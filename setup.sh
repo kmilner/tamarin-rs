@@ -17,11 +17,11 @@
 #                         trivially in sync with upstream.
 #
 # The patch (patches/tamarin-prover-fixes.patch) carries local fixes the port
-# is byte-compared against that are not yet merged upstream: fresh-variable
-# canonicalisation in msubstToLSubstVFresh, stored-formula normalisation and
-# gconj idempotence, the Iff expansion fix, and the solver trace
-# instrumentation used by the diff harnesses.  Only the testing oracle needs
-# it; nothing in the patch affects the web assets or the corpus.
+# is byte-compared against that are not yet merged upstream: stored-formula
+# normalisation and gconj idempotence, assorted solver and equation-store
+# fixes, and the solver trace instrumentation used by the diff harnesses.
+# Only the testing oracle needs it; nothing in the patch affects the web
+# assets or the corpus.
 set -eu
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 sub="$root/tamarin-prover"

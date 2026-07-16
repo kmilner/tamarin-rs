@@ -35,11 +35,11 @@ scripts/           parity gates, benchmarks, and divergence-debugging harnesses
 tests/             wellformedness fixture corpus
 patches/
   tamarin-prover-fixes.patch   local Haskell fixes not yet upstream —
-                               fresh-variable canonicalisation, stored-formula
-                               normalisation / gconj idempotence, the Iff
-                               expansion fix, and the solver-trace
+                               stored-formula normalisation / gconj
+                               idempotence, assorted solver and
+                               equation-store fixes, and the solver-trace
                                instrumentation the diff harnesses depend on
-tamarin-prover/    upstream submodule, pinned at the fork base and kept
+tamarin-prover/    upstream submodule, pinned to a known-good commit and kept
                    PRISTINE — holds the canonical Haskell sources, the
                    examples/ corpus, and the web data/ assets
 tamarin-prover-testing/   (untracked; created by ./setup.sh testing) patched
