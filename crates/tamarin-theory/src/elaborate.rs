@@ -1149,13 +1149,6 @@ fn elaborate_items(
             p::TheoryItem::FormalComment { header, body } => {
                 out.items.push(TheoryItem::Text((header.clone(), body.clone())));
             }
-            p::TheoryItem::IfDef { then_items, else_items, .. } => {
-                // The parser already expanded #ifdef branches based on
-                // the flags; both `then_items` and `else_items` are
-                // populated only for the live branch.
-                elaborate_items(then_items, out)?;
-                if let Some(else_b) = else_items { elaborate_items(else_b, out)?; }
-            }
             p::TheoryItem::Define(_) | p::TheoryItem::Include(_) => {
                 // Already handled by the parser preprocessor.
             }

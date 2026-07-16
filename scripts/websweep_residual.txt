@@ -71,7 +71,6 @@ sp14/Joux_EphkRev.spthy
 sp14/Joux.spthy
 sp14/Scott_EphkRev.spthy
 sp14/Scott.spthy
-testParser/define.spthy
 thesis-LaraSchmid-evoting/chapter3_Alethea/alethea_sel_SmHh.spthy
 thesis-LaraSchmid-evoting/chapter3_Alethea/alethea_vot_ShHh.spthy
 thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_VC.spthy

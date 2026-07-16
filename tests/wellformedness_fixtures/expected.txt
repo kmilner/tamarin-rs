@@ -1,6 +1,6 @@
 # Format: <fixture-name> [ --diff ]: <comma-separated topics>
 #
-# These are the wellformedness topics that `tamarin-prover 1.12.0`
+# These are the wellformedness topics that `tamarin-prover` (last verified: 1.13.0 @ submodule pin 0234f6a1)
 # emits AND that our Rust `wf::check_theory` is expected to emit. The
 # format is intentionally flat so a Rust runner can parse it as plain
 # key/value pairs.

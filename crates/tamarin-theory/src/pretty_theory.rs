@@ -993,23 +993,6 @@ fn render_parsed_item(
                 Some(format!("{}{{*{}*}}", header, body))
             }
         }
-        IfDef { then_items, else_items, .. } => {
-            // HS preprocesses `#ifdef` at the text level, so by parse time
-            // the surviving branch's items are ordinary top-level theory
-            // items.  RS's parser instead keeps the `#ifdef` structure as an
-            // `IfDef` node, populating ONLY the live branch (`then_items` XOR
-            // `else_items`).  Render that live branch in place — recursively,
-            // since a branch may hold nested `#ifdef`s / rules / lemmas —
-            // mirroring the same flattening `elaborate_items` does for the
-            // solver (elaborate.rs:732-738).  Without this the nested rules
-            // solve but never print (e.g. testParser/define.spthy).
-            let mut active: Vec<&p::TheoryItem> = then_items.iter().collect();
-            if let Some(else_b) = else_items { active.extend(else_b.iter()); }
-            let blocks: Vec<String> = active.iter()
-                .filter_map(|it| render_parsed_item(it, macros, predicates, elab, proved, in_file, arity1, manual_variants, auto_sources))
-                .collect();
-            if blocks.is_empty() { None } else { Some(blocks.join("\n\n")) }
-        }
         _ => None,
     }
 }

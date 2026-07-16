@@ -60,7 +60,10 @@ embeds `tamarin-prover/data/intruder_variants_dh.spthy` and
 `intruder_variants_bp.spthy` at compile time, the web server serves the
 submodule's `data/` assets at runtime, and the tests read the
 `tamarin-prover/examples/` corpus. The submodule working tree is never
-modified, so tracking upstream is an ordinary submodule bump.
+modified, so tracking upstream is an ordinary submodule bump —
+`scripts/bump_submodule.sh` automates it (rebases the patch onto the new pin,
+rebuilds the oracle, archives the now-stale gate caches, and prints the
+verification checklist; `--check` dry-runs the patch rebase first).
 
 The release profile uses `lto = "fat"` and `codegen-units = 1`.
 

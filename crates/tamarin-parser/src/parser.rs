@@ -732,6 +732,17 @@ impl<'a> Parser<'a> {
                     items.extend(included);
                     continue;
                 }
+                if directive == "ifdef" {
+                    // HS `ifdef` (Parser.hs): evaluate the flag formula at
+                    // parse time and add the live branch's items inline, so
+                    // they are ordinary top-level items.  Splice the same way
+                    // (no preprocessor node survives; every downstream
+                    // consumer of `Theory::items` sees the flat live stream).
+                    self.restore(save);
+                    let live = self.expand_ifdef()?;
+                    items.extend(live);
+                    continue;
+                }
                 self.restore(save);
             }
             let item = self.theory_item()?;
@@ -793,44 +804,6 @@ impl<'a> Parser<'a> {
         // Read directive name.
         let name = self.lx.ascii_alpha_run();
         match name.as_str() {
-            "ifdef" => {
-                self.skip_ws();
-                let cond = self.flag_disjuncts()?;
-                let cond_holds = self.eval_flagformula(&cond);
-                let then_items;
-                let else_items;
-                if cond_holds {
-                    then_items = self.theory_items_until_end()?;
-                    if self.try_punct("#else") {
-                        // Else branch text is skipped.
-                        self.skip_until("#endif");
-                        else_items = None;
-                    } else if self.try_punct("#endif") {
-                        else_items = None;
-                    } else {
-                        return Err(self.err("expected #endif or #else"));
-                    }
-                } else {
-                    // Skip then-branch.
-                    let found = self.skip_until_branch_terminator();
-                    match found {
-                        BranchEnd::Else => {
-                            then_items = vec![];
-                            let items = self.theory_items_until_end()?;
-                            self.require_punct("#endif")?;
-                            else_items = Some(items);
-                        }
-                        BranchEnd::Endif => {
-                            then_items = vec![];
-                            else_items = None;
-                        }
-                        BranchEnd::Eof => {
-                            return Err(self.err("unterminated #ifdef"));
-                        }
-                    }
-                }
-                Ok(Some(TheoryItem::IfDef { cond, then_items, else_items }))
-            }
             "define" => {
                 self.skip_ws();
                 let id = self.ident()?;
@@ -872,6 +845,46 @@ impl<'a> Parser<'a> {
     /// is read and its header-less fragment parsed by [`parse_include_fragment`]
     /// — which threads parser state both ways (signature / known funcs / flags),
     /// matching HS's `getState`/`putState` round-trip and `sig st'` merge.
+    /// `#ifdef <flag-formula>` … `[#else …] #endif`: evaluate the condition
+    /// against the active flag set and return the LIVE branch's items; the
+    /// dead branch's text is skipped without parsing (so a `#define` inside
+    /// it never fires).  Mirrors HS `ifdef` (Parser.hs), which evaluates the
+    /// formula at parse time and `addItems`-splices the live items inline —
+    /// the caller extends the surrounding item stream with the result, so no
+    /// preprocessor structure survives in the AST.
+    fn expand_ifdef(&mut self) -> Result<Vec<TheoryItem>, ParseError> {
+        self.skip_ws();
+        if !self.lx.eat_str("#") {
+            return Err(self.err("expected `#ifdef`"));
+        }
+        if self.lx.ascii_alpha_run() != "ifdef" {
+            return Err(self.err("expected `#ifdef`"));
+        }
+        self.skip_ws();
+        let cond = self.flag_disjuncts()?;
+        if self.eval_flagformula(&cond) {
+            let items = self.theory_items_until_end()?;
+            if self.try_punct("#else") {
+                // Else branch text is skipped.
+                self.skip_until("#endif");
+            } else if !self.try_punct("#endif") {
+                return Err(self.err("expected #endif or #else"));
+            }
+            Ok(items)
+        } else {
+            // Skip then-branch.
+            match self.skip_until_branch_terminator() {
+                BranchEnd::Else => {
+                    let items = self.theory_items_until_end()?;
+                    self.require_punct("#endif")?;
+                    Ok(items)
+                }
+                BranchEnd::Endif => Ok(Vec::new()),
+                BranchEnd::Eof => Err(self.err("unterminated #ifdef")),
+            }
+        }
+    }
+
     fn expand_include(&mut self) -> Result<Vec<TheoryItem>, ParseError> {
         // Consume `#include`.
         self.skip_ws();

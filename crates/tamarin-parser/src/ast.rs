@@ -19,6 +19,7 @@ pub struct Theory {
     pub items: Vec<TheoryItem>,
 }
 
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TheoryItem {
     Builtins(Vec<String>),
@@ -43,7 +44,10 @@ pub enum TheoryItem {
     DiffEquivLemma(Process),
     Export { tag: String, body: String },
     FormalComment { header: String, body: String },
-    IfDef { cond: FlagFormula, then_items: Vec<TheoryItem>, else_items: Option<Vec<TheoryItem>> },
+    // `#ifdef` never yields an item: the parser evaluates the flag formula
+    // and splices the live branch's items into the surrounding stream
+    // (parser.rs `expand_ifdef`), matching HS's parse-time preprocessing —
+    // so `items` is always the flat post-preprocessor stream.
     Define(String),
     Include(String),
 }

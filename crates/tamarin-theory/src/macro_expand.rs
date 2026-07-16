@@ -267,14 +267,9 @@ pub fn macro_expanded_clone(parsed: &p::Theory) -> p::Theory {
     t
 }
 
-/// Apply macros to a slice of theory items.  Recurses into `IfDef`
-/// branch items so that macro call-sites inside an `#ifdef`/`#ifndef`
-/// block are expanded too: the parser keeps the live branch wrapped in
-/// an `IfDef` node (it is only flattened later in elaboration), so
-/// without recursing here those items would be skipped via `_ => {}`.
-/// In Haskell `#ifdef` is resolved at parse time (Parser.hs `ifdef`
-/// calls `addItems` inline), so the live items become ordinary
-/// top-level items before macro application runs.
+/// Apply macros to a slice of theory items.  The parser splices `#ifdef`
+/// live branches into the top-level stream (like HS's parse-time
+/// preprocessing), so a plain walk sees every macro call-site.
 fn expand_items(macros: &[p::Macro], items: &mut [p::TheoryItem]) {
     for item in items.iter_mut() {
         match item {
@@ -303,15 +298,6 @@ fn expand_items(macros: &[p::Macro], items: &mut [p::TheoryItem]) {
                 for pred in ps.iter_mut() {
                     pred.formula = apply_macros_formula(macros, &pred.formula);
                     pred.fact = apply_macros_fact(macros, &pred.fact);
-                }
-            }
-            // Recurse into both branches of an `#ifdef`/`#ifndef` block:
-            // the parser keeps the live branch wrapped here until
-            // elaboration flattens it, so its items must be expanded too.
-            p::TheoryItem::IfDef { then_items, else_items, .. } => {
-                expand_items(macros, then_items);
-                if let Some(else_items) = else_items {
-                    expand_items(macros, else_items);
                 }
             }
             _ => {}
@@ -484,10 +470,9 @@ mod tests {
 
     #[test]
     fn macro_inside_ifdef_is_expanded() {
-        // A rule under `#ifdef FLAG` whose premise calls a macro must be
-        // expanded just like a top-level rule. The parser keeps the live
-        // branch wrapped in an `IfDef` node, so `expand_theory_macros`
-        // must recurse into it.
+        // A rule under a live `#ifdef FLAG` branch is spliced to the top
+        // level by the parser, so its macro call-sites are expanded like any
+        // other rule's.
         let src = "theory T begin\n\
             macros: id(x) = x\n\
             #ifdef FLAG\n\
@@ -496,23 +481,10 @@ mod tests {
             end\n";
         let mut thy = parse_theory(src, &["FLAG"]).expect("parse");
         expand_theory_macros(&mut thy);
-        // Find the rule nested inside the IfDef block.
-        fn find_rule(items: &[p::TheoryItem]) -> Option<&p::Rule> {
-            for it in items {
-                match it {
-                    p::TheoryItem::Rule(r) => return Some(r),
-                    p::TheoryItem::IfDef { then_items, else_items, .. } => {
-                        if let Some(r) = find_rule(then_items) { return Some(r); }
-                        if let Some(e) = else_items {
-                            if let Some(r) = find_rule(e) { return Some(r); }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            None
-        }
-        let rule = find_rule(&thy.items).expect("rule under ifdef");
+        let rule = thy.items.iter().find_map(|it| match it {
+            p::TheoryItem::Rule(r) => Some(r),
+            _ => None,
+        }).expect("rule from live ifdef branch at top level");
         let arg = &rule.premises[0].args[0];
         assert!(matches!(arg, p::Term::Var(v) if v.name == "a"), "got {:?}", arg);
     }

@@ -1,6 +1,10 @@
 # Patched Haskell oracle build tree (created by ./setup.sh testing)
 /tamarin-prover-testing/
 
+# Scratch worktree used by scripts/bump_submodule.sh while rebasing the patch
+/tamarin-prover-rebase/
+patches/*.rejected
+
 # Rust build artifacts
 /target
 target-agent/

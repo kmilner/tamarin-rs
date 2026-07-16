@@ -293,49 +293,9 @@ fn arg_matches_any_lemma(arg: &str, theory_lemmas: &[&str]) -> bool {
 // Helpers — collecting facts and variables
 // =============================================================================
 
-/// Flatten the theory's top-level item stream, inlining the live branch of
-/// every `#ifdef` block (recursively, including nested ifdefs).
-///
-/// HS evaluates `#ifdef`/`#else` at PARSE time, so by the time any
-/// wellformedness check runs over a HS theory the conditional has already
-/// been resolved — `thyProtoRules` / `thyEquations` see the flat, live rule
-/// set.  The Rust parser instead keeps each `#ifdef` as a
-/// [`TheoryItem::IfDef`] node, retaining ONLY the live branch's items (the
-/// dead branch is dropped during parsing): when the condition holds the live
-/// items live in `then_items` (and `else_items` is `None`); when it does not,
-/// the live items live in `else_items` (and `then_items` is empty).  IfDef
-/// flattening is otherwise deferred to elaboration
-/// (`tamarin-theory::elaborate::elaborate_items`,
-/// `lib/theory/src/Theory/Tools/Wellformedness.hs` runs after parse), which
-/// is AFTER `check_theory`.  So the WF checks must perform the same flatten
-/// themselves, or rules/equations nested inside an `#ifdef` are invisible to
-/// them (e.g. esorics23-bluetooth's `Oracle_f1`/`Oracle_pin` rules, which sit
-/// under `#ifdef NoLowEntropySecure #else ... #endif`).
-///
-/// Mirrors `elaborate_items`'s IfDef arm: descend into BOTH `then_items` and
-/// `else_items` (only one is populated for the live branch).
-fn flatten_items(thy: &Theory) -> Vec<&TheoryItem> {
-    fn go<'a>(items: &'a [TheoryItem], out: &mut Vec<&'a TheoryItem>) {
-        for it in items {
-            match it {
-                TheoryItem::IfDef { then_items, else_items, .. } => {
-                    go(then_items, out);
-                    if let Some(else_b) = else_items {
-                        go(else_b, out);
-                    }
-                }
-                other => out.push(other),
-            }
-        }
-    }
-    let mut out = Vec::new();
-    go(&thy.items, &mut out);
-    out
-}
-
 fn theory_rules(thy: &Theory) -> Vec<&Rule> {
     let mut out = Vec::new();
-    for it in flatten_items(thy) {
+    for it in &thy.items {
         match it {
             TheoryItem::Rule(r) => out.push(r),
             TheoryItem::IntrRule(r) => out.push(r),
@@ -346,7 +306,7 @@ fn theory_rules(thy: &Theory) -> Vec<&Rule> {
 }
 
 fn theory_lemmas(thy: &Theory) -> Vec<&Lemma> {
-    flatten_items(thy).into_iter().filter_map(|it| match it {
+    thy.items.iter().filter_map(|it| match it {
         TheoryItem::Lemma(l) => Some(l),
         _ => None,
     }).collect()
@@ -1557,7 +1517,7 @@ pub fn public_names_report_from_pairs(pairs: Vec<(String, String)>) -> WfReport 
 /// shadow user-declared 0-arity funs (wireguard.spthy's `true/0`).
 fn collect_nullary_fun_names(thy: &Theory) -> BTreeSet<String> {
     let mut out: BTreeSet<String> = BTreeSet::new();
-    for it in flatten_items(thy) {
+    for it in &thy.items {
         if let TheoryItem::Functions(decls) = it {
             for d in decls {
                 if d.arg_types.is_empty() {
@@ -1939,8 +1899,7 @@ pub fn subterm_convergence_report(thy: &Theory) -> WfReport {
     // flag of the LAST `equations` item; if it is set, suppress the entire
     // report.  (Probed: `[convergent]` block last => suppressed; `[convergent]`
     // first + a regular block last => fires.)
-    let flat = flatten_items(thy);
-    let global_convergent = flat.iter().rev().find_map(|it| match it {
+    let global_convergent = thy.items.iter().rev().find_map(|it| match it {
         TheoryItem::Equations { convergent, .. } => Some(*convergent),
         _ => None,
     }).unwrap_or(false);
@@ -1953,7 +1912,7 @@ pub fn subterm_convergence_report(thy: &Theory) -> WfReport {
     // function signature at parse time, so they are variable-free).
     let nullary_funs = collect_nullary_fun_names(thy);
     let mut non_conv: Vec<(&Term, &Term)> = Vec::new();
-    for it in &flat {
+    for it in &thy.items {
         let eqs = match it {
             TheoryItem::Equations { eqs, .. } => eqs,
             _ => continue,

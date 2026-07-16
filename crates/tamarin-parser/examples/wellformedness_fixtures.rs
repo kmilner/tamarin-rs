@@ -87,12 +87,24 @@ fn main() {
         // entry point), so we surface it from the fixture metadata.
         if flags.iter().any(|f| f == "--diff") { thy.is_diff = true; }
 
-        // 2. Our Rust wf checker must emit every expected topic.
-        let rust_topics = wf::topics(&wf::check_theory(&thy));
-        if expected_topics.is_subset(&rust_topics) {
+        // 2. Our Rust wf checker must emit every expected topic. Same
+        // comparison semantics as tests/wellformedness.rs: titles compare
+        // modulo trailing space (some HS titles carry a source-literal
+        // trailing space that comma-separated expected.txt cannot hold),
+        // and "Formula terms" (HS `checkTerms`) is excluded — it needs the
+        // elaborated MaudeSig, so it lives in `tamarin_theory::check_terms`
+        // post-elaboration rather than the parser-level `check_theory`;
+        // step 3 still verifies it against the tamarin binary.
+        let rust_topics: BTreeSet<String> = wf::topics(&wf::check_theory(&thy))
+            .into_iter()
+            .map(|s| s.trim_end().to_string())
+            .collect();
+        let mut rust_expected = expected_topics.clone();
+        rust_expected.remove("Formula terms");
+        if rust_expected.is_subset(&rust_topics) {
             rust_wf_match += 1;
         } else {
-            let missing: Vec<_> = expected_topics.difference(&rust_topics).collect();
+            let missing: Vec<_> = rust_expected.difference(&rust_topics).collect();
             fail_lines.push(format!(
                 "RUST   {}: missing {:?} (got: {:?})", name, missing, rust_topics));
         }
