@@ -1,0 +1,12 @@
+// Fixture: triggers `Fr facts must only use a fresh- or a msg-variable`.
+// `Fr($A)` uses a public variable, which is rejected: Fr is for fresh
+// names and the argument must be a fresh or message variable.
+theory FrPubArg
+begin
+
+rule Bad:
+   [ Fr($A) ]
+  --[ ]->
+   [ Out($A) ]
+
+end

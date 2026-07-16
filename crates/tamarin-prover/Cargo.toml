@@ -1,0 +1,33 @@
+[package]
+name = "tamarin-prover"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The Tamarin prover for security protocol verification (Rust port)."
+
+[lib]
+name = "tamarin_prover"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tamarin-prover"
+path = "src/main.rs"
+
+[dependencies]
+tamarin-utils = { workspace = true }
+tamarin-term = { workspace = true }
+tamarin-parser = { workspace = true }
+tamarin-theory = { workspace = true }
+tamarin-sapic = { workspace = true }
+tamarin-server = { workspace = true }
+tamarin-accountability = { workspace = true }
+# tamarin-export is a placeholder crate not yet wired into the driver; its dep
+# will be added here when that port lands.
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+mimalloc = { version = "0.1", default-features = false }
+rayon = { workspace = true }
+
+[lints]
+workspace = true

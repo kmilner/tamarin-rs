@@ -1,0 +1,16 @@
+// Fixture: triggers `Lemma annotations`.
+// Same as `lemma_attribute_conflict.spthy` but kept under a clearer
+// name that matches the actual check (reuse on exists-trace).
+theory ExistsTraceReuse
+begin
+
+rule Setup:
+   [ Fr(~x) ]
+  --[ Setup(~x) ]->
+   [ Out(~x) ]
+
+lemma exist_reuse [reuse]:
+  exists-trace
+  "Ex x #i. Setup(x) @ i"
+
+end

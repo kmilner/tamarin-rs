@@ -1,0 +1,18 @@
+[package]
+name = "tamarin-accountability"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Accountability extension for the Tamarin prover (Rust port)."
+# Not published independently: the crate is an internal stage of the
+# tamarin-prover driver.
+publish = false
+
+[dependencies]
+tamarin-parser = { workspace = true }
+tamarin-theory = { workspace = true }
+
+[lints]
+workspace = true

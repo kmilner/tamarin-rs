@@ -1,0 +1,90 @@
+# Per-file canonical extra HS flags, beyond bare `--prove`.
+#
+# WHY: some theories are meant to be run with specific flags (Makefile
+# case-study recipes / in-file invocation comments). Running them bare makes
+# HS time out or produce NO output (SKIP), so we never recorded the real HS
+# behaviour and "lost track" of what they need. This map records the canonical
+# flags so the HS cache is generated the right way, and the SAME flags are
+# passed to RS for the comparison.
+#
+# Format: <relpath><TAB><flags>   (relpath under examples/; '#' lines ignored).
+# Consumed by corpus_file_diff.sh and diff_proof_raw.sh. The cache key is
+# salted with a hash of the flags, so flagged entries are distinct from the
+# bare cache (flagless files are completely unaffected — no cache churn).
+#
+# NOTE: `--stop-on-trace=dfs` is the DEFAULT (HS `constructAutoProver`:
+# `fromMaybe CutDFS`), so bare `--prove` already == dfs — do NOT list it here.
+#
+# RS-MATCHABILITY:
+#   --diff               RS NOT PORTED (errors "not yet ported"); HS recorded,
+#                        RS can't match → kept out of parity_corpus.txt.
+#   --auto-sources       routed (RS generates the sources lemma); the spore /
+#                        AUTO_SOURCES_CASE_STUDIES rows below are corpus MATCHes.
+#   --stop-on-trace=...  dfs (default) and seqdfs are routed in prove-mode;
+#                        bfs/sorry/none error as unported.
+#   in-file `heuristic: o "..."` oracles need NO entry here — RS routes the
+#                        in-file heuristic + has oracle_ranking, so those files
+#                        already work bare.
+
+# ---- observational-equivalence / diff theories (need --diff; RS unported) ----
+features/equivalence/AxiomDiffTest1.spthy	--diff
+features/equivalence/AxiomDiffTest2.spthy	--diff
+features/equivalence/AxiomDiffTest3.spthy	--diff
+features/equivalence/AxiomDiffTest4.spthy	--diff
+regression/diff/issue324.spthy	--diff
+
+# ---- auto-sources spore models (HS empty bare; need --auto-sources) ----------
+features/auto-sources/spore/SpliceAS.spthy	--auto-sources
+features/auto-sources/spore/Nssk_amended.spthy	--auto-sources
+
+# ---- seqdfs-dependent regression (HS empty/wrong under default dfs) ----------
+regression/trace/seqdfsneeded.spthy	--stop-on-trace=seqdfs
+
+# ---- upstream AUTO_SOURCES_CASE_STUDIES (Makefile:460-471): canonical
+# ---- invocation is --auto-sources (%_analyzed-auto-sources target,
+# ---- Makefile:157). Added 2026-07-09 after the skip-class census; the
+# ---- remaining 44 gate skips are upstream-excluded and were removed
+# ---- from parity_corpus.txt (see FIX_NOTES SESSION 29).
+features/auto-sources/spore/AS_Modified_RPC.spthy	--auto-sources
+features/auto-sources/spore/AS_RPC.spthy	--auto-sources
+features/auto-sources/spore/Denning-Sacco-SK-Lowe.spthy	--auto-sources
+features/auto-sources/spore/Denning-Sacco-SK.spthy	--auto-sources
+features/auto-sources/spore/Nssk.spthy	--auto-sources
+features/auto-sources/spore/Otway-Rees.spthy	--auto-sources
+features/auto-sources/spore/SpliceAS_2.spthy	--auto-sources
+features/auto-sources/spore/SpliceAS_3.spthy	--auto-sources
+features/auto-sources/spore/Wide_Mouthed_Frog.spthy	--auto-sources
+features/auto-sources/spore/Wide_Mouthed_Frog_Lowe.spthy	--auto-sources
+features/auto-sources/spore/WooLam_Pi_f.spthy	--auto-sources
+features/auto-sources/spore/Yahalom.spthy	--auto-sources
+features/auto-sources/spore/Yahalom-Lowe.spthy	--auto-sources
+features/auto-sources/spore/Yahalom_BAN.spthy	--auto-sources
+features/auto-sources/spore/CCITT_X509_1.spthy	--auto-sources
+features/auto-sources/spore/CCITT_X509_1c.spthy	--auto-sources
+features/auto-sources/spore/CCITT_X509_3.spthy	--auto-sources
+features/auto-sources/spore/CCITT_X509_3_BAN.spthy	--auto-sources
+features/auto-sources/spore/AS_Concrete_RPC.spthy	--auto-sources
+features/auto-sources/spore/Lowe_AS_Concrete_RPC.spthy	--auto-sources
+
+# ---- cwd-dependent oracle (upstream deforacle recipe cd-s into the dir,
+# ---- Makefile:199-201; the default-oracle lookup is cwd-relative) --------
+regression/trace/defaultoracle.spthy	@cd
+
+# ---- csf21-acc-unbounded DMN message-tracing (in-file header "Run with"
+# ---- note, lines 7-8). seqdfs is semantically load-bearing: step counts
+# ---- differ from the default dfs. The in-file
+# ---- `heuristic: o "./oracle-dmn-message-tracing"` needs NO flag and no
+# ---- @cd: HS resolves the ./ path relative to the theory file's directory.
+accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-1.spthy	--stop-on-trace=seqdfs
+accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-2.spthy	--stop-on-trace=seqdfs
+accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-3.spthy	--stop-on-trace=seqdfs
+accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-4.spthy	--stop-on-trace=seqdfs
+accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-5.spthy	--stop-on-trace=seqdfs
+accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-1.spthy	--stop-on-trace=seqdfs
+accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-2.spthy	--stop-on-trace=seqdfs
+# first-3/4/5 exceed FILE_TIMEOUT=300 in HS under these canonical flags and
+# are excluded from the corpus; rows kept commented so the canonical
+# invocation is recorded:
+#accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-3.spthy	--stop-on-trace=seqdfs
+#accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-4.spthy	--stop-on-trace=seqdfs
+#accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-5.spthy	--stop-on-trace=seqdfs

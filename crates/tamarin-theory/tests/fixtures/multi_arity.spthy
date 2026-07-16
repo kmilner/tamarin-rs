@@ -1,0 +1,18 @@
+theory MultiArity
+begin
+
+rule Pair:
+  [ Fr(~k1), Fr(~k2) ] --[ Pair(~k1, ~k2) ]-> [ Out(<~k1, ~k2>) ]
+
+rule Triple:
+  [ Fr(~a), Fr(~b), Fr(~c) ] --[ Triple(~a, ~b, ~c) ]-> [ Out(<~a, ~b, ~c>) ]
+
+lemma pair_exists:
+  exists-trace
+  "Ex k1 k2 #i. Pair(k1, k2) @ #i"
+
+lemma triple_exists:
+  exists-trace
+  "Ex a b c #i. Triple(a, b, c) @ #i"
+
+end

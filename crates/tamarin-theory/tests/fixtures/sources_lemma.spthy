@@ -1,0 +1,21 @@
+theory SourcesLemma
+begin
+
+rule Setup:
+  [ Fr(~k) ] --[ Setup(~k), Once() ]-> [ ]
+
+restriction once:
+  "All #i #j. Once()@i & Once()@j ==> #i = #j"
+
+// A trivial sources-flagged invariant. Marks an AllTraces tautology
+// that other lemmas can rely on.
+lemma setup_self [sources]:
+  "All k #i. Setup(k) @ #i ==> Setup(k) @ #i"
+
+// Subsequent lemma — the [sources] attribute on `setup_self` should
+// inject it as an additional restriction, then this lemma reduces to
+// the Once() restriction's contradiction.
+lemma setup_unique:
+  "All k1 k2 #i #j. Setup(k1)@i & Setup(k2)@j ==> #i = #j"
+
+end

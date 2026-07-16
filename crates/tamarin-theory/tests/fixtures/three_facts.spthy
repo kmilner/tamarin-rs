@@ -1,0 +1,11 @@
+theory ThreeFacts
+begin
+
+rule Init:
+  [ Fr(~k) ] --[ Init(~k), Started(~k), Activated(~k) ]-> [ Out(~k) ]
+
+lemma all_three:
+  exists-trace
+  "Ex k #i #j #l. Init(k) @ #i & Started(k) @ #j & Activated(k) @ #l"
+
+end

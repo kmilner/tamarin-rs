@@ -1,0 +1,14 @@
+// Fixture: triggers `Nat Sorts`.
+// `%+` (natural-number plus) requires both operands to be of sort nat.
+// Here `~x` is fresh-sort, which is not a nat.
+theory NatSort
+begin
+
+builtins: natural-numbers
+
+rule Bad:
+   [ Fr(~x) ]
+  --[ ]->
+   [ Out(%a %+ ~x) ]
+
+end

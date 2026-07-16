@@ -1,0 +1,12 @@
+theory UseInduction
+begin
+
+rule R:
+  [ Fr(~k) ] --[ A(~k) ]-> [ ]
+
+// Trivially-true universal — the [use_induction] attribute hints
+// the solver to start with induction.
+lemma a_self [use_induction]:
+  "All k #i. A(k) @ #i ==> A(k) @ #i"
+
+end

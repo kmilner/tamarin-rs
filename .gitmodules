@@ -1,0 +1,3 @@
+[submodule "tamarin-prover"]
+	path = tamarin-prover
+	url = https://github.com/tamarin-prover/tamarin-prover.git

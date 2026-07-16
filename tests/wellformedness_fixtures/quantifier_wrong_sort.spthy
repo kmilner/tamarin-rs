@@ -1,0 +1,15 @@
+// Fixture: triggers `Formula terms`.
+// `#i` is referenced inside `Setup(...) @ #i` but never bound by any
+// quantifier — it's a free temporal variable.
+theory QuantSort
+begin
+
+rule Setup:
+   [ Fr(~x) ]
+  --[ Setup(~x) ]->
+   [ Out(~x) ]
+
+lemma weird:
+  "All x. Ex y. Setup(x) @ #i ==> y = x"
+
+end

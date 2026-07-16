@@ -1,0 +1,16 @@
+// Fixture: triggers `Subterm Convergence Warning`.
+// The equation `f(x, y) = g(y)` is not a subterm-convergent rewrite
+// rule (the RHS doesn't contain the LHS as a subterm).
+theory NonSubtermEq
+begin
+
+functions: f/2, g/1
+
+equations: f(x, y) = g(y)
+
+rule Use:
+   [ Fr(~x), Fr(~y) ]
+  --[ ]->
+   [ Out(f(~x, ~y)) ]
+
+end

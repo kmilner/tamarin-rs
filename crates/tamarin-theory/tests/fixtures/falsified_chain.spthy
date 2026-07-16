@@ -1,0 +1,14 @@
+theory FalsifiedChain
+begin
+
+rule MakeA:
+  [ Fr(~k) ] --[ A(~k) ]-> [ ]
+
+rule MakeB:
+  [ Fr(~k) ] --[ B(~k) ]-> [ ]
+
+// FALSE: A and B are independent rules — can occur with different keys.
+lemma a_implies_b:
+  "All k #i. A(k) @ i ==> Ex #j. B(k) @ j"
+
+end

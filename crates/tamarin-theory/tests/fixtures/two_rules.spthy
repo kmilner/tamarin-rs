@@ -1,0 +1,14 @@
+theory TwoRules
+begin
+
+rule Send:
+  [ Fr(~k) ] --[ Sent(~k) ]-> [ Out(~k), !K(~k) ]
+
+rule Recv:
+  [ In(x), !K(x) ] --[ Recv(x) ]-> [ ]
+
+lemma reachable:
+  exists-trace
+  "Ex k #i #j. Sent(k) @ #i & Recv(k) @ #j"
+
+end

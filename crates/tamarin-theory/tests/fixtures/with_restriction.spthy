@@ -1,0 +1,14 @@
+theory WithRestriction
+begin
+
+rule A:
+  [ Fr(~k) ] --[ A(~k), Once() ]-> [ Out(~k) ]
+
+restriction once:
+  "All #i #j. Once() @ #i & Once() @ #j ==> #i = #j"
+
+lemma a_exists:
+  exists-trace
+  "Ex k #i. A(k) @ #i"
+
+end

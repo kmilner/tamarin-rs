@@ -1,0 +1,11 @@
+theory TinySetup
+begin
+
+rule Setup:
+  [ Fr(~k) ] --[ Setup(~k) ]-> [ Out(~k) ]
+
+lemma trivial:
+  exists-trace
+  "Ex k #i. Setup(k) @ #i"
+
+end

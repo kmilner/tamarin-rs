@@ -1,0 +1,17 @@
+theory TwoKeys
+begin
+
+rule SetupA:
+  [ Fr(~ka) ] --[ SetupA(~ka) ]-> [ !LongTermA(~ka) ]
+
+rule SetupB:
+  [ Fr(~kb) ] --[ SetupB(~kb) ]-> [ !LongTermB(~kb) ]
+
+rule Use:
+  [ !LongTermA(a), !LongTermB(b) ] --[ Used(a, b) ]-> [ ]
+
+lemma can_use:
+  exists-trace
+  "Ex a b #i. Used(a, b) @ #i"
+
+end

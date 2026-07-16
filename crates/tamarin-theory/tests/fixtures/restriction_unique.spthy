@@ -1,0 +1,16 @@
+theory RestrictionUnique
+begin
+
+rule Setup:
+  [ Fr(~k) ] --[ Setup(~k), Once() ]-> [ ]
+
+restriction once_only:
+  "All #i #j. Once()@i & Once()@j ==> #i = #j"
+
+// The restriction forces Once() to fire at most once,
+// hence Setup fires at most once, hence Setup-instances at
+// distinct times must be equal.
+lemma setup_unique:
+  "All k1 k2 #i #j. Setup(k1)@i & Setup(k2)@j ==> #i = #j"
+
+end

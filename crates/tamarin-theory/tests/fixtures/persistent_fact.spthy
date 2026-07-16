@@ -1,0 +1,14 @@
+theory PersistentFact
+begin
+
+rule Init:
+  [ Fr(~k) ] --[ Init(~k) ]-> [ !State(~k) ]
+
+rule Use:
+  [ !State(x) ] --[ Used(x) ]-> [ ]
+
+lemma init_exists:
+  exists-trace
+  "Ex k #i. Init(k) @ #i"
+
+end

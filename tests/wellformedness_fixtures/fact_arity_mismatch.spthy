@@ -1,0 +1,18 @@
+// Fixture: triggers `Fact arity issues`.
+// The `Foo` fact is used with arity 1 in one rule and arity 2 in
+// another. Tamarin requires every fact to occur with a single fixed
+// arity throughout the theory.
+theory FactArity
+begin
+
+rule R1:
+   [ Fr(~x) ]
+  --[ ]->
+   [ Foo(~x) ]
+
+rule R2:
+   [ Fr(~x), Fr(~y) ]
+  --[ ]->
+   [ Foo(~x, ~y) ]
+
+end

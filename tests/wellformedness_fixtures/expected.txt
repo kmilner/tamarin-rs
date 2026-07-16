@@ -1,0 +1,33 @@
+# Format: <fixture-name> [ --diff ]: <comma-separated topics>
+#
+# These are the wellformedness topics that `tamarin-prover 1.12.0`
+# emits AND that our Rust `wf::check_theory` is expected to emit. The
+# format is intentionally flat so a Rust runner can parse it as plain
+# key/value pairs.
+#
+# `Message Derivation Checks` is intentionally OMITTED here — it's a
+# separate phase (`Theory.Tools.MessageDerivationChecks`), not part of
+# `Theory.Tools.Wellformedness`. We test it separately once that's
+# ported.
+
+diff_left_right_mismatch  --diff : Left rule
+diff_reserved_prefix       --diff : Reserved prefixes
+diff_right_rule_mismatch   --diff : Right rule
+exists_trace_reuse                 : Lemma annotations
+fact_arity_mismatch                : Fact arity issues
+fact_multiplicity_mismatch         : Fact multiplicity issues, Facts occur in the left-hand-side but not in any right-hand-side
+formula_unguarded                  : Formula terms
+fresh_public_constant              : Fresh public constants
+fr_with_pub_var                    : Fr facts must only use a fresh- or a msg-variable
+lhs_not_used                       : Facts occur in the left-hand-side but not in any right-hand-side
+multiplication_in_rule_lhs         : Multiplication restriction of rules
+nat_wrong_sort                     : Nat Sorts, Unbound variables
+non_subterm_equation               : Subterm Convergence Warning
+public_constant_capitalization     : Public constants with mismatching capitalization
+quantifier_wrong_sort              : Formula terms
+reserved_fact_name                 : Reserved names
+sort_mismatch                      : Variable with mismatching sorts or capitalization
+special_facts_misuse_fr_in_conclusion : Special facts, Unbound variables
+special_facts_misuse_in_in_conclusion : Special facts
+special_facts_misuse_out_in_premise   : Special facts
+unbound_variables                  : Unbound variables

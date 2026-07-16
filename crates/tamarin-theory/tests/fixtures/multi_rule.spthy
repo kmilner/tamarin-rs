@@ -1,0 +1,25 @@
+theory MultiRule
+begin
+
+rule InitA:
+  [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]
+
+rule InitB:
+  [ Fr(~k) ] --[ B(~k) ]-> [ Out(~k) ]
+
+rule InitC:
+  [ Fr(~k) ] --[ C(~k) ]-> [ Out(~k) ]
+
+lemma can_a:
+  exists-trace
+  "Ex k #i. A(k) @ #i"
+
+lemma can_b:
+  exists-trace
+  "Ex k #i. B(k) @ #i"
+
+lemma can_c:
+  exists-trace
+  "Ex k #i. C(k) @ #i"
+
+end

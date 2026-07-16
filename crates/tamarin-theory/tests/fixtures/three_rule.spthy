@@ -1,0 +1,17 @@
+theory ThreeRule
+begin
+
+rule Init:
+  [ Fr(~k) ] --[ Init(~k) ]-> [ St1(~k), Out(~k) ]
+
+rule Step:
+  [ St1(x) ] --[ Step(x) ]-> [ St2(x) ]
+
+rule Done:
+  [ St2(x) ] --[ Done(x) ]-> [ ]
+
+lemma all_three_steps:
+  exists-trace
+  "Ex k #i #j #l. Init(k) @ #i & Step(k) @ #j & Done(k) @ #l"
+
+end

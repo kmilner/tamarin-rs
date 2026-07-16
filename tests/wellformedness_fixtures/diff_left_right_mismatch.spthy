@@ -1,0 +1,22 @@
+// Fixture (run with --diff): triggers `Left rule` / `Right rule`.
+// The explicit `left` rule has an extra premise compared to what
+// would be derived from projecting the parent diff rule.
+theory DiffLR
+begin
+
+rule Send:
+   [ Fr(~k) ]
+  --[ ]->
+   [ Out(diff(~k, ~k)) ]
+left
+  rule Send:
+   [ Fr(~k), In(extra) ]
+  --[ ]->
+   [ Out(~k) ]
+right
+  rule Send:
+   [ Fr(~k) ]
+  --[ ]->
+   [ Out(~k) ]
+
+end

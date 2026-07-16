@@ -1,0 +1,16 @@
+theory Falsifiable
+begin
+
+rule A:
+  [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]
+
+rule B:
+  [ Fr(~k) ] --[ B(~k) ]-> [ Out(~k) ]
+
+// Easily falsifiable: there exist traces with A AND B (at different nodes).
+// Negation: exists trace with both A and B at distinct nodes.
+// Tamarin will find this counterexample.
+lemma never_both:
+  "All k1 k2 #i #j. A(k1) @ #i & B(k2) @ #j ==> #i = #j"
+
+end

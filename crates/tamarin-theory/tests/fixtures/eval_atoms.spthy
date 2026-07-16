@@ -1,0 +1,18 @@
+theory EvalAtoms
+begin
+
+rule R1:
+  [ Fr(~x) ] --[ A(~x) ]-> [ St(~x) ]
+
+rule R2:
+  [ St(x) ] --[ B(x) ]-> [ ]
+
+// All-traces tautology that needs partial-atom valuation to close.
+// `B(x) @ #j` implies the unique R2 instance with that x. The
+// premise A(x)@i forces R1's instance with the same x. After edges
+// are wired, `i < j` follows from `alwaysBefore`. The `i < j`
+// conclusion's atom is then known True.
+lemma a_then_b:
+  "All x #i #j. A(x) @ #i & B(x) @ #j ==> #i < #j | #i = #j"
+
+end

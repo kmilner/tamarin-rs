@@ -1,0 +1,13 @@
+// Fixture: triggers `Facts occur in the left-hand-side but not in any
+// right-hand-side`.
+// `Lonely` appears only as a premise, never as a conclusion of any
+// rule, so no rule can ever produce it.
+theory LhsNotUsed
+begin
+
+rule Bad:
+   [ Lonely(x) ]
+  --[ ]->
+   [ Out(x) ]
+
+end

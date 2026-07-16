@@ -1,0 +1,12 @@
+// Fixture: triggers `Fact usage`.
+// `In` (adversary input) is a premise-only fact; it must not appear
+// on the RHS of a rule.
+theory SpecialFactsIn
+begin
+
+rule Bad:
+   [ Fr(~k) ]
+  --[ ]->
+   [ In(~k) ]
+
+end

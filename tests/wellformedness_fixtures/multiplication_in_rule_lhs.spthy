@@ -1,0 +1,14 @@
+// Fixture: triggers `Multiplication restriction of rules`.
+// The `*` (DH multiplication) operator is reducible and may not appear
+// in a rule's LHS — *-restricted (a).
+theory MultLhs
+begin
+
+builtins: diffie-hellman
+
+rule Bad:
+   [ Fr(~x), In(a*b) ]
+  --[ ]->
+   [ Out(<~x, a*b>) ]
+
+end

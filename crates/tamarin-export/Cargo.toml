@@ -1,0 +1,19 @@
+[package]
+name = "tamarin-export"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Export to other provers for the Tamarin prover (Rust port)."
+# Placeholder crate: the Export.hs / RuleTranslation.hs port is not yet wired
+# up, so it is not ready to publish on its own.
+publish = false
+
+[dependencies]
+# Intentionally empty. The workspace deps (tamarin-term/-theory/-sapic) will be
+# re-added when the export translation is ported; keeping them now would be
+# unused-dependency noise.
+
+[lints]
+workspace = true

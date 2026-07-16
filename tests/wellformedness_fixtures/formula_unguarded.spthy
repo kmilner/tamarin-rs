@@ -1,0 +1,14 @@
+// Fixture: triggers `Formula guardedness`.
+// A negated existential without a guard is not in the guarded fragment.
+theory Unguarded
+begin
+
+rule Setup:
+   [ Fr(~x) ]
+  --[ Setup(~x) ]->
+   [ Out(~x) ]
+
+lemma bad:
+  "not (Ex x. Setup(x) @ #i)"
+
+end

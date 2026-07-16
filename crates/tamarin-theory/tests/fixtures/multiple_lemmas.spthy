@@ -1,0 +1,23 @@
+theory MultipleLemmas
+begin
+
+rule R:
+  [ Fr(~k) ] --[ Init(~k), Active(~k), Done(~k) ]-> [ ]
+
+lemma init_exists:
+  exists-trace
+  "Ex k #i. Init(k) @ i"
+
+lemma active_exists:
+  exists-trace
+  "Ex k #i. Active(k) @ i"
+
+lemma done_exists:
+  exists-trace
+  "Ex k #i. Done(k) @ i"
+
+lemma all_at_same_node:
+  exists-trace
+  "Ex k #i. Init(k) @ i & Active(k) @ i & Done(k) @ i"
+
+end

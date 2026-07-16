@@ -1,0 +1,11 @@
+theory PubVar
+begin
+
+rule Setup:
+  [ Fr(~k) ] --[ Setup($A, ~k) ]-> [ Out(<$A, ~k>) ]
+
+lemma setup_exists:
+  exists-trace
+  "Ex A k #i. Setup(A, k) @ #i"
+
+end

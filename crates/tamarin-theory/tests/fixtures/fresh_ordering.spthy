@@ -1,0 +1,14 @@
+theory FreshOrdering
+begin
+
+rule A:
+  [ Fr(~s) ] --[ Start(~s) ]-> [ St(~s) ]
+
+rule B:
+  [ St(s) ] --[ Step(s) ]-> [ ]
+
+// j must be after i: Step requires St which requires Fr's creation.
+lemma order:
+  "All s #i #j. Start(s) @ #i & Step(s) @ #j ==> #i < #j"
+
+end

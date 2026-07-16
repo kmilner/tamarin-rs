@@ -1,0 +1,12 @@
+// Fixture (run with --diff): triggers `Reserved prefixes`.
+// Fact names starting with `DiffIntr` or `DiffProto` are reserved
+// for the diff-mode translation; user rules cannot use them.
+theory DiffReservedPrefix
+begin
+
+rule Bad:
+   [ Fr(~x) ]
+  --[ ]->
+   [ DiffIntrPriv(~x) ]
+
+end

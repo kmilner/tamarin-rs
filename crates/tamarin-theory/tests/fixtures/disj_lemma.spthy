@@ -1,0 +1,14 @@
+theory DisjLemma
+begin
+
+rule A:
+  [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]
+
+rule B:
+  [ Fr(~k) ] --[ B(~k) ]-> [ Out(~k) ]
+
+lemma either:
+  exists-trace
+  "(Ex k #i. A(k) @ #i) | (Ex k #i. B(k) @ #i)"
+
+end

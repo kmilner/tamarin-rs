@@ -1,0 +1,17 @@
+// Fixture: triggers `Public constants with mismatching capitalization`.
+// The constants `'foo'` and `'Foo'` differ only in capitalization,
+// which Tamarin flags as a likely typo.
+theory PubConstCap
+begin
+
+rule R1:
+   [ ]
+  --[ ]->
+   [ Out('foo') ]
+
+rule R2:
+   [ ]
+  --[ ]->
+   [ Out('Foo') ]
+
+end

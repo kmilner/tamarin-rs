@@ -1,0 +1,78 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tamarin-utils",
+    "crates/tamarin-term",
+    "crates/tamarin-theory",
+    "crates/tamarin-sapic",
+    "crates/tamarin-accountability",
+    "crates/tamarin-export",
+    "crates/tamarin-parser",
+    "crates/tamarin-server",
+    "crates/tamarin-prover",
+]
+
+[workspace.package]
+version = "1.13.0"
+edition = "2021"
+rust-version = "1.78"
+license = "GPL-3.0"
+repository = "https://github.com/tamarin-prover/tamarin-prover"
+
+[workspace.dependencies]
+tamarin-utils = { path = "crates/tamarin-utils", version = "1.13.0" }
+tamarin-term = { path = "crates/tamarin-term", version = "1.13.0" }
+tamarin-theory = { path = "crates/tamarin-theory", version = "1.13.0" }
+tamarin-sapic = { path = "crates/tamarin-sapic", version = "1.13.0" }
+tamarin-accountability = { path = "crates/tamarin-accountability", version = "1.13.0" }
+tamarin-export = { path = "crates/tamarin-export", version = "1.13.0" }
+tamarin-parser = { path = "crates/tamarin-parser", version = "1.13.0" }
+tamarin-server = { path = "crates/tamarin-server", version = "1.13.0" }
+
+sha2 = "0.10"
+base64 = "0.22"
+indexmap = "2"
+proptest = "1"
+rayon = "1"
+rustc-hash = "2"
+
+# Workspace-wide lint policy.  These clippy lints are `allow`ed
+# deliberately: they flag structural choices inherent to a
+# function-for-function port of the Haskell prover, where "fixing" them
+# would mean diverging from the Haskell shape or churning signatures /
+# memory layout for no behavioural gain:
+#   - type_complexity / too_many_arguments: solver entry points thread a
+#     ProofContext and rich constraint types that mirror the Haskell ones.
+#   - result_large_err / large_enum_variant: the error/goal enums carry
+#     the full constraint data; boxing them would ripple through every
+#     `?` and constructor without changing behaviour.
+#   - ptr_arg: several helpers take `&Vec`/`&mut Vec` intentionally.
+#   - should_implement_trait / only_used_in_recursion: a few inherent
+#     methods and recursion-threaded params are intentional.
+#   - doc_overindented_list_items: many module docs lay out Haskell rule /
+#     formula syntax as indented ASCII art under a numbered step; the
+#     "overindentation" is deliberate alignment, not a list typo.
+[workspace.lints.clippy]
+type_complexity = "allow"
+too_many_arguments = "allow"
+result_large_err = "allow"
+large_enum_variant = "allow"
+ptr_arg = "allow"
+should_implement_trait = "allow"
+only_used_in_recursion = "allow"
+doc_overindented_list_items = "allow"
+
+# Optimized release profile.  `lto = "fat"` enables cross-crate
+# inlining (FunSym match arms in the term crate inlined into hot
+# solver paths in tamarin-theory).  `codegen-units = 1` improves LLVM
+# optimisation at the cost of compile time.  Measured 10-20 % CPU
+# speedup on solver-heavy lemmas (csf17::injectivity, jcs18 dnp3).
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
+[profile.profiling]
+inherits = "release"
+debug = 1
+lto = "thin"
+strip = false

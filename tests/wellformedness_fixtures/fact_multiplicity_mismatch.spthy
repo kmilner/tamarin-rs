@@ -1,0 +1,16 @@
+// Fixture: triggers `Fact multiplicity issues`.
+// `Bar` is used as both linear (`Bar(...)`) and persistent (`!Bar(...)`).
+theory FactMult
+begin
+
+rule R1:
+   [ Fr(~x) ]
+  --[ ]->
+   [ Bar(~x) ]
+
+rule R2:
+   [ !Bar(~y) ]
+  --[ ]->
+   [ ]
+
+end

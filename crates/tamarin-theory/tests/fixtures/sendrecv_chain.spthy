@@ -1,0 +1,14 @@
+theory SendRecvChain
+begin
+
+rule A:
+  [ Fr(~k) ] --[ Sent(~k) ]-> [ Out(~k) ]
+
+rule B:
+  [ In(x) ] --[ Got(x) ]-> [ ]
+
+lemma chain_works:
+  exists-trace
+  "Ex k #i #j. Sent(k) @ #i & Got(k) @ #j & #i < #j"
+
+end

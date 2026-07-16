@@ -1,0 +1,11 @@
+theory TwoActions
+begin
+
+rule Setup:
+  [ Fr(~k) ] --[ Setup(~k), Init(~k) ]-> [ Out(~k) ]
+
+lemma both_actions:
+  exists-trace
+  "Ex k #i #j. Setup(k) @ #i & Init(k) @ #j"
+
+end

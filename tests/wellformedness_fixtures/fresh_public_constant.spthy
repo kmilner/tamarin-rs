@@ -1,0 +1,13 @@
+// Fixture: triggers `Fresh public constants`.
+// `~'foo'` is a fresh-name *literal* (note the `~` prefix on the
+// quoted constant). Tamarin requires fresh names to come from `Fr(~x)`
+// premises — using a fresh constant directly is rejected.
+theory FreshPubConst
+begin
+
+rule Bad:
+   [ ]
+  --[ ]->
+   [ Out(~'foo') ]
+
+end

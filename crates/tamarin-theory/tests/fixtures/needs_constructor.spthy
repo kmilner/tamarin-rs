@@ -1,0 +1,15 @@
+theory NeedsConstructor
+begin
+
+// Adversary needs to deliver a pair(<x, y>) to Recv.
+rule SendBoth:
+  [ Fr(~a), Fr(~b) ] --[ SentBoth(~a, ~b) ]-> [ Out(~a), Out(~b) ]
+
+rule RecvPair:
+  [ In(<x, y>) ] --[ GotPair(x, y) ]-> [ ]
+
+lemma pair_arrives:
+  exists-trace
+  "Ex a b #i #j. SentBoth(a, b) @ i & GotPair(a, b) @ j"
+
+end

@@ -1,0 +1,24 @@
+theory AuthPattern
+begin
+
+rule Init:
+  [ Fr(~k) ] --[ Started(~k) ]-> [ St1(~k) ]
+
+rule Step1:
+  [ St1(x) ] --[ Step1(x) ]-> [ St2(x) ]
+
+rule Step2:
+  [ St2(x) ] --[ Step2(x) ]-> [ St3(x) ]
+
+rule Done:
+  [ St3(x) ] --[ Finished(x) ]-> [ ]
+
+lemma protocol_runs:
+  exists-trace
+  "Ex k #i #j #l #m.
+     Started(k) @ i &
+     Step1(k)   @ j &
+     Step2(k)   @ l &
+     Finished(k) @ m"
+
+end

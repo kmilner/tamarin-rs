@@ -1,0 +1,25 @@
+# Patched Haskell oracle build tree (created by ./setup.sh testing)
+/tamarin-prover-testing/
+
+# Rust build artifacts
+/target
+target-agent/
+
+# Gate/sweep artifacts — never commit (HS-output caches are GB-scale and
+# host-local; TSVs are per-host measurement snapshots; regenerate via
+# scripts/*.sh)
+scripts/.hs_file_cache*/
+scripts/.hs_canon_cache/
+scripts/.web_hs_cache*/
+scripts/.corpus_full_truedl_*.txt
+scripts/__pycache__/
+scripts/fullgate*.tsv
+scripts/websweep_full*.tsv
+scripts/websweep*probe*.tsv
+scripts/websweep_residual_*.tsv
+scripts/mixvote*.tsv
+# scratch workflow scripts dropped by tooling runs
+scripts/.wf_*.js
+
+# Probe scratch files
+crates/tamarin-theory/examples/probe_*.rs

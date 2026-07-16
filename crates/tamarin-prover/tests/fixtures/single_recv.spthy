@@ -1,0 +1,14 @@
+theory SingleRecv
+begin
+
+rule Send:
+  [ Fr(~k) ] --[ S(~k) ]-> [ Out(~k) ]
+
+rule Recv:
+  [ In(x) ] --[ R(x) ]-> [ ]
+
+lemma chain:
+  exists-trace
+  "Ex k #i #j. S(k) @ i & R(k) @ j"
+
+end

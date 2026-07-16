@@ -1,0 +1,10 @@
+theory SafetyUnique
+begin
+
+rule Setup:
+  [ Fr(~k) ] --[ Setup(~k) ]-> [ Out(~k) ]
+
+lemma setup_unique:
+  "All k #i #j. Setup(k)@i & Setup(k)@j ==> #i=#j"
+
+end

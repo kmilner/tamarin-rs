@@ -1,0 +1,15 @@
+theory LetBlock
+begin
+
+// `r` is a let-binding that aliases ~k. After desugaring, the rule is
+// equivalent to `[Fr(~k)] --[Use(~k)]-> [Out(~k)]`.
+rule R:
+  let r = ~k
+  in
+  [ Fr(~k) ] --[ Use(r) ]-> [ Out(r) ]
+
+// Trivially true universal — exercises the desugared action-set.
+lemma use_self:
+  "All k #i. Use(k) @ #i ==> Use(k) @ #i"
+
+end

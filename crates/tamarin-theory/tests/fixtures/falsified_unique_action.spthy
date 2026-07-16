@@ -1,0 +1,16 @@
+theory FalsifiedUniqueAction
+begin
+
+// Two distinct rules can both produce X(a, b) for distinct fresh values
+// — the lemma claiming a single X is uniquely determined is FALSIFIABLE.
+
+rule R1:
+  [ Fr(~a), Fr(~b) ] --[ X(~a, ~b) ]-> [ ]
+
+rule R2:
+  [ Fr(~c), Fr(~d) ] --[ X(~c, ~d) ]-> [ ]
+
+lemma x_unique:
+  "All a b c d #i #j. X(a, b) @ #i & X(c, d) @ #j ==> #i = #j"
+
+end

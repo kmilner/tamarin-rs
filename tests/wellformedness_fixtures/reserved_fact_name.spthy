@@ -1,0 +1,12 @@
+// Fixture: triggers `Reserved names`.
+// `KU` is reserved (intruder-knowledge fact tag); user rules cannot
+// produce it directly.
+theory ReservedFact
+begin
+
+rule Bad:
+   [ Fr(~k) ]
+  --[ ]->
+   [ KU(~k) ]
+
+end

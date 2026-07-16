@@ -1,0 +1,12 @@
+// Fixture: triggers `Special facts` / `Fact usage`.
+// `Fr` may only appear in the LHS of a rule (premises). Putting it in
+// the RHS (conclusions) violates protocol condition 3.
+theory SpecialFactsFr
+begin
+
+rule Bad:
+   [ ]
+  --[ ]->
+   [ Fr(~k) ]
+
+end

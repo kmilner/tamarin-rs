@@ -1,0 +1,18 @@
+theory ReuseLemma
+begin
+
+rule Setup:
+  [ Fr(~k) ] --[ Setup(~k), Once() ]-> [ ]
+
+restriction once_only:
+  "All #i #j. Once()@i & Once()@j ==> #i = #j"
+
+// First lemma: declared `reuse` so subsequent lemmas can use it.
+lemma setup_unique [reuse]:
+  "All k1 k2 #i #j. Setup(k1)@i & Setup(k2)@j ==> #i = #j"
+
+// Second lemma: reuses the first to derive the same key.
+lemma setup_unique_key:
+  "All k1 k2 #i #j. Setup(k1)@i & Setup(k2)@j ==> k1 = k2"
+
+end

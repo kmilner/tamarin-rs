@@ -1,0 +1,14 @@
+theory SafetyTwoKeys
+begin
+
+rule Setup:
+  [ Fr(~k) ] --[ Setup(~k) ]-> [ ]
+
+rule Other:
+  [ Fr(~m) ] --[ Other(~m) ]-> [ ]
+
+// Two distinct fresh values from Setup must occur at distinct times.
+lemma fresh_distinct_times:
+  "All a b #i #j. Setup(a) @ i & Setup(b) @ j & not(#i = #j) ==> not(a = b)"
+
+end

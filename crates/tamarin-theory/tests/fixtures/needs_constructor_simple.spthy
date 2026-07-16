@@ -1,0 +1,11 @@
+theory NeedsConstructorSimple
+begin
+
+rule SendBoth:
+  [ Fr(~a), Fr(~b) ] --[ SentBoth(~a, ~b) ]-> [ Out(~a), Out(~b) ]
+
+lemma sent_exists:
+  exists-trace
+  "Ex a b #i. SentBoth(a, b) @ i"
+
+end

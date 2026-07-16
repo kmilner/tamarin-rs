@@ -1,0 +1,26 @@
+# Workspace lint conventions: two invariants of this port are
+# compiler-checked rather than convention-checked.  Every intentional
+# exception carries a site-local `#[allow]` with a one-line justification
+# stating why that site is safe.
+
+# stdout is the byte-parity surface with the Haskell oracle: any stray
+# `println!`/`print!` can perturb `tamarin-prover ... --prove` stdout and break
+# byte-identical parity.  Diagnostics must go to stderr (`eprintln!`); real CLI
+# output must go through the sanctioned output path in the `tamarin-prover`
+# binary (annotated with `#[allow(clippy::disallowed_macros)]`).
+disallowed-macros = [
+    { path = "std::println", reason = "stdout is the byte-parity surface; use eprintln! or the sanctioned CLI output path" },
+    { path = "std::print", reason = "stdout is the byte-parity surface; use eprintln! or the sanctioned CLI output path" },
+]
+
+# std `HashMap`/`HashSet` have nondeterministic iteration order, which can reach
+# observable output or an `Ord`-sensitive structure and diverge from the
+# oracle.  Use `tamarin_utils::FastMap`/`FastSet` (deterministic `FxBuildHasher`
+# — note the aliases have their own def-ids, so USES of `FastMap`/`FastSet` are
+# NOT flagged, only literal `std::collections::HashMap`/`HashSet` paths), or
+# keep std with an `#[allow(clippy::disallowed_types)]` and a justification
+# comment stating why iteration order never escapes.
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "iteration order can reach output; use tamarin_utils::FastMap/FastSet, or allow with a justification comment" },
+    { path = "std::collections::HashSet", reason = "iteration order can reach output; use tamarin_utils::FastMap/FastSet, or allow with a justification comment" },
+]

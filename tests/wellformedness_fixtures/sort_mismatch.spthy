@@ -1,0 +1,12 @@
+// Fixture: triggers `Variable with mismatching sorts or capitalization`.
+// `x` is used as both a public variable (`$x`) and a fresh variable
+// (`~x`) in the same rule.
+theory SortMismatch
+begin
+
+rule Bad:
+   [ Fr(~x), In($x) ]
+  --[ ]->
+   [ Out(<~x, $x>) ]
+
+end

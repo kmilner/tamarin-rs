@@ -1,0 +1,22 @@
+// Fixture (run with --diff): triggers `Right rule`.
+// The explicit `right` rule has an extra premise compared to what
+// would be derived by projecting the parent diff rule.
+theory DiffRR
+begin
+
+rule Send:
+   [ Fr(~k) ]
+  --[ ]->
+   [ Out(diff(~k, ~k)) ]
+left
+  rule Send:
+   [ Fr(~k) ]
+  --[ ]->
+   [ Out(~k) ]
+right
+  rule Send:
+   [ Fr(~k), In(extra) ]
+  --[ ]->
+   [ Out(~k) ]
+
+end

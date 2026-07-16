@@ -1,0 +1,40 @@
+[package]
+name = "tamarin-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "HTTP server for the Tamarin prover (Rust port) interactive UI."
+
+[lib]
+name = "tamarin_server"
+path = "src/lib.rs"
+
+[dependencies]
+tamarin-utils = { workspace = true }
+tamarin-term = { workspace = true }
+tamarin-theory = { workspace = true }
+tamarin-parser = { workspace = true }
+tamarin-sapic = { workspace = true }
+tamarin-accountability = { workspace = true }
+
+axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio", "matched-path", "tracing", "form", "query", "multipart"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "sync", "time", "fs"] }
+tower-http = { version = "0.5", features = ["fs", "trace", "cors"] }
+tower = { version = "0.4", features = ["util"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+parking_lot = "0.12"
+percent-encoding = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+serde_json = "1"
+
+[lints]
+workspace = true

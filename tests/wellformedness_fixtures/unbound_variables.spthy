@@ -1,0 +1,13 @@
+// Fixture: triggers `Unbound variables`.
+// Variable `~k` appears in the conclusion but is not bound by any
+// fresh fact, persistent fact, premise variable, or public name on
+// the LHS.
+theory UnboundVars
+begin
+
+rule Bad:
+   [ ]
+  --[ ]->
+   [ Out(~k) ]
+
+end

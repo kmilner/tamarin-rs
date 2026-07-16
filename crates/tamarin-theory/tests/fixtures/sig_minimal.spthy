@@ -1,0 +1,13 @@
+theory SigMinimal
+begin
+
+builtins: hashing
+
+rule R:
+  [ Fr(~k) ] --[ A(~k) ]-> [ Out(h(~k)) ]
+
+// Trivial all-traces tautology that should close immediately.
+lemma a_self:
+  "All k #i. A(k) @ #i ==> A(k) @ #i"
+
+end
