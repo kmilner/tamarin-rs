@@ -1,3 +1,17 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Benedikt Schmidt, Jannik Dreier, Robert Künnemann, Philip
+//   Lukert, Kevin Morio, "sans-sucre" (github), Charlie Jacomme, Artur
+//   Cygan, "Tom" (github BTom-GH), "ValentinYuri" (github), "Nynko"
+//   (github), Ralf Sasse, Mathias Aurand, Adrian Dapprich, Felix Linker,
+//   Alexander Dax, Johannes Wocker, and other minor contributors (see
+//   upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term/FunctionSymbols.hs,
+//   lib/term/src/Term/Term/Raw.hs, lib/theory/src/Theory/Model/Formula.hs,
+//   lib/theory/src/Theory/Text/Parser/Term.hs,
+//   lib/theory/src/Theory/Text/Parser/Token.hs,
+//   lib/theory/src/Theory/Tools/Wellformedness.hs, src/Main/Console.hs
+
 //! Faithful port of HS `checkTerms` (the "Formula terms" wellformedness
 //! check) from `lib/theory/src/Theory/Tools/Wellformedness.hs:960-985`,
 //! together with `formulaTerms` (`:917-920`) and `atomTerms` (`:908-915`).

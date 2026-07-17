@@ -1,3 +1,13 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Felix Linker, Robert Künnemann, Benedikt
+//   Schmidt, "Pops" (github racoucho1u), symphorien, Ralf Sasse, Philip
+//   Lukert, Felix Yan, Yavor Ivanov, Katriel Cohn-Gordon, Alexander Dax, and
+//   other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Theory/Constraint/Solver/Contradictions.hs,
+//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
+//   lib/theory/src/Theory/Proof.hs
+
 //! Proof-skeleton printer + Haskell `--output=` extractor for
 //! cross-checking that our proof trees structurally match
 //! `tamarin-prover`'s.

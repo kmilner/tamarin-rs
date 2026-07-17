@@ -1,3 +1,12 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Artur Cygan, Simon Meier, Adrian Dapprich, Felix Linker, Jannik Dreier,
+//   Cas Cremers, "Jackie" (github kanakanajm), Ralf Sasse, Yann Colomb,
+//   "Tom" (github BTom-GH), Benedikt Schmidt, Alexander Dax, and other minor
+//   contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Theory/Constraint/System/Graph/Graph.hs,
+//   src/Web/Handler.hs
+
 //! Port of `GraphOptions` from `Graph.hs`.
 
 // this module's `HashMap<String, String>` values are

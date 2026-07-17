@@ -1,3 +1,8 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/utils/src/Text/PrettyPrint/Html.hs
+
 //! Port of `Text.PrettyPrint.Html` from `lib/utils/src/Text/PrettyPrint/Html.hs`.
 //!
 //! We reuse the plain `Doc` from `pretty.rs`. Two helpers do the work:

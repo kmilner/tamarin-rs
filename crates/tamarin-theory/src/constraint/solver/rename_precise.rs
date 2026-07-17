@@ -1,3 +1,22 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Philip Lukert, Benedikt Schmidt, Robert
+//   Künnemann, "Pops" (github racoucho1u), Felix Linker, Ralf Sasse, Yavor
+//   Ivanov, "sans-sucre" (github), Nick Moore, Katriel Cohn-Gordon, Adrian
+//   Dapprich, Artur Cygan, "Tom" (github BTom-GH), Charlie Jacomme,
+//   Alexander Dax, Felix Yan, and other minor contributors (see upstream git
+//   history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs,
+//   lib/term/src/Term/Substitution/SubstVFree.hs,
+//   lib/term/src/Term/Substitution/SubstVFresh.hs,
+//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
+//   lib/theory/src/Theory/Constraint/System.hs,
+//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
+//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
+//   lib/theory/src/Theory/Model/Atom.hs,
+//   lib/theory/src/Theory/Tools/EquationStore.hs,
+//   lib/theory/src/Theory/Tools/SubtermStore.hs
+
 //! Port of `Term.LTerm.renamePrecise` applied to a `System`.
 //!
 //! Haskell `cleanup` (ProofMethod.hs):

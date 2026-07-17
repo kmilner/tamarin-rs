@@ -1,3 +1,8 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann, Charlie Jacomme, Artur Cygan
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic/ReliableChannelTranslation.hs
+
 //! Port of `Sapic.ReliableChannelTranslation`
 //! (`lib/sapic/src/Sapic/ReliableChannelTranslation.hs`).
 //!

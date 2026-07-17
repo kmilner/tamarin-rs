@@ -1,3 +1,21 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Robert Künnemann, Hong-Thai Luu, Kevin
+//   Morio, Felix Linker, Benedikt Schmidt, Artur Cygan, Philip Lukert,
+//   "Pops" (github racoucho1u), Ralf Sasse, symphorien, Yavor Ivanov, "sans-
+//   sucre" (github), Felix Yan, "Nynko" (github), "Tom" (github BTom-GH),
+//   "ValentinYuri" (github), Jérôme (github Azurios-git), Katriel Cohn-
+//   Gordon, Charlie Jacomme, Alexander Dax, and other minor contributors
+//   (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs, lib/theory/src/Prover.hs,
+//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
+//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
+//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
+//   lib/theory/src/Theory/Model/Fact.hs, lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/ProofSkeleton.hs,
+//   lib/theory/src/Theory/Text/Parser/Formula.hs,
+//   lib/theory/src/Theory/Text/Parser/Proof.hs, src/Main/TheoryLoader.hs
+
 //! Skeleton-replay prover — port of HS `replaceSorryProver`
 //! (lib/theory/src/Theory/Proof.hs).
 //!

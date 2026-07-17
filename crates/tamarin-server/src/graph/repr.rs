@@ -1,3 +1,16 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Adrian Dapprich, Robert Künnemann, Jannik Dreier, Mathias
+//   Aurand, Hong-Thai Luu, Yavor Ivanov, Philip Lukert, Benedikt Schmidt,
+//   Artur Cygan, "ValentinYuri" (github), Felix Linker, Ralf Sasse, "sans-
+//   sucre" (github), Kevin Morio, and other minor contributors (see upstream
+//   git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Rule.hs, lib/theory/src/Theory/Constraint/System/Dot.hs,
+//   lib/theory/src/Theory/Constraint/System/Graph/Graph.hs,
+//   lib/theory/src/Theory/Constraint/System/Graph/GraphRepr.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Text/Parser/Rule.hs, lib/utils/src/Text/Dot.hs
+
 //! Port of `Theory.Constraint.System.Graph.GraphRepr` —
 //! intermediate representation of a `System` as nodes/edges/clusters
 //! that can be rendered to DOT/JSON.

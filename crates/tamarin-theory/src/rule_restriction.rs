@@ -1,3 +1,16 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Robert Künnemann, Charlie Jacomme, Benedikt
+//   Schmidt, Hong-Thai Luu, Philip Lukert, Yavor Ivanov, "Tom" (github BTom-
+//   GH), Ralf Sasse, Kevin Morio, "ValentinYuri" (github), "Pops" (github
+//   racoucho1u), Felix Linker, and other minor contributors (see upstream
+//   git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs, lib/theory/src/Rule.hs,
+//   lib/theory/src/Theory/Model/Restriction.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Text/Parser.hs,
+//   lib/theory/src/Theory/Text/Parser/Term.hs
+
 //! Port of HS `liftedAddProtoRule` (Theory/Text/Parser.hs:166-193) +
 //! `fromRuleRestriction` / `rewrite` (Theory/Model/Restriction.hs:89-161).
 //!

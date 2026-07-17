@@ -1,3 +1,13 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann, Simon Meier, Charlie Jacomme, "Tom" (github BTom-GH),
+//   Kevin Morio, Philip Lukert, "Pops" (github racoucho1u), Mathias Aurand,
+//   Jannik Dreier, Johannes Wocker, Ralf Sasse, and other minor contributors
+//   (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Theory/Text/Parser/Signature.hs,
+//   lib/theory/src/Theory/Text/Parser/Term.hs,
+//   lib/theory/src/Theory/Text/Parser/Token.hs
+
 //! Lexer for `.spthy` files.
 //!
 //! The lexer is a streaming character cursor that exposes higher-level

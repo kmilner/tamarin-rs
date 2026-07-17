@@ -1,3 +1,25 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Hong-Thai Luu, Benedikt Schmidt, Kevin
+//   Morio, Robert Künnemann, Felix Linker, "Pops" (github racoucho1u), Ralf
+//   Sasse, Charlie Jacomme, Artur Cygan, Philip Lukert, Yavor Ivanov,
+//   symphorien, "gilcu3" (github), "Nynko" (github), "ValentinYuri"
+//   (github), Felix Yan, "Tom" (github BTom-GH), Katriel Cohn-Gordon, Jérôme
+//   (github Azurios-git), Nick Moore, Adrian Dapprich, Cas Cremers,
+//   Alexander Dax, and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Maude/Parser.hs, lib/theory/src/ClosedTheory.hs,
+//   lib/theory/src/Rule.hs,
+//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
+//   lib/theory/src/Theory/Constraint/System.hs,
+//   lib/theory/src/Theory/Model/Fact.hs, lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/Sapic.hs, lib/theory/src/Theory/Text/Parser.hs,
+//   lib/theory/src/Theory/Tools/IntruderRules.hs,
+//   lib/theory/src/Theory/Tools/LoopBreakers.hs,
+//   lib/theory/src/Theory/Tools/RuleVariants.hs, src/Main/Mode/Intruder.hs,
+//   src/Main/TheoryLoader.hs
+
 //! Solver context — port of the `ProofContext` data type from
 //! `Theory.Constraint.System`.
 //!

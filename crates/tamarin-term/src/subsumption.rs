@@ -1,3 +1,11 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Benedikt Schmidt, Jannik Dreier, Philip Lukert, Felix Yan,
+//   "Tom" (github BTom-GH), Charlie Jacomme, and other minor contributors
+//   (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Rewriting/Definitions.hs,
+//   lib/term/src/Term/Subsumption.hs
+
 //! Port of `Term.Subsumption` — subsumption ordering on terms.
 //!
 //! Subsumption: `t1 ≤ t2` iff there exists a substitution `s` such that

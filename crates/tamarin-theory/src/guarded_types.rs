@@ -1,3 +1,8 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Theory/Sapic/Term.hs
+
 //! HS-faithful DeBruijn-indexed types for Guarded formulas.
 //!
 //! Mirrors `Theory.Constraint.System.Guarded`:

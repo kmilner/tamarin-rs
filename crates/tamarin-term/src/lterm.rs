@@ -1,3 +1,11 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Benedikt Schmidt, Jannik Dreier, Ralf Sasse, Philip Lukert,
+//   "Nynko" (github), Charlie Jacomme, Felix Linker, "Tom" (github BTom-GH),
+//   and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Unification.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Sources.hs
+
 //! Port of `Term.LTerm` data types from `lib/term/src/Term/LTerm.hs`:
 //! sorts, names, logical variables, simple predicates and convertors,
 //! the `BVar`/`BLVar`/`BLTerm` bound-variable wrappers, the `HasFrees`

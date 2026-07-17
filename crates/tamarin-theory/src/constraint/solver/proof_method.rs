@@ -1,3 +1,21 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Philip Lukert, Artur Cygan, Felix Linker,
+//   Benedikt Schmidt, Robert Künnemann, Ralf Sasse, "Pops" (github
+//   racoucho1u), "Jackie" (github kanakanajm), Cas Cremers, symphorien,
+//   Charlie Jacomme, Adrian Dapprich, Yann Colomb, "Tom" (github BTom-GH),
+//   Niklas Medinger, "Nynko" (github), Felix Yan, Mathias Aurand, Alexander
+//   Dax, Yavor Ivanov, Kevin Morio, Dominik Schoop, "ValentinYuri" (github),
+//   Katriel Cohn-Gordon, and other minor contributors (see upstream git
+//   history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs,
+//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Simplify.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
+//   lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/Tools/SubtermStore.hs, src/Web/Theory.hs
+
 //! Port of `Theory.Constraint.Solver.ProofMethod`.
 //!
 //! `ProofMethod` is the small-step interface to the constraint

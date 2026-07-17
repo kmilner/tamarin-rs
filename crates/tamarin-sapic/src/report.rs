@@ -1,3 +1,8 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Charlie Jacomme, Artur Cygan, Robert Künnemann
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic/Report.hs
+
 //! Port of `Sapic.Report` (`lib/sapic/src/Sapic/Report.hs`) — the
 //! `locations-report` (`builtins: locations-report`) translation, gated on
 //! `_transReport` (`OpenTheory` option set from the `locations-report` builtin).

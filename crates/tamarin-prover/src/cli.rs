@@ -1,3 +1,20 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Hong-Thai Luu, Robert Künnemann, Kevin Morio, Artur Cygan,
+//   Jannik Dreier, Felix Linker, Benedikt Schmidt, "Nynko" (github),
+//   "ValentinYuri" (github), Ralf Sasse, symphorien, Adrian Dapprich, Yavor
+//   Ivanov, "Tom" (github BTom-GH), Philip Lukert, "Pops" (github
+//   racoucho1u), Felix Yan, "gilcu3" (github), Jérôme (github Azurios-git),
+//   Hizbullah, Katriel Cohn-Gordon, Dominik Schoop, and other minor
+//   contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Prover.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
+//   lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/Text/Parser/Proof.hs,
+//   lib/theory/src/TheoryObject.hs, src/Main/Console.hs,
+//   src/Main/Environment.hs, src/Main/Mode/Batch.hs,
+//   src/Main/Mode/Interactive.hs, src/Main/TheoryLoader.hs
+
 //! Command-line argument parsing for `tamarin-prover` (Rust port).
 //!
 //! Mirrors the surface of the Haskell `tamarin-prover` CLI as defined

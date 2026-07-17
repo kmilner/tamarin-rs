@@ -1,3 +1,9 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Benedikt Schmidt, Simon Meier, Felix Yan, and other minor contributors
+//   (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Rewriting/Definitions.hs
+
 //! Port of `Term.Rewriting.Definitions` from
 //! `lib/term/src/Term/Rewriting/Definitions.hs`.
 //!

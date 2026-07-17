@@ -1,3 +1,9 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann, Artur Cygan, Charlie Jacomme, and other minor
+//   contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic/ProgressTranslation.hs
+
 //! Port of `Sapic.ProgressTranslation`
 //! (`lib/sapic/src/Sapic/ProgressTranslation.hs`).
 //!

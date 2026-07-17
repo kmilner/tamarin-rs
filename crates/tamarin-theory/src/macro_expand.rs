@@ -1,3 +1,22 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Hong-Thai Luu, Simon Meier, Robert Künnemann, Jannik Dreier, Charlie
+//   Jacomme, Kevin Morio, "Tom" (github BTom-GH), "ValentinYuri" (github),
+//   Yavor Ivanov, "gilcu3" (github), "Pops" (github racoucho1u), Benedikt
+//   Schmidt, Philip Lukert, Ralf Sasse, Felix Linker, "Nynko" (github),
+//   Katriel Cohn-Gordon, and other minor contributors (see upstream git
+//   history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Macro.hs, lib/theory/src/ClosedTheory.hs,
+//   lib/theory/src/Items/CaseTestItem.hs, lib/theory/src/Lemma.hs,
+//   lib/theory/src/Prover.hs, lib/theory/src/Rule.hs,
+//   lib/theory/src/Theory/Model/Fact.hs,
+//   lib/theory/src/Theory/Model/Formula.hs,
+//   lib/theory/src/Theory/Model/Restriction.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Sapic/Term.hs,
+//   lib/theory/src/Theory/Text/Parser.hs,
+//   lib/theory/src/Theory/Text/Parser/Macro.hs
+
 //! Parser-AST level macro expansion.
 //!
 //! Port of `Term.Macro.applyMacros` (HS: lib/term/src/Term/Macro.hs:40-50)

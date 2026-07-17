@@ -1,3 +1,13 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann, Benedikt Schmidt, "Tom" (github BTom-GH), Charlie
+//   Jacomme, Simon Meier, Jannik Dreier, Philip Lukert, Mathias Aurand,
+//   "Pops" (github racoucho1u), Ralf Sasse, and other minor contributors
+//   (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Builtin/Rules.hs,
+//   lib/term/src/Term/Maude/Signature.hs,
+//   lib/theory/src/Theory/Text/Parser/Signature.hs
+
 //! Port of `Term.Maude.Signature` from
 //! `lib/term/src/Term/Maude/Signature.hs`.
 //!

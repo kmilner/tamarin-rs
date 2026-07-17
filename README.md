@@ -277,7 +277,10 @@ environment reference, and the divergence-debugging toolbox.
 ## License
 
 - All Rust code in this repository (`crates/`, `scripts/`, `tests/`) is
-  MIT-licensed — see [LICENSE](LICENSE).
+  MIT-licensed by default, however code which is based on GPL 3.0 code is
+  still GPL 3.0 until either replaced by a cleanroom implementation or
+  granted permission for relicensing by the related authors. This is indicated
+  by comments at the top of those files. This makes the resulting binary GPL 3.0.
 - The `tamarin-prover/` submodule is a separate upstream project licensed under
   GPL-3.0 (see `tamarin-prover/LICENSE`). `patches/tamarin-prover-fixes.patch`
   modifies those GPL-3 sources and is therefore itself GPL-3.
@@ -287,8 +290,3 @@ environment reference, and the divergence-debugging toolbox.
   serves the submodule's `data/` web assets (jQuery, jQuery UI, etc.) at
   runtime; and the test and parity harnesses run the GPL Haskell binary as an
   external oracle process.
-- Practical consequence, not legal advice: because binaries built from this
-  workspace incorporate GPL-3-licensed data files, **distributing** those
-  binaries triggers GPL-3 obligations even though the Rust source itself is
-  MIT. Running the Haskell oracle as a separate process for testing does not
-  affect the licensing of the Rust code.

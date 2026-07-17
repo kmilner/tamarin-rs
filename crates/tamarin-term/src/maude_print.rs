@@ -1,3 +1,9 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Benedikt Schmidt, Jannik Dreier, Robert Künnemann, Philip Lukert, and
+//   other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Maude/Parser.hs
+
 //! Port of `Term.Maude.Parser`'s pretty-printing portion (Maude module
 //! emission and term formatting). The parsing portion lives in
 //! [`crate::maude_parse`].

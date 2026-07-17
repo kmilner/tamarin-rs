@@ -1,3 +1,9 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann, Charlie Jacomme, Kevin Morio, Artur Cygan, and other
+//   minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic/Basetranslation.hs
+
 //! Port of `Sapic.Basetranslation` (`lib/sapic/src/Sapic/Basetranslation.hs`):
 //!   - `baseInit`       (Basetranslation.hs:312-318)
 //!   - `baseTransNull`  (Basetranslation.hs:81)

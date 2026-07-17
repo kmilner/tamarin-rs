@@ -1,3 +1,11 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Robert Künnemann, Benedikt Schmidt, Philip
+//   Lukert, Yavor Ivanov, Hong-Thai Luu, Ralf Sasse, and other minor
+//   contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Theory/Constraint/Solver/Goals.hs,
+//   lib/theory/src/Theory/Model/Rule.hs
+
 //! Port of `Theory.Model.Rule` from `lib/theory/src/Theory/Model/Rule.hs`.
 //!
 //! Rewriting rules describing protocol execution and intruder deduction.

@@ -1,3 +1,12 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Kevin Morio, Robert Künnemann, Benedikt Schmidt, Artur
+//   Cygan, Jannik Dreier, Philip Lukert, "Tom" (github BTom-GH), Charlie
+//   Jacomme, and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/accountability/src/Accountability/Generation.hs,
+//   lib/term/src/Term/LTerm.hs, lib/theory/src/Theory/Model/Formula.hs,
+//   lib/theory/src/Theory/Text/Parser/Formula.hs
+
 //! Locally-nameless `SyntacticLNFormula` and the pure transforms the
 //! accountability lemma generation runs on it.
 //!

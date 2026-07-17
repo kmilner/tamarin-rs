@@ -1,3 +1,9 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Benedikt Schmidt, "sans-sucre" (github), and
+//   other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/utils/src/Utils/Misc.hs
+
 //! Port of `Utils.Misc` from `lib/utils/src/Utils/Misc.hs`.
 //!
 //! Pure helpers named after their Haskell originals where reasonable;

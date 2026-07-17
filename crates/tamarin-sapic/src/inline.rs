@@ -1,3 +1,16 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann, Hong-Thai Luu, Simon Meier, Charlie Jacomme, Benedikt
+//   Schmidt, Kevin Morio, "Tom" (github BTom-GH), Artur Cygan,
+//   "ValentinYuri" (github), Felix Linker, Yavor Ivanov, Jannik Dreier,
+//   "Pops" (github racoucho1u), and other minor contributors (see upstream
+//   git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic/Basetranslation.hs, lib/sapic/src/Sapic/Bindings.hs,
+//   lib/term/src/Term/Maude/Process.hs,
+//   lib/theory/src/Theory/Sapic/Process.hs,
+//   lib/theory/src/Theory/Text/Parser/Sapic.hs,
+//   lib/theory/src/TheoryObject.hs
+
 //! Process-call inlining.
 //!
 //! HS inlines process definitions at PARSE TIME: when the parser

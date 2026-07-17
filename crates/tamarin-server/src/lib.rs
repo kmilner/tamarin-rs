@@ -1,3 +1,12 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Kevin Morio, Artur Cygan, Simon Meier, Jannik Dreier, Benedikt Schmidt,
+//   Ralf Sasse, "Jackie" (github kanakanajm), Felix Linker, Adrian Dapprich,
+//   Yavor Ivanov, "Nynko" (github), Jérôme (github Azurios-git), and other
+//   minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   src/Main/Mode/Interactive.hs, src/Main/TheoryLoader.hs,
+//   src/Web/Dispatch.hs, src/Web/Types.hs
+
 //! HTTP server for the Tamarin prover (Rust port) interactive UI.
 //!
 //! Goal: serve the existing `frontend/` (TypeScript + d3 + viz-js)
@@ -50,10 +59,18 @@
 #![allow(clippy::disallowed_macros)]
 
 pub mod graph;
+// Clean-room deliverables vendored as in-crate modules (no license header —
+// these are the relicensable clean sources). `graph_clean` reimplements the
+// web-UI constraint-system graph DOT payload (model + serializer + node
+// abbreviation); `web_clean` reimplements the interactive web-UI response
+// bodies (HTML shell, forms, 404, JSON envelopes, DOT skeleton). Mechanical
+// path fixes only (`crate::` -> `super::`).
+pub mod graph_clean;
 pub mod handlers;
 pub mod routes;
 pub mod state;
 pub mod theory_io;
+pub mod web_clean;
 
 pub use routes::router;
 pub use state::{AppState, TheoryEntry, TheoryStore};

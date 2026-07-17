@@ -1,3 +1,12 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann, Charlie Jacomme, Artur Cygan, Kevin Morio, and other
+//   minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic/Basetranslation.hs, lib/sapic/src/Sapic/Bindings.hs,
+//   lib/sapic/src/Sapic/ProcessUtils.hs, lib/sapic/src/Sapic/Typing.hs,
+//   lib/theory/src/Theory/Sapic/Process.hs,
+//   lib/theory/src/Theory/Sapic/Term.hs
+
 //! Port of `Theory.Sapic.{Position, Term, Annotation, Process}` from
 //! `lib/theory/src/Theory/Sapic/`.
 //!

@@ -1,3 +1,8 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Theory/Syntactic/Predicate.hs
+
 //! Port of the data-only portion of `Theory.Syntactic.Predicate` from
 //! `lib/theory/src/Theory/Syntactic/Predicate.hs`.
 //!

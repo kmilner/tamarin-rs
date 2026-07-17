@@ -1,3 +1,8 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Adrian Dapprich
+// Ported from upstream tamarin-prover sources:
+//   lib/utils/src/Debug/Trace/EnvTracer.hs
+
 //! Port of `Debug.Trace.EnvTracer` from `lib/utils/src/Debug/Trace/EnvTracer.hs`.
 //!
 //! `DEBUG_TRACE=foo,bar tamarin-prover ...` enables traces tagged with

@@ -1,3 +1,30 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Philip Lukert, Benedikt Schmidt, Robert
+//   Künnemann, Kevin Morio, Felix Linker, "Pops" (github racoucho1u), Ralf
+//   Sasse, Hong-Thai Luu, Artur Cygan, Yavor Ivanov, symphorien, "Nynko"
+//   (github), Felix Yan, Charlie Jacomme, Katriel Cohn-Gordon, Adrian
+//   Dapprich, "ValentinYuri" (github), Nick Moore, "Tom" (github BTom-GH),
+//   Jérôme (github Azurios-git), Alexander Dax, and other minor contributors
+//   (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs,
+//   lib/term/src/Term/Substitution/SubstVFree.hs,
+//   lib/term/src/Term/Substitution/SubstVFresh.hs,
+//   lib/term/src/Term/Term/FunctionSymbols.hs,
+//   lib/term/src/Term/Unification.hs, lib/theory/src/Rule.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Goals.hs,
+//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
+//   lib/theory/src/Theory/Constraint/System.hs,
+//   lib/theory/src/Theory/Model/Fact.hs,
+//   lib/theory/src/Theory/Model/Rule.hs, lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/Sapic/Term.hs,
+//   lib/theory/src/Theory/Tools/EquationStore.hs,
+//   lib/theory/src/Theory/Tools/SubtermStore.hs,
+//   lib/utils/src/Control/Monad/Bind.hs, lib/utils/src/Extension/Prelude.hs,
+//   src/Main/TheoryLoader.hs
+
 //! Port of `Theory.Constraint.Solver.Sources`.
 //!
 //! Sources represent the big-step proofs computing the possible

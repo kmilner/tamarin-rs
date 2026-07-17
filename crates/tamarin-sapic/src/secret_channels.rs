@@ -1,3 +1,9 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Charlie Jacomme, Robert Künnemann, and other minor contributors (see
+//   upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic/SecretChannels.hs
+
 //! Port of `Sapic.SecretChannels` from
 //! `lib/sapic/src/Sapic/SecretChannels.hs`.
 //!

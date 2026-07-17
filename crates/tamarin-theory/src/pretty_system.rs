@@ -1,3 +1,22 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Philip Lukert, Artur Cygan, Benedikt
+//   Schmidt, "Pops" (github racoucho1u), Ralf Sasse, Felix Linker, Robert
+//   Künnemann, "Jackie" (github kanakanajm), Adrian Dapprich, Cas Cremers,
+//   "Tom" (github BTom-GH), Yann Colomb, Yavor Ivanov, Mathias Aurand, Hong-
+//   Thai Luu, Katriel Cohn-Gordon, Nick Moore, Dominik Schoop, Alexander
+//   Dax, Felix Yan, Charlie Jacomme, Kevin Morio, "ValentinYuri" (github),
+//   and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs,
+//   lib/term/src/Term/Substitution/SubstVFree.hs, lib/theory/src/Pretty.hs,
+//   lib/theory/src/Theory/Constraint/System.hs,
+//   lib/theory/src/Theory/Model/Fact.hs,
+//   lib/theory/src/Theory/Text/Pretty.hs,
+//   lib/theory/src/Theory/Tools/EquationStore.hs,
+//   lib/theory/src/Theory/Tools/SubtermStore.hs,
+//   lib/utils/src/Control/Monad/Disj/Class.hs,
+//   lib/utils/src/Text/PrettyPrint/Class.hs, src/Web/Theory.hs
+
 //! Pretty-printer for the constraint `System`.
 //!
 //! Port of `prettyNonGraphSystem` from

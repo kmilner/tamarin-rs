@@ -1,3 +1,12 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann, Kevin Morio, Hong-Thai Luu, Charlie Jacomme, Artur
+//   Cygan, Yavor Ivanov, Alexander Dax, and other minor contributors (see
+//   upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic.hs, lib/sapic/src/Sapic/Basetranslation.hs,
+//   lib/sapic/src/Sapic/Facts.hs, lib/sapic/src/Sapic/ProcessUtils.hs,
+//   lib/theory/src/OpenTheory.hs
+
 //! Port of the top-level SAPIC `translate` orchestration
 //! (`lib/sapic/src/Sapic.hs:45-101`) and `gen` (Sapic.hs:112-153), restricted
 //! to the CORE LINEAR pipeline (no progress / reliable / report / states /

@@ -1,3 +1,9 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Artur Cygan, "ValentinYuri" (github), "Nynko" (github), and
+//   other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   src/Main/Console.hs
+
 //! Embed git revision + build timestamp into the compiled binary so
 //! `tamarin-prover --version` can mirror HS's `Generated from:` block.
 //! Mirrors HS's compile-time TH (Console.hs `gitVersion`/`compileTime`): the

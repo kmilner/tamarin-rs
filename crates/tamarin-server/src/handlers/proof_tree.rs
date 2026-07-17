@@ -1,3 +1,28 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Jannik Dreier, Simon Meier, Hong-Thai Luu, Robert Künnemann, Artur
+//   Cygan, Felix Linker, Kevin Morio, "Pops" (github racoucho1u), Benedikt
+//   Schmidt, Ralf Sasse, Philip Lukert, Charlie Jacomme, Yavor Ivanov,
+//   "Jackie" (github kanakanajm), "Tom" (github BTom-GH), Adrian Dapprich,
+//   Cas Cremers, symphorien, "gilcu3" (github), "ValentinYuri" (github),
+//   Yann Colomb, Felix Yan, Mathias Aurand, "Nynko" (github), Katriel Cohn-
+//   Gordon, "sans-sucre" (github), Alexander Dax, Nick Moore, Jérôme (github
+//   Azurios-git), Dominik Schoop, and other minor contributors (see upstream
+//   git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Maude/Parser.hs, lib/theory/src/ClosedTheory.hs,
+//   lib/theory/src/Lemma.hs, lib/theory/src/Prover.hs,
+//   lib/theory/src/Rule.hs,
+//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
+//   lib/theory/src/Theory/Constraint/System.hs,
+//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
+//   lib/theory/src/Theory/Model/Rule.hs, lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/Text/Parser.hs,
+//   lib/theory/src/Theory/Text/Parser/Lemma.hs,
+//   lib/theory/src/Theory/Text/Parser/Rule.hs,
+//   lib/utils/src/Control/Monad/Disj/Class.hs,
+//   lib/utils/src/Text/PrettyPrint/Class.hs, src/Main/TheoryLoader.hs,
+//   src/Web/Theory.hs
+
 //! Live proof-tree state — mirror of Haskell's `IncrementalProof` +
 //! `applyProverAtPath`.
 //!

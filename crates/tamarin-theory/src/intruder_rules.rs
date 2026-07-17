@@ -1,3 +1,19 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Robert Künnemann, Kevin Morio, Benedikt Schmidt, Jannik
+//   Dreier, Hong-Thai Luu, Artur Cygan, Philip Lukert, Charlie Jacomme,
+//   Yavor Ivanov, "Nynko" (github), Felix Linker, "sans-sucre" (github),
+//   Ralf Sasse, "Tom" (github BTom-GH), Jérôme (github Azurios-git), and
+//   other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Maude/Types.hs,
+//   lib/term/src/Term/Positions.hs,
+//   lib/term/src/Term/Substitution/SubstVFresh.hs, lib/theory/src/Rule.hs,
+//   lib/theory/src/Theory/Sapic/Process.hs,
+//   lib/theory/src/Theory/Sapic/Term.hs,
+//   lib/theory/src/Theory/Tools/IntruderRules.hs,
+//   lib/utils/src/Utils/Misc.hs, src/Main/Mode/Intruder.hs,
+//   src/Main/TheoryLoader.hs
+
 //! Port of `Theory.Tools.IntruderRules` from
 //! `lib/theory/src/Theory/Tools/IntruderRules.hs` — covers the
 //! always-included "special" intruder rules plus the DH/XOR/multiset

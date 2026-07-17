@@ -1,3 +1,10 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Benedikt Schmidt, Jannik Dreier, Philip Lukert, "Tom"
+//   (github BTom-GH), Charlie Jacomme, and other minor contributors (see
+//   upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs
+
 //! Port of `Control.Monad.Fresh` and friends.
 //!
 //! The Haskell originals are monad transformers (`FreshT`) layered over user

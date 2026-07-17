@@ -1,3 +1,19 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Benedikt Schmidt, "Pops" (github
+//   racoucho1u), Philip Lukert, Ralf Sasse, Felix Linker, Felix Yan, Yavor
+//   Ivanov, Robert Künnemann, Artur Cygan, Adrian Dapprich, Nick Moore,
+//   Charlie Jacomme, Katriel Cohn-Gordon, "Tom" (github BTom-GH), and other
+//   minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Maude/Process.hs,
+//   lib/term/src/Term/Maude/Types.hs,
+//   lib/term/src/Term/Rewriting/Definitions.hs,
+//   lib/term/src/Term/Substitution/SubstVFresh.hs,
+//   lib/term/src/Term/Subsumption.hs, lib/term/src/Term/Unification.hs,
+//   lib/theory/src/Theory/Constraint/System.hs,
+//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
+//   lib/theory/src/Theory/Tools/EquationStore.hs
+
 //! Port of `Term.Maude.Process` — a subprocess driver for Maude.
 //!
 //! Spawns `maude -interactive -no-tecla -no-banner -no-wrap -batch`,

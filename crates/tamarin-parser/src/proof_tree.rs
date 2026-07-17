@@ -1,3 +1,15 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Benedikt Schmidt, Robert Künnemann, Philip
+//   Lukert, Charlie Jacomme, Felix Linker, Kevin Morio, Ralf Sasse, "Tom"
+//   (github BTom-GH), "sans-sucre" (github), Johannes Wocker, and other
+//   minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs,
+//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
+//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
+//   lib/theory/src/Theory/Text/Parser/Proof.hs,
+//   lib/theory/src/Theory/Text/Parser/Token.hs
+
 //! Structured parser for the proof skeleton attached to a lemma.
 //!
 //! Port of HS `Theory.Text.Parser.Proof.proofSkeleton`

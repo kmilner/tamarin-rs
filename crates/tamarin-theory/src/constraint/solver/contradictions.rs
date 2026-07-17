@@ -1,3 +1,21 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Benedikt Schmidt, Philip Lukert, "Pops"
+//   (github racoucho1u), Ralf Sasse, Robert Künnemann, Felix Linker, Charlie
+//   Jacomme, Niklas Medinger, "sans-sucre" (github), "Nynko" (github), Yavor
+//   Ivanov, Adrian Dapprich, Artur Cygan, Nick Moore, Katriel Cohn-Gordon,
+//   Felix Yan, "ValentinYuri" (github), "Tom" (github BTom-GH), and other
+//   minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Rewriting/Norm.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Contradictions.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Simplify.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
+//   lib/theory/src/Theory/Constraint/System.hs,
+//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
+//   lib/theory/src/Theory/Sapic/Substitution.hs,
+//   lib/theory/src/Theory/Tools/EquationStore.hs
+
 //! Port of `Theory.Constraint.Solver.Contradictions`.
 //!
 //! Identifies all reasons a `System` is contradictory. The full

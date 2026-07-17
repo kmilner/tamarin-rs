@@ -1,3 +1,14 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Hong-Thai Luu, Robert Künnemann, Felix
+//   Linker, Philip Lukert, symphorien, Benedikt Schmidt, Felix Yan, Kevin
+//   Morio, Yavor Ivanov, "Pops" (github racoucho1u), "ValentinYuri"
+//   (github), Ralf Sasse, Katriel Cohn-Gordon, and other minor contributors
+//   (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Items/LemmaItem.hs, lib/theory/src/Rule.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
+//   lib/theory/src/Theory/Model/Rule.hs, lib/theory/src/Theory/Proof.hs
+
 //! Top-level `Theory` data type — port of `TheoryObject.Theory` and
 //! `Items.TheoryItem.TheoryItem`.
 //!

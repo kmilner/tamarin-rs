@@ -1,3 +1,22 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Adrian Dapprich, Artur Cygan, Robert
+//   Künnemann, Mathias Aurand, Benedikt Schmidt, Felix Linker, Cas Cremers,
+//   Ralf Sasse, "Jackie" (github kanakanajm), Philip Lukert, Yann Colomb,
+//   "Tom" (github BTom-GH), "sans-sucre" (github), Yavor Ivanov, Alexander
+//   Dax, "ValentinYuri" (github), Hong-Thai Luu, Kevin Morio, Charlie
+//   Jacomme, and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs,
+//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
+//   lib/theory/src/Theory/Constraint/System/Dot.hs,
+//   lib/theory/src/Theory/Constraint/System/Graph/Graph.hs,
+//   lib/theory/src/Theory/Constraint/System/Graph/GraphRepr.hs,
+//   lib/theory/src/Theory/Model/Fact.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Text/Parser/Fact.hs,
+//   lib/utils/src/Control/Monad/Disj/Class.hs, lib/utils/src/Text/Dot.hs,
+//   lib/utils/src/Text/PrettyPrint/Class.hs, src/Web/Handler.hs
+
 //! Port of Haskell's `Theory.Constraint.System.Dot` +
 //! `Theory.Constraint.System.Graph.*` — convert a `System` into a
 //! Graphviz DOT representation suitable for `dot -Tsvg`.

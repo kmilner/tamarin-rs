@@ -1,3 +1,13 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Robert Künnemann, Benedikt Schmidt, "sans-
+//   sucre" (github), Philip Lukert, "Tom" (github BTom-GH), Mathias Aurand,
+//   "Nynko" (github), Kevin Morio, Ralf Sasse, Artur Cygan, Felix Linker,
+//   Yavor Ivanov, Alexander Dax, "ValentinYuri" (github), Charlie Jacomme
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic/Exceptions.hs, lib/sapic/src/Sapic/Warnings.hs,
+//   lib/term/src/Term/LTerm.hs, lib/theory/src/Theory/Sapic/Term.hs,
+//   lib/theory/src/Theory/Tools/Wellformedness.hs
+
 //! Port of `Sapic.Warnings` (`lib/sapic/src/Sapic/Warnings.hs`).
 //!
 //! `checkWellformedness = concatMap (toWfErrorReport . warnProcess) . theoryProcesses`

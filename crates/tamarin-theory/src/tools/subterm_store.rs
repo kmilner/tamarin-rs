@@ -1,3 +1,10 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Philip Lukert, Robert Künnemann, and other minor contributors (see
+//   upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Theory/Sapic/Term.hs,
+//   lib/theory/src/Theory/Tools/SubtermStore.hs
+
 //! Port of `Theory.Tools.SubtermStore`.
 //!
 //! The subterm store accumulates `t1 << t2` constraints during proof

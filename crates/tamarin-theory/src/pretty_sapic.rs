@@ -1,3 +1,16 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Robert Künnemann, Jannik Dreier, Hong-Thai Luu, Benedikt
+//   Schmidt, Philip Lukert, Ralf Sasse, Yavor Ivanov, Charlie Jacomme,
+//   "ValentinYuri" (github), and other minor contributors (see upstream git
+//   history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Term.hs, lib/theory/src/Rule.hs,
+//   lib/theory/src/Theory/Model/Fact.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Sapic/Print.hs,
+//   lib/theory/src/Theory/Sapic/Process.hs,
+//   lib/utils/src/Text/PrettyPrint/Class.hs
+
 //! Port of the SAPIC process pretty-printers from
 //! `lib/theory/src/Theory/Sapic/{Term,Process}.hs` and
 //! `lib/theory/src/Theory/Model/Fact.hs`, used for the `process="..."` rule

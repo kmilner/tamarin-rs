@@ -1,3 +1,29 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Hong-Thai Luu, Robert Künnemann, Kevin
+//   Morio, Artur Cygan, Adrian Dapprich, Benedikt Schmidt, Charlie Jacomme,
+//   "Tom" (github BTom-GH), Felix Linker, Dominik Schoop, Philip Lukert,
+//   "sans-sucre" (github), Yavor Ivanov, "Nynko" (github), "ValentinYuri"
+//   (github), Ralf Sasse, "Pops" (github racoucho1u), "gilcu3" (github),
+//   Mathias Aurand, symphorien, Felix Yan, Jérôme (github Azurios-git),
+//   Alexander Dax, Hizbullah, Katriel Cohn-Gordon, and other minor
+//   contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/ClosedTheory.hs, lib/theory/src/Items/RuleItem.hs,
+//   lib/theory/src/Prover.hs, lib/theory/src/Rule.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
+//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
+//   lib/theory/src/Theory/Constraint/System/JSON.hs,
+//   lib/theory/src/Theory/Model/Rule.hs, lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/Text/Parser.hs,
+//   lib/theory/src/Theory/Text/Parser/Accountability.hs,
+//   lib/theory/src/Theory/Text/Parser/Rule.hs,
+//   lib/theory/src/Theory/Text/Parser/Signature.hs,
+//   lib/theory/src/Theory/Tools/Wellformedness.hs,
+//   lib/theory/src/TheoryObject.hs, src/Main/Console.hs,
+//   src/Main/Environment.hs, src/Main/Mode/Batch.hs,
+//   src/Main/Mode/Interactive.hs, src/Main/Mode/Intruder.hs,
+//   src/Main/Mode/Test.hs, src/Main/TheoryLoader.hs
+
 //! Batch-mode driver: turn parsed [`Args`] into proof attempts and
 //! produce an analyzed-theory output document.
 //!

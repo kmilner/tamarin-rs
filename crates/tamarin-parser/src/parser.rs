@@ -1,3 +1,27 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Robert Künnemann, Jannik Dreier, Benedikt Schmidt, Charlie
+//   Jacomme, Philip Lukert, "Tom" (github BTom-GH), Kevin Morio, Yavor
+//   Ivanov, "ValentinYuri" (github), Ralf Sasse, Felix Linker, Adrian
+//   Dapprich, "Pops" (github racoucho1u), Mathias Aurand, Johannes Wocker,
+//   and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term/Raw.hs,
+//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
+//   lib/theory/src/Theory/Model/Fact.hs,
+//   lib/theory/src/Theory/Sapic/Term.hs,
+//   lib/theory/src/Theory/Text/Parser.hs,
+//   lib/theory/src/Theory/Text/Parser/Accountability.hs,
+//   lib/theory/src/Theory/Text/Parser/Formula.hs,
+//   lib/theory/src/Theory/Text/Parser/Lemma.hs,
+//   lib/theory/src/Theory/Text/Parser/Let.hs,
+//   lib/theory/src/Theory/Text/Parser/Macro.hs,
+//   lib/theory/src/Theory/Text/Parser/Proof.hs,
+//   lib/theory/src/Theory/Text/Parser/Rule.hs,
+//   lib/theory/src/Theory/Text/Parser/Sapic.hs,
+//   lib/theory/src/Theory/Text/Parser/Signature.hs,
+//   lib/theory/src/Theory/Text/Parser/Term.hs,
+//   lib/theory/src/Theory/Text/Parser/Token.hs
+
 //! Recursive-descent parser for `.spthy` files.
 
 // flag-name set import; membership dedup only;

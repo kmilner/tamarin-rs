@@ -1,3 +1,18 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Hong-Thai Luu, Kevin Morio, Benedikt
+//   Schmidt, Robert Künnemann, Philip Lukert, Artur Cygan, Jérôme (github
+//   Azurios-git), Yavor Ivanov, "ValentinYuri" (github), Ralf Sasse, "Tom"
+//   (github BTom-GH), "Nynko" (github), Felix Linker, Charlie Jacomme, and
+//   other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs, lib/theory/src/Prover.hs,
+//   lib/theory/src/Rule.hs, lib/theory/src/Theory/Model/Fact.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Text/Parser/Term.hs,
+//   lib/theory/src/Theory/Tools/IntruderRules.hs,
+//   lib/theory/src/Theory/Tools/MessageDerivationChecks.hs,
+//   src/Main/TheoryLoader.hs
+
 //! Dynamic message-derivation check.
 //!
 //! Mirrors HS's `Theory.Tools.MessageDerivationChecks.checkVariableDeducability`

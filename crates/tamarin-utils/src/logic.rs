@@ -1,3 +1,8 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/utils/src/Logic/Connectives.hs
+
 //! Port of `Logic.Connectives` from `lib/utils/src/Logic/Connectives.hs`.
 //!
 //! `Conj` and `Disj` are list-newtype wrappers used to track conjunctions

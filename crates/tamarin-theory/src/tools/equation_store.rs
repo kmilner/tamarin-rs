@@ -1,3 +1,18 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Benedikt Schmidt, Jannik Dreier, Robert Künnemann, Philip
+//   Lukert, Ralf Sasse, Felix Linker, "Nynko" (github), Charlie Jacomme,
+//   "Tom" (github BTom-GH), and other minor contributors (see upstream git
+//   history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Maude/Types.hs,
+//   lib/term/src/Term/Substitution/SubstVFresh.hs,
+//   lib/term/src/Term/Unification.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
+//   lib/theory/src/Theory/Sapic/Substitution.hs,
+//   lib/theory/src/Theory/Tools/EquationStore.hs,
+//   lib/theory/src/Theory/Tools/RuleVariants.hs
+
 //! Port of `Theory.Tools.EquationStore`.
 //!
 //! The equation store represents a (constrained) disjunction of

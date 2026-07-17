@@ -1,3 +1,10 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Artur Cygan, "Jackie" (github kanakanajm),
+//   Ralf Sasse, Benedikt Schmidt, Felix Linker, Adrian Dapprich, and other
+//   minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   src/Web/Types.hs
+
 //! Parse the wildcard path segment after `/thy/trace/<idx>/<section>/`
 //! into a [`TheoryPath`], mirroring Haskell's `parseTheoryPath` in
 //! `src/Web/Types.hs`.

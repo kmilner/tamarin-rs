@@ -1,3 +1,17 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Jannik Dreier, Simon Meier, Robert Künnemann, "Pops" (github
+//   racoucho1u), Felix Linker, Hong-Thai Luu, Ralf Sasse, Charlie Jacomme,
+//   Philip Lukert, Kevin Morio, "Tom" (github BTom-GH), Yavor Ivanov,
+//   Benedikt Schmidt, Nick Moore, Adrian Dapprich, Artur Cygan, Katriel
+//   Cohn-Gordon, "ValentinYuri" (github), Johannes Wocker, Alexander Dax,
+//   and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
+//   lib/theory/src/Theory/Constraint/System.hs,
+//   lib/theory/src/Theory/Text/Parser/Tactics.hs,
+//   lib/theory/src/Theory/Text/Parser/Token.hs,
+//   lib/theory/src/TheoryObject.hs
+
 //! Structured tactics and their pretty-printing.
 //!
 //! Mirrors the Haskell reference:

@@ -1,3 +1,9 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Benedikt Schmidt, Philip Lukert, Charlie Jacomme, Jannik Dreier, Robert
+//   Künnemann, and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Term/FunctionSymbols.hs
+
 //! Port of `Term.Term.FunctionSymbols` from
 //! `lib/term/src/Term/Term/FunctionSymbols.hs`.
 //!

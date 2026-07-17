@@ -1,3 +1,12 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Felix Linker, Robert Künnemann, "Pops"
+//   (github racoucho1u), Hong-Thai Luu, symphorien, Ralf Sasse, Philip
+//   Lukert, Felix Yan, Yavor Ivanov, Benedikt Schmidt, Katriel Cohn-Gordon,
+//   Alexander Dax, and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
+//   lib/theory/src/Theory/Proof.hs, lib/theory/src/Theory/ProofSkeleton.hs
+
 //! Proof-search driver — port of the `Theory.Proof` step loop.
 //!
 //! In Haskell, a proof tree (`LTreeProof`) grows by repeatedly:

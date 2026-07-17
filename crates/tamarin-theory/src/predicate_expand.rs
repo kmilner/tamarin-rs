@@ -1,3 +1,19 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann, Simon Meier, Benedikt Schmidt, Jannik Dreier, Charlie
+//   Jacomme, Hong-Thai Luu, Kevin Morio, "Tom" (github BTom-GH), Philip
+//   Lukert, Yavor Ivanov, Adrian Dapprich, Ralf Sasse, "ValentinYuri"
+//   (github), "Pops" (github racoucho1u), Felix Linker, and other minor
+//   contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term/Raw.hs,
+//   lib/theory/src/Items/CaseTestItem.hs,
+//   lib/theory/src/Theory/Model/Fact.hs,
+//   lib/theory/src/Theory/Syntactic/Predicate.hs,
+//   lib/theory/src/Theory/Text/Parser.hs,
+//   lib/theory/src/Theory/Text/Parser/Exceptions.hs,
+//   lib/theory/src/Theory/Text/Parser/Formula.hs,
+//   lib/theory/src/TheoryObject.hs
+
 //! Port of `Theory.Syntactic.Predicate.expandFormula` —
 //! substitutes predicate-atom occurrences in a formula with the body
 //! of the matching predicate definition. Uses parser-AST formulas /

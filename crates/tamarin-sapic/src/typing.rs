@@ -1,3 +1,11 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann, Benedikt Schmidt, Simon Meier, Charlie Jacomme, Adrian
+//   Dapprich, Jannik Dreier, Artur Cygan, Ralf Sasse, and other minor
+//   contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic/Typing.hs, lib/term/src/Term/Maude/Process.hs,
+//   lib/term/src/Term/Term/Raw.hs, lib/theory/src/Theory/Sapic/Process.hs
+
 //! Port of `Sapic.Typing` (`lib/sapic/src/Sapic/Typing.hs`) — the
 //! uniqueness-renaming pass (`renameUnique`) and the lightweight type
 //! inference (`typeProcess` / `typeWith`) over SAPIC processes.

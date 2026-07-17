@@ -1,3 +1,16 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Kevin Morio, Robert Künnemann, Simon Meier, Jannik Dreier, Benedikt
+//   Schmidt, Artur Cygan, Philip Lukert, Charlie Jacomme, Yavor Ivanov,
+//   "Nynko" (github), Ralf Sasse, Felix Linker, Jérôme (github Azurios-git),
+//   and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Term/FunctionSymbols.hs,
+//   lib/theory/src/Theory/Model/Fact.hs,
+//   lib/theory/src/Theory/Text/Parser/Rule.hs,
+//   lib/theory/src/Theory/Text/Parser/Term.hs,
+//   lib/theory/src/Theory/Tools/IntruderRules.hs, src/Main/Mode/Intruder.hs,
+//   src/Main/TheoryLoader.hs
+
 //! Pre-computed intruder-variant rule loaders.
 //!
 //! HS-faithful port of `Main.TheoryLoader.mkDhIntruderVariants` and

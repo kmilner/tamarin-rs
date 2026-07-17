@@ -1,3 +1,22 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Philip Lukert, Hong-Thai Luu, Benedikt
+//   Schmidt, "Pops" (github racoucho1u), Ralf Sasse, Robert Künnemann, Felix
+//   Linker, Charlie Jacomme, Yavor Ivanov, "Nynko" (github), Niklas
+//   Medinger, "ValentinYuri" (github), Artur Cygan, Adrian Dapprich, Kevin
+//   Morio, Felix Yan, Katriel Cohn-Gordon, Nick Moore, and other minor
+//   contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Maude/Types.hs, lib/term/src/Term/Subsumption.hs,
+//   lib/term/src/Term/Unification.hs, lib/theory/src/Prover.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Goals.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Simplify.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
+//   lib/theory/src/Theory/Constraint/System.hs,
+//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
+//   lib/theory/src/Theory/Model/Fact.hs,
+//   lib/theory/src/Theory/Tools/SubtermStore.hs
+
 //! Port of `Theory.Constraint.Solver.Simplify`.
 //!
 //! `simplifySystem` runs CR-rules that don't case-split until the

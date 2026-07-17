@@ -1,3 +1,9 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann, Charlie Jacomme, Artur Cygan, and other minor
+//   contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic/ProgressFunction.hs
+
 //! Port of `Sapic.ProgressFunction` (`lib/sapic/src/Sapic/ProgressFunction.hs`).
 //!
 //! Computes, for each process position, the set of positions a local-progress

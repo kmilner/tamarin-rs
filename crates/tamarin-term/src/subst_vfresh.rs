@@ -1,3 +1,13 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Benedikt Schmidt, Jannik Dreier, Philip Lukert, Felix
+//   Linker, Ralf Sasse, "Tom" (github BTom-GH), Charlie Jacomme, Robert
+//   Künnemann, and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Substitution.hs,
+//   lib/term/src/Term/Substitution/SubstVFresh.hs,
+//   lib/theory/src/Theory/Tools/EquationStore.hs,
+//   lib/theory/src/Theory/Tools/RuleVariants.hs
+
 //! Port of `Term.Substitution.SubstVFresh` from
 //! `lib/term/src/Term/Substitution/SubstVFresh.hs`.
 //!

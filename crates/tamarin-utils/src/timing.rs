@@ -1,3 +1,8 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Kevin Morio, Simon Meier
+// Ported from upstream tamarin-prover sources:
+//   lib/utils/src/System/Timing.hs
+
 //! Port of `System.Timing` from `lib/utils/src/System/Timing.hs`.
 //!
 //! The original `timed`/`timedIO` rely on Haskell's `deepseq` to force

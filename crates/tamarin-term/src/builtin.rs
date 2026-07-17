@@ -1,3 +1,11 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Benedikt Schmidt, Jannik Dreier, Charlie Jacomme, Philip
+//   Lukert, "Tom" (github BTom-GH), and other minor contributors (see
+//   upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Builtin/Convenience.hs,
+//   lib/term/src/Term/Builtin/Rules.hs
+
 //! Port of `Term.Builtin.{Signature, Convenience, Rules}` from
 //! `lib/term/src/Term/Builtin/`.
 //!

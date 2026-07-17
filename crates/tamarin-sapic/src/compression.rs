@@ -1,3 +1,10 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Kevin Morio, Robert Künnemann, Charlie Jacomme, Artur Cygan, Yavor
+//   Ivanov, and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic.hs, lib/sapic/src/Sapic/Compression.hs,
+//   lib/sapic/src/Sapic/Facts.hs
+
 //! Port of `Sapic.Compression` (`lib/sapic/src/Sapic/Compression.hs`).
 //!
 //! Path compression: merge adjacent "silent" SAPIC rules (rules that do not

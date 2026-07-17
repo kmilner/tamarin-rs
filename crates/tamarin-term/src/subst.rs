@@ -1,3 +1,8 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Robert Künnemann, Benedikt Schmidt, Jannik Dreier
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Substitution/SubstVFree.hs
+
 //! Port of `Term.Substitution.SubstVFree` (the *generic* part — no LTerm
 //! dependency yet) from `lib/term/src/Term/Substitution/SubstVFree.hs`.
 //!

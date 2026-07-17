@@ -1,3 +1,11 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann, Simon Meier, Benedikt Schmidt, Charlie Jacomme, Jannik
+//   Dreier, and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic/Bindings.hs, lib/term/src/Term/Maude/Process.hs,
+//   lib/theory/src/Theory/Sapic/Process.hs,
+//   lib/theory/src/Theory/Sapic/Term.hs
+
 //! Port of `Sapic.Bindings` from `lib/sapic/src/Sapic/Bindings.hs`.
 //!
 //! Compute the variables bound by SAPIC process actions / combinators, and

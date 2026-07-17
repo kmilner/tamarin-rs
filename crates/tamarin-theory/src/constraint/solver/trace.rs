@@ -1,3 +1,13 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Philip Lukert, Jannik Dreier, Benedikt Schmidt, Charlie
+//   Jacomme, Robert Künnemann, Niklas Medinger, Felix Linker, Yavor Ivanov,
+//   "ValentinYuri" (github), and other minor contributors (see upstream git
+//   history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Theory/Constraint/Solver/Goals.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Simplify.hs
+
 //! RS-only execution-trace diagnostic scaffolding.
 //!
 //! This is a Rust-only facility with no counterpart in the canonical

@@ -1,3 +1,28 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Philip Lukert, "Pops" (github racoucho1u),
+//   Benedikt Schmidt, Artur Cygan, Felix Linker, Robert Künnemann, Ralf
+//   Sasse, "Jackie" (github kanakanajm), Adrian Dapprich, Cas Cremers,
+//   symphorien, Yavor Ivanov, "sans-sucre" (github), Yann Colomb, "Tom"
+//   (github BTom-GH), Felix Yan, "Nynko" (github), Katriel Cohn-Gordon,
+//   Mathias Aurand, Alexander Dax, Nick Moore, Kevin Morio, Charlie Jacomme,
+//   "ValentinYuri" (github), Dominik Schoop, and other minor contributors
+//   (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term/Raw.hs,
+//   lib/theory/src/Theory/Constraint/Solver/AnnotatedGoals.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Goals.hs,
+//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
+//   lib/theory/src/Theory/Constraint/System.hs,
+//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
+//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
+//   lib/theory/src/Theory/Model/Fact.hs,
+//   lib/theory/src/Theory/Model/Signature.hs,
+//   lib/theory/src/Theory/Proof.hs, lib/theory/src/Theory/Sapic/Term.hs,
+//   lib/theory/src/Theory/Text/Parser/Tactics.hs,
+//   lib/theory/src/Theory/Tools/SubtermStore.hs,
+//   lib/utils/src/Data/DAG/Simple.hs, src/Web/Theory.hs
+
 //! Port of `Theory.Constraint.Solver.Goals`.
 //!
 //! `openGoals` enumerates the list of goals from a `System` that

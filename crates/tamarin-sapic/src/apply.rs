@@ -1,3 +1,13 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Kevin Morio, Artur Cygan, Charlie Jacomme, Robert Künnemann, Simon
+//   Meier, Jannik Dreier, Yavor Ivanov, "Tom" (github BTom-GH), Ralf Sasse,
+//   Jérôme (github Azurios-git), Felix Linker, "Pops" (github racoucho1u),
+//   "Nynko" (github), Benedikt Schmidt, "ValentinYuri" (github), and other
+//   minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic.hs, lib/sapic/src/Sapic/Warnings.hs,
+//   lib/theory/src/Theory/Text/Parser.hs, src/Main/TheoryLoader.hs
+
 //! Wiring: run the SAPIC translation and inject the generated rules +
 //! restriction + heuristic into BOTH the parsed theory (so the pretty-printer
 //! renders them via the existing rule/restriction path — P0f) and the

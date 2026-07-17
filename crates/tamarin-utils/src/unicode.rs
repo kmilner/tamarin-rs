@@ -1,3 +1,8 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier
+// Ported from upstream tamarin-prover sources:
+//   lib/utils/src/Text/Unicode.hs
+
 //! Port of `Text.Unicode` from `lib/utils/src/Text/Unicode.hs`.
 //!
 //! `pretty_theory::goal_subscript` routes its subscript rendering through

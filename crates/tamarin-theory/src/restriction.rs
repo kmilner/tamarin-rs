@@ -1,3 +1,9 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann, and other minor contributors (see upstream git
+//   history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Theory/Model/Restriction.hs
+
 //! Port of `Theory.Model.Restriction` from
 //! `lib/theory/src/Theory/Model/Restriction.hs` — the
 //! `ProtoRestriction`/`Restriction` data type.

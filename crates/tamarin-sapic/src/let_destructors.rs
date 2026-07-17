@@ -1,3 +1,14 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann, Charlie Jacomme, Simon Meier, Artur Cygan, Benedikt
+//   Schmidt, Kevin Morio, Jannik Dreier, and other minor contributors (see
+//   upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic.hs, lib/sapic/src/Sapic/Annotation.hs,
+//   lib/sapic/src/Sapic/Basetranslation.hs,
+//   lib/sapic/src/Sapic/LetDestructors.hs,
+//   lib/term/src/Term/Maude/Process.hs,
+//   lib/theory/src/Theory/Sapic/Process.hs
+
 //! Port of `Sapic.LetDestructors` (`lib/sapic/src/Sapic/LetDestructors.hs`).
 //!
 //! `translateLetDestr` (`mapProc`) walks the annotated process and rewrites

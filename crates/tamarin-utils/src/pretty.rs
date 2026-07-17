@@ -1,3 +1,10 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, and other minor contributors (see upstream
+//   git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/utils/src/Text/PrettyPrint/Class.hs,
+//   lib/utils/src/Text/PrettyPrint/Html.hs
+
 //! Port of `Text.PrettyPrint.Class` (and `Highlight`) from
 //! `lib/utils/src/Text/PrettyPrint/Class.hs`.
 //!

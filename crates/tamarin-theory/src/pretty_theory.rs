@@ -1,3 +1,42 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Robert Künnemann, Hong-Thai Luu, Benedikt
+//   Schmidt, Artur Cygan, "Pops" (github racoucho1u), Felix Linker, Philip
+//   Lukert, Ralf Sasse, "Tom" (github BTom-GH), Charlie Jacomme, Kevin
+//   Morio, "sans-sucre" (github), Adrian Dapprich, Mathias Aurand,
+//   "ValentinYuri" (github), Yavor Ivanov, "Jackie" (github kanakanajm),
+//   "gilcu3" (github), "Nynko" (github), Cas Cremers, Alexander Dax, Yann
+//   Colomb, Katriel Cohn-Gordon, Nick Moore, Charles Dumenil, Felix Yan,
+//   Dominik Schoop, and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic/Warnings.hs, lib/term/src/Term/LTerm.hs,
+//   lib/term/src/Term/Maude/Signature.hs,
+//   lib/term/src/Term/Substitution/SubstVFresh.hs,
+//   lib/term/src/Term/SubtermRule.hs, lib/term/src/Term/Term.hs,
+//   lib/term/src/Term/Term/Raw.hs, lib/theory/src/ClosedTheory.hs,
+//   lib/theory/src/Lemma.hs, lib/theory/src/OpenTheory.hs,
+//   lib/theory/src/Pretty.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Contradictions.hs,
+//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
+//   lib/theory/src/Theory/Constraint/System.hs,
+//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
+//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
+//   lib/theory/src/Theory/Model/Atom.hs,
+//   lib/theory/src/Theory/Model/Fact.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/ProofSkeleton.hs, lib/theory/src/Theory/Sapic.hs,
+//   lib/theory/src/Theory/Syntactic/Predicate.hs,
+//   lib/theory/src/Theory/Text/Parser.hs,
+//   lib/theory/src/Theory/Text/Parser/Proof.hs,
+//   lib/theory/src/Theory/Text/Parser/Rule.hs,
+//   lib/theory/src/Theory/Text/Parser/Signature.hs,
+//   lib/theory/src/Theory/Text/Parser/Tactics.hs,
+//   lib/theory/src/Theory/Text/Parser/Term.hs,
+//   lib/theory/src/Theory/Tools/Wellformedness.hs,
+//   lib/theory/src/TheoryObject.hs,
+//   lib/utils/src/Control/Monad/Disj/Class.hs, lib/utils/src/Data/Color.hs,
+//   lib/utils/src/Text/PrettyPrint/Class.hs, src/Main/Console.hs,
+//   src/Main/Mode/Batch.hs, src/Web/Dispatch.hs, src/Web/Theory.hs
+
 //! Theory pretty-printer.  Port of Haskell's `prettyClosedTheory`
 //! (ClosedTheory.hs:382) — top-level renderer for `--prove` output.
 //!

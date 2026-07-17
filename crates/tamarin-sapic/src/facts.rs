@@ -1,3 +1,13 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann, Simon Meier, Jannik Dreier, Kevin Morio, Hong-Thai
+//   Luu, Charlie Jacomme, Artur Cygan, Yavor Ivanov, Philip Lukert, Benedikt
+//   Schmidt, "ValentinYuri" (github), Ralf Sasse, and other minor
+//   contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic/Basetranslation.hs, lib/sapic/src/Sapic/Facts.hs,
+//   lib/theory/src/Rule.hs, lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Text/Parser/Rule.hs
+
 //! Port of `Sapic.Facts` (`lib/sapic/src/Sapic/Facts.hs`) — the
 //! translation-specific fact/action types (`TransFact` / `TransAction`), their
 //! conversion to real `LNFact`s (`factToFact` / `actionToFact`), the

@@ -1,3 +1,18 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Robert Künnemann, Felix Linker, Jannik Dreier, "Pops"
+//   (github racoucho1u), Hong-Thai Luu, symphorien, Philip Lukert, Ralf
+//   Sasse, Kevin Morio, Benedikt Schmidt, "sans-sucre" (github), Felix Yan,
+//   Yavor Ivanov, Katriel Cohn-Gordon, Alexander Dax, and other minor
+//   contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Items/LemmaItem.hs,
+//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
+//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
+//   lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/Text/Parser/Lemma.hs,
+//   lib/theory/src/Theory/Text/Parser/Proof.hs,
+//   lib/theory/src/Theory/Text/Parser/Rule.hs
+
 //! Surface-syntax AST for `.spthy` files: the loose tree [`crate::parser`]
 //! produces and [`crate::wf`] (plus, downstream, `tamarin-theory`'s
 //! elaboration) consumes.

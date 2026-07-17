@@ -1,3 +1,23 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Robert Künnemann, Benedikt Schmidt, Hong-
+//   Thai Luu, Philip Lukert, "sans-sucre" (github), "Tom" (github BTom-GH),
+//   Felix Linker, "gilcu3" (github), "Nynko" (github), Ralf Sasse, Mathias
+//   Aurand, "ValentinYuri" (github), Kevin Morio, "Pops" (github
+//   racoucho1u), Yavor Ivanov, Charlie Jacomme, Alexander Dax, and other
+//   minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Maude/Types.hs,
+//   lib/term/src/Term/Substitution.hs,
+//   lib/term/src/Term/Substitution/SubstVFresh.hs,
+//   lib/theory/src/ClosedTheory.hs, lib/theory/src/Rule.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Sapic/Process.hs,
+//   lib/theory/src/Theory/Tools/EquationStore.hs,
+//   lib/theory/src/Theory/Tools/RuleVariants.hs,
+//   lib/theory/src/Theory/Tools/Wellformedness.hs,
+//   lib/utils/src/Control/Monad/Bind.hs
+
 //! Port of `Theory.Tools.RuleVariants` — computes the AC-variants of
 //! a protocol rule via the Maude bridge.
 //!

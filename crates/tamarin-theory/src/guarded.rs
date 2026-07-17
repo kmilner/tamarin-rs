@@ -1,3 +1,20 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Benedikt Schmidt, "Pops" (github
+//   racoucho1u), Robert Künnemann, Philip Lukert, Ralf Sasse, Adrian
+//   Dapprich, Felix Linker, Charlie Jacomme, Yavor Ivanov, Katriel Cohn-
+//   Gordon, Artur Cygan, Nick Moore, "Tom" (github BTom-GH), "ValentinYuri"
+//   (github), Felix Yan, and other minor contributors (see upstream git
+//   history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term.hs,
+//   lib/term/src/Term/Term/FunctionSymbols.hs,
+//   lib/term/src/Term/Term/Raw.hs, lib/term/src/Term/VTerm.hs,
+//   lib/theory/src/Theory/Constraint/System.hs,
+//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
+//   lib/theory/src/Theory/Model/Atom.hs,
+//   lib/theory/src/Theory/Model/Fact.hs,
+//   lib/theory/src/Theory/Text/Parser/Fact.hs
+
 //! Port of `Theory.Constraint.System.Guarded.formulaToGuarded` —
 //! the conversion from a surface-formula (lemma / restriction) to the
 //! guarded-fragment representation that Tamarin's solver consumes.

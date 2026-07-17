@@ -1,3 +1,28 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Philip Lukert, Benedikt Schmidt, Robert
+//   Künnemann, Felix Linker, "Pops" (github racoucho1u), Ralf Sasse, Yavor
+//   Ivanov, symphorien, Charlie Jacomme, Adrian Dapprich, Felix Yan, Niklas
+//   Medinger, "Nynko" (github), Katriel Cohn-Gordon, Nick Moore,
+//   "ValentinYuri" (github), Artur Cygan, Hong-Thai Luu, "Tom" (github BTom-
+//   GH), Cas Cremers, Alexander Dax, Kevin Morio, and other minor
+//   contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs,
+//   lib/term/src/Term/Substitution/SubstVFree.hs,
+//   lib/term/src/Term/Substitution/SubstVFresh.hs,
+//   lib/term/src/Term/Term/Raw.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Goals.hs,
+//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Simplify.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
+//   lib/theory/src/Theory/Constraint/System.hs,
+//   lib/theory/src/Theory/Model/Rule.hs, lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/Sapic/Term.hs,
+//   lib/theory/src/Theory/Tools/EquationStore.hs,
+//   lib/theory/src/Theory/Tools/SubtermStore.hs,
+//   lib/utils/src/Control/Monad/Disj/Class.hs
+
 //! Port of `Theory.Constraint.Solver.Reduction`.
 //!
 //! In Haskell, `Reduction` is a state-fresh-disjunction monad over a

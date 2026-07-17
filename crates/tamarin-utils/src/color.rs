@@ -1,3 +1,8 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier
+// Ported from upstream tamarin-prover sources:
+//   lib/utils/src/Data/Color.hs
+
 //! Port of `Data.Color` from `lib/utils/src/Data/Color.hs`.
 //!
 //! RGB and HSV color types with conversions and palette generation.

@@ -1,3 +1,14 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Robert Künnemann, Philip Lukert, Kevin
+//   Morio, Hong-Thai Luu, Niklas Medinger, Charlie Jacomme, Yavor Ivanov,
+//   Benedikt Schmidt, "ValentinYuri" (github), Ralf Sasse, Artur Cygan,
+//   Felix Linker, and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic/Facts.hs, lib/theory/src/Rule.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Simplify.hs,
+//   lib/theory/src/Theory/Model/Rule.hs, lib/theory/src/Theory/Sapic.hs,
+//   lib/theory/src/Theory/Tools/InjectiveFactInstances.hs
+
 //! Port of `Theory.Tools.InjectiveFactInstances`.
 //!
 //! Computes an under-approximation of the set of fact tags whose

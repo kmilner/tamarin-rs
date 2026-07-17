@@ -1,3 +1,8 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Kevin Morio
+// Ported from upstream tamarin-prover sources:
+//   lib/export/src/ProVerifHeader.hs
+
 //! Port of `ProVerifHeader` from `lib/export/src/ProVerifHeader.hs`.
 //!
 //! Header declarations emitted at the top of a ProVerif export. They must

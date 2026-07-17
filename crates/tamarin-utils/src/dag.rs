@@ -1,3 +1,9 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, "sans-sucre" (github), and other minor contributors (see
+//   upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/utils/src/Data/DAG/Simple.hs
+
 //! Port of `Data.DAG.Simple` from `lib/utils/src/Data/DAG/Simple.hs`.
 //!
 //! Vertex-list-based DAG operations. A `Relation<T>` is `Vec<(T, T)>`.

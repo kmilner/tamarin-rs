@@ -1,3 +1,11 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Kevin Morio, Artur Cygan, Robert Künnemann, and other minor contributors
+//   (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/accountability/src/Accountability/Generation.hs,
+//   lib/theory/src/Items/AccLemmaItem.hs,
+//   lib/theory/src/Items/CaseTestItem.hs
+
 //! Port of `Accountability.Generation` (lib/accountability/src/Accountability/Generation.hs):
 //! the seven verification-condition generators and their fresh-counter
 //! threading.

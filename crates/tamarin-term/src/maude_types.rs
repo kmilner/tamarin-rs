@@ -1,3 +1,12 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Benedikt Schmidt, Jannik Dreier, Adrian Dapprich, Ralf
+//   Sasse, Philip Lukert, Robert Künnemann, and other minor contributors
+//   (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Maude/Types.hs, lib/term/src/Term/Term/Raw.hs,
+//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
+//   lib/utils/src/Control/Monad/Bind.hs
+
 //! Port of `Term.Maude.Types`.
 //!
 //! Converts between our `LNTerm` (logical-named term over `LVar`/`Name`)

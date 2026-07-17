@@ -1,3 +1,22 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Artur Cygan, Felix Linker, Jannik Dreier, Robert Künnemann,
+//   Adrian Dapprich, Benedikt Schmidt, Ralf Sasse, Mathias Aurand, Cas
+//   Cremers, "Pops" (github racoucho1u), "Jackie" (github kanakanajm),
+//   "ValentinYuri" (github), Yann Colomb, Philip Lukert, "Tom" (github BTom-
+//   GH), Yavor Ivanov, Alexander Dax, "sans-sucre" (github), "Nynko"
+//   (github), and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Substitution/SubstVFresh.hs,
+//   lib/term/src/Term/Term.hs,
+//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
+//   lib/theory/src/Theory/Constraint/System/Dot.hs,
+//   lib/theory/src/Theory/Text/Pretty.hs,
+//   lib/utils/src/Control/Monad/Disj/Class.hs,
+//   lib/utils/src/Text/PrettyPrint/Class.hs,
+//   lib/utils/src/Text/PrettyPrint/Highlight.hs,
+//   lib/utils/src/Text/PrettyPrint/Html.hs, src/Main/Console.hs,
+//   src/Web/Handler.hs
+
 //! HughesPJ-faithful pretty-printer Doc engine.
 //!
 //! Port of the layout algorithm from

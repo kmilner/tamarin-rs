@@ -1,3 +1,25 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Jannik Dreier, Simon Meier, Hong-Thai Luu, Artur Cygan, Robert
+//   Künnemann, Kevin Morio, Felix Linker, "Pops" (github racoucho1u),
+//   Benedikt Schmidt, Ralf Sasse, Philip Lukert, Charlie Jacomme, Yavor
+//   Ivanov, "Jackie" (github kanakanajm), "Tom" (github BTom-GH), Adrian
+//   Dapprich, Cas Cremers, symphorien, "gilcu3" (github), "ValentinYuri"
+//   (github), Yann Colomb, Felix Yan, Mathias Aurand, "Nynko" (github),
+//   Katriel Cohn-Gordon, Alexander Dax, Nick Moore, Jérôme (github Azurios-
+//   git), Dominik Schoop, and other minor contributors (see upstream git
+//   history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Maude/Parser.hs, lib/theory/src/ClosedTheory.hs,
+//   lib/theory/src/Items/RuleItem.hs, lib/theory/src/Lemma.hs,
+//   lib/theory/src/Prover.hs, lib/theory/src/Rule.hs,
+//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
+//   lib/theory/src/Theory/Constraint/System.hs,
+//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
+//   lib/theory/src/Theory/Model/Rule.hs, lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/ProofSkeleton.hs, lib/theory/src/Theory/Sapic.hs,
+//   lib/theory/src/Theory/Text/Parser.hs, src/Main/TheoryLoader.hs,
+//   src/Web/Theory.hs
+
 //! End-to-end `prove_lemma` entry point.
 //!
 //! Bridges a parsed `.spthy` theory and a lemma name into the

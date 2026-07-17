@@ -1,3 +1,12 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Artur Cygan, Simon Meier, Jannik Dreier, Felix Linker, Cas Cremers,
+//   "Jackie" (github kanakanajm), Ralf Sasse, Yann Colomb, Benedikt Schmidt,
+//   "Tom" (github BTom-GH), Adrian Dapprich, Alexander Dax, symphorien,
+//   Jérôme (github Azurios-git), and other minor contributors (see upstream
+//   git history)
+// Ported from upstream tamarin-prover sources:
+//   src/Web/Handler.hs, src/Web/Types.hs
+
 //! Integration tests for the DOT-pipeline routes.
 //!
 //! Coverage:

@@ -1,3 +1,9 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Artur Cygan, Kevin Morio, Simon Meier, Adrian Dapprich, "gilcu3"
+//   (github), and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   src/Main/Mode/Batch.hs
+
 //! End-to-end tests for the `tamarin-prover` CLI library.
 //!
 //! These tests stand up the whole pipeline — parser → elaborator →

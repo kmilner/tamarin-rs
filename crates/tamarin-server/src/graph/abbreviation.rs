@@ -1,3 +1,17 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann, Jannik Dreier, Simon Meier, Benedikt Schmidt, Adrian
+//   Dapprich, Hong-Thai Luu, Philip Lukert, Ralf Sasse, Yavor Ivanov,
+//   Charlie Jacomme, "ValentinYuri" (github), Kevin Morio, and other minor
+//   contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Term.hs, lib/term/src/Term/Term/Raw.hs,
+//   lib/theory/src/Rule.hs,
+//   lib/theory/src/Theory/Constraint/System/Graph/Abbreviation.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Sapic/Term.hs,
+//   lib/theory/src/Theory/Text/Parser/Rule.hs,
+//   lib/theory/src/Theory/Text/Parser/Term.hs
+
 //! Port of `Theory.Constraint.System.Graph.Abbreviation`.
 //!
 //! Generates a per-graph map from "complex" `LNTerm`s to short

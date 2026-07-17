@@ -1,3 +1,14 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann, Simon Meier, Charlie Jacomme, Benedikt Schmidt, Kevin
+//   Morio, Artur Cygan, Jannik Dreier, and other minor contributors (see
+//   upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic/Basetranslation.hs,
+//   lib/term/src/Term/Maude/Process.hs,
+//   lib/theory/src/Theory/Sapic/Pattern.hs,
+//   lib/theory/src/Theory/Sapic/Process.hs,
+//   lib/theory/src/Theory/Text/Parser/Sapic.hs
+
 //! Parser-AST → theory-AST process converter.
 //!
 //! Maps `tamarin_parser::ast::Process` (the surface syntax tree) into

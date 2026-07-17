@@ -1,3 +1,27 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann, Simon Meier, Jannik Dreier, Benedikt Schmidt, Charlie
+//   Jacomme, Philip Lukert, "Tom" (github BTom-GH), "sans-sucre" (github),
+//   Hong-Thai Luu, Kevin Morio, "ValentinYuri" (github), Ralf Sasse, "Pops"
+//   (github racoucho1u), Felix Linker, Mathias Aurand, "Nynko" (github),
+//   Yavor Ivanov, Adrian Dapprich, Artur Cygan, Alexander Dax, Johannes
+//   Wocker, and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic/Basetranslation.hs,
+//   lib/term/src/Term/Builtin/Signature.hs, lib/term/src/Term/LTerm.hs,
+//   lib/term/src/Term/Macro.hs,
+//   lib/term/src/Term/Substitution/SubstVFree.hs, lib/term/src/Term/Term.hs,
+//   lib/term/src/Term/Term/FunctionSymbols.hs,
+//   lib/term/src/Term/Term/Raw.hs, lib/theory/src/Rule.hs,
+//   lib/theory/src/Theory.hs, lib/theory/src/Theory/Model/Restriction.hs,
+//   lib/theory/src/Theory/Sapic.hs, lib/theory/src/Theory/Text/Parser.hs,
+//   lib/theory/src/Theory/Text/Parser/Lemma.hs,
+//   lib/theory/src/Theory/Text/Parser/Let.hs,
+//   lib/theory/src/Theory/Text/Parser/Macro.hs,
+//   lib/theory/src/Theory/Text/Parser/Rule.hs,
+//   lib/theory/src/Theory/Text/Parser/Signature.hs,
+//   lib/theory/src/Theory/Text/Parser/Term.hs,
+//   lib/theory/src/Theory/Tools/Wellformedness.hs
+
 //! Elaboration: parser AST → typed `Theory`.
 //!
 //! This pass takes a `tamarin_parser::ast::Theory` (the surface syntax

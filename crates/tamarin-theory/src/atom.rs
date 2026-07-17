@@ -1,3 +1,9 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Robert Künnemann, Philip Lukert, and other minor
+//   contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Theory/Model/Atom.hs
+
 //! Port of `Theory.Model.Atom` from `lib/theory/src/Theory/Model/Atom.hs`.
 //!
 //! Atoms of trace formulas. A `ProtoAtom<S, T>` is parameterised over a

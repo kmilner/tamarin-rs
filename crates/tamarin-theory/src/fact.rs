@@ -1,3 +1,11 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Benedikt Schmidt, Ralf Sasse, Robert
+//   Künnemann, "Nynko" (github), Felix Linker, and other minor contributors
+//   (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
+//   lib/theory/src/Theory/Model/Fact.hs
+
 //! Port of `Theory.Model.Fact` from `lib/theory/src/Theory/Model/Fact.hs`.
 //!
 //! Multiset-rewriting facts. This port covers the data type plus the

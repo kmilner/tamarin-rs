@@ -1,3 +1,9 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Jannik Dreier, Benedikt Schmidt, Simon Meier, and other minor
+//   contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Positions.hs
+
 //! Port of `Term.Positions` from `lib/term/src/Term/Positions.hs`.
 //!
 //! Positions in terms, subterm access, and replacement. AC operators with

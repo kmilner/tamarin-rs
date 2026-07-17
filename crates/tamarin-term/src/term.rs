@@ -1,3 +1,12 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Benedikt Schmidt, Simon Meier, Jannik Dreier, Philip Lukert, Adrian
+//   Dapprich, Ralf Sasse, Charlie Jacomme, "Tom" (github BTom-GH), Robert
+//   Künnemann, and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term.hs,
+//   lib/term/src/Term/Term/Classes.hs, lib/term/src/Term/Term/Raw.hs,
+//   lib/term/src/Term/VTerm.hs
+
 //! Port of `Term.Term.Raw` from `lib/term/src/Term/Term/Raw.hs`.
 //!
 //! The core term datatype with its smart constructors and view types.

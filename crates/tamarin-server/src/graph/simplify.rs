@@ -1,3 +1,15 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, "Pops" (github racoucho1u), Adrian Dapprich,
+//   Ralf Sasse, Benedikt Schmidt, Philip Lukert, Felix Linker, Yavor Ivanov,
+//   "sans-sucre" (github), Artur Cygan, Robert Künnemann, Nick Moore,
+//   Katriel Cohn-Gordon, Felix Yan, and other minor contributors (see
+//   upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Theory/Constraint/System.hs,
+//   lib/theory/src/Theory/Constraint/System/Graph/Simplification.hs,
+//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
+//   lib/utils/src/Data/DAG/Simple.hs
+
 //! Port of `Theory.Constraint.System.Graph.Simplification` —
 //! drops transitive `Less`-atoms and hides "transfer" nodes
 //! (irecv/isend/coerce/fresh chains, or rule nodes with no actions

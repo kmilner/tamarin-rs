@@ -1,3 +1,10 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Benedikt Schmidt, Simon Meier, Jannik Dreier, Charlie Jacomme, Felix
+//   Linker, and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Rewriting/Norm.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Contradictions.hs
+
 //! Port of `Term.Rewriting.Norm` — normalisation and normal-form
 //! checks via the Maude bridge.
 //!

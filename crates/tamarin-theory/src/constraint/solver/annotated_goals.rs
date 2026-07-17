@@ -1,3 +1,8 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   "Pops" (github racoucho1u)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Theory/Constraint/Solver/AnnotatedGoals.hs
+
 //! Port of `Theory.Constraint.Solver.AnnotatedGoals`.
 //!
 //! `AnnotatedGoal` is `(Goal, (sequence-number, usefulness))` — used

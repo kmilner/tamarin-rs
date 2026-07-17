@@ -1,3 +1,15 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Artur Cygan, Simon Meier, Kevin Morio, Jannik Dreier, Charlie Jacomme,
+//   Felix Linker, Cas Cremers, Robert Künnemann, Ralf Sasse, "Jackie"
+//   (github kanakanajm), Yann Colomb, Yavor Ivanov, Benedikt Schmidt, "Tom"
+//   (github BTom-GH), Adrian Dapprich, Jérôme (github Azurios-git), "Nynko"
+//   (github), "Pops" (github racoucho1u), Alexander Dax, "ValentinYuri"
+//   (github), and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic/Warnings.hs, lib/theory/src/Theory/Text/Parser.hs,
+//   lib/utils/src/Text/PrettyPrint/Html.hs, src/Main/Mode/Interactive.hs,
+//   src/Main/TheoryLoader.hs, src/Web/Dispatch.hs, src/Web/Handler.hs
+
 //! Parse + elaborate a `.spthy` file into a [`TheoryEntry`].
 
 use chrono::Local;

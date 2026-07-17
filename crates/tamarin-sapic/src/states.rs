@@ -1,3 +1,14 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Robert Künnemann, Charlie Jacomme, Simon Meier, Artur Cygan, Benedikt
+//   Schmidt, "Tom" (github BTom-GH), Kevin Morio, Hong-Thai Luu, "Pops"
+//   (github racoucho1u), Mathias Aurand, Jannik Dreier, and other minor
+//   contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/sapic/src/Sapic.hs, lib/sapic/src/Sapic/States.hs,
+//   lib/term/src/Term/Maude/Process.hs, lib/theory/src/Items/OptionItem.hs,
+//   lib/theory/src/Theory/Sapic/Process.hs,
+//   lib/theory/src/Theory/Text/Parser/Signature.hs
+
 //! Port of `Sapic.States` from `lib/sapic/src/Sapic/States.hs`.
 //!
 //! The pure-state ("state-channel") optimisation.  When enabled via

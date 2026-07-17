@@ -1,3 +1,12 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Artur Cygan, Jannik Dreier, Cas Cremers, Felix Linker,
+//   "Jackie" (github kanakanajm), Ralf Sasse, Yann Colomb, Benedikt Schmidt,
+//   "Tom" (github BTom-GH), Adrian Dapprich, Alexander Dax, symphorien,
+//   Jérôme (github Azurios-git), and other minor contributors (see upstream
+//   git history)
+// Ported from upstream tamarin-prover sources:
+//   src/Web/Hamlet.hs, src/Web/Handler.hs, src/Web/Types.hs
+
 //! Root + housekeeping handlers.
 
 use std::sync::Arc;

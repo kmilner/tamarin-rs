@@ -1,3 +1,19 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   Simon Meier, Jannik Dreier, Felix Linker, "Pops" (github racoucho1u),
+//   Robert Künnemann, Philip Lukert, Adrian Dapprich, Mathias Aurand, Ralf
+//   Sasse, Benedikt Schmidt, "sans-sucre" (github), Yavor Ivanov, Charlie
+//   Jacomme, Niklas Medinger, Nick Moore, Artur Cygan, Katriel Cohn-Gordon,
+//   Felix Yan, "ValentinYuri" (github), Alexander Dax, and other minor
+//   contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Simplify.hs,
+//   lib/theory/src/Theory/Constraint/System.hs,
+//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
+//   lib/theory/src/Theory/Constraint/System/Dot.hs,
+//   lib/utils/src/Data/DAG/Simple.hs
+
 //! The `System` sequent — the solver's working state.
 //!
 //! Port of `Theory.Constraint.System.System` (from the 1936-line
