@@ -322,6 +322,8 @@ github usernames that have not yet granted permission for reuse. Currently, this
 because I haven't started asking yet. If you want to preempt this and give your permission please
 send me an email or file a github issue!
 
+You can regenerate these headers (and inspect how they were generated) in scripts/gen_license_headers.py
+
 So, in summary:
 - All Rust code in this repository (`crates/`, `scripts/`, `tests/`) is
   MIT-licensed by default, however code which is based on GPL 3.0 code is
