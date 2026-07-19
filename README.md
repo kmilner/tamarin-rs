@@ -1,7 +1,7 @@
 # tamarin-prover (Rust port)
 
-A Rust port of the [Tamarin Prover](https://tamarin-prover.github.io/) that
-reproduces the Haskell prover's output byte-for-byte — and is typically
+A Rust port of the [Tamarin Prover](https://tamarin-prover.github.io/) with the goal
+of reproducing the Haskell prover's output byte-for-byte. Typically
 4–16× faster (up to 42×) on several-fold less memory.
 
 - **Parity:** byte-identical `--prove` output with the Haskell prover on a
@@ -26,6 +26,23 @@ utils → term → parser → theory → {sapic, server} → tamarin-prover
 
 (`export` is a standalone placeholder crate, not yet wired into the
 binary; `accountability` sits alongside `sapic` in the translation layer.)
+
+## Important notes
+
+Always verify generated proofs against regular tamarin-prover. All proofs generated
+by this prover  should be reverifiable against regular tamarin
+by simply running them on the command line (i.e. `tamarin-prover proof.spthy`).
+You should not directly trust the output of this given the extensive use of LLMs in
+translating code.
+
+At time of writing there are two open issues in Haskell affecting proof reverifiability,
+https://github.com/tamarin-prover/tamarin-prover/issues/871 and
+https://github.com/tamarin-prover/tamarin-prover/issues/881. Once the associated
+pull requests are merged there should be no further gaps. If you do find any
+please report them in the github issues so they can be fixed!.
+
+The licensing of this code is somewhat complicated, see [License](#license) if you
+are interested in future prospects for redistribution.
 
 ## Repository layout
 
@@ -276,17 +293,41 @@ environment reference, and the divergence-debugging toolbox.
 
 ## License
 
+The licensing situation of this code is somewhat complicated. Portions of the
+code are written based only on the observable output behaviour of tamarin-prover
+while other parts were written with access to Tamarin's GPL 3.0 code. This makes
+the resulting binary GPL 3.0 for the moment.
+
+Relicensing tamarin-prover is made difficult because of a very long tail of
+contributors over many years, making it intractable to get in touch with each
+and every one of them to relicense their contributions. An eventual goal is to
+relicense tamarin-rs fully under MIT if possible, which will require two parts:
+
+- Permission of the largest contributors (or their instutitions, where the institution
+  is the only party capable of relicensing).
+- Where getting permission is infeasible, replacing the associated contribution with a
+  cleanroom implementation of the feature. 
+
+Cleanroom implementations have to be performed by an LLM with access only to the observable
+behaviour of tamarin-prover, not the source code. Unfortunately I (as a contributor to
+tamarin-prover) am, to my understanding, tainted and cannot participate in this process
+except to audit the output. This work will be tracked along with full toolcall transcripts
+to prove there was no access to GPL 3.0 source in https://github.com/kmilner/tamarin-cleanroom
+but it will be a long process (the segments being reimplemented have to be sufficiently broad
+so as to not inherit any information about the GPL 3.0 source code beyond broad module interfaces
+etc).
+
+Code with GPL 3.0 attribution is stated at the top of the header file, including the associated
+github usernames that have not yet granted permission for reuse. Currently, this is everyone,
+because I haven't started asking yet. If you want to preempt this and give your permission please
+send me an email or file a github issue!
+
+So, in summary:
 - All Rust code in this repository (`crates/`, `scripts/`, `tests/`) is
   MIT-licensed by default, however code which is based on GPL 3.0 code is
   still GPL 3.0 until either replaced by a cleanroom implementation or
   granted permission for relicensing by the related authors. This is indicated
-  by comments at the top of those files. This makes the resulting binary GPL 3.0.
+  by comments at the top of those files. THE BINARY YOU BUILD IS GPL 3.0.
 - The `tamarin-prover/` submodule is a separate upstream project licensed under
   GPL-3.0 (see `tamarin-prover/LICENSE`). `patches/tamarin-prover-fixes.patch`
   modifies those GPL-3 sources and is therefore itself GPL-3.
-- The Rust build embeds two intruder-variant definition files
-  (`intruder_variants_dh.spthy`, `intruder_variants_bp.spthy`) from the
-  submodule's `data/` directory at compile time; the interactive web server
-  serves the submodule's `data/` web assets (jQuery, jQuery UI, etc.) at
-  runtime; and the test and parity harnesses run the GPL Haskell binary as an
-  external oracle process.
