@@ -1,8 +1,7 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann, Jannik Dreier, Simon Meier, Benedikt Schmidt, Adrian
-//   Dapprich, Hong-Thai Luu, Philip Lukert, Ralf Sasse, Yavor Ivanov,
-//   Charlie Jacomme, "ValentinYuri" (github), Kevin Morio, and other minor
-//   contributors (see upstream git history)
+//   addap, beschmi, rkunnema, meiersi, jdreier, PhilipLukertWork,
+//   racoucho1u, charlie-j, rsasse, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Term.hs, lib/term/src/Term/Term/Raw.hs,
 //   lib/theory/src/Rule.hs,

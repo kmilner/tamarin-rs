@@ -1,7 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann, Kevin Morio, Hong-Thai Luu, Charlie Jacomme, Artur
-//   Cygan, Yavor Ivanov, Alexander Dax, and other minor contributors (see
-//   upstream git history)
+//   arcz, rkunnema, kevinmorio, yavivanov, and other minor contributors
+//   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/sapic/src/Sapic.hs, lib/sapic/src/Sapic/Basetranslation.hs,
 //   lib/sapic/src/Sapic/Facts.hs, lib/sapic/src/Sapic/ProcessUtils.hs,
@@ -262,7 +261,7 @@ fn trans_comb(
     }
 }
 
-/// `substStatePos p_old p_new` over a list of generated rules (Sapic.hs:124,
+/// `substStatePos p_old p_new` over a list of generated rules (Sapic.hs:112-153, see line 124,
 /// 140-144): rewrite the position of every NON-semistate `State` PREMISE fact
 /// from `p_old` to `p_new` (leaving the actual position `p_old==p++[i]` only in
 /// the rule NAME, which was already fixed during `gen`).
@@ -296,7 +295,7 @@ fn subst_state_pos_fact(f: TransFact, p_old: &[i64], p_new: &[i64]) -> TransFact
     }
 }
 
-/// `getLockPositions = pfoldMap getLock` (Basetranslation.hs:473,478): the lock
+/// `getLockPositions = pfoldMap getLock` (Basetranslation.hs:449-479, see line 473,478): the lock
 /// variables of every `Lock` action with `pureState=False` and a `lock`
 /// annotation, in `pfoldMap` order, NOT deduplicated.
 fn get_lock_positions(
@@ -316,7 +315,7 @@ fn get_lock_positions(
     tamarin_theory::sapic::pfold_map(p, &mut get_lock)
 }
 
-/// `nub $ getUnlockPositions` (Basetranslation.hs:463): the lock variables of
+/// `nub $ getUnlockPositions` (Basetranslation.hs:449-479, see line 463): the lock variables of
 /// every `Unlock` action with `pureState=False` and an `unlock` annotation, in
 /// `pfoldMap` order, first-occurrence deduplicated (HS `List.nub`).
 fn get_unlock_positions(
@@ -364,14 +363,14 @@ pub struct TranslateOptions {
     pub trans_reliable: bool,
     pub async_channels: bool,
     pub compress_events: bool,
-    /// `_transReport` (Sapic.hs:56, 64): gates `translateTermsReport` (the
+    /// `_transReport` (Sapic.hs:45-101, see line 56, 64): gates `translateTermsReport` (the
     /// `report(t)`→`rep(t, loc)` term rewrite) and `reportInit` (the fixed
     /// `ReportRule`).  Set from the `locations-report` builtin.
     pub trans_report: bool,
-    /// `_stateChannelOpt` (OpenTheory.hs:547, default False): gates the
+    /// `_stateChannelOpt` (OpenTheory.hs:546-547, see line 547, default False): gates the
     /// pure-state / state-channel optimisation — `annotatePureStates`
-    /// (Sapic.hs:57) and `setforcedInjectiveFacts {L_PureState, L_CellLocked}`
-    /// (Sapic.hs:84).  Set from `options: translation-state-optimisation`.
+    /// (Sapic.hs:45-101, see line 57) and `setforcedInjectiveFacts {L_PureState, L_CellLocked}`
+    /// (Sapic.hs:45-101, see line 84).  Set from `options: translation-state-optimisation`.
     pub state_channel_opt: bool,
 }
 
@@ -393,12 +392,12 @@ pub fn translate(
     //   var-RHS `let`s and annotating destructor / kept `let`s.
     let an_proc_pre: Process<ProcessAnnotation<LVar>, SapicLVar> =
         propagate_names(to_annotated::<LVar>(plain.clone()));
-    // annotateSecretChannels (Sapic.hs:58): attach `secret_channel` to every
+    // annotateSecretChannels (Sapic.hs:45-101, see line 58): attach `secret_channel` to every
     // ChIn/ChOut whose channel is an always-secret fresh variable.  Runs AFTER
     // propagateNames and BEFORE translateLetDestr.  (annotatePureStates is gated
     // off by default — it needs `--translation-state-optimisation`.)
     let an_proc_sec = crate::secret_channels::annotate_secret_channels(an_proc_pre);
-    // `checkOps' (._stateChannelOpt) annotatePureStates` (Sapic.hs:57): the
+    // `checkOps' (._stateChannelOpt) annotatePureStates` (Sapic.hs:45-101, see line 57): the
     // pure-state / state-channel optimisation.  Runs AFTER annotateSecretChannels
     // and BEFORE translateTermsReport / translateLetDestr.  Gated off by default
     // (needs `options: translation-state-optimisation`).
@@ -407,7 +406,7 @@ pub fn translate(
     } else {
         an_proc_sec
     };
-    // `checkOps' (._transReport) translateTermsReport` (Sapic.hs:56): rewrite
+    // `checkOps' (._transReport) translateTermsReport` (Sapic.hs:45-101, see line 56): rewrite
     // `report(t)` terms to `rep(t, loc)` under the in-scope `@location`
     // annotation.  Runs AFTER annotatePureStates, BEFORE translateLetDestr.
     let an_proc_rep = if opts.trans_report {
@@ -528,7 +527,7 @@ pub fn translate(
         restrictions.extend(predicate_restrictions());
     }
     restrictions.push(single_session_restriction());
-    // `addIf needsInEvRes [resInEv]` (Basetranslation.hs:460) — the in_event
+    // `addIf needsInEvRes [resInEv]` (Basetranslation.hs:449-479, see line 460) — the in_event
     // restriction, AFTER single_session, when a lemma needs it.
     if needs_in_ev_res {
         restrictions.push(crate::base_translation::in_event_restriction());
@@ -565,10 +564,10 @@ pub fn translate(
 }
 
 // =============================================================================
-// needsInEvRes (Sapic.hs:101, 156-181)
+// needsInEvRes (Sapic.hs:45-101, see line 101, 156-181)
 // =============================================================================
 
-/// `needsInEvRes = any lemmaNeedsInEvRes (theoryLemmas th)` (Sapic.hs:101): does
+/// `needsInEvRes = any lemmaNeedsInEvRes (theoryLemmas th)` (Sapic.hs:45-101, see line 101): does
 /// any of the theory's lemmas fall in the fragment that requires the `in_event`
 /// restriction?  Each lemma is classified via `lemma_needs_in_ev_res`.
 pub fn needs_in_ev_res(lemmas: &[tamarin_parser::ast::Lemma]) -> bool {
@@ -624,7 +623,7 @@ fn is_pos_neg_formula(f: &tamarin_parser::ast::Formula) -> (bool, bool) {
 }
 
 /// `isPosNegFormula (Ato (Action _ f))` dispatches on `isActualKFact (factTag
-/// f)` (Sapic.hs:159, 167-169): a `K`-fact action is `(True, False)`; every
+/// f)` (Sapic.hs:156-172, see line 159, 167-169): a `K`-fact action is `(True, False)`; every
 /// other atom is `(True, True)`.
 fn is_pos_neg_atom(a: &tamarin_parser::ast::Atom) -> (bool, bool) {
     use tamarin_parser::ast::Atom;

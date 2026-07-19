@@ -1,19 +1,20 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann, Simon Meier, Jannik Dreier, Benedikt Schmidt, Charlie
-//   Jacomme, Philip Lukert, "Tom" (github BTom-GH), "sans-sucre" (github),
-//   Hong-Thai Luu, Kevin Morio, "ValentinYuri" (github), Ralf Sasse, "Pops"
-//   (github racoucho1u), Felix Linker, Mathias Aurand, "Nynko" (github),
-//   Yavor Ivanov, Adrian Dapprich, Artur Cygan, Alexander Dax, Johannes
-//   Wocker, and other minor contributors (see upstream git history)
+//   meiersi, rkunnema, jdreier, beschmi, racoucho1u, charlie-j,
+//   PhilipLukertWork, felixlinker, kevinmorio, rsasse, BTom-GH,
+//   ValentinYuri, sans-sucre, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/sapic/src/Sapic/Basetranslation.hs,
 //   lib/term/src/Term/Builtin/Signature.hs, lib/term/src/Term/LTerm.hs,
 //   lib/term/src/Term/Macro.hs,
-//   lib/term/src/Term/Substitution/SubstVFree.hs, lib/term/src/Term/Term.hs,
+//   lib/term/src/Term/Substitution/SubstVFree.hs,
+//   lib/term/src/Term/Term.hs,
 //   lib/term/src/Term/Term/FunctionSymbols.hs,
 //   lib/term/src/Term/Term/Raw.hs, lib/theory/src/Rule.hs,
-//   lib/theory/src/Theory.hs, lib/theory/src/Theory/Model/Restriction.hs,
-//   lib/theory/src/Theory/Sapic.hs, lib/theory/src/Theory/Text/Parser.hs,
+//   lib/theory/src/Theory.hs,
+//   lib/theory/src/Theory/Model/Restriction.hs,
+//   lib/theory/src/Theory/Sapic.hs,
+//   lib/theory/src/Theory/Text/Parser.hs,
 //   lib/theory/src/Theory/Text/Parser/Lemma.hs,
 //   lib/theory/src/Theory/Text/Parser/Let.hs,
 //   lib/theory/src/Theory/Text/Parser/Macro.hs,
@@ -200,7 +201,7 @@ pub fn elaborate_with_diagnostics(
 /// For each lemma/restriction formula that fails `formulaToGuarded`,
 /// produce a `WfError` with:
 ///   - topic `" Formula guardedness"` (leading space, matching HS
-///     `underlineTopic " Formula guardedness"` at Wellformedness.hs:1004)
+///     `underlineTopic " Formula guardedness"` at Wellformedness.hs:999-1014, see line 1004)
 ///   - message layout matching HS's `prettyWfErrorReport` + `checkGuarded`:
 ///
 /// ```text
@@ -239,7 +240,7 @@ pub fn check_guarded_wf(parser_thy: &p::Theory) -> Vec<tamarin_parser::wf::WfErr
     // time (`liftedAddLemma`→`expandLemma`→`expandFormula`,
     // Theory/Text/Parser.hs:145-147; `liftedAddRestriction`→`expandRestriction`,
     // lines 132-134), so by the time `formulaReports.checkGuarded`
-    // (Wellformedness.hs:1004) reads `get lFormula l` / `get rstrFormula rstr`
+    // (Wellformedness.hs:999-1014, see line 1004) reads `get lFormula l` / `get rstrFormula rstr`
     // the `Pred` sugar is already gone and the formula is the inlined body.
     // The guardedness conversion can only guard a quantified var that appears
     // in an `Action`/`Eq`/`Less`/… atom — never one buried inside an opaque
@@ -345,7 +346,7 @@ pub fn check_guarded_wf(parser_thy: &p::Theory) -> Vec<tamarin_parser::wf::WfErr
 ///
 /// The root `Init` rule carries the WHOLE process (`base_init`,
 /// tamarin-sapic base_translation.rs:952; HS `baseInit`,
-/// Basetranslation.hs:313 — the rule's annotation is `anP`, the full
+/// Basetranslation.hs:312-317, see line 313 — the rule's annotation is `anP`, the full
 /// process) and is emitted first, so under `clashesOn`'s
 /// first-occurrence dedup it wins every public name — reproducing HS's
 /// `rule "Init":  name 'C', 'c'` attribution.
@@ -714,7 +715,7 @@ fn builtin_fun_attrs(name: &str) -> Vec<(String, Privacy, Constructability)> {
 /// hand-curated table) we guarantee the set we recognise matches HS's
 /// `funSyms`, e.g. `oneSymString = "one"` and
 /// `dhNeutralSymString = "DH_neutral"` for `dhFunSig`
-/// (lib/term/src/Term/Term/FunctionSymbols.hs:134,137,153,163,192).
+/// (lib/term/src/Term/Term/FunctionSymbols.hs:134-134,137,153,163,192).
 fn builtin_nullary_names_from_msig(msig: &MaudeSig) -> Vec<String> {
     msig.fun_syms.iter().filter_map(|fs| match fs {
         tamarin_term::function_symbols::FunSym::NoEq(s) if s.arity == 0 =>
@@ -967,7 +968,7 @@ fn elaborate_items(
                     }
                     // NOTE: `diffie-hellman` already arrives with `enable_dh`
                     // set (its MaudeSig is `dh_maude_sig`, see
-                    // builtinsNames in Theory/Text/Parser/Signature.hs:60),
+                    // builtinsNames in Theory/Text/Parser/Signature.hs:57-74, see line 60),
                     // and `merge` ORs `enable_dh`, so no explicit force is
                     // needed here.  `diff` is a header/CLI flag handled via
                     // `enable_diff_maude_sig`, never a `builtins:` entry.
@@ -1051,8 +1052,8 @@ fn elaborate_items(
                     };
                     // Register macro fun-sym in MaudeSig — mirrors HS
                     // `addMacroSym (op,(k,Private,Destructor))`
-                    // (Theory/Text/Parser/Macro.hs:48) and
-                    // `macroToFunSym` (Term/Macro.hs:30).  After parser-
+                    // (Theory/Text/Parser/Macro.hs:29-49, see line 48) and
+                    // `macroToFunSym` (Term/Macro.hs:29-30, see line 30).  After parser-
                     // AST macro expansion (run in `elaborate()` above)
                     // call sites no longer reference the macro name, but
                     // the fun-sym must still be present in MaudeSig so
@@ -1533,7 +1534,7 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                         // `p::BinOp::Exp` arm at elaborate.rs:1721-1724).
                         // HS `viewTerm` exposes `exp(b,e)` as
                         // `FApp (NoEq s) [t1,t2] | s == expSym`, and
-                        // `prettyTerm` (Term/Term.hs:274) renders that arm as
+                        // `prettyTerm` (Term/Term.hs:272-300, see line 274) renders that arm as
                         // `ppTerm t1 <> text "^" <> ppTerm t2` — infix `b^e`,
                         // uniformly at every nesting depth (the printer is
                         // recursive).  Without this round-trip the runtime
@@ -1624,7 +1625,7 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                     // Scott::key_secrecy: lemma verifies in HS but RS
                     // terminates `SOLVED // trace found` (wrong verdict).
                     // Mirrors HS's `viewTerm` round-trip via `FApp (C EMap)`
-                    // followed by `naryOpApp` at Theory/Text/Parser/Term.hs:92.
+                    // followed by `naryOpApp` at Theory/Text/Parser/Term.hs:79-93, see line 92.
                     use tamarin_term::function_symbols::CSym;
                     let name = match c {
                         CSym::EMap => {
@@ -1665,7 +1666,7 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
 /// two arguments (Raw.hs:132-133).  Mirror that here so the parser-AST
 /// display path matches HS — `em` args from let-block desugaring may
 /// arrive in source order, which can differ from canonical order.
-/// HS site: `Theory/Text/Parser/Term.hs:92` / `Term/Term/Raw.hs:132-133`:
+/// HS site: `Theory/Text/Parser/Term.hs:79-93, see line 92` / `Term/Term/Raw.hs:132-133`:
 ///   `fAppC nacsym as = FAPP (C nacsym) (sort as)`
 pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
     use p::BinOp;
@@ -1873,7 +1874,7 @@ pub fn rewrite_arity1_formula(
 
 /// Right-fold a non-empty term list into a right-associative `pair(..)` chain:
 /// `[a, b, c]` → `pair(a, pair(b, c))`; `None` on an empty list.  Mirrors HS's
-/// `tupleterm`'s `chainr1 ... (curry fAppPair)` (Theory/Text/Parser/Term.hs:187)
+/// `tupleterm`'s `chainr1 ... (curry fAppPair)` (Theory/Text/Parser/Term.hs:187-188)
 /// — the shared fold behind the arity-1 surplus-argument tuple and the `<..>`
 /// tuple syntax.
 fn right_nest_pair<V>(items: Vec<VTerm<Name, V>>) -> Option<VTerm<Name, V>> {
@@ -1918,9 +1919,9 @@ where
             Some(Term::Lit(Lit::Con(n)))
         }
         p::Term::NumberOne => {
-            // HS `fAppOne = fAppNoEq oneSym []` (Term/Term.hs:127); the
+            // HS `fAppOne = fAppNoEq oneSym []` (Term/Term.hs:126-127, see line 127); the
             // `"1"` keyword in the term parser dispatches to this
-            // (Theory/Text/Parser/Term.hs:134).  Mirror exactly — emit
+            // (Theory/Text/Parser/Term.hs:123-148, see line 134).  Mirror exactly — emit
             // a 0-arity NoEq application of `oneSym`, NOT a public
             // constant.  Treating it as `Lit::Con(Pub,"1")` causes
             // source-case enumeration to mismatch HS's `c_one` rule.
@@ -1930,9 +1931,9 @@ where
             ))
         }
         p::Term::DhNeutral => {
-            // HS `fAppDHNeutral = fAppNoEq dhNeutralSym []` (Term/Term.hs:130);
+            // HS `fAppDHNeutral = fAppNoEq dhNeutralSym []` (Term/Term.hs:129-130, see line 130);
             // dispatched by `symbol "DH_neutral" *> pure fAppDHNeutral`
-            // (Theory/Text/Parser/Term.hs:127).
+            // (Theory/Text/Parser/Term.hs:123-148, see line 127).
             Some(f_app_no_eq(
                 tamarin_term::function_symbols::dh_neutral_sym(),
                 vec![],
@@ -1988,7 +1989,7 @@ where
             }
             // HS-faithful: `em(a, b)` (bilinear-pairing builtin) must be
             // emitted as a C-symbol application, not NoEq.  Mirrors HS
-            // `naryOpApp` (Theory/Text/Parser/Term.hs:92):
+            // `naryOpApp` (Theory/Text/Parser/Term.hs:79-93, see line 92):
             //   `let app o = if BC.pack op == emapSymString then fAppC EMap
             //                else fAppNoEq o`
             // Without this gate, RS builds `em` as a NoEq function symbol
@@ -2025,7 +2026,7 @@ where
             let aa = term_to_vterm(a, mk_var)?;
             let bb = term_to_vterm(b, mk_var)?;
             // Haskell `binaryAlgApp` also reads `(k,priv,cnstr)` from the
-            // signature via `lookupArity` (Theory/Text/Parser/Term.hs:101),
+            // signature via `lookupArity` (Theory/Text/Parser/Term.hs:96-106, see line 101),
             // so thread user privacy/constructability here too.
             let sym = NoEqSym::new(name.as_bytes().to_vec(), 2,
                 user_fun_privacy(name), user_fun_constructability(name));

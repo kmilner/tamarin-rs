@@ -1,14 +1,10 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Philip Lukert, Artur Cygan, Benedikt
-//   Schmidt, "Pops" (github racoucho1u), Ralf Sasse, Felix Linker, Robert
-//   Künnemann, "Jackie" (github kanakanajm), Adrian Dapprich, Cas Cremers,
-//   "Tom" (github BTom-GH), Yann Colomb, Yavor Ivanov, Mathias Aurand, Hong-
-//   Thai Luu, Katriel Cohn-Gordon, Nick Moore, Dominik Schoop, Alexander
-//   Dax, Felix Yan, Charlie Jacomme, Kevin Morio, "ValentinYuri" (github),
-//   and other minor contributors (see upstream git history)
+//   meiersi, jdreier, felixlinker, PhilipLukertWork, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs,
-//   lib/term/src/Term/Substitution/SubstVFree.hs, lib/theory/src/Pretty.hs,
+//   lib/term/src/Term/Substitution/SubstVFree.hs,
+//   lib/theory/src/Pretty.hs,
 //   lib/theory/src/Theory/Constraint/System.hs,
 //   lib/theory/src/Theory/Model/Fact.hs,
 //   lib/theory/src/Theory/Text/Pretty.hs,
@@ -20,7 +16,7 @@
 //! Pretty-printer for the constraint `System`.
 //!
 //! Port of `prettyNonGraphSystem` from
-//! `lib/theory/src/Theory/Constraint/System.hs:1673`.  Emits the same
+//! `lib/theory/src/Theory/Constraint/System.hs:1673-1686`.  Emits the same
 //! ordered section list the Haskell interactive UI shows in its
 //! "Constraint system" pane:
 //!
@@ -62,7 +58,7 @@ use crate::pretty_formula::guarded_doc;
 /// `vsep $ map combine_ [("last", …), …]` — the entire pane is a single
 /// Doc rendered once at the web display width.
 pub fn pretty_non_graph_system(sys: &System) -> String {
-    // HS renders this pane (Web/Theory.hs:535 `preformatted (Just "sequent")
+    // HS renders this pane (Web/Theory.hs:513-611, see line 535 `preformatted (Just "sequent")
     // (prettyNonGraphSystem se)`) through the `HtmlDoc Doc` transformer via
     // `renderHtmlDoc`: keywords/operators become `hl_*` spans, every `text` is
     // entity-escaped, and the HughesPJ fill measures each token at its escaped
@@ -112,7 +108,7 @@ fn vsep_docs(ds: Vec<Doc>) -> Doc {
     acc
 }
 
-// HS `prettyNTerm t` (LTerm.hs:894 `prettyTerm (text . show)`) as a Doc,
+// HS `prettyNTerm t` (LTerm.hs:893-894, see line 894 `prettyTerm (text . show)`) as a Doc,
 // via the parser-AST projection — the same Doc path the proof printer and
 // web DOT renderer use, so fact/term wrapping is byte-faithful.
 fn lnterm_doc(t: &tamarin_term::lterm::LNTerm) -> Doc {
@@ -123,7 +119,7 @@ fn lnterm_doc(t: &tamarin_term::lterm::LNTerm) -> Doc {
 // last_atom
 // ---------------------------------------------------------------------
 
-// HS `maybe (text "none") prettyNodeId $ L.get sLastAtom se` (System.hs:1676).
+// HS `maybe (text "none") prettyNodeId $ L.get sLastAtom se` (System.hs:1673-1686, see line 1676).
 fn pretty_last(sys: &System) -> Doc {
     match &sys.last_atom {
         None => Doc::text("none"),
@@ -136,7 +132,7 @@ fn pretty_last(sys: &System) -> Doc {
 // ---------------------------------------------------------------------
 
 /// Render a guarded-formula collection whose Haskell counterpart is a
-/// `S.Set LNGuarded` (System.hs:1679 renders `sLemmas` via `S.toList`,
+/// `S.Set LNGuarded` (System.hs:1673-1686, see line 1679 renders `sLemmas` via `S.toList`,
 /// i.e. ascending `Ord LNGuarded` with structural dedup).  RS stores
 /// `sLemmas` as a `Vec<Guarded>` in *insertion* order (see
 /// `System::insert_lemma`), so the raw Vec would render in a different
@@ -154,7 +150,7 @@ fn pretty_last(sys: &System) -> Doc {
 /// is reached only from the interactive/web constraint-system pane, never
 /// from `--prove` output.
 ///
-/// HS: `vsep $ map prettyGuarded $ S.toList` (System.hs:1677/1680/1682) —
+/// HS: `vsep $ map prettyGuarded $ S.toList` (System.hs:1673-1686, see line 1677/1680/1682) —
 /// each formula is a real Doc (`guarded_doc`) and formulas are separated
 /// by a blank line (`vsep` = fold `$--$`).
 fn pretty_formula_set(items: &[std::sync::Arc<Guarded>]) -> Doc {
@@ -214,7 +210,7 @@ fn blank_text() -> Doc {
 }
 
 // HS `combine (header, d) = fsep [keyword_ header <> colon, nest 2 d]`
-// (SubtermStore.hs:576 / EquationStore.hs:574) — the section header is a
+// (SubtermStore.hs:569-581, see line 576 / EquationStore.hs:568-588, see line 574) — the section header is a
 // `keyword_` span, the colon is plain.  `keyword_` is the identity in plain mode.
 fn combine(header: &str, d: Doc) -> Doc {
     fsep(vec![crate::pretty_hpj::keyword_(header).beside(Doc::char(':')), d.nest(2)])
@@ -329,8 +325,8 @@ fn pp_disj(d: &crate::tools::equation_store::EqDisj) -> Doc {
 fn pp_subst_vfresh(subst: &crate::tools::equation_store::LNSubstVFresh) -> Doc {
     use crate::pretty_hpj::{hsep, operator_, sep};
     // hsep (opExists : map prettyLVar vars) <> opDot
-    // opExists = operator_ "∃ " (Pretty.hs:177) — trailing space, one operator
-    // token; opDot = operator_ "." (Pretty.hs:183). Both `operator_`, so they
+    // opExists = operator_ "∃ " (Pretty.hs:177-177) — trailing space, one operator
+    // token; opDot = operator_ "." (Pretty.hs:183-183). Both `operator_`, so they
     // carry `hl_operator` spans in HtmlDoc mode and are identity in plain mode.
     let mut quant_parts: Vec<Doc> = vec![operator_("\u{2203} ")]; // opExists "∃ "
     for v in subst.vars_range() {
@@ -339,7 +335,7 @@ fn pp_subst_vfresh(subst: &crate::tools::equation_store::LNSubstVFresh) -> Doc {
     let quant = hsep(quant_parts).beside(operator_(".")); // opDot
 
     // fsep $ intersperse opLAnd $ map ppEq (substToListVFresh subst)
-    // opLAnd = operator_ "∧" (Pretty.hs:179).
+    // opLAnd = operator_ "∧" (Pretty.hs:179-179).
     let eqs: Vec<Doc> = subst
         .to_list()
         .into_iter()

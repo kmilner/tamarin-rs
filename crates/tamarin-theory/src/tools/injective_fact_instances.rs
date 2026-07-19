@@ -1,12 +1,11 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Robert Künnemann, Philip Lukert, Kevin
-//   Morio, Hong-Thai Luu, Niklas Medinger, Charlie Jacomme, Yavor Ivanov,
-//   Benedikt Schmidt, "ValentinYuri" (github), Ralf Sasse, Artur Cygan,
-//   Felix Linker, and other minor contributors (see upstream git history)
+//   niklasmedinger, PhilipLukertWork, rkunnema, meiersi, and other
+//   minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/sapic/src/Sapic/Facts.hs, lib/theory/src/Rule.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Simplify.hs,
-//   lib/theory/src/Theory/Model/Rule.hs, lib/theory/src/Theory/Sapic.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Sapic.hs,
 //   lib/theory/src/Theory/Tools/InjectiveFactInstances.hs
 
 //! Port of `Theory.Tools.InjectiveFactInstances`.
@@ -370,7 +369,7 @@ pub fn simple_injective_fact_instances(
         let copies: Vec<&LNFact> = r.conclusions.iter()
             .filter(|c| &c.tag == tag).collect();
         // HS `constraints = concatMap extractConstraints
-        //   (preRestriction (rInfo ru))` (InjectiveFactInstances.hs:177).
+        //   (preRestriction (rInfo ru))` (InjectiveFactInstances.hs:100-228, see line 177).
         let constraints: Vec<(LNTerm, LNTerm)> = r.info.restrictions.iter()
             .flat_map(extract_constraints).collect();
         // HS `duplicateFirstTerms` (InjectiveFactInstances.hs:181-182): the

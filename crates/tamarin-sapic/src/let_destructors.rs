@@ -1,7 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann, Charlie Jacomme, Simon Meier, Artur Cygan, Benedikt
-//   Schmidt, Kevin Morio, Jannik Dreier, and other minor contributors (see
-//   upstream git history)
+//   rkunnema, charlie-j, meiersi, arcz, beschmi, kevinmorio, jdreier,
+//   and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/sapic/src/Sapic.hs, lib/sapic/src/Sapic/Annotation.hs,
 //   lib/sapic/src/Sapic/Basetranslation.hs,
@@ -35,7 +34,7 @@
 //! `elsebranch` (LetDestructors.hs:74-76) is `False` iff the right branch is the
 //! null process, else `True`.
 //!
-//! Runs as part of `translate` (HS `Sapic.hs:54`), AFTER `propagateNames` and
+//! Runs as part of `translate` (HS `Sapic.hs:45-101, see line 54`), AFTER `propagateNames` and
 //! BEFORE `annotateLocks`, over the already type-/rename-unique'd process.
 
 use tamarin_term::function_symbols::{Constructability, FunSym};

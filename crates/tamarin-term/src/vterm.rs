@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann, Benedikt Schmidt, Simon Meier, and other minor
-//   contributors (see upstream git history)
+//   beschmi, meiersi, and other minor contributors (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/VTerm.hs, lib/theory/src/Theory/Sapic/Term.hs
 

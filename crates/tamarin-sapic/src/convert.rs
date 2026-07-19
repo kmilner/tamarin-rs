@@ -1,7 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann, Simon Meier, Charlie Jacomme, Benedikt Schmidt, Kevin
-//   Morio, Artur Cygan, Jannik Dreier, and other minor contributors (see
-//   upstream git history)
+//   rkunnema, meiersi, beschmi, charlie-j, jdreier, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/sapic/src/Sapic/Basetranslation.hs,
 //   lib/term/src/Term/Maude/Process.hs,
@@ -304,7 +303,7 @@ fn action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, ConvertError> {
         p::SapicAction::ChIn { chan, msg } => {
             // The surface `in(c, pat)` parser stores the pattern with `=t`
             // (`PatMatch`) match markers.  HS `ChIn maybeChannel (unpattern pt)
-            // (extractMatchingVariables pt)` (Parser/Sapic.hs:114) unpatterns the
+            // (extractMatchingVariables pt)` (Parser/Sapic.hs:84-162, see line 114) unpatterns the
             // message term and splits the matched variables out into `match_vars`.
             // We reuse the same `unpattern`/`extractMatchingVariables` helper used
             // for `let` patterns.

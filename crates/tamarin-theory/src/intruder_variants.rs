@@ -1,15 +1,14 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Kevin Morio, Robert Künnemann, Simon Meier, Jannik Dreier, Benedikt
-//   Schmidt, Artur Cygan, Philip Lukert, Charlie Jacomme, Yavor Ivanov,
-//   "Nynko" (github), Ralf Sasse, Felix Linker, Jérôme (github Azurios-git),
-//   and other minor contributors (see upstream git history)
+//   kevinmorio, arcz, meiersi, rkunnema, jdreier, yavivanov, Nynko,
+//   Azurios-git, felixlinker, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Term/FunctionSymbols.hs,
 //   lib/theory/src/Theory/Model/Fact.hs,
 //   lib/theory/src/Theory/Text/Parser/Rule.hs,
 //   lib/theory/src/Theory/Text/Parser/Term.hs,
-//   lib/theory/src/Theory/Tools/IntruderRules.hs, src/Main/Mode/Intruder.hs,
-//   src/Main/TheoryLoader.hs
+//   lib/theory/src/Theory/Tools/IntruderRules.hs,
+//   src/Main/Mode/Intruder.hs, src/Main/TheoryLoader.hs
 
 //! Pre-computed intruder-variant rule loaders.
 //!
@@ -34,7 +33,7 @@
 //!
 //! The cached files at `data/intruder_variants_dh.spthy` (51 rules) and
 //! `data/intruder_variants_bp.spthy` (75 rules) were produced by HS's
-//! `Main.Mode.Intruder.run` (src/Main/Mode/Intruder.hs:48) — that mode
+//! `Main.Mode.Intruder.run` (src/Main/Mode/Intruder.hs:43-63, see line 48) — that mode
 //! invokes `dhIntruderRules False`/`bpIntruderRules False` against
 //! Maude and pretty-prints the result.  See [`crate::intruder_rules`]
 //! for the Rust port of `dhIntruderRules`, which IS still used as a
@@ -48,21 +47,21 @@ use crate::elaborate;
 use crate::fact::LNFact;
 use crate::rule::{IntrRuleAC, IntrRuleACInfo, Rule};
 
-/// HS `dhIntruderVariantsFile` (TheoryLoader.hs:746).
+/// HS `dhIntruderVariantsFile` (TheoryLoader.hs:745-746, see line 746).
 pub const DH_INTRUDER_VARIANTS_FILE: &str = "data/intruder_variants_dh.spthy";
 
-/// HS `bpIntruderVariantsFile` (TheoryLoader.hs:750).
+/// HS `bpIntruderVariantsFile` (TheoryLoader.hs:749-750, see line 750).
 pub const BP_INTRUDER_VARIANTS_FILE: &str = "data/intruder_variants_bp.spthy";
 
 /// The DH intruder-variants spthy source, embedded at compile time
 /// (HS uses `$(embedFile "data/intruder_variants_dh.spthy")` —
-/// TheoryLoader.hs:759).
+/// TheoryLoader.hs:753-759, see line 759).
 pub const DH_INTRUDER_VARIANTS_SPTHY: &str =
     include_str!("../../../tamarin-prover/data/intruder_variants_dh.spthy");
 
 /// The BP intruder-variants spthy source, embedded at compile time
 /// (HS uses `$(embedFile "data/intruder_variants_bp.spthy")` —
-/// TheoryLoader.hs:768).
+/// TheoryLoader.hs:762-768, see line 768).
 pub const BP_INTRUDER_VARIANTS_SPTHY: &str =
     include_str!("../../../tamarin-prover/data/intruder_variants_bp.spthy");
 
@@ -96,7 +95,7 @@ pub fn mk_bp_intruder_variants(msig: &MaudeSig) -> Vec<IntrRuleAC> {
 }
 
 /// Error from `parse_intruder_rules`.  Includes the source file label
-/// (HS `ctxtDesc` — Theory/Text/Parser/Rule.hs:202) for human-readable
+/// (HS `ctxtDesc` — Theory/Text/Parser/Rule.hs:200-204, see line 202) for human-readable
 /// diagnostics.
 #[derive(Debug, Clone)]
 pub struct IntrRuleParseError {
@@ -260,13 +259,13 @@ fn ast_rule_to_intr_rule_ac(r: &p::Rule) -> Result<IntrRuleAC, String> {
     // but not premises.  The intruder-rule `.spthy` files don't have
     // any (all RHS vars are LHS vars), but compute it faithfully for
     // robustness.  HS reference: Theory.Model.Fact.newVariables
-    // (lib/theory/src/Theory/Model/Fact.hs:494).
+    // (lib/theory/src/Theory/Model/Fact.hs:484-494, see line 494).
     let new_vars = compute_new_vars(&prems, &concs);
 
     Ok(Rule::new(info, prems, concs, acts).with_new_vars(new_vars))
 }
 
-/// Mirrors HS `newVariables` (`lib/theory/src/Theory/Model/Fact.hs:494`):
+/// Mirrors HS `newVariables` (`lib/theory/src/Theory/Model/Fact.hs:484-494, see line 494`):
 /// the set of variables in `conclusions` that are not in `premises`,
 /// returned in deterministic order.
 fn compute_new_vars(
@@ -337,7 +336,7 @@ mod tests {
     /// The 5 constructor rules MUST be present with their HS-canonical
     /// underscore-prefixed names (`c_exp` → `ConstrRule "_exp"`, etc).
     /// HS reference: Theory/Tools/IntruderRules.hs:233-244 +
-    /// Theory/Text/Parser/Rule.hs:167 (`'c':cname → ConstrRule (BC.pack cname)`).
+    /// Theory/Text/Parser/Rule.hs:155-169, see line 167 (`'c':cname → ConstrRule (BC.pack cname)`).
     #[test]
     fn dh_variants_contains_five_constructors_with_underscore_prefix() {
         let rules = mk_dh_intruder_variants(&dh_maude_sig());
@@ -360,7 +359,7 @@ mod tests {
     }
 
     /// Every destructor rule in DH must have shape `DestrRule name 0 True False`
-    /// (HS Rule.hs:168 hard-codes `(fromIntegral limit) True False`, and
+    /// (HS Rule.hs:155-169, see line 168 hard-codes `(fromIntegral limit) True False`, and
     /// `option 0 natural` means limit=0 when none is parsed — none of the
     /// cached destructors have a numeric limit).  The name must start
     /// with `_` (HS strips the leading `d` and keeps the `_<rest>` as-is).
@@ -411,7 +410,7 @@ mod tests {
     }
 
     /// Rule names that don't start with `c` or `d` must be rejected
-    /// (HS Rule.hs:169 — `fail "invalid intruder rule name ..."`).
+    /// (HS Rule.hs:155-169, see line 169 — `fail "invalid intruder rule name ..."`).
     #[test]
     fn parse_intruder_rules_rejects_non_c_d_prefix() {
         let src = "rule (modulo AC) xfoo:\n   [ ] --> [ ]\n";
@@ -505,7 +504,7 @@ mod tests {
     /// var `one` (which would unify with every KU goal, falsely closing 8+ DH
     /// corpus branches).  HS: Theory/Text/Parser/Term.hs:139-143 (`nullaryApp`
     /// against `funSyms maudeSig`) and
-    /// lib/term/src/Term/Term/FunctionSymbols.hs:163
+    /// lib/term/src/Term/Term/FunctionSymbols.hs:163-163
     /// (`oneSym = ("one",(0,Public,Constructor))`).
     #[test]
     fn dh_one_and_dh_neutral_parse_as_constants() {

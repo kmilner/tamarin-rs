@@ -1,9 +1,7 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Artur Cygan, Simon Meier, Jannik Dreier, Felix Linker, Cas Cremers,
-//   "Jackie" (github kanakanajm), Ralf Sasse, Yann Colomb, Benedikt Schmidt,
-//   "Tom" (github BTom-GH), Adrian Dapprich, Alexander Dax, symphorien,
-//   Jérôme (github Azurios-git), and other minor contributors (see upstream
-//   git history)
+//   arcz, meiersi, felixlinker, cascremers, Kanakanajm, jdreier,
+//   rsasse, BTom-GH, beschmi, YannColomb, symphorien, xaDxelA, addap,
+//   and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   src/Web/Handler.hs, src/Web/Types.hs
 
@@ -22,8 +20,8 @@ use common::*;
 
 #[tokio::test]
 async fn intdot_returns_html_shell() {
-    // HS `getInteractiveDotGraphR` (`src/Web/Handler.hs:897`) returns the
-    // `intdotLayout` HTML shell page (`src/Web/Types.hs:727`) — a
+    // HS `getInteractiveDotGraphR` (`src/Web/Handler.hs:897-906`) returns the
+    // `intdotLayout` HTML shell page (`src/Web/Types.hs:727-744`) — a
     // `<dot-graph-viz>` custom element whose `dotsrc` points at the
     // `interactive-graph-def` route (which serves the raw DOT the bundled
     // client-side viz renders).  It is NOT the raw DOT itself.

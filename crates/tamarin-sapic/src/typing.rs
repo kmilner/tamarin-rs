@@ -1,10 +1,10 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann, Benedikt Schmidt, Simon Meier, Charlie Jacomme, Adrian
-//   Dapprich, Jannik Dreier, Artur Cygan, Ralf Sasse, and other minor
-//   contributors (see upstream git history)
+//   rkunnema, meiersi, charlie-j, beschmi, arcz, jdreier, and other
+//   minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/sapic/src/Sapic/Typing.hs, lib/term/src/Term/Maude/Process.hs,
-//   lib/term/src/Term/Term/Raw.hs, lib/theory/src/Theory/Sapic/Process.hs
+//   lib/term/src/Term/Term/Raw.hs,
+//   lib/theory/src/Theory/Sapic/Process.hs
 
 //! Port of `Sapic.Typing` (`lib/sapic/src/Sapic/Typing.hs`) — the
 //! uniqueness-renaming pass (`renameUnique`) and the lightweight type
@@ -33,7 +33,7 @@ use crate::bindings::{bindings_act, bindings_comb};
 // =============================================================================
 
 /// `varsProc`: every SAPIC variable that occurs anywhere in `p` (HS
-/// `varsProc = foldMap Data.Set.singleton`, Process.hs:361 — a Set, so sorted
+/// `varsProc = foldMap Data.Set.singleton`, Process.hs:361-362 — a Set, so sorted
 /// and deduplicated).  We return the underlying `LVar`s used to seed the
 /// avoidance state for `renameUnique`.
 fn proc_lvars(p: &PlainProcess) -> Vec<LVar> {
@@ -277,7 +277,7 @@ fn rename_unique_go(
     p: &PlainProcess,
 ) -> PlainProcess {
     // `let p' = apply initSubst p` — apply the outstanding renaming to the
-    // WHOLE subtree (HS Typing.hs:243); the children inherit the rename, then
+    // WHOLE subtree (HS Typing.hs:239-269, see line 243); the children inherit the rename, then
     // are descended into with only the NEW fresh subst for this node's binders.
     let p_prime = rename_process_full(subst, p);
     match p_prime {
@@ -305,7 +305,7 @@ fn rename_unique_go(
 }
 
 /// `apply subst p` over an entire process subtree (terms + bound vars), used to
-/// mirror HS's `apply initSubst p` (Typing.hs:243).  Annotations are untouched
+/// mirror HS's `apply initSubst p` (Typing.hs:239-269, see line 243).  Annotations are untouched
 /// here — `renameUnique_go` updates `back_substitution` per node afterwards.
 fn rename_process_full(subst: &BTreeMap<LVar, LVar>, p: &PlainProcess) -> PlainProcess {
     match p {
@@ -384,7 +384,7 @@ fn sqcap(t1: &SapicType, t2: &SapicType) -> Result<SapicType, String> {
     }
 }
 
-/// `defaultFunctionType n = (replicate n Nothing, Nothing)` (Typing.hs:53).
+/// `defaultFunctionType n = (replicate n Nothing, Nothing)` (Typing.hs:52-53, see line 53).
 fn default_function_type(n: usize) -> (Vec<SapicType>, SapicType) {
     (vec![None; n], None)
 }
@@ -445,8 +445,8 @@ fn type_with(
                 // `pmult`, `diff`, `one`, `natOne`, `dhNeutral`) does NOT view as
                 // `FAppNoEq` (Term/Raw.hs:183-196) — it views as its own
                 // constructor (`FPair`, `FExp`, …).  None of those match the
-                // `FAppNoEq fs ts` case (Typing.hs:83), so they fall through to
-                // the polymorphic `FApp fs ts <- viewTerm t` branch (Typing.hs:102)
+                // `FAppNoEq fs ts` case (Typing.hs:63-124, see line 83), so they fall through to
+                // the polymorphic `FApp fs ts <- viewTerm t` branch (Typing.hs:63-124, see line 102)
                 // which types arguments with `Nothing` and learns NO function
                 // type.  Crucially this means pairs (`<a,b>`) do NOT back-propagate
                 // an argument type onto `a`/`b` — matching HS, which keeps
@@ -633,7 +633,7 @@ fn type_action(
             prems: prems.iter().map(|f| type_event_fact(env, f)).collect::<Result<_, _>>()?,
             acts: acts.iter().map(|f| type_event_fact(env, f)).collect::<Result<_, _>>()?,
             concs: concs.iter().map(|f| type_event_fact(env, f)).collect::<Result<_, _>>()?,
-            // `rest` formulas use `typeWithFact = return` (Typing.hs:162) — left
+            // `rest` formulas use `typeWithFact = return` (Typing.hs:135-168, see line 162) — left
             // untyped, matching HS.
             rest: rest.clone(),
             match_vars: match_vars.iter().map(type_with_var).collect(),
@@ -662,7 +662,7 @@ fn type_comb(
     }
 }
 
-/// `typeWith' t = fst <$> typeWith t Nothing` (Typing.hs:155).
+/// `typeWith' t = fst <$> typeWith t Nothing` (Typing.hs:135-168, see line 155).
 fn type_term(env: &mut TypingEnvironment, t: &SapicTerm) -> Result<SapicTerm, String> {
     let (t1, _) = type_with(env, t, &None)?;
     Ok(t1)

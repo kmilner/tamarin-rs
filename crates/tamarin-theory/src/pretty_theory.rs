@@ -1,12 +1,10 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Robert Künnemann, Hong-Thai Luu, Benedikt
-//   Schmidt, Artur Cygan, "Pops" (github racoucho1u), Felix Linker, Philip
-//   Lukert, Ralf Sasse, "Tom" (github BTom-GH), Charlie Jacomme, Kevin
-//   Morio, "sans-sucre" (github), Adrian Dapprich, Mathias Aurand,
-//   "ValentinYuri" (github), Yavor Ivanov, "Jackie" (github kanakanajm),
-//   "gilcu3" (github), "Nynko" (github), Cas Cremers, Alexander Dax, Yann
-//   Colomb, Katriel Cohn-Gordon, Nick Moore, Charles Dumenil, Felix Yan,
-//   Dominik Schoop, and other minor contributors (see upstream git history)
+//   meiersi, rkunnema, arcz, jdreier, felixlinker, racoucho1u, beschmi,
+//   rsasse, kevinmorio, addap, PhilipLukertWork, BTom-GH, Hong-Thai,
+//   cascremers, yavivanov, Kanakanajm, Mathias-AURAND, xaDxelA,
+//   sans-sucre, Nynko, YannColomb, ValentinYuri, charlie-j,
+//   Esslingen-Security-Privacy, robert.kunnemann@cased.de, and other
+//   minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/sapic/src/Sapic/Warnings.hs, lib/term/src/Term/LTerm.hs,
 //   lib/term/src/Term/Maude/Signature.hs,
@@ -23,7 +21,8 @@
 //   lib/theory/src/Theory/Model/Atom.hs,
 //   lib/theory/src/Theory/Model/Fact.hs,
 //   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/ProofSkeleton.hs, lib/theory/src/Theory/Sapic.hs,
+//   lib/theory/src/Theory/ProofSkeleton.hs,
+//   lib/theory/src/Theory/Sapic.hs,
 //   lib/theory/src/Theory/Syntactic/Predicate.hs,
 //   lib/theory/src/Theory/Text/Parser.hs,
 //   lib/theory/src/Theory/Text/Parser/Proof.hs,
@@ -33,12 +32,13 @@
 //   lib/theory/src/Theory/Text/Parser/Term.hs,
 //   lib/theory/src/Theory/Tools/Wellformedness.hs,
 //   lib/theory/src/TheoryObject.hs,
-//   lib/utils/src/Control/Monad/Disj/Class.hs, lib/utils/src/Data/Color.hs,
+//   lib/utils/src/Control/Monad/Disj/Class.hs,
+//   lib/utils/src/Data/Color.hs,
 //   lib/utils/src/Text/PrettyPrint/Class.hs, src/Main/Console.hs,
 //   src/Main/Mode/Batch.hs, src/Web/Dispatch.hs, src/Web/Theory.hs
 
 //! Theory pretty-printer.  Port of Haskell's `prettyClosedTheory`
-//! (ClosedTheory.hs:382) — top-level renderer for `--prove` output.
+//! (ClosedTheory.hs:382-418) — top-level renderer for `--prove` output.
 //!
 //! Goal: byte-identical output to Haskell on the analyzed theory body.
 //! The output layout:
@@ -225,7 +225,7 @@ pub fn pretty_goal_rankings(raw: &str, in_file: &str) -> String {
             break;
         }
         if c == '{' {
-            // Tactic ranking: `'{' ++ _name tactic ++ "}"` (System.hs:714).
+            // Tactic ranking: `'{' ++ _name tactic ++ "}"` (System.hs:710-728, see line 714).
             // HS's parser does `string "{" <* skipMany (char ' ')` before
             // capturing `tacticName <- many1 (noneOf "\"\n\r{}")`
             // (Signature.hs:298-303), so it STRIPS leading space(s) after `{`
@@ -326,7 +326,7 @@ pub fn pretty_closed_theory(
         out.push('\n');
     }
     if !elaborated.heuristic.is_empty() {
-        // HS `TheoryObject.hs:749`: `text "heuristic: " <> text (prettyGoalRankings thyH)`
+        // HS `TheoryObject.hs:732-768, see line 749`: `text "heuristic: " <> text (prettyGoalRankings thyH)`
         // where `prettyGoalRankings = unwords . map prettyGoalRanking` (System.hs:707-708).
         // Each ranking in the Vec is a raw heuristic string; join their expansions with a
         // space.  (In practice there is only one `heuristic:` item per theory.)
@@ -349,8 +349,8 @@ pub fn pretty_closed_theory(
     // HS preserves source order via vsep over `thyItems`.  Each item is
     // separated from the previous block by a blank line.
     //
-    // HS-parallel: `lib/theory/src/TheoryObject.hs:744,752`
-    //   `parMap rdeepseq ppItem (theoryItems thy)` (and `OpenTheory.hs:921,933`).
+    // HS-parallel: `lib/theory/src/TheoryObject.hs:732-768, see line 744,752`
+    //   `parMap rdeepseq ppItem (theoryItems thy)` (and `OpenTheory.hs:909-949, see line 921,933`).
     // HS evaluates each item's `Doc` in parallel; the final `vsep`
     // (sequential concatenation) preserves source order.  We mirror via
     // rayon `par_iter().collect()` — parallel per-item render, sequential
@@ -374,7 +374,7 @@ pub fn pretty_closed_theory(
     // it through to every per-item renderer rather than recomputing (and
     // re-cloning the signature) for each rule/lemma/restriction/predicate.
     let arity1 = arity1_noeq_names(elaborated);
-    // HS `prettyClosedTheory` (ClosedTheory.hs:383) switches the WHOLE theory
+    // HS `prettyClosedTheory` (ClosedTheory.hs:382-418, see line 383) switches the WHOLE theory
     // to the open-as-closed renderer when `containsManualRuleVariants` holds,
     // which suppresses loop-breaker comments on trivial-AC-variant rules.
     let manual_variants = contains_manual_rule_variants(parsed, elaborated, auto_sources);
@@ -433,7 +433,7 @@ pub fn web_signature_block(sig: &tamarin_term::maude_sig::MaudeSig) -> String {
 }
 
 /// HS `ppPrem = nest 2 (doubleQuotes (prettyGoal th._cdGoal))`
-/// (Web/Theory.hs:830).  `doubleQuotes d = char '"' <> d <> char '"'` (the
+/// (Web/Theory.hs:820-845, see line 830).  `doubleQuotes d = char '"' <> d <> char '"'` (the
 /// quotes entity-escape to `&quot;` under the active HtmlDoc guard); the
 /// `nest 2` indents wrapped continuation lines.  Rendered as ONE Doc so a long
 /// source goal wraps exactly as HS `renderHtmlDoc` (the per-case `<p>` prem).
@@ -445,7 +445,7 @@ fn web_source_prem_doc(g: &crate::constraint::constraints::Goal) -> crate::prett
         .nest(2)
 }
 
-/// HS per-case `withTag "p" [] ppPrem` premise (Web/Theory.hs:837): the whole
+/// HS per-case `withTag "p" [] ppPrem` premise (Web/Theory.hs:820-845, see line 837): the whole
 /// `<p>` is built as ONE Doc via `with_tag`, so the `nest 2` indents only
 /// WRAPPED continuation lines — the `<p>` tag is zero-width and the prem sits
 /// BESIDE it, so line 1 carries no leading indent (a standalone `.render()`
@@ -488,7 +488,7 @@ fn collect_macros_predicates(parsed: &p::Theory) -> (Vec<p::Macro>, Vec<p::Predi
     (collect_macros(parsed), collect_predicates(parsed))
 }
 
-/// HS `prettyClosedProtoRule` over `theoryRules thy` (Web/Theory.hs:894,898) —
+/// HS `prettyClosedProtoRule` over `theoryRules thy` (Web/Theory.hs:887-917, see line 894,898) —
 /// one rendered rule string per user protocol rule, in source order.  Reuses
 /// `render_rule` (the `--prove` theory-body rule printer) with the same
 /// macro/arity1/manual-variant setup `pretty_closed_theory` uses.
@@ -503,7 +503,7 @@ pub fn web_proto_rules(parsed: &p::Theory, elaborated: &Theory) -> Vec<String> {
     }).collect()
 }
 
-/// HS `prettyRestriction` over `theoryRestrictions thy` (Web/Theory.hs:895) —
+/// HS `prettyRestriction` over `theoryRestrictions thy` (Web/Theory.hs:887-917, see line 895) —
 /// one rendered restriction string per restriction, in source order.  Reuses
 /// `render_parsed_restriction` (the `--prove` theory-body restriction printer).
 pub fn web_restrictions(parsed: &p::Theory, elaborated: &Theory) -> Vec<String> {
@@ -559,7 +559,7 @@ fn render_injective_fact_insts(elab: &Theory) -> String {
         );
     }
     if tags.is_empty() { return String::new(); }
-    // HS `showFactTagArity` (Fact.hs:526): persistent `!`-prefix + name
+    // HS `showFactTagArity` (Fact.hs:521-525, see line 526): persistent `!`-prefix + name
     // + `/` + arity.
     let label = |tag: &FactTag| -> String {
         let prefix = match tag {
@@ -601,7 +601,7 @@ fn render_signature(sig: &tamarin_term::maude_sig::MaudeSig) -> String {
     if !builtins.is_empty() {
         // HS renders builtins via the same `ppNonEmptyList'` as functions:
         // `(keyword_ "builtins:" <->) . fsep . punctuate comma`
-        // (Term/Maude/Signature.hs:220,229-231) — so the list wraps through
+        // (Term/Maude/Signature.hs:220-247,229-231) — so the list wraps through
         // the HughesPJ engine, not a flat join.
         out.push_str(&wrap_with_lead("builtins:", &builtins));
         out.push('\n');
@@ -650,7 +650,7 @@ fn render_fun_syms(sig: &tamarin_term::maude_sig::MaudeSig) -> Vec<String> {
 
 /// Render the equation list.  Each `CtxtStRule` has an LHS term and an
 /// RHS term (after reading positions/term out of `StRhs`).  HS renders
-/// `prettyCtxtStRule $ S.toList (stRules sig)` (Term/Maude/Signature.hs:226),
+/// `prettyCtxtStRule $ S.toList (stRules sig)` (Term/Maude/Signature.hs:220-247, see line 226),
 /// i.e. equations in `S.toList` order.  `CtxtStRule` derives structural `Ord`,
 /// so we emit them in the `st_rules` `BTreeSet` iteration order, which mirrors
 /// HS's `S.toList` exactly.  We must NOT re-sort by the rendered pretty-string,
@@ -694,7 +694,7 @@ fn render_equations(sig: &tamarin_term::maude_sig::MaudeSig) -> Vec<(crate::pret
 ///     (SubtermRule.hs:122-123), rendered via `pf::term_doc` so a wide RHS
 ///     wraps (HS `prettyTerm`'s `fsep` ppFun, Term.hs:295-296);
 ///   * suppressed entirely when `eqConvergent (sig thy)` is set
-///     (`isUserMarkedConvergent`, Wellformedness.hs:1211/1285).
+///     (`isUserMarkedConvergent`, Wellformedness.hs:1211-1214/1285).
 ///
 /// `run.rs` calls this AFTER elaboration and REPLACES the parser-level entry
 /// (same retain/re-add pattern used for "Message Derivation Checks").
@@ -703,7 +703,7 @@ pub fn subterm_convergence_report_wf(
 ) -> Vec<tamarin_parser::wf::WfError> {
     use tamarin_parser::wf::{underline_topic, WfError};
     // HS: `if not (isUserMarkedConvergent thy) then checkEqs else []`
-    // (Wellformedness.hs:1285); `isUserMarkedConvergent thy = eqConvergent (sig thy)`.
+    // (Wellformedness.hs:1270-1286, see line 1285); `isUserMarkedConvergent thy = eqConvergent (sig thy)`.
     if sig.eq_convergent {
         return Vec::new();
     }
@@ -724,10 +724,10 @@ pub fn subterm_convergence_report_wf(
     // indentation are HS-exact.
     //
     // WIDTH: the WF report Doc is rendered by HS `addComment c = ... TextItem
-    // ("", render c)` (TheoryObject.hs:703), where `render = P.render` uses the
+    // ("", render c)` (TheoryObject.hs:702-703, see line 703), where `render = P.render` uses the
     // HughesPJ DEFAULT style (`lineLength = 100`, `ribbonsPerLine = 1.5`,
     // `ribbon = round (100 / 1.5) = 67`) — NOT the theory body's
-    // `renderDoc` width of 110/73 (Console.hs:236,392).  The pre-rendered
+    // `renderDoc` width of 110/73 (Console.hs:227-239, see line 236,392).  The pre-rendered
     // string is then emitted verbatim inside the `/* ... */` comment.  So the
     // equation list wraps at the 100/67 budget, e.g. `f3`/`f6` (inline width 73
     // from column 4) wrap while `f2` (66) stays inline.  This is a SEPARATE
@@ -801,7 +801,7 @@ pub fn format_wf_block(report: &[tamarin_parser::wf::WfError]) -> String {
 /// the grouped topic blocks WITHOUT the `/* WARNING ... */` comment
 /// wrapper.  Shared by `format_wf_block` (batch theory output) and the
 /// interactive server's `ppInteractive` console echo of the report at
-/// theory-load time (Web/Dispatch.hs:187,200-209).
+/// theory-load time (Web/Dispatch.hs:149-209, see line 187,200-209).
 // grouped by topic; OUTPUT order driven by the topic_order Vec, map keyed only;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
@@ -831,7 +831,7 @@ pub fn render_wf_error_report(report: &[tamarin_parser::wf::WfError]) -> String 
         //
         // Some checks emit one HEADER-LESS body per offending rule (so the
         // summary's `length rep` WARNING count stays HS-faithful,
-        // Batch.hs:245), all sharing one topic.  These are assembled HS-style
+        // Batch.hs:87-316, see line 245), all sharing one topic.  These are assembled HS-style
         // (`prettyWfErrorReport`, Wellformedness.hs:118-125): the topic header
         // (+ any "reasons" preamble that HS folds into the topic string) ONCE,
         // then the per-rule bodies joined by the `intersperse (text "")`
@@ -865,7 +865,7 @@ fn wf_headerless_preamble(topic: &str) -> Option<String> {
         // SAPIC-process wellformedness errors (HS `toWfErrorReport`,
         // Warnings.hs:23-26).  Unlike the other topics, HS does NOT underline
         // this one — `prettyWfErrorReport` renders it as a bare `text topic`
-        // (Wellformedness.hs:124).  So the per-error bodies (each
+        // (Wellformedness.hs:118-125, see line 124).  So the per-error bodies (each
         // `"  Variable bound twice: x."`) sit directly under a plain header.
         "Wellformedness-error in Process" => Some(format!("{topic}\n")),
         "Unbound variables" | "Reserved names" | "Special facts" => {
@@ -896,7 +896,7 @@ fn wrap_with_lead<S: AsRef<str>>(lead: &str, items: &[S]) -> String {
     let docs: Vec<Doc> = items.iter().map(Doc::text).collect();
     let body = hpj::fsep(hpj::punctuate(Doc::char(','), docs));
     // HS `ppNonEmptyList' name = (keyword_ name <->) . fsep`
-    // (Term/Maude/Signature.hs:229) — the `builtins:`/`functions:` lead is a
+    // (Term/Maude/Signature.hs:220-247, see line 229) — the `builtins:`/`functions:` lead is a
     // keyword.  `keyword_` is the identity in plain mode, so `--prove` is
     // unchanged.
     hpj::keyword_(lead).beside_sp(body).render()
@@ -927,7 +927,7 @@ fn sep_block_with_lead(lead: &str, items: &[(crate::pretty_hpj::Doc, crate::pret
     let n = items.len();
     let mut docs: Vec<Doc> = Vec::with_capacity(n + 1);
     // HS `keyword_ "equations:"` / `keyword_ "equations [convergent]:"`
-    // (Term/Maude/Signature.hs:225).  Identity in plain mode.
+    // (Term/Maude/Signature.hs:220-247, see line 225).  Identity in plain mode.
     docs.push(hpj::keyword_(lead));
     for (i, (lhs, rhs)) in items.iter().enumerate() {
         // prettyCtxtStRule: sep [ nest 2 lhs, operator_ "=" <-> rhs ]
@@ -993,7 +993,7 @@ fn render_parsed_item(
         Restriction(r) | LegacyAxiom(r) => Some(render_parsed_restriction(r, macros, predicates, elab, arity1)),
         Predicates(preds) => {
             // HS `prettyTheory` folds each `PredicateItem` through
-            // `prettyPredicate` (TheoryObject.hs:764, 802-806):
+            // `prettyPredicate` (TheoryObject.hs:732-768, see line 764, 802-806):
             //   prettyPredicate p = kwPredicate <> colon <-> text (factstr ++ "<=>" ++ formulastr)
             //     factstr    = render $ prettyFact prettyLVar (pFact p)
             //     formulastr = render $ prettyLNFormula      (pFormula p)
@@ -1058,7 +1058,7 @@ fn arity1_noeq_names(elab: &Theory) -> std::collections::HashSet<String> {
 /// `containsManualRuleVariants` (OpenTheory.hs:584-589) is True iff some
 /// (merged) rule has a non-empty `ruleAC` — i.e. some rule's `openProtoRule`
 /// yields the `[cprRuleAC]` branch.  `prettyClosedTheory`
-/// (ClosedTheory.hs:383) uses that to switch the WHOLE theory to the
+/// (ClosedTheory.hs:382-418, see line 383) uses that to switch the WHOLE theory to the
 /// "open-as-closed" renderer `prettyOpenProtoRuleAsClosedRule`
 /// (OpenTheory.hs:827-851), which — for the `OpenProtoRule ruE []` (empty)
 /// branch — emits NO `prettyLoopBreakers` line ("cannot show loop breakers
@@ -1110,7 +1110,7 @@ fn rule_open_ac_nonempty(
 }
 
 /// HS `containsManualRuleVariants mergedRules` (OpenTheory.hs:584-589) as
-/// computed by `prettyClosedTheory` (ClosedTheory.hs:383, 402): True iff any
+/// computed by `prettyClosedTheory` (ClosedTheory.hs:382-418, see line 383, 402): True iff any
 /// rule's `openProtoRule` yields a non-empty AC list.  See
 /// [`rule_open_ac_nonempty`].  When True the theory renders via the
 /// open-as-closed path, which suppresses loop-breaker comments on
@@ -1232,7 +1232,7 @@ pub fn web_macros(parsed: &p::Theory) -> Option<String> {
 ///
 /// Render order is the `catMaybes [color, process, no_derivcheck, issapicrule,
 /// role]` of `prettyRuleAttribute`.  HS's attribute parser `parseAndIgnore`s
-/// `process=` (Parser/Rule.hs:72), so a user-written `process=` never sets
+/// `process=` (Parser/Rule.hs:68-93, see line 72), so a user-written `process=` never sets
 /// `ruleProcess` and is never rendered; RS mirrors this by discarding `process=`
 /// at parse time (no `RuleAttr::Process` variant exists).  `process=` is only
 /// emitted by HS for SAPIC-translation-generated rules (via `ruleProcess`),
@@ -1240,13 +1240,13 @@ pub fn web_macros(parsed: &p::Theory) -> Option<String> {
 fn rule_attribute_parts(attrs: &[p::RuleAttr]) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
     // color= : HS `text "color=" <> text (rgbToHex c)`; `rgbToHex` is
-    // `'#':` + lowercase 2-digit-per-channel hex (Data/Color.hs:141).
+    // `'#':` + lowercase 2-digit-per-channel hex (Data/Color.hs:140-147, see line 141).
     if let Some(hex) = attrs.iter().rev().find_map(|a| match a {
         p::RuleAttr::Color(c) => Some(c), _ => None }) {
         parts.push(format!("color=#{}", hex.trim_start_matches('#').to_lowercase()));
     }
     // process= : HS `ppProcess p = text "process=" <> "\"" ++ topLevel ++ "\""`
-    // (Model/Rule.hs:1210).  Rendered between color= and no_derivcheck.  Only
+    // (Model/Rule.hs:1201-1215, see line 1210).  Rendered between color= and no_derivcheck.  Only
     // SAPIC-translation-generated rules carry it (the parser ignores a
     // user-written `process=`); the LAST occurrence wins (Maybe field).
     if let Some(s) = attrs.iter().rev().find_map(|a| match a {
@@ -1291,7 +1291,7 @@ fn rule_attributes_doc(attrs: &[p::RuleAttr]) -> crate::pretty_hpj::Doc {
 fn render_rule(parsed_rule: &p::Rule, elab: &Theory, macros: &[p::Macro], arity1: &std::collections::HashSet<String>, manual_variants: bool, auto_sources: bool) -> String {
     let name = &parsed_rule.name;
     let mut out = String::new();
-    // HS rule-header line (`prettyNamedRule`, Model/Rule.hs:1285):
+    // HS rule-header line (`prettyNamedRule`, Model/Rule.hs:1280-1292, see line 1285):
     //   `prefix <-> prettyRuleName ru <> prettyRuleAttributes ru <> colon`
     // i.e. `"rule (modulo E)" <+> name <> [attrs] <> ":"`.  Routed through the
     // HughesPJ-faithful Doc engine so the attribute list's `fsep` wraps at the
@@ -1346,7 +1346,7 @@ fn render_rule(parsed_rule: &p::Rule, elab: &Theory, macros: &[p::Macro], arity1
     // case HS prints the AC body as a comment block rather than the
     // trivial-variant annotation.
     //
-    // MACRO CASE (ClosedTheory.hs:334 + Rule.hs:762-764): When the theory
+    // MACRO CASE (ClosedTheory.hs:332-366, see line 334 + Rule.hs:762-764): When the theory
     // uses macros, HS's `cprRuleE` keeps the MACRO form of the rule while
     // `cprRuleAC` has the EXPANDED form (closeProtoRule runs
     // `applyMacroInRule` before `variantsProtoRule` but stores the original
@@ -1438,7 +1438,7 @@ fn render_rule(parsed_rule: &p::Rule, elab: &Theory, macros: &[p::Macro], arity1
     // (non-trivial) block.  We emit the same `  // loop breaker: [<n>]`
     // / `  // loop breakers: [<n>,<m>]` line here when non-empty.
     //
-    // HS gate (ClosedTheory.hs:383): when `containsManualRuleVariants` holds
+    // HS gate (ClosedTheory.hs:382-418, see line 383): when `containsManualRuleVariants` holds
     // the whole theory renders via `prettyOpenProtoRuleAsClosedRule`
     // (OpenTheory.hs:827-851).  Its trivial-AC-variant branch
     // `(OpenProtoRule ruE [])` (OpenTheory.hs:828-835) shows NO loop-breaker
@@ -1513,7 +1513,7 @@ fn render_loop_breakers_line(breakers: &[crate::rule::PremIdx], indent: usize) -
 
 /// Compare the `(premises, conclusions, actions, new_vars)` of two
 /// `ProtoRuleE` rules structurally.  Mirrors HS's
-/// `isTrivialProtoVariantAC` body equality check (Rule.hs:764):
+/// `isTrivialProtoVariantAC` body equality check (Rule.hs:761-763, see line 764):
 /// `ps == ps' && cs == cs' && as == as' && nvs == nvs'`.
 ///
 /// Used by `render_rule` to decide whether the AC-normalised rule body
@@ -1576,7 +1576,7 @@ fn render_rule_body_at(prems: &[p::Fact], acts: &[p::Fact], concs: &[p::Fact], i
 
 /// Render the HS `/* rule (modulo AC) <name>: ... variants (modulo AC)
 /// 1. ... */` comment block.  Mirrors `prettyClosedProtoRule`'s
-/// `multiComment $ prettyProtoRuleAC ruAC` branch (ClosedTheory.hs:354).
+/// `multiComment $ prettyProtoRuleAC ruAC` branch (ClosedTheory.hs:332-366, see line 354).
 ///
 /// HS `prettyProtoRuleACInfo` (Rule.hs:1284-1290) emits the variants
 /// sub-block via `ppVariants`, which returns `emptyDoc` when the
@@ -1589,14 +1589,14 @@ fn render_rule_body_at(prems: &[p::Fact], acts: &[p::Fact], concs: &[p::Fact], i
 fn render_ac_variants_block(name: &str, rule: &crate::theory::OpenProtoRule, attrs: &[p::RuleAttr]) -> String {
     use crate::pretty_hpj::{hl_open, hl_close, Hl};
     let mut s = String::new();
-    // HS `nest 2 (multiComment (prettyProtoRuleAC ruAC))` (ClosedTheory.hs:354):
+    // HS `nest 2 (multiComment (prettyProtoRuleAC ruAC))` (ClosedTheory.hs:332-366, see line 354):
     // `multiComment = comment (fsep [text "/*", …, text "*/"])` wraps the whole
     // `/* … */` in an `hl_comment` span (opened after the 2-space indent).
     s.push_str("  ");
     s.push_str(&hl_open(Hl::Comment));
     s.push_str("/*\n");
     // HS renders the AC rule via `nest 2 (multiComment (prettyProtoRuleAC …))`
-    // (ClosedTheory.hs:354), so the `rule (modulo AC) <name>[attrs]:` header
+    // (ClosedTheory.hs:332-366, see line 354), so the `rule (modulo AC) <name>[attrs]:` header
     // line sits at column 2 and its attribute-list `fsep` wraps at the ribbon
     // width with the continuation hanging right after the `[`.  Build it through
     // the same Doc engine as the modulo-E header, prefixed by the 2-space
@@ -1628,7 +1628,7 @@ fn render_ac_variants_block(name: &str, rule: &crate::theory::OpenProtoRule, att
     let acts = lnfacts_to_parser(&ac_rule.actions);
     let concs = lnfacts_to_parser(&ac_rule.conclusions);
     // The comment block sits inside HS's `nest 2 (multiComment
-    // (prettyNamedRule …))` (ClosedTheory.hs:354), so the rule body's
+    // (prettyNamedRule …))` (ClosedTheory.hs:332-366, see line 354), so the rule body's
     // facts land at absolute column 5 (2 comment + 2 rule nest + 1
     // bracket).  CRITICAL: render the body with the ENGINE aware of the
     // full indent (nest 4 via indent=5) — the HughesPJ width decisions must
@@ -1643,7 +1643,7 @@ fn render_ac_variants_block(name: &str, rule: &crate::theory::OpenProtoRule, att
     s.push_str(&body);
     if !body.ends_with('\n') { s.push('\n'); }
     // HS `ppVariants (Disj [subst]) | subst == emptySubstVFresh = emptyDoc`
-    // (Rule.hs:1289): skip the variants sub-block when there's no
+    // (Rule.hs:1280-1292, see line 1289): skip the variants sub-block when there's no
     // residual disjunction beyond the identity.
     let has_residual_variants = rule.variant_substs.iter().any(|sub| !sub.is_empty());
     if has_residual_variants {
@@ -1672,7 +1672,7 @@ fn render_ac_variants_block(name: &str, rule: &crate::theory::OpenProtoRule, att
 /// Render one entry of `prettyDisjLNSubstsVFresh` (SubstVFresh.hs:223-229)
 /// as a Doc: the variant's number, then each domain var followed by
 /// `= <range>`.  `n_width` is the width of the largest variant number
-/// (HS `numbered`'s `nWidth = length (show n)`, Class.hs:258); each
+/// (HS `numbered`'s `nWidth = length (show n)`, Class.hs:252-259, see line 258); each
 /// variant's number is right-flushed in that width so dots line up.
 ///
 /// HS `numbered` (Class.hs:252-259) renders each variant as
@@ -1823,7 +1823,7 @@ pub(crate) fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
         Term::App(FunSym::NoEq(sym), args) => {
             let name = String::from_utf8_lossy(sym.name).to_string();
             // `exp` is the DH exponentiation infix operator — HS
-            // `prettyTerm` (Term/Term.hs:274) renders `exp(a, b)` as `a^b`.
+            // `prettyTerm` (Term/Term.hs:272-300, see line 274) renders `exp(a, b)` as `a^b`.
             // Surface as `p::Term::BinOp(Exp, ..)` so `pp_term`'s special
             // case applies.
             if name == "exp" && args.len() == 2 {
@@ -1834,7 +1834,7 @@ pub(crate) fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                 );
             }
             // `pair` chains flatten to n-ary tuple (HS `prettyTerm` at
-            // Term/Term.hs:277,292-293: `split` walks the right child
+            // Term/Term.hs:272-300, see line 277,292-293: `split` walks the right child
             // while it is itself a pair).
             if name == "pair" && args.len() == 2 {
                 let mut items: Vec<p::Term> = Vec::new();
@@ -1886,7 +1886,7 @@ pub(crate) fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
 /// re-exports `P.render` from HughesPJ — Class.hs:77-78), and `P.render`
 /// uses HughesPJ's default `style { lineLength = 100 }`.  This is
 /// DISTINCT from the `--prove` DISPLAY width (`pretty_hpj::LINE_LENGTH`
-/// = 110, set by `defaultStyle { lineLength = 110 }` in Console.hs:392).
+/// = 110, set by `defaultStyle { lineLength = 110 }` in Console.hs:362-390, see line 392).
 const ORACLE_LINE_LENGTH: usize = 100;
 
 /// HughesPJ default-`style` ribbon length used by the oracle/tactic
@@ -1981,7 +1981,7 @@ fn lemma_attr_docs(attrs: &[p::LemmaAttr], in_file: &str) -> Vec<crate::pretty_h
             DiffReuse => Some("diff_reuse".into()),
             UseInduction => Some("use_induction".into()),
             HideLemma(s) => Some(format!("hide_lemma={}", s)),
-            // HS `prettyLemmaAttribute (LemmaHeuristic h)` (Lemma.hs:103):
+            // HS `prettyLemmaAttribute (LemmaHeuristic h)` (Lemma.hs:97-107, see line 103):
             //   `text ("heuristic=" ++ prettyGoalRankings h)`
             // Mirror space-separated, oracle-name-expanded rendering.
             Heuristic(s) => Some(format!("heuristic={}", pretty_goal_rankings(s, in_file))),
@@ -2031,7 +2031,7 @@ fn render_guarded_block(lem: &p::Lemma, macros: &[p::Macro], predicates: &[p::Pr
         Err(e) => {
             // HS Lemma.hs:132-134: `multiComment (text "conversion to
             // guarded formula failed:" $$ nest 2 err)` where `err` is the
-            // full `ppError` doc (Guarded.hs:479): the error text, the
+            // full `ppError` doc (Guarded.hs:471-566, see line 479): the error text, the
             // quoted failing sub-formula (Guarded.hs:508-514/561-563 both
             // include `ppFormula f0`), then "in the formula" + the quoted
             // formula passed to `formulaToGuarded` (nest 2 . doubleQuotes).
@@ -2057,7 +2057,7 @@ fn render_guarded_block(lem: &p::Lemma, macros: &[p::Macro], predicates: &[p::Pr
     // (`gnot gf`).  The result is the "counter-example" form.
     //
     // The guarded block is rendered inside `multiComment` at col 0 with
-    // the formula wrapped in `doubleQuotes` (HS Lemma.hs:138/141:
+    // the formula wrapped in `doubleQuotes` (HS Lemma.hs:116-141, see line 138/141:
     // `doubleQuotes (prettyGuarded gf)`).  `pretty_guarded_doublequoted`
     // models the `"` as a real `Doc` `beside`, so HughesPJ's column-shift
     // puts continuation lines at the formula's start column (1) — exactly
@@ -2142,7 +2142,7 @@ fn render_parsed_restriction(r: &p::Restriction, macros: &[p::Macro], predicates
     // Since ogFormula = Just original, this always shows `r.formula` (macro form).
     out.push_str(&pf::formula_doublequoted_nested(&original, 2));
     // Safety annotation: `nest 2 (if safety then lineComment_ "safety formula"
-    // else emptyDoc)` (TheoryObject.hs:851).
+    // else emptyDoc)` (TheoryObject.hs:846-858, see line 851).
     if is_safety_formula(&expanded) {
         out.push_str("\n  ");
         out.push_str(&line_comment_("safety formula").render());
@@ -2193,7 +2193,7 @@ fn render_predicate(pr: &p::Predicate, arity1: &std::collections::HashSet<String
     format!("predicate: {}<=>{}", factstr, formulastr)
 }
 
-/// HS `isSafetyFormula` (Guarded.hs:156): closed formula with no
+/// HS `isSafetyFormula` (Guarded.hs:156-164): closed formula with no
 /// existential under any all-quantifier.
 fn is_safety_formula(f: &p::Formula) -> bool {
     let gf = match crate::guarded::formula_to_guarded(f) {
@@ -2342,7 +2342,7 @@ pub fn pretty_proof_method_inline(
 
 /// HS `prettyProofMethod m` as a Doc (ProofMethod.hs:1170-1186), for
 /// callers that lay the method out INSIDE a larger Doc context — the web
-/// "Applicable Proof Methods" list (`Web/Theory.hs:546` `numbered' $
+/// "Applicable Proof Methods" list (`Web/Theory.hs:513-611, see line 546` `numbered' $
 /// zipWith prettyPM [1..] pms`), where the `N. ` prefix beside-shift and
 /// the trailing `// expl` line comment both participate in the HughesPJ
 /// fill decisions.
@@ -2387,7 +2387,7 @@ fn pp_step_doc(
         // `noSystemPrf` (Proof.hs:469 `mapProofInfo (\i -> (Just i,
         // Nothing))`) keeps the STRUCTURED `ProofMethod` (`SolveGoal goal`)
         // unchanged and re-renders it via `prettyProofMethod`
-        // (ProofMethod.hs:1174) → `prettyGoal` (Constraints.hs:273-287),
+        // (ProofMethod.hs:1174-1187) → `prettyGoal` (Constraints.hs:273-287),
         // which RE-WRAPS the goal at the current `lineLength`/`ribbon`.  So
         // the stored `.spthy` layout (e.g. an `∃ #j.\n  (body)` break, or a
         // fact arg-list broken before `)`) must NOT be echoed verbatim: we
@@ -2454,7 +2454,7 @@ fn pp_step_doc(
 }
 
 /// Render a `Goal` for the oracle/tactic ranking path.  This is HS's
-/// `render $ prettyGoal g` from `ProofMethod.hs:607,702` (oracle stdin)
+/// `render $ prettyGoal g` from `ProofMethod.hs:598-623, see line 607,702` (oracle stdin)
 /// and `Tactics.hs` `pg = concat . lines . render $ prettyGoal agoal`
 /// (tactic regex string).  All consumers (goals.rs oracle stdin /
 /// `apply_ranking_fn` / `tactic_pg`) immediately apply `concat . lines`
@@ -2467,13 +2467,13 @@ fn pp_step_doc(
 /// uses HughesPJ's DEFAULT `style`: `lineLength = 100`,
 /// `ribbonsPerLine = 1.5` → `ribbon = round(100/1.5) = 67`.  This is
 /// DISTINCT from the `--prove` display path, which uses
-/// `renderStyle (defaultStyle { lineLength = 110 })` (Console.hs:392),
+/// `renderStyle (defaultStyle { lineLength = 110 })` (Console.hs:362-390, see line 392),
 /// i.e. width 110 / ribbon 73 (`pretty_hpj::LINE_LENGTH`/`RIBBON`).
 /// We build the goal via the same `solve_goal_to_doc` builder the
 /// display path uses, then render it at the oracle width.
 pub(crate) fn render_goal_for_oracle(g: &crate::constraint::constraints::Goal) -> String {
     // HS oracle stdin line = `show i ++": "++ (concat . lines . render $
-    // prettyGoal g)` (ProofMethod.hs:607).  HS `render` is HughesPJ's plain
+    // prettyGoal g)` (ProofMethod.hs:598-623, see line 607).  HS `render` is HughesPJ's plain
     // `render` (= `fullRender`/`display` from line column 0), which APPLIES a
     // top-level `nest` to the FIRST line — so e.g. `prettyGoal (DisjG ..)` =
     // `fsep (map (nest 1 . parens . prettyGuarded) gfs)` renders with a LEADING
@@ -2487,7 +2487,7 @@ pub(crate) fn render_goal_for_oracle(g: &crate::constraint::constraints::Goal) -
     //
     // ALWAYS plain: HS builds this string with the plain `render $
     // prettyGoal` regardless of the caller's rendering context
-    // (ProofMethod.hs:607).  The web proof-pane ranks while its
+    // (ProofMethod.hs:598-623, see line 607).  The web proof-pane ranks while its
     // `HtmlDocGuard::enable()` is active — without forcing plain mode the
     // oracle receives `<span class=…>`/`&lt;`-laden goal strings its
     // regexes cannot match (dmn `*_min` panes ranked in bare goal-nr
@@ -2628,7 +2628,7 @@ fn reparse_fact_doc(fact: &tamarin_parser::ast::Fact) -> crate::pretty_hpj::Doc 
 
 /// Split the `solve(...)` disjunction text at top-level `∥`, re-parsing
 /// each disjunct as a guarded formula (HS `disjSplitGoal` parses each
-/// disjunct as a full `Guarded`, Theory/Text/Parser/Proof.hs:61).  Returns
+/// disjunct as a full `Guarded`, Theory/Text/Parser/Proof.hs:39-72, see line 61).  Returns
 /// `None` if any disjunct fails to parse (caller falls back to verbatim).
 fn parse_disjuncts_to_guarded(text: &str) -> Option<Vec<crate::guarded::Guarded>> {
     use tamarin_parser::parser::parse_formula_str;
@@ -2667,7 +2667,7 @@ fn split_top_level_disj_par(s: &str) -> Vec<String> {
 /// Strip ONE balanced outer `(...)` layer if the whole string is wrapped
 /// in it; otherwise return the string unchanged.  Each disjunct in a
 /// `solve( (g1) ∥ (g2) )` carries its own `opParens` wrap (HS `map opParens`
-/// in `prettyGuarded`'s GDisj, Guarded.hs:836), which `parse_formula_str`
+/// in `prettyGuarded`'s GDisj, Guarded.hs:824-866, see line 836), which `parse_formula_str`
 /// would otherwise re-wrap — strip it so the re-parsed guarded matches the
 /// live-goal `Guarded` (which has no outer-paren node).
 fn strip_one_outer_paren(s: &str) -> &str {
@@ -2773,7 +2773,7 @@ fn render_node_prem(p: &crate::constraint::constraints::NodePrem) -> String {
 }
 
 /// Unicode-subscript digits for a non-negative integer.  Mirrors HS
-/// `subscript` used by `prettyGoal (PremiseG …)` in Constraints.hs:273.
+/// `subscript` used by `prettyGoal (PremiseG …)` in Constraints.hs:273-288.
 fn goal_subscript(n: usize) -> String {
     tamarin_utils::unicode::subscript(&n.to_string())
 }
@@ -2854,7 +2854,7 @@ mod oracle_goal_tests {
     /// where `render = P.render` uses HughesPJ's default `style`
     /// (lineLength = 100, ribbon = 67) — NOT the `--prove` DISPLAY width
     /// (110 / 73, used by `renderStyle (defaultStyle { lineLength = 110 })`
-    /// in Console.hs:392).
+    /// in Console.hs:362-390, see line 392).
     ///
     /// Authentic ground truth (captured from the v1.13.0 HS prover with an
     /// oracle that echoes stdin, on a crafted theory whose premise goal is

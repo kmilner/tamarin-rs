@@ -1,8 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Robert Künnemann, Benedikt Schmidt, "sans-
-//   sucre" (github), Philip Lukert, "Tom" (github BTom-GH), Mathias Aurand,
-//   "Nynko" (github), Kevin Morio, Ralf Sasse, Artur Cygan, Felix Linker,
-//   Yavor Ivanov, Alexander Dax, "ValentinYuri" (github), Charlie Jacomme
+//   rkunnema, meiersi, and other minor contributors (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
 //   lib/sapic/src/Sapic/Exceptions.hs, lib/sapic/src/Sapic/Warnings.hs,
 //   lib/term/src/Term/LTerm.hs, lib/theory/src/Theory/Sapic/Term.hs,
@@ -31,7 +29,7 @@ use tamarin_theory::sapic::{GoodAnnotation, Process, SapicLVar};
 use crate::bindings::captured_variables;
 
 /// The fixed topic HS `toWfErrorReport` attaches to every SAPIC process error
-/// (Warnings.hs:25).  Rendered verbatim (NOT underlined) by
+/// (Warnings.hs:24-27, see line 25).  Rendered verbatim (NOT underlined) by
 /// `prettyWfErrorReport` (Wellformedness.hs:118-125).
 pub const SAPIC_PROCESS_TOPIC: &str = "Wellformedness-error in Process";
 

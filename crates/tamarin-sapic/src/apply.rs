@@ -1,9 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Kevin Morio, Artur Cygan, Charlie Jacomme, Robert Künnemann, Simon
-//   Meier, Jannik Dreier, Yavor Ivanov, "Tom" (github BTom-GH), Ralf Sasse,
-//   Jérôme (github Azurios-git), Felix Linker, "Pops" (github racoucho1u),
-//   "Nynko" (github), Benedikt Schmidt, "ValentinYuri" (github), and other
-//   minor contributors (see upstream git history)
+//   arcz, rkunnema, kevinmorio, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/sapic/src/Sapic.hs, lib/sapic/src/Sapic/Warnings.hs,
 //   lib/theory/src/Theory/Text/Parser.hs, src/Main/TheoryLoader.hs
@@ -45,7 +42,7 @@ use crate::typing::{type_and_rename_process, UserFunTyping};
 /// Warnings.hs:37-38), which the caller PREPENDS to the overall report — HS
 /// computes it in `translateTheory` on the OpenTheory *before* translation, so
 /// it sorts before every other check (`preReport ++ postReport`,
-/// TheoryLoader.hs:455/631).  Empty for a well-formed (or non-SAPIC) theory.
+/// TheoryLoader.hs:448-460, see line 455/631).  Empty for a well-formed (or non-SAPIC) theory.
 pub fn apply_sapic(
     parsed: &mut p::Theory,
     elaborated: &mut Theory,
@@ -93,7 +90,7 @@ pub fn apply_sapic(
         .map_err(|e| ElabError { message: format!("SAPIC typing: {e}") })?;
 
     // translate → rules + restrictions.  `needs_in_ev_res = any
-    // lemmaNeedsInEvRes (theoryLemmas th)` (Sapic.hs:101): gates the
+    // lemmaNeedsInEvRes (theoryLemmas th)` (Sapic.hs:45-101, see line 101): gates the
     // `EventEmpty`/`ChannelIn` actions + the `in_event` restriction.  HS
     // `theoryLemmas` = the (non-diff, non-accountability) `Lemma` items.
     let lemmas: Vec<p::Lemma> = parsed
@@ -206,7 +203,7 @@ pub fn apply_sapic(
     }
 
     // `addHeuristic [SapicRanking]` unless a heuristic is already set
-    // (Sapic.hs:82).  `SapicRanking` renders as `p`.  Add it to BOTH theories:
+    // (Sapic.hs:45-101, see line 82).  `SapicRanking` renders as `p`.  Add it to BOTH theories:
     //   - `elaborated.heuristic` drives the rendered `heuristic: p` line; and
     //   - the `parsed` theory drives the PROVER's heuristic — `ProverSession`
     //     re-elaborates the parsed theory (`prove.rs:461`), so without the

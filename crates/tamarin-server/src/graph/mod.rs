@@ -1,6 +1,7 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Adrian Dapprich, Mathias Aurand, Artur Cygan, Robert Künnemann, Felix
-//   Linker
+//   addap, Mathias-AURAND, meiersi, arcz, rkunnema, sans-sucre,
+//   felixlinker, and other minor contributors (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Constraint/System/Graph/Abbreviation.hs,
 //   lib/theory/src/Theory/Constraint/System/Graph/Graph.hs,

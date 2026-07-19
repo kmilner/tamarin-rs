@@ -1,10 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann, Simon Meier, Jannik Dreier, Benedikt Schmidt, Kevin
-//   Morio, Hong-Thai Luu, Charlie Jacomme, "Tom" (github BTom-GH), "sans-
-//   sucre" (github), Philip Lukert, Artur Cygan, Yavor Ivanov, Mathias
-//   Aurand, "Nynko" (github), Ralf Sasse, Felix Linker, "ValentinYuri"
-//   (github), "Pops" (github racoucho1u), Alexander Dax, and other minor
-//   contributors (see upstream git history)
+//   kevinmorio, arcz, rkunnema, jdreier, and other minor contributors
+//   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/accountability/src/Accountability.hs,
 //   lib/accountability/src/Accountability/Generation.hs,
@@ -409,7 +405,7 @@ fn formula_has_predicate_atom(f: &p::Formula) -> bool {
     }
 }
 
-/// HS `capitalize` (Predicate.hs:41): upper-case the first character.
+/// HS `capitalize` (Predicate.hs:39-43, see line 41): upper-case the first character.
 fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
     match chars.next() {
@@ -607,7 +603,7 @@ fn term_is_free_var(t: &tamarin_theory::guarded_types::GTerm) -> bool {
     )
 }
 
-/// HS `isPubVar` (Term/LTerm.hs:324): a variable of sort `LSortPub` (`$x`).
+/// HS `isPubVar` (Term/LTerm.hs:323-325, see line 324): a variable of sort `LSortPub` (`$x`).
 fn is_pub_var(t: &p::Term) -> bool {
     matches!(t, p::Term::Var(v) if sort_rank(v.sort) == 0)
 }

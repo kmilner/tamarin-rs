@@ -1,5 +1,5 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Felix Linker, "sans-sucre" (github), Philip Lukert, and
+//   meiersi, felixlinker, beschmi, sans-sucre, PhilipLukertWork, and
 //   other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Constraint/System/Constraints.hs

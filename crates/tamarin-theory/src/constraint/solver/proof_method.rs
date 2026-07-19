@@ -1,12 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Philip Lukert, Artur Cygan, Felix Linker,
-//   Benedikt Schmidt, Robert Künnemann, Ralf Sasse, "Pops" (github
-//   racoucho1u), "Jackie" (github kanakanajm), Cas Cremers, symphorien,
-//   Charlie Jacomme, Adrian Dapprich, Yann Colomb, "Tom" (github BTom-GH),
-//   Niklas Medinger, "Nynko" (github), Felix Yan, Mathias Aurand, Alexander
-//   Dax, Yavor Ivanov, Kevin Morio, Dominik Schoop, "ValentinYuri" (github),
-//   Katriel Cohn-Gordon, and other minor contributors (see upstream git
-//   history)
+//   meiersi, felixlinker, jdreier, PhilipLukertWork, rkunnema, beschmi,
+//   rsasse, racoucho1u, charlie-j, niklasmedinger, Nynko, yavivanov,
+//   ValentinYuri, robert.kunnemann@cased.de, xaDxelA, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs,
 //   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
@@ -68,7 +64,7 @@ pub enum ProofMethod {
     /// Display-only: `solve( <raw_inner> )`.  Used for HS-faithful
     /// unannotated subtree display (replay.rs `parsed_to_unannotated`)
     /// where we have the original skeleton text but no live Goal object.
-    /// HS `noSystemPrf` (Proof.hs:467) clears the per-node system info
+    /// HS `noSystemPrf` (Proof.hs:447-467, see line 467) clears the per-node system info
     /// (`mapProofInfo (\i -> (Just i, Nothing))`); the ProofMethod itself
     /// is preserved by the proof-tree node, not by `noSystemPrf`.  RS uses
     /// raw inner text as the closest equivalent.
@@ -185,7 +181,7 @@ pub fn is_applicable_for_display(
     }
 }
 
-/// HS `uniqueListBy (comparing fst) id distinguish` (ProofMethod.hs:465,
+/// HS `uniqueListBy (comparing fst) id distinguish` (ProofMethod.hs:462-463, see line 465,
 /// 527-532): singleton case names stay bare; each duplicate group of
 /// size `n` is rewritten to `<name>_case_<i>` with the running index `i`
 /// (1,2,3…) zero-padded to the width of `show n`.  Input order is
@@ -456,9 +452,9 @@ pub fn exec_proof_method(
             // arm (ProofMethod.hs:421-427) inspects `M.toList cases`; the
             // empty list matches the `_ -> return cases` branch, so it
             // returns `Just M.empty` — Simplify SUCCEEDS with zero cases.
-            // `proveSystemDFS` (Proof.hs:1043) then takes Simplify as the
+            // `proveSystemDFS` (Proof.hs:1034-1044, see line 1043) then takes Simplify as the
             // head method and builds a childless node, which `prettyProof`
-            // (Proof.hs:1084) renders as a `by simplify` leaf closing the
+            // (Proof.hs:1080-1101, see line 1084) renders as a `by simplify` leaf closing the
             // (exists-trace) proof.  Returning `None` here instead would
             // drop Simplify from the ranked list and let `Induction` win —
             // the divergence this arm must avoid.
@@ -701,7 +697,7 @@ pub fn exec_proof_method(
             // goal at gsNr=0, shifting every subsequent gsNr in every
             // sibling branch and diverging from HS at the first insertGoal
             // call.)
-            // HS `process . induction` (ProofMethod.hs:428, 521-525):
+            // HS `process . induction` (ProofMethod.hs:348-459, see line 428, 521-525):
             // `runReduction (induction <* simplifySystem)` under the DisjT
             // monad.  `simplifySystem` CAN fan out at induction time — a
             // step-case formula that `reduceFormulas` decomposes into
@@ -754,7 +750,7 @@ pub fn exec_proof_method(
             // HS `process` tail: `removeRedundantCases ctxt [] snd`
             // (BP/MSet-gated structural dedup, before naming) followed by
             // `uniqueListBy (comparing fst) id distinguish`
-            // (ProofMethod.hs:465, 527-532): singleton names stay bare;
+            // (ProofMethod.hs:462-463, see line 465, 527-532): singleton names stay bare;
             // duplicate groups get `<name>_case_<i>`.  (The empty-name
             // branch of `distinguish` is unreachable here — both
             // induction case names are non-empty.)

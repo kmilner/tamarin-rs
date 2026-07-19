@@ -1,9 +1,7 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Robert Künnemann, Charlie Jacomme, Benedikt
-//   Schmidt, Hong-Thai Luu, Philip Lukert, Yavor Ivanov, "Tom" (github BTom-
-//   GH), Ralf Sasse, Kevin Morio, "ValentinYuri" (github), "Pops" (github
-//   racoucho1u), Felix Linker, and other minor contributors (see upstream
-//   git history)
+//   meiersi, jdreier, rkunnema, beschmi, PhilipLukertWork, Hong-Thai,
+//   rsasse, yavivanov, ValentinYuri, charlie-j, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/theory/src/Rule.hs,
 //   lib/theory/src/Theory/Model/Restriction.hs,
@@ -44,13 +42,13 @@ use tamarin_parser::ast as p;
 
 use crate::predicate_expand::{expand_formula, ExpandError};
 
-/// HS `varNow = LVar "NOW" LSortNode 0` (Restriction.hs:87).  The implicit
+/// HS `varNow = LVar "NOW" LSortNode 0` (Restriction.hs:86-87, see line 87).  The implicit
 /// timepoint variable bound by the generated `∀ … #NOW.` restriction.
 fn var_now() -> p::VarSpec {
     p::VarSpec { name: "NOW".to_string(), idx: 0, sort: p::SortHint::Node, typ: None }
 }
 
-/// HS `restrPrefix = "Restr_"` (Restriction.hs:130).
+/// HS `restrPrefix = "Restr_"` (Restriction.hs:129-130, see line 130).
 const RESTR_PREFIX: &str = "Restr_";
 
 /// Run the `_restrict` lifting pass over a parsed theory in place.
@@ -244,7 +242,7 @@ fn resolve_nullary_term(t: &p::Term, nullary: &BTreeSet<String>) -> p::Term {
 }
 
 /// HS `mkFact = protoFactAnn Linear (restrPrefix ++ rname) S.empty`
-/// (Restriction.hs:161): a linear fact named `Restr_<rname>`.
+/// (Restriction.hs:140-161, see line 161): a linear fact named `Restr_<rname>`.
 fn mk_fact(rname: &str, args: Vec<p::Term>) -> p::Fact {
     p::Fact {
         persistent: false,
@@ -264,7 +262,7 @@ fn mk_fact(rname: &str, args: Vec<p::Term>) -> p::Fact {
 type RewriteSubst = BTreeMap<(String, u64), p::Term>;
 
 /// HS `rewrite f = runState (evalFreshT (traverseFormulaAtom fAt' f) 0) M.empty`
-/// (Restriction.hs:95): traverse every term of every atom, abstracting
+/// (Restriction.hs:91-127, see line 95): traverse every term of every atom, abstracting
 /// subterms that contain free variables into fresh vars.  Returns the
 /// rewritten formula and the `{fresh ↦ original}` map.
 fn rewrite(f: &p::Formula) -> (p::Formula, RewriteSubst) {

@@ -1,9 +1,5 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Hong-Thai Luu, Robert Künnemann, Felix
-//   Linker, Philip Lukert, symphorien, Benedikt Schmidt, Felix Yan, Kevin
-//   Morio, Yavor Ivanov, "Pops" (github racoucho1u), "ValentinYuri"
-//   (github), Ralf Sasse, Katriel Cohn-Gordon, and other minor contributors
-//   (see upstream git history)
+//   meiersi, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Items/LemmaItem.hs, lib/theory/src/Rule.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
@@ -53,7 +49,7 @@ pub struct OpenProtoRule {
     /// non-empty, `solve_rule_constraints` adds it as a SplitG goal
     /// in the eq-store so the variant choice is enumerated lazily
     /// per Haskell's `solveRuleConstraints` (Reduction.hs:766-774).
-    /// Mirrors `RuleACConstrs = Disj LNSubstVFresh` (Rule.hs:926).
+    /// Mirrors `RuleACConstrs = Disj LNSubstVFresh` (Rule.hs:925-934, see line 926).
     pub variant_substs: Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
     /// The abstracted form of `rule` for the SplitG path (Haskell
     /// `variantsProtoRule` returns this in the `ProtoRuleAC`'s
@@ -183,7 +179,7 @@ pub struct Lemma<P = ProofSkeleton> {
     pub formula: tamarin_parser::ast::Formula,
     pub proof: P,
     /// Verbatim source text (comments stripped) — HS `_lPlaintext`
-    /// (`Items/LemmaItem.hs:50`).  Carried through elaboration for the
+    /// (`Items/LemmaItem.hs:48-58, see line 50`).  Carried through elaboration for the
     /// interactive web server's Edit-lemma form; never used by `--prove`.
     pub plaintext: String,
 }

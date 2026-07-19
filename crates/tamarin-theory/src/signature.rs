@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Robert Künnemann, and other minor contributors (see
-//   upstream git history)
+//   meiersi, rkunnema, and other minor contributors (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Model/Signature.hs
 

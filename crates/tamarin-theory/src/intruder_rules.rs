@@ -1,14 +1,11 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Robert Künnemann, Kevin Morio, Benedikt Schmidt, Jannik
-//   Dreier, Hong-Thai Luu, Artur Cygan, Philip Lukert, Charlie Jacomme,
-//   Yavor Ivanov, "Nynko" (github), Felix Linker, "sans-sucre" (github),
-//   Ralf Sasse, "Tom" (github BTom-GH), Jérôme (github Azurios-git), and
-//   other minor contributors (see upstream git history)
+//   jdreier, beschmi, meiersi, kevinmorio, arcz, rkunnema, and other
+//   minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Maude/Types.hs,
 //   lib/term/src/Term/Positions.hs,
-//   lib/term/src/Term/Substitution/SubstVFresh.hs, lib/theory/src/Rule.hs,
-//   lib/theory/src/Theory/Sapic/Process.hs,
+//   lib/term/src/Term/Substitution/SubstVFresh.hs,
+//   lib/theory/src/Rule.hs, lib/theory/src/Theory/Sapic/Process.hs,
 //   lib/theory/src/Theory/Sapic/Term.hs,
 //   lib/theory/src/Theory/Tools/IntruderRules.hs,
 //   lib/utils/src/Utils/Misc.hs, src/Main/Mode/Intruder.hs,
@@ -182,7 +179,7 @@ pub fn destruction_rules(
                 }
                 let public = sym.privacy == Privacy::Public;
                 if !public { return out; }
-                // Haskell `destructionRules` pattern #2 (IntruderRules.hs:135):
+                // Haskell `destructionRules` pattern #2 (IntruderRules.hs:129-157, see line 135):
                 //     go _ (viewTerm -> FApp _ _) (_:[]) _ _ | (frees rhs /= []) = []
                 // At the LAST position step, if the current term is an
                 // FApp AND rhs has free vars, return [] — neither emit
@@ -224,7 +221,7 @@ pub fn destruction_rules(
                         f
                     };
                     name.extend_from_slice(&funs);
-                    // `rhs == lhs `atPos` pos` (IntruderRules.hs:145).  Use
+                    // `rhs == lhs `atPos` pos` (IntruderRules.hs:129-157, see line 145).  Use
                     // the AC-aware `at_pos` (Positions.hs:28-43) so paths
                     // traversing an AC operator index exactly as Haskell.
                     // `pos` is the (valid) walked LHS position, so the
@@ -496,7 +493,7 @@ fn is_double_premise_rule(r: &IntrRuleAC) -> bool {
 ///          [kuFact $ fAppAC Union terms] [kuFact $ fAppAC Union terms] []
 /// ```
 ///
-/// Added to the intruder rule pool when `enableMSet` (Main/TheoryLoader.hs:788).
+/// Added to the intruder rule pool when `enableMSet` (Main/TheoryLoader.hs:773-791, see line 788).
 /// Note budget=0 (NOT -1) — `closeIntrRule` clause 3 passes through without
 /// further variant expansion since budget is not -1.  HS computes budget=0
 /// at definition time, so we mirror that here.
@@ -622,7 +619,7 @@ pub fn construction_rules(sig: &tamarin_term::maude_sig::MaudeSig) -> Vec<IntrRu
     use tamarin_term::function_symbols::{Constructability, Privacy};
     use tamarin_term::term::f_app_no_eq;
     // HS-faithful: `constructionRules (stFunSyms maudeSig)`
-    // (IntruderRules.hs:213).  `stFunSyms` is the SUBTERM-theory function
+    // (IntruderRules.hs:210-213, see line 213).  `stFunSyms` is the SUBTERM-theory function
     // signature — it EXCLUDES the DH / BP / MSet / Nat / Xor symbols
     // (those are added into `fun_syms` by `refresh`,
     // maude_sig.rs `fn refresh` lines 56-60, exposed as `fun_syms` at line 84).
@@ -689,7 +686,7 @@ pub fn construction_rules(sig: &tamarin_term::maude_sig::MaudeSig) -> Vec<IntrRu
 //   intrRulesAC = concatMap (closeIntrRule hnd) intrRules
 //                       -- ^ AFTER `minimizeIntruderRules` (run inside
 //                       --   `subtermIntruderRules`)
-// Mirrors Rule.hs:160.
+// Mirrors Rule.hs:121-176, see line 160.
 // =============================================================================
 
 /// `isPrivateFunction` (Term.hs:203-205): top-level function symbol is Private.
@@ -813,7 +810,7 @@ pub fn variants_intruder(
     ru: &IntrRuleAC,
 ) -> Vec<IntrRuleAC> {
     // HS hardcodes `minimizeVariants = id` for the DH/pmult call
-    // (`variantsIntruder hnd id True ...`, IntruderRules.hs:242/390).
+    // (`variantsIntruder hnd id True ...`, IntruderRules.hs:231-283, see line 242/390).
     variants_intruder_with(maude, &|s| s, apply_filters, ru)
 }
 
@@ -893,9 +890,9 @@ fn variants_intruder_with(
     let cleaned: Vec<LNSubstVFresh> = raw_substs
         .into_iter()
         .map(|pairs| {
-            // HS-faithful `removeRenamings` (Maude/Types.hs:130): HS's
+            // HS-faithful `removeRenamings` (Maude/Types.hs:123-127, see line 130): HS's
             // `msubstToLSubstVFresh bindings substMaude` — applied to EVERY
-            // variant subst inside `variantsViaMaude` (Process.hs:312,
+            // variant subst inside `variantsViaMaude` (Process.hs:304-309, see line 312,
             // `map (msubstToLSubstVFresh bindings) <$> parseVariantsReply`) —
             // ends with `removeRenamings $ substFromListVFresh slist`, dropping
             // each entry whose image is a bare fresh Var with no other role in
@@ -907,7 +904,7 @@ fn variants_intruder_with(
             // `x0 --> #1` (a fresh witness); `removeRenamings` collapses it to
             // the EMPTY subst, so `freshToFreeAvoiding {}` is the identity and
             // the variant rule equals the base rule — which the `ruvariant /= ru`
-            // guard (IntruderRules.hs:297) then drops.  Without this step the
+            // guard (IntruderRules.hs:288-314, see line 297) then drops.  Without this step the
             // identity variants leak through as `{x0 -> x.N}`, yielding the two
             // extra base-case rules (+1 `d_inv` `KD(x)->KD(inv(x))` and
             // +1 `d_exp`) that over-produce 53 rules instead of HS's 51.
@@ -1264,7 +1261,7 @@ fn intr_mk_empty(_: LNFact) -> Vec<LNFact> { Vec::new() }
 /// # Role: cache REGENERATOR (not the production runtime path)
 ///
 /// HS uses this function only inside `Main.Mode.Intruder.run`
-/// (src/Main/Mode/Intruder.hs:48) to PRODUCE `data/intruder_variants_dh.spthy`:
+/// (src/Main/Mode/Intruder.hs:43-63, see line 48) to PRODUCE `data/intruder_variants_dh.spthy`:
 /// ```haskell
 /// let dhRules = dhIntruderRules False `runReader` dhHnd
 /// ```
@@ -1421,7 +1418,7 @@ pub fn dh_intruder_rules(
 // NOTE the asymmetries vs `dhIntruderRules`:
 //   * `pmultRule`'s conclusion is `pmult(x_var_1, x_var_0)` — the args
 //     are SWAPPED relative to the premise order (HS `fAppPMult (x_var_1,
-//     x_var_0)`, IntruderRules.hs:404).
+//     x_var_0)`, IntruderRules.hs:384-413, see line 404).
 //   * `emapRule` uses `kud` (the KU/KD-fact constructor) for BOTH
 //     premises (`bfact = kud x0`, `efact = kud x1`), not `kuFact` for the
 //     second (IntruderRules.hs:410-411).
@@ -1609,7 +1606,7 @@ fn bp_variants_intruder(
 mod tests {
     use super::*;
 
-    // Pins HS `subsetOf` (Utils/Misc.hs:88) as a SET subset:
+    // Pins HS `subsetOf` (Utils/Misc.hs:87-88, see line 88) as a SET subset:
     // `(S.fromList xs) `S.isSubsetOf` (S.fromList ys)` deduplicates BOTH
     // sides, so `is_subset_of` must ignore multiplicity entirely.
     #[test]
@@ -2043,7 +2040,7 @@ mod tests {
 
     /// `destructionRules` short-circuits when the rhs is a closed term
     /// (no free vars) AND `diff=false` AND rhs has no Private symbol.
-    /// This is the outer guard at IntruderRules.hs:130 — the function
+    /// This is the outer guard at IntruderRules.hs:129-157, see line 130 — the function
     /// returns [] before even starting the position walk.
     ///
     /// Pin this by constructing a CtxtStRule whose rhs is a public
@@ -2220,8 +2217,8 @@ mod tests {
         // and `_inv` destructors (`KD(x)->KD(inv(x))`, `[KD(x),KU(y)]->
         // [KD(x^y)]`) MUST be dropped — Maude returns them as `x0 --> #N`
         // fresh-witness renamings which HS's `removeRenamings`
-        // (Maude/Types.hs:130) collapses to the empty subst, so the
-        // `ruvariant /= ru` guard (IntruderRules.hs:297) discards them.
+        // (Maude/Types.hs:123-127, see line 130) collapses to the empty subst, so the
+        // `ruvariant /= ru` guard (IntruderRules.hs:288-314, see line 297) discards them.
         // A regression here (53 rules: +1 d_exp, +1 d_inv) means the
         // `remove_renamings` step in `variants_intruder` was lost.
         let (n_exp, n_inv) = destrs.iter().fold((0usize, 0usize), |(e, i), d| {

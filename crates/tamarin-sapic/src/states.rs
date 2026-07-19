@@ -1,11 +1,11 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann, Charlie Jacomme, Simon Meier, Artur Cygan, Benedikt
-//   Schmidt, "Tom" (github BTom-GH), Kevin Morio, Hong-Thai Luu, "Pops"
-//   (github racoucho1u), Mathias Aurand, Jannik Dreier, and other minor
-//   contributors (see upstream git history)
+//   charlie-j, rkunnema, arcz, BTom-GH, kevinmorio, Hong-Thai,
+//   racoucho1u, Mathias-AURAND, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/sapic/src/Sapic.hs, lib/sapic/src/Sapic/States.hs,
-//   lib/term/src/Term/Maude/Process.hs, lib/theory/src/Items/OptionItem.hs,
+//   lib/term/src/Term/Maude/Process.hs,
+//   lib/theory/src/Items/OptionItem.hs,
 //   lib/theory/src/Theory/Sapic/Process.hs,
 //   lib/theory/src/Theory/Text/Parser/Signature.hs
 
@@ -106,7 +106,7 @@ fn get_all_states(
     }
 }
 
-/// `StateMap`: HS `M.Map SapicTerm (AnVar LVar)` (States.hs:73).
+/// `StateMap`: HS `M.Map SapicTerm (AnVar LVar)` (States.hs:73-73).
 type StateMap = BTreeMap<SapicTerm, AnVar<LVar>>;
 
 /// HS `addStatesChannels` (States.hs:78-83): seed the fast fresh counter at
@@ -444,7 +444,7 @@ fn annotate_each_pure_states(
 }
 
 /// `varsProc`: every SAPIC variable that occurs anywhere in `p` (HS
-/// `varsProc = foldMap singleton`, Process.hs:361).  Used only to seed the
+/// `varsProc = foldMap singleton`, Process.hs:361-362).  Used only to seed the
 /// `StateChannel` fresh counter; we return the underlying `LVar`s.
 fn vars_proc(p: &AnnotatedProc) -> Vec<LVar> {
     let mut out: BTreeSet<LVar> = BTreeSet::new();

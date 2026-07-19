@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Artur Cygan, "ValentinYuri" (github), "Nynko" (github), and
-//   other minor contributors (see upstream git history)
+//   meiersi, arcz, ValentinYuri, Nynko, and other minor contributors
+//   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   src/Main/Console.hs
 
@@ -58,7 +58,7 @@ fn main() {
     // Build timestamp (UTC).  Avoid `Date.now()`-style nondeterminism
     // concerns — this runs at COMPILE time, not at proof time.
     //
-    // NOTE: this does NOT byte-match HS's `compileTime` (Console.hs:213),
+    // NOTE: this does NOT byte-match HS's `compileTime` (Console.hs:200-216, see line 213),
     // which is `show =<< getCurrentTime` and emits sub-second precision (up to
     // picoseconds, trailing zeros trimmed) — e.g. `... 08:31:14.64851655 UTC`.
     // `date` only offers `%N` (nanoseconds, fixed width, no trim) so it cannot

@@ -1,5 +1,5 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Kevin Morio, Simon Meier
+//   kevinmorio, meiersi
 // Ported from upstream tamarin-prover sources:
 //   lib/utils/src/System/Timing.hs
 

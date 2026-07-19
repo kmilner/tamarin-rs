@@ -1,10 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Benedikt Schmidt, Jannik Dreier, Charlie Jacomme, Philip
-//   Lukert, "Tom" (github BTom-GH), and other minor contributors (see
-//   upstream git history)
+//   meiersi, beschmi, jdreier, PhilipLukertWork, charlie-j, BTom-GH,
+//   rsasse, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Builtin/Convenience.hs,
-//   lib/term/src/Term/Builtin/Rules.hs
+//   lib/term/src/Term/Builtin/Rules.hs, lib/term/src/Term/Term.hs
 
 //! Port of `Term.Builtin.{Signature, Convenience, Rules}` from
 //! `lib/term/src/Term/Builtin/`.
@@ -294,7 +293,7 @@ pub fn pair_rules() -> BTreeSet<crate::subterm_rule::CtxtStRule> {
     s
 }
 
-/// `pairDestRules` (Rules.hs:115): the DESTRUCTOR variant of
+/// `pairDestRules` (Rules.hs:115-115): the DESTRUCTOR variant of
 /// `pair_rules`, used by the `dest-pairing` builtin.  Same rewrite
 /// shapes as `fstRule`/`sndRule` but rooted at the destructor symbols:
 /// `fstDest(pair(x1,x2)) = x1` (`fstDestRule`) and
@@ -377,7 +376,7 @@ pub fn location_report_rules() -> BTreeSet<crate::subterm_rule::CtxtStRule> {
     s
 }
 
-/// `symEncDestRules` (Rules.hs:116): `sdecDest(senc(x1,x2), x2) = x1` —
+/// `symEncDestRules` (Rules.hs:116-116): `sdecDest(senc(x1,x2), x2) = x1` —
 /// the DESTRUCTOR variant of `sym_enc_rules`, used by the
 /// `dest-symmetric-encryption` builtin.
 pub fn sym_enc_dest_rules() -> BTreeSet<crate::subterm_rule::CtxtStRule> {
@@ -392,7 +391,7 @@ pub fn sym_enc_dest_rules() -> BTreeSet<crate::subterm_rule::CtxtStRule> {
     s
 }
 
-/// `asymEncDestRules` (Rules.hs:117): `adecDest(aenc(x1, pk(x2)), x2) = x1`
+/// `asymEncDestRules` (Rules.hs:117-117): `adecDest(aenc(x1, pk(x2)), x2) = x1`
 /// — the DESTRUCTOR variant of `asym_enc_rules`, used by the
 /// `dest-asymmetric-encryption` builtin.
 pub fn asym_enc_dest_rules() -> BTreeSet<crate::subterm_rule::CtxtStRule> {
@@ -430,7 +429,7 @@ pub fn reveal_signature_rules() -> BTreeSet<crate::subterm_rule::CtxtStRule> {
 }
 
 /// `signatureDestRules`: `verifyDest(sign(x, y), x, pk(y)) = true`.
-/// Mirrors `Term.Builtin.Rules.signatureDestRules` (Rules.hs:118).
+/// Mirrors `Term.Builtin.Rules.signatureDestRules` (Rules.hs:118-118).
 pub fn signature_dest_rules() -> BTreeSet<crate::subterm_rule::CtxtStRule> {
     use crate::subterm_rule::{CtxtStRule, StRhs};
     let x1 = msg_var("x", 1);

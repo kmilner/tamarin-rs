@@ -1,9 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Artur Cygan, Simon Meier, Jannik Dreier, Felix Linker, "Jackie" (github
-//   kanakanajm), Cas Cremers, Ralf Sasse, Yann Colomb, Benedikt Schmidt,
-//   Adrian Dapprich, "Tom" (github BTom-GH), Philip Lukert, Mathias Aurand,
-//   Alexander Dax, "Pops" (github racoucho1u), Dominik Schoop, Kevin Morio,
-//   and other minor contributors (see upstream git history)
+//   arcz, meiersi, cascremers, felixlinker, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   src/Web/Handler.hs, src/Web/Theory.hs
 
@@ -479,7 +476,7 @@ async fn test_main_lemma_envelope() {
         title
     );
     // HS `htmlThyPath` renders `TheoryLemma _ -> text "this is a mistake"`
-    // (Web/Theory.hs:1068) — a deliberate upstream quirk; the bare
+    // (Web/Theory.hs:1005-1144, see line 1068) — a deliberate upstream quirk; the bare
     // `main/lemma/<name>` path is never used by the frontend (it always
     // links to `main/proof/<name>`).  We match the oracle verbatim; the
     // HS capture is `{"html":"this is a mistake<br/>\n",...}`.

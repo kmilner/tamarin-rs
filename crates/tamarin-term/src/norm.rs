@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Benedikt Schmidt, Simon Meier, Jannik Dreier, Charlie Jacomme, Felix
-//   Linker, and other minor contributors (see upstream git history)
+//   beschmi, meiersi, jdreier, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Rewriting/Norm.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Contradictions.hs
@@ -69,7 +69,7 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, irreducible: &FunSig) -> bool {
         Term::Lit(_) => true,
         Term::App(sym, args) => {
             // 1. Irreducible NoEq top: walk subterms.
-            // HS-faithful: HS's `nfViaHaskell` (Norm.hs:62) checks
+            // HS-faithful: HS's `nfViaHaskell` (Norm.hs:55-127, see line 62) checks
             // `FAppNoEq o ts | (NoEq o) \`S.member\` irreducible` — the
             // irreducible-set check is gated by `FAppNoEq` (i.e. NoEq
             // function symbols only).  AC symbols like Mult are kept in

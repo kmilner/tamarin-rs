@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Jannik Dreier, Benedikt Schmidt, Simon Meier, and other minor
-//   contributors (see upstream git history)
+//   beschmi, jdreier, meiersi, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Positions.hs
 
@@ -75,7 +75,7 @@ pub fn replace_pos<C: Ord + Clone, V: Ord + Clone>(
 }
 
 /// `find_pos t s`: all positions at which subterm `t` occurs inside `s`,
-/// or `None` if `t` is not a subterm. Port of HS `findPos` (Positions.hs:63).
+/// or `None` if `t` is not a subterm. Port of HS `findPos` (Positions.hs:63-70).
 ///
 /// NB: this mirrors HS exactly by indexing over the **n-ary** argument list
 /// (`viewTerm -> FApp _ ts`), NOT the right-leaning binary-AC encoding used
@@ -115,7 +115,7 @@ pub fn find_pos<C: Ord + Clone, V: Ord + Clone>(
 /// `deepest_prot_subterm term pos`: the deepest "protected" subterm of `term`
 /// on the path to `pos` (anything but a pair or AC operator is protected).
 /// Returns `None` if there is no protected subterm. Port of HS
-/// `deepestProtSubterm` (Positions.hs:125). Uses n-ary indexing (`atMay`),
+/// `deepestProtSubterm` (Positions.hs:125-135). Uses n-ary indexing (`atMay`),
 /// matching [`find_pos`]. Panics on an invalid position, like HS.
 pub fn deepest_prot_subterm<C: Ord + Clone, V: Ord + Clone>(
     term: &VTerm<C, V>,

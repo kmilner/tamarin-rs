@@ -1,9 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Artur Cygan, Simon Meier, Jannik Dreier, Felix Linker, "Jackie" (github
-//   kanakanajm), Cas Cremers, Ralf Sasse, Yann Colomb, Benedikt Schmidt,
-//   Adrian Dapprich, "Tom" (github BTom-GH), Philip Lukert, Mathias Aurand,
-//   Alexander Dax, "Pops" (github racoucho1u), Dominik Schoop, Kevin Morio,
-//   and other minor contributors (see upstream git history)
+//   arcz, meiersi, jdreier, felixlinker, cascremers, rsasse,
+//   Kanakanajm, beschmi, addap, BTom-GH, PhilipLukertWork, YannColomb,
+//   xaDxelA, Mathias-AURAND, symphorien, racoucho1u,
+//   Esslingen-Security-Privacy, kevinmorio, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   src/Web/Handler.hs, src/Web/Theory.hs
 

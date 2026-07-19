@@ -1,8 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann, Simon Meier, Benedikt Schmidt, Charlie Jacomme, Jannik
-//   Dreier, and other minor contributors (see upstream git history)
+//   rkunnema, charlie-j, and other minor contributors (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/Bindings.hs, lib/term/src/Term/Maude/Process.hs,
+//   lib/sapic/src/Sapic/Bindings.hs,
+//   lib/term/src/Term/Maude/Process.hs,
 //   lib/theory/src/Theory/Sapic/Process.hs,
 //   lib/theory/src/Theory/Sapic/Term.hs
 
@@ -33,13 +34,13 @@ pub fn bindings<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> 
 /// `bindingsAct`: variables bound by an action (`new x`, `in(c, t)`, etc.).
 pub fn bindings_act(a: &SapicAction<SapicLVar>) -> Vec<SapicLVar> {
     match a {
-        // HS: `(New v) -> [v]` (Bindings.hs:23).
+        // HS: `(New v) -> [v]` (Bindings.hs:21-26, see line 23).
         SapicAction::New(v) => vec![v.clone()],
-        // HS: `nub (freesSapicTerm t) \\ S.toList vs` (Bindings.hs:24).
+        // HS: `nub (freesSapicTerm t) \\ S.toList vs` (Bindings.hs:21-26, see line 24).
         SapicAction::ChIn { msg, match_vars, .. } => {
             nub_difference(frees_sapic_term(msg), match_vars)
         }
-        // HS: `nub (foldMap freesSapicFact l) \\ S.toList mv` (Bindings.hs:25).
+        // HS: `nub (foldMap freesSapicFact l) \\ S.toList mv` (Bindings.hs:21-26, see line 25).
         // `nub` is applied AFTER concatenating across all premises (not
         // per-fact), so accumulate first, then nub-and-difference.
         SapicAction::Msr { prems, match_vars, .. } => {
@@ -47,7 +48,7 @@ pub fn bindings_act(a: &SapicAction<SapicLVar>) -> Vec<SapicLVar> {
             for f in prems { all.extend(frees_sapic_fact(f)); }
             nub_difference(all, match_vars)
         }
-        // HS `bindingsAct _ = []` (Bindings.hs:26): every other action binds
+        // HS `bindingsAct _ = []` (Bindings.hs:21-26, see line 26): every other action binds
         // nothing.  Enumerated (no wildcard) so a new binding-carrying variant
         // must decide its bound set here.
         SapicAction::Rep
@@ -64,13 +65,13 @@ pub fn bindings_act(a: &SapicAction<SapicLVar>) -> Vec<SapicLVar> {
 /// `bindingsComb`: variables bound by a process combinator (`lookup`, `let`).
 pub fn bindings_comb(c: &ProcessCombinator<SapicLVar>) -> Vec<SapicLVar> {
     match c {
-        // HS: `(Lookup _ v) -> [v]` (Bindings.hs:31).
+        // HS: `(Lookup _ v) -> [v]` (Bindings.hs:29-33, see line 31).
         ProcessCombinator::Lookup(_, v) => vec![v.clone()],
-        // HS: `nub (freesSapicTerm t1) \\ S.toList mv` (Bindings.hs:32).
+        // HS: `nub (freesSapicTerm t1) \\ S.toList mv` (Bindings.hs:29-33, see line 32).
         ProcessCombinator::Let { left, match_vars, .. } => {
             nub_difference(frees_sapic_term(left), match_vars)
         }
-        // HS `bindingsComb _ = []` (Bindings.hs:33): no other combinator binds a
+        // HS `bindingsComb _ = []` (Bindings.hs:29-33, see line 33): no other combinator binds a
         // variable.  Enumerated (no wildcard) so a new binding-carrying variant
         // must decide its bound set here.
         ProcessCombinator::Parallel
@@ -177,7 +178,7 @@ mod tests {
         // `nub (freesSapicTerm (pair y x)) \\ S.toList {}` = `[y, x]`
         // (first-occurrence order), NOT the sorted `[x, y]`.
         // freesSapicTerm = foldMap (:[]) (Theory/Sapic/Term.hs:131-132), nub keeps
-        // first-occurrence order (Sapic/Bindings.hs:24).
+        // first-occurrence order (Sapic/Bindings.hs:21-26, see line 24).
         use tamarin_term::builtin::pair;
         let x = slv("x");
         let y = slv("y");

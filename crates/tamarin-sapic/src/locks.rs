@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann, Artur Cygan, Kevin Morio, Charlie Jacomme, and other
-//   minor contributors (see upstream git history)
+//   rkunnema, arcz, and other minor contributors (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
 //   lib/sapic/src/Sapic.hs, lib/sapic/src/Sapic/Locks.hs
 
@@ -9,7 +9,7 @@
 //!
 //! `annotateLocks` (Locks.hs:94-99) assigns each `lock` a fresh lock variable
 //! (`freshLVar "lock" LSortMsg`, minted from a SINGLE fast fresh counter that
-//! starts at 0 — `evalFreshT a 0`, Locks.hs:99) and, via
+//! starts at 0 — `evalFreshT a 0`, Locks.hs:94-99, see line 99) and, via
 //! `annotateEachClosestUnlock` (Locks.hs:34-59), matches that lock variable onto
 //! each closest enclosing-scope `unlock` (and `insert`/`lookup`) that shares the
 //! lock's term.
@@ -34,7 +34,7 @@ use crate::annotation::ProcessAnnotation;
 
 type AnnotatedProc = Process<ProcessAnnotation<LVar>, SapicLVar>;
 
-/// `LocalException` (Locks.hs:28): thrown when `annotateEachClosestUnlock`
+/// `LocalException` (Locks.hs:28-28): thrown when `annotateEachClosestUnlock`
 /// encounters a `Rep` (`WFRep`) or `Parallel` (`WFPar`) below a lock.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LockWfError {

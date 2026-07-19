@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Kevin Morio, Robert Künnemann, Charlie Jacomme, Artur Cygan, Yavor
-//   Ivanov, and other minor contributors (see upstream git history)
+//   charlie-j, arcz, rkunnema, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/sapic/src/Sapic.hs, lib/sapic/src/Sapic/Compression.hs,
 //   lib/sapic/src/Sapic/Facts.hs
@@ -9,7 +9,7 @@
 //!
 //! Path compression: merge adjacent "silent" SAPIC rules (rules that do not
 //! perform observable actions) along the state-fact flow, starting from the
-//! initial `State_( )` fact.  Gated on `_transProgress` in HS (`Sapic.hs:72`).
+//! initial `State_( )` fact.  Gated on `_transProgress` in HS (`Sapic.hs:45-101, see line 72`).
 //!
 //! Operates on the final `Rule<ProtoRuleEInfo>` list (post-`toRule`).  HS uses
 //! `S.Set (Rule ProtoRuleEInfo)` in `mergeRules` and `S.Set (Fact LNTerm)` for
@@ -116,7 +116,7 @@ fn get_produced_facts(rules: &[ERule]) -> BTreeSet<LNFact> {
     out
 }
 
-/// `mergeAttrs a a' = a <> a'` (Compression.hs:67) — Semigroup on attributes.
+/// `mergeAttrs a a' = a <> a'` (Compression.hs:60-68, see line 67) — Semigroup on attributes.
 /// `RuleAttributes::merge` is right-precedence (`other.x.or(self.x)`), matching
 /// HS `a <> a'`; for two rules of the same source process the result is the same
 /// either way.

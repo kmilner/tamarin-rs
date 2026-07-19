@@ -1,7 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Benedikt Schmidt, Jannik Dreier, Ralf Sasse, Philip Lukert,
-//   "Nynko" (github), Charlie Jacomme, Felix Linker, "Tom" (github BTom-GH),
-//   and other minor contributors (see upstream git history)
+//   meiersi, jdreier, beschmi, rsasse, PhilipLukertWork, and other
+//   minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Unification.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Sources.hs
@@ -125,8 +124,8 @@ fn delay_or_needs_ac<C: Clone>(
 ///                 becomes KEY, smaller-idx the value)
 ///   vl ⊇ vr     → elim vl r   (broader becomes KEY)
 ///   otherwise   → elim vr l   (broader becomes KEY)
-/// This is the orientation `restrict stableVars` (Sources.hs:123) and
-/// `applySource` (Sources.hs:336) depend on: stable pattern vars (small
+/// This is the orientation `restrict stableVars` (Sources.hs:113-137, see line 123) and
+/// `applySource` (Sources.hs:336-350) depend on: stable pattern vars (small
 /// idx) stay on the value side so they never become keys and are dropped by
 /// the post-saturate key-filter.
 fn unify_raw_impl<C, F>(
@@ -151,7 +150,7 @@ where
             use std::cmp::Ordering;
             match sort_compare(vl.sort, vr.sort) {
                 Some(Ordering::Equal) => {
-                    // Haskell `unifyRaw` (Unification.hs:241):
+                    // Haskell `unifyRaw` (Unification.hs:235-243, see line 241):
                     //   `if vl < vr then elim vr l else elim vl r`
                     // Larger-idx becomes KEY, smaller-idx becomes value.
                     let (key, val) = if vl < vr {
@@ -392,7 +391,7 @@ where
 /// "no match" answer that HS never sends to Maude.  Conflating the two
 /// makes the Rust port issue a Maude `match` for every structurally
 /// failing match attempt, which is exactly the surplus `match in MSG`
-/// flood observed on LAK06/Scott (`matchToGoal`, `Sources.hs:381,414`).
+/// flood observed on LAK06/Scott (`matchToGoal`, `Sources.hs:355-384, see line 381,414`).
 pub enum MatchOutcome<C> {
     NoMatcher,
     Matched(Subst<C, LVar>),
@@ -407,7 +406,7 @@ pub enum MatchOutcome<C> {
 /// `matchRaw` raises `ACProblem` (here `NeedsAC`) the *instant* it sees an
 /// AC-/C-headed pair on BOTH sides; a variable pattern facing an
 /// AC-headed subject is bound natively (HS `matchRaw` checks the
-/// `(_, Lit (Var vp))` arm first, `Unification.hs:317`) — so a `tamxor`
+/// `(_, Lit (Var vp))` arm first, `Unification.hs:316-350, see line 317`) — so a `tamxor`
 /// buried under a variable pattern never triggers a Maude call.
 pub fn solve_match_lterm<C, F>(
     sort_of_const: &F,
@@ -484,7 +483,7 @@ where
         // subject `t` AND the pattern `p` are AC-/C-headed.  An AC-/C-headed
         // PATTERN facing a variable / constant / NoEq / List / differently-
         // headed subject is NOT an AC problem — HS falls to the final
-        // `_ -> throwError NoMatcher` arm (Unification.hs:337).  (An
+        // `_ -> throwError NoMatcher` arm (Unification.hs:316-350, see line 337).  (An
         // AC-/C-headed PATTERN alone is not enough — the subject must be
         // AC-/C-headed too, otherwise this would ship non-AC structural
         // mismatches to Maude.)
@@ -792,14 +791,14 @@ mod haskell_invariants {
     // -------------------------------------------------------------------
     // 2. Same-sort var-var unification: larger-idx becomes the KEY.
     //
-    //    Haskell `unifyRaw` (Unification.hs:241):
+    //    Haskell `unifyRaw` (Unification.hs:235-243, see line 241):
     //        (sl, sr) | sl == sr -> if vl < vr then elim vr l else elim vl r
     //    `elim v t` makes `v` the KEY mapped to `t`.  So when vl < vr
     //    (vl has smaller idx under idx-first Ord), eliminate vr →
     //    LARGER-idx is the KEY.
     //
     //    This is the orientation that makes `restrict stableVars`
-    //    (Sources.hs:123) work: stable pattern vars (small idx) stay
+    //    (Sources.hs:113-137, see line 123) work: stable pattern vars (small idx) stay
     //    on the value side and get dropped by the key-filter.
     // -------------------------------------------------------------------
 
@@ -1053,7 +1052,7 @@ mod haskell_invariants {
     }
 
     // -------------------------------------------------------------------
-    // 7. Occurs check (Unification.hs:276): `v `occurs` t` → no unifier.
+    // 7. Occurs check (Unification.hs:244-300, see line 276): `v `occurs` t` → no unifier.
     // -------------------------------------------------------------------
 
     #[test]
@@ -1068,7 +1067,7 @@ mod haskell_invariants {
     // 8. The factored unify and the older `unify_lnterm_no_ac` agree on
     //    orientation for var-vs-non-var (both bind the var to the term)
     //    AND on same-sort var-var (Haskell-faithful: larger-idx is key,
-    //    Unification.hs:241).  These tests pin both invariants.
+    //    Unification.hs:235-243, see line 241).  These tests pin both invariants.
     // -------------------------------------------------------------------
 
     #[test]
@@ -1084,7 +1083,7 @@ mod haskell_invariants {
 
     #[test]
     fn old_and_factored_unify_agree_on_same_sort_var_var_orientation() {
-        // Both paths follow Haskell `unifyRaw` (Unification.hs:241):
+        // Both paths follow Haskell `unifyRaw` (Unification.hs:235-243, see line 241):
         //   `if vl < vr then elim vr l else elim vl r`
         // i.e. LARGER-idx becomes KEY, smaller-idx becomes value.
         let small = msg_var("t", 1);   // small idx, "stable"

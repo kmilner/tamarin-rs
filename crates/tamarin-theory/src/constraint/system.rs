@@ -1,10 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Felix Linker, "Pops" (github racoucho1u),
-//   Robert Künnemann, Philip Lukert, Adrian Dapprich, Mathias Aurand, Ralf
-//   Sasse, Benedikt Schmidt, "sans-sucre" (github), Yavor Ivanov, Charlie
-//   Jacomme, Niklas Medinger, Nick Moore, Artur Cygan, Katriel Cohn-Gordon,
-//   Felix Yan, "ValentinYuri" (github), Alexander Dax, and other minor
-//   contributors (see upstream git history)
+//   meiersi, jdreier, PhilipLukertWork, addap, racoucho1u,
+//   Mathias-AURAND, rkunnema, rsasse, felixlinker, charlie-j,
+//   yavivanov, kevinmorio, niklasmedinger, beschmi, Nick Moore, arcz,
+//   sans-sucre, katrielalex, and other minor contributors (see upstream
+//   git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
@@ -353,7 +352,7 @@ pub struct System {
     pub source_kind: Option<SourceKind>,
     pub side: Option<Side>,
     /// Monotonic goal-number counter (`_sNextGoalNr`,
-    /// System.hs:394).  Advanced on every goal insertion (even when
+    /// System.hs:383-401, see line 394).  Advanced on every goal insertion (even when
     /// the goal already exists — HS's `insertGoalStatus`
     /// Reduction.hs:516-521 always `succ`s it).  Each new goal records
     /// the current value as its `GoalStatus.nr`.
@@ -626,7 +625,7 @@ pub struct GoalStatus {
     /// Whether the goal is already solved (kept for replay).
     pub solved: bool,
     /// Goal creation order (`_gsNr` in HS `GoalStatus`,
-    /// System.hs:373).  Assigned from `System.next_goal_nr` at first
+    /// System.hs:370-380, see line 373).  Assigned from `System.next_goal_nr` at first
     /// insertion; on re-insertion of an existing goal HS keeps the
     /// `min` (so the original, smaller nr wins — see
     /// `combineGoalStatus`).  `goalNrRanking` (ProofMethod.hs:593-594
@@ -1088,7 +1087,7 @@ impl System {
     }
 
     /// The rule instance at node `v`, if present. Port of HS `nodeRuleSafe`
-    /// (System.hs:917): `M.lookup v sNodes`.
+    /// (System.hs:913-914, see line 917): `M.lookup v sNodes`.
     pub fn node_rule_safe(&self, v: &NodeId) -> Option<&RuleACInst> {
         self.nodes.iter().find(|(id, _)| id == v).map(|(_, r)| r)
     }
@@ -1108,7 +1107,7 @@ impl System {
 
     /// All `In`- and protocol-premise terms in the system, as
     /// `(node, premise, term-index, term)`. Port of HS `allPrems`
-    /// (System.hs:894).
+    /// (System.hs:894-899).
     pub fn all_prems(&self) -> Vec<(NodeId, crate::rule::PremIdx, usize, tamarin_term::lterm::LNTerm)> {
         let mut out = Vec::new();
         for (i, ru) in self.nodes.iter() {
@@ -1124,7 +1123,7 @@ impl System {
     }
 
     /// All unsolved destruction chains, as `(NodeConc, NodePrem)`. Port of HS
-    /// `unsolvedChains` (System.hs:1601).
+    /// `unsolvedChains` (System.hs:1601-1605).
     pub fn unsolved_chains(&self) -> Vec<(crate::constraint::constraints::NodeConc, crate::constraint::constraints::NodePrem)> {
         use crate::constraint::constraints::Goal;
         let mut out = Vec::new();
@@ -1138,7 +1137,7 @@ impl System {
     }
 
     /// All unsolved premise goals, as `(NodePrem, LNFact)`. Port of HS
-    /// `unsolvedPremises` (System.hs:1505).
+    /// `unsolvedPremises` (System.hs:1505-1509).
     pub fn unsolved_premises(&self) -> Vec<(crate::constraint::constraints::NodePrem, crate::fact::LNFact)> {
         use crate::constraint::constraints::Goal;
         let mut out = Vec::new();
@@ -1657,12 +1656,12 @@ impl System {
         for l in ls { self.insert_lemma(l); }
     }
 
-    /// Direct port of Haskell `isInitialSystem` (`System.hs:828`):
+    /// Direct port of Haskell `isInitialSystem` (`System.hs:828-830`):
     ///   isInitialSystem sys =
     ///     null (get sSolvedFormulas sys) && not (member bot (get sFormulas sys))
     /// where `bot = gfalse()`.  Two conditions: no solved formulas yet, and no
     /// gfalse in the formula set.  This is the gate the automatic-search path
-    /// (`rankProofMethods`, ProofMethod.hs:527) uses to decide whether
+    /// (`rankProofMethods`, ProofMethod.hs:520-548, see line 527) uses to decide whether
     /// `insertInduction` runs — NOT the stricter replay-only `canApplyInduction`
     /// (ProofMethod.hs:264-270), which additionally checks node/goal emptiness
     /// and omits the gfalse check.

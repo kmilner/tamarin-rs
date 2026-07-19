@@ -1,7 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Robert Künnemann, Benedikt Schmidt, Philip
-//   Lukert, Yavor Ivanov, Hong-Thai Luu, Ralf Sasse, and other minor
-//   contributors (see upstream git history)
+//   meiersi, jdreier, rkunnema, beschmi, PhilipLukertWork, yavivanov,
+//   rsasse, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Constraint/Solver/Goals.hs,
 //   lib/theory/src/Theory/Model/Rule.hs
@@ -77,7 +76,7 @@ impl<I> Rule<I> {
     }
 
     /// Add an action fact, prepended, unless already present. Port of HS
-    /// `addAction` (Rule.hs:1035): `if act elem acts then unchanged else
+    /// `addAction` (Rule.hs:1035-1039): `if act elem acts then unchanged else
     /// act:acts`.
     pub fn add_action(&mut self, act: LNFact) {
         if !self.actions.contains(&act) {
@@ -106,7 +105,7 @@ impl<I> Rule<I> {
 // caller operates on `RuleACInst`, whose info (ProtoRuleACInstInfo /
 // IntrRuleACInfo) carries no free LVars. Note that Haskell's `HasFrees (Rule i)`
 // (Rule.hs:280-292) DOES fold over `info` first, and ProtoRuleEInfo/ProtoRuleACInfo
-// info (Rule.hs:476, 486-489) carry frees (restrictions / variant keys); callers
+// info (Rule.hs:474-477, see line 476, 486-489) carry frees (restrictions / variant keys); callers
 // that need those (ProtoRuleE/AC) must walk variants/restrictions separately, as
 // rule_variants.rs::rename_precise_rule_with_variants does.
 // =============================================================================

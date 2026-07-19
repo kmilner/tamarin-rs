@@ -1,10 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Benedikt Schmidt, Jannik Dreier, "Pops" (github
-//   racoucho1u), Philip Lukert, Robert Künnemann, Adrian Dapprich, Ralf
-//   Sasse, Charlie Jacomme, "Tom" (github BTom-GH), "ValentinYuri" (github),
-//   and other minor contributors (see upstream git history)
+//   racoucho1u, meiersi, jdreier, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term/FunctionSymbols.hs,
+//   lib/term/src/Term/LTerm.hs,
+//   lib/term/src/Term/Term/FunctionSymbols.hs,
 //   lib/term/src/Term/Term/Raw.hs, lib/term/src/Term/VTerm.hs,
 //   lib/theory/src/Theory/Constraint/System/Guarded.hs,
 //   lib/theory/src/Theory/Model/Fact.hs,
@@ -130,8 +129,8 @@ fn write_gterm(t: &GTerm, out: &mut String) {
         GTerm::Number(n) => out.push_str(&n.to_string()),
         // `fAppOne` = `NoEq oneSym` with `oneSymString = "one"` and
         // `fAppNatOne` = `NoEq natOneSym` with `natOneSymString = "tone"`
-        // (FunctionSymbols.hs:134,144). `show (FApp (NoEq (s,_)) [])` = `s`
-        // (Term/Raw.hs:222), so the two nullary symbols show differently.
+        // (FunctionSymbols.hs:134-134,144). `show (FApp (NoEq (s,_)) [])` = `s`
+        // (Term/Raw.hs:219-230, see line 222), so the two nullary symbols show differently.
         GTerm::NumberOne => out.push_str("one"),
         GTerm::NatOne => out.push_str("tone"),
         GTerm::DhNeutral => out.push_str("DH_neutral"),
@@ -152,7 +151,7 @@ fn write_gterm(t: &GTerm, out: &mut String) {
             out.push(')');
         }
         // `^` (exp) is a NoEq symbol named "exp"; the AC ops render with
-        // their derived constructor name (Term/Raw.hs:227 `show o`).
+        // their derived constructor name (Term/Raw.hs:219-230, see line 227 `show o`).
         GTerm::BinOp(op, a, b) => {
             let name = match op {
                 p::BinOp::Exp => "exp",
@@ -215,7 +214,7 @@ fn write_pair(items: &[GTerm], out: &mut String) {
 // isFactName, isInFactTerms
 // =============================================================================
 
-/// HS `Show (Term a)` applied to `LNTerm = VTerm Name LVar` (Term/Raw.hs:219).
+/// HS `Show (Term a)` applied to `LNTerm = VTerm Name LVar` (Term/Raw.hs:219-230).
 pub fn show_lnterm(t: &LNTerm) -> String {
     let mut s = String::new();
     write_lnterm(t, &mut s);
@@ -587,14 +586,14 @@ mod tests {
     #[test]
     fn show_gterm_nat_one_is_tone() {
         // fAppNatOne = FApp (NoEq natOneSym) [] with natOneSymString = "tone"
-        // (FunctionSymbols.hs:144) => `show fAppNatOne == "tone"`.
+        // (FunctionSymbols.hs:144-144) => `show fAppNatOne == "tone"`.
         assert_eq!(show_gterm(&GTerm::NatOne), "tone");
     }
 
     #[test]
     fn show_gterm_number_one_is_one() {
         // fAppOne = FApp (NoEq oneSym) [] with oneSymString = "one"
-        // (FunctionSymbols.hs:134) => `show fAppOne == "one"`.
+        // (FunctionSymbols.hs:134-134) => `show fAppOne == "one"`.
         assert_eq!(show_gterm(&GTerm::NumberOne), "one");
     }
 

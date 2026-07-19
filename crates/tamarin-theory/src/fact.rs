@@ -1,7 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Benedikt Schmidt, Ralf Sasse, Robert
-//   Künnemann, "Nynko" (github), Felix Linker, and other minor contributors
-//   (see upstream git history)
+//   meiersi, jdreier, rkunnema, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
 //   lib/theory/src/Theory/Model/Fact.hs
@@ -411,7 +410,7 @@ pub fn proto_fact(mult: Multiplicity, name: &str, terms: Vec<LNTerm>) -> LNFact 
 }
 
 /// View a protocol or `In` fact's terms. Port of HS `protoOrInFactView`
-/// (Fact.hs:331): a `ProtoFact` yields its terms; an `In` fact (arity 1)
+/// (Fact.hs:331-336): a `ProtoFact` yields its terms; an `In` fact (arity 1)
 /// yields its single term; anything else is `None`. A malformed `In` fact
 /// (arity ≠ 1) panics, mirroring HS `errMalformed`.
 pub fn proto_or_in_fact_view(fa: &LNFact) -> Option<Vec<LNTerm>> {
@@ -426,7 +425,7 @@ pub fn proto_or_in_fact_view(fa: &LNFact) -> Option<Vec<LNTerm>> {
 }
 
 /// View a protocol or `Out` fact's terms. Port of HS `protoOrOutFactView`
-/// (Fact.hs:339).
+/// (Fact.hs:339-344).
 pub fn proto_or_out_fact_view(fa: &LNFact) -> Option<Vec<LNTerm>> {
     match &fa.tag {
         FactTag::Proto(..) => Some(fa.terms.clone()),
@@ -498,7 +497,7 @@ mod tests {
     // injective-fact code assumes.
     // =========================================================================
 
-    /// Multiplicity: `Persistent < Linear` from Fact.hs:128.
+    /// Multiplicity: `Persistent < Linear` from Fact.hs:128-129.
     #[test]
     fn multiplicity_ord_matches_haskell_declaration() {
         assert!(Multiplicity::Persistent < Multiplicity::Linear,

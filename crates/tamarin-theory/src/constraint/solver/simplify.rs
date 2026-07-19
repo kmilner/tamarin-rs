@@ -1,9 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Philip Lukert, Hong-Thai Luu, Benedikt
-//   Schmidt, "Pops" (github racoucho1u), Ralf Sasse, Robert Künnemann, Felix
-//   Linker, Charlie Jacomme, Yavor Ivanov, "Nynko" (github), Niklas
-//   Medinger, "ValentinYuri" (github), Artur Cygan, Adrian Dapprich, Kevin
-//   Morio, Felix Yan, Katriel Cohn-Gordon, Nick Moore, and other minor
+//   meiersi, PhilipLukertWork, jdreier, beschmi, rkunnema, charlie-j,
+//   rsasse, niklasmedinger, felixlinker, ValentinYuri, and other minor
 //   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Maude/Types.hs, lib/term/src/Term/Subsumption.hs,
@@ -224,7 +221,7 @@ pub fn simplify_system_with_fanout_seeded(
     use crate::constraint::solver::reduction::Reduction;
     // `new_inheriting` consults the `REFINE_FLOOR` thread-local so this
     // sub-reduction inherits the source precompute's `avoid th` seed (HS
-    // Sources.hs:162); 0 (general proving path) is a no-op.
+    // Sources.hs:144-225, see line 162); 0 (general proving path) is a no-op.
     let mut red = Reduction::new_inheriting(ctx, sys, seed);
     simplify_system_fan_out_inner(&mut red)
 }
@@ -542,7 +539,7 @@ fn exploit_unique_msg_order(red: &mut Reduction) {
     }
     if kd_conc.is_empty() { return; }
     // Collect KU-action (term, node) pairs.  Haskell `allActions`
-    // (System.hs:1575) combines `unsolvedActionAtoms` with `rule.acts`
+    // (System.hs:1575-1579) combines `unsolvedActionAtoms` with `rule.acts`
     // — so we MUST include open Action goals here, not just rule
     // actions.  Without this, KU goals added by existential atom
     // decomposition (e.g. `∃ #j. KU(t) @ j`) don't participate in
@@ -960,13 +957,13 @@ fn partial_atom_valuation_with(
             let big_lt = crate::elaborate::term_to_lnterm(big)?;
             // small ⊏ small  -> False  (trivially-false)
             if small_lt == big_lt { return Some(false); }
-            // small ⊏ Con _  -> False  (Haskell: SubtermStore.hs:347)
+            // small ⊏ Con _  -> False  (Haskell: SubtermStore.hs:334-371, see line 347)
             if let LTerm::Lit(LLit::Con(_)) = &big_lt { return Some(false); }
             // small ⊏ Var (pub|fresh) -> False  (CR-rule S_invalid)
             if is_pub_var(&big_lt) || is_fresh_var(&big_lt) { return Some(false); }
             // Reducible-syntactic check (redElem): port of Haskell's
             // `small `redElem` big` line in `isTrueFalse`
-            // (SubtermStore.hs:342).
+            // (SubtermStore.hs:334-371, see line 342).
             let reducible_syms = maude.maude_sig().reducible_fun_syms_fast.clone();
             if elem_not_below_reducible(&reducible_syms, &small_lt, &big_lt) {
                 return Some(true);
@@ -1029,7 +1026,7 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
     // bound vars have all been substituted away).
     // Haskell-faithful: at runtime (NOT in_precompute_mode), SKIP
     // universals from `[sources]`-tagged lemma bodies.  Haskell only
-    // adds `[reuse]` to sLemmas (gatherReusableLemmas in Prover.hs:331),
+    // adds `[reuse]` to sLemmas (gatherReusableLemmas in Prover.hs:317-338, see line 331),
     // so its runtime `insertImpliedFormulas` never fires `[sources]`.
     // Refine fires them at precompute (drives typing-violation drops).
     //
@@ -1564,7 +1561,7 @@ fn try_match_all_guards(
         }
         match guards[guard_idx] {
             AAtom::Action(g_fact, g_time) => {
-                // Haskell `applySkAction subst (a, fa)` (System.hs:1134):
+                // Haskell `applySkAction subst (a, fa)` (System.hs:1111-1145, see line 1134):
                 // apply the accumulated `subst` to the guard's pattern
                 // BEFORE matching, so multi-guard universals where one
                 // guard binds a variable used by a later guard propagate
@@ -1692,7 +1689,7 @@ fn try_match_all_guards(
                 // `match_atom_via_maude` already does for Action-guard
                 // matching, but with BOTH sides skolemized (mirroring
                 // HS's `skolemizeGuarded gf0` step in `impliedFormulas`
-                // at System.hs:1122).  HS skolemizes both pattern and
+                // at System.hs:1111-1145, see line 1122).  HS skolemizes both pattern and
                 // subject so co-occurring free system vars (e.g. `y`
                 // in both `(y++z) = ('1'++y++h(y))`) map to the same
                 // constant; `match_eqs_const_subject` only skolemizes
@@ -1833,7 +1830,7 @@ fn atom_has_unbound_pattern_var(
 ///
 /// CRITICAL HS-faithfulness point: an AC-/C-headed subterm under a
 /// PATTERN VARIABLE never triggers `NeedsAc` — HS checks the pattern-var
-/// arm `(_, Lit (Var vp))` FIRST (`Unification.hs:317`) and binds the
+/// arm `(_, Lit (Var vp))` FIRST (`Unification.hs:316-350, see line 317`) and binds the
 /// var to the whole subject without inspecting its AC shape.  Likewise a
 /// function-app PATTERN facing a plain-variable SUBJECT is a `NoMatcher`
 /// (HS falls to the `_ -> throwError NoMatcher` arm), NOT an AC problem —
@@ -1861,7 +1858,7 @@ enum StructMatch {
 ///     (a bindable universal var = HS's post-`openGuarded` `Var`),
 ///     bind it to `subj` (or check consistency with an existing
 ///     binding) — but only if the subject's sort is a subsort of
-///     the pattern var's sort.  (HS `sortGeqLTerm`, `Unification.hs:320`.)
+///     the pattern var's sort.  (HS `sortGeqLTerm`, `Unification.hs:316-350, see line 320`.)
 ///   - If `pat` is a non-pattern LVar (= HS `Con (SkConst _)` after
 ///     `skolemizeGuarded`), it matches only the *same* literal LVar.
 ///   - Constant vs constant: match iff equal.
@@ -1932,7 +1929,7 @@ fn structural_match(
         // `(_, Lit (Var vp))` (`Unification.hs:317-324`) — checked
         // FIRST, so an AC-headed subject under a pattern var is bound
         // natively (never `NeedsAc`).  After `skolemizeGuarded`
-        // (System.hs:1122 + Guarded.hs:741-805) the universal's bound
+        // (System.hs:1111-1145, see line 1122 + Guarded.hs:741-805) the universal's bound
         // vars remain `Var`; free system vars become `SkConst`.
         (Term::Lit(Lit::Var(pv)), _)
             if pattern_vars.contains(&(pv.name.to_string(), pv.idx)) =>
@@ -1955,7 +1952,7 @@ fn structural_match(
         // literal LVar on the subject side.  HS `skolemizeAtom` turns
         // free LVars into `Con (SkConst v)`, so on the pattern side this
         // is a constant — it falls into HS's `(Lit (Con _), Lit (Con _))`
-        // arm (Unification.hs:326) which matches iff equal.
+        // arm (Unification.hs:316-350, see line 326) which matches iff equal.
         (Term::Lit(Lit::Var(pv)), Term::Lit(Lit::Var(sv))) =>
             if pv == sv { StructMatch::Matched } else { StructMatch::NoMatcher },
         (Term::Lit(Lit::Con(pn)), Term::Lit(Lit::Con(sn))) =>
@@ -1977,7 +1974,7 @@ fn structural_match(
         (Term::App(FunSym::Ac(_), _), Term::App(FunSym::Ac(_), _))
         | (Term::App(FunSym::C(_), _), Term::App(FunSym::C(_), _)) =>
             StructMatch::NeedsAc,
-        // HS `_ -> throwError NoMatcher` (Unification.hs:337): every
+        // HS `_ -> throwError NoMatcher` (Unification.hs:316-350, see line 337): every
         // other constructor pairing (incl. AC-vs-NoEq, app-vs-literal,
         // mismatched AC vs C heads).
         _ => StructMatch::NoMatcher,
@@ -2086,9 +2083,9 @@ fn match_atom_via_maude(
     let ms: Vec<Vec<(tamarin_term::lterm::LVar, tamarin_term::lterm::LNTerm)>> =
     match outcome {
         // HS `(Right (), mappings) -> [substFromMap mappings]`
-        // (Unification.hs:214): a single-element matcher list, NO Maude.
+        // (Unification.hs:204-224, see line 214): a single-element matcher list, NO Maude.
         StructMatch::Matched => vec![struct_subst.into_iter().collect()],
-        // HS `(Left NoMatcher, _) -> []` (Unification.hs:211): the pattern
+        // HS `(Left NoMatcher, _) -> []` (Unification.hs:204-224, see line 211): the pattern
         // structurally cannot match the subject — return empty WITHOUT any
         // Maude round-trip.  This is the byte-for-byte equivalent of the
         // surplus-`match`-eliminating change: HS issues 0 Maude `match`es
@@ -2108,10 +2105,10 @@ fn match_atom_via_maude(
         // and the search enumerates spurious Sessionkey_Reveal cases.
         //
         // HS-faithful skolemization (CRITICAL): HS's `impliedFormulas`
-        // (`System.hs:1112,1122`) runs `gf = skolemizeGuarded gf0`, which
+        // (`System.hs:1111-1145, see line 1112,1122`) runs `gf = skolemizeGuarded gf0`, which
         // turns EVERY free LVar of the guarded clause into `Con (SkConst
         // v)` — a Maude *constant* (`lTermToMTerm` ⇒ `MaudeConst`,
-        // `Maude/Types.hs:75`) — while the universal's BOUND vars,
+        // `Maude/Types.hs:74-93, see line 75`) — while the universal's BOUND vars,
         // instantiated by `openGuarded`, stay `Var lv` ⇒ `MaudeVar`
         // (bindable).  `sysActions` (`System.hs:1128-1129`) likewise
         // `skolemizeTerm`s the system action, so its vars are also
@@ -2285,7 +2282,7 @@ fn enforce_fresh_node_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
     let mut hit_contra = false;
     for (_rule, ids) in buckets {
         if ids.len() < 2 { continue; }
-        // HS-faithful keep-direction (Simplify.hs:225,272-276): HS's `merge`
+        // HS-faithful keep-direction (Simplify.hs:213-241, see line 225,272-276): HS's `merge`
         // runs `groupSortOn fst insts` where `insts` comes from
         // `M.toList (get sNodes se)` (node-id-sorted) and is stably grouped
         // by the rule, so `mergers ((keep):remove)` keeps the LOWEST node-id
@@ -2307,7 +2304,7 @@ fn enforce_fresh_node_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
         // Haskell `enforceNodeUniqueness` freshRuleInsts branch
         // (Simplify.hs) calls `solveNodeIdEqs` via the `merge`
         // helper.  The monadic bind through `solveTermEqs` ends in
-        // `noContradictoryEqStore` (Reduction.hs:704) which fires
+        // `noContradictoryEqStore` (Reduction.hs:669-698, see line 704) which fires
         // mzero on `eqsIsFalse`.  Funnel both `Ok(Contradictory)` and
         // `Err(_)` through `mark_contradictory` so the mzero proxy stays
         // in sync.  `Cases(arms)` must install arm[0]
@@ -2391,7 +2388,7 @@ fn enforce_ku_action_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
     }
     // HS-faithful order: HS `allKUActions` draws rule actions from
     // `M.toList (get sNodes se)` (node-id-sorted), and `merge`'s
-    // `groupSortOn fst` is stable (Simplify.hs:240,251,272-276), so within
+    // `groupSortOn fst` is stable (Simplify.hs:213-241, see line 240,251,272-276), so within
     // a term-group the kept action (`iKeep`) is the one from the LOWEST
     // node-id.  RS iterated `sys.nodes` in Vec (production) order, so a
     // term-group with no goal kept whichever same-term node was created
@@ -2470,7 +2467,7 @@ fn enforce_ku_action_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
 }
 
 /// CR-rule *S_@* (`solveUniqueActions`).  Mirrors Haskell's
-/// `solveUniqueActions` in `Simplify.hs:276`:
+/// `solveUniqueActions` in `Simplify.hs:276-297`:
 ///
 ///   - Count `(fact_tag, arity)` occurrences across non-silent rules
 ///     (proto + intruder rules with at least one action).
@@ -2834,7 +2831,7 @@ fn collect_unique_action_candidates(
 fn has_funion_head(t: &tamarin_term::lterm::LNTerm) -> bool {
     // HS-faithful: `solveUniqueActions`'s exclusion is
     //   null [ () | t <- ts, FUnion _ <- return (viewTerm2 t) ]
-    // (Simplify.hs:291).  `viewTerm2 t` inspects ONLY the TOP-LEVEL
+    // (Simplify.hs:276-297, see line 291).  `viewTerm2 t` inspects ONLY the TOP-LEVEL
     // symbol of `t` — it does NOT recurse into arguments.  So a fact
     // term excludes the action from `solveUniqueActions` ONLY when the
     // term is itself a top-level multiset union (`FUnion`), e.g. a bare
@@ -3282,7 +3279,7 @@ fn enforce_edge_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
             es.len(), es.join(" "));
     }
     // Lookup: is this conclusion of this node a persistent fact?
-    // Haskell `factTagMultiplicity` (Theory/Model/Fact.hs:354):
+    // Haskell `factTagMultiplicity` (Theory/Model/Fact.hs:351-352, see line 354):
     //   ProtoFact multi _ _ -> multi
     //   KUFact              -> Persistent
     //   KDFact              -> Persistent
@@ -3416,7 +3413,7 @@ fn node_id_to_lnterm(
 ///
 /// This is a full port of the active HS arms. The only cases not
 /// ported — (6) and (6.1) — are themselves commented out in Haskell
-/// (Simplify.hs:577, 581-583), so nothing active is missing. The
+/// (Simplify.hs:547-658, see line 577, 581-583), so nothing active is missing. The
 /// `Decreasing`/`StrictlyDecreasing` arms are handled by the i<->j
 /// swap below.
 fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
@@ -3540,7 +3537,7 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
     // solvedSubterms / negSubterms (added at the end of the closure):
     //   isInside && !isNegatedInside → Just True
     //   isNegatedInside && !isInside → Just False
-    // The `cyclic || natCyclic → Just False` arm (SubtermStore.hs:361,
+    // The `cyclic || natCyclic → Just False` arm (SubtermStore.hs:334-371, see line 361,
     // 365-366) is deliberately deferred to propagate_subterm_obvious /
     // the contradiction pass — same porting strategy as simplify.rs:1051-1054.
     let is_true_false = |s: &tamarin_term::lterm::LNTerm,
@@ -3608,7 +3605,7 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
     // they emit `(i, j)` or `(j, i)` LessAtoms whose direction depends
     // on which side has the "smaller" term.  Mirrors HS `paired` list
     // comprehension (Simplify.hs:643-651) which keys `behaviourTerms`
-    // by NodeId and guards `i /= j` (Simplify.hs:649) on NodeIds — so
+    // by NodeId and guards `i /= j` (Simplify.hs:547-658, see line 649) on NodeIds — so
     // two premises of the SAME node (which both live in that node's
     // single map-list) are never paired.  `by_inj` holds one entry per
     // premise, so a node with two same-tag premises appears twice with
@@ -3623,7 +3620,7 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
             if a == b { continue; }
             let (i, tag_i, first_i, pairs_i) = &by_inj[a];
             let (j, tag_j, first_j, pairs_j) = &by_inj[b];
-            // HS `paired` guard `i /= j` on NodeIds (Simplify.hs:649):
+            // HS `paired` guard `i /= j` on NodeIds (Simplify.hs:547-658, see line 649):
             // never pair two premises living on the same node.
             if i == j { continue; }
             // HS pairs only within a single `(tag, behaviours)` (Simplify.hs).
@@ -3631,7 +3628,7 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
             // Same first term required (the injectivity index).
             if first_i != first_j { continue; }
             // Walk the flattened `(behaviour, leaf-term)` pairs in lock-step.
-            // HS `((b, s),(_,t)) <- zip ss tt` (Simplify.hs:650): the behaviour
+            // HS `((b, s),(_,t)) <- zip ss tt` (Simplify.hs:547-658, see line 650): the behaviour
             // `b` comes from `ss` (node i's pairs); `t` is the leaf at the same
             // index in node j's pairs.
             for (k, (bh, s)) in pairs_i.iter().enumerate() {
@@ -3927,7 +3924,7 @@ fn is_true_false_core(
     if let Term::Lit(Lit::Con(_)) = t { return Some(false); }
     // CR-rule S_invalid: pub/fresh var (atom var) has no subterms;
     // similarly, a Nat-sorted big with a non-Nat/non-MsgVar small is
-    // invalid (HS SubtermStore.hs:349).
+    // invalid (HS SubtermStore.hs:334-371, see line 349).
     if let Term::Lit(Lit::Var(_)) = t {
         if is_pub_var(t) || is_fresh_var(t) {
             return Some(false);
@@ -3980,7 +3977,7 @@ fn is_true_false_core(
 ///     if the step returns `Just []` ⇒ `isContradictory := True`;
 ///     if the step returns `Just [TrueD]` ⇒ remove from store
 ///     (moved to solvedSubterms here);
-///     arity-one-deduction (SubtermStore.hs:177): for splits of the form
+///     arity-one-deduction (SubtermStore.hs:170-183, see line 177): for splits of the form
 ///     `[SubtermD st, EqualD (l,r)]` (sorted, NoEq big-side, recurse-step),
 ///     when `st ∈ negSubterms` we emit `l = r` as an equality formula.
 ///   - `simpSplitNegSt` (SubtermStore.hs:187-204) recurse step on each
@@ -4011,7 +4008,7 @@ fn is_true_false_core(
 /// as HS's `_negSubterms` — `insert_formula` consumes the
 /// `∀[].[Subterm i j].⊥` shape into the store at insert time
 /// (Reduction.hs:567-570), and the `neg_subterms \ old_neg_subterms`
-/// difference (HS `oldNegSubterms`, SubtermStore.hs:95,189) decides
+/// difference (HS `oldNegSubterms`, SubtermStore.hs:90-97, see line 95,189) decides
 /// which entries this pass (re-)splits.
 fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
     use tamarin_term::lterm::{is_msg_var, LSort, sort_of_lnterm};
@@ -4044,7 +4041,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
                  NatD(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm),
                  /// HS `ACNewVarD ((small+newVar, big), newVar)` — the
                  /// existential-variable leaf of the S_subterm-ac-recurse
-                 /// CR-rule (SubtermStore.hs:253,295).
+                 /// CR-rule (SubtermStore.hs:250-255, see line 253,295).
                  AcNewVar(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm,
                           tamarin_term::lterm::LVar) }
     // step (single unfolding): returns Some(set) where set is the
@@ -4187,7 +4184,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
             let f = crate::guarded::gall(Vec::new(), vec![atom], crate::guarded::gfalse());
             if !new_formulas.contains(&f) { new_formulas.push(f); }
         };
-    // `acFormulas` from simpSplitNegSt (HS SubtermStore.hs:194):
+    // `acFormulas` from simpSplitNegSt (HS SubtermStore.hs:187-204, see line 194):
     //   closeGuarded All [newVar] [EqE smallPlus big] gfalse
     // (∀ newVar. smallPlus = big ⇒ ⊥).  `smallPlus`/`big` are LNTerms
     // (lifted to the AST then re-bound by close_guarded over `[newVar]`).
@@ -4364,11 +4361,11 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
     let solved: Vec<crate::tools::subterm_store::SubtermConstraint> =
         std::mem::take(&mut red.sys.subterm_store_mut().solved_subterms);
     let mut subs = std::mem::take(&mut red.sys.subterm_store_mut().subterms);
-    // sst0 — `posSubterms \ solvedSubterms` (HS SubtermStore.hs:146):
+    // sst0 — `posSubterms \ solvedSubterms` (HS SubtermStore.hs:144-152, see line 146):
     // a substitution may have rewritten a live subterm into one that
     // is already solved.
     subs.retain(|c| !solved.iter().any(|x| x.small == c.small && x.big == c.big));
-    // `splittableSubterms` (HS SubtermStore.hs:174) — the SubtermG goal
+    // `splittableSubterms` (HS SubtermStore.hs:170-183, see line 174) — the SubtermG goal
     // list handed back to `simpSubterms` for goal reconciliation below.
     let mut subterm_goals: Vec<crate::constraint::constraints::Goal> = Vec::new();
     for c in subs {
@@ -4397,11 +4394,11 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
             Some(splits) => {
                 subterm_goals.push(crate::constraint::constraints::Goal::Subterm(
                     (c.small.clone(), c.big.clone())));
-                // arity-one-deduction (SubtermStore.hs:177): a single-level
+                // arity-one-deduction (SubtermStore.hs:170-183, see line 177): a single-level
                 // recurse step that yields exactly `[SubtermD st, EqualD (l,r)]`
                 // for some sub-pair, and where `st ∈ negSubterms`, emits
                 // `l = r` as an equality formula.  HS uses sorted-list pattern
-                // matching with SubtermD < EqualD (SubtermSplit.Ord, SubtermStore.hs:250).
+                // matching with SubtermD < EqualD (SubtermSplit.Ord, SubtermStore.hs:250-255).
                 let mut ss = splits.clone();
                 ss.sort_by_key(|s| match s {
                     Split::SubD(_,_) => 0,
@@ -4472,7 +4469,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
     }
 
     // -------------------------------------------------------------
-    // Phase 3b — CR-rule S_chain (HS simpSubtermStore, SubtermStore.hs:150):
+    // Phase 3b — CR-rule S_chain (HS simpSubtermStore, SubtermStore.hs:144-152, see line 150):
     // `isContradictory ||= hasSubtermCycle reducible sst3` runs BETWEEN
     // negativeSubtermVars and simpNatCycles.  The cyclic pairs REMAIN in
     // the store (only the flag is set) — since trivially-false pairs are
@@ -4526,7 +4523,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
     // Goal reconciliation — HS `simpSubterms` (Simplify.hs:683-691).
     // ONLY when the split pass produced a non-empty goal list ("if the
     // goals are [] then no goals have to be removed, as subterms cannot
-    // go from splittable to unsplittable", SubtermStore.hs:167):
+    // go from splittable to unsplittable", SubtermStore.hs:144-152, see line 167):
     //   goalsToRemove = OPEN SubtermG goals ∉ `subterm_goals`
     //   goalsToAdd    = `subterm_goals` ∉ sGoals (any status)
     // Insertion draws nrs from the same monotone goal counter as every
@@ -4569,7 +4566,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
     // the formula into `solved_formulas` as well, after which a
     // subsequent `reduce_formulas_pass` round strips it back out of
     // `formulas` via the solved-dedup short-circuit in
-    // `insert_formula`).  HS's `simpSubterms` (Simplify.hs:522)
+    // `insert_formula`).  HS's `simpSubterms` (Simplify.hs:499-524, see line 522)
     // funnels emitted formulas through `insertFormula` only ONCE per
     // simplify iteration and relies on the negSubterms set surviving
     // in `_negSubterms`; we mirror the same single-pass placement by
@@ -4651,7 +4648,7 @@ fn nat_subterm_equalities(
     }
 
     // `isNatSubterm (small, big) = (Nat small || msgVar small) && Nat big`
-    // (SubtermStore.hs:113).
+    // (SubtermStore.hs:112-113, see line 113).
     fn is_nat_subterm(s: &LNTerm, t: &LNTerm) -> bool {
         (sort_of_lnterm(s) == LSort::Nat || is_msg_var(s))
             && sort_of_lnterm(t) == LSort::Nat
@@ -4726,7 +4723,7 @@ fn nat_subterm_equalities(
         real_edges.extend(format_edge(st));
     }
 
-    // `vertices = S.toList $ S.fromList $ concatMap ...` (SubtermStore.hs:437)
+    // `vertices = S.toList $ S.fromList $ concatMap ...` (SubtermStore.hs:395-538, see line 437)
     // BTreeSet for deterministic ordering matching HS Set semantics.
     let mut vertex_set: std::collections::BTreeSet<Vertex> = std::collections::BTreeSet::new();
     for ((a, b), _) in &real_edges {
@@ -4739,12 +4736,12 @@ fn nat_subterm_equalities(
         return Some(Vec::new());
     }
 
-    // `vertexToInt v = lookup v $ zip vertices [0..]` (SubtermStore.hs:440)
+    // `vertexToInt v = lookup v $ zip vertices [0..]` (SubtermStore.hs:395-538, see line 440)
     let vertex_to_int: std::collections::BTreeMap<Vertex, usize> =
         vertices.iter().enumerate().map(|(i, v)| (v.clone(), i)).collect();
     let vti = |v: &Vertex| -> usize { vertex_to_int[v] };
 
-    // `oneEdges = map ... $ filter fst vertices` (SubtermStore.hs:443) —
+    // `oneEdges = map ... $ filter fst vertices` (SubtermStore.hs:395-538, see line 443) —
     // self-loops `(False, x) → (True, x)` with weight -2 for every
     // `(True, x)` vertex.
     let mut one_edges: Vec<((Vertex, Vertex), i64)> = Vec::new();
@@ -4754,7 +4751,7 @@ fn nat_subterm_equalities(
         }
     }
 
-    // `rawEdges = realEdges ++ oneEdges` (SubtermStore.hs:446)
+    // `rawEdges = realEdges ++ oneEdges` (SubtermStore.hs:395-538, see line 446)
     let mut raw_edges: Vec<((Vertex, Vertex), i64)> = Vec::new();
     raw_edges.extend(real_edges.iter().cloned());
     raw_edges.extend(one_edges.iter().cloned());
@@ -4803,7 +4800,7 @@ fn nat_subterm_equalities(
         tightened_edges.push(((v.clone(), nv), d - 1));
     }
 
-    // `edges = rawEdges ++ tightenedEdges` (SubtermStore.hs:479)
+    // `edges = rawEdges ++ tightenedEdges` (SubtermStore.hs:395-538, see line 479)
     let mut edges: Vec<((Vertex, Vertex), i64)> = raw_edges.clone();
     edges.extend(tightened_edges);
 
@@ -5012,7 +5009,7 @@ fn nat_subterm_equalities(
 
         // Absolute equalities: variables that appear with BOTH signs in
         // this SCC (`duplicates = concatMap ((\xs -> xs \\ S.toList (S.fromList xs)) . map snd) sccs`,
-        // SubtermStore.hs:535).
+        // SubtermStore.hs:395-538, see line 535).
         // Implementation: list ALL `snd` from the SCC; build the
         // multiset; the variables that appear more than once are the
         // duplicates.  We mirror HS's `xs \\ S.toList (S.fromList xs)` —
@@ -5453,7 +5450,7 @@ mod tests {
     /// produce the `ACNewVarD` existential leaf, which `simpSplitNegSt`
     /// turns into the `acFormula`:
     ///   ∀ newVar. (a++a) ++ newVar = (b++c) ⇒ ⊥
-    /// (HS SubtermStore.hs:194,289-296).
+    /// (HS SubtermStore.hs:187-204, see line 194,289-296).
     ///
     /// Authenticity: HS's `tamarin-prover --prove` verifies the
     /// corresponding lemma `not(a++a ⊏ b++c)` (4 steps) — the proof

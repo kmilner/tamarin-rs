@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Adrian Dapprich, Simon Meier, Robert Künnemann, Mathias Aurand, and
-//   other minor contributors (see upstream git history)
+//   meiersi, rkunnema, addap, Mathias-AURAND, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/utils/src/Text/Dot.hs
 

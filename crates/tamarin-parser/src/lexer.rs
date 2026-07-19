@@ -1,8 +1,5 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann, Simon Meier, Charlie Jacomme, "Tom" (github BTom-GH),
-//   Kevin Morio, Philip Lukert, "Pops" (github racoucho1u), Mathias Aurand,
-//   Jannik Dreier, Johannes Wocker, Ralf Sasse, and other minor contributors
-//   (see upstream git history)
+//   meiersi, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Text/Parser/Signature.hs,
 //   lib/theory/src/Theory/Text/Parser/Term.hs,
@@ -177,7 +174,7 @@ impl<'a> Lexer<'a> {
     /// Returns None if the next char isn't alphanumeric.
     ///
     /// Mirrors `identifier = T.identifier spthy` (Token.hs:393-394), which rejects
-    /// the reserved names `["in","let","rule","diff"]` (Token.hs:225): a word equal
+    /// the reserved names `["in","let","rule","diff"]` (Token.hs:214-230, see line 225): a word equal
     /// to one of those is not a valid identifier, so we backtrack and return None.
     /// The `diff` term operator does NOT go through this — it is matched as a
     /// keyword/symbol (HS `diffOp = symbol "diff" *> parens ...`, Term.hs:108-110).
@@ -207,7 +204,7 @@ impl<'a> Lexer<'a> {
 
     /// Parse a natural number literal (decimal only).
     ///
-    /// Haskell `T.natural spthy` (Token.hs:341) is Parsec's `natural`, which also
+    /// Haskell `T.natural spthy` (Token.hs:340-341, see line 341) is Parsec's `natural`, which also
     /// accepts `0x`/`0o` hex/octal prefixes and returns an unbounded `Integer`.
     /// Every `natural` call site is a small decimal index (premise/conclusion
     /// numbers, function arity, reuse limit, `x.1` subscripts) that no real
@@ -399,7 +396,7 @@ impl<'a> Lexer<'a> {
         // Haskell `singleQuoted = between (symbol "'") (symbol "'")` (Token.hs:296-297):
         // the opening `symbol "'"` is `lexeme (string "'")`, so it consumes whitespace
         // (and comments) AFTER the opening quote. The body `many1 (noneOf "'\n")`
-        // (Token.hs:453) keeps interior/trailing spaces, so only the leading run is
+        // (Token.hs:452-453, see line 453) keeps interior/trailing spaces, so only the leading run is
         // dropped here.
         self.skip_ws();
         let mut s = String::new();
@@ -493,7 +490,7 @@ pub fn is_ident_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-/// Reserved names that `T.identifier spthy` rejects (Token.hs:225). A word equal
+/// Reserved names that `T.identifier spthy` rejects (Token.hs:214-230, see line 225). A word equal
 /// to one of these is not a valid identifier.
 #[inline]
 pub fn is_reserved_name(s: &str) -> bool {

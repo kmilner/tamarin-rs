@@ -1,16 +1,11 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Artur Cygan, Felix Linker, Benedikt Schmidt,
-//   Ralf Sasse, Cas Cremers, "Jackie" (github kanakanajm), Robert Künnemann,
-//   Adrian Dapprich, Yann Colomb, Philip Lukert, symphorien, "Tom" (github
-//   BTom-GH), "Pops" (github racoucho1u), Mathias Aurand, "Nynko" (github),
-//   Felix Yan, Alexander Dax, Kevin Morio, Yavor Ivanov, Katriel Cohn-
-//   Gordon, Jérôme (github Azurios-git), Dominik Schoop, Hong-Thai Luu,
-//   "ValentinYuri" (github), and other minor contributors (see upstream git
-//   history)
+//   meiersi, arcz, cascremers, felixlinker, beschmi, rsasse, jdreier,
+//   BTom-GH, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Term/Raw.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
-//   lib/theory/src/Theory/Model/Rule.hs, lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Proof.hs,
 //   lib/utils/src/Text/PrettyPrint/Html.hs, src/Web/Hamlet.hs,
 //   src/Web/Handler.hs, src/Web/Theory.hs, src/Web/Types.hs
 
@@ -484,7 +479,7 @@ fn pp_step(out: &mut String, cx: &PpCtx, path: &[String], node: &ProofNode,
     }
     // Leading indent for this line (HS `nest 2` per named case).  The `by `
     // prefix is HS `prettyCase ps (kwBy <> text " ")` = `markStatus ps` wrapping
-    // `keyword_ "by"` PLUS its trailing space (Theory/Proof.hs:1084).
+    // `keyword_ "by"` PLUS its trailing space (Theory/Proof.hs:1080-1101, see line 1084).
     let ind = "  ".repeat(depth);
     out.push_str(&ind);
     if by_prefix {
@@ -557,7 +552,7 @@ pub fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> String {
         TheoryPath::Rules => rules_html(entry),
         TheoryPath::Message => message_html(entry),
         TheoryPath::Tactic => {
-            // HS `tacticSnippet` (Web/Theory.hs:934) =
+            // HS `tacticSnippet` (Web/Theory.hs:934-940) =
             //   ppSection "Tactic(s)" (prettyTactic <$> _thyTactic)
             // ppSection h s = withTag "h2" [] (text h) $$ withTag "p"
             //   [("class","monospace rules")] (vcat (intersperse (text "") s))
@@ -573,7 +568,7 @@ pub fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> String {
             ])
         }
         // HS renders `text "this is a mistake"` for the bare lemma path
-        // (`htmlThyPath` `TheoryLemma _`, Web/Theory.hs:1068) — the UI never
+        // (`htmlThyPath` `TheoryLemma _`, Web/Theory.hs:1005-1144, see line 1068) — the UI never
         // navigates here (it uses the proof path); mirror it verbatim.
         TheoryPath::Lemma(_) => "this is a mistake".into(),
         TheoryPath::Proof { lemma, sub } => proof_html(entry, lemma, sub),
@@ -843,7 +838,7 @@ fn show_inj_fact(
 /// HS `rulesSnippet` (Web/Theory.hs:887-917).
 fn rules_html(entry: &TheoryEntry) -> String {
     // HS renders `rulesSnippet` through the `HtmlDoc Doc` transformer
-    // (`HtmlDocument d => ClosedTheory -> d`, Web/Theory.hs:887, laid out by
+    // (`HtmlDocument d => ClosedTheory -> d`, Web/Theory.hs:887-917, laid out by
     // `renderHtmlDoc`): every `text`/`char` is entity-escaped + measured
     // escaped, keywords/operators/comments become `hl_*` spans, and the whole
     // doc is postprocessed.  The batch `--prove` theory printer calls the SAME
@@ -870,7 +865,7 @@ fn rules_html(entry: &TheoryEntry) -> String {
         // `extraACRules` = `_crProtocol` not already in `theoryRules` (ISend,
         // IRecv).  HS `prettyIntruderRuleAC r = prettyRuleAC r $--$ nest 2
         // (multiComment_ ["has exactly the trivial AC variant"]) $--$ text ""`
-        // (Web/Theory.hs:911): body, blank line, indent-2 comment, blank line,
+        // (Web/Theory.hs:887-917, see line 911): body, blank line, indent-2 comment, blank line,
         // trailing empty line.  Rendered as a string that is `vcat`-joined
         // (`\n`) with the other rules below.
         let comment = multi_comment_(&["has exactly the trivial AC variant"]).render();
@@ -889,7 +884,7 @@ fn rules_html(entry: &TheoryEntry) -> String {
     let mut msr_parts = extra_ac;
     msr_parts.extend(proto_rules);
     let msr_body = msr_parts.join("\n");
-    // `vsep $ map prettyRestriction` (Web/Theory.hs:895) = `foldr ($--$)` =
+    // `vsep $ map prettyRestriction` (Web/Theory.hs:887-917, see line 895) = `foldr ($--$)` =
     // blank line between restrictions.
     let restr_body = tamarin_theory::pretty_theory::web_restrictions(
         &entry.parser_theory, &entry.typed_theory).join("\n\n");
@@ -918,7 +913,7 @@ fn rules_html(entry: &TheoryEntry) -> String {
 /// only address the per-case interactive graph.
 fn sources_html(entry: &TheoryEntry, kind: &SourceKind) -> String {
     // HS renders `reqCasesSnippet = vcat (htmlSource <$> …)` through the
-    // `HtmlDoc Doc` transformer + `renderHtmlDoc` (Web/Theory.hs:1016): the
+    // `HtmlDoc Doc` transformer + `renderHtmlDoc` (Web/Theory.hs:1005-1144, see line 1016): the
     // goal headers, per-case sequents (`pretty_non_graph_system`) and all
     // structural tags are entity-escaped + span-marked and postprocessed once.
     let _html = tamarin_theory::pretty_hpj::HtmlDocGuard::enable();

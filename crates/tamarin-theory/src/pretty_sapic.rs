@@ -1,8 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Robert Künnemann, Jannik Dreier, Hong-Thai Luu, Benedikt
-//   Schmidt, Philip Lukert, Ralf Sasse, Yavor Ivanov, Charlie Jacomme,
-//   "ValentinYuri" (github), and other minor contributors (see upstream git
-//   history)
+//   meiersi, rkunnema, jdreier, beschmi, PhilipLukertWork, and other
+//   minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Term.hs, lib/theory/src/Rule.hs,
 //   lib/theory/src/Theory/Model/Fact.hs,
@@ -183,7 +181,7 @@ fn pair_doc(
     hpj::fcat_bracketed("<", ", ", ">", flat, |t| sapic_term_to_doc(t, match_vars))
 }
 
-/// HS `ppTerms (ppACOp o) 1 "(" ")" ts` (Term/Term.hs:273,288-290): like
+/// HS `ppTerms (ppACOp o) 1 "(" ")" ts` (Term/Term.hs:272-300, see line 273,288-290): like
 /// `pair_doc` with `(`/`)` lead/finish and the AC-op symbol (no surrounding
 /// spaces) as separator.
 fn ac_op_doc(
@@ -342,7 +340,7 @@ fn pretty_sapic_action(a: &SapicAction<SapicLVar>) -> String {
             format!("{}({})", s, body)
         }
         // HS `prettySapicAction' prettyRule' (MSR p a c r mv) = prettyRule' p a c r mv`
-        // (Process.hs:470), where `prettyRule' = rulePrinter` (Print.hs:41-46).
+        // (Process.hs:450-471, see line 470), where `prettyRule' = rulePrinter` (Print.hs:41-46).
         SapicAction::Msr { prems, acts, concs, rest, match_vars } => {
             render_msr(prems, acts, concs, rest, match_vars)
         }
@@ -359,7 +357,7 @@ fn pretty_sapic_comb(c: &ProcessCombinator<SapicLVar>) -> String {
             format!("if {}={}", pretty_sapic_term(t), pretty_sapic_term(t2))
         }
         // HS `prettySapicComb (Cond a) = "if "++ render (prettySyntacticSapicFormula a)`
-        // (Process.hs:476).  `prettySyntacticSapicFormula = prettySyntacticLNFormula
+        // (Process.hs:473-483, see line 476).  `prettySyntacticSapicFormula = prettySyntacticLNFormula
         // . toLFormula` (Term.hs:174-175); `toLFormula` just drops the SAPIC type
         // tags (`SapicLVar → LVar`), keeping the syntactic structure (predicates
         // intact, formula un-expanded).  The RS `Cond` already carries the
@@ -370,7 +368,7 @@ fn pretty_sapic_comb(c: &ProcessCombinator<SapicLVar>) -> String {
             format!("if {}", crate::pretty_formula::pretty_formula(f))
         }
         // HS `prettySapicComb (Lookup t v) = "lookup "++ p t ++ " as " ++ show v`
-        // (Process.hs:482).  `show v` on an (untyped) `SapicLVar` is just the
+        // (Process.hs:473-483, see line 482).  `show v` on an (untyped) `SapicLVar` is just the
         // LVar display name (`x.1`); a typed var would append `:type`, but
         // lookup binders are never typed by inference (`typeWithVar`).
         ProcessCombinator::Lookup(t, v) => {

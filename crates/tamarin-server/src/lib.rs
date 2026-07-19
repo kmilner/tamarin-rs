@@ -1,8 +1,7 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Kevin Morio, Artur Cygan, Simon Meier, Jannik Dreier, Benedikt Schmidt,
-//   Ralf Sasse, "Jackie" (github kanakanajm), Felix Linker, Adrian Dapprich,
-//   Yavor Ivanov, "Nynko" (github), Jérôme (github Azurios-git), and other
-//   minor contributors (see upstream git history)
+//   meiersi, arcz, jdreier, beschmi, kevinmorio, Kanakanajm, rsasse,
+//   addap, yavivanov, felixlinker, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   src/Main/Mode/Interactive.hs, src/Main/TheoryLoader.hs,
 //   src/Web/Dispatch.hs, src/Web/Types.hs
@@ -190,8 +189,8 @@ pub async fn serve(
 
     let app = router(state.clone());
     let listener = tokio::net::TcpListener::bind(cfg.bind_addr).await?;
-    // HS ready message (Interactive.hs:104, printed after all theories
-    // load, Dispatch.hs:160) — note the trailing space after "at" and the
+    // HS ready message (Interactive.hs:68-166, see line 104, printed after all theories
+    // load, Dispatch.hs:149-209, see line 160) — note the trailing space after "at" and the
     // indented URL line.
     println!(
         "Finished loading theories ... server ready at \n\n    http://{}\n",

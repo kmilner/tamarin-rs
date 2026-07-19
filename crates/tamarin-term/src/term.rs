@@ -1,7 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Benedikt Schmidt, Simon Meier, Jannik Dreier, Philip Lukert, Adrian
-//   Dapprich, Ralf Sasse, Charlie Jacomme, "Tom" (github BTom-GH), Robert
-//   Künnemann, and other minor contributors (see upstream git history)
+//   meiersi, beschmi, jdreier, PhilipLukertWork, addap, rsasse,
+//   charlie-j, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term.hs,
 //   lib/term/src/Term/Term/Classes.hs, lib/term/src/Term/Term/Raw.hs,
@@ -260,16 +259,16 @@ pub fn count_proper_subterms<A: PartialEq>(needle: &Term<A>, haystack: &Term<A>)
 
 // =============================================================================
 // "Protected" subterms (auto-sources).
-// NB (HS Term.hs:235): anything but a pair or an AC symbol is "protected".
+// NB (HS Term.hs:229-230, see line 235): anything but a pair or an AC symbol is "protected".
 // =============================================================================
 
 /// `True` iff the term's top symbol is an AC operator. Port of HS `isAC`
-/// (Term.hs:208).
+/// (Term.hs:208-210).
 pub fn is_ac<A>(t: &Term<A>) -> bool {
     matches!(t, Term::App(FunSym::Ac(_), _))
 }
 
-/// `True` iff the term is a pair `<_,_>`. Port of HS `isPair` (Term.hs:164,
+/// `True` iff the term is a pair `<_,_>`. Port of HS `isPair` (Term.hs:164-166,
 /// `viewTerm2 -> FPair _ _`): top symbol is the binary `pair` constructor.
 pub fn is_pair<A>(t: &Term<A>) -> bool {
     match t {
@@ -280,14 +279,14 @@ pub fn is_pair<A>(t: &Term<A>) -> bool {
 }
 
 /// `True` iff the term is a DH product `_*_`. Port of HS `isProduct`
-/// (Term.hs:179, `viewTerm2 -> FMult _`): top symbol is the AC
+/// (Term.hs:179-181, `viewTerm2 -> FMult _`): top symbol is the AC
 /// multiplication operator.
 pub fn is_product<A>(t: &Term<A>) -> bool {
     matches!(t, Term::App(FunSym::Ac(AcSym::Mult), _))
 }
 
 /// `True` iff the term is a well-formed inverse `inv(_)`. Port of HS `isInverse`
-/// (Term.hs:174, `viewTerm2 -> FInv _`): the unary `inv` operator applied to one
+/// (Term.hs:174-176, `viewTerm2 -> FInv _`): the unary `inv` operator applied to one
 /// argument.
 pub fn is_inverse<A>(t: &Term<A>) -> bool {
     match t {
@@ -299,7 +298,7 @@ pub fn is_inverse<A>(t: &Term<A>) -> bool {
 
 /// All "protected" subterms of `t`: subterms whose top symbol is a function
 /// that is neither a pair nor an AC operator. Port of HS `allProtSubterms`
-/// (Term.hs:239) — pre-order, descending through pairs/AC operators.
+/// (Term.hs:239-251) — pre-order, descending through pairs/AC operators.
 pub fn all_prot_subterms<A: Clone>(t: &Term<A>) -> Vec<Term<A>> {
     match t {
         Term::App(_, args) if is_pair(t) || is_ac(t) =>
@@ -359,7 +358,7 @@ pub trait TermSize {
     fn size(&self) -> usize;
 }
 
-// Port of `instance Sized a => Sized (Term a)` (Term/Term/Raw.hs:235).
+// Port of `instance Sized a => Sized (Term a)` (Term/Term/Raw.hs:231-235, see line 235).
 impl<A: TermSize> TermSize for Term<A> {
     fn size(&self) -> usize {
         match self {
@@ -369,7 +368,7 @@ impl<A: TermSize> TermSize for Term<A> {
     }
 }
 
-// Port of `instance Sized (Lit c v) where size _ = 1` (VTerm.hs:95).
+// Port of `instance Sized (Lit c v) where size _ = 1` (VTerm.hs:95-96).
 // This is what makes `TermSize` reachable for real `VTerm`/`LNTerm`.
 impl<C, V> TermSize for crate::vterm::Lit<C, V> {
     fn size(&self) -> usize { 1 }

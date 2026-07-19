@@ -1,3 +1,9 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   meiersi, jdreier, rkunnema, racoucho1u, kevinmorio, charlie-j,
+//   rsasse, and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Theory.hs
+
 //! Solver-support tools — port of `Theory.Tools.*`.
 
 pub mod abstract_interpretation;

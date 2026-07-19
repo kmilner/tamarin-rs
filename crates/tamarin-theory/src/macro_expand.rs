@@ -1,10 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Hong-Thai Luu, Simon Meier, Robert Künnemann, Jannik Dreier, Charlie
-//   Jacomme, Kevin Morio, "Tom" (github BTom-GH), "ValentinYuri" (github),
-//   Yavor Ivanov, "gilcu3" (github), "Pops" (github racoucho1u), Benedikt
-//   Schmidt, Philip Lukert, Ralf Sasse, Felix Linker, "Nynko" (github),
-//   Katriel Cohn-Gordon, and other minor contributors (see upstream git
-//   history)
+//   BTom-GH, ValentinYuri, jdreier, meiersi, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Macro.hs, lib/theory/src/ClosedTheory.hs,
 //   lib/theory/src/Items/CaseTestItem.hs, lib/theory/src/Lemma.hs,
@@ -39,7 +35,7 @@
 //! the parser AST.  This is observationally faithful: every macro call
 //! site is rewritten to its body before either side's typed conversion
 //! runs.  The macro fun-syms themselves are still registered in MaudeSig
-//! (HS Parser/Macro.hs:48 `addMacroSym`) so any unexpanded reference —
+//! (HS Parser/Macro.hs:29-49, see line 48 `addMacroSym`) so any unexpanded reference —
 //! and Maude — still see them.
 //!
 //! Recursion semantics mirror HS exactly:
@@ -257,7 +253,7 @@ pub fn apply_macros_formula(macros: &[p::Macro], f: &p::Formula) -> p::Formula {
 
 /// Apply macros to all items in a theory.  Mirrors HS's call-sites:
 ///   - rule prems/concs/acts (Rule.hs:1032-1037 + ClosedTheory.hs:322-323)
-///   - lemma formula (Lemma.hs:83-88, called from Parser.hs:105)
+///   - lemma formula (Lemma.hs:83-88, called from Parser.hs:97-105, see line 105)
 ///   - restriction formula (Restriction.hs:163-165)
 ///   - embedded restriction in rule (treat as formula)
 ///   - rule let-block RHS (already inlined into the rule by
@@ -303,8 +299,8 @@ fn expand_items(macros: &[p::Macro], items: &mut [p::TheoryItem]) {
             }
             // CaseTest / AccLemma are `TranslationItem`s in HS, which
             // `closeTheoryItem` passes through verbatim with NO macro
-            // application (Prover.hs:204 `TranslationItem`; added unmacroed
-            // via Parser.hs:157,163 `liftedAddAccLemma`/`liftedAddCaseTest`).
+            // application (Prover.hs:170-251, see line 204 `TranslationItem`; added unmacroed
+            // via Parser.hs:153-157, see line 157,163 `liftedAddAccLemma`/`liftedAddCaseTest`).
             // They stay `SyntacticLNFormula` and are only `toLNFormula`'d
             // during accountability translation (Items/CaseTestItem.hs:34-37),
             // which does not run macros. So we deliberately do NOT expand them
@@ -343,7 +339,7 @@ fn expand_rule(macros: &[p::Macro], r: &mut p::Rule) {
     // `variants` is the user-written explicit `variants ...` block (HS
     // OpenProtoRule's ruAC) and `left_right` is the diff `left ... right ...`
     // block (HS DiffProtoRule's sides). `applyMacroInProtoRule` /
-    // `applyMacroInDiffProtoRule` (ClosedTheory.hs:319,323) only run
+    // `applyMacroInDiffProtoRule` (ClosedTheory.hs:318-319, see line 319,323) only run
     // applyMacroInRule on the main rule `ruE` and leave variants/sides intact,
     // so a macro call inside an explicit variant must survive unexpanded.
 }
@@ -511,7 +507,7 @@ mod tests {
     #[test]
     fn case_test_formula_is_not_macro_expanded() {
         // HS keeps CaseTest as a `TranslationItem` and applies NO macros to
-        // it (Prover.hs:204; Parser.hs:163 `liftedAddCaseTest`). Probed
+        // it (Prover.hs:170-251, see line 204; Parser.hs:159-163, see line 163 `liftedAddCaseTest`). Probed
         // against the real HS prover (v1.13.0) on an equivalent theory: the
         // stored case-test formula prints `Blame( idm(a) )` UNEXPANDED, e.g.
         //   predicate: Blamed( a ) <=> ∃ #i. Blame( idm(a) ) @ #i
@@ -550,7 +546,7 @@ mod tests {
 
     #[test]
     fn acc_lemma_formula_is_not_macro_expanded() {
-        // AccLemma is also a `TranslationItem` (Prover.hs:204; Parser.hs:157
+        // AccLemma is also a `TranslationItem` (Prover.hs:170-251, see line 204; Parser.hs:153-157, see line 157
         // `liftedAddAccLemma`) and is never macro-expanded. After
         // `expand_theory_macros` the acc-lemma formula must still contain the
         // macro call `App("idm", ...)`.

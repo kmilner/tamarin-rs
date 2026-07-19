@@ -1,8 +1,5 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Robert Künnemann, Felix Linker, Jannik Dreier, "Pops"
-//   (github racoucho1u), Hong-Thai Luu, symphorien, Philip Lukert, Ralf
-//   Sasse, Kevin Morio, Benedikt Schmidt, "sans-sucre" (github), Felix Yan,
-//   Yavor Ivanov, Katriel Cohn-Gordon, Alexander Dax, and other minor
+//   meiersi, felixlinker, rkunnema, PhilipLukertWork, and other minor
 //   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Items/LemmaItem.hs,
@@ -138,7 +135,7 @@ pub enum RuleAttr {
     IsSapicRule,
     /// `process="..."` — the rendered `prettySapicTopLevel'` of a
     /// SAPIC-generated rule's subprocess.  HS's rule-attribute PARSER ignores
-    /// a user-written `process=` (`parseAndIgnore`, Parser/Rule.hs:72), so this
+    /// a user-written `process=` (`parseAndIgnore`, Parser/Rule.hs:68-93, see line 72), so this
     /// variant is never produced by the parser; it is synthesised only by the
     /// SAPIC translation when it injects generated rules into the parsed theory
     /// (so the pretty-printer renders the `process="..."` attribute).
@@ -167,9 +164,9 @@ pub struct Lemma {
     /// The verbatim source text of the lemma (from the `lemma` keyword up to
     /// and including the trailing whitespace/comments after its proof
     /// skeleton), with comments stripped.  Mirrors HS `_lPlaintext`
-    /// (`ProtoLemma`, `Items/LemmaItem.hs:50`), which the parser fills from
+    /// (`ProtoLemma`, `Items/LemmaItem.hs:48-58, see line 50`), which the parser fills from
     /// `removeComments $ take (length start - length end) start`
-    /// (`Theory/Text/Parser/Lemma.hs:87`).  Used only by the interactive web
+    /// (`Theory/Text/Parser/Lemma.hs:78-88, see line 87`).  Used only by the interactive web
     /// server's Edit-lemma form (never rendered by `--prove`).
     pub plaintext: String,
 }
@@ -336,12 +333,12 @@ pub enum GoalSpec {
     },
     /// `gf1 ∥ gf2 ∥ ...` — disjunction-split goal.  Mirrors HS
     /// `disjSplitGoal = (DisjG . Disj) <$> sepBy1 guardedFormula
-    /// (symbol "∥")` (Theory/Text/Parser/Proof.hs:61).
+    /// (symbol "∥")` (Theory/Text/Parser/Proof.hs:39-72, see line 61).
     ///
     /// HS parses each disjunct as a full `Guarded` value bearing
     /// concrete LVar identities, then matches by structural equality
     /// against the open `Goal::Disj(...)` in `sys.goals` (HS
-    /// ProofMethod.hs:259 `SolveGoal goal -> guard (goal `M.member`
+    /// ProofMethod.hs:254-274, see line 259 `SolveGoal goal -> guard (goal `M.member`
     /// L.get sGoals sys)`).
     ///
     /// We can't reconstruct skeleton-text LVar indices reliably (they
@@ -356,7 +353,7 @@ pub enum GoalSpec {
     Disj { alts: Vec<DisjAlt>, alt_texts: Vec<String> },
     /// `(#i, n) ~~> (#j, m)` — chain-split goal.  Mirrors HS
     /// `chainGoal = ChainG <$> (try (nodeConc <* opChain)) <*> nodePrem`
-    /// (Theory/Text/Parser/Proof.hs:59).  `nodeConc`/`nodePrem` parse
+    /// (Theory/Text/Parser/Proof.hs:39-72, see line 59).  `nodeConc`/`nodePrem` parse
     /// `(<nodevar>, <natural>)` and the operator is `~~>` (HS
     /// `prettyGoal (ChainG c p)` Constraints.hs:269-270).
     ///

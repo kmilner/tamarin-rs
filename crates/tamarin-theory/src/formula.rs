@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Kevin Morio, Simon Meier, Robert Künnemann, Artur Cygan, Benedikt
-//   Schmidt, and other minor contributors (see upstream git history)
+//   kevinmorio, meiersi, rkunnema, arcz, beschmi, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/accountability/src/Accountability/Generation.hs,
 //   lib/theory/src/Theory/Model/Formula.hs
@@ -139,7 +139,7 @@ mod tests {
     // Haskell-faithful structural comparison / round-tripping of formulas.
     // =========================================================================
 
-    /// `Connective` Ord — `And < Or < Imp < Iff` from Formula.hs:104.
+    /// `Connective` Ord — `And < Or < Imp < Iff` from Formula.hs:104-105.
     #[test]
     fn connective_ord_matches_haskell_declaration() {
         assert!(Connective::And < Connective::Or);
@@ -147,7 +147,7 @@ mod tests {
         assert!(Connective::Imp < Connective::Iff);
     }
 
-    /// `Quantifier` Ord — `All < Ex` from Formula.hs:108.
+    /// `Quantifier` Ord — `All < Ex` from Formula.hs:108-109.
     ///
     /// The All<Ex order is required for Haskell-faithful structural /
     /// BTreeMap comparisons and round-tripping of formulas, matching the

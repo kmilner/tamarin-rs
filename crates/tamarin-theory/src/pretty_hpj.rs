@@ -1,10 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Artur Cygan, Felix Linker, Jannik Dreier, Robert Künnemann,
-//   Adrian Dapprich, Benedikt Schmidt, Ralf Sasse, Mathias Aurand, Cas
-//   Cremers, "Pops" (github racoucho1u), "Jackie" (github kanakanajm),
-//   "ValentinYuri" (github), Yann Colomb, Philip Lukert, "Tom" (github BTom-
-//   GH), Yavor Ivanov, Alexander Dax, "sans-sucre" (github), "Nynko"
-//   (github), and other minor contributors (see upstream git history)
+//   meiersi, arcz, ValentinYuri, felixlinker, jdreier, Nynko, and other
+//   minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Substitution/SubstVFresh.hs,
 //   lib/term/src/Term/Term.hs,
@@ -21,7 +17,7 @@
 //!
 //! Port of the layout algorithm from
 //! `Text.PrettyPrint.HughesPJ` (pretty-1.1.3.6) — the non-annotated
-//! module used in production (HS `Class.hs:67`/`:72`).
+//! module used in production (HS `Class.hs:64-67, see line 67`/`:72`).
 //!
 //! The HS `Doc` is reduced to an RDoc with five constructors —
 //! `Empty`, `NilAbove`, `TextBeside`, `Nest`, `Union`, plus the
@@ -64,8 +60,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 ///   - the interactive web server renders every HTTP response at HS's
 ///     *web* width 100/67 — HughesPJ's default `style` used by `render`
 ///     (`getTheorySourceR` = `render . prettyClosedTheory`,
-///     `src/Web/Handler.hs:956`) and by `renderHtmlDoc`
-///     (`Text/PrettyPrint/Html.hs:151`).
+///     `src/Web/Handler.hs:950-957, see line 956`) and by `renderHtmlDoc`
+///     (`Text/PrettyPrint/Html.hs:140-149, see line 151`).
 ///
 /// Defaults to 110/73 so the CLI path is unchanged; the server calls
 /// [`set_display_width`] once at startup, before any rendering.  This is
@@ -181,7 +177,7 @@ impl HtmlDocGuard {
     /// drop).  For plain-text side channels rendered while an enclosing
     /// page render holds an `enable()` guard — e.g. the oracle/tactic
     /// goal strings, which HS produces with the plain `render $
-    /// prettyGoal` regardless of the surrounding widget (ProofMethod.hs:607):
+    /// prettyGoal` regardless of the surrounding widget (ProofMethod.hs:598-623, see line 607):
     /// HTML spans/entities in oracle stdin break the oracle's regexes.
     pub fn disable() -> Self {
         HtmlDocGuard(HTML_MODE.with(|c| c.replace(false)))
@@ -222,7 +218,7 @@ fn fill_width(s: &str) -> usize {
 // ============================================================================
 
 /// HS `Doc` from `pretty-1.1.3.6/Text/PrettyPrint/HughesPJ.hs` (the
-/// non-annotated module used in production, HS `Class.hs:67`/`:72`)
+/// non-annotated module used in production, HS `Class.hs:64-67, see line 67`/`:72`)
 /// — minus the `Above`/`Beside` lazy constructors (we eagerly reduce on
 /// build).
 #[derive(Clone)]
@@ -324,7 +320,7 @@ impl Doc {
     /// like CJK count as 1 in both).
     pub fn text<S: AsRef<str>>(s: S) -> Doc {
         let s = s.as_ref();
-        // HS `Document (HtmlDoc d)` (`Html.hs:104`): `text = HtmlDoc . text .
+        // HS `Document (HtmlDoc d)` (`Html.hs:102-123, see line 104`): `text = HtmlDoc . text .
         // escapeHtmlEntities`.  In HtmlDoc mode we escape the content up front so
         // the stored bytes AND the layout width are the escaped form (a `<`
         // costs 4 columns, matching HS).  In plain mode this is the byte-faithful
@@ -352,7 +348,7 @@ impl Doc {
     pub fn char(c: char) -> Doc {
         let mut buf = [0u8; 4];
         let s = c.encode_utf8(&mut buf);
-        // HS `Document (HtmlDoc d)` (`Html.hs:103`): `char = HtmlDoc . text .
+        // HS `Document (HtmlDoc d)` (`Html.hs:102-123, see line 103`): `char = HtmlDoc . text .
         // escapeHtmlEntities . return`.  Escape in HtmlDoc mode (a bare `<`
         // becomes `&lt;`, width 4); plain mode is unchanged.
         if html_mode() {
@@ -471,7 +467,7 @@ impl Doc {
 // always emit their tags, mirroring HS's `HtmlDoc`/`NoHtmlDoc` split.
 // ============================================================================
 
-/// HS `HighlightStyle` (`Text/PrettyPrint/Highlight.hs:33`).
+/// HS `HighlightStyle` (`Text/PrettyPrint/Highlight.hs:33-34`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hl {
     Keyword,
@@ -501,7 +497,7 @@ impl Doc {
     }
 }
 
-/// HS `attribute` (`Html.hs:83`): ` key="escaped-value"`.
+/// HS `attribute` (`Html.hs:82-83, see line 83`): ` key="escaped-value"`.
 fn push_attribute(buf: &mut String, key: &str, value: &str) {
     buf.push(' ');
     buf.push_str(key);
@@ -577,7 +573,7 @@ pub fn op_parens(d: Doc) -> Doc {
     operator_("(").beside(d).beside(operator_(")"))
 }
 
-/// HS `parens p = char '(' <> p <> char ')'` (`Class.hs:149`) — PLAIN parens
+/// HS `parens p = char '(' <> p <> char ')'` (`Class.hs:149-149`) — PLAIN parens
 /// (no highlight), used e.g. around `(modulo AC)`.
 pub fn parens(d: Doc) -> Doc {
     Doc::char('(').beside(d).beside(Doc::char(')'))
@@ -611,7 +607,7 @@ pub fn kw_modulo(what: &str, thy: &str) -> Doc {
     keyword_(what).beside_sp(parens(keyword_("modulo").beside_sp(Doc::text(thy))))
 }
 
-/// HS `kwRuleModulo = kwModulo "rule"` (`Pretty.hs:156`).
+/// HS `kwRuleModulo = kwModulo "rule"` (`Pretty.hs:154-156, see line 156`).
 pub fn kw_rule_modulo(thy: &str) -> Doc {
     kw_modulo("rule", thy)
 }

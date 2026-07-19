@@ -1,11 +1,11 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Felix Linker, Robert Künnemann, "Pops"
-//   (github racoucho1u), Hong-Thai Luu, symphorien, Ralf Sasse, Philip
-//   Lukert, Felix Yan, Yavor Ivanov, Benedikt Schmidt, Katriel Cohn-Gordon,
-//   Alexander Dax, and other minor contributors (see upstream git history)
+//   meiersi, jdreier, felixlinker, symphorien, felixonmars,
+//   PhilipLukertWork, racoucho1u, rkunnema, beschmi, katrielalex, and
+//   other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
-//   lib/theory/src/Theory/Proof.hs, lib/theory/src/Theory/ProofSkeleton.hs
+//   lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/ProofSkeleton.hs
 
 //! Proof-search driver — port of the `Theory.Proof` step loop.
 //!
@@ -379,7 +379,7 @@ pub fn run_proof_search(
             // `MAX_DEPTH = usize::MAX` disables the depth cut entirely, so no
             // branch becomes a `depth limit` Sorry, `DEPTH_LIMIT_HIT` never
             // fires, and no re-expansion is needed.  Like HS (the FIXME at
-            // Theory/Proof.hs:793) this can fail to terminate on an infinite
+            // Theory/Proof.hs:793-814) this can fail to terminate on an infinite
             // leftmost branch; the wall-clock `deadline` is the only backstop.
             MAX_DEPTH.with(|m| m.set(usize::MAX));
             DEPTH_LIMIT_HIT.with(|f| f.set(false));
@@ -387,7 +387,7 @@ pub fn run_proof_search(
             expand(ctx, &mut root, &mut budget, &deadline, 0);
         }
         CutStrategy::Nothing => {
-            // HS `CutNothing` → `id` (Proof.hs:740): the full DFS proof
+            // HS `CutNothing` → `id` (Proof.hs:730-750, see line 740): the full DFS proof
             // tree with NO cut and NO stop-on-solved.  Like SeqDfs this is
             // one unbounded-depth serial pass (the serial sibling loop's
             // abort policy below never fires for `Nothing`), and like HS
@@ -435,7 +435,7 @@ pub fn run_proof_search(
                 } else {
                     re_expand_depth_limited(ctx, &mut root, &mut budget, &deadline, 0);
                 }
-                // HS's poor-man's logging (Proof.hs:934,941) — `trace` to
+                // HS's poor-man's logging (Proof.hs:928-955, see line 934,941) — `trace` to
                 // stderr, unconditional.
                 eprintln!("searching for attacks at depth: {}", level);
                 let mut found = false;
@@ -857,7 +857,7 @@ fn expand_inner(
     // path we pick the first surviving method.
     //
     // Reference: `Theory.Constraint.Solver.ProofMethod.rankProofMethods`
-    // (`ProofMethod.hs:520`):
+    // (`ProofMethod.hs:520-548`):
     //
     //   proofMethods = bool toList insertInduction (isInitialSystem sys)
     //                  ((Simplify, "") :| goals)
@@ -920,7 +920,7 @@ fn expand_inner(
     //
     // Case iteration order: `execProofMethod`'s `process` helper
     // (ProofMethod.hs:302-308) builds a `Data.Map` keyed by case name
-    // via `M.fromListWith` (ProofMethod.hs:307), so
+    // via `M.fromListWith` (ProofMethod.hs:283-340, see line 307), so
     // entries are alphabetically ordered.  `proveSystemDFS` /
     // `cutOnSolvedDFS` then walk in map order (Proof.hs:855-877 —
     // `foldMap`, `M.map`).  Our `Vec` preserves creation order
@@ -936,7 +936,7 @@ fn expand_inner(
     //
     // Per-child parallelism (env-opt: `TAM_RS_DISABLE_PARALLEL_EXPAND=1`
     // disables; default ON).  Mirrors HS's `parTraversable nfProofMethod`
-    // at `Theory/Proof.hs:871` (the `nfProofMethod` helper at 871-877)
+    // at `Theory/Proof.hs:854-884, see line 871` (the `nfProofMethod` helper at 871-877)
     // inside `cutOnSolvedDFS`: HS evaluates each child's
     // proof-method/info/children in parallel via the Eval monad strategy.
     // We do the equivalent by running each child's `expand` on a rayon
@@ -1033,7 +1033,7 @@ fn expand_inner(
             // breaking deterministic output.
             //
             // HS-faithful: HS seeds a fresh FreshT counter per child case from
-            // `avoid sys` (ProofMethod.hs:306).  Mirror by cloning `ctx.maude`
+            // `avoid sys` (ProofMethod.hs:283-340, see line 306).  Mirror by cloning `ctx.maude`
             // with its own `fresh_counter` per worker (bounds_max(sys) + 1).
             //
             // If a `maude_pool` is configured, also borrow a per-worker
@@ -1197,10 +1197,10 @@ fn expand_inner(
 /// Run the goal ranker, centralising the two non-`Ok` outcomes shared
 /// by [`candidate_methods`] and [`candidate_methods_with_expl`]:
 ///   * `Err("__ORACLE_QUIT_ON_EMPTY__")` → `Err(())`, signalling the
-///     caller to emit a single `ApplySorry` candidate (HS ProofMethod.hs:621).
+///     caller to emit a single `ApplySorry` candidate (HS ProofMethod.hs:598-623, see line 621).
 ///   * any other `Err` → oracle exec failure: hard abort exactly like HS
 ///     (uncaught IO exception kills the invocation with EMPTY stdout —
-///     ProofMethod.hs:608, inside `oracleRanking` under `unsafePerformIO`,
+///     ProofMethod.hs:598-623, see line 608, inside `oracleRanking` under `unsafePerformIO`,
 ///     where `readProcess` throws).  Print to stderr, flush stdout (so
 ///     nothing leaks before exit), exit with code 1.
 fn rank_goals_or_abort(
@@ -1223,7 +1223,7 @@ fn rank_goals_or_abort(
 /// Insert an `Induction` candidate at the HS-mandated position when the
 /// system is in its initial state and the first formula supports
 /// induction.  Haskell's automatic path (`rankProofMethods`,
-/// ProofMethod.hs:527) gates `insertInduction` on `isInitialSystem sys`
+/// ProofMethod.hs:520-548, see line 527) gates `insertInduction` on `isInitialSystem sys`
 /// only; `execMethods` then filters non-applicable methods (the
 /// `ginduct` check here is our analog of `getInductionCases`).  Position:
 /// index 0 for `UseInduction`, index 1 (after `Simplify`) for
@@ -1256,7 +1256,7 @@ fn insert_induction_at<T>(
 
 /// Build the priority-ordered list of candidate proof methods to
 /// try at this node.  Mirrors Haskell's `rankProofMethods`
-/// (`ProofMethod.hs:520`):
+/// (`ProofMethod.hs:520-548`):
 ///
 ///   proofMethods = bool toList insertInduction (isInitialSystem sys)
 ///                  ((Simplify, "") :| goals)
@@ -1310,7 +1310,7 @@ fn candidate_methods_open(
     // `useHeuristic`'s `rankings !! (depth `mod` n)`).
     // Oracle ranked nothing and quitOnEmpty is set: emit ApplySorry.
     // HS: `guard (quitOnEmpty && not (null inp) && null ranked) *> Just ApplySorry`
-    // (ProofMethod.hs:621, inside `oracleRanking`) — stoppingMethod fires.
+    // (ProofMethod.hs:598-623, see line 621, inside `oracleRanking`) — stoppingMethod fires.
     // We represent this as an empty candidate list with a special Sorry.
     let goals = match rank_goals_or_abort(sys, ctx, depth) {
         Ok(gs) => gs,

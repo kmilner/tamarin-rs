@@ -1,5 +1,5 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann
+//   rkunnema, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Syntactic/Predicate.hs
 
@@ -70,7 +70,7 @@ pub fn smaller_fact<T>(t1: T, t2: T) -> Fact<T> {
 ///
 /// NOTE: This is a TEST-ONLY helper (its sole non-definition caller is
 /// its own unit test below). It deliberately searches only `preds` and
-/// does NOT append the built-in predicates list (HS Predicate.hs:78
+/// does NOT append the built-in predicates list (HS Predicate.hs:77-80, see line 78
 /// `lookupPredicate fact = find (sameName fact . pFact) . (++
 /// builtinPredicates)`). The real, runtime expansion path lives in
 /// `predicate_expand.rs`, which special-cases the only built-in predicate

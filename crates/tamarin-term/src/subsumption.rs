@@ -1,9 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Benedikt Schmidt, Jannik Dreier, Philip Lukert, Felix Yan,
-//   "Tom" (github BTom-GH), Charlie Jacomme, and other minor contributors
-//   (see upstream git history)
+//   meiersi, beschmi, felixonmars, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Rewriting/Definitions.hs,
+//   lib/term/src/Term/LTerm.hs,
+//   lib/term/src/Term/Rewriting/Definitions.hs,
 //   lib/term/src/Term/Subsumption.hs
 
 //! Port of `Term.Subsumption` — subsumption ordering on terms.
@@ -110,7 +110,7 @@ pub(crate) fn eq_term_subs(
 //     range var, the SET of context paths (`Occurence = [String]`) in
 //     which it appears.  The context path for a var is built innermost-
 //     first by `foldFreesOcc` (LTerm.hs:744-748 + the `[a]` instance
-//     LTerm.hs:843): the outer `[VTerm]` list prepends `show listIdx`,
+//     LTerm.hs:840-845, see line 843): the outer `[VTerm]` list prepends `show listIdx`,
 //     a `FApp (NoEq o)` prepends `unpack (fst o)` (the symbol name),
 //     and a `FApp (AC|C) o` prepends `show o` (the Haskell `Show` of
 //     the whole `FunSym`, e.g. `"AC Mult"` / `"C EMap"`), then descends
@@ -147,7 +147,7 @@ use std::collections::BTreeSet;
 type Occurence = Vec<String>;
 
 /// HS `show` of a non-`NoEq` `FunSym` used as a context label
-/// (`foldFreesOcc f (show o:c) as` for AC/C symbols, LTerm.hs:748).
+/// (`foldFreesOcc f (show o:c) as` for AC/C symbols, LTerm.hs:741-754, see line 748).
 /// Mirrors the derived `Show` for `FunSym`/`ACSym`/`CSym`.
 fn show_funsym_ac_c(sym: &FunSym) -> String {
     match sym {
@@ -187,7 +187,7 @@ fn show_funsym_ac_c(sym: &FunSym) -> String {
 ///
 /// **The NoEq vs AC/C asymmetry is load-bearing**: for a `NoEq` symbol the
 /// children `as :: [Term]` are folded via the `[a]` HasFrees instance
-/// (LTerm.hs:843), which prepends each child's `show argIdx` to the
+/// (LTerm.hs:840-845, see line 843), which prepends each child's `show argIdx` to the
 /// context.  But for an AC/C symbol HS does `mconcat $ map
 /// (foldFreesOcc f (show o:c)) as` — a DIRECT map over the children with
 /// the SAME `(show o : c)` context, bypassing the `[a]` instance, so the
@@ -224,7 +224,7 @@ fn fold_frees_occ_term(t: &LNTerm, ctx: &Occurence, out: &mut Vec<(LVar, Occuren
 /// `varOccurences (rangeVFresh subst)` — for each range var, the SET of
 /// context paths in which it occurs.  The argument is the list of range
 /// terms in domain-key order; the outer `[VTerm]` list instance
-/// prepends `show listIdx` to each term's context (LTerm.hs:843).
+/// prepends `show listIdx` to each term's context (LTerm.hs:840-845, see line 843).
 fn var_occurences(range_terms: &[LNTerm]) -> BTreeMap<LVar, BTreeSet<Occurence>> {
     let mut pairs: Vec<(LVar, Occurence)> = Vec::new();
     for (i, t) in range_terms.iter().enumerate() {

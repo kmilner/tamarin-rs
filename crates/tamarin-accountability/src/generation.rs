@@ -1,5 +1,5 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Kevin Morio, Artur Cygan, Robert Künnemann, and other minor contributors
+//   kevinmorio, arcz, rkunnema, xaDxelA, and other minor contributors
 //   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/accountability/src/Accountability/Generation.hs,
@@ -14,7 +14,7 @@
 //! order `casesLemmas` fixes (Generation.hs:249-261): all `suff`, then
 //! `verif_empty`, then all `verif_nonempty`, `min`, `uniq`, `inj`, `single`.
 //! A single fresh counter starting at 0 (HS `evalFreshT (casesLemmas ..) 0`,
-//! Generation.hs:264) is threaded through the families that call `rename`
+//! Generation.hs:263-264, see line 264) is threaded through the families that call `rename`
 //! (`suff`, `min`, `single`), in exactly that visitation order.
 
 use tamarin_parser::ast as p;

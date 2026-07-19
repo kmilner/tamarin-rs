@@ -1,11 +1,11 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann, Simon Meier, Jannik Dreier, Kevin Morio, Hong-Thai
-//   Luu, Charlie Jacomme, Artur Cygan, Yavor Ivanov, Philip Lukert, Benedikt
-//   Schmidt, "ValentinYuri" (github), Ralf Sasse, and other minor
-//   contributors (see upstream git history)
+//   meiersi, rkunnema, jdreier, kevinmorio, charlie-j, arcz, yavivanov,
+//   Hong-Thai, beschmi, PhilipLukertWork, rsasse, ValentinYuri,
+//   xaDxelA, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/Basetranslation.hs, lib/sapic/src/Sapic/Facts.hs,
-//   lib/theory/src/Rule.hs, lib/theory/src/Theory/Model/Rule.hs,
+//   lib/sapic/src/Sapic/Basetranslation.hs,
+//   lib/sapic/src/Sapic/Facts.hs, lib/theory/src/Rule.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
 //   lib/theory/src/Theory/Text/Parser/Rule.hs
 
 //! Port of `Sapic.Facts` (`lib/sapic/src/Sapic/Facts.hs`) — the
@@ -63,27 +63,27 @@ pub enum TransFact {
     State(StateKind, ProcessPosition, Vec<LVar>),
     /// A literal user MSR fact (`TamarinFact`).
     TamarinFact(LNFact),
-    /// `PureCell t1 t2` (Facts.hs:108): `L_PureState( t1, t2 )` — the pure-state
+    /// `PureCell t1 t2` (Facts.hs:96-109, see line 108): `L_PureState( t1, t2 )` — the pure-state
     /// cell content (used only when the state-channel optimisation is enabled).
     PureCell(LNTerm, LNTerm),
-    /// `CellLocked t1 t2` (Facts.hs:109): `L_CellLocked( t1, t2 )` — the
+    /// `CellLocked t1 t2` (Facts.hs:96-109, see line 109): `L_CellLocked( t1, t2 )` — the
     /// pure-state lock token.
     CellLocked(LNTerm, LNTerm),
-    /// `FLet p t vars` (Facts.hs:100): `Let_<pos>( t, v1, .., vn )` — the
+    /// `FLet p t vars` (Facts.hs:96-109, see line 100): `Let_<pos>( t, v1, .., vn )` — the
     /// intermediate fact a `let` combinator threads its RHS / matched LHS
     /// through (Basetranslation.hs:252-277).  `vars` are the bound variables in
     /// scope (rendered sorted, like `State`).
     FLet(ProcessPosition, LNTerm, Vec<LVar>),
-    /// `Message t t'` (Facts.hs:101): `Message( c, m )` — a message in transit
+    /// `Message t t'` (Facts.hs:96-109, see line 101): `Message( c, m )` — a message in transit
     /// on a private channel (Basetranslation.hs ChIn/ChOut with a channel).
     Message(LNTerm, LNTerm),
-    /// `Ack t t'` (Facts.hs:102): `Ack( c, m )` — the synchronous acknowledgement
+    /// `Ack t t'` (Facts.hs:96-109, see line 102): `Ack( c, m )` — the synchronous acknowledgement
     /// for a private-channel message (non-async-channels case).
     Ack(LNTerm, LNTerm),
-    /// `MessageIDSender p` (Facts.hs:104, 262): `MID_Sender( ~mid_<pos> )` — the
+    /// `MessageIDSender p` (Facts.hs:96-109, see line 104, 262): `MID_Sender( ~mid_<pos> )` — the
     /// reliable-channel sender message-id fact.
     MessageIDSender(ProcessPosition),
-    /// `MessageIDReceiver p` (Facts.hs:105, 263): `MID_Receiver( ~mid_<pos> )` —
+    /// `MessageIDReceiver p` (Facts.hs:96-109, see line 105, 263): `MID_Receiver( ~mid_<pos> )` —
     /// the reliable-channel receiver message-id fact.
     MessageIDReceiver(ProcessPosition),
 }
@@ -96,44 +96,44 @@ pub enum TransAction {
     EventEmpty,
     /// A literal user action fact (`TamarinAct`).
     TamarinAct(LNFact),
-    /// `PredicateA f` (Facts.hs:74): renders `f` with its name prefixed by
+    /// `PredicateA f` (Facts.hs:55-81, see line 74): renders `f` with its name prefixed by
     /// `Pred_` (used by the positive arm of `if t1 = t2`).
     PredicateA(LNFact),
-    /// `NegPredicateA f` (Facts.hs:75): renders `f` with its name prefixed by
+    /// `NegPredicateA f` (Facts.hs:55-81, see line 75): renders `f` with its name prefixed by
     /// `Pred_Not_` (the negative arm of `if t1 = t2`).
     NegPredicateA(LNFact),
     // --- mutable state (Facts.hs) ---
-    /// `IsIn t v` (Facts.hs:220): `IsIn( t, v )` — the lookup-found action.
+    /// `IsIn t v` (Facts.hs:213-234, see line 220): `IsIn( t, v )` — the lookup-found action.
     IsIn(LNTerm, LVar),
-    /// `IsNotSet t` (Facts.hs:221): `IsNotSet( t )` — the lookup-not-found action.
+    /// `IsNotSet t` (Facts.hs:213-234, see line 221): `IsNotSet( t )` — the lookup-not-found action.
     IsNotSet(LNTerm),
-    /// `InsertA t1 t2` (Facts.hs:222): `Insert( t1, t2 )`.
+    /// `InsertA t1 t2` (Facts.hs:213-234, see line 222): `Insert( t1, t2 )`.
     InsertA(LNTerm, LNTerm),
-    /// `DeleteA t` (Facts.hs:223): `Delete( t )`.
+    /// `DeleteA t` (Facts.hs:213-234, see line 223): `Delete( t )`.
     DeleteA(LNTerm),
     // --- locks (Facts.hs) ---
-    /// `LockNamed t v` (Facts.hs:228): `Lock_<idx v>( '<idx v>', v, t )`.
+    /// `LockNamed t v` (Facts.hs:213-234, see line 228): `Lock_<idx v>( '<idx v>', v, t )`.
     LockNamed(LNTerm, LVar),
-    /// `LockUnnamed t v` (Facts.hs:229): `Lock( '<idx v>', v, t )`.
+    /// `LockUnnamed t v` (Facts.hs:213-234, see line 229): `Lock( '<idx v>', v, t )`.
     LockUnnamed(LNTerm, LVar),
-    /// `UnlockNamed t v` (Facts.hs:230): `Unlock_<idx v>( '<idx v>', v, t )`.
+    /// `UnlockNamed t v` (Facts.hs:213-234, see line 230): `Unlock_<idx v>( '<idx v>', v, t )`.
     UnlockNamed(LNTerm, LVar),
-    /// `UnlockUnnamed t v` (Facts.hs:231): `Unlock( '<idx v>', v, t )`.
+    /// `UnlockUnnamed t v` (Facts.hs:213-234, see line 231): `Unlock( '<idx v>', v, t )`.
     UnlockUnnamed(LNTerm, LVar),
-    /// `ChannelIn t` (Facts.hs:69, 224): `ChannelIn( t )` — emitted by `in`
+    /// `ChannelIn t` (Facts.hs:55-81, see line 69, 224): `ChannelIn( t )` — emitted by `in`
     /// actions when the theory has a lemma needing the `in_event` restriction
     /// (`needsAssImmediate`).
     ChannelIn(LNTerm),
-    /// `ProgressFrom p` (Facts.hs:77, 232): `ProgressFrom_<pos>( ~prog_<pos> )`.
+    /// `ProgressFrom p` (Facts.hs:55-81, see line 77, 232): `ProgressFrom_<pos>( ~prog_<pos> )`.
     ProgressFrom(ProcessPosition),
-    /// `ProgressTo p pf` (Facts.hs:78, 233): `ProgressTo_<pos>( ~prog_<pf> )` —
+    /// `ProgressTo p pf` (Facts.hs:55-81, see line 78, 233): `ProgressTo_<pos>( ~prog_<pf> )` —
     /// the action is named for `p` but carries the progress variable of `pf`
     /// (the inverse position, for verification speedup).
     ProgressTo(ProcessPosition, ProcessPosition),
-    /// `Send p t` (Facts.hs:80, 218): `Send( ~mid_<pos>, t )` — reliable-channel
+    /// `Send p t` (Facts.hs:55-81, see line 80, 218): `Send( ~mid_<pos>, t )` — reliable-channel
     /// send action.
     Send(ProcessPosition, LNTerm),
-    /// `Receive p t` (Facts.hs:81, 219): `Receive( ~mid_<pos>, t )` —
+    /// `Receive p t` (Facts.hs:55-81, see line 81, 219): `Receive( ~mid_<pos>, t )` —
     /// reliable-channel receive action.
     Receive(ProcessPosition, LNTerm),
 }
@@ -186,12 +186,12 @@ pub fn fact_to_fact(f: &TransFact) -> LNFact {
         }
         TransFact::TamarinFact(f) => f.clone(),
         // `factToFact (PureCell t1 t2) = protoFact Linear "L_PureState" [t1, t2]`
-        // (Facts.hs:269).
+        // (Facts.hs:253-270, see line 269).
         TransFact::PureCell(t1, t2) => {
             proto_fact(Multiplicity::Linear, "L_PureState", vec![t1.clone(), t2.clone()])
         }
         // `factToFact (CellLocked t1 t2) = protoFact Linear "L_CellLocked" [t1, t2]`
-        // (Facts.hs:270).
+        // (Facts.hs:253-270, see line 270).
         TransFact::CellLocked(t1, t2) => {
             proto_fact(Multiplicity::Linear, "L_CellLocked", vec![t1.clone(), t2.clone()])
         }
@@ -208,24 +208,24 @@ pub fn fact_to_fact(f: &TransFact) -> LNFact {
             proto_fact(Multiplicity::Linear, &full, ts)
         }
         // `factToFact (Message t t') = protoFact Linear "Message" [t, t']`
-        // (Facts.hs:260) — the private-channel message-in-transit fact.
+        // (Facts.hs:253-270, see line 260) — the private-channel message-in-transit fact.
         TransFact::Message(t1, t2) => {
             proto_fact(Multiplicity::Linear, "Message", vec![t1.clone(), t2.clone()])
         }
-        // `factToFact (Ack t t') = protoFact Linear "Ack" [t, t']` (Facts.hs:261)
+        // `factToFact (Ack t t') = protoFact Linear "Ack" [t, t']` (Facts.hs:253-270, see line 261)
         // — the private-channel acknowledgement fact.
         TransFact::Ack(t1, t2) => {
             proto_fact(Multiplicity::Linear, "Ack", vec![t1.clone(), t2.clone()])
         }
         // `factToFact (MessageIDSender p) = protoFact Linear "MID_Sender" [varTerm $ varMID p]`
-        // (Facts.hs:262).
+        // (Facts.hs:253-270, see line 262).
         TransFact::MessageIDSender(p) => proto_fact(
             Multiplicity::Linear,
             "MID_Sender",
             vec![VTerm::Lit(Lit::Var(var_mid(p)))],
         ),
         // `factToFact (MessageIDReceiver p) = protoFact Linear "MID_Receiver" [varTerm $ varMID p]`
-        // (Facts.hs:263).
+        // (Facts.hs:253-270, see line 263).
         TransFact::MessageIDReceiver(p) => proto_fact(
             Multiplicity::Linear,
             "MID_Receiver",
@@ -241,37 +241,37 @@ pub fn action_to_fact(a: &TransAction) -> LNFact {
         TransAction::EventEmpty => proto_fact(Multiplicity::Linear, "Event", vec![]),
         TransAction::TamarinAct(f) => f.clone(),
         // `actionToFact (PredicateA f) = mapFactName ("Pred_" ++) f`
-        // (Facts.hs:226).
+        // (Facts.hs:213-234, see line 226).
         TransAction::PredicateA(f) => map_fact_name(f, "Pred_"),
         // `actionToFact (NegPredicateA f) = mapFactName ("Pred_Not_" ++) f`
-        // (Facts.hs:227).
+        // (Facts.hs:213-234, see line 227).
         TransAction::NegPredicateA(f) => map_fact_name(f, "Pred_Not_"),
         // `actionToFact (IsIn t v) = protoFact Linear "IsIn" [t, varTerm v]`
-        // (Facts.hs:220).
+        // (Facts.hs:213-234, see line 220).
         TransAction::IsIn(t, v) => proto_fact(
             Multiplicity::Linear,
             "IsIn",
             vec![t.clone(), VTerm::Lit(Lit::Var(v.clone()))],
         ),
-        // `actionToFact (IsNotSet t) = protoFact Linear "IsNotSet" [t]` (Facts.hs:221).
+        // `actionToFact (IsNotSet t) = protoFact Linear "IsNotSet" [t]` (Facts.hs:213-234, see line 221).
         TransAction::IsNotSet(t) => proto_fact(Multiplicity::Linear, "IsNotSet", vec![t.clone()]),
         // `actionToFact (InsertA t1 t2) = protoFact Linear "Insert" [t1, t2]`
-        // (Facts.hs:222).
+        // (Facts.hs:213-234, see line 222).
         TransAction::InsertA(t1, t2) => {
             proto_fact(Multiplicity::Linear, "Insert", vec![t1.clone(), t2.clone()])
         }
-        // `actionToFact (DeleteA t) = protoFact Linear "Delete" [t]` (Facts.hs:223).
+        // `actionToFact (DeleteA t) = protoFact Linear "Delete" [t]` (Facts.hs:213-234, see line 223).
         TransAction::DeleteA(t) => proto_fact(Multiplicity::Linear, "Delete", vec![t.clone()]),
         // `actionToFact (LockNamed t v) =
         //    protoFact Linear (lockFactName v) [lockPubTerm v, varTerm v, t]`
-        // (Facts.hs:228).
+        // (Facts.hs:213-234, see line 228).
         TransAction::LockNamed(t, v) => proto_fact(
             Multiplicity::Linear,
             &lock_fact_name(v),
             vec![lock_pub_term(v), VTerm::Lit(Lit::Var(v.clone())), t.clone()],
         ),
         // `actionToFact (LockUnnamed t v) =
-        //    protoFact Linear "Lock" [lockPubTerm v, varTerm v, t]` (Facts.hs:229).
+        //    protoFact Linear "Lock" [lockPubTerm v, varTerm v, t]` (Facts.hs:213-234, see line 229).
         TransAction::LockUnnamed(t, v) => proto_fact(
             Multiplicity::Linear,
             "Lock",
@@ -279,25 +279,25 @@ pub fn action_to_fact(a: &TransAction) -> LNFact {
         ),
         // `actionToFact (UnlockNamed t v) =
         //    protoFact Linear (unlockFactName v) [lockPubTerm v, varTerm v, t]`
-        // (Facts.hs:230).
+        // (Facts.hs:213-234, see line 230).
         TransAction::UnlockNamed(t, v) => proto_fact(
             Multiplicity::Linear,
             &unlock_fact_name(v),
             vec![lock_pub_term(v), VTerm::Lit(Lit::Var(v.clone())), t.clone()],
         ),
         // `actionToFact (UnlockUnnamed t v) =
-        //    protoFact Linear "Unlock" [lockPubTerm v, varTerm v, t]` (Facts.hs:231).
+        //    protoFact Linear "Unlock" [lockPubTerm v, varTerm v, t]` (Facts.hs:213-234, see line 231).
         TransAction::UnlockUnnamed(t, v) => proto_fact(
             Multiplicity::Linear,
             "Unlock",
             vec![lock_pub_term(v), VTerm::Lit(Lit::Var(v.clone())), t.clone()],
         ),
         // `actionToFact (ChannelIn t) = protoFact Linear "ChannelIn" [t]`
-        // (Facts.hs:224).
+        // (Facts.hs:213-234, see line 224).
         TransAction::ChannelIn(t) => proto_fact(Multiplicity::Linear, "ChannelIn", vec![t.clone()]),
         // `actionToFact (ProgressFrom p) =
         //    protoFact Linear ("ProgressFrom_" ++ prettyPosition p) [varTerm $ varProgress p]`
-        // (Facts.hs:232).
+        // (Facts.hs:213-234, see line 232).
         TransAction::ProgressFrom(p) => proto_fact(
             Multiplicity::Linear,
             &format!("ProgressFrom_{}", pretty_position(p)),
@@ -305,21 +305,21 @@ pub fn action_to_fact(a: &TransAction) -> LNFact {
         ),
         // `actionToFact (ProgressTo p pf) =
         //    protoFact Linear ("ProgressTo_" ++ prettyPosition p) [varTerm $ varProgress pf]`
-        // (Facts.hs:233).  NOTE: name uses `p`, but the term is `varProgress pf`.
+        // (Facts.hs:213-234, see line 233).  NOTE: name uses `p`, but the term is `varProgress pf`.
         TransAction::ProgressTo(p, pf) => proto_fact(
             Multiplicity::Linear,
             &format!("ProgressTo_{}", pretty_position(p)),
             vec![VTerm::Lit(Lit::Var(var_progress(pf)))],
         ),
         // `actionToFact (Send p t) = protoFact Linear "Send" [varTerm $ varMsgId p, t]`
-        // (Facts.hs:218).
+        // (Facts.hs:213-234, see line 218).
         TransAction::Send(p, t) => proto_fact(
             Multiplicity::Linear,
             "Send",
             vec![VTerm::Lit(Lit::Var(var_mid(p))), t.clone()],
         ),
         // `actionToFact (Receive p t) = protoFact Linear "Receive" [varTerm $ varMsgId p, t]`
-        // (Facts.hs:219).
+        // (Facts.hs:213-234, see line 219).
         TransAction::Receive(p, t) => proto_fact(
             Multiplicity::Linear,
             "Receive",
@@ -495,7 +495,7 @@ pub struct AnnotatedRule<Ann> {
     pub prems: Vec<TransFact>,
     pub acts: Vec<TransAction>,
     pub concs: Vec<TransFact>,
-    /// Embedded restrictions (HS `restr :: [SyntacticLNFormula]`, Facts.hs:123).
+    /// Embedded restrictions (HS `restr :: [SyntacticLNFormula]`, Facts.hs:116-125, see line 123).
     /// Carried as parser-AST formulas so they flow through the existing
     /// `_restrict` expansion (`rule_restriction::lift_rule_restrictions`).
     /// Non-empty only for `if <formula>` arms (the `Cond` combinator).
@@ -527,7 +527,7 @@ fn role_from_process_name_list(names: &[String]) -> String {
     }
 }
 
-/// `stripNonAlphanumerical = filter isAlpha` (Facts.hs:401).
+/// `stripNonAlphanumerical = filter isAlpha` (Facts.hs:376-404, see line 401).
 fn strip_non_alphabetic(s: &str) -> String {
     s.chars().filter(|c| c.is_alphabetic()).collect()
 }

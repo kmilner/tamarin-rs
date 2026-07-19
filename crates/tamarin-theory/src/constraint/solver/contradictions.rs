@@ -1,10 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Benedikt Schmidt, Philip Lukert, "Pops"
-//   (github racoucho1u), Ralf Sasse, Robert Künnemann, Felix Linker, Charlie
-//   Jacomme, Niklas Medinger, "sans-sucre" (github), "Nynko" (github), Yavor
-//   Ivanov, Adrian Dapprich, Artur Cygan, Nick Moore, Katriel Cohn-Gordon,
-//   Felix Yan, "ValentinYuri" (github), "Tom" (github BTom-GH), and other
-//   minor contributors (see upstream git history)
+//   meiersi, jdreier, beschmi, racoucho1u, rsasse, PhilipLukertWork,
+//   felixlinker, rkunnema, kevinmorio, yavivanov, arcz, Nick Moore,
+//   katrielalex, addap, charlie-j, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Rewriting/Norm.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Contradictions.hs,
@@ -89,7 +87,7 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     // identity instead by running `substSystem` — which applies the
     // eq-store subst to sEdges/sLessAtoms/sNodes (Reduction.hs:571-602)
     // — BEFORE the contradiction check (e.g. `solve` → `simplifySystem`
-    // ends in `void substSystem`, Simplify.hs:82, immediately before
+    // ends in `void substSystem`, Simplify.hs:56-158, see line 82, immediately before
     // `contradictorySystem`, Sources.hs:176-178).
     //
     // RS's `subst_system` does the same propagation, but isn't always
@@ -277,7 +275,7 @@ fn has_non_normal_terms(ctx: &ProofContext, sys: &System) -> bool {
     // `maybe_not_nf_subterms`) — fails `nf_via_haskell`, the system has a
     // non-normal term.  Constants are in NF; irreducible-headed apps recurse
     // into their args.  This is the boolean OR of `maybeNonNormalTerms` ∘
-    // `maybeNotNfSubterms` over `nf'` (Norm.hs:131), but without building the
+    // `maybeNotNfSubterms` over `nf'` (Norm.hs:130-131, see line 131), but without building the
     // `BTreeSet` of every candidate: the dedup is irrelevant to an OR, and
     // `nf_via_haskell` is a side-effect-free structural check, so visiting a
     // subterm more than once cannot change the verdict.
@@ -798,7 +796,7 @@ fn has_forbidden_chain(
         if !matches!(conc_fact.tag, FactTag::Kd) { continue; }
         if !matches!(prem_fact.tag, FactTag::Kd) { continue; }
         // Mirror HS `substNodes` — node conc terms are kept eq-store-
-        // substituted by `substSystem` (Reduction.hs:609 `modM sNodes . M.map
+        // substituted by `substSystem` (Reduction.hs:609-611 `modM sNodes . M.map
         // . apply =<< getM sSubst`, run after every reduction/variant fold),
         // and the contradiction check runs after simplifySystem→substSystem
         // (Sources.hs:177-178), so HS's `nodeConcFact` (System.hs:937-938, a

@@ -1,11 +1,7 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Robert Künnemann, Benedikt Schmidt, Hong-
-//   Thai Luu, "Pops" (github racoucho1u), Philip Lukert, Felix Linker, Artur
-//   Cygan, Kevin Morio, Ralf Sasse, "Tom" (github BTom-GH), "ValentinYuri"
-//   (github), symphorien, Yavor Ivanov, Adrian Dapprich, Charlie Jacomme,
-//   Katriel Cohn-Gordon, Felix Yan, "sans-sucre" (github), Nick Moore,
-//   "Nynko" (github), and other minor contributors (see upstream git
-//   history)
+//   meiersi, beschmi, jdreier, PhilipLukertWork, rkunnema, rsasse,
+//   BTom-GH, charlie-j, arcz, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term.hs,
 //   lib/term/src/Term/Term/FunctionSymbols.hs,
@@ -16,12 +12,14 @@
 //   lib/theory/src/Theory/Model/Atom.hs,
 //   lib/theory/src/Theory/Model/Fact.hs,
 //   lib/theory/src/Theory/Model/Formula.hs,
-//   lib/theory/src/Theory/Model/Rule.hs, lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Proof.hs,
 //   lib/theory/src/Theory/ProofSkeleton.hs,
 //   lib/theory/src/Theory/Syntactic/Predicate.hs,
 //   lib/theory/src/Theory/Text/Parser/Formula.hs,
 //   lib/theory/src/Theory/Text/Parser/Term.hs,
-//   lib/theory/src/Theory/Text/Pretty.hs, lib/theory/src/TheoryObject.hs,
+//   lib/theory/src/Theory/Text/Pretty.hs,
+//   lib/theory/src/TheoryObject.hs,
 //   lib/utils/src/Text/PrettyPrint/Class.hs,
 //   lib/utils/src/Text/PrettyPrint/Highlight.hs, src/Main/Console.hs,
 //   src/Main/Mode/Intruder.hs
@@ -30,8 +28,8 @@
 //! `tamarin_theory::guarded::Guarded`.
 //!
 //! Ports of Haskell `prettyLNFormula`/`prettyGuarded` from
-//! `lib/theory/src/Theory/Model/Formula.hs:511` and
-//! `lib/theory/src/Theory/Constraint/System/Guarded.hs:822`.
+//! `lib/theory/src/Theory/Model/Formula.hs:471-511, see line 511` and
+//! `lib/theory/src/Theory/Constraint/System/Guarded.hs:812-817, see line 822`.
 //!
 //! Output uses Tamarin's interactive UI math glyphs:
 //!   `∀`, `∃`, `⇒`, `∧`, `∨`, `¬`, `⊤`, `⊥`, `@`, `<`, `=`, `⊏`,
@@ -54,7 +52,7 @@ use crate::guarded::{Guarded, Quant};
 /// receives a `.<idx>` suffix per HS `show LVar` (LTerm.hs:525-532).
 ///
 /// Mirrors HS `LVar`'s role inside the `Precise.Fresh` monad used by
-/// `prettyLNFormula` (Formula.hs:511) and `prettyGuarded`
+/// `prettyLNFormula` (Formula.hs:471-511, see line 511) and `prettyGuarded`
 /// (Guarded.hs:822-864).
 /// `(source_name, sort, display_name, source_idx)`.  The `source_idx` is
 /// the binder var's ORIGINAL index (HS `lvarIdx`); it lets the body-var
@@ -94,7 +92,7 @@ pub fn pretty_formula(f: &p::Formula) -> String {
 ///
 /// HS's `Text.PrettyPrint.HughesPJ` decides "does flat fit on this
 /// line" via `fits ((w `min` r) - sl) p` (HughesPJ.hs:873), where
-///   - `w = lineLength` (Main/Console.hs:236, `lineWidth = 110`),
+///   - `w = lineLength` (Main/Console.hs:227-239, see line 236, `lineWidth = 110`),
 ///   - `r = ribbonLength = round(lineLength / ribbonsPerLine) = 73`
 ///     (HughesPJ.hs:1010, `defaultStyle.ribbonsPerLine = 1.5`,
 ///     HughesPJ.hs:940),
@@ -129,7 +127,7 @@ pub fn lemma_header_line(quant: &str, f: &p::Formula) -> String {
     use crate::pretty_hpj::{self as hpj, Doc};
     let mut state = avoid_precise_formula(f);
     let formula_doc = formula_to_doc(f, &[], &mut state);
-    // `doubleQuotes d = "\"" <> d <> "\""` (Class.hs:148).
+    // `doubleQuotes d = "\"" <> d <> "\""` (Class.hs:148-148).
     let dq = Doc::text("\"").beside(formula_doc).beside(Doc::text("\""));
     // `sep [quant, dq]` then `nest 2`.
     let line = hpj::sep(vec![Doc::text(quant), dq]).nest(2);
@@ -137,7 +135,7 @@ pub fn lemma_header_line(quant: &str, f: &p::Formula) -> String {
 }
 
 /// Render `nest n $ doubleQuotes (prettyLNFormula f)` through the
-/// HS-faithful engine (the restriction-body shape, TheoryObject.hs:850).
+/// HS-faithful engine (the restriction-body shape, TheoryObject.hs:846-858, see line 850).
 /// The `nest n` indent is included in the output; the `"` is a real Doc
 /// `beside` so the formula's wrapped continuation lines indent to the
 /// formula's start column.
@@ -184,12 +182,12 @@ pub fn pretty_guarded(g: &Guarded) -> String {
 /// out with the same `get1` per-NilAbove `w`-shrinkage HughesPJ uses
 /// (HughesPJ.hs:1011).  `indent` is the column where the formula's first
 /// char will land (e.g. 1, right after the opening `"` of the lemma's
-/// `doubleQuotes` wrap, Lemma.hs:138/141).
+/// `doubleQuotes` wrap, Lemma.hs:116-141, see line 138/141).
 ///
 /// NOTE: `render_at`'s `sl_initial` only shrinks the budget; it does NOT
 /// shift continuation lines by the leading prefix width.  In HS the
 /// `prettyGuarded` doc is the RIGHT operand of `doubleQuotes`'s `<>`
-/// (`"\"" <> prettyGuarded <> "\""`, Class.hs:148), and HughesPJ `beside`
+/// (`"\"" <> prettyGuarded <> "\""`, Class.hs:148-148), and HughesPJ `beside`
 /// DOES shift the right doc's vertical layout by the leading `"`'s width
 /// (1 col).  Callers that place the formula after a 1-col prefix must use
 /// `pretty_guarded_doublequoted` (which models the `"` as a real Doc
@@ -204,7 +202,7 @@ fn pretty_guarded_wrapped(g: &Guarded, indent: usize) -> String {
     doc.render_at(hpj::LINE_LENGTH, hpj::RIBBON, indent)
 }
 
-/// HS `doubleQuotes (prettyGuarded gf)` (Lemma.hs:138/141, Class.hs:148).
+/// HS `doubleQuotes (prettyGuarded gf)` (Lemma.hs:116-141, see line 138/141, Class.hs:148-148).
 /// Builds `"\"" <> guarded_doc <> "\""` as a single Doc and renders it,
 /// so HughesPJ `beside`'s column-shift puts continuation lines at the
 /// formula's start column (1, right after the opening quote) — matching
@@ -219,7 +217,7 @@ pub fn pretty_guarded_doublequoted(g: &Guarded) -> String {
 /// HS bare `prettyGuarded gf` (Guarded.hs:822-864) as a Doc — WITHOUT the
 /// lemma path's `doubleQuotes` wrap.  This is what
 /// `prettyNonGraphSystem` renders the `sFormulas` / `sLemmas` /
-/// `sSolvedFormulas` sections with (System.hs:1677/1680/1682), so the
+/// `sSolvedFormulas` sections with (System.hs:1673-1686, see line 1677/1680/1682), so the
 /// formula participates in the surrounding pane Doc and wraps at the
 /// pane's width/nesting exactly as in HS.
 pub(crate) fn guarded_doc(g: &Guarded) -> crate::pretty_hpj::Doc {
@@ -239,12 +237,12 @@ pub fn disj_goal_to_doc(gfs: &[Guarded]) -> crate::pretty_hpj::Doc {
         .map(|g| {
             let mut state = avoid_precise_guarded(g);
             let inner = guarded_to_doc(g, &[], &mut state);
-            // `nest 1 (parens (prettyGuarded gf))` — `parens` (Class.hs:149)
+            // `nest 1 (parens (prettyGuarded gf))` — `parens` (Class.hs:149-149)
             // is `char '(' <> d <> char ')'` (PLAIN).
             Doc::char('(').beside(inner).beside(Doc::char(')')).nest(1)
         })
         .collect();
-    // HS `punctuate (operator_ "  ∥")` (Constraints.hs:276) — the `∥`
+    // HS `punctuate (operator_ "  ∥")` (Constraints.hs:273-288, see line 276) — the `∥`
     // separator is an `hl_operator` span.
     let punct = hpj::punctuate(hpj::operator_("  \u{2225}"), items); // "  ∥"
     hpj::fsep(punct)
@@ -415,7 +413,7 @@ pub fn rule_body_to_doc(
 // ============================================================================
 // Intruder-variant rendering — the `tamarin-prover variants` subcommand.
 //
-// HS `prettyIntruderVariants` (Theory/Model/Rule.hs:1343):
+// HS `prettyIntruderVariants` (Theory/Model/Rule.hs:1343-1346):
 //   `vcat . intersperse (text "") $ map prettyIntrRuleAC vs`
 // each rule via `prettyNamedRule (kwRuleModulo "AC") (const emptyDoc)`
 // (Rule.hs:1285-1287) = `header $-$ nest 2 body`, where the body is laid out
@@ -424,7 +422,7 @@ pub fn rule_body_to_doc(
 // the SAME `nest_short_doc` paren layout as `fact_to_doc`, only over the
 // runtime `LNFact` representation with atomic `pretty_lnterm` argument docs.
 // The two blocks (DH then BP) concatenate with NO separating newline
-// (HS `putStrLn (dhS ++ bpS)`, Main/Mode/Intruder.hs:53).
+// (HS `putStrLn (dhS ++ bpS)`, Main/Mode/Intruder.hs:43-63, see line 53).
 // ============================================================================
 
 /// Render one runtime `LNFact` as a Doc — the `LNFact` analogue of
@@ -513,7 +511,7 @@ fn intr_rule_name(r: &crate::rule::IntrRuleAC) -> String {
 }
 
 /// `renderDoc . prettyIntruderVariants` for a block of intruder rules
-/// (Theory/Model/Rule.hs:1343).  Each rule is `rule (modulo AC) NAME:` then
+/// (Theory/Model/Rule.hs:1343-1346).  Each rule is `rule (modulo AC) NAME:` then
 /// the `nest 2` body; rules are separated by ONE blank line
 /// (`vcat . intersperse (text "")`).  Returns the block with NO trailing
 /// newline, so a DH block and a BP block concatenate seamlessly (the DH
@@ -795,7 +793,7 @@ fn pp_qua(
     out: &mut String,
 ) {
     state.scope_freshness(|state| {
-        // HS `openFormulaPrefix` (Formula.hs:498) collapses `∀ x. ∀ y. P`
+        // HS `openFormulaPrefix` (Formula.hs:471-511, see line 498) collapses `∀ x. ∀ y. P`
         // to `∀ x y. P`.
         let (all_vs, inner_body) = open_formula_prefix(is_forall, vs, body);
         let new_scope = allocate_formula_binders_refs(&all_vs, scope, state);
@@ -905,7 +903,7 @@ fn formula_to_doc(
             let is_forall = matches!(f, Forall(_, _));
             let sym = if is_forall { "\u{2200} " } else { "\u{2203} " };
             state.scope_freshness(|state| {
-                // HS `openFormulaPrefix` (Formula.hs:498) collapses
+                // HS `openFormulaPrefix` (Formula.hs:471-511, see line 498) collapses
                 // `∀ x. ∀ y. P` to one binder block `∀ x y. P`.
                 let (all_vs, inner_body) = open_formula_prefix(is_forall, vs, body);
                 let new_scope = allocate_formula_binders_refs(&all_vs, scope, state);
@@ -948,13 +946,13 @@ fn atom_to_doc(a: &p::Atom, scope: &[Bind]) -> crate::pretty_hpj::Doc {
             term_to_doc(l, scope).beside_sp(hpj::operator_("=")),
             term_to_doc(r, scope),
         ]),
-        // HS `Subterm l r -> sep [ppT l <-> opSubterm, ppT r]` (Atom.hs:220).
+        // HS `Subterm l r -> sep [ppT l <-> opSubterm, ppT r]` (Atom.hs:212-224, see line 220).
         Subterm(l, r) => hpj::sep(vec![
             term_to_doc(l, scope).beside_sp(hpj::operator_("\u{228F}")),
             term_to_doc(r, scope),
         ]),
         // HS `Less u v -> text (show u) <-> opLess <-> text (show v)`
-        // (Atom.hs:221) — `<->` is `<+>`, no break.  Both operands are
+        // (Atom.hs:212-224, see line 221) — `<->` is `<+>`, no break.  Both operands are
         // timepoints (HS `nodevarTerm`), so resolve them temporally.
         Less(l, r) => temporal_term_to_doc(l, scope)
             .beside_sp(hpj::operator_("<"))
@@ -977,7 +975,7 @@ fn atom_to_doc(a: &p::Atom, scope: &[Bind]) -> crate::pretty_hpj::Doc {
             .beside_sp(hpj::operator_("@"))
             .beside_sp(temporal_term_to_doc(t, scope)),
         // HS `Last i -> operator_ "last" <> parens (text (show i))`
-        // (Atom.hs:222) — `<>` is no-space beside; `parens` is plain.
+        // (Atom.hs:212-224, see line 222) — `<>` is no-space beside; `parens` is plain.
         Last(t) => hpj::operator_("last")
             .beside(hpj::parens(temporal_term_to_doc(t, scope))),
         // HS syntactic-sugar predicate: `prettyPred (Pred fa) = prettyNFact fa`.
@@ -1020,13 +1018,13 @@ fn binop_to_doc(
 // `render_at` layout for both the full-formula and guarded wrapped paths.
 // =============================================================================
 
-/// HS ribbon width.  HS sets `lineWidth = 110` (`Main/Console.hs:236`)
+/// HS ribbon width.  HS sets `lineWidth = 110` (`Main/Console.hs:227-239, see line 236`)
 /// and `defaultStyle.ribbonsPerLine = 1.5` (`HughesPJ.hs:940`), giving
 /// `ribbonLen = round(110/1.5) = 73` (`HughesPJ.hs:1010`).
 pub const RIBBON: usize = 73;
 
 /// HS hard page width.  Mirrors `lineWidth = 110`
-/// (`Main/Console.hs:236`).
+/// (`Main/Console.hs:227-239, see line 236`).
 pub const LINE_LENGTH: usize = 110;
 
 /// Resolve an occurrence's display sort, mirroring HS's by-position parsing.
@@ -1316,14 +1314,14 @@ pub fn term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
             if args.is_empty() {
                 // HS checks `s == natOneSym` BEFORE the generic nullary
                 // fallthrough: `FApp (NoEq s) [] | s == natOneSym -> text
-                // "%1"` (Term/Term.hs:276).  `natOneSym = ("tone",
+                // "%1"` (Term/Term.hs:272-300, see line 276).  `natOneSym = ("tone",
                 // (0,Public,Constructor))`; the parser AST keeps only the
                 // name, so match on nullary "tone" (runtime nat-one reaches
                 // here as `App("tone", [])` via `lnterm_to_parser`).
                 if name == "tone" {
                     Doc::text("%1")
                 } else {
-                    // HS `FApp (NoEq (f,_)) [] -> text f` (Term/Term.hs:278).
+                    // HS `FApp (NoEq (f,_)) [] -> text f` (Term/Term.hs:272-300, see line 278).
                     Doc::text(name.clone())
                 }
             } else {
@@ -1331,7 +1329,7 @@ pub fn term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
             }
         }
         AlgApp(name, l, r) => fun_doc_two(name, l, r, scope),
-        // HS `prettyTerm` dedicated diff case (Term/Term.hs:275):
+        // HS `prettyTerm` dedicated diff case (Term/Term.hs:272-300, see line 275):
         //   `... | s == diffSym -> text "diff" <> "(" <> ppTerm t1 <>
         //         ", " <> ppTerm t2 <> ")"` — all `<>` (no `fsep`), so it is
         //   fully flat and never breaks at the comma (unlike the generic
@@ -1350,7 +1348,7 @@ pub fn term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
             // fcat structure as pairs, with `(`/`)` lead/finish and the AC-op
             // symbol as separator (no surrounding spaces).
             if matches!(op, p::BinOp::Exp) {
-                // HS `prettyTerm` (Term/Term.hs:274):
+                // HS `prettyTerm` (Term/Term.hs:272-300, see line 274):
                 //   `FApp (NoEq s) [t1,t2] | s == expSym -> ppTerm t1 <> "^" <> ppTerm t2`
                 // The exp itself never breaks at the `^`, but its operands are
                 // recursively `ppTerm`'d, so an AC exponent (e.g.
@@ -1432,7 +1430,7 @@ fn flatten_pair_gterms(
     flat
 }
 
-/// HS `ppTerms (ppACOp o) 1 "(" ")" ts` (Term/Term.hs:273,288-290) — a fcat
+/// HS `ppTerms (ppACOp o) 1 "(" ")" ts` (Term/Term.hs:272-300, see line 273,288-290) — a fcat
 /// of `text "("`, each element `nest 1`'d and AC-op-suffixed (except last),
 /// and `text ")"`.  Structurally identical to `pair_doc` with different
 /// lead/finish/separator.  The AC-op symbol carries NO surrounding spaces
@@ -1547,7 +1545,7 @@ fn gterm_to_doc(t: &crate::guarded::GTerm, scope: &[Vec<Bind>]) -> crate::pretty
             gfun_doc_refs(name, &[&**l, &**r], scope)
         }
         Diff(l, r) => {
-            // HS `prettyTerm` dedicated diff case (Term/Term.hs:275): fully
+            // HS `prettyTerm` dedicated diff case (Term/Term.hs:272-300, see line 275): fully
             // flat `text "diff" <> "(" <> ppTerm t1 <> ", " <> ppTerm t2 <>
             // ")"` (all `<>`, no `fsep`), so it never breaks at the comma
             // (unlike the generic `gfun_doc` path).
@@ -1559,7 +1557,7 @@ fn gterm_to_doc(t: &crate::guarded::GTerm, scope: &[Vec<Bind>]) -> crate::pretty
         }
         BinOp(op, l, r) => {
             // exp never breaks at `^`, but its operands are recursively
-            // `ppTerm`'d (Term/Term.hs:274 `ppTerm t1 <> "^" <> ppTerm t2`),
+            // `ppTerm`'d (Term/Term.hs:272-300, see line 274 `ppTerm t1 <> "^" <> ppTerm t2`),
             // so an AC exponent (`'g'^(~a*~b)`) keeps its inner `fcat` break
             // points.  Composing operand Docs with `beside` preserves them.
             if matches!(op, p::BinOp::Exp) {
@@ -1656,7 +1654,7 @@ fn gatom_to_doc(a: &crate::guarded::GAtom, scope: &[Vec<Bind>]) -> crate::pretty
             gterm_to_doc(r, scope),
         ]),
         // HS `Less u v -> text (show u) <-> opLess <-> text (show v)`
-        // (Atom.hs:221) — both operands are time-point LVars rendered via
+        // (Atom.hs:212-224, see line 221) — both operands are time-point LVars rendered via
         // `show`, fully flat. In well-formed input a `Less` operand is always
         // a node-var term (parser Formula.hs `blatom`), so the flat `pp_gterm`
         // rendering of a time-point Var matches HS `show` exactly.
@@ -1725,10 +1723,10 @@ fn pp_term(t: &p::Term, scope: &[Bind], out: &mut String) {
             out.push('\'');
         }
         Number(n) => out.push_str(&n.to_string()),
-        // HS `fAppOne = fAppNoEq oneSym []` (Term/Term.hs:127), and
+        // HS `fAppOne = fAppNoEq oneSym []` (Term/Term.hs:126-127, see line 127), and
         // `prettyTerm` has NO special case for `oneSym` (Term/Term.hs:266-280)
         // — a nullary `NoEq` symbol falls through to `text (BC.unpack f)`,
-        // i.e. its symbol string `"one"` (FunctionSymbols.hs:134,163).  The
+        // i.e. its symbol string `"one"` (FunctionSymbols.hs:134-134,163).  The
         // `1` keyword is only a *parser* spelling for this constant; HS always
         // renders it back as `one`.
         NumberOne => out.push_str("one"),
@@ -1739,11 +1737,11 @@ fn pp_term(t: &p::Term, scope: &[Bind], out: &mut String) {
         // function_symbols.rs:93).  NOT `1:msg`/`1`.
         DhNeutral => out.push_str("DH_neutral"),
         Pair(items) => {
-            // HS `prettyTerm` (Term/Term.hs:277,292-293):
+            // HS `prettyTerm` (Term/Term.hs:272-300, see line 277,292-293):
             //   `FApp pairSym _ -> ppTerms ", " 1 "<" ">" (split t)`
             //   `split (FPair t1 t2) = t1 : split t2`
             // HS's right-associative `tupleterm` parser
-            // (Theory/Text/Parser/Term.hs:188) makes `<a, b, c>` into
+            // (Theory/Text/Parser/Term.hs:187-188, see line 188) makes `<a, b, c>` into
             // `Pair(a, Pair(b, c))`. When the last item of a Pair is
             // itself a Pair (as in `<a, b, <c, d>>` →
             // `Pair(a, Pair(b, Pair(c, d)))`), HS's recursive `split`
@@ -1760,7 +1758,7 @@ fn pp_term(t: &p::Term, scope: &[Bind], out: &mut String) {
         }
         App(name, args) => {
             // Nullary nat-one first, as in HS: `FApp (NoEq s) [] | s ==
-            // natOneSym -> text "%1"` (Term/Term.hs:276) — the runtime
+            // natOneSym -> text "%1"` (Term/Term.hs:272-300, see line 276) — the runtime
             // constant reaches here as `App("tone", [])` via
             // `lnterm_to_parser` (see the `term_to_doc` twin arm).
             if name == "tone" && args.is_empty() {
@@ -1905,8 +1903,8 @@ fn bound_to_varspec(n: u32, scope: &[Vec<Bind>]) -> Option<p::VarSpec> {
 ///
 /// HS-faithful: `prettyGuarded` (Guarded.hs:846-849) renders a `GGuarded`
 /// via `openGuarded`, whose `openas`/`opengf` apply `substBoundAtom`/
-/// `substBound` — both `fmapTerm (fmap subst)` (Guarded.hs:290) which rebuild
-/// every `FApp` through `fApp`/`fAppAC` (Term/Raw.hs:111,118-122,208-209),
+/// `substBound` — both `fmapTerm (fmap subst)` (Guarded.hs:289-294, see line 290) which rebuild
+/// every `FApp` through `fApp`/`fAppAC` (Term/Raw.hs:110-117, see line 111,118-122,208-209),
 /// RE-SORTING AC arguments by the term Ord with the bound variable now a
 /// concrete `Free` LVar.  RS stores AC args in source order and renders by
 /// name lookup, so it must reproduce that re-sort at display time.  This
@@ -1979,14 +1977,14 @@ fn pp_guarded_inner(
             if paren_atomic { out.push(')'); }
         }
         Guarded::Disj(xs) if xs.is_empty() => {
-            // HS `pp (GDisj (Disj [])) = operator_ "⊥"` (Guarded.hs:831).
+            // HS `pp (GDisj (Disj [])) = operator_ "⊥"` (Guarded.hs:824-866, see line 831).
             // Caller's opParens still wraps to `(⊥)`.
             if paren_atomic { out.push('('); }
             out.push('\u{22A5}'); // ⊥
             if paren_atomic { out.push(')'); }
         }
         Guarded::Conj(xs) if xs.is_empty() => {
-            // HS `pp (GConj (Conj [])) = operator_ "⊤"` (Guarded.hs:838).
+            // HS `pp (GConj (Conj [])) = operator_ "⊤"` (Guarded.hs:824-866, see line 838).
             if paren_atomic { out.push('('); }
             out.push('\u{22A4}'); // ⊤
             if paren_atomic { out.push(')'); }
@@ -2051,9 +2049,9 @@ fn pp_gguarded(
     let mut new_scope: Vec<Vec<Bind>> = scope.to_vec();
     new_scope.push(alloc);
 
-    // HS `dante = pp (GConj (Conj antecedent))` (Guarded.hs:852).  When the
+    // HS `dante = pp (GConj (Conj antecedent))` (Guarded.hs:824-866, see line 852).  When the
     // antecedent is empty `pp (GConj (Conj [])) = operator_ "⊤"`
-    // (Guarded.hs:838); otherwise each guard atom is wrapped via `opParens`
+    // (Guarded.hs:824-866, see line 838); otherwise each guard atom is wrapped via `opParens`
     // and joined with ` ∧ ` (Guarded.hs:840-842).  Render dante into a local
     // buffer so the empty-antecedent ⊤ is emitted in EVERY non-shortcut
     // case, matching HS and the Doc path `gguarded_to_doc`.
@@ -2182,7 +2180,7 @@ fn guarded_to_doc(
                 .map(|x| gdoc_op_parens(guarded_to_doc(x, scope, state)))
                 .collect();
             let punct = hpj::punctuate(hpj::operator_(" \u{2228}"), ps); // " ∨"
-            // `parens` (Class.hs:149) is `char '(' <> d <> char ')'` — PLAIN.
+            // `parens` (Class.hs:149-149) is `char '(' <> d <> char ')'` — PLAIN.
             Doc::char('(').beside(hpj::sep(punct)).beside(Doc::char(')'))
         }
         Guarded::Conj(xs) => {
@@ -2217,7 +2215,7 @@ fn gguarded_to_doc(
     let mut new_scope: Vec<Vec<Bind>> = scope.to_vec();
     new_scope.push(alloc);
 
-    // `dante = nest 1 $ pp (GConj (Conj antecedent))` (Guarded.hs:854).
+    // `dante = nest 1 $ pp (GConj (Conj antecedent))` (Guarded.hs:824-866, see line 854).
     // The antecedent is `map (GAto ...) atoms`, so `pp (GConj ...)` =
     // `sep $ punctuate " ∧" (map opParens [GAto a])` — each guard is a
     // flat atom wrapped in opParens.
@@ -2362,7 +2360,7 @@ fn pp_gterm(t: &crate::guarded::GTerm, scope: &[Vec<Bind>], out: &mut String) {
         GTerm::NumberOne => out.push_str("one"),
         GTerm::NatOne => out.push_str("%1"),
         // HS renders `dhNeutralSym` (nullary NoEq) as its symbol string
-        // "DH_neutral" (Term/Term.hs:278), not `1`.
+        // "DH_neutral" (Term/Term.hs:272-300, see line 278), not `1`.
         GTerm::DhNeutral => out.push_str("DH_neutral"),
         GTerm::App(name, args) => {
             out.push_str(name);
@@ -2537,7 +2535,7 @@ mod tests {
 
     #[test]
     fn long_quantifier_varlist_wraps() {
-        // HS `ppVars = fsep . map (text . show)` (Formula.hs:508): a long
+        // HS `ppVars = fsep . map (text . show)` (Formula.hs:471-511, see line 508): a long
         // bound-var list wraps across lines, the continuation aligned after
         // the `∃ ` prefix (column 2, the `<>` nesting offset).  Build an
         // existential with enough vars to overflow the ribbon, body `⊥`.
@@ -2608,7 +2606,7 @@ mod tests {
 
     /// Build the parser Term `<'1', g1> ++ <'2', g2> ++ <'3', g3>` where the
     /// pair payloads are long enough that the flat AC chain exceeds the ribbon
-    /// and HS `prettyTerm` (Term/Term.hs:273 `FApp (AC o) -> ppTerms ...`) must
+    /// and HS `prettyTerm` (Term/Term.hs:272-300, see line 273 `FApp (AC o) -> ppTerms ...`) must
     /// wrap it with the `++` operator at line ends and each element `nest 1`'d.
     fn ac_chain_term() -> p::Term {
         let pair = |n: &str, payload: &str| {
@@ -2665,7 +2663,7 @@ mod tests {
     }
 
     /// Regression: the AC `*` exponent inside an `exp` term must keep its
-    /// `fcat` break points.  HS `prettyTerm` (Term/Term.hs:274) renders exp as
+    /// `fcat` break points.  HS `prettyTerm` (Term/Term.hs:272-300, see line 274) renders exp as
     /// `ppTerm t1 <> "^" <> ppTerm t2`, so the exponent `t2 = (~a*~b)` stays a
     /// breakable `fcat`: `hmac('g'^(~a*~b), ...)` must wrap the `*`-operands
     /// like HS rather than run past LINE_LENGTH=110.  Mirrors the spdm

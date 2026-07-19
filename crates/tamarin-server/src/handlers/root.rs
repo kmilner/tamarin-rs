@@ -1,9 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Artur Cygan, Jannik Dreier, Cas Cremers, Felix Linker,
-//   "Jackie" (github kanakanajm), Ralf Sasse, Yann Colomb, Benedikt Schmidt,
-//   "Tom" (github BTom-GH), Adrian Dapprich, Alexander Dax, symphorien,
-//   Jérôme (github Azurios-git), and other minor contributors (see upstream
-//   git history)
+//   meiersi, cascremers, arcz, jdreier, rsasse, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   src/Web/Hamlet.hs, src/Web/Handler.hs, src/Web/Types.hs
 
@@ -70,7 +67,7 @@ pub async fn post(
                 // `/* WARNING */` block, both from `entry.wf_report`).
                 alert_msg = Some("Loaded new theory!".into());
             }
-            // HS `postRootR` (src/Web/Handler.hs:803):
+            // HS `postRootR` (src/Web/Handler.hs:785-817, see line 803):
             //   `setMessage $ "Theory loading failed:\n" <> toHtml (show err)`
             // — a NEWLINE separates the prefix from the error, not a space.
             // The '\n' survives both HS Blaze escaping and our `html_escape`
@@ -194,7 +191,7 @@ pub use tamarin_utils::pretty_html::escape_html_entities as html_escape;
 mod tests {
     use super::*;
 
-    /// HS `postRootR` (src/Web/Handler.hs:803) separates the
+    /// HS `postRootR` (src/Web/Handler.hs:785-817, see line 803) separates the
     /// "Theory loading failed:" prefix from the error body with a NEWLINE:
     ///   `setMessage $ "Theory loading failed:\n" <> toHtml (show err)`.
     /// We mirror that exact prefix (newline, not space).

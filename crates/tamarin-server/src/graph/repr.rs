@@ -1,15 +1,14 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Adrian Dapprich, Robert Künnemann, Jannik Dreier, Mathias
-//   Aurand, Hong-Thai Luu, Yavor Ivanov, Philip Lukert, Benedikt Schmidt,
-//   Artur Cygan, "ValentinYuri" (github), Felix Linker, Ralf Sasse, "sans-
-//   sucre" (github), Kevin Morio, and other minor contributors (see upstream
-//   git history)
+//   addap, Mathias-AURAND, meiersi, rkunnema, sans-sucre, yavivanov,
+//   and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Rule.hs, lib/theory/src/Theory/Constraint/System/Dot.hs,
+//   lib/theory/src/Rule.hs,
+//   lib/theory/src/Theory/Constraint/System/Dot.hs,
 //   lib/theory/src/Theory/Constraint/System/Graph/Graph.hs,
 //   lib/theory/src/Theory/Constraint/System/Graph/GraphRepr.hs,
 //   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/Text/Parser/Rule.hs, lib/utils/src/Text/Dot.hs
+//   lib/theory/src/Theory/Text/Parser/Rule.hs,
+//   lib/utils/src/Text/Dot.hs
 
 //! Port of `Theory.Constraint.System.Graph.GraphRepr` —
 //! intermediate representation of a `System` as nodes/edges/clusters
@@ -218,7 +217,7 @@ pub fn find_connected_components<'a>(
             }
         }
         // HS `component = filter (\node -> get nNodeId node `elem` componentIds)
-        // (n:ns)` (GraphRepr.hs:190): component nodes are kept in the ORIGINAL
+        // (n:ns)` (GraphRepr.hs:170-192, see line 190): component nodes are kept in the ORIGINAL
         // `nodes` order, not DFS discovery order.  Filtering the full `nodes`
         // slice is safe because each node belongs to exactly one component
         // (globally `visited`), so the per-component relative order matches HS.
@@ -272,7 +271,7 @@ pub fn add_cluster(
     //
     // Nodes too must be removed by STRUCTURAL equality, mirroring HS
     // `remainingNodes = filter (`notElem` clusteredNodes) grNodes`
-    // (GraphRepr.hs:127): a node id can appear TWICE in `grNodes` with
+    // (GraphRepr.hs:117-130, see line 127): a node id can appear TWICE in `grNodes` with
     // different types — e.g. the last-atom id is pushed both as a
     // `SystemNode` and as a free `LastAction` ellipse (see
     // `compute_basic_graph_repr`).  When the SystemNode is clustered,

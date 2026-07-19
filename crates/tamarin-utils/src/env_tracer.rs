@@ -1,5 +1,5 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Adrian Dapprich
+//   addap
 // Ported from upstream tamarin-prover sources:
 //   lib/utils/src/Debug/Trace/EnvTracer.hs
 

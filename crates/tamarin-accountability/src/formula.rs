@@ -1,7 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Kevin Morio, Robert Künnemann, Benedikt Schmidt, Artur
-//   Cygan, Jannik Dreier, Philip Lukert, "Tom" (github BTom-GH), Charlie
-//   Jacomme, and other minor contributors (see upstream git history)
+//   kevinmorio, meiersi, rkunnema, arcz, beschmi, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/accountability/src/Accountability/Generation.hs,
 //   lib/term/src/Term/LTerm.hs, lib/theory/src/Theory/Model/Formula.hs,
@@ -930,7 +929,7 @@ mod tests {
     }
 
     /// `simplifyFormula1` rewrites a reflexive equality `t = t` to `⊤`
-    /// (Formula.hs:389) and leaves a non-reflexive one alone.
+    /// (Formula.hs:377-409, see line 389) and leaves a non-reflexive one alone.
     #[test]
     fn simplify_reflexive_equality() {
         let x = msg_var_idx("x", 0);
@@ -945,7 +944,7 @@ mod tests {
     }
 
     /// `pullQuantifiers` pulls a universal out of a conjunction and shifts the
-    /// OTHER conjunct's dangling bound indices up by one (Generation.hs:280,291):
+    /// OTHER conjunct's dangling bound indices up by one (Generation.hs:273-293, see line 280,291):
     /// `(∀ j. A@j) ∧ B@Bound(0)` becomes `∀ j. (A@Bound(0) ∧ B@Bound(1))`.
     #[test]
     fn pull_quantifiers_shifts_dangling_bound() {

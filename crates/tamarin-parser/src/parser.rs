@@ -1,9 +1,7 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Robert Künnemann, Jannik Dreier, Benedikt Schmidt, Charlie
-//   Jacomme, Philip Lukert, "Tom" (github BTom-GH), Kevin Morio, Yavor
-//   Ivanov, "ValentinYuri" (github), Ralf Sasse, Felix Linker, Adrian
-//   Dapprich, "Pops" (github racoucho1u), Mathias Aurand, Johannes Wocker,
-//   and other minor contributors (see upstream git history)
+//   meiersi, rkunnema, charlie-j, kevinmorio, yavivanov, felixlinker,
+//   BTom-GH, PhilipLukertWork, jWoc, ValentinYuri, jdreier, beschmi,
+//   rsasse, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term/Raw.hs,
 //   lib/theory/src/Theory/Constraint/System/Guarded.hs,
@@ -369,7 +367,7 @@ pub fn parse_intruder_rules(input: &str) -> Result<Vec<Rule>, ParseError> {
         p.skip_ws();
         if p.lx.is_eof() { break; }
         // HS `intrRule` uses `try (symbol "rule" *> moduloAC *> intrInfo <* colon)`
-        // (Rule.hs:157) — i.e. requires the `rule (modulo AC) name:` head.
+        // (Rule.hs:155-169, see line 157) — i.e. requires the `rule (modulo AC) name:` head.
         // `parse_rule_ac` enforces the same shape.
         let r = p.parse_rule_ac()?;
         rules.push(r);
@@ -704,13 +702,13 @@ impl<'a> Parser<'a> {
             self.require_kw("begin")?;
         } else if !self.try_kw("begin") {
             // HS: `try (symbol "configuration" <* colon) <|> symbol "begin"
-            //      <?> "configuration or begin"` (Parser.hs:233) — the whole
+            //      <?> "configuration or begin"` (Parser.hs:230-393, see line 233) — the whole
             // choice is relabelled, so the failure Expect is the single custom
             // label, not the two quoted keywords.
             return Err(self.err_expect(&["configuration or begin"]));
         }
         let items = self.theory_items_until_end()?;
-        // HS `addItems … <* symbol_ "end"` (Parser.hs:240): when `end` is
+        // HS `addItems … <* symbol_ "end"` (Parser.hs:230-393, see line 240): when `end` is
         // absent the trailing-`end` failure merges with the item alternation's
         // error, so report the full item-position error rather than a bare
         // `expecting "end"`.
@@ -811,7 +809,7 @@ impl<'a> Parser<'a> {
 
         // Accountability: `lemma X [accountability_attrs] ...` is matched by lemma_item.
         // A lemmaAcc requires >=1 case-test ident before `accounts for` (HS
-        // `commaSep1`, Accountability.hs:36); the zero-ident form falls back to
+        // `commaSep1`, Accountability.hs:30-39, see line 36); the zero-ident form falls back to
         // a normal lemma.
 
         // No item alternative matched: reproduce parsec's merged item-position
@@ -1112,7 +1110,7 @@ impl<'a> Parser<'a> {
         // Parenthesis-nesting depth of the captured text.  A top-level theory
         // item can only begin at depth 0: HS parses the proof skeleton
         // STRUCTURALLY (`proofMethod = ... solve <$> parens goal`,
-        // Theory/Text/Parser/Proof.hs:80), so the goal inside `solve( ... )`
+        // Theory/Text/Parser/Proof.hs:76-85, see line 80), so the goal inside `solve( ... )`
         // is consumed as a `parens` unit and its interior tokens can never be
         // mistaken for a new top-level item.  Our raw-text scanner reproduces
         // that boundary rule by only testing the top-level-keyword set (`KW`,
@@ -1128,7 +1126,7 @@ impl<'a> Parser<'a> {
         // (examples/csf18-alethea/...): those `(`s are escaped regex text with
         // no matching `)`, so counting them would drive `depth` permanently
         // positive and make the scanner swallow every following item.  HS lexes
-        // these as ordinary string literals (`stringLiteral`, Token.hs:366), so
+        // these as ordinary string literals (`stringLiteral`, Token.hs:366-367), so
         // their content is opaque to the surrounding grammar.  Only `"` needs
         // tracking: proof skeletons contain no double-quoted strings, and
         // single-quoted public constants (`'Init'`) never hold parens and never
@@ -1137,14 +1135,14 @@ impl<'a> Parser<'a> {
         // Whether the identifier at the NEXT depth-0 word boundary is a proof
         // CASE LABEL and must not be tested against `KW`.  HS parses the proof
         // skeleton structurally: `oneCase = symbol "case" *> identifier`
-        // (Theory/Text/Parser/Proof.hs:115; the diff variant is identical,
-        // Proof.hs:146), so the token immediately after the `case` keyword is
+        // (Theory/Text/Parser/Proof.hs:98-115, see line 115; the diff variant is identical,
+        // Proof.hs:129-146, see line 146), so the token immediately after the `case` keyword is
         // consumed as the case name and can never begin a new top-level item.
         // Case names are drawn from rule names and source-case names, so ANY
         // top-level keyword can legally appear here — e.g. a rule named `test`
         // prints as `case test`, and `test` is itself the CaseTest keyword
         // (`caseTest = CaseTest <$> (symbol "test" *> identifier)`,
-        // Theory/Text/Parser/Accountability.hs:26; dispatched Parser.hs:268).
+        // Theory/Text/Parser/Accountability.hs:25-27, see line 26; dispatched Parser.hs:230-393, see line 268).
         // Without this suppression the bare `test` at depth 0 truncates the
         // capture and the main parser resumes by consuming `test` as a CaseTest
         // declaration → `expected ':'`.  This is the only in-script position
@@ -1281,7 +1279,7 @@ impl<'a> Parser<'a> {
             out_type = None;
         } else {
             self.require_punct("(")?;
-            // HS `parens (commaSep typep)` (Signature.hs:156): `sepEndBy`
+            // HS `parens (commaSep typep)` (Signature.hs:149-160, see line 156): `sepEndBy`
             // permits a trailing comma before `)`.
             let args = self.sep_end_by(")", |p| p.type_p())?;
             self.require_punct(":")?;
@@ -1309,7 +1307,7 @@ impl<'a> Parser<'a> {
     fn type_p(&mut self) -> Result<Option<String>, ParseError> {
         // HS `typep` (Token.hs:472-473): `(try (symbol defaultSapicTypeS) *>
         // return Nothing) <|> Just <$> identifier`, where `defaultSapicTypeS =
-        // "Any"` (Theory/Sapic/Term.hs:95). Only the literal `Any`
+        // "Any"` (Theory/Sapic/Term.hs:94-95, see line 95). Only the literal `Any`
         // (case-sensitive) is the default placeholder; everything else is
         // `Just <ident>` — so lowercase `any` is `Just "any"`, and `*` is not a
         // valid identifier (a parse failure, matching HS).
@@ -1362,7 +1360,7 @@ impl<'a> Parser<'a> {
         loop {
             let name = self.ident()?;
             self.require_punct("(")?;
-            // HS `parens $ commaSep lvar` (Macro.hs:38): trailing comma OK.
+            // HS `parens $ commaSep lvar` (Macro.hs:29-49, see line 38): trailing comma OK.
             let args = self.sep_end_by(")", |p| p.var_spec())?;
             self.require_punct("=")?;
             let body = self.term(false)?;
@@ -1449,7 +1447,7 @@ impl<'a> Parser<'a> {
     /// Parse the middle arrow of a rule: either the `-->` shortcut (no
     /// actions/restrictions) or `--[ .. ]->` with a `fact_or_restr` loop
     /// splitting action Facts from embedded Restrs, allowing a trailing comma
-    /// before `]->` (HS `commaSep` = `sepEndBy comma`, Rule.hs:186).
+    /// before `]->` (HS `commaSep` = `sepEndBy comma`, Rule.hs:181-191, see line 186).
     fn parse_actions_and_restrictions(&mut self) -> Result<(Vec<Fact>, Vec<Formula>), ParseError> {
         if self.try_punct("-->") {
             return Ok((vec![], vec![]));
@@ -1461,7 +1459,7 @@ impl<'a> Parser<'a> {
     /// Parse the `--[ ... ]->` action/restriction body up to (and consuming)
     /// the `]->` terminator, assuming `--[` has already been consumed. Facts
     /// become actions and `_restrict(..)` become restrictions; a trailing comma
-    /// before `]->` is permitted (HS `commaSep`, Rule.hs:186).
+    /// before `]->` is permitted (HS `commaSep`, Rule.hs:181-191, see line 186).
     fn parse_action_restr_list(&mut self) -> Result<(Vec<Fact>, Vec<Formula>), ParseError> {
         let mut acts = Vec::new();
         let mut rstrs = Vec::new();
@@ -1576,7 +1574,7 @@ impl<'a> Parser<'a> {
                 let c = self.lx.hex_color().ok_or_else(|| self.err("expected hex color"))?;
                 attrs.push(RuleAttr::Color(c));
             } else if self.try_kw("process") {
-                // HS `ruleAttribute` (Parser/Rule.hs:72) `parseAndIgnore`s
+                // HS `ruleAttribute` (Parser/Rule.hs:68-93, see line 72) `parseAndIgnore`s
                 // `process=`: the value is parsed and DISCARDED, leaving
                 // `ruleProcess = Nothing`, so a user-written `process=` is never
                 // rendered.  `process=` is only emitted by HS for
@@ -1622,7 +1620,7 @@ impl<'a> Parser<'a> {
     fn read_balanced_token(&mut self) -> Result<String, ParseError> {
         self.skip_ws();
         // HS `parseAndIgnore = betweenMatching (\(l,r) -> manyCharsExcept [l,r] ...)`
-        // (Rule.hs:85). `betweenMatching` (Token.hs:305-316) tries each pair in
+        // (Rule.hs:68-93, see line 85). `betweenMatching` (Token.hs:305-316) tries each pair in
         // `matches`, and `manyCharsExcept [l,r]` (Token.hs:320-321) consumes
         // chars until the FIRST `l` or `r` (NO nesting), after which `between`
         // requires the closing `r`. The pair set INCLUDES `('|','|')`.
@@ -1692,7 +1690,7 @@ impl<'a> Parser<'a> {
 
     fn fact_list(&mut self) -> Result<Vec<Fact>, ParseError> {
         self.require_punct("[")?;
-        // HS `list (fact ...)` (Rule.hs:183/188) = `brackets . commaSep`
+        // HS `list (fact ...)` (Rule.hs:181-191, see line 183/188) = `brackets . commaSep`
         // (Token.hs:362-363) with `commaSep = sepEndBy comma`: the list may
         // be empty and a trailing comma before `]` is OK.
         self.sep_end_by("]", |p| p.fact())
@@ -1715,7 +1713,7 @@ impl<'a> Parser<'a> {
     fn lemma_item(&mut self) -> Result<TheoryItem, ParseError> {
         // HS `protoLemma` captures `start <- getInput` BEFORE `symbol "lemma"`;
         // the enclosing item loop has already consumed leading whitespace, so
-        // the cursor sits exactly at `lemma` here (`Theory/Text/Parser/Lemma.hs:80`).
+        // the cursor sits exactly at `lemma` here (`Theory/Text/Parser/Lemma.hs:78-88, see line 80`).
         let start = self.lx.pos().offset;
         // Look ahead to decide between a normal lemma and an accountability lemma.
         // Accountability lemmas have the body `accounts for [..]` after the name.
@@ -1774,7 +1772,7 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        // HS `lemmaAcc` (Accountability.hs:36) uses `commaSep1 $ identifier`,
+        // HS `lemmaAcc` (Accountability.hs:30-39, see line 36) uses `commaSep1 $ identifier`,
         // requiring at least one case-test identifier before `accounts for`.
         // Since the whole `lemmaAcc` is `try`-wrapped, an empty list backtracks
         // and the caller reparses as a normal lemma — so fall back here too.
@@ -1833,7 +1831,7 @@ impl<'a> Parser<'a> {
             else if self.try_kw("output") {
                 self.require_punct("=")?;
                 self.require_punct("[")?;
-                // HS `list constructorp` (Lemma.hs:49) = `brackets . commaSep`:
+                // HS `list constructorp` (Lemma.hs:39-53, see line 49) = `brackets . commaSep`:
                 // trailing comma before `]` is permitted.
                 let outs = self.sep_end_by("]", |p| p.ident())?;
                 attrs.push(LemmaAttr::Output(outs));
@@ -1980,7 +1978,7 @@ impl<'a> Parser<'a> {
         self.require_kw("let")?;
         let name = self.ident()?;
         let vars = if self.try_punct("(") {
-            // HS `parens $ commaSep sapicvar` (Sapic.hs:69): trailing comma OK.
+            // HS `parens $ commaSep sapicvar` (Sapic.hs:64-72, see line 69): trailing comma OK.
             Some(self.sep_end_by(")", |p| p.var_spec())?)
         } else { None };
         self.require_punct("=")?;
@@ -2086,7 +2084,7 @@ impl<'a> Parser<'a> {
             // `let pat = t [, pat = t]* in p` or with newline-separated
             // bindings (Tamarin's `genericletBlock = many1 definition` has no
             // separator between bindings).
-            // HS `genericletBlock = many1 definition` (Let.hs:24) with
+            // HS `genericletBlock = many1 definition` (Let.hs:23-26, see line 24) with
             // `definition = sapicpatternterm <* equalSign <*> sapicterm`. There
             // is no separator between bindings; `many1` greedily reparses a
             // `definition` and backtracks when one fails to parse. We mirror that
@@ -2163,7 +2161,7 @@ impl<'a> Parser<'a> {
         if let Some(id) = self.lx.identifier() {
             // Heuristic: if followed by `(`, parse as call args.
             let args = if self.try_punct("(") {
-                // HS `parens $ commaSep (msetterm ...)` (Sapic.hs:296):
+                // HS `parens $ commaSep (msetterm ...)` (Sapic.hs:224-312, see line 296):
                 // trailing comma before `)` is permitted.
                 self.sep_end_by(")", |p| p.term(false))?
             } else { vec![] };
@@ -2462,7 +2460,7 @@ impl<'a> Parser<'a> {
             return Ok(Formula::Atom(Atom::Pred(fact)));
         }
         if self.try_punct("<") {
-            // HS `blatom` (Formula.hs:49) restricts both operands of `<` to
+            // HS `blatom` (Formula.hs:44-60, see line 49) restricts both operands of `<` to
             // node/timepoint variables: `Less <$> try (nodevarTerm <* opLess)
             // <*> nodevarTerm`. This structural port intentionally accepts any
             // `term` on both sides (parser-level permissiveness); the sort
@@ -2618,7 +2616,7 @@ impl<'a> Parser<'a> {
                 self.skip_ws();
                 // HS `pairing = angled (tupleterm eqn plit)` with
                 // `tupleterm = chainr1 (msetterm ...) (... <$ comma)`
-                // (Term.hs:142,187-188). `chainr1` requires >=1 operand, so the
+                // (Term.hs:123-148, see line 142,187-188). `chainr1` requires >=1 operand, so the
                 // operand loop always runs: an empty `<>` fails to parse
                 // (matching HS, where no other `term` alternative starts with
                 // `<`), and a singleton `<a>` collapses to `a`.
@@ -2640,12 +2638,12 @@ impl<'a> Parser<'a> {
         if self.try_punct("1:nat") { return Ok(Term::NatOne); }
         if self.try_punct("%1") { return Ok(Term::NatOne); }
         // `1` only valid when DH is enabled; we accept it always at parse level.
-        // Divergence from HS, benign on the corpus: HS `term` (Term.hs:134) tries
+        // Divergence from HS, benign on the corpus: HS `term` (Term.hs:123-148, see line 134) tries
         // `symbol "1"` before the identifier path, and `symbol`/`T.symbol`
-        // (Token.hs:273) has NO trailing word boundary, so HS splits the leading
+        // (Token.hs:272-273, see line 273) has NO trailing word boundary, so HS splits the leading
         // `1` off `1abc`/`12` (yielding fAppOne, leaving `abc`/`2`, which then
         // fails as a stray token). Note HS identifiers CAN start with a digit
-        // (Token.hs:223 `identStart = alphaNum`), so a bare `2` is the variable
+        // (Token.hs:214-230, see line 223 `identStart = alphaNum`), so a bare `2` is the variable
         // `2`. The word-boundary guard below only diverges on a `1` immediately
         // followed by an alphanumeric/`_` (e.g. `1abc`, `12`) — inputs that are
         // never valid message terms and never appear in any .spthy, so accepted
@@ -2708,7 +2706,7 @@ impl<'a> Parser<'a> {
             return Ok(Term::PubLit(s));
         }
         // diff(a, b) — HS `diffOp = symbol "diff" *> parens ...` (Term.hs:108-110).
-        // `diff` is a reserved name (Token.hs:225) so it is NOT an identifier and
+        // `diff` is a reserved name (Token.hs:214-230, see line 225) so it is NOT an identifier and
         // must be matched as a keyword here, BEFORE the identifier path. The
         // word-boundary check in `peek_symbol` keeps `diffuse(...)` an identifier
         // (function application), matching HS where `naryOpApp` handles it.
@@ -2856,8 +2854,8 @@ impl<'a> Parser<'a> {
 
     /// Parse a quantifier binder variable (`All`/`Ex` binder list), mirroring
     /// HS `quantification`'s `many1 (try varp <|> nodep)` with `varp = msgvar`,
-    /// `nodep = nodevar` (Formula.hs:75, Token.hs:440-447).  `msgvar` parses a
-    /// PREFIXLESS binder as `LSortMsg` (Token.hs:426,441) — there is no
+    /// `nodep = nodevar` (Formula.hs:64-77, see line 75, Token.hs:440-447).  `msgvar` parses a
+    /// PREFIXLESS binder as `LSortMsg` (Token.hs:409-433, see line 426,441) — there is no
     /// inference step for formula binders.  RS's generic `var_spec` tags a
     /// prefixless var as `Untagged` (a placeholder it resolves later for RULE
     /// terms), which has no HS equivalent and sorts LAST under `Ord LVar`
@@ -2865,7 +2863,7 @@ impl<'a> Parser<'a> {
     /// guarded binding's `LSort`, flipping the display-time AC arg sort of an
     /// existential binder against a free Msg operand of equal idx (`dif++seq`
     /// → `seq++dif`), since `fAppAC`/`openGuarded` sort by that key
-    /// (Term/Raw.hs:118-122, Guarded.hs:367).  Pin a prefixless binder to `Msg`
+    /// (Term/Raw.hs:118-122, Guarded.hs:364-373, see line 367).  Pin a prefixless binder to `Msg`
     /// exactly as `msgvar` does; explicit `$`/`~`/`#`/`%`/suffix binders keep
     /// their concrete sort.
     fn quantifier_binder(&mut self) -> Result<VarSpec, ParseError> {
@@ -3310,11 +3308,11 @@ mod tests {
 
     // Regression: `test` is a genuine top-level theory-item keyword (HS
     // `caseTest = CaseTest <$> (symbol "test" *> identifier)`,
-    // Theory/Text/Parser/Accountability.hs:26, dispatched in `addItems`,
-    // Theory/Text/Parser.hs:268) but is ALSO an ordinary message variable
+    // Theory/Text/Parser/Accountability.hs:25-27, see line 26, dispatched in `addItems`,
+    // Theory/Text/Parser.hs:230-393, see line 268) but is ALSO an ordinary message variable
     // name inside proof goals — e.g. `solve( Match( test, sid ) @ #i4 )` in
     // examples/ake/bilinear/Scott.spthy.  HS parses the proof skeleton
-    // STRUCTURALLY (`solve <$> parens goal`, Proof.hs:80), so a `test` inside
+    // STRUCTURALLY (`solve <$> parens goal`, Proof.hs:76-85, see line 80), so a `test` inside
     // `solve( ... )` is a `parens`-nested term and can never begin a new
     // top-level item.  `read_until_next_top_level` reproduces that boundary
     // rule by only testing the top-level-keyword set at paren-depth 0; without
@@ -3410,7 +3408,7 @@ end"#;
     // ESCAPED, UNBALANCED parens inside a double-quoted string literal —
     // e.g. `regex "cp\("` and `regex "In_A\( 'S', <'codes'"` in
     // examples/csf18-alethea/....  Those `(`s are opaque regex text (HS lexes
-    // the whole thing as `stringLiteral`, Token.hs:366); counting them as
+    // the whole thing as `stringLiteral`, Token.hs:366-367); counting them as
     // grouping would keep `depth` permanently positive so the tactic capture
     // swallows every following item.  The scanner must treat double-quoted
     // string interiors as opaque.
@@ -3445,10 +3443,10 @@ end"#;
 
     // Regression: a proof CASE LABEL that collides with a top-level keyword must
     // not truncate the capture.  HS parses `oneCase = symbol "case" *> identifier`
-    // (Theory/Text/Parser/Proof.hs:115) structurally, so the identifier after
+    // (Theory/Text/Parser/Proof.hs:98-115, see line 115) structurally, so the identifier after
     // `case` is the case NAME and can be any top-level keyword — case names come
     // from rule / source-case names, and `test` is the CaseTest keyword
-    // (Accountability.hs:26).  A rule named `test` prints its solved case as
+    // (Accountability.hs:25-27, see line 26).  A rule named `test` prints its solved case as
     // `case test` at paren-depth 0 (unlike Scott's `test` which was inside
     // `solve( ... )`), so the paren-depth guard alone does not suppress it —
     // the case-label suppression below is also needed.

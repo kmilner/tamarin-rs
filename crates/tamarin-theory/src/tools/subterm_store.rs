@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Philip Lukert, Robert Künnemann, and other minor contributors (see
-//   upstream git history)
+//   PhilipLukertWork, rkunnema, meiersi, charlie-j, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Sapic/Term.hs,
 //   lib/theory/src/Theory/Tools/SubtermStore.hs
@@ -106,7 +106,7 @@ pub struct SubtermStore {
     /// `S.toList` iteration order).
     pub neg_subterms: SortedPairSet,
     /// Copy of `neg_subterms` that is NOT changed by apply/HasFrees/
-    /// add_neg — HS `_oldNegSubterms` (SubtermStore.hs:95).  Only the
+    /// add_neg — HS `_oldNegSubterms` (SubtermStore.hs:90-97, see line 95).  Only the
     /// `simpSplitNegSt` pass updates it; the set difference
     /// `neg_subterms \ old_neg_subterms` is the change-detection
     /// mechanism deciding which negative subterms get (re-)split.
@@ -131,7 +131,7 @@ impl SubtermStore {
     pub fn is_false(&self) -> bool { self.contradictory }
 
     /// `conjoinSubtermStores` — HS-faithful port of
-    /// `Theory.Tools.SubtermStore.conjoinSubtermStores` (SubtermStore.hs:108):
+    /// `Theory.Tools.SubtermStore.conjoinSubtermStores` (SubtermStore.hs:108-110):
     /// ```haskell
     /// conjoinSubtermStores (SubtermStore a1 b1 c1 d1 e1) (SubtermStore a2 b2 c2 d2 e2)
     ///   = SubtermStore (a1 `S.union` a2) (b1 `S.union` b2)
@@ -222,7 +222,7 @@ pub fn collect_fresh_vars_not_below_reducible(
 }
 
 /// `hasSubtermCycle` — port of Haskell's
-/// `Theory.Tools.SubtermStore.hasSubtermCycle` (`SubtermStore.hs:223`).
+/// `Theory.Tools.SubtermStore.hasSubtermCycle` (`SubtermStore.hs:223-244`).
 ///
 /// Detects a cycle `t0 ⊏ x0, ..., tn ⊏ xn = t0 ⊏ x0` in the positive
 /// subterm dag, where each next edge `(t_i+1, x_i+1)` follows from

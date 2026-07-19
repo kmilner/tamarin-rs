@@ -1,9 +1,7 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Hong-Thai Luu, Simon Meier, Robert Künnemann, Jannik Dreier, Benedikt
-//   Schmidt, Philip Lukert, Yavor Ivanov, Kevin Morio, "Tom" (github BTom-
-//   GH), Ralf Sasse, "ValentinYuri" (github), Felix Linker, "Nynko"
-//   (github), Charlie Jacomme, and other minor contributors (see upstream
-//   git history)
+//   rkunnema, meiersi, jdreier, beschmi, Hong-Thai, PhilipLukertWork,
+//   kevinmorio, BTom-GH, rsasse, xaDxelA, and other minor contributors
+//   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/theory/src/Items/RuleItem.hs,
 //   lib/theory/src/OpenTheory.hs, lib/theory/src/Prover.hs,
@@ -46,7 +44,7 @@ fn var_term(name: &str, sort: p::SortHint) -> p::Term {
     p::Term::Var(var(name, sort))
 }
 
-/// `inputFactTerm pos ru terms var` (OpenTheory.hs:313): a linear proto fact
+/// `inputFactTerm pos ru terms var` (OpenTheory.hs:138-538, see line 313): a linear proto fact
 /// `AUTO_IN_TERM_<pos>_<rule>( terms.. , var )`.
 fn input_fact_term(name: &str, terms: Vec<p::Term>, v: p::Term) -> p::Fact {
     let mut args = terms;
@@ -54,7 +52,7 @@ fn input_fact_term(name: &str, terms: Vec<p::Term>, v: p::Term) -> p::Fact {
     p::Fact { persistent: false, name: name.to_string(), args, annotations: Vec::new() }
 }
 
-/// `outputFactTerm pos ru terms` (OpenTheory.hs:333).
+/// `outputFactTerm pos ru terms` (OpenTheory.hs:138-538, see line 333).
 fn output_fact_term(name: &str, terms: Vec<p::Term>) -> p::Fact {
     p::Fact { persistent: false, name: name.to_string(), args: terms, annotations: Vec::new() }
 }
@@ -84,7 +82,7 @@ fn forall(vs: Vec<p::VarSpec>, body: p::Formula) -> p::Formula {
 const MSG: p::SortHint = p::SortHint::Msg;
 const NODE: p::SortHint = p::SortHint::Node;
 
-/// `orKU` (OpenTheory.hs:484): `∃ j. !KU(x) @ j ∧ j < i`. Here `i` is the
+/// `orKU` (OpenTheory.hs:138-538, see line 484): `∃ j. !KU(x) @ j ∧ j < i`. Here `i` is the
 /// input timepoint and `x` the input-term variable.
 fn or_ku() -> p::Formula {
     let ku = p::Fact { persistent: true, name: "KU".to_string(), args: vec![var_term("x", MSG)], annotations: Vec::new() };
@@ -94,7 +92,7 @@ fn or_ku() -> p::Formula {
     )
 }
 
-/// `toFactsTerm ru p f''` (OpenTheory.hs:502): `f'' ∨ (∃ j. AUTO_OUT_TERM(m) @ j ∧ j < i)`.
+/// `toFactsTerm ru p f''` (OpenTheory.hs:138-538, see line 502): `f'' ∨ (∃ j. AUTO_OUT_TERM(m) @ j ∧ j < i)`.
 fn to_facts_term(out_name: &str, inner: p::Formula) -> p::Formula {
     let out = output_fact_term(out_name, vec![var_term("m", MSG)]);
     or(
@@ -106,7 +104,7 @@ fn to_facts_term(out_name: &str, inner: p::Formula) -> p::Formula {
     )
 }
 
-/// `addForm` protected-subterm case WITH matching outputs (OpenTheory.hs:419):
+/// `addForm` protected-subterm case WITH matching outputs (OpenTheory.hs:138-538, see line 419):
 /// `∀ x m i. AUTO_IN_TERM(m,x) @ i ⇒ (orKU ∨ (∃ j. AUTO_OUT_TERM(m) @ j ∧ j < i))`.
 pub fn term_input_form_with_outputs(in_name: &str, out_name: &str) -> p::Formula {
     let in_fact = input_fact_term(in_name, vec![var_term("m", MSG)], var_term("x", MSG));
@@ -119,7 +117,7 @@ pub fn term_input_form_with_outputs(in_name: &str, out_name: &str) -> p::Formula
     )
 }
 
-/// `addForm` protected-subterm case with NO matching outputs (OpenTheory.hs:395):
+/// `addForm` protected-subterm case with NO matching outputs (OpenTheory.hs:138-538, see line 395):
 /// `∀ x m i. AUTO_IN_TERM(m,x) @ i ⇒ orKU`.
 pub fn term_input_form_no_outputs(in_name: &str) -> p::Formula {
     let in_fact = input_fact_term(in_name, vec![var_term("m", MSG)], var_term("x", MSG));
@@ -134,7 +132,7 @@ pub fn term_input_form_no_outputs(in_name: &str) -> p::Formula {
 // `formulaMultArity` / `toFactsFact` (OpenTheory.hs:443-533).
 // ---------------------------------------------------------------------------
 
-/// `listOfM n` (OpenTheory.hs:380): `["m1", "m2", ..., "mn"]`.
+/// `listOfM n` (OpenTheory.hs:138-538, see line 380): `["m1", "m2", ..., "mn"]`.
 fn list_of_m(n: usize) -> Vec<String> {
     (1..=n).map(|k| format!("m{}", k)).collect()
 }
@@ -148,7 +146,7 @@ fn input_fact_fact_ast(name: &str, ms: &[p::VarSpec]) -> p::Fact {
     }
 }
 
-/// `addForm (_, Right (_, []), _)` (OpenTheory.hs:443): no matching outputs →
+/// `addForm (_, Right (_, []), _)` (OpenTheory.hs:138-538, see line 443): no matching outputs →
 /// `∀ m1..mn i. AUTO_IN_FACT(m1..mn) @ i ⇒ ⊥`.
 fn fact_input_form_no_outputs(in_name: &str, arity: usize) -> p::Formula {
     let ms: Vec<p::VarSpec> = list_of_m(arity).iter().map(|n| var(n, MSG)).collect();
@@ -158,7 +156,7 @@ fn fact_input_form_no_outputs(in_name: &str, arity: usize) -> p::Formula {
     forall(binders, implies(action(in_fact, var_term("i", NODE)), p::Formula::False))
 }
 
-/// `addForm (_, Right (_, outs:_), _)` (OpenTheory.hs:464): with a matching
+/// `addForm (_, Right (_, outs:_), _)` (OpenTheory.hs:138-538, see line 464): with a matching
 /// output → `∀ m1..mn i. AUTO_IN_FACT(m1..mn) @ i ⇒ toFactsFact`.
 /// `toFactsFact` (OpenTheory.hs): `∃ j. AUTO_OUT_FACT(m1..m{out_arity}) @ j ∧ j < i`
 /// — the output fact references the input binders `m1..m{out_arity}`, highest first.
@@ -414,7 +412,7 @@ pub fn add_auto_sources_lemma(
 }
 
 /// Build the AUTO source lemma item (HS `unprovenLemma lemmaName [SourceLemma]
-/// AllTraces formula`, OpenTheory.hs:157).
+/// AllTraces formula`, OpenTheory.hs:138-538, see line 157).
 pub fn build_source_lemma(name: &str, formula: p::Formula) -> crate::theory::Lemma {
     use crate::theory::{Lemma, LemmaAttr, TraceQuantifier};
     Lemma {
@@ -425,19 +423,19 @@ pub fn build_source_lemma(name: &str, formula: p::Formula) -> crate::theory::Lem
         formula,
         proof: crate::theory::ProofSkeleton::unproven(),
         // HS `unprovenLemma` seeds `_lPlaintext` with "Unpr_inSkeleton"
-        // (`Theory/ProofSkeleton.hs:61`).
+        // (`Theory/ProofSkeleton.hs:59-61, see line 61`).
         plaintext: "Unpr_inSkeleton".to_string(),
     }
 }
 
 /// Whether the theory already contains a lemma named `name`
-/// (HS `find lemma items`, OpenTheory.hs:146).
+/// (HS `find lemma items`, OpenTheory.hs:138-538, see line 146).
 pub fn has_lemma_named(items: &[TheoryItem], name: &str) -> bool {
     items.iter().any(|it| matches!(it, TheoryItem::Lemma(l) if l.name == name))
 }
 
 /// Add an AUTO action to an open proto rule's AC form. HS adds to
-/// `cprRuleAC` only (Rule.hs:1031); for a trivial-variant rule (no
+/// `cprRuleAC` only (Rule.hs:1026-1032, see line 1031); for a trivial-variant rule (no
 /// abstracted form) that is the rule itself, which renders as
 /// `rule (modulo E)` and propagates to its instances.
 fn add_action_to_open_rule(o: &mut OpenProtoRule, action: LNFact) {
@@ -508,7 +506,7 @@ pub fn apply_auto_sources(
     }
 
     // GENERATION chains: the RAW (saturated, unrefined) sources — HS
-    // `addAutoSourcesLemma` uses `crcRawSources` (RuleItem.hs:66).
+    // `addAutoSourcesLemma` uses `crcRawSources` (RuleItem.hs:64-70, see line 66).
     let ctx_raw = ProofContext::new_with_restrictions_and_pool(
         maude.clone(), pool.clone(), rules.clone(), restrictions.clone());
     let raw_chains = collect_chains(&ctx_raw);

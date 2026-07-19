@@ -1,6 +1,5 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Artur Cygan, Kevin Morio, Simon Meier, Adrian Dapprich, "gilcu3"
-//   (github), and other minor contributors (see upstream git history)
+//   meiersi, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   src/Main/Mode/Batch.hs
 
@@ -52,7 +51,7 @@ fn prove_chain_writes_output_with_verified_summary() {
     std::fs::create_dir_all(&out_dir).expect("mkdir out_dir");
     let out_path = out_dir.join("single_recv_out.spthy");
 
-    // `-o`/`--output` is a cmdargs `flagOpt` (Batch.hs:76): its value is
+    // `-o`/`--output` is a cmdargs `flagOpt` (Batch.hs:44-84, see line 76): its value is
     // OPTIONAL and must be ATTACHED — `-o FILE` (space-separated) leaves the
     // flag empty and treats FILE as a positional input (verified vs the HS
     // binary). So pass it inline via `--output=FILE`.
@@ -102,7 +101,7 @@ fn prove_lemma_filter_excludes_other_lemmas() {
     // Filter to a lemma that doesn't exist — every lemma is filtered
     // out and we still write an output.
     // flagOpt: attach the output value (`--output=FILE`); a space-separated
-    // `-o FILE` would treat FILE as a positional input (HS Batch.hs:76).
+    // `-o FILE` would treat FILE as a positional input (HS Batch.hs:44-84, see line 76).
     let output_arg = format!("--output={}", out_path.to_str().unwrap());
     let args = args_from(&[
         "--prove=nonexistent",
@@ -131,7 +130,7 @@ fn parse_only_emits_source_to_stdout() {
     std::fs::create_dir_all(&out_dir).expect("mkdir out_dir");
     let out_path = out_dir.join("parse_only.spthy");
     // flagOpt: attach the output value (`--output=FILE`); a space-separated
-    // `-o FILE` would treat FILE as a positional input (HS Batch.hs:76).
+    // `-o FILE` would treat FILE as a positional input (HS Batch.hs:44-84, see line 76).
     let output_arg = format!("--output={}", out_path.to_str().unwrap());
     let args = args_from(&[
         "--parse-only",
@@ -156,7 +155,7 @@ fn output_dir_writes_basename_underscore_analyzed() {
     let out_dir = std::env::temp_dir().join("tamarin_prover_outdir");
     let _ = std::fs::remove_dir_all(&out_dir); // clean prior runs
     std::fs::create_dir_all(&out_dir).expect("mkdir out_dir");
-    // `-O`/`--Output` is a cmdargs `flagOpt` (Batch.hs:77): its value is
+    // `-O`/`--Output` is a cmdargs `flagOpt` (Batch.hs:44-84, see line 77): its value is
     // OPTIONAL and must be ATTACHED — `-O DIR` (space-separated) leaves the
     // flag at its default and treats DIR as a positional input file (verified
     // against the HS binary). So the value must be inline via `--Output=DIR`.

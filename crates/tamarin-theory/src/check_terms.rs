@@ -1,13 +1,11 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Benedikt Schmidt, Jannik Dreier, Robert Künnemann, Philip
-//   Lukert, Kevin Morio, "sans-sucre" (github), Charlie Jacomme, Artur
-//   Cygan, "Tom" (github BTom-GH), "ValentinYuri" (github), "Nynko"
-//   (github), Ralf Sasse, Mathias Aurand, Adrian Dapprich, Felix Linker,
-//   Alexander Dax, Johannes Wocker, and other minor contributors (see
-//   upstream git history)
+//   meiersi, jdreier, and other minor contributors (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term/FunctionSymbols.hs,
-//   lib/term/src/Term/Term/Raw.hs, lib/theory/src/Theory/Model/Formula.hs,
+//   lib/term/src/Term/LTerm.hs,
+//   lib/term/src/Term/Term/FunctionSymbols.hs,
+//   lib/term/src/Term/Term/Raw.hs,
+//   lib/theory/src/Theory/Model/Formula.hs,
 //   lib/theory/src/Theory/Text/Parser/Term.hs,
 //   lib/theory/src/Theory/Text/Parser/Token.hs,
 //   lib/theory/src/Theory/Tools/Wellformedness.hs, src/Main/Console.hs
@@ -64,7 +62,7 @@ use crate::pretty_hpj::{fsep, punctuate, Doc};
 ///
 /// CAVEAT: this is a precomputed effective budget, NOT HS's own lineLength.
 /// We do not reproduce the outer warning-frame nesting in the `Doc`
-/// renderer, so if HS's `lineWidth` (Console.hs:236) or the WARNING-frame
+/// renderer, so if HS's `lineWidth` (Console.hs:227-239, see line 236) or the WARNING-frame
 /// indentation ever changes, this constant (used at both `render_with`
 /// call sites in `render_block`) must be re-derived against the new binary.
 const WF_WIDTH: usize = 69;
@@ -178,7 +176,7 @@ impl Irreducible {
 // Public entry point
 // =============================================================================
 
-/// Port of HS `formulaReports`'s `checkTerms` arm (Wellformedness.hs:1003),
+/// Port of HS `formulaReports`'s `checkTerms` arm (Wellformedness.hs:999-1014, see line 1003),
 /// for every lemma + restriction formula (in theory order, lemmas before
 /// restrictions — HS `annFormulas`).  Macros must already be expanded by
 /// the caller (HS applies `applyMacroInFormula` first).
@@ -348,7 +346,7 @@ fn resolve_term(t: &Term, scope: &Scope, irr: &Irreducible, pos: TermPos) -> RTe
         // Bare numeric/`1`/`%1` literals: HS treats these as nullary
         // irreducible Public constructors.  The DH `1` is `oneSymString =
         // "one"` and the nat `%1` is `natOneSymString = "tone"`
-        // (FunctionSymbols.hs:134,144); both are arity-0 Public Constructors
+        // (FunctionSymbols.hs:134-134,144); both are arity-0 Public Constructors
         // and hence always `allowed`, so the head name is never rendered as
         // an offender — but we still use the HS-faithful names here.
         Term::Number(n) => RTerm::PubConst(n.to_string()),
@@ -460,7 +458,7 @@ fn resolve_var(v: &VarSpec, scope: &Scope, irr: &Irreducible, pos: TermPos) -> R
 /// compares `idx`, sort and name, LTerm.hs:516-517). We reproduce this exactly
 /// on the sort-*kind*: the use's sort is concrete in HS, never approximate.
 /// The parser assigns every variable a concrete `LSort` before `quantify`
-/// runs (Formula.hs:114 `standardFormula msgvar nodevar`):
+/// runs (Formula.hs:114-119 `standardFormula msgvar nodevar`):
 ///   - a message-position variable is parsed by `msgvar`
 ///     (`sortedLVar [LSortFresh, LSortPub, LSortNat, LSortMsg]`,
 ///     Token.hs:440-441), so an *untagged* message use takes the

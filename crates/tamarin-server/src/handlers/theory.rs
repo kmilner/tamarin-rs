@@ -1,16 +1,13 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Artur Cygan, Jannik Dreier, Felix Linker, Kevin Morio, Ralf
-//   Sasse, Robert Künnemann, "Jackie" (github kanakanajm), Cas Cremers,
-//   "Pops" (github racoucho1u), Benedikt Schmidt, Yann Colomb, Philip
-//   Lukert, symphorien, Adrian Dapprich, "Tom" (github BTom-GH), Yavor
-//   Ivanov, Alexander Dax, Mathias Aurand, Felix Yan, Jérôme (github
-//   Azurios-git), "Nynko" (github), Dominik Schoop, Katriel Cohn-Gordon, and
-//   other minor contributors (see upstream git history)
+//   arcz, meiersi, felixlinker, cascremers, Kanakanajm, jdreier,
+//   kevinmorio, rsasse, BTom-GH, beschmi, symphorien, YannColomb,
+//   racoucho1u, xaDxelA, addap, Azurios-git, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
-//   lib/theory/src/Theory/Proof.hs, lib/utils/src/Text/PrettyPrint/Html.hs,
-//   src/Main/TheoryLoader.hs, src/Web/Handler.hs, src/Web/Theory.hs,
-//   src/Web/Types.hs
+//   lib/theory/src/Theory/Proof.hs,
+//   lib/utils/src/Text/PrettyPrint/Html.hs, src/Main/TheoryLoader.hs,
+//   src/Web/Handler.hs, src/Web/Theory.hs, src/Web/Types.hs
 
 //! Per-theory HTTP handlers.  Each one looks up the theory by idx,
 //! parses the trailing wildcard path, and emits HTML or the JSON
@@ -250,7 +247,7 @@ fn apply_method_and_redirect(
     // arm always yields another `TheoryProof` (child path, next-lemma root,
     // or same path when nothing follows), so we render the `overview/proof`
     // URL from its `(lemma, sub)`.  The URL SHAPE matches Haskell's
-    // `renderTheoryPath` (`src/Web/Types.hs:372`): lemma root (sub=[]) →
+    // `renderTheoryPath` (`src/Web/Types.hs:364-377, see line 372`): lemma root (sub=[]) →
     // `proof/<lemma>`; each sub segment is `prefixWithUnderscore`d.
     let Some(new_entry) = state.store.get(new_idx) else {
         return json_resp::alert(format!("theory index {} vanished", new_idx));
@@ -363,7 +360,7 @@ fn title_for(entry: &crate::state::TheoryEntry, path: &path_parse::TheoryPath) -
                     })
                     .unwrap_or_else(|| "None".to_string());
                 // HS `methodName` = `renderHtmlDoc . prettyProofMethod` and
-                // `renderHtmlDoc` (`Text/PrettyPrint/Html.hs:151`) escapes HTML
+                // `renderHtmlDoc` (`Text/PrettyPrint/Html.hs:140-149, see line 151`) escapes HTML
                 // entities in every text token via the `Document (HtmlDoc d)`
                 // instance (`Html.hs:105-107`, `escapeHtmlEntities`), so a
                 // method that mentions a tuple renders `&lt;B, A, …&gt;` in the
@@ -390,7 +387,7 @@ fn title_for(entry: &crate::state::TheoryEntry, path: &path_parse::TheoryPath) -
 
 /// Render the full closed-theory source, mirroring HS `getTheorySourceR`
 /// and `getTheoryMessageDeductionR` — both are `render . prettyClosedTheory
-/// . theory` (`Web/Handler.hs:950,985`), i.e. identical output.
+/// . theory` (`Web/Handler.hs:950-957,985`), i.e. identical output.
 ///
 /// HS's stored `ClosedTheory` carries each lemma's LIVE
 /// `IncrementalProof` — the close-time `checkAndExtendProver`-replayed
@@ -544,7 +541,7 @@ pub async fn autoprove(
     // case.  The prover itself is `runAutoProver` (Web/Handler.hs:1170-1171),
     // which "ignores the existing proof and tries to find one by itself"
     // (Theory/Proof.hs:743-747) — NOT `replaceSorryProver` (that wrapper is
-    // batch-`--prove`-only, Main/TheoryLoader.hs:518,606).  So any embedded
+    // batch-`--prove`-only, Main/TheoryLoader.hs:463-533, see line 518,606).  So any embedded
     // proof skeleton (e.g. Yubikey's `slightly_weaker_invariant` script,
     // replayed into the tree at `ProofState::new` time) is simply REPLACED
     // at the focused path: we search from the path node's stored system via
@@ -557,14 +554,14 @@ pub async fn autoprove(
     let Some(sys_at_path) = src_ps.get_system_at(&lemma_name, &sub) else {
         // Nonexistent lemma or proof path: HS `focus`'s `modifyAtPath`
         // returns `Nothing`, so `modifyTheory` emits the failure alert
-        // (`src/Web/Handler.hs:1068`):
+        // (`src/Web/Handler.hs:1056-1073, see line 1068`):
         //   JsonAlert $ "Sorry, but " <> name <> " failed!"
         // where `name` is the `fullName` built by `getAutoProverR` from
         // the extractor + bound (see `autoprover_name`).
         return json_resp::alert(
             format!("Sorry, but {} failed!", name)).into_response();
     };
-    // Mirror Haskell `modifyTheory` (`src/Web/Handler.hs:736`): allocate a
+    // Mirror Haskell `modifyTheory` (`src/Web/Handler.hs:730-747, see line 736`): allocate a
     // fresh theory idx for the post-autoprove state.  Use the FORKING
     // clone so the new idx PRESERVES the source idx's proof trees (HS
     // `modifyTheory` puts the modified `ClosedTheory` — with its full
@@ -614,7 +611,7 @@ pub async fn autoprove(
             // Prover failure (missing session, prove error) or a graft
             // whose lemma/path vanished between the fork and the graft —
             // surface HS's prover-failure alert
-            // (`src/Web/Handler.hs:1068`), same as the bad-path arm above.
+            // (`src/Web/Handler.hs:1056-1073, see line 1068`), same as the bad-path arm above.
             json_resp::alert(format!("Sorry, but {} failed!", name)).into_response()
         }
         Ok(Ok(status)) => {
@@ -725,7 +722,7 @@ fn autoprover_name(extractor: &str, bound: usize) -> Option<String> {
 /// `getProverAllR` in `src/Web/Handler.hs:1194-1218`.
 ///
 /// HS `getProverAllR` folds the SAME focus mechanism `autoprove` uses,
-/// at the root path of every lemma (`src/Web/Handler.hs:1092`):
+/// at the root path of every lemma (`src/Web/Handler.hs:1076-1090, see line 1092`):
 ///
 /// ```text
 /// proveAll thy = foldM (\tha lemma ->
@@ -737,7 +734,7 @@ fn autoprover_name(extractor: &str, bound: usize) -> Option<String> {
 /// skeleton wholesale (`runAutoProver` "ignores the existing proof and
 /// tries to find one by itself", Theory/Proof.hs:743-747; it is NOT
 /// wrapped in `replaceSorryProver`, the batch-`--prove`-only wrapper —
-/// Main/TheoryLoader.hs:518,606).  We mirror that uniformly with
+/// Main/TheoryLoader.hs:463-533, see line 518,606).  We mirror that uniformly with
 /// `autoprove`: fork the proof state at a fresh idx (HS `modifyTheory`)
 /// and `run_proof_search` + `graft_at_path` at `[]` per lemma.
 pub async fn autoprove_all(
@@ -816,7 +813,7 @@ pub async fn autoprove_all(
     })
     .await;
 
-    // HS `getProverAllR` (`src/Web/Handler.hs:1085`) advances the target
+    // HS `getProverAllR` (`src/Web/Handler.hs:1076-1090, see line 1085`) advances the target
     // via `nextSmartThyPath thy (TheoryProof (last names) [])` over the
     // NEW theory — the same smart traversal as `autoprove`, seeded at
     // the LAST lemma's root.  Now that the fork holds the freshly
@@ -1071,7 +1068,7 @@ fn next_thy_path_inner(
         T::Tactic => T::Source { kind: SourceKind::Raw, src_idx: 0, case_idx: 0 },
         T::Source { kind: SourceKind::Raw, .. } =>
             T::Source { kind: SourceKind::Refined, src_idx: 0, case_idx: 0 },
-        // Haskell `nextThyPath` (Web/Theory.hs:1683): refined sources
+        // Haskell `nextThyPath` (Web/Theory.hs:1676-1703, see line 1683): refined sources
         // advance to the FIRST lemma's proof root, falling back to Help
         // only when there are no lemmas.
         T::Source { kind: SourceKind::Refined, .. } => match lemmas.first() {
@@ -1295,7 +1292,7 @@ fn resolve_system_for_path(
 
 /// `GET /thy/trace/<idx>/intdot/*path` — return the DOT source as
 /// text/plain.  NOTE: the analogous Haskell `/intdot/*` route
-/// (`InteractiveDotGraphR`, `src/Web/Types.hs:576`) is handled by
+/// (`InteractiveDotGraphR`, `src/Web/Types.hs:576-576`) is handled by
 /// `getInteractiveDotGraphR` (`src/Web/Handler.hs:897-906`), which
 /// returns an HTML wrapper (`<dot-graph-viz dotsrc=...>`) pointing at
 /// the `interactive-graph-def` route, NOT the raw DOT.  Raw DOT is
@@ -1310,7 +1307,7 @@ pub async fn intdot(
     let Some(entry) = state.store.get(idx) else {
         return missing_idx_html(idx);
     };
-    // HS `getInteractiveDotGraphR` (`src/Web/Handler.hs:897`) returns the
+    // HS `getInteractiveDotGraphR` (`src/Web/Handler.hs:897-906`) returns the
     // HTML shell page `intdotLayout` (`src/Web/Types.hs:727-744`): a
     // `<dot-graph-viz>` custom element whose `dotsrc` points at the
     // `interactive-graph-def` route (which serves the raw DOT that the

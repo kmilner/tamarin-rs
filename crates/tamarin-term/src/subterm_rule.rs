@@ -1,11 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Benedikt Schmidt, Charlie Jacomme, Mathias Aurand, Jannik Dreier, Simon
-//   Meier, Charles Dumenil, "Tom" (github BTom-GH), Philip Lukert, Robert
-//   Künnemann, Ralf Sasse, and other minor contributors (see upstream git
-//   history)
+//   Mathias-AURAND, beschmi, jdreier, cdumenil, meiersi
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Builtin/Signature.hs,
-//   lib/term/src/Term/Maude/Signature.hs, lib/term/src/Term/SubtermRule.hs
+//   lib/term/src/Term/Maude/Signature.hs,
+//   lib/term/src/Term/SubtermRule.hs
 
 //! Port of `Term.SubtermRule` from `lib/term/src/Term/SubtermRule.hs`.
 

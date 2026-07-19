@@ -1,26 +1,25 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Robert Künnemann, Hong-Thai Luu, Kevin
-//   Morio, Felix Linker, Benedikt Schmidt, Artur Cygan, Philip Lukert,
-//   "Pops" (github racoucho1u), Ralf Sasse, symphorien, Yavor Ivanov, "sans-
-//   sucre" (github), Felix Yan, "Nynko" (github), "Tom" (github BTom-GH),
-//   "ValentinYuri" (github), Jérôme (github Azurios-git), Katriel Cohn-
-//   Gordon, Charlie Jacomme, Alexander Dax, and other minor contributors
-//   (see upstream git history)
+//   meiersi, felixlinker, jdreier, rkunnema, racoucho1u, beschmi,
+//   rsasse, symphorien, PhilipLukertWork, kevinmorio, yavivanov,
+//   felixonmars, arcz, katrielalex, robert.kunnemann@cased.de, xaDxelA,
+//   and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/theory/src/Prover.hs,
 //   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
 //   lib/theory/src/Theory/Constraint/System/Constraints.hs,
 //   lib/theory/src/Theory/Constraint/System/Guarded.hs,
-//   lib/theory/src/Theory/Model/Fact.hs, lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/Model/Fact.hs,
+//   lib/theory/src/Theory/Proof.hs,
 //   lib/theory/src/Theory/ProofSkeleton.hs,
 //   lib/theory/src/Theory/Text/Parser/Formula.hs,
-//   lib/theory/src/Theory/Text/Parser/Proof.hs, src/Main/TheoryLoader.hs
+//   lib/theory/src/Theory/Text/Parser/Proof.hs,
+//   src/Main/TheoryLoader.hs
 
 //! Skeleton-replay prover — port of HS `replaceSorryProver`
 //! (lib/theory/src/Theory/Proof.hs).
 //!
 //! HS's `--prove` flag wires `replaceSorryProver $ runAutoProver`
-//! (TheoryLoader.hs:606) so the auto-prover runs **only at `by sorry`
+//! (TheoryLoader.hs:569-615, see line 606) so the auto-prover runs **only at `by sorry`
 //! leaves of the user-written skeleton**, not from scratch.  This
 //! preserves the case-decomposition structure the user wrote in the
 //! `.spthy` file even when the auto-prover would have picked a
@@ -59,7 +58,7 @@
 //!      ALL lemmas — it re-execs each stored step, keeping the verbatim
 //!      structure and turning any step that no longer applies into an
 //!      annotated `sorry /* invalid proof step encountered */`;
-//!   2. prove-time `replaceSorryProver $ runAutoProver` (TheoryLoader.hs:606)
+//!   2. prove-time `replaceSorryProver $ runAutoProver` (TheoryLoader.hs:569-615, see line 606)
 //!      over the lemmas the `--prove` selector targets — it re-runs the
 //!      auto-prover at every annotated `sorry` leaf.
 //!
@@ -108,7 +107,7 @@ pub fn replace_sorry_prove(
 
 /// Replay a stored skeleton WITHOUT auto-proving its open/sorry leaves —
 /// the equivalent of HS's close-time `checkAndExtendProver (sorryProver
-/// Nothing)` (Prover.hs:185, Proof.hs).  Each step's method and
+/// Nothing)` (Prover.hs:170-251, see line 185, Proof.hs).  Each step's method and
 /// children are taken verbatim from the skeleton; every fall-through that
 /// `checkProof` would turn into a `Sorry` with a `Nothing` system
 /// (Proof.hs) becomes an *unannotated* `ProofNode`
@@ -216,7 +215,7 @@ fn parsed_method_to_display(pm: &ParsedMethod) -> ProofMethod {
 
 /// Public root-level **annotated** `sorry` leaf (HS keeps the parsed
 /// `unproven ()` proof when a lemma has no stored skeleton —
-/// ProofSkeleton.hs:61; checkProof annotates the node with the start
+/// ProofSkeleton.hs:59-61, see line 61; checkProof annotates the node with the start
 /// system, so it renders as plain `by sorry` with no `/* unannotated */`
 /// — see `annotated_sorry`).
 pub fn annotated_sorry_root(sys: System) -> ProofNode {
@@ -290,12 +289,12 @@ fn replay_node(
     // a contradiction can actually be derived; else fall through to the
     // auto-prover.  This is HS-faithful, not a divergence: at close time
     // `checkProof` re-execs the stored `Finished (Contradictory Nothing)`
-    // step (`checkAndExecProofMethod`, Proof.hs:456); if the system is no
+    // step (`checkAndExecProofMethod`, Proof.hs:447-467, see line 456); if the system is no
     // longer contradictory the method returns `Nothing`, so checkProof
     // emits `sorryNode (Just "invalid proof step encountered") ...`
     // (Proof.hs:459-461) carrying `Just sys`.  For a `--prove`-selected
     // lemma `replaceSorryProver` then re-runs the auto-prover on that
-    // annotated sorry (Prover.hs:185 → TheoryLoader.hs:606), exactly the
+    // annotated sorry (Prover.hs:170-251, see line 185 → TheoryLoader.hs:569-615, see line 606), exactly the
     // `run_proof_search` fall-through below.
     if matches!(node.method, ParsedMethod::Contradiction) && node.cases.is_empty() {
         // HS replay (checkProof, Proof.hs) preserves the skeleton's STORED
@@ -323,8 +322,8 @@ fn replay_node(
     // pipeline: close-time `checkProof` marks the stale `Finished Solved`
     // an annotated `sorry /* invalid proof step encountered */`
     // (Proof.hs:459-461), and for a `--prove`-selected lemma
-    // `replaceSorryProver` then reproves it (Prover.hs:185 →
-    // TheoryLoader.hs:606).  Skeleton's SOLVED is HS's claim; RS verifies
+    // `replaceSorryProver` then reproves it (Prover.hs:170-251, see line 185 →
+    // TheoryLoader.hs:569-615, see line 606).  Skeleton's SOLVED is HS's claim; RS verifies
     // via its own solver.
     if matches!(node.method, ParsedMethod::SolvedLeaf) && node.cases.is_empty() {
         return finished_leaf(
@@ -488,13 +487,13 @@ fn replay_node(
     // stale and a new case appeared), invoke the auto-prover on each.
     // This is HS-faithful: `checkProof`'s `mergeMapsWith` treats the
     // runtime-produced cases as the LEFT map and the stored skeleton's
-    // children as the RIGHT map (Proof.hs:463 `mergeMapsWith
+    // children as the RIGHT map (Proof.hs:447-467, see line 463 `mergeMapsWith
     // unhandledCase noSystemPrf (go (d+1)) cases cs`), so a runtime-only
     // case (present left, absent right) goes through `unhandledCase =
-    // mapProofInfo (Nothing,) . prover d` (Proof.hs:462) → an annotated
+    // mapProofInfo (Nothing,) . prover d` (Proof.hs:447-467, see line 462) → an annotated
     // `sorry Nothing (Just se)`.  For a `--prove`-selected lemma
     // `replaceSorryProver` then auto-proves that annotated sorry
-    // (Prover.hs:185 → TheoryLoader.hs:606), matching the
+    // (Prover.hs:170-251, see line 185 → TheoryLoader.hs:569-615, see line 606), matching the
     // `run_proof_search` branch below.
     for (rt_name, rt_sys) in produced.into_iter() {
         if children.contains_key(&rt_name) { continue; }
@@ -723,7 +722,7 @@ fn resolve_method(parsed: &ParsedMethod, sys: &System) -> Option<ProofMethod> {
 }
 
 /// Exact-match a stored-proof fact's argument terms against a runtime
-/// [`LNFact`]'s terms — HS's `M.member` semantics (ProofMethod.hs:374
+/// [`LNFact`]'s terms — HS's `M.member` semantics (ProofMethod.hs:348-459, see line 374
 /// `guard (goal `M.member` L.get sGoals sys)`).
 ///
 /// HS parses the stored `solve(...)` goal into a full `Goal` carrying
@@ -821,7 +820,7 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             //
             // HS-faithful: HS's parsed `ActionG i fa` carries the
             // timepoint LVar `i` and matches by structural equality
-            // (HS ProofMethod.hs:374 `goal `M.member` sGoals`).  RS's
+            // (HS ProofMethod.hs:348-459, see line 374 `goal `M.member` sGoals`).  RS's
             // skeleton-text parser captures only the time-var ROOT
             // name (e.g. `i` from `#i.3`) — LVar idxs in the skeleton
             // and runtime differ because HS pretty-prints idxs after a
@@ -860,7 +859,7 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
                 return None;
             }
             // Narrow to candidates whose TERMS are EXACTLY EQUAL to the
-            // stored goal (HS `M.member`, ProofMethod.hs:374 — see
+            // stored goal (HS `M.member`, ProofMethod.hs:348-459, see line 374 — see
             // `fact_terms_match_exact`).  When the stored goal's term is
             // absent from the drifted system, HS returns `Nothing` and
             // marks the step invalid (Proof.hs:455-468).  A name+arity
@@ -885,13 +884,13 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             }
             // HS `M.member` keys on the FULL timepoint LVar (name AND idx):
             // `SolveGoal (ActionG i fa)` matches iff that exact `ActionG i
-            // fa` is a key of `sGoals` (ProofMethod.hs:374,
+            // fa` is a key of `sGoals` (ProofMethod.hs:348-459, see line 374,
             // `goal `M.member` sGoals`).  A stored step whose timepoint idx
             // has DRIFTED from the re-executed system's idx (e.g. stored
             // `!KU(~e0)@#vk.17` but re-execution mints the goal at `#vk.18`
             // after upstream case-numbering changed) is therefore a MISS in
             // HS, which emits `sorry /* invalid proof step encountered */`
-            // and keeps the stored subtree verbatim (Proof.hs:461).
+            // and keeps the stored subtree verbatim (Proof.hs:447-467, see line 461).
             // Matching by term + root-name alone (ignoring the idx) is too
             // lenient — it re-binds the drifted goal and replays it as a
             // live step, diverging from HS.  Require the exact LVar idx.
@@ -952,7 +951,7 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
                 return None;
             }
             // HS `M.member` keys on the FULL node LVar (name AND idx) of the
-            // parsed `PremiseG (i, v) fa` (ProofMethod.hs:374).  A stored
+            // parsed `PremiseG (i, v) fa` (ProofMethod.hs:348-459, see line 374).  A stored
             // premise step whose node idx has drifted from the re-executed
             // system is a miss in HS ⇒ invalid step.  Require the exact LVar
             // idx — same rationale as the Action branch above (matching by
@@ -968,7 +967,7 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
         GoalSpec::Disj { alts, alt_texts } => {
             // HS-faithful: HS parses the `solve(...)` text into a
             // `DisjG (Disj [GuardedFormula])` value via
-            // `disjSplitGoal` (Theory/Text/Parser/Proof.hs:61), then
+            // `disjSplitGoal` (Theory/Text/Parser/Proof.hs:39-72, see line 61), then
             // dispatches `SolveGoal goal` against `sys.goals` (HS
             // ProofMethod.hs:374: `guard (goal \`M.member\` sGoals)`).
             //
@@ -1088,7 +1087,7 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
         GoalSpec::Subterm { small_raw, big_raw } => {
             // HS `stSplitGoal` (Proof.hs:63-66) parses to
             // `SubtermG (small, big)` over LNTerm and dispatches via
-            // structural Map lookup in `sys.goals` (HS ProofMethod.hs:374).
+            // structural Map lookup in `sys.goals` (HS ProofMethod.hs:348-459, see line 374).
             // We compare by canonical pretty-printed text — see HS
             // `prettyGoal (SubtermG (l,r))` at Constraints.hs:281-282
             // which prints `prettyLNTerm l ⊏ prettyLNTerm r`.  Pretty
@@ -1437,9 +1436,9 @@ mod tests {
     ///
     /// HS reference: `ActionG i fa` carries the exact timepoint LVar `i`;
     /// HS dispatches `SolveGoal goal -> guard (goal `M.member` sGoals)`
-    /// (ProofMethod.hs:374) — the goal key is the full LVar, so the idx is
+    /// (ProofMethod.hs:348-459, see line 374) — the goal key is the full LVar, so the idx is
     /// part of the match.  HS pretty-prints a timepoint as `#t2` when its
-    /// idx is 0 and `#t2.7` when its idx is 7 (`Show LVar`, LTerm.hs:526),
+    /// idx is 0 and `#t2.7` when its idx is 7 (`Show LVar`, LTerm.hs:526-533),
     /// so a stored skeleton's `time_idx` always equals the LVar idx of the
     /// goal it was generated from — the matcher requires that exact idx.
     #[test]
@@ -1657,7 +1656,7 @@ mod tests {
     ///
     /// HS reference: HS `disjSplitGoal` (Proof.hs:61) parses to
     /// `DisjG (Disj [Guarded])` and matches the runtime Goal::Disj by
-    /// structural equality (ProofMethod.hs:374).  The RS shape
+    /// structural equality (ProofMethod.hs:348-459, see line 374).  The RS shape
     /// signature must uniquely pick the disjunction whose alt-count
     /// matches the skeleton.
     #[test]

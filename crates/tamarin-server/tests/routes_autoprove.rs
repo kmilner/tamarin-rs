@@ -1,8 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Artur Cygan, Simon Meier, Felix Linker, Jannik Dreier, Cas Cremers,
-//   "Jackie" (github kanakanajm), Ralf Sasse, Yann Colomb, "Tom" (github
-//   BTom-GH), Benedikt Schmidt, Alexander Dax, Adrian Dapprich, and other
-//   minor contributors (see upstream git history)
+//   only minor contributions per cited ranges (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
 //   src/Web/Handler.hs
 

@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Benedikt Schmidt, Jannik Dreier, Robert Künnemann, Philip Lukert, and
-//   other minor contributors (see upstream git history)
+//   beschmi, jdreier, rkunnema, PhilipLukertWork, meiersi, and other
+//   minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Maude/Parser.hs
 
@@ -225,7 +225,7 @@ fn parse_substitutions(c: &mut Cursor) -> Result<Vec<MSubst>, ParseError> {
                 break;
             }
         }
-        // HS `parseSubstitution` (Parser.hs:293) uses `many1 parseEntry` for
+        // HS `parseSubstitution` (Parser.hs:289-296, see line 293) uses `many1 parseEntry` for
         // the non-`empty substitution` branch, requiring at least one entry.
         // (The `empty substitution` line is handled separately above.)
         if entries.is_empty() {
@@ -366,7 +366,7 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
             }
         }
         // C operator (em)?
-        // Mirror HS `fAppC EMap args` (Maude/Parser.hs:355): sort the two
+        // Mirror HS `fAppC EMap args` (Maude/Parser.hs:314-369, see line 355): sort the two
         // arguments so `em` is canonical regardless of Maude's output order.
         if suffix == EMAP_SYM_STRING {
             return crate::term::f_app_c(CSym::EMap, args);

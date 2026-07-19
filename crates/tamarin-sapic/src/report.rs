@@ -1,5 +1,5 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Charlie Jacomme, Artur Cygan, Robert Künnemann
+//   charlie-j, rkunnema, arcz
 // Ported from upstream tamarin-prover sources:
 //   lib/sapic/src/Sapic/Report.hs
 
@@ -206,7 +206,7 @@ fn report_map_terms_comb(
             match_vars,
         },
         ProcessCombinator::Lookup(t, v) => ProcessCombinator::Lookup(subst(loc, &t), v),
-        // `Cond _` is `undefined` in HS (Report.hs:85); never reached because
+        // `Cond _` is `undefined` in HS (Report.hs:80-89, see line 85); never reached because
         // location-report theories use `if t1 = t2` (CondEq) conditionals.
         // Leave any other combinator unchanged.
         other => other,

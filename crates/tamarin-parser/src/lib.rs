@@ -1,3 +1,10 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   charlie-j, rkunnema, meiersi, jdreier, yavivanov, kevinmorio,
+//   BTom-GH, rsasse, ValentinYuri, racoucho1u, and other minor
+//   contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Theory/Text/Parser.hs
+
 //! Surface parser for Tamarin's `.spthy` security-protocol theory files.
 //!
 //! Port of `Theory.Text.Parser.*` from `lib/theory/src/Theory/Text/Parser/`.

@@ -1,8 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Benedikt Schmidt, Jannik Dreier, Robert Künnemann, Philip
-//   Lukert, Ralf Sasse, Felix Linker, "Nynko" (github), Charlie Jacomme,
-//   "Tom" (github BTom-GH), and other minor contributors (see upstream git
-//   history)
+//   meiersi, beschmi, jdreier, PhilipLukertWork, rkunnema, felixlinker,
+//   rsasse, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Maude/Types.hs,
 //   lib/term/src/Term/Substitution/SubstVFresh.hs,
@@ -625,9 +623,9 @@ impl EquationStore {
         // result is the local subst directly — NO Maude call.  This is
         // critical for foo_eligibility-style cases: the local unifier
         // orients same-sort var-var with larger-idx-as-key
-        // (Unification.hs:241), so stable pattern vars (small idx like
+        // (Unification.hs:235-243, see line 241), so stable pattern vars (small idx like
         // t.1, t.2) stay on the value side and are dropped by
-        // `restrict stableVars` (Sources.hs:118).
+        // `restrict stableVars` (Sources.hs:113-137, see line 118).
         let local_result = tamarin_term::unification::unify_lnterm_factored(applied.clone());
         let local_result = match local_result {
             Some(r) => r,
@@ -727,7 +725,7 @@ impl EquationStore {
         // applyBound
         // rounds with the local subst and the Maude unifier SEPARATELY,
         // not one round with their composition; (b) SplitLater callers get
-        // a SplitG goal + a live singleton disj (HS Reduction.hs:618
+        // a SplitG goal + a live singleton disj (HS Reduction.hs:616-618, see line 618
         // `solveRuleEqs SplitLater`, addEqs/performSplit at 719-725);
         // (c) addDisj bumps the next-split-id counter.
         // (Paired HS/RS traces on Scott::key_secrecy show applyBound never
@@ -760,7 +758,7 @@ impl EquationStore {
             // `compose` accumulation collapses to a single `from_list` build.
             let maude_subst = LNSubst::from_list(raw);
             // Haskell-faithful: compose local_subst with Maude's result
-            // (Unification.hs:147 `flattenUnif` =
+            // (Unification.hs:145-146, see line 147 `flattenUnif` =
             // `map (\`composeVFresh\` subst) substs`).
             let subst = maude_subst.compose(&local_subst);
             log_fresh_bindings("maude_single", &subst);
@@ -1777,7 +1775,7 @@ impl EquationStore {
         // (`applyEqStore`'s `asubst \`compose\` eqsSubst`).  RS re-seeds a
         // per-pop counter from `avoid sys = bounds_max`, which — HS-faithfully,
         // matching `foldFrees (SubstVFresh) = foldFrees f . M.keys`
-        // (SubstVFresh.hs:197) — counts only DOMAIN keys, not range vars; when
+        // (SubstVFresh.hs:196-202, see line 197) — counts only DOMAIN keys, not range vars; when
         // under-advanced (the WF message-derivation probe of a let-destructor
         // rule) `alloc` could draw an idx equal to an already-folded free-subst
         // range var, fusing two witnesses and forcing the eq-store false
@@ -2211,7 +2209,7 @@ impl EquationStore {
                         format!("{:?} =? {:?}", e.lhs, e.rhs)).collect::<Vec<_>>());
                 }
                 let counter_before_maude = aes_maude.fresh_counter_peek();
-                // HS `applyBound` (EquationStore.hs:434): `unifiers =
+                // HS `applyBound` (EquationStore.hs:406-446, see line 434): `unifiers =
                 // unifyLNTerm eqs` — NO avoid.  The RHS terms were already
                 // rebased above `avoidSet` by the uniform-shift rename above
                 // (HS `ran = renameAvoiding (range) avoidSet`), so the reply
@@ -2279,7 +2277,7 @@ impl EquationStore {
                     // introduce narrowing witnesses for cross-sort
                     // var-var unification.  E.g. for `Var(~k:Fresh) =
                     // Var(~mw:Msg)`, the local unifier returns
-                    // `~mw:Msg → Var(~k:Fresh)` (Unification.hs:241
+                    // `~mw:Msg → Var(~k:Fresh)` (Unification.hs:235-243, see line 241
                     // orientation).  After restrict drops `~mw`, the
                     // `~k` narrowing info is lost AND `~k` (a system
                     // var in new_subst's range) ends up referenced
@@ -2387,7 +2385,7 @@ impl EquationStore {
                     // returns the raw Maude unifier outputs without
                     // calling `normSubstVFresh'` — that normaliser is only
                     // used during VARIANT COMPUTATION for rules
-                    // (RuleVariants.hs:74 `normSubstVFresh'`), NOT here.  Normalising here
+                    // (RuleVariants.hs:61-134, see line 74 `normSubstVFresh'`), NOT here.  Normalising here
                     // hides non-NF range values (e.g. `Xor(~k,~k)` that
                     // reduces to `zero`) from the post-fan-out
                     // `simpMinimize`/`substCreatesNonNormalTerms` filter,
@@ -2828,7 +2826,7 @@ mod tests {
 
     /// `add_eqs` for AC-free, same-sort var-var input must orient the
     /// resulting subst with LARGER-idx as KEY (Haskell `unifyRaw`
-    /// convention, Unification.hs:241).
+    /// convention, Unification.hs:235-243, see line 241).
     ///
     /// This is the most important orientation invariant for downstream
     /// `restrict stableVars`: stable pattern vars (small idx) must stay

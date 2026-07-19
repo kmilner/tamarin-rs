@@ -1,9 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Benedikt Schmidt, "Pops" (github
-//   racoucho1u), Philip Lukert, Ralf Sasse, Felix Linker, Felix Yan, Yavor
-//   Ivanov, Robert Künnemann, Artur Cygan, Adrian Dapprich, Nick Moore,
-//   Charlie Jacomme, Katriel Cohn-Gordon, "Tom" (github BTom-GH), and other
-//   minor contributors (see upstream git history)
+//   meiersi, beschmi, jdreier, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Maude/Process.hs,
 //   lib/term/src/Term/Maude/Types.hs,
@@ -375,9 +372,9 @@ impl MaudeHandle {
         // clone share this single immutable signature.
         let sig = Arc::new(sig);
         // stderr: INHERIT, not pipe.  HS uses `runInteractiveCommand`
-        // (System.Process) at Process.hs:109, which opens a PIPE for
+        // (System.Process) at Process.hs:105-128, see line 109, which opens a PIPE for
         // stderr too — the returned `herr` (captured into the `MP` record
-        // at Process.hs:115) is a real stderr pipe handle.  HS simply
+        // at Process.hs:105-128, see line 115) is a real stderr pipe handle.  HS simply
         // never reads/drains that pipe.  We deliberately INHERIT stderr
         // instead, because an undrained stderr pipe would deadlock us:
         // if we pipe stderr but never drain it,
@@ -836,7 +833,7 @@ impl MaudeHandle {
         let reply = inner.execute_memo(&cmd, |s| s.unify_count += 1)?;
         drop(inner);
         let msubsts = maude_parse::parse_unify_reply(&reply)?;
-        // HS `avoid (M.elems bindings)` (Term/Maude/Types.hs:113 via
+        // HS `avoid (M.elems bindings)` (Term/Maude/Types.hs:94-106, see line 113 via
         // LTerm.hs:656-657 `avoid = maybe 0 (succ . snd) . boundsVarIdx`):
         // the witness fresh-supply floor is the max idx over ALL of the
         // query's own binding vars — i.e. the vars of `maude_eqs`, which
@@ -891,7 +888,7 @@ impl MaudeHandle {
             let mut per_arm_ctx = ctx.clone();
             out.push(msubst_to_lnsubst_with_avoid(ms, &mut per_arm_ctx, input_max)?);
         }
-        // HS-faithful `removeRenamings` (Maude/Types.hs:130): HS's
+        // HS-faithful `removeRenamings` (Maude/Types.hs:123-127, see line 130): HS's
         // `msubstToLSubstVFresh bindings substMaude` ends with
         // `removeRenamings $ substFromListVFresh slist` — drops every
         // entry whose image is just a Var with no role elsewhere in
@@ -910,7 +907,7 @@ impl MaudeHandle {
             })
             .collect();
         // HS-faithful `flattenUnif (subst, substs) = map (composeVFresh _ subst) substs`
-        // (Unification.hs:147).  For the AC path RS sends ONLY the AC residual
+        // (Unification.hs:145-146, see line 147).  For the AC path RS sends ONLY the AC residual
         // equations to Maude and composes each arm with the non-AC factored
         // substitution `factored_m`, mirroring HS
         // flattenUnif's `(subst, substs)`.  `composeVFresh factored_m arm` also
@@ -925,7 +922,7 @@ impl MaudeHandle {
         // and `perform_split` picks the same case order.
         //
         // HS `flattenUnif (subst, substs) = map (`composeVFresh` subst) substs`
-        // (Unification.hs:147) composes each Maude arm with `subst = m`, the
+        // (Unification.hs:145-146, see line 147) composes each Maude arm with `subst = m`, the
         // non-AC factored substitution.  Because we factor and send only the
         // AC residuals to Maude, `factored_m` carries the
         // non-AC bindings and MUST be the second argument to composeVFresh.
@@ -990,7 +987,7 @@ impl MaudeHandle {
     /// `matchWith t p = DelayedMatches [(t, p)]` is `(subject, pattern)`
     /// (`Term/Rewriting/Definitions.hs:90-93`), and `matchViaMaude`
     /// turns each pair into `Equal subject pattern` via
-    /// `uncurry Equal <$> ms` (`Term/Maude/Process.hs:246`). The
+    /// `uncurry Equal <$> ms` (`Term/Maude/Process.hs:236-252, see line 246`). The
     /// emitted Maude command is then `match PATTERN <=? SUBJECT`,
     /// i.e. `matchCmd`'s `ppTerms t2s <> " <=? " <> ppTerms t1s` where
     /// `(t1s, t2s) = unzip [(a, b) | Equal a b <- eqs]` so `t2s = b =
@@ -1165,7 +1162,7 @@ impl MaudeHandle {
     /// their shared synthetic constant.
     ///
     /// This mirrors HS's `matchTerm` (Guarded.hs:810-815) called from
-    /// `impliedFormulas` (System.hs:1144): the universal is fully
+    /// `impliedFormulas` (System.hs:1111-1145, see line 1144): the universal is fully
     /// `skolemizeGuarded`-ed before matching, so every FREE LVar
     /// (universal-non-bound vars, originating from the system context)
     /// becomes a `Con (SkConst x)`, while the universal-bound
@@ -1299,7 +1296,7 @@ impl MaudeHandle {
         let msubsts = maude_parse::parse_variants_reply(&reply)?;
         let mut out = Vec::with_capacity(msubsts.len());
         // HS-faithful: each variant's back-conversion uses a fresh ctx
-        // clone.  Mirrors HS `msubstToLSubstVFresh` (Maude/Types.hs:130)
+        // clone.  Mirrors HS `msubstToLSubstVFresh` (Maude/Types.hs:123-127, see line 130)
         // where each call to `runBackConversion (...) bindings` runs
         // `evalBindT back bindings` with the same INITIAL bindings —
         // augmentations to the binding map are per-call.
@@ -1311,7 +1308,7 @@ impl MaudeHandle {
         // # and %) and the second lookup returns the first's LVar.
         //
         // HS-faithful: variant back-conversion uses hint "x" unconditionally
-        // (Maude/Types.hs:138), NOT the perform_split-motivated
+        // (Maude/Types.hs:137-157, see line 138), NOT the perform_split-motivated
         // name-preserve path used by `unify`/`match`.  The variants flow
         // into `composeVFresh`+`pracVariants` rendering; using "x" here
         // matches both HS's printed `~k = ~x.5` form AND HS's variant
@@ -1611,7 +1608,7 @@ fn msubst_to_lnsubst_with_avoid(
         let lv = crate::maude_types::substitute_lookup_var(ctx, *sort, *idx)
             .ok_or_else(|| MaudeError::Other(format!(
                 "no binding for Maude variable x{}:{:?}", idx, sort)))?;
-        // HS-faithful: HS's `msubstToLSubstVFresh` (Maude/Types.hs:138)
+        // HS-faithful: HS's `msubstToLSubstVFresh` (Maude/Types.hs:137-157, see line 138)
         // UNCONDITIONALLY uses `"x"` as the name hint for Maude-introduced
         // witnesses inside `eqsConj` substitutions.  The commented-out
         // alternative branch at Maude/Types.hs:134-137 (preserve domain
@@ -1970,7 +1967,7 @@ mod tests {
     }
 
     // HS's `impliedFormulas` runs `skolemizeGuarded` over the WHOLE clause
-    // (`System.hs:1122`): every FREE (non-universal) LVar of the guard
+    // (`System.hs:1111-1145, see line 1122`): every FREE (non-universal) LVar of the guard
     // pattern becomes a Maude *constant*; only universal-bound vars stay
     // bindable. `match_eqs_const_subject` over-matches such guards (treats
     // free vars as Maude variables); `match_eqs_skolemize_both` treats them

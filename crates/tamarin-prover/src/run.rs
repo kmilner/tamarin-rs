@@ -1,19 +1,17 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Hong-Thai Luu, Robert Künnemann, Kevin
-//   Morio, Artur Cygan, Adrian Dapprich, Benedikt Schmidt, Charlie Jacomme,
-//   "Tom" (github BTom-GH), Felix Linker, Dominik Schoop, Philip Lukert,
-//   "sans-sucre" (github), Yavor Ivanov, "Nynko" (github), "ValentinYuri"
-//   (github), Ralf Sasse, "Pops" (github racoucho1u), "gilcu3" (github),
-//   Mathias Aurand, symphorien, Felix Yan, Jérôme (github Azurios-git),
-//   Alexander Dax, Hizbullah, Katriel Cohn-Gordon, and other minor
-//   contributors (see upstream git history)
+//   kevinmorio, meiersi, jdreier, arcz, rsasse, rkunnema, beschmi,
+//   gilcu3, Nynko, felixlinker, addap, yavivanov, Hong-Thai,
+//   racoucho1u, ValentinYuri, BTom-GH, PhilipLukertWork, sans-sucre,
+//   Mathias-AURAND, Azurios-git, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/ClosedTheory.hs, lib/theory/src/Items/RuleItem.hs,
 //   lib/theory/src/Prover.hs, lib/theory/src/Rule.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
 //   lib/theory/src/Theory/Constraint/System/Guarded.hs,
 //   lib/theory/src/Theory/Constraint/System/JSON.hs,
-//   lib/theory/src/Theory/Model/Rule.hs, lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Proof.hs,
 //   lib/theory/src/Theory/Text/Parser.hs,
 //   lib/theory/src/Theory/Text/Parser/Accountability.hs,
 //   lib/theory/src/Theory/Text/Parser/Rule.hs,
@@ -79,13 +77,13 @@ pub enum LemmaVerdict {
     /// We exhausted the search budget or hit `Sorry`.
     Analyzed,
     /// HS `UnfinishableProof`: no open goals but subterm store has reducible
-    /// operators.  HS `showProofStatus` (Theory/Proof.hs:1109):
+    /// operators.  HS `showProofStatus` (Theory/Proof.hs:1104-1112, see line 1109):
     ///   "analysis cannot be finished (reducible operators in subterms)"
     Unfinishable,
-    /// HS `UndeterminedProof` (Theory/Proof.hs:1111): proof tree folds to a
+    /// HS `UndeterminedProof` (Theory/Proof.hs:1104-1112, see line 1111): proof tree folds to a
     /// status that could not be determined — renders "analysis undetermined".
     Undetermined,
-    /// HS `InvalidatedProof` (Theory/Proof.hs:1112): a stored proof step was
+    /// HS `InvalidatedProof` (Theory/Proof.hs:1104-1112, see line 1112): a stored proof step was
     /// invalidated (e.g. by an interactive reuse-lemma edit) — renders
     /// "proof has been invalidated".
     Invalidated,
@@ -97,7 +95,7 @@ pub enum LemmaVerdict {
 }
 
 /// HS-faithful per-lemma summary line, mirroring `prettyClosedSummary`
-/// (ClosedTheory.hs:463, which renders `showProofStatus ... <-> (siz "steps")`):
+/// (ClosedTheory.hs:463-491, which renders `showProofStatus ... <-> (siz "steps")`):
 ///   `<lemma> (<quantifier>): falsified - found trace (<N> steps)`
 ///   `<lemma> (<quantifier>): verified (<N> steps)`
 ///   `<lemma> (<quantifier>): analysis incomplete (<N> steps)`
@@ -117,13 +115,13 @@ fn format_lemma_summary_line(r: &LemmaResult) -> String {
         LemmaVerdict::Analyzed
         | LemmaVerdict::Skipped
         | LemmaVerdict::Filtered => format!("analysis incomplete ({} steps)", r.proof_steps),
-        // HS `showProofStatus _ UnfinishableProof` (Theory/Proof.hs:1109).
+        // HS `showProofStatus _ UnfinishableProof` (Theory/Proof.hs:1104-1112, see line 1109).
         LemmaVerdict::Unfinishable =>
             format!("analysis cannot be finished (reducible operators in subterms) ({} steps)", r.proof_steps),
-        // HS `showProofStatus _ UndeterminedProof` (Theory/Proof.hs:1111).
+        // HS `showProofStatus _ UndeterminedProof` (Theory/Proof.hs:1104-1112, see line 1111).
         LemmaVerdict::Undetermined =>
             format!("analysis undetermined ({} steps)", r.proof_steps),
-        // HS `showProofStatus _ InvalidatedProof` (Theory/Proof.hs:1112).
+        // HS `showProofStatus _ InvalidatedProof` (Theory/Proof.hs:1104-1112, see line 1112).
         LemmaVerdict::Invalidated =>
             format!("proof has been invalidated ({} steps)", r.proof_steps),
         LemmaVerdict::Error(msg) => format!("error: {}", msg),
@@ -137,8 +135,8 @@ pub struct LemmaResult {
     pub verdict: LemmaVerdict,
     pub elapsed_ms: u128,
     /// Proof-tree node count — matches HS's "(N steps)" in
-    /// `--prove` output (`foldProof proofStepSummary`, ClosedTheory.hs:484,491,
-    /// summing one per ProofStep via `foldProof`, Theory/Proof.hs:358).
+    /// `--prove` output (`foldProof proofStepSummary`, ClosedTheory.hs:463-491, see line 484,491,
+    /// summing one per ProofStep via `foldProof`, Theory/Proof.hs:358-362).
     pub proof_steps: usize,
     /// `true` for `exists-trace` lemmas, `false` for `all-traces`.
     /// Drives the trace-quantifier label in the summary.
@@ -203,7 +201,7 @@ fn run_test(_args: &Args) -> Result<i32, RunError> {
         }
     }
     let dot = std::process::Command::new("dot").arg("-V").output();
-    // HS `successGraphVizDot = isJust maybeSuccessGraphVizDot` (Test.hs:51):
+    // HS `successGraphVizDot = isJust maybeSuccessGraphVizDot` (Test.hs:42-112, see line 51):
     // a missing/unavailable `dot` is a test FAILURE, not a silent skip.
     let success_graphviz = match dot {
         Ok(out) if out.status.success() => {
@@ -218,7 +216,7 @@ fn run_test(_args: &Args) -> Result<i32, RunError> {
     };
     println!("\n*** TEST SUMMARY ***");
     // HS `success = successMaude && successGraphVizDot && successTerm`
-    // (Test.hs:96); on failure it warns and `exitFailure` (Test.hs:97-105).
+    // (Test.hs:42-112, see line 96); on failure it warns and `exitFailure` (Test.hs:97-105).
     // Maude reachability is asserted above (early `Ok(1)` return), so the
     // only failure reachable here is a missing GraphViz `dot`.
     if success_graphviz {
@@ -267,7 +265,7 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
     //     generator is byte-faithful (exactly 51 rules); `variants_intruder`
     //     applies `remove_renamings` to drop redundant identity-variants.
     //   - BP: `bpIntruderRules False` (runtime).  Like HS
-    //     (Intruder.hs:50), we start a SECOND Maude handle on
+    //     (Intruder.hs:43-63, see line 50), we start a SECOND Maude handle on
     //     `bp_maude_sig()` and generate the 75 BP rules at runtime via
     //     `bp_intruder_rules(false, ..)`.  This tracks the CURRENT Maude
     //     rather than the stale cached `data/intruder_variants_bp.spthy`
@@ -281,7 +279,7 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
     })?;
     let bp_rules = tamarin_theory::intruder_rules::bp_intruder_rules(false, &bp_maude);
     // HS `putStrLn (dhS ++ bpS)` where each block is
-    // `renderDoc . prettyIntruderVariants` (Rule.hs:1343): blank-line-separated
+    // `renderDoc . prettyIntruderVariants` (Rule.hs:1343-1346): blank-line-separated
     // `rule (modulo AC) NAME:` rules with HughesPJ body wrapping (`sep`/`fsep`
     // at the standard width) and NO trailing newline — so the DH and BP blocks
     // abut (the DH `d_inv` body directly precedes the BP `c_pmult` header with
@@ -481,10 +479,10 @@ fn guess_frontend_dist(data_dir: &std::path::Path) -> Option<std::path::PathBuf>
 /// (non-flag) tokens land in cmdargs' positional catch-all
 /// (`flagArg (updateArg "") ""`) and are ignored; an unknown flag or
 /// stop-on-trace value aborts the run (cmdargs `processValue` /
-/// `error e` on `ArgumentError`, TheoryLoader.hs:661).
+/// `error e` on `ArgumentError`, TheoryLoader.hs:618-665, see line 661).
 ///
 /// The strategy only steers prove-mode (`constructAutoProver` is used
-/// solely when `thyOpts.proveMode`, TheoryLoader.hs:606); without
+/// solely when `thyOpts.proveMode`, TheoryLoader.hs:569-615, see line 606); without
 /// `--prove` the non-prove default `CutDFS` applies.
 fn effective_config(
     args: &Args,
@@ -531,7 +529,7 @@ fn cli_cut(args: &Args) -> Option<tamarin_theory::constraint::solver::context::C
 }
 
 /// HS shows the maude tool's basename when the user didn't pass
-/// `--maude-path`, and the full path when they did (Console.hs:150).  We
+/// `--maude-path`, and the full path when they did (Console.hs:97-149, see line 150).  We
 /// can't re-introspect the flag downstream, so we key off `args.maude_path`
 /// being `None` (the default) vs `Some` (user-supplied).
 fn maude_display_name(args: &Args) -> String {
@@ -561,8 +559,8 @@ fn print_maude_banner(disp: &str, ver: Option<&str>) {
 fn run_batch(args: &Args) -> Result<i32, RunError> {
     // HS-faithful internal parallelism via rayon.  Mirrors the four
     // `using parList`/`parTraversable`/`parMap` sites HS uses (see
-    // `lib/theory/src/Prover.hs:102,195`, `Theory/Constraint/Solver/Sources.hs`,
-    // `lib/theory/src/TheoryObject.hs:744,752`).  Default: full machine
+    // `lib/theory/src/Prover.hs:68-164, see line 102,195`, `Theory/Constraint/Solver/Sources.hs`,
+    // `lib/theory/src/TheoryObject.hs:732-768, see line 744,752`).  Default: full machine
     // parallelism (`available_parallelism()`, uncapped — Maude IPC runs
     // through the contention-free `MaudePool`, so larger pools scale;
     // memory is budgeted via `--maude-processes`).
@@ -580,7 +578,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             "--output-module is not yet ported to the Rust prover.".to_string(),
         ));
     }
-    // `--stop-on-trace` selects HS's `SolutionExtractor` (Theory/Proof.hs:695,
+    // `--stop-on-trace` selects HS's `SolutionExtractor` (Theory/Proof.hs:693-694, see line 695,
     // TheoryLoader.hs:355-362) and, when the CLI flag is absent, HS
     // additionally consults the theory's in-file `configuration:` block
     // (`configStopOnTrace`, TheoryLoader.hs:640-666) — a PER-THEORY value,
@@ -659,7 +657,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             Ok(thy) => thy,
             Err(e) => {
                 // HS batch: `handleError e@(ParserError _) = die $ show e`
-                // (Main/Mode/Batch.hs:234).  `die` writes `show e` — the raw
+                // (Main/Mode/Batch.hs:87-316, see line 234).  `die` writes `show e` — the raw
                 // parsec frame, with `inFile` as the `SourcePos` name — to
                 // stderr and exits with code 1.  No `error:` prefix and no
                 // `parse error in …:` wrapper (neither of which HS emits).
@@ -680,7 +678,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             .map_err(|e| RunError(format!(
                 "_restrict expansion failed in {}: {}", in_file, e.message)))?;
         // HS emits this trace marker as soon as the theory parses
-        // (TheoryLoader.hs:409).  `--parse-only` and `--quiet` skip it.
+        // (TheoryLoader.hs:401-424, see line 409).  `--parse-only` and `--quiet` skip it.
         let theory_name = parsed.name.clone();
         // HS `[Theory X] …` progress markers go to stderr and are suppressed
         // by `--quiet` / `--parse-only`.  Route all of them through one guard
@@ -702,7 +700,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // (not gated by `--parse-only`) so a malformed theory is
         // surfaced even without proving.
         //
-        // HS-faithful: HS's `thyProtoRules` (Wellformedness.hs:134)
+        // HS-faithful: HS's `thyProtoRules` (Wellformedness.hs:133-134, see line 134)
         // applies `applyMacroInRule (theoryMacros thy)` to every rule
         // BEFORE the checks run — so `Fr(test())` where `test() = ~x`
         // becomes `Fr(~x)` and passes.  We mirror by cloning `parsed`
@@ -769,7 +767,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         );
 
         // HS emits this marker after `translateTheory` finishes
-        // (TheoryLoader.hs:454).
+        // (TheoryLoader.hs:448-460, see line 454).
         marker("Theory translated");
 
         // Port of HS `formulaReports.checkTerms` (Wellformedness.hs:960-985,
@@ -824,7 +822,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         }
 
         // SAPIC `process:` translation (HS `typeTheory` → `translate`,
-        // TheoryLoader.hs:430).  Runs ONLY for `is_sapic` theories (exactly one
+        // TheoryLoader.hs:428-443, see line 430).  Runs ONLY for `is_sapic` theories (exactly one
         // top-level `process:`); a no-op otherwise, so non-process theories are
         // byte-unchanged.  Injects the generated rules + `single_session`
         // restriction + `heuristic: p` into BOTH `parsed` (for rendering) and
@@ -845,7 +843,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         let _sapic_funs_guard =
             tamarin_theory::elaborate::set_user_funs_for_theory(&parsed);
         {
-            // HS `Acc.checkWellformedness t` (translateTheory, TheoryLoader.hs:455)
+            // HS `Acc.checkWellformedness t` (translateTheory, TheoryLoader.hs:448-460, see line 455)
             // runs on the PRE-translation theory `t` — the report is computed
             // from `thy`, not from the `transThy` that `Sapic.translate` /
             // `Acc.translate` produce.  So it must see the ORIGINAL rules /
@@ -861,7 +859,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             ).map_err(|e| RunError(format!(
                 "SAPIC translation error in {}: {}", in_file, e.message)))?;
 
-            // Accountability translation (HS `Acc.translate`, TheoryLoader.hs:430):
+            // Accountability translation (HS `Acc.translate`, TheoryLoader.hs:428-443, see line 430):
             // `Sapic.translate >=> Acc.translate`.  Expands each
             // `... accounts for` lemma into its verification-condition lemmas +
             // case-test predicates, injecting into BOTH `parsed` (rendering) and
@@ -886,7 +884,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             }
 
             // HS `preReport = Sapic.checkWellformedness t ++ Acc.checkWellformedness t`
-            // (TheoryLoader.hs:455), PREPENDED to the rest of the report
+            // (TheoryLoader.hs:448-460, see line 455), PREPENDED to the rest of the report
             // (`preReport ++ postReport`): SAPIC-process warnings first, then the
             // accountability RP check (computed above, pre-translation), then
             // every other wellformedness entry.  The trailing `N wellformedness
@@ -1077,7 +1075,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 let TheoryItem::Rule(opr) = item else { continue };
 
                 // Sub-check 1: "Rule has no variants" — mirrors HS
-                // `variantsCheck` (Wellformedness.hs:362):
+                // `variantsCheck` (Wellformedness.hs:354-372, see line 362):
                 //   `guard (null recomputedVariants) $> ...`
                 // Calls `rule_has_no_variants_for_wf` which implements
                 // the full HS `variantsProtoRule` detection logic including
@@ -1140,7 +1138,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // Annotate per-rule loop breakers on the OUTER theory so
         // `pretty_closed_theory` can render HS's `// loop breaker:
         // [<idx>]` comments at the rule output.  HS faithfulness:
-        // `prettyClosedProtoRule` (ClosedTheory.hs:337,353) reads
+        // `prettyClosedProtoRule` (ClosedTheory.hs:332-366, see line 337,353) reads
         // `prettyLoopBreakers` from the `ProtoRuleACInfo` baked into
         // every closed rule by `closeTheoryWithMaude`.  Our prover
         // computes them inside `ProofContext::new` on a LOCAL copy
@@ -1174,7 +1172,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         let deriv_timeout = args.derivcheck_timeout.unwrap_or(5) as u32;
         if deriv_timeout > 0 {
             // HS emits these markers around the per-variable derivability
-            // check (TheoryLoader.hs:485, :498).
+            // check (TheoryLoader.hs:463-533, see line 485, :498).
             marker("Derivation checks started");
             if let Some(m) = file_maude.as_ref() {
                 let extra = tamarin_theory::deriv_check::check_message_derivation(
@@ -1223,7 +1221,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     elapsed_ms: 0,
                     // HS counts the default `Sorry` placeholder proof
                     // as 1 step (one `LNode (ProofStep Sorry ...)` —
-                    // see `foldProof proofStepSummary`, ClosedTheory.hs:484,491).
+                    // see `foldProof proofStepSummary`, ClosedTheory.hs:463-491, see line 484,491).
                     // Match it.
                     proof_steps: 1,
                     exists_trace: matches!(
@@ -1277,14 +1275,14 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // CLI `--heuristic`/`--oraclename`/`--oracle-only` (HS
             // `AutoProver` via `constructAutoProver`, TheoryLoader.hs:702-706).
             // When `--heuristic` is given it OVERRIDES the per-lemma / theory
-            // heuristic for every lemma (HS `selectHeuristic`, Proof.hs:707).
+            // heuristic for every lemma (HS `selectHeuristic`, Proof.hs:705-716, see line 707).
             let cli_heuristic = tamarin_theory::prove::CliHeuristic {
                 raw: args.heuristic.clone(),
                 oracle_name: args.oracle_name.clone(),
                 oracle_only: args.oracle_only,
             };
             // `--auto-sources` (HS `closeTheoryWithMaude` autosources branch,
-            // Prover.hs:171): when the raw sources contain partial
+            // Prover.hs:170-251, see line 171): when the raw sources contain partial
             // deconstructions, annotate the rules with AUTO_* actions and add
             // the `AUTO_typing` sources lemma — to the elaborated theory (so it
             // renders + is iterated below) and the proving session alike.
@@ -1297,7 +1295,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 cli_heuristic.clone(), cut).ok();
 
             // HS prints "[Theory X] Theory closed" right after `closeTheory`
-            // (TheoryLoader.hs:596) and BEFORE the proof search, which it
+            // (TheoryLoader.hs:569-615, see line 596) and BEFORE the proof search, which it
             // forces lazily as `provedThy` is serialised — so the marker
             // appears in moments regardless of proving cost.  RS's
             // `ProverSession::build` is the `closeTheory` analog, so emit the
@@ -1466,7 +1464,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         }
 
         // HS emits this marker after `closeTheory` finishes
-        // (TheoryLoader.hs:596).  In prove mode it is emitted before the
+        // (TheoryLoader.hs:569-615, see line 596).  In prove mode it is emitted before the
         // prove loop (above); here it covers only the no-prove /
         // precompute-only paths, which skip that loop.
         if args.precompute_only || (!prove_anything && !any_stored_proof) {
@@ -1617,8 +1615,8 @@ pub fn out_path_for(args: &Args, in_file: &str) -> Option<String> {
 /// proof tree.  Each `step` in the proof's textual form (a `simplify` /
 /// `solve(...) case X` / `qed` / `SOLVED` annotation) corresponds to one
 /// ProofNode.  Mirrors HS's `foldProof proofStepSummary` (which sums
-/// `const (Sum 1)` over every ProofStep — ClosedTheory.hs:484,491 via
-/// `foldProof`, Theory/Proof.hs:358).
+/// `const (Sum 1)` over every ProofStep — ClosedTheory.hs:463-491, see line 484,491 via
+/// `foldProof`, Theory/Proof.hs:358-362).
 fn count_proof_steps(node: &tamarin_theory::constraint::solver::search::ProofNode) -> usize {
     1 + node.children.values().map(count_proof_steps).sum::<usize>()
 }
@@ -1642,14 +1640,14 @@ fn print_overall_summary(file_results: &[FileResult], prove_mode: bool) {
         println!();
         if let Some(out) = &fr.out_file {
             // HS aligns `output:` and `processing time:` columns
-            // (`ppRep` in Main.Mode.Batch, src/Main/Mode/Batch.hs:144).
+            // (`ppRep` in Main.Mode.Batch, src/Main/Mode/Batch.hs:87-316, see line 144).
             println!("  output:          {}", out);
         }
         println!("  processing time: {:.2}s", fr.elapsed_ms as f64 / 1000.0);
         println!("  ");
         if fr.wf_count > 0 {
             println!("  WARNING: {} wellformedness check failed!", fr.wf_count);
-            // HS Batch.hs:246 emits this second line only in prove mode:
+            // HS Batch.hs:87-316, see line 246 emits this second line only in prove mode:
             //   [ Pretty.text "         The analysis results might be wrong!"
             //   | thyLoadOptions.proveMode ]
             if prove_mode {

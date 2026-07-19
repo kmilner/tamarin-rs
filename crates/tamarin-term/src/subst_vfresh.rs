@@ -1,7 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Benedikt Schmidt, Jannik Dreier, Philip Lukert, Felix
-//   Linker, Ralf Sasse, "Tom" (github BTom-GH), Charlie Jacomme, Robert
-//   Künnemann, and other minor contributors (see upstream git history)
+//   meiersi, beschmi, jdreier, PhilipLukertWork, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Substitution.hs,
 //   lib/term/src/Term/Substitution/SubstVFresh.hs,
@@ -696,11 +695,11 @@ where
     let vs_in_range_s2: Vec<LVar> = distinct_range_vars(s2.range());
     let extended = s1_0.extend_with_renaming(&vs_in_range_s2);
     // Avoid set for freshToFreeAvoidingFast: `evalFreshAvoiding (s2, s1_0)`
-    // (Substitution.hs:47) = `frees (s2, s1_0)` = `frees s2 <> frees s1_0`.
+    // (Substitution.hs:41-47, see line 47) = `frees (s2, s1_0)` = `frees s2 <> frees s1_0`.
     //
     // `frees s2` (s2 :: free LNSubst) walks BOTH domain and range.
     // `frees s1_0` (s1_0 :: LNSubstVFresh) uses `foldFrees (SubstVFresh n
-    // LVar) = foldFrees f . M.keys` (SubstVFresh.hs:197) — i.e. ONLY the
+    // LVar) = foldFrees f . M.keys` (SubstVFresh.hs:196-202, see line 197) — i.e. ONLY the
     // DOMAIN KEYS, NOT the range (witnesses).  Including s1_0's range here
     // would over-count the avoid set and inflate the re-based witnesses
     // (Responder_secrecy: the Setup_Key `~k` variant witnesses at ~k.30/42

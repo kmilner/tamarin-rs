@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Benedikt Schmidt, Jannik Dreier, Robert Künnemann, Philip Lukert, and
-//   other minor contributors (see upstream git history)
+//   beschmi, jdreier, rkunnema, PhilipLukertWork, meiersi, and other
+//   minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Maude/Parser.hs
 
@@ -262,7 +262,7 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
     }
     if msig.enable_dh {
         op_eq(&mut out, "one", "-> Msg");
-        // HS `theoryOpEq "DH-neutral  : -> Msg"` (Parser.hs:209) has TWO
+        // HS `theoryOpEq "DH-neutral  : -> Msg"` (Parser.hs:162-251, see line 209) has TWO
         // spaces before the colon; the trailing space on the name reproduces
         // that so `format!("{} : {}")` yields `DH-neutral  : -> Msg`.
         op_eq(&mut out, "DH-neutral ", "-> Msg");
@@ -287,7 +287,7 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
     // in `NoEqSym`-`Ord` order.
     for sym in &msig.st_fun_syms {
         let args = "Msg ".repeat(sym.arity);
-        // Match HS `theoryFunSym` (Parser.hs:247) byte-for-byte:
+        // Match HS `theoryFunSym` (Parser.hs:162-251, see line 247) byte-for-byte:
         // `replaceUnderscore s <> " : " <> (concat $ replicate ar "Msg ") <> " -> Msg"`.
         // `args` already ends in a trailing space (or is empty), and the
         // literal " -> Msg" has a leading space, so there are two spaces
@@ -367,7 +367,7 @@ mod tests {
 
     #[test]
     fn dh_neutral_op_has_two_spaces_before_colon() {
-        // HS `theoryOpEq "DH-neutral  : -> Msg"` (Parser.hs:209) emits TWO
+        // HS `theoryOpEq "DH-neutral  : -> Msg"` (Parser.hs:162-251, see line 209) emits TWO
         // spaces before the colon; the emitted module must match byte-for-byte.
         let s = pp_theory(&dh_maude_sig());
         assert!(s.contains("op tamXCDH-neutral  : -> Msg ."));

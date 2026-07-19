@@ -1,9 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Hong-Thai Luu, Kevin Morio, Benedikt
-//   Schmidt, Robert Künnemann, Philip Lukert, Artur Cygan, Jérôme (github
-//   Azurios-git), Yavor Ivanov, "ValentinYuri" (github), Ralf Sasse, "Tom"
-//   (github BTom-GH), "Nynko" (github), Felix Linker, Charlie Jacomme, and
-//   other minor contributors (see upstream git history)
+//   meiersi, jdreier, kevinmorio, rkunnema, arcz, PhilipLukertWork,
+//   yavivanov, Hong-Thai, beschmi, racoucho1u, rsasse, Azurios-git,
+//   Nynko, ValentinYuri, felixlinker, charlie-j, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/theory/src/Prover.hs,
 //   lib/theory/src/Rule.hs, lib/theory/src/Theory/Model/Fact.hs,
@@ -90,13 +89,13 @@ pub fn check_message_derivation(
     // (lib/theory/src/Theory/Text/Parser/Term.hs::nullaryApp); RS
     // does the same resolution at elaborate-time, but the deriv-check
     // walks the un-elaborated parser AST so it needs an explicit
-    // deny-list.  See `MessageDerivationChecks.hs:39` (HS uses
+    // deny-list.  See `MessageDerivationChecks.hs:35-47, see line 39` (HS uses
     // `originalRules = map (applyMacroInProtoRule ...)`).
     let nullary_funs = collect_all_nullary_fun_names(parsed);
 
     // Theory-level `macros:` declarations.  HS expands these into every
     // protocol rule via `applyMacroInProtoRule (theoryMacros thy)`
-    // (MessageDerivationChecks.hs:39) BEFORE collecting free vars / building
+    // (MessageDerivationChecks.hs:35-47, see line 39) BEFORE collecting free vars / building
     // the probe.  The caller hands us the RAW parsed theory (theory macros
     // un-expanded), so we must expand them here ourselves; otherwise a rule
     // whose body uses a macro that introduces fresh vars (e.g.
@@ -117,7 +116,7 @@ pub fn check_message_derivation(
             continue;
         }
         // HS applies theory macros before the deriv check
-        // (MessageDerivationChecks.hs:39 -- `originalRules = map
+        // (MessageDerivationChecks.hs:35-47, see line 39 -- `originalRules = map
         // (applyMacroInProtoRule (theoryMacros thy)) $ theoryRules thy`).
         // Mirror that here: first expand theory-level `macros:` into the
         // rule's premise/action/conclusion facts (the only parts the deriv
@@ -207,7 +206,7 @@ pub fn check_message_derivation(
 /// Expand theory-level `macros:` into a rule's premise / action / conclusion
 /// facts and its `let { }` block — the parts the deriv check inspects.  Mirror
 /// of HS `applyMacroInProtoRule (theoryMacros thy)`
-/// (MessageDerivationChecks.hs:39).
+/// (MessageDerivationChecks.hs:35-47, see line 39).
 fn apply_theory_macros_to_rule(rule: &p::Rule, macros: &[p::Macro]) -> p::Rule {
     let mut r = rule.clone();
     for f in &mut r.premises {
@@ -448,17 +447,17 @@ fn synthesise_probe_theory(
     // HS keeps the maude signature PRIVATE for the deriv-check probe.  Two HS
     // operations look like they make symbols public, but neither affects the
     // verdict:
-    //   * `makeFunsPublic` (MessageDerivationChecks.hs:43,100-101) is just
+    //   * `makeFunsPublic` (MessageDerivationChecks.hs:35-47, see line 43,100-101) is just
     //     `L.set thySignature (toSignaturePure sig)` — it sets the OPEN theory's
     //     *pure* signature, which `closeTheoryWithMaude sig ...`
-    //     (MessageDerivationChecks.hs:41, Prover.hs:171-178) immediately
+    //     (MessageDerivationChecks.hs:35-47, see line 41, Prover.hs:171-178) immediately
     //     OVERWRITES with the ORIGINAL `SignatureWithMaude sig` (the 5th field
     //     of the `Theory` record).  Intruder-rule generation runs off that
     //     original maude signature (`closeRuleCache ... sig ...`, Rule.hs:144),
     //     so destructor/constructor rules see the symbols as Private exactly as
     //     in the real theory.  `makeFunsPublic` is a misnomer that touches only
     //     pretty/storage state, never the verdict.
-    //   * `replacePrivate` (MessageDerivationChecks.hs:46,94-98) rewrites a
+    //   * `replacePrivate` (MessageDerivationChecks.hs:35-47, see line 46,94-98) rewrites a
     //     private NoEq head on the Out terms to a Public-headed variant of the
     //     SAME name/arity.  That variant is never inserted into `stFunSyms`/
     //     `stRules`, so it gets no construction rule (constructionRules iterates
@@ -474,7 +473,7 @@ fn synthesise_probe_theory(
     //
     // The Rust intruder-rule generation (intruder_rules.rs:164 destructor-skip,
     // :648 Public-only `construction_rules` filter, `private_constructor_rules`)
-    // already matches IntruderRules.hs:149/219 once the privacy flags survive.
+    // already matches IntruderRules.hs:129-157, see line 149/219 once the privacy flags survive.
     for it in &src.items {
         match it {
             p::TheoryItem::Functions(_)
@@ -486,7 +485,7 @@ fn synthesise_probe_theory(
             _ => {}
         }
     }
-    // HS `generateRule` (MessageDerivationChecks.hs:181) keeps each free
+    // HS `generateRule` (MessageDerivationChecks.hs:181-182) keeps each free
     // var's ORIGINAL sort: premises = `freesToFresh . deleteGlobals` and
     // `freesToFresh = map (freshFact . lvarToLnterm)` where `lvarToLnterm`
     // only retypes LSortNat → LSortFresh (everything else stays as-is).
@@ -528,7 +527,7 @@ fn synthesise_probe_theory(
         })
         .collect();
     // HS `generateAction vars idx = protoFact Persistent ("Generated_" ++
-    // show idx) (...)` (MessageDerivationChecks.hs:185) — the Generated fact
+    // show idx) (...)` (MessageDerivationChecks.hs:184-185, see line 185) — the Generated fact
     // is Persistent.  For a ProtoFact the multiplicity rides in the tag, and
     // both the probe rule's action and the lemma's action atom are built from
     // this same `action`, so they stay mutually consistent.  Match HS exactly.
@@ -583,7 +582,7 @@ fn synthesise_probe_theory(
         let t1 = p::VarSpec { name: "t1".into(), idx: 0, sort: p::SortHint::Node, typ: None };
         let gen_at = action_atom(action.clone(), p::Term::Var(t0.clone()));
         let ku_fact = p::Fact {
-            // KU is Persistent per factTagMultiplicity (Model/Fact.hs:356);
+            // KU is Persistent per factTagMultiplicity (Model/Fact.hs:355-360, see line 356);
             // keep the "for special names, persistent == tag multiplicity"
             // invariant so GFact equality with parsed KU facts is faithful.
             persistent: true,
@@ -726,7 +725,7 @@ fn prove_probe(
         }
         if !ok {
             // HS reports `show LVar` (sortPrefix ++ body) for the
-            // undecidable variable (MessageDerivationChecks.hs:138,156).
+            // undecidable variable (MessageDerivationChecks.hs:122-138, see line 138,156).
             // Shared with the wellformedness checker's identical renderer.
             undecidable.push(crate::check_terms::show_lvar(v));
         }

@@ -1,13 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Jannik Dreier, Simon Meier, Hong-Thai Luu, Artur Cygan, Robert
-//   Künnemann, Kevin Morio, Felix Linker, "Pops" (github racoucho1u),
-//   Benedikt Schmidt, Ralf Sasse, Philip Lukert, Charlie Jacomme, Yavor
-//   Ivanov, "Jackie" (github kanakanajm), "Tom" (github BTom-GH), Adrian
-//   Dapprich, Cas Cremers, symphorien, "gilcu3" (github), "ValentinYuri"
-//   (github), Yann Colomb, Felix Yan, Mathias Aurand, "Nynko" (github),
-//   Katriel Cohn-Gordon, Alexander Dax, Nick Moore, Jérôme (github Azurios-
-//   git), Dominik Schoop, and other minor contributors (see upstream git
-//   history)
+//   meiersi, jdreier, rkunnema, beschmi, felixlinker, charlie-j,
+//   rsasse, racoucho1u, kevinmorio, yavivanov, PhilipLukertWork,
+//   Hong-Thai, gilcu3, arcz, BTom-GH, ValentinYuri, Azurios-git,
+//   xaDxelA, robert.kunnemann@cased.de, and other minor contributors
+//   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Maude/Parser.hs, lib/theory/src/ClosedTheory.hs,
 //   lib/theory/src/Items/RuleItem.hs, lib/theory/src/Lemma.hs,
@@ -15,8 +11,10 @@
 //   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
 //   lib/theory/src/Theory/Constraint/System.hs,
 //   lib/theory/src/Theory/Constraint/System/Guarded.hs,
-//   lib/theory/src/Theory/Model/Rule.hs, lib/theory/src/Theory/Proof.hs,
-//   lib/theory/src/Theory/ProofSkeleton.hs, lib/theory/src/Theory/Sapic.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/ProofSkeleton.hs,
+//   lib/theory/src/Theory/Sapic.hs,
 //   lib/theory/src/Theory/Text/Parser.hs, src/Main/TheoryLoader.hs,
 //   src/Web/Theory.hs
 
@@ -51,7 +49,7 @@ pub enum ProveError {
     Guarded(String),
 }
 
-/// Render the full HS `ppError` doc (Guarded.hs:477) for a failed guarded
+/// Render the full HS `ppError` doc (Guarded.hs:471-566, see line 477) for a failed guarded
 /// conversion: the error text, the quoted failing sub-formula (both
 /// quantifier-level errors include `ppFormula f0`, Guarded.hs:508-514 and
 /// 561-563), then "in the formula" + the quoted converted formula.  This is
@@ -191,7 +189,7 @@ pub fn prepend_theory_dir_to_oracle_paths(
 /// (non-flag) tokens land in cmdargs' positional catch-all
 /// (`flagArg (updateArg "") ""`) and are ignored; an unknown flag or
 /// stop-on-trace value is an error (cmdargs `processValue` / HS
-/// `error e` on `ArgumentError`, TheoryLoader.hs:661).
+/// `error e` on `ArgumentError`, TheoryLoader.hs:618-665, see line 661).
 ///
 /// Returns `(stop_on_trace, auto_sources)`; callers merge with the CLI
 /// per HS precedence — CLI `--stop-on-trace` wins when given
@@ -235,22 +233,22 @@ pub fn config_block_options(
 /// command line.  Mirrors the `AutoProver` fields populated by HS
 /// `constructAutoProver` (TheoryLoader.hs:702-706) from `thyOpts`:
 ///   * `raw`         = `--heuristic` ranking string (`apDefaultHeuristic`)
-///   * `oracle_name` = `--oraclename` (`Just "" -> Nothing`, TheoryLoader.hs:310)
+///   * `oracle_name` = `--oraclename` (`Just "" -> Nothing`, TheoryLoader.hs:262-353, see line 310)
 ///   * `oracle_only` = `--oracle-only` (`quitOnEmptyOracle`)
 ///
 /// `None` for any field means the flag was absent.  This whole struct is
 /// `None` on `ProverSession`/the prove entry points when `--heuristic` was
 /// not given, in which case the per-lemma / theory heuristic is used unchanged
-/// (HS `selectHeuristic`: `apDefaultHeuristic <|> pcHeuristic`, Proof.hs:707).
+/// (HS `selectHeuristic`: `apDefaultHeuristic <|> pcHeuristic`, Proof.hs:705-716, see line 707).
 #[derive(Debug, Clone, Default)]
 pub struct CliHeuristic {
     /// `--heuristic` raw ranking string (e.g. `"O"`, `"s1Ss"`).  When
     /// `Some`, this OVERRIDES the per-lemma / theory `heuristic:` (HS
-    /// `apDefaultHeuristic prover <|> L.get pcHeuristic ctx`, Proof.hs:708).
+    /// `apDefaultHeuristic prover <|> L.get pcHeuristic ctx`, Proof.hs:705-716, see line 708).
     pub raw: Option<String>,
     /// `--oraclename` — sets the oracle relPath for EVERY oracle ranking in
     /// the CLI heuristic (HS `mapOracleRanking (maybeSetOracleRelPath
-    /// oraclename)`, TheoryLoader.hs:305).  `Just ""` parses to `None`.
+    /// oraclename)`, TheoryLoader.hs:262-353, see line 305).  `Just ""` parses to `None`.
     pub oracle_name: Option<String>,
     /// `--oracle-only` — sets `quitOnEmpty` on every oracle / tactic ranking
     /// in the selected heuristic (HS `setQuitOnEmpty`, Proof.hs:712-716).
@@ -263,13 +261,13 @@ pub struct CliHeuristic {
 ///   1. `filterHeuristic diff rawRankings` — parse the ranking string char
 ///      by char (System.hs:680-684).  RS `parse_heuristic_str_with_tactics`.
 ///   2. `map (mapOracleRanking (maybeSetOracleRelPath oraclename))` — set the
-///      oracle relPath from `--oraclename` (TheoryLoader.hs:305).
-///   3. `defaultOracleNames srcThyInFileName` (TheoryLoader.hs:646) — fill any
+///      oracle relPath from `--oraclename` (TheoryLoader.hs:262-353, see line 305).
+///   3. `defaultOracleNames srcThyInFileName` (TheoryLoader.hs:618-665, see line 646) — fill any
 ///      oracle ranking that STILL has no relPath with the default `.oracle`
 ///      name (theory-basename `.oracle` if it exists on disk, else `"oracle"`).
 ///   4. `oraclePath = fromMaybe "." workDir </> normalise relPath`
 ///      (System.hs:574-575).  The CLI heuristic's `defaultOracle = Oracle
-///      Nothing Nothing` (System.hs:548) has workDir `Nothing` ⇒ `"."`, so
+///      Nothing Nothing` (System.hs:547-548, see line 548) has workDir `Nothing` ⇒ `"."`, so
 ///      its oracle exec path is CWD-relative (`./<name>`), NOT theory-dir
 ///      relative (unlike the in-file heuristic).
 ///   5. `setQuitOnEmpty` (Proof.hs:712-716) — `--oracle-only` sets
@@ -289,7 +287,7 @@ fn resolve_cli_heuristic(
     // (b) resolve every relPath against workDir `"."` (CLI-heuristic workDir).
     let mut rankings = crate::constraint::solver::goals::parse_heuristic_str_with_tactics(
         raw, in_file, tactics);
-    // The CLI `--oraclename` (`Just "" -> Nothing`, TheoryLoader.hs:310).
+    // The CLI `--oraclename` (`Just "" -> Nothing`, TheoryLoader.hs:262-353, see line 310).
     let oraclename: Option<&str> = match cli.oracle_name.as_deref() {
         Some("") => None,
         other => other,
@@ -320,7 +318,7 @@ fn resolve_cli_heuristic(
             }
             // Step 5: --oracle-only also sets quitOnEmpty on tactic rankings
             // (HS `aux (InternalTacticRanking _ t) = InternalTacticRanking
-            // (quitOnEmptyOracle prover) t`, Proof.hs:715).
+            // (quitOnEmptyOracle prover) t`, Proof.hs:705-716, see line 715).
             GoalRanking::Tactic { quit_on_empty, .. }
                 if cli.oracle_only => {
                     *quit_on_empty = true;
@@ -383,7 +381,7 @@ pub struct ProverSession {
     pub theory: crate::theory::Theory,
     /// CLI `--heuristic`/`--oraclename`/`--oracle-only` (HS `AutoProver`
     /// fields).  When `cli_heuristic.raw` is `Some`, it OVERRIDES the per-lemma
-    /// / theory heuristic for EVERY lemma (HS `selectHeuristic`, Proof.hs:707).
+    /// / theory heuristic for EVERY lemma (HS `selectHeuristic`, Proof.hs:705-716, see line 707).
     cli_heuristic: CliHeuristic,
     /// Solved-leaf extraction strategy (HS `apCut`, threaded from
     /// `--stop-on-trace`, TheoryLoader.hs:356-360).  Theory-global (HS
@@ -438,9 +436,9 @@ pub struct ProverSession {
 ///   lemmaSourceKind lem
 ///     | SourceLemma `elem` lAttributes lem = RawSource
 ///     | otherwise                          = RefinedSource
-/// HS sets `pcSourceKind = lemmaSourceKind l` (ClosedTheory.hs:116) and
+/// HS sets `pcSourceKind = lemmaSourceKind l` (ClosedTheory.hs:97-138, see line 116) and
 /// `mkSystem` stamps it onto the initial system's `sSourceKind`
-/// (Prover.hs:325).  In RS `SourceKind`, `RawSources < RefinedSources`,
+/// (Prover.hs:317-338, see line 325).  In RS `SourceKind`, `RawSources < RefinedSources`,
 /// matching HS's `RawSource < RefinedSource` Ord (System.hs:362-365), so it
 /// can be used directly as the `lemmaSourceKind lem <= kind` bound below.
 fn lemma_source_kind(lemma: &crate::theory::Lemma) -> SourceKind {
@@ -462,7 +460,7 @@ fn lemma_source_kind(lemma: &crate::theory::Lemma) -> SourceKind {
 ///
 /// `kind` is the source kind of the system being built (= the proved
 /// lemma's `lemmaSourceKind`).  `pcHiddenLemmas` is populated from the
-/// PROVED lemma's own `[hide_lemma=..]` attributes (ClosedTheory.hs:109),
+/// PROVED lemma's own `[hide_lemma=..]` attributes (ClosedTheory.hs:97-138, see line 109),
 /// so the hidden set is computed here from `lemma_name`'s attributes.
 /// HS uses `formulaToGuarded_` (fail-loud) on each reuse formula, so a
 /// non-guardable reuse formula propagates a `ProveError` rather than being
@@ -509,7 +507,7 @@ fn gather_reusable_lemmas(
 /// HS-faithful per-lemma RAW-vs-REFINED selection (ClosedTheory.hs:116-118
 /// `cases = case lemmaSourceKind l of RawSource -> crcRawSources;
 /// RefinedSource -> crcRefinedSources`).  `[sources]` lemmas (RawSource,
-/// Lemma.hs:40) use the RAW precomputed sources — `refineWithSourceAsms` is
+/// Lemma.hs:38-41, see line 40) use the RAW precomputed sources — `refineWithSourceAsms` is
 /// NEVER applied to them — so they carry NO typing assumptions (an empty
 /// list makes `ensure_saturated` skip the refine and use the raw cases
 /// verbatim).  All other lemmas (RefinedSource) use the refined sources
@@ -615,7 +613,7 @@ impl ProverSession {
         // Set in_file for oracle path resolution (HS Parser.hs:304).
         theory.in_file = in_file.to_string();
         // HS `mkSystem` maps `formulaToGuarded_ = either (error . render) id`
-        // (Prover.hs:324, Guarded.hs:466-467) over restriction formulas — it
+        // (Prover.hs:317-338, see line 324, Guarded.hs:466-467) over restriction formulas — it
         // ABORTS on a non-guardable restriction rather than silently dropping
         // it (which would weaken the constraint set and could let an unsound
         // proof through).  Mirror the fail-loud behaviour: propagate a
@@ -895,7 +893,7 @@ pub fn check_and_extend_lemma_in_session(
 /// Deliberately NO skeleton replay: web `runAutoProver` "ignores the
 /// existing proof and tries to find one by itself" (Theory/Proof.hs:743-747)
 /// — it is not wrapped in `replaceSorryProver` (batch-`--prove`-only,
-/// Main/TheoryLoader.hs:518,606).
+/// Main/TheoryLoader.hs:463-533, see line 518,606).
 pub fn prove_system_in_session(
     session: &ProverSession,
     lemma_name: &str,
@@ -970,9 +968,9 @@ fn prove_lemma_in_session_mode(
 
     // Per-lemma source kind, mirroring HS `lemmaSourceKind` (Lemma.hs:38-41):
     // `[sources]`-tagged lemmas get RawSource, all others RefinedSource.
-    // HS sets `pcSourceKind = lemmaSourceKind l` (ClosedTheory.hs:102,116)
+    // HS sets `pcSourceKind = lemmaSourceKind l` (ClosedTheory.hs:97-138, see line 102,116)
     // and `formulaToSystem` stamps it onto the initial system's
-    // `sSourceKind` (Prover.hs:325).
+    // `sSourceKind` (Prover.hs:317-338, see line 325).
     let lemma_source_kind = lemma_source_kind(lemma);
 
     // `[reuse]` lemmas declared BEFORE this one.  Same gather logic as
@@ -1015,10 +1013,10 @@ fn prove_lemma_in_session_mode(
     // HS-faithful laziness: refined sources are a lazy `where`-bound thunk
     // in HS's `ClosedRuleCache` (`refinedSources` = `precomputeSources` →
     // `refineWithSourceAsms`, Rule.hs:156-157), forced ONLY when a proof
-    // method reads `pcSources` (ProofMethod.hs:317).  A non-target lemma
+    // method reads `pcSources` (ProofMethod.hs:283-340, see line 317).  A non-target lemma
     // with NO stored skeleton replays HS's parsed `unproven () = sorry`
     // (`unproven = sorry Nothing`, Proof.hs:255-256; used by the lemma
-    // constructor at ProofSkeleton.hs:61) via `checkAndExtendProver`'s
+    // constructor at ProofSkeleton.hs:59-61, see line 61) via `checkAndExtendProver`'s
     // `sorry` walk
     // (Proof.hs:624-630) — that single `Sorry` node consults no source,
     // so HS never forces the (potentially very expensive) refined-source
@@ -1075,7 +1073,7 @@ fn prove_lemma_in_session_mode(
         // Non-target lemma with no stored skeleton: HS keeps the parsed
         // `unproven ()` single-`sorry` proof (`unproven = sorry Nothing`,
         // Proof.hs:255-256; used by the lemma constructor at
-        // ProofSkeleton.hs:61) — an
+        // ProofSkeleton.hs:59-61, see line 61) — an
         // annotated Sorry at the lemma's start system (the node carries
         // the start system, so it renders as plain `by sorry`).
         return Ok(crate::replay::annotated_sorry_root(sys));
@@ -1114,7 +1112,7 @@ pub fn prove_lemma(
 /// `--heuristic`/`--oraclename`/`--oracle-only` (HS `AutoProver`).  This is
 /// the per-lemma (non-session) fallback path; when `cli_heuristic.raw` is
 /// `Some` it OVERRIDES the per-lemma / theory heuristic (HS `selectHeuristic`,
-/// Proof.hs:707).
+/// Proof.hs:705-716, see line 707).
 pub fn prove_lemma_with_pool_file_heuristic(
     parser_theory: &p::Theory,
     lemma_name: &str,
@@ -1160,11 +1158,11 @@ pub fn prove_lemma_with_pool_file_heuristic(
 
     // Per-lemma source kind (HS `lemmaSourceKind`, Lemma.hs:38-41): RawSource
     // for `[sources]`-tagged lemmas, RefinedSource for all others.  Stamped
-    // onto the initial system's `sSourceKind` (Prover.hs:325).
+    // onto the initial system's `sSourceKind` (Prover.hs:317-338, see line 325).
     let lemma_source_kind = lemma_source_kind(lemma);
 
     // Convert restrictions to guarded.  HS `mkSystem` maps
-    // `formulaToGuarded_ = either (error . render) id` (Prover.hs:324,
+    // `formulaToGuarded_ = either (error . render) id` (Prover.hs:317-338, see line 324,
     // Guarded.hs:466-467) over restriction formulas — it ABORTS on a
     // non-guardable restriction rather than silently dropping it (a silent
     // drop weakens the constraint set and could let an unsound proof
@@ -1215,7 +1213,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // `sFormulas ++ sLemmas`) but are excluded from `ginduct`.
     //
     // Note: `[sources]`-tagged lemmas are NOT added to sLemmas.
-    // Haskell's `gatherReusableLemmas` (Prover.hs:331) filters to
+    // Haskell's `gatherReusableLemmas` (Prover.hs:317-338, see line 331) filters to
     // `[reuse]` only; `[sources]` lemmas are consumed solely by
     // `refineWithSourceAsms` at precompute time (driven below by the
     // `ctx.ensure_saturated()` call over `ctx.full_sources`).
@@ -1259,7 +1257,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
     ctx.cut = cut;
 
     // Resolve the goal-ranking heuristic.  HS `selectHeuristic prover ctx =
-    // ... apDefaultHeuristic prover <|> L.get pcHeuristic ctx` (Proof.hs:707):
+    // ... apDefaultHeuristic prover <|> L.get pcHeuristic ctx` (Proof.hs:705-716, see line 707):
     // the CLI `--heuristic` (apDefaultHeuristic) OVERRIDES the per-lemma /
     // theory heuristic when present.  Otherwise (`getProofContext.
     // specifiedHeuristic`, ClosedTheory.hs:123-131): per-lemma `[heuristic=..]`
@@ -1283,7 +1281,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // assumptions to filter out spurious decryption cases that would
     // otherwise surface as false counterexamples in our search.
     // HS-faithful per-lemma RAW-vs-REFINED selection (ClosedTheory.hs:116-118,
-    // Lemma.hs:40): `[sources]` lemmas (RawSource) use the RAW precomputed
+    // Lemma.hs:38-41, see line 40): `[sources]` lemmas (RawSource) use the RAW precomputed
     // sources — `refineWithSourceAsms` is NEVER applied to them — so they
     // carry NO typing assumptions (empty list => `ensure_saturated` skips the
     // refine).  All other lemmas (RefinedSource) fold in every prior

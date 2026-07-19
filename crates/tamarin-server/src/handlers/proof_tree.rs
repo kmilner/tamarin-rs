@@ -1,13 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Jannik Dreier, Simon Meier, Hong-Thai Luu, Robert Künnemann, Artur
-//   Cygan, Felix Linker, Kevin Morio, "Pops" (github racoucho1u), Benedikt
-//   Schmidt, Ralf Sasse, Philip Lukert, Charlie Jacomme, Yavor Ivanov,
-//   "Jackie" (github kanakanajm), "Tom" (github BTom-GH), Adrian Dapprich,
-//   Cas Cremers, symphorien, "gilcu3" (github), "ValentinYuri" (github),
-//   Yann Colomb, Felix Yan, Mathias Aurand, "Nynko" (github), Katriel Cohn-
-//   Gordon, "sans-sucre" (github), Alexander Dax, Nick Moore, Jérôme (github
-//   Azurios-git), Dominik Schoop, and other minor contributors (see upstream
-//   git history)
+//   jdreier, meiersi, racoucho1u, beschmi, charlie-j, rkunnema,
+//   felixlinker, rsasse, yavivanov, PhilipLukertWork, kevinmorio, arcz,
+//   BTom-GH, Nick Moore, ValentinYuri, addap, katrielalex, felixonmars,
+//   and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Maude/Parser.hs, lib/theory/src/ClosedTheory.hs,
 //   lib/theory/src/Lemma.hs, lib/theory/src/Prover.hs,
@@ -15,7 +10,8 @@
 //   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
 //   lib/theory/src/Theory/Constraint/System.hs,
 //   lib/theory/src/Theory/Constraint/System/Constraints.hs,
-//   lib/theory/src/Theory/Model/Rule.hs, lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Proof.hs,
 //   lib/theory/src/Theory/Text/Parser.hs,
 //   lib/theory/src/Theory/Text/Parser/Lemma.hs,
 //   lib/theory/src/Theory/Text/Parser/Rule.hs,
@@ -350,7 +346,7 @@ impl ProofState {
                 TraceQuantifier::ExistsTrace =>
                     tamarin_parser::ast::TraceQuantifier::ExistsTrace,
             };
-            // HS `getProofContext` / `lemmaSourceKind` (ClosedTheory.hs:116,
+            // HS `getProofContext` / `lemmaSourceKind` (ClosedTheory.hs:97-138, see line 116,
             // Lemma.hs:38-41): a `sources` lemma is proved under RAW sources;
             // every other lemma under REFINED sources.  `mkSystem` builds the
             // initial system with `pcSourceKind ctxt` (Prover.hs:319-326), and
@@ -569,7 +565,7 @@ impl ProofState {
             ctx.heuristic = s.heuristic.clone();
         }
         // Oracle argv[1] (HS `runProcess oraclePath [lemmaName]`,
-        // ProofMethod.hs:607): oracle scripts branch on the lemma name
+        // ProofMethod.hs:598-623, see line 607): oracle scripts branch on the lemma name
         // (e.g. oracle-dmn-basic), so an empty name selects the wrong
         // branch and the ranking silently degenerates to the pre-sort.
         ctx.lemma_name = lemma.to_string();
@@ -729,7 +725,7 @@ pub fn render_proof_tree_html(
 
 /// Render the per-path sub-proof snippet.  Mirrors Haskell's
 /// `subProofSnippet` (`src/Web/Theory.hs:513-611`; the methods section follows
-/// `prettyApplicableProofMethods`, `Web/Theory.hs:540`).  Emits:
+/// `prettyApplicableProofMethods`, `Web/Theory.hs:513-611, see line 540`).  Emits:
 ///
 ///   1. The Applicable Proof Methods section — delegated to
 ///      `write_applicable_methods`.  It emits the numbered method links
@@ -922,7 +918,7 @@ fn write_applicable_methods(
     // landing on our `/main/method/...` route which dispatches to
     // `apply_method_and_redirect` and returns a `{redirect}`.
     // HS lays the whole list out as ONE HtmlDoc (`numbered' $ zipWith
-    // prettyPM [1..] pms`, Web/Theory.hs:546): each item is
+    // prettyPM [1..] pms`, Web/Theory.hs:513-611, see line 546): each item is
     // `flushRight nW (show i) <> ". " <> (link (prettyProofMethod m) <->
     // lineComment_ expl)` — so the method text wraps (a) at HTML-ENTITY
     // fill widths (renderHtmlDoc), (b) beside-shifted by the `N. ` prefix
@@ -934,7 +930,7 @@ fn write_applicable_methods(
     // `</a>` boundary.  (Continuation-line indent bytes and the blank line
     // `numbered'` inserts between items are whitespace the parity gate
     // canonicalizes; the break POSITIONS are what must match.)
-    // HS `numbered' $ zipWith prettyPM [1..] pms` (Web/Theory.hs:546):
+    // HS `numbered' $ zipWith prettyPM [1..] pms` (Web/Theory.hs:513-611, see line 546):
     //   pp (i, d) = text (flushRight nW (show i)) <> text ". " <> d
     //   d        = withTag "a" [("class",…),("href",…)] (prettyProofMethod m)
     //              <-> (if null expl then emptyDoc else lineComment_ expl)
@@ -1128,7 +1124,7 @@ fn render_node(
 }
 
 /// Port of Haskell's `prettyProofMethod`
-/// (`lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs:1174`).
+/// (`lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs:1174-1187`).
 pub fn method_label(m: &ProofMethod) -> String {
     // Delegate to the byte-faithful `--prove` renderer (HS `prettyProofMethod`)
     // so the interactive method labels carry the same fact spacing
@@ -1309,7 +1305,7 @@ end
     fn empty_disj_goal_summary_has_space() {
         use tamarin_theory::constraint::constraints::{Disj, Goal};
         // HS `prettyGoal (DisjG (Disj [])) = text "Disj" <-> operator_ "(⊥)"`
-        // (Constraints.hs:275).  `<->` = HughesPJ `<+>` (Class.hs:176),
+        // (Constraints.hs:273-288, see line 275).  `<->` = HughesPJ `<+>` (Class.hs:172-187, see line 176),
         // which inserts a single space: `Disj (⊥)`.
         assert_eq!(goal_summary(&Goal::Disj(Disj(vec![]))), "Disj (\u{22A5})");
     }

@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   "Tom" (github BTom-GH), "ValentinYuri" (github), and other minor
-//   contributors (see upstream git history)
+//   BTom-GH, ValentinYuri, and other minor contributors (see upstream
+//   git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Macro.hs
 

@@ -1,11 +1,7 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Hong-Thai Luu, Robert Künnemann, Kevin Morio, Artur Cygan,
-//   Jannik Dreier, Felix Linker, Benedikt Schmidt, "Nynko" (github),
-//   "ValentinYuri" (github), Ralf Sasse, symphorien, Adrian Dapprich, Yavor
-//   Ivanov, "Tom" (github BTom-GH), Philip Lukert, "Pops" (github
-//   racoucho1u), Felix Yan, "gilcu3" (github), Jérôme (github Azurios-git),
-//   Hizbullah, Katriel Cohn-Gordon, Dominik Schoop, and other minor
-//   contributors (see upstream git history)
+//   kevinmorio, arcz, meiersi, jdreier, addap, Nynko, rkunnema,
+//   felixlinker, yavivanov, ValentinYuri, gilcu3, beschmi, Azurios-git,
+//   rsasse, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Prover.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
@@ -201,8 +197,8 @@ pub struct Args {
     /// `None` = use default (`available_parallelism()` — full machine).
     /// `Some(1)` = single-threaded, byte-identical to sequential output.
     /// Mirrors HS's `+RTS -N RTS_FLAG` in spirit — see
-    /// `lib/theory/src/Prover.hs:102,195`, `Theory/Constraint/Solver/Sources.hs:362`,
-    /// `lib/theory/src/TheoryObject.hs:744,752`.
+    /// `lib/theory/src/Prover.hs:68-164, see line 102,195`, `Theory/Constraint/Solver/Sources.hs:355-384, see line 362`,
+    /// `lib/theory/src/TheoryObject.hs:732-768, see line 744,752`.
     pub processors: Option<usize>,
 
     /// `--maude-processes=M` — size of the pool of Maude subprocesses
@@ -391,7 +387,7 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                     // flag is behaviourally equal to absent — leave None.
                     // Routed: when set, this OVERRIDES the per-lemma / theory
                     // heuristic for every lemma (HS `selectHeuristic`:
-                    // `apDefaultHeuristic <|> pcHeuristic`, Proof.hs:707).
+                    // `apDefaultHeuristic <|> pcHeuristic`, Proof.hs:705-716, see line 707).
                     if let Some(v) = val_inline {
                         args.heuristic = Some(v.to_string());
                     }
@@ -412,7 +408,7 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                 "oraclename" => {
                     // Routed: sets the oracle relPath on every oracle ranking
                     // in the `--heuristic` chain (HS `mapOracleRanking
-                    // (maybeSetOracleRelPath oraclename)`, TheoryLoader.hs:305).
+                    // (maybeSetOracleRelPath oraclename)`, TheoryLoader.hs:262-353, see line 305).
                     // `Just "" -> Nothing` is handled at resolution time.
                     args.oracle_name = Some(flag_opt(val_inline, ""));
                 }
@@ -458,7 +454,7 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                     args.output_file = Some(flag_opt(val_inline, ""));
                 }
                 // The long form in Haskell is `--Output` (capital O) for the
-                // directory variant (Batch.hs:77 registers only `Output`/`O`);
+                // directory variant (Batch.hs:44-84, see line 77 registers only `Output`/`O`);
                 // there is no `--output-dir` alias, so it falls through to the
                 // unknown-flag arm, exactly as HS does.
                 "Output" => {
@@ -493,7 +489,7 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                 // bare flag records the empty-string default; HS then reads
                 // port leniently (Interactive.hs:134-139, falls back to
                 // defaultPort) and interface defaults to 127.0.0.1
-                // (Interactive.hs:143), so an empty value behaves like absent.
+                // (Interactive.hs:68-166, see line 143), so an empty value behaves like absent.
                 "port" => {
                     if let Some(v) = val_inline {
                         if !v.is_empty() {
@@ -777,10 +773,10 @@ pub const BUILD_TIMESTAMP: &str = env!("TAMARIN_BUILD_TIMESTAMP");
 /// returned by `getVersionIO` (Console.hs:87-92) to stdout.  The maude
 /// self-check lines (`maude tool:`, ` checking version:`, ` checking
 /// installation:`) go to STDERR — see [`version_maude_stderr_text`] — because
-/// `ensureMaude` writes them with `hPutStrLn stderr` (Console.hs:153) and
-/// `testProcess` via `putStrErr = hPutStr stderr` (Console.hs:109,136-137).
+/// `ensureMaude` writes them with `hPutStrLn stderr` (Console.hs:151-185, see line 153) and
+/// `testProcess` via `putStrErr = hPutStr stderr` (Console.hs:97-149, see line 109,136-137).
 ///
-/// `versionStr` is built with `unlines` (Console.hs:221), so it ends in `\n`;
+/// `versionStr` is built with `unlines` (Console.hs:219-220, see line 221), so it ends in `\n`;
 /// `putStrLn` then appends a second `\n`, yielding the blank line that
 /// precedes `Generated from:`.  We reproduce that blank line here exactly.
 /// The reported maude version comes from `getVersionIO`'s argument, which is
@@ -807,8 +803,8 @@ pub fn version_text() -> String {
 /// The STDERR half of `--version` output: the three maude self-check lines
 /// `ensureMaude` writes via `hPutStrLn stderr` / `testProcess` (Console.hs:
 /// 151-165).  ` checking version: ` carries the *maude* version followed by
-/// `. OK.` (`Right (strip out ++ ". OK.")`, Console.hs:165); ` checking
-/// installation: ` carries `OK.` (Console.hs:171).  Returned without a
+/// `. OK.` (`Right (strip out ++ ". OK.")`, Console.hs:151-185, see line 165); ` checking
+/// installation: ` carries `OK.` (Console.hs:151-185, see line 171).  Returned without a
 /// trailing newline so the caller can `eprintln!` it as one block.
 pub fn version_maude_stderr_text() -> String {
     let maude_version = detect_maude_version_pub();
@@ -984,7 +980,7 @@ mod tests {
 
     #[test]
     fn maude_path_inline() {
-        // with-maude is flagOpt (Environment.hs:33); only `=VALUE` sets it.
+        // with-maude is flagOpt (Environment.hs:29-34, see line 33); only `=VALUE` sets it.
         let a = parse(&["--with-maude=/opt/maude/maude"]);
         assert_eq!(a.maude_path.as_deref(), Some("/opt/maude/maude"));
         // A space-separated token is NOT consumed: it stays positional and
@@ -1016,7 +1012,7 @@ mod tests {
 
     #[test]
     fn output_dir_alias_is_unknown_flag() {
-        // HS registers only `--Output`/`-O` (Batch.hs:77); there is no
+        // HS registers only `--Output`/`-O` (Batch.hs:44-84, see line 77); there is no
         // `--output-dir` alias.  Verified on the HS binary:
         // `tamarin-prover --output-dir=foo t.spthy` -> `Unknown flag: --output-dir`.
         assert!(parse_args(&["--output-dir=foo".to_string()]).is_err());
@@ -1174,7 +1170,7 @@ mod tests {
 
     #[test]
     fn output_module_parsed() {
-        // output-module is flagOpt "spthy" (Batch.hs:78): inline only.
+        // output-module is flagOpt "spthy" (Batch.hs:44-84, see line 78): inline only.
         let a = parse(&["-mmsr"]);
         assert_eq!(a.output_module.as_deref(), Some("msr"));
         let a = parse(&["--output-module=msr"]);

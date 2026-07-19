@@ -1,11 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Philip Lukert, "Pops" (github racoucho1u),
-//   Benedikt Schmidt, Artur Cygan, Felix Linker, Robert Künnemann, Ralf
-//   Sasse, "Jackie" (github kanakanajm), Adrian Dapprich, Cas Cremers,
-//   symphorien, Yavor Ivanov, "sans-sucre" (github), Yann Colomb, "Tom"
-//   (github BTom-GH), Felix Yan, "Nynko" (github), Katriel Cohn-Gordon,
-//   Mathias Aurand, Alexander Dax, Nick Moore, Kevin Morio, Charlie Jacomme,
-//   "ValentinYuri" (github), Dominik Schoop, and other minor contributors
+//   meiersi, jdreier, racoucho1u, beschmi, felixlinker, rkunnema,
+//   PhilipLukertWork, rsasse, yavivanov, kevinmorio, sans-sucre, Nick
+//   Moore, katrielalex, arcz, addap, charlie-j,
+//   robert.kunnemann@cased.de, xaDxelA, and other minor contributors
 //   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term/Raw.hs,
@@ -18,7 +15,8 @@
 //   lib/theory/src/Theory/Constraint/System/Guarded.hs,
 //   lib/theory/src/Theory/Model/Fact.hs,
 //   lib/theory/src/Theory/Model/Signature.hs,
-//   lib/theory/src/Theory/Proof.hs, lib/theory/src/Theory/Sapic/Term.hs,
+//   lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/Sapic/Term.hs,
 //   lib/theory/src/Theory/Text/Parser/Tactics.hs,
 //   lib/theory/src/Theory/Tools/SubtermStore.hs,
 //   lib/utils/src/Data/DAG/Simple.hs, src/Web/Theory.hs
@@ -48,9 +46,9 @@ use tamarin_term::lterm::{contains_private, is_msg_var};
 ///   * `SmartRanking Bool`         — heuristic `s`/`S`
 ///   * `InjRanking   Bool`         — heuristic `i`/`I`
 ///   * `Oracle       { quit_on_empty, oracle_path }` — heuristic `o`
-///     (HS `OracleRanking`, System.hs:589)
+///     (HS `OracleRanking`, System.hs:585-598, see line 589)
 ///   * `OracleSmart  { quit_on_empty, oracle_path }` — heuristic `O`
-///     (HS `OracleSmartRanking`, System.hs:590)
+///     (HS `OracleSmartRanking`, System.hs:585-598, see line 590)
 ///
 /// `c` → `UsefulGoalNr` and `C` → `GoalNr` are implemented
 /// (System.hs:593-594 `goalRankingIdentifiers`); `{name}` tactics are
@@ -63,26 +61,26 @@ pub enum GoalRanking {
     Smart(bool),
     /// `InjRanking useLoopBreakers` (ProofMethod.hs).
     Inj(bool),
-    /// `SapicRanking` (ProofMethod.hs:993) — heuristic char `p`.
-    /// "heuristics adapted for processes" (System.hs:694).
+    /// `SapicRanking` (ProofMethod.hs:941-1043, see line 993) — heuristic char `p`.
+    /// "heuristics adapted for processes" (System.hs:687-705, see line 694).
     Sapic,
-    /// `SapicPKCS11Ranking` (ProofMethod.hs:1072) — heuristic char `P`.
-    /// Deprecated PKCS#11-specific SAPIC ranking (System.hs:695).
+    /// `SapicPKCS11Ranking` (ProofMethod.hs:1048-1129, see line 1072) — heuristic char `P`.
+    /// Deprecated PKCS#11-specific SAPIC ranking (System.hs:687-705, see line 695).
     SapicPKCS11,
-    /// `GoalNrRanking` (rankGoals dispatch ProofMethod.hs:482):
+    /// `GoalNrRanking` (rankGoals dispatch ProofMethod.hs:480-503, see line 482):
     /// `sortOn (fst . snd)` — presort identifier `C`.
     GoalNr,
-    /// `UsefulGoalNrRanking` (rankGoals dispatch ProofMethod.hs:485):
+    /// `UsefulGoalNrRanking` (rankGoals dispatch ProofMethod.hs:480-503, see line 485):
     /// `sortOn (\(_, (nr, useless)) -> (useless, nr))` — presort `c`.
     UsefulGoalNr,
-    /// `OracleRanking quitOnEmpty oracle` (rankGoals dispatch ProofMethod.hs:483).
+    /// `OracleRanking quitOnEmpty oracle` (rankGoals dispatch ProofMethod.hs:480-503, see line 483).
     /// preSort = `const goalNrRanking`.
     /// `oracle_path` is the resolved filesystem path of the oracle script.
     Oracle { quit_on_empty: bool, oracle_path: String },
-    /// `OracleSmartRanking quitOnEmpty oracle` (rankGoals dispatch ProofMethod.hs:484).
+    /// `OracleSmartRanking quitOnEmpty oracle` (rankGoals dispatch ProofMethod.hs:480-503, see line 484).
     /// preSort = `smartRanking ctxt False`.
     OracleSmart { quit_on_empty: bool, oracle_path: String },
-    /// `InternalTacticRanking quitOnEmpty (Tactic …)` (rankGoals dispatch ProofMethod.hs:491).
+    /// `InternalTacticRanking quitOnEmpty (Tactic …)` (rankGoals dispatch ProofMethod.hs:480-503, see line 491).
     /// The resolved per-lemma tactic (presort + prio/deprio selectors).
     /// `quit_on_empty` is True for the `{.}` form, False for `{name}`.
     Tactic { quit_on_empty: bool, tactic: std::sync::Arc<crate::tactic::Tactic> },
@@ -111,9 +109,9 @@ impl GoalRanking {
             'C' => GoalRanking::GoalNr,
             // HS `UsefulGoalNrRanking` ('c')
             'c' => GoalRanking::UsefulGoalNr,
-            // HS `OracleRanking False defaultOracle` (System.hs:589)
+            // HS `OracleRanking False defaultOracle` (System.hs:585-598, see line 589)
             'o' => GoalRanking::Oracle { quit_on_empty: false, oracle_path: oracle_path.to_string() },
-            // HS `OracleSmartRanking False defaultOracle` (System.hs:590)
+            // HS `OracleSmartRanking False defaultOracle` (System.hs:585-598, see line 590)
             'O' => GoalRanking::OracleSmart { quit_on_empty: false, oracle_path: oracle_path.to_string() },
             _ => GoalRanking::Smart(false),
         }
@@ -152,7 +150,7 @@ impl GoalRanking {
     }
 }
 
-/// HS `goalRankingName`'s `loopStatus` (System.hs:701).
+/// HS `goalRankingName`'s `loopStatus` (System.hs:687-705, see line 701).
 fn loop_status(b: bool) -> String {
     format!(" (loop breakers {})", if b { "allowed" } else { "delayed" })
 }
@@ -177,7 +175,7 @@ pub fn parse_heuristic_str(s: &str, theory_file: &str) -> Vec<GoalRanking> {
 /// Like [`parse_heuristic_str`] but resolves `{name}` tactic rankings
 /// against the theory's tactic list (HS `chosenTactic`, ProofMethod.hs:
 /// 706-715).  A `{.}` (no name) resolves to HS `defaultTactic`
-/// (`Tactic "default" (SmartRanking False) [] []`, System.hs:534).  An
+/// (`Tactic "default" (SmartRanking False) [] []`, System.hs:534-535).  An
 /// unknown `{name}` falls back to `Smart(false)` (HS would `error`; we
 /// stay robust so non-tactic output is unaffected).
 pub fn parse_heuristic_str_with_tactics(
@@ -208,7 +206,7 @@ pub fn parse_heuristic_str_with_tactics(
         // tactic list (HS `chosenTactic`).  `{.}` (or name "." ) → HS
         // `defaultTactic`.  quitOnEmpty is always False from parsing
         // (HS `("{.}", InternalTacticRanking False defaultTactic)`,
-        // System.hs:597).
+        // System.hs:585-598, see line 597).
         if c == '{' {
             i += 1;
             while i < chars.len() && chars[i] == ' ' { i += 1; }
@@ -271,7 +269,7 @@ pub fn parse_heuristic_str_with_tactics(
 ///
 /// Haskell iterates `M.toList $ get sGoals sys` in Goal-derived-Ord
 /// order, but every ranking that consumes the result begins with
-/// `goalNrRanking = sortOn (fst . snd)` (ProofMethod.hs:594; the first
+/// `goalNrRanking = sortOn (fst . snd)` (ProofMethod.hs:593-594, see line 594; the first
 /// stage of smartRanking:1053, injRanking:946, GoalNrRanking:482, and
 /// the oracle preSorts:483-484).  Since `gsNr` is unique, sorting by nr
 /// fully overrides the `M.toList` Goal-Ord, so emitting goals in nr
@@ -286,7 +284,7 @@ pub fn open_goals(sys: &System) -> Vec<AnnotatedGoal> {
     let mut out = Vec::new();
     // HS `existingDeps = rawLessRel sys` — built ONCE per openGoals pass and
     // shared across every KU goal's `currentlyDeducible`/`extractible` check
-    // (Goals.hs:120) AND the Chain-goal `is_open_in_sys` always-before
+    // (Goals.hs:66-182, see line 120) AND the Chain-goal `is_open_in_sys` always-before
     // queries, rather than rebuilt per goal. The `rawLessRel` relation and
     // the always-before adjacency are the SAME map (identical build), and
     // `sys` is read-only across this pass, so one `PrebuiltAdj` feeds both:
@@ -450,7 +448,7 @@ fn sort_goal_nr(ags: &mut [AnnotatedGoal]) {
     ags.sort_by_key(|g| g.seq);
 }
 
-/// `sortOn (\(_, (nr, useless)) -> (useless, nr))` (ProofMethod.hs:485):
+/// `sortOn (\(_, (nr, useless)) -> (useless, nr))` (ProofMethod.hs:480-503, see line 485):
 /// order by the derived `Ord Usefulness` (declaration order, NOT
 /// `tagUsefulness`), breaking ties by creation number.  Shared by the
 /// `UsefulGoalNr` ranking arm and the tactic presort.
@@ -471,7 +469,7 @@ fn rank_goals_with_inner(
     // When no context (or no heuristic) is supplied we default to
     // `SmartRanking False` — exactly HS's
     // `defaultHeuristic False = Heuristic [SmartRanking False]`
-    // (System.hs:527).
+    // (System.hs:526-528, see line 527).
     let ranking = ctx
         .and_then(|c| c.heuristic.as_ref())
         .and_then(|h| {
@@ -489,12 +487,12 @@ fn rank_goals_with_inner(
         }
         GoalRanking::Sapic => {
             // HS `SapicRanking -> plainRanking (sapicRanking ctxt sys ags)`
-            // (ProofMethod.hs:698).
+            // (ProofMethod.hs:695-712, see line 698).
             Ok(sapic_ranking(sys, ctx, false))
         }
         GoalRanking::SapicPKCS11 => {
             // HS `SapicPKCS11Ranking -> plainRanking (sapicPKCS11Ranking …)`
-            // (ProofMethod.hs:699).
+            // (ProofMethod.hs:695-712, see line 699).
             Ok(sapic_ranking(sys, ctx, true))
         }
         GoalRanking::GoalNr => {
@@ -504,7 +502,7 @@ fn rank_goals_with_inner(
         }
         GoalRanking::UsefulGoalNr => {
             // HS `UsefulGoalNrRanking -> plainRanking . sortOn (\(_, (nr,
-            // useless)) -> (useless, nr))` (ProofMethod.hs:485).  This
+            // useless)) -> (useless, nr))` (ProofMethod.hs:480-503, see line 485).  This
             // sorts on the DERIVED `Ord Usefulness` (declaration order
             // Useful<LoopBreaker<ProbablyConstructible<CurrentlyDeducible,
             // AnnotatedGoals.hs:18-27), NOT `tagUsefulness` (which collapses
@@ -517,18 +515,18 @@ fn rank_goals_with_inner(
         GoalRanking::Tactic { quit_on_empty, tactic } => {
             // HS `InternalTacticRanking quitOnEmpty tactic ->
             //   internalTacticRanking (chosenTactic ..) quitOnEmpty ..`
-            // (ProofMethod.hs:491,695).
+            // (ProofMethod.hs:480-503, see line 491,695).
             internal_tactic_ranking(&tactic, quit_on_empty, ctx, sys)
         }
         GoalRanking::Oracle { quit_on_empty, oracle_path } => {
             // HS `oracleRanking (const goalNrRanking) oracle quitOnEmpty ctxt sys ags`
-            // (ProofMethod.hs:483): preSort = goalNrRanking (open_goals is already nr-sorted)
+            // (ProofMethod.hs:480-503, see line 483): preSort = goalNrRanking (open_goals is already nr-sorted)
             let ags = open_goals(sys);
             oracle_ranking(ags, &oracle_path, quit_on_empty, ctx, sys)
         }
         GoalRanking::OracleSmart { quit_on_empty, oracle_path } => {
             // HS `oracleRanking (smartRanking ctxt False) oracle quitOnEmpty ctxt sys ags`
-            // (ProofMethod.hs:484): preSort = smartRanking ctxt False
+            // (ProofMethod.hs:480-503, see line 484): preSort = smartRanking ctxt False
             let ags = smart_ranking(sys, ctx, false);
             oracle_ranking(ags, &oracle_path, quit_on_empty, ctx, sys)
         }
@@ -564,7 +562,7 @@ fn oracle_ranking(
 
     // Step 2: build stdin — `show i ++": "++ concat . lines . render $ prettyGoal g`
     // HS `concat . lines . render` collapses multi-line renders to one line
-    // (ProofMethod.hs:607).
+    // (ProofMethod.hs:598-623, see line 607).
     let inp: String = ags.iter().enumerate().map(|(i, ag)| {
         let goal_text = crate::pretty_theory::render_goal_for_oracle(&ag.goal);
         // concat . lines = remove all newlines (no intermediate Vec<&str>)
@@ -627,7 +625,7 @@ fn oracle_ranking(
     // Step 6: quitOnEmpty check
     // HS: `guard $ quitOnEmpty && not (null inp) && null ranked`
     // The `guard` in the IO monad returns `mzero` when condition is True,
-    // which causes the sorry instruction to fire (ProofMethod.hs:621).
+    // which causes the sorry instruction to fire (ProofMethod.hs:598-623, see line 621).
     if quit_on_empty && !inp.is_empty() && ranked.is_empty() {
         return Err(OracleError("__ORACLE_QUIT_ON_EMPTY__".to_string()));
     }
@@ -653,7 +651,7 @@ fn presort_ranking(presort: char) -> GoalRanking {
 /// already-open annotated goals.  The presort rankings the corpus uses
 /// are `C` (GoalNr), `c` (UsefulGoalNr), `s`/`S` (Smart).  This mirrors
 /// HS `rankGoals ctxt defaultMethod [tactic] _sys ags0`
-/// (ProofMethod.hs:699) restricted to the non-oracle, non-tactic
+/// (ProofMethod.hs:695-712, see line 699) restricted to the non-oracle, non-tactic
 /// presorts (a tactic presort cannot itself be a tactic or an oracle).
 fn apply_presort(
     presort: &GoalRanking,
@@ -670,7 +668,7 @@ fn apply_presort(
         }
         GoalRanking::UsefulGoalNr => {
             // sortOn (\(_, (nr, useless)) -> (useless, nr)) — derived
-            // `Ord Usefulness` (ProofMethod.hs:485), NOT tagUsefulness.
+            // `Ord Usefulness` (ProofMethod.hs:480-503, see line 485), NOT tagUsefulness.
             let mut a = ags;
             sort_useful_goal_nr(&mut a);
             a
@@ -747,7 +745,7 @@ fn it_ranking(
         .collect();
 
     // quitOnEmpty: `guard (quitOnEmpty && null rankedPrioGoals &&
-    //   null rankedDeprioGoals) *> Just ApplySorry` (ProofMethod.hs:629).
+    //   null rankedDeprioGoals) *> Just ApplySorry` (ProofMethod.hs:627-688, see line 629).
     if quit_on_empty && ranked_prio.is_empty() && ranked_deprio.is_empty() {
         return Err(OracleError("__ORACLE_QUIT_ON_EMPTY__".to_string()));
     }
@@ -842,7 +840,7 @@ fn apply_ranking_fn(name: &str, group: Vec<AnnotatedGoal>) -> Vec<AnnotatedGoal>
 }
 
 /// Does block `b` recognise goal `g`? HS `isPrio = or . sequenceA
-/// functionsPrio` (ProofMethod.hs:884): True iff ANY of the block's
+/// functionsPrio` (ProofMethod.hs:851-936, see line 884): True iff ANY of the block's
 /// disjunct selector-expressions evaluates True.
 fn block_matches(
     b: &crate::tactic::PrioBlock,
@@ -876,7 +874,7 @@ fn eval_selector(
 }
 
 /// The rendered-goal string HS `regex` matches against:
-/// `pg = concat . lines . render $ prettyGoal agoal` (Tactics.hs:134).
+/// `pg = concat . lines . render $ prettyGoal agoal` (Tactics.hs:117-220, see line 134).
 fn tactic_pg(g: &AnnotatedGoal) -> String {
     let s = crate::pretty_theory::render_goal_for_oracle(&g.goal);
     s.lines().collect::<String>()
@@ -1168,7 +1166,7 @@ fn smart_ranking(
     let not_solve_last: Vec<Pred> = vec![Box::new(is_non_solve_last_goal)];
     goals = sort_decision_tree_dyn(&not_solve_last, goals);
     // 3b. unmark — HS `smartRanking`'s `unmark | allowPremiseGLoopBreakers
-    //     = map unmarkPremiseG` (ProofMethod.hs:1073).  Resets each
+    //     = map unmarkPremiseG` (ProofMethod.hs:1048-1129, see line 1073).  Resets each
     //     PremiseG goal's usefulness to Useful so loop-breaker premises
     //     are not deprioritised.  Only active when allowLoopBreakers
     //     (heuristic `S`).  `unmarkPremiseG` (ProofMethod.hs:181-184).
@@ -1186,7 +1184,7 @@ fn smart_ranking(
     // 6. NO structural tie-break for Disj goals.  HS's `smartRanking`
     // pipeline runs `goalNrRanking = sortOn (fst . snd)` (defined at
     // ProofMethod.hs:593-594) FIRST — it is the rightmost composition
-    // stage `moveNatToEnd . ... . goalNrRanking` (ProofMethod.hs:1053),
+    // stage `moveNatToEnd . ... . goalNrRanking` (ProofMethod.hs:1048-1129, see line 1053),
     // so it runs before the others — sorting by goal NR (insertion-order
     // counter), NOT by Goal Ord.  The `sortDecisionTree` partitions that
     // follow are stable, so within each class the relative order from
@@ -1216,7 +1214,7 @@ fn smart_ranking(
 ///   - solve-last goals are moved to the END via `sortDecisionTreeLast`
 ///     (not the `notSolveLast` partition trick).
 ///   - `isFreshKnowsGoal` is COMMENTED OUT in HS's sapic solveFirst lists
-///     (ProofMethod.hs:1041, 1115) — so fresh-nonce KU goals are NOT
+///     (ProofMethod.hs:941-1043, see line 1041, 1115) — so fresh-nonce KU goals are NOT
 ///     prioritised (the key difference vs smartRanking, where it IS active).
 ///   - there is NO `moveNatToEnd` tail stage.
 ///
@@ -1246,7 +1244,7 @@ fn sapic_ranking(
             Box::new(is_standard_action_goal_but_not_insert),
             Box::new(is_not_auth_out),
             Box::new(is_private_knows_goal),
-            // isFreshKnowsGoal — COMMENTED OUT in HS (ProofMethod.hs:1115)
+            // isFreshKnowsGoal — COMMENTED OUT in HS (ProofMethod.hs:1048-1129, see line 1115)
             Box::new(|a: &AnnotatedGoal| is_split_goal_small(a, sys)),
             Box::new(|a: &AnnotatedGoal| is_msg_one_case_goal(a, &one_case_syms)),
             Box::new(is_double_exp_goal),
@@ -1268,7 +1266,7 @@ fn sapic_ranking(
             Box::new(is_progress_disj),
             Box::new(is_not_auth_out),
             Box::new(is_private_knows_goal),
-            // isFreshKnowsGoal — COMMENTED OUT in HS (ProofMethod.hs:1041)
+            // isFreshKnowsGoal — COMMENTED OUT in HS (ProofMethod.hs:941-1043, see line 1041)
             Box::new(|a: &AnnotatedGoal| is_split_goal_small(a, sys)),
             Box::new(|a: &AnnotatedGoal| is_msg_one_case_goal(a, &one_case_syms)),
             Box::new(is_double_exp_goal),
@@ -1292,7 +1290,7 @@ fn sapic_ranking(
     };
     goals = sort_decision_tree_last_dyn(&solve_last, goals);
     // unmark — UNCONDITIONAL (HS sapicRanking `unmark = map unmarkPremiseG`,
-    // ProofMethod.hs:1011): reset every PremiseG goal to `Useful`.
+    // ProofMethod.hs:941-1043, see line 1011): reset every PremiseG goal to `Useful`.
     for a in goals.iter_mut() {
         if matches!(a.goal, Goal::Premise(_, _)) {
             a.usefulness = Usefulness::Useful;
@@ -1380,7 +1378,7 @@ fn inj_ranking(
     })];
     goals = sort_decision_tree_dyn(&not_solve_last, goals);
     // unmark — `unmark | allowLoopBreakers = map unmarkPremiseG`
-    // (ProofMethod.hs:962).  Reset PremiseG usefulness to Useful.
+    // (ProofMethod.hs:941-1043, see line 962).  Reset PremiseG usefulness to Useful.
     if allow_loop_breakers {
         for a in goals.iter_mut() {
             if matches!(a.goal, Goal::Premise(_, _)) {
@@ -1545,7 +1543,7 @@ fn is_msg_one_case_goal(
     false
 }
 
-/// `tagUsefulness` — direct port of Haskell `ProofMethod.hs:1068`:
+/// `tagUsefulness` — direct port of Haskell `ProofMethod.hs:1048-1129, see line 1068`:
 ///
 /// ```haskell
 /// tagUsefulness Useful                = 0 :: Int
@@ -1671,20 +1669,20 @@ fn is_double_exp_goal(a: &AnnotatedGoal) -> bool {
 //    fact-name conventions exactly; faithfulness requires matching HS's
 //    literal name strings (e.g. lowercase "state_", "Unlock", "MID_*").
 
-/// HS `isFirstProtoFact` (ProofMethod.hs:230): a PremiseG whose fact is a
+/// HS `isFirstProtoFact` (ProofMethod.hs:229-238, see line 230): a PremiseG whose fact is a
 /// solve-first fact.  (Distinct from `is_solve_first_goal`, which HS's smart
 /// ranking uses and which also matches ActionG.)
 fn is_first_proto_fact(a: &AnnotatedGoal) -> bool {
     matches!(&a.goal, Goal::Premise(_, fa) if is_solve_first_fact(fa))
 }
 
-/// HS `isLastProtoFact` (ProofMethod.hs:226): a PremiseG whose fact is a
+/// HS `isLastProtoFact` (ProofMethod.hs:218-226, see line 226): a PremiseG whose fact is a
 /// solve-last fact.
 fn is_last_proto_fact(a: &AnnotatedGoal) -> bool {
     matches!(&a.goal, Goal::Premise(_, fa) if is_solve_last_fact(fa))
 }
 
-/// HS `isStateFact` (ProofMethod.hs:941): a PremiseG ProtoFact whose name
+/// HS `isStateFact` (ProofMethod.hs:941-1043): a PremiseG ProtoFact whose name
 /// has the lowercase `state_` prefix.
 fn is_state_fact(a: &AnnotatedGoal) -> bool {
     use crate::fact::FactTag;
@@ -1702,13 +1700,13 @@ fn is_proto_named(a: &AnnotatedGoal, want_action: bool, name: &str) -> bool {
     matches!(&fa.tag, FactTag::Proto(_, n, _) if &**n == name)
 }
 
-/// HS `isUnlockAction` (ProofMethod.hs:945): an ActionG of ProtoFact "Unlock".
+/// HS `isUnlockAction` (ProofMethod.hs:941-1043, see line 945): an ActionG of ProtoFact "Unlock".
 fn is_unlock_action(a: &AnnotatedGoal) -> bool { is_proto_named(a, true, "Unlock") }
-/// HS `isEventAction` (ProofMethod.hs:949): an ActionG of ProtoFact "Event".
+/// HS `isEventAction` (ProofMethod.hs:941-1043, see line 949): an ActionG of ProtoFact "Event".
 fn is_event_action(a: &AnnotatedGoal) -> bool { is_proto_named(a, true, "Event") }
-/// HS `isMID_Receiver` (ProofMethod.hs:953): PremiseG ProtoFact "MID_Receiver".
+/// HS `isMID_Receiver` (ProofMethod.hs:941-1043, see line 953): PremiseG ProtoFact "MID_Receiver".
 fn is_mid_receiver(a: &AnnotatedGoal) -> bool { is_proto_named(a, false, "MID_Receiver") }
-/// HS `isMID_Sender` (ProofMethod.hs:957): PremiseG ProtoFact "MID_Sender".
+/// HS `isMID_Sender` (ProofMethod.hs:941-1043, see line 957): PremiseG ProtoFact "MID_Sender".
 fn is_mid_sender(a: &AnnotatedGoal) -> bool { is_proto_named(a, false, "MID_Sender") }
 
 /// KU goal of a fresh-name var whose name has the given `prefix`.  Shared
@@ -1722,35 +1720,35 @@ fn is_knows_fresh_name_goal(a: &AnnotatedGoal, prefix: &str) -> bool {
         Some(Term::Lit(Lit::Var(v))) if v.sort == LSort::Fresh && v.name.starts_with(prefix))
 }
 
-/// HS `isKnowsLastNameGoal` (ProofMethod.hs:262): KU goal of a fresh name
+/// HS `isKnowsLastNameGoal` (ProofMethod.hs:254-274, see line 262): KU goal of a fresh name
 /// var whose name has the `L_` prefix.
 fn is_knows_last_name_goal(a: &AnnotatedGoal) -> bool {
     is_knows_fresh_name_goal(a, "L_")
 }
 
-/// HS `isKnowsHandleGoal` (ProofMethod.hs:1143, sapicPKCS11): KU goal of a
+/// HS `isKnowsHandleGoal` (ProofMethod.hs:1135-1166, see line 1143, sapicPKCS11): KU goal of a
 /// fresh name var whose name has the `h` prefix.
 fn is_knows_handle_goal(a: &AnnotatedGoal) -> bool {
     is_knows_fresh_name_goal(a, "h")
 }
 
-/// HS `isNotInsertAction` (ProofMethod.hs:973): NOT an ActionG ProtoFact "Insert".
+/// HS `isNotInsertAction` (ProofMethod.hs:941-1043, see line 973): NOT an ActionG ProtoFact "Insert".
 fn is_not_insert_action(a: &AnnotatedGoal) -> bool { !is_proto_named(a, true, "Insert") }
-/// HS `isNotReceiveAction` (ProofMethod.hs:977): NOT an ActionG ProtoFact "Receive".
+/// HS `isNotReceiveAction` (ProofMethod.hs:941-1043, see line 977): NOT an ActionG ProtoFact "Receive".
 fn is_not_receive_action(a: &AnnotatedGoal) -> bool { !is_proto_named(a, true, "Receive") }
 
-/// HS `isStandardActionGoalButNotInsertOrReceive` (ProofMethod.hs:983).
+/// HS `isStandardActionGoalButNotInsertOrReceive` (ProofMethod.hs:941-1043, see line 983).
 fn is_standard_action_goal_but_not_insert_or_receive(a: &AnnotatedGoal) -> bool {
     is_standard_action_goal(a) && is_not_insert_action(a) && is_not_receive_action(a)
 }
 
-/// HS `isStandardActionGoalButNotInsert` (ProofMethod.hs:987, sapicPKCS11):
+/// HS `isStandardActionGoalButNotInsert` (ProofMethod.hs:941-1043, see line 987, sapicPKCS11):
 /// standard action, not Insert, and not an Event action.
 fn is_standard_action_goal_but_not_insert(a: &AnnotatedGoal) -> bool {
     is_standard_action_goal(a) && is_not_insert_action(a) && !is_event_action(a)
 }
 
-/// HS Insert-action key-prefix helper (ProofMethod.hs:961/968/1130):
+/// HS Insert-action key-prefix helper (ProofMethod.hs:941-1043, see line 961/968/1130):
 /// the first arg of an "Insert" ProtoFact is `<'name', _>` with `name` a
 /// public-name constant; true iff that name string has the given prefix.
 fn insert_action_first_key_has_prefix(a: &AnnotatedGoal, prefix: &str) -> bool {
@@ -1769,20 +1767,20 @@ fn insert_action_first_key_has_prefix(a: &AnnotatedGoal, prefix: &str) -> bool {
         if c.tag == NameTag::Pub && c.id.0.starts_with(prefix))
 }
 
-/// HS `isFirstInsertAction` (ProofMethod.hs:961).
+/// HS `isFirstInsertAction` (ProofMethod.hs:941-1043, see line 961).
 fn is_first_insert_action(a: &AnnotatedGoal) -> bool {
     insert_action_first_key_has_prefix(a, "F_")
 }
-/// HS `isLastInsertAction` (ProofMethod.hs:968).
+/// HS `isLastInsertAction` (ProofMethod.hs:941-1043, see line 968).
 fn is_last_insert_action(a: &AnnotatedGoal) -> bool {
     insert_action_first_key_has_prefix(a, "L_")
 }
-/// HS `isInsertTemplateAction` (ProofMethod.hs:1130, sapicPKCS11).
+/// HS `isInsertTemplateAction` (ProofMethod.hs:1048-1129, see line 1130, sapicPKCS11).
 fn is_insert_template_action(a: &AnnotatedGoal) -> bool {
     insert_action_first_key_has_prefix(a, "template")
 }
 
-/// HS `isProgressFact` (ProofMethod.hs:243): a Linear fact of arity 1 whose
+/// HS `isProgressFact` (ProofMethod.hs:240-247, see line 243): a Linear fact of arity 1 whose
 /// name has the `ProgressTo_` prefix.  Operates on a guarded `GFact`.
 fn gfact_is_progress(f: &crate::guarded_types::GFact) -> bool {
     !f.persistent && f.args.len() == 1 && f.name.starts_with("ProgressTo_")
@@ -1811,7 +1809,7 @@ fn is_progress_disj(a: &AnnotatedGoal) -> bool {
     })
 }
 
-/// HS `isDisjGoalButNotProgress` (ProofMethod.hs:253).
+/// HS `isDisjGoalButNotProgress` (ProofMethod.hs:240-247, see line 253).
 fn is_disj_goal_but_not_progress(a: &AnnotatedGoal) -> bool {
     is_disj_goal(a) && !is_progress_disj(a)
 }
@@ -1896,7 +1894,7 @@ fn is_non_solve_last_goal(a: &AnnotatedGoal) -> bool {
     }
 }
 /// `isNatSubtermSplit` (ProofMethod.hs:1065-1066): a `SubtermG (small,
-/// big)` whose `isNatSubterm` holds (SubtermStore.hs:113):
+/// big)` whose `isNatSubterm` holds (SubtermStore.hs:112-113, see line 113):
 ///   `(sortOfLNTerm small == LSortNat || isMsgVar small)
 ///        && sortOfLNTerm big == LSortNat`
 /// Non-SubtermG goals are `False`.  Used by `moveNatToEnd` in
@@ -2119,13 +2117,13 @@ fn is_open_in_sys(
             }
             true
         }
-        // Haskell parity (Goals.hs:105):
+        // Haskell parity (Goals.hs:66-182, see line 105):
         //   SplitG idx -> splitExists (get sEqStore sys) idx
         // A Split goal is only open if its split-id still exists
         // in the eq-store.  Without this, stale split-ids appear
         // as open goals after a split has been performed elsewhere.
         Goal::Split(id) => sys.eq_store.split_exists(*id),
-        // Haskell parity (Goals.hs:106):
+        // Haskell parity (Goals.hs:66-182, see line 106):
         //   SubtermG st -> st `elem` posSubterms . sSubtermStore $ sys
         // A Subterm goal is only open if its (small, big) pair is
         // still in the positive-subterm list (not yet solved).
@@ -2164,7 +2162,7 @@ fn all_msg_vars_known_earlier(
 ) -> bool {
     if !args.iter().all(is_msg_var) { return false; }
     let i = &c.0;
-    // HS `earlierMsgVars = do (j,_,t) <- allKUActions sys; ...` (Goals.hs:164):
+    // HS `earlierMsgVars = do (j,_,t) <- allKUActions sys; ...` (Goals.hs:66-182, see line 164):
     // each arg must appear as a KU action always-before `i` (see
     // `exists_ku_action_before`).
     args.iter().all(|arg| exists_ku_action_before(sys, ab_adj, arg, i))
@@ -2283,7 +2281,7 @@ pub fn goal_useful_annotation(
 }
 
 /// Like [`goal_usefulness`] but reuses a prebuilt `rawLessRel`
-/// adjacency (`existingDeps`, Goals.hs:120) instead of rebuilding it.
+/// adjacency (`existingDeps`, Goals.hs:66-182, see line 120) instead of rebuilding it.
 fn goal_usefulness_with_adj(
     g: &Goal,
     looping: bool,
@@ -2359,7 +2357,7 @@ fn has_ku_guards(sys: &System) -> bool {
 }
 
 /// `currentlyDeducible i m` — direct port of Haskell's
-/// `Goals.hs:140`. True iff:
+/// `Goals.hs:66-182, see line 140`. True iff:
 ///   * `m` consists only of Pub/Nat literals (no private function
 ///     symbols), OR
 ///   * `m` is `extractible i m` from some existing node's `Out` /
@@ -2380,7 +2378,7 @@ fn currently_deducible(
     extractible(sys, adj, i, m)
 }
 
-/// `extractible i m` — direct port of Haskell's `Goals.hs:144`.
+/// `extractible i m` — direct port of Haskell's `Goals.hs:66-182, see line 144`.
 /// True iff some node `j != lastAtom` produces `m` (or one of its
 /// top-level pair/inv subterms) at an `Out` / `KD` conclusion,
 /// and `j` is not reachable from `i` via `rawLessRel` (so adding
@@ -2413,7 +2411,7 @@ fn extractible(
     false
 }
 
-/// `toplevelTerms t` — direct port of `Goals.hs:157`. Walks pair/inv
+/// `toplevelTerms t` — direct port of `Goals.hs:66-182, see line 157`. Walks pair/inv
 /// at the top level only (other function applications are leaves).
 fn toplevel_terms(t: &tamarin_term::lterm::LNTerm) -> Vec<tamarin_term::lterm::LNTerm> {
     use tamarin_term::function_symbols::{FunSym, NoEqSym};
@@ -2447,7 +2445,7 @@ fn toplevel_terms(t: &tamarin_term::lterm::LNTerm) -> Vec<tamarin_term::lterm::L
 /// This adjacency is invariant across all goals in one `openGoals`
 /// pass (only the BFS seed `i` varies per KU goal), so HS computes
 /// `existingDeps = rawLessRel sys` ONCE in the `where` clause of
-/// `openGoals` (Goals.hs:120) and shares it.  We get it from the single
+/// `openGoals` (Goals.hs:66-182, see line 120) and shares it.  We get it from the single
 /// [`System::build_always_before_adj`] `PrebuiltAdj` (built once in
 /// `open_goals`) via `.map()` and thread it through
 /// `goal_usefulness_with_adj` — the `rawLessRel` map and the always-before
@@ -2491,7 +2489,7 @@ pub(crate) fn reachable_set_adj(
 /// `rawLessRel`-based forward reachability: every node id reachable
 /// from `i` via the prebuilt `rawLessRel` adjacency (transitive
 /// closure).  Mirrors HS `D.reachableSet [i] existingDeps`
-/// (Goals.hs:155) — seed retained.
+/// (Goals.hs:66-182, see line 155) — seed retained.
 fn reachable_from(
     adj: &RawLessAdj,
     i: &crate::constraint::constraints::NodeId,
@@ -2634,7 +2632,7 @@ pub fn dispatch_solve_goal(
                 // HS-faithful: `solveWithSource` returned `Just` (the
                 // abstract `matchToGoal` matched) but every case was
                 // contradictory at conjoin → zero surviving cases.  HS
-                // renders this `by` (no children, Proof.hs:1084); the
+                // renders this `by` (no children, Proof.hs:1080-1101, see line 1084); the
                 // node is contradictory.  Return `Contradictory` instead
                 // of falling through to runtime `solve_premise_goal`,
                 // which would re-introduce a shallow producer case HS
@@ -2644,7 +2642,7 @@ pub fn dispatch_solve_goal(
         }
     }
     // TAM_RS_TRACE_EXEC mirror of Haskell `solveGoal` `T.traceExecM`
-    // (Goals.hs:206).  Same canonical-data form as the Haskell side so
+    // (Goals.hs:200-212, see line 206).  Same canonical-data form as the Haskell side so
     // the two outputs diff cleanly.
     //
     // Fact rendering mirrors Haskell `show FactTag`:
@@ -3100,8 +3098,8 @@ mod tests {
 
     // -- moveNatToEnd / isNatSubtermSplit (ProofMethod.hs:1064-1066) ----------
 
-    /// `isNatSubtermSplit` (ProofMethod.hs:1065) = `isNatSubterm st`
-    /// (SubtermStore.hs:113): `(sort small == Nat || isMsgVar small) &&
+    /// `isNatSubtermSplit` (ProofMethod.hs:1048-1129, see line 1065) = `isNatSubterm st`
+    /// (SubtermStore.hs:112-113, see line 113): `(sort small == Nat || isMsgVar small) &&
     /// sort big == Nat`.  Non-SubtermG goals are False.
     #[test]
     fn is_nat_subterm_split_matches_haskell() {
@@ -3125,7 +3123,7 @@ mod tests {
         assert!(!is_nat_subterm_split(&Goal::Split(SplitId(0))));
     }
 
-    // -- UsefulGoalNr ('c') derived Usefulness Ord (ProofMethod.hs:485) ------
+    // -- UsefulGoalNr ('c') derived Usefulness Ord (ProofMethod.hs:480-503, see line 485) ------
 
     /// HS `UsefulGoalNrRanking -> sortOn (\(_, (nr, useless)) -> (useless,
     /// nr))` sorts on the DERIVED `Ord Usefulness` (declaration order

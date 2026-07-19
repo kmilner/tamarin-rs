@@ -1,5 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   "Pops" (github racoucho1u)
+//   meiersi, racoucho1u, and other minor contributors (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Constraint/Solver/AnnotatedGoals.hs
 

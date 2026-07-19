@@ -1,8 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Benedikt Schmidt, Robert Künnemann, Philip
-//   Lukert, Charlie Jacomme, Felix Linker, Kevin Morio, Ralf Sasse, "Tom"
-//   (github BTom-GH), "sans-sucre" (github), Johannes Wocker, and other
-//   minor contributors (see upstream git history)
+//   meiersi, rkunnema, jdreier, PhilipLukertWork, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs,
 //   lib/theory/src/Theory/Constraint/System/Constraints.hs,
@@ -156,7 +154,7 @@ impl<'a> TreeParser<'a> {
         })
     }
 
-    /// HS `oneCase` (Proof.hs:115):
+    /// HS `oneCase` (Proof.hs:98-115, see line 115):
     ///   `(,) <$> ("case" *> identifier) <*> proofSkeleton`
     fn one_case(&mut self) -> Result<(String, ParsedProofTree), ProofTreeParseError> {
         self.require_kw("case")?;
@@ -230,7 +228,7 @@ impl<'a> TreeParser<'a> {
     }
 
     /// Identifier with extended chars: HS's `identifier` accepts
-    /// alphanum + `_` (Token.hs:224 `identLetter = alphaNum <|> oneOf "_"`)
+    /// alphanum + `_` (Token.hs:214-230, see line 224 `identLetter = alphaNum <|> oneOf "_"`)
     /// and emits names like `Server_ReceiveOTP_NewSession_case_1`.
     fn identifier_extended(&mut self) -> Result<String, ProofTreeParseError> {
         self.lx.skip_ws();
@@ -273,8 +271,8 @@ impl<'a> TreeParser<'a> {
 ///
 /// We structurally recognise (in the order the code tries them) Action
 /// (`Fact(...) @ #t`), Premise (`Fact(...) ▶<n> #t`), Disj
-/// (`gf1 ∥ gf2 ∥ ...` — HS `disjSplitGoal`, Proof.hs:61), Chain
-/// (`(#i,n) ~~> (#j,m)` — HS `chainGoal`, Proof.hs:59), Split
+/// (`gf1 ∥ gf2 ∥ ...` — HS `disjSplitGoal`, Proof.hs:39-72, see line 61), Chain
+/// (`(#i,n) ~~> (#j,m)` — HS `chainGoal`, Proof.hs:39-72, see line 59), Split
 /// (`splitEqs(N)` — HS `eqSplitGoal`, Proof.hs:70-72), then Subterm
 /// (`<a> ⊏ <b>` — HS `stSplitGoal`, Proof.hs:63-66).  Anything else
 /// lands in `GoalSpec::Raw` and the walker falls back to the
@@ -306,7 +304,7 @@ pub fn parse_goal_spec(raw: &str) -> GoalSpec {
 /// classifying each disjunct by its shape (`∀ / ∃ / NonQuant`).
 ///
 /// Mirrors HS `disjSplitGoal = (DisjG . Disj) <$> sepBy1 guardedFormula
-/// (symbol "∥")` (Theory/Text/Parser/Proof.hs:61).  HS parses each
+/// (symbol "∥")` (Theory/Text/Parser/Proof.hs:39-72, see line 61).  HS parses each
 /// disjunct as a full `Guarded` value — we capture only the shape so
 /// we can match against an existing `Goal::Disj` in `sys.goals` at
 /// replay time without rebuilding LVar identities.
@@ -330,7 +328,7 @@ fn try_disj_split(text: &str) -> Option<GoalSpec> {
     // and binding-B instantiations of the same IH-body 5-alt disj),
     // the shape-only `disj_alts_match` can't distinguish them.  HS
     // parses each alt as a full `Guarded` with concrete LVar
-    // identities (Proof.hs:61), enabling structural match in
+    // identities (Proof.hs:39-72, see line 61), enabling structural match in
     // sys.goals.  We can't easily reconstruct those identities, but
     // we CAN capture each alt's normalized text and use it as a
     // tie-breaker when shape matching is ambiguous.  See
@@ -440,7 +438,7 @@ fn strip_outer_parens(s: &str) -> &str {
 ///
 /// Note: a bound var with a non-zero LVar index renders as
 /// `name.idx` (HS `LVar` Show, LTerm.hs:529-532, via
-/// `ppVars = fsep . map (text . show)`, Guarded.hs:862), e.g.
+/// `ppVars = fsep . map (text . show)`, Guarded.hs:824-866, see line 862), e.g.
 /// `∀ x #i.1 #j.`.  So a `.` that is immediately followed by an ASCII
 /// digit is a var-index suffix, NOT the body terminator — we must
 /// keep counting through it.  The real body terminator `.` is always
@@ -472,7 +470,7 @@ fn count_quant_vars(after_qua: &str) -> usize {
 /// Try to parse a chain-split goal-text: `(#i, N) ~~> (#j, M)`.
 ///
 /// HS reference: `chainGoal = ChainG <$> (try (nodeConc <* opChain))
-/// <*> nodePrem` (Theory/Text/Parser/Proof.hs:59) where
+/// <*> nodePrem` (Theory/Text/Parser/Proof.hs:39-72, see line 59) where
 /// `nodeConc/nodePrem = parens ((,) <$> nodevar <*> (comma *> natural))`
 /// (Proof.hs:33-36).  The operator `~~>` is the HS pretty rendering
 /// (Constraints.hs:269-270).
@@ -654,9 +652,9 @@ impl<'a> GoalParser<'a> {
             // consume the ▶ (a single Unicode scalar)
             self.lx.bump();
             // HS always emits a Unicode subscript here: the pretty-printer
-            // prints `▶ ++ subscript (show v)` (Constraints.hs:273) and the
+            // prints `▶ ++ subscript (show v)` (Constraints.hs:273-288) and the
             // parser `opRequires = symbol "▶" *> naturalSubscript`
-            // (Token.hs:619) accepts ONLY subscript digits.
+            // (Token.hs:618-619, see line 619) accepts ONLY subscript digits.
             let idx_val = self.lx.natural_subscript()?;
             self.lx.skip_ws();
             let _hash = self.lx.eat_str("#");
@@ -786,7 +784,7 @@ mod tests {
 
     #[test]
     fn identifier_stops_at_hyphen() {
-        // HS `identifier` (Token.hs:224 `identLetter = alphaNum <|> oneOf
+        // HS `identifier` (Token.hs:214-230, see line 224 `identLetter = alphaNum <|> oneOf
         // "_"`) does NOT accept `-`, so a case name like `foo-bar` is
         // tokenised as the identifier `foo`; the `-bar` is not part of the
         // case name.  This locks in HS-faithful identifier termination.
@@ -920,7 +918,7 @@ mod tests {
 
     #[test]
     fn solve_chain_goal() {
-        // HS `chainGoal` (Proof.hs:59) pretty-print:
+        // HS `chainGoal` (Proof.hs:39-72, see line 59) pretty-print:
         // `(#i, 0) ~~> (#j, 2)`  (NodeConc ~~> NodePrem).
         let src = "solve( (#i, 0) ~~> (#j, 2) ) by sorry";
         let t = parse_proof_tree(src).expect("parse");

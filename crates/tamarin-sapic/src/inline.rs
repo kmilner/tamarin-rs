@@ -1,11 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann, Hong-Thai Luu, Simon Meier, Charlie Jacomme, Benedikt
-//   Schmidt, Kevin Morio, "Tom" (github BTom-GH), Artur Cygan,
-//   "ValentinYuri" (github), Felix Linker, Yavor Ivanov, Jannik Dreier,
-//   "Pops" (github racoucho1u), and other minor contributors (see upstream
-//   git history)
+//   rkunnema, meiersi, beschmi, charlie-j, jdreier, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/Basetranslation.hs, lib/sapic/src/Sapic/Bindings.hs,
+//   lib/sapic/src/Sapic/Basetranslation.hs,
+//   lib/sapic/src/Sapic/Bindings.hs,
 //   lib/term/src/Term/Maude/Process.hs,
 //   lib/theory/src/Theory/Sapic/Process.hs,
 //   lib/theory/src/Theory/Text/Parser/Sapic.hs,
@@ -56,7 +54,7 @@ use crate::convert::{convert_action, convert_combinator, convert_term, ConvertEr
 type SapicSubst = Subst<Name, SapicLVar>;
 
 /// Look up each process definition by name (HS `lookupProcessDef`,
-/// `TheoryObject.hs:678`).  Built once from the parsed theory's `ProcessDef`
+/// `TheoryObject.hs:678-679`).  Built once from the parsed theory's `ProcessDef`
 /// items, threaded into [`convert_process_with_defs`].
 pub type ProcessDefMap<'a> = BTreeMap<String, &'a p::ProcessDef>;
 
@@ -257,12 +255,12 @@ fn apply_m_action(
                 chan: chan.map(|t| subst_term(subst, &t)),
                 msg: subst_term(subst, &msg),
                 // HS `apply subst (ChIn mt t vs) = ChIn … (applyMatchVars subst vs)`
-                // (Process.hs:320): each match var `v` is replaced by the
+                // (Process.hs:319-321, see line 320): each match var `v` is replaced by the
                 // variables of its image `subst(v)` (or kept if undefined).  When
                 // inlining a call like `Q(h(a))` into `in(<y, =x>)`, the param
                 // match-var `x` becomes the vars of `h(a)` (= `{a}`) so that
                 // `bindingsAct = frees(<y,h(a)>) \ {a} = {y}` — i.e. the already-
-                // bound `a` is NOT rebound (Bindings.hs:24).  Without this the
+                // bound `a` is NOT rebound (Bindings.hs:21-26, see line 24).  Without this the
                 // stale `{x}` would leave `a` looking unbound, rebinding it to a
                 // fresh `a.N` and adding a spurious state-fact variable.
                 match_vars: apply_match_vars(subst, &match_vars),
@@ -316,7 +314,7 @@ fn apply_m_comb(
         // `Cond` carries an un-expanded parser-AST formula.  HS DOES substitute
         // here: `apply subst (Cond fa) = Cond (apply subst fa)` (Process.hs:165),
         // reached via the `ApplyM`/`Apply` ProcessCombinator instances
-        // (Process.hs:330,382).  So to be byte-faithful a call whose body begins
+        // (Process.hs:330-334,382).  So to be byte-faithful a call whose body begins
         // with `if <formula>` mentioning a parameter (the call substitutes that
         // parameter into the formula's free vars) must rewrite the formula too —
         // exactly as the sibling Case-B `let`-elimination path does in

@@ -1,10 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Benedikt Schmidt, "Pops" (github
-//   racoucho1u), Robert Künnemann, Philip Lukert, Ralf Sasse, Adrian
-//   Dapprich, Felix Linker, Charlie Jacomme, Yavor Ivanov, Katriel Cohn-
-//   Gordon, Artur Cygan, Nick Moore, "Tom" (github BTom-GH), "ValentinYuri"
-//   (github), Felix Yan, and other minor contributors (see upstream git
-//   history)
+//   meiersi, beschmi, jdreier, PhilipLukertWork, rkunnema, rsasse, and
+//   other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term.hs,
 //   lib/term/src/Term/Term/FunctionSymbols.hs,
@@ -107,7 +103,7 @@ pub fn cmp_guarded(a: &Guarded, b: &Guarded) -> std::cmp::Ordering {
                 else { unreachable!("guarded tag matched GGuarded") };
             cmp_quant(q1, q2)
                 // HS-faithful: in `LNGuarded = Guarded (String,LSort) Name
-                // LVar` (Guarded.hs:279,389), the `s` parameter — used
+                // LVar` (Guarded.hs:272-277, see line 279,389), the `s` parameter — used
                 // for GGuarded's binding list — is the TUPLE
                 // `(String, LSort)`, NOT `LVar`.  Our `GBinding` carries
                 // exactly those two fields, so bindings sort by
@@ -223,10 +219,10 @@ pub fn cmp_term(a: &GTerm, b: &GTerm) -> std::cmp::Ordering {
     if ca != cb { return ca.cmp(&cb); }
     // FApp class (ca == cb == 1): HS `Ord (Term a)` compares `FAPP fsym ts`
     // by `compare fsym` THEN `compare ts` (derived Ord on
-    // `Term a = LIT a | FAPP FunSym [Term a]`, Term/Raw.hs:74).  The
+    // `Term a = LIT a | FAPP FunSym [Term a]`, Term/Raw.hs:72-74, see line 74).  The
     // `FunSym` Ord is `NoEq < AC < C < List`, and within `NoEq` it is
     // `Ord NoEqSym = (name, (arity, privacy, constructability))`
-    // (FunctionSymbols.hs:117) — i.e. compared by NAME first.
+    // (FunctionSymbols.hs:113-117, see line 117) — i.e. compared by NAME first.
     //
     // RS special-cases several HS `FAPP (NoEq sym)` terms into dedicated
     // `GTerm` variants (`Pair`=pair, `BinOp Exp`=exp, `Diff`=diff,
@@ -241,7 +237,7 @@ pub fn cmp_term(a: &GTerm, b: &GTerm) -> std::cmp::Ordering {
     //
     // Faithful: compare two FApp-class terms by their HS `FunSym` key
     // (`funsym_key`), then by the argument list (flattened+sorted for AC,
-    // matching `fAppAC`'s `sort (...)`, Term/Raw.hs:122).
+    // matching `fAppAC`'s `sort (...)`, Term/Raw.hs:118-131, see line 122).
     if ca == 1 {
         // Borrowed FunSym key (no per-comparison allocation): compare
         // (outer, name-bytes, arity) in HS order without materialising a
@@ -290,7 +286,7 @@ pub fn cmp_term(a: &GTerm, b: &GTerm) -> std::cmp::Ordering {
 /// and, within `NoEq`, `(name, arity)` mirrors `Ord NoEqSym` (compared by
 /// name then arity — privacy/constructability never disambiguate two
 /// distinct symbols sharing a name+arity).  AC ops carry no name; their
-/// `ACSym` order is `Union < Mult < Xor < NatPlus` (FunctionSymbols.hs:93),
+/// `ACSym` order is `Union < Mult < Xor < NatPlus` (FunctionSymbols.hs:93-94),
 /// encoded in the third (`arity`) field as an index so AC terms sort among
 /// themselves by ACSym and after every NoEq term.
 fn funsym_key(t: &GTerm) -> (u8, &[u8], usize) {
@@ -375,7 +371,7 @@ pub fn cmp_bvar(a: &BVar, b: &BVar) -> std::cmp::Ordering {
 /// `LIT`, `Lit c v = Con c | Var v` derives `Con < Var` (VTerm.hs:56-57).
 /// Therefore ALL constant literals (Pub/Fresh/Nat names) sort BEFORE any
 /// variable.  Among constants, `Ord Name` compares the `NameTag` first
-/// (`FreshName | PubName | NodeName | NatName`, LTerm.hs:215) so the literal
+/// (`FreshName | PubName | NodeName | NatName`, LTerm.hs:215-216) so the literal
 /// order is Fresh < Pub < Nat, then by name string.  Variables come last in
 /// the `LIT` class.
 ///
@@ -444,7 +440,7 @@ pub fn cmp_varspec(a: &p::VarSpec, b: &p::VarSpec) -> std::cmp::Ordering {
 }
 
 /// HS-faithful Ord for GGuarded *binding* entries.  In LNGuarded, the
-/// binding type is `(String, LSort)` — Guarded.hs:279,389.  So bindings
+/// binding type is `(String, LSort)` — Guarded.hs:272-277, see line 279,389.  So bindings
 /// sort by `(name, sort)` lex.  Our `GBinding` carries only those
 /// two fields.
 pub fn cmp_binding(a: &GBinding, b: &GBinding) -> std::cmp::Ordering {
@@ -476,8 +472,8 @@ fn sort_hint_tag(s: &p::SortHint) -> u8 {
     }
 }
 
-/// HS Fact Ord (Theory/Model/Fact.hs:168): `compare tag tag' <> compare ts
-/// ts'`.  Annotations are explicitly IGNORED in `Ord (Fact t)` (Fact.hs:163
+/// HS Fact Ord (Theory/Model/Fact.hs:168-169): `compare tag tag' <> compare ts
+/// ts'`.  Annotations are explicitly IGNORED in `Ord (Fact t)` (Fact.hs:153-158, see line 163
 /// comment "Ignore annotations in equality and ord testing").  Works on
 /// `GFact` (HS `Fact (VTerm c (BVar v))`).
 ///
@@ -705,9 +701,9 @@ pub fn simplify_guarded_with(
                 .collect();
             let body_s = simplify_guarded_with(body, valuation);
             // HS-faithful: `simp` builds the universal via `gall [] (...) (simp
-            // gf)` (Guarded.hs:687).  `gall` collapses to the body when the
+            // gf)` (Guarded.hs:665-698, see line 687).  `gall` collapses to the body when the
             // kept guards are empty AND collapses the whole universal to
-            // `gtrue` when the simplified body is `gtrue` (Guarded.hs:450),
+            // `gtrue` when the simplified body is `gtrue` (Guarded.hs:449-453, see line 450),
             // regardless of whether guards remain.  Building `GGuarded`
             // directly would leave a non-canonical `GGuarded{All,[],kept,
             // gtrue}` where Haskell produces `gtrue`.
@@ -813,14 +809,14 @@ pub fn gdisj(items: Vec<Guarded>) -> Guarded {
         if flatten(it, &mut out) { return gtrue(); }
     }
     // HS-faithful: the `[gf] -> gf` singleton unwrap matches the FLATTENED,
-    // non-nubbed list (Guarded.hs:425); `nub` is applied only in the
-    // otherwise branch (`GDisj $ Disj $ nub gfs`, Guarded.hs:432).  So a
+    // non-nubbed list (Guarded.hs:415-423, see line 425); `nub` is applied only in the
+    // otherwise branch (`GDisj $ Disj $ nub gfs`, Guarded.hs:426-437, see line 432).  So a
     // flattened list like `[a,a]` is not a singleton and yields
     // `Disj (nub [a,a]) = Disj [a]`, NOT bare `a`.  (Note: this `out`
     // already has `gfalse` items dropped — see flatten above — so the
     // empty case below collapses an all-`gfalse` disjunction to `gfalse`.)
     if out.len() == 1 { return out.into_iter().next().unwrap(); }
-    // Mirror Haskell `gdisj`'s `nub gfs` (Guarded.hs:432).
+    // Mirror Haskell `gdisj`'s `nub gfs` (Guarded.hs:426-437, see line 432).
     let mut deduped: Vec<Guarded> = Vec::with_capacity(out.len());
     for x in out {
         if !deduped.contains(&x) { deduped.push(x); }
@@ -1743,7 +1739,7 @@ fn cac_rec_term_cow(t: &GTerm, cmp: GCmp) -> Option<GTerm> {
         // `em(a, b)` is the sole COMMUTATIVE (C) function symbol (EMap,
         // bilinear pairing).  HS stores every C application in sorted-arg
         // form: `fAppC nacsym as = FAPP (C nacsym) (sort as)` (Raw.hs:132-133;
-        // `fAppEMap (x,y) = fAppC EMap [x,y]`, Term.hs:146).  So in HS
+        // `fAppEMap (x,y) = fAppC EMap [x,y]`, Term.hs:145-146, see line 146).  So in HS
         // `em('P', x)` and `em(x, 'P')` are byte-identical, and the
         // structural `S.member sSolvedFormulas` guard in `insertImpliedFormulas`
         // always matches a re-derived instance against the solved one.
@@ -2330,7 +2326,7 @@ pub fn to_induction_hypothesis(g: &Guarded) -> Result<Guarded, String> {
             // Mirrors Haskell's
             //   lastAtos = [ Last (varTerm (Bound j))
             //              | (j, (_, LSortNode)) <- zip [0..] (reverse ss) ]
-            // Haskell `reverse ss` (Guarded.hs:613) — node-sorted binders
+            // Haskell `reverse ss` (Guarded.hs:601-622, see line 613) — node-sorted binders
             // emitted in REVERSE quantifier order.  For `∀ k #i #j`, ss
             // reversed = [#j, #i, k] → lastAtos = [Last(#j), Last(#i)].
             // Without `.rev()`, our disj order is [#i, #j] (matches HS
@@ -3028,7 +3024,7 @@ mod tests {
     // Haskell-faithfulness invariants for guarded-formula smart ctors.
     //
     // `gconj` / `gdisj` mirror Haskell's smart constructors in
-    // `Theory.Constraint.System.Guarded` (Guarded.hs:418, :432).  They
+    // `Theory.Constraint.System.Guarded` (Guarded.hs:415-423, see line 418, :432).  They
     // SHORT-CIRCUIT on `gtrue`/`gfalse` and dedupe via `nub`.
     // =========================================================================
 
@@ -3060,7 +3056,7 @@ mod tests {
 
     /// `gconj([..., gfalse, ...])` SHORT-CIRCUITS to `gfalse` regardless
     /// of other items.  This is the "any-false makes conjunction false"
-    /// short-circuit at Guarded.hs:418.
+    /// short-circuit at Guarded.hs:415-423, see line 418.
     #[test]
     fn gconj_short_circuits_on_gfalse() {
         // Build a non-trivial atom by parsing a small formula.
@@ -3091,7 +3087,7 @@ mod tests {
     }
 
     /// `gconj` deduplicates syntactically-equal items.  Mirrors
-    /// Haskell's `nub gfs` (Guarded.hs:418).  Dedup is ORDER-PRESERVING
+    /// Haskell's `nub gfs` (Guarded.hs:415-423, see line 418).  Dedup is ORDER-PRESERVING
     /// (Haskell `Data.List.nub` keeps first occurrence).
     #[test]
     fn gconj_dedupes_syntactic_duplicates() {

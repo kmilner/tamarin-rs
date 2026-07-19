@@ -1,8 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Felix Linker, Robert Künnemann, Benedikt
-//   Schmidt, "Pops" (github racoucho1u), symphorien, Ralf Sasse, Philip
-//   Lukert, Felix Yan, Yavor Ivanov, Katriel Cohn-Gordon, Alexander Dax, and
-//   other minor contributors (see upstream git history)
+//   meiersi, felixlinker, jdreier, rkunnema, racoucho1u, beschmi,
+//   rsasse, symphorien, PhilipLukertWork, felixonmars, yavivanov,
+//   katrielalex, robert.kunnemann@cased.de, xaDxelA, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Constraint/Solver/Contradictions.hs,
 //   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
@@ -82,7 +82,7 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
                 out.push_str(" */\n");
             }
             ProofMethod::Finished(MethodResult::Solved) => {
-                // Mirror HS `prettyProofMethod` (ProofMethod.hs:1177):
+                // Mirror HS `prettyProofMethod` (ProofMethod.hs:1174-1187, see line 1177):
                 //   `keyword_ "SOLVED" <-> lineComment_ "trace found"`.
                 out.push_str(&pad);
                 out.push_str("SOLVED // trace found\n");
@@ -162,7 +162,7 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
                     // Haskell's `extractSolved` (`Theory/Proof.hs:921-923`)
                     // keeps the survivor's label verbatim — including any
                     // `_case_N` dedup suffix appended by `uniqueListBy`
-                    // (ProofMethod.hs:91, applied at :308) when the goal
+                    // (ProofMethod.hs:91-103, applied at :308) when the goal
                     // originally had multiple cases sharing a rule name.
                     // Pass the name through unchanged.
                     vec![(name.clone(), child)]
@@ -225,7 +225,7 @@ fn contradiction_label(
 ) -> String {
     use crate::constraint::solver::contradictions::Contradiction as K;
     // Strings are abbreviated mirrors of Haskell `prettyContradiction`
-    // (Contradictions.hs:438+); see the case there for each variant.
+    // (Contradictions.hs:437-455, see line 438+); see the case there for each variant.
     // A few variants drop Haskell's interpolated detail (e.g. Haskell's
     // `"node " ++ show j ++ " after last node " ++ show i` becomes
     // `"node after last"`, `"non-injective facts " ++ show cex` becomes
@@ -432,9 +432,9 @@ fn normalize_haskell_line(raw: &str) -> Option<String> {
     }
     // UNFINISHABLE leaf (reducible operator in subterm).  Haskell's
     // `prettyProof` prepends `by ` to this non-Solved finished leaf
-    // (ppCases ps [] at Proof.hs:1065) and `prettyProofMethod` emits
+    // (ppCases ps [] at Proof.hs:1054-1075, see line 1065) and `prettyProofMethod` emits
     // `keyword_ "UNFINISHABLE" <-> lineComment_ "reducible operator in
-    // subterm"` (ProofMethod.hs:1179).  Our `render` emits the same
+    // subterm"` (ProofMethod.hs:1174-1187, see line 1179).  Our `render` emits the same
     // line, so preserve it verbatim instead of dropping it.
     if t.starts_with("UNFINISHABLE") || t.starts_with("by UNFINISHABLE") {
         return Some(format!(
@@ -444,7 +444,7 @@ fn normalize_haskell_line(raw: &str) -> Option<String> {
     }
     if t == "SOLVED" || t.starts_with("SOLVED") || t == "by SOLVED" {
         // HS pretty-prints `keyword_ "SOLVED" <-> lineComment_ "trace found"`
-        // (ProofMethod.hs:1177), so the raw line is `SOLVED // trace found`.
+        // (ProofMethod.hs:1174-1187, see line 1177), so the raw line is `SOLVED // trace found`.
         // Our `render` emits the same suffix; preserve it here so the diff
         // matches verbatim instead of treating the cosmetic comment as a
         // divergence.

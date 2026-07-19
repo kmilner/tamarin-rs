@@ -1,10 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Jannik Dreier, Simon Meier, Robert Künnemann, "Pops" (github
-//   racoucho1u), Felix Linker, Hong-Thai Luu, Ralf Sasse, Charlie Jacomme,
-//   Philip Lukert, Kevin Morio, "Tom" (github BTom-GH), Yavor Ivanov,
-//   Benedikt Schmidt, Nick Moore, Adrian Dapprich, Artur Cygan, Katriel
-//   Cohn-Gordon, "ValentinYuri" (github), Johannes Wocker, Alexander Dax,
-//   and other minor contributors (see upstream git history)
+//   racoucho1u, rkunnema, meiersi, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
 //   lib/theory/src/Theory/Constraint/System.hs,
@@ -60,7 +56,7 @@ pub enum SelectorExpr {
 /// `selectors` is the EVALUABLE form of those same disjuncts — one
 /// `SelectorExpr` per `disjuncts` line, in the same order, mirroring HS
 /// `functionsPrio :: [(AnnotatedGoal, ctx, System) -> Bool]`
-/// (System.hs:442).  The prio recognises a goal iff ANY of these
+/// (System.hs:439-446, see line 442).  The prio recognises a goal iff ANY of these
 /// expressions evaluates to True (HS `isPrio = or . sequenceA`,
 /// ProofMethod.hs:662-663).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,7 +73,7 @@ pub struct Tactic {
     /// The single-character presort identifier as rendered by HS
     /// `goalRankingToChar` (System.hs:647-649). Defaults to `'s'`
     /// (HS `tactic` defaults presort to `SmartRanking False`,
-    /// Tactics.hs:112).
+    /// Tactics.hs:109-115, see line 112).
     pub presort: char,
     pub prios: Vec<PrioBlock>,
     pub deprios: Vec<PrioBlock>,
@@ -342,7 +338,7 @@ impl<'a> TacticParser<'a> {
         let (mut s, mut e) = self.conjuncts()?;
         loop {
             self.skip_ws();
-            // HS opLOr = `|` <|> `∨` (Token.hs:600). `∨` = U+2228 = E2 88 A8.
+            // HS opLOr = `|` <|> `∨` (Token.hs:599-600, see line 600). `∨` = U+2228 = E2 88 A8.
             if self.eat_op(b"|") || self.eat_op("\u{2228}".as_bytes()) {
                 let (rs, re) = self.conjuncts()?;
                 s = format!("{} | {}", s, rs);
@@ -358,7 +354,7 @@ impl<'a> TacticParser<'a> {
         let (mut s, mut e) = self.negation()?;
         loop {
             self.skip_ws();
-            // HS opLAnd = `&` <|> `∧` (Token.hs:596). `∧` = U+2227 = E2 88 A7.
+            // HS opLAnd = `&` <|> `∧` (Token.hs:595-596, see line 596). `∧` = U+2227 = E2 88 A7.
             if self.eat_op(b"&") || self.eat_op("\u{2227}".as_bytes()) {
                 let (rs, re) = self.negation()?;
                 s = format!("{} & {}", s, rs);
@@ -371,7 +367,7 @@ impl<'a> TacticParser<'a> {
     }
 
     fn negation(&mut self) -> Option<(String, SelectorExpr)> {
-        // HS opLNot = `¬` <|> `not` (Token.hs:604). The ASCII `not` is an
+        // HS opLNot = `¬` <|> `not` (Token.hs:603-604, see line 604). The ASCII `not` is an
         // identifier word (needs a word boundary, hence try_kw); `¬`
         // (U+00AC = C2 AC) is a non-identifier symbol matched directly.
         if self.try_kw("not") || self.eat_op("\u{00AC}".as_bytes()) {
@@ -442,7 +438,7 @@ impl<'a> TacticParser<'a> {
 }
 
 /// HS spthy `identLetter = alphaNum <|> oneOf "_"`
-/// (Token.hs:224); `.` is NOT an identifier letter, so a name like
+/// (Token.hs:214-230, see line 224); `.` is NOT an identifier letter, so a name like
 /// `foo.bar` tokenizes as `foo` then a boundary at `.`.
 fn is_ident_byte(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_'
@@ -521,7 +517,7 @@ deprio:\n\
         assert_eq!(t.presort, 'C');
         let t = Tactic::parse("x", "presort: c\nprio:\n  regex \"a\"\n");
         assert_eq!(t.presort, 'c');
-        // Default (no presort) is SmartRanking False -> 's' (Tactics.hs:112).
+        // Default (no presort) is SmartRanking False -> 's' (Tactics.hs:109-115, see line 112).
         let t = Tactic::parse("x", "prio:\n  regex \"a\"\n");
         assert_eq!(t.presort, 's');
     }
@@ -559,7 +555,7 @@ prio: {id}\n  not regex\"e\""
         );
     }
 
-    /// HS spthy `identLetter` excludes `.` (Token.hs:224), so a function name
+    /// HS spthy `identLetter` excludes `.` (Token.hs:214-230, see line 224), so a function name
     /// containing `.` is not tokenized as one identifier: HS parses `foo` then
     /// requires a `"` and rejects the `.` (confirmed against the HS prover:
     /// `unexpected "." expecting letter or digit or """`). The Rust parser

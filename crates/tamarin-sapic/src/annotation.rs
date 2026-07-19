@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann, Artur Cygan, Charlie Jacomme, and other minor
-//   contributors (see upstream git history)
+//   rkunnema, arcz, charlie-j, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/sapic/src/Sapic/Annotation.hs
 
@@ -44,7 +44,7 @@ pub struct ProcessAnnotation<V> {
     /// Variable identifying the state cell associated with this op.
     pub state_channel: Option<AnVar<V>>,
     /// Term marking the binding of a state-channel.  HS `isStateChannel ::
-    /// Maybe SapicTerm` (Annotation.hs:59): the cell identifier this fresh
+    /// Maybe SapicTerm` (Annotation.hs:48-60, see line 59): the cell identifier this fresh
     /// `new StateChannel:channel` was introduced for.
     pub is_state_channel: Option<SapicTerm>,
 }

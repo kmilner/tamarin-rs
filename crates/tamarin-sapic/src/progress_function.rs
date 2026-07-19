@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann, Charlie Jacomme, Artur Cygan, and other minor
-//   contributors (see upstream git history)
+//   rkunnema, charlie-j, arcz, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/sapic/src/Sapic/ProgressFunction.hs
 

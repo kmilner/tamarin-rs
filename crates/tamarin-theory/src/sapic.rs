@@ -1,9 +1,10 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann, Charlie Jacomme, Artur Cygan, Kevin Morio, and other
-//   minor contributors (see upstream git history)
+//   rkunnema, charlie-j, kevinmorio
 // Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/Basetranslation.hs, lib/sapic/src/Sapic/Bindings.hs,
+//   lib/sapic/src/Sapic/Basetranslation.hs,
+//   lib/sapic/src/Sapic/Bindings.hs,
 //   lib/sapic/src/Sapic/ProcessUtils.hs, lib/sapic/src/Sapic/Typing.hs,
+//   lib/theory/src/Theory/Sapic.hs,
 //   lib/theory/src/Theory/Sapic/Process.hs,
 //   lib/theory/src/Theory/Sapic/Term.hs
 
@@ -183,7 +184,7 @@ pub enum SapicAction<V> {
         concs: Vec<SapicNFact<V>>,
         /// Embedded `_restrict(...)` formulas attached to the MSR's action row
         /// (`[l]--[a restricting φ]->[r]`).  HS stores these as
-        /// `SapicNFormula v` (Process.hs:88); the RS port carries the
+        /// `SapicNFormula v` (Process.hs:88-88); the RS port carries the
         /// un-expanded parser-AST [`tamarin_parser::ast::Formula`] directly,
         /// exactly as `ProcessCombinator::Cond` does — the base translation
         /// (`baseTransAction` MSR, Basetranslation.hs:200-203) keeps them as the
@@ -204,7 +205,7 @@ pub enum ProcessCombinator<V> {
     Ndc,
     /// `if <formula> then .. else ..`.  HS stores this as a
     /// `Cond (SapicNFormula v)` (a `ProtoFormula`/`SyntacticSugar` formula),
-    /// `lib/theory/src/Theory/Sapic/Process.hs:94`.  The RS port carries the
+    /// `lib/theory/src/Theory/Sapic/Process.hs:94-97`.  The RS port carries the
     /// (un-expanded) parser-AST [`tamarin_parser::ast::Formula`] instead: every
     /// downstream use is parser-AST based — the `process="if .."` attribute
     /// renders it flat (mirroring `prettySyntacticSapicFormula`), and the

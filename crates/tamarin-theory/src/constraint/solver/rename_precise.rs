@@ -1,10 +1,7 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Philip Lukert, Benedikt Schmidt, Robert
-//   Künnemann, "Pops" (github racoucho1u), Felix Linker, Ralf Sasse, Yavor
-//   Ivanov, "sans-sucre" (github), Nick Moore, Katriel Cohn-Gordon, Adrian
-//   Dapprich, Artur Cygan, "Tom" (github BTom-GH), Charlie Jacomme,
-//   Alexander Dax, Felix Yan, and other minor contributors (see upstream git
-//   history)
+//   meiersi, PhilipLukertWork, rkunnema, felixlinker, beschmi, jdreier,
+//   racoucho1u, rsasse, yavivanov, robert.kunnemann@cased.de, xaDxelA,
+//   and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs,
 //   lib/term/src/Term/Substitution/SubstVFree.hs,
@@ -163,7 +160,7 @@ pub fn rename_precise_system(sys: &mut System) {
     // `Subst` is `BTreeMap`-backed, so the borrowing `iter()` already
     // yields pairs in ascending-key order — matches HS's `HasFrees
     // (LSubst c) = foldFrees f . sMap` walking `M.Map LVar Term`
-    // ascending (SubstVFree.hs:221).
+    // ascending (SubstVFree.hs:220-221, see line 221).
     for (k, t) in sys.eq_store.subst.iter() {
         state.import(k);
         t.for_each_free(&mut |v| { state.import(v); });
@@ -174,7 +171,7 @@ pub fn rename_precise_system(sys: &mut System) {
     // sort-discriminating across variants at perform_split.
     //
     // The outer container `Conj (SplitId, S.Set LNSubstVFresh)`
-    // (EquationStore.hs:118) is a `Conj`-list (insertion order — match
+    // (EquationStore.hs:116-121, see line 118) is a `Conj`-list (insertion order — match
     // with RS's `Vec<EqDisj>`).  The INNER `S.Set LNSubstVFresh` is Ord
     // ascending — sort to match.
     for d in &sys.eq_store.conj {
@@ -209,7 +206,7 @@ pub fn rename_precise_system(sys: &mut System) {
         = sys.lemmas.iter().map(|f| f.as_ref()).collect();
     lemmas_sorted.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
     for f in lemmas_sorted { guarded_for_each_free(f, &mut |v| { state.import(v); }); }
-    // HS-faithful: `_sGoals` is `M.Map Goal GoalStatus` (System.hs:393),
+    // HS-faithful: `_sGoals` is `M.Map Goal GoalStatus` (System.hs:383-401, see line 393),
     // walked via `HasFrees (M.Map k v) = M.foldrWithKey combine`
     // (Term/LTerm.hs:829-836) in ascending key order (`Ord Goal`).
     // `goal_cmp` matches HS's derived `Ord Goal`
@@ -279,7 +276,7 @@ pub fn rename_precise_system(sys: &mut System) {
     // 1. Nodes — id + rule.
     //
     // HS-faithful: `mapFrees (M.Map NodeId RuleACInst)`
-    // = `fmap M.fromList . mapFrees f . M.toList` (Term/LTerm.hs:836).
+    // = `fmap M.fromList . mapFrees f . M.toList` (Term/LTerm.hs:832-838, see line 836).
     // `M.fromList` builds a Map keyed by Ord NodeId, so post-rename the
     // entries land in ascending NEW NodeId order.  Without this sort,
     // RS's `Vec<(NodeId, _)>` keeps the pre-rename insertion order — which
@@ -351,7 +348,7 @@ pub fn rename_precise_system(sys: &mut System) {
     // after the in-place rename.  See `subst_system_once`'s comment for
     // detailed rationale.
     // HS `mapFrees (S.Set LessAtom)`: sort + dedup post-rename
-    // (Term/LTerm.hs:827 `fmap S.fromList . mapFrees f . S.toList`).
+    // (Term/LTerm.hs:825-830, see line 827 `fmap S.fromList . mapFrees f . S.toList`).
     let mut new_less: Vec<crate::constraint::constraints::LessAtom>
         = Vec::with_capacity(sys.less_atoms.len());
     for la in std::mem::take(&mut sys.content_mut_untracked().less_atoms) {
@@ -404,7 +401,7 @@ pub fn rename_precise_system(sys: &mut System) {
         new_goals.push((g2, st));
     }
     // HS-faithful: `mapFrees (M.Map Goal GoalStatus)`
-    // = `fmap M.fromList . mapFrees f . M.toList` (Term/LTerm.hs:836).
+    // = `fmap M.fromList . mapFrees f . M.toList` (Term/LTerm.hs:832-838, see line 836).
     // `M.fromList` builds a Map keyed by Ord Goal, so post-rename the
     // entries land in ascending NEW Goal order.
     //
@@ -421,7 +418,7 @@ pub fn rename_precise_system(sys: &mut System) {
     //
     // HS-faithful: `_sFormulas` / `_sSolvedFormulas` / `_sLemmas` are
     // `S.Set LNGuarded`. `mapFrees (S.Set a) = fmap S.fromList . mapFrees
-    // f . S.toList` (Term/LTerm.hs:827) — rebuilds the set after mapping,
+    // f . S.toList` (Term/LTerm.hs:825-830, see line 827) — rebuilds the set after mapping,
     // so post-rename entries are sorted by NEW Ord Guarded AND
     // collision-deduped.  Mirror by sorting+deduping after the in-place
     // rename: post-rename two formulas that became equal collapse.

@@ -1,9 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, "Pops" (github racoucho1u), Adrian Dapprich,
-//   Ralf Sasse, Benedikt Schmidt, Philip Lukert, Felix Linker, Yavor Ivanov,
-//   "sans-sucre" (github), Artur Cygan, Robert Künnemann, Nick Moore,
-//   Katriel Cohn-Gordon, Felix Yan, and other minor contributors (see
-//   upstream git history)
+//   meiersi, addap, sans-sucre, felixlinker, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Constraint/System.hs,
 //   lib/theory/src/Theory/Constraint/System/Graph/Simplification.hs,
@@ -66,12 +63,12 @@ pub fn compress_system(mut sys: RenderSystem) -> RenderSystem {
 /// Drop `LessAtom`s that are implied by the edge relation.
 fn drop_entailed_ord_constraints(mut sys: RenderSystem) -> RenderSystem {
     // Build adjacency from `rawEdgeRel` = edges ++ unsolvedChains
-    // (Simplification.hs:37 / System.hs:1613-1616).
+    // (Simplification.hs:33-38, see line 37 / System.hs:1613-1616).
     let adj = build_raw_edge_adjacency(&sys);
     let mut new_atoms: Vec<LessAtom> = Vec::with_capacity(sys.less_atoms.len());
     for la in &sys.less_atoms {
         // HS `entailed (LessAtom from to _) = to `S.member` reachableSet [from] edges`
-        // (Simplification.hs:38).  `Dag.reachableSet [from]` ALWAYS contains the
+        // (Simplification.hs:33-38, see line 38).  `Dag.reachableSet [from]` ALWAYS contains the
         // start node `from` itself (DAG/Simple.hs:72-78: `visit` inserts `x`
         // before recursing), so a REFLEXIVE atom (`from == to`) is unconditionally
         // entailed — hence dropped from the display graph.  `reachable` below is

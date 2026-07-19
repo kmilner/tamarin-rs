@@ -1,12 +1,12 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann, Charlie Jacomme, Kevin Morio, Artur Cygan, and other
-//   minor contributors (see upstream git history)
+//   rkunnema, charlie-j, kevinmorio, arcz, and other minor contributors
+//   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/sapic/src/Sapic/Basetranslation.hs
 
 //! Port of `Sapic.Basetranslation` (`lib/sapic/src/Sapic/Basetranslation.hs`):
 //!   - `baseInit`       (Basetranslation.hs:312-318)
-//!   - `baseTransNull`  (Basetranslation.hs:81)
+//!   - `baseTransNull`  (Basetranslation.hs:81-82)
 //!   - `baseTransAction` New (103) / Event (197) / plain ChOut (155) / null-chan
 //!   - `baseRestr`      (449-485) — the always-on `single_session` restriction.
 
@@ -33,7 +33,7 @@ pub type RuleBody = (
     Vec<tamarin_parser::ast::Formula>,
 );
 
-/// `baseTransNull` (Basetranslation.hs:81):
+/// `baseTransNull` (Basetranslation.hs:81-82):
 ///   `[([State LState p tildex], [], [], [])]`
 pub fn base_trans_null(p: &ProcessPosition, tildex: &BTreeSet<LVar>) -> Vec<RuleBody> {
     let st = TransFact::State(StateKind::LState, p.clone(), tildex.iter().cloned().collect());
@@ -452,7 +452,7 @@ pub fn base_trans_action(
         //   let tx' = v `insert` tildex in
         //   [([def_state, Fr v], [LockNamed t v, LockUnnamed t v], [def_state' tx'], [])]
         // (Lock _) | Nothing <- an.lock -> "Unannotated lock" error
-        //   (Basetranslation.hs:190).
+        //   (Basetranslation.hs:94-214, see line 190).
         SapicAction::Lock(t) => {
             let Some(an_v) = &an.lock else {
                 return Err("baseTransAction: Unannotated lock".to_string());
@@ -475,7 +475,7 @@ pub fn base_trans_action(
         // (Unlock t) | Just (AnVar v) <- an.unlock (Basetranslation.hs:191-193):
         //   [([def_state], [UnlockNamed t v, UnlockUnnamed t v], [def_state' tildex], [])]
         // (Unlock _) | Nothing <- an.lock -> "Unannotated unlock" error
-        //   (Basetranslation.hs:194).
+        //   (Basetranslation.hs:94-214, see line 194).
         SapicAction::Unlock(t) => {
             let Some(an_v) = &an.unlock else {
                 return Err("baseTransAction: Unannotated unlock".to_string());
@@ -545,7 +545,7 @@ pub fn base_trans_action(
 }
 
 /// The result of translating a combinator: `(rules, tildex_l, Option<tildex_r>)`
-/// — HS `TranslationResultComb` (Basetranslation.hs:51).  `tildex_r` is `None`
+/// — HS `TranslationResultComb` (Basetranslation.hs:51-51).  `tildex_r` is `None`
 /// when the combinator has no right child to translate (e.g. `let` without an
 /// else branch).
 pub type CombResult = (Vec<RuleBody>, BTreeSet<LVar>, Option<BTreeSet<LVar>>);
@@ -819,7 +819,7 @@ fn merge_with_state_rule(
         .collect()
 }
 
-/// `evalFreshAvoiding (freshLVar name LSortMsg) tildex` (Basetranslation.hs:106):
+/// `evalFreshAvoiding (freshLVar name LSortMsg) tildex` (Basetranslation.hs:94-214, see line 106):
 /// mint a fresh `LSortMsg` variable named `name` whose index avoids every
 /// variable index already present in `tildex`.  HS `avoid` = `maybe 0 (succ .
 /// snd) . boundsVarIdx` — i.e. (max index in `tildex`) + 1, or 0 if empty.
@@ -922,7 +922,7 @@ fn collect_pair(t: &LNTerm, out: &mut Vec<tamarin_parser::ast::Term>) {
 
 /// `fromList (freesList f)` for a parser-AST formula — the formula's FREE
 /// variables (vars not bound by an enclosing quantifier), as `LVar`s for the
-/// WFUnbound `⊆ tildex` check (HS Basetranslation.hs:236).  Quantifier-bound
+/// WFUnbound `⊆ tildex` check (HS Basetranslation.hs:226-306, see line 236).  Quantifier-bound
 /// vars are excluded; the special timepoint vars carry the `Node` sort.
 fn formula_free_lvars(f: &tamarin_parser::ast::Formula) -> BTreeSet<LVar> {
     let mut out = BTreeSet::new();
@@ -932,7 +932,7 @@ fn formula_free_lvars(f: &tamarin_parser::ast::Formula) -> BTreeSet<LVar> {
     out
 }
 
-/// `toLNFact (protoFact Linear "Eq" [t1, t2])` (Basetranslation.hs:244): build
+/// `toLNFact (protoFact Linear "Eq" [t1, t2])` (Basetranslation.hs:226-306, see line 244): build
 /// the `Eq( t1, t2 )` linear fact over the type-erased terms.
 fn eq_fact(t1: &SapicTerm, t2: &SapicTerm) -> tamarin_theory::fact::LNFact {
     use tamarin_theory::fact::{Fact, FactTag, Multiplicity};

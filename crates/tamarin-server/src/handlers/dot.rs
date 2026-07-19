@@ -1,10 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Adrian Dapprich, Artur Cygan, Robert
-//   Künnemann, Mathias Aurand, Benedikt Schmidt, Felix Linker, Cas Cremers,
-//   Ralf Sasse, "Jackie" (github kanakanajm), Philip Lukert, Yann Colomb,
-//   "Tom" (github BTom-GH), "sans-sucre" (github), Yavor Ivanov, Alexander
-//   Dax, "ValentinYuri" (github), Hong-Thai Luu, Kevin Morio, Charlie
-//   Jacomme, and other minor contributors (see upstream git history)
+//   meiersi, arcz, addap, Mathias-AURAND, felixlinker, cascremers,
+//   rkunnema, jdreier, Kanakanajm, rsasse, BTom-GH, beschmi,
+//   YannColomb, symphorien, yavivanov, xaDxelA, sans-sucre, and other
+//   minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs,
 //   lib/theory/src/Theory/Constraint/System/Constraints.hs,
@@ -14,8 +12,9 @@
 //   lib/theory/src/Theory/Model/Fact.hs,
 //   lib/theory/src/Theory/Model/Rule.hs,
 //   lib/theory/src/Theory/Text/Parser/Fact.hs,
-//   lib/utils/src/Control/Monad/Disj/Class.hs, lib/utils/src/Text/Dot.hs,
-//   lib/utils/src/Text/PrettyPrint/Class.hs, src/Web/Handler.hs
+//   lib/utils/src/Control/Monad/Disj/Class.hs,
+//   lib/utils/src/Text/Dot.hs, lib/utils/src/Text/PrettyPrint/Class.hs,
+//   src/Web/Handler.hs
 
 //! Port of Haskell's `Theory.Constraint.System.Dot` +
 //! `Theory.Constraint.System.Graph.*` — convert a `System` into a
@@ -50,7 +49,7 @@
 //!     over the TOP-LEVEL `grEdges` only), else the full rule label incl. the
 //!     bracketed action row. The `uncompact`/`FullBoringNodes` toggle is not
 //!     plumbed through the RS handler (see `graph/options.rs`), so this route is
-//!     always compact — matching the HS default (`defaultDotOptions`, Dot.hs:82).
+//!     always compact — matching the HS default (`defaultDotOptions`, Dot.hs:81-84, see line 82).
 //!   * SERIALIZATION form only (normalised away by the parse-and-compare gate):
 //!     protocol-rule RECORD labels use RS port ids `<p0>`/`<c0>` and spaced
 //!     `{ .. } | .. | { .. }` bracketing, where HS's `Text.Dot.renderRecord`
@@ -177,7 +176,7 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
     // palette is sized by the whole rule set, so it must see every original
     // node.
     let color_map = build_node_color_map(&sys.nodes);
-    // HS `dotGraphCompact` (Dot.hs:503) switches the graph-level defaults to
+    // HS `dotGraphCompact` (Dot.hs:490-513, see line 503) switches the graph-level defaults to
     // `setDefaultAttributesIfCluster` when the repr has any clusters.
     g.preamble(!repr.clusters.is_empty());
     let abbrev_lookup = |t: &LNTerm| -> Option<LNTerm> {
@@ -286,7 +285,7 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
     // HS `dotCluster` (Dot.hs:547-562): each cluster gets a `roleColor`
     // derived from `extractBaseName name`, the subgraph is `style=filled`
     // with that colour, and the colour is threaded to the child nodes as
-    // their `manualNodeColor` (Dot.hs:562). HS also defers ALL of a
+    // their `manualNodeColor` (Dot.hs:547-562, see line 562). HS also defers ALL of a
     // cluster's edges to `dotClustersEdges` (Dot.hs:507-510/517-522), which
     // runs `mergeLessEdges` over the concatenation of every cluster's edges
     // and emits them AFTER every node/cluster — so we collect them here.
@@ -332,7 +331,7 @@ fn emit_node(
 
 /// `emit_node` with an optional `manual_color` — the cluster `roleColor`
 /// that HS `dotCluster` threads to its child nodes as `manualNodeColor`
-/// (Dot.hs:562). Only the `SystemNode` branch consults it (HS
+/// (Dot.hs:547-562, see line 562). Only the `SystemNode` branch consults it (HS
 /// `dotNodeCompact`, Dot.hs:248-256); the other node kinds ignore it.
 fn emit_node_colored(
     g: &mut DotBuilder,
@@ -550,8 +549,8 @@ impl DotBuilder {
         let id = Self::dot_node_id(nid);
         // HS `mkNode`'s `CompactBoringNodes` branch (Dot.hs:294-304): under the
         // default node style (`defaultDotOptions = DotOptions CompactBoringNodes`,
-        // Dot.hs:82; the interactive route builds its `DotOptions` from
-        // `getOptions`, Handler.hs:1334/1348, defaulting to `CompactBoringNodes`
+        // Dot.hs:81-84, see line 82; the interactive route builds its `DotOptions` from
+        // `getOptions`, Handler.hs:1331-1349, see line 1334/1348, defaulting to `CompactBoringNodes`
         // when the `uncompact` query param is absent), an intruder rule or the
         // `Fresh` rule collapses to a plain `mkSimpleNode` ellipse (Dot.hs:289-290)
         // with NO fill/font/role attrs. Its label is `show v : showDotRuleCaseName
@@ -686,7 +685,7 @@ impl DotBuilder {
         // missing-conclusion node is a `trapezium` labelled `prettyNodeConc`,
         // a missing-premise node is an `invtrapezium` labelled `prettyNodePrem`.
         // Both labels are `parens (prettyNodeId v <> comma <-> int i)`
-        // (Constraints.hs:251/255), i.e. `(<show v>, <i>)` — the conclusion /
+        // (Constraints.hs:248-249, see line 251/255), i.e. `(<show v>, <i>)` — the conclusion /
         // premise index is part of the label, not dropped.
         let (shape, idx) = match hint {
             MissingHint::Conc(ci) => ("trapezium", ci.0),
@@ -798,7 +797,7 @@ impl DotBuilder {
         // (`font txt = Text [Font [Color labelColor] txt]`), while the `=`
         // and expansion cells are bare `Text`.  `labelColor = doAbbrevColor`
         // (`defaultDotOptions = DotOptions CompactBoringNodes black`,
-        // Dot.hs:82; the web route never overrides `_doAbbrevColor`), which
+        // Dot.hs:81-84, see line 82; the web route never overrides `_doAbbrevColor`), which
         // renders as `#000000`.  The graphviz HTML-table printer emits the
         // cells of a `Cells` row separated by a single space and each `<TR>`
         // on its own line, so we join the three cells with `" "` and the rows
@@ -907,7 +906,7 @@ fn dot_html_escape(s: &str) -> String {
 }
 
 /// The `Doc` of an `LNFact` exactly as Haskell `renderLNFact =
-/// prettyLNFact` (Dot.hs:225-233, Fact.hs:551).  `prettyLNFact` builds the
+/// prettyLNFact` (Dot.hs:225-233, Fact.hs:549-550, see line 551).  `prettyLNFact` builds the
 /// argument list with `nestShort' (n++"(") ")" . fsep . punctuate comma`
 /// (Fact.hs:539-546), which — unlike a bare `name(a, b)` — emits the
 /// HughesPJ INNER-PAREN SPACES `!KU( ~ltk )` when the fact fits on one line.
@@ -1257,7 +1256,7 @@ fn group_idx(ru: &RuleACInst) -> usize {
 /// `colors = lightColorGroups intruderHue (map (length . snd) groups)` and
 /// `intruderHue = 18 % 360` (Dot.hs:208,217-218).
 ///
-/// `rules` here is `M.elems $ get sNodes se` (Dot.hs:485) — the raw system's
+/// `rules` here is `M.elems $ get sNodes se` (Dot.hs:481-487, see line 485) — the raw system's
 /// nodes in NodeId order — so we sort by NodeId (`M.Map` key order) first.
 /// Each entry's colour follows `getColorForRule attrs gIdx mIdx = fromMaybe
 /// defaultColor (ruleColor attrs)` (Dot.hs:212): a rule with an explicit
@@ -1308,7 +1307,7 @@ fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorMap<'_> {
             // `getColorForRule attrs gIdx mIdx = fromMaybe defaultColor
             // (ruleColor attrs)` (Dot.hs:212): explicit `color:` wins, else the
             // palette default.  `ruleAttributes ru = praciAttributes` for a
-            // RuleACInst (Rule.hs:674) — the same attributes `explicit_rule_color`
+            // RuleACInst (Rule.hs:673-675, see line 674) — the same attributes `explicit_rule_color`
             // reads, so a coloured rule maps to its own dark fill colour.
             let color = match &ru.info {
                 RuleInfo::Proto(p) => {
@@ -1824,7 +1823,7 @@ mod tests {
         // (showFactTag, Fact.hs:519-523), and a zero-arity fact renders
         // `Name( )` — `nestShort'` = `sep [text (n++"("), text ")"]`, whose
         // `sep` space-joins the two when they fit on one line (Class.hs:221-223 /
-        // Fact.hs:544).
+        // Fact.hs:539-546, see line 544).
         //
         // Authenticated against the repo's HS prover (v1.13.0) on a minimal
         // theory: `--prove` shows `[ Fr( ~k ) ] --> [ !Reg( ~k ), Started( ) ]`
@@ -1853,7 +1852,7 @@ mod tests {
     fn dot_node_id_uses_show_lvar_format() {
         // HS `prettyNodeId = text . show`: a node id renders `#i` when idx==0
         // and `#i.2` when idx==2 (`instance Show LVar`, LTerm.hs:525-532;
-        // sortPrefix LSortNode = "#", LTerm.hs:194). The rule-node header is
+        // sortPrefix LSortNode = "#", LTerm.hs:190-195, see line 194). The rule-node header is
         // `prettyNodeId v <-> colon <-> showDotRuleCaseName` (Dot.hs:336).
         use tamarin_theory::fact::out_fact;
         use tamarin_term::lterm::{LSort, LVar};

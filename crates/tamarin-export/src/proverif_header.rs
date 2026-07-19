@@ -1,5 +1,5 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Kevin Morio
+//   charlie-j, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/export/src/ProVerifHeader.hs
 

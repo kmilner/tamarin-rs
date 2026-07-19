@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Robert Künnemann, Philip Lukert, and other minor
-//   contributors (see upstream git history)
+//   meiersi, rkunnema, PhilipLukertWork, and other minor contributors
+//   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Model/Atom.hs
 

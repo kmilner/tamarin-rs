@@ -1,11 +1,7 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Jannik Dreier, Philip Lukert, Benedikt Schmidt, Robert
-//   Künnemann, Kevin Morio, Felix Linker, "Pops" (github racoucho1u), Ralf
-//   Sasse, Hong-Thai Luu, Artur Cygan, Yavor Ivanov, symphorien, "Nynko"
-//   (github), Felix Yan, Charlie Jacomme, Katriel Cohn-Gordon, Adrian
-//   Dapprich, "ValentinYuri" (github), Nick Moore, "Tom" (github BTom-GH),
-//   Jérôme (github Azurios-git), Alexander Dax, and other minor contributors
-//   (see upstream git history)
+//   meiersi, jdreier, PhilipLukertWork, rkunnema, beschmi, felixlinker,
+//   rsasse, Nynko, Hong-Thai, yavivanov, ValentinYuri, charlie-j, and
+//   other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs,
 //   lib/term/src/Term/Substitution/SubstVFree.hs,
@@ -18,12 +14,13 @@
 //   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
 //   lib/theory/src/Theory/Constraint/System.hs,
 //   lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Model/Rule.hs, lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Proof.hs,
 //   lib/theory/src/Theory/Sapic/Term.hs,
 //   lib/theory/src/Theory/Tools/EquationStore.hs,
 //   lib/theory/src/Theory/Tools/SubtermStore.hs,
-//   lib/utils/src/Control/Monad/Bind.hs, lib/utils/src/Extension/Prelude.hs,
-//   src/Main/TheoryLoader.hs
+//   lib/utils/src/Control/Monad/Bind.hs,
+//   lib/utils/src/Extension/Prelude.hs, src/Main/TheoryLoader.hs
 
 //! Port of `Theory.Constraint.Solver.Sources`.
 //!
@@ -140,7 +137,7 @@ fn grafted_edge_eqs(
 ///
 /// HS FreshT-threading (task #23, A(ii)): `inherit_next` is the fresh
 /// counter at the fan-out point — `DisjT` sits BELOW `FreshT`
-/// (Reduction.hs:123), so every arm's continuation draws (substSystem
+/// (Reduction.hs:115-115, see line 123), so every arm's continuation draws (substSystem
 /// node-merge witness mints, later solves) start from an independent
 /// COPY of that value, not from `bounds_max(arm_sys)` (which silently
 /// rewinds past the step's transient draws).  Callers pass the forking
@@ -252,7 +249,7 @@ impl Default for IntegerParameters {
 }
 
 /// Number of unsolved-chain constraints in the system. Mirrors
-/// `length . unsolvedChains` (System.hs:1601), counting unsolved Chain
+/// `length . unsolvedChains` (System.hs:1601-1605), counting unsolved Chain
 /// goals in one System. (Distinct from Haskell `unsolvedChainConstraints
 /// :: Source -> [Int]` at Sources.hs:87-89, which maps over a Source's
 /// cases.)
@@ -281,9 +278,9 @@ pub struct Source {
     /// requires.
     /// Internally stores case names as `Vec<String>` — HS's
     /// `caseNames :: [String]` (the `caseNames` parameter of `solve` at
-    /// Sources.hs:175; `[String]` type at Sources.hs:144).  The list
+    /// Sources.hs:144-225, see line 175; `[String]` type at Sources.hs:144-225).  The list
     /// representation is critical for `combine`'s truncation rule
-    /// `combine (n:_) _ = [n]` (Sources.hs:139): without per-element
+    /// `combine (n:_) _ = [n]` (Sources.hs:113-137, see line 139): without per-element
     /// boundaries, multi-step accumulated names can't be truncated
     /// to a single element across refineSource iters.  External
     /// callers using `cases_or_empty()` see
@@ -336,7 +333,7 @@ impl PartialEq for Source {
 impl Source {
     /// Build a Source whose cases will be computed lazily via
     /// `initial_source_cases(goal, ctx)` on the first `cases(ctx)`
-    /// call.  Matches HS's `initialSource` (Sources.hs:103) thunk.
+    /// call.  Matches HS's `initialSource` (Sources.hs:97-110, see line 103) thunk.
     pub fn lazy(goal: crate::constraint::constraints::Goal) -> Self {
         Source { goal, cases_cell: std::sync::Mutex::new(None), incomplete: false }
     }
@@ -466,7 +463,7 @@ fn cases_list_to_string_list(
 }
 
 /// HS-faithful port of `initialSource ctxt restrictions goal`
-/// (Sources.hs:103).  Builds a fresh empty system with restrictions
+/// (Sources.hs:97-110, see line 103).  Builds a fresh empty system with restrictions
 /// injected, inserts `goal`, marks-as-solved (HS `solveGoal`-style),
 /// then dispatches to the goal-specific solver.  The resulting cases
 /// are normalised: subst applied, simplify run, contradictory cases
@@ -577,11 +574,11 @@ fn initial_source_cases_impl(
         // the raw case's substitution — it returns `polish <$> runReduction
         // instantiate` verbatim, keeping every binding (e.g. a rule's internal
         // `lock`/`v` ⟼ goal-var bindings).  `restrict stableVars` is applied
-        // ONLY by `refineSource` (Sources.hs:137) on the SATURATED output,
+        // ONLY by `refineSource` (Sources.hs:113-137, see line 137) on the SATURATED output,
         // which `refine_one_source` already mirrors.  Restricting the raw
         // case's subst here would drop its internal rule vars and so LOWER
         // `avoid th` — the fresh-var seed
-        // `saturateSources` threads into `refineSource` (Sources.hs:162
+        // `saturateSources` threads into `refineSource` (Sources.hs:144-225, see line 162
         // `fs = avoid th`).  With the seed one index short per dropped var, the
         // saturated source cases minted every grafted `#vr`/`~n` node id below
         // HS's.  Keeping the raw subst here makes `bounds_max` (RS's `avoid`)
@@ -773,7 +770,7 @@ pub fn precompute_full_sources(
     //     , k > 0 || priv == Private ]
     // i.e. all NoEq symbols whose arity is ≥ 1 OR which are
     // Private, excluding the implicit `pair`/`inv`/`Mult`/`Union`
-    // symbols (FunctionSymbols.hs:228).  Includes both constructors
+    // symbols (FunctionSymbols.hs:227-229, see line 228).  Includes both constructors
     // AND destructors (e.g. `adec`, `fst`, `snd`).
     //
     // HS uses `noEqFunSyms msig` which is the full NoEq set, including
@@ -904,7 +901,7 @@ fn ku_source_label_for_fa(
 /// Used by the `matchToGoal` whole-source `rename` rebase (min side:
 /// HS `rename x`, LTerm.hs:614-621, shifts by `freshStart - minVarIdx`)
 /// and the `refineSource` seed `fs = avoid th` (max side,
-/// Sources.hs:162).
+/// Sources.hs:144-225, see line 162).
 fn system_bounds_hs(sys: &System) -> Option<(u64, u64)> {
     use std::cell::Cell;
     use tamarin_term::lterm::HasFrees;
@@ -998,11 +995,11 @@ fn system_bounds_hs(sys: &System) -> Option<(u64, u64)> {
 /// HS-faithful idx bounds over a WHOLE precomputed `Source` for the
 /// `matchToGoal` rename + `refineSource` seed:
 ///
-/// * `.0` = `boundsVarIdx th0` MIN (`matchToGoal`, Sources.hs:409,
+/// * `.0` = `boundsVarIdx th0` MIN (`matchToGoal`, Sources.hs:387-448, see line 409,
 ///   under `instance HasFrees Source`, System.hs:1880-1890: `cdGoal`
 ///   pattern + ALL `cdCases`) — the rename's rebase origin.
 /// * `.1` = the CASES-only MAX — feeds `fs = avoid th` where
-///   `th = set cdGoal goalTerm (renamed th0)` (Sources.hs:162,387):
+///   `th = set cdGoal goalTerm (renamed th0)` (Sources.hs:144-225, see line 162,387):
 ///   `cdGoal` is the LIVE goal by then, so the pattern's frees don't
 ///   count; the caller maxes this (post-shift) with the live goal's
 ///   own max.
@@ -1042,7 +1039,7 @@ fn source_bounds(
 }
 
 /// RAII scope for the runtime `refineSource` fresh-counter seed
-/// (`fs = avoid th`, Sources.hs:162): sets [`reduction::set_refine_floor`]
+/// (`fs = avoid th`, Sources.hs:144-225, see line 162): sets [`reduction::set_refine_floor`]
 /// on construction and restores the previous floor on drop — early
 /// `return`s and `continue`s included.  [`RefineFsScope::set`] pushes
 /// `fs - 1` (so `Reduction::new` seeds the next draw at
@@ -1313,7 +1310,7 @@ fn refine_one_source(
         stable_vars.insert(v.clone());
     });
     let all_cases = src.cases_take_list();
-    // HS `refineSource` (Sources.hs:162): `fs = avoid th` — the fresh seed
+    // HS `refineSource` (Sources.hs:144-225, see line 162): `fs = avoid th` — the fresh seed
     // for EVERY case is the max var idx over the WHOLE source `th` (all its
     // cases), NOT the per-case `avoid se`.  Compute it once here and thread
     // it as the seed floor into each case's Reduction.
@@ -1332,7 +1329,7 @@ fn refine_one_source(
             // source-pick remains; the ONLY exploration bounds are the
             // open-chains limit (`chainsLeft`, paramOpenChainsLimit,
             // Sources.hs:151-153/383) and the outer saturation limit
-            // (paramSaturationLimit, Sources.hs:362/368).  A finite default
+            // (paramSaturationLimit, Sources.hs:355-384, see line 362/368).  A finite default
             // here PARKED branches mid-flight as emitted cases — states
             // with open chain/KD goals HS would have solved or
             // contradicted — ballooning Chen_Kudla's KU(exp) source from
@@ -1354,7 +1351,7 @@ fn refine_one_source(
             }
             branches
         };
-        // HS-faithful `refineSource` (Sources.hs:123):
+        // HS-faithful `refineSource` (Sources.hs:113-137, see line 123):
         //   map (second (modify sSubst (restrict stableVars)))
         // restricts each branch's eq-store subst to the STABLE vars
         // (frees of the source's `cdGoal`) before dedup.  This
@@ -1447,7 +1444,7 @@ fn saturate_sources_with_simp_opt(
         // Inside refine_with_source_asms, drive each case forward by
         // SOLVING its safe goals (chain/KD-premise/non-KU action) —
         // not just simplifying.  Mirrors Haskell's `solveAllSafeGoals`-
-        // driven `saturateSources` (`Sources.hs:144,355`).  This is
+        // driven `saturateSources` (`Sources.hs:144-225,355`).  This is
         // what propagates typing assumptions transitively: each safe
         // goal we solve adds a new node/edge whose fact constraints
         // get unified against the assumption's pattern, eventually
@@ -1535,7 +1532,7 @@ fn saturate_sources_with_simp_opt(
                     // `ensure_above(avoid_max)` reseeds it to the source's OWN
                     // structural `avoid_max` — producing CANONICAL, source-
                     // local case var idxs (HS `evalFresh (avoid goalTerm)`,
-                    // Sources.hs:409).  Without this the case idxs depend on
+                    // Sources.hs:387-448, see line 409).  Without this the case idxs depend on
                     // the pooled handle's reuse history, so the refined-source
                     // cache content (shared across lemmas) becomes
                     // order-dependent and breaks under parallel lemma proving.
@@ -1596,7 +1593,7 @@ fn saturate_sources_with_simp_opt(
         if !changed { break; }
     }
     // HS-faithful final-truncate pass: applies `combine` one more
-    // time per case with empty `new_names`, which (per Sources.hs:139
+    // time per case with empty `new_names`, which (per Sources.hs:113-137, see line 139
     // `combine (n:_) _ = [n]`) truncates any multi-element name list
     // to its first non-coerce element.  HS's saturate normally
     // achieves this via iter-2's `combine names names'` on iter-1's
@@ -1636,7 +1633,7 @@ fn k_conc_term_for_chain(
 }
 
 /// Structural equality modulo fresh variable renaming.  Mirrors HS
-/// `eqModuloFreshnessNoAC` (LTerm.hs:632).  Two terms are equal iff
+/// `eqModuloFreshnessNoAC` (LTerm.hs:626-633, see line 632).  Two terms are equal iff
 /// they're structurally identical after renaming every free var to a
 /// fresh canonical name preserving ONLY sort.
 // alpha-eq var->index maps (outer scope); probed by key only, never iterated;
@@ -1747,8 +1744,8 @@ fn run_solve_all_safe_goals_disj_with_progress(
     use crate::fact::FactTag;
 
     // HS-faithful: track step names as a Vec<String> — HS's
-    // `caseNames` (the `solve` parameter at Sources.hs:175) is `[String]`
-    // (type at Sources.hs:144).  At finish we
+    // `caseNames` (the `solve` parameter at Sources.hs:144-225, see line 175) is `[String]`
+    // (type at Sources.hs:144-225).  At finish we
     // apply HS's `combine` (Sources.hs:135-139) to merge with the
     // existing case-name list from `initial_name`:
     //
@@ -1789,7 +1786,7 @@ fn run_solve_all_safe_goals_disj_with_progress(
         last_chain_term: Option<tamarin_term::lterm::LNTerm>,
         took_step: bool,
     }
-    // HS-faithful `avoid th` (Sources.hs:162): thread `source_avoid` as the
+    // HS-faithful `avoid th` (Sources.hs:144-225, see line 162): thread `source_avoid` as the
     // fresh-counter floor for the WHOLE refinement of this case — including
     // the floor-0 `simplify_system_with_fanout` sub-reductions where the
     // `[sources]`-lemma `Ex #j` node is drawn — via a thread-local, restored
@@ -1838,7 +1835,7 @@ fn run_solve_all_safe_goals_disj_with_progress(
             continue;
         }
 
-        // HS-faithful `simplifySystem` in DisjT (Sources.hs:222):
+        // HS-faithful `simplifySystem` in DisjT (Sources.hs:144-225, see line 222):
         //   simplifySystem
         //   ctxt <- ask
         //   isContra <- gets (contradictorySystem ctxt)
@@ -1902,7 +1899,7 @@ fn run_solve_all_safe_goals_disj_with_progress(
         // auto-handled chains remain.  See `is_open_for_saturate` in
         // goals.rs for the rationale.
         //
-        // Haskell-faithful Goal-Ord (Goals.hs:69 `M.toList sGoals`).
+        // Haskell-faithful Goal-Ord (Goals.hs:66-182, see line 69 `M.toList sGoals`).
         // `is_open_for_saturate`'s always-before relation depends only on
         // `red.sys` (not the goal), and `red.sys` is unmutated across this
         // filter, so build it once and thread it in via `_with`.
@@ -1963,7 +1960,7 @@ fn run_solve_all_safe_goals_disj_with_progress(
         // HS-faithful: HS's `safeGoal` predicate (Sources.hs:175-188)
         // marks Split/Disj/Subterm safe when `splitAllowed`.  Split is
         // allowed during saturate when `splitAllowed` (HS's
-        // `safeGoal SplitG = doSplit`, Sources.hs:162/194), regardless
+        // `safeGoal SplitG = doSplit`, Sources.hs:144-225, see line 162/194), regardless
         // of precompute/runtime.  In practice split_allowed is rarely
         // true during saturate (chain goals stay open), so this is a
         // no-op for most cases — but it is the HS-faithful behaviour.
@@ -1978,11 +1975,11 @@ fn run_solve_all_safe_goals_disj_with_progress(
                 }
                 Goal::Disj(_) | Goal::Subterm(_) => split_allowed,
                 // HS-faithful: `safeGoal SplitG = doSplit = splitAllowed`
-                // (Sources.hs:162/194).
+                // (Sources.hs:144-225, see line 162/194).
                 Goal::Split(_) => split_allowed,
             }
         };
-        // HS-faithful: kdPremGoals uses UNFILTERED goals (Sources.hs:200),
+        // HS-faithful: kdPremGoals uses UNFILTERED goals (Sources.hs:144-225, see line 200),
         // safeGoals uses FILTERED (line 195).  Match HS by deriving each
         // candidate from the correct source.
         let pick = goals.iter()
@@ -2287,7 +2284,7 @@ fn run_solve_all_safe_goals_disj_with_progress(
                 new_used.insert(case_name.clone());
             }
             // HS-faithful: source-pick step APPENDS its name to `caseNames`
-            // (Sources.hs:232 `(caseNames ++ x)`); `combine` runs only at the
+            // (Sources.hs:144-225, see line 232 `(caseNames ++ x)`); `combine` runs only at the
             // refineSource boundary, not per-step inside solveAllSafeGoals.
             let mut new_name = name.clone();
             append_step_name_list(&mut new_name, &case_name);
@@ -2431,7 +2428,7 @@ pub fn solve_with_source_cases_ctx(
     // fall-through to runtime `solveGoal`.  Concretely, if every case is
     // contradictory, `solveWithSource` still returns `Just (empty
     // reduction)` → the proof node renders `by` with ZERO children
-    // (Proof.hs:1084), NOT a runtime bare-rule graft.
+    // (Proof.hs:1080-1101, see line 1084), NOT a runtime bare-rule graft.
     //
     // The abstract premise pattern is all-fresh-vars, so `matchFact`
     // always succeeds for a same-tag/same-arity live fact — mirror that
@@ -2485,8 +2482,8 @@ pub fn solve_with_source_cases_ctx(
         // unifier arm with the SAME case name.  Push each as a separate
         // (case_label, sys, branch_counter) entry.  Sibling cases sharing
         // the same case_label get `_case_N` suffixes via `distinguish`
-        // (ProofMethod.hs:335, applied by `uniqueListBy ... distinguish
-        // cases` at ProofMethod.hs:308; `uniqueListBy` at ProofMethod.hs:91).
+        // (ProofMethod.hs:283-340, see line 335, applied by `uniqueListBy ... distinguish
+        // cases` at ProofMethod.hs:283-340, see line 308; `uniqueListBy` at ProofMethod.hs:91-103).
         for (final_sys, branch_counter) in applied_arms {
             out.push((case_label.clone(), final_sys, branch_counter));
         }
@@ -2543,7 +2540,7 @@ fn freshen_system(
         v2.idx = v2.idx.saturating_add(shift);
         v2
     };
-    // HS `matchToGoal` (Sources.hs:307): `th = (evalFresh avoid goalTerm) . rename`.
+    // HS `matchToGoal` (Sources.hs:268-317, see line 307): `th = (evalFresh avoid goalTerm) . rename`.
     // `rename` (LTerm.hs:607-612) is Monotone — the uniform `shift_lvar` index
     // bump preserves AC arg order (`unsafefApp`), so use `map_free_monotone`
     // throughout this freshening.
@@ -2778,7 +2775,7 @@ pub fn solve_with_source_cases_action_with_ctx(
     } else {
         src.cases_or_empty()
     };
-    // HS-faithful `applySource`/`solveWithSource` (Sources.hs:427,438-442):
+    // HS-faithful `applySource`/`solveWithSource` (Sources.hs:387-448, see line 427,438-442):
     // once a source's abstract pattern MATCHES the live goal (the `src`
     // find above succeeded), `applySource` returns `Just _` and its
     // reduction runs `disjunctionOfList (getDisj cdCases)`.  When `cdCases`
@@ -2802,7 +2799,7 @@ pub fn solve_with_source_cases_action_with_ctx(
 
     if let Some(ctx) = ctx_opt {
         // ----------------------------------------------------------------
-        // HS-faithful `refineSource` order (Sources.hs:131,376-419):
+        // HS-faithful `refineSource` order (Sources.hs:113-137, see line 131,376-419):
         //   refineSubst (per case) → removeRedundantCases (BEFORE conjoin)
         //   → _applySource (someInst + conjoinSystem) per SURVIVOR only.
         //
@@ -2828,12 +2825,12 @@ pub fn solve_with_source_cases_action_with_ctx(
         for (name, case_sys) in cases_iter {
             // HS-faithful: the stored case name is ALREADY the final display
             // name — `refineSource` applied `combine` (Sources.hs:135-139) and
-            // the list was joined via `intercalate "_"` (ProofMethod.hs:511).
+            // the list was joined via `intercalate "_"` (ProofMethod.hs:505-515, see line 511).
             // HS NEVER re-splits a name on `_`, so use it verbatim.
             let case_label = name.clone();
             // Haskell-faithful `applySource` path: matches the live goal
             // against the source's ABSTRACT `cdGoal` (`src.goal`) — NOT a
-            // case-specific action — mirroring `matchToGoal` (Sources.hs:268).
+            // case-specific action — mirroring `matchToGoal` (Sources.hs:268-317).
             let arms = refine_source_case_action(
                 ctx, sys, src, &case_sys, goal_node, fa_live, red_maude,
                 src_bounds, fork_base);
@@ -2898,7 +2895,7 @@ pub fn solve_with_source_cases_action_with_ctx(
         // conjoin-fanout + E.5 + output) for SURVIVOR arms only.  Same
         // `case_label` for all of a case's arms; proof_method.rs handles
         // `_case_N` disambiguation (HS `uniqueListBy ... distinguish cases`
-        // ProofMethod.hs:308).
+        // ProofMethod.hs:283-340, see line 308).
         // ----------------------------------------------------------------
         for (idx, (case_label, arm)) in refine_arms.into_iter().enumerate() {
             if !survivors.contains(&idx) { continue; }
@@ -2969,7 +2966,7 @@ fn append_step_name_list(names: &mut Vec<String>, sub_name: &str) {
 }
 
 /// Render a step-name list as a single user-facing case-name string,
-/// matching HS's `intercalate "_" names'` (ProofMethod.hs:319).
+/// matching HS's `intercalate "_" names'` (ProofMethod.hs:283-340, see line 319).
 pub(crate) fn case_name_list_to_string(names: &[String]) -> String {
     names.join("_")
 }
@@ -3007,7 +3004,7 @@ fn combine_case_names_list(existing: &[String], new_names: &[String]) -> Vec<Str
 
 // A source-case name reaching the runtime is already the final, `combine`d
 // display name (HS `combine`, Sources.hs:135-139, ported in
-// `combine_case_names_list`; joined with `intercalate "_"`, ProofMethod.hs:511).
+// `combine_case_names_list`; joined with `intercalate "_"`, ProofMethod.hs:505-515, see line 511).
 // Use it verbatim — never re-split on `_`, which would corrupt function symbols
 // whose names contain `_` (e.g. `c_KDF_SKc` → `SKc`).
 
@@ -3034,7 +3031,7 @@ fn sort_ge(a: tamarin_term::lterm::LSort, b: tamarin_term::lterm::LSort) -> bool
 /// `restrict` the system's eq-store `subst` (`sSubst`) to bindings
 /// whose KEY var is in `stable_vars`.  Mirrors Haskell's
 /// `modify sSubst (restrict stableVars)` inside `refineSource`
-/// (Sources.hs:123).  All bindings keyed on rule-internal vars
+/// (Sources.hs:113-137, see line 123).  All bindings keyed on rule-internal vars
 /// (vars not free in the abstract `cdGoal`) are dropped.
 ///
 /// Without this restriction, the case's eq-store at precompute time
@@ -3082,7 +3079,7 @@ fn restrict_eq_store_to_stable_vars(
 
 /// Freshen all vars in `sys` EXCEPT those in `keep`, shifting every
 /// other var's idx by `shift_amount`. Mirrors Haskell's
-/// `someInst sysTh0 keepVarBindings` (Sources.hs:348). Vars in `keep`
+/// `someInst sysTh0 keepVarBindings` (Sources.hs:336-350, see line 348). Vars in `keep`
 /// are preserved (they correspond to live-system vars introduced by
 /// the match-subst); other vars get shifted (callers derive
 /// `shift_amount` from the MaudeHandle's global counter via
@@ -3395,7 +3392,7 @@ fn freshen_system_some_inst(
     // and import keys only.
     // HS-faithful: inner `S.Set LNSubstVFresh` walks Ord-ascending
     // (`mapFrees (Set a) = fmap S.fromList . mapFrees f . S.toList`,
-    // LTerm.hs:866).  RS's `Vec` is in insertion order — sort to match
+    // LTerm.hs:861-866, see line 866).  RS's `Vec` is in insertion order — sort to match
     // (mirroring `rename_precise.rs:144-153`).
     for d in sys.eq_store.conj.iter() {
         let mut substs_sorted: Vec<&tamarin_term::subst_vfresh::SubstVFresh<
@@ -3431,7 +3428,7 @@ fn freshen_system_some_inst(
         });
     };
     // HS-faithful: `_sFormulas` / `_sSolvedFormulas` / `_sLemmas` are
-    // `S.Set LNGuarded`; HS walks them in Ord-ascending (Term/LTerm.hs:866
+    // `S.Set LNGuarded`; HS walks them in Ord-ascending (Term/LTerm.hs:861-866, see line 866
     // `foldMap (foldFrees f)`).  RS's `Vec<Guarded>` is in insertion order.
     // Sort copies (mirroring `rename_precise.rs:178-189`) so per-name
     // counter assignment matches HS exactly.
@@ -3764,9 +3761,9 @@ struct RefineArm {
 /// returned entry.  When the same `case_label` shows up twice in the
 /// upstream `Vec<(String, System, LNFact)>`, the proof-method dispatcher
 /// (`proof_method.rs`:595-611) appends `_case_N` per HS's
-/// `uniqueListBy ... distinguish cases` (ProofMethod.hs:308, with
-/// `uniqueListBy` at ProofMethod.hs:91 and `distinguish` at
-/// ProofMethod.hs:335).
+/// `uniqueListBy ... distinguish cases` (ProofMethod.hs:283-340, see line 308, with
+/// `uniqueListBy` at ProofMethod.hs:91-103 and `distinguish` at
+/// ProofMethod.hs:283-340, see line 335).
 /// HS-faithful split of `applySource` at the `conjoinSystem` boundary:
 /// this half does match + refineSubst + restrict + someInst (the
 /// `matchToGoal`→`refineSource`→someInst part of `_applySource`,
@@ -3813,7 +3810,7 @@ fn refine_source_case_action(
     crate::state_trace::emit("applySource_in", Some(&live_goal_for_trace), live_sys);
 
     // ---------------------------------------------------------------
-    // A.1 — `rename th0` in matchToGoal (Sources.hs:409):
+    // A.1 — `rename th0` in matchToGoal (Sources.hs:387-448, see line 409):
     //   `th = (`evalFresh` avoid goalTerm) . rename $ th0`
     // HS `rename` (LTerm.hs:614-621) is a UNIFORM SIGNED SHIFT of the
     // whole source's free-var span: `shift = freshStart - minVarIdx th0`
@@ -3869,7 +3866,7 @@ fn refine_source_case_action(
         = std::collections::BTreeSet::new();
     let renamed_case = freshen_system_keep_with_shift(
         case_sys, rename_shift, &empty_keep);
-    // HS `refineSource` (Sources.hs:162): `fs = avoid th` where
+    // HS `refineSource` (Sources.hs:144-225, see line 162): `fs = avoid th` where
     // `th = set cdGoal goalTerm (renamed th0)` — ONE seed for EVERY
     // case's `runReduction proofStep ctxt se fs`, computed over the
     // live goal + ALL renamed cases (NOT the per-case `avoid se`).
@@ -3909,7 +3906,7 @@ fn refine_source_case_action(
     ));
 
     // HS-faithful `doMatch (faTerm matchFact faPat <> iTerm matchLVar
-    // iPat)` = `runReader (solveMatchLNTerm match) hnd` (Sources.hs:381,
+    // iPat)` = `runReader (solveMatchLNTerm match) hnd` (Sources.hs:355-384, see line 381,
     // 414).  `solveMatchLTerm` (Term/Unification.hs:209-214) runs the
     // native matcher and ONLY shells out to `matchViaMaude` on the
     // `Left ACProblem` branch; a `Left NoMatcher` returns `[]` with NO
@@ -3954,7 +3951,7 @@ fn refine_source_case_action(
     // ---------------------------------------------------------------
     let _refine_fs = RefineFsScope::set(fs);
     let mut refined = Reduction::new(ctx, renamed_case);
-    // HS-faithful `solveSubstEqs` (Reduction.hs:736):
+    // HS-faithful `solveSubstEqs` (Reduction.hs:721-740, see line 736):
     //   solveTermEqs split [Equal (varTerm v) t | (v, t) <- substToList subst]
     // builds `Equal (varTerm v) t` with no conditional flip.
     let term_eqs: Vec<_> = match_pairs.into_iter()
@@ -3992,8 +3989,8 @@ fn refine_source_case_action(
     // proof-method dispatcher (`proof_method.rs`:595-611) handles
     // `_case_N` disambiguation when two entries share `case_label`,
     // matching HS's `uniqueListBy ... distinguish cases` (HS
-    // ProofMethod.hs:308, with `uniqueListBy` at ProofMethod.hs:91 and
-    // `distinguish` at ProofMethod.hs:335).
+    // ProofMethod.hs:283-340, see line 308, with `uniqueListBy` at ProofMethod.hs:91-103 and
+    // `distinguish` at ProofMethod.hs:283-340, see line 335).
     //
     // Arm order is preserved from `EquationStore::perform_split`, which
     // matches HS's `performSplit eqs2 splitId` enumeration order (Maude
@@ -4060,7 +4057,7 @@ fn refine_source_case_action(
         continue;
     }
     // Mirror Haskell `refineSource ctxt (refineSubst subst) (set cdGoal goalTerm th)`
-    // (Sources.hs:285,290): after refineSubst, restrict the case's
+    // (Sources.hs:268-317, see line 285,290): after refineSubst, restrict the case's
     // eq-store to `frees (cdGoal th) = frees goalTerm` — the LIVE
     // goal's free vars (since `set cdGoal goalTerm` was applied).
     // Drops any leftover abstract/rule-internal bindings introduced
@@ -4202,7 +4199,7 @@ fn conjoin_refine_arm(
     let live_goal = crate::constraint::constraints::Goal::Action(
         live_node.clone(), fa_live.clone());
     // HS-faithful (Sources.hs:196-216): `solveAllSafeGoals.safeGoal`
-    // returns `not (isKUFact fa)` for ActionG (Sources.hs:202), so
+    // returns `not (isKUFact fa)` for ActionG (Sources.hs:144-225, see line 202), so
     // HS's saturate-time precompute NEVER picks a KU action goal
     // and therefore never calls `applySource` on one (Sources.hs
     // `markGoalAsSolved "precomputed" goal`).  Any precompute-time
@@ -4246,7 +4243,7 @@ fn conjoin_refine_arm(
         return out_arms;
     }
 
-    // Drain `conjoin_system`'s step-12 fanout (HS Reduction.hs:736
+    // Drain `conjoin_system`'s step-12 fanout (HS Reduction.hs:721-740, see line 736
     // `solveSubstEqs SplitNow` inside DisjT).  arm[0] is in r.sys;
     // arms[1..] are post-substSystem snapshots in
     // `pending_conjoin_arm_systems`.  We replay the rest of
@@ -4295,7 +4292,7 @@ fn conjoin_refine_arm(
     //
     // SCOPING (HS-faithful): HS's `conjoinSystem` (Reduction.hs:660-690)
     // performs NO edge fact-equality solve at all — `joinSets sEdges`
-    // (Reduction.hs:667) unions the edge SET and relies on the saturated
+    // (Reduction.hs:646-660, see line 667) unions the edge SET and relies on the saturated
     // case being edge-consistent.  This E.5 step is an RS-only compensation
     // for saturate output that isn't fully edge-consistent.  It MUST only
     // touch edges INTRODUCED by the grafted case — re-solving a
@@ -4448,7 +4445,7 @@ fn conjoin_refine_arm(
 
 /// Haskell-faithful `applySource` for Premise goals.  Mirrors
 /// `conjoin_refine_arm` step-for-step, with the Premise-specific
-/// edge rewire from `matchToGoal` (Sources.hs:283).
+/// edge rewire from `matchToGoal` (Sources.hs:268-317, see line 283).
 ///
 /// Includes a defensive edge-fact `edge_eqs` pass (E.5) after
 /// `conjoinSystem` to re-unify edge facts.  Rust saturate doesn't always
@@ -4492,7 +4489,7 @@ fn apply_source_case_premise(
         (live_node.clone(), live_prem_idx), fa_live.clone());
     crate::state_trace::emit("applySource_prem_in", Some(&live_goal_for_trace), live_sys);
 
-    // A.1 — `rename th0` in matchToGoal (Sources.hs:409):
+    // A.1 — `rename th0` in matchToGoal (Sources.hs:387-448, see line 409):
     //   `th = (`evalFresh` avoid goalTerm) . rename $ th0`
     // Uniform SIGNED shift `avoid goalTerm - min(whole source)` — the
     // renamed source's min idx lands exactly at `avoid goalTerm`
@@ -4553,7 +4550,7 @@ fn apply_source_case_premise(
         tamarin_term::term::Term::Lit(
             tamarin_term::vterm::Lit::Var(renamed_abstract_node.clone())),
     ));
-    // HS-faithful `doMatch` (Sources.hs:390,414) — see the action-path
+    // HS-faithful `doMatch` (Sources.hs:387-448, see line 390,414) — see the action-path
     // twin above: only the `NeedsAc` (HS `Left ACProblem`) branch shells
     // out to Maude; `NoMatcher` returns `[]` natively.
     let match_pairs: Vec<(tamarin_term::lterm::LVar, tamarin_term::lterm::LNTerm)> = {
@@ -4581,7 +4578,7 @@ fn apply_source_case_premise(
     };
 
     // A.2.5 (Premise-specific) — substNodePrem pPat (iPat, premIdxTerm).
-    // HS `matchToGoal` (Sources.hs:385) rewrites ONLY the source case's
+    // HS `matchToGoal` (Sources.hs:355-384, see line 385) rewrites ONLY the source case's
     // EDGES: `modM sEdges (substNodePrem pPat (iPat, premIdxTerm))`, where
     // `substNodePrem from to = S.map (\e@(Edge c p) -> if p == from then
     // Edge c to else e)`.  It does NOT touch `sGoals`.  So when the source
@@ -4618,7 +4615,7 @@ fn apply_source_case_premise(
     // (LIVE-counter territory in HS) stay outside the floor.
     let refine_fs = RefineFsScope::set(fs);
     let mut refined = Reduction::new(ctx, renamed_case);
-    // HS-faithful `solveSubstEqs` (Reduction.hs:736): build
+    // HS-faithful `solveSubstEqs` (Reduction.hs:721-740, see line 736): build
     // `Equal (varTerm v) t` with no conditional flip.
     let term_eqs: Vec<_> = match_pairs.into_iter()
         .map(|(v, t)| {
@@ -4765,7 +4762,7 @@ fn apply_source_case_premise(
     // SCOPING (HS-faithful): the E.5 edge-fact solve must only touch edges
     // INTRODUCED by the grafted source case, NOT pre-existing LIVE edges.
     // HS's `conjoinSystem` (Reduction.hs:660-690) does NO edge solve at all —
-    // `joinSets sEdges` (Reduction.hs:667) unions the edge SET and lets the
+    // `joinSets sEdges` (Reduction.hs:646-660, see line 667) unions the edge SET and lets the
     // node-merge (`setNodes` → `solveRuleEqs SplitLater`) unify producer/consumer
     // multisets of LIVE-LIVE edges LAZILY (as a deferred AC `splitEqs`).  RS's
     // premise E.5 eagerly `solve_fact_eqs(SplitNow)`s every edge; re-solving a
@@ -4786,7 +4783,7 @@ fn apply_source_case_premise(
     // HS-faithful deferral: HS's `_applySource` -> `conjoinSystem`
     // (Sources.hs:447-469, Reduction.hs:839-866) never fact-solves grafted
     // edges; producer<->consumer AC ambiguity surfaces via node merges as
-    // `solveRuleEqs SplitLater` (Reduction.hs:778) — a DEFERRED eq-store
+    // `solveRuleEqs SplitLater` (Reduction.hs:775-783, see line 778) — a DEFERRED eq-store
     // disjunction plus a pending `splitEqs(N)` goal, live vars left
     // uninstantiated.  E.5's alignment job (Minimal_HashChain kZero<->kOrig,
     // TESLA variant drop) is single-unifier, which SplitLater still
@@ -4843,7 +4840,7 @@ fn apply_source_case_premise(
     // G — RS-only `apply_eq_store(empty_subst)` variant SplitG re-filter.
     //
     // HS HAS NO STANDALONE EMPTY-SUBST `applyEqStore` REFILTER.  HS's
-    // `applyEqStore` (EquationStore.hs:348) is only ever called with a
+    // `applyEqStore` (EquationStore.hs:345-348, see line 348) is only ever called with a
     // REAL `asubst` (from `solveSubstEqs`/`solveFactEqs`/`addEqs`); the
     // variant-drop for conflicting variants happens organically when the
     // conflicting binding enters via the normal solve path.  In particular
@@ -5076,7 +5073,7 @@ fn graft_case_into_action(
         live_node.clone(), fa_live.clone());
     if let Some(slot) = out.goals_mut().iter_mut().find(|(g, _)| g == &live_goal) {
         // HS-faithful: see the matching gate in `conjoin_refine_arm`.
-        // `solveAllSafeGoals.safeGoal` (Sources.hs:202) excludes KU
+        // `solveAllSafeGoals.safeGoal` (Sources.hs:144-225, see line 202) excludes KU
         // ActionG goals from saturate-time dispatch, so applying a
         // source-case for a KU goal during saturate must not mark
         // the live goal as solved — otherwise the case sub-system
@@ -5189,7 +5186,7 @@ fn graft_case_into_action(
 /// out for `b..m`).  Produces a list of `(LVar, BTreeSet<Vec<String>>)`
 /// where the inner set is the set of occurrence-context strings each
 /// var appears in.  Mirrors `varOccurences`
-/// (`lib/term/src/Term/LTerm.hs:593`).
+/// (`lib/term/src/Term/LTerm.hs:589-590, see line 593`).
 ///
 /// HS context format (per HasFrees-instance tree under `foldFreesOcc`):
 ///   - Map (NodeId, RuleACInst):  context = same `p` for both k and v
@@ -5320,7 +5317,7 @@ fn var_occurrences_nodes(
                 //   FApp o        as -> mconcat $ map (foldFreesOcc f (show o:c)) as
                 //                       -- AC or C symbols
                 // For a NoEq function the args are descended as a LIST, so the
-                // `HasFrees [a]` instance (LTerm.hs:843) prefixes EACH arg with
+                // `HasFrees [a]` instance (LTerm.hs:840-845, see line 843) prefixes EACH arg with
                 // its positional index `show i`: arg i's context becomes
                 // `[show i, opName, ...c]`.  For AC/C symbols HS maps over the
                 // args DIRECTLY (no list instance), so they get only
@@ -5345,7 +5342,7 @@ fn var_occurrences_nodes(
             }
         }
     }
-    // HS `instance HasFrees Fact` (Fact.hs:187):
+    // HS `instance HasFrees Fact` (Fact.hs:184-189, see line 187):
     //   foldFreesOcc f c fa = foldFreesOcc f (show (factTag fa):c) (factTerms fa)
     // i.e. push `show (factTag fa)` then descend into the term LIST, which
     // (via the `[a]` instance) pushes the list index `show i` per term.  So
@@ -6322,7 +6319,7 @@ fn compute_compare_systems_key(
     push_sorted_ranges(&mut out, &scratch, &mut ranges, ';');
     out.push(']');
     // HS also includes `_sNextGoalNr :: Integer` in the structural Ord
-    // (System.hs:394).  Include for faithfulness.
+    // (System.hs:383-401, see line 394).  Include for faithfulness.
     out.push_str(";NEXT_NR=");
     push_u64(&mut out, sys.next_goal_nr);
     // SOURCE KIND / DIFF — affect compareSystemsUpToNewVars only via
@@ -6432,7 +6429,7 @@ fn write_term_to_key_local(
     });
 }
 
-/// Direct port of HS `sortednubBy` (`lib/utils/src/Extension/Prelude.hs:52`,
+/// Direct port of HS `sortednubBy` (`lib/utils/src/Extension/Prelude.hs:52-87`,
 /// GHC's `Data.List.sortBy` adapted to drop duplicates).  Sorts by `cmp`
 /// AND removes elements for which an earlier-in-the-merge element compares
 /// `EQ`.  The survivor of an `EQ`-group is NOT simply the first input
@@ -6995,7 +6992,7 @@ mod tests {
     // By the time a case name reaches the runtime, `refineSource` has
     // already applied HS's `combine` (Sources.hs:135-139, ported in
     // `combine_case_names_list`) over the `[String]` step-name list, and
-    // the result is joined with `intercalate "_"` (ProofMethod.hs:511).
+    // the result is joined with `intercalate "_"` (ProofMethod.hs:505-515, see line 511).
     // The stored name is therefore the FINAL display name and must be
     // used verbatim — HS never re-splits a single name on `_`.
     // =========================================================================

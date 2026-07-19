@@ -1,5 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Robert Künnemann
+//   only minor contributions per cited ranges (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Sapic/Term.hs
 
@@ -122,7 +123,7 @@ pub enum GAtom {
 ///
 /// RS encodes tuples as n-ary `Pair([t1,..,tn])`, corresponding to HS's
 /// binary right-nested `<t1, <t2, .. <t_{n-1}, tn>>>`
-/// (`fAppPair (x,y) = fAppNoEq pairSym [x,y]`, Term.hs:142).  Because HS
+/// (`fAppPair (x,y) = fAppNoEq pairSym [x,y]`, Term.hs:140-141, see line 142).  Because HS
 /// pairs are binary, `<a,b,<c,d>>` and `<a,b,c,d>` are the SAME term; in
 /// RS's n-ary encoding those are the *distinct* trees
 /// `Pair([a,b,Pair([c,d])])` and `Pair([a,b,c,d])`.  Substituting a

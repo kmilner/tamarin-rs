@@ -1,7 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Benedikt Schmidt, Jannik Dreier, Ralf Sasse, Philip Lukert,
-//   "Nynko" (github), Charlie Jacomme, Felix Linker, "Tom" (github BTom-GH),
-//   and other minor contributors (see upstream git history)
+//   meiersi, beschmi, jdreier, PhilipLukertWork, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Unification.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Sources.hs
@@ -148,7 +147,7 @@ pub fn sort_of_name(n: &Name) -> LSort {
 ///
 /// where `x1=name, x2=sort, x3=idx` (comment: *"An ord instance that prefers
 /// the 'lvarIdx' over the 'lvarName'."*).  This matters because Haskell's
-/// `unifyRaw` (Unification.hs:241) orients same-sort var-var bindings such
+/// `unifyRaw` (Unification.hs:235-243, see line 241) orients same-sort var-var bindings such
 /// that the larger-Ord (=larger-idx) becomes the KEY:
 ///
 /// ```haskell
@@ -385,7 +384,7 @@ pub(crate) fn free_term(t: LNTerm) -> BLTerm {
 // =============================================================================
 
 /// A type that contains free `LVar`s. The Haskell typeclass takes a
-/// `MonotoneFunction` (LTerm.hs:550) distinguishing AC-position-preserving
+/// `MonotoneFunction` (LTerm.hs:550-551) distinguishing AC-position-preserving
 /// updates (`Monotone`, used by `rename`/`renameIgnoring`/`renameAvoiding*`
 /// index shifts) from arbitrary ones (`Arbitrary`, used by `someInst`,
 /// `applyVTerm` substitution, `fmap`). The two differ only at AC sub-terms:

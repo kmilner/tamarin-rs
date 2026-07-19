@@ -1,7 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Simon Meier, Benedikt Schmidt, Jannik Dreier, Adrian Dapprich, Ralf
-//   Sasse, Philip Lukert, Robert Künnemann, and other minor contributors
-//   (see upstream git history)
+//   meiersi, beschmi, and other minor contributors (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Maude/Types.hs, lib/term/src/Term/Term/Raw.hs,
 //   lib/theory/src/Theory/Constraint/System/Guarded.hs,
@@ -136,7 +135,7 @@ pub fn lterm_to_mterm_global(t: &LNTerm, ctx: &mut ConvCtx) -> MTerm {
             let new_args: Vec<MTerm> = args.iter().map(|a| lterm_to_mterm_global(a, ctx)).collect();
             // Smart constructor so AC args are flattened+sorted and C/EMap
             // args sorted by MaudeLit order, matching HS `lTermToMTerm`
-            // (Term/Maude/Types.hs:72) `go (FApp o as) = fApp o <$> ...`,
+            // (Term/Maude/Types.hs:57-73, see line 72) `go (FApp o as) = fApp o <$> ...`,
             // where `fApp (AC s) = fAppAC` (flatten+sort) and
             // `fApp (C s) = fAppC` (sort) per Raw.hs:111-131.  The raw
             // `Term::App` constructor would instead leave AC/em args in the
@@ -197,8 +196,8 @@ pub fn mterm_to_lnterm(
             //
             // Known Rust-side compensation, NOT yet traced to its upstream
             // encoding cause.  This diverges from HS `mTermToLNTerm`'s
-            // `importLit` (Term/Maude/Types.hs:89), whose `lookupBinding`
-            // (Bind.hs:117) is strict in the full `MaudeLit` sort
+            // `importLit` (Term/Maude/Types.hs:74-93, see line 89), whose `lookupBinding`
+            // (Bind.hs:115-117, see line 117) is strict in the full `MaudeLit` sort
             // (data MaudeLit = MaudeVar Integer LSort, deriving Ord —
             // Types.hs:42-45): on a sort-miss HS would mint a FRESH `LVar`
             // at the widened sort (importBinding, Bind.hs:134-141), never
@@ -236,7 +235,7 @@ pub fn mterm_to_lnterm(
             // Application via the smart constructors so AC/C normalisation
             // is preserved.  Mirrors HS `mTermToLNTerm`'s
             //   `go (FApp o as) = fApp o <$> mapM (go . viewTerm) as`
-            // (Term/Maude/Types.hs:88): `fApp` dispatches to `fAppAC`
+            // (Term/Maude/Types.hs:74-93, see line 88): `fApp` dispatches to `fAppAC`
             // (flatten+sort) for AC symbols AND `fAppC` (sort) for C
             // symbols (`em`/EMap).  Crucially the sort happens AFTER the
             // child args have been back-converted from `MaudeVar`s to the
@@ -380,7 +379,7 @@ mod tests {
 
     /// Pins the load-bearing sort-tolerant RANGE fallback used by
     /// `mterm_to_lnterm` via `lookup_canonical_var_lit`.  HS `importLit`
-    /// (Term/Maude/Types.hs:89) is strict on the full sort and on a miss
+    /// (Term/Maude/Types.hs:74-93, see line 89) is strict on the full sort and on a miss
     /// mints a FRESH `LVar` at the widened sort; the Rust fallback instead
     /// recovers the original LVar identity.  Locks current Rust behavior.
     #[test]
