@@ -4,29 +4,6 @@ A Rust port of the [Tamarin Prover](https://tamarin-prover.github.io/) with the 
 of reproducing the Haskell prover's output byte-for-byte. Typically
 4–16× faster (up to 42×) on several-fold less memory.
 
-- **Parity:** byte-identical `--prove` output with the Haskell prover on a
-  419-file corpus — every theory under `tamarin-prover/examples/` that uses only ported
-  features. Stored proofs replay and validate across provers in both
-  directions, and the interactive web UI agrees page-for-page with the
-  Haskell server across ≈380 theories / ≈120,000 crawled pages.
-- **Performance:** 1.7–42× faster across 1–16 cores (median ≈8×), with
-  peak memory 3.4–26× lower at one core — see [Performance](#performance).
-- **Not yet ported:** observational equivalence (`--diff`) — see
-  [Not yet ported](#not-yet-ported).
-- **Verification:** [TESTING.md](TESTING.md) documents the parity-gate
-  ladder and divergence-debugging tools.
-
-The Haskell sources under `tamarin-prover/lib/` and `tamarin-prover/src/` (git
-submodule) remain canonical; the port mirrors them function-for-function. Crate
-dependency order:
-
-```
-utils → term → parser → theory → {sapic, server} → tamarin-prover
-```
-
-(`export` is a standalone placeholder crate, not yet wired into the
-binary; `accountability` sits alongside `sapic` in the translation layer.)
-
 ## Important notes
 
 Always verify generated proofs against regular tamarin-prover. All proofs generated
@@ -36,17 +13,35 @@ You should not directly trust the output of this given the extensive use of LLMs
 translating code.
 
 To make this easy there is a `prove_and_reverify.sh` script in the root of this repo.
-In many cases, proving in Rust and reverifying in Haskell is still faster than proving
-in Haskell directly.
+In many cases, proving in tamarin-rs and reverifying in tamarin-prover is still faster than proving
+in tamarin-prover directly; you may also find tamarin-rs useful for iterating more quickly before
+checking against the regular tamarin-prover.
 
-At time of writing there are two open issues in Haskell affecting proof reverifiability,
-https://github.com/tamarin-prover/tamarin-prover/issues/871 and
-https://github.com/tamarin-prover/tamarin-prover/issues/881. Once the associated
-pull requests are merged there should be no further gaps. If you do find any
-please report them in the github issues so they can be fixed!.
+At time of writing there are two open issues in Haskell affecting proof reverifiability. If
+you'd like to build a version of tamarin-prover that has patches applied already, you
+can use `./setup.sh testing`, we use this patched version for internal testing. These
+issues are https://github.com/tamarin-prover/tamarin-prover/issues/871 and
+https://github.com/tamarin-prover/tamarin-prover/issues/881. Once the associated pull requests
+are merged all proofs should be identical; If you do find any that differ (even if they cross-verify)
+please report them in the github issues so they can be fixed!
 
 The licensing of this code is somewhat complicated, see [License](#license) if you
 are interested in future prospects for redistribution.
+
+## Summary
+
+- **Parity:** byte-identical `--prove` output with the Haskell prover on a
+  419-file corpus — every theory under `tamarin-prover/examples/` that uses only ported
+  features. Stored proofs replay and validate across provers in both
+  directions, and the interactive web UI agrees page-for-page with the
+  Haskell server across ≈380 theories / ≈120,000 crawled pages.
+- **Performance:** 1.7–42× faster across 1–16 cores (median ≈8×), with
+  peak memory 3.4–26× lower at one core — see [Performance](#performance).
+- **Not yet ported:** observational equivalence (`--diff`) — see
+  [Not yet ported](#not-yet-ported).
+- **Testing process:** [TESTING.md](TESTING.md) documents the parity-gate
+  ladder and divergence-debugging tools.
+
 
 ## Repository layout
 
