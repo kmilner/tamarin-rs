@@ -14,9 +14,9 @@
 //   lib/theory/src/Theory/Constraint/System/Constraints.hs,
 //   lib/theory/src/Theory/Constraint/System/Guarded.hs,
 //   lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Model/Signature.hs,
 //   lib/theory/src/Theory/Proof.hs,
 //   lib/theory/src/Theory/Sapic/Term.hs,
+//   lib/theory/src/Theory/Text/Parser/Signature.hs,
 //   lib/theory/src/Theory/Text/Parser/Tactics.hs,
 //   lib/theory/src/Theory/Tools/SubtermStore.hs,
 //   lib/utils/src/Data/DAG/Simple.hs, src/Web/Theory.hs
@@ -75,11 +75,20 @@ pub enum GoalRanking {
     UsefulGoalNr,
     /// `OracleRanking quitOnEmpty oracle` (rankGoals dispatch ProofMethod.hs:480-503, see line 483).
     /// preSort = `const goalNrRanking`.
-    /// `oracle_path` is the resolved filesystem path of the oracle script.
-    Oracle { quit_on_empty: bool, oracle_path: String },
+    /// `oracle_path` is the resolved filesystem path of the oracle script
+    /// (what gets exec'd).  `display_path`, when set, is what
+    /// [`Self::ranking_name`] prints instead: an `o`/`O` inside a COMPACT
+    /// letter run (HS `regularRanking`, Text/Parser/Signature.hs:293-311) carries the
+    /// bare `defaultOracle` with `workDir = Nothing`, so `printOracle`
+    /// (System.hs:702-705) shows the `"."`-joined name (`./oracle`);
+    /// only a STANDALONE `o`/`O` token keeps the parse-time workDir and
+    /// displays the resolved path.  (HS would also exec the compact form
+    /// CWD-relative; we exec the resolved path — the usable superset —
+    /// and keep just the display faithful.)
+    Oracle { quit_on_empty: bool, oracle_path: String, display_path: Option<String> },
     /// `OracleSmartRanking quitOnEmpty oracle` (rankGoals dispatch ProofMethod.hs:480-503, see line 484).
-    /// preSort = `smartRanking ctxt False`.
-    OracleSmart { quit_on_empty: bool, oracle_path: String },
+    /// preSort = `smartRanking ctxt False`.  Fields as in [`Self::Oracle`].
+    OracleSmart { quit_on_empty: bool, oracle_path: String, display_path: Option<String> },
     /// `InternalTacticRanking quitOnEmpty (Tactic …)` (rankGoals dispatch ProofMethod.hs:480-503, see line 491).
     /// The resolved per-lemma tactic (presort + prio/deprio selectors).
     /// `quit_on_empty` is True for the `{.}` form, False for `{name}`.
@@ -110,9 +119,9 @@ impl GoalRanking {
             // HS `UsefulGoalNrRanking` ('c')
             'c' => GoalRanking::UsefulGoalNr,
             // HS `OracleRanking False defaultOracle` (System.hs:585-598, see line 589)
-            'o' => GoalRanking::Oracle { quit_on_empty: false, oracle_path: oracle_path.to_string() },
+            'o' => GoalRanking::Oracle { quit_on_empty: false, oracle_path: oracle_path.to_string(), display_path: None },
             // HS `OracleSmartRanking False defaultOracle` (System.hs:585-598, see line 590)
-            'O' => GoalRanking::OracleSmart { quit_on_empty: false, oracle_path: oracle_path.to_string() },
+            'O' => GoalRanking::OracleSmart { quit_on_empty: false, oracle_path: oracle_path.to_string(), display_path: None },
             _ => GoalRanking::Smart(false),
         }
     }
@@ -138,11 +147,13 @@ impl GoalRanking {
             GoalRanking::Inj(lb) =>
                 format!("heuristics adapted to stateful injective protocols{}",
                         loop_status(*lb)),
-            GoalRanking::Oracle { oracle_path, .. } =>
-                format!("an oracle for ranking, located at {}", oracle_path),
-            GoalRanking::OracleSmart { oracle_path, .. } =>
+            GoalRanking::Oracle { oracle_path, display_path, .. } =>
+                format!("an oracle for ranking, located at {}",
+                        display_path.as_deref().unwrap_or(oracle_path)),
+            GoalRanking::OracleSmart { oracle_path, display_path, .. } =>
                 format!("an oracle for ranking based on 'smart' heuristic, \
-                         located at {}", oracle_path),
+                         located at {}",
+                        display_path.as_deref().unwrap_or(oracle_path)),
             GoalRanking::Tactic { tactic, .. } =>
                 format!("the tactic written in the theory file: {}", tactic.name),
         };
@@ -162,7 +173,7 @@ fn loop_status(b: bool) -> String {
 /// the default oracle name via `oracle_name_for_theory`
 /// (pretty_theory.rs, HS `defaultOracleNames` System.hs:551-561).
 ///
-/// Grammar (mirrors HS `goalRanking` Signature.hs:293-311):
+/// Grammar (mirrors HS `goalRanking` Text/Parser/Signature.hs:293-311):
 ///   heuristic   ::= ranking+
 ///   ranking     ::= oracle_ranking | tactic_ranking | letter
 ///   oracle_ranking ::= ('o' | 'O') ('"' name '"')?
@@ -232,7 +243,12 @@ pub fn parse_heuristic_str_with_tactics(
             out.push(resolved);
             continue;
         }
-        // Oracle rankings with optional quoted path
+        // Standalone oracle ranking with optional quoted path.  HS's
+        // `goalRanking` (Text/Parser/Signature.hs:293-311) tries `oracleRanking` FIRST
+        // at each token position, so an `o`/`O` that BEGINS a token is
+        // parsed alone and its Oracle keeps the parse-time workDir —
+        // `printOracle` (System.hs:702-705) then shows the workDir-joined
+        // (resolved) path.
         if c == 'o' || c == 'O' {
             i += 1;
             while i < chars.len() && chars[i] == ' ' { i += 1; }
@@ -250,9 +266,30 @@ pub fn parse_heuristic_str_with_tactics(
             out.push(GoalRanking::from_char_with_oracle(c, oracle_path));
             continue;
         }
+        // Compact letter run: HS's `regularRanking` (`many1 letter` →
+        // `filterHeuristic`) consumes a MAXIMAL run of letters as one
+        // token, mapping each via `goalRankingIdentifiers` — so an `o`/`O`
+        // INSIDE a run (e.g. the middle of `soioo`) gets the bare
+        // `defaultOracle` (workDir = Nothing) and displays as the
+        // `"."`-joined name (`./oracle`), unlike the standalone form
+        // above.  The exec path is still resolved later
+        // (`prepend_theory_dir_to_oracle_paths`); only the display keeps
+        // the workDir-less form.
         if c.is_ascii_alphabetic() {
-            out.push(GoalRanking::from_char_with_oracle(c, &default_oracle));
-            i += 1;
+            while i < chars.len() && chars[i].is_ascii_alphabetic() {
+                let mut r = GoalRanking::from_char_with_oracle(chars[i], &default_oracle);
+                if let GoalRanking::Oracle { display_path, oracle_path, .. }
+                    | GoalRanking::OracleSmart { display_path, oracle_path, .. } = &mut r
+                {
+                    *display_path = Some(if oracle_path.starts_with('/') {
+                        oracle_path.clone()
+                    } else {
+                        format!("./{}", oracle_path)
+                    });
+                }
+                out.push(r);
+                i += 1;
+            }
             continue;
         }
         i += 1; // skip unknown
@@ -518,13 +555,13 @@ fn rank_goals_with_inner(
             // (ProofMethod.hs:480-503, see line 491,695).
             internal_tactic_ranking(&tactic, quit_on_empty, ctx, sys)
         }
-        GoalRanking::Oracle { quit_on_empty, oracle_path } => {
+        GoalRanking::Oracle { quit_on_empty, oracle_path, .. } => {
             // HS `oracleRanking (const goalNrRanking) oracle quitOnEmpty ctxt sys ags`
             // (ProofMethod.hs:480-503, see line 483): preSort = goalNrRanking (open_goals is already nr-sorted)
             let ags = open_goals(sys);
             oracle_ranking(ags, &oracle_path, quit_on_empty, ctx, sys)
         }
-        GoalRanking::OracleSmart { quit_on_empty, oracle_path } => {
+        GoalRanking::OracleSmart { quit_on_empty, oracle_path, .. } => {
             // HS `oracleRanking (smartRanking ctxt False) oracle quitOnEmpty ctxt sys ags`
             // (ProofMethod.hs:480-503, see line 484): preSort = smartRanking ctxt False
             let ags = smart_ranking(sys, ctx, false);

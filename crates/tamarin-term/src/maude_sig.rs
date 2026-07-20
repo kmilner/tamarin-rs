@@ -180,7 +180,7 @@ impl MaudeSig {
         // DESTRUCTOR rule variants are mutually exclusive.  HS `addCtxtStRule`
         // (Signature.hs:162-164) is `msig <> mempty {stRules=[str]}`, so each
         // user `equations:` rule goes through the monoid `<>`, which applies
-        // `unionExceptPairRules` (Signature.hs:130, 135-141) — it is NOT a plain
+        // `unionExceptPairRules` (Signature.hs:120-141, see line 130, 135-141) — it is NOT a plain
         // set insert.  So an exported theory that declares `fst/1[destructor]` +
         // the pairing equation must keep only the declared destructor rule, not
         // BOTH the base constructor rule AND the user destructor rule (which
@@ -393,7 +393,7 @@ pub fn pair_maude_sig() -> MaudeSig {
     }.refresh()
 }
 
-/// `pairDestMaudeSig` (Signature.hs:202): the `dest-pairing` variant —
+/// `pairDestMaudeSig` (Signature.hs:202-202): the `dest-pairing` variant —
 /// fst/snd are DESTRUCTORS (`pair_fun_dest_sig`) with the destructor
 /// rewrite rules (`pair_dest_rules`), rather than constructors.
 pub fn pair_dest_maude_sig() -> MaudeSig {

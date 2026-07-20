@@ -193,3 +193,20 @@ async fn test_autoprove_proof_view_retains_systems() {
     assert!(!html.contains("Constraint System is Solved"),
         "root must not render as an empty solved system");
 }
+
+// Regression: an oracle exec failure must be confined to the request
+// that forced the ranking, exactly as HS's `readProcess` exception is
+// caught by the Warp request thread — the server process must survive.
+// The fixture's `heuristic=o` execs `./oracle` relative to the theory
+// dir and no such script exists, so the first ranking call fails
+// (`ORACLE_ERROR_UNWINDS` panics instead of `exit(1)`); the autoprove
+// handler's spawn_blocking boundary absorbs the unwind.
+#[tokio::test]
+async fn test_autoprove_missing_oracle_keeps_server_alive() {
+    let s = start_server_with_theory("oracle_missing.spthy").await;
+    let auto = s.url("/thy/trace/1/autoprove/idfs/0/False/proof/test");
+    let res = s.client.get(&auto).send().await.expect("request completes");
+    assert_eq!(res.status(), 200, "failure surfaces as an alert, not a dead socket");
+    let root = s.client.get(&s.url("/")).send().await.expect("server still serving");
+    assert_eq!(root.status(), 200, "server must survive the oracle failure");
+}

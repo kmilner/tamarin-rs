@@ -26,30 +26,9 @@ use tamarin_theory::constraint::solver::search::{proof_status, ProofNode, ProofS
 
 /// Full overview/framing page (the one served at `/thy/trace/<idx>/overview/...`).
 pub fn overview_page(entry: &TheoryEntry, path: &TheoryPath) -> String {
+    let header_html = header(entry);
     let proof_state = proof_state(entry);
     let main_view = path_html(entry, path);
-    // Route the page shell through the clean web layer (`web_clean::page`) for
-    // local-origin theories.  The west/center panes are opaque prover content
-    // (proof-script state, main-view HTML) supplied to the clean shell — which
-    // is byte-identical to the ported local-origin template.  The clean shell
-    // bakes in the local-origin header (Reload file / Append modified lemmas
-    // actions); a non-local origin gates those off, which the clean shell does
-    // not model, so that case keeps the ported template below.
-    if matches!(entry.origin, crate::state::TheoryOrigin::Local(_)) {
-        let filename = html_escape(&format!("{}.spthy", entry.name));
-        let params = crate::web_clean::page::PageParams {
-            theory_name: &entry.name,
-            index: entry.idx as u64,
-            version: env!("CARGO_PKG_VERSION"),
-            filename: &filename,
-        };
-        return crate::web_clean::page::render_page(
-            &params,
-            &format!("{proof_state} "),
-            &format!("{main_view} "),
-        );
-    }
-    let header_html = header(entry);
     // Byte-faithful port of HS `defaultLayout'` (Web/Types.hs:686-723)
     // wrapping `overviewTpl` (Web/Hamlet.hs:290-317): a `$newline never`
     // single-line frame (the only embedded newlines come from the
@@ -250,7 +229,7 @@ fn lemma_index(out: &mut String, entry: &TheoryEntry,
         TraceQuantifier::AllTraces => "all-traces",
         TraceQuantifier::ExistsTrace => "exists-trace",
     };
-    let attrs = render_attrs(&l.attributes);
+    let attrs = render_attrs(&l.attributes, &entry.typed_theory.in_file);
     // HS renders the quantifier + formula as `nest 2 (sep [tq, doubleQuotes
     // (prettyLNFormula f)])` (Web/Theory.hs:301-306) through the
     // HtmlDoc/HughesPJ engine: (1) AC argument lists (`++`/`*`/xor) are
@@ -527,7 +506,7 @@ fn pp_step(out: &mut String, cx: &PpCtx, path: &[String], node: &ProofNode,
 }
 
 
-fn render_attrs(attrs: &[LemmaAttr]) -> String {
+fn render_attrs(attrs: &[LemmaAttr], in_file: &str) -> String {
     if attrs.is_empty() { return String::new(); }
     let parts: Vec<String> = attrs.iter().map(|a| match a {
         LemmaAttr::Sources => "sources".into(),
@@ -535,7 +514,14 @@ fn render_attrs(attrs: &[LemmaAttr]) -> String {
         LemmaAttr::DiffReuse => "diff_reuse".into(),
         LemmaAttr::UseInduction => "use_induction".into(),
         LemmaAttr::HideLemma(s) => format!("hide_lemma={}", s),
-        LemmaAttr::Heuristic(s) => format!("heuristic={}", s),
+        // HS prints the STORED ranking value, whose oracle name was resolved
+        // at parse time; RS keeps the raw source string, so it must be
+        // re-rendered with the oracle name expanded — the same
+        // `pretty_goal_rankings` the batch printer's `lemma_attr_docs` uses
+        // (`heuristic=O` alone would drop the oracle file name).
+        LemmaAttr::Heuristic(s) => format!(
+            "heuristic={}",
+            tamarin_theory::pretty_theory::pretty_goal_rankings(s, in_file)),
         LemmaAttr::Output(xs) => format!("output={}", xs.join(",")),
         LemmaAttr::Left => "left".into(),
         LemmaAttr::Right => "right".into(),
@@ -575,14 +561,10 @@ pub fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> String {
         TheoryPath::Method { lemma, sub, .. } => proof_html(entry, lemma, sub),
         TheoryPath::Source { kind, .. } => sources_html(entry, kind),
         // HS `htmlThyPath` arms `TheoryEdit`/`TheoryAdd`/`TheoryDelete`
-        // (`src/Web/Theory.hs:1025-1133`).  Add/Delete route through the clean
-        // web layer (`web_clean::forms`).  Edit keeps the ported path: the
-        // clean `edit_form` hard-codes the textarea `rows="8"`, whereas HS
-        // sizes it dynamically (`textHeight = 2 + #newlines`), so routing Edit
-        // through `web_clean` would drop that behavior.
+        // (`src/Web/Theory.hs:1025-1133`).
         TheoryPath::Edit(name) => edit_lemma_html(entry, name),
-        TheoryPath::Add(name) => crate::web_clean::forms::add_form(name),
-        TheoryPath::Delete(name) => crate::web_clean::forms::delete_form(name),
+        TheoryPath::Add(name) => add_lemma_html(name),
+        TheoryPath::Delete(name) => delete_lemma_html(name),
     }
 }
 
@@ -619,6 +601,55 @@ fn edit_lemma_html(entry: &TheoryEntry, name: &str) -> String {
         name = esc_name,
         rows = rows,
         plaintext = html_escape(&plaintext),
+        noscript = NOSCRIPT_WARNING,
+        wrap_style = WRAP_TEXT_STYLE,
+    )
+}
+
+/// HS `htmlThyPath (TheoryAdd name)` (`src/Web/Theory.hs:1103-1133`).  The
+/// textarea is always the literal "Enter your new Lemma" (HS passes
+/// `lname = Nothing` for Add, so `getLemmaPlaintext` returns the default).
+fn add_lemma_html(name: &str) -> String {
+    let esc_name = html_escape(name);
+    format!(
+        "<form method=\"post\" action=\"../../edit/add/{action}\">\
+<div contenteditable=\"true\">\
+<label for=\"lemmaTextArea\">LemmaText</label>\n\
+<textarea name=\"lemma-text\" id=\"lemmaTextArea\">Enter your new Lemma</textarea>\n\
+</div>\n\
+<button type=\"submit\">Submit</button>\n\
+<p></p>\n\
+<h3> Introduction to Adding Lemmas:</h3>\n\
+{noscript}\n\
+<p><ul class=\"wrap-text\">\
+<li>Adds the lemma in the current position in the theory, but will throw an error if a lemma with the same name exists, the parsing fails, or the lemma isn't well-formed.\n<br>&zwnj;</br>\n</li>\n\
+<li>Adding a lemma will NOT modify the loaded source file, but clicking on \"Append modified lemmas to file\" in the Actions menu appends all added lemmas as a comment at the end of the current theory file.\n<br>&zwnj;</br>\n</li>\n\
+<li>Clicking on \"Download source\" in the Actions menu will download the modified version of the theory (including the added lemmas).</li>\n\
+</ul>\n{wrap_style}\n</p>\n</form>\n",
+        action = esc_name,
+        noscript = NOSCRIPT_WARNING,
+        wrap_style = WRAP_TEXT_STYLE,
+    )
+}
+
+/// HS `htmlThyPath (TheoryDelete name)` (`src/Web/Theory.hs:1070-1101`).
+fn delete_lemma_html(name: &str) -> String {
+    let esc_name = html_escape(name);
+    format!(
+        "<p> Do you want to delete lemma {name}?</p>\n\
+<form method=\"post\" action=\"../../edit/delete/{action}\">\
+<button type=\"submit\">Yes</button>\n\
+<p></p>\n\
+<h3> Introduction to Lemma Delete:</h3>\n\
+{noscript}\n\
+<p><ul class=\"wrap-text\">\
+<li>Clicking on the button above will delete the lemma from the loaded theory.\n<br>&zwnj;</br>\n</li>\n\
+<li>Deleting a lemma will NOT modify the file it was loaded from, but clicking on \"Download source\" in the Actions menu will download the modified version of the theory (so without the deleted lemmas).\n<br>&zwnj;</br>\n</li>\n\
+<li>Deleting a reuse lemma will invalidate all subsequent proofs.\n<br>&zwnj;</br>\n</li>\n\
+<li>Deleting a source lemma is not supported and will result in an error.</li>\n\
+{wrap_style}\n</ul>\n</p>\n</form>\n",
+        name = esc_name,
+        action = esc_name,
         noscript = NOSCRIPT_WARNING,
         wrap_style = WRAP_TEXT_STYLE,
     )

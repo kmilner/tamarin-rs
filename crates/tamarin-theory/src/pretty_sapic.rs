@@ -32,7 +32,7 @@
 //!
 //! HS references:
 //!   - `prettySapicTerm = prettyTerm (text . show)` (Term.hs:168-169), where
-//!     `show :: SapicLVar` is `show v ++ ":" ++ t` for typed vars (Term.hs:108).
+//!     `show :: SapicLVar` is `show v ++ ":" ++ t` for typed vars (Term.hs:108-110).
 //!   - `prettyTerm` term Doc structure (Term/Term.hs:268-296): pairs via
 //!     `ppTerms ", " 1 "<" ">"` (fcat + `nest 1`), AC ops via
 //!     `ppTerms (ppACOp o) 1 "(" ")"`, functions via `ppFun = text(f++"(") <>

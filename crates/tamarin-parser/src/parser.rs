@@ -2246,7 +2246,7 @@ impl<'a> Parser<'a> {
             return Err(self.err(format!("fact name `{}` must start with uppercase", name)));
         }
         self.require_punct("(")?;
-        // HS `parens (commaSep pterm)` (Fact.hs:47): trailing comma OK.
+        // HS `parens (commaSep pterm)` (Fact.hs:39-63, see line 47): trailing comma OK.
         let args = self.sep_end_by(")", |p| p.term(false))?;
         let mut annotations = Vec::new();
         if self.try_punct("[")
@@ -2294,7 +2294,7 @@ impl<'a> Parser<'a> {
             _     => None,
         };
         if let Some((cname, cpersistent, keep_ann)) = canonical {
-            // `!Fr(...)` is a parse error (Fact.hs:45).
+            // `!Fr(...)` is a parse error (Fact.hs:39-63, see line 45).
             if upper == "FR" && persistent {
                 return Err(self.err("fresh facts cannot be persistent"));
             }
@@ -3291,7 +3291,7 @@ mod tests {
     }
 
     // HS `factAnnotation` SolveFirst is `opUnion = symbol_ "++" <|> symbol_ "+"`
-    // (Fact.hs:32, Token.hs:551-552), so `[++]` is accepted like `[+]`.
+    // (Fact.hs:31-36, see line 32, Token.hs:551-552), so `[++]` is accepted like `[+]`.
     // Verified against tamarin-prover 1.13.0: `Foo(~k)[++]` parses and renders
     // as `[+]`.
     #[test]

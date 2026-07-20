@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, meiersi, jdreier, arcz, rsasse, rkunnema, beschmi,
-//   gilcu3, Nynko, felixlinker, addap, yavivanov, Hong-Thai,
+//   kevinmorio, meiersi, jdreier, arcz, rsasse, beschmi, rkunnema,
+//   gilcu3, Nynko, felixlinker, addap, Hong-Thai, yavivanov,
 //   racoucho1u, ValentinYuri, BTom-GH, PhilipLukertWork, sans-sucre,
 //   Mathias-AURAND, Azurios-git, and other minor contributors (see
 //   upstream git history)
@@ -302,6 +302,12 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     init_rayon_pool(args);
+
+    // Oracle exec failures must not kill the server: HS confines the
+    // `readProcess` exception to the Warp request thread, so only the
+    // triggering request fails.  Batch keeps the `exit(1)` parity path.
+    tamarin_theory::constraint::solver::search::ORACLE_ERROR_UNWINDS
+        .store(true, std::sync::atomic::Ordering::Relaxed);
 
     // Haskell defaults: 3001 on 127.0.0.1.
     let port = args.port.unwrap_or(DEFAULT_INTERACTIVE_PORT);
@@ -871,7 +877,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // private/destructor flags.
             if let Err(e) = tamarin_accountability::translate(&mut parsed, &mut elaborated) {
                 // HS: the exceptions `Acc.translate` throws — `CaseTestsUndefined`
-                // (Accountability.hs:45) and the `UndefinedPredicate` /
+                // (Accountability.hs:42-49, see line 45) and the `UndefinedPredicate` /
                 // `DuplicateItem` parsing exceptions its `liftedAddLemma` /
                 // `liftedAddPredicate` folds raise (Parser.hs:141-152,
                 // Parser/Signature.hs:313-316) — escape to GHC's runtime, which

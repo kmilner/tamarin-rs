@@ -34,7 +34,7 @@
 //! below. An explicit per-rule `color:` attribute and a cluster's
 //! `manualNodeColor` still take priority (HS `dotNodeCompact`, Dot.hs:248-256).
 //! Each rule record also carries HS's `fontcolor` (`colorUsesWhiteFont` of the
-//! palette colour, Dot.hs:258/284-287) and `role` (Dot.hs:259) attributes.
+//! palette colour, Dot.hs:236-379, see line 258/284-287) and `role` (Dot.hs:236-379, see line 259) attributes.
 //!
 //! KNOWN DIVERGENCES:
 //!   * (serialization form only — normalised away by the parse-and-compare
@@ -514,7 +514,7 @@ impl DotBuilder {
             let _ = writeln!(self.buf, "  showboxes=false;");
             let _ = writeln!(self.buf, "  clusterrank=local;");
             // HS `setDefaultAttributesIfCluster` sets the graph-level node
-            // default shape to `ellipse` (Dot.hs:160); each compact rule node
+            // default shape to `ellipse` (Dot.hs:140-161, see line 160); each compact rule node
             // overrides it with its own per-node `shape=record` (emitted in
             // `rule_node`, mirroring HS `genRecord "record"`), so record rules
             // still render as records inside clusters.
@@ -563,7 +563,7 @@ impl DotBuilder {
             let lbl = if outgoing {
                 format!("{} : {}", nid, rule_case_name(ru))
             } else {
-                // HS `concatMap snd as` (Dot.hs:302) — `as` is the
+                // HS `concatMap snd as` (Dot.hs:236-379, see line 302) — `as` is the
                 // `renderRow`-rendered rule label, i.e. the SAME
                 // `renderBalanced` single-doc row (width 130) the record
                 // mid row uses.  No `fixMultiLineLabel` here: this label
@@ -623,7 +623,7 @@ impl DotBuilder {
         // (`M.lookup rInfoVal colorMap`), i.e. the raw map value — NOT the
         // resolved `fillcolor` — so an explicit/cluster override does not change
         // the font choice. `role = fromMaybe "Undefined" (getNodeRole node)`
-        // (Dot.hs:243).
+        // (Dot.hs:236-379, see line 243).
         let palette_color = color_map.lookup(&ru.info);
         let fontcolor = if color_uses_white_font(palette_color) {
             "white"
@@ -636,7 +636,7 @@ impl DotBuilder {
         // the `dotNodeCompact` `attrs`.  The per-node `shape=record` OVERRIDES the
         // graph-level default node shape — which is `record` in the flat
         // `setDefaultAttributes` case but `ellipse` in the clustered
-        // `setDefaultAttributesIfCluster` case (Dot.hs:160).  Emit it explicitly
+        // `setDefaultAttributesIfCluster` case (Dot.hs:140-161, see line 160).  Emit it explicitly
         // so clustered SAPIC graphs keep `shape=record` (not the ellipse default).
         let _ = writeln!(self.buf,
             "  {} [shape=record,label=\"{}\",style=\"filled\",fillcolor=\"{}\",fontcolor=\"{}\",role=\"{}\"];",
@@ -671,7 +671,7 @@ impl DotBuilder {
             id, escape_dot_label(&s), color);
     }
     fn last_node(&mut self, dot_id: &str, nid: &LVar) {
-        // HS `LastActionAtom -> mkSimpleNode (show v) []` (Dot.hs:273): the
+        // HS `LastActionAtom -> mkSimpleNode (show v) []` (Dot.hs:236-379, see line 273): the
         // label is `show v`, rendered via `Display for LVar` (`#i` / `#i.2`),
         // via plain `D.node` (see `action_node`), so use the plain-label escaper.
         // `dot_id` is the collision-disambiguated id (see `ellipse_dot_ids`).
@@ -992,7 +992,7 @@ fn scale_indent(s: String) -> String {
     out
 }
 
-/// Mirror Haskell `ruleLabelM.isNotDiffAnnotation` (Dot.hs:341): the action
+/// Mirror Haskell `ruleLabelM.isNotDiffAnnotation` (Dot.hs:236-379, see line 341): the action
 /// fact equal to the synthetic diff annotation
 /// `Fact (ProtoFact Linear ("Diff" ++ getRuleNameDiff ru) 0) S.empty []`
 /// is dropped before rendering. `getRuleNameDiff` (Rule.hs:784-798) prefixes
@@ -1060,7 +1060,7 @@ fn rule_label_doc(nid: &LVar, ru: &RuleACInst, opts: &GraphOptions) -> Doc {
     if act_docs.is_empty() {
         header
     } else {
-        // `brackets (vcat $ punctuate comma lbl)` (Dot.hs:338).
+        // `brackets (vcat $ punctuate comma lbl)` (Dot.hs:236-379, see line 338).
         header
             .beside(Doc::text("["))
             .beside(pretty_hpj::vcat(pretty_hpj::punctuate(
@@ -1184,11 +1184,11 @@ fn color_uses_white_font(color: Option<tamarin_utils::color::Rgb>) -> bool {
     }
 }
 
-/// Key of HS `NodeColorMap` (Dot.hs:88): a rule's `rInfo`
+/// Key of HS `NodeColorMap` (Dot.hs:88-88): a rule's `rInfo`
 /// (`RuleInfo ProtoRuleACInstInfo IntrRuleACInfo`).
 type RInfo = RuleInfo<tamarin_theory::rule::ProtoRuleACInstInfo, IntrRuleACInfo>;
 
-/// Faithful port of HS `NodeColorMap` (Dot.hs:88) — the per-rule fill palette,
+/// Faithful port of HS `NodeColorMap` (Dot.hs:88-88) — the per-rule fill palette,
 /// keyed by a rule's `rInfo`. Built by [`build_node_color_map`] (port of
 /// `nodeColorMap`, Dot.hs:190-218). `rInfo` is not `Hash`/`Ord` in the Rust
 /// port (`ProtoRuleACInstInfo` only derives `PartialEq`), so we keep an
@@ -1202,7 +1202,7 @@ struct NodeColorMap<'a> {
 }
 
 impl NodeColorMap<'_> {
-    /// HS `M.lookup rInfoVal colorMap` (Dot.hs:255). Returns the LAST entry
+    /// HS `M.lookup rInfoVal colorMap` (Dot.hs:236-379, see line 255). Returns the LAST entry
     /// whose `rInfo` equals `info` (matching `M.fromList`'s last-wins), or
     /// `None` when the rInfo is absent (→ `"white"` at the call site).
     fn lookup(&self, info: &RInfo) -> Option<tamarin_utils::color::Rgb> {
@@ -1254,15 +1254,15 @@ fn group_idx(ru: &RuleACInst) -> usize {
 /// mIdx) | (gIdx, grp) <- groups, (mIdx, ru) <- zip [0..] grp ]`, with the
 /// four `groups` filtered from `rules` by [`group_idx`] and coloured via
 /// `colors = lightColorGroups intruderHue (map (length . snd) groups)` and
-/// `intruderHue = 18 % 360` (Dot.hs:208,217-218).
+/// `intruderHue = 18 % 360` (Dot.hs:190-218, see line 208,217-218).
 ///
 /// `rules` here is `M.elems $ get sNodes se` (Dot.hs:481-487, see line 485) — the raw system's
 /// nodes in NodeId order — so we sort by NodeId (`M.Map` key order) first.
 /// Each entry's colour follows `getColorForRule attrs gIdx mIdx = fromMaybe
-/// defaultColor (ruleColor attrs)` (Dot.hs:212): a rule with an explicit
+/// defaultColor (ruleColor attrs)` (Dot.hs:190-218, see line 212): a rule with an explicit
 /// `color:` attribute maps to THAT colour, otherwise to the palette default
-/// (`defaultColor = hsvToRGB (getColor (gIdx, mIdx))`, Dot.hs:214).  This map
-/// value is what `dotNodeCompact` feeds to `colorUsesWhiteFont` (Dot.hs:255,
+/// (`defaultColor = hsvToRGB (getColor (gIdx, mIdx))`, Dot.hs:190-218, see line 214).  This map
+/// value is what `dotNodeCompact` feeds to `colorUsesWhiteFont` (Dot.hs:236-379, see line 255,
 /// 258) to pick a node's font colour — so a SAPiC rule with a dark `color:`
 /// attribute must map to that dark colour (→ white font), not to the light
 /// palette default.  (The FILL colour is resolved separately via
@@ -1297,7 +1297,7 @@ fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorMap<'_> {
             .find(|((g, m), _)| *g == gi && *m == mi)
             .map(|(_, hsv)| *hsv)
             // `getColor idx = fromMaybe (HSV 0 1 1) (M.lookup idx colors)`
-            // (Dot.hs:209) — unreachable for a valid (gIdx, mIdx).
+            // (Dot.hs:190-218, see line 209) — unreachable for a valid (gIdx, mIdx).
             .unwrap_or_else(|| Hsv::new(0.0, 1.0, 1.0))
     };
 
@@ -1305,7 +1305,7 @@ fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorMap<'_> {
     for (gi, grp) in groups.iter().enumerate() {
         for (mi, ru) in grp.iter().enumerate() {
             // `getColorForRule attrs gIdx mIdx = fromMaybe defaultColor
-            // (ruleColor attrs)` (Dot.hs:212): explicit `color:` wins, else the
+            // (ruleColor attrs)` (Dot.hs:190-218, see line 212): explicit `color:` wins, else the
             // palette default.  `ruleAttributes ru = praciAttributes` for a
             // RuleACInst (Rule.hs:673-675, see line 674) — the same attributes `explicit_rule_color`
             // reads, so a coloured rule maps to its own dark fill colour.
@@ -1853,7 +1853,7 @@ mod tests {
         // HS `prettyNodeId = text . show`: a node id renders `#i` when idx==0
         // and `#i.2` when idx==2 (`instance Show LVar`, LTerm.hs:525-532;
         // sortPrefix LSortNode = "#", LTerm.hs:190-195, see line 194). The rule-node header is
-        // `prettyNodeId v <-> colon <-> showDotRuleCaseName` (Dot.hs:336).
+        // `prettyNodeId v <-> colon <-> showDotRuleCaseName` (Dot.hs:236-379, see line 336).
         use tamarin_theory::fact::out_fact;
         use tamarin_term::lterm::{LSort, LVar};
         use tamarin_term::term::Term;
@@ -1879,7 +1879,7 @@ mod tests {
 
     #[test]
     fn dot_drops_diff_annotation_action_fact() {
-        // HS `ruleLabelM.isNotDiffAnnotation` (Dot.hs:341) drops the synthetic
+        // HS `ruleLabelM.isNotDiffAnnotation` (Dot.hs:236-379, see line 341) drops the synthetic
         // `Diff<getRuleNameDiff ru>` linear proto fact from the action row.
         // For a standard proto rule `R`, getRuleNameDiff = "ProtoR", so the
         // dropped fact is `ProtoFact Linear "DiffProtoR" 0`.
@@ -1996,7 +1996,7 @@ mod tests {
     fn dot_no_cluster_preamble_sets_node_size_and_less_edge_color_first() {
         // No-cluster preamble mirrors HS setDefaultAttributes (Dot.hs:130-135)
         // — including `width=0.3,height=0.2` on the node defaults. The less
-        // edge emits `color` before `style` (HS dotLessEdge, Dot.hs:410).
+        // edge emits `color` before `style` (HS dotLessEdge, Dot.hs:406-410, see line 410).
         use tamarin_theory::constraint::constraints::LessAtom;
         use tamarin_term::lterm::{LSort, LVar};
         let mut sys = System::empty();
@@ -2210,7 +2210,7 @@ mod tests {
         assert!(s.contains("fillcolor=\"#d5d897\""),
             "rule node must use the faithful nodeColorMap palette hex: {}", s);
         // HS record attrs: the light palette colour is bright, so a black font
-        // (Dot.hs:258/284-287); no `role` attribute -> "Undefined" (Dot.hs:259).
+        // (Dot.hs:236-379, see line 258/284-287); no `role` attribute -> "Undefined" (Dot.hs:236-379, see line 259).
         assert!(s.contains("fontcolor=\"black\""),
             "bright palette colour must use a black font: {}", s);
         assert!(s.contains("role=\"Undefined\""),
@@ -2232,7 +2232,7 @@ mod tests {
 
     #[test]
     fn rule_node_emits_role_attribute() {
-        // HS `role = fromMaybe "Undefined" (getNodeRole node)` (Dot.hs:243,259):
+        // HS `role = fromMaybe "Undefined" (getNodeRole node)` (Dot.hs:236-379, see line 243,259):
         // a rule carrying a `role` attribute renders it verbatim.
         use tamarin_theory::fact::out_fact;
         use tamarin_term::term::Term;

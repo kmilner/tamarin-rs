@@ -58,18 +58,10 @@
 #![allow(clippy::disallowed_macros)]
 
 pub mod graph;
-// Clean-room deliverables vendored as in-crate modules (no license header —
-// these are the relicensable clean sources). `graph_clean` reimplements the
-// web-UI constraint-system graph DOT payload (model + serializer + node
-// abbreviation); `web_clean` reimplements the interactive web-UI response
-// bodies (HTML shell, forms, 404, JSON envelopes, DOT skeleton). Mechanical
-// path fixes only (`crate::` -> `super::`).
-pub mod graph_clean;
 pub mod handlers;
 pub mod routes;
 pub mod state;
 pub mod theory_io;
-pub mod web_clean;
 
 pub use routes::router;
 pub use state::{AppState, TheoryEntry, TheoryStore};

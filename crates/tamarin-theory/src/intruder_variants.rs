@@ -359,7 +359,7 @@ mod tests {
     }
 
     /// Every destructor rule in DH must have shape `DestrRule name 0 True False`
-    /// (HS Rule.hs:155-169, see line 168 hard-codes `(fromIntegral limit) True False`, and
+    /// (HS Rule.hs:168 hard-codes `(fromIntegral limit) True False`, and
     /// `option 0 natural` means limit=0 when none is parsed — none of the
     /// cached destructors have a numeric limit).  The name must start
     /// with `_` (HS strips the leading `d` and keeps the `_<rest>` as-is).
@@ -410,7 +410,7 @@ mod tests {
     }
 
     /// Rule names that don't start with `c` or `d` must be rejected
-    /// (HS Rule.hs:155-169, see line 169 — `fail "invalid intruder rule name ..."`).
+    /// (HS Rule.hs:169 — `fail "invalid intruder rule name ..."`).
     #[test]
     fn parse_intruder_rules_rejects_non_c_d_prefix() {
         let src = "rule (modulo AC) xfoo:\n   [ ] --> [ ]\n";

@@ -1318,12 +1318,23 @@ pub async fn intdot(
         idx = idx,
         path = raw_path,
     );
-    // Render the intdot HTML shell via the clean web layer. `render_intdot`
-    // does not entity-escape the theory name, so we pass the already-escaped
-    // name (the `<title>` prefix `Theory: ` carries no special chars, so
-    // escaping the whole `Theory: NAME` and escaping just NAME coincide).
-    let name = crate::handlers::root::html_escape(&entry.name);
-    let html = crate::web_clean::intdot::render_intdot(&name, &dotsrc);
+    let title = crate::handlers::root::html_escape(&format!("Theory: {}", entry.name));
+    // Byte-for-byte reproduction of HS `intdotLayout` (`src/Web/Types.hs:727-744`),
+    // including its doubled `</script></script>` Hamlet quirk — the stray end
+    // tag shifts DOM nesting, so matching it verbatim is what makes the
+    // semantic gate see the same tree.
+    let html = format!(
+        "<!DOCTYPE html>\n<html><head>\
+         <meta charset=\"UTF-8\" />\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\
+         <title>{title}</title>\
+         <style> body,html{{width: 100%; height: 100%; overflow: hidden; margin: 0; padding: 0; }}</style>\
+         <link rel=\"stylesheet\" href=\"/static/css/intdot-style.css\">\
+         <script type=\"module\" src=\"/static/js/intdot-graph.es.js\"></script></script>\
+         </head><body><dot-graph-viz dotsrc=\"{dotsrc}\"></dot-graph-viz>\n</body></html>",
+        title = title,
+        dotsrc = dotsrc,
+    );
     html_response(html)
 }
 

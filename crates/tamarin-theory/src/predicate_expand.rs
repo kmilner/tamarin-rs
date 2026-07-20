@@ -173,7 +173,7 @@ fn strip_shadowed<'a>(subst: &'a Subst, vs: &[p::VarSpec]) -> std::borrow::Cow<'
 /// keyed by the WHOLE LVar — so a message var `a` (`LSortMsg`) and a
 /// timepoint binder `#a` (`LSortNode`) are DISTINCT variables that cannot
 /// capture each other.  At print time HS likewise opens binders with
-/// `freshLVar n s` (Formula.hs:276) over a `FreshState` seeded by
+/// `freshLVar n s` (Formula.hs:271-283, see line 276) over a `FreshState` seeded by
 /// `avoidPrecise = avoidPreciseVars . frees` (LTerm.hs:681-690); the bound
 /// `#a` is not free and the free `a` was abstracted to `x` before
 /// printing, so HS renders `#a` (idx 0).  Do NOT key capture by name

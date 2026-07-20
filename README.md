@@ -35,6 +35,10 @@ by simply running them on the command line (i.e. `tamarin-prover proof.spthy`).
 You should not directly trust the output of this given the extensive use of LLMs in
 translating code.
 
+To make this easy there is a `prove_and_reverify.sh` script in the root of this repo.
+In many cases, proving in Rust and reverifying in Haskell is still faster than proving
+in Haskell directly.
+
 At time of writing there are two open issues in Haskell affecting proof reverifiability,
 https://github.com/tamarin-prover/tamarin-prover/issues/871 and
 https://github.com/tamarin-prover/tamarin-prover/issues/881. Once the associated
@@ -68,7 +72,7 @@ target/            Rust build output (release binary under target/release/)
 
 ```
 ./setup.sh                           # init the pristine submodule
-cargo build --release                # → target/release/tamarin-prover
+cargo build --release                # → target/release/tamarin-rs
 cargo test                           # Rust unit + integration tests
 ```
 
@@ -295,27 +299,29 @@ environment reference, and the divergence-debugging toolbox.
 
 The licensing situation of this code is somewhat complicated. Portions of the
 code are written based only on the observable output behaviour of tamarin-prover
-while other parts were written with access to Tamarin's GPL 3.0 code. This makes
-the resulting binary GPL 3.0 for the moment.
+while other parts were written with access to Tamarin's GPL 3.0 code. To my understanding,
+this makes the resulting binary GPL 3.0 for the moment, as some of the contents are
+a 'translation' of GPL 3 code..
 
 Relicensing tamarin-prover is made difficult because of a very long tail of
-contributors over many years, making it intractable to get in touch with each
+contributors over many years, making it very difficult to get in touch with each
 and every one of them to relicense their contributions. An eventual goal is to
-relicense tamarin-rs fully under MIT if possible, which will require two parts:
+relicense tamarin-rs fully under MIT if possible, which will require one or both of:
 
 - Permission of the largest contributors (or their instutitions, where the institution
   is the only party capable of relicensing).
 - Where getting permission is infeasible, replacing the associated contribution with a
-  cleanroom implementation of the feature. 
+  cleanroom implementation of the feature.
 
 Cleanroom implementations have to be performed by an LLM with access only to the observable
 behaviour of tamarin-prover, not the source code. Unfortunately I (as a contributor to
 tamarin-prover) am, to my understanding, tainted and cannot participate in this process
-except to audit the output. This work will be tracked along with full toolcall transcripts
+except to audit the output. This work will be tracked along with full tool-call transcripts
 to prove there was no access to GPL 3.0 source in https://github.com/kmilner/tamarin-cleanroom
 but it will be a long process (the segments being reimplemented have to be sufficiently broad
 so as to not inherit any information about the GPL 3.0 source code beyond broad module interfaces
-etc).
+etc). Early experiments with clean room implementation of the formatting code had limited success,
+so for now there is no active work on this.
 
 Code with GPL 3.0 attribution is stated at the top of the header file, including the associated
 github usernames that have not yet granted permission for reuse. Currently, this is everyone,
@@ -331,5 +337,6 @@ So, in summary:
   granted permission for relicensing by the related authors. This is indicated
   by comments at the top of those files. THE BINARY YOU BUILD IS GPL 3.0.
 - The `tamarin-prover/` submodule is a separate upstream project licensed under
-  GPL-3.0 (see `tamarin-prover/LICENSE`). `patches/tamarin-prover-fixes.patch`
-  modifies those GPL-3 sources and is therefore itself GPL-3.
+  GPL 3.0 (see `tamarin-prover/LICENSE`). `patches/tamarin-prover-fixes.patch`
+  modifies those GPL 3 sources and is therefore itself GPL-3.
+- None of this is legal advice, consult a lawyer.

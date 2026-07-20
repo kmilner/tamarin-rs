@@ -121,7 +121,7 @@ finalize() {
     cat <<EOF
 staged (NOT committed): tamarin-prover gitlink + patches/$(basename "$patch")
 Verify before committing:
-  1. RESULTS_TSV=scripts/fullgate_bump.tsv scripts/corpus_file_diff.sh   # full batch gate, cold cache
+  1. RESULTS_TSV=scripts/results/fullgate_bump.tsv scripts/corpus_file_diff.sh   # full batch gate, cold cache
      - heavy files (BP_IBS_2/3, fm24 C8, alethea_votingphase_malS_abstain) need FILE_TIMEOUT>=600 cold
      - retries short-circuit on cached markers: find scripts/.hs_file_cache -name '*.timeout' -delete first
   2. Web ladder: guards -> family files -> scripts/websweep_residual.txt (regenerates scripts/.web_hs_cache)

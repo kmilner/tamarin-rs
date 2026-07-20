@@ -1194,15 +1194,28 @@ fn expand_inner(
     // Solved/Sorry/Unfinishable — i.e. every branch closed to ⊥.
 }
 
+/// When set (interactive mode), an oracle exec failure unwinds via
+/// `panic!` instead of exiting the process.  HS has the same split by
+/// construction: `oracleRanking`'s `readProcess` exception
+/// (ProofMethod.hs:598-623, see line 608) is uncaught in batch mode and
+/// kills the invocation, but in the web server it surfaces inside a Warp
+/// request thread, so only the triggering request fails and the server
+/// keeps serving.  Batch (the default) keeps the byte-parity `exit(1)`.
+pub static ORACLE_ERROR_UNWINDS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Run the goal ranker, centralising the two non-`Ok` outcomes shared
 /// by [`candidate_methods`] and [`candidate_methods_with_expl`]:
 ///   * `Err("__ORACLE_QUIT_ON_EMPTY__")` → `Err(())`, signalling the
 ///     caller to emit a single `ApplySorry` candidate (HS ProofMethod.hs:598-623, see line 621).
-///   * any other `Err` → oracle exec failure: hard abort exactly like HS
-///     (uncaught IO exception kills the invocation with EMPTY stdout —
-///     ProofMethod.hs:598-623, see line 608, inside `oracleRanking` under `unsafePerformIO`,
-///     where `readProcess` throws).  Print to stderr, flush stdout (so
-///     nothing leaks before exit), exit with code 1.
+///   * any other `Err` → oracle exec failure: mirror HS's uncaught IO
+///     exception (ProofMethod.hs:598-623, see line 608, inside
+///     `oracleRanking` under `unsafePerformIO`, where `readProcess`
+///     throws).  In batch mode that kills the invocation with EMPTY
+///     stdout: print to stderr, flush stdout (so nothing leaks before
+///     exit), exit with code 1.  In interactive mode
+///     ([`ORACLE_ERROR_UNWINDS`]) it is confined to the request: panic
+///     and let the server's task boundary absorb the unwind.
 fn rank_goals_or_abort(
     sys: &System,
     ctx: &ProofContext,
@@ -1213,6 +1226,9 @@ fn rank_goals_or_abort(
         Err(e) if e.0 == "__ORACLE_QUIT_ON_EMPTY__" => Err(()),
         Err(e) => {
             eprintln!("tamarin-prover: {}", e);
+            if ORACLE_ERROR_UNWINDS.load(std::sync::atomic::Ordering::Relaxed) {
+                panic!("{}", e.0);
+            }
             use std::io::Write;
             let _ = std::io::stdout().flush();
             std::process::exit(1);

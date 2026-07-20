@@ -1,0 +1,16 @@
+theory OracleMissing
+begin
+
+/*
+ * Minimal fixture for the missing-oracle regression test: the lemma's
+ * `heuristic=o` ranking execs `./oracle` relative to the theory dir, and
+ * no such script is shipped, so every ranking call fails.
+ */
+
+rule Mark:
+    [ Fr(~x) ] --[ Marked(~x) ]-> []
+
+lemma test [heuristic=o]:
+    exists-trace "Ex x #i. Marked(x) @ #i"
+
+end

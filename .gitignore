@@ -10,18 +10,19 @@ patches/*.rejected
 target-agent/
 
 # Gate/sweep artifacts — never commit (HS-output caches are GB-scale and
-# host-local; TSVs are per-host measurement snapshots; regenerate via
-# scripts/*.sh)
+# host-local; result TSVs are per-host measurement snapshots; regenerate
+# via scripts/*.sh).  Gate scripts default their RESULTS_TSV into
+# scripts/results/; the blanket scripts/*.tsv entry catches strays from
+# explicit RESULTS_TSV= runs (tracked files like file_flags.tsv are
+# unaffected — gitignore only applies to untracked paths).
 scripts/.hs_file_cache*/
+scripts/.hs_pretty_cache*/
 scripts/.hs_canon_cache/
 scripts/.web_hs_cache*/
 scripts/.corpus_full_truedl_*.txt
 scripts/__pycache__/
-scripts/fullgate*.tsv
-scripts/websweep_full*.tsv
-scripts/websweep*probe*.tsv
-scripts/websweep_residual_*.tsv
-scripts/mixvote*.tsv
+scripts/results/
+scripts/*.tsv
 # scratch workflow scripts dropped by tooling runs
 scripts/.wf_*.js
 

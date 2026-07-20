@@ -12,7 +12,7 @@ name = "tamarin_prover"
 path = "src/lib.rs"
 
 [[bin]]
-name = "tamarin-prover"
+name = "tamarin-rs"
 path = "src/main.rs"
 
 [dependencies]

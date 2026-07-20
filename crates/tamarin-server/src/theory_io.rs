@@ -129,7 +129,7 @@ pub fn load_from_source(
     eprintln!("[Theory {}] Theory translated", parser_theory.name);
     let mut typed = elaborate(&parser_theory)
         .map_err(|e| LoadError::Elaborate(e.message))?;
-    // Oracle path resolution base (HS Parser.hs:230-393, see line 304 sets `inFile` at load;
+    // Oracle path resolution base (HS Parser.hs:304 sets `inFile` at load;
     // `heuristic: o "./oracle-…"` then resolves against the theory's own
     // directory, `hs_take_directory`).  Local files carry their on-disk
     // path; uploads keep the bare filename (dir "." — as in HS, where an

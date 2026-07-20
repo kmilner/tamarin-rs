@@ -13,7 +13,7 @@
 set -uo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HS_BIN="${HS_BIN:-$repo/tamarin-prover-testing/.stack-work/install/x86_64-linux-tinfo6/ec0cb11b1bfcf8776d45e0357bbc6d6ff2077f9222735af22115429c8cdfcef1/9.6.7/bin/tamarin-prover}"
-RS_BIN="${RS_BIN:-$repo/target/release/tamarin-prover}"
+RS_BIN="${RS_BIN:-$repo/target/release/tamarin-rs}"
 TIMEOUT="${TIMEOUT:-120}"
 prove_arg="--prove"
 [ -n "${LEMMA:-}" ] && prove_arg="--prove=$LEMMA"

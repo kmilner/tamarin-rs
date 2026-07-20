@@ -2291,7 +2291,7 @@ fn pp_proof(
             out.push_str(&pf::step_line_with_unann(doc, base, annotated, ""));
             out.push('\n');
             // HS `ppCases ps [("", prf)] = prettyStep ps $-$ ppPrf prf`
-            // (non-diff `prettyProofWith`, Proof.hs:1067).  `$-$` is "above" — the child is rendered
+            // (non-diff `prettyProofWith`, Proof.hs:1054-1075, see line 1067).  `$-$` is "above" — the child is rendered
             // at the SAME indent column as the parent step.  In our output
             // model the caller writes the indent before calling pp_proof, so
             // we reproduce that here: write the same `depth`-level indent
@@ -2304,7 +2304,7 @@ fn pp_proof(
             out.push_str(&pf::step_line_with_unann(doc, base, annotated, ""));
             for (i, (name, child)) in multi.iter().enumerate() {
                 if i > 0 {
-                    // HS Proof.hs:1070 (non-diff `prettyProofWith`): `intersperse (prettyCase ps kwNext)`
+                    // HS Proof.hs:1054-1075, see line 1070 (non-diff `prettyProofWith`): `intersperse (prettyCase ps kwNext)`
                     // — `next` is a sibling of `solve`/`qed`, so it sits at
                     // the parent's indent (`depth*2`), not column 0.
                     out.push('\n');
@@ -2384,7 +2384,7 @@ fn pp_step_doc(
         }
         // A `RawSolve` is the display-only method kept for an unannotated
         // (replayed) subtree (replay.rs `parsed_to_unannotated`).  HS's
-        // `noSystemPrf` (Proof.hs:469 `mapProofInfo (\i -> (Just i,
+        // `noSystemPrf` (Proof.hs:447-467, see line 469 `mapProofInfo (\i -> (Just i,
         // Nothing))`) keeps the STRUCTURED `ProofMethod` (`SolveGoal goal`)
         // unchanged and re-renders it via `prettyProofMethod`
         // (ProofMethod.hs:1174-1187) → `prettyGoal` (Constraints.hs:273-287),
@@ -2499,7 +2499,7 @@ pub(crate) fn render_goal_for_oracle(g: &crate::constraint::constraints::Goal) -
 /// Build the `solve( <goal> )` Doc for an unannotated (replayed) step from
 /// its raw goal text, re-rendering through the HS-faithful Doc engine.
 ///
-/// HS `noSystemPrf` (Proof.hs:469) keeps the parsed `SolveGoal goal`
+/// HS `noSystemPrf` (Proof.hs:447-467, see line 469) keeps the parsed `SolveGoal goal`
 /// structured, so `prettyProofMethod`/`prettyGoal` re-wraps it fresh.  We
 /// recover the structure from the raw `solve(...)` inner text and route it
 /// through the SAME builders the live-goal path uses

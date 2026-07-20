@@ -29,7 +29,7 @@
 //!
 //! HS works at the typed `LNTerm` / `LNFact` / `LNFormula` level, with
 //! macro matching keyed on the `FunSym` (a `NoEq (name, (arity, Private,
-//! Destructor))` tuple — Macro.hs:30).  RS parses lemma/restriction
+//! Destructor))` tuple — Macro.hs:29-30, see line 30).  RS parses lemma/restriction
 //! formulas as `parser::ast::Formula` and only converts to `LNFormula`
 //! later (via `formula_to_guarded`), so the natural place to expand is
 //! the parser AST.  This is observationally faithful: every macro call
@@ -39,10 +39,10 @@
 //! and Maude — still see them.
 //!
 //! Recursion semantics mirror HS exactly:
-//!   - args are recursively expanded FIRST (Macro.hs:46),
+//!   - args are recursively expanded FIRST (Macro.hs:40-54, see line 46),
 //!   - then substitution into the body,
 //!   - then the EXPANDED body is recursively re-expanded
-//!     (Macro.hs:48 `applyMacros macros (apply subst mout)`).
+//!     (Macro.hs:40-54, see line 48 `applyMacros macros (apply subst mout)`).
 //!
 //! This handles chained / nested macros (e.g. `hashdec` calling `decrypt`
 //! in `examples/features/macros/MacroExample.spthy`).
@@ -61,7 +61,7 @@ pub fn apply_macros_term(macros: &[p::Macro], term: &p::Term) -> p::Term {
             let processed_args: Vec<p::Term> =
                 args.iter().map(|a| apply_macros_term(macros, a)).collect();
             // Match on (name, arity) — HS matches on FunSym which includes
-            // arity (Macro.hs:30 `macroToFunSym (op,args,_) = NoEq (op,
+            // arity (Macro.hs:29-30, see line 30 `macroToFunSym (op,args,_) = NoEq (op,
             // (length args, Private, Destructor))` ; matching macros are
             // found via Macro.hs:53-54 `find (\m -> macroToFunSym m == f)`).
             if let Some(m) = find_matching_macro(name, processed_args.len(), macros) {
@@ -118,7 +118,7 @@ pub fn apply_macros_term(macros: &[p::Macro], term: &p::Term) -> p::Term {
             }
             term.clone()
         }
-        // Literals: no recursion (HS Macro.hs:51 `Lit l -> lit l`).
+        // Literals: no recursion (HS Macro.hs:40-54, see line 51 `Lit l -> lit l`).
         p::Term::PubLit(_) | p::Term::FreshLit(_)
         | p::Term::NatLit(_) | p::Term::Number(_) | p::Term::NumberOne
         | p::Term::NatOne | p::Term::DhNeutral => term.clone(),
@@ -140,7 +140,7 @@ fn find_matching_macro<'a>(
 }
 
 /// Apply a name-keyed substitution to a parser term.  HS's typed
-/// `apply subst term` (Macro.hs:48) becomes a structural name-keyed walk.
+/// `apply subst term` (Macro.hs:40-54, see line 48) becomes a structural name-keyed walk.
 /// Shared with `predicate_expand` (whose `Subst` newtype wraps the same
 /// `BTreeMap<String, p::Term>`), so both stay in lockstep on capture /
 /// replacement semantics.

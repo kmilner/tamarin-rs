@@ -137,14 +137,14 @@ proof-method expansion; diffing them pinpoints the first divergence:
 
 ```bash
 TAM_HS_TRACE_STATE=1 <hs-binary>                 --prove=<lemma> <file> 2>&1 | grep '^\[STATE\]' > /tmp/hs.trace
-TAM_RS_TRACE_STATE=1 target/release/tamarin-prover --prove=<lemma> <file> 2>&1 | grep '^\[STATE\]' > /tmp/rs.trace
+TAM_RS_TRACE_STATE=1 target/release/tamarin-rs --prove=<lemma> <file> 2>&1 | grep '^\[STATE\]' > /tmp/rs.trace
 diff /tmp/hs.trace /tmp/rs.trace | head
 ```
 
 **Maude IPC trace** — lock-step command/response comparison:
 
 ```bash
-TAM_DBG_MAUDE_IO=full TAM_DBG_MAUDE_IO_FILTER=unify target/release/tamarin-prover --prove <file>
+TAM_DBG_MAUDE_IO=full TAM_DBG_MAUDE_IO_FILTER=unify target/release/tamarin-rs --prove <file>
 scripts/diff_maude_io.sh <file> <lemma>       # side-by-side HS↔RS Maude traffic
 scripts/diff_aes_calls.sh <file> <lemma>      # apply_eq_store call counts per site
 ```

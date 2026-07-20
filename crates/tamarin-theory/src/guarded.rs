@@ -1739,7 +1739,7 @@ fn cac_rec_term_cow(t: &GTerm, cmp: GCmp) -> Option<GTerm> {
         // `em(a, b)` is the sole COMMUTATIVE (C) function symbol (EMap,
         // bilinear pairing).  HS stores every C application in sorted-arg
         // form: `fAppC nacsym as = FAPP (C nacsym) (sort as)` (Raw.hs:132-133;
-        // `fAppEMap (x,y) = fAppC EMap [x,y]`, Term.hs:145-146, see line 146).  So in HS
+        // `fAppEMap (x,y) = fAppC EMap [x,y]`, Term.hs:143-147, see line 146).  So in HS
         // `em('P', x)` and `em(x, 'P')` are byte-identical, and the
         // structural `S.member sSolvedFormulas` guard in `insertImpliedFormulas`
         // always matches a re-derived instance against the solved one.

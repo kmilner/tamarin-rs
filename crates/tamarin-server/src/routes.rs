@@ -13,6 +13,14 @@ use crate::handlers;
 use crate::state::AppState;
 
 pub fn router(state: Arc<AppState>) -> Router {
+    // Serving HTTP means an oracle exec failure is request-scoped, not
+    // process-fatal (HS confines the `readProcess` exception to the Warp
+    // request thread).  `run_interactive` sets this before theory load;
+    // repeating it here covers in-process embedders and the test harness,
+    // which build the router directly.
+    tamarin_theory::constraint::solver::search::ORACLE_ERROR_UNWINDS
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
     // 100 MB upload cap — generous, but bounded.
     let upload_limit = DefaultBodyLimit::max(100 * 1024 * 1024);
 

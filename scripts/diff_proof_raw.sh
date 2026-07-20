@@ -98,7 +98,7 @@ if [ -z "${TAM_RS_NO_AUTO_BUILD:-}" ]; then
         exit 2
     fi
 fi
-rs_path="$repo_root/target/release/tamarin-prover"
+rs_path="$repo_root/target/release/tamarin-rs"
 if [ ! -x "$rs_path" ]; then
     echo "diff_proof_raw.sh: RS binary not built at $rs_path" >&2
     exit 2

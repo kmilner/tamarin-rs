@@ -174,6 +174,10 @@ pub fn prepend_theory_dir_to_oracle_paths(
         match r {
             GoalRanking::Oracle { oracle_path, .. }
             | GoalRanking::OracleSmart { oracle_path, .. } => {
+                // `display_path` (set at parse for compact-run oracles) is
+                // deliberately NOT touched: those rankings display the
+                // workDir-less `./…` form even after the exec path is
+                // resolved here.
                 *oracle_path = resolve_oracle_path(oracle_path, Some(&work_dir));
             }
             _ => {}
@@ -297,8 +301,8 @@ fn resolve_cli_heuristic(
     let default_name = crate::pretty_theory::oracle_name_for_theory(in_file);
     for r in rankings.iter_mut() {
         match r {
-            GoalRanking::Oracle { oracle_path, quit_on_empty }
-            | GoalRanking::OracleSmart { oracle_path, quit_on_empty } => {
+            GoalRanking::Oracle { oracle_path, quit_on_empty, .. }
+            | GoalRanking::OracleSmart { oracle_path, quit_on_empty, .. } => {
                 // Step 2/3: relPath = --oraclename if given, else the default
                 // name (the parser already filled the default name, but for a
                 // bare `O`/`o` from the CLI string it set the default — so we

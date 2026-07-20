@@ -274,7 +274,22 @@ impl ProofState {
                 }
             }
         }
-        let mut ctx = ProofContext::new_with_restrictions(maude, rules, ctx_restrictions);
+        // When the state-channel optimisation is on, the two pure-state facts
+        // are forced injective for the whole proof (see
+        // `tools::injective_fact_instances::pure_state_forced_fact_tags` for
+        // the upstream provenance).  The web `main/rules` pane reads
+        // `ctx.injective_fact_insts` directly, so the forced tags must be
+        // unioned here exactly as on the batch `--prove` path (prove.rs);
+        // otherwise the "Fact Symbols with Injective Instances" section renders
+        // empty on `process:` theories whose only injective facts are forced.
+        let forced_injective_facts: Vec<tamarin_theory::fact::FactTag> =
+            if typed.options.state_channel_opt {
+                tamarin_theory::tools::injective_fact_instances::pure_state_forced_fact_tags()
+            } else {
+                Vec::new()
+            };
+        let mut ctx = ProofContext::new_with_restrictions_pool_forced(
+            maude, None, rules, ctx_restrictions, &forced_injective_facts);
         ctx.cut = cut;
         // Build the initial system for every lemma.
         let mut by_lemma: BTreeMap<String, LemmaProofState> = BTreeMap::new();

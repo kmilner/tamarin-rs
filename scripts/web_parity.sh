@@ -38,7 +38,7 @@ find_hs_bin() {
     done; return 1
 }
 HS_PATH="${HS_PATH:-$(find_hs_bin)}" || { echo "no HS binary" >&2; exit 2; }
-RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-prover}"
+RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 MAUDE_PATH="${MAUDE_PATH:-$(command -v maude)}"
 
 # Auto-build RS (opt out with TAM_RS_NO_AUTO_BUILD=1).
@@ -107,13 +107,29 @@ one_file() {
     local hs_manifest="$CACHE/$key.hs.json"
     local wd; wd=$(mktemp -d)
     mkdir -p "$wd/thy"; cp "$f" "$wd/thy/"
-    # Sibling oracle scripts: `heuristic: o "./oracle-…"` resolves relative
-    # to the server's theory dir on both engines (upstream's deforacle
-    # recipe) — stage them next to the theory or oracle rankings fail.
-    local __of
+    # Oracle staging — three upstream resolution modes, all relative to the
+    # theory dir at EXEC time (the servers' CWD-relative `<stem>.oracle`
+    # existence probe can never hit inside a mktemp workdir, whose path
+    # contains a `.`; the effective name is always the quoted one or the
+    # plain-`oracle` fallback):
+    #   1. sibling scripts `o "./oracle-…"` — the oracle* glob;
+    #   2. an unnamed `o`/`O` ranking execs plain `oracle` in the theory
+    #      dir — stage a `<stem>.oracle` sibling under that fallback name
+    #      (upstream's default-oracle recipe, cf. regression/trace/);
+    #   3. explicit relative refs (`o "../heuristic/oracle-…"`) — stage at
+    #      the same relative location, which may sit BESIDE the thy dir.
+    local __of __q
     for __of in "$(dirname "$f")"/oracle*; do
         [ -f "$__of" ] && cp "$__of" "$wd/thy/"
     done
+    if [ -f "${f%.spthy}.oracle" ] && [ ! -e "$wd/thy/oracle" ]; then
+        cp "${f%.spthy}.oracle" "$wd/thy/oracle"
+    fi
+    while IFS= read -r __q; do
+        [ -f "$(dirname "$f")/$__q" ] || continue
+        mkdir -p "$wd/thy/$(dirname "$__q")"
+        cp "$(dirname "$f")/$__q" "$wd/thy/$__q"
+    done < <(grep -E 'heuristic' "$f" | grep -oE '"[^"]+"' | tr -d '"' | sort -u)
 
     # Phase 1: HS (cached)
     if [ ! -f "$hs_manifest" ]; then

@@ -48,7 +48,7 @@ done
 
 find_hs() { ls "$repo_root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover 2>/dev/null | head -1; }
 HS_PATH="${HS_PATH:-$(find_hs)}"
-RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-prover}"
+RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 [ -x "$HS_PATH" ] || { echo "bench.sh: no HS binary (set HS_PATH)" >&2; exit 2; }
 [ -x "$RS_PATH" ] || { echo "bench.sh: no RS binary at $RS_PATH" >&2; exit 2; }
 command -v /usr/bin/time >/dev/null || { echo "bench.sh: needs GNU /usr/bin/time" >&2; exit 2; }
