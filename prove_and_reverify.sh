@@ -21,7 +21,10 @@
 # round-trip, e.g. Tutorial's exists-trace lemma: 5 steps → 7 steps).
 #
 # Env: RS_PATH (default target/release/tamarin-rs), HS_PATH (default: the
-#      ./setup.sh testing oracle build), MAUDE_PATH.
+#      ./setup.sh testing oracle build), MAUDE_PATH, THREADS (worker count —
+#      the engines take different flags, so the one knob maps to both:
+#      RS `--processors=k`, HS `+RTS -Nk -RTS`; unset = each engine's
+#      default, like a plain invocation).
 set -u
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,6 +45,12 @@ HS_PATH="${HS_PATH:-$(find_hs_bin)}" || { echo "no Haskell oracle (./setup.sh te
 MAUDE_PATH="${MAUDE_PATH:-$(command -v maude || echo /home/linuxbrew/.linuxbrew/bin/maude)}"
 export PATH="$(dirname "$MAUDE_PATH"):$PATH"
 
+rs_threads=(); hs_threads=()
+if [ -n "${THREADS:-}" ]; then
+    rs_threads=(--processors="$THREADS")
+    hs_threads=(+RTS -N"$THREADS" -RTS)
+fi
+
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
 # Lemma verdict lines of the "summary of summaries" block, e.g.
@@ -57,7 +66,7 @@ summary_lines() {
 
 echo "=== prove (tamarin-rs) ===" >&2
 t0=$SECONDS
-"$RS_PATH" "$thy" --prove "$@" \
+"$RS_PATH" "$thy" --prove "${rs_threads[@]}" "$@" \
     --output="$tmp/analyzed.spthy" > "$tmp/rs.out" 2> "$tmp/rs.err"
 rc=$?
 [ $rc = 0 ] || { echo "tamarin-rs failed (exit $rc):" >&2; tail -5 "$tmp/rs.err" >&2; exit 1; }
@@ -65,7 +74,7 @@ echo "  proved in $((SECONDS - t0))s" >&2
 
 echo "=== re-verify (tamarin-prover, re-checking the emitted proofs) ===" >&2
 t0=$SECONDS
-"$HS_PATH" "$tmp/analyzed.spthy" "$@" \
+"$HS_PATH" "$tmp/analyzed.spthy" "${hs_threads[@]}" "$@" \
     > "$tmp/hs.out" 2> "$tmp/hs.err"
 rc=$?
 [ $rc = 0 ] || { echo "tamarin-prover failed (exit $rc):" >&2; tail -5 "$tmp/hs.err" >&2; exit 1; }

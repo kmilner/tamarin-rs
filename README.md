@@ -153,50 +153,54 @@ Both provers prove every lemma (--prove --derivcheck-timeout=30); HS at
 `+RTS -Nk`, RS at `--processors=k`; wall-clock + peak RSS come from
 `/usr/bin/time -v` (the prover process only — Maude is a separate subprocess on
 both sides and is excluded). Single run per cell (wall-clock is noisy ±10%).
-The RS columns show the % change vs HS in parentheses (negative = faster / less
-memory). Tune the theory set / core counts / binaries via the FILES, CORES,
-TIMEOUT, DERIV, HS_PATH, RS_PATH env vars (see the scripts/bench.sh header).
+The P+R columns measure ./prove_and_reverify.sh (THREADS=k): prove with RS,
+then re-CHECK the emitted proofs with HS — i.e. the total cost of a proof you
+did not have to trust the port for; its peak RSS is the max across both
+phases. The RS and P+R columns show the % change vs HS in parentheses
+(negative = faster / less memory). Tune the theory set / core counts /
+binaries via the FILES, CORES, TIMEOUT, DERIV, HS_PATH, RS_PATH env vars (see
+the scripts/bench.sh header).
 -->
 <!-- last run: x86_64 Linux, 24 cores -->
 
 **1 core**
 
-| Theory | HS time | RS time | HS memory | RS memory |
-|--------|--------:|--------:|----------:|----------:|
-| `NSPK3` | 2.3 s | 0.5 s (-78%) | 62 MB | 18 MB (-71%) |
-| `Joux` | 18.2 s | 4.5 s (-75%) | 243 MB | 43 MB (-82%) |
-| `stateverif_left_right` | 28.8 s | 3.9 s (-86%) | 791 MB | 37 MB (-95%) |
-| `Yubikey` | 37.4 s | 5.2 s (-86%) | 285 MB | 46 MB (-84%) |
-| `mixvote_SmHh-multi-session` | 41.4 s | 4.7 s (-89%) | 902 MB | 34 MB (-96%) |
-| `gcm` | 94.9 s | 14.5 s (-85%) | 1275 MB | 88 MB (-93%) |
-| `wireguard` | 98.1 s | 7.2 s (-93%) | 1226 MB | 47 MB (-96%) |
-| `CCITT_X509_3` | 371.1 s | 28.1 s (-92%) | 2511 MB | 303 MB (-88%) |
+| Theory | HS time | RS time | P+R time | HS memory | RS memory | P+R memory |
+|--------|--------:|--------:|---------:|----------:|----------:|-----------:|
+| `NSPK3` | 2.2 s | 0.5 s (-77%) | 1.4 s (-36%) | 58 MB | 17 MB (-71%) | 45 MB (-22%) |
+| `Joux` | 17.5 s | 4.6 s (-74%) | 12.3 s (-30%) | 234 MB | 43 MB (-82%) | 89 MB (-62%) |
+| `stateverif_left_right` | 27.9 s | 3.6 s (-87%) | 24.9 s (-11%) | 838 MB | 39 MB (-95%) | 822 MB (-2%) |
+| `Yubikey` | 33.6 s | 5.2 s (-85%) | 26.4 s (-21%) | 273 MB | 47 MB (-83%) | 235 MB (-14%) |
+| `mixvote_SmHh-multi-session` | 40.1 s | 4.6 s (-89%) | 28.9 s (-28%) | 857 MB | 35 MB (-96%) | 827 MB (-4%) |
+| `gcm` | 80.5 s | 14.2 s (-82%) | 88.4 s (+10%) | 1241 MB | 100 MB (-92%) | 1245 MB (+0%) |
+| `wireguard` | 81.7 s | 7.3 s (-91%) | 46.6 s (-43%) | 1178 MB | 46 MB (-96%) | 761 MB (-35%) |
+| `CCITT_X509_3` | 373.1 s | 28.3 s (-92%) | 32.3 s (-91%) | 2404 MB | 303 MB (-87%) | 303 MB (-87%) |
 
 **4 cores**
 
-| Theory | HS time | RS time | HS memory | RS memory |
-|--------|--------:|--------:|----------:|----------:|
-| `NSPK3` | 1.2 s | 0.4 s (-67%) | 86 MB | 26 MB (-70%) |
-| `Joux` | 15.6 s | 6.1 s (-61%) | 260 MB | 45 MB (-83%) |
-| `stateverif_left_right` | 17.8 s | 2.4 s (-87%) | 807 MB | 54 MB (-93%) |
-| `Yubikey` | 25.7 s | 3.1 s (-88%) | 307 MB | 63 MB (-79%) |
-| `mixvote_SmHh-multi-session` | 21.8 s | 2.0 s (-91%) | 913 MB | 62 MB (-93%) |
-| `gcm` | 69.7 s | 6.2 s (-91%) | 1273 MB | 155 MB (-88%) |
-| `wireguard` | 62.3 s | 3.9 s (-94%) | 1267 MB | 79 MB (-94%) |
-| `CCITT_X509_3` | 149.2 s | 7.9 s (-95%) | 4857 MB | 535 MB (-89%) |
+| Theory | HS time | RS time | P+R time | HS memory | RS memory | P+R memory |
+|--------|--------:|--------:|---------:|----------:|----------:|-----------:|
+| `NSPK3` | 1.1 s | 0.4 s (-64%) | 1.0 s (-9%) | 79 MB | 26 MB (-67%) | 55 MB (-30%) |
+| `Joux` | 14.0 s | 6.2 s (-56%) | 13.1 s (-6%) | 278 MB | 45 MB (-84%) | 98 MB (-65%) |
+| `stateverif_left_right` | 17.6 s | 2.3 s (-87%) | 22.3 s (+27%) | 788 MB | 54 MB (-93%) | 839 MB (+6%) |
+| `Yubikey` | 22.0 s | 3.2 s (-85%) | 18.5 s (-16%) | 297 MB | 63 MB (-79%) | 250 MB (-16%) |
+| `mixvote_SmHh-multi-session` | 20.9 s | 2.0 s (-90%) | 16.9 s (-19%) | 898 MB | 58 MB (-94%) | 991 MB (+10%) |
+| `gcm` | 56.0 s | 5.7 s (-90%) | 56.4 s (+1%) | 1267 MB | 183 MB (-86%) | 1344 MB (+6%) |
+| `wireguard` | 45.6 s | 3.9 s (-91%) | 30.2 s (-34%) | 1255 MB | 75 MB (-94%) | 803 MB (-36%) |
+| `CCITT_X509_3` | 152.7 s | 7.8 s (-95%) | 10.4 s (-93%) | 4300 MB | 638 MB (-85%) | 584 MB (-86%) |
 
 **16 cores**
 
-| Theory | HS time | RS time | HS memory | RS memory |
-|--------|--------:|--------:|----------:|----------:|
-| `NSPK3` | 1.2 s | 0.7 s (-42%) | 132 MB | 32 MB (-76%) |
-| `Joux` | 16.0 s | 6.5 s (-59%) | 327 MB | 52 MB (-84%) |
-| `stateverif_left_right` | 16.4 s | 2.6 s (-84%) | 834 MB | 75 MB (-91%) |
-| `Yubikey` | 24.7 s | 3.2 s (-87%) | 389 MB | 92 MB (-76%) |
-| `mixvote_SmHh-multi-session` | 17.3 s | 2.2 s (-87%) | 939 MB | 114 MB (-88%) |
-| `gcm` | 56.8 s | 5.2 s (-91%) | 1383 MB | 212 MB (-85%) |
-| `wireguard` | 48.2 s | 3.9 s (-92%) | 1284 MB | 115 MB (-91%) |
-| `CCITT_X509_3` | 139.3 s | 3.3 s (-98%) | 5739 MB | 739 MB (-87%) |
+| Theory | HS time | RS time | P+R time | HS memory | RS memory | P+R memory |
+|--------|--------:|--------:|---------:|----------:|----------:|-----------:|
+| `NSPK3` | 1.1 s | 0.7 s (-36%) | 1.4 s (+27%) | 131 MB | 35 MB (-73%) | 100 MB (-24%) |
+| `Joux` | 14.8 s | 6.4 s (-57%) | 13.5 s (-9%) | 323 MB | 52 MB (-84%) | 146 MB (-55%) |
+| `stateverif_left_right` | 15.9 s | 2.5 s (-84%) | 20.6 s (+30%) | 920 MB | 78 MB (-92%) | 841 MB (-9%) |
+| `Yubikey` | 21.2 s | 3.1 s (-85%) | 17.8 s (-16%) | 346 MB | 95 MB (-73%) | 311 MB (-10%) |
+| `mixvote_SmHh-multi-session` | 16.4 s | 2.2 s (-87%) | 15.5 s (-5%) | 929 MB | 115 MB (-88%) | 1042 MB (+12%) |
+| `gcm` | 45.9 s | 5.1 s (-89%) | 56.5 s (+23%) | 1325 MB | 238 MB (-82%) | 1432 MB (+8%) |
+| `wireguard` | 38.8 s | 3.8 s (-90%) | 28.4 s (-27%) | 1281 MB | 114 MB (-91%) | 830 MB (-35%) |
+| `CCITT_X509_3` | 140.7 s | 3.3 s (-98%) | 5.7 s (-96%) | 5627 MB | 699 MB (-88%) | 766 MB (-86%) |
 
 <!-- BENCH:END -->
 
