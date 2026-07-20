@@ -25,8 +25,8 @@ https://github.com/tamarin-prover/tamarin-prover/issues/881. Once the associated
 are merged all proofs should be identical; If you do find any that differ (even if they cross-verify)
 please report them in the github issues so they can be fixed!
 
-The licensing of this code is somewhat complicated, see [License](#license) if you
-are interested in future prospects for redistribution.
+The licensing of this code is somewhat complicated, but the built binary is GPL 3.0. 
+See [License](#license) if you are interested in future prospects for redistribution.
 
 ## Summary
 
