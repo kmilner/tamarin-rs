@@ -41,7 +41,11 @@ find_hs_bin() {
         [ -x "$c" ] && { echo "$c"; return 0; }
     done; return 1
 }
-HS_PATH="${HS_PATH:-$(find_hs_bin)}" || { echo "no Haskell oracle (./setup.sh testing)" >&2; exit 2; }
+# Prefer the patched ./setup.sh testing build (it carries proof-reload fixes
+# not yet in a release); otherwise any tamarin-prover on PATH works.
+HS_PATH="${HS_PATH:-$(find_hs_bin || command -v tamarin-prover)}" || {
+    echo "no Haskell tamarin-prover found (./setup.sh testing, install one, or set HS_PATH)" >&2; exit 2; }
+echo "re-verifying with: $HS_PATH" >&2
 MAUDE_PATH="${MAUDE_PATH:-$(command -v maude || echo /home/linuxbrew/.linuxbrew/bin/maude)}"
 export PATH="$(dirname "$MAUDE_PATH"):$PATH"
 
