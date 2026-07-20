@@ -96,8 +96,11 @@ if diff "$tmp/rs.sum" "$tmp/hs.sum" > "$tmp/sum.diff"; then
     printf '\n'
     cat "$tmp/summary.block"
 else
-    echo
-    echo "MISMATCH between the Rust prover and the Haskell re-verification:" >&2
-    sed 's/^/  /' "$tmp/sum.diff" >&2
+    { echo
+      echo "MISMATCH between the Rust prover and the Haskell re-verification"
+      echo "(step counts are elided before comparison; nothing was written to stdout):"
+      diff -u --label "rust prove" --label "haskell reverify" \
+          "$tmp/rs.sum" "$tmp/hs.sum" | sed 's/^/  /'
+    } >&2
     exit 1
 fi
