@@ -77,12 +77,24 @@ n=$(grep -c . "$tmp/rs.sum" || true)
 [ "$n" -gt 0 ] || { echo "no lemma summaries found in the Rust output" >&2; exit 1; }
 
 if diff "$tmp/rs.sum" "$tmp/hs.sum" > "$tmp/sum.diff"; then
+    # The RS stdout summary block, minus its `output:` line (stdout IS the
+    # output here), plus the Haskell re-check time as `reverify time:`.
+    hs_time=$(grep -m1 '^  processing time:' "$tmp/hs.out" | sed 's/^ *processing time: *//')
+    awk '/^=+$/{n++; print; if (n==2) exit; next} n==1' "$tmp/rs.out" \
+        | grep -v '^  output:' \
+        | sed "s|^  processing time: .*|&\n  reverify time: ${hs_time}|" > "$tmp/summary.block"
     { echo
       echo "AGREE: both provers report identical verdicts for all $n lemma(s):"
-      summary_full "$tmp/rs.out" | sed 's/^/  /'
+      echo
+      sed 's/^/  /' "$tmp/summary.block"
     } >&2
-    # The re-verified proof file is the payload: stdout only.
+    # The re-verified proof file is the payload: stdout only.  Mirror the
+    # plain `--prove` stdout shape: the analyzed theory, a blank line, then
+    # the bare summary block — both provers stop parsing at `end`, so the
+    # result stays a loadable theory file.
     cat "$tmp/analyzed.spthy"
+    printf '\n'
+    cat "$tmp/summary.block"
 else
     echo
     echo "MISMATCH between the Rust prover and the Haskell re-verification:" >&2
