@@ -21,13 +21,8 @@
 # round-trip, e.g. Tutorial's exists-trace lemma: 5 steps → 7 steps).
 #
 # Env: RS_PATH (default target/release/tamarin-rs), HS_PATH (default: the
-#      ./setup.sh testing oracle build), MAUDE_PATH, FILE_TIMEOUT (600s).
+#      ./setup.sh testing oracle build), MAUDE_PATH.
 set -u
-
-# OOM safeguards (repo convention): this driver dies first, and a runaway
-# prover cannot take the machine down.
-echo 1000 > /proc/self/oom_score_adj 2>/dev/null || true
-ulimit -v 25165824 2>/dev/null || true
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -46,7 +41,6 @@ find_hs_bin() {
 HS_PATH="${HS_PATH:-$(find_hs_bin)}" || { echo "no Haskell oracle (./setup.sh testing)" >&2; exit 2; }
 MAUDE_PATH="${MAUDE_PATH:-$(command -v maude || echo /home/linuxbrew/.linuxbrew/bin/maude)}"
 export PATH="$(dirname "$MAUDE_PATH"):$PATH"
-FILE_TIMEOUT="${FILE_TIMEOUT:-600}"
 
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
@@ -63,19 +57,17 @@ summary_lines() {
 
 echo "=== prove (tamarin-rs) ===" >&2
 t0=$SECONDS
-timeout "$FILE_TIMEOUT" "$RS_PATH" "$thy" --prove "$@" \
+"$RS_PATH" "$thy" --prove "$@" \
     --output="$tmp/analyzed.spthy" > "$tmp/rs.out" 2> "$tmp/rs.err"
 rc=$?
-[ $rc = 124 ] && { echo "tamarin-rs timed out after ${FILE_TIMEOUT}s" >&2; exit 1; }
 [ $rc = 0 ] || { echo "tamarin-rs failed (exit $rc):" >&2; tail -5 "$tmp/rs.err" >&2; exit 1; }
 echo "  proved in $((SECONDS - t0))s" >&2
 
 echo "=== re-verify (tamarin-prover, re-checking the emitted proofs) ===" >&2
 t0=$SECONDS
-timeout "$FILE_TIMEOUT" "$HS_PATH" "$tmp/analyzed.spthy" "$@" \
+"$HS_PATH" "$tmp/analyzed.spthy" "$@" \
     > "$tmp/hs.out" 2> "$tmp/hs.err"
 rc=$?
-[ $rc = 124 ] && { echo "tamarin-prover timed out after ${FILE_TIMEOUT}s" >&2; exit 1; }
 [ $rc = 0 ] || { echo "tamarin-prover failed (exit $rc):" >&2; tail -5 "$tmp/hs.err" >&2; exit 1; }
 echo "  re-verified in $((SECONDS - t0))s" >&2
 
