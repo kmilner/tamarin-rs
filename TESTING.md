@@ -197,7 +197,6 @@ The list is not exhaustive — grep the sources for `TAM_DBG_` / `TAM_RS_` /
 | `corpus_raw_diff.sh` | raw per-lemma diff across the corpus |
 | `rs_vs_rs_diff.sh` / `triage_diff_vs_hs.sh` | refactor-inertness sweep + 3-way triage |
 | `compare_parity_tsv.py` | compare two gate TSVs by (file, lemma) |
-| `parity_check.sh` | quick raw check of specific files |
 | `web_parity.sh` (+ `web_crawl.py`, `web_normalize.py`, `web_diff.py`) | interactive-mode gate |
 | `websweep_residual.txt` | known cosmetic web residue |
 | `diff_proof_tree.sh` / `canon_proof_tree.py` / `corpus_diff_proof_trees.sh` / `corpus_full_trace_diff.sh` | canonicalised proof-tree diffs |
