@@ -98,10 +98,10 @@ Both provers prove every lemma (--prove --derivcheck-timeout=30); HS at
 `+RTS -Nk`, RS at `--processors=k`; wall-clock + peak RSS come from
 `/usr/bin/time -v` (the prover process only — Maude is a separate subprocess on
 both sides and is excluded). Single run per cell (wall-clock is noisy ±10%).
-The P+R columns measure ./prove_and_reverify.sh (THREADS=k): prove with RS,
+The RS+HS columns measure ./prove_and_reverify.sh (THREADS=k): prove with RS,
 then re-CHECK the emitted proofs with HS — i.e. the total cost of a proof you
 did not have to trust the port for; its peak RSS is the max across both
-phases. The RS and P+R columns show the % change vs HS in parentheses
+phases. The RS+HS and RS columns show the % change vs HS in parentheses
 (negative = faster / less memory). Tune the theory set / core counts /
 binaries via the FILES, CORES, TIMEOUT, DERIV, HS_PATH, RS_PATH env vars (see
 the scripts/bench.sh header).
@@ -112,8 +112,8 @@ HDR
         echo
         echo "**${k} core$([ "$k" = 1 ] && echo '' || echo 's')**"
         echo
-        echo "| Theory | HS time | RS time | P+R time | HS memory | RS memory | P+R memory |"
-        echo "|--------|--------:|--------:|---------:|----------:|----------:|-----------:|"
+        echo "| Theory | HS time | RS+HS time | RS time | HS memory | RS+HS memory | RS memory |"
+        echo "|--------|--------:|-----------:|--------:|----------:|-------------:|----------:|"
         for f in $FILES; do
             af="$CORPUS/$f"
             base="${f##*/}"; base="${base%.spthy}"
@@ -122,7 +122,7 @@ HDR
             r=$(measure "$RS_PATH" --processors="$k" --derivcheck-timeout="$DERIV" --prove "$af")
             p=$(measure env THREADS="$k" HS_PATH="$HS_PATH" RS_PATH="$RS_PATH" \
                     "$repo_root/prove_and_reverify.sh" "$af" --derivcheck-timeout="$DERIV")
-            echo "| \`$base\` | $(cell_t "${h%|*}") | $(cell_rs_t "${r%|*}" "${h%|*}") | $(cell_rs_t "${p%|*}" "${h%|*}") | $(cell_m "${h#*|}") | $(cell_rs_m "${r#*|}" "${h#*|}") | $(cell_rs_m "${p#*|}" "${h#*|}") |"
+            echo "| \`$base\` | $(cell_t "${h%|*}") | $(cell_rs_t "${p%|*}" "${h%|*}") | $(cell_rs_t "${r%|*}" "${h%|*}") | $(cell_m "${h#*|}") | $(cell_rs_m "${p#*|}" "${h#*|}") | $(cell_rs_m "${r#*|}" "${h#*|}") |"
         done
     done
     echo
