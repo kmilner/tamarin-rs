@@ -669,10 +669,7 @@ pub fn exec_proof_method(
         }
         ProofMethod::Induction => {
             // Take the first formula and try `ginduct`.
-            let fm = match sys.formulas.first() {
-                Some(f) => f.clone(),
-                None => return None,
-            };
+            let fm = sys.formulas.first()?.clone();
             let (base, step) = match crate::guarded::ginduct(&fm) {
                 Ok(p) => p,
                 Err(_) => return None,

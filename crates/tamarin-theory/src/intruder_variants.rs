@@ -287,11 +287,11 @@ fn compute_new_vars(
 
     let mut prem_vars: BTreeSet<LVar> = BTreeSet::new();
     for f in prems {
-        for t in &f.terms { collect(t, &mut prem_vars); }
+        for t in f.terms.iter() { collect(t, &mut prem_vars); }
     }
     let mut new_set: BTreeSet<LVar> = BTreeSet::new();
     for f in concs {
-        for t in &f.terms {
+        for t in f.terms.iter() {
             let mut here = BTreeSet::new();
             collect(t, &mut here);
             for v in here {

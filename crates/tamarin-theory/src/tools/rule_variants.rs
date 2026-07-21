@@ -182,13 +182,13 @@ fn make_proto_rule_ac(
     use tamarin_term::lterm::HasFrees;
     let mut frees_set: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
     for f in &premises {
-        for t in &f.terms { t.for_each_free(&mut |v| { frees_set.insert(v.clone()); }); }
+        for t in f.terms.iter() { t.for_each_free(&mut |v| { frees_set.insert(v.clone()); }); }
     }
     for f in &conclusions {
-        for t in &f.terms { t.for_each_free(&mut |v| { frees_set.insert(v.clone()); }); }
+        for t in f.terms.iter() { t.for_each_free(&mut |v| { frees_set.insert(v.clone()); }); }
     }
     for f in &actions {
-        for t in &f.terms { t.for_each_free(&mut |v| { frees_set.insert(v.clone()); }); }
+        for t in f.terms.iter() { t.for_each_free(&mut |v| { frees_set.insert(v.clone()); }); }
     }
     for t in &new_vars {
         t.for_each_free(&mut |v| { frees_set.insert(v.clone()); });
@@ -576,13 +576,13 @@ pub fn abstract_rule_and_variants(
     let abstr_frees: Vec<LVar> = {
         let mut s: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
         for f in &abstracted_rule.premises {
-            for t in &f.terms { t.for_each_free(&mut |v| { s.insert(v.clone()); }); }
+            for t in f.terms.iter() { t.for_each_free(&mut |v| { s.insert(v.clone()); }); }
         }
         for f in &abstracted_rule.actions {
-            for t in &f.terms { t.for_each_free(&mut |v| { s.insert(v.clone()); }); }
+            for t in f.terms.iter() { t.for_each_free(&mut |v| { s.insert(v.clone()); }); }
         }
         for f in &abstracted_rule.conclusions {
-            for t in &f.terms { t.for_each_free(&mut |v| { s.insert(v.clone()); }); }
+            for t in f.terms.iter() { t.for_each_free(&mut |v| { s.insert(v.clone()); }); }
         }
         for t in &abstracted_rule.new_vars {
             t.for_each_free(&mut |v| { s.insert(v.clone()); });
@@ -854,9 +854,9 @@ fn rule_renames_under_precise(rule: &ProtoRuleE) -> bool {
     let mut vars: Vec<LVar> = Vec::new();
     {
         let mut collect = |v: &LVar| vars.push(v.clone());
-        for f in &rule.premises { for t in &f.terms { t.for_each_free(&mut collect); } }
-        for f in &rule.conclusions { for t in &f.terms { t.for_each_free(&mut collect); } }
-        for f in &rule.actions { for t in &f.terms { t.for_each_free(&mut collect); } }
+        for f in &rule.premises { for t in f.terms.iter() { t.for_each_free(&mut collect); } }
+        for f in &rule.conclusions { for t in f.terms.iter() { t.for_each_free(&mut collect); } }
+        for f in &rule.actions { for t in f.terms.iter() { t.for_each_free(&mut collect); } }
         for t in &rule.new_vars { t.for_each_free(&mut collect); }
     }
     let mut state = PreciseFreshState::nothing_used();
@@ -930,13 +930,13 @@ fn rename_precise_rule_with_variants(
         }
     }
     for f in &rule.premises {
-        for t in &f.terms { t.for_each_free(&mut |v| import(v, &mut state, &mut map)); }
+        for t in f.terms.iter() { t.for_each_free(&mut |v| import(v, &mut state, &mut map)); }
     }
     for f in &rule.conclusions {
-        for t in &f.terms { t.for_each_free(&mut |v| import(v, &mut state, &mut map)); }
+        for t in f.terms.iter() { t.for_each_free(&mut |v| import(v, &mut state, &mut map)); }
     }
     for f in &rule.actions {
-        for t in &f.terms { t.for_each_free(&mut |v| import(v, &mut state, &mut map)); }
+        for t in f.terms.iter() { t.for_each_free(&mut |v| import(v, &mut state, &mut map)); }
     }
     for t in &rule.new_vars {
         t.for_each_free(&mut |v| import(v, &mut state, &mut map));
@@ -956,7 +956,7 @@ fn rename_precise_rule_with_variants(
     let map_facts = |fs: Vec<Fact<LNTerm>>| -> Vec<Fact<LNTerm>> {
         fs.into_iter().map(|f| {
             // Var rename — frees change; recompute the bloom.
-            let terms: Vec<LNTerm> = f.terms.into_iter().map(map_term).collect();
+            let terms: Vec<LNTerm> = f.terms.iter().cloned().map(map_term).collect();
             Fact::fresh_annotated(f.tag, f.annotations, terms)
         }).collect()
     };

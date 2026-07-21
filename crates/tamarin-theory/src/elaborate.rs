@@ -364,7 +364,7 @@ pub fn sapic_public_names_report(thy: &Theory) -> Vec<tamarin_parser::wf::WfErro
             .chain(&r.rule.actions)
             .chain(&r.rule.conclusions)
         {
-            for t in &f.terms {
+            for t in f.terms.iter() {
                 collect_pub_names(t, &mut names);
             }
         }
@@ -436,14 +436,14 @@ fn collect_process_pub_names(p: &crate::sapic::PlainProcess, out: &mut Vec<Strin
                 }
                 SA::Delete(a) | SA::Lock(a) | SA::Unlock(a) => collect_pub_names(a, out),
                 SA::Event(fa) => {
-                    for t in &fa.terms { collect_pub_names(t, out); }
+                    for t in fa.terms.iter() { collect_pub_names(t, out); }
                 }
                 SA::ProcessCall(_, args) => {
                     for t in args { collect_pub_names(t, out); }
                 }
                 SA::Msr { prems, acts, concs, .. } => {
                     for fa in prems.iter().chain(acts).chain(concs) {
-                        for t in &fa.terms { collect_pub_names(t, out); }
+                        for t in fa.terms.iter() { collect_pub_names(t, out); }
                     }
                 }
                 SA::Rep | SA::New(_) => {}
@@ -1442,11 +1442,11 @@ fn compute_new_vars(
 ) -> Vec<tamarin_term::lterm::LNTerm> {
     let mut prem_vars: BTreeSet<LVar> = BTreeSet::new();
     for f in prems {
-        for t in &f.terms { collect_vars(t, &mut prem_vars); }
+        for t in f.terms.iter() { collect_vars(t, &mut prem_vars); }
     }
     let mut new_set: BTreeSet<LVar> = BTreeSet::new();
     for f in concs.iter().chain(acts) {
-        for t in &f.terms {
+        for t in f.terms.iter() {
             let mut here = BTreeSet::new();
             collect_vars(t, &mut here);
             for v in here {

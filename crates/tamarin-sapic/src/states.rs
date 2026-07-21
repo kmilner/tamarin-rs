@@ -454,7 +454,7 @@ fn vars_proc(p: &AnnotatedProc) -> Vec<LVar> {
         }
     }
     fn fact_vars(f: &tamarin_theory::sapic::SapicLNFact, out: &mut BTreeSet<LVar>) {
-        for t in &f.terms {
+        for t in f.terms.iter() {
             term_vars(t, out);
         }
     }

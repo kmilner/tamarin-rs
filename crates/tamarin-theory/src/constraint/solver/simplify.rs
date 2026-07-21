@@ -2808,7 +2808,7 @@ fn collect_unique_action_candidates(
     let is_unique = |fa: &LNFact| -> bool {
         // Skip FUnion-headed terms — multiset unions can produce
         // multiple unifiers (Haskell's `null [ () | t <- ts, FUnion _ <- viewTerm2 t]`).
-        for t in &fa.terms {
+        for t in fa.terms.iter() {
             if has_funion_head(t) { return false; }
         }
         counts.get(&(fa.tag.clone(), fa.terms.len())).copied() == Some(1)
@@ -3136,7 +3136,7 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
         .map(|(_, rule)| {
             let mut out = tamarin_utils::FastSet::default();
             for f in rule.premises.iter().chain(rule.actions.iter()) {
-                for t in &f.terms {
+                for t in f.terms.iter() {
                     crate::tools::subterm_store::collect_fresh_vars_not_below_reducible(
                         reducible, t, &mut out);
                 }

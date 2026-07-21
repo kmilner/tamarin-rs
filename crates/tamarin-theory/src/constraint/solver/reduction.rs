@@ -841,7 +841,7 @@ impl<'ctx> Reduction<'ctx> {
             let mut new_terms: Option<Vec<tamarin_term::lterm::LNTerm>> = None;
             for (i, t) in fa.terms.iter().enumerate() {
                 if let Some(changed) = subst_view.apply_changed(t) {
-                    new_terms.get_or_insert_with(|| fa.terms.clone())[i] = changed;
+                    new_terms.get_or_insert_with(|| fa.terms.to_vec())[i] = changed;
                 }
             }
             new_terms.map(|terms| {
@@ -1195,7 +1195,7 @@ impl<'ctx> Reduction<'ctx> {
             let mut new_terms: Option<Vec<tamarin_term::lterm::LNTerm>> = None;
             for (i, t) in fa.terms.iter().enumerate() {
                 if let Some(changed) = tamarin_term::subst::apply_vterm_changed(&subst, t) {
-                    new_terms.get_or_insert_with(|| fa.terms.clone())[i] = changed;
+                    new_terms.get_or_insert_with(|| fa.terms.to_vec())[i] = changed;
                 }
             }
             match new_terms {
@@ -3997,7 +3997,7 @@ fn bm_fact(fa: &crate::fact::LNFact, max: &mut u64) {
                 // via the real per-term walk and panic on any mismatch with
                 // the cached value.
                 let mut walked = 0u64;
-                for t in &fa.terms { bm_term(t, &mut walked); }
+                for t in fa.terms.iter() { bm_term(t, &mut walked); }
                 if walked != m {
                     panic!(
                         "TAM_RS_VERIFY_FACT_MAX: cached max_var {} != walked max {} \
@@ -4009,7 +4009,7 @@ fn bm_fact(fa: &crate::fact::LNFact, max: &mut u64) {
             if m > *max { *max = m; }
         }
         None => {
-            for t in &fa.terms {
+            for t in fa.terms.iter() {
                 bm_term(t, max);
             }
         }
@@ -4246,7 +4246,7 @@ fn verify_fact_unchanged(
     fa: &crate::fact::LNFact,
     view: &tamarin_term::subst::SubstView<'_, tamarin_term::lterm::Name, tamarin_term::lterm::LVar>,
 ) {
-    for t in &fa.terms {
+    for t in fa.terms.iter() {
         if let Some(c) = view.apply_changed(t) {
             if c != *t {
                 panic!("TAM_RS_VERIFY_FP: bloom-skip dropped a real change \

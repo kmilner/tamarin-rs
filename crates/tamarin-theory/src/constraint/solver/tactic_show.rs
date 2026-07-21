@@ -488,7 +488,7 @@ fn show_term_list(args: &[GTerm]) -> String {
 /// the fact terms of an `ActionG _ (Fact { factTerms = ft })`, else `[]`.
 pub fn action_goal_fact_terms(goal: &crate::constraint::constraints::Goal) -> Vec<LNTerm> {
     if let crate::constraint::constraints::Goal::Action(_, fa) = goal {
-        fa.terms.clone()
+        fa.terms.to_vec()
     } else {
         Vec::new()
     }

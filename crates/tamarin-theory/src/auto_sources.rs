@@ -397,9 +397,9 @@ pub fn add_auto_sources_lemma(
                 }
                 Matched::Fact { fact, outs } => {
                     let (in_name, out_name) = auto_names(m, pos, &rin_name);
-                    grp.push((rin_name.clone(), ln_proto(&in_name, fact.terms.clone())));
+                    grp.push((rin_name.clone(), ln_proto(&in_name, fact.terms.to_vec())));
                     for (rout_i, fout) in outs {
-                        grp.push((rules[*rout_i].name().to_string(), ln_proto(&out_name, fout.terms.clone())));
+                        grp.push((rules[*rout_i].name().to_string(), ln_proto(&out_name, fout.terms.to_vec())));
                     }
                 }
             }

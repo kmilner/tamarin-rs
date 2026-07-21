@@ -855,7 +855,7 @@ fn variants_intruder_with(
         .chain(ru.conclusions.iter())
         .chain(ru.actions.iter())
     {
-        for t in &f.terms { rule_terms.push(t.clone()); }
+        for t in f.terms.iter() { rule_terms.push(t.clone()); }
     }
     // The free vars of the packed rule-terms list.  Note
     // `frees(packed) == frees(rule_terms)` (packing only wraps the terms in

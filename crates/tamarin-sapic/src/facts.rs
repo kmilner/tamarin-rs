@@ -409,7 +409,7 @@ fn map_fact_name(f: &LNFact, prefix: &str) -> LNFact {
         FactTag::Proto(m, s, i) => FactTag::Proto(*m, tamarin_term::intern::intern_str(&format!("{prefix}{s}")), *i),
         other => other.clone(),
     };
-    tamarin_theory::fact::Fact::new(tag, f.terms.clone()).with_annotations(f.annotations.clone())
+    tamarin_theory::fact::Fact::new(tag, f.terms.to_vec()).with_annotations(f.annotations.clone())
 }
 
 /// `proto_fact` is fixed to `Linear`; the state fact needs an explicit
@@ -623,13 +623,13 @@ pub fn compute_new_vars(prems: &[LNFact], concs: &[LNFact], acts: &[LNFact]) -> 
     }
     let mut prem_vars: BTreeSet<LVar> = BTreeSet::new();
     for f in prems {
-        for t in &f.terms {
+        for t in f.terms.iter() {
             collect(t, &mut prem_vars);
         }
     }
     let mut new_set: BTreeSet<LVar> = BTreeSet::new();
     for f in concs.iter().chain(acts) {
-        for t in &f.terms {
+        for t in f.terms.iter() {
             let mut here = BTreeSet::new();
             collect(t, &mut here);
             for v in here {

@@ -22,7 +22,7 @@
 
 use std::io::{Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::lterm::LNTerm;
@@ -83,6 +83,22 @@ fn term_has_reducible_sym(
     rec(t, reducible)
 }
 
+/// True if `t` contains NO Ac- or C-headed application anywhere.  Backs
+/// `MaudeProcessInner::st_lhs_ac_free`: `nf_via_haskell`'s st-rule arm
+/// matches with the no-AC matcher (`solve_match_lterm_no_ac`), whose
+/// `match_raw` raises `NeedsAC` only at Ac-vs-Ac / C-vs-C positions — so
+/// the matcher is complete (never misses a match Maude would find) exactly
+/// when the PATTERN (the rule LHS) is Ac/C-free.
+fn term_ac_c_free(t: &LNTerm) -> bool {
+    use crate::function_symbols::FunSym;
+    use crate::term::Term;
+    match t {
+        Term::Lit(_) => true,
+        Term::App(FunSym::Ac(_) | FunSym::C(_), _) => false,
+        Term::App(_, args) => args.iter().all(term_ac_c_free),
+    }
+}
+
 /// Statistics on Maude operations performed via this handle.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MaudeStats {
@@ -114,39 +130,82 @@ pub fn dump_callsite_profile() -> Vec<(String, u64)> {
         .map(|(k, v)| ((*k).to_string(), *v)).collect())
 }
 
-struct MaudeProcessInner {
-    stdin: ChildStdin,
-    stdout: ChildStdout,
-    stats: MaudeStats,
-    /// The theory signature — immutable after `start()`.  Shared (`Arc`) with
-    /// the owning `MaudeHandle` so reads via `MaudeHandle::maude_sig()` are a
-    /// refcount bump rather than a deep clone taken under this IPC mutex.
-    sig: Arc<MaudeSig>,
+/// Hit/miss tallies, per Maude subprocess, against the session's shared
+/// memo caches (`SharedMaudeCaches`: `reduce`, `unifiable`, `reply`).  A
+/// hit is counted when the cache `get` succeeds; a miss when this process
+/// computed the value and inserted it.  The `u64` bumps are always
+/// maintained (negligible cost); only the one-line-per-process summary is
+/// gated, printed to STDERR (never stdout) from `MaudeProcessInner`'s
+/// `Drop` when `TAM_MAUDE_CACHE_STATS` is set.  Diagnostic only — reaches
+/// no `--prove` output path.
+#[derive(Default)]
+struct MaudeCacheStats {
+    reduce_hits: u64,
+    reduce_misses: u64,
+    unifiable_hits: u64,
+    unifiable_misses: u64,
+    reply_hits: u64,
+    reply_misses: u64,
+}
+
+/// The three memo caches for one theory session, shared (`Arc`) by the
+/// session's sequential `file_maude` handle AND every `MaudePool` member
+/// (run.rs wires one instance into both).  Under `--processors=N`,
+/// parallel tasks draw different pool members; sharing lets a value
+/// computed by ANY subprocess satisfy the identical query from every
+/// other member of the session.
+///
+/// BYTE-PARITY: each cache relies on the memo invariant "identical
+/// term/command bytes ⇒ identical result", which a single process already
+/// depends on across an entire session.  Every sharing subprocess is
+/// initialised with the IDENTICAL signature module (`MaudePool` clones
+/// one `MaudeSig` per spawn; run.rs passes the same value to
+/// `file_maude`), the module is immutable after `start_with_caches()`
+/// (every post-load command is a pure `reduce` / `unify` / `match` /
+/// `get variants` query — nothing mutates Maude state that later replies
+/// depend on), and Maude's reply is a deterministic, command-local
+/// function of that module.  So the value any member computes is
+/// byte-identical to what the querying member would have computed itself
+/// — sharing changes only which process performed the first computation,
+/// exactly the member-interchangeability the pool already guarantees.
+///
+/// LOCK ORDER: a subprocess's inner IPC mutex is always acquired FIRST;
+/// each cache mutex here is acquired strictly INSIDE it, held only for
+/// the `get` or the `insert` (released before any Maude IPC wait), and
+/// acquires nothing itself.  No cycle is possible.
+///
+/// CONCURRENT MISSES: two members that miss the same key simultaneously
+/// both perform the IPC and both insert — last write wins with an
+/// identical value (see BYTE-PARITY).  That bounded first-wave
+/// duplication is harmless, so there is no single-flight machinery.
+#[derive(Default)]
+pub struct SharedMaudeCaches {
+    /// Memo for `reduce(...)` queries.  Maude `reduce` is a pure
+    /// function of the input term modulo the (fixed-per-session) theory
+    /// signature, so successful reductions can be cached across calls.
+    /// `has_non_normal_terms` (contradictions.rs) calls `reduce` on
+    /// every candidate subterm of every node, and `is_finished` runs
+    /// every search step — so the same subterm gets reduced repeatedly
+    /// during a single proof.  Caching cuts those repeat round-trips.
+    reduce: Mutex<tamarin_utils::FastMap<LNTerm, LNTerm>>,
     /// Memo for `unifiable(...)` queries — see `MaudeHandle::unifiable`.
     /// Caches the *boolean* outcome (true = at least one unifier
     /// exists).  Witness LVars produced inside the subst aren't safe
     /// to cache across calls (their indices need fresh-renaming each
     /// time) so we don't memoize substitutions, only the existence
     /// answer.
-    unifiable_cache: tamarin_utils::FastMap<Vec<(LNTerm, LNTerm)>, bool>,
-    /// Memo for `reduce(...)` queries.  Maude `reduce` is a pure
-    /// function of the input term modulo the (fixed-per-handle) theory
-    /// signature, so successful reductions can be cached across calls.
-    /// `has_non_normal_terms` (contradictions.rs) calls `reduce` on
-    /// every candidate subterm of every node, and `is_finished` runs
-    /// every search step — so the same subterm gets reduced repeatedly
-    /// during a single proof.  Caching cuts those repeat round-trips.
-    reduce_cache: tamarin_utils::FastMap<LNTerm, LNTerm>,
+    unifiable: Mutex<tamarin_utils::FastMap<Vec<(LNTerm, LNTerm)>, bool>>,
     /// Memo for the RAW REPLY BYTES of the witness-producing Maude commands
     /// (`unify in MSG`, `variant unify in MSG`, `get variants in MSG`, and the
     /// three `match in MSG` matchers), keyed by the *exact command
     /// byte-string*.  Maude's reply to one of these
     /// commands is a deterministic, command-local function of the theory
-    /// module — which is fixed for the life of this `MaudeProcessInner`
-    /// (`sig` is immutable after `start()`; `with_swapped_maude` hands out a
-    /// different pool handle rather than mutating this module) — so identical
+    /// module — which is fixed for the life of the session (`sig` is
+    /// immutable after `start_with_caches()`, every sharer loads the
+    /// identical module, and `with_swapped_maude` hands out a different
+    /// pool handle rather than mutating any module) — so identical
     /// command bytes imply an identical reply, exactly the invariant
-    /// `reduce_cache` already relies on.
+    /// `reduce` already relies on.
     ///
     /// This caches ONLY the raw bytes: the per-call back-conversion (per-arm
     /// `ConvCtx` clone, `input_max` seeded from the caller's own bindings) still
@@ -157,16 +216,38 @@ struct MaudeProcessInner {
     /// `(reply bytes, this call's ctx)` and touches NO global fresh state, so a
     /// hit and a miss consume the reply identically.
     ///
-    /// SCOPE / MEMORY: bounded to this `MaudeProcessInner` — i.e. to one proof
-    /// session's Maude handle.  It is freed when the handle's
-    /// `Arc<Mutex<MaudeProcessInner>>` drops at session end; it is NOT a
+    /// SCOPE / MEMORY: bounded to this `SharedMaudeCaches` — i.e. to one
+    /// theory session.  It is freed when the session's last
+    /// `Arc<SharedMaudeCaches>` drops at session end; it is NOT a
     /// process-global cache and does not accumulate across sessions.  The
     /// distinct-command population per session is small (a theory issues only a
     /// handful of distinct `get variants` / `unify` queries, and fixpoint
     /// passes re-issue the same `match` commands; the win is from heavy
     /// DUPLICATION of those few), so peak residency stays bounded even
-    /// though — like `reduce_cache` — no per-entry eviction is performed.
-    reply_cache: tamarin_utils::FastMap<Vec<u8>, Vec<u8>>,
+    /// though — like `reduce` — no per-entry eviction is performed.
+    reply: Mutex<tamarin_utils::FastMap<Vec<u8>, Vec<u8>>>,
+}
+
+struct MaudeProcessInner {
+    stdin: ChildStdin,
+    stdout: ChildStdout,
+    stats: MaudeStats,
+    /// Memo cache hit/miss tallies — see `MaudeCacheStats`.
+    cache_stats: MaudeCacheStats,
+    /// The theory signature — immutable after `start()`.  Shared (`Arc`) with
+    /// the owning `MaudeHandle` so reads via `MaudeHandle::maude_sig()` are a
+    /// refcount bump rather than a deep clone taken under this IPC mutex.
+    sig: Arc<MaudeSig>,
+    /// The session's memo caches — see `SharedMaudeCaches` for the
+    /// byte-parity argument and the lock-order invariant (this inner's
+    /// IPC mutex is always the outer lock; the cache mutexes are only
+    /// ever taken strictly inside it).
+    caches: Arc<SharedMaudeCaches>,
+    /// True iff every `sig.st_rules` LHS is Ac/C-free (`term_ac_c_free`),
+    /// i.e. `nf_via_haskell`'s no-AC st-rule matcher is complete for this
+    /// signature.  Gates `reduce`'s native normal-form fast path; computed
+    /// once at `start_with_caches` (the signature is immutable afterwards).
+    st_lhs_ac_free: bool,
 }
 
 /// Cached `TAM_DBG_MAUDE_IO` / `TAM_DBG_MAUDE_IO_FILTER` configuration.
@@ -263,23 +344,47 @@ impl MaudeProcessInner {
     /// `execute` with a raw-reply memo keyed by the exact command bytes.
     /// On a hit the cached reply is returned and the subprocess round-trip is
     /// skipped; on a miss the command is issued, `bump` records the per-command
-    /// stat, and the reply is cached.  See `reply_cache` for why a cmd-keyed
-    /// byte cache is transparent to witness numbering.  The stat bump (like
-    /// `reduce_cache` skipping `norm_count` on a hit) only fires on a real
+    /// stat, and the reply is cached.  See `SharedMaudeCaches::reply` for why
+    /// a cmd-keyed byte cache is transparent to witness numbering.  The stat
+    /// bump (like `reduce` skipping `norm_count` on a hit) only fires on a real
     /// round-trip; `MaudeStats` reaches no `--prove` output path, so this does
-    /// not affect stdout either way.
+    /// not affect stdout either way.  Each cache lock is scoped to a single
+    /// statement (the `get` / the `insert`) and thus never held across the
+    /// `execute` IPC wait, per the `SharedMaudeCaches` lock-order invariant.
     fn execute_memo(
         &mut self,
         cmd: &[u8],
         bump: impl FnOnce(&mut MaudeStats),
     ) -> Result<Vec<u8>, MaudeError> {
-        if let Some(cached) = self.reply_cache.get(cmd) {
-            return Ok(cached.clone());
+        let hit = self.caches.reply.lock().unwrap().get(cmd).cloned();
+        if let Some(cached) = hit {
+            self.cache_stats.reply_hits += 1;
+            return Ok(cached);
         }
         let reply = self.execute(cmd)?;
         bump(&mut self.stats);
-        self.reply_cache.insert(cmd.to_vec(), reply.clone());
+        self.cache_stats.reply_misses += 1;
+        self.caches.reply.lock().unwrap().insert(cmd.to_vec(), reply.clone());
         Ok(reply)
+    }
+}
+
+impl Drop for MaudeProcessInner {
+    /// When `TAM_MAUDE_CACHE_STATS` is set, emit one summary line per Maude
+    /// process to STDERR as this inner is torn down (the shared
+    /// `Arc<Mutex<MaudeProcessInner>>` is one per subprocess, so this fires
+    /// exactly once per process at session end).  Nothing reaches stdout;
+    /// stdout is byte-compared against the Haskell oracle.
+    fn drop(&mut self) {
+        if tamarin_utils::env_gate!("TAM_MAUDE_CACHE_STATS") {
+            let s = &self.cache_stats;
+            eprintln!(
+                "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{}",
+                s.reduce_hits, s.reduce_misses,
+                s.unifiable_hits, s.unifiable_misses,
+                s.reply_hits, s.reply_misses,
+            );
+        }
     }
 }
 
@@ -366,8 +471,26 @@ impl std::fmt::Debug for MaudeHandle {
 }
 
 impl MaudeHandle {
-    /// Start a new Maude process and load the theory module for `sig`.
+    /// Start a new Maude process and load the theory module for `sig`,
+    /// with a fresh private cache set (see [`Self::start_with_caches`]).
+    /// The entry point for standalone handles — one-shot commands, tests,
+    /// per-request server handles — that share memo results with nobody.
     pub fn start(maude_path: &str, sig: MaudeSig) -> Result<Self, MaudeError> {
+        Self::start_with_caches(
+            maude_path, sig, Arc::new(SharedMaudeCaches::default()))
+    }
+
+    /// Start a new Maude process and load the theory module for `sig`,
+    /// consulting `caches` for the memo lookups.  Handles that share one
+    /// `SharedMaudeCaches` MUST be started with the identical `sig` — see
+    /// the struct doc's byte-parity argument.  The per-theory session
+    /// (run.rs: `file_maude` plus its `MaudePool` members) is the one
+    /// sharing site.
+    pub fn start_with_caches(
+        maude_path: &str,
+        sig: MaudeSig,
+        caches: Arc<SharedMaudeCaches>,
+    ) -> Result<Self, MaudeError> {
         // Wrap once: `inner`, the handle, and every `with_fresh_counter_from`
         // clone share this single immutable signature.
         let sig = Arc::new(sig);
@@ -405,10 +528,10 @@ impl MaudeHandle {
             stdin,
             stdout,
             stats: MaudeStats::default(),
+            cache_stats: MaudeCacheStats::default(),
+            st_lhs_ac_free: sig.st_rules.iter().all(|r| term_ac_c_free(&r.lhs)),
             sig: Arc::clone(&sig),
-            unifiable_cache: tamarin_utils::FastMap::default(),
-            reduce_cache: tamarin_utils::FastMap::default(),
-            reply_cache: tamarin_utils::FastMap::default(),
+            caches,
         };
         // Banner / initial prompt.
         let _ = inner.read_until_prompt()?;
@@ -554,16 +677,21 @@ impl MaudeHandle {
     }
 
     /// Reduce a term to normal form modulo the theory.  Memoized via
-    /// `reduce_cache`: `reduce` is a pure function of the input modulo
-    /// the fixed-per-handle Maude signature, and `has_non_normal_terms`
-    /// (called on every search step) calls it repeatedly for the same
-    /// subterms.
+    /// `SharedMaudeCaches::reduce`: `reduce` is a pure function of the
+    /// input modulo the fixed-per-session Maude signature, and
+    /// `has_non_normal_terms` (called on every search step) calls it
+    /// repeatedly for the same subterms.  Cache locks are scoped to the
+    /// single `get` / `insert` statement, strictly inside the inner IPC
+    /// mutex and never across the IPC wait (lock-order invariant on
+    /// `SharedMaudeCaches`).
     pub fn reduce(&self, t: &LNTerm) -> Result<LNTerm, MaudeError> {
         let mut ctx = ConvCtx::new();
         let reply = {
             let mut inner = self.inner.lock().unwrap();
-            if let Some(cached) = inner.reduce_cache.get(t) {
-                return Ok(cached.clone());
+            let hit = inner.caches.reduce.lock().unwrap().get(t).cloned();
+            if let Some(cached) = hit {
+                inner.cache_stats.reduce_hits += 1;
+                return Ok(cached);
             }
             // Fast path: if the term contains NO reducible function
             // symbols anywhere (and the signature has no AC theories
@@ -574,6 +702,56 @@ impl MaudeHandle {
             if inner.sig.has_no_ac_operators()
                 && !term_has_reducible_sym(t, &inner.sig.reducible_fun_syms)
             {
+                return Ok(t.clone());
+            }
+            // Native normal-form fast path for the cases the cheap check
+            // above rejects (AC signatures, or terms containing reducible
+            // symbols).  `nf_via_haskell` (norm.rs) ports HS `nf'`
+            // (Norm.hs `nfViaHaskell`), which upstream asserts coincides
+            // with `nfViaMaude t = (t ==) <$> norm t` (`_nfCompare'`,
+            // Norm.hs:141-148) — `true` means no rewrite rule of this
+            // signature fires anywhere in `t`, so Maude's `reduce` is the
+            // identity on it.  Its st-rule arm uses the no-AC matcher,
+            // complete only for Ac/C-free rule LHSes — hence the
+            // `st_lhs_ac_free` gate (see `term_ac_c_free`).
+            //
+            // Returning `t.clone()` is byte-identical to the round-trip
+            // because both sides of the comparison are f_app-canonical:
+            // reduce inputs are rebuilt through the smart constructors
+            // (subst.rs `apply_vterm_map_changed` /
+            // `SubstView::apply_changed` route `FunSym::Ac`/`C` through
+            // `f_app_ac`/`f_app_c`), and Maude replies are reparsed
+            // through the SAME constructors (maude_parse.rs `build_app` →
+            // `f_app_ac`/`f_app_c`; maude_types.rs `mterm_to_lnterm` →
+            // `f_app`), so for a rewrite fixpoint the reparsed reply can
+            // only be `t` itself — Maude's transient AC print order cannot
+            // reach the result.  Mirrors the cheap fast path's
+            // conventions: no reduce-cache insert, no `norm_count` /
+            // cache-stat bump.
+            if inner.st_lhs_ac_free && crate::norm::nf_via_haskell(&inner.sig, t) {
+                // `TAM_RS_VERIFY_REDUCE_NF` oracle: ALSO run the real
+                // Maude round-trip this fast path elides and panic if
+                // Maude's answer differs from `t`.  Dead-cheap when
+                // unset; nothing reaches stdout.
+                if tamarin_utils::env_gate!("TAM_RS_VERIFY_REDUCE_NF") {
+                    let mt = lterm_to_mterm_global(t, &mut ctx);
+                    let mut cmd = b"reduce ".to_vec();
+                    cmd.extend(pp_mterm(&mt));
+                    cmd.extend_from_slice(b" .\n");
+                    let reply = inner.execute(&cmd)?;
+                    let mt_back = maude_parse::parse_reduce_reply(&reply)?;
+                    let mut next = 0;
+                    let maude_result =
+                        mterm_to_lnterm(&mt_back, &mut ctx, "z", &mut next);
+                    if maude_result != *t {
+                        panic!(
+                            "TAM_RS_VERIFY_REDUCE_NF: nf_via_haskell certified \
+                             a non-fixpoint as normal form — input {:?} but \
+                             Maude reduced it to {:?}",
+                            t, maude_result,
+                        );
+                    }
+                }
                 return Ok(t.clone());
             }
             let mt = lterm_to_mterm_global(t, &mut ctx);
@@ -588,7 +766,9 @@ impl MaudeHandle {
         let mut next = 0;
         let result = mterm_to_lnterm(&mt_back, &mut ctx, "z", &mut next);
         let mut inner = self.inner.lock().unwrap();
-        inner.reduce_cache.insert(t.clone(), result.clone());
+        inner.cache_stats.reduce_misses += 1;
+        inner.caches.reduce.lock().unwrap()
+            .insert(t.clone(), result.clone());
         Ok(result)
     }
 
@@ -614,16 +794,24 @@ impl MaudeHandle {
         }
         let key: Vec<(LNTerm, LNTerm)> = eqs.iter()
             .map(|e| (e.lhs.clone(), e.rhs.clone())).collect();
+        // Cache locks below are scoped to the single `get` / `insert`
+        // statement, strictly inside the inner IPC mutex and released
+        // before any Maude IPC (lock-order invariant on
+        // `SharedMaudeCaches`).
         {
-            let inner = self.inner.lock().unwrap();
-            if let Some(&hit) = inner.unifiable_cache.get(&key) {
+            let mut inner = self.inner.lock().unwrap();
+            let hit = inner.caches.unifiable.lock().unwrap()
+                .get(&key).copied();
+            if let Some(hit) = hit {
+                inner.cache_stats.unifiable_hits += 1;
                 return Ok(hit);
             }
         }
         let res = self.unify_at("unifiable::cache_miss", eqs)?;
         let answer = !res.is_empty();
         let mut inner = self.inner.lock().unwrap();
-        inner.unifiable_cache.insert(key, answer);
+        inner.cache_stats.unifiable_misses += 1;
+        inner.caches.unifiable.lock().unwrap().insert(key, answer);
         Ok(answer)
     }
 
@@ -827,7 +1015,7 @@ impl MaudeHandle {
         let mut inner = self.inner.lock().unwrap();
         let mut ctx = ConvCtx::new();
         let cmd = build_conj_eqs_cmd(b"unify in MSG : ", maude_eqs, &mut ctx);
-        // Raw-reply memo (see `reply_cache`): identical `unify in MSG` command
+        // Raw-reply memo (see `SharedMaudeCaches::reply`): identical `unify in MSG` command
         // bytes yield an identical reply, and the per-arm back-conversion below
         // still runs on every call, so a hit is bit-for-bit a real round-trip.
         let reply = inner.execute_memo(&cmd, |s| s.unify_count += 1)?;
@@ -965,7 +1153,7 @@ impl MaudeHandle {
         let mut inner = self.inner.lock().unwrap();
         let mut ctx = ConvCtx::new();
         let cmd = build_conj_eqs_cmd(b"variant unify in MSG : ", eqs, &mut ctx);
-        // Raw-reply memo (see `reply_cache`): same as the `unify` path — the
+        // Raw-reply memo (see `SharedMaudeCaches::reply`): same as the `unify` path — the
         // shared-`ctx` back-conversion below still runs per call, so caching the
         // `variant unify in MSG` reply bytes is transparent.
         let reply = inner.execute_memo(&cmd, |s| s.unify_count += 1)?;
@@ -1285,7 +1473,7 @@ impl MaudeHandle {
         let mut cmd = b"get variants in MSG : ".to_vec();
         cmd.extend(pp_mterm(&mt));
         cmd.extend_from_slice(b" .\n");
-        // Raw-reply memo (see `reply_cache`): `get variants in MSG` replies are
+        // Raw-reply memo (see `SharedMaudeCaches::reply`): `get variants in MSG` replies are
         // command-local and deterministic, and each variant is back-converted
         // on its own `ctx` clone below, so a cached reply is consumed exactly
         // like a fresh one.  This is the biggest single lever on variant-heavy
@@ -1639,17 +1827,57 @@ fn msubst_to_lnsubst_with_avoid(
 // handles a given task.
 // ---------------------------------------------------------------------------
 
-/// Pool of M independent Maude subprocesses, all initialised with the
-/// same `MaudeSig`.  Workers borrow a handle via `acquire()`; the
+/// Mutable state of a `MaudePool`, guarded by a single `Mutex`.
+struct PoolState {
+    /// Idle members available for immediate `pop`.  Released handles are
+    /// pushed back here and reused LIFO, concentrating queries onto the
+    /// warm (already-spawned) members.
+    free: Vec<MaudeHandle>,
+    /// Number of members brought into existence so far (in `free` plus the
+    /// ones currently borrowed).  Bounded by `size`; grown lazily by
+    /// `acquire`/`try_acquire` when no idle member is available.
+    spawned: usize,
+}
+
+/// Pool of up to `size` independent Maude subprocesses, all initialised
+/// with the same `MaudeSig`.  Workers borrow a handle via `acquire()`; the
 /// returned `PooledMaude` releases back to the pool on drop.
 ///
-/// Internally a `Mutex<Vec<MaudeHandle>>` LIFO works fine — the pool
-/// is small (≤ num_cpus) and `acquire` is rare on the hot path (it
-/// happens once per parallel task, not per Maude call).
+/// Members spawn LAZILY: `new` starts exactly one eagerly (so a failure to
+/// launch Maude surfaces as an `Err` from `new`), and the rest are spawned
+/// on demand the first time `acquire`/`try_acquire` finds no idle member
+/// and the target `size` is not yet reached.  A theory that draws few
+/// members never pays for the ones it doesn't use — Maude startup is
+/// ~30ms/process (spawn + banner + settings + theory-module load).
+///
+/// Released handles are reused LIFO (see `PoolState::free`), so under light
+/// contention the same warm member serves repeatedly and the lazy members
+/// stay unspawned.  Pool members are interchangeable: identical `sig`, and
+/// each draw site seeds its own fresh-counter (`with_fresh_counter_next` /
+/// `with_fresh_counter_from`), so which member — and how many — handle a
+/// task is output-invariant.
+///
+/// Internally a `Mutex<PoolState>` LIFO works fine — the pool is small
+/// (≤ num_cpus) and `acquire` is rare on the hot path (it happens once per
+/// parallel task, not per Maude call).
 pub struct MaudePool {
-    free: Mutex<Vec<MaudeHandle>>,
+    state: Mutex<PoolState>,
     notify: Condvar,
+    /// Target member count — the ceiling on lazy growth.  Constant after
+    /// construction; `size()` returns this, NOT the number spawned so far.
     size: usize,
+    /// Maude binary path, retained for lazy spawns.
+    path: String,
+    /// Theory signature, retained for lazy spawns; cloned per spawn exactly
+    /// as the eager first member was.
+    sig: MaudeSig,
+    /// The session's shared memo caches, retained for lazy spawns: every
+    /// member — the eager first and each lazy one — consults the same
+    /// `SharedMaudeCaches` the pool was constructed with.
+    caches: Arc<SharedMaudeCaches>,
+    /// Set once, the first time a lazy spawn fails, to de-duplicate the
+    /// warning (see `warn_spawn_failed`).
+    spawn_warned: AtomicBool,
 }
 
 impl std::fmt::Debug for MaudePool {
@@ -1659,46 +1887,128 @@ impl std::fmt::Debug for MaudePool {
 }
 
 impl MaudePool {
-    /// Spawn `n` Maude subprocesses with `sig`.  Returns Err if any
-    /// fail to start; partial pool is dropped on the error path (each
-    /// `MaudeHandle`'s `Drop` reaps its subprocess).
-    pub fn new(path: &str, sig: MaudeSig, n: usize) -> Result<Self, MaudeError> {
+    /// Construct a pool targeting `n` Maude subprocesses with `sig`, spawning
+    /// exactly ONE eagerly.  Returns `Err` if that first process fails to
+    /// start (the caller warns and falls back to the single shared Maude);
+    /// the remaining `n - 1` members spawn on demand in `acquire` /
+    /// `try_acquire`.  Every member consults `caches`; the session caller
+    /// (run.rs) passes the same instance to its `file_maude` handle so the
+    /// whole theory session shares one memo set (see `SharedMaudeCaches`).
+    pub fn new(
+        path: &str,
+        sig: MaudeSig,
+        n: usize,
+        caches: Arc<SharedMaudeCaches>,
+    ) -> Result<Self, MaudeError> {
         assert!(n >= 1, "MaudePool::new requires n >= 1");
-        let mut handles = Vec::with_capacity(n);
-        for _ in 0..n {
-            let h = MaudeHandle::start(path, sig.clone())?;
-            handles.push(h);
-        }
+        let first = MaudeHandle::start_with_caches(
+            path, sig.clone(), Arc::clone(&caches))?;
         Ok(MaudePool {
-            free: Mutex::new(handles),
+            state: Mutex::new(PoolState { free: vec![first], spawned: 1 }),
             notify: Condvar::new(),
             size: n,
+            path: path.to_string(),
+            sig,
+            caches,
+            spawn_warned: AtomicBool::new(false),
         })
     }
 
-    /// Block until a handle is free, then return it.  The handle is
-    /// returned to the pool when the returned `PooledMaude` is dropped.
-    pub fn acquire(&self) -> PooledMaude<'_> {
-        let mut free = self.free.lock().unwrap();
-        loop {
-            if let Some(h) = free.pop() {
-                return PooledMaude { pool: self, inner: Some(h) };
-            }
-            free = self.notify.wait(free).unwrap();
+    /// Warn (once per pool) that a lazy member failed to start.  The pool
+    /// keeps serving the members already spawned (≥ 1 always exists), so
+    /// this is a soft degradation, not a fatal error.
+    fn warn_spawn_failed(&self, e: &MaudeError) {
+        if !self.spawn_warned.swap(true, Ordering::Relaxed) {
+            eprintln!("[warn] MaudePool: lazy Maude spawn failed ({}); \
+                continuing with the members already started", e);
         }
     }
 
-    /// Non-blocking acquire: return a free handle if one is immediately
-    /// available, else `None`.  Used by the within-lemma fan-out so that
-    /// nested (lemma-level B1 + within-lemma) parallelism can't deadlock
-    /// waiting on a pool that the outer lemma tasks have fully drained.
-    pub fn try_acquire(&self) -> Option<PooledMaude<'_>> {
-        let mut free = self.free.lock().unwrap();
-        free.pop().map(|h| PooledMaude { pool: self, inner: Some(h) })
+    /// Block until a handle is available, then return it.  Pops an idle
+    /// member if one is free; otherwise spawns a new member on demand (up to
+    /// `size`) OUTSIDE the lock and hands it back directly — it is
+    /// immediately borrowed and never enters `free`.  If a lazy spawn fails,
+    /// the reserved slot is released and the caller falls back to waiting
+    /// for a release; at least one live member always exists, so that wait
+    /// terminates.  The handle is returned to the pool when the
+    /// `PooledMaude` is dropped.
+    pub fn acquire(&self) -> PooledMaude<'_> {
+        // Cleared on a spawn failure: this call then stops attempting lazy
+        // spawns and relies on releases, so a persistently failing spawn
+        // can't spin the loop hot.
+        let mut try_spawn = true;
+        let mut state = self.state.lock().unwrap();
+        loop {
+            if let Some(h) = state.free.pop() {
+                return PooledMaude { pool: self, inner: Some(h) };
+            }
+            if try_spawn && state.spawned < self.size {
+                // Reserve the slot under the lock, then spawn without it so
+                // other acquirers aren't blocked for the ~30ms startup.
+                state.spawned += 1;
+                drop(state);
+                match MaudeHandle::start_with_caches(
+                    &self.path, self.sig.clone(), Arc::clone(&self.caches),
+                ) {
+                    Ok(h) => return PooledMaude { pool: self, inner: Some(h) },
+                    Err(e) => {
+                        try_spawn = false;
+                        state = self.state.lock().unwrap();
+                        state.spawned -= 1;
+                        self.warn_spawn_failed(&e);
+                        // A member may have been released while the lock was
+                        // dropped for the spawn attempt — its notify_one had
+                        // no waiter and was lost.  Re-check `free` under this
+                        // relock before waiting, or the release is missed and
+                        // this acquire could sleep forever.
+                        continue;
+                    }
+                }
+            }
+            // Pool at target size (or spawning disabled) and nothing idle:
+            // wait for a release.  Atomic with the lock, so no release can
+            // slip between the `free` check above and this wait.
+            state = self.notify.wait(state).unwrap();
+        }
     }
 
-    /// Number of subprocesses this pool was constructed with.
+    /// Non-blocking acquire: pop an idle member, else spawn a new one on
+    /// demand (up to `size`), else return `None`.  Used by the within-lemma
+    /// fan-out so that nested (lemma-level B1 + within-lemma) parallelism
+    /// can't deadlock waiting on a pool that the outer lemma tasks have
+    /// fully drained: this NEVER waits on the condvar.  It may block ~30ms
+    /// while a lazy member spawns — acceptable, as it still cannot wait on a
+    /// drained pool.
+    pub fn try_acquire(&self) -> Option<PooledMaude<'_>> {
+        let mut state = self.state.lock().unwrap();
+        if let Some(h) = state.free.pop() {
+            return Some(PooledMaude { pool: self, inner: Some(h) });
+        }
+        if state.spawned < self.size {
+            state.spawned += 1;
+            drop(state);
+            match MaudeHandle::start_with_caches(
+                &self.path, self.sig.clone(), Arc::clone(&self.caches),
+            ) {
+                Ok(h) => return Some(PooledMaude { pool: self, inner: Some(h) }),
+                Err(e) => {
+                    let mut relock = self.state.lock().unwrap();
+                    relock.spawned -= 1;
+                    self.warn_spawn_failed(&e);
+                    return None;
+                }
+            }
+        }
+        None
+    }
+
+    /// Target subprocess count this pool was constructed with — the ceiling
+    /// on lazy growth, NOT the number spawned so far (see `spawned`).
     pub fn size(&self) -> usize { self.size }
+
+    /// Number of members actually spawned so far (≤ `size`).  Grows lazily
+    /// as `acquire`/`try_acquire` demand members beyond the eager first one.
+    pub fn spawned(&self) -> usize { self.state.lock().unwrap().spawned }
 }
 
 /// A borrowed Maude handle from a `MaudePool`.  `Deref`s to
@@ -1732,8 +2042,10 @@ impl<'a> std::ops::Deref for PooledMaude<'a> {
 impl<'a> Drop for PooledMaude<'a> {
     fn drop(&mut self) {
         if let Some(h) = self.inner.take() {
-            let mut free = self.pool.free.lock().unwrap();
-            free.push(h);
+            let mut state = self.pool.state.lock().unwrap();
+            // LIFO reuse: the most recently released (warmest) member is the
+            // next one popped, keeping queries concentrated on warm members.
+            state.free.push(h);
             // Only one waiter can take the handle we just pushed.
             self.pool.notify.notify_one();
         }
@@ -1871,7 +2183,8 @@ mod tests {
     #[test]
     fn pool_acquire_release_size() {
         let path = match maude_path() { Some(p) => p, None => { eprintln!("skipping: no maude"); return; } };
-        let pool = MaudePool::new(&path, pair_maude_sig(), 3).expect("pool");
+        let pool = MaudePool::new(&path, pair_maude_sig(), 3,
+            Arc::new(SharedMaudeCaches::default())).expect("pool");
         assert_eq!(pool.size(), 3);
         // Acquire all three, then release them; second round should
         // still succeed (handles must have been returned).
@@ -1886,11 +2199,32 @@ mod tests {
         drop(a); drop(b); drop(c);
     }
 
+    /// Sequential acquire/release never grows the pool past its eager first
+    /// member: each release returns the warm member to `free`, so the next
+    /// acquire reuses it (LIFO) instead of spawning a lazy one.  `size()`
+    /// keeps reporting the TARGET, while `spawned()` stays at 1.
+    #[test]
+    fn pool_sequential_reuse_stays_at_one_spawned() {
+        let path = match maude_path() { Some(p) => p, None => { eprintln!("skipping: no maude"); return; } };
+        let pool = MaudePool::new(&path, pair_maude_sig(), 4,
+            Arc::new(SharedMaudeCaches::default())).expect("pool");
+        assert_eq!(pool.size(), 4);
+        assert_eq!(pool.spawned(), 1, "new() spawns exactly one member eagerly");
+        for _ in 0..6 {
+            let g = pool.acquire();
+            drop(g);
+        }
+        assert_eq!(pool.spawned(), 1,
+            "sequential acquire/release reuses the warm member; no lazy spawns");
+        assert_eq!(pool.size(), 4, "size() still reports the target");
+    }
+
     #[test]
     fn pool_parallel_reduce_returns_correct_results() {
         use std::sync::Arc;
         let path = match maude_path() { Some(p) => p, None => { eprintln!("skipping: no maude"); return; } };
-        let pool = Arc::new(MaudePool::new(&path, pair_maude_sig(), 2).expect("pool"));
+        let pool = Arc::new(MaudePool::new(&path, pair_maude_sig(), 2,
+            Arc::new(SharedMaudeCaches::default())).expect("pool"));
         let mut handles = Vec::new();
         for i in 0u64..6 {
             let pool = pool.clone();
@@ -1913,7 +2247,8 @@ mod tests {
     #[test]
     fn pool_blocks_when_exhausted() {
         let path = match maude_path() { Some(p) => p, None => { eprintln!("skipping: no maude"); return; } };
-        let pool = std::sync::Arc::new(MaudePool::new(&path, pair_maude_sig(), 1).expect("pool"));
+        let pool = std::sync::Arc::new(MaudePool::new(&path, pair_maude_sig(), 1,
+            Arc::new(SharedMaudeCaches::default())).expect("pool"));
         let g = pool.acquire();
         // Spawn a thread that should block on acquire() until we drop g.
         let pool_c = pool.clone();
@@ -1928,6 +2263,72 @@ mod tests {
         // After releasing, the worker should wake up promptly.
         rx.recv_timeout(std::time::Duration::from_secs(5)).expect("worker should unblock");
         t.join().unwrap();
+    }
+
+    /// Two handles on one `SharedMaudeCaches`: a `reduce` computed on
+    /// handle A is a shared-cache hit on handle B, eliding B's subprocess
+    /// round-trip entirely.  `norm_count` bumps only on a real round-trip
+    /// (`reduce` returns before the bump on the cache-hit, no-reducible,
+    /// and native normal-form fast paths), so B's count staying at 0
+    /// proves the hit.  The XOR signature has an AC operator (blocking the
+    /// no-reducible fast path) and `x XOR x` has duplicate args — non-NF
+    /// per `invalid_xor`, blocking the native NF fast path — so A's reduce
+    /// genuinely goes to Maude.
+    #[test]
+    fn shared_caches_elide_round_trip_across_handles() {
+        let path = match maude_path() { Some(p) => p, None => { eprintln!("skipping: no maude"); return; } };
+        let sig = crate::maude_sig::xor_maude_sig();
+        let caches = Arc::new(SharedMaudeCaches::default());
+        let a = MaudeHandle::start_with_caches(
+            &path, sig.clone(), Arc::clone(&caches)).expect("start a");
+        let b = MaudeHandle::start_with_caches(
+            &path, sig, Arc::clone(&caches)).expect("start b");
+        let x = LVar::new("x", LSort::Msg, 0);
+        let t = crate::term::f_app_ac(
+            crate::function_symbols::AcSym::Xor,
+            vec![
+                crate::term::Term::Lit(Lit::Var(x.clone())),
+                crate::term::Term::Lit(Lit::Var(x)),
+            ],
+        );
+        let ra = a.reduce(&t).expect("reduce on a");
+        assert_eq!(a.stats().norm_count, 1,
+            "handle A performed the real round-trip");
+        let rb = b.reduce(&t).expect("reduce on b");
+        assert_eq!(rb, ra, "shared hit returns the value A computed");
+        assert_eq!(b.stats().norm_count, 0,
+            "B's reduce was a shared-cache hit — no IPC round-trip");
+    }
+
+    /// Native normal-form fast path on an AC signature: an already-normal
+    /// XOR term is certified by `nf_via_haskell` and returned unchanged
+    /// with NO Maude round-trip (`norm_count` stays 0), while a reducible
+    /// term (duplicate XOR args) fails the NF check and still round-trips
+    /// to Maude's reduced result.
+    #[test]
+    fn reduce_nf_fast_path_on_ac_signature() {
+        let path = match maude_path() { Some(p) => p, None => { eprintln!("skipping: no maude"); return; } };
+        let h = MaudeHandle::start(&path, crate::maude_sig::xor_maude_sig())
+            .expect("start");
+        let mk = |name: &str| -> LNTerm {
+            crate::term::Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)))
+        };
+        let nf = crate::term::f_app_ac(
+            crate::function_symbols::AcSym::Xor, vec![mk("x"), mk("y")]);
+        let r = h.reduce(&nf).expect("reduce NF term");
+        assert_eq!(r, nf, "normal-form term comes back unchanged");
+        assert_eq!(h.stats().norm_count, 0,
+            "NF-certified reduce took the native path — no IPC round-trip");
+        // `x XOR x` has duplicate args (`invalid_xor`) — not NF; the real
+        // round-trip runs and Maude cancels the pair to `zero`.
+        let red = crate::term::f_app_ac(
+            crate::function_symbols::AcSym::Xor, vec![mk("x"), mk("x")]);
+        let r2 = h.reduce(&red).expect("reduce reducible term");
+        assert_eq!(h.stats().norm_count, 1,
+            "reducible term performed the real round-trip");
+        let zero: LNTerm = crate::term::f_app_no_eq(
+            crate::function_symbols::zero_sym(), vec![]);
+        assert_eq!(r2, zero, "x XOR x reduces to zero");
     }
 
     // Pattern multiset `codeOther ++ <a,b>` (codeOther is the only pattern

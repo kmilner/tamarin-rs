@@ -68,7 +68,7 @@ fn collect_fact_vars(
     f: &tamarin_theory::sapic::SapicLNFact,
     out: &mut std::collections::BTreeSet<SapicLVar>,
 ) {
-    for t in &f.terms {
+    for t in f.terms.iter() {
         collect_term_vars(t, out);
     }
 }

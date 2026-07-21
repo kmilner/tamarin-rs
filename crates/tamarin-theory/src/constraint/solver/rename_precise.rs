@@ -371,7 +371,7 @@ pub fn rename_precise_system(sys: &mut System) {
     let apply_fact = |fa: crate::fact::LNFact| -> crate::fact::LNFact {
         // Var→var rename is a frees-changing rebuild:
         // recompute the bloom from the renamed terms — NEVER copy `fa`'s.
-        let terms: Vec<LNTerm> = fa.terms.into_iter().map(&apply_term).collect();
+        let terms: Vec<LNTerm> = fa.terms.iter().cloned().map(&apply_term).collect();
         // Computing constructor — recomputes the bloom from the renamed terms
         // internally (never copies `fa`'s stale bloom).
         crate::fact::Fact::fresh_annotated(fa.tag, fa.annotations, terms)

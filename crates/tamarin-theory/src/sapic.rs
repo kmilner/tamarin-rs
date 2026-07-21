@@ -360,7 +360,7 @@ pub fn frees_sapic_term(t: &SapicTerm) -> Vec<SapicLVar> {
 /// dedup). See [`frees_sapic_term`] for why order/duplicates matter.
 pub fn frees_sapic_fact(f: &Fact<SapicTerm>) -> Vec<SapicLVar> {
     let mut out = Vec::new();
-    for t in &f.terms {
+    for t in f.terms.iter() {
         out.extend(frees_sapic_term(t));
     }
     out

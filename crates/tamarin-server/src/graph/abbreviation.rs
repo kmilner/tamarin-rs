@@ -289,7 +289,7 @@ fn dump_rule_info(
 fn dump_fact(buf: &mut String, fa: &LNFact) {
     use std::fmt::Write as _;
     let _ = write!(buf, "{}", tamarin_theory::fact::fact_tag_name(&fa.tag));
-    for t in &fa.terms {
+    for t in fa.terms.iter() {
         let _ = write!(buf, "{} ", pretty_lnterm(t));
     }
 }
@@ -336,7 +336,7 @@ fn fact_terms(fa: &LNFact, out: &mut Vec<LNTerm>) {
     // Mirror `getFactTerms fact = filter (not . isPair) $ concatMap getSubTerms
     // $ factTerms fact`, where `getSubTerms t = t : ts` collects the term and
     // its IMMEDIATE arguments only (one level deep, not recursive).
-    for t in &fa.terms {
+    for t in fa.terms.iter() {
         sub_terms_no_pair(t, out);
     }
 }

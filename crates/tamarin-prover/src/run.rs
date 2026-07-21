@@ -51,7 +51,7 @@ use tamarin_parser::wf::{
     after_public_names_topics, insert_wf_before, WF_AFTER_CHECK_GUARDED,
     WF_AFTER_CHECK_TERMS, WF_AFTER_FACT_LHS, WF_AFTER_VARIANTS, WF_TOPIC_ORDER,
 };
-use tamarin_term::maude_proc::{MaudeHandle, MaudePool};
+use tamarin_term::maude_proc::{MaudeHandle, MaudePool, SharedMaudeCaches};
 use tamarin_theory::elaborate::elaborate;
 use tamarin_theory::macro_expand::macro_expanded_clone;
 
@@ -951,8 +951,16 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         //   - the dynamic Message Derivation Check;
         //   - the per-lemma prove loop.
         let maude_path = args.maude_path.clone().unwrap_or_else(default_maude_path);
+        // One memo-cache set for this theory session, shared by
+        // `file_maude` and every `file_maude_pool` member: an identical
+        // query issued from any of these subprocesses reuses the memoized
+        // result.  See `SharedMaudeCaches` (maude_proc.rs) for the
+        // byte-parity argument and lock-order invariant.
+        let session_maude_caches =
+            std::sync::Arc::new(SharedMaudeCaches::default());
         let file_maude: Option<MaudeHandle> = if !args.parse_only {
-            MaudeHandle::start(&maude_path, maude_sig.clone()).ok()
+            MaudeHandle::start_with_caches(&maude_path, maude_sig.clone(),
+                std::sync::Arc::clone(&session_maude_caches)).ok()
         } else {
             None
         };
@@ -971,13 +979,15 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         //
         // The pool is kept SEPARATE from `file_maude`: sequential paths
         // (main `prove_lemma` loop, derivation checks) keep using
-        // `file_maude` (counter state and caches stay coherent across
-        // lemmas); the pool is consumed only inside `par_iter` map
-        // closures.
+        // `file_maude` (counter state stays coherent across lemmas); the
+        // pool is consumed only inside `par_iter` map closures.  Both
+        // consult `session_maude_caches`, so a memo result computed on
+        // any of the session's subprocesses is visible to all of them.
         let pool_size = args.effective_maude_processes();
         let file_maude_pool: Option<std::sync::Arc<MaudePool>> =
             if !args.parse_only && pool_size >= 2 {
-                match MaudePool::new(&maude_path, maude_sig.clone(), pool_size) {
+                match MaudePool::new(&maude_path, maude_sig.clone(), pool_size,
+                    std::sync::Arc::clone(&session_maude_caches)) {
                     Ok(p) => Some(std::sync::Arc::new(p)),
                     Err(e) => {
                         if !args.quiet {

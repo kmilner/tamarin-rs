@@ -300,7 +300,7 @@ fn has_non_normal_terms(ctx: &ProofContext, sys: &System) -> bool {
 
     for (_, rule) in sys.nodes.iter() {
         for f in rule.premises.iter().chain(&rule.conclusions).chain(&rule.actions) {
-            for t in &f.terms {
+            for t in f.terms.iter() {
                 if any_non_nf(&sig, irreducible, t) { return true; }
             }
         }
@@ -1743,7 +1743,7 @@ pub fn maybe_non_normal_terms_nodes(
         = std::collections::BTreeSet::new();
     for (_, rule) in nodes.iter() {
         for f in rule.premises.iter().chain(&rule.conclusions).chain(&rule.actions) {
-            for t in &f.terms {
+            for t in f.terms.iter() {
                 maybe_not_nf_subterms(irreducible, t, &mut candidates);
             }
         }

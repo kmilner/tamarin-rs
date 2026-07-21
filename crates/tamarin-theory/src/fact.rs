@@ -13,6 +13,7 @@
 //! live Maude unification bridge (`maude.unify_at`).
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use tamarin_term::lterm::{HasFrees, LNTerm, LVar};
 
@@ -95,7 +96,7 @@ pub fn fact_fingerprints<T: HasFrees>(terms: &[T]) -> (u64, u64) {
 pub struct Fact<T> {
     pub tag: FactTag,
     pub annotations: BTreeSet<FactAnnotation>,
-    pub terms: Vec<T>,
+    pub terms: Arc<[T]>,
     /// Cached variable fingerprint over `terms`.  `u64::MAX` =
     /// "unknown, always descend" — the never-wrong-skip default (a fact that
     /// reaches the skip with `MAX` simply descends: `MAX & dom != 0` while
@@ -170,7 +171,7 @@ impl<T> Fact<T> {
     /// output reaches `subst_system_once`, prefer [`Fact::fresh`] so the
     /// fast-path fires (a `MAX` bloom is SOUND but never skips).
     pub fn new(tag: FactTag, terms: Vec<T>) -> Self {
-        Fact { tag, annotations: BTreeSet::new(), terms, bloom: u64::MAX, max_var: u64::MAX }
+        Fact { tag, annotations: BTreeSet::new(), terms: terms.into(), bloom: u64::MAX, max_var: u64::MAX }
     }
     pub fn with_annotations(mut self, ann: BTreeSet<FactAnnotation>) -> Self {
         self.annotations = ann;
@@ -197,11 +198,14 @@ impl<T> Fact<T> {
     /// carries no `HasFrees` bound).  A `MAX` bloom is a safe perf-miss and a
     /// `MAX` max_var falls back to the walk; if a hot LNFact producer routes
     /// through `map`, recompute via [`Fact::recompute_bloom`].
-    pub fn map<U, F: FnMut(T) -> U>(self, f: F) -> Fact<U> {
+    pub fn map<U, F: FnMut(T) -> U>(self, f: F) -> Fact<U>
+    where
+        T: Clone,
+    {
         Fact {
             tag: self.tag,
             annotations: self.annotations,
-            terms: self.terms.into_iter().map(f).collect(),
+            terms: self.terms.iter().cloned().map(f).collect(),
             bloom: u64::MAX,
             max_var: u64::MAX,
         }
@@ -231,7 +235,7 @@ impl<T> Fact<T> {
         Ok(Fact {
             tag: self.tag.clone(),
             annotations: self.annotations.clone(),
-            terms: terms?,
+            terms: terms?.into(),
             bloom: u64::MAX,
             max_var: u64::MAX,
         })
@@ -245,7 +249,7 @@ impl<T: HasFrees> Fact<T> {
     /// reused on every unchanged pass the fact survives (P1 amortization).
     pub fn fresh(tag: FactTag, terms: Vec<T>) -> Self {
         let (bloom, max_var) = fact_fingerprints(&terms);
-        Fact { tag, annotations: BTreeSet::new(), terms, bloom, max_var }
+        Fact { tag, annotations: BTreeSet::new(), terms: terms.into(), bloom, max_var }
     }
     /// Bloom-computing constructor with annotations.
     pub fn fresh_annotated(
@@ -254,7 +258,7 @@ impl<T: HasFrees> Fact<T> {
         terms: Vec<T>,
     ) -> Self {
         let (bloom, max_var) = fact_fingerprints(&terms);
-        Fact { tag, annotations, terms, bloom, max_var }
+        Fact { tag, annotations, terms: terms.into(), bloom, max_var }
     }
     /// Recompute both cached fingerprints (`bloom` and `max_var`) from the
     /// CURRENT terms.  Call after any external `.terms` mutation (never leave a
@@ -270,9 +274,9 @@ impl<T: HasFrees> Fact<T> {
 // HasFrees instance — visit/map over the fact's term arguments.
 // =============================================================================
 
-impl<T: HasFrees> HasFrees for Fact<T> {
+impl<T: HasFrees + Clone> HasFrees for Fact<T> {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
-        for t in &self.terms { t.for_each_free(f); }
+        for t in self.terms.iter() { t.for_each_free(f); }
     }
     fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
         // Freshen / rule-rename producer: this renames vars, so
@@ -280,9 +284,9 @@ impl<T: HasFrees> HasFrees for Fact<T> {
         // fingerprints from the renamed terms — NEVER copy `self`'s (would
         // fingerprint the old var names → possible wrong skip / stale max).
         let terms: Vec<T> =
-            self.terms.into_iter().map(|t| t.map_free_with(f, monotone)).collect();
+            self.terms.iter().map(|t| t.clone().map_free_with(f, monotone)).collect();
         let (bloom, max_var) = fact_fingerprints(&terms);
-        Fact { tag: self.tag, annotations: self.annotations, terms, bloom, max_var }
+        Fact { tag: self.tag, annotations: self.annotations, terms: terms.into(), bloom, max_var }
     }
 }
 
@@ -415,7 +419,7 @@ pub fn proto_fact(mult: Multiplicity, name: &str, terms: Vec<LNTerm>) -> LNFact 
 /// (arity ≠ 1) panics, mirroring HS `errMalformed`.
 pub fn proto_or_in_fact_view(fa: &LNFact) -> Option<Vec<LNTerm>> {
     match &fa.tag {
-        FactTag::Proto(..) => Some(fa.terms.clone()),
+        FactTag::Proto(..) => Some(fa.terms.to_vec()),
         FactTag::In => match &fa.terms[..] {
             [m] => Some(vec![m.clone()]),
             _ => panic!("proto_or_in_fact_view: malformed In fact"),
@@ -428,7 +432,7 @@ pub fn proto_or_in_fact_view(fa: &LNFact) -> Option<Vec<LNTerm>> {
 /// (Fact.hs:339-344).
 pub fn proto_or_out_fact_view(fa: &LNFact) -> Option<Vec<LNTerm>> {
     match &fa.tag {
-        FactTag::Proto(..) => Some(fa.terms.clone()),
+        FactTag::Proto(..) => Some(fa.terms.to_vec()),
         FactTag::Out => match &fa.terms[..] {
             [m] => Some(vec![m.clone()]),
             _ => panic!("proto_or_out_fact_view: malformed Out fact"),
@@ -618,7 +622,7 @@ mod tests {
             let b2 = fact_fingerprints(&fa.terms).0;
             assert_eq!(b, b2);
             // A structurally-equal rebuild gets an equal bloom.
-            let fa2 = Fact::fresh(fa.tag.clone(), fa.terms.clone());
+            let fa2 = Fact::fresh(fa.tag.clone(), fa.terms.to_vec());
             assert_eq!(fa.bloom(), fa2.bloom());
         }
     }
@@ -645,7 +649,7 @@ mod tests {
             let dom_bloom = subst.dom().fold(0u64, |b, v| b | var_bit(v));
             if fa.bloom() & dom_bloom == 0 {
                 fired += 1;
-                for t in &fa.terms {
+                for t in fa.terms.iter() {
                     assert!(apply_vterm_changed(&subst, t).is_none(),
                         "skip fired but subst changed a term — UNSOUND: fact={fa:?}");
                 }
@@ -736,7 +740,7 @@ mod tests {
     fn recompute_bloom_refreshes_both_fingerprints() {
         let mut fa = Fact::fresh(FactTag::Out, vec![mv("x", 2)]);
         assert_eq!(fa.max_var_cached(), Some(2));
-        fa.terms = vec![mv("y", 11), mv("z", 4)];
+        fa.terms = vec![mv("y", 11), mv("z", 4)].into();
         fa.recompute_bloom();
         assert_eq!(fa.max_var_cached(), Some(11));
         assert_eq!(fa.bloom(), fact_fingerprints(&fa.terms).0);
@@ -761,7 +765,7 @@ mod tests {
         for _ in 0..2000 {
             let fa = rand_fact(&mut r);
             let mut walked = 0u64;
-            for t in &fa.terms { term_max_idx(t, &mut walked); }
+            for t in fa.terms.iter() { term_max_idx(t, &mut walked); }
             assert_eq!(fa.max_var_cached(), Some(walked),
                 "cached max must equal the per-term walk — fact={fa:?}");
         }
