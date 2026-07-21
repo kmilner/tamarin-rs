@@ -1641,7 +1641,7 @@ impl System {
     pub fn insert_lemma(&mut self, l: Guarded) {
         match l {
             Guarded::Conj(items) => {
-                for item in items { self.insert_lemma(item); }
+                for item in items.iter() { self.insert_lemma(item.clone()); }
             }
             other => {
                 if !crate::guarded::stores_contains(&self.lemmas, &other) {
@@ -2140,7 +2140,7 @@ mod tests {
         });
         let l1 = crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(mkvar("i"))));
         let l2 = crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(mkvar("j"))));
-        s.insert_lemma(crate::guarded::Guarded::Conj(vec![l1.clone(), l2.clone()]));
+        s.insert_lemma(crate::guarded::Guarded::Conj(vec![l1.clone(), l2.clone()].into()));
         assert_eq!(s.lemmas.len(), 2);
         assert!(crate::guarded::stores_contains(&s.lemmas, &l1));
         assert!(crate::guarded::stores_contains(&s.lemmas, &l2));

@@ -651,7 +651,7 @@ fn eval_formula_atoms_pass(red: &mut Reduction) -> ChangeIndicator {
         // Haskell jumps straight to the Premise.
         if let Guarded::Disj(items) = &fm {
             let disj_goal = crate::constraint::constraints::Goal::Disj(
-                crate::constraint::constraints::Disj::new(items.clone()));
+                crate::constraint::constraints::Disj::new(items.to_vec()));
             for (g, st) in red.sys.goals_mut().iter_mut() {
                 if g == &disj_goal && !st.solved {
                     st.solved = true;
@@ -1076,7 +1076,7 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
                 // build the `zip [0..] (reverse xs)` substitution, walk
                 // guards + body replacing Bound → Free.
                 let mut xs: Vec<tamarin_parser::ast::VarSpec> = Vec::with_capacity(vars.len());
-                for b in vars {
+                for b in vars.iter() {
                     xs.push(tamarin_parser::ast::VarSpec {
                         name: b.name.clone(),
                         idx: rename_baseline,
@@ -5105,7 +5105,7 @@ mod tests {
             mkvar_idx("j", 0),
         )));
         sys.invalidate_max_var_idx_cache();
-        sys.formulas_mut().push(std::sync::Arc::new(crate::guarded::Guarded::Conj(vec![a1.clone(), a2.clone()])));
+        sys.formulas_mut().push(std::sync::Arc::new(crate::guarded::Guarded::Conj(vec![a1.clone(), a2.clone()].into())));
         let mut r = Reduction::new(&ctx, sys);
         simplify_system(&mut r);
         // The Conj should have been removed from the open formula set.
@@ -5145,9 +5145,9 @@ mod tests {
         // Wrap a Disj inside a Conj so the outer formula is reducible
         // (Conj is) — reduce_formulas will trip on it and decompose
         // the Disj inside.
-        let disj = crate::guarded::Guarded::Disj(vec![a1, a2]);
+        let disj = crate::guarded::Guarded::Disj(vec![a1, a2].into());
         sys.invalidate_max_var_idx_cache();
-        sys.formulas_mut().push(std::sync::Arc::new(crate::guarded::Guarded::Conj(vec![disj])));
+        sys.formulas_mut().push(std::sync::Arc::new(crate::guarded::Guarded::Conj(vec![disj].into())));
         let mut r = Reduction::new(&ctx, sys);
         simplify_system(&mut r);
         // After decomposition, a Goal::Disj should exist.

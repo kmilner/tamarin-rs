@@ -667,10 +667,10 @@ fn guarded_for_each_free(g: &crate::guarded::Guarded, f: &mut dyn FnMut(&LVar)) 
     match g {
         Guarded::Atom(a) => atom_for_each_free(a, f),
         Guarded::Disj(xs) | Guarded::Conj(xs) => {
-            for x in xs { guarded_for_each_free(x, f); }
+            for x in xs.iter() { guarded_for_each_free(x, f); }
         }
         Guarded::GGuarded { guards, body, .. } => {
-            for a in guards { atom_for_each_free(a, f); }
+            for a in guards.iter() { atom_for_each_free(a, f); }
             guarded_for_each_free(body, f);
         }
     }
@@ -691,10 +691,10 @@ fn atom_for_each_free(a: &crate::guarded::GAtom, f: &mut dyn FnMut(&LVar)) {
             // in visit order, so the timepoint must be walked first to
             // match HS's idx assignment.
             term_for_each_free(t, f);
-            for arg in &fa.args { term_for_each_free(arg, f); }
+            for arg in fa.args.iter() { term_for_each_free(arg, f); }
         }
         GAtom::Last(t) => term_for_each_free(t, f),
-        GAtom::Pred(fa) => { for arg in &fa.args { term_for_each_free(arg, f); } }
+        GAtom::Pred(fa) => { for arg in fa.args.iter() { term_for_each_free(arg, f); } }
     }
 }
 

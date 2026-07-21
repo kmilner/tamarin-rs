@@ -391,14 +391,39 @@ impl Source {
             Some(v) => v.clone(),
             None => {
                 drop(g);
-                let init = initial_source_cases(&self.goal, ctx);
-                let init_list: Vec<(Vec<String>, System)> = init.into_iter()
-                    .map(|(n, s)| (string_to_name_list(&n), s))
-                    .collect();
+                let init_list = self.compute_cases(ctx);
                 *self.cases_cell.lock().unwrap() = Some(init_list.clone());
                 init_list
             }
         }
+    }
+
+    /// Compute this source's initial case set: `initial_source_cases`
+    /// (HS's `initialSource` thunk body) with each joined case name split
+    /// into the internal list representation.  Runs the goal-specific
+    /// solvers, so callers must not hold the `cases_cell` lock across
+    /// this call.
+    fn compute_cases(&self, ctx: &crate::constraint::solver::context::ProofContext)
+        -> Vec<(Vec<String>, System)>
+    {
+        initial_source_cases(&self.goal, ctx).into_iter()
+            .map(|(n, s)| (string_to_name_list(&n), s))
+            .collect()
+    }
+
+    /// Force materialisation WITHOUT returning the cases: callers that
+    /// only need the cell forced (e.g. to then read [`Source::cases_len`])
+    /// skip [`Source::cases_list`]'s deep clone of every case `System`.
+    /// The already-materialised path is a lock/check/unlock; the compute
+    /// path mirrors `cases_list` exactly — `initial_source_cases` runs
+    /// the goal-specific solvers, so it must not execute under the cell
+    /// lock, and the unconditional re-lock/overwrite is deterministic
+    /// because the computed value is.
+    pub fn ensure_cases(&self, ctx: &crate::constraint::solver::context::ProofContext) {
+        ctx.ensure_saturated();
+        if self.cases_cell.lock().unwrap().is_some() { return; }
+        let init_list = self.compute_cases(ctx);
+        *self.cases_cell.lock().unwrap() = Some(init_list);
     }
 
     /// Read-only clone that returns `vec![]` when the cell hasn't
@@ -5441,9 +5466,9 @@ fn guarded_walk_frees(g: &crate::guarded::Guarded, push: &mut dyn FnMut(&tamarin
         match g {
             Guarded::Atom(a) => crate::guarded_types::collect_free_atom(a, out),
             Guarded::Disj(items) | Guarded::Conj(items) =>
-                for it in items { collect(it, out); },
+                for it in items.iter() { collect(it, out); },
             Guarded::GGuarded { guards, body, .. } => {
-                for a in guards { crate::guarded_types::collect_free_atom(a, out); }
+                for a in guards.iter() { crate::guarded_types::collect_free_atom(a, out); }
                 collect(body, out);
             }
         }

@@ -93,7 +93,7 @@ pub(crate) fn cow_pair_arc(
 pub struct GFact {
     pub persistent: bool,
     pub name: String,
-    pub args: Vec<GTerm>,
+    pub args: std::sync::Arc<[GTerm]>,
     pub annotations: Vec<p::FactAnnotation>,
 }
 
@@ -623,12 +623,12 @@ pub fn collect_free_atom(a: &GAtom, out: &mut Vec<p::VarSpec>) {
             collect_free_term(y, out);
         }
         GAtom::Action(f, t) => {
-            for arg in &f.args { collect_free_term(arg, out); }
+            for arg in f.args.iter() { collect_free_term(arg, out); }
             collect_free_term(t, out);
         }
         GAtom::Last(t) => collect_free_term(t, out),
         GAtom::Pred(f) =>
-            for arg in &f.args { collect_free_term(arg, out); },
+            for arg in f.args.iter() { collect_free_term(arg, out); },
     }
 }
 
@@ -817,7 +817,7 @@ mod tests {
                 args: vec![
                     GTerm::Var(BVar::Free(x.clone())),
                     GTerm::Var(BVar::Bound(0)),
-                ],
+                ].into(),
                 annotations: vec![],
             },
             GTerm::Var(BVar::Free(vs_node("t", 0))),

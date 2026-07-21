@@ -556,23 +556,34 @@ pub enum Guarded {
     /// a sufficient number of `GGuarded` binders).
     Atom(GAtom),
     /// Disjunction of guarded sub-formulas.
-    Disj(Vec<Guarded>),
+    Disj(std::sync::Arc<[Guarded]>),
     /// Conjunction of guarded sub-formulas.
-    Conj(Vec<Guarded>),
+    Conj(std::sync::Arc<[Guarded]>),
     /// `qua xs. as ⇒ gf` (when `qua = All`) or `qua xs. as ∧ gf`
     /// (when `qua = Ex`). The `as` are the *guard* atoms, all
     /// quantified `xs` must be bound by them.
     GGuarded {
         qua: Quant,
-        vars: Vec<GBinding>,
-        guards: Vec<GAtom>,
-        body: Box<Guarded>,
+        vars: std::sync::Arc<[GBinding]>,
+        guards: std::sync::Arc<[GAtom]>,
+        body: std::sync::Arc<Guarded>,
     },
 }
 
+/// Shared empty child slice for the boolean atoms `gtrue`/`gfalse` — cloning
+/// it is a refcount bump rather than a per-call allocation.  The empty `Conj`
+/// (`gtrue`) and empty `Disj` (`gfalse`) each clone their own static so the two
+/// hot constants never contend on a single cache line.
+static EMPTY_CONJ: std::sync::OnceLock<std::sync::Arc<[Guarded]>> = std::sync::OnceLock::new();
+static EMPTY_DISJ: std::sync::OnceLock<std::sync::Arc<[Guarded]>> = std::sync::OnceLock::new();
+
 /// Boolean atom helper.
-pub fn gtrue() -> Guarded { Guarded::Conj(vec![]) }
-pub fn gfalse() -> Guarded { Guarded::Disj(vec![]) }
+pub fn gtrue() -> Guarded {
+    Guarded::Conj(EMPTY_CONJ.get_or_init(|| std::sync::Arc::from(Vec::new())).clone())
+}
+pub fn gfalse() -> Guarded {
+    Guarded::Disj(EMPTY_DISJ.get_or_init(|| std::sync::Arc::from(Vec::new())).clone())
+}
 pub fn gtf(b: bool) -> Guarded { if b { gtrue() } else { gfalse() } }
 
 /// Content-membership test for the `Arc`-wrapped formula stores
@@ -618,8 +629,8 @@ pub fn gconj(items: Vec<Guarded>) -> Guarded {
         // returns true if gfalse encountered (absorbs)
         match item {
             Guarded::Conj(inner) => {
-                for x in inner {
-                    if flatten(x, out) { return true; }
+                for x in inner.iter() {
+                    if flatten(x.clone(), out) { return true; }
                 }
                 false
             }
@@ -641,7 +652,7 @@ pub fn gconj(items: Vec<Guarded>) -> Guarded {
         if !deduped.contains(&x) { deduped.push(x); }
     }
     if deduped.len() == 1 { return deduped.into_iter().next().unwrap(); }
-    Guarded::Conj(deduped)
+    Guarded::Conj(deduped.into())
 }
 
 /// Walk a guarded formula and replace atoms whose truth value the
@@ -707,7 +718,7 @@ pub fn simplify_guarded_with(
             // regardless of whether guards remain.  Building `GGuarded`
             // directly would leave a non-canonical `GGuarded{All,[],kept,
             // gtrue}` where Haskell produces `gtrue`.
-            gall(vars.clone(), kept, body_s)
+            gall(vars.to_vec(), kept, body_s)
         }
         // Quantifiers with bound vars stay as-is — Haskell delays
         // simplification past the binder.
@@ -764,7 +775,7 @@ pub fn try_gterm_to_term(t: &GTerm) -> Option<p::Term> {
 /// Convert `GFact` to `p::Fact` if no Bound vars are present, else None.
 pub fn try_gfact_to_fact(f: &GFact) -> Option<p::Fact> {
     let mut args = Vec::with_capacity(f.args.len());
-    for a in &f.args { args.push(try_gterm_to_term(a)?); }
+    for a in f.args.iter() { args.push(try_gterm_to_term(a)?); }
     Some(p::Fact {
         persistent: f.persistent,
         name: f.name.clone(),
@@ -794,8 +805,8 @@ pub fn gdisj(items: Vec<Guarded>) -> Guarded {
         // returns true if gtrue encountered (absorbs)
         match item {
             Guarded::Disj(inner) => {
-                for x in inner {
-                    if flatten(x, out) { return true; }
+                for x in inner.iter() {
+                    if flatten(x.clone(), out) { return true; }
                 }
                 false
             }
@@ -822,7 +833,7 @@ pub fn gdisj(items: Vec<Guarded>) -> Guarded {
         if !deduped.contains(&x) { deduped.push(x); }
     }
     if deduped.is_empty() { gfalse() }
-    else { Guarded::Disj(deduped) }
+    else { Guarded::Disj(deduped.into()) }
 }
 
 /// Smart `GGuarded(Ex, ...)` — direct port of Haskell's `gex`:
@@ -839,7 +850,7 @@ pub fn gex(vars: Vec<GBinding>, guards: Vec<GAtom>, body: Guarded) -> Guarded {
         return gconj(items);
     }
     if body == gfalse() { return gfalse(); }
-    Guarded::GGuarded { qua: Quant::Ex, vars, guards, body: Box::new(body) }
+    Guarded::GGuarded { qua: Quant::Ex, vars: vars.into(), guards: guards.into(), body: std::sync::Arc::new(body) }
 }
 
 /// Smart `GGuarded(All, ...)` — direct port of Haskell's `gall`:
@@ -851,7 +862,7 @@ pub fn gex(vars: Vec<GBinding>, guards: Vec<GAtom>, body: Guarded) -> Guarded {
 pub fn gall(vars: Vec<GBinding>, guards: Vec<GAtom>, body: Guarded) -> Guarded {
     if guards.is_empty() { return body; }
     if body == gtrue() { return gtrue(); }
-    Guarded::GGuarded { qua: Quant::All, vars, guards, body: Box::new(body) }
+    Guarded::GGuarded { qua: Quant::All, vars: vars.into(), guards: guards.into(), body: std::sync::Arc::new(body) }
 }
 
 // =============================================================================
@@ -974,7 +985,7 @@ fn map_guarded_atoms<F: FnMut(u32, &GAtom) -> GAtom>(g: &Guarded, f: &mut F) -> 
                     qua: qua.clone(),
                     vars: vars.clone(),
                     guards: guards.iter().map(|a| f(new_depth, a)).collect(),
-                    body: Box::new(rec(body, new_depth, f)),
+                    body: std::sync::Arc::new(rec(body, new_depth, f)),
                 }
             }
         }
@@ -1024,7 +1035,7 @@ pub fn normalise_guarded_cow(g: &Guarded) -> Option<Guarded> {
     match g {
         // `normalise_guarded`'s Atom arm is `g.clone()` → always unchanged.
         Guarded::Atom(_) => None,
-        Guarded::Disj(items) => normalise_disj_list_cow(items).map(Guarded::Disj),
+        Guarded::Disj(items) => normalise_disj_list_cow(items).map(|v| Guarded::Disj(v.into())),
         Guarded::Conj(items) => {
             // Normalise children first (COW), then re-run the `gconj`
             // smart-constructor step (flatten nested Conj / absorb gfalse /
@@ -1033,8 +1044,8 @@ pub fn normalise_guarded_cow(g: &Guarded) -> Option<Guarded> {
             // whole node is unchanged.  Otherwise the rebuild is exactly
             // `gconj(children)` — identical to the eager
             // `gconj(items.iter().map(normalise_guarded).collect())`.
-            let mapped = cow_map_vec(items.as_slice(), normalise_guarded_cow);
-            let children: &[Guarded] = mapped.as_deref().unwrap_or(items.as_slice());
+            let mapped = cow_map_vec(items, normalise_guarded_cow);
+            let children: &[Guarded] = mapped.as_deref().unwrap_or(&items[..]);
             if mapped.is_none() && gconj_is_structural_noop(children) {
                 None
             } else {
@@ -1047,7 +1058,7 @@ pub fn normalise_guarded_cow(g: &Guarded) -> Option<Guarded> {
                 qua: qua.clone(),
                 vars: vars.clone(),
                 guards: guards.clone(),
-                body: Box::new(b),
+                body: std::sync::Arc::new(b),
             }),
     }
 }
@@ -1133,7 +1144,7 @@ fn flatten_dedup_disj(children: &[Guarded]) -> Vec<Guarded> {
     let mut out: Vec<Guarded> = Vec::new();
     for it in children {
         match it {
-            Guarded::Disj(ds) => for d in ds { push(d.clone(), &mut out); },
+            Guarded::Disj(ds) => for d in ds.iter() { push(d.clone(), &mut out); },
             g => push(g.clone(), &mut out),
         }
     }
@@ -1157,7 +1168,7 @@ pub fn normalise_stored_formula(g: &Guarded) -> Guarded {
 /// twin.
 pub fn normalise_stored_formula_cow(g: &Guarded) -> Option<Guarded> {
     match g {
-        Guarded::Disj(items) => normalise_disj_list_cow(items).map(Guarded::Disj),
+        Guarded::Disj(items) => normalise_disj_list_cow(items).map(|v| Guarded::Disj(v.into())),
         _ => normalise_guarded_cow(g),
     }
 }
@@ -1482,9 +1493,9 @@ fn unguarded_error(vars: &[p::VarSpec]) -> GuardError {
 fn gnot_atom(a: &GAtom) -> Guarded {
     Guarded::GGuarded {
         qua: Quant::All,
-        vars: Vec::new(),
-        guards: vec![a.clone()],
-        body: Box::new(gfalse()),
+        vars: Vec::new().into(),
+        guards: vec![a.clone()].into(),
+        body: std::sync::Arc::new(gfalse()),
     }
 }
 
@@ -1562,7 +1573,7 @@ pub fn normalize_witness_lvars(g: &Guarded) -> Guarded {
 /// carries no `x`-named witness var (the common case — `collect_witness_vars` finds
 /// nothing) OR when the witness substitution touches no leaf
 /// (`subst_guarded_cow` returns `None`), so a caller can reuse `g` by move/borrow
-/// instead of deep-cloning.  `Some(_)` is byte-identical to the eager rebuild.
+/// instead of cloning.  `Some(_)` is byte-identical to the eager rebuild.
 pub fn normalize_witness_lvars_cow(g: &Guarded) -> Option<Guarded> {
     let mut subst: VarSubst = VarSubst::default();
     collect_witness_vars(g, &mut subst);
@@ -1578,7 +1589,7 @@ pub fn normalize_witness_lvars_cow(g: &Guarded) -> Option<Guarded> {
 /// needed.  Called from `constraint::system` and `solver::reduction` to mark
 /// the spots where HS relied on its DeBruijn invariant.  `solver::simplify`
 /// deliberately skips it — see `implied_apply_canon_cow` in simplify.rs, which
-/// drops the call to save one full `Guarded` deep clone.
+/// drops the call to save one identity `Guarded` clone.
 ///
 /// Intentionally a no-op identity clone: faithful HS port marker.
 pub fn normalize_bound_lvars(g: &Guarded) -> Guarded {
@@ -1663,7 +1674,7 @@ pub fn normalize_sort_hints(g: &Guarded) -> Guarded {
                 qua: qua.clone(),
                 vars: vars.iter().map(norm_binding).collect(),
                 guards: guards.iter().map(norm_atom).collect(),
-                body: Box::new(rec(body)),
+                body: std::sync::Arc::new(rec(body)),
             },
         }
     }
@@ -1822,10 +1833,10 @@ fn cac_rec_slice(args: &std::sync::Arc<[GTerm]>, cmp: GCmp) -> Option<std::sync:
 // EXACTLY what the previous eager rebuild produced (changed children rebuilt,
 // unchanged children cloned), so the output is byte-identical — the parity gate
 // verifies.  The lazy single-pass bookkeeping (clone the unchanged prefix on the
-// first change) lives once in `tamarin_utils::cow::{cow_map_vec, cow_pair}`.
+// first change) lives once in `tamarin_utils::cow::{cow_map_arc, cow_pair}`.
 
 fn cac_rec_fact_cow(f: &GFact, cmp: GCmp) -> Option<GFact> {
-    cow_map_vec(f.args.as_slice(), |a| cac_rec_term_cow(a, cmp)).map(|args| GFact {
+    cow_map_arc(&f.args, |a| cac_rec_term_cow(a, cmp)).map(|args| GFact {
         persistent: f.persistent,
         name: f.name.clone(),
         args,
@@ -1855,12 +1866,12 @@ fn cac_rec_guarded_cow(g: &Guarded, cmp: GCmp) -> Option<Guarded> {
     match g {
         Guarded::Atom(a) => cac_rec_atom_cow(a, cmp).map(Guarded::Atom),
         Guarded::Disj(items) =>
-            cow_map_vec(items.as_slice(), |i| cac_rec_guarded_cow(i, cmp)).map(Guarded::Disj),
+            cow_map_arc(items, |i| cac_rec_guarded_cow(i, cmp)).map(Guarded::Disj),
         Guarded::Conj(items) =>
-            cow_map_vec(items.as_slice(), |i| cac_rec_guarded_cow(i, cmp)).map(Guarded::Conj),
+            cow_map_arc(items, |i| cac_rec_guarded_cow(i, cmp)).map(Guarded::Conj),
         Guarded::GGuarded { qua, vars, guards, body } => cow_pair(
             guards,
-            cow_map_vec(guards.as_slice(), |a| cac_rec_atom_cow(a, cmp)),
+            cow_map_arc(guards, |a| cac_rec_atom_cow(a, cmp)),
             &**body,
             cac_rec_guarded_cow(body, cmp),
         )
@@ -1868,7 +1879,7 @@ fn cac_rec_guarded_cow(g: &Guarded, cmp: GCmp) -> Option<Guarded> {
             qua: qua.clone(),
             vars: vars.clone(),
             guards,
-            body: Box::new(body),
+            body: std::sync::Arc::new(body),
         }),
     }
 }
@@ -2004,12 +2015,12 @@ pub fn subst_guarded_cow(g: &Guarded, s: &VarSubst) -> Option<Guarded> {
     match g {
         Guarded::Atom(a) => subst_gatom_cow(a, s).map(Guarded::Atom),
         Guarded::Disj(items) =>
-            cow_map_vec(items.as_slice(), |i| subst_guarded_cow(i, s)).map(Guarded::Disj),
+            cow_map_arc(items, |i| subst_guarded_cow(i, s)).map(Guarded::Disj),
         Guarded::Conj(items) =>
-            cow_map_vec(items.as_slice(), |i| subst_guarded_cow(i, s)).map(Guarded::Conj),
+            cow_map_arc(items, |i| subst_guarded_cow(i, s)).map(Guarded::Conj),
         Guarded::GGuarded { qua, vars, guards, body } => cow_pair(
             guards,
-            cow_map_vec(guards.as_slice(), |a| subst_gatom_cow(a, s)),
+            cow_map_arc(guards, |a| subst_gatom_cow(a, s)),
             &**body,
             subst_guarded_cow(body, s),
         )
@@ -2017,7 +2028,7 @@ pub fn subst_guarded_cow(g: &Guarded, s: &VarSubst) -> Option<Guarded> {
             qua: qua.clone(),
             vars: vars.clone(),
             guards,
-            body: Box::new(body),
+            body: std::sync::Arc::new(body),
         }),
     }
 }
@@ -2045,7 +2056,7 @@ fn subst_gpair_cow(x: &GTerm, y: &GTerm, s: &VarSubst) -> Option<(GTerm, GTerm)>
 
 /// Substitute Free LVar leaves in a `GFact`.
 fn subst_gfact_cow(f: &GFact, s: &VarSubst) -> Option<GFact> {
-    cow_map_vec(f.args.as_slice(), |a| subst_gterm_cow(a, s)).map(|args| GFact {
+    cow_map_arc(&f.args, |a| subst_gterm_cow(a, s)).map(|args| GFact {
         persistent: f.persistent,
         name: f.name.clone(),
         args,
@@ -2178,20 +2189,20 @@ pub fn for_each_free_var_in_guarded<F: FnMut(&p::VarSpec)>(g: &Guarded, f: &mut 
             GAtom::Eq(x, y) | GAtom::Less(x, y) | GAtom::LessMset(x, y)
             | GAtom::Subterm(x, y) => { rec_term(x, f); rec_term(y, f); }
             GAtom::Action(fa, t) => {
-                for arg in &fa.args { rec_term(arg, f); }
+                for arg in fa.args.iter() { rec_term(arg, f); }
                 rec_term(t, f);
             }
             GAtom::Last(t) => rec_term(t, f),
-            GAtom::Pred(fa) => for a in &fa.args { rec_term(a, f); },
+            GAtom::Pred(fa) => for a in fa.args.iter() { rec_term(a, f); },
         }
     }
     fn rec<F: FnMut(&p::VarSpec)>(g: &Guarded, f: &mut F) {
         match g {
             Guarded::Atom(a) => rec_atom(a, f),
-            Guarded::Disj(xs) | Guarded::Conj(xs) => for x in xs { rec(x, f); },
+            Guarded::Disj(xs) | Guarded::Conj(xs) => for x in xs.iter() { rec(x, f); },
             Guarded::GGuarded { guards, body, .. } => {
                 // Bindings carry no idx in the DeBruijn representation.
-                for a in guards { rec_atom(a, f); }
+                for a in guards.iter() { rec_atom(a, f); }
                 rec(body, f);
             }
         }
@@ -2245,10 +2256,10 @@ pub fn gnot(g: &Guarded) -> Guarded {
         //   go (GGuarded All ss as gf) = gex  ss as (go gf)
         //   go (GGuarded Ex  ss as gf) = gall ss as (go gf)
         Guarded::GGuarded { qua: Quant::All, vars, guards, body } => {
-            gex(vars.clone(), guards.clone(), gnot(body))
+            gex(vars.to_vec(), guards.to_vec(), gnot(body))
         }
         Guarded::GGuarded { qua: Quant::Ex, vars, guards, body } => {
-            gall(vars.clone(), guards.clone(), gnot(body))
+            gall(vars.to_vec(), guards.to_vec(), gnot(body))
         }
     }
 }
@@ -2265,7 +2276,7 @@ pub fn satisfied_by_empty_trace(g: &Guarded) -> Result<bool, String> {
         Guarded::Atom(_) => Err("atom outside the scope of a quantifier".to_string()),
         Guarded::Disj(xs) => {
             let mut any = false;
-            for x in xs {
+            for x in xs.iter() {
                 if satisfied_by_empty_trace(x)? { any = true; }
             }
             Ok(any)
@@ -2277,7 +2288,7 @@ pub fn satisfied_by_empty_trace(g: &Guarded) -> Result<bool, String> {
             // conjunct and propagate any error rather than short-circuiting
             // on the first `Ok(false)`.
             let mut all = true;
-            for x in xs {
+            for x in xs.iter() {
                 if !satisfied_by_empty_trace(x)? { all = false; }
             }
             Ok(all)
@@ -2351,20 +2362,20 @@ pub fn to_induction_hypothesis(g: &Guarded) -> Result<Guarded, String> {
                     let mut items: Vec<Guarded> = last_atos.iter()
                         .map(gnot).collect();
                     items.push(body2);
-                    Ok(gex(vars.clone(), guards.clone(), gconj(items)))
+                    Ok(gex(vars.to_vec(), guards.to_vec(), gconj(items)))
                 }
                 Quant::Ex => {
                     // gall ss as (gdisj (map GAto lastAtos ++ [gf']))
                     let mut items = last_atos;
                     items.push(body2);
-                    Ok(gall(vars.clone(), guards.clone(), gdisj(items)))
+                    Ok(gall(vars.to_vec(), guards.to_vec(), gdisj(items)))
                 }
             }
         }
         Guarded::Atom(GAtom::Less(i, j)) => Ok(Guarded::Disj(vec![
             Guarded::Atom(GAtom::Eq(i.clone(), j.clone())),
             Guarded::Atom(GAtom::Less(j.clone(), i.clone())),
-        ])),
+        ].into())),
         Guarded::Atom(GAtom::Last(_)) => Err("formula not last-free".to_string()),
         Guarded::Atom(a) => Ok(gnot_atom(a)),
         Guarded::Disj(xs) => {
@@ -2441,7 +2452,7 @@ mod tests {
 
     // GFact builder for cmp_fact ordering tests.
     fn gf(persistent: bool, name: &str) -> GFact {
-        GFact { persistent, name: name.into(), args: vec![], annotations: vec![] }
+        GFact { persistent, name: name.into(), args: vec![].into(), annotations: vec![] }
     }
 
     /// HS `FactTag` derived Ord segregates all ProtoFacts before every
@@ -2481,9 +2492,9 @@ mod tests {
         assert_eq!(cmp_fact(&gf(false, "A"), &gf(false, "B")), Less);
         // Then by arity.
         let a1 = GFact { persistent: false, name: "P".into(),
-            args: vec![], annotations: vec![] };
+            args: vec![].into(), annotations: vec![] };
         let a2 = GFact { persistent: false, name: "P".into(),
-            args: vec![crate::guarded_types::GTerm::Var(crate::guarded_types::BVar::Bound(0))],
+            args: vec![crate::guarded_types::GTerm::Var(crate::guarded_types::BVar::Bound(0))].into(),
             annotations: vec![] };
         assert_eq!(cmp_fact(&a1, &a2), Less);
     }
@@ -2502,7 +2513,7 @@ mod tests {
     fn gnot_disj_becomes_conj() {
         let f1 = gtrue();
         let f2 = gfalse();
-        let d = Guarded::Disj(vec![f1.clone(), f2.clone()]);
+        let d = Guarded::Disj(vec![f1.clone(), f2.clone()].into());
         let n = gnot(&d);
         // ¬(T ∨ ⊥) = ¬T ∧ ¬⊥ = ⊥ ∧ T. After gconj, this collapses to ⊥
         // because gconj short-circuits on a gfalse.
@@ -2512,7 +2523,7 @@ mod tests {
     #[test]
     fn gnot_conj_becomes_disj() {
         let f1 = gtrue();
-        let d = Guarded::Conj(vec![f1.clone(), f1]);
+        let d = Guarded::Conj(vec![f1.clone(), f1].into());
         // ¬(T ∧ T) = ¬T ∨ ¬T = ⊥ ∨ ⊥ — gdisj filters out gfalse → gfalse.
         assert_eq!(gnot(&d), gfalse());
     }
@@ -2901,7 +2912,7 @@ mod tests {
         // a ∨ b — if b evaluates False and a is unknown, result = a.
         let a = mk_atom_eq("p", "q");
         let b = mk_atom_eq("r", "s");
-        let g = Guarded::Disj(vec![a.clone(), b.clone()]);
+        let g = Guarded::Disj(vec![a.clone(), b.clone()].into());
         let val = move |atom: &p::Atom| match atom {
             p::Atom::Eq(x, _) => match x {
                 p::Term::Var(v) if v.name == "r" => Some(false),
@@ -2917,7 +2928,7 @@ mod tests {
         // a ∧ b — if b evaluates False, conj should be gfalse.
         let a = mk_atom_eq("p", "q");
         let b = mk_atom_eq("r", "s");
-        let g = Guarded::Conj(vec![a, b]);
+        let g = Guarded::Conj(vec![a, b].into());
         let val = |atom: &p::Atom| match atom {
             p::Atom::Eq(x, _) => match x {
                 p::Term::Var(v) if v.name == "r" => Some(false),
@@ -2938,9 +2949,9 @@ mod tests {
         let b = p::Atom::Eq(mkv("c"), mkv("d"));
         let body = mk_atom_eq("p", "q");
         let g = Guarded::GGuarded {
-            qua: Quant::All, vars: Vec::new(),
-            guards: vec![atom_to_gatom_free(&a), atom_to_gatom_free(&b)],
-            body: Box::new(body),
+            qua: Quant::All, vars: Vec::new().into(),
+            guards: vec![atom_to_gatom_free(&a), atom_to_gatom_free(&b)].into(),
+            body: std::sync::Arc::new(body),
         };
         let val = move |atom: &p::Atom| {
             if atom == &a { Some(false) } else { None }
@@ -2957,9 +2968,9 @@ mod tests {
         let b = p::Atom::Eq(mkv("c"), mkv("d"));
         let body = mk_atom_eq("p", "q");
         let g = Guarded::GGuarded {
-            qua: Quant::All, vars: Vec::new(),
-            guards: vec![atom_to_gatom_free(&a), atom_to_gatom_free(&b)],
-            body: Box::new(body.clone()),
+            qua: Quant::All, vars: Vec::new().into(),
+            guards: vec![atom_to_gatom_free(&a), atom_to_gatom_free(&b)].into(),
+            body: std::sync::Arc::new(body.clone()),
         };
         let a_clone = a.clone();
         let b_clone = b.clone();
@@ -2975,7 +2986,7 @@ mod tests {
         match simp {
             Guarded::GGuarded { vars, guards, .. } => {
                 assert!(vars.is_empty());
-                assert_eq!(guards, vec![atom_to_gatom_free(&b)]);
+                assert_eq!(guards, vec![atom_to_gatom_free(&b)].into());
             }
             other => panic!("expected GGuarded with one guard, got {:?}", other),
         }
@@ -2989,9 +3000,9 @@ mod tests {
         let a = p::Atom::Eq(mkv("a"), mkv("b"));
         let body = mk_atom_eq("p", "q");
         let g = Guarded::GGuarded {
-            qua: Quant::All, vars: Vec::new(),
-            guards: vec![atom_to_gatom_free(&a)],
-            body: Box::new(body.clone()),
+            qua: Quant::All, vars: Vec::new().into(),
+            guards: vec![atom_to_gatom_free(&a)].into(),
+            body: std::sync::Arc::new(body.clone()),
         };
         let val = |_atom: &p::Atom| Some(true);
         // Both guard and body atoms evaluate to True under this
@@ -3012,9 +3023,9 @@ mod tests {
             name: "x".into(), sort: p::SortHint::Msg,
         };
         let g = Guarded::GGuarded {
-            qua: Quant::All, vars: vec![bound_var],
-            guards: vec![atom_to_gatom_free(&a)],
-            body: Box::new(body),
+            qua: Quant::All, vars: vec![bound_var].into(),
+            guards: vec![atom_to_gatom_free(&a)].into(),
+            body: std::sync::Arc::new(body),
         };
         let val = |_atom: &p::Atom| Some(true);
         assert_eq!(simplify_guarded_with(&g, &val), g);
@@ -3036,8 +3047,8 @@ mod tests {
     /// short-circuit silently breaks.
     #[test]
     fn gtrue_is_empty_conj_and_gfalse_is_empty_disj() {
-        assert_eq!(gtrue(), Guarded::Conj(vec![]));
-        assert_eq!(gfalse(), Guarded::Disj(vec![]));
+        assert_eq!(gtrue(), Guarded::Conj(vec![].into()));
+        assert_eq!(gfalse(), Guarded::Disj(vec![].into()));
         assert_ne!(gtrue(), gfalse(), "gtrue and gfalse must be distinguishable");
     }
 
@@ -3153,13 +3164,13 @@ mod tests {
         let a = g("Last(#i)").unwrap();
         let b = g("Last(#j)").unwrap();
         let c = g("Last(#k)").unwrap();
-        let inner = Guarded::Conj(vec![a.clone(), b.clone()]);
+        let inner = Guarded::Conj(vec![a.clone(), b.clone()].into());
         let out = gconj(vec![inner, c.clone()]);
         match out {
             Guarded::Conj(items) => {
                 assert_eq!(items.len(), 3,
                     "nested Conj should be flattened: 2 inner + 1 outer = 3");
-                assert_eq!(items, vec![a, b, c]);
+                assert_eq!(items, vec![a, b, c].into());
             }
             _ => panic!("expected Conj"),
         }
@@ -3179,10 +3190,10 @@ mod tests {
         let e = g("Last(#e)").unwrap();
         // Build the left-leaning binary-Or chain
         // `Disj(Disj(Disj(Disj(a, b), c), d), e)`.
-        let lvl1 = Guarded::Disj(vec![a.clone(), b.clone()]);
-        let lvl2 = Guarded::Disj(vec![lvl1, c.clone()]);
-        let lvl3 = Guarded::Disj(vec![lvl2, d.clone()]);
-        let lvl4 = Guarded::Disj(vec![lvl3, e.clone()]);
+        let lvl1 = Guarded::Disj(vec![a.clone(), b.clone()].into());
+        let lvl2 = Guarded::Disj(vec![lvl1, c.clone()].into());
+        let lvl3 = Guarded::Disj(vec![lvl2, d.clone()].into());
+        let lvl4 = Guarded::Disj(vec![lvl3, e.clone()].into());
         let out = gdisj(vec![lvl4]);
         match out {
             Guarded::Disj(items) => {
@@ -3190,7 +3201,7 @@ mod tests {
                     "4-level-nested binary-Or chain must flatten to 5 \
                      alts (HS `flatten` recurses) — got {} alts",
                     items.len());
-                assert_eq!(items, vec![a, b, c, d, e],
+                assert_eq!(items, vec![a, b, c, d, e].into(),
                     "flatten preserves leaf order (HS uses concatMap)");
             }
             other => panic!("expected Disj of 5 items, got {:?}", other),
@@ -3207,17 +3218,17 @@ mod tests {
         let c = g("Last(#c)").unwrap();
         let d = g("Last(#d)").unwrap();
         let e = g("Last(#e)").unwrap();
-        let lvl1 = Guarded::Conj(vec![a.clone(), b.clone()]);
-        let lvl2 = Guarded::Conj(vec![lvl1, c.clone()]);
-        let lvl3 = Guarded::Conj(vec![lvl2, d.clone()]);
-        let lvl4 = Guarded::Conj(vec![lvl3, e.clone()]);
+        let lvl1 = Guarded::Conj(vec![a.clone(), b.clone()].into());
+        let lvl2 = Guarded::Conj(vec![lvl1, c.clone()].into());
+        let lvl3 = Guarded::Conj(vec![lvl2, d.clone()].into());
+        let lvl4 = Guarded::Conj(vec![lvl3, e.clone()].into());
         let out = gconj(vec![lvl4]);
         match out {
             Guarded::Conj(items) => {
                 assert_eq!(items.len(), 5,
                     "4-level-nested binary-And chain must flatten to 5 \
                      conj items — got {}", items.len());
-                assert_eq!(items, vec![a, b, c, d, e]);
+                assert_eq!(items, vec![a, b, c, d, e].into());
             }
             other => panic!("expected Conj of 5 items, got {:?}", other),
         }
@@ -3300,7 +3311,7 @@ mod tests {
         // ¬(a ∨ b) = ¬a ∧ ¬b
         let a = g("Last(#i)").unwrap();
         let b = g("Last(#j)").unwrap();
-        let or = Guarded::Disj(vec![a.clone(), b.clone()]);
+        let or = Guarded::Disj(vec![a.clone(), b.clone()].into());
         let neg = gnot(&or);
         // Should be Conj([¬a, ¬b]) — both negated.
         let expected = gconj(vec![gnot(&a), gnot(&b)]);

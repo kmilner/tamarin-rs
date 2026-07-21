@@ -1516,7 +1516,7 @@ fn collect_one_case_syms(
         // the disjunct COUNT here, so force once (idempotent) and read
         // the cell length in O(1) instead of deep-cloning every case
         // `System`.
-        src.cases_list(ctx);
+        src.ensure_cases(ctx);
         if src.cases_len() != 1 { continue; }
         out.insert(s.name.to_vec());
     }
@@ -2378,7 +2378,7 @@ fn has_ku_guards(sys: &System) -> bool {
             // contributing NO tags (Guarded.hs:170-173).  So a bare `GAto`
             // KU action atom must NOT count — only a `GGuarded`'s guards.
             Guarded::GGuarded { guards, body, .. } => {
-                for atom in guards {
+                for atom in guards.iter() {
                     if let GAtom::Action(fa, _) = atom {
                         if fa.name == "KU" { return true; }
                     }

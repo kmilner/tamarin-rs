@@ -382,12 +382,12 @@ fn guard_fact_tag_names(g: &Guarded, out: &mut Vec<String>) {
     match g {
         Guarded::Atom(_) => {}
         Guarded::Disj(xs) | Guarded::Conj(xs) => {
-            for x in xs {
+            for x in xs.iter() {
                 guard_fact_tag_names(x, out);
             }
         }
         Guarded::GGuarded { guards, body, .. } => {
-            for a in guards {
+            for a in guards.iter() {
                 if let GAtom::Action(f, _) = a {
                     out.push(f.name.clone());
                 }
@@ -459,7 +459,7 @@ pub(crate) fn check_formula(oracle_type: &str, f: &Guarded) -> Vec<p::VarSpec> {
     // Dropping the Bound (vs. matching HS's panic) is intentional: a crash is
     // never the desired `--prove` output.
     let mut acc: Vec<p::VarSpec> = Vec::new();
-    for arg in &fact.args {
+    for arg in fact.args.iter() {
         let mut vars: Vec<p::VarSpec> = Vec::new();
         crate::guarded_types::collect_free_term(arg, &mut vars);
         // varsVTerm = sortednub (HS Ord LVar = idx, sort, name).

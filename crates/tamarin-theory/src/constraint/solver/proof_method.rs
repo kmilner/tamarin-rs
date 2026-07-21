@@ -921,7 +921,7 @@ mod tests {
             },
             mkvar("i", SortHint::Node),
         );
-        let body = crate::guarded::Guarded::Conj(Vec::new());
+        let body = crate::guarded::Guarded::Conj(Vec::new().into());
         // Build with close_guarded so the binder's `k` and `i` are
         // properly substituted to `Bound` in the guard atom.
         let fm = crate::guarded::close_guarded(

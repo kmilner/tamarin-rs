@@ -652,9 +652,9 @@ fn avoid_precise_guarded(g: &Guarded) -> PreciseFreshState {
         match g {
             Guarded::Atom(a) => seed_atom_frees(a, state),
             Guarded::Disj(xs) | Guarded::Conj(xs) =>
-                for x in xs { walk(x, state); },
+                for x in xs.iter() { walk(x, state); },
             Guarded::GGuarded { guards, body, .. } => {
-                for a in guards { seed_atom_frees(a, state); }
+                for a in guards.iter() { seed_atom_frees(a, state); }
                 walk(body, state);
             }
         }
@@ -2592,12 +2592,12 @@ mod tests {
         // ∀ [] [Less(i,j)] ⊥  ⇒  rendered as `¬(i < j)`.
         let g = Guarded::GGuarded {
             qua: Quant::All,
-            vars: vec![],
+            vars: vec![].into(),
             guards: vec![crate::guarded::atom_to_gatom_free(&p::Atom::Less(
                 p::Term::Var(v("i", p::SortHint::Node)),
                 p::Term::Var(v("j", p::SortHint::Node)),
-            ))],
-            body: Box::new(Guarded::Disj(vec![])),
+            ))].into(),
+            body: std::sync::Arc::new(Guarded::Disj(vec![].into())),
         };
         let s = pretty_guarded(&g);
         assert!(s.starts_with("\u{00AC}"));

@@ -139,7 +139,7 @@ fn msg_term(name: &str) -> GTerm {
 /// HS `protoFactFormula name terms at = Ato $ Action at $ protoFact Linear name terms`.
 pub(crate) fn proto_fact_formula(name: &str, terms: Vec<GTerm>, at: GTerm) -> Fm {
     Fm::Ato(GAtom::Action(
-        GFact { persistent: false, name: name.to_string(), args: terms, annotations: Vec::new() },
+        GFact { persistent: false, name: name.to_string(), args: terms.into(), annotations: Vec::new() },
         at,
     ))
 }

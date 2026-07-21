@@ -285,7 +285,7 @@ fn count_quantifiers(g: &Guarded) -> (usize, usize) {
         match g {
             Guarded::Atom(_) => {}
             Guarded::Conj(xs) | Guarded::Disj(xs) => {
-                for x in xs { rec(x, ex, all); }
+                for x in xs.iter() { rec(x, ex, all); }
             }
             Guarded::GGuarded { qua, vars, body, .. } => {
                 let n = vars.len();
@@ -815,7 +815,7 @@ fn corpus_verdict_match_coverage_probe() {
                 if dbg_incomp {
                     eprintln!("INCOMPARABLE: {}::{} → {:?} (tamarin={})",
                         w.path.file_name().unwrap().to_string_lossy(),
-                        w.lemma_name, &root.status, w.tamarin_verdict);
+                        w.lemma_name, root.status, w.tamarin_verdict);
                 }
                 return LemmaOutcome::Incomparable;
             }
@@ -1680,7 +1680,7 @@ fn atom_decomposition_creates_action_goal_in_simplify() {
     );
     let g = tamarin_theory::guarded::Guarded::Conj(vec![
         tamarin_theory::guarded::Guarded::Atom(tamarin_theory::guarded::atom_to_gatom_free(&action_atom)),
-    ]);
+    ].into());
     let mut sys = System::empty();
     sys.formulas_mut().push(std::sync::Arc::new(g));
     let mut r = Reduction::new(&ctx, sys);
@@ -1802,9 +1802,9 @@ fn simplify_conj_wrapping_disj_produces_goal() {
     });
     let a1 = tamarin_theory::guarded::Guarded::Atom(tamarin_theory::guarded::atom_to_gatom_free(&Atom::Last(mkvar("i"))));
     let a2 = tamarin_theory::guarded::Guarded::Atom(tamarin_theory::guarded::atom_to_gatom_free(&Atom::Last(mkvar("j"))));
-    let disj = tamarin_theory::guarded::Guarded::Disj(vec![a1, a2]);
+    let disj = tamarin_theory::guarded::Guarded::Disj(vec![a1, a2].into());
     let mut sys = System::empty();
-    sys.formulas_mut().push(std::sync::Arc::new(tamarin_theory::guarded::Guarded::Conj(vec![disj])));
+    sys.formulas_mut().push(std::sync::Arc::new(tamarin_theory::guarded::Guarded::Conj(vec![disj].into())));
     let mut r = Reduction::new(&ctx, sys);
     simplify_system(&mut r);
     assert!(r.sys.goals.iter().any(|(g, _)|

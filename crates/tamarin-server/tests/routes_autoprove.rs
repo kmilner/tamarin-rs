@@ -207,6 +207,6 @@ async fn test_autoprove_missing_oracle_keeps_server_alive() {
     let auto = s.url("/thy/trace/1/autoprove/idfs/0/False/proof/test");
     let res = s.client.get(&auto).send().await.expect("request completes");
     assert_eq!(res.status(), 200, "failure surfaces as an alert, not a dead socket");
-    let root = s.client.get(&s.url("/")).send().await.expect("server still serving");
+    let root = s.client.get(s.url("/")).send().await.expect("server still serving");
     assert_eq!(root.status(), 200, "server must survive the oracle failure");
 }

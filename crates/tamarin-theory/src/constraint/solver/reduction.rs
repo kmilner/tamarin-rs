@@ -2265,7 +2265,7 @@ impl<'ctx> Reduction<'ctx> {
                 if mark {
                     self.sys.solved_formulas_mut().push(std::sync::Arc::new(g));
                 }
-                for it in items { self.insert_formula_inner(it, false); }
+                for it in items.iter() { self.insert_formula_inner(it.clone(), false); }
                 self.changed = ChangeIndicator::Changed;
             }
             Guarded::Disj(items) if items.is_empty() => {
@@ -2302,7 +2302,7 @@ impl<'ctx> Reduction<'ctx> {
                 self.sys.bump_cache_guarded(&g);
                 self.sys.formulas_mut().push(std::sync::Arc::new(g.clone()));
                 self.changed = ChangeIndicator::Changed;
-                let goal = Goal::Disj(crate::constraint::constraints::Disj::new(items));
+                let goal = Goal::Disj(crate::constraint::constraints::Disj::new(items.to_vec()));
                 self.insert_goal(goal);
             }
             Guarded::Disj(items) => {
@@ -2324,7 +2324,7 @@ impl<'ctx> Reduction<'ctx> {
                 // Pure ADD (formula push): bump.
                 self.sys.bump_cache_guarded(&g);
                 self.sys.formulas_mut().push(std::sync::Arc::new(g.clone()));
-                let goal = Goal::Disj(crate::constraint::constraints::Disj::new(items));
+                let goal = Goal::Disj(crate::constraint::constraints::Disj::new(items.to_vec()));
                 self.insert_goal(goal);
                 self.changed = ChangeIndicator::Changed;
             }
@@ -2522,7 +2522,7 @@ impl<'ctx> Reduction<'ctx> {
                         let d = crate::guarded::Guarded::Disj(vec![
                             crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&AAtom::Eq(i.clone(), j.clone()))),
                             crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&AAtom::Less(j.clone(), i.clone()))),
-                        ]);
+                        ].into());
                         self.insert_formula_inner(d, false);
                         self.changed = ChangeIndicator::Changed;
                     }
@@ -2549,7 +2549,7 @@ impl<'ctx> Reduction<'ctx> {
                         let d = crate::guarded::Guarded::Disj(vec![
                             crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&AAtom::Less(i.clone(), j.clone()))),
                             crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&AAtom::Less(j.clone(), i.clone()))),
-                        ]);
+                        ].into());
                         self.insert_formula_inner(d, false);
                         self.changed = ChangeIndicator::Changed;
                     }
@@ -2599,7 +2599,7 @@ impl<'ctx> Reduction<'ctx> {
                         let d = crate::guarded::Guarded::Disj(vec![
                             crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&AAtom::Less(last_term.clone(), i.clone()))),
                             crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&AAtom::Less(i.clone(), last_term))),
-                        ]);
+                        ].into());
                         self.insert_formula_inner(d, false);
                         self.changed = ChangeIndicator::Changed;
                     }
@@ -2693,7 +2693,7 @@ impl<'ctx> Reduction<'ctx> {
         // solved_formulas (Haskell `markGoalAsSolved` DisjG branch).
         if let Goal::Disj(d) = g {
             use crate::guarded::Guarded;
-            let f = Guarded::Disj(d.0.clone());
+            let f = Guarded::Disj(d.0.clone().into());
             let pos = self.sys.formulas.iter().position(|x| **x == f);
             if let Some(idx) = pos {
                 self.sys.invalidate_max_var_idx_cache();
@@ -8367,9 +8367,9 @@ mod tests {
         let guard: GAtom = atom_to_gatom_free(&Atom::Less(mkvar(i_name), mkvar(j_name)));
         Guarded::GGuarded {
             qua: Quant::All,
-            vars: Vec::new(),
-            guards: vec![guard],
-            body: Box::new(crate::guarded::gfalse()),
+            vars: Vec::new().into(),
+            guards: vec![guard].into(),
+            body: std::sync::Arc::new(crate::guarded::gfalse()),
         }
     }
 
