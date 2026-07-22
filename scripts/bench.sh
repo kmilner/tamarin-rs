@@ -122,7 +122,7 @@ HDR
             r=$(measure "$RS_PATH" --processors="$k" --derivcheck-timeout="$DERIV" --prove "$af")
             p=$(measure env THREADS="$k" HS_PATH="$HS_PATH" RS_PATH="$RS_PATH" \
                     "$repo_root/prove_and_reverify.sh" "$af" --derivcheck-timeout="$DERIV")
-            echo "| \`$base\` | $(cell_t "${h%|*}") | $(cell_rs_t "${p%|*}" "${h%|*}") | $(cell_rs_t "${r%|*}" "${h%|*}") | $(cell_m "${h#*|}") | $(cell_rs_m "${p#*|}" "${h#*|}") | $(cell_rs_m "${r#*|}" "${h#*|}") |"
+            echo "| \`$base\` | $(cell_t "${h%|*}") | $(cell_rs_t "${p%|*}" "${h%|*}") | **$(cell_rs_t "${r%|*}" "${h%|*}")** | $(cell_m "${h#*|}") | $(cell_rs_m "${p#*|}" "${h#*|}") | **$(cell_rs_m "${r#*|}" "${h#*|}")** |"
         done
     done
     echo
