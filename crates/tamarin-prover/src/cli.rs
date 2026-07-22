@@ -305,8 +305,44 @@ impl std::fmt::Display for CliError {
 
 impl std::error::Error for CliError {}
 
+/// Drop GHC RTS sections from an argv slice, mirroring what the Haskell
+/// binary's runtime does before the program sees its arguments
+/// (ghc rts/RtsFlags.c `setupRtsFlags`): `+RTS` opens a section and
+/// `-RTS` closes one (both removed along with everything between; an
+/// unclosed `+RTS` swallows the rest), `--RTS` is removed and everything
+/// after it passes through verbatim, and `--` ends RTS processing with
+/// itself and the remainder kept.  The RTS flags themselves (e.g. `-N16`)
+/// are discarded — core counts are set with `--processors` here.
+fn strip_rts_args(raw: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(raw.len());
+    let mut in_rts = false;
+    for (i, a) in raw.iter().enumerate() {
+        match a.as_str() {
+            "--RTS" => {
+                out.extend(raw[i + 1..].iter().cloned());
+                break;
+            }
+            "--" => {
+                out.extend(raw[i..].iter().cloned());
+                break;
+            }
+            "+RTS" => in_rts = true,
+            "-RTS" => in_rts = false,
+            _ if !in_rts => out.push(a.clone()),
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Parse a raw argv-style slice (program name NOT included).
 pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
+    // Strip `+RTS ... -RTS` first so command lines written for the
+    // Haskell binary run here unchanged (its RTS removes these before
+    // the program ever sees argv).
+    let filtered = strip_rts_args(raw);
+    let raw = filtered.as_slice();
+
     let mut args = Args::default();
 
     // Subcommand detection: if the first non-option token is a known
@@ -976,6 +1012,28 @@ mod tests {
     fn prove_repeated() {
         let a = parse(&["--prove=foo", "--prove=bar*", "x.spthy"]);
         assert_eq!(a.lemma_names, vec!["foo", "bar*"]);
+    }
+
+    #[test]
+    fn rts_sections_are_stripped() {
+        // GHC removes `+RTS ... -RTS` before the program sees argv
+        // (rts/RtsFlags.c), so an HS-style invocation parses the same here.
+        let a = parse(&["+RTS", "-N16", "-RTS", "--prove", "x.spthy"]);
+        assert!(a.prove_mode);
+        assert_eq!(a.in_files, vec!["x.spthy".to_string()]);
+        assert_eq!(a.processors, None);
+        // Unclosed `+RTS` swallows the rest; a stray `-RTS` is a no-op.
+        let a = parse(&["--prove", "x.spthy", "+RTS", "-N4"]);
+        assert_eq!(a.in_files, vec!["x.spthy".to_string()]);
+        let a = parse(&["-RTS", "x.spthy"]);
+        assert_eq!(a.in_files, vec!["x.spthy".to_string()]);
+        // `--RTS` ends RTS processing: the rest passes through verbatim,
+        // so a later `+RTS` reaches the parser as a plain positional.
+        let a = parse(&["--RTS", "x.spthy", "+RTS"]);
+        assert_eq!(a.in_files, vec!["x.spthy".to_string(), "+RTS".to_string()]);
+        // `--` also ends RTS processing and is kept for the parser.
+        let a = parse(&["+RTS", "-N4", "-RTS", "--", "x.spthy"]);
+        assert_eq!(a.in_files, vec!["x.spthy".to_string()]);
     }
 
     #[test]
