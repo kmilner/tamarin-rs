@@ -316,7 +316,7 @@ pub fn simple_injective_fact_instances(
             Term::App(sym, args) => {
                 let mapped: Option<Vec<LNTerm>> =
                     args.iter().map(bvar_term_to_lnterm).collect();
-                mapped.map(|a| Term::App(sym.clone(), a.into()))
+                mapped.map(|a| Term::App(*sym, a.into()))
             }
         }
     }

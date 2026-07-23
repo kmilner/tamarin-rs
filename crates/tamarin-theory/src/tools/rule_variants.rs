@@ -381,7 +381,7 @@ pub fn abstract_rule_and_variants(
         if let Term::App(f, args) = t {
             if irreducible.contains(f) {
                 return Term::App(
-                    f.clone(),
+                    *f,
                     args.iter().map(|a| abstr_term(a, irreducible, bindings, maude)).collect(),
                 );
             }

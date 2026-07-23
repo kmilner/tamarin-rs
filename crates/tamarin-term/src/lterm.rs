@@ -563,9 +563,9 @@ where
         Term::App(fsym, args) => {
             cow_map_vec(&args[..], |a| map_free_term_cow(a, &mut *f, monotone)).map(|mapped| {
                 if monotone {
-                    crate::term::unsafe_f_app(fsym.clone(), mapped)
+                    crate::term::unsafe_f_app(*fsym, mapped)
                 } else {
-                    crate::term::f_app(fsym.clone(), mapped)
+                    crate::term::f_app(*fsym, mapped)
                 }
             })
         }

@@ -453,7 +453,7 @@ fn root_sym(t: &tamarin_term::lterm::LNTerm) -> Option<RootSym> {
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
     match t {
-        Term::App(sym, _) => Some(RootSym::Sym(sym.clone())),
+        Term::App(sym, _) => Some(RootSym::Sym(*sym)),
         Term::Lit(Lit::Var(v)) if v.sort == LSort::Msg => None,
         Term::Lit(Lit::Var(v)) => Some(RootSym::Sort(v.sort)),
         Term::Lit(Lit::Con(n)) => {

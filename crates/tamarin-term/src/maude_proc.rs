@@ -1653,7 +1653,7 @@ fn unskolemize(
         }
         crate::term::Term::App(sym, args) => {
             let new_args: Vec<LNTerm> = args.iter().map(|a| unskolemize(a, reverse)).collect();
-            crate::term::Term::App(sym.clone(), new_args.into())
+            crate::term::Term::App(*sym, new_args.into())
         }
         _ => t.clone(),
     }
@@ -1701,7 +1701,7 @@ fn rewrite_skolem(
             let new_args: Vec<LNTerm> = args.iter()
                 .map(|a| rewrite_skolem(a, map))
                 .collect();
-            crate::term::Term::App(sym.clone(), new_args.into())
+            crate::term::Term::App(*sym, new_args.into())
         }
         _ => t.clone(),
     }

@@ -246,7 +246,7 @@ fn subst(loc: &Option<SapicTerm>, t: &SapicTerm) -> SapicTerm {
             match sym {
                 FunSym::Ac(o) => tamarin_term::term::f_app_ac(*o, new_args),
                 FunSym::C(o) => tamarin_term::term::f_app_c(*o, new_args),
-                FunSym::NoEq(o) => tamarin_term::term::f_app_no_eq(o.clone(), new_args),
+                FunSym::NoEq(o) => tamarin_term::term::f_app_no_eq(*o, new_args),
                 FunSym::List => tamarin_term::term::f_app_list(new_args),
             }
         }

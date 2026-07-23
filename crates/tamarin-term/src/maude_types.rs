@@ -142,7 +142,7 @@ pub fn lterm_to_mterm_global(t: &LNTerm, ctx: &mut ConvCtx) -> MTerm {
             // LNTerm-side order, which (because MaudeLit Ord keys on the
             // global encounter-order id) can differ from HS's MaudeLit
             // ordering and change the emitted Maude query string.
-            crate::term::f_app(sym.clone(), new_args)
+            crate::term::f_app(*sym, new_args)
         }
     }
 }
@@ -245,7 +245,7 @@ pub fn mterm_to_lnterm(
             // constructor (and building `FunSym::C(EMap)` directly) would
             // leave `em` args in Maude's back-conversion order, producing
             // `em(XB.10, x.9)` where HS prints the sorted `em(x.9, XB.10)`.
-            crate::term::f_app(sym.clone(), new_args)
+            crate::term::f_app(*sym, new_args)
         }
     }
 }

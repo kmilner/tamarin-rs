@@ -193,7 +193,7 @@ fn rename_term(subst: &BTreeMap<LVar, LVar>, t: &SapicTerm) -> SapicTerm {
         VTerm::App(sym, args) => {
             let new_args: Vec<SapicTerm> = args.iter().map(|a| rename_term(subst, a)).collect();
             // Rebuild through the smart constructor so AC normal form is kept.
-            tamarin_term::term::f_app(sym.clone(), new_args)
+            tamarin_term::term::f_app(*sym, new_args)
         }
     }
 }
@@ -478,7 +478,7 @@ fn type_with(
                     }
                     insert_fun(env, fs, (ptypes2, outtype2.clone()))?;
                     Ok((
-                        tamarin_term::term::f_app(sym.clone(), ts_new),
+                        tamarin_term::term::f_app(*sym, ts_new),
                         outtype2,
                     ))
                 }
@@ -490,7 +490,7 @@ fn type_with(
                         ts_new.push(a_new);
                     }
                     Ok((
-                        tamarin_term::term::f_app(sym.clone(), ts_new),
+                        tamarin_term::term::f_app(*sym, ts_new),
                         None,
                     ))
                 }
@@ -515,12 +515,12 @@ fn insert_fun(
 ) -> Result<(), String> {
     match env.funs.get(fs).cloned() {
         None => {
-            env.funs.insert(fs.clone(), new_ty);
+            env.funs.insert(*fs, new_ty);
             Ok(())
         }
         Some(old) => {
             let merged = merge_fun_types(&new_ty, &old)?;
-            env.funs.insert(fs.clone(), merged);
+            env.funs.insert(*fs, merged);
             Ok(())
         }
     }
@@ -697,7 +697,7 @@ fn init_te_from_sig(
 ) -> TypingEnvironment {
     let mut funs: BTreeMap<NoEqSym, (Vec<SapicType>, SapicType)> = BTreeMap::new();
     for fs in &maude_sig.st_fun_syms {
-        funs.insert(fs.clone(), default_function_type(fs.arity));
+        funs.insert(*fs, default_function_type(fs.arity));
     }
     // `withUserDefinedFuns`: overlay declared types onto the matching signature
     // symbol (matched by name + arity, so the BTreeMap key — the actual term
@@ -710,7 +710,7 @@ fn init_te_from_sig(
             .iter()
             .find(|fs| fs.name == name.as_bytes() && fs.arity == arity)
         {
-            funs.insert(key.clone(), (arg_types.clone(), out_type.clone()));
+            funs.insert(*key, (arg_types.clone(), out_type.clone()));
         }
     }
     TypingEnvironment { vars: BTreeMap::new(), funs }

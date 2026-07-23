@@ -821,7 +821,7 @@ pub fn precompute_full_sources(
                         "t", tamarin_term::lterm::LSort::Msg, (i + 1) as u64))))
                 .collect();
             ku_patterns.push(tamarin_term::term::Term::App(
-                tamarin_term::function_symbols::FunSym::NoEq(noeq.clone()),
+                tamarin_term::function_symbols::FunSym::NoEq(*noeq),
                 args.into()));
         }
     }

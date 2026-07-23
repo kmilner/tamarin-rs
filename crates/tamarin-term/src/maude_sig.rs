@@ -79,7 +79,7 @@ impl MaudeSig {
         let mut all_funs: FunSig = self
             .st_fun_syms
             .iter()
-            .map(|s| FunSym::NoEq(s.clone()))
+            .map(|s| FunSym::NoEq(*s))
             .collect();
         if self.enable_dh || self.enable_bp { all_funs.extend(dh_fun_sig()); }
         if self.enable_bp { all_funs.extend(bp_fun_sig()); }
@@ -92,7 +92,7 @@ impl MaudeSig {
         let mut reducible_without_mult: FunSig = BTreeSet::new();
         for r in &self.st_rules {
             if let Term::App(o, _) = &r.lhs {
-                reducible_without_mult.insert(o.clone());
+                reducible_without_mult.insert(*o);
             }
         }
         reducible_without_mult.extend(dh_reducible_fun_sig());
@@ -105,7 +105,7 @@ impl MaudeSig {
         let mut reducible: FunSig = BTreeSet::new();
         for r in self.rrules() {
             if let Term::App(o, _) = &r.lhs {
-                reducible.insert(o.clone());
+                reducible.insert(*o);
             }
         }
 
@@ -137,7 +137,7 @@ impl MaudeSig {
     pub fn no_eq_fun_syms(&self) -> NoEqFunSig {
         self.fun_syms
             .iter()
-            .filter_map(|f| if let FunSym::NoEq(s) = f { Some(s.clone()) } else { None })
+            .filter_map(|f| if let FunSym::NoEq(s) = f { Some(*s) } else { None })
             .collect()
     }
 

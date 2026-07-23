@@ -69,7 +69,7 @@ pub fn replace_pos<C: Ord + Clone, V: Ord + Clone>(
             if p[0] < 0 || i >= args.len() { return None; }
             let mut new = args.to_vec();
             new[i] = replace_pos(&args[i], s, &p[1..])?;
-            Some(f_app(fsym.clone(), new))
+            Some(f_app(*fsym, new))
         }
     }
 }

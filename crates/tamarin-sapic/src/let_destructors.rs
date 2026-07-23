@@ -106,7 +106,7 @@ fn map_let(
         if let VTerm::App(FunSym::NoEq(funsym), rightterms) = &t2_ln {
             if funsym.constructability == Constructability::Destructor {
                 return case_destructor(
-                    rules, &t1_ln, funsym.clone(), rightterms, ann, pl, pr, elsebranch,
+                    rules, &t1_ln, *funsym, rightterms, ann, pl, pr, elsebranch,
                 );
             }
         }
@@ -205,7 +205,7 @@ fn rebuild_let_comb(
 ) -> ProcessCombinator<SapicLVar> {
     let left = ln_to_sapic(t1_ln);
     let right = ln_to_sapic(&tamarin_term::term::f_app_no_eq(
-        funsym.clone(),
+        *funsym,
         rightterms.to_vec(),
     ));
     ProcessCombinator::Let {
@@ -425,7 +425,7 @@ fn ln_to_sapic(t: &LNTerm) -> SapicTerm {
             match sym {
                 FunSym::Ac(o) => tamarin_term::term::f_app_ac(*o, new_args),
                 FunSym::C(o) => tamarin_term::term::f_app_c(*o, new_args),
-                FunSym::NoEq(o) => tamarin_term::term::f_app_no_eq(o.clone(), new_args),
+                FunSym::NoEq(o) => tamarin_term::term::f_app_no_eq(*o, new_args),
                 FunSym::List => tamarin_term::term::f_app_list(new_args),
             }
         }

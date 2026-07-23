@@ -1412,7 +1412,7 @@ impl EquationStore {
             // Borrowing scan — entries are cloned only on match.
             for (v, t) in first.iter() {
                 let (op, args0) = match t {
-                    Term::App(o, a) => (o.clone(), a.to_vec()),
+                    Term::App(o, a) => (*o, a.to_vec()),
                     _ => continue,
                 };
                 let mut argss: Vec<Vec<LNTerm>> = vec![args0];
@@ -1459,7 +1459,7 @@ impl EquationStore {
             // Build factor `{v → op(x1, ..., xk)}`.
             let factor = LNSubst::from_list(vec![(
                 v.clone(),
-                Term::App(op.clone(),
+                Term::App(op,
                     fvars.iter()
                         .map(|fv| Term::Lit(Lit::Var(fv.clone())))
                         .collect()),
@@ -1512,7 +1512,7 @@ impl EquationStore {
             // Factor: `{v → op(fv1, fv2)}`
             let factor = LNSubst::from_list(vec![(
                 v.clone(),
-                Term::App(op.clone(), vec![
+                Term::App(op, vec![
                     Term::Lit(Lit::Var(fv1.clone())),
                     Term::Lit(Lit::Var(fv2.clone())),
                 ].into()),
@@ -1542,7 +1542,7 @@ impl EquationStore {
                         [a1, a2] => (a1.clone(), a2.clone()),
                         // `newMappings (a:as) = [(fv1,a),(fv2,fApp o as)]`
                         [a1, rest @ ..] =>
-                            (a1.clone(), Term::App(op.clone(), rest.to_vec().into())),
+                            (a1.clone(), Term::App(op, rest.to_vec().into())),
                     };
                     kept.push((fv1.clone(), a1));
                     kept.push((fv2.clone(), a_rest));
