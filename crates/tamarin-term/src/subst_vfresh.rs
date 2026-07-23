@@ -125,7 +125,7 @@ fn rename_term_drop_hint<C: Ord + Clone>(
             // (LTerm.hs:733-734).  Renaming assigns fresh idxs by first
             // appearance, so an AC/C arg list sorted under the OLD vars
             // can become unsorted under the new ones; `fApp` re-sorts.
-            crate::term::f_app(sym.clone(), new_args)
+            crate::term::f_app(*sym, new_args)
         }
     }
 }
@@ -492,7 +492,7 @@ fn rename_lvars_with_hint<C: Ord + Clone, F: FnMut(u64) -> u64>(
             // `rename_lvars_in_vterm` stays raw — it mirrors HS's
             // Monotone `unsafefApp` path under a uniform, order-
             // preserving shift, where re-sorting is unnecessary.)
-            crate::term::f_app(f.clone(), new_args)
+            crate::term::f_app(*f, new_args)
         }
     }
 }
@@ -739,7 +739,7 @@ fn rename_lvars_in_vterm<C: Clone>(
         }
         Term::Lit(other) => Term::Lit(other.clone()),
         Term::App(f, args) => Term::App(
-            f.clone(),
+            *f,
             args.iter().map(|a| rename_lvars_in_vterm(a, rename)).collect(),
         ),
     }

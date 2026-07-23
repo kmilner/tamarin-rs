@@ -606,7 +606,7 @@ fn apply_proper_subterms(
             if new_args.iter().zip(args.iter()).all(|(n, o)| n == o) {
                 return t.clone();
             }
-            Term::App(s.clone(), new_args.into())
+            Term::App(*s, new_args.into())
         }
     }
 }

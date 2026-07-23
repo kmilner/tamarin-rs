@@ -1882,7 +1882,7 @@ fn right_nest_pair<V>(items: Vec<VTerm<Name, V>>) -> Option<VTerm<Name, V>> {
     let mut acc = iter.next()?;
     let sym = tamarin_term::function_symbols::pair_sym();
     for prev in iter {
-        acc = f_app_no_eq(sym.clone(), vec![prev, acc]);
+        acc = f_app_no_eq(sym, vec![prev, acc]);
     }
     Some(acc)
 }

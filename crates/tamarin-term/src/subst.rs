@@ -219,7 +219,7 @@ fn apply_vterm_map_changed<C: Ord + Clone, V: Ord + Clone>(
             cow_map_vec(&args[..], |a| apply_vterm_map_changed(map, a)).map(|mapped| match fsym {
                 FunSym::Ac(o) => f_app_ac(*o, mapped),
                 FunSym::C(o) => f_app_c(*o, mapped),
-                FunSym::NoEq(o) => f_app_no_eq(o.clone(), mapped),
+                FunSym::NoEq(o) => f_app_no_eq(*o, mapped),
                 FunSym::List => f_app_list(mapped),
             })
         }
@@ -314,7 +314,7 @@ where
                 cow_map_vec(&args[..], |a| self.apply_changed(a)).map(|mapped| match fsym {
                     FunSym::Ac(o) => f_app_ac(*o, mapped),
                     FunSym::C(o) => f_app_c(*o, mapped),
-                    FunSym::NoEq(o) => f_app_no_eq(o.clone(), mapped),
+                    FunSym::NoEq(o) => f_app_no_eq(*o, mapped),
                     FunSym::List => f_app_list(mapped),
                 })
             }

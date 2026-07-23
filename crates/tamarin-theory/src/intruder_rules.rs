@@ -647,7 +647,7 @@ pub fn construction_rules(sig: &tamarin_term::maude_sig::MaudeSig) -> Vec<IntrRu
             .map(|i| var_term(LVar::new("x", LSort::Msg, i as u64)))
             .collect();
         let prems: Vec<LNFact> = xs.iter().cloned().map(ku_fact).collect();
-        let m = f_app_no_eq(s.clone(), xs);
+        let m = f_app_no_eq(*s, xs);
         let conc = ku_fact(m.clone());
         let act = ku_fact(m);
         // Encode the constructor name in the IntrRuleACInfo.

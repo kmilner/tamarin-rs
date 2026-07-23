@@ -4120,7 +4120,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
             // child ti of big.  The dedupe set merges equal arms.
             Term::App(FunSym::NoEq(_), args) => {
                 let fs = match big {
-                    Term::App(fs, _) => fs.clone(),
+                    Term::App(fs, _) => *fs,
                     _ => unreachable!(),
                 };
                 if reducible.contains(&fs) { return None; }

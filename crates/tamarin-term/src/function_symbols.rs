@@ -40,7 +40,7 @@ pub enum Constructability {
 /// Free (no-equation) function symbol — name plus arity, privacy, and
 /// constructability. Mirrors the Haskell tuple
 /// `(ByteString, (Int, Privacy, Constructability))`.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct NoEqSym {
     /// Interned into a global pool and held as a `&'static [u8]`, so a clone
     /// is a pointer copy — no heap allocation (unlike owned `Vec`) and no
@@ -80,7 +80,12 @@ impl PartialEq for NoEqSym {
     fn eq(&self, other: &Self) -> bool {
         // Destructure without `..` so a new field forces an equality decision
         // here and in the sibling Hash/Ord impls; all four fields participate.
-        let NoEqSym { name, arity, privacy, constructability } = self;
+        let NoEqSym {
+            name,
+            arity,
+            privacy,
+            constructability,
+        } = self;
         let NoEqSym {
             name: other_name,
             arity: other_arity,
@@ -106,7 +111,12 @@ impl std::hash::Hash for NoEqSym {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         // Destructure without `..` so a new field forces a hash decision here,
         // keeping this in step with Eq/Ord; all four fields are hashed.
-        let NoEqSym { name, arity, privacy, constructability } = self;
+        let NoEqSym {
+            name,
+            arity,
+            privacy,
+            constructability,
+        } = self;
         name.hash(state);
         arity.hash(state);
         privacy.hash(state);
@@ -119,7 +129,12 @@ impl Ord for NoEqSym {
         // Field order: name, arity, privacy, constructability (consistent with
         // Eq/Hash).  Only the name compare gains the ptr fast-path.  Destructure
         // without `..` so a new field forces an ordering decision here.
-        let NoEqSym { name, arity, privacy, constructability } = self;
+        let NoEqSym {
+            name,
+            arity,
+            privacy,
+            constructability,
+        } = self;
         let NoEqSym {
             name: other_name,
             arity: other_arity,
@@ -145,8 +160,18 @@ impl PartialOrd for NoEqSym {
 }
 
 impl NoEqSym {
-    pub fn new(name: impl Into<Vec<u8>>, arity: usize, privacy: Privacy, c: Constructability) -> Self {
-        NoEqSym { name: crate::intern::intern_bytes(&name.into()), arity, privacy, constructability: c }
+    pub fn new(
+        name: impl Into<Vec<u8>>,
+        arity: usize,
+        privacy: Privacy,
+        c: Constructability,
+    ) -> Self {
+        NoEqSym {
+            name: crate::intern::intern_bytes(&name.into()),
+            arity,
+            privacy,
+            constructability: c,
+        }
     }
     pub fn with_destructor(mut self) -> Self {
         self.constructability = Constructability::Destructor;
@@ -161,7 +186,7 @@ pub enum CSym {
 }
 
 /// Top-level function-symbol classification.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
 pub enum FunSym {
     NoEq(NoEqSym),
     Ac(AcSym),
@@ -171,9 +196,15 @@ pub enum FunSym {
 }
 
 impl FunSym {
-    pub fn is_ac(&self) -> bool { matches!(self, FunSym::Ac(_)) }
-    pub fn is_c(&self) -> bool { matches!(self, FunSym::C(_)) }
-    pub fn is_list(&self) -> bool { matches!(self, FunSym::List) }
+    pub fn is_ac(&self) -> bool {
+        matches!(self, FunSym::Ac(_))
+    }
+    pub fn is_c(&self) -> bool {
+        matches!(self, FunSym::C(_))
+    }
+    pub fn is_list(&self) -> bool {
+        matches!(self, FunSym::List)
+    }
 }
 
 /// Function signature.
@@ -185,22 +216,22 @@ pub type NoEqFunSig = BTreeSet<NoEqSym>;
 // Symbol-name string constants (matching the Haskell `*SymString` family).
 // =============================================================================
 
-pub const DIFF_SYM_STRING: &[u8]     = b"diff";
-pub const MUN_SYM_STRING: &[u8]      = b"mun";
-pub const EXP_SYM_STRING: &[u8]      = b"exp";
-pub const INV_SYM_STRING: &[u8]      = b"inv";
-pub const ONE_SYM_STRING: &[u8]      = b"one";
-pub const FST_SYM_STRING: &[u8]      = b"fst";
-pub const SND_SYM_STRING: &[u8]      = b"snd";
+pub const DIFF_SYM_STRING: &[u8] = b"diff";
+pub const MUN_SYM_STRING: &[u8] = b"mun";
+pub const EXP_SYM_STRING: &[u8] = b"exp";
+pub const INV_SYM_STRING: &[u8] = b"inv";
+pub const ONE_SYM_STRING: &[u8] = b"one";
+pub const FST_SYM_STRING: &[u8] = b"fst";
+pub const SND_SYM_STRING: &[u8] = b"snd";
 pub const DH_NEUTRAL_SYM_STRING: &[u8] = b"DH_neutral";
-pub const MULT_SYM_STRING: &[u8]     = b"mult";
-pub const ZERO_SYM_STRING: &[u8]     = b"zero";
-pub const XOR_SYM_STRING: &[u8]      = b"xor";
+pub const MULT_SYM_STRING: &[u8] = b"mult";
+pub const ZERO_SYM_STRING: &[u8] = b"zero";
+pub const XOR_SYM_STRING: &[u8] = b"xor";
 pub const NAT_PLUS_SYM_STRING: &[u8] = b"tplus";
-pub const NAT_ONE_SYM_STRING: &[u8]  = b"tone";
-pub const UNION_SYM_STRING: &[u8]    = b"union";
-pub const EMAP_SYM_STRING: &[u8]     = b"em";
-pub const PMULT_SYM_STRING: &[u8]    = b"pmult";
+pub const NAT_ONE_SYM_STRING: &[u8] = b"tone";
+pub const UNION_SYM_STRING: &[u8] = b"union";
+pub const EMAP_SYM_STRING: &[u8] = b"em";
+pub const PMULT_SYM_STRING: &[u8] = b"pmult";
 
 // -- Predefined NoEq symbols --------------------------------------------------
 
@@ -211,20 +242,46 @@ fn priv_ctor(name: &[u8], arity: usize) -> NoEqSym {
     NoEqSym::new(name, arity, Privacy::Private, Constructability::Constructor)
 }
 
-pub fn pair_sym() -> NoEqSym       { pub_ctor(b"pair", 2) }
-pub fn diff_sym() -> NoEqSym       { priv_ctor(DIFF_SYM_STRING, 2) }
-pub fn exp_sym() -> NoEqSym        { pub_ctor(EXP_SYM_STRING, 2) }
-pub fn inv_sym() -> NoEqSym        { pub_ctor(INV_SYM_STRING, 1) }
-pub fn one_sym() -> NoEqSym        { pub_ctor(ONE_SYM_STRING, 0) }
-pub fn dh_neutral_sym() -> NoEqSym { pub_ctor(DH_NEUTRAL_SYM_STRING, 0) }
-pub fn fst_sym() -> NoEqSym        { pub_ctor(FST_SYM_STRING, 1) }
-pub fn snd_sym() -> NoEqSym        { pub_ctor(SND_SYM_STRING, 1) }
-pub fn pmult_sym() -> NoEqSym      { pub_ctor(PMULT_SYM_STRING, 2) }
-pub fn zero_sym() -> NoEqSym       { pub_ctor(ZERO_SYM_STRING, 0) }
-pub fn nat_one_sym() -> NoEqSym    { pub_ctor(NAT_ONE_SYM_STRING, 0) }
+pub fn pair_sym() -> NoEqSym {
+    pub_ctor(b"pair", 2)
+}
+pub fn diff_sym() -> NoEqSym {
+    priv_ctor(DIFF_SYM_STRING, 2)
+}
+pub fn exp_sym() -> NoEqSym {
+    pub_ctor(EXP_SYM_STRING, 2)
+}
+pub fn inv_sym() -> NoEqSym {
+    pub_ctor(INV_SYM_STRING, 1)
+}
+pub fn one_sym() -> NoEqSym {
+    pub_ctor(ONE_SYM_STRING, 0)
+}
+pub fn dh_neutral_sym() -> NoEqSym {
+    pub_ctor(DH_NEUTRAL_SYM_STRING, 0)
+}
+pub fn fst_sym() -> NoEqSym {
+    pub_ctor(FST_SYM_STRING, 1)
+}
+pub fn snd_sym() -> NoEqSym {
+    pub_ctor(SND_SYM_STRING, 1)
+}
+pub fn pmult_sym() -> NoEqSym {
+    pub_ctor(PMULT_SYM_STRING, 2)
+}
+pub fn zero_sym() -> NoEqSym {
+    pub_ctor(ZERO_SYM_STRING, 0)
+}
+pub fn nat_one_sym() -> NoEqSym {
+    pub_ctor(NAT_ONE_SYM_STRING, 0)
+}
 
-pub fn fst_dest_sym() -> NoEqSym { fst_sym().with_destructor() }
-pub fn snd_dest_sym() -> NoEqSym { snd_sym().with_destructor() }
+pub fn fst_dest_sym() -> NoEqSym {
+    fst_sym().with_destructor()
+}
+pub fn snd_dest_sym() -> NoEqSym {
+    snd_sym().with_destructor()
+}
 
 // -- Predefined signatures ----------------------------------------------------
 
@@ -235,15 +292,21 @@ pub fn dh_fun_sig() -> FunSig {
         FunSym::NoEq(one_sym()),
         FunSym::NoEq(inv_sym()),
         FunSym::NoEq(dh_neutral_sym()),
-    ].into_iter().collect()
+    ]
+    .into_iter()
+    .collect()
 }
 
 pub fn xor_fun_sig() -> FunSig {
-    [FunSym::Ac(AcSym::Xor), FunSym::NoEq(zero_sym())].into_iter().collect()
+    [FunSym::Ac(AcSym::Xor), FunSym::NoEq(zero_sym())]
+        .into_iter()
+        .collect()
 }
 
 pub fn bp_fun_sig() -> FunSig {
-    [FunSym::NoEq(pmult_sym()), FunSym::C(CSym::EMap)].into_iter().collect()
+    [FunSym::NoEq(pmult_sym()), FunSym::C(CSym::EMap)]
+        .into_iter()
+        .collect()
 }
 
 pub fn mset_fun_sig() -> FunSig {
@@ -255,15 +318,21 @@ pub fn pair_fun_sig() -> NoEqFunSig {
 }
 
 pub fn pair_fun_dest_sig() -> NoEqFunSig {
-    [pair_sym(), fst_dest_sym(), snd_dest_sym()].into_iter().collect()
+    [pair_sym(), fst_dest_sym(), snd_dest_sym()]
+        .into_iter()
+        .collect()
 }
 
 pub fn dh_reducible_fun_sig() -> FunSig {
-    [FunSym::NoEq(exp_sym()), FunSym::NoEq(inv_sym())].into_iter().collect()
+    [FunSym::NoEq(exp_sym()), FunSym::NoEq(inv_sym())]
+        .into_iter()
+        .collect()
 }
 
 pub fn bp_reducible_fun_sig() -> FunSig {
-    [FunSym::NoEq(pmult_sym()), FunSym::C(CSym::EMap)].into_iter().collect()
+    [FunSym::NoEq(pmult_sym()), FunSym::C(CSym::EMap)]
+        .into_iter()
+        .collect()
 }
 
 pub fn xor_reducible_fun_sig() -> FunSig {
@@ -276,11 +345,15 @@ pub fn implicit_fun_sig() -> FunSig {
         FunSym::NoEq(pair_sym()),
         FunSym::Ac(AcSym::Mult),
         FunSym::Ac(AcSym::Union),
-    ].into_iter().collect()
+    ]
+    .into_iter()
+    .collect()
 }
 
 pub fn nat_fun_sig() -> FunSig {
-    [FunSym::NoEq(nat_one_sym()), FunSym::Ac(AcSym::NatPlus)].into_iter().collect()
+    [FunSym::NoEq(nat_one_sym()), FunSym::Ac(AcSym::NatPlus)]
+        .into_iter()
+        .collect()
 }
 
 #[cfg(test)]
@@ -299,7 +372,10 @@ mod tests {
     #[test]
     fn destructors_flip_constructability() {
         assert_eq!(fst_sym().constructability, Constructability::Constructor);
-        assert_eq!(fst_dest_sym().constructability, Constructability::Destructor);
+        assert_eq!(
+            fst_dest_sym().constructability,
+            Constructability::Destructor
+        );
         // Same name though.
         assert_eq!(fst_sym().name, fst_dest_sym().name);
     }
@@ -335,16 +411,18 @@ mod tests {
     #[test]
     fn ac_sym_ord_matches_haskell_declaration() {
         assert!(AcSym::Union < AcSym::Mult);
-        assert!(AcSym::Mult  < AcSym::Xor);
-        assert!(AcSym::Xor   < AcSym::NatPlus);
+        assert!(AcSym::Mult < AcSym::Xor);
+        assert!(AcSym::Xor < AcSym::NatPlus);
     }
 
     /// FunctionSymbols.hs:97:
     ///     data Privacy = Private | Public
     #[test]
     fn privacy_ord_matches_haskell_declaration() {
-        assert!(Privacy::Private < Privacy::Public,
-                "Private MUST sort before Public — used in unifiabilty queries");
+        assert!(
+            Privacy::Private < Privacy::Public,
+            "Private MUST sort before Public — used in unifiabilty queries"
+        );
     }
 
     /// FunctionSymbols.hs:102:
@@ -364,12 +442,12 @@ mod tests {
     #[test]
     fn fun_sym_ord_matches_haskell_declaration() {
         let no_eq = FunSym::NoEq(pair_sym());
-        let ac    = FunSym::Ac(AcSym::Mult);
-        let c     = FunSym::C(CSym::EMap);
-        let list  = FunSym::List;
-        assert!(no_eq < ac,   "NoEq < AC (Haskell decl order)");
-        assert!(ac    < c,    "AC < C");
-        assert!(c     < list, "C < List");
+        let ac = FunSym::Ac(AcSym::Mult);
+        let c = FunSym::C(CSym::EMap);
+        let list = FunSym::List;
+        assert!(no_eq < ac, "NoEq < AC (Haskell decl order)");
+        assert!(ac < c, "AC < C");
+        assert!(c < list, "C < List");
         assert!(no_eq < list, "transitive: NoEq < List");
     }
 
@@ -383,13 +461,19 @@ mod tests {
         s.insert(FunSym::C(CSym::EMap));
         s.insert(FunSym::Ac(AcSym::Union));
         s.insert(FunSym::NoEq(pair_sym()));
-        let kinds: Vec<&str> = s.iter().map(|f| match f {
-            FunSym::NoEq(_) => "NoEq",
-            FunSym::Ac(_) => "AC",
-            FunSym::C(_) => "C",
-            FunSym::List => "List",
-        }).collect();
-        assert_eq!(kinds, vec!["NoEq", "AC", "C", "List"],
-                   "BTreeSet<FunSym> must iterate in Haskell decl order");
+        let kinds: Vec<&str> = s
+            .iter()
+            .map(|f| match f {
+                FunSym::NoEq(_) => "NoEq",
+                FunSym::Ac(_) => "AC",
+                FunSym::C(_) => "C",
+                FunSym::List => "List",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["NoEq", "AC", "C", "List"],
+            "BTreeSet<FunSym> must iterate in Haskell decl order"
+        );
     }
 }
