@@ -34,7 +34,7 @@
 //! so we walk each field by hand. The walk-order mirrors
 //! `Reduction::subst_system_once` so any future cross-checks stay aligned.
 
-use tamarin_term::lterm::{HasFrees, LVar, LNTerm};
+use tamarin_term::lterm::{HasFrees, LNTerm, LVar};
 use tamarin_term::subst::Subst;
 use tamarin_term::term::Term;
 use tamarin_term::vterm::Lit;
@@ -89,12 +89,16 @@ pub fn rename_precise_system(sys: &mut System) {
     // Helper_Loop_and_success this controls whether vr.0 ends up Check
     // (HS pattern) or Gen_Step (the unsorted-walk pattern), which in turn flips
     // impliedFormulas' sysActions iteration order and the Disj goal-nrs.
-    let mut nodes_sorted: Vec<&(crate::constraint::constraints::NodeId, crate::rule::RuleACInst)>
-        = sys.nodes.iter().collect();
+    let mut nodes_sorted: Vec<&(
+        crate::constraint::constraints::NodeId,
+        crate::rule::RuleACInst,
+    )> = sys.nodes.iter().collect();
     nodes_sorted.sort_by(|a, b| a.0.cmp(&b.0));
     for (id, rule) in nodes_sorted {
         state.import(id);
-        rule.for_each_free(&mut |v| { state.import(v); });
+        rule.for_each_free(&mut |v| {
+            state.import(v);
+        });
     }
     // Nodes are the FIRST field walked, so `!state.changed` here means every
     // node var (ids + rule vars) was bound to its own idx — the node rename
@@ -114,47 +118,60 @@ pub fn rename_precise_system(sys: &mut System) {
     // `evalFresh ... nothingUsed`-canonicalised numbering exactly —
     // without touching the live `less_atoms` / `edges` Vec used
     // elsewhere.
-    let mut edges_sorted: Vec<&crate::constraint::constraints::Edge>
-        = sys.edges.iter().collect();
+    let mut edges_sorted: Vec<&crate::constraint::constraints::Edge> = sys.edges.iter().collect();
     edges_sorted.sort();
     for e in edges_sorted {
         state.import(&e.src.0);
         state.import(&e.tgt.0);
     }
-    let mut less_sorted: Vec<&crate::constraint::constraints::LessAtom>
-        = sys.less_atoms.iter().collect();
+    let mut less_sorted: Vec<&crate::constraint::constraints::LessAtom> =
+        sys.less_atoms.iter().collect();
     less_sorted.sort();
     for la in less_sorted {
         state.import(&la.smaller);
         state.import(&la.larger);
     }
-    if let Some(la) = &sys.last_atom { state.import(la); }
+    if let Some(la) = &sys.last_atom {
+        state.import(la);
+    }
     // HS `HasFrees SubtermStore` (SubtermStore.hs:546-548) walks
     // `negSt <> st <> solvedSt`; each summand is a `S.Set` — sorted.
     // `neg_subterms` (negSt) must be visited FIRST to match HS order.
     // HS `neg_subterms` is `S.Set (LNTerm, LNTerm)` — sorted by pair Ord.
-    let mut neg_sorted: Vec<&(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)>
-        = sys.subterm_store.neg_subterms.iter().collect();
+    let mut neg_sorted: Vec<&(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)> =
+        sys.subterm_store.neg_subterms.iter().collect();
     neg_sorted.sort();
     for (s, b) in neg_sorted {
-        s.for_each_free(&mut |v| { state.import(v); });
-        b.for_each_free(&mut |v| { state.import(v); });
+        s.for_each_free(&mut |v| {
+            state.import(v);
+        });
+        b.for_each_free(&mut |v| {
+            state.import(v);
+        });
     }
     // SubtermConstraint isn't `Ord` in RS so sort by `(small, big)`
     // which mirrors HS's derived ordering on the analogous field pair.
-    let mut sub_sorted: Vec<&crate::tools::subterm_store::SubtermConstraint>
-        = sys.subterm_store.subterms.iter().collect();
+    let mut sub_sorted: Vec<&crate::tools::subterm_store::SubtermConstraint> =
+        sys.subterm_store.subterms.iter().collect();
     sub_sorted.sort_by(|a, b| (&a.small, &a.big).cmp(&(&b.small, &b.big)));
     for c in sub_sorted {
-        c.small.for_each_free(&mut |v| { state.import(v); });
-        c.big.for_each_free(&mut |v| { state.import(v); });
+        c.small.for_each_free(&mut |v| {
+            state.import(v);
+        });
+        c.big.for_each_free(&mut |v| {
+            state.import(v);
+        });
     }
-    let mut solved_sorted: Vec<&crate::tools::subterm_store::SubtermConstraint>
-        = sys.subterm_store.solved_subterms.iter().collect();
+    let mut solved_sorted: Vec<&crate::tools::subterm_store::SubtermConstraint> =
+        sys.subterm_store.solved_subterms.iter().collect();
     solved_sorted.sort_by(|a, b| (&a.small, &a.big).cmp(&(&b.small, &b.big)));
     for c in solved_sorted {
-        c.small.for_each_free(&mut |v| { state.import(v); });
-        c.big.for_each_free(&mut |v| { state.import(v); });
+        c.small.for_each_free(&mut |v| {
+            state.import(v);
+        });
+        c.big.for_each_free(&mut |v| {
+            state.import(v);
+        });
     }
     // eq_store.subst: visit keys (dom) and values (range).  RS's
     // `Subst` is `BTreeMap`-backed, so the borrowing `iter()` already
@@ -163,7 +180,9 @@ pub fn rename_precise_system(sys: &mut System) {
     // ascending (SubstVFree.hs:220-221, see line 221).
     for (k, t) in sys.eq_store.subst.iter() {
         state.import(k);
-        t.for_each_free(&mut |v| { state.import(v); });
+        t.for_each_free(&mut |v| {
+            state.import(v);
+        });
     }
     // eq_store.conj: HS-faithful `HasFrees (SubstVFresh n LVar)` only
     // walks DOMAIN (keys), NOT values (SubstVFresh.hs:196-202).  This
@@ -175,8 +194,9 @@ pub fn rename_precise_system(sys: &mut System) {
     // with RS's `Vec<EqDisj>`).  The INNER `S.Set LNSubstVFresh` is Ord
     // ascending — sort to match.
     for d in &sys.eq_store.conj {
-        let mut substs_sorted: Vec<&tamarin_term::subst_vfresh::SubstVFresh<tamarin_term::lterm::Name, LVar>>
-            = d.substs.iter().collect();
+        let mut substs_sorted: Vec<
+            &tamarin_term::subst_vfresh::SubstVFresh<tamarin_term::lterm::Name, LVar>,
+        > = d.substs.iter().collect();
         substs_sorted.sort();
         for s in substs_sorted {
             // Borrowing `dom()` walks the same BTreeMap keys in the same
@@ -194,30 +214,43 @@ pub fn rename_precise_system(sys: &mut System) {
     // `Vec<Guarded>` is in insertion order — sort via the existing
     // `cmp_guarded` helper (guarded.rs:67) which mirrors HS's derived
     // `Ord Guarded` (Guarded.hs:121-129).
-    let mut formulas_sorted: Vec<&crate::guarded::Guarded>
-        = sys.formulas.iter().map(|f| f.as_ref()).collect();
+    let mut formulas_sorted: Vec<&crate::guarded::Guarded> =
+        sys.formulas.iter().map(|f| f.as_ref()).collect();
     formulas_sorted.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
-    for f in formulas_sorted { guarded_for_each_free(f, &mut |v| { state.import(v); }); }
-    let mut solved_formulas_sorted: Vec<&crate::guarded::Guarded>
-        = sys.solved_formulas.iter().map(|f| f.as_ref()).collect();
+    for f in formulas_sorted {
+        guarded_for_each_free(f, &mut |v| {
+            state.import(v);
+        });
+    }
+    let mut solved_formulas_sorted: Vec<&crate::guarded::Guarded> =
+        sys.solved_formulas.iter().map(|f| f.as_ref()).collect();
     solved_formulas_sorted.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
-    for f in solved_formulas_sorted { guarded_for_each_free(f, &mut |v| { state.import(v); }); }
-    let mut lemmas_sorted: Vec<&crate::guarded::Guarded>
-        = sys.lemmas.iter().map(|f| f.as_ref()).collect();
+    for f in solved_formulas_sorted {
+        guarded_for_each_free(f, &mut |v| {
+            state.import(v);
+        });
+    }
+    let mut lemmas_sorted: Vec<&crate::guarded::Guarded> =
+        sys.lemmas.iter().map(|f| f.as_ref()).collect();
     lemmas_sorted.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
-    for f in lemmas_sorted { guarded_for_each_free(f, &mut |v| { state.import(v); }); }
+    for f in lemmas_sorted {
+        guarded_for_each_free(f, &mut |v| {
+            state.import(v);
+        });
+    }
     // HS-faithful: `_sGoals` is `M.Map Goal GoalStatus` (System.hs:383-401, see line 393),
     // walked via `HasFrees (M.Map k v) = M.foldrWithKey combine`
     // (Term/LTerm.hs:829-836) in ascending key order (`Ord Goal`).
     // `goal_cmp` matches HS's derived `Ord Goal`
     // (System/Constraints.hs:156-168); see
     // `goal_cmp_tag_order_matches_haskell_declaration` test in goals.rs.
-    let mut goals_sorted: Vec<&(Goal, crate::constraint::system::GoalStatus)>
-        = sys.goals.iter().collect();
-    goals_sorted.sort_by(|a, b|
-        crate::constraint::solver::goals::goal_cmp(&a.0, &b.0));
+    let mut goals_sorted: Vec<&(Goal, crate::constraint::system::GoalStatus)> =
+        sys.goals.iter().collect();
+    goals_sorted.sort_by(|a, b| crate::constraint::solver::goals::goal_cmp(&a.0, &b.0));
     for (g, _) in goals_sorted {
-        goal_for_each_free(g, &mut |v| { state.import(v); });
+        goal_for_each_free(g, &mut |v| {
+            state.import(v);
+        });
     }
 
     // ----------------------------------------------------------------------
@@ -233,7 +266,9 @@ pub fn rename_precise_system(sys: &mut System) {
     // invalidation note at the top of this function.
     let any_remap = state.changed;
     let map = state.into_map();
-    if map.is_empty() { return; }
+    if map.is_empty() {
+        return;
+    }
     if any_remap {
         sys.invalidate_max_var_idx_cache();
         // Whole-system alpha-rename: no inherited verified-no-op verdict
@@ -244,9 +279,8 @@ pub fn rename_precise_system(sys: &mut System) {
     }
 
     let term_subst: Subst<tamarin_term::lterm::Name, LVar> = Subst::from_list(
-        map.iter().map(|(old, new)| {
-            (old.0.clone(), Term::Lit(Lit::Var(new.clone())))
-        }),
+        map.iter()
+            .map(|(old, new)| (old.0.clone(), Term::Lit(Lit::Var(new.clone())))),
     );
     // Hashed leaf-lookup view over the pass-invariant rename subst
     // (`SubstView`): Phase 2 applies this ONE fixed var→var substitution to
@@ -255,23 +289,24 @@ pub fn rename_precise_system(sys: &mut System) {
     // byte-identical output.  (`from_list` above already drops identity
     // `x ~> x` entries, so the view's hit set matches the map's exactly.)
     let term_view = tamarin_term::subst::SubstView::new(&term_subst);
-    let formula_subst: VarSubst = map.iter().map(|(old, new)| {
-        let sort = lvar_sort_to_sort_hint(new.sort);
-        (
-            // `old.0.name` is an interned `&'static str` — zero-alloc key.
-            (old.0.name, old.0.idx),
-            tamarin_parser::ast::Term::Var(tamarin_parser::ast::VarSpec {
-                name: new.name.to_string(),
-                idx: new.idx,
-                sort,
-                typ: None,
-            }),
-        )
-    }).collect();
+    let formula_subst: VarSubst = map
+        .iter()
+        .map(|(old, new)| {
+            let sort = lvar_sort_to_sort_hint(new.sort);
+            (
+                // `old.0.name` is an interned `&'static str` — zero-alloc key.
+                (old.0.name, old.0.idx),
+                tamarin_parser::ast::Term::Var(tamarin_parser::ast::VarSpec {
+                    name: new.name.to_string(),
+                    idx: new.idx,
+                    sort,
+                    typ: None,
+                }),
+            )
+        })
+        .collect();
 
-    let map_var = |v: LVar| -> LVar {
-        map.get(&v).cloned().unwrap_or(v)
-    };
+    let map_var = |v: LVar| -> LVar { map.get(&v).cloned().unwrap_or(v) };
 
     // 1. Nodes — id + rule.
     //
@@ -304,7 +339,9 @@ pub fn rename_precise_system(sys: &mut System) {
             // Identity rename ⇒ the (id, rule) multiset is unchanged; only the
             // HS `M.fromList` ascending-NodeId storage order needs restoring.
             // Node-component max is unchanged, so its cache stays valid.
-            let mut nodes = std::sync::Arc::unwrap_or_clone(std::mem::take(&mut sys.content_mut_untracked().nodes));
+            let mut nodes = std::sync::Arc::unwrap_or_clone(std::mem::take(
+                &mut sys.content_mut_untracked().nodes,
+            ));
             nodes.sort_by(|a, b| a.0.cmp(&b.0));
             sys.content_mut_untracked().nodes = std::sync::Arc::new(nodes);
         }
@@ -313,13 +350,19 @@ pub fn rename_precise_system(sys: &mut System) {
         // the node-component max can drop — invalidate its cache here (the
         // one site that actually rewrites nodes).
         sys.invalidate_node_max_cache();
-        let nodes = std::sync::Arc::unwrap_or_clone(std::mem::take(&mut sys.content_mut_untracked().nodes));
-        let mut renamed: Vec<(crate::constraint::constraints::NodeId, crate::rule::RuleACInst)>
-            = nodes.into_iter().map(|(id, rule)| {
+        let nodes =
+            std::sync::Arc::unwrap_or_clone(std::mem::take(&mut sys.content_mut_untracked().nodes));
+        let mut renamed: Vec<(
+            crate::constraint::constraints::NodeId,
+            crate::rule::RuleACInst,
+        )> = nodes
+            .into_iter()
+            .map(|(id, rule)| {
                 let new_id = map_var(id);
                 let new_rule = rule.map_free(&mut |v| map_var(v));
                 (new_id, new_rule)
-            }).collect();
+            })
+            .collect();
         renamed.sort_by(|a, b| a.0.cmp(&b.0));
         sys.content_mut_untracked().nodes = std::sync::Arc::new(renamed);
     }
@@ -349,12 +392,12 @@ pub fn rename_precise_system(sys: &mut System) {
     // detailed rationale.
     // HS `mapFrees (S.Set LessAtom)`: sort + dedup post-rename
     // (Term/LTerm.hs:825-830, see line 827 `fmap S.fromList . mapFrees f . S.toList`).
-    let mut new_less: Vec<crate::constraint::constraints::LessAtom>
-        = Vec::with_capacity(sys.less_atoms.len());
+    let mut new_less: Vec<crate::constraint::constraints::LessAtom> =
+        Vec::with_capacity(sys.less_atoms.len());
     for la in std::mem::take(&mut sys.content_mut_untracked().less_atoms) {
         let mut la = la;
         la.smaller = map_var(la.smaller.clone());
-        la.larger  = map_var(la.larger.clone());
+        la.larger = map_var(la.larger.clone());
         new_less.push(la);
     }
     // Sort + dedup (O(n log n)), matching HS's `S.fromList` over the renamed
@@ -364,10 +407,9 @@ pub fn rename_precise_system(sys: &mut System) {
     sys.content_mut_untracked().less_atoms = new_less;
 
     // 5. Goals — per-variant rewrite.
-    let goals = std::sync::Arc::unwrap_or_clone(std::mem::take(&mut sys.content_mut_untracked().goals));
-    let apply_term = |t: LNTerm| -> LNTerm {
-        term_view.apply(t)
-    };
+    let goals =
+        std::sync::Arc::unwrap_or_clone(std::mem::take(&mut sys.content_mut_untracked().goals));
+    let apply_term = |t: LNTerm| -> LNTerm { term_view.apply(t) };
     let apply_fact = |fa: crate::fact::LNFact| -> crate::fact::LNFact {
         // Var→var rename is a frees-changing rebuild:
         // recompute the bloom from the renamed terms — NEVER copy `fa`'s.
@@ -382,17 +424,15 @@ pub fn rename_precise_system(sys: &mut System) {
         let g2 = match g {
             Goal::Action(i, fa) => Goal::Action(map_var(i), apply_fact(fa)),
             Goal::Premise(p, fa) => Goal::Premise((map_var(p.0), p.1), apply_fact(fa)),
-            Goal::Chain(c, p) => Goal::Chain(
-                (map_var(c.0), c.1),
-                (map_var(p.0), p.1),
-            ),
+            Goal::Chain(c, p) => Goal::Chain((map_var(c.0), c.1), (map_var(p.0), p.1)),
             Goal::Disj(d) => {
                 // COW: an identity rename (or one that touches no Disj leaf)
                 // reuses the owned `g` with zero rebuild; `Some` is byte-
                 // identical to the eager `subst_guarded`.
-                let items: Vec<crate::guarded::Guarded> = d.0.into_iter()
-                    .map(|g| subst_guarded_cow(&g, &formula_subst).unwrap_or(g))
-                    .collect();
+                let items: Vec<crate::guarded::Guarded> =
+                    d.0.into_iter()
+                        .map(|g| subst_guarded_cow(&g, &formula_subst).unwrap_or(g))
+                        .collect();
                 Goal::Disj(crate::constraint::constraints::Disj(items))
             }
             Goal::Split(s) => Goal::Split(s),
@@ -409,8 +449,7 @@ pub fn rename_precise_system(sys: &mut System) {
     // dedup on structural `Goal` equality (plain `==`) — NOT on
     // `goal_cmp == Equal`, because `goal_cmp` orders
     // Disj goals by len + canonical string and would over-collapse.
-    new_goals.sort_by(|a, b|
-        crate::constraint::solver::goals::goal_cmp(&a.0, &b.0));
+    new_goals.sort_by(|a, b| crate::constraint::solver::goals::goal_cmp(&a.0, &b.0));
     new_goals.dedup_by(|a, b| a.0 == b.0);
     sys.content_mut_untracked().goals = std::sync::Arc::new(new_goals);
 
@@ -423,7 +462,8 @@ pub fn rename_precise_system(sys: &mut System) {
     // collision-deduped.  Mirror by sorting+deduping after the in-place
     // rename: post-rename two formulas that became equal collapse.
     if !formula_subst.is_empty() {
-        let sort_dedup_guarded = |v: &mut Vec<std::sync::Arc<crate::guarded::Guarded>>, sub: &VarSubst| {
+        let sort_dedup_guarded = |v: &mut Vec<std::sync::Arc<crate::guarded::Guarded>>,
+                                  sub: &VarSubst| {
             // COW: only the formulas whose leaves actually change are rebuilt;
             // `Some(nf)` is byte-identical to the eager `subst_guarded`, and a
             // no-effect (identity) rename leaves `*f` untouched.  The
@@ -431,11 +471,12 @@ pub fn rename_precise_system(sys: &mut System) {
             // runs even under an identity rename, and intervening passes may
             // have left the Vec unsorted.
             for f in v.iter_mut() {
-                if let Some(nf) = subst_guarded_cow(f, sub) { *f = std::sync::Arc::new(nf); }
+                if let Some(nf) = subst_guarded_cow(f, sub) {
+                    *f = std::sync::Arc::new(nf);
+                }
             }
             v.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
-            v.dedup_by(|a, b| crate::guarded::cmp_guarded(a, b)
-                == std::cmp::Ordering::Equal);
+            v.dedup_by(|a, b| crate::guarded::cmp_guarded(a, b) == std::cmp::Ordering::Equal);
         };
         sort_dedup_guarded(sys.formulas_mut_untracked(), &formula_subst);
         sort_dedup_guarded(sys.solved_formulas_mut_untracked(), &formula_subst);
@@ -447,7 +488,9 @@ pub fn rename_precise_system(sys: &mut System) {
         &mut sys.eq_store_mut().subst,
         crate::tools::equation_store::LNSubst::empty(),
     );
-    let pairs: Vec<(LVar, LNTerm)> = old_subst.to_list().into_iter()
+    let pairs: Vec<(LVar, LNTerm)> = old_subst
+        .to_list()
+        .into_iter()
         .map(|(k, v)| (map_var(k), apply_term(v)))
         .collect();
     sys.eq_store_mut().subst = Subst::from_list(pairs);
@@ -469,8 +512,10 @@ pub fn rename_precise_system(sys: &mut System) {
     // idx differences across variants.
     for d in sys.eq_store_mut().conj.iter_mut() {
         for s in d.substs.iter_mut() {
-            let pairs: Vec<(LVar, LNTerm)> = s.to_list().into_iter()
-                .map(|(k, v)| (map_var(k), v))  // keep VALUE unchanged
+            let pairs: Vec<(LVar, LNTerm)> = s
+                .to_list()
+                .into_iter()
+                .map(|(k, v)| (map_var(k), v)) // keep VALUE unchanged
                 .collect();
             *s = tamarin_term::subst_vfresh::SubstVFresh::from_list(pairs);
         }
@@ -498,27 +543,30 @@ pub fn rename_precise_system(sys: &mut System) {
         c.small = apply_term(c.small.clone());
         c.big = apply_term(c.big.clone());
     }
-    sys.subterm_store_mut().subterms.sort_by(|a, b|
-        (&a.small, &a.big).cmp(&(&b.small, &b.big)));
-    sys.subterm_store_mut().subterms.dedup_by(|a, b|
-        (&a.small, &a.big) == (&b.small, &b.big));
+    sys.subterm_store_mut()
+        .subterms
+        .sort_by(|a, b| (&a.small, &a.big).cmp(&(&b.small, &b.big)));
+    sys.subterm_store_mut()
+        .subterms
+        .dedup_by(|a, b| (&a.small, &a.big) == (&b.small, &b.big));
     for c in sys.subterm_store_mut().solved_subterms.iter_mut() {
         c.small = apply_term(c.small.clone());
         c.big = apply_term(c.big.clone());
     }
-    sys.subterm_store_mut().solved_subterms.sort_by(|a, b|
-        (&a.small, &a.big).cmp(&(&b.small, &b.big)));
-    sys.subterm_store_mut().solved_subterms.dedup_by(|a, b|
-        (&a.small, &a.big) == (&b.small, &b.big));
+    sys.subterm_store_mut()
+        .solved_subterms
+        .sort_by(|a, b| (&a.small, &a.big).cmp(&(&b.small, &b.big)));
+    sys.subterm_store_mut()
+        .solved_subterms
+        .dedup_by(|a, b| (&a.small, &a.big) == (&b.small, &b.big));
     // negSubterms are mapped too; oldNegSubterms are NOT (HS mapFrees
     // keeps `oldNegSt` with `pure` — SubtermStore.hs:550-555).  Take the set
     // out, map each pair, then `rebuild_from` re-establishes the sorted-unique
     // set invariant on the rewritten pairs.
-    let mapped: Vec<(LNTerm, LNTerm)> =
-        std::mem::take(&mut sys.subterm_store_mut().neg_subterms)
-            .into_iter()
-            .map(|(s, t)| (apply_term(s), apply_term(t)))
-            .collect();
+    let mapped: Vec<(LNTerm, LNTerm)> = std::mem::take(&mut sys.subterm_store_mut().neg_subterms)
+        .into_iter()
+        .map(|(s, t)| (apply_term(s), apply_term(t)))
+        .collect();
     sys.subterm_store_mut().neg_subterms =
         crate::tools::subterm_store::SortedPairSet::rebuild_from(mapped);
 }
@@ -542,19 +590,25 @@ struct VarKey(LVar);
 
 impl PartialEq for VarKey {
     #[inline]
-    fn eq(&self, other: &Self) -> bool { lvar_fast_eq(&self.0, &other.0) }
+    fn eq(&self, other: &Self) -> bool {
+        lvar_fast_eq(&self.0, &other.0)
+    }
 }
 impl Eq for VarKey {}
 impl std::hash::Hash for VarKey {
     #[inline]
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) { self.0.hash(state) }
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state)
+    }
 }
 // Lets `contains_key`/`get` probe by `&LVar` (no clone) yet run the fast eq.
 // The probe hashes via `LVar`'s derive (identical to `VarKey::hash`), so the
 // probe lands in the same bucket the owned key was stored in.
 impl hashbrown::Equivalent<VarKey> for LVar {
     #[inline]
-    fn equivalent(&self, key: &VarKey) -> bool { lvar_fast_eq(self, &key.0) }
+    fn equivalent(&self, key: &VarKey) -> bool {
+        lvar_fast_eq(self, &key.0)
+    }
 }
 
 /// Exactly `LVar`'s content equality, faster: interned names share one
@@ -565,8 +619,16 @@ impl hashbrown::Equivalent<VarKey> for LVar {
 fn lvar_fast_eq(a: &LVar, b: &LVar) -> bool {
     // Destructure without `..` so a new `LVar` field forces an equality decision
     // here, keeping this fast path in step with `LVar`'s derived Eq.
-    let LVar { name: a_name, sort: a_sort, idx: a_idx } = a;
-    let LVar { name: b_name, sort: b_sort, idx: b_idx } = b;
+    let LVar {
+        name: a_name,
+        sort: a_sort,
+        idx: a_idx,
+    } = a;
+    let LVar {
+        name: b_name,
+        sort: b_sort,
+        idx: b_idx,
+    } = b;
     // idx (u64) first — most discriminating, cheapest — then sort, so a
     // hash-collision mismatch is rejected before the name is touched.
     if a_idx != b_idx || a_sort != b_sort {
@@ -611,20 +673,33 @@ impl RenameState {
         // that keeps the equality RELATION exactly `LVar`'s.  The hash is still
         // content-based (see `VarKey`), so equal-content vars — even with
         // different name pointers — dedup into one slot: output is identical.
-        if self.map.contains_key(v) { return; }
+        if self.map.contains_key(v) {
+            return;
+        }
         let idx = self.fresh.fresh_ident(v.name);
         // Record whether this first binding remaps the idx (name+sort are
         // always preserved), so an all-identity prefix leaves `changed` false.
-        if idx != v.idx { self.changed = true; }
+        if idx != v.idx {
+            self.changed = true;
+        }
         // First occurrence only (rare): materialise the owned key.
-        self.map.insert(VarKey(v.clone()), LVar { name: v.name, sort: v.sort, idx });
+        self.map.insert(
+            VarKey(v.clone()),
+            LVar {
+                name: v.name,
+                sort: v.sort,
+                idx,
+            },
+        );
     }
-    fn into_map(self) -> RenameMap { self.map }
+    fn into_map(self) -> RenameMap {
+        self.map
+    }
 }
 
 fn lvar_sort_to_sort_hint(s: tamarin_term::lterm::LSort) -> tamarin_parser::ast::SortHint {
-    use tamarin_term::lterm::LSort;
     use tamarin_parser::ast::SortHint;
+    use tamarin_term::lterm::LSort;
     match s {
         LSort::Msg => SortHint::Msg,
         LSort::Pub => SortHint::Pub,
@@ -649,7 +724,9 @@ fn goal_for_each_free(g: &Goal, f: &mut dyn FnMut(&LVar)) {
             f(&p.0);
         }
         Goal::Disj(d) => {
-            for item in &d.0 { guarded_for_each_free(item, f); }
+            for item in &d.0 {
+                guarded_for_each_free(item, f);
+            }
         }
         Goal::Split(_) => {}
         Goal::Subterm((a, b)) => {
@@ -667,10 +744,14 @@ fn guarded_for_each_free(g: &crate::guarded::Guarded, f: &mut dyn FnMut(&LVar)) 
     match g {
         Guarded::Atom(a) => atom_for_each_free(a, f),
         Guarded::Disj(xs) | Guarded::Conj(xs) => {
-            for x in xs.iter() { guarded_for_each_free(x, f); }
+            for x in xs.iter() {
+                guarded_for_each_free(x, f);
+            }
         }
         Guarded::GGuarded { guards, body, .. } => {
-            for a in guards.iter() { atom_for_each_free(a, f); }
+            for a in guards.iter() {
+                atom_for_each_free(a, f);
+            }
             guarded_for_each_free(body, f);
         }
     }
@@ -679,8 +760,7 @@ fn guarded_for_each_free(g: &crate::guarded::Guarded, f: &mut dyn FnMut(&LVar)) 
 fn atom_for_each_free(a: &crate::guarded::GAtom, f: &mut dyn FnMut(&LVar)) {
     use crate::guarded::GAtom;
     match a {
-        GAtom::Eq(x, y) | GAtom::Less(x, y)
-        | GAtom::LessMset(x, y) | GAtom::Subterm(x, y) => {
+        GAtom::Eq(x, y) | GAtom::Less(x, y) | GAtom::LessMset(x, y) | GAtom::Subterm(x, y) => {
             term_for_each_free(x, f);
             term_for_each_free(y, f);
         }
@@ -691,25 +771,42 @@ fn atom_for_each_free(a: &crate::guarded::GAtom, f: &mut dyn FnMut(&LVar)) {
             // in visit order, so the timepoint must be walked first to
             // match HS's idx assignment.
             term_for_each_free(t, f);
-            for arg in fa.args.iter() { term_for_each_free(arg, f); }
+            for arg in fa.args.iter() {
+                term_for_each_free(arg, f);
+            }
         }
         GAtom::Last(t) => term_for_each_free(t, f),
-        GAtom::Pred(fa) => { for arg in fa.args.iter() { term_for_each_free(arg, f); } }
+        GAtom::Pred(fa) => {
+            for arg in fa.args.iter() {
+                term_for_each_free(arg, f);
+            }
+        }
     }
 }
 
 fn term_for_each_free(t: &crate::guarded::GTerm, f: &mut dyn FnMut(&LVar)) {
-    use crate::guarded::{GTerm, BVar};
+    use crate::guarded::{BVar, GTerm};
     match t {
         GTerm::Var(BVar::Free(v)) => {
             let sort = parser_sort_to_lsort(v.sort);
-            f(&LVar { name: tamarin_term::intern::intern_str(v.name.as_str()), sort, idx: v.idx });
+            f(&LVar {
+                name: tamarin_term::intern::intern_str(v.name.as_str()),
+                sort,
+                idx: v.idx,
+            });
         }
         GTerm::Var(BVar::Bound(_)) => {}
-        GTerm::PubLit(_) | GTerm::FreshLit(_) | GTerm::NatLit(_)
-        | GTerm::Number(_) | GTerm::NumberOne | GTerm::NatOne | GTerm::DhNeutral => {}
+        GTerm::PubLit(_)
+        | GTerm::FreshLit(_)
+        | GTerm::NatLit(_)
+        | GTerm::Number(_)
+        | GTerm::NumberOne
+        | GTerm::NatOne
+        | GTerm::DhNeutral => {}
         GTerm::App(_, args) | GTerm::Pair(args) => {
-            for a in args.iter() { term_for_each_free(a, f); }
+            for a in args.iter() {
+                term_for_each_free(a, f);
+            }
         }
         GTerm::AlgApp(_, a, b) | GTerm::Diff(a, b) | GTerm::BinOp(_, a, b) => {
             term_for_each_free(a, f);
@@ -730,7 +827,9 @@ mod tests {
     use super::*;
     use tamarin_term::lterm::{LSort, LVar};
 
-    fn node(name: &str, idx: u64) -> LVar { LVar::new(name, LSort::Node, idx) }
+    fn node(name: &str, idx: u64) -> LVar {
+        LVar::new(name, LSort::Node, idx)
+    }
 
     #[test]
     fn rename_idempotent_on_empty_system() {
@@ -748,7 +847,9 @@ mod tests {
         let mk_sys = |i_a: u64, i_b: u64| -> System {
             let mut sys = System::empty();
             sys.content_mut().less_atoms.push(LessAtom::new(
-                node("i", i_a), node("i", i_b), Reason::Fresh,
+                node("i", i_a),
+                node("i", i_b),
+                Reason::Fresh,
             ));
             sys
         };
@@ -757,7 +858,7 @@ mod tests {
         rename_precise_system(&mut a);
         rename_precise_system(&mut b);
         assert_eq!(a.less_atoms[0].smaller, b.less_atoms[0].smaller);
-        assert_eq!(a.less_atoms[0].larger,  b.less_atoms[0].larger);
+        assert_eq!(a.less_atoms[0].larger, b.less_atoms[0].larger);
         // The two distinct node names should still differ.
         assert_ne!(a.less_atoms[0].smaller, a.less_atoms[0].larger);
     }

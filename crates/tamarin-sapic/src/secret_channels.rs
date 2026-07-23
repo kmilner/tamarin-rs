@@ -14,9 +14,7 @@
 use std::collections::BTreeSet;
 
 use tamarin_term::lterm::LVar;
-use tamarin_theory::sapic::{
-    Process, SapicAction, SapicLVar, SapicTerm,
-};
+use tamarin_theory::sapic::{Process, SapicAction, SapicLVar, SapicTerm};
 
 use crate::annotation::ProcessAnnotation;
 
@@ -76,8 +74,12 @@ fn annotate_each(p: AnnotatedProc, svars: &BTreeSet<LVar>) -> AnnotatedProc {
         Process::Action(action, ann, body) => {
             let inner = Box::new(annotate_each(*body, svars));
             let new_ann = match &action {
-                SapicAction::ChIn { chan: Some(chan), .. }
-                | SapicAction::ChOut { chan: Some(chan), .. } => {
+                SapicAction::ChIn {
+                    chan: Some(chan), ..
+                }
+                | SapicAction::ChOut {
+                    chan: Some(chan), ..
+                } => {
                     if let Some(chan_var) = lit_var(chan) {
                         if svars.contains(&chan_var) {
                             ann.append(ProcessAnnotation::with_secret_channel(chan_var))
@@ -97,8 +99,8 @@ fn annotate_each(p: AnnotatedProc, svars: &BTreeSet<LVar>) -> AnnotatedProc {
 
 /// If `t` is exactly a single variable literal, return its inner `LVar`.
 fn lit_var(t: &SapicTerm) -> Option<LVar> {
-    use tamarin_term::vterm::Lit;
     use tamarin_term::term::Term;
+    use tamarin_term::vterm::Lit;
     match t {
         Term::Lit(Lit::Var(sv)) => Some(sv.var.clone()),
         _ => None,

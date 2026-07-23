@@ -32,9 +32,9 @@ use tamarin_term::lterm::{LSort, LVar, Name};
 use tamarin_term::subst::Subst;
 use tamarin_term::vterm::VTerm;
 
+use crate::atom::SyntacticSugar;
 use crate::fact::Fact;
 use crate::formula::ProtoFormula;
-use crate::atom::SyntacticSugar;
 
 // =============================================================================
 // Position
@@ -58,7 +58,9 @@ pub fn rhs_position(mut p: ProcessPosition) -> ProcessPosition {
 
 /// `descendant child parent`: whether `parent` is a prefix of `child`.
 pub fn descendant<T: PartialEq>(child: &[T], parent: &[T]) -> bool {
-    if parent.len() > child.len() { return false; }
+    if parent.len() > child.len() {
+        return false;
+    }
     parent.iter().zip(child.iter()).all(|(a, b)| a == b)
 }
 
@@ -74,9 +76,15 @@ pub fn pretty_position(p: &ProcessPosition) -> String {
 pub type SapicType = Option<String>;
 
 // Intentionally retained: faithful HS port; no caller yet.
-pub fn default_sapic_type_string() -> String { "Any".to_string() }
-pub fn default_sapic_type() -> SapicType { None }
-pub fn default_sapic_node_type() -> SapicType { Some("node".to_string()) }
+pub fn default_sapic_type_string() -> String {
+    "Any".to_string()
+}
+pub fn default_sapic_type() -> SapicType {
+    None
+}
+pub fn default_sapic_node_type() -> SapicType {
+    Some("node".to_string())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SapicLVar {
@@ -85,9 +93,15 @@ pub struct SapicLVar {
 }
 
 impl SapicLVar {
-    pub fn new(var: LVar, stype: SapicType) -> Self { SapicLVar { var, stype } }
-    pub fn untyped(var: LVar) -> Self { SapicLVar { var, stype: None } }
-    pub fn to_lvar(&self) -> LVar { self.var.clone() }
+    pub fn new(var: LVar, stype: SapicType) -> Self {
+        SapicLVar { var, stype }
+    }
+    pub fn untyped(var: LVar) -> Self {
+        SapicLVar { var, stype: None }
+    }
+    pub fn to_lvar(&self) -> LVar {
+        self.var.clone()
+    }
 }
 
 /// `SapicNTerm<V>` ≡ `VTerm<Name, V>` — SAPIC terms carry `Name` constants.
@@ -95,8 +109,7 @@ pub type SapicNTerm<V> = VTerm<Name, V>;
 pub type SapicTerm = SapicNTerm<SapicLVar>;
 pub type SapicNFact<V> = Fact<SapicNTerm<V>>;
 pub type SapicLNFact = Fact<SapicTerm>;
-pub type SapicNFormula<V> =
-    ProtoFormula<SyntacticSugar<SapicNTerm<V>>, (String, LSort), Name, V>;
+pub type SapicNFormula<V> = ProtoFormula<SyntacticSugar<SapicNTerm<V>>, (String, LSort), Name, V>;
 pub type SapicFormula =
     ProtoFormula<SyntacticSugar<SapicNTerm<SapicLVar>>, (String, LSort), Name, SapicLVar>;
 
@@ -126,7 +139,9 @@ impl Default for ProcessParsedAnnotation {
 }
 
 impl ProcessParsedAnnotation {
-    pub fn empty() -> Self { Self::default() }
+    pub fn empty() -> Self {
+        Self::default()
+    }
     pub fn append(self, other: Self) -> Self {
         let mut names = self.process_names;
         names.extend(other.process_names);
@@ -135,7 +150,11 @@ impl ProcessParsedAnnotation {
             (l1, None) => l1,
         };
         let back_substitution = self.back_substitution.compose(&other.back_substitution);
-        ProcessParsedAnnotation { process_names: names, location, back_substitution }
+        ProcessParsedAnnotation {
+            process_names: names,
+            location,
+            back_substitution,
+        }
     }
 }
 
@@ -147,9 +166,15 @@ pub trait GoodAnnotation: Sized {
 }
 
 impl GoodAnnotation for ProcessParsedAnnotation {
-    fn parsed(&self) -> &ProcessParsedAnnotation { self }
-    fn set_parsed(self, p: ProcessParsedAnnotation) -> Self { p }
-    fn default_annotation() -> Self { Self::default() }
+    fn parsed(&self) -> &ProcessParsedAnnotation {
+        self
+    }
+    fn set_parsed(self, p: ProcessParsedAnnotation) -> Self {
+        p
+    }
+    fn default_annotation() -> Self {
+        Self::default()
+    }
 }
 
 // =============================================================================
@@ -229,7 +254,12 @@ pub enum ProcessCombinator<V> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Process<Ann, V> {
     Null(Ann),
-    Comb(ProcessCombinator<V>, Ann, Box<Process<Ann, V>>, Box<Process<Ann, V>>),
+    Comb(
+        ProcessCombinator<V>,
+        Ann,
+        Box<Process<Ann, V>>,
+        Box<Process<Ann, V>>,
+    ),
     Action(SapicAction<V>, Ann, Box<Process<Ann, V>>),
 }
 
@@ -239,7 +269,9 @@ pub type LProcess<Ann> = Process<Ann, SapicLVar>;
 pub type PlainProcess = LProcess<ProcessParsedAnnotation>;
 
 impl<Ann, V> Process<Ann, V> {
-    pub fn null(ann: Ann) -> Self { Process::Null(ann) }
+    pub fn null(ann: Ann) -> Self {
+        Process::Null(ann)
+    }
     pub fn annotation(&self) -> &Ann {
         match self {
             Process::Null(a) | Process::Comb(_, a, _, _) | Process::Action(_, a, _) => a,
@@ -285,8 +317,13 @@ pub fn process_contains<Ann, V, F: FnMut(&Process<Ann, V>) -> bool>(
         f: &mut F,
         found: &mut bool,
     ) {
-        if *found { return; }
-        if f(p) { *found = true; return; }
+        if *found {
+            return;
+        }
+        if f(p) {
+            *found = true;
+            return;
+        }
         match p {
             Process::Null(_) => {}
             Process::Action(_, _, body) => walk(body, f, found),
@@ -302,11 +339,10 @@ pub fn process_contains<Ann, V, F: FnMut(&Process<Ann, V>) -> bool>(
 
 /// `processAt p pos`: subprocess at position `pos`. Returns `None` if the
 /// position is invalid.
-pub fn process_at<'a, Ann, V>(
-    p: &'a Process<Ann, V>,
-    pos: &[i64],
-) -> Option<&'a Process<Ann, V>> {
-    if pos.is_empty() { return Some(p); }
+pub fn process_at<'a, Ann, V>(p: &'a Process<Ann, V>, pos: &[i64]) -> Option<&'a Process<Ann, V>> {
+    if pos.is_empty() {
+        return Some(p);
+    }
     match (p, pos[0]) {
         (Process::Null(_), _) => None,
         (Process::Action(_, _, body), 1) => process_at(body, &pos[1..]),
@@ -339,7 +375,9 @@ impl PatternSapicLVar {
 
 /// `unpatternVar`: drop the bind/match tag.
 // Intentionally retained: faithful HS port; exercised only by tests so far.
-pub fn unpattern_var(p: PatternSapicLVar) -> SapicLVar { p.into_var() }
+pub fn unpattern_var(p: PatternSapicLVar) -> SapicLVar {
+    p.into_var()
+}
 
 /// `freesSapicTerm`: free variables of a SAPIC term, in source order, with
 /// duplicates (HS Sapic/Term.hs:131-132, `freesSapicTerm = foldMap (: [])` —
@@ -452,11 +490,7 @@ mod tests {
     }
 
     fn lock_action(v: &str) -> PlainProcess {
-        let term = tamarin_term::vterm::var_term(SapicLVar::untyped(LVar::new(
-            v,
-            LSort::Msg,
-            0,
-        )));
+        let term = tamarin_term::vterm::var_term(SapicLVar::untyped(LVar::new(v, LSort::Msg, 0)));
         Process::Action(
             SapicAction::Lock(term),
             ProcessParsedAnnotation::empty(),

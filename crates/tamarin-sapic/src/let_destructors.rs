@@ -37,16 +37,14 @@
 //! Runs as part of `translate` (HS `Sapic.hs:45-101, see line 54`), AFTER `propagateNames` and
 //! BEFORE `annotateLocks`, over the already type-/rename-unique'd process.
 
+use crate::base_translation::{subst_fact, subst_term};
 use tamarin_term::function_symbols::{Constructability, FunSym};
 use tamarin_term::lterm::{LNTerm, LVar, Name};
-use tamarin_term::subterm_rule::CtxtStRule;
 use tamarin_term::subst::{apply_vterm, Subst};
-use crate::base_translation::{subst_term, subst_fact};
+use tamarin_term::subterm_rule::CtxtStRule;
 use tamarin_term::vterm::{Lit, VTerm};
 
-use tamarin_theory::sapic::{
-    Process, ProcessCombinator, SapicLVar, SapicTerm,
-};
+use tamarin_theory::sapic::{Process, ProcessCombinator, SapicLVar, SapicTerm};
 
 use crate::annotation::{AnnotatedProcess, ProcessAnnotation};
 
@@ -70,9 +68,16 @@ fn map_proc(
             Process::Action(ac, ann, Box::new(body1))
         }
         // `ProcessComb c@(Let t1 t2 mv) _ pl pr` (LetDestructors.hs:33-66).
-        Process::Comb(ProcessCombinator::Let { left, right, match_vars }, ann, pl, pr) => {
-            map_let(rules, left, right, match_vars, ann, *pl, *pr)
-        }
+        Process::Comb(
+            ProcessCombinator::Let {
+                left,
+                right,
+                match_vars,
+            },
+            ann,
+            pl,
+            pr,
+        ) => map_let(rules, left, right, match_vars, ann, *pl, *pr),
         // `ProcessComb c ann pl pr` (LetDestructors.hs:82-85): non-Let comb.
         Process::Comb(c, ann, pl, pr) => {
             let pl1 = map_proc(rules, *pl);
@@ -134,7 +139,11 @@ fn map_let(
     let pl1 = map_proc(rules, pl);
     let pr1 = map_proc(rules, pr);
     Process::Comb(
-        ProcessCombinator::Let { left, right, match_vars },
+        ProcessCombinator::Let {
+            left,
+            right,
+            match_vars,
+        },
         ann2,
         Box::new(pl1),
         Box::new(pr1),
@@ -161,8 +170,7 @@ fn case_destructor(
         Some((leftterms, outvar)) => {
             // `subst = substFromList [(outvar, t1')]`
             // `leftermssubst = apply subst $ toPairs leftterms`
-            let subst: Subst<Name, LVar> =
-                Subst::from_list(vec![(outvar, t1_ln.clone())]);
+            let subst: Subst<Name, LVar> = Subst::from_list(vec![(outvar, t1_ln.clone())]);
             let leftterms_pairs = to_pairs(&leftterms);
             let leftterms_subst = apply_vterm(&subst, leftterms_pairs);
             let rightterms_pairs = to_pairs(rightterms);
@@ -173,8 +181,11 @@ fn case_destructor(
             // other field (incl. the propagated `processnames`) is therefore reset
             // to default — so `ann` must NOT be reused (see Case C above).
             let _ = ann;
-            let new_an =
-                ProcessAnnotation::with_destructor_equation(leftterms_subst, rightterms_pairs, elsebranch);
+            let new_an = ProcessAnnotation::with_destructor_equation(
+                leftterms_subst,
+                rightterms_pairs,
+                elsebranch,
+            );
             let pl1 = map_proc(rules, pl);
             let pr1 = map_proc(rules, pr);
             // The Let combinator `c` is preserved unchanged.  Reconstruct it
@@ -243,10 +254,7 @@ fn find_rule(
 /// right-nested pair.  `[] -> fAppOne`, `[s] -> s`, `(p:q) -> <p, toPairs q>`.
 fn to_pairs(ts: &[LNTerm]) -> LNTerm {
     match ts {
-        [] => tamarin_term::term::f_app_no_eq(
-            tamarin_term::function_symbols::one_sym(),
-            vec![],
-        ),
+        [] => tamarin_term::term::f_app_no_eq(tamarin_term::function_symbols::one_sym(), vec![]),
         [s] => s.clone(),
         [head, tail @ ..] => {
             let rest = to_pairs(tail);
@@ -329,7 +337,11 @@ fn subst_action(
             chan: chan.map(|t| subst_term(subst, &t)),
             msg: subst_term(subst, &msg),
         },
-        A::ChIn { chan, msg, match_vars } => A::ChIn {
+        A::ChIn {
+            chan,
+            msg,
+            match_vars,
+        } => A::ChIn {
             chan: chan.map(|t| subst_term(subst, &t)),
             msg: subst_term(subst, &msg),
             // HS `applyMatchVars subst vs` (Process.hs:305-309, 320): a match var
@@ -346,7 +358,13 @@ fn subst_action(
         A::ProcessCall(n, ts) => {
             A::ProcessCall(n, ts.iter().map(|t| subst_term(subst, t)).collect())
         }
-        A::Msr { prems, acts, concs, rest, match_vars } => A::Msr {
+        A::Msr {
+            prems,
+            acts,
+            concs,
+            rest,
+            match_vars,
+        } => A::Msr {
             prems: prems.iter().map(|f| subst_fact(subst, f)).collect(),
             acts: acts.iter().map(|f| subst_fact(subst, f)).collect(),
             concs: concs.iter().map(|f| subst_fact(subst, f)).collect(),
@@ -363,7 +381,11 @@ fn subst_comb(
 ) -> ProcessCombinator<SapicLVar> {
     match c {
         ProcessCombinator::Lookup(t, v) => ProcessCombinator::Lookup(subst_term(subst, &t), v),
-        ProcessCombinator::Let { left, right, match_vars } => ProcessCombinator::Let {
+        ProcessCombinator::Let {
+            left,
+            right,
+            match_vars,
+        } => ProcessCombinator::Let {
             left: subst_term(subst, &left),
             right: subst_term(subst, &right),
             match_vars,
@@ -436,9 +458,9 @@ fn ln_to_sapic(t: &LNTerm) -> SapicTerm {
 mod tests {
     use super::*;
     use std::collections::{BTreeSet, BTreeSet as Set};
-    use tamarin_theory::sapic::{ProcessParsedAnnotation, SapicAction};
     use tamarin_term::lterm::{LSort, NameTag};
     use tamarin_term::vterm::var_term;
+    use tamarin_theory::sapic::{ProcessParsedAnnotation, SapicAction};
 
     fn ann() -> ProcessAnnotation<LVar> {
         ProcessAnnotation {
@@ -460,7 +482,10 @@ mod tests {
         // `let h = 't' in out(h)` (h not a match-var) → `out('t')`, Let gone.
         let h = svar("h");
         let body = Process::Action(
-            SapicAction::ChOut { chan: None, msg: var_term(h.clone()) },
+            SapicAction::ChOut {
+                chan: None,
+                msg: var_term(h.clone()),
+            },
             ann(),
             Box::new(Process::Null(ann())),
         );
@@ -479,7 +504,10 @@ mod tests {
         // The Let must be gone; the top node is the substituted `out('t')`.
         match out {
             Process::Action(SapicAction::ChOut { msg, .. }, _, _) => {
-                assert!(matches!(msg, VTerm::Lit(Lit::Con(_))), "h must be replaced by 't'");
+                assert!(
+                    matches!(msg, VTerm::Lit(Lit::Con(_))),
+                    "h must be replaced by 't'"
+                );
             }
             other => panic!("expected Let to be eliminated to ChOut, got {other:?}"),
         }
@@ -506,7 +534,10 @@ mod tests {
         let out = translate_let_destr(&rules, lett);
         match out {
             Process::Comb(ProcessCombinator::Let { .. }, a2, _, _) => {
-                assert!(!a2.else_branch, "else_branch must be False (Null right child)");
+                assert!(
+                    !a2.else_branch,
+                    "else_branch must be False (Null right child)"
+                );
             }
             other => panic!("expected kept Let, got {other:?}"),
         }

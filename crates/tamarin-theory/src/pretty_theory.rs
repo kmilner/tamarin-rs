@@ -149,7 +149,7 @@ pub(crate) fn oracle_name_for_theory(in_file: &str) -> String {
     // takes the final segment.  For absolute paths this segment starts with
     // '/' (e.g. "/defaultoracle"), so `inFileOracleName` is "/defaultoracle.oracle".
     let after_slash = match before_dot.rfind('/') {
-        Some(i) => &before_dot[i..],   // includes the '/' prefix, mirroring HS
+        Some(i) => &before_dot[i..], // includes the '/' prefix, mirroring HS
         None => before_dot,
     };
     // Step 3: append ".oracle"
@@ -233,7 +233,9 @@ pub fn pretty_goal_rankings(raw: &str, in_file: &str) -> String {
             // space).  Mirror that: skip leading spaces, then re-emit the rest
             // verbatim up to `}`.
             i += 1; // consume '{'
-            while i < chars.len() && chars[i] == ' ' { i += 1; }
+            while i < chars.len() && chars[i] == ' ' {
+                i += 1;
+            }
             let name_start = i;
             while i < chars.len() && chars[i] != '}' {
                 i += 1;
@@ -246,7 +248,9 @@ pub fn pretty_goal_rankings(raw: &str, in_file: &str) -> String {
         } else if c == 'o' || c == 'O' {
             i += 1;
             // Skip whitespace
-            while i < chars.len() && chars[i] == ' ' { i += 1; }
+            while i < chars.len() && chars[i] == ' ' {
+                i += 1;
+            }
             // Look for optional quoted oracle name
             if i < chars.len() && chars[i] == '"' {
                 i += 1; // consume opening '"'
@@ -255,7 +259,9 @@ pub fn pretty_goal_rankings(raw: &str, in_file: &str) -> String {
                     i += 1;
                 }
                 let explicit_name: String = chars[name_start..i].iter().collect();
-                if i < chars.len() && chars[i] == '"' { i += 1; } // consume closing '"'
+                if i < chars.len() && chars[i] == '"' {
+                    i += 1;
+                } // consume closing '"'
                 result.push(render_single_ranking(c, Some(&explicit_name), &oracle_name));
             } else {
                 result.push(render_single_ranking(c, None, &oracle_name));
@@ -330,7 +336,9 @@ pub fn pretty_closed_theory(
         // where `prettyGoalRankings = unwords . map prettyGoalRanking` (System.hs:707-708).
         // Each ranking in the Vec is a raw heuristic string; join their expansions with a
         // space.  (In practice there is only one `heuristic:` item per theory.)
-        let rendered: Vec<String> = elaborated.heuristic.iter()
+        let rendered: Vec<String> = elaborated
+            .heuristic
+            .iter()
             .map(|raw| pretty_goal_rankings(raw, in_file))
             .collect();
         out.push('\n');
@@ -383,11 +391,23 @@ pub fn pretty_closed_theory(
     // thread-locals — replicate the calling thread's sets onto each
     // render worker (a stolen thread outside any guard has EMPTY sets).
     let user_funs_snapshot = crate::elaborate::snapshot_user_funs();
-    let rendered: Vec<Option<String>> = parsed.items.par_iter()
+    let rendered: Vec<Option<String>> = parsed
+        .items
+        .par_iter()
         .map(|item| {
             let _user_funs_guard =
                 crate::elaborate::set_user_funs_from_collected(&user_funs_snapshot);
-            render_parsed_item(item, &macros, &predicates, elaborated, proved, in_file, &arity1, manual_variants, auto_sources)
+            render_parsed_item(
+                item,
+                &macros,
+                &predicates,
+                elaborated,
+                proved,
+                in_file,
+                &arity1,
+                manual_variants,
+                auto_sources,
+            )
         })
         .collect();
     for b in rendered.into_iter().flatten() {
@@ -459,27 +479,48 @@ pub fn web_pretty_source_prem(g: &crate::constraint::constraints::Goal) -> Strin
 /// the goal wraps at the web width WITH the `Sources of ` prefix offset — the
 /// `<h2>` source header (`n_cases` is the number of cases).
 pub fn web_pretty_source_header(
-    g: &crate::constraint::constraints::Goal, n_cases: usize) -> String {
+    g: &crate::constraint::constraints::Goal,
+    n_cases: usize,
+) -> String {
     use crate::pretty_hpj::{self as hpj, Doc};
     let left = Doc::text("Sources of").beside_sp(web_source_prem_doc(g));
-    let right = hpj::parens(
-        Doc::text(n_cases.to_string()).beside_sp(Doc::text("cases")));
+    let right = hpj::parens(Doc::text(n_cases.to_string()).beside_sp(Doc::text("cases")));
     hpj::hsep(vec![left, right]).render()
 }
 
 /// Collect the theory's macro declarations in source order (mirrors HS
 /// `applyMacroInRestriction` / `parseLemmaWithMacros`).
 fn collect_macros(parsed: &p::Theory) -> Vec<p::Macro> {
-    parsed.items.iter()
-        .filter_map(|i| if let p::TheoryItem::Macros(ms) = i { Some(ms.as_slice()) } else { None })
-        .flatten().cloned().collect()
+    parsed
+        .items
+        .iter()
+        .filter_map(|i| {
+            if let p::TheoryItem::Macros(ms) = i {
+                Some(ms.as_slice())
+            } else {
+                None
+            }
+        })
+        .flatten()
+        .cloned()
+        .collect()
 }
 
 /// Collect the theory's predicate declarations in source order.
 fn collect_predicates(parsed: &p::Theory) -> Vec<p::Predicate> {
-    parsed.items.iter()
-        .filter_map(|i| if let p::TheoryItem::Predicates(ps) = i { Some(ps.as_slice()) } else { None })
-        .flatten().cloned().collect()
+    parsed
+        .items
+        .iter()
+        .filter_map(|i| {
+            if let p::TheoryItem::Predicates(ps) = i {
+                Some(ps.as_slice())
+            } else {
+                None
+            }
+        })
+        .flatten()
+        .cloned()
+        .collect()
 }
 
 /// Collect the theory's macros + predicates the way `pretty_closed_theory`
@@ -496,11 +537,16 @@ pub fn web_proto_rules(parsed: &p::Theory, elaborated: &Theory) -> Vec<String> {
     let (macros, _preds) = collect_macros_predicates(parsed);
     let arity1 = arity1_noeq_names(elaborated);
     let manual_variants = contains_manual_rule_variants(parsed, elaborated, false);
-    parsed.items.iter().filter_map(|item| match item {
-        p::TheoryItem::Rule(r) if elaborated.rules().any(|er| er.name() == r.name) =>
-            Some(render_rule(r, elaborated, &macros, &arity1, manual_variants, false)),
-        _ => None,
-    }).collect()
+    parsed
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            p::TheoryItem::Rule(r) if elaborated.rules().any(|er| er.name() == r.name) => Some(
+                render_rule(r, elaborated, &macros, &arity1, manual_variants, false),
+            ),
+            _ => None,
+        })
+        .collect()
 }
 
 /// HS `prettyRestriction` over `theoryRestrictions thy` (Web/Theory.hs:887-917, see line 895) —
@@ -509,11 +555,16 @@ pub fn web_proto_rules(parsed: &p::Theory, elaborated: &Theory) -> Vec<String> {
 pub fn web_restrictions(parsed: &p::Theory, elaborated: &Theory) -> Vec<String> {
     let (macros, predicates) = collect_macros_predicates(parsed);
     let arity1 = arity1_noeq_names(elaborated);
-    parsed.items.iter().filter_map(|item| match item {
-        p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) =>
-            Some(render_parsed_restriction(r, &macros, &predicates, elaborated, &arity1)),
-        _ => None,
-    }).collect()
+    parsed
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => Some(
+                render_parsed_restriction(r, &macros, &predicates, elaborated, &arity1),
+            ),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Render HS `ppInjectiveFactInsts` (ClosedTheory.hs:413-418):
@@ -540,11 +591,9 @@ pub fn web_restrictions(parsed: &p::Theory, elaborated: &Theory) -> Vec<String> 
 /// symbols — same call site as `ProofContext::new`
 /// (`constraint/solver/context.rs:493-495`).
 fn render_injective_fact_insts(elab: &Theory) -> String {
-    use crate::pretty_hpj::{self as hpj, Doc, punctuate};
     use crate::fact::{FactTag, Multiplicity};
-    let proto_rules: Vec<&crate::rule::ProtoRuleE> = elab.rules()
-        .map(|r| &r.rule)
-        .collect();
+    use crate::pretty_hpj::{self as hpj, punctuate, Doc};
+    let proto_rules: Vec<&crate::rule::ProtoRuleE> = elab.rules().map(|r| &r.rule).collect();
     let mut tags = crate::tools::injective_fact_instances::simple_injective_fact_instances(
         &proto_rules,
         &elab.signature.maude_sig.reducible_fun_syms_fast,
@@ -558,7 +607,9 @@ fn render_injective_fact_insts(elab: &Theory) -> String {
             &crate::tools::injective_fact_instances::pure_state_forced_fact_tags(),
         );
     }
-    if tags.is_empty() { return String::new(); }
+    if tags.is_empty() {
+        return String::new();
+    }
     // HS `showFactTagArity` (Fact.hs:521-525, see line 526): persistent `!`-prefix + name
     // + `/` + arity.
     let label = |tag: &FactTag| -> String {
@@ -566,10 +617,12 @@ fn render_injective_fact_insts(elab: &Theory) -> String {
             FactTag::Proto(Multiplicity::Persistent, _, _) => "!",
             _ => "",
         };
-        format!("{}{}/{}",
+        format!(
+            "{}{}/{}",
             prefix,
             crate::fact::fact_tag_name(tag),
-            crate::fact::fact_tag_arity(tag))
+            crate::fact::fact_tag_arity(tag)
+        )
     };
     let tag_docs: Vec<Doc> = tags.iter().map(|(t, _)| Doc::text(label(t))).collect();
     // fsepList (text . showFactTagArity) (map fst tags)
@@ -593,11 +646,21 @@ fn render_signature(sig: &tamarin_term::maude_sig::MaudeSig) -> String {
 
     // builtins: ...  (only if any enabled)
     let mut builtins: Vec<&str> = Vec::new();
-    if sig.enable_dh { builtins.push("diffie-hellman"); }
-    if sig.enable_bp { builtins.push("bilinear-pairing"); }
-    if sig.enable_mset { builtins.push("multiset"); }
-    if sig.enable_nat { builtins.push("natural-numbers"); }
-    if sig.enable_xor { builtins.push("xor"); }
+    if sig.enable_dh {
+        builtins.push("diffie-hellman");
+    }
+    if sig.enable_bp {
+        builtins.push("bilinear-pairing");
+    }
+    if sig.enable_mset {
+        builtins.push("multiset");
+    }
+    if sig.enable_nat {
+        builtins.push("natural-numbers");
+    }
+    if sig.enable_xor {
+        builtins.push("xor");
+    }
     if !builtins.is_empty() {
         // HS renders builtins via the same `ppNonEmptyList'` as functions:
         // `(keyword_ "builtins:" <->) . fsep . punctuate comma`
@@ -617,7 +680,11 @@ fn render_signature(sig: &tamarin_term::maude_sig::MaudeSig) -> String {
     // equations: ...
     let eqs = render_equations(sig);
     if !eqs.is_empty() {
-        let key = if sig.eq_convergent { "equations [convergent]:" } else { "equations:" };
+        let key = if sig.eq_convergent {
+            "equations [convergent]:"
+        } else {
+            "equations:"
+        };
         // HS uses `sep [hdr, nest 2 (punctuate comma ds)]` for the
         // equations list — yields `hdr\n    eq1,\n    eq2,...` when
         // multiple equations.
@@ -632,18 +699,22 @@ fn render_signature(sig: &tamarin_term::maude_sig::MaudeSig) -> String {
 /// uses `S.toList` over a Set ordered by the same key).
 fn render_fun_syms(sig: &tamarin_term::maude_sig::MaudeSig) -> Vec<String> {
     use tamarin_term::function_symbols::{Constructability, Privacy};
-    let mut items: Vec<(String, String)> = sig.st_fun_syms.iter().map(|sym| {
-        let name = String::from_utf8_lossy(sym.name).to_string();
-        let arity = sym.arity;
-        let attr = match (sym.privacy, sym.constructability) {
-            (Privacy::Public, Constructability::Constructor) => "",
-            (Privacy::Public, Constructability::Destructor) => "[destructor]",
-            (Privacy::Private, Constructability::Constructor) => "[private,constructor]",
-            (Privacy::Private, Constructability::Destructor) => "[private,destructor]",
-        };
-        let rendered = format!("{}/{}{}", name, arity, attr);
-        (name, rendered)
-    }).collect();
+    let mut items: Vec<(String, String)> = sig
+        .st_fun_syms
+        .iter()
+        .map(|sym| {
+            let name = String::from_utf8_lossy(sym.name).to_string();
+            let arity = sym.arity;
+            let attr = match (sym.privacy, sym.constructability) {
+                (Privacy::Public, Constructability::Constructor) => "",
+                (Privacy::Public, Constructability::Destructor) => "[destructor]",
+                (Privacy::Private, Constructability::Constructor) => "[private,constructor]",
+                (Privacy::Private, Constructability::Destructor) => "[private,destructor]",
+            };
+            let rendered = format!("{}/{}{}", name, arity, attr);
+            (name, rendered)
+        })
+        .collect();
     items.sort_by(|a, b| a.0.cmp(&b.0));
     items.into_iter().map(|(_, s)| s).collect()
 }
@@ -665,7 +736,9 @@ fn render_fun_syms(sig: &tamarin_term::maude_sig::MaudeSig) -> Vec<String> {
 /// by converting the `LNTerm` to a parser-AST `p::Term` (`lnterm_to_parser`,
 /// the same conversion already used elsewhere) and rendering it through
 /// `pf::term_doc` (= HS `prettyTerm`).
-fn render_equations(sig: &tamarin_term::maude_sig::MaudeSig) -> Vec<(crate::pretty_hpj::Doc, crate::pretty_hpj::Doc)> {
+fn render_equations(
+    sig: &tamarin_term::maude_sig::MaudeSig,
+) -> Vec<(crate::pretty_hpj::Doc, crate::pretty_hpj::Doc)> {
     let mut items = Vec::new();
     for r in &sig.st_rules {
         let lhs = pf::term_doc(&lnterm_to_parser(&r.lhs));
@@ -747,7 +820,9 @@ pub fn subterm_convergence_report_wf(
             })
             .collect();
         // Outer `nest 2` from prettyWfErrorReport `(nest 2 . vcat ...)`.
-        let mut s = hpj::vcat(docs).nest(2).render_with(WF_LINE_LENGTH, WF_RIBBON);
+        let mut s = hpj::vcat(docs)
+            .nest(2)
+            .render_with(WF_LINE_LENGTH, WF_RIBBON);
         s.push('\n');
         s
     };
@@ -792,7 +867,9 @@ pub fn format_wf_block(report: &[tamarin_parser::wf::WfError]) -> String {
     out.push_str("/*\nWARNING: the following wellformedness checks failed!\n\n");
     out.push_str(&render_wf_error_report(report));
     // Trim trailing blank lines but keep a single newline before `*/`.
-    while out.ends_with("\n\n") { out.pop(); }
+    while out.ends_with("\n\n") {
+        out.pop();
+    }
     out.push_str("*/");
     out
 }
@@ -810,17 +887,21 @@ pub fn render_wf_error_report(report: &[tamarin_parser::wf::WfError]) -> String 
     // Group by topic, preserving FIRST-APPEARANCE order — mirrors HS's
     // `groupOn fst` over a left-to-right concatMap-over-checks.
     let mut topic_order: Vec<&str> = Vec::new();
-    let mut grouped: std::collections::HashMap<&str, Vec<&str>> =
-        std::collections::HashMap::new();
+    let mut grouped: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
     for e in report {
         if !grouped.contains_key(e.topic.as_str()) {
             topic_order.push(e.topic.as_str());
         }
-        grouped.entry(e.topic.as_str()).or_default().push(&e.message);
+        grouped
+            .entry(e.topic.as_str())
+            .or_default()
+            .push(&e.message);
     }
     for (i, topic) in topic_order.iter().enumerate() {
         let msgs = &grouped[topic];
-        if i > 0 { out.push('\n'); }
+        if i > 0 {
+            out.push('\n');
+        }
         // HS `prettyWfErrorReport` (Wellformedness.hs:118-125) groups by
         // topic and renders each group as
         //   `text topic $-$ (nest 2 . vcat . intersperse (text "") $ bodies)`
@@ -843,9 +924,13 @@ pub fn render_wf_error_report(report: &[tamarin_parser::wf::WfError]) -> String 
             out.push('\n');
         } else {
             for (j, m) in msgs.iter().enumerate() {
-                if j > 0 { out.push('\n'); }
+                if j > 0 {
+                    out.push('\n');
+                }
                 out.push_str(m);
-                if !m.ends_with('\n') { out.push('\n'); }
+                if !m.ends_with('\n') {
+                    out.push('\n');
+                }
             }
         }
     }
@@ -871,15 +956,14 @@ fn wf_headerless_preamble(topic: &str) -> Option<String> {
         "Unbound variables" | "Reserved names" | "Special facts" => {
             Some(format!("{}\n", underline_topic(topic)))
         }
-        "Variable with mismatching sorts or capitalization" => {
-            Some(format!(
-                "{}\nPossible reasons:\n\
+        "Variable with mismatching sorts or capitalization" => Some(format!(
+            "{}\nPossible reasons:\n\
                  1. Identifiers are case sensitive, i.e.,\
                  'x' and 'X' are considered to be different.\n\
                  2. The same holds for sorts:, \
                  i.e., '$x', 'x', and '~x' are considered to be different.\n\n",
-                underline_topic(topic)))
-        }
+            underline_topic(topic)
+        )),
         _ => None,
     }
 }
@@ -892,7 +976,9 @@ fn wf_headerless_preamble(topic: &str) -> Option<String> {
 /// hand-rolled greedy fill at a guessed width.  Route through `pretty_hpj`.
 fn wrap_with_lead<S: AsRef<str>>(lead: &str, items: &[S]) -> String {
     use crate::pretty_hpj::{self as hpj, Doc};
-    if items.is_empty() { return String::new(); }
+    if items.is_empty() {
+        return String::new();
+    }
     let docs: Vec<Doc> = items.iter().map(Doc::text).collect();
     let body = hpj::fsep(hpj::punctuate(Doc::char(','), docs));
     // HS `ppNonEmptyList' name = (keyword_ name <->) . fsep`
@@ -921,9 +1007,14 @@ fn wrap_with_lead<S: AsRef<str>>(lead: &str, items: &[S]) -> String {
 /// so the inner function-application `fsep` wrapping survives — passing flat
 /// strings would defeat the engine and emit over-long single lines for wide
 /// equations (e.g. BP `idverify(idsign(…), m, IBPub(…))`).
-fn sep_block_with_lead(lead: &str, items: &[(crate::pretty_hpj::Doc, crate::pretty_hpj::Doc)]) -> String {
+fn sep_block_with_lead(
+    lead: &str,
+    items: &[(crate::pretty_hpj::Doc, crate::pretty_hpj::Doc)],
+) -> String {
     use crate::pretty_hpj::{self as hpj, Doc};
-    if items.is_empty() { return String::new(); }
+    if items.is_empty() {
+        return String::new();
+    }
     let n = items.len();
     let mut docs: Vec<Doc> = Vec::with_capacity(n + 1);
     // HS `keyword_ "equations:"` / `keyword_ "equations [convergent]:"`
@@ -977,20 +1068,31 @@ fn render_parsed_item(
             // closed theory and never rendered.  Such rules are removed
             // from the elaborated theory in run.rs; mirror the absence here.
             if elab.rules().any(|er| er.name() == r.name) {
-                Some(render_rule(r, elab, macros, arity1, manual_variants, auto_sources))
+                Some(render_rule(
+                    r,
+                    elab,
+                    macros,
+                    arity1,
+                    manual_variants,
+                    auto_sources,
+                ))
             } else {
                 None
             }
         }
         IntrRule(_) => None,
-        Lemma(l) => Some(render_parsed_lemma(l, macros, predicates, proved, in_file, elab, arity1)),
+        Lemma(l) => Some(render_parsed_lemma(
+            l, macros, predicates, proved, in_file, elab, arity1,
+        )),
         // HS treats the deprecated `axiom` keyword as a synonym for
         // `restriction` (`liftedAddRestriction`; the legacy `axiom`/`Axiom` is
         // parsed and rendered as a `restriction`). RS already elaborates
         // `LegacyAxiom` as a restriction for solving; render it the same so the
         // deprecated-`axiom` blocks (e.g. the thesis-evoting auth models) emit
         // their `restriction <name>:` blocks instead of being dropped.
-        Restriction(r) | LegacyAxiom(r) => Some(render_parsed_restriction(r, macros, predicates, elab, arity1)),
+        Restriction(r) | LegacyAxiom(r) => Some(render_parsed_restriction(
+            r, macros, predicates, elab, arity1,
+        )),
         Predicates(preds) => {
             // HS `prettyTheory` folds each `PredicateItem` through
             // `prettyPredicate` (TheoryObject.hs:732-768, see line 764, 802-806):
@@ -1009,13 +1111,16 @@ fn render_parsed_item(
             if preds.is_empty() {
                 return None;
             }
-            let lines: Vec<String> = preds.iter()
+            let lines: Vec<String> = preds
+                .iter()
                 .map(|pr| render_predicate(pr, arity1))
                 .collect();
             Some(lines.join("\n\n"))
         }
         Macros(macros) => {
-            if macros.is_empty() { return None; }
+            if macros.is_empty() {
+                return None;
+            }
             Some(render_parsed_macros(macros))
         }
         FormalComment { header, body } => {
@@ -1137,10 +1242,7 @@ fn contains_manual_rule_variants(
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
-fn rewrite_arity1_fact(
-    fa: &p::Fact,
-    arity1: &std::collections::HashSet<String>,
-) -> p::Fact {
+fn rewrite_arity1_fact(fa: &p::Fact, arity1: &std::collections::HashSet<String>) -> p::Fact {
     crate::elaborate::rewrite_arity1_fact(fa, arity1)
 }
 
@@ -1165,36 +1267,47 @@ fn render_parsed_macros(macros: &[p::Macro]) -> String {
     use crate::pretty_hpj::{self as hpj, Doc};
 
     let last_idx = macros.len() - 1;
-    let macro_docs: Vec<Doc> = macros.iter().enumerate().map(|(i, m)| {
-        // HS: `ppNonEmptyList (\ds -> sep (map (nest 4) ds)) text [op++"("]`
-        // = `sep [nest 4 (text (op ++ "("))]` = `nest 4 (text (op ++ "("))`.
-        let name_open = Doc::text(format!("{}(", m.name)).nest(4);
-        // HS: `prettyVarList args = fsep . punctuate comma . map prettyLVar`
-        // For macro args (bare LVar names, sort-prefix from hint):
-        let args_parts: Vec<String> = m.args.iter().map(|v| {
-            let mut s = pf::sort_prefix_from_hint(v.sort).to_string();
-            s.push_str(&v.name);
-            if v.idx > 0 { s.push('.'); s.push_str(&v.idx.to_string()); }
-            s
-        }).collect();
-        let args_str = args_parts.join(", ");
-        // HS: `prettyTerm (text . show) body`
-        let body_str = pf::pretty_term(&m.body);
-        // Build: `nest 4 "name(" <+> args <+> ") = " <+> body`
-        // HS <-> = HughesPJ <+> (beside with space = beside_sp).
-        let mut doc = name_open;
-        if !m.args.is_empty() {
-            doc = doc.beside_sp(Doc::text(args_str));
-        }
-        doc = doc.beside_sp(Doc::text(") = "));
-        doc = doc.beside_sp(Doc::text(body_str));
-        // HS: last macro has no trailing comma
-        if i < last_idx {
-            doc.beside(Doc::text(","))
-        } else {
-            doc
-        }
-    }).collect();
+    let macro_docs: Vec<Doc> = macros
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            // HS: `ppNonEmptyList (\ds -> sep (map (nest 4) ds)) text [op++"("]`
+            // = `sep [nest 4 (text (op ++ "("))]` = `nest 4 (text (op ++ "("))`.
+            let name_open = Doc::text(format!("{}(", m.name)).nest(4);
+            // HS: `prettyVarList args = fsep . punctuate comma . map prettyLVar`
+            // For macro args (bare LVar names, sort-prefix from hint):
+            let args_parts: Vec<String> = m
+                .args
+                .iter()
+                .map(|v| {
+                    let mut s = pf::sort_prefix_from_hint(v.sort).to_string();
+                    s.push_str(&v.name);
+                    if v.idx > 0 {
+                        s.push('.');
+                        s.push_str(&v.idx.to_string());
+                    }
+                    s
+                })
+                .collect();
+            let args_str = args_parts.join(", ");
+            // HS: `prettyTerm (text . show) body`
+            let body_str = pf::pretty_term(&m.body);
+            // Build: `nest 4 "name(" <+> args <+> ") = " <+> body`
+            // HS <-> = HughesPJ <+> (beside with space = beside_sp).
+            let mut doc = name_open;
+            if !m.args.is_empty() {
+                doc = doc.beside_sp(Doc::text(args_str));
+            }
+            doc = doc.beside_sp(Doc::text(") = "));
+            doc = doc.beside_sp(Doc::text(body_str));
+            // HS: last macro has no trailing comma
+            if i < last_idx {
+                doc.beside(Doc::text(","))
+            } else {
+                doc
+            }
+        })
+        .collect();
 
     // HS: `keyword_ "macros:" $$ nest 4 (vcat macro_docs)`
     let body = hpj::vcat(macro_docs).nest(4);
@@ -1242,15 +1355,22 @@ fn rule_attribute_parts(attrs: &[p::RuleAttr]) -> Vec<String> {
     // color= : HS `text "color=" <> text (rgbToHex c)`; `rgbToHex` is
     // `'#':` + lowercase 2-digit-per-channel hex (Data/Color.hs:140-147, see line 141).
     if let Some(hex) = attrs.iter().rev().find_map(|a| match a {
-        p::RuleAttr::Color(c) => Some(c), _ => None }) {
-        parts.push(format!("color=#{}", hex.trim_start_matches('#').to_lowercase()));
+        p::RuleAttr::Color(c) => Some(c),
+        _ => None,
+    }) {
+        parts.push(format!(
+            "color=#{}",
+            hex.trim_start_matches('#').to_lowercase()
+        ));
     }
     // process= : HS `ppProcess p = text "process=" <> "\"" ++ topLevel ++ "\""`
     // (Model/Rule.hs:1201-1215, see line 1210).  Rendered between color= and no_derivcheck.  Only
     // SAPIC-translation-generated rules carry it (the parser ignores a
     // user-written `process=`); the LAST occurrence wins (Maybe field).
     if let Some(s) = attrs.iter().rev().find_map(|a| match a {
-        p::RuleAttr::Process(s) => Some(s), _ => None }) {
+        p::RuleAttr::Process(s) => Some(s),
+        _ => None,
+    }) {
         parts.push(format!("process=\"{}\"", s));
     }
     if attrs.iter().any(|a| matches!(a, p::RuleAttr::NoDerivCheck)) {
@@ -1260,7 +1380,9 @@ fn rule_attribute_parts(attrs: &[p::RuleAttr]) -> Vec<String> {
         parts.push("issapicrule".to_string());
     }
     if let Some(r) = attrs.iter().rev().find_map(|a| match a {
-        p::RuleAttr::Role(r) => Some(r), _ => None }) {
+        p::RuleAttr::Role(r) => Some(r),
+        _ => None,
+    }) {
         parts.push(format!("role='{}'", r));
     }
     parts
@@ -1288,7 +1410,14 @@ fn rule_attributes_doc(attrs: &[p::RuleAttr]) -> crate::pretty_hpj::Doc {
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
-fn render_rule(parsed_rule: &p::Rule, elab: &Theory, macros: &[p::Macro], arity1: &std::collections::HashSet<String>, manual_variants: bool, auto_sources: bool) -> String {
+fn render_rule(
+    parsed_rule: &p::Rule,
+    elab: &Theory,
+    macros: &[p::Macro],
+    arity1: &std::collections::HashSet<String>,
+    manual_variants: bool,
+    auto_sources: bool,
+) -> String {
     let name = &parsed_rule.name;
     let mut out = String::new();
     // HS rule-header line (`prettyNamedRule`, Model/Rule.hs:1280-1292, see line 1285):
@@ -1318,17 +1447,22 @@ fn render_rule(parsed_rule: &p::Rule, elab: &Theory, macros: &[p::Macro], arity1
     // (Theory/Text/Parser/Term.hs:84-87).  RS's term parser keeps the surplus
     // args, so re-fold here before rendering.  See `rewrite_arity1_term`.
     // `arity1` is computed once by the caller and threaded in.
-    let premises: Vec<p::Fact> =
-        desugared.premises.iter().map(|f| rewrite_arity1_fact(f, arity1)).collect();
-    let actions: Vec<p::Fact> =
-        desugared.actions.iter().map(|f| rewrite_arity1_fact(f, arity1)).collect();
-    let conclusions: Vec<p::Fact> =
-        desugared.conclusions.iter().map(|f| rewrite_arity1_fact(f, arity1)).collect();
-    out.push_str(&render_rule_body(
-        &premises,
-        &actions,
-        &conclusions,
-    ));
+    let premises: Vec<p::Fact> = desugared
+        .premises
+        .iter()
+        .map(|f| rewrite_arity1_fact(f, arity1))
+        .collect();
+    let actions: Vec<p::Fact> = desugared
+        .actions
+        .iter()
+        .map(|f| rewrite_arity1_fact(f, arity1))
+        .collect();
+    let conclusions: Vec<p::Fact> = desugared
+        .conclusions
+        .iter()
+        .map(|f| rewrite_arity1_fact(f, arity1))
+        .collect();
+    out.push_str(&render_rule_body(&premises, &actions, &conclusions));
 
     // Look up the elaborated rule by name to decide between
     // "trivial AC variant" and the full `/* rule (modulo AC) ... */`
@@ -1406,12 +1540,18 @@ fn render_rule(parsed_rule: &p::Rule, elab: &Theory, macros: &[p::Macro], arity1
             // identity rebuild (no macro can match), so the comparison below is
             // always `true`.  Skip the three deep-clone passes entirely.
             let no_macro_in_display = macros.is_empty() || {
-                let mp: Vec<p::Fact> = premises.iter()
-                    .map(|f| crate::macro_expand::apply_macros_fact(macros, f)).collect();
-                let ma: Vec<p::Fact> = actions.iter()
-                    .map(|f| crate::macro_expand::apply_macros_fact(macros, f)).collect();
-                let mc: Vec<p::Fact> = conclusions.iter()
-                    .map(|f| crate::macro_expand::apply_macros_fact(macros, f)).collect();
+                let mp: Vec<p::Fact> = premises
+                    .iter()
+                    .map(|f| crate::macro_expand::apply_macros_fact(macros, f))
+                    .collect();
+                let ma: Vec<p::Fact> = actions
+                    .iter()
+                    .map(|f| crate::macro_expand::apply_macros_fact(macros, f))
+                    .collect();
+                let mc: Vec<p::Fact> = conclusions
+                    .iter()
+                    .map(|f| crate::macro_expand::apply_macros_fact(macros, f))
+                    .collect();
                 mp == premises && ma == actions && mc == conclusions
             };
             let ac_body_matches = match &r.abstracted_rule {
@@ -1504,7 +1644,9 @@ fn render_loop_breakers_line(breakers: &[crate::rule::PremIdx], indent: usize) -
         "// loop breakers: ["
     });
     for (i, b) in breakers.iter().enumerate() {
-        if i > 0 { s.push(','); }
+        if i > 0 {
+            s.push(',');
+        }
         s.push_str(&b.0.to_string());
     }
     s.push_str("]\n");
@@ -1520,16 +1662,14 @@ fn render_loop_breakers_line(breakers: &[crate::rule::PremIdx], indent: usize) -
 /// differs from the E-rule body — when it does, even an empty variant
 /// disjunction must be rendered as a `/* rule (modulo AC) ... */`
 /// comment block (since the AC form is observably different).
-fn same_rule_body(
-    a: &crate::rule::ProtoRuleE,
-    b: &crate::rule::ProtoRuleE,
-) -> bool {
+fn same_rule_body(a: &crate::rule::ProtoRuleE, b: &crate::rule::ProtoRuleE) -> bool {
     use crate::fact::LNFact;
     let same_facts = |xs: &[LNFact], ys: &[LNFact]| {
         xs.len() == ys.len()
-            && xs.iter().zip(ys.iter()).all(|(f1, f2)| {
-                f1.tag == f2.tag && f1.terms == f2.terms
-            })
+            && xs
+                .iter()
+                .zip(ys.iter())
+                .all(|(f1, f2)| f1.tag == f2.tag && f1.terms == f2.terms)
     };
     same_facts(&a.premises, &b.premises)
         && same_facts(&a.conclusions, &b.conclusions)
@@ -1551,7 +1691,7 @@ fn render_rule_body(prems: &[p::Fact], acts: &[p::Fact], concs: &[p::Fact]) -> S
     // canonicalises on the LNTerm path; this fixes the parser-AST path.
     use crate::elaborate::canonicalize_ac_in_pfact;
     let prems2: Vec<p::Fact> = prems.iter().map(canonicalize_ac_in_pfact).collect();
-    let acts2:  Vec<p::Fact> = acts.iter().map(canonicalize_ac_in_pfact).collect();
+    let acts2: Vec<p::Fact> = acts.iter().map(canonicalize_ac_in_pfact).collect();
     let concs2: Vec<p::Fact> = concs.iter().map(canonicalize_ac_in_pfact).collect();
     render_rule_body_at(&prems2, &acts2, &concs2, 3)
 }
@@ -1569,7 +1709,12 @@ fn render_rule_body(prems: &[p::Fact], acts: &[p::Fact], concs: &[p::Fact]) -> S
 /// (== 2 for indent=3) so the HughesPJ engine makes the `sep`/`fsep`
 /// wrap decisions byte-identically to HS, instead of the hand-rolled
 /// string packers.
-fn render_rule_body_at(prems: &[p::Fact], acts: &[p::Fact], concs: &[p::Fact], indent: usize) -> String {
+fn render_rule_body_at(
+    prems: &[p::Fact],
+    acts: &[p::Fact],
+    concs: &[p::Fact],
+    indent: usize,
+) -> String {
     let nest = indent.saturating_sub(1) as isize;
     pf::rule_body_to_doc(prems, acts, concs).nest(nest).render()
 }
@@ -1586,8 +1731,12 @@ fn render_rule_body_at(prems: &[p::Fact], acts: &[p::Fact], concs: &[p::Fact], i
 /// header — matching HS byte-for-byte for the AddPublicKey-style case
 /// where the AC body differs from the E body but no residual variant
 /// disjunction remains.
-fn render_ac_variants_block(name: &str, rule: &crate::theory::OpenProtoRule, attrs: &[p::RuleAttr]) -> String {
-    use crate::pretty_hpj::{hl_open, hl_close, Hl};
+fn render_ac_variants_block(
+    name: &str,
+    rule: &crate::theory::OpenProtoRule,
+    attrs: &[p::RuleAttr],
+) -> String {
+    use crate::pretty_hpj::{hl_close, hl_open, Hl};
     let mut s = String::new();
     // HS `nest 2 (multiComment (prettyProtoRuleAC ruAC))` (ClosedTheory.hs:332-366, see line 354):
     // `multiComment = comment (fsep [text "/*", …, text "*/"])` wraps the whole
@@ -1637,11 +1786,13 @@ fn render_ac_variants_block(name: &str, rule: &crate::theory::OpenProtoRule, att
     // tuple: HS breaks at col 95).
     use crate::elaborate::canonicalize_ac_in_pfact;
     let prems2: Vec<p::Fact> = prems.iter().map(canonicalize_ac_in_pfact).collect();
-    let acts2:  Vec<p::Fact> = acts.iter().map(canonicalize_ac_in_pfact).collect();
+    let acts2: Vec<p::Fact> = acts.iter().map(canonicalize_ac_in_pfact).collect();
     let concs2: Vec<p::Fact> = concs.iter().map(canonicalize_ac_in_pfact).collect();
     let body = render_rule_body_at(&prems2, &acts2, &concs2, 5);
     s.push_str(&body);
-    if !body.ends_with('\n') { s.push('\n'); }
+    if !body.ends_with('\n') {
+        s.push('\n');
+    }
     // HS `ppVariants (Disj [subst]) | subst == emptySubstVFresh = emptyDoc`
     // (Rule.hs:1280-1292, see line 1289): skip the variants sub-block when there's no
     // residual disjunction beyond the identity.
@@ -1699,14 +1850,17 @@ fn variant_subst_doc(
     // HS `prettyEq (a,b) = prettyNTerm (Var a) $$ nest 6 (text "="
     // <-> prettyNTerm b)` (SubstVFresh.hs:228-229).  `<->` is `<+>`
     // (beside-with-space).
-    let eq_docs: Vec<Doc> = bindings.iter().map(|(v, t)| {
-        let term_doc = pf::term_to_doc(&lnterm_to_parser(t), &[]);
-        // HS `prettyEq (a,b) = prettyNTerm (Var a) $$ nest 6 (text "=" <->
-        // prettyNTerm b)` (SubstVFresh.hs:228-229) — the substitution `=` is a
-        // PLAIN `text`, NOT `opEqual`, so it carries no `hl_operator` span.
-        let rhs = Doc::text("=").beside_sp(term_doc).nest(6);
-        Doc::text(render_lvar(v)).above(rhs)
-    }).collect();
+    let eq_docs: Vec<Doc> = bindings
+        .iter()
+        .map(|(v, t)| {
+            let term_doc = pf::term_to_doc(&lnterm_to_parser(t), &[]);
+            // HS `prettyEq (a,b) = prettyNTerm (Var a) $$ nest 6 (text "=" <->
+            // prettyNTerm b)` (SubstVFresh.hs:228-229) — the substitution `=` is a
+            // PLAIN `text`, NOT `opEqual`, so it carries no `hl_operator` span.
+            let rhs = Doc::text("=").beside_sp(term_doc).nest(6);
+            Doc::text(render_lvar(v)).above(rhs)
+        })
+        .collect();
     let conj = hpj::vcat(eq_docs);
     // HS `pp (i, d) = text (flushRight nWidth (show i)) <> d`, with
     // `d = text ". " <> conj` (from `numbered' = numbered (text "")
@@ -1725,9 +1879,7 @@ fn variant_subst_doc(
 /// the blank `"    \n"` line (HS `text ""` at nest 4).  Building each
 /// conjunction as a single Doc (not per-binding) is what reproduces the
 /// `text i <> ". " <> vcat` beside-onto-multiline ribbon decision.
-fn render_variant_substs_block(
-    substs: &[tamarin_term::subst_vfresh::LNSubstVFresh],
-) -> String {
+fn render_variant_substs_block(substs: &[tamarin_term::subst_vfresh::LNSubstVFresh]) -> String {
     let n_width = substs.len().to_string().len();
     let mut s = String::new();
     for (i, subst) in substs.iter().enumerate() {
@@ -1758,8 +1910,11 @@ fn render_lvar(v: &tamarin_term::lterm::LVar) -> String {
 /// used by `raw_goal_to_doc` to re-render an unannotated goal head with its
 /// timepoint index preserved (HS `prettyGoal`'s `show i`).
 fn render_node_id_str(name: &str, idx: u32) -> String {
-    if idx == 0 { format!("#{}", name) }
-    else { format!("#{}.{}", name, idx) }
+    if idx == 0 {
+        format!("#{}", name)
+    } else {
+        format!("#{}.{}", name, idx)
+    }
 }
 
 /// Convert LNFacts (post-elaboration) to parser-AST Facts so we can
@@ -1792,9 +1947,9 @@ pub fn lnfact_to_parser(fa: &crate::fact::LNFact) -> p::Fact {
 
 pub(crate) fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
     use tamarin_term::function_symbols::{AcSym, FunSym};
+    use tamarin_term::lterm::LSort;
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_term::lterm::LSort;
     match t {
         Term::Lit(Lit::Var(v)) => {
             let sort = match v.sort {
@@ -1858,9 +2013,10 @@ pub(crate) fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
             }
             p::Term::App(name, args.iter().map(lnterm_to_parser).collect())
         }
-        Term::App(FunSym::C(_), args) => {
-            p::Term::App("em".to_string(), args.iter().map(lnterm_to_parser).collect())
-        }
+        Term::App(FunSym::C(_), args) => p::Term::App(
+            "em".to_string(),
+            args.iter().map(lnterm_to_parser).collect(),
+        ),
         Term::App(FunSym::Ac(ac), args) => {
             // Render AC as left-assoc binops to preserve display.
             let op = match ac {
@@ -1875,9 +2031,10 @@ pub(crate) fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                 p::Term::BinOp(op, Box::new(acc), Box::new(lnterm_to_parser(next)))
             })
         }
-        Term::App(FunSym::List, args) => {
-            p::Term::App("LIST".to_string(), args.iter().map(lnterm_to_parser).collect())
-        }
+        Term::App(FunSym::List, args) => p::Term::App(
+            "LIST".to_string(),
+            args.iter().map(lnterm_to_parser).collect(),
+        ),
     }
 }
 
@@ -1901,7 +2058,15 @@ const ORACLE_RIBBON: usize = 67;
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
-fn render_parsed_lemma(lem: &p::Lemma, macros: &[p::Macro], predicates: &[p::Predicate], proved: &[ProvedLemma], in_file: &str, _elab: &Theory, arity1: &std::collections::HashSet<String>) -> String {
+fn render_parsed_lemma(
+    lem: &p::Lemma,
+    macros: &[p::Macro],
+    predicates: &[p::Predicate],
+    proved: &[ProvedLemma],
+    in_file: &str,
+    _elab: &Theory,
+    arity1: &std::collections::HashSet<String>,
+) -> String {
     use crate::pretty_hpj::{self as hpj, Doc};
     let mut out = String::new();
     // HS `prettyLemmaName` (Lemma.hs:91-95):
@@ -1921,7 +2086,9 @@ fn render_parsed_lemma(lem: &p::Lemma, macros: &[p::Macro], predicates: &[p::Pre
         // first attr character (i.e. right after `[`).
         let attrs_fsep = hpj::fsep(hpj::punctuate(Doc::text(","), attr_docs));
         let brackets = Doc::text("[").beside(attrs_fsep).beside(Doc::text("]"));
-        kw.beside_sp(name_doc).beside_sp(brackets).beside(Doc::text(":"))
+        kw.beside_sp(name_doc)
+            .beside_sp(brackets)
+            .beside(Doc::text(":"))
     };
     out.push_str(&header_doc.render());
     out.push('\n');
@@ -1990,7 +2157,9 @@ fn lemma_attr_docs(attrs: &[p::LemmaAttr], in_file: &str) -> Vec<crate::pretty_h
             Right => Some("right".into()),
             _ => None,
         };
-        if let Some(s) = s { out.push(Doc::text(s)); }
+        if let Some(s) = s {
+            out.push(Doc::text(s));
+        }
     }
     out
 }
@@ -2005,7 +2174,12 @@ fn quantifier_keyword(q: &p::TraceQuantifier) -> &'static str {
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
-fn render_guarded_block(lem: &p::Lemma, macros: &[p::Macro], predicates: &[p::Predicate], arity1: &std::collections::HashSet<String>) -> String {
+fn render_guarded_block(
+    lem: &p::Lemma,
+    macros: &[p::Macro],
+    predicates: &[p::Predicate],
+    arity1: &std::collections::HashSet<String>,
+) -> String {
     let header = match &lem.trace_quantifier {
         p::TraceQuantifier::ExistsTrace => "guarded formula characterizing all satisfying traces:",
         p::TraceQuantifier::AllTraces => "guarded formula characterizing all counter-examples:",
@@ -2042,7 +2216,9 @@ fn render_guarded_block(lem: &p::Lemma, macros: &[p::Macro], predicates: &[p::Pr
                 block.push('\n');
             }
             let full_text = crate::pretty_formula::pretty_formula(&expanded_formula);
-            let sub_text = e.subject_formula.as_ref()
+            let sub_text = e
+                .subject_formula
+                .as_ref()
                 .map(crate::pretty_formula::pretty_formula)
                 .unwrap_or_else(|| full_text.clone());
             block.push_str("    \"");
@@ -2089,7 +2265,13 @@ fn expand_predicates_for_display(f: &p::Formula, predicates: &[p::Predicate]) ->
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
-fn render_parsed_restriction(r: &p::Restriction, macros: &[p::Macro], predicates: &[p::Predicate], _elab: &Theory, arity1: &std::collections::HashSet<String>) -> String {
+fn render_parsed_restriction(
+    r: &p::Restriction,
+    macros: &[p::Macro],
+    predicates: &[p::Predicate],
+    _elab: &Theory,
+    arity1: &std::collections::HashSet<String>,
+) -> String {
     // HS `prettyRestriction` (TheoryObject.hs:846-857):
     //   The `Restriction` carries two formulas after `applyMacroInRestriction`:
     //   - `_rstrFormula`         = macro-EXPANDED formula  (displayed in expanded block)
@@ -2116,27 +2298,36 @@ fn render_parsed_restriction(r: &p::Restriction, macros: &[p::Macro], predicates
     // written order, so re-establish the canonical AC operand order before
     // rendering, exactly as the lemma display path does (render_parsed_lemma,
     // `canonicalize_ac_in_formula`).
-    let original = crate::elaborate::canonicalize_ac_in_formula(
-        &crate::elaborate::rewrite_arity1_formula(
-            &expand_predicates_for_display(&r.formula, predicates), arity1));
+    let original =
+        crate::elaborate::canonicalize_ac_in_formula(&crate::elaborate::rewrite_arity1_formula(
+            &expand_predicates_for_display(&r.formula, predicates),
+            arity1,
+        ));
     let expanded = if macros.is_empty() {
         original.clone()
     } else {
-        crate::elaborate::canonicalize_ac_in_formula(
-            &crate::elaborate::rewrite_arity1_formula(
-                &expand_predicates_for_display(
-                    &crate::macro_expand::apply_macros_formula(macros, &r.formula), predicates),
-                arity1))
+        crate::elaborate::canonicalize_ac_in_formula(&crate::elaborate::rewrite_arity1_formula(
+            &expand_predicates_for_display(
+                &crate::macro_expand::apply_macros_formula(macros, &r.formula),
+                predicates,
+            ),
+            arity1,
+        ))
     };
-    use crate::pretty_hpj::{keyword_, line_comment_, hl_open, hl_close, html_mode,
-                            escape_html_entities, Hl};
+    use crate::pretty_hpj::{
+        escape_html_entities, hl_close, hl_open, html_mode, keyword_, line_comment_, Hl,
+    };
     let mut out = String::new();
     // HS `kwRestriction <-> text name <> colon` (TheoryObject.hs:848-849):
     // `restriction` is a keyword; the name is `text` (entity-escaped in HtmlDoc
     // mode).  `keyword_`/escaping are identities in plain mode.
     out.push_str(&keyword_("restriction").render());
     out.push(' ');
-    if html_mode() { out.push_str(&escape_html_entities(&r.name)); } else { out.push_str(&r.name); }
+    if html_mode() {
+        out.push_str(&escape_html_entities(&r.name));
+    } else {
+        out.push_str(&r.name);
+    }
     out.push_str(":\n");
     // Top-level display: original formula (macro form) — `fromMaybe expandedFormula ogFormula`.
     // Since ogFormula = Just original, this always shows `r.formula` (macro form).
@@ -2208,7 +2399,11 @@ fn no_existential(g: &crate::guarded::Guarded) -> bool {
     match g {
         Guarded::Atom(_) => true,
         Guarded::GGuarded { qua: Quant::Ex, .. } => false,
-        Guarded::GGuarded { qua: Quant::All, body, .. } => no_existential(body),
+        Guarded::GGuarded {
+            qua: Quant::All,
+            body,
+            ..
+        } => no_existential(body),
         Guarded::Disj(xs) => xs.iter().all(no_existential),
         Guarded::Conj(xs) => xs.iter().all(no_existential),
     }
@@ -2232,11 +2427,7 @@ pub fn pretty_proof_body(node: &crate::constraint::solver::search::ProofNode) ->
     out
 }
 
-fn pp_proof(
-    node: &crate::constraint::solver::search::ProofNode,
-    out: &mut String,
-    depth: usize,
-) {
+fn pp_proof(node: &crate::constraint::solver::search::ProofNode, out: &mut String, depth: usize) {
     use crate::constraint::solver::proof_method::{ProofMethod, Result as MR};
     // The step's first char lands at col `depth*2` (proof body uses
     // 2-space indent per nesting level).
@@ -2428,10 +2619,12 @@ fn pp_step_doc(
         PM::Induction => crate::pretty_hpj::keyword_("induction"),
         PM::Finished(MR::Solved) => crate::pretty_hpj::keyword_("SOLVED")
             .beside_sp(crate::pretty_hpj::line_comment_("trace found")),
-        PM::Finished(MR::Unfinishable) => crate::pretty_hpj::keyword_("UNFINISHABLE")
-            .beside_sp(crate::pretty_hpj::line_comment_("reducible operator in subterm")),
+        PM::Finished(MR::Unfinishable) => crate::pretty_hpj::keyword_("UNFINISHABLE").beside_sp(
+            crate::pretty_hpj::line_comment_("reducible operator in subterm"),
+        ),
         PM::Invalidated => crate::pretty_hpj::line_comment_(
-            "proof may have been invalidated by editing a reuse lemma above. You should "),
+            "proof may have been invalidated by editing a reuse lemma above. You should ",
+        ),
         // HS `Sorry reason -> fsep [keyword_ "sorry", maybe emptyDoc
         // closedComment_ reason]` (ProofMethod.hs:1490-1491).  `keyword_` is
         // identity in plain mode, so `sorry` / `sorry /* reason */`
@@ -2525,11 +2718,11 @@ fn raw_solve_to_doc(raw: &str) -> crate::pretty_hpj::Doc {
 /// reconstructing each goal kind from `parse_goal_spec`
 /// (proof_tree.rs:278) and laying it out with the live-goal builders.
 fn raw_goal_to_doc(raw: &str) -> crate::pretty_hpj::Doc {
+    use crate::guarded::formula_to_guarded;
     use crate::pretty_hpj::Doc;
     use tamarin_parser::ast::GoalSpec;
-    use tamarin_parser::proof_tree::parse_goal_spec;
     use tamarin_parser::parser::{parse_formula_str, parse_term_str};
-    use crate::guarded::formula_to_guarded;
+    use tamarin_parser::proof_tree::parse_goal_spec;
 
     let trimmed = raw.trim();
     match parse_goal_spec(trimmed) {
@@ -2538,33 +2731,39 @@ fn raw_goal_to_doc(raw: &str) -> crate::pretty_hpj::Doc {
         // `#vk`.  Reconstruct the node LVar and render via `render_lvar`
         // (the same renderer the live-goal path uses, render_node_id) so
         // the head is byte-identical to HS's re-render.
-        GoalSpec::Action { fact, time_var, time_idx } => {
-            reparse_fact_doc(&fact)
-                .beside_sp(crate::pretty_hpj::operator_("@"))
-                .beside_sp(Doc::text(render_node_id_str(&time_var, time_idx)))
-        }
+        GoalSpec::Action {
+            fact,
+            time_var,
+            time_idx,
+        } => reparse_fact_doc(&fact)
+            .beside_sp(crate::pretty_hpj::operator_("@"))
+            .beside_sp(Doc::text(render_node_id_str(&time_var, time_idx))),
         // `prettyGoal (PremiseG (i, PremIdx v) fa) =
         //    prettyLNFact fa <-> "▶"<>subscript v <-> prettyNodeId i`.
-        GoalSpec::Premise { fact, prem_idx, time_var, time_idx } => {
-            reparse_fact_doc(&fact)
-                .beside_sp(Doc::text(format!("\u{25B6}{}", goal_subscript(prem_idx))))
-                .beside_sp(Doc::text(render_node_id_str(&time_var, time_idx)))
-        }
+        GoalSpec::Premise {
+            fact,
+            prem_idx,
+            time_var,
+            time_idx,
+        } => reparse_fact_doc(&fact)
+            .beside_sp(Doc::text(format!("\u{25B6}{}", goal_subscript(prem_idx))))
+            .beside_sp(Doc::text(render_node_id_str(&time_var, time_idx))),
         // `prettyGoal (DisjG (Disj gfs)) =
         //    fsep $ punctuate "  ∥" (map (nest 1 . parens . prettyGuarded) gfs)`.
         // Re-parse each disjunct's text into a Guarded and route through the
         // same `disj_goal_to_doc` the live path uses.  If ANY disjunct fails
         // to re-parse, fall back to verbatim (the rare unparseable case then
         // renders as stored).
-        GoalSpec::Disj { .. } => {
-            match parse_disjuncts_to_guarded(trimmed) {
-                Some(gfs) => pf::disj_goal_to_doc(&gfs),
-                None => Doc::text(trimmed),
-            }
-        }
+        GoalSpec::Disj { .. } => match parse_disjuncts_to_guarded(trimmed) {
+            Some(gfs) => pf::disj_goal_to_doc(&gfs),
+            None => Doc::text(trimmed),
+        },
         // `prettyGoal (SubtermG (l,r)) = prettyLNTerm l <-> "⊏" <-> prettyLNTerm r`.
         GoalSpec::Subterm { small_raw, big_raw } => {
-            match (parse_term_str(small_raw.trim()), parse_term_str(big_raw.trim())) {
+            match (
+                parse_term_str(small_raw.trim()),
+                parse_term_str(big_raw.trim()),
+            ) {
                 (Ok(l), Ok(r)) => pf::term_doc(&l)
                     .beside_sp(crate::pretty_hpj::operator_("\u{228F}"))
                     .beside_sp(pf::term_doc(&r)),
@@ -2587,7 +2786,10 @@ fn raw_goal_to_doc(raw: &str) -> crate::pretty_hpj::Doc {
         // single quantified alt) parses here.  Try formula→guarded so it
         // re-wraps like HS's `prettyGuarded`; else keep verbatim.
         GoalSpec::Raw(_) => {
-            match parse_formula_str(trimmed).ok().and_then(|f| formula_to_guarded(&f).ok()) {
+            match parse_formula_str(trimmed)
+                .ok()
+                .and_then(|f| formula_to_guarded(&f).ok())
+            {
                 Some(g) => pf::disj_goal_to_doc(std::slice::from_ref(&g)),
                 None => Doc::text(trimmed),
             }
@@ -2612,11 +2814,15 @@ fn raw_goal_to_doc(raw: &str) -> crate::pretty_hpj::Doc {
 fn reparse_fact_doc(fact: &tamarin_parser::ast::Fact) -> crate::pretty_hpj::Doc {
     use tamarin_parser::ast::{Fact, Term};
     use tamarin_parser::parser::parse_term_str;
-    let args: Vec<Term> = fact.args.iter().map(|a| match a {
-        // `build_fact` stored the raw arg text as a `Var` name; re-parse it.
-        Term::Var(v) => parse_term_str(v.name.trim()).unwrap_or_else(|_| a.clone()),
-        other => other.clone(),
-    }).collect();
+    let args: Vec<Term> = fact
+        .args
+        .iter()
+        .map(|a| match a {
+            // `build_fact` stored the raw arg text as a `Var` name; re-parse it.
+            Term::Var(v) => parse_term_str(v.name.trim()).unwrap_or_else(|_| a.clone()),
+            other => other.clone(),
+        })
+        .collect();
     let reparsed = Fact {
         persistent: fact.persistent,
         name: fact.name.clone(),
@@ -2631,8 +2837,8 @@ fn reparse_fact_doc(fact: &tamarin_parser::ast::Fact) -> crate::pretty_hpj::Doc 
 /// disjunct as a full `Guarded`, Theory/Text/Parser/Proof.hs:39-72, see line 61).  Returns
 /// `None` if any disjunct fails to parse (caller falls back to verbatim).
 fn parse_disjuncts_to_guarded(text: &str) -> Option<Vec<crate::guarded::Guarded>> {
-    use tamarin_parser::parser::parse_formula_str;
     use crate::guarded::formula_to_guarded;
+    use tamarin_parser::parser::parse_formula_str;
     let parts = split_top_level_disj_par(text);
     let mut out = Vec::with_capacity(parts.len());
     for p in &parts {
@@ -2654,8 +2860,14 @@ fn split_top_level_disj_par(s: &str) -> Vec<String> {
     let mut depth: i32 = 0;
     for c in s.chars() {
         match c {
-            '(' | '[' | '{' => { depth += 1; cur.push(c); }
-            ')' | ']' | '}' => { depth -= 1; cur.push(c); }
+            '(' | '[' | '{' => {
+                depth += 1;
+                cur.push(c);
+            }
+            ')' | ']' | '}' => {
+                depth -= 1;
+                cur.push(c);
+            }
             _ if c == SEP && depth == 0 => out.push(std::mem::take(&mut cur)),
             _ => cur.push(c),
         }
@@ -2705,8 +2917,8 @@ pub(crate) fn solve_goal_to_doc(
     g: &crate::constraint::constraints::Goal,
 ) -> crate::pretty_hpj::Doc {
     use crate::constraint::constraints::Goal;
-    use crate::rule::PremIdx;
     use crate::pretty_hpj::Doc;
+    use crate::rule::PremIdx;
     match g {
         // `prettyGoal (ActionG i fa) = prettyNAtom (Action (varTerm i) fa)`
         // = `prettyFact fa <-> opAction <-> text (show i)` (Atom.hs:216-217),
@@ -2719,11 +2931,9 @@ pub(crate) fn solve_goal_to_doc(
         }
         // `prettyGoal (ChainG c p) =
         //    prettyNodeConc c <-> operator_ "~~>" <-> prettyNodePrem p`.
-        Goal::Chain(c, p) => {
-            Doc::text(render_node_conc(c))
-                .beside_sp(crate::pretty_hpj::operator_("~~>"))
-                .beside_sp(Doc::text(render_node_prem(p)))
-        }
+        Goal::Chain(c, p) => Doc::text(render_node_conc(c))
+            .beside_sp(crate::pretty_hpj::operator_("~~>"))
+            .beside_sp(Doc::text(render_node_prem(p))),
         // `prettyGoal (PremiseG (i, PremIdx v) fa) =
         //    prettyLNFact fa <-> text ("▶" ++ subscript (show v)) <-> prettyNodeId i`.
         Goal::Premise((i, PremIdx(v)), fa) => {
@@ -2744,11 +2954,9 @@ pub(crate) fn solve_goal_to_doc(
         Goal::Disj(d) => pf::disj_goal_to_doc(&d.0),
         // `prettyGoal (SubtermG (l,r)) =
         //    prettyLNTerm l <-> operator_ "⊏" <-> prettyLNTerm r`.
-        Goal::Subterm((l, r)) => {
-            pf::term_doc(&lnterm_to_parser(l))
-                .beside_sp(crate::pretty_hpj::operator_("\u{228F}"))
-                .beside_sp(pf::term_doc(&lnterm_to_parser(r)))
-        }
+        Goal::Subterm((l, r)) => pf::term_doc(&lnterm_to_parser(l))
+            .beside_sp(crate::pretty_hpj::operator_("\u{228F}"))
+            .beside_sp(pf::term_doc(&lnterm_to_parser(r))),
     }
 }
 
@@ -2800,24 +3008,29 @@ fn pp_contradiction(c: &crate::constraint::solver::contradictions::Contradiction
         // tuple yields `(a,b,c)` (no spaces after commas), with each
         // component rendered by `Show LVar` (LTerm.hs:525-532) — which
         // is identical to our `render_lvar`.
-        C::NonInjectiveFactInstance(a, b, c) =>
-            format!("non-injective facts ({},{},{})",
-                render_lvar(a), render_lvar(b), render_lvar(c)),
+        C::NonInjectiveFactInstance(a, b, c) => format!(
+            "non-injective facts ({},{},{})",
+            render_lvar(a),
+            render_lvar(b),
+            render_lvar(c)
+        ),
         C::FormulasFalse => "from formulas".to_string(),
         // HS: `SuperfluousLearn m v ->
         //        doubleQuotes (prettyLNTerm m) <->
         //        text "derived before and after" <->
         //        doubleQuotes (prettyNodeId v)`
         // → `"<m>" derived before and after "<v>"`.
-        C::SuperfluousLearn(m, v) =>
-            format!("\"{}\" derived before and after \"{}\"",
-                tamarin_term::pretty::pretty_lnterm(m), render_node_id(v)),
+        C::SuperfluousLearn(m, v) => format!(
+            "\"{}\" derived before and after \"{}\"",
+            tamarin_term::pretty::pretty_lnterm(m),
+            render_node_id(v)
+        ),
         // HS: `NodeAfterLast (i,j) ->
         //        text $ "node " ++ show j ++ " after last node " ++ show i`
         // Note HS reverses the order: `j` first in the message, then `i`.
-        C::NodeAfterLast(i, j) =>
-            format!("node {} after last node {}",
-                render_lvar(j), render_lvar(i)),
+        C::NodeAfterLast(i, j) => {
+            format!("node {} after last node {}", render_lvar(j), render_lvar(i))
+        }
     }
 }
 
@@ -2842,9 +3055,9 @@ mod oracle_goal_tests {
     use crate::constraint::constraints::Goal;
     use crate::fact::{Fact, FactTag, LNFact, Multiplicity};
     use crate::rule::PremIdx;
-    use tamarin_term::lterm::{LSort, LVar, LNTerm};
-    use tamarin_term::vterm::Lit;
+    use tamarin_term::lterm::{LNTerm, LSort, LVar};
     use tamarin_term::term::Term;
+    use tamarin_term::vterm::Lit;
 
     fn fresh(name: &str) -> LNTerm {
         Term::Lit(Lit::Var(LVar::new(name, LSort::Fresh, 0)))
@@ -2875,7 +3088,10 @@ mod oracle_goal_tests {
         // !KeyStore0( ~keyaaaaaaaaaaaaaaaaaaaa, ~msgbbbbbbbbbbbbbbbbbbbb ) ▶₀ #l
         let fa: LNFact = Fact::new(
             FactTag::Proto(Multiplicity::Persistent, "KeyStore0", 2),
-            vec![fresh("keyaaaaaaaaaaaaaaaaaaaa"), fresh("msgbbbbbbbbbbbbbbbbbbbb")],
+            vec![
+                fresh("keyaaaaaaaaaaaaaaaaaaaa"),
+                fresh("msgbbbbbbbbbbbbbbbbbbbb"),
+            ],
         );
         let node = LVar::new("l", LSort::Node, 0);
         let goal = Goal::Premise((node, PremIdx(0)), fa);
@@ -2904,7 +3120,10 @@ mod oracle_goal_tests {
             "!KeyStore0( ~keyaaaaaaaaaaaaaaaaaaaa, ~msgbbbbbbbbbbbbbbbbbbbb ) \u{25B6}\u{2080} #l",
             "display width must keep the fact inline (space before `)`)",
         );
-        assert_ne!(collapsed, display, "oracle and display widths must differ here");
+        assert_ne!(
+            collapsed, display,
+            "oracle and display widths must differ here"
+        );
     }
 
     /// Regression: a disjunction goal sent to the oracle MUST carry the
@@ -2925,12 +3144,14 @@ mod oracle_goal_tests {
         use crate::guarded_types::{BVar, GAtom, GTerm};
         use tamarin_parser::ast::{SortHint, VarSpec};
 
-        let tp = |n: &str| GTerm::Var(BVar::Free(VarSpec {
-            name: n.to_string(),
-            idx: 0,
-            sort: SortHint::Node,
-            typ: None,
-        }));
+        let tp = |n: &str| {
+            GTerm::Var(BVar::Free(VarSpec {
+                name: n.to_string(),
+                idx: 0,
+                sort: SortHint::Node,
+                typ: None,
+            }))
+        };
         // `#a < #b` ∥ `#b < #a`
         let d1 = Guarded::Atom(GAtom::Less(tp("a"), tp("b")));
         let d2 = Guarded::Atom(GAtom::Less(tp("b"), tp("a")));
@@ -2940,8 +3161,7 @@ mod oracle_goal_tests {
         let collapsed: String = rendered.lines().collect::<Vec<_>>().concat();
         // HS `nest 1` leading space + `"  ∥"` separator (two spaces + ∥).
         assert_eq!(
-            collapsed,
-            " (#a < #b)  \u{2225} (#b < #a)",
+            collapsed, " (#a < #b)  \u{2225} (#b < #a)",
             "oracle disjunction goal must keep HS's leading `nest 1` space",
         );
         assert!(

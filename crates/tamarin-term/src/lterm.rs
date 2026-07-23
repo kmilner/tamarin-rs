@@ -25,8 +25,8 @@ use std::cmp::Ordering;
 
 use crate::function_symbols::{AcSym, FunSym, Privacy};
 use crate::term::{Term, TermView};
-use tamarin_utils::cow::cow_map_vec;
 use crate::vterm::{const_term, var_term, Lit, VTerm};
+use tamarin_utils::cow::cow_map_vec;
 
 // =============================================================================
 // Sorts
@@ -47,7 +47,9 @@ pub enum LSort {
 /// Partial-order comparison on sorts. Returns `None` for incomparable sorts.
 pub fn sort_compare(a: LSort, b: LSort) -> Option<Ordering> {
     use LSort::*;
-    if a == b { return Some(Ordering::Equal); }
+    if a == b {
+        return Some(Ordering::Equal);
+    }
     match (a, b) {
         (Node, _) | (_, Node) => None,
         (Msg, _) => Some(Ordering::Greater),
@@ -86,8 +88,12 @@ pub fn sort_suffix(s: LSort) -> &'static str {
 pub struct NameId(pub &'static str);
 
 impl NameId {
-    pub fn new(s: impl Into<String>) -> Self { NameId(crate::intern::intern_str(&s.into())) }
-    pub fn as_str(&self) -> &str { self.0 }
+    pub fn new(s: impl Into<String>) -> Self {
+        NameId(crate::intern::intern_str(&s.into()))
+    }
+    pub fn as_str(&self) -> &str {
+        self.0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -106,7 +112,10 @@ pub struct Name {
 
 impl Name {
     pub fn new(tag: NameTag, id: impl Into<String>) -> Self {
-        Name { tag, id: NameId::new(id) }
+        Name {
+            tag,
+            id: NameId::new(id),
+        }
     }
 }
 
@@ -175,7 +184,11 @@ impl Ord for LVar {
         // the manual Ord in step with the derived Eq/Hash (which auto-include
         // every field).
         let LVar { name, sort, idx } = self;
-        let LVar { name: other_name, sort: other_sort, idx: other_idx } = other;
+        let LVar {
+            name: other_name,
+            sort: other_sort,
+            idx: other_idx,
+        } = other;
         idx.cmp(other_idx)
             .then_with(|| sort.cmp(other_sort))
             .then_with(|| name.cmp(other_name))
@@ -190,7 +203,11 @@ impl PartialOrd for LVar {
 
 impl LVar {
     pub fn new(name: impl AsRef<str>, sort: LSort, idx: u64) -> Self {
-        LVar { name: crate::intern::intern_str(name.as_ref()), sort, idx }
+        LVar {
+            name: crate::intern::intern_str(name.as_ref()),
+            sort,
+            idx,
+        }
     }
 }
 
@@ -209,7 +226,11 @@ pub fn fresh_lvar(
     name: &str,
     sort: LSort,
 ) -> LVar {
-    LVar { name: crate::intern::intern_str(name), sort, idx: state.fresh_ident(name) }
+    LVar {
+        name: crate::intern::intern_str(name),
+        sort,
+        idx: state.fresh_ident(name),
+    }
 }
 
 // =============================================================================
@@ -250,10 +271,18 @@ fn is_var_of_sort(t: &LNTerm, want: LSort) -> bool {
     matches!(t.view(), TermView::Lit(Lit::Var(v)) if v.sort == want)
 }
 
-pub fn is_msg_var(t: &LNTerm) -> bool { is_var_of_sort(t, LSort::Msg) }
-pub fn is_pub_var(t: &LNTerm) -> bool { is_var_of_sort(t, LSort::Pub) }
-pub fn is_nat_var(t: &LNTerm) -> bool { is_var_of_sort(t, LSort::Nat) }
-pub fn is_fresh_var(t: &LNTerm) -> bool { is_var_of_sort(t, LSort::Fresh) }
+pub fn is_msg_var(t: &LNTerm) -> bool {
+    is_var_of_sort(t, LSort::Msg)
+}
+pub fn is_pub_var(t: &LNTerm) -> bool {
+    is_var_of_sort(t, LSort::Pub)
+}
+pub fn is_nat_var(t: &LNTerm) -> bool {
+    is_var_of_sort(t, LSort::Nat)
+}
+pub fn is_fresh_var(t: &LNTerm) -> bool {
+    is_var_of_sort(t, LSort::Fresh)
+}
 
 pub fn is_pub_const(t: &LNTerm) -> bool {
     matches!(t.view(), TermView::Lit(Lit::Con(n)) if sort_of_name(n) == LSort::Pub)
@@ -261,7 +290,11 @@ pub fn is_pub_const(t: &LNTerm) -> bool {
 
 /// If `t` is a single variable, return it.
 pub fn get_var(t: &LNTerm) -> Option<&LVar> {
-    if let TermView::Lit(Lit::Var(v)) = t.view() { Some(v) } else { None }
+    if let TermView::Lit(Lit::Var(v)) = t.view() {
+        Some(v)
+    } else {
+        None
+    }
 }
 
 /// `containsPrivate t`: any private NoEq symbol anywhere in `t`?
@@ -347,8 +380,12 @@ pub enum BVar<V> {
 }
 
 impl<V> BVar<V> {
-    pub fn is_bound(&self) -> bool { matches!(self, BVar::Bound(_)) }
-    pub fn is_free(&self) -> bool { matches!(self, BVar::Free(_)) }
+    pub fn is_bound(&self) -> bool {
+        matches!(self, BVar::Bound(_))
+    }
+    pub fn is_free(&self) -> bool {
+        matches!(self, BVar::Free(_))
+    }
     /// HS `fromFree` (LTerm.hs): unwrap a free variable, panicking on `Bound`.
     pub fn into_free(self) -> V {
         match self {
@@ -366,7 +403,9 @@ pub(crate) type BLTerm = NTerm<BLVar>;
 // (LTerm.hs). Currently unwired — the macro path that consumes them lives in
 // `macro_expand.rs` (reimplemented on the parser AST).
 #[allow(dead_code)]
-pub(crate) fn free_lnterm(v: LVar) -> BLVar { BVar::Free(v) }
+pub(crate) fn free_lnterm(v: LVar) -> BLVar {
+    BVar::Free(v)
+}
 
 /// Convert an `LNTerm` to a term over `BVar<LVar>` — every variable becomes
 /// `Free`.
@@ -375,7 +414,14 @@ pub(crate) fn free_term(t: LNTerm) -> BLTerm {
     match t {
         Term::Lit(Lit::Var(v)) => crate::term::lit(Lit::Var(BVar::Free(v))),
         Term::Lit(Lit::Con(c)) => crate::term::lit(Lit::Con(c)),
-        Term::App(f, args) => Term::App(f, args.iter().cloned().map(free_term).collect::<Vec<_>>().into()),
+        Term::App(f, args) => Term::App(
+            f,
+            args.iter()
+                .cloned()
+                .map(free_term)
+                .collect::<Vec<_>>()
+                .into(),
+        ),
     }
 }
 
@@ -443,7 +489,11 @@ pub fn frees<T: HasFrees>(t: &T) -> Vec<LVar> {
 /// `occurs v t`: whether `v` is among `t`'s free variables.
 pub fn occurs<T: HasFrees>(v: &LVar, t: &T) -> bool {
     let mut found = false;
-    t.for_each_free(&mut |w| if w == v { found = true; });
+    t.for_each_free(&mut |w| {
+        if w == v {
+            found = true;
+        }
+    });
     found
 }
 
@@ -454,10 +504,18 @@ pub fn bounds_var_idx<T: HasFrees>(t: &T) -> Option<(u64, u64)> {
     let mut any = false;
     t.for_each_free(&mut |v| {
         any = true;
-        if v.idx < min { min = v.idx; }
-        if v.idx > max { max = v.idx; }
+        if v.idx < min {
+            min = v.idx;
+        }
+        if v.idx > max {
+            max = v.idx;
+        }
     });
-    if any { Some((min, max)) } else { None }
+    if any {
+        Some((min, max))
+    } else {
+        None
+    }
 }
 
 /// `avoid t`: a `FastFreshState` that won't generate any indices already
@@ -474,13 +532,19 @@ pub fn avoid<T: HasFrees>(t: &T) -> tamarin_utils::fresh::FastFreshState {
 // -- HasFrees impls -----------------------------------------------------------
 
 impl HasFrees for LVar {
-    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) { f(self); }
-    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, _monotone: bool) -> Self { f(self) }
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        f(self);
+    }
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, _monotone: bool) -> Self {
+        f(self)
+    }
 }
 
 impl<C: Clone, V: HasFreesV> HasFrees for Lit<C, V> {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
-        if let Lit::Var(v) = self { v.for_each_free_v(f); }
+        if let Lit::Var(v) = self {
+            v.for_each_free_v(f);
+        }
     }
     fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, _monotone: bool) -> Self {
         match self {
@@ -498,8 +562,12 @@ pub trait HasFreesV {
 }
 
 impl HasFreesV for LVar {
-    fn for_each_free_v(&self, f: &mut dyn FnMut(&LVar)) { f(self); }
-    fn map_free_v(self, f: &mut dyn FnMut(LVar) -> LVar) -> Self { f(self) }
+    fn for_each_free_v(&self, f: &mut dyn FnMut(&LVar)) {
+        f(self);
+    }
+    fn map_free_v(self, f: &mut dyn FnMut(LVar) -> LVar) -> Self {
+        f(self)
+    }
 }
 
 // Intentionally retained: faithful HS port of the `HasFrees (BVar v)` instance,
@@ -507,7 +575,9 @@ impl HasFreesV for LVar {
 // trait (formula terms over `BVar<LVar>` are traversed by pattern matching).
 impl HasFreesV for BVar<LVar> {
     fn for_each_free_v(&self, f: &mut dyn FnMut(&LVar)) {
-        if let BVar::Free(v) = self { f(v); }
+        if let BVar::Free(v) = self {
+            f(v);
+        }
     }
     fn map_free_v(self, f: &mut dyn FnMut(LVar) -> LVar) -> Self {
         match self {
@@ -525,7 +595,9 @@ where
         match self {
             Term::Lit(l) => l.for_each_free(f),
             Term::App(_, args) => {
-                for a in args.iter() { a.for_each_free(f); }
+                for a in args.iter() {
+                    a.for_each_free(f);
+                }
             }
         }
     }
@@ -551,14 +623,22 @@ where
 /// changed child, and unchanged children reuse their `Arc` by clone.  Mirrors
 /// `Term::App`'s `mapFrees`: monotone keeps arg order (`unsafe_f_app`),
 /// non-monotone re-sorts AC/C (`f_app`).
-fn map_free_term_cow<L>(t: &Term<L>, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Option<Term<L>>
+fn map_free_term_cow<L>(
+    t: &Term<L>,
+    f: &mut dyn FnMut(LVar) -> LVar,
+    monotone: bool,
+) -> Option<Term<L>>
 where
     L: Clone + Ord + HasFrees + HasFreesLit,
 {
     match t {
         Term::Lit(l) => {
             let nl = l.clone().map_free_with(f, monotone);
-            if &nl != l { Some(Term::Lit(nl)) } else { None }
+            if &nl != l {
+                Some(Term::Lit(nl))
+            } else {
+                None
+            }
         }
         Term::App(fsym, args) => {
             cow_map_vec(&args[..], |a| map_free_term_cow(a, &mut *f, monotone)).map(|mapped| {
@@ -580,10 +660,14 @@ impl HasFreesLit for LVar {}
 
 impl<T: HasFrees> HasFrees for Vec<T> {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
-        for t in self { t.for_each_free(f); }
+        for t in self {
+            t.for_each_free(f);
+        }
     }
     fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
-        self.into_iter().map(|t| t.map_free_with(f, monotone)).collect()
+        self.into_iter()
+            .map(|t| t.map_free_with(f, monotone))
+            .collect()
     }
 }
 
@@ -593,13 +677,18 @@ impl<A: HasFrees, B: HasFrees> HasFrees for (A, B) {
         self.1.for_each_free(f);
     }
     fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
-        (self.0.map_free_with(f, monotone), self.1.map_free_with(f, monotone))
+        (
+            self.0.map_free_with(f, monotone),
+            self.1.map_free_with(f, monotone),
+        )
     }
 }
 
 impl<T: HasFrees> HasFrees for Option<T> {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
-        if let Some(t) = self { t.for_each_free(f); }
+        if let Some(t) = self {
+            t.for_each_free(f);
+        }
     }
     fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
         self.map(|t| t.map_free_with(f, monotone))
@@ -637,9 +726,15 @@ pub fn rename<T: HasFrees>(t: T, fresh: &mut tamarin_utils::fresh::FastFreshStat
 #[allow(dead_code)]
 pub(crate) fn nat_to_fresh_vars(t: LNTerm) -> LNTerm {
     match t {
-        Term::Lit(Lit::Var(LVar { name, sort: LSort::Nat, idx })) => {
-            var_term(LVar { name, sort: LSort::Fresh, idx })
-        }
+        Term::Lit(Lit::Var(LVar {
+            name,
+            sort: LSort::Nat,
+            idx,
+        })) => var_term(LVar {
+            name,
+            sort: LSort::Fresh,
+            idx,
+        }),
         Term::Lit(_) => t,
         Term::App(f, args) => {
             let mapped: Vec<LNTerm> = args.iter().cloned().map(nat_to_fresh_vars).collect();
@@ -657,8 +752,14 @@ mod tests {
     #[test]
     fn sort_partial_order() {
         assert_eq!(sort_compare(LSort::Fresh, LSort::Msg), Some(Ordering::Less));
-        assert_eq!(sort_compare(LSort::Msg, LSort::Pub), Some(Ordering::Greater));
-        assert_eq!(sort_compare(LSort::Fresh, LSort::Fresh), Some(Ordering::Equal));
+        assert_eq!(
+            sort_compare(LSort::Msg, LSort::Pub),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            sort_compare(LSort::Fresh, LSort::Fresh),
+            Some(Ordering::Equal)
+        );
         // Fresh and Pub are incomparable.
         assert_eq!(sort_compare(LSort::Fresh, LSort::Pub), None);
         // Node is incomparable to everything else.
@@ -762,10 +863,10 @@ mod tests {
     #[test]
     fn lsort_ord_matches_haskell_declaration() {
         // Pub < Fresh < Msg < Node < Nat
-        assert!(LSort::Pub   < LSort::Fresh);
+        assert!(LSort::Pub < LSort::Fresh);
         assert!(LSort::Fresh < LSort::Msg);
-        assert!(LSort::Msg   < LSort::Node);
-        assert!(LSort::Node  < LSort::Nat);
+        assert!(LSort::Msg < LSort::Node);
+        assert!(LSort::Node < LSort::Nat);
         // Transitive.
         assert!(LSort::Pub < LSort::Nat);
     }
@@ -775,8 +876,8 @@ mod tests {
     fn name_tag_ord_matches_haskell_declaration() {
         // Fresh < Pub < Node < Nat
         assert!(NameTag::Fresh < NameTag::Pub);
-        assert!(NameTag::Pub   < NameTag::Node);
-        assert!(NameTag::Node  < NameTag::Nat);
+        assert!(NameTag::Pub < NameTag::Node);
+        assert!(NameTag::Node < NameTag::Nat);
     }
 
     /// Haskell `sortCompare` (LTerm.hs:177-187) is a PARTIAL ORDER, NOT
@@ -793,24 +894,35 @@ mod tests {
     #[test]
     fn sort_compare_is_partial_not_total() {
         // Comparable: Msg dominates.
-        assert_eq!(sort_compare(LSort::Msg, LSort::Pub),   Some(Ordering::Greater));
-        assert_eq!(sort_compare(LSort::Msg, LSort::Fresh), Some(Ordering::Greater));
-        assert_eq!(sort_compare(LSort::Msg, LSort::Nat),   Some(Ordering::Greater));
+        assert_eq!(
+            sort_compare(LSort::Msg, LSort::Pub),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            sort_compare(LSort::Msg, LSort::Fresh),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            sort_compare(LSort::Msg, LSort::Nat),
+            Some(Ordering::Greater)
+        );
         // Pub, Fresh, Nat are pairwise incomparable.
-        assert_eq!(sort_compare(LSort::Pub,   LSort::Fresh), None);
-        assert_eq!(sort_compare(LSort::Pub,   LSort::Nat),   None);
-        assert_eq!(sort_compare(LSort::Fresh, LSort::Nat),   None);
+        assert_eq!(sort_compare(LSort::Pub, LSort::Fresh), None);
+        assert_eq!(sort_compare(LSort::Pub, LSort::Nat), None);
+        assert_eq!(sort_compare(LSort::Fresh, LSort::Nat), None);
         // Node is incomparable to all.
-        assert_eq!(sort_compare(LSort::Node, LSort::Msg),   None);
-        assert_eq!(sort_compare(LSort::Node, LSort::Pub),   None);
+        assert_eq!(sort_compare(LSort::Node, LSort::Msg), None);
+        assert_eq!(sort_compare(LSort::Node, LSort::Pub), None);
         assert_eq!(sort_compare(LSort::Node, LSort::Fresh), None);
-        assert_eq!(sort_compare(LSort::Node, LSort::Nat),   None);
+        assert_eq!(sort_compare(LSort::Node, LSort::Nat), None);
         // BUT `Ord LSort` total order differs!  Pub < Fresh < Msg < Node
         // in Ord, even though Pub vs Fresh is incomparable in sortCompare.
-        assert!(LSort::Pub < LSort::Fresh,
-                "Ord LSort is total — Pub < Fresh by declaration order. \
+        assert!(
+            LSort::Pub < LSort::Fresh,
+            "Ord LSort is total — Pub < Fresh by declaration order. \
                  (sort_compare returns None for this pair; the two \
-                 contracts are deliberately different.)");
+                 contracts are deliberately different.)"
+        );
     }
 
     /// LTerm.hs `sortPrefix`: sort prefixes for variable rendering.  These
@@ -819,19 +931,19 @@ mod tests {
     #[test]
     fn sort_prefixes_match_haskell() {
         assert_eq!(sort_prefix(LSort::Fresh), "~");
-        assert_eq!(sort_prefix(LSort::Pub),   "$");
-        assert_eq!(sort_prefix(LSort::Node),  "#");
-        assert_eq!(sort_prefix(LSort::Nat),   "%");
-        assert_eq!(sort_prefix(LSort::Msg),   "");
+        assert_eq!(sort_prefix(LSort::Pub), "$");
+        assert_eq!(sort_prefix(LSort::Node), "#");
+        assert_eq!(sort_prefix(LSort::Nat), "%");
+        assert_eq!(sort_prefix(LSort::Msg), "");
     }
 
     /// LTerm.hs sort suffix strings used in maude bridge interchange.
     #[test]
     fn sort_suffixes_match_haskell() {
-        assert_eq!(sort_suffix(LSort::Msg),   "msg");
+        assert_eq!(sort_suffix(LSort::Msg), "msg");
         assert_eq!(sort_suffix(LSort::Fresh), "fresh");
-        assert_eq!(sort_suffix(LSort::Pub),   "pub");
-        assert_eq!(sort_suffix(LSort::Node),  "node");
-        assert_eq!(sort_suffix(LSort::Nat),   "nat");
+        assert_eq!(sort_suffix(LSort::Pub), "pub");
+        assert_eq!(sort_suffix(LSort::Node), "node");
+        assert_eq!(sort_suffix(LSort::Nat), "nat");
     }
 }

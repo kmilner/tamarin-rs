@@ -32,7 +32,9 @@ use crate::term::Term;
 pub fn norm(maude: &MaudeHandle, t: &LNTerm) -> Result<LNTerm, MaudeError> {
     // Variable / constant literals are already normal — skip the
     // Maude round-trip for them.
-    if matches!(t, Term::Lit(_)) { return Ok(t.clone()); }
+    if matches!(t, Term::Lit(_)) {
+        return Ok(t.clone());
+    }
     maude.reduce(t)
 }
 
@@ -132,12 +134,18 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, irreducible: &FunSig) -> bool {
                 if s.name == EXP_SYM_STRING && args.len() == 2 {
                     // (a ^ b) ^ c → reducible
                     if let Term::App(FunSym::NoEq(s2), _) = &args[0] {
-                        if s2.name == EXP_SYM_STRING { return false; }
+                        if s2.name == EXP_SYM_STRING {
+                            return false;
+                        }
                     }
                     // a ^ 1 → reducible
-                    if is_nullary(&args[1], ONE_SYM_STRING) { return false; }
+                    if is_nullary(&args[1], ONE_SYM_STRING) {
+                        return false;
+                    }
                     // DH_neutral ^ b → reducible
-                    if is_nullary(&args[0], DH_NEUTRAL_SYM_STRING) { return false; }
+                    if is_nullary(&args[0], DH_NEUTRAL_SYM_STRING) {
+                        return false;
+                    }
                     // else walk subterms
                     return go_nf(&args[0], msig, irreducible)
                         && go_nf(&args[1], msig, irreducible);
@@ -145,23 +153,33 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, irreducible: &FunSig) -> bool {
                 if s.name == INV_SYM_STRING && args.len() == 1 {
                     // inv(inv(_)) → reducible
                     if let Term::App(FunSym::NoEq(s2), _) = &args[0] {
-                        if s2.name == INV_SYM_STRING { return false; }
+                        if s2.name == INV_SYM_STRING {
+                            return false;
+                        }
                     }
                     // inv(mult(...)) where any factor is inverse → reducible
                     if let Term::App(FunSym::Ac(AcSym::Mult), inner_args) = &args[0] {
-                        if inner_args.iter().any(crate::term::is_inverse) { return false; }
+                        if inner_args.iter().any(crate::term::is_inverse) {
+                            return false;
+                        }
                     }
                     // inv(one) → reducible
-                    if is_nullary(&args[0], ONE_SYM_STRING) { return false; }
+                    if is_nullary(&args[0], ONE_SYM_STRING) {
+                        return false;
+                    }
                     return go_nf(&args[0], msig, irreducible);
                 }
                 if s.name == crate::function_symbols::PMULT_SYM_STRING && args.len() == 2 {
                     // pmult(_, pmult(_,_)) → reducible
                     if let Term::App(FunSym::NoEq(s2), _) = &args[1] {
-                        if s2.name == crate::function_symbols::PMULT_SYM_STRING { return false; }
+                        if s2.name == crate::function_symbols::PMULT_SYM_STRING {
+                            return false;
+                        }
                     }
                     // pmult(one, _) → reducible
-                    if is_nullary(&args[0], ONE_SYM_STRING) { return false; }
+                    if is_nullary(&args[0], ONE_SYM_STRING) {
+                        return false;
+                    }
                     return go_nf(&args[0], msig, irreducible)
                         && go_nf(&args[1], msig, irreducible);
                 }
@@ -171,16 +189,30 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, irreducible: &FunSig) -> bool {
                 match ac {
                     AcSym::Mult => {
                         // contains one / DH_neutral, nested mult, or invalidMult → reducible
-                        if args.iter().any(|a| is_nullary(a, ONE_SYM_STRING)) { return false; }
-                        if args.iter().any(|a| is_nullary(a, DH_NEUTRAL_SYM_STRING)) { return false; }
-                        if args.iter().any(crate::term::is_product) { return false; }
-                        if invalid_mult(args) { return false; }
+                        if args.iter().any(|a| is_nullary(a, ONE_SYM_STRING)) {
+                            return false;
+                        }
+                        if args.iter().any(|a| is_nullary(a, DH_NEUTRAL_SYM_STRING)) {
+                            return false;
+                        }
+                        if args.iter().any(crate::term::is_product) {
+                            return false;
+                        }
+                        if invalid_mult(args) {
+                            return false;
+                        }
                         return args.iter().all(|a| go_nf(a, msig, irreducible));
                     }
                     AcSym::Xor => {
-                        if args.iter().any(|a| is_nullary(a, ZERO_SYM_STRING)) { return false; }
-                        if args.iter().any(is_xor) { return false; }
-                        if invalid_xor(args) { return false; }
+                        if args.iter().any(|a| is_nullary(a, ZERO_SYM_STRING)) {
+                            return false;
+                        }
+                        if args.iter().any(is_xor) {
+                            return false;
+                        }
+                        if invalid_xor(args) {
+                            return false;
+                        }
                         return args.iter().all(|a| go_nf(a, msig, irreducible));
                     }
                     AcSym::Union | AcSym::NatPlus => {
@@ -193,10 +225,14 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, irreducible: &FunSig) -> bool {
                 // em(_, pmult(_,_)) or em(pmult(_,_), _) → reducible
                 if args.len() == 2 {
                     if let Term::App(FunSym::NoEq(s2), _) = &args[0] {
-                        if s2.name == crate::function_symbols::PMULT_SYM_STRING { return false; }
+                        if s2.name == crate::function_symbols::PMULT_SYM_STRING {
+                            return false;
+                        }
                     }
                     if let Term::App(FunSym::NoEq(s2), _) = &args[1] {
-                        if s2.name == crate::function_symbols::PMULT_SYM_STRING { return false; }
+                        if s2.name == crate::function_symbols::PMULT_SYM_STRING {
+                            return false;
+                        }
                     }
                 }
                 return args.iter().all(|a| go_nf(a, msig, irreducible));
@@ -211,7 +247,9 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, irreducible: &FunSig) -> bool {
 fn is_nullary(t: &LNTerm, name: &[u8]) -> bool {
     if let Term::App(FunSym::NoEq(s), args) = t {
         s.name == name && args.is_empty()
-    } else { false }
+    } else {
+        false
+    }
 }
 
 fn is_xor(t: &LNTerm) -> bool {
@@ -273,7 +311,9 @@ fn invalid_xor(ts: &[LNTerm]) -> bool {
     // O(n^2) is fine here — typical xor arities are tiny.
     for i in 0..ts.len() {
         for j in (i + 1)..ts.len() {
-            if ts[i] == ts[j] { return true; }
+            if ts[i] == ts[j] {
+                return true;
+            }
         }
     }
     false
@@ -285,10 +325,8 @@ fn invalid_xor(ts: &[LNTerm]) -> bool {
 fn rule_applies(t: &LNTerm, lhs: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> bool {
     use crate::rewriting::Match;
     let problem = Match::match_with(t.clone(), lhs.clone());
-    let matched = crate::unification::solve_match_lterm_no_ac(
-        &|n| crate::lterm::sort_of_name(n),
-        problem,
-    );
+    let matched =
+        crate::unification::solve_match_lterm_no_ac(&|n| crate::lterm::sort_of_name(n), problem);
     // HS (Norm.hs:107-110):
     //   _:_ -> case rhs of
     //            StRhs [] s -> not (t == s)   -- reducible, but RHS might equal t
@@ -323,20 +361,24 @@ mod tests {
     use crate::vterm::Lit;
 
     fn maude_path() -> Option<String> {
-        if let Ok(p) = std::env::var("MAUDE_PATH") { return Some(p); }
-        let candidates = [
-            "/usr/local/bin/maude",
-            "maude",
-        ];
+        if let Ok(p) = std::env::var("MAUDE_PATH") {
+            return Some(p);
+        }
+        let candidates = ["/usr/local/bin/maude", "maude"];
         for c in &candidates {
-            if std::path::Path::new(c).exists() { return Some((*c).to_string()); }
+            if std::path::Path::new(c).exists() {
+                return Some((*c).to_string());
+            }
         }
         None
     }
 
     #[test]
     fn norm_var_skips_maude() {
-        let path = match maude_path() { Some(p) => p, None => return };
+        let path = match maude_path() {
+            Some(p) => p,
+            None => return,
+        };
         let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
         let v = LVar::new("x", LSort::Msg, 0);
         let t: LNTerm = Term::Lit(Lit::Var(v));
@@ -347,7 +389,10 @@ mod tests {
     #[test]
     #[allow(non_snake_case)]
     fn nf_via_haskell_detects_inverse_cancellation() {
-        let path = match maude_path() { Some(p) => p, None => return };
+        let path = match maude_path() {
+            Some(p) => p,
+            None => return,
+        };
         let mut sig = crate::maude_sig::pair_maude_sig();
         sig.enable_dh = true;
         sig = sig.refresh();
@@ -368,7 +413,9 @@ mod tests {
         );
         // Test: mult(tid, ekI, ekR, inv(tid)) should NOT be in NF
         // (invalid_mult fires because tid appears as a factor and inside inv).
-        assert!(!nf_via_haskell(&h.maude_sig(), &mult),
-            "mult(tid, ekI, ekR, inv(tid)) should be non-NF");
+        assert!(
+            !nf_via_haskell(&h.maude_sig(), &mult),
+            "mult(tid, ekI, ekR, inv(tid)) should be non-NF"
+        );
     }
 }

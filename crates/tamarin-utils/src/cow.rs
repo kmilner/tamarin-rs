@@ -41,16 +41,14 @@ pub fn cow_map_vec<T: Clone>(xs: &[T], mut f: impl FnMut(&T) -> Option<T>) -> Op
 /// each unchanged side by cloning its original.  `fx`/`fy` are the already-
 /// computed per-field COW results.
 #[inline]
-pub fn cow_pair<T: Clone, U: Clone>(
-    x: &T,
-    fx: Option<T>,
-    y: &U,
-    fy: Option<U>,
-) -> Option<(T, U)> {
+pub fn cow_pair<T: Clone, U: Clone>(x: &T, fx: Option<T>, y: &U, fy: Option<U>) -> Option<(T, U)> {
     if fx.is_none() && fy.is_none() {
         return None;
     }
-    Some((fx.unwrap_or_else(|| x.clone()), fy.unwrap_or_else(|| y.clone())))
+    Some((
+        fx.unwrap_or_else(|| x.clone()),
+        fy.unwrap_or_else(|| y.clone()),
+    ))
 }
 
 /// COW-map an `Arc<[T]>` (a shared slice): like [`cow_map_vec`], but rebuilds

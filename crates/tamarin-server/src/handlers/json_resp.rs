@@ -25,4 +25,3 @@ pub fn alert(msg: impl Into<String>) -> Json<Value> {
 pub fn redirect(url: impl Into<String>) -> Json<Value> {
     Json(json!({ "redirect": url.into() }))
 }
-

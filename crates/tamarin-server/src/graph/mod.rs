@@ -25,14 +25,12 @@ pub mod simplify;
 
 pub use render_system::RenderSystem;
 
-pub use options::{GraphOptions, graph_options_from_query, graph_options_from_params};
+pub use abbreviation::{
+    apply_abbreviations_fact, compute_abbreviations, AbbreviationOptions, Abbreviations,
+};
+pub use options::{graph_options_from_params, graph_options_from_query, GraphOptions};
 pub use repr::{
-    add_cluster_by_role, add_intelligent_cluster_using_similar_names,
-    compute_basic_graph_repr, Cluster, GEdge,
-    GNode, GraphRepr, MissingHint, NodeType,
+    add_cluster_by_role, add_intelligent_cluster_using_similar_names, compute_basic_graph_repr,
+    Cluster, GEdge, GNode, GraphRepr, MissingHint, NodeType,
 };
 pub use simplify::{compress_system, simplify_system, SimplificationLevel};
-pub use abbreviation::{
-    apply_abbreviations_fact, compute_abbreviations,
-    AbbreviationOptions, Abbreviations,
-};

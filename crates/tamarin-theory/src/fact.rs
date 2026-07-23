@@ -84,7 +84,9 @@ pub fn fact_fingerprints<T: HasFrees>(terms: &[T]) -> (u64, u64) {
     for t in terms {
         t.for_each_free(&mut |v| {
             b |= var_bit(v);
-            if v.idx > max { max = v.idx; }
+            if v.idx > max {
+                max = v.idx;
+            }
         });
     }
     (b, max)
@@ -141,16 +143,40 @@ pub struct Fact<T> {
 // impl at once.
 impl<T: PartialEq> PartialEq for Fact<T> {
     fn eq(&self, other: &Self) -> bool {
-        let Fact { tag, terms, annotations: _, bloom: _, max_var: _ } = self;
-        let Fact { tag: other_tag, terms: other_terms, annotations: _, bloom: _, max_var: _ } = other;
+        let Fact {
+            tag,
+            terms,
+            annotations: _,
+            bloom: _,
+            max_var: _,
+        } = self;
+        let Fact {
+            tag: other_tag,
+            terms: other_terms,
+            annotations: _,
+            bloom: _,
+            max_var: _,
+        } = other;
         tag == other_tag && terms == other_terms
     }
 }
 impl<T: Eq> Eq for Fact<T> {}
 impl<T: PartialOrd> PartialOrd for Fact<T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        let Fact { tag, terms, annotations: _, bloom: _, max_var: _ } = self;
-        let Fact { tag: other_tag, terms: other_terms, annotations: _, bloom: _, max_var: _ } = other;
+        let Fact {
+            tag,
+            terms,
+            annotations: _,
+            bloom: _,
+            max_var: _,
+        } = self;
+        let Fact {
+            tag: other_tag,
+            terms: other_terms,
+            annotations: _,
+            bloom: _,
+            max_var: _,
+        } = other;
         match tag.partial_cmp(other_tag) {
             Some(std::cmp::Ordering::Equal) => terms.partial_cmp(other_terms),
             ord => ord,
@@ -159,8 +185,20 @@ impl<T: PartialOrd> PartialOrd for Fact<T> {
 }
 impl<T: Ord> Ord for Fact<T> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let Fact { tag, terms, annotations: _, bloom: _, max_var: _ } = self;
-        let Fact { tag: other_tag, terms: other_terms, annotations: _, bloom: _, max_var: _ } = other;
+        let Fact {
+            tag,
+            terms,
+            annotations: _,
+            bloom: _,
+            max_var: _,
+        } = self;
+        let Fact {
+            tag: other_tag,
+            terms: other_terms,
+            annotations: _,
+            bloom: _,
+            max_var: _,
+        } = other;
         tag.cmp(other_tag).then(terms.cmp(other_terms))
     }
 }
@@ -171,7 +209,13 @@ impl<T> Fact<T> {
     /// output reaches `subst_system_once`, prefer [`Fact::fresh`] so the
     /// fast-path fires (a `MAX` bloom is SOUND but never skips).
     pub fn new(tag: FactTag, terms: Vec<T>) -> Self {
-        Fact { tag, annotations: BTreeSet::new(), terms: terms.into(), bloom: u64::MAX, max_var: u64::MAX }
+        Fact {
+            tag,
+            annotations: BTreeSet::new(),
+            terms: terms.into(),
+            bloom: u64::MAX,
+            max_var: u64::MAX,
+        }
     }
     pub fn with_annotations(mut self, ann: BTreeSet<FactAnnotation>) -> Self {
         self.annotations = ann;
@@ -181,18 +225,26 @@ impl<T> Fact<T> {
         self.annotations.insert(a);
         self
     }
-    pub fn arity(&self) -> usize { self.terms.len() }
+    pub fn arity(&self) -> usize {
+        self.terms.len()
+    }
     /// Cached variable fingerprint.  `u64::MAX` means "not
     /// computed — always descend".
     #[inline]
-    pub fn bloom(&self) -> u64 { self.bloom }
+    pub fn bloom(&self) -> u64 {
+        self.bloom
+    }
     /// Cached EXACT maximum free-var index, or `None` when unknown (the
     /// `u64::MAX` sentinel).  `bm_fact` (reduction.rs) folds `Some(m)`
     /// straight into the running max and falls back to a per-term walk on
     /// `None`.
     #[inline]
     pub fn max_var_cached(&self) -> Option<u64> {
-        if self.max_var == u64::MAX { None } else { Some(self.max_var) }
+        if self.max_var == u64::MAX {
+            None
+        } else {
+            Some(self.max_var)
+        }
     }
     /// Generic map: stores both fingerprints as `u64::MAX` (result type `U`
     /// carries no `HasFrees` bound).  A `MAX` bloom is a safe perf-miss and a
@@ -227,10 +279,7 @@ impl<T> Fact<T> {
     /// (Fact.hs:177-179) specialised to `Result`; short-circuits on the first
     /// `Err`.  Same `tag`/`annotations` clone and `u64::MAX` fingerprints as
     /// [`Fact::map_ref`].
-    pub fn try_map_ref<U, E>(
-        &self,
-        f: impl FnMut(&T) -> Result<U, E>,
-    ) -> Result<Fact<U>, E> {
+    pub fn try_map_ref<U, E>(&self, f: impl FnMut(&T) -> Result<U, E>) -> Result<Fact<U>, E> {
         let terms: Result<Vec<U>, E> = self.terms.iter().map(f).collect();
         Ok(Fact {
             tag: self.tag.clone(),
@@ -249,7 +298,13 @@ impl<T: HasFrees> Fact<T> {
     /// reused on every unchanged pass the fact survives (P1 amortization).
     pub fn fresh(tag: FactTag, terms: Vec<T>) -> Self {
         let (bloom, max_var) = fact_fingerprints(&terms);
-        Fact { tag, annotations: BTreeSet::new(), terms: terms.into(), bloom, max_var }
+        Fact {
+            tag,
+            annotations: BTreeSet::new(),
+            terms: terms.into(),
+            bloom,
+            max_var,
+        }
     }
     /// Bloom-computing constructor with annotations.
     pub fn fresh_annotated(
@@ -258,7 +313,13 @@ impl<T: HasFrees> Fact<T> {
         terms: Vec<T>,
     ) -> Self {
         let (bloom, max_var) = fact_fingerprints(&terms);
-        Fact { tag, annotations, terms: terms.into(), bloom, max_var }
+        Fact {
+            tag,
+            annotations,
+            terms: terms.into(),
+            bloom,
+            max_var,
+        }
     }
     /// Recompute both cached fingerprints (`bloom` and `max_var`) from the
     /// CURRENT terms.  Call after any external `.terms` mutation (never leave a
@@ -276,17 +337,28 @@ impl<T: HasFrees> Fact<T> {
 
 impl<T: HasFrees + Clone> HasFrees for Fact<T> {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
-        for t in self.terms.iter() { t.for_each_free(f); }
+        for t in self.terms.iter() {
+            t.for_each_free(f);
+        }
     }
     fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
         // Freshen / rule-rename producer: this renames vars, so
         // the rebuilt fact's frees ≠ the source frees.  RECOMPUTE both
         // fingerprints from the renamed terms — NEVER copy `self`'s (would
         // fingerprint the old var names → possible wrong skip / stale max).
-        let terms: Vec<T> =
-            self.terms.iter().map(|t| t.clone().map_free_with(f, monotone)).collect();
+        let terms: Vec<T> = self
+            .terms
+            .iter()
+            .map(|t| t.clone().map_free_with(f, monotone))
+            .collect();
         let (bloom, max_var) = fact_fingerprints(&terms);
-        Fact { tag: self.tag, annotations: self.annotations, terms: terms.into(), bloom, max_var }
+        Fact {
+            tag: self.tag,
+            annotations: self.annotations,
+            terms: terms.into(),
+            bloom,
+            max_var,
+        }
     }
 }
 
@@ -310,7 +382,11 @@ pub fn fact_tag_name(t: &FactTag) -> String {
 /// `showFactTag` (Fact.hs:516-523): `factTagName` prefixed with `!` for
 /// persistent facts.
 pub fn show_fact_tag(t: &FactTag) -> String {
-    let prefix = if fact_tag_multiplicity(t) == Multiplicity::Persistent { "!" } else { "" };
+    let prefix = if fact_tag_multiplicity(t) == Multiplicity::Persistent {
+        "!"
+    } else {
+        ""
+    };
     format!("{}{}", prefix, fact_tag_name(t))
 }
 
@@ -318,8 +394,13 @@ pub fn fact_tag_arity(t: &FactTag) -> usize {
     match t {
         FactTag::Proto(_, _, n) => *n,
         // Every built-in tag carries exactly one term.
-        FactTag::Fresh | FactTag::Out | FactTag::In
-        | FactTag::Ku | FactTag::Kd | FactTag::Ded | FactTag::Term => 1,
+        FactTag::Fresh
+        | FactTag::Out
+        | FactTag::In
+        | FactTag::Ku
+        | FactTag::Kd
+        | FactTag::Ded
+        | FactTag::Term => 1,
     }
 }
 
@@ -346,17 +427,29 @@ pub fn fact_tag_multiplicity(t: &FactTag) -> Multiplicity {
 // =============================================================================
 
 impl<T> Fact<T> {
-    pub fn is_linear(&self) -> bool { fact_tag_multiplicity(&self.tag) == Multiplicity::Linear }
-    pub fn is_persistent(&self) -> bool { fact_tag_multiplicity(&self.tag) == Multiplicity::Persistent }
+    pub fn is_linear(&self) -> bool {
+        fact_tag_multiplicity(&self.tag) == Multiplicity::Linear
+    }
+    pub fn is_persistent(&self) -> bool {
+        fact_tag_multiplicity(&self.tag) == Multiplicity::Persistent
+    }
     // Intentionally retained: faithful HS port; no caller yet.
-    pub fn is_proto(&self) -> bool { matches!(self.tag, FactTag::Proto(_, _, _)) }
+    pub fn is_proto(&self) -> bool {
+        matches!(self.tag, FactTag::Proto(_, _, _))
+    }
     // Intentionally retained: faithful HS port; no caller yet.
-    pub fn is_in_fact(&self) -> bool { self.tag == FactTag::In }
+    pub fn is_in_fact(&self) -> bool {
+        self.tag == FactTag::In
+    }
     pub fn is_k_fact(&self) -> bool {
         matches!(self.tag, FactTag::Ku | FactTag::Kd)
     }
-    pub fn is_ku(&self) -> bool { self.tag == FactTag::Ku }
-    pub fn is_kd(&self) -> bool { self.tag == FactTag::Kd }
+    pub fn is_ku(&self) -> bool {
+        self.tag == FactTag::Ku
+    }
+    pub fn is_kd(&self) -> bool {
+        self.tag == FactTag::Kd
+    }
     /// Mirrors Haskell `Theory.Model.Fact.isNoSourcesFact`
     /// (Fact.hs:405-406): returns true iff this fact has the
     /// `NoSources` annotation (set via `[no_sources]` on a fact).
@@ -373,11 +466,12 @@ impl<T> Fact<T> {
 /// Xor-KD goals from saturate-time solving — Xor-KD goals are
 /// re-inserted directly by `insertAction` (Sources.hs:158-159).
 pub fn is_kd_xor_fact(fa: &LNFact) -> bool {
-    use tamarin_term::function_symbols::{FunSym, AcSym};
+    use tamarin_term::function_symbols::{AcSym, FunSym};
     use tamarin_term::term::Term;
-    if fa.tag != FactTag::Kd || fa.terms.len() != 1 { return false; }
-    matches!(&fa.terms[0],
-        Term::App(FunSym::Ac(AcSym::Xor), _))
+    if fa.tag != FactTag::Kd || fa.terms.len() != 1 {
+        return false;
+    }
+    matches!(&fa.terms[0], Term::App(FunSym::Ac(AcSym::Xor), _))
 }
 
 // =============================================================================
@@ -388,13 +482,25 @@ pub type LNFact = Fact<LNTerm>;
 
 // LNFact producers: route through the bloom-COMPUTING
 // `Fact::fresh` so the dominant node/action-fact skip fires.
-pub fn fresh_fact(t: LNTerm) -> LNFact { Fact::fresh(FactTag::Fresh, vec![t]) }
-pub fn out_fact(t: LNTerm) -> LNFact { Fact::fresh(FactTag::Out, vec![t]) }
-pub fn in_fact(t: LNTerm) -> LNFact { Fact::fresh(FactTag::In, vec![t]) }
-pub fn ku_fact(t: LNTerm) -> LNFact { Fact::fresh(FactTag::Ku, vec![t]) }
-pub fn kd_fact(t: LNTerm) -> LNFact { Fact::fresh(FactTag::Kd, vec![t]) }
+pub fn fresh_fact(t: LNTerm) -> LNFact {
+    Fact::fresh(FactTag::Fresh, vec![t])
+}
+pub fn out_fact(t: LNTerm) -> LNFact {
+    Fact::fresh(FactTag::Out, vec![t])
+}
+pub fn in_fact(t: LNTerm) -> LNFact {
+    Fact::fresh(FactTag::In, vec![t])
+}
+pub fn ku_fact(t: LNTerm) -> LNFact {
+    Fact::fresh(FactTag::Ku, vec![t])
+}
+pub fn kd_fact(t: LNTerm) -> LNFact {
+    Fact::fresh(FactTag::Kd, vec![t])
+}
 // Intentionally retained: faithful HS port; no caller yet.
-pub fn ded_fact(t: LNTerm) -> LNFact { Fact::fresh(FactTag::Ded, vec![t]) }
+pub fn ded_fact(t: LNTerm) -> LNFact {
+    Fact::fresh(FactTag::Ded, vec![t])
+}
 
 /// `kLogFact` from Haskell's `Theory.Model.Fact:280`:
 ///   `kLogFact = protoFact Linear "K" . return`
@@ -407,10 +513,15 @@ pub fn ded_fact(t: LNTerm) -> LNFact { Fact::fresh(FactTag::Ded, vec![t]) }
 pub fn k_log_fact(t: LNTerm) -> LNFact {
     Fact::fresh(FactTag::Proto(Multiplicity::Linear, "K", 1), vec![t])
 }
-pub fn term_fact(t: LNTerm) -> LNFact { Fact::fresh(FactTag::Term, vec![t]) }
+pub fn term_fact(t: LNTerm) -> LNFact {
+    Fact::fresh(FactTag::Term, vec![t])
+}
 
 pub fn proto_fact(mult: Multiplicity, name: &str, terms: Vec<LNTerm>) -> LNFact {
-    Fact::fresh(FactTag::Proto(mult, tamarin_term::intern::intern_str(name), terms.len()), terms)
+    Fact::fresh(
+        FactTag::Proto(mult, tamarin_term::intern::intern_str(name), terms.len()),
+        terms,
+    )
 }
 
 /// View a protocol or `In` fact's terms. Port of HS `protoOrInFactView`
@@ -461,7 +572,11 @@ mod tests {
 
     #[test]
     fn proto_fact_arity() {
-        let f = proto_fact(Multiplicity::Linear, "P", vec![msg_var("x", 0), msg_var("y", 0)]);
+        let f = proto_fact(
+            Multiplicity::Linear,
+            "P",
+            vec![msg_var("x", 0), msg_var("y", 0)],
+        );
         assert_eq!(f.arity(), 2);
         assert_eq!(fact_tag_arity(&f.tag), 2);
     }
@@ -504,8 +619,10 @@ mod tests {
     /// Multiplicity: `Persistent < Linear` from Fact.hs:128-129.
     #[test]
     fn multiplicity_ord_matches_haskell_declaration() {
-        assert!(Multiplicity::Persistent < Multiplicity::Linear,
-                "Persistent must sort before Linear (Fact.hs:128)");
+        assert!(
+            Multiplicity::Persistent < Multiplicity::Linear,
+            "Persistent must sort before Linear (Fact.hs:128)"
+        );
     }
 
     /// `FactTag` Ord — `Proto < Fresh < Out < In < Ku < Kd < Ded < Term`.
@@ -519,14 +636,16 @@ mod tests {
     fn fact_tag_ord_proto_sorts_before_builtins() {
         let proto = FactTag::Proto(Multiplicity::Linear, "Foo", 0);
         let fresh = FactTag::Fresh;
-        assert!(proto < fresh,
-                "Proto must sort before Fresh (Haskell decl order Fact.hs:132)");
+        assert!(
+            proto < fresh,
+            "Proto must sort before Fresh (Haskell decl order Fact.hs:132)"
+        );
         assert!(fresh < FactTag::Out);
-        assert!(FactTag::Out  < FactTag::In);
-        assert!(FactTag::In   < FactTag::Ku);
-        assert!(FactTag::Ku   < FactTag::Kd);
-        assert!(FactTag::Kd   < FactTag::Ded);
-        assert!(FactTag::Ded  < FactTag::Term);
+        assert!(FactTag::Out < FactTag::In);
+        assert!(FactTag::In < FactTag::Ku);
+        assert!(FactTag::Ku < FactTag::Kd);
+        assert!(FactTag::Kd < FactTag::Ded);
+        assert!(FactTag::Ded < FactTag::Term);
     }
 
     /// `Proto` facts compare by `(multiplicity, name, arity)` triple.
@@ -536,7 +655,7 @@ mod tests {
     /// inconsistently bucketed.
     #[test]
     fn proto_fact_tag_compare_by_multiplicity_then_name_then_arity() {
-        let lp = FactTag::Proto(Multiplicity::Linear,     "P", 1);
+        let lp = FactTag::Proto(Multiplicity::Linear, "P", 1);
         let pp = FactTag::Proto(Multiplicity::Persistent, "P", 1);
         // Persistent < Linear (per Haskell Multiplicity Ord).
         assert!(pp < lp);
@@ -564,19 +683,24 @@ mod tests {
     // Cached-bloom fingerprint skip: soundness invariants.
     // =========================================================================
 
-    use tamarin_term::builtin::{msg_var as mv, fresh_var, pub_var, pair};
-    use tamarin_term::lterm::{LVar, LSort, LNTerm};
-    use tamarin_term::subst::{Subst, apply_vterm_changed};
+    use tamarin_term::builtin::{fresh_var, msg_var as mv, pair, pub_var};
+    use tamarin_term::lterm::{LNTerm, LSort, LVar};
+    use tamarin_term::subst::{apply_vterm_changed, Subst};
 
     /// Tiny deterministic PRNG (no external quickcheck dep) for the property
     /// tests below.
     struct Lcg(u64);
     impl Lcg {
         fn next(&mut self) -> u64 {
-            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             self.0 >> 33
         }
-        fn range(&mut self, n: u64) -> u64 { self.next() % n }
+        fn range(&mut self, n: u64) -> u64 {
+            self.next() % n
+        }
     }
 
     /// Build a pseudo-random `LNTerm` of bounded depth over a small var pool.
@@ -615,8 +739,11 @@ mod tests {
             let fa = rand_fact(&mut r);
             let b = fa.bloom();
             fa.for_each_free(&mut |v| {
-                assert_ne!(b & var_bit(v), 0,
-                    "bloom missing a bit for free var {v:?} — superset invariant broken");
+                assert_ne!(
+                    b & var_bit(v),
+                    0,
+                    "bloom missing a bit for free var {v:?} — superset invariant broken"
+                );
             });
             // Recomputing from the same terms is identical (content-deterministic).
             let b2 = fact_fingerprints(&fa.terms).0;
@@ -639,23 +766,32 @@ mod tests {
             // Random subst: map a handful of vars to random terms (dropping
             // trivial bindings via `from_list`, as the real eq-store does).
             let ndom = 1 + r.range(4);
-            let pairs: Vec<(LVar, LNTerm)> = (0..ndom).map(|_| {
-                let i = r.range(6);
-                let v = LVar::new(format!("x{i}"), LSort::Msg, r.range(4));
-                (v, rand_term(&mut r, 2))
-            }).collect();
+            let pairs: Vec<(LVar, LNTerm)> = (0..ndom)
+                .map(|_| {
+                    let i = r.range(6);
+                    let v = LVar::new(format!("x{i}"), LSort::Msg, r.range(4));
+                    (v, rand_term(&mut r, 2))
+                })
+                .collect();
             let subst: Subst<_, _> = Subst::from_list(pairs);
-            if subst.is_empty() { continue; }
+            if subst.is_empty() {
+                continue;
+            }
             let dom_bloom = subst.dom().fold(0u64, |b, v| b | var_bit(v));
             if fa.bloom() & dom_bloom == 0 {
                 fired += 1;
                 for t in fa.terms.iter() {
-                    assert!(apply_vterm_changed(&subst, t).is_none(),
-                        "skip fired but subst changed a term — UNSOUND: fact={fa:?}");
+                    assert!(
+                        apply_vterm_changed(&subst, t).is_none(),
+                        "skip fired but subst changed a term — UNSOUND: fact={fa:?}"
+                    );
                 }
             }
         }
-        assert!(fired > 0, "test never exercised a real skip — weaken the generator");
+        assert!(
+            fired > 0,
+            "test never exercised a real skip — weaken the generator"
+        );
     }
 
     /// Trait regression: two facts equal-but-for-fingerprints compare `==`
@@ -665,12 +801,16 @@ mod tests {
     fn fingerprints_are_invisible_to_eq_and_ord() {
         let mut a = Fact::fresh(FactTag::Out, vec![mv("x", 0)]);
         let mut b = a.clone();
-        a.bloom = 0;              // deliberately divergent fingerprints
+        a.bloom = 0; // deliberately divergent fingerprints
         b.bloom = u64::MAX;
         a.max_var = 0;
         b.max_var = u64::MAX;
         assert_eq!(a, b, "Eq must ignore the bloom/max_var fields");
-        assert_eq!(a.cmp(&b), std::cmp::Ordering::Equal, "Ord must ignore the bloom/max_var fields");
+        assert_eq!(
+            a.cmp(&b),
+            std::cmp::Ordering::Equal,
+            "Ord must ignore the bloom/max_var fields"
+        );
         assert!(a.partial_cmp(&b) == Some(std::cmp::Ordering::Equal));
     }
 
@@ -682,9 +822,15 @@ mod tests {
         let a = LVar::new(String::from("foo"), LSort::Msg, 7);
         let b = LVar::new(format!("f{}{}", "o", "o"), LSort::Msg, 7);
         assert_eq!(a, b);
-        assert_eq!(var_bit(&a), var_bit(&b),
-            "content-equal LVars must yield the same bloom bit");
-        assert_eq!(tamarin_utils::fx_hash_one(&a), tamarin_utils::fx_hash_one(&b));
+        assert_eq!(
+            var_bit(&a),
+            var_bit(&b),
+            "content-equal LVars must yield the same bloom bit"
+        );
+        assert_eq!(
+            tamarin_utils::fx_hash_one(&a),
+            tamarin_utils::fx_hash_one(&b)
+        );
     }
 
     // =========================================================================
@@ -698,9 +844,17 @@ mod tests {
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
         match t {
-            Term::Lit(Lit::Var(v)) => { if v.idx > *max { *max = v.idx; } }
+            Term::Lit(Lit::Var(v)) => {
+                if v.idx > *max {
+                    *max = v.idx;
+                }
+            }
             Term::Lit(Lit::Con(_)) => {}
-            Term::App(_, args) => { for a in args.iter() { term_max_idx(a, max); } }
+            Term::App(_, args) => {
+                for a in args.iter() {
+                    term_max_idx(a, max);
+                }
+            }
         }
     }
 
@@ -719,8 +873,11 @@ mod tests {
         let fa = Fact::fresh(FactTag::Out, vec![mv("x", 7)]);
         assert_eq!(fa.max_var_cached(), Some(7));
         // Multiple vars: the maximum wins, order-independently.
-        let fa2 = proto_fact(Multiplicity::Linear, "P",
-            vec![mv("a", 3), fresh_var("n", 9), pub_var("p", 5)]);
+        let fa2 = proto_fact(
+            Multiplicity::Linear,
+            "P",
+            vec![mv("a", 3), fresh_var("n", 9), pub_var("p", 5)],
+        );
         assert_eq!(fa2.max_var_cached(), Some(9));
     }
 
@@ -751,7 +908,13 @@ mod tests {
     #[test]
     fn map_free_with_recomputes_the_max() {
         let fa = Fact::fresh(FactTag::Out, vec![mv("x", 3)]);
-        let shifted = fa.map_free_with(&mut |mut v| { v.idx += 10; v }, false);
+        let shifted = fa.map_free_with(
+            &mut |mut v| {
+                v.idx += 10;
+                v
+            },
+            false,
+        );
         assert_eq!(shifted.max_var_cached(), Some(13));
     }
 
@@ -765,9 +928,14 @@ mod tests {
         for _ in 0..2000 {
             let fa = rand_fact(&mut r);
             let mut walked = 0u64;
-            for t in fa.terms.iter() { term_max_idx(t, &mut walked); }
-            assert_eq!(fa.max_var_cached(), Some(walked),
-                "cached max must equal the per-term walk — fact={fa:?}");
+            for t in fa.terms.iter() {
+                term_max_idx(t, &mut walked);
+            }
+            assert_eq!(
+                fa.max_var_cached(),
+                Some(walked),
+                "cached max must equal the per-term walk — fact={fa:?}"
+            );
         }
     }
 }

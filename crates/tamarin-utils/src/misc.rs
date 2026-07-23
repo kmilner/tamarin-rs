@@ -19,8 +19,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::hash::Hash;
 
-use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine as _;
 use sha2::{Digest, Sha256};
 
 // -- Environment --------------------------------------------------------------
@@ -37,9 +37,15 @@ pub fn env_is_set(key: &str) -> bool {
 
 // -- Triples ------------------------------------------------------------------
 
-pub fn fst3<A, B, C>(t: (A, B, C)) -> A { t.0 }
-pub fn snd3<A, B, C>(t: (A, B, C)) -> B { t.1 }
-pub fn thd3<A, B, C>(t: (A, B, C)) -> C { t.2 }
+pub fn fst3<A, B, C>(t: (A, B, C)) -> A {
+    t.0
+}
+pub fn snd3<A, B, C>(t: (A, B, C)) -> B {
+    t.1
+}
+pub fn thd3<A, B, C>(t: (A, B, C)) -> C {
+    t.2
+}
 
 pub fn duplicate<A: Clone>(x: A) -> (A, A) {
     (x.clone(), x)
@@ -49,7 +55,9 @@ pub fn duplicate<A: Clone>(x: A) -> (A, A) {
 
 /// `subsetOf xs ys`: whether every element of `xs` appears in `ys`.
 pub fn subset_of<T: Ord + Clone>(xs: &[T], ys: &[T]) -> bool {
-    if xs.is_empty() { return true; }
+    if xs.is_empty() {
+        return true;
+    }
     let ys_set: BTreeSet<&T> = ys.iter().collect();
     xs.iter().all(|x| ys_set.contains(x))
 }
@@ -184,7 +192,10 @@ fn bloat<T: Clone>(x: T, yss: Vec<Vec<T>>) -> Vec<Vec<Vec<T>>> {
 /// `nonTrivialPartitions xs`: all partitions of `xs` except `[xs]` itself.
 pub fn non_trivial_partitions<T: Clone + Eq>(xs: &[T]) -> Vec<Vec<Vec<T>>> {
     let trivial: Vec<Vec<T>> = vec![xs.to_vec()];
-    partitions(xs).into_iter().filter(|p| p != &trivial).collect()
+    partitions(xs)
+        .into_iter()
+        .filter(|p| p != &trivial)
+        .collect()
 }
 
 /// `twoPartitions xs`: every way to split `xs` into an ordered pair of lists,
@@ -227,8 +238,12 @@ pub fn edit_distance(s: &str, t: &str) -> usize {
     let t: Vec<char> = t.chars().collect();
     let n = s.len();
     let m = t.len();
-    if n == 0 { return m; }
-    if m == 0 { return n; }
+    if n == 0 {
+        return m;
+    }
+    if m == 0 {
+        return n;
+    }
 
     let mut prev: Vec<usize> = (0..=m).collect();
     let mut cur = vec![0usize; m + 1];
@@ -236,9 +251,7 @@ pub fn edit_distance(s: &str, t: &str) -> usize {
         cur[0] = i;
         for j in 1..=m {
             let cost = if s[i - 1] == t[j - 1] { 0 } else { 1 };
-            cur[j] = (prev[j] + 1)
-                .min(cur[j - 1] + 1)
-                .min(prev[j - 1] + cost);
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
         }
         std::mem::swap(&mut prev, &mut cur);
     }
@@ -302,8 +315,7 @@ mod tests {
     // std kept (byte-inert) — iteration order never reaches output.
     #[allow(clippy::disallowed_types)]
     fn invert_map_bijective() {
-        let m: HashMap<i32, &str> =
-            HashMap::from([(1, "a"), (2, "b"), (3, "c")]);
+        let m: HashMap<i32, &str> = HashMap::from([(1, "a"), (2, "b"), (3, "c")]);
         let inv = invert_map(m);
         assert_eq!(inv[&"a"], 1);
         assert_eq!(inv[&"b"], 2);

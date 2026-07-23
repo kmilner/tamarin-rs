@@ -83,7 +83,11 @@ pub struct LessAtom {
 
 impl LessAtom {
     pub fn new(smaller: NodeId, larger: NodeId, reason: Reason) -> Self {
-        LessAtom { smaller, larger, reason }
+        LessAtom {
+            smaller,
+            larger,
+            reason,
+        }
     }
 
     pub fn to_edge(&self) -> (NodeId, NodeId) {
@@ -132,7 +136,9 @@ pub use crate::tools::equation_store::SplitId;
 pub struct Disj<T>(pub Vec<T>);
 
 impl<T> Disj<T> {
-    pub fn new(items: Vec<T>) -> Self { Disj(items) }
+    pub fn new(items: Vec<T>) -> Self {
+        Disj(items)
+    }
 }
 
 // =============================================================================
@@ -160,22 +166,36 @@ impl Goal {
     // `is_split`/`is_disj`/`is_subterm`/`is_premise` mirror the HS `Goal`
     // predicate set (`isSplitGoal`/`isDisjGoal`/`isSubtermGoal`); no caller
     // yet, kept for parity with the sibling live predicates.
-    pub fn is_action(&self) -> bool { matches!(self, Goal::Action(_, _)) }
-    pub fn is_premise(&self) -> bool { matches!(self, Goal::Premise(_, _)) }
-    pub fn is_chain(&self) -> bool { matches!(self, Goal::Chain(_, _)) }
-    pub fn is_split(&self) -> bool { matches!(self, Goal::Split(_)) }
-    pub fn is_disj(&self) -> bool { matches!(self, Goal::Disj(_)) }
+    pub fn is_action(&self) -> bool {
+        matches!(self, Goal::Action(_, _))
+    }
+    pub fn is_premise(&self) -> bool {
+        matches!(self, Goal::Premise(_, _))
+    }
+    pub fn is_chain(&self) -> bool {
+        matches!(self, Goal::Chain(_, _))
+    }
+    pub fn is_split(&self) -> bool {
+        matches!(self, Goal::Split(_))
+    }
+    pub fn is_disj(&self) -> bool {
+        matches!(self, Goal::Disj(_))
+    }
     // HS's `isSubtermGoal` (Constraints.hs) erroneously matches `DisjG _`
     // (a copy-paste of `isDisjGoal`); we match the semantically-correct
     // `Goal::Subterm`. The divergence is inert (no caller yet).
-    pub fn is_subterm(&self) -> bool { matches!(self, Goal::Subterm(_)) }
+    pub fn is_subterm(&self) -> bool {
+        matches!(self, Goal::Subterm(_))
+    }
 
     /// "Standard" action goals are non-`KU` actions — `KU(_)` is
     /// special-cased by the solver (intruder-knowledge goals).
     pub fn is_standard_action(&self) -> bool {
         if let Goal::Action(_, fa) = self {
             !matches!(fa.tag, crate::fact::FactTag::Ku)
-        } else { false }
+        } else {
+            false
+        }
     }
 }
 
@@ -184,7 +204,9 @@ mod tests {
     use super::*;
     use tamarin_term::lterm::LSort;
 
-    fn node(name: &str) -> NodeId { LVar::new(name, LSort::Node, 0) }
+    fn node(name: &str) -> NodeId {
+        LVar::new(name, LSort::Node, 0)
+    }
 
     #[test]
     fn less_atom_equality_ignores_reason() {

@@ -153,12 +153,18 @@ impl Irreducible {
                 }
             }
         }
-        Irreducible { noeq, ac, nullary_names }
+        Irreducible {
+            noeq,
+            ac,
+            nullary_names,
+        }
     }
 
     /// Is the NoEq symbol `name/arity` irreducible?
     fn is_irreducible(&self, name: &str, arity: usize) -> bool {
-        self.noeq.get(name.as_bytes()).is_some_and(|s| s.contains(&arity))
+        self.noeq
+            .get(name.as_bytes())
+            .is_some_and(|s| s.contains(&arity))
     }
 
     /// Is the AC symbol `a` irreducible?
@@ -202,11 +208,12 @@ pub fn check_terms_wf(thy: &p::Theory, sig: &MaudeSig) -> Vec<WfError> {
         match item {
             p::TheoryItem::Lemma(l) => lemmas.push((
                 format!("Lemma `{}'", l.name),
-                crate::elaborate::rewrite_arity1_formula(&l.formula, &arity1))),
-            p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) =>
-                restrictions.push((
-                    format!("Restriction `{}'", r.name),
-                    crate::elaborate::rewrite_arity1_formula(&r.formula, &arity1))),
+                crate::elaborate::rewrite_arity1_formula(&l.formula, &arity1),
+            )),
+            p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => restrictions.push((
+                format!("Restriction `{}'", r.name),
+                crate::elaborate::rewrite_arity1_formula(&r.formula, &arity1),
+            )),
             _ => {}
         }
     }
@@ -249,20 +256,12 @@ type Scope = Vec<VarSpec>;
 /// HS `formulaTerms`: collect the terms from every atom.  Recurses through
 /// connectives and quantifiers, pushing binders onto `scope` so that
 /// variable uses inside the body get the right De-Bruijn index.
-fn collect_formula_terms(
-    fm: &Formula,
-    scope: &mut Scope,
-    irr: &Irreducible,
-    out: &mut Vec<RTerm>,
-) {
+fn collect_formula_terms(fm: &Formula, scope: &mut Scope, irr: &Irreducible, out: &mut Vec<RTerm>) {
     match fm {
         Formula::True | Formula::False => {}
         Formula::Atom(a) => collect_atom_terms(a, scope, irr, out),
         Formula::Not(g) => collect_formula_terms(g, scope, irr, out),
-        Formula::And(a, b)
-        | Formula::Or(a, b)
-        | Formula::Implies(a, b)
-        | Formula::Iff(a, b) => {
+        Formula::And(a, b) | Formula::Or(a, b) | Formula::Implies(a, b) | Formula::Iff(a, b) => {
             collect_formula_terms(a, scope, irr, out);
             collect_formula_terms(b, scope, irr, out);
         }
@@ -350,9 +349,27 @@ fn resolve_term(t: &Term, scope: &Scope, irr: &Irreducible, pos: TermPos) -> RTe
         // and hence always `allowed`, so the head name is never rendered as
         // an offender — but we still use the HS-faithful names here.
         Term::Number(n) => RTerm::PubConst(n.to_string()),
-        Term::NumberOne => RTerm::App(Head::App { name: "one".into(), reducible: false }, vec![]),
-        Term::NatOne => RTerm::App(Head::App { name: "tone".into(), reducible: false }, vec![]),
-        Term::DhNeutral => RTerm::App(Head::App { name: "DH_neutral".into(), reducible: false }, vec![]),
+        Term::NumberOne => RTerm::App(
+            Head::App {
+                name: "one".into(),
+                reducible: false,
+            },
+            vec![],
+        ),
+        Term::NatOne => RTerm::App(
+            Head::App {
+                name: "tone".into(),
+                reducible: false,
+            },
+            vec![],
+        ),
+        Term::DhNeutral => RTerm::App(
+            Head::App {
+                name: "DH_neutral".into(),
+                reducible: false,
+            },
+            vec![],
+        ),
         Term::App(name, args) => resolve_app(name, args, scope, irr),
         Term::AlgApp(name, a, b) => {
             // `op{a}b` == `op(a, b)`.
@@ -406,7 +423,13 @@ fn resolve_app(name: &str, args: &[Term], scope: &Scope, irr: &Irreducible) -> R
 fn resolve_named(name: &str, args: Vec<RTerm>, irr: &Irreducible) -> RTerm {
     let arity = args.len();
     let reducible = !irr.is_irreducible(name, arity);
-    RTerm::App(Head::App { name: name.to_string(), reducible }, args)
+    RTerm::App(
+        Head::App {
+            name: name.to_string(),
+            reducible,
+        },
+        args,
+    )
 }
 
 /// Build an AC application node, classifying via the irreducible AC set.
@@ -517,9 +540,7 @@ fn allowed(t: &RTerm) -> bool {
         RTerm::Bound(_) => true,
         RTerm::PubConst(_) => true,
         RTerm::App(Head::App { reducible, .. }, args)
-        | RTerm::App(Head::Ac { reducible, .. }, args) => {
-            !*reducible && args.iter().all(allowed)
-        }
+        | RTerm::App(Head::Ac { reducible, .. }, args) => !*reducible && args.iter().all(allowed),
         // Free vars, fresh/nat name constants -> offenders.
         RTerm::Free(_) | RTerm::FreshConst(_) | RTerm::NatConst(_) => false,
     }
@@ -622,7 +643,10 @@ pub(crate) fn show_lvar(v: &VarSpec) -> String {
 fn render_block(header: &str, offenders: &[String]) -> String {
     // fsep $ (text "<header> uses terms of the wrong form:")
     //       : punctuate comma (map (nest 2 . text . quote . show) offenders)
-    let mut items = vec![Doc::text(format!("{} uses terms of the wrong form:", header))];
+    let mut items = vec![Doc::text(format!(
+        "{} uses terms of the wrong form:",
+        header
+    ))];
     let off_docs: Vec<Doc> = offenders
         .iter()
         .map(|o| Doc::text(format!("`{}'", o)).nest(2))
@@ -630,7 +654,10 @@ fn render_block(header: &str, offenders: &[String]) -> String {
     items.extend(punctuate(Doc::text(","), off_docs));
     let line1 = fsep(items).nest(2).render_with(WF_WIDTH, WF_WIDTH);
 
-    let words: Vec<Doc> = ALLOWED_PARAGRAPH.split_whitespace().map(Doc::text).collect();
+    let words: Vec<Doc> = ALLOWED_PARAGRAPH
+        .split_whitespace()
+        .map(Doc::text)
+        .collect();
     let para = fsep(words).nest(2).render_with(WF_WIDTH, WF_WIDTH);
 
     let mut out = String::new();
@@ -757,7 +784,10 @@ mod tests {
         let (thy, sig) = sig_of(src);
         let report = check_terms_wf(&thy, &sig);
         assert_eq!(report.len(), 1);
-        assert!(report[0].message.contains("`Free x'"),
-            "got: {}", report[0].message);
+        assert!(
+            report[0].message.contains("`Free x'"),
+            "got: {}",
+            report[0].message
+        );
     }
 }

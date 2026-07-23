@@ -38,10 +38,10 @@
 
 use std::collections::BTreeMap;
 
+use crate::base_translation::{subst_fact, subst_term};
 use tamarin_parser::ast as p;
 use tamarin_term::lterm::Name;
 use tamarin_term::subst::Subst;
-use crate::base_translation::{subst_term, subst_fact};
 use tamarin_term::vterm::{Lit, VTerm};
 
 use tamarin_theory::sapic::{
@@ -113,15 +113,12 @@ fn inline_call(
 
     // `checkProcess` (Theory/Text/Parser/Sapic.hs:314-317): fail if the
     // process is undefined.
-    let def = defs.get(name).ok_or_else(|| {
-        ConvertError::new(format!("process not defined: {name}"))
-    })?;
+    let def = defs
+        .get(name)
+        .ok_or_else(|| ConvertError::new(format!("process not defined: {name}")))?;
 
     // Convert the actual argument terms.
-    let sapic_args: Vec<SapicTerm> = args
-        .iter()
-        .map(convert_term)
-        .collect::<Result<_, _>>()?;
+    let sapic_args: Vec<SapicTerm> = args.iter().map(convert_term).collect::<Result<_, _>>()?;
 
     // Convert the formal parameters (HS `fromMaybe [] (get pVars p)`).
     let params: Vec<SapicLVar> = def
@@ -214,8 +211,7 @@ fn apply_m_process(subst: &SapicSubst, p: PlainProcess) -> Result<PlainProcess, 
 /// True iff a substitution maps `v` (in either typed or untyped form) — i.e.
 /// `v ∈ dom subst`, used for the capture checks.
 fn in_domain(subst: &SapicSubst, v: &SapicLVar) -> bool {
-    subst.image_of(v).is_some()
-        || subst.image_of(&SapicLVar::untyped(v.var.clone())).is_some()
+    subst.image_of(v).is_some() || subst.image_of(&SapicLVar::untyped(v.var.clone())).is_some()
 }
 
 /// `applyM` for `SapicAction` (Process.hs:392-408): substitute terms, raising
@@ -242,7 +238,11 @@ fn apply_m_action(
         }),
         // `ChIn` of a single captured var is captured unless its name starts
         // with `pat_` (Process.hs:399-406).
-        SapicAction::ChIn { chan, msg, match_vars } => {
+        SapicAction::ChIn {
+            chan,
+            msg,
+            match_vars,
+        } => {
             if let VTerm::Lit(Lit::Var(v)) = &msg {
                 if in_domain(subst, v) && !v.var.name.starts_with("pat_") {
                     return Err(ConvertError::new(format!(
@@ -266,9 +266,10 @@ fn apply_m_action(
                 match_vars: apply_match_vars(subst, &match_vars),
             })
         }
-        SapicAction::Insert(a, b) => {
-            Ok(SapicAction::Insert(subst_term(subst, &a), subst_term(subst, &b)))
-        }
+        SapicAction::Insert(a, b) => Ok(SapicAction::Insert(
+            subst_term(subst, &a),
+            subst_term(subst, &b),
+        )),
         SapicAction::Delete(t) => Ok(SapicAction::Delete(subst_term(subst, &t))),
         SapicAction::Lock(t) => Ok(SapicAction::Lock(subst_term(subst, &t))),
         SapicAction::Unlock(t) => Ok(SapicAction::Unlock(subst_term(subst, &t))),
@@ -276,7 +277,13 @@ fn apply_m_action(
             n,
             ts.iter().map(|t| subst_term(subst, t)).collect(),
         )),
-        SapicAction::Msr { prems, acts, concs, rest, match_vars } => Ok(SapicAction::Msr {
+        SapicAction::Msr {
+            prems,
+            acts,
+            concs,
+            rest,
+            match_vars,
+        } => Ok(SapicAction::Msr {
             prems: prems.iter().map(|f| subst_fact(subst, f)).collect(),
             acts: acts.iter().map(|f| subst_fact(subst, f)).collect(),
             concs: concs.iter().map(|f| subst_fact(subst, f)).collect(),
@@ -303,14 +310,19 @@ fn apply_m_comb(
             }
             Ok(ProcessCombinator::Lookup(subst_term(subst, &t), v))
         }
-        ProcessCombinator::Let { left, right, match_vars } => Ok(ProcessCombinator::Let {
+        ProcessCombinator::Let {
+            left,
+            right,
+            match_vars,
+        } => Ok(ProcessCombinator::Let {
             left: subst_term(subst, &left),
             right: subst_term(subst, &right),
             match_vars,
         }),
-        ProcessCombinator::CondEq(a, b) => {
-            Ok(ProcessCombinator::CondEq(subst_term(subst, &a), subst_term(subst, &b)))
-        }
+        ProcessCombinator::CondEq(a, b) => Ok(ProcessCombinator::CondEq(
+            subst_term(subst, &a),
+            subst_term(subst, &b),
+        )),
         // `Cond` carries an un-expanded parser-AST formula.  HS DOES substitute
         // here: `apply subst (Cond fa) = Cond (apply subst fa)` (Process.hs:165),
         // reached via the `ApplyM`/`Apply` ProcessCombinator instances
@@ -385,7 +397,10 @@ mod tests {
                 typ: None,
             }]),
             body: p::Process::Action {
-                action: p::SapicAction::ChOut { chan: None, msg: xref },
+                action: p::SapicAction::ChOut {
+                    chan: None,
+                    msg: xref,
+                },
                 body: Box::new(p::Process::Null),
             },
         }
@@ -398,7 +413,10 @@ mod tests {
         let def = out_x_def("P", "x");
         let mut defs: ProcessDefMap = BTreeMap::new();
         defs.insert("P".to_string(), &def);
-        let call = p::Process::Call { name: "P".into(), args: vec![pub_lit("t")] };
+        let call = p::Process::Call {
+            name: "P".into(),
+            args: vec![pub_lit("t")],
+        };
         let inlined = convert_process_with_defs(&call, &defs).unwrap();
         match inlined {
             Process::Action(SapicAction::ProcessCall(n, args), _, body) => {
@@ -421,7 +439,10 @@ mod tests {
     #[test]
     fn undefined_call_errors_gracefully() {
         let defs: ProcessDefMap = BTreeMap::new();
-        let call = p::Process::Call { name: "Nope".into(), args: vec![] };
+        let call = p::Process::Call {
+            name: "Nope".into(),
+            args: vec![],
+        };
         let err = convert_process_with_defs(&call, &defs).unwrap_err();
         assert!(err.message.contains("process not defined"));
     }
@@ -432,7 +453,10 @@ mod tests {
         let mut defs: ProcessDefMap = BTreeMap::new();
         defs.insert("P".to_string(), &def);
         // P expects 1 arg, give 0.
-        let call = p::Process::Call { name: "P".into(), args: vec![] };
+        let call = p::Process::Call {
+            name: "P".into(),
+            args: vec![],
+        };
         let err = convert_process_with_defs(&call, &defs).unwrap_err();
         assert!(err.message.contains("expected 1 argument"));
     }

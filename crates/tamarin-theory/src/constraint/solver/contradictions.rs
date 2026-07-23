@@ -106,17 +106,22 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     use tamarin_term::vterm::Lit;
     let subst = &sys.eq_store.subst;
     let resolve = |v: &LVar| -> LVar {
-        let t = tamarin_term::subst::apply_vterm(
-            subst,
-            Term::Lit(Lit::Var(v.clone())),
-        );
-        if let Term::Lit(Lit::Var(w)) = t { w } else { v.clone() }
+        let t = tamarin_term::subst::apply_vterm(subst, Term::Lit(Lit::Var(v.clone())));
+        if let Term::Lit(Lit::Var(w)) = t {
+            w
+        } else {
+            v.clone()
+        }
     };
-    let mut all_less: Vec<LessAtom> = sys.less_atoms.iter().map(|l| LessAtom {
-        smaller: resolve(&l.smaller),
-        larger: resolve(&l.larger),
-        reason: l.reason,
-    }).collect();
+    let mut all_less: Vec<LessAtom> = sys
+        .less_atoms
+        .iter()
+        .map(|l| LessAtom {
+            smaller: resolve(&l.smaller),
+            larger: resolve(&l.larger),
+            reason: l.reason,
+        })
+        .collect();
     for e in &sys.edges {
         all_less.push(LessAtom {
             smaller: resolve(&e.src.0),
@@ -130,7 +135,9 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     // catches when the cycle goes through an open chain. Root cause of
     // StatVerif KU(pcs) saturate over-enumeration.
     for (g, st) in sys.goals.iter() {
-        if st.solved { continue; }
+        if st.solved {
+            continue;
+        }
         if let crate::constraint::constraints::Goal::Chain(c, p) = g {
             all_less.push(LessAtom {
                 smaller: resolve(&c.0),
@@ -145,8 +152,10 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
         if tamarin_utils::env_gate!("TAM_RS_DBG_CYCLE_PATH") {
             let cp = crate::constraint::solver::trace::case_path_string();
             let path = cyclic_with_path(&all_less);
-            let path_str: Vec<String> = path.iter()
-                .map(|n| format!("{}_{}", n.name, n.idx)).collect();
+            let path_str: Vec<String> = path
+                .iter()
+                .map(|n| format!("{}_{}", n.name, n.idx))
+                .collect();
             eprintln!("[CYCLE_PATH] path={} cycle: {}", cp, path_str.join(" → "));
         }
         out.push(Contradiction::Cyclic);
@@ -178,14 +187,24 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     let ab_adj = sys.build_always_before_adj();
 
     // 2. SubtermCyclic — `isContradictory subtermStore`.
-    if sys.subterm_store.is_false() { out.push(Contradiction::SubtermCyclic); }
-    if has_subterm_cycle_contra(_ctxt, sys) { out.push(Contradiction::SubtermCyclic); }
+    if sys.subterm_store.is_false() {
+        out.push(Contradiction::SubtermCyclic);
+    }
+    if has_subterm_cycle_contra(_ctxt, sys) {
+        out.push(Contradiction::SubtermCyclic);
+    }
     // 3. NonNormalTerms.
-    if has_non_normal_terms(_ctxt, sys) { out.push(Contradiction::NonNormalTerms); }
+    if has_non_normal_terms(_ctxt, sys) {
+        out.push(Contradiction::NonNormalTerms);
+    }
     // 4. ForbiddenKD.
-    if has_forbidden_kd(sys) { out.push(Contradiction::ForbiddenKD); }
+    if has_forbidden_kd(sys) {
+        out.push(Contradiction::ForbiddenKD);
+    }
     // 5. ImpossibleChain.
-    if has_impossible_chain(_ctxt, sys) { out.push(Contradiction::ImpossibleChain); }
+    if has_impossible_chain(_ctxt, sys) {
+        out.push(Contradiction::ImpossibleChain);
+    }
     // 6. ForbiddenExp (Contradictions.hs `hasForbiddenExp`).  Drops Exp-down rule
     //    instances whose g is simple, whose MsgVar args are KU-known earlier,
     //    and whose exponent factors are already in the up-premise.  enableDH.
@@ -200,7 +219,9 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
         out.push(Contradiction::ForbiddenBP);
     }
     // 8. ForbiddenChain.
-    if has_forbidden_chain(sys, &ab_adj) { out.push(Contradiction::ForbiddenChain); }
+    if has_forbidden_chain(sys, &ab_adj) {
+        out.push(Contradiction::ForbiddenChain);
+    }
     // 9. IncompatibleEqs — HS-faithful: `eqsIsFalse sEqStore`
     //    (Contradictions.hs `contradictions`). The three preceding probes are RS-only
     //    soundness backstops, NOT a port of the eqsIsFalse check: each fires
@@ -216,12 +237,22 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     //    - has_incompatible_edge_facts / has_fresh_fact_sort_violation: lower
     //      risk — mirror real HS invariants (edges connect equal fact tags;
     //      Fr requires Fresh sort) that the unifier/solveFactEqs enforce.
-    if has_sort_conflated_lvars(sys) { out.push(Contradiction::IncompatibleEqs); }
-    if has_incompatible_edge_facts(sys) { out.push(Contradiction::IncompatibleEqs); }
-    if has_fresh_fact_sort_violation(sys) { out.push(Contradiction::IncompatibleEqs); }
-    if sys.eq_store.is_false() { out.push(Contradiction::IncompatibleEqs); }
+    if has_sort_conflated_lvars(sys) {
+        out.push(Contradiction::IncompatibleEqs);
+    }
+    if has_incompatible_edge_facts(sys) {
+        out.push(Contradiction::IncompatibleEqs);
+    }
+    if has_fresh_fact_sort_violation(sys) {
+        out.push(Contradiction::IncompatibleEqs);
+    }
+    if sys.eq_store.is_false() {
+        out.push(Contradiction::IncompatibleEqs);
+    }
     // 10. FormulasFalse — `gfalse ∈ sFormulas` (our `Disj([])`).
-    if has_false_formula(sys) { out.push(Contradiction::FormulasFalse); }
+    if has_false_formula(sys) {
+        out.push(Contradiction::FormulasFalse);
+    }
     // 11. NonInjectiveFactInstance (×n) — BEFORE NodeAfterLast, matching HS's
     //     list concatenation order in `contradictions` (Contradictions.hs).
     out.extend(non_injective_fact_instances(_ctxt, sys, ab_adj.map()));
@@ -267,7 +298,9 @@ fn has_non_normal_terms(ctx: &ProofContext, sys: &System) -> bool {
     // still helps for pair-only theories with no subterm rewrite
     // rules.
     let sig = ctx.maude.maude_sig();
-    if sig.reducible_fun_syms.is_empty() { return false; }
+    if sig.reducible_fun_syms.is_empty() {
+        return false;
+    }
     let irreducible = &sig.irreducible_fun_syms_fast;
 
     // Short-circuiting structural walk: the moment a candidate subterm — a
@@ -299,13 +332,22 @@ fn has_non_normal_terms(ctx: &ProofContext, sys: &System) -> bool {
     }
 
     for (_, rule) in sys.nodes.iter() {
-        for f in rule.premises.iter().chain(&rule.conclusions).chain(&rule.actions) {
+        for f in rule
+            .premises
+            .iter()
+            .chain(&rule.conclusions)
+            .chain(&rule.actions)
+        {
             for t in f.terms.iter() {
-                if any_non_nf(&sig, irreducible, t) { return true; }
+                if any_non_nf(&sig, irreducible, t) {
+                    return true;
+                }
             }
         }
         for t in &rule.new_vars {
-            if any_non_nf(&sig, irreducible, t) { return true; }
+            if any_non_nf(&sig, irreducible, t) {
+                return true;
+            }
         }
     }
     false
@@ -341,7 +383,9 @@ fn maybe_not_nf_subterms(
                 maybe_not_nf_subterms(irreducible, a, out);
             }
         }
-        _ => { out.insert(t.clone()); }
+        _ => {
+            out.insert(t.clone());
+        }
     }
 }
 
@@ -378,29 +422,47 @@ fn has_impossible_chain(ctx: &ProofContext, sys: &System) -> bool {
     let dbg = tamarin_utils::env_gate!("TAM_RS_DBG_IMPOSSIBLE_CHAIN");
 
     for (g, st) in sys.goals.iter() {
-        if st.solved { continue; }
+        if st.solved {
+            continue;
+        }
         let Goal::Chain(c, p) = g else { continue };
-        let c_rule = sys.nodes.iter().find(|(id, _)| id == &c.0)
-            .map(|(_, r)| r);
-        let p_rule = sys.nodes.iter().find(|(id, _)| id == &p.0)
-            .map(|(_, r)| r);
-        let (Some(c_rule), Some(p_rule)) = (c_rule, p_rule) else { continue };
-        let conc_fact = match c_rule.conclusions.get(c.1.0) {
-            Some(f) => f, None => continue,
+        let c_rule = sys.nodes.iter().find(|(id, _)| id == &c.0).map(|(_, r)| r);
+        let p_rule = sys.nodes.iter().find(|(id, _)| id == &p.0).map(|(_, r)| r);
+        let (Some(c_rule), Some(p_rule)) = (c_rule, p_rule) else {
+            continue;
         };
-        let prem_fact = match p_rule.premises.get(p.1.0) {
-            Some(f) => f, None => continue,
+        let conc_fact = match c_rule.conclusions.get(c.1 .0) {
+            Some(f) => f,
+            None => continue,
         };
-        if !matches!(conc_fact.tag, FactTag::Kd) { continue; }
-        if !matches!(prem_fact.tag, FactTag::Kd) { continue; }
-        let t_start = match conc_fact.terms.first() { Some(t) => t, None => continue };
-        let t_end = match prem_fact.terms.first() { Some(t) => t, None => continue };
+        let prem_fact = match p_rule.premises.get(p.1 .0) {
+            Some(f) => f,
+            None => continue,
+        };
+        if !matches!(conc_fact.tag, FactTag::Kd) {
+            continue;
+        }
+        if !matches!(prem_fact.tag, FactTag::Kd) {
+            continue;
+        }
+        let t_start = match conc_fact.terms.first() {
+            Some(t) => t,
+            None => continue,
+        };
+        let t_end = match prem_fact.terms.first() {
+            Some(t) => t,
+            None => continue,
+        };
         let poss_opt = possible_root_syms(t_start);
         if dbg {
             use tamarin_term::pretty::pretty_lnterm;
-            eprintln!("[ic] t_start={} t_end={} poss_root={:?} pc_true_subterm={}",
-                pretty_lnterm(t_start), pretty_lnterm(t_end),
-                poss_opt.is_some(), ctx.pc_true_subterm);
+            eprintln!(
+                "[ic] t_start={} t_end={} poss_root={:?} pc_true_subterm={}",
+                pretty_lnterm(t_start),
+                pretty_lnterm(t_end),
+                poss_opt.is_some(),
+                ctx.pc_true_subterm
+            );
         }
         let Some(poss) = poss_opt else { continue };
         // Haskell:
@@ -483,14 +545,16 @@ fn dh_view(t: &tamarin_term::lterm::LNTerm) -> Option<DhView<'_>> {
     use tamarin_term::term::Term;
     if let Term::App(sym, args) = t {
         match sym {
-            FunSym::NoEq(s) if *s == exp_sym() && args.len() == 2 =>
-                Some(DhView::Exp(&args[0])),
-            FunSym::NoEq(s) if *s == pmult_sym() && args.len() == 2 =>
-                Some(DhView::PMult(&args[1])),
+            FunSym::NoEq(s) if *s == exp_sym() && args.len() == 2 => Some(DhView::Exp(&args[0])),
+            FunSym::NoEq(s) if *s == pmult_sym() && args.len() == 2 => {
+                Some(DhView::PMult(&args[1]))
+            }
             FunSym::C(CSym::EMap) => Some(DhView::EMap),
             _ => None,
         }
-    } else { None }
+    } else {
+        None
+    }
 }
 
 enum DhView<'a> {
@@ -502,9 +566,7 @@ enum DhView<'a> {
 /// `possibleEndSyms`: HS-faithful port using `viewTerm2` to apply DH-
 /// special cases (FExp/FPMult/FEMap).  Mirrors `possibleEndSyms` in
 /// Contradictions.hs (defined locally inside `hasImpossibleChain`).
-fn possible_end_syms(
-    t: &tamarin_term::lterm::LNTerm,
-) -> Option<Vec<RootSym>> {
+fn possible_end_syms(t: &tamarin_term::lterm::LNTerm) -> Option<Vec<RootSym>> {
     use tamarin_term::function_symbols::{exp_sym, pmult_sym, CSym, FunSym};
     use tamarin_term::term::Term;
     // HS `viewTerm2` special cases first:
@@ -556,9 +618,7 @@ fn possible_end_syms(
 /// (no possible decomposition) when the term cannot contain fresh
 /// names or private functions — equivalent to
 /// `isForbiddenDeconstruction`.
-fn possible_root_syms(
-    t: &tamarin_term::lterm::LNTerm,
-) -> Option<Vec<RootSym>> {
+fn possible_root_syms(t: &tamarin_term::lterm::LNTerm) -> Option<Vec<RootSym>> {
     use tamarin_term::function_symbols::{exp_sym, pmult_sym, CSym, FunSym};
     use tamarin_term::term::Term;
     if never_contains_fresh_priv(t) {
@@ -637,12 +697,18 @@ fn has_forbidden_kd(sys: &System) -> bool {
     use crate::fact::FactTag;
     // Diff-system guard — see LATENT DIVERGENCE note above; `side` is a
     // stand-in for the missing `sDiffSystem` boolean.
-    if sys.side.is_some() { return false; }
+    if sys.side.is_some() {
+        return false;
+    }
     for (_, rule) in sys.nodes.iter() {
         for fa in &rule.conclusions {
-            if !matches!(fa.tag, FactTag::Kd) { continue; }
+            if !matches!(fa.tag, FactTag::Kd) {
+                continue;
+            }
             let Some(t) = fa.terms.first() else { continue };
-            if never_contains_fresh_priv(t) { return true; }
+            if never_contains_fresh_priv(t) {
+                return true;
+            }
         }
     }
     false
@@ -658,19 +724,17 @@ fn never_contains_fresh_priv(t: &tamarin_term::lterm::LNTerm) -> bool {
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
     match t {
-        Term::Lit(Lit::Var(v)) => {
-            !matches!(v.sort, LSort::Msg | LSort::Fresh)
-        }
-        Term::Lit(Lit::Con(n)) => {
-            !matches!(n.tag, NameTag::Fresh)
-        }
+        Term::Lit(Lit::Var(v)) => !matches!(v.sort, LSort::Msg | LSort::Fresh),
+        Term::Lit(Lit::Con(n)) => !matches!(n.tag, NameTag::Fresh),
         Term::App(sym, args) => {
             // Reject if the head is a private function symbol.
             let is_private = match sym {
                 FunSym::NoEq(s) => s.privacy == Privacy::Private,
                 _ => false,
             };
-            if is_private { return false; }
+            if is_private {
+                return false;
+            }
             args.iter().all(never_contains_fresh_priv)
         }
     }
@@ -701,10 +765,7 @@ fn never_contains_fresh_priv(t: &tamarin_term::lterm::LNTerm) -> bool {
 // equivalence-class value set; membership/union only, never iterated into output;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
-fn has_forbidden_chain(
-    sys: &System,
-    ab_adj: &crate::constraint::system::PrebuiltAdj,
-) -> bool {
+fn has_forbidden_chain(sys: &System, ab_adj: &crate::constraint::system::PrebuiltAdj) -> bool {
     use crate::constraint::constraints::Goal;
     use crate::fact::FactTag;
     use tamarin_term::lterm::is_msg_var;
@@ -732,8 +793,8 @@ fn has_forbidden_chain(
     // case survival.
     let mut equivalence_classes: tamarin_utils::FastMap<
         tamarin_term::lterm::LVar,
-        std::collections::HashSet<tamarin_term::lterm::LVar>> =
-        tamarin_utils::FastMap::default();
+        std::collections::HashSet<tamarin_term::lterm::LVar>,
+    > = tamarin_utils::FastMap::default();
     // Compute a coarse "head signature" of a term for grouping: the
     // outermost function symbol (or Var/Const tag).  Two Msg-Vars
     // mapped to App-headed terms with the same outer function symbol
@@ -743,31 +804,40 @@ fn has_forbidden_chain(
     // simp collapses them to a single canonical form.
     let term_head_sig = |t: &tamarin_term::lterm::LNTerm| -> Option<Vec<u8>> {
         match t {
-            Term::App(tamarin_term::function_symbols::FunSym::NoEq(sym), _) =>
-                Some(sym.name.to_vec()),
+            Term::App(tamarin_term::function_symbols::FunSym::NoEq(sym), _) => {
+                Some(sym.name.to_vec())
+            }
             _ => None,
         }
     };
     for disj in &sys.eq_store.conj {
         for subst in &disj.substs {
             // Group Msg-vars by their image's outermost function symbol.
-            let mut by_head: tamarin_utils::FastMap<
-                Vec<u8>,
-                Vec<tamarin_term::lterm::LVar>> = tamarin_utils::FastMap::default();
+            let mut by_head: tamarin_utils::FastMap<Vec<u8>, Vec<tamarin_term::lterm::LVar>> =
+                tamarin_utils::FastMap::default();
             for (v, t) in subst.iter() {
-                if v.sort != tamarin_term::lterm::LSort::Msg { continue; }
+                if v.sort != tamarin_term::lterm::LSort::Msg {
+                    continue;
+                }
                 let head = match term_head_sig(t) {
-                    Some(h) => h, None => continue,
+                    Some(h) => h,
+                    None => continue,
                 };
                 by_head.entry(head).or_default().push(v.clone());
             }
             for (_, vars) in by_head {
-                if vars.len() < 2 { continue; }
+                if vars.len() < 2 {
+                    continue;
+                }
                 for vi in &vars {
                     for vj in &vars {
-                        if vi == vj { continue; }
-                        equivalence_classes.entry(vi.clone())
-                            .or_default().insert(vj.clone());
+                        if vi == vj {
+                            continue;
+                        }
+                        equivalence_classes
+                            .entry(vi.clone())
+                            .or_default()
+                            .insert(vj.clone());
                     }
                 }
             }
@@ -778,23 +848,31 @@ fn has_forbidden_chain(
     // (`contradictions`) and shared across all ordering checks; queried here
     // via `always_before_with` in the chain/node/goal loops below.
     for (g, st) in sys.goals.iter() {
-        if st.solved { continue; }
+        if st.solved {
+            continue;
+        }
         let Goal::Chain(c, p) = g else { continue };
         // Look up the chain-conc fact.
-        let c_rule = sys.nodes.iter().find(|(id, _)| id == &c.0)
-            .map(|(_, r)| r);
-        let p_rule = sys.nodes.iter().find(|(id, _)| id == &p.0)
-            .map(|(_, r)| r);
-        let (Some(c_rule), Some(p_rule)) = (c_rule, p_rule) else { continue };
-        let conc_fact = match c_rule.conclusions.get(c.1.0) {
-            Some(f) => f, None => continue,
+        let c_rule = sys.nodes.iter().find(|(id, _)| id == &c.0).map(|(_, r)| r);
+        let p_rule = sys.nodes.iter().find(|(id, _)| id == &p.0).map(|(_, r)| r);
+        let (Some(c_rule), Some(p_rule)) = (c_rule, p_rule) else {
+            continue;
         };
-        let prem_fact = match p_rule.premises.get(p.1.0) {
-            Some(f) => f, None => continue,
+        let conc_fact = match c_rule.conclusions.get(c.1 .0) {
+            Some(f) => f,
+            None => continue,
+        };
+        let prem_fact = match p_rule.premises.get(p.1 .0) {
+            Some(f) => f,
+            None => continue,
         };
         // Chain ends and starts must both be KD facts.
-        if !matches!(conc_fact.tag, FactTag::Kd) { continue; }
-        if !matches!(prem_fact.tag, FactTag::Kd) { continue; }
+        if !matches!(conc_fact.tag, FactTag::Kd) {
+            continue;
+        }
+        if !matches!(prem_fact.tag, FactTag::Kd) {
+            continue;
+        }
         // Mirror HS `substNodes` — node conc terms are kept eq-store-
         // substituted by `substSystem` (Reduction.hs:609-611 `modM sNodes . M.map
         // . apply =<< getM sSubst`, run after every reduction/variant fold),
@@ -805,14 +883,21 @@ fn has_forbidden_chain(
         // `subst_system_once`; apply eq_store.subst here so t_start matches
         // HS's already-substituted value.  Idempotent on the canonical path;
         // compensates only if RS's subst_system lagged.
-        let raw_t_start = match conc_fact.terms.first() { Some(t) => t.clone(), None => continue };
+        let raw_t_start = match conc_fact.terms.first() {
+            Some(t) => t.clone(),
+            None => continue,
+        };
         let t_start_owned = tamarin_term::subst::apply_vterm(&sys.eq_store.subst, raw_t_start);
         let t_start = &t_start_owned;
         // (1) Chain starts at a message variable.
-        if !is_msg_var(t_start) { continue; }
+        if !is_msg_var(t_start) {
+            continue;
+        }
         // (2) End rule is not IEquality.
-        if matches!(&p_rule.info,
-            crate::rule::RuleInfo::Intr(crate::rule::IntrRuleACInfo::IEquality)) {
+        if matches!(
+            &p_rule.info,
+            crate::rule::RuleInfo::Intr(crate::rule::IntrRuleACInfo::IEquality)
+        ) {
             continue;
         }
         let t_start_var = match t_start {
@@ -821,16 +906,18 @@ fn has_forbidden_chain(
         };
         // Build the set of candidate-equal Msg-Vars: t_start itself
         // plus any var in its disj-equivalence class.
-        let mut candidate_vars: tamarin_utils::FastSet<tamarin_term::lterm::LVar>
-            = tamarin_utils::FastSet::default();
+        let mut candidate_vars: tamarin_utils::FastSet<tamarin_term::lterm::LVar> =
+            tamarin_utils::FastSet::default();
         candidate_vars.insert(t_start_var.clone());
         if let Some(eqs) = equivalence_classes.get(&t_start_var) {
             for v in eqs {
                 candidate_vars.insert(v.clone());
             }
         }
-        let candidate_terms: Vec<tamarin_term::lterm::LNTerm> = candidate_vars.iter()
-            .map(|v| Term::Lit(Lit::Var(v.clone()))).collect();
+        let candidate_terms: Vec<tamarin_term::lterm::LNTerm> = candidate_vars
+            .iter()
+            .map(|v| Term::Lit(Lit::Var(v.clone())))
+            .collect();
         // (3) Some KU(t_start) action node precedes the chain
         // start `c.0`.  HS-faithful: `allKUActions` (System.hs:1582-1585)
         // unions BOTH `unsolvedActionAtoms` (unsolved ActionG goals)
@@ -839,10 +926,19 @@ fn has_forbidden_chain(
         // Walk node actions first:
         for (id, rule) in sys.nodes.iter() {
             for fa in &rule.actions {
-                if !matches!(fa.tag, FactTag::Ku) { continue; }
-                let t_ku = match fa.terms.first() { Some(t) => t, None => continue };
-                if !candidate_terms.contains(t_ku) { continue; }
-                if id == &c.0 { continue; }
+                if !matches!(fa.tag, FactTag::Ku) {
+                    continue;
+                }
+                let t_ku = match fa.terms.first() {
+                    Some(t) => t,
+                    None => continue,
+                };
+                if !candidate_terms.contains(t_ku) {
+                    continue;
+                }
+                if id == &c.0 {
+                    continue;
+                }
                 if sys.always_before_with(ab_adj, id, &c.0) {
                     return true;
                 }
@@ -850,12 +946,23 @@ fn has_forbidden_chain(
         }
         // Then walk unsolved ActionG goals (HS's `unsolvedActionAtoms`):
         for (g, gst) in sys.goals.iter() {
-            if gst.solved { continue; }
+            if gst.solved {
+                continue;
+            }
             let Goal::Action(id, fa) = g else { continue };
-            if !matches!(fa.tag, FactTag::Ku) { continue; }
-            let t_ku = match fa.terms.first() { Some(t) => t, None => continue };
-            if !candidate_terms.contains(t_ku) { continue; }
-            if id == &c.0 { continue; }
+            if !matches!(fa.tag, FactTag::Ku) {
+                continue;
+            }
+            let t_ku = match fa.terms.first() {
+                Some(t) => t,
+                None => continue,
+            };
+            if !candidate_terms.contains(t_ku) {
+                continue;
+            }
+            if id == &c.0 {
+                continue;
+            }
             if sys.always_before_with(ab_adj, id, &c.0) {
                 return true;
             }
@@ -889,14 +996,11 @@ fn has_forbidden_chain(
 /// `KU(exp(t.1,t.2))`, RS produces 16 cases vs HS's 3, because each
 /// of the 4 surviving d_exp chain-extend variants would be dropped
 /// by ForbiddenExp in HS.
-fn has_forbidden_exp(
-    sys: &System,
-    ab_adj: &crate::constraint::system::PrebuiltAdj,
-) -> bool {
+fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltAdj) -> bool {
     use crate::fact::FactTag;
     use crate::rule::{IntrRuleACInfo, RuleInfo};
-    use tamarin_term::function_symbols::{EXP_SYM_STRING, FunSym};
-    use tamarin_term::lterm::{LNTerm, LSort, is_msg_var, frees, contains_private, sort_of_name};
+    use tamarin_term::function_symbols::{FunSym, EXP_SYM_STRING};
+    use tamarin_term::lterm::{contains_private, frees, is_msg_var, sort_of_name, LNTerm, LSort};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
 
@@ -906,23 +1010,25 @@ fn has_forbidden_exp(
     // `isSimpleTerm`: HS Term/LTerm.hs:383-386.
     // `not (containsPrivate t) && all (LSortFresh /=) (lits t)`.
     fn is_simple_term(t: &LNTerm) -> bool {
-        if contains_private(t) { return false; }
+        if contains_private(t) {
+            return false;
+        }
         let mut ok = true;
-        let mut visit = |term: &LNTerm| {
-            match term {
-                Term::Lit(Lit::Var(v))
-                    if v.sort == LSort::Fresh => { ok = false; }
-                Term::Lit(Lit::Con(c))
-                    if sort_of_name(c) == LSort::Fresh => {
-                        ok = false;
-                    }
-                _ => {}
+        let mut visit = |term: &LNTerm| match term {
+            Term::Lit(Lit::Var(v)) if v.sort == LSort::Fresh => {
+                ok = false;
             }
+            Term::Lit(Lit::Con(c)) if sort_of_name(c) == LSort::Fresh => {
+                ok = false;
+            }
+            _ => {}
         };
         fn walk(t: &LNTerm, f: &mut dyn FnMut(&LNTerm)) {
             f(t);
             if let Term::App(_, args) = t {
-                for a in args.iter() { walk(a, f); }
+                for a in args.iter() {
+                    walk(a, f);
+                }
             }
         }
         walk(t, &mut visit);
@@ -945,7 +1051,9 @@ fn has_forbidden_exp(
     // For "knownEarlier" we only need (NodeId, term).
     let mut all_ku: Vec<(NodeId, LNTerm)> = Vec::new();
     for (g, st) in sys.goals.iter() {
-        if st.solved { continue; }
+        if st.solved {
+            continue;
+        }
         if let crate::constraint::constraints::Goal::Action(i, fa) = g {
             if matches!(fa.tag, FactTag::Ku) {
                 if let Some(m) = fa.terms.first() {
@@ -971,30 +1079,56 @@ fn has_forbidden_exp(
     // Mirror HS `forbiddenDExp` exactly.
     for (i, ru) in sys.nodes.iter() {
         // Only intruder DestrRules can be exp-down; cheap pre-filter.
-        if !matches!(&ru.info,
-            RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, _, _, _)))
-        { continue; }
-        if ru.premises.len() != 2 { continue; }
-        if ru.conclusions.len() != 1 { continue; }
+        if !matches!(
+            &ru.info,
+            RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, _, _, _))
+        ) {
+            continue;
+        }
+        if ru.premises.len() != 2 {
+            continue;
+        }
+        if ru.conclusions.len() != 1 {
+            continue;
+        }
         let p1 = &ru.premises[0];
         let p2 = &ru.premises[1];
         let conc = &ru.conclusions[0];
 
-        let (dt1, p1_term) = match k_fact_view(p1) { Some(x) => x, None => continue };
-        if dt1 != KDir::Dn { continue; }
-        if view_exp(p1_term).is_none() { continue; }
-        let (dt2, b) = match k_fact_view(p2) { Some(x) => x, None => continue };
-        if dt2 != KDir::Up { continue; }
+        let (dt1, p1_term) = match k_fact_view(p1) {
+            Some(x) => x,
+            None => continue,
+        };
+        if dt1 != KDir::Dn {
+            continue;
+        }
+        if view_exp(p1_term).is_none() {
+            continue;
+        }
+        let (dt2, b) = match k_fact_view(p2) {
+            Some(x) => x,
+            None => continue,
+        };
+        if dt2 != KDir::Up {
+            continue;
+        }
 
-        let (dtc, conc_term) = match k_fact_view(conc) { Some(x) => x, None => continue };
-        if dtc != KDir::Dn { continue; }
+        let (dtc, conc_term) = match k_fact_view(conc) {
+            Some(x) => x,
+            None => continue,
+        };
+        if dtc != KDir::Dn {
+            continue;
+        }
 
         // The "earlier MsgVars" set: KU-known terms which are MsgVars
         // whose node `j` is `alwaysBefore` `i`.
         let earlier_msg_vars = || -> Vec<LNTerm> {
             let mut out = Vec::new();
             for (j, t) in &all_ku {
-                if !is_msg_var(t) { continue; }
+                if !is_msg_var(t) {
+                    continue;
+                }
                 if sys.always_before_with(ab_adj, j, i) {
                     out.push(t.clone());
                 }
@@ -1006,7 +1140,9 @@ fn has_forbidden_exp(
             // `varTerm <$> frees g` then keep only MsgVars.
             for v in frees(g) {
                 let vt: LNTerm = Term::Lit(Lit::Var(v.clone()));
-                if !is_msg_var(&vt) { continue; }
+                if !is_msg_var(&vt) {
+                    continue;
+                }
                 if !mvs.contains(&vt) {
                     return false;
                 }
@@ -1017,8 +1153,9 @@ fn has_forbidden_exp(
         let forbidden = if let Some((g, c)) = view_exp(conc_term) {
             // (1) conc = exp(g, c): g simple + all msg vars known earlier
             //     + niFactors c \\ niFactors b == []
-            if !is_simple_term(g) || !all_msg_vars_known_earlier(g) { false }
-            else {
+            if !is_simple_term(g) || !all_msg_vars_known_earlier(g) {
+                false
+            } else {
                 // niFactors c \\ niFactors b == [] (multiset subset).
                 ni_factors_subset(c, b)
             }
@@ -1065,13 +1202,21 @@ fn has_forbidden_bp(sys: &System) -> bool {
         }
         return true;
     }
-    if sys.nodes.iter().any(|(i, ru)| is_forbidden_d_emap(sys, i, ru)) {
+    if sys
+        .nodes
+        .iter()
+        .any(|(i, ru)| is_forbidden_d_emap(sys, i, ru))
+    {
         if tamarin_utils::env_gate!("TAM_RS_DBG_FORBIDDEN_BP") {
             eprintln!("[FORBIDDEN_BP] dEMap fired");
         }
         return true;
     }
-    if sys.nodes.iter().any(|(i, ru)| is_forbidden_d_emap_order(sys, i, ru)) {
+    if sys
+        .nodes
+        .iter()
+        .any(|(i, ru)| is_forbidden_d_emap_order(sys, i, ru))
+    {
         if tamarin_utils::env_gate!("TAM_RS_DBG_FORBIDDEN_BP") {
             eprintln!("[FORBIDDEN_BP] dEMapOrder fired");
         }
@@ -1086,31 +1231,60 @@ fn has_forbidden_bp(sys: &System) -> bool {
 /// is forbidden when:
 ///   - `p` never contains fresh/private terms, AND
 ///   - every non-inverse factor of `c` is also a non-inverse factor of `b`.
-fn is_forbidden_d_pmult<I>(ru: &crate::rule::Rule<crate::rule::RuleInfo<I, crate::rule::IntrRuleACInfo>>) -> bool {
-    if ru.premises.len() != 2 { return false; }
-    if ru.conclusions.len() != 1 { return false; }
+fn is_forbidden_d_pmult<I>(
+    ru: &crate::rule::Rule<crate::rule::RuleInfo<I, crate::rule::IntrRuleACInfo>>,
+) -> bool {
+    if ru.premises.len() != 2 {
+        return false;
+    }
+    if ru.conclusions.len() != 1 {
+        return false;
+    }
 
     let p1 = &ru.premises[0];
     let p2 = &ru.premises[1];
     let conc = &ru.conclusions[0];
 
     // p1 = KD(pmult(_, p))
-    let (dt1, p1_term) = match k_fact_view(p1) { Some(x) => x, None => return false };
-    if dt1 != KDir::Dn { return false; }
-    let _p = match bp_view_pmult(p1_term) { Some((_s, p)) => p, None => return false };
+    let (dt1, p1_term) = match k_fact_view(p1) {
+        Some(x) => x,
+        None => return false,
+    };
+    if dt1 != KDir::Dn {
+        return false;
+    }
+    let _p = match bp_view_pmult(p1_term) {
+        Some((_s, p)) => p,
+        None => return false,
+    };
     // p2 = KU(b)
-    let (dt2, b) = match k_fact_view(p2) { Some(x) => x, None => return false };
-    if dt2 != KDir::Up { return false; }
+    let (dt2, b) = match k_fact_view(p2) {
+        Some(x) => x,
+        None => return false,
+    };
+    if dt2 != KDir::Up {
+        return false;
+    }
     // conc = KD(pmult(c, p))
-    let (dtc, conc_term) = match k_fact_view(conc) { Some(x) => x, None => return false };
-    if dtc != KDir::Dn { return false; }
-    let (c, p_conc) = match bp_view_pmult(conc_term) { Some(x) => x, None => return false };
+    let (dtc, conc_term) = match k_fact_view(conc) {
+        Some(x) => x,
+        None => return false,
+    };
+    if dtc != KDir::Dn {
+        return false;
+    }
+    let (c, p_conc) = match bp_view_pmult(conc_term) {
+        Some(x) => x,
+        None => return false,
+    };
 
     // HS `isForbiddenDPMult` (Contradictions.hs) gates ONLY on the
     // structural shape checked above (`[p1,p2]`/`[conc]`, `(DnK, FPMult _ _)`
     // for p1, `(UpK, b)` for p2, `(DnK, FPMult c p)` for conc) — there is no
     // `isDPMultRule` guard (contrast isForbiddenDEMap/Order which DO guard).
-    if !never_contains_fresh_priv(p_conc) { return false; }
+    if !never_contains_fresh_priv(p_conc) {
+        return false;
+    }
     ni_factors_subset(c, b)
 }
 
@@ -1119,42 +1293,79 @@ fn is_forbidden_d_pmult<I>(ru: &crate::rule::Rule<crate::rule::RuleInfo<I, crate
 /// A `dExp` rule whose first premise's provider is a `dEMap` rule
 /// instance, where the EMap's `[s]P / [r]Q` premises are
 /// "overcomplicated" relative to the `dExp`'s `ke` exponent.
-fn is_forbidden_d_emap(sys: &System,
-                       i: &crate::constraint::constraints::NodeId,
-                       ru_exp: &crate::rule::Rule<crate::rule::RuleInfo<
-                           crate::rule::ProtoRuleACInstInfo,
-                           crate::rule::IntrRuleACInfo>>) -> bool {
-    use crate::rule::PremIdx;
-    use crate::rule::is_d_exp_rule;
+fn is_forbidden_d_emap(
+    sys: &System,
+    i: &crate::constraint::constraints::NodeId,
+    ru_exp: &crate::rule::Rule<
+        crate::rule::RuleInfo<crate::rule::ProtoRuleACInstInfo, crate::rule::IntrRuleACInfo>,
+    >,
+) -> bool {
     use crate::rule::is_d_emap_rule;
-    if !is_d_exp_rule(ru_exp) { return false; }
-    if ru_exp.premises.len() != 2 { return false; }
+    use crate::rule::is_d_exp_rule;
+    use crate::rule::PremIdx;
+    if !is_d_exp_rule(ru_exp) {
+        return false;
+    }
+    if ru_exp.premises.len() != 2 {
+        return false;
+    }
 
     // ke_f := premIdx 1 of the dExp rule
     let ke_f = &ru_exp.premises[1];
-    let (dt_ke, ke) = match k_fact_view(ke_f) { Some(x) => x, None => return false };
-    if dt_ke != KDir::Up { return false; }
+    let (dt_ke, ke) = match k_fact_view(ke_f) {
+        Some(x) => x,
+        None => return false,
+    };
+    if dt_ke != KDir::Up {
+        return false;
+    }
 
     // Find the edge ((ns,_) → (i, PremIdx 0)) i.e. the rule providing
     // the dExp's first premise (the dEMap rule).
     let edge_ns = sys.edges.iter().find_map(|e| {
         if e.tgt.0 == *i && e.tgt.1 == PremIdx(0) {
             Some(e.src.0.clone())
-        } else { None }
+        } else {
+            None
+        }
     });
-    let Some(ns) = edge_ns else { return false; };
-    let Some((_, ru_emap)) = sys.nodes.iter().find(|(n, _)| n == &ns) else { return false; };
-    if !is_d_emap_rule(ru_emap) { return false; }
-    if ru_emap.premises.len() != 2 { return false; }
+    let Some(ns) = edge_ns else {
+        return false;
+    };
+    let Some((_, ru_emap)) = sys.nodes.iter().find(|(n, _)| n == &ns) else {
+        return false;
+    };
+    if !is_d_emap_rule(ru_emap) {
+        return false;
+    }
+    if ru_emap.premises.len() != 2 {
+        return false;
+    }
 
     let sp_f = &ru_emap.premises[0];
     let rq_f = &ru_emap.premises[1];
-    let (dt_sp, sp_term) = match k_fact_view(sp_f) { Some(x) => x, None => return false };
-    if dt_sp != KDir::Dn { return false; }
-    let (s_sc, p_pt) = match bp_view_pmult(sp_term) { Some(x) => x, None => return false };
-    let (dt_rq, rq_term) = match k_fact_view(rq_f) { Some(x) => x, None => return false };
-    if dt_rq != KDir::Dn { return false; }
-    let (r_sc, q_pt) = match bp_view_pmult(rq_term) { Some(x) => x, None => return false };
+    let (dt_sp, sp_term) = match k_fact_view(sp_f) {
+        Some(x) => x,
+        None => return false,
+    };
+    if dt_sp != KDir::Dn {
+        return false;
+    }
+    let (s_sc, p_pt) = match bp_view_pmult(sp_term) {
+        Some(x) => x,
+        None => return false,
+    };
+    let (dt_rq, rq_term) = match k_fact_view(rq_f) {
+        Some(x) => x,
+        None => return false,
+    };
+    if dt_rq != KDir::Dn {
+        return false;
+    }
+    let (r_sc, q_pt) = match bp_view_pmult(rq_term) {
+        Some(x) => x,
+        None => return false,
+    };
 
     bp_over_complicated(s_sc, p_pt, ke) || bp_over_complicated(r_sc, q_pt, ke)
 }
@@ -1166,43 +1377,71 @@ fn is_forbidden_d_emap(sys: &System,
 /// rules feeding its premises (through an intermediate `IRecv`).
 /// Forbidden iff the first protocol rule's fact tags are strictly
 /// greater than the second's (normal-form fact-tag ordering).
-fn is_forbidden_d_emap_order(sys: &System,
-                             i: &crate::constraint::constraints::NodeId,
-                             ru: &crate::rule::Rule<crate::rule::RuleInfo<
-                                 crate::rule::ProtoRuleACInstInfo,
-                                 crate::rule::IntrRuleACInfo>>) -> bool {
-    use crate::rule::{PremIdx, is_d_emap_rule};
-    use tamarin_term::function_symbols::{AcSym, CSym, EXP_SYM_STRING, FunSym};
+fn is_forbidden_d_emap_order(
+    sys: &System,
+    i: &crate::constraint::constraints::NodeId,
+    ru: &crate::rule::Rule<
+        crate::rule::RuleInfo<crate::rule::ProtoRuleACInstInfo, crate::rule::IntrRuleACInfo>,
+    >,
+) -> bool {
+    use crate::rule::{is_d_emap_rule, PremIdx};
+    use tamarin_term::function_symbols::{AcSym, CSym, FunSym, EXP_SYM_STRING};
     use tamarin_term::term::Term;
-    if !is_d_emap_rule(ru) { return false; }
-    if ru.premises.len() != 2 { return false; }
-    if ru.conclusions.len() != 1 { return false; }
+    if !is_d_emap_rule(ru) {
+        return false;
+    }
+    if ru.premises.len() != 2 {
+        return false;
+    }
+    if ru.conclusions.len() != 1 {
+        return false;
+    }
 
     let f_p0 = &ru.premises[0];
     let f_p1 = &ru.premises[1];
     let f_c0 = &ru.conclusions[0];
 
-    let (dt0, t0) = match k_fact_view(f_p0) { Some(x) => x, None => return false };
-    if dt0 != KDir::Dn { return false; }
-    let (s_sc, p_pt) = match bp_view_pmult(t0) { Some(x) => x, None => return false };
+    let (dt0, t0) = match k_fact_view(f_p0) {
+        Some(x) => x,
+        None => return false,
+    };
+    if dt0 != KDir::Dn {
+        return false;
+    }
+    let (s_sc, p_pt) = match bp_view_pmult(t0) {
+        Some(x) => x,
+        None => return false,
+    };
 
-    let (dt1, t1) = match k_fact_view(f_p1) { Some(x) => x, None => return false };
-    if dt1 != KDir::Dn { return false; }
-    let (r_sc, q_pt) = match bp_view_pmult(t1) { Some(x) => x, None => return false };
+    let (dt1, t1) = match k_fact_view(f_p1) {
+        Some(x) => x,
+        None => return false,
+    };
+    if dt1 != KDir::Dn {
+        return false;
+    }
+    let (r_sc, q_pt) = match bp_view_pmult(t1) {
+        Some(x) => x,
+        None => return false,
+    };
 
-    let (dtc, tc) = match k_fact_view(f_c0) { Some(x) => x, None => return false };
-    if dtc != KDir::Dn { return false; }
+    let (dtc, tc) = match k_fact_view(f_c0) {
+        Some(x) => x,
+        None => return false,
+    };
+    if dtc != KDir::Dn {
+        return false;
+    }
 
     // tc = exp(em(p', q'), Mult([s', r', ...]))
     let (em_t, mult_arg) = match tc {
-        Term::App(FunSym::NoEq(s), args)
-            if s.name == EXP_SYM_STRING && args.len() == 2 =>
-            (&args[0], &args[1]),
+        Term::App(FunSym::NoEq(s), args) if s.name == EXP_SYM_STRING && args.len() == 2 => {
+            (&args[0], &args[1])
+        }
         _ => return false,
     };
     let (p_p, q_p) = match em_t {
-        Term::App(FunSym::C(CSym::EMap), args) if args.len() == 2 =>
-            (&args[0], &args[1]),
+        Term::App(FunSym::C(CSym::EMap), args) if args.len() == 2 => (&args[0], &args[1]),
         _ => return false,
     };
     let mult_args: Vec<tamarin_term::lterm::LNTerm> = match mult_arg {
@@ -1212,11 +1451,15 @@ fn is_forbidden_d_emap_order(sys: &System,
 
     // guard ((p,q) == (p',q') || (p,q) == (q',p'))
     let ok_pair = (p_pt == p_p && q_pt == q_p) || (p_pt == q_p && q_pt == p_p);
-    if !ok_pair { return false; }
+    if !ok_pair {
+        return false;
+    }
     // && (mult_args \\ [s,r] == [])  — every mult_arg appears among [s,r]
     let mut remaining: Vec<tamarin_term::lterm::LNTerm> = vec![s_sc.clone(), r_sc.clone()];
     for a in &mult_args {
-        let Some(pos) = remaining.iter().position(|x| x == a) else { return false; };
+        let Some(pos) = remaining.iter().position(|x| x == a) else {
+            return false;
+        };
         remaining.remove(pos);
     }
     // remaining can be non-empty (HS only checks mult_args ⊆ [s,r]).
@@ -1224,30 +1467,44 @@ fn is_forbidden_d_emap_order(sys: &System,
     // For each premise of i, follow edge backwards through IRecv to
     // the protocol rule.
     let lookup_prem_provider = |k: &crate::constraint::constraints::NodeId,
-                                pi: PremIdx| -> Option<crate::constraint::constraints::NodeId> {
-        sys.edges.iter().find_map(|e|
-            if e.tgt.0 == *k && e.tgt.1 == pi { Some(e.src.0.clone()) } else { None })
+                                pi: PremIdx|
+     -> Option<crate::constraint::constraints::NodeId> {
+        sys.edges.iter().find_map(|e| {
+            if e.tgt.0 == *k && e.tgt.1 == pi {
+                Some(e.src.0.clone())
+            } else {
+                None
+            }
+        })
     };
     let j1 = lookup_prem_provider(i, PremIdx(0));
     let j2 = lookup_prem_provider(i, PremIdx(1));
-    let (Some(j1), Some(j2)) = (j1, j2) else { return false; };
+    let (Some(j1), Some(j2)) = (j1, j2) else {
+        return false;
+    };
 
     let ru_proto1 = lookup_prem_provider(&j1, PremIdx(0))
         .and_then(|n| sys.nodes.iter().find(|(nn, _)| nn == &n).map(|(_, r)| r));
     let ru_proto2 = lookup_prem_provider(&j2, PremIdx(0))
         .and_then(|n| sys.nodes.iter().find(|(nn, _)| nn == &n).map(|(_, r)| r));
-    let (Some(rp1), Some(rp2)) = (ru_proto1, ru_proto2) else { return false; };
+    let (Some(rp1), Some(rp2)) = (ru_proto1, ru_proto2) else {
+        return false;
+    };
 
     // isStandRule: standard protocol rule (not Intr/Fresh/Pub).
     use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, RuleInfo};
-    let is_stand = |r: &crate::rule::Rule<RuleInfo<ProtoRuleACInstInfo, crate::rule::IntrRuleACInfo>>|
-        -> bool {
+    let is_stand = |r: &crate::rule::Rule<
+        RuleInfo<ProtoRuleACInstInfo, crate::rule::IntrRuleACInfo>,
+    >|
+     -> bool {
         match &r.info {
             RuleInfo::Proto(p) => matches!(p.name, ProtoRuleName::Stand(_)),
             _ => false,
         }
     };
-    if !is_stand(rp1) || !is_stand(rp2) { return false; }
+    if !is_stand(rp1) || !is_stand(rp2) {
+        return false;
+    }
 
     // factTags ruProto1 > factTags ruProto2
     //   where factTags ru = map (map factTag) [rPrems ru, rConcs ru, rActs ru]
@@ -1255,8 +1512,10 @@ fn is_forbidden_d_emap_order(sys: &System,
     // list whose length is significant — they must NOT be flattened into a
     // single sequence (that would cross group boundaries). Build
     // `[[prem tags], [conc tags], [act tags]]` and compare lexicographically.
-    let tags_of = |r: &crate::rule::Rule<RuleInfo<ProtoRuleACInstInfo, crate::rule::IntrRuleACInfo>>|
-        -> Vec<Vec<crate::fact::FactTag>> {
+    let tags_of = |r: &crate::rule::Rule<
+        RuleInfo<ProtoRuleACInstInfo, crate::rule::IntrRuleACInfo>,
+    >|
+     -> Vec<Vec<crate::fact::FactTag>> {
         vec![
             r.premises.iter().map(|f| f.tag.clone()).collect(),
             r.conclusions.iter().map(|f| f.tag.clone()).collect(),
@@ -1270,12 +1529,15 @@ fn is_forbidden_d_emap_order(sys: &System,
 /// `KDir::Up` = KU (constructible), `KDir::Dn` = KD (destruction).
 /// Shared by `has_forbidden_exp` and the BP contradiction checks.
 #[derive(Copy, Clone, PartialEq, Eq)]
-enum KDir { Up, Dn }
-fn k_fact_view(fa: &crate::fact::LNFact)
-    -> Option<(KDir, &tamarin_term::lterm::LNTerm)>
-{
+enum KDir {
+    Up,
+    Dn,
+}
+fn k_fact_view(fa: &crate::fact::LNFact) -> Option<(KDir, &tamarin_term::lterm::LNTerm)> {
     use crate::fact::FactTag;
-    if fa.terms.len() != 1 { return None; }
+    if fa.terms.len() != 1 {
+        return None;
+    }
     match fa.tag {
         FactTag::Ku => Some((KDir::Up, &fa.terms[0])),
         FactTag::Kd => Some((KDir::Dn, &fa.terms[0])),
@@ -1284,9 +1546,9 @@ fn k_fact_view(fa: &crate::fact::LNFact)
 }
 
 /// View `pmult(scalar, point)` — returns `(scalar, point)`.
-fn bp_view_pmult(t: &tamarin_term::lterm::LNTerm)
-    -> Option<(&tamarin_term::lterm::LNTerm, &tamarin_term::lterm::LNTerm)>
-{
+fn bp_view_pmult(
+    t: &tamarin_term::lterm::LNTerm,
+) -> Option<(&tamarin_term::lterm::LNTerm, &tamarin_term::lterm::LNTerm)> {
     use tamarin_term::function_symbols::{FunSym, PMULT_SYM_STRING};
     use tamarin_term::term::Term;
     if let Term::App(FunSym::NoEq(s), args) = t {
@@ -1306,20 +1568,21 @@ fn ni_factors(t: &tamarin_term::lterm::LNTerm) -> Vec<tamarin_term::lterm::LNTer
     match t {
         Term::App(FunSym::Ac(AcSym::Mult), args) => {
             let mut out = Vec::new();
-            for a in args.iter() { out.extend(ni_factors(a)); }
+            for a in args.iter() {
+                out.extend(ni_factors(a));
+            }
             out
         }
-        Term::App(FunSym::NoEq(s), args)
-            if s.name == INV_SYM_STRING && args.len() == 1 =>
-            ni_factors(&args[0]),
+        Term::App(FunSym::NoEq(s), args) if s.name == INV_SYM_STRING && args.len() == 1 => {
+            ni_factors(&args[0])
+        }
         _ => vec![t.clone()],
     }
 }
 
 /// `niFactors c \\ niFactors b == []`: every non-inverse factor of `c`
 /// appears in `b`'s non-inverse factors (multiset semantics).
-fn ni_factors_subset(c: &tamarin_term::lterm::LNTerm,
-                     b: &tamarin_term::lterm::LNTerm) -> bool {
+fn ni_factors_subset(c: &tamarin_term::lterm::LNTerm, b: &tamarin_term::lterm::LNTerm) -> bool {
     let nfc = ni_factors(c);
     let mut remaining = ni_factors(b);
     for x in &nfc {
@@ -1334,9 +1597,11 @@ fn ni_factors_subset(c: &tamarin_term::lterm::LNTerm,
 
 /// `overComplicated scalar point ke` — Contradictions.hs.
 ///   `(niFactors scalar \\ niFactors ke == []) && neverContainsFreshPriv point`
-fn bp_over_complicated(scalar: &tamarin_term::lterm::LNTerm,
-                       point: &tamarin_term::lterm::LNTerm,
-                       ke: &tamarin_term::lterm::LNTerm) -> bool {
+fn bp_over_complicated(
+    scalar: &tamarin_term::lterm::LNTerm,
+    point: &tamarin_term::lterm::LNTerm,
+    ke: &tamarin_term::lterm::LNTerm,
+) -> bool {
     ni_factors_subset(scalar, ke) && never_contains_fresh_priv(point)
 }
 
@@ -1359,7 +1624,9 @@ fn non_injective_fact_instances(
     let mut out = Vec::new();
     let inj_tags: BTreeSet<&crate::fact::FactTag> =
         ctxt.injective_fact_insts.iter().map(|(t, _)| t).collect();
-    if inj_tags.is_empty() { return out; }
+    if inj_tags.is_empty() {
+        return out;
+    }
 
     // `adj` is the raw less-relation (`rawLessRel`: less + edges + unsolved
     // chains), built once by the caller (`contradictions`) and shared. We
@@ -1384,41 +1651,56 @@ fn non_injective_fact_instances(
     // Resolve node-id → rule via a once-built map instead of a linear
     // `nodes.iter().find` per `i`/`j`.
     let node_rule_map = sys.node_rule_map();
-    let lookup_node = |id: &NodeId| -> Option<&crate::rule::RuleACInst> {
-        node_rule_map.get(id).copied()
-    };
+    let lookup_node =
+        |id: &NodeId| -> Option<&crate::rule::RuleACInst> { node_rule_map.get(id).copied() };
 
     for e in &sys.edges {
         let (i, conc_idx) = (e.src.0.clone(), e.src.1);
         let k = e.tgt.0.clone();
         // Look up the conclusion fact at (i, conc_idx).
-        let i_rule = match lookup_node(&i) { Some(r) => r, None => continue };
-        let k_fa_prem = match i_rule.conclusions.get(conc_idx.0) {
-            Some(f) => f, None => continue,
+        let i_rule = match lookup_node(&i) {
+            Some(r) => r,
+            None => continue,
         };
-        if !inj_tags.contains(&k_fa_prem.tag) { continue; }
+        let k_fa_prem = match i_rule.conclusions.get(conc_idx.0) {
+            Some(f) => f,
+            None => continue,
+        };
+        if !inj_tags.contains(&k_fa_prem.tag) {
+            continue;
+        }
         let k_term = match k_fa_prem.terms.first() {
-            Some(t) => t, None => continue,
+            Some(t) => t,
+            None => continue,
         };
         // Reachable set from i.
         let reach = reachable(&i);
         for j in &reach {
-            if j == &i || j == &k { continue; }
-            let j_rule = match lookup_node(j) { Some(r) => r, None => continue };
+            if j == &i || j == &k {
+                continue;
+            }
+            let j_rule = match lookup_node(j) {
+                Some(r) => r,
+                None => continue,
+            };
             // Conflicting fact in j's prems or concs.
             let conflicting = |fa: &crate::fact::LNFact| -> bool {
                 fa.tag == k_fa_prem.tag && fa.terms.first() == Some(k_term)
             };
             let has_conflict = j_rule.premises.iter().any(conflicting)
                 || j_rule.conclusions.iter().any(conflicting);
-            if !has_conflict { continue; }
+            if !has_conflict {
+                continue;
+            }
             // k reachable from j OR k is the last node.
             let j_reach = reachable(j);
             let k_after_j = j_reach.contains(&k);
             let k_is_last = sys.last_atom.as_ref() == Some(&k);
             if k_after_j || k_is_last {
                 out.push(Contradiction::NonInjectiveFactInstance(
-                    i.clone(), j.clone(), k.clone(),
+                    i.clone(),
+                    j.clone(),
+                    k.clone(),
                 ));
             }
         }
@@ -1443,18 +1725,27 @@ fn has_sort_conflated_lvars(sys: &System) -> bool {
     }
     impl SortSeen {
         fn visit(&mut self, v: &LVar) {
-            if self.conflict { return; }
+            if self.conflict {
+                return;
+            }
             match self.seen.get(&(v.name, v.idx)).copied() {
-                None => { self.seen.insert((v.name, v.idx), v.sort); }
+                None => {
+                    self.seen.insert((v.name, v.idx), v.sort);
+                }
                 Some(prev) if prev == v.sort => {}
                 Some(prev) => {
                     // Two distinct sorts at same (name, idx).  Pub/Fresh/
                     // Nat are disjoint; pairs that include Msg can be
                     // narrowed (Msg is the join), so don't flag those.
-                    let disjoint = matches!((prev, v.sort),
-                        (LSort::Pub, LSort::Fresh) | (LSort::Fresh, LSort::Pub) |
-                        (LSort::Pub, LSort::Nat)   | (LSort::Nat, LSort::Pub) |
-                        (LSort::Fresh, LSort::Nat) | (LSort::Nat, LSort::Fresh));
+                    let disjoint = matches!(
+                        (prev, v.sort),
+                        (LSort::Pub, LSort::Fresh)
+                            | (LSort::Fresh, LSort::Pub)
+                            | (LSort::Pub, LSort::Nat)
+                            | (LSort::Nat, LSort::Pub)
+                            | (LSort::Fresh, LSort::Nat)
+                            | (LSort::Nat, LSort::Fresh)
+                    );
                     if disjoint {
                         self.conflict = true;
                     }
@@ -1466,23 +1757,34 @@ fn has_sort_conflated_lvars(sys: &System) -> bool {
             x.for_each_free(&mut |v: &LVar| self.visit(v));
         }
     }
-    let mut st = SortSeen { seen: tamarin_utils::FastMap::default(), conflict: false };
+    let mut st = SortSeen {
+        seen: tamarin_utils::FastMap::default(),
+        conflict: false,
+    };
     for (id, rule) in sys.nodes.iter() {
         st.scan(id);
         st.scan(rule);
-        if st.conflict { return true; }
+        if st.conflict {
+            return true;
+        }
     }
     for e in &sys.edges {
         st.scan(&e.src.0);
         st.scan(&e.tgt.0);
-        if st.conflict { return true; }
+        if st.conflict {
+            return true;
+        }
     }
     for l in &sys.less_atoms {
         st.scan(&l.smaller);
         st.scan(&l.larger);
-        if st.conflict { return true; }
+        if st.conflict {
+            return true;
+        }
     }
-    if let Some(la) = &sys.last_atom { st.scan(la); }
+    if let Some(la) = &sys.last_atom {
+        st.scan(la);
+    }
     for (g, _) in sys.goals.iter() {
         match g {
             crate::constraint::constraints::Goal::Action(n, fa) => {
@@ -1499,7 +1801,9 @@ fn has_sort_conflated_lvars(sys: &System) -> bool {
             }
             _ => {}
         }
-        if st.conflict { return true; }
+        if st.conflict {
+            return true;
+        }
     }
     st.conflict
 }
@@ -1507,7 +1811,9 @@ fn has_sort_conflated_lvars(sys: &System) -> bool {
 /// Has the system's formula list been forced to ⊥?
 fn has_false_formula(sys: &System) -> bool {
     use crate::guarded::Guarded;
-    sys.formulas.iter().any(|f| matches!(f.as_ref(), Guarded::Disj(v) if v.is_empty()))
+    sys.formulas
+        .iter()
+        .any(|f| matches!(f.as_ref(), Guarded::Disj(v) if v.is_empty()))
 }
 
 /// `Fr(t)` requires `t` to be a Fresh-sorted variable. Maude's
@@ -1519,21 +1825,28 @@ fn has_false_formula(sys: &System) -> bool {
 /// `seed` with `f(k)` — the resulting `Fr(f(k))` is unsatisfiable.
 /// Mirrors the sort-check Haskell's unifier performs implicitly.
 fn has_fresh_fact_sort_violation(sys: &System) -> bool {
+    use crate::fact::FactTag;
     use tamarin_term::lterm::LSort;
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use crate::fact::FactTag;
     let subst = &sys.eq_store.subst;
     for (_, rule) in sys.nodes.iter() {
         // Check premises (where Fr lives) and conclusions/actions
         // for completeness — any Fresh-tagged fact with a non-Fresh
         // term is a sort violation.
-        for fact in rule.premises.iter()
+        for fact in rule
+            .premises
+            .iter()
             .chain(rule.conclusions.iter())
             .chain(rule.actions.iter())
         {
-            if !matches!(fact.tag, FactTag::Fresh) { continue; }
-            let t = match fact.terms.first() { Some(t) => t, None => continue };
+            if !matches!(fact.tag, FactTag::Fresh) {
+                continue;
+            }
+            let t = match fact.terms.first() {
+                Some(t) => t,
+                None => continue,
+            };
             let t_norm = tamarin_term::subst::apply_vterm(subst, t.clone());
             match t_norm {
                 Term::Lit(Lit::Var(v)) if v.sort == LSort::Fresh => {}
@@ -1565,8 +1878,14 @@ fn has_incompatible_edge_facts(sys: &System) -> bool {
         let (Some(sr), Some(tr)) = (src_rule, tgt_rule) else {
             continue;
         };
-        let fc = match sr.conclusions.get(e.src.1.0) { Some(f) => f, None => continue };
-        let fp = match tr.premises.get(e.tgt.1.0) { Some(f) => f, None => continue };
+        let fc = match sr.conclusions.get(e.src.1 .0) {
+            Some(f) => f,
+            None => continue,
+        };
+        let fp = match tr.premises.get(e.tgt.1 .0) {
+            Some(f) => f,
+            None => continue,
+        };
         if fc.tag != fp.tag || fc.terms.len() != fp.terms.len() {
             return true;
         }
@@ -1579,7 +1898,9 @@ pub fn cyclic(less: &[LessAtom]) -> bool {
     // Build adjacency list keyed by NodeId.
     let mut adj: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
     for l in less {
-        adj.entry(l.smaller.clone()).or_default().push(l.larger.clone());
+        adj.entry(l.smaller.clone())
+            .or_default()
+            .push(l.larger.clone());
     }
     // Run DFS detecting back-edges.
     let mut color: BTreeMap<NodeId, u8> = BTreeMap::new(); // 0=white,1=gray,2=black
@@ -1590,21 +1911,25 @@ pub fn cyclic(less: &[LessAtom]) -> bool {
         color: &mut BTreeMap<NodeId, u8>,
     ) -> bool {
         match color.get(node).copied().unwrap_or(0) {
-            1 => return true,    // gray ancestor → back-edge
-            2 => return false,   // already explored
+            1 => return true,  // gray ancestor → back-edge
+            2 => return false, // already explored
             _ => {}
         }
         color.insert(node.clone(), 1);
         if let Some(succs) = adj.get(node) {
             for s in succs {
-                if dfs(s, adj, color) { return true; }
+                if dfs(s, adj, color) {
+                    return true;
+                }
             }
         }
         color.insert(node.clone(), 2);
         false
     }
     for n in &nodes {
-        if dfs(n, &adj, &mut color) { return true; }
+        if dfs(n, &adj, &mut color) {
+            return true;
+        }
     }
     false
 }
@@ -1620,7 +1945,9 @@ pub fn cyclic(less: &[LessAtom]) -> bool {
 pub fn cyclic_with_path(less: &[LessAtom]) -> Vec<NodeId> {
     let mut adj: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
     for l in less {
-        adj.entry(l.smaller.clone()).or_default().push(l.larger.clone());
+        adj.entry(l.smaller.clone())
+            .or_default()
+            .push(l.larger.clone());
     }
     let mut color: BTreeMap<NodeId, u8> = BTreeMap::new();
     let mut path: Vec<NodeId> = Vec::new();
@@ -1632,7 +1959,7 @@ pub fn cyclic_with_path(less: &[LessAtom]) -> Vec<NodeId> {
         path: &mut Vec<NodeId>,
     ) -> Option<NodeId> {
         match color.get(node).copied().unwrap_or(0) {
-            1 => return Some(node.clone()),   // back-edge target
+            1 => return Some(node.clone()), // back-edge target
             2 => return None,
             _ => {}
         }
@@ -1671,11 +1998,11 @@ pub fn cyclic_with_path(less: &[LessAtom]) -> Vec<NodeId> {
 /// at a node that has chain successors via edges (but no explicit
 /// `LessAtom`) would survive — losing the contradiction Haskell uses
 /// to prune typing-class source cases at precompute.
-fn node_after_last(
-    sys: &System,
-    adj: &BTreeMap<NodeId, Vec<NodeId>>,
-) -> Vec<Contradiction> {
-    let last = match &sys.last_atom { Some(l) => l.clone(), None => return Vec::new() };
+fn node_after_last(sys: &System, adj: &BTreeMap<NodeId, Vec<NodeId>>) -> Vec<Contradiction> {
+    let last = match &sys.last_atom {
+        Some(l) => l.clone(),
+        None => return Vec::new(),
+    };
     // Port of Haskell `Theory.Constraint.Solver.Contradictions.nodesAfterLast`:
     //
     //   nodesAfterLast sys = case sLastAtom sys of
@@ -1702,14 +2029,17 @@ fn node_after_last(
     }
     in_trace.insert(last.clone()); // isLast is true for `last`
     for (g, st) in sys.goals.iter() {
-        if st.solved { continue; }
+        if st.solved {
+            continue;
+        }
         if let crate::constraint::constraints::Goal::Action(id, _) = g {
             in_trace.insert(id.clone());
         }
     }
     // Strictly-reachable set from `last` (seed removed) via the shared routine.
     let visited = crate::constraint::solver::goals::reachable_set_adj(adj, &last, false);
-    visited.into_iter()
+    visited
+        .into_iter()
         .filter(|n| in_trace.contains(n))
         .map(|after| Contradiction::NodeAfterLast(last.clone(), after))
         .collect()
@@ -1739,10 +2069,15 @@ pub fn maybe_non_normal_terms_nodes(
     nodes: &[(NodeId, crate::rule::RuleACInst)],
     irreducible: &tamarin_utils::FastSet<tamarin_term::function_symbols::FunSym>,
 ) -> Vec<tamarin_term::lterm::LNTerm> {
-    let mut candidates: std::collections::BTreeSet<tamarin_term::lterm::LNTerm>
-        = std::collections::BTreeSet::new();
+    let mut candidates: std::collections::BTreeSet<tamarin_term::lterm::LNTerm> =
+        std::collections::BTreeSet::new();
     for (_, rule) in nodes.iter() {
-        for f in rule.premises.iter().chain(&rule.conclusions).chain(&rule.actions) {
+        for f in rule
+            .premises
+            .iter()
+            .chain(&rule.conclusions)
+            .chain(&rule.actions)
+        {
             for t in f.terms.iter() {
                 maybe_not_nf_subterms(irreducible, t, &mut candidates);
             }
@@ -1815,14 +2150,16 @@ pub struct SubstNfChecker {
     /// freesList t` and `fresh_start = succ (maxIdx tvars)`.  `terms` is
     /// fixed between `fsubst` refreshes, so these are computed once here
     /// instead of once per candidate probe.
-    applied: std::cell::RefCell<Option<(
-        crate::tools::equation_store::LNSubst,
-        Vec<(
-            tamarin_term::lterm::LNTerm,
-            Vec<tamarin_term::lterm::LVar>,
-            u64,
+    applied: std::cell::RefCell<
+        Option<(
+            crate::tools::equation_store::LNSubst,
+            Vec<(
+                tamarin_term::lterm::LNTerm,
+                Vec<tamarin_term::lterm::LVar>,
+                u64,
+            )>,
         )>,
-    )>>,
+    >,
 }
 
 impl SubstNfChecker {
@@ -1856,7 +2193,9 @@ impl SubstNfChecker {
                 maybe_non_normal_terms_nodes(nodes, &sig.irreducible_fun_syms_fast)
             })
         };
-        if base.is_empty() { return false; }
+        if base.is_empty() {
+            return false;
+        }
         let sig = self.maude.maude_sig();
         let mut applied = self.applied.borrow_mut();
         let stale = match applied.as_ref() {
@@ -1870,11 +2209,16 @@ impl SubstNfChecker {
                 tamarin_term::lterm::LNTerm,
                 Vec<tamarin_term::lterm::LVar>,
                 u64,
-            )> = base.iter()
+            )> = base
+                .iter()
                 .map(|t| {
                     let t = apply_vterm(fsubst, t.clone());
                     let tvars: Vec<tamarin_term::lterm::LVar> = vars_vterm(&t);
-                    let fresh_start = tvars.iter().map(|v| v.idx).max().unwrap_or(0)
+                    let fresh_start = tvars
+                        .iter()
+                        .map(|v| v.idx)
+                        .max()
+                        .unwrap_or(0)
                         .saturating_add(1);
                     (t, tvars, fresh_start)
                 })
@@ -1883,13 +2227,17 @@ impl SubstNfChecker {
         }
         let terms = &applied.as_ref().unwrap().1;
         for (t, tvars, fresh_start) in terms {
-            if tvars.is_empty() { continue; }
+            if tvars.is_empty() {
+                continue;
+            }
             // `dom(restrictVFresh tvars subst) == ∅` ⟺ no `tvar` is in the
             // subst's domain; test that directly (`image_of` = domain map
             // lookup) and build the restricted map only on overlap.  Same
             // `continue` condition as `restrict(tvars).dom().count() == 0`,
             // without the empty-map alloc on the common no-overlap probe.
-            if !tvars.iter().any(|v| vfresh_subst.image_of(v).is_some()) { continue; }
+            if !tvars.iter().any(|v| vfresh_subst.image_of(v).is_some()) {
+                continue;
+            }
             let restricted = vfresh_subst.restrict(tvars);
             // HS `freshToFreeAvoidingFast subst tvars` (Substitution.hs:77-81):
             // a PURE uniform-shift rename of the range vars avoiding `tvars`
@@ -1902,7 +2250,9 @@ impl SubstNfChecker {
             let free_subst = restricted.fresh_to_free_uniform_shift(*fresh_start);
             let t_prime = apply_vterm(&free_subst, t.clone());
             // Fast path: if subst doesn't change the term, it's still NF.
-            if &t_prime == t { continue; }
+            if &t_prime == t {
+                continue;
+            }
             // Slow path: structural NF check (HS-faithful).  Mirrors HS
             // `nfApply subst0 t = t == t' || nf' t' \`runReader\` hnd`
             // where `nf' = nfViaHaskell` (Norm.hs:130-131).  This is a
@@ -1929,7 +2279,9 @@ mod tests {
     use crate::constraint::constraints::Reason;
     use tamarin_term::lterm::{LSort, LVar};
 
-    fn n(name: &str) -> NodeId { LVar::new(name, LSort::Node, 0) }
+    fn n(name: &str) -> NodeId {
+        LVar::new(name, LSort::Node, 0)
+    }
 
     #[test]
     fn empty_system_has_no_contradictions() {
@@ -1970,9 +2322,9 @@ mod tests {
         use crate::constraint::system::System;
         use crate::fact::{Fact, FactTag, Multiplicity};
         use crate::rule::{
-    Rule, ProtoRuleACInstInfo, ProtoRuleName, RuleAttributes,
-    RuleInfo, IntrRuleACInfo, RuleACInst, ConcIdx, PremIdx,
-};
+            ConcIdx, IntrRuleACInfo, PremIdx, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleACInst,
+            RuleAttributes, RuleInfo,
+        };
         use tamarin_term::builtin::msg_var;
         use tamarin_term::maude_proc::MaudeHandle;
 
@@ -2031,22 +2383,34 @@ mod tests {
 
         // Build the proof context that knows `Inj` is injective.
         fn maude_path() -> Option<String> {
-            if let Ok(p) = std::env::var("MAUDE_PATH") { return Some(p); }
+            if let Ok(p) = std::env::var("MAUDE_PATH") {
+                return Some(p);
+            }
             for c in ["/usr/local/bin/maude", "maude"] {
-                if std::path::Path::new(c).exists() { return Some(c.to_string()); }
+                if std::path::Path::new(c).exists() {
+                    return Some(c.to_string());
+                }
             }
             None
         }
-        let mp = match maude_path() { Some(p) => p, None => return };
+        let mp = match maude_path() {
+            Some(p) => p,
+            None => return,
+        };
         let h = MaudeHandle::start(&mp, tamarin_term::maude_sig::pair_maude_sig()).unwrap();
         let mut ctx = ProofContext::new(h, Vec::new());
         ctx.injective_fact_insts = vec![(inj_tag.clone(), Vec::new())];
 
         let cs = contradictions(&ctx, &sys);
-        let injs: Vec<_> = cs.iter().filter(|c| matches!(c,
-            Contradiction::NonInjectiveFactInstance(_, _, _))).collect();
-        assert!(!injs.is_empty(),
-            "expected at least one NonInjectiveFactInstance contradiction; got {:?}", cs);
+        let injs: Vec<_> = cs
+            .iter()
+            .filter(|c| matches!(c, Contradiction::NonInjectiveFactInstance(_, _, _)))
+            .collect();
+        assert!(
+            !injs.is_empty(),
+            "expected at least one NonInjectiveFactInstance contradiction; got {:?}",
+            cs
+        );
     }
 
     /// Two LVars sharing `(name, idx)` but with disjoint sub-sorts
@@ -2057,8 +2421,8 @@ mod tests {
         use crate::constraint::system::System;
         use crate::fact::{Fact, FactTag, Multiplicity};
         use crate::rule::{
-            Rule, ProtoRuleACInstInfo, ProtoRuleName, RuleAttributes,
-            RuleInfo, IntrRuleACInfo, RuleACInst,
+            IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleACInst, RuleAttributes,
+            RuleInfo,
         };
 
         // Build a system with two nodes, each containing an action
@@ -2066,10 +2430,10 @@ mod tests {
         let pub_var = LVar::new("x", LSort::Pub, 58);
         let fresh_var = LVar::new("x", LSort::Fresh, 58);
         let tag = FactTag::Proto(Multiplicity::Linear, "X", 1);
-        let pub_term = tamarin_term::term::Term::Lit(
-            tamarin_term::vterm::Lit::Var(pub_var.clone()));
-        let fresh_term = tamarin_term::term::Term::Lit(
-            tamarin_term::vterm::Lit::Var(fresh_var.clone()));
+        let pub_term =
+            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(pub_var.clone()));
+        let fresh_term =
+            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(fresh_var.clone()));
         let mk_rule = |name: &str, t| -> RuleACInst {
             Rule::new(
                 RuleInfo::<ProtoRuleACInstInfo, IntrRuleACInfo>::Proto(ProtoRuleACInstInfo {
@@ -2084,9 +2448,14 @@ mod tests {
         };
         let mut sys = System::empty();
         sys.add_node(LVar::new("i", LSort::Node, 1), mk_rule("R_pub", pub_term));
-        sys.add_node(LVar::new("j", LSort::Node, 2), mk_rule("R_fresh", fresh_term));
-        assert!(has_sort_conflated_lvars(&sys),
-            "expected sort-conflict between ~mw:Pub 58 and ~mw:Fresh 58");
+        sys.add_node(
+            LVar::new("j", LSort::Node, 2),
+            mk_rule("R_fresh", fresh_term),
+        );
+        assert!(
+            has_sort_conflated_lvars(&sys),
+            "expected sort-conflict between ~mw:Pub 58 and ~mw:Fresh 58"
+        );
     }
 
     /// Pub vs Msg should NOT be flagged — Msg is the join sort and
@@ -2096,8 +2465,8 @@ mod tests {
         use crate::constraint::system::System;
         use crate::fact::{Fact, FactTag, Multiplicity};
         use crate::rule::{
-            Rule, ProtoRuleACInstInfo, ProtoRuleName, RuleAttributes,
-            RuleInfo, IntrRuleACInfo, RuleACInst,
+            IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleACInst, RuleAttributes,
+            RuleInfo,
         };
         let pub_var = LVar::new("x", LSort::Pub, 58);
         let msg_var = LVar::new("x", LSort::Msg, 58);
@@ -2109,18 +2478,30 @@ mod tests {
                     attributes: RuleAttributes::empty(),
                     loop_breakers: Vec::new(),
                 }),
-                vec![], vec![Fact::new(tag.clone(), vec![t])], vec![],
+                vec![],
+                vec![Fact::new(tag.clone(), vec![t])],
+                vec![],
             )
         };
         let mut sys = System::empty();
-        sys.add_node(LVar::new("i", LSort::Node, 1),
-            mk("R_p", tamarin_term::term::Term::Lit(
-                tamarin_term::vterm::Lit::Var(pub_var))));
-        sys.add_node(LVar::new("j", LSort::Node, 2),
-            mk("R_m", tamarin_term::term::Term::Lit(
-                tamarin_term::vterm::Lit::Var(msg_var))));
-        assert!(!has_sort_conflated_lvars(&sys),
-            "Pub vs Msg should NOT be flagged (Msg is join sort)");
+        sys.add_node(
+            LVar::new("i", LSort::Node, 1),
+            mk(
+                "R_p",
+                tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(pub_var)),
+            ),
+        );
+        sys.add_node(
+            LVar::new("j", LSort::Node, 2),
+            mk(
+                "R_m",
+                tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(msg_var)),
+            ),
+        );
+        assert!(
+            !has_sort_conflated_lvars(&sys),
+            "Pub vs Msg should NOT be flagged (Msg is join sort)"
+        );
     }
 
     /// `isForbiddenDPMult` (Contradictions.hs) gates ONLY on the
@@ -2132,7 +2513,7 @@ mod tests {
     #[test]
     fn forbidden_d_pmult_fires_without_pmult_rule_name() {
         use crate::fact::{Fact, FactTag};
-        use crate::rule::{Rule, RuleInfo, ProtoRuleACInstInfo, IntrRuleACInfo, RuleACInst};
+        use crate::rule::{IntrRuleACInfo, ProtoRuleACInstInfo, Rule, RuleACInst, RuleInfo};
         use tamarin_term::builtin::{msg_var, pmult, pub_var};
 
         // p (point) is Pub → neverContainsFreshPriv p == true.
@@ -2150,9 +2531,13 @@ mod tests {
             vec![kd(pmult(b.clone(), p.clone()))],
             vec![],
         );
-        assert!(!crate::rule::is_d_pmult_rule(&ru),
-            "guard precondition: this rule is NOT a _pmult DestrRule");
-        assert!(super::is_forbidden_d_pmult(&ru),
-            "HS isForbiddenDPMult fires on the pmult shape regardless of rule name");
+        assert!(
+            !crate::rule::is_d_pmult_rule(&ru),
+            "guard precondition: this rule is NOT a _pmult DestrRule"
+        );
+        assert!(
+            super::is_forbidden_d_pmult(&ru),
+            "HS isForbiddenDPMult fires on the pmult shape regardless of rule name"
+        );
     }
 }

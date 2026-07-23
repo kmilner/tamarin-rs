@@ -325,4 +325,3 @@ fn big_or(tos: &[&Pos], progress_to: &impl Fn(&[i64]) -> p::Formula) -> p::Formu
         ),
     }
 }
-

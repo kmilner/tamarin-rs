@@ -19,9 +19,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::function_symbols::{
-    AcSym, Constructability, NoEqFunSig, NoEqSym, Privacy,
-};
+use crate::function_symbols::{AcSym, Constructability, NoEqFunSig, NoEqSym, Privacy};
 use crate::lterm::{LNTerm, LSort, LVar};
 use crate::rewriting::RRule;
 use crate::term::{f_app_ac, f_app_no_eq, Term};
@@ -41,26 +39,64 @@ fn pub_dest(name: &[u8], arity: usize) -> NoEqSym {
     NoEqSym::new(name, arity, Privacy::Public, Constructability::Destructor)
 }
 
-pub fn sdec_sym() -> NoEqSym { pub_ctor(b"sdec", 2) }
-pub fn senc_sym() -> NoEqSym { pub_ctor(b"senc", 2) }
-pub fn adec_sym() -> NoEqSym { pub_ctor(b"adec", 2) }
-pub fn aenc_sym() -> NoEqSym { pub_ctor(b"aenc", 2) }
-pub fn sign_sym() -> NoEqSym { pub_ctor(b"sign", 2) }
-pub fn reveal_sign_sym() -> NoEqSym { pub_ctor(b"revealSign", 2) }
-pub fn rep_sym() -> NoEqSym { priv_ctor(b"rep", 2) }
-pub fn check_rep_sym() -> NoEqSym { pub_dest(b"check_rep", 2) }
-pub fn verify_sym() -> NoEqSym { pub_ctor(b"verify", 3) }
-pub fn reveal_verify_sym() -> NoEqSym { pub_ctor(b"revealVerify", 3) }
-pub fn pk_sym() -> NoEqSym { pub_ctor(b"pk", 1) }
-pub fn hash_sym() -> NoEqSym { pub_ctor(b"h", 1) }
-pub fn extract_message_sym() -> NoEqSym { pub_ctor(b"getMessage", 1) }
-pub fn get_rep_sym() -> NoEqSym { pub_dest(b"get_rep", 1) }
-pub fn report_sym() -> NoEqSym { pub_ctor(b"report", 1) }
-pub fn true_sym() -> NoEqSym { pub_ctor(b"true", 0) }
+pub fn sdec_sym() -> NoEqSym {
+    pub_ctor(b"sdec", 2)
+}
+pub fn senc_sym() -> NoEqSym {
+    pub_ctor(b"senc", 2)
+}
+pub fn adec_sym() -> NoEqSym {
+    pub_ctor(b"adec", 2)
+}
+pub fn aenc_sym() -> NoEqSym {
+    pub_ctor(b"aenc", 2)
+}
+pub fn sign_sym() -> NoEqSym {
+    pub_ctor(b"sign", 2)
+}
+pub fn reveal_sign_sym() -> NoEqSym {
+    pub_ctor(b"revealSign", 2)
+}
+pub fn rep_sym() -> NoEqSym {
+    priv_ctor(b"rep", 2)
+}
+pub fn check_rep_sym() -> NoEqSym {
+    pub_dest(b"check_rep", 2)
+}
+pub fn verify_sym() -> NoEqSym {
+    pub_ctor(b"verify", 3)
+}
+pub fn reveal_verify_sym() -> NoEqSym {
+    pub_ctor(b"revealVerify", 3)
+}
+pub fn pk_sym() -> NoEqSym {
+    pub_ctor(b"pk", 1)
+}
+pub fn hash_sym() -> NoEqSym {
+    pub_ctor(b"h", 1)
+}
+pub fn extract_message_sym() -> NoEqSym {
+    pub_ctor(b"getMessage", 1)
+}
+pub fn get_rep_sym() -> NoEqSym {
+    pub_dest(b"get_rep", 1)
+}
+pub fn report_sym() -> NoEqSym {
+    pub_ctor(b"report", 1)
+}
+pub fn true_sym() -> NoEqSym {
+    pub_ctor(b"true", 0)
+}
 
-pub fn sdec_dest_sym() -> NoEqSym { sdec_sym().with_destructor() }
-pub fn adec_dest_sym() -> NoEqSym { adec_sym().with_destructor() }
-pub fn verify_dest_sym() -> NoEqSym { verify_sym().with_destructor() }
+pub fn sdec_dest_sym() -> NoEqSym {
+    sdec_sym().with_destructor()
+}
+pub fn adec_dest_sym() -> NoEqSym {
+    adec_sym().with_destructor()
+}
+pub fn verify_dest_sym() -> NoEqSym {
+    verify_sym().with_destructor()
+}
 
 // =============================================================================
 // Builtin signatures
@@ -70,20 +106,36 @@ fn sig(items: impl IntoIterator<Item = NoEqSym>) -> NoEqFunSig {
     items.into_iter().collect()
 }
 
-pub fn sym_enc_fun_sig() -> NoEqFunSig { sig([sdec_sym(), senc_sym()]) }
-pub fn asym_enc_fun_sig() -> NoEqFunSig { sig([adec_sym(), aenc_sym(), pk_sym()]) }
+pub fn sym_enc_fun_sig() -> NoEqFunSig {
+    sig([sdec_sym(), senc_sym()])
+}
+pub fn asym_enc_fun_sig() -> NoEqFunSig {
+    sig([adec_sym(), aenc_sym(), pk_sym()])
+}
 pub fn signature_fun_sig() -> NoEqFunSig {
     sig([sign_sym(), verify_sym(), true_sym(), pk_sym()])
 }
 pub fn reveal_signature_fun_sig() -> NoEqFunSig {
-    sig([reveal_sign_sym(), reveal_verify_sym(), extract_message_sym(), true_sym(), pk_sym()])
+    sig([
+        reveal_sign_sym(),
+        reveal_verify_sym(),
+        extract_message_sym(),
+        true_sym(),
+        pk_sym(),
+    ])
 }
 pub fn location_report_fun_sig() -> NoEqFunSig {
     sig([rep_sym(), check_rep_sym(), get_rep_sym(), report_sym()])
 }
-pub fn hash_fun_sig() -> NoEqFunSig { sig([hash_sym()]) }
-pub fn sym_enc_fun_dest_sig() -> NoEqFunSig { sig([sdec_dest_sym(), senc_sym()]) }
-pub fn asym_enc_fun_dest_sig() -> NoEqFunSig { sig([adec_dest_sym(), aenc_sym(), pk_sym()]) }
+pub fn hash_fun_sig() -> NoEqFunSig {
+    sig([hash_sym()])
+}
+pub fn sym_enc_fun_dest_sig() -> NoEqFunSig {
+    sig([sdec_dest_sym(), senc_sym()])
+}
+pub fn asym_enc_fun_dest_sig() -> NoEqFunSig {
+    sig([adec_dest_sym(), aenc_sym(), pk_sym()])
+}
 pub fn signature_fun_dest_sig() -> NoEqFunSig {
     sig([sign_sym(), verify_dest_sym(), true_sym(), pk_sym()])
 }
@@ -225,7 +277,10 @@ pub fn dh_rules() -> BTreeSet<RRule<LNTerm>> {
         mult(inv(mult(x1.clone(), x2.clone())), x3.clone()),
     ));
     s.insert(rule(
-        mult(inv(mult(x1.clone(), x2.clone())), mult(x2.clone(), x3.clone())),
+        mult(
+            inv(mult(x1.clone(), x2.clone())),
+            mult(x2.clone(), x3.clone()),
+        ),
         mult(inv(x1.clone()), x3.clone()),
     ));
     s
@@ -239,7 +294,10 @@ pub fn xor_rules() -> BTreeSet<RRule<LNTerm>> {
     let mut s = BTreeSet::new();
     s.insert(rule(xor(x1.clone(), zero.clone()), x1.clone()));
     s.insert(rule(xor(x1.clone(), x1.clone()), zero.clone()));
-    s.insert(rule(xor(x1.clone(), xor(x1.clone(), x2.clone())), x2.clone()));
+    s.insert(rule(
+        xor(x1.clone(), xor(x1.clone(), x2.clone())),
+        x2.clone(),
+    ));
     s
 }
 
@@ -263,7 +321,9 @@ pub fn bp_rules() -> BTreeSet<RRule<LNTerm>> {
 }
 
 /// `msetRules`: multisets have no rewrite rules.
-pub fn mset_rules() -> BTreeSet<RRule<LNTerm>> { BTreeSet::new() }
+pub fn mset_rules() -> BTreeSet<RRule<LNTerm>> {
+    BTreeSet::new()
+}
 
 // =============================================================================
 // Builtin subterm rules — direct port of `Term.Builtin.Rules`
@@ -284,11 +344,17 @@ pub fn pair_rules() -> BTreeSet<crate::subterm_rule::CtxtStRule> {
     let mut s = BTreeSet::new();
     s.insert(CtxtStRule::new(
         fst(pair(x1.clone(), x2.clone())),
-        StRhs { positions: vec![vec![0, 0]], term: x1.clone() },
+        StRhs {
+            positions: vec![vec![0, 0]],
+            term: x1.clone(),
+        },
     ));
     s.insert(CtxtStRule::new(
         snd(pair(x1.clone(), x2.clone())),
-        StRhs { positions: vec![vec![0, 1]], term: x2 },
+        StRhs {
+            positions: vec![vec![0, 1]],
+            term: x2,
+        },
     ));
     s
 }
@@ -304,14 +370,24 @@ pub fn pair_dest_rules() -> BTreeSet<crate::subterm_rule::CtxtStRule> {
     let x2 = msg_var("x", 2);
     let mut s = BTreeSet::new();
     s.insert(CtxtStRule::new(
-        f_app_no_eq(crate::function_symbols::fst_dest_sym(),
-                    vec![pair(x1.clone(), x2.clone())]),
-        StRhs { positions: vec![vec![0, 0]], term: x1.clone() },
+        f_app_no_eq(
+            crate::function_symbols::fst_dest_sym(),
+            vec![pair(x1.clone(), x2.clone())],
+        ),
+        StRhs {
+            positions: vec![vec![0, 0]],
+            term: x1.clone(),
+        },
     ));
     s.insert(CtxtStRule::new(
-        f_app_no_eq(crate::function_symbols::snd_dest_sym(),
-                    vec![pair(x1.clone(), x2.clone())]),
-        StRhs { positions: vec![vec![0, 1]], term: x2 },
+        f_app_no_eq(
+            crate::function_symbols::snd_dest_sym(),
+            vec![pair(x1.clone(), x2.clone())],
+        ),
+        StRhs {
+            positions: vec![vec![0, 1]],
+            term: x2,
+        },
     ));
     s
 }
@@ -324,7 +400,10 @@ pub fn sym_enc_rules() -> BTreeSet<crate::subterm_rule::CtxtStRule> {
     let mut s = BTreeSet::new();
     s.insert(CtxtStRule::new(
         sdec(senc(x1.clone(), x2.clone()), x2),
-        StRhs { positions: vec![vec![0, 0]], term: x1 },
+        StRhs {
+            positions: vec![vec![0, 0]],
+            term: x1,
+        },
     ));
     s
 }
@@ -337,7 +416,10 @@ pub fn asym_enc_rules() -> BTreeSet<crate::subterm_rule::CtxtStRule> {
     let mut s = BTreeSet::new();
     s.insert(CtxtStRule::new(
         adec(aenc(x1.clone(), pk(x2.clone())), x2),
-        StRhs { positions: vec![vec![0, 0]], term: x1 },
+        StRhs {
+            positions: vec![vec![0, 0]],
+            term: x1,
+        },
     ));
     s
 }
@@ -351,7 +433,10 @@ pub fn signature_rules() -> BTreeSet<crate::subterm_rule::CtxtStRule> {
     let mut s = BTreeSet::new();
     s.insert(CtxtStRule::new(
         verify(sign(x1.clone(), x2.clone()), x1, pk(x2)),
-        StRhs { positions: vec![vec![0, 0]], term: true_term },
+        StRhs {
+            positions: vec![vec![0, 0]],
+            term: true_term,
+        },
     ));
     s
 }
@@ -364,14 +449,27 @@ pub fn location_report_rules() -> BTreeSet<crate::subterm_rule::CtxtStRule> {
     let x2 = msg_var("x", 2);
     let mut s = BTreeSet::new();
     s.insert(CtxtStRule::new(
-        f_app_no_eq(check_rep_sym(),
-            vec![f_app_no_eq(rep_sym(), vec![x1.clone(), x2.clone()]), x2.clone()]),
-        StRhs { positions: vec![vec![0, 0]], term: x1.clone() },
+        f_app_no_eq(
+            check_rep_sym(),
+            vec![
+                f_app_no_eq(rep_sym(), vec![x1.clone(), x2.clone()]),
+                x2.clone(),
+            ],
+        ),
+        StRhs {
+            positions: vec![vec![0, 0]],
+            term: x1.clone(),
+        },
     ));
     s.insert(CtxtStRule::new(
-        f_app_no_eq(get_rep_sym(),
-            vec![f_app_no_eq(rep_sym(), vec![x1.clone(), x2.clone()])]),
-        StRhs { positions: vec![vec![0, 0]], term: x1 },
+        f_app_no_eq(
+            get_rep_sym(),
+            vec![f_app_no_eq(rep_sym(), vec![x1.clone(), x2.clone()])],
+        ),
+        StRhs {
+            positions: vec![vec![0, 0]],
+            term: x1,
+        },
     ));
     s
 }
@@ -386,7 +484,10 @@ pub fn sym_enc_dest_rules() -> BTreeSet<crate::subterm_rule::CtxtStRule> {
     let mut s = BTreeSet::new();
     s.insert(CtxtStRule::new(
         f_app_no_eq(sdec_dest_sym(), vec![senc(x1.clone(), x2.clone()), x2]),
-        StRhs { positions: vec![vec![0, 0]], term: x1 },
+        StRhs {
+            positions: vec![vec![0, 0]],
+            term: x1,
+        },
     ));
     s
 }
@@ -401,7 +502,10 @@ pub fn asym_enc_dest_rules() -> BTreeSet<crate::subterm_rule::CtxtStRule> {
     let mut s = BTreeSet::new();
     s.insert(CtxtStRule::new(
         f_app_no_eq(adec_dest_sym(), vec![aenc(x1.clone(), pk(x2.clone())), x2]),
-        StRhs { positions: vec![vec![0, 0]], term: x1 },
+        StRhs {
+            positions: vec![vec![0, 0]],
+            term: x1,
+        },
     ));
     s
 }
@@ -417,13 +521,21 @@ pub fn reveal_signature_rules() -> BTreeSet<crate::subterm_rule::CtxtStRule> {
     let mut s = BTreeSet::new();
     let reveal_sign_term = f_app_no_eq(reveal_sign_sym(), vec![x1.clone(), x2.clone()]);
     s.insert(CtxtStRule::new(
-        f_app_no_eq(reveal_verify_sym(),
-            vec![reveal_sign_term.clone(), x1.clone(), pk(x2)]),
-        StRhs { positions: vec![vec![0, 0]], term: true_term },
+        f_app_no_eq(
+            reveal_verify_sym(),
+            vec![reveal_sign_term.clone(), x1.clone(), pk(x2)],
+        ),
+        StRhs {
+            positions: vec![vec![0, 0]],
+            term: true_term,
+        },
     ));
     s.insert(CtxtStRule::new(
         f_app_no_eq(extract_message_sym(), vec![reveal_sign_term]),
-        StRhs { positions: vec![vec![0, 0]], term: x1 },
+        StRhs {
+            positions: vec![vec![0, 0]],
+            term: x1,
+        },
     ));
     s
 }
@@ -437,9 +549,14 @@ pub fn signature_dest_rules() -> BTreeSet<crate::subterm_rule::CtxtStRule> {
     let true_term: LNTerm = true_const::<crate::vterm::Lit<crate::lterm::Name, LVar>>();
     let mut s = BTreeSet::new();
     s.insert(CtxtStRule::new(
-        f_app_no_eq(verify_dest_sym(),
-            vec![sign(x1.clone(), x2.clone()), x1, pk(x2)]),
-        StRhs { positions: vec![vec![0, 0]], term: true_term },
+        f_app_no_eq(
+            verify_dest_sym(),
+            vec![sign(x1.clone(), x2.clone()), x1, pk(x2)],
+        ),
+        StRhs {
+            positions: vec![vec![0, 0]],
+            term: true_term,
+        },
     ));
     s
 }
@@ -470,7 +587,9 @@ mod tests {
         let m: LNTerm = mult(msg_var("x", 0), msg_var("y", 0));
         if let Term::App(FunSym::Ac(AcSym::Mult), ts) = m {
             assert_eq!(ts.len(), 2);
-        } else { panic!(); }
+        } else {
+            panic!();
+        }
     }
 
     #[test]

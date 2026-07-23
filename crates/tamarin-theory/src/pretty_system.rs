@@ -46,12 +46,12 @@ use tamarin_term::pretty::{pp_lvar, pretty_lnterm};
 // HS `flushRight n str` (Extension.Prelude): left-pad `str` with spaces to width n.
 use tamarin_utils::prelude_ext::flush_right;
 
-use crate::pretty_hpj::{fsep, punctuate, Doc};
 use crate::constraint::constraints::{Goal, NodeId};
 use crate::constraint::system::{SourceKind, System};
 use crate::fact::{fact_tag_name, LNFact};
 use crate::guarded::Guarded;
 use crate::pretty_formula::guarded_doc;
+use crate::pretty_hpj::{fsep, punctuate, Doc};
 
 /// Emit just the non-graph-part of the system, matching Haskell's
 /// `prettyNonGraphSystem` (System.hs:1675-1686):
@@ -73,7 +73,10 @@ pub fn pretty_non_graph_system(sys: &System) -> String {
         combine("subterms", pretty_subterm_store(sys)),
         combine("equations", pretty_eq_store(sys)),
         combine("lemmas", pretty_formula_set(&sys.lemmas)),
-        combine("allowed cases", Doc::text(pretty_source_kind(sys.source_kind))),
+        combine(
+            "allowed cases",
+            Doc::text(pretty_source_kind(sys.source_kind)),
+        ),
         combine("solved formulas", pretty_formula_set(&sys.solved_formulas)),
         combine("unsolved constraints", pretty_goals(sys, false)),
         combine("solved constraints", pretty_goals(sys, true)),
@@ -154,7 +157,9 @@ fn pretty_last(sys: &System) -> Doc {
 /// each formula is a real Doc (`guarded_doc`) and formulas are separated
 /// by a blank line (`vsep` = fold `$--$`).
 fn pretty_formula_set(items: &[std::sync::Arc<Guarded>]) -> Doc {
-    if items.is_empty() { return Doc::Empty; }
+    if items.is_empty() {
+        return Doc::Empty;
+    }
     let mut sorted: Vec<&Guarded> = items.iter().map(|f| f.as_ref()).collect();
     sorted.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
     sorted.dedup_by(|a, b| crate::guarded::cmp_guarded(a, b) == std::cmp::Ordering::Equal);
@@ -195,10 +200,7 @@ fn numbered(vsep: Doc, ds: Vec<Doc>) -> Doc {
 // collapses to `Doc::Empty` (which would be dropped by `$-$`), so we build
 // the zero-width text run explicitly via `blank_text`.
 fn numbered_prime(ds: Vec<Doc>) -> Doc {
-    let mapped: Vec<Doc> = ds
-        .into_iter()
-        .map(|d| Doc::text(". ").beside(d))
-        .collect();
+    let mapped: Vec<Doc> = ds.into_iter().map(|d| Doc::text(". ").beside(d)).collect();
     numbered(blank_text(), mapped)
 }
 
@@ -213,7 +215,10 @@ fn blank_text() -> Doc {
 // (SubtermStore.hs:569-581, see line 576 / EquationStore.hs:568-588, see line 574) — the section header is a
 // `keyword_` span, the colon is plain.  `keyword_` is the identity in plain mode.
 fn combine(header: &str, d: Doc) -> Doc {
-    fsep(vec![crate::pretty_hpj::keyword_(header).beside(Doc::char(':')), d.nest(2)])
+    fsep(vec![
+        crate::pretty_hpj::keyword_(header).beside(Doc::char(':')),
+        d.nest(2),
+    ])
 }
 
 // Faithful port of Haskell `prettySubtermStore` (SubtermStore.hs:569-581).
@@ -247,20 +252,15 @@ fn pretty_subterm_store(sys: &System) -> Doc {
         )
     };
 
-    let all_empty = st.neg_subterms.is_empty()
-        && st.subterms.is_empty()
-        && st.solved_subterms.is_empty();
+    let all_empty =
+        st.neg_subterms.is_empty() && st.subterms.is_empty() && st.solved_subterms.is_empty();
 
     let mut sections: Vec<Doc> = Vec::new();
     if st.contradictory {
         sections.push(combine("Contradictory", Doc::text("yes")));
     }
     if !all_empty {
-        let neg: Vec<Doc> = st
-            .neg_subterms
-            .iter()
-            .map(|(a, b)| pp_st(a, b))
-            .collect();
+        let neg: Vec<Doc> = st.neg_subterms.iter().map(|(a, b)| pp_st(a, b)).collect();
         sections.push(combine("Negative Subterms", numbered_prime(neg)));
 
         let pos: Vec<Doc> = st
@@ -347,7 +347,10 @@ fn pp_subst_vfresh(subst: &crate::tools::equation_store::LNSubstVFresh) -> Doc {
 }
 
 // HS `ppEq (a,b) = prettyNTerm (lit (Var a)) $$ nest 6 (opEqual <-> prettyNTerm b)`
-fn pp_eq(a: &tamarin_term::lterm::LVar, b: &tamarin_term::vterm::VTerm<tamarin_term::lterm::Name, tamarin_term::lterm::LVar>) -> Doc {
+fn pp_eq(
+    a: &tamarin_term::lterm::LVar,
+    b: &tamarin_term::vterm::VTerm<tamarin_term::lterm::Name, tamarin_term::lterm::LVar>,
+) -> Doc {
     Doc::text(lvar_to_string(a)).above(
         crate::pretty_hpj::operator_("=") // opEqual
             .beside_sp(lnterm_doc(b))
@@ -422,11 +425,12 @@ fn vcat_doc(ds: Vec<Doc>) -> Doc {
 fn pretty_goals(sys: &System, want_solved: bool) -> Doc {
     // `M.toList sGoals` yields Goal-Ord; RS stores goals in a Vec (creation
     // order), so sort by the solver's `goal_cmp` before rendering.
-    let mut ordered: Vec<_> = sys.goals.iter()
+    let mut ordered: Vec<_> = sys
+        .goals
+        .iter()
         .filter(|(_, st)| st.solved == want_solved)
         .collect();
-    ordered.sort_by(|a, b|
-        crate::constraint::solver::goals::goal_cmp(&a.0, &b.0));
+    ordered.sort_by(|a, b| crate::constraint::solver::goals::goal_cmp(&a.0, &b.0));
     let mut items: Vec<Doc> = Vec::with_capacity(ordered.len());
     for (g, st) in ordered {
         // sourceRule = HS `goalRule sys goal` → `nodeRuleSafe (goalNodeId g)`.
@@ -441,17 +445,13 @@ fn pretty_goals(sys: &System, want_solved: bool) -> Doc {
         };
         let loop_breaker = if st.looping { " (loop breaker)" } else { "" };
         // `show useful` — HS wraps the annotation string in literal quotes.
-        let useful = crate::constraint::solver::goals::goal_useful_annotation(
-            g, st.looping, sys);
+        let useful = crate::constraint::solver::goals::goal_useful_annotation(g, st.looping, sys);
         // HS `prettyGoal goal <-> lineComment_ (...)` where `lineComment_ =
         // lineComment . text` and `lineComment d = comment $ text "//" <-> d`
         // (Pretty.hs:96-100).  The comment is PART of the goal's Doc, so its
         // width participates in the goal's own layout decisions (a goal near
         // the ribbon wraps because of its trailing comment, exactly as HS).
-        let comment = format!(
-            "nr: {}{}{}\"{}\"",
-            st.nr, source_rule, loop_breaker, useful,
-        );
+        let comment = format!("nr: {}{}{}\"{}\"", st.nr, source_rule, loop_breaker, useful,);
         items.push(
             crate::pretty_theory::solve_goal_to_doc(g)
                 .beside_sp(crate::pretty_hpj::line_comment_(&comment)),
@@ -541,8 +541,14 @@ mod tests {
         let s = System::default();
         let out = pretty_non_graph_system(&s);
         for h in &[
-            "last:", "formulas:", "subterms:", "equations:", "lemmas:",
-            "allowed cases:", "solved formulas:", "unsolved constraints:",
+            "last:",
+            "formulas:",
+            "subterms:",
+            "equations:",
+            "lemmas:",
+            "allowed cases:",
+            "solved formulas:",
+            "unsolved constraints:",
             "solved constraints:",
         ] {
             assert!(out.contains(h), "missing header {} in:\n{}", h, out);
@@ -569,8 +575,10 @@ mod tests {
                 propagated: false,
             }],
             contradictory: true,
-            neg_subterms: crate::tools::subterm_store::SortedPairSet::rebuild_from(
-                vec![(v("p", LSort::Msg), v("q", LSort::Msg))]),
+            neg_subterms: crate::tools::subterm_store::SortedPairSet::rebuild_from(vec![(
+                v("p", LSort::Msg),
+                v("q", LSort::Msg),
+            )]),
             old_neg_subterms: crate::tools::subterm_store::SortedPairSet::default(),
         };
         let mut sys = System::empty();
@@ -592,7 +600,10 @@ mod tests {
 
         let mut eq = EquationStore::empty();
         // An empty disjunction makes the store contradictory.
-        eq.conj.push(EqDisj { split_id: SplitId(0), substs: vec![] });
+        eq.conj.push(EqDisj {
+            split_id: SplitId(0),
+            substs: vec![],
+        });
         let mut sys = System::empty();
         sys.set_eq_store(std::sync::Arc::new(eq));
         let out = pretty_eq_store(&sys).render();
@@ -626,9 +637,7 @@ mod tests {
         let pube = |s: &str| p::Term::PubLit(s.to_string());
         let app = |n: &str, args: Vec<p::Term>| p::Term::App(n.to_string(), args);
         let pair = p::Term::Pair;
-        let exp = |l: p::Term, r: p::Term| {
-            p::Term::BinOp(p::BinOp::Exp, Box::new(l), Box::new(r))
-        };
+        let exp = |l: p::Term, r: p::Term| p::Term::BinOp(p::BinOp::Exp, Box::new(l), Box::new(r));
         let a5 = || var("A", 5, p::SortHint::Pub);
         let b5 = || var("B", 5, p::SortHint::Pub);
         let y5 = || var("Y", 5, p::SortHint::Msg);
@@ -647,7 +656,10 @@ mod tests {
         };
         let h_arg = || pair(vec![z5(), g_eax5(), a5(), b5(), g_ex5(), y5()]);
         let mac = |snd: p::Term| {
-            app("MAC", vec![app("first", vec![app("h", vec![h_arg()])]), snd])
+            app(
+                "MAC",
+                vec![app("first", vec![app("h", vec![h_arg()])]), snd],
+            )
         };
         let t1 = pair(vec![pube("1"), g_ex5()]);
         let t2 = pair(vec![

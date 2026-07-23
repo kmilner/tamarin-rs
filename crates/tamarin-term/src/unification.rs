@@ -85,10 +85,7 @@ pub fn unify_lnterm_no_ac_with_counter(
 ///
 /// Intentionally retained for parity with HS `unifiableLNTermsNoAC`; no
 /// current Rust caller in the prover.
-pub fn unifiable_lnterms_no_ac(
-    a: crate::lterm::LNTerm,
-    b: crate::lterm::LNTerm,
-) -> bool {
+pub fn unifiable_lnterms_no_ac(a: crate::lterm::LNTerm, b: crate::lterm::LNTerm) -> bool {
     unify_lnterm_no_ac(vec![Equal::new(a, b)]).is_ok()
 }
 
@@ -105,7 +102,10 @@ fn delay_or_needs_ac<C: Clone>(
 ) -> Result<(), UnifyError> {
     match delayed {
         Some(d) => {
-            d.push(Equal { lhs: l.clone(), rhs: r.clone() });
+            d.push(Equal {
+                lhs: l.clone(),
+                rhs: r.clone(),
+            });
             Ok(())
         }
         None => Err(UnifyError::NeedsAC),
@@ -162,13 +162,21 @@ where
                 }
                 Some(Ordering::Greater) => {
                     // vl > vr (vl is broader) → bind vl to vr.
-                    eliminate(sort_of_const, acc,
-                        vl.clone(), Term::Lit(Lit::Var(vr.clone())))
+                    eliminate(
+                        sort_of_const,
+                        acc,
+                        vl.clone(),
+                        Term::Lit(Lit::Var(vr.clone())),
+                    )
                 }
                 Some(Ordering::Less) => {
                     // vl < vr (vr is broader) → bind vr to vl.
-                    eliminate(sort_of_const, acc,
-                        vr.clone(), Term::Lit(Lit::Var(vl.clone())))
+                    eliminate(
+                        sort_of_const,
+                        acc,
+                        vr.clone(),
+                        Term::Lit(Lit::Var(vl.clone())),
+                    )
                 }
                 None => Err(UnifyError::NoUnifier),
             }
@@ -176,7 +184,11 @@ where
         (Term::Lit(Lit::Var(vl)), _) => eliminate(sort_of_const, acc, vl.clone(), r.clone()),
         (_, Term::Lit(Lit::Var(vr))) => eliminate(sort_of_const, acc, vr.clone(), l.clone()),
         (Term::Lit(Lit::Con(cl)), Term::Lit(Lit::Con(cr))) => {
-            if cl == cr { Ok(()) } else { Err(UnifyError::NoUnifier) }
+            if cl == cr {
+                Ok(())
+            } else {
+                Err(UnifyError::NoUnifier)
+            }
         }
         (Term::App(FunSym::NoEq(lf), la), Term::App(FunSym::NoEq(rf), ra))
             if lf == rf && la.len() == ra.len() =>
@@ -196,18 +208,20 @@ where
         // a nullary NoEq vs a NatPlus sum unifies only when the nullary
         // symbol is `natOne`; otherwise no unifier.  When it is natOne,
         // Haskell `tell`s the equation for Maude (delay-or-NeedsAC).
-        (Term::App(FunSym::NoEq(lf), la), Term::App(FunSym::Ac(crate::function_symbols::AcSym::NatPlus), _))
-            if la.is_empty() =>
-        {
+        (
+            Term::App(FunSym::NoEq(lf), la),
+            Term::App(FunSym::Ac(crate::function_symbols::AcSym::NatPlus), _),
+        ) if la.is_empty() => {
             if *lf == crate::function_symbols::nat_one_sym() {
                 delay_or_needs_ac(delayed.as_deref_mut(), &l, &r)
             } else {
                 Err(UnifyError::NoUnifier)
             }
         }
-        (Term::App(FunSym::Ac(crate::function_symbols::AcSym::NatPlus), _), Term::App(FunSym::NoEq(rf), ra))
-            if ra.is_empty() =>
-        {
+        (
+            Term::App(FunSym::Ac(crate::function_symbols::AcSym::NatPlus), _),
+            Term::App(FunSym::NoEq(rf), ra),
+        ) if ra.is_empty() => {
             if *rf == crate::function_symbols::nat_one_sym() {
                 delay_or_needs_ac(delayed.as_deref_mut(), &l, &r)
             } else {
@@ -299,10 +313,13 @@ where
     // Apply the freshly-built subst to the delayed residuals so Maude
     // sees the most-refined form (mirrors Haskell's
     // `map (applyVTerm subst <$>) leqs`).
-    let delayed = delayed.into_iter().map(|Equal { lhs, rhs }| Equal {
-        lhs: apply_vterm(&subst, lhs),
-        rhs: apply_vterm(&subst, rhs),
-    }).collect();
+    let delayed = delayed
+        .into_iter()
+        .map(|Equal { lhs, rhs }| Equal {
+            lhs: apply_vterm(&subst, lhs),
+            rhs: apply_vterm(&subst, rhs),
+        })
+        .collect();
     Some((subst, delayed))
 }
 
@@ -344,9 +361,16 @@ where
 fn sort_geq_lterm<C, F: Fn(&C) -> LSort>(sort_of_const: &F, v: &LVar, t: &LTerm<C>) -> bool {
     let s_t = sort_of_lterm(t, |c| sort_of_const(c));
     let s_v = v.sort;
-    if s_v == s_t { return true; }
-    if s_v == LSort::Node || s_t == LSort::Node { return false; }
-    matches!(sort_compare(s_v, s_t), Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater))
+    if s_v == s_t {
+        return true;
+    }
+    if s_v == LSort::Node || s_t == LSort::Node {
+        return false;
+    }
+    matches!(
+        sort_compare(s_v, s_t),
+        Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater)
+    )
 }
 
 // =============================================================================
@@ -408,10 +432,7 @@ pub enum MatchOutcome<C> {
 /// AC-headed subject is bound natively (HS `matchRaw` checks the
 /// `(_, Lit (Var vp))` arm first, `Unification.hs:316-350, see line 317`) — so a `tamxor`
 /// buried under a variable pattern never triggers a Maude call.
-pub fn solve_match_lterm<C, F>(
-    sort_of_const: &F,
-    problem: Match<LTerm<C>>,
-) -> MatchOutcome<C>
+pub fn solve_match_lterm<C, F>(sort_of_const: &F, problem: Match<LTerm<C>>) -> MatchOutcome<C>
 where
     C: Ord + Clone,
     F: Fn(&C) -> LSort,
@@ -446,7 +467,9 @@ where
     match p {
         Term::Lit(Lit::Var(vp)) => {
             if let Some(existing) = mapping.get(&vp) {
-                if existing == &t { return Ok(()); }
+                if existing == &t {
+                    return Ok(());
+                }
                 return Err(UnifyError::NoUnifier);
             }
             if !sort_geq_lterm(sort_of_const, &vp, &t) {
@@ -571,9 +594,11 @@ mod tests {
         // mult(a,b) vs union(c,d): different AC symbols → HS `mzero`.
         let lhs: LNTerm = mult(msg_var("a", 0), msg_var("b", 0));
         let rhs: LNTerm = union(msg_var("c", 0), msg_var("d", 0));
-        assert!(unify_lnterm_factored(vec![Equal::new(lhs, rhs)]).is_none(),
-                "different AC symbols (mult vs union) must yield no unifier, \
-                 not a residual shipped to Maude");
+        assert!(
+            unify_lnterm_factored(vec![Equal::new(lhs, rhs)]).is_none(),
+            "different AC symbols (mult vs union) must yield no unifier, \
+                 not a residual shipped to Maude"
+        );
     }
 
     #[test]
@@ -581,8 +606,10 @@ mod tests {
         // mult(a,b) vs pk(x): AC-vs-NoEq → falls through to HS `_ -> mzero`.
         let lhs: LNTerm = mult(msg_var("a", 0), msg_var("b", 0));
         let rhs: LNTerm = pk(msg_var("x", 0));
-        assert!(unify_lnterm_factored(vec![Equal::new(lhs, rhs)]).is_none(),
-                "AC vs non-AC must yield no unifier (HS mzero), not a residual");
+        assert!(
+            unify_lnterm_factored(vec![Equal::new(lhs, rhs)]).is_none(),
+            "AC vs non-AC must yield no unifier (HS mzero), not a residual"
+        );
     }
 
     #[test]
@@ -591,11 +618,14 @@ mod tests {
         // i.e. a single residual delayed for Maude, with an empty local subst.
         let lhs: LNTerm = mult(msg_var("a", 0), msg_var("b", 0));
         let rhs: LNTerm = mult(msg_var("c", 0), msg_var("d", 0));
-        let (subst, residuals) =
-            unify_lnterm_factored(vec![Equal::new(lhs, rhs)])
-                .expect("same AC symbol must delay (Some), not fail");
+        let (subst, residuals) = unify_lnterm_factored(vec![Equal::new(lhs, rhs)])
+            .expect("same AC symbol must delay (Some), not fail");
         assert!(subst.is_empty(), "no non-AC bindings");
-        assert_eq!(residuals.len(), 1, "exactly one AC equation delayed for Maude");
+        assert_eq!(
+            residuals.len(),
+            1,
+            "exactly one AC equation delayed for Maude"
+        );
     }
 
     #[test]
@@ -639,7 +669,9 @@ mod tests {
     // when it appears AC-vs-AC; under a variable pattern, or facing a
     // variable subject, it resolves natively (Matched / NoMatcher).
     // -------------------------------------------------------------------
-    fn sn(n: &crate::lterm::Name) -> LSort { crate::lterm::sort_of_name(n) }
+    fn sn(n: &crate::lterm::Name) -> LSort {
+        crate::lterm::sort_of_name(n)
+    }
 
     #[test]
     fn match_ac_subterm_under_var_pattern_is_matched_no_maude() {
@@ -649,8 +681,13 @@ mod tests {
         let p: LNTerm = msg_var("x", 0);
         match solve_match_lterm(&sn, Match::match_with(t, p)) {
             MatchOutcome::Matched(s) => assert_eq!(s.len(), 1),
-            o => panic!("expected Matched, got {:?}", match o {
-                MatchOutcome::NoMatcher => "NoMatcher", _ => "NeedsAc" }),
+            o => panic!(
+                "expected Matched, got {:?}",
+                match o {
+                    MatchOutcome::NoMatcher => "NoMatcher",
+                    _ => "NeedsAc",
+                }
+            ),
         }
     }
 
@@ -698,7 +735,8 @@ mod tests {
         let p2: LNTerm = pair(msg_var("a", 0), msg_var("b", 0));
         assert!(matches!(
             solve_match_lterm(&sn, Match::match_with(t2, p2)),
-            MatchOutcome::NoMatcher));
+            MatchOutcome::NoMatcher
+        ));
     }
 }
 
@@ -759,7 +797,10 @@ mod haskell_invariants {
         // idx-first means "z.1" < "a.5".
         let za = LVar::new("z", LSort::Msg, 1);
         let aa = LVar::new("a", LSort::Msg, 5);
-        assert!(za < aa, "name 'z' idx 1 must be < name 'a' idx 5 (idx-first)");
+        assert!(
+            za < aa,
+            "name 'z' idx 1 must be < name 'a' idx 5 (idx-first)"
+        );
 
         // Same idx and sort, name as tiebreaker.
         let ax = LVar::new("a", LSort::Msg, 3);
@@ -784,8 +825,11 @@ mod haskell_invariants {
         m.insert(LVar::new("a", LSort::Msg, 10), 'b');
         m.insert(LVar::new("m", LSort::Msg, 5), 'c');
         let keys_in_order: Vec<u64> = m.keys().map(|k| k.idx).collect();
-        assert_eq!(keys_in_order, vec![1, 5, 10],
-                   "BTreeMap iterates LVars in idx order, NOT name order");
+        assert_eq!(
+            keys_in_order,
+            vec![1, 5, 10],
+            "BTreeMap iterates LVars in idx order, NOT name order"
+        );
     }
 
     // -------------------------------------------------------------------
@@ -816,14 +860,18 @@ mod haskell_invariants {
         assert!(residuals.is_empty(), "no AC stuff, no residuals");
         // Larger-idx (e.10) is the key.
         let e_10 = as_var(&rule_internal).clone();
-        let t_1  = as_var(&stable).clone();
-        assert!(subst.image_of(&e_10).is_some(),
-                "Haskell convention: larger-idx (e.10) must be a KEY");
-        assert!(subst.image_of(&t_1).is_none(),
-                "Haskell convention: smaller-idx (t.1, stable) must NOT be a key — \
+        let t_1 = as_var(&stable).clone();
+        assert!(
+            subst.image_of(&e_10).is_some(),
+            "Haskell convention: larger-idx (e.10) must be a KEY"
+        );
+        assert!(
+            subst.image_of(&t_1).is_none(),
+            "Haskell convention: smaller-idx (t.1, stable) must NOT be a key — \
                  otherwise `restrict stableVars` would keep it and downstream \
                  applySource would see a baked-in binding instead of an \
-                 unbound stable var");
+                 unbound stable var"
+        );
     }
 
     #[test]
@@ -833,19 +881,20 @@ mod haskell_invariants {
         let stable = msg_var("t", 1);
         let rule_internal = msg_var("e", 10);
 
-        let (s1, _) = unify_lnterm_factored(vec![Equal::new(
-            stable.clone(), rule_internal.clone()
-        )]).unwrap();
-        let (s2, _) = unify_lnterm_factored(vec![Equal::new(
-            rule_internal.clone(), stable.clone()
-        )]).unwrap();
+        let (s1, _) =
+            unify_lnterm_factored(vec![Equal::new(stable.clone(), rule_internal.clone())]).unwrap();
+        let (s2, _) =
+            unify_lnterm_factored(vec![Equal::new(rule_internal.clone(), stable.clone())]).unwrap();
 
         let e_10 = as_var(&rule_internal).clone();
         // Both directions: e.10 (larger idx) is the key, regardless of
         // whether it was on lhs or rhs of the equation.
         assert!(s1.image_of(&e_10).is_some());
         assert!(s2.image_of(&e_10).is_some());
-        assert_eq!(s1, s2, "orientation is determined by Ord LVar, not input order");
+        assert_eq!(
+            s1, s2,
+            "orientation is determined by Ord LVar, not input order"
+        );
     }
 
     #[test]
@@ -853,16 +902,17 @@ mod haskell_invariants {
         // When idx ties, Haskell falls back to sort then name.  Two Msg
         // vars same idx, different names: name is final tiebreaker.
         let alpha = msg_var("a", 3);
-        let beta  = msg_var("b", 3);
-        let (subst, _) = unify_lnterm_factored(vec![Equal::new(
-            alpha.clone(), beta.clone()
-        )]).unwrap();
+        let beta = msg_var("b", 3);
+        let (subst, _) =
+            unify_lnterm_factored(vec![Equal::new(alpha.clone(), beta.clone())]).unwrap();
         let a_3 = as_var(&alpha).clone();
         let b_3 = as_var(&beta).clone();
         // Ord: a.3 < b.3 (idx tie → sort tie → name 'a' < 'b').
         // unifyRaw: vl=a.3, vr=b.3, vl<vr, elim vr l → b.3 is key.
-        assert!(subst.image_of(&b_3).is_some(),
-                "tiebreaker via name: 'b' (later) becomes key");
+        assert!(
+            subst.image_of(&b_3).is_some(),
+            "tiebreaker via name: 'b' (later) becomes key"
+        );
         assert!(subst.image_of(&a_3).is_none());
     }
 
@@ -884,17 +934,19 @@ mod haskell_invariants {
         let m: LNTerm = msg_var("m", 5);
         let f: LNTerm = fresh_var("k", 100);
 
-        let (subst, _) = unify_lnterm_factored(vec![Equal::new(
-            m.clone(), f.clone()
-        )]).unwrap();
+        let (subst, _) = unify_lnterm_factored(vec![Equal::new(m.clone(), f.clone())]).unwrap();
 
         let m_v = as_var(&m).clone();
         let f_v = as_var(&f).clone();
         // The Msg var (broader sort) must be the KEY.
-        assert!(subst.image_of(&m_v).is_some(),
-                "broader sort (Msg) must be the KEY mapping to narrower (Fresh)");
-        assert!(subst.image_of(&f_v).is_none(),
-                "narrower sort (Fresh) must NOT be a key");
+        assert!(
+            subst.image_of(&m_v).is_some(),
+            "broader sort (Msg) must be the KEY mapping to narrower (Fresh)"
+        );
+        assert!(
+            subst.image_of(&f_v).is_none(),
+            "narrower sort (Fresh) must NOT be a key"
+        );
     }
 
     #[test]
@@ -903,9 +955,7 @@ mod haskell_invariants {
         let m: LNTerm = msg_var("m", 5);
         let p: LNTerm = pub_var("A", 100);
 
-        let (subst, _) = unify_lnterm_factored(vec![Equal::new(
-            m.clone(), p.clone()
-        )]).unwrap();
+        let (subst, _) = unify_lnterm_factored(vec![Equal::new(m.clone(), p.clone())]).unwrap();
 
         let m_v = as_var(&m).clone();
         let p_v = as_var(&p).clone();
@@ -919,9 +969,11 @@ mod haskell_invariants {
         let p: LNTerm = pub_var("A", 1);
         let f: LNTerm = fresh_var("k", 2);
         let result = unify_lnterm_factored(vec![Equal::new(p, f)]);
-        assert!(result.is_none(),
-                "Pub and Fresh are incomparable; unification must fail \
-                 (Haskell `unifyRaw` mzeros, returning Nothing)");
+        assert!(
+            result.is_none(),
+            "Pub and Fresh are incomparable; unification must fail \
+                 (Haskell `unifyRaw` mzeros, returning Nothing)"
+        );
     }
 
     // -------------------------------------------------------------------
@@ -968,15 +1020,19 @@ mod haskell_invariants {
         // All non-AC: pair + msg_var, no XOR/mset/DH/nat/BP.
         let p1: LNTerm = pair(msg_var("a", 1), msg_var("b", 2));
         let p2: LNTerm = pair(msg_var("x", 10), msg_var("y", 20));
-        let (subst, residuals) = unify_lnterm_factored(vec![
-            Equal::new(p1, p2)
-        ]).expect("non-AC pair-pair must unify");
-        assert!(residuals.is_empty(),
-                "AC-free input → empty residuals (matches Haskell's \
+        let (subst, residuals) =
+            unify_lnterm_factored(vec![Equal::new(p1, p2)]).expect("non-AC pair-pair must unify");
+        assert!(
+            residuals.is_empty(),
+            "AC-free input → empty residuals (matches Haskell's \
                  `solve _ (Just (m, []))` branch).  If this fires, the \
-                 unifier is incorrectly classifying something as AC.");
+                 unifier is incorrectly classifying something as AC."
+        );
         // Subst has at least the 4 var bindings.
-        assert!(!subst.is_empty(), "non-trivial input produces non-empty subst");
+        assert!(
+            !subst.is_empty(),
+            "non-trivial input produces non-empty subst"
+        );
     }
 
     #[test]
@@ -984,12 +1040,13 @@ mod haskell_invariants {
         // `x = x` is trivially true — Haskell short-circuits before
         // emitting a binding.
         let x: LNTerm = msg_var("x", 5);
-        let (subst, residuals) = unify_lnterm_factored(vec![
-            Equal::new(x.clone(), x)
-        ]).expect("x = x must unify trivially");
+        let (subst, residuals) = unify_lnterm_factored(vec![Equal::new(x.clone(), x)])
+            .expect("x = x must unify trivially");
         assert!(residuals.is_empty());
-        assert!(subst.is_empty(),
-                "x = x must NOT introduce a self-loop binding");
+        assert!(
+            subst.is_empty(),
+            "x = x must NOT introduce a self-loop binding"
+        );
     }
 
     #[test]
@@ -1038,17 +1095,24 @@ mod haskell_invariants {
         let (subst, _) = unify_lnterm_factored(vec![
             Equal::new(t_1.clone(), m_19.clone()),
             Equal::new(m_19.clone(), blind.clone()),
-        ]).unwrap();
+        ])
+        .unwrap();
 
         let t_1_v = as_var(&t_1).clone();
         let m_19_v = as_var(&m_19).clone();
-        assert_eq!(subst.image_of(&m_19_v), Some(&blind),
-                   "m.19 must end bound to the structural term");
+        assert_eq!(
+            subst.image_of(&m_19_v),
+            Some(&blind),
+            "m.19 must end bound to the structural term"
+        );
         // Crucially, t.1 should ALSO be bound — because eliminate(t.1, pair)
         // happens after snapshot apply of m.19→t.1, so the second eq
         // becomes t.1 = pair(...).  Both bindings end up.
-        assert_eq!(subst.image_of(&t_1_v), Some(&blind),
-                   "t.1 must also end bound (eliminate adds it as key)");
+        assert_eq!(
+            subst.image_of(&t_1_v),
+            Some(&blind),
+            "t.1 must also end bound (eliminate adds it as key)"
+        );
     }
 
     // -------------------------------------------------------------------
@@ -1076,9 +1140,11 @@ mod haskell_invariants {
         let p = pair(msg_var("a", 10), msg_var("b", 20));
         let old = unify_lnterm_no_ac(vec![Equal::new(x.clone(), p.clone())]).unwrap();
         let (new_, _) = unify_lnterm_factored(vec![Equal::new(x.clone(), p.clone())]).unwrap();
-        assert_eq!(old, new_,
-                   "for var-vs-term, both unifiers must produce identical \
-                    substs (the var is the key in both)");
+        assert_eq!(
+            old, new_,
+            "for var-vs-term, both unifiers must produce identical \
+                    substs (the var is the key in both)"
+        );
     }
 
     #[test]
@@ -1086,25 +1152,32 @@ mod haskell_invariants {
         // Both paths follow Haskell `unifyRaw` (Unification.hs:235-243, see line 241):
         //   `if vl < vr then elim vr l else elim vl r`
         // i.e. LARGER-idx becomes KEY, smaller-idx becomes value.
-        let small = msg_var("t", 1);   // small idx, "stable"
-        let large = msg_var("e", 10);  // large idx
+        let small = msg_var("t", 1); // small idx, "stable"
+        let large = msg_var("e", 10); // large idx
 
         let old = unify_lnterm_no_ac(vec![Equal::new(small.clone(), large.clone())]).unwrap();
-        let (new_, _) = unify_lnterm_factored(vec![Equal::new(small.clone(), large.clone())]).unwrap();
+        let (new_, _) =
+            unify_lnterm_factored(vec![Equal::new(small.clone(), large.clone())]).unwrap();
 
         let small_v = as_var(&small).clone();
         let large_v = as_var(&large).clone();
 
         // Haskell-faithful: larger-idx is key in BOTH paths.
-        assert!(old.image_of(&large_v).is_some(),
-                "`unify_raw`: larger-idx (e.10) is the key");
+        assert!(
+            old.image_of(&large_v).is_some(),
+            "`unify_raw`: larger-idx (e.10) is the key"
+        );
         assert!(old.image_of(&small_v).is_none());
-        assert!(new_.image_of(&large_v).is_some(),
-                "`unify_raw_factored`: larger-idx (e.10) is the key");
+        assert!(
+            new_.image_of(&large_v).is_some(),
+            "`unify_raw_factored`: larger-idx (e.10) is the key"
+        );
         assert!(new_.image_of(&small_v).is_none());
 
-        assert_eq!(old, new_,
-                   "Both unifiers must produce identical substs \
-                    (Haskell-faithful: Unification.hs:241).");
+        assert_eq!(
+            old, new_,
+            "Both unifiers must produce identical substs \
+                    (Haskell-faithful: Unification.hs:241)."
+        );
     }
 }

@@ -125,7 +125,9 @@ pub fn postprocess(s: &str) -> String {
         // its byte length, giving the suffix byte offset without re-walking.
         let mut suffix_offset = 0;
         for c in line.chars() {
-            if !c.is_whitespace() { break; }
+            if !c.is_whitespace() {
+                break;
+            }
             out.push_str("&nbsp;");
             suffix_offset += c.len_utf8();
         }

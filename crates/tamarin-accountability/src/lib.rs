@@ -39,7 +39,7 @@ use tamarin_parser::wf::WfError;
 use tamarin_theory::elaborate::elaborate_lemma_attr;
 use tamarin_theory::theory::{self as t, Theory, TheoryItem};
 
-use crate::formula::{from_p_formula, frees, sort_rank, to_p_formula, Fm};
+use crate::formula::{frees, from_p_formula, sort_rank, to_p_formula, Fm};
 use crate::generation::{generate_accountability_lemmas, AccData, CaseTestData};
 
 /// Accountability translation error: HS `AccException` (Accountability.hs:31-39)
@@ -119,7 +119,10 @@ fn collect_acc_items(parsed: &p::Theory) -> (Vec<RawCaseTest>, Vec<(RawAccLemma,
     for i in &parsed.items {
         match i {
             p::TheoryItem::CaseTest(c) => {
-                case_tests.push(RawCaseTest { name: c.name.clone(), formula: c.formula.clone() });
+                case_tests.push(RawCaseTest {
+                    name: c.name.clone(),
+                    formula: c.formula.clone(),
+                });
             }
             p::TheoryItem::AccLemma(a) => {
                 acc_lemmas.push((
@@ -188,8 +191,10 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
     let undef: Vec<(String, Vec<String>)> = acc_lemmas
         .iter()
         .filter_map(|(a, n_before)| {
-            let defined_names: Vec<String> =
-                case_tests[..*n_before].iter().map(|c| c.name.clone()).collect();
+            let defined_names: Vec<String> = case_tests[..*n_before]
+                .iter()
+                .map(|c| c.name.clone())
+                .collect();
             undefined_case_tests(a, &defined_names).map(|m| (a.name.clone(), m))
         })
         .collect();
@@ -199,8 +204,10 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
 
     // Pre-convert each case test's formula to locally-nameless form once
     // (declaration order, so `[..n_before]` is each lemma's visible scope).
-    let case_test_data: Vec<(String, Fm)> =
-        case_tests.iter().map(|c| (c.name.clone(), from_p_formula(&c.formula))).collect();
+    let case_test_data: Vec<(String, Fm)> = case_tests
+        .iter()
+        .map(|c| (c.name.clone(), from_p_formula(&c.formula)))
+        .collect();
 
     // Predicate fact tags `(name, arity, persistent)` defined for this theory:
     // every `predicates:` item (HS `theoryPredicates` — position-insensitive at
@@ -213,9 +220,10 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
         .items
         .iter()
         .filter_map(|i| match i {
-            p::TheoryItem::Predicates(ps) => Some(ps.iter().map(|pr| {
-                (pr.fact.name.clone(), pr.fact.args.len(), pr.fact.persistent)
-            })),
+            p::TheoryItem::Predicates(ps) => Some(
+                ps.iter()
+                    .map(|pr| (pr.fact.name.clone(), pr.fact.args.len(), pr.fact.persistent)),
+            ),
             _ => None,
         })
         .flatten()
@@ -245,10 +253,13 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
                 .case_test_idents
                 .iter()
                 .filter_map(|id| {
-                    scope.iter().find(|(n, _)| n == id).map(|(_, f)| CaseTestData {
-                        name: id.clone(),
-                        formula: f.clone(),
-                    })
+                    scope
+                        .iter()
+                        .find(|(n, _)| n == id)
+                        .map(|(_, f)| CaseTestData {
+                            name: id.clone(),
+                            formula: f.clone(),
+                        })
                 })
                 .collect(),
         };
@@ -268,7 +279,14 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
             }
             lemma_names.push(gen.name.clone());
             let formula = to_p_formula(&gen.formula);
-            inject_lemma(parsed, elaborated, &acc.attributes, &gen.name, gen.quantifier, formula);
+            inject_lemma(
+                parsed,
+                elaborated,
+                &acc.attributes,
+                &gen.name,
+                gen.quantifier,
+                formula,
+            );
         }
     }
 
@@ -276,8 +294,11 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
     // then `foldM liftedAddPredicate`), appended AFTER all generated lemmas.
     for c in &case_tests {
         if let Some(pred) = case_test_to_predicate(c) {
-            let tag =
-                (pred.fact.name.clone(), pred.fact.args.len(), pred.fact.persistent);
+            let tag = (
+                pred.fact.name.clone(),
+                pred.fact.args.len(),
+                pred.fact.persistent,
+            );
             if defined_preds.contains(&tag) {
                 return Err(AccError::DuplicatePredicate(render_fact(&pred.fact)));
             }
@@ -299,7 +320,12 @@ fn undefined_predicate(fm: &Fm, defined: &[(String, usize, bool)]) -> Option<Str
         if known {
             None
         } else {
-            Some(format!("{}{}/{}", if f.persistent { "!" } else { "" }, f.name, f.args.len()))
+            Some(format!(
+                "{}{}/{}",
+                if f.persistent { "!" } else { "" },
+                f.name,
+                f.args.len()
+            ))
         }
     })
 }
@@ -317,7 +343,12 @@ fn render_fact(f: &p::Fact) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ");
-    format!("{}{}( {} )", if f.persistent { "!" } else { "" }, f.name, args)
+    format!(
+        "{}{}( {} )",
+        if f.persistent { "!" } else { "" },
+        f.name,
+        args
+    )
 }
 
 /// Append one generated lemma to both theories (HS `addLemma`, which appends at
@@ -382,7 +413,10 @@ fn case_test_to_predicate(c: &RawCaseTest) -> Option<p::Predicate> {
         args: free_vars.into_iter().map(p::Term::Var).collect(),
         annotations: Vec::new(),
     };
-    Some(p::Predicate { fact, formula: c.formula.clone() })
+    Some(p::Predicate {
+        fact,
+        formula: c.formula.clone(),
+    })
 }
 
 /// HS `toLNFormula` returns `Nothing` for a formula carrying syntactic sugar
@@ -396,9 +430,7 @@ fn formula_has_predicate_atom(f: &p::Formula) -> bool {
         p::Formula::And(a, b)
         | p::Formula::Or(a, b)
         | p::Formula::Implies(a, b)
-        | p::Formula::Iff(a, b) => {
-            formula_has_predicate_atom(a) || formula_has_predicate_atom(b)
-        }
+        | p::Formula::Iff(a, b) => formula_has_predicate_atom(a) || formula_has_predicate_atom(b),
         p::Formula::Forall(_, body) | p::Formula::Exists(_, body) => {
             formula_has_predicate_atom(body)
         }
@@ -421,8 +453,10 @@ fn capitalize(s: &str) -> String {
 /// HS `Accountability.checkWellformedness` (Generation.hs:351-353): the RP-check
 /// report, emitted only when the theory declares accountability lemmas.
 pub fn check_wellformedness(parsed: &p::Theory) -> Vec<WfError> {
-    let has_acc_lemma =
-        parsed.items.iter().any(|i| matches!(i, p::TheoryItem::AccLemma(_)));
+    let has_acc_lemma = parsed
+        .items
+        .iter()
+        .any(|i| matches!(i, p::TheoryItem::AccLemma(_)));
     if !has_acc_lemma {
         return Vec::new();
     }
@@ -483,7 +517,10 @@ const DETAILED_EXPLANATION: &[&str] = &[
 /// HS `not $ null $ theoryRestrictions thy`.
 fn theory_has_restrictions(parsed: &p::Theory) -> bool {
     parsed.items.iter().any(|i| {
-        matches!(i, p::TheoryItem::Restriction(_) | p::TheoryItem::LegacyAxiom(_))
+        matches!(
+            i,
+            p::TheoryItem::Restriction(_) | p::TheoryItem::LegacyAxiom(_)
+        )
     })
 }
 

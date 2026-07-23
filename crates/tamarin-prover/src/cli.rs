@@ -430,8 +430,7 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                 }
                 "partial-evaluation" => {
                     let v = flag_opt(val_inline, "summary");
-                    args.partial_evaluation =
-                        Some(PartialEval::parse(&v).map_err(CliError::Msg)?);
+                    args.partial_evaluation = Some(PartialEval::parse(&v).map_err(CliError::Msg)?);
                 }
                 "defines" => {
                     // flagOpt "" — bare `-D`/`--defines` records the empty
@@ -480,8 +479,12 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                         Some(parse_positive_usize(&mut i, raw, val_inline, "processors")?);
                 }
                 "maude-processes" => {
-                    args.maude_processes =
-                        Some(parse_positive_usize(&mut i, raw, val_inline, "maude-processes")?);
+                    args.maude_processes = Some(parse_positive_usize(
+                        &mut i,
+                        raw,
+                        val_inline,
+                        "maude-processes",
+                    )?);
                 }
                 // Output flags.  output / Output / output-module are flagOpt
                 // (Batch.hs:76-78): only `=VALUE` or a bare flag (records the
@@ -539,8 +542,7 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                 "image-format" => {
                     if let Some(v) = val_inline {
                         if !v.is_empty() {
-                            args.image_format =
-                                Some(ImageFormat::parse(v).map_err(CliError::Msg)?);
+                            args.image_format = Some(ImageFormat::parse(v).map_err(CliError::Msg)?);
                         }
                     }
                 }
@@ -585,8 +587,11 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                 // leading `=` to keep `-b=12` working.
                 let after = &rest[idx + key.len_utf8()..];
                 let inline_raw = after.strip_prefix('=').unwrap_or(after);
-                let inline: Option<&str> =
-                    if inline_raw.is_empty() { None } else { Some(inline_raw) };
+                let inline: Option<&str> = if inline_raw.is_empty() {
+                    None
+                } else {
+                    Some(inline_raw)
+                };
                 match key {
                     'h' | '?' => {
                         args.show_help = true;
@@ -729,9 +734,10 @@ fn take_val(
     if let Some(v) = inline {
         return Ok(v.to_string());
     }
-    let next = raw.get(*i + 1).cloned().ok_or_else(|| {
-        CliError::Msg(format!("flag --{} requires a value", name))
-    })?;
+    let next = raw
+        .get(*i + 1)
+        .cloned()
+        .ok_or_else(|| CliError::Msg(format!("flag --{} requires a value", name)))?;
     if next.starts_with('-') {
         return Err(CliError::Msg(format!(
             "flag --{} requires a value (got {:?})",
@@ -743,9 +749,8 @@ fn take_val(
 }
 
 fn parse_int<T: std::str::FromStr>(s: &str, name: &str) -> Result<T, CliError> {
-    s.parse::<T>().map_err(|_| {
-        CliError::Msg(format!("{}: expected integer, got {:?}", name, s))
-    })
+    s.parse::<T>()
+        .map_err(|_| CliError::Msg(format!("{}: expected integer, got {:?}", name, s)))
 }
 
 /// Take a flag's value, parse it as a `usize`, and reject `0` with a
@@ -898,11 +903,15 @@ pub fn help_text() -> String {
     s.push('\n');
     s.push_str("Interactive-mode flags (used with the `interactive` subcommand):\n");
     s.push_str("  -p --port=PORT                        Port to listen on (default 3001).\n");
-    s.push_str("  -i --interface=INTERFACE              Interface to listen on (default 127.0.0.1).\n");
+    s.push_str(
+        "  -i --interface=INTERFACE              Interface to listen on (default 127.0.0.1).\n",
+    );
     s.push_str("     --image-format=PNG|SVG             Image format for graphs (default SVG).\n");
     s.push_str("     --debug                            Show server debugging output.\n");
     s.push_str("     --no-logging                       Suppress web server logs.\n");
-    s.push_str("     --data-dir=DIR                     Override path to the bundled `data/` dir.\n");
+    s.push_str(
+        "     --data-dir=DIR                     Override path to the bundled `data/` dir.\n",
+    );
     s.push('\n');
     s.push_str("Lemma selection / proof options:\n");
     s.push_str("     --prove[=LEMMAPREFIX*|LEMMANAME]   Prove the named lemma(s). Repeatable.\n");
@@ -924,14 +933,26 @@ pub fn help_text() -> String {
     s.push_str("     --quit-on-warning                  Treat wellformedness warnings as fatal.\n");
     s.push_str("     --parse-only                       Just parse + pretty-print.\n");
     s.push_str("     --precompute-only                  Just run precomputation.\n");
-    s.push_str("     --processors=N                     Rayon worker count for internal parallelism.\n");
+    s.push_str(
+        "     --processors=N                     Rayon worker count for internal parallelism.\n",
+    );
     s.push_str("                                        Default: available_parallelism() (full machine).\n");
-    s.push_str("                                        N=1 → byte-identical to sequential output.\n");
-    s.push_str("     --maude-processes=M                Maude subprocesses in the per-task pool.\n");
-    s.push_str("                                        Default: processors (1:1 with the worker pool,\n");
+    s.push_str(
+        "                                        N=1 → byte-identical to sequential output.\n",
+    );
+    s.push_str(
+        "     --maude-processes=M                Maude subprocesses in the per-task pool.\n",
+    );
+    s.push_str(
+        "                                        Default: processors (1:1 with the worker pool,\n",
+    );
     s.push_str("                                        or 1 when --processors=1).  Each costs\n");
-    s.push_str("                                        ~30-100 MB RAM; lower if memory is tight.\n");
-    s.push_str("                                        M=1 → single Maude (pre-pool behaviour).\n");
+    s.push_str(
+        "                                        ~30-100 MB RAM; lower if memory is tight.\n",
+    );
+    s.push_str(
+        "                                        M=1 → single Maude (pre-pool behaviour).\n",
+    );
     s.push('\n');
     s.push_str("Output:\n");
     s.push_str("  -o --output=FILE                      Write analyzed theory to FILE.\n");
@@ -1065,7 +1086,10 @@ mod tests {
         // not exist`) and the flag records its empty default.
         let a = parse(&["-o", "out.spthy", "input.spthy"]);
         assert_eq!(a.output_file.as_deref(), Some(""));
-        assert_eq!(a.in_files, vec!["out.spthy".to_string(), "input.spthy".to_string()]);
+        assert_eq!(
+            a.in_files,
+            vec!["out.spthy".to_string(), "input.spthy".to_string()]
+        );
     }
 
     #[test]
@@ -1158,9 +1182,7 @@ mod tests {
 
     #[test]
     fn stop_on_trace_unknown_is_err() {
-        let r = parse_args(
-            &["--stop-on-trace=banana".to_string()],
-        );
+        let r = parse_args(&["--stop-on-trace=banana".to_string()]);
         assert!(r.is_err());
     }
 
@@ -1409,9 +1431,18 @@ mod tests {
             out.contains("'https://github.com/tamarin-prover/tamarin-prover/blob/master/LICENSE'.\n\nGenerated from:\n"),
             "stdout must have a blank line between the license and `Generated from:`\n--- got ---\n{out}"
         );
-        assert!(!out.contains("maude tool:"), "stdout must NOT contain the maude self-check lines");
-        assert!(!out.contains("checking version:"), "stdout must NOT contain the maude self-check lines");
-        assert!(!out.contains("checking installation:"), "stdout must NOT contain the maude self-check lines");
+        assert!(
+            !out.contains("maude tool:"),
+            "stdout must NOT contain the maude self-check lines"
+        );
+        assert!(
+            !out.contains("checking version:"),
+            "stdout must NOT contain the maude self-check lines"
+        );
+        assert!(
+            !out.contains("checking installation:"),
+            "stdout must NOT contain the maude self-check lines"
+        );
         // The banner is the first line.
         assert!(out.starts_with("tamarin-prover "));
         // getVersionIO's block is present and ends with the compile-time line.
@@ -1430,10 +1461,25 @@ mod tests {
         //    checking installation: OK.
         let err = version_maude_stderr_text();
         let lines: Vec<&str> = err.lines().collect();
-        assert_eq!(lines.len(), 3, "stderr block must be exactly three lines: {err:?}");
+        assert_eq!(
+            lines.len(),
+            3,
+            "stderr block must be exactly three lines: {err:?}"
+        );
         assert_eq!(lines[0], "maude tool: 'maude'");
-        assert!(lines[1].starts_with(" checking version: "), "got {:?}", lines[1]);
-        assert!(lines[1].ends_with(". OK.") || lines[1].ends_with(". FAILED."), "got {:?}", lines[1]);
-        assert!(lines[2] == " checking installation: OK." || lines[2] == " checking installation: FAILED.");
+        assert!(
+            lines[1].starts_with(" checking version: "),
+            "got {:?}",
+            lines[1]
+        );
+        assert!(
+            lines[1].ends_with(". OK.") || lines[1].ends_with(". FAILED."),
+            "got {:?}",
+            lines[1]
+        );
+        assert!(
+            lines[2] == " checking installation: OK."
+                || lines[2] == " checking installation: FAILED."
+        );
     }
 }

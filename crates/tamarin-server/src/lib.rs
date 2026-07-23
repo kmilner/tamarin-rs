@@ -150,9 +150,8 @@ pub async fn serve(
                 let name = entry.name.clone();
                 if !entry.wf_report.is_empty() {
                     let dashes = "-".repeat(78);
-                    let report = tamarin_theory::pretty_theory::render_wf_error_report(
-                        &entry.wf_report,
-                    );
+                    let report =
+                        tamarin_theory::pretty_theory::render_wf_error_report(&entry.wf_report);
                     println!(
                         "{dashes}\nTheory file '{}'\n{dashes}\n\nWARNING: ignoring the following wellformedness errors\n\n{}\n{dashes}\n",
                         p.display(),
@@ -195,16 +194,18 @@ pub async fn serve(
 }
 
 async fn shutdown_signal() {
-    let ctrl_c = async { let _ = tokio::signal::ctrl_c().await; };
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
     #[cfg(unix)]
     let term = async {
         // Degrade gracefully if the SIGTERM handler can't be installed
         // (e.g. resource limits): only ctrl_c drives shutdown, instead
         // of panicking at startup.  Mirrors the non-unix branch.
-        match tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::terminate())
-        {
-            Ok(mut s) => { s.recv().await; }
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "could not install SIGTERM handler; \
                     only ctrl_c will trigger shutdown");

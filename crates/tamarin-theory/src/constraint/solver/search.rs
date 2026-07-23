@@ -180,8 +180,7 @@ pub fn proof_status(node: &ProofNode) -> ProofStatus {
 /// path (HS keeps a `Just System` on every `IncrementalProof` node), so
 /// it must retain them.  Call `set_keep_sys(true)` before any
 /// `run_proof_search`.  Default `false` → CLI behaviour unchanged.
-static KEEP_SYS_OVERRIDE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static KEEP_SYS_OVERRIDE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Enable/disable per-node `System` retention across the whole process.
 pub fn set_keep_sys(retain: bool) {
@@ -233,12 +232,14 @@ fn disable_parallel_expand() -> bool {
 /// `TAM_PROVE_DEADLINE_MS` env var (e.g. corpus sweeps that want to bound
 /// per-lemma wall time).
 fn proof_deadline() -> std::time::Instant {
-    match std::env::var("TAM_PROVE_DEADLINE_MS").ok().and_then(|s| s.parse::<u64>().ok()) {
+    match std::env::var("TAM_PROVE_DEADLINE_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+    {
         Some(ms) => std::time::Instant::now() + std::time::Duration::from_millis(ms),
         // No env override → run unbounded (faithful to HS).  ~10 years is
         // effectively infinite and safe against `Instant` overflow.
-        None => std::time::Instant::now()
-            + std::time::Duration::from_secs(10 * 365 * 24 * 3600),
+        None => std::time::Instant::now() + std::time::Duration::from_secs(10 * 365 * 24 * 3600),
     }
 }
 
@@ -270,11 +271,19 @@ thread_local! {
 
 /// True iff the current search is past its wall-clock deadline.
 pub fn deadline_reached() -> bool {
-    DEADLINE.with(|d| d.get().map(|t| std::time::Instant::now() >= t).unwrap_or(false))
+    DEADLINE.with(|d| {
+        d.get()
+            .map(|t| std::time::Instant::now() >= t)
+            .unwrap_or(false)
+    })
 }
 
-fn set_deadline(t: std::time::Instant) { DEADLINE.with(|d| d.set(Some(t))); }
-fn clear_deadline()                     { DEADLINE.with(|d| d.set(None));     }
+fn set_deadline(t: std::time::Instant) {
+    DEADLINE.with(|d| d.set(Some(t)));
+}
+fn clear_deadline() {
+    DEADLINE.with(|d| d.set(None));
+}
 
 /// Run an iterative-deepening search.  Heuristic: try `Simplify`
 /// once, then pick the first ranked open goal each round.
@@ -323,11 +332,7 @@ fn clear_deadline()                     { DEADLINE.with(|d| d.set(None));     }
 /// when the longer path is alphabetically earlier — critical for
 /// NSPK3/roles `injective_agree` where Haskell renders `case c_aenc`
 /// (shorter) over `case I_2` (alphabetically earlier but deeper).
-pub fn run_proof_search(
-    ctx: &ProofContext,
-    initial: System,
-    max_steps: usize,
-) -> ProofNode {
+pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -> ProofNode {
     let deadline = proof_deadline();
     set_deadline(deadline);
     // Optional hard-watchdog: opt-in via TAM_PROVE_DEADLINE_HARD_KILL=1.
@@ -341,16 +346,23 @@ pub fn run_proof_search(
     // who explicitly set it want this behaviour.  Grace defaults to
     // 30s but is configurable via `TAM_PROVE_DEADLINE_GRACE_MS`.
     if tamarin_utils::env_gate!("TAM_PROVE_DEADLINE_HARD_KILL") {
-        let total_ms: u64 = std::env::var("TAM_PROVE_DEADLINE_MS").ok()
-            .and_then(|s| s.parse().ok()).unwrap_or(30_000);
-        let grace_ms: u64 = std::env::var("TAM_PROVE_DEADLINE_GRACE_MS").ok()
-            .and_then(|s| s.parse().ok()).unwrap_or(30_000);
+        let total_ms: u64 = std::env::var("TAM_PROVE_DEADLINE_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30_000);
+        let grace_ms: u64 = std::env::var("TAM_PROVE_DEADLINE_GRACE_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30_000);
         let total = std::time::Duration::from_millis(total_ms + grace_ms);
         std::thread::Builder::new()
             .name("prove-watchdog".into())
             .spawn(move || {
                 std::thread::sleep(total);
-                eprintln!("[prove-watchdog] deadline+grace ({} ms) exceeded; aborting", total_ms + grace_ms);
+                eprintln!(
+                    "[prove-watchdog] deadline+grace ({} ms) exceeded; aborting",
+                    total_ms + grace_ms
+                );
                 std::process::exit(124);
             })
             .ok();
@@ -445,8 +457,7 @@ pub fn run_proof_search(
                     eprintln!("attack found at depth: {}", level);
                     let mut f2 = false;
                     let mut i2 = false;
-                    if let Some(cut_tree) =
-                        bfs_check_level(&root, level, &mut f2, &mut i2, true) {
+                    if let Some(cut_tree) = bfs_check_level(&root, level, &mut f2, &mut i2, true) {
                         root = cut_tree;
                     }
                     break;
@@ -559,10 +570,7 @@ fn bfs_check_level(
     build: bool,
 ) -> Option<ProofNode> {
     if remaining == 0 {
-        let solved_leaf = matches!(
-            &node.method,
-            ProofMethod::Finished(MethodResult::Solved)
-        );
+        let solved_leaf = matches!(&node.method, ProofMethod::Finished(MethodResult::Solved));
         if solved_leaf {
             *found = true;
             return build.then(|| node.clone());
@@ -640,7 +648,9 @@ fn find_solved_path(node: &ProofNode, path: &mut Vec<String>) -> bool {
 }
 
 fn prune_to_path(node: &mut ProofNode, path: &[String]) {
-    if path.is_empty() { return; }
+    if path.is_empty() {
+        return;
+    }
     let label = &path[0];
     if let Some(mut child) = node.children.remove(label) {
         prune_to_path(&mut child, &path[1..]);
@@ -705,9 +715,15 @@ fn re_expand_depth_limited(
     let early_break = !matches!(ctx.cut, CutStrategy::Bfs);
     let mut found_solved = false;
     for name in names {
-        if early_break && found_solved { break; }
-        if *budget == 0 { break; }
-        if std::time::Instant::now() >= *deadline { break; }
+        if early_break && found_solved {
+            break;
+        }
+        if *budget == 0 {
+            break;
+        }
+        if std::time::Instant::now() >= *deadline {
+            break;
+        }
         if let Some(child) = node.children.get_mut(&name) {
             // Track proof-tree path so state-trace / lockstep
             // emissions reflect the correct deep path during
@@ -719,9 +735,13 @@ fn re_expand_depth_limited(
             // `expand_inner` (the `if push_path { case_path_push(..) }`
             // around the recursive `expand` call further down this file).
             let push_path = !name.is_empty();
-            if push_path { crate::constraint::solver::trace::case_path_push(&name); }
+            if push_path {
+                crate::constraint::solver::trace::case_path_push(&name);
+            }
             re_expand_depth_limited(ctx, child, budget, deadline, depth + 1);
-            if push_path { crate::constraint::solver::trace::case_path_pop(); }
+            if push_path {
+                crate::constraint::solver::trace::case_path_pop();
+            }
             if matches!(child.status, NodeStatus::Solved) {
                 found_solved = true;
             }
@@ -875,7 +895,10 @@ fn expand_inner(
         for m in candidates {
             let r = exec_proof_method(ctx, &m, &node.sys);
             match r {
-                Some(cs) => { pick = Some((m, cs)); break; }
+                Some(cs) => {
+                    pick = Some((m, cs));
+                    break;
+                }
                 None => continue,
             }
         }
@@ -984,10 +1007,10 @@ fn expand_inner(
         // (below), which the parallel branch does not implement.
         && matches!(ctx.cut, CutStrategy::Dfs)
         && n_cases >= 2
-        && depth <= 16;  // bound recursion-level parallel splits; deeper
-                         // splits hurt more than help under rayon's
-                         // work-stealing — see HS's parLTreeDFS which
-                         // is similarly shallow in practice.
+        && depth <= 16; // bound recursion-level parallel splits; deeper
+                        // splits hurt more than help under rayon's
+                        // work-stealing — see HS's parLTreeDFS which
+                        // is similarly shallow in practice.
     if parallel {
         use rayon::prelude::*;
         // Snapshot data needed by each worker.  MAX_DEPTH is a per-
@@ -995,8 +1018,7 @@ fn expand_inner(
         let mp_snapshot = MAX_DEPTH.with(|m| m.get());
         // Snapshot the proof-tree case_path so each worker can seed its
         // own thread-local stack and produce coherent trace output.
-        let path_snapshot: Vec<String> =
-            crate::constraint::solver::trace::case_path_snapshot();
+        let path_snapshot: Vec<String> = crate::constraint::solver::trace::case_path_snapshot();
         let deadline_snapshot = *deadline;
         // Snapshot the user-fun sets for the workers: `term_to_lnterm` /
         // `term_to_gterm` (insert_atom, formula conversions) read them via
@@ -1013,69 +1035,82 @@ fn expand_inner(
         // restore after `collect`, folding `DEPTH_LIMIT_HIT` as
         // `prior || any_hit`, matching the serial branch.
         let parent_depth_limit_hit = DEPTH_LIMIT_HIT.with(|f| f.get());
-        let results: Vec<(String, ProofNode, bool)> = cases.into_par_iter().map(|(name, sys)| {
-            // Each rayon worker has its own thread-locals.  Initialise
-            // them from the parent's captured state so downstream code
-            // (depth-limit check, DEPTH_LIMIT_HIT bookkeeping, trace
-            // case path) sees the correct values regardless of which
-            // worker thread we land on.
-            MAX_DEPTH.with(|m| m.set(mp_snapshot));
-            DEPTH_LIMIT_HIT.with(|f| f.set(false));
-            DEADLINE.with(|d| d.set(Some(deadline_snapshot)));
-            crate::constraint::solver::trace::case_path_set(&path_snapshot);
-            let _user_funs_guard =
-                crate::elaborate::set_user_funs_from_collected(&user_funs_snapshot);
-            let push_path = !name.is_empty();
-            if push_path { crate::constraint::solver::trace::case_path_push(&name); }
-            // Per-worker MaudeHandle: siblings must not share `ctx.maude`'s
-            // `fresh_counter` -- concurrent mutation would make LVar.idx
-            // allocation (and proof-tree shape) depend on worker interleaving,
-            // breaking deterministic output.
-            //
-            // HS-faithful: HS seeds a fresh FreshT counter per child case from
-            // `avoid sys` (ProofMethod.hs:283-340, see line 306).  Mirror by cloning `ctx.maude`
-            // with its own `fresh_counter` per worker (bounds_max(sys) + 1).
-            //
-            // If a `maude_pool` is configured, also borrow a per-worker
-            // Maude subprocess so workers don't serialise on the
-            // single shared IPC mutex.  Without a pool we share the
-            // single Maude process; the IPC mutex serialises queries,
-            // which is correctness-safe (just slower).
-            // HS `avoid sys` next-draw seed (0 for a frees-less system —
-            // see `avoid_fresh_state`), matching `Reduction::new`.
-            let avoid_next = crate::constraint::solver::reduction::avoid_fresh_state(&sys);
-            // Non-blocking: with B1 lemma-level parallelism the pool may be
-            // fully drained by sibling lemma tasks.  A blocking `acquire`
-            // here could deadlock the nested fan-out; fall back to the shared
-            // `ctx.maude` (output-identical — both branches seed via
-            // `with_fresh_counter_next(avoid_next)`).
-            let pool_guard = ctx.maude_pool.as_ref().and_then(|pool| pool.try_acquire());
-            let worker_maude = match &pool_guard {
-                Some(pooled) => pooled.handle().with_fresh_counter_next(avoid_next),
-                None => ctx.maude.with_fresh_counter_next(avoid_next),
-            };
-            let worker_ctx = ctx.with_swapped_maude(worker_maude);
-            let mut child = ProofNode {
-                method: ProofMethod::Sorry(None),
-                sys,
-                children: BTreeMap::new(),
-                status: NodeStatus::Open,
-                annotated: true,
-            };
-            // Each worker gets its own budget cell — siblings no longer
-            // share a single counter, but with the default usize::MAX
-            // (no terminal cutoff) that's faithful: HS's lazy Disj
-            // exploration also doesn't share a counter.
-            let mut local_budget = *budget;
-            expand(&worker_ctx, &mut child, &mut local_budget, &deadline_snapshot, depth + 1);
-            // Drop the pooled Maude back to the pool only after expand
-            // returns — any Maude IPC inside expand uses the pooled
-            // handle via `worker_ctx.maude`.
-            drop(pool_guard);
-            if push_path { crate::constraint::solver::trace::case_path_pop(); }
-            let local_hit = DEPTH_LIMIT_HIT.with(|f| f.get());
-            (name, child, local_hit)
-        }).collect();
+        let results: Vec<(String, ProofNode, bool)> = cases
+            .into_par_iter()
+            .map(|(name, sys)| {
+                // Each rayon worker has its own thread-locals.  Initialise
+                // them from the parent's captured state so downstream code
+                // (depth-limit check, DEPTH_LIMIT_HIT bookkeeping, trace
+                // case path) sees the correct values regardless of which
+                // worker thread we land on.
+                MAX_DEPTH.with(|m| m.set(mp_snapshot));
+                DEPTH_LIMIT_HIT.with(|f| f.set(false));
+                DEADLINE.with(|d| d.set(Some(deadline_snapshot)));
+                crate::constraint::solver::trace::case_path_set(&path_snapshot);
+                let _user_funs_guard =
+                    crate::elaborate::set_user_funs_from_collected(&user_funs_snapshot);
+                let push_path = !name.is_empty();
+                if push_path {
+                    crate::constraint::solver::trace::case_path_push(&name);
+                }
+                // Per-worker MaudeHandle: siblings must not share `ctx.maude`'s
+                // `fresh_counter` -- concurrent mutation would make LVar.idx
+                // allocation (and proof-tree shape) depend on worker interleaving,
+                // breaking deterministic output.
+                //
+                // HS-faithful: HS seeds a fresh FreshT counter per child case from
+                // `avoid sys` (ProofMethod.hs:283-340, see line 306).  Mirror by cloning `ctx.maude`
+                // with its own `fresh_counter` per worker (bounds_max(sys) + 1).
+                //
+                // If a `maude_pool` is configured, also borrow a per-worker
+                // Maude subprocess so workers don't serialise on the
+                // single shared IPC mutex.  Without a pool we share the
+                // single Maude process; the IPC mutex serialises queries,
+                // which is correctness-safe (just slower).
+                // HS `avoid sys` next-draw seed (0 for a frees-less system —
+                // see `avoid_fresh_state`), matching `Reduction::new`.
+                let avoid_next = crate::constraint::solver::reduction::avoid_fresh_state(&sys);
+                // Non-blocking: with B1 lemma-level parallelism the pool may be
+                // fully drained by sibling lemma tasks.  A blocking `acquire`
+                // here could deadlock the nested fan-out; fall back to the shared
+                // `ctx.maude` (output-identical — both branches seed via
+                // `with_fresh_counter_next(avoid_next)`).
+                let pool_guard = ctx.maude_pool.as_ref().and_then(|pool| pool.try_acquire());
+                let worker_maude = match &pool_guard {
+                    Some(pooled) => pooled.handle().with_fresh_counter_next(avoid_next),
+                    None => ctx.maude.with_fresh_counter_next(avoid_next),
+                };
+                let worker_ctx = ctx.with_swapped_maude(worker_maude);
+                let mut child = ProofNode {
+                    method: ProofMethod::Sorry(None),
+                    sys,
+                    children: BTreeMap::new(),
+                    status: NodeStatus::Open,
+                    annotated: true,
+                };
+                // Each worker gets its own budget cell — siblings no longer
+                // share a single counter, but with the default usize::MAX
+                // (no terminal cutoff) that's faithful: HS's lazy Disj
+                // exploration also doesn't share a counter.
+                let mut local_budget = *budget;
+                expand(
+                    &worker_ctx,
+                    &mut child,
+                    &mut local_budget,
+                    &deadline_snapshot,
+                    depth + 1,
+                );
+                // Drop the pooled Maude back to the pool only after expand
+                // returns — any Maude IPC inside expand uses the pooled
+                // handle via `worker_ctx.maude`.
+                drop(pool_guard);
+                if push_path {
+                    crate::constraint::solver::trace::case_path_pop();
+                }
+                let local_hit = DEPTH_LIMIT_HIT.with(|f| f.get());
+                (name, child, local_hit)
+            })
+            .collect();
         // Aggregate worker DEPTH_LIMIT_HIT into the parent thread —
         // run_proof_search's ID-DFS loop reads this to decide whether
         // to grow MAX_DEPTH for the next iteration.  Fold the workers'
@@ -1129,13 +1164,16 @@ fn expand_inner(
                             }
                             None => (ProofMethod::Sorry(None), NodeStatus::Sorry),
                         };
-                        node.children.insert(name, ProofNode {
-                            method,
-                            sys,
-                            children: BTreeMap::new(),
-                            status,
-                            annotated: true,
-                        });
+                        node.children.insert(
+                            name,
+                            ProofNode {
+                                method,
+                                sys,
+                                children: BTreeMap::new(),
+                                status,
+                                annotated: true,
+                            },
+                        );
                         continue;
                     }
                     _ => break,
@@ -1152,15 +1190,21 @@ fn expand_inner(
             // Skip empty-name cases (Simplify produces a single "" case
             // with no proof-tree label — they're transparent in HS too).
             let push_path = !name.is_empty();
-            if push_path { crate::constraint::solver::trace::case_path_push(&name); }
+            if push_path {
+                crate::constraint::solver::trace::case_path_push(&name);
+            }
             expand(ctx, &mut child, budget, deadline, depth + 1);
-            if push_path { crate::constraint::solver::trace::case_path_pop(); }
+            if push_path {
+                crate::constraint::solver::trace::case_path_pop();
+            }
             abort = match ctx.cut {
-                CutStrategy::Dfs | CutStrategy::SeqDfs =>
-                    matches!(child.status, NodeStatus::Solved),
+                CutStrategy::Dfs | CutStrategy::SeqDfs => {
+                    matches!(child.status, NodeStatus::Solved)
+                }
                 CutStrategy::Bfs | CutStrategy::Nothing => false,
-                CutStrategy::AfterSorry =>
-                    matches!(child.status, NodeStatus::Solved | NodeStatus::Sorry),
+                CutStrategy::AfterSorry => {
+                    matches!(child.status, NodeStatus::Solved | NodeStatus::Sorry)
+                }
             };
             node.children.insert(name, child);
         }
@@ -1246,12 +1290,7 @@ fn rank_goals_or_abort(
 /// `AvoidInduction`.  `mk` builds the element — a bare
 /// `ProofMethod::Induction`, or the `(ProofMethod::Induction, String)`
 /// pair the UI variant needs.
-fn insert_induction_at<T>(
-    out: &mut Vec<T>,
-    sys: &System,
-    ctx: &ProofContext,
-    mk: impl Fn() -> T,
-) {
+fn insert_induction_at<T>(out: &mut Vec<T>, sys: &System, ctx: &ProofContext, mk: impl Fn() -> T) {
     use crate::constraint::solver::context::UseInduction;
     if !sys.is_initial() {
         return;
@@ -1285,11 +1324,7 @@ fn insert_induction_at<T>(
 /// in the list before goals so that when the system is reducible
 /// the simplifier runs first, decomposing pending formulas into
 /// goals.  Induction is only added in the initial state.
-pub fn candidate_methods(
-    sys: &System,
-    ctx: &ProofContext,
-    depth: usize,
-) -> Vec<ProofMethod> {
+pub fn candidate_methods(sys: &System, ctx: &ProofContext, depth: usize) -> Vec<ProofMethod> {
     // HS `stoppingMethod` (rankProofMethods, ProofMethod.hs:749-751):
     // `(Finished <$> isFinished ctxt sys) <|> …` — a finished system's
     // method list is exactly `[Finished r]`, displacing Simplify and every
@@ -1308,11 +1343,7 @@ pub fn candidate_methods(
 /// checks the terminal case immediately before ranking): `is_finished` is
 /// the full contradiction sweep, and a second sweep here doubles its cost on
 /// every expanded node (measured +7% wall on CCITT_X509_3).
-fn candidate_methods_open(
-    sys: &System,
-    ctx: &ProofContext,
-    depth: usize,
-) -> Vec<ProofMethod> {
+fn candidate_methods_open(sys: &System, ctx: &ProofContext, depth: usize) -> Vec<ProofMethod> {
     let mut out: Vec<ProofMethod> = Vec::new();
     // Haskell-faithful: build the FULL ranked goal list, not just the
     // first one (ProofMethod.hs:520-540).  Haskell's `proofMethods`
@@ -1331,7 +1362,9 @@ fn candidate_methods_open(
     let goals = match rank_goals_or_abort(sys, ctx, depth) {
         Ok(gs) => gs,
         Err(()) => {
-            return vec![ProofMethod::Sorry(Some("Oracle ranked no proof methods".into()))]
+            return vec![ProofMethod::Sorry(Some(
+                "Oracle ranked no proof methods".into(),
+            ))]
         }
     };
     // Construct: [Simplify, goal_1, goal_2, ..., goal_N].
@@ -1398,7 +1431,9 @@ pub fn candidate_methods_with_expl(
         let expl = format!("nr. {}{}{}", ag.seq, source_rule, suffix);
         out.push((ProofMethod::SolveGoal(ag.goal), expl));
     }
-    insert_induction_at(&mut out, sys, ctx, || (ProofMethod::Induction, String::new()));
+    insert_induction_at(&mut out, sys, ctx, || {
+        (ProofMethod::Induction, String::new())
+    });
     out
 }
 
@@ -1408,9 +1443,13 @@ mod tests {
     use tamarin_term::maude_sig::pair_maude_sig;
 
     fn maude_path() -> Option<String> {
-        if let Ok(p) = std::env::var("MAUDE_PATH") { return Some(p); }
+        if let Ok(p) = std::env::var("MAUDE_PATH") {
+            return Some(p);
+        }
         for c in ["/usr/local/bin/maude", "maude"] {
-            if std::path::Path::new(c).exists() { return Some(c.to_string()); }
+            if std::path::Path::new(c).exists() {
+                return Some(c.to_string());
+            }
         }
         None
     }
@@ -1423,12 +1462,15 @@ mod tests {
 
     #[test]
     fn search_empty_system_with_a_node_solves_immediately() {
-        let ctx = match ctx() { Some(c) => c, None => return };
+        let ctx = match ctx() {
+            Some(c) => c,
+            None => return,
+        };
         // Force out of initial state by adding a node, then no goals
         // / subterms remain.
         use crate::rule::{
-            IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, RuleAttributes,
-            RuleInfo, RuleACInst, Rule,
+            IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleACInst, RuleAttributes,
+            RuleInfo,
         };
         let info: RuleInfo<ProtoRuleACInstInfo, IntrRuleACInfo> =
             RuleInfo::Proto(ProtoRuleACInstInfo {
@@ -1441,16 +1483,22 @@ mod tests {
         // Mark non-initial via a solved formula (Haskell's
         // `isInitialSystem` uses solved_formulas emptiness, not the
         // node/edge count).
-        sys.solved_formulas_mut().push(std::sync::Arc::new(crate::guarded::gtrue()));
-        sys.add_node(tamarin_term::lterm::LVar::new(
-            "i", tamarin_term::lterm::LSort::Node, 0), rule);
+        sys.solved_formulas_mut()
+            .push(std::sync::Arc::new(crate::guarded::gtrue()));
+        sys.add_node(
+            tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0),
+            rule,
+        );
         let root = run_proof_search(&ctx, sys, 10);
         assert_eq!(root.status, NodeStatus::Solved);
     }
 
     #[test]
     fn search_empty_disj_goal_closes_contradictory() {
-        let ctx = match ctx() { Some(c) => c, None => return };
+        let ctx = match ctx() {
+            Some(c) => c,
+            None => return,
+        };
         let mut sys = System::empty();
         // Force out of initial state.
         sys.add_less(crate::constraint::constraints::LessAtom::new(
@@ -1463,7 +1511,8 @@ mod tests {
         // also how Haskell signals contradictoryness — `openGoals`
         // filters `DisjG (Disj [])` and `FormulasFalse` fires from
         // `contradictions`.  We mirror exactly that here.
-        sys.formulas_mut().push(std::sync::Arc::new(crate::guarded::gfalse()));
+        sys.formulas_mut()
+            .push(std::sync::Arc::new(crate::guarded::gfalse()));
         sys.add_goal(crate::constraint::constraints::Goal::Disj(
             crate::constraint::constraints::Disj::new(Vec::new()),
         ));
@@ -1473,7 +1522,10 @@ mod tests {
 
     #[test]
     fn search_disj_goal_with_two_branches_lazy_early_break_on_solved() {
-        let ctx = match ctx() { Some(c) => c, None => return };
+        let ctx = match ctx() {
+            Some(c) => c,
+            None => return,
+        };
         let mut sys = System::empty();
         // Force out of initial state.
         sys.add_less(crate::constraint::constraints::LessAtom::new(
@@ -1492,8 +1544,10 @@ mod tests {
             crate::constraint::constraints::Disj::new(vec![f1, f2]),
         ));
         let root = run_proof_search(&ctx, sys, 10);
-        assert!(matches!(root.method,
-            ProofMethod::SolveGoal(crate::constraint::constraints::Goal::Disj(_))));
+        assert!(matches!(
+            root.method,
+            ProofMethod::SolveGoal(crate::constraint::constraints::Goal::Disj(_))
+        ));
         // Lazy early-break: only the first-Solved branch is rendered.
         assert_eq!(root.children.len(), 1);
         assert_eq!(root.status, NodeStatus::Solved);
@@ -1501,7 +1555,10 @@ mod tests {
 
     #[test]
     fn search_simplify_then_solved_after_dedup_pass() {
-        let ctx = match ctx() { Some(c) => c, None => return };
+        let ctx = match ctx() {
+            Some(c) => c,
+            None => return,
+        };
         let mut sys = System::empty();
         // Force out of initial state.
         sys.add_less(crate::constraint::constraints::LessAtom::new(
@@ -1511,38 +1568,40 @@ mod tests {
         ));
         // Two duplicate gtrue formulas — `dedupe_formulas_pass` must
         // drop one and `drop_trivially_true_formulas_pass` drops both.
-        sys.formulas_mut().push(std::sync::Arc::new(crate::guarded::gtrue()));
-        sys.formulas_mut().push(std::sync::Arc::new(crate::guarded::gtrue()));
+        sys.formulas_mut()
+            .push(std::sync::Arc::new(crate::guarded::gtrue()));
+        sys.formulas_mut()
+            .push(std::sync::Arc::new(crate::guarded::gtrue()));
         let root = run_proof_search(&ctx, sys, 5);
         assert_eq!(root.status, NodeStatus::Solved);
     }
 
     #[test]
     fn search_runs_out_of_budget_returns_sorry() {
-        let ctx = match ctx() { Some(c) => c, None => return };
+        let ctx = match ctx() {
+            Some(c) => c,
+            None => return,
+        };
         let mut sys = System::empty();
         // Open subterm goal that we can't actually progress on.
-        let v = tamarin_term::lterm::LVar::new(
-            "x", tamarin_term::lterm::LSort::Msg, 0);
-        let v2 = tamarin_term::lterm::LVar::new(
-            "y", tamarin_term::lterm::LSort::Msg, 0);
+        let v = tamarin_term::lterm::LVar::new("x", tamarin_term::lterm::LSort::Msg, 0);
+        let v2 = tamarin_term::lterm::LVar::new("y", tamarin_term::lterm::LSort::Msg, 0);
         use tamarin_term::vterm::Lit;
-        let tx: tamarin_term::lterm::LNTerm =
-            tamarin_term::term::Term::Lit(Lit::Var(v));
-        let ty: tamarin_term::lterm::LNTerm =
-            tamarin_term::term::Term::Lit(Lit::Var(v2));
+        let tx: tamarin_term::lterm::LNTerm = tamarin_term::term::Term::Lit(Lit::Var(v));
+        let ty: tamarin_term::lterm::LNTerm = tamarin_term::term::Term::Lit(Lit::Var(v2));
         // Create an Action goal — without any rules in ctx the solver
         // will keep returning Contradictory branches, but the goal
         // itself stays unsolved across iterations.
-        let i = tamarin_term::lterm::LVar::new(
-            "i", tamarin_term::lterm::LSort::Node, 0);
+        let i = tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0);
         let f = crate::fact::out_fact(tx);
         sys.add_goal(crate::constraint::constraints::Goal::Action(i, f));
         // Add a non-empty piece so isInitialSystem returns false.
         sys.subterm_store_mut().add(ty.clone(), ty);
         let root = run_proof_search(&ctx, sys, 1);
         // Budget=1: one expand step. Action goal with no rules → contradiction.
-        assert!(matches!(root.status,
-            NodeStatus::Contradictory | NodeStatus::Sorry | NodeStatus::Solved));
+        assert!(matches!(
+            root.status,
+            NodeStatus::Contradictory | NodeStatus::Sorry | NodeStatus::Solved
+        ));
     }
 }

@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use axum::{
-    Router,
     extract::DefaultBodyLimit,
     routing::{get, post},
+    Router,
 };
 use tower_http::trace::TraceLayer;
 
@@ -32,14 +32,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/favicon.ico", get(handlers::root::favicon))
         .route("/robots.txt", get(handlers::root::robots))
         .route("/kill", get(handlers::root::kill_thread))
-
         // ----------------------------------------------------------------
         // Static assets: serve `data/` with frontend-dist hoisting —
         // the bundled `frontend/dist/` is served first for the
         // `intdot-*` JS/CSS assets, falling back to `data/`.
         // ----------------------------------------------------------------
         .nest("/static", handlers::static_files::serve(state.clone()))
-
         // ----------------------------------------------------------------
         // Theory routes (trace lemmas only — diff is stubbed).
         // ----------------------------------------------------------------
@@ -51,10 +49,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/thy/trace/:idx/main/*path",
             get(handlers::theory::theory_path_main),
         )
-        .route(
-            "/thy/trace/:idx/source",
-            get(handlers::theory::source_),
-        )
+        .route("/thy/trace/:idx/source", get(handlers::theory::source_))
         .route(
             "/thy/trace/:idx/message",
             get(handlers::theory::message_deduction),
@@ -71,10 +66,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/thy/trace/:idx/verify/*path",
             get(handlers::theory::verify),
         )
-        .route(
-            "/thy/trace/:idx/unload",
-            get(handlers::theory::unload),
-        )
+        .route("/thy/trace/:idx/unload", get(handlers::theory::unload))
         .route(
             "/thy/trace/:idx/next/:section/*path",
             get(handlers::theory::next_path),
@@ -92,10 +84,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/thy/trace/:idx/intdot/*path",
             get(handlers::theory::intdot),
         )
-        .route(
-            "/thy/trace/:idx/graph/*path",
-            get(handlers::theory::graph),
-        )
+        .route("/thy/trace/:idx/graph/*path", get(handlers::theory::graph))
         .route(
             "/thy/trace/:idx/interactive-graph-def/*path",
             get(handlers::theory::interactive_graph_def),
@@ -113,10 +102,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/thy/trace/:idx/del/path/*path",
             get(handlers::theory::delete_step),
         )
-        .route(
-            "/thy/trace/:idx/reload",
-            post(handlers::theory::reload),
-        )
+        .route("/thy/trace/:idx/reload", post(handlers::theory::reload))
         .route(
             "/thy/trace/:idx/get_and_append/:name",
             post(handlers::theory::append_new_lemmas),

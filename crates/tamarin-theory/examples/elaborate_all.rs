@@ -16,7 +16,10 @@ mod common;
 use common::{collect_spthy, corpus_root};
 
 fn main() {
-    let root = env::args().nth(1).map(PathBuf::from).unwrap_or_else(corpus_root);
+    let root = env::args()
+        .nth(1)
+        .map(PathBuf::from)
+        .unwrap_or_else(corpus_root);
 
     let files = collect_spthy(&root);
 
@@ -34,9 +37,15 @@ fn main() {
 
     for path in &files {
         total += 1;
-        let src = match fs::read_to_string(path) { Ok(s) => s, _ => continue };
+        let src = match fs::read_to_string(path) {
+            Ok(s) => s,
+            _ => continue,
+        };
         let p = match parse_theory(&src, &["diff"]) {
-            Ok(t) => { parse_ok += 1; t }
+            Ok(t) => {
+                parse_ok += 1;
+                t
+            }
             Err(_) => continue,
         };
         match elaborate_with_diagnostics(&p) {
@@ -49,16 +58,25 @@ fn main() {
                 let mut bad_lem = 0u64;
                 let mut bad_res = 0u64;
                 for d in &diags {
-                    if d.item.starts_with("Lemma") { bad_lem += 1; }
-                    else { bad_res += 1; }
+                    if d.item.starts_with("Lemma") {
+                        bad_lem += 1;
+                    } else {
+                        bad_res += 1;
+                    }
                 }
                 guarded_lemmas += n_lem.saturating_sub(bad_lem);
                 guarded_restrictions += n_res.saturating_sub(bad_res);
-                if diags.is_empty() { files_with_no_guard_diags += 1; }
+                if diags.is_empty() {
+                    files_with_no_guard_diags += 1;
+                }
                 if verbose && !diags.is_empty() && sample_diags.len() < 30 {
                     for d in &diags {
-                        sample_diags.push(format!("{}: {} → {}",
-                            path.display(), d.item, d.message));
+                        sample_diags.push(format!(
+                            "{}: {} → {}",
+                            path.display(),
+                            d.item,
+                            d.message
+                        ));
                     }
                 }
             }
@@ -70,17 +88,33 @@ fn main() {
         }
     }
     println!("Files:                  {}", total);
-    println!("Parsed:                 {} ({:.1}%)", parse_ok, 100.0 * parse_ok as f64 / total.max(1) as f64);
-    println!("Elaborated:             {} ({:.1}%)", elab_ok, 100.0 * elab_ok as f64 / total.max(1) as f64);
-    println!("Files with 0 guard diag {} ({:.1}%)",
+    println!(
+        "Parsed:                 {} ({:.1}%)",
+        parse_ok,
+        100.0 * parse_ok as f64 / total.max(1) as f64
+    );
+    println!(
+        "Elaborated:             {} ({:.1}%)",
+        elab_ok,
+        100.0 * elab_ok as f64 / total.max(1) as f64
+    );
+    println!(
+        "Files with 0 guard diag {} ({:.1}%)",
         files_with_no_guard_diags,
-        100.0 * files_with_no_guard_diags as f64 / elab_ok.max(1) as f64);
-    println!("Lemmas:                 {} ({} guarded, {:.1}%)",
-        total_lemmas, guarded_lemmas,
-        100.0 * guarded_lemmas as f64 / total_lemmas.max(1) as f64);
-    println!("Restrictions:           {} ({} guarded, {:.1}%)",
-        total_restrictions, guarded_restrictions,
-        100.0 * guarded_restrictions as f64 / total_restrictions.max(1) as f64);
+        100.0 * files_with_no_guard_diags as f64 / elab_ok.max(1) as f64
+    );
+    println!(
+        "Lemmas:                 {} ({} guarded, {:.1}%)",
+        total_lemmas,
+        guarded_lemmas,
+        100.0 * guarded_lemmas as f64 / total_lemmas.max(1) as f64
+    );
+    println!(
+        "Restrictions:           {} ({} guarded, {:.1}%)",
+        total_restrictions,
+        guarded_restrictions,
+        100.0 * guarded_restrictions as f64 / total_restrictions.max(1) as f64
+    );
     if !sample_diags.is_empty() {
         println!("\nSample guardedness diagnostics:");
         for d in sample_diags.iter().take(30) {

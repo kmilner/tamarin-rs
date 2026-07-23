@@ -67,14 +67,16 @@ impl Default for GraphOptions {
 /// `graph_options_from_params` directly, so this entry point is used
 /// only where a raw query string is on hand (and in tests).
 pub fn graph_options_from_query(qs: &str) -> GraphOptions {
-    let params: HashMap<String, String> = qs.split('&')
+    let params: HashMap<String, String> = qs
+        .split('&')
         .filter(|kv| !kv.is_empty())
         .map(|kv| {
             let mut it = kv.splitn(2, '=');
             let k = it.next().unwrap_or("");
             let v = it.next().unwrap_or("");
             (k.to_string(), v.to_string())
-        }).collect();
+        })
+        .collect();
     graph_options_from_params(&params)
 }
 
@@ -196,8 +198,14 @@ mod tests {
             SimplificationLevel::SL3
         );
         // Derived `Read` is case-sensitive and tolerates surrounding parens.
-        assert_eq!(read_simplification_level("(SL3)"), Some(SimplificationLevel::SL3));
-        assert_eq!(read_simplification_level(" ( SL3 ) "), Some(SimplificationLevel::SL3));
+        assert_eq!(
+            read_simplification_level("(SL3)"),
+            Some(SimplificationLevel::SL3)
+        );
+        assert_eq!(
+            read_simplification_level(" ( SL3 ) "),
+            Some(SimplificationLevel::SL3)
+        );
         assert_eq!(read_simplification_level("sl2"), None);
         assert_eq!(read_simplification_level("2"), None);
         assert_eq!(read_simplification_level("SL4"), None);

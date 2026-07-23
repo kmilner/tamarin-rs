@@ -65,7 +65,9 @@ pub struct ConvCtx {
 }
 
 impl ConvCtx {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Allocate the next id from the single shared encounter-order counter.
     /// Both variables and constants draw from this counter (sort is
@@ -257,11 +259,7 @@ pub fn mterm_to_lnterm(
 /// Information needed to translate a Maude substitution back to an LNSubst.
 /// The Haskell uses `BindT` to share the variable map. We thread `ConvCtx`
 /// explicitly.
-pub fn substitute_lookup_var(
-    ctx: &ConvCtx,
-    sort: LSort,
-    idx: u64,
-) -> Option<LVar> {
+pub fn substitute_lookup_var(ctx: &ConvCtx, sort: LSort, idx: u64) -> Option<LVar> {
     // Delegates to `lookup_canonical_var_lit` (identical strict lookup +
     // sort-tolerant fallback over the same candidate array) and projects the
     // hit to its `LVar`.  Every `MaudeVar(idx, sort)` key in `ctx.inverse` is
@@ -290,17 +288,25 @@ pub fn substitute_lookup_var(
 /// the matched literal (not just the LVar) so that callers in
 /// `mterm_to_lnterm` can reuse the canonical original LVar instead of
 /// fabricating a sort-mismatched fresh one.
-pub fn lookup_canonical_var_lit(
-    ctx: &ConvCtx,
-    sort: LSort,
-    idx: u64,
-) -> Option<Lit<Name, LVar>> {
+pub fn lookup_canonical_var_lit(ctx: &ConvCtx, sort: LSort, idx: u64) -> Option<Lit<Name, LVar>> {
     if let Some(l) = ctx.inverse.get(&MaudeLit::MaudeVar(idx, sort)).cloned() {
         return Some(l);
     }
-    for sort_candidate in &[LSort::Pub, LSort::Fresh, LSort::Nat, LSort::Msg, LSort::Node] {
-        if *sort_candidate == sort { continue; }
-        if let Some(l) = ctx.inverse.get(&MaudeLit::MaudeVar(idx, *sort_candidate)).cloned() {
+    for sort_candidate in &[
+        LSort::Pub,
+        LSort::Fresh,
+        LSort::Nat,
+        LSort::Msg,
+        LSort::Node,
+    ] {
+        if *sort_candidate == sort {
+            continue;
+        }
+        if let Some(l) = ctx
+            .inverse
+            .get(&MaudeLit::MaudeVar(idx, *sort_candidate))
+            .cloned()
+        {
             return Some(l);
         }
     }
@@ -323,17 +329,26 @@ mod tests {
         };
         assert_eq!(sort_of_name(&msg_skol), LSort::Msg);
         // A non-skolem Pub constant is still Pub.
-        let real_pub = Name { tag: NameTag::Pub, id: NameId::new("alice") };
+        let real_pub = Name {
+            tag: NameTag::Pub,
+            id: NameId::new("alice"),
+        };
         assert_eq!(sort_of_name(&real_pub), LSort::Pub);
         // The sentinel only applies to Pub-tagged carriers.
-        let fresh = Name { tag: NameTag::Fresh, id: NameId::new("k") };
+        let fresh = Name {
+            tag: NameTag::Fresh,
+            id: NameId::new("k"),
+        };
         assert_eq!(sort_of_name(&fresh), LSort::Fresh);
         // And the emitted Maude constant uses the `c` (Msg) symbol.
         let t: LNTerm = Term::Lit(Lit::Con(msg_skol));
         let mut ctx = ConvCtx::new();
         let mt = lterm_to_mterm_global(&t, &mut ctx);
         let wire = String::from_utf8(crate::maude_print::pp_mterm(&mt)).unwrap();
-        assert!(wire.starts_with("c("), "expected Msg constant `c(..)`, got {wire}");
+        assert!(
+            wire.starts_with("c("),
+            "expected Msg constant `c(..)`, got {wire}"
+        );
     }
 
     #[test]
@@ -429,18 +444,12 @@ mod tests {
         // Expected: em(x.9, x.10) — args sorted idx-first.
         let expected: LNTerm = crate::term::f_app_c(
             CSym::EMap,
-            vec![
-                Term::Lit(Lit::Var(x9)),
-                Term::Lit(Lit::Var(x10)),
-            ],
+            vec![Term::Lit(Lit::Var(x9)), Term::Lit(Lit::Var(x10))],
         );
         assert_eq!(back, expected);
         // And concretely: first arg is x.9, not x.10.
         if let Term::App(_, args) = &back {
-            assert_eq!(
-                args[0],
-                Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 9)))
-            );
+            assert_eq!(args[0], Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 9))));
         } else {
             panic!("expected an App");
         }

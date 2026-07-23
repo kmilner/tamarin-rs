@@ -34,7 +34,11 @@ use crate::rule::ProtoRuleE;
 
 /// How verbosely to report partial-evaluation progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EvaluationStyle { Silent, Summary, Tracing }
+pub enum EvaluationStyle {
+    Silent,
+    Summary,
+    Tracing,
+}
 
 /// Higher-order combinator used to build abstract interpreters over a
 /// set of multiset-rewriting rules. Mirrors Haskell's
@@ -72,8 +76,10 @@ where
     // Without typed-rule unification we only emit the (start, rules)
     // pair and stop. A future revision will iterate `refineRule`
     // until fixpoint.
-    let st = add_fact(LNFact::new(crate::fact::FactTag::Fresh, vec![]),
-        add_fact(LNFact::new(crate::fact::FactTag::In, vec![]), init_state));
+    let st = add_fact(
+        LNFact::new(crate::fact::FactTag::Fresh, vec![]),
+        add_fact(LNFact::new(crate::fact::FactTag::In, vec![]), init_state),
+    );
     let _ = state_facts;
     vec![(st, rules.to_vec())]
 }
@@ -81,9 +87,10 @@ where
 /// `partialEvaluation` placeholder. Returns the input untouched
 /// until the underlying unification primitive is wired up.
 #[allow(dead_code)] // unused placeholder; see module-level note
-pub fn partial_evaluation(_style: EvaluationStyle, rus: &[ProtoRuleE])
-    -> (Vec<LNFact>, Vec<ProtoRuleE>)
-{
+pub fn partial_evaluation(
+    _style: EvaluationStyle,
+    rus: &[ProtoRuleE],
+) -> (Vec<LNFact>, Vec<ProtoRuleE>) {
     (Vec::new(), rus.to_vec())
 }
 

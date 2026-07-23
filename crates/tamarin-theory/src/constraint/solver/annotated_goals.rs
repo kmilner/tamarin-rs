@@ -34,7 +34,11 @@ pub struct AnnotatedGoal {
 
 impl AnnotatedGoal {
     pub fn new(goal: Goal, seq: u64, usefulness: Usefulness) -> Self {
-        AnnotatedGoal { goal, seq, usefulness }
+        AnnotatedGoal {
+            goal,
+            seq,
+            usefulness,
+        }
     }
 }
 

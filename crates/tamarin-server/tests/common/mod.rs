@@ -9,8 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tamarin_server::{
-    handlers::static_files::resolve_data_dir,
-    router, AppState, ServerConfig, TheoryStore,
+    handlers::static_files::resolve_data_dir, router, AppState, ServerConfig, TheoryStore,
 };
 
 /// One running test server.
@@ -54,7 +53,8 @@ pub async fn start_server_with_theory(fixture_name: &str) -> TestServer {
     assert!(
         theory_path.is_file(),
         "fixture {} missing at {}",
-        fixture_name, theory_path.display(),
+        fixture_name,
+        theory_path.display(),
     );
 
     // Resolve a real data dir if we have one; tests that don't touch
@@ -75,19 +75,20 @@ pub async fn start_server_with_theory(fixture_name: &str) -> TestServer {
     // Load theory before starting server.
     let store = TheoryStore::default();
     let entry = tamarin_server::theory_io::load_from_path(
-        &theory_path, &detect_maude(), cfg.derivcheck_timeout)
-        .expect("fixture should parse + elaborate");
+        &theory_path,
+        &detect_maude(),
+        cfg.derivcheck_timeout,
+    )
+    .expect("fixture should parse + elaborate");
     let _idx = store.insert(entry);
 
     let state = Arc::new(AppState { cfg, store });
     let app = router(state.clone());
 
     // Bind to an ephemeral port; remember the resolved socket addr.
-    let listener = tokio::net::TcpListener::bind(
-        "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
-    )
-    .await
-    .expect("bind to 127.0.0.1:0");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0".parse::<SocketAddr>().unwrap())
+        .await
+        .expect("bind to 127.0.0.1:0");
     let addr = listener.local_addr().expect("local_addr after bind");
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();

@@ -25,13 +25,17 @@ pub struct FastFreshState {
 
 impl FastFreshState {
     /// Empty supply.
-    pub fn nothing_used() -> Self { FastFreshState { next: 0 } }
+    pub fn nothing_used() -> Self {
+        FastFreshState { next: 0 }
+    }
 
     /// Supply seeded so the first `fresh_ident` yields `seed` (HS
     /// `evalFresh action seed` over the `FastFresh` `FreshState = Integer`).
     /// Used by `Sapic.States.addStatesChannels`, which seeds the counter at
     /// `initStateChan` (the next free `StateChannel` index).
-    pub fn seeded(seed: u64) -> Self { FastFreshState { next: seed } }
+    pub fn seeded(seed: u64) -> Self {
+        FastFreshState { next: seed }
+    }
 
     /// Allocate `k` consecutive identifiers and return the first one.
     pub fn fresh_idents(&mut self, k: u64) -> u64 {
@@ -41,7 +45,9 @@ impl FastFreshState {
     }
 
     /// Allocate one identifier.
-    pub fn fresh_ident(&mut self) -> u64 { self.fresh_idents(1) }
+    pub fn fresh_ident(&mut self) -> u64 {
+        self.fresh_idents(1)
+    }
 
     /// Run `f` against this state but discard any allocations it made.
     pub fn scope_freshness<R, F: FnOnce(&mut Self) -> R>(&mut self, f: F) -> R {
@@ -67,7 +73,11 @@ pub struct PreciseFreshState {
 }
 
 impl PreciseFreshState {
-    pub fn nothing_used() -> Self { PreciseFreshState { map: FastMap::default() } }
+    pub fn nothing_used() -> Self {
+        PreciseFreshState {
+            map: FastMap::default(),
+        }
+    }
 
     /// Port of HS `avoidPreciseVars` (Term/LTerm.hs:681-684):
     /// `foldl' (\m (name, idx) -> insertWith max name (idx+1) m) empty`.
@@ -80,7 +90,11 @@ impl PreciseFreshState {
         for (name, idx) in vars {
             let want = idx + 1;
             map.entry(name)
-                .and_modify(|cur| { if want > *cur { *cur = want; } })
+                .and_modify(|cur| {
+                    if want > *cur {
+                        *cur = want;
+                    }
+                })
                 .or_insert(want);
         }
         PreciseFreshState { map }
@@ -123,7 +137,9 @@ impl PreciseFreshState {
     }
 
     /// Read-only view of the underlying counters.
-    pub fn as_map(&self) -> &FastMap<String, u64> { &self.map }
+    pub fn as_map(&self) -> &FastMap<String, u64> {
+        &self.map
+    }
 }
 
 #[cfg(test)]

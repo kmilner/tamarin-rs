@@ -54,8 +54,11 @@ async fn test_intdot_returns_html_shell() {
     let body = res.text().await.expect("text");
     // HS returns the shell page regardless of whether the path has a
     // system — the `<dot-graph-viz>` fetches the DOT lazily.
-    assert!(body.contains("<dot-graph-viz"),
-        "intdot must return the HTML shell; got: {}", &body[..body.len().min(200)]);
+    assert!(
+        body.contains("<dot-graph-viz"),
+        "intdot must return the HTML shell; got: {}",
+        &body[..body.len().min(200)]
+    );
 }
 
 #[tokio::test]
@@ -73,9 +76,9 @@ async fn test_graph_returns_image_or_dot() {
     let ct_str = ct.as_ref().map(|v| v.to_str().unwrap_or("")).unwrap_or("");
     // Accept either SVG or DOT fallback — both are valid responses.
     assert!(
-        ct_str.starts_with("image/svg+xml")
-            || ct_str.starts_with("text/plain"),
-        "unexpected content-type: {:?}", ct_str,
+        ct_str.starts_with("image/svg+xml") || ct_str.starts_with("text/plain"),
+        "unexpected content-type: {:?}",
+        ct_str,
     );
     assert!(
         body.contains("<svg") || body.contains("digraph"),

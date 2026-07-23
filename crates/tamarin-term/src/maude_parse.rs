@@ -10,14 +10,11 @@
 //! `get variants`, and `reduce` queries.
 
 use crate::function_symbols::{
-    AcSym, Constructability, FunSym, NoEqSym, Privacy, CSym,
-    EMAP_SYM_STRING, MULT_SYM_STRING, MUN_SYM_STRING,
-    NAT_PLUS_SYM_STRING, XOR_SYM_STRING,
+    AcSym, CSym, Constructability, FunSym, NoEqSym, Privacy, EMAP_SYM_STRING, MULT_SYM_STRING,
+    MUN_SYM_STRING, NAT_PLUS_SYM_STRING, XOR_SYM_STRING,
 };
 use crate::lterm::LSort;
-use crate::maude_print::{
-    fun_sym_decode, parse_lsort_sym, replace_minus, FUN_SYM_PREFIX,
-};
+use crate::maude_print::{fun_sym_decode, parse_lsort_sym, replace_minus, FUN_SYM_PREFIX};
 use crate::maude_types::{MSubst, MTerm, MaudeLit};
 use crate::term::Term;
 
@@ -41,27 +38,50 @@ struct Cursor<'a> {
 }
 
 impl<'a> Cursor<'a> {
-    fn new(src: &'a [u8]) -> Self { Cursor { src, pos: 0 } }
-    fn rest(&self) -> &[u8] { &self.src[self.pos..] }
-    fn is_eof(&self) -> bool { self.pos >= self.src.len() }
-    fn peek(&self) -> Option<u8> { self.src.get(self.pos).copied() }
+    fn new(src: &'a [u8]) -> Self {
+        Cursor { src, pos: 0 }
+    }
+    fn rest(&self) -> &[u8] {
+        &self.src[self.pos..]
+    }
+    fn is_eof(&self) -> bool {
+        self.pos >= self.src.len()
+    }
+    fn peek(&self) -> Option<u8> {
+        self.src.get(self.pos).copied()
+    }
     fn eat(&mut self, b: u8) -> bool {
-        if self.peek() == Some(b) { self.pos += 1; true } else { false }
+        if self.peek() == Some(b) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        }
     }
     fn eat_str(&mut self, s: &[u8]) -> bool {
         if self.rest().starts_with(s) {
             self.pos += s.len();
             true
-        } else { false }
+        } else {
+            false
+        }
     }
     fn read_decimal(&mut self) -> Option<u64> {
         let start = self.pos;
         while let Some(b) = self.peek() {
-            if b.is_ascii_digit() { self.pos += 1; } else { break; }
+            if b.is_ascii_digit() {
+                self.pos += 1;
+            } else {
+                break;
+            }
         }
-        if self.pos == start { None }
-        else { std::str::from_utf8(&self.src[start..self.pos]).ok()
-            .and_then(|s| s.parse().ok()) }
+        if self.pos == start {
+            None
+        } else {
+            std::str::from_utf8(&self.src[start..self.pos])
+                .ok()
+                .and_then(|s| s.parse().ok())
+        }
     }
     fn skip_eol(&mut self) -> bool {
         self.eat_str(b"\r\n") || self.eat(b'\n')
@@ -70,7 +90,11 @@ impl<'a> Cursor<'a> {
     fn take_while<F: Fn(u8) -> bool>(&mut self, f: F) -> &'a [u8] {
         let start = self.pos;
         while let Some(b) = self.peek() {
-            if f(b) { self.pos += 1; } else { break; }
+            if f(b) {
+                self.pos += 1;
+            } else {
+                break;
+            }
         }
         &self.src[start..self.pos]
     }
@@ -104,8 +128,10 @@ pub fn parse_match_reply(reply: &[u8]) -> Result<Vec<MSubst>, ParseError> {
 pub fn parse_reduce_reply(reply: &[u8]) -> Result<MTerm, ParseError> {
     let mut c = Cursor::new(reply);
     if !c.eat_str(b"result ") {
-        return Err(ParseError(format!("expected `result `, got: {:?}",
-            String::from_utf8_lossy(&c.rest()[..c.rest().len().min(40)]))));
+        return Err(ParseError(format!(
+            "expected `result `, got: {:?}",
+            String::from_utf8_lossy(&c.rest()[..c.rest().len().min(40)])
+        )));
     }
     // Sort: TOP -> Msg, otherwise parse_sort.
     if c.eat_str(b"TOP") {
@@ -127,7 +153,9 @@ pub fn parse_variants_reply(reply: &[u8]) -> Result<Vec<MSubst>, ParseError> {
     let _ = c.skip_eol();
     let mut variants = Vec::new();
     loop {
-        if c.eat_str(b"No more variants.") { break; }
+        if c.eat_str(b"No more variants.") {
+            break;
+        }
         if !c.eat_str(b"Variant ") {
             return Err(ParseError(format!(
                 "expected `Variant ` or `No more variants.`; got {:?}",
@@ -136,9 +164,13 @@ pub fn parse_variants_reply(reply: &[u8]) -> Result<Vec<MSubst>, ParseError> {
         }
         // Maude prints `Variant #N`; the `#` is optional.
         let _ = c.eat(b'#');
-        let _ = c.read_decimal().ok_or_else(|| ParseError("variant id".into()))?;
+        let _ = c
+            .read_decimal()
+            .ok_or_else(|| ParseError("variant id".into()))?;
         let _ = c.skip_eol();
-        if !c.eat_str(b"rewrites: ") { return Err(ParseError("expected rewrites:".into())); }
+        if !c.eat_str(b"rewrites: ") {
+            return Err(ParseError("expected rewrites:".into()));
+        }
         let _ = c.read_decimal();
         let _ = c.skip_eol();
         // Reprinted term (sort/TOP : term\n)
@@ -146,7 +178,9 @@ pub fn parse_variants_reply(reply: &[u8]) -> Result<Vec<MSubst>, ParseError> {
         } else {
             parse_sort(&mut c)?;
         }
-        if !c.eat_str(b": ") { return Err(ParseError("expected `: ` in reprinted term".into())); }
+        if !c.eat_str(b": ") {
+            return Err(ParseError("expected `: ` in reprinted term".into()));
+        }
         let _ = parse_term(&mut c)?;
         let _ = c.skip_eol();
         // Then bindings: `xN:Sort --> term\n` until empty line.
@@ -194,12 +228,20 @@ fn parse_substitutions(c: &mut Cursor) -> Result<Vec<MSubst>, ParseError> {
     let mut substs = Vec::new();
     loop {
         let _ = c.skip_eol();
-        if c.is_eof() { break; }
+        if c.is_eof() {
+            break;
+        }
         // Each substitution starts with `Solution N`, `Unifier N`, or `Matcher N`.
         let saved = c.pos;
         let header_ok = c.eat_str(b"Solution ")
-            || { c.pos = saved; c.eat_str(b"Unifier ") }
-            || { c.pos = saved; c.eat_str(b"Matcher ") };
+            || {
+                c.pos = saved;
+                c.eat_str(b"Unifier ")
+            }
+            || {
+                c.pos = saved;
+                c.eat_str(b"Matcher ")
+            };
         if !header_ok {
             // No more substitution headers; stop reading.  `endOfInput`
             // is enforced after the loop.
@@ -259,8 +301,12 @@ fn parse_entry(c: &mut Cursor) -> Result<((LSort, u64), MTerm), ParseError> {
     if !c.eat_str(b"x") {
         return Err(ParseError("expected `x` for substitution variable".into()));
     }
-    let n = c.read_decimal().ok_or_else(|| ParseError("var index".into()))?;
-    if !c.eat_str(b":") { return Err(ParseError("expected `:` after variable".into())); }
+    let n = c
+        .read_decimal()
+        .ok_or_else(|| ParseError("var index".into()))?;
+    if !c.eat_str(b":") {
+        return Err(ParseError("expected `:` after variable".into()));
+    }
     let sort = parse_sort(c)?;
     if !c.eat_str(b" --> ") {
         return Err(ParseError("expected ` --> `".into()));
@@ -275,30 +321,43 @@ fn parse_entry(c: &mut Cursor) -> Result<((LSort, u64), MTerm), ParseError> {
 // =============================================================================
 
 fn parse_sort(c: &mut Cursor) -> Result<LSort, ParseError> {
-    if c.eat_str(b"Pub") { Ok(LSort::Pub) }
-    else if c.eat_str(b"Fresh") { Ok(LSort::Fresh) }
-    else if c.eat_str(b"Node") { Ok(LSort::Node) }
-    else if c.eat_str(b"TamNat") { Ok(LSort::Nat) }
-    else if c.eat_str(b"Msg") { Ok(LSort::Msg) }
-    else if c.eat_str(b"M") {
+    if c.eat_str(b"Pub") {
+        Ok(LSort::Pub)
+    } else if c.eat_str(b"Fresh") {
+        Ok(LSort::Fresh)
+    } else if c.eat_str(b"Node") {
+        Ok(LSort::Node)
+    } else if c.eat_str(b"TamNat") {
+        Ok(LSort::Nat)
+    } else if c.eat_str(b"Msg") {
+        Ok(LSort::Msg)
+    } else if c.eat_str(b"M") {
         // HS `parseSort` (Parser.hs:310-311) parses sort `Msg` as
         // `string "M" *> string "sg"` (marked `FIXME: why?`); the explicit
         // `Msg` branch above plus this `M`+`sg` branch reproduce it. Both
         // accept exactly the byte sequence `Msg`.
-        if c.eat_str(b"sg") { Ok(LSort::Msg) }
-        else { Err(ParseError("unknown sort starting with M".into())) }
-    }
-    else {
-        Err(ParseError(format!("unknown sort prefix at {:?}",
-            String::from_utf8_lossy(&c.rest()[..c.rest().len().min(20)]))))
+        if c.eat_str(b"sg") {
+            Ok(LSort::Msg)
+        } else {
+            Err(ParseError("unknown sort starting with M".into()))
+        }
+    } else {
+        Err(ParseError(format!(
+            "unknown sort prefix at {:?}",
+            String::from_utf8_lossy(&c.rest()[..c.rest().len().min(20)])
+        )))
     }
 }
 
 fn parse_term(c: &mut Cursor) -> Result<MTerm, ParseError> {
     // `#N:Sort` or `%N:Sort` is a fresh variable (Maude-introduced).
     if c.eat(b'#') || c.eat(b'%') {
-        let n = c.read_decimal().ok_or_else(|| ParseError("fresh var idx".into()))?;
-        if !c.eat_str(b":") { return Err(ParseError("expected `:` after fresh idx".into())); }
+        let n = c
+            .read_decimal()
+            .ok_or_else(|| ParseError("fresh var idx".into()))?;
+        if !c.eat_str(b":") {
+            return Err(ParseError("expected `:` after fresh idx".into()));
+        }
         let s = parse_sort(c)?;
         return Ok(Term::Lit(MaudeLit::FreshVar(n, s)));
     }
@@ -315,24 +374,33 @@ fn parse_term(c: &mut Cursor) -> Result<MTerm, ParseError> {
         // Could be a constant `c(123)` or a function application.
         if let Some(s) = std::str::from_utf8(ident).ok().and_then(parse_lsort_sym) {
             // constant
-            let n = c.read_decimal().ok_or_else(|| ParseError("const idx".into()))?;
-            if !c.eat(b')') { return Err(ParseError("expected `)` after const".into())); }
+            let n = c
+                .read_decimal()
+                .ok_or_else(|| ParseError("const idx".into()))?;
+            if !c.eat(b')') {
+                return Err(ParseError("expected `)` after const".into()));
+            }
             return Ok(Term::Lit(MaudeLit::MaudeConst(n, s)));
         }
         // function application: parse comma-separated arguments.
         let mut args = Vec::new();
         loop {
             args.push(parse_term(c)?);
-            if c.eat_str(b", ") || c.eat(b',') { continue; }
+            if c.eat_str(b", ") || c.eat(b',') {
+                continue;
+            }
             break;
         }
-        if !c.eat(b')') { return Err(ParseError("expected `)` after args".into())); }
+        if !c.eat(b')') {
+            return Err(ParseError("expected `)` after args".into()));
+        }
         Ok(build_app(ident, args))
     } else if c.eat_str(b":") {
         // Variable: `xN:Sort` — `ident` is `xN`.
         let s = parse_sort(c)?;
         if let Some(rest) = ident.strip_prefix(b"x") {
-            let n: u64 = std::str::from_utf8(rest).ok()
+            let n: u64 = std::str::from_utf8(rest)
+                .ok()
                 .and_then(|s| s.parse().ok())
                 .ok_or_else(|| ParseError("invalid variable index".into()))?;
             Ok(Term::Lit(MaudeLit::MaudeVar(n, s)))

@@ -89,7 +89,9 @@ pub fn reliable_channel_trans_act(
 
     match ac {
         // ChIn (Just 'c') t — async private channel input.
-        SapicAction::ChIn { chan: Some(v), msg, .. } if pub_name_is(v, "c") => {
+        SapicAction::ChIn {
+            chan: Some(v), msg, ..
+        } if pub_name_is(v, "c") => {
             let vt = to_ln_term(v);
             let t = to_ln_term(msg);
             // `tx' = freeset v ∪ freeset t ∪ tx`
@@ -122,7 +124,9 @@ pub fn reliable_channel_trans_act(
             Ok(Some((vec![body], tx2)))
         }
         // ChIn (Just 'r') t — reliable channel input.
-        SapicAction::ChIn { chan: Some(r), msg, .. } if pub_name_is(r, "r") => {
+        SapicAction::ChIn {
+            chan: Some(r), msg, ..
+        } if pub_name_is(r, "r") => {
             let rt = to_ln_term(r);
             let t = to_ln_term(msg);
             let mut tx2 = tx.clone();
@@ -229,10 +233,7 @@ fn res_reliable() -> p::Restriction {
     let conj = p::Formula::And(Box::new(recv), Box::new(less));
     let exists = p::Formula::Exists(vec![tvar("j", 0)], Box::new(conj));
     let body = p::Formula::Implies(Box::new(send), Box::new(exists));
-    let formula = p::Formula::Forall(
-        vec![tvar("i", 0), mvar("x"), mvar("y")],
-        Box::new(body),
-    );
+    let formula = p::Formula::Forall(vec![tvar("i", 0), mvar("x"), mvar("y")], Box::new(body));
     p::Restriction {
         name: "reliable".to_string(),
         formula,

@@ -32,12 +32,10 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_term::lterm::{LSort, LVar, LNTerm};
+use tamarin_term::lterm::{LNTerm, LSort, LVar};
 use tamarin_term::vterm::{Lit, VTerm};
 
-use tamarin_theory::sapic::{
-    Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm,
-};
+use tamarin_theory::sapic::{Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm};
 
 use crate::annotation::ProcessAnnotation;
 use crate::facts::{AnnotatedRule, RulePosition, SpecialPosition, TransFact};
@@ -68,10 +66,7 @@ pub fn report_init(
     // prem: In( <x, loc> )
     let prem = TransFact::In(tamarin_term::builtin::pair(xt.clone(), loct.clone()));
     // concl: Out( rep(x, loc) )  (rep = private constructor)
-    let rep = tamarin_term::term::f_app_no_eq(
-        tamarin_term::builtin::rep_sym(),
-        vec![xt, loct],
-    );
+    let rep = tamarin_term::term::f_app_no_eq(tamarin_term::builtin::rep_sym(), vec![xt, loct]);
     let concl = TransFact::Out(rep);
 
     // restr: the syntactic predicate atom `Pred (Report( x, loc ))`, as a
@@ -164,7 +159,11 @@ fn report_map_terms_action(
         SapicAction::New(v) => SapicAction::New(v),
         SapicAction::Rep => SapicAction::Rep,
         SapicAction::ProcessCall(name, args) => SapicAction::ProcessCall(name, args),
-        SapicAction::ChIn { chan, msg, match_vars } => SapicAction::ChIn {
+        SapicAction::ChIn {
+            chan,
+            msg,
+            match_vars,
+        } => SapicAction::ChIn {
             chan: chan.map(|t| subst(loc, &t)),
             msg: subst(loc, &msg),
             match_vars,
@@ -178,7 +177,13 @@ fn report_map_terms_action(
         SapicAction::Lock(t) => SapicAction::Lock(subst(loc, &t)),
         SapicAction::Unlock(t) => SapicAction::Unlock(subst(loc, &t)),
         SapicAction::Event(fa) => SapicAction::Event(map_fact_terms(loc, fa)),
-        SapicAction::Msr { prems, acts, concs, rest, match_vars } => SapicAction::Msr {
+        SapicAction::Msr {
+            prems,
+            acts,
+            concs,
+            rest,
+            match_vars,
+        } => SapicAction::Msr {
             prems: prems.into_iter().map(|f| map_fact_terms(loc, f)).collect(),
             acts: acts.into_iter().map(|f| map_fact_terms(loc, f)).collect(),
             concs: concs.into_iter().map(|f| map_fact_terms(loc, f)).collect(),
@@ -200,7 +205,11 @@ fn report_map_terms_comb(
         ProcessCombinator::CondEq(t1, t2) => {
             ProcessCombinator::CondEq(subst(loc, &t1), subst(loc, &t2))
         }
-        ProcessCombinator::Let { left, right, match_vars } => ProcessCombinator::Let {
+        ProcessCombinator::Let {
+            left,
+            right,
+            match_vars,
+        } => ProcessCombinator::Let {
             left: subst(loc, &left),
             right: subst(loc, &right),
             match_vars,
@@ -242,7 +251,8 @@ fn subst(loc: &Option<SapicTerm>, t: &SapicTerm) -> SapicTerm {
                 }
             }
             // `FApp k as -> FApp k (map (subst loc) as)`.
-            let new_args: Vec<SapicTerm> = args.iter().map(|a| subst(&Some(loc.clone()), a)).collect();
+            let new_args: Vec<SapicTerm> =
+                args.iter().map(|a| subst(&Some(loc.clone()), a)).collect();
             match sym {
                 FunSym::Ac(o) => tamarin_term::term::f_app_ac(*o, new_args),
                 FunSym::C(o) => tamarin_term::term::f_app_c(*o, new_args),
@@ -297,10 +307,8 @@ mod tests {
     fn subst_just_rewrites_report_to_rep() {
         // report('c') with location 'loc' becomes rep('c', 'loc').
         let c: SapicTerm = tamarin_term::lterm::pub_term("c");
-        let report_c = tamarin_term::term::f_app_no_eq(
-            tamarin_term::builtin::report_sym(),
-            vec![c.clone()],
-        );
+        let report_c =
+            tamarin_term::term::f_app_no_eq(tamarin_term::builtin::report_sym(), vec![c.clone()]);
         let loc: SapicTerm = tamarin_term::lterm::pub_term("loc");
         let out = subst(&Some(loc.clone()), &report_c);
         match &out {

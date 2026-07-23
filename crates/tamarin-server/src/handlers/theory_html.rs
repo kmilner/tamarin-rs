@@ -20,9 +20,9 @@ use crate::handlers::path_parse::{encode_sub_path, url_path_escape, SourceKind, 
 use crate::handlers::root::html_escape;
 use crate::state::TheoryEntry;
 
-use tamarin_theory::theory::{LemmaAttr, TraceQuantifier};
 use tamarin_theory::constraint::solver::proof_method::{ProofMethod, Result as MethodResult};
 use tamarin_theory::constraint::solver::search::{proof_status, ProofNode, ProofStatus};
+use tamarin_theory::theory::{LemmaAttr, TraceQuantifier};
 
 /// Full overview/framing page (the one served at `/thy/trace/<idx>/overview/...`).
 pub fn overview_page(entry: &TheoryEntry, path: &TheoryPath) -> String {
@@ -62,11 +62,15 @@ fn header(entry: &TheoryEntry) -> String {
     let reload_form = if is_local {
         format!(
             "<li><form class=\"ajax-form ajax-form-full reload-confirm\" method=\"POST\" action=\"/thy/trace/{idx}/reload\"><button class=\"nav-button\" type=\"submit\">Reload file</button></form></li>")
-    } else { String::new() };
+    } else {
+        String::new()
+    };
     let append_form = if is_local {
         format!(
             "<li><form class=\"ajax-form\" method=\"POST\" action=\"/thy/trace/{idx}/get_and_append/{filename}\"><button class=\"link-button\" type=\"submit\">Append modified lemmas to file</button></form></li>")
-    } else { String::new() };
+    } else {
+        String::new()
+    };
     format!(
         "<div class=\"layout-pane-north\"><div id=\"header-info\">Running <a href=/><span class=\"tamarin\">Tamarin</span></a> {version}</div></div>\
 <div id=\"header-links\"><ul id=\"navigation\">\
@@ -112,7 +116,7 @@ fn header(entry: &TheoryEntry) -> String {
 /// the parity normalizer; only element structure / link targets / visible
 /// text are compared.
 fn proof_state(entry: &TheoryEntry) -> String {
-    use tamarin_theory::pretty_hpj::{self as hpj, HtmlDocGuard, postprocess_html};
+    use tamarin_theory::pretty_hpj::{self as hpj, postprocess_html, HtmlDocGuard};
     let typed = &entry.typed_theory;
     let idx = entry.idx;
     // HS renders the whole `theoryIndex` through the `HtmlDoc Doc` transformer
@@ -195,11 +199,13 @@ fn proof_state(entry: &TheoryEntry) -> String {
 /// `web_proto_rules.len()` plus the ISend/IRecv-style intruder members of
 /// `crProtocol` (`ctx.intruder_rules` minus construction/destruction rules).
 fn proto_rule_count(entry: &TheoryEntry) -> usize {
-    let proto = tamarin_theory::pretty_theory::web_proto_rules(
-        &entry.parser_theory, &entry.typed_theory).len();
+    let proto =
+        tamarin_theory::pretty_theory::web_proto_rules(&entry.parser_theory, &entry.typed_theory)
+            .len();
     let extra = entry.proof_state.as_ref().map_or(0, |ps| {
         let ctx = ps.ctx.lock();
-        ctx.intruder_rules.iter()
+        ctx.intruder_rules
+            .iter()
             .filter(|ir| !is_constr_intr(&ir.info) && !is_destr_intr(&ir.info))
             .count()
     });
@@ -222,8 +228,11 @@ fn cases_info(n_cases: usize, n_chains: usize) -> String {
 /// links, the `proofIndex` tree, then a trailing `add lemma`.  The header +
 /// edit/delete are wrapped by HS in `markStatus (root color)` — a `hl_*` span
 /// the normalizer unwraps, so we emit them plain.
-fn lemma_index(out: &mut String, entry: &TheoryEntry,
-               l: &tamarin_theory::theory::Lemma<tamarin_theory::theory::ProofSkeleton>) {
+fn lemma_index(
+    out: &mut String,
+    entry: &TheoryEntry,
+    l: &tamarin_theory::theory::Lemma<tamarin_theory::theory::ProofSkeleton>,
+) {
     let idx = entry.idx;
     let tq = match l.trace_quantifier {
         TraceQuantifier::AllTraces => "all-traces",
@@ -259,10 +268,12 @@ fn lemma_index(out: &mut String, entry: &TheoryEntry,
     // `bold`/name text is entity-escaped; `<->` contributes a single space, so
     // `editLink <-> " or " <-> deleteLink` renders `…edit</a>  or  <a…` (two
     // spaces around "or").
-    out.push_str(&format!("{lemma} {name}{attrs}:\n",
+    out.push_str(&format!(
+        "{lemma} {name}{attrs}:\n",
         lemma = hpj::keyword_("lemma").render(),
         name = html_escape(&l.name),
-        attrs = html_escape(&attrs)));
+        attrs = html_escape(&attrs)
+    ));
     out.push_str(&formula_hdr);
     out.push('\n');
     out.push_str(&format!(
@@ -271,10 +282,17 @@ fn lemma_index(out: &mut String, entry: &TheoryEntry,
         idx = idx, n_url = n_url));
     // `proofIndex l._lName tidx renderUrl mkRoute annPrf` — the annotated
     // proof tree, rendered by `prettyProofWith ppStep ppCase . insertPaths`.
-    let live_root = entry.proof_state.as_ref().and_then(|ps| ps.get_root(&l.name));
+    let live_root = entry
+        .proof_state
+        .as_ref()
+        .and_then(|ps| ps.get_root(&l.name));
     match live_root {
         Some(root) => {
-            let cx = PpCtx { idx, lemma: &l.name, tq: l.trace_quantifier };
+            let cx = PpCtx {
+                idx,
+                lemma: &l.name,
+                tq: l.trace_quantifier,
+            };
             let path: Vec<String> = Vec::new();
             pp_prf(out, &cx, &path, &root, 0);
         }
@@ -289,14 +307,18 @@ fn lemma_index(out: &mut String, entry: &TheoryEntry,
                  href=\"/thy/trace/{idx}/main/proof/{n_url}\">{sorry}</a>",
                 by = hpj::keyword_("by").render(),
                 sorry = hpj::keyword_("sorry").render(),
-                idx = idx, n_url = n_url));
+                idx = idx,
+                n_url = n_url
+            ));
         }
     }
     // `$-$ text "" $-$ addLink`.
     out.push_str("\n\n");
     out.push_str(&format!(
         "<a class=\"internal-link add\" href=\"/thy/trace/{idx}/main/add/{n_url}\">add lemma</a>",
-        idx = idx, n_url = n_url));
+        idx = idx,
+        n_url = n_url
+    ));
 }
 
 /// Addressing context threaded through the `proofIndex` recursion.
@@ -308,7 +330,12 @@ struct PpCtx<'a> {
 
 /// HS `ProofStepColor` after `annotateLemmaProof` — the per-step highlight.
 #[derive(Clone, Copy, PartialEq)]
-enum StepColor { Unmarked, Green, Red, Yellow }
+enum StepColor {
+    Unmarked,
+    Green,
+    Red,
+    Yellow,
+}
 
 /// HS `annotateLemmaProof.interpret` (`src/Web/Theory.hs:2183-2192`): map the
 /// aggregate subtree [`ProofStatus`] + trace quantifier to a highlight colour.
@@ -383,13 +410,24 @@ fn pp_prf(out: &mut String, cx: &PpCtx, path: &[String], node: &ProofNode, depth
         for (i, (name, child)) in children.iter().enumerate() {
             out.push('\n');
             if i > 0 {
-                out.push_str(&format!("{}{}{}{}\n",
-                    ind, mo, hpj::keyword_("next").render(), mc));
+                out.push_str(&format!(
+                    "{}{}{}{}\n",
+                    ind,
+                    mo,
+                    hpj::keyword_("next").render(),
+                    mc
+                ));
             }
             pp_case(out, cx, path, name, child, depth);
         }
         out.push('\n');
-        out.push_str(&format!("{}{}{}{}", ind, mo, hpj::keyword_("qed").render(), mc));
+        out.push_str(&format!(
+            "{}{}{}{}",
+            ind,
+            mo,
+            hpj::keyword_("qed").render(),
+            mc
+        ));
     }
 }
 
@@ -398,8 +436,14 @@ fn pp_prf(out: &mut String, cx: &PpCtx, path: &[String], node: &ProofNode, depth
 /// `case <name>` keyword is wrapped by HS in `markStatus`, a `hl_*` span the
 /// normalizer unwraps, so we emit it plain.  Each named case adds one
 /// `nest 2` level for the whole subtree.
-fn pp_case(out: &mut String, cx: &PpCtx, path: &[String], name: &str, child: &ProofNode,
-           depth: usize) {
+fn pp_case(
+    out: &mut String,
+    cx: &PpCtx,
+    path: &[String],
+    name: &str,
+    child: &ProofNode,
+    depth: usize,
+) {
     use tamarin_theory::pretty_hpj as hpj;
     // `nest 2 $ (kwCase <-> name) $-$ ppPrf prf` — the case header and its whole
     // subtree sit one `nest 2` deeper than this node.  `kwCase` is an
@@ -408,8 +452,14 @@ fn pp_case(out: &mut String, cx: &PpCtx, path: &[String], name: &str, child: &Pr
     // `prettyCase (root prf) (kwCase <-> name)` wraps the case header in
     // `markStatus (root prf)` — the CHILD node's colour span.
     let (mo, mc) = mark_wrap(cx, child);
-    out.push_str(&format!("{}{}{} {}{}\n",
-        ind, mo, hpj::keyword_("case").render(), html_escape(name), mc));
+    out.push_str(&format!(
+        "{}{}{} {}{}\n",
+        ind,
+        mo,
+        hpj::keyword_("case").render(),
+        html_escape(name),
+        mc
+    ));
     let mut child_path = path.to_vec();
     child_path.push(name.to_string());
     pp_prf(out, cx, &child_path, child, depth + 1);
@@ -431,8 +481,14 @@ fn pp_case(out: &mut String, cx: &PpCtx, path: &[String], name: &str, child: &Pr
 /// then stripping the indent/`by ` back off the first line (the `<a>`
 /// wraps only the method text; continuation-line whitespace is
 /// canonicalized by the gate, break positions are what must match).
-fn pp_step(out: &mut String, cx: &PpCtx, path: &[String], node: &ProofNode,
-           depth: usize, by_prefix: bool) {
+fn pp_step(
+    out: &mut String,
+    cx: &PpCtx,
+    path: &[String],
+    node: &ProofNode,
+    depth: usize,
+    by_prefix: bool,
+) {
     use tamarin_theory::pretty_hpj::{self as hpj, Doc, WEB_LINE_LENGTH, WEB_RIBBON};
     // Render `("by "? <> prettyProofMethod)` at `nest (2*depth)` under the
     // ACTIVE `HtmlDocGuard` (proof_state's), so the method carries its `hl_*`
@@ -440,8 +496,7 @@ fn pp_step(out: &mut String, cx: &PpCtx, path: &[String], node: &ProofNode,
     // The `by ` is a plain `Doc::text` here purely to size the budget; it is
     // stripped back off and re-emitted as `keyword_ "by"` OUTSIDE the link.
     let rendered = {
-        let mut doc =
-            tamarin_theory::pretty_theory::pretty_proof_method_doc(&node.method);
+        let mut doc = tamarin_theory::pretty_theory::pretty_proof_method_doc(&node.method);
         if by_prefix {
             doc = Doc::text("by ").beside(doc);
         }
@@ -467,7 +522,10 @@ fn pp_step(out: &mut String, cx: &PpCtx, path: &[String], node: &ProofNode,
     }
     let url = format!(
         "/thy/trace/{idx}/main/proof/{lemma}{path}",
-        idx = cx.idx, lemma = url_path_escape(cx.lemma), path = encode_sub_path(path));
+        idx = cx.idx,
+        lemma = url_path_escape(cx.lemma),
+        path = encode_sub_path(path)
+    );
     if !node.annotated {
         // `superfluousStep = withTag "span" [("class","hl_superfluous")] ppMethod`.
         // HS appends `removeStep` regardless of the annotation branch
@@ -478,7 +536,9 @@ fn pp_step(out: &mut String, cx: &PpCtx, path: &[String], node: &ProofNode,
         out.push_str(&format!("<span class=\"hl_superfluous\">{}</span>", label));
         if !matches!(node.method, ProofMethod::Sorry(_)) {
             out.push_str(&format!(
-                "<a class=\"internal-link remove-step\" href=\"{url}\"></a>", url = url));
+                "<a class=\"internal-link remove-step\" href=\"{url}\"></a>",
+                url = url
+            ));
         }
         return;
     }
@@ -491,7 +551,10 @@ fn pp_step(out: &mut String, cx: &PpCtx, path: &[String], node: &ProofNode,
     };
     out.push_str(&format!(
         "<a class=\"internal-link proof-step {cls}\" href=\"{url}\">{label}</a>",
-        cls = cls, url = url, label = label));
+        cls = cls,
+        url = url,
+        label = label
+    ));
     // `invalidatedStep`: an `Invalidated` step also gets a `verify it` link.
     if color == StepColor::Yellow && matches!(node.method, ProofMethod::Invalidated) {
         out.push_str(&format!(
@@ -501,32 +564,39 @@ fn pp_step(out: &mut String, cx: &PpCtx, path: &[String], node: &ProofNode,
     // `<> case psMethod step of Sorry _ -> emptyDoc; _ -> removeStep`.
     if !matches!(node.method, ProofMethod::Sorry(_)) {
         out.push_str(&format!(
-            "<a class=\"internal-link remove-step\" href=\"{url}\"></a>", url = url));
+            "<a class=\"internal-link remove-step\" href=\"{url}\"></a>",
+            url = url
+        ));
     }
 }
 
-
 fn render_attrs(attrs: &[LemmaAttr], in_file: &str) -> String {
-    if attrs.is_empty() { return String::new(); }
-    let parts: Vec<String> = attrs.iter().map(|a| match a {
-        LemmaAttr::Sources => "sources".into(),
-        LemmaAttr::Reuse => "reuse".into(),
-        LemmaAttr::DiffReuse => "diff_reuse".into(),
-        LemmaAttr::UseInduction => "use_induction".into(),
-        LemmaAttr::HideLemma(s) => format!("hide_lemma={}", s),
-        // HS prints the STORED ranking value, whose oracle name was resolved
-        // at parse time; RS keeps the raw source string, so it must be
-        // re-rendered with the oracle name expanded — the same
-        // `pretty_goal_rankings` the batch printer's `lemma_attr_docs` uses
-        // (`heuristic=O` alone would drop the oracle file name).
-        LemmaAttr::Heuristic(s) => format!(
-            "heuristic={}",
-            tamarin_theory::pretty_theory::pretty_goal_rankings(s, in_file)),
-        LemmaAttr::Output(xs) => format!("output={}", xs.join(",")),
-        LemmaAttr::Left => "left".into(),
-        LemmaAttr::Right => "right".into(),
-        LemmaAttr::Hint(s) => s.clone(),
-    }).collect();
+    if attrs.is_empty() {
+        return String::new();
+    }
+    let parts: Vec<String> = attrs
+        .iter()
+        .map(|a| match a {
+            LemmaAttr::Sources => "sources".into(),
+            LemmaAttr::Reuse => "reuse".into(),
+            LemmaAttr::DiffReuse => "diff_reuse".into(),
+            LemmaAttr::UseInduction => "use_induction".into(),
+            LemmaAttr::HideLemma(s) => format!("hide_lemma={}", s),
+            // HS prints the STORED ranking value, whose oracle name was resolved
+            // at parse time; RS keeps the raw source string, so it must be
+            // re-rendered with the oracle name expanded — the same
+            // `pretty_goal_rankings` the batch printer's `lemma_attr_docs` uses
+            // (`heuristic=O` alone would drop the oracle file name).
+            LemmaAttr::Heuristic(s) => format!(
+                "heuristic={}",
+                tamarin_theory::pretty_theory::pretty_goal_rankings(s, in_file)
+            ),
+            LemmaAttr::Output(xs) => format!("output={}", xs.join(",")),
+            LemmaAttr::Left => "left".into(),
+            LemmaAttr::Right => "right".into(),
+            LemmaAttr::Hint(s) => s.clone(),
+        })
+        .collect();
     format!(" [{}]", parts.join(", "))
 }
 
@@ -547,11 +617,17 @@ pub fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> String {
             // is entity-escaped by `Doc::text` under the guard.
             let _html = tamarin_theory::pretty_hpj::HtmlDocGuard::enable();
             // `vcat (intersperse (text "") s)` = tactics joined by a blank line.
-            let body = typed.tactic.iter().map(|t| t.render())
-                .collect::<Vec<_>>().join("\n\n");
-            assemble_pane(vec![
-                Some(section_fragment("Tactic(s)", "monospace rules", &body)),
-            ])
+            let body = typed
+                .tactic
+                .iter()
+                .map(|t| t.render())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            assemble_pane(vec![Some(section_fragment(
+                "Tactic(s)",
+                "monospace rules",
+                &body,
+            ))])
         }
         // HS renders `text "this is a mistake"` for the bare lemma path
         // (`htmlThyPath` `TheoryLemma _`, Web/Theory.hs:1005-1144, see line 1068) — the UI never
@@ -574,7 +650,9 @@ pub fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> String {
 /// "Enter your new Lemma" default as Add.  `rows = 2 + (#newlines in plaintext)`
 /// (HS `textHeight`).
 fn edit_lemma_html(entry: &TheoryEntry, name: &str) -> String {
-    let plaintext = entry.typed_theory.lookup_lemma(name)
+    let plaintext = entry
+        .typed_theory
+        .lookup_lemma(name)
         .map(|l| l.plaintext.clone())
         .unwrap_or_else(|| "Enter your new Lemma".to_string());
     let rows = 2 + plaintext.matches('\n').count();
@@ -733,7 +811,8 @@ pub fn proof_html(entry: &TheoryEntry, lemma: &str, sub: &[String]) -> String {
                 let mut ctx_guard = ps.ctx.lock();
                 ps.install_lemma_settings(&mut ctx_guard, lemma);
                 return crate::handlers::proof_tree::render_sub_proof_snippet(
-                    entry.idx, lemma, sub, n, &ctx_guard);
+                    entry.idx, lemma, sub, n, &ctx_guard,
+                );
             }
         }
     }
@@ -755,17 +834,22 @@ use tamarin_theory::rule::{IntrRuleAC, IntrRuleACInfo};
 /// HS `isConstrRule` for the message-page classification (Model/Rule.hs:684-691):
 /// `_crConstruct` = ConstrRule | FreshConstr | PubConstr | NatConstr | Coerce.
 fn is_constr_intr(info: &IntrRuleACInfo) -> bool {
-    matches!(info,
+    matches!(
+        info,
         IntrRuleACInfo::ConstrRule(_)
-        | IntrRuleACInfo::FreshConstr
-        | IntrRuleACInfo::PubConstr
-        | IntrRuleACInfo::NatConstr
-        | IntrRuleACInfo::Coerce)
+            | IntrRuleACInfo::FreshConstr
+            | IntrRuleACInfo::PubConstr
+            | IntrRuleACInfo::NatConstr
+            | IntrRuleACInfo::Coerce
+    )
 }
 
 /// HS `isDestrRule` (Model/Rule.hs:671-675): `_crDestruct` = DestrRule | IEquality.
 fn is_destr_intr(info: &IntrRuleACInfo) -> bool {
-    matches!(info, IntrRuleACInfo::DestrRule(..) | IntrRuleACInfo::IEquality)
+    matches!(
+        info,
+        IntrRuleACInfo::DestrRule(..) | IntrRuleACInfo::IEquality
+    )
 }
 
 /// HS `ppSection header s = withTag "h2" [] (text header) $$ withTag "p"
@@ -790,7 +874,11 @@ fn section_fragment(header: &str, class: &str, body: &str) -> String {
 /// whole section is `emptyDoc` (omitted from the `vcat`) when `body` is empty
 /// (`caseEmptyDoc emptyDoc … body`).
 fn with_header_fragment(header: &str, class: &str, body: &str) -> Option<String> {
-    if body.is_empty() { None } else { Some(section_fragment(header, class, body)) }
+    if body.is_empty() {
+        None
+    } else {
+        Some(section_fragment(header, class, body))
+    }
 }
 
 /// `vcat` the pane fragments (HS `messageSnippet`/`rulesSnippet` top-level
@@ -814,8 +902,8 @@ fn message_html(entry: &TheoryEntry) -> String {
     let _html = tamarin_theory::pretty_hpj::HtmlDocGuard::enable();
     // `prettySignatureWithMaude thy._thySignature` — the same signature block
     // the theory body prints.
-    let sig_block = tamarin_theory::pretty_theory::web_signature_block(
-        &entry.typed_theory.signature.maude_sig);
+    let sig_block =
+        tamarin_theory::pretty_theory::web_signature_block(&entry.typed_theory.signature.maude_sig);
     // `getClassifiedRules thy`'s `_crConstruct` / `_crDestruct`.  RS stores
     // proto rules separately, so `ctx.intruder_rules` is exactly HS's
     // `intrRulesAC`; an order-preserving filter reproduces the classification.
@@ -824,8 +912,11 @@ fn message_html(entry: &TheoryEntry) -> String {
     if let Some(ps) = &entry.proof_state {
         let ctx = ps.ctx.lock();
         for ir in &ctx.intruder_rules {
-            if is_constr_intr(&ir.info) { construct.push(ir.clone()); }
-            else if is_destr_intr(&ir.info) { destruct.push(ir.clone()); }
+            if is_constr_intr(&ir.info) {
+                construct.push(ir.clone());
+            } else if is_destr_intr(&ir.info) {
+                destruct.push(ir.clone());
+            }
         }
     }
     // `map prettyRuleAC` joined by one blank line == `pretty_intruder_variants`
@@ -837,8 +928,16 @@ fn message_html(entry: &TheoryEntry) -> String {
     // is ALWAYS emitted (even with an empty body), unlike `ppWithHeader`.
     assemble_pane(vec![
         Some(section_fragment("Signature", "monospace rules", &sig_block)),
-        Some(section_fragment("Construction Rules", "monospace rules", &construct_block)),
-        Some(section_fragment("Deconstruction Rules", "monospace rules", &destruct_block)),
+        Some(section_fragment(
+            "Construction Rules",
+            "monospace rules",
+            &construct_block,
+        )),
+        Some(section_fragment(
+            "Deconstruction Rules",
+            "monospace rules",
+            &destruct_block,
+        )),
     ])
 }
 
@@ -880,15 +979,17 @@ fn rules_html(entry: &TheoryEntry) -> String {
     // empty else ppWithHeader "Macros" (prettyMacros ...)` — a `text ""` blank
     // line when there are no macros, else the macros section.
     let macros_block = tamarin_theory::pretty_theory::web_macros(&entry.parser_theory);
-    let proto_rules = tamarin_theory::pretty_theory::web_proto_rules(
-        &entry.parser_theory, &entry.typed_theory);
+    let proto_rules =
+        tamarin_theory::pretty_theory::web_proto_rules(&entry.parser_theory, &entry.typed_theory);
     let mut inj_body = String::from("None");
     let mut extra_ac: Vec<String> = Vec::new();
     if let Some(ps) = &entry.proof_state {
         let ctx = ps.ctx.lock();
         // `getInjectiveFactInsts thy` — already computed on the context.
         if !ctx.injective_fact_insts.is_empty() {
-            let items: Vec<String> = ctx.injective_fact_insts.iter()
+            let items: Vec<String> = ctx
+                .injective_fact_insts
+                .iter()
                 .map(|(tag, behaviours)| show_inj_fact(tag, behaviours))
                 .collect();
             inj_body = items.join(", ");
@@ -901,9 +1002,11 @@ fn rules_html(entry: &TheoryEntry) -> String {
         // (`\n`) with the other rules below.
         let comment = multi_comment_(&["has exactly the trivial AC variant"]).render();
         for ir in &ctx.intruder_rules {
-            if is_constr_intr(&ir.info) || is_destr_intr(&ir.info) { continue; }
-            let body = tamarin_theory::pretty_formula::pretty_intruder_variants(
-                std::slice::from_ref(ir));
+            if is_constr_intr(&ir.info) || is_destr_intr(&ir.info) {
+                continue;
+            }
+            let body =
+                tamarin_theory::pretty_formula::pretty_intruder_variants(std::slice::from_ref(ir));
             extra_ac.push(format!("{body}\n\n  {comment}\n\n"));
         }
     }
@@ -917,8 +1020,9 @@ fn rules_html(entry: &TheoryEntry) -> String {
     let msr_body = msr_parts.join("\n");
     // `vsep $ map prettyRestriction` (Web/Theory.hs:887-917, see line 895) = `foldr ($--$)` =
     // blank line between restrictions.
-    let restr_body = tamarin_theory::pretty_theory::web_restrictions(
-        &entry.parser_theory, &entry.typed_theory).join("\n\n");
+    let restr_body =
+        tamarin_theory::pretty_theory::web_restrictions(&entry.parser_theory, &entry.typed_theory)
+            .join("\n\n");
 
     // HS `rulesSnippet` order: Macros slot → Fact Symbols → MSR → Restrictions.
     let macros_slot = match &macros_block {
@@ -930,11 +1034,16 @@ fn rules_html(entry: &TheoryEntry) -> String {
     assemble_pane(vec![
         macros_slot,
         with_header_fragment(
-            "Fact Symbols with Injective Instances", "monospace rules",
-            &escape_html_entities(&inj_body)),
+            "Fact Symbols with Injective Instances",
+            "monospace rules",
+            &escape_html_entities(&inj_body),
+        ),
         with_header_fragment("Multiset Rewriting Rules", "monospace rules", &msr_body),
         with_header_fragment(
-            "Restrictions of the Set of Traces", "monospace rules", &restr_body),
+            "Restrictions of the Set of Traces",
+            "monospace rules",
+            &restr_body,
+        ),
     ])
 }
 
@@ -954,7 +1063,9 @@ fn sources_html(entry: &TheoryEntry, kind: &SourceKind) -> String {
     };
     let source_lists = compute_source_lists(entry, want_refined);
     // `vcat` the per-source blocks (join with `\n`), then `postprocessHtmlDoc`.
-    let blocks: Vec<String> = source_lists.iter().enumerate()
+    let blocks: Vec<String> = source_lists
+        .iter()
+        .enumerate()
         .map(|(j, (goal, cases))| render_html_source(entry.idx, kind_str, j + 1, goal, cases))
         .collect();
     tamarin_theory::pretty_hpj::postprocess_html(&blocks.join("\n"))
@@ -967,10 +1078,14 @@ fn sources_html(entry: &TheoryEntry, kind: &SourceKind) -> String {
 fn compute_source_lists(
     entry: &TheoryEntry,
     want_refined: bool,
-) -> Vec<(tamarin_theory::constraint::constraints::Goal,
-         Vec<(String, tamarin_theory::constraint::system::System)>)> {
+) -> Vec<(
+    tamarin_theory::constraint::constraints::Goal,
+    Vec<(String, tamarin_theory::constraint::system::System)>,
+)> {
     use tamarin_theory::constraint::system::SourceKind as SysSourceKind;
-    let Some(ps) = &entry.proof_state else { return Vec::new(); };
+    let Some(ps) = &entry.proof_state else {
+        return Vec::new();
+    };
     // Saturation (`s.cases(&ctx)` → `ensure_saturated`) and
     // `refine_with_source_asms` run solver code; `formula_to_guarded` on
     // the `[sources]`-lemma formulas resolves user fun symbols.  All via
@@ -981,31 +1096,50 @@ fn compute_source_lists(
     // (HS `refineWithSourceAsms`, Rule.hs:157).  With no such lemma the refine
     // is a plain relabel to `RefinedSource` (Sources.hs:617-618).
     let typ_asms: Vec<tamarin_theory::guarded::Guarded> = if want_refined {
-        entry.typed_theory.lemmas()
-            .filter(|l| matches!(l.trace_quantifier, TraceQuantifier::AllTraces)
-                && l.attributes.iter().any(|a| matches!(a, LemmaAttr::Sources)))
+        entry
+            .typed_theory
+            .lemmas()
+            .filter(|l| {
+                matches!(l.trace_quantifier, TraceQuantifier::AllTraces)
+                    && l.attributes.iter().any(|a| matches!(a, LemmaAttr::Sources))
+            })
             .filter_map(|l| tamarin_theory::guarded::formula_to_guarded(&l.formula).ok())
             .collect()
-    } else { Vec::new() };
+    } else {
+        Vec::new()
+    };
 
     // `getSource kind thy`: raw = `ctx.full_sources` (precomputed + saturated);
     // refined = raw with `refineWithSourceAsms` applied (or relabeled).
     if want_refined && !typ_asms.is_empty() {
-        let cloned: Vec<_> = ctx.full_sources.iter()
-            .map(|s| { let _ = s.cases(&ctx); s.clone() }).collect();
+        let cloned: Vec<_> = ctx
+            .full_sources
+            .iter()
+            .map(|s| {
+                let _ = s.cases(&ctx);
+                s.clone()
+            })
+            .collect();
         let refined = tamarin_theory::constraint::solver::sources::refine_with_source_asms(
-            cloned, &typ_asms, &ctx);
-        refined.iter().map(|s| (s.goal.clone(), s.cases_or_empty())).collect()
+            cloned, &typ_asms, &ctx,
+        );
+        refined
+            .iter()
+            .map(|s| (s.goal.clone(), s.cases_or_empty()))
+            .collect()
     } else {
-        ctx.full_sources.iter().map(|s| {
-            let mut cases = s.cases(&ctx);
-            if want_refined {
-                for (_, sys) in cases.iter_mut() {
-                    sys.source_kind = Some(SysSourceKind::RefinedSources);
+        ctx.full_sources
+            .iter()
+            .map(|s| {
+                let mut cases = s.cases(&ctx);
+                if want_refined {
+                    for (_, sys) in cases.iter_mut() {
+                        sys.source_kind = Some(SysSourceKind::RefinedSources);
+                    }
                 }
-            }
-            (s.goal.clone(), cases)
-        }).collect()
+                (s.goal.clone(), cases)
+            })
+            .collect()
     }
 }
 
@@ -1016,10 +1150,12 @@ fn compute_source_lists(
 fn source_case_counts(entry: &TheoryEntry, want_refined: bool) -> (usize, usize) {
     let source_lists = compute_source_lists(entry, want_refined);
     let n_cases = source_lists.len();
-    let n_chains: usize = source_lists.iter()
+    let n_chains: usize = source_lists
+        .iter()
         .flat_map(|(_, cases)| cases.iter())
-        .map(|(_, sys)|
-            tamarin_theory::constraint::solver::sources::unsolved_chain_constraints(sys))
+        .map(|(_, sys)| {
+            tamarin_theory::constraint::solver::sources::unsolved_chain_constraints(sys)
+        })
         .sum();
     (n_cases, n_chains)
 }
@@ -1043,8 +1179,10 @@ fn render_html_source(
     // `withTag "h2" [] ppHeader`, `ppHeader = hsep [text "Sources of" <-> ppPrem,
     // parens (nCases <-> "cases")]` — the whole header is ONE Doc so the goal
     // wraps at the width WITH the `Sources of ` prefix offset.
-    let header = format!("<h2>{}</h2>",
-        tamarin_theory::pretty_theory::web_pretty_source_header(goal, n_cases));
+    let header = format!(
+        "<h2>{}</h2>",
+        tamarin_theory::pretty_theory::web_pretty_source_header(goal, n_cases)
+    );
     if cases.is_empty() {
         // HS `withTag "h2" [] ppHeader $-$ withTag "h3" [] (text "No cases.")`.
         return format!("{header}\n<h3>No cases.</h3>");
@@ -1057,7 +1195,11 @@ fn render_html_source(
         // `isPartial = not (null (unsolvedChains se))`.
         let is_partial =
             tamarin_theory::constraint::solver::sources::unsolved_chain_constraints(sys) != 0;
-        let partial = if is_partial { "(partial deconstructions)" } else { "" };
+        let partial = if is_partial {
+            "(partial deconstructions)"
+        } else {
+            ""
+        };
         // HS `fsep [text "Source", int i, text "of", nCases, text " / named ",
         // doubleQuotes (text name), partial]` — `fsep` single-spaces, and the
         // ` / named ` text keeps its own surrounding spaces (→ double spaces),
@@ -1065,7 +1207,10 @@ fn render_html_source(
         // `fsep` space (→ trailing space even when not partial).
         parts.push(format!(
             "<h3>Source {i} of {n}  / named  &quot;{name}&quot; {partial}</h3>",
-            i = ii, n = n_cases, name = escape_html_entities(name), partial = partial,
+            i = ii,
+            n = n_cases,
+            name = escape_html_entities(name),
+            partial = partial,
         ));
         // `refDotInteractiveStaticPath = withTag "static-graph"
         // [("graphSrc", srcPath)] (text "")` — note the capital-S `graphSrc`.
@@ -1079,7 +1224,8 @@ fn render_html_source(
         // [("class","monospace cases")]`.  The sequent renders under the guard.
         parts.push(format!(
             "<p class=\"monospace cases\">{}</p>",
-            tamarin_theory::pretty_system::pretty_non_graph_system(sys)));
+            tamarin_theory::pretty_system::pretty_non_graph_system(sys)
+        ));
     }
     parts.join("\n")
 }

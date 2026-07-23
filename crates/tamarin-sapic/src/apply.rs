@@ -22,8 +22,8 @@ use tamarin_parser::ast as p;
 use tamarin_parser::wf::WfError;
 
 use tamarin_theory::elaborate::ElabError;
-use tamarin_theory::pretty_theory::lnfact_to_parser;
 use tamarin_theory::pretty_sapic::pretty_sapic_top_level;
+use tamarin_theory::pretty_theory::lnfact_to_parser;
 use tamarin_theory::rule::{ProtoRuleE, ProtoRuleName};
 use tamarin_theory::theory::{OpenProtoRule, OpenRestriction, Theory, TheoryItem};
 
@@ -67,8 +67,9 @@ pub fn apply_sapic(
     // at parse time (`Theory.Text.Parser.Sapic.actionprocess`); we do it here,
     // resolving every `Call` against the theory's `ProcessDef`s.
     let defs = collect_process_defs(parsed);
-    let plain = convert_process_with_defs(&top, &defs)
-        .map_err(|e| ElabError { message: format!("SAPIC translation: {}", e.message) })?;
+    let plain = convert_process_with_defs(&top, &defs).map_err(|e| ElabError {
+        message: format!("SAPIC translation: {}", e.message),
+    })?;
 
     // HS `Sapic.checkWellformedness = concatMap (toWfErrorReport . warnProcess)
     // . theoryProcesses` (Warnings.hs:37-38) runs on the parsed process —
@@ -86,8 +87,10 @@ pub fn apply_sapic(
     // declared argument/return type onto the bound variables.
     let maude_sig = &elaborated.signature.maude_sig;
     let user_fun_typings = collect_user_fun_typings(parsed);
-    let typed = type_and_rename_process(maude_sig, &user_fun_typings, &plain)
-        .map_err(|e| ElabError { message: format!("SAPIC typing: {e}") })?;
+    let typed =
+        type_and_rename_process(maude_sig, &user_fun_typings, &plain).map_err(|e| ElabError {
+            message: format!("SAPIC typing: {e}"),
+        })?;
 
     // translate → rules + restrictions.  `needs_in_ev_res = any
     // lemmaNeedsInEvRes (theoryLemmas th)` (Sapic.hs:45-101, see line 101): gates the
@@ -114,8 +117,9 @@ pub fn apply_sapic(
         trans_report: elaborated.options.trans_report,
         state_channel_opt: elaborated.options.state_channel_opt,
     };
-    let translation = translate(&typed, needs_in_ev, st_rules, opts)
-        .map_err(|e| ElabError { message: format!("SAPIC translation: {e}") })?;
+    let translation = translate(&typed, needs_in_ev, st_rules, opts).map_err(|e| ElabError {
+        message: format!("SAPIC translation: {e}"),
+    })?;
 
     // The `predicate:` declarations the embedded `_restrict` formulas expand
     // against (HS `liftedExpandFormula`).  Collected from the parsed theory.
@@ -163,22 +167,21 @@ pub fn apply_sapic(
         }
 
         // `if <formula>` arm: expand the embedded restriction.
-        let (gen_restrs, rewritten) = tamarin_theory::rule_restriction::lift_one_rule(
-            parsed_rule,
-            &predicates,
-            &nullary,
-        )
-        .map_err(|e| ElabError {
-            message: format!("SAPIC _restrict expansion: {}", e.message),
-        })?;
+        let (gen_restrs, rewritten) =
+            tamarin_theory::rule_restriction::lift_one_rule(parsed_rule, &predicates, &nullary)
+                .map_err(|e| ElabError {
+                    message: format!("SAPIC _restrict expansion: {}", e.message),
+                })?;
 
         // Restrictions precede the rule in both theories.
         for r in &gen_restrs {
             parsed.items.push(p::TheoryItem::Restriction(r.clone()));
-            elaborated.items.push(TheoryItem::Restriction(OpenRestriction::new(
-                r.name.clone(),
-                r.formula.clone(),
-            )));
+            elaborated
+                .items
+                .push(TheoryItem::Restriction(OpenRestriction::new(
+                    r.name.clone(),
+                    r.formula.clone(),
+                )));
         }
 
         // Elaborated rule: re-elaborate the rewritten parser-rule body to
@@ -196,10 +199,12 @@ pub fn apply_sapic(
     // single_session) into both theories.
     for restr in &translation.restrictions {
         parsed.items.push(p::TheoryItem::Restriction(restr.clone()));
-        elaborated.items.push(TheoryItem::Restriction(OpenRestriction::new(
-            restr.name.clone(),
-            restr.formula.clone(),
-        )));
+        elaborated
+            .items
+            .push(TheoryItem::Restriction(OpenRestriction::new(
+                restr.name.clone(),
+                restr.formula.clone(),
+            )));
     }
 
     // `addHeuristic [SapicRanking]` unless a heuristic is already set

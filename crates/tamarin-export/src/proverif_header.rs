@@ -30,9 +30,11 @@ mod tests {
 
     #[test]
     fn ordering_groups_by_variant() {
-        let mut hs = [ProVerifHeader::Sym("k".into(), "n".into(), "t".into(), vec![]),
+        let mut hs = [
+            ProVerifHeader::Sym("k".into(), "n".into(), "t".into(), vec![]),
             ProVerifHeader::Type("nat".into()),
-            ProVerifHeader::Type("bitstring".into())];
+            ProVerifHeader::Type("bitstring".into()),
+        ];
         hs.sort();
         // Type variants come before Sym in derived Ord.
         assert!(matches!(hs[0], ProVerifHeader::Type(_)));

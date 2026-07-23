@@ -17,8 +17,8 @@
 use std::collections::BTreeMap;
 
 use crate::lterm::{LVar, Name};
-use crate::vterm::{Lit, VTerm};
 use crate::term::{Term, TermSize};
+use crate::vterm::{Lit, VTerm};
 
 // `PartialOrd` / `Ord` derived to mirror Haskell's `deriving (Ord, ..)` on
 // `SubstVFresh c v` (SubstVFresh.hs:79-80).  Haskell's `S.toList` in `performSplit`
@@ -32,7 +32,11 @@ pub struct SubstVFresh<C, V> {
 }
 
 impl<C, V> Default for SubstVFresh<C, V> {
-    fn default() -> Self { SubstVFresh { map: BTreeMap::new() } }
+    fn default() -> Self {
+        SubstVFresh {
+            map: BTreeMap::new(),
+        }
+    }
 }
 
 pub type LSubstVFresh<C> = SubstVFresh<C, LVar>;
@@ -43,12 +47,16 @@ where
     C: Ord + Clone,
     V: Ord + Clone,
 {
-    pub fn empty() -> Self { SubstVFresh::default() }
+    pub fn empty() -> Self {
+        SubstVFresh::default()
+    }
 
     /// `substFromListVFresh`: build directly from a mapping list (no
     /// trivial-mapping filtering, unlike free-variable `Subst`).
     pub fn from_list(pairs: impl IntoIterator<Item = (V, VTerm<C, V>)>) -> Self {
-        SubstVFresh { map: pairs.into_iter().collect() }
+        SubstVFresh {
+            map: pairs.into_iter().collect(),
+        }
     }
 
     /// `restrictVFresh`: drop entries whose key is not in `vars`.
@@ -72,23 +80,40 @@ where
     /// Rust caller (the live `Subst::map_range` is the distinct free-subst
     /// variant).
     pub fn map_range<F: FnMut(VTerm<C, V>) -> VTerm<C, V>>(&self, mut f: F) -> Self {
-        let map = self.map.iter().map(|(v, t)| (v.clone(), f(t.clone()))).collect();
+        let map = self
+            .map
+            .iter()
+            .map(|(v, t)| (v.clone(), f(t.clone())))
+            .collect();
         SubstVFresh { map }
     }
 
-    pub fn dom(&self) -> impl Iterator<Item = &V> { self.map.keys() }
-    pub fn range(&self) -> impl Iterator<Item = &VTerm<C, V>> { self.map.values() }
-    pub fn image_of(&self, v: &V) -> Option<&VTerm<C, V>> { self.map.get(v) }
+    pub fn dom(&self) -> impl Iterator<Item = &V> {
+        self.map.keys()
+    }
+    pub fn range(&self) -> impl Iterator<Item = &VTerm<C, V>> {
+        self.map.values()
+    }
+    pub fn image_of(&self, v: &V) -> Option<&VTerm<C, V>> {
+        self.map.get(v)
+    }
     pub fn to_list(&self) -> Vec<(V, VTerm<C, V>)> {
-        self.map.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        self.map
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
     /// Borrowing view over the (key, image) pairs in domain order, avoiding
     /// the per-entry clones of `to_list` when callers only need to read.
     pub fn iter(&self) -> impl Iterator<Item = (&V, &VTerm<C, V>)> {
         self.map.iter()
     }
-    pub fn is_empty(&self) -> bool { self.map.is_empty() }
-    pub fn len(&self) -> usize { self.map.len() }
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
 }
 
 /// Rename every variable in `t` to a canonical fresh variable (empty name
@@ -107,7 +132,11 @@ fn rename_term_drop_hint<C: Ord + Clone>(
             let nv = match bindings.get(v) {
                 Some(nv) => nv.clone(),
                 None => {
-                    let nv = LVar { name: "", sort: v.sort, idx: *counter };
+                    let nv = LVar {
+                        name: "",
+                        sort: v.sort,
+                        idx: *counter,
+                    };
                     *counter += 1;
                     bindings.insert(v.clone(), nv.clone());
                     nv
@@ -147,7 +176,12 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
         let renamed: Vec<(LVar, VTerm<C, LVar>)> = self
             .map
             .iter()
-            .map(|(k, t)| (k.clone(), rename_term_drop_hint(t, &mut bindings, &mut counter)))
+            .map(|(k, t)| {
+                (
+                    k.clone(),
+                    rename_term_drop_hint(t, &mut bindings, &mut counter),
+                )
+            })
             .collect();
         Self::from_list(renamed)
     }
@@ -169,9 +203,15 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
     /// `isRenamedVar`: the binding for `v` is just a sort-preserving
     /// rename, and the target variable doesn't appear elsewhere.
     pub fn is_renamed_var(&self, v: &LVar) -> bool {
-        let Some(t) = self.image_of(v) else { return false; };
-        let Term::Lit(Lit::Var(target)) = t else { return false; };
-        if target.sort != v.sort { return false; }
+        let Some(t) = self.image_of(v) else {
+            return false;
+        };
+        let Term::Lit(Lit::Var(target)) = t else {
+            return false;
+        };
+        if target.sort != v.sort {
+            return false;
+        }
         // target must not appear in any other range entry.  Borrow each
         // range term and scan in place (short-circuiting), avoiding the
         // per-key clone of every other range term + `f_app_list` bundle.
@@ -192,11 +232,17 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
     pub fn is_renaming(&self) -> bool {
         let mut targets: std::collections::BTreeSet<&LVar> = std::collections::BTreeSet::new();
         for (v, t) in self.map.iter() {
-            let Term::Lit(Lit::Var(target)) = t else { return false; };
-            if target.sort != v.sort { return false; }
+            let Term::Lit(Lit::Var(target)) = t else {
+                return false;
+            };
+            if target.sort != v.sort {
+                return false;
+            }
             // A duplicate target means this target var also appears in another
             // entry, so that entry's `is_renamed_var` would have failed.
-            if !targets.insert(target) { return false; }
+            if !targets.insert(target) {
+                return false;
+            }
         }
         true
     }
@@ -230,7 +276,9 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
         let mut vs_new: Vec<LVar> = Vec::new();
         let mut seen: tamarin_utils::FastSet<LVar> = Default::default();
         for v in vs {
-            if self.image_of(v).is_some() { continue; }
+            if self.image_of(v).is_some() {
+                continue;
+            }
             if seen.insert(v.clone()) {
                 vs_new.push(v.clone());
             }
@@ -258,7 +306,8 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
         // (e.g., self is empty so fresh_start=0 but vs_min > 0).  This is
         // a faithful translation of HS's Integer math.
         let shift: i128 = fresh_start as i128 - vs_min as i128;
-        let new_entries: Vec<(LVar, VTerm<C, LVar>)> = vs_new.iter()
+        let new_entries: Vec<(LVar, VTerm<C, LVar>)> = vs_new
+            .iter()
             .map(|v| {
                 let new_idx = shifted_idx(v.idx, shift);
                 let v_new = LVar {
@@ -295,9 +344,7 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
     /// `fresh_start` is the precomputed `succ . maxIdx . frees(avoid)`: the
     /// single value the rename actually needs from the avoid set (its max
     /// idx + 1), passed directly so the avoid collection is never materialised.
-    pub fn fresh_to_free_uniform_shift(&self, fresh_start: u64)
-        -> crate::subst::Subst<C, LVar>
-    {
+    pub fn fresh_to_free_uniform_shift(&self, fresh_start: u64) -> crate::subst::Subst<C, LVar> {
         use crate::subst::Subst;
         // Collect ALL distinct range vars in insertion order.
         let range_vars: Vec<LVar> = distinct_range_vars(self.range());
@@ -428,8 +475,13 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
         for (lv, t) in slist.into_iter() {
             // Determine the namehint mode based on the OUTER term shape.
             let outer_is_singleton_var = matches!(&t, Term::Lit(Lit::Var(_)));
-            let renamed = rename_lvars_with_hint(&t, &mut rename, &mut alloc_idxs,
-                outer_is_singleton_var, &lv);
+            let renamed = rename_lvars_with_hint(
+                &t,
+                &mut rename,
+                &mut alloc_idxs,
+                outer_is_singleton_var,
+                &lv,
+            );
             pairs.push((lv, renamed));
         }
         Subst::from_list(pairs)
@@ -442,9 +494,13 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
 /// load-bearing clamp can't drift between the two call sites.
 fn shifted_idx(idx: u64, shift: i128) -> u64 {
     let new_idx_signed: i128 = idx as i128 + shift;
-    if new_idx_signed < 0 { 0 }
-    else if new_idx_signed > u64::MAX as i128 { u64::MAX }
-    else { new_idx_signed as u64 }
+    if new_idx_signed < 0 {
+        0
+    } else if new_idx_signed > u64::MAX as i128 {
+        u64::MAX
+    } else {
+        new_idx_signed as u64
+    }
 }
 
 /// Walk a VTerm, renaming each var via the rename map.  If a var
@@ -472,16 +528,20 @@ fn rename_lvars_with_hint<C: Ord + Clone, F: FnMut(u64) -> u64>(
                 } else {
                     v.name
                 };
-                let new = LVar { name, sort: v.sort, idx };
+                let new = LVar {
+                    name,
+                    sort: v.sort,
+                    idx,
+                };
                 rename.insert(v.clone(), new.clone());
                 Term::Lit(Lit::Var(new))
             }
         }
         Term::Lit(Lit::Con(c)) => Term::Lit(Lit::Con(c.clone())),
         Term::App(f, args) => {
-            let new_args: Vec<_> = args.iter()
-                .map(|a| rename_lvars_with_hint(a, rename, alloc_idxs,
-                    outer_is_singleton_var, lv))
+            let new_args: Vec<_> = args
+                .iter()
+                .map(|a| rename_lvars_with_hint(a, rename, alloc_idxs, outer_is_singleton_var, lv))
                 .collect();
             // Route through the smart constructor so AC/C argument lists
             // are re-sorted: freshToFree allocates a brand-new, non-
@@ -503,9 +563,7 @@ fn rename_lvars_with_hint<C: Ord + Clone, F: FnMut(u64) -> u64>(
 /// just a type-level reinterpretation, so the owned map moves across
 /// wholesale (`SubstVFresh::from_list` does no trivial-drop; a
 /// `from_list(to_list)` round-trip would rebuild the identical map from clones).
-pub fn free_to_fresh_raw<C: Ord + Clone>(s: crate::subst::Subst<C, LVar>)
-    -> LSubstVFresh<C>
-{
+pub fn free_to_fresh_raw<C: Ord + Clone>(s: crate::subst::Subst<C, LVar>) -> LSubstVFresh<C> {
     LSubstVFresh { map: s.into_map() }
 }
 
@@ -596,7 +654,9 @@ where
     // (`SubstVFresh::from_list` does no trivial-drop; the entries are
     // identical to the `from_list(to_list)` round-trip).
     if range_vars.is_empty() {
-        return SubstVFresh { map: s2.clone().into_map() };
+        return SubstVFresh {
+            map: s2.clone().into_map(),
+        };
     }
     let vs_min: u64 = range_vars.iter().map(|v| v.idx).min().unwrap();
     // `fresh_start` = succ . maxIdx . frees s2 (= maxIdx over dom+range + 1).
@@ -609,7 +669,11 @@ where
     for w in &range_vars {
         let down = shifted_idx(w.idx, -(vs_min as i128));
         let up = shifted_idx(down, fresh_start as i128);
-        let w_prime = LVar { name: w.name, sort: w.sort, idx: up };
+        let w_prime = LVar {
+            name: w.name,
+            sort: w.sort,
+            idx: up,
+        };
         s1_map.insert(w.clone(), Term::Lit(Lit::Var(w_prime)));
     }
     let mut out: Vec<(LVar, VTerm<C, LVar>)> = Vec::new();
@@ -643,9 +707,7 @@ where
 /// `compose_vfresh_general`, which differ only in which subst's range is walked.
 /// The `seen` set is membership-only (`out` carries the byte-visible order),
 /// so a hash set replaces the per-occurrence BTree insert.
-fn distinct_range_vars<'a, C: 'a>(
-    range: impl Iterator<Item = &'a VTerm<C, LVar>>,
-) -> Vec<LVar> {
+fn distinct_range_vars<'a, C: 'a>(range: impl Iterator<Item = &'a VTerm<C, LVar>>) -> Vec<LVar> {
     let mut out: Vec<LVar> = Vec::new();
     let mut seen: tamarin_utils::FastSet<LVar> = Default::default();
     for t in range {
@@ -710,9 +772,13 @@ where
     // to a max, so the resulting `fresh_start` matches the same-value
     // computation via a max fold, without materialising a set/list.
     let mut max_idx: Option<u64> = None;
-    let mut bump = |idx: u64| { max_idx = Some(max_idx.map_or(idx, |m| m.max(idx))); };
+    let mut bump = |idx: u64| {
+        max_idx = Some(max_idx.map_or(idx, |m| m.max(idx)));
+    };
     // s2's domain
-    for v in s2.dom() { bump(v.idx); }
+    for v in s2.dom() {
+        bump(v.idx);
+    }
     // s2's range vars — visited in place (`for_each_free`); `vars_vterm`'s
     // per-term sort/dedup Vec is irrelevant to a max.
     for t in s2.range() {
@@ -720,7 +786,9 @@ where
         t.for_each_free(&mut |v: &LVar| bump(v.idx));
     }
     // s1_0's domain keys ONLY (HS-faithful: frees of a SubstVFresh = keys).
-    for v in s1_0.dom() { bump(v.idx); }
+    for v in s1_0.dom() {
+        bump(v.idx);
+    }
     let fresh_start: u64 = max_idx.map(|m| m + 1).unwrap_or(0);
     let s1 = extended.fresh_to_free_uniform_shift(fresh_start);
     let composed = s1.compose(s2);
@@ -740,7 +808,9 @@ fn rename_lvars_in_vterm<C: Clone>(
         Term::Lit(other) => Term::Lit(other.clone()),
         Term::App(f, args) => Term::App(
             *f,
-            args.iter().map(|a| rename_lvars_in_vterm(a, rename)).collect(),
+            args.iter()
+                .map(|a| rename_lvars_in_vterm(a, rename))
+                .collect(),
         ),
     }
 }
@@ -753,7 +823,9 @@ mod tests {
 
     type C = Name;
 
-    fn lv(name: &str, idx: u64) -> LVar { LVar::new(name, LSort::Msg, idx) }
+    fn lv(name: &str, idx: u64) -> LVar {
+        LVar::new(name, LSort::Msg, idx)
+    }
 
     #[test]
     fn empty_substitution() {
@@ -776,9 +848,7 @@ mod tests {
     fn renaming_detection() {
         // `x ~> y` — straightforward rename; should be detected as such
         // when no other entry mentions `y`.
-        let s: LSubstVFresh<C> = SubstVFresh::from_list(vec![
-            (lv("x", 0), var_term(lv("y", 0))),
-        ]);
+        let s: LSubstVFresh<C> = SubstVFresh::from_list(vec![(lv("x", 0), var_term(lv("y", 0)))]);
         assert!(s.is_renamed_var(&lv("x", 0)));
         assert!(s.is_renaming());
 
@@ -796,9 +866,7 @@ mod tests {
         // HS has no "preserve" concept: every range var is renamed
         // unconditionally (Substitution.hs:54-72) — the result must NOT
         // keep its identity.
-        let s: LSubstVFresh<C> = SubstVFresh::from_list(vec![
-            (lv("x", 0), var_term(lv("y", 5))),
-        ]);
+        let s: LSubstVFresh<C> = SubstVFresh::from_list(vec![(lv("x", 0), var_term(lv("y", 5)))]);
         // Allocator hands out a fixed, clearly-distinct fresh idx.
         let free = s.fresh_to_free_avoiding(|_| 99);
         let img = free.image_of(&lv("x", 0)).expect("x.0 must be mapped");

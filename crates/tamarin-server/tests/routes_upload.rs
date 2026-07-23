@@ -15,16 +15,14 @@ async fn test_post_index_uploads_theory() {
     // After start, the store has 1 theory at idx=1.  Posting a new
     // theory should register it at idx=2 and render the index showing
     // both.
-    let src = std::fs::read_to_string(fixture_path("Tutorial.spthy"))
-        .expect("read Tutorial.spthy");
-    let form = reqwest::multipart::Form::new()
-        .part(
-            "uploadedTheory",
-            reqwest::multipart::Part::text(src)
-                .file_name("Tutorial.spthy")
-                .mime_str("text/plain")
-                .expect("set mime"),
-        );
+    let src = std::fs::read_to_string(fixture_path("Tutorial.spthy")).expect("read Tutorial.spthy");
+    let form = reqwest::multipart::Form::new().part(
+        "uploadedTheory",
+        reqwest::multipart::Part::text(src)
+            .file_name("Tutorial.spthy")
+            .mime_str("text/plain")
+            .expect("set mime"),
+    );
 
     let res = s
         .client

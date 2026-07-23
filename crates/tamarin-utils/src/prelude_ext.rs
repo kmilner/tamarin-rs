@@ -21,11 +21,15 @@ use std::hash::Hash;
 // -- Bool ---------------------------------------------------------------------
 
 /// `implies p q`: classical material implication.
-pub fn implies(p: bool, q: bool) -> bool { !p || q }
+pub fn implies(p: bool, q: bool) -> bool {
+    !p || q
+}
 
 // -- List helpers -------------------------------------------------------------
 
-pub fn singleton<T>(x: T) -> Vec<T> { vec![x] }
+pub fn singleton<T>(x: T) -> Vec<T> {
+    vec![x]
+}
 
 /// `unique xs`: whether `xs` has no repeated element. O(n^2); prefer
 /// [`crate::misc::no_duplicates`] for `Ord` types.
@@ -79,7 +83,9 @@ pub fn nub_on<T: Clone, K: Eq + Hash, F: FnMut(&T) -> K>(xs: &[T], mut proj: F) 
 pub fn group_on<T: Clone, K: Eq, F: FnMut(&T) -> K>(xs: &[T], mut proj: F) -> Vec<Vec<T>> {
     let mut out: Vec<Vec<T>> = Vec::new();
     let mut iter = xs.iter().cloned();
-    let Some(first) = iter.next() else { return out; };
+    let Some(first) = iter.next() else {
+        return out;
+    };
     let mut cur_key = proj(&first);
     let mut cur_grp = vec![first];
     for x in iter {
@@ -137,17 +143,16 @@ pub fn group_sort_on<T: Clone, K: Ord + Clone, F: FnMut(&T) -> K>(
 
 /// `eqClasses proj xs`: group elements by their projection's equivalence
 /// class. Output uses sorted-then-grouped semantics, matching Haskell.
-pub fn eq_classes<T: Clone, K: Ord + Clone, F: FnMut(&T) -> K>(
-    xs: Vec<T>,
-    proj: F,
-) -> Vec<Vec<T>> {
+pub fn eq_classes<T: Clone, K: Ord + Clone, F: FnMut(&T) -> K>(xs: Vec<T>, proj: F) -> Vec<Vec<T>> {
     group_sort_on(xs, proj)
 }
 
 /// `splitBy p xs`: split on every element satisfying `p`. Separators are
 /// dropped; a trailing separator does *not* produce a final empty chunk.
 pub fn split_by<T: Clone, F: FnMut(&T) -> bool>(xs: &[T], mut p: F) -> Vec<Vec<T>> {
-    if xs.is_empty() { return vec![]; }
+    if xs.is_empty() {
+        return vec![];
+    }
     let mut out: Vec<Vec<T>> = Vec::new();
     let mut cur: Vec<T> = Vec::new();
     let mut had_separator = false;
@@ -173,13 +178,20 @@ pub fn split_by<T: Clone, F: FnMut(&T) -> bool>(xs: &[T], mut p: F) -> Vec<Vec<T
 
 /// `choose n xs`: every n-element ordered subsequence.
 pub fn choose<T: Clone>(n: usize, xs: &[T]) -> Vec<Vec<T>> {
-    if n == 0 { return vec![vec![]]; }
-    if xs.is_empty() { return vec![]; }
+    if n == 0 {
+        return vec![vec![]];
+    }
+    if xs.is_empty() {
+        return vec![];
+    }
     let head = xs[0].clone();
     let tail = &xs[1..];
     let mut with_head: Vec<Vec<T>> = choose(n - 1, tail)
         .into_iter()
-        .map(|mut v| { v.insert(0, head.clone()); v })
+        .map(|mut v| {
+            v.insert(0, head.clone());
+            v
+        })
         .collect();
     let without_head = choose(n, tail);
     with_head.extend(without_head);
@@ -224,16 +236,26 @@ pub fn keep_first<T: Clone, F: FnMut(&T, &T) -> bool>(xs: &[T], mut mask: F) -> 
 
 // -- Pairs --------------------------------------------------------------------
 
-pub fn swap<A, B>(p: (A, B)) -> (B, A) { (p.1, p.0) }
+pub fn swap<A, B>(p: (A, B)) -> (B, A) {
+    (p.1, p.0)
+}
 
 pub fn sort_pair<T: Ord>(p: (T, T)) -> (T, T) {
-    if p.0 <= p.1 { p } else { swap(p) }
+    if p.0 <= p.1 {
+        p
+    } else {
+        swap(p)
+    }
 }
 
 // -- Result (≈ Either) -------------------------------------------------------
 
-pub fn is_ok<A, B>(r: &Result<A, B>) -> bool { r.is_ok() }
-pub fn is_err<A, B>(r: &Result<A, B>) -> bool { r.is_err() }
+pub fn is_ok<A, B>(r: &Result<A, B>) -> bool {
+    r.is_ok()
+}
+pub fn is_err<A, B>(r: &Result<A, B>) -> bool {
+    r.is_err()
+}
 
 // -- Strings ------------------------------------------------------------------
 
@@ -243,13 +265,17 @@ pub fn flush_right_by(sep: &str, n: usize, s: &str) -> String {
     flush_by(sep, n, s, /*right*/ true)
 }
 
-pub fn flush_right(n: usize, s: &str) -> String { flush_right_by(" ", n, s) }
+pub fn flush_right(n: usize, s: &str) -> String {
+    flush_right_by(" ", n, s)
+}
 
 pub fn flush_left_by(sep: &str, n: usize, s: &str) -> String {
     flush_by(sep, n, s, /*right*/ false)
 }
 
-pub fn flush_left(n: usize, s: &str) -> String { flush_left_by(" ", n, s) }
+pub fn flush_left(n: usize, s: &str) -> String {
+    flush_left_by(" ", n, s)
+}
 
 fn flush_by(sep: &str, n: usize, s: &str, right: bool) -> String {
     let s_len = s.chars().count();
@@ -260,9 +286,15 @@ fn flush_by(sep: &str, n: usize, s: &str, right: bool) -> String {
     // Build the result in a single buffer: padding (cycled from `sep`) on the
     // correct side of `s`, avoiding a second `format!` allocation.
     let mut out = String::with_capacity(sep.len() * needed + s.len());
-    if !right { out.push_str(s); }
-    for c in sep.chars().cycle().take(needed) { out.push(c); }
-    if right { out.push_str(s); }
+    if !right {
+        out.push_str(s);
+    }
+    for c in sep.chars().cycle().take(needed) {
+        out.push(c);
+    }
+    if right {
+        out.push_str(s);
+    }
     out
 }
 
@@ -278,9 +310,18 @@ pub fn warning(s: &str) -> String {
 pub struct MinMax<T>(pub Option<(T, T)>);
 
 impl<T> MinMax<T> {
-    pub fn empty() -> Self { MinMax(None) }
-    pub fn singleton(x: T) -> Self where T: Clone { MinMax(Some((x.clone(), x))) }
-    pub fn into_inner(self) -> Option<(T, T)> { self.0 }
+    pub fn empty() -> Self {
+        MinMax(None)
+    }
+    pub fn singleton(x: T) -> Self
+    where
+        T: Clone,
+    {
+        MinMax(Some((x.clone(), x)))
+    }
+    pub fn into_inner(self) -> Option<(T, T)> {
+        self.0
+    }
 }
 
 impl<T: Ord + Clone> MinMax<T> {
@@ -373,22 +414,37 @@ mod tests {
     #[test]
     fn split_by_basic() {
         let xs = vec![1, 0, 2, 3, 0, 4];
-        assert_eq!(split_by(&xs, |x| *x == 0), vec![vec![1], vec![2, 3], vec![4]]);
+        assert_eq!(
+            split_by(&xs, |x| *x == 0),
+            vec![vec![1], vec![2, 3], vec![4]]
+        );
         let trail = vec![1, 2, 0];
         // Haskell: trailing separator yields a single chunk [1,2] and no trailing empty.
         assert_eq!(split_by(&trail, |x| *x == 0), vec![vec![1, 2]]);
         // Adjacent and leading separators lock the Haskell `unfoldr split` semantics:
         // a chunk (possibly empty) is emitted before every separator.
         let empty_i32: Vec<i32> = vec![];
-        assert_eq!(split_by(&[0, 0], |x| *x == 0), vec![empty_i32.clone(), empty_i32.clone()]);
+        assert_eq!(
+            split_by(&[0, 0], |x| *x == 0),
+            vec![empty_i32.clone(), empty_i32.clone()]
+        );
         assert_eq!(split_by(&[0], |x| *x == 0), vec![empty_i32.clone()]);
-        assert_eq!(split_by(&[1, 0, 0, 2], |x| *x == 0), vec![vec![1], empty_i32.clone(), vec![2]]);
-        assert_eq!(split_by(&[0, 1, 2], |x| *x == 0), vec![empty_i32.clone(), vec![1, 2]]);
+        assert_eq!(
+            split_by(&[1, 0, 0, 2], |x| *x == 0),
+            vec![vec![1], empty_i32.clone(), vec![2]]
+        );
+        assert_eq!(
+            split_by(&[0, 1, 2], |x| *x == 0),
+            vec![empty_i32.clone(), vec![1, 2]]
+        );
     }
 
     #[test]
     fn choose_basic() {
-        assert_eq!(choose(2, &[1, 2, 3]), vec![vec![1, 2], vec![1, 3], vec![2, 3]]);
+        assert_eq!(
+            choose(2, &[1, 2, 3]),
+            vec![vec![1, 2], vec![1, 3], vec![2, 3]]
+        );
         assert_eq!(choose(0, &[1, 2, 3]), vec![Vec::<i32>::new()]);
         let empty: Vec<Vec<i32>> = choose(2, &[]);
         assert_eq!(empty, Vec::<Vec<i32>>::new());
@@ -436,7 +492,12 @@ mod tests {
         let c = MinMax::singleton(1);
         let combined = a.combine(b).combine(c);
         assert_eq!(combined.into_inner(), Some((1, 7)));
-        assert_eq!(MinMax::<i32>::empty().combine(MinMax::singleton(5)).into_inner(), Some((5, 5)));
+        assert_eq!(
+            MinMax::<i32>::empty()
+                .combine(MinMax::singleton(5))
+                .into_inner(),
+            Some((5, 5))
+        );
     }
 
     #[test]

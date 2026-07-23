@@ -30,8 +30,10 @@ use common::run_tamarin;
 fn main() {
     let args = env::args().skip(1);
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap()
-        .parent().unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .join("tests")
         .join("wellformedness_fixtures");
     let mut run_tamarin_oracle = true;
@@ -42,7 +44,9 @@ fn main() {
             other => positional.push(other.to_string()),
         }
     }
-    if let Some(a) = positional.into_iter().next() { dir = PathBuf::from(a); }
+    if let Some(a) = positional.into_iter().next() {
+        dir = PathBuf::from(a);
+    }
     let tamarin = env::var("TAMARIN").unwrap_or_else(|_| "tamarin-prover".into());
 
     let expected_path = dir.join("expected.txt");
@@ -57,12 +61,22 @@ fn main() {
 
     for line in expected.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') { continue; }
-        let (lhs, rhs) = match line.split_once(':') { Some(p) => p, None => continue };
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (lhs, rhs) = match line.split_once(':') {
+            Some(p) => p,
+            None => continue,
+        };
         let mut parts = lhs.split_whitespace();
-        let name = match parts.next() { Some(n) => n, None => continue };
+        let name = match parts.next() {
+            Some(n) => n,
+            None => continue,
+        };
         let mut flags: Vec<String> = Vec::new();
-        for f in parts { flags.push(f.to_string()); }
+        for f in parts {
+            flags.push(f.to_string());
+        }
         let expected_topics: BTreeSet<String> = rhs
             .split(',')
             .map(|s| s.trim().to_string())
@@ -72,11 +86,15 @@ fn main() {
         total += 1;
 
         let path = dir.join(format!("{}.spthy", name));
-        let src = fs::read_to_string(&path).unwrap_or_else(|_| panic!("missing {}", path.display()));
+        let src =
+            fs::read_to_string(&path).unwrap_or_else(|_| panic!("missing {}", path.display()));
 
         // 1. Our parser must accept the fixture.
         let mut thy = match parse_theory(&src, &["diff"]) {
-            Ok(t) => { parser_ok += 1; t }
+            Ok(t) => {
+                parser_ok += 1;
+                t
+            }
             Err(e) => {
                 fail_lines.push(format!("PARSE  {}: {}", name, e));
                 continue;
@@ -85,7 +103,9 @@ fn main() {
         // Override is_diff if the fixture is flagged --diff. Our parser
         // doesn't auto-detect diff mode (Tamarin uses a separate
         // entry point), so we surface it from the fixture metadata.
-        if flags.iter().any(|f| f == "--diff") { thy.is_diff = true; }
+        if flags.iter().any(|f| f == "--diff") {
+            thy.is_diff = true;
+        }
 
         // 2. Our Rust wf checker must emit every expected topic. Same
         // comparison semantics as tests/wellformedness.rs: titles compare
@@ -106,7 +126,9 @@ fn main() {
         } else {
             let missing: Vec<_> = rust_expected.difference(&rust_topics).collect();
             fail_lines.push(format!(
-                "RUST   {}: missing {:?} (got: {:?})", name, missing, rust_topics));
+                "RUST   {}: missing {:?} (got: {:?})",
+                name, missing, rust_topics
+            ));
         }
 
         // 3. (Optional) Tamarin must emit the expected topics.
@@ -117,23 +139,36 @@ fn main() {
             } else {
                 let missing: Vec<_> = expected_topics.difference(&actual).collect();
                 fail_lines.push(format!(
-                    "TOPICS {}: missing {:?} (actual: {:?})", name, missing, actual));
+                    "TOPICS {}: missing {:?} (actual: {:?})",
+                    name, missing, actual
+                ));
             }
         }
     }
 
     println!("Fixtures total:   {}", total);
-    println!("Parsed OK:        {} ({:.0}%)",
-        parser_ok, 100.0 * parser_ok as f64 / total.max(1) as f64);
-    println!("Rust wf match:    {} ({:.0}%)",
-        rust_wf_match, 100.0 * rust_wf_match as f64 / total.max(1) as f64);
+    println!(
+        "Parsed OK:        {} ({:.0}%)",
+        parser_ok,
+        100.0 * parser_ok as f64 / total.max(1) as f64
+    );
+    println!(
+        "Rust wf match:    {} ({:.0}%)",
+        rust_wf_match,
+        100.0 * rust_wf_match as f64 / total.max(1) as f64
+    );
     if run_tamarin_oracle {
-        println!("Tamarin match:    {} ({:.0}%)",
-            topics_match, 100.0 * topics_match as f64 / total.max(1) as f64);
+        println!(
+            "Tamarin match:    {} ({:.0}%)",
+            topics_match,
+            100.0 * topics_match as f64 / total.max(1) as f64
+        );
     }
     if !fail_lines.is_empty() {
         println!("\nFailures:");
-        for l in fail_lines { println!("  {}", l); }
+        for l in fail_lines {
+            println!("  {}", l);
+        }
         std::process::exit(1);
     }
 }

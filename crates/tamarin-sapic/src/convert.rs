@@ -30,11 +30,11 @@
 use std::collections::BTreeSet;
 
 use tamarin_parser::ast as p;
+use tamarin_term::lterm::{LSort, LVar};
 use tamarin_theory::elaborate::{fact_to_sapic_fact, term_to_sapic_term};
 use tamarin_theory::sapic::{
     PlainProcess, Process, ProcessCombinator, ProcessParsedAnnotation, SapicAction, SapicLVar,
 };
-use tamarin_term::lterm::{LSort, LVar};
 
 /// Error returned when a SAPIC process cannot be converted (e.g. an
 /// unconvertible term/fact, or a process call reached without a definition map).
@@ -75,12 +75,20 @@ pub(crate) fn lsort_to_sort_hint(s: LSort) -> p::SortHint {
 
 /// `LVar` → parser `VarSpec` (name/idx/sort carried over, no SAPIC type).
 pub(crate) fn lvar_to_varspec(v: &LVar) -> p::VarSpec {
-    p::VarSpec { name: v.name.to_string(), idx: v.idx, sort: lsort_to_sort_hint(v.sort), typ: None }
+    p::VarSpec {
+        name: v.name.to_string(),
+        idx: v.idx,
+        sort: lsort_to_sort_hint(v.sort),
+        typ: None,
+    }
 }
 
 /// `VarSpec` → `SapicLVar` (carrying the SAPIC `name:type` annotation).
 pub(crate) fn varspec_to_sapic(v: &p::VarSpec) -> SapicLVar {
-    SapicLVar::new(LVar::new(v.name.clone(), sort_of_hint(&v.sort), v.idx), v.typ.clone())
+    SapicLVar::new(
+        LVar::new(v.name.clone(), sort_of_hint(&v.sort), v.idx),
+        v.typ.clone(),
+    )
 }
 
 /// Rebuild a parser-AST formula, mapping `f` over every FREE `Var` leaf.
@@ -109,9 +117,7 @@ pub(crate) fn map_free_terms(
             p::Term::App(n, args) => {
                 p::Term::App(n.clone(), args.iter().map(|a| rt(bound, f, a)).collect())
             }
-            p::Term::Pair(items) => {
-                p::Term::Pair(items.iter().map(|a| rt(bound, f, a)).collect())
-            }
+            p::Term::Pair(items) => p::Term::Pair(items.iter().map(|a| rt(bound, f, a)).collect()),
             p::Term::AlgApp(n, a, b) => p::Term::AlgApp(
                 n.clone(),
                 Box::new(rt(bound, f, a)),
@@ -200,10 +206,7 @@ pub(crate) fn map_free_terms(
 /// shadowing via the `bound` stack).  The traversal order is the depth-first,
 /// left-to-right order shared by `base_translation::formula_free_lvars` and
 /// `typing::cond_formula_free_lvars`.
-pub(crate) fn fold_free_vars(
-    formula: &p::Formula,
-    f: &mut dyn FnMut(&p::VarSpec, &[String]),
-) {
+pub(crate) fn fold_free_vars(formula: &p::Formula, f: &mut dyn FnMut(&p::VarSpec, &[String])) {
     fn ct(bound: &[String], f: &mut dyn FnMut(&p::VarSpec, &[String]), t: &p::Term) {
         match t {
             p::Term::Var(v) if !bound.iter().any(|n| n == &v.name) => f(v, bound),
@@ -241,7 +244,11 @@ pub(crate) fn fold_free_vars(
             }
         }
     }
-    fn cf(bound: &mut Vec<String>, f: &mut dyn FnMut(&p::VarSpec, &[String]), formula: &p::Formula) {
+    fn cf(
+        bound: &mut Vec<String>,
+        f: &mut dyn FnMut(&p::VarSpec, &[String]),
+        formula: &p::Formula,
+    ) {
         use p::Formula::*;
         match formula {
             True | False => {}
@@ -332,7 +339,12 @@ fn action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, ConvertError> {
         // i.e. match-vars come from the PREMISES only; every fact row is
         // `unpattern`ed (the `=v` markers stripped) and the embedded restriction
         // formulas carry through (parser-AST, like `Cond`).
-        p::SapicAction::Msr { prems, acts, concs, restrictions } => {
+        p::SapicAction::Msr {
+            prems,
+            acts,
+            concs,
+            restrictions,
+        } => {
             let mut match_vars: BTreeSet<SapicLVar> = BTreeSet::new();
             // Premises: unpattern + collect match-vars.
             let prems_c = prems
@@ -395,9 +407,7 @@ fn combinator(c: &p::ProcessComb) -> Result<ProcessCombinator<SapicLVar>, Conver
         // `ProcessCombinator::Cond` doc).  Predicate atoms inside the formula are
         // expanded later, by `lift_rule_restrictions` over the embedded
         // `_restrict` (HS `liftedExpandFormula`), so we keep it un-expanded here.
-        p::ProcessComb::Cond(p::Condition::Formula(f)) => {
-            Ok(ProcessCombinator::Cond(f.clone()))
-        }
+        p::ProcessComb::Cond(p::Condition::Formula(f)) => Ok(ProcessCombinator::Cond(f.clone())),
         // `lookup t as v in .. else ..`.  HS `Lookup (SapicNTerm v) v`
         // (Process.hs:95).
         p::ProcessComb::Lookup(t, v) => {
@@ -411,7 +421,11 @@ fn combinator(c: &p::ProcessComb) -> Result<ProcessCombinator<SapicLVar>, Conver
         p::ProcessComb::Let { pat, value } => {
             let (left, match_vars) = convert_let_pattern(pat)?;
             let right = term(value)?;
-            Ok(ProcessCombinator::Let { left, right, match_vars })
+            Ok(ProcessCombinator::Let {
+                left,
+                right,
+                match_vars,
+            })
         }
     }
 }
@@ -443,12 +457,18 @@ fn strip_pat_match(t: &p::Term, match_vars: &mut BTreeSet<SapicLVar>) -> p::Term
             // `unpattern` the inner term (it may itself contain nested patterns).
             strip_pat_match(inner, match_vars)
         }
-        p::Term::Pair(items) => {
-            p::Term::Pair(items.iter().map(|x| strip_pat_match(x, match_vars)).collect())
-        }
-        p::Term::App(n, args) => {
-            p::Term::App(n.clone(), args.iter().map(|x| strip_pat_match(x, match_vars)).collect())
-        }
+        p::Term::Pair(items) => p::Term::Pair(
+            items
+                .iter()
+                .map(|x| strip_pat_match(x, match_vars))
+                .collect(),
+        ),
+        p::Term::App(n, args) => p::Term::App(
+            n.clone(),
+            args.iter()
+                .map(|x| strip_pat_match(x, match_vars))
+                .collect(),
+        ),
         p::Term::AlgApp(n, a, b) => p::Term::AlgApp(
             n.clone(),
             Box::new(strip_pat_match(a, match_vars)),
@@ -516,7 +536,9 @@ pub fn convert_process(proc: &p::Process) -> Result<PlainProcess, ConvertError> 
             // map; the real pipeline goes through
             // `inline::convert_process_with_defs`.  This def-less entry point
             // (used by unit tests) cannot resolve a call.
-            Err(ConvertError::new("process calls require convert_process_with_defs"))
+            Err(ConvertError::new(
+                "process calls require convert_process_with_defs",
+            ))
         }
         p::Process::AtAnnotation(inner, _) => {
             // Location annotation (`@ loc`) — drop the location and descend.
@@ -549,7 +571,10 @@ mod tests {
             vec![p::Term::App("f".into(), vec![xref.clone()])],
         );
         let inner = p::Process::Action {
-            action: p::SapicAction::ChOut { chan: None, msg: ffx },
+            action: p::SapicAction::ChOut {
+                chan: None,
+                msg: ffx,
+            },
             body: Box::new(p::Process::Null),
         };
         let evt = p::Process::Action {
@@ -651,7 +676,12 @@ mod tests {
         let lookup = p::Process::Comb {
             comb: p::ProcessComb::Lookup(
                 p::Term::PubLit("x".into()),
-                p::VarSpec { name: "v".into(), idx: 0, sort: p::SortHint::Untagged, typ: None },
+                p::VarSpec {
+                    name: "v".into(),
+                    idx: 0,
+                    sort: p::SortHint::Untagged,
+                    typ: None,
+                },
             ),
             left: Box::new(event("E")),
             right: Box::new(p::Process::Null),
@@ -665,13 +695,19 @@ mod tests {
     #[test]
     fn convert_insert_delete() {
         let ins = p::Process::Action {
-            action: p::SapicAction::Insert(p::Term::PubLit("k".into()), p::Term::PubLit("v".into())),
+            action: p::SapicAction::Insert(
+                p::Term::PubLit("k".into()),
+                p::Term::PubLit("v".into()),
+            ),
             body: Box::new(p::Process::Action {
                 action: p::SapicAction::Delete(p::Term::PubLit("k".into())),
                 body: Box::new(p::Process::Null),
             }),
         };
         let conv = convert_process(&ins).unwrap();
-        assert!(matches!(conv, Process::Action(SapicAction::Insert(_, _), _, _)));
+        assert!(matches!(
+            conv,
+            Process::Action(SapicAction::Insert(_, _), _, _)
+        ));
     }
 }

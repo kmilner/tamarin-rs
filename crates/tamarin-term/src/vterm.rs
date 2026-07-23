@@ -23,10 +23,14 @@ pub enum Lit<C, V> {
 pub type VTerm<C, V> = Term<Lit<C, V>>;
 
 /// `varTerm v`: lift a variable into a term.
-pub fn var_term<C, V>(v: V) -> VTerm<C, V> { lit(Lit::Var(v)) }
+pub fn var_term<C, V>(v: V) -> VTerm<C, V> {
+    lit(Lit::Var(v))
+}
 
 /// `constTerm c`: lift a constant into a term.
-pub fn const_term<C, V>(c: C) -> VTerm<C, V> { lit(Lit::Con(c)) }
+pub fn const_term<C, V>(c: C) -> VTerm<C, V> {
+    lit(Lit::Con(c))
+}
 
 /// `isVar t`: whether `t` is a single variable literal.
 ///
@@ -125,7 +129,7 @@ fn collect_consts<C: Clone, V>(t: &VTerm<C, V>, out: &mut Vec<C>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::function_symbols::{pair_sym};
+    use crate::function_symbols::pair_sym;
     use crate::term::f_app_no_eq;
 
     type V = &'static str;
@@ -164,7 +168,10 @@ mod tests {
     fn consts_collected() {
         let t: VTerm<C, V> = f_app_no_eq(
             pair_sym(),
-            vec![const_term(2), f_app_no_eq(pair_sym(), vec![const_term(1), const_term(2)])],
+            vec![
+                const_term(2),
+                f_app_no_eq(pair_sym(), vec![const_term(1), const_term(2)]),
+            ],
         );
         assert_eq!(consts_vterm(&t), vec![1, 2]);
     }

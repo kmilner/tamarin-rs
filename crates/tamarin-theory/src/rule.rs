@@ -21,7 +21,7 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_term::lterm::{HasFrees, LSort, LVar, Name, LNTerm};
+use tamarin_term::lterm::{HasFrees, LNTerm, LSort, LVar, Name};
 use tamarin_term::vterm::VTerm;
 use tamarin_utils::color::Rgb;
 
@@ -53,7 +53,13 @@ impl<I> Rule<I> {
         conclusions: Vec<LNFact>,
         actions: Vec<LNFact>,
     ) -> Self {
-        Rule { info, premises, conclusions, actions, new_vars: Vec::new() }
+        Rule {
+            info,
+            premises,
+            conclusions,
+            actions,
+            new_vars: Vec::new(),
+        }
     }
 
     pub fn with_new_vars(mut self, vars: Vec<LNTerm>) -> Self {
@@ -91,10 +97,16 @@ impl<I> Rule<I> {
         self.conclusions.get(i.0)
     }
     pub fn enumerate_premises(&self) -> impl Iterator<Item = (PremIdx, &LNFact)> {
-        self.premises.iter().enumerate().map(|(i, f)| (PremIdx(i), f))
+        self.premises
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (PremIdx(i), f))
     }
     pub fn enumerate_conclusions(&self) -> impl Iterator<Item = (ConcIdx, &LNFact)> {
-        self.conclusions.iter().enumerate().map(|(i, f)| (ConcIdx(i), f))
+        self.conclusions
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (ConcIdx(i), f))
     }
 }
 
@@ -112,18 +124,42 @@ impl<I> Rule<I> {
 
 impl<I: Clone> HasFrees for Rule<I> {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
-        for p in &self.premises { p.for_each_free(f); }
-        for c in &self.conclusions { c.for_each_free(f); }
-        for a in &self.actions { a.for_each_free(f); }
-        for v in &self.new_vars { v.for_each_free(f); }
+        for p in &self.premises {
+            p.for_each_free(f);
+        }
+        for c in &self.conclusions {
+            c.for_each_free(f);
+        }
+        for a in &self.actions {
+            a.for_each_free(f);
+        }
+        for v in &self.new_vars {
+            v.for_each_free(f);
+        }
     }
     fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
         Rule {
             info: self.info,
-            premises: self.premises.into_iter().map(|x| x.map_free_with(f, monotone)).collect(),
-            conclusions: self.conclusions.into_iter().map(|x| x.map_free_with(f, monotone)).collect(),
-            actions: self.actions.into_iter().map(|x| x.map_free_with(f, monotone)).collect(),
-            new_vars: self.new_vars.into_iter().map(|x| x.map_free_with(f, monotone)).collect(),
+            premises: self
+                .premises
+                .into_iter()
+                .map(|x| x.map_free_with(f, monotone))
+                .collect(),
+            conclusions: self
+                .conclusions
+                .into_iter()
+                .map(|x| x.map_free_with(f, monotone))
+                .collect(),
+            actions: self
+                .actions
+                .into_iter()
+                .map(|x| x.map_free_with(f, monotone))
+                .collect(),
+            new_vars: self
+                .new_vars
+                .into_iter()
+                .map(|x| x.map_free_with(f, monotone))
+                .collect(),
         }
     }
 }
@@ -192,9 +228,10 @@ pub struct RuleAttributes {
     pub role: Option<String>,
 }
 
-
 impl RuleAttributes {
-    pub fn empty() -> Self { Self::default() }
+    pub fn empty() -> Self {
+        Self::default()
+    }
 
     /// Combine two attribute sets, with `other` taking precedence on
     /// `Option`-typed fields and `||` on bool fields.
@@ -304,7 +341,13 @@ pub type RuleACInst = Rule<RuleInfo<ProtoRuleACInstInfo, IntrRuleACInfo>>;
 
 pub fn rule_ac_to_intr_rule_ac(r: RuleAC) -> Option<IntrRuleAC> {
     if let RuleInfo::Intr(i) = r.info {
-        Some(Rule { info: i, premises: r.premises, conclusions: r.conclusions, actions: r.actions, new_vars: r.new_vars })
+        Some(Rule {
+            info: i,
+            premises: r.premises,
+            conclusions: r.conclusions,
+            actions: r.actions,
+            new_vars: r.new_vars,
+        })
     } else {
         None
     }
@@ -436,9 +479,11 @@ pub fn is_coerce_rule_inst<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> bool 
 /// Retained for port completeness (no production callers; test-only).
 #[allow(dead_code)]
 pub(crate) fn is_destr_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> bool {
-    matches!(&rule.info,
+    matches!(
+        &rule.info,
         RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, _, _, _))
-        | RuleInfo::Intr(IntrRuleACInfo::IEquality))
+            | RuleInfo::Intr(IntrRuleACInfo::IEquality)
+    )
 }
 
 /// `isSubtermRule` for a `Rule` shape — RHS is a true subterm of LHS,
@@ -454,9 +499,7 @@ pub(crate) fn is_subterm_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> bo
 
 /// `getRemainingRuleApplications`: returns the chain budget for
 /// destruction rules, or `0` for everything else.
-pub fn get_remaining_rule_applications<I>(
-    rule: &Rule<RuleInfo<I, IntrRuleACInfo>>,
-) -> i64 {
+pub fn get_remaining_rule_applications<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> i64 {
     match &rule.info {
         RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, n, _, _)) => *n,
         _ => 0,
@@ -476,15 +519,27 @@ pub fn get_remaining_rule_applications<I>(
 pub fn set_remaining_rule_applications<I>(
     rule: Rule<RuleInfo<I, IntrRuleACInfo>>,
     n: i64,
-) -> Rule<RuleInfo<I, IntrRuleACInfo>>
-{
-    let Rule { info, premises, conclusions, actions, new_vars } = rule;
+) -> Rule<RuleInfo<I, IntrRuleACInfo>> {
+    let Rule {
+        info,
+        premises,
+        conclusions,
+        actions,
+        new_vars,
+    } = rule;
     let info = match info {
-        RuleInfo::Intr(IntrRuleACInfo::DestrRule(name, _, subterm, constant)) =>
-            RuleInfo::Intr(IntrRuleACInfo::DestrRule(name, n, subterm, constant)),
+        RuleInfo::Intr(IntrRuleACInfo::DestrRule(name, _, subterm, constant)) => {
+            RuleInfo::Intr(IntrRuleACInfo::DestrRule(name, n, subterm, constant))
+        }
         other => other,
     };
-    Rule { info, premises, conclusions, actions, new_vars }
+    Rule {
+        info,
+        premises,
+        conclusions,
+        actions,
+        new_vars,
+    }
 }
 
 /// Get the rule name for `RuleACInst` / `RuleAC` shapes — used to
@@ -498,22 +553,21 @@ pub fn set_remaining_rule_applications<I>(
 /// Haskell prunes after one application (per the DestrRule
 /// remaining-applications counter — `getRemainingRuleApplications` /
 /// `setRemainingRuleApplications`, Rule.hs).
-pub fn rule_name_string(
-    rule: &RuleACInst,
-) -> String
-{
+pub fn rule_name_string(rule: &RuleACInst) -> String {
     match &rule.info {
         RuleInfo::Proto(p) => match &p.name {
             ProtoRuleName::Stand(s) => s.to_string(),
             ProtoRuleName::Fresh => "FreshRule".to_string(),
         },
         RuleInfo::Intr(i) => match i {
-            IntrRuleACInfo::ConstrRule(name) =>
-                format!("Constr{}", prefix_if_reserved(&format!("c{}",
-                    String::from_utf8_lossy(name)))),
-            IntrRuleACInfo::DestrRule(name, _, _, _) =>
-                format!("Destr{}", prefix_if_reserved(&format!("d{}",
-                    String::from_utf8_lossy(name)))),
+            IntrRuleACInfo::ConstrRule(name) => format!(
+                "Constr{}",
+                prefix_if_reserved(&format!("c{}", String::from_utf8_lossy(name)))
+            ),
+            IntrRuleACInfo::DestrRule(name, _, _, _) => format!(
+                "Destr{}",
+                prefix_if_reserved(&format!("d{}", String::from_utf8_lossy(name)))
+            ),
             IntrRuleACInfo::Coerce => "Coerce".to_string(),
             IntrRuleACInfo::IRecv => "Recv".to_string(),
             IntrRuleACInfo::ISend => "Send".to_string(),
@@ -569,10 +623,17 @@ pub fn unify_ln_fact_eqs(
 ) -> Result<Vec<Vec<(LVar, LNTerm)>>, MaudeError> {
     let mut term_eqs = Vec::new();
     for e in eqs {
-        if e.lhs.tag != e.rhs.tag { return Ok(Vec::new()); }
-        if e.lhs.terms.len() != e.rhs.terms.len() { return Ok(Vec::new()); }
+        if e.lhs.tag != e.rhs.tag {
+            return Ok(Vec::new());
+        }
+        if e.lhs.terms.len() != e.rhs.terms.len() {
+            return Ok(Vec::new());
+        }
         for (a, b) in e.lhs.terms.iter().zip(e.rhs.terms.iter()) {
-            term_eqs.push(Equal { lhs: a.clone(), rhs: b.clone() });
+            term_eqs.push(Equal {
+                lhs: a.clone(),
+                rhs: b.clone(),
+            });
         }
     }
     if term_eqs.is_empty() {
@@ -591,12 +652,24 @@ pub fn unifiable_ln_facts(
     f1: &LNFact,
     f2: &LNFact,
 ) -> Result<bool, MaudeError> {
-    if f1.tag != f2.tag { return Ok(false); }
-    if f1.terms.len() != f2.terms.len() { return Ok(false); }
-    let eqs: Vec<Equal<LNTerm>> = f1.terms.iter().zip(f2.terms.iter())
-        .map(|(a, b)| Equal { lhs: a.clone(), rhs: b.clone() })
+    if f1.tag != f2.tag {
+        return Ok(false);
+    }
+    if f1.terms.len() != f2.terms.len() {
+        return Ok(false);
+    }
+    let eqs: Vec<Equal<LNTerm>> = f1
+        .terms
+        .iter()
+        .zip(f2.terms.iter())
+        .map(|(a, b)| Equal {
+            lhs: a.clone(),
+            rhs: b.clone(),
+        })
         .collect();
-    if eqs.is_empty() { return Ok(true); }
+    if eqs.is_empty() {
+        return Ok(true);
+    }
     maude.unifiable(&eqs)
 }
 
@@ -613,14 +686,22 @@ pub fn unify_rule_ac_inst_eqs(
             && e.lhs.premises.len() == e.rhs.premises.len()
             && e.lhs.conclusions.len() == e.rhs.conclusions.len()
     });
-    if !unifiable { return Ok(Vec::new()); }
+    if !unifiable {
+        return Ok(Vec::new());
+    }
     let mut fact_eqs = Vec::new();
     for e in eqs {
         for (a, b) in e.lhs.premises.iter().zip(e.rhs.premises.iter()) {
-            fact_eqs.push(Equal { lhs: a.clone(), rhs: b.clone() });
+            fact_eqs.push(Equal {
+                lhs: a.clone(),
+                rhs: b.clone(),
+            });
         }
         for (a, b) in e.lhs.conclusions.iter().zip(e.rhs.conclusions.iter()) {
-            fact_eqs.push(Equal { lhs: a.clone(), rhs: b.clone() });
+            fact_eqs.push(Equal {
+                lhs: a.clone(),
+                rhs: b.clone(),
+            });
         }
     }
     unify_ln_fact_eqs(maude, &fact_eqs)
@@ -634,23 +715,41 @@ pub fn unifiable_rule_ac_insts(
     r1: &RuleACInst,
     r2: &RuleACInst,
 ) -> Result<bool, MaudeError> {
-    if r1.info != r2.info { return Ok(false); }
-    if r1.premises.len() != r2.premises.len() { return Ok(false); }
-    if r1.conclusions.len() != r2.conclusions.len() { return Ok(false); }
+    if r1.info != r2.info {
+        return Ok(false);
+    }
+    if r1.premises.len() != r2.premises.len() {
+        return Ok(false);
+    }
+    if r1.conclusions.len() != r2.conclusions.len() {
+        return Ok(false);
+    }
     let mut eqs: Vec<Equal<LNTerm>> = Vec::new();
     for (a, b) in r1.premises.iter().zip(r2.premises.iter()) {
-        if a.tag != b.tag || a.terms.len() != b.terms.len() { return Ok(false); }
+        if a.tag != b.tag || a.terms.len() != b.terms.len() {
+            return Ok(false);
+        }
         for (ta, tb) in a.terms.iter().zip(b.terms.iter()) {
-            eqs.push(Equal { lhs: ta.clone(), rhs: tb.clone() });
+            eqs.push(Equal {
+                lhs: ta.clone(),
+                rhs: tb.clone(),
+            });
         }
     }
     for (a, b) in r1.conclusions.iter().zip(r2.conclusions.iter()) {
-        if a.tag != b.tag || a.terms.len() != b.terms.len() { return Ok(false); }
+        if a.tag != b.tag || a.terms.len() != b.terms.len() {
+            return Ok(false);
+        }
         for (ta, tb) in a.terms.iter().zip(b.terms.iter()) {
-            eqs.push(Equal { lhs: ta.clone(), rhs: tb.clone() });
+            eqs.push(Equal {
+                lhs: ta.clone(),
+                rhs: tb.clone(),
+            });
         }
     }
-    if eqs.is_empty() { return Ok(true); }
+    if eqs.is_empty() {
+        return Ok(true);
+    }
     maude.unifiable(&eqs)
 }
 
@@ -704,8 +803,15 @@ mod tests {
 
     #[test]
     fn rule_attributes_merge_prefers_right() {
-        let a = RuleAttributes { role: Some("alice".into()), ..Default::default() };
-        let b = RuleAttributes { role: Some("bob".into()), is_sapic_rule: true, ..Default::default() };
+        let a = RuleAttributes {
+            role: Some("alice".into()),
+            ..Default::default()
+        };
+        let b = RuleAttributes {
+            role: Some("bob".into()),
+            is_sapic_rule: true,
+            ..Default::default()
+        };
         let merged = a.merge(b);
         assert_eq!(merged.role, Some("bob".into()));
         assert!(merged.is_sapic_rule);
@@ -713,12 +819,7 @@ mod tests {
 
     #[test]
     fn rule_info_conversion_round_trip() {
-        let intr: IntrRuleAC = Rule::new(
-            IntrRuleACInfo::Coerce,
-            vec![],
-            vec![],
-            vec![],
-        );
+        let intr: IntrRuleAC = Rule::new(IntrRuleACInfo::Coerce, vec![], vec![], vec![]);
         let lifted: RuleAC = rule_ac_intr_to_rule_ac(intr.clone());
         let back = rule_ac_to_intr_rule_ac(lifted).unwrap();
         assert_eq!(back, intr);
@@ -726,8 +827,15 @@ mod tests {
 
     #[test]
     fn intruder_predicates() {
-        assert!(is_constr_rule_info(&IntrRuleACInfo::ConstrRule(b"f".to_vec())));
-        assert!(is_destr_rule_info(&IntrRuleACInfo::DestrRule(b"f".to_vec(), 0, true, false)));
+        assert!(is_constr_rule_info(&IntrRuleACInfo::ConstrRule(
+            b"f".to_vec()
+        )));
+        assert!(is_destr_rule_info(&IntrRuleACInfo::DestrRule(
+            b"f".to_vec(),
+            0,
+            true,
+            false
+        )));
         assert!(is_coerce_rule_info(&IntrRuleACInfo::Coerce));
         assert!(!is_constr_rule_info(&IntrRuleACInfo::Coerce));
     }
@@ -751,16 +859,23 @@ mod tests {
     }
 
     fn maude_path() -> Option<String> {
-        if let Ok(p) = std::env::var("MAUDE_PATH") { return Some(p); }
+        if let Ok(p) = std::env::var("MAUDE_PATH") {
+            return Some(p);
+        }
         for c in ["/usr/local/bin/maude", "maude"] {
-            if std::path::Path::new(c).exists() { return Some(c.to_string()); }
+            if std::path::Path::new(c).exists() {
+                return Some(c.to_string());
+            }
         }
         None
     }
 
     #[test]
     fn unify_ln_fact_eqs_tag_mismatch_no_unifiers() {
-        let path = match maude_path() { Some(p) => p, None => return };
+        let path = match maude_path() {
+            Some(p) => p,
+            None => return,
+        };
         let h = MaudeHandle::start(&path, tamarin_term::maude_sig::pair_maude_sig()).unwrap();
         let f1 = out_fact(msg_var("x", 0));
         let f2 = in_fact(msg_var("y", 0));
@@ -770,7 +885,10 @@ mod tests {
 
     #[test]
     fn unify_ln_fact_eqs_two_vars() {
-        let path = match maude_path() { Some(p) => p, None => return };
+        let path = match maude_path() {
+            Some(p) => p,
+            None => return,
+        };
         let h = MaudeHandle::start(&path, tamarin_term::maude_sig::pair_maude_sig()).unwrap();
         let f1 = out_fact(msg_var("x", 0));
         let f2 = out_fact(msg_var("y", 0));
@@ -782,7 +900,10 @@ mod tests {
 
     #[test]
     fn unifiable_ln_facts_yes_no() {
-        let path = match maude_path() { Some(p) => p, None => return };
+        let path = match maude_path() {
+            Some(p) => p,
+            None => return,
+        };
         let h = MaudeHandle::start(&path, tamarin_term::maude_sig::pair_maude_sig()).unwrap();
         let f1 = out_fact(msg_var("x", 0));
         let f2 = out_fact(msg_var("y", 0));
@@ -793,7 +914,10 @@ mod tests {
 
     #[test]
     fn unifiable_rule_ac_insts_same_shape() {
-        let path = match maude_path() { Some(p) => p, None => return };
+        let path = match maude_path() {
+            Some(p) => p,
+            None => return,
+        };
         let h = MaudeHandle::start(&path, tamarin_term::maude_sig::pair_maude_sig()).unwrap();
         let r1: RuleACInst = Rule::new(
             RuleInfo::Intr(IntrRuleACInfo::Coerce),
@@ -812,7 +936,10 @@ mod tests {
 
     #[test]
     fn unifiable_rule_ac_insts_different_info_no() {
-        let path = match maude_path() { Some(p) => p, None => return };
+        let path = match maude_path() {
+            Some(p) => p,
+            None => return,
+        };
         let h = MaudeHandle::start(&path, tamarin_term::maude_sig::pair_maude_sig()).unwrap();
         let r1: RuleACInst = Rule::new(
             RuleInfo::Intr(IntrRuleACInfo::Coerce),
@@ -851,19 +978,32 @@ mod tests {
     fn d_exp_pmult_emap_rule_classification() {
         let dexp: RuleACInst = Rule::new(
             RuleInfo::Intr(IntrRuleACInfo::DestrRule(b"_exp".to_vec(), 0, false, false)),
-            vec![], vec![], vec![],
+            vec![],
+            vec![],
+            vec![],
         );
         let dpmult: RuleACInst = Rule::new(
-            RuleInfo::Intr(IntrRuleACInfo::DestrRule(b"_pmult".to_vec(), 0, false, false)),
-            vec![], vec![], vec![],
+            RuleInfo::Intr(IntrRuleACInfo::DestrRule(
+                b"_pmult".to_vec(),
+                0,
+                false,
+                false,
+            )),
+            vec![],
+            vec![],
+            vec![],
         );
         let dem: RuleACInst = Rule::new(
             RuleInfo::Intr(IntrRuleACInfo::DestrRule(b"_em".to_vec(), 0, false, false)),
-            vec![], vec![], vec![],
+            vec![],
+            vec![],
+            vec![],
         );
         let coerce: RuleACInst = Rule::new(
             RuleInfo::Intr(IntrRuleACInfo::Coerce),
-            vec![], vec![], vec![],
+            vec![],
+            vec![],
+            vec![],
         );
         assert!(is_d_exp_rule(&dexp));
         assert!(!is_d_exp_rule(&dpmult));
@@ -878,12 +1018,16 @@ mod tests {
     fn get_remaining_rule_applications_works() {
         let with_budget: RuleACInst = Rule::new(
             RuleInfo::Intr(IntrRuleACInfo::DestrRule(b"_x".to_vec(), 3, false, false)),
-            vec![], vec![], vec![],
+            vec![],
+            vec![],
+            vec![],
         );
         assert_eq!(get_remaining_rule_applications(&with_budget), 3);
         let no_budget: RuleACInst = Rule::new(
             RuleInfo::Intr(IntrRuleACInfo::Coerce),
-            vec![], vec![], vec![],
+            vec![],
+            vec![],
+            vec![],
         );
         assert_eq!(get_remaining_rule_applications(&no_budget), 0);
     }
@@ -898,7 +1042,10 @@ mod tests {
             vec![],
         );
         // Shift by +10.
-        let renamed = r.map_free(&mut |v| LVar { idx: v.idx + 10, ..v });
+        let renamed = r.map_free(&mut |v| LVar {
+            idx: v.idx + 10,
+            ..v
+        });
         let mut idxs = Vec::new();
         renamed.for_each_free(&mut |v| {
             assert_eq!(v.sort, LSort::Msg);

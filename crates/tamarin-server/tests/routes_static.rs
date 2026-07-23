@@ -34,11 +34,7 @@ async fn test_static_css_served_as_text_css() {
         .expect("send /static/css/...");
     assert_eq!(res.status(), 200);
     let ct = content_type(&res);
-    assert!(
-        ct.starts_with("text/css"),
-        "expected text/css, got {}",
-        ct
-    );
+    assert!(ct.starts_with("text/css"), "expected text/css, got {}", ct);
     let body = res.text().await.expect("read");
     assert!(!body.is_empty(), "css file should not be empty");
 }
@@ -61,11 +57,7 @@ async fn test_static_js_served_as_javascript() {
     let ct = content_type(&res);
     // tower-http's ServeDir defaults to application/javascript (or
     // text/javascript on some setups).  Either is acceptable per RFC.
-    assert!(
-        ct.contains("javascript"),
-        "expected JS mime, got {}",
-        ct
-    );
+    assert!(ct.contains("javascript"), "expected JS mime, got {}", ct);
 }
 
 #[tokio::test]

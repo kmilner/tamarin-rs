@@ -172,19 +172,19 @@ impl ProofState {
         // reuse lemmas) resolves nullary/unary user funs through them.
         // See the `user_funs` field docs.
         let user_funs = std::sync::Arc::new(
-            tamarin_theory::elaborate::collect_user_funs_for_theory(parser_theory));
-        let _user_funs_guard =
-            tamarin_theory::elaborate::set_user_funs_from_collected(&user_funs);
-        let mut typed = elaborate(parser_theory)
-            .map_err(|e| format!("elaborate: {}", e.message))?;
+            tamarin_theory::elaborate::collect_user_funs_for_theory(parser_theory),
+        );
+        let _user_funs_guard = tamarin_theory::elaborate::set_user_funs_from_collected(&user_funs);
+        let mut typed =
+            elaborate(parser_theory).map_err(|e| format!("elaborate: {}", e.message))?;
         // Oracle-path base (HS Parser.hs:304): a `heuristic: o "./oracle-…"`
         // resolves against the theory file's directory
         // (`hs_take_directory(in_file)` in prove.rs), both in the session
         // built below and in raw-solve replay rankings.
         typed.in_file = in_file.to_string();
         let sig = typed.signature.maude_sig.clone();
-        let maude = MaudeHandle::start(maude_path, sig)
-            .map_err(|e| format!("maude start: {:?}", e))?;
+        let maude =
+            MaudeHandle::start(maude_path, sig).map_err(|e| format!("maude start: {:?}", e))?;
         let rules: Vec<OpenProtoRule> = typed.rules().cloned().collect();
         // Build the ProofContext WITH the theory's restrictions, mirroring
         // HS `closeRuleCache`'s `safetyRestrictions` (Rule.hs:155-156) and the
@@ -196,7 +196,8 @@ impl ProofState {
         // initial per-lemma proof snippets are unaffected — they render the
         // root system (which already installs restrictions via
         // `formula_to_system`) and never graft precomputed sources.
-        let ctx_restrictions: Vec<Guarded> = typed.restrictions()
+        let ctx_restrictions: Vec<Guarded> = typed
+            .restrictions()
             .filter_map(|r| formula_to_guarded(&r.formula).ok())
             .collect();
         // --- Close-time skeleton replay (HS `checkAndExtendProver
@@ -241,10 +242,13 @@ impl ProofState {
         //
         let session: Option<Arc<tamarin_theory::prove::ProverSession>> =
             match tamarin_theory::prove::ProverSession::build_with_in_file_and_heuristic(
-                parser_theory, maude.clone(), None, &typed.in_file,
+                parser_theory,
+                maude.clone(),
+                None,
+                &typed.in_file,
                 tamarin_theory::prove::CliHeuristic::default(),
-                cut)
-            {
+                cut,
+            ) {
                 Ok(s) => Some(Arc::new(s)),
                 Err(e) => {
                     tracing::warn!(error = %e,
@@ -256,14 +260,18 @@ impl ProofState {
         let mut replayed_roots: BTreeMap<String, ProofNode> = BTreeMap::new();
         if let Some(session) = session.as_deref() {
             for lemma in typed.lemmas() {
-                if lemma.proof.tree.is_none() { continue; }
+                if lemma.proof.tree.is_none() {
+                    continue;
+                }
                 // `max_steps` mirrors the CLI (`budget =
                 // usize::MAX`, run.rs); in check-and-extend mode
                 // it is only consumed by `run_proof_search`
                 // fall-throughs, which never fire.
                 match tamarin_theory::prove::check_and_extend_lemma_in_session(
-                    session, &lemma.name, usize::MAX)
-                {
+                    session,
+                    &lemma.name,
+                    usize::MAX,
+                ) {
                     Ok(root) => {
                         replayed_roots.insert(lemma.name.clone(), root);
                     }
@@ -289,7 +297,12 @@ impl ProofState {
                 Vec::new()
             };
         let mut ctx = ProofContext::new_with_restrictions_pool_forced(
-            maude, None, rules, ctx_restrictions, &forced_injective_facts);
+            maude,
+            None,
+            rules,
+            ctx_restrictions,
+            &forced_injective_facts,
+        );
         ctx.cut = cut;
         // Build the initial system for every lemma.
         let mut by_lemma: BTreeMap<String, LemmaProofState> = BTreeMap::new();
@@ -301,8 +314,10 @@ impl ProofState {
             let lname = lemma.name.clone();
             // --- Per-lemma search settings (prove.rs:601-623,749-753) -------
             // `use_induction`: forced on by `[use_induction]` or `[sources]`.
-            let use_induction = if lemma.attributes.iter().any(|a| matches!(a,
-                LemmaAttr::UseInduction | LemmaAttr::Sources))
+            let use_induction = if lemma
+                .attributes
+                .iter()
+                .any(|a| matches!(a, LemmaAttr::UseInduction | LemmaAttr::Sources))
             {
                 UseInduction::UseInduction
             } else {
@@ -311,11 +326,10 @@ impl ProofState {
             // `heuristic`: per-lemma `[heuristic=..]` > theory `heuristic:`.
             // There is no CLI `--heuristic` on the web path, so the CLI
             // override branch of `prove::prove_lemma` is skipped entirely.
-            let lemma_heuristic: Option<&str> = lemma.attributes.iter()
-                .find_map(|a| match a {
-                    LemmaAttr::Heuristic(s) => Some(s.as_str()),
-                    _ => None,
-                });
+            let lemma_heuristic: Option<&str> = lemma.attributes.iter().find_map(|a| match a {
+                LemmaAttr::Heuristic(s) => Some(s.as_str()),
+                _ => None,
+            });
             let heuristic_raw: Option<String> = match lemma_heuristic {
                 Some(h) => Some(h.to_string()),
                 None => typed.heuristic.first().cloned(),
@@ -323,19 +337,28 @@ impl ProofState {
             let heuristic = heuristic_raw.map(|h| {
                 let mut rankings =
                     tamarin_theory::constraint::solver::goals::parse_heuristic_str_with_tactics(
-                        &h, &typed.in_file, &typed.tactic);
+                        &h,
+                        &typed.in_file,
+                        &typed.tactic,
+                    );
                 // Oracle paths resolve against the theory file's directory
                 // (HS `oraclePath = workDir </> relPath`, System.hs:574-575)
                 // — same prefixing the batch session applies
                 // (prove.rs `resolve_lemma_rankings`); without it the dmn
                 // family's `heuristic: o "./oracle-…"` exec fails cwd-relative.
                 tamarin_theory::prove::prepend_theory_dir_to_oracle_paths(
-                    &mut rankings, &typed.in_file);
+                    &mut rankings,
+                    &typed.in_file,
+                );
                 rankings
             });
             lemma_settings.insert(
                 lname.clone(),
-                LemmaSearchSettings { use_induction, heuristic });
+                LemmaSearchSettings {
+                    use_induction,
+                    heuristic,
+                },
+            );
             // Lemma shipped with an in-file proof script: install the
             // close-time-checked replay tree (see the replay block above)
             // instead of a bare `sorry` root.  HS shows exactly this
@@ -356,10 +379,8 @@ impl ProofState {
                 }
             }
             let tq = match lemma.trace_quantifier {
-                TraceQuantifier::AllTraces =>
-                    tamarin_parser::ast::TraceQuantifier::AllTraces,
-                TraceQuantifier::ExistsTrace =>
-                    tamarin_parser::ast::TraceQuantifier::ExistsTrace,
+                TraceQuantifier::AllTraces => tamarin_parser::ast::TraceQuantifier::AllTraces,
+                TraceQuantifier::ExistsTrace => tamarin_parser::ast::TraceQuantifier::ExistsTrace,
             };
             // HS `getProofContext` / `lemmaSourceKind` (ClosedTheory.hs:97-138, see line 116,
             // Lemma.hs:38-41): a `sources` lemma is proved under RAW sources;
@@ -367,25 +388,27 @@ impl ProofState {
             // initial system with `pcSourceKind ctxt` (Prover.hs:319-326), and
             // the system's `sSourceKind` shows in the sequent as
             // `allowed cases: raw|refined`.
-            let source_kind = if lemma.attributes.iter()
+            let source_kind = if lemma
+                .attributes
+                .iter()
                 .any(|a| matches!(a, LemmaAttr::Sources))
             {
                 SourceKind::RawSources
             } else {
                 SourceKind::RefinedSources
             };
-            let mut sys = formula_to_system(
-                restrictions,
-                source_kind,
-                tq,
-                false,
-                &g,
-            );
+            let mut sys = formula_to_system(restrictions, source_kind, tq, false, &g);
             // Reuse lemmas from earlier in the theory.
             let mut reuse: Vec<Guarded> = Vec::new();
             for prior in typed.lemmas() {
-                if prior.name == lname { break; }
-                if !prior.attributes.iter().any(|a| matches!(a, LemmaAttr::Reuse)) {
+                if prior.name == lname {
+                    break;
+                }
+                if !prior
+                    .attributes
+                    .iter()
+                    .any(|a| matches!(a, LemmaAttr::Reuse))
+                {
                     continue;
                 }
                 if !matches!(prior.trace_quantifier, TraceQuantifier::AllTraces) {
@@ -424,9 +447,7 @@ impl ProofState {
     /// must hold the returned guard for the duration — web handlers run on
     /// arbitrary tokio workers whose thread-locals start empty.  See the
     /// `user_funs` field docs.
-    pub fn install_user_funs(&self)
-        -> tamarin_theory::elaborate::UserFunsForTheoryGuard
-    {
+    pub fn install_user_funs(&self) -> tamarin_theory::elaborate::UserFunsForTheoryGuard {
         tamarin_theory::elaborate::set_user_funs_from_collected(&self.user_funs)
     }
 
@@ -445,7 +466,8 @@ impl ProofState {
         let _user_funs_guard = self.install_user_funs();
         let ctx_guard = self.ctx.lock();
         let mut by_lemma = self.by_lemma.lock();
-        let lp = by_lemma.get_mut(lemma)
+        let lp = by_lemma
+            .get_mut(lemma)
             .ok_or_else(|| format!("unknown lemma: {}", lemma))?;
         let node = navigate_mut(&mut lp.root, path)
             .ok_or_else(|| format!("path not found: {:?}", path))?;
@@ -487,7 +509,9 @@ impl ProofState {
                 };
                 node.children.insert(name, child);
             }
-            node.status = if any_open { NodeStatus::Open } else {
+            node.status = if any_open {
+                NodeStatus::Open
+            } else {
                 // Rollup: prefer Solved → Sorry → Unfinishable →
                 // Contradictory, matching Haskell's `ProofStatus`
                 // semigroup.
@@ -522,7 +546,8 @@ impl ProofState {
         subtree: ProofNode,
     ) -> Result<(), String> {
         let mut by_lemma = self.by_lemma.lock();
-        let lp = by_lemma.get_mut(lemma)
+        let lp = by_lemma
+            .get_mut(lemma)
             .ok_or_else(|| format!("unknown lemma: {}", lemma))?;
         if path.is_empty() {
             lp.root = subtree;
@@ -544,7 +569,12 @@ impl ProofState {
         let src = self.by_lemma.lock();
         let mut clone: BTreeMap<String, LemmaProofState> = BTreeMap::new();
         for (k, v) in src.iter() {
-            clone.insert(k.clone(), LemmaProofState { root: v.root.clone() });
+            clone.insert(
+                k.clone(),
+                LemmaProofState {
+                    root: v.root.clone(),
+                },
+            );
         }
         ProofState {
             ctx: self.ctx.clone(),
@@ -697,9 +727,10 @@ fn combine_status(a: NodeStatus, b: NodeStatus) -> NodeStatus {
 /// The method-string is split from the path-tail at the LAST segment
 /// by the caller; this fn just parses the head segment + an optional
 /// goal-id segment for `solve`.
-pub fn parse_method(segments: &[String], sys: &tamarin_theory::constraint::system::System)
-    -> Option<ProofMethod>
-{
+pub fn parse_method(
+    segments: &[String],
+    sys: &tamarin_theory::constraint::system::System,
+) -> Option<ProofMethod> {
     let head = segments.first()?.to_lowercase();
     match head.as_str() {
         "simplify" => Some(ProofMethod::Simplify),
@@ -708,7 +739,9 @@ pub fn parse_method(segments: &[String], sys: &tamarin_theory::constraint::syste
         "solve" => {
             let id: usize = segments.get(1)?.parse().ok()?;
             // 1-based — Haskell `goalNr` starts at 1.
-            let (g, _st) = sys.goals.iter()
+            let (g, _st) = sys
+                .goals
+                .iter()
                 .filter(|(_, st)| !st.solved)
                 .nth(id.saturating_sub(1))?;
             Some(ProofMethod::SolveGoal(g.clone()))
@@ -723,11 +756,7 @@ pub fn parse_method(segments: &[String], sys: &tamarin_theory::constraint::syste
 
 /// Render the proof tree for a lemma as nested HTML — mirrors
 /// Haskell's `prettyProof`.
-pub fn render_proof_tree_html(
-    idx: usize,
-    lemma: &str,
-    root: &ProofNode,
-) -> String {
+pub fn render_proof_tree_html(idx: usize, lemma: &str, root: &ProofNode) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "<h2>Proof of <code>{}</code></h2>\n",
@@ -774,7 +803,8 @@ pub fn render_sub_proof_snippet(
     if !node.annotated {
         return tamarin_theory::pretty_hpj::postprocess_html(&format!(
             "no annotated constraint system / {} sub-case(s)",
-            node.children.len()));
+            node.children.len()
+        ));
     }
     let url_path = encode_sub_path(proof_path);
     // HS `subProofSnippet = vcat [ …proofMethods…, text "", <h3>Constraint
@@ -783,8 +813,15 @@ pub fn render_sub_proof_snippet(
     let mut parts: Vec<String> = Vec::new();
     // Applicable Proof Methods (ranked at this node's proof depth, HS
     // `subProofSnippet` uses `length proofPath`).
-    write_applicable_methods(&mut parts, idx, lemma, &url_path, proof_path.len(),
-                             &node.sys, ctx);
+    write_applicable_methods(
+        &mut parts,
+        idx,
+        lemma,
+        &url_path,
+        proof_path.len(),
+        &node.sys,
+        ctx,
+    );
     // HS `text ""` — a blank line before the Constraint-system header.
     parts.push(String::new());
     parts.push("<h3>Constraint system</h3>".to_string());
@@ -795,16 +832,22 @@ pub fn render_sub_proof_snippet(
         // DOT route directly (`Web/Theory.hs:174-177`).
         let src = format!(
             "/thy/trace/{idx}/intdot/proof/{lemma}{path}",
-            idx = idx, lemma = url_path_escape(lemma), path = url_path,
+            idx = idx,
+            lemma = url_path_escape(lemma),
+            path = url_path,
         );
-        parts.push(format!("<dynamic-graph graphSrc=\"{}\"></dynamic-graph>", src));
+        parts.push(format!(
+            "<dynamic-graph graphSrc=\"{}\"></dynamic-graph>",
+            src
+        ));
     }
     // HS `preformatted (Just "sequent") (prettyNonGraphSystem se)` =
     // `withTag "div" [("class","preformatted sequent")] …` (no `<pre>`); the
     // sequent renders escaped + span-marked under the guard.
     parts.push(format!(
         "<div class=\"preformatted sequent\">{}</div>",
-        pretty_non_graph_system(&node.sys)));
+        pretty_non_graph_system(&node.sys)
+    ));
     // Sub-cases.
     let n_cases = node.children.len();
     parts.push(format!("<h3>{} sub-case(s)</h3>", n_cases));
@@ -813,8 +856,10 @@ pub fn render_sub_proof_snippet(
         child_path.push(case_name.clone());
         let child_url = encode_sub_path(&child_path);
         // HS `withTag "h4" [] (text "Case" <-> text name)` = `<h4>Case NAME</h4>`.
-        parts.push(format!("<h4>Case {}</h4>",
-            tamarin_theory::pretty_hpj::escape_html_entities(case_name)));
+        parts.push(format!(
+            "<h4>Case {}</h4>",
+            tamarin_theory::pretty_hpj::escape_html_entities(case_name)
+        ));
         // HS `refSubCase` (`Web/Theory.hs:608-611`): an unannotated child
         // (`psInfo == Nothing`) gets `text "no proof state available"`
         // instead of the static-graph reference.
@@ -825,9 +870,14 @@ pub fn render_sub_proof_snippet(
         // HS `refDotInteractiveStaticPath` → `<static-graph graphSrc=…>`.
         let src = format!(
             "/thy/trace/{idx}/intdot/proof/{lemma}{path}",
-            idx = idx, lemma = url_path_escape(lemma), path = child_url,
+            idx = idx,
+            lemma = url_path_escape(lemma),
+            path = child_url,
         );
-        parts.push(format!("<static-graph graphSrc=\"{}\"></static-graph>", src));
+        parts.push(format!(
+            "<static-graph graphSrc=\"{}\"></static-graph>",
+            src
+        ));
     }
     tamarin_theory::pretty_hpj::postprocess_html(&parts.join("\n"))
 }
@@ -849,9 +899,9 @@ fn has_graph_content(sys: &System) -> bool {
     if !sys.nodes.is_empty() || !sys.edges.is_empty() || !sys.less_atoms.is_empty() {
         return true;
     }
-    sys.goals.iter().any(|(g, st)| {
-        !st.solved && (g.is_action() || g.is_chain())
-    })
+    sys.goals
+        .iter()
+        .any(|(g, st)| !st.solved && (g.is_action() || g.is_chain()))
 }
 
 fn write_applicable_methods(
@@ -893,8 +943,11 @@ fn write_applicable_methods(
         // `apply_method_and_redirect`'s index filter (method numbering).
         None => candidate_methods_with_expl(sys, ctx, depth)
             .into_iter()
-            .filter(|(m, _)| tamarin_theory::constraint::solver::proof_method::
-                is_applicable_for_display(ctx, m, sys))
+            .filter(|(m, _)| {
+                tamarin_theory::constraint::solver::proof_method::is_applicable_for_display(
+                    ctx, m, sys,
+                )
+            })
             .collect(),
     };
     if methods.is_empty() {
@@ -960,10 +1013,16 @@ fn write_applicable_methods(
         let nr = i + 1;
         let href = format!(
             "/thy/trace/{idx}/main/method/{lemma}/{nr}{path}",
-            idx = idx, lemma = url_path_escape(lemma), nr = nr, path = url_path);
+            idx = idx,
+            lemma = url_path_escape(lemma),
+            nr = nr,
+            path = url_path
+        );
         let link = hpj::with_tag(
-            "a", &[("class", "internal-link proof-method"), ("href", &href)],
-            tamarin_theory::pretty_theory::pretty_proof_method_doc(m));
+            "a",
+            &[("class", "internal-link proof-method"), ("href", &href)],
+            tamarin_theory::pretty_theory::pretty_proof_method_doc(m),
+        );
         let item = if expl.is_empty() {
             link
         } else {
@@ -976,7 +1035,8 @@ fn write_applicable_methods(
     // `numbered'` blank-line separator → join item blocks with a blank line.
     out.push(format!(
         "<div class=\"preformatted methods\">{}</div>",
-        method_blocks.join("\n\n")));
+        method_blocks.join("\n\n")
+    ));
     // Autoprove menu links (a./b./[o.]/s.) — self-contained block.
     write_autoprove_links(out, idx, &url_path_escape(lemma), url_path, ctx);
 }
@@ -1001,15 +1061,15 @@ fn write_autoprove_links(
     let l = lemma_esc;
     let p = url_path;
     let bound = 5; // HS `fromMaybe 5 (apBound ti.autoProver)` — default depth bound.
-    // HS `autoProverLinks` (Web/Theory.hs:557-591) wraps each link's visible
-    // text in `keyword_` — an `hl_keyword` span in HtmlDoc mode, plain text
-    // otherwise.  `kw` renders that span under the active guard.  The line is
-    // assembled by `hsep` (single-space separators); the `b.`/`s.` suffixes are
-    // separate `text " …"` literals that BEGIN with a space (`boundDesc`,
-    // `allProve`), so `hsep`'s separator space PLUS the literal's leading space
-    // give the TWO spaces before "with"/"for".  `allProve = " for all lemmas "`
-    // also has a TRAILING space.  These are matched verbatim here (confirmed
-    // against the HS oracle).
+                   // HS `autoProverLinks` (Web/Theory.hs:557-591) wraps each link's visible
+                   // text in `keyword_` — an `hl_keyword` span in HtmlDoc mode, plain text
+                   // otherwise.  `kw` renders that span under the active guard.  The line is
+                   // assembled by `hsep` (single-space separators); the `b.`/`s.` suffixes are
+                   // separate `text " …"` literals that BEGIN with a space (`boundDesc`,
+                   // `allProve`), so `hsep`'s separator space PLUS the literal's leading space
+                   // give the TWO spaces before "with"/"for".  `allProve = " for all lemmas "`
+                   // also has a TRAILING space.  These are matched verbatim here (confirmed
+                   // against the HS oracle).
     let kw = |s: &str| hpj::keyword_(s).render();
     // a. autoprove  (A. for all solutions)   [nameSuffix = emptyDoc]
     out.push(format!(
@@ -1049,7 +1109,11 @@ fn ranking_for_depth(ctx: &ProofContext, depth: usize) -> GoalRanking {
         .as_ref()
         .and_then(|h| {
             let n = h.len();
-            if n == 0 { None } else { Some(h[depth % n].clone()) }
+            if n == 0 {
+                None
+            } else {
+                Some(h[depth % n].clone())
+            }
         })
         .unwrap_or(GoalRanking::Smart(false))
 }
@@ -1063,22 +1127,19 @@ fn ranking_for_depth(ctx: &ProofContext, depth: usize) -> GoalRanking {
 /// ranking list would be vacuously true; guard with `!h.is_empty()`.
 fn uses_oracle(ctx: &ProofContext) -> bool {
     ctx.heuristic.as_ref().is_some_and(|h| {
-        !h.is_empty() && h.iter().all(|r| matches!(
-            r,
-            GoalRanking::Oracle { .. }
-                | GoalRanking::OracleSmart { .. }
-                | GoalRanking::Tactic { .. }
-        ))
+        !h.is_empty()
+            && h.iter().all(|r| {
+                matches!(
+                    r,
+                    GoalRanking::Oracle { .. }
+                        | GoalRanking::OracleSmart { .. }
+                        | GoalRanking::Tactic { .. }
+                )
+            })
     })
 }
 
-fn render_node(
-    out: &mut String,
-    idx: usize,
-    lemma: &str,
-    path: &[String],
-    node: &ProofNode,
-) {
+fn render_node(out: &mut String, idx: usize, lemma: &str, path: &[String], node: &ProofNode) {
     let url_path = encode_sub_path(path);
     out.push_str("<div class=\"proof-node\">");
     // Method line with status badge.
@@ -1089,14 +1150,27 @@ fn render_node(
         badge,
     ));
     // Action links: depending on method/status, offer apply links.
-    if matches!(node.method,
-        ProofMethod::Sorry(_) | ProofMethod::Invalidated)
-        && matches!(node.status, NodeStatus::Open)
+    if matches!(
+        node.method,
+        ProofMethod::Sorry(_) | ProofMethod::Invalidated
+    ) && matches!(node.status, NodeStatus::Open)
     {
         // Offer Simplify / Induction / Solve links.
         out.push_str(" <span class=\"proof-actions\">");
-        out.push_str(&action_link(idx, lemma, &url_path, "simplify", "[simplify]"));
-        out.push_str(&action_link(idx, lemma, &url_path, "induction", "[induction]"));
+        out.push_str(&action_link(
+            idx,
+            lemma,
+            &url_path,
+            "simplify",
+            "[simplify]",
+        ));
+        out.push_str(&action_link(
+            idx,
+            lemma,
+            &url_path,
+            "induction",
+            "[induction]",
+        ));
         // Solve links — list the unsolved goals at this node, capped
         // at 8 so the UI doesn't blow up on systems with many open
         // goals.
@@ -1106,12 +1180,18 @@ fn render_node(
         // to a `take(i+1).filter(unsolved).count()` recount, but O(n)).
         let mut nr = 0usize;
         for (g, st) in node.sys.goals.iter() {
-            if st.solved { continue; }
+            if st.solved {
+                continue;
+            }
             nr += 1;
-            if shown >= 8 { break; }
+            if shown >= 8 {
+                break;
+            }
             let goal_label = goal_summary(g);
             out.push_str(&action_link(
-                idx, lemma, &url_path,
+                idx,
+                lemma,
+                &url_path,
                 &format!("solve/{}", nr),
                 &format!("[solve {}: {}]", nr, html_escape(&goal_label)),
             ));
@@ -1129,9 +1209,7 @@ fn render_node(
         for (case_name, child) in &node.children {
             let mut child_path = path.to_vec();
             child_path.push(case_name.clone());
-            out.push_str(&format!(
-                "<h4>Case {}</h4>\n",
-                html_escape(case_name)));
+            out.push_str(&format!("<h4>Case {}</h4>\n", html_escape(case_name)));
             render_node(out, idx, lemma, &child_path, child);
         }
         out.push_str("</div>");
@@ -1158,14 +1236,13 @@ fn status_badge(s: &NodeStatus) -> String {
         NodeStatus::Sorry => ("#8a1313", "✗ sorry"),
         NodeStatus::Open => ("#136a8a", "○ open"),
     };
-    format!("<span class=\"proof-status\" style=\"color:{}\">{}</span>",
-        color, label)
+    format!(
+        "<span class=\"proof-status\" style=\"color:{}\">{}</span>",
+        color, label
+    )
 }
 
-fn action_link(
-    idx: usize, lemma: &str,
-    url_path: &str, method: &str, label: &str,
-) -> String {
+fn action_link(idx: usize, lemma: &str, url_path: &str, method: &str, label: &str) -> String {
     format!(
         "<a class=\"ajax-action proof-step\" href=\"/thy/trace/{idx}/proof-step/{lemma}{path}/{method}\">{label}</a> ",
         idx = idx,
@@ -1184,13 +1261,20 @@ fn goal_summary(g: &Goal) -> String {
             let args: Vec<String> = fa.terms.iter().map(pretty_lnterm).collect();
             format!("{}({}) @ #{}{}", tag, args.join(","), nid.name, nid.idx)
         }
-        Goal::Chain(src, tgt) => format!("Chain #{}{} -> #{}{}",
-            src.0.name, src.0.idx, tgt.0.name, tgt.0.idx),
+        Goal::Chain(src, tgt) => format!(
+            "Chain #{}{} -> #{}{}",
+            src.0.name, src.0.idx, tgt.0.name, tgt.0.idx
+        ),
         Goal::Premise(np, fa) => {
             let tag = tamarin_theory::fact::fact_tag_name(&fa.tag);
             let args: Vec<String> = fa.terms.iter().map(pretty_lnterm).collect();
-            format!("{}({}) @ prem #{}{}", tag, args.join(","),
-                np.0.name, np.0.idx)
+            format!(
+                "{}({}) @ prem #{}{}",
+                tag,
+                args.join(","),
+                np.0.name,
+                np.0.idx
+            )
         }
         // Mirror Haskell `prettyGoal` (`Constraints.hs:279-280`):
         //   prettyGoal (SplitG x) = "splitEqs" <> parens (show (unSplitId x))
@@ -1202,15 +1286,14 @@ fn goal_summary(g: &Goal) -> String {
             if d.0.is_empty() {
                 "Disj (\u{22A5})".to_string()
             } else {
-                let parts: Vec<String> = d.0.iter()
-                    .map(|c| format!("({})",
-                        tamarin_theory::pretty_formula::pretty_guarded(c)))
-                    .collect();
+                let parts: Vec<String> =
+                    d.0.iter()
+                        .map(|c| format!("({})", tamarin_theory::pretty_formula::pretty_guarded(c)))
+                        .collect();
                 parts.join("  \u{2225} ")
             }
         }
-        Goal::Subterm((a, b)) => format!("{} \u{2291} {}",
-            pretty_lnterm(a), pretty_lnterm(b)),
+        Goal::Subterm((a, b)) => format!("{} \u{2291} {}", pretty_lnterm(a), pretty_lnterm(b)),
     }
 }
 
@@ -1219,7 +1302,9 @@ mod tests {
     use super::*;
 
     fn maude_path() -> Option<String> {
-        if let Ok(p) = std::env::var("MAUDE_PATH") { return Some(p); }
+        if let Ok(p) = std::env::var("MAUDE_PATH") {
+            return Some(p);
+        }
         for c in [
             "/usr/local/bin/maude",
             "/opt/homebrew/bin/maude",
@@ -1235,7 +1320,10 @@ mod tests {
 
     #[test]
     fn build_state_for_trivial_theory() {
-        let mp = match maude_path() { Some(p) => p, None => return };
+        let mp = match maude_path() {
+            Some(p) => p,
+            None => return,
+        };
         let src = r#"
 theory T begin
 rule Setup: [Fr(~k)] --[Setup(~k)]-> [Out(~k)]
@@ -1253,7 +1341,10 @@ end
 
     #[test]
     fn apply_simplify_step() {
-        let mp = match maude_path() { Some(p) => p, None => return };
+        let mp = match maude_path() {
+            Some(p) => p,
+            None => return,
+        };
         let src = r#"
 theory T begin
 rule Setup: [Fr(~k)] --[Setup(~k)]-> [Out(~k)]
@@ -1269,19 +1360,28 @@ end
         assert!(r.is_ok(), "simplify should succeed: {:?}", r);
         let root = state.get_root("trivial").expect("root");
         // Method should now be Simplify (not Sorry).
-        assert!(matches!(root.method, ProofMethod::Simplify),
-            "root method after simplify: {:?}", root.method);
+        assert!(
+            matches!(root.method, ProofMethod::Simplify),
+            "root method after simplify: {:?}",
+            root.method
+        );
     }
 
     #[test]
     fn parse_method_simplify_induction_sorry() {
         let sys = tamarin_theory::constraint::system::System::empty();
-        assert!(matches!(parse_method(&["simplify".into()], &sys),
-            Some(ProofMethod::Simplify)));
-        assert!(matches!(parse_method(&["induction".into()], &sys),
-            Some(ProofMethod::Induction)));
-        assert!(matches!(parse_method(&["sorry".into()], &sys),
-            Some(ProofMethod::Sorry(None))));
+        assert!(matches!(
+            parse_method(&["simplify".into()], &sys),
+            Some(ProofMethod::Simplify)
+        ));
+        assert!(matches!(
+            parse_method(&["induction".into()], &sys),
+            Some(ProofMethod::Induction)
+        ));
+        assert!(matches!(
+            parse_method(&["sorry".into()], &sys),
+            Some(ProofMethod::Sorry(None))
+        ));
         assert!(parse_method(&["solve".into()], &sys).is_none());
         assert!(parse_method(&["bogus".into()], &sys).is_none());
     }

@@ -94,11 +94,7 @@ async fn test_favicon_redirects_to_static_image() {
     // Haskell returns 303 + Location: /static/img/favicon.ico
     // Rust returns 308 (permanent redirect) + same Location.
     // Both are valid redirects to the same target.
-    assert!(
-        status.is_redirection(),
-        "expected redirect, got {}",
-        status
-    );
+    assert!(status.is_redirection(), "expected redirect, got {}", status);
     assert!(
         loc.ends_with("/static/img/favicon.ico"),
         "expected redirect to favicon.ico, got {:?}",
@@ -326,9 +322,8 @@ async fn test_overview_help_panes_are_direct_body_children() {
                     // standalone token (` />` / `"/>` / `'/>`).  Hamlet emits
                     // unquoted URL attributes like `<a href=/>` (RootR), whose
                     // trailing `/` is part of the value `/` — NOT a self-close.
-                    let is_self_close = tag.ends_with('/')
-                        && tag[..tag.len() - 1]
-                            .ends_with([' ', '"', '\'']);
+                    let is_self_close =
+                        tag.ends_with('/') && tag[..tag.len() - 1].ends_with([' ', '"', '\'']);
                     let starts = i + 1;
                     let name_end = tag[1..]
                         .find([' ', '>', '/'])
@@ -504,7 +499,11 @@ async fn test_main_with_missing_idx_returns_404_html() {
         .send()
         .await
         .expect("send main with bad idx");
-    assert_eq!(res.status(), 404, "missing idx must be 404 (matches Haskell)");
+    assert_eq!(
+        res.status(),
+        404,
+        "missing idx must be 404 (matches Haskell)"
+    );
     let ct = content_type(&res);
     assert!(
         ct.starts_with("text/html"),

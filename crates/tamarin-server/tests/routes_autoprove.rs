@@ -110,20 +110,23 @@ async fn test_autoprove_on_bad_path_returns_alert() {
     // `rules` is not a valid path target for autoprove (it's not a
     // lemma / proof / method); Haskell returns alert, ours does too.
     let url = s.url("/thy/trace/1/autoprove/idfs/0/False/rules");
-    let res = s.client.get(&url).send().await.expect("send autoprove-rules");
+    let res = s
+        .client
+        .get(&url)
+        .send()
+        .await
+        .expect("send autoprove-rules");
     assert_eq!(res.status(), 200);
     let v: serde_json::Value = res.json().await.expect("decode");
     let keys = json_top_keys(&v);
-    let one: std::collections::BTreeSet<String> =
-        std::iter::once("alert".to_string()).collect();
+    let one: std::collections::BTreeSet<String> = std::iter::once("alert".to_string()).collect();
     assert_eq!(keys, one, "autoprove on non-lemma path should be {{alert}}");
 
     // The captured Haskell alert is exactly
     // "Can't run the autoprover () on the given theory path!" — we
     // emit the same string for byte-equal comparison.
     let captured = haskell_capture("autoprove_on_rules.json");
-    let captured_v: serde_json::Value =
-        serde_json::from_str(&captured).expect("parse captured");
+    let captured_v: serde_json::Value = serde_json::from_str(&captured).expect("parse captured");
     assert_eq!(
         v.get("alert").and_then(|x| x.as_str()),
         captured_v.get("alert").and_then(|x| x.as_str()),
@@ -159,8 +162,7 @@ async fn test_autoprove_on_unknown_lemma_returns_alert() {
     assert_eq!(res.status(), 200);
     let v: serde_json::Value = res.json().await.expect("decode");
     let keys = json_top_keys(&v);
-    let one: std::collections::BTreeSet<String> =
-        std::iter::once("alert".to_string()).collect();
+    let one: std::collections::BTreeSet<String> = std::iter::once("alert".to_string()).collect();
     assert_eq!(keys, one, "unknown-lemma autoprove must be {{alert}}");
     let alert = v.get("alert").and_then(|x| x.as_str()).unwrap_or("");
     assert!(
@@ -178,20 +180,43 @@ async fn test_autoprove_on_unknown_lemma_returns_alert() {
 async fn test_autoprove_proof_view_retains_systems() {
     tamarin_theory::constraint::solver::search::set_keep_sys(true);
     let s = start_server_with_theory("Tutorial.spthy").await;
-    let v: serde_json::Value = s.client
+    let v: serde_json::Value = s
+        .client
         .get(s.url("/thy/trace/1/autoprove/idfs/0/False/proof/Client_auth"))
-        .send().await.expect("send").json().await.expect("decode");
-    let redir = v.get("redirect").and_then(|x| x.as_str()).expect("redirect");
-    let idx: usize = redir.split('/').nth(3).and_then(|x| x.parse().ok()).expect("idx");
-    let pv: serde_json::Value = s.client
+        .send()
+        .await
+        .expect("send")
+        .json()
+        .await
+        .expect("decode");
+    let redir = v
+        .get("redirect")
+        .and_then(|x| x.as_str())
+        .expect("redirect");
+    let idx: usize = redir
+        .split('/')
+        .nth(3)
+        .and_then(|x| x.parse().ok())
+        .expect("idx");
+    let pv: serde_json::Value = s
+        .client
         .get(s.url(&format!("/thy/trace/{}/main/proof/Client_auth", idx)))
-        .send().await.expect("send").json().await.expect("decode");
+        .send()
+        .await
+        .expect("send")
+        .json()
+        .await
+        .expect("decode");
     let html = pv.get("html").and_then(|x| x.as_str()).unwrap_or("");
-    assert!(html.contains("Applicable Proof Methods"),
+    assert!(
+        html.contains("Applicable Proof Methods"),
         "proof view must render applicable methods from retained systems; got: {}",
-        &html[..html.len().min(200)]);
-    assert!(!html.contains("Constraint System is Solved"),
-        "root must not render as an empty solved system");
+        &html[..html.len().min(200)]
+    );
+    assert!(
+        !html.contains("Constraint System is Solved"),
+        "root must not render as an empty solved system"
+    );
 }
 
 // Regression: an oracle exec failure must be confined to the request
@@ -206,7 +231,16 @@ async fn test_autoprove_missing_oracle_keeps_server_alive() {
     let s = start_server_with_theory("oracle_missing.spthy").await;
     let auto = s.url("/thy/trace/1/autoprove/idfs/0/False/proof/test");
     let res = s.client.get(&auto).send().await.expect("request completes");
-    assert_eq!(res.status(), 200, "failure surfaces as an alert, not a dead socket");
-    let root = s.client.get(s.url("/")).send().await.expect("server still serving");
+    assert_eq!(
+        res.status(),
+        200,
+        "failure surfaces as an alert, not a dead socket"
+    );
+    let root = s
+        .client
+        .get(s.url("/"))
+        .send()
+        .await
+        .expect("server still serving");
     assert_eq!(root.status(), 200, "server must survive the oracle failure");
 }

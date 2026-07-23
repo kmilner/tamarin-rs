@@ -74,7 +74,9 @@ pub enum ProofMethod {
 /// `isFinished`: returns the appropriate `Result` if the system is in
 /// a terminal state — solved, contradictory, or unfinishable.
 pub fn is_finished(ctx: &ProofContext, sys: &System) -> Option<Result> {
-    if sys.is_initial() { return None; }
+    if sys.is_initial() {
+        return None;
+    }
     let cs = contradictions(ctx, sys);
     if let Some(c) = cs.into_iter().next() {
         // Mirror Haskell `contradictorySystem`: any contradiction
@@ -102,9 +104,11 @@ pub fn is_finished(ctx: &ProofContext, sys: &System) -> Option<Result> {
         // source consumption — `Source.incomplete` is diagnostic-only
         // there.  Match that.
         Some(Result::Solved)
+    } else if no_open_goals && !sub_finished {
+        Some(Result::Unfinishable)
+    } else {
+        None
     }
-    else if no_open_goals && !sub_finished { Some(Result::Unfinishable) }
-    else { None }
 }
 
 /// Direct port of Haskell `finishedSubterms`
@@ -135,9 +139,20 @@ pub fn finished_subterms(ctx: &ProofContext, sys: &System) -> bool {
     };
     // HS `hasReducibleOperatorsOnTop` walks posSubterms ∪ negSubterms ∪
     // solvedSubterms (SubtermStore.hs:131-133).
-    sys.subterm_store.subterms.iter().all(|s| top_is_not_reducible(&s.big))
-        && sys.subterm_store.solved_subterms.iter().all(|s| top_is_not_reducible(&s.big))
-        && sys.subterm_store.neg_subterms.iter().all(|(_, big)| top_is_not_reducible(big))
+    sys.subterm_store
+        .subterms
+        .iter()
+        .all(|s| top_is_not_reducible(&s.big))
+        && sys
+            .subterm_store
+            .solved_subterms
+            .iter()
+            .all(|s| top_is_not_reducible(&s.big))
+        && sys
+            .subterm_store
+            .neg_subterms
+            .iter()
+            .all(|(_, big)| top_is_not_reducible(big))
 }
 
 /// Render/index applicability — the evaluation depth HS's
@@ -163,19 +178,16 @@ pub fn finished_subterms(ctx: &ProofContext, sys: &System) -> bool {
 /// web-crawl timeouts.  Also more faithful on the deadline: HS never
 /// drops a SolveGoal at render; the eager exec's deadline entry-guard
 /// could.
-pub fn is_applicable_for_display(
-    ctx: &ProofContext,
-    method: &ProofMethod,
-    sys: &System,
-) -> bool {
+pub fn is_applicable_for_display(ctx: &ProofContext, method: &ProofMethod, sys: &System) -> bool {
     match method {
         // `return tracedCases` — unconditionally `Just` in HS; do NOT
         // call exec_proof_method (that forces the fan-out).
         ProofMethod::SolveGoal(_) => true,
         // Forced by HS at render too; cheap and can legitimately drop
         // the method (no-op Simplify / non-initial Induction).
-        ProofMethod::Simplify | ProofMethod::Induction =>
-            exec_proof_method(ctx, method, sys).is_some(),
+        ProofMethod::Simplify | ProofMethod::Induction => {
+            exec_proof_method(ctx, method, sys).is_some()
+        }
         ProofMethod::Sorry(_) | ProofMethod::Finished(_) => true,
         ProofMethod::Invalidated | ProofMethod::RawSolve(_) => false,
     }
@@ -229,8 +241,8 @@ fn remove_redundant_cases_ctx<T>(
     cases: Vec<T>,
 ) -> Vec<T> {
     let msig = ctx.maude.maude_sig();
-    let empty_stable: std::collections::BTreeSet<tamarin_term::lterm::LVar>
-        = std::collections::BTreeSet::new();
+    let empty_stable: std::collections::BTreeSet<tamarin_term::lterm::LVar> =
+        std::collections::BTreeSet::new();
     crate::constraint::solver::sources::remove_redundant_cases(
         msig.enable_bp,
         msig.enable_mset,
@@ -244,7 +256,11 @@ fn remove_redundant_cases_ctx<T>(
 /// BP/MSet-gated structural dedup (`removeRedundantCases ctxt [] snd`)
 /// followed by `uniqueListBy (comparing fst) id distinguish` naming.
 fn process_cases(ctx: &ProofContext, cases: Vec<(String, System)>) -> Vec<(String, System)> {
-    distinguish_case_names(remove_redundant_cases_ctx(ctx, |p: &(String, System)| &p.1, cases))
+    distinguish_case_names(remove_redundant_cases_ctx(
+        ctx,
+        |p: &(String, System)| &p.1,
+        cases,
+    ))
 }
 
 /// Opt-in hit/miss counters for the Simplify no-op shortcut
@@ -262,8 +278,12 @@ fn simp_noop_stat(hit: bool) {
     let calls = CALLS.fetch_add(1, Relaxed) + 1;
     if calls % 1_000 == 0 {
         let h = HITS.load(Relaxed);
-        eprintln!("[SIMP_NOOP_STATS] simplify_execs={} noop_hits={} ({:.1}%)",
-            calls, h, 100.0 * h as f64 / calls as f64);
+        eprintln!(
+            "[SIMP_NOOP_STATS] simplify_execs={} noop_hits={} ({:.1}%)",
+            calls,
+            h,
+            100.0 * h as f64 / calls as f64
+        );
     }
 }
 
@@ -330,8 +350,13 @@ pub fn exec_proof_method(
             ProofMethod::Induction => "Induction",
             ProofMethod::SolveGoal(_) => "SolveGoal",
         };
-        eprintln!("[EXECPM] enter method={} goals={} nodes={} avoid={}",
-            mname, sys.goals.iter().count(), sys.nodes.iter().count(), avoid);
+        eprintln!(
+            "[EXECPM] enter method={} goals={} nodes={} avoid={}",
+            mname,
+            sys.goals.iter().count(),
+            sys.nodes.iter().count(),
+            avoid
+        );
     }
     let _execpm_exit = if dbg_sua {
         struct ExitLog(std::time::Instant);
@@ -341,7 +366,9 @@ pub fn exec_proof_method(
             }
         }
         Some(ExitLog(std::time::Instant::now()))
-    } else { None };
+    } else {
+        None
+    };
 
     match method {
         ProofMethod::Sorry(_) | ProofMethod::Finished(_) => Some(Vec::new()),
@@ -393,7 +420,11 @@ pub fn exec_proof_method(
                 && case_systems[0] == *sys
             {
                 simp_noop_stat(true);
-                return if sys.eq_store.is_false() { Some(Vec::new()) } else { None };
+                return if sys.eq_store.is_false() {
+                    Some(Vec::new())
+                } else {
+                    None
+                };
             }
             simp_noop_stat(false);
             // HS-faithful `cleanup` (ProofMethod.hs): EVERY
@@ -402,17 +433,16 @@ pub fn exec_proof_method(
             // output is ALSO cleaned.
             let cleanup = |s: &System| -> System {
                 let mut s2 = s.clone();
-                crate::constraint::solver::rename_precise::rename_precise_system(
-                    &mut s2);
-                s2.eq_store_mut().subst =
-                    tamarin_term::subst::Subst::from_list(Vec::new());
+                crate::constraint::solver::rename_precise::rename_precise_system(&mut s2);
+                s2.eq_store_mut().subst = tamarin_term::subst::Subst::from_list(Vec::new());
                 s2
             };
             // HS-faithful filter: cases whose eq_store is false were
             // mzero'd by `contradictoryIf` during simplify; they don't
             // show up in HS's surviving Disj.  (Other contradiction
             // reasons surface as explicit Finished(Contradictory) leaves.)
-            let cleaned: Vec<System> = case_systems.into_iter()
+            let cleaned: Vec<System> = case_systems
+                .into_iter()
                 .filter(|s| !s.eq_store.is_false())
                 .map(|mut s| {
                     // HS-faithful `cleanup` (ProofMethod.hs) applied in
@@ -422,10 +452,8 @@ pub fn exec_proof_method(
                     // directly.  Value-identical to `cleanup(&s)`; that
                     // closure only clones because its callers hand it a
                     // `&System` (the borrowed `cleanup(sys)` site below).
-                    crate::constraint::solver::rename_precise::rename_precise_system(
-                        &mut s);
-                    s.eq_store_mut().subst =
-                        tamarin_term::subst::Subst::from_list(Vec::new());
+                    crate::constraint::solver::rename_precise::rename_precise_system(&mut s);
+                    s.eq_store_mut().subst = tamarin_term::subst::Subst::from_list(Vec::new());
                     s
                 })
                 .collect();
@@ -445,8 +473,7 @@ pub fn exec_proof_method(
             // empty stable_vars (HS passes `[]`).  Runs BEFORE the
             // single-case `sys' /= cleanup sys` check, matching HS's order
             // (the check inspects the post-dedup `M.toList cases`).
-            let cleaned: Vec<System> =
-                remove_redundant_cases_ctx(ctx, |s: &System| s, cleaned);
+            let cleaned: Vec<System> = remove_redundant_cases_ctx(ctx, |s: &System| s, cleaned);
             // Empty case-map: `simplifySystem` mzero'd every branch (the
             // restriction / formula set is contradictory).  HS's `Simplify`
             // arm (ProofMethod.hs:421-427) inspects `M.toList cases`; the
@@ -458,14 +485,18 @@ pub fn exec_proof_method(
             // (exists-trace) proof.  Returning `None` here instead would
             // drop Simplify from the ranked list and let `Induction` win —
             // the divergence this arm must avoid.
-            if cleaned.is_empty() { return Some(Vec::new()); }
+            if cleaned.is_empty() {
+                return Some(Vec::new());
+            }
             let cleaned_input = cleanup(sys);
             if cleaned.len() == 1 {
                 // Single-case path: HS's `Simplify` arm (ProofMethod.hs)
                 // checks whether the simplified system equals the cleaned
                 // input — if so, the method "failed" and we return None.
                 // Multi-case fan-out trivially can't satisfy that condition.
-                if cleaned[0] == cleaned_input { return None; }
+                if cleaned[0] == cleaned_input {
+                    return None;
+                }
                 return Some(vec![("".to_string(), cleaned.into_iter().next().unwrap())]);
             }
             // HS-faithful naming: `distinguish n` (ProofMethod.hs)
@@ -479,7 +510,8 @@ pub fn exec_proof_method(
             // exact-name duplicates structurally; for our empty-name
             // case all siblings get unique numeric names so no real
             // dedup is needed.
-            let out: Vec<(String, System)> = cleaned.into_iter()
+            let out: Vec<(String, System)> = cleaned
+                .into_iter()
                 .enumerate()
                 .map(|(i, s)| ((i + 1).to_string(), s))
                 .collect();
@@ -523,19 +555,18 @@ pub fn exec_proof_method(
             let simplify = |sys: System, seed: u64| -> Vec<System> {
                 let raw_systems: Vec<System> =
                     crate::constraint::solver::simplify::simplify_system_with_fanout_seeded(
-                        ctx, sys, seed);
+                        ctx, sys, seed,
+                    );
                 // Cleanup each surviving system per HS
                 // `cleanup` (ProofMethod.hs):
                 //   cleanup s = L.set sSubst emptySubst
                 //                       (renamePrecise s)
                 let mut out: Vec<System> = Vec::with_capacity(raw_systems.len());
                 for mut s in raw_systems {
-                    crate::constraint::solver::rename_precise::rename_precise_system(
-                        &mut s);
+                    crate::constraint::solver::rename_precise::rename_precise_system(&mut s);
                     if !s.eq_store.is_false() {
                         s.invalidate_max_var_idx_cache();
-                        s.eq_store_mut().subst =
-                            tamarin_term::subst::Subst::from_list(Vec::new());
+                        s.eq_store_mut().subst = tamarin_term::subst::Subst::from_list(Vec::new());
                     }
                     out.push(s);
                 }
@@ -595,9 +626,13 @@ pub fn exec_proof_method(
             let cases: Vec<(String, System, u64)> = match outcome {
                 GoalCases::Linear => vec![("".to_string(), r.sys, adopted_counter)],
                 GoalCases::LinearNamed(name) => vec![(name, r.sys, adopted_counter)],
-                GoalCases::Cases(cases) => cases.into_iter().enumerate()
+                GoalCases::Cases(cases) => cases
+                    .into_iter()
+                    .enumerate()
                     .map(|(ci, (n, s))| {
-                        let seed = goal_case_counters.get(ci).copied()
+                        let seed = goal_case_counters
+                            .get(ci)
+                            .copied()
                             .unwrap_or(adopted_counter);
                         (n, s, seed)
                     })
@@ -605,66 +640,74 @@ pub fn exec_proof_method(
                 GoalCases::Contradictory => return Some(Vec::new()),
             };
             {
-                    // De-duplicate identical case names by appending
-                    // `_case_1`/`_case_2`/... — mirrors Haskell's
-                    // `groupSortOn casName` printing convention
-                    // (e.g. `R_1_case_1`, `R_1_case_2` for two
-                    // distinct unifications against rule `R_1`).
-                    //
-                    // The dedup must run on the *kept* cases only.  If
-                    // we count before `keep` and one of two `Create`
-                    // cases gets dropped (e.g. eq_store false after
-                    // simplify), we end up with a lone `Create_case_1`
-                    // where Haskell shows a bare `Create` — a pure
-                    // naming divergence with no proof-shape difference.
-                    // So: simplify + keep first, then dedup the
-                    // survivors.
-                    //
-                    // **Order preservation**: Vec<(name, sys)> output
-                    // preserves the order from `dispatch_solve_goal`,
-                    // which matches Haskell's `disjunctionOfList`
-                    // iteration order (rule order in `joinAllRules`).
-                    // simplify can fan out per case — flat-map.
-                    let kept_raw: Vec<(String, System)> = cases.into_iter()
-                        .flat_map(|(name, sys, seed)| {
-                            // `TAM_RS_TRACE_CASE_SIMP=1`: bracket each
-                            // per-case simplify so interleaved trace hooks
-                            // (EDGES/SIMP_CONTRA/SET_NODES) attribute to a
-                            // named case.
-                            let dbg = tamarin_utils::env_gate!("TAM_RS_TRACE_CASE_SIMP");
-                            if dbg {
-                                eprintln!("[CASE_SIMP] begin name={} path={}",
-                                    name,
-                                    crate::constraint::solver::trace::case_path_string());
-                            }
-                            let systems = simplify(sys, seed);
-                            let n_arms = systems.len();
-                            let out: Vec<(String, System)> = systems.into_iter()
-                                .filter(|s| keep(s, &name))
-                                .map(|s| (name.clone(), s))
-                                .collect();
-                            if dbg {
-                                eprintln!("[CASE_SIMP] end name={} arms={} kept={}",
-                                    name, n_arms, out.len());
-                            }
-                            out
-                        })
-                        .collect();
-                    // HS `process` (ProofMethod.hs) dedups cases
-                    // ONLY via `removeRedundantCases ctxt [] snd` — gated
-                    // on BP/MSet, comparing systems up-to-new-vars
-                    // (Sources.hs).  There is no unconditional
-                    // exact-(name,system) dedup: any surviving same-named
-                    // cases are renamed by `uniqueListBy ... distinguish`
-                    // (ProofMethod.hs) to `name_case_1`/`name_case_2`,
-                    // never dropped.  Variant enumeration is threaded
-                    // through SplitG by `reduction::rule_insts_with_constrs`,
-                    // so each distinct variant arrives as its own
-                    // RuleACInst case here.  Empty stable_vars (HS passes
-                    // `[]`); the helper is a no-op outside BP/MSet.
-                    // HS `uniqueListBy ... distinguish` — rename duplicate
-                    // case names to `name_case_N`.
-                    Some(process_cases(ctx, kept_raw))
+                // De-duplicate identical case names by appending
+                // `_case_1`/`_case_2`/... — mirrors Haskell's
+                // `groupSortOn casName` printing convention
+                // (e.g. `R_1_case_1`, `R_1_case_2` for two
+                // distinct unifications against rule `R_1`).
+                //
+                // The dedup must run on the *kept* cases only.  If
+                // we count before `keep` and one of two `Create`
+                // cases gets dropped (e.g. eq_store false after
+                // simplify), we end up with a lone `Create_case_1`
+                // where Haskell shows a bare `Create` — a pure
+                // naming divergence with no proof-shape difference.
+                // So: simplify + keep first, then dedup the
+                // survivors.
+                //
+                // **Order preservation**: Vec<(name, sys)> output
+                // preserves the order from `dispatch_solve_goal`,
+                // which matches Haskell's `disjunctionOfList`
+                // iteration order (rule order in `joinAllRules`).
+                // simplify can fan out per case — flat-map.
+                let kept_raw: Vec<(String, System)> = cases
+                    .into_iter()
+                    .flat_map(|(name, sys, seed)| {
+                        // `TAM_RS_TRACE_CASE_SIMP=1`: bracket each
+                        // per-case simplify so interleaved trace hooks
+                        // (EDGES/SIMP_CONTRA/SET_NODES) attribute to a
+                        // named case.
+                        let dbg = tamarin_utils::env_gate!("TAM_RS_TRACE_CASE_SIMP");
+                        if dbg {
+                            eprintln!(
+                                "[CASE_SIMP] begin name={} path={}",
+                                name,
+                                crate::constraint::solver::trace::case_path_string()
+                            );
+                        }
+                        let systems = simplify(sys, seed);
+                        let n_arms = systems.len();
+                        let out: Vec<(String, System)> = systems
+                            .into_iter()
+                            .filter(|s| keep(s, &name))
+                            .map(|s| (name.clone(), s))
+                            .collect();
+                        if dbg {
+                            eprintln!(
+                                "[CASE_SIMP] end name={} arms={} kept={}",
+                                name,
+                                n_arms,
+                                out.len()
+                            );
+                        }
+                        out
+                    })
+                    .collect();
+                // HS `process` (ProofMethod.hs) dedups cases
+                // ONLY via `removeRedundantCases ctxt [] snd` — gated
+                // on BP/MSet, comparing systems up-to-new-vars
+                // (Sources.hs).  There is no unconditional
+                // exact-(name,system) dedup: any surviving same-named
+                // cases are renamed by `uniqueListBy ... distinguish`
+                // (ProofMethod.hs) to `name_case_1`/`name_case_2`,
+                // never dropped.  Variant enumeration is threaded
+                // through SplitG by `reduction::rule_insts_with_constrs`,
+                // so each distinct variant arrives as its own
+                // RuleACInst case here.  Empty stable_vars (HS passes
+                // `[]`); the helper is a no-op outside BP/MSet.
+                // HS `uniqueListBy ... distinguish` — rename duplicate
+                // case names to `name_case_N`.
+                Some(process_cases(ctx, kept_raw))
             }
         }
         ProofMethod::Induction => {
@@ -711,8 +754,7 @@ pub fn exec_proof_method(
             let cleanup = |s: &mut System| {
                 crate::constraint::solver::rename_precise::rename_precise_system(s);
                 s.invalidate_max_var_idx_cache();
-                s.eq_store_mut().subst =
-                    tamarin_term::subst::Subst::from_list(Vec::new());
+                s.eq_store_mut().subst = tamarin_term::subst::Subst::from_list(Vec::new());
             };
             // HS branch order: `disjunctionOfList [("empty_trace", base),
             // ("non_empty_trace", step)]` — base first, then step; each
@@ -729,12 +771,13 @@ pub fn exec_proof_method(
                 case_sys.formulas_mut().clear();
                 case_sys.formulas_mut().push(std::sync::Arc::new(fm_case));
                 let sub_systems: Vec<System> =
-                    crate::constraint::solver::simplify::simplify_system_with_fanout(
-                        ctx, case_sys);
+                    crate::constraint::solver::simplify::simplify_system_with_fanout(ctx, case_sys);
                 for mut s in sub_systems {
                     // mzero'd branches (eq-store false) don't survive HS's
                     // Disj — same filter as the Simplify/SolveGoal arms.
-                    if s.eq_store.is_false() { continue; }
+                    if s.eq_store.is_false() {
+                        continue;
+                    }
                     // HS-faithful `cleanup` (ProofMethod.hs `process`):
                     // renamePrecise with an empty Precise supply + clear
                     // subst.  Without it the IH disjunction's free vars
@@ -773,7 +816,9 @@ pub fn check_and_exec_proof_method(
     match method {
         ProofMethod::Finished(r) => {
             let actual = is_finished(ctx, sys)?;
-            if !same_kind(r, &actual) { return None; }
+            if !same_kind(r, &actual) {
+                return None;
+            }
         }
         ProofMethod::Induction => {
             // Direct port of Haskell `canApplyInduction` (ProofMethod.hs):
@@ -781,13 +826,23 @@ pub fn check_and_exec_proof_method(
             //   guard (M.null sGoals); (_, t) <- uncons sFormulas; guard (null t)
             // i.e. no nodes, no solved formulas, no open goals, exactly one
             // formula.  No gfalse check (do NOT call is_initial_system here).
-            if !sys.nodes.is_empty() { return None; }
-            if !sys.solved_formulas.is_empty() { return None; }
-            if !sys.goals.is_empty() { return None; }
-            if sys.formulas.len() != 1 { return None; }
+            if !sys.nodes.is_empty() {
+                return None;
+            }
+            if !sys.solved_formulas.is_empty() {
+                return None;
+            }
+            if !sys.goals.is_empty() {
+                return None;
+            }
+            if sys.formulas.len() != 1 {
+                return None;
+            }
         }
         ProofMethod::SolveGoal(g) => {
-            if !sys.goals.iter().any(|(existing, _)| existing == g) { return None; }
+            if !sys.goals.iter().any(|(existing, _)| existing == g) {
+                return None;
+            }
         }
         ProofMethod::Simplify | ProofMethod::Sorry(_) | ProofMethod::Invalidated => {}
         ProofMethod::RawSolve(_) => return None,
@@ -810,13 +865,14 @@ mod tests {
     use tamarin_term::maude_sig::pair_maude_sig;
 
     fn maude_path() -> Option<String> {
-        if let Ok(p) = std::env::var("MAUDE_PATH") { return Some(p); }
-        let candidates = [
-            "/usr/local/bin/maude",
-            "maude",
-        ];
+        if let Ok(p) = std::env::var("MAUDE_PATH") {
+            return Some(p);
+        }
+        let candidates = ["/usr/local/bin/maude", "maude"];
         for c in &candidates {
-            if std::path::Path::new(c).exists() { return Some((*c).to_string()); }
+            if std::path::Path::new(c).exists() {
+                return Some((*c).to_string());
+            }
         }
         None
     }
@@ -829,25 +885,35 @@ mod tests {
 
     #[test]
     fn empty_system_is_not_finished() {
-        let ctx = match ctx() { Some(c) => c, None => return };
+        let ctx = match ctx() {
+            Some(c) => c,
+            None => return,
+        };
         let s = System::empty();
-        assert!(is_finished(&ctx, &s).is_none(), "initial system shouldn't be finished");
+        assert!(
+            is_finished(&ctx, &s).is_none(),
+            "initial system shouldn't be finished"
+        );
     }
 
     #[test]
     fn solved_when_no_goals_and_subterms_done() {
-        let ctx = match ctx() { Some(c) => c, None => return };
+        let ctx = match ctx() {
+            Some(c) => c,
+            None => return,
+        };
         let mut s = System::empty();
         // Force the system out of its initial state by recording a
         // solved formula (Haskell `isInitialSystem` checks
         // `solved_formulas.is_empty() && no_gfalse`; setting one to
         // gtrue makes the system non-initial).
-        s.solved_formulas_mut().push(std::sync::Arc::new(crate::guarded::gtrue()));
+        s.solved_formulas_mut()
+            .push(std::sync::Arc::new(crate::guarded::gtrue()));
         // Add a placeholder node too so the structure is non-trivial.
         let nid = tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0);
         use crate::rule::{
-            IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, RuleAttributes,
-            RuleInfo, RuleACInst, Rule,
+            IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleACInst, RuleAttributes,
+            RuleInfo,
         };
         let info: RuleInfo<ProtoRuleACInstInfo, IntrRuleACInfo> =
             RuleInfo::Proto(ProtoRuleACInstInfo {
@@ -874,11 +940,15 @@ mod tests {
         // trace` (verified against the v1.13.0 binary on a minimal
         // `Setup() @ i ==> F` lemma).  This pins that routing so the
         // gfalse-in-formulas path can never be misread as Unfinishable.
-        let ctx = match ctx() { Some(c) => c, None => return };
+        let ctx = match ctx() {
+            Some(c) => c,
+            None => return,
+        };
         let mut s = System::empty();
         // gfalse in formulas makes the system non-initial AND yields a
         // `FormulasFalse` contradiction.
-        s.formulas_mut().push(std::sync::Arc::new(crate::guarded::gfalse()));
+        s.formulas_mut()
+            .push(std::sync::Arc::new(crate::guarded::gfalse()));
         match is_finished(&ctx, &s) {
             Some(Result::Contradictory(Some(Contradiction::FormulasFalse))) => {}
             r => panic!("expected Contradictory(FormulasFalse), got {:?}", r),
@@ -887,7 +957,10 @@ mod tests {
 
     #[test]
     fn exec_sorry_is_empty_cases() {
-        let ctx = match ctx() { Some(c) => c, None => return };
+        let ctx = match ctx() {
+            Some(c) => c,
+            None => return,
+        };
         let s = System::empty();
         let cases = exec_proof_method(&ctx, &ProofMethod::Sorry(None), &s).unwrap();
         assert!(cases.is_empty());
@@ -895,7 +968,10 @@ mod tests {
 
     #[test]
     fn induction_on_open_formula_returns_none() {
-        let ctx = match ctx() { Some(c) => c, None => return };
+        let ctx = match ctx() {
+            Some(c) => c,
+            None => return,
+        };
         let s = System::empty();
         // No formula → ginduct can't run.
         let r = exec_proof_method(&ctx, &ProofMethod::Induction, &s);
@@ -904,14 +980,22 @@ mod tests {
 
     #[test]
     fn induction_creates_two_cases() {
-        let ctx = match ctx() { Some(c) => c, None => return };
+        let ctx = match ctx() {
+            Some(c) => c,
+            None => return,
+        };
         // Build a closed action-bearing formula:
         //   Ex k #i. Setup(k) @ #i
         // tracked as a guarded GGuarded::Ex with a single Action guard.
         use tamarin_parser::ast::{Atom, Fact, SortHint, Term, VarSpec};
-        let mkvar = |n: &str, sort: SortHint| Term::Var(VarSpec {
-            name: n.to_string(), idx: 0, sort, typ: None,
-        });
+        let mkvar = |n: &str, sort: SortHint| {
+            Term::Var(VarSpec {
+                name: n.to_string(),
+                idx: 0,
+                sort,
+                typ: None,
+            })
+        };
         let action_atom = Atom::Action(
             Fact {
                 persistent: false,
@@ -927,8 +1011,18 @@ mod tests {
         let fm = crate::guarded::close_guarded(
             crate::guarded::Quant::Ex,
             vec![
-                VarSpec { name: "k".into(), idx: 0, sort: SortHint::Msg, typ: None },
-                VarSpec { name: "i".into(), idx: 0, sort: SortHint::Node, typ: None },
+                VarSpec {
+                    name: "k".into(),
+                    idx: 0,
+                    sort: SortHint::Msg,
+                    typ: None,
+                },
+                VarSpec {
+                    name: "i".into(),
+                    idx: 0,
+                    sort: SortHint::Node,
+                    typ: None,
+                },
             ],
             vec![action_atom],
             body,
@@ -944,7 +1038,10 @@ mod tests {
 
     #[test]
     fn check_solve_goal_rejects_unknown() {
-        let ctx = match ctx() { Some(c) => c, None => return };
+        let ctx = match ctx() {
+            Some(c) => c,
+            None => return,
+        };
         let s = System::empty();
         // Goal not in sys.goals → check should fail.
         let v = tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Msg, 0);

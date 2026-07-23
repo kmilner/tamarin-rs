@@ -101,7 +101,12 @@ impl Tactic {
         while p.try_kw("deprio") {
             deprios.push(p.prio_block());
         }
-        Tactic { name: name.to_string(), presort, prios, deprios }
+        Tactic {
+            name: name.to_string(),
+            presort,
+            prios,
+            deprios,
+        }
     }
 
     /// Render via the ported HS `prettyTactic` (TheoryObject.hs:881-909).
@@ -192,7 +197,10 @@ struct TacticParser<'a> {
 
 impl<'a> TacticParser<'a> {
     fn new(raw: &'a str) -> Self {
-        TacticParser { s: raw.as_bytes(), i: 0 }
+        TacticParser {
+            s: raw.as_bytes(),
+            i: 0,
+        }
     }
 
     fn skip_ws(&mut self) {
@@ -302,11 +310,18 @@ impl<'a> TacticParser<'a> {
                 }
             }
             match self.disjuncts() {
-                Some((d, e)) => { disjuncts.push(d); selectors.push(e); }
+                Some((d, e)) => {
+                    disjuncts.push(d);
+                    selectors.push(e);
+                }
                 None => break,
             }
         }
-        PrioBlock { ranking, disjuncts, selectors }
+        PrioBlock {
+            ranking,
+            disjuncts,
+            selectors,
+        }
     }
 
     /// Optional `{ident}` (HS `braced identifier`).
@@ -538,10 +553,7 @@ prio:\n\
         let t = Tactic::parse("mytac", raw);
         assert_eq!(t.prios.len(), 3);
         // Structure mirrors the ASCII spellings.
-        assert!(matches!(
-            t.prios[0].selectors[0],
-            SelectorExpr::And(_, _)
-        ));
+        assert!(matches!(t.prios[0].selectors[0], SelectorExpr::And(_, _)));
         assert!(matches!(t.prios[1].selectors[0], SelectorExpr::Or(_, _)));
         assert!(matches!(t.prios[2].selectors[0], SelectorExpr::Not(_)));
         // Rendered with canonical ASCII operators, byte-identical to HS.

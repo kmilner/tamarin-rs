@@ -59,7 +59,11 @@ pub enum GTerm {
     NatOne,
     DhNeutral,
     App(std::sync::Arc<str>, std::sync::Arc<[GTerm]>),
-    AlgApp(std::sync::Arc<str>, std::sync::Arc<GTerm>, std::sync::Arc<GTerm>),
+    AlgApp(
+        std::sync::Arc<str>,
+        std::sync::Arc<GTerm>,
+        std::sync::Arc<GTerm>,
+    ),
     Pair(std::sync::Arc<[GTerm]>),
     Diff(std::sync::Arc<GTerm>, std::sync::Arc<GTerm>),
     BinOp(p::BinOp, std::sync::Arc<GTerm>, std::sync::Arc<GTerm>),
@@ -68,7 +72,9 @@ pub enum GTerm {
 
 /// O(1)-clone helper: wrap a recursive `GTerm` child in `Arc`.
 #[inline]
-pub fn ga(t: GTerm) -> std::sync::Arc<GTerm> { std::sync::Arc::new(t) }
+pub fn ga(t: GTerm) -> std::sync::Arc<GTerm> {
+    std::sync::Arc::new(t)
+}
 
 /// COW combinator for a binary `GTerm` node whose two children are
 /// `Arc<GTerm>` (`AlgApp`, `Diff`, non-AC `BinOp`): `None` when both children
@@ -85,7 +91,10 @@ pub(crate) fn cow_pair_arc(
     if a2.is_none() && b2.is_none() {
         return None;
     }
-    Some((a2.map(ga).unwrap_or_else(|| a.clone()), b2.map(ga).unwrap_or_else(|| b.clone())))
+    Some((
+        a2.map(ga).unwrap_or_else(|| a.clone()),
+        b2.map(ga).unwrap_or_else(|| b.clone()),
+    ))
 }
 
 /// Mirrors HS `Fact (VTerm c (BVar v))`.
@@ -165,9 +174,12 @@ pub fn term_to_gterm_free(t: &p::Term) -> GTerm {
         // `ginduct` rejects the formula as "not closed", and `[sources]`
         // lemmas silently lose their induction (proof explodes).
         p::Term::Var(v)
-            if matches!(v.sort, p::SortHint::Untagged) && v.idx == 0
+            if matches!(v.sort, p::SortHint::Untagged)
+                && v.idx == 0
                 && crate::elaborate::is_user_nullary_fun(&v.name) =>
-            GTerm::App(v.name.as_str().into(), Vec::<GTerm>::new().into()),
+        {
+            GTerm::App(v.name.as_str().into(), Vec::<GTerm>::new().into())
+        }
         p::Term::Var(v) => GTerm::Var(BVar::Free(v.clone())),
         p::Term::PubLit(s) => GTerm::PubLit(s.clone()),
         p::Term::FreshLit(s) => GTerm::FreshLit(s.clone()),
@@ -176,18 +188,21 @@ pub fn term_to_gterm_free(t: &p::Term) -> GTerm {
         p::Term::NumberOne => GTerm::NumberOne,
         p::Term::NatOne => GTerm::NatOne,
         p::Term::DhNeutral => GTerm::DhNeutral,
-        p::Term::App(n, args) =>
-            GTerm::App(n.as_str().into(), args.iter().map(term_to_gterm_free).collect()),
-        p::Term::AlgApp(n, a, b) =>
-            GTerm::AlgApp(n.as_str().into(), ga(term_to_gterm_free(a)), ga(term_to_gterm_free(b))),
-        p::Term::Pair(items) =>
-            mk_gpair(items.iter().map(term_to_gterm_free).collect()),
-        p::Term::Diff(a, b) =>
-            GTerm::Diff(ga(term_to_gterm_free(a)), ga(term_to_gterm_free(b))),
-        p::Term::BinOp(op, a, b) =>
-            GTerm::BinOp(*op, ga(term_to_gterm_free(a)), ga(term_to_gterm_free(b))),
-        p::Term::PatMatch(t) =>
-            GTerm::PatMatch(ga(term_to_gterm_free(t))),
+        p::Term::App(n, args) => GTerm::App(
+            n.as_str().into(),
+            args.iter().map(term_to_gterm_free).collect(),
+        ),
+        p::Term::AlgApp(n, a, b) => GTerm::AlgApp(
+            n.as_str().into(),
+            ga(term_to_gterm_free(a)),
+            ga(term_to_gterm_free(b)),
+        ),
+        p::Term::Pair(items) => mk_gpair(items.iter().map(term_to_gterm_free).collect()),
+        p::Term::Diff(a, b) => GTerm::Diff(ga(term_to_gterm_free(a)), ga(term_to_gterm_free(b))),
+        p::Term::BinOp(op, a, b) => {
+            GTerm::BinOp(*op, ga(term_to_gterm_free(a)), ga(term_to_gterm_free(b)))
+        }
+        p::Term::PatMatch(t) => GTerm::PatMatch(ga(term_to_gterm_free(t))),
     }
 }
 
@@ -228,8 +243,9 @@ pub fn atom_to_gatom_free(a: &p::Atom) -> GAtom {
 pub fn gterm_to_term(g: &GTerm) -> p::Term {
     match g {
         GTerm::Var(BVar::Free(v)) => p::Term::Var(v.clone()),
-        GTerm::Var(BVar::Bound(n)) =>
-            panic!("gterm_to_term: left-over bound variable Bound({})", n),
+        GTerm::Var(BVar::Bound(n)) => {
+            panic!("gterm_to_term: left-over bound variable Bound({})", n)
+        }
         GTerm::PubLit(s) => p::Term::PubLit(s.clone()),
         GTerm::FreshLit(s) => p::Term::FreshLit(s.clone()),
         GTerm::NatLit(s) => p::Term::NatLit(s.clone()),
@@ -237,18 +253,20 @@ pub fn gterm_to_term(g: &GTerm) -> p::Term {
         GTerm::NumberOne => p::Term::NumberOne,
         GTerm::NatOne => p::Term::NatOne,
         GTerm::DhNeutral => p::Term::DhNeutral,
-        GTerm::App(n, args) =>
-            p::Term::App(n.to_string(), args.iter().map(gterm_to_term).collect()),
-        GTerm::AlgApp(n, a, b) =>
-            p::Term::AlgApp(n.to_string(), Box::new(gterm_to_term(a)), Box::new(gterm_to_term(b))),
-        GTerm::Pair(items) =>
-            p::Term::Pair(items.iter().map(gterm_to_term).collect()),
-        GTerm::Diff(a, b) =>
-            p::Term::Diff(Box::new(gterm_to_term(a)), Box::new(gterm_to_term(b))),
-        GTerm::BinOp(op, a, b) =>
-            p::Term::BinOp(*op, Box::new(gterm_to_term(a)), Box::new(gterm_to_term(b))),
-        GTerm::PatMatch(t) =>
-            p::Term::PatMatch(Box::new(gterm_to_term(t))),
+        GTerm::App(n, args) => {
+            p::Term::App(n.to_string(), args.iter().map(gterm_to_term).collect())
+        }
+        GTerm::AlgApp(n, a, b) => p::Term::AlgApp(
+            n.to_string(),
+            Box::new(gterm_to_term(a)),
+            Box::new(gterm_to_term(b)),
+        ),
+        GTerm::Pair(items) => p::Term::Pair(items.iter().map(gterm_to_term).collect()),
+        GTerm::Diff(a, b) => p::Term::Diff(Box::new(gterm_to_term(a)), Box::new(gterm_to_term(b))),
+        GTerm::BinOp(op, a, b) => {
+            p::Term::BinOp(*op, Box::new(gterm_to_term(a)), Box::new(gterm_to_term(b)))
+        }
+        GTerm::PatMatch(t) => p::Term::PatMatch(Box::new(gterm_to_term(t))),
     }
 }
 
@@ -364,46 +382,65 @@ fn subst_free_term_cow(
             // Resolve this occurrence's sort the way HS's parser would:
             // temporal positions are parsed by `nodevar` (always `LSortNode`),
             // every other occurrence by `msgvar` (bare name → `LSortMsg`).
-            let occ_sort = if temporal { p::SortHint::Node } else { normalise_msg_sort(v.sort) };
+            let occ_sort = if temporal {
+                p::SortHint::Node
+            } else {
+                normalise_msg_sort(v.sort)
+            };
             for (lv, db) in s {
-                if lv.name == v.name
-                    && lv.idx == v.idx
-                    && normalise_msg_sort(lv.sort) == occ_sort
-                {
+                if lv.name == v.name && lv.idx == v.idx && normalise_msg_sort(lv.sort) == occ_sort {
                     return Some(GTerm::Var(BVar::Bound(db + depth)));
                 }
             }
             None
         }
-        GTerm::Var(_) | GTerm::PubLit(_) | GTerm::FreshLit(_) | GTerm::NatLit(_)
-        | GTerm::Number(_) | GTerm::NumberOne | GTerm::NatOne | GTerm::DhNeutral => None,
+        GTerm::Var(_)
+        | GTerm::PubLit(_)
+        | GTerm::FreshLit(_)
+        | GTerm::NatLit(_)
+        | GTerm::Number(_)
+        | GTerm::NumberOne
+        | GTerm::NatOne
+        | GTerm::DhNeutral => None,
         // Below a function/pair/operator, sub-terms are never in temporal
         // position (HS parses them via the message-term parser), so descend
         // with `temporal = false`.
-        GTerm::App(n, args) => subst_free_slice(args, s, depth)
-            .map(|new| GTerm::App(n.clone(), new)),
-        GTerm::Pair(items) => subst_free_slice(items, s, depth)
-            .map(GTerm::Pair),
+        GTerm::App(n, args) => {
+            subst_free_slice(args, s, depth).map(|new| GTerm::App(n.clone(), new))
+        }
+        GTerm::Pair(items) => subst_free_slice(items, s, depth).map(GTerm::Pair),
         GTerm::AlgApp(n, a, b) => cow_pair_arc(
-            a, subst_free_term_cow(a, s, depth, false),
-            b, subst_free_term_cow(b, s, depth, false),
-        ).map(|(a, b)| GTerm::AlgApp(n.clone(), a, b)),
+            a,
+            subst_free_term_cow(a, s, depth, false),
+            b,
+            subst_free_term_cow(b, s, depth, false),
+        )
+        .map(|(a, b)| GTerm::AlgApp(n.clone(), a, b)),
         GTerm::Diff(a, b) => cow_pair_arc(
-            a, subst_free_term_cow(a, s, depth, false),
-            b, subst_free_term_cow(b, s, depth, false),
-        ).map(|(a, b)| GTerm::Diff(a, b)),
+            a,
+            subst_free_term_cow(a, s, depth, false),
+            b,
+            subst_free_term_cow(b, s, depth, false),
+        )
+        .map(|(a, b)| GTerm::Diff(a, b)),
         GTerm::BinOp(op, a, b) => cow_pair_arc(
-            a, subst_free_term_cow(a, s, depth, false),
-            b, subst_free_term_cow(b, s, depth, false),
-        ).map(|(a, b)| GTerm::BinOp(*op, a, b)),
-        GTerm::PatMatch(inner) => subst_free_term_cow(inner, s, depth, false)
-            .map(|g| GTerm::PatMatch(ga(g))),
+            a,
+            subst_free_term_cow(a, s, depth, false),
+            b,
+            subst_free_term_cow(b, s, depth, false),
+        )
+        .map(|(a, b)| GTerm::BinOp(*op, a, b)),
+        GTerm::PatMatch(inner) => {
+            subst_free_term_cow(inner, s, depth, false).map(|g| GTerm::PatMatch(ga(g)))
+        }
     }
 }
 
-fn subst_free_slice(args: &std::sync::Arc<[GTerm]>, s: &[(p::VarSpec, u32)], depth: u32)
-    -> Option<std::sync::Arc<[GTerm]>>
-{
+fn subst_free_slice(
+    args: &std::sync::Arc<[GTerm]>,
+    s: &[(p::VarSpec, u32)],
+    depth: u32,
+) -> Option<std::sync::Arc<[GTerm]>> {
     cow_map_arc(args, |a| subst_free_term_cow(a, s, depth, false))
 }
 
@@ -412,7 +449,11 @@ pub fn subst_free_fact_at_depth(f: &GFact, s: &[(p::VarSpec, u32)], depth: u32) 
     GFact {
         persistent: f.persistent,
         name: f.name.clone(),
-        args: f.args.iter().map(|a| subst_free_term_at_depth(a, s, depth)).collect(),
+        args: f
+            .args
+            .iter()
+            .map(|a| subst_free_term_at_depth(a, s, depth))
+            .collect(),
         annotations: f.annotations.clone(),
     }
 }
@@ -490,32 +531,50 @@ fn subst_bound_term_cow(t: &GTerm, s: &[(u32, p::VarSpec)], depth: u32) -> Optio
             }
             None
         }
-        GTerm::Var(_) | GTerm::PubLit(_) | GTerm::FreshLit(_) | GTerm::NatLit(_)
-        | GTerm::Number(_) | GTerm::NumberOne | GTerm::NatOne | GTerm::DhNeutral => None,
-        GTerm::App(n, args) => subst_bound_slice(args, s, depth)
-            .map(|new| GTerm::App(n.clone(), new)),
-        GTerm::Pair(items) => subst_bound_slice(items, s, depth)
-            .map(GTerm::Pair),
+        GTerm::Var(_)
+        | GTerm::PubLit(_)
+        | GTerm::FreshLit(_)
+        | GTerm::NatLit(_)
+        | GTerm::Number(_)
+        | GTerm::NumberOne
+        | GTerm::NatOne
+        | GTerm::DhNeutral => None,
+        GTerm::App(n, args) => {
+            subst_bound_slice(args, s, depth).map(|new| GTerm::App(n.clone(), new))
+        }
+        GTerm::Pair(items) => subst_bound_slice(items, s, depth).map(GTerm::Pair),
         GTerm::AlgApp(n, a, b) => cow_pair_arc(
-            a, subst_bound_term_cow(a, s, depth),
-            b, subst_bound_term_cow(b, s, depth),
-        ).map(|(a, b)| GTerm::AlgApp(n.clone(), a, b)),
+            a,
+            subst_bound_term_cow(a, s, depth),
+            b,
+            subst_bound_term_cow(b, s, depth),
+        )
+        .map(|(a, b)| GTerm::AlgApp(n.clone(), a, b)),
         GTerm::Diff(a, b) => cow_pair_arc(
-            a, subst_bound_term_cow(a, s, depth),
-            b, subst_bound_term_cow(b, s, depth),
-        ).map(|(a, b)| GTerm::Diff(a, b)),
+            a,
+            subst_bound_term_cow(a, s, depth),
+            b,
+            subst_bound_term_cow(b, s, depth),
+        )
+        .map(|(a, b)| GTerm::Diff(a, b)),
         GTerm::BinOp(op, a, b) => cow_pair_arc(
-            a, subst_bound_term_cow(a, s, depth),
-            b, subst_bound_term_cow(b, s, depth),
-        ).map(|(a, b)| GTerm::BinOp(*op, a, b)),
-        GTerm::PatMatch(inner) => subst_bound_term_cow(inner, s, depth)
-            .map(|g| GTerm::PatMatch(ga(g))),
+            a,
+            subst_bound_term_cow(a, s, depth),
+            b,
+            subst_bound_term_cow(b, s, depth),
+        )
+        .map(|(a, b)| GTerm::BinOp(*op, a, b)),
+        GTerm::PatMatch(inner) => {
+            subst_bound_term_cow(inner, s, depth).map(|g| GTerm::PatMatch(ga(g)))
+        }
     }
 }
 
-fn subst_bound_slice(args: &std::sync::Arc<[GTerm]>, s: &[(u32, p::VarSpec)], depth: u32)
-    -> Option<std::sync::Arc<[GTerm]>>
-{
+fn subst_bound_slice(
+    args: &std::sync::Arc<[GTerm]>,
+    s: &[(u32, p::VarSpec)],
+    depth: u32,
+) -> Option<std::sync::Arc<[GTerm]>> {
     cow_map_arc(args, |a| subst_bound_term_cow(a, s, depth))
 }
 
@@ -524,7 +583,11 @@ pub fn subst_bound_fact_at_depth(f: &GFact, s: &[(u32, p::VarSpec)], depth: u32)
     GFact {
         persistent: f.persistent,
         name: f.name.clone(),
-        args: f.args.iter().map(|a| subst_bound_term_at_depth(a, s, depth)).collect(),
+        args: f
+            .args
+            .iter()
+            .map(|a| subst_bound_term_at_depth(a, s, depth))
+            .collect(),
         annotations: f.annotations.clone(),
     }
 }
@@ -591,7 +654,10 @@ pub fn open_subst(xs: &[p::VarSpec]) -> Vec<(u32, p::VarSpec)> {
 
 /// Project a binder's metadata. HS `vs' = map (lvarName &&& lvarSort) vs`.
 pub fn lvar_to_binding(v: &p::VarSpec) -> GBinding {
-    GBinding { name: v.name.clone(), sort: v.sort }
+    GBinding {
+        name: v.name.clone(),
+        sort: v.sort,
+    }
 }
 
 // =============================================================================
@@ -604,8 +670,11 @@ pub fn collect_free_term(t: &GTerm, out: &mut Vec<p::VarSpec>) {
     match t {
         GTerm::Var(BVar::Free(v)) => out.push(v.clone()),
         GTerm::Var(BVar::Bound(_)) => {}
-        GTerm::App(_, args) | GTerm::Pair(args) =>
-            for a in args.iter() { collect_free_term(a, out); },
+        GTerm::App(_, args) | GTerm::Pair(args) => {
+            for a in args.iter() {
+                collect_free_term(a, out);
+            }
+        }
         GTerm::AlgApp(_, a, b) | GTerm::Diff(a, b) | GTerm::BinOp(_, a, b) => {
             collect_free_term(a, out);
             collect_free_term(b, out);
@@ -623,12 +692,17 @@ pub fn collect_free_atom(a: &GAtom, out: &mut Vec<p::VarSpec>) {
             collect_free_term(y, out);
         }
         GAtom::Action(f, t) => {
-            for arg in f.args.iter() { collect_free_term(arg, out); }
+            for arg in f.args.iter() {
+                collect_free_term(arg, out);
+            }
             collect_free_term(t, out);
         }
         GAtom::Last(t) => collect_free_term(t, out),
-        GAtom::Pred(f) =>
-            for arg in f.args.iter() { collect_free_term(arg, out); },
+        GAtom::Pred(f) => {
+            for arg in f.args.iter() {
+                collect_free_term(arg, out);
+            }
+        }
     }
 }
 
@@ -644,16 +718,18 @@ pub fn map_free_term<F: FnMut(&p::VarSpec) -> p::VarSpec>(t: &GTerm, f: &mut F) 
         GTerm::NumberOne => GTerm::NumberOne,
         GTerm::NatOne => GTerm::NatOne,
         GTerm::DhNeutral => GTerm::DhNeutral,
-        GTerm::App(n, args) =>
-            GTerm::App(n.clone(), args.iter().map(|a| map_free_term(a, f)).collect()),
-        GTerm::AlgApp(n, a, b) =>
-            GTerm::AlgApp(n.clone(), ga(map_free_term(a, f)), ga(map_free_term(b, f))),
-        GTerm::Pair(items) =>
-            GTerm::Pair(items.iter().map(|a| map_free_term(a, f)).collect()),
-        GTerm::Diff(a, b) =>
-            GTerm::Diff(ga(map_free_term(a, f)), ga(map_free_term(b, f))),
-        GTerm::BinOp(op, a, b) =>
-            GTerm::BinOp(*op, ga(map_free_term(a, f)), ga(map_free_term(b, f))),
+        GTerm::App(n, args) => GTerm::App(
+            n.clone(),
+            args.iter().map(|a| map_free_term(a, f)).collect(),
+        ),
+        GTerm::AlgApp(n, a, b) => {
+            GTerm::AlgApp(n.clone(), ga(map_free_term(a, f)), ga(map_free_term(b, f)))
+        }
+        GTerm::Pair(items) => GTerm::Pair(items.iter().map(|a| map_free_term(a, f)).collect()),
+        GTerm::Diff(a, b) => GTerm::Diff(ga(map_free_term(a, f)), ga(map_free_term(b, f))),
+        GTerm::BinOp(op, a, b) => {
+            GTerm::BinOp(*op, ga(map_free_term(a, f)), ga(map_free_term(b, f)))
+        }
         GTerm::PatMatch(t) => GTerm::PatMatch(ga(map_free_term(t, f))),
     }
 }
@@ -690,11 +766,21 @@ mod tests {
     use super::*;
 
     fn vs(name: &str, idx: u64) -> p::VarSpec {
-        p::VarSpec { name: name.to_string(), idx, sort: p::SortHint::Msg, typ: None }
+        p::VarSpec {
+            name: name.to_string(),
+            idx,
+            sort: p::SortHint::Msg,
+            typ: None,
+        }
     }
 
     fn vs_node(name: &str, idx: u64) -> p::VarSpec {
-        p::VarSpec { name: name.to_string(), idx, sort: p::SortHint::Node, typ: None }
+        p::VarSpec {
+            name: name.to_string(),
+            idx,
+            sort: p::SortHint::Node,
+            typ: None,
+        }
     }
 
     #[test]
@@ -817,7 +903,8 @@ mod tests {
                 args: vec![
                     GTerm::Var(BVar::Free(x.clone())),
                     GTerm::Var(BVar::Bound(0)),
-                ].into(),
+                ]
+                .into(),
                 annotations: vec![],
             },
             GTerm::Var(BVar::Free(vs_node("t", 0))),
@@ -891,7 +978,8 @@ mod tests {
                 GTerm::Var(BVar::Free(vs("x", 0))),
                 GTerm::Var(BVar::Bound(0)),
                 GTerm::Var(BVar::Free(vs("y", 1))),
-            ].into(),
+            ]
+            .into(),
         );
         let mut out = Vec::new();
         collect_free_term(&t, &mut out);
@@ -907,7 +995,8 @@ mod tests {
             vec![
                 GTerm::Var(BVar::Free(vs("x", 0))),
                 GTerm::Var(BVar::Bound(0)),
-            ].into(),
+            ]
+            .into(),
         );
         let mapped = map_free_term(&t, &mut |v: &p::VarSpec| p::VarSpec {
             name: v.name.clone(),

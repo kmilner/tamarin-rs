@@ -34,7 +34,11 @@ impl<C: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for Macro<C, V> {
 
 impl<C, V> Macro<C, V> {
     pub fn new(name: impl Into<Vec<u8>>, params: Vec<V>, body: VTerm<C, V>) -> Self {
-        Macro { name: name.into(), params, body }
+        Macro {
+            name: name.into(),
+            params,
+            body,
+        }
     }
 }
 
@@ -60,15 +64,13 @@ where
     match term {
         Term::Lit(l) => Term::Lit(l),
         Term::App(fsym, args) => {
-            let processed: Vec<VTerm<C, V>> =
-                args.iter().cloned().map(|a| apply_macros(macros, a)).collect();
+            let processed: Vec<VTerm<C, V>> = args
+                .iter()
+                .cloned()
+                .map(|a| apply_macros(macros, a))
+                .collect();
             if let Some(m) = find_matching_macro(&fsym, macros) {
-                let pairs = m
-                    .params
-                    .iter()
-                    .cloned()
-                    .zip(processed)
-                    .collect::<Vec<_>>();
+                let pairs = m.params.iter().cloned().zip(processed).collect::<Vec<_>>();
                 let s = Subst::from_list(pairs);
                 let expanded = apply_vterm(&s, m.body.clone());
                 apply_macros(macros, expanded)
@@ -114,9 +116,9 @@ impl FunSym {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::builtin::{msg_var, pair};
     use crate::lterm::LNTerm;
     use crate::vterm::var_term;
-    use crate::builtin::{msg_var, pair};
 
     #[test]
     fn macro_to_fun_sym_arity() {

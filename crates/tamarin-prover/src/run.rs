@@ -48,8 +48,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use tamarin_parser::wf::{
-    after_public_names_topics, insert_wf_before, WF_AFTER_CHECK_GUARDED,
-    WF_AFTER_CHECK_TERMS, WF_AFTER_FACT_LHS, WF_AFTER_VARIANTS, WF_TOPIC_ORDER,
+    after_public_names_topics, insert_wf_before, WF_AFTER_CHECK_GUARDED, WF_AFTER_CHECK_TERMS,
+    WF_AFTER_FACT_LHS, WF_AFTER_VARIANTS, WF_TOPIC_ORDER,
 };
 use tamarin_term::maude_proc::{MaudeHandle, MaudePool, SharedMaudeCaches};
 use tamarin_theory::elaborate::elaborate;
@@ -101,29 +101,36 @@ pub enum LemmaVerdict {
 ///   `<lemma> (<quantifier>): analysis incomplete (<N> steps)`
 ///   `<lemma> (<quantifier>): analysis cannot be finished (reducible operators in subterms) (<N> steps)`
 fn format_lemma_summary_line(r: &LemmaResult) -> String {
-    let quantifier = if r.exists_trace { "exists-trace" } else { "all-traces" };
+    let quantifier = if r.exists_trace {
+        "exists-trace"
+    } else {
+        "all-traces"
+    };
     let body = match &r.verdict {
         // HS `showProofStatus` (Theory/Proof.hs:1105-1108): a falsified
         // exists-trace lemma is a `CompleteProof` of `ExistsSomeTrace`
         // ("falsified - no trace found"), whereas a falsified all-traces
         // lemma is a `TraceFound` for `ExistsNoTrace` ("falsified - found
         // trace").  The wording therefore depends on the quantifier.
-        LemmaVerdict::Falsified if r.exists_trace =>
-            format!("falsified - no trace found ({} steps)", r.proof_steps),
+        LemmaVerdict::Falsified if r.exists_trace => {
+            format!("falsified - no trace found ({} steps)", r.proof_steps)
+        }
         LemmaVerdict::Falsified => format!("falsified - found trace ({} steps)", r.proof_steps),
         LemmaVerdict::Verified => format!("verified ({} steps)", r.proof_steps),
-        LemmaVerdict::Analyzed
-        | LemmaVerdict::Skipped
-        | LemmaVerdict::Filtered => format!("analysis incomplete ({} steps)", r.proof_steps),
+        LemmaVerdict::Analyzed | LemmaVerdict::Skipped | LemmaVerdict::Filtered => {
+            format!("analysis incomplete ({} steps)", r.proof_steps)
+        }
         // HS `showProofStatus _ UnfinishableProof` (Theory/Proof.hs:1104-1112, see line 1109).
-        LemmaVerdict::Unfinishable =>
-            format!("analysis cannot be finished (reducible operators in subterms) ({} steps)", r.proof_steps),
+        LemmaVerdict::Unfinishable => format!(
+            "analysis cannot be finished (reducible operators in subterms) ({} steps)",
+            r.proof_steps
+        ),
         // HS `showProofStatus _ UndeterminedProof` (Theory/Proof.hs:1104-1112, see line 1111).
-        LemmaVerdict::Undetermined =>
-            format!("analysis undetermined ({} steps)", r.proof_steps),
+        LemmaVerdict::Undetermined => format!("analysis undetermined ({} steps)", r.proof_steps),
         // HS `showProofStatus _ InvalidatedProof` (Theory/Proof.hs:1104-1112, see line 1112).
-        LemmaVerdict::Invalidated =>
-            format!("proof has been invalidated ({} steps)", r.proof_steps),
+        LemmaVerdict::Invalidated => {
+            format!("proof has been invalidated ({} steps)", r.proof_steps)
+        }
         LemmaVerdict::Error(msg) => format!("error: {}", msg),
     };
     format!("{} ({}): {}", r.name, quantifier, body)
@@ -252,7 +259,10 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
     // `false`.
     let sig = tamarin_term::maude_sig::dh_maude_sig();
     let maude = MaudeHandle::start(&maude_path, sig).map_err(|e| {
-        RunError(format!("failed to start maude at {:?}: {:?}", maude_path, e))
+        RunError(format!(
+            "failed to start maude at {:?}: {:?}",
+            maude_path, e
+        ))
     })?;
     // HS emits the maude tool/version banner on STDERR (via `ensureMaude`),
     // not stdout — the rule dump alone goes to stdout.  Mirror that.
@@ -275,7 +285,10 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
     let dh_rules = tamarin_theory::intruder_rules::dh_intruder_rules(false, &maude);
     let bp_sig = tamarin_term::maude_sig::bp_maude_sig();
     let bp_maude = MaudeHandle::start(&maude_path, bp_sig).map_err(|e| {
-        RunError(format!("failed to start maude at {:?}: {:?}", maude_path, e))
+        RunError(format!(
+            "failed to start maude at {:?}: {:?}",
+            maude_path, e
+        ))
     })?;
     let bp_rules = tamarin_theory::intruder_rules::bp_intruder_rules(false, &bp_maude);
     // HS `putStrLn (dhS ++ bpS)` where each block is
@@ -377,7 +390,9 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
                 let banner = String::from_utf8_lossy(&out.stderr).to_lowercase();
                 if banner.contains("graphviz") {
                     eprintln!(" checking version: {}. OK.", banner.trim_end_matches('\n'));
-                    let png_ok = std::process::Command::new("dot").arg("-T?").output()
+                    let png_ok = std::process::Command::new("dot")
+                        .arg("-T?")
+                        .output()
                         .map(|o| {
                             let s = format!(
                                 "{}{}",
@@ -493,11 +508,16 @@ fn guess_frontend_dist(data_dir: &std::path::Path) -> Option<std::path::PathBuf>
 fn effective_config(
     args: &Args,
     parsed: &tamarin_parser::ast::Theory,
-) -> Result<(tamarin_theory::constraint::solver::context::CutStrategy, bool), RunError> {
+) -> Result<
+    (
+        tamarin_theory::constraint::solver::context::CutStrategy,
+        bool,
+    ),
+    RunError,
+> {
     use tamarin_theory::constraint::solver::context::CutStrategy;
     let (block_cut, block_auto_sources) = match &parsed.configuration {
-        Some(cfg) => tamarin_theory::prove::config_block_options(cfg)
-            .map_err(RunError)?,
+        Some(cfg) => tamarin_theory::prove::config_block_options(cfg).map_err(RunError)?,
         None => (None, false),
     };
     let cut = if args.prove_mode {
@@ -575,8 +595,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     init_rayon_pool(args);
     if args.diff {
         return Err(RunError(
-            "--diff (observational equivalence) is not yet ported to the Rust prover."
-                .to_string(),
+            "--diff (observational equivalence) is not yet ported to the Rust prover.".to_string(),
         ));
     }
     if args.output_module.is_some() {
@@ -612,17 +631,14 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         if !args.quiet {
             eprintln!("warning: --output-json: trace graph serialisation not yet ported; writing empty stub to {}", p);
         }
-        fs::write(p, "{\n    \"graphs\": []\n}").map_err(|e| {
-            RunError(format!("failed to write {}: {}", p, e))
-        })?;
+        fs::write(p, "{\n    \"graphs\": []\n}")
+            .map_err(|e| RunError(format!("failed to write {}: {}", p, e)))?;
     }
     if let Some(p) = &args.trace_dot {
         if !args.quiet {
             eprintln!("warning: --output-dot: trace graph serialisation not yet ported; writing empty stub to {}", p);
         }
-        fs::write(p, "").map_err(|e| {
-            RunError(format!("failed to write {}: {}", p, e))
-        })?;
+        fs::write(p, "").map_err(|e| RunError(format!("failed to write {}: {}", p, e)))?;
     }
     if args.in_files.is_empty() {
         return Err(RunError(
@@ -651,15 +667,15 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
 
     for in_file in &args.in_files {
         let t0 = Instant::now();
-        let src = fs::read_to_string(in_file).map_err(|e| {
-            RunError(format!("failed to read {}: {}", in_file, e))
-        })?;
+        let src = fs::read_to_string(in_file)
+            .map_err(|e| RunError(format!("failed to read {}: {}", in_file, e)))?;
         // Thread the including file's directory so `#include "file"` resolves
         // relative to it (HS `takeDirectory inFile0`, Parser.hs:323-343).
         let base_dir = std::path::Path::new(in_file)
             .parent()
             .map(|p| p.to_path_buf());
-        let mut parsed = match tamarin_parser::parse_theory_with_base(&src, &parser_flags, base_dir) {
+        let mut parsed = match tamarin_parser::parse_theory_with_base(&src, &parser_flags, base_dir)
+        {
             Ok(thy) => thy,
             Err(e) => {
                 // HS batch: `handleError e@(ParserError _) = die $ show e`
@@ -680,9 +696,12 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // lifting pass here, BEFORE wellformedness / elaboration / rendering,
         // so the transformed parser theory drives all three (the renderer
         // iterates `parsed.items`).
-        tamarin_theory::rule_restriction::lift_rule_restrictions(&mut parsed)
-            .map_err(|e| RunError(format!(
-                "_restrict expansion failed in {}: {}", in_file, e.message)))?;
+        tamarin_theory::rule_restriction::lift_rule_restrictions(&mut parsed).map_err(|e| {
+            RunError(format!(
+                "_restrict expansion failed in {}: {}",
+                in_file, e.message
+            ))
+        })?;
         // HS emits this trace marker as soon as the theory parses
         // (TheoryLoader.hs:401-424, see line 409).  `--parse-only` and `--quiet` skip it.
         let theory_name = parsed.name.clone();
@@ -727,8 +746,8 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // call it separately and PREPEND the result so it sorts first —
         // matching HS's `checkIfLemmasInTheory : ...` order.
         {
-            let lemma_check = tamarin_parser::wf::check_if_lemmas_in_theory(
-                &args.lemma_names, &parsed);
+            let lemma_check =
+                tamarin_parser::wf::check_if_lemmas_in_theory(&args.lemma_names, &parsed);
             if !lemma_check.is_empty() {
                 let mut new_report = lemma_check;
                 new_report.extend(wf_report);
@@ -752,9 +771,8 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         }
 
         // Elaborate (mainly to get the protocol-specific MaudeSig).
-        let mut elaborated = elaborate(&parsed).map_err(|e| {
-            RunError(format!("elaboration error in {}: {}", in_file, e.message))
-        })?;
+        let mut elaborated = elaborate(&parsed)
+            .map_err(|e| RunError(format!("elaboration error in {}: {}", in_file, e.message)))?;
         let maude_sig = elaborated.signature.maude_sig.clone();
 
         // HS `checkEquationsSubtermConvergence` (Wellformedness.hs:1222-1232)
@@ -768,9 +786,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // `sep [nest 2 lhs, "=" <-> rhs]` width-wrap for wide equations.
         // (Same retain/re-add pattern as the "Message Derivation Checks" swap.)
         wf_report.retain(|e| e.topic != "Subterm Convergence Warning");
-        wf_report.extend(
-            tamarin_theory::pretty_theory::subterm_convergence_report_wf(&maude_sig),
-        );
+        wf_report.extend(tamarin_theory::pretty_theory::subterm_convergence_report_wf(&maude_sig));
 
         // HS emits this marker after `translateTheory` finishes
         // (TheoryLoader.hs:448-460, see line 454).
@@ -790,10 +806,13 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // block BEFORE the guardedness block below.  Insert before the first
         // topic that comes after position 8b.
         {
-            let term_errors = tamarin_theory::check_terms::check_terms_wf(
-                &parsed_for_wf, &maude_sig);
-            insert_wf_before(&mut wf_report, term_errors,
-                &WF_TOPIC_ORDER[WF_AFTER_CHECK_TERMS..]);
+            let term_errors =
+                tamarin_theory::check_terms::check_terms_wf(&parsed_for_wf, &maude_sig);
+            insert_wf_before(
+                &mut wf_report,
+                term_errors,
+                &WF_TOPIC_ORDER[WF_AFTER_CHECK_TERMS..],
+            );
         }
 
         // Port of HS `formulaReports.checkGuarded` (Wellformedness.hs:988-1004):
@@ -823,8 +842,11 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // matches HS: Formula guardedness (8c) before Lemma
             // annotations (9).  Find the first index of a topic that
             // comes after position 8 in HS's check order.
-            insert_wf_before(&mut wf_report, guard_errors,
-                &WF_TOPIC_ORDER[WF_AFTER_CHECK_GUARDED..]);
+            insert_wf_before(
+                &mut wf_report,
+                guard_errors,
+                &WF_TOPIC_ORDER[WF_AFTER_CHECK_GUARDED..],
+            );
         }
 
         // SAPIC `process:` translation (HS `typeTheory` → `translate`,
@@ -846,8 +868,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // destructors from `locations-report`) re-elaborate with the default
         // public-constructor flags, serialising as `tamXC..` — which Maude
         // rejects, leaving the rule with "no variants".
-        let _sapic_funs_guard =
-            tamarin_theory::elaborate::set_user_funs_for_theory(&parsed);
+        let _sapic_funs_guard = tamarin_theory::elaborate::set_user_funs_for_theory(&parsed);
         {
             // HS `Acc.checkWellformedness t` (translateTheory, TheoryLoader.hs:448-460, see line 455)
             // runs on the PRE-translation theory `t` — the report is computed
@@ -860,10 +881,14 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             let acc_wf = tamarin_accountability::check_wellformedness(&parsed);
 
             let user_set_heuristic = !elaborated.heuristic.is_empty();
-            let sapic_wf = tamarin_sapic::apply::apply_sapic(
-                &mut parsed, &mut elaborated, user_set_heuristic,
-            ).map_err(|e| RunError(format!(
-                "SAPIC translation error in {}: {}", in_file, e.message)))?;
+            let sapic_wf =
+                tamarin_sapic::apply::apply_sapic(&mut parsed, &mut elaborated, user_set_heuristic)
+                    .map_err(|e| {
+                        RunError(format!(
+                            "SAPIC translation error in {}: {}",
+                            in_file, e.message
+                        ))
+                    })?;
 
             // Accountability translation (HS `Acc.translate`, TheoryLoader.hs:428-443, see line 430):
             // `Sapic.translate >=> Acc.translate`.  Expands each
@@ -920,8 +945,11 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             let lhs_rhs = tamarin_parser::wf::fact_lhs_occur_no_rhs(&post_thy);
             // Insert at the factReports position (after fact_usage, before
             // formulaReports), matching HS check order.
-            insert_wf_before(&mut wf_report, lhs_rhs,
-                &WF_TOPIC_ORDER[WF_AFTER_FACT_LHS..]);
+            insert_wf_before(
+                &mut wf_report,
+                lhs_rhs,
+                &WF_TOPIC_ORDER[WF_AFTER_FACT_LHS..],
+            );
 
             // HS `publicNamesReport` (Wellformedness.hs:463-484) also runs on
             // the TRANSLATED rules (`checkWellformedness` over the OpenTranslated
@@ -939,8 +967,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // entries must not act as a boundary).
             let caps_topic = "Public constants with mismatching capitalization";
             wf_report.retain(|e| e.topic != caps_topic);
-            let public_names =
-                tamarin_theory::elaborate::sapic_public_names_report(&elaborated);
+            let public_names = tamarin_theory::elaborate::sapic_public_names_report(&elaborated);
             insert_wf_before(&mut wf_report, public_names, &after_public_names_topics());
         }
 
@@ -956,11 +983,14 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // query issued from any of these subprocesses reuses the memoized
         // result.  See `SharedMaudeCaches` (maude_proc.rs) for the
         // byte-parity argument and lock-order invariant.
-        let session_maude_caches =
-            std::sync::Arc::new(SharedMaudeCaches::default());
+        let session_maude_caches = std::sync::Arc::new(SharedMaudeCaches::default());
         let file_maude: Option<MaudeHandle> = if !args.parse_only {
-            MaudeHandle::start_with_caches(&maude_path, maude_sig.clone(),
-                std::sync::Arc::clone(&session_maude_caches)).ok()
+            MaudeHandle::start_with_caches(
+                &maude_path,
+                maude_sig.clone(),
+                std::sync::Arc::clone(&session_maude_caches),
+            )
+            .ok()
         } else {
             None
         };
@@ -986,13 +1016,20 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         let pool_size = args.effective_maude_processes();
         let file_maude_pool: Option<std::sync::Arc<MaudePool>> =
             if !args.parse_only && pool_size >= 2 {
-                match MaudePool::new(&maude_path, maude_sig.clone(), pool_size,
-                    std::sync::Arc::clone(&session_maude_caches)) {
+                match MaudePool::new(
+                    &maude_path,
+                    maude_sig.clone(),
+                    pool_size,
+                    std::sync::Arc::clone(&session_maude_caches),
+                ) {
                     Ok(p) => Some(std::sync::Arc::new(p)),
                     Err(e) => {
                         if !args.quiet {
-                            eprintln!("[warn] failed to spawn MaudePool({}): {} \
-                                — falling back to single shared Maude", pool_size, e);
+                            eprintln!(
+                                "[warn] failed to spawn MaudePool({}): {} \
+                                — falling back to single shared Maude",
+                                pool_size, e
+                            );
                         }
                         None
                     }
@@ -1010,7 +1047,10 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // (ClosedTheory.hs `closeTheory`).
         if let Some(m) = file_maude.as_ref() {
             tamarin_theory::tools::rule_variants::populate_rule_variants(
-                &mut elaborated, m, file_maude_pool.as_deref());
+                &mut elaborated,
+                m,
+                file_maude_pool.as_deref(),
+            );
         }
 
         // Port of HS `ruleVariantsReport` / `variantsCheck`
@@ -1065,9 +1105,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // vs `abstracted_rule + variant_substs`. Not yet ported (no corpus
         // files affected); see implementation notes below.
         if let Some(ref wf_maude) = file_maude {
-            use tamarin_theory::theory::TheoryItem;
-            use tamarin_parser::wf::WfError as WfE;
             use tamarin_parser::wf::underline_topic;
+            use tamarin_parser::wf::WfError as WfE;
+            use tamarin_theory::theory::TheoryItem;
 
             let mut variants_errors: Vec<WfE> = Vec::new();
             let mut no_variant_rules: Vec<String> = Vec::new();
@@ -1084,11 +1124,12 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // those fields, but then no rule is reducible either — the WF
             // check takes its syntactic (no-Maude) path, so the precomputed
             // value is never consulted.
-            let sig_has_reducible =
-                !wf_maude.maude_sig().reducible_fun_syms.is_empty();
+            let sig_has_reducible = !wf_maude.maude_sig().reducible_fun_syms.is_empty();
 
             for item in &elaborated.items {
-                let TheoryItem::Rule(opr) = item else { continue };
+                let TheoryItem::Rule(opr) = item else {
+                    continue;
+                };
 
                 // Sub-check 1: "Rule has no variants" — mirrors HS
                 // `variantsCheck` (Wellformedness.hs:354-372, see line 362):
@@ -1100,14 +1141,15 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 // Sub-check 2: "Variants mismatch" — not yet ported; no
                 // corpus files affected (see step-0 analysis).
                 let precomputed_no_variants = if sig_has_reducible {
-                    Some(opr.abstracted_rule.is_none()
-                        && opr.variant_substs.is_empty())
+                    Some(opr.abstracted_rule.is_none() && opr.variant_substs.is_empty())
                 } else {
                     None
                 };
                 if tamarin_theory::tools::rule_variants::rule_has_no_variants_for_wf_with(
-                    wf_maude, &opr.rule, precomputed_no_variants)
-                {
+                    wf_maude,
+                    &opr.rule,
+                    precomputed_no_variants,
+                ) {
                     // HS message (Wellformedness.hs:363-366):
                     //   text "Rule " <> prettyRuleName ruE <> text " has no variants."
                     //   $--$  text "Most likely, ..."
@@ -1134,8 +1176,11 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
 
             // HS position 6: ruleVariantsReport comes BEFORE factReports
             // (position 7).  Insert before factReports items.
-            insert_wf_before(&mut wf_report, variants_errors,
-                &WF_TOPIC_ORDER[WF_AFTER_VARIANTS..]);
+            insert_wf_before(
+                &mut wf_report,
+                variants_errors,
+                &WF_TOPIC_ORDER[WF_AFTER_VARIANTS..],
+            );
 
             // HS closeProtoRule (Rule.hs:97-98): `ClosedProtoRule ruE <$>
             // maybeToList (variantsProtoRule hnd ruE)` — a rule with NO
@@ -1163,12 +1208,15 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // structure HS persists.
         if let Some(m) = file_maude.as_ref() {
             use tamarin_theory::theory::TheoryItem;
-            let mut rules: Vec<tamarin_theory::theory::OpenProtoRule> =
-                elaborated.items.iter().filter_map(|i| match i {
-                    TheoryItem::Rule(r) => Some(r.clone()), _ => None,
-                }).collect();
-            tamarin_theory::constraint::solver::context::annotate_loop_breakers(
-                &mut rules, m);
+            let mut rules: Vec<tamarin_theory::theory::OpenProtoRule> = elaborated
+                .items
+                .iter()
+                .filter_map(|i| match i {
+                    TheoryItem::Rule(r) => Some(r.clone()),
+                    _ => None,
+                })
+                .collect();
+            tamarin_theory::constraint::solver::context::annotate_loop_breakers(&mut rules, m);
             // Sequential writeback in source order.
             let mut iter = rules.into_iter();
             for item in elaborated.items.iter_mut() {
@@ -1192,7 +1240,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             marker("Derivation checks started");
             if let Some(m) = file_maude.as_ref() {
                 let extra = tamarin_theory::deriv_check::check_message_derivation(
-                    &parsed, m, deriv_timeout,
+                    &parsed,
+                    m,
+                    deriv_timeout,
                 );
                 wf_report.extend(extra);
             }
@@ -1208,8 +1258,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // output is identical either way (every lemma is a 1-step sorry).
         let lemma_filter: &[String] = &args.lemma_names;
         let prove_anything = args.prove_mode;
-        let any_stored_proof =
-            elaborated.lemmas().any(|l| l.proof.tree.is_some());
+        let any_stored_proof = elaborated.lemmas().any(|l| l.proof.tree.is_some());
 
         let mut results: Vec<LemmaResult> = Vec::new();
         // Mirrors HS's per-lemma proof body for embedding in the
@@ -1221,32 +1270,30 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // (Shared by the cheap branch below and the session-build
         // failure fallback inside the prove/check branch.)
         let push_skipped_results =
-            |results: &mut Vec<LemmaResult>,
-             elaborated: &tamarin_theory::theory::Theory| {
-            for l in elaborated.lemmas() {
-                results.push(LemmaResult {
-                    name: l.name.clone(),
-                    verdict: if lemma_filter.is_empty()
-                        || lemma_matches(lemma_filter, &l.name)
-                    {
-                        // Empty filter, or selected but no prove flag — skipped.
-                        LemmaVerdict::Skipped
-                    } else {
-                        LemmaVerdict::Filtered
-                    },
-                    elapsed_ms: 0,
-                    // HS counts the default `Sorry` placeholder proof
-                    // as 1 step (one `LNode (ProofStep Sorry ...)` —
-                    // see `foldProof proofStepSummary`, ClosedTheory.hs:463-491, see line 484,491).
-                    // Match it.
-                    proof_steps: 1,
-                    exists_trace: matches!(
-                        l.trace_quantifier,
-                        tamarin_theory::theory::TraceQuantifier::ExistsTrace,
-                    ),
-                });
-            }
-        };
+            |results: &mut Vec<LemmaResult>, elaborated: &tamarin_theory::theory::Theory| {
+                for l in elaborated.lemmas() {
+                    results.push(LemmaResult {
+                        name: l.name.clone(),
+                        verdict: if lemma_filter.is_empty() || lemma_matches(lemma_filter, &l.name)
+                        {
+                            // Empty filter, or selected but no prove flag — skipped.
+                            LemmaVerdict::Skipped
+                        } else {
+                            LemmaVerdict::Filtered
+                        },
+                        elapsed_ms: 0,
+                        // HS counts the default `Sorry` placeholder proof
+                        // as 1 step (one `LNode (ProofStep Sorry ...)` —
+                        // see `foldProof proofStepSummary`, ClosedTheory.hs:463-491, see line 484,491).
+                        // Match it.
+                        proof_steps: 1,
+                        exists_trace: matches!(
+                            l.trace_quantifier,
+                            tamarin_theory::theory::TraceQuantifier::ExistsTrace,
+                        ),
+                    });
+                }
+            };
 
         if args.precompute_only || (!prove_anything && !any_stored_proof) {
             push_skipped_results(&mut results, &elaborated);
@@ -1254,12 +1301,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // Reuse the per-file maude handle.  The `maude tool: ...`
             // banner is printed once at the top of the batch run (see
             // above), matching HS.
-            let maude = file_maude.clone().ok_or_else(|| {
-                RunError(format!(
-                    "failed to start maude at {:?}",
-                    maude_path,
-                ))
-            })?;
+            let maude = file_maude
+                .clone()
+                .ok_or_else(|| RunError(format!("failed to start maude at {:?}", maude_path,)))?;
 
             // Per-lemma proof loop.
             //
@@ -1304,11 +1348,21 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // renders + is iterated below) and the proving session alike.
             if auto_sources {
                 tamarin_theory::auto_sources::apply_auto_sources(
-                    &mut parsed, &mut elaborated, maude.clone(), file_maude_pool.clone());
+                    &mut parsed,
+                    &mut elaborated,
+                    maude.clone(),
+                    file_maude_pool.clone(),
+                );
             }
             let session = tamarin_theory::prove::ProverSession::build_with_in_file_and_heuristic(
-                &parsed, maude.clone(), file_maude_pool.clone(), in_file,
-                cli_heuristic.clone(), cut).ok();
+                &parsed,
+                maude.clone(),
+                file_maude_pool.clone(),
+                in_file,
+                cli_heuristic.clone(),
+                cut,
+            )
+            .ok();
 
             // HS prints "[Theory X] Theory closed" right after `closeTheory`
             // (TheoryLoader.hs:569-615, see line 596) and BEFORE the proof search, which it
@@ -1437,22 +1491,30 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 // per `ClosedRuleCache`, RuleItem.hs:64-69).  The predicate mirrors
                 // `run_lemma`'s `is_target`; the session skips lemmas that would
                 // emit a bare sorry (they never saturate).
-                let cache_disabled =
-                    tamarin_utils::env_gate!("TAM_RS_NO_SOURCE_CACHE");
-                sess.presaturate_shared_sources(
-                    cache_disabled,
-                    |name| prove_anything && lemma_matches(lemma_filter, name),
-                );
-                let specs: Vec<&tamarin_theory::theory::Lemma<_>> =
-                    elaborated.lemmas().collect();
-                let mut out: Vec<(usize, tamarin_theory::pretty_theory::ProvedLemma, LemmaResult)> =
-                    specs.par_iter().enumerate()
-                        .map(|(i, l)| { let (pl, lr) = run_lemma(l); (i, pl, lr) })
-                        .collect();
+                let cache_disabled = tamarin_utils::env_gate!("TAM_RS_NO_SOURCE_CACHE");
+                sess.presaturate_shared_sources(cache_disabled, |name| {
+                    prove_anything && lemma_matches(lemma_filter, name)
+                });
+                let specs: Vec<&tamarin_theory::theory::Lemma<_>> = elaborated.lemmas().collect();
+                let mut out: Vec<(
+                    usize,
+                    tamarin_theory::pretty_theory::ProvedLemma,
+                    LemmaResult,
+                )> = specs
+                    .par_iter()
+                    .enumerate()
+                    .map(|(i, l)| {
+                        let (pl, lr) = run_lemma(l);
+                        (i, pl, lr)
+                    })
+                    .collect();
                 // Reassemble in DECLARATION order so output is identical to the
                 // sequential loop regardless of which worker finished first.
                 out.sort_by_key(|(i, _, _)| *i);
-                for (_, pl, lr) in out { proved_lemmas.push(pl); results.push(lr); }
+                for (_, pl, lr) in out {
+                    proved_lemmas.push(pl);
+                    results.push(lr);
+                }
             } else if !prove_anything {
                 // The plain-load check pass needs the session's
                 // check_and_extend arm; the pool fallback below always
@@ -1576,10 +1638,7 @@ fn init_rayon_pool(args: &Args) {
 }
 
 fn default_maude_path() -> String {
-    for c in [
-        "/usr/local/bin/maude",
-        "/usr/bin/maude",
-    ] {
+    for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
         if std::path::Path::new(c).exists() {
             return c.to_string();
         }
@@ -1598,8 +1657,7 @@ fn emit_output(args: &Args, in_file: &str, body: &str) -> Result<(), RunError> {
                 })?;
             }
         }
-        fs::write(&out, body)
-            .map_err(|e| RunError(format!("failed to write {}: {}", out, e)))?;
+        fs::write(&out, body).map_err(|e| RunError(format!("failed to write {}: {}", out, e)))?;
     } else {
         // stdout
         print!("{}", body);
@@ -1725,7 +1783,11 @@ mod tests {
     fn diff_flag_errors_cleanly() {
         let a = parse(&["--diff", "in.spthy"]);
         let r = run(&a);
-        assert!(matches!(r, Err(RunError(_))), "diff should error, got {:?}", r);
+        assert!(
+            matches!(r, Err(RunError(_))),
+            "diff should error, got {:?}",
+            r
+        );
     }
 
     #[test]

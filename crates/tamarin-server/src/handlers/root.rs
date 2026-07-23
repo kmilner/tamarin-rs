@@ -11,7 +11,7 @@ use std::sync::Arc;
 use axum::{
     body::Bytes,
     extract::{Multipart, State},
-    http::{StatusCode, header},
+    http::{header, StatusCode},
     response::{IntoResponse, Redirect, Response},
 };
 
@@ -27,10 +27,7 @@ pub async fn get(State(state): State<Arc<AppState>>) -> Response {
 }
 
 /// `POST /` — File upload (multipart `uploadedTheory`).
-pub async fn post(
-    State(state): State<Arc<AppState>>,
-    mut mp: Multipart,
-) -> Response {
+pub async fn post(State(state): State<Arc<AppState>>, mut mp: Multipart) -> Response {
     // Mirror Haskell `postRootR` (src/Web/Handler.hs:785-812): a missing
     // `uploadedTheory` field → "Post request failed."; an empty file →
     // "No theory file given."; a load error → "Theory loading failed:…";
@@ -38,12 +35,17 @@ pub async fn post(
     let mut alert_msg: Option<String> = None;
     let mut found_field = false;
     while let Some(field) = mp.next_field().await.unwrap_or(None) {
-        if field.name() != Some("uploadedTheory") { continue; }
+        if field.name() != Some("uploadedTheory") {
+            continue;
+        }
         found_field = true;
         let filename = field.file_name().unwrap_or("uploaded.spthy").to_string();
         let bytes: Bytes = match field.bytes().await {
             Ok(b) => b,
-            Err(e) => { alert_msg = Some(format!("upload failed: {}", e)); break; }
+            Err(e) => {
+                alert_msg = Some(format!("upload failed: {}", e));
+                break;
+            }
         };
         if bytes.is_empty() {
             alert_msg = Some("No theory file given.".into());
@@ -51,11 +53,17 @@ pub async fn post(
         }
         let src = match std::str::from_utf8(&bytes) {
             Ok(s) => s.to_string(),
-            Err(_) => { alert_msg = Some("upload was not valid UTF-8".into()); break; }
+            Err(_) => {
+                alert_msg = Some("upload was not valid UTF-8".into());
+                break;
+            }
         };
         match theory_io::load_from_source(
-            &src, TheoryOrigin::Upload(filename.clone()), &state.cfg.maude_path,
-            state.cfg.derivcheck_timeout) {
+            &src,
+            TheoryOrigin::Upload(filename.clone()),
+            &state.cfg.maude_path,
+            state.cfg.derivcheck_timeout,
+        ) {
             Ok(entry) => {
                 let idx = state.store.insert(entry);
                 tracing::info!(idx, file = %filename, "uploaded theory");
@@ -72,7 +80,9 @@ pub async fn post(
             // — a NEWLINE separates the prefix from the error, not a space.
             // The '\n' survives both HS Blaze escaping and our `html_escape`
             // (which leaves '\n' untouched).
-            Err(e) => { alert_msg = Some(format!("Theory loading failed:\n{}", e)); }
+            Err(e) => {
+                alert_msg = Some(format!("Theory loading failed:\n{}", e));
+            }
         }
         break;
     }
@@ -100,9 +110,11 @@ pub async fn favicon() -> impl IntoResponse {
 
 /// `GET /robots.txt` — Mirror Haskell's `getRobotsR`.
 pub async fn robots() -> impl IntoResponse {
-    (StatusCode::OK,
-     [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-     "User-agent: *")
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        "User-agent: *",
+    )
 }
 
 /// `GET /kill?path=<key>` — frontend uses this to cancel a
@@ -161,7 +173,11 @@ fn render_index(state: &AppState) -> String {
             let link = format!("/thy/trace/{}/overview/help", t.idx);
             let time = t.loaded_at.format("%T");
             // `$if getEitherTheoryPrimary` → `<td>Original`, else `<td><em>Modified`.
-            let primary = if t.primary { "<td>Original</td>" } else { "<td><em>Modified</em></td>" };
+            let primary = if t.primary {
+                "<td>Original</td>"
+            } else {
+                "<td><em>Modified</em></td>"
+            };
             rows.push_str(&format!(
                 "<tr><td><a href=\"{link}\">{name}</a></td><td>{time}</td>{primary}<td>{origin}</td></tr>",
                 link = html_escape(&link),
@@ -208,9 +224,13 @@ mod tests {
     /// likewise leaves '\n' alone).  Only `& < > " '` are escaped.
     #[test]
     fn html_escape_preserves_newline() {
-        assert_eq!(html_escape("Theory loading failed:\nerr"),
-                   "Theory loading failed:\nerr");
-        assert_eq!(html_escape("a&b<c>d\"e'f"),
-                   "a&amp;b&lt;c&gt;d&quot;e&#39;f");
+        assert_eq!(
+            html_escape("Theory loading failed:\nerr"),
+            "Theory loading failed:\nerr"
+        );
+        assert_eq!(
+            html_escape("a&b<c>d\"e'f"),
+            "a&amp;b&lt;c&gt;d&quot;e&#39;f"
+        );
     }
 }

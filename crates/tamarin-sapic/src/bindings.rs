@@ -15,12 +15,12 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_utils::prelude_ext::nub_on;
 use crate::base_translation::{list_intersect, list_union};
 use tamarin_theory::sapic::{
     frees_sapic_fact, frees_sapic_term, pfold_map, GoodAnnotation, Process, ProcessCombinator,
     SapicAction, SapicLVar,
 };
+use tamarin_utils::prelude_ext::nub_on;
 
 /// `bindings`: variables bound *precisely at this point* in `p`.
 pub fn bindings<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> {
@@ -37,15 +37,19 @@ pub fn bindings_act(a: &SapicAction<SapicLVar>) -> Vec<SapicLVar> {
         // HS: `(New v) -> [v]` (Bindings.hs:21-26, see line 23).
         SapicAction::New(v) => vec![v.clone()],
         // HS: `nub (freesSapicTerm t) \\ S.toList vs` (Bindings.hs:21-26, see line 24).
-        SapicAction::ChIn { msg, match_vars, .. } => {
-            nub_difference(frees_sapic_term(msg), match_vars)
-        }
+        SapicAction::ChIn {
+            msg, match_vars, ..
+        } => nub_difference(frees_sapic_term(msg), match_vars),
         // HS: `nub (foldMap freesSapicFact l) \\ S.toList mv` (Bindings.hs:21-26, see line 25).
         // `nub` is applied AFTER concatenating across all premises (not
         // per-fact), so accumulate first, then nub-and-difference.
-        SapicAction::Msr { prems, match_vars, .. } => {
+        SapicAction::Msr {
+            prems, match_vars, ..
+        } => {
             let mut all = Vec::new();
-            for f in prems { all.extend(frees_sapic_fact(f)); }
+            for f in prems {
+                all.extend(frees_sapic_fact(f));
+            }
             nub_difference(all, match_vars)
         }
         // HS `bindingsAct _ = []` (Bindings.hs:21-26, see line 26): every other action binds
@@ -68,9 +72,9 @@ pub fn bindings_comb(c: &ProcessCombinator<SapicLVar>) -> Vec<SapicLVar> {
         // HS: `(Lookup _ v) -> [v]` (Bindings.hs:29-33, see line 31).
         ProcessCombinator::Lookup(_, v) => vec![v.clone()],
         // HS: `nub (freesSapicTerm t1) \\ S.toList mv` (Bindings.hs:29-33, see line 32).
-        ProcessCombinator::Let { left, match_vars, .. } => {
-            nub_difference(frees_sapic_term(left), match_vars)
-        }
+        ProcessCombinator::Let {
+            left, match_vars, ..
+        } => nub_difference(frees_sapic_term(left), match_vars),
         // HS `bindingsComb _ = []` (Bindings.hs:29-33, see line 33): no other combinator binds a
         // variable.  Enumerated (no wildcard) so a new binding-carrying variant
         // must decide its bound set here.
@@ -105,9 +109,7 @@ fn captured_variables_at<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<Sa
     match p {
         Process::Null(_) => Vec::new(),
         // `bindingsAct ac \`intersect\` accBindings body`.
-        Process::Action(a, _, body) => {
-            list_intersect(&bindings_act(a), &acc_bindings(body))
-        }
+        Process::Action(a, _, body) => list_intersect(&bindings_act(a), &acc_bindings(body)),
         // `bindingsComb c \`intersect\` (accBindings pl \`union\` accBindings pr)`.
         Process::Comb(c, _, pl, pr) => {
             let below = list_union(&acc_bindings(pl), &acc_bindings(pr));

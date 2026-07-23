@@ -26,7 +26,9 @@ pub fn should_trace(key: &str) -> bool {
 
 /// Output a section header to stderr if `key` is enabled.
 pub fn etrace_section_ln(key: &str, title: &str) {
-    if !should_trace(key) { return; }
+    if !should_trace(key) {
+        return;
+    }
     let bar_len = 80usize.saturating_sub(5 + title.chars().count());
     let bar: String = "=".repeat(bar_len);
     eprintln!("=== {} {}", title, bar);
@@ -34,7 +36,9 @@ pub fn etrace_section_ln(key: &str, title: &str) {
 
 /// Output `label: s` to stderr if `key` is enabled.
 pub fn etrace_ln(key: &str, label: &str, s: &str) {
-    if !should_trace(key) { return; }
+    if !should_trace(key) {
+        return;
+    }
     eprintln!("{}: {}", label, s);
 }
 
@@ -48,8 +52,14 @@ mod tests {
     fn empty_env_disables_trace() {
         // SAFETY: temporarily unset for this single test thread; restore after.
         let prev = env::var(TRACE_SETTINGS).ok();
-        unsafe { env::remove_var(TRACE_SETTINGS); }
+        unsafe {
+            env::remove_var(TRACE_SETTINGS);
+        }
         assert!(!should_trace("anything"));
-        if let Some(v) = prev { unsafe { env::set_var(TRACE_SETTINGS, v); } }
+        if let Some(v) = prev {
+            unsafe {
+                env::set_var(TRACE_SETTINGS, v);
+            }
+        }
     }
 }

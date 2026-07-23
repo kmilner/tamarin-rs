@@ -191,25 +191,33 @@ fn parsed_to_unannotated(node: &ParsedProofTree, sys: System) -> ProofNode {
         ProofMethod::Sorry(_) if node.cases.is_empty() => NodeStatus::Sorry,
         _ => NodeStatus::Open,
     };
-    let children: BTreeMap<String, ProofNode> = node.cases.iter()
+    let children: BTreeMap<String, ProofNode> = node
+        .cases
+        .iter()
         .map(|(name, sub)| (name.clone(), parsed_to_unannotated(sub, sys.clone())))
         .collect();
-    ProofNode { method, sys, children, status, annotated: false }
+    ProofNode {
+        method,
+        sys,
+        children,
+        status,
+        annotated: false,
+    }
 }
 
 /// Convert a `ParsedMethod` to the best display-only `ProofMethod`.
 /// Used exclusively by `parsed_to_unannotated` — not for exec.
 fn parsed_method_to_display(pm: &ParsedMethod) -> ProofMethod {
     match pm {
-        ParsedMethod::Simplify      => ProofMethod::Simplify,
-        ParsedMethod::Induction     => ProofMethod::Induction,
-        ParsedMethod::Sorry         => ProofMethod::Sorry(None),
+        ParsedMethod::Simplify => ProofMethod::Simplify,
+        ParsedMethod::Induction => ProofMethod::Induction,
+        ParsedMethod::Sorry => ProofMethod::Sorry(None),
         ParsedMethod::Contradiction => ProofMethod::Finished(MethodResult::Contradictory(None)),
         ParsedMethod::SolveGoal(_, raw) => ProofMethod::RawSolve(raw.clone()),
-        ParsedMethod::SolvedLeaf    => ProofMethod::Finished(MethodResult::Solved),
-        ParsedMethod::Unfinishable  => ProofMethod::Finished(MethodResult::Unfinishable),
-        ParsedMethod::Invalidated   => ProofMethod::Invalidated,
-        ParsedMethod::Other(s)      => ProofMethod::Sorry(Some(s.clone())),
+        ParsedMethod::SolvedLeaf => ProofMethod::Finished(MethodResult::Solved),
+        ParsedMethod::Unfinishable => ProofMethod::Finished(MethodResult::Unfinishable),
+        ParsedMethod::Invalidated => ProofMethod::Invalidated,
+        ParsedMethod::Other(s) => ProofMethod::Sorry(Some(s.clone())),
     }
 }
 
@@ -307,11 +315,14 @@ fn replay_node(
         //   `sorryNode (Just "invalid proof step encountered") (M.singleton "" prf)`
         // where `prf` is the current leaf, `noSystemPrf`'d → unannotated.
         return finished_leaf(
-            ctx, sys, node,
+            ctx,
+            sys,
+            node,
             |r| matches!(r, MethodResult::Contradictory(_)),
             MethodResult::Contradictory(None),
             NodeStatus::Contradictory,
-            auto_prove, max_steps,
+            auto_prove,
+            max_steps,
         );
     }
 
@@ -327,11 +338,14 @@ fn replay_node(
     // via its own solver.
     if matches!(node.method, ParsedMethod::SolvedLeaf) && node.cases.is_empty() {
         return finished_leaf(
-            ctx, sys, node,
+            ctx,
+            sys,
+            node,
             |r| matches!(r, MethodResult::Solved),
             MethodResult::Solved,
             NodeStatus::Solved,
-            auto_prove, max_steps,
+            auto_prove,
+            max_steps,
         );
     }
 
@@ -339,11 +353,14 @@ fn replay_node(
     // agrees, else fall back to auto-prover.
     if matches!(node.method, ParsedMethod::Unfinishable) && node.cases.is_empty() {
         return finished_leaf(
-            ctx, sys, node,
+            ctx,
+            sys,
+            node,
             |r| matches!(r, MethodResult::Unfinishable),
             MethodResult::Unfinishable,
             NodeStatus::Unfinishable,
-            auto_prove, max_steps,
+            auto_prove,
+            max_steps,
         );
     }
 
@@ -400,8 +417,7 @@ fn replay_node(
     }
 
     // Build a map from case name → System for fast lookup.
-    let produced: BTreeMap<String, System> =
-        cases.into_iter().collect();
+    let produced: BTreeMap<String, System> = cases.into_iter().collect();
 
     let mut children: BTreeMap<String, ProofNode> = BTreeMap::new();
     let mut any_solved = false;
@@ -496,7 +512,9 @@ fn replay_node(
     // (Prover.hs:170-251, see line 185 → TheoryLoader.hs:569-615, see line 606), matching the
     // `run_proof_search` branch below.
     for (rt_name, rt_sys) in produced.into_iter() {
-        if children.contains_key(&rt_name) { continue; }
+        if children.contains_key(&rt_name) {
+            continue;
+        }
         // Also skip if the skeleton consumed this case via "".
         if node.cases.iter().any(|(s, _)| s.is_empty())
             && children.len() == 1
@@ -549,7 +567,13 @@ fn replay_node(
         NodeStatus::Sorry
     };
 
-    ProofNode { method, sys, children, status, annotated: true }
+    ProofNode {
+        method,
+        sys,
+        children,
+        status,
+        annotated: true,
+    }
 }
 
 /// Resolve a parsed method against `sys` and produce a (method, cases)
@@ -575,13 +599,21 @@ fn exec_method_for(
         if let Some(cases) = exec_proof_method(ctx, &method, sys) {
             if dbg {
                 let names: Vec<&str> = cases.iter().map(|(n, _)| n.as_str()).collect();
-                eprintln!("[replay] direct {:?} → {} cases: {:?}",
-                    method_kind(&method), cases.len(), names);
+                eprintln!(
+                    "[replay] direct {:?} → {} cases: {:?}",
+                    method_kind(&method),
+                    cases.len(),
+                    names
+                );
             }
             return Some((method, sort_cases(cases)));
         }
-        if dbg { eprintln!("[replay] direct {:?} → exec returned None",
-            method_kind(&method)); }
+        if dbg {
+            eprintln!(
+                "[replay] direct {:?} → exec returned None",
+                method_kind(&method)
+            );
+        }
         return None;
     }
     // Slow path: SolveGoal(GoalSpec::Raw(_)) — iterate candidates and
@@ -600,11 +632,13 @@ fn exec_method_for(
     let skel_names: Vec<&str> = skel_children.iter().map(|(s, _)| s.as_str()).collect();
     if dbg {
         let raw = match parsed {
-            ParsedMethod::SolveGoal(GoalSpec::Raw(r), _) =>
-                r.chars().take(120).collect::<String>(),
+            ParsedMethod::SolveGoal(GoalSpec::Raw(r), _) => r.chars().take(120).collect::<String>(),
             _ => String::new(),
         };
-        eprintln!("[replay] raw-solve skel_names={:?} (raw text: {:?})", skel_names, raw);
+        eprintln!(
+            "[replay] raw-solve skel_names={:?} (raw text: {:?})",
+            skel_names, raw
+        );
     }
     // depth=0 for replay: replayed steps don't need round-robin since the
     // skeleton already specifies the goal.
@@ -617,14 +651,23 @@ fn exec_method_for(
     // hits at the top.
     const MAX_CANDIDATES: usize = 32;
     for m in candidates {
-        if !matches!(m, ProofMethod::SolveGoal(_)) { continue; }
+        if !matches!(m, ProofMethod::SolveGoal(_)) {
+            continue;
+        }
         tried += 1;
-        if tried > MAX_CANDIDATES { break; }
+        if tried > MAX_CANDIDATES {
+            break;
+        }
         if let Some(cases) = exec_proof_method(ctx, &m, sys) {
             if dbg && tried <= 8 {
                 let names: Vec<&str> = cases.iter().map(|(n, _)| n.as_str()).collect();
-                eprintln!("[replay]   candidate#{} {:?} → {} cases {:?}",
-                    tried, method_kind(&m), cases.len(), names);
+                eprintln!(
+                    "[replay]   candidate#{} {:?} → {} cases {:?}",
+                    tried,
+                    method_kind(&m),
+                    cases.len(),
+                    names
+                );
             }
             if cases_compatible(&cases, &skel_names) {
                 if dbg {
@@ -634,7 +677,9 @@ fn exec_method_for(
             }
         }
     }
-    if dbg { eprintln!("[replay] raw-solve: no candidate matched"); }
+    if dbg {
+        eprintln!("[replay] raw-solve: no candidate matched");
+    }
     None
 }
 
@@ -679,7 +724,9 @@ fn goal_kind(g: &Goal) -> String {
 /// we'd accept an unrelated goal that happens to share a case name
 /// (e.g. `case_1`), leading to deeper-tree drift.
 fn cases_compatible(produced: &[(String, System)], skel: &[&str]) -> bool {
-    if skel.is_empty() { return false; }
+    if skel.is_empty() {
+        return false;
+    }
     if skel.len() == 1 && skel[0].is_empty() {
         return produced.len() == 1;
     }
@@ -773,9 +820,7 @@ fn fact_terms_match_exact(
 /// `Term::Var` name shim; `term_to_lnterm` (elaborate.rs) is HS's
 /// `fact llit` term construction (it reads the live elaboration context for
 /// user function symbols, which is in scope during proof-search replay).
-fn parse_arg_to_lnterm(
-    arg: &tamarin_parser::ast::Term,
-) -> Option<tamarin_term::lterm::LNTerm> {
+fn parse_arg_to_lnterm(arg: &tamarin_parser::ast::Term) -> Option<tamarin_term::lterm::LNTerm> {
     let ast = parsed_term_of_arg(arg)?;
     crate::elaborate::term_to_lnterm(&ast)
 }
@@ -784,9 +829,7 @@ fn parse_arg_to_lnterm(
 /// skeleton parser stores each arg as a `Term::Var` whose `name` holds
 /// the raw surface text (see `build_fact`); re-parse that text.  If the
 /// arg is already structured (future-proofing), return it directly.
-fn parsed_term_of_arg(
-    arg: &tamarin_parser::ast::Term,
-) -> Option<tamarin_parser::ast::Term> {
+fn parsed_term_of_arg(arg: &tamarin_parser::ast::Term) -> Option<tamarin_parser::ast::Term> {
     use tamarin_parser::ast::Term as PTerm;
     match arg {
         PTerm::Var(v) => tamarin_parser::parser::parse_term_str(&v.name).ok(),
@@ -813,7 +856,12 @@ fn parsed_term_of_arg(
 /// auto-prover.
 fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
     match spec {
-        GoalSpec::Action { fact, time_var, time_idx, .. } => {
+        GoalSpec::Action {
+            fact,
+            time_var,
+            time_idx,
+            ..
+        } => {
             // Open Action goals whose fact name matches.  Skip KU
             // (auto-handled) for non-KU goal specs — the skeleton's
             // `solve(...)` always names protocol facts, never `KU(...)`.
@@ -850,7 +898,9 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
                             && (want_ku || !matches!(fa.tag, FactTag::Ku))
                         {
                             Some(g)
-                        } else { None }
+                        } else {
+                            None
+                        }
                     }
                     _ => None,
                 })
@@ -867,10 +917,11 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             // not bind a present `!KU( h(...) )` of the same shape — that
             // re-derives the wrong goal and cascades into a divergent
             // subtree.
-            let by_struct: Vec<&Goal> = shape_matches.iter().copied()
+            let by_struct: Vec<&Goal> = shape_matches
+                .iter()
+                .copied()
                 .filter(|g| match g {
-                    Goal::Action(_, fa) =>
-                        fact_terms_match_exact(&fact.args, &fa.terms),
+                    Goal::Action(_, fa) => fact_terms_match_exact(&fact.args, &fa.terms),
                     _ => false,
                 })
                 .collect();
@@ -898,15 +949,22 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             // appear twice; at most one candidate carries the exact LVar.
             // If none does, HS's `M.member` misses ⇒ invalid step — return
             // None and mirror it.
-            by_struct.iter().copied()
+            by_struct
+                .iter()
+                .copied()
                 .find(|g| match g {
-                    Goal::Action(i, _) =>
-                        *i.name == **time_var && i.idx == *time_idx as u64,
+                    Goal::Action(i, _) => *i.name == **time_var && i.idx == *time_idx as u64,
                     _ => false,
                 })
                 .cloned()
         }
-        GoalSpec::Premise { fact, prem_idx, time_var, time_idx, .. } => {
+        GoalSpec::Premise {
+            fact,
+            prem_idx,
+            time_var,
+            time_idx,
+            ..
+        } => {
             // HS `PremiseG (i, v) fa` carries the node-LVar `i` and
             // PremIdx `v`.  Disambiguate by name + arity + prem_idx
             // first, then by time-var root if the (name, arity, idx)
@@ -926,7 +984,9 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
                             && (np.1).0 == *prem_idx
                         {
                             Some(g)
-                        } else { None }
+                        } else {
+                            None
+                        }
                     }
                     _ => None,
                 })
@@ -940,10 +1000,11 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             // structural equality; a stale stored premise goal that no
             // longer exists in the drifted system must be rejected so the
             // caller emits the invalid-step placeholder.
-            let by_struct: Vec<&Goal> = shape_matches.iter().copied()
+            let by_struct: Vec<&Goal> = shape_matches
+                .iter()
+                .copied()
                 .filter(|g| match g {
-                    Goal::Premise(_, fa) =>
-                        fact_terms_match_exact(&fact.args, &fa.terms),
+                    Goal::Premise(_, fa) => fact_terms_match_exact(&fact.args, &fa.terms),
                     _ => false,
                 })
                 .collect();
@@ -956,10 +1017,13 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             // system is a miss in HS ⇒ invalid step.  Require the exact LVar
             // idx — same rationale as the Action branch above (matching by
             // root-name alone re-binds a drifted goal and replays it live).
-            by_struct.iter().copied()
+            by_struct
+                .iter()
+                .copied()
                 .find(|g| match g {
-                    Goal::Premise((node, _), _) =>
-                        *node.name == **time_var && node.idx == *time_idx as u64,
+                    Goal::Premise((node, _), _) => {
+                        *node.name == **time_var && node.idx == *time_idx as u64
+                    }
                     _ => false,
                 })
                 .cloned()
@@ -998,7 +1062,8 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             // picks (t1,t2), which propagates `last_atom = #t1`
             // instead of `last_atom = #t2`, triggering a false-positive
             // Cyclic contradiction downstream.
-            let shape_matches: Vec<&Goal> = sys.goals
+            let shape_matches: Vec<&Goal> = sys
+                .goals
                 .iter()
                 .filter(|(_, st)| !st.solved)
                 .filter_map(|(g, _)| match g {
@@ -1020,23 +1085,36 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
                 let dbg = tamarin_utils::env_gate!("TAM_RS_DBG_MATCH_GOAL_DISJ");
                 if dbg {
                     let path = crate::constraint::solver::trace::case_path_string();
-                    eprintln!("[MATCH_GOAL_DISJ] path={} shape_matches={} skel.alt_texts={:?}",
-                        path, shape_matches.len(), alt_texts);
+                    eprintln!(
+                        "[MATCH_GOAL_DISJ] path={} shape_matches={} skel.alt_texts={:?}",
+                        path,
+                        shape_matches.len(),
+                        alt_texts
+                    );
                 }
                 if !alt_texts.iter().all(|s| s.is_empty()) {
                     let want: Vec<String> = alt_texts.clone();
-                    let mut text_matches: Vec<&Goal> = shape_matches.iter().copied()
+                    let mut text_matches: Vec<&Goal> = shape_matches
+                        .iter()
+                        .copied()
                         .filter(|g| {
                             if let Goal::Disj(d) = g {
-                                let runtime_texts: Vec<String> = d.0.iter()
+                                let runtime_texts: Vec<String> = d
+                                    .0
+                                    .iter()
                                     .map(|a| normalize_disj_alt_text_for_match(&pretty_disj_alt(a)))
                                     .collect();
                                 if dbg {
-                                    eprintln!("[MATCH_GOAL_DISJ]   runtime_alts={:?} match={}",
-                                        runtime_texts, runtime_texts == want);
+                                    eprintln!(
+                                        "[MATCH_GOAL_DISJ]   runtime_alts={:?} match={}",
+                                        runtime_texts,
+                                        runtime_texts == want
+                                    );
                                 }
                                 runtime_texts == want
-                            } else { false }
+                            } else {
+                                false
+                            }
                         })
                         .collect();
                     if text_matches.len() == 1 {
@@ -1053,7 +1131,12 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             }
             None
         }
-        GoalSpec::Chain { src_var, conc_idx, tgt_var, prem_idx } => {
+        GoalSpec::Chain {
+            src_var,
+            conc_idx,
+            tgt_var,
+            prem_idx,
+        } => {
             // HS dispatch: `solve( (#i, n) ~~> (#j, m) )` parses to
             // `ChainG (i, ConcIdx n) (j, PremIdx m)` (Proof.hs:59) and
             // matches by structural equality against an open
@@ -1066,7 +1149,8 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             let want_tgt = tgt_var;
             let want_c = *conc_idx as usize;
             let want_p = *prem_idx as usize;
-            let matches: Vec<&Goal> = sys.goals
+            let matches: Vec<&Goal> = sys
+                .goals
                 .iter()
                 .filter(|(_, st)| !st.solved)
                 .filter_map(|(g, _)| match g {
@@ -1077,7 +1161,9 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
                             && p.0 == want_p
                         {
                             Some(g)
-                        } else { None }
+                        } else {
+                            None
+                        }
                     }
                     _ => None,
                 })
@@ -1099,7 +1185,8 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             use tamarin_term::pretty::pretty_lnterm;
             let want_small = canonicalise_term_text(small_raw);
             let want_big = canonicalise_term_text(big_raw);
-            let matches: Vec<&Goal> = sys.goals
+            let matches: Vec<&Goal> = sys
+                .goals
                 .iter()
                 .filter(|(_, st)| !st.solved)
                 .filter_map(|(g, _)| match g {
@@ -1108,7 +1195,9 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
                         let r_s = canonicalise_term_text(&pretty_lnterm(r));
                         if l_s == want_small && r_s == want_big {
                             Some(g)
-                        } else { None }
+                        } else {
+                            None
+                        }
                     }
                     _ => None,
                 })
@@ -1119,9 +1208,17 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             // Fallback: if exactly one open Subterm goal exists, use
             // it (the skeleton text uniquely identifies it by being
             // the only Subterm in `sys.goals`).
-            let only_subterm: Vec<&Goal> = sys.goals.iter()
+            let only_subterm: Vec<&Goal> = sys
+                .goals
+                .iter()
                 .filter(|(_, st)| !st.solved)
-                .filter_map(|(g, _)| if matches!(g, Goal::Subterm(_)) { Some(g) } else { None })
+                .filter_map(|(g, _)| {
+                    if matches!(g, Goal::Subterm(_)) {
+                        Some(g)
+                    } else {
+                        None
+                    }
+                })
                 .collect();
             if only_subterm.len() == 1 {
                 return Some(only_subterm[0].clone());
@@ -1136,7 +1233,9 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             // correct here — no variable-renaming concerns.
             let want = crate::constraint::constraints::SplitId(*split_id);
             for (g, st) in sys.goals.iter() {
-                if st.solved { continue; }
+                if st.solved {
+                    continue;
+                }
                 if let Goal::Split(id) = g {
                     if *id == want {
                         return Some(g.clone());
@@ -1177,13 +1276,18 @@ fn canonicalise_term_text(s: &str) -> String {
     let mut last_ws = true; // suppress leading whitespace
     for c in s.chars() {
         if c.is_whitespace() {
-            if !last_ws { collapsed.push(' '); last_ws = true; }
+            if !last_ws {
+                collapsed.push(' ');
+                last_ws = true;
+            }
         } else {
             collapsed.push(c);
             last_ws = false;
         }
     }
-    if collapsed.ends_with(' ') { collapsed.pop(); }
+    if collapsed.ends_with(' ') {
+        collapsed.pop();
+    }
     // Pass 2: drop a space that immediately follows `<`/`(` (opening
     // delimiter) or immediately precedes `>`/`)` (closing delimiter).
     let chars: Vec<char> = collapsed.chars().collect();
@@ -1215,8 +1319,12 @@ fn canonicalise_term_text(s: &str) -> String {
 /// don't have to rebuild LVar identities from skeleton text (whose
 /// var indices are different from the runtime System's).
 fn disj_alts_match(skel: &[DisjAlt], runtime: &[crate::guarded::Guarded]) -> bool {
-    if skel.len() != runtime.len() { return false; }
-    skel.iter().zip(runtime.iter()).all(|(s, r)| disj_alt_shape_matches(s, r))
+    if skel.len() != runtime.len() {
+        return false;
+    }
+    skel.iter()
+        .zip(runtime.iter())
+        .all(|(s, r)| disj_alt_shape_matches(s, r))
 }
 
 /// Render a single Guarded alt to its HS-faithful `prettyGuarded`
@@ -1232,18 +1340,30 @@ fn pretty_disj_alt(g: &crate::guarded::Guarded) -> String {
 /// all whitespace and `#` characters.  This bridges the HS-render's
 /// `last(#t2)` style and the parser's pre-stripped form.
 fn normalize_disj_alt_text_for_match(s: &str) -> String {
-    s.chars().filter(|c| !c.is_whitespace() && *c != '#').collect()
+    s.chars()
+        .filter(|c| !c.is_whitespace() && *c != '#')
+        .collect()
 }
 
 fn disj_alt_shape_matches(skel: &DisjAlt, g: &crate::guarded::Guarded) -> bool {
     use crate::guarded::{Guarded, Quant};
     match (skel, g) {
-        (DisjAlt::All { n_vars }, Guarded::GGuarded { qua: Quant::All, vars, .. }) => {
-            *n_vars == vars.len()
-        }
-        (DisjAlt::Ex { n_vars }, Guarded::GGuarded { qua: Quant::Ex, vars, .. }) => {
-            *n_vars == vars.len()
-        }
+        (
+            DisjAlt::All { n_vars },
+            Guarded::GGuarded {
+                qua: Quant::All,
+                vars,
+                ..
+            },
+        ) => *n_vars == vars.len(),
+        (
+            DisjAlt::Ex { n_vars },
+            Guarded::GGuarded {
+                qua: Quant::Ex,
+                vars,
+                ..
+            },
+        ) => *n_vars == vars.len(),
         // `NonQuant` matches anything that isn't a top-level
         // `GGuarded` — atoms, conjunctions, disjunctions, and the
         // `∀[].A ⇒ ⊥` negation idiom (which HS pretty-prints as `¬A`
@@ -1252,8 +1372,15 @@ fn disj_alt_shape_matches(skel: &DisjAlt, g: &crate::guarded::Guarded) -> bool {
         // the parser classified it `NonQuant`; we accept it matching
         // a `GGuarded { qua: All, vars: [] }` here.  See
         // Guarded.hs:856-857 for the negation rendering.
-        (DisjAlt::NonQuant, Guarded::GGuarded { qua: Quant::All, vars, body, .. })
-            if vars.is_empty() => {
+        (
+            DisjAlt::NonQuant,
+            Guarded::GGuarded {
+                qua: Quant::All,
+                vars,
+                body,
+                ..
+            },
+        ) if vars.is_empty() => {
             matches!(&**body, Guarded::Disj(v) if v.is_empty())
         }
         (DisjAlt::NonQuant, Guarded::Atom(_))
@@ -1282,15 +1409,17 @@ fn tag_persistent(tag: &FactTag) -> bool {
 mod tests {
     use super::*;
     use crate::constraint::system::System;
+    use tamarin_parser::ast::{Fact as PFact, ParsedMethod, ParsedProofTree};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::maude_proc::MaudeHandle;
     use tamarin_term::maude_sig::pair_maude_sig;
-    use tamarin_parser::ast::{Fact as PFact, ParsedMethod, ParsedProofTree};
 
     fn maude() -> Option<MaudeHandle> {
         let path = std::env::var("MAUDE_PATH").ok().or_else(|| {
             for c in ["/usr/local/bin/maude", "maude"] {
-                if std::path::Path::new(c).exists() { return Some(c.to_string()); }
+                if std::path::Path::new(c).exists() {
+                    return Some(c.to_string());
+                }
             }
             None
         })?;
@@ -1325,18 +1454,27 @@ mod tests {
         // canonicalises identically to the runtime form.
         let multiline = "hmac(<KSQ, \n   $USR, \n   senc(<\n     ~CDSK_j_USR_O, KSQ, $USR, keystatus, CD_j.1\n    >,\n    ~UK_i_USR_O)\n   >,\n   ~MDSK_j_USR_O)";
         let rt2 = "hmac(<KSQ, $USR, senc(<~CDSK_j_USR_O, KSQ, $USR, keystatus, CD_j.1>, ~UK_i_USR_O)>, ~MDSK_j_USR_O)";
-        assert_eq!(canonicalise_term_text(multiline), canonicalise_term_text(rt2));
+        assert_eq!(
+            canonicalise_term_text(multiline),
+            canonicalise_term_text(rt2)
+        );
         // Inter-token spaces (e.g. after commas) are PRESERVED so distinct
         // terms never collapse together.
         assert_eq!(canonicalise_term_text("<a, b>"), "<a, b>");
-        assert_ne!(canonicalise_term_text("<a, b>"), canonicalise_term_text("<a, c>"));
+        assert_ne!(
+            canonicalise_term_text("<a, b>"),
+            canonicalise_term_text("<a, c>")
+        );
     }
 
     /// A Sorry-only skeleton on an empty system should be a degenerate
     /// replay → equivalent to running the auto-prover directly.
     #[test]
     fn sorry_leaf_runs_auto_prover() {
-        let h = match maude() { Some(m) => m, None => return };
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
         let ctx = ProofContext::new(h, Vec::new());
         let sys = System::empty();
         // Skeleton = `by sorry`.
@@ -1363,11 +1501,15 @@ mod tests {
     /// later replaced by the auto-prove fallback.
     #[test]
     fn contradiction_leaf_without_contradiction_falls_back_to_auto() {
-        let h = match maude() { Some(m) => m, None => return };
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
         let ctx = ProofContext::new(h, Vec::new());
         let mut sys = System::empty();
         // Force out of initial state so is_finished can run.
-        sys.solved_formulas_mut().push(std::sync::Arc::new(crate::guarded::gtrue()));
+        sys.solved_formulas_mut()
+            .push(std::sync::Arc::new(crate::guarded::gtrue()));
         let skel = ParsedProofTree {
             method: ParsedMethod::Contradiction,
             cases: Vec::new(),
@@ -1376,8 +1518,11 @@ mod tests {
         // No goals, no contradictions → auto-prover recognises Solved. The
         // contract is "fall back to auto-prover, never fabricate
         // Contradictory".
-        assert_ne!(result.status, NodeStatus::Contradictory,
-            "walker must NOT fabricate Contradictory when runtime disagrees");
+        assert_ne!(
+            result.status,
+            NodeStatus::Contradictory,
+            "walker must NOT fabricate Contradictory when runtime disagrees"
+        );
         assert_eq!(result.status, NodeStatus::Solved);
     }
 
@@ -1449,12 +1594,24 @@ mod tests {
         let tag = FactTag::Proto(Multiplicity::Linear, "Step", 1);
         // Two goals with the same fact tag/arity but different
         // timepoints.
-        let g1 = Goal::Action(i1.clone(),
-            Fact::new(tag.clone(), vec![tamarin_term::term::Term::Lit(
-                tamarin_term::vterm::Lit::Var(LVar::new("x", LSort::Msg, 0)))]));
-        let g2 = Goal::Action(i2.clone(),
-            Fact::new(tag, vec![tamarin_term::term::Term::Lit(
-                tamarin_term::vterm::Lit::Var(LVar::new("y", LSort::Msg, 0)))]));
+        let g1 = Goal::Action(
+            i1.clone(),
+            Fact::new(
+                tag.clone(),
+                vec![tamarin_term::term::Term::Lit(
+                    tamarin_term::vterm::Lit::Var(LVar::new("x", LSort::Msg, 0)),
+                )],
+            ),
+        );
+        let g2 = Goal::Action(
+            i2.clone(),
+            Fact::new(
+                tag,
+                vec![tamarin_term::term::Term::Lit(
+                    tamarin_term::vterm::Lit::Var(LVar::new("y", LSort::Msg, 0)),
+                )],
+            ),
+        );
         let mut sys = System::empty();
         sys.goals_mut().push((g1.clone(), Default::default()));
         sys.goals_mut().push((g2.clone(), Default::default()));
@@ -1463,10 +1620,14 @@ mod tests {
             fact: PFact {
                 persistent: false,
                 name: "Step".into(),
-                args: vec![tamarin_parser::ast::Term::Var(tamarin_parser::ast::VarSpec {
-                    name: "y".into(), idx: 0,
-                    sort: tamarin_parser::ast::SortHint::Untagged, typ: None,
-                })],
+                args: vec![tamarin_parser::ast::Term::Var(
+                    tamarin_parser::ast::VarSpec {
+                        name: "y".into(),
+                        idx: 0,
+                        sort: tamarin_parser::ast::SortHint::Untagged,
+                        typ: None,
+                    },
+                )],
                 annotations: Vec::new(),
             },
             time_var: "t2".into(),
@@ -1474,8 +1635,10 @@ mod tests {
         };
         let matched = match_goal(&spec, &sys).expect("should match");
         match matched {
-            Goal::Action(i, _) => assert_eq!(i.name, "t2",
-                "matcher must pick the goal whose timepoint LVar.name == time_var"),
+            Goal::Action(i, _) => assert_eq!(
+                i.name, "t2",
+                "matcher must pick the goal whose timepoint LVar.name == time_var"
+            ),
             other => panic!("expected Action, got {:?}", other),
         }
         // And with the t1 goal's full LVar `#t1.5` we get the other goal.
@@ -1483,10 +1646,14 @@ mod tests {
             fact: PFact {
                 persistent: false,
                 name: "Step".into(),
-                args: vec![tamarin_parser::ast::Term::Var(tamarin_parser::ast::VarSpec {
-                    name: "x".into(), idx: 0,
-                    sort: tamarin_parser::ast::SortHint::Untagged, typ: None,
-                })],
+                args: vec![tamarin_parser::ast::Term::Var(
+                    tamarin_parser::ast::VarSpec {
+                        name: "x".into(),
+                        idx: 0,
+                        sort: tamarin_parser::ast::SortHint::Untagged,
+                        typ: None,
+                    },
+                )],
                 annotations: Vec::new(),
             },
             time_var: "t1".into(),
@@ -1503,17 +1670,23 @@ mod tests {
             fact: PFact {
                 persistent: false,
                 name: "Step".into(),
-                args: vec![tamarin_parser::ast::Term::Var(tamarin_parser::ast::VarSpec {
-                    name: "y".into(), idx: 0,
-                    sort: tamarin_parser::ast::SortHint::Untagged, typ: None,
-                })],
+                args: vec![tamarin_parser::ast::Term::Var(
+                    tamarin_parser::ast::VarSpec {
+                        name: "y".into(),
+                        idx: 0,
+                        sort: tamarin_parser::ast::SortHint::Untagged,
+                        typ: None,
+                    },
+                )],
                 annotations: Vec::new(),
             },
             time_var: "t2".into(),
             time_idx: 9,
         };
-        assert!(match_goal(&spec_drift, &sys).is_none(),
-            "drifted timepoint idx must miss like HS `M.member`");
+        assert!(
+            match_goal(&spec_drift, &sys).is_none(),
+            "drifted timepoint idx must miss like HS `M.member`"
+        );
     }
 
     /// Variable-renaming-aware Premise match: two same-(name, arity,
@@ -1532,8 +1705,10 @@ mod tests {
         sys.goals_mut().push((g2, Default::default()));
         let spec = GoalSpec::Premise {
             fact: PFact {
-                persistent: false, name: "Inp".into(),
-                args: Vec::new(), annotations: Vec::new(),
+                persistent: false,
+                name: "Inp".into(),
+                args: Vec::new(),
+                annotations: Vec::new(),
             },
             prem_idx: 0,
             time_var: "v".into(),
@@ -1563,21 +1738,27 @@ mod tests {
         sys.goals_mut().push((g_jk.clone(), Default::default()));
         // Ask for (#j, 1) ~~> (#k, 0).
         let spec = GoalSpec::Chain {
-            src_var: "j".into(), conc_idx: 1,
-            tgt_var: "k".into(), prem_idx: 0,
+            src_var: "j".into(),
+            conc_idx: 1,
+            tgt_var: "k".into(),
+            prem_idx: 0,
         };
         let matched = match_goal(&spec, &sys).expect("should match");
         assert_eq!(matched, g_jk);
         // And the other side.
         let spec2 = GoalSpec::Chain {
-            src_var: "i".into(), conc_idx: 0,
-            tgt_var: "j".into(), prem_idx: 2,
+            src_var: "i".into(),
+            conc_idx: 0,
+            tgt_var: "j".into(),
+            prem_idx: 2,
         };
         assert_eq!(match_goal(&spec2, &sys).expect("should match"), g_ij);
         // Wrong idx — no match.
         let bad = GoalSpec::Chain {
-            src_var: "i".into(), conc_idx: 9,
-            tgt_var: "j".into(), prem_idx: 2,
+            src_var: "i".into(),
+            conc_idx: 9,
+            tgt_var: "j".into(),
+            prem_idx: 2,
         };
         assert!(match_goal(&bad, &sys).is_none());
     }
@@ -1661,27 +1842,34 @@ mod tests {
     /// matches the skeleton.
     #[test]
     fn match_disj_goal_by_alt_count() {
-        use crate::guarded::{Guarded, GAtom, BVar};
         use crate::constraint::constraints::Disj;
+        use crate::guarded::{BVar, GAtom, Guarded};
         let mk_vs = |n: &str| tamarin_parser::ast::VarSpec {
-            name: n.into(), idx: 0,
-            sort: tamarin_parser::ast::SortHint::Node, typ: None,
+            name: n.into(),
+            idx: 0,
+            sort: tamarin_parser::ast::SortHint::Node,
+            typ: None,
         };
         // Two non-quant alts.
         let two = Goal::Disj(Disj::new(vec![
-            Guarded::Atom(GAtom::Last(crate::guarded::GTerm::Var(
-                BVar::Free(mk_vs("a"))))),
-            Guarded::Atom(GAtom::Last(crate::guarded::GTerm::Var(
-                BVar::Free(mk_vs("b"))))),
+            Guarded::Atom(GAtom::Last(crate::guarded::GTerm::Var(BVar::Free(mk_vs(
+                "a",
+            ))))),
+            Guarded::Atom(GAtom::Last(crate::guarded::GTerm::Var(BVar::Free(mk_vs(
+                "b",
+            ))))),
         ]));
         // Three non-quant alts.
         let three = Goal::Disj(Disj::new(vec![
-            Guarded::Atom(GAtom::Last(crate::guarded::GTerm::Var(
-                BVar::Free(mk_vs("c"))))),
-            Guarded::Atom(GAtom::Last(crate::guarded::GTerm::Var(
-                BVar::Free(mk_vs("d"))))),
-            Guarded::Atom(GAtom::Last(crate::guarded::GTerm::Var(
-                BVar::Free(mk_vs("e"))))),
+            Guarded::Atom(GAtom::Last(crate::guarded::GTerm::Var(BVar::Free(mk_vs(
+                "c",
+            ))))),
+            Guarded::Atom(GAtom::Last(crate::guarded::GTerm::Var(BVar::Free(mk_vs(
+                "d",
+            ))))),
+            Guarded::Atom(GAtom::Last(crate::guarded::GTerm::Var(BVar::Free(mk_vs(
+                "e",
+            ))))),
         ]));
         let mut sys = System::empty();
         sys.goals_mut().push((two.clone(), Default::default()));
@@ -1710,7 +1898,10 @@ mod tests {
     #[test]
     fn parsed_to_unannotated_marks_whole_subtree() {
         // Skeleton:  simplify → case "a" (by sorry), case "b" (by sorry)
-        let leaf = |m| ParsedProofTree { method: m, cases: Vec::new() };
+        let leaf = |m| ParsedProofTree {
+            method: m,
+            cases: Vec::new(),
+        };
         let skel = ParsedProofTree {
             method: ParsedMethod::Simplify,
             cases: vec![

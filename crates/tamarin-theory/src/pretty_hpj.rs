@@ -277,7 +277,10 @@ impl LazyRight {
         if let Some(v) = self.value.borrow().as_ref() {
             return v.clone();
         }
-        let f = self.thunk.borrow_mut().take()
+        let f = self
+            .thunk
+            .borrow_mut()
+            .take()
             .expect("LazyRight forced while already forcing (cycle)");
         let d = Rc::new(f());
         *self.value.borrow_mut() = Some(d.clone());
@@ -307,12 +310,16 @@ fn defer(f: impl FnOnce() -> Doc + 'static) -> Doc {
 
 /// HS `mkUnion` with a lazy right branch.
 fn lazy_union(p: Doc, q: impl FnOnce() -> Doc + 'static) -> Doc {
-    if matches!(p, Doc::Empty) { return Doc::Empty; }
+    if matches!(p, Doc::Empty) {
+        return Doc::Empty;
+    }
     Doc::LazyUnion(rc(p), LazyRight::new(q))
 }
 
 impl Doc {
-    pub fn empty() -> Doc { Doc::Empty }
+    pub fn empty() -> Doc {
+        Doc::Empty
+    }
 
     /// `text s` with `width = s.chars().count()` — the number of
     /// codepoints, exactly matching HS `P.text`'s `length s` (HS
@@ -368,8 +375,12 @@ impl Doc {
 
     /// HS `<+>` (beside with one space).
     pub fn beside_sp(self, other: Doc) -> Doc {
-        if matches!(self, Doc::Empty) { return other; }
-        if matches!(other, Doc::Empty) { return self; }
+        if matches!(self, Doc::Empty) {
+            return other;
+        }
+        if matches!(other, Doc::Empty) {
+            return self;
+        }
         self.beside(Doc::char(' ')).beside(other)
     }
 
@@ -518,7 +529,9 @@ pub fn with_tag(tag: &str, attrs: &[(&str, &str)], inner: Doc) -> Doc {
     }
     open.push('>');
     let close = format!("</{tag}>");
-    Doc::text_w(&open, 0).beside(inner).beside(Doc::text_w(&close, 0))
+    Doc::text_w(&open, 0)
+        .beside(inner)
+        .beside(Doc::text_w(&close, 0))
 }
 
 /// HS `closedTag tag attrs` (`Html.hs:71-73`): `<tag …/>` as zero-width text.
@@ -560,13 +573,25 @@ pub fn hl_close(_style: Hl) -> String {
 
 // -- General highlighters (HS Highlight.hs:48-59) -----------------------------
 
-pub fn comment(d: Doc) -> Doc { d.highlight(Hl::Comment) }
-pub fn keyword(d: Doc) -> Doc { d.highlight(Hl::Keyword) }
-pub fn operator(d: Doc) -> Doc { d.highlight(Hl::Operator) }
+pub fn comment(d: Doc) -> Doc {
+    d.highlight(Hl::Comment)
+}
+pub fn keyword(d: Doc) -> Doc {
+    d.highlight(Hl::Keyword)
+}
+pub fn operator(d: Doc) -> Doc {
+    d.highlight(Hl::Operator)
+}
 
-pub fn comment_(s: &str) -> Doc { comment(Doc::text(s)) }
-pub fn keyword_(s: &str) -> Doc { keyword(Doc::text(s)) }
-pub fn operator_(s: &str) -> Doc { operator(Doc::text(s)) }
+pub fn comment_(s: &str) -> Doc {
+    comment(Doc::text(s))
+}
+pub fn keyword_(s: &str) -> Doc {
+    keyword(Doc::text(s))
+}
+pub fn operator_(s: &str) -> Doc {
+    operator(Doc::text(s))
+}
 
 /// HS `opParens d = operator_ "(" <> d <> operator_ ")"` (`Highlight.hs:58-59`).
 pub fn op_parens(d: Doc) -> Doc {
@@ -655,10 +680,14 @@ pub fn postprocess_html(s: &str) -> String {
 // Smart constructors (internal)
 // ============================================================================
 
-fn rc(d: Doc) -> Rc<Doc> { Rc::new(d) }
+fn rc(d: Doc) -> Rc<Doc> {
+    Rc::new(d)
+}
 
 /// HS `nilAbove_`.
-fn nil_above_(d: Doc) -> Doc { Doc::NilAbove(rc(d)) }
+fn nil_above_(d: Doc) -> Doc {
+    Doc::NilAbove(rc(d))
+}
 
 /// HS `textBeside_ s p`.
 fn text_beside_(s: Rc<str>, w: usize, p: Doc) -> Doc {
@@ -666,14 +695,22 @@ fn text_beside_(s: Rc<str>, w: usize, p: Doc) -> Doc {
 }
 
 /// HS `nest_ k p`.
-fn nest_(k: isize, p: Doc) -> Doc { Doc::Nest(k, rc(p)) }
+fn nest_(k: isize, p: Doc) -> Doc {
+    Doc::Nest(k, rc(p))
+}
 
 /// HS `union_ p q`.
-fn union_(p: Doc, q: Doc) -> Doc { Doc::Union(rc(p), rc(q)) }
+fn union_(p: Doc, q: Doc) -> Doc {
+    Doc::Union(rc(p), rc(q))
+}
 
 /// HS `mkUnion`: drop union if left is Empty.
 fn mk_union(p: Doc, q: Doc) -> Doc {
-    if matches!(p, Doc::Empty) { Doc::Empty } else { union_(p, q) }
+    if matches!(p, Doc::Empty) {
+        Doc::Empty
+    } else {
+        union_(p, q)
+    }
 }
 
 /// HS `mkNest`.
@@ -697,7 +734,9 @@ fn elide_nest(d: Doc) -> Doc {
 
 /// HS `reduceDoc` — our Doc has no `Above`/`Beside` lazy nodes so
 /// reduceDoc is the identity.  Kept for parity.
-fn reduce_doc(d: Doc) -> Doc { d }
+fn reduce_doc(d: Doc) -> Doc {
+    d
+}
 
 // ============================================================================
 // Beside (HS `beside` — eager, RDoc->RDoc)
@@ -729,18 +768,16 @@ fn beside_inner(p: Doc, g: bool, q: Doc) -> Doc {
         // deferring the right branch exactly as the `LazyUnion` arm below does.
         Doc::Union(a, b) => {
             let q2 = q.clone();
-            lazy_union(
-                beside_inner((*a).clone(), g, q),
-                move || beside_inner((*b).clone(), g, q2),
-            )
+            lazy_union(beside_inner((*a).clone(), g, q), move || {
+                beside_inner((*b).clone(), g, q2)
+            })
         }
         // Lazy distribution of `beside` over a LazyUnion (keep right lazy).
         Doc::LazyUnion(a, r) => {
             let q2 = q.clone();
-            lazy_union(
-                beside_inner((*a).clone(), g, q),
-                move || beside_inner((*r.force()).clone(), g, q2),
-            )
+            lazy_union(beside_inner((*a).clone(), g, q), move || {
+                beside_inner((*r.force()).clone(), g, q2)
+            })
         }
         // HS `beside (NilAbove p) g q = nilAbove_ $! beside p g q`.
         Doc::NilAbove(p1) => nil_above_(beside_inner((*p1).clone(), g, q)),
@@ -771,8 +808,12 @@ fn beside_inner(p: Doc, g: bool, q: Doc) -> Doc {
 // ============================================================================
 
 fn above_g(p: Doc, g: bool, q: Doc) -> Doc {
-    if matches!(p, Doc::Empty) { return q; }
-    if matches!(q, Doc::Empty) { return p; }
+    if matches!(p, Doc::Empty) {
+        return q;
+    }
+    if matches!(q, Doc::Empty) {
+        return p;
+    }
     let p = reduce_doc(p);
     let q = reduce_doc(q);
     above_nest(p, g, 0, q)
@@ -797,18 +838,16 @@ fn above_nest(p: Doc, g: bool, k: isize, q: Doc) -> Doc {
         // right branch a memoised thunk.
         Doc::Union(p1, p2) => {
             let q2 = q.clone();
-            lazy_union(
-                above_nest((*p1).clone(), g, k, q),
-                move || above_nest((*p2).clone(), g, k, q2),
-            )
+            lazy_union(above_nest((*p1).clone(), g, k, q), move || {
+                above_nest((*p2).clone(), g, k, q2)
+            })
         }
         // Lazy distribution: keep the right branch a thunk.
         Doc::LazyUnion(p1, r) => {
             let q2 = q.clone();
-            lazy_union(
-                above_nest((*p1).clone(), g, k, q),
-                move || above_nest((*r.force()).clone(), g, k, q2),
-            )
+            lazy_union(above_nest((*p1).clone(), g, k, q), move || {
+                above_nest((*r.force()).clone(), g, k, q2)
+            })
         }
         Doc::Empty => mk_nest(k, q),
         Doc::Nest(k1, inner) => nest_(k1, above_nest((*inner).clone(), g, k - k1, q)),
@@ -831,10 +870,9 @@ fn nil_above_nest(g: bool, k: isize, q: Doc) -> Doc {
     match q {
         Doc::Empty => Doc::Empty,
         Doc::Nest(k1, inner) => nil_above_nest(g, k + k1, (*inner).clone()),
-        Doc::LazyUnion(p1, r) => lazy_union(
-            nil_above_nest(g, k, (*p1).clone()),
-            move || nil_above_nest(g, k, (*r.force()).clone()),
-        ),
+        Doc::LazyUnion(p1, r) => lazy_union(nil_above_nest(g, k, (*p1).clone()), move || {
+            nil_above_nest(g, k, (*r.force()).clone())
+        }),
         other => {
             if !g && k > 0 {
                 // HS: `textBeside_ (NoAnnot (Str (indent k)) k) q` —
@@ -871,16 +909,24 @@ fn one_liner(d: Doc) -> Doc {
 // ============================================================================
 
 /// HS `sep` — try one line (separated by spaces); else vertical.
-pub fn sep(ds: Vec<Doc>) -> Doc { sep_x(true, ds) }
+pub fn sep(ds: Vec<Doc>) -> Doc {
+    sep_x(true, ds)
+}
 
 /// HS `cat` — try one line (no separator); else vertical.
-pub fn cat(ds: Vec<Doc>) -> Doc { sep_x(false, ds) }
+pub fn cat(ds: Vec<Doc>) -> Doc {
+    sep_x(false, ds)
+}
 
 /// HS `fsep` — fill-style paragraph (greedy wrap), space-separated.
-pub fn fsep(ds: Vec<Doc>) -> Doc { fill(true, ds) }
+pub fn fsep(ds: Vec<Doc>) -> Doc {
+    fill(true, ds)
+}
 
 /// HS `fcat` — fill-style paragraph, no separator.
-pub fn fcat(ds: Vec<Doc>) -> Doc { fill(false, ds) }
+pub fn fcat(ds: Vec<Doc>) -> Doc {
+    fill(false, ds)
+}
 
 /// HS `ppTerms sepa n lead finish ts` (Term/Term.hs:288-290): an `fcat` of
 /// `text lead`, each element rendered and `nest(1)`'d (all but the last
@@ -917,7 +963,9 @@ pub fn fcat_bracketed<T>(
 pub fn fun_app_doc<T>(name: &str, args: &[&T], render: impl Fn(&T) -> Doc) -> Doc {
     let arg_docs: Vec<Doc> = args.iter().map(|a| render(a)).collect();
     let body = fsep(punctuate(Doc::char(','), arg_docs));
-    Doc::text(format!("{}(", name)).beside(body).beside(Doc::text(")"))
+    Doc::text(format!("{}(", name))
+        .beside(body)
+        .beside(Doc::text(")"))
 }
 
 /// HS `nestShort' lead finish body =
@@ -976,7 +1024,9 @@ fn foldr_beside(g: bool, ds: Vec<Doc>) -> Doc {
 }
 
 fn sep_x(x: bool, mut ds: Vec<Doc>) -> Doc {
-    if ds.is_empty() { return Doc::Empty; }
+    if ds.is_empty() {
+        return Doc::Empty;
+    }
     let first = ds.remove(0);
     sep1(x, reduce_doc(first), 0, ds)
 }
@@ -1019,7 +1069,11 @@ fn sep_nb(g: bool, p: Doc, k: isize, ys: Vec<Doc>) -> Doc {
             //   where rest | g = hsep ys | otherwise = hcat ys
             // The flag is `False` (see the XXX comment in pretty-1.1.3.6
             // — GHC's bundled pretty settled on False).
-            let rest = if g { hsep(ys.clone()) } else { hcat(ys.clone()) };
+            let rest = if g {
+                hsep(ys.clone())
+            } else {
+                hcat(ys.clone())
+            };
             let left = one_liner(nil_beside(g, reduce_doc(rest)));
             let right = nil_above_nest(false, k, reduce_doc(vcat(ys)));
             mk_union(left, right)
@@ -1033,10 +1087,9 @@ fn nil_beside(g: bool, p: Doc) -> Doc {
     match p {
         Doc::Empty => Doc::Empty,
         Doc::Nest(_, inner) => nil_beside(g, (*inner).clone()),
-        Doc::LazyUnion(p1, r) => lazy_union(
-            nil_beside(g, (*p1).clone()),
-            move || nil_beside(g, (*r.force()).clone()),
-        ),
+        Doc::LazyUnion(p1, r) => lazy_union(nil_beside(g, (*p1).clone()), move || {
+            nil_beside(g, (*r.force()).clone())
+        }),
         other => {
             if g {
                 text_beside_(Rc::from(" "), 1, other)
@@ -1049,7 +1102,9 @@ fn nil_beside(g: bool, p: Doc) -> Doc {
 
 /// HS `fill` — paragraph-fill greedy wrap.
 fn fill(g: bool, mut ds: Vec<Doc>) -> Doc {
-    if ds.is_empty() { return Doc::Empty; }
+    if ds.is_empty() {
+        return Doc::Empty;
+    }
     let first = ds.remove(0);
     fill1(g, reduce_doc(first), 0, ds)
 }
@@ -1078,7 +1133,9 @@ fn fill1(g: bool, p: Doc, k: isize, ys: Vec<Doc>) -> Doc {
         Doc::Empty => mk_nest(k, fill(g, ys)),
         Doc::Nest(n, inner) => nest_(n, fill1(g, (*inner).clone(), k - n, ys)),
         Doc::NilAbove(p) => nil_above_(above_nest((*p).clone(), false, k, fill(g, ys))),
-        Doc::TextBeside(s, w, p) => text_beside_(s, w, fill_nb(g, (*p).clone(), k - w as isize, ys)),
+        Doc::TextBeside(s, w, p) => {
+            text_beside_(s, w, fill_nb(g, (*p).clone(), k - w as isize, ys))
+        }
     }
 }
 
@@ -1087,7 +1144,9 @@ fn fill_nb(g: bool, p: Doc, k: isize, ys: Vec<Doc>) -> Doc {
     match p {
         Doc::Nest(_, inner) => fill_nb(g, (*inner).clone(), k, ys),
         Doc::Empty => {
-            if ys.is_empty() { return Doc::Empty; }
+            if ys.is_empty() {
+                return Doc::Empty;
+            }
             // Skip leading Empty ys.
             let mut iter = ys.into_iter();
             let y_first = loop {
@@ -1157,7 +1216,11 @@ fn get(w: isize, r: isize, d: Doc) -> Doc {
             // `p` overflows.
             let p1 = get(w, r, (*p).clone());
             let budget = std::cmp::min(w, r); // sl = 0 here
-            if fits(budget, &p1) { p1 } else { get(w, r, (*q).clone()) }
+            if fits(budget, &p1) {
+                p1
+            } else {
+                get(w, r, (*q).clone())
+            }
         }
         // CRITICAL (task #20 perf): a `LazyUnion` must NOT be `force()`d at
         // the match head — that RUNS the right-branch thunk (an
@@ -1169,7 +1232,11 @@ fn get(w: isize, r: isize, d: Doc) -> Doc {
         Doc::LazyUnion(p, rt) => {
             let p1 = get(w, r, (*p).clone());
             let budget = std::cmp::min(w, r); // sl = 0 here
-            if fits(budget, &p1) { p1 } else { get(w, r, (*rt.force()).clone()) }
+            if fits(budget, &p1) {
+                p1
+            } else {
+                get(w, r, (*rt.force()).clone())
+            }
         }
         Doc::Deferred(c) => get(w, r, (*c.force()).clone()),
     }
@@ -1193,31 +1260,39 @@ fn get1(w: isize, r: isize, sl: isize, d: Doc) -> Doc {
         Doc::Union(p, q) => {
             let p1 = get1(w, r, sl, (*p).clone());
             let budget = std::cmp::min(w, r) - sl;
-            if fits(budget, &p1) { p1 } else { get1(w, r, sl, (*q).clone()) }
+            if fits(budget, &p1) {
+                p1
+            } else {
+                get1(w, r, sl, (*q).clone())
+            }
         }
         // See `get`'s LazyUnion arm: force the right branch ONLY when the
         // flat branch overflows (HS call-by-need).
         Doc::LazyUnion(p, rt) => {
             let p1 = get1(w, r, sl, (*p).clone());
             let budget = std::cmp::min(w, r) - sl;
-            if fits(budget, &p1) { p1 } else { get1(w, r, sl, (*rt.force()).clone()) }
+            if fits(budget, &p1) {
+                p1
+            } else {
+                get1(w, r, sl, (*rt.force()).clone())
+            }
         }
         Doc::Deferred(c) => get1(w, r, sl, (*c.force()).clone()),
     }
 }
 
-
-
 /// HS `fits`.
 fn fits(n: isize, d: &Doc) -> bool {
-    if n < 0 { return false; }
+    if n < 0 {
+        return false;
+    }
     match d {
         Doc::NoDoc => false,
         Doc::Empty => true,
         Doc::NilAbove(_) => true,
         Doc::TextBeside(_, w, p) => fits(n - *w as isize, p),
         Doc::Nest(_, p) => fits(n, p),
-        Doc::Union(p, _) => fits(n, p),  // pre-reduced, but be defensive
+        Doc::Union(p, _) => fits(n, p), // pre-reduced, but be defensive
         // Only the left (flat) branch matters for fits; never force `q`.
         Doc::LazyUnion(p, _) => fits(n, p),
         // A deferred reduction tail: force it (memoised) and continue.
@@ -1304,7 +1379,9 @@ fn lay_loop(k0: isize, d: &Doc, out: &mut String, line_start0: bool) {
 /// E.g. `punctuate "," [a;b;c]` → `[a<>"," ; b<>"," ; c]`.
 pub fn punctuate(sep: Doc, ds: Vec<Doc>) -> Vec<Doc> {
     let n = ds.len();
-    if n == 0 { return Vec::new(); }
+    if n == 0 {
+        return Vec::new();
+    }
     let mut out = Vec::with_capacity(n);
     for (i, d) in ds.into_iter().enumerate() {
         if i + 1 == n {
@@ -1426,13 +1503,14 @@ mod tests {
         // after the outermost sep wraps to vertical, the inner sep
         // gets `w` shrunk by `sl` (col where prior text started) and
         // should wrap too.
-        let conn = |l: Doc, r: Doc| {
-            sep(vec![l.beside_sp(Doc::text("\u{2227}")), r])
-        };
+        let conn = |l: Doc, r: Doc| sep(vec![l.beside_sp(Doc::text("\u{2227}")), r]);
         // Simpler test: sep deep nesting at width 40 should wrap.
-        let mut d = Doc::text("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");  // 36 chars
+        let mut d = Doc::text("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"); // 36 chars
         for _ in 0..3 {
-            d = conn(Doc::text("[").beside(d).beside(Doc::text("]")), Doc::text("y"));
+            d = conn(
+                Doc::text("[").beside(d).beside(Doc::text("]")),
+                Doc::text("y"),
+            );
         }
         let out = d.render_with(50, 50);
         // Verify SOMETHING wrapped (we'd be at >50 cols otherwise).
@@ -1453,10 +1531,7 @@ mod tests {
         let and = "\u{2227}";
         let conn = |l: Doc, r: Doc| {
             // HS: sep [opParens(l) <+> op, opParens(r)]
-            sep(vec![
-                op_parens(l).beside_sp(Doc::text(and)),
-                op_parens(r),
-            ])
+            sep(vec![op_parens(l).beside_sp(Doc::text(and)), op_parens(r)])
         };
         let a = eq("pki1", "pki2");
         let b = eq("pkr1", "pkr2");
@@ -1498,7 +1573,9 @@ mod tests {
         // and verify the fsep breaks before "'e',".
         let arg1 = Doc::text("h(<h(<h(<h(<ci2, pekR, '1'>), z, '1'>), z.1, '1'>), ~psk, '3'>)");
         let arg2 = Doc::text("'e'");
-        let arg3 = Doc::text("h(<h(<hi1, pekR>), h(<h(<h(<h(<ci2, pekR, '1'>), z, '1'>), z.1, '1'>), ~psk, '2'>)>)");
+        let arg3 = Doc::text(
+            "h(<h(<hi1, pekR>), h(<h(<h(<h(<ci2, pekR, '1'>), z, '1'>), z.1, '1'>), ~psk, '2'>)>)",
+        );
         let comma = Doc::text(",");
         let items = punctuate(comma, vec![arg1, arg2, arg3]);
         let body = fsep(items);
@@ -1597,29 +1674,43 @@ mod tests {
         // (the element fits within the ribbon measured from the line
         // start).  This pins the `fcat` fill-boundary byte-for-byte vs
         // `Text.PrettyPrint.HughesPJ` at lineLength 110 / ribbon 73.
-        let elems = ["~CDSK_j_USR_O","MDSK_j_USR_O","KSQ.1","$USR","keystatus","CD_j"];
+        let elems = [
+            "~CDSK_j_USR_O",
+            "MDSK_j_USR_O",
+            "KSQ.1",
+            "$USR",
+            "keystatus",
+            "CD_j",
+        ];
         let n = elems.len();
         let mut parts: Vec<Doc> = Vec::new();
         parts.push(Doc::text("<"));
-        for (i,e) in elems.iter().enumerate() {
+        for (i, e) in elems.iter().enumerate() {
             let mut d = Doc::text(*e);
-            if i+1<n { d = d.beside(Doc::text(", ")); }
+            if i + 1 < n {
+                d = d.beside(Doc::text(", "));
+            }
             parts.push(d.nest(1));
         }
         parts.push(Doc::text(">"));
         let tuple = fcat(parts);
         // senc( tuple , ~UK_i_USR_O ): "senc(" <> fsep(punctuate(",", [tuple,key])) <> ")"
-        let senc_body = fsep(punctuate(Doc::char(','), vec![tuple, Doc::text("~UK_i_USR_O")]));
+        let senc_body = fsep(punctuate(
+            Doc::char(','),
+            vec![tuple, Doc::text("~UK_i_USR_O")],
+        ));
         let senc = Doc::text("senc(").beside(senc_body).beside(Doc::text(")"));
         // !KU( senc ): nestShort' ("!KU(", ")", fsep([senc]))
-        let lead="!KU(";
+        let lead = "!KU(";
         let nku_body = fsep(punctuate(Doc::char(','), vec![senc]));
         let nn = lead.chars().count() as isize + 1;
         let above = Doc::text(lead).above(nku_body.nest(nn));
         let nku = sep(vec![above, Doc::text(")")]);
         // Action goal: solve( !KU(...) @ #vk.11 )
         let goal = nku.beside_sp(Doc::text("@")).beside_sp(Doc::text("#vk.11"));
-        let solve = Doc::text("solve(").beside_sp(goal).beside_sp(Doc::text(")"));
+        let solve = Doc::text("solve(")
+            .beside_sp(goal)
+            .beside_sp(Doc::text(")"));
         let out = solve.nest(16).render();
         let first = out.split('\n').next().unwrap();
         assert!(
@@ -1691,7 +1782,10 @@ mod sep_nb_regression {
             sep(vec![quant, sep(vec![dante, conn, dsucc])])
         };
         let mp = punctuate(Doc::text(" |"), vec![opp(mkdj("x")), opp(mkdj("y"))]);
-        let out = Doc::text("(").beside(sep(mp)).beside(Doc::text(")")).render_with(50, 33);
+        let out = Doc::text("(")
+            .beside(sep(mp))
+            .beside(Doc::text(")"))
+            .render_with(50, 33);
         let expected = "\
 ((Qx.
    (DANTE)

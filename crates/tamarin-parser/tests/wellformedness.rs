@@ -11,8 +11,10 @@ use tamarin_parser::{parse_theory, wf};
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap()
-        .parent().unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .join("tests")
         .join("wellformedness_fixtures")
 }
@@ -26,17 +28,25 @@ struct Fixture {
 
 fn load_fixtures() -> Vec<Fixture> {
     let dir = fixtures_dir();
-    let expected = fs::read_to_string(dir.join("expected.txt"))
-        .expect("expected.txt missing");
+    let expected = fs::read_to_string(dir.join("expected.txt")).expect("expected.txt missing");
     let mut out = Vec::new();
     for line in expected.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') { continue; }
-        let (lhs, rhs) = match line.split_once(':') { Some(p) => p, None => continue };
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (lhs, rhs) = match line.split_once(':') {
+            Some(p) => p,
+            None => continue,
+        };
         let mut parts = lhs.split_whitespace();
         let name = parts.next().expect("fixture name");
         let mut is_diff = false;
-        for f in parts { if f == "--diff" { is_diff = true; } }
+        for f in parts {
+            if f == "--diff" {
+                is_diff = true;
+            }
+        }
         let expected_topics: BTreeSet<String> = rhs
             .split(',')
             .map(|s| s.trim().to_string())
@@ -68,7 +78,9 @@ fn every_fixture_parses_and_matches() {
                 continue;
             }
         };
-        if fx.is_diff { thy.is_diff = true; }
+        if fx.is_diff {
+            thy.is_diff = true;
+        }
         // Normalise trailing whitespace: some HS wellformedness titles
         // carry a source-literal trailing space (e.g.
         // "...not in any right-hand-side "), which the comma-separated
@@ -91,7 +103,9 @@ fn every_fixture_parses_and_matches() {
         if !expected.is_subset(&topics) {
             let missing: Vec<_> = expected.difference(&topics).collect();
             failures.push(format!(
-                "TOPIC  {}: missing {:?} (got {:?})", fx.name, missing, topics));
+                "TOPIC  {}: missing {:?} (got {:?})",
+                fx.name, missing, topics
+            ));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

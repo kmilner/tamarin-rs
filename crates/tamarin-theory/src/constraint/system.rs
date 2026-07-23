@@ -70,8 +70,8 @@ impl PrebuiltAdj {
 /// mutation path; instead a caller running many inserts against a
 /// stable-between-inserts Vec builds one with [`System::build_less_index`]
 /// and passes it by `&mut`.
-pub type LessIndex = tamarin_utils::FastMap<
-    (tamarin_term::lterm::LVar, tamarin_term::lterm::LVar), usize>;
+pub type LessIndex =
+    tamarin_utils::FastMap<(tamarin_term::lterm::LVar, tamarin_term::lterm::LVar), usize>;
 
 // =============================================================================
 // Source kind / side annotations
@@ -80,11 +80,17 @@ pub type LessIndex = tamarin_utils::FastMap<
 /// Whether a system arose from raw or refined source-traces. Mirrors
 /// Haskell's `SourceKind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Hash)]
-pub enum SourceKind { RawSources, RefinedSources }
+pub enum SourceKind {
+    RawSources,
+    RefinedSources,
+}
 
 /// Whether the system tracks the LHS or RHS of a diff theory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Hash)]
-pub enum Side { LHS, RHS }
+pub enum Side {
+    LHS,
+    RHS,
+}
 
 // =============================================================================
 // Write-sealed equation-store field
@@ -118,7 +124,9 @@ pub struct SealedEqStore(Arc<EquationStore>);
 impl std::ops::Deref for SealedEqStore {
     type Target = Arc<EquationStore>;
     #[inline]
-    fn deref(&self) -> &Arc<EquationStore> { &self.0 }
+    fn deref(&self) -> &Arc<EquationStore> {
+        &self.0
+    }
 }
 
 // Delegate to the inner `Arc` so `{:?}` output (and any Debug-derived
@@ -333,9 +341,9 @@ fn canon_entries_eq(
     b: &[(Arc<Guarded>, Arc<Guarded>, u64)],
 ) -> bool {
     a.len() == b.len()
-        && a.iter().zip(b.iter()).all(|((_, ca, ha), (_, cb, hb))| {
-            *ha == *hb && ca.as_ref() == cb.as_ref()
-        })
+        && a.iter()
+            .zip(b.iter())
+            .all(|((_, ca, ha), (_, cb, hb))| *ha == *hb && ca.as_ref() == cb.as_ref())
 }
 
 #[derive(Debug, Default)]
@@ -587,7 +595,9 @@ impl PartialEq for System {
 impl std::ops::Deref for System {
     type Target = SystemContent;
     #[inline]
-    fn deref(&self) -> &SystemContent { &self.content }
+    fn deref(&self) -> &SystemContent {
+        &self.content
+    }
 }
 
 /// Canonicalize a Goal for dedup-comparison in `add_goal_with_loop_flag`.
@@ -718,8 +728,7 @@ impl System {
     /// total no-op.
     #[inline]
     pub fn subst_marker_matches(&self) -> bool {
-        self.subst_applied_marker.get()
-            == Some((self.content_stamp.get(), self.subst_stamp.get()))
+        self.subst_applied_marker.get() == Some((self.content_stamp.get(), self.subst_stamp.get()))
     }
 
     /// Record the verified-identity marker at the current stamp pair.
@@ -730,10 +739,8 @@ impl System {
     /// no explicit invalidation is needed.
     #[inline]
     pub fn record_subst_marker(&self) {
-        self.subst_applied_marker.set(Some((
-            self.content_stamp.get(),
-            self.subst_stamp.get(),
-        )));
+        self.subst_applied_marker
+            .set(Some((self.content_stamp.get(), self.subst_stamp.get())));
     }
 
     /// Drop the verified-identity marker.  For whole-system rewriters
@@ -773,9 +780,13 @@ impl System {
         // replaced by a non-false one resurrects a dead case — print the
         // installing call chain (RUST_BACKTRACE=1 for symbols).
         if tamarin_utils::env_gate!("TAM_DBG_EQ_FALSE_WIPE")
-            && self.content.eq_store.0.is_false() && !es.is_false() {
-            eprintln!("[EQ_FALSE_WIPE] set_eq_store false->ok\n{}",
-                std::backtrace::Backtrace::force_capture());
+            && self.content.eq_store.0.is_false()
+            && !es.is_false()
+        {
+            eprintln!(
+                "[EQ_FALSE_WIPE] set_eq_store false->ok\n{}",
+                std::backtrace::Backtrace::force_capture()
+            );
         }
         // Module-private `SealedEqStore` constructor: the only place (with
         // `take_eq_store`/`eq_store_mut`) a sealed value is produced.
@@ -973,9 +984,17 @@ impl System {
                 let entries = reused + canoned;
                 eprintln!(
                     "[CANON_STATS] calls={} hits={} ({:.1}%) incr={} entry_reuse={}/{} ({:.1}%)",
-                    calls, hits, 100.0 * hits as f64 / calls as f64, incr,
-                    reused, entries,
-                    if entries == 0 { 0.0 } else { 100.0 * reused as f64 / entries as f64 },
+                    calls,
+                    hits,
+                    100.0 * hits as f64 / calls as f64,
+                    incr,
+                    reused,
+                    entries,
+                    if entries == 0 {
+                        0.0
+                    } else {
+                        100.0 * reused as f64 / entries as f64
+                    },
                 );
             }
         }
@@ -1009,7 +1028,10 @@ impl System {
         // Stamp miss: incrementally rebuild, reusing each entry whose store
         // `Arc` pointer still matches the previous generation.
         let table = Arc::new(Self::build_canon_incremental(
-            store, stamp, current.as_deref(), &canon,
+            store,
+            stamp,
+            current.as_deref(),
+            &canon,
         ));
         // Oracle: the pointer-keyed incremental rebuild must be byte-identical
         // to a from-scratch full recanon — a mismatch would mean a reused
@@ -1108,7 +1130,14 @@ impl System {
     /// All `In`- and protocol-premise terms in the system, as
     /// `(node, premise, term-index, term)`. Port of HS `allPrems`
     /// (System.hs:894-899).
-    pub fn all_prems(&self) -> Vec<(NodeId, crate::rule::PremIdx, usize, tamarin_term::lterm::LNTerm)> {
+    pub fn all_prems(
+        &self,
+    ) -> Vec<(
+        NodeId,
+        crate::rule::PremIdx,
+        usize,
+        tamarin_term::lterm::LNTerm,
+    )> {
         let mut out = Vec::new();
         for (i, ru) in self.nodes.iter() {
             for (j, fa) in ru.enumerate_premises() {
@@ -1124,11 +1153,18 @@ impl System {
 
     /// All unsolved destruction chains, as `(NodeConc, NodePrem)`. Port of HS
     /// `unsolvedChains` (System.hs:1601-1605).
-    pub fn unsolved_chains(&self) -> Vec<(crate::constraint::constraints::NodeConc, crate::constraint::constraints::NodePrem)> {
+    pub fn unsolved_chains(
+        &self,
+    ) -> Vec<(
+        crate::constraint::constraints::NodeConc,
+        crate::constraint::constraints::NodePrem,
+    )> {
         use crate::constraint::constraints::Goal;
         let mut out = Vec::new();
         for (g, status) in self.goals.iter() {
-            if status.solved { continue; }
+            if status.solved {
+                continue;
+            }
             if let Goal::Chain(from, to) = g {
                 out.push((from.clone(), to.clone()));
             }
@@ -1138,11 +1174,18 @@ impl System {
 
     /// All unsolved premise goals, as `(NodePrem, LNFact)`. Port of HS
     /// `unsolvedPremises` (System.hs:1505-1509).
-    pub fn unsolved_premises(&self) -> Vec<(crate::constraint::constraints::NodePrem, crate::fact::LNFact)> {
+    pub fn unsolved_premises(
+        &self,
+    ) -> Vec<(
+        crate::constraint::constraints::NodePrem,
+        crate::fact::LNFact,
+    )> {
         use crate::constraint::constraints::Goal;
         let mut out = Vec::new();
         for (g, status) in self.goals.iter() {
-            if status.solved { continue; }
+            if status.solved {
+                continue;
+            }
             if let Goal::Premise(premidx, fa) = g {
                 out.push((premidx.clone(), fa.clone()));
             }
@@ -1245,7 +1288,9 @@ impl System {
         if let Some(cur) = self.node_max_cache.get() {
             let mut m = cur;
             crate::constraint::solver::reduction::bm_rule_pub(r, &mut m);
-            if m != cur { self.node_max_cache.set(Some(m)); }
+            if m != cur {
+                self.node_max_cache.set(Some(m));
+            }
         }
     }
 
@@ -1285,7 +1330,9 @@ impl System {
         if let Some(cur) = self.max_var_idx_cache.get() {
             let mut m = cur;
             crate::constraint::solver::reduction::bm_term_pub(t, &mut m);
-            if m != cur { self.max_var_idx_cache.set(Some(m)); }
+            if m != cur {
+                self.max_var_idx_cache.set(Some(m));
+            }
         }
     }
 
@@ -1296,7 +1343,9 @@ impl System {
         if let Some(cur) = self.max_var_idx_cache.get() {
             let mut m = cur;
             crate::constraint::solver::reduction::bm_fact_pub(fa, &mut m);
-            if m != cur { self.max_var_idx_cache.set(Some(m)); }
+            if m != cur {
+                self.max_var_idx_cache.set(Some(m));
+            }
         }
     }
 
@@ -1307,7 +1356,9 @@ impl System {
         if let Some(cur) = self.max_var_idx_cache.get() {
             let mut m = cur;
             crate::constraint::solver::reduction::bm_rule_pub(r, &mut m);
-            if m != cur { self.max_var_idx_cache.set(Some(m)); }
+            if m != cur {
+                self.max_var_idx_cache.set(Some(m));
+            }
         }
     }
 
@@ -1317,7 +1368,9 @@ impl System {
         self.bump_content_stamp();
         if let Some(cur) = self.max_var_idx_cache.get() {
             let n = crate::guarded::max_var_idx(f);
-            if n > cur { self.max_var_idx_cache.set(Some(n)); }
+            if n > cur {
+                self.max_var_idx_cache.set(Some(n));
+            }
         }
     }
 
@@ -1327,7 +1380,9 @@ impl System {
         // Bump BEFORE the cache-None early return so a goal add still moves
         // `content_stamp` when the max-var cache is currently invalidated.
         self.bump_content_stamp();
-        if self.max_var_idx_cache.get().is_none() { return; }
+        if self.max_var_idx_cache.get().is_none() {
+            return;
+        }
         match g {
             Goal::Action(i, fa) => {
                 self.bump_cache_lvar(i);
@@ -1401,7 +1456,10 @@ impl System {
             let want_pre = dbg_insert_goal_include_precompute();
             if !in_pre || want_pre {
                 let tag = if in_pre { "<precompute>" } else { "<proof>" };
-                eprintln!("[RS_INS_GOAL] lemma={} gsNr={} solved=false loops={} goal={:?}", tag, age, looping, g);
+                eprintln!(
+                    "[RS_INS_GOAL] lemma={} gsNr={} solved=false loops={} goal={:?}",
+                    tag, age, looping, g
+                );
             }
         }
         // Single dedup scan: locate the existing slot (if any) once and
@@ -1436,8 +1494,12 @@ impl System {
                 Goal::Disj(_) => "Disj".to_string(),
                 Goal::Subterm(_) => "Subterm".to_string(),
             };
-            eprintln!("[RS_GOAL_INSERT] gsNr={} isNew={} kind={}",
-                age, slot_idx.is_none(), kindstr);
+            eprintln!(
+                "[RS_GOAL_INSERT] gsNr={} isNew={} kind={}",
+                age,
+                slot_idx.is_none(),
+                kindstr
+            );
         }
         if let Some(idx) = slot_idx {
             let slot = &mut self.goals_mut()[idx];
@@ -1446,7 +1508,11 @@ impl System {
             // existing one is always smaller, so leave it unchanged.
             return;
         }
-        let st = GoalStatus { looping, nr: age, ..Default::default() };
+        let st = GoalStatus {
+            looping,
+            nr: age,
+            ..Default::default()
+        };
         self.bump_cache_goal(&g);
         self.goals_mut().push((g, st));
     }
@@ -1526,7 +1592,8 @@ impl System {
     pub fn build_less_index(&self) -> LessIndex {
         let mut idx: LessIndex = tamarin_utils::FastMap::default();
         for (i, la) in self.less_atoms.iter().enumerate() {
-            idx.entry((la.smaller.clone(), la.larger.clone())).or_insert(i);
+            idx.entry((la.smaller.clone(), la.larger.clone()))
+                .or_insert(i);
         }
         idx
     }
@@ -1581,18 +1648,24 @@ impl System {
     /// relation depends only on `&self`, never on the `i`/`j` query
     /// arguments.
     pub fn build_always_before_adj(&self) -> PrebuiltAdj {
-        let mut adj: std::collections::BTreeMap<NodeId, Vec<NodeId>>
-            = std::collections::BTreeMap::new();
+        let mut adj: std::collections::BTreeMap<NodeId, Vec<NodeId>> =
+            std::collections::BTreeMap::new();
         for l in &self.less_atoms {
-            adj.entry(l.smaller.clone()).or_default().push(l.larger.clone());
+            adj.entry(l.smaller.clone())
+                .or_default()
+                .push(l.larger.clone());
         }
         for e in &self.edges {
-            adj.entry(e.src.0.clone()).or_default().push(e.tgt.0.clone());
+            adj.entry(e.src.0.clone())
+                .or_default()
+                .push(e.tgt.0.clone());
         }
         // HS-faithful `unsolvedChains` contribution to rawEdgeRel
         // (`System.hs`).
         for (g, st) in self.goals.iter() {
-            if st.solved { continue; }
+            if st.solved {
+                continue;
+            }
             if let crate::constraint::constraints::Goal::Chain(c, p) = g {
                 adj.entry(c.0.clone()).or_default().push(p.0.clone());
             }
@@ -1614,19 +1687,21 @@ impl System {
         // `simpInjectiveFactEq` `i /= j` filter, contradictions.rs's
         // `id == c.0` skip), exactly as HS does, so the `i == i => true`
         // result is never observable in either codebase.
-        if i == j { return false; }
+        if i == j {
+            return false;
+        }
         let adj = &adj.adj;
         // BFS from i until j.
-        let mut frontier: std::collections::VecDeque<NodeId>
-            = std::collections::VecDeque::new();
-        let mut visited: std::collections::BTreeSet<NodeId>
-            = std::collections::BTreeSet::new();
+        let mut frontier: std::collections::VecDeque<NodeId> = std::collections::VecDeque::new();
+        let mut visited: std::collections::BTreeSet<NodeId> = std::collections::BTreeSet::new();
         frontier.push_back(i.clone());
         visited.insert(i.clone());
         while let Some(n) = frontier.pop_front() {
             if let Some(nbrs) = adj.get(&n) {
                 for nb in nbrs {
-                    if nb == j { return true; }
+                    if nb == j {
+                        return true;
+                    }
                     if visited.insert(nb.clone()) {
                         frontier.push_back(nb.clone());
                     }
@@ -1641,7 +1716,9 @@ impl System {
     pub fn insert_lemma(&mut self, l: Guarded) {
         match l {
             Guarded::Conj(items) => {
-                for item in items.iter() { self.insert_lemma(item.clone()); }
+                for item in items.iter() {
+                    self.insert_lemma(item.clone());
+                }
             }
             other => {
                 if !crate::guarded::stores_contains(&self.lemmas, &other) {
@@ -1653,7 +1730,9 @@ impl System {
     }
 
     pub fn insert_lemmas(&mut self, ls: Vec<Guarded>) {
-        for l in ls { self.insert_lemma(l); }
+        for l in ls {
+            self.insert_lemma(l);
+        }
     }
 
     /// Direct port of Haskell `isInitialSystem` (`System.hs:828-830`):
@@ -1690,8 +1769,8 @@ pub fn formula_to_system(
     is_diff: bool,
     fm: &Guarded,
 ) -> System {
-    use tamarin_parser::ast::TraceQuantifier;
     use crate::guarded::{gconj, gnot, is_safety_formula};
+    use tamarin_parser::ast::TraceQuantifier;
 
     let mut sys = System::empty();
     sys.source_kind = Some(source_kind);
@@ -1724,8 +1803,8 @@ pub fn formula_to_system(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tamarin_term::lterm::{LSort, LVar};
     use crate::fact::LNFact;
+    use tamarin_term::lterm::{LSort, LVar};
 
     #[test]
     fn empty_system_is_default() {
@@ -1782,7 +1861,8 @@ mod tests {
         let mut s = System::empty();
         let b0 = s.subst_stamp.get();
         s.set_eq_store(std::sync::Arc::new(
-            crate::tools::equation_store::EquationStore::default()));
+            crate::tools::equation_store::EquationStore::default(),
+        ));
         assert_ne!(s.subst_stamp.get(), b0);
     }
 
@@ -1803,7 +1883,8 @@ mod tests {
         b.subst_stamp.set(a.subst_stamp.get().wrapping_add(1));
         b.subst_applied_marker.set(Some((123, 456)));
         b.formulas_stamp.set(a.formulas_stamp.get().wrapping_add(1));
-        b.solved_formulas_stamp.set(a.solved_formulas_stamp.get().wrapping_add(1));
+        b.solved_formulas_stamp
+            .set(a.solved_formulas_stamp.get().wrapping_add(1));
         assert_eq!(a, b, "PartialEq must ignore the stamp/marker cells");
     }
 
@@ -1872,8 +1953,13 @@ mod tests {
         while let Some(dir) = stack.pop() {
             for entry in std::fs::read_dir(&dir).expect("read src dir") {
                 let path = entry.expect("dir entry").path();
-                if path.is_dir() { stack.push(path); continue; }
-                if path.extension().and_then(|e| e.to_str()) != Some("rs") { continue; }
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
                 let src = std::fs::read_to_string(&path).expect("read source");
                 let mut cur_fn = String::from("<file-scope>");
                 for line in src.lines() {
@@ -1881,21 +1967,25 @@ mod tests {
                     // Stop at the file's `#[cfg(test)]` / `mod tests` boundary:
                     // unit tests legitimately exercise the accessor and must not
                     // count as production callers (test modules sit at file end).
-                    if trimmed.starts_with("#[cfg(test)]")
-                        || trimmed.starts_with("mod tests")
-                    {
+                    if trimmed.starts_with("#[cfg(test)]") || trimmed.starts_with("mod tests") {
                         break;
                     }
-                    if let Some(rest) = trimmed.strip_prefix("fn ")
+                    if let Some(rest) = trimmed
+                        .strip_prefix("fn ")
                         .or_else(|| trimmed.strip_prefix("pub fn "))
                         .or_else(|| trimmed.strip_prefix("pub(crate) fn "))
                     {
-                        let name: String = rest.chars()
+                        let name: String = rest
+                            .chars()
                             .take_while(|c| c.is_alphanumeric() || *c == '_')
                             .collect();
-                        if !name.is_empty() { cur_fn = name; }
+                        if !name.is_empty() {
+                            cur_fn = name;
+                        }
                     }
-                    if trimmed.starts_with("//") { continue; }
+                    if trimmed.starts_with("//") {
+                        continue;
+                    }
                     if call_needles.iter().any(|n| line.contains(n))
                         && !ALLOWED.contains(&cur_fn.as_str())
                     {
@@ -1947,8 +2037,16 @@ mod tests {
         let _ = s.content_mut();
         assert_ne!(s.content_stamp.get(), c0, "content_mut bumps content_stamp");
         assert_ne!(s.subst_stamp.get(), b0, "content_mut bumps subst_stamp");
-        assert_eq!(s.max_var_idx_cache.get(), None, "content_mut clears max cache");
-        assert_eq!(s.node_max_cache.get(), None, "content_mut clears node cache");
+        assert_eq!(
+            s.max_var_idx_cache.get(),
+            None,
+            "content_mut clears max cache"
+        );
+        assert_eq!(
+            s.node_max_cache.get(),
+            None,
+            "content_mut clears node cache"
+        );
     }
 
     #[test]
@@ -1958,9 +2056,21 @@ mod tests {
         let c0 = s.content_stamp.get();
         let b0 = s.subst_stamp.get();
         let _ = s.content_mut_untracked();
-        assert_eq!(s.content_stamp.get(), c0, "untracked door does not bump content");
-        assert_eq!(s.subst_stamp.get(), b0, "untracked door does not bump subst");
-        assert_eq!(s.max_var_idx_cache.get(), Some(5), "untracked door leaves caches");
+        assert_eq!(
+            s.content_stamp.get(),
+            c0,
+            "untracked door does not bump content"
+        );
+        assert_eq!(
+            s.subst_stamp.get(),
+            b0,
+            "untracked door does not bump subst"
+        );
+        assert_eq!(
+            s.max_var_idx_cache.get(),
+            Some(5),
+            "untracked door leaves caches"
+        );
     }
 
     #[test]
@@ -1982,11 +2092,21 @@ mod tests {
         for pick in 0..3 {
             let c0 = s.content_stamp.get();
             match pick {
-                0 => { let _ = s.formulas_mut(); }
-                1 => { let _ = s.solved_formulas_mut(); }
-                _ => { let _ = s.lemmas_mut(); }
+                0 => {
+                    let _ = s.formulas_mut();
+                }
+                1 => {
+                    let _ = s.solved_formulas_mut();
+                }
+                _ => {
+                    let _ = s.lemmas_mut();
+                }
             }
-            assert_ne!(s.content_stamp.get(), c0, "formula accessor bumps content_stamp");
+            assert_ne!(
+                s.content_stamp.get(),
+                c0,
+                "formula accessor bumps content_stamp"
+            );
         }
     }
 
@@ -1995,10 +2115,18 @@ mod tests {
         let mut s = System::empty();
         let f0 = s.formulas_stamp.get();
         let _ = s.formulas_mut();
-        assert_ne!(s.formulas_stamp.get(), f0, "formulas_mut bumps formulas_stamp");
+        assert_ne!(
+            s.formulas_stamp.get(),
+            f0,
+            "formulas_mut bumps formulas_stamp"
+        );
         let sv0 = s.solved_formulas_stamp.get();
         let _ = s.solved_formulas_mut();
-        assert_ne!(s.solved_formulas_stamp.get(), sv0, "solved_formulas_mut bumps its stamp");
+        assert_ne!(
+            s.solved_formulas_stamp.get(),
+            sv0,
+            "solved_formulas_mut bumps its stamp"
+        );
     }
 
     #[test]
@@ -2009,15 +2137,39 @@ mod tests {
         s.max_var_idx_cache.set(Some(5));
         let f0 = s.formulas_stamp.get();
         let _ = s.formulas_mut_untracked();
-        assert_eq!(s.content_stamp.get(), c0, "untracked formula door leaves content_stamp");
-        assert_eq!(s.subst_stamp.get(), b0, "untracked formula door leaves subst_stamp");
-        assert_eq!(s.max_var_idx_cache.get(), Some(5), "untracked formula door leaves caches");
-        assert_ne!(s.formulas_stamp.get(), f0, "untracked formula door bumps formulas_stamp");
+        assert_eq!(
+            s.content_stamp.get(),
+            c0,
+            "untracked formula door leaves content_stamp"
+        );
+        assert_eq!(
+            s.subst_stamp.get(),
+            b0,
+            "untracked formula door leaves subst_stamp"
+        );
+        assert_eq!(
+            s.max_var_idx_cache.get(),
+            Some(5),
+            "untracked formula door leaves caches"
+        );
+        assert_ne!(
+            s.formulas_stamp.get(),
+            f0,
+            "untracked formula door bumps formulas_stamp"
+        );
 
         let sv0 = s.solved_formulas_stamp.get();
         let _ = s.solved_formulas_mut_untracked();
-        assert_eq!(s.content_stamp.get(), c0, "untracked solved door leaves content_stamp");
-        assert_ne!(s.solved_formulas_stamp.get(), sv0, "untracked solved door bumps its stamp");
+        assert_eq!(
+            s.content_stamp.get(),
+            c0,
+            "untracked solved door leaves content_stamp"
+        );
+        assert_ne!(
+            s.solved_formulas_stamp.get(),
+            sv0,
+            "untracked solved door bumps its stamp"
+        );
     }
 
     #[test]
@@ -2026,14 +2178,23 @@ mod tests {
         let f0 = s.formulas_stamp.get();
         let sv0 = s.solved_formulas_stamp.get();
         let _ = s.content_mut();
-        assert_ne!(s.formulas_stamp.get(), f0, "content_mut bumps formulas_stamp");
-        assert_ne!(s.solved_formulas_stamp.get(), sv0, "content_mut bumps solved_formulas_stamp");
+        assert_ne!(
+            s.formulas_stamp.get(),
+            f0,
+            "content_mut bumps formulas_stamp"
+        );
+        assert_ne!(
+            s.solved_formulas_stamp.get(),
+            sv0,
+            "content_mut bumps solved_formulas_stamp"
+        );
     }
 
     #[test]
     fn mint_fresh_stamps_refreshes_per_store_and_clears_caches() {
         let s = System::empty();
-        let ident = |src: &Arc<Guarded>| (Arc::clone(src), tamarin_utils::fx_hash_one(src.as_ref()));
+        let ident =
+            |src: &Arc<Guarded>| (Arc::clone(src), tamarin_utils::fx_hash_one(src.as_ref()));
         let _ = s.formulas_canon_table(ident);
         let _ = s.solved_formulas_canon_table(ident);
         assert!(s.formulas_canon_cache.borrow().is_some());
@@ -2041,10 +2202,24 @@ mod tests {
         let f0 = s.formulas_stamp.get();
         let sv0 = s.solved_formulas_stamp.get();
         s.mint_fresh_stamps();
-        assert_ne!(s.formulas_stamp.get(), f0, "mint_fresh_stamps refreshes formulas_stamp");
-        assert_ne!(s.solved_formulas_stamp.get(), sv0, "mint_fresh_stamps refreshes solved stamp");
-        assert!(s.formulas_canon_cache.borrow().is_none(), "mint_fresh_stamps drops formulas cache");
-        assert!(s.solved_formulas_canon_cache.borrow().is_none(), "mint_fresh_stamps drops solved cache");
+        assert_ne!(
+            s.formulas_stamp.get(),
+            f0,
+            "mint_fresh_stamps refreshes formulas_stamp"
+        );
+        assert_ne!(
+            s.solved_formulas_stamp.get(),
+            sv0,
+            "mint_fresh_stamps refreshes solved stamp"
+        );
+        assert!(
+            s.formulas_canon_cache.borrow().is_none(),
+            "mint_fresh_stamps drops formulas cache"
+        );
+        assert!(
+            s.solved_formulas_canon_cache.borrow().is_none(),
+            "mint_fresh_stamps drops solved cache"
+        );
     }
 
     #[test]
@@ -2075,29 +2250,46 @@ mod tests {
         let t3 = s.formulas_canon_table(canon);
         assert!(!Arc::ptr_eq(&t1, &t3), "stamp miss builds a new table");
         assert_eq!(t3.entries.len(), 3);
-        assert_eq!(calls.get(), 3, "incremental rebuild recanons only the changed entry");
-        assert!(Arc::ptr_eq(&t1.entries[0].0, &t3.entries[0].0), "unchanged src Arc reused");
-        assert!(Arc::ptr_eq(&t1.entries[1].0, &t3.entries[1].0), "unchanged src Arc reused");
+        assert_eq!(
+            calls.get(),
+            3,
+            "incremental rebuild recanons only the changed entry"
+        );
+        assert!(
+            Arc::ptr_eq(&t1.entries[0].0, &t3.entries[0].0),
+            "unchanged src Arc reused"
+        );
+        assert!(
+            Arc::ptr_eq(&t1.entries[1].0, &t3.entries[1].0),
+            "unchanged src Arc reused"
+        );
     }
 
     #[test]
     fn canon_cache_shared_then_independent_across_clone() {
         let mut a = System::empty();
         a.formulas_mut().push(Arc::new(crate::guarded::gfalse()));
-        let ident = |src: &Arc<Guarded>| (Arc::clone(src), tamarin_utils::fx_hash_one(src.as_ref()));
+        let ident =
+            |src: &Arc<Guarded>| (Arc::clone(src), tamarin_utils::fx_hash_one(src.as_ref()));
         let ta = a.formulas_canon_table(ident);
 
         // A clone inherits the stamp AND shares the cached generation.
         let mut b = a.clone();
         let tb = b.formulas_canon_table(ident);
-        assert!(Arc::ptr_eq(&ta, &tb), "a clone shares the parent's cached table (equal stamp)");
+        assert!(
+            Arc::ptr_eq(&ta, &tb),
+            "a clone shares the parent's cached table (equal stamp)"
+        );
 
         // Mutating `b` bumps only `b`'s stamp: `b` rebuilds, `a` is undisturbed.
         b.formulas_mut().push(Arc::new(crate::guarded::gtrue()));
         let tb2 = b.formulas_canon_table(ident);
         assert!(!Arc::ptr_eq(&tb, &tb2), "b rebuilds after its own mutation");
         let ta2 = a.formulas_canon_table(ident);
-        assert!(Arc::ptr_eq(&ta, &ta2), "a still reuses its generation (untouched)");
+        assert!(
+            Arc::ptr_eq(&ta, &ta2),
+            "a still reuses its generation (untouched)"
+        );
     }
 
     #[test]
@@ -2135,12 +2327,23 @@ mod tests {
         // optimise them away. We just need two leaves that don't
         // recurse further into Conj.
         use tamarin_parser::ast::{Atom, SortHint, Term, VarSpec};
-        let mkvar = |n: &str| Term::Var(VarSpec {
-            name: n.to_string(), idx: 0, sort: SortHint::Node, typ: None,
-        });
-        let l1 = crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(mkvar("i"))));
-        let l2 = crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(mkvar("j"))));
-        s.insert_lemma(crate::guarded::Guarded::Conj(vec![l1.clone(), l2.clone()].into()));
+        let mkvar = |n: &str| {
+            Term::Var(VarSpec {
+                name: n.to_string(),
+                idx: 0,
+                sort: SortHint::Node,
+                typ: None,
+            })
+        };
+        let l1 = crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(
+            mkvar("i"),
+        )));
+        let l2 = crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(
+            mkvar("j"),
+        )));
+        s.insert_lemma(crate::guarded::Guarded::Conj(
+            vec![l1.clone(), l2.clone()].into(),
+        ));
         assert_eq!(s.lemmas.len(), 2);
         assert!(crate::guarded::stores_contains(&s.lemmas, &l1));
         assert!(crate::guarded::stores_contains(&s.lemmas, &l2));
@@ -2184,10 +2387,7 @@ mod tests {
         let f = crate::guarded::gtrue();
         // gtrue is safety (no Ex, no free vars).
         // gfalse is also safety (Disj([])) — no Ex, no free vars.
-        let restrictions = vec![
-            crate::guarded::gtrue(),
-            crate::guarded::gfalse(),
-        ];
+        let restrictions = vec![crate::guarded::gtrue(), crate::guarded::gfalse()];
         let sys = formula_to_system(
             restrictions,
             SourceKind::RawSources,
@@ -2200,6 +2400,9 @@ mod tests {
         // gtrue is `Conj []` which `insert_lemma` flattens to nothing
         // (no items inside the empty conjunction). gfalse stays.
         // Lemmas should contain at least the gfalse non-conj entry.
-        assert!(crate::guarded::stores_contains(&sys.lemmas, &crate::guarded::gfalse()));
+        assert!(crate::guarded::stores_contains(
+            &sys.lemmas,
+            &crate::guarded::gfalse()
+        ));
     }
 }

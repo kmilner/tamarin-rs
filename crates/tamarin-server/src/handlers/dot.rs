@@ -101,15 +101,13 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
+use tamarin_term::lterm::{LNTerm, LVar};
+use tamarin_term::pretty::pretty_lnterm;
 use tamarin_theory::constraint::constraints::{LessAtom, NodeId, Reason};
 use tamarin_theory::constraint::system::System;
 use tamarin_theory::fact::{FactTag, LNFact};
 use tamarin_theory::pretty_hpj::{self, Doc, WEB_LINE_LENGTH, WEB_RIBBON};
-use tamarin_theory::rule::{
-    rule_name_string, IntrRuleACInfo, ProtoRuleName, RuleACInst, RuleInfo,
-};
-use tamarin_term::lterm::{LNTerm, LVar};
-use tamarin_term::pretty::pretty_lnterm;
+use tamarin_theory::rule::{rule_name_string, IntrRuleACInfo, ProtoRuleName, RuleACInst, RuleInfo};
 // `fix_multi_line_label` is HS `fixMultiLineLabel` (Text/Dot.hs:355-363),
 // applied to every record FIELD by the `mkField` smart constructor
 // (Text/Dot.hs:378-381): a multi-line label has each line's leading spaces
@@ -119,17 +117,15 @@ use tamarin_term::pretty::pretty_lnterm;
 use tamarin_utils::dot::fix_multi_line_label;
 
 use crate::graph::abbreviation::{
-    apply_abbreviations_fact, compute_abbreviations, AbbreviationOptions,
-    Abbreviations,
+    apply_abbreviations_fact, compute_abbreviations, AbbreviationOptions, Abbreviations,
 };
 use crate::graph::options::GraphOptions;
+use crate::graph::render_system::RenderSystem;
 use crate::graph::repr::{
-    add_cluster_by_role, add_intelligent_cluster_using_similar_names,
-    compute_basic_graph_repr, extract_base_name, extract_role, GEdge, GNode,
-    MissingHint, NodeType,
+    add_cluster_by_role, add_intelligent_cluster_using_similar_names, compute_basic_graph_repr,
+    extract_base_name, extract_role, GEdge, GNode, MissingHint, NodeType,
 };
 use crate::graph::simplify::{compress_system, simplify_system};
-use crate::graph::render_system::RenderSystem;
 
 // ---------------------------------------------------------------------
 // Public API
@@ -152,7 +148,11 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
     //    never be fed back into the prover — the compress/simplify passes mutate
     //    it in ways that leave the `subst_system` stamps meaningless.
     let working = RenderSystem::from_prover(sys.clone());
-    let working = if opts.compress { compress_system(working) } else { working };
+    let working = if opts.compress {
+        compress_system(working)
+    } else {
+        working
+    };
     let working = simplify_system(opts.simplification_level, working);
     // 2. Build the GraphRepr.  `compute_basic_graph_repr` takes `&System`;
     //    `&RenderSystem` derefs to it.
@@ -179,9 +179,7 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
     // HS `dotGraphCompact` (Dot.hs:490-513, see line 503) switches the graph-level defaults to
     // `setDefaultAttributesIfCluster` when the repr has any clusters.
     g.preamble(!repr.clusters.is_empty());
-    let abbrev_lookup = |t: &LNTerm| -> Option<LNTerm> {
-        abbrevs.get(t).map(|(a, _)| a.clone())
-    };
+    let abbrev_lookup = |t: &LNTerm| -> Option<LNTerm> { abbrevs.get(t).map(|(a, _)| a.clone()) };
     // Precompute a node-id -> rule map so edge styling is O(1) per edge
     // instead of scanning `working.nodes` per edge.
     let node_map: HashMap<&LVar, &RuleACInst> =
@@ -192,7 +190,9 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
     // internal edges from `grEdges` (GraphRepr.hs:126-129), so we mirror HS and
     // consult ONLY `repr.edges` (post-clustering), never a cluster's own edges.
     // Drives the compact-node label choice in `rule_node`.
-    let has_outgoing: HashSet<&LVar> = repr.edges.iter()
+    let has_outgoing: HashSet<&LVar> = repr
+        .edges
+        .iter()
         .filter_map(|e| match e {
             GEdge::System(src, _) => Some(&src.0),
             _ => None,
@@ -221,7 +221,9 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
     // (SystemNode records + MissingNodes). An UnsolvedAction/LastAction at such
     // a `v` MUST yield the base to that owner regardless of emission order (a
     // SystemNode can be clustered and thus emitted AFTER a free action ellipse).
-    let port_owner_ids: HashSet<&LVar> = repr.nodes.iter()
+    let port_owner_ids: HashSet<&LVar> = repr
+        .nodes
+        .iter()
         .chain(repr.clusters.iter().flat_map(|c| c.nodes.iter()))
         .filter(|n| matches!(n.ty, NodeType::System(_) | NodeType::Missing(_)))
         .map(|n| &n.id)
@@ -232,9 +234,10 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
     let mut ellipse_dot_ids: std::collections::BTreeMap<(LVar, u8), String> =
         std::collections::BTreeMap::new();
     // `dsNodes`: v -> dot id of the LAST node emitted at v (less-edge target).
-    let mut ds_nodes: std::collections::BTreeMap<LVar, String> =
-        std::collections::BTreeMap::new();
-    for node in repr.nodes.iter()
+    let mut ds_nodes: std::collections::BTreeMap<LVar, String> = std::collections::BTreeMap::new();
+    for node in repr
+        .nodes
+        .iter()
         .chain(repr.clusters.iter().flat_map(|c| c.nodes.iter()))
     {
         let base = DotBuilder::dot_node_id(&node.id);
@@ -245,11 +248,17 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
                 base
             }
             NodeType::UnsolvedAction(_) | NodeType::LastAction => {
-                let tag: u8 = if matches!(node.ty, NodeType::LastAction) { 1 } else { 0 };
-                let suffix = if tag == 1 { "__lastatom" } else { "__actionatom" };
-                let id = if port_owner_ids.contains(&node.id)
-                    || used_dot_ids.contains(&base)
-                {
+                let tag: u8 = if matches!(node.ty, NodeType::LastAction) {
+                    1
+                } else {
+                    0
+                };
+                let suffix = if tag == 1 {
+                    "__lastatom"
+                } else {
+                    "__actionatom"
+                };
+                let id = if port_owner_ids.contains(&node.id) || used_dot_ids.contains(&base) {
                     let mut cand = format!("{base}{suffix}");
                     let mut n = 2u32;
                     while used_dot_ids.contains(&cand) {
@@ -277,8 +286,15 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
     // (a free node emitted after the cluster's closing `}` lands in the wrong
     // scope order vs HS).
     for node in &repr.nodes {
-        emit_node(&mut g, node, &abbrev_lookup, opts, &color_map, &has_outgoing,
-            &ellipse_dot_ids);
+        emit_node(
+            &mut g,
+            node,
+            &abbrev_lookup,
+            opts,
+            &color_map,
+            &has_outgoing,
+            &ellipse_dot_ids,
+        );
     }
     // 4b. Clusters as subgraphs.
     //
@@ -292,13 +308,20 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
     let mut cluster_edges: Vec<GEdge> = Vec::new();
     for (i, cluster) in repr.clusters.iter().enumerate() {
         // `baseName = fromMaybe "Undefined" (extractBaseName name)`.
-        let base = extract_base_name(&cluster.name)
-            .unwrap_or_else(|| "Undefined".to_string());
+        let base = extract_base_name(&cluster.name).unwrap_or_else(|| "Undefined".to_string());
         let color = role_color(&base);
         g.open_subgraph(i, &cluster.name, &color);
         for node in &cluster.nodes {
-            emit_node_colored(&mut g, node, &abbrev_lookup, opts, Some(&color),
-                &color_map, &has_outgoing, &ellipse_dot_ids);
+            emit_node_colored(
+                &mut g,
+                node,
+                &abbrev_lookup,
+                opts,
+                Some(&color),
+                &color_map,
+                &has_outgoing,
+                &ellipse_dot_ids,
+            );
         }
         g.close_subgraph();
         cluster_edges.extend(cluster.edges.iter().cloned());
@@ -325,8 +348,16 @@ fn emit_node(
     has_outgoing: &HashSet<&LVar>,
     ellipse_dot_ids: &std::collections::BTreeMap<(LVar, u8), String>,
 ) {
-    emit_node_colored(g, node, abbrev, opts, None, color_map, has_outgoing,
-        ellipse_dot_ids);
+    emit_node_colored(
+        g,
+        node,
+        abbrev,
+        opts,
+        None,
+        color_map,
+        has_outgoing,
+        ellipse_dot_ids,
+    );
 }
 
 /// `emit_node` with an optional `manual_color` — the cluster `roleColor`
@@ -346,18 +377,27 @@ fn emit_node_colored(
     // Look up the (possibly collision-disambiguated) dot id assigned to a
     // non-record ellipse node (UnsolvedAction tag 0 / LastAction tag 1).
     let ellipse_id = |tag: u8| -> String {
-        ellipse_dot_ids.get(&(node.id.clone(), tag)).cloned()
+        ellipse_dot_ids
+            .get(&(node.id.clone(), tag))
+            .cloned()
             .unwrap_or_else(|| DotBuilder::dot_node_id(&node.id))
     };
     match &node.ty {
         NodeType::System(ru) => {
             let ru_abbreviated = abbreviate_rule(ru, abbrev);
             let outgoing = has_outgoing.contains(&node.id);
-            g.rule_node(&node.id, &ru_abbreviated, opts, manual_color, color_map,
-                outgoing);
+            g.rule_node(
+                &node.id,
+                &ru_abbreviated,
+                opts,
+                manual_color,
+                color_map,
+                outgoing,
+            );
         }
         NodeType::UnsolvedAction(facts) => {
-            let new_facts: Vec<LNFact> = facts.iter()
+            let new_facts: Vec<LNFact> = facts
+                .iter()
                 .map(|fa| apply_abbreviations_fact(abbrev, fa))
                 .collect();
             // A colliding action ellipse (same `v` as a system record) gets a
@@ -399,8 +439,12 @@ fn emit_edges_merged(
     }
     // lessEdges: collect, sort by (smaller, larger) like `eqClasses`, emit one
     // merged edge per pair.
-    let mut lesses: Vec<&LessAtom> = edges.iter()
-        .filter_map(|e| match e { GEdge::Less(la) => Some(la), _ => None })
+    let mut lesses: Vec<&LessAtom> = edges
+        .iter()
+        .filter_map(|e| match e {
+            GEdge::Less(la) => Some(la),
+            _ => None,
+        })
         .collect();
     lesses.sort_by(|a, b| (&a.smaller, &a.larger).cmp(&(&b.smaller, &b.larger)));
     for la in lesses {
@@ -408,18 +452,21 @@ fn emit_edges_merged(
     }
 }
 
-fn abbreviate_rule(
-    ru: &RuleACInst,
-    abbrev: &dyn Fn(&LNTerm) -> Option<LNTerm>,
-) -> RuleACInst {
+fn abbreviate_rule(ru: &RuleACInst, abbrev: &dyn Fn(&LNTerm) -> Option<LNTerm>) -> RuleACInst {
     let mut new_ru = ru.clone();
-    new_ru.premises = ru.premises.iter()
+    new_ru.premises = ru
+        .premises
+        .iter()
         .map(|fa| apply_abbreviations_fact(abbrev, fa))
         .collect();
-    new_ru.actions = ru.actions.iter()
+    new_ru.actions = ru
+        .actions
+        .iter()
         .map(|fa| apply_abbreviations_fact(abbrev, fa))
         .collect();
-    new_ru.conclusions = ru.conclusions.iter()
+    new_ru.conclusions = ru
+        .conclusions
+        .iter()
         .map(|fa| apply_abbreviations_fact(abbrev, fa))
         .collect();
     new_ru
@@ -473,8 +520,10 @@ fn try_render_dot_to_svg(dot: &str) -> std::io::Result<Vec<u8>> {
         }
     }
     if !out.status.success() {
-        return Err(std::io::Error::other(
-            format!("dot exited with status {:?}", out.status)));
+        return Err(std::io::Error::other(format!(
+            "dot exited with status {:?}",
+            out.status
+        )));
     }
     Ok(out.stdout)
 }
@@ -491,7 +540,9 @@ impl DotBuilder {
     fn new() -> Self {
         DotBuilder { buf: String::new() }
     }
-    fn into_string(self) -> String { self.buf }
+    fn into_string(self) -> String {
+        self.buf
+    }
     fn preamble(&mut self, has_clusters: bool) {
         let _ = writeln!(self.buf, "digraph G {{");
         if has_clusters {
@@ -528,10 +579,11 @@ impl DotBuilder {
             // `shape=record` because each rule node is rendered as a record
             // label (HS sets the record shape per-node via `D.record`).
             let _ = writeln!(self.buf, "  nodesep=0.3; ranksep=0.3;");
-            let _ = writeln!(self.buf,
-                "  node [fontsize=8,fontname=\"Helvetica\",width=0.3,height=0.2,shape=record];");
-            let _ = writeln!(self.buf,
-                "  edge [fontsize=8,fontname=\"Helvetica\"];");
+            let _ = writeln!(
+                self.buf,
+                "  node [fontsize=8,fontname=\"Helvetica\",width=0.3,height=0.2,shape=record];"
+            );
+            let _ = writeln!(self.buf, "  edge [fontsize=8,fontname=\"Helvetica\"];");
         }
     }
     fn close(&mut self) {
@@ -540,12 +592,19 @@ impl DotBuilder {
     fn dot_node_id(nid: &LVar) -> String {
         // Sanitise to a valid DOT identifier.
         let raw = format!("{}_{}", nid.name, nid.idx);
-        raw.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        raw.chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
             .collect()
     }
-    fn rule_node(&mut self, nid: &LVar, ru: &RuleACInst, opts: &GraphOptions,
-                 manual_color: Option<&str>, color_map: &NodeColorMap,
-                 outgoing: bool) {
+    fn rule_node(
+        &mut self,
+        nid: &LVar,
+        ru: &RuleACInst,
+        opts: &GraphOptions,
+        manual_color: Option<&str>,
+        color_map: &NodeColorMap,
+        outgoing: bool,
+    ) {
         let id = Self::dot_node_id(nid);
         // HS `mkNode`'s `CompactBoringNodes` branch (Dot.hs:294-304): under the
         // default node style (`defaultDotOptions = DotOptions CompactBoringNodes`,
@@ -573,9 +632,12 @@ impl DotBuilder {
                     .pop()
                     .unwrap_or_default()
             };
-            let _ = writeln!(self.buf,
+            let _ = writeln!(
+                self.buf,
                 "  {} [label=\"{}\",shape=ellipse];",
-                id, escape_dot_label(&lbl));
+                id,
+                escape_dot_label(&lbl)
+            );
             return;
         }
         // Build prems / acts / concs rows as Docs, then lay each row out with
@@ -601,20 +663,36 @@ impl DotBuilder {
         // (`showAttr`, Text/Dot.hs:346-353) via `escape_dot_label`.
         let mut rows: Vec<String> = Vec::new();
         if !ps.is_empty() {
-            rows.push(format!("{{{}}}", ps.iter().enumerate()
-                .map(|(i, s)| format!(
-                    "<p{}> {}", i, escape_record_field(&fix_multi_line_label(s))))
-                .collect::<Vec<_>>()
-                .join("|")));
+            rows.push(format!(
+                "{{{}}}",
+                ps.iter()
+                    .enumerate()
+                    .map(|(i, s)| format!(
+                        "<p{}> {}",
+                        i,
+                        escape_record_field(&fix_multi_line_label(s))
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("|")
+            ));
         }
-        rows.push(format!("{{{}}}",
-            escape_record_field(&fix_multi_line_label(&mid))));
+        rows.push(format!(
+            "{{{}}}",
+            escape_record_field(&fix_multi_line_label(&mid))
+        ));
         if !cs.is_empty() {
-            rows.push(format!("{{{}}}", cs.iter().enumerate()
-                .map(|(i, s)| format!(
-                    "<c{}> {}", i, escape_record_field(&fix_multi_line_label(s))))
-                .collect::<Vec<_>>()
-                .join("|")));
+            rows.push(format!(
+                "{{{}}}",
+                cs.iter()
+                    .enumerate()
+                    .map(|(i, s)| format!(
+                        "<c{}> {}",
+                        i,
+                        escape_record_field(&fix_multi_line_label(s))
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("|")
+            ));
         }
         let lbl = escape_dot_label(&format!("{{{}}}", rows.join("|")));
         let color = rule_fillcolor(ru, manual_color, color_map);
@@ -657,7 +735,9 @@ impl DotBuilder {
             .render_with(WEB_LINE_LENGTH, WEB_RIBBON);
         let color = if facts.iter().any(|f| matches!(f.tag, FactTag::Ku)) {
             "gray"
-        } else { "darkblue" };
+        } else {
+            "darkblue"
+        };
         // HS renders a loose action node via `mkSimpleNode (render lbl) attrs`
         // = plain `D.node [("label", …), ("shape","ellipse")]` (Dot.hs:267-272,
         // 289-290), NOT `D.record`.  A plain node label is a quoted string whose
@@ -666,18 +746,25 @@ impl DotBuilder {
         // `{ } | < >` are LITERAL, so a tuple `<A, B, …>` in a goal fact must
         // stay `<…>` and NOT be `\<…\>`-escaped (only the `SystemNode`/
         // `D.record` path escapes them).
-        let _ = writeln!(self.buf,
+        let _ = writeln!(
+            self.buf,
             "  {} [shape=ellipse,label=\"{}\",color=\"{}\"];",
-            id, escape_dot_label(&s), color);
+            id,
+            escape_dot_label(&s),
+            color
+        );
     }
     fn last_node(&mut self, dot_id: &str, nid: &LVar) {
         // HS `LastActionAtom -> mkSimpleNode (show v) []` (Dot.hs:236-379, see line 273): the
         // label is `show v`, rendered via `Display for LVar` (`#i` / `#i.2`),
         // via plain `D.node` (see `action_node`), so use the plain-label escaper.
         // `dot_id` is the collision-disambiguated id (see `ellipse_dot_ids`).
-        let _ = writeln!(self.buf,
+        let _ = writeln!(
+            self.buf,
             "  {} [shape=ellipse,label=\"{}\"];",
-            dot_id, escape_dot_label(&nid.to_string()));
+            dot_id,
+            escape_dot_label(&nid.to_string())
+        );
     }
     fn missing_node(&mut self, nid: &LVar, hint: &MissingHint) {
         let id = Self::dot_node_id(nid);
@@ -697,31 +784,40 @@ impl DotBuilder {
         // `action_node`/`last_node`).  This label (`(#i, 0)`) never contains
         // record metacharacters, so the choice is inert here, but keeping all
         // three plain (ellipse/trapezium) nodes on `escape_dot_label` mirrors HS.
-        let _ = writeln!(self.buf,
+        let _ = writeln!(
+            self.buf,
             "  {} [shape={},label=\"{}\"];",
-            id, shape, escape_dot_label(&label));
+            id,
+            shape,
+            escape_dot_label(&label)
+        );
     }
-    fn edge(&mut self,
-            node_map: &HashMap<&LVar, &RuleACInst>,
-            src: &tamarin_theory::constraint::constraints::NodeConc,
-            tgt: &tamarin_theory::constraint::constraints::NodePrem) {
+    fn edge(
+        &mut self,
+        node_map: &HashMap<&LVar, &RuleACInst>,
+        src: &tamarin_theory::constraint::constraints::NodeConc,
+        tgt: &tamarin_theory::constraint::constraints::NodePrem,
+    ) {
         // Look up the target premise's fact tag so we can colour
         // the edge.
         let style = edge_style(node_map, src, tgt);
         let src_ref = conc_port_ref(node_map, src);
         let tgt_ref = prem_port_ref(node_map, tgt);
-        let _ = writeln!(self.buf,
-            "  {} -> {} [{}];", src_ref, tgt_ref, style);
+        let _ = writeln!(self.buf, "  {} -> {} [{}];", src_ref, tgt_ref, style);
     }
-    fn chain_edge(&mut self,
-                  node_map: &HashMap<&LVar, &RuleACInst>,
-                  src: &tamarin_theory::constraint::constraints::NodeConc,
-                  tgt: &tamarin_theory::constraint::constraints::NodePrem) {
+    fn chain_edge(
+        &mut self,
+        node_map: &HashMap<&LVar, &RuleACInst>,
+        src: &tamarin_theory::constraint::constraints::NodeConc,
+        tgt: &tamarin_theory::constraint::constraints::NodePrem,
+    ) {
         let src_ref = conc_port_ref(node_map, src);
         let tgt_ref = prem_port_ref(node_map, tgt);
-        let _ = writeln!(self.buf,
+        let _ = writeln!(
+            self.buf,
             "  {} -> {} [style=\"dotted\",color=\"green\"];",
-            src_ref, tgt_ref);
+            src_ref, tgt_ref
+        );
     }
     /// Open a subgraph (Graphviz `subgraph cluster_<n> { ... }`).
     /// `idx` is a numeric disambiguator; `name` is shown as the label and
@@ -754,22 +850,27 @@ impl DotBuilder {
     /// reasons; since at most one less-atom survives per node pair (LessAtom
     /// equality ignores the reason), the group is a singleton and the colour
     /// reduces to the single reason's `toColor` (`reason_color`).
-    fn less_edge(&mut self, la: &LessAtom,
-                 ds_nodes: &std::collections::BTreeMap<LVar, String>) {
+    fn less_edge(&mut self, la: &LessAtom, ds_nodes: &std::collections::BTreeMap<LVar, String>) {
         // HS `dotLessEdge` resolves each endpoint through `dsNodes` (Dot.hs:408-409),
         // which holds the LAST dot node emitted at that id — the action / last
         // ellipse when it shadows a same-id system record. Mirror that by
         // resolving through the precomputed `ds_nodes` map (falling back to the
         // bare id for any endpoint that was never emitted as a node).
         let resolve = |nid: &LVar| -> String {
-            ds_nodes.get(nid).cloned()
+            ds_nodes
+                .get(nid)
+                .cloned()
                 .unwrap_or_else(|| Self::dot_node_id(nid))
         };
         let s = resolve(&la.smaller);
         let t = resolve(&la.larger);
-        let _ = writeln!(self.buf,
+        let _ = writeln!(
+            self.buf,
             "  {} -> {} [color=\"{}\",style=\"dashed\"];",
-            s, t, reason_color(la.reason));
+            s,
+            t,
+            reason_color(la.reason)
+        );
     }
     /// Emit a legend node listing the chosen abbreviations.
     /// Mirror of Haskell's `generateLegend` (Dot.hs:415-474) — produces a
@@ -780,7 +881,8 @@ impl DotBuilder {
     fn legend(&mut self, abbrevs: &Abbreviations) {
         // sortOn (Down . render . prettyLNTerm . fst) $ M.elems abbrevs
         // M.elems iterates by key (orig term) order; sortOn is stable.
-        let mut entries: Vec<(&LNTerm, &LNTerm)> = abbrevs.iter()
+        let mut entries: Vec<(&LNTerm, &LNTerm)> = abbrevs
+            .iter()
             .map(|(_orig, (name, exp))| (name, exp))
             .collect();
         // Descending by rendered name (stable); key cached per element.
@@ -789,8 +891,7 @@ impl DotBuilder {
         // Mirror Haskell `abbrevLabel`: tableAttributes =
         //   [Border 1, CellBorder 0, CellSpacing 3, CellPadding 1].
         let mut html = String::new();
-        html.push_str(
-            "<<TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"3\" CELLPADDING=\"1\">");
+        html.push_str("<<TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"3\" CELLPADDING=\"1\">");
         // Mirror Haskell `renderLine` (Dot.hs:441-450): each row is three
         // `LabelCell`s with `cellAttributes = [Align HLeft, VAlign HTop]`.
         // The NAME cell wraps its text in `<FONT COLOR="labelColor">`
@@ -802,17 +903,22 @@ impl DotBuilder {
         // cells of a `Cells` row separated by a single space and each `<TR>`
         // on its own line, so we join the three cells with `" "` and the rows
         // with `"\n"`.
-        let rows: Vec<String> = order.iter().map(|&i| {
-            let (name, exp) = entries[i];
-            let name_cell = format!(
-                "<TD ALIGN=\"LEFT\" VALIGN=\"TOP\"><FONT COLOR=\"#000000\">{}</FONT></TD>",
-                dot_html_escape(&pretty_lnterm(name)));
-            let eq_cell = "<TD ALIGN=\"LEFT\" VALIGN=\"TOP\">=</TD>".to_string();
-            let exp_cell = format!(
-                "<TD ALIGN=\"LEFT\" VALIGN=\"TOP\">{}</TD>",
-                dot_html_escape(&pretty_lnterm(exp)));
-            format!("<TR>{}</TR>", [name_cell, eq_cell, exp_cell].join(" "))
-        }).collect();
+        let rows: Vec<String> = order
+            .iter()
+            .map(|&i| {
+                let (name, exp) = entries[i];
+                let name_cell = format!(
+                    "<TD ALIGN=\"LEFT\" VALIGN=\"TOP\"><FONT COLOR=\"#000000\">{}</FONT></TD>",
+                    dot_html_escape(&pretty_lnterm(name))
+                );
+                let eq_cell = "<TD ALIGN=\"LEFT\" VALIGN=\"TOP\">=</TD>".to_string();
+                let exp_cell = format!(
+                    "<TD ALIGN=\"LEFT\" VALIGN=\"TOP\">{}</TD>",
+                    dot_html_escape(&pretty_lnterm(exp))
+                );
+                format!("<TR>{}</TR>", [name_cell, eq_cell, exp_cell].join(" "))
+            })
+            .collect();
         html.push_str(&rows.join("\n"));
         html.push_str("</TABLE>>");
         // HS `generateLegend` (Dot.hs:419-425) emits the legend inside a
@@ -915,9 +1021,7 @@ fn dot_html_escape(s: &str) -> String {
 /// on the parser-AST projection), NOT `pretty_system::pretty_fact` (which
 /// omits those spaces).
 fn fact_doc_of(fa: &LNFact) -> Doc {
-    tamarin_theory::pretty_formula::fact_doc(
-        &tamarin_theory::pretty_theory::lnfact_to_parser(fa),
-    )
+    tamarin_theory::pretty_formula::fact_doc(&tamarin_theory::pretty_theory::lnfact_to_parser(fa))
 }
 
 /// Haskell `round :: Double -> Int` — IEEE round-half-to-EVEN (banker's
@@ -935,7 +1039,11 @@ fn round_half_even(x: f64) -> i64 {
         f as i64
     } else {
         let fi = f as i64;
-        if fi % 2 == 0 { fi } else { fi + 1 }
+        if fi % 2 == 0 {
+            fi
+        } else {
+            fi + 1
+        }
     }
 }
 
@@ -957,7 +1065,8 @@ fn render_balanced(docs: Vec<Doc>) -> Vec<String> {
     if docs.is_empty() {
         return Vec::new();
     }
-    let used: Vec<f64> = docs.iter()
+    let used: Vec<f64> = docs
+        .iter()
         .map(|d| d.one_line_render().chars().count() as f64)
         .collect();
     let total: f64 = used.iter().sum();
@@ -1048,7 +1157,9 @@ fn is_intruder_or_fresh(ru: &RuleACInst) -> bool {
 /// `render_balanced` (HS `asM = renderRow [(Nothing, ruleLabel)]`,
 /// Dot.hs:320-322 — a single-doc row, i.e. width 130 / ribbon 87).
 fn rule_label_doc(nid: &LVar, ru: &RuleACInst, opts: &GraphOptions) -> Doc {
-    let act_docs: Vec<Doc> = ru.actions.iter()
+    let act_docs: Vec<Doc> = ru
+        .actions
+        .iter()
         .filter(|fa| is_not_diff_annotation(ru, fa))
         .filter(|fa| !opts.show_auto_source || !is_auto_source(fa))
         .map(fact_doc_of)
@@ -1064,7 +1175,9 @@ fn rule_label_doc(nid: &LVar, ru: &RuleACInst, opts: &GraphOptions) -> Doc {
         header
             .beside(Doc::text("["))
             .beside(pretty_hpj::vcat(pretty_hpj::punctuate(
-                Doc::text(","), act_docs)))
+                Doc::text(","),
+                act_docs,
+            )))
             .beside(Doc::text("]"))
     }
 }
@@ -1090,7 +1203,7 @@ fn rule_case_name(ru: &RuleACInst) -> String {
                 }
             }
             ProtoRuleName::Fresh => "Fresh".to_string(),
-        }
+        },
         RuleInfo::Intr(i) => intr_case_name(i),
     }
 }
@@ -1120,17 +1233,19 @@ fn intr_case_name(i: &IntrRuleACInfo) -> String {
     // `_exp`), so the Haskell `'c' : name` yields e.g. `c_exp` (a single
     // underscore), then `prefixIfReserved` is applied.
     match i {
-        IntrRuleACInfo::IRecv      => "irecv".into(),
-        IntrRuleACInfo::ISend      => "isend".into(),
-        IntrRuleACInfo::Coerce     => "coerce".into(),
-        IntrRuleACInfo::FreshConstr=> "fresh".into(),
-        IntrRuleACInfo::PubConstr  => "pub".into(),
-        IntrRuleACInfo::NatConstr  => "nat".into(),
-        IntrRuleACInfo::IEquality  => "iequality".into(),
-        IntrRuleACInfo::ConstrRule(n) =>
-            prefix_if_reserved(&format!("c{}", String::from_utf8_lossy(n))),
-        IntrRuleACInfo::DestrRule(n, _, _, _) =>
-            prefix_if_reserved(&format!("d{}", String::from_utf8_lossy(n))),
+        IntrRuleACInfo::IRecv => "irecv".into(),
+        IntrRuleACInfo::ISend => "isend".into(),
+        IntrRuleACInfo::Coerce => "coerce".into(),
+        IntrRuleACInfo::FreshConstr => "fresh".into(),
+        IntrRuleACInfo::PubConstr => "pub".into(),
+        IntrRuleACInfo::NatConstr => "nat".into(),
+        IntrRuleACInfo::IEquality => "iequality".into(),
+        IntrRuleACInfo::ConstrRule(n) => {
+            prefix_if_reserved(&format!("c{}", String::from_utf8_lossy(n)))
+        }
+        IntrRuleACInfo::DestrRule(n, _, _, _) => {
+            prefix_if_reserved(&format!("d{}", String::from_utf8_lossy(n)))
+        }
     }
 }
 
@@ -1162,8 +1277,7 @@ fn explicit_rule_color(ru: &RuleACInst) -> Option<String> {
 /// then the cluster's `manualNodeColor`, then the `nodeColorMap` palette
 /// fallback (`maybe "white" rgbToHex (M.lookup rInfo colorMap)`): a rInfo
 /// present in the map yields its palette hex, an absent one yields `"white"`.
-fn rule_fillcolor(ru: &RuleACInst, manual_color: Option<&str>,
-                  color_map: &NodeColorMap) -> String {
+fn rule_fillcolor(ru: &RuleACInst, manual_color: Option<&str>, color_map: &NodeColorMap) -> String {
     explicit_rule_color(ru)
         .or_else(|| manual_color.map(|c| c.to_string()))
         .unwrap_or_else(|| match color_map.lookup(&ru.info) {
@@ -1206,7 +1320,11 @@ impl NodeColorMap<'_> {
     /// whose `rInfo` equals `info` (matching `M.fromList`'s last-wins), or
     /// `None` when the rInfo is absent (→ `"white"` at the call site).
     fn lookup(&self, info: &RInfo) -> Option<tamarin_utils::color::Rgb> {
-        self.entries.iter().rev().find(|(k, _)| **k == *info).map(|(_, c)| *c)
+        self.entries
+            .iter()
+            .rev()
+            .find(|(k, _)| **k == *info)
+            .map(|(_, c)| *c)
     }
 }
 
@@ -1218,9 +1336,9 @@ impl NodeColorMap<'_> {
 ///   * otherwise (protocol rules, IRecv, …)                     → 1
 fn group_idx(ru: &RuleACInst) -> usize {
     use tamarin_theory::rule::{
-        is_coerce_rule_info, is_constr_rule_info, is_destr_rule_info,
-        is_fresh_constr_rule_info, is_iequality_rule_info, is_isend_rule_info,
-        is_nat_constr_rule_info, is_pub_constr_rule_info,
+        is_coerce_rule_info, is_constr_rule_info, is_destr_rule_info, is_fresh_constr_rule_info,
+        is_iequality_rule_info, is_isend_rule_info, is_nat_constr_rule_info,
+        is_pub_constr_rule_info,
     };
     match &ru.info {
         RuleInfo::Intr(i) => {
@@ -1243,7 +1361,11 @@ fn group_idx(ru: &RuleACInst) -> usize {
         // a protocol rule only ever hits `isFreshRule` (the reserved `Fresh`
         // rule) → 3, else the `otherwise` group → 1.
         RuleInfo::Proto(p) => {
-            if p.name == ProtoRuleName::Fresh { 3 } else { 1 }
+            if p.name == ProtoRuleName::Fresh {
+                3
+            } else {
+                1
+            }
         }
     }
 }
@@ -1277,14 +1399,17 @@ fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorMap<'_> {
 
     // `groups = [ (gIdx, [ru | ru <- rules, gIdx == groupIdx ru]) | gIdx <- 0..3 ]`
     // — order-preserving partition into four groups.
-    let mut groups: [Vec<&RuleACInst>; 4] =
-        [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    let mut groups: [Vec<&RuleACInst>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
     for pair in &ordered {
         let ru = &pair.1;
         groups[group_idx(ru)].push(ru);
     }
-    let sizes: [usize; 4] =
-        [groups[0].len(), groups[1].len(), groups[2].len(), groups[3].len()];
+    let sizes: [usize; 4] = [
+        groups[0].len(),
+        groups[1].len(),
+        groups[2].len(),
+        groups[3].len(),
+    ];
 
     // `colors = M.fromList $ lightColorGroups intruderHue (map (length . snd)
     // groups)`, `intruderHue = 18 % 360`. The palette is exact `Rational` in
@@ -1293,7 +1418,8 @@ fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorMap<'_> {
     const INTRUDER_HUE: f64 = 18.0 / 360.0;
     let palette = light_color_groups(INTRUDER_HUE, &sizes);
     let get_color = |gi: usize, mi: usize| -> Hsv {
-        palette.iter()
+        palette
+            .iter()
             .find(|((g, m), _)| *g == gi && *m == mi)
             .map(|(_, hsv)| *hsv)
             // `getColor idx = fromMaybe (HSV 0 1 1) (M.lookup idx colors)`
@@ -1310,9 +1436,10 @@ fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorMap<'_> {
             // RuleACInst (Rule.hs:673-675, see line 674) — the same attributes `explicit_rule_color`
             // reads, so a coloured rule maps to its own dark fill colour.
             let color = match &ru.info {
-                RuleInfo::Proto(p) => {
-                    p.attributes.color.unwrap_or_else(|| hsv_to_rgb(get_color(gi, mi)))
-                }
+                RuleInfo::Proto(p) => p
+                    .attributes
+                    .color
+                    .unwrap_or_else(|| hsv_to_rgb(get_color(gi, mi))),
                 _ => hsv_to_rgb(get_color(gi, mi)),
             };
             entries.push((&ru.info, color));
@@ -1329,16 +1456,20 @@ fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorMap<'_> {
 /// `node_map` holds only System nodes, so an id absent from it is a non-System
 /// ellipse (portless); a present intruder/`Fresh` rule is a compact ellipse.
 fn node_has_ports(node_map: &HashMap<&LVar, &RuleACInst>, nid: &LVar) -> bool {
-    node_map.get(nid).is_some_and(|ru| !is_intruder_or_fresh(ru))
+    node_map
+        .get(nid)
+        .is_some_and(|ru| !is_intruder_or_fresh(ru))
 }
 
 /// Render an edge's conclusion endpoint: `id:c<i>` for a record node, else the
 /// bare `id` (compact/simple node — HS emits no port there).
-fn conc_port_ref(node_map: &HashMap<&LVar, &RuleACInst>,
-                 nc: &tamarin_theory::constraint::constraints::NodeConc) -> String {
+fn conc_port_ref(
+    node_map: &HashMap<&LVar, &RuleACInst>,
+    nc: &tamarin_theory::constraint::constraints::NodeConc,
+) -> String {
     let id = DotBuilder::dot_node_id(&nc.0);
     if node_has_ports(node_map, &nc.0) {
-        format!("{}:c{}", id, nc.1.0)
+        format!("{}:c{}", id, nc.1 .0)
     } else {
         id
     }
@@ -1346,31 +1477,38 @@ fn conc_port_ref(node_map: &HashMap<&LVar, &RuleACInst>,
 
 /// Render an edge's premise endpoint: `id:p<i>` for a record node, else the
 /// bare `id` (compact/simple node — HS emits no port there).
-fn prem_port_ref(node_map: &HashMap<&LVar, &RuleACInst>,
-                 np: &tamarin_theory::constraint::constraints::NodePrem) -> String {
+fn prem_port_ref(
+    node_map: &HashMap<&LVar, &RuleACInst>,
+    np: &tamarin_theory::constraint::constraints::NodePrem,
+) -> String {
     let id = DotBuilder::dot_node_id(&np.0);
     if node_has_ports(node_map, &np.0) {
-        format!("{}:p{}", id, np.1.0)
+        format!("{}:p{}", id, np.1 .0)
     } else {
         id
     }
 }
 
-fn edge_style(node_map: &HashMap<&LVar, &RuleACInst>,
-              src: &tamarin_theory::constraint::constraints::NodeConc,
-              tgt: &tamarin_theory::constraint::constraints::NodePrem) -> String {
+fn edge_style(
+    node_map: &HashMap<&LVar, &RuleACInst>,
+    src: &tamarin_theory::constraint::constraints::NodeConc,
+    tgt: &tamarin_theory::constraint::constraints::NodePrem,
+) -> String {
     // Look up tag of the source-conclusion or target-premise.
     let conc_tag = lookup_conc_tag(node_map, src);
     let prem_tag = lookup_prem_tag(node_map, tgt);
-    let is_proto = |t: Option<&FactTag>| -> bool {
-        matches!(t, Some(FactTag::Proto(_, _, _)))
-    };
+    let is_proto = |t: Option<&FactTag>| -> bool { matches!(t, Some(FactTag::Proto(_, _, _))) };
     let is_persistent = |t: Option<&FactTag>| -> bool {
-        matches!(t, Some(FactTag::Proto(tamarin_theory::fact::Multiplicity::Persistent, _, _)))
+        matches!(
+            t,
+            Some(FactTag::Proto(
+                tamarin_theory::fact::Multiplicity::Persistent,
+                _,
+                _
+            ))
+        )
     };
-    let is_k = |t: Option<&FactTag>| -> bool {
-        matches!(t, Some(FactTag::Ku) | Some(FactTag::Kd))
-    };
+    let is_k = |t: Option<&FactTag>| -> bool { matches!(t, Some(FactTag::Ku) | Some(FactTag::Kd)) };
     if is_proto(conc_tag.as_ref()) || is_proto(prem_tag.as_ref()) {
         let mut s = String::from("style=\"bold\",weight=10");
         if is_persistent(conc_tag.as_ref()) || is_persistent(prem_tag.as_ref()) {
@@ -1423,16 +1561,21 @@ fn reason_color(r: Reason) -> &'static str {
 /// not reuse `rgb_to_hex`.
 fn role_color(name: &str) -> String {
     // simpleHash: `Int` arithmetic, wraps on overflow.
-    let hash: i64 = name.chars().fold(7i64, |acc, c| {
-        acc.wrapping_mul(31).wrapping_add(c as i64)
-    });
+    let hash: i64 = name
+        .chars()
+        .fold(7i64, |acc, c| acc.wrapping_mul(31).wrapping_add(c as i64));
     let v = (hash.rem_euclid(360)) as f64 / 360.0;
-    let rgb = tamarin_utils::color::hsv_to_rgb(
-        tamarin_utils::color::Hsv::new(v * 360.0, 0.75, 0.85));
+    let rgb =
+        tamarin_utils::color::hsv_to_rgb(tamarin_utils::color::Hsv::new(v * 360.0, 0.75, 0.85));
     let chan = |f: f64| -> i64 { (f * 255.0).floor() as i64 };
     let alpha: i64 = (255.0 * 0.3_f64).floor() as i64; // = 76
-    format!("#{:02X}{:02X}{:02X}{:02X}",
-        chan(rgb.r), chan(rgb.g), chan(rgb.b), alpha)
+    format!(
+        "#{:02X}{:02X}{:02X}{:02X}",
+        chan(rgb.r),
+        chan(rgb.g),
+        chan(rgb.b),
+        alpha
+    )
 }
 
 /// Escape a record FIELD's text, mirroring HS `Text.Dot.renderRecord`'s
@@ -1448,7 +1591,7 @@ fn escape_record_field(s: &str) -> String {
             '}' => out.push_str("\\}"),
             '<' => out.push_str("\\<"),
             '>' => out.push_str("\\>"),
-            _   => out.push(c),
+            _ => out.push(c),
         }
     }
     out
@@ -1464,9 +1607,9 @@ fn escape_dot_label(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
-            '"'  => out.push_str("\\\""),
+            '"' => out.push_str("\\\""),
             '\n' => out.push_str("\\l"),
-            _    => out.push(c),
+            _ => out.push(c),
         }
     }
     out
@@ -1488,26 +1631,27 @@ mod tests {
 
     #[test]
     fn dot_for_node_with_rule() {
-        use tamarin_theory::fact::{out_fact, fresh_fact};
-        use tamarin_theory::rule::{
-            ProtoRuleACInstInfo, ProtoRuleName, RuleAttributes, RuleInfo, Rule,
-        };
         use tamarin_term::lterm::{LSort, LVar};
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
+        use tamarin_theory::fact::{fresh_fact, out_fact};
+        use tamarin_theory::rule::{
+            ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo,
+        };
         let mut sys = System::empty();
         let kvar = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-        let info: RuleInfo<ProtoRuleACInstInfo,
-            tamarin_theory::rule::IntrRuleACInfo> =
+        let info: RuleInfo<ProtoRuleACInstInfo, tamarin_theory::rule::IntrRuleACInfo> =
             RuleInfo::Proto(ProtoRuleACInstInfo {
                 name: ProtoRuleName::Stand("Setup"),
                 attributes: RuleAttributes::empty(),
                 loop_breakers: Vec::new(),
             });
-        let rule = Rule::new(info,
+        let rule = Rule::new(
+            info,
             vec![fresh_fact(kvar.clone())],
             vec![out_fact(kvar.clone())],
-            Vec::new());
+            Vec::new(),
+        );
         let nid = LVar::new("i", LSort::Node, 0);
         sys.add_node(nid, rule);
         let s = system_to_dot(&sys);
@@ -1527,10 +1671,10 @@ mod tests {
     // `&nbsp;`→space, record escapes undone).
     #[test]
     fn render_balanced_matches_hs_oidc_rows() {
-        use tamarin_theory::fact::{proto_fact, Multiplicity};
         use tamarin_term::builtin::pair;
         use tamarin_term::lterm::{pub_term, LSort, LVar};
         use tamarin_term::vterm::var_term;
+        use tamarin_theory::fact::{proto_fact, Multiplicity};
 
         let mv = |n: &str| var_term(LVar::new(n, LSort::Msg, 0));
         let pv = |n: &str| var_term(LVar::new(n, LSort::Pub, 0));
@@ -1555,38 +1699,77 @@ mod tests {
             mv("RE1"),
             pair(pv("uri"), pair(mv("AU1"), pair(inner(), mv("sig")))),
         );
-        let f1 = proto_fact(Multiplicity::Persistent, "Server_to_Client_TLS",
-            vec![pv("Server1"), mv("BR1"), big]);
-        let f2 = proto_fact(Multiplicity::Persistent, "St_Browser_Session",
-            vec![mv("BR2"), pv("Server1"), mv("BR1")]);
-        let f3 = proto_fact(Multiplicity::Persistent, "St_Browser_Session",
-            vec![mv("BR2"), pv("Server"), mv("BR3")]);
-        let f4 = proto_fact(Multiplicity::Persistent, "Uri_belongs_to",
-            vec![pv("uri"), pv("Server")]);
+        let f1 = proto_fact(
+            Multiplicity::Persistent,
+            "Server_to_Client_TLS",
+            vec![pv("Server1"), mv("BR1"), big],
+        );
+        let f2 = proto_fact(
+            Multiplicity::Persistent,
+            "St_Browser_Session",
+            vec![mv("BR2"), pv("Server1"), mv("BR1")],
+        );
+        let f3 = proto_fact(
+            Multiplicity::Persistent,
+            "St_Browser_Session",
+            vec![mv("BR2"), pv("Server"), mv("BR3")],
+        );
+        let f4 = proto_fact(
+            Multiplicity::Persistent,
+            "Uri_belongs_to",
+            vec![pv("uri"), pv("Server")],
+        );
 
         // The 4-premise row: widths proportional to one-line lengths.
         let sp = |n: usize| " ".repeat(n);
         let rows = render_balanced(
-            [&f1, &f2, &f3, &f4].iter().map(|f| fact_doc_of(f)).collect());
+            [&f1, &f2, &f3, &f4]
+                .iter()
+                .map(|f| fact_doc_of(f))
+                .collect(),
+        );
         assert_eq!(rows[0], format!(
             "!Server_to_Client_TLS( $Server1, BR1,\n{}<RE1, $uri, AU1, \n{}<'id_token', <'iss', iss>, <'sub', sub>, \n{}<'aud', aud>, 'nonce', nonce>, \n{}sig>\n)",
             sp(23), sp(24), sp(25), sp(24)), "row 0:\n{}", rows[0]);
-        assert_eq!(rows[1], format!(
-            "!St_Browser_Session( BR2,\n{}$Server1,\n{}BR1\n)",
-            sp(21), sp(21)), "row 1:\n{}", rows[1]);
-        assert_eq!(rows[2], format!(
-            "!St_Browser_Session( BR2,\n{}$Server,\n{}BR3\n)",
-            sp(21), sp(21)), "row 2:\n{}", rows[2]);
-        assert_eq!(rows[3], format!(
-            "!Uri_belongs_to( $uri,\n{}$Server\n)",
-            sp(17)), "row 3:\n{}", rows[3]);
+        assert_eq!(
+            rows[1],
+            format!(
+                "!St_Browser_Session( BR2,\n{}$Server1,\n{}BR1\n)",
+                sp(21),
+                sp(21)
+            ),
+            "row 1:\n{}",
+            rows[1]
+        );
+        assert_eq!(
+            rows[2],
+            format!(
+                "!St_Browser_Session( BR2,\n{}$Server,\n{}BR3\n)",
+                sp(21),
+                sp(21)
+            ),
+            "row 2:\n{}",
+            rows[2]
+        );
+        assert_eq!(
+            rows[3],
+            format!("!Uri_belongs_to( $uri,\n{}$Server\n)", sp(17)),
+            "row 3:\n{}",
+            rows[3]
+        );
 
         // The single-fact conclusion row: w = max 30 (round 130) = 130,
         // ribbon = round(130/1.5) = 87 — the 82-col pair fits ONE line
         // (at the page width 100/67 it would split like the premise row).
-        let conc = proto_fact(Multiplicity::Persistent, "Client_to_Server_TLS",
-            vec![mv("BR3"), pv("Server"),
-                 pair(mv("AU1"), pair(inner(), mv("sig")))]);
+        let conc = proto_fact(
+            Multiplicity::Persistent,
+            "Client_to_Server_TLS",
+            vec![
+                mv("BR3"),
+                pv("Server"),
+                pair(mv("AU1"), pair(inner(), mv("sig"))),
+            ],
+        );
         let crow = render_balanced(vec![fact_doc_of(&conc)]);
         assert_eq!(crow[0], format!(
             "!Client_to_Server_TLS( BR3, $Server,\n{}<AU1, <'id_token', <'iss', iss>, <'sub', sub>, <'aud', aud>, 'nonce', nonce>, sig>\n)",
@@ -1597,26 +1780,27 @@ mod tests {
     fn dot_uses_pretty_printing_for_terms() {
         // Two pub var literals should render as $a, $b not as cryptic
         // M:0 placeholders.
-        use tamarin_theory::fact::{out_fact, fresh_fact};
-        use tamarin_theory::rule::{
-            ProtoRuleACInstInfo, ProtoRuleName, RuleAttributes, RuleInfo, Rule,
-        };
         use tamarin_term::lterm::{LSort, LVar};
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
+        use tamarin_theory::fact::{fresh_fact, out_fact};
+        use tamarin_theory::rule::{
+            ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo,
+        };
         let mut sys = System::empty();
         let a = Term::Lit(Lit::Var(LVar::new("a", LSort::Pub, 0)));
-        let info: RuleInfo<ProtoRuleACInstInfo,
-            tamarin_theory::rule::IntrRuleACInfo> =
+        let info: RuleInfo<ProtoRuleACInstInfo, tamarin_theory::rule::IntrRuleACInfo> =
             RuleInfo::Proto(ProtoRuleACInstInfo {
                 name: ProtoRuleName::Stand("Setup"),
                 attributes: RuleAttributes::empty(),
                 loop_breakers: Vec::new(),
             });
-        let rule = Rule::new(info,
+        let rule = Rule::new(
+            info,
             vec![fresh_fact(a.clone())],
             vec![out_fact(a.clone())],
-            Vec::new());
+            Vec::new(),
+        );
         let nid = LVar::new("i", LSort::Node, 0);
         sys.add_node(nid, rule);
         let s = system_to_dot(&sys);
@@ -1625,13 +1809,13 @@ mod tests {
 
     #[test]
     fn dot_emits_cluster_for_role() {
-        use tamarin_theory::fact::out_fact;
-        use tamarin_theory::rule::{
-            ProtoRuleACInstInfo, ProtoRuleName, RuleAttributes, RuleInfo, Rule,
-        };
         use tamarin_term::lterm::{LSort, LVar};
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
+        use tamarin_theory::fact::out_fact;
+        use tamarin_theory::rule::{
+            ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo,
+        };
         let mut sys = System::empty();
         let kvar = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
         let mk = |name: &str, role: Option<&str>| -> RuleACInst {
@@ -1669,9 +1853,15 @@ mod tests {
         let a = LVar::new("a", tamarin_term::lterm::LSort::Node, 0);
         let b = LVar::new("b", tamarin_term::lterm::LSort::Node, 0);
         let c = LVar::new("c", tamarin_term::lterm::LSort::Node, 0);
-        sys.content_mut().less_atoms.push(LessAtom::new(a.clone(), b.clone(), Reason::Fresh));
-        sys.content_mut().less_atoms.push(LessAtom::new(b.clone(), c.clone(), Reason::Fresh));
-        sys.content_mut().less_atoms.push(LessAtom::new(a.clone(), c.clone(), Reason::Fresh));
+        sys.content_mut()
+            .less_atoms
+            .push(LessAtom::new(a.clone(), b.clone(), Reason::Fresh));
+        sys.content_mut()
+            .less_atoms
+            .push(LessAtom::new(b.clone(), c.clone(), Reason::Fresh));
+        sys.content_mut()
+            .less_atoms
+            .push(LessAtom::new(a.clone(), c.clone(), Reason::Fresh));
         let opts_sl0 = crate::graph::GraphOptions {
             simplification_level: crate::graph::SimplificationLevel::SL0,
             compress: false,
@@ -1687,9 +1877,12 @@ mod tests {
         };
         let s3 = system_to_dot_with(&sys, &opts_sl3);
         let dashed_sl3 = s3.matches("style=\"dashed\"").count();
-        assert!(dashed_sl3 < dashed_sl0,
+        assert!(
+            dashed_sl3 < dashed_sl0,
             "SL3 should drop the redundant transitive edge: SL0={} SL3={}",
-            dashed_sl0, dashed_sl3);
+            dashed_sl0,
+            dashed_sl3
+        );
     }
 
     #[test]
@@ -1697,10 +1890,11 @@ mod tests {
         // Smoke test for graph_options_from_query, matching HS `getOptions`
         // (Handler.hs): the `simplification` param reads `SL0..SL3` via the
         // derived `Read`, and `uncompress` presence turns compression off.
-        let opts = crate::graph::graph_options_from_query(
-            "simplification=SL3&uncompress=");
-        assert_eq!(opts.simplification_level,
-            crate::graph::SimplificationLevel::SL3);
+        let opts = crate::graph::graph_options_from_query("simplification=SL3&uncompress=");
+        assert_eq!(
+            opts.simplification_level,
+            crate::graph::SimplificationLevel::SL3
+        );
         assert!(!opts.compress);
     }
 
@@ -1708,13 +1902,13 @@ mod tests {
     fn dot_with_cluster_passes_graphviz_lint() {
         // Render a small system with a cluster and (if `dot` is on
         // PATH) verify the output parses without errors.
-        use tamarin_theory::fact::out_fact;
-        use tamarin_theory::rule::{
-            ProtoRuleACInstInfo, ProtoRuleName, RuleAttributes, RuleInfo, Rule,
-        };
         use tamarin_term::lterm::{LSort, LVar};
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
+        use tamarin_theory::fact::out_fact;
+        use tamarin_theory::rule::{
+            ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo,
+        };
         let mut sys = System::empty();
         let kvar = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
         let mk = |name: &str, role: Option<&str>| -> RuleACInst {
@@ -1745,15 +1939,20 @@ mod tests {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn();
-        let Ok(mut child) = child else { return; };
+        let Ok(mut child) = child else {
+            return;
+        };
         if let Some(mut sin) = child.stdin.take() {
             let _ = sin.write_all(s.as_bytes());
         }
         let out = child.wait_with_output().expect("dot wait");
         // If dot complains, the stderr would be non-empty.
         if !out.status.success() {
-            panic!("graphviz `dot` rejected our output:\nstderr=\n{}\nDOT was:\n{}",
-                String::from_utf8_lossy(&out.stderr), s);
+            panic!(
+                "graphviz `dot` rejected our output:\nstderr=\n{}\nDOT was:\n{}",
+                String::from_utf8_lossy(&out.stderr),
+                s
+            );
         }
     }
 
@@ -1761,23 +1960,26 @@ mod tests {
     fn dot_emits_legend_when_abbreviating_long_terms() {
         // Build a System whose nodes carry a long, frequently-repeated
         // compound term -- the abbreviation algorithm should emit a legend.
-        use tamarin_theory::fact::{Fact, FactTag};
-        use tamarin_theory::rule::{
-            ProtoRuleACInstInfo, ProtoRuleName, RuleAttributes, RuleInfo, Rule,
-        };
-        use tamarin_term::function_symbols::{NoEqSym, Privacy, Constructability};
+        use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
         use tamarin_term::lterm::{LSort, LVar};
         use tamarin_term::term::{f_app_no_eq, Term};
         use tamarin_term::vterm::Lit;
+        use tamarin_theory::fact::{Fact, FactTag};
+        use tamarin_theory::rule::{
+            ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo,
+        };
         let mut sys = System::empty();
         let a = Term::Lit(Lit::Var(LVar::new("argument", LSort::Msg, 0)));
         let b = Term::Lit(Lit::Var(LVar::new("payload", LSort::Msg, 0)));
         let k = Term::Lit(Lit::Var(LVar::new("session_key", LSort::Msg, 0)));
-        let senc = NoEqSym::new(b"senc".to_vec(), 2,
-            Privacy::Public, Constructability::Constructor);
+        let senc = NoEqSym::new(
+            b"senc".to_vec(),
+            2,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
         // A long-ish term to abbreviate.
-        let big = f_app_no_eq(senc.clone(),
-            vec![f_app_no_eq(senc, vec![a, b]), k]);
+        let big = f_app_no_eq(senc, vec![f_app_no_eq(senc, vec![a, b]), k]);
         let mk = |name: &str| -> RuleACInst {
             Rule::new(
                 RuleInfo::Proto(ProtoRuleACInstInfo {
@@ -1802,18 +2004,22 @@ mod tests {
 
     // Build a simple proto rule node with the given premises/actions/concs.
     #[cfg(test)]
-    fn proto_node(name: &str, prems: Vec<LNFact>, acts: Vec<LNFact>,
-                  concs: Vec<LNFact>) -> RuleACInst {
-        use tamarin_theory::rule::{
-            ProtoRuleACInstInfo, ProtoRuleName, RuleAttributes, Rule,
-        };
+    fn proto_node(
+        name: &str,
+        prems: Vec<LNFact>,
+        acts: Vec<LNFact>,
+        concs: Vec<LNFact>,
+    ) -> RuleACInst {
+        use tamarin_theory::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes};
         Rule::new(
             RuleInfo::Proto(ProtoRuleACInstInfo {
                 name: ProtoRuleName::Stand(tamarin_term::intern::intern_str(name)),
                 attributes: RuleAttributes::empty(),
                 loop_breakers: Vec::new(),
             }),
-            prems, concs, acts,
+            prems,
+            concs,
+            acts,
         )
     }
 
@@ -1828,24 +2034,29 @@ mod tests {
         // Authenticated against the repo's HS prover (v1.13.0) on a minimal
         // theory: `--prove` shows `[ Fr( ~k ) ] --> [ !Reg( ~k ), Started( ) ]`
         // — i.e. the `!` prefix on `!Reg` and the spaced empty parens on `Started`.
-        use tamarin_theory::fact::{fresh_fact, proto_fact, Multiplicity};
         use tamarin_term::lterm::{LSort, LVar};
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
+        use tamarin_theory::fact::{fresh_fact, proto_fact, Multiplicity};
         let mut sys = System::empty();
         let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
         let reg = proto_fact(Multiplicity::Persistent, "Reg", vec![k.clone()]);
         let started = proto_fact(Multiplicity::Linear, "Started", vec![]);
-        let ru = proto_node("Setup", vec![fresh_fact(k)],
-            vec![started], vec![reg]);
+        let ru = proto_node("Setup", vec![fresh_fact(k)], vec![started], vec![reg]);
         sys.add_node(LVar::new("i", LSort::Node, 0), ru);
         // Disable compression so the action node / facts are not collapsed.
-        let opts = GraphOptions { compress: false, abbreviate: false,
-            ..GraphOptions::default() };
+        let opts = GraphOptions {
+            compress: false,
+            abbreviate: false,
+            ..GraphOptions::default()
+        };
         let s = system_to_dot_with(&sys, &opts);
         assert!(s.contains("!Reg("), "persistent `!` prefix missing: {}", s);
-        assert!(s.contains("Started( )"),
-            "zero-arity fact should render `Started( )`: {}", s);
+        assert!(
+            s.contains("Started( )"),
+            "zero-arity fact should render `Started( )`: {}",
+            s
+        );
     }
 
     #[test]
@@ -1854,27 +2065,37 @@ mod tests {
         // and `#i.2` when idx==2 (`instance Show LVar`, LTerm.hs:525-532;
         // sortPrefix LSortNode = "#", LTerm.hs:190-195, see line 194). The rule-node header is
         // `prettyNodeId v <-> colon <-> showDotRuleCaseName` (Dot.hs:236-379, see line 336).
-        use tamarin_theory::fact::out_fact;
         use tamarin_term::lterm::{LSort, LVar};
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
-        let opts = GraphOptions { compress: false, abbreviate: false,
-            ..GraphOptions::default() };
+        use tamarin_theory::fact::out_fact;
+        let opts = GraphOptions {
+            compress: false,
+            abbreviate: false,
+            ..GraphOptions::default()
+        };
         let mk = || {
             let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-            proto_node("R", vec![], vec![out_fact(k.clone())],
-                vec![out_fact(k)])
+            proto_node("R", vec![], vec![out_fact(k.clone())], vec![out_fact(k)])
         };
         let mut sys0 = System::empty();
         sys0.add_node(LVar::new("i", LSort::Node, 0), mk());
         let s0 = system_to_dot_with(&sys0, &opts);
         assert!(s0.contains("#i : R"), "idx==0 should render `#i`: {}", s0);
-        assert!(!s0.contains("#i0"), "idx==0 must not append the index: {}", s0);
+        assert!(
+            !s0.contains("#i0"),
+            "idx==0 must not append the index: {}",
+            s0
+        );
 
         let mut sys2 = System::empty();
         sys2.add_node(LVar::new("i", LSort::Node, 2), mk());
         let s2 = system_to_dot_with(&sys2, &opts);
-        assert!(s2.contains("#i.2 : R"), "idx==2 should render `#i.2`: {}", s2);
+        assert!(
+            s2.contains("#i.2 : R"),
+            "idx==2 should render `#i.2`: {}",
+            s2
+        );
     }
 
     #[test]
@@ -1883,24 +2104,32 @@ mod tests {
         // `Diff<getRuleNameDiff ru>` linear proto fact from the action row.
         // For a standard proto rule `R`, getRuleNameDiff = "ProtoR", so the
         // dropped fact is `ProtoFact Linear "DiffProtoR" 0`.
-        use tamarin_theory::fact::{out_fact, proto_fact, Multiplicity};
         use tamarin_term::lterm::{LSort, LVar};
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
+        use tamarin_theory::fact::{out_fact, proto_fact, Multiplicity};
         let mut sys = System::empty();
         let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
         let diff = proto_fact(Multiplicity::Linear, "DiffProtoR", vec![]);
         let real = proto_fact(Multiplicity::Linear, "Visible", vec![]);
-        let ru = proto_node("R", vec![], vec![diff, real],
-            vec![out_fact(k)]);
+        let ru = proto_node("R", vec![], vec![diff, real], vec![out_fact(k)]);
         sys.add_node(LVar::new("i", LSort::Node, 0), ru);
-        let opts = GraphOptions { compress: false, abbreviate: false,
-            ..GraphOptions::default() };
+        let opts = GraphOptions {
+            compress: false,
+            abbreviate: false,
+            ..GraphOptions::default()
+        };
         let s = system_to_dot_with(&sys, &opts);
-        assert!(s.contains("Visible( )"),
-            "non-diff action fact must remain: {}", s);
-        assert!(!s.contains("DiffProtoR"),
-            "Diff annotation fact must be filtered out: {}", s);
+        assert!(
+            s.contains("Visible( )"),
+            "non-diff action fact must remain: {}",
+            s
+        );
+        assert!(
+            !s.contains("DiffProtoR"),
+            "Diff annotation fact must be filtered out: {}",
+            s
+        );
     }
 
     #[test]
@@ -1910,52 +2139,80 @@ mod tests {
         // With an outgoing edge the label is `#id : name` (actions dropped);
         // without one it is the full `#id : name[acts]`. Compact endpoints also
         // carry no record ports (Dot.hs:303-304).
-        use tamarin_theory::constraint::constraints::Edge;
-        use tamarin_theory::fact::{in_fact, out_fact, proto_fact, Multiplicity};
-        use tamarin_theory::rule::{ConcIdx, IntrRuleACInfo, PremIdx, Rule};
         use tamarin_term::lterm::{LSort, LVar};
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
-        let opts = GraphOptions { compress: false, abbreviate: false,
-            ..GraphOptions::default() };
+        use tamarin_theory::constraint::constraints::Edge;
+        use tamarin_theory::fact::{in_fact, out_fact, proto_fact, Multiplicity};
+        use tamarin_theory::rule::{ConcIdx, IntrRuleACInfo, PremIdx, Rule};
+        let opts = GraphOptions {
+            compress: false,
+            abbreviate: false,
+            ..GraphOptions::default()
+        };
         let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Fresh, 0)));
 
         // (1) coerce with an outgoing edge -> compact `#j : coerce`, no actions.
         let mut sys = System::empty();
-        let coerce = Rule::new(RuleInfo::Intr(IntrRuleACInfo::Coerce),
-            vec![in_fact(x.clone())], vec![out_fact(x.clone())],
-            vec![proto_fact(Multiplicity::Linear, "Act", vec![x.clone()])]);
-        let isend = Rule::new(RuleInfo::Intr(IntrRuleACInfo::ISend),
-            vec![in_fact(x.clone())], vec![out_fact(x.clone())], Vec::new());
+        let coerce = Rule::new(
+            RuleInfo::Intr(IntrRuleACInfo::Coerce),
+            vec![in_fact(x.clone())],
+            vec![out_fact(x.clone())],
+            vec![proto_fact(Multiplicity::Linear, "Act", vec![x.clone()])],
+        );
+        let isend = Rule::new(
+            RuleInfo::Intr(IntrRuleACInfo::ISend),
+            vec![in_fact(x.clone())],
+            vec![out_fact(x.clone())],
+            Vec::new(),
+        );
         let j = LVar::new("j", LSort::Node, 0);
         let v = LVar::new("v", LSort::Node, 0);
         sys.add_node(j.clone(), coerce);
         sys.add_node(v.clone(), isend);
-        sys.content_mut().edges.push(Edge { src: (j.clone(), ConcIdx(0)), tgt: (v.clone(), PremIdx(0)) });
+        sys.content_mut().edges.push(Edge {
+            src: (j.clone(), ConcIdx(0)),
+            tgt: (v.clone(), PremIdx(0)),
+        });
         let out = system_to_dot_with(&sys, &opts);
         // Outgoing coerce: `#j : coerce` (its `Act(..)` action is dropped).
-        assert!(out.contains("label=\"#j : coerce\",shape=ellipse"),
-            "outgoing intruder node must be a plain ellipse `#j : coerce`: {out}");
-        assert!(!out.contains("coerce[Act"),
-            "outgoing compact label must drop the action row: {out}");
+        assert!(
+            out.contains("label=\"#j : coerce\",shape=ellipse"),
+            "outgoing intruder node must be a plain ellipse `#j : coerce`: {out}"
+        );
+        assert!(
+            !out.contains("coerce[Act"),
+            "outgoing compact label must drop the action row: {out}"
+        );
         // Compact nodes carry no record ports and no fill/role attrs.
-        assert!(!out.contains("<p0>") && !out.contains("<c0>"),
-            "compact intruder nodes must not emit record ports: {out}");
-        assert!(!out.contains("fillcolor"),
-            "compact intruder nodes carry no fill: {out}");
+        assert!(
+            !out.contains("<p0>") && !out.contains("<c0>"),
+            "compact intruder nodes must not emit record ports: {out}"
+        );
+        assert!(
+            !out.contains("fillcolor"),
+            "compact intruder nodes carry no fill: {out}"
+        );
         // The compact->compact edge is emitted portless.
-        assert!(out.contains("j_0 -> v_0"),
-            "edge between two compact nodes must be portless: {out}");
+        assert!(
+            out.contains("j_0 -> v_0"),
+            "edge between two compact nodes must be portless: {out}"
+        );
 
         // (2) coerce with NO outgoing edge keeps the bracketed action row.
         let mut sys2 = System::empty();
-        let coerce2 = Rule::new(RuleInfo::Intr(IntrRuleACInfo::Coerce),
-            vec![in_fact(x.clone())], vec![out_fact(x.clone())],
-            vec![proto_fact(Multiplicity::Linear, "Act", vec![x.clone()])]);
+        let coerce2 = Rule::new(
+            RuleInfo::Intr(IntrRuleACInfo::Coerce),
+            vec![in_fact(x.clone())],
+            vec![out_fact(x.clone())],
+            vec![proto_fact(Multiplicity::Linear, "Act", vec![x.clone()])],
+        );
         sys2.add_node(LVar::new("k", LSort::Node, 0), coerce2);
         let out2 = system_to_dot_with(&sys2, &opts);
-        assert!(out2.contains("#k : coerce[Act( ~x )]"),
-            "non-outgoing compact label keeps the `[..]` action row: {out2}");
+        assert!(
+            out2.contains("#k : coerce[Act( ~x )]"),
+            "non-outgoing compact label keeps the `[..]` action row: {out2}"
+        );
     }
 
     #[test]
@@ -1963,33 +2220,43 @@ mod tests {
         // HS `dotNodeCompact` prefers `ruleColor'` (the explicit `color:`
         // attribute) over the colormap (Dot.hs:248-256). The hex is
         // `rgbToHex` of the attribute's Rgb.
-        use tamarin_theory::fact::out_fact;
-        use tamarin_theory::rule::{
-            ProtoRuleACInstInfo, ProtoRuleName, RuleAttributes, Rule,
-        };
         use tamarin_term::lterm::{LSort, LVar};
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
+        use tamarin_theory::fact::out_fact;
+        use tamarin_theory::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes};
         use tamarin_utils::color::Rgb;
         let mut sys = System::empty();
         let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
         let rgb = Rgb::new(1.0, 0.5, 0.0);
         let expected = tamarin_utils::color::rgb_to_hex(rgb); // "#ff7f00"
-        let attrs = RuleAttributes { color: Some(rgb), ..Default::default() };
+        let attrs = RuleAttributes {
+            color: Some(rgb),
+            ..Default::default()
+        };
         let ru = Rule::new(
             RuleInfo::Proto(ProtoRuleACInstInfo {
                 name: ProtoRuleName::Stand("Coloured"),
                 attributes: attrs,
                 loop_breakers: Vec::new(),
             }),
-            Vec::new(), vec![out_fact(k.clone())], vec![out_fact(k)]);
+            Vec::new(),
+            vec![out_fact(k.clone())],
+            vec![out_fact(k)],
+        );
         sys.add_node(LVar::new("i", LSort::Node, 0), ru);
-        let opts = GraphOptions { compress: false, abbreviate: false,
-            ..GraphOptions::default() };
+        let opts = GraphOptions {
+            compress: false,
+            abbreviate: false,
+            ..GraphOptions::default()
+        };
         let s = system_to_dot_with(&sys, &opts);
-        assert!(s.contains(&format!("fillcolor=\"{}\"", expected)),
+        assert!(
+            s.contains(&format!("fillcolor=\"{}\"", expected)),
             "explicit rule colour {} must be used as fillcolor: {}",
-            expected, s);
+            expected,
+            s
+        );
     }
 
     #[test]
@@ -1997,64 +2264,84 @@ mod tests {
         // No-cluster preamble mirrors HS setDefaultAttributes (Dot.hs:130-135)
         // — including `width=0.3,height=0.2` on the node defaults. The less
         // edge emits `color` before `style` (HS dotLessEdge, Dot.hs:406-410, see line 410).
-        use tamarin_theory::constraint::constraints::LessAtom;
         use tamarin_term::lterm::{LSort, LVar};
+        use tamarin_theory::constraint::constraints::LessAtom;
         let mut sys = System::empty();
         let a = LVar::new("a", LSort::Node, 0);
         let b = LVar::new("b", LSort::Node, 0);
-        sys.content_mut().less_atoms.push(LessAtom::new(a, b, Reason::Fresh));
-        let opts = GraphOptions { compress: false, abbreviate: false,
+        sys.content_mut()
+            .less_atoms
+            .push(LessAtom::new(a, b, Reason::Fresh));
+        let opts = GraphOptions {
+            compress: false,
+            abbreviate: false,
             simplification_level: crate::graph::SimplificationLevel::SL0,
-            ..GraphOptions::default() };
+            ..GraphOptions::default()
+        };
         let s = system_to_dot_with(&sys, &opts);
-        assert!(s.contains("width=0.3,height=0.2"),
-            "no-cluster preamble must set node width/height: {}", s);
+        assert!(
+            s.contains("width=0.3,height=0.2"),
+            "no-cluster preamble must set node width/height: {}",
+            s
+        );
         // `Reason::Fresh` -> "blue3"; color must precede style.
-        assert!(s.contains("[color=\"blue3\",style=\"dashed\"]"),
-            "less edge must emit color before style: {}", s);
+        assert!(
+            s.contains("[color=\"blue3\",style=\"dashed\"]"),
+            "less edge must emit color before style: {}",
+            s
+        );
     }
 
     #[test]
     fn dot_cluster_preamble_uses_cluster_attributes() {
         // When clusters exist HS switches to setDefaultAttributesIfCluster
         // (Dot.hs:140-161), which sets `packmode`/`pack`/etc.
-        use tamarin_theory::fact::out_fact;
-        use tamarin_theory::rule::{
-            ProtoRuleACInstInfo, ProtoRuleName, RuleAttributes, Rule,
-        };
         use tamarin_term::lterm::{LSort, LVar};
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
+        use tamarin_theory::fact::out_fact;
+        use tamarin_theory::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes};
         let mut sys = System::empty();
         let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
         let mk = |name: &str, role: &str| -> RuleACInst {
-            let attrs = RuleAttributes { role: Some(role.to_string()),
-                ..Default::default() };
+            let attrs = RuleAttributes {
+                role: Some(role.to_string()),
+                ..Default::default()
+            };
             Rule::new(
                 RuleInfo::Proto(ProtoRuleACInstInfo {
                     name: ProtoRuleName::Stand(tamarin_term::intern::intern_str(name)),
                     attributes: attrs,
                     loop_breakers: Vec::new(),
                 }),
-                Vec::new(), vec![out_fact(k.clone())], vec![out_fact(k.clone())])
+                Vec::new(),
+                vec![out_fact(k.clone())],
+                vec![out_fact(k.clone())],
+            )
         };
         sys.add_node(LVar::new("a", LSort::Node, 1), mk("InitA", "Alice"));
         sys.add_node(LVar::new("b", LSort::Node, 2), mk("InitB", "Bob"));
         let s = system_to_dot(&sys);
-        assert!(s.contains("packmode=cluster"),
-            "cluster preamble must set packmode: {}", s);
+        assert!(
+            s.contains("packmode=cluster"),
+            "cluster preamble must set packmode: {}",
+            s
+        );
         // Cluster subgraph styling: filled with the roleColor.
-        assert!(s.contains("style=\"filled\";"),
-            "cluster must be style=filled: {}", s);
+        assert!(
+            s.contains("style=\"filled\";"),
+            "cluster must be style=filled: {}",
+            s
+        );
     }
 
     // ---- nodeColorMap palette (HS Dot.hs:190-218) ----------------------------
 
-    use tamarin_theory::rule::{
-        IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName as PRN, Rule as TRule,
-        RuleAttributes, RuleInfo as TRuleInfo,
-    };
     use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_theory::rule::{
+        IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName as PRN, Rule as TRule, RuleAttributes,
+        RuleInfo as TRuleInfo,
+    };
 
     /// A bare intruder-rule node (no facts) with the given `IntrRuleACInfo`.
     fn intr_node(info: IntrRuleACInfo) -> RuleACInst {
@@ -2068,9 +2355,14 @@ mod tests {
                 attributes: RuleAttributes::empty(),
                 loop_breakers: Vec::new(),
             }),
-            Vec::new(), Vec::new(), Vec::new())
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
     }
-    fn nid(i: u64) -> NodeId { LVar::new("i", LSort::Node, i) }
+    fn nid(i: u64) -> NodeId {
+        LVar::new("i", LSort::Node, i)
+    }
     fn destr(n: &[u8]) -> IntrRuleACInfo {
         IntrRuleACInfo::DestrRule(n.to_vec(), 0, false, false)
     }
@@ -2081,16 +2373,19 @@ mod tests {
     #[test]
     fn group_idx_partition_matches_hs() {
         // HS groupIdx (Dot.hs:196-200).
-        assert_eq!(group_idx(&intr_node(destr(b"x"))), 0);          // isDestrRule
+        assert_eq!(group_idx(&intr_node(destr(b"x"))), 0); // isDestrRule
         assert_eq!(group_idx(&intr_node(IntrRuleACInfo::IEquality)), 0);
-        assert_eq!(group_idx(&intr_node(IntrRuleACInfo::ConstrRule(b"c".to_vec()))), 2);
+        assert_eq!(
+            group_idx(&intr_node(IntrRuleACInfo::ConstrRule(b"c".to_vec()))),
+            2
+        );
         assert_eq!(group_idx(&intr_node(IntrRuleACInfo::Coerce)), 2); // isConstrRule
         assert_eq!(group_idx(&intr_node(IntrRuleACInfo::FreshConstr)), 2);
         assert_eq!(group_idx(&intr_node(IntrRuleACInfo::PubConstr)), 2);
         assert_eq!(group_idx(&intr_node(IntrRuleACInfo::NatConstr)), 2);
-        assert_eq!(group_idx(&intr_node(IntrRuleACInfo::ISend)), 3);  // isISendRule
-        assert_eq!(group_idx(&named_proto_node(PRN::Fresh)), 3);      // isFreshRule
-        assert_eq!(group_idx(&intr_node(IntrRuleACInfo::IRecv)), 1);  // otherwise
+        assert_eq!(group_idx(&intr_node(IntrRuleACInfo::ISend)), 3); // isISendRule
+        assert_eq!(group_idx(&named_proto_node(PRN::Fresh)), 3); // isFreshRule
+        assert_eq!(group_idx(&intr_node(IntrRuleACInfo::IRecv)), 1); // otherwise
         assert_eq!(group_idx(&named_proto_node(PRN::Stand("R"))), 1); // otherwise
     }
 
@@ -2103,10 +2398,10 @@ mod tests {
 
         // ---- one rule per group: sizes = [1, 1, 1, 1] ----
         let n1111: Vec<(NodeId, RuleACInst)> = vec![
-            (nid(0), intr_node(destr(b"d"))),                       // g0 (0,0)
-            (nid(1), named_proto_node(PRN::Stand("R"))),           // g1 (1,0)
+            (nid(0), intr_node(destr(b"d"))),            // g0 (0,0)
+            (nid(1), named_proto_node(PRN::Stand("R"))), // g1 (1,0)
             (nid(2), intr_node(IntrRuleACInfo::ConstrRule(b"c".to_vec()))), // g2 (2,0)
-            (nid(3), named_proto_node(PRN::Fresh)),                // g3 (3,0)
+            (nid(3), named_proto_node(PRN::Fresh)),      // g3 (3,0)
         ];
         let cm = build_node_color_map(&n1111);
         assert_eq!(hex_of(&cm, &n1111[0].1), "#ce90ac"); // (0,0)
@@ -2116,13 +2411,19 @@ mod tests {
 
         // ---- sizes = [2, 1, 3, 1], member index tracks NodeId order ----
         let n2131: Vec<(NodeId, RuleACInst)> = vec![
-            (nid(0), intr_node(destr(b"d1"))),                       // g0 (0,0)
-            (nid(1), intr_node(destr(b"d2"))),                       // g0 (0,1)
-            (nid(2), named_proto_node(PRN::Stand("R"))),            // g1 (1,0)
-            (nid(3), intr_node(IntrRuleACInfo::ConstrRule(b"c1".to_vec()))), // g2 (2,0)
-            (nid(4), intr_node(IntrRuleACInfo::ConstrRule(b"c2".to_vec()))), // g2 (2,1)
-            (nid(5), intr_node(IntrRuleACInfo::Coerce)),            // g2 (2,2)
-            (nid(6), named_proto_node(PRN::Fresh)),                // g3 (3,0)
+            (nid(0), intr_node(destr(b"d1"))),           // g0 (0,0)
+            (nid(1), intr_node(destr(b"d2"))),           // g0 (0,1)
+            (nid(2), named_proto_node(PRN::Stand("R"))), // g1 (1,0)
+            (
+                nid(3),
+                intr_node(IntrRuleACInfo::ConstrRule(b"c1".to_vec())),
+            ), // g2 (2,0)
+            (
+                nid(4),
+                intr_node(IntrRuleACInfo::ConstrRule(b"c2".to_vec())),
+            ), // g2 (2,1)
+            (nid(5), intr_node(IntrRuleACInfo::Coerce)), // g2 (2,2)
+            (nid(6), named_proto_node(PRN::Fresh)),      // g3 (3,0)
         ];
         let cm = build_node_color_map(&n2131);
         assert_eq!(hex_of(&cm, &n2131[0].1), "#ce90ac"); // (0,0)
@@ -2141,8 +2442,8 @@ mod tests {
         // the second destr first; after the NodeId sort the (0,0)/(0,1) split
         // must still land by NodeId, matching the in-order [2,1,3,1] map.
         let shuffled: Vec<(NodeId, RuleACInst)> = vec![
-            (nid(1), intr_node(destr(b"d2"))),  // (0,1) after sort
-            (nid(0), intr_node(destr(b"d1"))),  // (0,0) after sort
+            (nid(1), intr_node(destr(b"d2"))), // (0,1) after sort
+            (nid(0), intr_node(destr(b"d1"))), // (0,0) after sort
         ];
         let cm = build_node_color_map(&shuffled);
         // d1 (nid 0) is member 0; d2 (nid 1) is member 1 — regardless of the
@@ -2171,8 +2472,7 @@ mod tests {
         use tamarin_utils::color::Rgb;
         // Palette-only map for a single otherwise-group proto rule "R":
         // sizes = [0,1,0,0] -> (1,0) = #d5d897.
-        let nodes: Vec<(NodeId, RuleACInst)> =
-            vec![(nid(0), named_proto_node(PRN::Stand("R")))];
+        let nodes: Vec<(NodeId, RuleACInst)> = vec![(nid(0), named_proto_node(PRN::Stand("R")))];
         let cm = build_node_color_map(&nodes);
         let r = &nodes[0].1;
 
@@ -2197,36 +2497,50 @@ mod tests {
     fn dot_rule_node_uses_faithful_palette_fillcolor() {
         // End-to-end through system_to_dot_with: a lone protocol rule is the
         // sole member of group 1, so its fill colour is the (1,0) palette hex #d5d897.
-        use tamarin_theory::fact::out_fact;
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
+        use tamarin_theory::fact::out_fact;
         let mut sys = System::empty();
         let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-        sys.add_node(nid(0),
-            named_proto_node_with_out(PRN::Stand("R"), out_fact(k)));
-        let opts = GraphOptions { compress: false, abbreviate: false,
-            ..GraphOptions::default() };
+        sys.add_node(
+            nid(0),
+            named_proto_node_with_out(PRN::Stand("R"), out_fact(k)),
+        );
+        let opts = GraphOptions {
+            compress: false,
+            abbreviate: false,
+            ..GraphOptions::default()
+        };
         let s = system_to_dot_with(&sys, &opts);
-        assert!(s.contains("fillcolor=\"#d5d897\""),
-            "rule node must use the faithful nodeColorMap palette hex: {}", s);
+        assert!(
+            s.contains("fillcolor=\"#d5d897\""),
+            "rule node must use the faithful nodeColorMap palette hex: {}",
+            s
+        );
         // HS record attrs: the light palette colour is bright, so a black font
         // (Dot.hs:236-379, see line 258/284-287); no `role` attribute -> "Undefined" (Dot.hs:236-379, see line 259).
-        assert!(s.contains("fontcolor=\"black\""),
-            "bright palette colour must use a black font: {}", s);
-        assert!(s.contains("role=\"Undefined\""),
-            "role-less rule must render role=\"Undefined\": {}", s);
+        assert!(
+            s.contains("fontcolor=\"black\""),
+            "bright palette colour must use a black font: {}",
+            s
+        );
+        assert!(
+            s.contains("role=\"Undefined\""),
+            "role-less rule must render role=\"Undefined\": {}",
+            s
+        );
     }
 
     #[test]
     fn color_uses_white_font_matches_hs_luminance() {
         use tamarin_utils::color::Rgb;
         // HS colorUsesWhiteFont: 0.2126r + 0.7152g + 0.0722b < 0.5 (and Just).
-        assert!(!color_uses_white_font(None));                       // absent -> black
+        assert!(!color_uses_white_font(None)); // absent -> black
         assert!(!color_uses_white_font(Some(Rgb::new(1.0, 1.0, 1.0)))); // white bg -> black font
-        assert!(color_uses_white_font(Some(Rgb::new(0.0, 0.0, 0.0))));  // black bg -> white font
-        // A dark blue (low luminance) uses a white font.
-        assert!(color_uses_white_font(Some(Rgb::new(0.0, 0.0, 1.0))));  // 0.0722 < 0.5
-        // A pure green is bright enough for a black font (0.7152 >= 0.5).
+        assert!(color_uses_white_font(Some(Rgb::new(0.0, 0.0, 0.0)))); // black bg -> white font
+                                                                       // A dark blue (low luminance) uses a white font.
+        assert!(color_uses_white_font(Some(Rgb::new(0.0, 0.0, 1.0)))); // 0.0722 < 0.5
+                                                                       // A pure green is bright enough for a black font (0.7152 >= 0.5).
         assert!(!color_uses_white_font(Some(Rgb::new(0.0, 1.0, 0.0))));
     }
 
@@ -2234,9 +2548,9 @@ mod tests {
     fn rule_node_emits_role_attribute() {
         // HS `role = fromMaybe "Undefined" (getNodeRole node)` (Dot.hs:236-379, see line 243,259):
         // a rule carrying a `role` attribute renders it verbatim.
-        use tamarin_theory::fact::out_fact;
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
+        use tamarin_theory::fact::out_fact;
         let mut sys = System::empty();
         let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
         let mut ru = named_proto_node_with_out(PRN::Stand("R"), out_fact(k));
@@ -2244,11 +2558,17 @@ mod tests {
             p.attributes.role = Some("Alice".to_string());
         }
         sys.add_node(nid(0), ru);
-        let opts = GraphOptions { compress: false, abbreviate: false,
-            ..GraphOptions::default() };
+        let opts = GraphOptions {
+            compress: false,
+            abbreviate: false,
+            ..GraphOptions::default()
+        };
         let s = system_to_dot_with(&sys, &opts);
-        assert!(s.contains("role=\"Alice\""),
-            "rule node must render its role attribute: {}", s);
+        assert!(
+            s.contains("role=\"Alice\""),
+            "rule node must render its role attribute: {}",
+            s
+        );
     }
 
     /// Like [`named_proto_node`] but with a single conclusion so the node is
@@ -2260,6 +2580,9 @@ mod tests {
                 attributes: RuleAttributes::empty(),
                 loop_breakers: Vec::new(),
             }),
-            Vec::new(), vec![conc.clone()], vec![conc])
+            Vec::new(),
+            vec![conc.clone()],
+            vec![conc],
+        )
     }
 }

@@ -34,7 +34,11 @@ pub struct ProtoRestriction<F> {
 
 impl<F> ProtoRestriction<F> {
     pub fn new(name: impl Into<String>, formula: F) -> Self {
-        ProtoRestriction { name: name.into(), formula, original_formula: None }
+        ProtoRestriction {
+            name: name.into(),
+            formula,
+            original_formula: None,
+        }
     }
 }
 

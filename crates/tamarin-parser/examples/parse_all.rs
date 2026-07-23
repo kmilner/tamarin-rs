@@ -61,14 +61,23 @@ fn main() {
     let mut failure_reasons: BTreeMap<String, usize> = BTreeMap::new();
 
     for entry in WalkDir::new(&root).follow_links(false) {
-        let entry = match entry { Ok(e) => e, Err(_) => continue };
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
         let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("spthy") { continue; }
+        if path.extension().and_then(|s| s.to_str()) != Some("spthy") {
+            continue;
+        }
         if let Some(f) = &filter {
-            if !path.to_string_lossy().contains(f) { continue; }
+            if !path.to_string_lossy().contains(f) {
+                continue;
+            }
         }
         if let Some(n) = limit {
-            if total >= n { break; }
+            if total >= n {
+                break;
+            }
         }
         let src = match fs::read_to_string(path) {
             Ok(s) => s,
@@ -76,7 +85,9 @@ fn main() {
         };
         total += 1;
         match parse_theory(&src, &["diff"]) {
-            Ok(_) => { ok += 1; }
+            Ok(_) => {
+                ok += 1;
+            }
             Err(e) => {
                 let key = classify(&error_key_source(&e));
                 *failure_reasons.entry(key).or_insert(0) += 1;
@@ -85,8 +96,12 @@ fn main() {
         }
     }
 
-    println!("Parsed {} / {} ({:.1}%)",
-        ok, total, 100.0 * ok as f64 / total.max(1) as f64);
+    println!(
+        "Parsed {} / {} ({:.1}%)",
+        ok,
+        total,
+        100.0 * ok as f64 / total.max(1) as f64
+    );
 
     println!("\nTop failure categories:");
     let mut reasons: Vec<_> = failure_reasons.iter().collect();

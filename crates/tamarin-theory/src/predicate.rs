@@ -50,7 +50,14 @@ impl Predicate {
         };
         let arity = free_vars.len();
         Predicate {
-            fact: Fact::new(FactTag::Proto(Multiplicity::Linear, tamarin_term::intern::intern_str(&cap), arity), free_vars),
+            fact: Fact::new(
+                FactTag::Proto(
+                    Multiplicity::Linear,
+                    tamarin_term::intern::intern_str(&cap),
+                    arity,
+                ),
+                free_vars,
+            ),
             formula,
         }
     }
@@ -76,13 +83,8 @@ pub fn smaller_fact<T>(t1: T, t2: T) -> Fact<T> {
 /// `predicate_expand.rs`, which special-cases the only built-in predicate
 /// (`Smaller`) inline in `expand_atom`. Because nothing on the runtime
 /// path calls this function, the missing-builtin divergence is inert.
-pub fn lookup_predicate<'a, T: Eq>(
-    fa: &Fact<T>,
-    preds: &'a [Predicate],
-) -> Option<&'a Predicate> {
-    preds
-        .iter()
-        .find(|p| p.fact.tag == fa.tag)
+pub fn lookup_predicate<'a, T: Eq>(fa: &Fact<T>, preds: &'a [Predicate]) -> Option<&'a Predicate> {
+    preds.iter().find(|p| p.fact.tag == fa.tag)
 }
 
 #[cfg(test)]
@@ -100,10 +102,8 @@ mod tests {
 
     #[test]
     fn smaller_fact_arity() {
-        let f: Fact<LVar> = smaller_fact(
-            LVar::new("x", LSort::Msg, 0),
-            LVar::new("y", LSort::Msg, 0),
-        );
+        let f: Fact<LVar> =
+            smaller_fact(LVar::new("x", LSort::Msg, 0), LVar::new("y", LSort::Msg, 0));
         assert_eq!(f.arity(), 2);
     }
 

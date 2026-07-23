@@ -61,7 +61,11 @@ pub fn load_from_path(
     let src = std::fs::read_to_string(path)
         .map_err(|e| LoadError::Io(format!("{}: {}", path.display(), e)))?;
     load_from_source(
-        &src, TheoryOrigin::Local(PathBuf::from(path)), maude_path, derivcheck_timeout)
+        &src,
+        TheoryOrigin::Local(PathBuf::from(path)),
+        maude_path,
+        derivcheck_timeout,
+    )
 }
 
 /// Parse + elaborate from a string (for the upload path), then "close"
@@ -96,8 +100,7 @@ pub fn load_from_source(
     // parser theory drives every web renderer (rules / source / message /
     // graphs / sequents).
     tamarin_theory::rule_restriction::lift_rule_restrictions(&mut parser_theory)
-        .map_err(|e| LoadError::Parse(format!(
-            "_restrict expansion failed: {}", e.message)))?;
+        .map_err(|e| LoadError::Parse(format!("_restrict expansion failed: {}", e.message)))?;
 
     // HS lifecycle markers, stderr via `traceM`: "Theory loaded" right
     // after parsing (TheoryLoader.hs:401-424, see line 409; `liftedAddProtoRule` runs
@@ -127,8 +130,7 @@ pub fn load_from_source(
     // prints before `processOpenTheory` runs); RS's `elaborate` is that
     // translation step.
     eprintln!("[Theory {}] Theory translated", parser_theory.name);
-    let mut typed = elaborate(&parser_theory)
-        .map_err(|e| LoadError::Elaborate(e.message))?;
+    let mut typed = elaborate(&parser_theory).map_err(|e| LoadError::Elaborate(e.message))?;
     // Oracle path resolution base (HS Parser.hs:304 sets `inFile` at load;
     // `heuristic: o "./oracle-…"` then resolves against the theory's own
     // directory, `hs_take_directory`).  Local files carry their on-disk
@@ -141,19 +143,19 @@ pub fn load_from_source(
     // (run.rs:577-580): replace `check_theory`'s AST-level placeholder with the
     // signature-driven, width-wrapped version now that the MaudeSig exists.
     wf_report.retain(|e| e.topic != "Subterm Convergence Warning");
-    wf_report.extend(
-        tamarin_theory::pretty_theory::subterm_convergence_report_wf(&maude_sig),
-    );
+    wf_report.extend(tamarin_theory::pretty_theory::subterm_convergence_report_wf(&maude_sig));
 
     // Formula terms (run.rs:601-616): needs the elaborated MaudeSig
     // (reducible/irreducible funsym classification), so it runs here rather than
     // inside `check_theory`.  Insert BEFORE the guardedness / lemma-annotation
     // topics to match HS `formulaReports` order (8b before 8c/9).
     {
-        let term_errors = tamarin_theory::check_terms::check_terms_wf(
-            &parsed_for_wf, &maude_sig);
-        insert_wf_before(&mut wf_report, term_errors,
-            &WF_TOPIC_ORDER[WF_AFTER_CHECK_TERMS..]);
+        let term_errors = tamarin_theory::check_terms::check_terms_wf(&parsed_for_wf, &maude_sig);
+        insert_wf_before(
+            &mut wf_report,
+            term_errors,
+            &WF_TOPIC_ORDER[WF_AFTER_CHECK_TERMS..],
+        );
     }
 
     // Formula guardedness (run.rs:638-656): each lemma/restriction formula that
@@ -161,8 +163,11 @@ pub fn load_from_source(
     // parser theory (HS `formulaReports`), before the SAPIC pass below.
     {
         let guard_errors = tamarin_theory::elaborate::check_guarded_wf(&parser_theory);
-        insert_wf_before(&mut wf_report, guard_errors,
-            &WF_TOPIC_ORDER[WF_AFTER_CHECK_GUARDED..]);
+        insert_wf_before(
+            &mut wf_report,
+            guard_errors,
+            &WF_TOPIC_ORDER[WF_AFTER_CHECK_GUARDED..],
+        );
     }
 
     // SAPIC `process:` translation — mirror `run.rs`'s CLI-side pass
@@ -190,8 +195,7 @@ pub fn load_from_source(
     // with "no variants".  The guard must therefore stay alive across the
     // `populate_rule_variants` call in the maude block below (it does: this
     // binding lives to the end of the function).
-    let _sapic_funs_guard =
-        tamarin_theory::elaborate::set_user_funs_for_theory(&parser_theory);
+    let _sapic_funs_guard = tamarin_theory::elaborate::set_user_funs_for_theory(&parser_theory);
     // HS `Acc.checkWellformedness t` (translateTheory, TheoryLoader.hs:448-460, see line 455)
     // runs on the PRE-translation theory — before `apply_sapic` injects the
     // SAPIC-generated rules (mirrors run.rs's CLI-side placement).
@@ -200,9 +204,9 @@ pub fn load_from_source(
     // HS `Sapic.checkWellformedness` (Warnings.hs) is part of `preReport`, which
     // is PREPENDED to the rest of the report (run.rs:685-695).  A hard
     // translation error still propagates as `LoadError::Elaborate`.
-    let sapic_wf = tamarin_sapic::apply::apply_sapic(
-        &mut parser_theory, &mut typed, user_set_heuristic,
-    ).map_err(|e| LoadError::Elaborate(e.message))?;
+    let sapic_wf =
+        tamarin_sapic::apply::apply_sapic(&mut parser_theory, &mut typed, user_set_heuristic)
+            .map_err(|e| LoadError::Elaborate(e.message))?;
     // Accountability translation (HS `Sapic.translate >=> Acc.translate`,
     // TheoryLoader.hs:428-443, see line 430): expands each `… accounts for` lemma into its
     // verification-condition lemmas + case-test predicates, injecting into
@@ -231,8 +235,11 @@ pub fn load_from_source(
         let topic = "Facts occur in the left-hand-side but not in any right-hand-side ";
         wf_report.retain(|e| e.topic != topic);
         let lhs_rhs = tamarin_parser::wf::fact_lhs_occur_no_rhs(&post_thy);
-        insert_wf_before(&mut wf_report, lhs_rhs,
-            &WF_TOPIC_ORDER[WF_AFTER_FACT_LHS..]);
+        insert_wf_before(
+            &mut wf_report,
+            lhs_rhs,
+            &WF_TOPIC_ORDER[WF_AFTER_FACT_LHS..],
+        );
         // HS `publicNamesReport` runs on the TRANSLATED rules — the
         // parser-level report cannot see the source process a generated
         // rule carries as its `process=` attribute (run.rs:950-973, e.g.
@@ -243,8 +250,7 @@ pub fn load_from_source(
         // headed by the variable-sorts topic.
         let caps_topic = "Public constants with mismatching capitalization";
         wf_report.retain(|e| e.topic != caps_topic);
-        let public_names =
-            tamarin_theory::elaborate::sapic_public_names_report(&typed);
+        let public_names = tamarin_theory::elaborate::sapic_public_names_report(&typed);
         insert_wf_before(&mut wf_report, public_names, &after_public_names_topics());
     }
 
@@ -258,10 +264,14 @@ pub fn load_from_source(
         // CLI-side pass here on the load path (identical writeback in source
         // order) so the byte-faithful `web_proto_rules` printer has them.
         use tamarin_theory::theory::{OpenProtoRule, TheoryItem};
-        let mut rules: Vec<OpenProtoRule> = typed.items.iter().filter_map(|i| match i {
-            TheoryItem::Rule(r) => Some(r.clone()),
-            _ => None,
-        }).collect();
+        let mut rules: Vec<OpenProtoRule> = typed
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                TheoryItem::Rule(r) => Some(r.clone()),
+                _ => None,
+            })
+            .collect();
         tamarin_theory::constraint::solver::context::annotate_loop_breakers(&mut rules, &maude);
         let mut iter = rules.into_iter();
         for item in typed.items.iter_mut() {
@@ -288,7 +298,9 @@ pub fn load_from_source(
             eprintln!("[Theory {}] Derivation checks started", typed.name);
         }
         let extra = tamarin_theory::deriv_check::check_message_derivation(
-            &parser_theory, &maude, derivcheck_timeout,
+            &parser_theory,
+            &maude,
+            derivcheck_timeout,
         );
         wf_report.extend(extra);
         if derivcheck_timeout > 0 {
@@ -354,8 +366,8 @@ fn make_wf_errors_html(report: &[WfError]) -> String {
     // lines rejoin with `\n` (trailing `\n`).  `html_escape` never touches
     // spaces or newlines, so escaping the whole body first is byte-equivalent
     // to escaping each line's non-leading remainder in the loop.
-    let rendered = tamarin_theory::pretty_hpj::postprocess_html(
-        &crate::handlers::root::html_escape(body));
+    let rendered =
+        tamarin_theory::pretty_hpj::postprocess_html(&crate::handlers::root::html_escape(body));
     // HS `makeWfErrorsHtml`: <div> + literal WARNING line + rendered body + </div>.
     format!(
         "<div class=\"wf-warning\">\n\
