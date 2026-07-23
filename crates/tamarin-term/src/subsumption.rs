@@ -60,9 +60,15 @@ pub(crate) fn compare_term_subs(
     t2: &LNTerm,
 ) -> Result<Option<Ordering>, MaudeError> {
     // arm A: `t1 matchWith t2` = subject t1, pattern t2.
-    let match_a = maude.match_eqs(&[Equal { lhs: t1.clone(), rhs: t2.clone() }])?;
+    let match_a = maude.match_eqs(&[Equal {
+        lhs: t1.clone(),
+        rhs: t2.clone(),
+    }])?;
     // arm B: `t2 matchWith t1` = subject t2, pattern t1.
-    let match_b = maude.match_eqs(&[Equal { lhs: t2.clone(), rhs: t1.clone() }])?;
+    let match_b = maude.match_eqs(&[Equal {
+        lhs: t2.clone(),
+        rhs: t1.clone(),
+    }])?;
     Ok(match (match_a.is_empty(), match_b.is_empty()) {
         (true, true) => None,
         (false, true) => Some(Ordering::Greater),
@@ -81,7 +87,10 @@ pub(crate) fn eq_term_subs(
     t1: &LNTerm,
     t2: &LNTerm,
 ) -> Result<bool, MaudeError> {
-    Ok(matches!(compare_term_subs(maude, t1, t2)?, Some(Ordering::Equal)))
+    Ok(matches!(
+        compare_term_subs(maude, t1, t2)?,
+        Some(Ordering::Equal)
+    ))
 }
 
 // =============================================================================
@@ -133,11 +142,11 @@ pub(crate) fn eq_term_subs(
 // dedup BP destructor variants byte-identically.
 // =============================================================================
 
+use crate::function_symbols::{AcSym, CSym, FunSym};
 use crate::lterm::LVar;
 use crate::subst_vfresh::LNSubstVFresh;
-use crate::vterm::{var_term, Lit};
 use crate::term::Term;
-use crate::function_symbols::{AcSym, CSym, FunSym};
+use crate::vterm::{var_term, Lit};
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 

@@ -25,10 +25,9 @@
 
 use tamarin_parser::ast as p;
 use tamarin_theory::guarded_types::{
-    self as gt, atom_to_gatom_free, close_subst, collect_free_atom, gatom_to_atom,
-    lvar_to_binding, map_free_atom, normalise_msg_sort, open_subst,
-    subst_bound_atom_at_depth, subst_free_atom_at_depth, BVar, GAtom, GBinding,
-    GFact, GTerm,
+    self as gt, atom_to_gatom_free, close_subst, collect_free_atom, gatom_to_atom, lvar_to_binding,
+    map_free_atom, normalise_msg_sort, open_subst, subst_bound_atom_at_depth,
+    subst_free_atom_at_depth, BVar, GAtom, GBinding, GFact, GTerm,
 };
 
 // The connective/quantifier enums (HS Formula.hs:104,108) are shared with the
@@ -100,12 +99,22 @@ fn cmp_lvar(a: &p::VarSpec, b: &p::VarSpec) -> std::cmp::Ordering {
 
 /// HS `tempVar name = LVar name LSortNode 0`.
 pub(crate) fn temp_var(name: &str) -> p::VarSpec {
-    p::VarSpec { name: name.to_string(), idx: 0, sort: p::SortHint::Node, typ: None }
+    p::VarSpec {
+        name: name.to_string(),
+        idx: 0,
+        sort: p::SortHint::Node,
+        typ: None,
+    }
 }
 
 /// HS `msgVar name = LVar name LSortMsg 0`.
 pub(crate) fn msg_var(name: &str) -> p::VarSpec {
-    p::VarSpec { name: name.to_string(), idx: 0, sort: p::SortHint::Msg, typ: None }
+    p::VarSpec {
+        name: name.to_string(),
+        idx: 0,
+        sort: p::SortHint::Msg,
+        typ: None,
+    }
 }
 
 fn free_term(v: p::VarSpec) -> GTerm {
@@ -121,9 +130,7 @@ pub(crate) fn free_var_term(v: p::VarSpec) -> GTerm {
 /// compared after normalising to their concrete base (a bare `Untagged`
 /// message variable is `LSortMsg`).
 pub(crate) fn lvar_eq(a: &p::VarSpec, b: &p::VarSpec) -> bool {
-    a.idx == b.idx
-        && a.name == b.name
-        && normalise_msg_sort(a.sort) == normalise_msg_sort(b.sort)
+    a.idx == b.idx && a.name == b.name && normalise_msg_sort(a.sort) == normalise_msg_sort(b.sort)
 }
 
 /// HS `tempTerm name = varTerm $ Free $ LVar name LSortNode 0`.
@@ -139,7 +146,12 @@ fn msg_term(name: &str) -> GTerm {
 /// HS `protoFactFormula name terms at = Ato $ Action at $ protoFact Linear name terms`.
 pub(crate) fn proto_fact_formula(name: &str, terms: Vec<GTerm>, at: GTerm) -> Fm {
     Fm::Ato(GAtom::Action(
-        GFact { persistent: false, name: name.to_string(), args: terms.into(), annotations: Vec::new() },
+        GFact {
+            persistent: false,
+            name: name.to_string(),
+            args: terms.into(),
+            annotations: Vec::new(),
+        },
         at,
     ))
 }
@@ -207,7 +219,9 @@ pub(crate) fn strict_subset_of(lhs: &[p::VarSpec], rhs: &[p::VarSpec]) -> Fm {
 /// HS `foldr1 op` for a non-empty list; right-associative.
 pub(crate) fn fold_r1(op: Conn, mut fms: Vec<Fm>) -> Fm {
     let last = fms.pop().expect("fold_r1: empty list");
-    fms.into_iter().rev().fold(last, |acc, f| Fm::Conn(op, Box::new(f), Box::new(acc)))
+    fms.into_iter()
+        .rev()
+        .fold(last, |acc, f| Fm::Conn(op, Box::new(f), Box::new(acc)))
 }
 
 /// HS `foldl1 op` for a non-empty list; left-associative.
@@ -335,9 +349,7 @@ fn map_free_fm<F: FnMut(&p::VarSpec) -> p::VarSpec>(fm: &Fm, f: &mut F) -> Fm {
         Fm::Ato(a) => Fm::Ato(map_free_atom(a, f)),
         Fm::Tf(b) => Fm::Tf(*b),
         Fm::Not(p_) => Fm::Not(Box::new(map_free_fm(p_, f))),
-        Fm::Conn(c, a, b) => {
-            Fm::Conn(*c, Box::new(map_free_fm(a, f)), Box::new(map_free_fm(b, f)))
-        }
+        Fm::Conn(c, a, b) => Fm::Conn(*c, Box::new(map_free_fm(a, f)), Box::new(map_free_fm(b, f))),
         Fm::Qua(q, h, body) => Fm::Qua(*q, h.clone(), Box::new(map_free_fm(body, f))),
     }
 }
@@ -362,25 +374,32 @@ fn shift_free_at(n: u32, fm: &Fm, depth: u32) -> Fm {
             Box::new(shift_free_at(n, a, depth)),
             Box::new(shift_free_at(n, b, depth)),
         ),
-        Fm::Qua(q, h, body) => {
-            Fm::Qua(*q, h.clone(), Box::new(shift_free_at(n, body, depth + 1)))
-        }
+        Fm::Qua(q, h, body) => Fm::Qua(*q, h.clone(), Box::new(shift_free_at(n, body, depth + 1))),
     }
 }
 
 fn shift_bound_atom(a: &GAtom, threshold: u32, n: u32) -> GAtom {
     match a {
-        GAtom::Eq(x, y) => GAtom::Eq(shift_bound_term(x, threshold, n), shift_bound_term(y, threshold, n)),
-        GAtom::Less(x, y) => GAtom::Less(shift_bound_term(x, threshold, n), shift_bound_term(y, threshold, n)),
-        GAtom::LessMset(x, y) => {
-            GAtom::LessMset(shift_bound_term(x, threshold, n), shift_bound_term(y, threshold, n))
-        }
-        GAtom::Subterm(x, y) => {
-            GAtom::Subterm(shift_bound_term(x, threshold, n), shift_bound_term(y, threshold, n))
-        }
-        GAtom::Action(f, t) => {
-            GAtom::Action(shift_bound_fact(f, threshold, n), shift_bound_term(t, threshold, n))
-        }
+        GAtom::Eq(x, y) => GAtom::Eq(
+            shift_bound_term(x, threshold, n),
+            shift_bound_term(y, threshold, n),
+        ),
+        GAtom::Less(x, y) => GAtom::Less(
+            shift_bound_term(x, threshold, n),
+            shift_bound_term(y, threshold, n),
+        ),
+        GAtom::LessMset(x, y) => GAtom::LessMset(
+            shift_bound_term(x, threshold, n),
+            shift_bound_term(y, threshold, n),
+        ),
+        GAtom::Subterm(x, y) => GAtom::Subterm(
+            shift_bound_term(x, threshold, n),
+            shift_bound_term(y, threshold, n),
+        ),
+        GAtom::Action(f, t) => GAtom::Action(
+            shift_bound_fact(f, threshold, n),
+            shift_bound_term(t, threshold, n),
+        ),
         GAtom::Last(t) => GAtom::Last(shift_bound_term(t, threshold, n)),
         GAtom::Pred(f) => GAtom::Pred(shift_bound_fact(f, threshold, n)),
     }
@@ -390,7 +409,11 @@ fn shift_bound_fact(f: &GFact, threshold: u32, n: u32) -> GFact {
     GFact {
         persistent: f.persistent,
         name: f.name.clone(),
-        args: f.args.iter().map(|a| shift_bound_term(a, threshold, n)).collect(),
+        args: f
+            .args
+            .iter()
+            .map(|a| shift_bound_term(a, threshold, n))
+            .collect(),
         annotations: f.annotations.clone(),
     }
 }
@@ -411,16 +434,21 @@ fn shift_bound_term(t: &GTerm, threshold: u32, n: u32) -> GTerm {
         | GTerm::DhNeutral => t.clone(),
         GTerm::App(name, args) => GTerm::App(
             name.clone(),
-            args.iter().map(|a| shift_bound_term(a, threshold, n)).collect(),
+            args.iter()
+                .map(|a| shift_bound_term(a, threshold, n))
+                .collect(),
         ),
         GTerm::AlgApp(name, a, b) => GTerm::AlgApp(
             name.clone(),
             gt::ga(shift_bound_term(a, threshold, n)),
             gt::ga(shift_bound_term(b, threshold, n)),
         ),
-        GTerm::Pair(items) => {
-            GTerm::Pair(items.iter().map(|a| shift_bound_term(a, threshold, n)).collect())
-        }
+        GTerm::Pair(items) => GTerm::Pair(
+            items
+                .iter()
+                .map(|a| shift_bound_term(a, threshold, n))
+                .collect(),
+        ),
         GTerm::Diff(a, b) => GTerm::Diff(
             gt::ga(shift_bound_term(a, threshold, n)),
             gt::ga(shift_bound_term(b, threshold, n)),
@@ -646,18 +674,26 @@ fn from_p(f: &p::Formula, scope: &[p::VarSpec]) -> Fm {
             Fm::Ato(resolve_atom_sorts(&ga))
         }
         p::Formula::Not(p_) => Fm::Not(Box::new(from_p(p_, scope))),
-        p::Formula::And(a, b) => {
-            Fm::Conn(Conn::And, Box::new(from_p(a, scope)), Box::new(from_p(b, scope)))
-        }
-        p::Formula::Or(a, b) => {
-            Fm::Conn(Conn::Or, Box::new(from_p(a, scope)), Box::new(from_p(b, scope)))
-        }
-        p::Formula::Implies(a, b) => {
-            Fm::Conn(Conn::Imp, Box::new(from_p(a, scope)), Box::new(from_p(b, scope)))
-        }
-        p::Formula::Iff(a, b) => {
-            Fm::Conn(Conn::Iff, Box::new(from_p(a, scope)), Box::new(from_p(b, scope)))
-        }
+        p::Formula::And(a, b) => Fm::Conn(
+            Conn::And,
+            Box::new(from_p(a, scope)),
+            Box::new(from_p(b, scope)),
+        ),
+        p::Formula::Or(a, b) => Fm::Conn(
+            Conn::Or,
+            Box::new(from_p(a, scope)),
+            Box::new(from_p(b, scope)),
+        ),
+        p::Formula::Implies(a, b) => Fm::Conn(
+            Conn::Imp,
+            Box::new(from_p(a, scope)),
+            Box::new(from_p(b, scope)),
+        ),
+        p::Formula::Iff(a, b) => Fm::Conn(
+            Conn::Iff,
+            Box::new(from_p(a, scope)),
+            Box::new(from_p(b, scope)),
+        ),
         p::Formula::Forall(vs, body) => from_p_qua(Quant::All, vs, body, scope),
         p::Formula::Exists(vs, body) => from_p_qua(Quant::Ex, vs, body, scope),
     }
@@ -689,9 +725,7 @@ fn resolve_atom_sorts(a: &GAtom) -> GAtom {
         GAtom::Subterm(x, y) => {
             GAtom::Subterm(resolve_term_sorts(x, false), resolve_term_sorts(y, false))
         }
-        GAtom::Action(f, t) => {
-            GAtom::Action(resolve_fact_sorts(f), resolve_term_sorts(t, true))
-        }
+        GAtom::Action(f, t) => GAtom::Action(resolve_fact_sorts(f), resolve_term_sorts(t, true)),
         GAtom::Last(t) => GAtom::Last(resolve_term_sorts(t, true)),
         GAtom::Pred(f) => GAtom::Pred(resolve_fact_sorts(f)),
     }
@@ -701,7 +735,11 @@ fn resolve_fact_sorts(f: &GFact) -> GFact {
     GFact {
         persistent: f.persistent,
         name: f.name.clone(),
-        args: f.args.iter().map(|t| resolve_term_sorts(t, false)).collect(),
+        args: f
+            .args
+            .iter()
+            .map(|t| resolve_term_sorts(t, false))
+            .collect(),
         annotations: f.annotations.clone(),
     }
 }
@@ -710,7 +748,11 @@ fn resolve_term_sorts(t: &GTerm, temporal: bool) -> GTerm {
     match t {
         GTerm::Var(BVar::Free(v)) => {
             let mut w = v.clone();
-            w.sort = if temporal { p::SortHint::Node } else { normalise_msg_sort(v.sort) };
+            w.sort = if temporal {
+                p::SortHint::Node
+            } else {
+                normalise_msg_sort(v.sort)
+            };
             GTerm::Var(BVar::Free(w))
         }
         GTerm::Var(_)
@@ -807,11 +849,15 @@ fn to_p(fm: &Fm, opened: &[p::VarSpec], counter: &mut u64) -> p::Formula {
 /// `Action` atoms of a formula.
 pub(crate) fn formula_action_facts(fm: &Fm) -> Vec<GFact> {
     let mut out = Vec::new();
-    collect_atom_facts(fm, &mut |a, out| {
-        if let GAtom::Action(f, _) = a {
-            out.push(f.clone());
-        }
-    }, &mut out);
+    collect_atom_facts(
+        fm,
+        &mut |a, out| {
+            if let GAtom::Action(f, _) = a {
+                out.push(f.clone());
+            }
+        },
+        &mut out,
+    );
     out
 }
 
@@ -819,11 +865,15 @@ pub(crate) fn formula_action_facts(fm: &Fm) -> Vec<GFact> {
 /// atoms HS `expandLemma` resolves against the theory's predicates.
 pub(crate) fn formula_pred_facts(fm: &Fm) -> Vec<GFact> {
     let mut out = Vec::new();
-    collect_atom_facts(fm, &mut |a, out| {
-        if let GAtom::Pred(f) = a {
-            out.push(f.clone());
-        }
-    }, &mut out);
+    collect_atom_facts(
+        fm,
+        &mut |a, out| {
+            if let GAtom::Pred(f) = a {
+                out.push(f.clone());
+            }
+        },
+        &mut out,
+    );
     out
 }
 
@@ -849,7 +899,12 @@ mod tests {
     use super::*;
 
     fn node(name: &str, idx: u64) -> p::VarSpec {
-        p::VarSpec { name: name.to_string(), idx, sort: p::SortHint::Node, typ: None }
+        p::VarSpec {
+            name: name.to_string(),
+            idx,
+            sort: p::SortHint::Node,
+            typ: None,
+        }
     }
 
     /// A( x ) @ #i with x free (idx 0) — the public-names case test body,
@@ -863,7 +918,12 @@ mod tests {
     }
 
     fn msg_var_idx(name: &str, idx: u64) -> p::VarSpec {
-        p::VarSpec { name: name.to_string(), idx, sort: p::SortHint::Msg, typ: None }
+        p::VarSpec {
+            name: name.to_string(),
+            idx,
+            sort: p::SortHint::Msg,
+            typ: None,
+        }
     }
 
     /// `Ex #i. A(x)@#i` (x free) round-trips p::Formula → Fm → p::Formula
@@ -905,7 +965,10 @@ mod tests {
     fn rename_shifts_and_advances_counter() {
         let fm = Fm::Qua(
             Quant::Ex,
-            GBinding { name: "i".into(), sort: p::SortHint::Node },
+            GBinding {
+                name: "i".into(),
+                sort: p::SortHint::Node,
+            },
             Box::new(action_a_x_at_i(0)),
         );
         let mut counter = 0u64;
@@ -922,9 +985,16 @@ mod tests {
     #[test]
     fn simplify_true_implication_and_quantifier() {
         // ∀ x. (P => ⊤)  ->  ⊤
-        let inner = proto_fact_formula("P", vec![], GTerm::Var(BVar::Bound(0)))
-            .implies(Fm::Tf(true));
-        let f = Fm::Qua(Quant::All, GBinding { name: "x".into(), sort: p::SortHint::Msg }, Box::new(inner));
+        let inner =
+            proto_fact_formula("P", vec![], GTerm::Var(BVar::Bound(0))).implies(Fm::Tf(true));
+        let f = Fm::Qua(
+            Quant::All,
+            GBinding {
+                name: "x".into(),
+                sort: p::SortHint::Msg,
+            },
+            Box::new(inner),
+        );
         assert_eq!(simplify_formula(f), Fm::Tf(true));
     }
 
@@ -935,7 +1005,10 @@ mod tests {
         let x = msg_var_idx("x", 0);
         let y = msg_var_idx("y", 0);
         assert_eq!(
-            simplify_formula(Fm::Ato(GAtom::Eq(free_term(x.clone()), free_term(x.clone())))),
+            simplify_formula(Fm::Ato(GAtom::Eq(
+                free_term(x.clone()),
+                free_term(x.clone())
+            ))),
             Fm::Tf(true)
         );
         // x = y is preserved.
@@ -950,7 +1023,10 @@ mod tests {
     fn pull_quantifiers_shifts_dangling_bound() {
         let all_j = Fm::Qua(
             Quant::All,
-            GBinding { name: "j".into(), sort: p::SortHint::Node },
+            GBinding {
+                name: "j".into(),
+                sort: p::SortHint::Node,
+            },
             Box::new(proto_fact_formula("A", vec![], GTerm::Var(BVar::Bound(0)))),
         );
         // B@Bound(0): a reference dangling past this formula.
@@ -963,8 +1039,14 @@ mod tests {
         let Fm::Conn(Conn::And, l, r) = *body else {
             panic!("expected a conjunction under the binder");
         };
-        assert_eq!(*l, proto_fact_formula("A", vec![], GTerm::Var(BVar::Bound(0))));
-        assert_eq!(*r, proto_fact_formula("B", vec![], GTerm::Var(BVar::Bound(1))));
+        assert_eq!(
+            *l,
+            proto_fact_formula("A", vec![], GTerm::Var(BVar::Bound(0)))
+        );
+        assert_eq!(
+            *r,
+            proto_fact_formula("B", vec![], GTerm::Var(BVar::Bound(1)))
+        );
     }
 
     /// `mergeQuantifiers` pulls an existential out of an implication's guard,
@@ -974,7 +1056,10 @@ mod tests {
         // (Ex #i. P@i) => (Q)  with Q closed (a nullary fact @ a fresh bound)
         let guard = Fm::Qua(
             Quant::Ex,
-            GBinding { name: "i".into(), sort: p::SortHint::Node },
+            GBinding {
+                name: "i".into(),
+                sort: p::SortHint::Node,
+            },
             Box::new(proto_fact_formula("P", vec![], GTerm::Var(BVar::Bound(0)))),
         );
         let concl = Fm::Tf(false);

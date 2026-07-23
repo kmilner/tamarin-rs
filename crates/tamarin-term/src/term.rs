@@ -72,7 +72,11 @@ impl<A: PartialEq> PartialEq for Term<A> {
         // `Lit`/`App` cross pair unequal.
         match self {
             Term::Lit(a) => {
-                if let Term::Lit(b) = other { a == b } else { false }
+                if let Term::Lit(b) = other {
+                    a == b
+                } else {
+                    false
+                }
             }
             Term::App(s1, a1) => {
                 if let Term::App(s2, a2) = other {
@@ -135,8 +139,15 @@ impl<A: std::hash::Hash> std::hash::Hash for Term<A> {
     #[inline]
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self {
-            Term::Lit(a) => { 0u8.hash(state); a.hash(state); }
-            Term::App(s, args) => { 1u8.hash(state); s.hash(state); args.hash(state); }
+            Term::Lit(a) => {
+                0u8.hash(state);
+                a.hash(state);
+            }
+            Term::App(s, args) => {
+                1u8.hash(state);
+                s.hash(state);
+                args.hash(state);
+            }
         }
     }
 }
@@ -164,7 +175,9 @@ impl<A> Term<A> {
 // =============================================================================
 
 /// `lit l`: build a literal term.
-pub fn lit<A>(l: A) -> Term<A> { Term::Lit(l) }
+pub fn lit<A>(l: A) -> Term<A> {
+    Term::Lit(l)
+}
 
 /// `fApp fsym ts`: smart constructor that AC-normalises when needed.
 ///
@@ -190,7 +203,10 @@ pub fn f_app_ac<A: Ord + Clone>(sym: AcSym, args: Vec<Term<A>>) -> Term<A> {
     let target = FunSym::Ac(sym);
     // Fast path: when no argument is a nested same-symbol App, the flatten
     // loop would be the identity copy, so sort `args` in place and reuse it.
-    if !args.iter().any(|a| matches!(a, Term::App(s, _) if *s == target)) {
+    if !args
+        .iter()
+        .any(|a| matches!(a, Term::App(s, _) if *s == target))
+    {
         let mut args = args;
         args.sort();
         return Term::App(target, args.into());
@@ -234,7 +250,9 @@ pub fn unsafe_f_app<A>(fsym: FunSym, args: Vec<Term<A>>) -> Term<A> {
 // =============================================================================
 
 pub fn is_subterm<A: PartialEq>(needle: &Term<A>, haystack: &Term<A>) -> bool {
-    if needle == haystack { return true; }
+    if needle == haystack {
+        return true;
+    }
     is_proper_subterm(needle, haystack)
 }
 
@@ -246,7 +264,9 @@ pub fn is_proper_subterm<A: PartialEq>(needle: &Term<A>, haystack: &Term<A>) -> 
 }
 
 pub fn count_subterms<A: PartialEq>(needle: &Term<A>, haystack: &Term<A>) -> usize {
-    if needle == haystack { return 1; }
+    if needle == haystack {
+        return 1;
+    }
     count_proper_subterms(needle, haystack)
 }
 
@@ -272,8 +292,9 @@ pub fn is_ac<A>(t: &Term<A>) -> bool {
 /// `viewTerm2 -> FPair _ _`): top symbol is the binary `pair` constructor.
 pub fn is_pair<A>(t: &Term<A>) -> bool {
     match t {
-        Term::App(FunSym::NoEq(s), args) =>
-            *s == crate::function_symbols::pair_sym() && args.len() == 2,
+        Term::App(FunSym::NoEq(s), args) => {
+            *s == crate::function_symbols::pair_sym() && args.len() == 2
+        }
         _ => false,
     }
 }
@@ -290,8 +311,9 @@ pub fn is_product<A>(t: &Term<A>) -> bool {
 /// argument.
 pub fn is_inverse<A>(t: &Term<A>) -> bool {
     match t {
-        Term::App(FunSym::NoEq(s), args) =>
-            s.name == crate::function_symbols::INV_SYM_STRING && args.len() == 1,
+        Term::App(FunSym::NoEq(s), args) => {
+            s.name == crate::function_symbols::INV_SYM_STRING && args.len() == 1
+        }
         _ => false,
     }
 }
@@ -301,8 +323,9 @@ pub fn is_inverse<A>(t: &Term<A>) -> bool {
 /// (Term.hs:239-251) — pre-order, descending through pairs/AC operators.
 pub fn all_prot_subterms<A: Clone>(t: &Term<A>) -> Vec<Term<A>> {
     match t {
-        Term::App(_, args) if is_pair(t) || is_ac(t) =>
-            args.iter().flat_map(|a| all_prot_subterms(a)).collect(),
+        Term::App(_, args) if is_pair(t) || is_ac(t) => {
+            args.iter().flat_map(|a| all_prot_subterms(a)).collect()
+        }
         Term::App(_, args) => {
             let mut out = vec![t.clone()];
             for a in args.iter() {
@@ -318,16 +341,12 @@ pub fn all_prot_subterms<A: Clone>(t: &Term<A>) -> Vec<Term<A>> {
 // Replacement helpers (top-down)
 // =============================================================================
 
-pub fn replace_subterm<A: Clone, F: FnMut(Term<A>) -> Term<A>>(
-    f: &mut F,
-    t: Term<A>,
-) -> Term<A> {
+pub fn replace_subterm<A: Clone, F: FnMut(Term<A>) -> Term<A>>(f: &mut F, t: Term<A>) -> Term<A> {
     let new = f(t);
     match new {
         Term::Lit(_) => new,
         Term::App(s, ts) => {
-            let new_ts: Vec<Term<A>> =
-                ts.iter().cloned().map(|c| replace_subterm(f, c)).collect();
+            let new_ts: Vec<Term<A>> = ts.iter().cloned().map(|c| replace_subterm(f, c)).collect();
             Term::App(s, new_ts.into())
         }
     }
@@ -339,8 +358,7 @@ pub fn replace_proper_subterm<A: Clone, F: FnMut(Term<A>) -> Term<A>>(
 ) -> Term<A> {
     match t {
         Term::App(s, ts) => {
-            let new_ts: Vec<Term<A>> =
-                ts.iter().cloned().map(|c| replace_subterm(f, c)).collect();
+            let new_ts: Vec<Term<A>> = ts.iter().cloned().map(|c| replace_subterm(f, c)).collect();
             Term::App(s, new_ts.into())
         }
         Term::Lit(_) => t,
@@ -371,14 +389,32 @@ impl<A: TermSize> TermSize for Term<A> {
 // Port of `instance Sized (Lit c v) where size _ = 1` (VTerm.hs:95-96).
 // This is what makes `TermSize` reachable for real `VTerm`/`LNTerm`.
 impl<C, V> TermSize for crate::vterm::Lit<C, V> {
-    fn size(&self) -> usize { 1 }
+    fn size(&self) -> usize {
+        1
+    }
 }
 
 // Sensible default impls for the literal types we'll actually use.
-impl TermSize for u64 { fn size(&self) -> usize { 1 } }
-impl TermSize for i64 { fn size(&self) -> usize { 1 } }
-impl TermSize for String { fn size(&self) -> usize { 1 } }
-impl TermSize for &str { fn size(&self) -> usize { 1 } }
+impl TermSize for u64 {
+    fn size(&self) -> usize {
+        1
+    }
+}
+impl TermSize for i64 {
+    fn size(&self) -> usize {
+        1
+    }
+}
+impl TermSize for String {
+    fn size(&self) -> usize {
+        1
+    }
+}
+impl TermSize for &str {
+    fn size(&self) -> usize {
+        1
+    }
+}
 
 // =============================================================================
 // Tests
@@ -389,7 +425,9 @@ mod tests {
     use super::*;
     use crate::function_symbols::{exp_sym, pair_sym, AcSym, CSym, FunSym};
 
-    fn nat(n: u64) -> Term<u64> { lit(n) }
+    fn nat(n: u64) -> Term<u64> {
+        lit(n)
+    }
 
     #[test]
     fn ac_flattens_and_sorts() {
@@ -398,10 +436,13 @@ mod tests {
         let outer = f_app_ac(AcSym::Mult, vec![inner, nat(2)]);
         match outer {
             Term::App(FunSym::Ac(AcSym::Mult), ref ts) => {
-                let lits: Vec<u64> = ts.iter().map(|t| match t {
-                    Term::Lit(n) => *n,
-                    _ => unreachable!(),
-                }).collect();
+                let lits: Vec<u64> = ts
+                    .iter()
+                    .map(|t| match t {
+                        Term::Lit(n) => *n,
+                        _ => unreachable!(),
+                    })
+                    .collect();
                 assert_eq!(lits, vec![1, 2, 3]);
             }
             _ => panic!("expected AC Mult application"),
@@ -418,12 +459,16 @@ mod tests {
     fn prot_subterms_descend_through_pair_and_ac() {
         use crate::function_symbols::{Constructability, NoEqSym, Privacy};
         let h1 = NoEqSym::new(b"h", 1, Privacy::Public, Constructability::Constructor);
-        let mk_h = |x: Term<u64>| Term::App(FunSym::NoEq(h1.clone()), vec![x].into());
+        let mk_h = |x: Term<u64>| Term::App(FunSym::NoEq(h1), vec![x].into());
         // pair(h(1), mult(h(2), 3)): protected subterms are h(1), h(2)
         // (descend through pair and the AC mult; bare 3 is a Lit → none).
         let pr = Term::App(
             FunSym::NoEq(pair_sym()),
-            vec![mk_h(nat(1)), f_app_ac(AcSym::Mult, vec![mk_h(nat(2)), nat(3)])].into(),
+            vec![
+                mk_h(nat(1)),
+                f_app_ac(AcSym::Mult, vec![mk_h(nat(2)), nat(3)]),
+            ]
+            .into(),
         );
         assert!(is_pair(&pr));
         assert!(!is_ac(&pr));
@@ -524,9 +569,11 @@ mod tests {
         let t1 = f_app_ac(AcSym::Mult, vec![nat(7), nat(2), nat(5)]);
         let t2 = f_app_ac(AcSym::Mult, vec![nat(5), nat(7), nat(2)]);
         let t3 = f_app_ac(AcSym::Mult, vec![nat(2), nat(5), nat(7)]);
-        assert_eq!(t1, t2,
+        assert_eq!(
+            t1, t2,
             "AC terms with same multiset of args must compare equal — \
-             smart constructor canonicalizes order");
+             smart constructor canonicalizes order"
+        );
         assert_eq!(t1, t3);
     }
 
@@ -535,10 +582,10 @@ mod tests {
     #[test]
     fn ac_flattens_but_c_does_not() {
         // AC: mult(mult(1,2), 3) → mult(1,2,3) — flat.
-        let nested_ac = f_app_ac(AcSym::Mult, vec![
-            f_app_ac(AcSym::Mult, vec![nat(1), nat(2)]),
-            nat(3),
-        ]);
+        let nested_ac = f_app_ac(
+            AcSym::Mult,
+            vec![f_app_ac(AcSym::Mult, vec![nat(1), nat(2)]), nat(3)],
+        );
         match &nested_ac {
             Term::App(FunSym::Ac(AcSym::Mult), ts) => {
                 assert_eq!(ts.len(), 3, "AC must flatten nested same-sym");
@@ -546,10 +593,10 @@ mod tests {
             _ => panic!(),
         }
         // C is non-associative; nested EMap doesn't flatten.
-        let nested_c = f_app_c(CSym::EMap, vec![
-            f_app_c(CSym::EMap, vec![nat(1), nat(2)]),
-            nat(3),
-        ]);
+        let nested_c = f_app_c(
+            CSym::EMap,
+            vec![f_app_c(CSym::EMap, vec![nat(1), nat(2)]), nat(3)],
+        );
         match &nested_c {
             Term::App(FunSym::C(CSym::EMap), ts) => {
                 assert_eq!(ts.len(), 2, "C must NOT flatten — non-associative");
@@ -576,18 +623,23 @@ mod tests {
     /// positions when matching.
     #[test]
     fn lit_con_sorts_before_lit_var() {
-        use crate::lterm::{LNTerm, LVar, LSort, Name, NameTag, NameId};
+        use crate::lterm::{LNTerm, LSort, LVar, Name, NameId, NameTag};
         use crate::vterm::Lit;
 
         // Variant tags: Con=0, Var=1 in Haskell decl order.
-        let pub_a = Name { tag: NameTag::Pub, id: NameId::new("a") };
+        let pub_a = Name {
+            tag: NameTag::Pub,
+            id: NameId::new("a"),
+        };
         let v_x = LVar::new("x", LSort::Msg, 0);
         let con: LNTerm = Term::Lit(Lit::Con(pub_a));
         let var: LNTerm = Term::Lit(Lit::Var(v_x));
-        assert!(con < var,
-                "Lit::Con must sort before Lit::Var (Haskell decl order). \
+        assert!(
+            con < var,
+            "Lit::Con must sort before Lit::Var (Haskell decl order). \
                  AC term canonicalization relies on this — `+(x, 'a')` \
-                 canonicalizes to `+('a', x)`.");
+                 canonicalizes to `+('a', x)`."
+        );
     }
 
     /// `BVar::Bound < BVar::Free` from LTerm.hs:451-453 declaration order.
@@ -599,11 +651,13 @@ mod tests {
     /// occurrences.
     #[test]
     fn bvar_bound_sorts_before_bvar_free() {
-        use crate::lterm::{BVar, LVar, LSort};
+        use crate::lterm::{BVar, LSort, LVar};
         let bound: BVar<LVar> = BVar::Bound(5);
         let free: BVar<LVar> = BVar::Free(LVar::new("x", LSort::Msg, 0));
-        assert!(bound < free,
-                "BVar::Bound must sort before BVar::Free \
-                 (Haskell LTerm.hs:451 declaration order)");
+        assert!(
+            bound < free,
+            "BVar::Bound must sort before BVar::Free \
+                 (Haskell LTerm.hs:451 declaration order)"
+        );
     }
 }

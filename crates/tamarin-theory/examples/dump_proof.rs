@@ -9,8 +9,8 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use tamarin_theory::prove::prove_lemma;
 use tamarin_theory::proof_skeleton::render;
+use tamarin_theory::prove::prove_lemma;
 
 mod common;
 
@@ -27,8 +27,13 @@ fn main() {
 
     let root = prove_lemma(&parsed, lemma, maude, 500).expect("prove");
     let steps = count_steps(&root);
-    eprintln!("=== {} proof tree (status={:?}, children={}, steps={}) ===",
-        lemma, root.status, root.children.len(), steps);
+    eprintln!(
+        "=== {} proof tree (status={:?}, children={}, steps={}) ===",
+        lemma,
+        root.status,
+        root.children.len(),
+        steps
+    );
     println!("{}", render(&root));
 }
 

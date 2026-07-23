@@ -74,7 +74,9 @@ impl std::fmt::Display for MonotonicBehaviour {
 /// per-rule shapes into a single behaviour vector for the tag.
 pub fn combine_behaviour(x: MonotonicBehaviour, y: MonotonicBehaviour) -> MonotonicBehaviour {
     use MonotonicBehaviour::*;
-    if x == y { return x; }
+    if x == y {
+        return x;
+    }
     match (x, y) {
         (Unstable, _) | (_, Unstable) => Unstable,
         (Unspecified, b) | (b, Unspecified) => b,
@@ -101,13 +103,16 @@ fn get_pair_terms(t: &tamarin_term::lterm::LNTerm) -> Vec<&tamarin_term::lterm::
     loop {
         match cur.view() {
             tamarin_term::term::TermView::App(
-                tamarin_term::function_symbols::FunSym::NoEq(s), args)
-                if *s == tamarin_term::function_symbols::pair_sym() && args.len() == 2 =>
-            {
+                tamarin_term::function_symbols::FunSym::NoEq(s),
+                args,
+            ) if *s == tamarin_term::function_symbols::pair_sym() && args.len() == 2 => {
                 out.push(&args[0]);
                 cur = &args[1];
             }
-            _ => { out.push(cur); break; }
+            _ => {
+                out.push(cur);
+                break;
+            }
         }
     }
     out
@@ -119,24 +124,25 @@ fn get_pair_terms(t: &tamarin_term::lterm::LNTerm) -> Vec<&tamarin_term::lterm::
 /// pairs; that only arises across rules with mismatched shapes, which
 /// `combineShapes` already trims to the shorter shape, so we fall back to
 /// treating the remainder as a single leaf rather than panicking.
-pub fn shape_term(t: &tamarin_term::lterm::LNTerm, n: usize)
-    -> Vec<tamarin_term::lterm::LNTerm>
-{
+pub fn shape_term(t: &tamarin_term::lterm::LNTerm, n: usize) -> Vec<tamarin_term::lterm::LNTerm> {
     let mut out = Vec::new();
     let mut cur = t.clone();
     let mut x = n;
     while x > 1 {
         match cur.view() {
             tamarin_term::term::TermView::App(
-                tamarin_term::function_symbols::FunSym::NoEq(s), args)
-                if *s == tamarin_term::function_symbols::pair_sym() && args.len() == 2 =>
-            {
+                tamarin_term::function_symbols::FunSym::NoEq(s),
+                args,
+            ) if *s == tamarin_term::function_symbols::pair_sym() && args.len() == 2 => {
                 out.push(args[0].clone());
                 let rest = args[1].clone();
                 cur = rest;
                 x -= 1;
             }
-            _ => { out.push(cur); return out; }
+            _ => {
+                out.push(cur);
+                return out;
+            }
         }
     }
     out.push(cur);
@@ -152,17 +158,21 @@ pub fn shape_term(t: &tamarin_term::lterm::LNTerm, n: usize)
 pub fn trimmed_pair_terms(
     fa: &crate::fact::LNFact,
     behaviours: &[Vec<MonotonicBehaviour>],
-) -> Option<(tamarin_term::lterm::LNTerm,
-             Vec<(MonotonicBehaviour, tamarin_term::lterm::LNTerm)>)>
-{
+) -> Option<(
+    tamarin_term::lterm::LNTerm,
+    Vec<(MonotonicBehaviour, tamarin_term::lterm::LNTerm)>,
+)> {
     let first = fa.terms.first()?.clone();
-    let pairs: Vec<(MonotonicBehaviour, tamarin_term::lterm::LNTerm)> =
-        fa.terms.iter().skip(1).zip(behaviours.iter())
-            .flat_map(|(term, behaviour)| {
-                let leaves = shape_term(term, behaviour.len());
-                behaviour.iter().cloned().zip(leaves).collect::<Vec<_>>()
-            })
-            .collect();
+    let pairs: Vec<(MonotonicBehaviour, tamarin_term::lterm::LNTerm)> = fa
+        .terms
+        .iter()
+        .skip(1)
+        .zip(behaviours.iter())
+        .flat_map(|(term, behaviour)| {
+            let leaves = shape_term(term, behaviour.len());
+            behaviour.iter().cloned().zip(leaves).collect::<Vec<_>>()
+        })
+        .collect();
     Some((first, pairs))
 }
 
@@ -198,21 +208,22 @@ pub fn simple_injective_fact_instances(
     rules: &[&ProtoRuleE],
     reducible: &tamarin_utils::FastSet<tamarin_term::function_symbols::FunSym>,
 ) -> Vec<(FactTag, Vec<Vec<MonotonicBehaviour>>)> {
-    use crate::fact::{LNFact, fact_tag_multiplicity, Multiplicity};
+    use crate::fact::{fact_tag_multiplicity, LNFact, Multiplicity};
+    use std::collections::BTreeMap;
     use tamarin_term::lterm::LNTerm;
     use MonotonicBehaviour::*;
-    use std::collections::BTreeMap;
 
     fn first_term(f: &LNFact) -> Option<&LNTerm> {
         f.terms.first()
     }
     fn fresh_premise_for(rule: &ProtoRuleE, t: &LNTerm) -> bool {
-        rule.premises.iter().any(|p|
-            p.tag == crate::fact::FactTag::Fresh
-                && p.terms.first() == Some(t))
+        rule.premises
+            .iter()
+            .any(|p| p.tag == crate::fact::FactTag::Fresh && p.terms.first() == Some(t))
     }
     fn copy_premise_for<'a>(
-        rule: &'a ProtoRuleE, tag: &crate::fact::FactTag,
+        rule: &'a ProtoRuleE,
+        tag: &crate::fact::FactTag,
         t: &LNTerm,
     ) -> Option<&'a crate::fact::LNFact> {
         // Mirrors HS `getPrem` (InjectiveFactInstances.hs:226-228):
@@ -222,7 +233,9 @@ pub fn simple_injective_fact_instances(
         // We must return the premise ONLY when there is EXACTLY one match; if
         // two or more premises share the tag and first term the rule cannot be
         // executed and the tag is treated as non-injective.
-        let mut it = rule.premises.iter()
+        let mut it = rule
+            .premises
+            .iter()
             .filter(|p| &p.tag == tag && p.terms.first() == Some(t));
         match (it.next(), it.next()) {
             (Some(g), None) => Some(g),
@@ -233,7 +246,9 @@ pub fn simple_injective_fact_instances(
     // HS `getShape` (InjectiveFactInstances.hs:136-138): for each non-first
     // term, `replicate Unspecified (length (getPairTerms term))`.
     fn get_shape(fact: &LNFact) -> Vec<Vec<MonotonicBehaviour>> {
-        fact.terms.iter().skip(1)
+        fact.terms
+            .iter()
+            .skip(1)
             .map(|t| vec![Unspecified; get_pair_terms(t).len()])
             .collect()
     }
@@ -245,7 +260,8 @@ pub fn simple_injective_fact_instances(
         a: &[Vec<MonotonicBehaviour>],
         b: &[Vec<MonotonicBehaviour>],
     ) -> Vec<Vec<MonotonicBehaviour>> {
-        a.iter().zip(b.iter())
+        a.iter()
+            .zip(b.iter())
             .map(|(ai, bi)| ai.iter().zip(bi.iter()).map(|(x, _)| *x).collect())
             .collect()
     }
@@ -268,10 +284,15 @@ pub fn simple_injective_fact_instances(
         };
         for next in it {
             let next = next?;
-            acc = acc.iter().zip(next.iter())
-                .map(|(ai, bi)| ai.iter().zip(bi.iter())
-                    .map(|(x, y)| combine_behaviour(*x, *y))
-                    .collect())
+            acc = acc
+                .iter()
+                .zip(next.iter())
+                .map(|(ai, bi)| {
+                    ai.iter()
+                        .zip(bi.iter())
+                        .map(|(x, y)| combine_behaviour(*x, *y))
+                        .collect()
+                })
                 .collect();
         }
         Some(acc)
@@ -282,11 +303,9 @@ pub fn simple_injective_fact_instances(
     // atom (every other formula shape yields `[]`).  Bound variables in a
     // top-level atom are an implementation error in HS; we drop the
     // restriction instead of panicking.
-    fn extract_constraints(
-        f: &crate::rule::SyntacticLNFormula,
-    ) -> Vec<(LNTerm, LNTerm)> {
-        use crate::formula::ProtoFormula;
+    fn extract_constraints(f: &crate::rule::SyntacticLNFormula) -> Vec<(LNTerm, LNTerm)> {
         use crate::atom::ProtoAtom;
+        use crate::formula::ProtoFormula;
         match f {
             ProtoFormula::Atom(ProtoAtom::Subterm(t1, t2)) => {
                 match (bvar_term_to_lnterm(t1), bvar_term_to_lnterm(t2)) {
@@ -303,19 +322,20 @@ pub fn simple_injective_fact_instances(
     // var as an implementation error.  Returns `None` (drop the
     // constraint) instead of `error`/panic.
     fn bvar_term_to_lnterm(
-        t: &tamarin_term::vterm::VTerm<tamarin_term::lterm::Name,
-            tamarin_term::lterm::BVar<tamarin_term::lterm::LVar>>,
+        t: &tamarin_term::vterm::VTerm<
+            tamarin_term::lterm::Name,
+            tamarin_term::lterm::BVar<tamarin_term::lterm::LVar>,
+        >,
     ) -> Option<LNTerm> {
+        use tamarin_term::lterm::BVar;
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
-        use tamarin_term::lterm::BVar;
         match t {
             Term::Lit(Lit::Con(n)) => Some(Term::Lit(Lit::Con(n.clone()))),
             Term::Lit(Lit::Var(BVar::Free(v))) => Some(Term::Lit(Lit::Var(v.clone()))),
             Term::Lit(Lit::Var(BVar::Bound(_))) => None,
             Term::App(sym, args) => {
-                let mapped: Option<Vec<LNTerm>> =
-                    args.iter().map(bvar_term_to_lnterm).collect();
+                let mapped: Option<Vec<LNTerm>> = args.iter().map(bvar_term_to_lnterm).collect();
                 mapped.map(|a| Term::App(*sym, a.into()))
             }
         }
@@ -343,17 +363,26 @@ pub fn simple_injective_fact_instances(
     // symmetric in length-trimming), so we fold on insert.
     let mut candidates: BTreeMap<FactTag, Vec<Vec<MonotonicBehaviour>>> = BTreeMap::new();
     for &r in rules {
-        let prem_tags: std::collections::BTreeSet<FactTag> = r.premises.iter()
-            .map(|p| p.tag.clone()).collect();
+        let prem_tags: std::collections::BTreeSet<FactTag> =
+            r.premises.iter().map(|p| p.tag.clone()).collect();
         for conc in &r.conclusions {
             let tag = &conc.tag;
-            if !matches!(tag, FactTag::Proto(_, _, _)) { continue; }
-            if fact_tag_multiplicity(tag) != Multiplicity::Linear { continue; }
-            if !prem_tags.contains(tag) { continue; }
+            if !matches!(tag, FactTag::Proto(_, _, _)) {
+                continue;
+            }
+            if fact_tag_multiplicity(tag) != Multiplicity::Linear {
+                continue;
+            }
+            if !prem_tags.contains(tag) {
+                continue;
+            }
             for prem in r.premises.iter().filter(|p| &p.tag == tag) {
-                if conc.terms.is_empty() { continue; }
+                if conc.terms.is_empty() {
+                    continue;
+                }
                 let shape = combine_shapes(&get_shape(conc), &get_shape(prem));
-                candidates.entry(tag.clone())
+                candidates
+                    .entry(tag.clone())
                     .and_modify(|existing| *existing = combine_shapes(existing, &shape))
                     .or_insert(shape);
             }
@@ -363,15 +392,19 @@ pub fn simple_injective_fact_instances(
     // HS `getMaybeEqStrict tag ru` (InjectiveFactInstances.hs:170-223): the
     // per-rule shape, or `Nothing` if the rule violates injectivity for the
     // tag.
-    let get_maybe_eq_strict = |tag: &FactTag, r: &ProtoRuleE,
+    let get_maybe_eq_strict = |tag: &FactTag,
+                               r: &ProtoRuleE,
                                default_shape: &[Vec<MonotonicBehaviour>]|
-        -> Option<Vec<Vec<MonotonicBehaviour>>> {
-        let copies: Vec<&LNFact> = r.conclusions.iter()
-            .filter(|c| &c.tag == tag).collect();
+     -> Option<Vec<Vec<MonotonicBehaviour>>> {
+        let copies: Vec<&LNFact> = r.conclusions.iter().filter(|c| &c.tag == tag).collect();
         // HS `constraints = concatMap extractConstraints
         //   (preRestriction (rInfo ru))` (InjectiveFactInstances.hs:100-228, see line 177).
-        let constraints: Vec<(LNTerm, LNTerm)> = r.info.restrictions.iter()
-            .flat_map(extract_constraints).collect();
+        let constraints: Vec<(LNTerm, LNTerm)> = r
+            .info
+            .restrictions
+            .iter()
+            .flat_map(extract_constraints)
+            .collect();
         // HS `duplicateFirstTerms` (InjectiveFactInstances.hs:181-182): the
         // first terms appearing at least twice among `copies`.
         let mut first_term_counts: BTreeMap<&LNTerm, usize> = BTreeMap::new();
@@ -380,71 +413,85 @@ pub fn simple_injective_fact_instances(
                 *first_term_counts.entry(ft).or_insert(0) += 1;
             }
         }
-        let duplicate_first_terms: std::collections::BTreeSet<&LNTerm> =
-            first_term_counts.into_iter()
-                .filter(|(_, n)| *n >= 2)
-                .map(|(t, _)| t)
-                .collect();
+        let duplicate_first_terms: std::collections::BTreeSet<&LNTerm> = first_term_counts
+            .into_iter()
+            .filter(|(_, n)| *n >= 2)
+            .map(|(t, _)| t)
+            .collect();
 
         // HS `getMaybeEqMonConclusion` (InjectiveFactInstances.hs:185-223).
-        let get_maybe_eq_mon_conclusion = |fa_conc: &LNFact|
-            -> Option<Vec<Vec<MonotonicBehaviour>>> {
-            let t_conc = first_term(fa_conc)?;          // Nothing if no args
-            if duplicate_first_terms.contains(t_conc) {  // violating (2)
-                return None;
-            }
-            if fresh_premise_for(r, t_conc) {            // applying (2)(a)
-                return Some(default_shape.to_vec());
-            }
-            let fa_prem = copy_premise_for(r, tag, t_conc)?;  // violating (2)(b)
-            // HS `getBehaviour` (InjectiveFactInstances.hs:213-219).
-            let get_behaviour = |t1: &LNTerm, t2: &LNTerm| -> MonotonicBehaviour {
-                if t1 == t2 {
-                    Constant
-                } else if crate::tools::subterm_store::elem_not_below_reducible(
-                    reducible, t1, t2) {
-                    StrictlyIncreasing
-                } else if crate::tools::subterm_store::elem_not_below_reducible(
-                    reducible, t2, t1) {
-                    StrictlyDecreasing
-                } else if constraints.iter().any(|(a, b)| a == t1 && b == t2) {
-                    StrictlyIncreasing
-                } else if constraints.iter().any(|(a, b)| a == t2 && b == t1) {
-                    StrictlyDecreasing
-                } else {
-                    Unstable
+        let get_maybe_eq_mon_conclusion =
+            |fa_conc: &LNFact| -> Option<Vec<Vec<MonotonicBehaviour>>> {
+                let t_conc = first_term(fa_conc)?; // Nothing if no args
+                if duplicate_first_terms.contains(t_conc) {
+                    // violating (2)
+                    return None;
                 }
+                if fresh_premise_for(r, t_conc) {
+                    // applying (2)(a)
+                    return Some(default_shape.to_vec());
+                }
+                let fa_prem = copy_premise_for(r, tag, t_conc)?; // violating (2)(b)
+                                                                 // HS `getBehaviour` (InjectiveFactInstances.hs:213-219).
+                let get_behaviour = |t1: &LNTerm, t2: &LNTerm| -> MonotonicBehaviour {
+                    if t1 == t2 {
+                        Constant
+                    } else if crate::tools::subterm_store::elem_not_below_reducible(
+                        reducible, t1, t2,
+                    ) {
+                        StrictlyIncreasing
+                    } else if crate::tools::subterm_store::elem_not_below_reducible(
+                        reducible, t2, t1,
+                    ) {
+                        StrictlyDecreasing
+                    } else if constraints.iter().any(|(a, b)| a == t1 && b == t2) {
+                        StrictlyIncreasing
+                    } else if constraints.iter().any(|(a, b)| a == t2 && b == t1) {
+                        StrictlyDecreasing
+                    } else {
+                        Unstable
+                    }
+                };
+                // HS `trimmedPairTerms` (InjectiveFactInstances.hs:205-207): unfold
+                // each non-first term according to the default shape lengths.
+                let shape_lens: Vec<usize> = default_shape.iter().map(|s| s.len()).collect();
+                let trimmed = |fa: &LNFact| -> Vec<Vec<LNTerm>> {
+                    fa.terms
+                        .iter()
+                        .skip(1)
+                        .zip(shape_lens.iter())
+                        .map(|(t, &n)| shape_term(t, n))
+                        .collect()
+                };
+                let prem_leaves = trimmed(fa_prem);
+                let conc_leaves = trimmed(fa_conc);
+                // HS `zipped = zipWith zip (trimmedPairTerms faPrem)
+                //   (trimmedPairTerms faConc)` then `map (map getBehaviour)`.
+                let behaviours: Vec<Vec<MonotonicBehaviour>> = prem_leaves
+                    .iter()
+                    .zip(conc_leaves.iter())
+                    .map(|(ps, cs)| {
+                        ps.iter()
+                            .zip(cs.iter())
+                            .map(|(p, c)| get_behaviour(p, c))
+                            .collect()
+                    })
+                    .collect();
+                Some(behaviours)
             };
-            // HS `trimmedPairTerms` (InjectiveFactInstances.hs:205-207): unfold
-            // each non-first term according to the default shape lengths.
-            let shape_lens: Vec<usize> = default_shape.iter().map(|s| s.len()).collect();
-            let trimmed = |fa: &LNFact| -> Vec<Vec<LNTerm>> {
-                fa.terms.iter().skip(1).zip(shape_lens.iter())
-                    .map(|(t, &n)| shape_term(t, n))
-                    .collect()
-            };
-            let prem_leaves = trimmed(fa_prem);
-            let conc_leaves = trimmed(fa_conc);
-            // HS `zipped = zipWith zip (trimmedPairTerms faPrem)
-            //   (trimmedPairTerms faConc)` then `map (map getBehaviour)`.
-            let behaviours: Vec<Vec<MonotonicBehaviour>> = prem_leaves.iter()
-                .zip(conc_leaves.iter())
-                .map(|(ps, cs)| ps.iter().zip(cs.iter())
-                    .map(|(p, c)| get_behaviour(p, c))
-                    .collect())
-                .collect();
-            Some(behaviours)
-        };
 
-        combine_all(copies.iter().map(|c| get_maybe_eq_mon_conclusion(c)),
-            default_shape)
+        combine_all(
+            copies.iter().map(|c| get_maybe_eq_mon_conclusion(c)),
+            default_shape,
+        )
     };
 
     // HS top-level: `tag <- M.keys candidates`;
     //   `combineAll (map (getMaybeEqStrict tag) rules) tag`.
     let mut out: Vec<(FactTag, Vec<Vec<MonotonicBehaviour>>)> = Vec::new();
     for (tag, default_shape) in &candidates {
-        let per_rule = rules.iter()
+        let per_rule = rules
+            .iter()
             .map(|&r| get_maybe_eq_strict(tag, r, default_shape));
         if let Some(behaviours) = combine_all(per_rule, default_shape) {
             out.push((tag.clone(), behaviours));
@@ -484,8 +531,7 @@ pub fn union_forced_injective_fact_instances(
 ) -> Vec<(FactTag, Vec<Vec<MonotonicBehaviour>>)> {
     use crate::fact::fact_tag_arity;
     use std::collections::BTreeMap;
-    let mut map: BTreeMap<FactTag, Vec<Vec<MonotonicBehaviour>>> =
-        computed.into_iter().collect();
+    let mut map: BTreeMap<FactTag, Vec<Vec<MonotonicBehaviour>>> = computed.into_iter().collect();
     for tag in forced {
         // `S.union` is LEFT-biased; the forced entry wins on collision.
         let arity = fact_tag_arity(tag);
@@ -518,8 +564,8 @@ mod tests {
     /// either consumes `A(x)` with same first arg or has `Fr(x)` premise.
     #[test]
     fn loop_pattern_detects_a_as_injective() {
-        use crate::fact::{Fact, FactTag, Multiplicity, fresh_fact};
-        use crate::rule::{Rule, ProtoRuleEInfo};
+        use crate::fact::{fresh_fact, Fact, FactTag, Multiplicity};
+        use crate::rule::{ProtoRuleEInfo, Rule};
         use tamarin_term::builtin::msg_var;
 
         let a_tag = FactTag::Proto(Multiplicity::Linear, "A", 1);
@@ -553,13 +599,12 @@ mod tests {
     /// behaviour should be `Constant`.
     #[test]
     fn copy_preserving_arg_marks_position_constant() {
-        use crate::fact::{Fact, FactTag, Multiplicity, fresh_fact};
-        use crate::rule::{Rule, ProtoRuleEInfo};
+        use crate::fact::{fresh_fact, Fact, FactTag, Multiplicity};
+        use crate::rule::{ProtoRuleEInfo, Rule};
         use tamarin_term::builtin::msg_var;
 
         let s_tag = FactTag::Proto(Multiplicity::Linear, "S", 2);
-        let s_fact = Fact::new(s_tag.clone(),
-            vec![msg_var("id", 0), msg_var("k", 0)]);
+        let s_fact = Fact::new(s_tag.clone(), vec![msg_var("id", 0), msg_var("k", 0)]);
         let init: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("Init"),
             vec![fresh_fact(msg_var("id", 0))],
@@ -587,7 +632,7 @@ mod tests {
     #[test]
     fn arbitrary_production_not_injective() {
         use crate::fact::{Fact, FactTag, Multiplicity};
-        use crate::rule::{Rule, ProtoRuleEInfo};
+        use crate::rule::{ProtoRuleEInfo, Rule};
         use tamarin_term::builtin::msg_var;
 
         let b_tag = FactTag::Proto(Multiplicity::Linear, "B", 1);
@@ -610,20 +655,26 @@ mod tests {
     /// collapsed `Unstable` over the whole `<a, b>`/`<a, c>` argument.
     #[test]
     fn pair_argument_is_flattened_to_the_right() {
-        use crate::fact::{Fact, FactTag, Multiplicity, fresh_fact};
-        use crate::rule::{Rule, ProtoRuleEInfo};
+        use crate::fact::{fresh_fact, Fact, FactTag, Multiplicity};
+        use crate::rule::{ProtoRuleEInfo, Rule};
         use tamarin_term::builtin::{msg_var, pair};
 
         let s_tag = FactTag::Proto(Multiplicity::Linear, "S", 2);
-        let prem_fact = Fact::new(s_tag.clone(),
-            vec![msg_var("id", 0), pair(msg_var("a", 0), msg_var("b", 0))]);
-        let conc_fact = Fact::new(s_tag.clone(),
-            vec![msg_var("id", 0), pair(msg_var("a", 0), msg_var("c", 0))]);
+        let prem_fact = Fact::new(
+            s_tag.clone(),
+            vec![msg_var("id", 0), pair(msg_var("a", 0), msg_var("b", 0))],
+        );
+        let conc_fact = Fact::new(
+            s_tag.clone(),
+            vec![msg_var("id", 0), pair(msg_var("a", 0), msg_var("c", 0))],
+        );
         let init: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("Init"),
             vec![fresh_fact(msg_var("id", 0))],
-            vec![Fact::new(s_tag.clone(),
-                vec![msg_var("id", 0), pair(msg_var("a", 0), msg_var("b", 0))])],
+            vec![Fact::new(
+                s_tag.clone(),
+                vec![msg_var("id", 0), pair(msg_var("a", 0), msg_var("b", 0))],
+            )],
             vec![],
         );
         let copy: ProtoRuleE = Rule::new(
@@ -636,8 +687,13 @@ mod tests {
         assert_eq!(inj.len(), 1);
         assert_eq!(inj[0].0, s_tag);
         // One non-first position whose tuple flattens into two leaves.
-        assert_eq!(inj[0].1, vec![vec![
-            MonotonicBehaviour::Constant, MonotonicBehaviour::Unstable]]);
+        assert_eq!(
+            inj[0].1,
+            vec![vec![
+                MonotonicBehaviour::Constant,
+                MonotonicBehaviour::Unstable
+            ]]
+        );
     }
 
     /// `duplicateFirstTerms` (HS InjectiveFactInstances.hs:181-182,188):
@@ -648,7 +704,7 @@ mod tests {
     #[test]
     fn duplicate_first_terms_drops_tag() {
         use crate::fact::{Fact, FactTag, Multiplicity};
-        use crate::rule::{Rule, ProtoRuleEInfo};
+        use crate::rule::{ProtoRuleEInfo, Rule};
         use tamarin_term::builtin::msg_var;
 
         let a_tag = FactTag::Proto(Multiplicity::Linear, "A", 1);
@@ -660,9 +716,11 @@ mod tests {
             vec![],
         );
         let inj = simple_injective_fact_instances(&[&r], &Default::default());
-        assert!(inj.is_empty(),
+        assert!(
+            inj.is_empty(),
             "two conclusions A(x), A(x) share the first term x → A cannot be \
-             injective (HS duplicateFirstTerms drops the whole tag)");
+             injective (HS duplicateFirstTerms drops the whole tag)"
+        );
     }
 
     // =========================================================================
@@ -693,13 +751,12 @@ mod tests {
     /// spurious less-atom in case_2.
     #[test]
     fn cross_rule_create_consume_is_not_injective() {
-        use crate::fact::{Fact, FactTag, Multiplicity, fresh_fact};
-        use crate::rule::{Rule, ProtoRuleEInfo};
+        use crate::fact::{fresh_fact, Fact, FactTag, Multiplicity};
+        use crate::rule::{ProtoRuleEInfo, Rule};
         use tamarin_term::builtin::msg_var;
 
         let st_tag = FactTag::Proto(Multiplicity::Linear, "St", 2);
-        let st_fact = Fact::new(st_tag.clone(),
-            vec![msg_var("x", 0), msg_var("k", 0)]);
+        let st_fact = Fact::new(st_tag.clone(), vec![msg_var("x", 0), msg_var("k", 0)]);
         // Step1 creates St but doesn't consume it.
         let step1: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("Step1"),
@@ -716,13 +773,15 @@ mod tests {
         );
 
         let inj = simple_injective_fact_instances(&[&step1, &step2], &Default::default());
-        assert!(inj.is_empty(),
+        assert!(
+            inj.is_empty(),
             "St is created in Step1, consumed in Step2, but NO single rule \
              has St in both prems and concs → must NOT be marked injective. \
              Haskell `simpleInjectiveFactInstances` checks the per-rule \
              `tag elem rPrems ru` condition.  Otherwise spurious less-atoms \
              break Artificial::Fin_unique case_2.  (Memory: \
-             project_rust_injective_fact_candidate_filter.md)");
+             project_rust_injective_fact_candidate_filter.md)"
+        );
     }
 
     /// Persistent facts (multiplicity = Persistent) are never marked
@@ -731,7 +790,7 @@ mod tests {
     #[test]
     fn persistent_facts_are_not_injective() {
         use crate::fact::{Fact, FactTag, Multiplicity};
-        use crate::rule::{Rule, ProtoRuleEInfo};
+        use crate::rule::{ProtoRuleEInfo, Rule};
         use tamarin_term::builtin::msg_var;
 
         let p_tag = FactTag::Proto(Multiplicity::Persistent, "P", 1);
@@ -745,9 +804,11 @@ mod tests {
             vec![],
         );
         let inj = simple_injective_fact_instances(&[&r], &Default::default());
-        assert!(inj.is_empty(),
+        assert!(
+            inj.is_empty(),
             "Persistent facts are never injective (Haskell: \
-             `factTagMultiplicity tag == Linear` guard)");
+             `factTagMultiplicity tag == Linear` guard)"
+        );
     }
 
     /// Arity-0 facts (no args) cannot have monotonic behaviour and
@@ -758,7 +819,7 @@ mod tests {
     #[test]
     fn arity_zero_facts_are_not_injective() {
         use crate::fact::{Fact, FactTag, Multiplicity};
-        use crate::rule::{Rule, ProtoRuleEInfo};
+        use crate::rule::{ProtoRuleEInfo, Rule};
 
         let z_tag = FactTag::Proto(Multiplicity::Linear, "Z", 0);
         let z_fact = Fact::new(z_tag.clone(), vec![]);
@@ -769,16 +830,18 @@ mod tests {
             vec![],
         );
         let inj = simple_injective_fact_instances(&[&r], &Default::default());
-        assert!(inj.is_empty(),
-            "Arity-0 facts have no behaviour to track → never injective");
+        assert!(
+            inj.is_empty(),
+            "Arity-0 facts have no behaviour to track → never injective"
+        );
     }
 
     /// Built-in facts (Out, Ku, Kd, Fresh, etc.) are never injective.
     /// Only Proto-tagged facts get the analysis.
     #[test]
     fn builtin_facts_are_not_injective() {
-        use crate::fact::{Fact, FactTag, fresh_fact};
-        use crate::rule::{Rule, ProtoRuleEInfo};
+        use crate::fact::{fresh_fact, Fact, FactTag};
+        use crate::rule::{ProtoRuleEInfo, Rule};
         use tamarin_term::builtin::msg_var;
 
         // Two Out facts — never injective regardless of pattern.
@@ -791,9 +854,14 @@ mod tests {
         );
         let inj = simple_injective_fact_instances(&[&r], &Default::default());
         // Out should NOT appear (only Proto tags are candidates).
-        assert!(inj.iter().all(|(t, _)| matches!(t, FactTag::Proto(_, _, _))),
-            "Only Proto facts are injective candidates");
-        assert!(!inj.iter().any(|(t, _)| matches!(t, FactTag::Out)),
-            "Out is never injective");
+        assert!(
+            inj.iter()
+                .all(|(t, _)| matches!(t, FactTag::Proto(_, _, _))),
+            "Only Proto facts are injective candidates"
+        );
+        assert!(
+            !inj.iter().any(|(t, _)| matches!(t, FactTag::Out)),
+            "Out is never injective"
+        );
     }
 }

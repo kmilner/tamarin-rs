@@ -31,7 +31,11 @@ pub struct Subst<C, V> {
 }
 
 impl<C, V> Default for Subst<C, V> {
-    fn default() -> Self { Subst { map: BTreeMap::new() } }
+    fn default() -> Self {
+        Subst {
+            map: BTreeMap::new(),
+        }
+    }
 }
 
 impl<C, V> Subst<C, V>
@@ -39,7 +43,9 @@ where
     C: Ord + Clone,
     V: Ord + Clone,
 {
-    pub fn empty() -> Self { Subst::default() }
+    pub fn empty() -> Self {
+        Subst::default()
+    }
 
     /// `substFromList`: drop trivial `x ~> x` mappings, then build.
     pub fn from_list(pairs: impl IntoIterator<Item = (V, VTerm<C, V>)>) -> Self {
@@ -66,18 +72,33 @@ where
         self.map
     }
 
-    pub fn dom(&self) -> impl Iterator<Item = &V> { self.map.keys() }
-    pub fn range(&self) -> impl Iterator<Item = &VTerm<C, V>> { self.map.values() }
+    pub fn dom(&self) -> impl Iterator<Item = &V> {
+        self.map.keys()
+    }
+    pub fn range(&self) -> impl Iterator<Item = &VTerm<C, V>> {
+        self.map.values()
+    }
     /// Borrowing iterator over the `(var, term)` mappings in domain (key)
     /// order.  The non-cloning counterpart of [`to_list`]: callers that only
     /// need to read `v.idx` / walk the term avoid cloning every entry.
-    pub fn iter(&self) -> impl Iterator<Item = (&V, &VTerm<C, V>)> { self.map.iter() }
-    pub fn image_of(&self, v: &V) -> Option<&VTerm<C, V>> { self.map.get(v) }
-    pub fn to_list(&self) -> Vec<(V, VTerm<C, V>)> {
-        self.map.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    pub fn iter(&self) -> impl Iterator<Item = (&V, &VTerm<C, V>)> {
+        self.map.iter()
     }
-    pub fn is_empty(&self) -> bool { self.map.is_empty() }
-    pub fn len(&self) -> usize { self.map.len() }
+    pub fn image_of(&self, v: &V) -> Option<&VTerm<C, V>> {
+        self.map.get(v)
+    }
+    pub fn to_list(&self) -> Vec<(V, VTerm<C, V>)> {
+        self.map
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
 
     /// `restrict vars`: keep only mappings whose key is in `vars`.
     pub fn restrict(&self, vars: &[V]) -> Self
@@ -101,7 +122,11 @@ where
             .iter()
             .filter_map(|(v, t)| {
                 let t2 = f(t.clone());
-                if equal_to_var(&t2, v) { None } else { Some((v.clone(), t2)) }
+                if equal_to_var(&t2, v) {
+                    None
+                } else {
+                    Some((v.clone(), t2))
+                }
             })
             .collect();
         Subst { map }
@@ -146,10 +171,7 @@ pub fn apply_lit<C: Ord + Clone, V: Ord + Clone>(s: &Subst<C, V>, l: &Lit<C, V>)
 }
 
 /// `applyVTerm`: substitute through a whole term, re-AC-normalising.
-pub fn apply_vterm<C: Ord + Clone, V: Ord + Clone>(
-    s: &Subst<C, V>,
-    t: VTerm<C, V>,
-) -> VTerm<C, V> {
+pub fn apply_vterm<C: Ord + Clone, V: Ord + Clone>(s: &Subst<C, V>, t: VTerm<C, V>) -> VTerm<C, V> {
     apply_vterm_map(&s.map, t)
 }
 
@@ -274,17 +296,17 @@ where
 {
     /// Build the view for one whole-system pass over `s`.
     pub fn new(s: &'a Subst<C, V>) -> Self {
-        let mut map = tamarin_utils::FastMap::with_capacity_and_hasher(
-            s.map.len(),
-            Default::default(),
-        );
+        let mut map =
+            tamarin_utils::FastMap::with_capacity_and_hasher(s.map.len(), Default::default());
         for (k, t) in s.map.iter() {
             map.insert(k, t);
         }
         SubstView { map }
     }
 
-    pub fn is_empty(&self) -> bool { self.map.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
 
     /// Keyed image probe — the hashed counterpart of [`Subst::image_of`].
     pub fn image_of(&self, v: &V) -> Option<&'a VTerm<C, V>> {
@@ -341,8 +363,7 @@ mod tests {
 
     #[test]
     fn from_list_drops_trivial() {
-        let s: Subst<C, V> =
-            Subst::from_list(vec![("x", var_term("x")), ("y", const_term(1))]);
+        let s: Subst<C, V> = Subst::from_list(vec![("x", var_term("x")), ("y", const_term(1))]);
         // `x ~> x` is dropped, only `y ~> 1` remains.
         assert_eq!(s.dom().copied().collect::<Vec<_>>(), vec!["y"]);
     }
@@ -361,8 +382,7 @@ mod tests {
     #[test]
     fn apply_preserves_ac_normalization() {
         // mult(x, 3) with {x ~> 1} should become mult(1, 3) — sorted.
-        let t: VTerm<C, V> =
-            f_app_ac(AcSym::Mult, vec![var_term("x"), const_term(3)]);
+        let t: VTerm<C, V> = f_app_ac(AcSym::Mult, vec![var_term("x"), const_term(3)]);
         let s: Subst<C, V> = Subst::from_list(vec![("x", const_term(1))]);
         let out = apply_vterm(&s, t);
         // Substitution may reorder; arguments must be sorted.
@@ -379,15 +399,12 @@ mod tests {
     /// `None`-when-unchanged convention.
     #[test]
     fn subst_view_matches_btree_apply() {
-        let s: Subst<C, V> = Subst::from_list(vec![
-            ("x", const_term(7)),
-            ("y", var_term("z")),
-        ]);
+        let s: Subst<C, V> = Subst::from_list(vec![("x", const_term(7)), ("y", var_term("z"))]);
         let view = SubstView::new(&s);
         let terms: Vec<VTerm<C, V>> = vec![
-            var_term("x"),                                            // hit (leaf)
-            var_term("w"),                                            // miss (leaf)
-            const_term(3),                                            // constant
+            var_term("x"),                                               // hit (leaf)
+            var_term("w"),                                               // miss (leaf)
+            const_term(3),                                               // constant
             f_app_no_eq(pair_sym(), vec![var_term("x"), var_term("w")]), // partial rebuild
             f_app_no_eq(pair_sym(), vec![var_term("w"), const_term(1)]), // unchanged app
             f_app_ac(AcSym::Mult, vec![var_term("y"), const_term(0)]),   // AC re-sort
@@ -456,16 +473,16 @@ mod tests {
         // If restrict ⊇ {y}: should keep `y → z` LITERALLY, not collapse
         // to `y → 1`.  The dangling z is fine — Haskell falls back to
         // identity for unbound vars.
-        let s: Subst<C, V> = Subst::from_list(vec![
-            ("y", var_term("z")),
-            ("z", const_term(1)),
-        ]);
+        let s: Subst<C, V> = Subst::from_list(vec![("y", var_term("z")), ("z", const_term(1))]);
         let r = s.restrict(&["y"]);
         // y must map to z (the var), NOT to 1 (the chain-chased value).
-        assert_eq!(r.image_of(&"y"), Some(&var_term("z")),
-                   "restrict must NOT chain-chase: y → z stays as y → z, \
+        assert_eq!(
+            r.image_of(&"y"),
+            Some(&var_term("z")),
+            "restrict must NOT chain-chase: y → z stays as y → z, \
                     not y → 1.  Chain-chase here breaks foo_eligibility \
-                    (see project_rust_foo_eligibility_saturate_overspec.md).");
+                    (see project_rust_foo_eligibility_saturate_overspec.md)."
+        );
         // z is filtered out entirely.
         assert_eq!(r.image_of(&"z"), None);
     }
@@ -480,14 +497,16 @@ mod tests {
     fn restrict_empties_subst_when_no_key_is_stable() {
         // "Rule-internal" keys binding to whatever values.
         let s: Subst<C, V> = Subst::from_list(vec![
-            ("m", const_term(19)),   // m.19 in spirit
-            ("sk", const_term(28)),  // sk.28 in spirit
+            ("m", const_term(19)),  // m.19 in spirit
+            ("sk", const_term(28)), // sk.28 in spirit
         ]);
         // "Stable" vars: don't overlap.
         let r = s.restrict(&["t", "i"]);
-        assert!(r.is_empty(),
-                "When no key is in stable set, restrict produces empty subst. \
-                 This is what enables foo_eligibility's clean runtime bind.");
+        assert!(
+            r.is_empty(),
+            "When no key is in stable set, restrict produces empty subst. \
+                 This is what enables foo_eligibility's clean runtime bind."
+        );
     }
 
     /// `compose s1 s2` applies right-then-left.
@@ -506,12 +525,14 @@ mod tests {
         let s1: Subst<C, V> = Subst::from_list(vec![("x", const_term(1))]);
         let s2: Subst<C, V> = Subst::from_list(vec![("y", var_term("x"))]);
         let composed = s1.compose(&s2);
-        assert_eq!(apply_vterm(&composed, var_term("y")),
-                   const_term(1),
-                   "compose(s1, s2) applied to y must equal s1(s2(y)) = 1, \
+        assert_eq!(
+            apply_vterm(&composed, var_term("y")),
+            const_term(1),
+            "compose(s1, s2) applied to y must equal s1(s2(y)) = 1, \
                     NOT s2(s1(y)) = y.  If this fails, the direction is \
                     reversed and eq-store subst composition is silently \
-                    wrong.");
+                    wrong."
+        );
     }
 
     /// `compose` preserves `s1`'s domain when `s2` doesn't bind it.
@@ -549,9 +570,12 @@ mod tests {
         let s1: Subst<C, V> = Subst::from_list(vec![("x", const_term(1))]);
         let s2: Subst<C, V> = Subst::from_list(vec![("x", const_term(99))]);
         let composed = s1.compose(&s2);
-        assert_eq!(composed.image_of(&"x"), Some(&const_term(99)),
-                   "compose: s2's binding wins when domains overlap and \
-                    s1 doesn't transform s2's value.");
+        assert_eq!(
+            composed.image_of(&"x"),
+            Some(&const_term(99)),
+            "compose: s2's binding wins when domains overlap and \
+                    s1 doesn't transform s2's value."
+        );
         assert_eq!(apply_vterm(&composed, var_term("x")), const_term(99));
     }
 
@@ -568,9 +592,15 @@ mod tests {
         let s1: Subst<C, V> = Subst::from_list(vec![("x", const_term(1))]);
         let s2: Subst<C, V> = Subst::from_list(vec![("y", var_term("x"))]);
         let result = s1.apply_subst(&s2);
-        assert_eq!(result.image_of(&"y"), Some(&const_term(1)),
-                   "apply_subst rewrites s2's range");
-        assert_eq!(result.image_of(&"x"), None,
-                   "apply_subst must NOT add new keys");
+        assert_eq!(
+            result.image_of(&"y"),
+            Some(&const_term(1)),
+            "apply_subst rewrites s2's range"
+        );
+        assert_eq!(
+            result.image_of(&"x"),
+            None,
+            "apply_subst must NOT add new keys"
+        );
     }
 }

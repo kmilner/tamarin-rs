@@ -82,9 +82,9 @@ pub fn apply_macros_term(macros: &[p::Macro], term: &p::Term) -> p::Term {
             Box::new(apply_macros_term(macros, a)),
             Box::new(apply_macros_term(macros, b)),
         ),
-        p::Term::Pair(items) => p::Term::Pair(
-            items.iter().map(|t| apply_macros_term(macros, t)).collect(),
-        ),
+        p::Term::Pair(items) => {
+            p::Term::Pair(items.iter().map(|t| apply_macros_term(macros, t)).collect())
+        }
         p::Term::Diff(a, b) => p::Term::Diff(
             Box::new(apply_macros_term(macros, a)),
             Box::new(apply_macros_term(macros, b)),
@@ -94,9 +94,7 @@ pub fn apply_macros_term(macros: &[p::Macro], term: &p::Term) -> p::Term {
             Box::new(apply_macros_term(macros, a)),
             Box::new(apply_macros_term(macros, b)),
         ),
-        p::Term::PatMatch(inner) => p::Term::PatMatch(
-            Box::new(apply_macros_term(macros, inner)),
-        ),
+        p::Term::PatMatch(inner) => p::Term::PatMatch(Box::new(apply_macros_term(macros, inner))),
         // A BARE identifier (no `$~#%` prefix, no `:sort` suffix, no `.idx`)
         // naming a 0-ary macro is a macro CALL: HS's `nullaryApp` parser
         // alternative (Term.hs:143-148) runs before `plit` and matches any
@@ -119,9 +117,13 @@ pub fn apply_macros_term(macros: &[p::Macro], term: &p::Term) -> p::Term {
             term.clone()
         }
         // Literals: no recursion (HS Macro.hs:40-54, see line 51 `Lit l -> lit l`).
-        p::Term::PubLit(_) | p::Term::FreshLit(_)
-        | p::Term::NatLit(_) | p::Term::Number(_) | p::Term::NumberOne
-        | p::Term::NatOne | p::Term::DhNeutral => term.clone(),
+        p::Term::PubLit(_)
+        | p::Term::FreshLit(_)
+        | p::Term::NatLit(_)
+        | p::Term::Number(_)
+        | p::Term::NumberOne
+        | p::Term::NatOne
+        | p::Term::DhNeutral => term.clone(),
     }
 }
 
@@ -136,7 +138,9 @@ fn find_matching_macro<'a>(
     arity: usize,
     macros: &'a [p::Macro],
 ) -> Option<&'a p::Macro> {
-    macros.iter().find(|m| m.name == name && m.args.len() == arity)
+    macros
+        .iter()
+        .find(|m| m.name == name && m.args.len() == arity)
 }
 
 /// Apply a name-keyed substitution to a parser term.  HS's typed
@@ -159,9 +163,9 @@ pub(crate) fn subst_term_by_name(t: &p::Term, subst: &BTreeMap<String, p::Term>)
             Box::new(subst_term_by_name(a, subst)),
             Box::new(subst_term_by_name(b, subst)),
         ),
-        p::Term::Pair(items) => p::Term::Pair(
-            items.iter().map(|a| subst_term_by_name(a, subst)).collect(),
-        ),
+        p::Term::Pair(items) => {
+            p::Term::Pair(items.iter().map(|a| subst_term_by_name(a, subst)).collect())
+        }
         p::Term::Diff(a, b) => p::Term::Diff(
             Box::new(subst_term_by_name(a, subst)),
             Box::new(subst_term_by_name(b, subst)),
@@ -171,9 +175,7 @@ pub(crate) fn subst_term_by_name(t: &p::Term, subst: &BTreeMap<String, p::Term>)
             Box::new(subst_term_by_name(a, subst)),
             Box::new(subst_term_by_name(b, subst)),
         ),
-        p::Term::PatMatch(inner) => p::Term::PatMatch(
-            Box::new(subst_term_by_name(inner, subst)),
-        ),
+        p::Term::PatMatch(inner) => p::Term::PatMatch(Box::new(subst_term_by_name(inner, subst))),
         other => other.clone(),
     }
 }
@@ -217,16 +219,20 @@ pub(crate) fn map_formula_terms(f: &p::Formula, g: &dyn Fn(&p::Term) -> p::Term)
         Not(x) => Not(Box::new(map_formula_terms(x, g))),
         And(x, y) => And(
             Box::new(map_formula_terms(x, g)),
-            Box::new(map_formula_terms(y, g))),
+            Box::new(map_formula_terms(y, g)),
+        ),
         Or(x, y) => Or(
             Box::new(map_formula_terms(x, g)),
-            Box::new(map_formula_terms(y, g))),
+            Box::new(map_formula_terms(y, g)),
+        ),
         Implies(x, y) => Implies(
             Box::new(map_formula_terms(x, g)),
-            Box::new(map_formula_terms(y, g))),
+            Box::new(map_formula_terms(y, g)),
+        ),
         Iff(x, y) => Iff(
             Box::new(map_formula_terms(x, g)),
-            Box::new(map_formula_terms(y, g))),
+            Box::new(map_formula_terms(y, g)),
+        ),
         Forall(vs, x) => Forall(vs.clone(), Box::new(map_formula_terms(x, g))),
         Exists(vs, x) => Exists(vs.clone(), Box::new(map_formula_terms(x, g))),
     }
@@ -263,12 +269,19 @@ pub fn apply_macros_formula(macros: &[p::Macro], f: &p::Formula) -> p::Formula {
 /// If no macros are declared, the theory is left unchanged (HS:
 /// `applyMacroInFormula [] fm = fm`).
 pub fn expand_theory_macros(thy: &mut p::Theory) {
-    let macros: Vec<p::Macro> = thy.items.iter().filter_map(|i| match i {
-        p::TheoryItem::Macros(ms) => Some(ms.clone()),
-        _ => None,
-    }).flatten().collect();
+    let macros: Vec<p::Macro> = thy
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            p::TheoryItem::Macros(ms) => Some(ms.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
 
-    if macros.is_empty() { return; }
+    if macros.is_empty() {
+        return;
+    }
 
     expand_items(&macros, &mut thy.items);
 }
@@ -321,9 +334,15 @@ fn expand_items(macros: &[p::Macro], items: &mut [p::TheoryItem]) {
 }
 
 fn expand_rule(macros: &[p::Macro], r: &mut p::Rule) {
-    for f in &mut r.premises { *f = apply_macros_fact(macros, f); }
-    for f in &mut r.actions { *f = apply_macros_fact(macros, f); }
-    for f in &mut r.conclusions { *f = apply_macros_fact(macros, f); }
+    for f in &mut r.premises {
+        *f = apply_macros_fact(macros, f);
+    }
+    for f in &mut r.actions {
+        *f = apply_macros_fact(macros, f);
+    }
+    for f in &mut r.conclusions {
+        *f = apply_macros_fact(macros, f);
+    }
     for phi in &mut r.embedded_restrictions {
         *phi = apply_macros_formula(macros, phi);
     }
@@ -366,22 +385,35 @@ mod tests {
             end\n";
         let mut thy = parse(src);
         expand_theory_macros(&mut thy);
-        let rule = thy.items.iter().find_map(|i| match i {
-            p::TheoryItem::Rule(r) => Some(r),
-            _ => None,
-        }).unwrap();
+        let rule = thy
+            .items
+            .iter()
+            .find_map(|i| match i {
+                p::TheoryItem::Rule(r) => Some(r),
+                _ => None,
+            })
+            .unwrap();
         // Premise In(konst) → In(h('seed')).
-        assert!(matches!(&rule.premises[0].args[0],
+        assert!(
+            matches!(&rule.premises[0].args[0],
             p::Term::App(n, args) if n == "h" && args.len() == 1),
-            "got {:?}", rule.premises[0].args[0]);
+            "got {:?}",
+            rule.premises[0].args[0]
+        );
         // konst.1 (indexed) and konst:pub (sorted) stay variables.
-        assert!(matches!(&rule.actions[0].args[0],
+        assert!(
+            matches!(&rule.actions[0].args[0],
             p::Term::Var(v) if v.name == "konst" && v.idx == 1),
-            "got {:?}", rule.actions[0].args[0]);
-        assert!(matches!(&rule.actions[0].args[1],
+            "got {:?}",
+            rule.actions[0].args[0]
+        );
+        assert!(
+            matches!(&rule.actions[0].args[1],
             p::Term::Var(v) if v.name == "konst"
                 && v.sort != p::SortHint::Untagged),
-            "got {:?}", rule.actions[0].args[1]);
+            "got {:?}",
+            rule.actions[0].args[1]
+        );
     }
 
     #[test]
@@ -393,13 +425,21 @@ mod tests {
             end\n";
         let mut thy = parse(src);
         expand_theory_macros(&mut thy);
-        let rule = thy.items.iter().find_map(|i| match i {
-            p::TheoryItem::Rule(r) => Some(r),
-            _ => None,
-        }).unwrap();
+        let rule = thy
+            .items
+            .iter()
+            .find_map(|i| match i {
+                p::TheoryItem::Rule(r) => Some(r),
+                _ => None,
+            })
+            .unwrap();
         // Premise was In(id(a)); after expansion: In(a).
         let arg = &rule.premises[0].args[0];
-        assert!(matches!(arg, p::Term::Var(v) if v.name == "a"), "got {:?}", arg);
+        assert!(
+            matches!(arg, p::Term::Var(v) if v.name == "a"),
+            "got {:?}",
+            arg
+        );
     }
 
     #[test]
@@ -413,10 +453,14 @@ mod tests {
             end\n";
         let mut thy = parse(src);
         expand_theory_macros(&mut thy);
-        let rule = thy.items.iter().find_map(|i| match i {
-            p::TheoryItem::Rule(r) => Some(r),
-            _ => None,
-        }).unwrap();
+        let rule = thy
+            .items
+            .iter()
+            .find_map(|i| match i {
+                p::TheoryItem::Rule(r) => Some(r),
+                _ => None,
+            })
+            .unwrap();
         let arg = &rule.premises[0].args[0];
         // Expected: App("h", [App("adec", [Var(a), Var(b)])])
         if let p::Term::App(h_name, h_args) = arg {
@@ -443,18 +487,28 @@ mod tests {
             end\n";
         let mut thy = parse(src);
         expand_theory_macros(&mut thy);
-        let lemma = thy.items.iter().find_map(|i| match i {
-            p::TheoryItem::Lemma(l) => Some(l),
-            _ => None,
-        }).unwrap();
+        let lemma = thy
+            .items
+            .iter()
+            .find_map(|i| match i {
+                p::TheoryItem::Lemma(l) => Some(l),
+                _ => None,
+            })
+            .unwrap();
         // The Action atom's fact's arg should be Var(x) (not App("m", [Var(x)])).
         fn check(f: &p::Formula) {
             match f {
                 p::Formula::Exists(_, body) => check(body),
-                p::Formula::And(a, b) => { check(a); check(b); }
+                p::Formula::And(a, b) => {
+                    check(a);
+                    check(b);
+                }
                 p::Formula::Atom(p::Atom::Action(fact, _)) => {
-                    assert!(matches!(&fact.args[0], p::Term::Var(v) if v.name == "x"),
-                        "got {:?}", fact.args[0]);
+                    assert!(
+                        matches!(&fact.args[0], p::Term::Var(v) if v.name == "x"),
+                        "got {:?}",
+                        fact.args[0]
+                    );
                 }
                 _ => {}
             }
@@ -471,10 +525,14 @@ mod tests {
             end\n";
         let mut thy = parse(src);
         expand_theory_macros(&mut thy);
-        let rule = thy.items.iter().find_map(|i| match i {
-            p::TheoryItem::Rule(r) => Some(r),
-            _ => None,
-        }).unwrap();
+        let rule = thy
+            .items
+            .iter()
+            .find_map(|i| match i {
+                p::TheoryItem::Rule(r) => Some(r),
+                _ => None,
+            })
+            .unwrap();
         let arg = &rule.premises[0].args[0];
         if let p::Term::Pair(items) = arg {
             assert_eq!(items.len(), 2);
@@ -496,12 +554,20 @@ mod tests {
             end\n";
         let mut thy = parse_theory(src, &["FLAG"]).expect("parse");
         expand_theory_macros(&mut thy);
-        let rule = thy.items.iter().find_map(|it| match it {
-            p::TheoryItem::Rule(r) => Some(r),
-            _ => None,
-        }).expect("rule from live ifdef branch at top level");
+        let rule = thy
+            .items
+            .iter()
+            .find_map(|it| match it {
+                p::TheoryItem::Rule(r) => Some(r),
+                _ => None,
+            })
+            .expect("rule from live ifdef branch at top level");
         let arg = &rule.premises[0].args[0];
-        assert!(matches!(arg, p::Term::Var(v) if v.name == "a"), "got {:?}", arg);
+        assert!(
+            matches!(arg, p::Term::Var(v) if v.name == "a"),
+            "got {:?}",
+            arg
+        );
     }
 
     #[test]
@@ -521,16 +587,22 @@ mod tests {
             end\n";
         let mut thy = parse(src);
         expand_theory_macros(&mut thy);
-        let ct = thy.items.iter().find_map(|i| match i {
-            p::TheoryItem::CaseTest(c) => Some(c),
-            _ => None,
-        }).expect("case test");
+        let ct = thy
+            .items
+            .iter()
+            .find_map(|i| match i {
+                p::TheoryItem::CaseTest(c) => Some(c),
+                _ => None,
+            })
+            .expect("case test");
         // The Action atom's fact arg must remain App("idm", [Var("a")]).
         fn check(f: &p::Formula) -> bool {
             match f {
                 p::Formula::Exists(_, body) | p::Formula::Forall(_, body) => check(body),
-                p::Formula::And(a, b) | p::Formula::Or(a, b)
-                | p::Formula::Implies(a, b) | p::Formula::Iff(a, b) => check(a) || check(b),
+                p::Formula::And(a, b)
+                | p::Formula::Or(a, b)
+                | p::Formula::Implies(a, b)
+                | p::Formula::Iff(a, b) => check(a) || check(b),
                 p::Formula::Not(g) => check(g),
                 p::Formula::Atom(p::Atom::Action(fact, _)) => {
                     matches!(fact.args.first(),
@@ -539,9 +611,11 @@ mod tests {
                 _ => false,
             }
         }
-        assert!(check(&ct.formula),
+        assert!(
+            check(&ct.formula),
             "case-test formula was macro-expanded (idm should survive): {:?}",
-            ct.formula);
+            ct.formula
+        );
     }
 
     #[test]
@@ -559,15 +633,21 @@ mod tests {
             end\n";
         let mut thy = parse(src);
         expand_theory_macros(&mut thy);
-        let acc = thy.items.iter().find_map(|i| match i {
-            p::TheoryItem::AccLemma(a) => Some(a),
-            _ => None,
-        }).expect("acc lemma");
+        let acc = thy
+            .items
+            .iter()
+            .find_map(|i| match i {
+                p::TheoryItem::AccLemma(a) => Some(a),
+                _ => None,
+            })
+            .expect("acc lemma");
         fn check(f: &p::Formula) -> bool {
             match f {
                 p::Formula::Exists(_, body) | p::Formula::Forall(_, body) => check(body),
-                p::Formula::And(a, b) | p::Formula::Or(a, b)
-                | p::Formula::Implies(a, b) | p::Formula::Iff(a, b) => check(a) || check(b),
+                p::Formula::And(a, b)
+                | p::Formula::Or(a, b)
+                | p::Formula::Implies(a, b)
+                | p::Formula::Iff(a, b) => check(a) || check(b),
                 p::Formula::Not(g) => check(g),
                 p::Formula::Atom(p::Atom::Action(fact, _)) => {
                     matches!(fact.args.first(),
@@ -576,9 +656,11 @@ mod tests {
                 _ => false,
             }
         }
-        assert!(check(&acc.formula),
+        assert!(
+            check(&acc.formula),
             "acc-lemma formula was macro-expanded (idm should survive): {:?}",
-            acc.formula);
+            acc.formula
+        );
     }
 
     #[test]

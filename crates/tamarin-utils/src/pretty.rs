@@ -68,15 +68,35 @@ pub struct Doc {
 }
 
 impl Default for Doc {
-    fn default() -> Self { Doc::empty() }
+    fn default() -> Self {
+        Doc::empty()
+    }
 }
 
 impl Doc {
-    pub fn empty() -> Self { Doc { node: Node::Empty, empty: true } }
-    pub fn text<S: Into<String>>(s: S) -> Self { Doc { node: Node::Text(s.into()), empty: false } }
-    pub fn char(c: char) -> Self { Doc { node: Node::Text(c.to_string()), empty: false } }
+    pub fn empty() -> Self {
+        Doc {
+            node: Node::Empty,
+            empty: true,
+        }
+    }
+    pub fn text<S: Into<String>>(s: S) -> Self {
+        Doc {
+            node: Node::Text(s.into()),
+            empty: false,
+        }
+    }
+    pub fn char(c: char) -> Self {
+        Doc {
+            node: Node::Text(c.to_string()),
+            empty: false,
+        }
+    }
     pub fn zero_width_text<S: Into<String>>(s: S) -> Self {
-        Doc { node: Node::ZeroWidth(s.into()), empty: false }
+        Doc {
+            node: Node::ZeroWidth(s.into()),
+            empty: false,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -95,8 +115,12 @@ impl Doc {
         let lines = layout(&self.node, 0);
         let mut out = String::new();
         for (i, line) in lines.iter().enumerate() {
-            if i > 0 { out.push('\n'); }
-            for _ in 0..line.indent { out.push(' '); }
+            if i > 0 {
+                out.push('\n');
+            }
+            for _ in 0..line.indent {
+                out.push(' ');
+            }
             out.push_str(&line.content);
         }
         out
@@ -115,8 +139,12 @@ impl Doc {
         let lines = layout_with(&self.node, 0, tags);
         let mut out = String::new();
         for (i, line) in lines.iter().enumerate() {
-            if i > 0 { out.push('\n'); }
-            for _ in 0..line.indent { out.push(' '); }
+            if i > 0 {
+                out.push('\n');
+            }
+            for _ in 0..line.indent {
+                out.push(' ');
+            }
             out.push_str(&line.content);
         }
         out
@@ -128,14 +156,21 @@ impl Doc {
             (true, _) => other,
             (_, true) => self,
             // Both non-empty here, so the result is non-empty.
-            _ => Doc { node: Node::Cat(Box::new(self.node), Box::new(other.node)), empty: false },
+            _ => Doc {
+                node: Node::Cat(Box::new(self.node), Box::new(other.node)),
+                empty: false,
+            },
         }
     }
 
     /// `<+>`: horizontal concatenation with a single space between.
     pub fn beside(self, other: Doc) -> Doc {
-        if self.is_empty() { return other; }
-        if other.is_empty() { return self; }
+        if self.is_empty() {
+            return other;
+        }
+        if other.is_empty() {
+            return self;
+        }
         self.cat_with(Doc::text(" ")).cat_with(other)
     }
 
@@ -145,21 +180,34 @@ impl Doc {
             (true, _) => other,
             (_, true) => self,
             // Both non-empty here, so the result is non-empty.
-            _ => Doc { node: Node::Above(Box::new(self.node), Box::new(other.node)), empty: false },
+            _ => Doc {
+                node: Node::Above(Box::new(self.node), Box::new(other.node)),
+                empty: false,
+            },
         }
     }
 
     /// `nest n d`: indent every line of `d` after the first by `n` spaces.
     pub fn nest(self, n: usize) -> Doc {
         // Reached only when `self` is non-empty, so the result is non-empty.
-        if self.is_empty() || n == 0 { self } else { Doc { node: Node::Nest(n, Box::new(self.node)), empty: false } }
+        if self.is_empty() || n == 0 {
+            self
+        } else {
+            Doc {
+                node: Node::Nest(n, Box::new(self.node)),
+                empty: false,
+            }
+        }
     }
 
     /// Tag this document with a highlight style.
     pub fn highlight(self, style: HighlightStyle) -> Doc {
         // Highlight is empty iff its child is empty.
         let empty = self.empty;
-        Doc { node: Node::Highlight(style, Box::new(self.node)), empty }
+        Doc {
+            node: Node::Highlight(style, Box::new(self.node)),
+            empty,
+        }
     }
 }
 
@@ -171,43 +219,85 @@ pub fn hcat(ds: impl IntoIterator<Item = Doc>) -> Doc {
 /// `hsep`: horizontal concatenation separated by single spaces.
 pub fn hsep(ds: impl IntoIterator<Item = Doc>) -> Doc {
     let mut iter = ds.into_iter().filter(|d| !d.is_empty());
-    let first = match iter.next() { Some(d) => d, None => return Doc::empty() };
+    let first = match iter.next() {
+        Some(d) => d,
+        None => return Doc::empty(),
+    };
     iter.fold(first, |acc, d| acc.beside(d))
 }
 
 /// `vcat`: vertical concatenation, one document per line.
 pub fn vcat(ds: impl IntoIterator<Item = Doc>) -> Doc {
     let mut iter = ds.into_iter().filter(|d| !d.is_empty());
-    let first = match iter.next() { Some(d) => d, None => return Doc::empty() };
+    let first = match iter.next() {
+        Some(d) => d,
+        None => return Doc::empty(),
+    };
     iter.fold(first, |acc, d| acc.above(d))
 }
 
 // -- Atomic punctuation -------------------------------------------------------
 
-pub fn semi() -> Doc { Doc::char(';') }
-pub fn colon() -> Doc { Doc::char(':') }
-pub fn comma() -> Doc { Doc::char(',') }
-pub fn space() -> Doc { Doc::char(' ') }
-pub fn equals() -> Doc { Doc::char('=') }
-pub fn lparen() -> Doc { Doc::char('(') }
-pub fn rparen() -> Doc { Doc::char(')') }
-pub fn lbrack() -> Doc { Doc::char('[') }
-pub fn rbrack() -> Doc { Doc::char(']') }
-pub fn lbrace() -> Doc { Doc::char('{') }
-pub fn rbrace() -> Doc { Doc::char('}') }
+pub fn semi() -> Doc {
+    Doc::char(';')
+}
+pub fn colon() -> Doc {
+    Doc::char(':')
+}
+pub fn comma() -> Doc {
+    Doc::char(',')
+}
+pub fn space() -> Doc {
+    Doc::char(' ')
+}
+pub fn equals() -> Doc {
+    Doc::char('=')
+}
+pub fn lparen() -> Doc {
+    Doc::char('(')
+}
+pub fn rparen() -> Doc {
+    Doc::char(')')
+}
+pub fn lbrack() -> Doc {
+    Doc::char('[')
+}
+pub fn rbrack() -> Doc {
+    Doc::char(']')
+}
+pub fn lbrace() -> Doc {
+    Doc::char('{')
+}
+pub fn rbrace() -> Doc {
+    Doc::char('}')
+}
 
-pub fn quotes(d: Doc) -> Doc { Doc::char('\'').cat_with(d).cat_with(Doc::char('\'')) }
-pub fn double_quotes(d: Doc) -> Doc { Doc::char('"').cat_with(d).cat_with(Doc::char('"')) }
-pub fn parens(d: Doc) -> Doc { Doc::char('(').cat_with(d).cat_with(Doc::char(')')) }
-pub fn brackets(d: Doc) -> Doc { Doc::char('[').cat_with(d).cat_with(Doc::char(']')) }
-pub fn braces(d: Doc) -> Doc { Doc::char('{').cat_with(d).cat_with(Doc::char('}')) }
+pub fn quotes(d: Doc) -> Doc {
+    Doc::char('\'').cat_with(d).cat_with(Doc::char('\''))
+}
+pub fn double_quotes(d: Doc) -> Doc {
+    Doc::char('"').cat_with(d).cat_with(Doc::char('"'))
+}
+pub fn parens(d: Doc) -> Doc {
+    Doc::char('(').cat_with(d).cat_with(Doc::char(')'))
+}
+pub fn brackets(d: Doc) -> Doc {
+    Doc::char('[').cat_with(d).cat_with(Doc::char(']'))
+}
+pub fn braces(d: Doc) -> Doc {
+    Doc::char('{').cat_with(d).cat_with(Doc::char('}'))
+}
 
-pub fn hang(d1: Doc, n: usize, d2: Doc) -> Doc { vcat([d1, d2.nest(n)]) }
+pub fn hang(d1: Doc, n: usize, d2: Doc) -> Doc {
+    vcat([d1, d2.nest(n)])
+}
 
 /// `punctuate sep ds`: insert `sep` between successive `ds`.
 pub fn punctuate(sep: Doc, ds: Vec<Doc>) -> Vec<Doc> {
     let n = ds.len();
-    if n == 0 { return Vec::new(); }
+    if n == 0 {
+        return Vec::new();
+    }
     let mut out = Vec::with_capacity(n);
     for (i, d) in ds.into_iter().enumerate() {
         if i == n - 1 {
@@ -231,7 +321,9 @@ pub fn fixed_width_text(n: usize, s: &str) -> Doc {
 }
 
 /// Treat a string as a single-column "symbol" (zero-width past column 1).
-pub fn symbol(s: &str) -> Doc { fixed_width_text(1, s) }
+pub fn symbol(s: &str) -> Doc {
+    fixed_width_text(1, s)
+}
 
 /// `numbered vsep ds`: prefix each `d` with a right-flushed index, then join the
 /// items with `vsep` interspersed between them (Class.hs:252-259):
@@ -240,16 +332,22 @@ pub fn symbol(s: &str) -> Doc { fixed_width_text(1, s) }
 /// horizontally onto the items — so `numbered (text "")` yields blank separator
 /// lines (because `text ""` is not empty).
 pub fn numbered(vsep: Doc, ds: Vec<Doc>) -> Doc {
-    if ds.is_empty() { return Doc::empty(); }
+    if ds.is_empty() {
+        return Doc::empty();
+    }
     let n = ds.len();
     let n_width = n.to_string().chars().count();
     let mut buf = String::new();
-    let lined: Vec<Doc> = ds.into_iter().enumerate().map(|(i, d)| {
-        buf.clear();
-        write!(&mut buf, "{}", i + 1).unwrap();
-        let prefix = flush_right(n_width, &buf);
-        Doc::text(prefix).cat_with(d)
-    }).collect();
+    let lined: Vec<Doc> = ds
+        .into_iter()
+        .enumerate()
+        .map(|(i, d)| {
+            buf.clear();
+            write!(&mut buf, "{}", i + 1).unwrap();
+            let prefix = flush_right(n_width, &buf);
+            Doc::text(prefix).cat_with(d)
+        })
+        .collect();
     // intersperse `vsep` between items, then foldr1 ($-$).
     let mut iter = lined.into_iter();
     let mut acc = iter.next().unwrap();
@@ -261,13 +359,25 @@ pub fn numbered(vsep: Doc, ds: Vec<Doc>) -> Doc {
 
 // -- Highlight helpers --------------------------------------------------------
 
-pub fn comment(d: Doc) -> Doc { d.highlight(HighlightStyle::Comment) }
-pub fn keyword(d: Doc) -> Doc { d.highlight(HighlightStyle::Keyword) }
-pub fn operator(d: Doc) -> Doc { d.highlight(HighlightStyle::Operator) }
+pub fn comment(d: Doc) -> Doc {
+    d.highlight(HighlightStyle::Comment)
+}
+pub fn keyword(d: Doc) -> Doc {
+    d.highlight(HighlightStyle::Keyword)
+}
+pub fn operator(d: Doc) -> Doc {
+    d.highlight(HighlightStyle::Operator)
+}
 
-pub fn comment_text(s: &str) -> Doc { comment(Doc::text(s)) }
-pub fn keyword_text(s: &str) -> Doc { keyword(Doc::text(s)) }
-pub fn operator_text(s: &str) -> Doc { operator(Doc::text(s)) }
+pub fn comment_text(s: &str) -> Doc {
+    comment(Doc::text(s))
+}
+pub fn keyword_text(s: &str) -> Doc {
+    keyword(Doc::text(s))
+}
+pub fn operator_text(s: &str) -> Doc {
+    operator(Doc::text(s))
+}
 
 pub fn op_parens(d: Doc) -> Doc {
     operator_text("(").cat_with(d).cat_with(operator_text(")"))
@@ -293,17 +403,29 @@ fn layout_with<F: Fn(HighlightStyle) -> (String, String)>(
     tags: &F,
 ) -> Vec<Line> {
     match n {
-        Node::Empty => vec![Line { indent: base_indent, content: String::new() }],
+        Node::Empty => vec![Line {
+            indent: base_indent,
+            content: String::new(),
+        }],
         Node::Text(s) | Node::ZeroWidth(s) => {
-            vec![Line { indent: base_indent, content: s.clone() }]
+            vec![Line {
+                indent: base_indent,
+                content: s.clone(),
+            }]
         }
         Node::Cat(a, b) => {
             let mut la = layout_with(a, base_indent, tags);
             let lb = layout_with(b, base_indent, tags);
             // Glue first line of b onto last line of a.
-            let last = la.pop().unwrap_or(Line { indent: base_indent, content: String::new() });
+            let last = la.pop().unwrap_or(Line {
+                indent: base_indent,
+                content: String::new(),
+            });
             let mut lb_iter = lb.into_iter();
-            let first_b = lb_iter.next().unwrap_or(Line { indent: 0, content: String::new() });
+            let first_b = lb_iter.next().unwrap_or(Line {
+                indent: 0,
+                content: String::new(),
+            });
             let merged = Line {
                 indent: last.indent,
                 content: last.content + &first_b.content,
@@ -426,11 +548,7 @@ mod tests {
         // "1 alpha\n\n2 beta\n\n3 gamma".
         let d = numbered(
             Doc::text(""),
-            vec![
-                Doc::text(" alpha"),
-                Doc::text(" beta"),
-                Doc::text(" gamma"),
-            ],
+            vec![Doc::text(" alpha"), Doc::text(" beta"), Doc::text(" gamma")],
         );
         assert_eq!(d.render(), "1 alpha\n\n2 beta\n\n3 gamma");
     }

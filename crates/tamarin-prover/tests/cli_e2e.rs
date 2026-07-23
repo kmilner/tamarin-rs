@@ -16,10 +16,7 @@ use std::path::PathBuf;
 use tamarin_prover::{parse_args, run};
 
 fn maude_available() -> bool {
-    for c in [
-        "/usr/local/bin/maude",
-        "/usr/bin/maude",
-    ] {
+    for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
         if std::path::Path::new(c).exists() {
             return true;
         }
@@ -132,11 +129,7 @@ fn parse_only_emits_source_to_stdout() {
     // flagOpt: attach the output value (`--output=FILE`); a space-separated
     // `-o FILE` would treat FILE as a positional input (HS Batch.hs:44-84, see line 76).
     let output_arg = format!("--output={}", out_path.to_str().unwrap());
-    let args = args_from(&[
-        "--parse-only",
-        &output_arg,
-        in_path.to_str().unwrap(),
-    ]);
+    let args = args_from(&["--parse-only", &output_arg, in_path.to_str().unwrap()]);
     let code = run(&args).expect("run");
     assert_eq!(code, 0);
     let body = std::fs::read_to_string(&out_path).expect("output written");
@@ -169,18 +162,18 @@ fn output_dir_writes_basename_underscore_analyzed() {
     assert_eq!(code, 0);
     // Expected output: <out_dir>/single_recv_analyzed.spthy
     let expected = out_dir.join("single_recv_analyzed.spthy");
-    assert!(
-        expected.exists(),
-        "expected output file at {:?}",
-        expected
-    );
+    assert!(expected.exists(), "expected output file at {:?}", expected);
 }
 
 #[test]
 fn no_input_files_returns_error() {
     let args = args_from(&["--prove"]);
     let r = run(&args);
-    assert!(r.is_err(), "expected RunError for no input files; got {:?}", r);
+    assert!(
+        r.is_err(),
+        "expected RunError for no input files; got {:?}",
+        r
+    );
 }
 
 #[test]

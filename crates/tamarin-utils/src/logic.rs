@@ -16,21 +16,45 @@ pub struct Conj<T>(pub Vec<T>);
 pub struct Disj<T>(pub Vec<T>);
 
 impl<T> Conj<T> {
-    pub fn new() -> Self { Conj(Vec::new()) }
-    pub fn singleton(x: T) -> Self { Conj(vec![x]) }
-    pub fn into_inner(self) -> Vec<T> { self.0 }
-    pub fn as_slice(&self) -> &[T] { &self.0 }
-    pub fn len(&self) -> usize { self.0.len() }
-    pub fn is_empty(&self) -> bool { self.0.is_empty() }
+    pub fn new() -> Self {
+        Conj(Vec::new())
+    }
+    pub fn singleton(x: T) -> Self {
+        Conj(vec![x])
+    }
+    pub fn into_inner(self) -> Vec<T> {
+        self.0
+    }
+    pub fn as_slice(&self) -> &[T] {
+        &self.0
+    }
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 impl<T> Disj<T> {
-    pub fn new() -> Self { Disj(Vec::new()) }
-    pub fn singleton(x: T) -> Self { Disj(vec![x]) }
-    pub fn into_inner(self) -> Vec<T> { self.0 }
-    pub fn as_slice(&self) -> &[T] { &self.0 }
-    pub fn len(&self) -> usize { self.0.len() }
-    pub fn is_empty(&self) -> bool { self.0.is_empty() }
+    pub fn new() -> Self {
+        Disj(Vec::new())
+    }
+    pub fn singleton(x: T) -> Self {
+        Disj(vec![x])
+    }
+    pub fn into_inner(self) -> Vec<T> {
+        self.0
+    }
+    pub fn as_slice(&self) -> &[T] {
+        &self.0
+    }
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 
     /// Disjoin two computations. Concatenates the alternative lists,
     /// matching the Haskell `mplus` instance.
@@ -43,11 +67,21 @@ impl<T> Disj<T> {
     ///
     /// Retained as a named-constructor alias mirroring the upstream Haskell
     /// API; equivalent to [`Disj::new`].
-    pub fn contradiction() -> Self { Disj(Vec::new()) }
+    pub fn contradiction() -> Self {
+        Disj(Vec::new())
+    }
 }
 
-impl<T> Default for Conj<T> { fn default() -> Self { Conj::new() } }
-impl<T> Default for Disj<T> { fn default() -> Self { Disj::new() } }
+impl<T> Default for Conj<T> {
+    fn default() -> Self {
+        Conj::new()
+    }
+}
+impl<T> Default for Disj<T> {
+    fn default() -> Self {
+        Disj::new()
+    }
+}
 
 impl<T> FromIterator<T> for Conj<T> {
     fn from_iter<I: IntoIterator<Item = T>>(it: I) -> Self {
@@ -64,13 +98,17 @@ impl<T> FromIterator<T> for Disj<T> {
 impl<T> IntoIterator for Conj<T> {
     type Item = T;
     type IntoIter = std::vec::IntoIter<T>;
-    fn into_iter(self) -> Self::IntoIter { self.0.into_iter() }
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
 }
 
 impl<T> IntoIterator for Disj<T> {
     type Item = T;
     type IntoIter = std::vec::IntoIter<T>;
-    fn into_iter(self) -> Self::IntoIter { self.0.into_iter() }
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
 }
 
 #[cfg(test)]

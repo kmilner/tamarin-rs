@@ -64,16 +64,25 @@ fn main() {
 
     for path in files.iter() {
         total += 1;
-        let src = match fs::read_to_string(path) { Ok(s) => s, Err(_) => continue };
+        let src = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
 
         // Tamarin oracle.
         let tamarin = match run_tamarin(&tamarin_path, path) {
             Some(c) => c,
-            None => { tamarin_failed += 1; continue; }
+            None => {
+                tamarin_failed += 1;
+                continue;
+            }
         };
         let our = match parse_theory(&src, &["diff"]) {
             Ok(t) => count_ours(&t),
-            Err(_) => { ours_failed += 1; continue; }
+            Err(_) => {
+                ours_failed += 1;
+                continue;
+            }
         };
         both_parse += 1;
         if structural_equal(&tamarin, &our) {
@@ -87,17 +96,24 @@ fn main() {
     println!("Tamarin parse failures:  {}", tamarin_failed);
     println!("Our parse failures:      {}", ours_failed);
     println!("Both parsed:             {}", both_parse);
-    println!("Structurally equal:      {} ({:.1}%)",
-        equal, 100.0 * equal as f64 / both_parse.max(1) as f64);
+    println!(
+        "Structurally equal:      {} ({:.1}%)",
+        equal,
+        100.0 * equal as f64 / both_parse.max(1) as f64
+    );
 
     if !diff_examples.is_empty() {
         println!("\nDifferences (showing up to 10):");
         for (p, t, o) in diff_examples.iter() {
             println!("  {}", p.display());
-            println!("    tamarin: name={:?} rules={} lemmas={} restrictions={}",
-                t.name, t.rules, t.lemmas, t.restrictions);
-            println!("    ours:    name={:?} rules={} lemmas={} restrictions={}",
-                o.name, o.rules, o.lemmas, o.restrictions);
+            println!(
+                "    tamarin: name={:?} rules={} lemmas={} restrictions={}",
+                t.name, t.rules, t.lemmas, t.restrictions
+            );
+            println!(
+                "    ours:    name={:?} rules={} lemmas={} restrictions={}",
+                o.name, o.rules, o.lemmas, o.restrictions
+            );
         }
     }
 }
@@ -139,7 +155,10 @@ fn parse_tamarin_output(s: &str) -> Option<Counts> {
             c.restrictions += 1;
         }
     }
-    name.map(|n| { c.name = n; c })
+    name.map(|n| {
+        c.name = n;
+        c
+    })
 }
 
 fn count_ours(t: &ast::Theory) -> Counts {
@@ -151,7 +170,9 @@ fn count_ours(t: &ast::Theory) -> Counts {
         match it {
             ast::TheoryItem::Rule(_) | ast::TheoryItem::IntrRule(_) => c.rules += 1,
             ast::TheoryItem::Lemma(_) => c.lemmas += 1,
-            ast::TheoryItem::Restriction(_) | ast::TheoryItem::LegacyAxiom(_) => c.restrictions += 1,
+            ast::TheoryItem::Restriction(_) | ast::TheoryItem::LegacyAxiom(_) => {
+                c.restrictions += 1
+            }
             _ => {}
         }
     }

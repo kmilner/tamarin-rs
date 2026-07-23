@@ -31,12 +31,14 @@ pub struct Theory {
     pub items: Vec<TheoryItem>,
 }
 
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum TheoryItem {
     Builtins(Vec<String>),
     Functions(Vec<FunctionDecl>),
-    Equations { convergent: bool, eqs: Vec<Equation> },
+    Equations {
+        convergent: bool,
+        eqs: Vec<Equation>,
+    },
     Macros(Vec<Macro>),
     Predicates(Vec<Predicate>),
     Options(Vec<String>),
@@ -54,8 +56,14 @@ pub enum TheoryItem {
     TopLevelProcess(Process),
     EquivLemma(Process, Process),
     DiffEquivLemma(Process),
-    Export { tag: String, body: String },
-    FormalComment { header: String, body: String },
+    Export {
+        tag: String,
+        body: String,
+    },
+    FormalComment {
+        header: String,
+        body: String,
+    },
     // `#ifdef` never yields an item: the parser evaluates the flag formula
     // and splices the live branch's items into the surrounding stream
     // (parser.rs `expand_ifdef`), matching HS's parse-time preprocessing —
@@ -350,7 +358,10 @@ pub enum GoalSpec {
     /// where the HS-parsed disjunction would be matched, only ONE open
     /// `Goal::Disj` typically lives in `sys.goals`, so the shape
     /// signature is a sufficient discriminator.
-    Disj { alts: Vec<DisjAlt>, alt_texts: Vec<String> },
+    Disj {
+        alts: Vec<DisjAlt>,
+        alt_texts: Vec<String>,
+    },
     /// `(#i, n) ~~> (#j, m)` — chain-split goal.  Mirrors HS
     /// `chainGoal = ChainG <$> (try (nodeConc <* opChain)) <*> nodePrem`
     /// (Theory/Text/Parser/Proof.hs:39-72, see line 59).  `nodeConc`/`nodePrem` parse
@@ -455,7 +466,10 @@ pub enum Process {
     },
     Replication(Box<Process>),
     /// Process called by name (with optional argument list).
-    Call { name: String, args: Vec<Term> },
+    Call {
+        name: String,
+        args: Vec<Term>,
+    },
     /// (...) @ term — annotation
     AtAnnotation(Box<Process>, Term),
 }
@@ -465,13 +479,24 @@ pub enum SapicAction {
     New(VarSpec),
     Insert(Term, Term),
     Delete(Term),
-    ChIn { chan: Option<Term>, msg: Term },
-    ChOut { chan: Option<Term>, msg: Term },
+    ChIn {
+        chan: Option<Term>,
+        msg: Term,
+    },
+    ChOut {
+        chan: Option<Term>,
+        msg: Term,
+    },
     Lock(Term),
     Unlock(Term),
     Event(Fact),
     /// embedded MSR rule
-    Msr { prems: Vec<Fact>, acts: Vec<Fact>, concs: Vec<Fact>, restrictions: Vec<Formula> },
+    Msr {
+        prems: Vec<Fact>,
+        acts: Vec<Fact>,
+        concs: Vec<Fact>,
+        restrictions: Vec<Formula>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -483,7 +508,10 @@ pub enum ProcessComb {
     /// `lookup t as v in ... else ...`
     Lookup(Term, VarSpec),
     /// `let pat = t in ... else ...`
-    Let { pat: Term, value: Term },
+    Let {
+        pat: Term,
+        value: Term,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -532,8 +560,8 @@ pub enum Formula {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Atom {
     Eq(Term, Term),
-    Less(Term, Term),       // tp < tp
-    LessMset(Term, Term),   // t (<) t
+    Less(Term, Term),     // tp < tp
+    LessMset(Term, Term), // t (<) t
     Subterm(Term, Term),
     /// `F @ t`
     Action(Fact, Term),
@@ -550,12 +578,12 @@ pub enum Atom {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Term {
     Var(VarSpec),
-    PubLit(String),    // 'foo'
-    FreshLit(String),  // ~'n'
-    NatLit(String),    // %'n'
-    Number(u64),       // bare integer literal (e.g. for %+)
-    NumberOne,         // 1
-    NatOne,            // 1:nat / %1
+    PubLit(String),   // 'foo'
+    FreshLit(String), // ~'n'
+    NatLit(String),   // %'n'
+    Number(u64),      // bare integer literal (e.g. for %+)
+    NumberOne,        // 1
+    NatOne,           // 1:nat / %1
     DhNeutral,
     /// Function or operator application by name.
     App(String, Vec<Term>),
@@ -574,11 +602,11 @@ pub enum Term {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinOp {
-    Exp,    // ^
-    Mult,   // *
-    Union,  // + or ++
-    Xor,    // XOR or ⊕
-    NatPlus,// %+
+    Exp,     // ^
+    Mult,    // *
+    Union,   // + or ++
+    Xor,     // XOR or ⊕
+    NatPlus, // %+
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -592,10 +620,10 @@ pub struct VarSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SortHint {
     Msg,
-    Pub,    // $x
-    Fresh,  // ~x
-    Node,   // #x
-    Nat,    // %x
+    Pub,   // $x
+    Fresh, // ~x
+    Node,  // #x
+    Nat,   // %x
     /// Sort given by suffix `: msg | : pub | : fresh | : node | : nat`.
     Suffix(SuffixSort),
     /// No sort hint: bare identifier, sort to be inferred.
@@ -604,8 +632,13 @@ pub enum SortHint {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SuffixSort { Msg, Pub, Fresh, Node, Nat }
-
+pub enum SuffixSort {
+    Msg,
+    Pub,
+    Fresh,
+    Node,
+    Nat,
+}
 
 // =============================================================================
 // Flag formulas (for #ifdef)
@@ -618,4 +651,3 @@ pub enum FlagFormula {
     And(Box<FlagFormula>, Box<FlagFormula>),
     Or(Box<FlagFormula>, Box<FlagFormula>),
 }
-

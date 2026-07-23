@@ -233,7 +233,8 @@ pub(crate) fn guarded_doc(g: &Guarded) -> crate::pretty_hpj::Doc {
 /// and the items are joined by `fsep` (paragraph-fill, one space between).
 pub fn disj_goal_to_doc(gfs: &[Guarded]) -> crate::pretty_hpj::Doc {
     use crate::pretty_hpj::{self as hpj, Doc};
-    let items: Vec<Doc> = gfs.iter()
+    let items: Vec<Doc> = gfs
+        .iter()
         .map(|g| {
             let mut state = avoid_precise_guarded(g);
             let inner = guarded_to_doc(g, &[], &mut state);
@@ -430,8 +431,8 @@ pub fn rule_body_to_doc(
 /// `pretty_lnterm` docs (intruder-rule fact terms never wrap internally, so
 /// the `sep`/`fsep` wrap decisions are identical to HS's structured docs).
 fn ln_fact_to_doc(fa: &crate::fact::LNFact) -> crate::pretty_hpj::Doc {
-    use crate::pretty_hpj::{self as hpj, Doc};
     use crate::fact::{fact_tag_multiplicity, fact_tag_name, Multiplicity};
+    use crate::pretty_hpj::{self as hpj, Doc};
     let mut lead = String::new();
     // HS `showFactTag` (Fact.hs:519-523): `!` prefix for persistent tags
     // (incl. KU/KD), then the tag name.
@@ -485,8 +486,15 @@ fn ln_rule_body_to_doc(
 fn intr_rule_name(r: &crate::rule::IntrRuleAC) -> String {
     use crate::rule::IntrRuleACInfo;
     let prefix_if_reserved = |n: String| -> String {
-        const RESERVED: [&str; 7] =
-            ["Fresh", "irecv", "isend", "coerce", "fresh", "pub", "iequality"];
+        const RESERVED: [&str; 7] = [
+            "Fresh",
+            "irecv",
+            "isend",
+            "coerce",
+            "fresh",
+            "pub",
+            "iequality",
+        ];
         if RESERVED.contains(&n.as_str()) || n.starts_with('_') {
             format!("_{}", n)
         } else {
@@ -558,7 +566,9 @@ fn avoid_precise_insert(state: &mut PreciseFreshState, name: &str, idx: u64) {
     // current value ONCE (default 0) and early-return when it already meets
     // `want` — no double lookup.
     let cur = state.as_map().get(name).copied().unwrap_or(0);
-    if cur >= want { return; }
+    if cur >= want {
+        return;
+    }
     for _ in cur..want {
         let _ = state.fresh_ident(name);
     }
@@ -591,7 +601,9 @@ fn collect_free_vars_formula(
         }
         Forall(vs, body) | Exists(vs, body) => {
             let saved_len = bound.len();
-            for v in vs { bound.push(v.name.clone()); }
+            for v in vs {
+                bound.push(v.name.clone());
+            }
             collect_free_vars_formula(body, bound, state);
             bound.truncate(saved_len);
         }
@@ -606,12 +618,16 @@ fn collect_free_vars_atom(a: &p::Atom, bound: &[String], state: &mut PreciseFres
             collect_free_vars_term(r, bound, state);
         }
         Action(fa, t) => {
-            for arg in &fa.args { collect_free_vars_term(arg, bound, state); }
+            for arg in &fa.args {
+                collect_free_vars_term(arg, bound, state);
+            }
             collect_free_vars_term(t, bound, state);
         }
         Last(t) => collect_free_vars_term(t, bound, state),
         Pred(fa) => {
-            for arg in &fa.args { collect_free_vars_term(arg, bound, state); }
+            for arg in &fa.args {
+                collect_free_vars_term(arg, bound, state);
+            }
         }
     }
 }
@@ -624,10 +640,17 @@ fn collect_free_vars_term(t: &p::Term, bound: &[String], state: &mut PreciseFres
                 avoid_precise_insert(state, &v.name, v.idx);
             }
         }
-        PubLit(_) | FreshLit(_) | NatLit(_)
-        | Number(_) | NumberOne | NatOne | DhNeutral => {}
-        Pair(items) => for it in items { collect_free_vars_term(it, bound, state); },
-        App(_, args) => for a in args { collect_free_vars_term(a, bound, state); },
+        PubLit(_) | FreshLit(_) | NatLit(_) | Number(_) | NumberOne | NatOne | DhNeutral => {}
+        Pair(items) => {
+            for it in items {
+                collect_free_vars_term(it, bound, state);
+            }
+        }
+        App(_, args) => {
+            for a in args {
+                collect_free_vars_term(a, bound, state);
+            }
+        }
         AlgApp(_, l, r) | Diff(l, r) | BinOp(_, l, r) => {
             collect_free_vars_term(l, bound, state);
             collect_free_vars_term(r, bound, state);
@@ -646,15 +669,22 @@ fn avoid_precise_guarded(g: &Guarded) -> PreciseFreshState {
     fn seed_atom_frees(a: &crate::guarded::GAtom, state: &mut PreciseFreshState) {
         let mut frees = Vec::new();
         collect_free_atom(a, &mut frees);
-        for v in frees { avoid_precise_insert(state, &v.name, v.idx); }
+        for v in frees {
+            avoid_precise_insert(state, &v.name, v.idx);
+        }
     }
     fn walk(g: &Guarded, state: &mut PreciseFreshState) {
         match g {
             Guarded::Atom(a) => seed_atom_frees(a, state),
-            Guarded::Disj(xs) | Guarded::Conj(xs) =>
-                for x in xs.iter() { walk(x, state); },
+            Guarded::Disj(xs) | Guarded::Conj(xs) => {
+                for x in xs.iter() {
+                    walk(x, state);
+                }
+            }
             Guarded::GGuarded { guards, body, .. } => {
-                for a in guards.iter() { seed_atom_frees(a, state); }
+                for a in guards.iter() {
+                    seed_atom_frees(a, state);
+                }
                 walk(body, state);
             }
         }
@@ -700,12 +730,7 @@ fn allocate_guarded_binders(
 ///
 /// `state` threads the HS `Precise.Fresh` state across `scopeFreshness`
 /// boundaries (Formula.hs:496-502 — every `Qua` saves/restores state).
-fn pp_formula(
-    f: &p::Formula,
-    scope: &[Bind],
-    state: &mut PreciseFreshState,
-    out: &mut String,
-) {
+fn pp_formula(f: &p::Formula, scope: &[Bind], state: &mut PreciseFreshState, out: &mut String) {
     use p::Formula::*;
     match f {
         True => out.push('\u{22A4}'),  // ⊤
@@ -801,7 +826,9 @@ fn pp_qua(
         out.push(' ');
         // Render binder display names (post-allocation).
         for (i, b) in new_scope[scope.len()..].iter().enumerate() {
-            if i > 0 { out.push(' '); }
+            if i > 0 {
+                out.push(' ');
+            }
             out.push_str(sort_prefix_from_hint(b.1));
             out.push_str(&b.2);
         }
@@ -838,7 +865,6 @@ fn pp_formula_opparens(
     pp_formula(f, scope, state, out);
     out.push(')');
 }
-
 
 // =============================================================================
 // HS-style wrapped layout — Doc-engine path
@@ -976,8 +1002,7 @@ fn atom_to_doc(a: &p::Atom, scope: &[Bind]) -> crate::pretty_hpj::Doc {
             .beside_sp(temporal_term_to_doc(t, scope)),
         // HS `Last i -> operator_ "last" <> parens (text (show i))`
         // (Atom.hs:212-224, see line 222) — `<>` is no-space beside; `parens` is plain.
-        Last(t) => hpj::operator_("last")
-            .beside(hpj::parens(temporal_term_to_doc(t, scope))),
+        Last(t) => hpj::operator_("last").beside(hpj::parens(temporal_term_to_doc(t, scope))),
         // HS syntactic-sugar predicate: `prettyPred (Pred fa) = prettyNFact fa`.
         Pred(fa) => fact_to_doc(fa, scope),
     }
@@ -1007,10 +1032,7 @@ fn binop_to_doc(
     let l_doc = formula_to_doc_opparens(l, scope, state);
     let r_doc = formula_to_doc_opparens(r, scope, state);
     // HS `op` here is `opLAnd`/`opLOr`/`opImp`/`opIff` = `operator_ "∧"` etc.
-    hpj::sep(vec![
-        l_doc.beside_sp(hpj::operator_(op)),
-        r_doc,
-    ])
+    hpj::sep(vec![l_doc.beside_sp(hpj::operator_(op)), r_doc])
 }
 
 // =============================================================================
@@ -1089,7 +1111,12 @@ fn normalise_msg_hint(s: p::SortHint) -> p::SortHint {
 /// `freshLVar "x" LSortMsg`).  Innermost-first matching still resolves
 /// ordinary same-(name,idx) shadowing to the inner binder (source
 /// binders carry idx 0, so the idx test is a no-op there).
-fn lookup_display(name: &str, idx: u64, sort: p::SortHint, scope: &[Bind]) -> Option<(p::SortHint, String)> {
+fn lookup_display(
+    name: &str,
+    idx: u64,
+    sort: p::SortHint,
+    scope: &[Bind],
+) -> Option<(p::SortHint, String)> {
     for b in scope.iter().rev() {
         if b.0 == name && b.3 == idx && b.1 == sort {
             return Some((b.1, b.2.clone()));
@@ -1210,14 +1237,18 @@ fn pp_fact(fa: &p::Fact, scope: &[Bind], out: &mut String) {
     // (empty-arg fact), HS's HughesPJ `sep` collapses the empty middle
     // and emits `Name( )` with ONE inner space; non-empty `body` emits
     // `Name( a, b )` with one space pad on each side.
-    if fa.persistent { out.push('!'); }
+    if fa.persistent {
+        out.push('!');
+    }
     out.push_str(&fa.name);
     if fa.args.is_empty() {
         out.push_str("( )");
     } else {
         out.push_str("( ");
         for (i, t) in fa.args.iter().enumerate() {
-            if i > 0 { out.push_str(", "); }
+            if i > 0 {
+                out.push_str(", ");
+            }
             pp_term(t, scope, out);
         }
         out.push_str(" )");
@@ -1298,8 +1329,8 @@ pub fn term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
     match t {
         // Atomic / non-wrapping leaves: render via the existing string
         // printer (these never break internally in HS either).
-        Var(_) | PubLit(_) | FreshLit(_) | NatLit(_) | Number(_) | NumberOne
-        | NatOne | DhNeutral | PatMatch(_) => {
+        Var(_) | PubLit(_) | FreshLit(_) | NatLit(_) | Number(_) | NumberOne | NatOne
+        | DhNeutral | PatMatch(_) => {
             let mut s = String::new();
             pp_term(t, scope, &mut s);
             Doc::text(s)
@@ -1406,26 +1437,42 @@ fn flatten_pair_terms(items: &[p::Term]) -> Vec<&p::Term> {
     let mut cur: &[p::Term] = items;
     loop {
         let n = cur.len();
-        if n == 0 { break; }
-        for it in &cur[..n - 1] { flat.push(it); }
+        if n == 0 {
+            break;
+        }
+        for it in &cur[..n - 1] {
+            flat.push(it);
+        }
         let last = &cur[n - 1];
-        if let p::Term::Pair(inner) = last { cur = inner; } else { flat.push(last); break; }
+        if let p::Term::Pair(inner) = last {
+            cur = inner;
+        } else {
+            flat.push(last);
+            break;
+        }
     }
     flat
 }
 
 /// `flatten_pair_terms` over `GTerm` (the guarded-formula term AST).
-fn flatten_pair_gterms(
-    items: &[crate::guarded::GTerm],
-) -> Vec<&crate::guarded::GTerm> {
+fn flatten_pair_gterms(items: &[crate::guarded::GTerm]) -> Vec<&crate::guarded::GTerm> {
     let mut flat: Vec<&crate::guarded::GTerm> = Vec::with_capacity(items.len());
     let mut cur: &[crate::guarded::GTerm] = items;
     loop {
         let n = cur.len();
-        if n == 0 { break; }
-        for it in &cur[..n - 1] { flat.push(it); }
+        if n == 0 {
+            break;
+        }
+        for it in &cur[..n - 1] {
+            flat.push(it);
+        }
         let last = &cur[n - 1];
-        if let crate::guarded::GTerm::Pair(inner) = last { cur = inner; } else { flat.push(last); break; }
+        if let crate::guarded::GTerm::Pair(inner) = last {
+            cur = inner;
+        } else {
+            flat.push(last);
+            break;
+        }
     }
     flat
 }
@@ -1464,12 +1511,7 @@ fn fun_doc(name: &str, args: &[p::Term], scope: &[Bind]) -> crate::pretty_hpj::D
 /// `fun_doc` for the binary algebraic / diff shapes that the parser stores
 /// as boxed pairs rather than a `Vec` — passes the operands by reference
 /// (no subtree clone).
-fn fun_doc_two(
-    name: &str,
-    l: &p::Term,
-    r: &p::Term,
-    scope: &[Bind],
-) -> crate::pretty_hpj::Doc {
+fn fun_doc_two(name: &str, l: &p::Term, r: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
     fun_doc_refs(name, &[l, r], scope)
 }
 
@@ -1480,7 +1522,9 @@ pub fn fact_to_doc(fa: &p::Fact, scope: &[Bind]) -> crate::pretty_hpj::Doc {
     use crate::pretty_hpj::{self as hpj, Doc};
     let lead = {
         let mut s = String::new();
-        if fa.persistent { s.push('!'); }
+        if fa.persistent {
+            s.push('!');
+        }
         s.push_str(&fa.name);
         s.push('(');
         s
@@ -1518,8 +1562,8 @@ fn gterm_to_doc(t: &crate::guarded::GTerm, scope: &[Vec<Bind>]) -> crate::pretty
     match t {
         // Atomic / non-wrapping leaves — render via `pp_gterm` (these never
         // break internally in HS either; Var carries De Bruijn lookup).
-        Var(_) | PubLit(_) | FreshLit(_) | NatLit(_) | Number(_) | NumberOne
-        | NatOne | DhNeutral | PatMatch(_) => {
+        Var(_) | PubLit(_) | FreshLit(_) | NatLit(_) | Number(_) | NumberOne | NatOne
+        | DhNeutral | PatMatch(_) => {
             let mut s = String::new();
             pp_gterm(t, scope, &mut s);
             Doc::text(s)
@@ -1617,7 +1661,9 @@ fn gfact_to_doc(fa: &crate::guarded::GFact, scope: &[Vec<Bind>]) -> crate::prett
     use crate::pretty_hpj::{self as hpj, Doc};
     let lead = {
         let mut s = String::new();
-        if fa.persistent { s.push('!'); }
+        if fa.persistent {
+            s.push('!');
+        }
         s.push_str(&fa.name);
         s.push('(');
         s
@@ -1665,7 +1711,9 @@ fn gatom_to_doc(a: &crate::guarded::GAtom, scope: &[Vec<Bind>]) -> crate::pretty
             pp_gterm(r, scope, &mut rs);
             // HS `text (show u) <-> opLess <-> text (show v)` — `opLess` is an
             // `hl_operator` span between the two flat time-point operands.
-            Doc::text(ls).beside_sp(hpj::operator_("<")).beside_sp(Doc::text(rs))
+            Doc::text(ls)
+                .beside_sp(hpj::operator_("<"))
+                .beside_sp(Doc::text(rs))
         }
         // Multiset `(<)`: HS has no printer for it.  The parser-AST
         // `Atom::LessMset` is rewritten to `∃ z. r = l ++ z` by
@@ -1751,7 +1799,9 @@ fn pp_term(t: &p::Term, scope: &[Bind], out: &mut String) {
             let flat = flatten_pair_terms(items);
             out.push('<');
             for (i, it) in flat.iter().enumerate() {
-                if i > 0 { out.push_str(", "); }
+                if i > 0 {
+                    out.push_str(", ");
+                }
                 pp_term(it, scope, out);
             }
             out.push('>');
@@ -1769,7 +1819,9 @@ fn pp_term(t: &p::Term, scope: &[Bind], out: &mut String) {
             if !args.is_empty() {
                 out.push('(');
                 for (i, a) in args.iter().enumerate() {
-                    if i > 0 { out.push_str(", "); }
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
                     pp_term(a, scope, out);
                 }
                 out.push(')');
@@ -1809,8 +1861,10 @@ fn pp_term(t: &p::Term, scope: &[Bind], out: &mut String) {
             // representations like `Xor(Xor(a, b), c)` print as
             // `((a⊕b)⊕c)` instead of HS's `(a⊕b⊕c)`.
             let is_exp = matches!(op, p::BinOp::Exp);
-            let is_ac = matches!(op,
-                p::BinOp::Mult | p::BinOp::Union | p::BinOp::Xor | p::BinOp::NatPlus);
+            let is_ac = matches!(
+                op,
+                p::BinOp::Mult | p::BinOp::Union | p::BinOp::Xor | p::BinOp::NatPlus
+            );
             if is_ac {
                 let mut flat: Vec<&p::Term> = Vec::new();
                 flatten_ac_terms(*op, l, &mut flat);
@@ -1818,13 +1872,17 @@ fn pp_term(t: &p::Term, scope: &[Bind], out: &mut String) {
                 out.push('(');
                 let sym = binop_symbol(*op);
                 for (i, child) in flat.iter().enumerate() {
-                    if i > 0 { out.push_str(sym); }
+                    if i > 0 {
+                        out.push_str(sym);
+                    }
                     pp_term(child, scope, out);
                 }
                 out.push(')');
                 return;
             }
-            if !is_exp { out.push('('); }
+            if !is_exp {
+                out.push('(');
+            }
             // Within an exp, children print at Top (no extra parens for
             // nested `^`).  Within an AC, children at Top — AC nesting
             // already gets its own mandatory parens via the recursive
@@ -1832,7 +1890,9 @@ fn pp_term(t: &p::Term, scope: &[Bind], out: &mut String) {
             pp_term(l, scope, out);
             out.push_str(binop_symbol(*op));
             pp_term(r, scope, out);
-            if !is_exp { out.push(')'); }
+            if !is_exp {
+                out.push(')');
+            }
         }
         PatMatch(inner) => {
             out.push('=');
@@ -1888,14 +1948,20 @@ fn bound_to_varspec(n: u32, scope: &[Vec<Bind>]) -> Option<p::VarSpec> {
     // display = src_name (idx 0) | "src_name.idx".
     let idx = if display == src_name {
         0
-    } else if let Some(suffix) = display.strip_prefix(src_name.as_str())
+    } else if let Some(suffix) = display
+        .strip_prefix(src_name.as_str())
         .and_then(|s| s.strip_prefix('.'))
     {
         suffix.parse::<u64>().unwrap_or(0)
     } else {
         0
     };
-    Some(p::VarSpec { name: src_name.clone(), idx, sort: *sort, typ: None })
+    Some(p::VarSpec {
+        name: src_name.clone(),
+        idx,
+        sort: *sort,
+        typ: None,
+    })
 }
 
 /// Produce an "opened" copy of a `GTerm` in which every `Bound(n)` leaf is
@@ -1916,22 +1982,38 @@ fn open_gterm_for_sort(t: &crate::guarded::GTerm, scope: &[Vec<Bind>]) -> crate:
             Some(vs) => GTerm::Var(BVar::Free(vs)),
             None => t.clone(),
         },
-        GTerm::Var(_) | GTerm::PubLit(_) | GTerm::FreshLit(_) | GTerm::NatLit(_)
-        | GTerm::Number(_) | GTerm::NumberOne | GTerm::NatOne | GTerm::DhNeutral => t.clone(),
+        GTerm::Var(_)
+        | GTerm::PubLit(_)
+        | GTerm::FreshLit(_)
+        | GTerm::NatLit(_)
+        | GTerm::Number(_)
+        | GTerm::NumberOne
+        | GTerm::NatOne
+        | GTerm::DhNeutral => t.clone(),
         GTerm::App(n, args) => GTerm::App(
-            n.clone(), args.iter().map(|a| open_gterm_for_sort(a, scope)).collect()),
-        GTerm::Pair(args) => GTerm::Pair(
-            args.iter().map(|a| open_gterm_for_sort(a, scope)).collect()),
+            n.clone(),
+            args.iter().map(|a| open_gterm_for_sort(a, scope)).collect(),
+        ),
+        GTerm::Pair(args) => {
+            GTerm::Pair(args.iter().map(|a| open_gterm_for_sort(a, scope)).collect())
+        }
         GTerm::AlgApp(n, a, b) => GTerm::AlgApp(
-            n.clone(), crate::guarded_types::ga(open_gterm_for_sort(a, scope)),
-            crate::guarded_types::ga(open_gterm_for_sort(b, scope))),
+            n.clone(),
+            crate::guarded_types::ga(open_gterm_for_sort(a, scope)),
+            crate::guarded_types::ga(open_gterm_for_sort(b, scope)),
+        ),
         GTerm::Diff(a, b) => GTerm::Diff(
             crate::guarded_types::ga(open_gterm_for_sort(a, scope)),
-            crate::guarded_types::ga(open_gterm_for_sort(b, scope))),
+            crate::guarded_types::ga(open_gterm_for_sort(b, scope)),
+        ),
         GTerm::BinOp(op, a, b) => GTerm::BinOp(
-            *op, crate::guarded_types::ga(open_gterm_for_sort(a, scope)),
-            crate::guarded_types::ga(open_gterm_for_sort(b, scope))),
-        GTerm::PatMatch(t) => GTerm::PatMatch(crate::guarded_types::ga(open_gterm_for_sort(t, scope))),
+            *op,
+            crate::guarded_types::ga(open_gterm_for_sort(a, scope)),
+            crate::guarded_types::ga(open_gterm_for_sort(b, scope)),
+        ),
+        GTerm::PatMatch(t) => {
+            GTerm::PatMatch(crate::guarded_types::ga(open_gterm_for_sort(t, scope)))
+        }
     }
 }
 
@@ -1940,10 +2022,7 @@ fn open_gterm_for_sort(t: &crate::guarded::GTerm, scope: &[Vec<Bind>]) -> crate:
 /// by the term Ord (`cmp_term`) with `Bound` leaves resolved to their opened
 /// `Free` LVars.  Operates on `&GTerm` references so callers keep rendering
 /// the ORIGINAL terms (whose `Bound` leaves resolve to display names).
-fn sort_ac_args_for_display<'a>(
-    flat: &mut [&'a crate::guarded::GTerm],
-    scope: &[Vec<Bind>],
-) {
+fn sort_ac_args_for_display<'a>(flat: &mut [&'a crate::guarded::GTerm], scope: &[Vec<Bind>]) {
     // Precompute the opened keys once per element (avoids O(n log n) re-opens).
     let keyed: Vec<(crate::guarded::GTerm, &'a crate::guarded::GTerm)> = flat
         .iter()
@@ -1972,22 +2051,34 @@ fn pp_guarded_inner(
             // 829) — bare atom.  The caller's `opParens` wrap (used in
             // GConj/GDisj children, lines 834+841) is encoded as
             // `paren_atomic=true` here; emit `(<atom>)`.
-            if paren_atomic { out.push('('); }
+            if paren_atomic {
+                out.push('(');
+            }
             pp_gatom(a, scope, out);
-            if paren_atomic { out.push(')'); }
+            if paren_atomic {
+                out.push(')');
+            }
         }
         Guarded::Disj(xs) if xs.is_empty() => {
             // HS `pp (GDisj (Disj [])) = operator_ "⊥"` (Guarded.hs:824-866, see line 831).
             // Caller's opParens still wraps to `(⊥)`.
-            if paren_atomic { out.push('('); }
+            if paren_atomic {
+                out.push('(');
+            }
             out.push('\u{22A5}'); // ⊥
-            if paren_atomic { out.push(')'); }
+            if paren_atomic {
+                out.push(')');
+            }
         }
         Guarded::Conj(xs) if xs.is_empty() => {
             // HS `pp (GConj (Conj [])) = operator_ "⊤"` (Guarded.hs:824-866, see line 838).
-            if paren_atomic { out.push('('); }
+            if paren_atomic {
+                out.push('(');
+            }
             out.push('\u{22A4}'); // ⊤
-            if paren_atomic { out.push(')'); }
+            if paren_atomic {
+                out.push(')');
+            }
         }
         Guarded::Disj(xs) => {
             // HS Guarded.hs:833-835 — `parens $ sep $ punctuate ∨ ps`.
@@ -1998,14 +2089,20 @@ fn pp_guarded_inner(
             // HS's behaviour.  Reproduce it by always emitting `(...)`
             // here and letting the caller add its own `(...)` when
             // `paren_atomic`.
-            if paren_atomic { out.push('('); }
+            if paren_atomic {
+                out.push('(');
+            }
             out.push('(');
             for (i, x) in xs.iter().enumerate() {
-                if i > 0 { out.push_str(" \u{2228} "); } // ∨
+                if i > 0 {
+                    out.push_str(" \u{2228} ");
+                } // ∨
                 pp_guarded_inner(x, true, scope, state, out);
             }
             out.push(')');
-            if paren_atomic { out.push(')'); }
+            if paren_atomic {
+                out.push(')');
+            }
         }
         Guarded::Conj(xs) => {
             // HS Guarded.hs:840-842 — `sep $ punctuate ∧ ps` (no outer
@@ -2015,20 +2112,33 @@ fn pp_guarded_inner(
             // so an outer opParens would produce `((c))` — that's HS's
             // literal behaviour; we match it for faithfulness.
             let needs = paren_atomic;
-            if needs { out.push('('); }
+            if needs {
+                out.push('(');
+            }
             for (i, x) in xs.iter().enumerate() {
-                if i > 0 { out.push_str(" \u{2227} "); } // ∧
+                if i > 0 {
+                    out.push_str(" \u{2227} ");
+                } // ∧
                 pp_guarded_inner(x, true, scope, state, out);
             }
-            if needs { out.push(')'); }
+            if needs {
+                out.push(')');
+            }
         }
-        Guarded::GGuarded { qua, vars, guards, body } => {
+        Guarded::GGuarded {
+            qua,
+            vars,
+            guards,
+            body,
+        } => {
             // HS `pp gf0@(GGuarded _ _ _ _) = scopeFreshness $ do ...`
             // (Guarded.hs:844-846): save Precise state, openGuarded
             // allocates fresh display names via `freshLVar n s`
             // (Guarded.hs:362-371, LTerm.hs:295-296), render under
             // the resulting scope, then restore state on exit.
-            state.scope_freshness(|state| pp_gguarded(qua, vars, guards, body, paren_atomic, scope, state, out))
+            state.scope_freshness(|state| {
+                pp_gguarded(qua, vars, guards, body, paren_atomic, scope, state, out)
+            })
         }
     }
 }
@@ -2060,7 +2170,9 @@ fn pp_gguarded(
         dante.push('\u{22A4}'); // ⊤
     } else {
         for (i, gd) in guards.iter().enumerate() {
-            if i > 0 { dante.push_str(" \u{2227} "); }
+            if i > 0 {
+                dante.push_str(" \u{2227} ");
+            }
             dante.push('(');
             pp_gatom(gd, &new_scope, &mut dante);
             dante.push(')');
@@ -2070,18 +2182,21 @@ fn pp_gguarded(
     // Special case: `∀[] [Atom].⊥` renders as `¬<dante>`
     // (Guarded.hs:856-857).  `<>` is no-break horizontal concat.  The
     // caller's `opParens` (GConj/GDisj child position) adds outer parens.
-    if matches!(qua, Quant::All)
-        && vars.is_empty()
-        && body_is_false(body)
-    {
-        if paren_atomic { out.push('('); }
+    if matches!(qua, Quant::All) && vars.is_empty() && body_is_false(body) {
+        if paren_atomic {
+            out.push('(');
+        }
         out.push('\u{00AC}'); // ¬
         out.push_str(&dante);
-        if paren_atomic { out.push(')'); }
+        if paren_atomic {
+            out.push(')');
+        }
         return;
     }
     // Quantifier line.
-    if paren_atomic { out.push('('); }
+    if paren_atomic {
+        out.push('(');
+    }
     out.push(match qua {
         Quant::All => '\u{2200}', // ∀
         Quant::Ex => '\u{2203}',  // ∃
@@ -2106,7 +2221,9 @@ fn pp_gguarded(
         // parens (e.g. GDisj self-wraps).  paren_atomic=false here.
         pp_guarded_inner(body, false, &new_scope, state, out);
     }
-    if paren_atomic { out.push(')'); }
+    if paren_atomic {
+        out.push(')');
+    }
 }
 
 /// Render the binder line for a GGuarded — uses the display names
@@ -2114,12 +2231,13 @@ fn pp_gguarded(
 /// 295-296), so a shadowed inner binder emits `#j.1` instead of `#j`.
 fn pp_binding_list_with_display(bs: &[Bind], out: &mut String) {
     for (i, b) in bs.iter().enumerate() {
-        if i > 0 { out.push(' '); }
+        if i > 0 {
+            out.push(' ');
+        }
         out.push_str(sort_prefix_from_hint(b.1));
         out.push_str(&b.2);
     }
 }
-
 
 // =============================================================================
 // HS-faithful wrapped layout for Guarded — Doc-engine path
@@ -2176,26 +2294,33 @@ fn guarded_to_doc(
         Guarded::Conj(xs) if xs.is_empty() => hpj::operator_("\u{22A4}"), // ⊤
         Guarded::Disj(xs) => {
             // HS: `parens $ sep $ punctuate (operator_ " ∨") (map opParens ps)`.
-            let ps: Vec<Doc> = xs.iter()
+            let ps: Vec<Doc> = xs
+                .iter()
                 .map(|x| gdoc_op_parens(guarded_to_doc(x, scope, state)))
                 .collect();
             let punct = hpj::punctuate(hpj::operator_(" \u{2228}"), ps); // " ∨"
-            // `parens` (Class.hs:149-149) is `char '(' <> d <> char ')'` — PLAIN.
-            Doc::char('(').beside(hpj::sep(punct)).beside(Doc::char(')'))
+                                                                         // `parens` (Class.hs:149-149) is `char '(' <> d <> char ')'` — PLAIN.
+            Doc::char('(')
+                .beside(hpj::sep(punct))
+                .beside(Doc::char(')'))
         }
         Guarded::Conj(xs) => {
             // HS: `sep $ punctuate (operator_ " ∧") (map opParens ps)`.
-            let ps: Vec<Doc> = xs.iter()
+            let ps: Vec<Doc> = xs
+                .iter()
                 .map(|x| gdoc_op_parens(guarded_to_doc(x, scope, state)))
                 .collect();
             let punct = hpj::punctuate(hpj::operator_(" \u{2227}"), ps); // " ∧"
             hpj::sep(punct)
         }
-        Guarded::GGuarded { qua, vars, guards, body } => {
+        Guarded::GGuarded {
+            qua,
+            vars,
+            guards,
+            body,
+        } => {
             // HS: `scopeFreshness $ do ...` (Guarded.hs:846-862).
-            state.scope_freshness(|state| {
-                gguarded_to_doc(qua, vars, guards, body, scope, state)
-            })
+            state.scope_freshness(|state| gguarded_to_doc(qua, vars, guards, body, scope, state))
         }
     }
 }
@@ -2224,7 +2349,8 @@ fn gguarded_to_doc(
             // `pp (GConj (Conj [])) = operator_ "⊤"`.
             hpj::operator_("\u{22A4}").nest(1)
         } else {
-            let ps: Vec<Doc> = guards.iter()
+            let ps: Vec<Doc> = guards
+                .iter()
                 .map(|gd| gdoc_op_parens(gatom_to_doc(gd, &new_scope)))
                 .collect();
             let punct = hpj::punctuate(hpj::operator_(" \u{2227}"), ps);
@@ -2234,8 +2360,12 @@ fn gguarded_to_doc(
 
     // `quantifier = operator_ ppQuant <-> ppVars vs <> operator_ "."`.
     // `<->` is `<+>` (beside with one space); `ppVars = fsep (map show)`.
-    let sym = match qua { Quant::All => "\u{2200}", Quant::Ex => "\u{2203}" };
-    let var_docs: Vec<Doc> = new_scope[scope.len()].iter()
+    let sym = match qua {
+        Quant::All => "\u{2200}",
+        Quant::Ex => "\u{2203}",
+    };
+    let var_docs: Vec<Doc> = new_scope[scope.len()]
+        .iter()
         .map(|b| {
             let mut s = String::new();
             s.push_str(sort_prefix_from_hint(b.1));
@@ -2245,7 +2375,9 @@ fn gguarded_to_doc(
         .collect();
     let ppvars = hpj::fsep(var_docs);
     // `operator_ sym <+> ppvars <> operator_ "."`
-    let quantifier = hpj::operator_(sym).beside_sp(ppvars).beside(hpj::operator_("."));
+    let quantifier = hpj::operator_(sym)
+        .beside_sp(ppvars)
+        .beside(hpj::operator_("."));
 
     // Case analysis (Guarded.hs:855-862).
     let is_ex_trivial = matches!(qua, Quant::Ex) && body_is_true(body);
@@ -2269,7 +2401,6 @@ fn gguarded_to_doc(
         hpj::sep(vec![quantifier, inner])
     }
 }
-
 
 /// Pretty-print a binder list — uses each entry's display name, which
 /// is the source name (idx==0) or `name.<idx>` (HS `show LVar`,
@@ -2318,14 +2449,18 @@ fn pp_gfact(fa: &crate::guarded::GFact, scope: &[Vec<Bind>], out: &mut String) {
     // HS-faithful: `Name( args )` with internal spaces, matching `pp_fact`.
     // Empty-arg case collapses to a single inner space — see `pp_fact`
     // for the HS citation.
-    if fa.persistent { out.push('!'); }
+    if fa.persistent {
+        out.push('!');
+    }
     out.push_str(&fa.name);
     if fa.args.is_empty() {
         out.push_str("( )");
     } else {
         out.push_str("( ");
         for (i, t) in fa.args.iter().enumerate() {
-            if i > 0 { out.push_str(", "); }
+            if i > 0 {
+                out.push_str(", ");
+            }
             pp_gterm(t, scope, out);
         }
         out.push_str(" )");
@@ -2333,7 +2468,7 @@ fn pp_gfact(fa: &crate::guarded::GFact, scope: &[Vec<Bind>], out: &mut String) {
 }
 
 fn pp_gterm(t: &crate::guarded::GTerm, scope: &[Vec<Bind>], out: &mut String) {
-    use crate::guarded::{GTerm, BVar};
+    use crate::guarded::{BVar, GTerm};
     match t {
         GTerm::Var(BVar::Free(v)) => pp_var(v, out),
         GTerm::Var(BVar::Bound(n)) => {
@@ -2351,10 +2486,24 @@ fn pp_gterm(t: &crate::guarded::GTerm, scope: &[Vec<Bind>], out: &mut String) {
                 out.push_str(&n.to_string());
             }
         }
-        GTerm::PubLit(s) => { out.push('\''); out.push_str(s); out.push('\''); }
-        GTerm::FreshLit(s) => { out.push_str("~'"); out.push_str(s); out.push('\''); }
-        GTerm::NatLit(s) => { out.push_str("%'"); out.push_str(s); out.push('\''); }
-        GTerm::Number(n) => { out.push_str(&n.to_string()); }
+        GTerm::PubLit(s) => {
+            out.push('\'');
+            out.push_str(s);
+            out.push('\'');
+        }
+        GTerm::FreshLit(s) => {
+            out.push_str("~'");
+            out.push_str(s);
+            out.push('\'');
+        }
+        GTerm::NatLit(s) => {
+            out.push_str("%'");
+            out.push_str(s);
+            out.push('\'');
+        }
+        GTerm::Number(n) => {
+            out.push_str(&n.to_string());
+        }
         // HS `oneSym` renders as its symbol string `"one"` — see note in
         // `pp_term` (no `prettyTerm` special case; Term/Term.hs:266-280).
         GTerm::NumberOne => out.push_str("one"),
@@ -2366,7 +2515,9 @@ fn pp_gterm(t: &crate::guarded::GTerm, scope: &[Vec<Bind>], out: &mut String) {
             out.push_str(name);
             out.push('(');
             for (i, a) in args.iter().enumerate() {
-                if i > 0 { out.push_str(", "); }
+                if i > 0 {
+                    out.push_str(", ");
+                }
                 pp_gterm(a, scope, out);
             }
             out.push(')');
@@ -2386,7 +2537,9 @@ fn pp_gterm(t: &crate::guarded::GTerm, scope: &[Vec<Bind>], out: &mut String) {
         GTerm::Pair(items) => {
             out.push('<');
             for (i, it) in items.iter().enumerate() {
-                if i > 0 { out.push_str(", "); }
+                if i > 0 {
+                    out.push_str(", ");
+                }
                 pp_gterm(it, scope, out);
             }
             out.push('>');
@@ -2426,7 +2579,9 @@ fn pp_gterm(t: &crate::guarded::GTerm, scope: &[Vec<Bind>], out: &mut String) {
             out.push('(');
             let sym = binop_symbol(*op);
             for (i, child) in flat.iter().enumerate() {
-                if i > 0 { out.push_str(sym); }
+                if i > 0 {
+                    out.push_str(sym);
+                }
                 pp_gterm(child, scope, out);
             }
             out.push(')');
@@ -2451,7 +2606,12 @@ mod tests {
     use super::*;
 
     fn v(name: &str, sort: p::SortHint) -> p::VarSpec {
-        p::VarSpec { name: name.into(), idx: 0, sort, typ: None }
+        p::VarSpec {
+            name: name.into(),
+            idx: 0,
+            sort,
+            typ: None,
+        }
     }
 
     #[test]
@@ -2463,10 +2623,7 @@ mod tests {
     #[test]
     fn unannotated_comment_renders_inline() {
         // `multiComment_ ["unannotated"]` → `/* unannotated */`.
-        assert_eq!(
-            unannotated_comment_doc().render(),
-            "/* unannotated */"
-        );
+        assert_eq!(unannotated_comment_doc().render(), "/* unannotated */");
     }
 
     #[test]
@@ -2501,7 +2658,11 @@ mod tests {
         assert!(long.chars().count() + " /* unannotated */".chars().count() > 73);
         let out = step_line_with_unann(Doc::text(long), 2, /*annotated=*/ false, "");
         let lines: Vec<&str> = out.split('\n').collect();
-        assert_eq!(lines.len(), 2, "comment should drop to its own line: {out:?}");
+        assert_eq!(
+            lines.len(),
+            2,
+            "comment should drop to its own line: {out:?}"
+        );
         assert_eq!(lines[0], long, "method line unchanged");
         // Dropped comment sits at the step's base indent (2 spaces).
         assert_eq!(lines[1], "  /* unannotated */");
@@ -2518,7 +2679,9 @@ mod tests {
         };
         let body = p::Formula::Implies(
             Box::new(p::Formula::Atom(p::Atom::Action(
-                fa, p::Term::Var(v("i", p::SortHint::Node))))),
+                fa,
+                p::Term::Var(v("i", p::SortHint::Node)),
+            ))),
             Box::new(p::Formula::False),
         );
         let f = p::Formula::Forall(
@@ -2540,31 +2703,37 @@ mod tests {
         // the `∃ ` prefix (column 2, the `<>` nesting offset).  Build an
         // existential with enough vars to overflow the ribbon, body `⊥`.
         let names = [
-            "i1", "i2", "j1", "j2", "h1", "h2", "ss", "vote2", "fstcode1",
-            "sndcode1", "fstcode2", "sndcode2", "ess", "hv1", "hv2", "hy1",
-            "hy2", "x1", "x2", "adv1", "adv2", "ek", "bb", "sks", "y1", "y2",
-            "aa", "ea", "el", "em",
+            "i1", "i2", "j1", "j2", "h1", "h2", "ss", "vote2", "fstcode1", "sndcode1", "fstcode2",
+            "sndcode2", "ess", "hv1", "hv2", "hy1", "hy2", "x1", "x2", "adv1", "adv2", "ek", "bb",
+            "sks", "y1", "y2", "aa", "ea", "el", "em",
         ];
-        let vs: Vec<p::VarSpec> =
-            names.iter().map(|n| v(n, p::SortHint::Untagged)).collect();
+        let vs: Vec<p::VarSpec> = names.iter().map(|n| v(n, p::SortHint::Untagged)).collect();
         let f = p::Formula::Exists(vs, Box::new(p::Formula::False));
         let out = pretty_formula_wrapped(&f, 0);
         let lines: Vec<&str> = out.split('\n').collect();
         assert!(lines.len() >= 2, "long var list must wrap: {out:?}");
         // First line opens with the existential symbol and a space.
-        assert!(lines[0].starts_with("\u{2203} "), "first line: {:?}", lines[0]);
+        assert!(
+            lines[0].starts_with("\u{2203} "),
+            "first line: {:?}",
+            lines[0]
+        );
         // Continuation lines are indented by 2 (aligned after `∃ `), i.e.
         // exactly the column where the first bound var landed.
         for cont in &lines[1..] {
             // Skip the final body-only line if it is just the nested `⊥`.
-            if cont.trim_start() == "\u{22A5}" { continue; }
+            if cont.trim_start() == "\u{22A5}" {
+                continue;
+            }
             assert!(
                 cont.starts_with("  ") && !cont.starts_with("   "),
                 "continuation var line should align at col 2: {cont:?}"
             );
         }
         // No bound var was dropped: the rendered text contains every name.
-        for n in names { assert!(out.contains(n), "missing var {n} in {out:?}"); }
+        for n in names {
+            assert!(out.contains(n), "missing var {n} in {out:?}");
+        }
     }
 
     #[test]
@@ -2596,7 +2765,8 @@ mod tests {
             guards: vec![crate::guarded::atom_to_gatom_free(&p::Atom::Less(
                 p::Term::Var(v("i", p::SortHint::Node)),
                 p::Term::Var(v("j", p::SortHint::Node)),
-            ))].into(),
+            ))]
+            .into(),
             body: std::sync::Arc::new(Guarded::Disj(vec![].into())),
         };
         let s = pretty_guarded(&g);
@@ -2636,9 +2806,15 @@ mod tests {
         let doc = term_to_doc(&t, &[]);
         // place at column 20 (a typical proof-tree/rule indent) so it wraps.
         let s = doc.render_at(LINE_LENGTH, RIBBON, 20);
-        assert!(s.contains("++\n"), "AC chain did not wrap with ++ at line end:\n{s}");
+        assert!(
+            s.contains("++\n"),
+            "AC chain did not wrap with ++ at line end:\n{s}"
+        );
         assert!(s.starts_with('('), "AC chain missing leading paren:\n{s}");
-        assert!(s.trim_end().ends_with(')'), "AC chain missing trailing paren:\n{s}");
+        assert!(
+            s.trim_end().ends_with(')'),
+            "AC chain missing trailing paren:\n{s}"
+        );
         // Each pair element renders fully (its payload var appears).
         assert!(s.contains("~longPayloadNameNumberOne"));
         assert!(s.contains("~longPayloadNameNumberThree"));
@@ -2649,15 +2825,15 @@ mod tests {
         // gterm_to_doc (guarded path) must wrap the SAME AC chain identically,
         // since HS uses ONE prettyTerm for both rule terms and formula terms.
         // Build `z = <chain>` as a guarded Eq atom and render wrapped.
-        let eq = p::Atom::Eq(
-            p::Term::Var(v("z", p::SortHint::Msg)),
-            ac_chain_term(),
-        );
+        let eq = p::Atom::Eq(p::Term::Var(v("z", p::SortHint::Msg)), ac_chain_term());
         let g = Guarded::Atom(crate::guarded::atom_to_gatom_free(&eq));
         // indent 12 (a proof-tree depth) forces the RHS chain to wrap.
         let s = pretty_guarded_wrapped(&g, 12);
         assert!(s.contains("++\n"), "guarded AC chain did not wrap:\n{s}");
-        assert!(s.contains("~longPayloadNameNumberTwo"), "payload missing:\n{s}");
+        assert!(
+            s.contains("~longPayloadNameNumberTwo"),
+            "payload missing:\n{s}"
+        );
         // The Eq's `=` is rendered (HS `sep [ppT l <-> opEqual, ppT r]`).
         assert!(s.contains("z ="), "Eq operator missing:\n{s}");
     }
@@ -2682,21 +2858,30 @@ mod tests {
         );
         let t = p::Term::App(
             "hmac".into(),
-            vec![exp.clone(), p::Term::Var(v("longSaltArgumentName", p::SortHint::Fresh))],
+            vec![
+                exp.clone(),
+                p::Term::Var(v("longSaltArgumentName", p::SortHint::Fresh)),
+            ],
         );
         let doc = term_to_doc(&t, &[]);
         // Deep indent (col 30) so the flat term overruns and the `*`-operands
         // must each break onto their own line at `nest 1` (HS layout).
         let s = doc.render_at(LINE_LENGTH, RIBBON, 30);
-        assert!(s.contains("*\n"),
-            "AC `*` exponent inside exp did not wrap:\n{s}");
+        assert!(
+            s.contains("*\n"),
+            "AC `*` exponent inside exp did not wrap:\n{s}"
+        );
         // exp's `^` and `'g'` stay on the first line (exp never breaks at `^`).
-        assert!(s.lines().next().unwrap().contains("'g'^("),
-            "exp head should stay flat as `'g'^(`:\n{s}");
+        assert!(
+            s.lines().next().unwrap().contains("'g'^("),
+            "exp head should stay flat as `'g'^(`:\n{s}"
+        );
         // No flat line exceeds the page width.
         for line in s.lines() {
-            assert!(line.chars().count() <= LINE_LENGTH,
-                "line overruns LINE_LENGTH:\n{line}");
+            assert!(
+                line.chars().count() <= LINE_LENGTH,
+                "line overruns LINE_LENGTH:\n{line}"
+            );
         }
         // The plain (well-fitting) exp still renders flat with no wrap.
         let flat = term_to_doc(&exp, &[]).render_at(LINE_LENGTH, RIBBON, 0);
@@ -2747,12 +2932,14 @@ mod tests {
     fn algapp_renders_function_form_flat_gterm() {
         let g = crate::guarded::GTerm::AlgApp(
             "sdec".into(),
-            std::sync::Arc::new(crate::guarded::GTerm::Var(crate::guarded::BVar::Free(
-                v("body", p::SortHint::Untagged),
-            ))),
-            std::sync::Arc::new(crate::guarded::GTerm::Var(crate::guarded::BVar::Free(
-                v("key", p::SortHint::Untagged),
-            ))),
+            std::sync::Arc::new(crate::guarded::GTerm::Var(crate::guarded::BVar::Free(v(
+                "body",
+                p::SortHint::Untagged,
+            )))),
+            std::sync::Arc::new(crate::guarded::GTerm::Var(crate::guarded::BVar::Free(v(
+                "key",
+                p::SortHint::Untagged,
+            )))),
         );
         let mut s = String::new();
         pp_gterm(&g, &[], &mut s);
@@ -2764,19 +2951,23 @@ mod tests {
         // senc{a,b}k as a GTerm -> senc(<a, b>, k) via the Doc renderer
         let g = crate::guarded::GTerm::AlgApp(
             "senc".into(),
-            std::sync::Arc::new(crate::guarded::GTerm::Pair(vec![
-                crate::guarded::GTerm::Var(crate::guarded::BVar::Free(v(
-                    "a",
-                    p::SortHint::Untagged,
-                ))),
-                crate::guarded::GTerm::Var(crate::guarded::BVar::Free(v(
-                    "b",
-                    p::SortHint::Untagged,
-                ))),
-            ].into())),
-            std::sync::Arc::new(crate::guarded::GTerm::Var(crate::guarded::BVar::Free(
-                v("k", p::SortHint::Untagged),
-            ))),
+            std::sync::Arc::new(crate::guarded::GTerm::Pair(
+                vec![
+                    crate::guarded::GTerm::Var(crate::guarded::BVar::Free(v(
+                        "a",
+                        p::SortHint::Untagged,
+                    ))),
+                    crate::guarded::GTerm::Var(crate::guarded::BVar::Free(v(
+                        "b",
+                        p::SortHint::Untagged,
+                    ))),
+                ]
+                .into(),
+            )),
+            std::sync::Arc::new(crate::guarded::GTerm::Var(crate::guarded::BVar::Free(v(
+                "k",
+                p::SortHint::Untagged,
+            )))),
         );
         assert_eq!(gterm_to_doc(&g, &[]).render(), "senc(<a, b>, k)");
     }

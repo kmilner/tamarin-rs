@@ -26,9 +26,7 @@ use std::collections::BTreeSet;
 use tamarin_term::lterm::LVar;
 
 use tamarin_theory::rule::ProtoRuleE;
-use tamarin_theory::sapic::{
-    GoodAnnotation, PlainProcess, Process, SapicLVar, ProcessPosition,
-};
+use tamarin_theory::sapic::{GoodAnnotation, PlainProcess, Process, ProcessPosition, SapicLVar};
 
 use tamarin_theory::sapic::ProcessCombinator;
 
@@ -60,7 +58,9 @@ struct TransCtx {
 
 /// `propagateNames` (Facts.hs:301-313): push each node's process-names down to
 /// its children so every node carries the names of all its ancestors.
-pub fn propagate_names<A: GoodAnnotation + Clone>(p: Process<A, SapicLVar>) -> Process<A, SapicLVar> {
+pub fn propagate_names<A: GoodAnnotation + Clone>(
+    p: Process<A, SapicLVar>,
+) -> Process<A, SapicLVar> {
     fn go<A: GoodAnnotation + Clone>(
         prefix: Vec<String>,
         p: Process<A, SapicLVar>,
@@ -148,8 +148,7 @@ fn gen(
     p: &ProcessPosition,
     tildex: &BTreeSet<LVar>,
 ) -> Result<Vec<AnnotatedRule<ProcessAnnotation<LVar>>>, String> {
-    let proc = process_at(an_proc, p)
-        .ok_or_else(|| format!("gen: invalid position {p:?}"))?;
+    let proc = process_at(an_proc, p).ok_or_else(|| format!("gen: invalid position {p:?}"))?;
     match proc {
         Process::Null(_) => {
             // `trans_null` is the identity wrapper for progress/reliable.
@@ -298,9 +297,7 @@ fn subst_state_pos_fact(f: TransFact, p_old: &[i64], p_new: &[i64]) -> TransFact
 /// `getLockPositions = pfoldMap getLock` (Basetranslation.hs:449-479, see line 473,478): the lock
 /// variables of every `Lock` action with `pureState=False` and a `lock`
 /// annotation, in `pfoldMap` order, NOT deduplicated.
-fn get_lock_positions(
-    p: &Process<ProcessAnnotation<LVar>, SapicLVar>,
-) -> Vec<LVar> {
+fn get_lock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<LVar> {
     use tamarin_theory::sapic::SapicAction;
     let mut get_lock = |proc: &Process<ProcessAnnotation<LVar>, SapicLVar>| -> Vec<LVar> {
         if let Process::Action(SapicAction::Lock(_), an, _) = proc {
@@ -318,9 +315,7 @@ fn get_lock_positions(
 /// `nub $ getUnlockPositions` (Basetranslation.hs:449-479, see line 463): the lock variables of
 /// every `Unlock` action with `pureState=False` and an `unlock` annotation, in
 /// `pfoldMap` order, first-occurrence deduplicated (HS `List.nub`).
-fn get_unlock_positions(
-    p: &Process<ProcessAnnotation<LVar>, SapicLVar>,
-) -> Vec<LVar> {
+fn get_unlock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<LVar> {
     use tamarin_theory::sapic::SapicAction;
     let mut get_unlock = |proc: &Process<ProcessAnnotation<LVar>, SapicLVar>| -> Vec<LVar> {
         if let Process::Action(SapicAction::Unlock(_), an, _) = proc {
@@ -447,8 +442,7 @@ pub fn translate(
         init_tx = t;
     }
     if opts.trans_reliable {
-        let (r, t) =
-            crate::reliable_channel::reliable_channel_init(&an_proc, init_rules, init_tx);
+        let (r, t) = crate::reliable_channel::reliable_channel_init(&an_proc, init_rules, init_tx);
         init_rules = r;
         init_tx = t;
     }
@@ -519,8 +513,7 @@ pub fn translate(
                 if !an.pure_state)
     };
     if tamarin_theory::sapic::process_contains(&an_proc, is_lookup_non_pure) {
-        let has_delete =
-            tamarin_theory::sapic::process_contains(&an_proc, is_delete_non_pure);
+        let has_delete = tamarin_theory::sapic::process_contains(&an_proc, is_delete_non_pure);
         restrictions.extend(state_restrictions(has_delete));
     }
     if tamarin_theory::sapic::process_contains(&an_proc, tamarin_theory::sapic::is_eq) {
@@ -556,11 +549,13 @@ pub fn translate(
         restrictions = crate::progress_translation::progress_restr(&an_proc, restrictions)?;
     }
     if opts.trans_reliable {
-        restrictions =
-            crate::reliable_channel::reliable_channel_restr(&an_proc, restrictions);
+        restrictions = crate::reliable_channel::reliable_channel_restr(&an_proc, restrictions);
     }
 
-    Ok(Translation { rules, restrictions })
+    Ok(Translation {
+        rules,
+        restrictions,
+    })
 }
 
 // =============================================================================
@@ -580,11 +575,11 @@ fn lemma_needs_in_ev_res(lem: &tamarin_parser::ast::Lemma) -> bool {
     use tamarin_parser::ast::TraceQuantifier as TQ;
     let (pos, neg) = is_pos_neg_formula(&lem.formula);
     match (&lem.trace_quantifier, pos, neg) {
-        (TQ::AllTraces, _, true) => false,   // L- for all-traces
-        (TQ::ExistsTrace, true, _) => false, // L+ for exists-trace
+        (TQ::AllTraces, _, true) => false,      // L- for all-traces
+        (TQ::ExistsTrace, true, _) => false,    // L+ for exists-trace
         (TQ::ExistsTrace, false, true) => true, // L- for exists-trace
         (TQ::AllTraces, true, false) => true,   // L+ for all-traces
-        _ => true,                               // not in L- and L+
+        _ => true,                              // not in L- and L+
     }
 }
 
@@ -667,7 +662,10 @@ mod tests {
                     annotations: vec![],
                 }),
                 body: Box::new(p::Process::Action {
-                    action: p::SapicAction::ChOut { chan: None, msg: ffx },
+                    action: p::SapicAction::ChOut {
+                        chan: None,
+                        msg: ffx,
+                    },
                     body: Box::new(p::Process::Null),
                 }),
             }),
@@ -687,6 +685,9 @@ mod tests {
         assert_eq!(tr.rules.len(), 5);
         assert_eq!(tr.restrictions.len(), 1);
         // First rule is "Init".
-        assert_eq!(tr.rules[0].0.info.name, tamarin_theory::rule::ProtoRuleName::Stand("Init"));
+        assert_eq!(
+            tr.rules[0].0.info.name,
+            tamarin_theory::rule::ProtoRuleName::Stand("Init")
+        );
     }
 }

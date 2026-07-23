@@ -146,10 +146,7 @@ fn pp_term_lnterm(t: &Term<Lit<Name, LVar>>, out: &mut String) {
     }
 }
 
-fn collect_pair_tail<'a>(
-    t: &'a Term<Lit<Name, LVar>>,
-    out: &mut Vec<&'a Term<Lit<Name, LVar>>>,
-) {
+fn collect_pair_tail<'a>(t: &'a Term<Lit<Name, LVar>>, out: &mut Vec<&'a Term<Lit<Name, LVar>>>) {
     if let Term::App(FunSym::NoEq(sym), args) = t {
         if *sym == pair_sym() && args.len() == 2 {
             collect_pair_tail(&args[0], out);
@@ -269,7 +266,7 @@ impl fmt::Display for LSort {
 mod tests {
     use super::*;
     use crate::function_symbols::{
-        exp_sym, inv_sym, nat_one_sym, pair_sym, NoEqSym, Privacy, Constructability,
+        exp_sym, inv_sym, nat_one_sym, pair_sym, Constructability, NoEqSym, Privacy,
     };
     use crate::lterm::{fresh_term, pub_term, NameTag};
     use crate::term::{f_app_ac, f_app_no_eq, lit};
@@ -330,8 +327,11 @@ mod tests {
         let t = f_app_ac(crate::function_symbols::AcSym::Xor, vec![a, b]);
         // AC-normalised order: alphabetic — a, b
         let rendered = pretty_lnterm(&t);
-        assert!(rendered.starts_with('(') && rendered.ends_with(')'),
-            "got {}", rendered);
+        assert!(
+            rendered.starts_with('(') && rendered.ends_with(')'),
+            "got {}",
+            rendered
+        );
         assert!(rendered.contains("\u{2295}"));
     }
 
@@ -369,8 +369,12 @@ mod tests {
     #[test]
     fn pretty_user_function() {
         // senc(k, m)
-        let senc = NoEqSym::new(b"senc".to_vec(), 2, Privacy::Public,
-            Constructability::Constructor);
+        let senc = NoEqSym::new(
+            b"senc".to_vec(),
+            2,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
         let k = var("k", LSort::Msg);
         let m = var("m", LSort::Msg);
         let t = f_app_no_eq(senc, vec![k, m]);

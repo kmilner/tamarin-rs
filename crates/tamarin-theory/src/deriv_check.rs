@@ -74,7 +74,9 @@ pub fn check_message_derivation(
     maude: &MaudeHandle,
     timeout_secs: u32,
 ) -> Vec<WfError> {
-    if timeout_secs == 0 { return Vec::new(); }
+    if timeout_secs == 0 {
+        return Vec::new();
+    }
     let timeout = Duration::from_secs(timeout_secs as u64);
     let dbg = tamarin_utils::env_gate!("TAM_DBG_DERIV_CHECK");
     // TAM_DBG_DERIV_TIMING=1: emit per-rule / per-variable wall-clock
@@ -101,10 +103,14 @@ pub fn check_message_derivation(
     // whose body uses a macro that introduces fresh vars (e.g.
     // `macros: test() = ~x`) mis-collects vars and the rule is silently
     // skipped.
-    let theory_macros: Vec<p::Macro> = parsed.items.iter().flat_map(|i| match i {
-        p::TheoryItem::Macros(ms) => ms.clone(),
-        _ => Vec::new(),
-    }).collect();
+    let theory_macros: Vec<p::Macro> = parsed
+        .items
+        .iter()
+        .flat_map(|i| match i {
+            p::TheoryItem::Macros(ms) => ms.clone(),
+            _ => Vec::new(),
+        })
+        .collect();
 
     let mut per_rule: Vec<(String, Vec<String>)> = Vec::new();
     let mut rule_count = 0usize;
@@ -112,7 +118,11 @@ pub fn check_message_derivation(
     let mut total_synth = Duration::ZERO;
     let mut total_prove = Duration::ZERO;
     for (idx, raw_rule) in protocol_rules(parsed).enumerate() {
-        if raw_rule.attributes.iter().any(|a| matches!(a, p::RuleAttr::NoDerivCheck)) {
+        if raw_rule
+            .attributes
+            .iter()
+            .any(|a| matches!(a, p::RuleAttr::NoDerivCheck))
+        {
             continue;
         }
         // HS applies theory macros before the deriv check
@@ -137,7 +147,9 @@ pub fn check_message_derivation(
         let expanded = crate::elaborate::apply_let_block(macro_src);
         let rule = &expanded;
         let free_vars = collect_rule_free_vars(rule, &nullary_funs);
-        if free_vars.is_empty() { continue; }
+        if free_vars.is_empty() {
+            continue;
+        }
         rule_count += 1;
 
         // Build the probe theory ONCE per rule (it contains all the
@@ -148,15 +160,24 @@ pub fn check_message_derivation(
         let synth_dt = t_synth.elapsed();
         total_synth += synth_dt;
         if dbg {
-            eprintln!("[deriv] rule={} free_vars={:?}", rule.name,
-                free_vars.iter().map(|v| &v.name).collect::<Vec<_>>());
+            eprintln!(
+                "[deriv] rule={} free_vars={:?}",
+                rule.name,
+                free_vars.iter().map(|v| &v.name).collect::<Vec<_>>()
+            );
             eprintln!("[deriv] probe theory items:");
             for it in &probe.items {
                 match it {
-                    p::TheoryItem::Rule(r) => eprintln!("  rule {}: prem={} act={} conc={}",
-                        r.name, r.premises.len(), r.actions.len(), r.conclusions.len()),
-                    p::TheoryItem::Lemma(l) => eprintln!("  lemma {} ({:?})",
-                        l.name, l.trace_quantifier),
+                    p::TheoryItem::Rule(r) => eprintln!(
+                        "  rule {}: prem={} act={} conc={}",
+                        r.name,
+                        r.premises.len(),
+                        r.actions.len(),
+                        r.conclusions.len()
+                    ),
+                    p::TheoryItem::Lemma(l) => {
+                        eprintln!("  lemma {} ({:?})", l.name, l.trace_quantifier)
+                    }
                     _ => {}
                 }
             }
@@ -172,7 +193,15 @@ pub fn check_message_derivation(
         // sources/cache — `Prover.hs:260-279`).  `prove_probe` mirrors
         // this: build the `ProofContext` + run `ensure_saturated()` ONCE
         // per probe, then iterate the per-variable lemmas reusing it.
-        let outcome = match prove_probe(&probe, maude.clone(), idx, &free_vars, timeout, dbg_timing, &rule.name) {
+        let outcome = match prove_probe(
+            &probe,
+            maude.clone(),
+            idx,
+            &free_vars,
+            timeout,
+            dbg_timing,
+            &rule.name,
+        ) {
             Some(o) => o,
             None => continue,
         };
@@ -183,7 +212,9 @@ pub fn check_message_derivation(
         if dbg_timing {
             eprintln!(
                 "[deriv-timing] rule={} synth={:.3}s nvars={} total_prove={:.3}s",
-                rule.name, synth_dt.as_secs_f64(), free_vars.len(),
+                rule.name,
+                synth_dt.as_secs_f64(),
+                free_vars.len(),
                 total_prove.as_secs_f64(),
             );
         }
@@ -194,7 +225,8 @@ pub fn check_message_derivation(
     if dbg_timing {
         eprintln!(
             "[deriv-timing] TOTAL rules={} vars={} synth={:.3}s prove={:.3}s wall={:.3}s",
-            rule_count, var_count,
+            rule_count,
+            var_count,
             total_synth.as_secs_f64(),
             total_prove.as_secs_f64(),
             t_total_start.elapsed().as_secs_f64(),
@@ -295,13 +327,16 @@ fn collect_rule_free_vars(
     // a (name, idx)-only key would let `~ltk` mask `ltk` and silently drop
     // the non-derivable msg var (Register_pk `ltk`).
     let mut seen: std::collections::BTreeSet<(String, u8, u64)> = std::collections::BTreeSet::new();
-    let push = |v: &p::VarSpec, out: &mut Vec<p::VarSpec>, seen: &mut std::collections::BTreeSet<(String, u8, u64)>| {
+    let push = |v: &p::VarSpec,
+                out: &mut Vec<p::VarSpec>,
+                seen: &mut std::collections::BTreeSet<(String, u8, u64)>| {
         if matches!(v.sort, p::SortHint::Pub | p::SortHint::Node) {
             return;
         }
-        if matches!(v.sort, p::SortHint::Suffix(p::SuffixSort::Pub)
-            | p::SortHint::Suffix(p::SuffixSort::Node))
-        {
+        if matches!(
+            v.sort,
+            p::SortHint::Suffix(p::SuffixSort::Pub) | p::SortHint::Suffix(p::SuffixSort::Node)
+        ) {
             return;
         }
         if nullary_funs.contains(&v.name) {
@@ -315,17 +350,32 @@ fn collect_rule_free_vars(
     let visit_term = |t: &p::Term, out: &mut Vec<p::VarSpec>, seen: &mut _| {
         let mut vs = Vec::new();
         collect_term_vars(t, &mut vs);
-        for v in vs { push(&v, out, seen); }
+        for v in vs {
+            push(&v, out, seen);
+        }
     };
-    for f in &r.premises { for a in &f.args { visit_term(a, &mut out, &mut seen); } }
-    for f in &r.actions { for a in &f.args { visit_term(a, &mut out, &mut seen); } }
-    for f in &r.conclusions { for a in &f.args { visit_term(a, &mut out, &mut seen); } }
+    for f in &r.premises {
+        for a in &f.args {
+            visit_term(a, &mut out, &mut seen);
+        }
+    }
+    for f in &r.actions {
+        for a in &f.args {
+            visit_term(a, &mut out, &mut seen);
+        }
+    }
+    for f in &r.conclusions {
+        for a in &f.args {
+            visit_term(a, &mut out, &mut seen);
+        }
+    }
     // HS-faithful: sort by (idx, sort, name) to match HS's `LVar Ord`
     // (LTerm.hs:522-524: `compare x3 y3 <> compare x2 y2 <> compare x1 y1`
     //  where x3=idx, x2=sort, x1=name).  HS uses `frees . L.get oprRuleE` →
     // `S.toList` which returns elements in ascending LVar Ord.
     out.sort_by(|a, b| {
-        a.idx.cmp(&b.idx)
+        a.idx
+            .cmp(&b.idx)
             .then_with(|| sort_ord(&a.sort).cmp(&sort_ord(&b.sort)))
             .then_with(|| a.name.cmp(&b.name))
     });
@@ -340,8 +390,7 @@ fn sort_ord(s: &p::SortHint) -> u8 {
     match s {
         p::SortHint::Pub | p::SortHint::Suffix(p::SuffixSort::Pub) => 0,
         p::SortHint::Fresh | p::SortHint::Suffix(p::SuffixSort::Fresh) => 1,
-        p::SortHint::Msg | p::SortHint::Suffix(p::SuffixSort::Msg)
-            | p::SortHint::Untagged => 2,
+        p::SortHint::Msg | p::SortHint::Suffix(p::SuffixSort::Msg) | p::SortHint::Untagged => 2,
         p::SortHint::Node | p::SortHint::Suffix(p::SuffixSort::Node) => 3,
         p::SortHint::Nat | p::SortHint::Suffix(p::SuffixSort::Nat) => 4,
     }
@@ -351,7 +400,10 @@ fn sort_ord(s: &p::SortHint) -> u8 {
 /// the var's sort unchanged (MessageDerivationChecks.hs:216-218).
 fn nat_to_fresh_var(v: &p::VarSpec) -> p::VarSpec {
     let mut nv = v.clone();
-    if matches!(v.sort, p::SortHint::Nat | p::SortHint::Suffix(p::SuffixSort::Nat)) {
+    if matches!(
+        v.sort,
+        p::SortHint::Nat | p::SortHint::Suffix(p::SuffixSort::Nat)
+    ) {
         nv.sort = p::SortHint::Fresh;
     }
     nv
@@ -380,9 +432,9 @@ fn rename_term_to_probe(
             name.clone(),
             args.iter().map(|a| rename_term_to_probe(a, map)).collect(),
         ),
-        p::Term::Pair(args) => p::Term::Pair(
-            args.iter().map(|a| rename_term_to_probe(a, map)).collect(),
-        ),
+        p::Term::Pair(args) => {
+            p::Term::Pair(args.iter().map(|a| rename_term_to_probe(a, map)).collect())
+        }
         p::Term::BinOp(op, l, r) => p::Term::BinOp(
             *op,
             Box::new(rename_term_to_probe(l, map)),
@@ -401,10 +453,18 @@ fn collect_term_vars(t: &p::Term, out: &mut Vec<p::VarSpec>) {
     match t {
         p::Term::Var(v) => out.push(v.clone()),
         p::Term::App(_, args) | p::Term::Pair(args) => {
-            for a in args { collect_term_vars(a, out); }
+            for a in args {
+                collect_term_vars(a, out);
+            }
         }
-        p::Term::BinOp(_, l, rt) => { collect_term_vars(l, out); collect_term_vars(rt, out); }
-        p::Term::AlgApp(_, l, rt) => { collect_term_vars(l, out); collect_term_vars(rt, out); }
+        p::Term::BinOp(_, l, rt) => {
+            collect_term_vars(l, out);
+            collect_term_vars(rt, out);
+        }
+        p::Term::AlgApp(_, l, rt) => {
+            collect_term_vars(l, out);
+            collect_term_vars(rt, out);
+        }
         _ => {}
     }
 }
@@ -504,7 +564,9 @@ fn synthesise_probe_theory(
     // (variable names are immaterial to the intruder); the original var name
     // is restored for the WfError report via `show_lvar` (prove_probe uses
     // `free_vars`).
-    let probe_vars: Vec<p::VarSpec> = free_vars.iter().enumerate()
+    let probe_vars: Vec<p::VarSpec> = free_vars
+        .iter()
+        .enumerate()
         .map(|(k, v)| {
             let mut nv = nat_to_fresh_var(v);
             nv.name = format!("dvar{}", k);
@@ -514,11 +576,18 @@ fn synthesise_probe_theory(
         .collect();
     // Sort-aware (name, sort, idx) → probe-var map for renaming premise terms
     // (so `Out(~ltk)` references the same `dvar<k>` as `Fr(dvar<k>)`).
-    let rename: std::collections::HashMap<(String, u8, u64), p::VarSpec> =
-        free_vars.iter().enumerate()
-            .map(|(k, v)| ((v.name.clone(), sort_ord(&v.sort), v.idx), probe_vars[k].clone()))
-            .collect();
-    let fresh_premises: Vec<p::Fact> = probe_vars.iter()
+    let rename: std::collections::HashMap<(String, u8, u64), p::VarSpec> = free_vars
+        .iter()
+        .enumerate()
+        .map(|(k, v)| {
+            (
+                (v.name.clone(), sort_ord(&v.sort), v.idx),
+                probe_vars[k].clone(),
+            )
+        })
+        .collect();
+    let fresh_premises: Vec<p::Fact> = probe_vars
+        .iter()
         .map(|v| p::Fact {
             persistent: false,
             name: "Fr".into(),
@@ -540,7 +609,9 @@ fn synthesise_probe_theory(
     // premisesToOut = map (outFact . natToFreshVars) . concatMap factTerms:
     // Out each premise term, with free-var occurrences renamed to their
     // `dvar<k>` probe var (and nat-sort non-free vars retyped to fresh).
-    let out_concs: Vec<p::Fact> = rule.premises.iter()
+    let out_concs: Vec<p::Fact> = rule
+        .premises
+        .iter()
         .flat_map(|f| f.args.iter().cloned())
         .map(|t| p::Fact {
             persistent: false,
@@ -578,8 +649,18 @@ fn synthesise_probe_theory(
         // collide; prove_probe re-derives the same name from the index.
         let lemma_name = format!("deriv_check_{}_{}", idx, k);
         let v_renamed = probe_vars[k].clone();
-        let t0 = p::VarSpec { name: "t0".into(), idx: 0, sort: p::SortHint::Node, typ: None };
-        let t1 = p::VarSpec { name: "t1".into(), idx: 0, sort: p::SortHint::Node, typ: None };
+        let t0 = p::VarSpec {
+            name: "t0".into(),
+            idx: 0,
+            sort: p::SortHint::Node,
+            typ: None,
+        };
+        let t1 = p::VarSpec {
+            name: "t1".into(),
+            idx: 0,
+            sort: p::SortHint::Node,
+            typ: None,
+        };
         let gen_at = action_atom(action.clone(), p::Term::Var(t0.clone()));
         let ku_fact = p::Fact {
             // KU is Persistent per factTagMultiplicity (Model/Fact.hs:355-360, see line 356);
@@ -720,7 +801,10 @@ fn prove_probe(
         if dbg_timing {
             eprintln!(
                 "[deriv-timing] rule={} var={} prove={:.3}s ok={}",
-                rule_name, v.name, prove_dt.as_secs_f64(), ok,
+                rule_name,
+                v.name,
+                prove_dt.as_secs_f64(),
+                ok,
             );
         }
         if !ok {
@@ -731,7 +815,11 @@ fn prove_probe(
         }
     }
 
-    Some(ProbeOutcome { undecidable, prove_time, var_count })
+    Some(ProbeOutcome {
+        undecidable,
+        prove_time,
+        var_count,
+    })
 }
 
 /// RAII guard for the `TAM_PROVE_DEADLINE_MS` env var (mirrors the
@@ -761,7 +849,9 @@ impl Drop for DeadlineEnvGuard {
 }
 
 fn format_deriv_report(per_rule: &[(String, Vec<String>)]) -> Vec<WfError> {
-    if per_rule.is_empty() { return Vec::new(); }
+    if per_rule.is_empty() {
+        return Vec::new();
+    }
     // HS `reportVars` (Theory/Tools/MessageDerivationChecks.hs:122-127)
     //   `[(underlineTopic "Message Derivation Checks",
     //     text $ "The variables of the following rule(s) ... pattern matching.\n\n" ++ errors)]`
@@ -775,15 +865,20 @@ fn format_deriv_report(per_rule: &[(String, Vec<String>)]) -> Vec<WfError> {
     msg.push_str(
         "  The variables of the following rule(s) are not derivable \
          from their premises, you may be performing unintended pattern \
-         matching.\n\n");
+         matching.\n\n",
+    );
     // The per-rule blocks are intentionally NOT 2-space-indented: HughesPJ
     // `nest 2` re-indents only the first line of a `text`, leaving text that
     // follows a literal `\n` un-reindented, so HS's 2-space indent lands on
     // the intro line only and every `Rule X:` block starts at column 0.
-    let blocks: Vec<String> = per_rule.iter()
+    let blocks: Vec<String> = per_rule
+        .iter()
         .map(|(rule_name, vars)| {
-            format!("Rule {}: \nFailed to derive Variable(s): {}",
-                rule_name, vars.join(", "))
+            format!(
+                "Rule {}: \nFailed to derive Variable(s): {}",
+                rule_name,
+                vars.join(", ")
+            )
         })
         .collect();
     msg.push_str(&blocks.join("\n\n"));
@@ -844,8 +939,11 @@ mod tests {
         let report = check_message_derivation(&thy, &m, 5);
         // Free `unbound` has no premise → not derivable.
         assert_eq!(report.len(), 1);
-        assert!(report[0].message.contains("unbound"),
-            "expected 'unbound' in report, got {:?}", report);
+        assert!(
+            report[0].message.contains("unbound"),
+            "expected 'unbound' in report, got {:?}",
+            report
+        );
     }
 
     #[test]
@@ -903,13 +1001,18 @@ mod tests {
               lemma trivial: exists-trace "Ex m #i. Got(m) @ i"
             end
         "#;
-        let Some((thy, m)) = maude_for(src) else { return };
+        let Some((thy, m)) = maude_for(src) else {
+            return;
+        };
         let report = check_message_derivation(&thy, &m, 10);
         assert_eq!(report.len(), 1, "expected one report, got {:?}", report);
-        assert!(report[0].message.contains("Reveal")
+        assert!(
+            report[0].message.contains("Reveal")
                 && report[0].message.contains("Failed to derive Variable(s)")
                 && report[0].message.contains("m"),
-            "expected `m` flagged in Rule Reveal, got {:?}", report);
+            "expected `m` flagged in Rule Reveal, got {:?}",
+            report
+        );
     }
 
     #[test]
@@ -928,9 +1031,14 @@ mod tests {
               lemma trivial: exists-trace "Ex m #i. Got(m) @ i"
             end
         "#;
-        let Some((thy, m)) = maude_for(src) else { return };
+        let Some((thy, m)) = maude_for(src) else {
+            return;
+        };
         let report = check_message_derivation(&thy, &m, 10);
-        assert!(report.is_empty(),
-            "public `dec` → `m` derivable; expected no report, got {:?}", report);
+        assert!(
+            report.is_empty(),
+            "public `dec` → `m` derivable; expected no report, got {:?}",
+            report
+        );
     }
 }

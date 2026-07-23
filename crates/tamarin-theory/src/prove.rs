@@ -61,10 +61,15 @@ fn guard_error_doc(
     formula: &tamarin_parser::ast::Formula,
 ) -> String {
     let full = crate::pretty_formula::pretty_formula(formula);
-    let sub = e.subject_formula.as_ref()
+    let sub = e
+        .subject_formula
+        .as_ref()
         .map(crate::pretty_formula::pretty_formula)
         .unwrap_or_else(|| full.clone());
-    format!("{}\n  \"{}\"\nin the formula\n  \"{}\"", e.message, sub, full)
+    format!(
+        "{}\n  \"{}\"\nin the formula\n  \"{}\"",
+        e.message, sub, full
+    )
 }
 
 impl std::fmt::Display for ProveError {
@@ -201,7 +206,13 @@ pub fn prepend_theory_dir_to_oracle_paths(
 /// (`configAutoSources`).
 pub fn config_block_options(
     cfg: &str,
-) -> Result<(Option<crate::constraint::solver::context::CutStrategy>, bool), String> {
+) -> Result<
+    (
+        Option<crate::constraint::solver::context::CutStrategy>,
+        bool,
+    ),
+    String,
+> {
     use crate::constraint::solver::context::CutStrategy;
     let mut stop_on_trace: Option<CutStrategy> = None;
     let mut auto_sources = false;
@@ -222,8 +233,7 @@ pub fn config_block_options(
                 "seqdfs" => CutStrategy::SeqDfs,
                 "sorry" => CutStrategy::AfterSorry,
                 "none" => CutStrategy::Nothing,
-                other => return Err(format!(
-                    "unknown stop-on-trace method: {}", other)),
+                other => return Err(format!("unknown stop-on-trace method: {}", other)),
             });
         } else if tok.starts_with("--") {
             return Err(format!("configuration block: unknown flag: {}", tok));
@@ -289,8 +299,8 @@ fn resolve_cli_heuristic(
     // (oraclename, applied below) and step 3 (default name).  We post-process
     // to (a) override the parsed default with `--oraclename` where given, and
     // (b) resolve every relPath against workDir `"."` (CLI-heuristic workDir).
-    let mut rankings = crate::constraint::solver::goals::parse_heuristic_str_with_tactics(
-        raw, in_file, tactics);
+    let mut rankings =
+        crate::constraint::solver::goals::parse_heuristic_str_with_tactics(raw, in_file, tactics);
     // The CLI `--oraclename` (`Just "" -> Nothing`, TheoryLoader.hs:262-353, see line 310).
     let oraclename: Option<&str> = match cli.oracle_name.as_deref() {
         Some("") => None,
@@ -301,8 +311,16 @@ fn resolve_cli_heuristic(
     let default_name = crate::pretty_theory::oracle_name_for_theory(in_file);
     for r in rankings.iter_mut() {
         match r {
-            GoalRanking::Oracle { oracle_path, quit_on_empty, .. }
-            | GoalRanking::OracleSmart { oracle_path, quit_on_empty, .. } => {
+            GoalRanking::Oracle {
+                oracle_path,
+                quit_on_empty,
+                ..
+            }
+            | GoalRanking::OracleSmart {
+                oracle_path,
+                quit_on_empty,
+                ..
+            } => {
                 // Step 2/3: relPath = --oraclename if given, else the default
                 // name (the parser already filled the default name, but for a
                 // bare `O`/`o` from the CLI string it set the default — so we
@@ -323,10 +341,9 @@ fn resolve_cli_heuristic(
             // Step 5: --oracle-only also sets quitOnEmpty on tactic rankings
             // (HS `aux (InternalTacticRanking _ t) = InternalTacticRanking
             // (quitOnEmptyOracle prover) t`, Proof.hs:705-716, see line 715).
-            GoalRanking::Tactic { quit_on_empty, .. }
-                if cli.oracle_only => {
-                    *quit_on_empty = true;
-                }
+            GoalRanking::Tactic { quit_on_empty, .. } if cli.oracle_only => {
+                *quit_on_empty = true;
+            }
             _ => {}
         }
     }
@@ -431,9 +448,7 @@ pub struct ProverSession {
     // keyed source cache (Mutex); source-key->CachedSources
     // lookup, never iterated; std kept (byte-inert) — order never reaches output.
     #[allow(clippy::disallowed_types)]
-    source_cache: std::sync::Mutex<
-        std::collections::HashMap<Vec<String>, CachedSources>,
-    >,
+    source_cache: std::sync::Mutex<std::collections::HashMap<Vec<String>, CachedSources>>,
 }
 
 /// Per-lemma source kind, mirroring HS `lemmaSourceKind` (Lemma.hs:38-41):
@@ -446,7 +461,11 @@ pub struct ProverSession {
 /// matching HS's `RawSource < RefinedSource` Ord (System.hs:362-365), so it
 /// can be used directly as the `lemmaSourceKind lem <= kind` bound below.
 fn lemma_source_kind(lemma: &crate::theory::Lemma) -> SourceKind {
-    if lemma.attributes.iter().any(|a| matches!(a, crate::theory::LemmaAttr::Sources)) {
+    if lemma
+        .attributes
+        .iter()
+        .any(|a| matches!(a, crate::theory::LemmaAttr::Sources))
+    {
         SourceKind::RawSources
     } else {
         SourceKind::RefinedSources
@@ -477,20 +496,36 @@ fn gather_reusable_lemmas(
     // HS `pcHiddenLemmas` = the proved lemma's `[hide_lemma=h]` names.
     let hidden: Vec<&str> = theory
         .lookup_lemma(lemma_name)
-        .map(|l| l.attributes.iter().filter_map(|a| match a {
-            crate::theory::LemmaAttr::HideLemma(h) => Some(h.as_str()),
-            _ => None,
-        }).collect())
+        .map(|l| {
+            l.attributes
+                .iter()
+                .filter_map(|a| match a {
+                    crate::theory::LemmaAttr::HideLemma(h) => Some(h.as_str()),
+                    _ => None,
+                })
+                .collect()
+        })
         .unwrap_or_default();
     let hide_all = hidden.contains(&"ALL");
     let mut reuse_lemmas: Vec<Guarded> = Vec::new();
     for prior in theory.lemmas() {
-        if prior.name == lemma_name { break; }
-        if lemma_source_kind(prior) > kind { continue; }
-        if !prior.attributes.iter().any(|a| matches!(a, crate::theory::LemmaAttr::Reuse)) {
+        if prior.name == lemma_name {
+            break;
+        }
+        if lemma_source_kind(prior) > kind {
             continue;
         }
-        if !matches!(prior.trace_quantifier, crate::theory::TraceQuantifier::AllTraces) {
+        if !prior
+            .attributes
+            .iter()
+            .any(|a| matches!(a, crate::theory::LemmaAttr::Reuse))
+        {
+            continue;
+        }
+        if !matches!(
+            prior.trace_quantifier,
+            crate::theory::TraceQuantifier::AllTraces
+        ) {
             continue;
         }
         if hide_all || hidden.contains(&prior.name.as_str()) {
@@ -529,11 +564,20 @@ fn gather_typing_assumptions(
     let mut source_key: Vec<String> = Vec::new();
     if kind >= SourceKind::RefinedSources {
         for prior in theory.lemmas() {
-            if prior.name == lemma_name { continue; }
-            if !prior.attributes.iter().any(|a| matches!(a, crate::theory::LemmaAttr::Sources)) {
+            if prior.name == lemma_name {
                 continue;
             }
-            if !matches!(prior.trace_quantifier, crate::theory::TraceQuantifier::AllTraces) {
+            if !prior
+                .attributes
+                .iter()
+                .any(|a| matches!(a, crate::theory::LemmaAttr::Sources))
+            {
+                continue;
+            }
+            if !matches!(
+                prior.trace_quantifier,
+                crate::theory::TraceQuantifier::AllTraces
+            ) {
                 continue;
             }
             let rg = formula_to_guarded(&prior.formula)
@@ -565,11 +609,10 @@ fn resolve_heuristic(
     match resolve_cli_heuristic(cli, in_file, tactics) {
         Some(rankings) => Some(rankings),
         None => {
-            let lemma_heuristic: Option<&str> =
-                lemma.attributes.iter().find_map(|a| match a {
-                    crate::theory::LemmaAttr::Heuristic(s) => Some(s.as_str()),
-                    _ => None,
-                });
+            let lemma_heuristic: Option<&str> = lemma.attributes.iter().find_map(|a| match a {
+                crate::theory::LemmaAttr::Heuristic(s) => Some(s.as_str()),
+                _ => None,
+            });
             let heuristic_raw: Option<String> = match lemma_heuristic {
                 Some(h) => Some(h.to_string()),
                 None => theory_heuristic_first.map(|s| s.to_string()),
@@ -577,7 +620,8 @@ fn resolve_heuristic(
             heuristic_raw.map(|h| {
                 let mut rankings =
                     crate::constraint::solver::goals::parse_heuristic_str_with_tactics(
-                        &h, in_file, tactics);
+                        &h, in_file, tactics,
+                    );
                 prepend_theory_dir_to_oracle_paths(&mut rankings, in_file);
                 rankings
             })
@@ -612,8 +656,8 @@ impl ProverSession {
         // need these set; the parser-theory drives the set.
         let user_funs = crate::elaborate::collect_user_funs_for_theory(parser_theory);
         let _user_funs_guard = crate::elaborate::set_user_funs_from_collected(&user_funs);
-        let mut theory = elaborate(parser_theory)
-            .map_err(|e| ProveError::Elaboration(e.message))?;
+        let mut theory =
+            elaborate(parser_theory).map_err(|e| ProveError::Elaboration(e.message))?;
         // Set in_file for oracle path resolution (HS Parser.hs:304).
         theory.in_file = in_file.to_string();
         // HS `mkSystem` maps `formulaToGuarded_ = either (error . render) id`
@@ -632,7 +676,8 @@ impl ProverSession {
         // HS `setforcedInjectiveFacts {L_PureState, L_CellLocked}` (Sapic.hs:84):
         // when the state-channel optimisation is on, those two facts are forced
         // injective for the WHOLE proof (`closeRuleCache`, Rule.hs:147-150).
-        let forced_injective_facts: Vec<crate::fact::FactTag> = if theory.options.state_channel_opt {
+        let forced_injective_facts: Vec<crate::fact::FactTag> = if theory.options.state_channel_opt
+        {
             crate::tools::injective_fact_instances::pure_state_forced_fact_tags()
         } else {
             Vec::new()
@@ -648,7 +693,12 @@ impl ProverSession {
         // instantiation.
         let setup_counter_before = maude.fresh_counter_peek();
         let template_ctx = ProofContext::new_with_restrictions_pool_forced(
-            maude.clone(), pool, rules, restrictions.clone(), &forced_injective_facts);
+            maude.clone(),
+            pool,
+            rules,
+            restrictions.clone(),
+            &forced_injective_facts,
+        );
         maude.reset_counter_to(setup_counter_before);
         Ok(ProverSession {
             theory,
@@ -679,7 +729,8 @@ impl ProverSession {
         let theory = &self.theory;
         let mut ctx = self.template_ctx.clone();
         ctx.maude = ctx.maude.with_fresh_counter_from(0);
-        ctx.maude.ensure_above(self.setup_counter_before.saturating_sub(1));
+        ctx.maude
+            .ensure_above(self.setup_counter_before.saturating_sub(1));
         ctx.is_exists_trace = matches!(
             lemma.trace_quantifier,
             crate::theory::TraceQuantifier::ExistsTrace,
@@ -689,8 +740,12 @@ impl ProverSession {
         ctx.cut = self.cut;
         let session_in_file = &theory.in_file;
         ctx.heuristic = resolve_heuristic(
-            &self.cli_heuristic, lemma, theory.heuristic.first().map(|s| s.as_str()),
-            &theory.tactic, session_in_file);
+            &self.cli_heuristic,
+            lemma,
+            theory.heuristic.first().map(|s| s.as_str()),
+            &theory.tactic,
+            session_in_file,
+        );
         ctx.lemma_name = lemma_name.to_string();
         ctx.theory_file = session_in_file.clone();
         let (typing_assumptions, source_key) =
@@ -740,23 +795,32 @@ impl ProverSession {
             ctx.ensure_saturated();
             let delta = ctx.maude.fresh_counter_peek().saturating_sub(cnt_before);
             if tamarin_utils::env_gate!("TAM_DBG_SAT_COUNTER") {
-                eprintln!("[SAT_COUNTER] lemma={} key={:?} delta={} (computed)",
-                    ctx.lemma_name, source_key, delta);
+                eprintln!(
+                    "[SAT_COUNTER] lemma={} key={:?} delta={} (computed)",
+                    ctx.lemma_name, source_key, delta
+                );
             }
             // Only cache results that allocated NO fresh vars — those are the
             // ones safe to replay byte-identically (counter unperturbed, cases
             // carry only template-sourced var indices).  Sources lemmas (delta
             // > 0) keep recomputing.
             if !cache_disabled && delta == 0 {
-                let snapshot: Vec<_> = ctx.full_sources.iter()
+                let snapshot: Vec<_> = ctx
+                    .full_sources
+                    .iter()
                     .map(|s| (s.goal.clone(), s.cases_or_empty_list(), s.incomplete))
                     .collect();
-                self.source_cache.lock().unwrap()
+                self.source_cache
+                    .lock()
+                    .unwrap()
                     .entry(source_key)
                     .or_insert(CachedSources { sources: snapshot });
             }
         } else if tamarin_utils::env_gate!("TAM_DBG_SAT_COUNTER") {
-            eprintln!("[SAT_COUNTER] lemma={} key={:?} (cache hit)", ctx.lemma_name, source_key);
+            eprintln!(
+                "[SAT_COUNTER] lemma={} key={:?} (cache hit)",
+                ctx.lemma_name, source_key
+            );
         }
         cache_hit
     }
@@ -806,11 +870,12 @@ impl ProverSession {
         cache_disabled: bool,
         is_target: impl Fn(&str) -> bool,
     ) -> usize {
-        if cache_disabled { return 0; }
+        if cache_disabled {
+            return 0;
+        }
         let _lemma_user_funs_guard =
             crate::elaborate::set_user_funs_from_collected(&self.user_funs);
-        let mut seen: tamarin_utils::FastSet<Vec<String>> =
-            tamarin_utils::FastSet::default();
+        let mut seen: tamarin_utils::FastSet<Vec<String>> = tamarin_utils::FastSet::default();
         let mut saturated = 0usize;
         for lemma in self.theory.lemmas() {
             // Fan-out saturation gate (see `will_emit_bare_sorry`): a lemma
@@ -826,18 +891,19 @@ impl ProverSession {
             // without cloning.  A non-guardable `[sources]`/typing formula
             // errors here; the fan-out reproduces the identical per-lemma
             // abort, so skip it in the pre-pass rather than preempting it.
-            let source_key = match gather_typing_assumptions(
-                &self.theory, lemma.name.as_str(), kind) {
-                Ok((_, key)) => key,
-                Err(_) => continue,
-            };
-            if !seen.insert(source_key) { continue; }
+            let source_key =
+                match gather_typing_assumptions(&self.theory, lemma.name.as_str(), kind) {
+                    Ok((_, key)) => key,
+                    Err(_) => continue,
+                };
+            if !seen.insert(source_key) {
+                continue;
+            }
             // First lemma of this key: build its per-lemma ctx and saturate +
             // seed through the shared `delta == 0` gate.  The cache starts
             // empty and `seen` skips repeats, so this always misses and
             // computes.
-            let (mut ctx, key) = match self.setup_per_lemma_ctx(
-                lemma, lemma.name.as_str(), kind) {
+            let (mut ctx, key) = match self.setup_per_lemma_ctx(lemma, lemma.name.as_str(), kind) {
                 Ok(v) => v,
                 Err(_) => continue,
             };
@@ -907,8 +973,7 @@ pub fn prove_system_in_session(
     // Thread-locals for user-fn-symbol resolution — the web autoprove
     // runs on a blocking-pool thread whose locals start empty.  Same
     // rationale as `prove_lemma_in_session_mode`.
-    let _lemma_user_funs_guard =
-        crate::elaborate::set_user_funs_from_collected(&session.user_funs);
+    let _lemma_user_funs_guard = crate::elaborate::set_user_funs_from_collected(&session.user_funs);
 
     let theory = &session.theory;
     let lemma = theory
@@ -929,8 +994,12 @@ pub fn prove_system_in_session(
     // including the delta==0 cache-write gate.
     let cache_disabled = tamarin_utils::env_gate!("TAM_RS_NO_SOURCE_CACHE");
     let _cache_hit = session.restore_or_saturate_sources(&mut ctx, source_key, cache_disabled);
-    let force_induction = lemma.attributes.iter().any(|a| matches!(a,
-        crate::theory::LemmaAttr::UseInduction | crate::theory::LemmaAttr::Sources));
+    let force_induction = lemma.attributes.iter().any(|a| {
+        matches!(
+            a,
+            crate::theory::LemmaAttr::UseInduction | crate::theory::LemmaAttr::Sources
+        )
+    });
     if force_induction {
         ctx.use_induction = crate::constraint::solver::context::UseInduction::UseInduction;
     }
@@ -944,8 +1013,11 @@ fn prove_lemma_in_session_mode(
     auto_prove: bool,
 ) -> Result<ProofNode, ProveError> {
     let trace = tamarin_utils::env_gate!("TAM_DBG_PHASE");
-    let t_phase: Option<std::time::Instant> =
-        if trace { Some(std::time::Instant::now()) } else { None };
+    let t_phase: Option<std::time::Instant> = if trace {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
 
     // B1 (lemma-level parallelism): under the per-lemma rayon `par_iter`,
     // this runs on a WORKER thread whose user-fn-symbol thread-locals are
@@ -959,8 +1031,7 @@ fn prove_lemma_in_session_mode(
     // the previous (empty) values on drop, so it is safe to nest and is
     // output-identical to the serial path (where the file-level guard
     // already covered the main thread).
-    let _lemma_user_funs_guard =
-        crate::elaborate::set_user_funs_from_collected(&session.user_funs);
+    let _lemma_user_funs_guard = crate::elaborate::set_user_funs_from_collected(&session.user_funs);
 
     let theory = &session.theory;
     let lemma = theory
@@ -979,8 +1050,7 @@ fn prove_lemma_in_session_mode(
 
     // `[reuse]` lemmas declared BEFORE this one.  Same gather logic as
     // the pre-session prove_lemma_with_pool_file_heuristic path.
-    let reuse_lemmas =
-        gather_reusable_lemmas(theory, lemma_name, lemma_source_kind)?;
+    let reuse_lemmas = gather_reusable_lemmas(theory, lemma_name, lemma_source_kind)?;
 
     let tq = match lemma.trace_quantifier {
         crate::theory::TraceQuantifier::AllTraces => p::TraceQuantifier::AllTraces,
@@ -995,10 +1065,17 @@ fn prove_lemma_in_session_mode(
     );
     sys.insert_lemmas(reuse_lemmas);
 
-    if trace { eprintln!("[phase] (session) formula_to_system done dt={:.3}s",
-        t_phase.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())); }
-    let t_ctx: Option<std::time::Instant> =
-        if trace { Some(std::time::Instant::now()) } else { None };
+    if trace {
+        eprintln!(
+            "[phase] (session) formula_to_system done dt={:.3}s",
+            t_phase.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())
+        );
+    }
+    let t_ctx: Option<std::time::Instant> = if trace {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
     // Per-lemma ProofContext: clone the template (built once at session
     // construction with raw, unsaturated `full_sources` — each source's
     // `cases_cell = None`), give it its OWN fresh-counter Arc floored at the
@@ -1010,10 +1087,17 @@ fn prove_lemma_in_session_mode(
     // no cross-lemma contamination.
     let (mut ctx, source_key) =
         session.setup_per_lemma_ctx(lemma, lemma_name, lemma_source_kind)?;
-    if trace { eprintln!("[phase] (session) ProofContext clone dt={:.3}s",
-        t_ctx.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())); }
-    let t_sat: Option<std::time::Instant> =
-        if trace { Some(std::time::Instant::now()) } else { None };
+    if trace {
+        eprintln!(
+            "[phase] (session) ProofContext clone dt={:.3}s",
+            t_ctx.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())
+        );
+    }
+    let t_sat: Option<std::time::Instant> = if trace {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
     // HS-faithful laziness: refined sources are a lazy `where`-bound thunk
     // in HS's `ClosedRuleCache` (`refinedSources` = `precomputeSources` →
     // `refineWithSourceAsms`, Rule.hs:156-157), forced ONLY when a proof
@@ -1034,8 +1118,7 @@ fn prove_lemma_in_session_mode(
     // The `cases(ctx)` accessor (sources.rs) still calls `ensure_saturated`
     // lazily for every path that DOES consult a source — skeleton replay
     // and `run_proof_search` — so correctness is unchanged.)
-    let will_emit_bare_sorry =
-        !auto_prove && lemma.proof.tree.is_none();
+    let will_emit_bare_sorry = !auto_prove && lemma.proof.tree.is_none();
     // Lever #3: reuse a previously-computed refined-source set when one
     // exists for this exact `source_key`.  See [`CachedSources`] for why a
     // hit is byte-identical (only delta==0 results are ever cached).
@@ -1046,27 +1129,40 @@ fn prove_lemma_in_session_mode(
         // `cases(ctx)` hook in place in case some future path consults a
         // source; for the bare-sorry early return it never fires.
         if tamarin_utils::env_gate!("TAM_DBG_SAT_COUNTER") {
-            eprintln!("[SAT_COUNTER] lemma={} key={:?} (bare-sorry, saturation deferred)",
-                lemma_name, source_key);
+            eprintln!(
+                "[SAT_COUNTER] lemma={} key={:?} (bare-sorry, saturation deferred)",
+                lemma_name, source_key
+            );
         }
         false
     } else {
         session.restore_or_saturate_sources(&mut ctx, source_key, cache_disabled)
     };
-    if trace { eprintln!("[phase] (session) ensure_saturated dt={:.3}s hit={}",
-        t_sat.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64()), cache_hit); }
+    if trace {
+        eprintln!(
+            "[phase] (session) ensure_saturated dt={:.3}s hit={}",
+            t_sat.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64()),
+            cache_hit
+        );
+    }
     if tamarin_utils::env_gate!("TAM_RS_DBG_PHASE") {
         eprintln!("[rs-phase] lemma-proof START");
     }
-    let force_induction = lemma.attributes.iter().any(|a| matches!(a,
-        crate::theory::LemmaAttr::UseInduction | crate::theory::LemmaAttr::Sources));
+    let force_induction = lemma.attributes.iter().any(|a| {
+        matches!(
+            a,
+            crate::theory::LemmaAttr::UseInduction | crate::theory::LemmaAttr::Sources
+        )
+    });
     if force_induction {
         ctx.use_induction = crate::constraint::solver::context::UseInduction::UseInduction;
     }
     // Skeleton replay: same logic as in `prove_lemma_with_pool_file_heuristic`.
     if let Some(tree) = lemma.proof.tree.clone() {
         if auto_prove {
-            return Ok(crate::replay::replace_sorry_prove(&ctx, sys, &tree, max_steps));
+            return Ok(crate::replay::replace_sorry_prove(
+                &ctx, sys, &tree, max_steps,
+            ));
         } else {
             // Non-target lemma: HS close-time check-and-extend
             // replay, no auto-proving of open leaves.
@@ -1082,12 +1178,19 @@ fn prove_lemma_in_session_mode(
         // the start system, so it renders as plain `by sorry`).
         return Ok(crate::replay::annotated_sorry_root(sys));
     }
-    let t_search: Option<std::time::Instant> =
-        if trace { Some(std::time::Instant::now()) } else { None };
+    let t_search: Option<std::time::Instant> = if trace {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
     let r = run_proof_search(&ctx, sys, max_steps);
-    if trace { eprintln!("[phase] (session) run_proof_search dt={:.3}s total={:.3}s",
-        t_search.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64()),
-        t_phase.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())); }
+    if trace {
+        eprintln!(
+            "[phase] (session) run_proof_search dt={:.3}s total={:.3}s",
+            t_search.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64()),
+            t_phase.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())
+        );
+    }
     Ok(r)
 }
 
@@ -1103,9 +1206,15 @@ pub fn prove_lemma(
     max_steps: usize,
 ) -> Result<ProofNode, ProveError> {
     prove_lemma_with_pool_file_heuristic(
-        parser_theory, lemma_name, maude, None, max_steps, "",
+        parser_theory,
+        lemma_name,
+        maude,
+        None,
+        max_steps,
+        "",
         &CliHeuristic::default(),
-        crate::constraint::solver::context::CutStrategy::Dfs)
+        crate::constraint::solver::context::CutStrategy::Dfs,
+    )
 }
 
 /// Like [`prove_lemma`] but accepts a `MaudePool` (consulted ONLY inside
@@ -1131,9 +1240,14 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // Per-phase wall-clock instrumentation, gated by TAM_DBG_PHASE.
     // `Option<Instant>` keeps the disabled-path branch-predictable to
     // a single `if let Some(_)` check at each phase boundary.
-    let t_phase: Option<std::time::Instant> =
-        if trace { Some(std::time::Instant::now()) } else { None };
-    if trace { eprintln!("[phase] elaborate start"); }
+    let t_phase: Option<std::time::Instant> = if trace {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
+    if trace {
+        eprintln!("[phase] elaborate start");
+    }
     // Re-set the thread-locals that track user-declared function symbols
     // for the *duration of this prove call*.  `elaborate()` sets them
     // for its own scope via RAII guards that drop on return — so
@@ -1142,14 +1256,22 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // the whole prover lifetime.
     let _user_funs_guard = crate::elaborate::set_user_funs_for_theory(parser_theory);
     // Elaborate to get the typed theory, then pull rules + restrictions.
-    let mut theory = elaborate(parser_theory)
-        .map_err(|e| ProveError::Elaboration(e.message))?;
+    let mut theory = elaborate(parser_theory).map_err(|e| ProveError::Elaboration(e.message))?;
     // Set in_file for oracle path resolution (HS Parser.hs:304).
-    if !in_file.is_empty() { theory.in_file = in_file.to_string(); }
-    if trace { eprintln!("[phase] elaborate done dt={:.3}s",
-        t_phase.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())); }
-    let t_after_elab: Option<std::time::Instant> =
-        if trace { Some(std::time::Instant::now()) } else { None };
+    if !in_file.is_empty() {
+        theory.in_file = in_file.to_string();
+    }
+    if trace {
+        eprintln!(
+            "[phase] elaborate done dt={:.3}s",
+            t_phase.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())
+        );
+    }
+    let t_after_elab: Option<std::time::Instant> = if trace {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
 
     // Find the lemma (parser-AST formula stays accessible via Theory's items).
     // Our typed theory's lemma carries a parser-AST formula too — look it up.
@@ -1196,8 +1318,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // conjoined: their IH would weaken the inductive hypothesis to a
     // disjunction across all reuse lemmas, blocking simplify from
     // resolving the IH against current trace actions.
-    let reuse_lemmas =
-        gather_reusable_lemmas(&theory, lemma_name, lemma_source_kind)?;
+    let reuse_lemmas = gather_reusable_lemmas(&theory, lemma_name, lemma_source_kind)?;
 
     // Bridge our typed `theory::TraceQuantifier` back to the parser's
     // `ast::TraceQuantifier` (which `formula_to_system` consumes).
@@ -1205,13 +1326,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
         crate::theory::TraceQuantifier::AllTraces => p::TraceQuantifier::AllTraces,
         crate::theory::TraceQuantifier::ExistsTrace => p::TraceQuantifier::ExistsTrace,
     };
-    let mut sys = formula_to_system(
-        restrictions.clone(),
-        lemma_source_kind,
-        tq,
-        false,
-        &g,
-    );
+    let mut sys = formula_to_system(restrictions.clone(), lemma_source_kind, tq, false, &g);
     // Haskell's `addLemmas`: push reuse lemmas into `sLemmas`. They
     // become drivers for `insertImpliedFormulas` (which iterates
     // `sFormulas ++ sLemmas`) but are excluded from `ginduct`.
@@ -1226,10 +1341,19 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // architecture matching Haskell exactly — no workaround.
     sys.insert_lemmas(reuse_lemmas);
 
-    if trace { eprintln!("[phase] formula_to_system done dt={:.3}s; ProofContext::new start",
-        t_after_elab.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())); }
-    let t_ctx: Option<std::time::Instant> =
-        if trace { Some(std::time::Instant::now()) } else { None };
+    if trace {
+        eprintln!(
+            "[phase] formula_to_system done dt={:.3}s; ProofContext::new start",
+            t_after_elab
+                .as_ref()
+                .map_or(0.0, |t| t.elapsed().as_secs_f64())
+        );
+    }
+    let t_ctx: Option<std::time::Instant> = if trace {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
     // Bridge the elaborated theory's rules into the proof context.
     let rules: Vec<OpenProtoRule> = theory.rules().cloned().collect();
     // HS `setforcedInjectiveFacts {L_PureState, L_CellLocked}` (Sapic.hs:84):
@@ -1245,9 +1369,18 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // from the pool.  Setting `maude_pool` after construction would
     // leave that initial precompute on the single shared `maude`.
     let mut ctx = ProofContext::new_with_restrictions_pool_forced(
-        maude, pool, rules, restrictions.clone(), &forced_injective_facts);
-    if trace { eprintln!("[phase] ProofContext::new done dt={:.3}s",
-        t_ctx.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())); }
+        maude,
+        pool,
+        rules,
+        restrictions.clone(),
+        &forced_injective_facts,
+    );
+    if trace {
+        eprintln!(
+            "[phase] ProofContext::new done dt={:.3}s",
+            t_ctx.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())
+        );
+    }
     // Propagate the lemma's trace quantifier so `is_finished` can
     // decide whether the Fresh-conflation case-drop should convert
     // Contradictory→Unfinishable (sound only on exists-trace where
@@ -1273,8 +1406,12 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // `{name}` tactic rankings against `theory.tactic`.
     let in_file = &theory.in_file;
     ctx.heuristic = resolve_heuristic(
-        cli_heuristic, lemma, theory.heuristic.first().map(|s| s.as_str()),
-        &theory.tactic, in_file);
+        cli_heuristic,
+        lemma,
+        theory.heuristic.first().map(|s| s.as_str()),
+        &theory.tactic,
+        in_file,
+    );
     // Set lemma_name and theory_file on ctx for oracle invocation.
     ctx.lemma_name = lemma_name.to_string();
     ctx.theory_file = in_file.clone();
@@ -1301,14 +1438,26 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // Done` at theory-close time — Rust does it per-lemma because the
     // ctx is per-lemma.
     ctx.typing_assumptions = typing_assumptions;
-    let t_sat: Option<std::time::Instant> =
-        if trace { Some(std::time::Instant::now()) } else { None };
+    let t_sat: Option<std::time::Instant> = if trace {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
     ctx.ensure_saturated();
-    if trace { eprintln!("[phase] ensure_saturated done dt={:.3}s",
-        t_sat.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())); }
-    let t_search: Option<std::time::Instant> =
-        if trace { Some(std::time::Instant::now()) } else { None };
-    if trace { eprintln!("[phase] run_proof_search start"); }
+    if trace {
+        eprintln!(
+            "[phase] ensure_saturated done dt={:.3}s",
+            t_sat.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())
+        );
+    }
+    let t_search: Option<std::time::Instant> = if trace {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
+    if trace {
+        eprintln!("[phase] run_proof_search start");
+    }
     // Phase marker so TAM_RS_DBG_* counts can be filtered to the
     // lemma-proof phase only.  Pair with HS's `[Saturating Sources]
     // Done` marker for HS↔Rust diffing of just the lemma proof
@@ -1322,8 +1471,12 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // `ClosedTheory.hs` flips `pcUseInduction = UseInduction` for
     // `SourceLemma` and `InvariantLemma`-tagged lemmas — sources
     // proofs essentially always run via induction.
-    let force_induction = lemma.attributes.iter().any(|a| matches!(a,
-        crate::theory::LemmaAttr::UseInduction | crate::theory::LemmaAttr::Sources));
+    let force_induction = lemma.attributes.iter().any(|a| {
+        matches!(
+            a,
+            crate::theory::LemmaAttr::UseInduction | crate::theory::LemmaAttr::Sources
+        )
+    });
     if force_induction {
         ctx.use_induction = crate::constraint::solver::context::UseInduction::UseInduction;
     }
@@ -1335,18 +1488,30 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // pre-existing auto-prover-from-scratch behavior.
     if let Some(tree) = lemma.proof.tree.clone() {
         if tamarin_utils::env_gate!("TAM_DBG_REPLAY") {
-            eprintln!("[replay] firing skeleton replay for `{}` (raw {} bytes)",
-                lemma_name, lemma.proof.raw.len());
+            eprintln!(
+                "[replay] firing skeleton replay for `{}` (raw {} bytes)",
+                lemma_name,
+                lemma.proof.raw.len()
+            );
         }
-        return Ok(crate::replay::replace_sorry_prove(&ctx, sys, &tree, max_steps));
+        return Ok(crate::replay::replace_sorry_prove(
+            &ctx, sys, &tree, max_steps,
+        ));
     } else if tamarin_utils::env_gate!("TAM_DBG_REPLAY") {
-        eprintln!("[replay] NO tree on `{}` (raw {} bytes) — falling through to auto-prover",
-            lemma_name, lemma.proof.raw.len());
+        eprintln!(
+            "[replay] NO tree on `{}` (raw {} bytes) — falling through to auto-prover",
+            lemma_name,
+            lemma.proof.raw.len()
+        );
     }
     let r = run_proof_search(&ctx, sys, max_steps);
-    if trace { eprintln!("[phase] run_proof_search done dt={:.3}s total={:.3}s",
-        t_search.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64()),
-        t_phase.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())); }
+    if trace {
+        eprintln!(
+            "[phase] run_proof_search done dt={:.3}s total={:.3}s",
+            t_search.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64()),
+            t_phase.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())
+        );
+    }
     Ok(r)
 }
 
@@ -1359,7 +1524,9 @@ mod tests {
     fn maude_path_local() -> Option<String> {
         std::env::var("MAUDE_PATH").ok().or_else(|| {
             for c in ["/usr/local/bin/maude", "maude"] {
-                if std::path::Path::new(c).exists() { return Some(c.to_string()); }
+                if std::path::Path::new(c).exists() {
+                    return Some(c.to_string());
+                }
             }
             None
         })
@@ -1372,18 +1539,24 @@ mod tests {
 
     #[test]
     fn prove_lemma_unknown_name_is_error() {
-        let h = match maude() { Some(m) => m, None => return };
-        let parser_theory = tamarin_parser::parse_theory("theory T begin end", &[])
-            .expect("parse");
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
+        let parser_theory = tamarin_parser::parse_theory("theory T begin end", &[]).expect("parse");
         let r = prove_lemma(&parser_theory, "nonexistent", h, 5);
         assert!(matches!(r, Err(ProveError::LemmaNotFound(_))));
     }
 
     fn print_tree(node: &super::ProofNode, depth: usize) {
         let pad = "  ".repeat(depth);
-        let reason = if let crate::constraint::solver::proof_method::ProofMethod::Finished(r) = &node.method {
+        let reason = if let crate::constraint::solver::proof_method::ProofMethod::Finished(r) =
+            &node.method
+        {
             format!(" reason={:?}", r)
-        } else { String::new() };
+        } else {
+            String::new()
+        };
         eprintln!("{}status={:?} method={:?} children={} goals={} nodes={} formulas={} less_atoms={} edges={} {}",
             pad, node.status, node.method, node.children.len(),
             node.sys.goals.len(), node.sys.nodes.len(), node.sys.formulas.len(),
@@ -1394,37 +1567,66 @@ mod tests {
                     crate::rule::RuleInfo::Proto(p) => format!("{:?}", p.name),
                     crate::rule::RuleInfo::Intr(i) => format!("Intr({:?})", i),
                 };
-                let concs: Vec<String> = ru.conclusions.iter()
-                    .map(|c| format!("{}({})", crate::fact::fact_tag_name(&c.tag),
-                        c.terms.iter().map(|t| format!("{:?}", t)).collect::<Vec<_>>().join(",")))
+                let concs: Vec<String> = ru
+                    .conclusions
+                    .iter()
+                    .map(|c| {
+                        format!(
+                            "{}({})",
+                            crate::fact::fact_tag_name(&c.tag),
+                            c.terms
+                                .iter()
+                                .map(|t| format!("{:?}", t))
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        )
+                    })
                     .collect();
-                eprintln!("{}  node {:?} = {} concs=[{}]", pad,
-                    (id.name, id.idx), info, concs.join("; "));
+                eprintln!(
+                    "{}  node {:?} = {} concs=[{}]",
+                    pad,
+                    (id.name, id.idx),
+                    info,
+                    concs.join("; ")
+                );
             }
             eprintln!("{}  eq_store.subst = {:?}", pad, node.sys.eq_store.subst);
             for la in &node.sys.less_atoms {
-                eprintln!("{}  less {:?} < {:?}", pad,
+                eprintln!(
+                    "{}  less {:?} < {:?}",
+                    pad,
                     (la.smaller.name, la.smaller.idx),
-                    (la.larger.name, la.larger.idx));
+                    (la.larger.name, la.larger.idx)
+                );
             }
             for e in &node.sys.edges {
-                eprintln!("{}  edge {:?} -> {:?}", pad,
+                eprintln!(
+                    "{}  edge {:?} -> {:?}",
+                    pad,
                     (e.src.0.name, e.src.0.idx),
-                    (e.tgt.0.name, e.tgt.0.idx));
+                    (e.tgt.0.name, e.tgt.0.idx)
+                );
             }
         }
         for (k, c) in &node.children {
             eprintln!("{}case '{}'", pad, k);
-            if depth < 9 { print_tree(c, depth + 1); }
+            if depth < 9 {
+                print_tree(c, depth + 1);
+            }
         }
     }
 
     #[test]
     fn probe_two_rules_proof_shape() {
-        let h = match maude() { Some(m) => m, None => return };
-        let src = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/two_rules.spthy"))
-            .expect("read");
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/two_rules.spthy"
+        ))
+        .expect("read");
         let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
         let root = prove_lemma(&pt, "reachable", h, 200).expect("prove");
         eprintln!("=== two_rules.spthy `reachable` ===");
@@ -1434,10 +1636,15 @@ mod tests {
 
     #[test]
     fn probe_two_actions_proof_shape() {
-        let h = match maude() { Some(m) => m, None => return };
-        let src = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/two_actions.spthy"))
-            .expect("read");
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/two_actions.spthy"
+        ))
+        .expect("read");
         let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
         let root = prove_lemma(&pt, "both_actions", h, 200).expect("prove");
         eprintln!("=== two_actions.spthy `both_actions` ===");
@@ -1447,10 +1654,15 @@ mod tests {
 
     #[test]
     fn probe_falsifiable_proof_shape() {
-        let h = match maude() { Some(m) => m, None => return };
-        let src = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/falsifiable.spthy"))
-            .expect("read");
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/falsifiable.spthy"
+        ))
+        .expect("read");
         let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
         let root = prove_lemma(&pt, "never_both", h, 200).expect("prove");
         eprintln!("=== falsifiable.spthy `never_both` ===");
@@ -1460,10 +1672,15 @@ mod tests {
 
     #[test]
     fn probe_three_facts_proof_shape() {
-        let h = match maude() { Some(m) => m, None => return };
-        let src = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/three_facts.spthy"))
-            .expect("read");
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/three_facts.spthy"
+        ))
+        .expect("read");
         let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
         let root = prove_lemma(&pt, "all_three", h, 200).expect("prove");
         eprintln!("=== three_facts.spthy `all_three` ===");
@@ -1473,10 +1690,15 @@ mod tests {
 
     #[test]
     fn probe_single_recv_proof_shape() {
-        let h = match maude() { Some(m) => m, None => return };
-        let src = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/single_recv.spthy"))
-            .expect("read");
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/single_recv.spthy"
+        ))
+        .expect("read");
         let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
         let root = prove_lemma(&pt, "chain", h, 200).expect("prove");
         eprintln!("=== single_recv ===");
@@ -1490,12 +1712,18 @@ mod tests {
         // from CARGO_MANIFEST_DIR (crate lives at crates/tamarin-theory,
         // so the corpus is at ../../tamarin-prover/examples in the
         // submodule); skips gracefully if the example is not present.
-        let mp = match maude_path_local() { Some(p) => p, None => return };
+        let mp = match maude_path_local() {
+            Some(p) => p,
+            None => return,
+        };
         let src = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tamarin-prover/examples/features/injectivity/injectivity.spthy"
-        )).unwrap_or_default();
-        if src.is_empty() { return; }
+        ))
+        .unwrap_or_default();
+        if src.is_empty() {
+            return;
+        }
         let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
         let h = MaudeHandle::start(&mp, pair_maude_sig()).expect("start maude");
         let root = prove_lemma(&pt, "injectivity_check", h, 200).expect("prove");
@@ -1507,10 +1735,15 @@ mod tests {
         // Regression test: with the elaborated MaudeSig (hashing), the
         // simplify loop must converge instead of spinning on
         // already-canonical edges.
-        let mp = match maude_path_local() { Some(p) => p, None => return };
-        let src = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/CR_external.spthy"))
-            .expect("read");
+        let mp = match maude_path_local() {
+            Some(p) => p,
+            None => return,
+        };
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/CR_external.spthy"
+        ))
+        .expect("read");
         let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
         let elab = crate::elaborate::elaborate(&pt).expect("elaborate");
         let sig = elab.signature.maude_sig.clone();
@@ -1521,8 +1754,11 @@ mod tests {
         // Must complete within a generous bound; the load-bearing
         // assertion is that the simplify loop converges, not the specific
         // timing.
-        assert!(dt < std::time::Duration::from_secs(60),
-            "recentalive ran {:?}, expected ≤60s (simplify-loop converges)", dt);
+        assert!(
+            dt < std::time::Duration::from_secs(60),
+            "recentalive ran {:?}, expected ≤60s (simplify-loop converges)",
+            dt
+        );
     }
 
     #[test]
@@ -1530,18 +1766,28 @@ mod tests {
         // Try the trivially-true tautology with the elaborated theory's
         // MaudeSig (which adds h/1) instead of pair-only. If this hangs,
         // the goal explosion is reproducible on a near-empty file.
-        let mp = match maude_path_local() { Some(p) => p, None => return };
-        let src = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sig_minimal.spthy"))
-            .expect("read");
+        let mp = match maude_path_local() {
+            Some(p) => p,
+            None => return,
+        };
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/sig_minimal.spthy"
+        ))
+        .expect("read");
         let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
         let elab = crate::elaborate::elaborate(&pt).expect("elaborate");
         let sig = elab.signature.maude_sig.clone();
         eprintln!("sig fun_syms count = {}", sig.fun_syms.len());
         for fs in &sig.fun_syms {
             if let tamarin_term::function_symbols::FunSym::NoEq(s) = fs {
-                eprintln!("  {} (arity={}, priv={:?}, ctor={:?})",
-                    String::from_utf8_lossy(s.name), s.arity, s.privacy, s.constructability);
+                eprintln!(
+                    "  {} (arity={}, priv={:?}, ctor={:?})",
+                    String::from_utf8_lossy(s.name),
+                    s.arity,
+                    s.privacy,
+                    s.constructability
+                );
             }
         }
         let h = MaudeHandle::start(&mp, sig).expect("start maude");
@@ -1553,10 +1799,15 @@ mod tests {
 
     #[test]
     fn probe_auth_pattern_proof_shape() {
-        let h = match maude() { Some(m) => m, None => return };
-        let src = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/auth_pattern.spthy"))
-            .expect("read");
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/auth_pattern.spthy"
+        ))
+        .expect("read");
         let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
         let root = prove_lemma(&pt, "protocol_runs", h, 200).expect("prove");
         eprintln!("=== auth_pattern.spthy ===");
@@ -1565,10 +1816,15 @@ mod tests {
 
     #[test]
     fn probe_fresh_ordering_proof_shape() {
-        let h = match maude() { Some(m) => m, None => return };
-        let src = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fresh_ordering.spthy"))
-            .expect("read");
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/fresh_ordering.spthy"
+        ))
+        .expect("read");
         let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
         let root = prove_lemma(&pt, "order", h, 200).expect("prove");
         eprintln!("=== fresh_ordering.spthy `order` ===");
@@ -1578,10 +1834,15 @@ mod tests {
 
     #[test]
     fn probe_needs_constructor_simple_proof_shape() {
-        let h = match maude() { Some(m) => m, None => return };
-        let src = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/needs_constructor_simple.spthy"))
-            .expect("read");
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/needs_constructor_simple.spthy"
+        ))
+        .expect("read");
         let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
         let root = prove_lemma(&pt, "sent_exists", h, 200).expect("prove");
         eprintln!("=== needs_constructor_simple ===");
@@ -1590,10 +1851,15 @@ mod tests {
 
     #[test]
     fn probe_needs_constructor_proof_shape() {
-        let h = match maude() { Some(m) => m, None => return };
-        let src = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/needs_constructor.spthy"))
-            .expect("read");
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/needs_constructor.spthy"
+        ))
+        .expect("read");
         let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
         let root = prove_lemma(&pt, "pair_arrives", h, 2000).expect("prove");
         eprintln!("=== needs_constructor.spthy `pair_arrives` ===");
@@ -1603,7 +1869,10 @@ mod tests {
     /// Smaller test: just receive a fresh that was Out-ed.
     #[test]
     fn probe_recv_one_fresh() {
-        let h = match maude() { Some(m) => m, None => return };
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
         let src = "theory T begin
 rule S: [Fr(~k)] --[Sent(~k)]-> [Out(~k)]
 rule R: [In(x)] --[Got(x)]-> []
@@ -1617,22 +1886,35 @@ end";
 
     #[test]
     fn probe_reuse_lemma() {
-        let h = match maude() { Some(m) => m, None => return };
-        let src = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/reuse_lemma.spthy"))
-            .expect("read");
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/reuse_lemma.spthy"
+        ))
+        .expect("read");
         let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
         let r1 = prove_lemma(&pt, "setup_unique", maude().unwrap(), 200).expect("prove1");
         let r2 = prove_lemma(&pt, "setup_unique_key", h, 200).expect("prove2");
-        eprintln!("setup_unique={:?}, setup_unique_key={:?}", r1.status, r2.status);
+        eprintln!(
+            "setup_unique={:?}, setup_unique_key={:?}",
+            r1.status, r2.status
+        );
     }
 
     #[test]
     fn probe_restriction_unique() {
-        let h = match maude() { Some(m) => m, None => return };
-        let src = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/restriction_unique.spthy"))
-            .expect("read");
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/restriction_unique.spthy"
+        ))
+        .expect("read");
         let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
         let root = prove_lemma(&pt, "setup_unique", h, 200).expect("prove");
         eprintln!("=== restriction_unique ===");
@@ -1640,7 +1922,9 @@ end";
         // Diagnostic: count lemmas in the proof tree's leaves.
         fn collect_max_lemmas(n: &super::ProofNode, out: &mut usize) {
             *out = (*out).max(n.sys.lemmas.len());
-            for c in n.children.values() { collect_max_lemmas(c, out); }
+            for c in n.children.values() {
+                collect_max_lemmas(c, out);
+            }
         }
         let mut max_lemmas = 0;
         collect_max_lemmas(&root, &mut max_lemmas);
@@ -1649,10 +1933,15 @@ end";
 
     #[test]
     fn probe_safety_two_keys_proof_shape() {
-        let h = match maude() { Some(m) => m, None => return };
-        let src = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/safety_two_keys.spthy"))
-            .expect("read");
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/safety_two_keys.spthy"
+        ))
+        .expect("read");
         let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
         let root = prove_lemma(&pt, "fresh_distinct_times", h, 200).expect("prove");
         eprintln!("=== safety_two_keys.spthy `fresh_distinct_times` ===");
@@ -1662,10 +1951,15 @@ end";
 
     #[test]
     fn probe_safety_unique_proof_shape() {
-        let h = match maude() { Some(m) => m, None => return };
-        let src = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/safety_unique.spthy"))
-            .expect("read");
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/safety_unique.spthy"
+        ))
+        .expect("read");
         let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
         let root = prove_lemma(&pt, "setup_unique", h, 200).expect("prove");
         eprintln!("=== safety_unique.spthy `setup_unique` ===");
@@ -1683,7 +1977,10 @@ end";
     /// with no formulas (HS keeps a `Just System` on every node).
     #[test]
     fn prove_lemma_keep_sys_retains_node_systems() {
-        let h = match maude() { Some(m) => m, None => return };
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
         let src = r#"
 theory T begin
 rule R:
@@ -1698,15 +1995,22 @@ end
         let root = prove_lemma(&pt, "always_A", h, 200).expect("prove");
         // Root = the initial constraint system (the negated goal formula),
         // with the lemma's refined source kind — NOT an empty default.
-        assert!(!root.sys.formulas.is_empty(),
-            "root node must retain the initial system's formulas");
-        assert_eq!(root.sys.source_kind,
+        assert!(
+            !root.sys.formulas.is_empty(),
+            "root node must retain the initial system's formulas"
+        );
+        assert_eq!(
+            root.sys.source_kind,
             Some(crate::constraint::system::SourceKind::RefinedSources),
-            "root system source kind must survive (refined for a non-sources lemma)");
+            "root system source kind must survive (refined for a non-sources lemma)"
+        );
         // Every child must also carry a real system.
         for (name, ch) in &root.children {
-            assert!(ch.sys.source_kind.is_some(),
-                "child {:?} must retain a real system, not System::default()", name);
+            assert!(
+                ch.sys.source_kind.is_some(),
+                "child {:?} must retain a real system, not System::default()",
+                name
+            );
         }
     }
 
@@ -1720,7 +2024,10 @@ end
     /// 4. Status reaches `Solved` (or `Contradictory` for some branches).
     #[test]
     fn prove_lemma_tiny_setup_drives_through_action_goal() {
-        let h = match maude() { Some(m) => m, None => return };
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
         let src = r#"
 theory TinySetup begin
 rule Setup:
@@ -1731,8 +2038,8 @@ lemma trivial:
 end
 "#;
         let parser_theory = tamarin_parser::parse_theory(src, &[]).expect("parse");
-        let root = prove_lemma(&parser_theory, "trivial", h, 100)
-            .expect("prove_lemma should not error");
+        let root =
+            prove_lemma(&parser_theory, "trivial", h, 100).expect("prove_lemma should not error");
 
         // Root method: under the `AvoidInduction` default (exists-trace
         // lemmas), Haskell's `rankProofMethods` tries Simplify first.
@@ -1743,17 +2050,28 @@ end
         // structurally acceptable as long as the proof reaches Solved.
         use crate::constraint::solver::proof_method::ProofMethod;
         use crate::constraint::solver::search::NodeStatus;
-        assert!(matches!(root.method,
-            ProofMethod::Induction | ProofMethod::Simplify
-            | ProofMethod::SolveGoal(_)),
-            "expected Simplify/Induction/SolveGoal at root, got {:?}", root.method);
-        assert_eq!(root.status, NodeStatus::Solved,
-            "expected Solved on tiny_setup, got {:?}", root.status);
+        assert!(
+            matches!(
+                root.method,
+                ProofMethod::Induction | ProofMethod::Simplify | ProofMethod::SolveGoal(_)
+            ),
+            "expected Simplify/Induction/SolveGoal at root, got {:?}",
+            root.method
+        );
+        assert_eq!(
+            root.status,
+            NodeStatus::Solved,
+            "expected Solved on tiny_setup, got {:?}",
+            root.status
+        );
     }
 
     #[test]
     fn prove_lemma_tiny_setup_terminates() {
-        let h = match maude() { Some(m) => m, None => return };
+        let h = match maude() {
+            Some(m) => m,
+            None => return,
+        };
         let src = r#"
 theory TinySetup begin
 rule Setup:
@@ -1764,16 +2082,18 @@ lemma trivial:
 end
 "#;
         let parser_theory = tamarin_parser::parse_theory(src, &[]).expect("parse");
-        let root = prove_lemma(&parser_theory, "trivial", h, 50)
-            .expect("prove_lemma should not error");
+        let root =
+            prove_lemma(&parser_theory, "trivial", h, 50).expect("prove_lemma should not error");
         // Tamarin's proof is `induction → SOLVED` in the empty branch,
         // and the non_empty branch needs the existential to be
         // decomposed — which produces a Goal::Action. Whatever our
         // verdict, the search must terminate, and the non-trivial
         // branch should reach a method beyond the initial induction.
         use crate::constraint::solver::search::NodeStatus;
-        assert!(!matches!(root.status, NodeStatus::Open),
-            "search must terminate within budget");
+        assert!(
+            !matches!(root.status, NodeStatus::Open),
+            "search must terminate within budget"
+        );
     }
 
     /// Build a `ProverSession` from theory source for the pre-pass tests.
@@ -1781,9 +2101,14 @@ end
         let h = maude()?;
         let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
         ProverSession::build_with_in_file_and_heuristic(
-            &pt, h, None, "", CliHeuristic::default(),
+            &pt,
+            h,
+            None,
+            "",
+            CliHeuristic::default(),
             crate::constraint::solver::context::CutStrategy::Dfs,
-        ).ok()
+        )
+        .ok()
     }
 
     const SHARED_KEY_TWO_LEMMAS: &str = "theory T begin\n\
@@ -1796,19 +2121,30 @@ end";
     /// pre-pass, seed one cache entry, and a same-key lemma then restores it.
     #[test]
     fn presaturate_dedups_shared_source_key() {
-        let session = match session_from(SHARED_KEY_TWO_LEMMAS) { Some(s) => s, None => return };
+        let session = match session_from(SHARED_KEY_TWO_LEMMAS) {
+            Some(s) => s,
+            None => return,
+        };
         // Both lemmas are RefinedSource with no prior `[sources]` lemma, so
         // both carry the identical empty key — one saturation covers both.
         let n = session.presaturate_shared_sources(false, |_| true);
         assert_eq!(n, 1, "two lemmas sharing a key must saturate once");
-        assert_eq!(session.source_cache.lock().unwrap().len(), 1,
-            "exactly one refined-source set is cached");
+        assert_eq!(
+            session.source_cache.lock().unwrap().len(),
+            1,
+            "exactly one refined-source set is cached"
+        );
         // A fan-out lemma of the same key restores from the pre-seeded cache.
         let lemma_b = session.theory.lookup_lemma("b").expect("lemma b");
         let kind = lemma_source_kind(lemma_b);
-        let (mut ctx, key) = session.setup_per_lemma_ctx(lemma_b, "b", kind).expect("ctx");
+        let (mut ctx, key) = session
+            .setup_per_lemma_ctx(lemma_b, "b", kind)
+            .expect("ctx");
         let hit = session.restore_or_saturate_sources(&mut ctx, key, false);
-        assert!(hit, "lemma b must restore from the pre-seeded shared-key cache");
+        assert!(
+            hit,
+            "lemma b must restore from the pre-seeded shared-key cache"
+        );
     }
 
     /// A lemma that would emit a bare `sorry` (not a `--prove` target and with
@@ -1816,13 +2152,18 @@ end";
     /// must skip it — the spdm121 `--prove=<no match>` regression precedent.
     #[test]
     fn presaturate_skips_bare_sorry_lemmas() {
-        let session = match session_from(SHARED_KEY_TWO_LEMMAS) { Some(s) => s, None => return };
+        let session = match session_from(SHARED_KEY_TWO_LEMMAS) {
+            Some(s) => s,
+            None => return,
+        };
         // Freshly parsed lemmas have no stored proof tree; with no target
         // selected they emit a bare sorry and never consult a source.
         let n = session.presaturate_shared_sources(false, |_| false);
         assert_eq!(n, 0, "bare-sorry lemmas must not be pre-saturated");
-        assert!(session.source_cache.lock().unwrap().is_empty(),
-            "no key is seeded for bare-sorry lemmas");
+        assert!(
+            session.source_cache.lock().unwrap().is_empty(),
+            "no key is seeded for bare-sorry lemmas"
+        );
         // The SAME lemmas do saturate once they are `--prove` targets.
         let n2 = session.presaturate_shared_sources(false, |_| true);
         assert_eq!(n2, 1, "targeted lemmas saturate their shared key once");
@@ -1832,10 +2173,15 @@ end";
     /// entirely, falling back to the per-lemma compute path.
     #[test]
     fn presaturate_disabled_is_noop() {
-        let session = match session_from(SHARED_KEY_TWO_LEMMAS) { Some(s) => s, None => return };
+        let session = match session_from(SHARED_KEY_TWO_LEMMAS) {
+            Some(s) => s,
+            None => return,
+        };
         let n = session.presaturate_shared_sources(true, |_| true);
         assert_eq!(n, 0, "the disabled pre-pass saturates nothing");
-        assert!(session.source_cache.lock().unwrap().is_empty(),
-            "the disabled pre-pass seeds no cache entries");
+        assert!(
+            session.source_cache.lock().unwrap().is_empty(),
+            "the disabled pre-pass seeds no cache entries"
+        );
     }
 }

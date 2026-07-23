@@ -14,16 +14,16 @@
 //! `AnnotatedRule` carrier, and the final `toRule` that produces a
 //! `ProtoRuleE` with HS-exact name / color / process / role attributes.
 
-use tamarin_term::lterm::{LVar, LNTerm};
+use tamarin_term::lterm::{LNTerm, LVar};
 use tamarin_term::vterm::{Lit, VTerm};
-use tamarin_utils::color::{rgb_to_hex, rgb_to_hsv, hsv_to_rgb, Hsv, Rgb};
+use tamarin_utils::color::{hsv_to_rgb, rgb_to_hex, rgb_to_hsv, Hsv, Rgb};
 
-use tamarin_theory::fact::{proto_fact, fresh_fact, out_fact, in_fact, LNFact, Multiplicity};
+use tamarin_theory::fact::{fresh_fact, in_fact, out_fact, proto_fact, LNFact, Multiplicity};
+use tamarin_theory::pretty_sapic::pretty_sapic_top_level;
 use tamarin_theory::rule::{ProtoRuleE, ProtoRuleEInfo, ProtoRuleName, Rule, RuleAttributes};
 use tamarin_theory::sapic::{
     pretty_position, GoodAnnotation, PlainProcess, Process, ProcessPosition, SapicLVar,
 };
-use tamarin_theory::pretty_sapic::pretty_sapic_top_level;
 
 use crate::annotation::ProcessAnnotation;
 
@@ -175,7 +175,11 @@ pub fn fact_to_fact(f: &TransFact) -> LNFact {
         TransFact::In(t) => in_fact(t.clone()),
         TransFact::Out(t) => out_fact(t.clone()),
         TransFact::State(kind, p, vars) => {
-            let name = if kind.is_semi_state() { "Semistate" } else { "State" };
+            let name = if kind.is_semi_state() {
+                "Semistate"
+            } else {
+                "State"
+            };
             let full = format!("{}_{}", name, pretty_position(p));
             let ts: Vec<LNTerm> = sorted_unique(vars.clone())
                 .into_iter()
@@ -187,14 +191,18 @@ pub fn fact_to_fact(f: &TransFact) -> LNFact {
         TransFact::TamarinFact(f) => f.clone(),
         // `factToFact (PureCell t1 t2) = protoFact Linear "L_PureState" [t1, t2]`
         // (Facts.hs:253-270, see line 269).
-        TransFact::PureCell(t1, t2) => {
-            proto_fact(Multiplicity::Linear, "L_PureState", vec![t1.clone(), t2.clone()])
-        }
+        TransFact::PureCell(t1, t2) => proto_fact(
+            Multiplicity::Linear,
+            "L_PureState",
+            vec![t1.clone(), t2.clone()],
+        ),
         // `factToFact (CellLocked t1 t2) = protoFact Linear "L_CellLocked" [t1, t2]`
         // (Facts.hs:253-270, see line 270).
-        TransFact::CellLocked(t1, t2) => {
-            proto_fact(Multiplicity::Linear, "L_CellLocked", vec![t1.clone(), t2.clone()])
-        }
+        TransFact::CellLocked(t1, t2) => proto_fact(
+            Multiplicity::Linear,
+            "L_CellLocked",
+            vec![t1.clone(), t2.clone()],
+        ),
         // `factToFact (FLet p t vars) = protoFact Linear ("Let_" ++ pos) (t : vars)`
         // (Facts.hs:257-259).  `vars` rendered as `S.toList` (sorted unique).
         TransFact::FLet(p, t, vars) => {
@@ -209,9 +217,11 @@ pub fn fact_to_fact(f: &TransFact) -> LNFact {
         }
         // `factToFact (Message t t') = protoFact Linear "Message" [t, t']`
         // (Facts.hs:253-270, see line 260) — the private-channel message-in-transit fact.
-        TransFact::Message(t1, t2) => {
-            proto_fact(Multiplicity::Linear, "Message", vec![t1.clone(), t2.clone()])
-        }
+        TransFact::Message(t1, t2) => proto_fact(
+            Multiplicity::Linear,
+            "Message",
+            vec![t1.clone(), t2.clone()],
+        ),
         // `factToFact (Ack t t') = protoFact Linear "Ack" [t, t']` (Facts.hs:253-270, see line 261)
         // — the private-channel acknowledgement fact.
         TransFact::Ack(t1, t2) => {
@@ -406,7 +416,11 @@ fn lock_pub_term(v: &LVar) -> LNTerm {
 fn map_fact_name(f: &LNFact, prefix: &str) -> LNFact {
     use tamarin_theory::fact::FactTag;
     let tag = match &f.tag {
-        FactTag::Proto(m, s, i) => FactTag::Proto(*m, tamarin_term::intern::intern_str(&format!("{prefix}{s}")), *i),
+        FactTag::Proto(m, s, i) => FactTag::Proto(
+            *m,
+            tamarin_term::intern::intern_str(&format!("{prefix}{s}")),
+            *i,
+        ),
         other => other.clone(),
     };
     tamarin_theory::fact::Fact::new(tag, f.terms.to_vec()).with_annotations(f.annotations.clone())
@@ -416,7 +430,10 @@ fn map_fact_name(f: &LNFact, prefix: &str) -> LNFact {
 /// multiplicity, so build the tag directly.
 fn proto_fact_mult(mult: Multiplicity, name: &str, terms: Vec<LNTerm>) -> LNFact {
     use tamarin_theory::fact::{Fact, FactTag};
-    Fact::new(FactTag::Proto(mult, tamarin_term::intern::intern_str(name), terms.len()), terms)
+    Fact::new(
+        FactTag::Proto(mult, tamarin_term::intern::intern_str(name), terms.len()),
+        terms,
+    )
 }
 
 // =============================================================================
@@ -557,7 +574,11 @@ pub fn rule_name<Ann: GoodAnnotation + Clone>(r: &AnnotatedRule<Ann>) -> String 
             let plain = to_plain(&r.process);
             let base = pretty_sapic_top_level(&plain);
             let stripped = strip_non_alphabetic(&base);
-            let un_null = if stripped.is_empty() { "p".to_string() } else { stripped };
+            let un_null = if stripped.is_empty() {
+                "p".to_string()
+            } else {
+                stripped
+            };
             format!(
                 "{}_{}_{}",
                 un_null,
@@ -581,7 +602,12 @@ pub fn to_rule(r: &AnnotatedRule<ProcessAnnotation<LVar>>) -> ProtoRuleE {
     // (Facts.hs:404-405) — the LITERAL process node this rule was generated for.
     let is_lookup_proc = matches!(
         &r.process,
-        Process::Comb(tamarin_theory::sapic::ProcessCombinator::Lookup(_, _), _, _, _)
+        Process::Comb(
+            tamarin_theory::sapic::ProcessCombinator::Lookup(_, _),
+            _,
+            _,
+            _
+        )
     );
     let attr = RuleAttributes {
         color: Some(color_for_process_name(&names)),
@@ -639,7 +665,10 @@ pub fn compute_new_vars(prems: &[LNFact], concs: &[LNFact], acts: &[LNFact]) -> 
             }
         }
     }
-    new_set.into_iter().map(|v| VTerm::Lit(Lit::Var(v))).collect()
+    new_set
+        .into_iter()
+        .map(|v| VTerm::Lit(Lit::Var(v)))
+        .collect()
 }
 
 #[cfg(test)]

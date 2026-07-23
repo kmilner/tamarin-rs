@@ -24,7 +24,9 @@ pub enum NodeId {
 }
 
 impl NodeId {
-    pub fn from_user(i: i64) -> Self { NodeId::User(i) }
+    pub fn from_user(i: i64) -> Self {
+        NodeId::User(i)
+    }
 
     pub fn to_dot_string(&self) -> String {
         match self {
@@ -56,7 +58,9 @@ pub struct DotGraph {
 }
 
 impl DotGraph {
-    pub fn new() -> Self { DotGraph::default() }
+    pub fn new() -> Self {
+        DotGraph::default()
+    }
 
     /// Allocate the next sequential id.
     pub fn next_id(&mut self) -> u64 {
@@ -65,14 +69,18 @@ impl DotGraph {
         id
     }
 
-    pub fn set_id(&mut self, id: u64) { self.next_id = id; }
+    pub fn set_id(&mut self, id: u64) {
+        self.next_id = id;
+    }
 
     /// `addElements`.
     pub fn add_elements(&mut self, mut new: Vec<GraphElement>) {
         self.elements.append(&mut new);
     }
 
-    pub fn elements(&self) -> &[GraphElement] { &self.elements }
+    pub fn elements(&self) -> &[GraphElement] {
+        &self.elements
+    }
 
     /// `rawNode`: allocate a node and return its id.
     pub fn raw_node(&mut self, attrs: Vec<(String, String)>) -> NodeId {
@@ -87,7 +95,13 @@ impl DotGraph {
     pub fn node(&mut self, attrs: Vec<(String, String)>) -> NodeId {
         let fixed = attrs
             .into_iter()
-            .map(|(k, v)| if k == "label" { (k, fix_multi_line_label(&v)) } else { (k, v) })
+            .map(|(k, v)| {
+                if k == "label" {
+                    (k, fix_multi_line_label(&v))
+                } else {
+                    (k, v)
+                }
+            })
             .collect();
         self.raw_node(fixed)
     }
@@ -109,7 +123,8 @@ impl DotGraph {
         sub.set_id(self.next_id);
         let r = body(&mut sub);
         self.next_id = sub.next_id;
-        self.elements.push(GraphElement::SubGraph(None, sub.elements));
+        self.elements
+            .push(GraphElement::SubGraph(None, sub.elements));
         r
     }
 
@@ -147,24 +162,18 @@ impl DotGraph {
     }
 
     pub fn node_attributes(&mut self, attrs: Vec<(String, String)>) {
-        self.elements.push(GraphElement::Node(
-            NodeId::Generated("node".into()),
-            attrs,
-        ));
+        self.elements
+            .push(GraphElement::Node(NodeId::Generated("node".into()), attrs));
     }
 
     pub fn edge_attributes(&mut self, attrs: Vec<(String, String)>) {
-        self.elements.push(GraphElement::Node(
-            NodeId::Generated("edge".into()),
-            attrs,
-        ));
+        self.elements
+            .push(GraphElement::Node(NodeId::Generated("edge".into()), attrs));
     }
 
     pub fn graph_attributes(&mut self, attrs: Vec<(String, String)>) {
-        self.elements.push(GraphElement::Node(
-            NodeId::Generated("graph".into()),
-            attrs,
-        ));
+        self.elements
+            .push(GraphElement::Node(NodeId::Generated("graph".into()), attrs));
     }
 }
 
@@ -175,7 +184,9 @@ pub fn show_dot(label: &str, graph: &DotGraph) -> String {
     // Inline label escaping (`"`→`\"`): push each char directly instead of
     // collecting a per-char Vec<char>.
     for c in label.chars() {
-        if c == '"' { out.push('\\'); }
+        if c == '"' {
+            out.push('\\');
+        }
         out.push(c);
     }
     out.push_str("\" {\n");
@@ -189,7 +200,10 @@ pub fn show_dot(label: &str, graph: &DotGraph) -> String {
 
 fn write_element(out: &mut String, e: &GraphElement) {
     match e {
-        GraphElement::Attribute(k, v) => { write_attr(out, k, v); out.push(';'); }
+        GraphElement::Attribute(k, v) => {
+            write_attr(out, k, v);
+            out.push(';');
+        }
         GraphElement::Node(nid, attrs) => {
             out.push_str(&nid.to_dot_string());
             write_attrs(out, attrs);
@@ -204,24 +218,34 @@ fn write_element(out: &mut String, e: &GraphElement) {
         }
         GraphElement::Scope(inner) | GraphElement::SubGraph(None, inner) => {
             out.push_str("{\n");
-            for e in inner { write_element(out, e); out.push('\n'); }
+            for e in inner {
+                write_element(out, e);
+                out.push('\n');
+            }
             out.push_str("\n}");
         }
         GraphElement::SubGraph(Some(nid), inner) => {
             out.push_str("subgraph ");
             out.push_str(&nid.to_dot_string());
             out.push_str(" {\n");
-            for e in inner { write_element(out, e); out.push('\n'); }
+            for e in inner {
+                write_element(out, e);
+                out.push('\n');
+            }
             out.push_str("\n}");
         }
     }
 }
 
 fn write_attrs(out: &mut String, attrs: &[(String, String)]) {
-    if attrs.is_empty() { return; }
+    if attrs.is_empty() {
+        return;
+    }
     out.push('[');
     for (i, (k, v)) in attrs.iter().enumerate() {
-        if i > 0 { out.push(','); }
+        if i > 0 {
+            out.push(',');
+        }
         write_attr(out, k, v);
     }
     out.push(']');
@@ -238,8 +262,14 @@ fn write_attr(out: &mut String, name: &str, val: &str) {
         // collecting a per-char Vec<char>.
         for c in val.chars() {
             match c {
-                '\n' => { out.push('\\'); out.push('l'); }
-                '"' => { out.push('\\'); out.push('"'); }
+                '\n' => {
+                    out.push('\\');
+                    out.push('l');
+                }
+                '"' => {
+                    out.push('\\');
+                    out.push('"');
+                }
                 c => out.push(c),
             }
         }
@@ -252,8 +282,14 @@ fn quote_dot_id(s: &str) -> String {
     out.push('"');
     for c in s.chars() {
         match c {
-            '"' => { out.push('\\'); out.push('"'); }
-            '\\' => { out.push('\\'); out.push('\\'); }
+            '"' => {
+                out.push('\\');
+                out.push('"');
+            }
+            '\\' => {
+                out.push('\\');
+                out.push('\\');
+            }
             x => out.push(x),
         }
     }
@@ -267,14 +303,18 @@ fn quote_dot_id(s: &str) -> String {
 /// `lines()` and pushing `'\n'` after every line). Single-line labels (no
 /// `\n`) pass through untouched.
 pub fn fix_multi_line_label(s: &str) -> String {
-    if !s.contains('\n') { return s.to_string(); }
+    if !s.contains('\n') {
+        return s.to_string();
+    }
     let mut out = String::new();
     for line in s.lines() {
         // Single pass: count leading whitespace chars and accumulate their byte
         // length, so we get the suffix byte offset without re-walking the line.
         let mut suffix_offset = 0;
         for c in line.chars() {
-            if !c.is_whitespace() { break; }
+            if !c.is_whitespace() {
+                break;
+            }
             out.push_str("&nbsp;");
             suffix_offset += c.len_utf8();
         }
@@ -303,8 +343,12 @@ pub fn port_field<P>(port: P, label: &str) -> Record<P> {
     Record::Field(Some(port), fix_multi_line_label(label))
 }
 
-pub fn hcat_records<P>(rs: Vec<Record<P>>) -> Record<P> { Record::HCat(rs) }
-pub fn vcat_records<P>(rs: Vec<Record<P>>) -> Record<P> { Record::VCat(rs) }
+pub fn hcat_records<P>(rs: Vec<Record<P>>) -> Record<P> {
+    Record::HCat(rs)
+}
+pub fn vcat_records<P>(rs: Vec<Record<P>>) -> Record<P> {
+    Record::VCat(rs)
+}
 
 fn record_label<P: Clone>(graph: &mut DotGraph, rec: &Record<P>) -> (String, Vec<(P, String)>) {
     fn render<P: Clone>(
@@ -329,7 +373,11 @@ fn record_label<P: Clone>(graph: &mut DotGraph, rec: &Record<P>) -> (String, Vec
                     ids.append(&mut i);
                 }
                 let raw = labels.join("|");
-                let label = if horiz { format!("{{{{{}}}}}", raw) } else { format!("{{{}}}", raw) };
+                let label = if horiz {
+                    format!("{{{{{}}}}}", raw)
+                } else {
+                    format!("{{{}}}", raw)
+                };
                 (label, ids)
             }
             Record::VCat(rs) => {
@@ -341,7 +389,11 @@ fn record_label<P: Clone>(graph: &mut DotGraph, rec: &Record<P>) -> (String, Vec
                     ids.append(&mut i);
                 }
                 let raw = labels.join("|");
-                let label = if horiz { format!("{{{}}}", raw) } else { format!("{{{{{}}}}}", raw) };
+                let label = if horiz {
+                    format!("{{{}}}", raw)
+                } else {
+                    format!("{{{{{}}}}}", raw)
+                };
                 (label, ids)
             }
         }
@@ -353,7 +405,10 @@ fn escape_record(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
-            '|' | '{' | '}' | '<' | '>' => { out.push('\\'); out.push(c); }
+            '|' | '{' | '}' | '<' | '>' => {
+                out.push('\\');
+                out.push(c);
+            }
             x => out.push(x),
         }
     }
@@ -386,7 +441,10 @@ fn gen_record<P: Clone>(
     mut attrs: Vec<(String, String)>,
 ) -> (NodeId, Vec<(P, NodeId)>) {
     let (lbl, port_ids) = record_label(graph, rec);
-    let mut full = vec![("shape".to_string(), shape.to_string()), ("label".to_string(), lbl)];
+    let mut full = vec![
+        ("shape".to_string(), shape.to_string()),
+        ("label".to_string(), lbl),
+    ];
     full.append(&mut attrs);
     let nid = graph.raw_node(full);
     let ports = port_ids
@@ -476,11 +534,8 @@ mod tests {
     #[test]
     fn record_node_emits_label_with_ports() {
         let mut g = DotGraph::new();
-        let rec: Record<&'static str> = hcat_records(vec![
-            field("a"),
-            port_field("p1", "b"),
-            field("c"),
-        ]);
+        let rec: Record<&'static str> =
+            hcat_records(vec![field("a"), port_field("p1", "b"), field("c")]);
         let (nid, ports) = record(&mut g, &rec, vec![]);
         // One port and a node id; label should contain the angle-port marker.
         assert_eq!(ports.len(), 1);

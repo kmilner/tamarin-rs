@@ -20,7 +20,9 @@ pub type Position = Vec<i64>;
 
 /// `t @ p`: subterm of `t` at `p`. Returns `None` for invalid positions.
 pub fn at_pos<C: Ord + Clone, V: Ord + Clone>(t: &VTerm<C, V>, p: &[i64]) -> Option<VTerm<C, V>> {
-    if p.is_empty() { return Some(t.clone()); }
+    if p.is_empty() {
+        return Some(t.clone());
+    }
     match t {
         Term::Lit(_) => None,
         Term::App(FunSym::Ac(s), args) => match (p[0], &args[..]) {
@@ -35,7 +37,9 @@ pub fn at_pos<C: Ord + Clone, V: Ord + Clone>(t: &VTerm<C, V>, p: &[i64]) -> Opt
         },
         Term::App(_, args) => {
             let i = p[0] as usize;
-            if p[0] < 0 || i >= args.len() { return None; }
+            if p[0] < 0 || i >= args.len() {
+                return None;
+            }
             at_pos(&args[i], &p[1..])
         }
     }
@@ -47,7 +51,9 @@ pub fn replace_pos<C: Ord + Clone, V: Ord + Clone>(
     s: &VTerm<C, V>,
     p: &[i64],
 ) -> Option<VTerm<C, V>> {
-    if p.is_empty() { return Some(s.clone()); }
+    if p.is_empty() {
+        return Some(s.clone());
+    }
     match t {
         Term::Lit(_) => None,
         Term::App(FunSym::Ac(sym), args) => match (p[0], &args[..]) {
@@ -66,7 +72,9 @@ pub fn replace_pos<C: Ord + Clone, V: Ord + Clone>(
         },
         Term::App(fsym, args) => {
             let i = p[0] as usize;
-            if p[0] < 0 || i >= args.len() { return None; }
+            if p[0] < 0 || i >= args.len() {
+                return None;
+            }
             let mut new = args.to_vec();
             new[i] = replace_pos(&args[i], s, &p[1..])?;
             Some(f_app(*fsym, new))
@@ -140,7 +148,11 @@ pub fn deepest_prot_subterm<C: Ord + Clone, V: Ord + Clone>(
                     let a = args
                         .get(*i as usize)
                         .expect("deepest_prot_subterm: invalid position given");
-                    let new_st = if is_pair(t) || is_ac(t) { st } else { t.clone() };
+                    let new_st = if is_pair(t) || is_ac(t) {
+                        st
+                    } else {
+                        t.clone()
+                    };
                     f(orig, new_st, a, rest)
                 }
                 Term::Lit(_) => panic!("deepest_prot_subterm: invalid position given"),
@@ -259,7 +271,7 @@ mod tests {
         // In pair(h(a), b), the deepest protected subterm on the path to
         // a (position [0,0]) is h(a): pairs are transparent, h is protected.
         use crate::builtin::msg_var as mv;
-        use crate::function_symbols::{FunSym, NoEqSym, Privacy, Constructability};
+        use crate::function_symbols::{Constructability, FunSym, NoEqSym, Privacy};
         let h = NoEqSym::new(b"h", 1, Privacy::Public, Constructability::Constructor);
         let ha: LNTerm = Term::App(FunSym::NoEq(h), vec![mv("a", 0)].into());
         let t: LNTerm = pair(ha.clone(), mv("b", 0));

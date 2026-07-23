@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable --no-self-update && rustup default stable
+      - run: cargo fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      # The submodule is needed to build: tamarin-theory include_str!'s the
+      # intruder-variant data files from tamarin-prover/data/.
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - run: rustup update stable --no-self-update && rustup default stable
+      - run: cargo clippy --workspace --all-targets -- -D warnings

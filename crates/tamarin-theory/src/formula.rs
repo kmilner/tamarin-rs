@@ -69,10 +69,16 @@ pub type LFormula<C> = Formula<(String, tamarin_term::lterm::LSort), C, LVar>;
 pub type LNFormula = LFormula<Name>;
 
 impl<S, H, C, V> ProtoFormula<S, H, C, V> {
-    pub fn ltrue() -> Self { ProtoFormula::Tf(true) }
-    pub fn lfalse() -> Self { ProtoFormula::Tf(false) }
+    pub fn ltrue() -> Self {
+        ProtoFormula::Tf(true)
+    }
+    pub fn lfalse() -> Self {
+        ProtoFormula::Tf(false)
+    }
 
-    pub fn not(self) -> Self { ProtoFormula::Not(Box::new(self)) }
+    pub fn not(self) -> Self {
+        ProtoFormula::Not(Box::new(self))
+    }
 
     pub fn and(self, other: Self) -> Self {
         ProtoFormula::Conn(Connective::And, Box::new(self), Box::new(other))
@@ -108,8 +114,12 @@ mod tests {
     use super::*;
     use tamarin_term::lterm::LSort;
 
-    fn lftrue() -> LNFormula { ProtoFormula::ltrue() }
-    fn lffalse() -> LNFormula { ProtoFormula::lfalse() }
+    fn lftrue() -> LNFormula {
+        ProtoFormula::ltrue()
+    }
+    fn lffalse() -> LNFormula {
+        ProtoFormula::lfalse()
+    }
 
     #[test]
     fn build_a_simple_formula() {
@@ -143,7 +153,7 @@ mod tests {
     #[test]
     fn connective_ord_matches_haskell_declaration() {
         assert!(Connective::And < Connective::Or);
-        assert!(Connective::Or  < Connective::Imp);
+        assert!(Connective::Or < Connective::Imp);
         assert!(Connective::Imp < Connective::Iff);
     }
 
@@ -156,7 +166,9 @@ mod tests {
     /// pattern-matches structurally — see `simplify_guarded_with`.)
     #[test]
     fn quantifier_ord_matches_haskell_declaration() {
-        assert!(Quantifier::All < Quantifier::Ex,
-                "All MUST sort before Ex (Formula.hs:108)");
+        assert!(
+            Quantifier::All < Quantifier::Ex,
+            "All MUST sort before Ex (Formula.hs:108)"
+        );
     }
 }

@@ -26,7 +26,9 @@ pub struct CtxtStRule {
 }
 
 impl CtxtStRule {
-    pub fn new(lhs: LNTerm, rhs: StRhs) -> Self { CtxtStRule { lhs, rhs } }
+    pub fn new(lhs: LNTerm, rhs: StRhs) -> Self {
+        CtxtStRule { lhs, rhs }
+    }
 
     pub fn to_rrule(&self) -> RRule<LNTerm> {
         RRule::new(self.lhs.clone(), self.rhs.term.clone())
@@ -62,7 +64,9 @@ pub fn find_all_subterms(l: &LNTerm, r: &LNTerm) -> Option<Vec<Position>> {
     let direct = find_subterm(l, r);
     match r {
         Term::App(_, args) => {
-            if !direct.is_empty() { return Some(direct); }
+            if !direct.is_empty() {
+                return Some(direct);
+            }
             let mut out = Vec::new();
             for sub in args.iter() {
                 let parts = find_all_subterms(l, sub)?;
@@ -71,7 +75,11 @@ pub fn find_all_subterms(l: &LNTerm, r: &LNTerm) -> Option<Vec<Position>> {
             Some(out)
         }
         Term::Lit(Lit::Var(_)) => {
-            if direct.is_empty() { None } else { Some(direct) }
+            if direct.is_empty() {
+                None
+            } else {
+                Some(direct)
+            }
         }
         Term::Lit(Lit::Con(_)) => None,
     }
@@ -148,7 +156,10 @@ pub fn rrule_to_ctxt_st_rule(rule: &RRule<LNTerm>) -> Option<CtxtStRule> {
         // NOT all non-variable positions.
         return Some(CtxtStRule::new(
             rule.lhs.clone(),
-            StRhs { positions: constant_positions(&rule.lhs), term: rule.rhs.clone() },
+            StRhs {
+                positions: constant_positions(&rule.lhs),
+                term: rule.rhs.clone(),
+            },
         ));
     }
     let positions = find_all_subterms(&rule.lhs, &rule.rhs)?;
@@ -157,10 +168,15 @@ pub fn rrule_to_ctxt_st_rule(rule: &RRule<LNTerm>) -> Option<CtxtStRule> {
     // position is at the HEAD of the list; an empty position later in the
     // list does not reject. The `is_empty()` guard above covers HS's `[]` arm,
     // so `positions[0]` is in bounds here.
-    if positions.is_empty() || positions[0].is_empty() { return None; }
+    if positions.is_empty() || positions[0].is_empty() {
+        return None;
+    }
     Some(CtxtStRule::new(
         rule.lhs.clone(),
-        StRhs { positions, term: rule.rhs.clone() },
+        StRhs {
+            positions,
+            term: rule.rhs.clone(),
+        },
     ))
 }
 
@@ -168,7 +184,9 @@ pub fn rrule_to_ctxt_st_rule(rule: &RRule<LNTerm>) -> Option<CtxtStRule> {
 /// of LHS.
 pub fn is_subterm_convergent(rule: &CtxtStRule) -> bool {
     let rhs = &rule.rhs.term;
-    if frees(rhs).is_empty() { return true; }
+    if frees(rhs).is_empty() {
+        return true;
+    }
     !find_subterm(&rule.lhs, rhs).is_empty()
 }
 
@@ -224,7 +242,7 @@ mod tests {
             Constructability::Constructor,
         );
         let x = msg_var("x", 0);
-        let lhs: LNTerm = f_app_no_eq(h_sym.clone(), vec![x.clone()]); // h(x)
+        let lhs: LNTerm = f_app_no_eq(h_sym, vec![x.clone()]); // h(x)
         let rhs: LNTerm = f_app_no_eq(f_sym, vec![x.clone(), lhs.clone()]); // f(x, h(x))
         let rule = RRule::new(lhs, rhs);
         let ctxt = rrule_to_ctxt_st_rule(&rule).expect("must not be rejected");

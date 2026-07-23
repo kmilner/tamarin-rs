@@ -104,7 +104,12 @@ fn fact_tag_label(tag: &crate::fact::FactTag) -> String {
 pub fn goal_summary(g: Option<&crate::constraint::constraints::Goal>) -> String {
     use crate::constraint::constraints::Goal;
     let tag_label = |fa: &crate::fact::LNFact, prefix: &str| -> String {
-        format!("{}{}({})", prefix, fact_tag_label(&fa.tag), terms_summary(&fa.terms))
+        format!(
+            "{}{}({})",
+            prefix,
+            fact_tag_label(&fa.tag),
+            terms_summary(&fa.terms)
+        )
     };
     match g {
         None => "-".into(),
@@ -122,7 +127,9 @@ pub fn goal_summary(g: Option<&crate::constraint::constraints::Goal>) -> String 
 fn terms_summary(ts: &[tamarin_term::lterm::LNTerm]) -> String {
     let mut out = String::new();
     for (i, t) in ts.iter().enumerate() {
-        if i > 0 { out.push(','); }
+        if i > 0 {
+            out.push(',');
+        }
         out.push_str(&term_summary(t));
     }
     out
@@ -132,10 +139,10 @@ fn terms_summary(ts: &[tamarin_term::lterm::LNTerm]) -> String {
 /// abbreviates vars to `name:sort:idx` (sort as a 1-char code),
 /// shows `<...>` for pair sub-trees.
 pub fn term_summary(t: &tamarin_term::lterm::LNTerm) -> String {
+    use tamarin_term::function_symbols::FunSym;
     use tamarin_term::lterm::LSort;
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_term::function_symbols::FunSym;
     match t {
         Term::Lit(Lit::Var(v)) => {
             let sort_ch = match v.sort {
@@ -155,8 +162,10 @@ pub fn term_summary(t: &tamarin_term::lterm::LNTerm) -> String {
             let name = String::from_utf8_lossy(noeq.name);
             if name == "pair" {
                 let mut inner = Vec::new();
-                fn flatten<'a>(t: &'a tamarin_term::lterm::LNTerm,
-                               out: &mut Vec<&'a tamarin_term::lterm::LNTerm>) {
+                fn flatten<'a>(
+                    t: &'a tamarin_term::lterm::LNTerm,
+                    out: &mut Vec<&'a tamarin_term::lterm::LNTerm>,
+                ) {
                     if let Term::App(FunSym::NoEq(ns), args) = t {
                         if ns.name == b"pair" {
                             flatten(&args[0], out);
@@ -195,21 +204,40 @@ fn dump_enabled() -> bool {
 /// Dump system goals and formulas to stderr — useful when fingerprint
 /// counts diverge and we need to know exactly what's on each side.
 fn dump_sys(sys: &crate::constraint::system::System) {
-    if !dump_enabled() { return; }
+    if !dump_enabled() {
+        return;
+    }
     eprintln!("  goals:");
     for (g, st) in sys.goals.iter() {
-        eprintln!("    [{}{}] {}",
+        eprintln!(
+            "    [{}{}] {}",
             if st.solved { "S" } else { "-" },
             if st.looping { "L" } else { "-" },
-            goal_summary(Some(g)));
+            goal_summary(Some(g))
+        );
     }
     eprintln!("  nodes:");
     for (id, rule) in sys.nodes.iter() {
-        eprintln!("    {}:{} prems=[{}] concs=[{}] acts=[{}]",
-            id.name, id.idx,
-            rule.premises.iter().map(state_trace_fact_brief).collect::<Vec<_>>().join(","),
-            rule.conclusions.iter().map(state_trace_fact_brief).collect::<Vec<_>>().join(","),
-            rule.actions.iter().map(state_trace_fact_brief).collect::<Vec<_>>().join(","));
+        eprintln!(
+            "    {}:{} prems=[{}] concs=[{}] acts=[{}]",
+            id.name,
+            id.idx,
+            rule.premises
+                .iter()
+                .map(state_trace_fact_brief)
+                .collect::<Vec<_>>()
+                .join(","),
+            rule.conclusions
+                .iter()
+                .map(state_trace_fact_brief)
+                .collect::<Vec<_>>()
+                .join(","),
+            rule.actions
+                .iter()
+                .map(state_trace_fact_brief)
+                .collect::<Vec<_>>()
+                .join(",")
+        );
     }
     eprintln!("  edges: {}", sys.edges.len());
 }
@@ -221,25 +249,48 @@ fn state_trace_fact_brief(fa: &crate::fact::LNFact) -> String {
 }
 
 /// Emit one trace event line.
-pub fn emit(op: &str, goal: Option<&crate::constraint::constraints::Goal>,
-            sys: &crate::constraint::system::System) {
-    if !enabled() { return; }
+pub fn emit(
+    op: &str,
+    goal: Option<&crate::constraint::constraints::Goal>,
+    sys: &crate::constraint::system::System,
+) {
+    if !enabled() {
+        return;
+    }
     let s = next_step();
     let path = crate::constraint::solver::trace::case_path_string();
-    eprintln!("[STATE path={} step={} op={} goal={} {}]",
-        path, s, op, goal_summary(goal), fingerprint(sys));
+    eprintln!(
+        "[STATE path={} step={} op={} goal={} {}]",
+        path,
+        s,
+        op,
+        goal_summary(goal),
+        fingerprint(sys)
+    );
     dump_sys(sys);
 }
 
 /// Emit a trace event with an extra `case=<name>` tag (used by
 /// case-selection points like the SolveGoal filter).
-pub fn emit_case(op: &str, case_name: &str,
-                 goal: Option<&crate::constraint::constraints::Goal>,
-                 sys: &crate::constraint::system::System) {
-    if !enabled() { return; }
+pub fn emit_case(
+    op: &str,
+    case_name: &str,
+    goal: Option<&crate::constraint::constraints::Goal>,
+    sys: &crate::constraint::system::System,
+) {
+    if !enabled() {
+        return;
+    }
     let s = next_step();
     let path = crate::constraint::solver::trace::case_path_string();
-    eprintln!("[STATE path={} step={} op={} case={} goal={} {}]",
-        path, s, op, case_name, goal_summary(goal), fingerprint(sys));
+    eprintln!(
+        "[STATE path={} step={} op={} case={} goal={} {}]",
+        path,
+        s,
+        op,
+        case_name,
+        goal_summary(goal),
+        fingerprint(sys)
+    );
     dump_sys(sys);
 }

@@ -26,9 +26,7 @@
 use tamarin_utils::fresh::FastFreshState;
 
 use tamarin_term::lterm::{LSort, LVar};
-use tamarin_theory::sapic::{
-    Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm,
-};
+use tamarin_theory::sapic::{Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm};
 
 use crate::annotation::ProcessAnnotation;
 
@@ -58,11 +56,10 @@ fn annotate_each_closest_unlock(
         Process::Action(ac, a, body) => match &ac {
             // (Unlock t') | t == t' -> annUnlock here, STOP (closest match).
             //              | otherwise -> recurse into body.
-            SapicAction::Unlock(t_prime)
-                if t == t_prime => {
-                    let a2 = a.append(ProcessAnnotation::with_unlock(v.clone()));
-                    Ok(Process::Action(ac, a2, body))
-                }
+            SapicAction::Unlock(t_prime) if t == t_prime => {
+                let a2 = a.append(ProcessAnnotation::with_unlock(v.clone()));
+                Ok(Process::Action(ac, a2, body))
+            }
             // (Insert t1 t2) | t1 == t -> annUnlock here AND recurse into body.
             //  (otherwise falls through to the generic action case below.)
             SapicAction::Insert(t1, _t2) if t1 == t => {
@@ -141,7 +138,8 @@ pub fn annotate_locks(p: AnnotatedProc) -> Result<AnnotatedProc, String> {
     let mut fresh = FastFreshState::nothing_used();
     annotate_locks_go(&mut fresh, p).map_err(|e| match e {
         LockWfError::Rep => {
-            "process not well-formed: replication below a lock without a matching unlock".to_string()
+            "process not well-formed: replication below a lock without a matching unlock"
+                .to_string()
         }
         LockWfError::Par => {
             "process not well-formed: parallel below a lock without a matching unlock".to_string()
@@ -152,8 +150,8 @@ pub fn annotate_locks(p: AnnotatedProc) -> Result<AnnotatedProc, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tamarin_term::vterm::const_term;
     use tamarin_term::lterm::{Name, NameTag};
+    use tamarin_term::vterm::const_term;
 
     fn pub_const(s: &str) -> SapicTerm {
         const_term(Name::new(NameTag::Pub, s))
@@ -164,10 +162,18 @@ mod tests {
     }
 
     fn lock(t: SapicTerm, body: AnnotatedProc) -> AnnotatedProc {
-        Process::Action(SapicAction::Lock(t), ProcessAnnotation::empty(), Box::new(body))
+        Process::Action(
+            SapicAction::Lock(t),
+            ProcessAnnotation::empty(),
+            Box::new(body),
+        )
     }
     fn unlock(t: SapicTerm, body: AnnotatedProc) -> AnnotatedProc {
-        Process::Action(SapicAction::Unlock(t), ProcessAnnotation::empty(), Box::new(body))
+        Process::Action(
+            SapicAction::Unlock(t),
+            ProcessAnnotation::empty(),
+            Box::new(body),
+        )
     }
 
     #[test]
@@ -205,11 +211,17 @@ mod tests {
         );
         let out = annotate_locks(p).unwrap();
         // outer lock idx 0
-        let Process::Action(SapicAction::Lock(_), a0, body0) = out else { panic!() };
+        let Process::Action(SapicAction::Lock(_), a0, body0) = out else {
+            panic!()
+        };
         assert_eq!(a0.lock.unwrap().0.idx, 0);
         // the inner lock gets idx 1
-        let Process::Action(SapicAction::Unlock(_), _, body1) = *body0 else { panic!() };
-        let Process::Action(SapicAction::Lock(_), a1, _) = *body1 else { panic!() };
+        let Process::Action(SapicAction::Unlock(_), _, body1) = *body0 else {
+            panic!()
+        };
+        let Process::Action(SapicAction::Lock(_), a1, _) = *body1 else {
+            panic!()
+        };
         assert_eq!(a1.lock.unwrap().0.idx, 1);
     }
 
@@ -226,8 +238,12 @@ mod tests {
             ),
         );
         let out = annotate_locks(p).unwrap();
-        let Process::Action(SapicAction::Lock(_), _, body) = out else { panic!() };
-        let Process::Action(SapicAction::Insert(_, _), ia, _) = *body else { panic!() };
+        let Process::Action(SapicAction::Lock(_), _, body) = out else {
+            panic!()
+        };
+        let Process::Action(SapicAction::Insert(_, _), ia, _) = *body else {
+            panic!()
+        };
         assert_eq!(ia.unlock.expect("insert annotated as unlock").0.idx, 0);
     }
 
@@ -250,8 +266,12 @@ mod tests {
         // recursion continues into body.
         let p = lock(pub_const("s"), unlock(pub_const("other"), null()));
         let out = annotate_locks(p).unwrap();
-        let Process::Action(SapicAction::Lock(_), _, body) = out else { panic!() };
-        let Process::Action(SapicAction::Unlock(_), ua, _) = *body else { panic!() };
+        let Process::Action(SapicAction::Lock(_), _, body) = out else {
+            panic!()
+        };
+        let Process::Action(SapicAction::Unlock(_), ua, _) = *body else {
+            panic!()
+        };
         assert!(ua.unlock.is_none());
     }
 }

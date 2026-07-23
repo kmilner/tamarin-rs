@@ -19,9 +19,9 @@
 //! — are ported in `constraint::solver::simplify` rather than here.
 
 use tamarin_term::function_symbols::FunSym;
-use tamarin_utils::FastSet;
 use tamarin_term::lterm::LNTerm;
 use tamarin_term::term::Term;
+use tamarin_utils::FastSet;
 
 /// One stored subterm constraint: `small ⊏ big`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,7 +62,10 @@ impl SortedPairSet {
     pub fn insert(&mut self, pair: (LNTerm, LNTerm)) -> bool {
         match self.inner.binary_search(&pair) {
             Ok(_) => false,
-            Err(pos) => { self.inner.insert(pos, pair); true }
+            Err(pos) => {
+                self.inner.insert(pos, pair);
+                true
+            }
         }
     }
 
@@ -76,19 +79,25 @@ impl SortedPairSet {
 
 impl std::ops::Deref for SortedPairSet {
     type Target = [(LNTerm, LNTerm)];
-    fn deref(&self) -> &Self::Target { &self.inner }
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
 }
 
 impl IntoIterator for SortedPairSet {
     type Item = (LNTerm, LNTerm);
     type IntoIter = std::vec::IntoIter<(LNTerm, LNTerm)>;
-    fn into_iter(self) -> Self::IntoIter { self.inner.into_iter() }
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.into_iter()
+    }
 }
 
 impl<'a> IntoIterator for &'a SortedPairSet {
     type Item = &'a (LNTerm, LNTerm);
     type IntoIter = std::slice::Iter<'a, (LNTerm, LNTerm)>;
-    fn into_iter(self) -> Self::IntoIter { self.inner.iter() }
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.iter()
+    }
 }
 
 /// Subterm store. Mirrors HS's 5-field `SubtermStore`
@@ -114,11 +123,17 @@ pub struct SubtermStore {
 }
 
 impl SubtermStore {
-    pub fn empty() -> Self { Self::default() }
+    pub fn empty() -> Self {
+        Self::default()
+    }
 
     /// Record a new `small << big` constraint.
     pub fn add(&mut self, small: LNTerm, big: LNTerm) {
-        self.subterms.push(SubtermConstraint { small, big, propagated: false });
+        self.subterms.push(SubtermConstraint {
+            small,
+            big,
+            propagated: false,
+        });
     }
 
     /// `addNegSubterm` (SubtermStore.hs:125-126): set-insert into
@@ -128,7 +143,9 @@ impl SubtermStore {
         self.neg_subterms.insert((small, big))
     }
 
-    pub fn is_false(&self) -> bool { self.contradictory }
+    pub fn is_false(&self) -> bool {
+        self.contradictory
+    }
 
     /// `conjoinSubtermStores` — HS-faithful port of
     /// `Theory.Tools.SubtermStore.conjoinSubtermStores` (SubtermStore.hs:108-110):
@@ -174,11 +191,16 @@ pub fn elem_not_below_reducible(
     inner: &LNTerm,
     outer: &LNTerm,
 ) -> bool {
-    if inner == outer { return true; }
+    if inner == outer {
+        return true;
+    }
     match outer {
         Term::App(sym, args) => {
-            if reducible.contains(sym) { return false; }
-            args.iter().any(|a| elem_not_below_reducible(reducible, inner, a))
+            if reducible.contains(sym) {
+                return false;
+            }
+            args.iter()
+                .any(|a| elem_not_below_reducible(reducible, inner, a))
         }
         _ => false,
     }
@@ -209,7 +231,9 @@ pub fn collect_fresh_vars_not_below_reducible(
     use tamarin_term::vterm::Lit;
     match t {
         Term::App(sym, args) => {
-            if reducible.contains(sym) { return; }
+            if reducible.contains(sym) {
+                return;
+            }
             for a in args.iter() {
                 collect_fresh_vars_not_below_reducible(reducible, a, out);
             }
@@ -232,18 +256,19 @@ pub fn collect_fresh_vars_not_below_reducible(
 /// parent-set) tracking to avoid revisiting already-finished nodes
 /// while still detecting back-edges into the current recursion
 /// stack.
-pub fn has_subterm_cycle(
-    reducible: &FastSet<FunSym>,
-    store: &SubtermStore,
-) -> bool {
+pub fn has_subterm_cycle(reducible: &FastSet<FunSym>, store: &SubtermStore) -> bool {
     // Build the dag from positive subterms — every active (small, big)
     // constraint is an edge in the dependency dag.
-    let dag: Vec<(LNTerm, LNTerm)> = store.subterms.iter()
+    let dag: Vec<(LNTerm, LNTerm)> = store
+        .subterms
+        .iter()
         .map(|c| (c.small.clone(), c.big.clone()))
         .collect();
-    if dag.is_empty() { return false; }
-    let mut visited: std::collections::BTreeSet<(LNTerm, LNTerm)>
-        = std::collections::BTreeSet::new();
+    if dag.is_empty() {
+        return false;
+    }
+    let mut visited: std::collections::BTreeSet<(LNTerm, LNTerm)> =
+        std::collections::BTreeSet::new();
     for edge in &dag {
         let mut parents = std::collections::BTreeSet::new();
         if find_loop(reducible, &dag, edge, &mut parents, &mut visited).is_none() {
@@ -262,12 +287,17 @@ fn find_loop(
     parents: &mut std::collections::BTreeSet<(LNTerm, LNTerm)>,
     visited: &mut std::collections::BTreeSet<(LNTerm, LNTerm)>,
 ) -> Option<()> {
-    if parents.contains(x) { return None; }
-    if visited.contains(x) { return Some(()); }
+    if parents.contains(x) {
+        return None;
+    }
+    if visited.contains(x) {
+        return Some(());
+    }
     parents.insert(x.clone());
     // Successors: edges (e, e') in the dag such that `x.1` (the big
     // side of x's subterm) appears in `e` not below a reducible head.
-    let next: Vec<&(LNTerm, LNTerm)> = dag.iter()
+    let next: Vec<&(LNTerm, LNTerm)> = dag
+        .iter()
         .filter(|e| elem_not_below_reducible(reducible, &x.1, &e.0))
         .collect();
     for n in next {
@@ -282,8 +312,8 @@ fn find_loop(
 mod tests {
     use super::*;
     use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::vterm::Lit;
     use tamarin_term::term::Term;
+    use tamarin_term::vterm::Lit;
 
     fn var(name: &str) -> LNTerm {
         Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)))

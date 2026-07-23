@@ -99,10 +99,7 @@ pub(crate) fn lookup_abbreviation<'a>(
 /// replace the whole thing if it's in the map, else recurse into args.
 ///
 /// Mirror of `applyAbbreviationsTerm`.
-pub fn apply_abbreviations_term(
-    lookup: &dyn Fn(&LNTerm) -> Option<LNTerm>,
-    t: &LNTerm,
-) -> LNTerm {
+pub fn apply_abbreviations_term(lookup: &dyn Fn(&LNTerm) -> Option<LNTerm>, t: &LNTerm) -> LNTerm {
     if let Some(abbrev) = lookup(t) {
         return abbrev;
     }
@@ -114,12 +111,11 @@ pub fn apply_abbreviations_term(
 
 /// Apply abbreviation substitution to all terms of a fact.
 /// Mirror of `applyAbbreviationsFact`.
-pub fn apply_abbreviations_fact(
-    lookup: &dyn Fn(&LNTerm) -> Option<LNTerm>,
-    fa: &LNFact,
-) -> LNFact {
+pub fn apply_abbreviations_fact(lookup: &dyn Fn(&LNTerm) -> Option<LNTerm>, fa: &LNFact) -> LNFact {
     let mut new_fa = fa.clone();
-    new_fa.terms = fa.terms.iter()
+    new_fa.terms = fa
+        .terms
+        .iter()
         .map(|t| apply_abbreviations_term(lookup, t))
         .collect();
     // The `.terms` assignment changes frees (abbreviation vars replace
@@ -138,9 +134,7 @@ fn get_term_prefix(opts: &AbbreviationOptions, t: &LNTerm) -> String {
     let raw = match t {
         Term::Lit(Lit::Var(v)) => v.name.to_string(),
         Term::Lit(Lit::Con(n)) => n.id.0.to_string(),
-        Term::App(FunSym::NoEq(sym), _) => {
-            String::from_utf8_lossy(sym.name).into_owned()
-        }
+        Term::App(FunSym::NoEq(sym), _) => String::from_utf8_lossy(sym.name).into_owned(),
         Term::App(FunSym::C(CSym::EMap), _) => "EMP".to_string(),
         Term::App(FunSym::List, _) => "LST".to_string(),
         Term::App(FunSym::Ac(op), _) => format!("{:?}", op),
@@ -208,10 +202,15 @@ fn abbreviate_term(
 /// change which abbreviation is chosen.
 fn collect_all_names(repr: &GraphRepr) -> BTreeSet<String> {
     let mut buf = String::new();
-    for n in &repr.nodes { dump_node(&mut buf, n); }
+    for n in &repr.nodes {
+        dump_node(&mut buf, n);
+    }
     for c in &repr.clusters {
-        buf.push_str(&c.name); buf.push('\n');
-        for n in &c.nodes { dump_node(&mut buf, n); }
+        buf.push_str(&c.name);
+        buf.push('\n');
+        for n in &c.nodes {
+            dump_node(&mut buf, n);
+        }
     }
     let mut out: BTreeSet<String> = BTreeSet::new();
     let mut cur = String::new();
@@ -222,7 +221,9 @@ fn collect_all_names(repr: &GraphRepr) -> BTreeSet<String> {
             out.insert(std::mem::take(&mut cur));
         }
     }
-    if !cur.is_empty() { out.insert(cur); }
+    if !cur.is_empty() {
+        out.insert(cur);
+    }
     out
 }
 
@@ -232,7 +233,9 @@ fn dump_node(buf: &mut String, n: &super::repr::GNode) {
     match &n.ty {
         NodeType::System(ru) => dump_rule(buf, ru),
         NodeType::UnsolvedAction(fs) => {
-            for f in fs { dump_fact(buf, f); }
+            for f in fs {
+                dump_fact(buf, f);
+            }
         }
         _ => {}
     }
@@ -244,19 +247,22 @@ fn dump_rule(buf: &mut String, ru: &RuleACInst) {
     // those (and only those) user-controlled tokens — the derived Show's
     // long constructor/field words are harmless (see `collect_all_names`).
     dump_rule_info(buf, &ru.info);
-    for f in &ru.premises { dump_fact(buf, f); }
-    for f in &ru.actions  { dump_fact(buf, f); }
-    for f in &ru.conclusions { dump_fact(buf, f); }
+    for f in &ru.premises {
+        dump_fact(buf, f);
+    }
+    for f in &ru.actions {
+        dump_fact(buf, f);
+    }
+    for f in &ru.conclusions {
+        dump_fact(buf, f);
+    }
 }
 
 /// Emit the user-controlled name/role tokens that derived `Show` of a
 /// rule's `_rInfo` exposes (Rule.hs:206-214, 397-400, 517-519): the raw
 /// `StandRule "<name>"` string, the `role = Just "<role>"` string, and the
 /// intruder `ConstrRule`/`DestrRule "<name>"` byte string.
-fn dump_rule_info(
-    buf: &mut String,
-    info: &RuleInfo<ProtoRuleACInstInfo, IntrRuleACInfo>,
-) {
+fn dump_rule_info(buf: &mut String, info: &RuleInfo<ProtoRuleACInstInfo, IntrRuleACInfo>) {
     use std::fmt::Write as _;
     match info {
         RuleInfo::Proto(p) => {
@@ -319,14 +325,19 @@ fn collect_all_terms(repr: &GraphRepr) -> Vec<LNTerm> {
 fn node_terms(n: &super::repr::GNode, out: &mut Vec<LNTerm>) {
     match &n.ty {
         NodeType::System(ru) => {
-            for f in ru.premises.iter()
-                    .chain(ru.actions.iter())
-                    .chain(ru.conclusions.iter()) {
+            for f in ru
+                .premises
+                .iter()
+                .chain(ru.actions.iter())
+                .chain(ru.conclusions.iter())
+            {
                 fact_terms(f, out);
             }
         }
         NodeType::UnsolvedAction(fs) => {
-            for f in fs { fact_terms(f, out); }
+            for f in fs {
+                fact_terms(f, out);
+            }
         }
         _ => {}
     }
@@ -427,9 +438,7 @@ fn lnterm_doc(t: &LNTerm) -> Doc {
         Term::App(FunSym::NoEq(sym), ts) if ts.is_empty() => {
             Doc::text(String::from_utf8_lossy(sym.name))
         }
-        Term::App(FunSym::NoEq(sym), ts) => {
-            pp_fun(&String::from_utf8_lossy(sym.name), ts)
-        }
+        Term::App(FunSym::NoEq(sym), ts) => pp_fun(&String::from_utf8_lossy(sym.name), ts),
         Term::App(FunSym::C(CSym::EMap), ts) => {
             pp_fun(&String::from_utf8_lossy(EMAP_SYM_STRING), ts)
         }
@@ -484,9 +493,17 @@ fn judge_term(
     let lookup = |k: &LNTerm| abbrevs.get(k).cloned();
     let replaced = apply_abbreviations_term(&lookup, t);
     let term_weight = rendered_term_len(&replaced) as i64;
-    if term_weight < 10 { return -1; }
-    let relative = if occs == 1 && legend_occs == [1] { 0 } else { occs };
-    if relative <= 1 { return -1; }
+    if term_weight < 10 {
+        return -1;
+    }
+    let relative = if occs == 1 && legend_occs == [1] {
+        0
+    } else {
+        occs
+    };
+    if relative <= 1 {
+        return -1;
+    }
     relative * term_weight
 }
 
@@ -495,10 +512,7 @@ fn judge_term(
 // ---------------------------------------------------------------------
 
 /// Mirror of `computeAbbreviations` (Abbreviation.hs:166-254).
-pub fn compute_abbreviations(
-    repr: &GraphRepr,
-    opts: &AbbreviationOptions,
-) -> Abbreviations {
+pub fn compute_abbreviations(repr: &GraphRepr, opts: &AbbreviationOptions) -> Abbreviations {
     // Step 1: collect all terms and their occurrence counts.
     let terms = collect_all_terms(repr);
     let mut term_occs: BTreeMap<LNTerm, (i64, Vec<i64>)> = BTreeMap::new();
@@ -581,7 +595,11 @@ pub fn compute_abbreviations(
     let mut out: Abbreviations = BTreeMap::new();
     for (orig, name) in &abbrevs {
         let others_only = |k: &LNTerm| -> Option<LNTerm> {
-            if k == orig { None } else { abbrevs.get(k).cloned() }
+            if k == orig {
+                None
+            } else {
+                abbrevs.get(k).cloned()
+            }
         };
         let expansion = apply_proper_subterms(&others_only, orig);
         out.insert(orig.clone(), (name.clone(), expansion));
@@ -591,14 +609,12 @@ pub fn compute_abbreviations(
 
 /// Apply replacement to PROPER subterms only -- not to the top-level
 /// term itself.  Mirror of `replaceProperSubterm`.
-fn apply_proper_subterms(
-    lookup: &dyn Fn(&LNTerm) -> Option<LNTerm>,
-    t: &LNTerm,
-) -> LNTerm {
+fn apply_proper_subterms(lookup: &dyn Fn(&LNTerm) -> Option<LNTerm>, t: &LNTerm) -> LNTerm {
     match t {
         Term::Lit(_) => t.clone(),
         Term::App(s, args) => {
-            let new_args: Vec<LNTerm> = args.iter()
+            let new_args: Vec<LNTerm> = args
+                .iter()
                 .map(|a| apply_abbreviations_term(lookup, a))
                 .collect();
             // Fast path: if no child changed, the rebuilt App is structurally
@@ -614,7 +630,7 @@ fn apply_proper_subterms(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tamarin_term::function_symbols::{NoEqSym, Privacy, Constructability};
+    use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::{f_app_no_eq, lit};
 
@@ -623,7 +639,12 @@ mod tests {
     }
 
     fn senc_sym() -> NoEqSym {
-        NoEqSym::new(b"senc".to_vec(), 2, Privacy::Public, Constructability::Constructor)
+        NoEqSym::new(
+            b"senc".to_vec(),
+            2,
+            Privacy::Public,
+            Constructability::Constructor,
+        )
     }
 
     #[test]
@@ -631,7 +652,10 @@ mod tests {
         let t = f_app_no_eq(senc_sym(), vec![var("a", LSort::Msg), var("b", LSort::Msg)]);
         let abbrev = var("SE1", LSort::Msg);
         let map = |q: &LNTerm| if q == &t { Some(abbrev.clone()) } else { None };
-        assert_eq!(apply_abbreviations_term(&map as &dyn Fn(&LNTerm) -> Option<LNTerm>, &t), abbrev);
+        assert_eq!(
+            apply_abbreviations_term(&map as &dyn Fn(&LNTerm) -> Option<LNTerm>, &t),
+            abbrev
+        );
     }
 
     #[test]
@@ -639,19 +663,26 @@ mod tests {
         let inner = f_app_no_eq(senc_sym(), vec![var("a", LSort::Msg), var("b", LSort::Msg)]);
         let outer = f_app_no_eq(senc_sym(), vec![inner.clone(), var("k", LSort::Msg)]);
         let abbrev = var("SE1", LSort::Msg);
-        let map = |q: &LNTerm| if q == &inner { Some(abbrev.clone()) } else { None };
+        let map = |q: &LNTerm| {
+            if q == &inner {
+                Some(abbrev.clone())
+            } else {
+                None
+            }
+        };
         let out = apply_abbreviations_term(&map as &dyn Fn(&LNTerm) -> Option<LNTerm>, &outer);
         // Top-level senc stays; inner senc replaced.
         if let Term::App(_, args) = &out {
             assert_eq!(&args[0], &abbrev);
-        } else { panic!("expected App"); }
+        } else {
+            panic!("expected App");
+        }
     }
 
     #[test]
     fn lookup_returns_first_field() {
         let mut abbrevs = Abbreviations::new();
-        let t = f_app_no_eq(senc_sym(),
-            vec![var("a", LSort::Msg), var("b", LSort::Msg)]);
+        let t = f_app_no_eq(senc_sym(), vec![var("a", LSort::Msg), var("b", LSort::Msg)]);
         let name = var("SE1", LSort::Msg);
         abbrevs.insert(t.clone(), (name.clone(), t.clone()));
         assert_eq!(lookup_abbreviation(&abbrevs, &t), Some(&name));
@@ -664,9 +695,9 @@ mod tests {
     // set, so the abbreviator skips `SE1` and emits `SE2` (matching HS).
     #[test]
     fn rule_name_blocks_aliasing_abbreviation() {
-        use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
-        use tamarin_theory::rule::{ProtoRuleACInstInfo, RuleAttributes, Rule};
         use super::super::repr::{GNode, NodeType};
+        use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
+        use tamarin_theory::rule::{ProtoRuleACInstInfo, Rule, RuleAttributes};
 
         // A senc(...) term long enough to clear the weight>=10 threshold and
         // appearing in two facts so its occurrence count exceeds 1.
@@ -676,7 +707,11 @@ mod tests {
         );
         let mk_fact = |name: &str| {
             Fact::new(
-                FactTag::Proto(Multiplicity::Linear, tamarin_term::intern::intern_str(name), 1),
+                FactTag::Proto(
+                    Multiplicity::Linear,
+                    tamarin_term::intern::intern_str(name),
+                    1,
+                ),
                 vec![enc.clone()],
             )
         };
@@ -707,8 +742,7 @@ mod tests {
         });
 
         let abbrevs = compute_abbreviations(&repr, &AbbreviationOptions::default());
-        let name = lookup_abbreviation(&abbrevs, &enc)
-            .expect("senc term should be abbreviated");
+        let name = lookup_abbreviation(&abbrevs, &enc).expect("senc term should be abbreviated");
         // HS skips SE1 (taken by the rule name) and uses SE2.
         assert_eq!(name, &var("SE2", LSort::Msg));
     }

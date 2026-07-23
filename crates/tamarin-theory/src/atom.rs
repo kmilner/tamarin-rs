@@ -58,15 +58,27 @@ pub fn to_atom<S, T>(a: ProtoAtom<S, T>) -> Atom<T> {
 // not `Atom`).
 
 impl<T> Atom<T> {
-    pub fn is_action(&self) -> bool { matches!(self, ProtoAtom::Action(_, _)) }
-    pub fn is_eq(&self) -> bool { matches!(self, ProtoAtom::EqE(_, _)) }
-    pub fn is_subterm(&self) -> bool { matches!(self, ProtoAtom::Subterm(_, _)) }
-    pub fn is_less(&self) -> bool { matches!(self, ProtoAtom::Less(_, _)) }
-    pub fn is_last(&self) -> bool { matches!(self, ProtoAtom::Last(_)) }
+    pub fn is_action(&self) -> bool {
+        matches!(self, ProtoAtom::Action(_, _))
+    }
+    pub fn is_eq(&self) -> bool {
+        matches!(self, ProtoAtom::EqE(_, _))
+    }
+    pub fn is_subterm(&self) -> bool {
+        matches!(self, ProtoAtom::Subterm(_, _))
+    }
+    pub fn is_less(&self) -> bool {
+        matches!(self, ProtoAtom::Less(_, _))
+    }
+    pub fn is_last(&self) -> bool {
+        matches!(self, ProtoAtom::Last(_))
+    }
     /// Retained for parity with Haskell's exported `isSyntacticSugar`; no Rust
     /// call site currently uses it.
     #[allow(dead_code)]
-    pub fn is_syntactic_sugar(&self) -> bool { matches!(self, ProtoAtom::Syntactic(_)) }
+    pub fn is_syntactic_sugar(&self) -> bool {
+        matches!(self, ProtoAtom::Syntactic(_))
+    }
 }
 
 #[cfg(test)]
@@ -82,18 +94,16 @@ mod tests {
         assert!(a.is_less());
         assert!(!a.is_eq());
 
-        let b: Atom<LNTerm> = ProtoAtom::Action(
-            msg_var("t", 0),
-            fresh_fact(msg_var("k", 0)),
-        );
+        let b: Atom<LNTerm> = ProtoAtom::Action(msg_var("t", 0), fresh_fact(msg_var("k", 0)));
         assert!(b.is_action());
     }
 
     #[test]
     fn to_atom_strips_sugar() {
-        let s: SyntacticAtom<LNTerm> = ProtoAtom::Syntactic(SyntacticSugar::Pred(
-            Fact::fresh(FactTag::Term, vec![msg_var("x", 0)]),
-        ));
+        let s: SyntacticAtom<LNTerm> = ProtoAtom::Syntactic(SyntacticSugar::Pred(Fact::fresh(
+            FactTag::Term,
+            vec![msg_var("x", 0)],
+        )));
         let a = to_atom(s);
         assert!(matches!(a, ProtoAtom::Syntactic(Unit2)));
     }

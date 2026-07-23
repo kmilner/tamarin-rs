@@ -16,9 +16,11 @@ use std::process::Command;
 /// crate's manifest.
 #[allow(dead_code)]
 pub fn corpus_root() -> PathBuf {
-    std::env::var("CORPUS_ROOT").map(PathBuf::from).unwrap_or_else(|_| {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tamarin-prover/examples")
-    })
+    std::env::var("CORPUS_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tamarin-prover/examples")
+        })
 }
 
 /// Collect every `.spthy` file under `root`, sorted by path.

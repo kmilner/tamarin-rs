@@ -45,7 +45,12 @@ use crate::predicate_expand::{expand_formula, ExpandError};
 /// HS `varNow = LVar "NOW" LSortNode 0` (Restriction.hs:86-87, see line 87).  The implicit
 /// timepoint variable bound by the generated `∀ … #NOW.` restriction.
 fn var_now() -> p::VarSpec {
-    p::VarSpec { name: "NOW".to_string(), idx: 0, sort: p::SortHint::Node, typ: None }
+    p::VarSpec {
+        name: "NOW".to_string(),
+        idx: 0,
+        sort: p::SortHint::Node,
+        typ: None,
+    }
 }
 
 /// HS `restrPrefix = "Restr_"` (Restriction.hs:129-130, see line 130).
@@ -65,10 +70,15 @@ const RESTR_PREFIX: &str = "Restr_";
 /// Rule.hs:131, before `liftedAddProtoRule`).
 pub fn lift_rule_restrictions(thy: &mut p::Theory) -> Result<(), ExpandError> {
     // Collect predicate definitions once (declared before the rules).
-    let predicates: Vec<p::Predicate> = thy.items.iter().filter_map(|i| match i {
-        p::TheoryItem::Predicates(ps) => Some(ps.clone()),
-        _ => None,
-    }).flatten().collect();
+    let predicates: Vec<p::Predicate> = thy
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            p::TheoryItem::Predicates(ps) => Some(ps.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
     // The 0-arity function-symbol set the restriction formulas resolve their
     // bare constant tokens against (HS `nullaryApp`, resolved at parse time).
     let nullary = crate::elaborate::nullary_fun_names(&thy.items);
@@ -179,10 +189,7 @@ fn from_rule_restriction(rname: &str, f: &p::Formula) -> (p::Restriction, p::Fac
     // f'' = (Restr_<rname>(...) @ #NOW) ⇒ f'
     let now_term = p::Term::Var(var_now());
     let antecedent = p::Formula::Atom(p::Atom::Action(restr_fact, now_term));
-    let f2 = p::Formula::Implies(
-        Box::new(antecedent),
-        Box::new(rewr_f.clone()),
-    );
+    let f2 = p::Formula::Implies(Box::new(antecedent), Box::new(rewr_f.clone()));
     // foldr forAll f'' (frees f''): bind ALL free vars of f'' (sorted,
     // dedup), outermost-first matching HS `foldr`.
     let quant_vars = frees_sorted(&f2);
@@ -266,7 +273,10 @@ type RewriteSubst = BTreeMap<(String, u64), p::Term>;
 /// subterms that contain free variables into fresh vars.  Returns the
 /// rewritten formula and the `{fresh ↦ original}` map.
 fn rewrite(f: &p::Formula) -> (p::Formula, RewriteSubst) {
-    let mut st = RewriteState { counter: 0, subst: RewriteSubst::new() };
+    let mut st = RewriteState {
+        counter: 0,
+        subst: RewriteSubst::new(),
+    };
     let bound: Vec<VarKey> = Vec::new();
     let out = rewrite_formula(f, &bound, &mut st);
     (out, st.subst)
@@ -284,7 +294,12 @@ impl RewriteState {
     fn substitute(&mut self, t: &p::Term) -> p::Term {
         let idx = self.counter;
         self.counter += 1;
-        let v = p::VarSpec { name: "x".to_string(), idx, sort: p::SortHint::Msg, typ: None };
+        let v = p::VarSpec {
+            name: "x".to_string(),
+            idx,
+            sort: p::SortHint::Msg,
+            typ: None,
+        };
         self.subst.insert((v.name.clone(), v.idx), t.clone());
         p::Term::Var(v)
     }
@@ -317,12 +332,16 @@ fn rewrite_formula(f: &p::Formula, bound: &[VarKey], st: &mut RewriteState) -> p
         ),
         Forall(vs, body) => {
             let mut b2 = bound.to_vec();
-            for v in vs { b2.push(var_full_key(v)); }
+            for v in vs {
+                b2.push(var_full_key(v));
+            }
             Forall(vs.clone(), Box::new(rewrite_formula(body, &b2, st)))
         }
         Exists(vs, body) => {
             let mut b2 = bound.to_vec();
-            for v in vs { b2.push(var_full_key(v)); }
+            for v in vs {
+                b2.push(var_full_key(v));
+            }
             Exists(vs.clone(), Box::new(rewrite_formula(body, &b2, st)))
         }
     }
@@ -431,9 +450,15 @@ fn contains_var(t: &p::Term, bound: &[VarKey], free_pred: bool) -> bool {
     match t {
         p::Term::Var(v) => {
             let free = is_free(v, bound);
-            if free_pred { free } else { !free }
+            if free_pred {
+                free
+            } else {
+                !free
+            }
         }
-        _ => term_children(t).iter().any(|c| contains_var(c, bound, free_pred)),
+        _ => term_children(t)
+            .iter()
+            .any(|c| contains_var(c, bound, free_pred)),
     }
 }
 
@@ -460,18 +485,14 @@ fn term_children(t: &p::Term) -> Vec<&p::Term> {
 /// Rebuild a compound term, mapping `f` over its direct children.
 fn rebuild_term(t: &p::Term, mut f: impl FnMut(&p::Term) -> p::Term) -> p::Term {
     match t {
-        p::Term::App(name, args) =>
-            p::Term::App(name.clone(), args.iter().map(&mut f).collect()),
-        p::Term::Pair(items) =>
-            p::Term::Pair(items.iter().map(&mut f).collect()),
-        p::Term::AlgApp(name, a, b) =>
-            p::Term::AlgApp(name.clone(), Box::new(f(a)), Box::new(f(b))),
-        p::Term::Diff(a, b) =>
-            p::Term::Diff(Box::new(f(a)), Box::new(f(b))),
-        p::Term::BinOp(op, a, b) =>
-            p::Term::BinOp(*op, Box::new(f(a)), Box::new(f(b))),
-        p::Term::PatMatch(inner) =>
-            p::Term::PatMatch(Box::new(f(inner))),
+        p::Term::App(name, args) => p::Term::App(name.clone(), args.iter().map(&mut f).collect()),
+        p::Term::Pair(items) => p::Term::Pair(items.iter().map(&mut f).collect()),
+        p::Term::AlgApp(name, a, b) => {
+            p::Term::AlgApp(name.clone(), Box::new(f(a)), Box::new(f(b)))
+        }
+        p::Term::Diff(a, b) => p::Term::Diff(Box::new(f(a)), Box::new(f(b))),
+        p::Term::BinOp(op, a, b) => p::Term::BinOp(*op, Box::new(f(a)), Box::new(f(b))),
+        p::Term::PatMatch(inner) => p::Term::PatMatch(Box::new(f(inner))),
         other => other.clone(),
     }
 }
@@ -521,7 +542,8 @@ fn dedup_first(vs: Vec<p::VarSpec>) -> Vec<p::VarSpec> {
 /// (LTerm.hs:522-524).  LSort order: Pub < Fresh < Msg < Node < Nat
 /// (LTerm.hs:161-166).
 fn cmp_lvar(a: &p::VarSpec, b: &p::VarSpec) -> std::cmp::Ordering {
-    a.idx.cmp(&b.idx)
+    a.idx
+        .cmp(&b.idx)
         .then(sort_rank(a.sort).cmp(&sort_rank(b.sort)))
         .then(a.name.cmp(&b.name))
 }
@@ -552,7 +574,9 @@ fn collect_frees_formula(f: &p::Formula, bound: &mut Vec<VarKey>, out: &mut Vec<
         }
         Forall(vs, body) | Exists(vs, body) => {
             let saved = bound.len();
-            for v in vs { bound.push(var_full_key(v)); }
+            for v in vs {
+                bound.push(var_full_key(v));
+            }
             collect_frees_formula(body, bound, out);
             bound.truncate(saved);
         }
@@ -567,11 +591,17 @@ fn collect_frees_atom(a: &p::Atom, bound: &[VarKey], out: &mut Vec<p::VarSpec>) 
             collect_frees_term(r, bound, out);
         }
         Action(fa, t) => {
-            for arg in &fa.args { collect_frees_term(arg, bound, out); }
+            for arg in &fa.args {
+                collect_frees_term(arg, bound, out);
+            }
             collect_frees_term(t, bound, out);
         }
         Last(t) => collect_frees_term(t, bound, out),
-        Pred(fa) => for arg in &fa.args { collect_frees_term(arg, bound, out); },
+        Pred(fa) => {
+            for arg in &fa.args {
+                collect_frees_term(arg, bound, out);
+            }
+        }
     }
 }
 
@@ -582,7 +612,11 @@ fn collect_frees_term(t: &p::Term, bound: &[VarKey], out: &mut Vec<p::VarSpec>) 
                 out.push(v.clone());
             }
         }
-        _ => for c in term_children(t) { collect_frees_term(c, bound, out); },
+        _ => {
+            for c in term_children(t) {
+                collect_frees_term(c, bound, out);
+            }
+        }
     }
 }
 
@@ -594,10 +628,14 @@ mod tests {
     fn preds(decl: &str) -> Vec<p::Predicate> {
         let src = format!("theory T begin\npredicates: {}\nend", decl);
         let thy = tamarin_parser::parse_theory(&src, &[]).unwrap();
-        thy.items.into_iter().filter_map(|it| match it {
-            p::TheoryItem::Predicates(ps) => Some(ps),
-            _ => None,
-        }).flatten().collect()
+        thy.items
+            .into_iter()
+            .filter_map(|it| match it {
+                p::TheoryItem::Predicates(ps) => Some(ps),
+                _ => None,
+            })
+            .flatten()
+            .collect()
     }
 
     #[test]
@@ -646,14 +684,20 @@ mod tests {
         let mut thy = tamarin_parser::parse_theory(src, &[]).unwrap();
         lift_rule_restrictions(&mut thy).unwrap();
         // Find rule A and the generated restriction.
-        let restr_pos = thy.items.iter().position(|i| matches!(i,
-            p::TheoryItem::Restriction(r) if r.name == "Restr_A_1"));
-        let rule_pos = thy.items.iter().position(|i| matches!(i,
-            p::TheoryItem::Rule(r) if r.name == "A"));
+        let restr_pos = thy.items.iter().position(|i| {
+            matches!(i,
+            p::TheoryItem::Restriction(r) if r.name == "Restr_A_1")
+        });
+        let rule_pos = thy.items.iter().position(|i| {
+            matches!(i,
+            p::TheoryItem::Rule(r) if r.name == "A")
+        });
         assert!(restr_pos.is_some(), "restriction not generated");
         assert!(rule_pos.is_some(), "rule missing");
-        assert!(restr_pos.unwrap() < rule_pos.unwrap(),
-            "restriction must precede rule");
+        assert!(
+            restr_pos.unwrap() < rule_pos.unwrap(),
+            "restriction must precede rule"
+        );
         // Rule action rewritten, embedded restrictions cleared.
         if let p::TheoryItem::Rule(r) = &thy.items[rule_pos.unwrap()] {
             assert!(r.embedded_restrictions.is_empty());

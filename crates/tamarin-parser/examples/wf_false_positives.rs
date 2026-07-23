@@ -21,11 +21,16 @@ mod common;
 use common::{collect_spthy, corpus_root, run_tamarin};
 
 fn main() {
-    let root = env::args().nth(1).map(PathBuf::from).unwrap_or_else(corpus_root);
+    let root = env::args()
+        .nth(1)
+        .map(PathBuf::from)
+        .unwrap_or_else(corpus_root);
     let limit: Option<usize> = env::var("WF_LIMIT").ok().and_then(|s| s.parse().ok());
 
     let mut files = collect_spthy(&root);
-    if let Some(n) = limit { files.truncate(n); }
+    if let Some(n) = limit {
+        files.truncate(n);
+    }
 
     let mut scanned = 0usize;
     let mut tamarin_clean = 0usize;
@@ -33,8 +38,14 @@ fn main() {
     let mut false_positives: Vec<(PathBuf, BTreeSet<String>)> = Vec::new();
 
     for (i, path) in files.iter().enumerate() {
-        let src = match fs::read_to_string(path) { Ok(s) => s, Err(_) => continue };
-        let thy = match parse_theory(&src, &["diff"]) { Ok(t) => t, Err(_) => continue };
+        let src = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let thy = match parse_theory(&src, &["diff"]) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
         scanned += 1;
 
         // Skip files Tamarin can't even handle.
@@ -42,10 +53,14 @@ fn main() {
             Some(s) => s,
             None => continue,
         };
-        if tamarin_topics.is_empty() { tamarin_clean += 1; }
+        if tamarin_topics.is_empty() {
+            tamarin_clean += 1;
+        }
 
         let rust_topics = wf::topics(&wf::check_theory(&thy));
-        if !rust_topics.is_empty() { rust_flagged += 1; }
+        if !rust_topics.is_empty() {
+            rust_flagged += 1;
+        }
 
         // False positive: Tamarin had no warnings but our checker flagged something.
         let fp = tamarin_topics.is_empty() && !rust_topics.is_empty();
@@ -53,19 +68,27 @@ fn main() {
             false_positives.push((path.clone(), rust_topics.clone()));
         }
         if i % 5 == 0 || fp {
-            eprintln!("[{:4}/{:4}] scanned={}, tam_clean={}, ours={}, fp={} ({})",
-                i + 1, files.len(), scanned, tamarin_clean, rust_flagged,
+            eprintln!(
+                "[{:4}/{:4}] scanned={}, tam_clean={}, ours={}, fp={} ({})",
+                i + 1,
+                files.len(),
+                scanned,
+                tamarin_clean,
+                rust_flagged,
                 false_positives.len(),
-                path.file_name().unwrap_or_default().to_string_lossy());
+                path.file_name().unwrap_or_default().to_string_lossy()
+            );
         }
     }
 
     println!("Scanned (parsed by both):  {}", scanned);
     println!("Tamarin clean:             {}", tamarin_clean);
     println!("Rust flagged:              {}", rust_flagged);
-    println!("False positives:           {} ({:.1}%)",
+    println!(
+        "False positives:           {} ({:.1}%)",
         false_positives.len(),
-        100.0 * false_positives.len() as f64 / tamarin_clean.max(1) as f64);
+        100.0 * false_positives.len() as f64 / tamarin_clean.max(1) as f64
+    );
 
     if !false_positives.is_empty() {
         println!("\nFirst 10 false positives:");
@@ -77,7 +100,9 @@ fn main() {
         // Bucket by topic to see what we're over-flagging.
         let mut by_topic: std::collections::BTreeMap<String, usize> = Default::default();
         for (_, ts) in &false_positives {
-            for t in ts { *by_topic.entry(t.clone()).or_insert(0) += 1; }
+            for t in ts {
+                *by_topic.entry(t.clone()).or_insert(0) += 1;
+            }
         }
         let mut sorted: Vec<_> = by_topic.iter().collect();
         sorted.sort_by(|a, b| b.1.cmp(a.1));

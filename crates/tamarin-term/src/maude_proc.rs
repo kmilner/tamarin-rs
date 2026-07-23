@@ -29,9 +29,7 @@ use crate::lterm::LNTerm;
 use crate::maude_parse;
 use crate::maude_print::{pp_mterm, pp_mterm_list, pp_theory};
 use crate::maude_sig::MaudeSig;
-use crate::maude_types::{
-    lterm_to_mterm_global, mterm_to_lnterm, ConvCtx, MSubst, MTerm,
-};
+use crate::maude_types::{lterm_to_mterm_global, mterm_to_lnterm, ConvCtx, MSubst, MTerm};
 use crate::rewriting::Equal;
 
 const PROMPT: &[u8] = b"Maude> ";
@@ -60,24 +58,27 @@ impl std::fmt::Display for MaudeError {
     }
 }
 impl std::error::Error for MaudeError {}
-impl From<std::io::Error> for MaudeError { fn from(e: std::io::Error) -> Self { MaudeError::Io(e) } }
-impl From<maude_parse::ParseError> for MaudeError { fn from(e: maude_parse::ParseError) -> Self { MaudeError::Parse(e) } }
+impl From<std::io::Error> for MaudeError {
+    fn from(e: std::io::Error) -> Self {
+        MaudeError::Io(e)
+    }
+}
+impl From<maude_parse::ParseError> for MaudeError {
+    fn from(e: maude_parse::ParseError) -> Self {
+        MaudeError::Parse(e)
+    }
+}
 
 /// True if `t` contains any function symbol whose head matches one in
 /// `reducible`.  Used as a fast-path predicate for `reduce`: if the
 /// term contains no reducible symbols at all, `reduce` is the
 /// identity, and we can skip the Maude IPC round-trip.
-fn term_has_reducible_sym(
-    t: &LNTerm,
-    reducible: &crate::function_symbols::FunSig,
-) -> bool {
+fn term_has_reducible_sym(t: &LNTerm, reducible: &crate::function_symbols::FunSig) -> bool {
     use crate::term::Term;
     fn rec(t: &LNTerm, reducible: &crate::function_symbols::FunSig) -> bool {
         match t {
             Term::Lit(_) => false,
-            Term::App(f, args) => {
-                reducible.contains(f) || args.iter().any(|a| rec(a, reducible))
-            }
+            Term::App(f, args) => reducible.contains(f) || args.iter().any(|a| rec(a, reducible)),
         }
     }
     rec(t, reducible)
@@ -126,8 +127,12 @@ pub fn _tally_callsite(label: &'static str) {
 
 #[doc(hidden)]
 pub fn dump_callsite_profile() -> Vec<(String, u64)> {
-    MAUDE_CALLSITE_COUNTS.with(|m| m.borrow().iter()
-        .map(|(k, v)| ((*k).to_string(), *v)).collect())
+    MAUDE_CALLSITE_COUNTS.with(|m| {
+        m.borrow()
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), *v))
+            .collect()
+    })
 }
 
 /// Hit/miss tallies, per Maude subprocess, against the session's shared
@@ -288,8 +293,7 @@ impl MaudeProcessInner {
             let start = buf.len().saturating_sub(PROMPT.len() - 1);
             let n = self.stdout.read(&mut tmp)?;
             if n == 0 {
-                return Err(MaudeError::Other(
-                    "Maude exited unexpectedly".into()));
+                return Err(MaudeError::Other("Maude exited unexpectedly".into()));
             }
             buf.extend_from_slice(&tmp[..n]);
             if let Some(rel) = find_subseq(&buf[start..], PROMPT) {
@@ -316,8 +320,11 @@ impl MaudeProcessInner {
             let cmd_str_full: String = cmd.iter().map(|&b| b as char).collect();
             let keep = filter.is_empty() || cmd_str_full.contains(filter.as_str());
             if trace_enabled && keep {
-                let cmd_str = if trace_full { cmd_str_full }
-                    else { cmd_str_full.chars().take(200).collect() };
+                let cmd_str = if trace_full {
+                    cmd_str_full
+                } else {
+                    cmd_str_full.chars().take(200).collect()
+                };
                 eprintln!("[maude>] {}", cmd_str.replace('\n', "\\n"));
             }
             keep
@@ -330,10 +337,16 @@ impl MaudeProcessInner {
             match &result {
                 Ok(reply) => {
                     let reply_str_full: String = reply.iter().map(|&b| b as char).collect();
-                    let reply_str = if trace_full { reply_str_full }
-                        else { reply.iter().take(200).map(|&b| b as char).collect() };
-                    eprintln!("[maude<] {} bytes: {}",
-                        reply.len(), reply_str.replace('\n', "\\n"));
+                    let reply_str = if trace_full {
+                        reply_str_full
+                    } else {
+                        reply.iter().take(200).map(|&b| b as char).collect()
+                    };
+                    eprintln!(
+                        "[maude<] {} bytes: {}",
+                        reply.len(),
+                        reply_str.replace('\n', "\\n")
+                    );
                 }
                 Err(e) => eprintln!("[maude<] ERR: {:?}", e),
             }
@@ -364,7 +377,11 @@ impl MaudeProcessInner {
         let reply = self.execute(cmd)?;
         bump(&mut self.stats);
         self.cache_stats.reply_misses += 1;
-        self.caches.reply.lock().unwrap().insert(cmd.to_vec(), reply.clone());
+        self.caches
+            .reply
+            .lock()
+            .unwrap()
+            .insert(cmd.to_vec(), reply.clone());
         Ok(reply)
     }
 }
@@ -380,9 +397,12 @@ impl Drop for MaudeProcessInner {
             let s = &self.cache_stats;
             eprintln!(
                 "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{}",
-                s.reduce_hits, s.reduce_misses,
-                s.unifiable_hits, s.unifiable_misses,
-                s.reply_hits, s.reply_misses,
+                s.reduce_hits,
+                s.reduce_misses,
+                s.unifiable_hits,
+                s.unifiable_misses,
+                s.reply_hits,
+                s.reply_misses,
             );
         }
     }
@@ -420,7 +440,9 @@ impl Drop for MaudeChildReaper {
 }
 
 fn find_subseq(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || haystack.len() < needle.len() { return None; }
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
@@ -476,8 +498,7 @@ impl MaudeHandle {
     /// The entry point for standalone handles — one-shot commands, tests,
     /// per-request server handles — that share memo results with nobody.
     pub fn start(maude_path: &str, sig: MaudeSig) -> Result<Self, MaudeError> {
-        Self::start_with_caches(
-            maude_path, sig, Arc::new(SharedMaudeCaches::default()))
+        Self::start_with_caches(maude_path, sig, Arc::new(SharedMaudeCaches::default()))
     }
 
     /// Start a new Maude process and load the theory module for `sig`,
@@ -569,7 +590,9 @@ impl MaudeHandle {
     /// unique range without per-call collisions.  Haskell's MonadFresh
     /// equivalent: `freshIdents n` (replicates `freshIdent` n times).
     pub fn reserve_idxs(&self, n: u64) -> u64 {
-        if n == 0 { return self.fresh_counter.load(Ordering::SeqCst); }
+        if n == 0 {
+            return self.fresh_counter.load(Ordering::SeqCst);
+        }
         self.fresh_counter.fetch_add(n, Ordering::SeqCst)
     }
 
@@ -582,7 +605,10 @@ impl MaudeHandle {
         let mut cur = self.fresh_counter.load(Ordering::SeqCst);
         while cur < target {
             match self.fresh_counter.compare_exchange(
-                cur, target, Ordering::SeqCst, Ordering::SeqCst,
+                cur,
+                target,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
             ) {
                 Ok(_) => return,
                 Err(actual) => cur = actual,
@@ -741,8 +767,7 @@ impl MaudeHandle {
                     let reply = inner.execute(&cmd)?;
                     let mt_back = maude_parse::parse_reduce_reply(&reply)?;
                     let mut next = 0;
-                    let maude_result =
-                        mterm_to_lnterm(&mt_back, &mut ctx, "z", &mut next);
+                    let maude_result = mterm_to_lnterm(&mt_back, &mut ctx, "z", &mut next);
                     if maude_result != *t {
                         panic!(
                             "TAM_RS_VERIFY_REDUCE_NF: nf_via_haskell certified \
@@ -767,7 +792,11 @@ impl MaudeHandle {
         let result = mterm_to_lnterm(&mt_back, &mut ctx, "z", &mut next);
         let mut inner = self.inner.lock().unwrap();
         inner.cache_stats.reduce_misses += 1;
-        inner.caches.reduce.lock().unwrap()
+        inner
+            .caches
+            .reduce
+            .lock()
+            .unwrap()
             .insert(t.clone(), result.clone());
         Ok(result)
     }
@@ -786,22 +815,25 @@ impl MaudeHandle {
     /// protocols hit this fast path almost exclusively, cutting the
     /// per-step Maude call count by orders of magnitude.
     pub fn unifiable(&self, eqs: &[Equal<LNTerm>]) -> Result<bool, MaudeError> {
-        if eqs.is_empty() { return Ok(true); }
-        if eqs.iter().all(|eq| eq.lhs == eq.rhs) { return Ok(true); }
+        if eqs.is_empty() {
+            return Ok(true);
+        }
+        if eqs.iter().all(|eq| eq.lhs == eq.rhs) {
+            return Ok(true);
+        }
         if self.is_ac_free() {
             let eqs_owned: Vec<Equal<LNTerm>> = eqs.to_vec();
             return Ok(crate::unification::unify_lnterm_no_ac(eqs_owned).is_ok());
         }
-        let key: Vec<(LNTerm, LNTerm)> = eqs.iter()
-            .map(|e| (e.lhs.clone(), e.rhs.clone())).collect();
+        let key: Vec<(LNTerm, LNTerm)> =
+            eqs.iter().map(|e| (e.lhs.clone(), e.rhs.clone())).collect();
         // Cache locks below are scoped to the single `get` / `insert`
         // statement, strictly inside the inner IPC mutex and released
         // before any Maude IPC (lock-order invariant on
         // `SharedMaudeCaches`).
         {
             let mut inner = self.inner.lock().unwrap();
-            let hit = inner.caches.unifiable.lock().unwrap()
-                .get(&key).copied();
+            let hit = inner.caches.unifiable.lock().unwrap().get(&key).copied();
             if let Some(hit) = hit {
                 inner.cache_stats.unifiable_hits += 1;
                 return Ok(hit);
@@ -841,9 +873,11 @@ impl MaudeHandle {
     }
 
     /// `unify` tagged with a `label` for the per-callsite profiler.
-    pub fn unify_at(&self, label: &'static str, eqs: &[Equal<LNTerm>])
-        -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError>
-    {
+    pub fn unify_at(
+        &self,
+        label: &'static str,
+        eqs: &[Equal<LNTerm>],
+    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
         _tally_callsite(label);
         self.unify(eqs)
     }
@@ -867,8 +901,7 @@ impl MaudeHandle {
     pub fn unify(
         &self,
         eqs: &[Equal<LNTerm>],
-    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError>
-    {
+    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
         if eqs.is_empty() {
             return Ok(vec![Vec::new()]);
         }
@@ -938,15 +971,14 @@ impl MaudeHandle {
         // via the [variant] equations and keeps variants HS would drop.
         {
             let eqs_owned: Vec<Equal<LNTerm>> = eqs.to_vec();
-            let result = crate::unification::unify_lnterm_no_ac_with_counter(
-                eqs_owned, &self.fresh_counter,
-            );
+            let result =
+                crate::unification::unify_lnterm_no_ac_with_counter(eqs_owned, &self.fresh_counter);
             match result {
                 Ok(subst) => {
                     // HS-faithful flattenUnif: success, return [vfresh ∘ subst].
-                    let empty_vfresh = crate::subst_vfresh::LSubstVFresh::<crate::lterm::Name>::empty();
-                    let folded = crate::subst_vfresh::compose_vfresh(
-                        &empty_vfresh, &subst);
+                    let empty_vfresh =
+                        crate::subst_vfresh::LSubstVFresh::<crate::lterm::Name>::empty();
+                    let folded = crate::subst_vfresh::compose_vfresh(&empty_vfresh, &subst);
                     return Ok(vec![folded.to_list()]);
                 }
                 Err(crate::unification::UnifyError::NoUnifier) => {
@@ -992,9 +1024,7 @@ impl MaudeHandle {
         let (factored_m, residual_eqs): (
             crate::subst::Subst<crate::lterm::Name, crate::lterm::LVar>,
             Vec<Equal<LNTerm>>,
-        ) = match crate::unification::unify_lnterm_factored(
-            eqs.to_vec(),
-        ) {
+        ) = match crate::unification::unify_lnterm_factored(eqs.to_vec()) {
             Some((m, leqs)) => (m, leqs),
             // unifyRaw failed during factoring → no unifier (HS `solve _
             // Nothing = (emptySubst, [])` → flattenUnif maps over []).
@@ -1005,8 +1035,7 @@ impl MaudeHandle {
         // `[emptyVFresh `composeVFresh` m]`.  Mirror that without a Maude
         // round-trip.
         if residual_eqs.is_empty() {
-            let empty_vfresh =
-                crate::subst_vfresh::LSubstVFresh::<crate::lterm::Name>::empty();
+            let empty_vfresh = crate::subst_vfresh::LSubstVFresh::<crate::lterm::Name>::empty();
             let composed = crate::subst_vfresh::compose_vfresh(&empty_vfresh, &factored_m);
             return Ok(vec![composed.to_list()]);
         }
@@ -1033,7 +1062,9 @@ impl MaudeHandle {
         let mut input_max = 0u64;
         for lit in ctx.bindings().values() {
             if let crate::vterm::Lit::Var(lv) = lit {
-                if lv.idx > input_max { input_max = lv.idx; }
+                if lv.idx > input_max {
+                    input_max = lv.idx;
+                }
             }
         }
         let mut out = Vec::with_capacity(msubsts.len());
@@ -1074,7 +1105,11 @@ impl MaudeHandle {
         // Ord).
         for ms in &msubsts {
             let mut per_arm_ctx = ctx.clone();
-            out.push(msubst_to_lnsubst_with_avoid(ms, &mut per_arm_ctx, input_max)?);
+            out.push(msubst_to_lnsubst_with_avoid(
+                ms,
+                &mut per_arm_ctx,
+                input_max,
+            )?);
         }
         // HS-faithful `removeRenamings` (Maude/Types.hs:123-127, see line 130): HS's
         // `msubstToLSubstVFresh bindings substMaude` ends with
@@ -1087,10 +1122,11 @@ impl MaudeHandle {
         // `/case_2/Init_2/Init_1/c_kdf/split_case_3` these renames
         // become extra node-id bindings that drive `setNodes` collisions
         // → 14 spurious `shape_mismatch` drops.
-        out = out.into_iter()
+        out = out
+            .into_iter()
             .map(|arm| {
-                let vfresh = crate::subst_vfresh::LSubstVFresh::
-                    <crate::lterm::Name>::from_list(arm);
+                let vfresh =
+                    crate::subst_vfresh::LSubstVFresh::<crate::lterm::Name>::from_list(arm);
                 vfresh.remove_renamings().to_list()
             })
             .collect();
@@ -1114,11 +1150,15 @@ impl MaudeHandle {
         // non-AC factored substitution.  Because we factor and send only the
         // AC residuals to Maude, `factored_m` carries the
         // non-AC bindings and MUST be the second argument to composeVFresh.
-        let renamed: Vec<Vec<(crate::lterm::LVar, LNTerm)>> = out.into_iter().map(|arm| {
-            let arm_vfresh = crate::subst_vfresh::LSubstVFresh::<crate::lterm::Name>::from_list(arm);
-            let composed = crate::subst_vfresh::compose_vfresh(&arm_vfresh, &factored_m);
-            composed.to_list()
-        }).collect();
+        let renamed: Vec<Vec<(crate::lterm::LVar, LNTerm)>> = out
+            .into_iter()
+            .map(|arm| {
+                let arm_vfresh =
+                    crate::subst_vfresh::LSubstVFresh::<crate::lterm::Name>::from_list(arm);
+                let composed = crate::subst_vfresh::compose_vfresh(&arm_vfresh, &factored_m);
+                composed.to_list()
+            })
+            .collect();
         Ok(renamed)
     }
 
@@ -1141,9 +1181,10 @@ impl MaudeHandle {
     /// in-crate caller today and is intentionally kept wired so the entry
     /// point is ready when narrowing lands; do not remove it as "dead code"
     /// without also dropping the `lib.rs` doc reference.
-    pub fn variant_unify_eqs(&self, eqs: &[Equal<LNTerm>])
-        -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError>
-    {
+    pub fn variant_unify_eqs(
+        &self,
+        eqs: &[Equal<LNTerm>],
+    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
         if eqs.is_empty() {
             return Ok(vec![Vec::new()]);
         }
@@ -1193,8 +1234,10 @@ impl MaudeHandle {
     /// constructed from `matchFact`/`matchWith` (e.g. `sources.rs`,
     /// `subsumption.rs::compare_term_subs`) MUST therefore put the
     /// subject in `lhs` and the pattern in `rhs`.
-    pub fn match_eqs(&self, eqs: &[Equal<LNTerm>]) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError>
-    {
+    pub fn match_eqs(
+        &self,
+        eqs: &[Equal<LNTerm>],
+    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
         if eqs.is_empty() {
             return Ok(vec![Vec::new()]);
         }
@@ -1270,8 +1313,7 @@ impl MaudeHandle {
         &self,
         eqs: &[Equal<LNTerm>],
         pattern_vars: &std::collections::BTreeSet<(String, u64)>,
-    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError>
-    {
+    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
         use crate::lterm::LVar;
         if eqs.is_empty() {
             return Ok(vec![Vec::new()]);
@@ -1282,16 +1324,18 @@ impl MaudeHandle {
         // string so the same LVar maps to the same constant across
         // multiple eqs in this call.  Build the reverse map at the
         // same time so we can translate the match output back.
-        let mut subject_vars: std::collections::BTreeSet<LVar> =
-            std::collections::BTreeSet::new();
+        let mut subject_vars: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
         for eq in eqs {
             collect_free_non_pattern_vars(&eq.rhs, pattern_vars, &mut subject_vars);
         }
         let (skolem_map, reverse) = build_skolem_maps(&subject_vars);
-        let rewritten_eqs: Vec<Equal<LNTerm>> = eqs.iter().map(|eq| Equal {
-            lhs: eq.lhs.clone(),
-            rhs: rewrite_skolem(&eq.rhs, &skolem_map),
-        }).collect();
+        let rewritten_eqs: Vec<Equal<LNTerm>> = eqs
+            .iter()
+            .map(|eq| Equal {
+                lhs: eq.lhs.clone(),
+                rhs: rewrite_skolem(&eq.rhs, &skolem_map),
+            })
+            .collect();
 
         let mut inner = self.inner.lock().unwrap();
         let mut ctx = ConvCtx::new();
@@ -1331,8 +1375,9 @@ impl MaudeHandle {
         let msubsts = maude_parse::parse_match_reply(&reply)?;
         if msubsts.is_empty() {
             _tally_callsite("match_eqs_const_subject::EMPTY");
+        } else {
+            _tally_callsite("match_eqs_const_subject::NONEMPTY");
         }
-        else { _tally_callsite("match_eqs_const_subject::NONEMPTY"); }
         let mut out = Vec::with_capacity(msubsts.len());
         for ms in &msubsts {
             let lnsubst = msubst_to_lnsubst(ms, &mut ctx)?;
@@ -1373,8 +1418,7 @@ impl MaudeHandle {
         &self,
         eqs: &[Equal<LNTerm>],
         pattern_vars: &std::collections::BTreeSet<(String, u64)>,
-    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError>
-    {
+    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
         use crate::lterm::LVar;
         if eqs.is_empty() {
             return Ok(vec![Vec::new()]);
@@ -1400,10 +1444,12 @@ impl MaudeHandle {
         ) -> bool {
             use crate::vterm::Lit;
             match t {
-                crate::term::Term::Lit(Lit::Var(lv)) =>
-                    pattern_vars.contains(&(lv.name.to_string(), lv.idx)),
-                crate::term::Term::App(_, args) =>
-                    args.iter().any(|a| has_pattern_var(a, pattern_vars)),
+                crate::term::Term::Lit(Lit::Var(lv)) => {
+                    pattern_vars.contains(&(lv.name.to_string(), lv.idx))
+                }
+                crate::term::Term::App(_, args) => {
+                    args.iter().any(|a| has_pattern_var(a, pattern_vars))
+                }
                 _ => false,
             }
         }
@@ -1414,18 +1460,20 @@ impl MaudeHandle {
         // Step 1: collect ALL non-pattern free vars from BOTH sides.
         // The same LVar appearing on both sides must skolemize to the
         // same Name so the two occurrences match each other.
-        let mut free_vars: std::collections::BTreeSet<LVar> =
-            std::collections::BTreeSet::new();
+        let mut free_vars: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
         for eq in eqs {
             collect_free_non_pattern_vars(&eq.lhs, pattern_vars, &mut free_vars);
             collect_free_non_pattern_vars(&eq.rhs, pattern_vars, &mut free_vars);
         }
         let (skolem_map, reverse) = build_skolem_maps(&free_vars);
         // Step 2: rewrite BOTH sides via the shared skolem_map.
-        let rewritten_eqs: Vec<Equal<LNTerm>> = eqs.iter().map(|eq| Equal {
-            lhs: rewrite_skolem(&eq.lhs, &skolem_map),
-            rhs: rewrite_skolem(&eq.rhs, &skolem_map),
-        }).collect();
+        let rewritten_eqs: Vec<Equal<LNTerm>> = eqs
+            .iter()
+            .map(|eq| Equal {
+                lhs: rewrite_skolem(&eq.lhs, &skolem_map),
+                rhs: rewrite_skolem(&eq.rhs, &skolem_map),
+            })
+            .collect();
 
         let mut inner = self.inner.lock().unwrap();
         let mut ctx = ConvCtx::new();
@@ -1466,7 +1514,10 @@ impl MaudeHandle {
     /// Each variant is back-converted with its own fresh conversion
     /// context (see the inline note) so that fresh witness vars do not
     /// collide between variants.
-    pub fn variants(&self, t: &LNTerm) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
+    pub fn variants(
+        &self,
+        t: &LNTerm,
+    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
         let mut inner = self.inner.lock().unwrap();
         let mut ctx = ConvCtx::new();
         let mt = lterm_to_mterm_global(t, &mut ctx);
@@ -1526,14 +1577,12 @@ fn sort_tag(s: crate::lterm::LSort) -> &'static str {
 /// Shared by `unify` (with the AC residual eqs) and `variant_unify_eqs`; each
 /// side is converted via `lterm_to_mterm_global` threading the shared `ctx`,
 /// so both call sites emit one identical wire encoding.
-fn build_conj_eqs_cmd(
-    prefix: &[u8],
-    eqs: &[Equal<LNTerm>],
-    ctx: &mut ConvCtx,
-) -> Vec<u8> {
+fn build_conj_eqs_cmd(prefix: &[u8], eqs: &[Equal<LNTerm>], ctx: &mut ConvCtx) -> Vec<u8> {
     let mut cmd = prefix.to_vec();
     for (i, eq) in eqs.iter().enumerate() {
-        if i > 0 { cmd.extend_from_slice(b" /\\ "); }
+        if i > 0 {
+            cmd.extend_from_slice(b" /\\ ");
+        }
         let lm = lterm_to_mterm_global(&eq.lhs, ctx);
         let rm = lterm_to_mterm_global(&eq.rhs, ctx);
         cmd.extend(pp_mterm(&lm));
@@ -1617,7 +1666,10 @@ fn skolem_name(counter: u64, lv: &crate::lterm::LVar) -> crate::lterm::Name {
             let id = format!(
                 "{}{}_{}_{}_{}",
                 crate::maude_types::SKOLEM_MSG_PREFIX,
-                counter, lv.name, lv.idx, sort_tag(lv.sort)
+                counter,
+                lv.name,
+                lv.idx,
+                sort_tag(lv.sort)
             );
             Name::new(NameTag::Pub, id)
         }
@@ -1671,11 +1723,14 @@ fn collect_free_non_pattern_vars(
     use crate::vterm::Lit;
     match t {
         crate::term::Term::Lit(Lit::Var(lv))
-            if !pattern_vars.contains(&(lv.name.to_string(), lv.idx)) => {
-                out.insert(lv.clone());
-            }
+            if !pattern_vars.contains(&(lv.name.to_string(), lv.idx)) =>
+        {
+            out.insert(lv.clone());
+        }
         crate::term::Term::App(_, args) => {
-            for a in args.iter() { collect_free_non_pattern_vars(a, pattern_vars, out); }
+            for a in args.iter() {
+                collect_free_non_pattern_vars(a, pattern_vars, out);
+            }
         }
         _ => {}
     }
@@ -1698,9 +1753,7 @@ fn rewrite_skolem(
             }
         }
         crate::term::Term::App(sym, args) => {
-            let new_args: Vec<LNTerm> = args.iter()
-                .map(|a| rewrite_skolem(a, map))
-                .collect();
+            let new_args: Vec<LNTerm> = args.iter().map(|a| rewrite_skolem(a, map)).collect();
             crate::term::Term::App(*sym, new_args.into())
         }
         _ => t.clone(),
@@ -1793,9 +1846,9 @@ fn msubst_to_lnsubst_with_avoid(
     // returned order — neither sorts the domain (Maude/Types.hs:127-138;
     // the old `sortBy` was removed upstream in `c9d456b8`).
     for ((sort, idx), mt) in ms {
-        let lv = crate::maude_types::substitute_lookup_var(ctx, *sort, *idx)
-            .ok_or_else(|| MaudeError::Other(format!(
-                "no binding for Maude variable x{}:{:?}", idx, sort)))?;
+        let lv = crate::maude_types::substitute_lookup_var(ctx, *sort, *idx).ok_or_else(|| {
+            MaudeError::Other(format!("no binding for Maude variable x{}:{:?}", idx, sort))
+        })?;
         // HS-faithful: HS's `msubstToLSubstVFresh` (Maude/Types.hs:137-157, see line 138)
         // UNCONDITIONALLY uses `"x"` as the name hint for Maude-introduced
         // witnesses inside `eqsConj` substitutions.  The commented-out
@@ -1901,10 +1954,12 @@ impl MaudePool {
         caches: Arc<SharedMaudeCaches>,
     ) -> Result<Self, MaudeError> {
         assert!(n >= 1, "MaudePool::new requires n >= 1");
-        let first = MaudeHandle::start_with_caches(
-            path, sig.clone(), Arc::clone(&caches))?;
+        let first = MaudeHandle::start_with_caches(path, sig.clone(), Arc::clone(&caches))?;
         Ok(MaudePool {
-            state: Mutex::new(PoolState { free: vec![first], spawned: 1 }),
+            state: Mutex::new(PoolState {
+                free: vec![first],
+                spawned: 1,
+            }),
             notify: Condvar::new(),
             size: n,
             path: path.to_string(),
@@ -1919,8 +1974,11 @@ impl MaudePool {
     /// this is a soft degradation, not a fatal error.
     fn warn_spawn_failed(&self, e: &MaudeError) {
         if !self.spawn_warned.swap(true, Ordering::Relaxed) {
-            eprintln!("[warn] MaudePool: lazy Maude spawn failed ({}); \
-                continuing with the members already started", e);
+            eprintln!(
+                "[warn] MaudePool: lazy Maude spawn failed ({}); \
+                continuing with the members already started",
+                e
+            );
         }
     }
 
@@ -1940,7 +1998,10 @@ impl MaudePool {
         let mut state = self.state.lock().unwrap();
         loop {
             if let Some(h) = state.free.pop() {
-                return PooledMaude { pool: self, inner: Some(h) };
+                return PooledMaude {
+                    pool: self,
+                    inner: Some(h),
+                };
             }
             if try_spawn && state.spawned < self.size {
                 // Reserve the slot under the lock, then spawn without it so
@@ -1948,9 +2009,16 @@ impl MaudePool {
                 state.spawned += 1;
                 drop(state);
                 match MaudeHandle::start_with_caches(
-                    &self.path, self.sig.clone(), Arc::clone(&self.caches),
+                    &self.path,
+                    self.sig.clone(),
+                    Arc::clone(&self.caches),
                 ) {
-                    Ok(h) => return PooledMaude { pool: self, inner: Some(h) },
+                    Ok(h) => {
+                        return PooledMaude {
+                            pool: self,
+                            inner: Some(h),
+                        }
+                    }
                     Err(e) => {
                         try_spawn = false;
                         state = self.state.lock().unwrap();
@@ -1982,15 +2050,25 @@ impl MaudePool {
     pub fn try_acquire(&self) -> Option<PooledMaude<'_>> {
         let mut state = self.state.lock().unwrap();
         if let Some(h) = state.free.pop() {
-            return Some(PooledMaude { pool: self, inner: Some(h) });
+            return Some(PooledMaude {
+                pool: self,
+                inner: Some(h),
+            });
         }
         if state.spawned < self.size {
             state.spawned += 1;
             drop(state);
             match MaudeHandle::start_with_caches(
-                &self.path, self.sig.clone(), Arc::clone(&self.caches),
+                &self.path,
+                self.sig.clone(),
+                Arc::clone(&self.caches),
             ) {
-                Ok(h) => return Some(PooledMaude { pool: self, inner: Some(h) }),
+                Ok(h) => {
+                    return Some(PooledMaude {
+                        pool: self,
+                        inner: Some(h),
+                    })
+                }
                 Err(e) => {
                     let mut relock = self.state.lock().unwrap();
                     relock.spawned -= 1;
@@ -2004,11 +2082,15 @@ impl MaudePool {
 
     /// Target subprocess count this pool was constructed with — the ceiling
     /// on lazy growth, NOT the number spawned so far (see `spawned`).
-    pub fn size(&self) -> usize { self.size }
+    pub fn size(&self) -> usize {
+        self.size
+    }
 
     /// Number of members actually spawned so far (≤ `size`).  Grows lazily
     /// as `acquire`/`try_acquire` demand members beyond the eager first one.
-    pub fn spawned(&self) -> usize { self.state.lock().unwrap().spawned }
+    pub fn spawned(&self) -> usize {
+        self.state.lock().unwrap().spawned
+    }
 }
 
 /// A borrowed Maude handle from a `MaudePool`.  `Deref`s to
@@ -2028,14 +2110,18 @@ impl<'a> PooledMaude<'a> {
     /// owned handle (e.g. to clone into a per-task `ProofContext`) should
     /// `.clone()` the returned `&MaudeHandle`.
     pub fn handle(&self) -> &MaudeHandle {
-        self.inner.as_ref().expect("PooledMaude inner not yet taken")
+        self.inner
+            .as_ref()
+            .expect("PooledMaude inner not yet taken")
     }
 }
 
 impl<'a> std::ops::Deref for PooledMaude<'a> {
     type Target = MaudeHandle;
     fn deref(&self) -> &MaudeHandle {
-        self.inner.as_ref().expect("PooledMaude inner not yet taken")
+        self.inner
+            .as_ref()
+            .expect("PooledMaude inner not yet taken")
     }
 }
 
@@ -2061,21 +2147,27 @@ mod tests {
 
     fn maude_path() -> Option<String> {
         // Honour an env override; otherwise look for `maude` on PATH.
-        if let Ok(p) = std::env::var("MAUDE_PATH") { return Some(p); }
-        let candidates = [
-            "/usr/local/bin/maude",
-            "/usr/bin/maude",
-            "maude",
-        ];
+        if let Ok(p) = std::env::var("MAUDE_PATH") {
+            return Some(p);
+        }
+        let candidates = ["/usr/local/bin/maude", "/usr/bin/maude", "maude"];
         for c in &candidates {
-            if std::path::Path::new(c).exists() { return Some((*c).to_string()); }
+            if std::path::Path::new(c).exists() {
+                return Some((*c).to_string());
+            }
         }
         None
     }
 
     #[test]
     fn spawn_and_reduce_pair() {
-        let path = match maude_path() { Some(p) => p, None => { eprintln!("skipping: no maude"); return; } };
+        let path = match maude_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("skipping: no maude");
+                return;
+            }
+        };
         let h = MaudeHandle::start(&path, pair_maude_sig()).expect("start");
         // Reduce a public-name constant — should normalise to itself.
         let v = LVar::new("x", LSort::Msg, 0);
@@ -2087,7 +2179,13 @@ mod tests {
 
     #[test]
     fn unify_two_vars() {
-        let path = match maude_path() { Some(p) => p, None => { eprintln!("skipping: no maude"); return; } };
+        let path = match maude_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("skipping: no maude");
+                return;
+            }
+        };
         let h = MaudeHandle::start(&path, pair_maude_sig()).expect("start");
         let x = LVar::new("x", LSort::Msg, 0);
         let y = LVar::new("y", LSort::Msg, 0);
@@ -2100,7 +2198,13 @@ mod tests {
 
     #[test]
     fn unify_xor_terms_ac() {
-        let path = match maude_path() { Some(p) => p, None => { eprintln!("skipping: no maude"); return; } };
+        let path = match maude_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("skipping: no maude");
+                return;
+            }
+        };
         let sig = crate::maude_sig::xor_maude_sig();
         let h = MaudeHandle::start(&path, sig).expect("start");
         // x XOR a =? b XOR y — has multiple AC unifiers.
@@ -2133,7 +2237,10 @@ mod tests {
     /// x:Msg with y:Pub should narrow x → ?:Pub.
     #[test]
     fn unify_narrows_msg_var_to_pub() {
-        let path = match maude_path() { Some(p) => p, None => return };
+        let path = match maude_path() {
+            Some(p) => p,
+            None => return,
+        };
         let h = MaudeHandle::start(&path, pair_maude_sig()).expect("start");
         let x_msg = LVar::new("x", LSort::Msg, 0);
         let y_pub = LVar::new("y", LSort::Pub, 0);
@@ -2144,8 +2251,13 @@ mod tests {
         // Both vars should be bound to a fresh variable of sort Pub.
         for (v, t) in &unifiers[0] {
             if let crate::term::Term::Lit(Lit::Var(lv)) = t {
-                assert_eq!(lv.sort, LSort::Pub,
-                    "expected narrowing to Pub, got {:?} → {:?}", v, lv);
+                assert_eq!(
+                    lv.sort,
+                    LSort::Pub,
+                    "expected narrowing to Pub, got {:?} → {:?}",
+                    v,
+                    lv
+                );
             }
         }
     }
@@ -2155,22 +2267,41 @@ mod tests {
     /// (Pub ⊂ Msg, but `pk(_)` is not Pub).
     #[test]
     fn unify_pub_var_with_pk_msg_term_fails() {
-        let path = match maude_path() { Some(p) => p, None => return };
-        use crate::function_symbols::{NoEqSym, FunSym, Privacy, Constructability};
-        let pk_sym = NoEqSym::new(b"pk".to_vec(), 1, Privacy::Public, Constructability::Constructor);
-        let sig = pair_maude_sig().add_fun_sym(pk_sym.clone());
+        let path = match maude_path() {
+            Some(p) => p,
+            None => return,
+        };
+        use crate::function_symbols::{Constructability, FunSym, NoEqSym, Privacy};
+        let pk_sym = NoEqSym::new(
+            b"pk".to_vec(),
+            1,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
+        let sig = pair_maude_sig().add_fun_sym(pk_sym);
         let h = MaudeHandle::start(&path, sig).expect("start");
         let a_pub = LVar::new("A", LSort::Pub, 0);
         let ltka = LVar::new("ltkA", LSort::Fresh, 0);
         let mk = |v: LVar| -> LNTerm { crate::term::Term::Lit(Lit::Var(v)) };
         let pk_term = crate::term::Term::App(FunSym::NoEq(pk_sym), vec![mk(ltka)].into());
-        let us = h.unify(&[Equal { lhs: mk(a_pub), rhs: pk_term }]).expect("unify");
+        let us = h
+            .unify(&[Equal {
+                lhs: mk(a_pub),
+                rhs: pk_term,
+            }])
+            .expect("unify");
         assert!(us.is_empty(), "expected no unifier for Pub ↔ pk(Fresh)");
     }
 
     #[test]
     fn reduce_pair_fst_snd() {
-        let path = match maude_path() { Some(p) => p, None => { eprintln!("skipping: no maude"); return; } };
+        let path = match maude_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("skipping: no maude");
+                return;
+            }
+        };
         // pair_dest_maude_sig has fst/snd as destructors with rules.
         let sig = crate::maude_sig::pair_maude_sig();
         let h = MaudeHandle::start(&path, sig).expect("start");
@@ -2182,9 +2313,20 @@ mod tests {
 
     #[test]
     fn pool_acquire_release_size() {
-        let path = match maude_path() { Some(p) => p, None => { eprintln!("skipping: no maude"); return; } };
-        let pool = MaudePool::new(&path, pair_maude_sig(), 3,
-            Arc::new(SharedMaudeCaches::default())).expect("pool");
+        let path = match maude_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("skipping: no maude");
+                return;
+            }
+        };
+        let pool = MaudePool::new(
+            &path,
+            pair_maude_sig(),
+            3,
+            Arc::new(SharedMaudeCaches::default()),
+        )
+        .expect("pool");
         assert_eq!(pool.size(), 3);
         // Acquire all three, then release them; second round should
         // still succeed (handles must have been returned).
@@ -2196,7 +2338,9 @@ mod tests {
         let a = pool.acquire();
         let b = pool.acquire();
         let c = pool.acquire();
-        drop(a); drop(b); drop(c);
+        drop(a);
+        drop(b);
+        drop(c);
     }
 
     /// Sequential acquire/release never grows the pool past its eager first
@@ -2205,26 +2349,53 @@ mod tests {
     /// keeps reporting the TARGET, while `spawned()` stays at 1.
     #[test]
     fn pool_sequential_reuse_stays_at_one_spawned() {
-        let path = match maude_path() { Some(p) => p, None => { eprintln!("skipping: no maude"); return; } };
-        let pool = MaudePool::new(&path, pair_maude_sig(), 4,
-            Arc::new(SharedMaudeCaches::default())).expect("pool");
+        let path = match maude_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("skipping: no maude");
+                return;
+            }
+        };
+        let pool = MaudePool::new(
+            &path,
+            pair_maude_sig(),
+            4,
+            Arc::new(SharedMaudeCaches::default()),
+        )
+        .expect("pool");
         assert_eq!(pool.size(), 4);
         assert_eq!(pool.spawned(), 1, "new() spawns exactly one member eagerly");
         for _ in 0..6 {
             let g = pool.acquire();
             drop(g);
         }
-        assert_eq!(pool.spawned(), 1,
-            "sequential acquire/release reuses the warm member; no lazy spawns");
+        assert_eq!(
+            pool.spawned(),
+            1,
+            "sequential acquire/release reuses the warm member; no lazy spawns"
+        );
         assert_eq!(pool.size(), 4, "size() still reports the target");
     }
 
     #[test]
     fn pool_parallel_reduce_returns_correct_results() {
         use std::sync::Arc;
-        let path = match maude_path() { Some(p) => p, None => { eprintln!("skipping: no maude"); return; } };
-        let pool = Arc::new(MaudePool::new(&path, pair_maude_sig(), 2,
-            Arc::new(SharedMaudeCaches::default())).expect("pool"));
+        let path = match maude_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("skipping: no maude");
+                return;
+            }
+        };
+        let pool = Arc::new(
+            MaudePool::new(
+                &path,
+                pair_maude_sig(),
+                2,
+                Arc::new(SharedMaudeCaches::default()),
+            )
+            .expect("pool"),
+        );
         let mut handles = Vec::new();
         for i in 0u64..6 {
             let pool = pool.clone();
@@ -2246,9 +2417,22 @@ mod tests {
 
     #[test]
     fn pool_blocks_when_exhausted() {
-        let path = match maude_path() { Some(p) => p, None => { eprintln!("skipping: no maude"); return; } };
-        let pool = std::sync::Arc::new(MaudePool::new(&path, pair_maude_sig(), 1,
-            Arc::new(SharedMaudeCaches::default())).expect("pool"));
+        let path = match maude_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("skipping: no maude");
+                return;
+            }
+        };
+        let pool = std::sync::Arc::new(
+            MaudePool::new(
+                &path,
+                pair_maude_sig(),
+                1,
+                Arc::new(SharedMaudeCaches::default()),
+            )
+            .expect("pool"),
+        );
         let g = pool.acquire();
         // Spawn a thread that should block on acquire() until we drop g.
         let pool_c = pool.clone();
@@ -2258,10 +2442,13 @@ mod tests {
             tx.send(()).unwrap();
         });
         // Initially the worker should be blocked (no message yet).
-        assert!(rx.recv_timeout(std::time::Duration::from_millis(100)).is_err());
+        assert!(rx
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .is_err());
         drop(g);
         // After releasing, the worker should wake up promptly.
-        rx.recv_timeout(std::time::Duration::from_secs(5)).expect("worker should unblock");
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .expect("worker should unblock");
         t.join().unwrap();
     }
 
@@ -2276,13 +2463,18 @@ mod tests {
     /// genuinely goes to Maude.
     #[test]
     fn shared_caches_elide_round_trip_across_handles() {
-        let path = match maude_path() { Some(p) => p, None => { eprintln!("skipping: no maude"); return; } };
+        let path = match maude_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("skipping: no maude");
+                return;
+            }
+        };
         let sig = crate::maude_sig::xor_maude_sig();
         let caches = Arc::new(SharedMaudeCaches::default());
-        let a = MaudeHandle::start_with_caches(
-            &path, sig.clone(), Arc::clone(&caches)).expect("start a");
-        let b = MaudeHandle::start_with_caches(
-            &path, sig, Arc::clone(&caches)).expect("start b");
+        let a = MaudeHandle::start_with_caches(&path, sig.clone(), Arc::clone(&caches))
+            .expect("start a");
+        let b = MaudeHandle::start_with_caches(&path, sig, Arc::clone(&caches)).expect("start b");
         let x = LVar::new("x", LSort::Msg, 0);
         let t = crate::term::f_app_ac(
             crate::function_symbols::AcSym::Xor,
@@ -2292,12 +2484,18 @@ mod tests {
             ],
         );
         let ra = a.reduce(&t).expect("reduce on a");
-        assert_eq!(a.stats().norm_count, 1,
-            "handle A performed the real round-trip");
+        assert_eq!(
+            a.stats().norm_count,
+            1,
+            "handle A performed the real round-trip"
+        );
         let rb = b.reduce(&t).expect("reduce on b");
         assert_eq!(rb, ra, "shared hit returns the value A computed");
-        assert_eq!(b.stats().norm_count, 0,
-            "B's reduce was a shared-cache hit — no IPC round-trip");
+        assert_eq!(
+            b.stats().norm_count,
+            0,
+            "B's reduce was a shared-cache hit — no IPC round-trip"
+        );
     }
 
     /// Native normal-form fast path on an AC signature: an already-normal
@@ -2307,27 +2505,36 @@ mod tests {
     /// to Maude's reduced result.
     #[test]
     fn reduce_nf_fast_path_on_ac_signature() {
-        let path = match maude_path() { Some(p) => p, None => { eprintln!("skipping: no maude"); return; } };
-        let h = MaudeHandle::start(&path, crate::maude_sig::xor_maude_sig())
-            .expect("start");
+        let path = match maude_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("skipping: no maude");
+                return;
+            }
+        };
+        let h = MaudeHandle::start(&path, crate::maude_sig::xor_maude_sig()).expect("start");
         let mk = |name: &str| -> LNTerm {
             crate::term::Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)))
         };
-        let nf = crate::term::f_app_ac(
-            crate::function_symbols::AcSym::Xor, vec![mk("x"), mk("y")]);
+        let nf = crate::term::f_app_ac(crate::function_symbols::AcSym::Xor, vec![mk("x"), mk("y")]);
         let r = h.reduce(&nf).expect("reduce NF term");
         assert_eq!(r, nf, "normal-form term comes back unchanged");
-        assert_eq!(h.stats().norm_count, 0,
-            "NF-certified reduce took the native path — no IPC round-trip");
+        assert_eq!(
+            h.stats().norm_count,
+            0,
+            "NF-certified reduce took the native path — no IPC round-trip"
+        );
         // `x XOR x` has duplicate args (`invalid_xor`) — not NF; the real
         // round-trip runs and Maude cancels the pair to `zero`.
-        let red = crate::term::f_app_ac(
-            crate::function_symbols::AcSym::Xor, vec![mk("x"), mk("x")]);
+        let red =
+            crate::term::f_app_ac(crate::function_symbols::AcSym::Xor, vec![mk("x"), mk("x")]);
         let r2 = h.reduce(&red).expect("reduce reducible term");
-        assert_eq!(h.stats().norm_count, 1,
-            "reducible term performed the real round-trip");
-        let zero: LNTerm = crate::term::f_app_no_eq(
-            crate::function_symbols::zero_sym(), vec![]);
+        assert_eq!(
+            h.stats().norm_count,
+            1,
+            "reducible term performed the real round-trip"
+        );
+        let zero: LNTerm = crate::term::f_app_no_eq(crate::function_symbols::zero_sym(), vec![]);
         assert_eq!(r2, zero, "x XOR x reduces to zero");
     }
 
@@ -2336,35 +2543,65 @@ mod tests {
     // `codeOther -> code2 ++ x`, matching HS's Maude matchAction.
     #[test]
     fn match_eqs_const_subject_mset_var_to_submultiset() {
-        let path = match maude_path() { Some(p) => p, None => { eprintln!("skipping: no maude"); return; } };
-        use crate::function_symbols::{AcSym, NoEqSym, FunSym, Privacy, Constructability};
-        let pair_sym = NoEqSym::new(b"pair".to_vec(), 2, Privacy::Public, Constructability::Constructor);
-        let sig = crate::maude_sig::mset_maude_sig().add_fun_sym(pair_sym.clone());
+        let path = match maude_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("skipping: no maude");
+                return;
+            }
+        };
+        use crate::function_symbols::{AcSym, Constructability, FunSym, NoEqSym, Privacy};
+        let pair_sym = NoEqSym::new(
+            b"pair".to_vec(),
+            2,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
+        let sig = crate::maude_sig::mset_maude_sig().add_fun_sym(pair_sym);
         let h = MaudeHandle::start(&path, sig).expect("start");
         let mk = |v: LVar| -> LNTerm { crate::term::Term::Lit(Lit::Var(v)) };
         // ground "pair" payload a,b -> use public name constants
-        let a = crate::term::Term::Lit(Lit::Con(crate::lterm::Name::new(crate::lterm::NameTag::Pub, "a")));
-        let b = crate::term::Term::Lit(Lit::Con(crate::lterm::Name::new(crate::lterm::NameTag::Pub, "b")));
-        let payload = crate::term::Term::App(FunSym::NoEq(pair_sym.clone()), vec![a, b].into());
+        let a = crate::term::Term::Lit(Lit::Con(crate::lterm::Name::new(
+            crate::lterm::NameTag::Pub,
+            "a",
+        )));
+        let b = crate::term::Term::Lit(Lit::Con(crate::lterm::Name::new(
+            crate::lterm::NameTag::Pub,
+            "b",
+        )));
+        let payload = crate::term::Term::App(FunSym::NoEq(pair_sym), vec![a, b].into());
         // pattern var codeOther:Msg idx 89 (the universal-bound var)
         let code_other = LVar::new("codeOther", LSort::Msg, 89);
-        let pat = crate::term::f_app_ac(AcSym::Union, vec![mk(code_other.clone()), payload.clone()]);
+        let pat =
+            crate::term::f_app_ac(AcSym::Union, vec![mk(code_other.clone()), payload.clone()]);
         // subject: code2:Msg, x:Msg (free system vars, skolemized by the fn)
         let code2 = LVar::new("code2", LSort::Msg, 8);
         let xv = LVar::new("x", LSort::Msg, 9);
-        let subj = crate::term::f_app_ac(AcSym::Union, vec![mk(code2.clone()), mk(xv.clone()), payload.clone()]);
+        let subj = crate::term::f_app_ac(
+            AcSym::Union,
+            vec![mk(code2.clone()), mk(xv.clone()), payload.clone()],
+        );
         let mut pattern_vars = std::collections::BTreeSet::new();
         pattern_vars.insert(("codeOther".to_string(), 89u64));
-        let res = h.match_eqs_const_subject(
-            &[Equal { lhs: pat, rhs: subj }], &pattern_vars).expect("match");
+        let res = h
+            .match_eqs_const_subject(
+                &[Equal {
+                    lhs: pat,
+                    rhs: subj,
+                }],
+                &pattern_vars,
+            )
+            .expect("match");
         eprintln!("[REPRO] match result count = {}", res.len());
         for m in &res {
             for (lv, lt) in m {
                 eprintln!("[REPRO]   {}#{} -> {:?}", lv.name, lv.idx, lt);
             }
         }
-        assert!(!res.is_empty(),
-            "expected codeOther to AC-match a 2-element sub-multiset");
+        assert!(
+            !res.is_empty(),
+            "expected codeOther to AC-match a 2-element sub-multiset"
+        );
     }
 
     // HS's `impliedFormulas` runs `skolemizeGuarded` over the WHOLE clause
@@ -2390,23 +2627,39 @@ mod tests {
     // exactly as HS's `skolemizeGuarded`-then-`matchAction` does.
     #[test]
     fn impl_guard_match_skolemizes_pattern_free_vars() {
-        let path = match maude_path() { Some(p) => p, None => { eprintln!("skipping: no maude"); return; } };
-        use crate::function_symbols::{FunSym, exp_sym};
+        let path = match maude_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("skipping: no maude");
+                return;
+            }
+        };
+        use crate::function_symbols::{exp_sym, FunSym};
         let sig = crate::maude_sig::dh_maude_sig();
         let h = MaudeHandle::start(&path, sig).expect("start");
         let mk = |v: LVar| -> LNTerm { crate::term::Term::Lit(Lit::Var(v)) };
-        let g = crate::term::Term::Lit(Lit::Con(crate::lterm::Name::new(crate::lterm::NameTag::Pub, "g")));
-        let exp = |base: LNTerm, e: LNTerm|
-            crate::term::Term::App(FunSym::NoEq(exp_sym()), vec![base, e].into());
+        let g = crate::term::Term::Lit(Lit::Con(crate::lterm::Name::new(
+            crate::lterm::NameTag::Pub,
+            "g",
+        )));
+        let exp = |base: LNTerm, e: LNTerm| {
+            crate::term::Term::App(FunSym::NoEq(exp_sym()), vec![base, e].into())
+        };
         // free (non-universal) system vars — NONE of these is in
         // `pattern_vars`, so HS skolemizes them all to constants.
         let ek_i = LVar::new("ekI", LSort::Fresh, 0);
         let ek_r = LVar::new("ekR", LSort::Fresh, 0);
-        let xv   = LVar::new("x",   LSort::Fresh, 21);
-        let tid  = LVar::new("tid", LSort::Fresh, 15);
+        let xv = LVar::new("x", LSort::Fresh, 21);
+        let tid = LVar::new("tid", LSort::Fresh, 15);
         let eqs = vec![
-            Equal { lhs: exp(g.clone(), mk(ek_i.clone())), rhs: exp(g.clone(), mk(xv.clone())) },
-            Equal { lhs: exp(g.clone(), mk(ek_r.clone())), rhs: exp(g.clone(), mk(tid.clone())) },
+            Equal {
+                lhs: exp(g.clone(), mk(ek_i.clone())),
+                rhs: exp(g.clone(), mk(xv.clone())),
+            },
+            Equal {
+                lhs: exp(g.clone(), mk(ek_r.clone())),
+                rhs: exp(g.clone(), mk(tid.clone())),
+            },
         ];
         // No universal-bound vars in these positions.
         let pattern_vars: std::collections::BTreeSet<(String, u64)> =
@@ -2414,17 +2667,28 @@ mod tests {
         // const_subject (the OLD Action-guard path) OVER-MATCHES: the
         // pattern's free `ekI`,`ekR` are Maude variables binding to x,tid.
         let over = h.match_eqs_const_subject(&eqs, &pattern_vars).expect("m1");
-        eprintln!("[REPRO] const_subject matches = {} (over-match expected: >=1)", over.len());
-        assert!(!over.is_empty(),
-            "sanity: const_subject is expected to OVER-match here (the bug)");
+        eprintln!(
+            "[REPRO] const_subject matches = {} (over-match expected: >=1)",
+            over.len()
+        );
+        assert!(
+            !over.is_empty(),
+            "sanity: const_subject is expected to OVER-match here (the bug)"
+        );
         // skolemize_both (the FIX): ekI,ekR,x,tid are distinct constants,
         // so neither equation can be satisfied → NO match, matching HS.
         let fixed = h.match_eqs_skolemize_both(&eqs, &pattern_vars).expect("m2");
-        eprintln!("[REPRO] skolemize_both matches = {} (HS-faithful: 0)", fixed.len());
-        assert!(fixed.is_empty(),
+        eprintln!(
+            "[REPRO] skolemize_both matches = {} (HS-faithful: 0)",
+            fixed.len()
+        );
+        assert!(
+            fixed.is_empty(),
             "skolemize_both must NOT over-match: pattern-side free system \
              vars (ekI,ekR) are CONSTANTS and cannot bind to the subject's \
-             different free vars (x,tid); got {:?}", fixed);
+             different free vars (x,tid); got {:?}",
+            fixed
+        );
     }
 
     /// Directional regression for the `match_eqs` / `compare_term_subs`
@@ -2447,32 +2711,49 @@ mod tests {
     /// the pattern,subject order used by the `const_subject` sibling.
     #[test]
     fn compare_term_subs_direction_matches_hs() {
-        let path = match maude_path() { Some(p) => p, None => { eprintln!("skipping: no maude"); return; } };
-        use crate::function_symbols::{NoEqSym, FunSym, Privacy, Constructability};
-        let h_sym = NoEqSym::new(b"h".to_vec(), 1, Privacy::Public, Constructability::Constructor);
-        let sig = pair_maude_sig().add_fun_sym(h_sym.clone());
+        let path = match maude_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("skipping: no maude");
+                return;
+            }
+        };
+        use crate::function_symbols::{Constructability, FunSym, NoEqSym, Privacy};
+        let h_sym = NoEqSym::new(
+            b"h".to_vec(),
+            1,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
+        let sig = pair_maude_sig().add_fun_sym(h_sym);
         let hnd = MaudeHandle::start(&path, sig).expect("start");
         let mk = |v: LVar| -> LNTerm { crate::term::Term::Lit(Lit::Var(v)) };
         let x = LVar::new("x", LSort::Msg, 0);
-        let a = crate::term::Term::Lit(Lit::Con(crate::lterm::Name::new(crate::lterm::NameTag::Pub, "a")));
-        let t_gen = crate::term::Term::App(FunSym::NoEq(h_sym.clone()), vec![mk(x)].into()); // h(x) general
-        let t_spec = crate::term::Term::App(FunSym::NoEq(h_sym.clone()), vec![a].into());    // h(a) specific
-        // general vs specific => general is LESS specific => Less.
+        let a = crate::term::Term::Lit(Lit::Con(crate::lterm::Name::new(
+            crate::lterm::NameTag::Pub,
+            "a",
+        )));
+        let t_gen = crate::term::Term::App(FunSym::NoEq(h_sym), vec![mk(x)].into()); // h(x) general
+        let t_spec = crate::term::Term::App(FunSym::NoEq(h_sym), vec![a].into()); // h(a) specific
+                                                                                  // general vs specific => general is LESS specific => Less.
         assert_eq!(
             crate::subsumption::compare_term_subs(&hnd, &t_gen, &t_spec).expect("cmp"),
             Some(std::cmp::Ordering::Less),
-            "h(x) is more general than h(a); HS compareTermSubs gives Less");
+            "h(x) is more general than h(a); HS compareTermSubs gives Less"
+        );
         // specific vs general => specific is MORE specific => Greater.
         assert_eq!(
             crate::subsumption::compare_term_subs(&hnd, &t_spec, &t_gen).expect("cmp"),
             Some(std::cmp::Ordering::Greater),
-            "h(a) is more specific than h(x); HS compareTermSubs gives Greater");
+            "h(a) is more specific than h(x); HS compareTermSubs gives Greater"
+        );
         // Identical (modulo renaming) terms compare Equal (invariant).
         let y = LVar::new("y", LSort::Msg, 1);
-        let t_gen2 = crate::term::Term::App(FunSym::NoEq(h_sym.clone()), vec![mk(y)].into());
+        let t_gen2 = crate::term::Term::App(FunSym::NoEq(h_sym), vec![mk(y)].into());
         assert_eq!(
             crate::subsumption::compare_term_subs(&hnd, &t_gen, &t_gen2).expect("cmp"),
             Some(std::cmp::Ordering::Equal),
-            "h(x) and h(y) are equal modulo renaming => Equal");
+            "h(x) and h(y) are equal modulo renaming => Equal"
+        );
     }
 }

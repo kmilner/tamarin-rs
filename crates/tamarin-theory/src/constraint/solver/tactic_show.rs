@@ -137,9 +137,7 @@ fn write_gterm(t: &GTerm, out: &mut String) {
         // FApp (NoEq (name,_)) as
         GTerm::App(name, args) => write_app(name, args.iter(), out),
         // `op{a}b` == `op(a,b)` — a NoEq application.
-        GTerm::AlgApp(name, a, b) => {
-            write_app(name, [a.as_ref(), b.as_ref()], out)
-        }
+        GTerm::AlgApp(name, a, b) => write_app(name, [a.as_ref(), b.as_ref()], out),
         // `<a,b,c>` is binary-nested `pair(a, pair(b,c))` in HS Term.
         GTerm::Pair(items) => write_pair(items, out),
         // diff is a NoEq symbol named "diff".
@@ -547,7 +545,12 @@ mod tests {
     use super::*;
 
     fn fresh(name: &str) -> p::VarSpec {
-        p::VarSpec { name: name.into(), idx: 0, sort: p::SortHint::Fresh, typ: None }
+        p::VarSpec {
+            name: name.into(),
+            idx: 0,
+            sort: p::SortHint::Fresh,
+            typ: None,
+        }
     }
 
     #[test]

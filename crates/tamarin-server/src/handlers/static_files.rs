@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::State;
-use axum::http::{StatusCode, header};
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use tower_http::services::ServeDir;
 
@@ -74,11 +74,7 @@ async fn intdot_css_or_data(
     fallback_to_data(state, "css", &name).await
 }
 
-async fn fallback_to_data(
-    state: Arc<AppState>,
-    subdir: &str,
-    name: &str,
-) -> Response {
+async fn fallback_to_data(state: Arc<AppState>, subdir: &str, name: &str) -> Response {
     let candidate = state.cfg.data_dir.join(subdir).join(name);
     let mime = guess_mime(&candidate);
     if let Some(resp) = try_file(&candidate, mime).await {
@@ -88,11 +84,18 @@ async fn fallback_to_data(
 }
 
 async fn try_file(path: &Path, mime: &str) -> Option<Response> {
-    if !path.is_file() { return None; }
+    if !path.is_file() {
+        return None;
+    }
     let bytes = tokio::fs::read(path).await.ok()?;
-    Some((StatusCode::OK,
-          [(header::CONTENT_TYPE, mime.to_string())],
-          bytes).into_response())
+    Some(
+        (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, mime.to_string())],
+            bytes,
+        )
+            .into_response(),
+    )
 }
 
 fn guess_mime(path: &Path) -> &'static str {
@@ -123,11 +126,15 @@ fn guess_mime(path: &Path) -> &'static str {
 /// then `../data` / `../../data` (older nested layouts).  The first
 /// existing directory is used; if none match we fall back to `data`.
 pub fn resolve_data_dir(explicit: Option<PathBuf>) -> PathBuf {
-    if let Some(d) = explicit { return d; }
+    if let Some(d) = explicit {
+        return d;
+    }
     for c in ["data", "tamarin-prover/data", "../data", "../../data"] {
         let p = Path::new(c);
         if p.exists() && p.is_dir() {
-            if let Ok(abs) = std::fs::canonicalize(p) { return abs; }
+            if let Ok(abs) = std::fs::canonicalize(p) {
+                return abs;
+            }
             return p.to_path_buf();
         }
     }

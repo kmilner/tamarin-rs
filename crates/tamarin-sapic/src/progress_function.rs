@@ -169,9 +169,7 @@ fn combine(x: &PosSetSet, y: &PosSetSet) -> PosSetSet {
 fn f(p: &AProc) -> Result<PosSetSet, String> {
     use tamarin_theory::sapic::ProcessCombinator as PC;
     // `ss x = S.singleton (S.singleton x)`.
-    let ss = |x: Pos| -> PosSetSet {
-        [[x].into_iter().collect::<PosSet>()].into_iter().collect()
-    };
+    let ss = |x: Pos| -> PosSetSet { [[x].into_iter().collect::<PosSet>()].into_iter().collect() };
     if blocking(p) {
         return Ok(ss(Vec::new()));
     }
@@ -186,8 +184,7 @@ fn f(p: &AProc) -> Result<PosSetSet, String> {
     // The accumulator starts as the singleton-of-the-empty-set (combine's unit).
     let mut acc: PosSetSet = [PosSet::new()].into_iter().collect();
     for pos in next0(p) {
-        let p_at =
-            process_at(p, &pos).ok_or_else(|| format!("f: invalid position {pos:?}"))?;
+        let p_at = process_at(p, &pos).ok_or_else(|| format!("f: invalid position {pos:?}"))?;
         let lpos = f(p_at)?;
         // `combine (pos <..> lpos) acc`
         acc = combine(&prefix_set_set(&pos, &lpos), &acc);
@@ -198,8 +195,7 @@ fn f(p: &AProc) -> Result<PosSetSet, String> {
 /// `pf proc pos` (ProgressFunction.hs:125-128): the progress function at a
 /// position — `pos <..> f (proc@pos)`.
 pub fn pf(proc: &AProc, pos: &[i64]) -> Result<PosSetSet, String> {
-    let p_at = process_at(proc, pos)
-        .ok_or_else(|| format!("pf: invalid position {pos:?}"))?;
+    let p_at = process_at(proc, pos).ok_or_else(|| format!("pf: invalid position {pos:?}"))?;
     let res = f(p_at)?;
     Ok(prefix_set_set(pos, &res))
 }
@@ -234,6 +230,8 @@ fn pf_range_prime(proc: &AProc) -> Result<BTreeSet<(Pos, Pos)>, String> {
 pub fn pf_inv(proc: &AProc) -> Result<impl Fn(&[i64]) -> Option<Pos>, String> {
     let set = pf_range_prime(proc)?;
     Ok(move |x: &[i64]| -> Option<Pos> {
-        set.iter().find(|(to, _)| to.as_slice() == x).map(|(_, from)| from.clone())
+        set.iter()
+            .find(|(to, _)| to.as_slice() == x)
+            .map(|(_, from)| from.clone())
     })
 }

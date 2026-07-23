@@ -35,7 +35,8 @@ async fn proof_step_simplify_returns_html_envelope() {
     // form is acceptable; we just need a well-formed envelope.
     assert!(
         keys.contains("html") || keys.contains("alert"),
-        "unexpected keys: {:?}", keys,
+        "unexpected keys: {:?}",
+        keys,
     );
 }
 
@@ -100,6 +101,7 @@ async fn proof_step_unknown_lemma_returns_alert() {
     let v: serde_json::Value = res.json().await.expect("decode");
     assert!(
         v.get("alert").is_some(),
-        "expected alert for unknown lemma, got: {:?}", v,
+        "expected alert for unknown lemma, got: {:?}",
+        v,
     );
 }

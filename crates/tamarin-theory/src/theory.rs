@@ -143,12 +143,18 @@ pub enum TranslationElement {
     AccLemma(AccLemma),
     CaseTest(CaseTest),
     /// Foreign-language export block (Tamarin's `export X: "..."`).
-    ExportInfo { tag: String, body: String },
+    ExportInfo {
+        tag: String,
+        body: String,
+    },
 }
 
 /// Trace quantifier on lemmas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TraceQuantifier { AllTraces, ExistsTrace }
+pub enum TraceQuantifier {
+    AllTraces,
+    ExistsTrace,
+}
 
 /// Attribute on a lemma.
 #[derive(Debug, Clone, PartialEq)]
@@ -234,7 +240,12 @@ pub struct ProofSkeleton {
 }
 
 impl ProofSkeleton {
-    pub fn unproven() -> Self { ProofSkeleton { raw: String::new(), tree: None } }
+    pub fn unproven() -> Self {
+        ProofSkeleton {
+            raw: String::new(),
+            tree: None,
+        }
+    }
 }
 
 /// `TheoryItem` — one top-level construct in a (non-diff) theory.
@@ -252,7 +263,12 @@ pub enum TheoryItem<R = OpenProtoRule, P = ProofSkeleton, S = TranslationElement
 
 /// `DiffTheoryItem` — one top-level construct in a diff theory.
 #[derive(Debug, Clone, PartialEq)]
-pub enum DiffTheoryItem<R = OpenProtoRule, R2 = OpenProtoRule, P = ProofSkeleton, P2 = ProofSkeleton> {
+pub enum DiffTheoryItem<
+    R = OpenProtoRule,
+    R2 = OpenProtoRule,
+    P = ProofSkeleton,
+    P2 = ProofSkeleton,
+> {
     DiffRule(R),
     EitherRule(Side, R2),
     DiffLemma(DiffLemma<P>),
@@ -265,7 +281,10 @@ pub enum DiffTheoryItem<R = OpenProtoRule, R2 = OpenProtoRule, P = ProofSkeleton
 
 /// Side of a diff theory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Hash)]
-pub enum Side { LHS, RHS }
+pub enum Side {
+    LHS,
+    RHS,
+}
 
 // =============================================================================
 // Top-level Theory
@@ -333,25 +352,29 @@ impl<R, P, S> Theory<R, P, S> {
     /// further specialise on the rule type.
     pub fn rules(&self) -> impl Iterator<Item = &R> {
         self.items.iter().filter_map(|i| match i {
-            TheoryItem::Rule(r) => Some(r), _ => None,
+            TheoryItem::Rule(r) => Some(r),
+            _ => None,
         })
     }
 
     pub fn lemmas(&self) -> impl Iterator<Item = &Lemma<P>> {
         self.items.iter().filter_map(|i| match i {
-            TheoryItem::Lemma(l) => Some(l), _ => None,
+            TheoryItem::Lemma(l) => Some(l),
+            _ => None,
         })
     }
 
     pub fn restrictions(&self) -> impl Iterator<Item = &OpenRestriction> {
         self.items.iter().filter_map(|i| match i {
-            TheoryItem::Restriction(r) => Some(r), _ => None,
+            TheoryItem::Restriction(r) => Some(r),
+            _ => None,
         })
     }
 
     pub fn predicates(&self) -> impl Iterator<Item = &Predicate> {
         self.items.iter().filter_map(|i| match i {
-            TheoryItem::Predicate(p) => Some(p), _ => None,
+            TheoryItem::Predicate(p) => Some(p),
+            _ => None,
         })
     }
 
@@ -366,7 +389,6 @@ impl<R, P, S> Theory<R, P, S> {
     pub fn lookup_lemma(&self, name: &str) -> Option<&Lemma<P>> {
         self.lemmas().find(|l| l.name == name)
     }
-
 }
 
 // =============================================================================
@@ -374,7 +396,8 @@ impl<R, P, S> Theory<R, P, S> {
 // =============================================================================
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct DiffTheory<R = OpenProtoRule, R2 = OpenProtoRule, P = ProofSkeleton, P2 = ProofSkeleton> {
+pub struct DiffTheory<R = OpenProtoRule, R2 = OpenProtoRule, P = ProofSkeleton, P2 = ProofSkeleton>
+{
     pub name: String,
     pub in_file: String,
     pub heuristic: Vec<String>,

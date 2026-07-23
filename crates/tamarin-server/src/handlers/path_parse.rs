@@ -21,16 +21,30 @@ pub enum TheoryPath {
     Message,
     Tactic,
     Lemma(String),
-    Source { kind: SourceKind, src_idx: usize, case_idx: usize },
-    Proof { lemma: String, sub: Vec<String> },
-    Method { lemma: String, idx: usize, sub: Vec<String> },
+    Source {
+        kind: SourceKind,
+        src_idx: usize,
+        case_idx: usize,
+    },
+    Proof {
+        lemma: String,
+        sub: Vec<String>,
+    },
+    Method {
+        lemma: String,
+        idx: usize,
+        sub: Vec<String>,
+    },
     Edit(String),
     Add(String),
     Delete(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SourceKind { Refined, Raw }
+pub enum SourceKind {
+    Refined,
+    Raw,
+}
 
 impl TheoryPath {
     /// Render to the same shape Haskell does (for emitting URLs back
@@ -43,9 +57,21 @@ impl TheoryPath {
             TheoryPath::Message => vec!["message".into()],
             TheoryPath::Tactic => vec!["tactic".into()],
             TheoryPath::Lemma(n) => vec!["lemma".into(), n.clone()],
-            TheoryPath::Source { kind, src_idx, case_idx } => {
-                let k = match kind { SourceKind::Refined => "refined", SourceKind::Raw => "raw" };
-                vec!["cases".into(), k.into(), src_idx.to_string(), case_idx.to_string()]
+            TheoryPath::Source {
+                kind,
+                src_idx,
+                case_idx,
+            } => {
+                let k = match kind {
+                    SourceKind::Refined => "refined",
+                    SourceKind::Raw => "raw",
+                };
+                vec![
+                    "cases".into(),
+                    k.into(),
+                    src_idx.to_string(),
+                    case_idx.to_string(),
+                ]
             }
             TheoryPath::Proof { lemma, sub } => {
                 let mut v = vec!["proof".into(), lemma.clone()];
@@ -68,18 +94,24 @@ impl TheoryPath {
 /// Canonical URL path-segment escaping shared by the theory/graph/proof
 /// handlers: keep `[A-Za-z0-9_.-]`, percent-encode everything else.
 pub fn url_path_escape(s: &str) -> String {
-    s.chars().map(|c| match c {
-        c if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' => c.to_string(),
-        c => format!("%{:02X}", c as u32),
-    }).collect()
+    s.chars()
+        .map(|c| match c {
+            c if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' => c.to_string(),
+            c => format!("%{:02X}", c as u32),
+        })
+        .collect()
 }
 
 /// Match Haskell's `prefixWithUnderscore`.  Empty + `_*` strings get
 /// an extra leading `_` to avoid the empty-segment trap in Yesod.
 pub fn prefix_with_underscore(s: &str) -> String {
-    if s.is_empty() { "_".into() }
-    else if s.starts_with('_') { format!("_{}", s) }
-    else { s.to_string() }
+    if s.is_empty() {
+        "_".into()
+    } else if s.starts_with('_') {
+        format!("_{}", s)
+    } else {
+        s.to_string()
+    }
 }
 
 /// Encode a proof/method sub-path as leading-slash-joined URL segments,
@@ -98,9 +130,13 @@ pub fn encode_sub_path(sub: &[String]) -> String {
 
 /// Inverse of [`prefix_with_underscore`].
 pub fn unprefix_underscore(s: &str) -> String {
-    if s == "_" { String::new() }
-    else if s.starts_with("__") { s[1..].to_string() }
-    else { s.to_string() }
+    if s == "_" {
+        String::new()
+    } else if s.starts_with("__") {
+        s[1..].to_string()
+    } else {
+        s.to_string()
+    }
 }
 
 /// Decode a wildcard-captured URL path into its logical segments: strip
@@ -114,8 +150,7 @@ pub fn unprefix_underscore(s: &str) -> String {
 /// are dropped by the empty-segment filter, so a leading-only vs both-end
 /// trim of `/` is immaterial.
 pub fn decode_segments(raw: &str) -> Vec<String> {
-    raw
-        .trim_start_matches('/')
+    raw.trim_start_matches('/')
         .split('/')
         .filter(|s| !s.is_empty())
         .map(|s| percent_decode_str(s).decode_utf8_lossy().to_string())
@@ -182,7 +217,11 @@ fn parse_segs(segs: &[String]) -> Option<TheoryPath> {
             };
             let src_idx: usize = rest.get(1)?.parse().ok()?;
             let case_idx: usize = rest.get(2)?.parse().ok()?;
-            Some(TheoryPath::Source { kind, src_idx, case_idx })
+            Some(TheoryPath::Source {
+                kind,
+                src_idx,
+                case_idx,
+            })
         }
         _ => None,
     }
@@ -192,50 +231,80 @@ fn parse_segs(segs: &[String]) -> Option<TheoryPath> {
 mod tests {
     use super::*;
 
-    #[test] fn help_and_rules() {
+    #[test]
+    fn help_and_rules() {
         assert_eq!(parse("help"), Some(TheoryPath::Help));
         assert_eq!(parse("/help/"), Some(TheoryPath::Help));
         assert_eq!(parse("rules"), Some(TheoryPath::Rules));
     }
-    #[test] fn lemma_basic() {
-        assert_eq!(parse("lemma/Alice"),
-            Some(TheoryPath::Lemma("Alice".into())));
+    #[test]
+    fn lemma_basic() {
+        assert_eq!(
+            parse("lemma/Alice"),
+            Some(TheoryPath::Lemma("Alice".into()))
+        );
     }
-    #[test] fn proof_path() {
+    #[test]
+    fn proof_path() {
         let p = parse("proof/Alice/case_1/0").unwrap();
-        assert!(matches!(p, TheoryPath::Proof { lemma, sub } if lemma == "Alice" && sub == vec!["case_1", "0"]));
+        assert!(
+            matches!(p, TheoryPath::Proof { lemma, sub } if lemma == "Alice" && sub == vec!["case_1", "0"])
+        );
     }
-    #[test] fn method_path() {
+    #[test]
+    fn method_path() {
         let p = parse("method/Alice/3/0").unwrap();
-        assert!(matches!(p, TheoryPath::Method { lemma, idx, sub } if lemma == "Alice" && idx == 3 && sub == vec!["0"]));
+        assert!(
+            matches!(p, TheoryPath::Method { lemma, idx, sub } if lemma == "Alice" && idx == 3 && sub == vec!["0"])
+        );
     }
-    #[test] fn render_roundtrip() {
-        let p = TheoryPath::Proof { lemma: "X".into(), sub: vec![] };
+    #[test]
+    fn render_roundtrip() {
+        let p = TheoryPath::Proof {
+            lemma: "X".into(),
+            sub: vec![],
+        };
         let segs = p.render();
         assert_eq!(segs, vec!["proof", "X"]);
     }
     // Haskell `parseProof (y:ys) = Just (TheoryProof y ys)`: no trailing
     // strip — `proof/<lemma>` is the root (sub=[]), `proof/<lemma>/_`
     // is the inner sub-path with single empty case (sub=[""]).
-    #[test] fn proof_root_vs_inner_empty_case() {
+    #[test]
+    fn proof_root_vs_inner_empty_case() {
         let root = parse("proof/Alice").unwrap();
-        assert!(matches!(&root, TheoryPath::Proof { lemma, sub } if lemma == "Alice" && sub.is_empty()),
-            "got {:?}", root);
+        assert!(
+            matches!(&root, TheoryPath::Proof { lemma, sub } if lemma == "Alice" && sub.is_empty()),
+            "got {:?}",
+            root
+        );
         let inner = parse("proof/Alice/_").unwrap();
-        assert!(matches!(&inner, TheoryPath::Proof { lemma, sub } if lemma == "Alice" && sub == &[""]),
-            "got {:?}", inner);
+        assert!(
+            matches!(&inner, TheoryPath::Proof { lemma, sub } if lemma == "Alice" && sub == &[""]),
+            "got {:?}",
+            inner
+        );
     }
     // Method path: `method/<lemma>/<N>` applies method N at lemma root
     // (sub=[]); `method/<lemma>/<N>/_` applies at the inner empty-case
     // sub-path (sub=[""]).  Without this distinction the click on a
     // post-simplify sub-case's method list would resolve to the
     // wrong proof node.
-    #[test] fn method_root_vs_inner_empty_case() {
+    #[test]
+    fn method_root_vs_inner_empty_case() {
         let root = parse("method/Alice/1").unwrap();
-        assert!(matches!(&root, TheoryPath::Method { lemma, idx, sub }
-            if lemma == "Alice" && *idx == 1 && sub.is_empty()), "got {:?}", root);
+        assert!(
+            matches!(&root, TheoryPath::Method { lemma, idx, sub }
+            if lemma == "Alice" && *idx == 1 && sub.is_empty()),
+            "got {:?}",
+            root
+        );
         let inner = parse("method/Alice/1/_").unwrap();
-        assert!(matches!(&inner, TheoryPath::Method { lemma, idx, sub }
-            if lemma == "Alice" && *idx == 1 && sub == &[""]), "got {:?}", inner);
+        assert!(
+            matches!(&inner, TheoryPath::Method { lemma, idx, sub }
+            if lemma == "Alice" && *idx == 1 && sub == &[""]),
+            "got {:?}",
+            inner
+        );
     }
 }

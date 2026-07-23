@@ -31,8 +31,8 @@
 //! - Data is normalised to suppress fresh-var indices (use canonical
 //!   sort prefix + name only).
 
-use std::sync::OnceLock;
 use std::cell::RefCell;
+use std::sync::OnceLock;
 use tamarin_term::lterm::sort_prefix;
 
 thread_local! {
@@ -75,7 +75,9 @@ pub fn op_label_enabled() -> bool {
 /// a semantic name.  Use `OpLabelGuard::new(...)` for scope-based
 /// management so the label restores on drop.
 pub fn set_op_label(label: &str) -> String {
-    if !op_label_enabled() { return String::new(); }
+    if !op_label_enabled() {
+        return String::new();
+    }
     CURRENT_OP_LABEL.with(|l| {
         let prev = l.borrow().clone();
         *l.borrow_mut() = label.to_string();
@@ -86,7 +88,9 @@ pub fn set_op_label(label: &str) -> String {
 /// Get the current operation label.  Used by apply_eq_store's [rs-aes]
 /// trace to print the site label.
 pub fn current_op_label() -> String {
-    if !op_label_enabled() { return String::new(); }
+    if !op_label_enabled() {
+        return String::new();
+    }
     CURRENT_OP_LABEL.with(|l| l.borrow().clone())
 }
 
@@ -110,7 +114,11 @@ impl OpLabelGuard {
     pub fn new(label: &str) -> Self {
         // No consuming trace => the label is never read; skip the
         // thread-local clone + `to_string` entirely (Drop also no-ops).
-        if !op_label_enabled() { return Self { prev: String::new() }; }
+        if !op_label_enabled() {
+            return Self {
+                prev: String::new(),
+            };
+        }
         let outer = current_op_label();
         if outer == "unlabeled" {
             let prev = set_op_label(label);
@@ -125,7 +133,11 @@ impl OpLabelGuard {
     /// Force override the label (used by simp passes that prepend to
     /// the outer label, e.g. `simpAbstractFun@<outer>`).
     pub fn force(label: &str) -> Self {
-        if !op_label_enabled() { return Self { prev: String::new() }; }
+        if !op_label_enabled() {
+            return Self {
+                prev: String::new(),
+            };
+        }
         let prev = set_op_label(label);
         Self { prev }
     }
@@ -133,9 +145,13 @@ impl OpLabelGuard {
 
 impl Drop for OpLabelGuard {
     fn drop(&mut self) {
-        if !op_label_enabled() { return; }
+        if !op_label_enabled() {
+            return;
+        }
         let prev = std::mem::take(&mut self.prev);
-        CURRENT_OP_LABEL.with(|l| { *l.borrow_mut() = prev; });
+        CURRENT_OP_LABEL.with(|l| {
+            *l.borrow_mut() = prev;
+        });
     }
 }
 
@@ -144,13 +160,19 @@ pub fn case_path_push(name: &str) {
 }
 
 pub fn case_path_pop() {
-    CASE_PATH.with(|p| { p.borrow_mut().pop(); });
+    CASE_PATH.with(|p| {
+        p.borrow_mut().pop();
+    });
 }
 
 pub fn case_path_string() -> String {
     CASE_PATH.with(|p| {
         let v = p.borrow();
-        if v.is_empty() { "/".to_string() } else { format!("/{}", v.join("/")) }
+        if v.is_empty() {
+            "/".to_string()
+        } else {
+            format!("/{}", v.join("/"))
+        }
     })
 }
 
@@ -186,7 +208,12 @@ pub fn form_flag() -> bool {
 /// the trace stream is byte-identical.
 pub fn trace_form(kind: &str, repr: impl FnOnce() -> String) {
     if form_flag() {
-        eprintln!("[FORMULA_ADD] path={} kind={} {}", case_path_string(), kind, repr());
+        eprintln!(
+            "[FORMULA_ADD] path={} kind={} {}",
+            case_path_string(),
+            kind,
+            repr()
+        );
     }
 }
 
@@ -207,9 +234,20 @@ pub fn guarded_repr(g: &crate::guarded::Guarded) -> String {
             let s: Vec<String> = items.iter().map(guarded_repr).collect();
             format!("Disj[{}]", s.join("|"))
         }
-        Guarded::GGuarded { qua, vars, guards, body } => {
+        Guarded::GGuarded {
+            qua,
+            vars,
+            guards,
+            body,
+        } => {
             let g_strs: Vec<String> = guards.iter().map(atom_repr).collect();
-            format!("{:?}{}v[{}]({})", qua, vars.len(), g_strs.join(","), guarded_repr(body))
+            format!(
+                "{:?}{}v[{}]({})",
+                qua,
+                vars.len(),
+                g_strs.join(","),
+                guarded_repr(body)
+            )
         }
     }
 }
@@ -222,29 +260,42 @@ fn atom_repr(a: &crate::guarded::GAtom) -> String {
         GAtom::LessMset(s, t) => format!("LMset({},{})", term_repr(s), term_repr(t)),
         GAtom::Subterm(s, t) => format!("Subterm({},{})", term_repr(s), term_repr(t)),
         GAtom::Last(s) => format!("Last({})", term_repr(s)),
-        GAtom::Action(f, t) => format!("{}({})@{}",
-            f.name, f.args.iter().map(term_repr).collect::<Vec<_>>().join(","),
-            term_repr(t)),
+        GAtom::Action(f, t) => format!(
+            "{}({})@{}",
+            f.name,
+            f.args.iter().map(term_repr).collect::<Vec<_>>().join(","),
+            term_repr(t)
+        ),
         GAtom::Pred(f) => format!("Pred({})", f.name),
     }
 }
 
 fn term_repr(t: &crate::guarded::GTerm) -> String {
-    use crate::guarded::{GTerm, BVar};
+    use crate::guarded::{BVar, GTerm};
     match t {
-        GTerm::Var(BVar::Free(v)) => format!("{}{}#{}", match v.sort {
-            tamarin_parser::ast::SortHint::Fresh => "~",
-            tamarin_parser::ast::SortHint::Pub   => "$",
-            tamarin_parser::ast::SortHint::Node  => "#",
-            tamarin_parser::ast::SortHint::Nat   => "%",
-            tamarin_parser::ast::SortHint::Msg   => "",
-            _ => "?",
-        }, v.name, v.idx),
+        GTerm::Var(BVar::Free(v)) => format!(
+            "{}{}#{}",
+            match v.sort {
+                tamarin_parser::ast::SortHint::Fresh => "~",
+                tamarin_parser::ast::SortHint::Pub => "$",
+                tamarin_parser::ast::SortHint::Node => "#",
+                tamarin_parser::ast::SortHint::Nat => "%",
+                tamarin_parser::ast::SortHint::Msg => "",
+                _ => "?",
+            },
+            v.name,
+            v.idx
+        ),
         GTerm::Var(BVar::Bound(n)) => format!("B{}", n),
-        GTerm::App(name, args) => format!("{}({})", name,
-            args.iter().map(term_repr).collect::<Vec<_>>().join(",")),
-        GTerm::Pair(args) =>
-            format!("<{}>", args.iter().map(term_repr).collect::<Vec<_>>().join(",")),
+        GTerm::App(name, args) => format!(
+            "{}({})",
+            name,
+            args.iter().map(term_repr).collect::<Vec<_>>().join(",")
+        ),
+        GTerm::Pair(args) => format!(
+            "<{}>",
+            args.iter().map(term_repr).collect::<Vec<_>>().join(",")
+        ),
         GTerm::AlgApp(name, a, b) => format!("{}({},{})", name, term_repr(a), term_repr(b)),
         GTerm::Diff(a, b) => format!("diff({},{})", term_repr(a), term_repr(b)),
         GTerm::BinOp(op, a, b) => format!("{:?}({},{})", op, term_repr(a), term_repr(b)),
@@ -294,11 +345,9 @@ pub fn exec_enabled() -> bool {
 /// no canonical `Simplify.hs` / `Goals.hs` / `Reduction.hs` line
 /// citations to give.
 fn is_cse_deduplicated_label(label: &str) -> bool {
-    matches!(label,
-        "simplifySystem"
-        | "solveChain ENTER"
-        | "FrNarrow"
-        | "exploitPrem InFact"
+    matches!(
+        label,
+        "simplifySystem" | "solveChain ENTER" | "FrNarrow" | "exploitPrem InFact"
     )
 }
 
@@ -328,7 +377,9 @@ fn check_and_mark_emitted(label: &str) -> bool {
 /// those literal-string trace callsites.
 #[inline]
 pub fn trace_exec(label: &str) {
-    if !flag() { return; }
+    if !flag() {
+        return;
+    }
     if is_cse_deduplicated_label(label) && check_and_mark_emitted(label) {
         return;
     }
@@ -358,13 +409,17 @@ fn state_flag() -> bool {
 /// `[EXEC] solveGoal ...` line) so we can see exactly what state HS / Rust
 /// had when each ranking decision was made.
 pub fn trace_state(sys: &crate::constraint::system::System) {
-    if !state_flag() { return; }
-    eprintln!("[STATE] path={} nodes={} goals={} formulas={} solved_formulas={}",
+    if !state_flag() {
+        return;
+    }
+    eprintln!(
+        "[STATE] path={} nodes={} goals={} formulas={} solved_formulas={}",
         case_path_string(),
         canonical_nodes(sys),
         canonical_open_goals(sys),
         sys.formulas.len(),
-        sys.solved_formulas.len());
+        sys.solved_formulas.len()
+    );
     if state_full_flag() {
         // Additional [STATE_FULL] emission for fine-grained lockstep
         // diff: dumps the FULL action terms with var idxs suppressed
@@ -377,20 +432,31 @@ pub fn trace_state(sys: &crate::constraint::system::System) {
         // for HS vs Rust binding-divergence diagnosis.  Idxs suppressed
         // so the diff catches semantic divergences (different name
         // unifications) rather than idx-allocation drift.
-        eprintln!("[STATE_EQS] path={} subst={} conj={}",
+        eprintln!(
+            "[STATE_EQS] path={} subst={} conj={}",
             case_path_string(),
             canonical_eq_store_subst(sys),
-            sys.eq_store.conj.len());
+            sys.eq_store.conj.len()
+        );
         // Dump each disjunct's substs for diff against HS — WITH IDXS
         for (di, d) in sys.eq_store.conj.iter().enumerate() {
             for (si, s) in d.substs.iter().enumerate() {
-                let entries: Vec<String> = s.to_list().into_iter().map(|(k, v)| {
-                    let k_str = format!("{}{}.{}", sort_prefix(k.sort), k.name, k.idx);
-                    let v_str = format!("{:?}", v).chars().take(120).collect::<String>();
-                    format!("{}→{}", k_str, v_str)
-                }).collect();
-                eprintln!("[STATE_EQS]   disj[{}].subst[{}]={:?} [{}]",
-                    di, si, d.split_id, entries.join(", "));
+                let entries: Vec<String> = s
+                    .to_list()
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let k_str = format!("{}{}.{}", sort_prefix(k.sort), k.name, k.idx);
+                        let v_str = format!("{:?}", v).chars().take(120).collect::<String>();
+                        format!("{}→{}", k_str, v_str)
+                    })
+                    .collect();
+                eprintln!(
+                    "[STATE_EQS]   disj[{}].subst[{}]={:?} [{}]",
+                    di,
+                    si,
+                    d.split_id,
+                    entries.join(", ")
+                );
             }
         }
     }
@@ -400,12 +466,20 @@ pub fn trace_state(sys: &crate::constraint::system::System) {
         // HS (e.g., HS has more formulas than Rust at the same path):
         // shows which specific formulas Rust is missing relative to HS.
         for (i, f) in sys.formulas.iter().enumerate() {
-            eprintln!("[STATE_FORM] path={} formulas[{}]={}",
-                case_path_string(), i, guarded_repr(f));
+            eprintln!(
+                "[STATE_FORM] path={} formulas[{}]={}",
+                case_path_string(),
+                i,
+                guarded_repr(f)
+            );
         }
         for (i, f) in sys.solved_formulas.iter().enumerate() {
-            eprintln!("[STATE_FORM] path={} solved[{}]={}",
-                case_path_string(), i, guarded_repr(f));
+            eprintln!(
+                "[STATE_FORM] path={} solved[{}]={}",
+                case_path_string(),
+                i,
+                guarded_repr(f)
+            );
         }
     }
     if state_nodes_flag() {
@@ -417,16 +491,27 @@ pub fn trace_state(sys: &crate::constraint::system::System) {
         // f(k), kOrig) — missing the third chain level).
         for (id, rule) in sys.nodes.iter() {
             let rc = crate::constraint::solver::reduction::rule_case_name(rule);
-            let acts: Vec<String> = rule.actions.iter()
-                .map(canonical_fact_with_idx).collect();
-            eprintln!("[STATE_NODE] path={} {}.{}={} actions=[{}]",
-                case_path_string(), id.name, id.idx, rc, acts.join(", "));
+            let acts: Vec<String> = rule.actions.iter().map(canonical_fact_with_idx).collect();
+            eprintln!(
+                "[STATE_NODE] path={} {}.{}={} actions=[{}]",
+                case_path_string(),
+                id.name,
+                id.idx,
+                rc,
+                acts.join(", ")
+            );
         }
         for e in &sys.edges {
-            eprintln!("[STATE_EDGE] path={} {}.{}/{} -> {}.{}/{}",
+            eprintln!(
+                "[STATE_EDGE] path={} {}.{}/{} -> {}.{}/{}",
                 case_path_string(),
-                e.src.0.name, e.src.0.idx, e.src.1.0,
-                e.tgt.0.name, e.tgt.0.idx, e.tgt.1.0);
+                e.src.0.name,
+                e.src.0.idx,
+                e.src.1 .0,
+                e.tgt.0.name,
+                e.tgt.0.idx,
+                e.tgt.1 .0
+            );
         }
         // Also dump open Action goals with their idx-preserved fact
         // content (the canonical [STATE] line above suppresses idxs).
@@ -436,11 +521,17 @@ pub fn trace_state(sys: &crate::constraint::system::System) {
         // gfalse divergences at case-3 (Helper_Loop_and_success).
         use crate::constraint::constraints::Goal;
         for (g, st) in sys.goals.iter() {
-            if st.solved { continue; }
+            if st.solved {
+                continue;
+            }
             if let Goal::Action(node, fa) = g {
-                eprintln!("[STATE_GOAL] path={} Action@{}.{}={}",
-                    case_path_string(), node.name, node.idx,
-                    canonical_fact_with_idx(fa));
+                eprintln!(
+                    "[STATE_GOAL] path={} Action@{}.{}={}",
+                    case_path_string(),
+                    node.name,
+                    node.idx,
+                    canonical_fact_with_idx(fa)
+                );
             }
         }
         // Dump less_atoms and last_atom — these drive HS's `Cyclic`
@@ -448,14 +539,22 @@ pub fn trace_state(sys: &crate::constraint::system::System) {
         // Critical for diagnosing Gen_Stop/Gen_Start cyclic-firing
         // divergences in Helper_Loop_and_success.
         for la in &sys.less_atoms {
-            eprintln!("[STATE_LESS] path={} {}.{} < {}.{}",
+            eprintln!(
+                "[STATE_LESS] path={} {}.{} < {}.{}",
                 case_path_string(),
-                la.smaller.name, la.smaller.idx,
-                la.larger.name, la.larger.idx);
+                la.smaller.name,
+                la.smaller.idx,
+                la.larger.name,
+                la.larger.idx
+            );
         }
         if let Some(la) = &sys.last_atom {
-            eprintln!("[STATE_LAST] path={} last={}.{}",
-                case_path_string(), la.name, la.idx);
+            eprintln!(
+                "[STATE_LAST] path={} last={}.{}",
+                case_path_string(),
+                la.name,
+                la.idx
+            );
         }
     }
 }
@@ -481,9 +580,9 @@ fn write_lnterm_canon(
     t: &tamarin_term::lterm::LNTerm,
     var_fmt: &impl Fn(&tamarin_term::lterm::LVar) -> String,
 ) -> String {
+    use tamarin_term::function_symbols::FunSym;
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_term::function_symbols::FunSym;
     match t {
         Term::Lit(Lit::Var(v)) => var_fmt(v),
         Term::Lit(Lit::Con(n)) => {
@@ -502,8 +601,10 @@ fn write_lnterm_canon(
                 FunSym::Ac(_) => "AC".to_string(),
                 FunSym::List => "List".to_string(),
             };
-            let args_s: Vec<String> =
-                args.iter().map(|a| write_lnterm_canon(a, var_fmt)).collect();
+            let args_s: Vec<String> = args
+                .iter()
+                .map(|a| write_lnterm_canon(a, var_fmt))
+                .collect();
             format!("{}({})", head, args_s.join(","))
         }
     }
@@ -532,11 +633,17 @@ fn state_eqs_flag() -> bool {
 /// equivalent dump in the private instrumented HS build so the lines
 /// diff line-by-line.
 fn canonical_eq_store_subst(sys: &crate::constraint::system::System) -> String {
-    let mut entries: Vec<String> = sys.eq_store.subst.to_list().into_iter().map(|(k, v)| {
-        let k_str = format!("{}{}:{:?}", sort_prefix(k.sort), k.name, k.sort);
-        let v_str = canonical_lnterm(&v);
-        format!("{}→{}", k_str, v_str)
-    }).collect();
+    let mut entries: Vec<String> = sys
+        .eq_store
+        .subst
+        .to_list()
+        .into_iter()
+        .map(|(k, v)| {
+            let k_str = format!("{}{}:{:?}", sort_prefix(k.sort), k.name, k.sort);
+            let v_str = canonical_lnterm(&v);
+            format!("{}→{}", k_str, v_str)
+        })
+        .collect();
     entries.sort();
     format!("[{}]", entries.join(", "))
 }
@@ -565,7 +672,7 @@ fn canonical_node_actions(sys: &crate::constraint::system::System) -> String {
         }
     }
     acts.sort();
-    
+
     compress_dups(&acts)
 }
 
@@ -573,13 +680,15 @@ fn canonical_open_actions(sys: &crate::constraint::system::System) -> String {
     use crate::constraint::constraints::Goal;
     let mut acts: Vec<String> = Vec::new();
     for (g, st) in sys.goals.iter() {
-        if st.solved { continue; }
+        if st.solved {
+            continue;
+        }
         if let Goal::Action(_, fa) = g {
             acts.push(canonical_fact(fa));
         }
     }
     acts.sort();
-    
+
     compress_dups(&acts)
 }
 
@@ -588,14 +697,12 @@ fn canonical_open_actions(sys: &crate::constraint::system::System) -> String {
 fn goal_digest(g: &crate::constraint::constraints::Goal) -> String {
     use crate::constraint::constraints::Goal;
     match g {
-        Goal::Action(_, fa)  => format!("Action({}/{})",
-            fact_tag_short(&fa.tag), fa.terms.len()),
-        Goal::Premise(_, fa) => format!("Premise({}/{})",
-            fact_tag_short(&fa.tag), fa.terms.len()),
-        Goal::Chain(_, _)    => "Chain".to_string(),
-        Goal::Split(_)       => "Split".to_string(),
-        Goal::Disj(d)        => format!("Disj[{}]", disj_heads(d)),
-        Goal::Subterm(_)     => "Subterm".to_string(),
+        Goal::Action(_, fa) => format!("Action({}/{})", fact_tag_short(&fa.tag), fa.terms.len()),
+        Goal::Premise(_, fa) => format!("Premise({}/{})", fact_tag_short(&fa.tag), fa.terms.len()),
+        Goal::Chain(_, _) => "Chain".to_string(),
+        Goal::Split(_) => "Split".to_string(),
+        Goal::Disj(d) => format!("Disj[{}]", disj_heads(d)),
+        Goal::Subterm(_) => "Subterm".to_string(),
     }
 }
 
@@ -604,7 +711,9 @@ fn goal_digest(g: &crate::constraint::constraints::Goal) -> String {
 /// instrumented HS build so we can compare goal-ranking decisions.
 pub fn trace_pick(g: &crate::constraint::constraints::Goal) {
     use crate::constraint::constraints::Goal;
-    if !state_flag() { return; }
+    if !state_flag() {
+        return;
+    }
     let s = goal_digest(g);
     // For Disj goals, also dump the full alternatives (with var idxs
     // preserved) so HS↔Rust comparison can catch dispatch-order
@@ -641,15 +750,15 @@ pub fn trace_pick(g: &crate::constraint::constraints::Goal) {
 
 fn canonical_nodes(sys: &crate::constraint::system::System) -> String {
     use crate::constraint::solver::reduction::rule_case_name;
-    let mut names: Vec<String> = sys.nodes.iter()
-        .map(|(_, r)| rule_case_name(r))
-        .collect();
+    let mut names: Vec<String> = sys.nodes.iter().map(|(_, r)| rule_case_name(r)).collect();
     names.sort();
     compress_dups(&names)
 }
 
 fn canonical_open_goals(sys: &crate::constraint::system::System) -> String {
-    let mut digests: Vec<String> = sys.goals.iter()
+    let mut digests: Vec<String> = sys
+        .goals
+        .iter()
         .filter(|(_, st)| !st.solved)
         .map(|(g, _)| goal_digest(g))
         .collect();
@@ -686,13 +795,14 @@ fn guarded_head(g: &crate::guarded::Guarded) -> String {
         Guarded::Disj(_) => "Disj".to_string(),
         // Format matches that HS build's guarded-head trace: `<Quant><N>v`
         // (e.g. `Ex1v`).  Suppresses bound-var names so HS/Rust line up.
-        Guarded::GGuarded { qua, vars, .. } => format!("{:?}{}v",
-            qua, vars.len()),
+        Guarded::GGuarded { qua, vars, .. } => format!("{:?}{}v", qua, vars.len()),
     }
 }
 
 fn compress_dups(sorted: &[String]) -> String {
-    if sorted.is_empty() { return "[]".to_string(); }
+    if sorted.is_empty() {
+        return "[]".to_string();
+    }
     let mut out = String::from("[");
     let mut iter = sorted.iter().peekable();
     while let Some(first) = iter.next() {
@@ -706,7 +816,9 @@ fn compress_dups(sorted: &[String]) -> String {
         } else {
             out.push_str(first);
         }
-        if iter.peek().is_some() { out.push(','); }
+        if iter.peek().is_some() {
+            out.push(',');
+        }
     }
     out.push(']');
     out

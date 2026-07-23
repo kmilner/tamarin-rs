@@ -24,22 +24,34 @@ pub struct Hsv {
 }
 
 impl Rgb {
-    pub const fn new(r: f64, g: f64, b: f64) -> Self { Rgb { r, g, b } }
+    pub const fn new(r: f64, g: f64, b: f64) -> Self {
+        Rgb { r, g, b }
+    }
     pub fn map<F: Fn(f64) -> f64>(self, f: F) -> Self {
-        Rgb { r: f(self.r), g: f(self.g), b: f(self.b) }
+        Rgb {
+            r: f(self.r),
+            g: f(self.g),
+            b: f(self.b),
+        }
     }
 }
 
 impl Hsv {
-    pub const fn new(h: f64, s: f64, v: f64) -> Self { Hsv { h, s, v } }
+    pub const fn new(h: f64, s: f64, v: f64) -> Self {
+        Hsv { h, s, v }
+    }
     pub fn map<F: Fn(f64) -> f64>(self, f: F) -> Self {
-        Hsv { h: f(self.h), s: f(self.s), v: f(self.v) }
+        Hsv {
+            h: f(self.h),
+            s: f(self.s),
+            v: f(self.v),
+        }
     }
 }
 
-pub const RED:   Rgb = Rgb::new(1.0, 0.0, 0.0);
+pub const RED: Rgb = Rgb::new(1.0, 0.0, 0.0);
 pub const GREEN: Rgb = Rgb::new(0.0, 1.0, 0.0);
-pub const BLUE:  Rgb = Rgb::new(0.0, 0.0, 1.0);
+pub const BLUE: Rgb = Rgb::new(0.0, 0.0, 1.0);
 
 // -- Colourspace conversions --------------------------------------------------
 
@@ -83,11 +95,17 @@ pub fn hsv_to_rgb(c: Hsv) -> Rgb {
 
 /// Drop saturation, keeping hue and value (used to render greyscale variants).
 pub fn hsv_to_gray(c: Hsv) -> Hsv {
-    Hsv { h: c.h, s: 0.0, v: c.v }
+    Hsv {
+        h: c.h,
+        s: 0.0,
+        v: c.v,
+    }
 }
 
 /// `rgbToGray`: max channel intensity.
-pub fn rgb_to_gray(c: Rgb) -> f64 { c.r.max(c.g.max(c.b)) }
+pub fn rgb_to_gray(c: Rgb) -> f64 {
+    c.r.max(c.g.max(c.b))
+}
 
 // -- Hex output ---------------------------------------------------------------
 
@@ -106,7 +124,9 @@ pub fn hex_to_rgb(s: &str) -> Option<Rgb> {
     // byte-slicing) so multibyte input yields `None` instead of panicking on a
     // char-boundary split.
     let cs: Vec<char> = s.chars().collect();
-    if cs.len() != 6 { return None; }
+    if cs.len() != 6 {
+        return None;
+    }
     let r = u8::from_str_radix(&cs[0..2].iter().collect::<String>(), 16).ok()?;
     let g = u8::from_str_radix(&cs[2..4].iter().collect::<String>(), 16).ok()?;
     let b = u8::from_str_radix(&cs[4..6].iter().collect::<String>(), 16).ok()?;
@@ -117,7 +137,9 @@ pub fn hex_to_rgb(s: &str) -> Option<Rgb> {
     })
 }
 
-pub fn hsv_to_hex(c: Hsv) -> String { rgb_to_hex(hsv_to_rgb(c)) }
+pub fn hsv_to_hex(c: Hsv) -> String {
+    rgb_to_hex(hsv_to_rgb(c))
+}
 
 // -- Palette generation -------------------------------------------------------
 //
@@ -141,18 +163,34 @@ pub struct ColorParams {
 }
 
 pub fn color_group_style(zero_hue: f64) -> ColorParams {
-    ColorParams { scale: 0.6, zero_hue, v_bottom: 0.75, v_range: 0.2, s_bottom: 0.4, s_range: 0.0 }
+    ColorParams {
+        scale: 0.6,
+        zero_hue,
+        v_bottom: 0.75,
+        v_range: 0.2,
+        s_bottom: 0.4,
+        s_range: 0.0,
+    }
 }
 
 pub fn light_color_group_style(zero_hue: f64) -> ColorParams {
-    ColorParams { scale: 0.6, zero_hue, v_bottom: 0.8, v_range: 0.15, s_bottom: 0.3, s_range: 0.0 }
+    ColorParams {
+        scale: 0.6,
+        zero_hue,
+        v_bottom: 0.8,
+        v_range: 0.15,
+        s_bottom: 0.3,
+        s_range: 0.0,
+    }
 }
 
 /// `genColorGroups`: assign every element a unique HSV colour from a layout
 /// of group sizes.
 pub fn gen_color_groups(p: ColorParams, groups: &[usize]) -> Vec<((usize, usize), Hsv)> {
     let n_groups = groups.len();
-    if n_groups == 0 { return vec![]; }
+    if n_groups == 0 {
+        return vec![];
+    }
 
     let to_group_hue = |g: usize, h: f64| -> f64 {
         (g as f64 + 0.5 * (1.0 - p.scale) + h * p.scale) / (n_groups as f64)
@@ -190,13 +228,13 @@ pub fn light_color_groups(zero_hue: f64, groups: &[usize]) -> Vec<((usize, usize
 mod tests {
     use super::*;
 
-    fn approx_eq(a: f64, b: f64) -> bool { (a - b).abs() < 1e-9 }
+    fn approx_eq(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
 
     #[test]
     fn rgb_hsv_roundtrip_primaries() {
-        for &(rgb, expected_h) in
-            &[(RED, 0.0), (GREEN, 120.0), (BLUE, 240.0)]
-        {
+        for &(rgb, expected_h) in &[(RED, 0.0), (GREEN, 120.0), (BLUE, 240.0)] {
             let hsv = rgb_to_hsv(rgb);
             assert!(approx_eq(hsv.h, expected_h));
             assert!(approx_eq(hsv.s, 1.0));

@@ -23,10 +23,7 @@ pub type Relation<T> = Vec<(T, T)>;
 
 /// `restrict p rel`: keep edges where both endpoints satisfy `p`.
 pub fn restrict<T: Clone, F: FnMut(&T) -> bool>(rel: &Relation<T>, mut p: F) -> Relation<T> {
-    rel.iter()
-        .filter(|(x, y)| p(x) && p(y))
-        .cloned()
-        .collect()
+    rel.iter().filter(|(x, y)| p(x) && p(y)).cloned().collect()
 }
 
 /// `image x rel`: every successor of `x` in `rel`.
@@ -67,8 +64,12 @@ pub fn cyclic<T: Ord + Clone>(rel: &Relation<T>) -> bool {
         visited: &mut BTreeSet<T>,
         x: T,
     ) -> bool {
-        if parents.contains(&x) { return true; }
-        if visited.contains(&x) { return false; }
+        if parents.contains(&x) {
+            return true;
+        }
+        if visited.contains(&x) {
+            return false;
+        }
         parents.insert(x.clone());
         // Inlined `image(&x, rel)`: scan `rel` front-to-back, recursing into each
         // successor in the same order (no `visited` guard here, matching the
@@ -105,8 +106,12 @@ pub fn toposort<T: Ord + Clone>(rel: &Relation<T>) -> Vec<T> {
     // Collect all vertices in source-then-target order, like Haskell's
     // `map fst dag ++ map snd dag`.
     let mut order_input: Vec<T> = Vec::with_capacity(rel.len() * 2);
-    for (a, _) in rel { order_input.push(a.clone()); }
-    for (_, b) in rel { order_input.push(b.clone()); }
+    for (a, _) in rel {
+        order_input.push(a.clone());
+    }
+    for (_, b) in rel {
+        order_input.push(b.clone());
+    }
 
     let mut visited: BTreeSet<T> = BTreeSet::new();
     let mut out: Vec<T> = Vec::new();
@@ -118,7 +123,9 @@ pub fn toposort<T: Ord + Clone>(rel: &Relation<T>) -> Vec<T> {
         out: &mut Vec<T>,
         x: T,
     ) {
-        if visited.contains(&x) { return; }
+        if visited.contains(&x) {
+            return;
+        }
         visited.insert(x.clone());
         // Inlined `image(&x, inv)`: scan `inv` front-to-back, recursing into each
         // predecessor in the same order (avoids a per-node Vec). `inv` is
@@ -193,9 +200,7 @@ pub fn dfs_loop_breakers<T: Ord + Clone>(rel: &Relation<T>) -> Vec<T> {
         // check whether ANY successor is already a parent (back-edge), then
         // otherwise recurse into the unvisited successors front-to-back. `rel` is
         // immutable so the two scans see the same successors as the snapshot.
-        let hits_parent = rel
-            .iter()
-            .any(|(a, b)| a == &x && parents.contains(b));
+        let hits_parent = rel.iter().any(|(a, b)| a == &x && parents.contains(b));
         if hits_parent {
             breakers.push(x.clone());
         } else {
@@ -221,7 +226,9 @@ pub fn dfs_loop_breakers<T: Ord + Clone>(rel: &Relation<T>) -> Vec<T> {
 pub fn trans_red<T: Ord + Clone>(dag: &Relation<T>) -> Relation<T> {
     let topo = toposort(dag);
     let n = topo.len();
-    if n < 2 { return Vec::new(); }
+    if n < 2 {
+        return Vec::new();
+    }
 
     let dag_set: BTreeSet<(T, T)> = dag.iter().cloned().collect();
 
@@ -241,7 +248,9 @@ pub fn trans_red<T: Ord + Clone>(dag: &Relation<T>) -> Relation<T> {
     let mut new_edges: Relation<T> = Vec::new();
     for (j, i) in indexed {
         let edge = (topo[j].clone(), topo[i].clone());
-        if !dag_set.contains(&edge) { continue; }
+        if !dag_set.contains(&edge) {
+            continue;
+        }
         let reachable = reachable_set(std::slice::from_ref(&edge.0), &new_edges);
         if !reachable.contains(&edge.1) {
             new_edges.push(edge);
@@ -255,7 +264,9 @@ pub fn trans_red<T: Ord + Clone>(dag: &Relation<T>) -> Relation<T> {
 mod tests {
     use super::*;
 
-    fn rel<T: Clone>(es: &[(T, T)]) -> Relation<T> { es.to_vec() }
+    fn rel<T: Clone>(es: &[(T, T)]) -> Relation<T> {
+        es.to_vec()
+    }
 
     #[test]
     fn image_and_inverse() {

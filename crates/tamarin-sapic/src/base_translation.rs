@@ -12,10 +12,10 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_term::lterm::{LVar, LNTerm};
+use tamarin_term::lterm::{LNTerm, LVar};
 use tamarin_term::vterm::{Lit, VTerm};
 
-use tamarin_theory::sapic::{SapicAction, SapicLVar, SapicTerm, ProcessPosition};
+use tamarin_theory::sapic::{ProcessPosition, SapicAction, SapicLVar, SapicTerm};
 
 use crate::annotation::ProcessAnnotation;
 use crate::facts::{
@@ -36,7 +36,11 @@ pub type RuleBody = (
 /// `baseTransNull` (Basetranslation.hs:81-82):
 ///   `[([State LState p tildex], [], [], [])]`
 pub fn base_trans_null(p: &ProcessPosition, tildex: &BTreeSet<LVar>) -> Vec<RuleBody> {
-    let st = TransFact::State(StateKind::LState, p.clone(), tildex.iter().cloned().collect());
+    let st = TransFact::State(
+        StateKind::LState,
+        p.clone(),
+        tildex.iter().cloned().collect(),
+    );
     vec![(vec![st], vec![], vec![], vec![])]
 }
 
@@ -193,7 +197,11 @@ pub fn base_trans_action(
         // message variable `x` avoiding `tildex`, build the Let combinator rules
         // for `let pat = x`, then prepend the channel facts via
         // `mergeWithStateRule` (only onto rules that have a State premise).
-        SapicAction::ChIn { chan, msg, match_vars } => {
+        SapicAction::ChIn {
+            chan,
+            msg,
+            match_vars,
+        } => {
             // `x = evalFreshAvoiding (freshLVar "x" LSortMsg) tildex`.
             let x = fresh_msg_var_avoiding("x", tildex);
             let xt: LNTerm = VTerm::Lit(Lit::Var(x.clone()));
@@ -252,7 +260,11 @@ pub fn base_trans_action(
                     };
                     // `mergeWithStateRule ([Message tc xt], [], ack) rules`.
                     let mut out = merge_with_state_rule(
-                        (vec![TransFact::Message(tc.clone(), xt.clone())], vec![], ack),
+                        (
+                            vec![TransFact::Message(tc.clone(), xt.clone())],
+                            vec![],
+                            ack,
+                        ),
                         rules.clone(),
                     );
                     // only add adversary rule if channel is not guaranteed secret.
@@ -268,7 +280,10 @@ pub fn base_trans_action(
         }
         // (ChOut (Just tc') t') | secretChannel = Just (AnVar _)
         // (Basetranslation.hs:128-137): the private secret-channel output.
-        SapicAction::ChOut { chan: Some(tc_term), msg } if an.secret_channel.is_some() => {
+        SapicAction::ChOut {
+            chan: Some(tc_term),
+            msg,
+        } if an.secret_channel.is_some() => {
             let tc = to_ln_term(tc_term);
             let t = to_ln_term(msg);
             if async_channels {
@@ -304,7 +319,10 @@ pub fn base_trans_action(
         }
         // (ChOut (Just tc') t') | secretChannel = Nothing
         // (Basetranslation.hs:138-149): the public-channel output.
-        SapicAction::ChOut { chan: Some(tc_term), msg } => {
+        SapicAction::ChOut {
+            chan: Some(tc_term),
+            msg,
+        } => {
             let tc = to_ln_term(tc_term);
             let t = to_ln_term(msg);
             // The adversary-injected output rule: `([def_state, In tc],
@@ -516,7 +534,13 @@ pub fn base_trans_action(
         //    , map TamarinAct a ++ [EventEmpty | needsAss]
         //    , def_state' tx' : map TamarinFact r
         //    , res )]
-        SapicAction::Msr { prems, acts, concs, rest, .. } => {
+        SapicAction::Msr {
+            prems,
+            acts,
+            concs,
+            rest,
+            ..
+        } => {
             let l: Vec<tamarin_theory::fact::LNFact> = prems.iter().map(to_ln_fact).collect();
             let a: Vec<tamarin_theory::fact::LNFact> = acts.iter().map(to_ln_fact).collect();
             let r: Vec<tamarin_theory::fact::LNFact> = concs.iter().map(to_ln_fact).collect();
@@ -663,7 +687,11 @@ pub fn base_trans_comb(
                 vec![def_state2(tildex)],
                 vec![not_f],
             );
-            Ok((vec![body_then, body_else], tildex.clone(), Some(tildex.clone())))
+            Ok((
+                vec![body_then, body_else],
+                tildex.clone(),
+                Some(tildex.clone()),
+            ))
         }
         // Pure cell Lookup (Basetranslation.hs:280-289), gated on
         //   pureState && Just (AnVar vs) <- an.unlock:
@@ -741,20 +769,20 @@ pub fn base_trans_comb(
         //      tildexl, Nothing
         PC::Let { left, right, .. } => {
             let t1or = to_ln_term(left);
-            let (t1, t2, freevars): (LNTerm, LNTerm, BTreeSet<LVar>) =
-                match &an.destructor_equation {
-                    None => {
-                        let fv = ln_term_vars(&t1or);
-                        (t1or.clone(), to_ln_term(right), fv)
+            let (t1, t2, freevars): (LNTerm, LNTerm, BTreeSet<LVar>) = match &an.destructor_equation
+            {
+                None => {
+                    let fv = ln_term_vars(&t1or);
+                    (t1or.clone(), to_ln_term(right), fv)
+                }
+                Some((tl1, tl2)) => {
+                    let mut fv = ln_term_vars(tl1);
+                    for v in tildex {
+                        fv.remove(v);
                     }
-                    Some((tl1, tl2)) => {
-                        let mut fv = ln_term_vars(tl1);
-                        for v in tildex {
-                            fv.remove(v);
-                        }
-                        (tl1.clone(), tl2.clone(), fv)
-                    }
-                };
+                    (tl1.clone(), tl2.clone(), fv)
+                }
+            };
             // `tildexl = frees t1or ∪ tildex`
             let mut tildexl = tildex.clone();
             tildexl.extend(ln_term_vars(&t1or));
@@ -765,11 +793,19 @@ pub fn base_trans_comb(
             let body0: RuleBody = (
                 vec![def_state(tildex)],
                 vec![],
-                vec![TransFact::FLet(pos.clone(), t2.clone(), tildex.iter().cloned().collect())],
+                vec![TransFact::FLet(
+                    pos.clone(),
+                    t2.clone(),
+                    tildex.iter().cloned().collect(),
+                )],
                 vec![],
             );
             let body1: RuleBody = (
-                vec![TransFact::FLet(pos.clone(), t1, tildex.iter().cloned().collect())],
+                vec![TransFact::FLet(
+                    pos.clone(),
+                    t1,
+                    tildex.iter().cloned().collect(),
+                )],
                 vec![],
                 vec![def_state1(&tildexl)],
                 vec![],
@@ -825,7 +861,12 @@ fn merge_with_state_rule(
 /// snd) . boundsVarIdx` — i.e. (max index in `tildex`) + 1, or 0 if empty.
 fn fresh_msg_var_avoiding(name: &str, tildex: &BTreeSet<LVar>) -> LVar {
     use tamarin_term::lterm::LSort;
-    let idx = tildex.iter().map(|v| v.idx).max().map(|m| m + 1).unwrap_or(0);
+    let idx = tildex
+        .iter()
+        .map(|v| v.idx)
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(0);
     LVar::new(name, LSort::Msg, idx)
 }
 
@@ -845,16 +886,16 @@ fn let_else_restriction(
     freevars: &BTreeSet<LVar>,
 ) -> tamarin_parser::ast::Formula {
     use tamarin_parser::ast as p;
-    let eq = p::Formula::Atom(p::Atom::Eq(
-        ln_term_to_parser(t1),
-        ln_term_to_parser(t2),
-    ));
+    let eq = p::Formula::Atom(p::Atom::Eq(ln_term_to_parser(t1), ln_term_to_parser(t2)));
     // `Conn Imp (Ato (EqE t1 t2)) (TF False)` = `(t1 = t2) ⇒ False`.
     let body = p::Formula::Implies(Box::new(eq), Box::new(p::Formula::False));
     if freevars.is_empty() {
         body
     } else {
-        let vs: Vec<p::VarSpec> = freevars.iter().map(crate::convert::lvar_to_varspec).collect();
+        let vs: Vec<p::VarSpec> = freevars
+            .iter()
+            .map(crate::convert::lvar_to_varspec)
+            .collect();
         p::Formula::Forall(vs, Box::new(body))
     }
 }
@@ -893,14 +934,18 @@ pub(crate) fn ln_term_to_parser(t: &LNTerm) -> tamarin_parser::ast::Term {
             };
             // Fold the AC arg list left-associatively into BinOps.
             let mut it = args.iter();
-            let first = it.next().map(ln_term_to_parser).unwrap_or(p::Term::NumberOne);
+            let first = it
+                .next()
+                .map(ln_term_to_parser)
+                .unwrap_or(p::Term::NumberOne);
             it.fold(first, |acc, a| {
                 p::Term::BinOp(bop, Box::new(acc), Box::new(ln_term_to_parser(a)))
             })
         }
-        VTerm::App(FunSym::C(_), args) => {
-            p::Term::App("em".to_string(), args.iter().map(ln_term_to_parser).collect())
-        }
+        VTerm::App(FunSym::C(_), args) => p::Term::App(
+            "em".to_string(),
+            args.iter().map(ln_term_to_parser).collect(),
+        ),
         VTerm::App(FunSym::List, args) => {
             p::Term::Pair(args.iter().map(ln_term_to_parser).collect())
         }
@@ -927,7 +972,11 @@ fn collect_pair(t: &LNTerm, out: &mut Vec<tamarin_parser::ast::Term>) {
 fn formula_free_lvars(f: &tamarin_parser::ast::Formula) -> BTreeSet<LVar> {
     let mut out = BTreeSet::new();
     crate::convert::fold_free_vars(f, &mut |v, _bound| {
-        out.insert(LVar::new(v.name.clone(), crate::convert::sort_of_hint(&v.sort), v.idx));
+        out.insert(LVar::new(
+            v.name.clone(),
+            crate::convert::sort_of_hint(&v.sort),
+            v.idx,
+        ));
     });
     out
 }
@@ -942,7 +991,10 @@ fn eq_fact(t1: &SapicTerm, t2: &SapicTerm) -> tamarin_theory::fact::LNFact {
 
 /// `fromList $ getFactVariables fa` — the set of variables occurring in a fact.
 fn fact_vars(f: &tamarin_theory::fact::LNFact) -> BTreeSet<LVar> {
-    f.terms.iter().flat_map(tamarin_term::vterm::vars_vterm).collect()
+    f.terms
+        .iter()
+        .flat_map(tamarin_term::vterm::vars_vterm)
+        .collect()
 }
 
 /// `baseInit` (Basetranslation.hs:312-318): the `Init` rule plus the empty
@@ -1054,14 +1106,8 @@ pub fn predicate_restrictions() -> Vec<tamarin_parser::ast::Restriction> {
     ));
 
     // predicate_eq: All #i a b. Pred_Eq(a,b)@i ==> a = b
-    let eq_body = p::Formula::Implies(
-        Box::new(pred_at("Pred_Eq")),
-        Box::new(eq_atom.clone()),
-    );
-    let eq_formula = p::Formula::Forall(
-        vec![tvar("i"), mvar("a"), mvar("b")],
-        Box::new(eq_body),
-    );
+    let eq_body = p::Formula::Implies(Box::new(pred_at("Pred_Eq")), Box::new(eq_atom.clone()));
+    let eq_formula = p::Formula::Forall(vec![tvar("i"), mvar("a"), mvar("b")], Box::new(eq_body));
     let predicate_eq = p::Restriction {
         name: "predicate_eq".to_string(),
         formula: eq_formula,
@@ -1073,10 +1119,7 @@ pub fn predicate_restrictions() -> Vec<tamarin_parser::ast::Restriction> {
         Box::new(pred_at("Pred_Not_Eq")),
         Box::new(p::Formula::Not(Box::new(eq_atom))),
     );
-    let neq_formula = p::Formula::Forall(
-        vec![tvar("i"), mvar("a"), mvar("b")],
-        Box::new(neq_body),
-    );
+    let neq_formula = p::Formula::Forall(vec![tvar("i"), mvar("a"), mvar("b")], Box::new(neq_body));
     let predicate_not_eq = p::Restriction {
         name: "predicate_not_eq".to_string(),
         formula: neq_formula,
@@ -1093,7 +1136,11 @@ fn parse_restriction(name: &str, src: &str) -> tamarin_parser::ast::Restriction 
     use tamarin_parser::ast as p;
     let formula = tamarin_parser::parser::parse_formula_str(src)
         .unwrap_or_else(|e| panic!("Error parsing hard-coded restriction {name}: {e:?}"));
-    p::Restriction { name: name.to_string(), formula, attributes: vec![] }
+    p::Restriction {
+        name: name.to_string(),
+        formula,
+        attributes: vec![],
+    }
 }
 
 /// The `set_in` / `set_notin` restrictions (Basetranslation.hs:332-359), added
@@ -1137,7 +1184,6 @@ pub fn state_restrictions(has_delete: bool) -> Vec<tamarin_parser::ast::Restrict
     ]
 }
 
-
 /// The `in_event` restriction `resInEv` (Basetranslation.hs:439-444), added by
 /// `baseRestr` when `needsInEvRes` (a lemma needs the in-event axiom).  As with
 /// the other hardcoded restrictions, HS parses the string with
@@ -1166,7 +1212,8 @@ const RES_LOCKING_POS: &str = "All p pp l x lp #t1 #t3. LockPOS(p, l, x)@t1 & Lo
 
 /// `resLockingPOSNoUnlock` (Basetranslation.hs:379-383): the locking
 /// restriction for a lock with no matching unlock.
-const RES_LOCKING_POS_NO_UNLOCK: &str = "All p pp l x lp #t1 #t3. LockPOS(p, l, x)@t1 & Lock(pp, lp, x)@t3 ==>\n\
+const RES_LOCKING_POS_NO_UNLOCK: &str =
+    "All p pp l x lp #t1 #t3. LockPOS(p, l, x)@t1 & Lock(pp, lp, x)@t3 ==>\n\
         #t3<#t1 | #t1=#t3";
 
 /// `resLocking hasUnlock v` (Basetranslation.hs:406-425): produce the
@@ -1175,7 +1222,11 @@ const RES_LOCKING_POS_NO_UNLOCK: &str = "All p pp l x lp #t1 #t3. LockPOS(p, l, 
 /// `Lock_<idx>`/`Unlock_<idx>` (HS `mapAtoms subst`, with
 /// `hardcode s = s ++ "_" ++ show (lvarIdx v)`).
 pub fn res_locking(has_unlock: bool, v: &LVar) -> tamarin_parser::ast::Restriction {
-    let src = if has_unlock { RES_LOCKING_POS } else { RES_LOCKING_POS_NO_UNLOCK };
+    let src = if has_unlock {
+        RES_LOCKING_POS
+    } else {
+        RES_LOCKING_POS_NO_UNLOCK
+    };
     let idx = v.idx;
     let mut restr = parse_restriction(&format!("locking_{idx}"), src);
     rename_lock_pos_atoms(&mut restr.formula, idx);
@@ -1230,8 +1281,8 @@ pub fn res_locking_pure() -> Vec<tamarin_parser::ast::Restriction> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tamarin_theory::sapic::ProcessCombinator;
     use tamarin_term::lterm::LSort;
+    use tamarin_theory::sapic::ProcessCombinator;
 
     fn lv(name: &str, idx: u64) -> LVar {
         LVar::new(name, LSort::Msg, idx)
@@ -1252,12 +1303,15 @@ mod tests {
             base_trans_action(false, false, &SapicAction::Rep, &an, &p, &tx).unwrap();
         assert_eq!(bodies.len(), 2);
         assert_eq!(tx2, tx); // tildex unchanged
-        // First rule conclusion is a PERSISTENT semistate at [1,1].
+                             // First rule conclusion is a PERSISTENT semistate at [1,1].
         let (_, _, concs0, _) = &bodies[0];
         match &concs0[0] {
             TransFact::State(kind, pos, _) => {
                 assert!(kind.is_semi_state());
-                assert_eq!(kind.multiplicity(), tamarin_theory::fact::Multiplicity::Persistent);
+                assert_eq!(
+                    kind.multiplicity(),
+                    tamarin_theory::fact::Multiplicity::Persistent
+                );
                 assert_eq!(pos, &vec![1, 1]);
             }
             _ => panic!("expected semistate conclusion"),
@@ -1297,8 +1351,7 @@ mod tests {
         let an = ProcessAnnotation::<LVar>::empty();
         let p: Vec<i64> = vec![];
         let tx = BTreeSet::new();
-        let (bodies, txl, txr) =
-            base_trans_comb(&ProcessCombinator::Ndc, &an, &p, &tx).unwrap();
+        let (bodies, txl, txr) = base_trans_comb(&ProcessCombinator::Ndc, &an, &p, &tx).unwrap();
         assert!(bodies.is_empty());
         assert_eq!(txl, tx);
         assert_eq!(txr, Some(tx));

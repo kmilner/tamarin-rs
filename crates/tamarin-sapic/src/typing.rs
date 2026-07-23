@@ -21,10 +21,10 @@ use tamarin_term::lterm::{LSort, LVar, Name};
 use tamarin_term::vterm::{Lit, VTerm};
 use tamarin_utils::fresh::PreciseFreshState;
 
+use tamarin_theory::sapic::PlainProcess;
 use tamarin_theory::sapic::{
     Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm, SapicType,
 };
-use tamarin_theory::sapic::PlainProcess;
 
 use crate::bindings::{bindings_act, bindings_comb};
 
@@ -73,7 +73,10 @@ fn collect_fact_vars(
     }
 }
 
-fn collect_action_vars(a: &SapicAction<SapicLVar>, out: &mut std::collections::BTreeSet<SapicLVar>) {
+fn collect_action_vars(
+    a: &SapicAction<SapicLVar>,
+    out: &mut std::collections::BTreeSet<SapicLVar>,
+) {
     match a {
         SapicAction::New(v) => {
             out.insert(v.clone());
@@ -85,7 +88,11 @@ fn collect_action_vars(a: &SapicAction<SapicLVar>, out: &mut std::collections::B
             }
             collect_term_vars(msg, out);
         }
-        SapicAction::ChIn { chan, msg, match_vars } => {
+        SapicAction::ChIn {
+            chan,
+            msg,
+            match_vars,
+        } => {
             if let Some(c) = chan {
                 collect_term_vars(c, out);
             }
@@ -106,7 +113,9 @@ fn collect_action_vars(a: &SapicAction<SapicLVar>, out: &mut std::collections::B
                 collect_term_vars(t, out);
             }
         }
-        SapicAction::Msr { prems, acts, concs, .. } => {
+        SapicAction::Msr {
+            prems, acts, concs, ..
+        } => {
             for f in prems.iter().chain(acts).chain(concs) {
                 collect_fact_vars(f, out);
             }
@@ -115,13 +124,20 @@ fn collect_action_vars(a: &SapicAction<SapicLVar>, out: &mut std::collections::B
     }
 }
 
-fn collect_comb_vars(c: &ProcessCombinator<SapicLVar>, out: &mut std::collections::BTreeSet<SapicLVar>) {
+fn collect_comb_vars(
+    c: &ProcessCombinator<SapicLVar>,
+    out: &mut std::collections::BTreeSet<SapicLVar>,
+) {
     match c {
         ProcessCombinator::Lookup(t, v) => {
             collect_term_vars(t, out);
             out.insert(v.clone());
         }
-        ProcessCombinator::Let { left, right, match_vars } => {
+        ProcessCombinator::Let {
+            left,
+            right,
+            match_vars,
+        } => {
             collect_term_vars(left, out);
             collect_term_vars(right, out);
             for v in match_vars {
@@ -151,7 +167,11 @@ fn collect_comb_vars(c: &ProcessCombinator<SapicLVar>, out: &mut std::collection
 fn cond_formula_free_lvars(f: &tamarin_parser::ast::Formula) -> Vec<LVar> {
     let mut out = Vec::new();
     crate::convert::fold_free_vars(f, &mut |v, _bound| {
-        out.push(LVar::new(v.name.clone(), crate::convert::sort_of_hint(&v.sort), v.idx));
+        out.push(LVar::new(
+            v.name.clone(),
+            crate::convert::sort_of_hint(&v.sort),
+            v.idx,
+        ));
     });
     out
 }
@@ -186,7 +206,10 @@ fn rename_cond_formula(
 fn rename_term(subst: &BTreeMap<LVar, LVar>, t: &SapicTerm) -> SapicTerm {
     match t {
         VTerm::Lit(Lit::Var(sv)) => {
-            let new_lv = subst.get(&sv.var).cloned().unwrap_or_else(|| sv.var.clone());
+            let new_lv = subst
+                .get(&sv.var)
+                .cloned()
+                .unwrap_or_else(|| sv.var.clone());
             VTerm::Lit(Lit::Var(SapicLVar::new(new_lv, sv.stype.clone())))
         }
         VTerm::Lit(Lit::Con(c)) => VTerm::Lit(Lit::Con(c.clone())),
@@ -199,7 +222,10 @@ fn rename_term(subst: &BTreeMap<LVar, LVar>, t: &SapicTerm) -> SapicTerm {
 }
 
 fn rename_sv(subst: &BTreeMap<LVar, LVar>, sv: &SapicLVar) -> SapicLVar {
-    let new_lv = subst.get(&sv.var).cloned().unwrap_or_else(|| sv.var.clone());
+    let new_lv = subst
+        .get(&sv.var)
+        .cloned()
+        .unwrap_or_else(|| sv.var.clone());
     SapicLVar::new(new_lv, sv.stype.clone())
 }
 
@@ -210,7 +236,10 @@ fn rename_fact(
     f.map_ref(|t| rename_term(subst, t))
 }
 
-fn rename_action(subst: &BTreeMap<LVar, LVar>, a: &SapicAction<SapicLVar>) -> SapicAction<SapicLVar> {
+fn rename_action(
+    subst: &BTreeMap<LVar, LVar>,
+    a: &SapicAction<SapicLVar>,
+) -> SapicAction<SapicLVar> {
     match a {
         SapicAction::New(v) => SapicAction::New(rename_sv(subst, v)),
         SapicAction::Event(f) => SapicAction::Event(rename_fact(subst, f)),
@@ -218,7 +247,11 @@ fn rename_action(subst: &BTreeMap<LVar, LVar>, a: &SapicAction<SapicLVar>) -> Sa
             chan: chan.as_ref().map(|t| rename_term(subst, t)),
             msg: rename_term(subst, msg),
         },
-        SapicAction::ChIn { chan, msg, match_vars } => SapicAction::ChIn {
+        SapicAction::ChIn {
+            chan,
+            msg,
+            match_vars,
+        } => SapicAction::ChIn {
             chan: chan.as_ref().map(|t| rename_term(subst, t)),
             msg: rename_term(subst, msg),
             match_vars: match_vars.iter().map(|v| rename_sv(subst, v)).collect(),
@@ -229,10 +262,17 @@ fn rename_action(subst: &BTreeMap<LVar, LVar>, a: &SapicAction<SapicLVar>) -> Sa
         SapicAction::Delete(t) => SapicAction::Delete(rename_term(subst, t)),
         SapicAction::Lock(t) => SapicAction::Lock(rename_term(subst, t)),
         SapicAction::Unlock(t) => SapicAction::Unlock(rename_term(subst, t)),
-        SapicAction::ProcessCall(n, ts) => {
-            SapicAction::ProcessCall(n.clone(), ts.iter().map(|t| rename_term(subst, t)).collect())
-        }
-        SapicAction::Msr { prems, acts, concs, rest, match_vars } => SapicAction::Msr {
+        SapicAction::ProcessCall(n, ts) => SapicAction::ProcessCall(
+            n.clone(),
+            ts.iter().map(|t| rename_term(subst, t)).collect(),
+        ),
+        SapicAction::Msr {
+            prems,
+            acts,
+            concs,
+            rest,
+            match_vars,
+        } => SapicAction::Msr {
             prems: prems.iter().map(|f| rename_fact(subst, f)).collect(),
             acts: acts.iter().map(|f| rename_fact(subst, f)).collect(),
             concs: concs.iter().map(|f| rename_fact(subst, f)).collect(),
@@ -251,7 +291,11 @@ fn rename_comb(
         ProcessCombinator::Lookup(t, v) => {
             ProcessCombinator::Lookup(rename_term(subst, t), rename_sv(subst, v))
         }
-        ProcessCombinator::Let { left, right, match_vars } => ProcessCombinator::Let {
+        ProcessCombinator::Let {
+            left,
+            right,
+            match_vars,
+        } => ProcessCombinator::Let {
             left: rename_term(subst, left),
             right: rename_term(subst, right),
             match_vars: match_vars.iter().map(|v| rename_sv(subst, v)).collect(),
@@ -347,8 +391,10 @@ fn mk_subst(
 /// every variable already present, then run `renameUnique'` from the identity
 /// substitution.
 pub fn rename_unique(p: &PlainProcess) -> PlainProcess {
-    let avoid: Vec<(String, u64)> =
-        proc_lvars(p).into_iter().map(|lv| (lv.name.to_string(), lv.idx)).collect();
+    let avoid: Vec<(String, u64)> = proc_lvars(p)
+        .into_iter()
+        .map(|lv| (lv.name.to_string(), lv.idx))
+        .collect();
     let mut fresh = PreciseFreshState::avoid_precise(avoid);
     let empty: BTreeMap<LVar, LVar> = BTreeMap::new();
     rename_unique_go(&mut fresh, &empty, p)
@@ -477,10 +523,7 @@ fn type_with(
                         ptypes2.push(ty);
                     }
                     insert_fun(env, fs, (ptypes2, outtype2.clone()))?;
-                    Ok((
-                        tamarin_term::term::f_app(*sym, ts_new),
-                        outtype2,
-                    ))
+                    Ok((tamarin_term::term::f_app(*sym, ts_new), outtype2))
                 }
                 // list / AC / C symbol: polymorphic, type args with Nothing.
                 _ => {
@@ -489,10 +532,7 @@ fn type_with(
                         let (a_new, _) = type_with(env, a, &None)?;
                         ts_new.push(a_new);
                     }
-                    Ok((
-                        tamarin_term::term::f_app(*sym, ts_new),
-                        None,
-                    ))
+                    Ok((tamarin_term::term::f_app(*sym, ts_new), None))
                 }
             }
         }
@@ -614,7 +654,11 @@ fn type_action(
             chan: chan.as_ref().map(|t| type_term(env, t)).transpose()?,
             msg: type_term(env, msg)?,
         }),
-        SapicAction::ChIn { chan, msg, match_vars } => Ok(SapicAction::ChIn {
+        SapicAction::ChIn {
+            chan,
+            msg,
+            match_vars,
+        } => Ok(SapicAction::ChIn {
             chan: chan.as_ref().map(|t| type_term(env, t)).transpose()?,
             msg: type_term(env, msg)?,
             match_vars: match_vars.iter().map(type_with_var).collect(),
@@ -627,12 +671,29 @@ fn type_action(
         SapicAction::Unlock(t) => Ok(SapicAction::Unlock(type_term(env, t)?)),
         SapicAction::ProcessCall(n, ts) => Ok(SapicAction::ProcessCall(
             n.clone(),
-            ts.iter().map(|t| type_term(env, t)).collect::<Result<_, _>>()?,
+            ts.iter()
+                .map(|t| type_term(env, t))
+                .collect::<Result<_, _>>()?,
         )),
-        SapicAction::Msr { prems, acts, concs, rest, match_vars } => Ok(SapicAction::Msr {
-            prems: prems.iter().map(|f| type_event_fact(env, f)).collect::<Result<_, _>>()?,
-            acts: acts.iter().map(|f| type_event_fact(env, f)).collect::<Result<_, _>>()?,
-            concs: concs.iter().map(|f| type_event_fact(env, f)).collect::<Result<_, _>>()?,
+        SapicAction::Msr {
+            prems,
+            acts,
+            concs,
+            rest,
+            match_vars,
+        } => Ok(SapicAction::Msr {
+            prems: prems
+                .iter()
+                .map(|f| type_event_fact(env, f))
+                .collect::<Result<_, _>>()?,
+            acts: acts
+                .iter()
+                .map(|f| type_event_fact(env, f))
+                .collect::<Result<_, _>>()?,
+            concs: concs
+                .iter()
+                .map(|f| type_event_fact(env, f))
+                .collect::<Result<_, _>>()?,
             // `rest` formulas use `typeWithFact = return` (Typing.hs:135-168, see line 162) — left
             // untyped, matching HS.
             rest: rest.clone(),
@@ -647,17 +708,23 @@ fn type_comb(
     c: &ProcessCombinator<SapicLVar>,
 ) -> Result<ProcessCombinator<SapicLVar>, String> {
     match c {
-        ProcessCombinator::Lookup(t, v) => {
-            Ok(ProcessCombinator::Lookup(type_term(env, t)?, type_with_var(v)))
-        }
-        ProcessCombinator::Let { left, right, match_vars } => Ok(ProcessCombinator::Let {
+        ProcessCombinator::Lookup(t, v) => Ok(ProcessCombinator::Lookup(
+            type_term(env, t)?,
+            type_with_var(v),
+        )),
+        ProcessCombinator::Let {
+            left,
+            right,
+            match_vars,
+        } => Ok(ProcessCombinator::Let {
             left: type_term(env, left)?,
             right: type_term(env, right)?,
             match_vars: match_vars.iter().map(type_with_var).collect(),
         }),
-        ProcessCombinator::CondEq(a, b) => {
-            Ok(ProcessCombinator::CondEq(type_term(env, a)?, type_term(env, b)?))
-        }
+        ProcessCombinator::CondEq(a, b) => Ok(ProcessCombinator::CondEq(
+            type_term(env, a)?,
+            type_term(env, b)?,
+        )),
         other => Ok(other.clone()),
     }
 }
@@ -713,7 +780,10 @@ fn init_te_from_sig(
             funs.insert(*key, (arg_types.clone(), out_type.clone()));
         }
     }
-    TypingEnvironment { vars: BTreeMap::new(), funs }
+    TypingEnvironment {
+        vars: BTreeMap::new(),
+        funs,
+    }
 }
 
 /// `typeAndRenameProcess` (Typing.hs:209-212): renameUnique then typeProcess.

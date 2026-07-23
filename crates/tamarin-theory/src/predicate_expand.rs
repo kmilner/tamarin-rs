@@ -137,10 +137,12 @@ fn expand(
             Box::new(expand(a, preds, subst)?),
             Box::new(expand(b, preds, subst)?),
         )),
-        p::Formula::Forall(vs, body) =>
-            expand_quantified(vs, body, preds, subst, p::Formula::Forall),
-        p::Formula::Exists(vs, body) =>
-            expand_quantified(vs, body, preds, subst, p::Formula::Exists),
+        p::Formula::Forall(vs, body) => {
+            expand_quantified(vs, body, preds, subst, p::Formula::Forall)
+        }
+        p::Formula::Exists(vs, body) => {
+            expand_quantified(vs, body, preds, subst, p::Formula::Exists)
+        }
     }
 }
 
@@ -151,7 +153,9 @@ fn strip_shadowed<'a>(subst: &'a Subst, vs: &[p::VarSpec]) -> std::borrow::Cow<'
         return std::borrow::Cow::Borrowed(subst);
     }
     let mut out = subst.clone();
-    for v in vs { out.map.remove(&v.name); }
+    for v in vs {
+        out.map.remove(&v.name);
+    }
     std::borrow::Cow::Owned(out)
 }
 
@@ -201,7 +205,10 @@ fn expand_quantified(
     let collides = |v: &p::VarSpec| capture.contains(&(v.name.clone(), sort_key(v.sort)));
     // Fast path: no binder collides with a substituted variable.
     if !vs.iter().any(collides) {
-        return Ok(make(vs.to_vec(), Box::new(expand(body, preds, &new_subst)?)));
+        return Ok(make(
+            vs.to_vec(),
+            Box::new(expand(body, preds, &new_subst)?),
+        ));
     }
     // Alpha-rename the colliding binders to fresh names.  The fresh-name
     // avoid-set stays name-based (over-avoiding a name is harmless; renaming
@@ -209,7 +216,9 @@ fn expand_quantified(
     let mut avoid: std::collections::BTreeSet<String> =
         capture.iter().map(|(n, _)| n.clone()).collect();
     collect_formula_vars(body, &mut avoid);
-    for v in vs { avoid.insert(v.name.clone()); }
+    for v in vs {
+        avoid.insert(v.name.clone());
+    }
     let mut new_vs = vs.to_vec();
     let mut body_subst = new_subst.into_owned();
     for v in new_vs.iter_mut() {
@@ -229,7 +238,9 @@ fn expand_quantified(
 /// the variables at risk of capture by a binder of the SAME name AND sort.
 fn subst_range_vars(subst: &Subst) -> std::collections::BTreeSet<(String, SortKey)> {
     let mut out = std::collections::BTreeSet::new();
-    for v in subst.map.values() { collect_term_vars_keyed(v, &mut out); }
+    for v in subst.map.values() {
+        collect_term_vars_keyed(v, &mut out);
+    }
     out
 }
 
@@ -238,7 +249,13 @@ fn subst_range_vars(subst: &Subst) -> std::collections::BTreeSet<(String, SortKe
 /// var, no prefix) is `LSortMsg`, so `Msg` and the un-prefixed `Untagged`
 /// hint collapse to the same key, while `#`/`~`/`$`/`%` are distinct sorts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum SortKey { Msg, Pub, Fresh, Node, Nat }
+enum SortKey {
+    Msg,
+    Pub,
+    Fresh,
+    Node,
+    Nat,
+}
 
 fn sort_key(s: p::SortHint) -> SortKey {
     match s {
@@ -256,14 +273,14 @@ fn sort_key(s: p::SortHint) -> SortKey {
 }
 
 /// Collect `(name, sort)` keys of every variable in a term.
-fn collect_term_vars_keyed(
-    t: &p::Term,
-    out: &mut std::collections::BTreeSet<(String, SortKey)>,
-) {
+fn collect_term_vars_keyed(t: &p::Term, out: &mut std::collections::BTreeSet<(String, SortKey)>) {
     match t {
-        p::Term::Var(v) => { out.insert((v.name.clone(), sort_key(v.sort))); }
-        p::Term::App(_, args) | p::Term::Pair(args) =>
-            args.iter().for_each(|a| collect_term_vars_keyed(a, out)),
+        p::Term::Var(v) => {
+            out.insert((v.name.clone(), sort_key(v.sort)));
+        }
+        p::Term::App(_, args) | p::Term::Pair(args) => {
+            args.iter().for_each(|a| collect_term_vars_keyed(a, out))
+        }
         p::Term::AlgApp(_, a, b) | p::Term::Diff(a, b) | p::Term::BinOp(_, a, b) => {
             collect_term_vars_keyed(a, out);
             collect_term_vars_keyed(b, out);
@@ -323,16 +340,21 @@ fn fresh_name(base: &str, avoid: &std::collections::BTreeSet<String>) -> String 
     let mut n = 1u64;
     loop {
         let cand = format!("{}{}", base, n);
-        if !avoid.contains(&cand) { return cand; }
+        if !avoid.contains(&cand) {
+            return cand;
+        }
         n += 1;
     }
 }
 
 fn collect_term_vars(t: &p::Term, out: &mut std::collections::BTreeSet<String>) {
     match t {
-        p::Term::Var(v) => { out.insert(v.name.clone()); }
-        p::Term::App(_, args) | p::Term::Pair(args) =>
-            args.iter().for_each(|a| collect_term_vars(a, out)),
+        p::Term::Var(v) => {
+            out.insert(v.name.clone());
+        }
+        p::Term::App(_, args) | p::Term::Pair(args) => {
+            args.iter().for_each(|a| collect_term_vars(a, out))
+        }
         p::Term::AlgApp(_, a, b) | p::Term::Diff(a, b) | p::Term::BinOp(_, a, b) => {
             collect_term_vars(a, out);
             collect_term_vars(b, out);
@@ -345,8 +367,10 @@ fn collect_term_vars(t: &p::Term, out: &mut std::collections::BTreeSet<String>) 
 fn collect_atom_vars(a: &p::Atom, out: &mut std::collections::BTreeSet<String>) {
     match a {
         p::Atom::Pred(fact) => fact.args.iter().for_each(|t| collect_term_vars(t, out)),
-        p::Atom::Eq(s, t) | p::Atom::Less(s, t)
-        | p::Atom::LessMset(s, t) | p::Atom::Subterm(s, t) => {
+        p::Atom::Eq(s, t)
+        | p::Atom::Less(s, t)
+        | p::Atom::LessMset(s, t)
+        | p::Atom::Subterm(s, t) => {
             collect_term_vars(s, out);
             collect_term_vars(t, out);
         }
@@ -365,13 +389,17 @@ fn collect_formula_vars(f: &p::Formula, out: &mut std::collections::BTreeSet<Str
         p::Formula::True | p::Formula::False => {}
         p::Formula::Atom(a) => collect_atom_vars(a, out),
         p::Formula::Not(g) => collect_formula_vars(g, out),
-        p::Formula::And(a, b) | p::Formula::Or(a, b)
-        | p::Formula::Implies(a, b) | p::Formula::Iff(a, b) => {
+        p::Formula::And(a, b)
+        | p::Formula::Or(a, b)
+        | p::Formula::Implies(a, b)
+        | p::Formula::Iff(a, b) => {
             collect_formula_vars(a, out);
             collect_formula_vars(b, out);
         }
         p::Formula::Forall(vs, b) | p::Formula::Exists(vs, b) => {
-            for v in vs { out.insert(v.name.clone()); }
+            for v in vs {
+                out.insert(v.name.clone());
+            }
             collect_formula_vars(b, out);
         }
     }
@@ -385,9 +413,7 @@ fn expand_atom(
     match a {
         p::Atom::Pred(fact) => {
             // Substitute the use-site arguments first.
-            let sub_args: Vec<p::Term> = fact.args.iter()
-                .map(|t| subst_term(t, subst))
-                .collect();
+            let sub_args: Vec<p::Term> = fact.args.iter().map(|t| subst_term(t, subst)).collect();
             // Look up predicate definition.  HS `lookupPredicate`
             // (Theory/Syntactic/Predicate.hs:76-80) matches on the FULL
             // `FactTag` (`sameName (Fact tag _ _) (Fact tag' _ _) = tag ==
@@ -409,9 +435,11 @@ fn expand_atom(
                             // Non-variable in predicate parameter list — can't
                             // do simple substitution. Skip.
                             return Err(ExpandError {
-                                message: format!("predicate `{}` has non-variable parameter; \
+                                message: format!(
+                                    "predicate `{}` has non-variable parameter; \
                                     predicate definitions must use plain variables",
-                                    fact.name),
+                                    fact.name
+                                ),
                             });
                         }
                     }
@@ -445,9 +473,13 @@ fn expand_atom(
         }
         // For non-Pred atoms, just substitute through their terms.
         p::Atom::Eq(s, t) => Ok(p::Formula::Atom(p::Atom::Eq(
-            subst_term(s, subst), subst_term(t, subst)))),
+            subst_term(s, subst),
+            subst_term(t, subst),
+        ))),
         p::Atom::Less(s, t) => Ok(p::Formula::Atom(p::Atom::Less(
-            subst_term(s, subst), subst_term(t, subst)))),
+            subst_term(s, subst),
+            subst_term(t, subst),
+        ))),
         // Multiset `s (<) t`.  In HS there is no dedicated atom for this:
         // `smallerp` (Theory/Text/Parser/Formula.hs:30-38) parses `(<)` to
         // `Syntactic . Pred $ protoFact Linear "Smaller" [s, t]`, which
@@ -456,10 +488,14 @@ fn expand_atom(
         // here so `LessMset` never survives into guarded conversion / solving
         // / pretty-printing — matching HS byte-for-byte (`... ⇒ (∃ z. y =
         // (x++z))`).  Operand order: `s (<) t` ⇒ lhs = s, rhs = t.
-        p::Atom::LessMset(s, t) =>
-            Ok(smaller_expansion(&subst_term(s, subst), &subst_term(t, subst))),
+        p::Atom::LessMset(s, t) => Ok(smaller_expansion(
+            &subst_term(s, subst),
+            &subst_term(t, subst),
+        )),
         p::Atom::Subterm(s, t) => Ok(p::Formula::Atom(p::Atom::Subterm(
-            subst_term(s, subst), subst_term(t, subst)))),
+            subst_term(s, subst),
+            subst_term(t, subst),
+        ))),
         p::Atom::Action(fact, t) => {
             let new_fact = p::Fact {
                 persistent: fact.persistent,
@@ -467,7 +503,10 @@ fn expand_atom(
                 args: fact.args.iter().map(|a| subst_term(a, subst)).collect(),
                 annotations: fact.annotations.clone(),
             };
-            Ok(p::Formula::Atom(p::Atom::Action(new_fact, subst_term(t, subst))))
+            Ok(p::Formula::Atom(p::Atom::Action(
+                new_fact,
+                subst_term(t, subst),
+            )))
         }
         p::Atom::Last(t) => Ok(p::Formula::Atom(p::Atom::Last(subst_term(t, subst)))),
     }
@@ -506,10 +545,14 @@ mod tests {
         // Parse a tiny theory containing only `predicates: <decl>`.
         let src = format!("theory T begin\npredicates: {}\nend", decl);
         let thy = tamarin_parser::parse_theory(&src, &[]).unwrap();
-        thy.items.into_iter().filter_map(|it| match it {
-            p::TheoryItem::Predicates(ps) => Some(ps),
-            _ => None,
-        }).flatten().collect()
+        thy.items
+            .into_iter()
+            .filter_map(|it| match it {
+                p::TheoryItem::Predicates(ps) => Some(ps),
+                _ => None,
+            })
+            .flatten()
+            .collect()
     }
 
     #[test]
@@ -573,24 +616,35 @@ mod tests {
             match item {
                 p::TheoryItem::CaseTest(c) => {
                     saw_ct = true;
-                    assert!(has_pred_atom(&c.formula),
-                        "case-test must keep too its Pred atom: {:?}", c.formula);
+                    assert!(
+                        has_pred_atom(&c.formula),
+                        "case-test must keep too its Pred atom: {:?}",
+                        c.formula
+                    );
                 }
                 p::TheoryItem::AccLemma(a) => {
                     saw_acc = true;
-                    assert!(has_pred_atom(&a.formula),
-                        "acc-lemma must keep its Pred atom: {:?}", a.formula);
+                    assert!(
+                        has_pred_atom(&a.formula),
+                        "acc-lemma must keep its Pred atom: {:?}",
+                        a.formula
+                    );
                 }
                 p::TheoryItem::Lemma(l) => {
                     saw_reg = true;
-                    assert!(!has_pred_atom(&l.formula),
-                        "regular lemma must be expanded: {:?}", l.formula);
+                    assert!(
+                        !has_pred_atom(&l.formula),
+                        "regular lemma must be expanded: {:?}",
+                        l.formula
+                    );
                 }
                 _ => {}
             }
         }
-        assert!(saw_ct && saw_acc && saw_reg,
-            "expected all three item kinds (ct={saw_ct}, acc={saw_acc}, reg={saw_reg})");
+        assert!(
+            saw_ct && saw_acc && saw_reg,
+            "expected all three item kinds (ct={saw_ct}, acc={saw_acc}, reg={saw_reg})"
+        );
     }
 
     #[test]
@@ -602,8 +656,11 @@ mod tests {
         let preds = pred("P(x) <=> Ex z #i. Act(x, z) @ #i");
         let f = parse_formula_str("P(z)").unwrap();
         let expanded = expand_formula(&f, &preds).unwrap();
-        assert!(!binds_var_named(&expanded, "z"),
-            "variable capture: a quantifier still binds `z`: {:?}", expanded);
+        assert!(
+            !binds_var_named(&expanded, "z"),
+            "variable capture: a quantifier still binds `z`: {:?}",
+            expanded
+        );
     }
 
     #[test]
@@ -644,9 +701,10 @@ mod tests {
             p::Formula::Atom(p::Atom::LessMset(_, _)) => true,
             p::Formula::True | p::Formula::False | p::Formula::Atom(_) => false,
             p::Formula::Not(g) => has_lessmset_atom(g),
-            p::Formula::And(a, b) | p::Formula::Or(a, b)
-            | p::Formula::Implies(a, b) | p::Formula::Iff(a, b) =>
-                has_lessmset_atom(a) || has_lessmset_atom(b),
+            p::Formula::And(a, b)
+            | p::Formula::Or(a, b)
+            | p::Formula::Implies(a, b)
+            | p::Formula::Iff(a, b) => has_lessmset_atom(a) || has_lessmset_atom(b),
             p::Formula::Forall(_, b) | p::Formula::Exists(_, b) => has_lessmset_atom(b),
         }
     }
@@ -655,11 +713,13 @@ mod tests {
         match f {
             p::Formula::True | p::Formula::False | p::Formula::Atom(_) => false,
             p::Formula::Not(g) => binds_var_named(g, name),
-            p::Formula::And(a, b) | p::Formula::Or(a, b)
-            | p::Formula::Implies(a, b) | p::Formula::Iff(a, b) =>
-                binds_var_named(a, name) || binds_var_named(b, name),
-            p::Formula::Forall(vs, b) | p::Formula::Exists(vs, b) =>
-                vs.iter().any(|v| v.name == name) || binds_var_named(b, name),
+            p::Formula::And(a, b)
+            | p::Formula::Or(a, b)
+            | p::Formula::Implies(a, b)
+            | p::Formula::Iff(a, b) => binds_var_named(a, name) || binds_var_named(b, name),
+            p::Formula::Forall(vs, b) | p::Formula::Exists(vs, b) => {
+                vs.iter().any(|v| v.name == name) || binds_var_named(b, name)
+            }
         }
     }
 
@@ -669,10 +729,10 @@ mod tests {
             p::Formula::True | p::Formula::False => false,
             p::Formula::Atom(_) => false,
             p::Formula::Not(g) => has_pred_atom(g),
-            p::Formula::And(a, b) | p::Formula::Or(a, b)
-            | p::Formula::Implies(a, b) | p::Formula::Iff(a, b) => {
-                has_pred_atom(a) || has_pred_atom(b)
-            }
+            p::Formula::And(a, b)
+            | p::Formula::Or(a, b)
+            | p::Formula::Implies(a, b)
+            | p::Formula::Iff(a, b) => has_pred_atom(a) || has_pred_atom(b),
             p::Formula::Forall(_, b) | p::Formula::Exists(_, b) => has_pred_atom(b),
         }
     }

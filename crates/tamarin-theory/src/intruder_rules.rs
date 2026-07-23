@@ -53,8 +53,18 @@ pub fn special_intruder_rules(diff: bool) -> Vec<IntrRuleAC> {
     };
 
     let mut out = vec![
-        ku_rule(IntrRuleACInfo::Coerce, vec![kd_fact(x.clone())], x.clone(), vec![]),
-        ku_rule(IntrRuleACInfo::PubConstr, vec![], x_pub.clone(), vec![x_pub]),
+        ku_rule(
+            IntrRuleACInfo::Coerce,
+            vec![kd_fact(x.clone())],
+            x.clone(),
+            vec![],
+        ),
+        ku_rule(
+            IntrRuleACInfo::PubConstr,
+            vec![],
+            x_pub.clone(),
+            vec![x_pub],
+        ),
         ku_rule(
             IntrRuleACInfo::FreshConstr,
             vec![fresh_fact(x_fresh.clone())],
@@ -128,15 +138,17 @@ pub fn destruction_rules(
     diff: bool,
     rule: &tamarin_term::subterm_rule::CtxtStRule,
 ) -> Vec<IntrRuleAC> {
+    use tamarin_term::function_symbols::{FunSym, Privacy};
     use tamarin_term::lterm::frees;
     use tamarin_term::positions::Position;
-    use tamarin_term::function_symbols::{FunSym, Privacy};
     use tamarin_term::term::Term;
 
     let lhs = &rule.lhs;
     let rhs = &rule.rhs.term;
     let positions: &[Position] = &rule.rhs.positions;
-    if positions.is_empty() { return Vec::new(); }
+    if positions.is_empty() {
+        return Vec::new();
+    }
 
     // `containsPrivate` mirror (shared `tamarin_term::lterm::contains_private`).
     if !(diff || !frees(rhs).is_empty() || tamarin_term::lterm::contains_private(rhs)) {
@@ -145,20 +157,26 @@ pub fn destruction_rules(
 
     // Process the first position; recurse on the rest of `positions`.
     if positions.len() > 1 {
-        let mut out = destruction_rules(diff, &tamarin_term::subterm_rule::CtxtStRule {
-            lhs: lhs.clone(),
-            rhs: tamarin_term::subterm_rule::StRhs {
-                positions: vec![positions[0].clone()],
-                term: rhs.clone(),
+        let mut out = destruction_rules(
+            diff,
+            &tamarin_term::subterm_rule::CtxtStRule {
+                lhs: lhs.clone(),
+                rhs: tamarin_term::subterm_rule::StRhs {
+                    positions: vec![positions[0].clone()],
+                    term: rhs.clone(),
+                },
             },
-        });
-        out.extend(destruction_rules(diff, &tamarin_term::subterm_rule::CtxtStRule {
-            lhs: lhs.clone(),
-            rhs: tamarin_term::subterm_rule::StRhs {
-                positions: positions[1..].to_vec(),
-                term: rhs.clone(),
+        );
+        out.extend(destruction_rules(
+            diff,
+            &tamarin_term::subterm_rule::CtxtStRule {
+                lhs: lhs.clone(),
+                rhs: tamarin_term::subterm_rule::StRhs {
+                    positions: positions[1..].to_vec(),
+                    term: rhs.clone(),
+                },
             },
-        }));
+        ));
         return out;
     }
 
@@ -178,7 +196,9 @@ pub fn destruction_rules(
                     return out;
                 }
                 let public = sym.privacy == Privacy::Public;
-                if !public { return out; }
+                if !public {
+                    return out;
+                }
                 // Haskell `destructionRules` pattern #2 (IntruderRules.hs:129-157, see line 135):
                 //     go _ (viewTerm -> FApp _ _) (_:[]) _ _ | (frees rhs /= []) = []
                 // At the LAST position step, if the current term is an
@@ -198,7 +218,9 @@ pub fn destruction_rules(
                 // `uprems` value is never read again (the next iteration uses
                 // the extended one), so extend in place instead of cloning.
                 for (j, a) in args.iter().enumerate() {
-                    if (j as i64) != i { uprems.push(a.clone()); }
+                    if (j as i64) != i {
+                        uprems.push(a.clone());
+                    }
                 }
                 let t_new = match args.get(i as usize) {
                     Some(t) => t.clone(),
@@ -228,16 +250,13 @@ pub fn destruction_rules(
                     // lookup is `Some`; on the impossible invalid case fall
                     // back to `lhs`,
                     // keeping the boolean unchanged rather than panicking.
-                    let at = tamarin_term::positions::at_pos(lhs, pos)
-                        .unwrap_or_else(|| lhs.clone());
-                    let info = IntrRuleACInfo::DestrRule(
-                        name,
-                        -1,
-                        rhs == &at,
-                        rhs_frees_empty,
-                    );
+                    let at =
+                        tamarin_term::positions::at_pos(lhs, pos).unwrap_or_else(|| lhs.clone());
+                    let info = IntrRuleACInfo::DestrRule(name, -1, rhs == &at, rhs_frees_empty);
                     let mut prems = vec![kd_fact(t_new.clone())];
-                    for u in &uprems { prems.push(ku_fact(u.clone())); }
+                    for u in &uprems {
+                        prems.push(ku_fact(u.clone()));
+                    }
                     out.push(Rule::new(info, prems, vec![kd_fact(rhs.clone())], vec![]));
                 }
                 // Update accumulators and walk down.
@@ -308,22 +327,27 @@ pub fn subterm_intruder_rules(
 fn private_constructor_rules(
     st_rules: &std::collections::BTreeSet<tamarin_term::subterm_rule::CtxtStRule>,
 ) -> Vec<IntrRuleAC> {
-    use tamarin_term::function_symbols::{
-        Constructability, FunSym, NoEqSym, Privacy,
-    };
+    use tamarin_term::function_symbols::{Constructability, FunSym, NoEqSym, Privacy};
     use tamarin_term::term::Term;
 
     // `privateConstructorEquations` (IntruderRules.hs:160-165): all
     // equations whose RHS is a 0-arity Private constructor, paired with
     // that constructor's name.
-    let eqs: Vec<(&LNTerm, Vec<u8>)> = st_rules.iter().filter_map(|r| {
-        match &r.rhs.term {
-            Term::App(FunSym::NoEq(NoEqSym { name, arity: 0, privacy: Privacy::Private, .. }), _) => {
-                Some((&r.lhs, name.to_vec()))
-            }
+    let eqs: Vec<(&LNTerm, Vec<u8>)> = st_rules
+        .iter()
+        .filter_map(|r| match &r.rhs.term {
+            Term::App(
+                FunSym::NoEq(NoEqSym {
+                    name,
+                    arity: 0,
+                    privacy: Privacy::Private,
+                    ..
+                }),
+                _,
+            ) => Some((&r.lhs, name.to_vec())),
             _ => None,
-        }
-    }).collect();
+        })
+        .collect();
 
     // `containsNoPrivateExcept funs t` (LTerm.hs:373-377): True if `t`
     // contains no private function symbols other than those named in
@@ -331,8 +355,16 @@ fn private_constructor_rules(
     fn contains_no_private_except(funs: &[Vec<u8>], t: &LNTerm) -> bool {
         match t {
             Term::Lit(_) => true,
-            Term::App(FunSym::NoEq(NoEqSym { name, privacy: Privacy::Private, .. }), args) => {
-                funs.iter().any(|f| f.as_slice() == &**name) && args.iter().all(|a| contains_no_private_except(funs, a))
+            Term::App(
+                FunSym::NoEq(NoEqSym {
+                    name,
+                    privacy: Privacy::Private,
+                    ..
+                }),
+                args,
+            ) => {
+                funs.iter().any(|f| f.as_slice() == &**name)
+                    && args.iter().all(|a| contains_no_private_except(funs, a))
             }
             Term::App(_, args) => args.iter().all(|a| contains_no_private_except(funs, a)),
         }
@@ -349,7 +381,9 @@ fn private_constructor_rules(
             // Both HS filters (drop + collect-names) use the OLD `x`, so
             // snapshot it before augmenting.
             let prev_x = x.clone();
-            let any_derivable = eqs.iter().any(|(l, _)| contains_no_private_except(&prev_x, l));
+            let any_derivable = eqs
+                .iter()
+                .any(|(l, _)| contains_no_private_except(&prev_x, l));
             if !any_derivable {
                 return x;
             }
@@ -364,17 +398,25 @@ fn private_constructor_rules(
         }
     }
 
-    derivable_private_constants(eqs, Vec::new()).into_iter().map(|s| {
-        let sym = NoEqSym::new(s.clone(), 0, Privacy::Private, Constructability::Constructor);
-        let m: LNTerm = Term::App(FunSym::NoEq(sym), Vec::<LNTerm>::new().into());
-        let concfact = ku_fact(m);
-        Rule::new(
-            intr_constr_info(&s),
-            vec![],
-            vec![concfact.clone()],
-            vec![concfact],
-        )
-    }).collect()
+    derivable_private_constants(eqs, Vec::new())
+        .into_iter()
+        .map(|s| {
+            let sym = NoEqSym::new(
+                s.clone(),
+                0,
+                Privacy::Private,
+                Constructability::Constructor,
+            );
+            let m: LNTerm = Term::App(FunSym::NoEq(sym), Vec::<LNTerm>::new().into());
+            let concfact = ku_fact(m);
+            Rule::new(
+                intr_constr_info(&s),
+                vec![],
+                vec![concfact.clone()],
+                vec![concfact],
+            )
+        })
+        .collect()
 }
 
 /// Port of `minimizeIntruderRules` (IntruderRules.hs:186-206).
@@ -388,10 +430,7 @@ fn private_constructor_rules(
 /// 2. **Double-premise filter** (always applied): drop rules whose KD
 ///    first-premise is a msg-var `t` and whose premises also include
 ///    `KU(t)` of the same term (with all terms private-free).
-fn minimize_intruder_rules(
-    diff: bool,
-    rules: Vec<IntrRuleAC>,
-) -> Vec<IntrRuleAC> {
+fn minimize_intruder_rules(diff: bool, rules: Vec<IntrRuleAC>) -> Vec<IntrRuleAC> {
     let after_subsumption = if diff {
         rules
     } else {
@@ -404,20 +443,28 @@ fn minimize_intruder_rules(
         for i in 0..n {
             let r_i = &rules[i];
             let subsumed = (0..n).any(|j| {
-                if j == i { return false; }
+                if j == i {
+                    return false;
+                }
                 // Peer eligibility: either already-kept earlier (j < i and j in kept)
                 // or still in `unchecked` (j > i).  Haskell's `checked++unchecked`
                 // semantics.
-                if j < i && !kept.contains(&j) { return false; }
+                if j < i && !kept.contains(&j) {
+                    return false;
+                }
                 let r_j = &rules[j];
-                r_j.conclusions == r_i.conclusions
-                    && is_subset_of(&r_j.premises, &r_i.premises)
+                r_j.conclusions == r_i.conclusions && is_subset_of(&r_j.premises, &r_i.premises)
             });
-            if !subsumed { kept.push(i); }
+            if !subsumed {
+                kept.push(i);
+            }
         }
         kept.into_iter().map(|i| rules[i].clone()).collect()
     };
-    after_subsumption.into_iter().filter(|r| !is_double_premise_rule(r)).collect()
+    after_subsumption
+        .into_iter()
+        .filter(|r| !is_double_premise_rule(r))
+        .collect()
 }
 
 /// Set-subset check: every distinct element of `a` is `==` to some element of
@@ -443,7 +490,9 @@ fn is_double_premise_rule(r: &IntrRuleAC) -> bool {
     let (kd_fact_term, rest_prems): (&tamarin_term::lterm::LNTerm, &[crate::fact::LNFact]) =
         match r.premises.split_first() {
             Some((first, rest)) => {
-                if first.tag != FactTag::Kd { return false; }
+                if first.tag != FactTag::Kd {
+                    return false;
+                }
                 let t = match first.terms.first() {
                     Some(t) => t,
                     None => return false,
@@ -453,20 +502,30 @@ fn is_double_premise_rule(r: &IntrRuleAC) -> bool {
             None => return false,
         };
     // Conclusions must be ground.
-    let frees_concs = r.conclusions.iter()
+    let frees_concs = r
+        .conclusions
+        .iter()
         .flat_map(|f| f.terms.iter())
         .any(|t| !tamarin_term::lterm::frees(t).is_empty());
-    if frees_concs { return false; }
+    if frees_concs {
+        return false;
+    }
     // Reject if any term (KD-premise or any prems-term) contains a private
     // symbol (shared `tamarin_term::lterm::contains_private`).
-    if tamarin_term::lterm::contains_private(kd_fact_term) { return false; }
+    if tamarin_term::lterm::contains_private(kd_fact_term) {
+        return false;
+    }
     for f in r.premises.iter() {
         for t in f.terms.iter() {
-            if tamarin_term::lterm::contains_private(t) { return false; }
+            if tamarin_term::lterm::contains_private(t) {
+                return false;
+            }
         }
     }
     // KD-premise term must be a msg-var.
-    if !is_msg_var(kd_fact_term) { return false; }
+    if !is_msg_var(kd_fact_term) {
+        return false;
+    }
     // KU(kd_fact_term) must appear among the remaining premises.
     let ku_t = crate::fact::ku_fact(kd_fact_term.clone());
     rest_prems.iter().any(|f| f == &ku_t)
@@ -502,7 +561,10 @@ pub fn multiset_intruder_rules() -> Vec<IntrRuleAC> {
     use tamarin_term::term::Term;
     let x_var = var_term(LVar::new("x", LSort::Msg, 0));
     let y_var = var_term(LVar::new("y", LSort::Msg, 0));
-    let xy_union = Term::App(FunSym::Ac(AcSym::Union), vec![x_var.clone(), y_var.clone()].into());
+    let xy_union = Term::App(
+        FunSym::Ac(AcSym::Union),
+        vec![x_var.clone(), y_var.clone()].into(),
+    );
     let name = underscore_prefixed(UNION_SYM_STRING);
     let d_rule = Rule::new(
         IntrRuleACInfo::DestrRule(name.clone(), 0, true, false),
@@ -546,8 +608,7 @@ pub fn multiset_intruder_rules() -> Vec<IntrRuleAC> {
 /// Variants` (TheoryLoader.hs:786-789).
 pub fn xor_intruder_rules() -> Vec<IntrRuleAC> {
     use tamarin_term::function_symbols::{
-        AcSym, FunSym, NoEqSym, Privacy, Constructability,
-        XOR_SYM_STRING, ZERO_SYM_STRING,
+        AcSym, Constructability, FunSym, NoEqSym, Privacy, XOR_SYM_STRING, ZERO_SYM_STRING,
     };
     use tamarin_term::term::Term;
     let x = var_term(LVar::new("x", LSort::Msg, 0));
@@ -556,9 +617,8 @@ pub fn xor_intruder_rules() -> Vec<IntrRuleAC> {
     // `Term::App(Ac(Xor), [a, b])`.  Constructed via the AC-flatten/sort
     // smart constructor so the operand order matches HS's `fAppAC` (sorted
     // by Ord).
-    let xor2 = |a: LNTerm, b: LNTerm| -> LNTerm {
-        tamarin_term::term::f_app_ac(AcSym::Xor, vec![a, b])
-    };
+    let xor2 =
+        |a: LNTerm, b: LNTerm| -> LNTerm { tamarin_term::term::f_app_ac(AcSym::Xor, vec![a, b]) };
     let x_xor_y = xor2(x.clone(), y.clone());
     let x_xor_z = xor2(x.clone(), z.clone());
     let y_xor_z = xor2(y.clone(), z.clone());
@@ -594,8 +654,12 @@ pub fn xor_intruder_rules() -> Vec<IntrRuleAC> {
         r
     };
     // Rule 4: zero constructor (HS `zeroConstructor`).
-    let zero_sym = NoEqSym::new(ZERO_SYM_STRING.to_vec(), 0,
-        Privacy::Public, Constructability::Constructor);
+    let zero_sym = NoEqSym::new(
+        ZERO_SYM_STRING.to_vec(),
+        0,
+        Privacy::Public,
+        Constructability::Constructor,
+    );
     let zero_term: LNTerm = Term::App(FunSym::NoEq(zero_sym), Vec::<LNTerm>::new().into());
     let zero_name = underscore_prefixed(ZERO_SYM_STRING);
     let zero_rule = {
@@ -636,9 +700,7 @@ pub fn construction_rules(sig: &tamarin_term::maude_sig::MaudeSig) -> Vec<IntrRu
     for s in &sig.st_fun_syms {
         // `[ createRule s k | (s,(k,Public,Constructor)) <- ... ]` —
         // only public constructors.
-        if s.privacy != Privacy::Public
-            || s.constructability != Constructability::Constructor
-        {
+        if s.privacy != Privacy::Public || s.constructability != Constructability::Constructor {
             continue;
         }
         let arity = s.arity;
@@ -693,7 +755,16 @@ pub fn construction_rules(sig: &tamarin_term::maude_sig::MaudeSig) -> Vec<IntrRu
 pub fn is_private_function(t: &LNTerm) -> bool {
     use tamarin_term::function_symbols::{FunSym, NoEqSym, Privacy};
     use tamarin_term::term::Term;
-    matches!(t, Term::App(FunSym::NoEq(NoEqSym { privacy: Privacy::Private, .. }), _))
+    matches!(
+        t,
+        Term::App(
+            FunSym::NoEq(NoEqSym {
+                privacy: Privacy::Private,
+                ..
+            }),
+            _
+        )
+    )
 }
 
 /// `closeIntrRule` — port of `Rule.closeIntrRule` (lib/theory/src/Rule.hs:103-116).
@@ -727,21 +798,29 @@ pub fn close_intr_rule(
 
     // Clause 1: budget = -1 AND single-KD-conclusion AND first-prem is KD.
     if let IntrRuleACInfo::DestrRule(name, -1, subterm, constant) = &ir.info {
-        let kd_prem_t: Option<&LNTerm> = ir.premises.first()
+        let kd_prem_t: Option<&LNTerm> = ir
+            .premises
+            .first()
             .filter(|f| f.tag == FactTag::Kd && f.terms.len() == 1)
             .map(|f| &f.terms[0]);
-        let single_kd_conc_rhs: Option<&LNTerm> =
-            if ir.conclusions.len() == 1
-                && ir.conclusions[0].tag == FactTag::Kd
-                && ir.conclusions[0].terms.len() == 1 {
-                Some(&ir.conclusions[0].terms[0])
-            } else { None };
+        let single_kd_conc_rhs: Option<&LNTerm> = if ir.conclusions.len() == 1
+            && ir.conclusions[0].tag == FactTag::Kd
+            && ir.conclusions[0].terms.len() == 1
+        {
+            Some(&ir.conclusions[0].terms[0])
+        } else {
+            None
+        };
         if let (Some(t), Some(rhs)) = (kd_prem_t, single_kd_conc_rhs) {
             // Compute budget: `if runMaude (unifiableLNTerms rhs t)
             //   then (length (positions t)) - (if (isPrivateFunction t) then 1 else 2)
             //   else 0`.
             use tamarin_term::rewriting::Equal;
-            let unifiable = maude.unifiable(&[Equal { lhs: rhs.clone(), rhs: t.clone() }])
+            let unifiable = maude
+                .unifiable(&[Equal {
+                    lhs: rhs.clone(),
+                    rhs: t.clone(),
+                }])
                 .unwrap_or(false);
             let budget: i64 = if unifiable {
                 let np = positions(t).len() as i64;
@@ -836,8 +915,9 @@ pub fn variants_intruder(
 /// [`bp_variants_intruder`].
 fn variants_intruder_with(
     maude: &tamarin_term::maude_proc::MaudeHandle,
-    minimize_variants: &dyn Fn(Vec<tamarin_term::subst_vfresh::LNSubstVFresh>)
-        -> Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
+    minimize_variants: &dyn Fn(
+        Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
+    ) -> Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
     apply_filters: bool,
     ru: &IntrRuleAC,
 ) -> Vec<IntrRuleAC> {
@@ -851,11 +931,15 @@ fn variants_intruder_with(
     // Note: HS does NOT include `nvs` here (only prems/concs/acts), even
     // though the rest of the pipeline includes nvs.
     let mut rule_terms: Vec<LNTerm> = Vec::new();
-    for f in ru.premises.iter()
+    for f in ru
+        .premises
+        .iter()
         .chain(ru.conclusions.iter())
         .chain(ru.actions.iter())
     {
-        for t in f.terms.iter() { rule_terms.push(t.clone()); }
+        for t in f.terms.iter() {
+            rule_terms.push(t.clone());
+        }
     }
     // The free vars of the packed rule-terms list.  Note
     // `frees(packed) == frees(rule_terms)` (packing only wraps the terms in
@@ -867,7 +951,9 @@ fn variants_intruder_with(
     let packed_frees: std::collections::BTreeSet<LVar> = {
         let mut s: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
         for t in &rule_terms {
-            for v in frees(t) { s.insert(v); }
+            for v in frees(t) {
+                s.insert(v);
+            }
         }
         s
     };
@@ -921,15 +1007,20 @@ fn variants_intruder_with(
     // Build one candidate variant rule per (minimized) variant subst.
     let mut produced: Vec<IntrRuleAC> = Vec::new();
     for s_fresh in minimized {
-
         // `freshToFreeAvoiding ruleTerms` — convert VFresh → free Subst,
         // allocating fresh idxs that avoid every var in `ruleTerms`.
         let sigma: Subst<tamarin_term::lterm::Name, LVar> = {
-            let mut counter = packed_frees.iter().map(|v| v.idx).max()
-                .map(|m| m + 1).unwrap_or(0);
-            s_fresh.fresh_to_free_avoiding(
-                |n| { let b = counter; counter += n; b },
-            )
+            let mut counter = packed_frees
+                .iter()
+                .map(|v| v.idx)
+                .max()
+                .map(|m| m + 1)
+                .unwrap_or(0);
+            s_fresh.fresh_to_free_avoiding(|n| {
+                let b = counter;
+                counter += n;
+                b
+            })
         };
 
         // Build the variant rule by applying sigma + normalising every term.
@@ -941,11 +1032,13 @@ fn variants_intruder_with(
             maude.reduce(&applied).unwrap_or(applied)
         };
         let map_facts = |fs: &[LNFact]| -> Vec<LNFact> {
-            fs.iter().map(|f| {
-                // norm/subst rebuild — frees can change; recompute the bloom.
-                let terms: Vec<LNTerm> = f.terms.iter().map(|t| norm_t(t.clone())).collect();
-                LNFact::fresh_annotated(f.tag.clone(), f.annotations.clone(), terms)
-            }).collect()
+            fs.iter()
+                .map(|f| {
+                    // norm/subst rebuild — frees can change; recompute the bloom.
+                    let terms: Vec<LNTerm> = f.terms.iter().map(|t| norm_t(t.clone())).collect();
+                    LNFact::fresh_annotated(f.tag.clone(), f.annotations.clone(), terms)
+                })
+                .collect()
         };
         let new_prems = map_facts(&ru.premises);
         let new_concs = map_facts(&ru.conclusions);
@@ -971,12 +1064,18 @@ fn variants_intruder_with(
         // True (trivially) so only c applies.
         if apply_filters {
             // Conclusions must have free vars.
-            let concs_have_frees = ruvariant.conclusions.iter()
+            let concs_have_frees = ruvariant
+                .conclusions
+                .iter()
                 .flat_map(|f| f.terms.iter())
                 .any(|t| !frees(t).is_empty());
-            if !concs_have_frees { continue; }
+            if !concs_have_frees {
+                continue;
+            }
             // Not the identity variant.
-            if &ruvariant == ru { continue; }
+            if &ruvariant == ru {
+                continue;
+            }
         }
         // Always-applied: `(rConcs ruvariant) \\ (rPrems ruvariant) /= []`.
         // `Data.List.(\\)` is multiset difference — it removes ONE matching
@@ -993,20 +1092,25 @@ fn variants_intruder_with(
                         break;
                     }
                 }
-                if !matched { any_remaining = true; }
+                if !matched {
+                    any_remaining = true;
+                }
             }
             any_remaining
         };
-        if !concs_minus_prems_nonempty { continue; }
+        if !concs_minus_prems_nonempty {
+            continue;
+        }
 
         // Drop rules with single product-conclusion (HS lines 303-305).
-        let conc_terms: Vec<&LNTerm> = ruvariant.conclusions.iter()
+        let conc_terms: Vec<&LNTerm> = ruvariant
+            .conclusions
+            .iter()
             .flat_map(|f| f.terms.iter())
             .collect();
-        if conc_terms.len() == 1
-            && matches!(conc_terms[0], Term::App(FunSym::Ac(AcSym::Mult), _)) {
-                continue;
-            }
+        if conc_terms.len() == 1 && matches!(conc_terms[0], Term::App(FunSym::Ac(AcSym::Mult), _)) {
+            continue;
+        }
 
         produced.push(ruvariant);
     }
@@ -1026,7 +1130,9 @@ fn variants_intruder_with(
     for p in 0..rev.len() {
         let r = &rev[p];
         // peers = {kept so far} ∪ {rev[p+1..]}
-        let dup = kept_idx.iter().map(|&k| &rev[k])
+        let dup = kept_idx
+            .iter()
+            .map(|&k| &rev[k])
             .chain(rev[p + 1..].iter())
             .any(|peer| equal_rule_up_to_renaming(maude, r, peer));
         if !dup {
@@ -1072,7 +1178,9 @@ pub fn equal_rule_up_to_renaming(
     use tamarin_term::rewriting::Equal;
     use tamarin_term::subst_vfresh::LNSubstVFresh;
 
-    if r1.info != r2.info { return false; }
+    if r1.info != r2.info {
+        return false;
+    }
 
     // HS's `eqs` is initialised with `zipWith Equal nvs1 nvs2` (truncating),
     // then each tag-matching fact pair extends it by `zipWith Equal t1 t2`
@@ -1081,26 +1189,47 @@ pub fn equal_rule_up_to_renaming(
     // guards, and zip the section concatenations across boundaries.
     let mut term_eqs: Vec<Equal<LNTerm>> = Vec::new();
     for (a, b) in r1.new_vars.iter().zip(r2.new_vars.iter()) {
-        term_eqs.push(Equal { lhs: a.clone(), rhs: b.clone() });
+        term_eqs.push(Equal {
+            lhs: a.clone(),
+            rhs: b.clone(),
+        });
     }
-    let pair_iter = r1.premises.iter().chain(r1.conclusions.iter()).chain(r1.actions.iter())
-        .zip(r2.premises.iter().chain(r2.conclusions.iter()).chain(r2.actions.iter()));
+    let pair_iter = r1
+        .premises
+        .iter()
+        .chain(r1.conclusions.iter())
+        .chain(r1.actions.iter())
+        .zip(
+            r2.premises
+                .iter()
+                .chain(r2.conclusions.iter())
+                .chain(r2.actions.iter()),
+        );
     for (f1, f2) in pair_iter {
-        if f1.tag != f2.tag { return false; }
+        if f1.tag != f2.tag {
+            return false;
+        }
         for (a, b) in f1.terms.iter().zip(f2.terms.iter()) {
-            term_eqs.push(Equal { lhs: a.clone(), rhs: b.clone() });
+            term_eqs.push(Equal {
+                lhs: a.clone(),
+                rhs: b.clone(),
+            });
         }
     }
 
     // Collect each rule's vars (occurrences-set).
     let vars_r1: Vec<LVar> = {
         let mut s: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
-        r1.for_each_free(&mut |v| { s.insert(v.clone()); });
+        r1.for_each_free(&mut |v| {
+            s.insert(v.clone());
+        });
         s.into_iter().collect()
     };
     let vars_r2: Vec<LVar> = {
         let mut s: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
-        r2.for_each_free(&mut |v| { s.insert(v.clone()); });
+        r2.for_each_free(&mut |v| {
+            s.insert(v.clone());
+        });
         s.into_iter().collect()
     };
 
@@ -1160,9 +1289,8 @@ pub(crate) fn norm_rule(
     maude: &tamarin_term::maude_proc::MaudeHandle,
     ru: &IntrRuleAC,
 ) -> IntrRuleAC {
-    let norm_t = |t: &LNTerm| -> LNTerm {
-        tamarin_term::norm::norm(maude, t).unwrap_or_else(|_| t.clone())
-    };
+    let norm_t =
+        |t: &LNTerm| -> LNTerm { tamarin_term::norm::norm(maude, t).unwrap_or_else(|_| t.clone()) };
     let norm_fact = |f: &LNFact| -> LNFact {
         // norm rebuild — frees can change; recompute the bloom.
         let terms: Vec<LNTerm> = f.terms.iter().map(&norm_t).collect();
@@ -1243,9 +1371,13 @@ fn intr_destr_info(sym: &[u8]) -> IntrRuleACInfo {
 }
 
 /// `return :: a -> [a]` — singleton-list action constructor (HS).
-fn intr_mk_singleton(f: LNFact) -> Vec<LNFact> { vec![f] }
+fn intr_mk_singleton(f: LNFact) -> Vec<LNFact> {
+    vec![f]
+}
 /// `const [] :: a -> [a]` — empty action constructor (HS destructors).
-fn intr_mk_empty(_: LNFact) -> Vec<LNFact> { Vec::new() }
+fn intr_mk_empty(_: LNFact) -> Vec<LNFact> {
+    Vec::new()
+}
 
 /// `dhIntruderRules` — compute the intruder rules for the Diffie-Hellman
 /// theory.  Direct mirror of HS `dhIntruderRules` (IntruderRules.hs:230-283).
@@ -1283,8 +1415,7 @@ pub fn dh_intruder_rules(
 ) -> Vec<IntrRuleAC> {
     use tamarin_term::builtin::{dh_neutral, exp, inv, mult, one_const};
     use tamarin_term::function_symbols::{
-        DH_NEUTRAL_SYM_STRING, EXP_SYM_STRING, INV_SYM_STRING, MULT_SYM_STRING,
-        ONE_SYM_STRING,
+        DH_NEUTRAL_SYM_STRING, EXP_SYM_STRING, INV_SYM_STRING, MULT_SYM_STRING, ONE_SYM_STRING,
     };
 
     // `x_var_0 = varTerm (LVar "x" LSortMsg 0)` etc.
@@ -1553,28 +1684,24 @@ fn bp_variants_intruder(
     //                       zip doms (sort rngs)
     // where (doms, rngs) = unzip (substToListVFresh subst), i.e. the
     // domain keys in `to_list` order zipped with the SORTED range terms.
-    let minimize_variants =
-        |substs: Vec<LNSubstVFresh>| -> Vec<LNSubstVFresh> {
-            let mut out: Vec<LNSubstVFresh> = Vec::new();
-            for s in substs {
-                let mappings = s.to_list();
-                let doms: Vec<LVar> = mappings.iter().map(|(d, _)| d.clone()).collect();
-                let mut rngs: Vec<LNTerm> =
-                    mappings.iter().map(|(_, t)| t.clone()).collect();
-                // `sort rngs` — `Ord LNTerm`.
-                rngs.sort();
-                let rezipped = LNSubstVFresh::from_list(
-                    doms.into_iter().zip(rngs).collect::<Vec<_>>(),
-                );
-                let canon = canonize_subst(&rezipped);
-                // `nub` — keep first occurrence, drop later duplicates
-                // (structural `Eq` on the canonicalised subst).
-                if !out.iter().any(|existing| existing == &canon) {
-                    out.push(canon);
-                }
+    let minimize_variants = |substs: Vec<LNSubstVFresh>| -> Vec<LNSubstVFresh> {
+        let mut out: Vec<LNSubstVFresh> = Vec::new();
+        for s in substs {
+            let mappings = s.to_list();
+            let doms: Vec<LVar> = mappings.iter().map(|(d, _)| d.clone()).collect();
+            let mut rngs: Vec<LNTerm> = mappings.iter().map(|(_, t)| t.clone()).collect();
+            // `sort rngs` — `Ord LNTerm`.
+            rngs.sort();
+            let rezipped = LNSubstVFresh::from_list(doms.into_iter().zip(rngs).collect::<Vec<_>>());
+            let canon = canonize_subst(&rezipped);
+            // `nub` — keep first occurrence, drop later duplicates
+            // (structural `Eq` on the canonicalised subst).
+            if !out.iter().any(|existing| existing == &canon) {
+                out.push(canon);
             }
-            out
-        };
+        }
+        out
+    };
 
     let variants = variants_intruder_with(maude, &minimize_variants, true, ru);
 
@@ -1583,9 +1710,7 @@ fn bp_variants_intruder(
     // tag KD→KU (keeping the same args/annotations); else the symmetric
     // case where the SECOND premise is the bare-Var KD-fact.
     let is_bare_var_kd = |f: &LNFact| -> bool {
-        f.tag == FactTag::Kd
-            && f.terms.len() == 1
-            && matches!(f.terms[0], Term::Lit(Lit::Var(_)))
+        f.tag == FactTag::Kd && f.terms.len() == 1 && matches!(f.terms[0], Term::Lit(Lit::Var(_)))
     };
     variants
         .into_iter()
@@ -1688,10 +1813,7 @@ mod tests {
     fn fresh_constr_has_fresh_premise() {
         let r = &special_intruder_rules(false)[2];
         assert_eq!(r.premises.len(), 1);
-        assert!(matches!(
-            r.premises[0].tag,
-            crate::fact::FactTag::Fresh
-        ));
+        assert!(matches!(r.premises[0].tag, crate::fact::FactTag::Fresh));
     }
 
     #[test]
@@ -1733,7 +1855,9 @@ mod tests {
         assert_eq!(pair_rule.conclusions.len(), 1);
         assert_eq!(pair_rule.actions.len(), 1);
         // All facts have KU tag.
-        for f in pair_rule.premises.iter()
+        for f in pair_rule
+            .premises
+            .iter()
             .chain(&pair_rule.conclusions)
             .chain(&pair_rule.actions)
         {
@@ -1753,7 +1877,10 @@ mod tests {
                 other => panic!("expected ConstrRule, got {:?}", other),
             }
         }
-        assert!(!rules.is_empty(), "default pair sig has at least one constructor");
+        assert!(
+            !rules.is_empty(),
+            "default pair sig has at least one constructor"
+        );
     }
 
     /// Symmetric-encryption signature should emit one destructor rule
@@ -1764,17 +1891,29 @@ mod tests {
     #[test]
     fn destruction_rules_sym_enc_emits_decryption() {
         let sig = tamarin_term::maude_sig::sym_enc_maude_sig();
-        let rules: Vec<IntrRuleAC> = sig.st_rules.iter()
+        let rules: Vec<IntrRuleAC> = sig
+            .st_rules
+            .iter()
             .flat_map(|r| destruction_rules(false, r))
             .collect();
         // We expect exactly one destructor: the outermost decryption.
-        assert!(!rules.is_empty(),
-            "expected at least one sdec destructor; got {:?}", rules);
+        assert!(
+            !rules.is_empty(),
+            "expected at least one sdec destructor; got {:?}",
+            rules
+        );
         // Inspect: first rule should have KD as first premise + at least one KU.
         let first = &rules[0];
         assert_eq!(first.premises[0].tag, crate::fact::FactTag::Kd);
-        assert!(first.premises.iter().skip(1).all(|p| p.tag == crate::fact::FactTag::Ku),
-            "follow-on premises must be KU; got {:?}", first.premises);
+        assert!(
+            first
+                .premises
+                .iter()
+                .skip(1)
+                .all(|p| p.tag == crate::fact::FactTag::Ku),
+            "follow-on premises must be KU; got {:?}",
+            first.premises
+        );
         assert_eq!(first.conclusions[0].tag, crate::fact::FactTag::Kd);
     }
 
@@ -1782,12 +1921,17 @@ mod tests {
     #[test]
     fn destruction_rules_pair_emits_fst_snd_destructors() {
         let sig = tamarin_term::maude_sig::pair_maude_sig();
-        let rules: Vec<IntrRuleAC> = sig.st_rules.iter()
+        let rules: Vec<IntrRuleAC> = sig
+            .st_rules
+            .iter()
             .flat_map(|r| destruction_rules(false, r))
             .collect();
         // One destructor per rule; pair has fst + snd → 2 destructor rules.
-        assert!(rules.len() >= 2,
-            "expected >= 2 pair destructors (fst + snd); got {}", rules.len());
+        assert!(
+            rules.len() >= 2,
+            "expected >= 2 pair destructors (fst + snd); got {}",
+            rules.len()
+        );
     }
 
     /// `subtermIntruderRules` on a sym-enc signature should combine
@@ -1796,10 +1940,12 @@ mod tests {
     fn subterm_intruder_rules_combines_construction_and_destruction() {
         let sig = tamarin_term::maude_sig::sym_enc_maude_sig();
         let rules = subterm_intruder_rules(false, &sig);
-        let any_destr = rules.iter().any(|r|
-            matches!(r.info, IntrRuleACInfo::DestrRule(..)));
-        let any_constr = rules.iter().any(|r|
-            matches!(r.info, IntrRuleACInfo::ConstrRule(_)));
+        let any_destr = rules
+            .iter()
+            .any(|r| matches!(r.info, IntrRuleACInfo::DestrRule(..)));
+        let any_constr = rules
+            .iter()
+            .any(|r| matches!(r.info, IntrRuleACInfo::ConstrRule(_)));
         assert!(any_destr, "expected at least one DestrRule");
         assert!(any_constr, "expected at least one ConstrRule");
     }
@@ -1814,8 +1960,11 @@ mod tests {
                 tamarin_term::term::Term::App(_, args) => args.len(),
                 tamarin_term::term::Term::Lit(_) => 0,
             };
-            assert_eq!(r.premises.len(), arity,
-                "premise count must equal symbol arity");
+            assert_eq!(
+                r.premises.len(),
+                arity,
+                "premise count must equal symbol arity"
+            );
             assert_eq!(r.conclusions.len(), 1);
             assert_eq!(r.actions.len(), 1);
         }
@@ -1844,15 +1993,20 @@ mod tests {
     #[test]
     fn destruction_rules_sym_enc_emits_exactly_one_destructor() {
         let sig = tamarin_term::maude_sig::sym_enc_maude_sig();
-        let rules: Vec<IntrRuleAC> = sig.st_rules.iter()
+        let rules: Vec<IntrRuleAC> = sig
+            .st_rules
+            .iter()
             .flat_map(|r| destruction_rules(false, r))
             .collect();
-        assert_eq!(rules.len(), 1,
+        assert_eq!(
+            rules.len(),
+            1,
             "sym-enc rule `sdec(senc(x, y), y) = x` must yield EXACTLY ONE \
              destructor — the skip-last pattern (IntruderRules.hs:135) \
              elides the inner step.  Got {} rules.  If this regresses, \
              denning_sacco-class chain explosion will silently reappear.",
-            rules.len());
+            rules.len()
+        );
         let r = &rules[0];
         // Premise[0] = KD(senc(x, y)); follow-on premises = KU(y).
         assert_eq!(r.premises[0].tag, crate::fact::FactTag::Kd);
@@ -1868,12 +2022,18 @@ mod tests {
     #[test]
     fn destruction_rules_asym_enc_emits_exactly_one_destructor() {
         let sig = tamarin_term::maude_sig::asym_enc_maude_sig();
-        let rules: Vec<IntrRuleAC> = sig.st_rules.iter()
+        let rules: Vec<IntrRuleAC> = sig
+            .st_rules
+            .iter()
             .flat_map(|r| destruction_rules(false, r))
             .collect();
-        assert_eq!(rules.len(), 1,
+        assert_eq!(
+            rules.len(),
+            1,
             "asym-enc rule must yield EXACTLY ONE destructor; got {} rules. \
-             Skip-last pattern was probably regressed.", rules.len());
+             Skip-last pattern was probably regressed.",
+            rules.len()
+        );
     }
 
     /// `destructionRules` for pair `fst(<x,y>) = x` and `snd(<x,y>) = y`
@@ -1889,13 +2049,19 @@ mod tests {
     #[test]
     fn destruction_rules_pair_emits_exactly_two_destructors() {
         let sig = tamarin_term::maude_sig::pair_maude_sig();
-        let rules: Vec<IntrRuleAC> = sig.st_rules.iter()
+        let rules: Vec<IntrRuleAC> = sig
+            .st_rules
+            .iter()
             .flat_map(|r| destruction_rules(false, r))
             .collect();
-        assert_eq!(rules.len(), 2,
+        assert_eq!(
+            rules.len(),
+            2,
             "pair signature must yield exactly fst + snd destructors \
              (2 total); got {} rules.  Pair rules are `fst(<x,y>) = x` \
-             and `snd(<x,y>) = y` at position [0] each.", rules.len());
+             and `snd(<x,y>) = y` at position [0] each.",
+            rules.len()
+        );
     }
 
     // =========================================================================
@@ -1914,7 +2080,9 @@ mod tests {
     fn maude_bin_path() -> Option<String> {
         std::env::var("MAUDE_PATH").ok().or_else(|| {
             for c in ["/usr/local/bin/maude", "maude"] {
-                if std::path::Path::new(c).exists() { return Some(c.to_string()); }
+                if std::path::Path::new(c).exists() {
+                    return Some(c.to_string());
+                }
             }
             None
         })
@@ -1922,7 +2090,10 @@ mod tests {
 
     fn maude_handle() -> Option<tamarin_term::maude_proc::MaudeHandle> {
         tamarin_term::maude_proc::MaudeHandle::start(
-            &maude_bin_path()?, tamarin_term::maude_sig::pair_maude_sig()).ok()
+            &maude_bin_path()?,
+            tamarin_term::maude_sig::pair_maude_sig(),
+        )
+        .ok()
     }
 
     /// Build a rule `[ KU(a) ] --[ KU(pair(a, a)) ]-> [ KU(pair(a, a)) ]`
@@ -1949,20 +2120,29 @@ mod tests {
     /// vs `{y.7}`) is a renaming, so `isRenamingPerRule` holds.
     #[test]
     fn equal_rule_up_to_renaming_alpha_equivalent_pair_rules() {
-        let maude = match maude_handle() { Some(m) => m, None => return };
+        let maude = match maude_handle() {
+            Some(m) => m,
+            None => return,
+        };
         let r1 = ku_pair_rule_with_var("x", 0);
         let r2 = ku_pair_rule_with_var("y", 7);
-        assert!(equal_rule_up_to_renaming(&maude, &r1, &r2),
+        assert!(
+            equal_rule_up_to_renaming(&maude, &r1, &r2),
             "two rules differing only in their bound var's name+idx \
              must be equal-up-to-renaming.  HS: `unifyLNTerm` yields a \
              renaming `[x.0 ~> y.7]`, isRenaming on each rule's restricted \
-             var set holds.  See Rule.hs:1065-1077.");
+             var set holds.  See Rule.hs:1065-1077."
+        );
         // Symmetric: r2 vs r1.
-        assert!(equal_rule_up_to_renaming(&maude, &r2, &r1),
-            "equal_rule_up_to_renaming must be symmetric");
+        assert!(
+            equal_rule_up_to_renaming(&maude, &r2, &r1),
+            "equal_rule_up_to_renaming must be symmetric"
+        );
         // Reflexive: r1 vs r1.
-        assert!(equal_rule_up_to_renaming(&maude, &r1, &r1),
-            "equal_rule_up_to_renaming must be reflexive");
+        assert!(
+            equal_rule_up_to_renaming(&maude, &r1, &r1),
+            "equal_rule_up_to_renaming must be reflexive"
+        );
     }
 
     /// Negative: two rules with structurally different conclusions
@@ -1972,7 +2152,10 @@ mod tests {
     #[test]
     fn equal_rule_up_to_renaming_structurally_different_rules_diverge() {
         use tamarin_term::lterm::{LSort, LVar};
-        let maude = match maude_handle() { Some(m) => m, None => return };
+        let maude = match maude_handle() {
+            Some(m) => m,
+            None => return,
+        };
         let r1 = ku_pair_rule_with_var("x", 0);
         // r2 has a single KU premise but a DIFFERENT conclusion shape:
         // it concludes KU(x) (the variable directly) instead of
@@ -1984,11 +2167,13 @@ mod tests {
             vec![ku_fact(a.clone())],
             vec![ku_fact(a)],
         );
-        assert!(!equal_rule_up_to_renaming(&maude, &r1, &r2),
+        assert!(
+            !equal_rule_up_to_renaming(&maude, &r1, &r2),
             "rules with structurally distinct conclusions (KU(pair(x,x)) \
              vs KU(x)) cannot be equal-up-to-renaming — no unifier \
              matches `pair(x,x) =? x`.  HS: matchFacts builds the eqs, \
-             unifyLNTerm fails or yields a non-renaming.");
+             unifyLNTerm fails or yields a non-renaming."
+        );
         // Different info also makes them unequal even when terms match.
         let r3 = Rule::new(
             IntrRuleACInfo::ConstrRule(b"_OTHER".to_vec()),
@@ -1996,9 +2181,11 @@ mod tests {
             r1.conclusions.clone(),
             r1.actions.clone(),
         );
-        assert!(!equal_rule_up_to_renaming(&maude, &r1, &r3),
+        assert!(
+            !equal_rule_up_to_renaming(&maude, &r1, &r3),
             "differing info field (rule names) must short-circuit to False \
-             — HS: `if r1.info /= r2.info then False else ...`");
+             — HS: `if r1.info /= r2.info then False else ...`"
+        );
     }
 
     // =========================================================================
@@ -2018,24 +2205,32 @@ mod tests {
     /// enumeration), but `len() >= 1` is invariant.
     #[test]
     fn variants_intruder_emits_at_least_the_identity_variant() {
-        let maude = match maude_handle() { Some(m) => m, None => return };
+        let maude = match maude_handle() {
+            Some(m) => m,
+            None => return,
+        };
         // The pair-construction rule from the basic sig.  Apply
         // `variants_intruder` to it; Maude should produce at least the
         // identity variant.  More may appear depending on the
         // signature loaded.
         let sig = tamarin_term::maude_sig::pair_maude_sig();
         let cs = construction_rules(&sig);
-        let pair_rule = cs.iter().find(|r| match &r.info {
-            IntrRuleACInfo::ConstrRule(name) => name == b"_pair",
-            _ => false,
-        }).expect("expected pair constructor rule");
+        let pair_rule = cs
+            .iter()
+            .find(|r| match &r.info {
+                IntrRuleACInfo::ConstrRule(name) => name == b"_pair",
+                _ => false,
+            })
+            .expect("expected pair constructor rule");
         let variants = variants_intruder(&maude, false, pair_rule);
-        assert!(!variants.is_empty(),
+        assert!(
+            !variants.is_empty(),
             "variants_intruder must emit at least one rule (the identity \
              variant if no Maude variants exist).  HS \
              `variantsIntruder` (IntruderRules.hs:288-314) wraps the \
              rule in a list-monad enumeration that includes the original \
-             via the identity Maude variant.");
+             via the identity Maude variant."
+        );
     }
 
     /// `destructionRules` short-circuits when the rhs is a closed term
@@ -2047,36 +2242,50 @@ mod tests {
     /// constant (no free vars).
     #[test]
     fn destruction_rules_returns_empty_for_closed_rhs_in_non_diff_mode() {
-        use tamarin_term::lterm::{LSort, LVar, Name, NameId, NameTag, LNTerm};
+        use tamarin_term::builtin::{pair, senc};
+        use tamarin_term::lterm::{LNTerm, LSort, LVar, Name, NameId, NameTag};
         use tamarin_term::subterm_rule::{CtxtStRule, StRhs};
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
-        use tamarin_term::builtin::{pair, senc};
 
         // Build: lhs = senc(x, pair($a, $b)), rhs = $a (pub const, no frees).
         // Position [1, 0] — into senc's arg 1 (the pair), then into pair's
         // arg 0 ($a).
         let x = LVar::new("x", LSort::Msg, 1);
-        let pub_a = Name { tag: NameTag::Pub, id: NameId::new("a") };
-        let pub_b = Name { tag: NameTag::Pub, id: NameId::new("b") };
+        let pub_a = Name {
+            tag: NameTag::Pub,
+            id: NameId::new("a"),
+        };
+        let pub_b = Name {
+            tag: NameTag::Pub,
+            id: NameId::new("b"),
+        };
         let pa: LNTerm = Term::Lit(Lit::Con(pub_a.clone()));
         let pb: LNTerm = Term::Lit(Lit::Con(pub_b));
         let lhs = senc(Term::Lit(Lit::Var(x)), pair(pa.clone(), pb));
-        let rhs_st = StRhs { positions: vec![vec![1, 0]], term: pa };
+        let rhs_st = StRhs {
+            positions: vec![vec![1, 0]],
+            term: pa,
+        };
         let rule = CtxtStRule::new(lhs, rhs_st);
 
         // diff=false, rhs has no free vars, rhs has no private symbol →
         // outer guard returns [].
         let out = destruction_rules(false, &rule);
-        assert!(out.is_empty(),
+        assert!(
+            out.is_empty(),
             "diff=false + closed rhs (no frees, no private) must short-\
              circuit to empty.  Mirrors IntruderRules.hs:130 outer guard. \
-             Got {} rules.", out.len());
+             Got {} rules.",
+            out.len()
+        );
 
         // BUT in diff mode, the guard is bypassed and we DO descend.
         let out_diff = destruction_rules(true, &rule);
-        assert!(!out_diff.is_empty(),
-            "diff=true must bypass the closed-rhs guard and emit destructors");
+        assert!(
+            !out_diff.is_empty(),
+            "diff=true must bypass the closed-rhs guard and emit destructors"
+        );
     }
 
     // =========================================================================
@@ -2107,12 +2316,18 @@ mod tests {
 
     fn dh_maude_handle() -> Option<tamarin_term::maude_proc::MaudeHandle> {
         tamarin_term::maude_proc::MaudeHandle::start(
-            &maude_bin_path()?, tamarin_term::maude_sig::dh_maude_sig()).ok()
+            &maude_bin_path()?,
+            tamarin_term::maude_sig::dh_maude_sig(),
+        )
+        .ok()
     }
 
     fn bp_maude_handle() -> Option<tamarin_term::maude_proc::MaudeHandle> {
         tamarin_term::maude_proc::MaudeHandle::start(
-            &maude_bin_path()?, tamarin_term::maude_sig::bp_maude_sig()).ok()
+            &maude_bin_path()?,
+            tamarin_term::maude_sig::bp_maude_sig(),
+        )
+        .ok()
     }
 
     /// `bp_intruder_rules(false)` yields exactly 75 bilinear-pairing
@@ -2122,7 +2337,10 @@ mod tests {
     /// for the BP block (75 of the 126 total = 51 DH + 75 BP).
     #[test]
     fn bp_intruder_rules_yields_75() {
-        let maude = match bp_maude_handle() { Some(m) => m, None => return };
+        let maude = match bp_maude_handle() {
+            Some(m) => m,
+            None => return,
+        };
         let rules = bp_intruder_rules(false, &maude);
         assert_eq!(
             rules.len(),
@@ -2164,50 +2382,72 @@ mod tests {
     /// constr + 45 d_exp + 1 d_inv = 51 rules total).
     #[test]
     fn dh_intruder_rules_emits_five_constructors_and_some_destructors() {
-        let maude = match dh_maude_handle() { Some(m) => m, None => return };
+        let maude = match dh_maude_handle() {
+            Some(m) => m,
+            None => return,
+        };
         let rules = dh_intruder_rules(false, &maude);
 
         // 5 ConstrRules with the known names.
-        let names: Vec<&[u8]> = rules.iter()
+        let names: Vec<&[u8]> = rules
+            .iter()
             .filter_map(|r| match &r.info {
                 IntrRuleACInfo::ConstrRule(n) => Some(n.as_slice()),
                 _ => None,
-            }).collect();
-        assert_eq!(names.len(), 5,
+            })
+            .collect();
+        assert_eq!(
+            names.len(),
+            5,
             "expected exactly 5 ConstrRules (_exp/_inv/_DH_neutral/_one/_mult); \
              got: {:?}",
-            names.iter().map(|n| String::from_utf8_lossy(n).to_string()).collect::<Vec<_>>()
+            names
+                .iter()
+                .map(|n| String::from_utf8_lossy(n).to_string())
+                .collect::<Vec<_>>()
         );
         // All constructor names start with `_` (HS pack "_" prefix).
         for n in &names {
-            assert!(n.starts_with(b"_"),
+            assert!(
+                n.starts_with(b"_"),
                 "constructor rule name must start with `_` (HS appends pack \"_\" — \
                  IntruderRules.hs:233-240); got {}",
-                String::from_utf8_lossy(n));
+                String::from_utf8_lossy(n)
+            );
         }
         // Specific names present.
         let name_strings: Vec<&[u8]> = names.to_vec();
         for expected in &[&b"_exp"[..], b"_inv", b"_DH_neutral", b"_one", b"_mult"] {
-            assert!(name_strings.contains(expected),
+            assert!(
+                name_strings.contains(expected),
                 "missing constructor rule named {}; got names {:?}",
                 String::from_utf8_lossy(expected),
-                name_strings.iter().map(|n| String::from_utf8_lossy(n).to_string())
-                    .collect::<Vec<_>>());
+                name_strings
+                    .iter()
+                    .map(|n| String::from_utf8_lossy(n).to_string())
+                    .collect::<Vec<_>>()
+            );
         }
 
         // Destructor rules also present (variants of _exp and _inv).
-        let destrs: Vec<&IntrRuleAC> = rules.iter()
+        let destrs: Vec<&IntrRuleAC> = rules
+            .iter()
             .filter(|r| matches!(r.info, IntrRuleACInfo::DestrRule(..)))
             .collect();
-        assert!(!destrs.is_empty(),
+        assert!(
+            !destrs.is_empty(),
             "expected at least one DestrRule variant (HS \
              `variantsIntruder (exp-destr|inv-destr)` produces several); \
-             got 0 destructors out of {} total rules", rules.len());
+             got 0 destructors out of {} total rules",
+            rules.len()
+        );
         for d in &destrs {
             let n = rule_name(&d.info).expect("DestrRule has name");
-            assert!(n.starts_with(b"_"),
+            assert!(
+                n.starts_with(b"_"),
                 "destructor rule name must start with `_`; got {}",
-                String::from_utf8_lossy(n));
+                String::from_utf8_lossy(n)
+            );
         }
 
         // EXACT byte-faithful shape vs HS `dhIntruderRules False`
@@ -2224,19 +2464,37 @@ mod tests {
         let (n_exp, n_inv) = destrs.iter().fold((0usize, 0usize), |(e, i), d| {
             let n = rule_name(&d.info).unwrap();
             let s = String::from_utf8_lossy(n);
-            if s.contains("inv") { (e, i + 1) }
-            else if s.contains("exp") { (e + 1, i) }
-            else { (e, i) }
+            if s.contains("inv") {
+                (e, i + 1)
+            } else if s.contains("exp") {
+                (e + 1, i)
+            } else {
+                (e, i)
+            }
         });
-        assert_eq!(rules.len(), 51,
+        assert_eq!(
+            rules.len(),
+            51,
             "dhIntruderRules must yield exactly 51 rules (5 constr + 45 d_exp \
              + 1 d_inv) byte-identically to HS; got {} (n_exp={}, n_inv={}). \
              53 indicates the dropped-identity-variant `remove_renamings` \
-             step regressed.", rules.len(), n_exp, n_inv);
-        assert_eq!(n_exp, 45, "expected exactly 45 d_exp destructors; got {}", n_exp);
-        assert_eq!(n_inv, 1, "expected exactly 1 d_inv destructor (the swap \
+             step regressed.",
+            rules.len(),
+            n_exp,
+            n_inv
+        );
+        assert_eq!(
+            n_exp, 45,
+            "expected exactly 45 d_exp destructors; got {}",
+            n_exp
+        );
+        assert_eq!(
+            n_inv, 1,
+            "expected exactly 1 d_inv destructor (the swap \
              variant); got {} (2 means the identity variant KD(x)->KD(inv(x)) \
-             leaked)", n_inv);
+             leaked)",
+            n_inv
+        );
     }
 
     /// The 5 ConstrRules MUST have the HS-specified shape:
@@ -2251,43 +2509,82 @@ mod tests {
     /// (mkAction concfact) []` where `concfact = kudFact conc`.
     #[test]
     fn dh_intruder_rules_constructors_have_expected_shape() {
-        let maude = match dh_maude_handle() { Some(m) => m, None => return };
+        let maude = match dh_maude_handle() {
+            Some(m) => m,
+            None => return,
+        };
         let rules = dh_intruder_rules(false, &maude);
         let find = |name: &[u8]| -> &IntrRuleAC {
-            rules.iter().find(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n) => n.as_slice() == name,
-                _ => false,
-            }).unwrap_or_else(|| panic!("no constructor rule named {}",
-                String::from_utf8_lossy(name)))
+            rules
+                .iter()
+                .find(|r| match &r.info {
+                    IntrRuleACInfo::ConstrRule(n) => n.as_slice() == name,
+                    _ => false,
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "no constructor rule named {}",
+                        String::from_utf8_lossy(name)
+                    )
+                })
         };
 
         // All constructor rules emit a single action equal to the conclusion
         // (HS: `mkAction = return`, so `acts = [concfact]`).
         for name in &[&b"_exp"[..], b"_inv", b"_DH_neutral", b"_one", b"_mult"] {
             let r = find(name);
-            assert_eq!(r.conclusions.len(), 1, "{}: must have 1 conclusion",
-                String::from_utf8_lossy(name));
-            assert_eq!(r.actions.len(), 1, "{}: HS `return concfact` ⇒ 1 action",
-                String::from_utf8_lossy(name));
-            assert_eq!(r.actions[0], r.conclusions[0],
+            assert_eq!(
+                r.conclusions.len(),
+                1,
+                "{}: must have 1 conclusion",
+                String::from_utf8_lossy(name)
+            );
+            assert_eq!(
+                r.actions.len(),
+                1,
+                "{}: HS `return concfact` ⇒ 1 action",
+                String::from_utf8_lossy(name)
+            );
+            assert_eq!(
+                r.actions[0],
+                r.conclusions[0],
                 "{}: action must equal conclusion (HS `mkAction concfact` ⇒ \
-                 `[concfact]`)", String::from_utf8_lossy(name));
+                 `[concfact]`)",
+                String::from_utf8_lossy(name)
+            );
             // No `new_vars`.
-            assert!(r.new_vars.is_empty(),
+            assert!(
+                r.new_vars.is_empty(),
                 "{}: constructors have empty new_vars (HS Rule mkInfo prems concs acts [])",
-                String::from_utf8_lossy(name));
+                String::from_utf8_lossy(name)
+            );
             // Every fact tag is KU (HS `kudFact = kuFact`).
             for f in r.premises.iter().chain(&r.conclusions).chain(&r.actions) {
-                assert_eq!(f.tag, FactTag::Ku,
+                assert_eq!(
+                    f.tag,
+                    FactTag::Ku,
                     "{}: all facts must be KU (HS `kudFact = kuFact`)",
-                    String::from_utf8_lossy(name));
+                    String::from_utf8_lossy(name)
+                );
             }
         }
 
         // Premise counts match HS shape.
-        assert_eq!(find(b"_exp").premises.len(), 2, "_exp: 2 KU premises (HS expRule)");
-        assert_eq!(find(b"_inv").premises.len(), 1, "_inv: 1 KU premise (HS invRule)");
-        assert_eq!(find(b"_DH_neutral").premises.len(), 0, "_DH_neutral: 0 premises");
+        assert_eq!(
+            find(b"_exp").premises.len(),
+            2,
+            "_exp: 2 KU premises (HS expRule)"
+        );
+        assert_eq!(
+            find(b"_inv").premises.len(),
+            1,
+            "_inv: 1 KU premise (HS invRule)"
+        );
+        assert_eq!(
+            find(b"_DH_neutral").premises.len(),
+            0,
+            "_DH_neutral: 0 premises"
+        );
         assert_eq!(find(b"_one").premises.len(), 0, "_one: 0 premises");
         assert_eq!(find(b"_mult").premises.len(), 2, "_mult: 2 KU premises");
     }
@@ -2305,23 +2602,33 @@ mod tests {
     /// filter still applies).
     #[test]
     fn dh_intruder_rules_diff_mode_is_at_least_as_large() {
-        let maude = match dh_maude_handle() { Some(m) => m, None => return };
+        let maude = match dh_maude_handle() {
+            Some(m) => m,
+            None => return,
+        };
         let rules_no_diff = dh_intruder_rules(false, &maude);
         let rules_diff = dh_intruder_rules(true, &maude);
-        assert!(rules_diff.len() >= rules_no_diff.len(),
+        assert!(
+            rules_diff.len() >= rules_no_diff.len(),
             "diff=true skips the subsumption filter (HS IntruderRules.hs:188-190) \
              — must produce >= rules.  Got diff={}, no-diff={}",
-            rules_diff.len(), rules_no_diff.len());
+            rules_diff.len(),
+            rules_no_diff.len()
+        );
         // The 5 constructor rules must still be present in diff mode.
-        let constr_names: Vec<&[u8]> = rules_diff.iter()
+        let constr_names: Vec<&[u8]> = rules_diff
+            .iter()
             .filter_map(|r| match &r.info {
                 IntrRuleACInfo::ConstrRule(n) => Some(n.as_slice()),
                 _ => None,
-            }).collect();
+            })
+            .collect();
         for expected in &[&b"_exp"[..], b"_inv", b"_DH_neutral", b"_one", b"_mult"] {
-            assert!(constr_names.contains(expected),
+            assert!(
+                constr_names.contains(expected),
                 "diff-mode dh_intruder_rules missing constructor named {}",
-                String::from_utf8_lossy(expected));
+                String::from_utf8_lossy(expected)
+            );
         }
     }
 
@@ -2331,25 +2638,44 @@ mod tests {
     /// for destructors).
     #[test]
     fn dh_intruder_rules_destructors_have_kd_shape() {
-        let maude = match dh_maude_handle() { Some(m) => m, None => return };
+        let maude = match dh_maude_handle() {
+            Some(m) => m,
+            None => return,
+        };
         let rules = dh_intruder_rules(false, &maude);
-        let destrs: Vec<&IntrRuleAC> = rules.iter()
+        let destrs: Vec<&IntrRuleAC> = rules
+            .iter()
             .filter(|r| matches!(r.info, IntrRuleACInfo::DestrRule(..)))
             .collect();
-        assert!(!destrs.is_empty(), "expected at least one destructor variant");
+        assert!(
+            !destrs.is_empty(),
+            "expected at least one destructor variant"
+        );
         for d in &destrs {
-            assert!(!d.premises.is_empty(),
-                "destructor must have premises; got rule with 0 prems");
-            assert_eq!(d.premises[0].tag, FactTag::Kd,
-                "destructor's first premise must be KD (HS `kudFact = kdFact`)");
-            assert_eq!(d.conclusions.len(), 1,
-                "destructor must have exactly 1 KD conclusion");
-            assert_eq!(d.conclusions[0].tag, FactTag::Kd,
-                "destructor conclusion must be KD");
-            assert!(d.actions.is_empty(),
-                "destructor actions must be empty (HS `mkAction = const []`)");
-            assert!(d.new_vars.is_empty(),
-                "destructor new_vars must be empty");
+            assert!(
+                !d.premises.is_empty(),
+                "destructor must have premises; got rule with 0 prems"
+            );
+            assert_eq!(
+                d.premises[0].tag,
+                FactTag::Kd,
+                "destructor's first premise must be KD (HS `kudFact = kdFact`)"
+            );
+            assert_eq!(
+                d.conclusions.len(),
+                1,
+                "destructor must have exactly 1 KD conclusion"
+            );
+            assert_eq!(
+                d.conclusions[0].tag,
+                FactTag::Kd,
+                "destructor conclusion must be KD"
+            );
+            assert!(
+                d.actions.is_empty(),
+                "destructor actions must be empty (HS `mkAction = const []`)"
+            );
+            assert!(d.new_vars.is_empty(), "destructor new_vars must be empty");
         }
     }
 
@@ -2360,15 +2686,20 @@ mod tests {
     /// Mirrors IntruderRules.hs:233-244, 182, etc.
     #[test]
     fn dh_intruder_rules_all_names_have_underscore_prefix() {
-        let maude = match dh_maude_handle() { Some(m) => m, None => return };
+        let maude = match dh_maude_handle() {
+            Some(m) => m,
+            None => return,
+        };
         let rules = dh_intruder_rules(false, &maude);
         for r in &rules {
             let n = rule_name(&r.info).expect("DH intruder rule must have a name");
-            assert!(n.starts_with(b"_"),
+            assert!(
+                n.starts_with(b"_"),
                 "DH intruder rule name must start with `_` (HS `append (pack \"_\") \
                  ...SymString`); got {}.  This prefix is how HS distinguishes \
                  the intruder `_exp` from a user-defined `exp` function.",
-                String::from_utf8_lossy(n));
+                String::from_utf8_lossy(n)
+            );
         }
     }
 
@@ -2378,33 +2709,51 @@ mod tests {
     /// terms, `norm'` returns the input.
     #[test]
     fn norm_rule_identity_on_already_normal_rule() {
-        let maude = match dh_maude_handle() { Some(m) => m, None => return };
+        let maude = match dh_maude_handle() {
+            Some(m) => m,
+            None => return,
+        };
         let rules = dh_intruder_rules(false, &maude);
-        let exp_constr = rules.iter().find(|r| match &r.info {
-            IntrRuleACInfo::ConstrRule(n) => n.as_slice() == b"_exp",
-            _ => false,
-        }).expect("_exp constructor rule must be present");
+        let exp_constr = rules
+            .iter()
+            .find(|r| match &r.info {
+                IntrRuleACInfo::ConstrRule(n) => n.as_slice() == b"_exp",
+                _ => false,
+            })
+            .expect("_exp constructor rule must be present");
         let normalised = norm_rule(&maude, exp_constr);
-        assert_eq!(&normalised, exp_constr,
+        assert_eq!(
+            &normalised, exp_constr,
             "norm_rule must be the identity on a rule whose terms are \
              already in normal form (`x.0`, `x.1`, `exp(x.0, x.1)` — no \
              reducible top-level shapes).  HS: `normRule' = mapTerms norm'`, \
-             and `norm' (x.0) = x.0`.");
+             and `norm' (x.0) = x.0`."
+        );
     }
 
     /// `dh_intruder_rules` rule list is well-formed: every rule has at
     /// least one conclusion, every fact's terms is non-empty, etc.
     #[test]
     fn dh_intruder_rules_well_formed() {
-        let maude = match dh_maude_handle() { Some(m) => m, None => return };
+        let maude = match dh_maude_handle() {
+            Some(m) => m,
+            None => return,
+        };
         let rules = dh_intruder_rules(false, &maude);
-        assert!(!rules.is_empty(), "dh_intruder_rules must produce > 0 rules");
+        assert!(
+            !rules.is_empty(),
+            "dh_intruder_rules must produce > 0 rules"
+        );
         for r in &rules {
-            assert!(!r.conclusions.is_empty(),
-                "every dh intruder rule must have at least one conclusion");
+            assert!(
+                !r.conclusions.is_empty(),
+                "every dh intruder rule must have at least one conclusion"
+            );
             for f in r.premises.iter().chain(&r.conclusions).chain(&r.actions) {
-                assert!(!f.terms.is_empty(),
-                    "every fact in a dh intruder rule must have non-empty terms");
+                assert!(
+                    !f.terms.is_empty(),
+                    "every fact in a dh intruder rule must have non-empty terms"
+                );
             }
         }
     }

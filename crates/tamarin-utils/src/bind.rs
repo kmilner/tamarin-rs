@@ -26,38 +26,48 @@ pub struct Bindings<K, V> {
 }
 
 impl<K, V> Default for Bindings<K, V> {
-    fn default() -> Self { Bindings { map: FastMap::default() } }
+    fn default() -> Self {
+        Bindings {
+            map: FastMap::default(),
+        }
+    }
 }
 
 impl<K, V> Bindings<K, V>
 where
     K: Eq + Hash,
 {
-    pub fn new() -> Self { Bindings::default() }
+    pub fn new() -> Self {
+        Bindings::default()
+    }
 
     /// `noBindings`: retained as a named-constructor alias mirroring the
     /// upstream Haskell API; equivalent to [`Bindings::new`].
-    pub fn no_bindings() -> Self { Bindings::default() }
+    pub fn no_bindings() -> Self {
+        Bindings::default()
+    }
 
     /// `lookupBinding`.
-    pub fn lookup(&self, k: &K) -> Option<&V> { self.map.get(k) }
+    pub fn lookup(&self, k: &K) -> Option<&V> {
+        self.map.get(k)
+    }
 
     /// `insertBinding`. Overwrites any existing entry.
-    pub fn insert(&mut self, k: K, v: V) { self.map.insert(k, v); }
+    pub fn insert(&mut self, k: K, v: V) {
+        self.map.insert(k, v);
+    }
 
-    pub fn len(&self) -> usize { self.map.len() }
-    pub fn is_empty(&self) -> bool { self.map.is_empty() }
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
 
     /// `importBinding mkR k name`: if `k` is already bound, return the
     /// existing value; otherwise allocate a fresh identifier for `name` from
     /// `fresh`, build a new value via `mk`, store it, and return it.
-    pub fn import_binding<F>(
-        &mut self,
-        fresh: &mut PreciseFreshState,
-        mk: F,
-        k: K,
-        name: &str,
-    ) -> V
+    pub fn import_binding<F>(&mut self, fresh: &mut PreciseFreshState, mk: F, k: K, name: &str) -> V
     where
         K: Clone,
         V: Clone,

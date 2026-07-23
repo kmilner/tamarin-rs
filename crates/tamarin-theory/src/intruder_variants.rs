@@ -80,8 +80,10 @@ pub const BP_INTRUDER_VARIANTS_SPTHY: &str =
 pub fn mk_dh_intruder_variants(msig: &MaudeSig) -> Vec<IntrRuleAC> {
     parse_intruder_rules(msig, DH_INTRUDER_VARIANTS_FILE, DH_INTRUDER_VARIANTS_SPTHY)
         .unwrap_or_else(|e| {
-            panic!("mk_dh_intruder_variants: parse error in {}: {}",
-                DH_INTRUDER_VARIANTS_FILE, e)
+            panic!(
+                "mk_dh_intruder_variants: parse error in {}: {}",
+                DH_INTRUDER_VARIANTS_FILE, e
+            )
         })
 }
 
@@ -89,8 +91,10 @@ pub fn mk_dh_intruder_variants(msig: &MaudeSig) -> Vec<IntrRuleAC> {
 pub fn mk_bp_intruder_variants(msig: &MaudeSig) -> Vec<IntrRuleAC> {
     parse_intruder_rules(msig, BP_INTRUDER_VARIANTS_FILE, BP_INTRUDER_VARIANTS_SPTHY)
         .unwrap_or_else(|e| {
-            panic!("mk_bp_intruder_variants: parse error in {}: {}",
-                BP_INTRUDER_VARIANTS_FILE, e)
+            panic!(
+                "mk_bp_intruder_variants: parse error in {}: {}",
+                BP_INTRUDER_VARIANTS_FILE, e
+            )
         })
 }
 
@@ -141,11 +145,10 @@ pub fn parse_intruder_rules(
     ctxt_desc: &str,
     source: &str,
 ) -> Result<Vec<IntrRuleAC>, IntrRuleParseError> {
-    let parser_rules = p::parse_intruder_rules(source)
-        .map_err(|e| IntrRuleParseError {
-            ctxt_desc: ctxt_desc.to_string(),
-            message: e.to_string(),
-        })?;
+    let parser_rules = p::parse_intruder_rules(source).map_err(|e| IntrRuleParseError {
+        ctxt_desc: ctxt_desc.to_string(),
+        message: e.to_string(),
+    })?;
 
     // Mirror HS `setState (mkStateSig msig)` — make the term-conversion
     // pass below see the 0-arity NoEq names from `msig` so bare
@@ -154,11 +157,10 @@ pub fn parse_intruder_rules(
 
     let mut out = Vec::with_capacity(parser_rules.len());
     for r in parser_rules {
-        let intr = ast_rule_to_intr_rule_ac(&r)
-            .map_err(|message| IntrRuleParseError {
-                ctxt_desc: ctxt_desc.to_string(),
-                message,
-            })?;
+        let intr = ast_rule_to_intr_rule_ac(&r).map_err(|message| IntrRuleParseError {
+            ctxt_desc: ctxt_desc.to_string(),
+            message,
+        })?;
         out.push(intr);
     }
     Ok(out)
@@ -218,9 +220,13 @@ fn ast_rule_to_intr_rule_ac(r: &p::Rule) -> Result<IntrRuleAC, String> {
             true,
             false,
         ),
-        _ => return Err(format!(
-            "invalid intruder rule name '{}': must start with `c` (constructor) \
-             or `d` (destructor) — HS Rule.hs:166-169", r.name)),
+        _ => {
+            return Err(format!(
+                "invalid intruder rule name '{}': must start with `c` (constructor) \
+             or `d` (destructor) — HS Rule.hs:166-169",
+                r.name
+            ))
+        }
     };
 
     // HS `genericRule msgvar nodevar` returns `(ps, as, cs, [])`.
@@ -228,31 +234,55 @@ fn ast_rule_to_intr_rule_ac(r: &p::Rule) -> Result<IntrRuleAC, String> {
     // are all empty for intruder rules.  Surface them as elaboration
     // errors if present (defensive).
     if !r.let_block.is_empty() {
-        return Err(format!("intruder rule {} unexpectedly has a let-block", r.name));
+        return Err(format!(
+            "intruder rule {} unexpectedly has a let-block",
+            r.name
+        ));
     }
     if !r.embedded_restrictions.is_empty() {
-        return Err(format!("intruder rule {} unexpectedly has embedded restrictions", r.name));
+        return Err(format!(
+            "intruder rule {} unexpectedly has embedded restrictions",
+            r.name
+        ));
     }
     if !r.variants.is_empty() {
-        return Err(format!("intruder rule {} unexpectedly has variants", r.name));
+        return Err(format!(
+            "intruder rule {} unexpectedly has variants",
+            r.name
+        ));
     }
     if r.left_right.is_some() {
-        return Err(format!("intruder rule {} unexpectedly has left/right halves", r.name));
+        return Err(format!(
+            "intruder rule {} unexpectedly has left/right halves",
+            r.name
+        ));
     }
 
     // Convert facts via the existing AST→LNFact path.  `fact_to_lnfact`
     // already handles the `KU`/`KD`/etc. tag mapping (elaborate.rs:974).
-    let prems: Vec<LNFact> = r.premises.iter()
-        .map(|f| elaborate::fact_to_lnfact(f)
-            .map_err(|e| format!("intruder rule {}: premise: {}", r.name, e.message)))
+    let prems: Vec<LNFact> = r
+        .premises
+        .iter()
+        .map(|f| {
+            elaborate::fact_to_lnfact(f)
+                .map_err(|e| format!("intruder rule {}: premise: {}", r.name, e.message))
+        })
         .collect::<Result<_, _>>()?;
-    let acts: Vec<LNFact> = r.actions.iter()
-        .map(|f| elaborate::fact_to_lnfact(f)
-            .map_err(|e| format!("intruder rule {}: action: {}", r.name, e.message)))
+    let acts: Vec<LNFact> = r
+        .actions
+        .iter()
+        .map(|f| {
+            elaborate::fact_to_lnfact(f)
+                .map_err(|e| format!("intruder rule {}: action: {}", r.name, e.message))
+        })
         .collect::<Result<_, _>>()?;
-    let concs: Vec<LNFact> = r.conclusions.iter()
-        .map(|f| elaborate::fact_to_lnfact(f)
-            .map_err(|e| format!("intruder rule {}: conclusion: {}", r.name, e.message)))
+    let concs: Vec<LNFact> = r
+        .conclusions
+        .iter()
+        .map(|f| {
+            elaborate::fact_to_lnfact(f)
+                .map_err(|e| format!("intruder rule {}: conclusion: {}", r.name, e.message))
+        })
         .collect::<Result<_, _>>()?;
 
     // HS `newVariables ps cs` — variables that appear in conclusions
@@ -268,10 +298,7 @@ fn ast_rule_to_intr_rule_ac(r: &p::Rule) -> Result<IntrRuleAC, String> {
 /// Mirrors HS `newVariables` (`lib/theory/src/Theory/Model/Fact.hs:484-494, see line 494`):
 /// the set of variables in `conclusions` that are not in `premises`,
 /// returned in deterministic order.
-fn compute_new_vars(
-    prems: &[LNFact],
-    concs: &[LNFact],
-) -> Vec<tamarin_term::lterm::LNTerm> {
+fn compute_new_vars(prems: &[LNFact], concs: &[LNFact]) -> Vec<tamarin_term::lterm::LNTerm> {
     use std::collections::BTreeSet;
     use tamarin_term::lterm::LVar;
     use tamarin_term::term::Term;
@@ -279,15 +306,23 @@ fn compute_new_vars(
 
     fn collect(t: &tamarin_term::lterm::LNTerm, out: &mut BTreeSet<LVar>) {
         match t {
-            Term::Lit(Lit::Var(v)) => { out.insert(v.clone()); }
+            Term::Lit(Lit::Var(v)) => {
+                out.insert(v.clone());
+            }
             Term::Lit(_) => {}
-            Term::App(_, args) => for a in args.iter() { collect(a, out); }
+            Term::App(_, args) => {
+                for a in args.iter() {
+                    collect(a, out);
+                }
+            }
         }
     }
 
     let mut prem_vars: BTreeSet<LVar> = BTreeSet::new();
     for f in prems {
-        for t in f.terms.iter() { collect(t, &mut prem_vars); }
+        for t in f.terms.iter() {
+            collect(t, &mut prem_vars);
+        }
     }
     let mut new_set: BTreeSet<LVar> = BTreeSet::new();
     for f in concs {
@@ -295,11 +330,16 @@ fn compute_new_vars(
             let mut here = BTreeSet::new();
             collect(t, &mut here);
             for v in here {
-                if !prem_vars.contains(&v) { new_set.insert(v); }
+                if !prem_vars.contains(&v) {
+                    new_set.insert(v);
+                }
             }
         }
     }
-    new_set.into_iter().map(|v| Term::Lit(Lit::Var(v))).collect()
+    new_set
+        .into_iter()
+        .map(|v| Term::Lit(Lit::Var(v)))
+        .collect()
 }
 
 // =============================================================================
@@ -318,9 +358,13 @@ mod tests {
     #[test]
     fn dh_variants_file_parses_to_51_rules() {
         let rules = mk_dh_intruder_variants(&dh_maude_sig());
-        assert_eq!(rules.len(), 51,
+        assert_eq!(
+            rules.len(),
+            51,
             "data/intruder_variants_dh.spthy should yield exactly 51 rules \
-             (HS-cached output of `dhIntruderRules`); got {}", rules.len());
+             (HS-cached output of `dhIntruderRules`); got {}",
+            rules.len()
+        );
     }
 
     /// Count check for the BP cached file
@@ -328,9 +372,12 @@ mod tests {
     #[test]
     fn bp_variants_file_parses_to_75_rules() {
         let rules = mk_bp_intruder_variants(&bp_maude_sig());
-        assert_eq!(rules.len(), 75,
+        assert_eq!(
+            rules.len(),
+            75,
             "data/intruder_variants_bp.spthy should yield exactly 75 rules; got {}",
-            rules.len());
+            rules.len()
+        );
     }
 
     /// The 5 constructor rules MUST be present with their HS-canonical
@@ -340,21 +387,32 @@ mod tests {
     #[test]
     fn dh_variants_contains_five_constructors_with_underscore_prefix() {
         let rules = mk_dh_intruder_variants(&dh_maude_sig());
-        let constr_names: Vec<&[u8]> = rules.iter()
+        let constr_names: Vec<&[u8]> = rules
+            .iter()
             .filter_map(|r| match &r.info {
                 IntrRuleACInfo::ConstrRule(n) => Some(n.as_slice()),
                 _ => None,
-            }).collect();
-        assert_eq!(constr_names.len(), 5,
+            })
+            .collect();
+        assert_eq!(
+            constr_names.len(),
+            5,
             "expected exactly 5 ConstrRules; got {:?}",
-            constr_names.iter().map(|n| String::from_utf8_lossy(n).to_string())
-                .collect::<Vec<_>>());
+            constr_names
+                .iter()
+                .map(|n| String::from_utf8_lossy(n).to_string())
+                .collect::<Vec<_>>()
+        );
         for expected in &[&b"_exp"[..], b"_inv", b"_DH_neutral", b"_one", b"_mult"] {
-            assert!(constr_names.contains(expected),
+            assert!(
+                constr_names.contains(expected),
                 "missing constructor named {} in DH variants; got names {:?}",
                 String::from_utf8_lossy(expected),
-                constr_names.iter().map(|n| String::from_utf8_lossy(n).to_string())
-                    .collect::<Vec<_>>());
+                constr_names
+                    .iter()
+                    .map(|n| String::from_utf8_lossy(n).to_string())
+                    .collect::<Vec<_>>()
+            );
         }
     }
 
@@ -366,30 +424,46 @@ mod tests {
     #[test]
     fn dh_variants_destructors_are_d_exp_or_d_inv_with_limit_0() {
         let rules = mk_dh_intruder_variants(&dh_maude_sig());
-        let destrs: Vec<&IntrRuleAC> = rules.iter()
+        let destrs: Vec<&IntrRuleAC> = rules
+            .iter()
             .filter(|r| matches!(r.info, IntrRuleACInfo::DestrRule(..)))
             .collect();
-        assert_eq!(destrs.len(), 46,
+        assert_eq!(
+            destrs.len(),
+            46,
             "DH cached file: 5 constr + 46 destr = 51 (45 d_exp + 1 d_inv); \
-             got {} destructors", destrs.len());
+             got {} destructors",
+            destrs.len()
+        );
         for d in &destrs {
             if let IntrRuleACInfo::DestrRule(name, limit, subterm, constant) = &d.info {
-                assert!(name.starts_with(b"_"),
+                assert!(
+                    name.starts_with(b"_"),
                     "destructor name must start with `_` (HS leading `d` is consumed, \
                      rest goes to the bytestring); got {}",
-                    String::from_utf8_lossy(name));
-                assert_eq!(*limit, 0,
+                    String::from_utf8_lossy(name)
+                );
+                assert_eq!(
+                    *limit, 0,
                     "DestrRule limit must be 0 (HS Rule.hs:168 `fromIntegral limit` \
                      with `option 0 natural` and no numeric in the cached file); \
-                     got {}", limit);
-                assert!(*subterm,
-                    "DestrRule subterm must be True (HS Rule.hs:168 hard-codes True)");
-                assert!(!(*constant),
-                    "DestrRule constant must be False (HS Rule.hs:168 hard-codes False)");
+                     got {}",
+                    limit
+                );
+                assert!(
+                    *subterm,
+                    "DestrRule subterm must be True (HS Rule.hs:168 hard-codes True)"
+                );
+                assert!(
+                    !(*constant),
+                    "DestrRule constant must be False (HS Rule.hs:168 hard-codes False)"
+                );
                 // Names in the DH file: only `_exp` and `_inv`.
-                assert!(name == b"_exp" || name == b"_inv",
+                assert!(
+                    name == b"_exp" || name == b"_inv",
                     "DH destructor name must be `_exp` or `_inv`; got {}",
-                    String::from_utf8_lossy(name));
+                    String::from_utf8_lossy(name)
+                );
             }
         }
     }
@@ -416,8 +490,11 @@ mod tests {
         let src = "rule (modulo AC) xfoo:\n   [ ] --> [ ]\n";
         let err = parse_intruder_rules(&dh_maude_sig(), "<bad>", src)
             .expect_err("rule named `xfoo` should be rejected");
-        assert!(err.message.contains("invalid intruder rule name"),
-            "expected `invalid intruder rule name` in error; got {}", err.message);
+        assert!(
+            err.message.contains("invalid intruder rule name"),
+            "expected `invalid intruder rule name` in error; got {}",
+            err.message
+        );
     }
 
     /// Round-trip: every rule produced by `mk_dh_intruder_variants` has
@@ -454,37 +531,58 @@ mod tests {
         // intruder_rules.rs).
         let maude_path = std::env::var("MAUDE_PATH").ok().or_else(|| {
             for c in ["/usr/local/bin/maude", "maude"] {
-                if std::path::Path::new(c).exists() { return Some(c.to_string()); }
+                if std::path::Path::new(c).exists() {
+                    return Some(c.to_string());
+                }
             }
             None
         });
-        let maude = match maude_path.and_then(|p|
-            tamarin_term::maude_proc::MaudeHandle::start(&p, dh_maude_sig()).ok())
+        let maude = match maude_path
+            .and_then(|p| tamarin_term::maude_proc::MaudeHandle::start(&p, dh_maude_sig()).ok())
         {
-            Some(m) => m, None => return,
+            Some(m) => m,
+            None => return,
         };
 
         let cached = mk_dh_intruder_variants(&dh_maude_sig());
         let runtime = crate::intruder_rules::dh_intruder_rules(false, &maude);
 
         // Constructor names should be identical sets.
-        let cached_constrs: std::collections::BTreeSet<Vec<u8>> = cached.iter()
+        let cached_constrs: std::collections::BTreeSet<Vec<u8>> = cached
+            .iter()
             .filter_map(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n) => Some(n.clone()), _ => None,
-            }).collect();
-        let runtime_constrs: std::collections::BTreeSet<Vec<u8>> = runtime.iter()
+                IntrRuleACInfo::ConstrRule(n) => Some(n.clone()),
+                _ => None,
+            })
+            .collect();
+        let runtime_constrs: std::collections::BTreeSet<Vec<u8>> = runtime
+            .iter()
             .filter_map(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n) => Some(n.clone()), _ => None,
-            }).collect();
+                IntrRuleACInfo::ConstrRule(n) => Some(n.clone()),
+                _ => None,
+            })
+            .collect();
         if cached_constrs != runtime_constrs {
             eprintln!("bridge test: cached constr names ≠ runtime constr names");
-            eprintln!("  cached  = {:?}", cached_constrs.iter()
-                .map(|n| String::from_utf8_lossy(n).to_string()).collect::<Vec<_>>());
-            eprintln!("  runtime = {:?}", runtime_constrs.iter()
-                .map(|n| String::from_utf8_lossy(n).to_string()).collect::<Vec<_>>());
+            eprintln!(
+                "  cached  = {:?}",
+                cached_constrs
+                    .iter()
+                    .map(|n| String::from_utf8_lossy(n).to_string())
+                    .collect::<Vec<_>>()
+            );
+            eprintln!(
+                "  runtime = {:?}",
+                runtime_constrs
+                    .iter()
+                    .map(|n| String::from_utf8_lossy(n).to_string())
+                    .collect::<Vec<_>>()
+            );
         }
-        assert_eq!(cached_constrs, runtime_constrs,
-            "runtime and cached DH constr name sets should match");
+        assert_eq!(
+            cached_constrs, runtime_constrs,
+            "runtime and cached DH constr name sets should match"
+        );
 
         // Destructor counts should be EQUAL or DIFFER (the cached file
         // is authoritative — log a diff but don't fail).  Counts may
@@ -494,7 +592,9 @@ mod tests {
             eprintln!(
                 "bridge test note: cached DH rule count = {}, runtime = {} \
                  — investigate if today's Maude has drifted from the cached file",
-                cached.len(), runtime.len());
+                cached.len(),
+                runtime.len()
+            );
         }
     }
 
@@ -508,21 +608,25 @@ mod tests {
     /// (`oneSym = ("one",(0,Public,Constructor))`).
     #[test]
     fn dh_one_and_dh_neutral_parse_as_constants() {
-        use tamarin_term::function_symbols::{
-            DH_NEUTRAL_SYM_STRING, ONE_SYM_STRING,
-        };
+        use tamarin_term::function_symbols::{DH_NEUTRAL_SYM_STRING, ONE_SYM_STRING};
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
 
         let rules = mk_dh_intruder_variants(&dh_maude_sig());
-        let c_one = rules.iter().find(|r| match &r.info {
-            IntrRuleACInfo::ConstrRule(n) => n.as_slice() == b"_one",
-            _ => false,
-        }).expect("c_one rule should be present");
-        let c_dh_neutral = rules.iter().find(|r| match &r.info {
-            IntrRuleACInfo::ConstrRule(n) => n.as_slice() == b"_DH_neutral",
-            _ => false,
-        }).expect("c_DH_neutral rule should be present");
+        let c_one = rules
+            .iter()
+            .find(|r| match &r.info {
+                IntrRuleACInfo::ConstrRule(n) => n.as_slice() == b"_one",
+                _ => false,
+            })
+            .expect("c_one rule should be present");
+        let c_dh_neutral = rules
+            .iter()
+            .find(|r| match &r.info {
+                IntrRuleACInfo::ConstrRule(n) => n.as_slice() == b"_DH_neutral",
+                _ => false,
+            })
+            .expect("c_DH_neutral rule should be present");
 
         // Each rule has shape `[ ] --[ !KU( <const> ) ]-> [ !KU( <const> ) ]`.
         // The action and conclusion fact must carry a 0-arity NoEq term
@@ -537,8 +641,7 @@ mod tests {
             match action_term {
                 Term::App(sym, args) => {
                     if let tamarin_term::function_symbols::FunSym::NoEq(s) = sym {
-                        assert_eq!(s.name, expected_name,
-                            "{}: action term sym name", label);
+                        assert_eq!(s.name, expected_name, "{}: action term sym name", label);
                         assert_eq!(s.arity, 0, "{}: action term arity", label);
                         assert!(args.is_empty(), "{}: action term args", label);
                     } else {
@@ -551,7 +654,9 @@ mod tests {
                      was not recognised against the MaudeSig; check that \
                      `parse_intruder_rules` threads the MaudeSig through \
                      `MaudeSigNullaryGuard`.",
-                    label, v, String::from_utf8_lossy(expected_name),
+                    label,
+                    v,
+                    String::from_utf8_lossy(expected_name),
                 ),
                 other => panic!("{}: unexpected action term {:?}", label, other),
             }
@@ -578,9 +683,11 @@ mod tests {
         let action_term = &rules[0].actions[0].terms[0];
         match action_term {
             Term::Lit(Lit::Var(v)) => {
-                assert_eq!(v.name, "one",
+                assert_eq!(
+                    v.name, "one",
                     "under pair_maude_sig, `one` should remain a Var; HS-equivalent: \
-                     `funSyms pairMaudeSig` does not include `oneSym`");
+                     `funSyms pairMaudeSig` does not include `oneSym`"
+                );
             }
             other => panic!(
                 "expected Var (no DH builtin → MaudeSig has no `one` constant), \

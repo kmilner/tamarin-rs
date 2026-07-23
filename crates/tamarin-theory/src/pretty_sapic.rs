@@ -48,14 +48,12 @@
 //! later phases); the printers here are only used for SAPIC-generated output,
 //! so they never affect non-process theories.
 
-use tamarin_term::function_symbols::{CSym, FunSym};
 use tamarin_term::function_symbols::{diff_sym, exp_sym, nat_one_sym, pair_sym, EMAP_SYM_STRING};
+use tamarin_term::function_symbols::{CSym, FunSym};
 use tamarin_term::vterm::{Lit, VTerm};
 
 use crate::pretty_hpj::{self as hpj, Doc};
-use crate::sapic::{
-    PlainProcess, Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm,
-};
+use crate::sapic::{PlainProcess, Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm};
 
 /// HughesPJ DEFAULT `lineLength` (`Text.PrettyPrint.HughesPJ.style`,
 /// pretty-1.1.3.6 HughesPJ.hs:939).  The inner `render` calls in
@@ -318,11 +316,23 @@ fn pretty_sapic_action(a: &SapicAction<SapicLVar>) -> String {
         SapicAction::ChOut { chan: Some(c), msg } => {
             format!("out({},{})", pretty_sapic_term(c), pretty_sapic_term(msg))
         }
-        SapicAction::ChIn { chan: None, msg, match_vars } => {
+        SapicAction::ChIn {
+            chan: None,
+            msg,
+            match_vars,
+        } => {
             format!("in({})", pretty_pattern(msg, match_vars))
         }
-        SapicAction::ChIn { chan: Some(c), msg, match_vars } => {
-            format!("in({},{})", pretty_sapic_term(c), pretty_pattern(msg, match_vars))
+        SapicAction::ChIn {
+            chan: Some(c),
+            msg,
+            match_vars,
+        } => {
+            format!(
+                "in({},{})",
+                pretty_sapic_term(c),
+                pretty_pattern(msg, match_vars)
+            )
         }
         SapicAction::Insert(a, b) => {
             format!("insert {},{}", pretty_sapic_term(a), pretty_sapic_term(b))
@@ -341,9 +351,13 @@ fn pretty_sapic_action(a: &SapicAction<SapicLVar>) -> String {
         }
         // HS `prettySapicAction' prettyRule' (MSR p a c r mv) = prettyRule' p a c r mv`
         // (Process.hs:450-471, see line 470), where `prettyRule' = rulePrinter` (Print.hs:41-46).
-        SapicAction::Msr { prems, acts, concs, rest, match_vars } => {
-            render_msr(prems, acts, concs, rest, match_vars)
-        }
+        SapicAction::Msr {
+            prems,
+            acts,
+            concs,
+            rest,
+            match_vars,
+        } => render_msr(prems, acts, concs, rest, match_vars),
     }
 }
 
@@ -379,8 +393,16 @@ fn pretty_sapic_comb(c: &ProcessCombinator<SapicLVar>) -> String {
         // (Process.hs:479-481).  `prettyPattern' vs = prettySapicTerm .
         // unextractMatchingVariables vs` renders the LEFT pattern with its match
         // vars `=`-prefixed; the RIGHT is a plain term.
-        ProcessCombinator::Let { left, right, match_vars } => {
-            format!("let {}={}", pretty_pattern(left, match_vars), pretty_sapic_term(right))
+        ProcessCombinator::Let {
+            left,
+            right,
+            match_vars,
+        } => {
+            format!(
+                "let {}={}",
+                pretty_pattern(left, match_vars),
+                pretty_sapic_term(right)
+            )
         }
     }
 }
@@ -399,10 +421,10 @@ pub fn pretty_sapic_top_level(p: &PlainProcess) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
-    use tamarin_term::term::f_app_no_eq;
     use crate::sapic::ProcessParsedAnnotation;
+    use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::term::f_app_no_eq;
 
     fn sv(name: &str, idx: u64, ty: Option<&str>) -> SapicLVar {
         SapicLVar::new(LVar::new(name, LSort::Msg, idx), ty.map(String::from))
@@ -420,11 +442,19 @@ mod tests {
 
     #[test]
     fn out_ffx_top_level() {
-        let f = NoEqSym::new(b"f".to_vec(), 1, Privacy::Public, Constructability::Constructor);
+        let f = NoEqSym::new(
+            b"f".to_vec(),
+            1,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
         let x = VTerm::Lit(Lit::Var(sv("x", 1, Some("lol"))));
-        let ffx = f_app_no_eq(f.clone(), vec![f_app_no_eq(f, vec![x])]);
+        let ffx = f_app_no_eq(f, vec![f_app_no_eq(f, vec![x])]);
         let p = Process::Action(
-            SapicAction::ChOut { chan: None, msg: ffx },
+            SapicAction::ChOut {
+                chan: None,
+                msg: ffx,
+            },
             ProcessParsedAnnotation::empty(),
             Box::new(Process::Null(ProcessParsedAnnotation::empty())),
         );

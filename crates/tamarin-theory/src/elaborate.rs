@@ -50,15 +50,13 @@
 //! Returned errors describe the surface offence (e.g. "duplicate rule
 //! `R`"), with no internal panics.
 
-use std::collections::BTreeSet;
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 
 use tamarin_parser::ast as p;
-use tamarin_term::function_symbols::{
-    Constructability, NoEqSym, Privacy,
-};
-use tamarin_term::lterm::LVar;
+use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
 use tamarin_term::lterm::LSort;
+use tamarin_term::lterm::LVar;
 
 thread_local! {
     /// User-declared arity-1 function names for the theory currently
@@ -114,27 +112,22 @@ thread_local! {
     static USER_DESTRUCTOR_FUNS: RefCell<BTreeSet<String>>
         = const { RefCell::new(BTreeSet::new()) };
 }
-use tamarin_term::term::{f_app_no_eq, Term};
 use tamarin_term::lterm::{Name, NameTag};
-use tamarin_term::vterm::{Lit, VTerm};
 use tamarin_term::maude_sig::{
-    asym_enc_dest_maude_sig, asym_enc_maude_sig, bp_maude_sig, dh_maude_sig,
-    enable_diff_maude_sig, hash_maude_sig, location_report_maude_sig,
-    mset_maude_sig, nat_maude_sig, pair_dest_maude_sig,
+    asym_enc_dest_maude_sig, asym_enc_maude_sig, bp_maude_sig, dh_maude_sig, enable_diff_maude_sig,
+    hash_maude_sig, location_report_maude_sig, mset_maude_sig, nat_maude_sig, pair_dest_maude_sig,
     reveal_signature_maude_sig, signature_dest_maude_sig, signature_maude_sig,
     sym_enc_dest_maude_sig, sym_enc_maude_sig, xor_maude_sig, MaudeSig,
 };
+use tamarin_term::term::{f_app_no_eq, Term};
+use tamarin_term::vterm::{Lit, VTerm};
 
-use crate::rule::{
-    ProtoRuleE, ProtoRuleEInfo, ProtoRuleName,
-    Rule, RuleAttributes,
-};
-use crate::signature::SignaturePure;
 use crate::guarded::formula_to_guarded;
+use crate::rule::{ProtoRuleE, ProtoRuleEInfo, ProtoRuleName, Rule, RuleAttributes};
+use crate::signature::SignaturePure;
 use crate::theory::{
-    AccLemma, CaseTest, LNMacro, Lemma, LemmaAttr, OpenProtoRule,
-    OpenRestriction, ProofSkeleton, Theory, TheoryItem,
-    TraceQuantifier, TranslationElement,
+    AccLemma, CaseTest, LNMacro, Lemma, LemmaAttr, OpenProtoRule, OpenRestriction, ProofSkeleton,
+    Theory, TheoryItem, TraceQuantifier, TranslationElement,
 };
 
 #[derive(Debug, Clone)]
@@ -227,8 +220,8 @@ pub fn elaborate_with_diagnostics(
 /// lemma/restriction.  This function does the same: it runs the
 /// guardedness check unconditionally on every lemma/restriction.
 pub fn check_guarded_wf(parser_thy: &p::Theory) -> Vec<tamarin_parser::wf::WfError> {
-    use tamarin_parser::wf::underline_topic;
     use crate::pretty_formula::pretty_formula;
+    use tamarin_parser::wf::underline_topic;
 
     // Apply macros so the WF check sees the expanded formulas, just as
     // HS's `formulaReports` applies `applyMacroInFormula` before checking.
@@ -260,9 +253,7 @@ pub fn check_guarded_wf(parser_thy: &p::Theory) -> Vec<tamarin_parser::wf::WfErr
     // `annFormulas` list monad in `formulaReports` (Wellformedness.hs:1007-1014).
     for item in &thy_clone.items {
         let (header, formula) = match item {
-            p::TheoryItem::Lemma(l) => {
-                (format!("Lemma `{}'", l.name), &l.formula)
-            }
+            p::TheoryItem::Lemma(l) => (format!("Lemma `{}'", l.name), &l.formula),
             p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => {
                 (format!("Restriction `{}'", r.name), &r.formula)
             }
@@ -270,7 +261,7 @@ pub fn check_guarded_wf(parser_thy: &p::Theory) -> Vec<tamarin_parser::wf::WfErr
         };
 
         let e = match formula_to_guarded(formula) {
-            Ok(_) => continue,   // guard check passed
+            Ok(_) => continue, // guard check passed
             Err(e) => e,
         };
 
@@ -280,7 +271,9 @@ pub fn check_guarded_wf(parser_thy: &p::Theory) -> Vec<tamarin_parser::wf::WfErr
         // Render the sub-formula text (the innermost failing quantifier,
         // or the full formula if no sub-formula was tracked — which
         // matches HS's `ppFormula fmOrig` for the top-level case).
-        let sub_formula_text = e.subject_formula.as_ref()
+        let sub_formula_text = e
+            .subject_formula
+            .as_ref()
             .map(pretty_formula)
             .unwrap_or_else(|| full_formula_text.clone());
 
@@ -298,8 +291,8 @@ pub fn check_guarded_wf(parser_thy: &p::Theory) -> Vec<tamarin_parser::wf::WfErr
         let topic = " Formula guardedness";
         let mut msg = String::new();
         msg.push_str(&underline_topic(topic));
-        msg.push('\n');                 // blank line between header and body
-        msg.push_str("  ");            // nest 2 (prettyWfErrorReport)
+        msg.push('\n'); // blank line between header and body
+        msg.push_str("  "); // nest 2 (prettyWfErrorReport)
         msg.push_str(&header);
         msg.push_str(" cannot be converted to a guarded formula:\n");
 
@@ -318,12 +311,12 @@ pub fn check_guarded_wf(parser_thy: &p::Theory) -> Vec<tamarin_parser::wf::WfErr
         // When sub == full (top-level quantifier failure), HS still emits
         // the formula once under the error text and once under "in the formula"
         // — the same text appears twice.
-        msg.push_str("      ");        // 6 spaces
+        msg.push_str("      "); // 6 spaces
         msg.push('"');
         msg.push_str(&sub_formula_text);
         msg.push_str("\"\n");
         msg.push_str("    in the formula\n");
-        msg.push_str("      ");        // 6 spaces
+        msg.push_str("      "); // 6 spaces
         msg.push('"');
         msg.push_str(&full_formula_text);
         msg.push_str("\"\n");
@@ -360,7 +353,10 @@ pub fn sapic_public_names_report(thy: &Theory) -> Vec<tamarin_parser::wf::WfErro
         // (Rule.hs:1225-1227) = `prefixIfReserved n` for a `StandRule n`.
         let case_name = crate::rule::prefix_if_reserved(r.name());
         let mut names: Vec<String> = Vec::new();
-        for f in r.rule.premises.iter()
+        for f in r
+            .rule
+            .premises
+            .iter()
             .chain(&r.rule.actions)
             .chain(&r.rule.conclusions)
         {
@@ -423,11 +419,15 @@ fn collect_process_pub_names(p: &crate::sapic::PlainProcess, out: &mut Vec<Strin
             Process::Null(_) => {}
             Process::Action(ac, _, _) => match ac {
                 SA::ChIn { chan, msg, .. } => {
-                    if let Some(c) = chan { collect_pub_names(c, out); }
+                    if let Some(c) = chan {
+                        collect_pub_names(c, out);
+                    }
                     collect_pub_names(msg, out);
                 }
                 SA::ChOut { chan, msg } => {
-                    if let Some(c) = chan { collect_pub_names(c, out); }
+                    if let Some(c) = chan {
+                        collect_pub_names(c, out);
+                    }
                     collect_pub_names(msg, out);
                 }
                 SA::Insert(a, b) => {
@@ -436,14 +436,22 @@ fn collect_process_pub_names(p: &crate::sapic::PlainProcess, out: &mut Vec<Strin
                 }
                 SA::Delete(a) | SA::Lock(a) | SA::Unlock(a) => collect_pub_names(a, out),
                 SA::Event(fa) => {
-                    for t in fa.terms.iter() { collect_pub_names(t, out); }
+                    for t in fa.terms.iter() {
+                        collect_pub_names(t, out);
+                    }
                 }
                 SA::ProcessCall(_, args) => {
-                    for t in args { collect_pub_names(t, out); }
+                    for t in args {
+                        collect_pub_names(t, out);
+                    }
                 }
-                SA::Msr { prems, acts, concs, .. } => {
+                SA::Msr {
+                    prems, acts, concs, ..
+                } => {
                     for fa in prems.iter().chain(acts).chain(concs) {
-                        for t in fa.terms.iter() { collect_pub_names(t, out); }
+                        for t in fa.terms.iter() {
+                            collect_pub_names(t, out);
+                        }
                     }
                 }
                 SA::Rep | SA::New(_) => {}
@@ -481,23 +489,25 @@ fn collect_parser_formula_pub_names(f: &p::Formula, out: &mut Vec<String>) {
     match f {
         Formula::False | Formula::True => {}
         Formula::Atom(a) => match a {
-            Atom::Eq(x, y) | Atom::Less(x, y) | Atom::LessMset(x, y)
-            | Atom::Subterm(x, y) => {
+            Atom::Eq(x, y) | Atom::Less(x, y) | Atom::LessMset(x, y) | Atom::Subterm(x, y) => {
                 collect_parser_term_pub_names(x, out);
                 collect_parser_term_pub_names(y, out);
             }
             Atom::Action(fa, t) => {
-                for x in &fa.args { collect_parser_term_pub_names(x, out); }
+                for x in &fa.args {
+                    collect_parser_term_pub_names(x, out);
+                }
                 collect_parser_term_pub_names(t, out);
             }
             Atom::Last(t) => collect_parser_term_pub_names(t, out),
             Atom::Pred(fa) => {
-                for x in &fa.args { collect_parser_term_pub_names(x, out); }
+                for x in &fa.args {
+                    collect_parser_term_pub_names(x, out);
+                }
             }
         },
         Formula::Not(x) => collect_parser_formula_pub_names(x, out),
-        Formula::And(x, y) | Formula::Or(x, y) | Formula::Implies(x, y)
-        | Formula::Iff(x, y) => {
+        Formula::And(x, y) | Formula::Or(x, y) | Formula::Implies(x, y) | Formula::Iff(x, y) => {
             collect_parser_formula_pub_names(x, out);
             collect_parser_formula_pub_names(y, out);
         }
@@ -513,10 +523,17 @@ fn collect_parser_term_pub_names(t: &p::Term, out: &mut Vec<String>) {
     use tamarin_parser::ast::Term as PT;
     match t {
         PT::PubLit(n) => out.push(n.clone()),
-        PT::Var(_) | PT::FreshLit(_) | PT::NatLit(_) | PT::Number(_)
-        | PT::NumberOne | PT::NatOne | PT::DhNeutral => {}
+        PT::Var(_)
+        | PT::FreshLit(_)
+        | PT::NatLit(_)
+        | PT::Number(_)
+        | PT::NumberOne
+        | PT::NatOne
+        | PT::DhNeutral => {}
         PT::App(_, args) | PT::Pair(args) => {
-            for a in args { collect_parser_term_pub_names(a, out); }
+            for a in args {
+                collect_parser_term_pub_names(a, out);
+            }
         }
         PT::AlgApp(_, a, b) | PT::Diff(a, b) | PT::BinOp(_, a, b) => {
             collect_parser_term_pub_names(a, out);
@@ -591,8 +608,7 @@ pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
                 TheoryItem::Restriction(r) => {
                     r.formula = rewrite_arity1_formula(&r.formula, &arity1);
                     if let Some(of) = &r.original_formula {
-                        r.original_formula =
-                            Some(rewrite_arity1_formula(of, &arity1));
+                        r.original_formula = Some(rewrite_arity1_formula(of, &arity1));
                     }
                 }
                 _ => {}
@@ -624,11 +640,17 @@ pub struct CollectedUserFuns {
 /// `set_user_funs_for_theory`).
 fn collect_user_funs(items: &[p::TheoryItem]) -> CollectedUserFuns {
     let user_names = |pred: fn(&p::FunctionDecl) -> bool| -> BTreeSet<String> {
-        items.iter().filter_map(|it| {
-            if let p::TheoryItem::Functions(decls) = it {
-                Some(decls.iter().filter(|d| pred(d)).map(|d| d.name.clone()))
-            } else { None }
-        }).flatten().collect()
+        items
+            .iter()
+            .filter_map(|it| {
+                if let p::TheoryItem::Functions(decls) = it {
+                    Some(decls.iter().filter(|d| pred(d)).map(|d| d.name.clone()))
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect()
     };
     let mut nullary = user_names(|d| d.arg_types.is_empty());
     let mut private = user_names(|d| d.private);
@@ -689,12 +711,17 @@ pub fn nullary_fun_names(items: &[p::TheoryItem]) -> BTreeSet<String> {
 /// destructor flags into `term_to_lnterm`'s symbol resolution — HS reads these
 /// from the per-theory signature via `lookupArity`.
 fn builtin_fun_attrs(name: &str) -> Vec<(String, Privacy, Constructability)> {
-    let Some(msig) = builtin_sig(name) else { return Vec::new() };
-    msig.st_fun_syms.iter().filter_map(|s| {
-        String::from_utf8(s.name.to_vec())
-            .ok()
-            .map(|n| (n, s.privacy, s.constructability))
-    }).collect()
+    let Some(msig) = builtin_sig(name) else {
+        return Vec::new();
+    };
+    msig.st_fun_syms
+        .iter()
+        .filter_map(|s| {
+            String::from_utf8(s.name.to_vec())
+                .ok()
+                .map(|n| (n, s.privacy, s.constructability))
+        })
+        .collect()
 }
 
 /// Extracts the 0-arity NoEq function-symbol names from a `MaudeSig`.
@@ -717,11 +744,15 @@ fn builtin_fun_attrs(name: &str) -> Vec<(String, Privacy, Constructability)> {
 /// `dhNeutralSymString = "DH_neutral"` for `dhFunSig`
 /// (lib/term/src/Term/Term/FunctionSymbols.hs:134-134,137,153,163,192).
 fn builtin_nullary_names_from_msig(msig: &MaudeSig) -> Vec<String> {
-    msig.fun_syms.iter().filter_map(|fs| match fs {
-        tamarin_term::function_symbols::FunSym::NoEq(s) if s.arity == 0 =>
-            String::from_utf8(s.name.to_vec()).ok(),
-        _ => None,
-    }).collect()
+    msig.fun_syms
+        .iter()
+        .filter_map(|fs| match fs {
+            tamarin_term::function_symbols::FunSym::NoEq(s) if s.arity == 0 => {
+                String::from_utf8(s.name.to_vec()).ok()
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Returns the 0-arity function symbol names introduced by a given
@@ -810,7 +841,11 @@ btreeset_swap_guard! {
 /// `signature` lookup against the per-theory funSig.
 fn user_fun_privacy(name: &str) -> Privacy {
     USER_PRIVATE_FUNS.with(|c| {
-        if c.borrow().contains(name) { Privacy::Private } else { Privacy::Public }
+        if c.borrow().contains(name) {
+            Privacy::Private
+        } else {
+            Privacy::Public
+        }
     })
 }
 
@@ -933,9 +968,12 @@ fn elaborate_already_expanded(parser_thy: &p::Theory) -> Result<Theory, ElabErro
     // and `>=2` throws MoreThanOneProcess (Sapic.hs:48,85,87). Mirror
     // that: count only TopLevelProcess items, true iff exactly one.
     // Read downstream to gate SAPIC translation (run.rs, apply.rs).
-    thy.is_sapic = parser_thy.items.iter()
+    thy.is_sapic = parser_thy
+        .items
+        .iter()
         .filter(|i| matches!(i, p::TheoryItem::TopLevelProcess(_)))
-        .count() == 1;
+        .count()
+        == 1;
 
     if let Some(cfg) = &parser_thy.configuration {
         thy.items.push(TheoryItem::ConfigBlock(cfg.clone()));
@@ -945,10 +983,7 @@ fn elaborate_already_expanded(parser_thy: &p::Theory) -> Result<Theory, ElabErro
     Ok(thy)
 }
 
-fn elaborate_items(
-    items: &[p::TheoryItem],
-    out: &mut Theory,
-) -> Result<(), ElabError> {
+fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), ElabError> {
     for item in items {
         match item {
             p::TheoryItem::Builtins(names) => {
@@ -973,15 +1008,24 @@ fn elaborate_items(
                     // needed here.  `diff` is a header/CLI flag handled via
                     // `enable_diff_maude_sig`, never a `builtins:` entry.
                     out.items.push(TheoryItem::Translation(
-                        TranslationElement::SignatureBuiltin(name.clone())));
+                        TranslationElement::SignatureBuiltin(name.clone()),
+                    ));
                 }
                 out.signature.maude_sig = s;
             }
             p::TheoryItem::Functions(decls) => {
                 for d in decls {
                     let arity = d.arg_types.len();
-                    let priv_ = if d.private { Privacy::Private } else { Privacy::Public };
-                    let constr = if d.destructor { Constructability::Destructor } else { Constructability::Constructor };
+                    let priv_ = if d.private {
+                        Privacy::Private
+                    } else {
+                        Privacy::Public
+                    };
+                    let constr = if d.destructor {
+                        Constructability::Destructor
+                    } else {
+                        Constructability::Constructor
+                    };
                     let sym = NoEqSym::new(d.name.as_bytes().to_vec(), arity, priv_, constr);
                     // `add_fun_sym` consumes `self` by value; move the
                     // current sig out via `take` to avoid a per-declaration
@@ -1005,8 +1049,7 @@ fn elaborate_items(
                     // cannot be converted to a CtxtStRule
                     // (Theory/Text/Parser/Signature.hs:232-234).  Match
                     // that failure behaviour rather than silently dropping.
-                    let (Some(l), Some(r)) =
-                        (term_to_lnterm(&eq.lhs), term_to_lnterm(&eq.rhs))
+                    let (Some(l), Some(r)) = (term_to_lnterm(&eq.lhs), term_to_lnterm(&eq.rhs))
                     else {
                         return Err(ElabError {
                             message: "Not a correct equation".to_string(),
@@ -1027,7 +1070,9 @@ fn elaborate_items(
             p::TheoryItem::Macros(macros) => {
                 let mut ms = Vec::new();
                 for m in macros {
-                    let args: Vec<LVar> = m.args.iter()
+                    let args: Vec<LVar> = m
+                        .args
+                        .iter()
                         .map(|v| LVar::new(v.name.clone(), sort_of(&v.sort), v.idx))
                         .collect();
                     // HS `macro` parses the body with `msetterm False llit`
@@ -1044,9 +1089,7 @@ fn elaborate_items(
                         Some(t) => t,
                         None => {
                             return Err(ElabError {
-                                message: format!(
-                                    "could not elaborate macro body for `{}`",
-                                    m.name),
+                                message: format!("could not elaborate macro body for `{}`", m.name),
                             });
                         }
                     };
@@ -1070,9 +1113,15 @@ fn elaborate_items(
                     // ordering are identical.
                     let cur = std::mem::take(&mut out.signature.maude_sig);
                     out.signature.maude_sig = cur.add_macro_sym(sym);
-                    ms.push(LNMacro { name: m.name.clone(), args, body });
+                    ms.push(LNMacro {
+                        name: m.name.clone(),
+                        args,
+                        body,
+                    });
                 }
-                if !ms.is_empty() { out.items.push(TheoryItem::Macros(ms)); }
+                if !ms.is_empty() {
+                    out.items.push(TheoryItem::Macros(ms));
+                }
             }
             p::TheoryItem::Predicates(_predicates) => {
                 // Predicates render via the PARSER-AST path
@@ -1097,7 +1146,9 @@ fn elaborate_items(
                 for n in opts {
                     match n.as_str() {
                         "translation-progress" => o.trans_progress = true,
-                        "translation-allow-pattern-lookups" => o.trans_allow_pattern_matching_in_lookup = true,
+                        "translation-allow-pattern-lookups" => {
+                            o.trans_allow_pattern_matching_in_lookup = true
+                        }
                         "translation-state-optimisation" => o.state_channel_opt = true,
                         "translation-asynchronous-channels" => o.asynchronous_channels = true,
                         "translation-compress-events" => o.compress_events = true,
@@ -1110,7 +1161,8 @@ fn elaborate_items(
                 out.heuristic.push(h.clone());
             }
             p::TheoryItem::Tactic(t) => {
-                out.tactic.push(crate::tactic::Tactic::parse(&t.name, &t.raw));
+                out.tactic
+                    .push(crate::tactic::Tactic::parse(&t.name, &t.raw));
             }
             p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => {
                 let or = OpenRestriction::new(r.name.clone(), r.formula.clone());
@@ -1151,14 +1203,21 @@ fn elaborate_items(
                     formula: a.formula.clone(),
                     case_test_idents: a.case_test_idents.clone(),
                 };
-                out.items.push(TheoryItem::Translation(TranslationElement::AccLemma(acc)));
+                out.items
+                    .push(TheoryItem::Translation(TranslationElement::AccLemma(acc)));
             }
             p::TheoryItem::CaseTest(c) => {
-                let ct = CaseTest { name: c.name.clone(), formula: c.formula.clone() };
-                out.items.push(TheoryItem::Translation(TranslationElement::CaseTest(ct)));
+                let ct = CaseTest {
+                    name: c.name.clone(),
+                    formula: c.formula.clone(),
+                };
+                out.items
+                    .push(TheoryItem::Translation(TranslationElement::CaseTest(ct)));
             }
-            p::TheoryItem::ProcessDef(_) | p::TheoryItem::TopLevelProcess(_)
-            | p::TheoryItem::EquivLemma(_, _) | p::TheoryItem::DiffEquivLemma(_) => {
+            p::TheoryItem::ProcessDef(_)
+            | p::TheoryItem::TopLevelProcess(_)
+            | p::TheoryItem::EquivLemma(_, _)
+            | p::TheoryItem::DiffEquivLemma(_) => {
                 // Process/equiv items are intentionally not lowered here.
                 // SAPIC translation is a dedicated pass
                 // (`tamarin_sapic::apply::apply_sapic`) that consumes the
@@ -1167,12 +1226,15 @@ fn elaborate_items(
                 // drops them.
             }
             p::TheoryItem::Export { tag, body } => {
-                out.items.push(TheoryItem::Translation(
-                    TranslationElement::ExportInfo {
-                        tag: tag.clone(), body: body.clone() }));
+                out.items
+                    .push(TheoryItem::Translation(TranslationElement::ExportInfo {
+                        tag: tag.clone(),
+                        body: body.clone(),
+                    }));
             }
             p::TheoryItem::FormalComment { header, body } => {
-                out.items.push(TheoryItem::Text((header.clone(), body.clone())));
+                out.items
+                    .push(TheoryItem::Text((header.clone(), body.clone())));
             }
             p::TheoryItem::Define(_) | p::TheoryItem::Include(_) => {
                 // Already handled by the parser preprocessor.
@@ -1256,15 +1318,26 @@ fn rule_to_proto_rule_e(r: &p::Rule) -> Result<ProtoRuleE, ElabError> {
     // Desugar let-bindings before fact conversion: each `let x = t in ...`
     // binding substitutes `x` with `t` in the rule body.
     let r_owned: p::Rule;
-    let r_eff = if r.let_block.is_empty() { r } else {
+    let r_eff = if r.let_block.is_empty() {
+        r
+    } else {
         r_owned = apply_let_block(r);
         &r_owned
     };
-    let prems = r_eff.premises.iter().map(fact_to_lnfact)
+    let prems = r_eff
+        .premises
+        .iter()
+        .map(fact_to_lnfact)
         .collect::<Result<Vec<_>, _>>()?;
-    let acts  = r_eff.actions.iter().map(fact_to_lnfact)
+    let acts = r_eff
+        .actions
+        .iter()
+        .map(fact_to_lnfact)
         .collect::<Result<Vec<_>, _>>()?;
-    let concs = r_eff.conclusions.iter().map(fact_to_lnfact)
+    let concs = r_eff
+        .conclusions
+        .iter()
+        .map(fact_to_lnfact)
         .collect::<Result<Vec<_>, _>>()?;
     let new_vars = compute_new_vars(&prems, &concs, &acts);
 
@@ -1296,9 +1369,15 @@ pub fn apply_let_block(r: &p::Rule) -> p::Rule {
     let bindings = std::mem::take(&mut out.let_block);
 
     for b in bindings.iter().rev() {
-        for f in &mut out.premises    { subst_fact_in_place(f, &b.var, &b.value); }
-        for f in &mut out.actions     { subst_fact_in_place(f, &b.var, &b.value); }
-        for f in &mut out.conclusions { subst_fact_in_place(f, &b.var, &b.value); }
+        for f in &mut out.premises {
+            subst_fact_in_place(f, &b.var, &b.value);
+        }
+        for f in &mut out.actions {
+            subst_fact_in_place(f, &b.var, &b.value);
+        }
+        for f in &mut out.conclusions {
+            subst_fact_in_place(f, &b.var, &b.value);
+        }
         for phi in &mut out.embedded_restrictions {
             subst_formula_in_place(phi, &b.var, &b.value);
         }
@@ -1307,7 +1386,9 @@ pub fn apply_let_block(r: &p::Rule) -> p::Rule {
 }
 
 fn subst_term(t: &p::Term, key: &p::Term, val: &p::Term) -> p::Term {
-    if t == key { return val.clone(); }
+    if t == key {
+        return val.clone();
+    }
     match t {
         p::Term::App(name, args) => p::Term::App(
             name.clone(),
@@ -1318,9 +1399,9 @@ fn subst_term(t: &p::Term, key: &p::Term, val: &p::Term) -> p::Term {
             Box::new(subst_term(a, key, val)),
             Box::new(subst_term(b, key, val)),
         ),
-        p::Term::Pair(args) => p::Term::Pair(
-            args.iter().map(|a| subst_term(a, key, val)).collect(),
-        ),
+        p::Term::Pair(args) => {
+            p::Term::Pair(args.iter().map(|a| subst_term(a, key, val)).collect())
+        }
         p::Term::Diff(a, b) => p::Term::Diff(
             Box::new(subst_term(a, key, val)),
             Box::new(subst_term(b, key, val)),
@@ -1330,18 +1411,23 @@ fn subst_term(t: &p::Term, key: &p::Term, val: &p::Term) -> p::Term {
             Box::new(subst_term(a, key, val)),
             Box::new(subst_term(b, key, val)),
         ),
-        p::Term::PatMatch(a) => p::Term::PatMatch(
-            Box::new(subst_term(a, key, val)),
-        ),
+        p::Term::PatMatch(a) => p::Term::PatMatch(Box::new(subst_term(a, key, val))),
         // Atoms and literals: no recursion.
-        p::Term::Var(_) | p::Term::PubLit(_) | p::Term::FreshLit(_)
-        | p::Term::NatLit(_) | p::Term::Number(_) | p::Term::NumberOne
-        | p::Term::NatOne | p::Term::DhNeutral => t.clone(),
+        p::Term::Var(_)
+        | p::Term::PubLit(_)
+        | p::Term::FreshLit(_)
+        | p::Term::NatLit(_)
+        | p::Term::Number(_)
+        | p::Term::NumberOne
+        | p::Term::NatOne
+        | p::Term::DhNeutral => t.clone(),
     }
 }
 
 fn subst_fact_in_place(f: &mut p::Fact, key: &p::Term, val: &p::Term) {
-    for a in &mut f.args { *a = subst_term(a, key, val); }
+    for a in &mut f.args {
+        *a = subst_term(a, key, val);
+    }
 }
 
 fn subst_formula_in_place(phi: &mut p::Formula, key: &p::Term, val: &p::Term) {
@@ -1371,7 +1457,9 @@ fn subst_atom_in_place(a: &mut p::Atom, key: &p::Term, val: &p::Term) {
             subst_fact_in_place(f, key, val);
             *t = subst_term(t, key, val);
         }
-        Last(t) => { *t = subst_term(t, key, val); }
+        Last(t) => {
+            *t = subst_term(t, key, val);
+        }
         Pred(f) => subst_fact_in_place(f, key, val),
     }
 }
@@ -1404,7 +1492,11 @@ fn fact_tag_of(f: &p::Fact) -> crate::fact::FactTag {
         "KD" => FactTag::Kd,
         "Ded" => FactTag::Ded,
         _ => FactTag::Proto(
-            if f.persistent { Multiplicity::Persistent } else { Multiplicity::Linear },
+            if f.persistent {
+                Multiplicity::Persistent
+            } else {
+                Multiplicity::Linear
+            },
             tamarin_term::intern::intern_str(f.name.as_str()),
             f.args.len(),
         ),
@@ -1428,9 +1520,14 @@ fn copy_fact_annotations(f: &p::Fact) -> BTreeSet<crate::fact::FactAnnotation> {
 pub fn fact_to_lnfact(f: &p::Fact) -> Result<crate::fact::LNFact, ElabError> {
     use crate::fact::Fact;
     let tag = fact_tag_of(f);
-    let terms: Result<Vec<_>, _> = f.args.iter()
-        .map(|t| term_to_lnterm(t).ok_or_else(||
-            ElabError { message: format!("could not elaborate term in fact `{}`", f.name) }))
+    let terms: Result<Vec<_>, _> = f
+        .args
+        .iter()
+        .map(|t| {
+            term_to_lnterm(t).ok_or_else(|| ElabError {
+                message: format!("could not elaborate term in fact `{}`", f.name),
+            })
+        })
         .collect();
     Ok(Fact::new(tag, terms?).with_annotations(copy_fact_annotations(f)))
 }
@@ -1442,7 +1539,9 @@ fn compute_new_vars(
 ) -> Vec<tamarin_term::lterm::LNTerm> {
     let mut prem_vars: BTreeSet<LVar> = BTreeSet::new();
     for f in prems {
-        for t in f.terms.iter() { collect_vars(t, &mut prem_vars); }
+        for t in f.terms.iter() {
+            collect_vars(t, &mut prem_vars);
+        }
     }
     let mut new_set: BTreeSet<LVar> = BTreeSet::new();
     for f in concs.iter().chain(acts) {
@@ -1450,18 +1549,29 @@ fn compute_new_vars(
             let mut here = BTreeSet::new();
             collect_vars(t, &mut here);
             for v in here {
-                if !prem_vars.contains(&v) { new_set.insert(v); }
+                if !prem_vars.contains(&v) {
+                    new_set.insert(v);
+                }
             }
         }
     }
-    new_set.into_iter().map(|v| Term::Lit(Lit::Var(v))).collect()
+    new_set
+        .into_iter()
+        .map(|v| Term::Lit(Lit::Var(v)))
+        .collect()
 }
 
 fn collect_vars(t: &tamarin_term::lterm::LNTerm, out: &mut BTreeSet<LVar>) {
     match t {
-        Term::Lit(Lit::Var(v)) => { out.insert(v.clone()); }
+        Term::Lit(Lit::Var(v)) => {
+            out.insert(v.clone());
+        }
         Term::Lit(_) => {}
-        Term::App(_, args) => for a in args.iter() { collect_vars(a, out); }
+        Term::App(_, args) => {
+            for a in args.iter() {
+                collect_vars(a, out);
+            }
+        }
     }
 }
 
@@ -1472,11 +1582,12 @@ fn collect_vars(t: &tamarin_term::lterm::LNTerm, out: &mut BTreeSet<LVar>) {
 fn sort_of(s: &p::SortHint) -> LSort {
     match s {
         p::SortHint::Fresh | p::SortHint::Suffix(p::SuffixSort::Fresh) => LSort::Fresh,
-        p::SortHint::Pub   | p::SortHint::Suffix(p::SuffixSort::Pub) => LSort::Pub,
-        p::SortHint::Node  | p::SortHint::Suffix(p::SuffixSort::Node) => LSort::Node,
-        p::SortHint::Nat   | p::SortHint::Suffix(p::SuffixSort::Nat) => LSort::Nat,
-        p::SortHint::Msg   | p::SortHint::Suffix(p::SuffixSort::Msg)
-        | p::SortHint::Untagged => LSort::Msg,
+        p::SortHint::Pub | p::SortHint::Suffix(p::SuffixSort::Pub) => LSort::Pub,
+        p::SortHint::Node | p::SortHint::Suffix(p::SuffixSort::Node) => LSort::Node,
+        p::SortHint::Nat | p::SortHint::Suffix(p::SuffixSort::Nat) => LSort::Nat,
+        p::SortHint::Msg | p::SortHint::Suffix(p::SuffixSort::Msg) | p::SortHint::Untagged => {
+            LSort::Msg
+        }
     }
 }
 
@@ -1485,8 +1596,8 @@ fn sort_of(s: &p::SortHint) -> LSort {
 /// parser-AST world (e.g. for `insert_implied_formulas`).
 pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
     use tamarin_term::function_symbols::FunSym;
-    use tamarin_term::vterm::Lit;
     use tamarin_term::lterm::LSort;
+    use tamarin_term::vterm::Lit;
     match t {
         tamarin_term::term::Term::Lit(Lit::Var(v)) => {
             let sort = match v.sort {
@@ -1517,8 +1628,7 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
             let parser_args: Vec<p::Term> = args.iter().map(lnterm_to_term).collect();
             match funsym {
                 FunSym::NoEq(s) => {
-                    let name = String::from_utf8(s.name.to_vec())
-                        .unwrap_or_default();
+                    let name = String::from_utf8(s.name.to_vec()).unwrap_or_default();
                     if name == "pair" && parser_args.len() == 2 {
                         // Re-pair into a flat Pair term where possible.
                         // Right-assoc: pair(a, pair(b, c)) → Pair([a, b, c]).
@@ -1628,11 +1738,10 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                     // followed by `naryOpApp` at Theory/Text/Parser/Term.hs:79-93, see line 92.
                     use tamarin_term::function_symbols::CSym;
                     let name = match c {
-                        CSym::EMap => {
-                            String::from_utf8(
-                                tamarin_term::function_symbols::EMAP_SYM_STRING.to_vec()
-                            ).unwrap()
-                        }
+                        CSym::EMap => String::from_utf8(
+                            tamarin_term::function_symbols::EMAP_SYM_STRING.to_vec(),
+                        )
+                        .unwrap(),
                     };
                     p::Term::App(name, parser_args)
                 }
@@ -1691,9 +1800,14 @@ pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
         crate::guarded::cmp_term(&ga, &gb)
     }
     match t {
-        p::Term::Var(_) | p::Term::PubLit(_) | p::Term::FreshLit(_)
-        | p::Term::NatLit(_) | p::Term::Number(_) | p::Term::NumberOne
-        | p::Term::NatOne | p::Term::DhNeutral => t.clone(),
+        p::Term::Var(_)
+        | p::Term::PubLit(_)
+        | p::Term::FreshLit(_)
+        | p::Term::NatLit(_)
+        | p::Term::Number(_)
+        | p::Term::NumberOne
+        | p::Term::NatOne
+        | p::Term::DhNeutral => t.clone(),
         // `em(a, b)` — commutative C-symbol: sort the two args to match
         // HS `fAppC EMap [a,b] = FAPP (C EMap) (sort [a,b])` (Raw.hs:132-133).
         p::Term::App(n, args) if n == "em" && args.len() == 2 => {
@@ -1706,20 +1820,21 @@ pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
             };
             p::Term::App(n.clone(), vec![first, second])
         }
-        p::Term::App(n, args) =>
-            p::Term::App(n.clone(), args.iter().map(canonicalize_ac_in_pterm).collect()),
-        p::Term::AlgApp(n, a, b) =>
-            p::Term::AlgApp(n.clone(),
-                Box::new(canonicalize_ac_in_pterm(a)),
-                Box::new(canonicalize_ac_in_pterm(b))),
-        p::Term::Pair(items) =>
-            p::Term::Pair(items.iter().map(canonicalize_ac_in_pterm).collect()),
-        p::Term::Diff(a, b) =>
-            p::Term::Diff(
-                Box::new(canonicalize_ac_in_pterm(a)),
-                Box::new(canonicalize_ac_in_pterm(b))),
-        p::Term::PatMatch(inner) =>
-            p::Term::PatMatch(Box::new(canonicalize_ac_in_pterm(inner))),
+        p::Term::App(n, args) => p::Term::App(
+            n.clone(),
+            args.iter().map(canonicalize_ac_in_pterm).collect(),
+        ),
+        p::Term::AlgApp(n, a, b) => p::Term::AlgApp(
+            n.clone(),
+            Box::new(canonicalize_ac_in_pterm(a)),
+            Box::new(canonicalize_ac_in_pterm(b)),
+        ),
+        p::Term::Pair(items) => p::Term::Pair(items.iter().map(canonicalize_ac_in_pterm).collect()),
+        p::Term::Diff(a, b) => p::Term::Diff(
+            Box::new(canonicalize_ac_in_pterm(a)),
+            Box::new(canonicalize_ac_in_pterm(b)),
+        ),
+        p::Term::PatMatch(inner) => p::Term::PatMatch(Box::new(canonicalize_ac_in_pterm(inner))),
         p::Term::BinOp(op, l, r) => {
             let l2 = canonicalize_ac_in_pterm(l);
             let r2 = canonicalize_ac_in_pterm(r);
@@ -1771,9 +1886,9 @@ pub fn canonicalize_ac_in_formula(f: &p::Formula) -> p::Formula {
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
-pub fn arity1_noeq_names(sig: &tamarin_term::maude_sig::MaudeSig)
-    -> std::collections::HashSet<String>
-{
+pub fn arity1_noeq_names(
+    sig: &tamarin_term::maude_sig::MaudeSig,
+) -> std::collections::HashSet<String> {
     sig.no_eq_fun_syms()
         .iter()
         .filter(|s| s.arity == 1)
@@ -1802,23 +1917,26 @@ pub fn arity1_noeq_names(sig: &tamarin_term::maude_sig::MaudeSig)
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
-pub fn rewrite_arity1_term(
-    t: &p::Term,
-    arity1: &std::collections::HashSet<String>,
-) -> p::Term {
+pub fn rewrite_arity1_term(t: &p::Term, arity1: &std::collections::HashSet<String>) -> p::Term {
     use p::Term::*;
     match t {
         App(name, args) => {
-            let new_args: Vec<p::Term> =
-                args.iter().map(|a| rewrite_arity1_term(a, arity1)).collect();
+            let new_args: Vec<p::Term> = args
+                .iter()
+                .map(|a| rewrite_arity1_term(a, arity1))
+                .collect();
             if arity1.contains(name) && new_args.len() > 1 {
                 App(name.clone(), vec![Pair(new_args)])
             } else {
                 App(name.clone(), new_args)
             }
         }
-        Pair(items) =>
-            Pair(items.iter().map(|i| rewrite_arity1_term(i, arity1)).collect()),
+        Pair(items) => Pair(
+            items
+                .iter()
+                .map(|i| rewrite_arity1_term(i, arity1))
+                .collect(),
+        ),
         AlgApp(name, l, r) => AlgApp(
             name.clone(),
             Box::new(rewrite_arity1_term(l, arity1)),
@@ -1842,10 +1960,7 @@ pub fn rewrite_arity1_term(
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
-pub fn rewrite_arity1_fact(
-    fa: &p::Fact,
-    arity1: &std::collections::HashSet<String>,
-) -> p::Fact {
+pub fn rewrite_arity1_fact(fa: &p::Fact, arity1: &std::collections::HashSet<String>) -> p::Fact {
     crate::macro_expand::map_fact_terms(fa, &|t| rewrite_arity1_term(t, arity1))
 }
 
@@ -1853,10 +1968,7 @@ pub fn rewrite_arity1_fact(
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
-pub fn rewrite_arity1_atom(
-    a: &p::Atom,
-    arity1: &std::collections::HashSet<String>,
-) -> p::Atom {
+pub fn rewrite_arity1_atom(a: &p::Atom, arity1: &std::collections::HashSet<String>) -> p::Atom {
     crate::macro_expand::map_atom_terms(a, &|t| rewrite_arity1_term(t, arity1))
 }
 
@@ -1976,10 +2088,10 @@ where
             // (locations-report) — see Term/Builtin/Signature.hs:38-40.
             // Other multi-arg builtins (senc/aenc/sign/...) are
             // genuinely multi-arg and are excluded.
-            let unary_builtin = matches!(name.as_str(),
-                    "h" | "fst" | "snd" | "inv" | "pk"
-                    | "getMessage" | "get_rep" | "report")
-                || is_user_unary_fun(name.as_str());
+            let unary_builtin = matches!(
+                name.as_str(),
+                "h" | "fst" | "snd" | "inv" | "pk" | "getMessage" | "get_rep" | "report"
+            ) || is_user_unary_fun(name.as_str());
             let new_args: Option<Vec<_>> = args.iter().map(|a| term_to_vterm(a, mk_var)).collect();
             let mut new_args = new_args?;
             if unary_builtin && new_args.len() > 1 {
@@ -2011,12 +2123,17 @@ where
                 let b = it.next().unwrap();
                 return Some(tamarin_term::builtin::emap(a, b));
             }
-            let sym = NoEqSym::new(name.as_bytes().to_vec(), new_args.len(),
-                user_fun_privacy(name), user_fun_constructability(name));
+            let sym = NoEqSym::new(
+                name.as_bytes().to_vec(),
+                new_args.len(),
+                user_fun_privacy(name),
+                user_fun_constructability(name),
+            );
             Some(f_app_no_eq(sym, new_args))
         }
         p::Term::Pair(items) => {
-            let new_items: Option<Vec<_>> = items.iter().map(|i| term_to_vterm(i, mk_var)).collect();
+            let new_items: Option<Vec<_>> =
+                items.iter().map(|i| term_to_vterm(i, mk_var)).collect();
             // Right-associative pair: <a, b, c> = pair(a, pair(b, c)).
             right_nest_pair(new_items?)
         }
@@ -2028,15 +2145,23 @@ where
             // Haskell `binaryAlgApp` also reads `(k,priv,cnstr)` from the
             // signature via `lookupArity` (Theory/Text/Parser/Term.hs:96-106, see line 101),
             // so thread user privacy/constructability here too.
-            let sym = NoEqSym::new(name.as_bytes().to_vec(), 2,
-                user_fun_privacy(name), user_fun_constructability(name));
+            let sym = NoEqSym::new(
+                name.as_bytes().to_vec(),
+                2,
+                user_fun_privacy(name),
+                user_fun_constructability(name),
+            );
             Some(f_app_no_eq(sym, vec![aa, bb]))
         }
         p::Term::Diff(a, b) => {
             let aa = term_to_vterm(a, mk_var)?;
             let bb = term_to_vterm(b, mk_var)?;
-            let sym = NoEqSym::new(b"diff".to_vec(), 2,
-                Privacy::Public, Constructability::Constructor);
+            let sym = NoEqSym::new(
+                b"diff".to_vec(),
+                2,
+                Privacy::Public,
+                Constructability::Constructor,
+            );
             Some(f_app_no_eq(sym, vec![aa, bb]))
         }
         p::Term::BinOp(op, a, b) => {
@@ -2048,8 +2173,12 @@ where
                 p::BinOp::Xor => Some(f_app_ac(AcSym::Xor, vec![aa, bb])),
                 p::BinOp::NatPlus => Some(f_app_ac(AcSym::NatPlus, vec![aa, bb])),
                 p::BinOp::Exp => {
-                    let sym = NoEqSym::new(b"exp".to_vec(), 2,
-                        Privacy::Public, Constructability::Constructor);
+                    let sym = NoEqSym::new(
+                        b"exp".to_vec(),
+                        2,
+                        Privacy::Public,
+                        Constructability::Constructor,
+                    );
                     Some(f_app_no_eq(sym, vec![aa, bb]))
                 }
             }
@@ -2069,10 +2198,13 @@ pub fn term_to_lnterm(t: &p::Term) -> Option<tamarin_term::lterm::LNTerm> {
     // `true:msg`), and the parser would emit `Untagged` only for the bare
     // form anyway.
     let mk_var = |v: &p::VarSpec| -> Option<tamarin_term::lterm::LNTerm> {
-        if matches!(v.sort, p::SortHint::Untagged) && v.idx == 0
-            && is_user_nullary_fun(&v.name) {
-            let sym = NoEqSym::new(v.name.as_bytes().to_vec(), 0,
-                user_fun_privacy(&v.name), Constructability::Constructor);
+        if matches!(v.sort, p::SortHint::Untagged) && v.idx == 0 && is_user_nullary_fun(&v.name) {
+            let sym = NoEqSym::new(
+                v.name.as_bytes().to_vec(),
+                0,
+                user_fun_privacy(&v.name),
+                Constructability::Constructor,
+            );
             return Some(f_app_no_eq(sym, vec![]));
         }
         let lv = LVar::new(v.name.clone(), sort_of(&v.sort), v.idx);
@@ -2103,10 +2235,17 @@ pub fn term_to_sapic_term(t: &p::Term) -> Option<crate::sapic::SapicTerm> {
     // fun symbol (mirrors `term_to_lnterm`'s `nullaryApp` recovery, additionally
     // gated on an un-annotated variable); otherwise a typed `SapicLVar`.
     let mk_var = |v: &p::VarSpec| -> Option<crate::sapic::SapicTerm> {
-        if matches!(v.sort, p::SortHint::Untagged) && v.idx == 0
-            && v.typ.is_none() && is_user_nullary_fun(&v.name) {
-            let sym = NoEqSym::new(v.name.as_bytes().to_vec(), 0,
-                user_fun_privacy(&v.name), Constructability::Constructor);
+        if matches!(v.sort, p::SortHint::Untagged)
+            && v.idx == 0
+            && v.typ.is_none()
+            && is_user_nullary_fun(&v.name)
+        {
+            let sym = NoEqSym::new(
+                v.name.as_bytes().to_vec(),
+                0,
+                user_fun_privacy(&v.name),
+                Constructability::Constructor,
+            );
             return Some(f_app_no_eq(sym, vec![]));
         }
         let lv = LVar::new(v.name.clone(), sort_of(&v.sort), v.idx);
@@ -2121,9 +2260,14 @@ pub fn term_to_sapic_term(t: &p::Term) -> Option<crate::sapic::SapicTerm> {
 pub fn fact_to_sapic_fact(f: &p::Fact) -> Result<crate::sapic::SapicLNFact, ElabError> {
     use crate::fact::Fact;
     let tag = fact_tag_of(f);
-    let terms: Result<Vec<_>, _> = f.args.iter()
-        .map(|t| term_to_sapic_term(t).ok_or_else(||
-            ElabError { message: format!("could not elaborate term in fact `{}`", f.name) }))
+    let terms: Result<Vec<_>, _> = f
+        .args
+        .iter()
+        .map(|t| {
+            term_to_sapic_term(t).ok_or_else(|| ElabError {
+                message: format!("could not elaborate term in fact `{}`", f.name),
+            })
+        })
         .collect();
     Ok(Fact::new(tag, terms?).with_annotations(copy_fact_annotations(f)))
 }
@@ -2162,21 +2306,41 @@ mod tests {
     fn canonicalize_ac_in_pterm_flattens_and_sorts() {
         use tamarin_parser::ast as p;
         // Build: BinOp(Xor, BinOp(Xor, na, k), nb)
-        let na = p::Term::Var(p::VarSpec { typ: None, name: "na".into(), sort: p::SortHint::Msg, idx: 0 });
-        let k = p::Term::Var(p::VarSpec { typ: None, name: "k".into(), sort: p::SortHint::Fresh, idx: 0 });
-        let nb = p::Term::Var(p::VarSpec { typ: None, name: "nb".into(), sort: p::SortHint::Fresh, idx: 0 });
+        let na = p::Term::Var(p::VarSpec {
+            typ: None,
+            name: "na".into(),
+            sort: p::SortHint::Msg,
+            idx: 0,
+        });
+        let k = p::Term::Var(p::VarSpec {
+            typ: None,
+            name: "k".into(),
+            sort: p::SortHint::Fresh,
+            idx: 0,
+        });
+        let nb = p::Term::Var(p::VarSpec {
+            typ: None,
+            name: "nb".into(),
+            sort: p::SortHint::Fresh,
+            idx: 0,
+        });
         let inner = p::Term::BinOp(p::BinOp::Xor, Box::new(na.clone()), Box::new(k.clone()));
         let outer = p::Term::BinOp(p::BinOp::Xor, Box::new(inner), Box::new(nb.clone()));
         // Canonicalised right-fold should be `BinOp(Xor, k, BinOp(Xor, nb, na))`.
         let canon = canonicalize_ac_in_pterm(&outer);
-        let expected = p::Term::BinOp(p::BinOp::Xor,
+        let expected = p::Term::BinOp(
+            p::BinOp::Xor,
             Box::new(k),
-            Box::new(p::Term::BinOp(p::BinOp::Xor, Box::new(nb), Box::new(na))));
+            Box::new(p::Term::BinOp(p::BinOp::Xor, Box::new(nb), Box::new(na))),
+        );
         assert_eq!(canon, expected);
         // And the LNTerm-side via `term_to_lnterm` should produce the
         // flat sorted form (already byte-identical to HS).
         let l = term_to_lnterm(&outer).unwrap();
-        assert_eq!(tamarin_term::pretty::pretty_lnterm(&l), "(~k\u{2295}~nb\u{2295}na)");
+        assert_eq!(
+            tamarin_term::pretty::pretty_lnterm(&l),
+            "(~k\u{2295}~nb\u{2295}na)"
+        );
     }
 
     #[test]
@@ -2191,11 +2355,19 @@ mod tests {
         let p = parse_theory("theory T begin builtins: hashing, signing end", &[]).unwrap();
         let t = elaborate(&p).unwrap();
         // hashing adds h/1, signing adds sign/2 etc.
-        let funs: Vec<String> = t.signature.maude_sig.st_fun_syms.iter()
+        let funs: Vec<String> = t
+            .signature
+            .maude_sig
+            .st_fun_syms
+            .iter()
             .map(|s| String::from_utf8_lossy(s.name).to_string())
             .collect();
         assert!(funs.iter().any(|n| n == "h"), "expected h: {:?}", funs);
-        assert!(funs.iter().any(|n| n == "sign"), "expected sign: {:?}", funs);
+        assert!(
+            funs.iter().any(|n| n == "sign"),
+            "expected sign: {:?}",
+            funs
+        );
     }
 
     #[test]
@@ -2229,7 +2401,12 @@ mod tests {
     // =========================================================================
 
     fn parser_var(name: &str, idx: u64, sort: p::SortHint) -> p::Term {
-        p::Term::Var(p::VarSpec { name: name.into(), idx, sort, typ: None })
+        p::Term::Var(p::VarSpec {
+            name: name.into(),
+            idx,
+            sort,
+            typ: None,
+        })
     }
 
     #[test]
@@ -2297,10 +2474,10 @@ mod tests {
     fn lnterm_to_term_round_trip_nested_app() {
         // f(g(x), y) → ... → f(g(x), y).
         let inner = p::Term::App("g".into(), vec![parser_var("x", 0, p::SortHint::Msg)]);
-        let outer = p::Term::App("f".into(), vec![
-            inner.clone(),
-            parser_var("y", 0, p::SortHint::Msg),
-        ]);
+        let outer = p::Term::App(
+            "f".into(),
+            vec![inner.clone(), parser_var("y", 0, p::SortHint::Msg)],
+        );
         let lt = term_to_lnterm(&outer).unwrap();
         let back = lnterm_to_term(&lt);
         assert_eq!(back, outer);
@@ -2323,7 +2500,8 @@ mod tests {
         end"#;
         let p = parse_theory(src, &[]).unwrap();
         let r = match &p.items[0] {
-            p::TheoryItem::Rule(r) => r, _ => unreachable!(),
+            p::TheoryItem::Rule(r) => r,
+            _ => unreachable!(),
         };
         let desugared = apply_let_block(r);
         assert!(desugared.let_block.is_empty());
@@ -2345,7 +2523,8 @@ mod tests {
         end"#;
         let p = parse_theory(src, &[]).unwrap();
         let r = match &p.items[0] {
-            p::TheoryItem::Rule(r) => r, _ => unreachable!(),
+            p::TheoryItem::Rule(r) => r,
+            _ => unreachable!(),
         };
         let desugared = apply_let_block(r);
         let in_fact = &desugared.premises[0];
@@ -2371,14 +2550,14 @@ mod tests {
         end"#;
         let p = parse_theory(src, &[]).unwrap();
         let r = match &p.items[0] {
-            p::TheoryItem::Rule(r) => r, _ => unreachable!(),
+            p::TheoryItem::Rule(r) => r,
+            _ => unreachable!(),
         };
         let desugared = apply_let_block(r);
         let in_fact = &desugared.premises[0];
         match &in_fact.args[0] {
             p::Term::App(name, args) if name == "h" => match &args[0] {
-                p::Term::Var(vs) if vs.name == "b"
-                    && vs.sort != p::SortHint::Fresh => {}
+                p::Term::Var(vs) if vs.name == "b" && vs.sort != p::SortHint::Fresh => {}
                 other => panic!("expected h(b) with free b, got h({:?})", other),
             },
             other => panic!("expected h(b), got {:?}", other),
@@ -2392,7 +2571,8 @@ mod tests {
         end"#;
         let p = parse_theory(src, &[]).unwrap();
         let r = match &p.items[0] {
-            p::TheoryItem::Rule(r) => r, _ => unreachable!(),
+            p::TheoryItem::Rule(r) => r,
+            _ => unreachable!(),
         };
         let desugared = apply_let_block(r);
         let use_act = &desugared.actions[0];
@@ -2420,4 +2600,3 @@ mod tests {
         assert_eq!(rules.len(), 1);
     }
 }
-

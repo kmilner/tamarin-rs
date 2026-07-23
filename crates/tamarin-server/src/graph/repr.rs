@@ -18,7 +18,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tamarin_theory::constraint::constraints::{LessAtom, NodeId, NodePrem, NodeConc};
+use tamarin_theory::constraint::constraints::{LessAtom, NodeConc, NodeId, NodePrem};
 use tamarin_theory::fact::LNFact;
 use tamarin_theory::rule::{ConcIdx, PremIdx, ProtoRuleName, RuleACInst, RuleInfo};
 
@@ -74,7 +74,9 @@ pub struct GraphRepr {
 }
 
 impl GraphRepr {
-    pub fn new() -> Self { GraphRepr::default() }
+    pub fn new() -> Self {
+        GraphRepr::default()
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -100,9 +102,7 @@ pub fn node_role(n: &GNode) -> Option<&str> {
 }
 
 /// Group nodes by role.  Mirror of `groupNodesByRole`.
-pub fn group_nodes_by_role<'a>(
-    nodes: &'a [GNode],
-) -> BTreeMap<String, Vec<&'a GNode>> {
+pub fn group_nodes_by_role<'a>(nodes: &'a [GNode]) -> BTreeMap<String, Vec<&'a GNode>> {
     let mut by_role: BTreeMap<String, Vec<&'a GNode>> = BTreeMap::new();
     for n in nodes {
         if let Some(r) = node_role(n) {
@@ -116,7 +116,9 @@ pub fn group_nodes_by_role<'a>(
 /// Mirror of `extractBaseName` (GraphRepr.hs:217-225).
 pub fn extract_base_name(name: &str) -> Option<String> {
     let parts: Vec<&str> = name.split('_').collect();
-    if parts.len() < 2 { return None; }
+    if parts.len() < 2 {
+        return None;
+    }
     let last = parts.last().unwrap();
     if !last.is_empty() && last.chars().all(|c| c.is_ascii_digit()) {
         Some(parts[..parts.len() - 1].join("_"))
@@ -152,9 +154,7 @@ pub fn rule_name_by_node(n: &GNode) -> Option<String> {
 }
 
 /// Mirror of `groupBySimilarName` — group nodes by their rule's base name.
-pub fn group_by_similar_name<'a>(
-    nodes: &'a [GNode],
-) -> BTreeMap<String, Vec<&'a GNode>> {
+pub fn group_by_similar_name<'a>(nodes: &'a [GNode]) -> BTreeMap<String, Vec<&'a GNode>> {
     let mut out: BTreeMap<String, Vec<&'a GNode>> = BTreeMap::new();
     for n in nodes {
         if let Some(rn) = rule_name_by_node(n) {
@@ -168,16 +168,17 @@ pub fn group_by_similar_name<'a>(
 
 /// Filter edges keeping only those whose endpoints are both in `node_ids`.
 /// Mirror of `filterEdgesForCluster`.
-pub fn filter_edges_for_cluster(
-    node_ids: &BTreeSet<NodeId>,
-    edges: &[GEdge],
-) -> Vec<GEdge> {
-    edges.iter().filter(|e| match e {
-        GEdge::System(s, t) | GEdge::UnsolvedChain(s, t) =>
-            node_ids.contains(&s.0) && node_ids.contains(&t.0),
-        GEdge::Less(la) =>
-            node_ids.contains(&la.smaller) && node_ids.contains(&la.larger),
-    }).cloned().collect()
+pub fn filter_edges_for_cluster(node_ids: &BTreeSet<NodeId>, edges: &[GEdge]) -> Vec<GEdge> {
+    edges
+        .iter()
+        .filter(|e| match e {
+            GEdge::System(s, t) | GEdge::UnsolvedChain(s, t) => {
+                node_ids.contains(&s.0) && node_ids.contains(&t.0)
+            }
+            GEdge::Less(la) => node_ids.contains(&la.smaller) && node_ids.contains(&la.larger),
+        })
+        .cloned()
+        .collect()
 }
 
 /// Group `nodes` into weakly-connected components under the projection
@@ -199,14 +200,17 @@ pub fn find_connected_components<'a>(
     }
     let mut visited: BTreeSet<NodeId> = BTreeSet::new();
     let mut components: Vec<Vec<&'a GNode>> = Vec::new();
-    let by_id: BTreeSet<NodeId> =
-        nodes.iter().map(|n| n.id.clone()).collect();
+    let by_id: BTreeSet<NodeId> = nodes.iter().map(|n| n.id.clone()).collect();
     for n in nodes {
-        if visited.contains(&n.id) { continue; }
+        if visited.contains(&n.id) {
+            continue;
+        }
         let mut stack = vec![n.id.clone()];
         let mut comp_set: BTreeSet<NodeId> = BTreeSet::new();
         while let Some(cur) = stack.pop() {
-            if !visited.insert(cur.clone()) { continue; }
+            if !visited.insert(cur.clone()) {
+                continue;
+            }
             comp_set.insert(cur.clone());
             if let Some(neighbors) = adj.get(&cur) {
                 for nb in neighbors {
@@ -221,10 +225,14 @@ pub fn find_connected_components<'a>(
         // `nodes` order, not DFS discovery order.  Filtering the full `nodes`
         // slice is safe because each node belongs to exactly one component
         // (globally `visited`), so the per-component relative order matches HS.
-        let comp: Vec<&'a GNode> = nodes.iter().copied()
+        let comp: Vec<&'a GNode> = nodes
+            .iter()
+            .copied()
             .filter(|n| comp_set.contains(&n.id))
             .collect();
-        if !comp.is_empty() { components.push(comp); }
+        if !comp.is_empty() {
+            components.push(comp);
+        }
     }
     // Haskell `go (n:ns) components = go remainingNodes (component : components)`
     // PREPENDS each newly-discovered component, so the returned list is in
@@ -249,13 +257,11 @@ pub fn add_cluster(
     let all_edges = repr.edges.clone();
     let mut sub_clusters: Vec<Cluster> = Vec::new();
     for (group_name, group_nodes) in &nodes_by_group {
-        let group_node_ids: BTreeSet<NodeId> =
-            group_nodes.iter().map(|n| n.id.clone()).collect();
+        let group_node_ids: BTreeSet<NodeId> = group_nodes.iter().map(|n| n.id.clone()).collect();
         let edges_for_group = filter_edges_for_cluster(&group_node_ids, &all_edges);
         let components = find_connected_components(group_nodes, &edges_for_group);
         for (i, comp) in components.into_iter().enumerate() {
-            let comp_ids: BTreeSet<NodeId> =
-                comp.iter().map(|n| n.id.clone()).collect();
+            let comp_ids: BTreeSet<NodeId> = comp.iter().map(|n| n.id.clone()).collect();
             let edges_in_comp = filter_edges_for_cluster(&comp_ids, &all_edges);
             sub_clusters.push(Cluster {
                 name: format!("{}{}{}", group_name, name_suffix, i + 1),
@@ -277,16 +283,21 @@ pub fn add_cluster(
     // `compute_basic_graph_repr`).  When the SystemNode is clustered,
     // an id-keyed filter would silently drop the free ellipse as well;
     // HS keeps it at top level (it is not an element of the cluster).
-    let absorbed_nodes: Vec<GNode> = sub_clusters.iter()
+    let absorbed_nodes: Vec<GNode> = sub_clusters
+        .iter()
         .flat_map(|c| c.nodes.iter().cloned())
         .collect();
-    let absorbed_edges_struct: Vec<GEdge> = sub_clusters.iter()
+    let absorbed_edges_struct: Vec<GEdge> = sub_clusters
+        .iter()
         .flat_map(|c| c.edges.iter().cloned())
         .collect();
-    let remaining_edges: Vec<GEdge> = all_edges.into_iter()
+    let remaining_edges: Vec<GEdge> = all_edges
+        .into_iter()
         .filter(|e| !absorbed_edges_struct.iter().any(|ae| ae == e))
         .collect();
-    let remaining_nodes: Vec<GNode> = repr.nodes.iter()
+    let remaining_nodes: Vec<GNode> = repr
+        .nodes
+        .iter()
         .filter(|n| !absorbed_nodes.iter().any(|an| an == *n))
         .cloned()
         .collect();
@@ -328,7 +339,10 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     let mut nodes: Vec<GNode> = Vec::new();
     // 1. System rule instances.
     for (nid, ru) in sys.nodes.iter() {
-        nodes.push(GNode { id: nid.clone(), ty: NodeType::System(ru.clone()) });
+        nodes.push(GNode {
+            id: nid.clone(),
+            ty: NodeType::System(ru.clone()),
+        });
     }
     // 2. Unsolved action atoms — collect by node id.
     // HS `systemUnsolvedActionNodes se = map unsolvedActionNode
@@ -338,7 +352,9 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     // UnsolvedActionNode.  So there is no skip-if-already-a-system-node guard.
     let mut by_node: BTreeMap<NodeId, Vec<LNFact>> = BTreeMap::new();
     for (g, st) in sys.goals.iter() {
-        if st.solved { continue; }
+        if st.solved {
+            continue;
+        }
         if let Goal::Action(nid, fa) = g {
             by_node.entry(nid.clone()).or_default().push(fa.clone());
         }
@@ -359,7 +375,10 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     // ellipse ends up as `dsNodes[v]`, which drives less-edge resolution).  The
     // colliding dot-id is disambiguated in `dot.rs`.
     if let Some(la) = &sys.last_atom {
-        nodes.push(GNode { id: la.clone(), ty: NodeType::LastAction });
+        nodes.push(GNode {
+            id: la.clone(),
+            ty: NodeType::LastAction,
+        });
     }
     // 4. Missing nodes referenced by edges.
     // HS `systemMissingNodes se = mapMaybe missingNode (S.toList sEdges)`
@@ -372,8 +391,7 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     // nodes: two edges sharing the same missing endpoint emit it twice.
     // `systemMissingNodes` never inspects `sLessAtoms`; less-atoms contribute
     // edges (below), not nodes.
-    let sys_node_ids: BTreeSet<NodeId> =
-        sys.nodes.iter().map(|(id, _)| id.clone()).collect();
+    let sys_node_ids: BTreeSet<NodeId> = sys.nodes.iter().map(|(id, _)| id.clone()).collect();
     for e in &sys.edges {
         if !sys_node_ids.contains(&e.src.0) {
             nodes.push(GNode {
@@ -396,19 +414,25 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
         edges.push(GEdge::Less(la.clone()));
     }
     for (g, st) in sys.goals.iter() {
-        if st.solved { continue; }
+        if st.solved {
+            continue;
+        }
         if let Goal::Chain(src, tgt) = g {
             edges.push(GEdge::UnsolvedChain(src.clone(), tgt.clone()));
         }
     }
-    GraphRepr { clusters: Vec::new(), nodes, edges }
+    GraphRepr {
+        clusters: Vec::new(),
+        nodes,
+        edges,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tamarin_theory::rule::{ProtoRuleACInstInfo, ProtoRuleName, RuleAttributes, Rule};
     use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_theory::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes};
 
     fn proto_rule(name: &str, role: Option<&str>) -> RuleACInst {
         let attrs = RuleAttributes {
@@ -421,7 +445,9 @@ mod tests {
                 attributes: attrs,
                 loop_breakers: Vec::new(),
             }),
-            Vec::new(), Vec::new(), Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
         )
     }
 
@@ -432,7 +458,10 @@ mod tests {
     #[test]
     fn extract_base_name_drops_numeric_suffix() {
         assert_eq!(extract_base_name("Setup_1"), Some("Setup".to_string()));
-        assert_eq!(extract_base_name("Long_Name_3"), Some("Long_Name".to_string()));
+        assert_eq!(
+            extract_base_name("Long_Name_3"),
+            Some("Long_Name".to_string())
+        );
         assert_eq!(extract_base_name("NoSuffix"), None);
         assert_eq!(extract_base_name("Name_NotNumber"), None);
         assert_eq!(extract_base_name(""), None);
@@ -464,8 +493,10 @@ mod tests {
         // stays at the top level.
         assert_eq!(repr.clusters.len(), 3);
         let cluster_names: Vec<&str> = repr.clusters.iter().map(|c| c.name.as_str()).collect();
-        let alice_count = cluster_names.iter()
-            .filter(|n| n.starts_with("Alice")).count();
+        let alice_count = cluster_names
+            .iter()
+            .filter(|n| n.starts_with("Alice"))
+            .count();
         assert_eq!(alice_count, 2);
         assert!(cluster_names.iter().any(|n| n.starts_with("Bob")));
         // The roleless node stays in repr.nodes.
@@ -501,9 +532,18 @@ mod tests {
     // DFS pop-order would be [B, A, C]; HS keeps [B, C, A].
     #[test]
     fn connected_components_preserve_original_node_order() {
-        let b = GNode { id: nid("i", 2), ty: NodeType::System(proto_rule("B", None)) };
-        let c = GNode { id: nid("i", 3), ty: NodeType::System(proto_rule("C", None)) };
-        let a = GNode { id: nid("i", 1), ty: NodeType::System(proto_rule("A", None)) };
+        let b = GNode {
+            id: nid("i", 2),
+            ty: NodeType::System(proto_rule("B", None)),
+        };
+        let c = GNode {
+            id: nid("i", 3),
+            ty: NodeType::System(proto_rule("C", None)),
+        };
+        let a = GNode {
+            id: nid("i", 1),
+            ty: NodeType::System(proto_rule("A", None)),
+        };
         // Input order is deliberately [B, C, A].
         let input: Vec<&GNode> = vec![&b, &c, &a];
         // A links to both B and C via SystemEdges.

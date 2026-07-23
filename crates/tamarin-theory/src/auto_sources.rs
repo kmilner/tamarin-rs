@@ -23,22 +23,27 @@
 //! byte-identically to HS's `prettyLNFormula` of the `LNFormula` it builds.
 //! The variable binders use HS's names (`x`, `m`/`m1..mn`, `i`, `j`).
 
+use crate::constraint::constraints::{NodeConc, NodePrem};
+use crate::constraint::system::System;
+use crate::fact::{proto_or_in_fact_view, proto_or_out_fact_view, FactTag, LNFact, Multiplicity};
+use crate::rule::{print_fact_position, print_position, rule_name_string, ExtendedPosition};
+use crate::theory::{OpenProtoRule, TheoryItem};
 use tamarin_parser::ast as p;
 use tamarin_term::lterm::LNTerm;
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::positions::{at_pos, deepest_prot_subterm, find_pos};
 use tamarin_term::rewriting::Equal;
 use tamarin_term::term::all_prot_subterms;
-use crate::constraint::constraints::{NodeConc, NodePrem};
-use crate::constraint::system::System;
-use crate::fact::{proto_or_in_fact_view, proto_or_out_fact_view, FactTag, LNFact, Multiplicity};
-use crate::rule::{print_fact_position, print_position, rule_name_string, ExtendedPosition};
-use crate::theory::{OpenProtoRule, TheoryItem};
 
 /// Bound-variable names, matching HS's quantifier binders in
 /// `addAutoSourcesLemma` (`OpenTheory.hs:399-535`).
 fn var(name: &str, sort: p::SortHint) -> p::VarSpec {
-    p::VarSpec { name: name.to_string(), idx: 0, sort, typ: None }
+    p::VarSpec {
+        name: name.to_string(),
+        idx: 0,
+        sort,
+        typ: None,
+    }
 }
 fn var_term(name: &str, sort: p::SortHint) -> p::Term {
     p::Term::Var(var(name, sort))
@@ -49,12 +54,22 @@ fn var_term(name: &str, sort: p::SortHint) -> p::Term {
 fn input_fact_term(name: &str, terms: Vec<p::Term>, v: p::Term) -> p::Fact {
     let mut args = terms;
     args.push(v);
-    p::Fact { persistent: false, name: name.to_string(), args, annotations: Vec::new() }
+    p::Fact {
+        persistent: false,
+        name: name.to_string(),
+        args,
+        annotations: Vec::new(),
+    }
 }
 
 /// `outputFactTerm pos ru terms` (OpenTheory.hs:138-538, see line 333).
 fn output_fact_term(name: &str, terms: Vec<p::Term>) -> p::Fact {
-    p::Fact { persistent: false, name: name.to_string(), args: terms, annotations: Vec::new() }
+    p::Fact {
+        persistent: false,
+        name: name.to_string(),
+        args: terms,
+        annotations: Vec::new(),
+    }
 }
 
 fn action(fa: p::Fact, tp: p::Term) -> p::Formula {
@@ -85,10 +100,18 @@ const NODE: p::SortHint = p::SortHint::Node;
 /// `orKU` (OpenTheory.hs:138-538, see line 484): `∃ j. !KU(x) @ j ∧ j < i`. Here `i` is the
 /// input timepoint and `x` the input-term variable.
 fn or_ku() -> p::Formula {
-    let ku = p::Fact { persistent: true, name: "KU".to_string(), args: vec![var_term("x", MSG)], annotations: Vec::new() };
+    let ku = p::Fact {
+        persistent: true,
+        name: "KU".to_string(),
+        args: vec![var_term("x", MSG)],
+        annotations: Vec::new(),
+    };
     exists(
         vec![var("j", NODE)],
-        and(action(ku, var_term("j", NODE)), less(var_term("j", NODE), var_term("i", NODE))),
+        and(
+            action(ku, var_term("j", NODE)),
+            less(var_term("j", NODE), var_term("i", NODE)),
+        ),
     )
 }
 
@@ -99,7 +122,10 @@ fn to_facts_term(out_name: &str, inner: p::Formula) -> p::Formula {
         inner,
         exists(
             vec![var("j", NODE)],
-            and(action(out, var_term("j", NODE)), less(var_term("j", NODE), var_term("i", NODE))),
+            and(
+                action(out, var_term("j", NODE)),
+                less(var_term("j", NODE), var_term("i", NODE)),
+            ),
         ),
     )
 }
@@ -153,28 +179,49 @@ fn fact_input_form_no_outputs(in_name: &str, arity: usize) -> p::Formula {
     let in_fact = input_fact_fact_ast(in_name, &ms);
     let mut binders = ms;
     binders.push(var("i", NODE));
-    forall(binders, implies(action(in_fact, var_term("i", NODE)), p::Formula::False))
+    forall(
+        binders,
+        implies(action(in_fact, var_term("i", NODE)), p::Formula::False),
+    )
 }
 
 /// `addForm (_, Right (_, outs:_), _)` (OpenTheory.hs:138-538, see line 464): with a matching
 /// output → `∀ m1..mn i. AUTO_IN_FACT(m1..mn) @ i ⇒ toFactsFact`.
 /// `toFactsFact` (OpenTheory.hs): `∃ j. AUTO_OUT_FACT(m1..m{out_arity}) @ j ∧ j < i`
 /// — the output fact references the input binders `m1..m{out_arity}`, highest first.
-fn fact_input_form_with_outputs(in_name: &str, out_name: &str, in_arity: usize, out_arity: usize) -> p::Formula {
+fn fact_input_form_with_outputs(
+    in_name: &str,
+    out_name: &str,
+    in_arity: usize,
+    out_arity: usize,
+) -> p::Formula {
     let ms: Vec<p::VarSpec> = list_of_m(in_arity).iter().map(|n| var(n, MSG)).collect();
     let in_fact = input_fact_fact_ast(in_name, &ms);
     // toFactsFact: AUTO_OUT_FACT( listVarTerm (1 + out_arity) 2 ) — de-Bruijn
     // Bound (1+out_arity)..Bound 2 with j=Bound 0, i=Bound 1. So the output
     // fact references m1..m{out_arity} (the input binders), highest first.
-    let out_ms: Vec<p::Term> = (1..=out_arity).map(|k| var_term(&format!("m{}", k), MSG)).collect();
-    let out_fact = p::Fact { persistent: false, name: out_name.to_string(), args: out_ms, annotations: Vec::new() };
+    let out_ms: Vec<p::Term> = (1..=out_arity)
+        .map(|k| var_term(&format!("m{}", k), MSG))
+        .collect();
+    let out_fact = p::Fact {
+        persistent: false,
+        name: out_name.to_string(),
+        args: out_ms,
+        annotations: Vec::new(),
+    };
     let to_facts = exists(
         vec![var("j", NODE)],
-        and(action(out_fact, var_term("j", NODE)), less(var_term("j", NODE), var_term("i", NODE))),
+        and(
+            action(out_fact, var_term("j", NODE)),
+            less(var_term("j", NODE), var_term("i", NODE)),
+        ),
     );
     let mut binders = ms;
     binders.push(var("i", NODE));
-    forall(binders, implies(action(in_fact, var_term("i", NODE)), to_facts))
+    forall(
+        binders,
+        implies(action(in_fact, var_term("i", NODE)), to_facts),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -194,10 +241,16 @@ pub struct AutoSourcesResult {
 }
 
 fn ac_concs(o: &OpenProtoRule) -> &[LNFact] {
-    match &o.abstracted_rule { Some(ar) => &ar.conclusions, None => &o.rule.conclusions }
+    match &o.abstracted_rule {
+        Some(ar) => &ar.conclusions,
+        None => &o.rule.conclusions,
+    }
 }
 fn ac_prems(o: &OpenProtoRule) -> &[LNFact] {
-    match &o.abstracted_rule { Some(ar) => &ar.premises, None => &o.rule.premises }
+    match &o.abstracted_rule {
+        Some(ar) => &ar.premises,
+        None => &o.rule.premises,
+    }
 }
 
 fn ln_proto(name: &str, terms: Vec<LNTerm>) -> LNFact {
@@ -206,7 +259,10 @@ fn ln_proto(name: &str, terms: Vec<LNTerm>) -> LNFact {
 
 /// `t `renameAvoiding` avoid_set` (LTerm.hs): rename `t`'s vars to fresh
 /// indices that avoid those in `avoid`.
-fn rename_avoiding<T: tamarin_term::lterm::HasFrees>(t: T, avoid: &impl tamarin_term::lterm::HasFrees) -> T {
+fn rename_avoiding<T: tamarin_term::lterm::HasFrees>(
+    t: T,
+    avoid: &impl tamarin_term::lterm::HasFrees,
+) -> T {
     let mut fresh = tamarin_term::lterm::avoid(avoid);
     tamarin_term::lterm::rename(t, &mut fresh)
 }
@@ -214,9 +270,16 @@ fn rename_avoiding<T: tamarin_term::lterm::HasFrees>(t: T, avoid: &impl tamarin_
 /// One matched input together with its matching outputs.
 enum Matched {
     /// protected-subterm input: deepest prot term, the var, matching (out-rule, out-term).
-    Term { protterm: LNTerm, vin: LNTerm, outs: Vec<(usize, LNTerm)> },
+    Term {
+        protterm: LNTerm,
+        vin: LNTerm,
+        outs: Vec<(usize, LNTerm)>,
+    },
     /// non-protected fact input: the fact, matching (out-rule, out-fact).
-    Fact { fact: LNFact, outs: Vec<(usize, LNFact)> },
+    Fact {
+        fact: LNFact,
+        outs: Vec<(usize, LNFact)>,
+    },
 }
 
 /// Build the `(AUTO_IN_*, AUTO_OUT_*)` fact-name pair for a matched input,
@@ -227,13 +290,17 @@ fn auto_names(m: &Matched, pos: &ExtendedPosition, rin_name: &str) -> (String, S
     match m {
         Matched::Term { .. } => {
             let p = print_position(pos);
-            (format!("AUTO_IN_TERM_{}_{}", p, rin_name),
-             format!("AUTO_OUT_TERM_{}_{}", p, rin_name))
+            (
+                format!("AUTO_IN_TERM_{}_{}", p, rin_name),
+                format!("AUTO_OUT_TERM_{}_{}", p, rin_name),
+            )
         }
         Matched::Fact { .. } => {
             let p = print_fact_position(pos);
-            (format!("AUTO_IN_FACT_{}_{}", p, rin_name),
-             format!("AUTO_OUT_FACT_{}_{}", p, rin_name))
+            (
+                format!("AUTO_IN_FACT_{}_{}", p, rin_name),
+                format!("AUTO_OUT_FACT_{}_{}", p, rin_name),
+            )
         }
     }
 }
@@ -271,26 +338,51 @@ pub fn add_auto_sources_lemma(
 
     for ((conc, _prem), source) in chains {
         // v = head $ getFactTerms $ nodeConcFact conc source
-        let Some(c_rule) = source.node_rule_safe(&conc.0) else { continue };
-        let Some(conc_fact) = c_rule.conclusions.get(conc.1 .0) else { continue };
-        let Some(v) = conc_fact.terms.first().cloned() else { continue };
+        let Some(c_rule) = source.node_rule_safe(&conc.0) else {
+            continue;
+        };
+        let Some(conc_fact) = c_rule.conclusions.get(conc.1 .0) else {
+            continue;
+        };
+        let Some(v) = conc_fact.terms.first().cloned() else {
+            continue;
+        };
 
         // unsolved premises of this source (for the fact-case guard).
-        let unsolved_prem_keys: Vec<NodePrem> =
-            source.unsolved_premises().into_iter().map(|(np, _)| np).collect();
+        let unsolved_prem_keys: Vec<NodePrem> = source
+            .unsolved_premises()
+            .into_iter()
+            .map(|(np, _)| np)
+            .collect();
 
         // inputRules: for each (nodeid, pid, tidx, term) in allPrems containing v.
         // Each element is (input-rule-idx, Left term | Right fact, position).
-        enum InRule { Term(LNTerm), Fact(LNFact) }
+        enum InRule {
+            Term(LNTerm),
+            Fact(LNFact),
+        }
         let mut input_rules: Vec<(usize, InRule, ExtendedPosition)> = Vec::new();
         for (nodeid, pid, tidx, term) in source.all_prems() {
-            let Some(positions) = find_pos(&v, &term) else { continue };
-            let Some(rule_sys) = source.node_rule_safe(&nodeid) else { continue };
+            let Some(positions) = find_pos(&v, &term) else {
+                continue;
+            };
+            let Some(rule_sys) = source.node_rule_safe(&nodeid) else {
+                continue;
+            };
             let sys_name = rule_name_string(rule_sys);
-            let Some((ri, rule)) = rules.iter().enumerate().find(|(_, r)| r.name() == sys_name) else { continue };
-            let Some(premise) = ac_prems(rule).get(pid.0) else { continue };
-            let Some(t_prime) = proto_or_in_fact_view(premise) else { continue };
-            let Some(t) = t_prime.get(tidx).cloned() else { continue };
+            let Some((ri, rule)) = rules.iter().enumerate().find(|(_, r)| r.name() == sys_name)
+            else {
+                continue;
+            };
+            let Some(premise) = ac_prems(rule).get(pid.0) else {
+                continue;
+            };
+            let Some(t_prime) = proto_or_in_fact_view(premise) else {
+                continue;
+            };
+            let Some(t) = t_prime.get(tidx).cloned() else {
+                continue;
+            };
             // terms (Left): one per found position.
             for pos in &positions {
                 input_rules.push((ri, InRule::Term(t.clone()), (pid, tidx, pos.clone())));
@@ -308,15 +400,24 @@ pub fn add_auto_sources_lemma(
         }
 
         // premiseTermU: resolve Left terms to (deepest prot subterm, var).
-        enum Unify { Term(LNTerm, LNTerm), Fact(LNFact) }
+        enum Unify {
+            Term(LNTerm, LNTerm),
+            Fact(LNFact),
+        }
         let mut premise_term_u: Vec<(usize, Unify, ExtendedPosition)> = Vec::new();
         for (ri, inr, pos) in input_rules {
             match inr {
                 InRule::Term(y) => {
                     let z = &pos.2;
-                    let Some(v_prime) = at_pos(&y, z) else { continue };
-                    let Some(prot_prime) = deepest_prot_subterm(&y, z) else { continue };
-                    if prot_prime == v_prime { continue; } // HS: skip when prot == var
+                    let Some(v_prime) = at_pos(&y, z) else {
+                        continue;
+                    };
+                    let Some(prot_prime) = deepest_prot_subterm(&y, z) else {
+                        continue;
+                    };
+                    if prot_prime == v_prime {
+                        continue;
+                    } // HS: skip when prot == var
                     premise_term_u.push((ri, Unify::Term(prot_prime, v_prime), pos));
                 }
                 InRule::Fact(f) => premise_term_u.push((ri, Unify::Fact(f), pos)),
@@ -324,35 +425,70 @@ pub fn add_auto_sources_lemma(
         }
 
         // filterFacts + matchingConclusions → inputsAndOutputs.
-        let has_subterm_case = premise_term_u.iter().any(|(_, u, _)| matches!(u, Unify::Term(..)));
+        let has_subterm_case = premise_term_u
+            .iter()
+            .any(|(_, u, _)| matches!(u, Unify::Term(..)));
         let mut matches: Vec<(usize, Matched, ExtendedPosition)> = Vec::new();
         for (ri, u, pos) in &premise_term_u {
             let rin_name = rules[*ri].name().to_string();
             match u {
                 Unify::Term(protterm, vin) => {
-                    if done.contains(&(rin_name.clone(), pos.clone())) { continue; }
+                    if done.contains(&(rin_name.clone(), pos.clone())) {
+                        continue;
+                    }
                     let mut outs: Vec<(usize, LNTerm)> = Vec::new();
                     for (rout_i, tout) in &all_out_concs {
-                        if rules[*rout_i].name() == rin_name { continue; }
+                        if rules[*rout_i].name() == rin_name {
+                            continue;
+                        }
                         let fout = rename_avoiding(tout.clone(), protterm);
-                        if maude.unifiable(&[Equal { lhs: protterm.clone(), rhs: fout }]).unwrap_or(false) {
+                        if maude
+                            .unifiable(&[Equal {
+                                lhs: protterm.clone(),
+                                rhs: fout,
+                            }])
+                            .unwrap_or(false)
+                        {
                             outs.push((*rout_i, tout.clone()));
                         }
                     }
-                    matches.push((*ri, Matched::Term { protterm: protterm.clone(), vin: vin.clone(), outs }, pos.clone()));
+                    matches.push((
+                        *ri,
+                        Matched::Term {
+                            protterm: protterm.clone(),
+                            vin: vin.clone(),
+                            outs,
+                        },
+                        pos.clone(),
+                    ));
                 }
                 Unify::Fact(fact) => {
-                    if done.contains(&(rin_name.clone(), pos.clone())) || has_subterm_case { continue; }
+                    if done.contains(&(rin_name.clone(), pos.clone())) || has_subterm_case {
+                        continue;
+                    }
                     let mut outs: Vec<(usize, LNFact)> = Vec::new();
                     for (rout_i, fout) in &all_out_concs_not_prot {
-                        if rules[*rout_i].name() == rin_name { continue; }
-                        if crate::fact::fact_tag_name(&fout.tag) != crate::fact::fact_tag_name(&fact.tag) { continue; }
+                        if rules[*rout_i].name() == rin_name {
+                            continue;
+                        }
+                        if crate::fact::fact_tag_name(&fout.tag)
+                            != crate::fact::fact_tag_name(&fact.tag)
+                        {
+                            continue;
+                        }
                         let unifout = rename_avoiding(fout.clone(), fact);
                         if crate::rule::unifiable_ln_facts(maude, fact, &unifout).unwrap_or(false) {
                             outs.push((*rout_i, fout.clone()));
                         }
                     }
-                    matches.push((*ri, Matched::Fact { fact: fact.clone(), outs }, pos.clone()));
+                    matches.push((
+                        *ri,
+                        Matched::Fact {
+                            fact: fact.clone(),
+                            outs,
+                        },
+                        pos.clone(),
+                    ));
                 }
             }
         }
@@ -388,18 +524,31 @@ pub fn add_auto_sources_lemma(
         for (ri, m, pos) in &matches {
             let rin_name = rules[*ri].name().to_string();
             match m {
-                Matched::Term { protterm, vin, outs } => {
+                Matched::Term {
+                    protterm,
+                    vin,
+                    outs,
+                } => {
                     let (in_name, out_name) = auto_names(m, pos, &rin_name);
-                    grp.push((rin_name.clone(), ln_proto(&in_name, vec![protterm.clone(), vin.clone()])));
+                    grp.push((
+                        rin_name.clone(),
+                        ln_proto(&in_name, vec![protterm.clone(), vin.clone()]),
+                    ));
                     for (rout_i, tout) in outs {
-                        grp.push((rules[*rout_i].name().to_string(), ln_proto(&out_name, vec![tout.clone()])));
+                        grp.push((
+                            rules[*rout_i].name().to_string(),
+                            ln_proto(&out_name, vec![tout.clone()]),
+                        ));
                     }
                 }
                 Matched::Fact { fact, outs } => {
                     let (in_name, out_name) = auto_names(m, pos, &rin_name);
                     grp.push((rin_name.clone(), ln_proto(&in_name, fact.terms.to_vec())));
                     for (rout_i, fout) in outs {
-                        grp.push((rules[*rout_i].name().to_string(), ln_proto(&out_name, fout.terms.to_vec())));
+                        grp.push((
+                            rules[*rout_i].name().to_string(),
+                            ln_proto(&out_name, fout.terms.to_vec()),
+                        ));
                     }
                 }
             }
@@ -408,7 +557,10 @@ pub fn add_auto_sources_lemma(
         annotation_groups.push(grp);
     }
 
-    AutoSourcesResult { annotation_groups, formula }
+    AutoSourcesResult {
+        annotation_groups,
+        formula,
+    }
 }
 
 /// Build the AUTO source lemma item (HS `unprovenLemma lemmaName [SourceLemma]
@@ -431,7 +583,9 @@ pub fn build_source_lemma(name: &str, formula: p::Formula) -> crate::theory::Lem
 /// Whether the theory already contains a lemma named `name`
 /// (HS `find lemma items`, OpenTheory.hs:138-538, see line 146).
 pub fn has_lemma_named(items: &[TheoryItem], name: &str) -> bool {
-    items.iter().any(|it| matches!(it, TheoryItem::Lemma(l) if l.name == name))
+    items
+        .iter()
+        .any(|it| matches!(it, TheoryItem::Lemma(l) if l.name == name))
 }
 
 /// Add an AUTO action to an open proto rule's AC form. HS adds to
@@ -508,7 +662,11 @@ pub fn apply_auto_sources(
     // GENERATION chains: the RAW (saturated, unrefined) sources — HS
     // `addAutoSourcesLemma` uses `crcRawSources` (RuleItem.hs:64-70, see line 66).
     let ctx_raw = ProofContext::new_with_restrictions_and_pool(
-        maude.clone(), pool.clone(), rules.clone(), restrictions.clone());
+        maude.clone(),
+        pool.clone(),
+        rules.clone(),
+        restrictions.clone(),
+    );
     let raw_chains = collect_chains(&ctx_raw);
 
     // TRIGGER: HS `containsPartialDeconstructions` checks the REFINED sources
@@ -519,7 +677,11 @@ pub fn apply_auto_sources(
     // context whose typing assumptions are those lemmas and check ITS chains.
     let typing_asms: Vec<crate::guarded::Guarded> = elaborated
         .lemmas()
-        .filter(|l| l.attributes.iter().any(|a| matches!(a, crate::theory::LemmaAttr::Sources)))
+        .filter(|l| {
+            l.attributes
+                .iter()
+                .any(|a| matches!(a, crate::theory::LemmaAttr::Sources))
+        })
         .filter_map(|l| formula_to_guarded(&l.formula).ok())
         .collect();
     let trigger = if typing_asms.is_empty() {
@@ -527,7 +689,11 @@ pub fn apply_auto_sources(
         !raw_chains.is_empty()
     } else {
         let mut ctx_ref = ProofContext::new_with_restrictions_and_pool(
-            maude.clone(), pool, rules.clone(), restrictions);
+            maude.clone(),
+            pool,
+            rules.clone(),
+            restrictions,
+        );
         ctx_ref.typing_assumptions = typing_asms;
         !collect_chains(&ctx_ref).is_empty()
     };
@@ -566,8 +732,16 @@ pub fn apply_auto_sources(
     // elaborated theory (so the prove loop proves it) and the parsed theory
     // (so it renders).
     if !has_lemma_named(&elaborated.items, "AUTO_typing") {
-        elaborated.items.push(TheoryItem::Lemma(build_source_lemma("AUTO_typing", result.formula.clone())));
-        parsed.items.push(p::TheoryItem::Lemma(build_parsed_source_lemma("AUTO_typing", result.formula)));
+        elaborated.items.push(TheoryItem::Lemma(build_source_lemma(
+            "AUTO_typing",
+            result.formula.clone(),
+        )));
+        parsed
+            .items
+            .push(p::TheoryItem::Lemma(build_parsed_source_lemma(
+                "AUTO_typing",
+                result.formula,
+            )));
     }
     true
 }

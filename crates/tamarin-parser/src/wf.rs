@@ -61,7 +61,10 @@ pub struct WfError {
 
 impl WfError {
     pub fn new(topic: impl Into<String>, message: impl Into<String>) -> Self {
-        WfError { topic: topic.into(), message: message.into() }
+        WfError {
+            topic: topic.into(),
+            message: message.into(),
+        }
     }
 }
 
@@ -288,8 +291,8 @@ pub fn check_if_lemmas_in_theory(lemma_names: &[String], thy: &Theory) -> WfRepo
     // `$-$` appends one more newline, so we get title\n====\n\n<body>.
     let mut msg = String::new();
     msg.push_str(&underline_topic(topic_str));
-    msg.push('\n');                   // blank line between header and body
-    msg.push_str("  ");              // nest 2
+    msg.push('\n'); // blank line between header and body
+    msg.push_str("  "); // nest 2
     msg.push_str(&body_line);
     msg.push('\n');
 
@@ -325,10 +328,13 @@ fn theory_rules(thy: &Theory) -> Vec<&Rule> {
 }
 
 fn theory_lemmas(thy: &Theory) -> Vec<&Lemma> {
-    thy.items.iter().filter_map(|it| match it {
-        TheoryItem::Lemma(l) => Some(l),
-        _ => None,
-    }).collect()
+    thy.items
+        .iter()
+        .filter_map(|it| match it {
+            TheoryItem::Lemma(l) => Some(l),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Iterate all facts in a rule (premises ∪ actions ∪ conclusions),
@@ -337,13 +343,23 @@ fn theory_lemmas(thy: &Theory) -> Vec<&Lemma> {
 // Intentionally retained: faithful HS port; no caller reads the tag yet.
 #[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum FactSide { Lhs, Acts, Rhs }
+enum FactSide {
+    Lhs,
+    Acts,
+    Rhs,
+}
 
 fn rule_facts(r: &Rule) -> Vec<(FactSide, &Fact)> {
     let mut out = Vec::new();
-    for f in &r.premises    { out.push((FactSide::Lhs, f)); }
-    for f in &r.actions     { out.push((FactSide::Acts, f)); }
-    for f in &r.conclusions { out.push((FactSide::Rhs, f)); }
+    for f in &r.premises {
+        out.push((FactSide::Lhs, f));
+    }
+    for f in &r.actions {
+        out.push((FactSide::Acts, f));
+    }
+    for f in &r.conclusions {
+        out.push((FactSide::Rhs, f));
+    }
     out
 }
 
@@ -351,44 +367,91 @@ fn rule_facts(r: &Rule) -> Vec<(FactSide, &Fact)> {
 fn term_vars(t: &Term, out: &mut Vec<VarSpec>) {
     match t {
         Term::Var(v) => out.push(v.clone()),
-        Term::App(_, args) => for a in args { term_vars(a, out); },
-        Term::AlgApp(_, a, b) => { term_vars(a, out); term_vars(b, out); }
-        Term::Pair(items) => for a in items { term_vars(a, out); },
-        Term::Diff(a, b) => { term_vars(a, out); term_vars(b, out); }
-        Term::BinOp(_, a, b) => { term_vars(a, out); term_vars(b, out); }
+        Term::App(_, args) => {
+            for a in args {
+                term_vars(a, out);
+            }
+        }
+        Term::AlgApp(_, a, b) => {
+            term_vars(a, out);
+            term_vars(b, out);
+        }
+        Term::Pair(items) => {
+            for a in items {
+                term_vars(a, out);
+            }
+        }
+        Term::Diff(a, b) => {
+            term_vars(a, out);
+            term_vars(b, out);
+        }
+        Term::BinOp(_, a, b) => {
+            term_vars(a, out);
+            term_vars(b, out);
+        }
         Term::PatMatch(inner) => term_vars(inner, out),
-        Term::PubLit(_) | Term::FreshLit(_) | Term::NatLit(_)
-        | Term::Number(_) | Term::NumberOne | Term::NatOne | Term::DhNeutral => {}
+        Term::PubLit(_)
+        | Term::FreshLit(_)
+        | Term::NatLit(_)
+        | Term::Number(_)
+        | Term::NumberOne
+        | Term::NatOne
+        | Term::DhNeutral => {}
     }
 }
 
 fn fact_vars(f: &Fact) -> Vec<VarSpec> {
     let mut v = Vec::new();
-    for a in &f.args { term_vars(a, &mut v); }
+    for a in &f.args {
+        term_vars(a, &mut v);
+    }
     v
 }
 
 /// Collect every public-name literal (`'foo'`) and fresh-name literal
 /// (`~'foo'`) within a term subtree.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum NameKind { Pub, Fresh }
+enum NameKind {
+    Pub,
+    Fresh,
+}
 
 fn term_name_lits(t: &Term, out: &mut Vec<(NameKind, String)>) {
     match t {
         Term::PubLit(s) => out.push((NameKind::Pub, s.clone())),
         Term::FreshLit(s) => out.push((NameKind::Fresh, s.clone())),
-        Term::App(_, args) => for a in args { term_name_lits(a, out); },
-        Term::AlgApp(_, a, b) => { term_name_lits(a, out); term_name_lits(b, out); }
-        Term::Pair(items) => for a in items { term_name_lits(a, out); },
-        Term::Diff(a, b) => { term_name_lits(a, out); term_name_lits(b, out); }
-        Term::BinOp(_, a, b) => { term_name_lits(a, out); term_name_lits(b, out); }
+        Term::App(_, args) => {
+            for a in args {
+                term_name_lits(a, out);
+            }
+        }
+        Term::AlgApp(_, a, b) => {
+            term_name_lits(a, out);
+            term_name_lits(b, out);
+        }
+        Term::Pair(items) => {
+            for a in items {
+                term_name_lits(a, out);
+            }
+        }
+        Term::Diff(a, b) => {
+            term_name_lits(a, out);
+            term_name_lits(b, out);
+        }
+        Term::BinOp(_, a, b) => {
+            term_name_lits(a, out);
+            term_name_lits(b, out);
+        }
         Term::PatMatch(inner) => term_name_lits(inner, out),
         _ => {}
     }
 }
 
 fn rule_terms(r: &Rule) -> impl Iterator<Item = &Term> {
-    r.premises.iter().chain(&r.actions).chain(&r.conclusions)
+    r.premises
+        .iter()
+        .chain(&r.actions)
+        .chain(&r.conclusions)
         .flat_map(|f: &Fact| f.args.iter())
 }
 
@@ -400,7 +463,9 @@ pub fn underline_topic(title: &str) -> String {
     let mut s = String::with_capacity(title.len() + len + 2);
     s.push_str(title);
     s.push('\n');
-    for _ in 0..len { s.push('='); }
+    for _ in 0..len {
+        s.push('=');
+    }
     s.push('\n');
     s
 }
@@ -435,11 +500,15 @@ fn numbered_index_width(count: usize) -> usize {
 /// for linear.  Internal spaces match `nestShort'`.
 fn pp_wf_fact(fa: &Fact) -> String {
     let mut s = String::new();
-    if fa.persistent { s.push('!'); }
+    if fa.persistent {
+        s.push('!');
+    }
     s.push_str(&fa.name);
     s.push_str("( ");
     for (i, a) in fa.args.iter().enumerate() {
-        if i > 0 { s.push_str(", "); }
+        if i > 0 {
+            s.push_str(", ");
+        }
         pp_wf_term(a, &mut s);
     }
     s.push_str(" )");
@@ -452,11 +521,26 @@ fn pp_wf_term(t: &Term, out: &mut String) {
         Var(v) => {
             out.push_str(sort_prefix(&v.sort));
             out.push_str(&v.name);
-            if v.idx > 0 { out.push('.'); out.push_str(&v.idx.to_string()); }
+            if v.idx > 0 {
+                out.push('.');
+                out.push_str(&v.idx.to_string());
+            }
         }
-        PubLit(s) => { out.push('\''); out.push_str(s); out.push('\''); }
-        FreshLit(s) => { out.push_str("~'"); out.push_str(s); out.push('\''); }
-        NatLit(s) => { out.push_str("%'"); out.push_str(s); out.push('\''); }
+        PubLit(s) => {
+            out.push('\'');
+            out.push_str(s);
+            out.push('\'');
+        }
+        FreshLit(s) => {
+            out.push_str("~'");
+            out.push_str(s);
+            out.push('\'');
+        }
+        NatLit(s) => {
+            out.push_str("%'");
+            out.push_str(s);
+            out.push('\'');
+        }
         Number(n) => out.push_str(&n.to_string()),
         // HS `prettyTerm` renders the nullary builtins via `text (BC.unpack f)`
         // except natOneSym ("%1"): oneSym → "one", dhNeutralSym → "DH_neutral"
@@ -467,7 +551,9 @@ fn pp_wf_term(t: &Term, out: &mut String) {
         Pair(items) => {
             out.push('<');
             for (i, it) in items.iter().enumerate() {
-                if i > 0 { out.push_str(", "); }
+                if i > 0 {
+                    out.push_str(", ");
+                }
                 pp_wf_term(it, out);
             }
             out.push('>');
@@ -477,7 +563,9 @@ fn pp_wf_term(t: &Term, out: &mut String) {
             if !args.is_empty() {
                 out.push('(');
                 for (i, a) in args.iter().enumerate() {
-                    if i > 0 { out.push_str(", "); }
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
                     pp_wf_term(a, out);
                 }
                 out.push(')');
@@ -518,7 +606,9 @@ fn pp_wf_term(t: &Term, out: &mut String) {
                 flat.sort_by(|a, b| cmp_wf_term(a, b));
                 out.push('(');
                 for (i, a) in flat.iter().enumerate() {
-                    if i > 0 { out.push_str(sym); }
+                    if i > 0 {
+                        out.push_str(sym);
+                    }
                     pp_wf_term(a, out);
                 }
                 out.push(')');
@@ -528,7 +618,10 @@ fn pp_wf_term(t: &Term, out: &mut String) {
                 pp_wf_term(r, out);
             }
         }
-        PatMatch(inner) => { out.push('='); pp_wf_term(inner, out); }
+        PatMatch(inner) => {
+            out.push('=');
+            pp_wf_term(inner, out);
+        }
     }
 }
 
@@ -546,9 +639,15 @@ fn rule_facts_with_lets(r: &Rule) -> (Vec<Fact>, Vec<Fact>, Vec<Fact>) {
     let mut acts = r.actions.clone();
     let mut concs = r.conclusions.clone();
     for b in r.let_block.iter().rev() {
-        for f in prems.iter_mut() { subst_let_fact(f, &b.var, &b.value); }
-        for f in acts.iter_mut()  { subst_let_fact(f, &b.var, &b.value); }
-        for f in concs.iter_mut() { subst_let_fact(f, &b.var, &b.value); }
+        for f in prems.iter_mut() {
+            subst_let_fact(f, &b.var, &b.value);
+        }
+        for f in acts.iter_mut() {
+            subst_let_fact(f, &b.var, &b.value);
+        }
+        for f in concs.iter_mut() {
+            subst_let_fact(f, &b.var, &b.value);
+        }
     }
     (prems, acts, concs)
 }
@@ -560,26 +659,33 @@ fn subst_let_fact(f: &mut Fact, key: &Term, val: &Term) {
 }
 
 fn subst_let_term(t: &Term, key: &Term, val: &Term) -> Term {
-    if t == key { return val.clone(); }
+    if t == key {
+        return val.clone();
+    }
     use Term::*;
     match t {
-        App(name, args) =>
-            App(name.clone(), args.iter().map(|a| subst_let_term(a, key, val)).collect()),
-        AlgApp(name, a, b) =>
-            AlgApp(name.clone(),
-                Box::new(subst_let_term(a, key, val)),
-                Box::new(subst_let_term(b, key, val))),
-        Pair(args) =>
-            Pair(args.iter().map(|a| subst_let_term(a, key, val)).collect()),
-        Diff(a, b) =>
-            Diff(Box::new(subst_let_term(a, key, val)),
-                 Box::new(subst_let_term(b, key, val))),
-        BinOp(op, a, b) =>
-            BinOp(*op, Box::new(subst_let_term(a, key, val)),
-                       Box::new(subst_let_term(b, key, val))),
+        App(name, args) => App(
+            name.clone(),
+            args.iter().map(|a| subst_let_term(a, key, val)).collect(),
+        ),
+        AlgApp(name, a, b) => AlgApp(
+            name.clone(),
+            Box::new(subst_let_term(a, key, val)),
+            Box::new(subst_let_term(b, key, val)),
+        ),
+        Pair(args) => Pair(args.iter().map(|a| subst_let_term(a, key, val)).collect()),
+        Diff(a, b) => Diff(
+            Box::new(subst_let_term(a, key, val)),
+            Box::new(subst_let_term(b, key, val)),
+        ),
+        BinOp(op, a, b) => BinOp(
+            *op,
+            Box::new(subst_let_term(a, key, val)),
+            Box::new(subst_let_term(b, key, val)),
+        ),
         PatMatch(a) => PatMatch(Box::new(subst_let_term(a, key, val))),
-        Var(_) | PubLit(_) | FreshLit(_) | NatLit(_) | Number(_)
-        | NumberOne | NatOne | DhNeutral => t.clone(),
+        Var(_) | PubLit(_) | FreshLit(_) | NatLit(_) | Number(_) | NumberOne | NatOne
+        | DhNeutral => t.clone(),
     }
 }
 
@@ -628,8 +734,12 @@ fn cmp_wf_term(a: &Term, b: &Term) -> std::cmp::Ordering {
     }
     let (ca, sa) = class(a);
     let (cb, sb) = class(b);
-    if ca != cb { return ca.cmp(&cb); }
-    if sa != sb { return sa.cmp(&sb); }
+    if ca != cb {
+        return ca.cmp(&cb);
+    }
+    if sa != sb {
+        return sa.cmp(&sb);
+    }
     use Term::*;
     // `class` maps every variant to a unique `(class, subclass)`, so the two
     // early returns above guarantee `a` and `b` are the same variant and each
@@ -638,26 +748,37 @@ fn cmp_wf_term(a: &Term, b: &Term) -> std::cmp::Ordering {
     // nullary FAPP builtins carry no payload, so same-variant pairs are `Equal`.
     match a {
         Var(v1) => {
-            let Var(v2) = b else { unreachable!("term class matched Var") };
+            let Var(v2) = b else {
+                unreachable!("term class matched Var")
+            };
             // HS Ord LVar = (idx, sort, name) (LTerm.hs:521-523).
-            v1.idx.cmp(&v2.idx)
+            v1.idx
+                .cmp(&v2.idx)
                 .then_with(|| sort_tag(&v1.sort).cmp(&sort_tag(&v2.sort)))
                 .then_with(|| v1.name.cmp(&v2.name))
         }
         PubLit(s1) => {
-            let PubLit(s2) = b else { unreachable!("term class matched PubLit") };
+            let PubLit(s2) = b else {
+                unreachable!("term class matched PubLit")
+            };
             s1.cmp(s2)
         }
         FreshLit(s1) => {
-            let FreshLit(s2) = b else { unreachable!("term class matched FreshLit") };
+            let FreshLit(s2) = b else {
+                unreachable!("term class matched FreshLit")
+            };
             s1.cmp(s2)
         }
         NatLit(s1) => {
-            let NatLit(s2) = b else { unreachable!("term class matched NatLit") };
+            let NatLit(s2) = b else {
+                unreachable!("term class matched NatLit")
+            };
             s1.cmp(s2)
         }
         Number(n1) => {
-            let Number(n2) = b else { unreachable!("term class matched Number") };
+            let Number(n2) = b else {
+                unreachable!("term class matched Number")
+            };
             n1.cmp(n2)
         }
         NumberOne => std::cmp::Ordering::Equal,
@@ -672,31 +793,44 @@ fn cmp_wf_term(a: &Term, b: &Term) -> std::cmp::Ordering {
         // gives a total order on the AC operand lists that arise, rather than
         // tying distinct complex operands as Equal.
         App(n1, a1) => {
-            let App(n2, a2) = b else { unreachable!("term class matched App") };
+            let App(n2, a2) = b else {
+                unreachable!("term class matched App")
+            };
             n1.cmp(n2).then_with(|| cmp_term_slices(a1, a2))
         }
         AlgApp(n1, l1, r1) => {
-            let AlgApp(n2, l2, r2) = b else { unreachable!("term class matched AlgApp") };
+            let AlgApp(n2, l2, r2) = b else {
+                unreachable!("term class matched AlgApp")
+            };
             n1.cmp(n2)
                 .then_with(|| cmp_wf_term(l1, l2))
                 .then_with(|| cmp_wf_term(r1, r2))
         }
         Pair(a1) => {
-            let Pair(a2) = b else { unreachable!("term class matched Pair") };
+            let Pair(a2) = b else {
+                unreachable!("term class matched Pair")
+            };
             cmp_term_slices(a1, a2)
         }
         Diff(l1, r1) => {
-            let Diff(l2, r2) = b else { unreachable!("term class matched Diff") };
+            let Diff(l2, r2) = b else {
+                unreachable!("term class matched Diff")
+            };
             cmp_wf_term(l1, l2).then_with(|| cmp_wf_term(r1, r2))
         }
         BinOp(o1, l1, r1) => {
-            let BinOp(o2, l2, r2) = b else { unreachable!("term class matched BinOp") };
-            (*o1 as u8).cmp(&(*o2 as u8))
+            let BinOp(o2, l2, r2) = b else {
+                unreachable!("term class matched BinOp")
+            };
+            (*o1 as u8)
+                .cmp(&(*o2 as u8))
                 .then_with(|| cmp_wf_term(l1, l2))
                 .then_with(|| cmp_wf_term(r1, r2))
         }
         PatMatch(i1) => {
-            let PatMatch(i2) = b else { unreachable!("term class matched PatMatch") };
+            let PatMatch(i2) = b else {
+                unreachable!("term class matched PatMatch")
+            };
             cmp_wf_term(i1, i2)
         }
     }
@@ -708,7 +842,9 @@ fn cmp_wf_term(a: &Term, b: &Term) -> std::cmp::Ordering {
 fn cmp_term_slices(a: &[Term], b: &[Term]) -> std::cmp::Ordering {
     for (x, y) in a.iter().zip(b.iter()) {
         let o = cmp_wf_term(x, y);
-        if o != std::cmp::Ordering::Equal { return o; }
+        if o != std::cmp::Ordering::Equal {
+            return o;
+        }
     }
     a.len().cmp(&b.len())
 }
@@ -741,14 +877,14 @@ fn sort_prefix(s: &SortHint) -> &'static str {
 
 /// True if a sort hint indicates a fresh-sort variable.
 fn is_fresh_sort(s: &SortHint) -> bool {
-    matches!(s,
-        SortHint::Fresh
-        | SortHint::Suffix(SuffixSort::Fresh))
+    matches!(s, SortHint::Fresh | SortHint::Suffix(SuffixSort::Fresh))
 }
 
 fn is_msg_sort_or_untagged(s: &SortHint) -> bool {
-    matches!(s, SortHint::Msg | SortHint::Untagged
-        | SortHint::Suffix(SuffixSort::Msg))
+    matches!(
+        s,
+        SortHint::Msg | SortHint::Untagged | SortHint::Suffix(SuffixSort::Msg)
+    )
 }
 
 fn is_pub_sort(s: &SortHint) -> bool {
@@ -769,7 +905,10 @@ const RESERVED_FACT_NAMES: &[&str] = &["fr", "ku", "kd", "out", "in"];
 /// allowed when used in their semantic position (e.g. `Fr(~k)` in a
 /// premise) but not as user-defined protocol facts elsewhere.
 fn is_builtin_fact_name(name: &str) -> bool {
-    matches!(name, "Fr" | "In" | "Out" | "K" | "KU" | "KD" | "Ded" | "Term")
+    matches!(
+        name,
+        "Fr" | "In" | "Out" | "K" | "KU" | "KD" | "Ded" | "Term"
+    )
 }
 
 pub fn reserved_report(thy: &Theory) -> WfReport {
@@ -777,12 +916,18 @@ pub fn reserved_report(thy: &Theory) -> WfReport {
     for r in theory_rules(thy) {
         for (_, f) in rule_facts(r) {
             // Only protocol facts (non-builtin) trigger this check.
-            if is_builtin_fact_name(&f.name) { continue; }
+            if is_builtin_fact_name(&f.name) {
+                continue;
+            }
             let lower = f.name.to_lowercase();
             if RESERVED_FACT_NAMES.contains(&lower.as_str()) {
-                out.push(WfError::new("Reserved names",
-                    format!("Rule '{}' contains a fact with reserved name `{}`",
-                        r.name, f.name)));
+                out.push(WfError::new(
+                    "Reserved names",
+                    format!(
+                        "Rule '{}' contains a fact with reserved name `{}`",
+                        r.name, f.name
+                    ),
+                ));
             }
         }
     }
@@ -808,14 +953,19 @@ pub fn reserved_fact_name_rules(thy: &Theory) -> WfReport {
         // HS checks the let-substituted `ProtoRuleE`, so the emitted facts
         // carry their fully-inlined terms (Term/Term/Raw.hs fAppAC order).
         let (prems, acts, concs) = rule_facts_with_lets(r);
-        let bad_lhs: Vec<&Fact> = prems.iter()
+        let bad_lhs: Vec<&Fact> = prems
+            .iter()
             .filter(|f| KLOG_NAMES.contains(&f.name.as_str()))
             .collect();
-        let bad_acts: Vec<&Fact> = acts.iter()
-            .filter(|f| KLOG_NAMES.contains(&f.name.as_str())
-                || matches!(f.name.as_str(), "In" | "Out" | "Fr"))
+        let bad_acts: Vec<&Fact> = acts
+            .iter()
+            .filter(|f| {
+                KLOG_NAMES.contains(&f.name.as_str())
+                    || matches!(f.name.as_str(), "In" | "Out" | "Fr")
+            })
             .collect();
-        let bad_rhs: Vec<&Fact> = concs.iter()
+        let bad_rhs: Vec<&Fact> = concs
+            .iter()
             .filter(|f| KLOG_NAMES.contains(&f.name.as_str()))
             .collect();
         for (msg, fs) in [
@@ -832,8 +982,7 @@ pub fn reserved_fact_name_rules(thy: &Theory) -> WfReport {
                 // grouped/nested by `prettyWfErrorReport` (text topic $-$
                 // nest 2 body): the rule line gets 2-space indent, the fact
                 // line 4-space (2 from ppTopic + 2 from the inner nest 2).
-                let facts: Vec<String> =
-                    fs.iter().map(|f| pp_wf_fact(f)).collect();
+                let facts: Vec<String> = fs.iter().map(|f| pp_wf_fact(f)).collect();
                 // Headerless body (no trailing newline); `format_wf_block`
                 // emits the single "Reserved names" header for the group and
                 // joins per-rule/side bodies with the 2-space blank separator.
@@ -874,14 +1023,20 @@ pub fn reserved_prefix_report(thy: &Theory) -> WfReport {
     // `quote` form for the rule name.  topic "Reserved prefixes" matches HS
     // `underlineTopic`.
     let mut out = Vec::new();
-    if !thy.is_diff { return out; }
+    if !thy.is_diff {
+        return out;
+    }
     for r in theory_rules(thy) {
         for (_, f) in rule_facts(r) {
             let lower = f.name.to_lowercase();
             if lower.starts_with("diffintr") || lower.starts_with("diffproto") {
-                out.push(WfError::new("Reserved prefixes",
-                    format!("Rule `{}' contains a fact with reserved prefix: {}",
-                        r.name, f.name)));
+                out.push(WfError::new(
+                    "Reserved prefixes",
+                    format!(
+                        "Rule `{}' contains a fact with reserved prefix: {}",
+                        r.name, f.name
+                    ),
+                ));
             }
         }
     }
@@ -900,10 +1055,9 @@ pub fn special_facts_usage(thy: &Theory) -> WfReport {
         // carry their fully-inlined `let` terms — mirror the reserved-names
         // sibling and use the let-substituted facts.
         let (prems, _acts, concs) = rule_facts_with_lets(r);
-        let lhs_bad: Vec<&Fact> = prems.iter()
-            .filter(|f| f.name == "Out")
-            .collect();
-        let rhs_bad: Vec<&Fact> = concs.iter()
+        let lhs_bad: Vec<&Fact> = prems.iter().filter(|f| f.name == "Out").collect();
+        let rhs_bad: Vec<&Fact> = concs
+            .iter()
             .filter(|f| f.name == "Fr" || f.name == "In")
             .collect();
         for (msg, fs) in [
@@ -918,8 +1072,7 @@ pub fn special_facts_usage(thy: &Theory) -> WfReport {
                 // grouped/nested by `prettyWfErrorReport` exactly like the
                 // "Reserved names" sibling.  Note HS uses lowercase `"rule "`
                 // here (vs capital `"Rule "` for reserved names).
-                let facts: Vec<String> =
-                    fs.iter().map(|f| pp_wf_fact(f)).collect();
+                let facts: Vec<String> = fs.iter().map(|f| pp_wf_fact(f)).collect();
                 // Headerless body (no trailing newline); `format_wf_block`
                 // emits the single "Special facts" header for the group and
                 // joins per-rule/side bodies with the 2-space blank separator.
@@ -966,8 +1119,12 @@ pub fn fresh_fact_arguments(thy: &Theory) -> WfReport {
     let mut out = Vec::new();
     for r in theory_rules(thy) {
         for f in &r.premises {
-            if f.name != "Fr" { continue; }
-            if f.args.len() != 1 { continue; }
+            if f.name != "Fr" {
+                continue;
+            }
+            if f.args.len() != 1 {
+                continue;
+            }
             let arg = &f.args[0];
             // The argument must be a single variable of fresh- or
             // message-sort. Anything else (constants, function
@@ -1018,7 +1175,9 @@ fn collect_fact_observations(thy: &Theory) -> Vec<FactObservation> {
             // included in the capitalization/arity/multiplicity clash grouping.
             // We exclude only the genuine special tags (Fr/In/Out/KU/KD/Ded/Term)
             // via `is_proto_fact_name`, matching the sibling check.
-            if !is_proto_fact_name(&f.name) { continue; }
+            if !is_proto_fact_name(&f.name) {
+                continue;
+            }
             out.push(FactObservation {
                 origin: format!("Rule `{}'", r.name),
                 name: f.name.clone(),
@@ -1069,21 +1228,28 @@ fn collect_formula_facts<'a>(
 ) {
     match f {
         Formula::Atom(Atom::Action(fa, _)) => {
-            let terms = fa.args.iter().map(|t| show_debruijn_term(t, binders)).collect();
+            let terms = fa
+                .args
+                .iter()
+                .map(|t| show_debruijn_term(t, binders))
+                .collect();
             out.push((fa.clone(), terms));
         }
         Formula::Atom(_) | Formula::True | Formula::False => {}
         Formula::Not(a) => collect_formula_facts(a, binders, out),
-        Formula::And(a, b) | Formula::Or(a, b)
-        | Formula::Implies(a, b) | Formula::Iff(a, b) => {
+        Formula::And(a, b) | Formula::Or(a, b) | Formula::Implies(a, b) | Formula::Iff(a, b) => {
             collect_formula_facts(a, binders, out);
             collect_formula_facts(b, binders, out);
         }
         Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
             let n = vars.len();
-            for v in vars { binders.push(v); }
+            for v in vars {
+                binders.push(v);
+            }
             collect_formula_facts(body, binders, out);
-            for _ in 0..n { binders.pop(); }
+            for _ in 0..n {
+                binders.pop();
+            }
         }
     }
 }
@@ -1096,8 +1262,7 @@ fn show_debruijn_term(t: &Term, binders: &[&VarSpec]) -> String {
         Term::Var(v) => {
             // Nearest (innermost) matching binder → Bound n; else Free.
             for (pos, b) in binders.iter().enumerate().rev() {
-                if b.name == v.name && sort_tag(&b.sort) == sort_tag(&v.sort)
-                    && b.idx == v.idx {
+                if b.name == v.name && sort_tag(&b.sort) == sort_tag(&v.sort) && b.idx == v.idx {
                     return format!("Bound {}", binders.len() - 1 - pos);
                 }
             }
@@ -1107,22 +1272,39 @@ fn show_debruijn_term(t: &Term, binders: &[&VarSpec]) -> String {
         Term::FreshLit(s) => format!("~'{}'", s),
         Term::NatLit(s) => format!("%'{}'", s),
         Term::App(name, args) if args.is_empty() => name.clone(),
-        Term::App(name, args) => format!("{}({})", name,
-            args.iter().map(|a| show_debruijn_term(a, binders))
-                .collect::<Vec<_>>().join(",")),
-        Term::Pair(items) => format!("pair({})",
-            items.iter().map(|a| show_debruijn_term(a, binders))
-                .collect::<Vec<_>>().join(",")),
+        Term::App(name, args) => format!(
+            "{}({})",
+            name,
+            args.iter()
+                .map(|a| show_debruijn_term(a, binders))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Term::Pair(items) => format!(
+            "pair({})",
+            items
+                .iter()
+                .map(|a| show_debruijn_term(a, binders))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
         // Remaining `FApp` forms in HS `show` (Term/Raw.hs:219-227):
         // `FApp (NoEq (s,_)) as -> s ++ "(" ++ intercalate "," (map show as) ++ ")"`
         // and `FApp (AC o) as -> show o ++ "(" ++ ... ++ ")"` (show ACSym is the
         // derived constructor name "Mult"/"Union"/"Xor"/"NatPlus").  Nullary
         // builtins show via their symbol string.  Rendered explicitly here
         // rather than via Rust's derived Debug.
-        Term::AlgApp(name, a, b) => format!("{}({},{})", name,
-            show_debruijn_term(a, binders), show_debruijn_term(b, binders)),
-        Term::Diff(a, b) => format!("diff({},{})",
-            show_debruijn_term(a, binders), show_debruijn_term(b, binders)),
+        Term::AlgApp(name, a, b) => format!(
+            "{}({},{})",
+            name,
+            show_debruijn_term(a, binders),
+            show_debruijn_term(b, binders)
+        ),
+        Term::Diff(a, b) => format!(
+            "diff({},{})",
+            show_debruijn_term(a, binders),
+            show_debruijn_term(b, binders)
+        ),
         Term::BinOp(op, a, b) => {
             use crate::ast::BinOp as B;
             let head = match op {
@@ -1132,8 +1314,12 @@ fn show_debruijn_term(t: &Term, binders: &[&VarSpec]) -> String {
                 B::Xor => "Xor",
                 B::NatPlus => "NatPlus",
             };
-            format!("{}({},{})", head,
-                show_debruijn_term(a, binders), show_debruijn_term(b, binders))
+            format!(
+                "{}({},{})",
+                head,
+                show_debruijn_term(a, binders),
+                show_debruijn_term(b, binders)
+            )
         }
         Term::PatMatch(inner) => show_debruijn_term(inner, binders),
         Term::Number(n) => n.to_string(),
@@ -1147,10 +1333,18 @@ fn show_debruijn_term(t: &Term, binders: &[&VarSpec]) -> String {
 /// `Fact {factTag = ProtoFact <Mult> "<name>" <arity>, factAnnotations =
 /// fromList [], factTerms = [<terms>]}`.
 fn show_debruijn_fact(fa: &Fact, dbterms: &[String]) -> String {
-    let mult = if fa.persistent { "Persistent" } else { "Linear" };
+    let mult = if fa.persistent {
+        "Persistent"
+    } else {
+        "Linear"
+    };
     format!(
         "Fact {{factTag = ProtoFact {} {:?} {}, factAnnotations = fromList [], factTerms = [{}]}}",
-        mult, fa.name, fa.args.len(), dbterms.join(","))
+        mult,
+        fa.name,
+        fa.args.len(),
+        dbterms.join(",")
+    )
 }
 
 pub fn fact_usage(thy: &Theory) -> WfReport {
@@ -1170,9 +1364,15 @@ pub fn fact_usage(thy: &Theory) -> WfReport {
         let cap_set: BTreeSet<&str> = group.iter().map(|o| o.name.as_str()).collect();
         let arity_set: BTreeSet<usize> = group.iter().map(|o| o.arity).collect();
         let mult_set: BTreeSet<bool> = group.iter().map(|o| o.persistent).collect();
-        if cap_set.len() > 1 { cap_groups.push(group); }
-        if arity_set.len() > 1 { arity_groups.push(group); }
-        if mult_set.len() > 1 { mult_groups.push(group); }
+        if cap_set.len() > 1 {
+            cap_groups.push(group);
+        }
+        if arity_set.len() > 1 {
+            arity_groups.push(group);
+        }
+        if mult_set.len() > 1 {
+            mult_groups.push(group);
+        }
     }
 
     if !cap_groups.is_empty() {
@@ -1205,8 +1405,12 @@ pub fn fact_usage(thy: &Theory) -> WfReport {
             "Fact multiplicity issues",
             msg,
             &mult_groups,
-            |o| format!("multiplicity (persistence) {}",
-                if o.persistent { "Persistent" } else { "Linear" }),
+            |o| {
+                format!(
+                    "multiplicity (persistence) {}",
+                    if o.persistent { "Persistent" } else { "Linear" }
+                )
+            },
         ));
     }
     out
@@ -1222,27 +1426,30 @@ fn format_fact_clash_block<F>(
     groups: &[&Vec<&FactObservation>],
     detail: F,
 ) -> WfError
-where F: Fn(&FactObservation) -> String,
+where
+    F: Fn(&FactObservation) -> String,
 {
     let mut s = String::new();
     s.push_str(&underline_topic(title));
     s.push('\n');
     s.push_str(intro);
     s.push('\n');
-    s.push_str("  \n");  // trailing 2-space line from HS `text ""`
-    // HS body = `text "\n" $-$ vcat (map formatCapIssue groups)`: the leading
-    // blank line (`text "\n"`) appears ONCE before the first group; each group
-    // ends with its own trailing `  \n` (from `$-$ text ""`), which is the only
-    // separator between groups.  So push the leading blank only for group 0.
+    s.push_str("  \n"); // trailing 2-space line from HS `text ""`
+                        // HS body = `text "\n" $-$ vcat (map formatCapIssue groups)`: the leading
+                        // blank line (`text "\n"`) appears ONCE before the first group; each group
+                        // ends with its own trailing `  \n` (from `$-$ text ""`), which is the only
+                        // separator between groups.  So push the leading blank only for group 0.
     for (gi, group) in groups.iter().enumerate() {
-        if gi == 0 { s.push('\n'); }
+        if gi == 0 {
+            s.push('\n');
+        }
         let name = group[0].name.to_lowercase();
         s.push_str(&format!("  Fact `{}':\n", name));
         s.push('\n');
         let w = numbered_index_width(group.len());
         for (i, obs) in group.iter().enumerate() {
             if i > 0 {
-                s.push_str("    \n");  // 4-space trailing line
+                s.push_str("    \n"); // 4-space trailing line
             }
             s.push_str(&format!(
                 "    {:>w$}. {}, {}\n",
@@ -1258,7 +1465,7 @@ where F: Fn(&FactObservation) -> String,
             // (Probed: width 1 => 9 spaces, width 2 => 10 spaces.)
             s.push_str(&format!("{}{}\n", " ".repeat(8 + w), obs.pp));
         }
-        s.push_str("  \n");  // 2-space trailing line after the group
+        s.push_str("  \n"); // 2-space trailing line after the group
     }
     WfError::new(title, s)
 }
@@ -1309,11 +1516,14 @@ pub fn fact_lhs_occur_no_rhs(thy: &Theory) -> WfReport {
     let mut rhs: Vec<(String, Fact)> = Vec::new();
     for r in theory_rules(thy) {
         for f in &r.conclusions {
-            if !is_proto_fact_name(&f.name) { continue; }
+            if !is_proto_fact_name(&f.name) {
+                continue;
+            }
             rhs.push((r.name.clone(), f.clone()));
         }
     }
-    let rhs_info: BTreeSet<(String, usize, bool)> = rhs.iter()
+    let rhs_info: BTreeSet<(String, usize, bool)> = rhs
+        .iter()
         .map(|(_, f)| (f.name.clone(), f.args.len(), f.persistent))
         .collect();
 
@@ -1321,14 +1531,17 @@ pub fn fact_lhs_occur_no_rhs(thy: &Theory) -> WfReport {
     let mut orphan_pairs: Vec<(String, Fact, Option<(String, Fact)>)> = Vec::new();
     for r in theory_rules(thy) {
         for f in &r.premises {
-            if !is_proto_fact_name(&f.name) { continue; }
+            if !is_proto_fact_name(&f.name) {
+                continue;
+            }
             // HS `removeSame`: drop if the full factInfo occurs in some RHS.
             if rhs_info.contains(&(f.name.clone(), f.args.len(), f.persistent)) {
                 continue;
             }
             // HS `minimalEdFact`: the RHS fact with minimum name edit distance
             // (first in RHS order on ties); `isSimilar` keeps it only if <= 3.
-            let suggestion = rhs.iter()
+            let suggestion = rhs
+                .iter()
                 .map(|(rn, rf)| (edit_distance(&f.name, &rf.name), rn, rf))
                 .min_by_key(|(d, _, _)| *d)
                 .filter(|(d, _, _)| *d <= 3)
@@ -1337,7 +1550,9 @@ pub fn fact_lhs_occur_no_rhs(thy: &Theory) -> WfReport {
         }
     }
 
-    if orphan_pairs.is_empty() { return Vec::new(); }
+    if orphan_pairs.is_empty() {
+        return Vec::new();
+    }
 
     let mut s = String::new();
     s.push_str(&underline_topic(title));
@@ -1355,7 +1570,11 @@ pub fn fact_lhs_occur_no_rhs(thy: &Theory) -> WfReport {
             rule_name,
             fa.name,
             fa.args.len(),
-            if fa.persistent { "Persistent" } else { "Linear" },
+            if fa.persistent {
+                "Persistent"
+            } else {
+                "Linear"
+            },
         );
         let line = match suggestion {
             Some((sug_rule, sug_fa)) => format!(
@@ -1409,17 +1628,24 @@ pub fn fresh_names_report(thy: &Theory) -> WfReport {
         }
         // HS `show (Name FreshName n) = "~'" ++ n ++ "'"` for each fresh name,
         // joined by `punctuate comma` (`, `) under the `fsep`.
-        let fresh_lits: Vec<String> = names.iter()
-            .filter_map(|(k, n)| if *k == NameKind::Fresh {
-                Some(format!("~'{}'", n))
-            } else { None })
+        let fresh_lits: Vec<String> = names
+            .iter()
+            .filter_map(|(k, n)| {
+                if *k == NameKind::Fresh {
+                    Some(format!("~'{}'", n))
+                } else {
+                    None
+                }
+            })
             .collect();
         if !fresh_lits.is_empty() {
             // Body only, 2-space `nest 2` indent baked in; HS `quote` form for
             // the rule name (backtick + apostrophe).
             bodies.push(format!(
                 "  rule `{}': fresh public constants are not allowed: {}",
-                r.name, fresh_lits.join(", ")));
+                r.name,
+                fresh_lits.join(", ")
+            ));
         }
     }
     grouped_topic_block(topic, bodies)
@@ -1447,10 +1673,14 @@ pub fn public_names_report(thy: &Theory) -> WfReport {
         let (prems, acts, concs) = rule_facts_with_lets(r);
         let mut names = Vec::new();
         for f in prems.iter().chain(&acts).chain(&concs) {
-            for t in &f.args { term_name_lits(t, &mut names); }
+            for t in &f.args {
+                term_name_lits(t, &mut names);
+            }
         }
         for (k, n) in names {
-            if k == NameKind::Pub { pairs.push((r.name.clone(), n)); }
+            if k == NameKind::Pub {
+                pairs.push((r.name.clone(), n));
+            }
         }
     }
     public_names_report_from_pairs(pairs)
@@ -1465,13 +1695,15 @@ pub fn public_names_report(thy: &Theory) -> WfReport {
 /// arrive in rule order (matching HS `thyProtoRules`), first-occurrence-wins:
 /// `clashesOn` keeps the earliest `(rule, name)` per distinct public name.
 pub fn public_names_report_from_pairs(pairs: Vec<(String, String)>) -> WfReport {
-    if pairs.is_empty() { return Vec::new(); }
+    if pairs.is_empty() {
+        return Vec::new();
+    }
     // HS `show` of a (public) Name constant is the quoted form `'name'`.
     let shw = |n: &str| format!("'{}'", n);
     let f = |p: &(String, String)| shw(&p.1).to_lowercase(); // lowerCase.show.snd
-    let g = |p: &(String, String)| shw(&p.1);                 // show.snd
-    // clashesOn f g: stable-sort by f, group consecutive by f, each group
-    // sortednubOn g; keep groups with >= 2 distinct g.
+    let g = |p: &(String, String)| shw(&p.1); // show.snd
+                                              // clashesOn f g: stable-sort by f, group consecutive by f, each group
+                                              // sortednubOn g; keep groups with >= 2 distinct g.
     let mut sorted: Vec<(String, String)> = pairs;
     sorted.sort_by_key(|a| f(a));
     let mut clashes: Vec<Vec<(String, String)>> = Vec::new();
@@ -1479,40 +1711,52 @@ pub fn public_names_report_from_pairs(pairs: Vec<(String, String)>) -> WfReport 
     while i < sorted.len() {
         let key = f(&sorted[i]);
         let mut j = i + 1;
-        while j < sorted.len() && f(&sorted[j]) == key { j += 1; }
+        while j < sorted.len() && f(&sorted[j]) == key {
+            j += 1;
+        }
         let mut grp: Vec<(String, String)> = sorted[i..j].to_vec();
         grp.sort_by_key(|a| g(a));
         grp.dedup_by(|a, b| g(a) == g(b));
-        if grp.len() >= 2 { clashes.push(grp); }
+        if grp.len() >= 2 {
+            clashes.push(grp);
+        }
         i = j;
     }
-    if clashes.is_empty() { return Vec::new(); }
+    if clashes.is_empty() {
+        return Vec::new();
+    }
     let topic = "Public constants with mismatching capitalization";
     let mut s = String::new();
     s.push_str(&underline_topic(topic));
     s.push('\n');
-    s.push_str("Identifiers are case-sensitive, mismatched capitalizations \
+    s.push_str(
+        "Identifiers are case-sensitive, mismatched capitalizations \
         are considered as different, i.e., 'ID' is different from 'id'. \
-        Check the capitalization of your identifiers.\n");
+        Check the capitalization of your identifiers.\n",
+    );
     s.push('\n');
     let w = numbered_index_width(clashes.len());
-    let items: Vec<String> = clashes.iter().enumerate().map(|(k, grp)| {
-        // groupOn fst: list each rule's names together.
-        let mut parts: Vec<String> = Vec::new();
-        let mut m = 0;
-        while m < grp.len() {
-            let rule = &grp[m].0;
-            let mut names = vec![shw(&grp[m].1)];
-            let mut n2 = m + 1;
-            while n2 < grp.len() && &grp[n2].0 == rule {
-                names.push(shw(&grp[n2].1));
-                n2 += 1;
+    let items: Vec<String> = clashes
+        .iter()
+        .enumerate()
+        .map(|(k, grp)| {
+            // groupOn fst: list each rule's names together.
+            let mut parts: Vec<String> = Vec::new();
+            let mut m = 0;
+            while m < grp.len() {
+                let rule = &grp[m].0;
+                let mut names = vec![shw(&grp[m].1)];
+                let mut n2 = m + 1;
+                while n2 < grp.len() && &grp[n2].0 == rule {
+                    names.push(shw(&grp[n2].1));
+                    n2 += 1;
+                }
+                parts.push(format!("rule \"{}\":  name {}", rule, names.join(", ")));
+                m = n2;
             }
-            parts.push(format!("rule \"{}\":  name {}", rule, names.join(", ")));
-            m = n2;
-        }
-        format!("  {:>w$}. {}", k + 1, parts.join(", "), w = w)
-    }).collect();
+            format!("  {:>w$}. {}", k + 1, parts.join(", "), w = w)
+        })
+        .collect();
     s.push_str(&items.join("\n  \n"));
     s.push('\n');
     vec![WfError::new(topic, s)]
@@ -1588,8 +1832,12 @@ fn collect_rule_unbound_vars(r: &Rule, nullary_funs: &BTreeSet<String>) -> Vec<V
     let mut seen: BTreeSet<(String, u8, u64)> = BTreeSet::new();
     for f in acts.iter().chain(&concs) {
         for v in fact_vars(f) {
-            if is_pub_sort(&v.sort) { continue; }
-            if nullary_funs.contains(&v.name) { continue; }
+            if is_pub_sort(&v.sort) {
+                continue;
+            }
+            if nullary_funs.contains(&v.name) {
+                continue;
+            }
             // Builtin nullary constants (e.g. XOR's `zero`, DH's
             // `DH_neutral`) parse as bare identifiers in the surface
             // syntax but semantically denote 0-arity functions.  HS's
@@ -1599,9 +1847,13 @@ fn collect_rule_unbound_vars(r: &Rule, nullary_funs: &BTreeSet<String>) -> Vec<V
             // them when classifying "unbound".  Without this skip,
             // rules like CRxor's `responder` (`Neq(na, zero)`) get
             // bogus "has unbound variables: zero" warnings.
-            if is_known_nullary_constant_name(&v.name) { continue; }
+            if is_known_nullary_constant_name(&v.name) {
+                continue;
+            }
             let key = (v.name.clone(), sort_tag(&v.sort), v.idx);
-            if bound.contains(&key) { continue; }
+            if bound.contains(&key) {
+                continue;
+            }
             if seen.insert(key.clone()) {
                 unbound.push(v);
             }
@@ -1638,15 +1890,18 @@ pub fn unbound_report(thy: &Theory) -> WfReport {
             // same way; we comma-join at the 4-space inner `nest 2` indent
             // (variable lists are short, so the fsep wrap never triggers in
             // practice — identical bytes to HS for the common case).
-            let names: Vec<String> = unbound.iter()
-                .map(render_var)
-                .collect();
+            let names: Vec<String> = unbound.iter().map(render_var).collect();
             // Body only: `  rule `{name}' has unbound variables: ` (2-space
             // ppTopic nest, trailing space from HS's `info`) then the
             // variable list at 4 spaces.  format_wf_block adds the header.
-            out.push(WfError::new("Unbound variables", format!(
-                "  rule `{}' has unbound variables: \n    {}",
-                r.name, names.join(", "))));
+            out.push(WfError::new(
+                "Unbound variables",
+                format!(
+                    "  rule `{}' has unbound variables: \n    {}",
+                    r.name,
+                    names.join(", ")
+                ),
+            ));
         }
     }
     out
@@ -1672,27 +1927,38 @@ pub fn message_derivation_report(thy: &Theory) -> WfReport {
     let nullary_funs = collect_nullary_fun_names(thy);
     let mut per_rule: Vec<(String, Vec<String>)> = Vec::new();
     for r in theory_rules(thy) {
-        if r.attributes.iter().any(|a| matches!(a,
-            crate::ast::RuleAttr::NoDerivCheck)) { continue; }
+        if r.attributes
+            .iter()
+            .any(|a| matches!(a, crate::ast::RuleAttr::NoDerivCheck))
+        {
+            continue;
+        }
         let unbound = collect_rule_unbound_vars(r, &nullary_funs);
-        if unbound.is_empty() { continue; }
+        if unbound.is_empty() {
+            continue;
+        }
         // HS shows the LVar (sort prefix included): MessageDerivationChecks.hs:122-138, see line 138
-        let names: Vec<String> = unbound.iter()
-            .map(render_var)
-            .collect();
+        let names: Vec<String> = unbound.iter().map(render_var).collect();
         per_rule.push((r.name.clone(), names));
     }
-    if per_rule.is_empty() { return Vec::new(); }
+    if per_rule.is_empty() {
+        return Vec::new();
+    }
     // HS emits this as a single WfErrorReport entry with a multi-line
     // message: explanatory header + one block per affected rule.
     let mut msg = String::from(
         "The variables of the following rule(s) are not derivable \
          from their premises, you may be performing unintended pattern \
-         matching.\n\n");
-    let rule_blocks: Vec<String> = per_rule.iter()
+         matching.\n\n",
+    );
+    let rule_blocks: Vec<String> = per_rule
+        .iter()
         .map(|(rule_name, vars)| {
-            format!("Rule {}: \nFailed to derive Variable(s): {}",
-                rule_name, vars.join(", "))
+            format!(
+                "Rule {}: \nFailed to derive Variable(s): {}",
+                rule_name,
+                vars.join(", ")
+            )
         })
         .collect();
     msg.push_str(&rule_blocks.join("\n\n"));
@@ -1754,13 +2020,18 @@ pub fn mult_restricted_report(thy: &Theory) -> WfReport {
     for r in theory_rules(thy) {
         // (a) HS `multTerms` over RHS conclusions: gather any `AC Mult`
         //     sub-terms. Skip if RHS has no multiplication.
-        let rhs_has_mult = r.conclusions.iter()
+        let rhs_has_mult = r
+            .conclusions
+            .iter()
             .flat_map(|f| f.args.iter())
             .any(term_has_mult_subterm);
-        if !rhs_has_mult { continue; }
-        out.push(WfError::new("Multiplication restriction of rules",
-            format!("rule `{}' has multiplication in its RHS",
-                r.name)));
+        if !rhs_has_mult {
+            continue;
+        }
+        out.push(WfError::new(
+            "Multiplication restriction of rules",
+            format!("rule `{}' has multiplication in its RHS", r.name),
+        ));
     }
     out
 }
@@ -1797,8 +2068,10 @@ pub fn lemma_attribute_report(thy: &Theory) -> WfReport {
     let topic = "Lemma annotations";
     let bodies: Vec<String> = theory_lemmas(thy)
         .into_iter()
-        .filter(|l| matches!(l.trace_quantifier, TraceQuantifier::ExistsTrace)
-            && l.attributes.iter().any(|a| matches!(a, LemmaAttr::Reuse)))
+        .filter(|l| {
+            matches!(l.trace_quantifier, TraceQuantifier::ExistsTrace)
+                && l.attributes.iter().any(|a| matches!(a, LemmaAttr::Reuse))
+        })
         .map(|l| format!("  Lemma `{}': cannot reuse 'exists-trace' lemmas", l.name))
         .collect();
     // NB: the corpus has at most one reuse-exists lemma per file, so the
@@ -1827,7 +2100,9 @@ pub fn left_right_rule_report(thy: &Theory) -> WfReport {
     // we keep a topic-faithful body and do not reproduce the full rule
     // pretty-print.
     let mut out = Vec::new();
-    if !thy.is_diff { return out; }
+    if !thy.is_diff {
+        return out;
+    }
     for r in theory_rules(thy) {
         let (lhs_diff, rhs_diff) = match &r.left_right {
             Some(pair) => pair,
@@ -1838,12 +2113,16 @@ pub fn left_right_rule_report(thy: &Theory) -> WfReport {
         let proj_l = project_rule(r, /* left = */ true);
         let proj_r = project_rule(r, /* left = */ false);
         if !rules_equivalent_up_to_actions(&proj_l, lhs_diff) {
-            out.push(WfError::new("Left rule",
-                format!("Inconsistent left rule for `{}'", r.name)));
+            out.push(WfError::new(
+                "Left rule",
+                format!("Inconsistent left rule for `{}'", r.name),
+            ));
         }
         if !rules_equivalent_up_to_actions(&proj_r, rhs_diff) {
-            out.push(WfError::new("Right rule",
-                format!("Inconsistent right rule for `{}'", r.name)));
+            out.push(WfError::new(
+                "Right rule",
+                format!("Inconsistent right rule for `{}'", r.name),
+            ));
         }
     }
     out
@@ -1854,15 +2133,27 @@ pub fn left_right_rule_report(thy: &Theory) -> WfReport {
 fn project_rule(r: &Rule, left: bool) -> Rule {
     fn proj_term(t: &Term, left: bool) -> Term {
         match t {
-            Term::Diff(a, b) => if left { proj_term(a, left) } else { proj_term(b, left) },
-            Term::App(n, args) =>
-                Term::App(n.clone(), args.iter().map(|a| proj_term(a, left)).collect()),
-            Term::AlgApp(n, a, b) =>
-                Term::AlgApp(n.clone(), Box::new(proj_term(a, left)), Box::new(proj_term(b, left))),
-            Term::Pair(items) =>
-                Term::Pair(items.iter().map(|a| proj_term(a, left)).collect()),
-            Term::BinOp(op, a, b) =>
-                Term::BinOp(*op, Box::new(proj_term(a, left)), Box::new(proj_term(b, left))),
+            Term::Diff(a, b) => {
+                if left {
+                    proj_term(a, left)
+                } else {
+                    proj_term(b, left)
+                }
+            }
+            Term::App(n, args) => {
+                Term::App(n.clone(), args.iter().map(|a| proj_term(a, left)).collect())
+            }
+            Term::AlgApp(n, a, b) => Term::AlgApp(
+                n.clone(),
+                Box::new(proj_term(a, left)),
+                Box::new(proj_term(b, left)),
+            ),
+            Term::Pair(items) => Term::Pair(items.iter().map(|a| proj_term(a, left)).collect()),
+            Term::BinOp(op, a, b) => Term::BinOp(
+                *op,
+                Box::new(proj_term(a, left)),
+                Box::new(proj_term(b, left)),
+            ),
             Term::PatMatch(inner) => Term::PatMatch(Box::new(proj_term(inner, left))),
             other => other.clone(),
         }
@@ -1918,11 +2209,18 @@ pub fn subterm_convergence_report(thy: &Theory) -> WfReport {
     // flag of the LAST `equations` item; if it is set, suppress the entire
     // report.  (Probed: `[convergent]` block last => suppressed; `[convergent]`
     // first + a regular block last => fires.)
-    let global_convergent = thy.items.iter().rev().find_map(|it| match it {
-        TheoryItem::Equations { convergent, .. } => Some(*convergent),
-        _ => None,
-    }).unwrap_or(false);
-    if global_convergent { return Vec::new(); }
+    let global_convergent = thy
+        .items
+        .iter()
+        .rev()
+        .find_map(|it| match it {
+            TheoryItem::Equations { convergent, .. } => Some(*convergent),
+            _ => None,
+        })
+        .unwrap_or(false);
+    if global_convergent {
+        return Vec::new();
+    }
 
     // Collect all non-subterm-convergent equations across ALL `equations`
     // items (HS `thyEquations = S.toList (stRules sig)` merges every block's
@@ -1950,7 +2248,9 @@ pub fn subterm_convergence_report(thy: &Theory) -> WfReport {
     // distinct non-convergent user equations.  Corpus cases have a single
     // non-convergent equation, where this is a no-op.
     non_conv.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
-    if non_conv.is_empty() { return Vec::new(); }
+    if non_conv.is_empty() {
+        return Vec::new();
+    }
 
     // HS `prettyCtxtStRule r = sep [nest 2 (prettyLNTerm lhs), "=" <-> prettyLNTerm rhs]`
     // For equations that fit on one line, `sep` renders inline:
@@ -1983,8 +2283,8 @@ pub fn subterm_convergence_report(thy: &Theory) -> WfReport {
     let mut msg = String::new();
     msg.push_str(&underline_topic("Subterm Convergence Warning"));
     msg.push('\n'); // blank line before intro (HS `$-$`)
-    // The intro text — HS: `text "User-defined equations must be convergent..."`.
-    // Wrapped at 2-space indent (outer nest-2 in prettyWfErrorReport).
+                    // The intro text — HS: `text "User-defined equations must be convergent..."`.
+                    // Wrapped at 2-space indent (outer nest-2 in prettyWfErrorReport).
     msg.push_str("  User-defined equations must be convergent and have the finite variant property. The following equations are not subterm convergent. If you are sure that the set of equations is nevertheless convergent and has the finite variant property, you can ignore this warning and continue \n");
     msg.push('\n'); // blank line after intro (HS `$-$` before vcat)
     msg.push_str(&eq_lines);
@@ -2055,7 +2355,9 @@ fn is_subterm_convergent(lhs: &Term, rhs: &Term, nullary_funs: &BTreeSet<String>
     // i.e. ANY variable-free (ground) RHS is accepted, not just a fixed set
     // of reserved names (e.g. `f(x) = 'c'`, `f(x) = g('a','b')`, or a user
     // `c/0` constant), where `frees` collects only `LVar`s.
-    if rhs_is_ground(rhs, nullary_funs) { return true; }
+    if rhs_is_ground(rhs, nullary_funs) {
+        return true;
+    }
     // Otherwise the RHS must literally appear as a subterm of the LHS.
     contains_subterm(lhs, rhs)
 }
@@ -2074,15 +2376,14 @@ fn rhs_is_ground(t: &Term, nullary_funs: &BTreeSet<String>) -> bool {
             // variable-free; everything else (and any sigil-tagged var) is a
             // genuine free variable.
             matches!(v.sort, SortHint::Untagged)
-                && (is_known_nullary_constant_name(&v.name)
-                    || nullary_funs.contains(&v.name))
+                && (is_known_nullary_constant_name(&v.name) || nullary_funs.contains(&v.name))
         }
         App(_, args) | Pair(args) => args.iter().all(|a| rhs_is_ground(a, nullary_funs)),
-        AlgApp(_, a, b) | Diff(a, b) | BinOp(_, a, b) =>
-            rhs_is_ground(a, nullary_funs) && rhs_is_ground(b, nullary_funs),
+        AlgApp(_, a, b) | Diff(a, b) | BinOp(_, a, b) => {
+            rhs_is_ground(a, nullary_funs) && rhs_is_ground(b, nullary_funs)
+        }
         PatMatch(inner) => rhs_is_ground(inner, nullary_funs),
-        PubLit(_) | FreshLit(_) | NatLit(_) | Number(_)
-        | NumberOne | NatOne | DhNeutral => true,
+        PubLit(_) | FreshLit(_) | NatLit(_) | Number(_) | NumberOne | NatOne | DhNeutral => true,
     }
 }
 
@@ -2102,14 +2403,15 @@ fn is_known_nullary_constant_name(n: &str) -> bool {
 }
 
 fn contains_subterm(haystack: &Term, needle: &Term) -> bool {
-    if haystack == needle { return true; }
+    if haystack == needle {
+        return true;
+    }
     match haystack {
-        Term::App(_, args) | Term::Pair(args) =>
-            args.iter().any(|a| contains_subterm(a, needle)),
-        Term::AlgApp(_, a, b) =>
-            contains_subterm(a, needle) || contains_subterm(b, needle),
-        Term::Diff(a, b) | Term::BinOp(_, a, b) =>
-            contains_subterm(a, needle) || contains_subterm(b, needle),
+        Term::App(_, args) | Term::Pair(args) => args.iter().any(|a| contains_subterm(a, needle)),
+        Term::AlgApp(_, a, b) => contains_subterm(a, needle) || contains_subterm(b, needle),
+        Term::Diff(a, b) | Term::BinOp(_, a, b) => {
+            contains_subterm(a, needle) || contains_subterm(b, needle)
+        }
         Term::PatMatch(inner) => contains_subterm(inner, needle),
         _ => false,
     }
@@ -2154,43 +2456,53 @@ pub fn variable_sort_clashes(thy: &Theory) -> WfReport {
         // clashesOn removeSort id: sort+group by (lowercase name, idx).
         // Stable sort over the precomputed lowercase key — identical order to
         // re-lowercasing in the comparator.
-        vars.sort_by(|a, b| {
-            a.0.cmp(&b.0).then_with(|| a.1.idx.cmp(&b.1.idx))
-        });
+        vars.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.idx.cmp(&b.1.idx)));
         let mut clash_groups: Vec<Vec<VarSpec>> = Vec::new();
         let mut i = 0;
         while i < vars.len() {
             let key = (vars[i].0.as_str(), vars[i].1.idx);
             let mut j = i + 1;
-            while j < vars.len()
-                && (vars[j].0.as_str(), vars[j].1.idx) == key { j += 1; }
+            while j < vars.len() && (vars[j].0.as_str(), vars[j].1.idx) == key {
+                j += 1;
+            }
             // sortednubOn id: sort by HS LVar Ord (idx, sort, name) then dedup.
-            let mut grp: Vec<VarSpec> =
-                vars[i..j].iter().map(|(_, v)| v.clone()).collect();
+            let mut grp: Vec<VarSpec> = vars[i..j].iter().map(|(_, v)| v.clone()).collect();
             grp.sort_by(|a, b| {
-                a.idx.cmp(&b.idx)
+                a.idx
+                    .cmp(&b.idx)
                     .then_with(|| sort_tag(&a.sort).cmp(&sort_tag(&b.sort)))
                     .then_with(|| a.name.cmp(&b.name))
             });
-            grp.dedup_by(|a, b| a.name == b.name
-                && sort_tag(&a.sort) == sort_tag(&b.sort) && a.idx == b.idx);
-            if grp.len() >= 2 { clash_groups.push(grp); }
+            grp.dedup_by(|a, b| {
+                a.name == b.name && sort_tag(&a.sort) == sort_tag(&b.sort) && a.idx == b.idx
+            });
+            if grp.len() >= 2 {
+                clash_groups.push(grp);
+            }
             i = j;
         }
-        if clash_groups.is_empty() { continue; }
+        if clash_groups.is_empty() {
+            continue;
+        }
         // Body (headerless): HS snd = `text info $-$ nest 2 (numbered' $ map
         // prettyVarList cs)`, with ppTopic's outer `nest 2` baked in →
         // "  rule `X': \n    1. <vars>".  `numbered'` separates items by a
         // blank `text ""` line, which at 4-space indent renders as "    ".
         let mut body = format!("  rule `{}': \n", r.name);
         let w = numbered_index_width(clash_groups.len());
-        let items: Vec<String> = clash_groups.iter().enumerate().map(|(k, grp)| {
-            let vs: Vec<String> = grp.iter().map(render_var).collect();
-            format!("    {:>w$}. {}", k + 1, vs.join(", "), w = w)
-        }).collect();
+        let items: Vec<String> = clash_groups
+            .iter()
+            .enumerate()
+            .map(|(k, grp)| {
+                let vs: Vec<String> = grp.iter().map(render_var).collect();
+                format!("    {:>w$}. {}", k + 1, vs.join(", "), w = w)
+            })
+            .collect();
         body.push_str(&items.join("\n    \n"));
         out.push(WfError::new(
-            "Variable with mismatching sorts or capitalization", body));
+            "Variable with mismatching sorts or capitalization",
+            body,
+        ));
     }
     out
 }
@@ -2222,7 +2534,9 @@ pub fn nat_well_sorted_report(thy: &Theory) -> WfReport {
             for err in errs {
                 bodies.push(format!(
                     "  {} in term {} must be of sort nat",
-                    pp_term_for_wf(err), pp_term_for_wf(t)));
+                    pp_term_for_wf(err),
+                    pp_term_for_wf(t)
+                ));
             }
         }
     }
@@ -2244,12 +2558,19 @@ fn non_well_sorted<'a>(t: &'a Term, out: &mut Vec<&'a Term>) {
             not_only_nat(b, out);
         }
         // NatOne -> []; Lit _ -> []
-        Term::NatOne | Term::Var(_) | Term::PubLit(_) | Term::FreshLit(_)
-        | Term::NatLit(_) | Term::Number(_) | Term::NumberOne
+        Term::NatOne
+        | Term::Var(_)
+        | Term::PubLit(_)
+        | Term::FreshLit(_)
+        | Term::NatLit(_)
+        | Term::Number(_)
+        | Term::NumberOne
         | Term::DhNeutral => {}
         // FApp _ ts -> concatMap nonWellSorted ts (recurse into children)
         Term::App(_, args) | Term::Pair(args) => {
-            for a in args { non_well_sorted(a, out); }
+            for a in args {
+                non_well_sorted(a, out);
+            }
         }
         Term::AlgApp(_, a, b) | Term::Diff(a, b) | Term::BinOp(_, a, b) => {
             non_well_sorted(a, out);
@@ -2303,10 +2624,12 @@ mod tests {
 
     #[test]
     fn fact_arity_clash_detected() {
-        let t = parse(r#"theory T begin
+        let t = parse(
+            r#"theory T begin
             rule R1: [Fr(~x)] --[ ]-> [Foo(~x)]
             rule R2: [Fr(~x), Fr(~y)] --[ ]-> [Foo(~x, ~y)]
-        end"#);
+        end"#,
+        );
         let r = check_theory(&t);
         assert!(topics(&r).contains("Fact arity issues"));
     }
@@ -2320,9 +2643,11 @@ mod tests {
 
     #[test]
     fn reserved_name_detected() {
-        let t = parse(r#"theory T begin
+        let t = parse(
+            r#"theory T begin
             rule R: [Fr(~k)] --[ ]-> [KU(~k)]
-        end"#);
+        end"#,
+        );
         let r = check_theory(&t);
         assert!(topics(&r).contains("Reserved names"));
     }
@@ -2330,8 +2655,13 @@ mod tests {
     /// Return the single `WfError` whose topic matches `topic`.
     fn only(report: &WfReport, topic: &str) -> String {
         let hits: Vec<&WfError> = report.iter().filter(|e| e.topic == topic).collect();
-        assert_eq!(hits.len(), 1, "expected exactly one {:?} entry, got {:?}",
-            topic, report);
+        assert_eq!(
+            hits.len(),
+            1,
+            "expected exactly one {:?} entry, got {:?}",
+            topic,
+            report
+        );
         hits[0].message.clone()
     }
 
@@ -2344,11 +2674,16 @@ mod tests {
     /// matches HS exactly.)
     #[test]
     fn nat_sorts_message_format() {
-        let t = parse("theory T begin builtins: natural-numbers \
-            rule R: [ Fr(~x) ] --[ ]-> [ Out(%a %+ ~x) ] end");
+        let t = parse(
+            "theory T begin builtins: natural-numbers \
+            rule R: [ Fr(~x) ] --[ ]-> [ Out(%a %+ ~x) ] end",
+        );
         let msg = only(&check_theory(&t), "Nat Sorts");
         // Header + 2-space-nested single body.
-        assert_eq!(msg, "Nat Sorts\n=========\n\n  ~x in term (%a%+~x) must be of sort nat");
+        assert_eq!(
+            msg,
+            "Nat Sorts\n=========\n\n  ~x in term (%a%+~x) must be of sort nat"
+        );
     }
 
     /// `%a` (nat-sorted var) is ACCEPTED; only `~x` (fresh) is flagged —
@@ -2356,8 +2691,10 @@ mod tests {
     /// nat-sorted *variables*).
     #[test]
     fn nat_sorts_accepts_nat_var_flags_fresh() {
-        let t = parse("theory T begin builtins: natural-numbers \
-            rule R: [ Fr(~x) ] --[ ]-> [ Out(%a %+ ~x) ] end");
+        let t = parse(
+            "theory T begin builtins: natural-numbers \
+            rule R: [ Fr(~x) ] --[ ]-> [ Out(%a %+ ~x) ] end",
+        );
         let msg = only(&check_theory(&t), "Nat Sorts");
         assert!(msg.contains("~x in term"), "should flag ~x: {}", msg);
         assert!(!msg.contains("%a in term"), "should NOT flag %a: {}", msg);
@@ -2368,11 +2705,17 @@ mod tests {
     ///   `%'a' in term (%'a'%+%y) must be of sort nat`
     #[test]
     fn nat_sorts_flags_nat_literal() {
-        let t = parse("theory T begin builtins: natural-numbers \
-            rule R: [ Fr(~x) ] --[ ]-> [ Out(%'a' %+ %y) ] end");
+        let t = parse(
+            "theory T begin builtins: natural-numbers \
+            rule R: [ Fr(~x) ] --[ ]-> [ Out(%'a' %+ %y) ] end",
+        );
         let msg = only(&check_theory(&t), "Nat Sorts");
         assert!(msg.contains("%'a' in term"), "should flag %'a': {}", msg);
-        assert!(!msg.contains("%y in term"), "should NOT flag nat var %y: {}", msg);
+        assert!(
+            !msg.contains("%y in term"),
+            "should NOT flag nat var %y: {}",
+            msg
+        );
     }
 
     /// Probed against tamarin-prover v1.13.0 on `Out(<~k, ~'foo'>)`:
@@ -2380,12 +2723,16 @@ mod tests {
     ///   fresh constant renders via `show (Name FreshName ..)` = `~'foo'`.
     #[test]
     fn fresh_public_constants_message_format() {
-        let t = parse("theory T begin \
-            rule R: [ Fr(~k) ] --[ ]-> [ Out(<~k, ~'foo'>) ] end");
+        let t = parse(
+            "theory T begin \
+            rule R: [ Fr(~k) ] --[ ]-> [ Out(<~k, ~'foo'>) ] end",
+        );
         let msg = only(&check_theory(&t), "Fresh public constants");
-        assert_eq!(msg,
+        assert_eq!(
+            msg,
             "Fresh public constants\n======================\n\n  \
-             rule `R': fresh public constants are not allowed: ~'foo'");
+             rule `R': fresh public constants are not allowed: ~'foo'"
+        );
     }
 
     /// A free variable literally named `True` IS reported as unbound — there
@@ -2394,8 +2741,10 @@ mod tests {
     #[test]
     fn variable_named_true_is_unbound() {
         let t = parse("theory T begin rule R: [ ] --[ ]-> [ Out(True) ] end");
-        assert!(topics(&check_theory(&t)).contains("Unbound variables"),
-            "True must be reported as unbound");
+        assert!(
+            topics(&check_theory(&t)).contains("Unbound variables"),
+            "True must be reported as unbound"
+        );
     }
 
     /// `equations [convergent]` as the LAST equations block suppresses the
@@ -2403,11 +2752,15 @@ mod tests {
     /// last-write-wins), even with a non-convergent regular block present.
     #[test]
     fn subterm_convergence_global_convergent_guard() {
-        let t = parse("theory T begin functions: f/1, g/1, a/0, b/0 \
+        let t = parse(
+            "theory T begin functions: f/1, g/1, a/0, b/0 \
             equations: f(x) = g(x) \
-            equations [convergent]: g(y) = a end");
-        assert!(!topics(&check_theory(&t)).contains("Subterm Convergence Warning"),
-            "global convergent flag (last-write-wins) must suppress the check");
+            equations [convergent]: g(y) = a end",
+        );
+        assert!(
+            !topics(&check_theory(&t)).contains("Subterm Convergence Warning"),
+            "global convergent flag (last-write-wins) must suppress the check"
+        );
     }
 
     /// A `[convergent]` block FIRST followed by a regular block LAST does NOT
@@ -2415,10 +2768,14 @@ mod tests {
     /// equation is reported.
     #[test]
     fn subterm_convergence_last_write_wins() {
-        let t = parse("theory T begin functions: f/1, g/1, a/0, b/0 \
+        let t = parse(
+            "theory T begin functions: f/1, g/1, a/0, b/0 \
             equations [convergent]: g(y) = a \
-            equations: f(x) = g(x) end");
-        assert!(topics(&check_theory(&t)).contains("Subterm Convergence Warning"),
-            "regular block last => flag false => warning fires");
+            equations: f(x) = g(x) end",
+        );
+        assert!(
+            topics(&check_theory(&t)).contains("Subterm Convergence Warning"),
+            "regular block last => flag false => warning fires"
+        );
     }
 }

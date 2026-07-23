@@ -24,11 +24,15 @@ pub struct Equal<A> {
 }
 
 impl<A> Equal<A> {
-    pub fn new(lhs: A, rhs: A) -> Self { Equal { lhs, rhs } }
+    pub fn new(lhs: A, rhs: A) -> Self {
+        Equal { lhs, rhs }
+    }
 }
 
 impl<A: PartialEq> Equal<A> {
-    pub fn eval(&self) -> bool { self.lhs == self.rhs }
+    pub fn eval(&self) -> bool {
+        self.lhs == self.rhs
+    }
 }
 
 // -- Matching problem ---------------------------------------------------------
@@ -42,16 +46,26 @@ pub enum Match<A> {
 }
 
 impl<A> Default for Match<A> {
-    fn default() -> Self { Match::DelayedMatches(Vec::new()) }
+    fn default() -> Self {
+        Match::DelayedMatches(Vec::new())
+    }
 }
 
 impl<A> Match<A> {
-    pub fn empty() -> Self { Match::DelayedMatches(Vec::new()) }
-    pub fn no_match() -> Self { Match::NoMatch }
+    pub fn empty() -> Self {
+        Match::DelayedMatches(Vec::new())
+    }
+    pub fn no_match() -> Self {
+        Match::NoMatch
+    }
 
     /// `matchOnlyIf b`: an empty match if `b`, otherwise `NoMatch`.
     pub fn only_if(b: bool) -> Self {
-        if b { Match::empty() } else { Match::NoMatch }
+        if b {
+            Match::empty()
+        } else {
+            Match::NoMatch
+        }
     }
 
     /// `matchWith t p`: a single-pair match problem.
@@ -89,7 +103,9 @@ pub struct RRule<A> {
 }
 
 impl<A> RRule<A> {
-    pub fn new(lhs: A, rhs: A) -> Self { RRule { lhs, rhs } }
+    pub fn new(lhs: A, rhs: A) -> Self {
+        RRule { lhs, rhs }
+    }
 }
 
 #[cfg(test)]

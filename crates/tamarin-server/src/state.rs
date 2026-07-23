@@ -233,7 +233,9 @@ impl TheoryStore {
         // duration.
         let (parser_theory, in_file) = {
             let inner = self.inner.lock();
-            let entry = inner.by_idx.get(&idx)
+            let entry = inner
+                .by_idx
+                .get(&idx)
                 .ok_or_else(|| format!("theory index {} not found", idx))?;
             if let Some(ps) = &entry.proof_state {
                 return Ok(ps.clone());
@@ -241,12 +243,18 @@ impl TheoryStore {
             (entry.parser_theory.clone(), entry.origin.label())
         };
         let ps = Arc::new(ProofState::new(
-            &parser_theory, &cfg.maude_path, cfg.stop_on_trace, &in_file)?);
+            &parser_theory,
+            &cfg.maude_path,
+            cfg.stop_on_trace,
+            &in_file,
+        )?);
         // Re-lock and double-check: another thread may have built (and
         // stored) the proof state while we held no lock.  If so, prefer
         // the already-stored one so all callers share a single instance.
         let mut inner = self.inner.lock();
-        let entry = inner.by_idx.get_mut(&idx)
+        let entry = inner
+            .by_idx
+            .get_mut(&idx)
             .ok_or_else(|| format!("theory index {} not found", idx))?;
         if let Some(existing) = &entry.proof_state {
             return Ok(existing.clone());

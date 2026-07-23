@@ -117,7 +117,9 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
                     NodeStatus::Contradictory => "by contradiction /* closed */\n",
                     NodeStatus::Solved => "SOLVED // trace found\n",
                     NodeStatus::Sorry => "by sorry\n",
-                    NodeStatus::Unfinishable => "by UNFINISHABLE // reducible operator in subterm\n",
+                    NodeStatus::Unfinishable => {
+                        "by UNFINISHABLE // reducible operator in subterm\n"
+                    }
                     NodeStatus::Open => "by sorry /* open */\n",
                 });
             }
@@ -153,29 +155,27 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
     // We keep only the FIRST Solved child and drop other
     // Contradictory/Sorry siblings.  All-traces proofs (status =
     // Contradictory) keep every branch.
-    let children_to_render: Vec<(String, &ProofNode)> =
-        if node.status == NodeStatus::Solved {
-            // Find the first Solved child; render only that one.
-            match node.children.iter()
-                .find(|(_, c)| c.status == NodeStatus::Solved) {
-                Some((name, child)) => {
-                    // Haskell's `extractSolved` (`Theory/Proof.hs:921-923`)
-                    // keeps the survivor's label verbatim — including any
-                    // `_case_N` dedup suffix appended by `uniqueListBy`
-                    // (ProofMethod.hs:91-103, applied at :308) when the goal
-                    // originally had multiple cases sharing a rule name.
-                    // Pass the name through unchanged.
-                    vec![(name.clone(), child)]
-                }
-                None => node.children.iter()
-                    .map(|(n, c)| (n.clone(), c))
-                    .collect(),
+    let children_to_render: Vec<(String, &ProofNode)> = if node.status == NodeStatus::Solved {
+        // Find the first Solved child; render only that one.
+        match node
+            .children
+            .iter()
+            .find(|(_, c)| c.status == NodeStatus::Solved)
+        {
+            Some((name, child)) => {
+                // Haskell's `extractSolved` (`Theory/Proof.hs:921-923`)
+                // keeps the survivor's label verbatim — including any
+                // `_case_N` dedup suffix appended by `uniqueListBy`
+                // (ProofMethod.hs:91-103, applied at :308) when the goal
+                // originally had multiple cases sharing a rule name.
+                // Pass the name through unchanged.
+                vec![(name.clone(), child)]
             }
-        } else {
-            node.children.iter()
-                .map(|(n, c)| (n.clone(), c))
-                .collect()
-        };
+            None => node.children.iter().map(|(n, c)| (n.clone(), c)).collect(),
+        }
+    } else {
+        node.children.iter().map(|(n, c)| (n.clone(), c)).collect()
+    };
     // After elision, a singleton empty-key child is still Linear.
     if children_to_render.len() == 1 && children_to_render[0].0.is_empty() {
         render_node(children_to_render[0].1, indent, out);
@@ -213,8 +213,8 @@ fn method_keyword(m: &ProofMethod) -> &'static str {
         ProofMethod::Simplify => "simplify",
         ProofMethod::SolveGoal(_) => "solve",
         ProofMethod::Induction => "induction",
-        ProofMethod::Sorry(_) => "",     // handled at leaf-emit time
-        ProofMethod::Finished(_) => "",  // handled at leaf-emit time
+        ProofMethod::Sorry(_) => "",    // handled at leaf-emit time
+        ProofMethod::Finished(_) => "", // handled at leaf-emit time
         ProofMethod::Invalidated => "INVALIDATED",
         ProofMethod::RawSolve(_) => "solve", // display-only; handled in pp_step_doc
     }
@@ -302,9 +302,7 @@ pub fn extract_from_haskell(spthy_text: &str, lemma_name: &str) -> Option<String
     };
     while i < lines.len() && !is_proof_kw(lines[i]) {
         // Stop early if we hit the next lemma — means no proof.
-        if lines[i].trim_start().starts_with("lemma ")
-            || lines[i].trim_start().starts_with("end")
-        {
+        if lines[i].trim_start().starts_with("lemma ") || lines[i].trim_start().starts_with("end") {
             return None;
         }
         i += 1;
@@ -324,7 +322,10 @@ pub fn extract_from_haskell(spthy_text: &str, lemma_name: &str) -> Option<String
     //
     // The proof ends when the stack returns to empty.
     #[derive(Clone, Copy, PartialEq)]
-    enum Scope { Uncommitted, Multi }
+    enum Scope {
+        Uncommitted,
+        Multi,
+    }
     let mut out = String::new();
     let mut stack: Vec<Scope> = Vec::new();
     let mut opened_any = false;
@@ -332,7 +333,8 @@ pub fn extract_from_haskell(spthy_text: &str, lemma_name: &str) -> Option<String
         let raw = lines[i];
         let t = raw.trim_start();
         // Hard stop: a top-level lemma/rule/restriction declaration.
-        if stack.is_empty() && opened_any
+        if stack.is_empty()
+            && opened_any
             && (t.starts_with("lemma ")
                 || t.starts_with("end")
                 || t.starts_with("rule ")
@@ -354,9 +356,9 @@ pub fn extract_from_haskell(spthy_text: &str, lemma_name: &str) -> Option<String
                     *top = Scope::Multi;
                 }
             } else if nt == "qed" {
-                stack.pop();  // pops the Multi
-                // Chain-pop any Uncommitted ancestor whose
-                // single-child path resolves via this child's qed.
+                stack.pop(); // pops the Multi
+                             // Chain-pop any Uncommitted ancestor whose
+                             // single-child path resolves via this child's qed.
                 while let Some(Scope::Uncommitted) = stack.last() {
                     stack.pop();
                 }
@@ -387,7 +389,9 @@ fn normalize_haskell_line(raw: &str) -> Option<String> {
     // Tamarin uses 2-space indent same as us; pass it through.
     let pad = " ".repeat(indent_count);
     let t = raw.trim();
-    if t.is_empty() { return None; }
+    if t.is_empty() {
+        return None;
+    }
     // Drop block-comment fragments.  `by contradiction /* ... */` is
     // fine — it doesn't start with `/*` or `*`, and isn't exactly `*/`.
     if t.starts_with("/*") || t.starts_with("*") || t == "*/" {
@@ -419,11 +423,7 @@ fn normalize_haskell_line(raw: &str) -> Option<String> {
         // Extract the /* reason */ if present.
         let reason = rest.trim();
         if let Some(inner) = reason.strip_prefix("/*").and_then(|s| s.strip_suffix("*/")) {
-            return Some(format!(
-                "{}by contradiction /* {} */",
-                pad,
-                inner.trim()
-            ));
+            return Some(format!("{}by contradiction /* {} */", pad, inner.trim()));
         }
         return Some(format!("{}by contradiction", pad));
     }
@@ -448,8 +448,12 @@ fn normalize_haskell_line(raw: &str) -> Option<String> {
         // Our `render` emits the same suffix; preserve it here so the diff
         // matches verbatim instead of treating the cosmetic comment as a
         // divergence.
-        let rest = t.strip_prefix("by ").unwrap_or(t)  // "by SOLVED" → "SOLVED"
-                    .strip_prefix("SOLVED").unwrap_or("").trim();
+        let rest = t
+            .strip_prefix("by ")
+            .unwrap_or(t) // "by SOLVED" → "SOLVED"
+            .strip_prefix("SOLVED")
+            .unwrap_or("")
+            .trim();
         if rest.is_empty() {
             return Some(format!("{}SOLVED", pad));
         }

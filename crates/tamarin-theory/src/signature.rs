@@ -23,8 +23,12 @@ pub struct SignaturePure {
 
 impl SignaturePure {
     pub fn empty(diff: bool) -> Self {
-        SignaturePure { maude_sig: minimal_maude_sig(diff) }
+        SignaturePure {
+            maude_sig: minimal_maude_sig(diff),
+        }
     }
 
-    pub fn maude_sig(&self) -> &MaudeSig { &self.maude_sig }
+    pub fn maude_sig(&self) -> &MaudeSig {
+        &self.maude_sig
+    }
 }

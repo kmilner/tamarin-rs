@@ -47,8 +47,11 @@ pub struct ProofTreeParseError {
 
 impl std::fmt::Display for ProofTreeParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "proof-tree parse error at line {} col {}: {}",
-            self.line, self.col, self.msg)
+        write!(
+            f,
+            "proof-tree parse error at line {} col {}: {}",
+            self.line, self.col, self.msg
+        )
     }
 }
 impl std::error::Error for ProofTreeParseError {}
@@ -59,7 +62,9 @@ impl std::error::Error for ProofTreeParseError {}
 /// `tree: None` so the lemma is at least readable, and replay falls
 /// back to auto-prover at the top.
 pub fn parse_proof_tree(raw: &str) -> Result<ParsedProofTree, ProofTreeParseError> {
-    let mut p = TreeParser { lx: Lexer::new(raw) };
+    let mut p = TreeParser {
+        lx: Lexer::new(raw),
+    };
     p.lx.skip_ws();
     let tree = p.proof_skeleton()?;
     p.lx.skip_ws();
@@ -79,13 +84,24 @@ fn read_balanced_paren(lx: &mut Lexer<'_>) -> Option<String> {
     while depth > 0 {
         match lx.peek() {
             None => return None,
-            Some('(') => { s.push('('); lx.bump(); depth += 1; }
+            Some('(') => {
+                s.push('(');
+                lx.bump();
+                depth += 1;
+            }
             Some(')') => {
                 depth -= 1;
-                if depth == 0 { lx.bump(); break; }
-                s.push(')'); lx.bump();
+                if depth == 0 {
+                    lx.bump();
+                    break;
+                }
+                s.push(')');
+                lx.bump();
             }
-            Some(c) => { s.push(c); lx.bump(); }
+            Some(c) => {
+                s.push(c);
+                lx.bump();
+            }
         }
     }
     Some(s)
@@ -98,7 +114,11 @@ struct TreeParser<'a> {
 impl<'a> TreeParser<'a> {
     fn err(&self, msg: impl Into<String>) -> ProofTreeParseError {
         let (line, col) = self.lx.line_col();
-        ProofTreeParseError { line, col, msg: msg.into() }
+        ProofTreeParseError {
+            line,
+            col,
+            msg: msg.into(),
+        }
     }
 
     /// HS `proofSkeleton` (Proof.hs:98-115).
@@ -114,7 +134,10 @@ impl<'a> TreeParser<'a> {
         // finalProof: `by <proofMethod>`
         if self.try_kw("by") {
             let m = self.proof_method()?;
-            return Ok(ParsedProofTree { method: m, cases: Vec::new() });
+            return Ok(ParsedProofTree {
+                method: m,
+                cases: Vec::new(),
+            });
         }
         // interProof: <method> ( case-block | proofSkeleton )
         let m = self.proof_method()?;
@@ -166,12 +189,24 @@ impl<'a> TreeParser<'a> {
     /// HS `proofMethod` (Proof.hs:76-85).
     fn proof_method(&mut self) -> Result<ParsedMethod, ProofTreeParseError> {
         self.lx.skip_ws();
-        if self.try_kw("sorry") { return Ok(ParsedMethod::Sorry); }
-        if self.try_kw("simplify") { return Ok(ParsedMethod::Simplify); }
-        if self.try_kw("contradiction") { return Ok(ParsedMethod::Contradiction); }
-        if self.try_kw("induction") { return Ok(ParsedMethod::Induction); }
-        if self.try_kw("INVALIDATED") { return Ok(ParsedMethod::Invalidated); }
-        if self.try_kw("UNFINISHABLE") { return Ok(ParsedMethod::Unfinishable); }
+        if self.try_kw("sorry") {
+            return Ok(ParsedMethod::Sorry);
+        }
+        if self.try_kw("simplify") {
+            return Ok(ParsedMethod::Simplify);
+        }
+        if self.try_kw("contradiction") {
+            return Ok(ParsedMethod::Contradiction);
+        }
+        if self.try_kw("induction") {
+            return Ok(ParsedMethod::Induction);
+        }
+        if self.try_kw("INVALIDATED") {
+            return Ok(ParsedMethod::Invalidated);
+        }
+        if self.try_kw("UNFINISHABLE") {
+            return Ok(ParsedMethod::Unfinishable);
+        }
         // SOLVED is intentionally NOT a proofMethod: HS `proofMethod`
         // (Proof.hs:76-85) never lists it; it is handled only at the
         // skeleton level (`solvedProof`, Proof.hs:102-103) — see the
@@ -191,7 +226,9 @@ impl<'a> TreeParser<'a> {
         let save = self.lx.pos();
         let mut word = String::new();
         while let Some(c) = self.lx.peek() {
-            if c.is_whitespace() || c == '(' || c == ')' { break; }
+            if c.is_whitespace() || c == '(' || c == ')' {
+                break;
+            }
             word.push(c);
             self.lx.bump();
         }
@@ -216,15 +253,20 @@ impl<'a> TreeParser<'a> {
     }
 
     fn require_kw(&mut self, kw: &str) -> Result<(), ProofTreeParseError> {
-        if self.try_kw(kw) { Ok(()) } else {
+        if self.try_kw(kw) {
+            Ok(())
+        } else {
             Err(self.err(format!("expected `{}`", kw)))
         }
     }
 
     fn require_punct(&mut self, p: &str) -> Result<(), ProofTreeParseError> {
         self.lx.skip_ws();
-        if self.lx.eat_str(p) { Ok(()) }
-        else { Err(self.err(format!("expected `{}`", p))) }
+        if self.lx.eat_str(p) {
+            Ok(())
+        } else {
+            Err(self.err(format!("expected `{}`", p)))
+        }
     }
 
     /// Identifier with extended chars: HS's `identifier` accepts
@@ -235,13 +277,18 @@ impl<'a> TreeParser<'a> {
         let mut s = String::new();
         match self.lx.peek() {
             Some(c) if c.is_alphanumeric() || c == '_' => {
-                s.push(c); self.lx.bump();
+                s.push(c);
+                self.lx.bump();
             }
             _ => return Err(self.err("expected identifier")),
         }
         while let Some(c) = self.lx.peek() {
-            if is_ident_char(c) { s.push(c); self.lx.bump(); }
-            else { break; }
+            if is_ident_char(c) {
+                s.push(c);
+                self.lx.bump();
+            } else {
+                break;
+            }
         }
         self.lx.skip_ws();
         Ok(s)
@@ -251,8 +298,7 @@ impl<'a> TreeParser<'a> {
     /// `)`, accounting for nested parens.  Returns the inner text
     /// (excluding the final `)` which is consumed).
     fn read_balanced_paren(&mut self) -> Result<String, ProofTreeParseError> {
-        read_balanced_paren(&mut self.lx)
-            .ok_or_else(|| self.err("unterminated `(` in solve(...)"))
+        read_balanced_paren(&mut self.lx).ok_or_else(|| self.err("unterminated `(` in solve(...)"))
     }
 }
 
@@ -279,7 +325,9 @@ impl<'a> TreeParser<'a> {
 /// auto-prover.
 pub fn parse_goal_spec(raw: &str) -> GoalSpec {
     let trimmed = raw.trim();
-    let mut p = GoalParser { lx: Lexer::new(trimmed) };
+    let mut p = GoalParser {
+        lx: Lexer::new(trimmed),
+    };
     if let Some(spec) = p.try_action_or_premise() {
         return spec;
     }
@@ -337,10 +385,13 @@ fn try_disj_split(text: &str) -> Option<GoalSpec> {
     // `last(#t2)`) and binding-B's (alt[0] = `last(#t1)`) match the
     // 5-alt NonQuant shape; without alt-text matching, match_goal
     // picks the wrong one and the proof diverges.
-    let alt_texts: Vec<String> = parts.iter().map(|p| {
-        let s = strip_outer_parens(p.trim()).trim().to_string();
-        normalize_disj_alt_text(&s)
-    }).collect();
+    let alt_texts: Vec<String> = parts
+        .iter()
+        .map(|p| {
+            let s = strip_outer_parens(p.trim()).trim().to_string();
+            normalize_disj_alt_text(&s)
+        })
+        .collect();
     Some(GoalSpec::Disj { alts, alt_texts })
 }
 
@@ -354,7 +405,9 @@ fn try_disj_split(text: &str) -> Option<GoalSpec> {
 /// stripping, which reveals divergent var bindings via a simple
 /// substring/equality check.
 fn normalize_disj_alt_text(s: &str) -> String {
-    s.chars().filter(|c| !c.is_whitespace() && *c != '#').collect()
+    s.chars()
+        .filter(|c| !c.is_whitespace() && *c != '#')
+        .collect()
 }
 
 /// Split `s` at top-level `∥` characters (U+2225).  Ignores any `∥`
@@ -366,8 +419,14 @@ fn split_top_level_disj(s: &str) -> Vec<String> {
     let mut depth: i32 = 0;
     for c in s.chars() {
         match c {
-            '(' | '[' | '{' => { depth += 1; cur.push(c); }
-            ')' | ']' | '}' => { depth -= 1; cur.push(c); }
+            '(' | '[' | '{' => {
+                depth += 1;
+                cur.push(c);
+            }
+            ')' | ']' | '}' => {
+                depth -= 1;
+                cur.push(c);
+            }
             // `<` / `>` are used for tuple syntax inside facts; we don't
             // need to bracket-track them here because the `∥` separator
             // never appears inside `<…>`.  Tracking them would break on
@@ -391,10 +450,14 @@ fn classify_disj_alt(raw: &str) -> DisjAlt {
     // any further whitespace.
     let t = trimmed.trim_start();
     if let Some(rest) = t.strip_prefix('\u{2200}') {
-        return DisjAlt::All { n_vars: count_quant_vars(rest) };
+        return DisjAlt::All {
+            n_vars: count_quant_vars(rest),
+        };
     }
     if let Some(rest) = t.strip_prefix('\u{2203}') {
-        return DisjAlt::Ex { n_vars: count_quant_vars(rest) };
+        return DisjAlt::Ex {
+            n_vars: count_quant_vars(rest),
+        };
     }
     DisjAlt::NonQuant
 }
@@ -405,7 +468,7 @@ fn classify_disj_alt(raw: &str) -> DisjAlt {
 /// no intermediate depth-0 break.
 fn strip_outer_parens(s: &str) -> &str {
     let bytes = s.as_bytes();
-    if bytes.len() < 2 || bytes[0] != b'(' || bytes[bytes.len()-1] != b')' {
+    if bytes.len() < 2 || bytes[0] != b'(' || bytes[bytes.len() - 1] != b')' {
         return s;
     }
     // Verify the opening `(` matches the FINAL `)` (no depth-drop in between).
@@ -418,7 +481,7 @@ fn strip_outer_parens(s: &str) -> &str {
                 if depth == 0 {
                     if i + c.len_utf8() == s.len() {
                         // The first `(` closes at the last char — safe to strip.
-                        return &s[1..s.len()-1];
+                        return &s[1..s.len() - 1];
                     }
                     return s; // Closes early — not a wrapping pair.
                 }
@@ -459,7 +522,10 @@ fn count_quant_vars(after_qua: &str) -> usize {
             break;
         }
         if c == '#' || c == '~' || c == '$' || c == '%' || is_ident_char(c) {
-            if !in_token { n += 1; in_token = true; }
+            if !in_token {
+                n += 1;
+                in_token = true;
+            }
         } else {
             in_token = false;
         }
@@ -489,7 +555,12 @@ fn try_chain_split(text: &str) -> Option<GoalSpec> {
     let rhs = text[arrow_pos + 3..].trim();
     let (src_var, conc_idx) = parse_node_idx_pair(lhs)?;
     let (tgt_var, prem_idx) = parse_node_idx_pair(rhs)?;
-    Some(GoalSpec::Chain { src_var, conc_idx, tgt_var, prem_idx })
+    Some(GoalSpec::Chain {
+        src_var,
+        conc_idx,
+        tgt_var,
+        prem_idx,
+    })
 }
 
 /// Try to parse a subterm-split goal-text: `<small> ⊏ <big>` (U+228F).
@@ -529,10 +600,14 @@ fn try_eq_split(text: &str) -> Option<GoalSpec> {
     while end < bs.len() && bs[end].is_ascii_digit() {
         end += 1;
     }
-    if end == 0 { return None; }
+    if end == 0 {
+        return None;
+    }
     let n: i64 = rest[..end].parse().ok()?;
     let tail = rest[end..].trim_start();
-    if !tail.starts_with(')') { return None; }
+    if !tail.starts_with(')') {
+        return None;
+    }
     Some(GoalSpec::Split { split_id: n })
 }
 
@@ -541,14 +616,18 @@ fn try_eq_split(text: &str) -> Option<GoalSpec> {
 fn find_top_level_substr(s: &str, needle: &str) -> Option<usize> {
     let bs = s.as_bytes();
     let nb = needle.as_bytes();
-    if nb.is_empty() || bs.len() < nb.len() { return None; }
+    if nb.is_empty() || bs.len() < nb.len() {
+        return None;
+    }
     let mut depth: i32 = 0;
     let mut i = 0;
     while i + nb.len() <= bs.len() {
         let c = bs[i];
-        if c == b'(' || c == b'[' || c == b'{' { depth += 1; }
-        else if c == b')' || c == b']' || c == b'}' { depth -= 1; }
-        else if depth == 0 && &bs[i..i + nb.len()] == nb {
+        if c == b'(' || c == b'[' || c == b'{' {
+            depth += 1;
+        } else if c == b')' || c == b']' || c == b'}' {
+            depth -= 1;
+        } else if depth == 0 && &bs[i..i + nb.len()] == nb {
             return Some(i);
         }
         i += 1;
@@ -586,11 +665,18 @@ fn parse_node_idx_pair(s: &str) -> Option<(String, u32)> {
     let name_no_hash = name_part.strip_prefix('#').unwrap_or(name_part).trim();
     let mut end = name_no_hash.len();
     for (i, c) in name_no_hash.char_indices() {
-        if c == '.' || c.is_whitespace() { end = i; break; }
-        if !is_ident_char(c) { return None; }
+        if c == '.' || c.is_whitespace() {
+            end = i;
+            break;
+        }
+        if !is_ident_char(c) {
+            return None;
+        }
     }
     let var_name = name_no_hash[..end].to_string();
-    if var_name.is_empty() { return None; }
+    if var_name.is_empty() {
+        return None;
+    }
     let idx: u32 = num_part.parse().ok()?;
     Some((var_name, idx))
 }
@@ -632,14 +718,19 @@ impl<'a> GoalParser<'a> {
             let _hash = self.lx.eat_str("#");
             let tvar = match self.lx.identifier() {
                 Some(s) => s,
-                None => { self.lx.set_pos(save); return None; }
+                None => {
+                    self.lx.set_pos(save);
+                    return None;
+                }
             };
             // Capture `.idx` if present (HS's `ActionG i fa` keeps the
             // full timepoint LVar incl. idx — needed to re-render the head
             // as `#vk.6` not `#vk`, and for exact goal matching).
             let tidx = if self.lx.eat_str(".") {
                 self.lx.natural().unwrap_or(0) as u32
-            } else { 0 };
+            } else {
+                0
+            };
             return Some(GoalSpec::Action {
                 fact: build_fact(persistent, name, &args_text),
                 time_var: tvar,
@@ -660,11 +751,16 @@ impl<'a> GoalParser<'a> {
             let _hash = self.lx.eat_str("#");
             let tvar = match self.lx.identifier() {
                 Some(s) => s,
-                None => { self.lx.set_pos(save); return None; }
+                None => {
+                    self.lx.set_pos(save);
+                    return None;
+                }
             };
             let tidx = if self.lx.eat_str(".") {
                 self.lx.natural().unwrap_or(0) as u32
-            } else { 0 };
+            } else {
+                0
+            };
             return Some(GoalSpec::Premise {
                 fact: build_fact(persistent, name, &args_text),
                 prem_idx: idx_val as usize,
@@ -693,15 +789,22 @@ fn build_fact(persistent: bool, name: String, args_text: &str) -> Fact {
     } else {
         split_top_level_commas(trimmed)
             .into_iter()
-            .map(|s| Term::Var(crate::ast::VarSpec {
-                name: s.trim().to_string(),
-                idx: 0,
-                sort: crate::ast::SortHint::Untagged,
-                typ: None,
-            }))
+            .map(|s| {
+                Term::Var(crate::ast::VarSpec {
+                    name: s.trim().to_string(),
+                    idx: 0,
+                    sort: crate::ast::SortHint::Untagged,
+                    typ: None,
+                })
+            })
             .collect()
     };
-    Fact { persistent, name, args, annotations: Vec::new() }
+    Fact {
+        persistent,
+        name,
+        args,
+        annotations: Vec::new(),
+    }
 }
 
 /// Split a string at top-level commas — ignores commas inside any kind
@@ -712,13 +815,23 @@ fn split_top_level_commas(s: &str) -> Vec<String> {
     let mut depth: i32 = 0;
     for c in s.chars() {
         match c {
-            '(' | '<' | '[' | '{' => { depth += 1; cur.push(c); }
-            ')' | '>' | ']' | '}' => { depth -= 1; cur.push(c); }
-            ',' if depth == 0 => { out.push(std::mem::take(&mut cur)); }
+            '(' | '<' | '[' | '{' => {
+                depth += 1;
+                cur.push(c);
+            }
+            ')' | '>' | ']' | '}' => {
+                depth -= 1;
+                cur.push(c);
+            }
+            ',' if depth == 0 => {
+                out.push(std::mem::take(&mut cur));
+            }
             _ => cur.push(c),
         }
     }
-    if !cur.is_empty() { out.push(cur); }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
     out
 }
 
@@ -816,7 +929,14 @@ mod tests {
         let src = "solve( Foo( x ) @ #i )";
         let t = parse_proof_tree(&format!("{} by sorry", src)).expect("parse");
         match &t.method {
-            ParsedMethod::SolveGoal(GoalSpec::Action { fact, time_var, time_idx }, _) => {
+            ParsedMethod::SolveGoal(
+                GoalSpec::Action {
+                    fact,
+                    time_var,
+                    time_idx,
+                },
+                _,
+            ) => {
                 assert_eq!(fact.name, "Foo");
                 assert_eq!(fact.args.len(), 1);
                 assert_eq!(time_var, "i");
@@ -837,7 +957,12 @@ mod tests {
         let src = "solve( !KU( ~AK ) @ #vk.6 )";
         let t = parse_proof_tree(&format!("{} by sorry", src)).expect("parse");
         match &t.method {
-            ParsedMethod::SolveGoal(GoalSpec::Action { time_var, time_idx, .. }, _) => {
+            ParsedMethod::SolveGoal(
+                GoalSpec::Action {
+                    time_var, time_idx, ..
+                },
+                _,
+            ) => {
                 assert_eq!(time_var, "vk");
                 assert_eq!(*time_idx, 6);
             }
@@ -851,7 +976,15 @@ mod tests {
         let src = "solve( Server( pid, sid, otc ) \u{25B6}\u{2080} #t1 )";
         let t = parse_proof_tree(&format!("{} by sorry", src)).expect("parse");
         match &t.method {
-            ParsedMethod::SolveGoal(GoalSpec::Premise { fact, prem_idx, time_var, time_idx }, _) => {
+            ParsedMethod::SolveGoal(
+                GoalSpec::Premise {
+                    fact,
+                    prem_idx,
+                    time_var,
+                    time_idx,
+                },
+                _,
+            ) => {
                 assert_eq!(fact.name, "Server");
                 assert_eq!(*prem_idx, 0);
                 assert_eq!(time_var, "t1");
@@ -923,7 +1056,15 @@ mod tests {
         let src = "solve( (#i, 0) ~~> (#j, 2) ) by sorry";
         let t = parse_proof_tree(src).expect("parse");
         match &t.method {
-            ParsedMethod::SolveGoal(GoalSpec::Chain { src_var, conc_idx, tgt_var, prem_idx }, _) => {
+            ParsedMethod::SolveGoal(
+                GoalSpec::Chain {
+                    src_var,
+                    conc_idx,
+                    tgt_var,
+                    prem_idx,
+                },
+                _,
+            ) => {
                 assert_eq!(src_var, "i");
                 assert_eq!(*conc_idx, 0);
                 assert_eq!(tgt_var, "j");
@@ -940,7 +1081,15 @@ mod tests {
         let src = "solve( (#i.5, 1) ~~> (#j.7, 0) ) by sorry";
         let t = parse_proof_tree(src).expect("parse");
         match &t.method {
-            ParsedMethod::SolveGoal(GoalSpec::Chain { src_var, conc_idx, tgt_var, prem_idx }, _) => {
+            ParsedMethod::SolveGoal(
+                GoalSpec::Chain {
+                    src_var,
+                    conc_idx,
+                    tgt_var,
+                    prem_idx,
+                },
+                _,
+            ) => {
                 // Freshen suffix stripped from the var ROOT.
                 assert_eq!(src_var, "i");
                 assert_eq!(*conc_idx, 1);
@@ -1035,7 +1184,9 @@ mod tests {
         match &t.method {
             ParsedMethod::SolveGoal(GoalSpec::Disj { alts, alt_texts: _ }, _) => {
                 assert_eq!(alts.len(), 5);
-                for a in alts.iter() { assert!(matches!(a, DisjAlt::NonQuant)); }
+                for a in alts.iter() {
+                    assert!(matches!(a, DisjAlt::NonQuant));
+                }
             }
             other => panic!("expected Disj goal-spec, got {:?}", other),
         }

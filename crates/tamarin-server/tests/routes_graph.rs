@@ -34,12 +34,16 @@ async fn intdot_returns_html_shell() {
         .expect("send");
     assert_eq!(res.status(), 200);
     let body = res.text().await.expect("text");
-    assert!(body.contains("<dot-graph-viz"),
+    assert!(
+        body.contains("<dot-graph-viz"),
         "intdot must be the HTML shell with a <dot-graph-viz>, got: {}",
-        &body[..body.len().min(200)]);
-    assert!(body.contains("/interactive-graph-def/proof/debug/_"),
+        &body[..body.len().min(200)]
+    );
+    assert!(
+        body.contains("/interactive-graph-def/proof/debug/_"),
         "the shell's dotsrc must point at interactive-graph-def; got: {}",
-        &body[..body.len().min(300)]);
+        &body[..body.len().min(300)]
+    );
 }
 
 #[tokio::test]
@@ -78,25 +82,23 @@ fn dot_output_for_a_simple_system() {
     // a System with a single rule node + an Out edge and confirm
     // the DOT output contains the expected structural pieces.
     use tamarin_server::handlers::dot::system_to_dot;
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::term::Term;
+    use tamarin_term::vterm::Lit;
     use tamarin_theory::constraint::system::System;
     use tamarin_theory::fact::{fresh_fact, out_fact};
     use tamarin_theory::rule::{
         ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo,
     };
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
 
     let mut sys = System::empty();
     let kvar = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-    let info: RuleInfo<
-        ProtoRuleACInstInfo,
-        tamarin_theory::rule::IntrRuleACInfo,
-    > = RuleInfo::Proto(ProtoRuleACInstInfo {
-        name: ProtoRuleName::Stand("Setup"),
-        attributes: RuleAttributes::empty(),
-        loop_breakers: Vec::new(),
-    });
+    let info: RuleInfo<ProtoRuleACInstInfo, tamarin_theory::rule::IntrRuleACInfo> =
+        RuleInfo::Proto(ProtoRuleACInstInfo {
+            name: ProtoRuleName::Stand("Setup"),
+            attributes: RuleAttributes::empty(),
+            loop_breakers: Vec::new(),
+        });
     let rule = Rule::new(
         info,
         vec![fresh_fact(kvar.clone())],

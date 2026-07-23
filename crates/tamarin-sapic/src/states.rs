@@ -128,7 +128,13 @@ fn add_states_channels(p: AnnotatedProc) -> AnnotatedProc {
         .unwrap_or(0);
     let mut fresh = FastFreshState::seeded(init_state_chan);
     let to_declare: Vec<SapicTerm> = all_bound_states.into_iter().collect();
-    declare_state_channel(&mut fresh, p, &to_declare, &BTreeSet::new(), &BTreeMap::new())
+    declare_state_channel(
+        &mut fresh,
+        p,
+        &to_declare,
+        &BTreeSet::new(),
+        &BTreeMap::new(),
+    )
 }
 
 /// HS `declareStateChannel` (States.hs:86-114): descend into the process.
@@ -145,10 +151,12 @@ fn declare_state_channel(
 ) -> AnnotatedProc {
     // `(declarables, undeclarables) = partition (frees ⊆ boundNames) toDeclare`
     let bound_lvars: BTreeSet<LVar> = bound_names.iter().map(|v| v.var.clone()).collect();
-    let (declarables, undeclarables): (Vec<SapicTerm>, Vec<SapicTerm>) = to_declare
-        .iter()
-        .cloned()
-        .partition(|t| frees_sapic_term(t).into_iter().all(|sv| bound_lvars.contains(&sv.var)));
+    let (declarables, undeclarables): (Vec<SapicTerm>, Vec<SapicTerm>) =
+        to_declare.iter().cloned().partition(|t| {
+            frees_sapic_term(t)
+                .into_iter()
+                .all(|sv| bound_lvars.contains(&sv.var))
+        });
 
     if declarables.is_empty() {
         // Nothing new to declare here: recurse, annotating state channels.
@@ -178,12 +186,12 @@ fn declare_state_channel(
                 let pr2 = declare_state_channel(fresh, *pr, to_declare, bound_names, state_map);
                 let an2 = match &act {
                     // Insert/Lock/Unlock: `an{ stateChannel = M.lookup t stateMap }`
-                    SapicAction::Insert(t, _)
-                    | SapicAction::Lock(t)
-                    | SapicAction::Unlock(t) => ProcessAnnotation {
-                        state_channel: state_map.get(t).cloned(),
-                        ..an
-                    },
+                    SapicAction::Insert(t, _) | SapicAction::Lock(t) | SapicAction::Unlock(t) => {
+                        ProcessAnnotation {
+                            state_channel: state_map.get(t).cloned(),
+                            ..an
+                        }
+                    }
                     _ => an,
                 };
                 Process::Action(act, an2, Box::new(pr2))
@@ -259,9 +267,7 @@ fn exists_attacker_unpure(p: &AnnotatedProc, bound_names: &BTreeSet<LVar>) -> bo
             exists_attacker_unpure(pl, &next)
         }
         // insert t; unlock t  (pure write pattern) — skip the pair, recurse.
-        Process::Action(SapicAction::Insert(t, _), _, body)
-            if matches!(&**body, Process::Action(SapicAction::Unlock(t2), _, _) if t == t2) =>
-        {
+        Process::Action(SapicAction::Insert(t, _), _, body) if matches!(&**body, Process::Action(SapicAction::Unlock(t2), _, _) if t == t2) => {
             if let Process::Action(SapicAction::Unlock(_), _, pl) = &**body {
                 exists_attacker_unpure(pl, bound_names)
             } else {
@@ -303,9 +309,7 @@ fn exists_attacker_unpure(p: &AnnotatedProc, bound_names: &BTreeSet<LVar>) -> bo
 fn is_pure_state(p: &AnnotatedProc, target: &SapicTerm, lone_insert: bool) -> (bool, bool) {
     match p {
         // insert t; unlock t  — skip the pure write pair.
-        Process::Action(SapicAction::Insert(t, _), _, body)
-            if matches!(&**body, Process::Action(SapicAction::Unlock(t2), _, _) if t == t2) =>
-        {
+        Process::Action(SapicAction::Insert(t, _), _, body) if matches!(&**body, Process::Action(SapicAction::Unlock(t2), _, _) if t == t2) => {
             if let Process::Action(SapicAction::Unlock(_), _, pl) = &**body {
                 is_pure_state(pl, target, lone_insert)
             } else {
@@ -368,19 +372,17 @@ pub fn annotate_pure_states(p: AnnotatedProc) -> AnnotatedProc {
 /// every `lookup`/`unlock`/`lock`/`insert` on a pure cell, and on every
 /// `new StateChannel` whose cell `isPureState` (adding the cell to the
 /// `pureStates` set for the body).
-fn annotate_each_pure_states(
-    p: AnnotatedProc,
-    pure_states: &BTreeSet<SapicTerm>,
-) -> AnnotatedProc {
+fn annotate_each_pure_states(p: AnnotatedProc, pure_states: &BTreeSet<SapicTerm>) -> AnnotatedProc {
     match p {
         Process::Null(an) => Process::Null(an),
         Process::Comb(comb, an, pl, pr) => {
             let pl2 = annotate_each_pure_states(*pl, pure_states);
             let pr2 = annotate_each_pure_states(*pr, pure_states);
             let an2 = match &comb {
-                ProcessCombinator::Lookup(t, _) if pure_states.contains(t) => {
-                    ProcessAnnotation { pure_state: true, ..an }
-                }
+                ProcessCombinator::Lookup(t, _) if pure_states.contains(t) => ProcessAnnotation {
+                    pure_state: true,
+                    ..an
+                },
                 _ => an,
             };
             Process::Comb(comb, an2, Box::new(pl2), Box::new(pr2))
@@ -419,19 +421,40 @@ fn annotate_each_pure_states(
                 SapicAction::Unlock(t) => {
                     let is_pure = pure_states.contains(t);
                     let body2 = annotate_each_pure_states(*body, pure_states);
-                    let an2 = if is_pure { ProcessAnnotation { pure_state: true, ..an } } else { an };
+                    let an2 = if is_pure {
+                        ProcessAnnotation {
+                            pure_state: true,
+                            ..an
+                        }
+                    } else {
+                        an
+                    };
                     Process::Action(ac, an2, Box::new(body2))
                 }
                 SapicAction::Lock(t) => {
                     let is_pure = pure_states.contains(t);
                     let body2 = annotate_each_pure_states(*body, pure_states);
-                    let an2 = if is_pure { ProcessAnnotation { pure_state: true, ..an } } else { an };
+                    let an2 = if is_pure {
+                        ProcessAnnotation {
+                            pure_state: true,
+                            ..an
+                        }
+                    } else {
+                        an
+                    };
                     Process::Action(ac, an2, Box::new(body2))
                 }
                 SapicAction::Insert(t, _) => {
                     let is_pure = pure_states.contains(t);
                     let body2 = annotate_each_pure_states(*body, pure_states);
-                    let an2 = if is_pure { ProcessAnnotation { pure_state: true, ..an } } else { an };
+                    let an2 = if is_pure {
+                        ProcessAnnotation {
+                            pure_state: true,
+                            ..an
+                        }
+                    } else {
+                        an
+                    };
                     Process::Action(ac, an2, Box::new(body2))
                 }
                 _ => {
@@ -468,21 +491,42 @@ fn vars_proc(p: &AnnotatedProc) -> Vec<LVar> {
                     }
                     SapicAction::Event(f) => fact_vars(f, out),
                     SapicAction::ChOut { chan, msg } => {
-                        if let Some(c) = chan { term_vars(c, out); }
+                        if let Some(c) = chan {
+                            term_vars(c, out);
+                        }
                         term_vars(msg, out);
                     }
-                    SapicAction::ChIn { chan, msg, match_vars } => {
-                        if let Some(c) = chan { term_vars(c, out); }
+                    SapicAction::ChIn {
+                        chan,
+                        msg,
+                        match_vars,
+                    } => {
+                        if let Some(c) = chan {
+                            term_vars(c, out);
+                        }
                         term_vars(msg, out);
-                        for v in match_vars { out.insert(v.var.clone()); }
+                        for v in match_vars {
+                            out.insert(v.var.clone());
+                        }
                     }
-                    SapicAction::Insert(a, b) => { term_vars(a, out); term_vars(b, out); }
-                    SapicAction::Delete(t)
-                    | SapicAction::Lock(t)
-                    | SapicAction::Unlock(t) => term_vars(t, out),
-                    SapicAction::ProcessCall(_, ts) => for t in ts { term_vars(t, out); },
-                    SapicAction::Msr { prems, acts, concs, .. } => {
-                        for f in prems.iter().chain(acts).chain(concs) { fact_vars(f, out); }
+                    SapicAction::Insert(a, b) => {
+                        term_vars(a, out);
+                        term_vars(b, out);
+                    }
+                    SapicAction::Delete(t) | SapicAction::Lock(t) | SapicAction::Unlock(t) => {
+                        term_vars(t, out)
+                    }
+                    SapicAction::ProcessCall(_, ts) => {
+                        for t in ts {
+                            term_vars(t, out);
+                        }
+                    }
+                    SapicAction::Msr {
+                        prems, acts, concs, ..
+                    } => {
+                        for f in prems.iter().chain(acts).chain(concs) {
+                            fact_vars(f, out);
+                        }
                     }
                     SapicAction::Rep => {}
                 }
@@ -490,14 +534,27 @@ fn vars_proc(p: &AnnotatedProc) -> Vec<LVar> {
             }
             Process::Comb(c, _, l, r) => {
                 match c {
-                    ProcessCombinator::Lookup(t, v) => { term_vars(t, out); out.insert(v.var.clone()); }
-                    ProcessCombinator::Let { left, right, match_vars } => {
+                    ProcessCombinator::Lookup(t, v) => {
+                        term_vars(t, out);
+                        out.insert(v.var.clone());
+                    }
+                    ProcessCombinator::Let {
+                        left,
+                        right,
+                        match_vars,
+                    } => {
                         term_vars(left, out);
                         term_vars(right, out);
-                        for v in match_vars { out.insert(v.var.clone()); }
+                        for v in match_vars {
+                            out.insert(v.var.clone());
+                        }
                     }
-                    ProcessCombinator::CondEq(a, b) => { term_vars(a, out); term_vars(b, out); }
-                    ProcessCombinator::Cond(_) | ProcessCombinator::Parallel
+                    ProcessCombinator::CondEq(a, b) => {
+                        term_vars(a, out);
+                        term_vars(b, out);
+                    }
+                    ProcessCombinator::Cond(_)
+                    | ProcessCombinator::Parallel
                     | ProcessCombinator::Ndc => {}
                 }
                 go(l, out);
@@ -512,8 +569,8 @@ fn vars_proc(p: &AnnotatedProc) -> Vec<LVar> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tamarin_term::vterm::{const_term, var_term};
     use tamarin_term::lterm::{LSort, Name, NameTag};
+    use tamarin_term::vterm::{const_term, var_term};
 
     fn slv(name: &str, sort: LSort) -> SapicLVar {
         SapicLVar::untyped(LVar::new(name, sort, 0))
@@ -559,7 +616,9 @@ mod tests {
         let out = annotate_pure_states(p);
 
         // Walk: after `new s` we expect the inserted `new StateChannel:channel`.
-        let Process::Action(SapicAction::New(_), _, body) = out else { panic!("new s") };
+        let Process::Action(SapicAction::New(_), _, body) = out else {
+            panic!("new s")
+        };
         let Process::Action(SapicAction::New(chan_var), chan_an, body) = *body else {
             panic!("expected inserted `new StateChannel:channel`")
         };
@@ -569,10 +628,14 @@ mod tests {
         assert!(chan_an.pure_state, "the StateChannel new is marked pure");
 
         // insert s,'init' (lone init) — pure.
-        let Process::Action(SapicAction::Insert(_, _), ins_an, body) = *body else { panic!() };
+        let Process::Action(SapicAction::Insert(_, _), ins_an, body) = *body else {
+            panic!()
+        };
         assert!(ins_an.pure_state);
         // lock s — pure.
-        let Process::Action(SapicAction::Lock(_), lock_an, body) = *body else { panic!() };
+        let Process::Action(SapicAction::Lock(_), lock_an, body) = *body else {
+            panic!()
+        };
         assert!(lock_an.pure_state);
         // lookup s as x — pure.
         let Process::Comb(ProcessCombinator::Lookup(_, _), lk_an, lk_body, _) = *body else {
@@ -580,10 +643,14 @@ mod tests {
         };
         assert!(lk_an.pure_state);
         // insert s,x — pure.
-        let Process::Action(SapicAction::Insert(_, _), ins2_an, body) = *lk_body else { panic!() };
+        let Process::Action(SapicAction::Insert(_, _), ins2_an, body) = *lk_body else {
+            panic!()
+        };
         assert!(ins2_an.pure_state);
         // unlock s — pure.
-        let Process::Action(SapicAction::Unlock(_), unlock_an, _) = *body else { panic!() };
+        let Process::Action(SapicAction::Unlock(_), unlock_an, _) = *body else {
+            panic!()
+        };
         assert!(unlock_an.pure_state);
     }
 
@@ -594,7 +661,10 @@ mod tests {
         // insert state,'v'  where `state` is a FREE (unbound) public name var:
         // `existsAttackerUnpure` returns true → addStatesChannels only.
         let state_var = var_term(slv("state", LSort::Msg));
-        let p = act(SapicAction::Insert(state_var, const_term(Name::new(NameTag::Pub, "v"))), null());
+        let p = act(
+            SapicAction::Insert(state_var, const_term(Name::new(NameTag::Pub, "v"))),
+            null(),
+        );
         let out = annotate_pure_states(p);
         // No pure_state anywhere.
         fn any_pure(p: &AnnotatedProc) -> bool {

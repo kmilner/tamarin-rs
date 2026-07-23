@@ -16,24 +16,21 @@
 use std::collections::BTreeSet;
 
 use crate::builtin::{
-    asym_enc_fun_sig, hash_fun_sig, location_report_fun_sig, mset_rules,
-    reveal_signature_fun_sig, signature_fun_sig, sym_enc_fun_sig,
-    asym_enc_fun_dest_sig, sym_enc_fun_dest_sig, signature_fun_dest_sig,
-    bp_rules, dh_rules, xor_rules,
+    asym_enc_fun_dest_sig, asym_enc_fun_sig, bp_rules, dh_rules, hash_fun_sig,
+    location_report_fun_sig, mset_rules, reveal_signature_fun_sig, signature_fun_dest_sig,
+    signature_fun_sig, sym_enc_fun_dest_sig, sym_enc_fun_sig, xor_rules,
 };
 use crate::function_symbols::{
-    bp_fun_sig, bp_reducible_fun_sig, dh_fun_sig, dh_reducible_fun_sig,
-    fst_dest_sym, fst_sym, mset_fun_sig, nat_fun_sig, pair_fun_dest_sig,
-    pair_fun_sig, snd_dest_sym, snd_sym, xor_fun_sig, xor_reducible_fun_sig, FunSig,
-    FunSym, NoEqFunSig, NoEqSym,
+    bp_fun_sig, bp_reducible_fun_sig, dh_fun_sig, dh_reducible_fun_sig, fst_dest_sym, fst_sym,
+    mset_fun_sig, nat_fun_sig, pair_fun_dest_sig, pair_fun_sig, snd_dest_sym, snd_sym, xor_fun_sig,
+    xor_reducible_fun_sig, FunSig, FunSym, NoEqFunSig, NoEqSym,
 };
 use crate::lterm::LNTerm;
 use crate::rewriting::RRule;
 use crate::subterm_rule::CtxtStRule;
 use crate::term::Term;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MaudeSig {
     pub enable_dh: bool,
     pub enable_bp: bool,
@@ -61,31 +58,41 @@ pub struct MaudeSig {
     pub reducible_fun_syms_fast: tamarin_utils::FastSet<FunSym>,
 }
 
-
 impl MaudeSig {
     /// True when the signature declares NO associative-commutative operators
     /// (DH / BP / multiset / nat / XOR).  The local Robinson unifier and the
     /// `reduce` identity fast-path are complete only for such signatures; this
     /// is the single source of truth for that "no AC theory" predicate.
     pub fn has_no_ac_operators(&self) -> bool {
-        !self.enable_dh && !self.enable_bp && !self.enable_mset
-            && !self.enable_nat && !self.enable_xor
+        !self.enable_dh
+            && !self.enable_bp
+            && !self.enable_mset
+            && !self.enable_nat
+            && !self.enable_xor
     }
 
     /// Refresh the cached `fun_syms` / `irreducible_fun_syms` /
     /// `reducible_fun_syms` from the source-of-truth flags.
     pub fn refresh(mut self) -> Self {
-        if self.enable_bp { self.enable_dh = true; }
-        let mut all_funs: FunSig = self
-            .st_fun_syms
-            .iter()
-            .map(|s| FunSym::NoEq(*s))
-            .collect();
-        if self.enable_dh || self.enable_bp { all_funs.extend(dh_fun_sig()); }
-        if self.enable_bp { all_funs.extend(bp_fun_sig()); }
-        if self.enable_mset { all_funs.extend(mset_fun_sig()); }
-        if self.enable_nat { all_funs.extend(nat_fun_sig()); }
-        if self.enable_xor { all_funs.extend(xor_fun_sig()); }
+        if self.enable_bp {
+            self.enable_dh = true;
+        }
+        let mut all_funs: FunSig = self.st_fun_syms.iter().map(|s| FunSym::NoEq(*s)).collect();
+        if self.enable_dh || self.enable_bp {
+            all_funs.extend(dh_fun_sig());
+        }
+        if self.enable_bp {
+            all_funs.extend(bp_fun_sig());
+        }
+        if self.enable_mset {
+            all_funs.extend(mset_fun_sig());
+        }
+        if self.enable_nat {
+            all_funs.extend(nat_fun_sig());
+        }
+        if self.enable_xor {
+            all_funs.extend(xor_fun_sig());
+        }
 
         // Reducible roots: any function symbol at the root of an stRules LHS,
         // plus DH/BP/XOR reducible. AC Mult is intentionally absent.
@@ -99,8 +106,10 @@ impl MaudeSig {
         reducible_without_mult.extend(bp_reducible_fun_sig());
         reducible_without_mult.extend(xor_reducible_fun_sig());
 
-        let irreducible: FunSig =
-            all_funs.difference(&reducible_without_mult).cloned().collect();
+        let irreducible: FunSig = all_funs
+            .difference(&reducible_without_mult)
+            .cloned()
+            .collect();
 
         let mut reducible: FunSig = BTreeSet::new();
         for r in self.rrules() {
@@ -122,22 +131,32 @@ impl MaudeSig {
 
     /// `rrulesForMaudeSig`: every rewrite rule active for this signature.
     pub fn rrules(&self) -> BTreeSet<RRule<LNTerm>> {
-        let mut s: BTreeSet<RRule<LNTerm>> = self
-            .st_rules
-            .iter()
-            .map(|r| r.to_rrule())
-            .collect();
-        if self.enable_dh { s.extend(dh_rules()); }
-        if self.enable_bp { s.extend(bp_rules()); }
-        if self.enable_mset { s.extend(mset_rules()); }
-        if self.enable_xor { s.extend(xor_rules()); }
+        let mut s: BTreeSet<RRule<LNTerm>> = self.st_rules.iter().map(|r| r.to_rrule()).collect();
+        if self.enable_dh {
+            s.extend(dh_rules());
+        }
+        if self.enable_bp {
+            s.extend(bp_rules());
+        }
+        if self.enable_mset {
+            s.extend(mset_rules());
+        }
+        if self.enable_xor {
+            s.extend(xor_rules());
+        }
         s
     }
 
     pub fn no_eq_fun_syms(&self) -> NoEqFunSig {
         self.fun_syms
             .iter()
-            .filter_map(|f| if let FunSym::NoEq(s) = f { Some(*s) } else { None })
+            .filter_map(|f| {
+                if let FunSym::NoEq(s) = f {
+                    Some(*s)
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 
@@ -187,10 +206,15 @@ impl MaudeSig {
         // would render the equation twice, e.g. noise/secrecy_4_passiveINpsk1_proof).
         // Mirror HS here: inserting a pair destructor rule drops the constructor
         // variant and vice versa, matching the declared symbol.
-        if rule == fst_dest_rule() { self.st_rules.remove(&fst_rule()); }
-        else if rule == fst_rule() { self.st_rules.remove(&fst_dest_rule()); }
-        else if rule == snd_dest_rule() { self.st_rules.remove(&snd_rule()); }
-        else if rule == snd_rule() { self.st_rules.remove(&snd_dest_rule()); }
+        if rule == fst_dest_rule() {
+            self.st_rules.remove(&fst_rule());
+        } else if rule == fst_rule() {
+            self.st_rules.remove(&fst_dest_rule());
+        } else if rule == snd_dest_rule() {
+            self.st_rules.remove(&snd_rule());
+        } else if rule == snd_rule() {
+            self.st_rules.remove(&snd_dest_rule());
+        }
         self.st_rules.insert(rule);
         self.refresh()
     }
@@ -205,7 +229,11 @@ impl MaudeSig {
             enable_diff: self.enable_diff || other.enable_diff,
             st_fun_syms: union_except_pair_sym(&self.st_fun_syms, &other.st_fun_syms),
             st_rules: union_except_pair_rules(&self.st_rules, &other.st_rules),
-            macro_names: self.macro_names.union(&other.macro_names).cloned().collect(),
+            macro_names: self
+                .macro_names
+                .union(&other.macro_names)
+                .cloned()
+                .collect(),
             eq_convergent: false,
             fun_syms: BTreeSet::new(),
             irreducible_fun_syms: BTreeSet::new(),
@@ -232,10 +260,7 @@ impl MaudeSig {
 /// exclusive: whichever variant `st2` carries WINS, and the opposite
 /// variant is removed from `st1`.  This is asymmetric in `st2`, matching
 /// HS's monoid `<>` (where the right operand is the newly-added symbol).
-fn union_except_pair_sym(
-    a: &BTreeSet<NoEqSym>,
-    b: &BTreeSet<NoEqSym>,
-) -> BTreeSet<NoEqSym> {
+fn union_except_pair_sym(a: &BTreeSet<NoEqSym>, b: &BTreeSet<NoEqSym>) -> BTreeSet<NoEqSym> {
     // removeIfNecessary' st1 st2 toAdd toRemove
     fn remove_if_necessary_prime(
         st1: &BTreeSet<NoEqSym>,
@@ -329,7 +354,10 @@ fn fst_rule() -> CtxtStRule {
     let x2 = msg_var("x", 2);
     CtxtStRule::new(
         fst(pair(x1.clone(), x2.clone())),
-        StRhs { positions: vec![vec![0, 0]], term: x1 },
+        StRhs {
+            positions: vec![vec![0, 0]],
+            term: x1,
+        },
     )
 }
 fn snd_rule() -> CtxtStRule {
@@ -339,7 +367,10 @@ fn snd_rule() -> CtxtStRule {
     let x2 = msg_var("x", 2);
     CtxtStRule::new(
         snd(pair(x1.clone(), x2.clone())),
-        StRhs { positions: vec![vec![0, 1]], term: x2 },
+        StRhs {
+            positions: vec![vec![0, 1]],
+            term: x2,
+        },
     )
 }
 fn fst_dest_rule() -> CtxtStRule {
@@ -350,7 +381,10 @@ fn fst_dest_rule() -> CtxtStRule {
     let x2 = msg_var("x", 2);
     CtxtStRule::new(
         f_app_no_eq(fst_dest_sym(), vec![pair(x1.clone(), x2.clone())]),
-        StRhs { positions: vec![vec![0, 0]], term: x1 },
+        StRhs {
+            positions: vec![vec![0, 0]],
+            term: x1,
+        },
     )
 }
 fn snd_dest_rule() -> CtxtStRule {
@@ -361,7 +395,10 @@ fn snd_dest_rule() -> CtxtStRule {
     let x2 = msg_var("x", 2);
     CtxtStRule::new(
         f_app_no_eq(snd_dest_sym(), vec![pair(x1.clone(), x2.clone())]),
-        StRhs { positions: vec![vec![0, 1]], term: x2 },
+        StRhs {
+            positions: vec![vec![0, 1]],
+            term: x2,
+        },
     )
 }
 
@@ -370,19 +407,39 @@ fn snd_dest_rule() -> CtxtStRule {
 // =============================================================================
 
 pub fn dh_maude_sig() -> MaudeSig {
-    MaudeSig { enable_dh: true, ..MaudeSig::default() }.refresh()
+    MaudeSig {
+        enable_dh: true,
+        ..MaudeSig::default()
+    }
+    .refresh()
 }
 pub fn bp_maude_sig() -> MaudeSig {
-    MaudeSig { enable_bp: true, ..MaudeSig::default() }.refresh()
+    MaudeSig {
+        enable_bp: true,
+        ..MaudeSig::default()
+    }
+    .refresh()
 }
 pub fn mset_maude_sig() -> MaudeSig {
-    MaudeSig { enable_mset: true, ..MaudeSig::default() }.refresh()
+    MaudeSig {
+        enable_mset: true,
+        ..MaudeSig::default()
+    }
+    .refresh()
 }
 pub fn nat_maude_sig() -> MaudeSig {
-    MaudeSig { enable_nat: true, ..MaudeSig::default() }.refresh()
+    MaudeSig {
+        enable_nat: true,
+        ..MaudeSig::default()
+    }
+    .refresh()
 }
 pub fn xor_maude_sig() -> MaudeSig {
-    MaudeSig { enable_xor: true, ..MaudeSig::default() }.refresh()
+    MaudeSig {
+        enable_xor: true,
+        ..MaudeSig::default()
+    }
+    .refresh()
 }
 
 pub fn pair_maude_sig() -> MaudeSig {
@@ -390,7 +447,8 @@ pub fn pair_maude_sig() -> MaudeSig {
         st_fun_syms: pair_fun_sig(),
         st_rules: crate::builtin::pair_rules(),
         ..MaudeSig::default()
-    }.refresh()
+    }
+    .refresh()
 }
 
 /// `pairDestMaudeSig` (Signature.hs:202-202): the `dest-pairing` variant —
@@ -401,7 +459,8 @@ pub fn pair_dest_maude_sig() -> MaudeSig {
         st_fun_syms: pair_fun_dest_sig(),
         st_rules: crate::builtin::pair_dest_rules(),
         ..MaudeSig::default()
-    }.refresh()
+    }
+    .refresh()
 }
 
 pub fn hash_maude_sig() -> MaudeSig {
@@ -409,7 +468,8 @@ pub fn hash_maude_sig() -> MaudeSig {
         st_fun_syms: hash_fun_sig(),
         // Hash is one-way: no destructor rules.
         ..MaudeSig::default()
-    }.refresh()
+    }
+    .refresh()
 }
 
 pub fn sym_enc_maude_sig() -> MaudeSig {
@@ -417,7 +477,8 @@ pub fn sym_enc_maude_sig() -> MaudeSig {
         st_fun_syms: sym_enc_fun_sig(),
         st_rules: crate::builtin::sym_enc_rules(),
         ..MaudeSig::default()
-    }.refresh()
+    }
+    .refresh()
 }
 
 pub fn asym_enc_maude_sig() -> MaudeSig {
@@ -425,7 +486,8 @@ pub fn asym_enc_maude_sig() -> MaudeSig {
         st_fun_syms: asym_enc_fun_sig(),
         st_rules: crate::builtin::asym_enc_rules(),
         ..MaudeSig::default()
-    }.refresh()
+    }
+    .refresh()
 }
 
 pub fn signature_maude_sig() -> MaudeSig {
@@ -433,7 +495,8 @@ pub fn signature_maude_sig() -> MaudeSig {
         st_fun_syms: signature_fun_sig(),
         st_rules: crate::builtin::signature_rules(),
         ..MaudeSig::default()
-    }.refresh()
+    }
+    .refresh()
 }
 
 pub fn reveal_signature_maude_sig() -> MaudeSig {
@@ -441,7 +504,8 @@ pub fn reveal_signature_maude_sig() -> MaudeSig {
         st_fun_syms: reveal_signature_fun_sig(),
         st_rules: crate::builtin::reveal_signature_rules(),
         ..MaudeSig::default()
-    }.refresh()
+    }
+    .refresh()
 }
 
 pub fn location_report_maude_sig() -> MaudeSig {
@@ -449,7 +513,8 @@ pub fn location_report_maude_sig() -> MaudeSig {
         st_fun_syms: location_report_fun_sig(),
         st_rules: crate::builtin::location_report_rules(),
         ..MaudeSig::default()
-    }.refresh()
+    }
+    .refresh()
 }
 
 pub fn sym_enc_dest_maude_sig() -> MaudeSig {
@@ -457,7 +522,8 @@ pub fn sym_enc_dest_maude_sig() -> MaudeSig {
         st_fun_syms: sym_enc_fun_dest_sig(),
         st_rules: crate::builtin::sym_enc_dest_rules(),
         ..MaudeSig::default()
-    }.refresh()
+    }
+    .refresh()
 }
 
 pub fn asym_enc_dest_maude_sig() -> MaudeSig {
@@ -465,7 +531,8 @@ pub fn asym_enc_dest_maude_sig() -> MaudeSig {
         st_fun_syms: asym_enc_fun_dest_sig(),
         st_rules: crate::builtin::asym_enc_dest_rules(),
         ..MaudeSig::default()
-    }.refresh()
+    }
+    .refresh()
 }
 
 pub fn signature_dest_maude_sig() -> MaudeSig {
@@ -473,7 +540,8 @@ pub fn signature_dest_maude_sig() -> MaudeSig {
         st_fun_syms: signature_fun_dest_sig(),
         st_rules: crate::builtin::signature_dest_rules(),
         ..MaudeSig::default()
-    }.refresh()
+    }
+    .refresh()
 }
 
 pub fn minimal_maude_sig(diff: bool) -> MaudeSig {
@@ -482,11 +550,16 @@ pub fn minimal_maude_sig(diff: bool) -> MaudeSig {
         st_fun_syms: pair_fun_sig(),
         st_rules: crate::builtin::pair_rules(),
         ..MaudeSig::default()
-    }.refresh()
+    }
+    .refresh()
 }
 
 pub fn enable_diff_maude_sig() -> MaudeSig {
-    MaudeSig { enable_diff: true, ..MaudeSig::default() }.refresh()
+    MaudeSig {
+        enable_diff: true,
+        ..MaudeSig::default()
+    }
+    .refresh()
 }
 
 #[cfg(test)]
@@ -538,23 +611,41 @@ mod tests {
     #[test]
     fn add_fun_sym_resets_eq_convergent() {
         use crate::function_symbols::{Constructability, NoEqSym, Privacy};
-        let sig = MaudeSig { eq_convergent: true, ..MaudeSig::default() };
+        let sig = MaudeSig {
+            eq_convergent: true,
+            ..MaudeSig::default()
+        };
         let g = NoEqSym::new(
-            b"g".to_vec(), 1, Privacy::Public, Constructability::Constructor);
+            b"g".to_vec(),
+            1,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
         let sig = sig.add_fun_sym(g);
-        assert!(!sig.eq_convergent,
-            "add_fun_sym must reset eq_convergent (HS monoid <>)");
+        assert!(
+            !sig.eq_convergent,
+            "add_fun_sym must reset eq_convergent (HS monoid <>)"
+        );
     }
 
     #[test]
     fn add_macro_sym_resets_eq_convergent() {
         use crate::function_symbols::{Constructability, NoEqSym, Privacy};
-        let sig = MaudeSig { eq_convergent: true, ..MaudeSig::default() };
+        let sig = MaudeSig {
+            eq_convergent: true,
+            ..MaudeSig::default()
+        };
         let m = NoEqSym::new(
-            b"m".to_vec(), 1, Privacy::Private, Constructability::Destructor);
+            b"m".to_vec(),
+            1,
+            Privacy::Private,
+            Constructability::Destructor,
+        );
         let sig = sig.add_macro_sym(m);
-        assert!(!sig.eq_convergent,
-            "add_macro_sym must reset eq_convergent (HS monoid <>)");
+        assert!(
+            !sig.eq_convergent,
+            "add_macro_sym must reset eq_convergent (HS monoid <>)"
+        );
     }
 
     /// `add_ctxt_st_rule` must PRESERVE eq_convergent (no reset), because the
@@ -564,9 +655,14 @@ mod tests {
     /// corpus ordering.
     #[test]
     fn add_ctxt_st_rule_preserves_eq_convergent() {
-        let sig = MaudeSig { eq_convergent: true, ..MaudeSig::default() };
+        let sig = MaudeSig {
+            eq_convergent: true,
+            ..MaudeSig::default()
+        };
         let sig = sig.add_ctxt_st_rule(fst_dest_rule());
-        assert!(sig.eq_convergent,
-            "add_ctxt_st_rule must NOT reset eq_convergent");
+        assert!(
+            sig.eq_convergent,
+            "add_ctxt_st_rule must NOT reset eq_convergent"
+        );
     }
 }

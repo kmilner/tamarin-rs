@@ -15,9 +15,8 @@
 //!   term used in queries.
 
 use crate::function_symbols::{
-    AcSym, CSym, Constructability, FunSym, NoEqSym, Privacy,
-    EMAP_SYM_STRING, MULT_SYM_STRING, MUN_SYM_STRING,
-    NAT_PLUS_SYM_STRING, XOR_SYM_STRING,
+    AcSym, CSym, Constructability, FunSym, NoEqSym, Privacy, EMAP_SYM_STRING, MULT_SYM_STRING,
+    MUN_SYM_STRING, NAT_PLUS_SYM_STRING, XOR_SYM_STRING,
 };
 use crate::lterm::LSort;
 use crate::maude_sig::MaudeSig;
@@ -72,8 +71,8 @@ pub fn fun_sym_encode_attr(p: Privacy, c: Constructability) -> &'static str {
     match (p, c) {
         (Privacy::Private, Constructability::Destructor) => "PD",
         (Privacy::Private, Constructability::Constructor) => "PC",
-        (Privacy::Public,  Constructability::Destructor)  => "XD",
-        (Privacy::Public,  Constructability::Constructor) => "XC",
+        (Privacy::Public, Constructability::Destructor) => "XD",
+        (Privacy::Public, Constructability::Constructor) => "XC",
     }
 }
 
@@ -89,8 +88,8 @@ pub fn fun_sym_decode(s: &[u8]) -> (Vec<u8>, Privacy, Constructability) {
     let (priv_, constr) = match attr {
         b"PD" => (Privacy::Private, Constructability::Destructor),
         b"PC" => (Privacy::Private, Constructability::Constructor),
-        b"XD" => (Privacy::Public,  Constructability::Destructor),
-        _      => (Privacy::Public,  Constructability::Constructor),
+        b"XD" => (Privacy::Public, Constructability::Destructor),
+        _ => (Privacy::Public, Constructability::Constructor),
     };
     (ident, priv_, constr)
 }
@@ -98,7 +97,9 @@ pub fn fun_sym_decode(s: &[u8]) -> (Vec<u8>, Privacy, Constructability) {
 /// Replace `-` with `_` (inverse of the identifier `_` -> `-` mapping
 /// applied when emitting Maude names).
 pub fn replace_minus(s: &[u8]) -> Vec<u8> {
-    s.iter().map(|c| if *c == b'-' { b'_' } else { *c }).collect()
+    s.iter()
+        .map(|c| if *c == b'-' { b'_' } else { *c })
+        .collect()
 }
 
 /// AC operator's Maude name (with `tam` prefix).
@@ -178,34 +179,36 @@ fn pp_mterm_into(t: &Term<MaudeLit>, buf: &mut Vec<u8>) {
             // Should not appear in queries we send. Match Haskell's panic.
             panic!("pp_mterm: FreshVar must not appear in outgoing terms");
         }
-        Term::App(sym, args) => {
-            match sym {
-                FunSym::NoEq(s) => {
-                    pp_maude_no_eq_sym_into(s, buf);
-                    if !args.is_empty() { pp_args(args, buf); }
-                }
-                FunSym::C(c) => {
-                    pp_maude_c_sym_into(*c, buf);
+        Term::App(sym, args) => match sym {
+            FunSym::NoEq(s) => {
+                pp_maude_no_eq_sym_into(s, buf);
+                if !args.is_empty() {
                     pp_args(args, buf);
-                }
-                FunSym::Ac(op) => {
-                    pp_maude_ac_sym_into(*op, buf);
-                    pp_args(args, buf);
-                }
-                FunSym::List => {
-                    buf.extend_from_slice(b"list(");
-                    pp_list(args, buf);
-                    buf.push(b')');
                 }
             }
-        }
+            FunSym::C(c) => {
+                pp_maude_c_sym_into(*c, buf);
+                pp_args(args, buf);
+            }
+            FunSym::Ac(op) => {
+                pp_maude_ac_sym_into(*op, buf);
+                pp_args(args, buf);
+            }
+            FunSym::List => {
+                buf.extend_from_slice(b"list(");
+                pp_list(args, buf);
+                buf.push(b')');
+            }
+        },
     }
 }
 
 fn pp_args(args: &[Term<MaudeLit>], buf: &mut Vec<u8>) {
     buf.push(b'(');
     for (i, a) in args.iter().enumerate() {
-        if i > 0 { buf.push(b','); }
+        if i > 0 {
+            buf.push(b',');
+        }
         pp_mterm_into(a, buf);
     }
     buf.push(b')');
@@ -316,8 +319,12 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
 }
 
 fn op_eq(out: &mut String, name: &str, sort: &str) {
-    op(out, Privacy::Public, Constructability::Constructor,
-       &format!("{} : {}", name, sort));
+    op(
+        out,
+        Privacy::Public,
+        Constructability::Constructor,
+        &format!("{} : {}", name, sort),
+    );
 }
 
 fn op_ac(out: &mut String, name: &str, sort: &str) {

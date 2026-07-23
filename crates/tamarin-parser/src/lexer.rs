@@ -22,7 +22,11 @@ pub struct Pos {
 }
 
 impl Pos {
-    pub const ZERO: Pos = Pos { offset: 0, line: 1, col: 1 };
+    pub const ZERO: Pos = Pos {
+        offset: 0,
+        line: 1,
+        col: 1,
+    };
 }
 
 #[derive(Debug, Clone)]
@@ -33,16 +37,31 @@ pub struct Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     pub fn new(src: &'a str) -> Self {
-        Lexer { src, pos: Pos::ZERO }
+        Lexer {
+            src,
+            pos: Pos::ZERO,
+        }
     }
 
-    pub fn pos(&self) -> Pos { self.pos }
-    pub fn set_pos(&mut self, p: Pos) { self.pos = p; }
-    pub fn src(&self) -> &'a str { self.src }
-    pub fn rest(&self) -> &'a str { &self.src[self.pos.offset..] }
-    pub fn is_eof(&self) -> bool { self.pos.offset >= self.src.len() }
+    pub fn pos(&self) -> Pos {
+        self.pos
+    }
+    pub fn set_pos(&mut self, p: Pos) {
+        self.pos = p;
+    }
+    pub fn src(&self) -> &'a str {
+        self.src
+    }
+    pub fn rest(&self) -> &'a str {
+        &self.src[self.pos.offset..]
+    }
+    pub fn is_eof(&self) -> bool {
+        self.pos.offset >= self.src.len()
+    }
 
-    pub fn line_col(&self) -> (u32, u32) { (self.pos.line, self.pos.col) }
+    pub fn line_col(&self) -> (u32, u32) {
+        (self.pos.line, self.pos.col)
+    }
 
     /// Peek the next char without advancing.
     pub fn peek(&self) -> Option<char> {
@@ -72,15 +91,24 @@ impl<'a> Lexer<'a> {
 
     /// If the next char matches `c`, consume and return true.
     pub fn eat(&mut self, c: char) -> bool {
-        if self.peek() == Some(c) { self.bump(); true } else { false }
+        if self.peek() == Some(c) {
+            self.bump();
+            true
+        } else {
+            false
+        }
     }
 
     /// Try to consume the literal string `s` at current position.
     pub fn eat_str(&mut self, s: &str) -> bool {
         if self.rest().starts_with(s) {
-            for _ in s.chars() { self.bump(); }
+            for _ in s.chars() {
+                self.bump();
+            }
             true
-        } else { false }
+        } else {
+            false
+        }
     }
 
     /// Consume a maximal run of ASCII-alphabetic characters and return it
@@ -90,7 +118,12 @@ impl<'a> Lexer<'a> {
     pub fn ascii_alpha_run(&mut self) -> String {
         let mut s = String::new();
         while let Some(c) = self.peek() {
-            if c.is_ascii_alphabetic() { s.push(c); self.bump(); } else { break; }
+            if c.is_ascii_alphabetic() {
+                s.push(c);
+                self.bump();
+            } else {
+                break;
+            }
         }
         s
     }
@@ -102,27 +135,38 @@ impl<'a> Lexer<'a> {
     pub fn skip_ws(&mut self) {
         loop {
             match self.peek() {
-                Some(c) if c.is_whitespace() => { self.bump(); }
+                Some(c) if c.is_whitespace() => {
+                    self.bump();
+                }
                 Some('/') => {
                     if self.rest().starts_with("//") {
                         // line comment to EOL
                         while let Some(c) = self.peek() {
-                            if c == '\n' { break; }
+                            if c == '\n' {
+                                break;
+                            }
                             self.bump();
                         }
                     } else if self.rest().starts_with("/*") {
-                        self.bump(); self.bump();
+                        self.bump();
+                        self.bump();
                         let mut depth = 1usize;
                         while depth > 0 {
                             match self.peek() {
                                 None => return, // unterminated, stop
                                 Some('/') if self.rest().starts_with("/*") => {
-                                    self.bump(); self.bump(); depth += 1;
+                                    self.bump();
+                                    self.bump();
+                                    depth += 1;
                                 }
                                 Some('*') if self.rest().starts_with("*/") => {
-                                    self.bump(); self.bump(); depth -= 1;
+                                    self.bump();
+                                    self.bump();
+                                    depth -= 1;
                                 }
-                                _ => { self.bump(); }
+                                _ => {
+                                    self.bump();
+                                }
                             }
                         }
                     } else {
@@ -141,7 +185,9 @@ impl<'a> Lexer<'a> {
     /// require the next char to NOT be alphanum (word boundary).
     pub fn symbol(&mut self, s: &str) -> bool {
         self.skip_ws();
-        if !self.rest().starts_with(s) { return false; }
+        if !self.rest().starts_with(s) {
+            return false;
+        }
         // Word-boundary check for keyword-like symbols.
         if s.chars().last().is_some_and(is_ident_char) {
             let after = &self.rest()[s.len()..];
@@ -149,7 +195,9 @@ impl<'a> Lexer<'a> {
                 return false;
             }
         }
-        for _ in s.chars() { self.bump(); }
+        for _ in s.chars() {
+            self.bump();
+        }
         self.skip_ws();
         true
     }
@@ -157,7 +205,12 @@ impl<'a> Lexer<'a> {
     /// Like [`symbol`], but does not consume on failure.
     pub fn try_symbol(&mut self, s: &str) -> bool {
         let save = self.pos;
-        if self.symbol(s) { true } else { self.pos = save; false }
+        if self.symbol(s) {
+            true
+        } else {
+            self.pos = save;
+            false
+        }
     }
 
     /// Peek for a symbol (with word-boundary check) without consuming.
@@ -183,13 +236,27 @@ impl<'a> Lexer<'a> {
         let save = self.pos;
         let mut s = String::new();
         match self.peek() {
-            Some(c) if c.is_alphanumeric() => { s.push(c); self.bump(); }
-            _ => { self.pos = save; return None; }
+            Some(c) if c.is_alphanumeric() => {
+                s.push(c);
+                self.bump();
+            }
+            _ => {
+                self.pos = save;
+                return None;
+            }
         }
         while let Some(c) = self.peek() {
-            if is_ident_char(c) { s.push(c); self.bump(); } else { break; }
+            if is_ident_char(c) {
+                s.push(c);
+                self.bump();
+            } else {
+                break;
+            }
         }
-        if is_reserved_name(&s) { self.pos = save; return None; }
+        if is_reserved_name(&s) {
+            self.pos = save;
+            return None;
+        }
         self.skip_ws();
         Some(s)
     }
@@ -214,9 +281,20 @@ impl<'a> Lexer<'a> {
         self.skip_ws();
         let mut s = String::new();
         while let Some(c) = self.peek() {
-            if c.is_ascii_digit() { s.push(c); self.bump(); } else { break; }
+            if c.is_ascii_digit() {
+                s.push(c);
+                self.bump();
+            } else {
+                break;
+            }
         }
-        if s.is_empty() { None } else { let n = s.parse().ok(); self.skip_ws(); n }
+        if s.is_empty() {
+            None
+        } else {
+            let n = s.parse().ok();
+            self.skip_ws();
+            n
+        }
     }
 
     /// Subscript-digit natural (Unicode subscripts ₀–₉).
@@ -226,15 +304,28 @@ impl<'a> Lexer<'a> {
         let mut got = false;
         while let Some(c) = self.peek() {
             let d = match c {
-                '\u{2080}' => 0, '\u{2081}' => 1, '\u{2082}' => 2, '\u{2083}' => 3,
-                '\u{2084}' => 4, '\u{2085}' => 5, '\u{2086}' => 6, '\u{2087}' => 7,
-                '\u{2088}' => 8, '\u{2089}' => 9, _ => break,
+                '\u{2080}' => 0,
+                '\u{2081}' => 1,
+                '\u{2082}' => 2,
+                '\u{2083}' => 3,
+                '\u{2084}' => 4,
+                '\u{2085}' => 5,
+                '\u{2086}' => 6,
+                '\u{2087}' => 7,
+                '\u{2088}' => 8,
+                '\u{2089}' => 9,
+                _ => break,
             };
             n = n * 10 + d;
             got = true;
             self.bump();
         }
-        if got { self.skip_ws(); Some(n) } else { None }
+        if got {
+            self.skip_ws();
+            Some(n)
+        } else {
+            None
+        }
     }
 
     /// Double-quoted string literal, decoding Haskell/Parsec string escapes.
@@ -257,21 +348,37 @@ impl<'a> Lexer<'a> {
     pub fn string_literal(&mut self) -> Option<String> {
         self.skip_ws();
         let save = self.pos;
-        if !self.eat('"') { self.pos = save; return None; }
+        if !self.eat('"') {
+            self.pos = save;
+            return None;
+        }
         let mut s = String::new();
         loop {
             match self.peek() {
-                None => { self.pos = save; return None; }
-                Some('"') => { self.bump(); self.skip_ws(); return Some(s); }
+                None => {
+                    self.pos = save;
+                    return None;
+                }
+                Some('"') => {
+                    self.bump();
+                    self.skip_ws();
+                    return Some(s);
+                }
                 Some('\\') => {
                     self.bump();
                     match self.string_escape() {
                         Some(Some(c)) => s.push(c),
                         Some(None) => {} // empty escape `\&` or gap `\  \`
-                        None => { self.pos = save; return None; }
+                        None => {
+                            self.pos = save;
+                            return None;
+                        }
                     }
                 }
-                Some(c) => { s.push(c); self.bump(); }
+                Some(c) => {
+                    s.push(c);
+                    self.bump();
+                }
             }
         }
     }
@@ -283,26 +390,71 @@ impl<'a> Lexer<'a> {
     fn string_escape(&mut self) -> Option<Option<char>> {
         match self.peek() {
             // escapeEmpty
-            Some('&') => { self.bump(); Some(None) }
+            Some('&') => {
+                self.bump();
+                Some(None)
+            }
             // escapeGap: many1 space then `\`
             Some(c) if c.is_whitespace() => {
-                while self.peek().is_some_and(|c| c.is_whitespace()) { self.bump(); }
-                if self.eat('\\') { Some(None) } else { None }
+                while self.peek().is_some_and(|c| c.is_whitespace()) {
+                    self.bump();
+                }
+                if self.eat('\\') {
+                    Some(None)
+                } else {
+                    None
+                }
             }
             // charEsc
-            Some('a') => { self.bump(); Some(Some('\u{07}')) }
-            Some('b') => { self.bump(); Some(Some('\u{08}')) }
-            Some('f') => { self.bump(); Some(Some('\u{0C}')) }
-            Some('n') => { self.bump(); Some(Some('\n')) }
-            Some('r') => { self.bump(); Some(Some('\r')) }
-            Some('t') => { self.bump(); Some(Some('\t')) }
-            Some('v') => { self.bump(); Some(Some('\u{0B}')) }
-            Some('\\') => { self.bump(); Some(Some('\\')) }
-            Some('"') => { self.bump(); Some(Some('"')) }
-            Some('\'') => { self.bump(); Some(Some('\'')) }
+            Some('a') => {
+                self.bump();
+                Some(Some('\u{07}'))
+            }
+            Some('b') => {
+                self.bump();
+                Some(Some('\u{08}'))
+            }
+            Some('f') => {
+                self.bump();
+                Some(Some('\u{0C}'))
+            }
+            Some('n') => {
+                self.bump();
+                Some(Some('\n'))
+            }
+            Some('r') => {
+                self.bump();
+                Some(Some('\r'))
+            }
+            Some('t') => {
+                self.bump();
+                Some(Some('\t'))
+            }
+            Some('v') => {
+                self.bump();
+                Some(Some('\u{0B}'))
+            }
+            Some('\\') => {
+                self.bump();
+                Some(Some('\\'))
+            }
+            Some('"') => {
+                self.bump();
+                Some(Some('"'))
+            }
+            Some('\'') => {
+                self.bump();
+                Some(Some('\''))
+            }
             // charNum: decimal / octal (\o) / hex (\x)
-            Some('o') => { self.bump(); self.string_escape_radix(8) }
-            Some('x') => { self.bump(); self.string_escape_radix(16) }
+            Some('o') => {
+                self.bump();
+                self.string_escape_radix(8)
+            }
+            Some('x') => {
+                self.bump();
+                self.string_escape_radix(16)
+            }
             Some(d) if d.is_ascii_digit() => self.string_escape_radix(10),
             // charControl: \^A .. \^_ (and \^@)
             Some('^') => {
@@ -328,11 +480,17 @@ impl<'a> Lexer<'a> {
         let mut got = false;
         while let Some(c) = self.peek() {
             match c.to_digit(radix) {
-                Some(d) => { acc = acc.checked_mul(radix)?.checked_add(d)?; got = true; self.bump(); }
+                Some(d) => {
+                    acc = acc.checked_mul(radix)?.checked_add(d)?;
+                    got = true;
+                    self.bump();
+                }
                 None => break,
             }
         }
-        if !got { return None; }
+        if !got {
+            return None;
+        }
         char::from_u32(acc).map(Some)
     }
 
@@ -343,16 +501,46 @@ impl<'a> Lexer<'a> {
         // Names ordered longest-first so prefixes (e.g. `S` of `SOH`/`SO`) resolve
         // greedily, matching Parsec's `asciiMap` (sorted by descending length).
         const ASCII: &[(&str, u8)] = &[
-            ("NUL", 0), ("SOH", 1), ("STX", 2), ("ETX", 3), ("EOT", 4), ("ENQ", 5),
-            ("ACK", 6), ("BEL", 7), ("DLE", 16), ("DC1", 17), ("DC2", 18), ("DC3", 19),
-            ("DC4", 20), ("NAK", 21), ("SYN", 22), ("ETB", 23), ("CAN", 24), ("SUB", 26),
-            ("ESC", 27), ("DEL", 127), ("EM", 25), ("FS", 28), ("GS", 29), ("RS", 30),
-            ("US", 31), ("SP", 32), ("BS", 8), ("HT", 9), ("LF", 10), ("VT", 11),
-            ("FF", 12), ("CR", 13), ("SO", 14), ("SI", 15),
+            ("NUL", 0),
+            ("SOH", 1),
+            ("STX", 2),
+            ("ETX", 3),
+            ("EOT", 4),
+            ("ENQ", 5),
+            ("ACK", 6),
+            ("BEL", 7),
+            ("DLE", 16),
+            ("DC1", 17),
+            ("DC2", 18),
+            ("DC3", 19),
+            ("DC4", 20),
+            ("NAK", 21),
+            ("SYN", 22),
+            ("ETB", 23),
+            ("CAN", 24),
+            ("SUB", 26),
+            ("ESC", 27),
+            ("DEL", 127),
+            ("EM", 25),
+            ("FS", 28),
+            ("GS", 29),
+            ("RS", 30),
+            ("US", 31),
+            ("SP", 32),
+            ("BS", 8),
+            ("HT", 9),
+            ("LF", 10),
+            ("VT", 11),
+            ("FF", 12),
+            ("CR", 13),
+            ("SO", 14),
+            ("SI", 15),
         ];
         for &(name, code) in ASCII {
             if self.rest().starts_with(name) {
-                for _ in name.chars() { self.bump(); }
+                for _ in name.chars() {
+                    self.bump();
+                }
                 return Some(Some(char::from(code)));
             }
         }
@@ -367,23 +555,42 @@ impl<'a> Lexer<'a> {
     pub fn export_body(&mut self) -> Option<String> {
         self.skip_ws();
         let save = self.pos;
-        if !self.eat('"') { self.pos = save; return None; }
+        if !self.eat('"') {
+            self.pos = save;
+            return None;
+        }
         let mut s = String::new();
         loop {
             match self.peek() {
-                None => { self.pos = save; return None; }
-                Some('"') => { self.bump(); self.skip_ws(); return Some(s); }
+                None => {
+                    self.pos = save;
+                    return None;
+                }
+                Some('"') => {
+                    self.bump();
+                    self.skip_ws();
+                    return Some(s);
+                }
                 Some('\\') => {
                     self.bump();
                     match self.peek() {
-                        Some(c @ '\\') | Some(c @ '"') => { s.push(c); self.bump(); }
+                        Some(c @ '\\') | Some(c @ '"') => {
+                            s.push(c);
+                            self.bump();
+                        }
                         // Any other `\x` makes `bodyChar` (wrapped in `try`)
                         // backtrack, so `many bodyChar` stops and the closing
                         // `"` is never found at this position — the export fails.
-                        _ => { self.pos = save; return None; }
+                        _ => {
+                            self.pos = save;
+                            return None;
+                        }
                     }
                 }
-                Some(c) => { s.push(c); self.bump(); }
+                Some(c) => {
+                    s.push(c);
+                    self.bump();
+                }
             }
         }
     }
@@ -392,7 +599,10 @@ impl<'a> Lexer<'a> {
     pub fn single_quoted(&mut self) -> Option<String> {
         self.skip_ws();
         let save = self.pos;
-        if !self.eat('\'') { self.pos = save; return None; }
+        if !self.eat('\'') {
+            self.pos = save;
+            return None;
+        }
         // Haskell `singleQuoted = between (symbol "'") (symbol "'")` (Token.hs:296-297):
         // the opening `symbol "'"` is `lexeme (string "'")`, so it consumes whitespace
         // (and comments) AFTER the opening quote. The body `many1 (noneOf "'\n")`
@@ -403,14 +613,23 @@ impl<'a> Lexer<'a> {
         loop {
             match self.peek() {
                 None | Some('\n') | Some('\'') => break,
-                Some(c) => { s.push(c); self.bump(); }
+                Some(c) => {
+                    s.push(c);
+                    self.bump();
+                }
             }
         }
         // Haskell `singleQuotedString = singleQuoted $ many1 (noneOf "'\n")`
         // (Token.hs:452-453): `many1` requires at least one body char, so `''`
         // must fail.
-        if s.is_empty() { self.pos = save; return None; }
-        if !self.eat('\'') { self.pos = save; return None; }
+        if s.is_empty() {
+            self.pos = save;
+            return None;
+        }
+        if !self.eat('\'') {
+            self.pos = save;
+            return None;
+        }
         self.skip_ws();
         Some(s)
     }
@@ -420,35 +639,58 @@ impl<'a> Lexer<'a> {
         self.skip_ws();
         let save = self.pos;
         let header = self.ascii_alpha_run();
-        if header.is_empty() { self.pos = save; return None; }
-        if !self.eat_str("{*") { self.pos = save; return None; }
+        if header.is_empty() {
+            self.pos = save;
+            return None;
+        }
+        if !self.eat_str("{*") {
+            self.pos = save;
+            return None;
+        }
         let mut body = String::new();
         loop {
             match self.peek() {
-                None => { self.pos = save; return None; }
+                None => {
+                    self.pos = save;
+                    return None;
+                }
                 Some('*') if self.rest().starts_with("*}") => {
-                    self.bump(); self.bump(); self.skip_ws();
+                    self.bump();
+                    self.bump();
+                    self.skip_ws();
                     return Some((header, body));
                 }
                 // Haskell `bodyChar` (Token.hs:382-387): `'*' -> mzero`. A lone `*`
                 // that is not the start of the `*}` closer makes `bodyChar` fail, so
                 // `many bodyChar` stops and the required `string "*}"` then fails at
                 // the `*`, failing the whole formalComment.
-                Some('*') => { self.pos = save; return None; }
+                Some('*') => {
+                    self.pos = save;
+                    return None;
+                }
                 Some('\\') => {
                     self.bump();
                     match self.peek() {
-                        Some(c @ '\\') | Some(c @ '*') => { body.push(c); self.bump(); }
+                        Some(c @ '\\') | Some(c @ '*') => {
+                            body.push(c);
+                            self.bump();
+                        }
                         // Haskell `bodyChar` (Token.hs:382-387): on `\` the inner
                         // `char '\\' <|> char '*'` only accepts `\` or `*`; any
                         // other `\x` makes `bodyChar` (wrapped in `try`) backtrack
                         // un-consuming the `\`, so `many bodyChar` stops and the
                         // required `string "*}"` then fails at the `\` — i.e. the
                         // whole formalComment fails.
-                        _ => { self.pos = save; return None; }
+                        _ => {
+                            self.pos = save;
+                            return None;
+                        }
                     }
                 }
-                Some(c) => { body.push(c); self.bump(); }
+                Some(c) => {
+                    body.push(c);
+                    self.bump();
+                }
             }
         }
     }
@@ -467,10 +709,21 @@ impl<'a> Lexer<'a> {
         let _ = self.eat('#');
         let mut s = String::new();
         while let Some(c) = self.peek() {
-            if c.is_ascii_hexdigit() { s.push(c); self.bump(); } else { break; }
+            if c.is_ascii_hexdigit() {
+                s.push(c);
+                self.bump();
+            } else {
+                break;
+            }
         }
-        if quoted && !self.eat('\'') { self.pos = save; return None; }
-        if s.is_empty() { self.pos = save; return None; }
+        if quoted && !self.eat('\'') {
+            self.pos = save;
+            return None;
+        }
+        if s.is_empty() {
+            self.pos = save;
+            return None;
+        }
         self.skip_ws();
         Some(s)
     }
@@ -479,7 +732,10 @@ impl<'a> Lexer<'a> {
     pub fn ext_identifier(&mut self) -> Option<String> {
         self.skip_ws();
         let save = self.pos;
-        if !self.eat_str("x-") { self.pos = save; return None; }
+        if !self.eat_str("x-") {
+            self.pos = save;
+            return None;
+        }
         let id = self.identifier()?;
         Some(format!("x-{}", id))
     }
@@ -639,7 +895,11 @@ mod tests {
     fn identifier_rejects_reserved_names() {
         for kw in ["in", "let", "rule", "diff"] {
             let mut l = Lexer::new(kw);
-            assert_eq!(l.identifier(), None, "reserved name `{kw}` must not be an identifier");
+            assert_eq!(
+                l.identifier(),
+                None,
+                "reserved name `{kw}` must not be an identifier"
+            );
         }
         // Non-reserved lookalikes still parse.
         let mut l = Lexer::new("diffuse");
