@@ -1743,6 +1743,15 @@ impl System {
         self.solved_formulas.is_empty()
             && !crate::guarded::stores_contains(&self.formulas, &crate::guarded::gfalse())
     }
+
+    /// Port of Haskell's `cleanup` (`ProofMethod.hs:310-311`):
+    ///
+    /// Resets the systems variable indices and clears the substitution.
+    pub fn cleanup(mut self) -> Self {
+        crate::constraint::solver::rename_precise::rename_precise_system(&mut self);
+        self.eq_store_mut().subst = tamarin_term::subst::Subst::from_list(Vec::new());
+        self
+    }
 }
 
 // =============================================================================

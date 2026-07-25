@@ -427,16 +427,7 @@ pub fn exec_proof_method(
                 };
             }
             simp_noop_stat(false);
-            // HS-faithful `cleanup` (ProofMethod.hs): EVERY
-            // proof method's cases pass through `map (fmap cleanup .
-            // fst)`, and `Simplify` goes through `process` — so its
-            // output is ALSO cleaned.
-            let cleanup = |s: &System| -> System {
-                let mut s2 = s.clone();
-                crate::constraint::solver::rename_precise::rename_precise_system(&mut s2);
-                s2.eq_store_mut().subst = tamarin_term::subst::Subst::from_list(Vec::new());
-                s2
-            };
+
             // HS-faithful filter: cases whose eq_store is false were
             // mzero'd by `contradictoryIf` during simplify; they don't
             // show up in HS's surviving Disj.  (Other contradiction
@@ -444,17 +435,13 @@ pub fn exec_proof_method(
             let cleaned: Vec<System> = case_systems
                 .into_iter()
                 .filter(|s| !s.eq_store.is_false())
-                .map(|mut s| {
+                .map(|s| {
                     // HS-faithful `cleanup` (ProofMethod.hs) applied in
                     // place: `case_systems` is owned here (from
                     // `simplify_system_with_fanout`'s into_iter), so we
                     // rename and clear the subst on the owned System
-                    // directly.  Value-identical to `cleanup(&s)`; that
-                    // closure only clones because its callers hand it a
-                    // `&System` (the borrowed `cleanup(sys)` site below).
-                    crate::constraint::solver::rename_precise::rename_precise_system(&mut s);
-                    s.eq_store_mut().subst = tamarin_term::subst::Subst::from_list(Vec::new());
-                    s
+                    // directly.
+                    s.cleanup()
                 })
                 .collect();
             // HS-faithful `removeRedundantCases ctxt [] snd`
@@ -488,7 +475,7 @@ pub fn exec_proof_method(
             if cleaned.is_empty() {
                 return Some(Vec::new());
             }
-            let cleaned_input = cleanup(sys);
+            let cleaned_input = sys.clone().cleanup();
             if cleaned.len() == 1 {
                 // Single-case path: HS's `Simplify` arm (ProofMethod.hs)
                 // checks whether the simplified system equals the cleaned
@@ -561,16 +548,7 @@ pub fn exec_proof_method(
                 // `cleanup` (ProofMethod.hs):
                 //   cleanup s = L.set sSubst emptySubst
                 //                       (renamePrecise s)
-                let mut out: Vec<System> = Vec::with_capacity(raw_systems.len());
-                for mut s in raw_systems {
-                    crate::constraint::solver::rename_precise::rename_precise_system(&mut s);
-                    if !s.eq_store.is_false() {
-                        s.invalidate_max_var_idx_cache();
-                        s.eq_store_mut().subst = tamarin_term::subst::Subst::from_list(Vec::new());
-                    }
-                    out.push(s);
-                }
-                out
+                raw_systems.into_iter().map(|s| s.cleanup()).collect()
             };
             // Filter cases the same way Haskell's `runReduction` does:
             // when a CR-rule called `contradictoryIf` during simplify
