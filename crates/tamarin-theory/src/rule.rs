@@ -246,7 +246,7 @@ impl RuleAttributes {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ProtoRuleName {
     /// The reserved `Fresh` rule.
     Fresh,

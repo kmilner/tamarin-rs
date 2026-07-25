@@ -45,7 +45,7 @@ pub use crate::guarded_types::{
 // Guarded data type
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Hash)]
 pub enum Quant {
     All,
     Ex,

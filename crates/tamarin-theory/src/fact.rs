@@ -23,7 +23,7 @@ pub enum Multiplicity {
     Linear,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FactTag {
     /// A protocol fact: `ProtoFact(multiplicity, name, arity)`.
     /// Interned `&'static str` (see `tamarin_term::intern`): pointer-copy
