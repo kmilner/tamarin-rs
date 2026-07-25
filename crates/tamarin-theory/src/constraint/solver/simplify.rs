@@ -6360,14 +6360,10 @@ mod tests {
         let k1 = mk_var("k", tamarin_term::lterm::LSort::Msg, 1);
         let k2 = mk_var("k", tamarin_term::lterm::LSort::Msg, 2);
 
-        let s_fact_a = crate::fact::Fact::new(
-            s_tag,
-            vec![id_t.clone(), pair(a1.clone(), k1.clone())],
-        );
-        let s_fact_b = crate::fact::Fact::new(
-            s_tag,
-            vec![id_t.clone(), pair(a2.clone(), k2.clone())],
-        );
+        let s_fact_a =
+            crate::fact::Fact::new(s_tag, vec![id_t.clone(), pair(a1.clone(), k1.clone())]);
+        let s_fact_b =
+            crate::fact::Fact::new(s_tag, vec![id_t.clone(), pair(a2.clone(), k2.clone())]);
 
         let info = || {
             crate::rule::RuleInfo::Proto(crate::rule::ProtoRuleACInstInfo {

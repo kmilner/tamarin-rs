@@ -7338,10 +7338,7 @@ mod tests {
     fn precompute_sources_drops_multi_producer() {
         use crate::fact::{FactTag, Multiplicity};
         let tag = FactTag::Proto(Multiplicity::Linear, "Bar", 0);
-        let rules = vec![
-            make_rule("MakeBarA", tag),
-            make_rule("MakeBarB", tag),
-        ];
+        let rules = vec![make_rule("MakeBarA", tag), make_rule("MakeBarB", tag)];
         let ctx = match ctx_with_rules(rules) {
             Some(c) => c,
             None => return,
@@ -7487,10 +7484,7 @@ mod tests {
         use crate::fact::{FactTag, Multiplicity};
         let tag_a = FactTag::Proto(Multiplicity::Linear, "A", 0);
         let tag_b = FactTag::Proto(Multiplicity::Linear, "B", 0);
-        let rules = vec![
-            make_rule("MakeA", tag_a),
-            make_rule("MakeB", tag_b),
-        ];
+        let rules = vec![make_rule("MakeA", tag_a), make_rule("MakeB", tag_b)];
         let ctx = match ctx_with_rules(rules) {
             Some(c) => c,
             None => return,

@@ -2572,15 +2572,11 @@ mod tests {
         let payload = crate::term::Term::App(FunSym::NoEq(pair_sym), vec![a, b].into());
         // pattern var codeOther:Msg idx 89 (the universal-bound var)
         let code_other = LVar::new("codeOther", LSort::Msg, 89);
-        let pat =
-            crate::term::f_app_ac(AcSym::Union, vec![mk(code_other), payload.clone()]);
+        let pat = crate::term::f_app_ac(AcSym::Union, vec![mk(code_other), payload.clone()]);
         // subject: code2:Msg, x:Msg (free system vars, skolemized by the fn)
         let code2 = LVar::new("code2", LSort::Msg, 8);
         let xv = LVar::new("x", LSort::Msg, 9);
-        let subj = crate::term::f_app_ac(
-            AcSym::Union,
-            vec![mk(code2), mk(xv), payload.clone()],
-        );
+        let subj = crate::term::f_app_ac(AcSym::Union, vec![mk(code2), mk(xv), payload.clone()]);
         let mut pattern_vars = std::collections::BTreeSet::new();
         pattern_vars.insert(("codeOther".to_string(), 89u64));
         let res = h

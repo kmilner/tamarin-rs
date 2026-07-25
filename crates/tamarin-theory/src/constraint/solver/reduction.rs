@@ -8626,10 +8626,8 @@ mod tests {
             })
         };
         // First node has 0 conclusions; second has 1 — incompatible.
-        r.sys.add_node(
-            i,
-            crate::rule::Rule::new(info(), vec![], vec![], vec![]),
-        );
+        r.sys
+            .add_node(i, crate::rule::Rule::new(info(), vec![], vec![], vec![]));
         let dummy_fact = crate::fact::Fact::new(crate::fact::FactTag::Out, vec![]);
         r.sys.add_node(
             j,

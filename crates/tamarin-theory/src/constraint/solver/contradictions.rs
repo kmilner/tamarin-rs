@@ -2419,10 +2419,8 @@ mod tests {
         let pub_var = LVar::new("x", LSort::Pub, 58);
         let fresh_var = LVar::new("x", LSort::Fresh, 58);
         let tag = FactTag::Proto(Multiplicity::Linear, "X", 1);
-        let pub_term =
-            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(pub_var));
-        let fresh_term =
-            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(fresh_var));
+        let pub_term = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(pub_var));
+        let fresh_term = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(fresh_var));
         let mk_rule = |name: &str, t| -> RuleACInst {
             Rule::new(
                 RuleInfo::<ProtoRuleACInstInfo, IntrRuleACInfo>::Proto(ProtoRuleACInstInfo {
