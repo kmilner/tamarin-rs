@@ -1592,8 +1592,7 @@ impl System {
     pub fn build_less_index(&self) -> LessIndex {
         let mut idx: LessIndex = tamarin_utils::FastMap::default();
         for (i, la) in self.less_atoms.iter().enumerate() {
-            idx.entry((la.smaller, la.larger))
-                .or_insert(i);
+            idx.entry((la.smaller, la.larger)).or_insert(i);
         }
         idx
     }
@@ -1651,14 +1650,10 @@ impl System {
         let mut adj: std::collections::BTreeMap<NodeId, Vec<NodeId>> =
             std::collections::BTreeMap::new();
         for l in &self.less_atoms {
-            adj.entry(l.smaller)
-                .or_default()
-                .push(l.larger);
+            adj.entry(l.smaller).or_default().push(l.larger);
         }
         for e in &self.edges {
-            adj.entry(e.src.0)
-                .or_default()
-                .push(e.tgt.0);
+            adj.entry(e.src.0).or_default().push(e.tgt.0);
         }
         // HS-faithful `unsolvedChains` contribution to rawEdgeRel
         // (`System.hs`).

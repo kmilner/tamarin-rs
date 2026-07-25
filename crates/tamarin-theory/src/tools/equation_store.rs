@@ -1631,10 +1631,7 @@ impl EquationStore {
                 v,
                 Term::App(
                     op,
-                    fvars
-                        .iter()
-                        .map(|fv| Term::Lit(Lit::Var(*fv)))
-                        .collect(),
+                    fvars.iter().map(|fv| Term::Lit(Lit::Var(*fv))).collect(),
                 ),
             )]);
             // Apply factor (via apply_eq_store if maude available).
@@ -1700,11 +1697,7 @@ impl EquationStore {
                 v,
                 Term::App(
                     op,
-                    vec![
-                        Term::Lit(Lit::Var(fv1)),
-                        Term::Lit(Lit::Var(fv2)),
-                    ]
-                    .into(),
+                    vec![Term::Lit(Lit::Var(fv1)), Term::Lit(Lit::Var(fv2))].into(),
                 ),
             )]);
             // HS-faithful order (`foreachDisj`): replace the disj FIRST,

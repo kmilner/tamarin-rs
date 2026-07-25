@@ -834,10 +834,7 @@ fn has_forbidden_chain(sys: &System, ab_adj: &crate::constraint::system::Prebuil
                         if vi == vj {
                             continue;
                         }
-                        equivalence_classes
-                            .entry(*vi)
-                            .or_default()
-                            .insert(*vj);
+                        equivalence_classes.entry(*vi).or_default().insert(*vj);
                     }
                 }
             }
@@ -1697,11 +1694,7 @@ fn non_injective_fact_instances(
             let k_after_j = j_reach.contains(&k);
             let k_is_last = sys.last_atom.as_ref() == Some(&k);
             if k_after_j || k_is_last {
-                out.push(Contradiction::NonInjectiveFactInstance(
-                    i,
-                    *j,
-                    k,
-                ));
+                out.push(Contradiction::NonInjectiveFactInstance(i, *j, k));
             }
         }
     }
@@ -1898,9 +1891,7 @@ pub fn cyclic(less: &[LessAtom]) -> bool {
     // Build adjacency list keyed by NodeId.
     let mut adj: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
     for l in less {
-        adj.entry(l.smaller)
-            .or_default()
-            .push(l.larger);
+        adj.entry(l.smaller).or_default().push(l.larger);
     }
     // Run DFS detecting back-edges.
     let mut color: BTreeMap<NodeId, u8> = BTreeMap::new(); // 0=white,1=gray,2=black
@@ -1945,9 +1936,7 @@ pub fn cyclic(less: &[LessAtom]) -> bool {
 pub fn cyclic_with_path(less: &[LessAtom]) -> Vec<NodeId> {
     let mut adj: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
     for l in less {
-        adj.entry(l.smaller)
-            .or_default()
-            .push(l.larger);
+        adj.entry(l.smaller).or_default().push(l.larger);
     }
     let mut color: BTreeMap<NodeId, u8> = BTreeMap::new();
     let mut path: Vec<NodeId> = Vec::new();

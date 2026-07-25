@@ -162,21 +162,11 @@ where
                 }
                 Some(Ordering::Greater) => {
                     // vl > vr (vl is broader) → bind vl to vr.
-                    eliminate(
-                        sort_of_const,
-                        acc,
-                        *vl,
-                        Term::Lit(Lit::Var(*vr)),
-                    )
+                    eliminate(sort_of_const, acc, *vl, Term::Lit(Lit::Var(*vr)))
                 }
                 Some(Ordering::Less) => {
                     // vl < vr (vr is broader) → bind vr to vl.
-                    eliminate(
-                        sort_of_const,
-                        acc,
-                        *vr,
-                        Term::Lit(Lit::Var(*vl)),
-                    )
+                    eliminate(sort_of_const, acc, *vr, Term::Lit(Lit::Var(*vl)))
                 }
                 None => Err(UnifyError::NoUnifier),
             }

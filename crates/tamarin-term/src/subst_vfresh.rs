@@ -176,12 +176,7 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
         let renamed: Vec<(LVar, VTerm<C, LVar>)> = self
             .map
             .iter()
-            .map(|(k, t)| {
-                (
-                    *k,
-                    rename_term_drop_hint(t, &mut bindings, &mut counter),
-                )
-            })
+            .map(|(k, t)| (*k, rename_term_drop_hint(t, &mut bindings, &mut counter)))
             .collect();
         Self::from_list(renamed)
     }

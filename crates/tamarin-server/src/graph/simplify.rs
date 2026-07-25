@@ -106,9 +106,7 @@ fn unsolved_chain_pairs(sys: &System) -> Vec<(NodeId, NodeId)> {
 fn build_raw_edge_adjacency(sys: &System) -> BTreeMap<NodeId, Vec<NodeId>> {
     let mut adj: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
     for e in &sys.edges {
-        adj.entry(e.src.0)
-            .or_default()
-            .push(e.tgt.0);
+        adj.entry(e.src.0).or_default().push(e.tgt.0);
     }
     for (from, to) in unsolved_chain_pairs(sys) {
         adj.entry(from).or_default().push(to);

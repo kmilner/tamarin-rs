@@ -6172,8 +6172,7 @@ impl<'ctx> Reduction<'ctx> {
             let next_n = bounds_max(&self.sys).saturating_add(1);
             let n_var =
                 tamarin_term::lterm::LVar::new("n", tamarin_term::lterm::LSort::Fresh, next_n);
-            let n_term =
-                tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(n_var));
+            let n_term = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(n_var));
             crate::constraint::solver::trace::trace_exec("FrNarrow");
             if tamarin_utils::env_gate!("TAM_RS_TRACE_FR_NARROW") {
                 eprintln!(
@@ -6843,10 +6842,7 @@ impl<'ctx> Reduction<'ctx> {
                                 );
                                 sub.sys.add_node(*i, coerce_ru);
                                 // PremiseG (i, PremIdx 0) (kdFact m)
-                                sub.insert_goal(Goal::Premise(
-                                    (*i, crate::rule::PremIdx(0)),
-                                    kd_m,
-                                ));
+                                sub.insert_goal(Goal::Premise((*i, crate::rule::PremIdx(0)), kd_m));
                                 let case_name = "coerce".to_string();
                                 for (existing, status) in sub.sys.goals_mut().iter_mut() {
                                     if existing == &g && !status.solved {
@@ -7587,10 +7583,7 @@ impl<'ctx> Reduction<'ctx> {
                     );
                     let res = sub.insert_edge_labeled(
                         "chain_direct",
-                        crate::constraint::constraints::Edge {
-                            src: *c,
-                            tgt: *p,
-                        },
+                        crate::constraint::constraints::Edge { src: *c, tgt: *p },
                     );
                     if !matches!(res, Err(_) | Ok(SolveOutcome::Contradictory)) {
                         // Direct-edge chain: name by the chain conc's KD
@@ -7751,10 +7744,7 @@ impl<'ctx> Reduction<'ctx> {
                         (new_node, crate::rule::PremIdx(0)),
                         prem0.clone(),
                     ));
-                    arm_sub.insert_goal(Goal::Chain(
-                        (new_node, crate::rule::ConcIdx(0)),
-                        *p,
-                    ));
+                    arm_sub.insert_goal(Goal::Chain((new_node, crate::rule::ConcIdx(0)), *p));
                     let arm_counter = arm_sub.maude.fresh_counter_peek();
                     arm_sys = arm_sub.sys;
                     for (existing, status) in arm_sys.goals_mut().iter_mut() {
@@ -8029,10 +8019,7 @@ impl<'ctx> Reduction<'ctx> {
                         prem0.clone(),
                     ));
                     // Insert the chain continuation (i, ConcIdx(0)) → p.
-                    arm_sub.insert_goal(Goal::Chain(
-                        (new_node, crate::rule::ConcIdx(0)),
-                        *p,
-                    ));
+                    arm_sub.insert_goal(Goal::Chain((new_node, crate::rule::ConcIdx(0)), *p));
                     let arm_counter = arm_sub.maude.fresh_counter_peek();
                     arm_sys = arm_sub.sys;
                     // Mark the original chain goal as solved in this case
@@ -8191,8 +8178,7 @@ impl<'ctx> Reduction<'ctx> {
                         sub.maude.ensure_above(avoid_max);
                         let new_var = LVar::new("newVar", LSort::Nat, sub.maude.fresh_idx());
                         // sPlus = s ++: varTerm newVar
-                        let s_plus =
-                            f_app_ac(AcSym::NatPlus, vec![s.clone(), var_term(new_var)]);
+                        let s_plus = f_app_ac(AcSym::NatPlus, vec![s.clone(), var_term(new_var)]);
                         // insertFormula $ closeGuarded Ex [newVar] [EqE sPlus t] gtrue
                         let f = close_guarded_ex_eq(&new_var, &s_plus, t);
                         sub.insert_formula(f);

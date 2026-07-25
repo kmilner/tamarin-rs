@@ -606,10 +606,8 @@ pub fn abstract_rule_and_variants(
     // ordered query payload) read from this sorted view.  `bindings` is a
     // `BTreeMap`, so `.iter()` already yields entries in term-`Ord` key
     // order — exactly `M.toList`'s ordering, no explicit sort needed.
-    let abstraction_pairs: Vec<(LVar, LNTerm)> = bindings
-        .iter()
-        .map(|(t, v)| (*v, t.clone()))
-        .collect();
+    let abstraction_pairs: Vec<(LVar, LNTerm)> =
+        bindings.iter().map(|(t, v)| (*v, t.clone())).collect();
     let abstraction_subst: LNSubst = Subst::from_list(abstraction_pairs);
 
     // `abstractedTerms = map snd eqsAbstr` — the ORIGINAL terms.

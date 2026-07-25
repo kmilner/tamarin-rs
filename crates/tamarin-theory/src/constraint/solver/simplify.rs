@@ -658,11 +658,7 @@ fn exploit_unique_msg_order(red: &mut Reduction) {
     for (m, i_kd) in &kd_conc {
         if let Some(i_ku) = ku_act.get(m) {
             if i_kd != i_ku {
-                red.insert_less(LessAtom::new(
-                    *i_kd,
-                    *i_ku,
-                    Reason::NormalForm,
-                ));
+                red.insert_less(LessAtom::new(*i_kd, *i_ku, Reason::NormalForm));
             }
         }
     }
@@ -2635,10 +2631,7 @@ fn enforce_fresh_node_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
         let eqs: Vec<_> = ids
             .into_iter()
             .skip(1)
-            .map(|i| tamarin_term::rewriting::Equal {
-                lhs: keep,
-                rhs: i,
-            })
+            .map(|i| tamarin_term::rewriting::Equal { lhs: keep, rhs: i })
             .collect();
         // Haskell `enforceNodeUniqueness` freshRuleInsts branch
         // (Simplify.hs) calls `solveNodeIdEqs` via the `merge`
@@ -3448,12 +3441,7 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
     let edge_map: std::collections::BTreeMap<
         crate::constraint::constraints::NodeConc,
         crate::constraint::constraints::NodeId,
-    > = red
-        .sys
-        .edges
-        .iter()
-        .map(|e| (e.src, e.tgt.0))
-        .collect();
+    > = red.sys.edges.iter().map(|e| (e.src, e.tgt.0)).collect();
     fn plain_route(
         nid: &crate::constraint::constraints::NodeId,
         single_linear_conc: &std::collections::BTreeSet<crate::constraint::constraints::NodeId>,
@@ -3615,8 +3603,7 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
     // this step, Rust falsifies a verified lemma — confirmed against
     // Haskell `interactive`'s dot output (LessAtom `#i < #j Fresh`
     // comes from `enhancedLesses`).
-    let supplier_ids: std::collections::BTreeSet<_> =
-        suppliers.iter().map(|(id, _)| *id).collect();
+    let supplier_ids: std::collections::BTreeSet<_> = suppliers.iter().map(|(id, _)| *id).collect();
     for (i, j) in &new_lesses {
         if !supplier_ids.contains(i) {
             continue;
@@ -5325,11 +5312,8 @@ fn nat_subterm_equalities(
     }
 
     // `vertexToInt v = lookup v $ zip vertices [0..]` (SubtermStore.hs:395-538, see line 440)
-    let vertex_to_int: std::collections::BTreeMap<Vertex, usize> = vertices
-        .iter()
-        .enumerate()
-        .map(|(i, v)| (*v, i))
-        .collect();
+    let vertex_to_int: std::collections::BTreeMap<Vertex, usize> =
+        vertices.iter().enumerate().map(|(i, v)| (*v, i)).collect();
     let vti = |v: &Vertex| -> usize { vertex_to_int[v] };
 
     // `oneEdges = map ... $ filter fst vertices` (SubtermStore.hs:395-538, see line 443) —

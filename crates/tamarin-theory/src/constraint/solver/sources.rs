@@ -2461,8 +2461,7 @@ fn run_solve_all_safe_goals_disj_with_progress(
                 found
             };
             if has_fresh_var {
-                let live_goal_action =
-                    crate::constraint::constraints::Goal::Action(i, fa.clone());
+                let live_goal_action = crate::constraint::constraints::Goal::Action(i, fa.clone());
                 for (g, st) in sub.sys.goals_mut().iter_mut() {
                     if g == &live_goal_action {
                         st.solved = true;
@@ -3733,10 +3732,10 @@ fn freshen_system_some_inst(
                     bindings.entry(lv).or_insert_with(|| {
                         let new_idx = maude.reserve_idxs(1);
                         tamarin_term::lterm::LVar {
-                                name: lv.name,
-                                sort: lv.sort,
-                                idx: new_idx,
-                            }
+                            name: lv.name,
+                            sort: lv.sort,
+                            idx: new_idx,
+                        }
                     });
                 }
                 v.clone()
@@ -4599,8 +4598,7 @@ fn conjoin_refine_arm(
     if let Some(m) = red_maude {
         r.maude = m.clone();
     }
-    let live_goal =
-        crate::constraint::constraints::Goal::Action(*live_node, fa_live.clone());
+    let live_goal = crate::constraint::constraints::Goal::Action(*live_node, fa_live.clone());
     // HS-faithful (Sources.hs:196-216): `solveAllSafeGoals.safeGoal`
     // returns `not (isKUFact fa)` for ActionG (Sources.hs:144-225, see line 202), so
     // HS's saturate-time precompute NEVER picks a KU action goal
@@ -4916,10 +4914,8 @@ fn apply_source_case_premise(
         return Vec::new();
     }
 
-    let live_goal_for_trace = crate::constraint::constraints::Goal::Premise(
-        (*live_node, live_prem_idx),
-        fa_live.clone(),
-    );
+    let live_goal_for_trace =
+        crate::constraint::constraints::Goal::Premise((*live_node, live_prem_idx), fa_live.clone());
     crate::state_trace::emit("applySource_prem_in", Some(&live_goal_for_trace), live_sys);
 
     // A.1 — `rename th0` in matchToGoal (Sources.hs:387-448, see line 409):
@@ -5444,10 +5440,8 @@ fn close_trivial_chains_in_graft(r: &mut crate::constraint::solver::reduction::R
         // Snapshot system; if direct-edge unification contradicts,
         // restore and stop trying.
         let snapshot = r.sys.clone();
-        r.sys.add_edge(crate::constraint::constraints::Edge {
-            src: c,
-            tgt: p,
-        });
+        r.sys
+            .add_edge(crate::constraint::constraints::Edge { src: c, tgt: p });
         let res = r.solve_fact_eqs(
             SplitStrategy::SplitNow,
             &[tamarin_term::rewriting::Equal {
@@ -5554,8 +5548,7 @@ fn graft_case_into_action(
             out.goals_mut().push((renamed_goal, st.clone()));
         }
     }
-    let live_goal =
-        crate::constraint::constraints::Goal::Action(*live_node, fa_live.clone());
+    let live_goal = crate::constraint::constraints::Goal::Action(*live_node, fa_live.clone());
     if let Some(slot) = out.goals_mut().iter_mut().find(|(g, _)| g == &live_goal) {
         // HS-faithful: see the matching gate in `conjoin_refine_arm`.
         // `solveAllSafeGoals.safeGoal` (Sources.hs:144-225, see line 202) excludes KU
@@ -5590,15 +5583,10 @@ fn graft_case_into_action(
     // Out_Initiator's terms, the universal fires, and the case is
     // pruned via contradiction.
     let mut merged_pairs: Vec<_> = out.eq_store.subst.to_list();
-    let existing: std::collections::HashSet<_> =
-        merged_pairs.iter().map(|(v, _)| *v).collect();
+    let existing: std::collections::HashSet<_> = merged_pairs.iter().map(|(v, _)| *v).collect();
     let mut appended_any = false;
     for (lv, lt) in case_sys.eq_store.subst.to_list() {
-        let new_lv = if &lv == abstract_node {
-            *live_node
-        } else {
-            lv
-        };
+        let new_lv = if &lv == abstract_node { *live_node } else { lv };
         if !existing.contains(&new_lv) {
             appended_any = true;
             merged_pairs.push((new_lv, lt));
@@ -5919,9 +5907,7 @@ fn var_occurrences_nodes(
     for (nid, rule) in &nodes_sorted {
         // For (k, v) tuple: "0":p for k (NodeId is just an LVar), "1":p for v.
         // base_ctx is empty, so k = ["0"] and the rule root chain = ["1"].
-        out.entry(*nid)
-            .or_default()
-            .insert(vec!["0".to_string()]);
+        out.entry(*nid).or_default().insert(vec!["0".to_string()]);
         let v_ctx = Ctx {
             seg: std::borrow::Cow::Borrowed("1"),
             parent: None,
