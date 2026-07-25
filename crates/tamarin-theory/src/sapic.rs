@@ -100,7 +100,7 @@ impl SapicLVar {
         SapicLVar { var, stype: None }
     }
     pub fn to_lvar(&self) -> LVar {
-        self.var.clone()
+        self.var
     }
 }
 

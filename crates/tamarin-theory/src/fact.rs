@@ -268,7 +268,7 @@ impl<T> Fact<T> {
     /// same recompute guidance applies if a hot LNFact producer routes here.
     pub fn map_ref<U>(&self, f: impl FnMut(&T) -> U) -> Fact<U> {
         Fact {
-            tag: self.tag.clone(),
+            tag: self.tag,
             annotations: self.annotations.clone(),
             terms: self.terms.iter().map(f).collect(),
             bloom: u64::MAX,
@@ -282,7 +282,7 @@ impl<T> Fact<T> {
     pub fn try_map_ref<U, E>(&self, f: impl FnMut(&T) -> Result<U, E>) -> Result<Fact<U>, E> {
         let terms: Result<Vec<U>, E> = self.terms.iter().map(f).collect();
         Ok(Fact {
-            tag: self.tag.clone(),
+            tag: self.tag,
             annotations: self.annotations.clone(),
             terms: terms?.into(),
             bloom: u64::MAX,

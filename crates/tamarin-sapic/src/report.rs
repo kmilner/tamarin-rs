@@ -60,8 +60,8 @@ pub fn report_init(
     // `x`, `loc` :: LVar _ LSortMsg 0.
     let x = LVar::new("x", LSort::Msg, 0);
     let loc = LVar::new("loc", LSort::Msg, 0);
-    let xt: LNTerm = VTerm::Lit(Lit::Var(x.clone()));
-    let loct: LNTerm = VTerm::Lit(Lit::Var(loc.clone()));
+    let xt: LNTerm = VTerm::Lit(Lit::Var(x));
+    let loct: LNTerm = VTerm::Lit(Lit::Var(loc));
 
     // prem: In( <x, loc> )
     let prem = TransFact::In(tamarin_term::builtin::pair(xt.clone(), loct.clone()));

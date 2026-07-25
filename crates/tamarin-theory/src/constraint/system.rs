@@ -278,7 +278,7 @@ impl Clone for SystemContent {
             formulas: self.formulas.clone(),
             solved_formulas: self.solved_formulas.clone(),
             lemmas: self.lemmas.clone(),
-            last_atom: self.last_atom.clone(),
+            last_atom: self.last_atom,
             eq_store: SealedEqStore(self.eq_store.0.clone()),
             subterm_store: self.subterm_store.clone(),
             goals: self.goals.clone(),
@@ -1143,7 +1143,7 @@ impl System {
             for (j, fa) in ru.enumerate_premises() {
                 if let Some(ms) = crate::fact::proto_or_in_fact_view(fa) {
                     for (k, m) in ms.into_iter().enumerate() {
-                        out.push((i.clone(), j, k, m));
+                        out.push((*i, j, k, m));
                     }
                 }
             }
@@ -1166,7 +1166,7 @@ impl System {
                 continue;
             }
             if let Goal::Chain(from, to) = g {
-                out.push((from.clone(), to.clone()));
+                out.push((*from, *to));
             }
         }
         out
@@ -1187,7 +1187,7 @@ impl System {
                 continue;
             }
             if let Goal::Premise(premidx, fa) = g {
-                out.push((premidx.clone(), fa.clone()));
+                out.push((*premidx, fa.clone()));
             }
         }
         out
@@ -1592,7 +1592,7 @@ impl System {
     pub fn build_less_index(&self) -> LessIndex {
         let mut idx: LessIndex = tamarin_utils::FastMap::default();
         for (i, la) in self.less_atoms.iter().enumerate() {
-            idx.entry((la.smaller.clone(), la.larger.clone()))
+            idx.entry((la.smaller, la.larger))
                 .or_insert(i);
         }
         idx
@@ -1616,7 +1616,7 @@ impl System {
     /// the last indexed insert (within `enforce_fresh_ordering_pass` the only
     /// mutators are these calls — Maude unifiability queries are read-only).
     pub fn add_less_indexed(&mut self, l: LessAtom, idx: &mut LessIndex) -> bool {
-        let key = (l.smaller.clone(), l.larger.clone());
+        let key = (l.smaller, l.larger);
         if let Some(&pos) = idx.get(&key) {
             self.content.less_atoms[pos] = l;
             false
@@ -1651,14 +1651,14 @@ impl System {
         let mut adj: std::collections::BTreeMap<NodeId, Vec<NodeId>> =
             std::collections::BTreeMap::new();
         for l in &self.less_atoms {
-            adj.entry(l.smaller.clone())
+            adj.entry(l.smaller)
                 .or_default()
-                .push(l.larger.clone());
+                .push(l.larger);
         }
         for e in &self.edges {
-            adj.entry(e.src.0.clone())
+            adj.entry(e.src.0)
                 .or_default()
-                .push(e.tgt.0.clone());
+                .push(e.tgt.0);
         }
         // HS-faithful `unsolvedChains` contribution to rawEdgeRel
         // (`System.hs`).
@@ -1667,7 +1667,7 @@ impl System {
                 continue;
             }
             if let crate::constraint::constraints::Goal::Chain(c, p) = g {
-                adj.entry(c.0.clone()).or_default().push(p.0.clone());
+                adj.entry(c.0).or_default().push(p.0);
             }
         }
         PrebuiltAdj { adj }
@@ -1694,16 +1694,16 @@ impl System {
         // BFS from i until j.
         let mut frontier: std::collections::VecDeque<NodeId> = std::collections::VecDeque::new();
         let mut visited: std::collections::BTreeSet<NodeId> = std::collections::BTreeSet::new();
-        frontier.push_back(i.clone());
-        visited.insert(i.clone());
+        frontier.push_back(*i);
+        visited.insert(*i);
         while let Some(n) = frontier.pop_front() {
             if let Some(nbrs) = adj.get(&n) {
                 for nb in nbrs {
                     if nb == j {
                         return true;
                     }
-                    if visited.insert(nb.clone()) {
-                        frontier.push_back(nb.clone());
+                    if visited.insert(*nb) {
+                        frontier.push_back(*nb);
                     }
                 }
             }

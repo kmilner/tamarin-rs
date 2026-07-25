@@ -474,7 +474,7 @@ pub trait HasFrees {
 /// `freesList`: every free `LVar`, in traversal order (with duplicates).
 pub fn frees_list<T: HasFrees>(t: &T) -> Vec<LVar> {
     let mut out = Vec::new();
-    t.for_each_free(&mut |v| out.push(v.clone()));
+    t.for_each_free(&mut |v| out.push(*v));
     out
 }
 

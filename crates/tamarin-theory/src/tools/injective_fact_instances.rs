@@ -331,8 +331,8 @@ pub fn simple_injective_fact_instances(
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
         match t {
-            Term::Lit(Lit::Con(n)) => Some(Term::Lit(Lit::Con(n.clone()))),
-            Term::Lit(Lit::Var(BVar::Free(v))) => Some(Term::Lit(Lit::Var(v.clone()))),
+            Term::Lit(Lit::Con(n)) => Some(Term::Lit(Lit::Con(*n))),
+            Term::Lit(Lit::Var(BVar::Free(v))) => Some(Term::Lit(Lit::Var(*v))),
             Term::Lit(Lit::Var(BVar::Bound(_))) => None,
             Term::App(sym, args) => {
                 let mapped: Option<Vec<LNTerm>> = args.iter().map(bvar_term_to_lnterm).collect();
@@ -364,7 +364,7 @@ pub fn simple_injective_fact_instances(
     let mut candidates: BTreeMap<FactTag, Vec<Vec<MonotonicBehaviour>>> = BTreeMap::new();
     for &r in rules {
         let prem_tags: std::collections::BTreeSet<FactTag> =
-            r.premises.iter().map(|p| p.tag.clone()).collect();
+            r.premises.iter().map(|p| p.tag).collect();
         for conc in &r.conclusions {
             let tag = &conc.tag;
             if !matches!(tag, FactTag::Proto(_, _, _)) {
@@ -382,7 +382,7 @@ pub fn simple_injective_fact_instances(
                 }
                 let shape = combine_shapes(&get_shape(conc), &get_shape(prem));
                 candidates
-                    .entry(tag.clone())
+                    .entry(*tag)
                     .and_modify(|existing| *existing = combine_shapes(existing, &shape))
                     .or_insert(shape);
             }
@@ -494,7 +494,7 @@ pub fn simple_injective_fact_instances(
             .iter()
             .map(|&r| get_maybe_eq_strict(tag, r, default_shape));
         if let Some(behaviours) = combine_all(per_rule, default_shape) {
-            out.push((tag.clone(), behaviours));
+            out.push((*tag, behaviours));
         }
     }
     out
@@ -536,7 +536,7 @@ pub fn union_forced_injective_fact_instances(
         // `S.union` is LEFT-biased; the forced entry wins on collision.
         let arity = fact_tag_arity(tag);
         let behaviour = vec![vec![MonotonicBehaviour::Unspecified]; arity];
-        map.insert(tag.clone(), behaviour);
+        map.insert(*tag, behaviour);
     }
     map.into_iter().collect()
 }

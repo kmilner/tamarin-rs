@@ -1118,7 +1118,7 @@ pub fn annotate_loop_breakers(
                     .iter()
                     .map(|t| tamarin_term::subst::apply_vterm(&free, t.clone()))
                     .collect();
-                crate::fact::LNFact::fresh_annotated(fa.tag.clone(), fa.annotations.clone(), terms)
+                crate::fact::LNFact::fresh_annotated(fa.tag, fa.annotations.clone(), terms)
             })
             .collect()
     };

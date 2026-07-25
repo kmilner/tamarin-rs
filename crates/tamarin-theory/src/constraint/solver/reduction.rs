@@ -596,7 +596,7 @@ impl<'ctx> Reduction<'ctx> {
         &mut self,
         i: crate::constraint::constraints::NodeId,
     ) -> Result<SolveOutcome, crate::tools::equation_store::AddEqsError> {
-        match self.sys.last_atom.clone() {
+        match self.sys.last_atom {
             None => {
                 // Pure ADD (last_atom None→Some): the max can only rise
                 // by this node id — bump instead of invalidating.
@@ -834,7 +834,7 @@ impl<'ctx> Reduction<'ctx> {
             // result `apply_vterm` gives on a `Lit::Var` term, minus the
             // temporary term construction.
             match subst_view.image_of(&v) {
-                Some(tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(w))) => w.clone(),
+                Some(tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(w))) => *w,
                 _ => v,
             }
         };
@@ -860,7 +860,7 @@ impl<'ctx> Reduction<'ctx> {
         // disjoint 2-unifier (→ deferred `splitEqs`) instead of HS's shared
         // 1-unifier (→ direct `by contradiction`).  Sort by node-id here to
         // mirror `M.toList`, so the live/lower-idx node's rule survives.
-        nodes.sort_by(|a, b| a.0.cmp(&b.0));
+        nodes.sort_by_key(|a| a.0);
         let mut new_nodes: Vec<(crate::constraint::constraints::NodeId, RuleACInst)> =
             Vec::with_capacity(nodes.len());
         let mut id_to_index: tamarin_utils::FastMap<crate::constraint::constraints::NodeId, usize> =
@@ -938,7 +938,7 @@ impl<'ctx> Reduction<'ctx> {
                 // Subst rebuild — frees change; the computing constructor
                 // recomputes the bloom from the post-subst terms internally
                 // (never copy `fa`'s bloom: the rebuild changes the free-var set).
-                crate::fact::LNFact::fresh_annotated(fa.tag.clone(), fa.annotations.clone(), terms)
+                crate::fact::LNFact::fresh_annotated(fa.tag, fa.annotations.clone(), terms)
             })
         };
         let dbg_set_nodes = tamarin_utils::env_gate!("TAM_DBG_SET_NODES");
@@ -973,7 +973,7 @@ impl<'ctx> Reduction<'ctx> {
         let mut id_renamed_nodes: Vec<(crate::constraint::constraints::NodeId, RuleACInst)> =
             Vec::new();
         for (id, rule) in nodes {
-            let id_orig = id.clone();
+            let id_orig = id;
             let new_id = map_var(id);
             if new_id != id_orig {
                 nodes_value_changed = true;
@@ -1047,7 +1047,7 @@ impl<'ctx> Reduction<'ctx> {
                     }
                 }
                 None => {
-                    id_to_index.insert(new_id.clone(), new_nodes.len());
+                    id_to_index.insert(new_id, new_nodes.len());
                     new_nodes.push((new_id, rule));
                 }
             }
@@ -1157,12 +1157,12 @@ impl<'ctx> Reduction<'ctx> {
         // change the max free-var idx.
         let mut edges_value_changed = false;
         for e in self.sys.content_mut_untracked().edges.iter_mut() {
-            let new_src = map_var(e.src.0.clone());
+            let new_src = map_var(e.src.0);
             if new_src != e.src.0 {
                 edges_value_changed = true;
                 e.src.0 = new_src;
             }
-            let new_tgt = map_var(e.tgt.0.clone());
+            let new_tgt = map_var(e.tgt.0);
             if new_tgt != e.tgt.0 {
                 edges_value_changed = true;
                 e.tgt.0 = new_tgt;
@@ -1182,7 +1182,7 @@ impl<'ctx> Reduction<'ctx> {
         // 3. Last-atom.
         let mut last_atom_changed = false;
         if let Some(last) = self.sys.content_mut_untracked().last_atom.take() {
-            let new_last = map_var(last.clone());
+            let new_last = map_var(last);
             if new_last != last {
                 last_atom_changed = true;
                 self.sys.invalidate_max_var_idx_cache();
@@ -1232,17 +1232,17 @@ impl<'ctx> Reduction<'ctx> {
         let mut less_value_changed = false;
         for la in std::mem::take(&mut self.sys.content_mut_untracked().less_atoms) {
             let mut la = la;
-            let new_smaller = map_var(la.smaller.clone());
+            let new_smaller = map_var(la.smaller);
             if new_smaller != la.smaller {
                 less_value_changed = true;
                 la.smaller = new_smaller;
             }
-            let new_larger = map_var(la.larger.clone());
+            let new_larger = map_var(la.larger);
             if new_larger != la.larger {
                 less_value_changed = true;
                 la.larger = new_larger;
             }
-            if seen_less.insert((la.smaller.clone(), la.larger.clone())) {
+            if seen_less.insert((la.smaller, la.larger)) {
                 new_less.push(la);
             }
         }
@@ -1342,7 +1342,7 @@ impl<'ctx> Reduction<'ctx> {
                 match subst.image_of(&v) {
                     Some(tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(w))) => {
                         goals_value_changed.set(true);
-                        w.clone()
+                        *w
                     }
                     _ => v,
                 }
@@ -1499,7 +1499,7 @@ impl<'ctx> Reduction<'ctx> {
             };
             if needs_reinsert {
                 if let Goal::Action(i, fa) = &g2 {
-                    to_insert_action.push((i.clone(), fa.clone(), st.clone()));
+                    to_insert_action.push((*i, fa.clone(), st.clone()));
                 }
             } else {
                 // HS-faithful merge: mirror `M.insertWith combineGoalStatus`
@@ -2025,7 +2025,7 @@ impl<'ctx> Reduction<'ctx> {
                     let mut sys_vars: std::collections::BTreeSet<tamarin_term::lterm::LVar> =
                         std::collections::BTreeSet::new();
                     let mut visit = |v: &tamarin_term::lterm::LVar| {
-                        sys_vars.insert(v.clone());
+                        sys_vars.insert(*v);
                     };
                     for (id, rule) in self.sys.nodes.iter() {
                         id.for_each_free(&mut visit);
@@ -2176,7 +2176,7 @@ impl<'ctx> Reduction<'ctx> {
                         if self.sys.goals.iter().any(|(eg, _)| eg == &g) {
                             return;
                         }
-                        let outer_node = node_id.clone();
+                        let outer_node = *node_id;
                         // HS-faithful order (Reduction.hs:364-366):
                         //   insertGoal goal False                     -- outer FIRST
                         //   requiresKU m1 *> requiresKU m2 ...        -- sub-goals after
@@ -2226,12 +2226,12 @@ impl<'ctx> Reduction<'ctx> {
                             }
                             let sub_fa = crate::fact::ku_fact(sub);
                             self.insert_goal_with_loop_flag(
-                                Goal::Action(sub_node.clone(), sub_fa),
+                                Goal::Action(sub_node, sub_fa),
                                 looping,
                             );
                             self.insert_less(crate::constraint::constraints::LessAtom::new(
                                 sub_node,
-                                outer_node.clone(),
+                                outer_node,
                                 crate::constraint::constraints::Reason::Adversary,
                             ));
                         }
@@ -2858,7 +2858,7 @@ impl<'ctx> Reduction<'ctx> {
                                 .push(std::sync::Arc::new(g.clone()));
                         }
                         let last_node = match &self.sys.last_atom {
-                            Some(j) => j.clone(),
+                            Some(j) => *j,
                             None => {
                                 let baseline = self.fresh_var_baseline();
                                 let j = tamarin_term::lterm::LVar::new(
@@ -2867,7 +2867,7 @@ impl<'ctx> Reduction<'ctx> {
                                     baseline.saturating_add(1),
                                 );
                                 self.sys.invalidate_max_var_idx_cache();
-                                self.sys.set_last_atom(Some(j.clone()));
+                                self.sys.set_last_atom(Some(j));
                                 j
                             }
                         };
@@ -3331,8 +3331,8 @@ impl<'ctx> Reduction<'ctx> {
         let term_eqs: Vec<tamarin_term::rewriting::Equal<tamarin_term::lterm::LNTerm>> = eqs
             .iter()
             .map(|e| tamarin_term::rewriting::Equal {
-                lhs: Term::Lit(Lit::Var(e.lhs.clone())),
-                rhs: Term::Lit(Lit::Var(e.rhs.clone())),
+                lhs: Term::Lit(Lit::Var(e.lhs)),
+                rhs: Term::Lit(Lit::Var(e.rhs)),
             })
             .collect();
         self.solve_term_eqs(SplitStrategy::SplitNow, &term_eqs)
@@ -3533,7 +3533,7 @@ impl<'ctx> Reduction<'ctx> {
         let mut order: Vec<crate::constraint::constraints::NodeId> = Vec::new();
         for (id, ru) in nodes {
             if !groups.contains_key(&id) {
-                order.push(id.clone());
+                order.push(id);
             }
             groups.entry(id).or_default().push(ru);
         }
@@ -3771,7 +3771,7 @@ impl<'ctx> Reduction<'ctx> {
         // 4. insertLast: HS-faithful (Reduction.hs:402-407 + conjoinSystem
         // Reduction.hs:669-698, see line 676 `F.mapM_ insertLast $ get sLastAtom sys`).
         if let Some(case_last) = &sys.last_atom {
-            let r = self.insert_last(case_last.clone());
+            let r = self.insert_last(*case_last);
             if matches!(r, Err(_) | Ok(SolveOutcome::Contradictory)) {
                 return r;
             }
@@ -4031,7 +4031,7 @@ fn canonical_rule_inst(o: &crate::theory::OpenProtoRule) -> RuleACInst {
     let src: &crate::rule::ProtoRuleE = o.abstracted_rule.as_ref().unwrap_or(&o.rule);
     crate::rule::Rule {
         info: crate::rule::RuleInfo::Proto(crate::rule::ProtoRuleACInstInfo {
-            name: src.info.name.clone(),
+            name: src.info.name,
             attributes: src.info.attributes.clone(),
             loop_breakers: o.loop_breakers.clone(),
         }),
@@ -4226,7 +4226,7 @@ fn build_parser_subst_from_eq_store(
     // `structural_match` fails and `impliedFormulas` misses the
     // discharge, leaving FormulasFalse unfired — wrong-Solved.
     let lookup_chain = |start: &tamarin_term::lterm::LVar| -> tamarin_term::lterm::LNTerm {
-        let mut cur = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(start.clone()));
+        let mut cur = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(*start));
         // Bound chain length to avoid pathological cycles (shouldn't
         // happen post-compose, but defensive).  Borrowing COW step: the
         // helper returns `None` exactly when applying `subst` leaves `cur`
@@ -4287,7 +4287,7 @@ fn normalise_node_id(
     id: crate::constraint::constraints::NodeId,
     subst: &crate::tools::equation_store::LNSubst,
 ) -> crate::constraint::constraints::NodeId {
-    let id_term = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(id.clone()));
+    let id_term = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(id));
     let mapped = tamarin_term::subst::apply_vterm(subst, id_term);
     if let tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(v)) = mapped {
         v
@@ -5165,7 +5165,7 @@ fn collect_live_system_vars(sys: &System) -> std::collections::BTreeSet<tamarin_
     use tamarin_term::lterm::HasFrees;
     let mut s = std::collections::BTreeSet::new();
     let mut visit = |v: &tamarin_term::lterm::LVar| {
-        s.insert(v.clone());
+        s.insert(*v);
     };
     for (id, rule) in sys.nodes.iter() {
         id.for_each_free(&mut visit);
@@ -5453,7 +5453,7 @@ fn subterm_step(
                 Err(_) => None,
                 Ok((n_small, n_big)) => {
                     let new_var = mk_fresh(sort_of_lnterm(big));
-                    let small_plus = f_app_ac(f, vec![n_small, var_term(new_var.clone())]);
+                    let small_plus = f_app_ac(f, vec![n_small, var_term(new_var)]);
                     let mut out: Vec<SubtermSplit> = Vec::new();
                     out.push(SubtermSplit::AcNewVarD(small_plus, n_big, new_var));
                     // map (curry SubtermD small) (flattenedACTerms f big)
@@ -5516,7 +5516,7 @@ fn close_guarded_ex_eq(
     r: &tamarin_term::lterm::LNTerm,
 ) -> crate::guarded::Guarded {
     let var_lt: tamarin_term::lterm::LNTerm =
-        tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(new_var.clone()));
+        tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(*new_var));
     let vs = match crate::elaborate::lnterm_to_term(&var_lt) {
         tamarin_parser::ast::Term::Var(v) => v,
         _ => unreachable!("var_term elaborates to a Var"),
@@ -5596,7 +5596,7 @@ fn has_fresh_consumer_conflation(
             let t_norm = tamarin_term::subst::apply_vterm(subst, t.clone());
             if let Term::Lit(Lit::Var(v)) = t_norm {
                 if v.sort == LSort::Fresh {
-                    consumers.push((id.clone(), v, rule));
+                    consumers.push((*id, v, rule));
                 }
             }
         }
@@ -6074,7 +6074,7 @@ impl<'ctx> Reduction<'ctx> {
             // (v `elem` breakers)`).  Covers Kd/Ded and every other tag.
             _ => {
                 self.insert_goal_with_loop_flag(
-                    Goal::Premise((i.clone(), idx), fa.clone()),
+                    Goal::Premise((*i, idx), fa.clone()),
                     is_loop_breaker,
                 );
             }
@@ -6129,7 +6129,7 @@ impl<'ctx> Reduction<'ctx> {
                 path, next
             );
         }
-        self.sys.add_node(j.clone(), rule);
+        self.sys.add_node(j, rule);
         // HS-faithful (Reduction.hs:217-270, see line 258): `exploitPrem FreshFact` does
         // a raw `modM sEdges (S.insert $ Edge (j, ConcIdx 0) (i,v))` —
         // NO `insertEdges` (so NO solveFactEqs).  Routing through
@@ -6147,7 +6147,7 @@ impl<'ctx> Reduction<'ctx> {
         // `add_isend_supplier_for` path and avoids a full cache recompute.
         self.sys.add_edge(crate::constraint::constraints::Edge {
             src: (j, crate::rule::ConcIdx(0)),
-            tgt: (i.clone(), idx),
+            tgt: (*i, idx),
         });
         // Haskell `unless (isFreshVar m)`: narrow m:Msg → ~n:Fresh
         // via solveTermEqs.  Only fires when m is not already Fresh-
@@ -6173,7 +6173,7 @@ impl<'ctx> Reduction<'ctx> {
             let n_var =
                 tamarin_term::lterm::LVar::new("n", tamarin_term::lterm::LSort::Fresh, next_n);
             let n_term =
-                tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(n_var.clone()));
+                tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(n_var));
             crate::constraint::solver::trace::trace_exec("FrNarrow");
             if tamarin_utils::env_gate!("TAM_RS_TRACE_FR_NARROW") {
                 eprintln!(
@@ -6251,14 +6251,14 @@ impl<'ctx> Reduction<'ctx> {
                 crate::constraint::solver::reduction::rule_trace_name(&rule)
             ));
         }
-        self.sys.add_node(j.clone(), rule);
+        self.sys.add_node(j, rule);
         // HS-faithful (Reduction.hs:217-270, see line 247): `exploitPrem InFact` does a
         // RAW `modM sEdges (S.insert $ Edge (j, ConcIdx 0) (i, v))` —
         // NO `insertEdges` call, NO `solveFactEqs` unification, NO
         // `[EXEC] insertEdges n=1` trace.
         self.sys.add_edge(crate::constraint::constraints::Edge {
-            src: (j.clone(), crate::rule::ConcIdx(0)),
-            tgt: (i.clone(), idx),
+            src: (j, crate::rule::ConcIdx(0)),
+            tgt: (*i, idx),
         });
         // ISend's KU premise → KU action goal at fresh predecessor —
         // Haskell's `exploitPrems j ruKnows`.  Always record the goal,
@@ -6295,8 +6295,8 @@ impl<'ctx> Reduction<'ctx> {
             );
         }
         self.insert_less(crate::constraint::constraints::LessAtom::new(
-            j.clone(),
-            i.clone(),
+            j,
+            *i,
             crate::constraint::constraints::Reason::Adversary,
         ));
         self.insert_goal(Goal::Action(j, fa.clone()));
@@ -6371,7 +6371,7 @@ impl<'ctx> Reduction<'ctx> {
             "solveActionGoal"
         };
         let _op_guard = crate::constraint::solver::trace::OpLabelGuard::new(label);
-        let g = Goal::Action(i.clone(), fa.clone());
+        let g = Goal::Action(*i, fa.clone());
         let existing = self
             .sys
             .nodes
@@ -6544,7 +6544,7 @@ impl<'ctx> Reduction<'ctx> {
                         if case_pairs.is_empty() {
                             return GoalCases::Contradictory;
                         }
-                        let live_goal = Goal::Action(i.clone(), fa.clone());
+                        let live_goal = Goal::Action(*i, fa.clone());
                         let mut out: Vec<(String, crate::constraint::system::System)> = Vec::new();
                         // HS FreshT-threading (task #16): per-out-case branch counters.
                         let mut out_counters: Vec<u64> = Vec::new();
@@ -6664,7 +6664,7 @@ impl<'ctx> Reduction<'ctx> {
                             // re-narrows live disjunctions HS keeps).
                             let action_live_node_ids: std::collections::BTreeSet<
                                 crate::constraint::constraints::NodeId,
-                            > = self.sys.nodes.iter().map(|(n, _)| n.clone()).collect();
+                            > = self.sys.nodes.iter().map(|(n, _)| *n).collect();
                             'arm: for (arm_sys, arm_counter) in action_arm_systems {
                                 let mut sub =
                                     Reduction::new_inheriting(self.ctx, arm_sys, arm_counter);
@@ -6841,10 +6841,10 @@ impl<'ctx> Reduction<'ctx> {
                                     vec![fa.clone()],
                                     vec![fa.clone()],
                                 );
-                                sub.sys.add_node(i.clone(), coerce_ru);
+                                sub.sys.add_node(*i, coerce_ru);
                                 // PremiseG (i, PremIdx 0) (kdFact m)
                                 sub.insert_goal(Goal::Premise(
-                                    (i.clone(), crate::rule::PremIdx(0)),
+                                    (*i, crate::rule::PremIdx(0)),
                                     kd_m,
                                 ));
                                 let case_name = "coerce".to_string();
@@ -6880,7 +6880,7 @@ impl<'ctx> Reduction<'ctx> {
                                     vec![fa.clone()],
                                     vec![fa.clone()],
                                 );
-                                sub.sys.add_node(i.clone(), xor_ru);
+                                sub.sys.add_node(*i, xor_ru);
                                 // requiresKU a, requiresKU b
                                 sub.add_ku_action_before(i, &ku_a);
                                 sub.add_ku_action_before(i, &ku_b);
@@ -7004,7 +7004,7 @@ impl<'ctx> Reduction<'ctx> {
                         }
                         let case_name = rule_case_name(&renamed);
                         let mut sys = self.sys.clone();
-                        sys.add_node(i.clone(), renamed.clone());
+                        sys.add_node(*i, renamed.clone());
                         let mut sub = Reduction::new(self.ctx, sys);
                         // HS-faithful order (Goals.hs:262-265): `labelNodeId
                         // i rules Nothing` returns the chosen `ru` AFTER
@@ -7200,11 +7200,11 @@ impl<'ctx> Reduction<'ctx> {
                 vec![crate::fact::kd_fact(m_learn.clone())],
                 vec![],
             );
-            self.sys.add_node(i_learn.clone(), irecv_rule);
+            self.sys.add_node(i_learn, irecv_rule);
             let c_learn: crate::constraint::constraints::NodeConc =
-                (i_learn.clone(), crate::rule::ConcIdx(0));
-            self.insert_goal(Goal::Chain(c_learn, p.clone()));
-            self.mark_goal_as_solved(&Goal::Premise(p.clone(), fa_prem.clone()));
+                (i_learn, crate::rule::ConcIdx(0));
+            self.insert_goal(Goal::Chain(c_learn, *p));
+            self.mark_goal_as_solved(&Goal::Premise(*p, fa_prem.clone()));
             self.changed = ChangeIndicator::Changed;
             // Recurse on the Out(mLearn) premise — Haskell does this
             // immediately, inline, before any chain solving.  This is
@@ -7287,7 +7287,7 @@ impl<'ctx> Reduction<'ctx> {
                 // dropped — keeps the search making progress.
             }
         }
-        let g = Goal::Premise(p.clone(), fa_prem.clone());
+        let g = Goal::Premise(*p, fa_prem.clone());
         // Canonical (abstracted) rule + variant disjunction installed
         // as SplitG after labeling — Haskell-faithful `someRuleACInst`
         // path (Rule.hs:925-934, see line 933).
@@ -7374,7 +7374,7 @@ impl<'ctx> Reduction<'ctx> {
             // freshen counter), not a bounds_max re-derivation — see
             // `new_inheriting`.
             let mut label_sys = self.sys.clone();
-            label_sys.add_node(new_node.clone(), renamed.clone());
+            label_sys.add_node(new_node, renamed.clone());
             let mut label_sub =
                 Reduction::new_inheriting(self.ctx, label_sys, self.maude.fresh_counter_peek());
             if tamarin_utils::env_gate!("TAM_RS_DBG_SOLVE_RULE_CONSTRAINTS") {
@@ -7412,8 +7412,8 @@ impl<'ctx> Reduction<'ctx> {
                 let res = sub.insert_edge_labeled_with_facts(
                     "premise_goal_rule_enum",
                     crate::constraint::constraints::Edge {
-                        src: (new_node.clone(), c_idx),
-                        tgt: p.clone(),
+                        src: (new_node, c_idx),
+                        tgt: *p,
                     },
                     fa_conc,
                     fa_prem,
@@ -7525,7 +7525,7 @@ impl<'ctx> Reduction<'ctx> {
             };
             eprintln!("[SOLVE_CHAIN] enter mode={} c={:?} p={:?}", mode, c, p);
         }
-        let g = Goal::Chain(c.clone(), p.clone());
+        let g = Goal::Chain(*c, *p);
         let c_rule = match self.sys.nodes.iter().find(|(id, _)| id == &c.0) {
             Some((_, r)) => r.clone(),
             None => return GoalCases::Contradictory,
@@ -7588,8 +7588,8 @@ impl<'ctx> Reduction<'ctx> {
                     let res = sub.insert_edge_labeled(
                         "chain_direct",
                         crate::constraint::constraints::Edge {
-                            src: c.clone(),
-                            tgt: p.clone(),
+                            src: *c,
+                            tgt: *p,
                         },
                     );
                     if !matches!(res, Err(_) | Ok(SolveOutcome::Contradictory)) {
@@ -7716,7 +7716,7 @@ impl<'ctx> Reduction<'ctx> {
                 let new_node =
                     tamarin_term::lterm::LVar::new("vr", tamarin_term::lterm::LSort::Node, vr_idx);
                 let mut sys_clone = self.sys.clone();
-                sys_clone.add_node(new_node.clone(), ru_inst.clone());
+                sys_clone.add_node(new_node, ru_inst.clone());
                 let mut sub =
                     Reduction::new_inheriting(self.ctx, sys_clone, self.maude.fresh_counter_peek());
                 // HS `extendAndMark i ru v faPrem faConc` (Goals.hs `extendAndMark`):
@@ -7726,8 +7726,8 @@ impl<'ctx> Reduction<'ctx> {
                 let res = sub.insert_edge_labeled(
                     "chain_extend",
                     crate::constraint::constraints::Edge {
-                        src: c.clone(),
-                        tgt: (new_node.clone(), crate::rule::PremIdx(0)),
+                        src: *c,
+                        tgt: (new_node, crate::rule::PremIdx(0)),
                     },
                 );
                 if matches!(res, Err(_) | Ok(SolveOutcome::Contradictory)) {
@@ -7748,12 +7748,12 @@ impl<'ctx> Reduction<'ctx> {
                     let mut arm_sub =
                         Reduction::new_inheriting(self.ctx, arm_sys, post_edge_counter);
                     arm_sub.mark_goal_as_solved(&Goal::Premise(
-                        (new_node.clone(), crate::rule::PremIdx(0)),
+                        (new_node, crate::rule::PremIdx(0)),
                         prem0.clone(),
                     ));
                     arm_sub.insert_goal(Goal::Chain(
-                        (new_node.clone(), crate::rule::ConcIdx(0)),
-                        p.clone(),
+                        (new_node, crate::rule::ConcIdx(0)),
+                        *p,
                     ));
                     let arm_counter = arm_sub.maude.fresh_counter_peek();
                     arm_sys = arm_sub.sys;
@@ -7915,7 +7915,7 @@ impl<'ctx> Reduction<'ctx> {
                 let mut sys_clone = self.sys.clone();
                 let new_node =
                     tamarin_term::lterm::LVar::new("vr", tamarin_term::lterm::LSort::Node, vr_idx);
-                sys_clone.add_node(new_node.clone(), ru_renamed.clone());
+                sys_clone.add_node(new_node, ru_renamed.clone());
                 // HS FreshT-threading: continue the enclosing thread
                 // (post-freshen counter of THIS destructor fork).
                 let mut sub =
@@ -7961,8 +7961,8 @@ impl<'ctx> Reduction<'ctx> {
                 let res = sub.insert_edge_labeled(
                     "chain_extend",
                     crate::constraint::constraints::Edge {
-                        src: c.clone(),
-                        tgt: (new_node.clone(), crate::rule::PremIdx(0)),
+                        src: *c,
+                        tgt: (new_node, crate::rule::PremIdx(0)),
                     },
                 );
                 if tamarin_utils::env_gate!("TAM_RS_DBG_CHAIN_EXTEND_MULTI") {
@@ -8025,13 +8025,13 @@ impl<'ctx> Reduction<'ctx> {
                     let mut arm_sub =
                         Reduction::new_inheriting(self.ctx, arm_sys, post_edge_counter);
                     arm_sub.mark_goal_as_solved(&Goal::Premise(
-                        (new_node.clone(), crate::rule::PremIdx(0)),
+                        (new_node, crate::rule::PremIdx(0)),
                         prem0.clone(),
                     ));
                     // Insert the chain continuation (i, ConcIdx(0)) → p.
                     arm_sub.insert_goal(Goal::Chain(
-                        (new_node.clone(), crate::rule::ConcIdx(0)),
-                        p.clone(),
+                        (new_node, crate::rule::ConcIdx(0)),
+                        *p,
                     ));
                     let arm_counter = arm_sub.maude.fresh_counter_peek();
                     arm_sys = arm_sub.sys;
@@ -8192,7 +8192,7 @@ impl<'ctx> Reduction<'ctx> {
                         let new_var = LVar::new("newVar", LSort::Nat, sub.maude.fresh_idx());
                         // sPlus = s ++: varTerm newVar
                         let s_plus =
-                            f_app_ac(AcSym::NatPlus, vec![s.clone(), var_term(new_var.clone())]);
+                            f_app_ac(AcSym::NatPlus, vec![s.clone(), var_term(new_var)]);
                         // insertFormula $ closeGuarded Ex [newVar] [EqE sPlus t] gtrue
                         let f = close_guarded_ex_eq(&new_var, &s_plus, t);
                         sub.insert_formula(f);

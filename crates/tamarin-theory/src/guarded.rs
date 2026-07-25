@@ -1124,7 +1124,7 @@ fn map_guarded_atoms<F: FnMut(u32, &GAtom) -> GAtom>(g: &Guarded, f: &mut F) -> 
             } => {
                 let new_depth = depth + vars.len() as u32;
                 Guarded::GGuarded {
-                    qua: qua.clone(),
+                    qua: *qua,
                     vars: vars.clone(),
                     guards: guards.iter().map(|a| f(new_depth, a)).collect(),
                     body: std::sync::Arc::new(rec(body, new_depth, f)),
@@ -1203,7 +1203,7 @@ pub fn normalise_guarded_cow(g: &Guarded) -> Option<Guarded> {
         // Only `body` can change; qua/vars/guards are cloned verbatim.
         {
             normalise_guarded_cow(body).map(|b| Guarded::GGuarded {
-                qua: qua.clone(),
+                qua: *qua,
                 vars: vars.clone(),
                 guards: guards.clone(),
                 body: std::sync::Arc::new(b),
@@ -1868,7 +1868,7 @@ pub fn normalize_sort_hints(g: &Guarded) -> Guarded {
                 guards,
                 body,
             } => Guarded::GGuarded {
-                qua: qua.clone(),
+                qua: *qua,
                 vars: vars.iter().map(norm_binding).collect(),
                 guards: guards.iter().map(norm_atom).collect(),
                 body: std::sync::Arc::new(rec(body)),
@@ -2092,7 +2092,7 @@ fn cac_rec_guarded_cow(g: &Guarded, cmp: GCmp) -> Option<Guarded> {
             cac_rec_guarded_cow(body, cmp),
         )
         .map(|(guards, body)| Guarded::GGuarded {
-            qua: qua.clone(),
+            qua: *qua,
             vars: vars.clone(),
             guards,
             body: std::sync::Arc::new(body),
@@ -2246,7 +2246,7 @@ pub fn subst_guarded_cow(g: &Guarded, s: &VarSubst) -> Option<Guarded> {
             subst_guarded_cow(body, s),
         )
         .map(|(guards, body)| Guarded::GGuarded {
-            qua: qua.clone(),
+            qua: *qua,
             vars: vars.clone(),
             guards,
             body: std::sync::Arc::new(body),

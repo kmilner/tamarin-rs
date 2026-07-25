@@ -35,7 +35,7 @@ fn get_secret_channels(p: &AnnotatedProc, candidates: BTreeSet<LVar>) -> BTreeSe
     match p {
         Process::Action(SapicAction::New(v), _, body) => {
             let mut next = candidates;
-            next.insert(v.var.clone());
+            next.insert(v.var);
             get_secret_channels(body, next)
         }
         Process::Action(SapicAction::ChOut { msg, .. }, _, body)
@@ -102,7 +102,7 @@ fn lit_var(t: &SapicTerm) -> Option<LVar> {
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
     match t {
-        Term::Lit(Lit::Var(sv)) => Some(sv.var.clone()),
+        Term::Lit(Lit::Var(sv)) => Some(sv.var),
         _ => None,
     }
 }

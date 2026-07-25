@@ -54,7 +54,7 @@ fn add_progress_from(dom_pf: &PosSet, child: &[i64], body: RuleBody) -> RuleBody
     let any_non_semi = r.iter().any(is_non_semi_state);
     if any_non_semi && dom_pf.contains(child) {
         let vp = var_progress(&child.to_vec());
-        let mut nl = vec![TransFact::Fr(vp.clone())];
+        let mut nl = vec![TransFact::Fr(vp)];
         nl.extend(l);
         let mut na = vec![TransAction::ProgressFrom(child.to_vec())];
         na.extend(a);

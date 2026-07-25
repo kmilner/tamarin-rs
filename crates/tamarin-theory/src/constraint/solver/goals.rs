@@ -2666,14 +2666,14 @@ pub(crate) fn reachable_set_adj(
     use std::collections::{BTreeSet, VecDeque};
     let mut seen: BTreeSet<crate::constraint::constraints::NodeId> = BTreeSet::new();
     let mut q: VecDeque<crate::constraint::constraints::NodeId> = VecDeque::new();
-    q.push_back(from.clone());
+    q.push_back(*from);
     while let Some(n) = q.pop_front() {
-        if !seen.insert(n.clone()) {
+        if !seen.insert(n) {
             continue;
         }
         if let Some(succs) = adj.get(&n) {
             for s in succs {
-                q.push_back(s.clone());
+                q.push_back(*s);
             }
         }
     }

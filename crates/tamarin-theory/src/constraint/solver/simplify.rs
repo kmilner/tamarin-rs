@@ -534,14 +534,14 @@ fn non_injective_fact_instances_pairs(
         crate::constraint::constraints::NodeId,
         crate::rule::RuleACInst,
     )> = sys.nodes.iter().collect();
-    nodes_sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    nodes_sorted.sort_by_key(|a| a.0);
     // The `alwaysBefore` adjacency is invariant across the edge/node loop
     // (`sys` is read-only), so build it once and query with
     // `always_before_with` instead of rebuilding the relation per pair.
     let ab_adj = sys.build_always_before_adj();
     for e in &edges_sorted {
-        let (i, conc_idx) = (e.src.0.clone(), e.src.1);
-        let k = e.tgt.0.clone();
+        let (i, conc_idx) = (e.src.0, e.src.1);
+        let k = e.tgt.0;
         let i_rule = match lookup_node(&i) {
             Some(r) => r,
             None => continue,
@@ -576,14 +576,14 @@ fn non_injective_fact_instances_pairs(
             }
             // checkRuleJK: j<k and nonUnifiable(j, i) — return (j, i)
             if non_unifiable_nodes(j, &i) {
-                out.push((j.clone(), i.clone()));
+                out.push((*j, i));
                 continue;
             }
             // checkRuleIJ: i<j and nonUnifiable(k, j) — return (k, j)
             // Haskell's IJ branch uses `D.reachableSet [i] less`; we
             // mirror that with `i < j`.
             if sys.always_before_with(&ab_adj, &i, j) && non_unifiable_nodes(&k, j) {
-                out.push((k.clone(), j.clone()));
+                out.push((k, *j));
             }
         }
     }
@@ -615,7 +615,7 @@ fn exploit_unique_msg_order(red: &mut Reduction) {
                 if let Some(m) = fa.terms.first() {
                     // First occurrence wins; N5↓ has already merged
                     // duplicates by this point.
-                    kd_conc.entry(m.clone()).or_insert_with(|| id.clone());
+                    kd_conc.entry(m.clone()).or_insert_with(|| *id);
                 }
             }
         }
@@ -634,7 +634,7 @@ fn exploit_unique_msg_order(red: &mut Reduction) {
         for fa in &rule.actions {
             if matches!(fa.tag, FactTag::Ku) {
                 if let Some(m) = fa.terms.first() {
-                    ku_act.entry(m.clone()).or_insert_with(|| id.clone());
+                    ku_act.entry(m.clone()).or_insert_with(|| *id);
                 }
             }
         }
@@ -646,7 +646,7 @@ fn exploit_unique_msg_order(red: &mut Reduction) {
         if let crate::constraint::constraints::Goal::Action(i, fa) = goal {
             if matches!(fa.tag, FactTag::Ku) {
                 if let Some(m) = fa.terms.first() {
-                    ku_act.entry(m.clone()).or_insert_with(|| i.clone());
+                    ku_act.entry(m.clone()).or_insert_with(|| *i);
                 }
             }
         }
@@ -659,8 +659,8 @@ fn exploit_unique_msg_order(red: &mut Reduction) {
         if let Some(i_ku) = ku_act.get(m) {
             if i_kd != i_ku {
                 red.insert_less(LessAtom::new(
-                    i_kd.clone(),
-                    i_ku.clone(),
+                    *i_kd,
+                    *i_ku,
                     Reason::NormalForm,
                 ));
             }
@@ -1052,17 +1052,17 @@ fn partial_atom_valuation_with(
             )> = sys
                 .less_atoms
                 .iter()
-                .map(|l| (l.smaller.clone(), l.larger.clone()))
-                .chain(sys.edges.iter().map(|e| (e.src.0.clone(), e.tgt.0.clone())))
+                .map(|l| (l.smaller, l.larger))
+                .chain(sys.edges.iter().map(|e| (e.src.0, e.tgt.0)))
                 .collect();
             // nodesAfter n = transitive closure from n via less_rel.
-            let mut frontier: Vec<crate::constraint::constraints::NodeId> = vec![n.clone()];
-            let mut seen: std::collections::BTreeSet<_> = [n.clone()].into_iter().collect();
+            let mut frontier: Vec<crate::constraint::constraints::NodeId> = vec![n];
+            let mut seen: std::collections::BTreeSet<_> = [n].into_iter().collect();
             while let Some(cur) = frontier.pop() {
                 for (a, b) in &less_rel {
                     if a == &cur && !seen.contains(b) {
-                        seen.insert(b.clone());
-                        frontier.push(b.clone());
+                        seen.insert(*b);
+                        frontier.push(*b);
                     }
                 }
             }
@@ -1300,7 +1300,7 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
             .iter()
             .filter(|(_, st)| !st.solved)
             .filter_map(|(g, _)| match g {
-                Goal::Action(i, fa) => Some((i.clone(), fa.clone())),
+                Goal::Action(i, fa) => Some((*i, fa.clone())),
                 _ => None,
             })
             .collect();
@@ -1309,10 +1309,10 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
         Vec::new();
     for (id, rule) in red.sys.nodes.iter() {
         for a in &rule.actions {
-            node_actions.push((id.clone(), a.clone()));
+            node_actions.push((*id, a.clone()));
         }
     }
-    node_actions.sort_by(|a, b| a.0.cmp(&b.0));
+    node_actions.sort_by_key(|a| a.0);
     let mut sys_actions = unsolved_actions;
     sys_actions.extend(node_actions);
     if sys_actions.is_empty() {
@@ -2248,7 +2248,7 @@ fn structural_match(
             if matches!(subj, Term::Lit(Lit::Var(sv)) if sv == pv) {
                 return StructMatch::Matched;
             }
-            subst.insert(pv.clone(), subj.clone());
+            subst.insert(*pv, subj.clone());
             StructMatch::Matched
         }
         // Non-pattern LVar = SkConst-equivalent: matches only the same
@@ -2526,12 +2526,12 @@ fn normalise_less_atoms_pass(red: &mut Reduction) -> ChangeIndicator {
         let subst = &c.eq_store.subst;
         let normalize = |id: &crate::constraint::constraints::NodeId| -> crate::constraint::constraints::NodeId {
             let t = tamarin_term::term::Term::Lit(
-                tamarin_term::vterm::Lit::Var(id.clone()));
+                tamarin_term::vterm::Lit::Var(*id));
             let mapped = tamarin_term::subst::apply_vterm(subst, t);
             if let tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(v)) = mapped {
                 v
             } else {
-                id.clone()
+                *id
             }
         };
         for la in c.less_atoms.iter_mut() {
@@ -2567,7 +2567,7 @@ fn normalise_less_atoms_pass(red: &mut Reduction) -> ChangeIndicator {
     let mut seen: tamarin_utils::FastSet<(tamarin_term::lterm::LVar, tamarin_term::lterm::LVar)> =
         tamarin_utils::FastSet::default();
     for la in std::mem::take(&mut red.sys.content_mut_untracked().less_atoms) {
-        if seen.insert((la.smaller.clone(), la.larger.clone())) {
+        if seen.insert((la.smaller, la.larger)) {
             new_less.push(la);
         }
     }
@@ -2607,9 +2607,9 @@ fn enforce_fresh_node_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
             continue;
         }
         if let Some(slot) = buckets.iter_mut().find(|(r, _)| r == rule) {
-            slot.1.push(id.clone());
+            slot.1.push(*id);
         } else {
-            buckets.push((rule.clone(), vec![id.clone()]));
+            buckets.push((rule.clone(), vec![*id]));
         }
     }
     let mut changed = ChangeIndicator::Unchanged;
@@ -2631,12 +2631,12 @@ fn enforce_fresh_node_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
         // order is immaterial; only the in-group keep-direction matters.)
         let mut ids = ids;
         ids.sort();
-        let keep = ids[0].clone();
+        let keep = ids[0];
         let eqs: Vec<_> = ids
             .into_iter()
             .skip(1)
             .map(|i| tamarin_term::rewriting::Equal {
-                lhs: keep.clone(),
+                lhs: keep,
                 rhs: i,
             })
             .collect();
@@ -2720,7 +2720,7 @@ fn enforce_ku_action_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
         if let Goal::Action(i, fa) = g {
             if matches!(fa.tag, FactTag::Ku) {
                 if let Some(m) = fa.terms.first() {
-                    acts.push((i.clone(), fa.clone(), apply_subst(m)));
+                    acts.push((*i, fa.clone(), apply_subst(m)));
                 }
             }
         }
@@ -2736,12 +2736,12 @@ fn enforce_ku_action_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
     // still pushed FIRST — `allKUActions` lists `unsolvedActionAtoms`
     // before rule actions — so a goal still wins `iKeep` over a rule node.)
     let mut sorted_nodes: Vec<_> = red.sys.nodes.iter().collect();
-    sorted_nodes.sort_by(|a, b| a.0.cmp(&b.0));
+    sorted_nodes.sort_by_key(|a| a.0);
     for (id, rule) in sorted_nodes {
         for fa in &rule.actions {
             if matches!(fa.tag, FactTag::Ku) {
                 if let Some(m) = fa.terms.first() {
-                    acts.push((id.clone(), fa.clone(), apply_subst(m)));
+                    acts.push((*id, fa.clone(), apply_subst(m)));
                 }
             }
         }
@@ -2765,8 +2765,8 @@ fn enforce_ku_action_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
         for (rid, rfa) in group.iter().skip(1) {
             if rid != keep_id {
                 node_eqs.push(tamarin_term::rewriting::Equal {
-                    lhs: keep_id.clone(),
-                    rhs: rid.clone(),
+                    lhs: *keep_id,
+                    rhs: *rid,
                 });
             }
             if rfa != keep_fa {
@@ -3171,12 +3171,12 @@ fn collect_unique_action_candidates(
         std::collections::BTreeMap::new();
     for r in &red.ctx.rules {
         for fa in &r.rule.actions {
-            *counts.entry((fa.tag.clone(), fa.terms.len())).or_insert(0) += 1;
+            *counts.entry((fa.tag, fa.terms.len())).or_insert(0) += 1;
         }
     }
     for r in &red.ctx.intruder_rules {
         for fa in &r.actions {
-            *counts.entry((fa.tag.clone(), fa.terms.len())).or_insert(0) += 1;
+            *counts.entry((fa.tag, fa.terms.len())).or_insert(0) += 1;
         }
     }
     let is_unique = |fa: &LNFact| -> bool {
@@ -3187,7 +3187,7 @@ fn collect_unique_action_candidates(
                 return false;
             }
         }
-        counts.get(&(fa.tag.clone(), fa.terms.len())).copied() == Some(1)
+        counts.get(&(fa.tag, fa.terms.len())).copied() == Some(1)
     };
 
     let mut candidates: Vec<(crate::constraint::constraints::NodeId, LNFact)> = red
@@ -3195,7 +3195,7 @@ fn collect_unique_action_candidates(
         .goals
         .iter()
         .filter_map(|(g, st)| match g {
-            Goal::Action(i, fa) if !st.solved && is_unique(fa) => Some((i.clone(), fa.clone())),
+            Goal::Action(i, fa) if !st.solved && is_unique(fa) => Some((*i, fa.clone())),
             _ => None,
         })
         .collect();
@@ -3258,7 +3258,7 @@ fn enforce_kd_fact_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
         for fa in &rule.conclusions {
             if matches!(fa.tag, FactTag::Kd) {
                 if let Some(m) = fa.terms.first() {
-                    kd_concs.push((id.clone(), rule.clone(), m.clone()));
+                    kd_concs.push((*id, rule.clone(), m.clone()));
                 }
             }
         }
@@ -3281,8 +3281,8 @@ fn enforce_kd_fact_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
         for (rid, rrule) in group.iter().skip(1) {
             if rid != keep_id {
                 node_eqs.push(tamarin_term::rewriting::Equal {
-                    lhs: keep_id.clone(),
-                    rhs: rid.clone(),
+                    lhs: *keep_id,
+                    rhs: *rid,
                 });
             }
             if keep_rule != rrule {
@@ -3376,7 +3376,7 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
                 };
                 if let Term::Lit(Lit::Var(v)) = t_norm {
                     if v.sort == tamarin_term::lterm::LSort::Fresh {
-                        suppliers.push((id.clone(), v));
+                        suppliers.push((*id, v));
                     }
                 }
             }
@@ -3439,7 +3439,7 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
         nodes_snapshot
             .iter()
             .filter(|(_, r)| r.conclusions.len() == 1 && r.conclusions[0].is_linear())
-            .map(|(id, _)| id.clone())
+            .map(|(id, _)| *id)
             .collect();
     // edge_map: NodeConc → NodeId (only first edge per conc is needed since the
     // source case has at most one outgoing edge per conc).  Built directly from
@@ -3452,7 +3452,7 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
         .sys
         .edges
         .iter()
-        .map(|e| (e.src.clone(), e.tgt.0.clone()))
+        .map(|e| (e.src, e.tgt.0))
         .collect();
     fn plain_route(
         nid: &crate::constraint::constraints::NodeId,
@@ -3469,16 +3469,16 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
         // iff it has a single linear conclusion (precomputed) — i.e. `nid`'s
         // rule has exactly one, linear conclusion.
         if depth > 32 || !single_linear_conc.contains(nid) {
-            return vec![nid.clone()];
+            return vec![*nid];
         }
-        let conc_key = (nid.clone(), crate::rule::ConcIdx(0));
+        let conc_key = (*nid, crate::rule::ConcIdx(0));
         match edge_map.get(&conc_key) {
             Some(next) => {
-                let mut out = vec![nid.clone()];
+                let mut out = vec![*nid];
                 out.extend(plain_route(next, single_linear_conc, edge_map, depth + 1));
                 out
             }
-            None => vec![nid.clone()],
+            None => vec![*nid],
         }
     }
 
@@ -3583,13 +3583,13 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
                 less_idx = Some(red.sys.build_less_index());
             }
             if red.sys.add_less_indexed(
-                LessAtom::new(sup_id.clone(), other_id.clone(), Reason::Fresh),
+                LessAtom::new(*sup_id, *other_id, Reason::Fresh),
                 less_idx.as_mut().unwrap(),
             ) {
                 red.changed = ChangeIndicator::Changed;
                 changed = ChangeIndicator::Changed;
             }
-            new_lesses.push((sup_id.clone(), other_id.clone()));
+            new_lesses.push((*sup_id, *other_id));
         }
     }
 
@@ -3616,7 +3616,7 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
     // Haskell `interactive`'s dot output (LessAtom `#i < #j Fresh`
     // comes from `enhancedLesses`).
     let supplier_ids: std::collections::BTreeSet<_> =
-        suppliers.iter().map(|(id, _)| id.clone()).collect();
+        suppliers.iter().map(|(id, _)| *id).collect();
     for (i, j) in &new_lesses {
         if !supplier_ids.contains(i) {
             continue;
@@ -3648,7 +3648,7 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
             continue;
         }
         let last = match rs.last() {
-            Some(l) => l.clone(),
+            Some(l) => *l,
             None => continue,
         };
         // HS-faithful insertLess (Reduction.hs:390-391).  `less_idx` stays
@@ -3658,7 +3658,7 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
             less_idx = Some(red.sys.build_less_index());
         }
         if red.sys.add_less_indexed(
-            LessAtom::new(last, j.clone(), Reason::Fresh),
+            LessAtom::new(last, *j, Reason::Fresh),
             less_idx.as_mut().unwrap(),
         ) {
             red.changed = ChangeIndicator::Changed;
@@ -3729,7 +3729,7 @@ fn enforce_edge_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
                     | FactTag::Ku
                     | FactTag::Kd
             ) {
-                persistent_concs.insert((id.clone(), i));
+                persistent_concs.insert((*id, i));
             }
         }
     }
@@ -3746,8 +3746,8 @@ fn enforce_edge_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
         Vec<crate::constraint::constraints::NodePrem>,
     > = std::collections::BTreeMap::new();
     for e in &red.sys.edges {
-        by_tgt.entry(e.tgt.clone()).or_default().push(e.src.clone());
-        by_src.entry(e.src.clone()).or_default().push(e.tgt.clone());
+        by_tgt.entry(e.tgt).or_default().push(e.src);
+        by_src.entry(e.src).or_default().push(e.tgt);
     }
     let mut node_eqs: Vec<tamarin_term::rewriting::Equal<crate::constraint::constraints::NodeId>> =
         Vec::new();
@@ -3764,8 +3764,8 @@ fn enforce_edge_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
                 continue;
             }
             node_eqs.push(tamarin_term::rewriting::Equal {
-                lhs: keep.0.clone(),
-                rhs: other.0.clone(),
+                lhs: keep.0,
+                rhs: other.0,
             });
         }
     }
@@ -3780,7 +3780,7 @@ fn enforce_edge_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
         if prems.len() < 2 {
             continue;
         }
-        if persistent_concs.contains(&(src.0.clone(), src.1 .0)) {
+        if persistent_concs.contains(&(src.0, src.1 .0)) {
             continue;
         }
         let keep = &prems[0];
@@ -3790,8 +3790,8 @@ fn enforce_edge_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
                 continue;
             }
             node_eqs.push(tamarin_term::rewriting::Equal {
-                lhs: keep.0.clone(),
-                rhs: other.0.clone(),
+                lhs: keep.0,
+                rhs: other.0,
             });
         }
     }
@@ -3835,7 +3835,7 @@ fn enforce_edge_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
 /// Lift a `NodeId` (an `LVar` of sort Node) to an `LNTerm` variable —
 /// HS `varTerm (Free i)` for a node-id.
 fn node_id_to_lnterm(n: &crate::constraint::constraints::NodeId) -> tamarin_term::lterm::LNTerm {
-    tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(n.clone()))
+    tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(*n))
 }
 
 /// `simpInjectiveFactEqMon` — direct port of Haskell's
@@ -3890,7 +3890,7 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
         crate::constraint::constraints::NodeId,
         crate::rule::RuleACInst,
     )> = red.sys.nodes.iter().collect();
-    sorted_nodes.sort_by(|a, b| a.0.cmp(&b.0));
+    sorted_nodes.sort_by_key(|a| a.0);
     for (id, rule) in sorted_nodes {
         for prem in &rule.premises {
             if let Some((_, behaviours)) = red
@@ -3902,7 +3902,7 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
                 if let Some((first, pairs)) =
                     crate::tools::injective_fact_instances::trimmed_pair_terms(prem, behaviours)
                 {
-                    by_inj.push((id.clone(), prem.tag.clone(), first, pairs));
+                    by_inj.push((*id, prem.tag, first, pairs));
                 }
             }
         }
@@ -4227,7 +4227,7 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
                         // case (3) (Simplify.hs): [(i,j) |
                         //   triviallySmaller s t, not alwaysBefore i j]
                         if trivially_smaller(s, t) && !ab_ij {
-                            new_lesses.push((ii.clone(), jj.clone()));
+                            new_lesses.push((*ii, *jj));
                         }
                         // case (5) (Simplify.hs): [(j,i) |
                         //   triviallyNotSmaller s t, not alwaysBefore j i, ineq s t]
@@ -4236,7 +4236,7 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
                             && (inequalities.contains(&(s.clone(), t.clone()))
                                 || inequalities.contains(&(t.clone(), s.clone())))
                         {
-                            new_lesses.push((jj.clone(), ii.clone()));
+                            new_lesses.push((*jj, *ii));
                         }
                     }
                     // HS-faithful Increasing (Simplify.hs):
@@ -4246,14 +4246,14 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
                     //   again NOT gated on `s == t`.
                     MonotonicBehaviour::Increasing => {
                         if trivially_smaller(s, t) && !red.sys.always_before_with(&ab_adj, ii, jj) {
-                            new_lesses.push((ii.clone(), jj.clone()));
+                            new_lesses.push((*ii, *jj));
                         }
                         if trivially_not_smaller(s, t)
                             && !red.sys.always_before_with(&ab_adj, jj, ii)
                             && (inequalities.contains(&(s.clone(), t.clone()))
                                 || inequalities.contains(&(t.clone(), s.clone())))
                         {
-                            new_lesses.push((jj.clone(), ii.clone()));
+                            new_lesses.push((*jj, *ii));
                         }
                     }
                     _ => {}
@@ -4619,7 +4619,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
                     Err(_) => None,
                     Ok((n_small, n_big)) => {
                         let new_var = mk_fresh(sort_of_lnterm(big));
-                        let small_plus = f_app_ac(f, vec![n_small, var_term(new_var.clone())]);
+                        let small_plus = f_app_ac(f, vec![n_small, var_term(new_var)]);
                         let mut out: Vec<Split> = Vec::new();
                         out.push(Split::AcNewVar(small_plus, n_big, new_var));
                         // map (curry SubtermD small) (flattenedACTerms f big)
@@ -4731,7 +4731,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
                        new_var: &tamarin_term::lterm::LVar,
                        new_formulas: &mut Vec<crate::guarded::Guarded>| {
         let var_lt: tamarin_term::lterm::LNTerm =
-            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(new_var.clone()));
+            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(*new_var));
         let vs = match crate::elaborate::lnterm_to_term(&var_lt) {
             tamarin_parser::ast::Term::Var(v) => v,
             _ => return,
@@ -5274,25 +5274,25 @@ fn nat_subterm_equalities(
             let d: i64 = 2 * (r_ones - l_ones - 1);
             // `from = head $ map (True,) (getVars l) ++ map (False,) (getVars r)`
             let from: Vertex = if let Some(v) = l_vars.first() {
-                (true, v.clone())
+                (true, *v)
             } else {
                 // Must exist because total_vars == 1
-                (false, r_vars[0].clone())
+                (false, r_vars[0])
             };
-            let to: Vertex = (!from.0, from.1.clone());
+            let to: Vertex = (!from.0, from.1);
             vec![((from, to), d)]
         } else if total_vars == 2 {
             let d: i64 = r_ones - l_ones - 1;
             // `froms = map (True,) (getVars l) ++ map (False,) (getVars r)`
             let mut froms: Vec<Vertex> = Vec::with_capacity(2);
             for v in &l_vars {
-                froms.push((true, v.clone()));
+                froms.push((true, *v));
             }
             for v in &r_vars {
-                froms.push((false, v.clone()));
+                froms.push((false, *v));
             }
             // `tos = map (first not) (reverse froms)`
-            let mut tos: Vec<Vertex> = froms.iter().rev().map(|(s, v)| (!s, v.clone())).collect();
+            let mut tos: Vec<Vertex> = froms.iter().rev().map(|(s, v)| (!s, *v)).collect();
             let mut out = Vec::with_capacity(2);
             for _ in 0..2 {
                 let f = froms.remove(0);
@@ -5315,8 +5315,8 @@ fn nat_subterm_equalities(
     // BTreeSet for deterministic ordering matching HS Set semantics.
     let mut vertex_set: std::collections::BTreeSet<Vertex> = std::collections::BTreeSet::new();
     for ((a, b), _) in &real_edges {
-        vertex_set.insert(a.clone());
-        vertex_set.insert(b.clone());
+        vertex_set.insert(*a);
+        vertex_set.insert(*b);
     }
     let vertices: Vec<Vertex> = vertex_set.into_iter().collect();
     let n = vertices.len();
@@ -5328,7 +5328,7 @@ fn nat_subterm_equalities(
     let vertex_to_int: std::collections::BTreeMap<Vertex, usize> = vertices
         .iter()
         .enumerate()
-        .map(|(i, v)| (v.clone(), i))
+        .map(|(i, v)| (*v, i))
         .collect();
     let vti = |v: &Vertex| -> usize { vertex_to_int[v] };
 
@@ -5338,7 +5338,7 @@ fn nat_subterm_equalities(
     let mut one_edges: Vec<((Vertex, Vertex), i64)> = Vec::new();
     for v in &vertices {
         if v.0 {
-            one_edges.push((((false, v.1.clone()), (true, v.1.clone())), -2));
+            one_edges.push((((false, v.1), (true, v.1)), -2));
         }
     }
 
@@ -5385,14 +5385,14 @@ fn nat_subterm_equalities(
         if !v.0 {
             continue;
         }
-        let nv: Vertex = (false, v.1.clone());
+        let nv: Vertex = (false, v.1);
         let d = fw[vti(v) * n + vti(&nv)];
         let reachable = d < inf / 2;
         let is_even = d.rem_euclid(2) == 0;
         if reachable && is_even {
             continue;
         }
-        tightened_edges.push(((v.clone(), nv), d - 1));
+        tightened_edges.push(((*v, nv), d - 1));
     }
 
     // `edges = rawEdges ++ tightenedEdges` (SubtermStore.hs:395-538, see line 479)
@@ -5439,7 +5439,7 @@ fn nat_subterm_equalities(
             }
             w + df == dt
         })
-        .map(|((from, to), _)| (from.clone(), to.clone()))
+        .map(|((from, to), _)| (*from, *to))
         .collect();
 
     // ---- SCC of slackEdges (SubtermStore.hs:512-520) -------------------
@@ -5543,7 +5543,7 @@ fn nat_subterm_equalities(
     //
     // `addN y n`: `varTerm y + n * fAppNatOne` (HS line 531).
     fn add_n(y: &LVar, n: i64) -> LNTerm {
-        let var_term: LNTerm = Term::Lit(tamarin_term::vterm::Lit::Var(y.clone()));
+        let var_term: LNTerm = Term::Lit(tamarin_term::vterm::Lit::Var(*y));
         if n == 0 {
             return var_term;
         }
@@ -5587,7 +5587,7 @@ fn nat_subterm_equalities(
     let mut scc_vertices: Vec<Vec<Vertex>> = sccs
         .iter()
         .map(|comp| {
-            let mut s: Vec<Vertex> = comp.iter().map(|i| vertices[*i].clone()).collect();
+            let mut s: Vec<Vertex> = comp.iter().map(|i| vertices[*i]).collect();
             s.sort();
             s
         })
@@ -5597,10 +5597,10 @@ fn nat_subterm_equalities(
     for scc in &scc_vertices {
         // `smallest = foldr1 (\x y -> if getValue x < getValue y then x else y)`
         // HS `foldr1` walks right-to-left and ties go to the rightmost.
-        let mut smallest: Vertex = scc[scc.len() - 1].clone();
+        let mut smallest: Vertex = scc[scc.len() - 1];
         for v in scc.iter().rev().skip(1) {
             if get_value(v) < get_value(&smallest) {
-                smallest = v.clone();
+                smallest = *v;
             }
         }
         // `filter fst scc` — keep only True-tagged vertices.
@@ -5621,7 +5621,7 @@ fn nat_subterm_equalities(
             let lhs_var = &smallest.1;
             let rhs_var = &y.1;
             let n = get_value(y) - get_value(&smallest);
-            let lhs: LNTerm = Term::Lit(tamarin_term::vterm::Lit::Var(lhs_var.clone()));
+            let lhs: LNTerm = Term::Lit(tamarin_term::vterm::Lit::Var(*lhs_var));
             let rhs: LNTerm = add_n(rhs_var, n);
             equalities.push((lhs, rhs));
         }
@@ -5633,17 +5633,17 @@ fn nat_subterm_equalities(
         // multiset; the variables that appear more than once are the
         // duplicates.  We mirror HS's `xs \\ S.toList (S.fromList xs)` —
         // i.e. take each var and remove one copy of its first occurrence.
-        let snds: Vec<LVar> = scc.iter().map(|v| v.1.clone()).collect();
+        let snds: Vec<LVar> = scc.iter().map(|v| v.1).collect();
         let mut seen: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
         let mut dups: Vec<LVar> = Vec::new();
         for v in &snds {
-            if !seen.insert(v.clone()) {
-                dups.push(v.clone());
+            if !seen.insert(*v) {
+                dups.push(*v);
             }
         }
         for v in &dups {
-            let neg_v: Vertex = (false, v.clone());
-            let pos_v: Vertex = (true, v.clone());
+            let neg_v: Vertex = (false, *v);
+            let pos_v: Vertex = (true, *v);
             let val = (get_value(&neg_v) - get_value(&pos_v)) / 2;
             if val <= 0 {
                 // HS `termN` precondition `n > 0`; if `val ≤ 0` the absolute
@@ -5653,7 +5653,7 @@ fn nat_subterm_equalities(
                 // is enforced by the `oneEdges`).  Defensive.
                 continue;
             }
-            let lhs: LNTerm = Term::Lit(tamarin_term::vterm::Lit::Var(v.clone()));
+            let lhs: LNTerm = Term::Lit(tamarin_term::vterm::Lit::Var(*v));
             let rhs: LNTerm = term_n(val);
             equalities.push((lhs, rhs));
         }

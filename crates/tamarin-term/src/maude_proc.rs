@@ -1619,8 +1619,8 @@ fn build_skolem_maps(
     let mut reverse = std::collections::BTreeMap::new();
     for (counter, lv) in (0_u64..).zip(vars.iter()) {
         let n = skolem_name(counter, lv);
-        skolem_map.insert(lv.clone(), n.clone());
-        reverse.insert(n, lv.clone());
+        skolem_map.insert(*lv, n);
+        reverse.insert(n, *lv);
     }
     (skolem_map, reverse)
 }
@@ -1698,7 +1698,7 @@ fn unskolemize(
     match t {
         crate::term::Term::Lit(Lit::Con(n)) => {
             if let Some(lv) = reverse.get(n) {
-                crate::term::Term::Lit(Lit::Var(lv.clone()))
+                crate::term::Term::Lit(Lit::Var(*lv))
             } else {
                 t.clone()
             }
@@ -1725,7 +1725,7 @@ fn collect_free_non_pattern_vars(
         crate::term::Term::Lit(Lit::Var(lv))
             if !pattern_vars.contains(&(lv.name.to_string(), lv.idx)) =>
         {
-            out.insert(lv.clone());
+            out.insert(*lv);
         }
         crate::term::Term::App(_, args) => {
             for a in args.iter() {
@@ -1747,7 +1747,7 @@ fn rewrite_skolem(
     match t {
         crate::term::Term::Lit(Lit::Var(lv)) => {
             if let Some(n) = map.get(lv) {
-                crate::term::Term::Lit(Lit::Con(n.clone()))
+                crate::term::Term::Lit(Lit::Con(*n))
             } else {
                 t.clone()
             }

@@ -93,7 +93,7 @@ pub fn rename_precise_system(sys: &mut System) {
         crate::constraint::constraints::NodeId,
         crate::rule::RuleACInst,
     )> = sys.nodes.iter().collect();
-    nodes_sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    nodes_sorted.sort_by_key(|a| a.0);
     for (id, rule) in nodes_sorted {
         state.import(id);
         rule.for_each_free(&mut |v| {
@@ -280,7 +280,7 @@ pub fn rename_precise_system(sys: &mut System) {
 
     let term_subst: Subst<tamarin_term::lterm::Name, LVar> = Subst::from_list(
         map.iter()
-            .map(|(old, new)| (old.0.clone(), Term::Lit(Lit::Var(new.clone())))),
+            .map(|(old, new)| (old.0, Term::Lit(Lit::Var(*new)))),
     );
     // Hashed leaf-lookup view over the pass-invariant rename subst
     // (`SubstView`): Phase 2 applies this ONE fixed var→var substitution to
@@ -342,7 +342,7 @@ pub fn rename_precise_system(sys: &mut System) {
             let mut nodes = std::sync::Arc::unwrap_or_clone(std::mem::take(
                 &mut sys.content_mut_untracked().nodes,
             ));
-            nodes.sort_by(|a, b| a.0.cmp(&b.0));
+            nodes.sort_by_key(|a| a.0);
             sys.content_mut_untracked().nodes = std::sync::Arc::new(nodes);
         }
     } else {
@@ -363,14 +363,14 @@ pub fn rename_precise_system(sys: &mut System) {
                 (new_id, new_rule)
             })
             .collect();
-        renamed.sort_by(|a, b| a.0.cmp(&b.0));
+        renamed.sort_by_key(|a| a.0);
         sys.content_mut_untracked().nodes = std::sync::Arc::new(renamed);
     }
 
     // 2. Edges.
     for e in sys.content_mut_untracked().edges.iter_mut() {
-        e.src.0 = map_var(e.src.0.clone());
-        e.tgt.0 = map_var(e.tgt.0.clone());
+        e.src.0 = map_var(e.src.0);
+        e.tgt.0 = map_var(e.tgt.0);
     }
     // Dedup after rename — sort + dedup (matches subst_system).
     let mut tmp: Vec<_> = std::mem::take(&mut sys.content_mut_untracked().edges);
@@ -396,8 +396,8 @@ pub fn rename_precise_system(sys: &mut System) {
         Vec::with_capacity(sys.less_atoms.len());
     for la in std::mem::take(&mut sys.content_mut_untracked().less_atoms) {
         let mut la = la;
-        la.smaller = map_var(la.smaller.clone());
-        la.larger = map_var(la.larger.clone());
+        la.smaller = map_var(la.smaller);
+        la.larger = map_var(la.larger);
         new_less.push(la);
     }
     // Sort + dedup (O(n log n)), matching HS's `S.fromList` over the renamed
@@ -684,7 +684,7 @@ impl RenameState {
         }
         // First occurrence only (rare): materialise the owned key.
         self.map.insert(
-            VarKey(v.clone()),
+            VarKey(*v),
             LVar {
                 name: v.name,
                 sort: v.sort,

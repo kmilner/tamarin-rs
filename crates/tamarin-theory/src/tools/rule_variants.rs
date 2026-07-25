@@ -202,27 +202,27 @@ fn make_proto_rule_ac(
     for f in &premises {
         for t in f.terms.iter() {
             t.for_each_free(&mut |v| {
-                frees_set.insert(v.clone());
+                frees_set.insert(*v);
             });
         }
     }
     for f in &conclusions {
         for t in f.terms.iter() {
             t.for_each_free(&mut |v| {
-                frees_set.insert(v.clone());
+                frees_set.insert(*v);
             });
         }
     }
     for f in &actions {
         for t in f.terms.iter() {
             t.for_each_free(&mut |v| {
-                frees_set.insert(v.clone());
+                frees_set.insert(*v);
             });
         }
     }
     for t in &new_vars {
         t.for_each_free(&mut |v| {
-            frees_set.insert(v.clone());
+            frees_set.insert(*v);
         });
     }
     let frees_vec: Vec<LVar> = frees_set.into_iter().collect();
@@ -232,7 +232,7 @@ fn make_proto_rule_ac(
         .collect();
 
     let info = ProtoRuleACInfo {
-        name: rule.info.name.clone(),
+        name: rule.info.name,
         attributes: rule.info.attributes.clone(),
         variants,
         loop_breakers: Vec::new(),
@@ -445,7 +445,7 @@ pub fn abstract_rule_and_variants(
         // Catch-all: import binding (handles leaf vars AND reducible-head
         // App).  HS: `abstrTerm t = do at <- varTerm <$> importBinding ...`.
         if let Some(v) = bindings.get(t) {
-            return Term::Lit(tamarin_term::vterm::Lit::Var(v.clone()));
+            return Term::Lit(tamarin_term::vterm::Lit::Var(*v));
         }
         let new_idx = maude.reserve_idxs(1);
         let v = LVar {
@@ -458,7 +458,7 @@ pub fn abstract_rule_and_variants(
             sort: tamarin_term::lterm::sort_of_lnterm(t),
             idx: new_idx,
         };
-        bindings.insert(t.clone(), v.clone());
+        bindings.insert(t.clone(), v);
         Term::Lit(tamarin_term::vterm::Lit::Var(v))
     }
 
@@ -474,7 +474,7 @@ pub fn abstract_rule_and_variants(
             .iter()
             .map(|t| abstr_term(t, irreducible, bindings, maude))
             .collect();
-        Fact::fresh_annotated(f.tag.clone(), f.annotations.clone(), terms)
+        Fact::fresh_annotated(f.tag, f.annotations.clone(), terms)
     }
 
     // HS-faithful: import ALL leaf vars FIRST (RuleVariants.hs:61-134, see line 95
@@ -506,7 +506,7 @@ pub fn abstract_rule_and_variants(
     // and dedupes — exactly `sortednub` semantics.
     let mut leaf_set: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
     let mut visit = |v: &LVar| {
-        leaf_set.insert(v.clone());
+        leaf_set.insert(*v);
     };
     for f in &rule.premises {
         f.terms.iter().for_each(|t| t.for_each_free(&mut visit));
@@ -608,7 +608,7 @@ pub fn abstract_rule_and_variants(
     // order — exactly `M.toList`'s ordering, no explicit sort needed.
     let abstraction_pairs: Vec<(LVar, LNTerm)> = bindings
         .iter()
-        .map(|(t, v)| (v.clone(), t.clone()))
+        .map(|(t, v)| (*v, t.clone()))
         .collect();
     let abstraction_subst: LNSubst = Subst::from_list(abstraction_pairs);
 
@@ -656,27 +656,27 @@ pub fn abstract_rule_and_variants(
         for f in &abstracted_rule.premises {
             for t in f.terms.iter() {
                 t.for_each_free(&mut |v| {
-                    s.insert(v.clone());
+                    s.insert(*v);
                 });
             }
         }
         for f in &abstracted_rule.actions {
             for t in f.terms.iter() {
                 t.for_each_free(&mut |v| {
-                    s.insert(v.clone());
+                    s.insert(*v);
                 });
             }
         }
         for f in &abstracted_rule.conclusions {
             for t in f.terms.iter() {
                 t.for_each_free(&mut |v| {
-                    s.insert(v.clone());
+                    s.insert(*v);
                 });
             }
         }
         for t in &abstracted_rule.new_vars {
             t.for_each_free(&mut |v| {
-                s.insert(v.clone());
+                s.insert(*v);
             });
         }
         s.into_iter().collect()
@@ -715,7 +715,7 @@ pub fn abstract_rule_and_variants(
             let mut frees = std::collections::BTreeSet::new();
             for t in &premise_terms_for_filter {
                 t.for_each_free(&mut |v| {
-                    frees.insert(v.clone());
+                    frees.insert(*v);
                 });
             }
             // HS-faithful: `freshToFreeAvoidingFast sFresh (frees premiseTerms)`
@@ -968,7 +968,7 @@ fn rule_renames_under_precise(rule: &ProtoRuleE) -> bool {
     use tamarin_utils::fresh::PreciseFreshState;
     let mut vars: Vec<LVar> = Vec::new();
     {
-        let mut collect = |v: &LVar| vars.push(v.clone());
+        let mut collect = |v: &LVar| vars.push(*v);
         for f in &rule.premises {
             for t in f.terms.iter() {
                 t.for_each_free(&mut collect);
@@ -999,7 +999,7 @@ fn rule_renames_under_precise(rule: &ProtoRuleE) -> bool {
             return true;
         }
         map.insert(
-            v.clone(),
+            *v,
             LVar {
                 name: v.name,
                 sort: v.sort,
@@ -1059,7 +1059,7 @@ fn rename_precise_rule_with_variants(
             sort: v.sort,
             idx,
         };
-        m.insert(v.clone(), new_v);
+        m.insert(*v, new_v);
     };
 
     // Phase 1: walk every free LVar in HS's `mapFrees (Rule ProtoRuleACInfo)`
@@ -1099,7 +1099,7 @@ fn rename_precise_rule_with_variants(
     }
 
     // Phase 2: apply the renaming map.
-    let map_var = |v: &LVar| -> LVar { map.get(v).cloned().unwrap_or_else(|| v.clone()) };
+    let map_var = |v: &LVar| -> LVar { map.get(v).cloned().unwrap_or(*v) };
     let map_term = |t: LNTerm| -> LNTerm { t.map_free(&mut |v| map_var(&v)) };
     let map_facts = |fs: Vec<Fact<LNTerm>>| -> Vec<Fact<LNTerm>> {
         fs.into_iter()

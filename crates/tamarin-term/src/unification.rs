@@ -154,9 +154,9 @@ where
                     //   `if vl < vr then elim vr l else elim vl r`
                     // Larger-idx becomes KEY, smaller-idx becomes value.
                     let (key, val) = if vl < vr {
-                        (vr.clone(), Term::Lit(Lit::Var(vl.clone())))
+                        (*vr, Term::Lit(Lit::Var(*vl)))
                     } else {
-                        (vl.clone(), Term::Lit(Lit::Var(vr.clone())))
+                        (*vl, Term::Lit(Lit::Var(*vr)))
                     };
                     eliminate(sort_of_const, acc, key, val)
                 }
@@ -165,8 +165,8 @@ where
                     eliminate(
                         sort_of_const,
                         acc,
-                        vl.clone(),
-                        Term::Lit(Lit::Var(vr.clone())),
+                        *vl,
+                        Term::Lit(Lit::Var(*vr)),
                     )
                 }
                 Some(Ordering::Less) => {
@@ -174,15 +174,15 @@ where
                     eliminate(
                         sort_of_const,
                         acc,
-                        vr.clone(),
-                        Term::Lit(Lit::Var(vl.clone())),
+                        *vr,
+                        Term::Lit(Lit::Var(*vl)),
                     )
                 }
                 None => Err(UnifyError::NoUnifier),
             }
         }
-        (Term::Lit(Lit::Var(vl)), _) => eliminate(sort_of_const, acc, vl.clone(), r.clone()),
-        (_, Term::Lit(Lit::Var(vr))) => eliminate(sort_of_const, acc, vr.clone(), l.clone()),
+        (Term::Lit(Lit::Var(vl)), _) => eliminate(sort_of_const, acc, *vl, r.clone()),
+        (_, Term::Lit(Lit::Var(vr))) => eliminate(sort_of_const, acc, *vr, l.clone()),
         (Term::Lit(Lit::Con(cl)), Term::Lit(Lit::Con(cr))) => {
             if cl == cr {
                 Ok(())
@@ -349,9 +349,9 @@ where
     // Substitute `v ~> t` through the existing accumulator in place, mutating
     // each value rather than rebuilding the whole map with cloned keys.
     let mut single = BTreeMap::new();
-    single.insert(v.clone(), t.clone());
+    single.insert(v, t.clone());
     for ts in acc.values_mut() {
-        let cur = std::mem::replace(ts, Term::Lit(Lit::Var(v.clone())));
+        let cur = std::mem::replace(ts, Term::Lit(Lit::Var(v)));
         *ts = apply_vterm_map(&single, cur);
     }
     acc.insert(v, t);

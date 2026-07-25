@@ -130,7 +130,7 @@ fn rename_term_drop_hint<C: Ord + Clone>(
         Term::Lit(Lit::Con(c)) => Term::Lit(Lit::Con(c.clone())),
         Term::Lit(Lit::Var(v)) => {
             let nv = match bindings.get(v) {
-                Some(nv) => nv.clone(),
+                Some(nv) => *nv,
                 None => {
                     let nv = LVar {
                         name: "",
@@ -138,7 +138,7 @@ fn rename_term_drop_hint<C: Ord + Clone>(
                         idx: *counter,
                     };
                     *counter += 1;
-                    bindings.insert(v.clone(), nv.clone());
+                    bindings.insert(*v, nv);
                     nv
                 }
             };
@@ -178,7 +178,7 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
             .iter()
             .map(|(k, t)| {
                 (
-                    k.clone(),
+                    *k,
                     rename_term_drop_hint(t, &mut bindings, &mut counter),
                 )
             })
@@ -253,7 +253,7 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
             .map
             .iter()
             .filter(|(v, _)| !self.is_renamed_var(v))
-            .map(|(v, t)| (v.clone(), t.clone()))
+            .map(|(v, t)| (*v, t.clone()))
             .collect();
         SubstVFresh { map }
     }
@@ -279,8 +279,8 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
             if self.image_of(v).is_some() {
                 continue;
             }
-            if seen.insert(v.clone()) {
-                vs_new.push(v.clone());
+            if seen.insert(*v) {
+                vs_new.push(*v);
             }
         }
         if vs_new.is_empty() {
@@ -315,7 +315,7 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
                     sort: v.sort,
                     idx: new_idx,
                 };
-                (v.clone(), Term::Lit(Lit::Var(v_new)))
+                (*v, Term::Lit(Lit::Var(v_new)))
             })
             .collect();
         // `from_list(to_list() ++ new_entries)` would rebuild the whole map from
@@ -351,7 +351,7 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
         if range_vars.is_empty() {
             // No range vars to rename — just downgrade (through `from_list`,
             // which drops trivial `x ~> x` mappings exactly as before).
-            return Subst::from_list(self.iter().map(|(v, t)| (v.clone(), t.clone())));
+            return Subst::from_list(self.iter().map(|(v, t)| (*v, t.clone())));
         }
         // HS: `evalFreshAvoiding t` initial counter = succ . maxIdx . frees t,
         // precomputed by the caller and handed in as `fresh_start`.
@@ -368,7 +368,7 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
                 sort: old.sort,
                 idx: new_idx,
             };
-            rename.insert(old.clone(), new);
+            rename.insert(*old, new);
         }
         let mut pairs: Vec<(LVar, VTerm<C, LVar>)> = Vec::with_capacity(self.len());
         // Borrowing walk: the rename rebuilds every range term anyway, so read
@@ -376,7 +376,7 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
         // `to_list`.
         for (v, t) in self.iter() {
             let renamed = rename_lvars_in_vterm(t, &rename);
-            pairs.push((v.clone(), renamed));
+            pairs.push((*v, renamed));
         }
         Subst::from_list(pairs)
     }
@@ -533,7 +533,7 @@ fn rename_lvars_with_hint<C: Ord + Clone, F: FnMut(u64) -> u64>(
                     sort: v.sort,
                     idx,
                 };
-                rename.insert(v.clone(), new.clone());
+                rename.insert(*v, new);
                 Term::Lit(Lit::Var(new))
             }
         }
@@ -643,7 +643,7 @@ where
     for t in s2.range() {
         for v in crate::vterm::vars_vterm(t) {
             max_idx = Some(max_idx.map_or(v.idx, |m| m.max(v.idx)));
-            if seen.insert(v.clone()) {
+            if seen.insert(v) {
                 range_vars.push(v);
             }
         }
@@ -674,7 +674,7 @@ where
             sort: w.sort,
             idx: up,
         };
-        s1_map.insert(w.clone(), Term::Lit(Lit::Var(w_prime)));
+        s1_map.insert(*w, Term::Lit(Lit::Var(w_prime)));
     }
     let mut out: Vec<(LVar, VTerm<C, LVar>)> = Vec::new();
     // `s1 `compose` s2` first arm = `s2.map_range(|t| apply_vterm(s1, t))`:
@@ -683,7 +683,7 @@ where
     for (v, t) in s2.iter() {
         let t2 = crate::subst::apply_vterm_map(&s1_map, t.clone());
         if !matches!(&t2, Term::Lit(Lit::Var(w)) if w == v) {
-            out.push((v.clone(), t2));
+            out.push((*v, t2));
         }
     }
     // `compose`'s second arm: s1's own bindings whose domain s2 does not
@@ -693,7 +693,7 @@ where
     for w in &range_vars {
         if s2.image_of(w).is_none() {
             // `s1_map[w]` exists for every range var by construction.
-            out.push((w.clone(), s1_map[w].clone()));
+            out.push((*w, s1_map[w].clone()));
         }
     }
     LSubstVFresh::from_list(out)
@@ -712,7 +712,7 @@ fn distinct_range_vars<'a, C: 'a>(range: impl Iterator<Item = &'a VTerm<C, LVar>
     let mut seen: tamarin_utils::FastSet<LVar> = Default::default();
     for t in range {
         for v in crate::vterm::vars_vterm(t) {
-            if seen.insert(v.clone()) {
+            if seen.insert(v) {
                 out.push(v);
             }
         }
@@ -802,7 +802,7 @@ fn rename_lvars_in_vterm<C: Clone>(
 ) -> VTerm<C, LVar> {
     match t {
         Term::Lit(Lit::Var(v)) => {
-            let new = rename.get(v).cloned().unwrap_or_else(|| v.clone());
+            let new = rename.get(v).cloned().unwrap_or(*v);
             Term::Lit(Lit::Var(new))
         }
         Term::Lit(other) => Term::Lit(other.clone()),

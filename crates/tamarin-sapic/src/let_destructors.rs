@@ -242,7 +242,7 @@ fn find_rule(
         if let VTerm::App(FunSym::NoEq(fs), y) = &rr.lhs {
             if let VTerm::Lit(Lit::Var(v)) = &rr.rhs {
                 if fs == funsym {
-                    acc = Some((y.to_vec(), v.clone()));
+                    acc = Some((y.to_vec(), *v));
                 }
             }
         }
@@ -271,7 +271,7 @@ fn to_pairs(ts: &[LNTerm]) -> LNTerm {
 fn make_let_subst(svar: &SapicLVar, t2: &SapicTerm) -> Subst<Name, SapicLVar> {
     let mut pairs: Vec<(SapicLVar, SapicTerm)> = vec![(svar.clone(), t2.clone())];
     if svar.stype.is_some() {
-        pairs.push((SapicLVar::untyped(svar.var.clone()), t2.clone()));
+        pairs.push((SapicLVar::untyped(svar.var), t2.clone()));
     }
     Subst::from_list(pairs)
 }
@@ -429,8 +429,8 @@ fn subst_cond_formula(
         // was typed, its typed variant too); a `Cond`-formula var is untyped, so
         // probe the untyped key first, then the typed-erased path.
         let img = subst
-            .image_of(&SapicLVar::untyped(lv.clone()))
-            .or_else(|| subst.image_of(&SapicLVar::new(lv.clone(), None)));
+            .image_of(&SapicLVar::untyped(lv))
+            .or_else(|| subst.image_of(&SapicLVar::new(lv, None)));
         img.map(|t| {
             crate::base_translation::ln_term_to_parser(&crate::base_translation::to_ln_term(t))
         })
@@ -440,8 +440,8 @@ fn subst_cond_formula(
 /// Lift an `LNTerm` (untyped) back to a SAPIC term (all variables untyped).
 fn ln_to_sapic(t: &LNTerm) -> SapicTerm {
     match t {
-        VTerm::Lit(Lit::Var(v)) => VTerm::Lit(Lit::Var(SapicLVar::untyped(v.clone()))),
-        VTerm::Lit(Lit::Con(c)) => VTerm::Lit(Lit::Con(c.clone())),
+        VTerm::Lit(Lit::Var(v)) => VTerm::Lit(Lit::Var(SapicLVar::untyped(*v))),
+        VTerm::Lit(Lit::Con(c)) => VTerm::Lit(Lit::Con(*c)),
         VTerm::App(sym, args) => {
             let new_args: Vec<SapicTerm> = args.iter().map(ln_to_sapic).collect();
             match sym {

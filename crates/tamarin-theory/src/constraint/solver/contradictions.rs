@@ -106,11 +106,11 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     use tamarin_term::vterm::Lit;
     let subst = &sys.eq_store.subst;
     let resolve = |v: &LVar| -> LVar {
-        let t = tamarin_term::subst::apply_vterm(subst, Term::Lit(Lit::Var(v.clone())));
+        let t = tamarin_term::subst::apply_vterm(subst, Term::Lit(Lit::Var(*v)));
         if let Term::Lit(Lit::Var(w)) = t {
             w
         } else {
-            v.clone()
+            *v
         }
     };
     let mut all_less: Vec<LessAtom> = sys
@@ -823,7 +823,7 @@ fn has_forbidden_chain(sys: &System, ab_adj: &crate::constraint::system::Prebuil
                     Some(h) => h,
                     None => continue,
                 };
-                by_head.entry(head).or_default().push(v.clone());
+                by_head.entry(head).or_default().push(*v);
             }
             for (_, vars) in by_head {
                 if vars.len() < 2 {
@@ -835,9 +835,9 @@ fn has_forbidden_chain(sys: &System, ab_adj: &crate::constraint::system::Prebuil
                             continue;
                         }
                         equivalence_classes
-                            .entry(vi.clone())
+                            .entry(*vi)
                             .or_default()
-                            .insert(vj.clone());
+                            .insert(*vj);
                     }
                 }
             }
@@ -901,22 +901,22 @@ fn has_forbidden_chain(sys: &System, ab_adj: &crate::constraint::system::Prebuil
             continue;
         }
         let t_start_var = match t_start {
-            Term::Lit(Lit::Var(v)) => v.clone(),
+            Term::Lit(Lit::Var(v)) => *v,
             _ => continue,
         };
         // Build the set of candidate-equal Msg-Vars: t_start itself
         // plus any var in its disj-equivalence class.
         let mut candidate_vars: tamarin_utils::FastSet<tamarin_term::lterm::LVar> =
             tamarin_utils::FastSet::default();
-        candidate_vars.insert(t_start_var.clone());
+        candidate_vars.insert(t_start_var);
         if let Some(eqs) = equivalence_classes.get(&t_start_var) {
             for v in eqs {
-                candidate_vars.insert(v.clone());
+                candidate_vars.insert(*v);
             }
         }
         let candidate_terms: Vec<tamarin_term::lterm::LNTerm> = candidate_vars
             .iter()
-            .map(|v| Term::Lit(Lit::Var(v.clone())))
+            .map(|v| Term::Lit(Lit::Var(*v)))
             .collect();
         // (3) Some KU(t_start) action node precedes the chain
         // start `c.0`.  HS-faithful: `allKUActions` (System.hs:1582-1585)
@@ -1057,7 +1057,7 @@ fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltA
         if let crate::constraint::constraints::Goal::Action(i, fa) = g {
             if matches!(fa.tag, FactTag::Ku) {
                 if let Some(m) = fa.terms.first() {
-                    all_ku.push((i.clone(), m.clone()));
+                    all_ku.push((*i, m.clone()));
                 }
             }
         }
@@ -1066,7 +1066,7 @@ fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltA
         for fa in &rule.actions {
             if matches!(fa.tag, FactTag::Ku) {
                 if let Some(m) = fa.terms.first() {
-                    all_ku.push((id.clone(), m.clone()));
+                    all_ku.push((*id, m.clone()));
                 }
             }
         }
@@ -1139,7 +1139,7 @@ fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltA
             let mvs = earlier_msg_vars();
             // `varTerm <$> frees g` then keep only MsgVars.
             for v in frees(g) {
-                let vt: LNTerm = Term::Lit(Lit::Var(v.clone()));
+                let vt: LNTerm = Term::Lit(Lit::Var(v));
                 if !is_msg_var(&vt) {
                     continue;
                 }
@@ -1324,7 +1324,7 @@ fn is_forbidden_d_emap(
     // the dExp's first premise (the dEMap rule).
     let edge_ns = sys.edges.iter().find_map(|e| {
         if e.tgt.0 == *i && e.tgt.1 == PremIdx(0) {
-            Some(e.src.0.clone())
+            Some(e.src.0)
         } else {
             None
         }
@@ -1471,7 +1471,7 @@ fn is_forbidden_d_emap_order(
      -> Option<crate::constraint::constraints::NodeId> {
         sys.edges.iter().find_map(|e| {
             if e.tgt.0 == *k && e.tgt.1 == pi {
-                Some(e.src.0.clone())
+                Some(e.src.0)
             } else {
                 None
             }
@@ -1517,9 +1517,9 @@ fn is_forbidden_d_emap_order(
     >|
      -> Vec<Vec<crate::fact::FactTag>> {
         vec![
-            r.premises.iter().map(|f| f.tag.clone()).collect(),
-            r.conclusions.iter().map(|f| f.tag.clone()).collect(),
-            r.actions.iter().map(|f| f.tag.clone()).collect(),
+            r.premises.iter().map(|f| f.tag).collect(),
+            r.conclusions.iter().map(|f| f.tag).collect(),
+            r.actions.iter().map(|f| f.tag).collect(),
         ]
     };
     tags_of(rp1) > tags_of(rp2)
@@ -1645,7 +1645,7 @@ fn non_injective_fact_instances(
         }
         // Strictly-reachable set (seed removed) via the shared routine.
         let out = crate::constraint::solver::goals::reachable_set_adj(adj, from, false);
-        reach_cache.borrow_mut().insert(from.clone(), out.clone());
+        reach_cache.borrow_mut().insert(*from, out.clone());
         out
     };
     // Resolve node-id → rule via a once-built map instead of a linear
@@ -1655,8 +1655,8 @@ fn non_injective_fact_instances(
         |id: &NodeId| -> Option<&crate::rule::RuleACInst> { node_rule_map.get(id).copied() };
 
     for e in &sys.edges {
-        let (i, conc_idx) = (e.src.0.clone(), e.src.1);
-        let k = e.tgt.0.clone();
+        let (i, conc_idx) = (e.src.0, e.src.1);
+        let k = e.tgt.0;
         // Look up the conclusion fact at (i, conc_idx).
         let i_rule = match lookup_node(&i) {
             Some(r) => r,
@@ -1698,9 +1698,9 @@ fn non_injective_fact_instances(
             let k_is_last = sys.last_atom.as_ref() == Some(&k);
             if k_after_j || k_is_last {
                 out.push(Contradiction::NonInjectiveFactInstance(
-                    i.clone(),
-                    j.clone(),
-                    k.clone(),
+                    i,
+                    *j,
+                    k,
                 ));
             }
         }
@@ -1898,9 +1898,9 @@ pub fn cyclic(less: &[LessAtom]) -> bool {
     // Build adjacency list keyed by NodeId.
     let mut adj: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
     for l in less {
-        adj.entry(l.smaller.clone())
+        adj.entry(l.smaller)
             .or_default()
-            .push(l.larger.clone());
+            .push(l.larger);
     }
     // Run DFS detecting back-edges.
     let mut color: BTreeMap<NodeId, u8> = BTreeMap::new(); // 0=white,1=gray,2=black
@@ -1915,7 +1915,7 @@ pub fn cyclic(less: &[LessAtom]) -> bool {
             2 => return false, // already explored
             _ => {}
         }
-        color.insert(node.clone(), 1);
+        color.insert(*node, 1);
         if let Some(succs) = adj.get(node) {
             for s in succs {
                 if dfs(s, adj, color) {
@@ -1923,7 +1923,7 @@ pub fn cyclic(less: &[LessAtom]) -> bool {
                 }
             }
         }
-        color.insert(node.clone(), 2);
+        color.insert(*node, 2);
         false
     }
     for n in &nodes {
@@ -1945,9 +1945,9 @@ pub fn cyclic(less: &[LessAtom]) -> bool {
 pub fn cyclic_with_path(less: &[LessAtom]) -> Vec<NodeId> {
     let mut adj: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
     for l in less {
-        adj.entry(l.smaller.clone())
+        adj.entry(l.smaller)
             .or_default()
-            .push(l.larger.clone());
+            .push(l.larger);
     }
     let mut color: BTreeMap<NodeId, u8> = BTreeMap::new();
     let mut path: Vec<NodeId> = Vec::new();
@@ -1959,12 +1959,12 @@ pub fn cyclic_with_path(less: &[LessAtom]) -> Vec<NodeId> {
         path: &mut Vec<NodeId>,
     ) -> Option<NodeId> {
         match color.get(node).copied().unwrap_or(0) {
-            1 => return Some(node.clone()), // back-edge target
+            1 => return Some(*node), // back-edge target
             2 => return None,
             _ => {}
         }
-        color.insert(node.clone(), 1);
-        path.push(node.clone());
+        color.insert(*node, 1);
+        path.push(*node);
         if let Some(succs) = adj.get(node) {
             for s in succs {
                 if let Some(target) = dfs(s, adj, color, path) {
@@ -1972,7 +1972,7 @@ pub fn cyclic_with_path(less: &[LessAtom]) -> Vec<NodeId> {
                 }
             }
         }
-        color.insert(node.clone(), 2);
+        color.insert(*node, 2);
         path.pop();
         None
     }
@@ -2000,7 +2000,7 @@ pub fn cyclic_with_path(less: &[LessAtom]) -> Vec<NodeId> {
 /// to prune typing-class source cases at precompute.
 fn node_after_last(sys: &System, adj: &BTreeMap<NodeId, Vec<NodeId>>) -> Vec<Contradiction> {
     let last = match &sys.last_atom {
-        Some(l) => l.clone(),
+        Some(l) => *l,
         None => return Vec::new(),
     };
     // Port of Haskell `Theory.Constraint.Solver.Contradictions.nodesAfterLast`:
@@ -2025,15 +2025,15 @@ fn node_after_last(sys: &System, adj: &BTreeMap<NodeId, Vec<NodeId>>) -> Vec<Con
     // isInTrace: collect every node-id that is "in the trace".
     let mut in_trace: BTreeSet<NodeId> = BTreeSet::new();
     for (id, _) in sys.nodes.iter() {
-        in_trace.insert(id.clone());
+        in_trace.insert(*id);
     }
-    in_trace.insert(last.clone()); // isLast is true for `last`
+    in_trace.insert(last); // isLast is true for `last`
     for (g, st) in sys.goals.iter() {
         if st.solved {
             continue;
         }
         if let crate::constraint::constraints::Goal::Action(id, _) = g {
-            in_trace.insert(id.clone());
+            in_trace.insert(*id);
         }
     }
     // Strictly-reachable set from `last` (seed removed) via the shared routine.
@@ -2041,7 +2041,7 @@ fn node_after_last(sys: &System, adj: &BTreeMap<NodeId, Vec<NodeId>>) -> Vec<Con
     visited
         .into_iter()
         .filter(|n| in_trace.contains(n))
-        .map(|after| Contradiction::NodeAfterLast(last.clone(), after))
+        .map(|after| Contradiction::NodeAfterLast(last, after))
         .collect()
 }
 
