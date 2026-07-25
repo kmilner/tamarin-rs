@@ -1855,13 +1855,13 @@ mod tests {
         let c = LVar::new("c", tamarin_term::lterm::LSort::Node, 0);
         sys.content_mut()
             .less_atoms
-            .push(LessAtom::new(a.clone(), b.clone(), Reason::Fresh));
+            .push(LessAtom::new(a, b, Reason::Fresh));
         sys.content_mut()
             .less_atoms
-            .push(LessAtom::new(b.clone(), c.clone(), Reason::Fresh));
+            .push(LessAtom::new(b, c, Reason::Fresh));
         sys.content_mut()
             .less_atoms
-            .push(LessAtom::new(a.clone(), c.clone(), Reason::Fresh));
+            .push(LessAtom::new(a, c, Reason::Fresh));
         let opts_sl0 = crate::graph::GraphOptions {
             simplification_level: crate::graph::SimplificationLevel::SL0,
             compress: false,
@@ -2168,11 +2168,11 @@ mod tests {
         );
         let j = LVar::new("j", LSort::Node, 0);
         let v = LVar::new("v", LSort::Node, 0);
-        sys.add_node(j.clone(), coerce);
-        sys.add_node(v.clone(), isend);
+        sys.add_node(j, coerce);
+        sys.add_node(v, isend);
         sys.content_mut().edges.push(Edge {
-            src: (j.clone(), ConcIdx(0)),
-            tgt: (v.clone(), PremIdx(0)),
+            src: (j, ConcIdx(0)),
+            tgt: (v, PremIdx(0)),
         });
         let out = system_to_dot_with(&sys, &opts);
         // Outgoing coerce: `#j : coerce` (its `Act(..)` action is dropped).

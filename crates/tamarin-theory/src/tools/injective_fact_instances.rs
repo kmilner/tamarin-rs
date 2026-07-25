@@ -569,7 +569,7 @@ mod tests {
         use tamarin_term::builtin::msg_var;
 
         let a_tag = FactTag::Proto(Multiplicity::Linear, "A", 1);
-        let a_fact = Fact::new(a_tag.clone(), vec![msg_var("x", 0)]);
+        let a_fact = Fact::new(a_tag, vec![msg_var("x", 0)]);
         let start: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("Start"),
             vec![fresh_fact(msg_var("x", 0))],
@@ -604,7 +604,7 @@ mod tests {
         use tamarin_term::builtin::msg_var;
 
         let s_tag = FactTag::Proto(Multiplicity::Linear, "S", 2);
-        let s_fact = Fact::new(s_tag.clone(), vec![msg_var("id", 0), msg_var("k", 0)]);
+        let s_fact = Fact::new(s_tag, vec![msg_var("id", 0), msg_var("k", 0)]);
         let init: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("Init"),
             vec![fresh_fact(msg_var("id", 0))],
@@ -636,7 +636,7 @@ mod tests {
         use tamarin_term::builtin::msg_var;
 
         let b_tag = FactTag::Proto(Multiplicity::Linear, "B", 1);
-        let b_fact = Fact::new(b_tag.clone(), vec![msg_var("y", 0)]);
+        let b_fact = Fact::new(b_tag, vec![msg_var("y", 0)]);
         // No Fresh premise binding `y`, no `B` premise.
         let weird: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("Weird"),
@@ -661,18 +661,18 @@ mod tests {
 
         let s_tag = FactTag::Proto(Multiplicity::Linear, "S", 2);
         let prem_fact = Fact::new(
-            s_tag.clone(),
+            s_tag,
             vec![msg_var("id", 0), pair(msg_var("a", 0), msg_var("b", 0))],
         );
         let conc_fact = Fact::new(
-            s_tag.clone(),
+            s_tag,
             vec![msg_var("id", 0), pair(msg_var("a", 0), msg_var("c", 0))],
         );
         let init: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("Init"),
             vec![fresh_fact(msg_var("id", 0))],
             vec![Fact::new(
-                s_tag.clone(),
+                s_tag,
                 vec![msg_var("id", 0), pair(msg_var("a", 0), msg_var("b", 0))],
             )],
             vec![],
@@ -708,7 +708,7 @@ mod tests {
         use tamarin_term::builtin::msg_var;
 
         let a_tag = FactTag::Proto(Multiplicity::Linear, "A", 1);
-        let a_fact = Fact::new(a_tag.clone(), vec![msg_var("x", 0)]);
+        let a_fact = Fact::new(a_tag, vec![msg_var("x", 0)]);
         let r: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("Dup"),
             vec![a_fact.clone()],
@@ -756,7 +756,7 @@ mod tests {
         use tamarin_term::builtin::msg_var;
 
         let st_tag = FactTag::Proto(Multiplicity::Linear, "St", 2);
-        let st_fact = Fact::new(st_tag.clone(), vec![msg_var("x", 0), msg_var("k", 0)]);
+        let st_fact = Fact::new(st_tag, vec![msg_var("x", 0), msg_var("k", 0)]);
         // Step1 creates St but doesn't consume it.
         let step1: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("Step1"),
@@ -794,7 +794,7 @@ mod tests {
         use tamarin_term::builtin::msg_var;
 
         let p_tag = FactTag::Proto(Multiplicity::Persistent, "P", 1);
-        let p_fact = Fact::new(p_tag.clone(), vec![msg_var("x", 0)]);
+        let p_fact = Fact::new(p_tag, vec![msg_var("x", 0)]);
         // Even with both prems + concs (which would normally pass the
         // candidate filter), Persistent disqualifies.
         let r: ProtoRuleE = Rule::new(
@@ -822,7 +822,7 @@ mod tests {
         use crate::rule::{ProtoRuleEInfo, Rule};
 
         let z_tag = FactTag::Proto(Multiplicity::Linear, "Z", 0);
-        let z_fact = Fact::new(z_tag.clone(), vec![]);
+        let z_fact = Fact::new(z_tag, vec![]);
         let r: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("R"),
             vec![z_fact.clone()],

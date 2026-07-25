@@ -785,7 +785,7 @@ mod tests {
     #[test]
     fn lvar_predicates() {
         let v = LVar::new("x", LSort::Msg, 0);
-        let t: LNTerm = var_term(v.clone());
+        let t: LNTerm = var_term(v);
         assert!(is_msg_var(&t));
         assert!(!is_pub_var(&t));
         assert_eq!(get_var(&t), Some(&v));

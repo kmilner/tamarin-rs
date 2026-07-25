@@ -749,7 +749,7 @@ mod tests {
             let b2 = fact_fingerprints(&fa.terms).0;
             assert_eq!(b, b2);
             // A structurally-equal rebuild gets an equal bloom.
-            let fa2 = Fact::fresh(fa.tag.clone(), fa.terms.to_vec());
+            let fa2 = Fact::fresh(fa.tag, fa.terms.to_vec());
             assert_eq!(fa.bloom(), fa2.bloom());
         }
     }

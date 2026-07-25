@@ -7273,7 +7273,7 @@ mod tests {
         use tamarin_term::lterm::{LSort, LVar};
         let mut s = System::empty();
         let n: NodeId = LVar::new("i", LSort::Node, 0);
-        s.add_goal(Goal::Chain((n.clone(), ConcIdx(0)), (n, PremIdx(0))));
+        s.add_goal(Goal::Chain((n, ConcIdx(0)), (n, PremIdx(0))));
         assert_eq!(unsolved_chain_constraints(&s), 1);
     }
 
@@ -7319,7 +7319,7 @@ mod tests {
     fn precompute_sources_picks_single_producer() {
         use crate::fact::{FactTag, Multiplicity};
         let tag = FactTag::Proto(Multiplicity::Linear, "Foo", 0);
-        let rules = vec![make_rule("MakeFoo", tag.clone())];
+        let rules = vec![make_rule("MakeFoo", tag)];
         let ctx = match ctx_with_rules(rules) {
             Some(c) => c,
             None => return,
@@ -7339,8 +7339,8 @@ mod tests {
         use crate::fact::{FactTag, Multiplicity};
         let tag = FactTag::Proto(Multiplicity::Linear, "Bar", 0);
         let rules = vec![
-            make_rule("MakeBarA", tag.clone()),
-            make_rule("MakeBarB", tag.clone()),
+            make_rule("MakeBarA", tag),
+            make_rule("MakeBarB", tag),
         ];
         let ctx = match ctx_with_rules(rules) {
             Some(c) => c,
@@ -7382,7 +7382,7 @@ mod tests {
         .unwrap();
 
         let a_tag = FactTag::Proto(Multiplicity::Linear, "A", 1);
-        let a_fact = Fact::new(a_tag.clone(), vec![msg_var("x", 0)]);
+        let a_fact = Fact::new(a_tag, vec![msg_var("x", 0)]);
         let init: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("Init"),
             vec![fresh_fact(msg_var("x", 0))],
@@ -7448,7 +7448,7 @@ mod tests {
         // Minimal protocol so there's at least one proto rule (so
         // `precompute_full_sources` actually runs).
         let a_tag = FactTag::Proto(Multiplicity::Linear, "A", 1);
-        let a_fact = Fact::new(a_tag.clone(), vec![msg_var("x", 0)]);
+        let a_fact = Fact::new(a_tag, vec![msg_var("x", 0)]);
         let init: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("Init"),
             vec![fresh_fact(msg_var("x", 0))],
@@ -7488,8 +7488,8 @@ mod tests {
         let tag_a = FactTag::Proto(Multiplicity::Linear, "A", 0);
         let tag_b = FactTag::Proto(Multiplicity::Linear, "B", 0);
         let rules = vec![
-            make_rule("MakeA", tag_a.clone()),
-            make_rule("MakeB", tag_b.clone()),
+            make_rule("MakeA", tag_a),
+            make_rule("MakeB", tag_b),
         ];
         let ctx = match ctx_with_rules(rules) {
             Some(c) => c,
@@ -7539,12 +7539,12 @@ mod tests {
         let mut sys = System::empty();
         sys.invalidate_max_var_idx_cache();
         sys.eq_store_mut().subst = Subst::from_list(vec![
-            (t1.clone(), Term::Lit(Lit::Var(pub_a))),
-            (m19.clone(), Term::Lit(Lit::Var(pub_b))),
-            (sk28.clone(), Term::Lit(Lit::Var(t2.clone()))),
+            (t1, Term::Lit(Lit::Var(pub_a))),
+            (m19, Term::Lit(Lit::Var(pub_b))),
+            (sk28, Term::Lit(Lit::Var(t2))),
         ]);
 
-        let stable: BTreeSet<LVar> = [t1.clone(), t2.clone()].into_iter().collect();
+        let stable: BTreeSet<LVar> = [t1, t2].into_iter().collect();
         restrict_eq_store_to_stable_vars(&mut sys, &stable);
 
         // t1 binding kept; m19 + sk28 bindings dropped.
@@ -7587,11 +7587,11 @@ mod tests {
         let mut sys = System::empty();
         sys.invalidate_max_var_idx_cache();
         sys.eq_store_mut().subst = Subst::from_list(vec![
-            (t1.clone(), Term::Lit(Lit::Var(e10.clone()))),
-            (e10.clone(), Term::Lit(Lit::Var(blind_arg.clone()))),
+            (t1, Term::Lit(Lit::Var(e10))),
+            (e10, Term::Lit(Lit::Var(blind_arg))),
         ]);
 
-        let stable: BTreeSet<LVar> = [t1.clone()].into_iter().collect();
+        let stable: BTreeSet<LVar> = [t1].into_iter().collect();
         restrict_eq_store_to_stable_vars(&mut sys, &stable);
 
         // t.1's binding must be exactly e.10 (the var), NOT chain-chased

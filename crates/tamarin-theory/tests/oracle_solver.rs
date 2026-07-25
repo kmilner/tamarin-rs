@@ -1588,7 +1588,7 @@ fn probe_nspk3_cyclic_leaf() {
             for prem in &ru.premises {
                 if matches!(prem.tag, tamarin_theory::fact::FactTag::Fresh) {
                     let mut vars = Vec::new();
-                    prem.for_each_free(&mut |v| vars.push(v.clone()));
+                    prem.for_each_free(&mut |v| vars.push(*v));
                     if let Some(v) = vars
                         .into_iter()
                         .find(|v| v.sort == tamarin_term::lterm::LSort::Fresh)
@@ -1597,7 +1597,7 @@ fn probe_nspk3_cyclic_leaf() {
                             .chars()
                             .take(60)
                             .collect::<String>();
-                        fresh_consumers.push((id.clone(), v, info));
+                        fresh_consumers.push((*id, v, info));
                     }
                 }
             }

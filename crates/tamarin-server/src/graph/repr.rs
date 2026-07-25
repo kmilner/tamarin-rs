@@ -553,7 +553,7 @@ mod tests {
         ];
         let comps = find_connected_components(&input, &edges);
         assert_eq!(comps.len(), 1);
-        let ids: Vec<NodeId> = comps[0].iter().map(|n| n.id.clone()).collect();
+        let ids: Vec<NodeId> = comps[0].iter().map(|n| n.id).collect();
         // Original order [B, C, A], NOT DFS order [B, A, C].
         assert_eq!(ids, vec![nid("i", 2), nid("i", 3), nid("i", 1)]);
     }

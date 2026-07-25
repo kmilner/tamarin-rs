@@ -2319,7 +2319,7 @@ mod tests {
 
         // Build the rule instances.
         let inj_tag = FactTag::Proto(Multiplicity::Linear, "Inj", 1);
-        let inj_fact = Fact::new(inj_tag.clone(), vec![msg_var("x", 0)]);
+        let inj_fact = Fact::new(inj_tag, vec![msg_var("x", 0)]);
 
         let init: RuleACInst = Rule::new(
             RuleInfo::<ProtoRuleACInstInfo, IntrRuleACInfo>::Proto(ProtoRuleACInstInfo {
@@ -2358,17 +2358,17 @@ mod tests {
         let j = n("3");
         let k = n("2");
         let mut sys = System::empty();
-        sys.add_node(i.clone(), init);
-        sys.add_node(j.clone(), copy);
-        sys.add_node(k.clone(), stop);
+        sys.add_node(i, init);
+        sys.add_node(j, copy);
+        sys.add_node(k, stop);
         // i → k edge (Inj fact).
         sys.add_edge(Edge {
-            src: (i.clone(), ConcIdx(0)),
-            tgt: (k.clone(), PremIdx(0)),
+            src: (i, ConcIdx(0)),
+            tgt: (k, PremIdx(0)),
         });
         // i < j, j < k via less atoms.
-        sys.add_less(LessAtom::new(i.clone(), j.clone(), Reason::Adversary));
-        sys.add_less(LessAtom::new(j.clone(), k.clone(), Reason::Adversary));
+        sys.add_less(LessAtom::new(i, j, Reason::Adversary));
+        sys.add_less(LessAtom::new(j, k, Reason::Adversary));
 
         // Build the proof context that knows `Inj` is injective.
         fn maude_path() -> Option<String> {
@@ -2388,7 +2388,7 @@ mod tests {
         };
         let h = MaudeHandle::start(&mp, tamarin_term::maude_sig::pair_maude_sig()).unwrap();
         let mut ctx = ProofContext::new(h, Vec::new());
-        ctx.injective_fact_insts = vec![(inj_tag.clone(), Vec::new())];
+        ctx.injective_fact_insts = vec![(inj_tag, Vec::new())];
 
         let cs = contradictions(&ctx, &sys);
         let injs: Vec<_> = cs
@@ -2420,9 +2420,9 @@ mod tests {
         let fresh_var = LVar::new("x", LSort::Fresh, 58);
         let tag = FactTag::Proto(Multiplicity::Linear, "X", 1);
         let pub_term =
-            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(pub_var.clone()));
+            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(pub_var));
         let fresh_term =
-            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(fresh_var.clone()));
+            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(fresh_var));
         let mk_rule = |name: &str, t| -> RuleACInst {
             Rule::new(
                 RuleInfo::<ProtoRuleACInstInfo, IntrRuleACInfo>::Proto(ProtoRuleACInstInfo {
@@ -2431,7 +2431,7 @@ mod tests {
                     loop_breakers: Vec::new(),
                 }),
                 vec![],
-                vec![Fact::new(tag.clone(), vec![t])],
+                vec![Fact::new(tag, vec![t])],
                 vec![],
             )
         };
@@ -2468,7 +2468,7 @@ mod tests {
                     loop_breakers: Vec::new(),
                 }),
                 vec![],
-                vec![Fact::new(tag.clone(), vec![t])],
+                vec![Fact::new(tag, vec![t])],
                 vec![],
             )
         };

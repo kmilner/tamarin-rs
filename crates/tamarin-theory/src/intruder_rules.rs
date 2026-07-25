@@ -2260,7 +2260,7 @@ mod tests {
             tag: NameTag::Pub,
             id: NameId::new("b"),
         };
-        let pa: LNTerm = Term::Lit(Lit::Con(pub_a.clone()));
+        let pa: LNTerm = Term::Lit(Lit::Con(pub_a));
         let pb: LNTerm = Term::Lit(Lit::Con(pub_b));
         let lhs = senc(Term::Lit(Lit::Var(x)), pair(pa.clone(), pb));
         let rhs_st = StRhs {

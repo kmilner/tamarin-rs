@@ -637,16 +637,16 @@ mod tests {
         let n1 = nid("i", 1);
         let n2 = nid("i", 2);
         let n3 = nid("i", 3);
-        sys.add_node(n1.clone(), r1);
-        sys.add_node(n2.clone(), r2);
-        sys.add_node(n3.clone(), r3);
+        sys.add_node(n1, r1);
+        sys.add_node(n2, r2);
+        sys.add_node(n3, r3);
         sys.content_mut().edges.push(Edge {
-            src: (n1.clone(), ConcIdx(0)),
-            tgt: (n2.clone(), PremIdx(0)),
+            src: (n1, ConcIdx(0)),
+            tgt: (n2, PremIdx(0)),
         });
         sys.content_mut().edges.push(Edge {
-            src: (n2.clone(), ConcIdx(0)),
-            tgt: (n3.clone(), PremIdx(0)),
+            src: (n2, ConcIdx(0)),
+            tgt: (n3, PremIdx(0)),
         });
         let out = compress_system(RenderSystem::from_prover(sys));
         assert!(
@@ -680,7 +680,7 @@ mod tests {
             vec![out_fact(kvar.clone())], // has an action
         );
         let n1 = nid("i", 1);
-        sys.add_node(n1.clone(), r1);
+        sys.add_node(n1, r1);
         let out = compress_system(RenderSystem::from_prover(sys));
         assert!(out.nodes.iter().any(|(id, _)| id == &n1));
     }
@@ -722,16 +722,16 @@ mod tests {
         let n1 = nid("i", 1);
         let n2 = nid("i", 2);
         let n3 = nid("i", 3);
-        sys.add_node(n1.clone(), r1);
-        sys.add_node(n2.clone(), r2);
-        sys.add_node(n3.clone(), r3);
+        sys.add_node(n1, r1);
+        sys.add_node(n2, r2);
+        sys.add_node(n3, r3);
         sys.content_mut().edges.push(Edge {
-            src: (n1.clone(), ConcIdx(0)),
-            tgt: (n2.clone(), PremIdx(0)),
+            src: (n1, ConcIdx(0)),
+            tgt: (n2, PremIdx(0)),
         });
         sys.content_mut().edges.push(Edge {
-            src: (n2.clone(), ConcIdx(0)),
-            tgt: (n3.clone(), PremIdx(0)),
+            src: (n2, ConcIdx(0)),
+            tgt: (n3, PremIdx(0)),
         });
         let out = compress_system(RenderSystem::from_prover(sys));
         assert!(

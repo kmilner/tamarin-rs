@@ -3108,8 +3108,8 @@ mod tests {
         use tamarin_term::vterm::Lit;
         let v = LVar::new("x", LSort::Msg, 0);
         let foo: LNTerm = Term::Lit(Lit::Con(Name::new(NameTag::Pub, "foo".to_string())));
-        let s1 = LNSubstVFresh::from_list(vec![(v.clone(), foo.clone())]);
-        let s2 = LNSubstVFresh::from_list(vec![(v.clone(), foo.clone())]);
+        let s1 = LNSubstVFresh::from_list(vec![(v, foo.clone())]);
+        let s2 = LNSubstVFresh::from_list(vec![(v, foo.clone())]);
         let mut store = EquationStore::empty();
         let _ = store.add_disj(vec![s1, s2]);
         assert!(store.simp_abstract_name());
@@ -3222,8 +3222,8 @@ mod tests {
         let e10 = LVar::new("e", LSort::Msg, 10);
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
-        let lt1: LNTerm = Term::Lit(Lit::Var(t1.clone()));
-        let le10: LNTerm = Term::Lit(Lit::Var(e10.clone()));
+        let lt1: LNTerm = Term::Lit(Lit::Var(t1));
+        let le10: LNTerm = Term::Lit(Lit::Var(e10));
 
         let mut store = EquationStore::empty();
         let split = store
@@ -3276,8 +3276,8 @@ mod tests {
         let y = LVar::new("y", LSort::Msg, 0);
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
-        let tx: LNTerm = Term::Lit(Lit::Var(x.clone()));
-        let ty: LNTerm = Term::Lit(Lit::Var(y.clone()));
+        let tx: LNTerm = Term::Lit(Lit::Var(x));
+        let ty: LNTerm = Term::Lit(Lit::Var(y));
         let mut store = EquationStore::empty();
         let _ = store
             .add_eqs(&h, &[tamarin_term::rewriting::Equal { lhs: tx, rhs: ty }])
@@ -3332,8 +3332,8 @@ mod tests {
         let y = LVar::new("y", LSort::Msg, 5);
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
-        let tx: LNTerm = Term::Lit(Lit::Var(x.clone()));
-        let ty: LNTerm = Term::Lit(Lit::Var(y.clone()));
+        let tx: LNTerm = Term::Lit(Lit::Var(x));
+        let ty: LNTerm = Term::Lit(Lit::Var(y));
         let mut store = EquationStore::empty();
         let _ = store
             .add_eqs(

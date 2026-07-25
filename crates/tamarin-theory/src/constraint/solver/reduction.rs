@@ -8504,8 +8504,8 @@ mod tests {
         use tamarin_term::vterm::Lit;
         let i = LVar::new("i", LSort::Node, 2);
         let j = LVar::new("j", LSort::Node, 3);
-        let ti = tamarin_term::term::Term::Lit(Lit::Var(i.clone()));
-        let tj = tamarin_term::term::Term::Lit(Lit::Var(j.clone()));
+        let ti = tamarin_term::term::Term::Lit(Lit::Var(i));
+        let tj = tamarin_term::term::Term::Lit(Lit::Var(j));
         // Add an edge i -> some target. (Source-only is enough — we
         // just want to verify the substitution propagates.)
         let tgt = LVar::new("t", LSort::Node, 99);
@@ -8514,8 +8514,8 @@ mod tests {
             .content_mut()
             .edges
             .push(crate::constraint::constraints::Edge {
-                src: (i.clone(), crate::rule::ConcIdx(0)),
-                tgt: (tgt.clone(), crate::rule::PremIdx(0)),
+                src: (i, crate::rule::ConcIdx(0)),
+                tgt: (tgt, crate::rule::PremIdx(0)),
             });
         // Inject the equality into the eq-store directly.
         r.solve_term_eqs(
@@ -8528,12 +8528,12 @@ mod tests {
         // mapped to whatever the canonical representative of i and j
         // is (the eq-store unifier picks one).
         let canonical = {
-            let id_term = tamarin_term::term::Term::Lit(Lit::Var(i.clone()));
+            let id_term = tamarin_term::term::Term::Lit(Lit::Var(i));
             let mapped = tamarin_term::subst::apply_vterm(&r.sys.eq_store.subst, id_term);
             if let tamarin_term::term::Term::Lit(Lit::Var(v)) = mapped {
                 v
             } else {
-                i.clone()
+                i
             }
         };
         assert_eq!(
@@ -8559,11 +8559,11 @@ mod tests {
             .content_mut()
             .less_atoms
             .push(crate::constraint::constraints::LessAtom::new(
-                i.clone(),
-                target.clone(),
+                i,
+                target,
                 crate::constraint::constraints::Reason::Formula,
             ));
-        let ti = tamarin_term::term::Term::Lit(Lit::Var(i.clone()));
+        let ti = tamarin_term::term::Term::Lit(Lit::Var(i));
         let tj = tamarin_term::term::Term::Lit(Lit::Var(j));
         r.solve_term_eqs(
             SplitStrategy::SplitNow,
@@ -8574,12 +8574,12 @@ mod tests {
         // The less atom's `smaller` should still resolve to the same
         // canonical id reachable from i via the eq-store.
         let canonical = {
-            let id_term = tamarin_term::term::Term::Lit(Lit::Var(i.clone()));
+            let id_term = tamarin_term::term::Term::Lit(Lit::Var(i));
             let mapped = tamarin_term::subst::apply_vterm(&r.sys.eq_store.subst, id_term);
             if let tamarin_term::term::Term::Lit(Lit::Var(v)) = mapped {
                 v
             } else {
-                i.clone()
+                i
             }
         };
         assert_eq!(r.sys.less_atoms[0].smaller, canonical);
@@ -8627,12 +8627,12 @@ mod tests {
         };
         // First node has 0 conclusions; second has 1 — incompatible.
         r.sys.add_node(
-            i.clone(),
+            i,
             crate::rule::Rule::new(info(), vec![], vec![], vec![]),
         );
         let dummy_fact = crate::fact::Fact::new(crate::fact::FactTag::Out, vec![]);
         r.sys.add_node(
-            j.clone(),
+            j,
             crate::rule::Rule::new(info(), vec![], vec![dummy_fact], vec![]),
         );
         // Force i = j into the eq-store.
@@ -8679,8 +8679,8 @@ mod tests {
             actions: vec![],
             new_vars: vec![],
         };
-        r.sys.add_node(i.clone(), ru());
-        r.sys.add_node(j.clone(), ru());
+        r.sys.add_node(i, ru());
+        r.sys.add_node(j, ru());
         let ti = tamarin_term::term::Term::Lit(Lit::Var(i));
         let tj = tamarin_term::term::Term::Lit(Lit::Var(j));
         r.solve_term_eqs(
@@ -8862,8 +8862,8 @@ mod tests {
             vec![],
             vec![fa.clone()],
         );
-        sys.add_node(i.clone(), ru);
-        sys.add_goal(Goal::Action(i.clone(), fa.clone()));
+        sys.add_node(i, ru);
+        sys.add_goal(Goal::Action(i, fa.clone()));
         let mut r = Reduction::new(&ctx, sys);
         let out = r.solve_action_goal(&i, &fa);
         // Post-Root-D: `LinearNamed(rule_case_name)`. The case name must
@@ -9010,7 +9010,7 @@ mod tests {
         let v2 = tamarin_term::lterm::LVar::new("x", tamarin_term::lterm::LSort::Msg, 0);
         let tx: tamarin_term::lterm::LNTerm = tamarin_term::term::Term::Lit(Lit::Var(v2));
         let fa = crate::fact::out_fact(tx);
-        let p = (i.clone(), crate::rule::PremIdx(0));
+        let p = (i, crate::rule::PremIdx(0));
         let out = r.solve_premise_goal(&p, &fa);
         // Single matching rule → LinearNamed("Producer"); node + edge
         // applied in-place to r.sys.
@@ -9091,7 +9091,7 @@ mod tests {
             vec![conc_kd],
             vec![],
         );
-        sys.add_node(i.clone(), ru_i);
+        sys.add_node(i, ru_i);
         // Node j premise: KD(x).
         let prem_kd = crate::fact::kd_fact(tx);
         let ru_j: crate::rule::RuleACInst = crate::rule::Rule::new(
@@ -9100,10 +9100,10 @@ mod tests {
             vec![],
             vec![],
         );
-        sys.add_node(j.clone(), ru_j);
+        sys.add_node(j, ru_j);
         let c = (i, crate::rule::ConcIdx(0));
         let p = (j, crate::rule::PremIdx(0));
-        sys.add_goal(Goal::Chain(c.clone(), p.clone()));
+        sys.add_goal(Goal::Chain(c, p));
         let mut r = Reduction::new(&ctx, sys);
         let out = r.solve_chain_goal(&c, &p);
         // Compatible facts → LinearNamed (rule-named) with edge added

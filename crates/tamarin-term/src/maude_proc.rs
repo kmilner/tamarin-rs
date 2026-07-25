@@ -2189,8 +2189,8 @@ mod tests {
         let h = MaudeHandle::start(&path, pair_maude_sig()).expect("start");
         let x = LVar::new("x", LSort::Msg, 0);
         let y = LVar::new("y", LSort::Msg, 0);
-        let tx: LNTerm = crate::term::Term::Lit(Lit::Var(x.clone()));
-        let ty: LNTerm = crate::term::Term::Lit(Lit::Var(y.clone()));
+        let tx: LNTerm = crate::term::Term::Lit(Lit::Var(x));
+        let ty: LNTerm = crate::term::Term::Lit(Lit::Var(y));
         let unifiers = h.unify(&[Equal { lhs: tx, rhs: ty }]).expect("unify");
         // Two free variables of the same sort have a single mgu (a renaming).
         assert!(!unifiers.is_empty());
@@ -2244,8 +2244,8 @@ mod tests {
         let h = MaudeHandle::start(&path, pair_maude_sig()).expect("start");
         let x_msg = LVar::new("x", LSort::Msg, 0);
         let y_pub = LVar::new("y", LSort::Pub, 0);
-        let tx: LNTerm = crate::term::Term::Lit(Lit::Var(x_msg.clone()));
-        let ty: LNTerm = crate::term::Term::Lit(Lit::Var(y_pub.clone()));
+        let tx: LNTerm = crate::term::Term::Lit(Lit::Var(x_msg));
+        let ty: LNTerm = crate::term::Term::Lit(Lit::Var(y_pub));
         let unifiers = h.unify(&[Equal { lhs: tx, rhs: ty }]).expect("unify");
         assert_eq!(unifiers.len(), 1);
         // Both vars should be bound to a fresh variable of sort Pub.
@@ -2479,7 +2479,7 @@ mod tests {
         let t = crate::term::f_app_ac(
             crate::function_symbols::AcSym::Xor,
             vec![
-                crate::term::Term::Lit(Lit::Var(x.clone())),
+                crate::term::Term::Lit(Lit::Var(x)),
                 crate::term::Term::Lit(Lit::Var(x)),
             ],
         );
@@ -2573,13 +2573,13 @@ mod tests {
         // pattern var codeOther:Msg idx 89 (the universal-bound var)
         let code_other = LVar::new("codeOther", LSort::Msg, 89);
         let pat =
-            crate::term::f_app_ac(AcSym::Union, vec![mk(code_other.clone()), payload.clone()]);
+            crate::term::f_app_ac(AcSym::Union, vec![mk(code_other), payload.clone()]);
         // subject: code2:Msg, x:Msg (free system vars, skolemized by the fn)
         let code2 = LVar::new("code2", LSort::Msg, 8);
         let xv = LVar::new("x", LSort::Msg, 9);
         let subj = crate::term::f_app_ac(
             AcSym::Union,
-            vec![mk(code2.clone()), mk(xv.clone()), payload.clone()],
+            vec![mk(code2), mk(xv), payload.clone()],
         );
         let mut pattern_vars = std::collections::BTreeSet::new();
         pattern_vars.insert(("codeOther".to_string(), 89u64));
@@ -2653,12 +2653,12 @@ mod tests {
         let tid = LVar::new("tid", LSort::Fresh, 15);
         let eqs = vec![
             Equal {
-                lhs: exp(g.clone(), mk(ek_i.clone())),
-                rhs: exp(g.clone(), mk(xv.clone())),
+                lhs: exp(g.clone(), mk(ek_i)),
+                rhs: exp(g.clone(), mk(xv)),
             },
             Equal {
-                lhs: exp(g.clone(), mk(ek_r.clone())),
-                rhs: exp(g.clone(), mk(tid.clone())),
+                lhs: exp(g.clone(), mk(ek_r)),
+                rhs: exp(g.clone(), mk(tid)),
             },
         ];
         // No universal-bound vars in these positions.

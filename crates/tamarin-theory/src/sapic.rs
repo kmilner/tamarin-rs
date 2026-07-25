@@ -465,7 +465,7 @@ mod tests {
     #[test]
     fn sapic_lvar_round_trip() {
         let v = LVar::new("x", LSort::Msg, 0);
-        let sv = SapicLVar::untyped(v.clone());
+        let sv = SapicLVar::untyped(v);
         assert_eq!(sv.to_lvar(), v);
     }
 

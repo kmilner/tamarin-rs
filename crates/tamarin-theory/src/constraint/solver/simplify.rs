@@ -5847,7 +5847,7 @@ mod tests {
         sys.content_mut()
             .less_atoms
             .push(crate::constraint::constraints::LessAtom::new(
-                n.clone(),
+                n,
                 m,
                 crate::constraint::constraints::Reason::Formula,
             ));
@@ -6168,8 +6168,8 @@ mod tests {
         };
         let id_a = tamarin_term::lterm::LVar::new("a", tamarin_term::lterm::LSort::Node, 1);
         let id_b = tamarin_term::lterm::LVar::new("b", tamarin_term::lterm::LSort::Node, 2);
-        sys.add_node(id_a.clone(), mk_rule());
-        sys.add_node(id_b.clone(), mk_rule());
+        sys.add_node(id_a, mk_rule());
+        sys.add_node(id_b, mk_rule());
         let mut r = Reduction::new(&ctx, sys);
         let res = enforce_ku_action_uniqueness_pass(&mut r);
         assert_eq!(
@@ -6178,8 +6178,8 @@ mod tests {
             "should report Changed after merging two KU(m) producers"
         );
         // The eq-store should now equate `a` and `b`.
-        let id_term_a = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(id_a.clone()));
-        let id_term_b = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(id_b.clone()));
+        let id_term_a = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(id_a));
+        let id_term_b = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(id_b));
         let mapped_a = tamarin_term::subst::apply_vterm(&r.sys.eq_store.subst, id_term_a);
         let mapped_b = tamarin_term::subst::apply_vterm(&r.sys.eq_store.subst, id_term_b);
         assert_eq!(
@@ -6268,7 +6268,7 @@ mod tests {
         // Wire S as injective with one Constant behaviour position.
         let s_tag = crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "S", 2);
         ctx.injective_fact_insts = vec![(
-            s_tag.clone(),
+            s_tag,
             vec![vec![
                 crate::tools::injective_fact_instances::MonotonicBehaviour::Constant,
             ]],
@@ -6279,13 +6279,13 @@ mod tests {
             tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(id));
         let k1 = tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Msg, 1);
         let k1_t: tamarin_term::lterm::LNTerm =
-            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(k1.clone()));
+            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(k1));
         let k2 = tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Msg, 2);
         let k2_t: tamarin_term::lterm::LNTerm =
-            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(k2.clone()));
+            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(k2));
 
-        let s_fact_a = crate::fact::Fact::new(s_tag.clone(), vec![id_t.clone(), k1_t.clone()]);
-        let s_fact_b = crate::fact::Fact::new(s_tag.clone(), vec![id_t.clone(), k2_t.clone()]);
+        let s_fact_a = crate::fact::Fact::new(s_tag, vec![id_t.clone(), k1_t.clone()]);
+        let s_fact_b = crate::fact::Fact::new(s_tag, vec![id_t.clone(), k2_t.clone()]);
 
         let info = || {
             crate::rule::RuleInfo::Proto(crate::rule::ProtoRuleACInstInfo {
@@ -6342,7 +6342,7 @@ mod tests {
         let mut ctx = ProofContext::new(h, Vec::new());
         use crate::tools::injective_fact_instances::MonotonicBehaviour::{Constant, Unstable};
         let s_tag = crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "S", 2);
-        ctx.injective_fact_insts = vec![(s_tag.clone(), vec![vec![Unstable, Constant]])];
+        ctx.injective_fact_insts = vec![(s_tag, vec![vec![Unstable, Constant]])];
 
         let mk_var = |n: &str, sort, idx| -> tamarin_term::lterm::LNTerm {
             tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(
@@ -6361,11 +6361,11 @@ mod tests {
         let k2 = mk_var("k", tamarin_term::lterm::LSort::Msg, 2);
 
         let s_fact_a = crate::fact::Fact::new(
-            s_tag.clone(),
+            s_tag,
             vec![id_t.clone(), pair(a1.clone(), k1.clone())],
         );
         let s_fact_b = crate::fact::Fact::new(
-            s_tag.clone(),
+            s_tag,
             vec![id_t.clone(), pair(a2.clone(), k2.clone())],
         );
 
@@ -6440,11 +6440,11 @@ mod tests {
         let id_a = tamarin_term::lterm::LVar::new("a", tamarin_term::lterm::LSort::Node, 1);
         let id_b = tamarin_term::lterm::LVar::new("b", tamarin_term::lterm::LSort::Node, 2);
         sys.add_node(
-            id_a.clone(),
+            id_a,
             crate::rule::Rule::new(info(), vec![], vec![], vec![mk_ku("k1", 0)]),
         );
         sys.add_node(
-            id_b.clone(),
+            id_b,
             crate::rule::Rule::new(info(), vec![], vec![], vec![mk_ku("k2", 0)]),
         );
         let mut r = Reduction::new(&ctx, sys);
