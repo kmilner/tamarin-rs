@@ -683,7 +683,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 // parsec frame, with `inFile` as the `SourcePos` name — to
                 // stderr and exits with code 1.  No `error:` prefix and no
                 // `parse error in …:` wrapper (neither of which HS emits).
-                eprintln!("{}", e.with_source(in_file.clone()));
+                report_parser_error(e, in_file, &src);
                 return Ok(1);
             }
         };
@@ -1744,6 +1744,49 @@ fn print_overall_summary(file_results: &[FileResult], prove_mode: bool) {
         println!();
     }
     println!("{}", line);
+}
+
+///
+fn report_parser_error(mut err: tamarin_parser::ParseError, src_name: &str, src_content: &str) {
+    use codespan_reporting::diagnostic::{Diagnostic, Label};
+    use codespan_reporting::files::SimpleFiles;
+    use codespan_reporting::term::{
+        self,
+        termcolor::{ColorChoice, StandardStream},
+    };
+
+    let mut files = SimpleFiles::new();
+    // Just for sanity we deduplicate?
+    err.messages.dedup();
+    // Sorts error messages by their severity
+    err.messages.sort();
+    let sorted_messages = err.messages;
+    let file_id = files.add(src_name, src_content);
+
+    let message = sorted_messages
+        .get(0)
+        .map(|m| m.string().to_owned())
+        .unwrap_or("ParseError".to_owned());
+
+    let label = Label::primary(file_id, err.offset - 1..err.offset);
+
+    let notes = sorted_messages
+        .into_iter()
+        .skip(1)
+        .rev()
+        .map(|m| m.string().to_owned())
+        .collect::<Vec<_>>();
+
+    let diagnostic = Diagnostic::error()
+        .with_message(message)
+        .with_notes(notes)
+        .with_label(label);
+
+    let writer = StandardStream::stderr(ColorChoice::Always);
+    let config = codespan_reporting::term::Config::default();
+
+    term::emit_to_write_style(&mut writer.lock(), &config, &files, &diagnostic)
+        .expect("Failed to report parse errors.");
 }
 
 #[cfg(test)]

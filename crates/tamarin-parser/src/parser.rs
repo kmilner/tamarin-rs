@@ -44,7 +44,7 @@ use crate::proof_tree::parse_proof_tree;
 /// `instance Ord Message` compares *only* the constructor rank (`fromEnum`,
 /// `SysUnExpect`=0 … `Message`=3), and `errorMessages = sort msgs` stable-sorts
 /// by that rank before rendering, so the groups always appear in this order.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Ord, Eq)]
 pub enum Message {
     /// Library-generated "unexpected" (parsec `SysUnExpect`): the token found
     /// where the grammar could not continue.  Rendered `unexpected <tok>`, or
@@ -69,13 +69,25 @@ impl Message {
         }
     }
     /// parsec `messageString :: Message -> String`.
-    fn string(&self) -> &str {
+    pub fn string(&self) -> &str {
         match self {
             Message::SysUnExpect(s)
             | Message::UnExpect(s)
             | Message::Expect(s)
             | Message::Message(s) => s,
         }
+    }
+}
+
+impl PartialEq for Message {
+    fn eq(&self, other: &Self) -> bool {
+        self.rank() == other.rank() && self.string() == other.string()
+    }
+}
+
+impl PartialOrd for Message {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.rank().cmp(&other.rank()))
     }
 }
 
