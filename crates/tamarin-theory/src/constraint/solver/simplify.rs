@@ -2186,21 +2186,6 @@ fn structural_match(
             (LSort::Msg, LSort::Pub | LSort::Fresh | LSort::Nat)
         )
     }
-    fn term_lsort(t: &tamarin_term::lterm::LNTerm) -> LSort {
-        match t {
-            Term::Lit(Lit::Var(v)) => v.sort,
-            Term::Lit(Lit::Con(n)) => match n.tag {
-                tamarin_term::lterm::NameTag::Pub => LSort::Pub,
-                tamarin_term::lterm::NameTag::Fresh => LSort::Fresh,
-                tamarin_term::lterm::NameTag::Nat => LSort::Nat,
-                tamarin_term::lterm::NameTag::Node => LSort::Node,
-            },
-            Term::App(FunSym::NoEq(_), _)
-            | Term::App(FunSym::C(_), _)
-            | Term::App(FunSym::Ac(_), _)
-            | Term::App(FunSym::List, _) => LSort::Msg,
-        }
-    }
     // Pairwise left-to-right recursion shared by the `NoEq` and `List`
     // arms (HS `sequence_ . zipWith match`): equal arity required, first
     // non-`Matched` outcome wins.
@@ -2232,7 +2217,7 @@ fn structural_match(
         // (System.hs:1111-1145, see line 1122 + Guarded.hs:741-805) the universal's bound
         // vars remain `Var`; free system vars become `SkConst`.
         (Term::Lit(Lit::Var(pv)), _) if pattern_vars.contains(&(pv.name.to_string(), pv.idx)) => {
-            let subj_sort = term_lsort(subj);
+            let subj_sort = tamarin_term::lterm::sort_of_lnterm(subj);
             if !sort_compatible(pv.sort, subj_sort) {
                 return StructMatch::NoMatcher;
             }
