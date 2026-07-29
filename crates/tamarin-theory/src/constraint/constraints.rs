@@ -91,7 +91,7 @@ impl LessAtom {
     }
 
     pub fn to_edge(&self) -> (NodeId, NodeId) {
-        (self.smaller.clone(), self.larger.clone())
+        (self.smaller, self.larger)
     }
 }
 

@@ -356,7 +356,7 @@ mod tests {
         // 1 -> 2 -> 3, plus shortcut 1 -> 3
         let r = rel(&[(1, 2), (2, 3), (1, 3)]);
         let red = trans_red(&r);
-        let red_set: BTreeSet<(i32, i32)> = red.iter().cloned().collect();
+        let red_set: BTreeSet<(i32, i32)> = red.iter().copied().collect();
         // The reduction must drop (1,3) and keep (1,2),(2,3).
         assert!(red_set.contains(&(1, 2)));
         assert!(red_set.contains(&(2, 3)));

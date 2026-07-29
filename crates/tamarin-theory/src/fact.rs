@@ -23,7 +23,7 @@ pub enum Multiplicity {
     Linear,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FactTag {
     /// A protocol fact: `ProtoFact(multiplicity, name, arity)`.
     /// Interned `&'static str` (see `tamarin_term::intern`): pointer-copy
@@ -268,7 +268,7 @@ impl<T> Fact<T> {
     /// same recompute guidance applies if a hot LNFact producer routes here.
     pub fn map_ref<U>(&self, f: impl FnMut(&T) -> U) -> Fact<U> {
         Fact {
-            tag: self.tag.clone(),
+            tag: self.tag,
             annotations: self.annotations.clone(),
             terms: self.terms.iter().map(f).collect(),
             bloom: u64::MAX,
@@ -282,7 +282,7 @@ impl<T> Fact<T> {
     pub fn try_map_ref<U, E>(&self, f: impl FnMut(&T) -> Result<U, E>) -> Result<Fact<U>, E> {
         let terms: Result<Vec<U>, E> = self.terms.iter().map(f).collect();
         Ok(Fact {
-            tag: self.tag.clone(),
+            tag: self.tag,
             annotations: self.annotations.clone(),
             terms: terms?.into(),
             bloom: u64::MAX,
@@ -749,7 +749,7 @@ mod tests {
             let b2 = fact_fingerprints(&fa.terms).0;
             assert_eq!(b, b2);
             // A structurally-equal rebuild gets an equal bloom.
-            let fa2 = Fact::fresh(fa.tag.clone(), fa.terms.to_vec());
+            let fa2 = Fact::fresh(fa.tag, fa.terms.to_vec());
             assert_eq!(fa.bloom(), fa2.bloom());
         }
     }

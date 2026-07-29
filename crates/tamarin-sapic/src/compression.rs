@@ -127,7 +127,7 @@ fn merge_attrs(a: RuleAttributes, b: RuleAttributes) -> RuleAttributes {
 /// `mergeInfo` (Compression.hs:60-68): keep the FIRST rule's name, merge attrs,
 /// concatenate restrictions.
 fn merge_info(i1: &ProtoRuleEInfo, i2: &ProtoRuleEInfo) -> ProtoRuleEInfo {
-    let name = i1.name.clone(); // `mergeStand n _ = n`
+    let name = i1.name; // `mergeStand n _ = n`
     let attributes = merge_attrs(i1.attributes.clone(), i2.attributes.clone());
     let mut restrictions = i1.restrictions.clone();
     restrictions.extend(i2.restrictions.clone());

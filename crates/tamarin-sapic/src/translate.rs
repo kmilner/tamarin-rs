@@ -303,7 +303,7 @@ fn get_lock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<LV
         if let Process::Action(SapicAction::Lock(_), an, _) = proc {
             if !an.pure_state {
                 if let Some(v) = &an.lock {
-                    return vec![v.0.clone()];
+                    return vec![v.0];
                 }
             }
         }
@@ -321,7 +321,7 @@ fn get_unlock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<
         if let Process::Action(SapicAction::Unlock(_), an, _) = proc {
             if !an.pure_state {
                 if let Some(v) = &an.unlock {
-                    return vec![v.0.clone()];
+                    return vec![v.0];
                 }
             }
         }

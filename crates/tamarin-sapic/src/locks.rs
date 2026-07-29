@@ -57,14 +57,14 @@ fn annotate_each_closest_unlock(
             // (Unlock t') | t == t' -> annUnlock here, STOP (closest match).
             //              | otherwise -> recurse into body.
             SapicAction::Unlock(t_prime) if t == t_prime => {
-                let a2 = a.append(ProcessAnnotation::with_unlock(v.clone()));
+                let a2 = a.append(ProcessAnnotation::with_unlock(*v));
                 Ok(Process::Action(ac, a2, body))
             }
             // (Insert t1 t2) | t1 == t -> annUnlock here AND recurse into body.
             //  (otherwise falls through to the generic action case below.)
             SapicAction::Insert(t1, _t2) if t1 == t => {
                 let body2 = annotate_each_closest_unlock(t, v, *body)?;
-                let a2 = a.append(ProcessAnnotation::with_unlock(v.clone()));
+                let a2 = a.append(ProcessAnnotation::with_unlock(*v));
                 Ok(Process::Action(ac, a2, Box::new(body2)))
             }
             // (Rep) -> Left WFRep
@@ -82,7 +82,7 @@ fn annotate_each_closest_unlock(
             ProcessCombinator::Lookup(st, _vt) if st == t => {
                 let pl2 = annotate_each_closest_unlock(t, v, *pl)?;
                 let pr2 = annotate_each_closest_unlock(t, v, *pr)?;
-                let a2 = a.append(ProcessAnnotation::with_unlock(v.clone()));
+                let a2 = a.append(ProcessAnnotation::with_unlock(*v));
                 Ok(Process::Comb(c, a2, Box::new(pl2), Box::new(pr2)))
             }
             // generic combinator: recurse into both children (no annotation).

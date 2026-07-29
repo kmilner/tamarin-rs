@@ -270,11 +270,11 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
                     base
                 };
                 used_dot_ids.insert(id.clone());
-                ellipse_dot_ids.insert((node.id.clone(), tag), id.clone());
+                ellipse_dot_ids.insert((node.id, tag), id.clone());
                 id
             }
         };
-        ds_nodes.insert(node.id.clone(), id);
+        ds_nodes.insert(node.id, id);
     }
     // 4a. Top-level (ungrouped) nodes.
     //
@@ -378,7 +378,7 @@ fn emit_node_colored(
     // non-record ellipse node (UnsolvedAction tag 0 / LastAction tag 1).
     let ellipse_id = |tag: u8| -> String {
         ellipse_dot_ids
-            .get(&(node.id.clone(), tag))
+            .get(&(node.id, tag))
             .cloned()
             .unwrap_or_else(|| DotBuilder::dot_node_id(&node.id))
     };
@@ -1395,7 +1395,7 @@ fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorMap<'_> {
 
     // `M.elems $ get sNodes se`: iterate in NodeId (Map key) order.
     let mut ordered: Vec<&(NodeId, RuleACInst)> = nodes.iter().collect();
-    ordered.sort_by(|a, b| a.0.cmp(&b.0));
+    ordered.sort_by_key(|a| a.0);
 
     // `groups = [ (gIdx, [ru | ru <- rules, gIdx == groupIdx ru]) | gIdx <- 0..3 ]`
     // — order-preserving partition into four groups.
@@ -1528,7 +1528,7 @@ fn lookup_conc_tag(
 ) -> Option<FactTag> {
     let (nid, idx) = nc;
     let ru = node_map.get(nid)?;
-    ru.conclusions.get(idx.0).map(|fa| fa.tag.clone())
+    ru.conclusions.get(idx.0).map(|fa| fa.tag)
 }
 
 fn lookup_prem_tag(
@@ -1537,7 +1537,7 @@ fn lookup_prem_tag(
 ) -> Option<FactTag> {
     let (nid, idx) = np;
     let ru = node_map.get(nid)?;
-    ru.premises.get(idx.0).map(|fa| fa.tag.clone())
+    ru.premises.get(idx.0).map(|fa| fa.tag)
 }
 
 fn reason_color(r: Reason) -> &'static str {
@@ -1855,13 +1855,13 @@ mod tests {
         let c = LVar::new("c", tamarin_term::lterm::LSort::Node, 0);
         sys.content_mut()
             .less_atoms
-            .push(LessAtom::new(a.clone(), b.clone(), Reason::Fresh));
+            .push(LessAtom::new(a, b, Reason::Fresh));
         sys.content_mut()
             .less_atoms
-            .push(LessAtom::new(b.clone(), c.clone(), Reason::Fresh));
+            .push(LessAtom::new(b, c, Reason::Fresh));
         sys.content_mut()
             .less_atoms
-            .push(LessAtom::new(a.clone(), c.clone(), Reason::Fresh));
+            .push(LessAtom::new(a, c, Reason::Fresh));
         let opts_sl0 = crate::graph::GraphOptions {
             simplification_level: crate::graph::SimplificationLevel::SL0,
             compress: false,
@@ -2168,11 +2168,11 @@ mod tests {
         );
         let j = LVar::new("j", LSort::Node, 0);
         let v = LVar::new("v", LSort::Node, 0);
-        sys.add_node(j.clone(), coerce);
-        sys.add_node(v.clone(), isend);
+        sys.add_node(j, coerce);
+        sys.add_node(v, isend);
         sys.content_mut().edges.push(Edge {
-            src: (j.clone(), ConcIdx(0)),
-            tgt: (v.clone(), PremIdx(0)),
+            src: (j, ConcIdx(0)),
+            tgt: (v, PremIdx(0)),
         });
         let out = system_to_dot_with(&sys, &opts);
         // Outgoing coerce: `#j : coerce` (its `Act(..)` action is dropped).

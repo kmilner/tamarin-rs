@@ -221,7 +221,7 @@ mod tests {
         let v1 = LVar::new("a", LSort::Msg, 0);
         let v2 = LVar::new("b", LSort::Msg, 0);
         let a = ProcessAnnotation::<V>::with_lock(v1);
-        let b = ProcessAnnotation::<V>::with_lock(v2.clone());
+        let b = ProcessAnnotation::<V>::with_lock(v2);
         let c = a.append(b);
         // `AnVar` `<>` is right-biased (`(<>) _ b = b`), so combining two
         // `Just` lock annotations keeps the right (`b`) value.

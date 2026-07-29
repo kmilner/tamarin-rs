@@ -400,7 +400,7 @@ mod tests {
         let tid = LVar::new("tid", LSort::Fresh, 0);
         let ekI = LVar::new("ekI", LSort::Fresh, 0);
         let ekR = LVar::new("ekR", LSort::Fresh, 0);
-        let tid_term: LNTerm = Term::Lit(Lit::Var(tid.clone()));
+        let tid_term: LNTerm = Term::Lit(Lit::Var(tid));
         let ekI_term: LNTerm = Term::Lit(Lit::Var(ekI));
         let ekR_term: LNTerm = Term::Lit(Lit::Var(ekR));
         let inv_tid: LNTerm = Term::App(

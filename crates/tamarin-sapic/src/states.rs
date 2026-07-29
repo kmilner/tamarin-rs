@@ -77,7 +77,7 @@ fn get_all_states(
         // New v: extend the bound-name scope.
         Process::Action(SapicAction::New(v), _, body) => {
             let mut next = bound_names.clone();
-            next.insert(v.var.clone());
+            next.insert(v.var);
             get_all_states(body, &next)
         }
         Process::Action(_, _, body) => get_all_states(body, bound_names),
@@ -150,7 +150,7 @@ fn declare_state_channel(
     state_map: &StateMap,
 ) -> AnnotatedProc {
     // `(declarables, undeclarables) = partition (frees ⊆ boundNames) toDeclare`
-    let bound_lvars: BTreeSet<LVar> = bound_names.iter().map(|v| v.var.clone()).collect();
+    let bound_lvars: BTreeSet<LVar> = bound_names.iter().map(|v| v.var).collect();
     let (declarables, undeclarables): (Vec<SapicTerm>, Vec<SapicTerm>) =
         to_declare.iter().cloned().partition(|t| {
             frees_sapic_term(t)
@@ -221,7 +221,7 @@ fn add_news(pr: AnnotatedProc, new_vars: &[(LVar, SapicTerm)]) -> AnnotatedProc 
             ..ProcessAnnotation::empty()
         };
         out = Process::Action(
-            SapicAction::New(SapicLVar::new(var.clone(), Some("channel".to_string()))),
+            SapicAction::New(SapicLVar::new(*var, Some("channel".to_string()))),
             ann,
             Box::new(out),
         );
@@ -248,7 +248,7 @@ fn new_states(
             sort: LSort::Msg,
             idx: fresh.fresh_ident(),
         };
-        map.insert(v.clone(), AnVar(newvar.clone()));
+        map.insert(v.clone(), AnVar(newvar));
         // HS conses: `newStates p declarables ((newvar, v):declared) newMap`
         declared.insert(0, (newvar, v.clone()));
     }
@@ -263,7 +263,7 @@ fn exists_attacker_unpure(p: &AnnotatedProc, bound_names: &BTreeSet<LVar>) -> bo
         // New v: extend the bound-name scope.
         Process::Action(SapicAction::New(v), _, pl) => {
             let mut next = bound_names.clone();
-            next.insert(v.var.clone());
+            next.insert(v.var);
             exists_attacker_unpure(pl, &next)
         }
         // insert t; unlock t  (pure write pattern) — skip the pair, recurse.
@@ -487,7 +487,7 @@ fn vars_proc(p: &AnnotatedProc) -> Vec<LVar> {
             Process::Action(a, _, body) => {
                 match a {
                     SapicAction::New(v) => {
-                        out.insert(v.var.clone());
+                        out.insert(v.var);
                     }
                     SapicAction::Event(f) => fact_vars(f, out),
                     SapicAction::ChOut { chan, msg } => {
@@ -506,7 +506,7 @@ fn vars_proc(p: &AnnotatedProc) -> Vec<LVar> {
                         }
                         term_vars(msg, out);
                         for v in match_vars {
-                            out.insert(v.var.clone());
+                            out.insert(v.var);
                         }
                     }
                     SapicAction::Insert(a, b) => {
@@ -536,7 +536,7 @@ fn vars_proc(p: &AnnotatedProc) -> Vec<LVar> {
                 match c {
                     ProcessCombinator::Lookup(t, v) => {
                         term_vars(t, out);
-                        out.insert(v.var.clone());
+                        out.insert(v.var);
                     }
                     ProcessCombinator::Let {
                         left,
@@ -546,7 +546,7 @@ fn vars_proc(p: &AnnotatedProc) -> Vec<LVar> {
                         term_vars(left, out);
                         term_vars(right, out);
                         for v in match_vars {
-                            out.insert(v.var.clone());
+                            out.insert(v.var);
                         }
                     }
                     ProcessCombinator::CondEq(a, b) => {

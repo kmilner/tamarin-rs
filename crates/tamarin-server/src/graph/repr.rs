@@ -193,29 +193,29 @@ pub fn find_connected_components<'a>(
     let mut adj: BTreeMap<NodeId, BTreeSet<NodeId>> = BTreeMap::new();
     for e in edges {
         if let GEdge::System(s, t) = e {
-            let (a, b) = (s.0.clone(), t.0.clone());
-            adj.entry(a.clone()).or_default().insert(b.clone());
+            let (a, b) = (s.0, t.0);
+            adj.entry(a).or_default().insert(b);
             adj.entry(b).or_default().insert(a);
         }
     }
     let mut visited: BTreeSet<NodeId> = BTreeSet::new();
     let mut components: Vec<Vec<&'a GNode>> = Vec::new();
-    let by_id: BTreeSet<NodeId> = nodes.iter().map(|n| n.id.clone()).collect();
+    let by_id: BTreeSet<NodeId> = nodes.iter().map(|n| n.id).collect();
     for n in nodes {
         if visited.contains(&n.id) {
             continue;
         }
-        let mut stack = vec![n.id.clone()];
+        let mut stack = vec![n.id];
         let mut comp_set: BTreeSet<NodeId> = BTreeSet::new();
         while let Some(cur) = stack.pop() {
-            if !visited.insert(cur.clone()) {
+            if !visited.insert(cur) {
                 continue;
             }
-            comp_set.insert(cur.clone());
+            comp_set.insert(cur);
             if let Some(neighbors) = adj.get(&cur) {
                 for nb in neighbors {
                     if !visited.contains(nb) && by_id.contains(nb) {
-                        stack.push(nb.clone());
+                        stack.push(*nb);
                     }
                 }
             }
@@ -257,11 +257,11 @@ pub fn add_cluster(
     let all_edges = repr.edges.clone();
     let mut sub_clusters: Vec<Cluster> = Vec::new();
     for (group_name, group_nodes) in &nodes_by_group {
-        let group_node_ids: BTreeSet<NodeId> = group_nodes.iter().map(|n| n.id.clone()).collect();
+        let group_node_ids: BTreeSet<NodeId> = group_nodes.iter().map(|n| n.id).collect();
         let edges_for_group = filter_edges_for_cluster(&group_node_ids, &all_edges);
         let components = find_connected_components(group_nodes, &edges_for_group);
         for (i, comp) in components.into_iter().enumerate() {
-            let comp_ids: BTreeSet<NodeId> = comp.iter().map(|n| n.id.clone()).collect();
+            let comp_ids: BTreeSet<NodeId> = comp.iter().map(|n| n.id).collect();
             let edges_in_comp = filter_edges_for_cluster(&comp_ids, &all_edges);
             sub_clusters.push(Cluster {
                 name: format!("{}{}{}", group_name, name_suffix, i + 1),
@@ -340,7 +340,7 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     // 1. System rule instances.
     for (nid, ru) in sys.nodes.iter() {
         nodes.push(GNode {
-            id: nid.clone(),
+            id: *nid,
             ty: NodeType::System(ru.clone()),
         });
     }
@@ -356,12 +356,12 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
             continue;
         }
         if let Goal::Action(nid, fa) = g {
-            by_node.entry(nid.clone()).or_default().push(fa.clone());
+            by_node.entry(*nid).or_default().push(fa.clone());
         }
     }
     for (nid, facts) in by_node {
         nodes.push(GNode {
-            id: nid.clone(),
+            id: nid,
             ty: NodeType::UnsolvedAction(facts),
         });
     }
@@ -376,7 +376,7 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     // colliding dot-id is disambiguated in `dot.rs`.
     if let Some(la) = &sys.last_atom {
         nodes.push(GNode {
-            id: la.clone(),
+            id: *la,
             ty: NodeType::LastAction,
         });
     }
@@ -391,16 +391,16 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     // nodes: two edges sharing the same missing endpoint emit it twice.
     // `systemMissingNodes` never inspects `sLessAtoms`; less-atoms contribute
     // edges (below), not nodes.
-    let sys_node_ids: BTreeSet<NodeId> = sys.nodes.iter().map(|(id, _)| id.clone()).collect();
+    let sys_node_ids: BTreeSet<NodeId> = sys.nodes.iter().map(|(id, _)| *id).collect();
     for e in &sys.edges {
         if !sys_node_ids.contains(&e.src.0) {
             nodes.push(GNode {
-                id: e.src.0.clone(),
+                id: e.src.0,
                 ty: NodeType::Missing(MissingHint::Conc(e.src.1)),
             });
         } else if !sys_node_ids.contains(&e.tgt.0) {
             nodes.push(GNode {
-                id: e.tgt.0.clone(),
+                id: e.tgt.0,
                 ty: NodeType::Missing(MissingHint::Prem(e.tgt.1)),
             });
         }
@@ -408,7 +408,7 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     // 5. Edges.
     let mut edges: Vec<GEdge> = Vec::new();
     for e in &sys.edges {
-        edges.push(GEdge::System(e.src.clone(), e.tgt.clone()));
+        edges.push(GEdge::System(e.src, e.tgt));
     }
     for la in &sys.less_atoms {
         edges.push(GEdge::Less(la.clone()));
@@ -418,7 +418,7 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
             continue;
         }
         if let Goal::Chain(src, tgt) = g {
-            edges.push(GEdge::UnsolvedChain(src.clone(), tgt.clone()));
+            edges.push(GEdge::UnsolvedChain(*src, *tgt));
         }
     }
     GraphRepr {
@@ -553,7 +553,7 @@ mod tests {
         ];
         let comps = find_connected_components(&input, &edges);
         assert_eq!(comps.len(), 1);
-        let ids: Vec<NodeId> = comps[0].iter().map(|n| n.id.clone()).collect();
+        let ids: Vec<NodeId> = comps[0].iter().map(|n| n.id).collect();
         // Original order [B, C, A], NOT DFS order [B, A, C].
         assert_eq!(ids, vec![nid("i", 2), nid("i", 3), nid("i", 1)]);
     }

@@ -79,9 +79,9 @@ fn collect_node_and_fact_frees(
 ) -> std::collections::BTreeSet<tamarin_term::lterm::LVar> {
     use tamarin_term::lterm::HasFrees;
     let mut s = std::collections::BTreeSet::new();
-    s.insert(live_node.clone());
+    s.insert(*live_node);
     fa_live.for_each_free(&mut |v: &tamarin_term::lterm::LVar| {
-        s.insert(v.clone());
+        s.insert(*v);
     });
     s
 }
@@ -92,7 +92,7 @@ fn collect_node_and_fact_frees(
 fn collect_node_ids(
     sys: &System,
 ) -> std::collections::BTreeSet<crate::constraint::constraints::NodeId> {
-    sys.nodes.iter().map(|(n, _)| n.clone()).collect()
+    sys.nodes.iter().map(|(n, _)| *n).collect()
 }
 
 /// Grafted-edge producer-conclusion ⇆ consumer-premise fact equalities.
@@ -699,7 +699,7 @@ pub fn precompute_sources(
     let mut counts: BTreeMap<crate::fact::FactTag, u32> = BTreeMap::new();
     for o in &ctx.rules {
         for c in &o.rule.conclusions {
-            *counts.entry(c.tag.clone()).or_insert(0) += 1;
+            *counts.entry(c.tag).or_insert(0) += 1;
         }
     }
     let mut out = Vec::new();
@@ -707,14 +707,14 @@ pub fn precompute_sources(
         for c in &o.rule.conclusions {
             if counts.get(&c.tag).copied() == Some(1) {
                 out.push(UniqueSource {
-                    fact_tag: c.tag.clone(),
+                    fact_tag: c.tag,
                     rule_name: o.name().to_string(),
                 });
             }
         }
     }
     // Dedup.
-    out.sort_by(|a, b| a.fact_tag.cmp(&b.fact_tag));
+    out.sort_by_key(|a| a.fact_tag);
     out.dedup_by(|a, b| a.fact_tag == b.fact_tag);
     out
 }
@@ -754,7 +754,7 @@ pub fn precompute_full_sources(
     for o in &ctx.rules {
         for fa in o.rule.premises.iter().chain(o.rule.conclusions.iter()) {
             if matches!(&fa.tag, FactTag::Proto(_, _, _)) {
-                tags.insert(fa.tag.clone());
+                tags.insert(fa.tag);
             }
         }
     }
@@ -795,8 +795,8 @@ pub fn precompute_full_sources(
                 ))
             })
             .collect();
-        let abstract_fact = Fact::new(tag.clone(), terms);
-        let goal = Goal::Premise((goal_node.clone(), PremIdx(0)), abstract_fact.clone());
+        let abstract_fact = Fact::new(tag, terms);
+        let goal = Goal::Premise((goal_node, PremIdx(0)), abstract_fact.clone());
         // HS-faithful: defer `initialSource`'s `solve_premise_goal`
         // call to `Source::cases(ctx)`'s first invocation.  No work
         // done here, no `[EXEC] solveGoal kind=Premise ...` line
@@ -948,7 +948,7 @@ pub fn precompute_full_sources(
     }
     for pat in ku_patterns {
         let ku_fact = crate::fact::ku_fact(pat.clone());
-        let goal = Goal::Action(goal_node.clone(), ku_fact.clone());
+        let goal = Goal::Action(goal_node, ku_fact.clone());
         // HS-faithful lazy: defer `solve_action_goal` + normalisation
         // to `Source::cases(ctx)`.  No work done here.
         out.push(Source::lazy(goal));
@@ -1440,7 +1440,7 @@ fn refine_one_source(
     let mut stable_vars: std::collections::BTreeSet<tamarin_term::lterm::LVar> =
         std::collections::BTreeSet::new();
     goal_walk_frees(&src.goal, &mut |v| {
-        stable_vars.insert(v.clone());
+        stable_vars.insert(*v);
     });
     let all_cases = src.cases_take_list();
     // HS `refineSource` (Sources.hs:144-225, see line 162): `fs = avoid th` — the fresh seed
@@ -1814,15 +1814,15 @@ fn eq_modulo_freshness_no_ac(
                 if va.sort != vb.sort {
                     return false;
                 }
-                let ka = ma.get(va).cloned();
-                let kb = mb.get(vb).cloned();
+                let ka = ma.get(va).copied();
+                let kb = mb.get(vb).copied();
                 match (ka, kb) {
                     (Some(x), Some(y)) => x == y,
                     (None, None) => {
                         let k = *next;
                         *next += 1;
-                        ma.insert(va.clone(), k);
-                        mb.insert(vb.clone(), k);
+                        ma.insert(*va, k);
+                        mb.insert(*vb, k);
                         true
                     }
                     _ => false,
@@ -2319,7 +2319,7 @@ fn run_solve_all_safe_goals_disj_with_progress(
                             return None;
                         }
                     }
-                    Some((i.clone(), fa.clone()))
+                    Some((*i, fa.clone()))
                 }
                 _ => None,
             })
@@ -2461,8 +2461,7 @@ fn run_solve_all_safe_goals_disj_with_progress(
                 found
             };
             if has_fresh_var {
-                let live_goal_action =
-                    crate::constraint::constraints::Goal::Action(i.clone(), fa.clone());
+                let live_goal_action = crate::constraint::constraints::Goal::Action(i, fa.clone());
                 for (g, st) in sub.sys.goals_mut().iter_mut() {
                     if g == &live_goal_action {
                         st.solved = true;
@@ -2750,7 +2749,7 @@ fn freshen_system(
         avoid_max.saturating_add(1)
     };
     let shift_lvar = |v: &tamarin_term::lterm::LVar| {
-        let mut v2 = v.clone();
+        let mut v2 = *v;
         v2.idx = v2.idx.saturating_add(shift);
         v2
     };
@@ -3014,7 +3013,7 @@ pub fn solve_with_source_cases_action_with_ctx(
     })?;
 
     let abstract_orig = match &src.goal {
-        Goal::Action(n, _) => n.clone(),
+        Goal::Action(n, _) => *n,
         _ => return None,
     };
 
@@ -3114,9 +3113,9 @@ pub fn solve_with_source_cases_action_with_ctx(
                 use tamarin_term::lterm::HasFrees;
                 let stable_vars: std::collections::BTreeSet<tamarin_term::lterm::LVar> = {
                     let mut s = std::collections::BTreeSet::new();
-                    s.insert(goal_node.clone());
+                    s.insert(*goal_node);
                     fa_live.for_each_free(&mut |v: &tamarin_term::lterm::LVar| {
-                        s.insert(v.clone());
+                        s.insert(*v);
                     });
                     s
                 };
@@ -3193,7 +3192,7 @@ pub fn solve_with_source_cases_action_with_ctx(
             let case_label = name.clone();
             let renamed = freshen_system(&case_sys, avoid_max, ctx_opt.map(|c| &c.maude));
             let abstract_renamed = {
-                let mut v = abstract_orig.clone();
+                let mut v = abstract_orig;
                 v.idx = v.idx.saturating_add(avoid_max.saturating_add(1));
                 v
             };
@@ -3387,9 +3386,9 @@ fn freshen_system_keep_with_shift(
     };
     let shift_lvar = |v: &tamarin_term::lterm::LVar| {
         if keep.contains(v) {
-            v.clone()
+            *v
         } else {
-            let mut v2 = v.clone();
+            let mut v2 = *v;
             v2.idx = shift_idx(v2.idx);
             v2
         }
@@ -3604,7 +3603,7 @@ fn freshen_system_some_inst(
     let mut bindings: BTreeMap<tamarin_term::lterm::LVar, tamarin_term::lterm::LVar> =
         BTreeMap::new();
     for v in keep {
-        bindings.insert(v.clone(), v.clone());
+        bindings.insert(*v, *v);
     }
     let import_var =
         |v: &tamarin_term::lterm::LVar,
@@ -3618,7 +3617,7 @@ fn freshen_system_some_inst(
                 sort: v.sort,
                 idx: new_idx,
             };
-            bindings.insert(v.clone(), new_v);
+            bindings.insert(*v, new_v);
         };
 
     // sNodes: BTreeMap-equivalent iteration by NodeId order.  Rust's
@@ -3628,7 +3627,7 @@ fn freshen_system_some_inst(
         crate::constraint::constraints::NodeId,
         crate::rule::RuleACInst,
     )> = sys.nodes.iter().collect();
-    sorted_nodes.sort_by(|a, b| a.0.cmp(&b.0));
+    sorted_nodes.sort_by_key(|a| a.0);
     for (id, rule) in &sorted_nodes {
         import_var(id, &mut bindings);
         // HS Rule HasFrees order: info, premises, conclusions, actions,
@@ -3730,17 +3729,14 @@ fn freshen_system_some_inst(
          bindings: &mut BTreeMap<tamarin_term::lterm::LVar, tamarin_term::lterm::LVar>| {
             let _ = crate::guarded::map_lvars_in_guarded(g, |v: &tamarin_parser::ast::VarSpec| {
                 if let Some(lv) = vspec_to_lvar(v) {
-                    if !bindings.contains_key(&lv) {
+                    bindings.entry(lv).or_insert_with(|| {
                         let new_idx = maude.reserve_idxs(1);
-                        bindings.insert(
-                            lv.clone(),
-                            tamarin_term::lterm::LVar {
-                                name: lv.name,
-                                sort: lv.sort,
-                                idx: new_idx,
-                            },
-                        );
-                    }
+                        tamarin_term::lterm::LVar {
+                            name: lv.name,
+                            sort: lv.sort,
+                            idx: new_idx,
+                        }
+                    });
                 }
                 v.clone()
             });
@@ -3803,7 +3799,7 @@ fn freshen_system_some_inst(
 
     // Step 2: apply bindings to produce the freshened system.
     let lookup = |v: &tamarin_term::lterm::LVar| -> tamarin_term::lterm::LVar {
-        bindings.get(v).cloned().unwrap_or_else(|| v.clone())
+        bindings.get(v).copied().unwrap_or(*v)
     };
     // For Guarded formulas (VarSpec-based), build a (name, idx) → new (name, idx) map.
     // VarSpec sort hints are preserved unchanged.
@@ -4157,7 +4153,7 @@ fn refine_source_case_action(
 
     // Pull the abstract `cdGoal` (NodeId + LNFact) out of `src`.
     let (abstract_node_orig, abstract_action_orig) = match &src.goal {
-        crate::constraint::constraints::Goal::Action(n, fa) => (n.clone(), fa.clone()),
+        crate::constraint::constraints::Goal::Action(n, fa) => (*n, fa.clone()),
         _ => {
             return Vec::new();
         }
@@ -4169,7 +4165,7 @@ fn refine_source_case_action(
     }
 
     let live_goal_for_trace =
-        crate::constraint::constraints::Goal::Action(live_node.clone(), fa_live.clone());
+        crate::constraint::constraints::Goal::Action(*live_node, fa_live.clone());
     crate::state_trace::emit("applySource_in", Some(&live_goal_for_trace), live_sys);
 
     // ---------------------------------------------------------------
@@ -4219,7 +4215,7 @@ fn refine_source_case_action(
         None => 0,
     };
     let shift_lvar = |v: &tamarin_term::lterm::LVar| {
-        let mut v2 = v.clone();
+        let mut v2 = *v;
         let n = v2.idx as i128 + rename_shift;
         v2.idx = if n < 0 { 0 } else { n as u64 };
         v2
@@ -4272,8 +4268,8 @@ fn refine_source_case_action(
         pairs.push((lt.clone(), pt.clone()));
     }
     pairs.push((
-        tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(live_node.clone())),
-        tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(renamed_abstract_node.clone())),
+        tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(*live_node)),
+        tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(renamed_abstract_node)),
     ));
 
     // HS-faithful `doMatch (faTerm matchFact faPat <> iTerm matchLVar
@@ -4582,7 +4578,7 @@ fn conjoin_refine_arm(
     } = arm;
 
     let live_goal_for_trace =
-        crate::constraint::constraints::Goal::Action(live_node.clone(), fa_live.clone());
+        crate::constraint::constraints::Goal::Action(*live_node, fa_live.clone());
 
     // Fourth tuple element: HS FreshT-threading (task #23, A(ii)) —
     // the OUTPUT arm's continuation counter (this branch's fork + its
@@ -4602,8 +4598,7 @@ fn conjoin_refine_arm(
     if let Some(m) = red_maude {
         r.maude = m.clone();
     }
-    let live_goal =
-        crate::constraint::constraints::Goal::Action(live_node.clone(), fa_live.clone());
+    let live_goal = crate::constraint::constraints::Goal::Action(*live_node, fa_live.clone());
     // HS-faithful (Sources.hs:196-216): `solveAllSafeGoals.safeGoal`
     // returns `not (isKUFact fa)` for ActionG (Sources.hs:144-225, see line 202), so
     // HS's saturate-time precompute NEVER picks a KU action goal
@@ -4908,7 +4903,7 @@ fn apply_source_case_premise(
     use tamarin_term::lterm::HasFrees;
 
     let (abstract_node_orig, abstract_prem_idx_orig, abstract_prem_fact_orig) = match &src.goal {
-        crate::constraint::constraints::Goal::Premise((n, p), fa) => (n.clone(), *p, fa.clone()),
+        crate::constraint::constraints::Goal::Premise((n, p), fa) => (*n, *p, fa.clone()),
         _ => {
             return Vec::new();
         }
@@ -4919,10 +4914,8 @@ fn apply_source_case_premise(
         return Vec::new();
     }
 
-    let live_goal_for_trace = crate::constraint::constraints::Goal::Premise(
-        (live_node.clone(), live_prem_idx),
-        fa_live.clone(),
-    );
+    let live_goal_for_trace =
+        crate::constraint::constraints::Goal::Premise((*live_node, live_prem_idx), fa_live.clone());
     crate::state_trace::emit("applySource_prem_in", Some(&live_goal_for_trace), live_sys);
 
     // A.1 — `rename th0` in matchToGoal (Sources.hs:387-448, see line 409):
@@ -4953,7 +4946,7 @@ fn apply_source_case_premise(
         None => 0,
     };
     let shift_lvar = |v: &tamarin_term::lterm::LVar| {
-        let mut v2 = v.clone();
+        let mut v2 = *v;
         let n = v2.idx as i128 + rename_shift;
         v2.idx = if n < 0 { 0 } else { n as u64 };
         v2
@@ -4987,8 +4980,8 @@ fn apply_source_case_premise(
         pairs.push((lt.clone(), pt.clone()));
     }
     pairs.push((
-        tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(live_node.clone())),
-        tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(renamed_abstract_node.clone())),
+        tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(*live_node)),
+        tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(renamed_abstract_node)),
     ));
     // HS-faithful `doMatch` (Sources.hs:387-448, see line 390,414) — see the action-path
     // twin above: only the `NeedsAc` (HS `Left ACProblem`) branch shells
@@ -5043,16 +5036,16 @@ fn apply_source_case_premise(
     // Faithful behaviour: rewrite edges only; leave goals at the source idx.
     let mut renamed_case = renamed_case;
     let pat_prem: (tamarin_term::lterm::LVar, crate::rule::PremIdx) =
-        (renamed_abstract_node.clone(), abstract_prem_idx_orig);
+        (renamed_abstract_node, abstract_prem_idx_orig);
     let new_prem: (tamarin_term::lterm::LVar, crate::rule::PremIdx) =
-        (renamed_abstract_node.clone(), live_prem_idx);
+        (renamed_abstract_node, live_prem_idx);
     // In-place edge-endpoint rewrite through `content_mut()` — the
     // conservative door bumps `content_stamp` (and, harmlessly, invalidates
     // the caches: `renamed_case` was freshened, marker already cleared, and it
     // is about to be wrapped in a `Reduction` and refined).
     for e in renamed_case.content_mut().edges.iter_mut() {
         if e.tgt == pat_prem {
-            e.tgt = new_prem.clone();
+            e.tgt = new_prem;
         }
     }
 
@@ -5184,7 +5177,7 @@ fn apply_source_case_premise(
         let mut r = Reduction::new(ctx, live_sys.clone());
         r.maude = red_m.clone();
         let live_goal = crate::constraint::constraints::Goal::Premise(
-            (live_node.clone(), live_prem_idx),
+            (*live_node, live_prem_idx),
             fa_live.clone(),
         );
         if let Some(slot) = r.sys.goals_mut().iter_mut().find(|(g, _)| g == &live_goal) {
@@ -5432,13 +5425,13 @@ fn close_trivial_chains_in_graft(r: &mut crate::constraint::solver::reduction::R
             // what HS leaves open; only chains HS itself auto-handles
             // (union-all-known) remain eligible for direct-edge closure.
             if crate::constraint::solver::goals::is_open_for_saturate_with(
-                &Goal::Chain(c.clone(), p.clone()),
+                &Goal::Chain(*c, *p),
                 &r.sys,
                 &sat_adj,
             ) {
                 return None;
             }
-            Some((c.clone(), p.clone(), fa_conc, fa_prem))
+            Some((*c, *p, fa_conc, fa_prem))
         });
         let Some((c, p, fa_conc, fa_prem)) = candidate else {
             break;
@@ -5447,10 +5440,8 @@ fn close_trivial_chains_in_graft(r: &mut crate::constraint::solver::reduction::R
         // Snapshot system; if direct-edge unification contradicts,
         // restore and stop trying.
         let snapshot = r.sys.clone();
-        r.sys.add_edge(crate::constraint::constraints::Edge {
-            src: c.clone(),
-            tgt: p.clone(),
-        });
+        r.sys
+            .add_edge(crate::constraint::constraints::Edge { src: c, tgt: p });
         let res = r.solve_fact_eqs(
             SplitStrategy::SplitNow,
             &[tamarin_term::rewriting::Equal {
@@ -5503,9 +5494,9 @@ fn graft_case_into_action(
     let mut out = live_sys.clone();
     let rename_node = |n: &crate::constraint::constraints::NodeId| {
         if n == abstract_node {
-            live_node.clone()
+            *live_node
         } else {
-            n.clone()
+            *n
         }
     };
     for (id, rule) in case_sys.nodes.iter() {
@@ -5557,8 +5548,7 @@ fn graft_case_into_action(
             out.goals_mut().push((renamed_goal, st.clone()));
         }
     }
-    let live_goal =
-        crate::constraint::constraints::Goal::Action(live_node.clone(), fa_live.clone());
+    let live_goal = crate::constraint::constraints::Goal::Action(*live_node, fa_live.clone());
     if let Some(slot) = out.goals_mut().iter_mut().find(|(g, _)| g == &live_goal) {
         // HS-faithful: see the matching gate in `conjoin_refine_arm`.
         // `solveAllSafeGoals.safeGoal` (Sources.hs:144-225, see line 202) excludes KU
@@ -5593,15 +5583,10 @@ fn graft_case_into_action(
     // Out_Initiator's terms, the universal fires, and the case is
     // pruned via contradiction.
     let mut merged_pairs: Vec<_> = out.eq_store.subst.to_list();
-    let existing: std::collections::HashSet<_> =
-        merged_pairs.iter().map(|(v, _)| v.clone()).collect();
+    let existing: std::collections::HashSet<_> = merged_pairs.iter().map(|(v, _)| *v).collect();
     let mut appended_any = false;
     for (lv, lt) in case_sys.eq_store.subst.to_list() {
-        let new_lv = if &lv == abstract_node {
-            live_node.clone()
-        } else {
-            lv
-        };
+        let new_lv = if &lv == abstract_node { *live_node } else { lv };
         if !existing.contains(&new_lv) {
             appended_any = true;
             merged_pairs.push((new_lv, lt));
@@ -5803,7 +5788,7 @@ fn var_occurrences_nodes(
     ) {
         match t {
             Term::Lit(Lit::Var(v)) => {
-                out.entry(v.clone()).or_default().insert(ctx.materialize());
+                out.entry(*v).or_default().insert(ctx.materialize());
             }
             Term::Lit(Lit::Con(_)) => {}
             Term::App(sym, args) => {
@@ -5917,14 +5902,12 @@ fn var_occurrences_nodes(
     // order (Ord LVar on NodeId) — HS's M.foldrWithKey iterates ASC.
     let mut nodes_sorted: Vec<&(tamarin_term::lterm::LVar, crate::rule::RuleACInst)> =
         sys.nodes.iter().collect();
-    nodes_sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    nodes_sorted.sort_by_key(|a| a.0);
     let mut out: BTreeMap<LVar, BTreeSet<Vec<String>>> = BTreeMap::new();
     for (nid, rule) in &nodes_sorted {
         // For (k, v) tuple: "0":p for k (NodeId is just an LVar), "1":p for v.
         // base_ctx is empty, so k = ["0"] and the rule root chain = ["1"].
-        out.entry((*nid).clone())
-            .or_default()
-            .insert(vec!["0".to_string()]);
+        out.entry(*nid).or_default().insert(vec!["0".to_string()]);
         let v_ctx = Ctx {
             seg: std::borrow::Cow::Borrowed("1"),
             parent: None,
@@ -6025,7 +6008,7 @@ fn system_walk_frees(
     // a: sNodes (Map NodeId RuleACInst) — BTreeMap-key order.
     let mut nodes_sorted: Vec<&(tamarin_term::lterm::LVar, crate::rule::RuleACInst)> =
         sys.nodes.iter().collect();
-    nodes_sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    nodes_sorted.sort_by_key(|a| a.0);
     for (nid, rule) in &nodes_sorted {
         push(nid);
         rule.for_each_free(push);
@@ -6232,7 +6215,7 @@ fn compute_rename_map(
     let mut rename: RenameMap = RenameMap::default();
     // Step 1: stable vars bind to themselves.
     for v in stable_vars {
-        rename.insert(v.clone(), v.clone());
+        rename.insert(*v, *v);
     }
     // Step 2: fresh state = avoid stableVars.
     let mut fresh_state = tamarin_utils::fresh::FastFreshState::nothing_used();
@@ -6255,7 +6238,7 @@ fn compute_rename_map(
                 sort: v.sort,
                 idx: new_idx,
             };
-            rename.insert(v.clone(), new_v);
+            rename.insert(*v, new_v);
         };
     // Step 3: orderedVars sys — varOccurences from nodes ONLY,
     // sorted by occurrence set, filtered to non-Node sort.
@@ -6278,7 +6261,7 @@ fn compute_rename_map(
 /// Apply rename to an LVar; if missing, return as-is (Node-sort vars
 /// without an occurrence in `_sNodes` may not appear in the map).
 fn rn(rename: &RenameMap, v: &tamarin_term::lterm::LVar) -> tamarin_term::lterm::LVar {
-    rename.get(v).cloned().unwrap_or_else(|| v.clone())
+    rename.get(v).copied().unwrap_or(*v)
 }
 
 /// Write a term to the key buffer with renamed vars.
@@ -6811,7 +6794,7 @@ fn compute_compare_systems_key(
             .drain(..)
             .map(|(v, t)| (rn(&rename, &v), t))
             .collect();
-    subst_keyed.sort_by(|a, b| a.0.cmp(&b.0));
+    subst_keyed.sort_by_key(|a| a.0);
     for (v, t) in &subst_keyed {
         push_u64(&mut out, v.idx);
         out.push(':');
@@ -6843,7 +6826,7 @@ fn compute_compare_systems_key(
                 .into_iter()
                 .map(|(v, t)| (rn(&rename, &v), t))
                 .collect();
-            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            entries.sort_by_key(|a| a.0);
             for (v, t) in &entries {
                 push_u64(&mut scratch, v.idx);
                 scratch.push(':');
@@ -6860,7 +6843,7 @@ fn compute_compare_systems_key(
                     |v: &tamarin_term::lterm::LVar, m: &mut RenameMap, n: &mut u64| {
                         if !m.contains_key(v) {
                             m.insert(
-                                v.clone(),
+                                *v,
                                 tamarin_term::lterm::LVar {
                                     name: "",
                                     sort: v.sort,
@@ -7029,7 +7012,7 @@ fn write_term_to_key_local(t: &tamarin_term::lterm::LNTerm, rename: &RenameMap, 
     // Same App/Con recursion as `write_term_to_key`, but the Var leaf drops
     // the name (local dedup keys use idx:sort only).
     write_term_to_key_with(t, out, &|v, out| {
-        let rv = rename.get(v).cloned().unwrap_or_else(|| v.clone());
+        let rv = rename.get(v).copied().unwrap_or(*v);
         out.push('v');
         push_u64(out, rv.idx);
         out.push(':');
@@ -7290,7 +7273,7 @@ mod tests {
         use tamarin_term::lterm::{LSort, LVar};
         let mut s = System::empty();
         let n: NodeId = LVar::new("i", LSort::Node, 0);
-        s.add_goal(Goal::Chain((n.clone(), ConcIdx(0)), (n, PremIdx(0))));
+        s.add_goal(Goal::Chain((n, ConcIdx(0)), (n, PremIdx(0))));
         assert_eq!(unsolved_chain_constraints(&s), 1);
     }
 
@@ -7336,7 +7319,7 @@ mod tests {
     fn precompute_sources_picks_single_producer() {
         use crate::fact::{FactTag, Multiplicity};
         let tag = FactTag::Proto(Multiplicity::Linear, "Foo", 0);
-        let rules = vec![make_rule("MakeFoo", tag.clone())];
+        let rules = vec![make_rule("MakeFoo", tag)];
         let ctx = match ctx_with_rules(rules) {
             Some(c) => c,
             None => return,
@@ -7355,10 +7338,7 @@ mod tests {
     fn precompute_sources_drops_multi_producer() {
         use crate::fact::{FactTag, Multiplicity};
         let tag = FactTag::Proto(Multiplicity::Linear, "Bar", 0);
-        let rules = vec![
-            make_rule("MakeBarA", tag.clone()),
-            make_rule("MakeBarB", tag.clone()),
-        ];
+        let rules = vec![make_rule("MakeBarA", tag), make_rule("MakeBarB", tag)];
         let ctx = match ctx_with_rules(rules) {
             Some(c) => c,
             None => return,
@@ -7399,7 +7379,7 @@ mod tests {
         .unwrap();
 
         let a_tag = FactTag::Proto(Multiplicity::Linear, "A", 1);
-        let a_fact = Fact::new(a_tag.clone(), vec![msg_var("x", 0)]);
+        let a_fact = Fact::new(a_tag, vec![msg_var("x", 0)]);
         let init: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("Init"),
             vec![fresh_fact(msg_var("x", 0))],
@@ -7465,7 +7445,7 @@ mod tests {
         // Minimal protocol so there's at least one proto rule (so
         // `precompute_full_sources` actually runs).
         let a_tag = FactTag::Proto(Multiplicity::Linear, "A", 1);
-        let a_fact = Fact::new(a_tag.clone(), vec![msg_var("x", 0)]);
+        let a_fact = Fact::new(a_tag, vec![msg_var("x", 0)]);
         let init: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("Init"),
             vec![fresh_fact(msg_var("x", 0))],
@@ -7504,10 +7484,7 @@ mod tests {
         use crate::fact::{FactTag, Multiplicity};
         let tag_a = FactTag::Proto(Multiplicity::Linear, "A", 0);
         let tag_b = FactTag::Proto(Multiplicity::Linear, "B", 0);
-        let rules = vec![
-            make_rule("MakeA", tag_a.clone()),
-            make_rule("MakeB", tag_b.clone()),
-        ];
+        let rules = vec![make_rule("MakeA", tag_a), make_rule("MakeB", tag_b)];
         let ctx = match ctx_with_rules(rules) {
             Some(c) => c,
             None => return,
@@ -7556,12 +7533,12 @@ mod tests {
         let mut sys = System::empty();
         sys.invalidate_max_var_idx_cache();
         sys.eq_store_mut().subst = Subst::from_list(vec![
-            (t1.clone(), Term::Lit(Lit::Var(pub_a))),
-            (m19.clone(), Term::Lit(Lit::Var(pub_b))),
-            (sk28.clone(), Term::Lit(Lit::Var(t2.clone()))),
+            (t1, Term::Lit(Lit::Var(pub_a))),
+            (m19, Term::Lit(Lit::Var(pub_b))),
+            (sk28, Term::Lit(Lit::Var(t2))),
         ]);
 
-        let stable: BTreeSet<LVar> = [t1.clone(), t2.clone()].into_iter().collect();
+        let stable: BTreeSet<LVar> = [t1, t2].into_iter().collect();
         restrict_eq_store_to_stable_vars(&mut sys, &stable);
 
         // t1 binding kept; m19 + sk28 bindings dropped.
@@ -7604,11 +7581,11 @@ mod tests {
         let mut sys = System::empty();
         sys.invalidate_max_var_idx_cache();
         sys.eq_store_mut().subst = Subst::from_list(vec![
-            (t1.clone(), Term::Lit(Lit::Var(e10.clone()))),
-            (e10.clone(), Term::Lit(Lit::Var(blind_arg.clone()))),
+            (t1, Term::Lit(Lit::Var(e10))),
+            (e10, Term::Lit(Lit::Var(blind_arg))),
         ]);
 
-        let stable: BTreeSet<LVar> = [t1.clone()].into_iter().collect();
+        let stable: BTreeSet<LVar> = [t1].into_iter().collect();
         restrict_eq_store_to_stable_vars(&mut sys, &stable);
 
         // t.1's binding must be exactly e.10 (the var), NOT chain-chased

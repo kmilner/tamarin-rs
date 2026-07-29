@@ -205,7 +205,7 @@ fn show_funsym_ac_c(sym: &FunSym) -> String {
 /// AC/C operands being unordered).
 fn fold_frees_occ_term(t: &LNTerm, ctx: &Occurence, out: &mut Vec<(LVar, Occurence)>) {
     match t {
-        Term::Lit(Lit::Var(v)) => out.push((v.clone(), ctx.clone())),
+        Term::Lit(Lit::Var(v)) => out.push((*v, ctx.clone())),
         Term::Lit(_) => {}
         Term::App(FunSym::NoEq(o), args) => {
             // `FApp (NoEq o) as -> foldFreesOcc f ((unpack (fst o)):c) as`,
@@ -273,7 +273,7 @@ pub fn canonize_subst(subst: &LNSubstVFresh) -> LNSubstVFresh {
     // `LNTerm` var→term map `applyVTerm` consumes directly.
     let mut renaming: BTreeMap<LVar, LNTerm> = BTreeMap::new();
     for (i, v) in vrange.iter().enumerate() {
-        renaming.insert(v.clone(), var_term(LVar::new("x", v.sort, (i + 1) as u64)));
+        renaming.insert(*v, var_term(LVar::new("x", v.sort, (i + 1) as u64)));
     }
 
     // `mapRangeVFresh (applyVTerm renaming) subst`.  `apply_vterm_map` is the

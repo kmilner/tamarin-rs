@@ -206,13 +206,10 @@ fn rename_cond_formula(
 fn rename_term(subst: &BTreeMap<LVar, LVar>, t: &SapicTerm) -> SapicTerm {
     match t {
         VTerm::Lit(Lit::Var(sv)) => {
-            let new_lv = subst
-                .get(&sv.var)
-                .cloned()
-                .unwrap_or_else(|| sv.var.clone());
+            let new_lv = subst.get(&sv.var).copied().unwrap_or(sv.var);
             VTerm::Lit(Lit::Var(SapicLVar::new(new_lv, sv.stype.clone())))
         }
-        VTerm::Lit(Lit::Con(c)) => VTerm::Lit(Lit::Con(c.clone())),
+        VTerm::Lit(Lit::Con(c)) => VTerm::Lit(Lit::Con(*c)),
         VTerm::App(sym, args) => {
             let new_args: Vec<SapicTerm> = args.iter().map(|a| rename_term(subst, a)).collect();
             // Rebuild through the smart constructor so AC normal form is kept.
@@ -222,10 +219,7 @@ fn rename_term(subst: &BTreeMap<LVar, LVar>, t: &SapicTerm) -> SapicTerm {
 }
 
 fn rename_sv(subst: &BTreeMap<LVar, LVar>, sv: &SapicLVar) -> SapicLVar {
-    let new_lv = subst
-        .get(&sv.var)
-        .cloned()
-        .unwrap_or_else(|| sv.var.clone());
+    let new_lv = subst.get(&sv.var).copied().unwrap_or(sv.var);
     SapicLVar::new(new_lv, sv.stype.clone())
 }
 
@@ -380,8 +374,8 @@ fn mk_subst(
     for sv in bvars {
         let lv = &sv.var;
         let v_new = tamarin_term::lterm::fresh_lvar(fresh, lv.name, lv.sort);
-        fwd.insert(lv.clone(), v_new.clone());
-        inv_pairs.push((v_new, VTerm::Lit(Lit::Var(lv.clone()))));
+        fwd.insert(*lv, v_new);
+        inv_pairs.push((v_new, VTerm::Lit(Lit::Var(*lv))));
     }
     let inv = tamarin_term::subst::Subst::from_list(inv_pairs);
     (fwd, inv)
@@ -477,9 +471,9 @@ fn type_with(
                 }
             };
             let merged = sqcap(&stype, tt)?;
-            env.vars.insert(lvar.clone(), merged.clone());
+            env.vars.insert(*lvar, merged.clone());
             Ok((
-                VTerm::Lit(Lit::Var(SapicLVar::new(lvar.clone(), merged.clone()))),
+                VTerm::Lit(Lit::Var(SapicLVar::new(*lvar, merged.clone()))),
                 merged,
             ))
         }
@@ -624,7 +618,7 @@ fn insert_var(env: &mut TypingEnvironment, v: &SapicLVar) -> Result<(), String> 
     if env.vars.contains_key(&v.var) {
         return Err(format!("variable bound twice: {:?}", v.var));
     }
-    env.vars.insert(v.var.clone(), v.stype.clone());
+    env.vars.insert(v.var, v.stype.clone());
     Ok(())
 }
 
@@ -632,7 +626,7 @@ fn insert_var(env: &mut TypingEnvironment, v: &SapicLVar) -> Result<(), String> 
 /// correctly typed; if untyped, give it `defaultSapicType` (= `Nothing`).
 fn type_with_var(v: &SapicLVar) -> SapicLVar {
     match &v.stype {
-        None => SapicLVar::new(v.var.clone(), None),
+        None => SapicLVar::new(v.var, None),
         Some(_) => v.clone(),
     }
 }

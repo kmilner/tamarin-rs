@@ -154,35 +154,25 @@ where
                     //   `if vl < vr then elim vr l else elim vl r`
                     // Larger-idx becomes KEY, smaller-idx becomes value.
                     let (key, val) = if vl < vr {
-                        (vr.clone(), Term::Lit(Lit::Var(vl.clone())))
+                        (*vr, Term::Lit(Lit::Var(*vl)))
                     } else {
-                        (vl.clone(), Term::Lit(Lit::Var(vr.clone())))
+                        (*vl, Term::Lit(Lit::Var(*vr)))
                     };
                     eliminate(sort_of_const, acc, key, val)
                 }
                 Some(Ordering::Greater) => {
                     // vl > vr (vl is broader) → bind vl to vr.
-                    eliminate(
-                        sort_of_const,
-                        acc,
-                        vl.clone(),
-                        Term::Lit(Lit::Var(vr.clone())),
-                    )
+                    eliminate(sort_of_const, acc, *vl, Term::Lit(Lit::Var(*vr)))
                 }
                 Some(Ordering::Less) => {
                     // vl < vr (vr is broader) → bind vr to vl.
-                    eliminate(
-                        sort_of_const,
-                        acc,
-                        vr.clone(),
-                        Term::Lit(Lit::Var(vl.clone())),
-                    )
+                    eliminate(sort_of_const, acc, *vr, Term::Lit(Lit::Var(*vl)))
                 }
                 None => Err(UnifyError::NoUnifier),
             }
         }
-        (Term::Lit(Lit::Var(vl)), _) => eliminate(sort_of_const, acc, vl.clone(), r.clone()),
-        (_, Term::Lit(Lit::Var(vr))) => eliminate(sort_of_const, acc, vr.clone(), l.clone()),
+        (Term::Lit(Lit::Var(vl)), _) => eliminate(sort_of_const, acc, *vl, r.clone()),
+        (_, Term::Lit(Lit::Var(vr))) => eliminate(sort_of_const, acc, *vr, l.clone()),
         (Term::Lit(Lit::Con(cl)), Term::Lit(Lit::Con(cr))) => {
             if cl == cr {
                 Ok(())
@@ -349,9 +339,9 @@ where
     // Substitute `v ~> t` through the existing accumulator in place, mutating
     // each value rather than rebuilding the whole map with cloned keys.
     let mut single = BTreeMap::new();
-    single.insert(v.clone(), t.clone());
+    single.insert(v, t.clone());
     for ts in acc.values_mut() {
-        let cur = std::mem::replace(ts, Term::Lit(Lit::Var(v.clone())));
+        let cur = std::mem::replace(ts, Term::Lit(Lit::Var(v)));
         *ts = apply_vterm_map(&single, cur);
     }
     acc.insert(v, t);
@@ -859,8 +849,8 @@ mod haskell_invariants {
                 .expect("non-AC same-sort vars must unify");
         assert!(residuals.is_empty(), "no AC stuff, no residuals");
         // Larger-idx (e.10) is the key.
-        let e_10 = as_var(&rule_internal).clone();
-        let t_1 = as_var(&stable).clone();
+        let e_10 = *as_var(&rule_internal);
+        let t_1 = *as_var(&stable);
         assert!(
             subst.image_of(&e_10).is_some(),
             "Haskell convention: larger-idx (e.10) must be a KEY"
@@ -886,7 +876,7 @@ mod haskell_invariants {
         let (s2, _) =
             unify_lnterm_factored(vec![Equal::new(rule_internal.clone(), stable.clone())]).unwrap();
 
-        let e_10 = as_var(&rule_internal).clone();
+        let e_10 = *as_var(&rule_internal);
         // Both directions: e.10 (larger idx) is the key, regardless of
         // whether it was on lhs or rhs of the equation.
         assert!(s1.image_of(&e_10).is_some());
@@ -905,8 +895,8 @@ mod haskell_invariants {
         let beta = msg_var("b", 3);
         let (subst, _) =
             unify_lnterm_factored(vec![Equal::new(alpha.clone(), beta.clone())]).unwrap();
-        let a_3 = as_var(&alpha).clone();
-        let b_3 = as_var(&beta).clone();
+        let a_3 = *as_var(&alpha);
+        let b_3 = *as_var(&beta);
         // Ord: a.3 < b.3 (idx tie → sort tie → name 'a' < 'b').
         // unifyRaw: vl=a.3, vr=b.3, vl<vr, elim vr l → b.3 is key.
         assert!(
@@ -936,8 +926,8 @@ mod haskell_invariants {
 
         let (subst, _) = unify_lnterm_factored(vec![Equal::new(m.clone(), f.clone())]).unwrap();
 
-        let m_v = as_var(&m).clone();
-        let f_v = as_var(&f).clone();
+        let m_v = *as_var(&m);
+        let f_v = *as_var(&f);
         // The Msg var (broader sort) must be the KEY.
         assert!(
             subst.image_of(&m_v).is_some(),
@@ -957,8 +947,8 @@ mod haskell_invariants {
 
         let (subst, _) = unify_lnterm_factored(vec![Equal::new(m.clone(), p.clone())]).unwrap();
 
-        let m_v = as_var(&m).clone();
-        let p_v = as_var(&p).clone();
+        let m_v = *as_var(&m);
+        let p_v = *as_var(&p);
         assert!(subst.image_of(&m_v).is_some(), "Msg (broader) is key");
         assert!(subst.image_of(&p_v).is_none(), "Pub (narrower) is value");
     }
@@ -995,7 +985,7 @@ mod haskell_invariants {
         let (s1, _) = unify_lnterm_factored(vec![Equal::new(x.clone(), p.clone())]).unwrap();
         let (s2, _) = unify_lnterm_factored(vec![Equal::new(p.clone(), x.clone())]).unwrap();
 
-        let x_v = as_var(&x).clone();
+        let x_v = *as_var(&x);
         assert_eq!(s1.image_of(&x_v), Some(&p));
         assert_eq!(s2.image_of(&x_v), Some(&p));
         assert_eq!(s1, s2);
@@ -1098,8 +1088,8 @@ mod haskell_invariants {
         ])
         .unwrap();
 
-        let t_1_v = as_var(&t_1).clone();
-        let m_19_v = as_var(&m_19).clone();
+        let t_1_v = *as_var(&t_1);
+        let m_19_v = *as_var(&m_19);
         assert_eq!(
             subst.image_of(&m_19_v),
             Some(&blind),
@@ -1159,8 +1149,8 @@ mod haskell_invariants {
         let (new_, _) =
             unify_lnterm_factored(vec![Equal::new(small.clone(), large.clone())]).unwrap();
 
-        let small_v = as_var(&small).clone();
-        let large_v = as_var(&large).clone();
+        let small_v = *as_var(&small);
+        let large_v = *as_var(&large);
 
         // Haskell-faithful: larger-idx is key in BOTH paths.
         assert!(

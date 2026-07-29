@@ -111,7 +111,7 @@ mod tests {
     fn lookup_finds_match() {
         let f: LNFormula = ProtoFormula::ltrue();
         let p = Predicate::new("foo", f, vec![]);
-        let probe: Fact<LVar> = Fact::new(p.fact.tag.clone(), vec![]);
+        let probe: Fact<LVar> = Fact::new(p.fact.tag, vec![]);
         let preds = vec![p];
         assert!(lookup_predicate(&probe, &preds).is_some());
     }

@@ -108,7 +108,7 @@ impl MaudeSig {
 
         let irreducible: FunSig = all_funs
             .difference(&reducible_without_mult)
-            .cloned()
+            .copied()
             .collect();
 
         let mut reducible: FunSig = BTreeSet::new();
@@ -121,8 +121,8 @@ impl MaudeSig {
         // Hash-set mirrors for O(1) membership in the proof-search hot path.
         // Kept in lock-step with the BTreeSets above (same elements), so every
         // `.contains()` answer is identical — only the cost differs.
-        self.irreducible_fun_syms_fast = irreducible.iter().cloned().collect();
-        self.reducible_fun_syms_fast = reducible.iter().cloned().collect();
+        self.irreducible_fun_syms_fast = irreducible.iter().copied().collect();
+        self.reducible_fun_syms_fast = reducible.iter().copied().collect();
         self.fun_syms = all_funs;
         self.irreducible_fun_syms = irreducible;
         self.reducible_fun_syms = reducible;
@@ -232,7 +232,7 @@ impl MaudeSig {
             macro_names: self
                 .macro_names
                 .union(&other.macro_names)
-                .cloned()
+                .copied()
                 .collect(),
             eq_convergent: false,
             fun_syms: BTreeSet::new(),
@@ -271,10 +271,10 @@ fn union_except_pair_sym(a: &BTreeSet<NoEqSym>, b: &BTreeSet<NoEqSym>) -> BTreeS
         if st2.contains(to_add) {
             let mut out: BTreeSet<NoEqSym> = st1.clone();
             out.remove(to_remove);
-            out.extend(st2.iter().cloned());
+            out.extend(st2.iter().copied());
             out
         } else {
-            st1.union(st2).cloned().collect()
+            st1.union(st2).copied().collect()
         }
     }
     // removeIfNecessary st1 st2 x y

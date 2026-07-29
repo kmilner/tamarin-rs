@@ -239,7 +239,7 @@ pub fn collect_fresh_vars_not_below_reducible(
             }
         }
         Term::Lit(Lit::Var(v)) if v.sort == LSort::Fresh => {
-            out.insert(v.clone());
+            out.insert(*v);
         }
         _ => {}
     }

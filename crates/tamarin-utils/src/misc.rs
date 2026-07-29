@@ -397,7 +397,7 @@ mod tests {
         // There are 2^(n-1) results (the first list is never empty); here just
         // check that each pair covers the input.
         for (a, b) in &tp {
-            let mut combined: Vec<i32> = a.iter().chain(b.iter()).cloned().collect();
+            let mut combined: Vec<i32> = a.iter().chain(b.iter()).copied().collect();
             combined.sort();
             assert_eq!(combined, vec![1, 2, 3]);
         }

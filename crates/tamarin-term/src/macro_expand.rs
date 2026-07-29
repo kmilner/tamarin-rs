@@ -143,7 +143,7 @@ mod tests {
         // `pair(b, a)`.
         let x = crate::lterm::LVar::new("x", crate::lterm::LSort::Msg, 0);
         let y = crate::lterm::LVar::new("y", crate::lterm::LSort::Msg, 0);
-        let body: LNTerm = pair(var_term(y.clone()), var_term(x.clone()));
+        let body: LNTerm = pair(var_term(y), var_term(x));
         let m = Macro::new(b"swap".to_vec(), vec![x, y], body);
 
         let invoke: LNTerm = crate::term::f_app_no_eq(

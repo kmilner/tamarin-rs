@@ -307,7 +307,7 @@ fn compute_new_vars(prems: &[LNFact], concs: &[LNFact]) -> Vec<tamarin_term::lte
     fn collect(t: &tamarin_term::lterm::LNTerm, out: &mut BTreeSet<LVar>) {
         match t {
             Term::Lit(Lit::Var(v)) => {
-                out.insert(v.clone());
+                out.insert(*v);
             }
             Term::Lit(_) => {}
             Term::App(_, args) => {

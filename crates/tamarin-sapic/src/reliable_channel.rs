@@ -80,11 +80,11 @@ pub fn reliable_channel_trans_act(
     tx: &BTreeSet<LVar>,
 ) -> Result<Option<(Vec<RuleBody>, BTreeSet<LVar>)>, String> {
     // `def_state = State LState p tx`; `def_state1 tx' = State LState (p++[1]) tx'`.
-    let def_state = || TransFact::State(StateKind::LState, p.clone(), tx.iter().cloned().collect());
+    let def_state = || TransFact::State(StateKind::LState, p.clone(), tx.iter().copied().collect());
     let mut p1 = p.clone();
     p1.push(1);
     let def_state1 = |tx2: &BTreeSet<LVar>| {
-        TransFact::State(StateKind::LState, p1.clone(), tx2.iter().cloned().collect())
+        TransFact::State(StateKind::LState, p1.clone(), tx2.iter().copied().collect())
     };
 
     match ac {

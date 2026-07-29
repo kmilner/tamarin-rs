@@ -171,7 +171,7 @@ fn sorted_unique(mut vs: Vec<LVar>) -> Vec<LVar> {
 /// `factToFact` (Facts.hs:253-271).
 pub fn fact_to_fact(f: &TransFact) -> LNFact {
     match f {
-        TransFact::Fr(v) => fresh_fact(VTerm::Lit(Lit::Var(v.clone()))),
+        TransFact::Fr(v) => fresh_fact(VTerm::Lit(Lit::Var(*v))),
         TransFact::In(t) => in_fact(t.clone()),
         TransFact::Out(t) => out_fact(t.clone()),
         TransFact::State(kind, p, vars) => {
@@ -261,7 +261,7 @@ pub fn action_to_fact(a: &TransAction) -> LNFact {
         TransAction::IsIn(t, v) => proto_fact(
             Multiplicity::Linear,
             "IsIn",
-            vec![t.clone(), VTerm::Lit(Lit::Var(v.clone()))],
+            vec![t.clone(), VTerm::Lit(Lit::Var(*v))],
         ),
         // `actionToFact (IsNotSet t) = protoFact Linear "IsNotSet" [t]` (Facts.hs:213-234, see line 221).
         TransAction::IsNotSet(t) => proto_fact(Multiplicity::Linear, "IsNotSet", vec![t.clone()]),
@@ -278,14 +278,14 @@ pub fn action_to_fact(a: &TransAction) -> LNFact {
         TransAction::LockNamed(t, v) => proto_fact(
             Multiplicity::Linear,
             &lock_fact_name(v),
-            vec![lock_pub_term(v), VTerm::Lit(Lit::Var(v.clone())), t.clone()],
+            vec![lock_pub_term(v), VTerm::Lit(Lit::Var(*v)), t.clone()],
         ),
         // `actionToFact (LockUnnamed t v) =
         //    protoFact Linear "Lock" [lockPubTerm v, varTerm v, t]` (Facts.hs:213-234, see line 229).
         TransAction::LockUnnamed(t, v) => proto_fact(
             Multiplicity::Linear,
             "Lock",
-            vec![lock_pub_term(v), VTerm::Lit(Lit::Var(v.clone())), t.clone()],
+            vec![lock_pub_term(v), VTerm::Lit(Lit::Var(*v)), t.clone()],
         ),
         // `actionToFact (UnlockNamed t v) =
         //    protoFact Linear (unlockFactName v) [lockPubTerm v, varTerm v, t]`
@@ -293,14 +293,14 @@ pub fn action_to_fact(a: &TransAction) -> LNFact {
         TransAction::UnlockNamed(t, v) => proto_fact(
             Multiplicity::Linear,
             &unlock_fact_name(v),
-            vec![lock_pub_term(v), VTerm::Lit(Lit::Var(v.clone())), t.clone()],
+            vec![lock_pub_term(v), VTerm::Lit(Lit::Var(*v)), t.clone()],
         ),
         // `actionToFact (UnlockUnnamed t v) =
         //    protoFact Linear "Unlock" [lockPubTerm v, varTerm v, t]` (Facts.hs:213-234, see line 231).
         TransAction::UnlockUnnamed(t, v) => proto_fact(
             Multiplicity::Linear,
             "Unlock",
-            vec![lock_pub_term(v), VTerm::Lit(Lit::Var(v.clone())), t.clone()],
+            vec![lock_pub_term(v), VTerm::Lit(Lit::Var(*v)), t.clone()],
         ),
         // `actionToFact (ChannelIn t) = protoFact Linear "ChannelIn" [t]`
         // (Facts.hs:213-234, see line 224).
@@ -387,7 +387,7 @@ pub fn add_var_to_state(v: &LVar, f: &TransFact) -> TransFact {
         TransFact::State(kind, pos, vs) => {
             let mut nvs = vs.clone();
             if !nvs.contains(v) {
-                nvs.push(v.clone());
+                nvs.push(*v);
             }
             TransFact::State(*kind, pos.clone(), nvs)
         }
@@ -421,7 +421,7 @@ fn map_fact_name(f: &LNFact, prefix: &str) -> LNFact {
             tamarin_term::intern::intern_str(&format!("{prefix}{s}")),
             *i,
         ),
-        other => other.clone(),
+        other => *other,
     };
     tamarin_theory::fact::Fact::new(tag, f.terms.to_vec()).with_annotations(f.annotations.clone())
 }
@@ -637,7 +637,7 @@ pub fn compute_new_vars(prems: &[LNFact], concs: &[LNFact], acts: &[LNFact]) -> 
     fn collect(t: &LNTerm, out: &mut BTreeSet<LVar>) {
         match t {
             VTerm::Lit(Lit::Var(v)) => {
-                out.insert(v.clone());
+                out.insert(*v);
             }
             VTerm::Lit(_) => {}
             VTerm::App(_, args) => {
