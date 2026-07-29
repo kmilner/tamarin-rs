@@ -427,7 +427,6 @@ pub fn exec_proof_method(
                 };
             }
             simp_noop_stat(false);
-
             // HS-faithful filter: cases whose eq_store is false were
             // mzero'd by `contradictoryIf` during simplify; they don't
             // show up in HS's surviving Disj.  (Other contradiction
@@ -729,11 +728,6 @@ pub fn exec_proof_method(
             // execs Induction while the batch search does not).
             // Route through `simplify_system_with_fanout` exactly like the
             // `Simplify` and `SolveGoal` arms.
-            let cleanup = |s: &mut System| {
-                crate::constraint::solver::rename_precise::rename_precise_system(s);
-                s.invalidate_max_var_idx_cache();
-                s.eq_store_mut().subst = tamarin_term::subst::Subst::from_list(Vec::new());
-            };
             // HS branch order: `disjunctionOfList [("empty_trace", base),
             // ("non_empty_trace", step)]` — base first, then step; each
             // branch's simplify sub-branches keep DisjT order (the same
@@ -750,7 +744,7 @@ pub fn exec_proof_method(
                 case_sys.formulas_mut().push(std::sync::Arc::new(fm_case));
                 let sub_systems: Vec<System> =
                     crate::constraint::solver::simplify::simplify_system_with_fanout(ctx, case_sys);
-                for mut s in sub_systems {
+                for s in sub_systems {
                     // mzero'd branches (eq-store false) don't survive HS's
                     // Disj — same filter as the Simplify/SolveGoal arms.
                     if s.eq_store.is_false() {
@@ -761,8 +755,7 @@ pub fn exec_proof_method(
                     // subst.  Without it the IH disjunction's free vars
                     // keep their high `.N` indices (e.g. `last(#z.7)`)
                     // instead of the canonical idx-0 form (`last(#z)`).
-                    cleanup(&mut s);
-                    named.push((name.to_string(), s));
+                    named.push((name.to_string(), s.cleanup()));
                 }
             }
             // HS `process` tail: `removeRedundantCases ctxt [] snd`
