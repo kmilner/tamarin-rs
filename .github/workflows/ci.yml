@@ -23,3 +23,33 @@ jobs:
           submodules: true
       - run: rustup update stable --no-self-update && rustup default stable
       - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  rs-parity:
+    runs-on: ubuntu-latest
+    steps:
+      # Submodule: corpus theories to prove + intruder-variant data the build
+      # include_str!'s.
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - run: rustup update stable --no-self-update && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      # Pinned Maude — must match the '# maude:' header in
+      # scripts/ci_ref_fast.tsv (rs_ref_check.sh enforces this; unifier
+      # enumeration order can change between Maude versions).  The release zip
+      # ships prelude.maude next to the binary, so the dir stays together.
+      - name: Install Maude 3.5.1
+        run: |
+          curl -sSL -o /tmp/maude.zip https://github.com/maude-lang/Maude/releases/download/Maude3.5.1/Maude-3.5.1-linux-x86_64.zip
+          sudo mkdir -p /opt/maude
+          sudo unzip -q /tmp/maude.zip -d /opt/maude
+          sudo chmod +x /opt/maude/maude
+          echo /opt/maude >> "$GITHUB_PATH"
+      - run: cargo build --release
+      # Prove-output parity: this branch's binary vs the committed reference
+      # of main's outputs (scripts/ci_ref_fast.tsv over
+      # scripts/parity_corpus_fast.txt).  On DIFF: reproduce locally with
+      # scripts/rs_vs_rs_diff.sh.  After a DELIBERATE output change or a
+      # submodule bump, regenerate the reference on a trusted build of main:
+      #   scripts/rs_ref_check.sh generate
+      - run: scripts/rs_ref_check.sh check
