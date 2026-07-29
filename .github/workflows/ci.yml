@@ -9,7 +9,7 @@ jobs:
   fmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: rustup update stable --no-self-update && rustup default stable
       - run: cargo fmt --all --check
 
@@ -18,7 +18,7 @@ jobs:
     steps:
       # The submodule is needed to build: tamarin-theory include_str!'s the
       # intruder-variant data files from tamarin-prover/data/.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: true
       - run: rustup update stable --no-self-update && rustup default stable
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Submodule: intruder-variant data the build include_str!'s.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: true
       - run: rustup update stable --no-self-update && rustup default stable
@@ -53,7 +53,7 @@ jobs:
     steps:
       # Submodule: corpus theories to prove + intruder-variant data the build
       # include_str!'s.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: true
       - run: rustup update stable --no-self-update && rustup default stable
