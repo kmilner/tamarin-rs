@@ -1,0 +1,230 @@
+/*
+  Regression theory for a Rust-port bug in `structural_match`
+  (crates/tamarin-theory/src/constraint/solver/simplify.rs):
+  `insert_implied_formulas_pass` matches a `[reuse]` lemma's antecedent
+  against concrete action facts to derive its consequence. A local
+  `term_lsort` helper classified every function-application term as
+  sort `Msg`, including natural-number literals like `tone()` (the
+  internal `App` form of `%1`), so a Nat-sorted pattern variable
+  (here `%idx`) failed to match a concrete `tone()` argument even
+  though it should. That silently dropped the reuse lemma's implied
+  `HonestSignatureKey` fact whenever the triggering action came from
+  the intruder directly forging a signature rather than from an
+  already-posted board entry.
+
+  Trimmed from a larger election-trustee-board protocol theory down to
+  the minimum needed to reproduce the mechanism. Both tamarin-prover
+  and a fixed tamarin-rs prove `CanForgeAndPost` via an 8-step proof
+  that solves `HonestSignatureKey` as an explicit intermediate step;
+  the pre-fix Rust port instead finds a 7-step proof that skips it
+  entirely (the goal was never created), which is byte-different
+  even though the verdict is unchanged.
+*/
+
+theory election_key_generation_nat_sort_regression
+
+begin
+
+builtins:
+  asymmetric-encryption, natural-numbers, multiset
+
+functions:
+  sign/3, e1_sig/1 [private], e3_sig/1 [private], true/0, false/0
+
+equations:
+  e1_sig(sign(x, y, z)) = x,
+  e3_sig(sign(x, y, z)) = z
+
+/*
+  This restriction states that an honestly generated key, an honestly
+  generated signature, and the correct message must verify as true.
+ */
+restriction SignatureCorrectness:
+  "
+    All sig m pk #t1 #t2.
+            HonestSignatureKey(pk)@t1
+          &
+            SignatureVerified(sig, m, pk, m, pk, false)@t2
+      ==>
+          F
+  "
+
+/*
+  This restriction states that if a signature verification succeeds
+  against an honest public key, then the signature must have been
+  honestly produced.
+ */
+restriction SignatureUnforgeability:
+  "
+    All sig sigm sigpk verm verpk #t1 #t2.
+            HonestSignatureKey(verpk)@t1
+          &
+            SignatureVerified(sig, sigm, sigpk, verm, verpk, true)@t2
+      ==>
+            sigm = verm
+          &
+            sigpk = verpk
+  "
+
+/*
+  This restriction states that the signature verification procedure
+  is deterministic.
+ */
+restriction SignatureDeterminism:
+  "
+    All sig sigm sigpk verm verpk res1 res2 #t1 #t2.
+            SignatureVerified(sig, sigm, sigpk, verm, verpk, res1)@t1
+          &
+            SignatureVerified(sig, sigm, sigpk, verm, verpk, res2)@t2
+      ==>
+          res1 = res2
+  "
+
+/*
+  Restriction that a rule specified by a single value can only be
+  executed once in the entire trace.
+ */
+restriction Unique:
+  "All x #i #j. Unique(x)@i & Unique(x)@j ==> #i = #j"
+
+/*
+  This rule waits for a message to be submitted by a trustee,
+  checks its signature, and posts it to the trustee board.
+ */
+rule TrusteeBoard_TAS_ReceiveTrusteeMessage [role="TAS"]:
+    [ TAS_State_ReceiveTrusteeMessage(%idx),
+      Trustee_Message_Submit(trustee, msg, sig),
+      !Trustee_Public_Keys(trustee, pk_sign, pk_encrypt_unused) ]
+  --[ Unique(<'BBEntry', %idx>),
+      TAS_BBEntry_Trace(trustee, fst(msg), msg, sig, %idx),
+      SignatureVerified(sig, e1_sig(sig), pk(e3_sig(sig)),
+                        msg, pk_sign, true) /* valid signature */ ]->
+    [ !TAS_BBEntry(trustee, msg, sig, %idx),
+      TAS_State_ReceiveTrusteeMessage(%idx %+ %1) ]
+
+/*
+  This rule allows the adversary to (attempt to) submit a message
+  to the trustee board.
+ */
+rule TrusteeBoard_Inject_Arbitrary_Trustee_Message:
+    [ In(<trustee, msg, sig>),
+      !Trustee_Public_Keys(trustee, pk_sign, pk_encrypt_unused) ]
+  --[ InjectTrusteeMsg(trustee, msg, sig),
+      SignatureVerified(sig, e1_sig(sig), pk(e3_sig(sig)),
+                        msg, pk_sign, true) /* valid signature */ ]->
+    [ Trustee_Message_Submit(trustee, msg, sig) ]
+
+/*
+  This rule allows the adversary to see any trustee board message
+  that has been posted.
+ */
+rule TrusteeBoard_Reveal_BB_Message:
+    [ !TAS_BBEntry(t, m, s, %i) ]
+  --[ RevealBBMsg(t, m, s, %i) ]->
+    [ Out(<m, s>) /* t and %i are already known to the adversary */ ]
+
+/*
+  This rule updates a trustee's local copy of the trustee board. It only
+  fires if the next message it needs from the TAS is a legal addition to
+  the trustee board.
+ */
+rule TrusteeBoard_Trustee_Update [role="Trustee"]:
+    [ Trustee_State_ReceiveBBMessage(trustee, %idx),
+      !TAS_BBEntry(sender, msg, sig, %idx) ]
+  --[ Trustee_BBEntry_Trace(trustee, sender, fst(msg), msg, sig, %idx),
+      OUT_TRUSTEE_BBENTRY(trustee, sender, msg, sig, %idx) ]->
+    [ !Trustee_BBEntry(trustee, sender, msg, sig, %idx),
+      Trustee_State_ReceiveBBMessage(trustee, %idx %+ %1) ]
+
+/*
+  This rule enters an error state and stops updating a trustee's local
+  copy of the trustee board if an invalid message is detected on the
+  global trustee board.
+ */
+rule TrusteeBoard_Trustee_Error [role="Trustee"]:
+    [ Trustee_State_ReceiveBBMessage(trustee, %idx),
+      !TAS_BBEntry(sender, msg, sig, %idx) ]
+  --[ Trustee_BBError_Trace(trustee, sender, fst(msg), msg, sig, %idx),
+      Trustee_Trace_Error(trustee, <'invalid trustee board message', sender, msg>) ]->
+    [ !Terminal_Error(trustee) /* no further trustee execution */ ]
+
+/*
+  The initial configuration of the trustees and the trustee
+  administration server. Abstracted to a single trustee for this
+  regression theory (the original has three; one is enough to
+  reproduce the bug).
+ */
+rule Mock_TrusteeElectionSetup [role="Mock"]:
+    [ Fr(~sk_sign_tas),
+      Fr(~sk_sign_trustee1),
+      Fr(~sk_encrypt_trustee1) ]
+  --[ Unique('Mock_TrusteeElectionSetup'),
+      HonestSignatureKey(pk(~sk_sign_tas)),
+      TAS_Trustee_Trace('Trustee1', pk(~sk_sign_trustee1), pk(~sk_encrypt_trustee1)),
+      HonestSignatureKey(pk(~sk_sign_trustee1)) ]->
+    [ !TAS_Secret_Signing_Key(~sk_sign_tas),
+      !TAS_Public_Signing_Key(pk(~sk_sign_tas)),
+      !Trustee('Trustee1'),
+      !Trustee_Secret_Keys('Trustee1', ~sk_sign_trustee1, ~sk_encrypt_trustee1),
+      !Trustee_Public_Keys('Trustee1', pk(~sk_sign_trustee1), pk(~sk_encrypt_trustee1)),
+      TAS_State_BeginTrusteeThresholdKeygen(),
+      Out(pk(~sk_sign_trustee1)),
+      Out(pk(~sk_encrypt_trustee1)),
+      Out(pk(~sk_sign_tas)) ]
+
+/*
+  This rule initializes the counter for trustee board messages.
+ */
+rule ElectionKeyGeneration_TAS_Init [role="TAS"]:
+    [ TAS_State_BeginTrusteeThresholdKeygen(),
+      !TAS_Secret_Signing_Key(sk_sign) ]
+  --[ TAS_ElectionKeyGeneration_Init_Trace() ]->
+    [ Trustee_State_ReceiveBBMessage('Trustee1', %1),
+      TAS_State_ReceiveTrusteeMessage(%1) ]
+
+/*
+  This rule reveals a trustee's private keys to the adversary.
+ */
+rule ElectionKeyGeneration_Reveal_Trustee_Keys:
+    [ !Trustee_Secret_Keys(trustee, sk_sign, sk_encrypt) ]
+  --[ Unique(<'RevealTrusteeKeys', trustee>),
+      RevealTrusteeKeys(trustee) ]->
+    [ Out(<trustee, sk_sign, sk_encrypt>) ]
+
+/*
+  This lemma states that every entry on the TAS trustee board, other
+  than the root message, is from a registered trustee and has a
+  valid signature.  Its consequence (`HonestSignatureKey`) is what the
+  bug silently failed to derive.
+ */
+lemma Safety_ElectionKeyGeneration_TAS_BB_Message_Validity [reuse]:
+  "
+    All tr mt msg sig %idx #i.
+            TAS_BBEntry_Trace(tr, mt, msg, sig, %idx)@i
+      ==>
+          (Ex pk_sign pk_encrypt param sk #j #k.
+              TAS_Trustee_Trace(tr, pk_sign, pk_encrypt)@j
+            &
+              HonestSignatureKey(pk_sign)@k
+            &
+              pk(sk) = pk_sign
+            &
+              sig = sign(msg, param, sk)
+          )
+  "
+
+/*
+  Exists-trace witness requiring the adversary to construct a signed
+  message directly (`case c_sign`) using a trustee's revealed signing
+  key, post it to the TAS trustee board, and have the trustee detect it
+  as invalid (since it was never legitimately sent). Reaching `SOLVED`
+  needs the `HonestSignatureKey` fact the reuse lemma above must supply
+  in order to justify the trustee board entry's signature at all.
+ */
+lemma CanForgeAndPost:
+  exists-trace
+  "
+    Ex t e #i. Trustee_Trace_Error(t, e)@i
+  "
+
+end
