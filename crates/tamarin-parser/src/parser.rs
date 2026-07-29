@@ -32,175 +32,25 @@ use crate::ast::*;
 use crate::lexer::{is_ident_char, Lexer, Pos};
 use crate::proof_tree::parse_proof_tree;
 
-// =============================================================================
-// Errors
-// =============================================================================
-
-/// A single parsec-style error message.
-///
-/// Direct port of parsec's `data Message` (`Text.Parsec.Error`, the
-/// `parsec-3.1.16.1` bundled with the GHC-9.6.7 that builds the HS oracle).
-/// The four constructors and their ordering are load-bearing: parsec's
-/// `instance Ord Message` compares *only* the constructor rank (`fromEnum`,
-/// `SysUnExpect`=0 … `Message`=3), and `errorMessages = sort msgs` stable-sorts
-/// by that rank before rendering, so the groups always appear in this order.
-#[derive(Debug, Clone, Ord, Eq)]
-pub enum Message {
-    /// Library-generated "unexpected" (parsec `SysUnExpect`): the token found
-    /// where the grammar could not continue.  Rendered `unexpected <tok>`, or
-    /// `unexpected end of input` when the string is empty.
-    SysUnExpect(String),
-    /// User "unexpected" (parsec `UnExpect`, via the `unexpected` combinator).
-    UnExpect(String),
-    /// "expecting" label (parsec `Expect`, from `<?>` and the token parsers).
-    Expect(String),
-    /// Raw message (parsec `Message`, e.g. via `fail`).  Rendered verbatim.
-    Message(String),
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
 }
 
-impl Message {
-    /// parsec `fromEnum :: Message -> Int` (`Text.Parsec.Error`).
-    fn rank(&self) -> u8 {
-        match self {
-            Message::SysUnExpect(_) => 0,
-            Message::UnExpect(_) => 1,
-            Message::Expect(_) => 2,
-            Message::Message(_) => 3,
-        }
-    }
-    /// parsec `messageString :: Message -> String`.
-    pub fn string(&self) -> &str {
-        match self {
-            Message::SysUnExpect(s)
-            | Message::UnExpect(s)
-            | Message::Expect(s)
-            | Message::Message(s) => s,
-        }
-    }
+pub struct ParseErrorContent {
+    pub expected: Vec<String>,
+    pub found: Option<(String, Span)>,
 }
 
-impl PartialEq for Message {
-    fn eq(&self, other: &Self) -> bool {
-        self.rank() == other.rank() && self.string() == other.string()
-    }
+pub enum ParseError {
+    ExpectedKeyword(ParseErrorContent),
+    ExpectedTheoryItem(ParseErrorContent),
+    ExpectedPunctuation(ParseErrorContent),
+    ExpectedStringLiteral(ParseErrorContent),
+    ExpectedIdentifier(ParseErrorContent),
+    ExpectedNaturalNumber(ParseErrorContent),
+    UnknownPreprocessorDirective(ParseErrorContent),
 }
-
-impl PartialOrd for Message {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.rank().cmp(&other.rank()))
-    }
-}
-
-/// A parse error, modelled on parsec's `ParseError` (`Text.Parsec.Error`): a
-/// source position plus a list of [`Message`]s.  Rendering (the [`Display`]
-/// impl) is a verbatim port of parsec's `instance Show ParseError` +
-/// `showErrorMessages` + `instance Show SourcePos` (`Text.Parsec.Pos`), so the
-/// user-facing frame is byte-identical to HS's `show err`:
-///
-/// ```text
-/// "path/file.spthy" (line 2, column 5):
-/// unexpected " "
-/// expecting letter or "{*"
-/// ```
-///
-/// The line/col/offset are retained as public fields for callers that inspect
-/// the position; `source` is the parsec `SourcePos` "name" (the file path in
-/// the header), injected by each surface via [`ParseError::with_source`] —
-/// mirroring parsec threading `parseString`'s `inFile` into the `SourcePos`.
-#[derive(Debug, Clone)]
-pub struct ParseError {
-    pub line: u32,
-    pub col: u32,
-    pub offset: usize,
-    /// parsec `SourcePos` name (file path printed in the header).  Empty until
-    /// a surface injects it, in which case the header omits the quoted name
-    /// exactly as parsec's null-name `show SourcePos` branch does.
-    pub source: String,
-    /// Unsorted parsec-style messages; [`Display`] sorts + dedups them exactly
-    /// as parsec's `errorMessages` + `showErrorMessages` do.
-    pub messages: Vec<Message>,
-}
-
-impl ParseError {
-    /// Attach the source-file name parsec prints in the header.  Each surface
-    /// injects the path it knows (batch: the CLI arg; server eager-load: the
-    /// on-disk path; web upload: the uploaded filename) — the same value HS
-    /// passes as `inFile` to `parseString`.
-    pub fn with_source(mut self, name: impl Into<String>) -> Self {
-        self.source = name.into();
-        self
-    }
-
-    /// Port of parsec's `showErrorMessages` (`Text.Parsec.Error`) instantiated
-    /// with the exact argument strings from `instance Show ParseError`:
-    /// `showErrorMessages "or" "unknown parse error" "expecting" "unexpected"
-    /// "end of input"`.  Produces the message body (each line already prefixed
-    /// with `\n`, matching `concat $ map ("\n"++) …`).
-    fn show_error_messages(&self) -> String {
-        // errorMessages = sort msgs  (stable sort by constructor rank).
-        let mut msgs: Vec<&Message> = self.messages.iter().collect();
-        msgs.sort_by_key(|m| m.rank());
-        if msgs.is_empty() {
-            // parsec: `| null msgs = msgUnknown` (returned with NO leading '\n').
-            return "unknown parse error".to_string();
-        }
-        // span by rank into (sysUnExpect, unExpect, expect, messages).
-        let strings = |rank: u8| -> Vec<&str> {
-            msgs.iter()
-                .filter(|m| m.rank() == rank)
-                .map(|m| m.string())
-                .collect()
-        };
-        let sys = strings(0);
-        let un = strings(1);
-        let exp = strings(2);
-        let raw = strings(3);
-
-        let show_expect = show_many("expecting", &exp);
-        let show_unexpect = show_many("unexpected", &un);
-        // showSysUnExpect: suppressed if there are UnExpect messages or no
-        // SysUnExpect; else uses only the FIRST sysUnExpect (empty → EOF).
-        let show_sys = if !un.is_empty() || sys.is_empty() {
-            String::new()
-        } else if sys[0].is_empty() {
-            "unexpected end of input".to_string()
-        } else {
-            format!("unexpected {}", sys[0])
-        };
-        let show_messages = show_many("", &raw);
-
-        // concat $ map ("\n"++) $ clean [showSys, showUn, showExp, showMsg]
-        let parts = clean_dedup(&[
-            show_sys.as_str(),
-            show_unexpect.as_str(),
-            show_expect.as_str(),
-            show_messages.as_str(),
-        ]);
-        parts.iter().map(|p| format!("\n{p}")).collect()
-    }
-}
-
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Port of parsec `instance Show ParseError` (`show pos ++ ":" ++ …`)
-        // and `instance Show SourcePos` (`Text.Parsec.Pos`): the quoted name is
-        // omitted when empty, and there is a single space before "(line …".
-        let line_col = format!("(line {}, column {})", self.line, self.col);
-        if self.source.is_empty() {
-            write!(f, "{}:{}", line_col, self.show_error_messages())
-        } else {
-            write!(
-                f,
-                "\"{}\" {}:{}",
-                self.source,
-                line_col,
-                self.show_error_messages()
-            )
-        }
-    }
-}
-
-impl std::error::Error for ParseError {}
 
 /// parsec `clean = nub . filter (not . null)` — drop empties, dedup preserving
 /// first occurrence.
@@ -521,101 +371,60 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // -------- Error helpers --------
-
-    /// A raw-message parse error at the current position (parsec `Message`).
-    /// Renders as `"<path>" (line, column):\n<msg>` — the correct parsec frame
-    /// with a single message line, even though the message text itself is not a
-    /// `unexpected …`/`expecting …` pair.  Used by the many hand-coded error
-    /// sites that do not (yet) track a parsec-style expected set.
-    fn err(&self, msg: impl Into<String>) -> ParseError {
+    fn create_error_content(&self, expected: Vec<String>) -> ParseErrorContent {
         let pos = self.lx.pos();
-        ParseError {
-            line: pos.line,
-            col: pos.col,
-            offset: pos.offset,
-            source: String::new(),
-            messages: vec![Message::Message(msg.into())],
+        let found = self.lx.peek_until_ws();
+        ParseErrorContent {
+            expected: expected,
+            found: found.map(|s| {
+                let start = pos.offset - 1;
+                (
+                    s.to_string(),
+                    Span {
+                        start,
+                        end: start + s.len(),
+                    },
+                )
+            }),
         }
     }
 
-    /// A parsec-shaped `unexpected TOKEN / expecting …` error at the current
-    /// (post-whitespace) position — the shape a failing `symbol`/token parser
-    /// produces.  `expects` are the raw `<?>` label strings, already carrying
-    /// any quoting (e.g. `"\"theory\""`).  The `SysUnExpect` token is `show [c]`
-    /// of the next char, or empty (→ `end of input`) at EOF, exactly as
-    /// parsec's Char-stream `SysUnExpect` is filled.  Whitespace is skipped
-    /// first so the reported position/token is the token start, matching
-    /// parsec (where `lexeme` has already consumed leading whitespace).
-    fn err_expect(&mut self, expects: &[&str]) -> ParseError {
-        self.skip_ws();
-        let pos = self.lx.pos();
-        let unexpected = match self.lx.peek() {
-            Some(c) => show_char_token(c),
-            None => String::new(),
+    fn expected_keyword_err(&self, kws: Vec<String>) -> ParseError {
+        let content = self.create_error_content(kws);
+        ParseError::ExpectedKeyword(content)
+    }
+
+    fn expected_punctuation_err(&self, puncs: Vec<String>) -> ParseError {
+        let content = self.create_error_content(puncs);
+        ParseError::ExpectedPunctuation(content)
+    }
+
+    fn unknown_preproc_err(&self, dirs: Vec<String>, found: (String, Span)) -> ParseError {
+        let content = ParseErrorContent {
+            expected: dirs,
+            found: Some(found),
         };
-        let mut messages = Vec::with_capacity(expects.len() + 1);
-        messages.push(Message::SysUnExpect(unexpected));
-        for e in expects {
-            messages.push(Message::Expect((*e).to_string()));
-        }
-        ParseError {
-            line: pos.line,
-            col: pos.col,
-            offset: pos.offset,
-            source: String::new(),
-            messages,
-        }
+        ParseError::UnknownPreprocessorDirective(content)
     }
 
-    /// The parse error parsec produces at a top-level *item* position when no
-    /// item alternative matches — a faithful reproduction of the merged error
-    /// from `addItems`'s `asum` (`Theory/Text/Parser.hs:243-303`) `<* symbol_
-    /// "end"`.
-    ///
-    /// Two shapes, exactly as parsec's longest-match error merging yields:
-    ///
-    /// * If the next token starts with letters, `formalComment`'s
-    ///   `try (many1 letter <* string "{*")` (`Token.hs:377-378`) consumes them
-    ///   and is the furthest-reaching alternative, so it dominates: the error
-    ///   sits *after* the letters and reads `unexpected <c> / expecting letter
-    ///   or "{*"` (the `many1 letter` hangover merged with the `string "{*"`
-    ///   expectation).
-    /// * Otherwise every alternative fails at the same position, so parsec
-    ///   unions all of their leading labels → [`TOP_LEVEL_ITEM_EXPECTS`].
-    ///
-    /// Residue (see §28): after certain preceding items parsec *prepends* extra
-    /// merged tokens (rule → `"variants"`, functions → `"["`,`","`, …) that this
-    /// port does not track; those cases match on frame+position+base-list but
-    /// omit the leading prefix.
-    fn item_position_error(&mut self) -> ParseError {
-        self.skip_ws();
-        let start = self.save();
-        let mut saw_letter = false;
-        while self.lx.peek().is_some_and(|c| c.is_alphabetic()) {
-            self.lx.bump();
-            saw_letter = true;
-        }
-        if saw_letter {
-            let pos = self.lx.pos();
-            let unexpected = match self.lx.peek() {
-                Some(c) => show_char_token(c),
-                None => String::new(),
-            };
-            return ParseError {
-                line: pos.line,
-                col: pos.col,
-                offset: pos.offset,
-                source: String::new(),
-                messages: vec![
-                    Message::SysUnExpect(unexpected),
-                    Message::Expect("letter".to_string()),
-                    Message::Expect("\"{*\"".to_string()),
-                ],
-            };
-        }
-        self.restore(start);
-        self.err_expect(TOP_LEVEL_ITEM_EXPECTS)
+    fn expected_identifier_err(&self, idents: Vec<String>) -> ParseError {
+        let content = self.create_error_content(idents);
+        ParseError::ExpectedIdentifier(content)
+    }
+
+    fn expected_string_literal_err(&self, strs: Vec<String>) -> ParseError {
+        let content = self.create_error_content(strs);
+        ParseError::ExpectedStringLiteral(content)
+    }
+
+    fn expected_natural_number_err(&self, nums: Vec<String>) -> ParseError {
+        let content = self.create_error_content(nums);
+        ParseError::ExpectedNaturalNumber(content)
+    }
+
+    fn expected_theory_item_err(&self, items: Vec<String>) -> ParseError {
+        let content = self.create_error_content(items);
+        ParseError::ExpectedTheoryItem(content)
     }
 
     fn save(&self) -> Pos {
@@ -661,8 +470,7 @@ impl<'a> Parser<'a> {
         if self.try_kw(kw) {
             Ok(())
         } else {
-            let label = format!("\"{kw}\"");
-            Err(self.err_expect(&[&label]))
+            Err(self.expected_keyword_err(vec![kw.into()]))
         }
     }
 
@@ -674,8 +482,8 @@ impl<'a> Parser<'a> {
         } else {
             // HS `symbol p` labels the failure with the quoted punctuation
             // (Token.hs:272-273).
-            let label = format!("\"{p}\"");
-            Err(self.err_expect(&[&label]))
+            let label = format!("{p}");
+            Err(self.expected_punctuation_err(vec![label]))
         }
     }
 
@@ -726,17 +534,19 @@ impl<'a> Parser<'a> {
     fn ident(&mut self) -> Result<String, ParseError> {
         self.lx
             .identifier()
-            .ok_or_else(|| self.err("expected identifier"))
+            .ok_or_else(|| self.expected_identifier_err(vec!["identifier".into()]))
     }
 
     fn natural(&mut self) -> Result<u64, ParseError> {
-        self.lx.natural().ok_or_else(|| self.err("expected number"))
+        self.lx
+            .natural()
+            .ok_or_else(|| self.expected_natural_number_err(vec!["number".into()]))
     }
 
     fn string_literal(&mut self) -> Result<String, ParseError> {
         self.lx
             .string_literal()
-            .ok_or_else(|| self.err("expected string literal"))
+            .ok_or_else(|| self.expected_string_literal_err(vec!["string literal".into()]))
     }
 
     // =========================================================================
@@ -762,7 +572,7 @@ impl<'a> Parser<'a> {
             //      <?> "configuration or begin"` (Parser.hs:230-393, see line 233) — the whole
             // choice is relabelled, so the failure Expect is the single custom
             // label, not the two quoted keywords.
-            return Err(self.err_expect(&["configuration or begin"]));
+            return Err(self.expected_keyword_err(vec!["configuration".into(), "begin".into()]));
         }
         let items = self.theory_items_until_end()?;
         // HS `addItems … <* symbol_ "end"` (Parser.hs:230-393, see line 240): when `end` is
@@ -770,7 +580,7 @@ impl<'a> Parser<'a> {
         // error, so report the full item-position error rather than a bare
         // `expecting "end"`.
         if !self.try_kw("end") {
-            return Err(self.item_position_error());
+            return Err(self.expected_keyword_err(vec!["end".into()]));
         }
         // Parsing stops at `end`; any trailing text is left unconsumed (callers
         // ignore it), as Haskell's parser does.
@@ -915,7 +725,12 @@ impl<'a> Parser<'a> {
 
         // No item alternative matched: reproduce parsec's merged item-position
         // error (`addItems` `asum` <* `symbol_ "end"`).
-        Err(self.item_position_error())
+        Err(self.expected_theory_item_err(
+            TOP_LEVEL_ITEM_EXPECTS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        ))
     }
 
     // -------------------- Preprocessor --------------------
@@ -928,6 +743,7 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
         // Read directive name.
+        let pos_before_ascii = self.lx.pos();
         let name = self.lx.ascii_alpha_run();
         match name.as_str() {
             "define" => {
@@ -946,7 +762,21 @@ impl<'a> Parser<'a> {
                 self.restore(save);
                 Ok(None)
             }
-            other => Err(self.err(format!("unknown preprocessor directive `#{}`", other))),
+            other => Err(self.unknown_preproc_err(
+                vec![
+                    "define".into(),
+                    "include".into(),
+                    "endif".into(),
+                    "else".into(),
+                ],
+                (
+                    other.into(),
+                    Span {
+                        start: pos_before_ascii.offset - 1,
+                        end: pos_before_ascii.offset - 1 + other.len(),
+                    },
+                ),
+            )),
         }
     }
 
