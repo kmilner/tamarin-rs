@@ -1743,6 +1743,23 @@ impl System {
         self.solved_formulas.is_empty()
             && !crate::guarded::stores_contains(&self.formulas, &crate::guarded::gfalse())
     }
+
+    /// Port of Haskell's `cleanup` (`ProofMethod.hs:310-311`):
+    ///
+    /// Resets the system's variable indices and clears the substitution.
+    pub fn cleanup(mut self) -> Self {
+        crate::constraint::solver::rename_precise::rename_precise_system(&mut self);
+        self.eq_store_mut().subst = tamarin_term::subst::Subst::from_list(Vec::new());
+        // The subst is inside `bounds_max`'s walk (dom + range,
+        // reduction.rs `bounds_max_rest`), so clearing it can LOWER the
+        // max free-var idx — while `rename_precise_system` invalidates
+        // the cache only when some var was actually remapped.  After an
+        // all-identity rename a pre-populated cache would survive with
+        // the pre-clear max (stale-high ⇒ fresh idxs minted above HS's).
+        // Invalidate so the next `bounds_max` recomputes post-clear.
+        self.invalidate_max_var_idx_cache();
+        self
+    }
 }
 
 // =============================================================================
@@ -2293,6 +2310,31 @@ mod tests {
         let c0 = s.content_stamp.get();
         s.set_last_atom(None);
         assert_ne!(s.content_stamp.get(), c0);
+    }
+
+    #[test]
+    fn cleanup_invalidates_max_var_idx_cache() {
+        use crate::constraint::solver::reduction::{bounds_max, bounds_max_uncached};
+        use tamarin_term::term::Term;
+        use tamarin_term::vterm::Lit;
+
+        // Per-name idxs dense from 0 make `rename_precise_system` the
+        // identity (no remap ⇒ no invalidation from the rename itself),
+        // while the subst holds the global max idx: `x.1` occurs nowhere
+        // outside the subst range, so `cleanup`'s subst-clear lowers the
+        // true max from 1 to 0.
+        let mut s = System::empty();
+        s.set_last_atom(Some(LVar::new("i", LSort::Node, 0)));
+        s.eq_store_mut().subst = tamarin_term::subst::Subst::from_list([(
+            LVar::new("x", LSort::Msg, 0),
+            Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 1))),
+        )]);
+        // Populate the cache with the pre-cleanup max (held by the subst).
+        assert_eq!(bounds_max(&s), 1);
+        let s = s.cleanup();
+        assert_eq!(bounds_max_uncached(&s), 0);
+        // The cached read must match — a stale cache would return 1 here.
+        assert_eq!(bounds_max(&s), 0);
     }
 
     #[test]
