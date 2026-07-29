@@ -306,7 +306,7 @@ pub fn rename_precise_system(sys: &mut System) {
         })
         .collect();
 
-    let map_var = |v: LVar| -> LVar { map.get(&v).cloned().unwrap_or(v) };
+    let map_var = |v: LVar| -> LVar { map.get(&v).copied().unwrap_or(v) };
 
     // 1. Nodes — id + rule.
     //

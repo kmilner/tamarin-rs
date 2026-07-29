@@ -751,7 +751,7 @@ impl ProofContext {
         // in some fact term could narrow. Skipping non-destructor
         // rules avoids ~N Maude round-trips at theory-load time.
         let reducible_syms: std::collections::BTreeSet<_> =
-            sig.reducible_fun_syms.iter().cloned().collect();
+            sig.reducible_fun_syms.iter().copied().collect();
         let term_has_reducible = |t: &tamarin_term::lterm::LNTerm| -> bool {
             fn rec(
                 t: &tamarin_term::lterm::LNTerm,

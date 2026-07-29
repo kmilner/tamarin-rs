@@ -512,7 +512,7 @@ fn rename_lvars_with_hint<C: Ord + Clone, F: FnMut(u64) -> u64>(
 ) -> VTerm<C, LVar> {
     match t {
         Term::Lit(Lit::Var(v)) => {
-            if let Some(new) = rename.get(v).cloned() {
+            if let Some(new) = rename.get(v).copied() {
                 Term::Lit(Lit::Var(new))
             } else {
                 // Allocate a fresh idx; name hint depends on outer
@@ -797,7 +797,7 @@ fn rename_lvars_in_vterm<C: Clone>(
 ) -> VTerm<C, LVar> {
     match t {
         Term::Lit(Lit::Var(v)) => {
-            let new = rename.get(v).cloned().unwrap_or(*v);
+            let new = rename.get(v).copied().unwrap_or(*v);
             Term::Lit(Lit::Var(new))
         }
         Term::Lit(other) => Term::Lit(other.clone()),

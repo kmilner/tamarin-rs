@@ -39,7 +39,7 @@ pub fn base_trans_null(p: &ProcessPosition, tildex: &BTreeSet<LVar>) -> Vec<Rule
     let st = TransFact::State(
         StateKind::LState,
         p.clone(),
-        tildex.iter().cloned().collect(),
+        tildex.iter().copied().collect(),
     );
     vec![(vec![st], vec![], vec![], vec![])]
 }
@@ -126,13 +126,13 @@ pub fn base_trans_action(
 ) -> Result<(Vec<RuleBody>, BTreeSet<LVar>), String> {
     // `def_state = State LState p tildex`
     let def_state = |tx: &BTreeSet<LVar>| {
-        TransFact::State(StateKind::LState, p.clone(), tx.iter().cloned().collect())
+        TransFact::State(StateKind::LState, p.clone(), tx.iter().copied().collect())
     };
     // `def_state' tx = State LState (p++[1]) tx`
     let mut p1 = p.clone();
     p1.push(1);
     let def_state_next = |tx: &BTreeSet<LVar>| {
-        TransFact::State(StateKind::LState, p1.clone(), tx.iter().cloned().collect())
+        TransFact::State(StateKind::LState, p1.clone(), tx.iter().copied().collect())
     };
 
     match ac {
@@ -147,7 +147,7 @@ pub fn base_trans_action(
             let semistate = TransFact::State(
                 StateKind::PSemiState,
                 p1.clone(),
-                tildex.iter().cloned().collect(),
+                tildex.iter().copied().collect(),
             );
             let body1: RuleBody = (
                 vec![def_state(tildex)],
@@ -300,7 +300,7 @@ pub fn base_trans_action(
                 let semistate = TransFact::State(
                     StateKind::LSemiState,
                     p1.clone(),
-                    tildex.iter().cloned().collect(),
+                    tildex.iter().copied().collect(),
                 );
                 let body1: RuleBody = (
                     vec![def_state(tildex)],
@@ -351,7 +351,7 @@ pub fn base_trans_action(
                 let semistate = TransFact::State(
                     StateKind::LSemiState,
                     p1.clone(),
-                    tildex.iter().cloned().collect(),
+                    tildex.iter().copied().collect(),
                 );
                 let msg_rule: RuleBody = (
                     vec![def_state(tildex)],
@@ -586,19 +586,19 @@ pub fn base_trans_comb(
 
     // `def_state = State LState p tildex`
     let def_state = |tx: &BTreeSet<LVar>| {
-        TransFact::State(StateKind::LState, p.clone(), tx.iter().cloned().collect())
+        TransFact::State(StateKind::LState, p.clone(), tx.iter().copied().collect())
     };
     // `def_state1 tx = State LState (p++[1]) tx`
     let mut p1 = p.clone();
     p1.push(1);
     let def_state1 = |tx: &BTreeSet<LVar>| {
-        TransFact::State(StateKind::LState, p1.clone(), tx.iter().cloned().collect())
+        TransFact::State(StateKind::LState, p1.clone(), tx.iter().copied().collect())
     };
     // `def_state2 tx = State LState (p++[2]) tx`
     let mut p2 = p.clone();
     p2.push(2);
     let def_state2 = |tx: &BTreeSet<LVar>| {
-        TransFact::State(StateKind::LState, p2.clone(), tx.iter().cloned().collect())
+        TransFact::State(StateKind::LState, p2.clone(), tx.iter().copied().collect())
     };
 
     match c {
@@ -631,7 +631,7 @@ pub fn base_trans_comb(
             // (untyped) Eq fact.
             let vars_f = fact_vars(&fa);
             if !vars_f.is_subset(tildex) {
-                let unbound: Vec<LVar> = vars_f.difference(tildex).cloned().collect();
+                let unbound: Vec<LVar> = vars_f.difference(tildex).copied().collect();
                 return Err(format!(
                     "process not well-formed: unbound variables in conditional: {unbound:?}"
                 ));
@@ -668,7 +668,7 @@ pub fn base_trans_comb(
             // mapped to `LVar`s to compare against `tildex :: Set LVar`.
             let freevars_f = formula_free_lvars(f);
             if !freevars_f.is_subset(tildex) {
-                let unbound: Vec<LVar> = freevars_f.difference(tildex).cloned().collect();
+                let unbound: Vec<LVar> = freevars_f.difference(tildex).copied().collect();
                 return Err(format!(
                     "process not well-formed: unbound variables in conditional: {unbound:?}"
                 ));
@@ -796,7 +796,7 @@ pub fn base_trans_comb(
                 vec![TransFact::FLet(
                     pos.clone(),
                     t2.clone(),
-                    tildex.iter().cloned().collect(),
+                    tildex.iter().copied().collect(),
                 )],
                 vec![],
             );
@@ -804,7 +804,7 @@ pub fn base_trans_comb(
                 vec![TransFact::FLet(
                     pos.clone(),
                     t1,
-                    tildex.iter().cloned().collect(),
+                    tildex.iter().copied().collect(),
                 )],
                 vec![],
                 vec![def_state1(&tildexl)],
@@ -812,7 +812,7 @@ pub fn base_trans_comb(
             );
             if an.else_branch {
                 let body2: RuleBody = (
-                    vec![TransFact::FLet(pos, t2, tildex.iter().cloned().collect())],
+                    vec![TransFact::FLet(pos, t2, tildex.iter().copied().collect())],
                     vec![],
                     vec![def_state2(tildex)],
                     vec![fa_n],

@@ -50,7 +50,7 @@ fn get_secret_channels(p: &AnnotatedProc, candidates: BTreeSet<LVar>) -> BTreeSe
         Process::Comb(_, _, l, r) => {
             let cl = get_secret_channels(l, candidates.clone());
             let cr = get_secret_channels(r, candidates);
-            cl.intersection(&cr).cloned().collect()
+            cl.intersection(&cr).copied().collect()
         }
     }
 }

@@ -1097,7 +1097,7 @@ fn rename_precise_rule_with_variants(
     }
 
     // Phase 2: apply the renaming map.
-    let map_var = |v: &LVar| -> LVar { map.get(v).cloned().unwrap_or(*v) };
+    let map_var = |v: &LVar| -> LVar { map.get(v).copied().unwrap_or(*v) };
     let map_term = |t: LNTerm| -> LNTerm { t.map_free(&mut |v| map_var(&v)) };
     let map_facts = |fs: Vec<Fact<LNTerm>>| -> Vec<Fact<LNTerm>> {
         fs.into_iter()

@@ -1814,8 +1814,8 @@ fn eq_modulo_freshness_no_ac(
                 if va.sort != vb.sort {
                     return false;
                 }
-                let ka = ma.get(va).cloned();
-                let kb = mb.get(vb).cloned();
+                let ka = ma.get(va).copied();
+                let kb = mb.get(vb).copied();
                 match (ka, kb) {
                     (Some(x), Some(y)) => x == y,
                     (None, None) => {
@@ -3799,7 +3799,7 @@ fn freshen_system_some_inst(
 
     // Step 2: apply bindings to produce the freshened system.
     let lookup = |v: &tamarin_term::lterm::LVar| -> tamarin_term::lterm::LVar {
-        bindings.get(v).cloned().unwrap_or(*v)
+        bindings.get(v).copied().unwrap_or(*v)
     };
     // For Guarded formulas (VarSpec-based), build a (name, idx) → new (name, idx) map.
     // VarSpec sort hints are preserved unchanged.
@@ -6261,7 +6261,7 @@ fn compute_rename_map(
 /// Apply rename to an LVar; if missing, return as-is (Node-sort vars
 /// without an occurrence in `_sNodes` may not appear in the map).
 fn rn(rename: &RenameMap, v: &tamarin_term::lterm::LVar) -> tamarin_term::lterm::LVar {
-    rename.get(v).cloned().unwrap_or(*v)
+    rename.get(v).copied().unwrap_or(*v)
 }
 
 /// Write a term to the key buffer with renamed vars.
@@ -7012,7 +7012,7 @@ fn write_term_to_key_local(t: &tamarin_term::lterm::LNTerm, rename: &RenameMap, 
     // Same App/Con recursion as `write_term_to_key`, but the Var leaf drops
     // the name (local dedup keys use idx:sort only).
     write_term_to_key_with(t, out, &|v, out| {
-        let rv = rename.get(v).cloned().unwrap_or(*v);
+        let rv = rename.get(v).copied().unwrap_or(*v);
         out.push('v');
         push_u64(out, rv.idx);
         out.push(':');

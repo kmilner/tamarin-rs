@@ -105,8 +105,8 @@ fn freshen_witness_range(
     // Apply the rename across each (var, term).  Keys get renamed too.
     raw.into_iter()
         .map(|(v, t)| {
-            let new_v = renames.get(&v).cloned().unwrap_or(v);
-            let new_t = t.map_free(&mut |w| renames.get(&w).cloned().unwrap_or(w));
+            let new_v = renames.get(&v).copied().unwrap_or(v);
+            let new_t = t.map_free(&mut |w| renames.get(&w).copied().unwrap_or(w));
             (new_v, new_t)
         })
         .collect()
@@ -986,7 +986,7 @@ impl EquationStore {
     ) -> Result<SplitId, &'static str> {
         // Domain-disjointness check: free-subst domain must not
         // overlap with any variant's domain.
-        let free_dom: BTreeSet<LVar> = self.subst.dom().cloned().collect();
+        let free_dom: BTreeSet<LVar> = self.subst.dom().copied().collect();
         for v in &variants {
             if v.dom().any(|x| free_dom.contains(x)) {
                 return Err("addRuleVariants: nonempty intersection between domain \
@@ -2665,9 +2665,9 @@ impl EquationStore {
                         }
                     }
                     let witness_map: std::collections::BTreeMap<LVar, LVar> =
-                        witnesses.iter().cloned().collect();
+                        witnesses.iter().copied().collect();
                     let rename_term = |t: LNTerm| -> LNTerm {
-                        t.map_free(&mut |v: LVar| witness_map.get(&v).cloned().unwrap_or(v))
+                        t.map_free(&mut |v: LVar| witness_map.get(&v).copied().unwrap_or(v))
                     };
                     // Build lifted subst: rename range values, add
                     // S → Var(W) entries to domain.
@@ -3344,13 +3344,13 @@ mod tests {
                 }],
             )
             .expect("first add_eqs");
-        let dom_before: Vec<LVar> = store.subst.dom().cloned().collect();
+        let dom_before: Vec<LVar> = store.subst.dom().copied().collect();
 
         // Repeat — should be a no-op.
         let _ = store
             .add_eqs(&h, &[tamarin_term::rewriting::Equal { lhs: tx, rhs: ty }])
             .expect("second add_eqs");
-        let dom_after: Vec<LVar> = store.subst.dom().cloned().collect();
+        let dom_after: Vec<LVar> = store.subst.dom().copied().collect();
         assert_eq!(
             dom_before, dom_after,
             "Repeated add_eqs of an already-implied equation must \

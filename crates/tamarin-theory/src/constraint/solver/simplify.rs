@@ -5247,12 +5247,12 @@ fn nat_subterm_equalities(
         let l_vars: Vec<LVar> = l_flat
             .iter()
             .filter(|t| *t != &one)
-            .filter_map(|t| get_var(t).cloned())
+            .filter_map(|t| get_var(t).copied())
             .collect();
         let r_vars: Vec<LVar> = r_flat
             .iter()
             .filter(|t| *t != &one)
-            .filter_map(|t| get_var(t).cloned())
+            .filter_map(|t| get_var(t).copied())
             .collect();
         let l_ones = l_flat.iter().filter(|t| *t == &one).count() as i64;
         let r_ones = r_flat.iter().filter(|t| *t == &one).count() as i64;
@@ -5328,8 +5328,8 @@ fn nat_subterm_equalities(
 
     // `rawEdges = realEdges ++ oneEdges` (SubtermStore.hs:395-538, see line 446)
     let mut raw_edges: Vec<((Vertex, Vertex), i64)> = Vec::new();
-    raw_edges.extend(real_edges.iter().cloned());
-    raw_edges.extend(one_edges.iter().cloned());
+    raw_edges.extend(real_edges.iter().copied());
+    raw_edges.extend(one_edges.iter().copied());
 
     // `inf = maxBound `div` 2` — large sentinel, avoid overflow in `ik + kj`.
     let inf: i64 = i64::MAX / 4;
@@ -5588,7 +5588,7 @@ fn nat_subterm_equalities(
             }
         }
         // `filter fst scc` — keep only True-tagged vertices.
-        let positives: Vec<Vertex> = scc.iter().filter(|v| v.0).cloned().collect();
+        let positives: Vec<Vertex> = scc.iter().filter(|v| v.0).copied().collect();
         // `delete smallest positives` — remove if present.
         let mut ys: Vec<Vertex> = Vec::new();
         let mut removed = false;

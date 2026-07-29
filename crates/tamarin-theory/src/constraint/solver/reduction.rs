@@ -6042,7 +6042,7 @@ impl<'ctx> Reduction<'ctx> {
         // `looping=true`, so `isNonLoopBreakerProtoFactGoal` excludes
         // them and the smart ranker defers them.
         let breakers: std::collections::BTreeSet<crate::rule::PremIdx> = match &rule.info {
-            crate::rule::RuleInfo::Proto(info) => info.loop_breakers.iter().cloned().collect(),
+            crate::rule::RuleInfo::Proto(info) => info.loop_breakers.iter().copied().collect(),
             _ => std::collections::BTreeSet::new(),
         };
         for (idx, fa) in prems {

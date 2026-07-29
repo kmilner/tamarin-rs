@@ -972,7 +972,7 @@ fn variants_intruder_with(
     // is applied to.
     // `restrict` key-set is loop-invariant (`packed_frees` never mutates), so
     // materialise the `Vec<LVar>` once rather than per variant subst.
-    let packed_frees_vec: Vec<LVar> = packed_frees.iter().cloned().collect();
+    let packed_frees_vec: Vec<LVar> = packed_frees.iter().copied().collect();
     let cleaned: Vec<LNSubstVFresh> = raw_substs
         .into_iter()
         .map(|pairs| {

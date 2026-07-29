@@ -206,7 +206,7 @@ fn rename_cond_formula(
 fn rename_term(subst: &BTreeMap<LVar, LVar>, t: &SapicTerm) -> SapicTerm {
     match t {
         VTerm::Lit(Lit::Var(sv)) => {
-            let new_lv = subst.get(&sv.var).cloned().unwrap_or(sv.var);
+            let new_lv = subst.get(&sv.var).copied().unwrap_or(sv.var);
             VTerm::Lit(Lit::Var(SapicLVar::new(new_lv, sv.stype.clone())))
         }
         VTerm::Lit(Lit::Con(c)) => VTerm::Lit(Lit::Con(*c)),
@@ -219,7 +219,7 @@ fn rename_term(subst: &BTreeMap<LVar, LVar>, t: &SapicTerm) -> SapicTerm {
 }
 
 fn rename_sv(subst: &BTreeMap<LVar, LVar>, sv: &SapicLVar) -> SapicLVar {
-    let new_lv = subst.get(&sv.var).cloned().unwrap_or(sv.var);
+    let new_lv = subst.get(&sv.var).copied().unwrap_or(sv.var);
     SapicLVar::new(new_lv, sv.stype.clone())
 }
 

@@ -170,7 +170,7 @@ pub fn trimmed_pair_terms(
         .zip(behaviours.iter())
         .flat_map(|(term, behaviour)| {
             let leaves = shape_term(term, behaviour.len());
-            behaviour.iter().cloned().zip(leaves).collect::<Vec<_>>()
+            behaviour.iter().copied().zip(leaves).collect::<Vec<_>>()
         })
         .collect();
     Some((first, pairs))

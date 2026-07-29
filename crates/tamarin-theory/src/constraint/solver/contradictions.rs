@@ -1895,7 +1895,7 @@ pub fn cyclic(less: &[LessAtom]) -> bool {
     }
     // Run DFS detecting back-edges.
     let mut color: BTreeMap<NodeId, u8> = BTreeMap::new(); // 0=white,1=gray,2=black
-    let nodes: Vec<NodeId> = adj.keys().cloned().collect();
+    let nodes: Vec<NodeId> = adj.keys().copied().collect();
     fn dfs(
         node: &NodeId,
         adj: &BTreeMap<NodeId, Vec<NodeId>>,
@@ -1940,7 +1940,7 @@ pub fn cyclic_with_path(less: &[LessAtom]) -> Vec<NodeId> {
     }
     let mut color: BTreeMap<NodeId, u8> = BTreeMap::new();
     let mut path: Vec<NodeId> = Vec::new();
-    let nodes: Vec<NodeId> = adj.keys().cloned().collect();
+    let nodes: Vec<NodeId> = adj.keys().copied().collect();
     fn dfs(
         node: &NodeId,
         adj: &BTreeMap<NodeId, Vec<NodeId>>,
