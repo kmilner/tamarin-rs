@@ -137,6 +137,8 @@ pub fn content_type(res: &reqwest::Response) -> String {
 }
 
 /// Absolute Maude locations probed by the test harness, in priority order.
+/// A `MAUDE_PATH` env var overrides the probe entirely (the convention the
+/// rest of the workspace's maude-gated tests follow, and what CI sets).
 const MAUDE_CANDIDATES: [&str; 3] = [
     "/usr/local/bin/maude",
     "/opt/homebrew/bin/maude",
@@ -144,6 +146,9 @@ const MAUDE_CANDIDATES: [&str; 3] = [
 ];
 
 fn detect_maude() -> String {
+    if let Ok(p) = std::env::var("MAUDE_PATH") {
+        return p;
+    }
     for c in MAUDE_CANDIDATES {
         if std::path::Path::new(c).exists() {
             return c.into();
@@ -152,10 +157,14 @@ fn detect_maude() -> String {
     "maude".into()
 }
 
-/// True when a Maude binary exists at one of [`MAUDE_CANDIDATES`].  Tests
-/// that boot a real `ProofContext` use this as a skip-guard.
+/// True when a Maude binary exists at `MAUDE_PATH` or one of
+/// [`MAUDE_CANDIDATES`].  Tests that boot a real `ProofContext` use this
+/// as a skip-guard.
 #[allow(dead_code)]
 pub fn maude_available() -> bool {
+    if let Ok(p) = std::env::var("MAUDE_PATH") {
+        return std::path::Path::new(&p).exists();
+    }
     MAUDE_CANDIDATES
         .iter()
         .any(|c| std::path::Path::new(c).exists())

@@ -16,12 +16,24 @@ use std::path::PathBuf;
 use tamarin_prover::{parse_args, run};
 
 fn maude_available() -> bool {
+    if let Ok(p) = std::env::var("MAUDE_PATH") {
+        return std::path::Path::new(&p).exists();
+    }
     for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
         if std::path::Path::new(c).exists() {
             return true;
         }
     }
     false
+}
+
+/// `--with-maude=PATH` from the `MAUDE_PATH` env override, when set.
+/// Without the flag the prover probes bare `maude` on PATH (HS-faithful),
+/// which is absent on CI runners.
+fn maude_arg() -> Option<String> {
+    std::env::var("MAUDE_PATH")
+        .ok()
+        .map(|p| format!("--with-maude={p}"))
 }
 
 fn fixture(name: &str) -> PathBuf {
@@ -53,12 +65,15 @@ fn prove_chain_writes_output_with_verified_summary() {
     // flag empty and treats FILE as a positional input (verified vs the HS
     // binary). So pass it inline via `--output=FILE`.
     let output_arg = format!("--output={}", out_path.to_str().unwrap());
-    let args = args_from(&[
+    let maude = maude_arg();
+    let mut argv: Vec<&str> = maude.as_deref().into_iter().collect();
+    argv.extend([
         "--prove=chain",
         &output_arg,
         "--quiet",
         in_path.to_str().unwrap(),
     ]);
+    let args = args_from(&argv);
     let code = run(&args).expect("run");
     assert_eq!(code, 0, "expected exit code 0, got {}", code);
 
@@ -100,12 +115,15 @@ fn prove_lemma_filter_excludes_other_lemmas() {
     // flagOpt: attach the output value (`--output=FILE`); a space-separated
     // `-o FILE` would treat FILE as a positional input (HS Batch.hs:44-84, see line 76).
     let output_arg = format!("--output={}", out_path.to_str().unwrap());
-    let args = args_from(&[
+    let maude = maude_arg();
+    let mut argv: Vec<&str> = maude.as_deref().into_iter().collect();
+    argv.extend([
         "--prove=nonexistent",
         &output_arg,
         "--quiet",
         in_path.to_str().unwrap(),
     ]);
+    let args = args_from(&argv);
     let code = run(&args).expect("run");
     assert_eq!(code, 0);
     let body = std::fs::read_to_string(&out_path).expect("output written");
@@ -153,11 +171,14 @@ fn output_dir_writes_basename_underscore_analyzed() {
     // flag at its default and treats DIR as a positional input file (verified
     // against the HS binary). So the value must be inline via `--Output=DIR`.
     let output_arg = format!("--Output={}", out_dir.to_str().unwrap());
-    let args = args_from(&[
+    let maude = maude_arg();
+    let mut argv: Vec<&str> = maude.as_deref().into_iter().collect();
+    argv.extend([
         "--parse-only", // skip the proof to keep this test fast & maude-light
         &output_arg,
         in_path.to_str().unwrap(),
     ]);
+    let args = args_from(&argv);
     let code = run(&args).expect("run");
     assert_eq!(code, 0);
     // Expected output: <out_dir>/single_recv_analyzed.spthy
