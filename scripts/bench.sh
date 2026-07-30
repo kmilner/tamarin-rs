@@ -46,19 +46,27 @@ for arg in "$@"; do
     esac
 done
 
-find_hs() { ls "$repo_root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover 2>/dev/null | head -1; }
+# Default HS baseline: a *released* tamarin-prover on PATH — the README tables
+# compare against what users actually run, not the develop-pinned parity
+# oracle.  Fall back to the ./setup.sh testing build; HS_PATH overrides.
+find_hs() {
+    command -v tamarin-prover 2>/dev/null \
+        || ls "$repo_root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover 2>/dev/null | head -1
+}
 HS_PATH="${HS_PATH:-$(find_hs)}"
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 [ -x "$HS_PATH" ] || { echo "bench.sh: no HS binary (set HS_PATH)" >&2; exit 2; }
 [ -x "$RS_PATH" ] || { echo "bench.sh: no RS binary at $RS_PATH" >&2; exit 2; }
 command -v /usr/bin/time >/dev/null || { echo "bench.sh: needs GNU /usr/bin/time" >&2; exit 2; }
 
-# measure <cmd...> → prints "<secs>|<mb>" (or "timeout|—" on cap).
+# measure <cmd...> → prints "<secs>|<mb>" ("timeout|—" on cap, "fail|—" on a
+# nonzero exit — e.g. prove_and_reverify.sh refusing a verdict mismatch).
 measure() {
     local e rc wall rss
     e=$(mktemp)
     timeout "$TIMEOUT" /usr/bin/time -v "$@" >/dev/null 2>"$e"; rc=$?
     if [ "$rc" = 124 ]; then rm -f "$e"; printf 'timeout|—'; return; fi
+    if [ "$rc" != 0 ]; then rm -f "$e"; printf 'fail|—'; return; fi
     wall=$(awk -F': ' '/Elapsed \(wall clock\)/{print $NF}' "$e")
     rss=$(awk -F': ' '/Maximum resident set size/{print $NF}' "$e")
     rm -f "$e"
@@ -68,7 +76,7 @@ measure() {
         printf "%.1f|%.0f", s, k/1024 }'
 }
 
-cell_t() { [ "$1" = timeout ] && printf 'timeout' || printf '%s s' "$1"; }
+cell_t() { case "$1" in timeout|fail) printf '%s' "$1" ;; *) printf '%s s' "$1" ;; esac; }
 cell_m() { [ "$1" = "—" ] && printf '—' || printf '%s MB' "$1"; }
 
 # pct <rs> <hs> → " (-44%)" (RS vs HS; negative = lower).  Empty when either
@@ -79,7 +87,7 @@ pct() {
         printf " (%+.0f%%)", (rs-hs)/hs*100 }'
 }
 # RS cells: value + parenthetical % vs the HS value in the same row.
-cell_rs_t() { [ "$1" = timeout ] && printf 'timeout' || printf '%s s%s' "$1" "$(pct "$1" "$2")"; }
+cell_rs_t() { case "$1" in timeout|fail) printf '%s' "$1" ;; *) printf '%s s%s' "$1" "$(pct "$1" "$2")" ;; esac; }
 cell_rs_m() { [ "$1" = "—" ] && printf '—' || printf '%s MB%s' "$1" "$(pct "$1" "$2")"; }
 
 # Emit the full marker block (header comment + per-core tables) to stdout.
@@ -94,6 +102,12 @@ Regenerate these three tables in place:
     scripts/bench.sh --write     # measure, then rewrite this block
     scripts/bench.sh             # measure, print to stdout only
 
+The HS baseline is the most recent tamarin-prover RELEASE (the exact version
+is in the "last run" line below) — the prover users actually have installed —
+not the develop branch this repo's parity oracle is pinned to; develop has
+since gained performance work of its own, so the gap versus a develop build
+is smaller than these tables show.
+
 Both provers prove every lemma (--prove --derivcheck-timeout=30); HS at
 `+RTS -Nk`, RS at `--processors=k`; wall-clock + peak RSS come from
 `/usr/bin/time -v` (the prover process only — Maude is a separate subprocess on
@@ -107,7 +121,9 @@ binaries via the FILES, CORES, TIMEOUT, DERIV, HS_PATH, RS_PATH env vars (see
 the scripts/bench.sh header).
 -->
 HDR
-    echo "<!-- last run: $(uname -m) Linux, $(nproc) cores -->"
+    local hs_ver
+    hs_ver="$("$HS_PATH" --version 2>/dev/null | grep -oE 'tamarin-prover [0-9]+(\.[0-9]+)*' | head -1)"
+    echo "<!-- last run: $(uname -m) Linux, $(nproc) cores; HS baseline: ${hs_ver:-unknown version} -->"
     for k in $CORES; do
         echo
         echo "**${k} core$([ "$k" = 1 ] && echo '' || echo 's')**"

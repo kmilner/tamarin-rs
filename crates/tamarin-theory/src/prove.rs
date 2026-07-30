@@ -640,6 +640,11 @@ impl ProverSession {
     /// `cli_heuristic.raw` is `Some`, every lemma's goal ranking is the CLI
     /// heuristic (HS `selectHeuristic`: `apDefaultHeuristic <|> pcHeuristic`,
     /// Proof.hs).
+    ///
+    /// `ndc_cache`: the theory's once-per-load NDC-checked intruder cache
+    /// (`close_rule::check_close_intr_rule`), injected into the template
+    /// context so the session reuses the tagged+permuted rules instead of
+    /// re-running the check.
     // keyed source cache constructor; lookup-only map;
     // std kept (byte-inert) — iteration order never reaches output.
     #[allow(clippy::disallowed_types)]
@@ -650,6 +655,7 @@ impl ProverSession {
         in_file: &str,
         cli_heuristic: CliHeuristic,
         cut: crate::constraint::solver::context::CutStrategy,
+        ndc_cache: Option<&[crate::rule::IntrRuleAC]>,
     ) -> Result<Self, ProveError> {
         // RAII-set the user-fn-symbol thread-locals for the WHOLE
         // session.  Per-lemma `term_to_lnterm` calls during search
@@ -698,6 +704,7 @@ impl ProverSession {
             rules,
             restrictions.clone(),
             &forced_injective_facts,
+            ndc_cache.map(<[_]>::to_vec),
         );
         maude.reset_counter_to(setup_counter_before);
         Ok(ProverSession {
@@ -1214,6 +1221,7 @@ pub fn prove_lemma(
         "",
         &CliHeuristic::default(),
         crate::constraint::solver::context::CutStrategy::Dfs,
+        None,
     )
 }
 
@@ -1225,7 +1233,9 @@ pub fn prove_lemma(
 /// `--heuristic`/`--oraclename`/`--oracle-only` (HS `AutoProver`).  This is
 /// the per-lemma (non-session) fallback path; when `cli_heuristic.raw` is
 /// `Some` it OVERRIDES the per-lemma / theory heuristic (HS `selectHeuristic`,
-/// Proof.hs:705-716, see line 707).
+/// Proof.hs:705-716, see line 707).  `ndc_cache` is the theory's
+/// once-per-load NDC-checked intruder cache, injected into the context so
+/// the fallback path never re-runs the check.
 pub fn prove_lemma_with_pool_file_heuristic(
     parser_theory: &p::Theory,
     lemma_name: &str,
@@ -1235,6 +1245,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
     in_file: &str,
     cli_heuristic: &CliHeuristic,
     cut: crate::constraint::solver::context::CutStrategy,
+    ndc_cache: Option<&[crate::rule::IntrRuleAC]>,
 ) -> Result<ProofNode, ProveError> {
     let trace = tamarin_utils::env_gate!("TAM_DBG_PHASE");
     // Per-phase wall-clock instrumentation, gated by TAM_DBG_PHASE.
@@ -1374,6 +1385,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
         rules,
         restrictions.clone(),
         &forced_injective_facts,
+        ndc_cache.map(<[_]>::to_vec),
     );
     if trace {
         eprintln!(
@@ -2107,6 +2119,7 @@ end
             "",
             CliHeuristic::default(),
             crate::constraint::solver::context::CutStrategy::Dfs,
+            None,
         )
         .ok()
     }

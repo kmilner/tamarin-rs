@@ -1,7 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, arcz, meiersi, jdreier, addap, Nynko, rkunnema,
-//   felixlinker, yavivanov, ValentinYuri, gilcu3, beschmi, Azurios-git,
-//   rsasse, and other minor contributors (see upstream git history)
+//   kevinmorio, arcz, meiersi, jdreier, addap, Nynko, cascremers,
+//   felixlinker, yavivanov, ValentinYuri, rkunnema, beschmi, gilcu3,
+//   Azurios-git, rsasse, and other minor contributors (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Prover.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
@@ -176,6 +177,9 @@ pub struct Args {
     pub defines: Vec<String>,
     pub diff: bool,
     pub quit_on_warning: bool,
+    /// `--no-ndc`: deactivate the no-deconstruction-chain (NDC) check
+    /// (enabled by default).
+    pub no_ndc: bool,
     pub auto_sources: bool,
     pub oracle_name: Option<String>,
     pub oracle_only: bool,
@@ -253,6 +257,7 @@ impl Default for Args {
             defines: Vec::new(),
             diff: false,
             quit_on_warning: false,
+            no_ndc: false,
             auto_sources: false,
             oracle_name: None,
             oracle_only: false,
@@ -439,6 +444,7 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                 }
                 "diff" => args.diff = true,
                 "quit-on-warning" => args.quit_on_warning = true,
+                "no-ndc" => args.no_ndc = true,
                 "auto-sources" => args.auto_sources = true,
                 "oraclename" => {
                     // Routed: sets the oracle relPath on every oracle ranking

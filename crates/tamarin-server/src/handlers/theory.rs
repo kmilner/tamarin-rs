@@ -1394,16 +1394,21 @@ fn resolve_system_for_path(
     ps.get_system_at(&lemma_name, &sub)
 }
 
-/// `GET /thy/trace/<idx>/intdot/*path` — return the DOT source as
-/// text/plain.  NOTE: the analogous Haskell `/intdot/*` route
-/// (`InteractiveDotGraphR`, `src/Web/Types.hs:576-576`) is handled by
-/// `getInteractiveDotGraphR` (`src/Web/Handler.hs:897-906`), which
-/// returns an HTML wrapper (`<dot-graph-viz dotsrc=...>`) pointing at
-/// the `interactive-graph-def` route, NOT the raw DOT.  Raw DOT is
-/// served by `getTheoryInteractiveGraphR` at that
-/// `interactive-graph-def` route (`src/Web/Handler.hs:1370-1375`,
-/// `notFound` on `Nothing`).  The Rust port returns the raw DOT here
-/// directly.
+/// `GET /thy/trace/<idx>/intdot/*path` — the interactive graph shell page.
+///
+/// HS `getInteractiveDotGraphR` (`src/Web/Handler.hs:903-911`) renders
+/// `intdotLayout True` (`src/Web/Types.hs:795-825`) around a
+/// `<dot-graph-viz>` custom element whose `dotsrc` points at the JSON graph
+/// route; the bundled `intdot-graph.es.js` fetches that and draws the graph
+/// client-side.  It does NOT resolve the constraint system itself — the shell
+/// is system-agnostic.
+///
+/// The same page serves both as the pop-out window and as the iframe embedded
+/// in the main theory view, so the floating `#popout-options` bar
+/// (`popoutOptionsTpl`, `src/Web/Types.hs:769-777`) is hidden client-side when
+/// embedded (the inline script sets `graph-embedded` on `<html>`).  Its
+/// Options menu is `optionsMenuItemTpl True` — the trace-theory variant, which
+/// includes the `abstr-toggle` entry.
 pub async fn intdot(
     State(state): State<Arc<AppState>>,
     Path((idx, raw_path)): Path<(usize, String)>,
@@ -1411,35 +1416,56 @@ pub async fn intdot(
     let Some(entry) = state.store.get(idx) else {
         return missing_idx_html(idx);
     };
-    // HS `getInteractiveDotGraphR` (`src/Web/Handler.hs:897-906`) returns the
-    // HTML shell page `intdotLayout` (`src/Web/Types.hs:727-744`): a
-    // `<dot-graph-viz>` custom element whose `dotsrc` points at the
-    // `interactive-graph-def` route (which serves the raw DOT that the
-    // bundled `intdot-graph.es.js` renders client-side).  It does NOT
-    // resolve the constraint system itself — the shell is system-agnostic.
-    let dotsrc = format!(
-        "/thy/trace/{idx}/interactive-graph-def/{path}",
-        idx = idx,
-        path = raw_path,
-    );
+    let Some(path) = parse_path(&raw_path) else {
+        return not_found_response();
+    };
+    let dotsrc = graph_json_url(idx, &path);
     let title = crate::handlers::root::html_escape(&format!("Theory: {}", entry.name));
-    // Byte-for-byte reproduction of HS `intdotLayout` (`src/Web/Types.hs:727-744`),
-    // including its doubled `</script></script>` Hamlet quirk — the stray end
-    // tag shifts DOM nesting, so matching it verbatim is what makes the
-    // semantic gate see the same tree.
-    let html = format!(
+    html_response(intdot_shell_html(&title, &dotsrc))
+}
+
+/// Byte-for-byte reproduction of `intdotLayout True` (`src/Web/Types.hs:795-825`)
+/// wrapping `popoutOptionsTpl True` (`src/Web/Types.hs:769-777`) and
+/// `optionsMenuItemTpl True` (`src/Web/Types.hs:749-763`).
+///
+/// The doubled `</script></script>` end tags are Hamlet's, and the stray tags
+/// shift DOM nesting — matching them verbatim is what makes the semantic gate
+/// see the same tree.
+fn intdot_shell_html(title: &str, dotsrc: &str) -> String {
+    format!(
         "<!DOCTYPE html>\n<html><head>\
          <meta charset=\"UTF-8\" />\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\
          <title>{title}</title>\
          <style> body,html{{width: 100%; height: 100%; overflow: hidden; margin: 0; padding: 0; }}</style>\
          <link rel=\"stylesheet\" href=\"/static/css/intdot-style.css\">\
+         <link rel=\"stylesheet\" href=\"/static/css/tamarin-prover-ui.css\">\
+         <script src=\"/static/js/jquery.js\"></script></script>\
+         <script src=\"/static/js/jquery-cookie.js\"></script></script>\
+         <script src=\"/static/js/jquery-superfish.js\"></script></script>\
+         <script>window.tamarinPopoutGraph = (window.self === window.top); if (!window.tamarinPopoutGraph) {{ document.documentElement.classList.add(\"graph-embedded\"); }}</script></script>\
+         <script src=\"/static/js/tamarin-prover-ui.js\"></script></script>\
          <script type=\"module\" src=\"/static/js/intdot-graph.es.js\"></script></script>\
-         </head><body><dot-graph-viz dotsrc=\"{dotsrc}\"></dot-graph-viz>\n</body></html>",
+         </head><body><div class=\"graph-page\">\
+         <div id=\"popout-options\"><ul id=\"navigation\">\
+         {options}</ul></div>\
+         <dot-graph-viz dotsrc=\"{dotsrc}\"></dot-graph-viz>\n</div></body></html>",
         title = title,
         dotsrc = dotsrc,
-    );
-    html_response(html)
+        options = theory_html::OPTIONS_MENU_ITEMS,
+    )
+}
+
+/// Yesod `getUrlRender (TheoryGraphJsonR idx path)` — re-render the parsed
+/// path through `renderTheoryPath` + `prefixWithUnderscore` and percent-encode
+/// each segment, exactly as the other URL builders here do.
+fn graph_json_url(idx: usize, path: &path_parse::TheoryPath) -> String {
+    let mut url = format!("/thy/trace/{}/json", idx);
+    for seg in path.render() {
+        url.push('/');
+        url.push_str(&path_parse::url_path_escape(&seg));
+    }
+    url
 }
 
 /// Build `GraphOptions` from a parsed query map.  Re-uses the same
@@ -1512,6 +1538,108 @@ pub async fn interactive_graph_def(
     let opts = graph_options_from_map(&query);
     let dot = crate::handlers::dot::system_to_dot_with(&sys, &opts);
     text_response(dot)
+}
+
+/// `GET /thy/trace/<idx>/json/*path` — the constraint system at `path`
+/// serialised to the JSON graph format the `<dot-graph-viz>` frontend reads.
+///
+/// Port of `getTheoryGraphJsonR` (`src/Web/Handler.hs:1435-1444`) over
+/// `graphJsonThyPath` (`src/Web/Theory.hs:1305-1338`):
+///
+/// - `TheoryProof lemma path` — the sub-proof's system, run through
+///   `Web.Utils.abbrev` when the `abbrevInBackend` parameter is present, and
+///   labelled `Theory: <thy> Lemma: <lemma>`.  An unresolvable proof path is
+///   HS `fromMaybe ""`: a 200 with an EMPTY body.
+/// - `TheorySource kind i j` — the `(i-1, j-1)` case system, labelled
+///   `Theory: <thy> Case: <i>:<j>`, with no backend abbreviation.  HS indexes
+///   with `!!`, so an out-of-range index raises and Yesod answers 500.
+/// - every other path — HS `error "Unhandled theory path. This is a bug."`,
+///   i.e. 500.
+///
+/// The response `Content-Type` is the literal `.json`: HS hands the cached
+/// file to `sendFile (fromString ".json")`, which uses that string verbatim as
+/// the MIME type.
+pub async fn graph_json(
+    State(state): State<Arc<AppState>>,
+    Path((idx, raw_path)): Path<(usize, String)>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    if state.store.get(idx).is_none() {
+        return missing_idx_html(idx);
+    }
+    let Some(path) = parse_path(&raw_path) else {
+        return not_found_response();
+    };
+    let opts = graph_options_from_map(&query);
+    // The source-case list lives on the materialised proof state, so re-read
+    // the entry afterwards (as the `main` handler does).
+    materialise_proof_state_if_needed(&state, idx, &path);
+    let Some(entry) = state.store.get(idx) else {
+        return missing_idx_html(idx);
+    };
+    match &path {
+        path_parse::TheoryPath::Proof { lemma, .. } => {
+            let Some(sys) = resolve_system_for_path(&state, idx, &path) else {
+                return json_graph_response(String::new());
+            };
+            // `Web.Utils.abbrev abbreviate 30 sequent`, with `abbreviate` set
+            // by the mere PRESENCE of `abbrevInBackend`.
+            let abbreviate = query.contains_key("abbrevInBackend");
+            // `abbrev` returns its input unchanged on success, so only the
+            // unshowable-`AbbrevName` failure is of interest here.
+            if crate::graph::web_utils_abbrev::abbrev(
+                abbreviate,
+                crate::graph::web_utils_abbrev::MIN_ABBREV_SIZE,
+                &sys,
+            )
+            .is_err()
+            {
+                return internal_server_error();
+            }
+            let label = format!("Theory: {} Lemma: {}", entry.name, lemma);
+            json_graph_response(crate::graph::json::sequents_to_json_pretty(
+                &opts,
+                &[(label, &sys)],
+            ))
+        }
+        path_parse::TheoryPath::Source {
+            kind,
+            src_idx,
+            case_idx,
+        } => {
+            let want_refined = matches!(kind, path_parse::SourceKind::Refined);
+            let sources = theory_html::compute_source_lists(&entry, want_refined);
+            let case = src_idx
+                .checked_sub(1)
+                .and_then(|i| sources.get(i))
+                .and_then(|(_, cases)| case_idx.checked_sub(1).and_then(|j| cases.get(j)));
+            let Some((_, sys)) = case else {
+                return internal_server_error();
+            };
+            let label = format!("Theory: {} Case: {}:{}", entry.name, src_idx, case_idx);
+            json_graph_response(crate::graph::json::sequents_to_json_pretty(
+                &opts,
+                &[(label, sys)],
+            ))
+        }
+        _ => internal_server_error(),
+    }
+}
+
+/// `200 OK` with HS's literal `.json` content type (see [`graph_json`]).
+fn json_graph_response(body: String) -> Response {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static(".json"),
+    );
+    (StatusCode::OK, headers, body).into_response()
+}
+
+/// The 500 Yesod's `traceExceptions` wrapper produces when the handler raises.
+/// The status is the contract; the body is not consumed by the frontend.
+fn internal_server_error() -> Response {
+    (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
 }
 
 /// `GET /thy/trace/<idx>/proof-step/<lemma>/<path...>/<method>` —
@@ -1708,4 +1836,37 @@ pub async fn append_new_lemmas(
 /// frontend can dispatch a useful message.
 pub async fn diff_stub(_: State<Arc<AppState>>, _: Path<(usize, String)>) -> axum::Json<Value> {
     stub_alert("diff theories")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The interactive-graph shell is a fixed template around the escaped
+    // theory title and the JSON graph URL; the fixture is the Haskell
+    // oracle's response for NSPK3 at
+    // `/thy/trace/2/intdot/proof/injective_agree/_`.
+    #[test]
+    fn intdot_shell_matches_haskell_layout() {
+        let html = intdot_shell_html("Theory: NSPK3", "/thy/trace/2/json/proof/injective_agree/_");
+        assert_eq!(
+            html,
+            include_str!("../../tests/assets/hsjson_intdot_shell.html")
+        );
+    }
+
+    // `getUrlRender (TheoryGraphJsonR idx path)` re-renders the parsed path,
+    // so an empty proof-tree case name comes back as the `_` segment
+    // `prefixWithUnderscore` encodes it as.
+    #[test]
+    fn graph_json_url_encodes_empty_case_name() {
+        let p = path_parse::TheoryPath::Proof {
+            lemma: "injective_agree".into(),
+            sub: vec![String::new()],
+        };
+        assert_eq!(
+            graph_json_url(2, &p),
+            "/thy/trace/2/json/proof/injective_agree/_"
+        );
+    }
 }

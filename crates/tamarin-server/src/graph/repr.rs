@@ -1,14 +1,16 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   addap, Mathias-AURAND, meiersi, rkunnema, sans-sucre, yavivanov,
-//   and other minor contributors (see upstream git history)
+//   addap, Mathias-AURAND, meiersi, rkunnema, jdreier, Divya19gupta,
+//   felixlinker, sans-sucre, yavivanov, and other minor contributors
+//   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Rule.hs,
+//   lib/theory/src/Rule.hs, lib/theory/src/Theory/Constraint/System.hs,
+//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
 //   lib/theory/src/Theory/Constraint/System/Dot.hs,
 //   lib/theory/src/Theory/Constraint/System/Graph/Graph.hs,
 //   lib/theory/src/Theory/Constraint/System/Graph/GraphRepr.hs,
 //   lib/theory/src/Theory/Model/Rule.hs,
 //   lib/theory/src/Theory/Text/Parser/Rule.hs,
-//   lib/utils/src/Text/Dot.hs
+//   lib/utils/src/Extension/Prelude.hs, lib/utils/src/Text/Dot.hs
 
 //! Port of `Theory.Constraint.System.Graph.GraphRepr` —
 //! intermediate representation of a `System` as nodes/edges/clusters
@@ -326,7 +328,7 @@ pub fn add_intelligent_cluster_using_similar_names(repr: &mut GraphRepr) {
 // Building a basic repr from a System
 // ---------------------------------------------------------------------
 
-use tamarin_theory::constraint::constraints::Goal;
+use tamarin_theory::constraint::constraints::{cmp_goal, Goal};
 use tamarin_theory::constraint::system::System;
 
 /// Port of `computeBasicGraphRepr` from `Graph.hs:140-150`.
@@ -350,11 +352,27 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     // these ids against `sNodes`: if an id is both a system node and an
     // unsolved ActionG goal, HS emits BOTH a SystemNode and an
     // UnsolvedActionNode.  So there is no skip-if-already-a-system-node guard.
+    //
+    // `unsolvedActionAtoms` (System.hs:1567-1571) walks `M.toList sGoals`, so
+    // its action goals arrive in ascending `Goal` order; this crate's goal
+    // store is a `Vec` in insertion order, so sort with [`cmp_goal`] first.
+    // Filtering a `cmp_goal`-sorted list down to one constructor yields the
+    // same sequence as sorting that constructor's goals among themselves, so
+    // only the action goals need sorting here.
+    //
+    // `collectBy` (Extension/Prelude.hs:100-107) keys off `nub`'d FIRST
+    // occurrences, and `ActionG`'s leading payload is the node id, so its key
+    // order over that sorted list is ascending node id — what the `BTreeMap`
+    // gives.  Within a node the facts then follow `LNFact` order.
+    let mut action_goals: Vec<&Goal> = sys
+        .goals
+        .iter()
+        .filter(|(g, st)| !st.solved && g.is_action())
+        .map(|(g, _)| g)
+        .collect();
+    action_goals.sort_by(|a, b| cmp_goal(a, b));
     let mut by_node: BTreeMap<NodeId, Vec<LNFact>> = BTreeMap::new();
-    for (g, st) in sys.goals.iter() {
-        if st.solved {
-            continue;
-        }
+    for g in action_goals {
         if let Goal::Action(nid, fa) = g {
             by_node.entry(*nid).or_default().push(fa.clone());
         }
@@ -380,6 +398,19 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
             ty: NodeType::LastAction,
         });
     }
+    // HS reaches `sEdges` / `sLessAtoms` through `S.toList` (Graph.hs:116-127,
+    // 138-147), so both come out in ASCENDING element order.  RS stores each
+    // set as a `Vec` whose element order carries no set semantics — the
+    // display-only `compress_system` pass appends its reconnected edges /
+    // less-atoms (`graph/simplify.rs`) instead of re-inserting in order — so
+    // materialise the set order here, at the same `S.toList` boundary.
+    // `Edge`'s derived `Ord` is `src` then `tgt` (matching HS's derived
+    // instance) and `LessAtom`'s is `(smaller, larger)`, ignoring the reason
+    // tag (matching HS's manual instance, Constraints.hs:126-130).
+    let mut sorted_edges: Vec<_> = sys.edges.iter().collect();
+    sorted_edges.sort();
+    let mut sorted_less: Vec<_> = sys.less_atoms.iter().collect();
+    sorted_less.sort();
     // 4. Missing nodes referenced by edges.
     // HS `systemMissingNodes se = mapMaybe missingNode (S.toList sEdges)`
     // (Graph.hs:116-122): each edge yields AT MOST ONE missing node — `missingNode`
@@ -392,7 +423,7 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     // `systemMissingNodes` never inspects `sLessAtoms`; less-atoms contribute
     // edges (below), not nodes.
     let sys_node_ids: BTreeSet<NodeId> = sys.nodes.iter().map(|(id, _)| *id).collect();
-    for e in &sys.edges {
+    for e in &sorted_edges {
         if !sys_node_ids.contains(&e.src.0) {
             nodes.push(GNode {
                 id: e.src.0,
@@ -407,19 +438,21 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     }
     // 5. Edges.
     let mut edges: Vec<GEdge> = Vec::new();
-    for e in &sys.edges {
+    for e in &sorted_edges {
         edges.push(GEdge::System(e.src, e.tgt));
     }
-    for la in &sys.less_atoms {
-        edges.push(GEdge::Less(la.clone()));
+    for la in &sorted_less {
+        edges.push(GEdge::Less((*la).clone()));
     }
-    for (g, st) in sys.goals.iter() {
-        if st.solved {
-            continue;
-        }
-        if let Goal::Chain(src, tgt) = g {
-            edges.push(GEdge::UnsolvedChain(*src, *tgt));
-        }
+    // HS `unsolvedChains` (System.hs:1600-1604) walks `M.toList sGoals`, so
+    // its chain goals arrive in ascending `Goal` order — see step 2 for why
+    // sorting the filtered subset reproduces that.  `Ord` on the
+    // `(NodeConc, NodePrem)` pair is exactly [`cmp_goal`]'s `Chain` arm, so
+    // sorting the extracted pairs is the same order as sorting the goals.
+    let mut chains = sys.unsolved_chains();
+    chains.sort();
+    for (src, tgt) in chains {
+        edges.push(GEdge::UnsolvedChain(src, tgt));
     }
     GraphRepr {
         clusters: Vec::new(),
@@ -453,6 +486,56 @@ mod tests {
 
     fn nid(name: &str, idx: u64) -> NodeId {
         LVar::new(name, LSort::Node, idx)
+    }
+
+    // `sEdges` / `sLessAtoms` are `Data.Set`s upstream, so `computeBasicGraphRepr`
+    // reads them through `S.toList` in ascending element order — system edges by
+    // `(src, tgt)` and less-atoms by `(smaller, larger)` — with all system edges
+    // ahead of all less-edges.  `NodeId` (`LVar`) orders idx-major, so `#vr.5`
+    // sorts before `#vk.6`, and the display-only compression pass's appended
+    // edges must land at their sorted position rather than at the end.
+    #[test]
+    fn basic_repr_materialises_edge_and_less_set_order() {
+        use tamarin_theory::constraint::constraints::{Edge, Reason};
+        let mut sys = System::default();
+        // Pushed in a deliberately unsorted order, as compression leaves them.
+        for (s, si, t, ti) in [
+            ("vr", 2u64, "vk", 8u64),
+            ("vf", 0, "vi", 1),
+            ("vr", 1, "vk", 8),
+        ] {
+            sys.content_mut().edges.push(Edge {
+                src: (nid(s, si), ConcIdx(0)),
+                tgt: (nid(t, ti), PremIdx(0)),
+            });
+        }
+        for (s, si, t, ti) in [("vk", 6u64, "vk", 0u64), ("vr", 5, "vk", 0)] {
+            sys.content_mut().less_atoms.push(LessAtom::new(
+                nid(s, si),
+                nid(t, ti),
+                Reason::Formula,
+            ));
+        }
+        let repr = compute_basic_graph_repr(&sys);
+        let rendered: Vec<String> = repr
+            .edges
+            .iter()
+            .map(|e| match e {
+                GEdge::System(s, t) => format!("{}->{}", s.0, t.0),
+                GEdge::Less(la) => format!("{}<{}", la.smaller, la.larger),
+                GEdge::UnsolvedChain(s, t) => format!("{}~>{}", s.0, t.0),
+            })
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "#vf->#vi.1",
+                "#vr.1->#vk.8",
+                "#vr.2->#vk.8",
+                "#vr.5<#vk",
+                "#vk.6<#vk",
+            ]
+        );
     }
 
     #[test]

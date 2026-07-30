@@ -86,6 +86,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/thy/trace/:idx/graph/*path", get(handlers::theory::graph))
         .route(
+            "/thy/trace/:idx/json/*path",
+            get(handlers::theory::graph_json),
+        )
+        .route(
             "/thy/trace/:idx/interactive-graph-def/*path",
             get(handlers::theory::interactive_graph_def),
         )

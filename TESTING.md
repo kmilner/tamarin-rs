@@ -27,7 +27,7 @@ output**, after stripping only the environment-volatile header lines
 |---|---|---|
 | 1 | `cargo test` | Rust unit + integration suites (~1000 tests) |
 | 2 | `scripts/diff_proof_raw.sh <file> <lemma>` | one lemma, raw HS↔RS diff |
-| 3 | `scripts/corpus_file_diff.sh` | the batch gate: 419-file corpus, byte parity |
+| 3 | `scripts/corpus_file_diff.sh` | the batch gate: 414-file corpus, byte parity |
 | 4 | `scripts/web_parity.sh` | interactive-mode gate: crawl + semantic diff |
 | 5 | `scripts/bench.sh` | performance tables (see README) |
 
@@ -64,10 +64,10 @@ existing build).
 
 ```bash
 ALLOWLIST=scripts/parity_corpus.txt RESULTS_TSV=/tmp/gate.tsv scripts/corpus_file_diff.sh
-awk -F'\t' '{print $2}' /tmp/gate.tsv | sort | uniq -c     # expect: 419 MATCH
+awk -F'\t' '{print $2}' /tmp/gate.tsv | sort | uniq -c     # expect: 414 MATCH
 ```
 
-Whole-file `--prove` diff over the canonical 419-file corpus
+Whole-file `--prove` diff over the canonical 414-file corpus
 (`scripts/parity_corpus.txt`). Two strictly sequential phases: Haskell
 output is computed once per file-content hash and cached under
 `scripts/.hs_file_cache/`; the Rust binary is then diffed against the cache
@@ -158,6 +158,8 @@ instrumented Haskell build, the rest on the Rust binary:
 
 | Variable | Effect |
 |---|---|
+| `TAM_RS_DBG_INTR_DUMP=1` | assembled intruder-rule cache (index, kind, budget/flags, facts) |
+| `TAM_RS_DBG_SOURCES_DUMP=1` | per-source goal + refined case names after `ensure_saturated` |
 | `TAM_DBG_PERFORM_SPLIT=1` | perform_split case lists (RS) |
 | `TAM_HS_DBG_PERFORM_SPLIT=1` | same, HS side |
 | `TAM_RS_DBG_APPLY_EQ_STORE=1` | applyEqStore IN/OUT (RS) |
@@ -191,7 +193,7 @@ The list is not exhaustive — grep the sources for `TAM_DBG_` / `TAM_RS_` /
 | Script | Purpose |
 |---|---|
 | `corpus_file_diff.sh` | the batch byte gate (cached HS, per-file) |
-| `parity_corpus.txt` | canonical 419-file corpus list |
+| `parity_corpus.txt` | canonical 414-file corpus list |
 | `file_flags.tsv` | per-file extra prover flags (both sides) |
 | `diff_proof_raw.sh` | one lemma, raw HS↔RS diff |
 | `corpus_raw_diff.sh` | raw per-lemma diff across the corpus |

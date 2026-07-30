@@ -330,10 +330,13 @@ pub fn cmp_term(a: &GTerm, b: &GTerm) -> std::cmp::Ordering {
 /// order `NoEq(0) < AC(1) < C(2) < List(3)` (FunctionSymbols.hs:113-117)
 /// and, within `NoEq`, `(name, arity)` mirrors `Ord NoEqSym` (compared by
 /// name then arity — privacy/constructability never disambiguate two
-/// distinct symbols sharing a name+arity).  AC ops carry no name; their
-/// `ACSym` order is `Union < Mult < Xor < NatPlus` (FunctionSymbols.hs:93-94),
-/// encoded in the third (`arity`) field as an index so AC terms sort among
-/// themselves by ACSym and after every NoEq term.
+/// distinct symbols sharing a name+arity).  The builtin AC ops carry no name;
+/// their `ACSym` order is `Union < Mult < Xor < NatPlus < ACfct`
+/// (FunctionSymbols.hs:93-94), encoded in the third (`arity`) field as an
+/// index so AC terms sort among themselves by ACSym and after every NoEq
+/// term.  A user-defined `ACfct` carries its name, which sorts after the
+/// builtin ops' empty name and orders two `ACfct`s by name — mirroring
+/// `Ord ACfctSym`, whose first tuple component is the name.
 fn funsym_key(t: &GTerm) -> (u8, &[u8], usize) {
     use GTerm::*;
     // NoEq syms: outer = 0, key by (name-bytes, arity).  Static byte-string
@@ -354,6 +357,7 @@ fn funsym_key(t: &GTerm) -> (u8, &[u8], usize) {
         BinOp(p::BinOp::Mult, _, _) => (1, b"", 1),
         BinOp(p::BinOp::Xor, _, _) => (1, b"", 2),
         BinOp(p::BinOp::NatPlus, _, _) => (1, b"", 3),
+        BinOp(p::BinOp::AcFct(n), _, _) => (1, n.as_bytes(), 4),
         // PatMatch is RS-only with no HS equivalent — sort after all.
         PatMatch(_) => (255, b"", 0),
         // Lit-class terms never reach here (ca != 1).
@@ -452,10 +456,11 @@ fn term_class(t: &GTerm) -> (u8, u8) {
 
 /// HS-faithful: which `BinOp`s are AC (associative-commutative)?
 /// Mirrors HS's `MaudeSig`-attribute classification: Mult, Union, Xor,
-/// NatPlus are AC; Exp is NOT (right-associative algebraic).
+/// NatPlus and the user-declared `[AC]` symbols are AC; Exp is NOT
+/// (right-associative algebraic).
 fn is_ac_binop(o: &p::BinOp) -> bool {
     use p::BinOp::*;
-    matches!(o, Mult | Union | Xor | NatPlus)
+    matches!(o, Mult | Union | Xor | NatPlus | AcFct(_))
 }
 
 /// Flatten an AC-BinOp chain into a flat arg list.  E.g.

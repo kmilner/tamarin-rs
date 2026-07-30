@@ -2268,6 +2268,11 @@ fn is_open_in_sys(g: &Goal, sys: &System, ab_adj: &crate::constraint::system::Pr
             if is_pub_or_nat_term(m) {
                 return false;
             }
+            // #883 soundness condition: do not solve actions consisting of
+            // an AC symbol where all arguments are simple msg variables.
+            if tamarin_term::lterm::is_trivial_ac_fun_sym_term(m) {
+                return false;
+            }
             if has_top_pair_inv_prod(m) {
                 return false;
             }

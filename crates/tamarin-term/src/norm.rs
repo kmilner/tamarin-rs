@@ -88,6 +88,15 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, irreducible: &FunSig) -> bool {
             if matches!(sym, FunSym::NoEq(_)) && irreducible.contains(sym) {
                 return args.iter().all(|a| go_nf(a, msig, irreducible));
             }
+            // Irreducible user-defined AC top (HS
+            // `FAppACfct o ts | AC (ACfct o) \`S.member\` irreducible`),
+            // directly after the NoEq irreducible case.  The gate is again on
+            // the symbol KIND: the builtin AC operators are matched by their
+            // own `viewTerm2` constructors, so they never take this arm even
+            // when they are in `irreducible` (see the note above).
+            if matches!(sym, FunSym::Ac(AcSym::AcFct(_))) && irreducible.contains(sym) {
+                return args.iter().all(|a| go_nf(a, msig, irreducible));
+            }
             if matches!(sym, FunSym::List) {
                 return args.iter().all(|a| go_nf(a, msig, irreducible));
             }
@@ -102,7 +111,9 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, irreducible: &FunSig) -> bool {
                     return true;
                 }
             }
-            // 3. Subterm-rule LHS match → reducible.  HS uses
+            // 3. Subterm-rule LHS match → reducible.  HS gates this on a NoEq
+            //    or user-defined-AC top (`FAppNoEq _ _` / `FAppACfct _ _`);
+            //    both reach here.  HS uses
             //    `solveMatchLNTerm (t `matchWith` lhs)` (Norm.hs:104-110).
             //    All builtin subterm rules (pair / senc / sdec / aenc /
             //    adec / sign / verify / ...) have AC-free LHS, so the
@@ -215,7 +226,9 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, irreducible: &FunSig) -> bool {
                         }
                         return args.iter().all(|a| go_nf(a, msig, irreducible));
                     }
-                    AcSym::Union | AcSym::NatPlus => {
+                    // HS's recursive catch-all section: `FUnion ts`,
+                    // `FNatPlus ts` and `FAppACfct _ ts` all walk subterms.
+                    AcSym::Union | AcSym::NatPlus | AcSym::AcFct(_) => {
                         return args.iter().all(|a| go_nf(a, msig, irreducible));
                     }
                 }

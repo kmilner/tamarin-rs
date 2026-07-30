@@ -13,15 +13,6 @@
 
 use std::collections::BTreeSet;
 
-/// AC (associative-commutative) function symbols.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum AcSym {
-    Union,
-    Mult,
-    Xor,
-    NatPlus,
-}
-
 /// A function symbol can be either private (unknown to the adversary) or public.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Privacy {
@@ -37,9 +28,68 @@ pub enum Constructability {
     Destructor,
 }
 
-/// Free (no-equation) function symbol — name plus arity, privacy, and
-/// constructability. Mirrors the Haskell tuple
-/// `(ByteString, (Int, Privacy, Constructability))`.
+/// A function symbol can be AC or not (parser attribute carrier).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AcState {
+    IsAc,
+    NotAc,
+}
+
+/// NDC ("no deconstruction chain") property of a function symbol: held for
+/// the trace intruder rules (`IsNdc`), the diff-mode intruder rules
+/// (`IsNdcDiff`), both, or neither.
+///
+/// Variant order mirrors the Haskell declaration
+/// `IsNDC | NotNDC | IsNDCDiff | IsNDCBoth` — the derived `Ord` participates
+/// in symbol ordering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum NdcState {
+    IsNdc,
+    NotNdc,
+    IsNdcDiff,
+    IsNdcBoth,
+}
+
+impl NdcState {
+    /// Does the state include the NDC property for the trace intruder rules?
+    pub fn has_ndc(self) -> bool {
+        matches!(self, NdcState::IsNdc | NdcState::IsNdcBoth)
+    }
+    /// Does the state include the NDC property for the diff-mode intruder rules?
+    pub fn has_ndc_diff(self) -> bool {
+        matches!(self, NdcState::IsNdcDiff | NdcState::IsNdcBoth)
+    }
+    /// Combine two NDC states, keeping the properties asserted by either one.
+    pub fn join(self, other: NdcState) -> NdcState {
+        match (
+            self.has_ndc() || other.has_ndc(),
+            self.has_ndc_diff() || other.has_ndc_diff(),
+        ) {
+            (true, true) => NdcState::IsNdcBoth,
+            (true, false) => NdcState::IsNdc,
+            (false, true) => NdcState::IsNdcDiff,
+            (false, false) => NdcState::NotNdc,
+        }
+    }
+}
+
+/// A parsed function-symbol attribute (`[private]`, `[destructor]`, `[AC]`,
+/// `[NDC]`, `[NDC-diff]`, …).
+///
+/// Intentionally retained: faithful mirror of HS `FctAttr`
+/// (Term/Term/FunctionSymbols.hs). The parser carries its own
+/// surface-restricted copy; this one has no call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum FctAttr {
+    Privacy(Privacy),
+    Constructability(Constructability),
+    AcState(AcState),
+    NdcState(NdcState),
+}
+
+/// Free (no-equation) function symbol — name plus arity, privacy,
+/// constructability, and NDC property. Mirrors the Haskell tuple
+/// `(ByteString, (Int, Privacy, Constructability, NDCstate))`.
 #[derive(Clone, Copy)]
 pub struct NoEqSym {
     /// Interned into a global pool and held as a `&'static [u8]`, so a clone
@@ -52,6 +102,7 @@ pub struct NoEqSym {
     pub arity: usize,
     pub privacy: Privacy,
     pub constructability: Constructability,
+    pub ndc: NdcState,
 }
 
 // Render the name as a (lossy) string rather than a raw byte array, so debug
@@ -63,6 +114,7 @@ impl std::fmt::Debug for NoEqSym {
             .field("arity", &self.arity)
             .field("privacy", &self.privacy)
             .field("constructability", &self.constructability)
+            .field("ndc", &self.ndc)
             .finish()
     }
 }
@@ -79,23 +131,26 @@ impl PartialEq for NoEqSym {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
         // Destructure without `..` so a new field forces an equality decision
-        // here and in the sibling Hash/Ord impls; all four fields participate.
+        // here and in the sibling Hash/Ord impls; all five fields participate.
         let NoEqSym {
             name,
             arity,
             privacy,
             constructability,
+            ndc,
         } = self;
         let NoEqSym {
             name: other_name,
             arity: other_arity,
             privacy: other_privacy,
             constructability: other_constructability,
+            ndc: other_ndc,
         } = other;
         (std::ptr::eq(name.as_ptr(), other_name.as_ptr()) || name == other_name)
             && arity == other_arity
             && privacy == other_privacy
             && constructability == other_constructability
+            && ndc == other_ndc
     }
 }
 impl Eq for NoEqSym {}
@@ -110,36 +165,41 @@ impl std::hash::Hash for NoEqSym {
     #[inline]
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         // Destructure without `..` so a new field forces a hash decision here,
-        // keeping this in step with Eq/Ord; all four fields are hashed.
+        // keeping this in step with Eq/Ord; all five fields are hashed.
         let NoEqSym {
             name,
             arity,
             privacy,
             constructability,
+            ndc,
         } = self;
         name.hash(state);
         arity.hash(state);
         privacy.hash(state);
         constructability.hash(state);
+        ndc.hash(state);
     }
 }
 impl Ord for NoEqSym {
     #[inline]
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Field order: name, arity, privacy, constructability (consistent with
-        // Eq/Hash).  Only the name compare gains the ptr fast-path.  Destructure
-        // without `..` so a new field forces an ordering decision here.
+        // Field order: name, arity, privacy, constructability, ndc (the HS
+        // tuple order, consistent with Eq/Hash).  Only the name compare gains
+        // the ptr fast-path.  Destructure without `..` so a new field forces
+        // an ordering decision here.
         let NoEqSym {
             name,
             arity,
             privacy,
             constructability,
+            ndc,
         } = self;
         let NoEqSym {
             name: other_name,
             arity: other_arity,
             privacy: other_privacy,
             constructability: other_constructability,
+            ndc: other_ndc,
         } = other;
         let name_ord = if std::ptr::eq(name.as_ptr(), other_name.as_ptr()) {
             std::cmp::Ordering::Equal
@@ -150,6 +210,7 @@ impl Ord for NoEqSym {
             .then_with(|| arity.cmp(other_arity))
             .then_with(|| privacy.cmp(other_privacy))
             .then_with(|| constructability.cmp(other_constructability))
+            .then_with(|| ndc.cmp(other_ndc))
     }
 }
 impl PartialOrd for NoEqSym {
@@ -171,18 +232,211 @@ impl NoEqSym {
             arity,
             privacy,
             constructability: c,
+            ndc: NdcState::NotNdc,
         }
     }
     pub fn with_destructor(mut self) -> Self {
         self.constructability = Constructability::Destructor;
         self
     }
+    pub fn with_ndc(mut self, ndc: NdcState) -> Self {
+        self.ndc = ndc;
+        self
+    }
+}
+
+/// User-defined AC function symbol — name plus privacy, constructability,
+/// and NDC property (arity is always 2). Mirrors the Haskell tuple
+/// `(ByteString, (Privacy, Constructability, NDCstate))`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AcFctSym {
+    /// Interned like `NoEqSym::name` (see there for the rationale).
+    pub name: &'static [u8],
+    pub privacy: Privacy,
+    pub constructability: Constructability,
+    pub ndc: NdcState,
+}
+
+impl std::fmt::Debug for AcFctSym {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AcFctSym")
+            .field("name", &String::from_utf8_lossy(self.name))
+            .field("privacy", &self.privacy)
+            .field("constructability", &self.constructability)
+            .field("ndc", &self.ndc)
+            .finish()
+    }
+}
+
+impl Ord for AcFctSym {
+    #[inline]
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // HS tuple order: name, privacy, constructability, ndc.
+        let AcFctSym {
+            name,
+            privacy,
+            constructability,
+            ndc,
+        } = self;
+        let AcFctSym {
+            name: other_name,
+            privacy: other_privacy,
+            constructability: other_constructability,
+            ndc: other_ndc,
+        } = other;
+        name.cmp(other_name)
+            .then_with(|| privacy.cmp(other_privacy))
+            .then_with(|| constructability.cmp(other_constructability))
+            .then_with(|| ndc.cmp(other_ndc))
+    }
+}
+impl PartialOrd for AcFctSym {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl AcFctSym {
+    pub fn new(
+        name: impl Into<Vec<u8>>,
+        privacy: Privacy,
+        c: Constructability,
+        ndc: NdcState,
+    ) -> Self {
+        AcFctSym {
+            name: crate::intern::intern_bytes(&name.into()),
+            privacy,
+            constructability: c,
+            ndc,
+        }
+    }
+    pub fn with_ndc(mut self, ndc: NdcState) -> Self {
+        self.ndc = ndc;
+        self
+    }
+}
+
+/// Haskell `showLitChar` over a single `ByteString` byte (each byte is
+/// unpacked to the `Char` with the same code point).
+pub fn hs_show_lit_byte(b: u8, out: &mut String) {
+    match b {
+        b'"' => out.push_str("\\\""),
+        b'\\' => out.push_str("\\\\"),
+        0x20..=0x7e => out.push(b as char),
+        0x7f => out.push_str("\\DEL"),
+        // ASCII control mnemonics, in code-point order (`asciiTab`), with the
+        // `\a \b \f \n \r \t \v` shortcuts GHC prints for the seven that have
+        // one.
+        _ if b < 0x20 => {
+            const CTRL: [&str; 32] = [
+                "\\NUL", "\\SOH", "\\STX", "\\ETX", "\\EOT", "\\ENQ", "\\ACK", "\\a", "\\b", "\\t",
+                "\\n", "\\v", "\\f", "\\r", "\\SO", "\\SI", "\\DLE", "\\DC1", "\\DC2", "\\DC3",
+                "\\DC4", "\\NAK", "\\SYN", "\\ETB", "\\CAN", "\\EM", "\\SUB", "\\ESC", "\\FS",
+                "\\GS", "\\RS", "\\US",
+            ];
+            out.push_str(CTRL[b as usize]);
+        }
+        // Above DEL: `'\\' : show (ord c)`, i.e. a decimal escape.
+        _ => {
+            out.push('\\');
+            out.push_str(&b.to_string());
+        }
+    }
+}
+
+/// `plainstring $ show s` for a symbol-name `ByteString`.
+///
+/// `show` renders the byte string as a Haskell string literal and
+/// `plainstring` strips the surrounding quotes again, leaving the
+/// literal's escaped BODY.  Symbol names produced by the parser are
+/// alphanumeric, so the escaping is inert in practice; it is reproduced for
+/// faithfulness.
+pub fn plain_show_bytes(name: &[u8]) -> String {
+    let mut out = String::with_capacity(name.len());
+    for (i, &b) in name.iter().enumerate() {
+        let before = out.len();
+        hs_show_lit_byte(b, &mut out);
+        // GHC `showLitString`'s `\&` separator: a numeric escape followed by a
+        // digit, and `\SO` followed by `H`, would otherwise re-lex as a single
+        // token.  Both following characters are ASCII, so the next INPUT byte
+        // is also the next OUTPUT character.
+        let escape = &out[before..];
+        let ambiguous = match name.get(i + 1) {
+            Some(n) if n.is_ascii_digit() => {
+                escape.len() > 1 && escape.as_bytes()[1..].iter().all(u8::is_ascii_digit)
+            }
+            Some(b'H') => escape == "\\SO",
+            _ => false,
+        };
+        if ambiguous {
+            out.push_str("\\&");
+        }
+    }
+    out
+}
+
+/// Derived `Show` of `Privacy` / `Constructability` / `NDCstate` and of the
+/// `ACfctSym` tuple `(ByteString, (Privacy, Constructability, NDCstate))`:
+/// `("name",(Public,Constructor,NotNDC))` — no spaces after the commas, and
+/// the `ByteString` name as a string literal's escaped body.
+pub fn show_acfct_sym(sym: &AcFctSym) -> String {
+    let privacy = match sym.privacy {
+        Privacy::Private => "Private",
+        Privacy::Public => "Public",
+    };
+    let constructability = match sym.constructability {
+        Constructability::Constructor => "Constructor",
+        Constructability::Destructor => "Destructor",
+    };
+    let ndc = match sym.ndc {
+        NdcState::IsNdc => "IsNDC",
+        NdcState::NotNdc => "NotNDC",
+        NdcState::IsNdcDiff => "IsNDCDiff",
+        NdcState::IsNdcBoth => "IsNDCBoth",
+    };
+    format!(
+        "(\"{}\",({},{},{}))",
+        plain_show_bytes(sym.name),
+        privacy,
+        constructability,
+        ndc
+    )
+}
+
+/// AC (associative-commutative) function symbols.
+///
+/// Variant order mirrors the Haskell declaration
+/// `Union | Mult | Xor | NatPlus | ACfct ACfctSym`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AcSym {
+    Union,
+    Mult,
+    Xor,
+    NatPlus,
+    AcFct(AcFctSym),
 }
 
 /// Commutative (but not associative) function symbols.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CSym {
     EMap,
+}
+
+/// A user-defined function symbol: free or AC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum UserDefinedSym {
+    NoEqUser(NoEqSym),
+    AcFctUser(AcFctSym),
+}
+
+impl UserDefinedSym {
+    pub fn name(&self) -> &'static [u8] {
+        match self {
+            UserDefinedSym::NoEqUser(s) => s.name,
+            UserDefinedSym::AcFctUser(s) => s.name,
+        }
+    }
 }
 
 /// Top-level function-symbol classification.
@@ -205,12 +459,58 @@ impl FunSym {
     pub fn is_list(&self) -> bool {
         matches!(self, FunSym::List)
     }
+
+    /// HS `isNDCFunSym`: NDC property (trace mode) of the symbol.
+    pub fn is_ndc_fun_sym(&self) -> bool {
+        match self {
+            FunSym::NoEq(s) => s.ndc.has_ndc(),
+            FunSym::Ac(AcSym::AcFct(s)) => s.ndc.has_ndc(),
+            _ => false,
+        }
+    }
+
+    /// HS `isNDCDiffFunSym`: NDC property (diff mode) of the symbol.
+    pub fn is_ndc_diff_fun_sym(&self) -> bool {
+        match self {
+            FunSym::NoEq(s) => s.ndc.has_ndc_diff(),
+            FunSym::Ac(AcSym::AcFct(s)) => s.ndc.has_ndc_diff(),
+            _ => false,
+        }
+    }
+
+    /// HS `setNDC`: overwrite the NDC state (no-op on non-user symbols).
+    pub fn set_ndc(self, ndc: NdcState) -> FunSym {
+        match self {
+            FunSym::NoEq(s) => FunSym::NoEq(s.with_ndc(ndc)),
+            FunSym::Ac(AcSym::AcFct(s)) => FunSym::Ac(AcSym::AcFct(s.with_ndc(ndc))),
+            other => other,
+        }
+    }
+
+    /// HS `addNDC`: join the given NDC state onto the existing one.
+    pub fn add_ndc(self, ndc: NdcState) -> FunSym {
+        match self {
+            FunSym::NoEq(s) => {
+                let joined = ndc.join(s.ndc);
+                FunSym::NoEq(s.with_ndc(joined))
+            }
+            FunSym::Ac(AcSym::AcFct(s)) => {
+                let joined = ndc.join(s.ndc);
+                FunSym::Ac(AcSym::AcFct(s.with_ndc(joined)))
+            }
+            other => other,
+        }
+    }
 }
 
 /// Function signature.
 pub type FunSig = BTreeSet<FunSym>;
 /// Free function signature.
 pub type NoEqFunSig = BTreeSet<NoEqSym>;
+/// User-defined AC function signature.
+pub type AcFctFunSig = BTreeSet<AcFctSym>;
+/// User-defined function signature.
+pub type UserDefinedSig = BTreeSet<UserDefinedSym>;
 
 // =============================================================================
 // Symbol-name string constants (matching the Haskell `*SymString` family).
@@ -388,6 +688,43 @@ mod tests {
         assert!(!dh.contains(&FunSym::Ac(AcSym::Xor)));
     }
 
+    /// `plainstring (show sym)` is the Haskell string literal's escaped body:
+    /// ordinary symbol names pass through, and the `\&` separator appears only
+    /// where the literal would otherwise re-lex (a numeric escape before a
+    /// digit, `\SO` before `H`).
+    #[test]
+    fn plain_show_bytes_matches_haskell_string_literal_body() {
+        assert_eq!(plain_show_bytes(b"aenc"), "aenc");
+        assert_eq!(plain_show_bytes(b"_exp"), "_exp");
+        assert_eq!(plain_show_bytes(b"a\"b\\c"), "a\\\"b\\\\c");
+        assert_eq!(plain_show_bytes(&[0xc3, b'7']), "\\195\\&7");
+        assert_eq!(plain_show_bytes(&[0xc3, b'x']), "\\195x");
+        assert_eq!(plain_show_bytes(&[0x0e, b'H']), "\\SO\\&H");
+        assert_eq!(plain_show_bytes(&[0x0e, b'I']), "\\SOI");
+    }
+
+    /// Derived `Show` of the `ACfctSym` tuple.
+    #[test]
+    fn show_acfct_sym_matches_derived_show() {
+        let s = AcFctSym::new(
+            b"add".to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::NotNdc,
+        );
+        assert_eq!(show_acfct_sym(&s), "(\"add\",(Public,Constructor,NotNDC))");
+        let d = AcFctSym::new(
+            b"add".to_vec(),
+            Privacy::Private,
+            Constructability::Destructor,
+            NdcState::IsNdcBoth,
+        );
+        assert_eq!(
+            show_acfct_sym(&d),
+            "(\"add\",(Private,Destructor,IsNDCBoth))"
+        );
+    }
+
     #[test]
     fn implicit_sig_includes_pair_and_inv() {
         let s = implicit_fun_sig();
@@ -406,13 +743,29 @@ mod tests {
     // Maude-bridge command order and term canonicalization.
     // =========================================================================
 
-    /// FunctionSymbols.hs:93:
-    ///     data ACSym = Union | Mult | Xor | NatPlus
+    /// FunctionSymbols.hs:
+    ///     data ACSym = Union | Mult | Xor | NatPlus | ACfct ACfctSym
     #[test]
     fn ac_sym_ord_matches_haskell_declaration() {
         assert!(AcSym::Union < AcSym::Mult);
         assert!(AcSym::Mult < AcSym::Xor);
         assert!(AcSym::Xor < AcSym::NatPlus);
+        let user = AcSym::AcFct(AcFctSym::new(
+            b"f".to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::NotNdc,
+        ));
+        assert!(AcSym::NatPlus < user);
+    }
+
+    /// FunctionSymbols.hs:
+    ///     data NDCstate = IsNDC | NotNDC | IsNDCDiff | IsNDCBoth
+    #[test]
+    fn ndc_state_ord_matches_haskell_declaration() {
+        assert!(NdcState::IsNdc < NdcState::NotNdc);
+        assert!(NdcState::NotNdc < NdcState::IsNdcDiff);
+        assert!(NdcState::IsNdcDiff < NdcState::IsNdcBoth);
     }
 
     /// FunctionSymbols.hs:97:

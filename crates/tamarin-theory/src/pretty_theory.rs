@@ -641,7 +641,7 @@ fn render_injective_fact_insts(elab: &Theory) -> String {
 // Signature
 // =============================================================================
 
-fn render_signature(sig: &tamarin_term::maude_sig::MaudeSig) -> String {
+pub(crate) fn render_signature(sig: &tamarin_term::maude_sig::MaudeSig) -> String {
     let mut out = String::new();
 
     // builtins: ...  (only if any enabled)
@@ -698,25 +698,86 @@ fn render_signature(sig: &tamarin_term::maude_sig::MaudeSig) -> String {
 /// Render the function symbol list, sorted alphabetically by name (HS
 /// uses `S.toList` over a Set ordered by the same key).
 fn render_fun_syms(sig: &tamarin_term::maude_sig::MaudeSig) -> Vec<String> {
-    use tamarin_term::function_symbols::{Constructability, Privacy};
-    let mut items: Vec<(String, String)> = sig
-        .st_fun_syms
-        .iter()
-        .map(|sym| {
-            let name = String::from_utf8_lossy(sym.name).to_string();
-            let arity = sym.arity;
-            let attr = match (sym.privacy, sym.constructability) {
-                (Privacy::Public, Constructability::Constructor) => "",
-                (Privacy::Public, Constructability::Destructor) => "[destructor]",
-                (Privacy::Private, Constructability::Constructor) => "[private,constructor]",
-                (Privacy::Private, Constructability::Destructor) => "[private,destructor]",
-            };
-            let rendered = format!("{}/{}{}", name, arity, attr);
-            (name, rendered)
-        })
-        .collect();
-    items.sort_by(|a, b| a.0.cmp(&b.0));
-    items.into_iter().map(|(_, s)| s).collect()
+    // HS `prettyMaudeSigExcept`: NoEq symbols (BTreeSet order) followed by
+    // the user-defined AC symbols, with space-prefixed attribute lists
+    // (`h/1 [destructor]`) and NDC attributes.
+    sig.pretty_fun_syms_except(&std::collections::BTreeSet::new())
+}
+
+/// HS `prettyTranslationElement`, the two `FunctionTypingInfo` cases
+/// (TheoryObject.hs:800-819 for a user-defined AC symbol, 820-838 for a free
+/// one): the `function: f(t1, t2): t` typing line of a SAPIC theory, followed by
+/// the symbol's attributes.
+///
+/// No call site: RS never produces `TranslationElement::FunctionTypingInfo`.  In
+/// HS these items only reach a printer through the OPEN theory (`typeTheoryEnv`
+/// rebuilds them from the typing environment, Typing.hs:204-227, see line 210);
+/// `removeTranslationItems` strips every translation item before a theory is
+/// closed, so `--prove` output never carries them.  This is the faithful printer
+/// for whenever open-theory rendering is ported.
+///
+/// SPACING.  HS glues the parts with `<->` = HughesPJ `<+>`, and HughesPJ's
+/// `text ""` is NOT `empty`, so an ABSENT attribute still contributes its
+/// separating space (a public constructor with no NDC state renders
+/// `function: f(a): b` plus two trailing spaces).  RS's `Doc::text("")`
+/// collapses to `Doc::empty()`, whose `beside_sp` would swallow that space, so
+/// the attribute suffixes are glued with an explicit space here.  The attribute
+/// strings themselves also carry a LEADING space in HS, which is why the
+/// rendered line has two spaces before `[private]`.
+pub fn pretty_function_typing_info(fti: &crate::theory::SapicFunSym) -> crate::pretty_hpj::Doc {
+    use crate::pretty_hpj::{fsep, parens, punctuate, Doc};
+    use tamarin_term::function_symbols::{Constructability, NdcState, Privacy, UserDefinedSym};
+
+    // HS `printType = maybe (text defaultSapicTypeS) text`.
+    fn print_type(t: &crate::sapic::SapicType) -> Doc {
+        match t {
+            Some(ty) => Doc::text(ty),
+            None => Doc::text(crate::sapic::default_sapic_type_string()),
+        }
+    }
+    // HS `d <-> text s` for a possibly-empty `s` (see SPACING above).
+    fn beside_sp_str(d: Doc, s: &str) -> Doc {
+        d.beside(Doc::char(' ')).beside(Doc::text(s))
+    }
+    fn show_priv(p: Privacy) -> &'static str {
+        match p {
+            Privacy::Private => " [private]",
+            Privacy::Public => "",
+        }
+    }
+    fn show_const(c: Constructability) -> &'static str {
+        match c {
+            Constructability::Constructor => "",
+            Constructability::Destructor => " [destructor]",
+        }
+    }
+    fn show_ndc(n: NdcState) -> &'static str {
+        match n {
+            NdcState::NotNdc => "",
+            NdcState::IsNdc => " [NDC]",
+            NdcState::IsNdcDiff => " [NDC-Diff]",
+            NdcState::IsNdcBoth => " [NDC,NDC-Diff]",
+        }
+    }
+
+    let (privacy, constructability, ndc, is_ac) = match fti.sym {
+        UserDefinedSym::NoEqUser(s) => (s.privacy, s.constructability, s.ndc, false),
+        UserDefinedSym::AcFctUser(s) => (s.privacy, s.constructability, s.ndc, true),
+    };
+    let name = String::from_utf8_lossy(fti.sym.name()).to_string();
+    let args: Vec<Doc> = fti.arg_types.iter().map(print_type).collect();
+    let mut d = Doc::text("function:")
+        .beside_sp(Doc::text(name))
+        .beside_sp(parens(fsep(punctuate(Doc::text(","), args))))
+        .beside_sp(Doc::text(":"))
+        .beside_sp(print_type(&fti.out_type));
+    // The AC marker sits between the out type and the privacy attribute.
+    if is_ac {
+        d = beside_sp_str(d, " [AC]");
+    }
+    d = beside_sp_str(d, show_priv(privacy));
+    d = beside_sp_str(d, show_const(constructability));
+    beside_sp_str(d, show_ndc(ndc))
 }
 
 /// Render the equation list.  Each `CtxtStRule` has an LHS term and an
@@ -1918,7 +1979,7 @@ fn render_node_id_str(name: &str, idx: u32) -> String {
 }
 
 /// Convert LNFacts (post-elaboration) to parser-AST Facts so we can
-/// reuse the parser-AST fact rendering path.  Drops fact annotations.
+/// reuse the parser-AST fact rendering path.
 fn lnfacts_to_parser(facts: &[crate::fact::LNFact]) -> Vec<p::Fact> {
     facts.iter().map(lnfact_to_parser).collect()
 }
@@ -1941,7 +2002,19 @@ pub fn lnfact_to_parser(fa: &crate::fact::LNFact) -> p::Fact {
         persistent,
         name,
         args: fa.terms.iter().map(lnterm_to_parser).collect(),
-        annotations: Vec::new(),
+        // HS `prettyFact` appends `ppAnn an` to every fact (Fact.hs:567-574),
+        // so the annotations must survive the projection.  `fa.annotations`
+        // is a `BTreeSet<FactAnnotation>` whose iteration order IS the HS
+        // `S.toList` (Ord) order the renderer expects.
+        annotations: fa
+            .annotations
+            .iter()
+            .map(|a| match a {
+                crate::fact::FactAnnotation::SolveFirst => p::FactAnnotation::SolveFirst,
+                crate::fact::FactAnnotation::SolveLast => p::FactAnnotation::SolveLast,
+                crate::fact::FactAnnotation::NoSources => p::FactAnnotation::NoSources,
+            })
+            .collect(),
     }
 }
 
@@ -2017,6 +2090,12 @@ pub(crate) fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
             "em".to_string(),
             args.iter().map(lnterm_to_parser).collect(),
         ),
+        // HS `prettyTerm` (Term/Term.hs:304): `FApp (AC (ACfct (f,_))) [] ->
+        // text (BC.unpack f)` — a nullary user-AC symbol is the bare name,
+        // which `term_to_doc` renders for a nullary `App`.
+        Term::App(FunSym::Ac(AcSym::AcFct(s)), args) if args.is_empty() => {
+            p::Term::App(String::from_utf8_lossy(s.name).into_owned(), vec![])
+        }
         Term::App(FunSym::Ac(ac), args) => {
             // Render AC as left-assoc binops to preserve display.
             let op = match ac {
@@ -2024,6 +2103,12 @@ pub(crate) fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                 AcSym::Union => p::BinOp::Union,
                 AcSym::NatPlus => p::BinOp::NatPlus,
                 AcSym::Xor => p::BinOp::Xor,
+                // HS renders a user-declared `[AC]` symbol INFIX too
+                // (Term/Term.hs:305): `ppTerms (" " ++ BC.unpack f ++ " ") 1
+                // "(" ")" ts`, i.e. `(x add y)`.
+                AcSym::AcFct(s) => p::BinOp::AcFct(tamarin_term::intern::intern_str(
+                    &String::from_utf8_lossy(s.name),
+                )),
             };
             let mut it = args.iter();
             let first = lnterm_to_parser(it.next().expect("AC needs at least one arg"));
@@ -3002,6 +3087,7 @@ fn pp_contradiction(c: &crate::constraint::solver::contradictions::Contradiction
         // HS: `ForbiddenKD -> text "forbidden KD-fact"`
         C::ForbiddenKD => "forbidden KD-fact".to_string(),
         C::ForbiddenChain => "forbidden chain".to_string(),
+        C::ForbiddenACConstrChain => "forbidden AC constructor chain".to_string(),
         C::ImpossibleChain => "impossible chain".to_string(),
         // HS: `NonInjectiveFactInstance cex -> text $ "non-injective facts " ++ show cex`
         // where `cex :: (NodeId, NodeId, NodeId)`.  HS `Show` for a

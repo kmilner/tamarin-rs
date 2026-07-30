@@ -98,6 +98,20 @@ thread_local! {
     static USER_PRIVATE_FUNS: RefCell<BTreeSet<String>>
         = const { RefCell::new(BTreeSet::new()) };
 
+    /// Names of user-declared `[AC]` function symbols.  Read by
+    /// `term_to_lnterm` so applications lower to `f_app_ac(AcFct ..)`
+    /// (n-ary, no arity check) instead of `f_app_no_eq`.
+    static USER_AC_FUNS: RefCell<BTreeSet<String>>
+        = const { RefCell::new(BTreeSet::new()) };
+
+    /// Names of user-declared `[NDC]` function symbols.
+    static USER_NDC_FUNS: RefCell<BTreeSet<String>>
+        = const { RefCell::new(BTreeSet::new()) };
+
+    /// Names of user-declared `[NDC-diff]` function symbols.
+    static USER_NDC_DIFF_FUNS: RefCell<BTreeSet<String>>
+        = const { RefCell::new(BTreeSet::new()) };
+
     /// Names of user-declared function symbols marked `[destructor]`.
     /// Populated from `FunctionDecl.destructor` across all arities.
     /// Read by `term_to_lnterm` when synthesizing the `NoEqSym` for a
@@ -575,6 +589,9 @@ pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
     let _nullary_guard = UserNullaryFunsGuard::set(funs.nullary);
     let _private_guard = UserPrivateFunsGuard::set(funs.private);
     let _destructor_guard = UserDestructorFunsGuard::set(funs.destructor);
+    let _ac_guard = UserAcFunsGuard::set(funs.ac);
+    let _ndc_guard = UserNdcFunsGuard::set(funs.ndc);
+    let _ndc_diff_guard = UserNdcDiffFunsGuard::set(funs.ndc_diff);
     let mut thy = elaborate_already_expanded(&thy_clone)?;
 
     // HS folds surplus arguments of arity-1 function applications into a
@@ -633,12 +650,33 @@ pub struct CollectedUserFuns {
     /// User `functions:` names marked `[destructor]` (any arity); threads
     /// `Constructability::Destructor` through synthesized NoEqSyms.
     destructor: BTreeSet<String>,
+    /// User `functions:` names marked `[AC]`; lowers applications to
+    /// `f_app_ac(AcFct ..)` instead of `f_app_no_eq`.
+    ac: BTreeSet<String>,
+    /// User `functions:` names marked `[NDC]`.
+    ndc: BTreeSet<String>,
+    /// User `functions:` names marked `[NDC-diff]`.
+    ndc_diff: BTreeSet<String>,
 }
 
 /// Single source of truth for collecting the user-declared function-name
 /// sets from a theory's items (shared by `elaborate` and
 /// `set_user_funs_for_theory`).
 fn collect_user_funs(items: &[p::TheoryItem]) -> CollectedUserFuns {
+    // HS `function` (Theory/Text/Parser/Signature.hs): a re-declaration of
+    // `fst`/`snd` at arity 1 with public visibility resolves to the EXISTING
+    // builtin pair-projection symbol (`return (NoEqUser (f,kp'), ...)` with
+    // `kp'` the builtin's `(1, Public, Constructor, NotNDC)`) — every
+    // requested attribute is discarded and no symbol is added.  Mirror that
+    // here: such declarations must not contribute to the attribute sets,
+    // otherwise `term_to_lnterm` resolves the theory's own
+    // `fst(<x,y>) = x` equations with a Destructor-flagged symbol whose
+    // Maude encoding (`tamXDFUfst`) does not match the declared op
+    // (`tamXCFUfst`), killing the rewrite rule and with it the narrowed
+    // `_0_fst`/`_0_snd` intruder destructors (noise theories).
+    let is_builtin_pair_proj = |d: &p::FunctionDecl| -> bool {
+        (d.name == "fst" || d.name == "snd") && d.arg_types.len() == 1 && !d.private
+    };
     let user_names = |pred: fn(&p::FunctionDecl) -> bool| -> BTreeSet<String> {
         items
             .iter()
@@ -652,9 +690,29 @@ fn collect_user_funs(items: &[p::TheoryItem]) -> CollectedUserFuns {
             .flatten()
             .collect()
     };
+    // Attribute sets only (arity resolution via `unary`/`nullary` is
+    // unaffected: the builtin symbol has the same name and arity).
+    let user_attr_names = |pred: fn(&p::FunctionDecl) -> bool| -> BTreeSet<String> {
+        items
+            .iter()
+            .filter_map(|it| {
+                if let p::TheoryItem::Functions(decls) = it {
+                    Some(
+                        decls
+                            .iter()
+                            .filter(|d| pred(d) && !is_builtin_pair_proj(d))
+                            .map(|d| d.name.clone()),
+                    )
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect()
+    };
     let mut nullary = user_names(|d| d.arg_types.is_empty());
-    let mut private = user_names(|d| d.private);
-    let mut destructor = user_names(|d| d.destructor);
+    let mut private = user_attr_names(|d| d.private);
+    let mut destructor = user_attr_names(|d| d.destructor);
     for it in items {
         if let p::TheoryItem::Builtins(names) = it {
             for n in names {
@@ -688,6 +746,9 @@ fn collect_user_funs(items: &[p::TheoryItem]) -> CollectedUserFuns {
         nullary,
         private,
         destructor,
+        ac: user_attr_names(|d| d.ac),
+        ndc: user_attr_names(|d| d.ndc),
+        ndc_diff: user_attr_names(|d| d.ndc_diff),
     }
 }
 
@@ -854,6 +915,45 @@ btreeset_swap_guard! {
     UserDestructorFunsGuard, USER_DESTRUCTOR_FUNS
 }
 
+btreeset_swap_guard! {
+    /// RAII guard for the USER_AC_FUNS thread-local.
+    UserAcFunsGuard, USER_AC_FUNS
+}
+
+btreeset_swap_guard! {
+    /// RAII guard for the USER_NDC_FUNS thread-local.
+    UserNdcFunsGuard, USER_NDC_FUNS
+}
+
+btreeset_swap_guard! {
+    /// RAII guard for the USER_NDC_DIFF_FUNS thread-local.
+    UserNdcDiffFunsGuard, USER_NDC_DIFF_FUNS
+}
+
+/// True if `name` is a user-declared `[AC]` function symbol.
+pub(crate) fn is_user_ac_fun(name: &str) -> bool {
+    USER_AC_FUNS.with(|c| c.borrow().contains(name))
+}
+
+/// The NDC state of a user-declared symbol: join of its `[NDC]` and
+/// `[NDC-diff]` attributes (HS `function`'s `joinNDC`).
+fn user_fun_ndc(name: &str) -> tamarin_term::function_symbols::NdcState {
+    use tamarin_term::function_symbols::NdcState;
+    let ndc = USER_NDC_FUNS.with(|c| c.borrow().contains(name));
+    let ndc_diff = USER_NDC_DIFF_FUNS.with(|c| c.borrow().contains(name));
+    let a = if ndc {
+        NdcState::IsNdc
+    } else {
+        NdcState::NotNdc
+    };
+    let b = if ndc_diff {
+        NdcState::IsNdcDiff
+    } else {
+        NdcState::NotNdc
+    };
+    a.join(b)
+}
+
 /// Returns `Constructability::Destructor` if `name` is a user-declared
 /// `[destructor]` function symbol; otherwise `Constructability::Constructor`.
 /// Mirrors Haskell's `lookupArity`, which reads `(k,priv,cnstr)` straight
@@ -876,6 +976,9 @@ pub struct UserFunsForTheoryGuard {
     _nullary: UserNullaryFunsGuard,
     _private: UserPrivateFunsGuard,
     _destructor: UserDestructorFunsGuard,
+    _ac: UserAcFunsGuard,
+    _ndc: UserNdcFunsGuard,
+    _ndc_diff: UserNdcDiffFunsGuard,
 }
 
 /// RAII guard that swaps in the 0-arity NoEq function-symbol names from
@@ -933,6 +1036,9 @@ pub fn set_user_funs_from_collected(funs: &CollectedUserFuns) -> UserFunsForTheo
         _nullary: UserNullaryFunsGuard::set(funs.nullary.clone()),
         _private: UserPrivateFunsGuard::set(funs.private.clone()),
         _destructor: UserDestructorFunsGuard::set(funs.destructor.clone()),
+        _ac: UserAcFunsGuard::set(funs.ac.clone()),
+        _ndc: UserNdcFunsGuard::set(funs.ndc.clone()),
+        _ndc_diff: UserNdcDiffFunsGuard::set(funs.ndc_diff.clone()),
     }
 }
 
@@ -949,6 +1055,9 @@ pub fn snapshot_user_funs() -> CollectedUserFuns {
         nullary: USER_NULLARY_FUNS.with(|c| c.borrow().clone()),
         private: USER_PRIVATE_FUNS.with(|c| c.borrow().clone()),
         destructor: USER_DESTRUCTOR_FUNS.with(|c| c.borrow().clone()),
+        ac: USER_AC_FUNS.with(|c| c.borrow().clone()),
+        ndc: USER_NDC_FUNS.with(|c| c.borrow().clone()),
+        ndc_diff: USER_NDC_DIFF_FUNS.with(|c| c.borrow().clone()),
     }
 }
 
@@ -1014,6 +1123,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 out.signature.maude_sig = s;
             }
             p::TheoryItem::Functions(decls) => {
+                use tamarin_term::function_symbols::{AcFctSym, NdcState, UserDefinedSym};
                 for d in decls {
                     let arity = d.arg_types.len();
                     let priv_ = if d.private {
@@ -1026,13 +1136,87 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                     } else {
                         Constructability::Constructor
                     };
-                    let sym = NoEqSym::new(d.name.as_bytes().to_vec(), arity, priv_, constr);
+                    // HS `function`: NDC state joins the [NDC] and
+                    // [NDC-diff] attributes.
+                    let ndc = if d.ndc {
+                        NdcState::IsNdc
+                    } else {
+                        NdcState::NotNdc
+                    }
+                    .join(if d.ndc_diff {
+                        NdcState::IsNdcDiff
+                    } else {
+                        NdcState::NotNdc
+                    });
+                    // HS `function` conflict check against the existing
+                    // signature (by name; fst/snd re-declarations return the
+                    // existing symbol without re-adding).  HS looks the name
+                    // up in `S.toList (stFunSyms sign) ++ S.toList (macroNames
+                    // sign)` (Theory/Text/Parser/Signature.hs:212), and
+                    // `lookup` takes the FIRST match — free symbols first,
+                    // then macros, which register as `(k, Private, Destructor,
+                    // NotNDC)` (Theory/Text/Parser/Macro.hs:47).
+                    let existing = out
+                        .signature
+                        .maude_sig
+                        .st_fun_syms
+                        .iter()
+                        .find(|s| s.name == d.name.as_bytes())
+                        .or_else(|| {
+                            out.signature
+                                .maude_sig
+                                .macro_names
+                                .iter()
+                                .find(|s| s.name == d.name.as_bytes())
+                        })
+                        .copied();
+                    if let Some(prev) = existing {
+                        let same = prev.arity == arity
+                            && prev.privacy == priv_
+                            && prev.constructability == constr
+                            && prev.ndc == ndc;
+                        let is_pair_proj = (d.name == "fst" || d.name == "snd")
+                            && arity == 1
+                            && priv_ == Privacy::Public;
+                        if !same && !is_pair_proj {
+                            return Err(ElabError {
+                                message: format!(
+                                    "conflicting arities/options for `{}`. Please choose a \
+                                     different name for this function.",
+                                    d.name
+                                ),
+                            });
+                        }
+                        if d.name == "fst" || d.name == "snd" {
+                            continue;
+                        }
+                    }
+                    let user_sym = if d.ac {
+                        // HS: AC functions must be binary.
+                        if arity != 2 {
+                            return Err(ElabError {
+                                message: "conflicting arity : AC function must be binary"
+                                    .to_string(),
+                            });
+                        }
+                        UserDefinedSym::AcFctUser(AcFctSym::new(
+                            d.name.as_bytes().to_vec(),
+                            priv_,
+                            constr,
+                            ndc,
+                        ))
+                    } else {
+                        UserDefinedSym::NoEqUser(
+                            NoEqSym::new(d.name.as_bytes().to_vec(), arity, priv_, constr)
+                                .with_ndc(ndc),
+                        )
+                    };
                     // `add_fun_sym` consumes `self` by value; move the
                     // current sig out via `take` to avoid a per-declaration
                     // deep clone of the whole MaudeSig.  Output order and
                     // dedup are unchanged (same `add_fun_sym` path).
                     let cur = std::mem::take(&mut out.signature.maude_sig);
-                    out.signature.maude_sig = cur.add_fun_sym(sym);
+                    out.signature.maude_sig = cur.add_fun_sym(user_sym);
                 }
             }
             p::TheoryItem::Equations { eqs, convergent } => {
@@ -1690,12 +1874,18 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                     // breaking Maude unification on multiset equations (e.g.
                     // the `1+x+z` → false simplification chain for
                     // `counters_linear_order`).
-                    if parser_args.len() >= 2 {
+                    if let AcSym::AcFct(s) = ac {
+                        // User-defined AC symbol: an n-ary application
+                        // round-trips through the parser (`naryOpApp`
+                        // accepts any arity for AC symbols).
+                        p::Term::App(String::from_utf8_lossy(s.name).into_owned(), parser_args)
+                    } else if parser_args.len() >= 2 {
                         let op = match ac {
                             AcSym::Mult => p::BinOp::Mult,
                             AcSym::Union => p::BinOp::Union,
                             AcSym::Xor => p::BinOp::Xor,
                             AcSym::NatPlus => p::BinOp::NatPlus,
+                            AcSym::AcFct(_) => unreachable!("handled above"),
                         };
                         // Left-fold: a parser BinOp is strictly arity-2,
                         // so fold left-to-right when more than 2 args.
@@ -1716,6 +1906,7 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                             AcSym::Union => "?Union",
                             AcSym::Xor => "?Xor",
                             AcSym::NatPlus => "?NatPlus",
+                            AcSym::AcFct(_) => unreachable!("handled above"),
                         };
                         p::Term::App(name.to_string(), parser_args)
                     }
@@ -2123,12 +2314,29 @@ where
                 let b = it.next().unwrap();
                 return Some(tamarin_term::builtin::emap(a, b));
             }
+            // #883 `naryOpApp` IsAC case: a user-declared `[AC]` symbol
+            // lowers to an AC application (n-ary — the arity check applies
+            // only to non-AC symbols); infix `a f b` produces the same
+            // `App(f, [a, b])` parser node, so both forms land here.
+            if is_user_ac_fun(name.as_str()) {
+                let sym = tamarin_term::function_symbols::AcFctSym::new(
+                    name.as_bytes().to_vec(),
+                    user_fun_privacy(name),
+                    user_fun_constructability(name),
+                    user_fun_ndc(name),
+                );
+                return Some(tamarin_term::term::f_app_ac(
+                    tamarin_term::function_symbols::AcSym::AcFct(sym),
+                    new_args,
+                ));
+            }
             let sym = NoEqSym::new(
                 name.as_bytes().to_vec(),
                 new_args.len(),
                 user_fun_privacy(name),
                 user_fun_constructability(name),
-            );
+            )
+            .with_ndc(user_fun_ndc(name));
             Some(f_app_no_eq(sym, new_args))
         }
         p::Term::Pair(items) => {
@@ -2145,12 +2353,26 @@ where
             // Haskell `binaryAlgApp` also reads `(k,priv,cnstr)` from the
             // signature via `lookupArity` (Theory/Text/Parser/Term.hs:96-106, see line 101),
             // so thread user privacy/constructability here too.
+            // #883: `[AC]` symbols build an AC application here as well.
+            if is_user_ac_fun(name.as_str()) {
+                let sym = tamarin_term::function_symbols::AcFctSym::new(
+                    name.as_bytes().to_vec(),
+                    user_fun_privacy(name),
+                    user_fun_constructability(name),
+                    user_fun_ndc(name),
+                );
+                return Some(tamarin_term::term::f_app_ac(
+                    tamarin_term::function_symbols::AcSym::AcFct(sym),
+                    vec![aa, bb],
+                ));
+            }
             let sym = NoEqSym::new(
                 name.as_bytes().to_vec(),
                 2,
                 user_fun_privacy(name),
                 user_fun_constructability(name),
-            );
+            )
+            .with_ndc(user_fun_ndc(name));
             Some(f_app_no_eq(sym, vec![aa, bb]))
         }
         p::Term::Diff(a, b) => {
@@ -2172,6 +2394,19 @@ where
                 p::BinOp::Union => Some(f_app_ac(AcSym::Union, vec![aa, bb])),
                 p::BinOp::Xor => Some(f_app_ac(AcSym::Xor, vec![aa, bb])),
                 p::BinOp::NatPlus => Some(f_app_ac(AcSym::NatPlus, vec![aa, bb])),
+                // A user-declared `[AC]` symbol applied infix — the same
+                // application the `App(f, [a, b])` arm above builds, so it
+                // reads the same user-function signature for the symbol's
+                // privacy / constructability / NDC flags.
+                p::BinOp::AcFct(name) => {
+                    let sym = tamarin_term::function_symbols::AcFctSym::new(
+                        name.as_bytes().to_vec(),
+                        user_fun_privacy(name),
+                        user_fun_constructability(name),
+                        user_fun_ndc(name),
+                    );
+                    Some(f_app_ac(AcSym::AcFct(sym), vec![aa, bb]))
+                }
                 p::BinOp::Exp => {
                     let sym = NoEqSym::new(
                         b"exp".to_vec(),
@@ -2204,7 +2439,8 @@ pub fn term_to_lnterm(t: &p::Term) -> Option<tamarin_term::lterm::LNTerm> {
                 0,
                 user_fun_privacy(&v.name),
                 Constructability::Constructor,
-            );
+            )
+            .with_ndc(user_fun_ndc(&v.name));
             return Some(f_app_no_eq(sym, vec![]));
         }
         let lv = LVar::new(v.name.clone(), sort_of(&v.sort), v.idx);
@@ -2245,7 +2481,8 @@ pub fn term_to_sapic_term(t: &p::Term) -> Option<crate::sapic::SapicTerm> {
                 0,
                 user_fun_privacy(&v.name),
                 Constructability::Constructor,
-            );
+            )
+            .with_ndc(user_fun_ndc(&v.name));
             return Some(f_app_no_eq(sym, vec![]));
         }
         let lv = LVar::new(v.name.clone(), sort_of(&v.sort), v.idx);

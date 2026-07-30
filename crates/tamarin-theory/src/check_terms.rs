@@ -404,6 +404,10 @@ fn resolve_term(t: &Term, scope: &Scope, irr: &Irreducible, pos: TermPos) -> RTe
                 BinOp::Mult => resolve_ac(AcSym::Mult, vec![ra, rb], irr),
                 BinOp::Xor => resolve_ac(AcSym::Xor, vec![ra, rb], irr),
                 BinOp::NatPlus => resolve_ac(AcSym::NatPlus, vec![ra, rb], irr),
+                // A user-declared `[AC]` symbol applied infix denotes the
+                // same application as `App(name, [a, b])`, so it resolves
+                // through the same named-symbol path.
+                BinOp::AcFct(name) => resolve_named(name, vec![ra, rb], irr),
             }
         }
         Term::PatMatch(inner) => resolve_term(inner, scope, irr, pos),
@@ -584,21 +588,24 @@ fn write_rterm(t: &RTerm, out: &mut String) {
             out.push('\'');
         }
         RTerm::App(head, args) => {
-            // HS `Show (Term a)` (Term/Raw.hs:219-227):
+            // HS `Show (Term a)` (Term/Raw.hs):
             //   FApp (NoEq (s,_)) [] -> s
             //   FApp (NoEq (s,_)) as -> s ++ "(" ++ intercalate "," ... ++ ")"
+            //   FApp (AC (ACfct (s,_))) as -> s ++ "(" ++ ... ++ ")"
             //   FApp (AC o) as       -> show o ++ "(" ++ ... ++ ")"
-            // ACSym derives Show as the constructor name (Union/Mult/Xor/NatPlus).
-            let name: &str = match head {
-                Head::App { name, .. } => name.as_str(),
+            // ACSym derives Show as the constructor name (Union/Mult/Xor/NatPlus);
+            // user-defined AC symbols print their own name.
+            let name: std::borrow::Cow<'_, str> = match head {
+                Head::App { name, .. } => std::borrow::Cow::Borrowed(name.as_str()),
                 Head::Ac { sym, .. } => match sym {
-                    AcSym::Union => "Union",
-                    AcSym::Mult => "Mult",
-                    AcSym::Xor => "Xor",
-                    AcSym::NatPlus => "NatPlus",
+                    AcSym::Union => std::borrow::Cow::Borrowed("Union"),
+                    AcSym::Mult => std::borrow::Cow::Borrowed("Mult"),
+                    AcSym::Xor => std::borrow::Cow::Borrowed("Xor"),
+                    AcSym::NatPlus => std::borrow::Cow::Borrowed("NatPlus"),
+                    AcSym::AcFct(s) => String::from_utf8_lossy(s.name),
                 },
             };
-            out.push_str(name);
+            out.push_str(&name);
             if !args.is_empty() {
                 out.push('(');
                 for (i, a) in args.iter().enumerate() {

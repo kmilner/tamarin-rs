@@ -474,6 +474,40 @@ pub fn is_kd_xor_fact(fa: &LNFact) -> bool {
     matches!(&fa.terms[0], Term::App(FunSym::Ac(AcSym::Xor), _))
 }
 
+/// Mirrors Haskell `isTrivialKUFact` (Fact.hs:242-245): a KU-fact whose single
+/// term is a plain message variable.
+pub fn is_trivial_ku_fact(fa: &LNFact) -> bool {
+    match &fa.terms[..] {
+        [t] if fa.tag == FactTag::Ku => tamarin_term::lterm::is_msg_var(t),
+        _ => false,
+    }
+}
+
+/// Mirrors Haskell `isNearlyTrivialKUFact` (Fact.hs:247-250): a KU-fact whose
+/// single term applies `sym` to message variables only.
+pub fn is_nearly_trivial_ku_fact(
+    sym: &tamarin_term::function_symbols::FunSym,
+    fa: &LNFact,
+) -> bool {
+    match &fa.terms[..] {
+        [t] if fa.tag == FactTag::Ku => tamarin_term::lterm::is_trivial_fun_sym_term(t, sym),
+        _ => false,
+    }
+}
+
+/// Mirrors Haskell `isNearlyTrivialACKUFact` (Fact.hs:252-255): a KU-fact whose
+/// single term applies an AC operator to message variables only.
+///
+/// No caller, in HS either: the KU-goal filter that motivates it
+/// (`openGoals`/`is_open_in_sys`) tests the goal TERM directly via
+/// `is_trivial_ac_fun_sym_term`.  Kept for parity with the exported HS API.
+pub fn is_nearly_trivial_ac_ku_fact(fa: &LNFact) -> bool {
+    match &fa.terms[..] {
+        [t] if fa.tag == FactTag::Ku => tamarin_term::lterm::is_trivial_ac_fun_sym_term(t),
+        _ => false,
+    }
+}
+
 // =============================================================================
 // Construction helpers (NFact / LNFact specialised)
 // =============================================================================
@@ -565,6 +599,30 @@ pub fn proto_fact_ann(
     )
 }
 
+/// Mirrors Haskell `freesToFresh = map (freshFact . lvarToLnterm)`
+/// (Fact.hs:327-329): one `Fr`-premise per variable, with nat-sorted variables
+/// reinterpreted as fresh ones (see [`lvar_to_lnterm`]).
+pub fn frees_to_fresh(vs: &[LVar]) -> Vec<LNFact> {
+    vs.iter().map(|v| fresh_fact(lvar_to_lnterm(v))).collect()
+}
+
+/// Mirrors Haskell `lvarToLnterm` (Fact.hs:331-333): a variable as a term, with
+/// `LSortNat` variables re-sorted to `LSortFresh` (so they can be bound by an
+/// `Fr`-premise); every other sort is kept as is.
+pub fn lvar_to_lnterm(v: &LVar) -> LNTerm {
+    use tamarin_term::lterm::LSort;
+    let v = if v.sort == LSort::Nat {
+        LVar {
+            name: v.name,
+            sort: LSort::Fresh,
+            idx: v.idx,
+        }
+    } else {
+        *v
+    };
+    tamarin_term::vterm::var_term(v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -600,6 +658,37 @@ mod tests {
     fn k_fact_categorisation() {
         assert!(ku_fact(msg_var("x", 0)).is_ku());
         assert!(kd_fact(msg_var("x", 0)).is_kd());
+    }
+
+    /// `lvarToLnterm` re-sorts NAT variables to FRESH ones — the surprising bit
+    /// of the HS definition (Fact.hs:331-333), since only fresh-sorted variables
+    /// can be bound by the `Fr`-premise `freesToFresh` builds around them.
+    #[test]
+    fn lvar_to_lnterm_resorts_nat_to_fresh() {
+        use tamarin_term::lterm::LSort;
+        use tamarin_term::vterm::var_term;
+
+        let n = LVar::new("n", LSort::Nat, 1);
+        let expected: LNTerm = var_term(LVar::new("n", LSort::Fresh, 1));
+        assert_eq!(lvar_to_lnterm(&n), expected);
+
+        let m = LVar::new("m", LSort::Msg, 0);
+        assert_eq!(lvar_to_lnterm(&m), var_term(m));
+
+        assert_eq!(frees_to_fresh(&[n]), vec![fresh_fact(expected)]);
+    }
+
+    #[test]
+    fn trivial_ku_fact_predicates() {
+        assert!(is_trivial_ku_fact(&ku_fact(msg_var("x", 0))));
+        // A KD-fact of the same term is not a trivial KU-fact.
+        assert!(!is_trivial_ku_fact(&kd_fact(msg_var("x", 0))));
+        // Neither is a KU-fact whose term is not a plain message variable.
+        let pair = tamarin_term::term::f_app_no_eq(
+            tamarin_term::function_symbols::pair_sym(),
+            vec![msg_var("x", 0), msg_var("y", 0)],
+        );
+        assert!(!is_trivial_ku_fact(&ku_fact(pair)));
     }
 
     // =========================================================================

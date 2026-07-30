@@ -71,6 +71,13 @@ pub struct TheoryEntry {
     /// *closed* theory's wellformedness report in a `<div class="wf-warning">`.
     /// Empty string when the report is empty (HS `makeWfErrorsHtml [] = ""`).
     pub errors_html: String,
+    /// The theory's once-per-load NDC-checked intruder cache
+    /// (`close_rule::check_close_intr_rule`, run in `theory_io` before
+    /// the derivation checks).  Injected into every `ProofContext` the
+    /// lazily built [`ProofState`] constructs (web session + shared
+    /// display ctx) so no context re-runs the check.  `None` when the
+    /// load-time Maude boot failed.
+    pub ndc_cache: Option<Arc<Vec<tamarin_theory::rule::IntrRuleAC>>>,
     /// Live proof state — built lazily on first request that needs it
     /// (theory load → only kept-around-but-empty until `ensure_proof_state`
     /// is asked for).  `None` here means "not yet built"; on first
@@ -231,7 +238,7 @@ impl TheoryStore {
         // `ProofState::new` (Maude boot + source precompute) so unrelated
         // handlers — and other tokio workers — aren't blocked for its
         // duration.
-        let (parser_theory, in_file) = {
+        let (parser_theory, in_file, ndc_cache) = {
             let inner = self.inner.lock();
             let entry = inner
                 .by_idx
@@ -240,13 +247,18 @@ impl TheoryStore {
             if let Some(ps) = &entry.proof_state {
                 return Ok(ps.clone());
             }
-            (entry.parser_theory.clone(), entry.origin.label())
+            (
+                entry.parser_theory.clone(),
+                entry.origin.label(),
+                entry.ndc_cache.clone(),
+            )
         };
         let ps = Arc::new(ProofState::new(
             &parser_theory,
             &cfg.maude_path,
             cfg.stop_on_trace,
             &in_file,
+            ndc_cache.as_ref().map(|c| c.as_slice()),
         )?);
         // Re-lock and double-check: another thread may have built (and
         // stored) the proof state while we held no lock.  If so, prefer

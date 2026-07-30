@@ -2278,7 +2278,8 @@ mod tests {
             Privacy::Public,
             Constructability::Constructor,
         );
-        let sig = pair_maude_sig().add_fun_sym(pk_sym);
+        let sig =
+            pair_maude_sig().add_fun_sym(crate::function_symbols::UserDefinedSym::NoEqUser(pk_sym));
         let h = MaudeHandle::start(&path, sig).expect("start");
         let a_pub = LVar::new("A", LSort::Pub, 0);
         let ltka = LVar::new("ltkA", LSort::Fresh, 0);
@@ -2557,7 +2558,8 @@ mod tests {
             Privacy::Public,
             Constructability::Constructor,
         );
-        let sig = crate::maude_sig::mset_maude_sig().add_fun_sym(pair_sym);
+        let sig = crate::maude_sig::mset_maude_sig()
+            .add_fun_sym(crate::function_symbols::UserDefinedSym::NoEqUser(pair_sym));
         let h = MaudeHandle::start(&path, sig).expect("start");
         let mk = |v: LVar| -> LNTerm { crate::term::Term::Lit(Lit::Var(v)) };
         // ground "pair" payload a,b -> use public name constants
@@ -2721,7 +2723,8 @@ mod tests {
             Privacy::Public,
             Constructability::Constructor,
         );
-        let sig = pair_maude_sig().add_fun_sym(h_sym);
+        let sig =
+            pair_maude_sig().add_fun_sym(crate::function_symbols::UserDefinedSym::NoEqUser(h_sym));
         let hnd = MaudeHandle::start(&path, sig).expect("start");
         let mk = |v: LVar| -> LNTerm { crate::term::Term::Lit(Lit::Var(v)) };
         let x = LVar::new("x", LSort::Msg, 0);

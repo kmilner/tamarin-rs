@@ -104,11 +104,13 @@ pub struct ProcessDef {
 }
 
 /// Lightweight placeholder for `Theory.Sapic.SapicFunSym` —
-/// `((NoEqSym), [SapicType], SapicType)`. Backs the not-yet-produced
-/// `TranslationElement::FunctionTypingInfo` variant — kept for the HS port.
+/// `(UserDefinedSym, [SapicType], SapicType)` (Theory/Sapic/Term.hs:78), so a
+/// typing declaration can name a free OR a user-defined AC symbol. Backs the
+/// not-yet-produced `TranslationElement::FunctionTypingInfo` variant — kept for
+/// the HS port.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SapicFunSym {
-    pub sym: tamarin_term::function_symbols::NoEqSym,
+    pub sym: tamarin_term::function_symbols::UserDefinedSym,
     pub arg_types: Vec<crate::sapic::SapicType>,
     pub out_type: crate::sapic::SapicType,
 }
@@ -291,7 +293,7 @@ pub enum Side {
 // =============================================================================
 
 /// `Option` block — translation/proof-driver options set per theory.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Options {
     pub trans_progress: bool,
     pub trans_report: bool,
@@ -300,11 +302,33 @@ pub struct Options {
     pub state_channel_opt: bool,
     pub asynchronous_channels: bool,
     pub compress_events: bool,
+    /// HS `_deductionChainCheck`: run the no-deconstruction-chain (NDC)
+    /// check at theory load. Enabled by default; `--no-ndc` disables it.
+    /// Consulted by the load paths when they run the once-per-theory
+    /// `close_rule::check_close_intr_rule` pass (per-theory, like HS).
+    pub deduction_chain_check: bool,
     /// Auto-generated `default` heuristic used to discharge proofs when
     /// no explicit heuristic is supplied.
     pub default_heuristic: Option<String>,
     /// Lemmas the user requested to prove via `--prove=NAME`.
     pub lemmas_to_prove: Vec<String>,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Options {
+            trans_progress: false,
+            trans_report: false,
+            trans_reliable: false,
+            trans_allow_pattern_matching_in_lookup: false,
+            state_channel_opt: false,
+            asynchronous_channels: false,
+            compress_events: false,
+            deduction_chain_check: true,
+            default_heuristic: None,
+            lemmas_to_prove: Vec::new(),
+        }
+    }
 }
 
 /// Top-level theory containing rules, lemmas, restrictions, etc.
@@ -388,6 +412,65 @@ impl<R, P, S> Theory<R, P, S> {
     /// Look up a lemma by name.
     pub fn lookup_lemma(&self, name: &str) -> Option<&Lemma<P>> {
         self.lemmas().find(|l| l.name == name)
+    }
+
+    /// Look up a restriction by name (HS `lookupRestriction`,
+    /// TheoryObject.hs:671-672).
+    pub fn lookup_restriction(&self, name: &str) -> Option<&OpenRestriction> {
+        self.restrictions().find(|r| r.name == name)
+    }
+
+    /// HS `addRules` (TheoryObject.hs:470-471): append rule items, in order.
+    pub fn add_rules(&mut self, rules: impl IntoIterator<Item = R>) -> &mut Self {
+        self.items.extend(rules.into_iter().map(TheoryItem::Rule));
+        self
+    }
+
+    /// HS `addLemma` (TheoryObject.hs:462-465): append the lemma unless one of
+    /// that name is already present.  Returns whether it was added.
+    ///
+    /// HS returns `Maybe (Theory ...)`; the `bool` here is that `Just`/`Nothing`
+    /// distinction on an in-place update.
+    pub fn add_lemma(&mut self, l: Lemma<P>) -> bool {
+        if self.lookup_lemma(&l.name).is_some() {
+            return false;
+        }
+        self.items.push(TheoryItem::Lemma(l));
+        true
+    }
+
+    /// HS `addLemmas` (TheoryObject.hs:467-468): add each lemma in turn.  HS
+    /// folds `addLemma` through a `Maybe` and `fromJust`s it, so a name clash
+    /// leaves the theory as it was (and, mid-list, is a hard error); here a
+    /// clashing lemma is simply skipped.
+    pub fn add_lemmas(&mut self, lemmas: impl IntoIterator<Item = Lemma<P>>) -> &mut Self {
+        for l in lemmas {
+            self.add_lemma(l);
+        }
+        self
+    }
+
+    /// HS `addRestriction` (TheoryObject.hs:453-456): append the restriction
+    /// unless one of that name is already present.  Returns whether it was
+    /// added.
+    pub fn add_restriction(&mut self, r: OpenRestriction) -> bool {
+        if self.lookup_restriction(&r.name).is_some() {
+            return false;
+        }
+        self.items.push(TheoryItem::Restriction(r));
+        true
+    }
+
+    /// HS `addRestrictions` (TheoryObject.hs:458-459): add each restriction in
+    /// turn, skipping name clashes (see [`Theory::add_lemmas`]).
+    pub fn add_restrictions(
+        &mut self,
+        restrictions: impl IntoIterator<Item = OpenRestriction>,
+    ) -> &mut Self {
+        for r in restrictions {
+            self.add_restriction(r);
+        }
+        self
     }
 }
 

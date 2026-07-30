@@ -257,16 +257,6 @@ fn ln_proto(name: &str, terms: Vec<LNTerm>) -> LNFact {
     crate::fact::proto_fact(Multiplicity::Linear, name, terms)
 }
 
-/// `t `renameAvoiding` avoid_set` (LTerm.hs): rename `t`'s vars to fresh
-/// indices that avoid those in `avoid`.
-fn rename_avoiding<T: tamarin_term::lterm::HasFrees>(
-    t: T,
-    avoid: &impl tamarin_term::lterm::HasFrees,
-) -> T {
-    let mut fresh = tamarin_term::lterm::avoid(avoid);
-    tamarin_term::lterm::rename(t, &mut fresh)
-}
-
 /// One matched input together with its matching outputs.
 enum Matched {
     /// protected-subterm input: deepest prot term, the var, matching (out-rule, out-term).
@@ -441,7 +431,7 @@ pub fn add_auto_sources_lemma(
                         if rules[*rout_i].name() == rin_name {
                             continue;
                         }
-                        let fout = rename_avoiding(tout.clone(), protterm);
+                        let fout = tamarin_term::lterm::rename_avoiding(tout.clone(), protterm);
                         if maude
                             .unifiable(&[Equal {
                                 lhs: protterm.clone(),
@@ -476,7 +466,7 @@ pub fn add_auto_sources_lemma(
                         {
                             continue;
                         }
-                        let unifout = rename_avoiding(fout.clone(), fact);
+                        let unifout = tamarin_term::lterm::rename_avoiding(fout.clone(), fact);
                         if crate::rule::unifiable_ln_facts(maude, fact, &unifout).unwrap_or(false) {
                             outs.push((*rout_i, fout.clone()));
                         }
@@ -626,12 +616,16 @@ fn build_parsed_source_lemma(name: &str, formula: p::Formula) -> p::Lemma {
 /// annotate the rules with AUTO_* actions and append the `AUTO_typing` sources
 /// lemma — to BOTH the parser-AST theory (`parsed`, drives rendering) and the
 /// elaborated theory (`elaborated`, drives the prove loop and the
-/// trivial-AC-variant render check).  Returns `true` iff anything was added.
+/// trivial-AC-variant render check).  `ndc_cache` is the theory's
+/// once-per-load NDC-checked intruder cache, injected into the scratch
+/// contexts below so they reuse the tagged+permuted rules instead of
+/// re-running the check.  Returns `true` iff anything was added.
 pub fn apply_auto_sources(
     parsed: &mut p::Theory,
     elaborated: &mut crate::theory::Theory,
     maude: MaudeHandle,
     pool: Option<std::sync::Arc<tamarin_term::maude_proc::MaudePool>>,
+    ndc_cache: Option<&[crate::rule::IntrRuleAC]>,
 ) -> bool {
     use crate::constraint::solver::context::ProofContext;
     use crate::guarded::formula_to_guarded;
@@ -661,11 +655,13 @@ pub fn apply_auto_sources(
 
     // GENERATION chains: the RAW (saturated, unrefined) sources — HS
     // `addAutoSourcesLemma` uses `crcRawSources` (RuleItem.hs:64-70, see line 66).
-    let ctx_raw = ProofContext::new_with_restrictions_and_pool(
+    let ctx_raw = ProofContext::new_with_restrictions_pool_forced(
         maude.clone(),
         pool.clone(),
         rules.clone(),
         restrictions.clone(),
+        &[],
+        ndc_cache.map(<[_]>::to_vec),
     );
     let raw_chains = collect_chains(&ctx_raw);
 
@@ -688,11 +684,13 @@ pub fn apply_auto_sources(
         // refined == raw
         !raw_chains.is_empty()
     } else {
-        let mut ctx_ref = ProofContext::new_with_restrictions_and_pool(
+        let mut ctx_ref = ProofContext::new_with_restrictions_pool_forced(
             maude.clone(),
             pool,
             rules.clone(),
             restrictions,
+            &[],
+            ndc_cache.map(<[_]>::to_vec),
         );
         ctx_ref.typing_assumptions = typing_asms;
         !collect_chains(&ctx_ref).is_empty()

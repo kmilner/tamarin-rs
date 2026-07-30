@@ -39,6 +39,16 @@
 //! for the Rust port of `dhIntruderRules`, which IS still used as a
 //! regenerator (the function that PRODUCES the cache file) but is not
 //! the production runtime path.
+//!
+//! The BP cache predates upstream #883: that commit rewrote
+//! `minimizeIntruderRules` (IntruderRules.hs:190-208) to subsume rules
+//! via Maude-backed `equalDuplicateRuleUpToRenaming` /
+//! `equalSubsetRuleUpToRenaming`, which collapses one more `d_em`
+//! variant, so re-running `tamarin-prover variants` at c7e92819 emits
+//! 74 BP rules rather than the 75 committed here.  Upstream never
+//! regenerated the file, and both HS and RS parse the committed 75
+//! rules on every theory load, so the two stay byte-identical in
+//! production; the divergence is confined to the regenerator.
 
 use tamarin_parser as p;
 use tamarin_term::maude_sig::MaudeSig;
@@ -157,7 +167,7 @@ pub fn parse_intruder_rules(
 
     let mut out = Vec::with_capacity(parser_rules.len());
     for r in parser_rules {
-        let intr = ast_rule_to_intr_rule_ac(&r).map_err(|message| IntrRuleParseError {
+        let intr = ast_rule_to_intr_rule_ac(msig, &r).map_err(|message| IntrRuleParseError {
             ctxt_desc: ctxt_desc.to_string(),
             message,
         })?;
@@ -166,28 +176,81 @@ pub fn parse_intruder_rules(
     Ok(out)
 }
 
-/// HS `intrRule` (Theory/Text/Parser/Rule.hs:155-169):
+/// HS `lookupFun` (Theory/Text/Parser/Rule.hs): resolve a plain function
+/// name against the signature's known symbols (`S.toList (funSyms msig)`)
+/// by `showFunSymName` equality.
+fn lookup_fun(
+    known_funs: &[tamarin_term::function_symbols::FunSym],
+    f: &str,
+) -> Result<tamarin_term::function_symbols::FunSym, String> {
+    known_funs
+        .iter()
+        .copied()
+        .find(|fun| crate::intruder_rules::show_fun_sym_name(fun) == f)
+        .ok_or_else(|| {
+            format!(
+                "Failed parsing intruder rule name: no function named '{}' found in the signature (symbols: {})",
+                f,
+                known_funs
+                    .iter()
+                    .map(|fun| crate::intruder_rules::show_fun_sym_name(fun))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+}
+
+/// HS `constrNameFunc` (Theory/Text/Parser/Rule.hs): recover the function
+/// names encoded in a destructor rule name.  Splits on `'_'`, drops the
+/// leading empty segment (the name starts with an underscore), then drops
+/// the LEADING purely-numeric position segments (`supprPos` via
+/// `readMaybe :: Maybe Int`); errors on an empty result.
+fn constr_name_func(name: &str) -> Result<Vec<String>, String> {
+    // `tail . T.split (== '_')`.
+    let mut names: Vec<String> = name.split('_').skip(1).map(|s| s.to_string()).collect();
+    // `supprPos`: remove position information from the rule name.
+    while let Some(first) = names.first() {
+        if first.parse::<i64>().is_ok() {
+            names.remove(0);
+        } else {
+            break;
+        }
+    }
+    if names.is_empty() {
+        return Err("Failed parsing intruder rule name: empty name".to_string());
+    }
+    Ok(names)
+}
+
+/// HS `intrRule` (Theory/Text/Parser/Rule.hs):
 ///
 /// ```haskell
 /// intrRule :: Parser IntrRuleAC
 /// intrRule = do
-///     info <- try (symbol "rule" *> moduloAC *> intrInfo <* colon)
+///     (name, info)  <- try (symbol "rule" *> moduloAC *> intrInfo <* colon)
 ///     (ps,as,cs,[]) <- genericRule msgvar nodevar
 ///     return $ Rule info ps cs as (newVariables ps cs)
 ///   where
 ///     intrInfo = do
-///         name     <- identifier
-///         limit    <- option 0 natural
+///         name  <- identifier
+///         limit <- option 0 natural
+///         msig  <- sig <$> getState
+///         let knownFuns = S.toList (funSyms msig)
 ///         case name of
-///           'c':cname -> return $ ConstrRule (BC.pack cname)
-///           'd':dname -> return $ DestrRule (BC.pack dname)
-///                                   (fromIntegral limit) True False
-///           _         -> fail $ "invalid intruder rule name '" ++ name ++ "'"
+///           'c':cname -> return (cname, ConstrRule (BC.pack cname)
+///                                         (lookupFun knownFuns $ tail cname))
+///           'd':dname -> return (dname, DestrRule (BC.pack dname)
+///                                         (fromIntegral limit) True False
+///                                         (map (lookupFun knownFuns) (constrNameFunc dname)))
 /// ```
 ///
 /// The first character of the parsed name (`c` or `d`) is the rule-kind
 /// dispatch; the REMAINING name string is what goes into the `Vec<u8>`
-/// (e.g. `c_exp` → `ConstrRule "_exp"`, `d_exp` → `DestrRule "_exp" 0 True False`).
+/// (e.g. `c_exp` → `ConstrRule "_exp" (NoEq expSym)`, `d_exp` →
+/// `DestrRule "_exp" 0 True False [NoEq expSym]`).  The attached function
+/// symbols are resolved against the signature: constructors via the name
+/// after the underscore (`tail cname`), destructors via `constrNameFunc`
+/// (split on `'_'`, position segments stripped).
 ///
 /// `option 0 natural` defaults `limit` to 0.  The cached `.spthy` files
 /// never emit a non-zero limit (they're produced by the canonical HS
@@ -202,28 +265,45 @@ pub fn parse_intruder_rules(
 /// `True False` are HS hard-codes — see the FIXME in
 /// Theory/Text/Parser/Rule.hs ("Currently we (wrongly) always assume
 /// that we have a subterm rule").  Subterm=True / constant=False.
-fn ast_rule_to_intr_rule_ac(r: &p::Rule) -> Result<IntrRuleAC, String> {
+fn ast_rule_to_intr_rule_ac(msig: &MaudeSig, r: &p::Rule) -> Result<IntrRuleAC, String> {
     // HS `intrInfo` rejects non-c/d-prefixed names.  Mirror that here.
     let bytes = r.name.as_bytes();
     if bytes.is_empty() {
         return Err("empty intruder rule name".to_string());
     }
     let (kind, rest) = (bytes[0], &bytes[1..]);
+    // HS `knownFuns = S.toList (funSyms msig)`.
+    let known_funs: Vec<tamarin_term::function_symbols::FunSym> =
+        msig.fun_syms.iter().copied().collect();
     let info: IntrRuleACInfo = match kind {
-        b'c' => IntrRuleACInfo::ConstrRule(rest.to_vec()),
-        b'd' => IntrRuleACInfo::DestrRule(
-            rest.to_vec(),
-            // HS `fromIntegral limit` where `limit <- option 0 natural`.
-            // The cached files never specify a limit; we always see 0.
-            0,
-            // HS hard-codes `True False` (subterm, constant).
-            true,
-            false,
-        ),
+        b'c' => {
+            // `lookupFun knownFuns $ tail cname` — cname is `_<fun>`, so
+            // `tail` strips the leading underscore.
+            let cname = &r.name[1..];
+            let f = lookup_fun(&known_funs, cname.get(1..).unwrap_or(""))?;
+            IntrRuleACInfo::ConstrRule(rest.to_vec(), f)
+        }
+        b'd' => {
+            let dname = &r.name[1..];
+            let funs = constr_name_func(dname)?
+                .iter()
+                .map(|n| lookup_fun(&known_funs, n))
+                .collect::<Result<Vec<_>, _>>()?;
+            IntrRuleACInfo::DestrRule(
+                rest.to_vec(),
+                // HS `fromIntegral limit` where `limit <- option 0 natural`.
+                // The cached files never specify a limit; we always see 0.
+                0,
+                // HS hard-codes `True False` (subterm, constant).
+                true,
+                false,
+                funs,
+            )
+        }
         _ => {
             return Err(format!(
                 "invalid intruder rule name '{}': must start with `c` (constructor) \
-             or `d` (destructor) — HS Rule.hs:166-169",
+             or `d` (destructor)",
                 r.name
             ))
         }
@@ -390,7 +470,7 @@ mod tests {
         let constr_names: Vec<&[u8]> = rules
             .iter()
             .filter_map(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n) => Some(n.as_slice()),
+                IntrRuleACInfo::ConstrRule(n, _) => Some(n.as_slice()),
                 _ => None,
             })
             .collect();
@@ -416,13 +496,16 @@ mod tests {
         }
     }
 
-    /// Every destructor rule in DH must have shape `DestrRule name 0 True False`
-    /// (HS Rule.hs:168 hard-codes `(fromIntegral limit) True False`, and
-    /// `option 0 natural` means limit=0 when none is parsed — none of the
-    /// cached destructors have a numeric limit).  The name must start
-    /// with `_` (HS strips the leading `d` and keeps the `_<rest>` as-is).
+    /// Every destructor rule in DH must have shape
+    /// `DestrRule name 0 True False funs` (HS `intrInfo` hard-codes
+    /// `(fromIntegral limit) True False`, and `option 0 natural` means
+    /// limit=0 when none is parsed — none of the cached destructors have a
+    /// numeric limit).  The name must start with `_` (HS strips the leading
+    /// `d` and keeps the `_<rest>` as-is), and the attached function-symbol
+    /// list resolves the name via `constrNameFunc` + `lookupFun`.
     #[test]
     fn dh_variants_destructors_are_d_exp_or_d_inv_with_limit_0() {
+        use tamarin_term::function_symbols::{exp_sym, inv_sym, FunSym};
         let rules = mk_dh_intruder_variants(&dh_maude_sig());
         let destrs: Vec<&IntrRuleAC> = rules
             .iter()
@@ -436,7 +519,7 @@ mod tests {
             destrs.len()
         );
         for d in &destrs {
-            if let IntrRuleACInfo::DestrRule(name, limit, subterm, constant) = &d.info {
+            if let IntrRuleACInfo::DestrRule(name, limit, subterm, constant, funs) = &d.info {
                 assert!(
                     name.starts_with(b"_"),
                     "destructor name must start with `_` (HS leading `d` is consumed, \
@@ -445,25 +528,31 @@ mod tests {
                 );
                 assert_eq!(
                     *limit, 0,
-                    "DestrRule limit must be 0 (HS Rule.hs:168 `fromIntegral limit` \
+                    "DestrRule limit must be 0 (HS `fromIntegral limit` \
                      with `option 0 natural` and no numeric in the cached file); \
                      got {}",
                     limit
                 );
                 assert!(
                     *subterm,
-                    "DestrRule subterm must be True (HS Rule.hs:168 hard-codes True)"
+                    "DestrRule subterm must be True (HS intrInfo hard-codes True)"
                 );
                 assert!(
                     !(*constant),
-                    "DestrRule constant must be False (HS Rule.hs:168 hard-codes False)"
+                    "DestrRule constant must be False (HS intrInfo hard-codes False)"
                 );
-                // Names in the DH file: only `_exp` and `_inv`.
-                assert!(
-                    name == b"_exp" || name == b"_inv",
-                    "DH destructor name must be `_exp` or `_inv`; got {}",
-                    String::from_utf8_lossy(name)
-                );
+                // Names in the DH file: only `_exp` and `_inv`; the funs
+                // list carries the resolved symbol.
+                if name == b"_exp" {
+                    assert_eq!(funs, &vec![FunSym::NoEq(exp_sym())]);
+                } else if name == b"_inv" {
+                    assert_eq!(funs, &vec![FunSym::NoEq(inv_sym())]);
+                } else {
+                    panic!(
+                        "DH destructor name must be `_exp` or `_inv`; got {}",
+                        String::from_utf8_lossy(name)
+                    );
+                }
             }
         }
     }
@@ -478,7 +567,16 @@ mod tests {
             .expect("parse_intruder_rules on inline src");
         assert_eq!(rules.len(), 1);
         match &rules[0].info {
-            IntrRuleACInfo::ConstrRule(n) => assert_eq!(n.as_slice(), b"_exp"),
+            IntrRuleACInfo::ConstrRule(n, f) => {
+                assert_eq!(n.as_slice(), b"_exp");
+                assert_eq!(
+                    *f,
+                    tamarin_term::function_symbols::FunSym::NoEq(
+                        tamarin_term::function_symbols::exp_sym()
+                    ),
+                    "c_exp must resolve `exp` against the signature"
+                );
+            }
             other => panic!("expected ConstrRule, got {:?}", other),
         }
     }
@@ -506,8 +604,8 @@ mod tests {
         let rules = mk_dh_intruder_variants(&dh_maude_sig());
         for r in &rules {
             let n = match &r.info {
-                IntrRuleACInfo::ConstrRule(n) => n.as_slice(),
-                IntrRuleACInfo::DestrRule(n, _, _, _) => n.as_slice(),
+                IntrRuleACInfo::ConstrRule(n, _) => n.as_slice(),
+                IntrRuleACInfo::DestrRule(n, _, _, _, _) => n.as_slice(),
                 other => panic!("unexpected info kind: {:?}", other),
             };
             assert!(n.starts_with(b"_"),
@@ -551,14 +649,14 @@ mod tests {
         let cached_constrs: std::collections::BTreeSet<Vec<u8>> = cached
             .iter()
             .filter_map(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n) => Some(n.clone()),
+                IntrRuleACInfo::ConstrRule(n, _) => Some(n.clone()),
                 _ => None,
             })
             .collect();
         let runtime_constrs: std::collections::BTreeSet<Vec<u8>> = runtime
             .iter()
             .filter_map(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n) => Some(n.clone()),
+                IntrRuleACInfo::ConstrRule(n, _) => Some(n.clone()),
                 _ => None,
             })
             .collect();
@@ -616,14 +714,14 @@ mod tests {
         let c_one = rules
             .iter()
             .find(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n) => n.as_slice() == b"_one",
+                IntrRuleACInfo::ConstrRule(n, _) => n.as_slice() == b"_one",
                 _ => false,
             })
             .expect("c_one rule should be present");
         let c_dh_neutral = rules
             .iter()
             .find(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n) => n.as_slice() == b"_DH_neutral",
+                IntrRuleACInfo::ConstrRule(n, _) => n.as_slice() == b"_DH_neutral",
                 _ => false,
             })
             .expect("c_DH_neutral rule should be present");
@@ -676,7 +774,10 @@ mod tests {
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
 
-        let src = "rule (modulo AC) c_test:\n   [ ] --[ !KU( one ) ]-> [ !KU( one ) ]\n";
+        // The rule name must resolve against the signature (`lookupFun`),
+        // so use the always-present `pair` symbol; the point of the test
+        // is the bare `one` in the facts.
+        let src = "rule (modulo AC) c_pair:\n   [ ] --[ !KU( one ) ]-> [ !KU( one ) ]\n";
         let rules = parse_intruder_rules(&pair_maude_sig(), "<no-dh>", src)
             .expect("parse_intruder_rules under pair_maude_sig");
         assert_eq!(rules.len(), 1);

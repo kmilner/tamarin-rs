@@ -23,7 +23,8 @@ use crate::builtin::{
 use crate::function_symbols::{
     bp_fun_sig, bp_reducible_fun_sig, dh_fun_sig, dh_reducible_fun_sig, fst_dest_sym, fst_sym,
     mset_fun_sig, nat_fun_sig, pair_fun_dest_sig, pair_fun_sig, snd_dest_sym, snd_sym, xor_fun_sig,
-    xor_reducible_fun_sig, FunSig, FunSym, NoEqFunSig, NoEqSym,
+    xor_reducible_fun_sig, AcFctFunSig, AcFctSym, AcSym, Constructability, FunSig, FunSym,
+    NdcState, NoEqFunSig, NoEqSym, Privacy, UserDefinedSig, UserDefinedSym,
 };
 use crate::lterm::LNTerm;
 use crate::rewriting::RRule;
@@ -39,6 +40,10 @@ pub struct MaudeSig {
     pub enable_xor: bool,
     pub enable_diff: bool,
     pub st_fun_syms: BTreeSet<NoEqSym>,
+    /// User-defined AC function signature (HS `stACFunSyms`).  These are the
+    /// symbols declared `[AC]` in the theory's `functions:` block; the
+    /// built-in AC operators live in the `enable_*` flags instead.
+    pub st_ac_fun_syms: BTreeSet<AcFctSym>,
     pub st_rules: BTreeSet<CtxtStRule>,
     pub macro_names: BTreeSet<NoEqSym>,
     pub eq_convergent: bool,
@@ -60,15 +65,17 @@ pub struct MaudeSig {
 
 impl MaudeSig {
     /// True when the signature declares NO associative-commutative operators
-    /// (DH / BP / multiset / nat / XOR).  The local Robinson unifier and the
-    /// `reduce` identity fast-path are complete only for such signatures; this
-    /// is the single source of truth for that "no AC theory" predicate.
+    /// (DH / BP / multiset / nat / XOR, or a user-defined `[AC]` symbol).  The
+    /// local Robinson unifier and the `reduce` identity fast-path are complete
+    /// only for such signatures; this is the single source of truth for that
+    /// "no AC theory" predicate.
     pub fn has_no_ac_operators(&self) -> bool {
         !self.enable_dh
             && !self.enable_bp
             && !self.enable_mset
             && !self.enable_nat
             && !self.enable_xor
+            && self.st_ac_fun_syms.is_empty()
     }
 
     /// Refresh the cached `fun_syms` / `irreducible_fun_syms` /
@@ -93,6 +100,11 @@ impl MaudeSig {
         if self.enable_xor {
             all_funs.extend(xor_fun_sig());
         }
+        all_funs.extend(
+            self.st_ac_fun_syms
+                .iter()
+                .map(|s| FunSym::Ac(AcSym::AcFct(*s))),
+        );
 
         // Reducible roots: any function symbol at the root of an stRules LHS,
         // plus DH/BP/XOR reducible. AC Mult is intentionally absent.
@@ -160,24 +172,171 @@ impl MaudeSig {
             .collect()
     }
 
-    /// Add a free function symbol.
+    /// AC function symbols in the signature (HS `acUserFunSyms`), read back out
+    /// of the derived `fun_syms` rather than `st_ac_fun_syms`.
+    pub fn ac_user_fun_syms(&self) -> AcFctFunSig {
+        self.fun_syms
+            .iter()
+            .filter_map(|f| {
+                if let FunSym::Ac(AcSym::AcFct(s)) = f {
+                    Some(*s)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// HS `userDefinedFunSyms`: every free symbol of the signature plus every
+    /// user-defined AC symbol, tagged with which kind it is.
+    pub fn user_defined_fun_syms(&self) -> UserDefinedSig {
+        self.no_eq_fun_syms()
+            .into_iter()
+            .map(UserDefinedSym::NoEqUser)
+            .chain(
+                self.ac_user_fun_syms()
+                    .into_iter()
+                    .map(UserDefinedSym::AcFctUser),
+            )
+            .collect()
+    }
+
+    /// HS `userDefinedSTFunSyms`: like [`MaudeSig::user_defined_fun_syms`], but
+    /// the free part is the SUBTERM-theory signature (`st_fun_syms`), i.e. it
+    /// excludes the symbols contributed by the built-in theories.
+    pub fn user_defined_st_fun_syms(&self) -> UserDefinedSig {
+        self.st_fun_syms
+            .iter()
+            .copied()
+            .map(UserDefinedSym::NoEqUser)
+            .chain(
+                self.ac_user_fun_syms()
+                    .into_iter()
+                    .map(UserDefinedSym::AcFctUser),
+            )
+            .collect()
+    }
+
+    /// Add a user-defined function symbol: free symbols go to `st_fun_syms`,
+    /// AC symbols to `st_ac_fun_syms`.
     ///
     /// HS `addFunSym funsym msig = msig <> mempty {stFunSyms = [funsym]}`
     /// (Term/Maude/Signature.hs:152-154) — the `<>` routes through
     /// `unionExceptPairSym`, so adding the `fst`/`snd` DESTRUCTOR variant
     /// removes the built-in CONSTRUCTOR variant (and vice versa).  A plain
     /// `insert` would leave BOTH `fst/1` and `fst/1[destructor]` in the set,
-    /// printing the symbol twice in the `functions:` header.
-    pub fn add_fun_sym(mut self, sym: NoEqSym) -> Self {
-        let mut singleton: BTreeSet<NoEqSym> = BTreeSet::new();
-        singleton.insert(sym);
-        self.st_fun_syms = union_except_pair_sym(&self.st_fun_syms, &singleton);
+    /// printing the symbol twice in the `functions:` header.  The AC branch has
+    /// no such exception: HS `<>` unions `stACFunSyms` plainly.
+    pub fn add_fun_sym(mut self, sym: UserDefinedSym) -> Self {
+        match sym {
+            UserDefinedSym::NoEqUser(f) => {
+                let mut singleton: BTreeSet<NoEqSym> = BTreeSet::new();
+                singleton.insert(f);
+                self.st_fun_syms = union_except_pair_sym(&self.st_fun_syms, &singleton);
+            }
+            UserDefinedSym::AcFctUser(f) => {
+                self.st_ac_fun_syms.insert(f);
+            }
+        }
         // HS `<>` (Signature.hs:120-141) rebuilds via `maudeSig (mempty {...})`,
         // and `mempty` has `eqConvergent=False` (line 145), which `maudeSig`
         // preserves (line 105).  So routing through the monoid RESETS
         // eqConvergent to false; mirror that here.
         self.eq_convergent = false;
         self.refresh()
+    }
+
+    /// Join `ndc_state` onto the NDC state of every symbol in the subterm
+    /// signature whose NAME matches `fun_sym`'s.
+    ///
+    /// HS `joinNDCinSig` (Signature.hs:233-247) matches by name only, because
+    /// the NDC state of the symbol handed in may differ from the one recorded
+    /// in the signature (e.g. for symbols read out of the metadata of
+    /// diff-mode intruder rules).  `fun_sym`s that carry no name (the built-in
+    /// AC/C operators, `List`) match nothing.
+    ///
+    /// Note that HS updates the two subterm-signature sets with a record
+    /// update and does NOT re-run `maudeSig`, so the derived `fun_syms` /
+    /// irreducible / reducible caches keep the pre-join NDC states — no
+    /// `refresh()` here either.
+    pub fn join_ndc_in_sig(mut self, fun_sym: FunSym, ndc_state: NdcState) -> Self {
+        let name = match fun_sym {
+            FunSym::NoEq(s) => s.name,
+            FunSym::Ac(AcSym::AcFct(s)) => s.name,
+            _ => return self,
+        };
+        self.st_fun_syms = self
+            .st_fun_syms
+            .iter()
+            .map(|s| {
+                if s.name == name {
+                    s.with_ndc(ndc_state.join(s.ndc))
+                } else {
+                    *s
+                }
+            })
+            .collect();
+        self.st_ac_fun_syms = self
+            .st_ac_fun_syms
+            .iter()
+            .map(|s| {
+                if s.name == name {
+                    s.with_ndc(ndc_state.join(s.ndc))
+                } else {
+                    *s
+                }
+            })
+            .collect();
+        self
+    }
+
+    /// The `functions:` list of HS `prettyMaudeSigExcept`
+    /// (Signature.hs:249-295): the subterm signature's free symbols rendered
+    /// as `name/arity[attrs]`, followed by the user-defined AC symbols as
+    /// `name/2[attrs]`, both skipping the entries listed in `excl`.
+    ///
+    /// The two attribute lists differ: a PRIVATE CONSTRUCTOR free symbol
+    /// prints `[private,constructor]` while its AC counterpart prints just
+    /// `[private]` (the `AC` attribute already implies constructability).
+    pub fn pretty_fun_syms_except(&self, excl: &UserDefinedSig) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for sym in &self.st_fun_syms {
+            if excl.contains(&UserDefinedSym::NoEqUser(*sym)) {
+                continue;
+            }
+            let mut attrs: Vec<&str> = match (sym.privacy, sym.constructability) {
+                (Privacy::Public, Constructability::Destructor) => vec!["destructor"],
+                (Privacy::Private, Constructability::Destructor) => vec!["private", "destructor"],
+                (Privacy::Private, Constructability::Constructor) => vec!["private", "constructor"],
+                (Privacy::Public, Constructability::Constructor) => vec![],
+            };
+            attrs.extend(ndc_attrs(sym.ndc));
+            out.push(format!(
+                "{}/{}{}",
+                String::from_utf8_lossy(sym.name),
+                sym.arity,
+                show_attrs(&attrs)
+            ));
+        }
+        for sym in &self.st_ac_fun_syms {
+            if excl.contains(&UserDefinedSym::AcFctUser(*sym)) {
+                continue;
+            }
+            let mut attrs: Vec<&str> = match (sym.privacy, sym.constructability) {
+                (Privacy::Public, Constructability::Destructor) => vec!["destructor"],
+                (Privacy::Private, Constructability::Destructor) => vec!["private", "destructor"],
+                (Privacy::Private, Constructability::Constructor) => vec!["private"],
+                (Privacy::Public, Constructability::Constructor) => vec![],
+            };
+            attrs.push("AC");
+            attrs.extend(ndc_attrs(sym.ndc));
+            out.push(format!(
+                "{}/2{}",
+                String::from_utf8_lossy(sym.name),
+                show_attrs(&attrs)
+            ));
+        }
+        out
     }
 
     /// Add a macro symbol.
@@ -228,6 +387,14 @@ impl MaudeSig {
             enable_xor: self.enable_xor || other.enable_xor,
             enable_diff: self.enable_diff || other.enable_diff,
             st_fun_syms: union_except_pair_sym(&self.st_fun_syms, &other.st_fun_syms),
+            // HS `<>` unions `stACFunSyms` plainly (Signature.hs:127-141): the
+            // `fst`/`snd` constructor-vs-destructor exception applies to the
+            // free symbols only.
+            st_ac_fun_syms: self
+                .st_ac_fun_syms
+                .union(&other.st_ac_fun_syms)
+                .copied()
+                .collect(),
             st_rules: union_except_pair_rules(&self.st_rules, &other.st_rules),
             macro_names: self
                 .macro_names
@@ -242,6 +409,29 @@ impl MaudeSig {
             reducible_fun_syms_fast: tamarin_utils::FastSet::default(),
         };
         merged.refresh()
+    }
+}
+
+/// HS `attrsNDC` (Signature.hs:290): the NDC attributes a symbol prints, in
+/// trace-then-diff order (a symbol with `IsNdcBoth` prints both).
+fn ndc_attrs(ndc: NdcState) -> Vec<&'static str> {
+    let mut attrs = Vec::new();
+    if ndc.has_ndc() {
+        attrs.push("NDC");
+    }
+    if ndc.has_ndc_diff() {
+        attrs.push("NDC-diff");
+    }
+    attrs
+}
+
+/// HS `showAttrs` (Signature.hs:292-293): nothing at all for an empty
+/// attribute list, otherwise ` [a1,a2,…]` — note the LEADING space.
+fn show_attrs(attrs: &[&str]) -> String {
+    if attrs.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", attrs.join(","))
     }
 }
 
@@ -621,7 +811,7 @@ mod tests {
             Privacy::Public,
             Constructability::Constructor,
         );
-        let sig = sig.add_fun_sym(g);
+        let sig = sig.add_fun_sym(UserDefinedSym::NoEqUser(g));
         assert!(
             !sig.eq_convergent,
             "add_fun_sym must reset eq_convergent (HS monoid <>)"
@@ -663,6 +853,83 @@ mod tests {
         assert!(
             sig.eq_convergent,
             "add_ctxt_st_rule must NOT reset eq_convergent"
+        );
+    }
+
+    /// An `[AC]` symbol goes to `st_ac_fun_syms` and reaches the derived
+    /// signature as `AC (ACfct …)` (HS `maudeSig`'s
+    /// `S.union S.map (AC . ACfct) stACFunSyms`).
+    #[test]
+    fn add_fun_sym_routes_ac_symbols() {
+        let f = AcFctSym::new(
+            b"f".to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::NotNdc,
+        );
+        let sig = MaudeSig::default().add_fun_sym(UserDefinedSym::AcFctUser(f));
+        assert!(sig.st_fun_syms.is_empty());
+        assert!(sig.st_ac_fun_syms.contains(&f));
+        assert!(sig.fun_syms.contains(&FunSym::Ac(AcSym::AcFct(f))));
+        assert_eq!(sig.ac_user_fun_syms().len(), 1);
+        assert!(sig
+            .user_defined_st_fun_syms()
+            .contains(&UserDefinedSym::AcFctUser(f)));
+        // A user-defined AC symbol makes the theory an AC theory.
+        assert!(!sig.has_no_ac_operators());
+    }
+
+    /// HS `ppFunSymb`/`showAttrs` (Signature.hs:273-293): attributes are
+    /// bracketed after a LEADING space, free symbols print
+    /// `[private,constructor]` where AC symbols print only `[private]`, and the
+    /// NDC attributes come last.
+    #[test]
+    fn pretty_fun_syms_renders_attributes() {
+        let sig = MaudeSig {
+            st_fun_syms: [
+                NoEqSym::new(
+                    b"h".to_vec(),
+                    1,
+                    Privacy::Public,
+                    Constructability::Constructor,
+                ),
+                NoEqSym::new(
+                    b"p".to_vec(),
+                    2,
+                    Privacy::Private,
+                    Constructability::Constructor,
+                )
+                .with_ndc(NdcState::IsNdcBoth),
+            ]
+            .into_iter()
+            .collect(),
+            st_ac_fun_syms: [
+                AcFctSym::new(
+                    b"ac".to_vec(),
+                    Privacy::Public,
+                    Constructability::Constructor,
+                    NdcState::NotNdc,
+                ),
+                AcFctSym::new(
+                    b"pac".to_vec(),
+                    Privacy::Private,
+                    Constructability::Constructor,
+                    NdcState::IsNdc,
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            ..MaudeSig::default()
+        }
+        .refresh();
+        assert_eq!(
+            sig.pretty_fun_syms_except(&UserDefinedSig::new()),
+            vec![
+                "h/1".to_string(),
+                "p/2 [private,constructor,NDC,NDC-diff]".to_string(),
+                "ac/2 [AC]".to_string(),
+                "pac/2 [private,AC,NDC]".to_string(),
+            ]
         );
     }
 }

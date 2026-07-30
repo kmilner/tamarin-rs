@@ -80,7 +80,6 @@ csf18-xor/CH07.spthy
 csf18-xor/chaum_offline_anonymity.spthy
 csf18-xor/CRxor.spthy
 csf18-xor/KCL07.spthy
-csf18-xor/LAK06.spthy
 csf18-xor/NSLPK3xor.spthy
 csf19-wrapping/gcm.spthy
 csf19-wrapping/siv.spthy
@@ -111,7 +110,6 @@ csf23-subterms/ParserTests.spthy
 csf23-subterms/YellowTest.spthy
 esorics23-bluetooth/models/ble.spthy
 esorics23-bluetooth/models/bredr.spthy
-esorics23-bluetooth/models/mesh.spthy
 eurosp19-eccDAA/ISOIEC_20008_2013_2_ECC_DAA.fixed.spthy
 eurosp19-eccDAA/ISOIEC_20008_2013_2_ECC_DAA.spthy
 experiments/JKL_TS1_2004-KI.spthy
@@ -199,13 +197,11 @@ features/xor/CH07.spthy
 features/xor/CR.spthy
 features/xor/CRxor.spthy
 features/xor/KCL07.spthy
-features/xor/LAK06.spthy
 features/xor/NSLPK3xor.spthy
 features/xor/obsolete/CHx.spthy
 features/xor/obsolete/KCL07-manualproof.spthy
 features/xor/xorplusdh.spthy
 features/xor/xor.spthy
-fm24-cardpayments/onlineAuthorized/C8.spthy
 idbased/BP_ABSTRACT_IBE_toyExample.spthy
 idbased/BP_ABSTRACT_IBS_toyExample.spthy
 idbased/BP_IBS_2.spthy
@@ -214,7 +210,6 @@ idbased/BP_IBS_4.spthy
 jcs19-xor/CH07.spthy
 jcs19-xor/CRxor.spthy
 jcs19-xor/KCL07.spthy
-jcs19-xor/LAK06.spthy
 jcs19-xor/NSLPK3xor.spthy
 loops/Axioms_and_Induction.spthy
 loops/JCS12_Typing_Example.spthy

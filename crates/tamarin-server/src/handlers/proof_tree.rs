@@ -147,11 +147,17 @@ impl ProofState {
     /// Build the [`ProofContext`] + initial per-lemma roots for a
     /// freshly loaded theory.  Mirrors the construction in
     /// `tamarin_theory::prove::prove_lemma` minus the search loop.
+    ///
+    /// `ndc_cache`: the theory's once-per-load NDC-checked intruder cache
+    /// (`theory_io` ran `check_close_intr_rule` at load), injected into
+    /// both the web session and the shared display context so neither
+    /// re-runs the check.
     pub fn new(
         parser_theory: &tamarin_parser::ast::Theory,
         maude_path: &str,
         cli_cut: Option<tamarin_theory::constraint::solver::context::CutStrategy>,
         in_file: &str,
+        ndc_cache: Option<&[tamarin_theory::rule::IntrRuleAC]>,
     ) -> Result<Self, String> {
         // Effective cut strategy — HS `closeTheory` precedence
         // (TheoryLoader.hs:640-666): the CLI `--stop-on-trace` wins;
@@ -248,6 +254,7 @@ impl ProofState {
                 &typed.in_file,
                 tamarin_theory::prove::CliHeuristic::default(),
                 cut,
+                ndc_cache,
             ) {
                 Ok(s) => Some(Arc::new(s)),
                 Err(e) => {
@@ -302,6 +309,7 @@ impl ProofState {
             rules,
             ctx_restrictions,
             &forced_injective_facts,
+            ndc_cache.map(<[_]>::to_vec),
         );
         ctx.cut = cut;
         // Build the initial system for every lemma.
@@ -1332,7 +1340,7 @@ lemma trivial: exists-trace
 end
 "#;
         let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
-        let state = ProofState::new(&pt, &mp, None, "").expect("build state");
+        let state = ProofState::new(&pt, &mp, None, "", None).expect("build state");
         // Should have one lemma initialised.
         let root = state.get_root("trivial").expect("trivial root");
         assert!(matches!(root.method, ProofMethod::Sorry(_)));
@@ -1353,7 +1361,7 @@ lemma trivial: exists-trace
 end
 "#;
         let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
-        let state = ProofState::new(&pt, &mp, None, "").expect("build state");
+        let state = ProofState::new(&pt, &mp, None, "", None).expect("build state");
         // Apply simplify at the root.
         let path: Vec<String> = Vec::new();
         let r = state.apply_at_path("trivial", &path, ProofMethod::Simplify);

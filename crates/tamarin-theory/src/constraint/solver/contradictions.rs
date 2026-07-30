@@ -57,6 +57,8 @@ pub enum Contradiction {
     ImpossibleChain,
     /// Has a forbidden chain.
     ForbiddenChain,
+    /// Has a forbidden AC constructor chain.
+    ForbiddenACConstrChain,
     /// Conflicting injective-fact instances.
     NonInjectiveFactInstance(NodeId, NodeId, NodeId),
     /// Equation store became false.
@@ -221,6 +223,11 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     // 8. ForbiddenChain.
     if has_forbidden_chain(sys, &ab_adj) {
         out.push(Contradiction::ForbiddenChain);
+    }
+    // 8b. ForbiddenACConstrChain — AC-constructor chain check
+    //     (Contradictions.hs `hasForbiddenConstrChain`).
+    if has_forbidden_constr_chain(sys) {
+        out.push(Contradiction::ForbiddenACConstrChain);
     }
     // 9. IncompatibleEqs — HS-faithful: `eqsIsFalse sEqStore`
     //    (Contradictions.hs `contradictions`). The three preceding probes are RS-only
@@ -740,6 +747,212 @@ fn never_contains_fresh_priv(t: &tamarin_term::lterm::LNTerm) -> bool {
     }
 }
 
+/// `hasForbiddenConstrChain` — port of Haskell's
+/// `Theory.Constraint.Solver.Contradictions.hasForbiddenConstrChain`.
+///
+/// Detects non-normal chains linking two instances of the SAME AC-symbol
+/// construction rule where the connected component contains at least two
+/// "trivial" instances (a premise that is a plain msg-var KU fact, or the
+/// same AC symbol applied to only msg-vars).  Union-find over the
+/// `LessAtom … Adversary` edges between AC-constructor nodes whose
+/// conclusion feeds the other's premise, run to a fixpoint.
+fn has_forbidden_constr_chain(sys: &System) -> bool {
+    use crate::constraint::constraints::Reason;
+    use crate::rule::is_ac_constr_rule;
+    use std::collections::{BTreeMap, BTreeSet};
+    use tamarin_term::function_symbols::FunSym;
+
+    type NodeInfo = (
+        crate::constraint::constraints::NodeId,
+        BTreeSet<crate::constraint::constraints::NodeId>,
+        FunSym,
+    );
+
+    // Every candidate pair comes from an `Adversary` less-atom, so without one
+    // `extracted` is empty and the fixpoint below cannot report a chain.  This
+    // runs on every solver step, so bail out before touching the eq-store.
+    if sys
+        .less_atoms
+        .iter()
+        .all(|la| la.reason != Reason::Adversary)
+    {
+        return false;
+    }
+
+    // Resolve less-atom endpoints through the eq-store subst before node
+    // lookup — the same RS-only compensation the cyclic check above applies
+    // (HS runs post-`substSystem`, so its `sLessAtoms` are already
+    // canonical; RS's may lag one `subst_system` behind).
+    let subst = &sys.eq_store.subst;
+    let resolve =
+        |v: &crate::constraint::constraints::NodeId| -> crate::constraint::constraints::NodeId {
+            use tamarin_term::term::Term;
+            use tamarin_term::vterm::Lit;
+            let t = tamarin_term::subst::apply_vterm(subst, Term::Lit(Lit::Var(*v)));
+            if let Term::Lit(Lit::Var(w)) = t {
+                w
+            } else {
+                *v
+            }
+        };
+
+    // Facts are compared under the pending eq-store subst as well — same
+    // rationale as the endpoint resolve above (HS compares post-substSystem
+    // rule instances).  Comparison-only copies; `Fact` equality ignores the
+    // bloom cache.
+    let subst_fact = |fa: &crate::fact::LNFact| -> crate::fact::LNFact {
+        let mut f = fa.clone();
+        f.terms = f
+            .terms
+            .iter()
+            .map(|t| tamarin_term::subst::apply_vterm(subst, t.clone()))
+            .collect();
+        f.recompute_bloom();
+        f
+    };
+
+    // `extractNodesAndRules`: for each `LessAtom n1 n2 Adversary` where both
+    // nodes carry AC-constructor rules of the same symbol and r1's (single)
+    // conclusion appears among r2's premises, record the two nodes'
+    // (substituted) premises and the symbol.  Both endpoints resolve through a
+    // single `node_rule_map` index — it is only `.get()`-ed, and it keeps the
+    // FIRST rule per id, so it answers exactly as `node_rule_safe` does.
+    let node_rules = sys.node_rule_map();
+    let extracted: Vec<(
+        crate::constraint::constraints::NodeId,
+        Vec<crate::fact::LNFact>,
+        crate::constraint::constraints::NodeId,
+        Vec<crate::fact::LNFact>,
+        FunSym,
+    )> = sys
+        .less_atoms
+        .iter()
+        .filter_map(|la| {
+            if la.reason != Reason::Adversary {
+                return None;
+            }
+            let n1 = resolve(&la.smaller);
+            let n2 = resolve(&la.larger);
+            let r1 = node_rules.get(&n1).copied()?;
+            let r2 = node_rules.get(&n2).copied()?;
+            let name1 = is_ac_constr_rule(r1)?;
+            let name2 = is_ac_constr_rule(r2)?;
+            if name1 != name2 {
+                return None;
+            }
+            let conc = subst_fact(r1.conclusions.first()?);
+            let prems2: Vec<crate::fact::LNFact> = r2.premises.iter().map(&subst_fact).collect();
+            if tamarin_utils::env_gate!("TAM_RS_DBG_ACCHAIN") {
+                eprintln!(
+                    "[RS_ACCHAIN] path={} pair {:?}<{:?} conc={:?} prems2={:?} contains={}",
+                    crate::constraint::solver::trace::case_path_string(),
+                    n1,
+                    n2,
+                    conc,
+                    prems2,
+                    prems2.contains(&conc)
+                );
+            }
+            if prems2.contains(&conc) {
+                let prems1: Vec<crate::fact::LNFact> =
+                    r1.premises.iter().map(&subst_fact).collect();
+                Some((n1, prems1, n2, prems2, name1))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // `trivial r n iden`: the singleton {iden} iff some premise of `r` is a
+    // trivial or nearly-trivial (same-symbol) KU fact.
+    let trivial = |prems: &[crate::fact::LNFact],
+                   n: &FunSym,
+                   iden: crate::constraint::constraints::NodeId|
+     -> BTreeSet<crate::constraint::constraints::NodeId> {
+        if prems.iter().any(|fa| {
+            crate::fact::is_trivial_ku_fact(fa) || crate::fact::is_nearly_trivial_ku_fact(n, fa)
+        }) {
+            BTreeSet::from([iden])
+        } else {
+            BTreeSet::new()
+        }
+    };
+
+    // `initialMap`: every endpoint maps to (itself, its trivial set, symbol).
+    let mut map: BTreeMap<crate::constraint::constraints::NodeId, NodeInfo> = BTreeMap::new();
+    for (n1, p1, n2, p2, n) in &extracted {
+        map.insert(*n1, (*n1, trivial(p1, n, *n1), *n));
+        map.insert(*n2, (*n2, trivial(p2, n, *n2), *n));
+    }
+
+    if tamarin_utils::env_gate!("TAM_RS_DBG_ACCHAIN") && !extracted.is_empty() {
+        let trivias: Vec<String> = map
+            .iter()
+            .map(|(k, (root, tset, _))| {
+                format!(
+                    "{}_{}→root {}_{} triv={:?}",
+                    k.name,
+                    k.idx,
+                    root.name,
+                    root.idx,
+                    tset.iter().map(|v| v.idx).collect::<Vec<_>>()
+                )
+            })
+            .collect();
+        eprintln!(
+            "[RS_ACCHAIN_MAP] path={} pairs={} init: {}",
+            crate::constraint::solver::trace::case_path_string(),
+            extracted.len(),
+            trivias.join(" | ")
+        );
+    }
+
+    // `finalMap = fixpoint (\x -> foldr updateMap x extracted) (False, initialMap)`.
+    let mut found = false;
+    loop {
+        let before = (found, map.clone());
+        // `foldr` walks the list right-to-left.
+        for (a, _, b, _, n) in extracted.iter().rev() {
+            if found {
+                break;
+            }
+            let (Some((_, t1, _)), Some((c, t2, n2))) = (map.get(a).cloned(), map.get(b).cloned())
+            else {
+                continue;
+            };
+            if *n != n2 {
+                continue;
+            }
+            let (_, t3, _) = map
+                .get(&c)
+                .cloned()
+                .expect("has_forbidden_constr_chain: root must be mapped");
+            let mut nodes = t1.clone();
+            nodes.extend(t2.iter().copied());
+            nodes.extend(t3.iter().copied());
+            if nodes.len() >= 2 {
+                found = true;
+            }
+            // HS `M.insert c … $ M.insert b … $ M.insert a … m` applies
+            // right-to-left, so when `b == c` (the root itself) the
+            // root's accumulated `nodes` entry must win — insert it LAST.
+            map.insert(*a, (c, t1, n2));
+            map.insert(*b, (c, t2, n2));
+            map.insert(c, (c, nodes, n2));
+        }
+        if (found, &map) == (before.0, &before.1) {
+            if tamarin_utils::env_gate!("TAM_RS_DBG_ACCHAIN") && !extracted.is_empty() {
+                eprintln!(
+                    "[RS_ACCHAIN_RES] path={} found={}",
+                    crate::constraint::solver::trace::case_path_string(),
+                    found
+                );
+            }
+            return found;
+        }
+    }
+}
+
 /// `hasForbiddenChain` — port of Haskell's
 /// `Theory.Constraint.Solver.Contradictions.hasForbiddenChain`
 /// (`Contradictions.hs`).
@@ -1076,10 +1289,7 @@ fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltA
     // Mirror HS `forbiddenDExp` exactly.
     for (i, ru) in sys.nodes.iter() {
         // Only intruder DestrRules can be exp-down; cheap pre-filter.
-        if !matches!(
-            &ru.info,
-            RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, _, _, _))
-        ) {
+        if !matches!(&ru.info, RuleInfo::Intr(IntrRuleACInfo::DestrRule(..))) {
             continue;
         }
         if ru.premises.len() != 2 {

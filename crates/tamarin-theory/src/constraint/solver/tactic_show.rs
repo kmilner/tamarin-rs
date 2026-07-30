@@ -157,6 +157,10 @@ fn write_gterm(t: &GTerm, out: &mut String) {
                 p::BinOp::Union => "Union",
                 p::BinOp::Xor => "Xor",
                 p::BinOp::NatPlus => "NatPlus",
+                // `FApp (AC (ACfct (s,_))) as -> BC.unpack s ++ "(" ... ")"`
+                // (Term/Raw.hs:227-233): a user-defined AC symbol shows under
+                // its own name, not the `ACfct` constructor.
+                p::BinOp::AcFct(n) => n,
             };
             out.push_str(name);
             out.push('(');
@@ -262,23 +266,31 @@ fn write_lnterm(t: &LNTerm, out: &mut String) {
                 }
                 out.push(')');
             }
-            // FApp (AC o) as -> show o (..)  (constructor name)
+            // FApp (AC (ACfct (s,_))) [] -> s ; FApp (AC (ACfct (s,_))) as ->
+            // s(..) ; FApp (AC o) as -> show o (..)
             FunSym::Ac(o) => {
-                let name = match o {
-                    AcSym::Union => "Union",
-                    AcSym::Mult => "Mult",
-                    AcSym::Xor => "Xor",
-                    AcSym::NatPlus => "NatPlus",
+                let name: std::borrow::Cow<'_, str> = match o {
+                    AcSym::Union => std::borrow::Cow::Borrowed("Union"),
+                    AcSym::Mult => std::borrow::Cow::Borrowed("Mult"),
+                    AcSym::Xor => std::borrow::Cow::Borrowed("Xor"),
+                    AcSym::NatPlus => std::borrow::Cow::Borrowed("NatPlus"),
+                    AcSym::AcFct(s) => String::from_utf8_lossy(s.name),
                 };
-                out.push_str(name);
-                out.push('(');
-                for (i, a) in args.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
+                out.push_str(&name);
+                // Only the user-defined AC symbols have a nullary arm
+                // (Term/Raw.hs:227-233) showing the bare name; the builtin AC
+                // operators always show a parenthesised argument list.
+                let nullary_acfct = args.is_empty() && matches!(o, AcSym::AcFct(_));
+                if !nullary_acfct {
+                    out.push('(');
+                    for (i, a) in args.iter().enumerate() {
+                        if i > 0 {
+                            out.push(',');
+                        }
+                        write_lnterm(a, out);
                     }
-                    write_lnterm(a, out);
+                    out.push(')');
                 }
-                out.push(')');
             }
         },
     }

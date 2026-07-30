@@ -1,0 +1,43 @@
+{
+    "graphs": [
+        {
+            "jgAbbrevs": [],
+            "jgClusters": [],
+            "jgDirected": true,
+            "jgEdges": [],
+            "jgLabel": "Theory: NSPK3 Lemma: injective_agree",
+            "jgNodes": [
+                {
+                    "jgnId": "#i",
+                    "jgnLabel": "Commit( actor, peer, params )",
+                    "jgnMetadata": {
+                        "jgnActs": [
+                            {
+                                "jgnFactId": "action",
+                                "jgnFactMult": "",
+                                "jgnFactName": "Commit",
+                                "jgnFactShow": "Commit( actor, peer, params )",
+                                "jgnFactTag": "ProtoFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnConst": "actor"
+                                    },
+                                    {
+                                        "jgnConst": "peer"
+                                    },
+                                    {
+                                        "jgnConst": "params"
+                                    }
+                                ]
+                            }
+                        ],
+                        "jgnConcs": [],
+                        "jgnPrems": []
+                    },
+                    "jgnType": "unsolvedActionAtom"
+                }
+            ],
+            "jgType": "Tamarin prover constraint system"
+        }
+    ]
+}

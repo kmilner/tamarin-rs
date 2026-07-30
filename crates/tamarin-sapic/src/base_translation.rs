@@ -925,12 +925,17 @@ pub(crate) fn ln_term_to_parser(t: &LNTerm) -> tamarin_parser::ast::Term {
             }
             p::Term::App(name, args.iter().map(ln_term_to_parser).collect())
         }
+        VTerm::App(FunSym::Ac(AcSym::AcFct(s)), args) => p::Term::App(
+            String::from_utf8_lossy(s.name).into_owned(),
+            args.iter().map(ln_term_to_parser).collect(),
+        ),
         VTerm::App(FunSym::Ac(op), args) => {
             let bop = match op {
                 AcSym::Mult => p::BinOp::Mult,
                 AcSym::Union => p::BinOp::Union,
                 AcSym::Xor => p::BinOp::Xor,
                 AcSym::NatPlus => p::BinOp::NatPlus,
+                AcSym::AcFct(_) => unreachable!("user-AC handled by the preceding arm"),
             };
             // Fold the AC arg list left-associatively into BinOps.
             let mut it = args.iter();

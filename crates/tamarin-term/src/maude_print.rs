@@ -15,8 +15,8 @@
 //!   term used in queries.
 
 use crate::function_symbols::{
-    AcSym, CSym, Constructability, FunSym, NoEqSym, Privacy, EMAP_SYM_STRING, MULT_SYM_STRING,
-    MUN_SYM_STRING, NAT_PLUS_SYM_STRING, XOR_SYM_STRING,
+    AcState, AcSym, CSym, Constructability, FunSym, NdcState, NoEqSym, Privacy, EMAP_SYM_STRING,
+    MULT_SYM_STRING, MUN_SYM_STRING, NAT_PLUS_SYM_STRING, XOR_SYM_STRING,
 };
 use crate::lterm::LSort;
 use crate::maude_sig::MaudeSig;
@@ -65,33 +65,99 @@ pub fn parse_lsort_sym(s: &str) -> Option<LSort> {
 /// with Maude's own syntax (e.g. `true`, `not`, `if`).
 pub const FUN_SYM_PREFIX: &str = "tam";
 
-/// Encode privacy / constructability into a 2-char prefix that follows
-/// `tam` for each NoEq symbol.
-pub fn fun_sym_encode_attr(p: Privacy, c: Constructability) -> &'static str {
-    match (p, c) {
-        (Privacy::Private, Constructability::Destructor) => "PD",
-        (Privacy::Private, Constructability::Constructor) => "PC",
-        (Privacy::Public, Constructability::Destructor) => "XD",
-        (Privacy::Public, Constructability::Constructor) => "XC",
+/// Encode privacy / constructability / AC-ness / NDC state into a 4-char
+/// prefix that follows `tam` for each user-defined symbol.
+///
+/// HS `funSymEncodeAttr` (Parser.hs:75-87) concatenates one char per
+/// attribute: `Private`->`P` / `Public`->`X`, `Constructor`->`C` /
+/// `Destructor`->`D`, `IsAC`->`A` / `NotAC`->`F`, and `IsNDC`->`N` /
+/// `NotNDC`->`U` / `IsNDCDiff`->`D` / `IsNDCBoth`->`B`.  All 32
+/// concatenations are spelled out so the encoding stays a `&'static str`:
+/// the Maude-emission path appends it per printed term, so it must not
+/// allocate.
+pub fn fun_sym_encode_attr(
+    p: Privacy,
+    c: Constructability,
+    ac: AcState,
+    ndc: NdcState,
+) -> &'static str {
+    use crate::function_symbols::AcState::{IsAc, NotAc};
+    use crate::function_symbols::Constructability::{Constructor, Destructor};
+    use crate::function_symbols::NdcState::{IsNdc, IsNdcBoth, IsNdcDiff, NotNdc};
+    use crate::function_symbols::Privacy::{Private, Public};
+    match (p, c, ac, ndc) {
+        (Private, Destructor, IsAc, IsNdc) => "PDAN",
+        (Private, Destructor, IsAc, NotNdc) => "PDAU",
+        (Private, Destructor, IsAc, IsNdcDiff) => "PDAD",
+        (Private, Destructor, IsAc, IsNdcBoth) => "PDAB",
+        (Private, Destructor, NotAc, IsNdc) => "PDFN",
+        (Private, Destructor, NotAc, NotNdc) => "PDFU",
+        (Private, Destructor, NotAc, IsNdcDiff) => "PDFD",
+        (Private, Destructor, NotAc, IsNdcBoth) => "PDFB",
+        (Private, Constructor, IsAc, IsNdc) => "PCAN",
+        (Private, Constructor, IsAc, NotNdc) => "PCAU",
+        (Private, Constructor, IsAc, IsNdcDiff) => "PCAD",
+        (Private, Constructor, IsAc, IsNdcBoth) => "PCAB",
+        (Private, Constructor, NotAc, IsNdc) => "PCFN",
+        (Private, Constructor, NotAc, NotNdc) => "PCFU",
+        (Private, Constructor, NotAc, IsNdcDiff) => "PCFD",
+        (Private, Constructor, NotAc, IsNdcBoth) => "PCFB",
+        (Public, Destructor, IsAc, IsNdc) => "XDAN",
+        (Public, Destructor, IsAc, NotNdc) => "XDAU",
+        (Public, Destructor, IsAc, IsNdcDiff) => "XDAD",
+        (Public, Destructor, IsAc, IsNdcBoth) => "XDAB",
+        (Public, Destructor, NotAc, IsNdc) => "XDFN",
+        (Public, Destructor, NotAc, NotNdc) => "XDFU",
+        (Public, Destructor, NotAc, IsNdcDiff) => "XDFD",
+        (Public, Destructor, NotAc, IsNdcBoth) => "XDFB",
+        (Public, Constructor, IsAc, IsNdc) => "XCAN",
+        (Public, Constructor, IsAc, NotNdc) => "XCAU",
+        (Public, Constructor, IsAc, IsNdcDiff) => "XCAD",
+        (Public, Constructor, IsAc, IsNdcBoth) => "XCAB",
+        (Public, Constructor, NotAc, IsNdc) => "XCFN",
+        (Public, Constructor, NotAc, NotNdc) => "XCFU",
+        (Public, Constructor, NotAc, IsNdcDiff) => "XCFD",
+        (Public, Constructor, NotAc, IsNdcBoth) => "XCFB",
     }
 }
 
-/// Decode a Maude-prefixed identifier back into the original `(name, p, c)`.
-/// `prefix == "tam<PC|PD|XC|XD>"` followed by the user-given name.
-pub fn fun_sym_decode(s: &[u8]) -> (Vec<u8>, Privacy, Constructability) {
+/// Decode a Maude-prefixed identifier back into the original
+/// `(name, p, c, ndc)`.  `prefix == "tam"` plus the 4 attribute chars
+/// (see [`fun_sym_encode_attr`]) followed by the user-given name.
+///
+/// HS `funSymDecode` (Parser.hs:89-104) reads the privacy from char 0, the
+/// constructability from char 1 and the NDC state from char 3 — char 2 (the
+/// AC state) is not decoded, because the caller already knows from the
+/// identifier's shape which of `fAppNoEq`/`fAppACfct` it is building.
+pub fn fun_sym_decode(s: &[u8]) -> (Vec<u8>, Privacy, Constructability, NdcState) {
     let prefix_len = FUN_SYM_PREFIX.len();
-    if s.len() < prefix_len + 2 {
-        return (s.to_vec(), Privacy::Public, Constructability::Constructor);
+    if s.len() < prefix_len + 4 {
+        return (
+            s.to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::NotNdc,
+        );
     }
-    let attr = &s[prefix_len..prefix_len + 2];
-    let ident = s[prefix_len + 2..].to_vec();
-    let (priv_, constr) = match attr {
-        b"PD" => (Privacy::Private, Constructability::Destructor),
-        b"PC" => (Privacy::Private, Constructability::Constructor),
-        b"XD" => (Privacy::Public, Constructability::Destructor),
-        _ => (Privacy::Public, Constructability::Constructor),
+    let attr = &s[prefix_len..prefix_len + 4];
+    let ident = s[prefix_len + 4..].to_vec();
+    let priv_ = if attr[0] == b'P' {
+        Privacy::Private
+    } else {
+        Privacy::Public
     };
-    (ident, priv_, constr)
+    let constr = if attr[1] == b'D' {
+        Constructability::Destructor
+    } else {
+        Constructability::Constructor
+    };
+    let ndc = match attr[3] {
+        b'U' => NdcState::NotNdc,
+        b'D' => NdcState::IsNdcDiff,
+        b'B' => NdcState::IsNdcBoth,
+        _ => NdcState::IsNdc,
+    };
+    (ident, priv_, constr, ndc)
 }
 
 /// Replace `-` with `_` (inverse of the identifier `_` -> `-` mapping
@@ -112,19 +178,31 @@ pub fn pp_maude_ac_sym(o: AcSym) -> Vec<u8> {
 /// Append an AC operator's Maude name directly into `buf`.
 fn pp_maude_ac_sym_into(o: AcSym, buf: &mut Vec<u8>) {
     buf.extend_from_slice(FUN_SYM_PREFIX.as_bytes());
-    let s: &[u8] = match o {
-        AcSym::Mult => MULT_SYM_STRING,
-        AcSym::Union => MUN_SYM_STRING,
-        AcSym::Xor => XOR_SYM_STRING,
-        AcSym::NatPlus => NAT_PLUS_SYM_STRING,
-    };
-    buf.extend_from_slice(s);
+    match o {
+        AcSym::Mult => buf.extend_from_slice(MULT_SYM_STRING),
+        AcSym::Union => buf.extend_from_slice(MUN_SYM_STRING),
+        AcSym::Xor => buf.extend_from_slice(XOR_SYM_STRING),
+        AcSym::NatPlus => buf.extend_from_slice(NAT_PLUS_SYM_STRING),
+        // A user-defined AC symbol carries its attributes just like a free
+        // symbol does; the `A` in the AC slot is what tells the parser to
+        // rebuild an AC application rather than a free one.
+        AcSym::AcFct(sym) => {
+            buf.extend_from_slice(
+                fun_sym_encode_attr(sym.privacy, sym.constructability, AcState::IsAc, sym.ndc)
+                    .as_bytes(),
+            );
+            // `replaceUnderscore`: map `_` -> `-`, pushed straight into `buf`.
+            buf.extend(sym.name.iter().map(|c| if *c == b'_' { b'-' } else { *c }));
+        }
+    }
 }
 
 /// Append a free symbol's Maude name directly into `buf`.
 fn pp_maude_no_eq_sym_into(sym: &NoEqSym, buf: &mut Vec<u8>) {
     buf.extend_from_slice(FUN_SYM_PREFIX.as_bytes());
-    buf.extend_from_slice(fun_sym_encode_attr(sym.privacy, sym.constructability).as_bytes());
+    buf.extend_from_slice(
+        fun_sym_encode_attr(sym.privacy, sym.constructability, AcState::NotAc, sym.ndc).as_bytes(),
+    );
     // `replaceUnderscore`: map `_` -> `-`, pushed straight into `buf`.
     buf.extend(sym.name.iter().map(|c| if *c == b'_' { b'-' } else { *c }));
 }
@@ -300,7 +378,12 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
         // round-trip; the resulting bytes are identical to the `op(..)` helper.
         out.push_str("  op ");
         out.push_str(FUN_SYM_PREFIX);
-        out.push_str(fun_sym_encode_attr(sym.privacy, sym.constructability));
+        out.push_str(fun_sym_encode_attr(
+            sym.privacy,
+            sym.constructability,
+            AcState::NotAc,
+            sym.ndc,
+        ));
         // `replaceUnderscore`: map `_` -> `-` (names are ASCII).
         for b in sym.name.iter() {
             out.push(if *b == b'_' { '-' } else { *b as char });
@@ -308,6 +391,34 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
         out.push_str(" : ");
         out.push_str(&args);
         out.push_str(" -> Msg");
+        out.push_str(" .\n");
+    }
+    // User-defined AC symbols, declared `[comm assoc]` so Maude solves modulo
+    // AC for them.  `st_ac_fun_syms` is a `BTreeSet`, so iterating it directly
+    // yields `AcFctSym`-`Ord` order (HS `S.toList $ stACFunSyms msig`).
+    for sym in &msig.st_ac_fun_syms {
+        // Match HS `theoryACFunSym` (Parser.hs:246-267, see line 265) byte-for-byte:
+        // `replaceUnderscore s <> " : " <> (concat $ replicate 2 "Msg ") <> "-> Msg"
+        //  <> " [comm assoc]"`, wrapped by `theoryOpACUser` into
+        // `"  op " <> funSymPrefix <> encoded attrs <> fsort <> " ."`.
+        // Unlike `theoryFunSym` above, the sort part has no extra space before
+        // `->`, so the line reads `name : Msg Msg -> Msg [comm assoc] .`.
+        out.push_str("  op ");
+        out.push_str(FUN_SYM_PREFIX);
+        out.push_str(fun_sym_encode_attr(
+            sym.privacy,
+            sym.constructability,
+            AcState::IsAc,
+            sym.ndc,
+        ));
+        // `replaceUnderscore`: map `_` -> `-` (names are ASCII).
+        for b in sym.name.iter() {
+            out.push(if *b == b'_' { '-' } else { *b as char });
+        }
+        out.push_str(" : ");
+        out.push_str("Msg Msg ");
+        out.push_str("-> Msg");
+        out.push_str(" [comm assoc]");
         out.push_str(" .\n");
     }
     // Rewrite rules.
@@ -319,10 +430,14 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
 }
 
 fn op_eq(out: &mut String, name: &str, sort: &str) {
+    // HS `theoryOpEq = theoryOp (Just (Public,Constructor,NotAC,NotNDC))`
+    // (Parser.hs:246-267, see line 259).
     op(
         out,
         Privacy::Public,
         Constructability::Constructor,
+        AcState::NotAc,
+        NdcState::NotNdc,
         &format!("{} : {}", name, sort),
     );
 }
@@ -345,10 +460,10 @@ fn op_c(out: &mut String, name: &str, sort: &str) {
     out.push_str(" [comm] .\n");
 }
 
-fn op(out: &mut String, p: Privacy, c: Constructability, fsort: &str) {
+fn op(out: &mut String, p: Privacy, c: Constructability, ac: AcState, ndc: NdcState, fsort: &str) {
     out.push_str("  op ");
     out.push_str(FUN_SYM_PREFIX);
-    out.push_str(fun_sym_encode_attr(p, c));
+    out.push_str(fun_sym_encode_attr(p, c, ac, ndc));
     out.push_str(fsort);
     out.push_str(" .\n");
 }
@@ -377,9 +492,9 @@ mod tests {
         // HS `theoryOpEq "DH-neutral  : -> Msg"` (Parser.hs:162-251, see line 209) emits TWO
         // spaces before the colon; the emitted module must match byte-for-byte.
         let s = pp_theory(&dh_maude_sig());
-        assert!(s.contains("op tamXCDH-neutral  : -> Msg ."));
+        assert!(s.contains("op tamXCFUDH-neutral  : -> Msg ."));
         // Guard against accidentally emitting only a single space.
-        assert!(!s.contains("op tamXCDH-neutral : -> Msg ."));
+        assert!(!s.contains("op tamXCFUDH-neutral : -> Msg ."));
     }
 
     #[test]
@@ -394,5 +509,56 @@ mod tests {
     fn ac_sym_names() {
         assert_eq!(pp_maude_ac_sym(AcSym::Mult), b"tammult".to_vec());
         assert_eq!(pp_maude_ac_sym(AcSym::Xor), b"tamxor".to_vec());
+    }
+
+    /// The attribute prefix is 4 chars: privacy, constructability, AC state,
+    /// NDC state (HS `funSymEncodeAttr`, Parser.hs:75-87).
+    #[test]
+    fn encode_attr_is_four_chars() {
+        assert_eq!(
+            fun_sym_encode_attr(
+                Privacy::Public,
+                Constructability::Constructor,
+                AcState::NotAc,
+                NdcState::NotNdc
+            ),
+            "XCFU"
+        );
+        assert_eq!(
+            fun_sym_encode_attr(
+                Privacy::Private,
+                Constructability::Destructor,
+                AcState::IsAc,
+                NdcState::IsNdcBoth
+            ),
+            "PDAB"
+        );
+    }
+
+    /// A user-defined AC symbol is declared `[comm assoc]`, with a single
+    /// space before `->` (unlike the free-symbol declarations, which carry a
+    /// trailing space in the argument list AND a leading one before `->`).
+    #[test]
+    fn ac_user_fun_sym_op_line() {
+        use crate::function_symbols::AcFctSym;
+        use crate::maude_sig::MaudeSig;
+        let f = AcFctSym::new(
+            b"my_op".to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::NotNdc,
+        );
+        let sig = MaudeSig {
+            st_ac_fun_syms: [f].into_iter().collect(),
+            ..MaudeSig::default()
+        }
+        .refresh();
+        let s = pp_theory(&sig);
+        assert!(
+            s.contains("  op tamXCAUmy-op : Msg Msg -> Msg [comm assoc] .\n"),
+            "got: {}",
+            s
+        );
+        assert_eq!(pp_maude_ac_sym(AcSym::AcFct(f)), b"tamXCAUmy-op".to_vec());
     }
 }

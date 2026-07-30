@@ -9,8 +9,9 @@
 //! Pure helpers named after their Haskell originals where reasonable;
 //! signatures adapted to idiomatic Rust.
 //!
-//! Intentionally retained: faithful `Utils.Misc` mirror. Only `two_partitions`
-//! has a live caller; the rest are kept for completeness of the port.
+//! Intentionally retained: faithful `Utils.Misc` mirror. None of these
+//! helpers currently has a live caller; they are kept for completeness of
+//! the port.
 
 // generic map-utility import; invert_map returns a new map, never rendered;
 // std kept (byte-inert) — iteration order never reaches output.
@@ -269,6 +270,37 @@ pub fn while_true<F: FnMut() -> bool>(mut m: F) -> usize {
     n
 }
 
+/// `fixpoint f x` (Misc.hs:176-180): iterate `f` from `x` until two consecutive
+/// values are equal, returning that value.  `f` borrows its argument (HS takes
+/// `a -> a`), so no `Clone` bound is needed.
+pub fn fixpoint<A: Eq, F: FnMut(&A) -> A>(mut f: F, x: A) -> A {
+    let mut cur = x;
+    loop {
+        let next = f(&cur);
+        if next == cur {
+            return next;
+        }
+        cur = next;
+    }
+}
+
+// -- List operations ----------------------------------------------------------
+
+/// `mapHead f xs` (Misc.hs:183-185): apply `f` to the first element only; `[]`
+/// maps to `[]`.
+pub fn map_head<A, F: FnOnce(A) -> A>(f: F, xs: Vec<A>) -> Vec<A> {
+    let mut it = xs.into_iter();
+    match it.next() {
+        None => Vec::new(),
+        Some(head) => {
+            let mut out = Vec::with_capacity(it.len() + 1);
+            out.push(f(head));
+            out.extend(it);
+            out
+        }
+    }
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -422,6 +454,20 @@ mod tests {
         });
         assert_eq!(count, 4);
         assert_eq!(n, 5);
+    }
+
+    #[test]
+    fn fixpoint_stops_at_stable_value() {
+        // Saturating decrement: reaches 0 and stays there.
+        assert_eq!(fixpoint(|n: &u32| n.saturating_sub(1), 5), 0);
+        // Already stable: `f` is applied once and its (equal) result returned.
+        assert_eq!(fixpoint(|n: &u32| *n, 7), 7);
+    }
+
+    #[test]
+    fn map_head_only_touches_first() {
+        assert_eq!(map_head(|n: i32| n + 10, vec![1, 2, 3]), vec![11, 2, 3]);
+        assert_eq!(map_head(|n: i32| n + 10, vec![]), Vec::<i32>::new());
     }
 
     // -- Properties -----------------------------------------------------------

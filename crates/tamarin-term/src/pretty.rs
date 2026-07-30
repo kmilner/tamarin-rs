@@ -13,6 +13,9 @@
 //! - AC operators render in infix form: `Mult` => `*`, `Xor` => `⊕`
 //!   (the single character U+2295, matching the Haskell side's `\8853`),
 //!   `Union` => `++`, `NatPlus` => `%+`.
+//! - A user-defined AC symbol `f` renders infix with its name surrounded
+//!   by spaces (`(a f b)`), or as the bare name when applied to no
+//!   arguments.
 //! - `pair`-trees flatten into `<a,b,c>` notation.
 //! - `exp(a,b)` renders as `a^b`, `diff(a,b)` stays as `diff(a, b)`.
 //! - The `%1` constant (`tone`) prints as `%1`.
@@ -65,8 +68,16 @@ impl PrettyTerm for Term<Lit<Name, LVar>> {
 fn pp_term_lnterm(t: &Term<Lit<Name, LVar>>, out: &mut String) {
     match t {
         Term::Lit(l) => pp_lit_lnterm(l, out),
+        // Haskell `prettyTerm` matches the user-defined AC symbols BEFORE the
+        // builtin AC operators, and prints a nullary application as the bare
+        // symbol name (`FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)`).
+        // Non-nullary ones fall through to the generic AC arm below, whose
+        // separator `ac_op_symbol` renders as `" f "`.
+        Term::App(FunSym::Ac(AcSym::AcFct(sym)), ts) if ts.is_empty() => {
+            out.push_str(&String::from_utf8_lossy(sym.name));
+        }
         Term::App(FunSym::Ac(o), ts) => {
-            // Haskell: `ppTerms (ppACOp o) 1 "(" ")" ts` — parenthesised
+            // Haskell: `ppTerms <op> 1 "(" ")" ts` — parenthesised
             // infix list joined by the AC operator symbol.
             out.push('(');
             for (i, child) in ts.iter().enumerate() {
@@ -199,7 +210,7 @@ pub fn pp_name(n: &Name, out: &mut String) {
 }
 
 pub fn ac_op_symbol(op: AcSym) -> &'static str {
-    // Haskell `ppACOp` (Term.hs:283-286).
+    // Haskell `prettyTerm`'s AC arms (Term.hs).
     //   Mult => "*"; Xor => "⊕"; Union => "++"; NatPlus => "%+"
     // We use the unicode char for Xor since the rest of the UI
     // already passes UTF-8 around and the JS frontend renders it.
@@ -208,7 +219,17 @@ pub fn ac_op_symbol(op: AcSym) -> &'static str {
         AcSym::Xor => "\u{2295}",
         AcSym::Union => "++",
         AcSym::NatPlus => "%+",
+        AcSym::AcFct(sym) => ac_fct_op_symbol(&String::from_utf8_lossy(sym.name)),
     }
+}
+
+/// The infix separator of a user-defined AC symbol: Haskell
+/// `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts` (Term.hs:305) surrounds
+/// the symbol name by spaces, so the spaces are part of the separator (unlike
+/// the builtin ops).  Interned so it can be handed out as `&'static str` like
+/// the fixed ones; the pool is bounded by the theory's user-defined AC names.
+pub fn ac_fct_op_symbol(name: &str) -> &'static str {
+    crate::intern::intern_str(&format!(" {} ", name))
 }
 
 // ---------------------------------------------------------------------

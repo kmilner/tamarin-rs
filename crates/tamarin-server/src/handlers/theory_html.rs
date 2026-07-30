@@ -48,6 +48,26 @@ pub fn overview_page(entry: &TheoryEntry, path: &TheoryPath) -> String {
     )
 }
 
+/// The "Options" drop-down's `<li>` run, from the `Options` anchor through the
+/// closing `</ul></li>` of the toggle list.
+///
+/// HS splices the same `optionsMenuItemTpl True` (Web/Types.hs:749-763) into
+/// both the theory-page header (Web/Hamlet.hs:190, via [`header`]) and the
+/// standalone graph shell's popout bar (`popoutOptionsTpl True`,
+/// Web/Types.hs:769-777, via `handlers::theory::intdot_shell_html`), so the
+/// two pages carry byte-identical menu markup.
+pub(crate) const OPTIONS_MENU_ITEMS: &str =
+    "<li><a href=\"#\">Options</a><ul class=\"list-with-toggles\">\
+<li><a id=abbrv-toggle href=\"#\">Abbreviate terms</a></li>\
+<li><a id=agent-toggle href=\"#\">Clustering by role</a></li>\
+<li><a id=auto-toggle href=\"#\">Show annotation auto-sources</a></li>\
+<li><a id=abstr-toggle href=\"#\">Abstract node content</a></li>\
+<li><a id=lvl0-toggle href=\"#\">Graph simplification off</a></li>\
+<li><a id=lvl1-toggle href=\"#\">Graph simplification L1</a></li>\
+<li><a id=lvl2-toggle href=\"#\">Graph simplification L2</a></li>\
+<li><a id=lvl3-toggle href=\"#\">Graph simplification L3</a></li>\
+</ul></li>";
+
 fn header(entry: &TheoryEntry) -> String {
     // Byte-faithful port of HS `headerTpl` (Web/Hamlet.hs:166-198): the
     // Reload-file and Append-modified-lemmas `<li>`s are gated on
@@ -56,6 +76,9 @@ fn header(entry: &TheoryEntry) -> String {
     // `target=_blank`, `href=/thy/...`), the `#id`/`.class` shorthands are
     // quoted (`id="header-info"`), and literal `id=abbrv-toggle` attrs stay
     // unquoted.  No "(Rust port)" suffix — HS renders `Running … Tamarin … 1.13.0`.
+    // The "Options" drop-down is `optionsMenuItemTpl True` (Web/Types.hs:749-763,
+    // spliced at Web/Hamlet.hs:190) — the trace-theory variant, which includes
+    // the `abstr-toggle` entry.
     let is_local = matches!(entry.origin, crate::state::TheoryOrigin::Local(_));
     let idx = entry.idx;
     let filename = html_escape(&format!("{}.spthy", entry.name));
@@ -81,20 +104,13 @@ fn header(entry: &TheoryEntry) -> String {
 <li><a href=/thy/trace/{idx}/download/{filename}>Download source</a></li>\
 {append_form}\
 </ul></li>\
-<li><a href=\"#\">Options</a><ul class=\"list-with-toggles\">\
-<li><a id=abbrv-toggle href=\"#\">Abbreviate terms</a></li>\
-<li><a id=agent-toggle href=\"#\">Clustering by role</a></li>\
-<li><a id=auto-toggle href=\"#\">Show annotation auto-sources</a></li>\
-<li><a id=lvl0-toggle href=\"#\">Graph simplification off</a></li>\
-<li><a id=lvl1-toggle href=\"#\">Graph simplification L1</a></li>\
-<li><a id=lvl2-toggle href=\"#\">Graph simplification L2</a></li>\
-<li><a id=lvl3-toggle href=\"#\">Graph simplification L3</a></li>\
-</ul></li></ul></div>",
+{options}</ul></div>",
         version = env!("CARGO_PKG_VERSION"),
         idx = idx,
         filename = filename,
         reload_form = reload_form,
         append_form = append_form,
+        options = OPTIONS_MENU_ITEMS,
     )
 }
 
@@ -836,7 +852,7 @@ use tamarin_theory::rule::{IntrRuleAC, IntrRuleACInfo};
 fn is_constr_intr(info: &IntrRuleACInfo) -> bool {
     matches!(
         info,
-        IntrRuleACInfo::ConstrRule(_)
+        IntrRuleACInfo::ConstrRule(_, _)
             | IntrRuleACInfo::FreshConstr
             | IntrRuleACInfo::PubConstr
             | IntrRuleACInfo::NatConstr
@@ -1072,10 +1088,11 @@ fn sources_html(entry: &TheoryEntry, kind: &SourceKind) -> String {
 }
 
 /// Compute `getSource kind thy` — the raw or refined source list, as
-/// `(goal, cases)` pairs.  Shared by `sources_html` (the page) and
-/// `source_case_counts` (the theory-index `(N cases, …)` annotation) so both
-/// stay consistent.  Returns empty when the proof state is not yet built.
-fn compute_source_lists(
+/// `(goal, cases)` pairs.  Shared by `sources_html` (the page),
+/// `source_case_counts` (the theory-index `(N cases, …)` annotation) and the
+/// JSON graph endpoint's `TheorySource` branch so they stay consistent.
+/// Returns empty when the proof state is not yet built.
+pub(crate) fn compute_source_lists(
     entry: &TheoryEntry,
     want_refined: bool,
 ) -> Vec<(

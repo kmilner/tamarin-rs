@@ -10,7 +10,8 @@ Deterministic click-through crawl:
      site map (every `main/*` link — proof nodes, methods, add/edit/delete,
      cases, …)
   5. GET every site-map URL; for each `main/proof/...` node also GET the
-     `interactive-graph-def/...` (DOT) and `intdot/...` (HTML shell) variants
+     `interactive-graph-def/...` (DOT), `json/...` (JSON graph) and
+  `intdot/...` (HTML shell) variants
   6. also exercise next/prev on the lemma roots
 
 Writes a JSON manifest {norm_url: {kind, status, body}} keyed by
@@ -143,7 +144,8 @@ def main():
     # 2. static routes (overview/help already recorded in step 1)
     for r in ["source", "message", "main/rules", "main/help",
               "main/message", "main/tactic",
-              "main/cases/raw/0/0", "main/cases/refined/0/0"]:
+              "main/cases/raw/0/0", "main/cases/refined/0/0",
+              "json/cases/raw/0/0", "json/cases/refined/0/0"]:
         record(f"/thy/trace/{idx}/{r}")
 
     # per-lemma root main + lemma views + graph at root
@@ -151,6 +153,7 @@ def main():
         record(f"/thy/trace/{idx}/main/lemma/{L}")
         record(f"/thy/trace/{idx}/main/proof/{L}")
         record(f"/thy/trace/{idx}/interactive-graph-def/proof/{L}")
+        record(f"/thy/trace/{idx}/json/proof/{L}")
         record(f"/thy/trace/{idx}/intdot/proof/{L}")
         # next/prev on the lemma root
         record(f"/thy/trace/{idx}/next/normal/proof/{L}")
@@ -200,6 +203,8 @@ def main():
         record(p)
         gd = p.replace("/main/proof/", "/interactive-graph-def/proof/")
         record(gd)
+        gj = p.replace("/main/proof/", "/json/proof/")
+        record(gj)
         it = p.replace("/main/proof/", "/intdot/proof/")
         record(it)
 

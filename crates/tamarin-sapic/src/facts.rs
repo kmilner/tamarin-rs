@@ -1,7 +1,7 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, rkunnema, jdreier, kevinmorio, charlie-j, arcz, yavivanov,
-//   Hong-Thai, beschmi, PhilipLukertWork, rsasse, ValentinYuri,
-//   xaDxelA, and other minor contributors (see upstream git history)
+//   jdreier, meiersi, rkunnema, kevinmorio, charlie-j, arcz, yavivanov,
+//   beschmi, Hong-Thai, rsasse, PhilipLukertWork, ValentinYuri, and
+//   other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/sapic/src/Sapic/Basetranslation.hs,
 //   lib/sapic/src/Sapic/Facts.hs, lib/theory/src/Rule.hs,

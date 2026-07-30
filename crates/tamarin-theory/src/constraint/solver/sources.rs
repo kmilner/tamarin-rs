@@ -5714,6 +5714,11 @@ fn var_occurrences_nodes(
                 AcSym::Mult => Cow::Borrowed("AC Mult"),
                 AcSym::Xor => Cow::Borrowed("AC Xor"),
                 AcSym::NatPlus => Cow::Borrowed("AC NatPlus"),
+                // Derived HS `Show` of a user-defined AC symbol.
+                AcSym::AcFct(s) => Cow::Owned(format!(
+                    "AC (ACfct {})",
+                    tamarin_term::subsumption::show_acfct_sym(s)
+                )),
             },
             FunSym::C(c) => match c {
                 CSym::EMap => Cow::Borrowed("C EMap"),

@@ -155,20 +155,24 @@ use std::collections::BTreeSet;
 /// descend — head is the innermost context label).
 type Occurence = Vec<String>;
 
+/// HS `show` of an `ACfctSym` — the shared derived-`Show` port, re-exported
+/// here for the context-label callers of this module.
+pub use crate::function_symbols::show_acfct_sym;
+
 /// HS `show` of a non-`NoEq` `FunSym` used as a context label
 /// (`foldFreesOcc f (show o:c) as` for AC/C symbols, LTerm.hs:741-754, see line 748).
 /// Mirrors the derived `Show` for `FunSym`/`ACSym`/`CSym`.
 fn show_funsym_ac_c(sym: &FunSym) -> String {
     match sym {
-        FunSym::Ac(a) => {
-            let name = match a {
-                AcSym::Union => "Union",
-                AcSym::Mult => "Mult",
-                AcSym::Xor => "Xor",
-                AcSym::NatPlus => "NatPlus",
-            };
-            format!("AC {}", name)
-        }
+        FunSym::Ac(a) => match a {
+            AcSym::Union => "AC Union".to_string(),
+            AcSym::Mult => "AC Mult".to_string(),
+            AcSym::Xor => "AC Xor".to_string(),
+            AcSym::NatPlus => "AC NatPlus".to_string(),
+            // Derived `Show` parenthesises the nested constructor
+            // application; `show` of the `ACfctSym` tuple follows.
+            AcSym::AcFct(s) => format!("AC (ACfct {})", show_acfct_sym(s)),
+        },
         FunSym::C(c) => {
             let name = match c {
                 CSym::EMap => "EMap",

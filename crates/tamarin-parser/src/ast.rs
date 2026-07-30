@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, felixlinker, rkunnema, PhilipLukertWork, and other minor
-//   contributors (see upstream git history)
+//   meiersi, felixlinker, rkunnema, BTom-GH, jdreier, PhilipLukertWork,
+//   and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Items/LemmaItem.hs,
 //   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
@@ -8,7 +8,8 @@
 //   lib/theory/src/Theory/Proof.hs,
 //   lib/theory/src/Theory/Text/Parser/Lemma.hs,
 //   lib/theory/src/Theory/Text/Parser/Proof.hs,
-//   lib/theory/src/Theory/Text/Parser/Rule.hs
+//   lib/theory/src/Theory/Text/Parser/Rule.hs,
+//   lib/theory/src/Theory/Text/Parser/Signature.hs
 
 //! Surface-syntax AST for `.spthy` files: the loose tree [`crate::parser`]
 //! produces and [`crate::wf`] (plus, downstream, `tamarin-theory`'s
@@ -83,6 +84,21 @@ pub struct FunctionDecl {
     pub out_type: Option<String>,
     pub private: bool,
     pub destructor: bool,
+    /// `[AC]`: the symbol is a user-defined associative-commutative operator
+    /// (HS `ACstate IsAC`).  HS requires such a symbol to be binary and
+    /// registers it as an `ACfctUser` rather than a `NoEqUser` symbol; a binary
+    /// one is additionally usable in infix notation (`Parser::acterm`).
+    pub ac: bool,
+    /// `[NDC]`: the "no deconstruction chain" property is asserted for the
+    /// trace intruder rules (HS `NDCstate IsNDC`).
+    pub ndc: bool,
+    /// `[NDC-diff]`: the "no deconstruction chain" property is asserted for the
+    /// diff-mode intruder rules (HS `NDCstate IsNDCDiff`).
+    ///
+    /// The symbol's NDC state is the join of the two flags (HS `function`,
+    /// Theory/Text/Parser/Signature.hs:183-225): neither = `NotNDC`, `ndc`
+    /// alone = `IsNDC`, `ndc_diff` alone = `IsNDCDiff`, both = `IsNDCBoth`.
+    pub ndc_diff: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -607,6 +623,11 @@ pub enum BinOp {
     Union,   // + or ++
     Xor,     // XOR or ⊕
     NatPlus, // %+
+    /// A user-declared `[AC]` function symbol, applied infix (`(x add y)`).
+    /// Carries the bare symbol name; the rendered separator is the name
+    /// surrounded by spaces.  The name is interned, so the derived `Copy` /
+    /// `Eq` / `Hash` stay cheap and content-based.
+    AcFct(&'static str),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

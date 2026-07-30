@@ -10,8 +10,8 @@
 //! `get variants`, and `reduce` queries.
 
 use crate::function_symbols::{
-    AcSym, CSym, Constructability, FunSym, NoEqSym, Privacy, EMAP_SYM_STRING, MULT_SYM_STRING,
-    MUN_SYM_STRING, NAT_PLUS_SYM_STRING, XOR_SYM_STRING,
+    AcFctSym, AcSym, CSym, Constructability, FunSym, NdcState, NoEqSym, Privacy, EMAP_SYM_STRING,
+    MULT_SYM_STRING, MUN_SYM_STRING, NAT_PLUS_SYM_STRING, XOR_SYM_STRING,
 };
 use crate::lterm::LSort;
 use crate::maude_print::{fun_sym_decode, parse_lsort_sym, replace_minus, FUN_SYM_PREFIX};
@@ -421,17 +421,22 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
     // what those helpers would have produced (`tam` + name), so the dispatch is
     // byte-identical; ordinary (non-`tam`) symbols short-circuit immediately.
     if let Some(suffix) = ident.strip_prefix(FUN_SYM_PREFIX.as_bytes()) {
-        // AC operator?
-        for op in [AcSym::Mult, AcSym::Union, AcSym::NatPlus, AcSym::Xor] {
-            let name: &[u8] = match op {
-                AcSym::Mult => MULT_SYM_STRING,
-                AcSym::Union => MUN_SYM_STRING,
-                AcSym::Xor => XOR_SYM_STRING,
-                AcSym::NatPlus => NAT_PLUS_SYM_STRING,
-            };
+        // Built-in AC operator?  Guard order follows HS `appIdent`
+        // (Parser.hs:373-386); the names are distinct, so only the pairing
+        // matters.
+        for (op, name) in [
+            (AcSym::Mult, MULT_SYM_STRING),
+            (AcSym::Union, MUN_SYM_STRING),
+            (AcSym::NatPlus, NAT_PLUS_SYM_STRING),
+            (AcSym::Xor, XOR_SYM_STRING),
+        ] {
             if suffix == name {
                 return crate::term::f_app_ac(op, args);
             }
+        }
+        // User-defined AC operator?
+        if is_ac_fct_ident(ident) {
+            return crate::term::f_app_ac(AcSym::AcFct(parse_fun_ac_sym(ident)), args);
         }
         // C operator (em)?
         // Mirror HS `fAppC EMap args` (Maude/Parser.hs:314-369, see line 355): sort the two
@@ -452,7 +457,7 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
     // reach here they fall through to the no-eq handling below.
     // Free symbol — decode and lookup.
     if ident.starts_with(FUN_SYM_PREFIX.as_bytes()) {
-        let (name, p, c) = fun_sym_decode(ident);
+        let (name, p, c, ndc) = fun_sym_decode(ident);
         let name = replace_minus(&name);
         let arity = args.len();
         let sym = NoEqSym {
@@ -460,6 +465,7 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
             arity,
             privacy: p,
             constructability: c,
+            ndc,
         };
         // Haskell `parseFunSym` (Parser.hs:331-344) errors when the decoded
         // symbol is not in `allowedfunSyms` (consSym, nilSym, natOneSym plus
@@ -472,14 +478,40 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
     }
     // Unknown — fall back to a public-constructor symbol with the raw name
     // for forward compatibility; this matches Haskell only for certain
-    // built-ins (like Maude's own `true`).
+    // built-ins (like Maude's own `true`).  HS gives the specially-handled
+    // idents (`list`, `cons`, `nil`) `(Public, Constructor, NotNDC)` too
+    // (`parseFunSym`, Parser.hs:351-366).
     let sym = NoEqSym {
         name: crate::intern::intern_bytes(ident),
         arity: args.len(),
         privacy: Privacy::Public,
         constructability: Constructability::Constructor,
+        ndc: NdcState::NotNdc,
     };
     Term::App(FunSym::NoEq(sym), args.into())
+}
+
+/// Maude identifiers of user-defined AC symbols: `tam` + the encoded
+/// (privacy, constructability) pair + the `A` that marks `IsAC`
+/// (see `maude_print::fun_sym_encode_attr`).
+const AC_FCT_IDENT_MARKERS: [&[u8]; 4] = [b"tamPDA", b"tamPCA", b"tamXDA", b"tamXCA"];
+
+/// HS `appIdent`'s user-defined-AC guards (Parser.hs:373-386) are
+/// `BC.isInfixOf "tamPDA" ident` (and the three sibling encodings), i.e. they
+/// test the WHOLE identifier for containment rather than matching a prefix —
+/// mirrored here.
+fn is_ac_fct_ident(ident: &[u8]) -> bool {
+    AC_FCT_IDENT_MARKERS
+        .iter()
+        .any(|m| ident.windows(m.len()).any(|w| w == *m))
+}
+
+/// HS `parseFunACSym` (Parser.hs:365-367): decode the attributes out of the
+/// Maude identifier and undo the `_` -> `-` renaming applied when it was
+/// emitted (`replaceMinusFunAC`).
+fn parse_fun_ac_sym(ident: &[u8]) -> AcFctSym {
+    let (name, p, c, ndc) = fun_sym_decode(ident);
+    AcFctSym::new(replace_minus(&name), p, c, ndc)
 }
 
 fn flatten_cons(t: &MTerm) -> Vec<MTerm> {
@@ -518,6 +550,24 @@ mod tests {
         // `empty substitution` nor an `xN` entry must fail the whole parse.
         let r = parse_unify_reply(b"\nSolution 1\n\n");
         assert!(r.is_err());
+    }
+
+    /// An identifier carrying the `A` (AC) attribute rebuilds a user-defined
+    /// AC application, so the arguments are flattened/sorted by `f_app_ac`
+    /// rather than kept in Maude's print order (HS `fAppACfct`).
+    #[test]
+    fn parse_user_defined_ac_application() {
+        let t = parse_reduce_reply(b"result Msg: tamXCAUmy-op(c(2),c(1))\n").unwrap();
+        match t {
+            Term::App(FunSym::Ac(AcSym::AcFct(s)), args) => {
+                assert_eq!(s.name, b"my_op");
+                assert_eq!(s.privacy, Privacy::Public);
+                assert_eq!(s.constructability, Constructability::Constructor);
+                assert_eq!(s.ndc, NdcState::NotNdc);
+                assert_eq!(args.len(), 2);
+            }
+            x => panic!("got {:?}", x),
+        }
     }
 
     #[test]

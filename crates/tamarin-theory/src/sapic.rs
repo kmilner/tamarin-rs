@@ -75,7 +75,9 @@ pub fn pretty_position(p: &ProcessPosition) -> String {
 /// SAPIC variables carry an optional type tag (`Some("node")`, `Some("Any")`, …).
 pub type SapicType = Option<String>;
 
-// Intentionally retained: faithful HS port; no caller yet.
+/// HS `defaultSapicTypeS` (Theory/Sapic/Term.hs:94-95) — the type printed for an
+/// undeclared argument / return type (see
+/// `pretty_theory::pretty_function_typing_info`).
 pub fn default_sapic_type_string() -> String {
     "Any".to_string()
 }
