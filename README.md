@@ -315,9 +315,9 @@ relicense tamarin-rs fully under MIT if possible, which will require one or both
 Cleanroom implementations have to be performed by an LLM with access only to the observable
 behaviour of tamarin-prover, not the source code. Unfortunately I (as a contributor to
 tamarin-prover) am, to my understanding, tainted and cannot participate in this process
-except to audit the output. This work will be tracked along with full tool-call transcripts
-to prove there was no access to GPL 3.0 source in https://github.com/kmilner/tamarin-cleanroom
-but it will be a long process (the segments being reimplemented have to be sufficiently broad
+except to audit the output. Any work on thhis should be tracked along with full tool-call transcripts
+to prove there was no access to GPL 3.0 source. 
+The segments being reimplemented have to be sufficiently broad
 so as to not inherit any information about the GPL 3.0 source code beyond broad module interfaces
 etc). Early experiments with clean room implementation of the formatting code had limited success,
 so for now there is no active work on this.
