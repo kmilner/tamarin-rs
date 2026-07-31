@@ -194,24 +194,23 @@ pub fn pp_lvar(v: &LVar, out: &mut String) {
     }
 }
 
-/// Mirror of Haskell `instance Show Name` (LTerm.hs:231-235).
+/// Mirror of Haskell `instance Show Name` (LTerm.hs:235-240).
 pub fn pp_name(n: &Name, out: &mut String) {
-    let body = format!("'{}'", n.id.0);
     match n.tag {
-        NameTag::Fresh => {
-            out.push('~');
-            out.push_str(&body);
-        }
-        NameTag::Pub => out.push_str(&body),
-        NameTag::Node => {
-            out.push('#');
-            out.push_str(&body);
-        }
-        NameTag::Nat => {
-            out.push('%');
-            out.push_str(&body);
+        NameTag::Fresh => out.push('~'),
+        NameTag::Pub => {}
+        NameTag::Node => out.push('#'),
+        NameTag::Nat => out.push('%'),
+        // `show (Name AbbrevName n) = show n` (LTerm.hs:240) — the bare name
+        // id, with neither a sigil nor the quotes the other four tags carry.
+        NameTag::Abbrev => {
+            out.push_str(n.id.0);
+            return;
         }
     }
+    out.push('\'');
+    out.push_str(n.id.0);
+    out.push('\'');
 }
 
 pub fn ac_op_symbol(op: AcSym) -> &'static str {

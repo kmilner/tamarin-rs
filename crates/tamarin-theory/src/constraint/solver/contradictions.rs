@@ -537,6 +537,11 @@ fn root_sym(t: &tamarin_term::lterm::LNTerm) -> Option<RootSym> {
                 NameTag::Fresh => LSort::Fresh,
                 NameTag::Nat => LSort::Nat,
                 NameTag::Node => LSort::Node,
+                // `sortOfName (Name AbbrevName _) = LSortMsg` (LTerm.hs:266),
+                // and HS's guard `Lit _ | sortOfLNTerm t == LSortMsg ->
+                // Nothing` (Contradictions.hs:255) drops every message-sorted
+                // literal, constants included.
+                NameTag::Abbrev => return None,
             };
             Some(RootSym::Sort(s))
         }

@@ -64,10 +64,10 @@ restriction equality:
 
 /*
 Generated from:
-Tamarin version 1.12.0
+Tamarin version 1.13.0
 Maude version 3.5.1
-Git revision: UNKNOWN, branch: UNKNOWN
-Compiled at: 2026-03-09 02:11:41.807311346 UTC
+Git revision: ef3f0468f6f12b81f43289aa64f5d1b9e53eaf59, branch: HEAD
+Compiled at: 2026-07-31 12:54:17.256348115 UTC
 */
 
 end

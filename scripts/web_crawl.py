@@ -216,6 +216,16 @@ def main():
         it = p.replace("/main/proof/", "/intdot/proof/")
         record(it)
 
+    # A dead or dying server (OOM-guard kill, per-request heap exhaustion)
+    # yields REQUEST_ERROR bodies; a manifest containing them would be cached
+    # as valid and poison every later comparison against this theory.
+    errored = [u for u, e in manifest.items()
+               if e["body"].startswith("REQUEST_ERROR")]
+    if errored:
+        print(f"ERROR: {len(errored)} REQUEST_ERROR pages (first: {errored[0]}); "
+              f"refusing to write a poisoned manifest", file=sys.stderr)
+        sys.exit(3)
+
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump({"base": base, "lemmas": lemmas, "log": log,
                    "capped": capped, "manifest": manifest}, f)

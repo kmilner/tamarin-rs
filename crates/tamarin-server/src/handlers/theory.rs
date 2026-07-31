@@ -1581,17 +1581,11 @@ pub async fn graph_json(
             // `Web.Utils.abbrev abbreviate 30 sequent`, with `abbreviate` set
             // by the mere PRESENCE of `abbrevInBackend`.
             let abbreviate = query.contains_key("abbrevInBackend");
-            // `abbrev` returns its input unchanged on success, so only the
-            // unshowable-`AbbrevName` failure is of interest here.
-            if crate::graph::web_utils_abbrev::abbrev(
+            let sys = crate::graph::web_utils_abbrev::abbrev(
                 abbreviate,
                 crate::graph::web_utils_abbrev::MIN_ABBREV_SIZE,
                 &sys,
-            )
-            .is_err()
-            {
-                return internal_server_error(ABBREV_NAME_SHOW_FAILURE);
-            }
+            );
             let label = format!("Theory: {} Lemma: {}", entry.name, lemma);
             json_graph_response(crate::graph::json::sequents_to_json_pretty(
                 &opts,
@@ -1627,14 +1621,6 @@ fn json_graph_response(body: String) -> Response {
     (StatusCode::OK, headers, body).into_response()
 }
 
-/// The `PatternMatchFail` raised once `Web.Utils.abbrev`'s shortened constant
-/// reaches `instance Show Name`, which has no `AbbrevName` case
-/// (`lib/term/src/Term/LTerm.hs:236-239`, see
-/// [`crate::graph::web_utils_abbrev`]).  GHC's message for a partial function
-/// is the defining clauses' source span, and it carries a trailing newline.
-const ABBREV_NAME_SHOW_FAILURE: &str =
-    "src/Term/LTerm.hs:(236,3)-(239,49): Non-exhaustive patterns in function show\n";
-
 /// Where the `thyPathSystem` a route dispatches through sits in
 /// `src/Web/Theory.hs`, as `LINE:COLUMN` — the CallStacks the raised errors
 /// carry name the exact call, so each route reports its own copy.
@@ -1652,25 +1638,25 @@ struct ThyPathSystemSites {
     unhandled: &'static str,
 }
 
-/// `graphJsonThyPath` (`src/Web/Theory.hs:1316,1320`).
+/// `graphJsonThyPath` (`src/Web/Theory.hs:1318,1322`).
 const JSON_SITES: ThyPathSystemSites = ThyPathSystemSites {
-    source_index: "1320:108",
-    case_index: "1320:117",
-    unhandled: "1316:31",
+    source_index: "1322:108",
+    case_index: "1322:117",
+    unhandled: "1318:31",
 };
 
-/// `imgThyPath` (`src/Web/Theory.hs:1414,1420`).
+/// `imgThyPath` (`src/Web/Theory.hs:1416,1422`).
 const GRAPH_SITES: ThyPathSystemSites = ThyPathSystemSites {
-    source_index: "1420:38",
-    case_index: "1420:47",
-    unhandled: "1414:51",
+    source_index: "1422:38",
+    case_index: "1422:47",
+    unhandled: "1416:51",
 };
 
-/// `dotGraphString` (`src/Web/Theory.hs:2321,2327`).
+/// `dotGraphString` (`src/Web/Theory.hs:2323,2329`).
 const INTERACTIVE_DOT_SITES: ThyPathSystemSites = ThyPathSystemSites {
-    source_index: "2327:38",
-    case_index: "2327:47",
-    unhandled: "2321:51",
+    source_index: "2329:38",
+    case_index: "2329:47",
+    unhandled: "2323:51",
 };
 
 /// The `error` `thyPathSystem`'s catch-all clause raises for a theory path that

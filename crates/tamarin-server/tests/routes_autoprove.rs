@@ -174,11 +174,10 @@ async fn test_autoprove_on_unknown_lemma_returns_alert() {
 // Web-parity regression: after autoprove, `main/proof/<lemma>` must render
 // the "Applicable Proof Methods" + sequent snippet from the grown tree's
 // retained per-node systems — not an empty "Constraint System is Solved".
-// Guards the `set_keep_sys(true)` the interactive server enables at
-// startup (see `tamarin_server::serve`).
+// Guards the `set_keep_sys(true)` that `tamarin_server::init_process_globals`
+// applies for every server, the harness's included.
 #[tokio::test]
 async fn test_autoprove_proof_view_retains_systems() {
-    tamarin_theory::constraint::solver::search::set_keep_sys(true);
     let s = start_server_with_theory("Tutorial.spthy").await;
     let v: serde_json::Value = s
         .client

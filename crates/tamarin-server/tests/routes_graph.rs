@@ -256,6 +256,47 @@ async fn graph_json_returns_json_graph_with_dot_json_content_type() {
         &body[..body.len().min(400)]
     );
     assert!(!body.ends_with('\n'), "no trailing newline");
+
+    // The lemma root carries no rule instances yet, so the assertions above
+    // hold over an EMPTY graph and cannot see whether the solved systems
+    // survive.  Autoprove `debug` and re-read the witness node: its system
+    // must actually be there.
+    let res = s
+        .client
+        .get(s.url("/thy/trace/1/autoprove/idfs/0/False/proof/debug"))
+        .send()
+        .await
+        .expect("send autoprove");
+    assert_eq!(res.status(), 200);
+    let redirect: serde_json::Value = res.json().await.expect("autoprove replies JSON");
+    // `{"redirect": "/thy/trace/2/overview/proof/debug/<path>"}` — the graph
+    // route for the same node is that path with `overview` swapped for `json`.
+    let target = redirect["redirect"]
+        .as_str()
+        .expect("autoprove must redirect to the proved node")
+        .replace("/overview/", "/json/");
+    let body = s
+        .client
+        .get(s.url(&target))
+        .send()
+        .await
+        .expect("send")
+        .text()
+        .await
+        .expect("text");
+    let v: serde_json::Value = serde_json::from_str(&body).expect("body must be valid JSON");
+    let graph = &v["graphs"][0];
+    assert!(
+        !graph["jgNodes"].as_array().expect("jgNodes").is_empty(),
+        "the autoproved node's graph must carry its system's rule instances, \
+         not an empty node list; got: {}",
+        body
+    );
+    assert!(
+        !graph["jgEdges"].as_array().expect("jgEdges").is_empty(),
+        "the autoproved node's graph must carry its system's edges; got: {}",
+        body
+    );
 }
 
 #[tokio::test]
@@ -381,6 +422,46 @@ async fn graph_json_source_case_returns_json_graph() {
         v["graphs"][0]["jgType"],
         serde_json::Value::String("Tamarin prover constraint system".to_string())
     );
+}
+
+#[tokio::test]
+async fn graph_json_abbrev_in_backend_shortens_long_terms() {
+    // `getTheoryGraphJsonR` runs the sub-proof's system through
+    // `Web.Utils.abbrev` when `abbrevInBackend` is present
+    // (`src/Web/Handler.hs:1440`, `src/Web/Theory.hs:1330-1333`): every
+    // premise/conclusion term of `size >= 30` is replaced by a
+    // `Name AbbrevName` constant named after the term's head symbol, with an
+    // occurrence counter from that symbol's SECOND abbreviation on.  The body
+    // is byte-compared against the Haskell capture.
+    let s = start_server_with_theory("BigTermProved.spthy").await;
+    let path = "/thy/trace/1/json/proof/done/_/Init/Init";
+    let abbreviated = s
+        .client
+        .get(s.url(&format!("{path}?abbrevInBackend=1")))
+        .send()
+        .await
+        .expect("send");
+    assert_eq!(abbreviated.status(), 200);
+    let abbreviated = abbreviated.text().await.expect("text");
+    assert_eq!(abbreviated, haskell_capture("json_proof_abbrev.json"));
+
+    // The abbreviation constants render as their bare ids — no quotes, no
+    // sigil (`show (Name AbbrevName n) = show n`, LTerm.hs:240).
+    assert!(
+        abbreviated.contains(r#""jgnFactShow": "A( g3 )""#),
+        "abbreviated fact must show the bare constant"
+    );
+
+    // Without the parameter the same node keeps its full terms, so the two
+    // bodies differ.
+    let plain = s.client.get(s.url(path)).send().await.expect("send");
+    assert_eq!(plain.status(), 200);
+    let plain = plain.text().await.expect("text");
+    assert!(
+        plain.contains(r#""jgnFactShow": "A( g(f(~x, f(~x,"#),
+        "unabbreviated fact must keep the nested term"
+    );
+    assert!(plain.len() > abbreviated.len());
 }
 
 #[test]

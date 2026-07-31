@@ -221,14 +221,12 @@ fn show_ac_sym(o: &AcSym) -> String {
 
 /// `show` of an `LNTerm` literal: `instance Show (Lit c v)` (VTerm.hs:98-100)
 /// delegating to `instance Show LVar` (LTerm.hs:548-554) and `instance Show
-/// Name` (LTerm.hs:235-239), both of which are the `Display` impls in
+/// Name` (LTerm.hs:235-240), both of which are the `Display` impls in
 /// `tamarin_term::pretty`.
 ///
-/// `Show Name` covers exactly `FreshName` (`~'x'`), `PubName` (`'x'`),
-/// `NodeName` (`#'x'`) and `NatName` (`%'x'`) — the four `NameTag`s
-/// representable here.  Upstream's fifth tag `AbbrevName`, which
-/// `Web.Utils.abbrev` introduces, has NO `show` case; see
-/// [`crate::graph::web_utils_abbrev`] for how that is surfaced.
+/// `Show Name` covers `FreshName` (`~'x'`), `PubName` (`'x'`), `NodeName`
+/// (`#'x'`), `NatName` (`%'x'`) and `AbbrevName` (`x` — the bare id, see
+/// [`crate::graph::web_utils_abbrev`]).
 fn show_lit(l: &Lit<Name, LVar>) -> String {
     l.to_string()
 }
@@ -686,8 +684,10 @@ fn json_graph(label: &str, graph: &Graph<'_>, color_map: &NodeColorMap) -> Value
 /// RAW `sNodes` (`nodeColorMap (M.elems $ get sNodes system)`), i.e. before
 /// compression/simplification.
 ///
-/// The returned string is [`latin1_expand`]ed, so writing it out as UTF-8
-/// reproduces upstream's wire bytes exactly.
+/// Upstream keeps the encoder's output a `ByteString` all the way to
+/// `BL.writeFile` (JSON.hs:564-569, `src/Web/Theory.hs:1335-1340`), so the
+/// wire bytes are the document's own UTF-8 — which is what writing this
+/// `String` out as UTF-8 produces.
 pub fn sequents_to_json_pretty(
     graph_options: &GraphOptions,
     systems: &[(String, &System)],
@@ -701,18 +701,10 @@ pub fn sequents_to_json_pretty(
         })
         .collect();
     let root = object(vec![("graphs", Value::Array(graphs))]);
-    // `removePseudoUnicode $ BC.unpack $ encodePretty graphJSON`: `BC.unpack`
-    // first, then the `<`/`>` unescaping — which is a no-op against
-    // `serde_json`, whose output never contains `<`/`>` (see the
-    // module docs), and which only ever matches pure-ASCII sequences anyway.
-    let body = to_pretty_string(&root);
-    // `latin1_expand` widens each BYTE to the code point of the same value, so
-    // it is the identity on an all-ASCII document — which is the common case.
-    if body.is_ascii() {
-        body
-    } else {
-        latin1_expand(&body)
-    }
+    // `removePseudoUnicode $ encodePretty graphJSON`: the `<`/`>` unescaping
+    // is a no-op against `serde_json`, whose output never contains the
+    // `<`/`>` escapes it rewrites (see the module docs).
+    to_pretty_string(&root)
 }
 
 /// aeson-pretty `encodePretty` layout: 4-space indent, `": "` between key and
@@ -723,23 +715,6 @@ fn to_pretty_string(v: &Value) -> String {
     let mut ser = serde_json::Serializer::with_formatter(&mut buf, formatter);
     serde::Serialize::serialize(v, &mut ser).expect("serialising a serde_json::Value cannot fail");
     String::from_utf8(buf).expect("serde_json emits UTF-8")
-}
-
-/// Widen every BYTE of `s` to the code point with the same value.
-///
-/// Upstream's JSON body is UTF-8-encoded TWICE.  `sequentsToJSONPretty` ends
-/// in `BC.unpack` (`Data.ByteString.Lazy.Char8`, JSON.hs:558), which turns
-/// each byte of the encoder's output into a `Char` in `U+0000..U+00FF`;
-/// `graphJsonThyPath`'s `renderJson` then `writeFile`s that `String`
-/// (`src/Web/Theory.hs:1333-1338`), re-encoding it as UTF-8, and `sendFile`
-/// serves those bytes verbatim.  A non-ASCII character therefore reaches the
-/// wire doubly encoded — the `⊕` of an xor term (`E2 8A 95`) arrives as
-/// `C3 A2 C2 8A C2 95`.
-///
-/// Applying the widening here and letting the response writer UTF-8-encode the
-/// result reproduces that byte sequence.  Pure-ASCII documents are unchanged.
-fn latin1_expand(s: &str) -> String {
-    s.bytes().map(char::from).collect()
 }
 
 #[cfg(test)]
@@ -866,38 +841,24 @@ mod tests {
         assert_eq!(plain_show_bytes(&[0x0e, b'I']), "\\SOI");
     }
 
-    // The body is UTF-8-encoded twice upstream (`BC.unpack` then `writeFile`),
-    // so a `⊕` from an xor term's pretty form reaches the wire as
-    // `C3 A2 C2 8A C2 95` rather than its own `E2 8A 95`.  ASCII is untouched.
+    // The document reaches the wire as its own UTF-8, so the `⊕` an xor term's
+    // pretty form carries is the three bytes `E2 8A 95` — not the `C3 A2 C2 8A
+    // C2 95` a `String` round-trip would produce.
     #[test]
-    fn latin1_expand_double_encodes_non_ascii() {
-        assert_eq!(
-            latin1_expand("h(~k⊕~nb)").as_bytes(),
-            b"h(~k\xc3\xa2\xc2\x8a\xc2\x95~nb)"
-        );
-        assert_eq!(
-            latin1_expand("{\n    \"jgLabel\": \"<a>\"\n}").as_bytes(),
-            b"{\n    \"jgLabel\": \"<a>\"\n}"
-        );
-    }
-
-    // The whole document goes through the double encoding, so a non-ASCII
-    // graph label is expanded just like a term inside a fact.
-    #[test]
-    fn json_body_double_encodes_non_ascii_label() {
+    fn json_body_keeps_non_ascii_label_in_utf8() {
         let out = sequents_to_json_pretty(
             &GraphOptions::default(),
             &[("Theory: ⊕".to_string(), &System::default())],
         );
         assert!(
-            out.as_bytes()
-                .windows(6)
-                .any(|w| w == b"\xc3\xa2\xc2\x8a\xc2\x95"),
-            "label must carry the double-encoded ⊕"
+            out.as_bytes().windows(3).any(|w| w == b"\xe2\x8a\x95"),
+            "label must carry the UTF-8 ⊕"
         );
         assert!(
-            !out.contains('⊕'),
-            "the singly-encoded form must not survive"
+            !out.as_bytes()
+                .windows(6)
+                .any(|w| w == b"\xc3\xa2\xc2\x8a\xc2\x95"),
+            "the doubly-encoded form must not appear"
         );
     }
 

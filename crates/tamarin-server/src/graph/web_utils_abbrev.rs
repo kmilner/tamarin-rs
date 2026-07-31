@@ -14,43 +14,29 @@
 //!
 //! `abbrev n sys` picks every term of the constraint system's rule premises
 //! and conclusions whose `size` is at least `n` and replaces it with a short
-//! constant, returning the rewritten system plus the legend.
+//! constant, returning the rewritten system plus the legend.  The web handler
+//! keeps only the system (`src/Web/Theory.hs:1330-1333`), so the legend is not
+//! materialised here.
 //!
-//! # Representability of the shortened constant
-//!
-//! `shorten` (Utils.hs:70-84) builds `lit (Con (Name AbbrevName (NameId …)))`.
-//! `AbbrevName` is the fifth `NameTag` constructor (LTerm.hs:218-219), and
-//! `instance Show Name` (LTerm.hs:235-239) has NO case for it — so as soon as
-//! one of these constants reaches the JSON serialiser (or `prettyLNTerm`,
-//! which `computeAbbreviations` runs over every candidate term), upstream
-//! aborts the request with `Non-exhaustive patterns in function show` and
-//! Yesod answers 500.  There is therefore no upstream rendering to port.
-//!
-//! [`abbrev`] reproduces that observable behaviour: it reports
-//! [`AbbrevNameUnshowable`] the moment `shorten` would build such a constant,
-//! and the handler turns that into a 500.  When no candidate term is headed by
-//! a `NoEq` symbol, `shorten` returns its argument unchanged (Utils.hs:86), so
-//! every legend entry is an identity and `updateSystem` (Utils.hs:90-104) is a
-//! no-op — hence the system is returned untouched.
-//!
-//! Known deviation: upstream only aborts once such a constant is actually
-//! rendered, so a shortened term sitting on a node that the graph pipeline
-//! drops (compression / simplification) would still yield a 200 there.  This
-//! port reports the error as soon as the constant is built.
+//! The short constant is `lit (Con (Name AbbrevName (NameId …)))`
+//! (Utils.hs:71-88), whose `NameId` is the head symbol's own name plus, from
+//! the second abbreviation of that symbol on, an occurrence counter (`aenc`,
+//! `aenc1`, `aenc2`, …).  It renders as that bare id: `show (Name AbbrevName
+//! n) = show n` (LTerm.hs:240), and its sort is `LSortMsg` (LTerm.hs:266).
+
+use std::borrow::Cow;
 
 use tamarin_term::function_symbols::FunSym;
-use tamarin_term::lterm::LNTerm;
-use tamarin_term::term::{Term, TermSize};
+use tamarin_term::lterm::{LNTerm, Name, NameTag};
+use tamarin_term::term::{lit, Term, TermSize};
+use tamarin_term::vterm::Lit;
+
+use tamarin_utils::FastMap;
 
 use tamarin_theory::constraint::system::System;
 
-/// Reported when [`abbrev`] would build the `Con (Name AbbrevName …)` literal
-/// that upstream cannot `show` (see the module docs).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AbbrevNameUnshowable;
-
 /// HS `Web.Utils.abbrev`'s minimal term size, as passed by
-/// `graphJsonThyPath` (`src/Web/Theory.hs:1329`).
+/// `graphJsonThyPath` (`src/Web/Theory.hs:1331`).
 pub const MIN_ABBREV_SIZE: usize = 30;
 
 /// Port of `getTerms` (Utils.hs:39-40): every fact term of every rule's
@@ -64,31 +50,74 @@ fn get_terms(sys: &System) -> impl Iterator<Item = &LNTerm> {
     })
 }
 
-/// Port of `shorten` (Utils.hs:70-86): a `NoEq` function application gets a
-/// short constant (unrepresentable here — see the module docs), everything
-/// else is returned unchanged.
-fn shorten(t: &LNTerm) -> Result<&LNTerm, AbbrevNameUnshowable> {
-    match t {
-        Term::App(FunSym::NoEq(_), _) => Err(AbbrevNameUnshowable),
-        _ => Ok(t),
+/// HS's `TermState` (Utils.hs:35): how many abbreviations each head symbol has
+/// already produced.
+type TermState = FastMap<String, usize>;
+
+/// Port of `shorten` (Utils.hs:71-88): a `NoEq` function application becomes an
+/// `AbbrevName` constant named after its head symbol, everything else is
+/// returned unchanged.
+///
+/// The first abbreviation of a symbol is the bare name; the counter is only
+/// appended once the symbol is already in the state map, so `f` is followed by
+/// `f1`, `f2`, ….
+fn shorten(t: &LNTerm, state: &mut TermState) -> LNTerm {
+    let Term::App(FunSym::NoEq(sym), _) = t else {
+        return t.clone();
+    };
+    // `BC.unpack bs` — the bare symbol name, not `show bs`.
+    let sym_name = String::from_utf8_lossy(sym.name).into_owned();
+    let name_id = match state.get(&sym_name) {
+        Some(n) => format!("{}{}", sym_name, n),
+        None => sym_name.clone(),
+    };
+    *state.entry(sym_name).or_insert(0) += 1;
+    lit(Lit::Con(Name::new(NameTag::Abbrev, name_id)))
+}
+
+/// The `Legend` (Utils.hs:31) `computeLegend` builds: a `Map LNTerm LNTerm`
+/// assembled by `M.fromList . zip terms`, so when the same term is abbreviated
+/// more than once the LAST shortened form is the one that survives.
+type Legend = FastMap<LNTerm, LNTerm>;
+
+/// Port of `computeLegend` (Utils.hs:61-65).
+fn compute_legend(n: usize, sys: &System) -> Legend {
+    let mut state = TermState::default();
+    let mut legend = Legend::default();
+    for t in get_terms(sys).filter(|t| t.size() >= n) {
+        let short = shorten(t, &mut state);
+        legend.insert(t.clone(), short);
+    }
+    legend
+}
+
+/// Port of `updateSystem` (Utils.hs:92-106): rewrite the top-level terms of
+/// every rule's premises and conclusions through the legend.  Facts are
+/// rebuilt from `(tag, annotations, terms)`, i.e. without their cached
+/// fingerprints — matching HS's `Fact tag a ts` and safe because this system
+/// only ever reaches the renderer.
+fn update_system(legend: &Legend, sys: &mut System) {
+    for (_, ru) in sys.nodes_mut().iter_mut() {
+        for facts in [&mut ru.premises, &mut ru.conclusions] {
+            for f in facts.iter_mut() {
+                *f = f.map_ref(|t| legend.get(t).cloned().unwrap_or_else(|| t.clone()));
+            }
+        }
     }
 }
 
-/// Port of `abbrev` (Utils.hs:107-114) composed with `computeLegend`
-/// (Utils.hs:60-64) and `updateSystem` (Utils.hs:90-104).
+/// Port of `abbrev` (Utils.hs:109-116).
 ///
-/// `abbreviate == false` is HS's `abbrev False _ sys = return (sys, M.empty)`.
-/// Otherwise every term of `size >= n` is run through [`shorten`]; since the
-/// only shortenable shape is unrepresentable, a successful run leaves the
-/// system unchanged and is returned as-is.
-pub fn abbrev(abbreviate: bool, n: usize, sys: &System) -> Result<&System, AbbrevNameUnshowable> {
+/// `abbreviate == false` is HS's `abbrev False _ sys = return (sys, M.empty)`,
+/// which hands the system back untouched.
+pub fn abbrev(abbreviate: bool, n: usize, sys: &System) -> Cow<'_, System> {
     if !abbreviate {
-        return Ok(sys);
+        return Cow::Borrowed(sys);
     }
-    for t in get_terms(sys).filter(|t| t.size() >= n) {
-        shorten(t)?;
-    }
-    Ok(sys)
+    let legend = compute_legend(n, sys);
+    let mut out = sys.clone();
+    update_system(&legend, &mut out);
+    Cow::Owned(out)
 }
 
 #[cfg(test)]
@@ -96,8 +125,7 @@ mod tests {
     use super::*;
     use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
     use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::{f_app_no_eq, lit};
-    use tamarin_term::vterm::Lit;
+    use tamarin_term::term::{f_app_ac, f_app_no_eq, lit};
     use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
     use tamarin_theory::rule::{
         ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo,
@@ -119,8 +147,24 @@ mod tests {
         )
     }
 
-    /// A system with a single rule whose conclusion carries `term`.
-    fn system_with(term: LNTerm) -> System {
+    /// `f(f(… f(v) …))` with 29 applications: `size` counts one per literal
+    /// and one per application, so this is exactly [`MIN_ABBREV_SIZE`].
+    fn big(v: &str) -> LNTerm {
+        let mut t = var(v);
+        for _ in 0..29 {
+            t = f(t);
+        }
+        assert_eq!(t.size(), MIN_ABBREV_SIZE);
+        t
+    }
+
+    /// The constant `shorten` builds for a head symbol abbreviated as `id`.
+    fn abbrev_const(id: &str) -> LNTerm {
+        lit(Lit::Con(Name::new(NameTag::Abbrev, id)))
+    }
+
+    /// A system with a single rule whose one conclusion carries `terms`.
+    fn system_with(terms: Vec<LNTerm>) -> System {
         let mut sys = System::default();
         let ru = Rule::new(
             RuleInfo::<_, tamarin_theory::rule::IntrRuleACInfo>::Proto(ProtoRuleACInstInfo {
@@ -133,9 +177,9 @@ mod tests {
                 FactTag::Proto(
                     Multiplicity::Linear,
                     tamarin_term::intern::intern_str("A"),
-                    1,
+                    terms.len(),
                 ),
-                vec![term],
+                terms,
             )],
             Vec::new(),
         );
@@ -143,31 +187,70 @@ mod tests {
         sys
     }
 
-    // A small term never reaches the size threshold, so the system is returned
+    fn conclusion_terms(sys: &System) -> Vec<LNTerm> {
+        sys.nodes[0].1.conclusions[0].terms.to_vec()
+    }
+
+    // A small term never reaches the size threshold, so the system comes back
     // unchanged even with abbreviation requested.
     #[test]
     fn small_terms_are_left_alone() {
-        let sys = system_with(f(var("x")));
-        assert!(abbrev(true, MIN_ABBREV_SIZE, &sys).is_ok());
+        let sys = system_with(vec![f(var("x"))]);
+        let out = abbrev(true, MIN_ABBREV_SIZE, &sys);
+        assert_eq!(conclusion_terms(&out), conclusion_terms(&sys));
     }
 
-    // A `NoEq`-headed term at or above the threshold is what upstream replaces
-    // by an unshowable `AbbrevName` constant.
+    // A `NoEq`-headed term at or above the threshold is replaced by a constant
+    // named after its head symbol, which renders as that bare name.
     #[test]
-    fn large_noeq_term_is_unshowable() {
-        let mut t = var("x");
-        // `size` counts one per literal and one per application, so 29 nested
-        // unary applications over one literal reach exactly 30.
-        for _ in 0..29 {
-            t = f(t);
-        }
-        assert_eq!(t.size(), MIN_ABBREV_SIZE);
-        let sys = system_with(t);
+    fn large_noeq_term_becomes_an_abbrev_constant() {
+        let sys = system_with(vec![big("x")]);
+        let out = abbrev(true, MIN_ABBREV_SIZE, &sys);
+        assert_eq!(conclusion_terms(&out), vec![abbrev_const("f")]);
         assert_eq!(
-            abbrev(true, MIN_ABBREV_SIZE, &sys),
-            Err(AbbrevNameUnshowable)
+            Lit::<Name, LVar>::Con(Name::new(NameTag::Abbrev, "f")).to_string(),
+            "f"
         );
-        // Without the `abbrevInBackend` parameter nothing is inspected.
-        assert!(abbrev(false, MIN_ABBREV_SIZE, &sys).is_ok());
+        // Without the `abbrevInBackend` parameter nothing is rewritten.
+        let plain = abbrev(false, MIN_ABBREV_SIZE, &sys);
+        assert_eq!(conclusion_terms(&plain), conclusion_terms(&sys));
+    }
+
+    // The per-symbol counter is appended from the SECOND abbreviation of that
+    // symbol on, so two distinct `f`-headed terms become `f` and `f1`.
+    #[test]
+    fn repeated_head_symbol_gets_a_counter_suffix() {
+        let sys = system_with(vec![big("x"), big("y")]);
+        let out = abbrev(true, MIN_ABBREV_SIZE, &sys);
+        assert_eq!(
+            conclusion_terms(&out),
+            vec![abbrev_const("f"), abbrev_const("f1")]
+        );
+    }
+
+    // The legend is `M.fromList . zip terms`, so a term occurring twice burns
+    // two counter values and keeps the LAST one for BOTH occurrences.
+    #[test]
+    fn a_repeated_term_takes_its_last_abbreviation() {
+        let sys = system_with(vec![big("x"), big("x")]);
+        let out = abbrev(true, MIN_ABBREV_SIZE, &sys);
+        assert_eq!(
+            conclusion_terms(&out),
+            vec![abbrev_const("f1"), abbrev_const("f1")]
+        );
+    }
+
+    // `shorten` only rewrites `NoEq` applications; a large AC-headed term
+    // falls through its catch-all unchanged.
+    #[test]
+    fn large_ac_term_is_left_alone() {
+        let t = f_app_ac(
+            tamarin_term::function_symbols::AcSym::Xor,
+            (0..30).map(|i| var(&format!("x{i}"))).collect(),
+        );
+        assert!(t.size() >= MIN_ABBREV_SIZE);
+        let sys = system_with(vec![t]);
+        let out = abbrev(true, MIN_ABBREV_SIZE, &sys);
+        assert_eq!(conclusion_terms(&out), conclusion_terms(&sys));
     }
 }

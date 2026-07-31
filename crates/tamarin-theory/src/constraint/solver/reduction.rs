@@ -5759,7 +5759,7 @@ pub fn chain_direct_case_name(fa_conc: &crate::fact::LNFact) -> Option<String> {
             //   Con (Name FreshName n) -> "Const_fresh_" ++ show n
             //   Con (Name PubName   n) -> "Const_pub_"   ++ show n
             // (`show n` = the raw NameId string, LTerm.hs:237-238).
-            // showLitName has no Node/Nat arm (Haskell would crash); a
+            // showLitName has no Node/Nat/Abbrev arm (Haskell would crash); a
             // direct close on such a constant is not expected for KD
             // facts, so emit a stable shaped fallback for those.
             use tamarin_term::lterm::NameTag;
@@ -5768,6 +5768,7 @@ pub fn chain_direct_case_name(fa_conc: &crate::fact::LNFact) -> Option<String> {
                 NameTag::Pub => format!("Const_pub_{}", name.id.as_str()),
                 NameTag::Node => format!("Const_node_{}", name.id.as_str()),
                 NameTag::Nat => format!("Const_nat_{}", name.id.as_str()),
+                NameTag::Abbrev => format!("Const_abbrev_{}", name.id.as_str()),
             }
         }
         // `showFunSymName` (Term.hs, #883 rendering): builtin AC/C symbols

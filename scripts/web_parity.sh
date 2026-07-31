@@ -71,8 +71,15 @@ boot_crawl() {
     # replacing the derivation report with a timeout block RS never emits
     # (48 bogus DIFF rows in the 2026-07-05 sweep).  RS parses the flag on
     # its web path too (hardcoded-5s load is a separate, tracked plumb).
-    setsid "$bin" interactive "$wd/thy" --port="$port" \
-        --derivcheck-timeout="${DERIVCHECK_TIMEOUT:-30}" >"$log" 2>&1 &
+    # OOM containment: the server (and the maude children that inherit
+    # these settings) is the sacrificial process, not the session — a
+    # theory whose source computation heap-exhausts (LAK06-class) must
+    # die at the cap and yield a SKIP/MISSING row, never take the
+    # machine down.  Same guards as wf_gate.sh / corpus_file_diff.sh.
+    ( echo 1000 > /proc/self/oom_score_adj 2>/dev/null
+      ulimit -v "${SERVER_MEM_KB:-25165824}" 2>/dev/null
+      exec setsid "$bin" interactive "$wd/thy" --port="$port" \
+        --derivcheck-timeout="${DERIVCHECK_TIMEOUT:-30}" ) >"$log" 2>&1 &
     pid=$!
     # wait for readiness
     local ok="" i

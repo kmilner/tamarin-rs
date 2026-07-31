@@ -33,6 +33,18 @@ if ! command -v tamarin-prover >/dev/null 2>&1; then
   exit 1
 fi
 
+# Fixtures must come from the pinned patched oracle, not whatever
+# tamarin-prover happens to be first on PATH (the brew release shadows it
+# on this machine). Refuse any binary whose baked git revision differs
+# from the submodule pin.
+pin="$(git -C "${SCRIPT_DIR}/../../.." rev-parse :tamarin-prover)"
+binrev="$(tamarin-prover --version 2>/dev/null | sed -n 's/^Git revision: \([0-9a-f]*\).*/\1/p')"
+if [[ "$binrev" != "$pin" ]]; then
+  echo "error: tamarin-prover on PATH is revision '${binrev:-unknown}' but the submodule pin is $pin" >&2
+  echo "       put the testing oracle's bin dir first on PATH (tamarin-prover-testing/.stack-work/install/*/*/*/bin)" >&2
+  exit 1
+fi
+
 if [[ ! -f "$FIXTURE" ]]; then
   echo "error: fixture $FIXTURE missing" >&2
   exit 1
@@ -162,6 +174,28 @@ fetch graph_unhandled_path.html "/thy/trace/1/graph/help"
 # ---------------- Stubs (capture for documentation) ----------------
 fetch intdot.html               "/thy/trace/1/intdot/lemma/debug"
 fetch equiv_overview.json       "/thy/equiv/1/overview/help"
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+
+# ---------------- Backend abbreviation (second theory, second server) -------
+# `abbrevInBackend` replaces every premise/conclusion term of `size >= 30` with
+# a short `AbbrevName` constant, so it needs a theory carrying such a term plus
+# a stored proof for the system to hang off — `BigTermProved.spthy`.  It is
+# served from its OWN work-dir: a second `.spthy` alongside `issue193.spthy`
+# would renumber the theory indices every URL above depends on.
+BIGDIR="$(mktemp -d)"
+cp "${SCRIPT_DIR}/fixtures/BigTermProved.spthy" "$BIGDIR/BigTermProved.spthy"
+( cd "$BIGDIR" && tamarin-prover interactive --port="$PORT" --no-logging ./ ) >>/tmp/haskell-server.log 2>&1 &
+SERVER_PID=$!
+for i in {1..40}; do
+  if curl -fs -o /dev/null "$BASE/" 2>/dev/null; then
+    break
+  fi
+  sleep 0.5
+done
+fetch json_proof_abbrev.json    "/thy/trace/1/json/proof/done/_/Init/Init?abbrevInBackend=1"
+rm -rf "$BIGDIR"
 
 echo "done.  Captures live under: ${RES_DIR}"
 kill "$SERVER_PID" 2>/dev/null || true

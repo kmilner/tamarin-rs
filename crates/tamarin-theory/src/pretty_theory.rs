@@ -2046,6 +2046,12 @@ pub(crate) fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                 NameTag::Fresh => p::Term::FreshLit(n.id.0.to_string()),
                 NameTag::Nat => p::Term::NatLit(n.id.0.to_string()),
                 NameTag::Node => p::Term::PubLit(n.id.0.to_string()),
+                // `prettyTerm`'s literal case is `text . show`, and `show
+                // (Name AbbrevName n) = show n` (LTerm.hs:240) is the bare id;
+                // a nullary `App` is the parser-AST term `pp_term` renders
+                // that way.  Reached from `prettyLNFact` on the facts
+                // `Web.Utils.abbrev` rewrote.
+                NameTag::Abbrev => p::Term::App(n.id.0.to_string(), Vec::new()),
             }
         }
         Term::App(FunSym::NoEq(sym), args) => {

@@ -1,0 +1,76 @@
+theory BigTerm
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: f/2, fst/1, g/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) Init:
+   [ Fr( ~x ) ]
+  -->
+   [
+   A( g(f(~x,
+          f(~x,
+            f(~x,
+              f(~x,
+                f(~x,
+                  f(~x,
+                    f(~x,
+                      f(~x,
+                        f(~x,
+                          f(~x,
+                            f(~x,
+                              f(~x,
+                                f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, ~x)))))))))))))))))))))
+   ),
+   B( g(f(~x,
+          f(~x,
+            f(~x,
+              f(~x,
+                f(~x,
+                  f(~x,
+                    f(~x,
+                      f(~x,
+                        f(~x,
+                          f(~x,
+                            f(~x,
+                              f(~x,
+                                f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, ~x)))))))))))))))))))))
+   )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Fin:
+   [ A( y ), B( z ) ] --[ Done( y, z ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+lemma done:
+  exists-trace "∃ y z #i. Done( y, z ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ y z #i. (Done( y, z ) @ #i)"
+*/
+simplify
+solve( A( y ) ▶₀ #i )
+  case Init
+  solve( B( z ) ▶₁ #i )
+    case Init
+    SOLVED // trace found
+  qed
+qed
+
+/* All wellformedness checks were successful. */
+
+/*
+Generated from:
+Tamarin version 1.13.0
+Maude version 3.5.1
+Git revision: ef3f0468f6f12b81f43289aa64f5d1b9e53eaf59, branch: HEAD
+Compiled at: 2026-07-31 12:54:17.256348115 UTC
+*/
+
+end

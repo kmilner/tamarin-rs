@@ -915,6 +915,10 @@ pub(crate) fn ln_term_to_parser(t: &LNTerm) -> tamarin_parser::ast::Term {
             NameTag::Fresh => p::Term::FreshLit(n.id.0.to_string()),
             NameTag::Nat => p::Term::NatLit(n.id.0.to_string()),
             NameTag::Node => p::Term::PubLit(n.id.0.to_string()),
+            // `show (Name AbbrevName n) = show n` (LTerm.hs:240) is the bare
+            // id, and a nullary `App` is the parser-AST term that renders
+            // that way.
+            NameTag::Abbrev => p::Term::App(n.id.0.to_string(), Vec::new()),
         },
         VTerm::App(FunSym::NoEq(sym), args) => {
             let name = String::from_utf8_lossy(sym.name).to_string();

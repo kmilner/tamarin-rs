@@ -1806,6 +1806,12 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                 tamarin_term::lterm::NameTag::Fresh => p::Term::FreshLit(name.id.0.to_string()),
                 tamarin_term::lterm::NameTag::Nat => p::Term::NatLit(name.id.0.to_string()),
                 tamarin_term::lterm::NameTag::Node => p::Term::PubLit(name.id.0.to_string()),
+                // `show (Name AbbrevName n) = show n` (LTerm.hs:240) is the
+                // bare id, and a nullary `App` is the parser-AST term that
+                // renders that way.
+                tamarin_term::lterm::NameTag::Abbrev => {
+                    p::Term::App(name.id.0.to_string(), Vec::new())
+                }
             }
         }
         tamarin_term::term::Term::App(funsym, args) => {

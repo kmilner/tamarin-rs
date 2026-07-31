@@ -96,12 +96,20 @@ impl NameId {
     }
 }
 
+/// Variant order mirrors the Haskell constructor order
+/// (`data NameTag = FreshName | PubName | NodeName | NatName | AbbrevName`,
+/// LTerm.hs:219), which the derived `Ord` on both sides reads off.
+///
+/// `Abbrev` is the tag `Web.Utils.shorten` (`src/Web/Utils.hs:71-88`) puts on
+/// the short constant it substitutes for a long term; it never occurs in a
+/// parsed or solved term.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NameTag {
     Fresh,
     Pub,
     Node,
     Nat,
+    Abbrev,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -135,6 +143,8 @@ pub fn sort_of_name(n: &Name) -> LSort {
         NameTag::Pub => LSort::Pub,
         NameTag::Node => LSort::Node,
         NameTag::Nat => LSort::Nat,
+        // LTerm.hs:266.
+        NameTag::Abbrev => LSort::Msg,
     }
 }
 

@@ -320,7 +320,7 @@ fn write_lvar(v: &tamarin_term::lterm::LVar, out: &mut String) {
     }
 }
 
-/// HS `show Name` (LTerm.hs:231-235).  Writes directly into `out`,
+/// HS `show Name` (LTerm.hs:235-240).  Writes directly into `out`,
 /// avoiding a throwaway intermediate `String`; byte-identical output.
 fn write_name(n: &Name, out: &mut String) {
     match n.tag {
@@ -328,6 +328,12 @@ fn write_name(n: &Name, out: &mut String) {
         NameTag::Pub => {}
         NameTag::Node => out.push('#'),
         NameTag::Nat => out.push('%'),
+        // `show (Name AbbrevName n) = show n` (LTerm.hs:240) — the bare name
+        // id, with neither a sigil nor the quotes the other four tags carry.
+        NameTag::Abbrev => {
+            out.push_str(n.id.0);
+            return;
+        }
     }
     out.push('\'');
     out.push_str(n.id.0);
