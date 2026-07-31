@@ -90,6 +90,22 @@ pct() {
 cell_rs_t() { case "$1" in timeout|fail) printf '%s' "$1" ;; *) printf '%s s%s' "$1" "$(pct "$1" "$2")" ;; esac; }
 cell_rs_m() { [ "$1" = "—" ] && printf '—' || printf '%s MB%s' "$1" "$(pct "$1" "$2")"; }
 
+# Theories whose emitted proofs the HS *release* cannot replay (upstream
+# #871 thread-count-dependent proofs / #881 reload normalisation — not port
+# failures; the ./setup.sh testing build re-verifies them).  Only these
+# render the linked note in the RS+HS column; any other failure still
+# prints a bare `fail` so new breakage stays loud.
+HS_REPLAY_UNSUPPORTED=" Joux wireguard "
+UNSUPPORTED_TEXT="not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881))"
+# Reverify (RS+HS) time cell: args <measured> <theory-base> <hs-time>.
+cell_rv_t() {
+    if [ "$1" = fail ] && [[ "$HS_REPLAY_UNSUPPORTED" == *" $2 "* ]]; then
+        printf '%s' "$UNSUPPORTED_TEXT"
+    else
+        cell_rs_t "$1" "$3"
+    fi
+}
+
 # Emit the full marker block (header comment + per-core tables) to stdout.
 gen_block() {
     # Static header comment.  Kept in sync with the README prose; this is the
@@ -138,7 +154,7 @@ HDR
             r=$(measure "$RS_PATH" --processors="$k" --derivcheck-timeout="$DERIV" --prove "$af")
             p=$(measure env THREADS="$k" HS_PATH="$HS_PATH" RS_PATH="$RS_PATH" \
                     "$repo_root/prove_and_reverify.sh" "$af" --derivcheck-timeout="$DERIV")
-            echo "| \`$base\` | $(cell_t "${h%|*}") | $(cell_rs_t "${p%|*}" "${h%|*}") | **$(cell_rs_t "${r%|*}" "${h%|*}")** | $(cell_m "${h#*|}") | $(cell_rs_m "${p#*|}" "${h#*|}") | **$(cell_rs_m "${r#*|}" "${h#*|}")** |"
+            echo "| \`$base\` | $(cell_t "${h%|*}") | $(cell_rv_t "${p%|*}" "$base" "${h%|*}") | **$(cell_rs_t "${r%|*}" "${h%|*}")** | $(cell_m "${h#*|}") | $(cell_rs_m "${p#*|}" "${h#*|}") | **$(cell_rs_m "${r#*|}" "${h#*|}")** |"
         done
     done
     echo
