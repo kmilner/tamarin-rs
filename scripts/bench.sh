@@ -96,7 +96,7 @@ cell_rs_m() { [ "$1" = "—" ] && printf '—' || printf '%s MB%s' "$1" "$(pct "
 # render the linked note in the RS+HS column; any other failure still
 # prints a bare `fail` so new breakage stays loud.
 HS_REPLAY_UNSUPPORTED=" Joux wireguard "
-UNSUPPORTED_TEXT="not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881))"
+UNSUPPORTED_TEXT="not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below)"
 # Reverify (RS+HS) time cell: args <measured> <theory-base> <hs-time>.
 cell_rv_t() {
     if [ "$1" = fail ] && [[ "$HS_REPLAY_UNSUPPORTED" == *" $2 "* ]]; then
