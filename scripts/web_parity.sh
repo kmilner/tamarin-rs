@@ -53,6 +53,7 @@ fi
 seed_list() {
     cat <<EOF
 Tutorial.spthy
+csf26-ac/fast/counter.spthy
 EOF
 }
 filelist() {

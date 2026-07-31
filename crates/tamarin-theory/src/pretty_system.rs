@@ -314,9 +314,17 @@ fn pretty_eq_store(sys: &System) -> Doc {
 }
 
 // HS `ppDisj (idx, substs) = text (show idx ++ ".") <-> numbered' conjs`
-// where `conjs = map ppSubst (S.toList substs)`.
+// where `conjs = map ppSubst (orderedSubsts substs)` (EquationStore.hs,
+// upstream 8fc9f18a): the displayed case order is the same α-canonical
+// order `performSplit` produces, so the numbering shown for a disjunction
+// matches the `split_case_i` labels a split of it emits.  Same two-step
+// sort as `perform_split`: raw `Ord` first (= `S.toList`), then the
+// stable `drop_name_hints` key (= `sortOnMemo dropNameHintsLNSubstVFresh`).
 fn pp_disj(d: &crate::tools::equation_store::EqDisj) -> Doc {
-    let conjs: Vec<Doc> = d.substs.iter().map(pp_subst_vfresh).collect();
+    let mut substs = d.substs.clone();
+    substs.sort();
+    substs.sort_by_cached_key(|s| s.drop_name_hints());
+    let conjs: Vec<Doc> = substs.iter().map(pp_subst_vfresh).collect();
     Doc::text(format!("{}.", d.split_id.0)).beside_sp(numbered_prime(conjs))
 }
 

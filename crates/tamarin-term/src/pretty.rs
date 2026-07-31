@@ -157,10 +157,15 @@ fn pp_term_lnterm(t: &Term<Lit<Name, LVar>>, out: &mut String) {
     }
 }
 
+/// HS `split` (Term.hs:323-324): `split (viewTerm2 -> FPair t1 t2) = t1 :
+/// split t2; split t = [t]`.  ONLY the RIGHT spine of a pair is flattened —
+/// `pair(t1, t2)` yields `t1` then recurses into `t2`.  A LEFT-nested pair
+/// such as `pair(pair(a,b), c)` therefore renders as `<<a, b>, c>` (the left
+/// child is printed by the recursive term printer, NOT flattened here).
 fn collect_pair_tail<'a>(t: &'a Term<Lit<Name, LVar>>, out: &mut Vec<&'a Term<Lit<Name, LVar>>>) {
     if let Term::App(FunSym::NoEq(sym), args) = t {
         if *sym == pair_sym() && args.len() == 2 {
-            collect_pair_tail(&args[0], out);
+            out.push(&args[0]);
             collect_pair_tail(&args[1], out);
             return;
         }
@@ -339,6 +344,19 @@ mod tests {
         let inner = f_app_no_eq(pair_sym(), vec![b, c]);
         let outer = f_app_no_eq(pair_sym(), vec![a, inner]);
         assert_eq!(pretty_lnterm(&outer), "<a, b, c>");
+    }
+
+    #[test]
+    fn pretty_pair_left_nested_not_flattened() {
+        // HS `split` unrolls only the RIGHT spine: pair(pair(a,b), c)
+        // renders `<<a, b>, c>`, keeping the render round-trippable
+        // (`<a, b, c>` would re-parse as the right-nested pair(a, pair(b,c))).
+        let a = var("a", LSort::Msg);
+        let b = var("b", LSort::Msg);
+        let c = var("c", LSort::Msg);
+        let inner = f_app_no_eq(pair_sym(), vec![a, b]);
+        let outer = f_app_no_eq(pair_sym(), vec![inner, c]);
+        assert_eq!(pretty_lnterm(&outer), "<<a, b>, c>");
     }
 
     #[test]

@@ -26,6 +26,10 @@ use tamarin_theory::theory::{LemmaAttr, TraceQuantifier};
 
 /// Full overview/framing page (the one served at `/thy/trace/<idx>/overview/...`).
 pub fn overview_page(entry: &TheoryEntry, path: &TheoryPath) -> String {
+    // The west pane's lemma list and the centre pane both AC-canonicalise
+    // parser-AST terms, which reads the user-fn thread-locals — empty on an
+    // axum worker thread.  See `TheoryEntry::install_user_funs`.
+    let _user_funs_guard = entry.install_user_funs();
     let header_html = header(entry);
     let proof_state = proof_state(entry);
     let main_view = path_html(entry, path);
@@ -618,6 +622,10 @@ fn render_attrs(attrs: &[LemmaAttr], in_file: &str) -> String {
 
 /// Main pane: render the content for a given path.
 pub fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> String {
+    // The rule / lemma / restriction renderers reached below AC-canonicalise
+    // parser-AST terms, which reads the user-fn thread-locals — empty on an
+    // axum worker thread.  See `TheoryEntry::install_user_funs`.
+    let _user_funs_guard = entry.install_user_funs();
     let typed = &entry.typed_theory;
     match path {
         TheoryPath::Help => help_html(entry),

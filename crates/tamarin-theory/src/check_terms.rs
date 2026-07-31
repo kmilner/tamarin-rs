@@ -124,6 +124,11 @@ struct Irreducible {
     /// is reducible).  HS keys on the `FunSym` value, which for AC ops is
     /// `AC <ACSym>`.
     ac: BTreeSet<AcSym>,
+    /// Names of the irreducible user-declared `[AC]` symbols.  HS's membership
+    /// test is on the whole `FunSym`, which for such a symbol is
+    /// `AC (ACfct (name, _))` and carries no arity — `naryOpApp`'s `IsAC`
+    /// branch accepts an application of any arity — so the name alone decides.
+    ac_fct_names: BTreeSet<Vec<u8>>,
     /// Names of all nullary NoEq symbols in the FULL signature.  Used to
     /// resolve a bare `Var` whose name is a declared nullary funsym into an
     /// application (mirrors HS resolving `f/0` to `FApp f []`).
@@ -134,6 +139,7 @@ impl Irreducible {
     fn from_sig(sig: &MaudeSig) -> Self {
         let mut noeq: BTreeMap<Vec<u8>, BTreeSet<usize>> = BTreeMap::new();
         let mut ac = BTreeSet::new();
+        let mut ac_fct_names = BTreeSet::new();
         for s in &sig.irreducible_fun_syms {
             match s {
                 FunSym::NoEq(n) => {
@@ -141,6 +147,9 @@ impl Irreducible {
                 }
                 FunSym::Ac(a) => {
                     ac.insert(*a);
+                    if let AcSym::AcFct(f) = a {
+                        ac_fct_names.insert(f.name.to_vec());
+                    }
                 }
                 _ => {}
             }
@@ -156,15 +165,21 @@ impl Irreducible {
         Irreducible {
             noeq,
             ac,
+            ac_fct_names,
             nullary_names,
         }
     }
 
-    /// Is the NoEq symbol `name/arity` irreducible?
+    /// Is the symbol applied under `name` with `arity` arguments irreducible?
+    /// A user-declared `[AC]` symbol matches on its name alone (see
+    /// `ac_fct_names`); every other name denotes a NoEq symbol, keyed by
+    /// (name, arity).
     fn is_irreducible(&self, name: &str, arity: usize) -> bool {
-        self.noeq
-            .get(name.as_bytes())
-            .is_some_and(|s| s.contains(&arity))
+        self.ac_fct_names.contains(name.as_bytes())
+            || self
+                .noeq
+                .get(name.as_bytes())
+                .is_some_and(|s| s.contains(&arity))
     }
 
     /// Is the AC symbol `a` irreducible?

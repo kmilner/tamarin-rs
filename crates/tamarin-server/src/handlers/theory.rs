@@ -30,7 +30,9 @@ use axum::{
 use serde_json::Value;
 use std::collections::HashMap;
 
-use crate::handlers::{html_response, json_resp, path_parse, text_response, theory_html};
+use crate::handlers::{
+    html_response, internal_server_error, json_resp, path_parse, text_response, theory_html,
+};
 use crate::state::AppState;
 
 use tamarin_theory::constraint::solver::search::NodeStatus;
@@ -39,42 +41,24 @@ use tamarin_theory::constraint::solver::search::NodeStatus;
 // Helpers
 // ---------------------------------------------------------------------
 
-/// Haskell's `notFound` returns a 404 HTML page.  We mirror that so the
-/// frontend's `server.handleResponseError` triggers the right branch.
-/// Used for non-JSON live routes (`overview`, `download`, `source`,
-/// `message`, `unload`).
-pub fn missing_idx_html(idx: usize) -> Response {
-    let body = format!(
-        "<!DOCTYPE html>\n<html><head><title>Not Found</title></head><body>\
-         <h1>Not Found</h1><p>Theory index {} not found.</p></body></html>",
-        idx
-    );
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_TYPE,
-        "text/html; charset=utf-8".parse().unwrap(),
-    );
-    (StatusCode::NOT_FOUND, headers, body).into_response()
-}
-
 /// Parse the trailing wildcard path.  Returns `None` on UNPARSEABLE
 /// input, mirroring Haskell's Yesod `PathMultiPiece TheoryPath`
 /// instance (`fromPathMultiPiece = parseTheoryPath`,
 /// `src/Web/Types.hs:650-652`): when `parseTheoryPath` returns
 /// `Nothing`, Yesod routing yields `notFound` (404) BEFORE the handler
 /// runs, so a malformed path 404s on every theory route.  Callers must
-/// map `None` to [`not_found_response`].  Note the legitimate help view
+/// map `None` to [`not_found`].  Note the legitimate help view
 /// (`/help`) parses to `TheoryPath::Help`, so it is NOT affected.
 fn parse_path(raw: &str) -> Option<path_parse::TheoryPath> {
     path_parse::parse(raw)
 }
 
-/// Generic 404 used when the trailing path doesn't parse.  Mirrors
-/// Yesod's routing-level `notFound` (a plain 404) — matches the
-/// already-fixed `graph` handler's `(StatusCode::NOT_FOUND, "Not
-/// Found")` response.
-fn not_found_response() -> Response {
-    (StatusCode::NOT_FOUND, "Not Found").into_response()
+/// Haskell's `notFound`: the miss itself.  Every one of them — an unknown
+/// theory index as much as a theory path that does not resolve — carries the
+/// same page, which the `not_found_page` layer in [`crate::routes`] renders
+/// from the request path (see [`crate::handlers::not_found_response`]).
+fn not_found() -> Response {
+    StatusCode::NOT_FOUND.into_response()
 }
 
 // ---------------------------------------------------------------------
@@ -89,10 +73,10 @@ pub async fn interactive_overview(
     if state.store.get(idx).is_none() {
         // Haskell's `notFound` returns 404 HTML; our overview is HTML
         // too so we match exactly.
-        return missing_idx_html(idx);
+        return not_found();
     }
     let Some(path) = parse_path(&raw_path) else {
-        return not_found_response();
+        return not_found();
     };
     // The full framed page ALWAYS renders the left-pane proof-state tree
     // (`proof_state`), whose rule count (incl. the ISend/IRecv intruder
@@ -105,7 +89,7 @@ pub async fn interactive_overview(
     // as-is.
     let _ = state.store.ensure_proof_state(idx, &state.cfg);
     let Some(entry) = state.store.get(idx) else {
-        return missing_idx_html(idx);
+        return not_found();
     };
     html_response(theory_html::overview_page(&entry, &path))
 }
@@ -124,10 +108,10 @@ pub async fn theory_path_main(
     Path((idx, raw_path)): Path<(usize, String)>,
 ) -> Response {
     if state.store.get(idx).is_none() {
-        return missing_idx_html(idx);
+        return not_found();
     }
     let Some(path) = parse_path(&raw_path) else {
-        return not_found_response();
+        return not_found();
     };
     // Method paths mutate the proof tree; dispatch separately.
     if let path_parse::TheoryPath::Method {
@@ -140,7 +124,7 @@ pub async fn theory_path_main(
     }
     materialise_proof_state_if_needed(&state, idx, &path);
     let Some(entry) = state.store.get(idx) else {
-        return missing_idx_html(idx);
+        return not_found();
     };
     let title = title_for(&entry, &path);
     let body = theory_html::path_html(&entry, &path);
@@ -172,7 +156,7 @@ fn apply_method_and_redirect(
     state: &AppState,
     idx: usize,
     lemma: &str,
-    method_nr: usize,
+    method_nr: i64,
     sub: &[String],
 ) -> axum::Json<Value> {
     // Ensure the proof state at the *source* idx is built (so we can
@@ -227,10 +211,15 @@ fn apply_method_and_redirect(
             )
         })
         .collect();
-        if method_nr == 0 || method_nr > methods.len() {
+        // The method number is 1-based and read as a signed `Int`, so 0 and
+        // negatives index off the front of the ranked list.
+        let Some(nth) = usize::try_from(method_nr - 1)
+            .ok()
+            .filter(|nth| *nth < methods.len())
+        else {
             return json_resp::alert("Sorry, but the prover failed on the selected method!");
-        }
-        methods.into_iter().nth(method_nr - 1).unwrap()
+        };
+        methods.into_iter().nth(nth).unwrap()
     };
     // Allocate a fresh theory idx so the post-step state doesn't
     // overwrite the source (matches Haskell's `modifyTheory` →
@@ -428,6 +417,10 @@ fn title_for(entry: &crate::state::TheoryEntry, path: &path_parse::TheoryPath) -
 /// by the same pipeline `--prove` runs — via the shared `format_wf_block`,
 /// so it matches HS byte-for-byte (empty report ⇒ the "all successful" block).
 fn render_theory_source(entry: &crate::state::TheoryEntry) -> String {
+    // `pretty_closed_theory` AC-canonicalises parser-AST rule/lemma terms,
+    // which reads the user-fn thread-locals — empty on an axum worker thread.
+    // See `TheoryEntry::install_user_funs`.
+    let _user_funs_guard = entry.install_user_funs();
     let build = tamarin_theory::pretty_theory::BuildInfo {
         tamarin_version: env!("CARGO_PKG_VERSION").to_string(),
         maude_version: String::new(),
@@ -472,7 +465,7 @@ pub async fn source_(State(state): State<Arc<AppState>>, Path(idx): Path<usize>)
     // handler's unconditional `ensure_proof_state`.
     let _ = state.store.ensure_proof_state(idx, &state.cfg);
     let Some(entry) = state.store.get(idx) else {
-        return missing_idx_html(idx);
+        return not_found();
     };
     text_response(render_theory_source(&entry))
 }
@@ -484,7 +477,7 @@ pub async fn message_deduction(
     // See `source_` — identical output, identical proof-state need.
     let _ = state.store.ensure_proof_state(idx, &state.cfg);
     let Some(entry) = state.store.get(idx) else {
-        return missing_idx_html(idx);
+        return not_found();
     };
     text_response(render_theory_source(&entry))
 }
@@ -514,21 +507,21 @@ pub async fn autoprove(
     // `autoprover_name` returns `None` for an unrecognised extractor and
     // otherwise the exact `fullName` Haskell `getAutoProverR` builds.
     let Some(name) = autoprover_name(&extractor, bound) else {
-        return not_found_response();
+        return not_found();
     };
     // Match Haskell's Yesod `PathPiece Bool`: only "True" / "False"
     // are valid.  Anything else 404s.
     if parse_bool_path_piece(&quit).is_none() {
-        return missing_idx_html(idx);
+        return not_found();
     }
     let Some(entry) = state.store.get(idx) else {
         // Haskell: notFound from `withTheory`.  The handler returns
         // JSON in the success branch but 404 HTML when the theory is
         // missing.  We mirror that.
-        return missing_idx_html(idx);
+        return not_found();
     };
     let Some(path) = parse_path(&raw_path) else {
-        return not_found_response();
+        return not_found();
     };
     // Haskell `getProverR` handles ONLY the `TheoryProof lemma proofPath`
     // arm (`src/Web/Handler.hs:1065-1068`); we additionally tolerate
@@ -784,10 +777,10 @@ pub async fn autoprove_all(
     // prover `name` to the user — it always redirects — so unlike
     // `autoprove` we only need the validation, not the display name.)
     if autoprover_name(&extractor, bound).is_none() {
-        return not_found_response();
+        return not_found();
     }
     let Some(entry) = state.store.get(idx) else {
-        return missing_idx_html(idx);
+        return not_found();
     };
     let lemma_names: Vec<String> = entry
         .typed_theory
@@ -898,7 +891,7 @@ pub async fn verify(
     };
     // Unparseable path → routing-level 404 (see `parse_path`).
     let Some(path) = parse_path(&raw_path) else {
-        return not_found_response();
+        return not_found();
     };
     match path {
         // The success branch: re-point navigation at the same idx and
@@ -1013,7 +1006,7 @@ pub async fn download(
     // different content-type/disposition.
     let _ = state.store.ensure_proof_state(idx, &state.cfg);
     let Some(entry) = state.store.get(idx) else {
-        return missing_idx_html(idx);
+        return not_found();
     };
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -1058,10 +1051,10 @@ pub async fn next_path(
     Path((idx, section, raw_path)): Path<(usize, String, String)>,
 ) -> Response {
     let Some(entry) = state.store.get(idx) else {
-        return missing_idx_html(idx);
+        return not_found();
     };
     let Some(path) = parse_path(&raw_path) else {
-        return not_found_response();
+        return not_found();
     };
     let new_path = next_theory_path(&path, &section, &entry);
     let url = render_main_url(idx, &new_path);
@@ -1074,10 +1067,10 @@ pub async fn prev_path(
     Path((idx, section, raw_path)): Path<(usize, String, String)>,
 ) -> Response {
     let Some(entry) = state.store.get(idx) else {
-        return missing_idx_html(idx);
+        return not_found();
     };
     let Some(path) = parse_path(&raw_path) else {
-        return not_found_response();
+        return not_found();
     };
     let new_path = prev_theory_path(&path, &section, &entry);
     let url = render_main_url(idx, &new_path);
@@ -1414,10 +1407,10 @@ pub async fn intdot(
     Path((idx, raw_path)): Path<(usize, String)>,
 ) -> Response {
     let Some(entry) = state.store.get(idx) else {
-        return missing_idx_html(idx);
+        return not_found();
     };
     let Some(path) = parse_path(&raw_path) else {
-        return not_found_response();
+        return not_found();
     };
     let dotsrc = graph_json_url(idx, &path);
     let title = crate::handlers::root::html_escape(&format!("Theory: {}", entry.name));
@@ -1487,19 +1480,18 @@ pub async fn graph(
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
     let Some(_entry) = state.store.get(idx) else {
-        return missing_idx_html(idx);
+        return not_found();
     };
     let Some(path) = parse_path(&raw_path) else {
-        return not_found_response();
+        return not_found();
     };
-    let sys = match resolve_system_for_path(&state, idx, &path) {
-        Some(s) => s,
-        // Haskell `getTheoryGraphR` (`src/Web/Handler.hs`) returns a
-        // generic `notFound` (404) when `imgThyPath` yields `Nothing` —
-        // i.e. the path has no associated system (help / message / rules).
-        // There is no placeholder SVG.  The theory `idx` itself exists
-        // here, so this is a path-level 404, not a missing-theory page.
-        None => return (StatusCode::NOT_FOUND, "Not Found").into_response(),
+    // HS `getTheoryGraphR` (`src/Web/Handler.hs:1418-1432`) answers
+    // `imgThyPath`'s `Nothing` — a proof path that does not resolve — with a
+    // generic `notFound`; there is no placeholder SVG.
+    let sys = match dot_path_system(&state, idx, &path, &GRAPH_SITES) {
+        Ok(Some(s)) => s,
+        Ok(None) => return not_found(),
+        Err(message) => return internal_server_error(&message),
     };
     let opts = graph_options_from_map(&query);
     // Try to render with dot; fall back to DOT-as-text when
@@ -1526,14 +1518,18 @@ pub async fn interactive_graph_def(
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
     let Some(_entry) = state.store.get(idx) else {
-        return missing_idx_html(idx);
+        return not_found();
     };
     let Some(path) = parse_path(&raw_path) else {
-        return not_found_response();
+        return not_found();
     };
-    let sys = match resolve_system_for_path(&state, idx, &path) {
-        Some(s) => s,
-        None => return text_response("digraph G { label=\"no system at this path\" }\n".into()),
+    // HS `getTheoryInteractiveGraphR` (`src/Web/Handler.hs:1464-1470`) answers
+    // `dotGraphString`'s `Nothing` — a proof path that does not resolve — with
+    // `notFound`.
+    let sys = match dot_path_system(&state, idx, &path, &INTERACTIVE_DOT_SITES) {
+        Ok(Some(s)) => s,
+        Ok(None) => return not_found(),
+        Err(message) => return internal_server_error(&message),
     };
     let opts = graph_options_from_map(&query);
     let dot = crate::handlers::dot::system_to_dot_with(&sys, &opts);
@@ -1565,17 +1561,17 @@ pub async fn graph_json(
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
     if state.store.get(idx).is_none() {
-        return missing_idx_html(idx);
+        return not_found();
     }
     let Some(path) = parse_path(&raw_path) else {
-        return not_found_response();
+        return not_found();
     };
     let opts = graph_options_from_map(&query);
     // The source-case list lives on the materialised proof state, so re-read
     // the entry afterwards (as the `main` handler does).
     materialise_proof_state_if_needed(&state, idx, &path);
     let Some(entry) = state.store.get(idx) else {
-        return missing_idx_html(idx);
+        return not_found();
     };
     match &path {
         path_parse::TheoryPath::Proof { lemma, .. } => {
@@ -1594,7 +1590,7 @@ pub async fn graph_json(
             )
             .is_err()
             {
-                return internal_server_error();
+                return internal_server_error(ABBREV_NAME_SHOW_FAILURE);
             }
             let label = format!("Theory: {} Lemma: {}", entry.name, lemma);
             json_graph_response(crate::graph::json::sequents_to_json_pretty(
@@ -1607,22 +1603,17 @@ pub async fn graph_json(
             src_idx,
             case_idx,
         } => {
-            let want_refined = matches!(kind, path_parse::SourceKind::Refined);
-            let sources = theory_html::compute_source_lists(&entry, want_refined);
-            let case = src_idx
-                .checked_sub(1)
-                .and_then(|i| sources.get(i))
-                .and_then(|(_, cases)| case_idx.checked_sub(1).and_then(|j| cases.get(j)));
-            let Some((_, sys)) = case else {
-                return internal_server_error();
+            let sys = match source_case_system(&entry, kind, *src_idx, *case_idx, &JSON_SITES) {
+                Ok(sys) => sys,
+                Err(message) => return internal_server_error(&message),
             };
             let label = format!("Theory: {} Case: {}:{}", entry.name, src_idx, case_idx);
             json_graph_response(crate::graph::json::sequents_to_json_pretty(
                 &opts,
-                &[(label, sys)],
+                &[(label, &sys)],
             ))
         }
-        _ => internal_server_error(),
+        _ => internal_server_error(&unhandled_theory_path(JSON_SITES.unhandled)),
     }
 }
 
@@ -1636,10 +1627,146 @@ fn json_graph_response(body: String) -> Response {
     (StatusCode::OK, headers, body).into_response()
 }
 
-/// The 500 Yesod's `traceExceptions` wrapper produces when the handler raises.
-/// The status is the contract; the body is not consumed by the frontend.
-fn internal_server_error() -> Response {
-    (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+/// The `PatternMatchFail` raised once `Web.Utils.abbrev`'s shortened constant
+/// reaches `instance Show Name`, which has no `AbbrevName` case
+/// (`lib/term/src/Term/LTerm.hs:236-239`, see
+/// [`crate::graph::web_utils_abbrev`]).  GHC's message for a partial function
+/// is the defining clauses' source span, and it carries a trailing newline.
+const ABBREV_NAME_SHOW_FAILURE: &str =
+    "src/Term/LTerm.hs:(236,3)-(239,49): Non-exhaustive patterns in function show\n";
+
+/// Where the `thyPathSystem` a route dispatches through sits in
+/// `src/Web/Theory.hs`, as `LINE:COLUMN` — the CallStacks the raised errors
+/// carry name the exact call, so each route reports its own copy.
+///
+/// The three copies are `graphJsonThyPath`'s (`/json`), `imgThyPath`'s
+/// (`/graph`) and `dotGraphString`'s (`/interactive-graph-def`); within each,
+/// `cases !! (i-1) !! (j-1)` supplies the two `!!` sites and the catch-all
+/// clause the `error` site.
+struct ThyPathSystemSites {
+    /// The `cases !! (i-1)` call — the source index.
+    source_index: &'static str,
+    /// The `… !! (j-1)` call on the same line — the case index.
+    case_index: &'static str,
+    /// The `error "Unhandled theory path. This is a bug."` clause.
+    unhandled: &'static str,
+}
+
+/// `graphJsonThyPath` (`src/Web/Theory.hs:1316,1320`).
+const JSON_SITES: ThyPathSystemSites = ThyPathSystemSites {
+    source_index: "1320:108",
+    case_index: "1320:117",
+    unhandled: "1316:31",
+};
+
+/// `imgThyPath` (`src/Web/Theory.hs:1414,1420`).
+const GRAPH_SITES: ThyPathSystemSites = ThyPathSystemSites {
+    source_index: "1420:38",
+    case_index: "1420:47",
+    unhandled: "1414:51",
+};
+
+/// `dotGraphString` (`src/Web/Theory.hs:2321,2327`).
+const INTERACTIVE_DOT_SITES: ThyPathSystemSites = ThyPathSystemSites {
+    source_index: "2327:38",
+    case_index: "2327:47",
+    unhandled: "2321:51",
+};
+
+/// The `error` `thyPathSystem`'s catch-all clause raises for a theory path that
+/// is neither a proof nor a source case, as GHC renders it into Yesod's error
+/// page.  `site` is the raising clause (see [`ThyPathSystemSites`]).
+fn unhandled_theory_path(site: &str) -> String {
+    format!(
+        "Unhandled theory path. This is a bug.\nCallStack (from HasCallStack):\n  \
+         error, called at src/Web/Theory.hs:{site} in main:Web.Theory"
+    )
+}
+
+/// The `error` GHC's `!!` raises for an out-of-range index (`negIndex` /
+/// `tooLarge`, `libraries/base/GHC/List.hs:1366-1376`), as Yesod's error page
+/// renders it.
+///
+/// `one_based` is the index as it appears in the URL — signed, as
+/// `parseCases`'s `safeRead` reads it — so HS's `n = one_based - 1` is negative
+/// exactly when it is at most 0; `site` is the failing `!!` (see
+/// [`ThyPathSystemSites`]).
+fn bang_bang_error(one_based: i64, site: &str) -> String {
+    if one_based <= 0 {
+        format!(
+            "Prelude.!!: negative index\nCallStack (from HasCallStack):\n  \
+             error, called at libraries/base/GHC/List.hs:1369:12 in base:GHC.List\n  \
+             negIndex, called at libraries/base/GHC/List.hs:1373:17 in base:GHC.List\n  \
+             !!, called at src/Web/Theory.hs:{site} in main:Web.Theory"
+        )
+    } else {
+        format!(
+            "Prelude.!!: index too large\nCallStack (from HasCallStack):\n  \
+             error, called at libraries/base/GHC/List.hs:1366:14 in base:GHC.List\n  \
+             tooLarge, called at libraries/base/GHC/List.hs:1376:50 in base:GHC.List\n  \
+             !!, called at src/Web/Theory.hs:{site} in main:Web.Theory"
+        )
+    }
+}
+
+/// HS `casesSystem k i j`: the `(i-1, j-1)` case of the `k` sources, or the
+/// `error` its `!!` raises — the source index is indexed first, so an
+/// out-of-range `i` is reported even when `j` is out of range too.
+fn source_case_system(
+    entry: &crate::state::TheoryEntry,
+    kind: &path_parse::SourceKind,
+    src_idx: i64,
+    case_idx: i64,
+    sites: &ThyPathSystemSites,
+) -> Result<tamarin_theory::constraint::system::System, String> {
+    let want_refined = matches!(kind, path_parse::SourceKind::Refined);
+    let sources = theory_html::compute_source_lists(entry, want_refined);
+    let Some((_, cases)) = src_idx
+        .checked_sub(1)
+        .and_then(|i| usize::try_from(i).ok())
+        .and_then(|i| sources.get(i))
+    else {
+        return Err(bang_bang_error(src_idx, sites.source_index));
+    };
+    let Some((_, sys)) = case_idx
+        .checked_sub(1)
+        .and_then(|j| usize::try_from(j).ok())
+        .and_then(|j| cases.get(j))
+    else {
+        return Err(bang_bang_error(case_idx, sites.case_index));
+    };
+    Ok(sys.clone())
+}
+
+/// HS `thyPathSystem`, the system dispatch the two dot routes share
+/// (`imgThyPath` `src/Web/Theory.hs:1412-1414`, `dotGraphString` `:2319-2321`):
+///
+///   - `TheorySource k i j` — the `casesSystem` case, or its `!!` error;
+///   - `TheoryProof lemma path` — the sub-proof's system, `Nothing` when the
+///     path does not resolve (both handlers answer that with `notFound`);
+///   - anything else — the catch-all `error`.
+fn dot_path_system(
+    state: &AppState,
+    idx: usize,
+    path: &path_parse::TheoryPath,
+    sites: &ThyPathSystemSites,
+) -> Result<Option<tamarin_theory::constraint::system::System>, String> {
+    match path {
+        path_parse::TheoryPath::Source {
+            kind,
+            src_idx,
+            case_idx,
+        } => {
+            // The source cases live on the materialised proof state.
+            materialise_proof_state_if_needed(state, idx, path);
+            let Some(entry) = state.store.get(idx) else {
+                return Ok(None);
+            };
+            source_case_system(&entry, kind, *src_idx, *case_idx, sites).map(Some)
+        }
+        path_parse::TheoryPath::Proof { .. } => Ok(resolve_system_for_path(state, idx, path)),
+        _ => Err(unhandled_theory_path(sites.unhandled)),
+    }
 }
 
 /// `GET /thy/trace/<idx>/proof-step/<lemma>/<path...>/<method>` —
@@ -1763,7 +1890,7 @@ pub async fn delete_step(
     };
     // Unparseable path → routing-level 404 (see `parse_path`).
     let Some(path) = parse_path(&raw_path) else {
-        return not_found_response();
+        return not_found();
     };
     match &path {
         // Haskell `removeLemma`-branch.

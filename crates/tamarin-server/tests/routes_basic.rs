@@ -528,6 +528,125 @@ async fn test_overview_with_missing_idx_returns_404_html() {
 }
 
 // ---------------------------------------------------------------------
+// Yesod's Not Found page
+// ---------------------------------------------------------------------
+
+/// Every `notFound` carries the same page — the `defaultLayout` frame around
+/// `<h1>Not Found</h1>` and the request's raw path — whatever raised it:
+/// an unknown theory index, a theory path `parseTheoryPath` rejects, or a URL
+/// matching no route at all.  Byte-for-byte the captured Haskell responses.
+#[tokio::test]
+async fn test_not_found_page_matches_haskell() {
+    let s = start_server_with_theory("issue193.spthy").await;
+    for (path, capture) in [
+        ("/thy/trace/99/overview/help", "missing_idx_overview.html"),
+        ("/thy/trace/1/json/main", "not_found_theory_path.html"),
+        ("/nonexistent", "not_found_unknown_route.html"),
+    ] {
+        let res = s.client.get(s.url(path)).send().await.expect("send");
+        assert_eq!(res.status(), 404, "{path} must be a 404");
+        assert_eq!(
+            content_type(&res),
+            "text/html; charset=utf-8",
+            "{path} must carry the Not Found page's content type"
+        );
+        assert_eq!(
+            res.text().await.expect("text"),
+            haskell_capture(capture),
+            "{path}"
+        );
+    }
+}
+
+/// The path is spliced in by hamlet's `#{}`, so its HTML metacharacters are
+/// escaped; it is the RAW path — percent-encoding intact (a `%3C` stays a
+/// `%3C`, it is not decoded and then escaped), query string dropped.
+#[tokio::test]
+async fn test_not_found_page_escapes_the_request_path() {
+    let s = start_server_with_theory("issue193.spthy").await;
+    let res = s
+        .client
+        .get(s.url("/a&b'c%3Cd"))
+        .send()
+        .await
+        .expect("send");
+    assert_eq!(res.status(), 404);
+    assert_eq!(
+        res.text().await.expect("text"),
+        haskell_capture("not_found_escaped_path.html")
+    );
+
+    // Percent-encoded bytes stay encoded, and `?…` is not part of the path.
+    let res = s
+        .client
+        .get(s.url("/caf%C3%A9?q=1"))
+        .send()
+        .await
+        .expect("send");
+    assert_eq!(res.status(), 404);
+    assert!(
+        res.text().await.expect("text").contains("<p>/caf%C3%A9</p>"),
+        "the raw path is echoed undecoded, without the query string"
+    );
+}
+
+/// The theory-index route piece is `#Int` (`src/Web/Types.hs:580-616`): a
+/// piece Yesod's `PathPiece Int` cannot read — trailing junk, an over-long
+/// literal — makes the route not match, and a piece that reads but names no
+/// live theory (a negative one, say) is the handlers' own miss.  All of them
+/// carry the same Not Found page; none is a path-extractor 400.
+#[tokio::test]
+async fn test_unusable_theory_index_is_not_found() {
+    let s = start_server_with_theory("issue193.spthy").await;
+    for (path, capture) in [
+        ("/thy/trace/-1/overview/help", "not_found_negative_idx.html"),
+        ("/thy/trace/1x/overview/help", "not_found_unparsed_idx.html"),
+        (
+            "/thy/trace/99999999999999999999/overview/help",
+            "not_found_huge_idx.html",
+        ),
+    ] {
+        let res = s.client.get(s.url(path)).send().await.expect("send");
+        assert_eq!(res.status(), 404, "{path} must be a 404");
+        assert_eq!(
+            content_type(&res),
+            "text/html; charset=utf-8",
+            "{path} must carry the Not Found page's content type"
+        );
+        assert_eq!(
+            res.text().await.expect("text"),
+            haskell_capture(capture),
+            "{path}"
+        );
+    }
+    // `01` and `+1` are theory 1 — `PathPiece Int` reads both.
+    for path in ["/thy/trace/01/overview/help", "/thy/trace/+1/overview/help"] {
+        let res = s.client.get(s.url(path)).send().await.expect("send");
+        assert_eq!(res.status(), 200, "{path} must resolve to theory 1");
+    }
+}
+
+/// `/static` is wai-app-static in HS, a separate WAI app whose miss never
+/// reaches Yesod's error handler: a bare `File not found`, `text/plain` with
+/// no charset.
+#[tokio::test]
+async fn test_missing_static_asset_matches_haskell() {
+    let s = start_server_with_theory("issue193.spthy").await;
+    let res = s
+        .client
+        .get(s.url("/static/js/does-not-exist.js"))
+        .send()
+        .await
+        .expect("send");
+    assert_eq!(res.status(), 404);
+    assert_eq!(content_type(&res), "text/plain");
+    assert_eq!(
+        res.text().await.expect("text"),
+        haskell_capture("static_not_found.txt")
+    );
+}
+
+// ---------------------------------------------------------------------
 // /source, /message, /download
 // ---------------------------------------------------------------------
 

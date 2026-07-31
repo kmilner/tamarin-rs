@@ -88,6 +88,28 @@ pub struct TheoryEntry {
     pub proof_state: Option<Arc<ProofState>>,
 }
 
+impl TheoryEntry {
+    /// Install this theory's user-declared function-symbol sets into the
+    /// calling thread's thread-locals, returning an RAII guard that restores
+    /// the previous values on drop.
+    ///
+    /// Request handlers run on axum worker threads, whose sets start EMPTY;
+    /// the renderers they reach resolve a declared `[AC]` / nullary / unary
+    /// symbol through those thread-locals (`elaborate::is_user_ac_fun` in
+    /// `canonicalize_ac_in_pterm`, `term_to_lnterm`, `term_to_gterm`).  An
+    /// unset `[AC]` symbol prints prefix (`add(x, z)`) instead of the infix
+    /// form HS's `prettyTerm` emits (`(x add z)`, Term/Term.hs:305).
+    ///
+    /// Uses the [`ProofState`]'s cached sets when the proof state is built,
+    /// and re-collects them from the parser theory otherwise.
+    pub fn install_user_funs(&self) -> tamarin_theory::elaborate::UserFunsForTheoryGuard {
+        match &self.proof_state {
+            Some(ps) => ps.install_user_funs(),
+            None => tamarin_theory::elaborate::set_user_funs_for_theory(&self.parser_theory),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum TheoryOrigin {
     /// Loaded from a path on disk.

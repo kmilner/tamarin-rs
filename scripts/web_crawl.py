@@ -143,10 +143,18 @@ def main():
 
     # 2. static routes (overview/help already recorded in step 1)
     for r in ["source", "message", "main/rules", "main/help",
-              "main/message", "main/tactic",
-              "main/cases/raw/0/0", "main/cases/refined/0/0",
-              "json/cases/raw/0/0", "json/cases/refined/0/0"]:
+              "main/message", "main/tactic"]:
         record(f"/thy/trace/{idx}/{r}")
+
+    # Source cases, on every route that renders them: the sources pane, the
+    # JSON graph and the two dot routes.  `0/0` is the index the left-pane nav
+    # link carries (both backends index off the front of the case list there,
+    # which the graph routes report as a server error); `1/1` is the first real
+    # case, which they draw.
+    for route in ["main", "json", "graph", "interactive-graph-def"]:
+        for kind in ["raw", "refined"]:
+            for case in ["0/0", "1/1"]:
+                record(f"/thy/trace/{idx}/{route}/cases/{kind}/{case}")
 
     # per-lemma root main + lemma views + graph at root
     for L in lemmas:

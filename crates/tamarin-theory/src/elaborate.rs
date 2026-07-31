@@ -1874,18 +1874,20 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                     // breaking Maude unification on multiset equations (e.g.
                     // the `1+x+z` → false simplification chain for
                     // `counters_linear_order`).
-                    if let AcSym::AcFct(s) = ac {
-                        // User-defined AC symbol: an n-ary application
-                        // round-trips through the parser (`naryOpApp`
-                        // accepts any arity for AC symbols).
-                        p::Term::App(String::from_utf8_lossy(s.name).into_owned(), parser_args)
-                    } else if parser_args.len() >= 2 {
+                    if parser_args.len() >= 2 {
                         let op = match ac {
                             AcSym::Mult => p::BinOp::Mult,
                             AcSym::Union => p::BinOp::Union,
                             AcSym::Xor => p::BinOp::Xor,
                             AcSym::NatPlus => p::BinOp::NatPlus,
-                            AcSym::AcFct(_) => unreachable!("handled above"),
+                            // A user-declared `[AC]` symbol is infix in HS's
+                            // `prettyTerm` as well (Term/Term.hs:305:
+                            // `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")"
+                            // ts`), so it round-trips through the same parser
+                            // `BinOp` node as the builtin AC operators.
+                            AcSym::AcFct(s) => p::BinOp::AcFct(tamarin_term::intern::intern_str(
+                                &String::from_utf8_lossy(s.name),
+                            )),
                         };
                         // Left-fold: a parser BinOp is strictly arity-2,
                         // so fold left-to-right when more than 2 args.
@@ -1897,6 +1899,13 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                             acc = p::Term::BinOp(op, Box::new(acc), Box::new(next));
                         }
                         acc
+                    } else if let AcSym::AcFct(s) = ac {
+                        // HS `prettyTerm` renders a NULLARY user-AC symbol as
+                        // its bare name (Term/Term.hs:304), and `fAppAC`
+                        // collapses a one-element operand list to that operand
+                        // (Term/Term/Raw.hs:118-122) — neither shape carries an
+                        // infix operator, so both stay a named application.
+                        p::Term::App(String::from_utf8_lossy(s.name).into_owned(), parser_args)
                     } else {
                         // Defensive: 0- or 1-arg AC term shouldn't occur
                         // (AC operators are arity-2), but emit a
@@ -1946,7 +1955,8 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
 }
 
 /// AC-canonicalise a parser-AST term: for every `BinOp(op, l, r)` where op
-/// is AC (Mult/Union/Xor/NatPlus), flatten the chain into the full
+/// is AC (Mult/Union/Xor/NatPlus, or a user-declared `[AC]` symbol),
+/// flatten the chain into the full
 /// multiset, sort it (via the existing `cmp_term` for GTerm — we convert
 /// through GTerm transiently), then re-fold right-leaning so the
 /// canonical form matches HS's flat-sorted `FApp (AC op) args`.
@@ -1971,7 +1981,10 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
 pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
     use p::BinOp;
     fn is_ac(op: BinOp) -> bool {
-        matches!(op, BinOp::Mult | BinOp::Union | BinOp::Xor | BinOp::NatPlus)
+        matches!(
+            op,
+            BinOp::Mult | BinOp::Union | BinOp::Xor | BinOp::NatPlus | BinOp::AcFct(_)
+        )
     }
     fn flatten(op: BinOp, t: &p::Term, out: &mut Vec<p::Term>) {
         match t {
@@ -1981,6 +1994,20 @@ pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
             }
             _ => out.push(t.clone()),
         }
+    }
+    /// Sort a flattened AC operand list and re-fold it right-leaning into
+    /// `BinOp(op, x_0, BinOp(op, x_1, ...))` — the parser-AST spelling of
+    /// HS's flat, sorted `FApp (AC op) args` (`fAppAC`,
+    /// Term/Term/Raw.hs:118-122).  A one-element list collapses to that
+    /// element, mirroring `fAppAC _ [a] = a`.
+    fn sort_and_fold(op: BinOp, mut flat: Vec<p::Term>) -> p::Term {
+        flat.sort_by(cmp_pterm);
+        let mut iter = flat.into_iter().rev();
+        let mut acc = iter.next().expect("AC chain has at least one element");
+        for prev in iter {
+            acc = p::Term::BinOp(op, Box::new(prev), Box::new(acc));
+        }
+        acc
     }
     fn cmp_pterm(a: &p::Term, b: &p::Term) -> std::cmp::Ordering {
         // Convert to GTerm transiently for the canonical `cmp_term`
@@ -2011,6 +2038,20 @@ pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
             };
             p::Term::App(n.clone(), vec![first, second])
         }
+        // A user-declared `[AC]` symbol written in PREFIX form.  HS's
+        // `naryOpApp` builds `fAppAC (ACfct …) ts` for it whatever the
+        // written arity (Theory/Text/Parser/Term.hs:88-105), so the operands
+        // are flattened and sorted into the same AC node the infix spelling
+        // yields — and `prettyTerm` then renders that node infix
+        // (Term/Term.hs:305).
+        p::Term::App(n, args) if !args.is_empty() && is_user_ac_fun(n.as_str()) => {
+            let op = BinOp::AcFct(tamarin_term::intern::intern_str(n));
+            let mut flat: Vec<p::Term> = Vec::new();
+            for a in args {
+                flatten(op, &canonicalize_ac_in_pterm(a), &mut flat);
+            }
+            sort_and_fold(op, flat)
+        }
         p::Term::App(n, args) => p::Term::App(
             n.clone(),
             args.iter().map(canonicalize_ac_in_pterm).collect(),
@@ -2036,15 +2077,7 @@ pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
             let mut flat: Vec<p::Term> = Vec::new();
             flatten(*op, &l2, &mut flat);
             flatten(*op, &r2, &mut flat);
-            flat.sort_by(cmp_pterm);
-            // Right-fold into `BinOp(op, x_0, BinOp(op, x_1, ...))`.
-            let mut iter = flat.into_iter().rev();
-            let last = iter.next().expect("AC chain has at least one element");
-            let mut acc = last;
-            for prev in iter {
-                acc = p::Term::BinOp(*op, Box::new(prev), Box::new(acc));
-            }
-            acc
+            sort_and_fold(*op, flat)
         }
     }
 }

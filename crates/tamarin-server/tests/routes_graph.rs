@@ -52,20 +52,35 @@ async fn intdot_returns_html_shell() {
     );
 }
 
+/// Both dot routes dispatch through a `thyPathSystem` that handles only
+/// `TheorySource` and `TheoryProof`; help / message / rules / lemma hit its
+/// catch-all `error "Unhandled theory path. This is a bug."` — a 500, not a
+/// 404 — and each route's copy of the clause is named in the CallStack
+/// (`imgThyPath` at `src/Web/Theory.hs:1414`, `dotGraphString` at `:2321`).
 #[tokio::test]
-async fn graph_for_help_returns_not_found() {
-    // For paths without an associated system (help / message / rules),
-    // the graph route returns 404 — matching Haskell `getTheoryGraphR`,
-    // which returns `notFound` when `imgThyPath` yields `Nothing`
-    // (`src/Web/Handler.hs`).  There is no placeholder SVG.
+async fn dot_routes_unhandled_path_is_internal_error() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/graph/help"))
-        .send()
-        .await
-        .expect("send");
-    assert_eq!(res.status(), 404);
+    for (path, capture) in [
+        ("/thy/trace/1/graph/help", "graph_unhandled_path.html"),
+        ("/thy/trace/1/graph/rules", "graph_unhandled_path.html"),
+        ("/thy/trace/1/graph/lemma/debug", "graph_unhandled_path.html"),
+        (
+            "/thy/trace/1/interactive-graph-def/rules",
+            "igd_unhandled_path.html",
+        ),
+        (
+            "/thy/trace/1/interactive-graph-def/lemma/debug",
+            "igd_unhandled_path.html",
+        ),
+    ] {
+        let res = s.client.get(s.url(path)).send().await.expect("send");
+        assert_eq!(res.status(), 500, "{path} must be a 500");
+        assert_eq!(
+            res.text().await.expect("text"),
+            haskell_capture(capture),
+            "{path}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -73,13 +88,141 @@ async fn interactive_graph_def_returns_dot() {
     let s = start_server_with_theory("issue193.spthy").await;
     let res = s
         .client
-        .get(s.url("/thy/trace/1/interactive-graph-def/proof/debug/_"))
+        .get(s.url("/thy/trace/1/interactive-graph-def/proof/debug"))
         .send()
         .await
         .expect("send");
     assert_eq!(res.status(), 200);
     let body = res.text().await.expect("text");
     assert!(body.contains("digraph"));
+
+    // A proof path that does not resolve is `dotGraphString`'s `Nothing`,
+    // which `getTheoryInteractiveGraphR` (`src/Web/Handler.hs:1464-1470`)
+    // answers with `notFound`.
+    let res = s
+        .client
+        .get(s.url("/thy/trace/1/interactive-graph-def/proof/debug/_"))
+        .send()
+        .await
+        .expect("send");
+    assert_eq!(res.status(), 404);
+}
+
+/// The dot labels of a graph, port anchors and whitespace dropped.
+///
+/// The two dot emitters serialise the same graph differently — `D.showDot`
+/// quotes every attribute value, names nodes `n<k>` and gives every record
+/// field a port, while the port's emitter writes bare values, names nodes after
+/// the node id and ports only the premise/conclusion fields — which is what the
+/// web-parity gate's dot canonicalisation (`scripts/web_normalize.py`, graph
+/// compared by label rather than by serialisation) exists to see past.  What
+/// must agree is the graph drawn: the labels, in order.
+fn dot_label_texts(dot: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = dot;
+    while let Some(pos) = rest.find("label=") {
+        rest = &rest[pos + "label=".len()..];
+        let value = match rest.strip_prefix('"') {
+            Some(inner) => {
+                let end = inner.find('"').unwrap_or(inner.len());
+                let (value, tail) = inner.split_at(end);
+                rest = tail;
+                value
+            }
+            None => {
+                let end = rest.find([',', ']', ';', '\n']).unwrap_or(rest.len());
+                let (value, tail) = rest.split_at(end);
+                rest = tail;
+                value
+            }
+        };
+        let mut cleaned = String::new();
+        let mut in_port = false;
+        for ch in value.chars() {
+            match ch {
+                '<' => in_port = true,
+                '>' => in_port = false,
+                _ if in_port || ch.is_whitespace() => {}
+                _ => cleaned.push(ch),
+            }
+        }
+        out.push(cleaned);
+    }
+    out
+}
+
+/// `thyPathSystem`'s `TheorySource` arm draws the `(i-1, j-1)` case, so both
+/// dot routes serve a source case as readily as a proof node: the same graph
+/// the oracle draws, for both source kinds.
+#[tokio::test]
+async fn interactive_graph_def_renders_source_cases() {
+    let s = start_server_with_theory("issue193.spthy").await;
+    for (path, capture) in [
+        (
+            "/thy/trace/1/interactive-graph-def/cases/refined/1/1",
+            "igd_cases_refined.dot",
+        ),
+        (
+            "/thy/trace/1/interactive-graph-def/cases/raw/1/1",
+            "igd_cases_raw.dot",
+        ),
+    ] {
+        let res = s.client.get(s.url(path)).send().await.expect("send");
+        assert_eq!(res.status(), 200, "{path} must be a 200");
+        let body = res.text().await.expect("text");
+        let expected = haskell_capture(capture);
+        assert_eq!(
+            dot_label_texts(&body),
+            dot_label_texts(&expected),
+            "{path} must draw the oracle's graph; got:\n{body}"
+        );
+        assert!(
+            !dot_label_texts(&body).is_empty(),
+            "{path} must draw a non-empty graph"
+        );
+    }
+}
+
+/// The `!!` on the source cases raises through the dot routes too, from each
+/// route's own call site (`src/Web/Theory.hs:1420` for `/graph`, `:2327` for
+/// `/interactive-graph-def`), source index first.
+#[tokio::test]
+async fn dot_routes_out_of_range_case_is_internal_error() {
+    let s = start_server_with_theory("issue193.spthy").await;
+    for (path, capture) in [
+        (
+            "/thy/trace/1/graph/cases/refined/0/0",
+            "graph_cases_neg_index.html",
+        ),
+        (
+            "/thy/trace/1/graph/cases/refined/-1/1",
+            "graph_cases_neg_index.html",
+        ),
+        (
+            "/thy/trace/1/graph/cases/refined/1/9",
+            "graph_cases_too_large.html",
+        ),
+        (
+            "/thy/trace/1/interactive-graph-def/cases/refined/0/0",
+            "igd_cases_neg_index.html",
+        ),
+        (
+            "/thy/trace/1/interactive-graph-def/cases/refined/-1/1",
+            "igd_cases_neg_index.html",
+        ),
+        (
+            "/thy/trace/1/interactive-graph-def/cases/refined/1/9",
+            "igd_cases_too_large.html",
+        ),
+    ] {
+        let res = s.client.get(s.url(path)).send().await.expect("send");
+        assert_eq!(res.status(), 500, "{path} must be a 500");
+        assert_eq!(
+            res.text().await.expect("text"),
+            haskell_capture(capture),
+            "{path}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -134,20 +277,76 @@ async fn graph_json_unresolvable_proof_path_is_empty_body() {
 async fn graph_json_unhandled_path_is_internal_error() {
     // `graphJsonThyPath` handles only `TheorySource` / `TheoryProof`;
     // everything else hits `error "Unhandled theory path. This is a bug."`
-    // (`src/Web/Theory.hs:1316`), which Yesod reports as 500.
+    // (`src/Web/Theory.hs:1316`), which Yesod renders as its 500 page — the
+    // `defaultLayout` frame around `<h1>Internal Server Error</h1>` and the
+    // exception text, byte-for-byte the captured Haskell response.
     let s = start_server_with_theory("issue193.spthy").await;
+    let expected = haskell_capture("json_rules.html");
     for path in ["/thy/trace/1/json/rules", "/thy/trace/1/json/lemma/debug"] {
         let res = s.client.get(s.url(path)).send().await.expect("send");
         assert_eq!(res.status(), 500, "{path} must be a 500");
+        assert_eq!(
+            res.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
+            Some("text/html; charset=utf-8"),
+            "{path} must carry the error page's content type"
+        );
+        assert_eq!(res.text().await.expect("text"), expected, "{path}");
     }
-    // An out-of-range case index is HS `!!` raising `index too large`.
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/json/cases/refined/9/9"))
-        .send()
-        .await
-        .expect("send");
-    assert_eq!(res.status(), 500);
+}
+
+#[tokio::test]
+async fn graph_json_out_of_range_source_index_is_internal_error() {
+    // `casesCode`'s `cases !! (i-1) !! (j-1)` (`src/Web/Theory.hs:1320`): a
+    // path index of 0 makes HS's `i-1` negative (`!!`'s `negIndex`), a
+    // past-the-end one raises its `tooLarge`, and the CallStack in the error
+    // page names the failing `!!`.
+    //
+    // `parseCases` reads both indices with `safeRead` at `ReadS Int`
+    // (`src/Web/Types.hs:443`), so a NEGATIVE index parses too and lands on
+    // the same `negIndex` — the message names the `!!`, never the index, so
+    // `-1/1` and `0/0` carry the very same page.
+    let s = start_server_with_theory("issue193.spthy").await;
+    for (path, capture) in [
+        (
+            "/thy/trace/1/json/cases/refined/0/0",
+            "json_cases_neg_index.html",
+        ),
+        (
+            "/thy/trace/1/json/cases/refined/-1/1",
+            "json_cases_neg_index.html",
+        ),
+        (
+            "/thy/trace/1/json/cases/refined/-1/-1",
+            "json_cases_neg_index.html",
+        ),
+        (
+            // The source index resolves, so this is the SECOND `!!` failing —
+            // a different call site, hence a different CallStack.
+            "/thy/trace/1/json/cases/refined/1/-1",
+            "json_cases_neg_case_index.html",
+        ),
+        (
+            "/thy/trace/1/json/cases/refined/9/9",
+            "json_cases_too_large.html",
+        ),
+    ] {
+        let res = s.client.get(s.url(path)).send().await.expect("send");
+        assert_eq!(res.status(), 500, "{path} must be a 500");
+        assert_eq!(
+            res.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
+            Some("text/html; charset=utf-8"),
+            "{path} must carry the error page's content type"
+        );
+        assert_eq!(
+            res.text().await.expect("text"),
+            haskell_capture(capture),
+            "{path}"
+        );
+    }
 }
 
 #[tokio::test]

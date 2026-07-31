@@ -63,10 +63,12 @@ async fn test_intdot_returns_html_shell() {
 
 #[tokio::test]
 async fn test_graph_returns_image_or_dot() {
+    // A proof node — the paths `thyPathSystem` draws.  A lemma / help / rules
+    // path is its catch-all `error` instead (see `routes_graph.rs`).
     let s = start_server_with_theory("issue193.spthy").await;
     let res = s
         .client
-        .get(s.url("/thy/trace/1/graph/lemma/debug"))
+        .get(s.url("/thy/trace/1/graph/proof/debug"))
         .send()
         .await
         .expect("send");
@@ -89,10 +91,11 @@ async fn test_graph_returns_image_or_dot() {
 
 #[tokio::test]
 async fn test_interactive_graph_def_returns_dot_text() {
+    // As above: a proof node is what this route draws.
     let s = start_server_with_theory("issue193.spthy").await;
     let res = s
         .client
-        .get(s.url("/thy/trace/1/interactive-graph-def/lemma/debug"))
+        .get(s.url("/thy/trace/1/interactive-graph-def/proof/debug"))
         .send()
         .await
         .expect("send");

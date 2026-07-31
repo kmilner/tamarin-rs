@@ -279,14 +279,18 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
 ///   where hnd = L.get sigmMaudeHandle sig
 /// ```
 ///
-/// And `nf' = nfViaHaskell` (Norm.hs:130-131) — a PURE structural
-/// NF check that walks the term tree against the reducibility
-/// patterns in Norm.hs:60-99.  This is NOT a Maude-driven check;
-/// it's pattern-based on the signature's reducibility shape.
+/// And `nf' = nfViaHaskell` (Norm.hs:130-131) — a structural NF check
+/// that walks the term tree against the reducibility patterns in
+/// Norm.hs:60-99 (NOT full Maude normalisation: no `reduce`, no AC
+/// re-canonicalisation).  It runs in the `WithMaude` reader because its
+/// `struleApplicable` arm matches subterm-rule LHSes via
+/// `solveMatchLNTerm`, which needs Maude AC matching for rules whose
+/// LHS contains an Ac-/C-headed subterm (user `[AC]` equations); the
+/// port mirrors that with `nf_via_haskell_maude`.
 ///
 /// Walks every node's premise, conclusion, action facts and
 /// `new_vars`; for each subterm whose head could be reducible,
-/// asks `nf_via_haskell` whether the term is in normal form.  If
+/// asks the NF check whether the term is in normal form.  If
 /// any term is not in NF, the system is contradictory (we only
 /// ever construct normal-form-respecting traces).
 ///
@@ -296,14 +300,12 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
 /// destructors come from intruder rules, not subterm rewriting),
 /// no term can be in non-normal form structurally, so we skip
 /// the per-term check.
-///
-/// `nf_via_haskell` ports `nf'` (Norm.hs:130-131): a pure structural
-/// NF check, not the Maude-driven `nfViaMaude`.
 fn has_non_normal_terms(ctx: &ProofContext, sys: &System) -> bool {
-    // NF check is cheap (pure structural walk) but we call this
-    // from `is_finished` on every expand step, so the early-exit
-    // still helps for pair-only theories with no subterm rewrite
-    // rules.
+    // The NF check is cheap for AC-free-LHS signatures (pure structural
+    // walk; Maude is consulted only for Ac-/C-containing st-rule LHSes)
+    // but we call this from `is_finished` on every expand step, so the
+    // early-exit still helps for pair-only theories with no subterm
+    // rewrite rules.
     let sig = ctx.maude.maude_sig();
     if sig.reducible_fun_syms.is_empty() {
         return false;
@@ -312,15 +314,18 @@ fn has_non_normal_terms(ctx: &ProofContext, sys: &System) -> bool {
 
     // Short-circuiting structural walk: the moment a candidate subterm — a
     // variable or a reducible-headed `App` (the `_` arm of
-    // `maybe_not_nf_subterms`) — fails `nf_via_haskell`, the system has a
+    // `maybe_not_nf_subterms`) — fails the NF check, the system has a
     // non-normal term.  Constants are in NF; irreducible-headed apps recurse
     // into their args.  This is the boolean OR of `maybeNonNormalTerms` ∘
     // `maybeNotNfSubterms` over `nf'` (Norm.hs:130-131, see line 131), but without building the
     // `BTreeSet` of every candidate: the dedup is irrelevant to an OR, and
-    // `nf_via_haskell` is a side-effect-free structural check, so visiting a
-    // subterm more than once cannot change the verdict.
+    // the NF check is a side-effect-free predicate of the term, so visiting a
+    // subterm more than once cannot change the verdict.  The check runs
+    // through `nf_via_haskell_maude` — HS's `nf'` runs in the `WithMaude`
+    // reader, and the handle is what lets `struleApplicable` AC-match the
+    // user-`[AC]` cancellation equations (`xorr(x, x) = zeroo`).
     fn any_non_nf(
-        sig: &tamarin_term::maude_sig::MaudeSig,
+        maude: &tamarin_term::maude_proc::MaudeHandle,
         irreducible: &tamarin_utils::FastSet<tamarin_term::function_symbols::FunSym>,
         t: &tamarin_term::lterm::LNTerm,
     ) -> bool {
@@ -329,12 +334,12 @@ fn has_non_normal_terms(ctx: &ProofContext, sys: &System) -> bool {
         match t {
             Term::Lit(Lit::Con(_)) => false,
             // Bare variables are always in normal form (`go_nf` returns true
-            // for every `Lit`), so skip the `nf_via_haskell` call.
+            // for every `Lit`), so skip the NF-check call.
             Term::Lit(Lit::Var(_)) => false,
             Term::App(sym, args) if irreducible.contains(sym) => {
-                args.iter().any(|a| any_non_nf(sig, irreducible, a))
+                args.iter().any(|a| any_non_nf(maude, irreducible, a))
             }
-            _ => !tamarin_term::norm::nf_via_haskell(sig, t),
+            _ => !tamarin_term::norm::nf_via_haskell_maude(maude, t),
         }
     }
 
@@ -346,13 +351,13 @@ fn has_non_normal_terms(ctx: &ProofContext, sys: &System) -> bool {
             .chain(&rule.actions)
         {
             for t in f.terms.iter() {
-                if any_non_nf(&sig, irreducible, t) {
+                if any_non_nf(&ctx.maude, irreducible, t) {
                     return true;
                 }
             }
         }
         for t in &rule.new_vars {
-            if any_non_nf(&sig, irreducible, t) {
+            if any_non_nf(&ctx.maude, irreducible, t) {
                 return true;
             }
         }
@@ -2395,7 +2400,6 @@ impl SubstNfChecker {
         if base.is_empty() {
             return false;
         }
-        let sig = self.maude.maude_sig();
         let mut applied = self.applied.borrow_mut();
         let stale = match applied.as_ref() {
             Some((fs, _)) => fs != fsubst,
@@ -2454,13 +2458,17 @@ impl SubstNfChecker {
             }
             // Slow path: structural NF check (HS-faithful).  Mirrors HS
             // `nfApply subst0 t = t == t' || nf' t' \`runReader\` hnd`
-            // where `nf' = nfViaHaskell` (Norm.hs:130-131).  This is a
-            // PURE structural check, NOT `maude.reduce(t) == t`.  The
+            // where `nf' = nfViaHaskell` (Norm.hs:130-131) — run with the
+            // handle, as HS does: the st-rule arm needs Maude AC matching
+            // for rules whose LHS contains an Ac-/C-headed subterm (user
+            // `[AC]` cancellation equations; csf26-ac CRxor `splitEqs(2)`
+            // keeps 6 cases instead of HS's 2 without it).  This is still
+            // the STRUCTURAL check, NOT `maude.reduce(t) == t`.  The
             // distinction matters because Maude canonicalises AC operator
             // arguments (multiset / mult / xor / nat-plus), so
             // `mult(tid, x)` and `mult(x, tid)` are different `Eq`
             // representations but both in NF.
-            let is_nf = tamarin_term::norm::nf_via_haskell(&sig, &t_prime);
+            let is_nf = tamarin_term::norm::nf_via_haskell_maude(&self.maude, &t_prime);
             if !is_nf {
                 if tamarin_utils::env_gate!("TAM_RS_DBG_SUBST_NF") {
                     eprintln!("[rs-subst-nf] CREATES t={:?} t_prime={:?}", t, t_prime);

@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::State;
+use axum::handler::HandlerWithoutStateExt;
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use tower_http::services::ServeDir;
@@ -31,7 +32,8 @@ use crate::state::AppState;
 
 /// Build the static-files router, to be nested at `/static`.
 pub fn serve(state: Arc<AppState>) -> axum::Router<Arc<AppState>> {
-    let serve_data = ServeDir::new(&state.cfg.data_dir);
+    let serve_data =
+        ServeDir::new(&state.cfg.data_dir).not_found_service(asset_not_found.into_service());
     let mut router: axum::Router<Arc<AppState>> = axum::Router::new();
 
     if state.cfg.frontend_dist.is_some() {
@@ -80,7 +82,19 @@ async fn fallback_to_data(state: Arc<AppState>, subdir: &str, name: &str) -> Res
     if let Some(resp) = try_file(&candidate, mime).await {
         return resp;
     }
-    (StatusCode::NOT_FOUND, "static asset not found").into_response()
+    asset_not_found().await
+}
+
+/// A missing static asset.  HS serves `/static` from wai-app-static, whose miss
+/// is the bare `File not found` — `text/plain` with no charset — and never
+/// reaches Yesod's error handler, so this subtree carries no framed page.
+async fn asset_not_found() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        [(header::CONTENT_TYPE, "text/plain")],
+        "File not found",
+    )
+        .into_response()
 }
 
 async fn try_file(path: &Path, mime: &str) -> Option<Response> {

@@ -1456,13 +1456,13 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
     ChangeIndicator::Changed
 }
 
-/// Canonicalising key for implied-formula dedup: witness LVars `~mw#N → ~mw#0`,
-/// bound LVars normalised, then AC `BinOp` permutations re-sorted, then stored
-/// normal form.  This is the SINGLE source of the dedup canon — the existing/
-/// threaded canon vectors and the per-candidate site both call it, so they cannot
-/// drift out of lock-step.  Each of the three stages reuses its borrowed input
-/// when the transform is a structural no-op, so an already-canonical formula
-/// pays zero clones — the dedup only materialises (`into_owned`) a survivor.
+/// Canonicalising key for implied-formula dedup: AC `BinOp` permutations
+/// re-sorted, then stored normal form.  This is the SINGLE source of the dedup
+/// canon — the existing/threaded canon vectors and the per-candidate site both
+/// call it, so they cannot drift out of lock-step.  Both stages reuse their
+/// borrowed input when the transform is a structural no-op, so an
+/// already-canonical formula pays zero clones — the dedup only materialises
+/// (`into_owned`) a survivor.
 ///
 /// `normalize_bound_lvars` is currently an identity clone (the DeBruijn
 /// bound-var invariant already holds for formulas reaching dedup), so it is
@@ -1473,19 +1473,30 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
 /// normalises derived instances before the membership pre-check) — a raw
 /// duplicate-carrying candidate must match its normalised stored twin, or the
 /// pass re-fires it every simplifier iteration.
+///
+/// NO α-normalisation of variable idxs: HS's membership pre-check compares the
+/// (stored-normalised) instance RAW against `sFormulas`/`sSolvedFormulas`, and
+/// an implied instance is a deterministic function of (clause, matched
+/// actions) — guardedness means every opened clause var is bound by the match,
+/// so no per-call fresh mint reaches the instance.  An earlier
+/// `normalize_witness_lvars` stage here (rewriting EVERY `x`-named LVar to
+/// idx 0) over-collapsed genuinely NEW instances whose matched action terms
+/// happened to use a var named `x` — e.g. csf26-ac counter.spthy, where the
+/// diagonal IH instances over a fresh `Inc` rule instance's `x.7`/`x.10`
+/// collapsed with the iteration-1 `x`/`y.1` instances that HS keeps distinct,
+/// suppressing 3 of HS's `insertGoalStatus` ticks and shifting every later
+/// goal `nr:` annotation in the web panes (batch output was unaffected).
+/// The AC stage repairs an RS-only representation artifact
+/// (`rename_precise_system` reorders stored AC args; HS's `fAppAC` keeps
+/// them sorted), so it stays.
 fn implied_apply_canon_cow(
     f: &crate::guarded::Guarded,
 ) -> std::borrow::Cow<'_, crate::guarded::Guarded> {
     use std::borrow::Cow;
-    let f1: Cow<crate::guarded::Guarded> = match crate::guarded::normalize_witness_lvars_cow(f) {
+    let f2: Cow<crate::guarded::Guarded> = match crate::guarded::canonicalize_ac_in_guarded_cow(f) {
         None => Cow::Borrowed(f),
         Some(g) => Cow::Owned(g),
     };
-    let f2: Cow<crate::guarded::Guarded> =
-        match crate::guarded::canonicalize_ac_in_guarded_cow(f1.as_ref()) {
-            None => f1,
-            Some(g) => Cow::Owned(g),
-        };
     match crate::guarded::normalise_stored_formula_cow(f2.as_ref()) {
         None => f2,
         Some(g) => Cow::Owned(g),

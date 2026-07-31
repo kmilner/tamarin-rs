@@ -85,12 +85,14 @@ fn term_has_reducible_sym(t: &LNTerm, reducible: &crate::function_symbols::FunSi
 }
 
 /// True if `t` contains NO Ac- or C-headed application anywhere.  Backs
-/// `MaudeProcessInner::st_lhs_ac_free`: `nf_via_haskell`'s st-rule arm
-/// matches with the no-AC matcher (`solve_match_lterm_no_ac`), whose
-/// `match_raw` raises `NeedsAC` only at Ac-vs-Ac / C-vs-C positions — so
-/// the matcher is complete (never misses a match Maude would find) exactly
-/// when the PATTERN (the rule LHS) is Ac/C-free.
-fn term_ac_c_free(t: &LNTerm) -> bool {
+/// `MaudeProcessInner::st_lhs_ac_free` and `norm::go_nf`'s per-rule
+/// dispatch: `nf_via_haskell`'s pure st-rule arm matches with the no-AC
+/// matcher (`solve_match_lterm_no_ac`), whose `match_raw` raises
+/// `NeedsAC` only at Ac-vs-Ac / C-vs-C positions — so the matcher is
+/// complete (never misses a match Maude would find) exactly when the
+/// PATTERN (the rule LHS) is Ac/C-free.  Rules failing this predicate
+/// need the Maude-backed path (`norm::rule_applies_ac`).
+pub(crate) fn term_ac_c_free(t: &LNTerm) -> bool {
     use crate::function_symbols::FunSym;
     use crate::term::Term;
     match t {
