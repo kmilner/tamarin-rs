@@ -24,7 +24,6 @@ pub mod wf;
 
 pub use ast::*;
 pub use parser::{
-    parse_intruder_rules, parse_theory, parse_theory_or_diff, parse_theory_with_base, Message,
-    ParseError,
+    parse_intruder_rules, parse_theory, parse_theory_or_diff, parse_theory_with_base, ParseError,
 };
 pub use proof_tree::parse_proof_tree;

@@ -32,24 +32,47 @@ use crate::ast::*;
 use crate::lexer::{is_ident_char, Lexer, Pos};
 use crate::proof_tree::parse_proof_tree;
 
-pub struct Span {
+pub struct Location {
+    pub line: u32,
+    pub col: u32,
     pub start: usize,
     pub end: usize,
 }
 
-pub struct ParseErrorContent {
-    pub expected: Vec<String>,
-    pub found: Option<(String, Span)>,
+impl Location {
+    pub fn location_of(word: Option<&str>, pos: &Pos) -> Location {
+        Location {
+            line: pos.line,
+            col: pos.col,
+            start: pos.offset - 1,
+            end: pos.offset - 1 + word.map_or(0, |s| s.len()),
+        }
+    }
+}
+
+impl From<Pos> for Location {
+    fn from(pos: Pos) -> Self {
+        Location {
+            line: pos.line,
+            col: pos.col,
+            start: pos.offset - 1,
+            end: pos.offset,
+        }
+    }
 }
 
 pub enum ParseError {
-    ExpectedKeyword(ParseErrorContent),
-    ExpectedTheoryItem(ParseErrorContent),
-    ExpectedPunctuation(ParseErrorContent),
-    ExpectedStringLiteral(ParseErrorContent),
-    ExpectedIdentifier(ParseErrorContent),
-    ExpectedNaturalNumber(ParseErrorContent),
-    UnknownPreprocessorDirective(ParseErrorContent),
+    UnexpectedKeyword {
+        found: Option<String>,
+        expected: Vec<&'static str>,
+        at: Location,
+    },
+    ExpectedTheoryItem(),
+    ExpectedPunctuation(),
+    ExpectedStringLiteral(),
+    ExpectedIdentifier(),
+    ExpectedNaturalNumber(),
+    UnknownPreprocessorDirective(),
 }
 
 /// parsec `clean = nub . filter (not . null)` — drop empties, dedup preserving
@@ -371,62 +394,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn create_error_content(&self, expected: Vec<String>) -> ParseErrorContent {
-        let pos = self.lx.pos();
-        let found = self.lx.peek_until_ws();
-        ParseErrorContent {
-            expected: expected,
-            found: found.map(|s| {
-                let start = pos.offset - 1;
-                (
-                    s.to_string(),
-                    Span {
-                        start,
-                        end: start + s.len(),
-                    },
-                )
-            }),
-        }
-    }
-
-    fn expected_keyword_err(&self, kws: Vec<String>) -> ParseError {
-        let content = self.create_error_content(kws);
-        ParseError::ExpectedKeyword(content)
-    }
-
-    fn expected_punctuation_err(&self, puncs: Vec<String>) -> ParseError {
-        let content = self.create_error_content(puncs);
-        ParseError::ExpectedPunctuation(content)
-    }
-
-    fn unknown_preproc_err(&self, dirs: Vec<String>, found: (String, Span)) -> ParseError {
-        let content = ParseErrorContent {
-            expected: dirs,
-            found: Some(found),
-        };
-        ParseError::UnknownPreprocessorDirective(content)
-    }
-
-    fn expected_identifier_err(&self, idents: Vec<String>) -> ParseError {
-        let content = self.create_error_content(idents);
-        ParseError::ExpectedIdentifier(content)
-    }
-
-    fn expected_string_literal_err(&self, strs: Vec<String>) -> ParseError {
-        let content = self.create_error_content(strs);
-        ParseError::ExpectedStringLiteral(content)
-    }
-
-    fn expected_natural_number_err(&self, nums: Vec<String>) -> ParseError {
-        let content = self.create_error_content(nums);
-        ParseError::ExpectedNaturalNumber(content)
-    }
-
-    fn expected_theory_item_err(&self, items: Vec<String>) -> ParseError {
-        let content = self.create_error_content(items);
-        ParseError::ExpectedTheoryItem(content)
-    }
-
     fn save(&self) -> Pos {
         self.lx.pos()
     }
@@ -464,17 +431,22 @@ impl<'a> Parser<'a> {
         }
         true
     }
-    fn require_kw(&mut self, kw: &str) -> Result<(), ParseError> {
+    fn require_kw(&mut self, kw: &'static str) -> Result<(), ParseError> {
         // HS `symbol_ kw` = `void (try (T.symbol spthy kw) <?> ("\""++kw++"\""))`
         // (Token.hs:272-277): on failure, Expect is the quoted keyword.
         if self.try_kw(kw) {
             Ok(())
         } else {
-            Err(self.expected_keyword_err(vec![kw.into()]))
+            let found = self.lx.peek_until_ws();
+            Err(ParseError::UnexpectedKeyword {
+                found: found.map(|s| s.to_string()),
+                expected: vec![kw],
+                at: Location::location_of(found, &self.lx.pos()),
+            })
         }
     }
 
-    fn require_punct(&mut self, p: &str) -> Result<(), ParseError> {
+    fn require_punct(&mut self, p: &'static str) -> Result<(), ParseError> {
         self.skip_ws();
         if self.lx.eat_str(p) {
             self.skip_ws();
@@ -482,8 +454,7 @@ impl<'a> Parser<'a> {
         } else {
             // HS `symbol p` labels the failure with the quoted punctuation
             // (Token.hs:272-273).
-            let label = format!("{p}");
-            Err(self.expected_punctuation_err(vec![label]))
+            Err(self.expected_punctuation_err(vec![p]))
         }
     }
 
@@ -534,19 +505,19 @@ impl<'a> Parser<'a> {
     fn ident(&mut self) -> Result<String, ParseError> {
         self.lx
             .identifier()
-            .ok_or_else(|| self.expected_identifier_err(vec!["identifier".into()]))
+            .ok_or_else(|| self.expected_identifier_err(vec!["identifier"]))
     }
 
     fn natural(&mut self) -> Result<u64, ParseError> {
         self.lx
             .natural()
-            .ok_or_else(|| self.expected_natural_number_err(vec!["number".into()]))
+            .ok_or_else(|| self.expected_natural_number_err(vec!["number"]))
     }
 
     fn string_literal(&mut self) -> Result<String, ParseError> {
         self.lx
             .string_literal()
-            .ok_or_else(|| self.expected_string_literal_err(vec!["string literal".into()]))
+            .ok_or_else(|| self.expected_string_literal_err(vec!["string literal"]))
     }
 
     // =========================================================================
@@ -725,12 +696,7 @@ impl<'a> Parser<'a> {
 
         // No item alternative matched: reproduce parsec's merged item-position
         // error (`addItems` `asum` <* `symbol_ "end"`).
-        Err(self.expected_theory_item_err(
-            TOP_LEVEL_ITEM_EXPECTS
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
-        ))
+        Err(self.expected_theory_item_err(TOP_LEVEL_ITEM_EXPECTS))
     }
 
     // -------------------- Preprocessor --------------------
@@ -763,12 +729,7 @@ impl<'a> Parser<'a> {
                 Ok(None)
             }
             other => Err(self.unknown_preproc_err(
-                vec![
-                    "define".into(),
-                    "include".into(),
-                    "endif".into(),
-                    "else".into(),
-                ],
+                vec!["define", "include", "endif", "else"],
                 (
                     other.into(),
                     Span {
@@ -811,10 +772,10 @@ impl<'a> Parser<'a> {
     fn expand_ifdef(&mut self) -> Result<Vec<TheoryItem>, ParseError> {
         self.skip_ws();
         if !self.lx.eat_str("#") {
-            return Err(self.err("expected `#ifdef`"));
+            return Err(self.expected_keyword_err(vec!["#ifdef".into()]));
         }
         if self.lx.ascii_alpha_run() != "ifdef" {
-            return Err(self.err("expected `#ifdef`"));
+            return Err(self.expected_keyword_err(vec!["#ifdef"]));
         }
         self.skip_ws();
         let cond = self.flag_disjuncts()?;
@@ -824,7 +785,7 @@ impl<'a> Parser<'a> {
                 // Else branch text is skipped.
                 self.skip_until("#endif");
             } else if !self.try_punct("#endif") {
-                return Err(self.err("expected #endif or #else"));
+                return Err(self.expected_keyword_err(vec!["#endif", "#else"]));
             }
             Ok(items)
         } else {
@@ -836,7 +797,7 @@ impl<'a> Parser<'a> {
                     Ok(items)
                 }
                 BranchEnd::Endif => Ok(Vec::new()),
-                BranchEnd::Eof => Err(self.err("unterminated #ifdef")),
+                BranchEnd::Eof => Err(self.expected_keyword_err(vec!["#endif"])),
             }
         }
     }
