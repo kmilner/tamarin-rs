@@ -58,7 +58,11 @@ mkdir -p "$RES_DIR"
 
 # Spin Haskell up in its own work-dir so it doesn't dirty ours.
 WORKDIR="$(mktemp -d)"
-trap 'rm -rf "$WORKDIR"; pkill -P $$ -f "tamarin-prover interactive --port=${PORT}" 2>/dev/null || true' EXIT
+# BIGDIR is the second phase's work-dir (created further down); declaring it
+# here keeps the trap's `${BIGDIR:+...}` well-defined under `set -u` and
+# contributes no argument to `rm` while it is empty.
+BIGDIR=""
+trap 'rm -rf "$WORKDIR" ${BIGDIR:+"$BIGDIR"}; pkill -P $$ -f "tamarin-prover interactive --port=${PORT}" 2>/dev/null || true' EXIT
 cp "$FIXTURE" "$WORKDIR/issue193.spthy"
 
 echo "starting Haskell tamarin-prover on port $PORT ..."
