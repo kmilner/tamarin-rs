@@ -848,10 +848,10 @@ impl ProofContext {
     fn ndc_check_cache_order(rules: Vec<IntrRuleAC>) -> Vec<IntrRuleAC> {
         let (builtin_or_constr_or_ndc, checked_groups, all_subterm) =
             crate::close_rule::partition_for_ndc(rules);
-        let mut checked: Vec<IntrRuleAC> = checked_groups.into_iter().flatten().collect();
-        checked.extend(builtin_or_constr_or_ndc);
-        checked.extend(all_subterm);
-        checked
+        let mut permuted: Vec<IntrRuleAC> = checked_groups.into_iter().flatten().collect();
+        permuted.extend(builtin_or_constr_or_ndc);
+        permuted.extend(all_subterm);
+        permuted
     }
 
     /// Like [`new_with_restrictions_and_pool`] but also unions the FORCED

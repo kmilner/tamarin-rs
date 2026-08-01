@@ -451,7 +451,7 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
         // decoding the attribute block instead and deliberately diverges from
         // upstream on exactly those names.
         if !args.is_empty() && is_ac_fct_ident(ident) {
-            return crate::term::f_app_ac(AcSym::AcFct(parse_fun_ac_sym(ident)), args);
+            return crate::term::f_app_acfct(parse_fun_ac_sym(ident), args);
         }
         // C operator (em)?
         // Mirror HS `fAppC EMap args` (Maude/Parser.hs:314-369, see line 355): sort the two

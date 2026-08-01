@@ -4150,7 +4150,7 @@ fn non_silent_rule_insts_with_constrs(
     let is_destr_hs = |info: &IntrRuleACInfo| {
         matches!(
             info,
-            IntrRuleACInfo::DestrRule(_, _, _, _, _) | IntrRuleACInfo::IEquality
+            IntrRuleACInfo::DestrRule(..) | IntrRuleACInfo::IEquality
         )
     };
 
@@ -5861,7 +5861,7 @@ pub fn rule_case_name(rule: &crate::rule::RuleACInst) -> String {
                 let trimmed = s.strip_prefix('_').unwrap_or(&s);
                 format!("c_{}", trimmed)
             }
-            IntrRuleACInfo::DestrRule(name, _, _, _, _) => {
+            IntrRuleACInfo::DestrRule(name, ..) => {
                 let s = String::from_utf8_lossy(name);
                 let trimmed = s.strip_prefix('_').unwrap_or(&s);
                 format!("d_{}", trimmed)
@@ -5921,7 +5921,7 @@ pub fn rule_trace_name(rule: &crate::rule::RuleACInst) -> String {
                     crate::rule::prefix_if_reserved(&format!("c{}", s))
                 )
             }
-            IntrRuleACInfo::DestrRule(name, _, _, _, _) => {
+            IntrRuleACInfo::DestrRule(name, ..) => {
                 let s = String::from_utf8_lossy(name);
                 format!(
                     "Destr{}",

@@ -580,9 +580,9 @@ pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
             message: format!("predicate expansion failed: {}", e.message),
         });
     }
-    // Collect the user-declared unary / nullary / private / destructor
-    // function-name sets that drive `term_to_lnterm`.  Each is installed
-    // into its thread-local via an RAII guard, scoped so concurrent /
+    // Collect the user-declared unary / nullary / private / destructor / AC /
+    // NDC / NDC-diff function-name sets that drive `term_to_lnterm`.  Each is
+    // installed into its thread-local via an RAII guard, scoped so concurrent /
     // sequential elaborations on the same thread can't bleed stale state.
     let funs = collect_user_funs(&thy_clone.items);
     let _guard = UserUnaryFunsGuard::set(funs.unary);
@@ -635,7 +635,7 @@ pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
     Ok(thy)
 }
 
-/// The four user-declared function-name sets read by `term_to_lnterm`.
+/// The user-declared function-name sets read by `term_to_lnterm`.
 #[derive(Clone, Default)]
 pub struct CollectedUserFuns {
     /// Arity-1 user `functions:` names (drives the auto-tuple fold, like
@@ -921,8 +921,7 @@ pub(crate) fn is_user_ac_fun(name: &str) -> bool {
 }
 
 /// Join of the `[NDC]` and `[NDC-diff]` attributes (HS `function`'s `joinNDC`).
-fn ndc_state_of(ndc: bool, ndc_diff: bool) -> tamarin_term::function_symbols::NdcState {
-    use tamarin_term::function_symbols::NdcState;
+fn ndc_state_of(ndc: bool, ndc_diff: bool) -> NdcState {
     let a = if ndc {
         NdcState::IsNdc
     } else {
@@ -938,7 +937,7 @@ fn ndc_state_of(ndc: bool, ndc_diff: bool) -> tamarin_term::function_symbols::Nd
 
 /// The NDC state of a user-declared symbol, read from the `[NDC]` /
 /// `[NDC-diff]` name sets.
-fn user_fun_ndc(name: &str) -> tamarin_term::function_symbols::NdcState {
+fn user_fun_ndc(name: &str) -> NdcState {
     ndc_state_of(
         USER_NDC_FUNS.with(|c| c.borrow().contains(name)),
         USER_NDC_DIFF_FUNS.with(|c| c.borrow().contains(name)),

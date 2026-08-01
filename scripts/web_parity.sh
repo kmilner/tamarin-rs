@@ -44,8 +44,8 @@ PLAN_VERSION="$(python3 -c \
     "$script_dir")"
 [ -n "$PLAN_VERSION" ] || { echo "cannot read PLAN_VERSION from web_crawl.py" >&2; exit 2; }
 
-# Plan version stamped in a cached HS manifest.  An ABSENT stamp means 2: the
-# cache was regenerated in full under the v2 plan, so those manifests MUST stay
+# Plan version stamped in a cached HS manifest.  An ABSENT stamp means 2: every
+# stampless manifest in the cache is a v2 crawl, so those manifests MUST stay
 # valid; growing the plan bumps web_crawl.py's PLAN_VERSION to 3, which
 # invalidates each cached file lazily, on its next use.  A manifest that fails
 # to parse yields nothing and is likewise treated as stale.

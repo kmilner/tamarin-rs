@@ -71,8 +71,6 @@ pub async fn interactive_overview(
     Path((idx, raw_path)): Path<(usize, String)>,
 ) -> Response {
     if !state.store.contains(idx) {
-        // Haskell's `notFound` returns 404 HTML; our overview is HTML
-        // too so we match exactly.
         return not_found();
     }
     let Some(path) = parse_path(&raw_path) else {

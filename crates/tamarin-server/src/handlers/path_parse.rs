@@ -231,8 +231,8 @@ fn parse_segs(segs: &[String]) -> Option<TheoryPath> {
 
 /// Haskell `parseCases`'s `safeRead = listToMaybe . map fst . reads`
 /// (`src/Web/Types.hs:443`) at `ReadS Int`: the two case indices are SIGNED, so
-/// a negative one parses and reaches the handler, which indexes the case list
-/// with it exactly as index 0 does (see `handlers::theory::bang_bang_error`).
+/// a negative one parses and reaches the handler, where it names no case
+/// exactly as index 0 does (see `handlers::theory::source_case_system`).
 ///
 /// `reads` runs `Text.Read.Lex` over the segment and keeps whatever it did not
 /// consume, so the accepted forms are wider than a decimal parse:
@@ -367,8 +367,8 @@ mod tests {
         assert_eq!(segs, vec!["proof", "X"]);
     }
     /// `parseCases`'s `safeRead` reads `Int`, so the case indices are signed:
-    /// `cases/raw/-1/1` parses (and then raises in the handler, exactly as
-    /// `cases/raw/0/1` does).
+    /// `cases/raw/-1/1` parses (and then names no case in the handler, exactly
+    /// as `cases/raw/0/1` does).
     #[test]
     fn case_indices_are_signed() {
         assert_eq!(

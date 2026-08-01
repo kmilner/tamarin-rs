@@ -1552,7 +1552,7 @@ impl<'a> Parser<'a> {
 
     fn equations(&mut self) -> Result<TheoryItem, ParseError> {
         self.require_kw("equations")?;
-        // HS `equations` (Signature.hs:219-224): `convergent` is set only when
+        // HS `equations` (Signature.hs:234-239): `convergent` is set only when
         // the literal `[convergent]` is present (`brackets (symbol "convergent")`);
         // an empty `[]` makes the `try` block fail (convergent=False) and the
         // subsequent `symbol "equations" *> colon` then errors on the `[`. So the
@@ -1572,11 +1572,10 @@ impl<'a> Parser<'a> {
             // nat/xor/mult/exp operators (but NOT the user-defined AC operators
             // of `acterm`) — matched here by `acterm(true)`, which is what
             // `term(true)` reduces to anyway once those gates are closed.
-            // `llitNoPub`
-            // (Term.hs:53-54 = `asum [freshTerm <$> freshName, varTerm <$>
-            // msgvar]`) additionally forbids public-name literals `'foo'` and
-            // nat literals `%'n'` in operands, while still allowing fresh
-            // literals `~'n'` and all msgvar-sort variables (including `$x`
+            // `llitNoPub` (Term.hs:57-58 = `asum [freshTerm <$> freshName,
+            // varTerm <$> msgvar]`) additionally forbids public-name literals
+            // `'foo'` and nat literals `%'n'` in operands, while still allowing
+            // fresh literals `~'n'` and all msgvar-sort variables (including `$x`
             // pub-sort vars, since `msgvar = sortedLVar [Fresh,Pub,Nat,Msg]`).
             // We deliberately use the public-name-allowing `acterm(true)` here:
             // accepting `'foo'`/`%'n'` is benign parser-level leniency — such

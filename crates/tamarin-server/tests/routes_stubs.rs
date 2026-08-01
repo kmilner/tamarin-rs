@@ -35,7 +35,7 @@ fn one_key_set(k: &str) -> std::collections::BTreeSet<String> {
 // Graph routes — now LIVE (DOT pipeline).
 //
 // `intdot` returns the HS `intdotLayout` HTML shell page (a
-// `<dot-graph-viz>` pointing at `interactive-graph-def`);
+// `<dot-graph-viz>` pointing at the `json` graph route);
 // `interactive-graph-def` returns the raw DOT source; `graph` returns
 // SVG (or DOT fallback when `dot` is missing).  `intdot` is
 // system-agnostic (HS `getInteractiveDotGraphR` only does `withTheory`),

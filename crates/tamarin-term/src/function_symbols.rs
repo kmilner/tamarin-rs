@@ -160,7 +160,7 @@ impl Eq for NoEqSym {}
 // `a == b ⇒ hash(a) == hash(b)` invariant being violated).  Here both are
 // content-based — the `Eq`/`Ord` pointer fast-path only ever returns early when
 // the contents are provably equal — so the invariant holds.  The field order matches
-// Eq/Ord's (name, arity, privacy, constructability).
+// Eq/Ord's (name, arity, privacy, constructability, ndc).
 impl std::hash::Hash for NoEqSym {
     #[inline]
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {

@@ -476,7 +476,7 @@ pub fn built_in_destr_rule_incl_pair() -> [&'static [u8]; 8] {
     ]
 }
 
-fn has_builtin_suffix(name: &[u8], suffixes: &[&[u8]]) -> bool {
+pub(crate) fn has_builtin_suffix(name: &[u8], suffixes: &[&[u8]]) -> bool {
     suffixes.iter().any(|s| name.ends_with(s))
 }
 

@@ -197,7 +197,7 @@ fn clean_string(s: &str) -> String {
     out
 }
 
-/// Port of `pps` (JSON.hs:220-221) — `cleanString . render`.
+/// Port of `pps` (JSON.hs:221-222) — `cleanString . render`.
 ///
 /// HS `render` is HughesPJ's default `style` (PageMode, `lineLength = 100`,
 /// `ribbonsPerLine = 1.5` ⇒ ribbon `round (100/1.5) = 67`), so a wide fact
@@ -271,14 +271,8 @@ fn get_rule_type(ru: &RuleACInst) -> &'static str {
 /// HS `check p`, shared by `getRelationType` (JSON.hs:424-425) and `colorEdge`'s
 /// `SystemEdge` arm (JSON.hs:442-443): the TARGET premise's fact is tested
 /// first, then the SOURCE conclusion's.
-fn edge_fact_check(
-    src: &NodeConc,
-    tgt: &NodePrem,
-    rules: &NodeRules<'_>,
-    p: fn(&LNFact) -> bool,
-) -> bool {
-    resolve_node_prem_fact(tgt, rules).is_some_and(p)
-        || resolve_node_conc_fact(src, rules).is_some_and(p)
+fn edge_fact_check(prem: Option<&LNFact>, conc: Option<&LNFact>, p: fn(&LNFact) -> bool) -> bool {
+    prem.is_some_and(p) || conc.is_some_and(p)
 }
 
 /// The single classification `graphEdgeToJSONGraphEdge` (JSON.hs:457-485) needs
@@ -327,11 +321,13 @@ impl EdgeClass {
 fn classify_edge(edge: &GEdge, rules: &NodeRules<'_>) -> EdgeClass {
     match edge {
         GEdge::System(src, tgt) => {
-            if edge_fact_check(src, tgt, rules, LNFact::is_k_fact) {
+            let prem = resolve_node_prem_fact(tgt, rules);
+            let conc = resolve_node_conc_fact(src, rules);
+            if edge_fact_check(prem, conc, LNFact::is_k_fact) {
                 EdgeClass::SystemK
-            } else if edge_fact_check(src, tgt, rules, LNFact::is_persistent) {
+            } else if edge_fact_check(prem, conc, LNFact::is_persistent) {
                 EdgeClass::SystemPersistent
-            } else if edge_fact_check(src, tgt, rules, LNFact::is_proto) {
+            } else if edge_fact_check(prem, conc, LNFact::is_proto) {
                 EdgeClass::SystemProto
             } else {
                 EdgeClass::SystemDefault

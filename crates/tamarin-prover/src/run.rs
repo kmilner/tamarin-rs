@@ -1240,15 +1240,13 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // the verdicts into the printed signature (`joinNDCinSigWMaude`)
         // so every later rendering — including the no-prove and
         // `--precompute-only` paths — shows `[NDC]` on tagged symbols.
-        // The checked cache is injected into every `ProofContext` built
-        // for this theory below (derivation-check probes, auto-sources
-        // scratch contexts, the prover session, the per-lemma fallback),
+        // The checked cache is a shared handle injected into every
+        // `ProofContext` built for this theory below (derivation-check
+        // probes, auto-sources scratch contexts, the prover session, the
+        // per-lemma fallback), which all reuse this one allocation —
         // mirroring HS's `closeRuleCache` consuming `_thyCache` verbatim.
         // The stderr markers are suppressed by `--quiet`, like the
         // sibling `[Theory X]` markers routed through `marker`.
-        // Held as a shared handle: the derivation-check probes, the
-        // auto-sources scratch contexts, the prover session and the
-        // per-lemma fallback all share this one allocation.
         let ndc_cache: Option<tamarin_theory::constraint::solver::context::IntrRuleCache> =
             file_maude.as_ref().map(|m| {
                 let checked = tamarin_theory::close_rule::check_close_intr_rule(

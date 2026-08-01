@@ -708,9 +708,8 @@ fn render_fun_syms(sig: &tamarin_term::maude_sig::MaudeSig) -> Vec<String> {
 /// one): the `function: f(t1, t2): t` typing line of a SAPIC theory, followed by
 /// the symbol's attributes.
 ///
-/// Intentionally retained: faithful mirror of HS `prettyTranslationElement`'s
-/// two `FunctionTypingInfo` cases (TheoryObject.hs:800-819 and 820-838); no
-/// caller yet.  RS never produces `TranslationElement::FunctionTypingInfo`.  In
+/// Intentionally retained: faithful mirror of those two cases, with no caller
+/// yet.  RS never produces `TranslationElement::FunctionTypingInfo`.  In
 /// HS these items only reach a printer through the OPEN theory (`typeTheoryEnv`
 /// rebuilds them from the typing environment, Typing.hs:204-226, see line 210);
 /// `removeTranslationItems` strips every translation item before a theory is

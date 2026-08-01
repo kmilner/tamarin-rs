@@ -1375,9 +1375,11 @@ pub fn term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
             //   `FApp (AC o) ts -> ppTerms (ppACOp o) 1 "(" ")" ts`  (wraps via fcat)
             //   `FApp (NoEq s) [t1,t2] | s == expSym -> ppTerm t1 <> "^" <> ppTerm t2`
             //     (flat beside, never breaks).
-            // exp renders flat; AC ops (Mult/Union/Xor/NatPlus) use the SAME
-            // fcat structure as pairs, with `(`/`)` lead/finish and the AC-op
-            // symbol as separator (no surrounding spaces).
+            // exp renders flat; AC ops (Mult/Union/Xor/NatPlus and the
+            // user-declared `[AC]` symbols) use the SAME fcat structure as
+            // pairs, with `(`/`)` lead/finish and the AC-op symbol as
+            // separator — bare for the builtins, space-surrounded for a
+            // user-declared symbol (see `binop_symbol`).
             if matches!(op, p::BinOp::Exp) {
                 // HS `prettyTerm` (Term/Term.hs:272-300, see line 274):
                 //   `FApp (NoEq s) [t1,t2] | s == expSym -> ppTerm t1 <> "^" <> ppTerm t2`

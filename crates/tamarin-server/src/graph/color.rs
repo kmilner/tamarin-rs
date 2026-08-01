@@ -27,10 +27,11 @@ use tamarin_theory::fact::LNFact;
 use tamarin_theory::pretty_hpj::Doc;
 use tamarin_theory::rule::{IntrRuleACInfo, ProtoRuleName, RuleACInst, RuleInfo};
 
-/// The `Doc` of an `LNFact` exactly as Haskell `renderLNFact =
-/// prettyLNFact` (Dot.hs:225-233, Fact.hs:549-550, see line 551).  `prettyLNFact` builds the
+/// The `Doc` of an `LNFact` exactly as Haskell `prettyLNFact`
+/// (Fact.hs:581-582), the printer `renderLNFact` (Dot.hs:227-233) feeds
+/// after abbreviation replacement.  `prettyLNFact` builds the
 /// argument list with `nestShort' (n++"(") ")" . fsep . punctuate comma`
-/// (Fact.hs:539-546), which — unlike a bare `name(a, b)` — emits the
+/// (`prettyFact`'s `ppFact`, Fact.hs:567-574, see line 572), which — unlike a bare `name(a, b)` — emits the
 /// HughesPJ INNER-PAREN SPACES `!KU( ~ltk )` when the fact fits on one line.
 /// We therefore reuse the *same* faithful `Doc` path the proof pretty-
 /// printer uses for goals (`solve_goal_to_doc` → `pretty_formula::fact_doc`
@@ -42,7 +43,7 @@ pub(crate) fn fact_doc_of(fa: &LNFact) -> Doc {
 
 /// HS `toColor` — the per-`Reason` less-edge colour, spelled identically in
 /// the DOT renderer (`dotLessAtom.toColor`, Dot.hs:624-630) and in the JSON
-/// serialiser (`colorEdge`'s `LessEdge` arm, JSON.hs:446-453).
+/// serialiser (`colorEdge`'s `LessEdge` arm, JSON.hs:444-455, see line 455).
 pub(crate) fn reason_color(r: Reason) -> &'static str {
     match r {
         Reason::Adversary => "red",
@@ -53,11 +54,11 @@ pub(crate) fn reason_color(r: Reason) -> &'static str {
     }
 }
 
-/// Key of HS `NodeColorMap` (Dot.hs:88-88): a rule's `rInfo`
+/// Key of HS `NodeColorMap` (Dot.hs:91): a rule's `rInfo`
 /// (`RuleInfo ProtoRuleACInstInfo IntrRuleACInfo`).
 pub(crate) type RInfo = RuleInfo<tamarin_theory::rule::ProtoRuleACInstInfo, IntrRuleACInfo>;
 
-/// Faithful port of HS `NodeColorMap` (Dot.hs:88-88) — the per-rule fill
+/// Faithful port of HS `NodeColorMap` (Dot.hs:91) — the per-rule fill
 /// palette, keyed in HS by a rule's `rInfo`. Built by [`build_node_color_map`]
 /// (port of `nodeColorMap`, Dot.hs:190-218).
 ///

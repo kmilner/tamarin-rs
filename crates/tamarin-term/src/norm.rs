@@ -19,7 +19,10 @@
 //! For the Rust port we expose the Maude-backed `norm` directly and
 //! the pure structural `nf_via_haskell` check, which decides normal
 //! form from syntax alone (independent of any AC canonicalisation
-//! Maude might apply).
+//! Maude might apply).  `nf_via_haskell_maude` is the same structural
+//! check for callers that hold a `MaudeHandle`: its subterm-rule arm can
+//! additionally match rule LHSes that need AC matching (user-`[AC]`
+//! equations), which the pure check has no matcher for.
 
 use crate::function_symbols::{AcSym, FunSig, FunSym};
 use crate::lterm::LNTerm;
@@ -418,7 +421,7 @@ fn rule_applies(t: &LNTerm, lhs: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> b
 /// the same HS `solveMatchLNTerm (t `matchWith` lhs)` semantics, with the
 /// 3-way native matcher first and a Maude `match` only on `NeedsAc`
 /// (mirroring HS `matchViaMaude` on `Left ACProblem`,
-/// Term/Unification.hs:209-214).  Subject vars are rigid in the Maude
+/// Term/Unification.hs:235-236).  Subject vars are rigid in the Maude
 /// `match` command on both sides of the port, so the outcomes agree.
 /// The trailing `StRhs` disambiguation is identical to [`rule_applies`].
 /// A Maude transport error is folded to "no match" — the conservative

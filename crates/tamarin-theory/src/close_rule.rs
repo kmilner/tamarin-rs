@@ -117,12 +117,7 @@ pub fn check_close_intr_rule(
 /// `isNDCRule` on a not-yet-instantiated cache rule: deconstruction rule
 /// whose head function carries the trace-mode NDC flag.
 fn is_ndc_cache_rule(r: &IntrRuleAC) -> bool {
-    match &r.info {
-        IntrRuleACInfo::DestrRule(_, _, _, _, funs) => {
-            funs.first().is_some_and(|f| f.is_ndc_fun_sym())
-        }
-        _ => false,
-    }
+    get_destr_rule_function(r).is_some_and(|f| f.is_ndc_fun_sym())
 }
 
 /// The partition/group/sort skeleton of HS `prettyNDCcheck`:
@@ -579,9 +574,10 @@ fn bound_to_one(rule: &IntrRuleAC, checked_fun: Option<FunSym>) -> IntrRuleAC {
                 vec![],
             ));
         } else {
-            let is_built_in = crate::rule::built_in_destr_rule_incl_pair()
-                .iter()
-                .any(|s| name.ends_with(s));
+            let is_built_in = crate::rule::has_builtin_suffix(
+                name.as_slice(),
+                &crate::rule::built_in_destr_rule_incl_pair(),
+            );
             if !is_built_in && *i == 0 {
                 *i = 1;
             }
@@ -727,9 +723,9 @@ fn ndc_check_prepare(
     r.for_each_free(&mut track);
     fresh_inst1.for_each_free(&mut track);
     let insts = unifs
-        .iter()
+        .into_iter()
         .map(|u_pairs| {
-            let s_fresh = LNSubstVFresh::from_list(u_pairs.clone());
+            let s_fresh = LNSubstVFresh::from_list(u_pairs);
             let sigma = s_fresh.fresh_to_free_avoiding(|n| {
                 let b = counter;
                 counter += n;

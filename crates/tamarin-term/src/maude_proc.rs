@@ -1847,7 +1847,7 @@ fn msubst_to_lnsubst_with_avoid(
     // HS-faithful: both the unify/variants path (`msubstToLSubstVFresh`)
     // and the match path (`msubstToLSubstVFree`) convert in Maude's raw
     // returned order — neither sorts the domain (Maude/Types.hs:127-138;
-    // the old `sortBy` was removed upstream in `c9d456b8`).
+    // the unsorted order is deliberate upstream, so do not sort here).
     for ((sort, idx), mt) in ms {
         let lv = crate::maude_types::substitute_lookup_var(ctx, *sort, *idx).ok_or_else(|| {
             MaudeError::Other(format!("no binding for Maude variable x{}:{:?}", idx, sort))

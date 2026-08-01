@@ -40,14 +40,13 @@
 //! regenerator (the function that PRODUCES the cache file) but is not
 //! the production runtime path.
 //!
-//! The BP cache predates upstream #883: that commit rewrote
-//! `minimizeIntruderRules` (IntruderRules.hs:190-208) to subsume rules
-//! via Maude-backed `equalDuplicateRuleUpToRenaming` /
-//! `equalSubsetRuleUpToRenaming`, which collapses one more `d_em`
-//! variant, so re-running `tamarin-prover variants` at c7e92819 emits
-//! 74 BP rules rather than the 75 committed here.  Upstream never
-//! regenerated the file, and both HS and RS parse the committed 75
-//! rules on every theory load, so the two stay byte-identical in
+//! The committed BP cache holds 75 rules, one more than the regenerator
+//! emits: `minimizeIntruderRules` (IntruderRules.hs:190-208) subsumes
+//! rules via the Maude-backed `equalDuplicateRuleUpToRenaming` /
+//! `equalSubsetRuleUpToRenaming`, collapsing one `d_em` variant that the
+//! cached file still lists, so `tamarin-prover variants` on the pinned
+//! upstream tree emits 74 BP rules.  Both HS and RS parse the committed
+//! 75 rules on every theory load, so the two stay byte-identical in
 //! production; the divergence is confined to the regenerator.
 
 use tamarin_parser as p;
@@ -210,14 +209,13 @@ fn lookup_fun(
 /// leading empty segment (the name starts with an underscore), then drops
 /// the LEADING purely-numeric position segments (`supprPos` via
 /// `readMaybe :: Maybe Int`); errors on an empty result.
-fn constr_name_func(name: &str) -> Result<Vec<String>, String> {
+fn constr_name_func(name: &str) -> Result<Vec<&str>, String> {
     // `tail . T.split (== '_')`, then `supprPos` (remove position
     // information from the rule name).
-    let names: Vec<String> = name
+    let names: Vec<&str> = name
         .split('_')
         .skip(1)
         .skip_while(|seg| seg.parse::<i64>().is_ok())
-        .map(|seg| seg.to_string())
         .collect();
     if names.is_empty() {
         return Err("Failed parsing intruder rule name: empty name".to_string());
@@ -289,7 +287,7 @@ fn ast_rule_to_intr_rule_ac(
         b'd' => {
             let dname = &r.name[1..];
             let funs = constr_name_func(dname)?
-                .iter()
+                .into_iter()
                 .map(|n| lookup_fun(known_funs, n))
                 .collect::<Result<Vec<_>, _>>()?;
             IntrRuleACInfo::DestrRule(

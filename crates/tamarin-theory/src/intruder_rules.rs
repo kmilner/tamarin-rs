@@ -302,8 +302,7 @@ pub fn show_fun_sym_name(f: &FunSym) -> std::borrow::Cow<'static, str> {
     }
 }
 
-/// `subtermConstructorRules` (HS name; the pre-#883 upstream called it
-/// `subtermIntruderRules`) — direct port:
+/// `subtermConstructorRules` — direct port:
 ///
 /// ```haskell
 /// subtermConstructorRules :: Bool -> MaudeHandle -> MaudeSig -> [IntrRuleAC]
@@ -2873,12 +2872,11 @@ mod tests {
     /// `bp_intruder_rules(false)` yields exactly 74 bilinear-pairing
     /// intruder rules (2 constructors `_pmult`/`_em` + the pmult- and
     /// em-destructor variant expansions), matching HS `bpIntruderRules
-    /// False` at c7e92819, whose #883 Maude-backed
+    /// False` in the pinned upstream tree, whose Maude-backed
     /// `minimizeIntruderRules` subsumption drops one BP destructor
-    /// variant. Upstream's committed `data/intruder_variants_bp.spthy`
-    /// is a stale pre-#883 cache holding 75 rules; production loads
-    /// that cached file byte-for-byte (as HS does), so this count
-    /// applies to the generator only.
+    /// variant.  Upstream's committed `data/intruder_variants_bp.spthy`
+    /// holds 75 rules; production loads that cached file byte-for-byte
+    /// (as HS does), so this count applies to the generator only.
     #[test]
     fn bp_intruder_rules_yields_74() {
         let maude = match bp_maude_handle() {

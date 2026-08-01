@@ -108,7 +108,7 @@ fn update_system(legend: &Legend, sys: &mut System) {
     for (_, ru) in sys.nodes_mut().iter_mut() {
         for facts in [&mut ru.premises, &mut ru.conclusions] {
             for f in facts.iter_mut() {
-                *f = f.map_ref(|t| legend.get(t).cloned().unwrap_or_else(|| t.clone()));
+                *f = f.map_ref(|t| legend.get(t).unwrap_or(t).clone());
             }
         }
     }
@@ -123,6 +123,11 @@ pub fn abbrev(abbreviate: bool, n: usize, sys: &System) -> Cow<'_, System> {
         return Cow::Borrowed(sys);
     }
     let legend = compute_legend(n, sys);
+    // An empty legend maps every term to itself, so `updateSystem` is the
+    // identity and the system is handed back as-is.
+    if legend.is_empty() {
+        return Cow::Borrowed(sys);
+    }
     let mut out = sys.clone();
     update_system(&legend, &mut out);
     Cow::Owned(out)

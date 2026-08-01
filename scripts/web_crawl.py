@@ -47,8 +47,9 @@ MAX_NODES_DEFAULT = int(os.environ.get("WEB_CRAWL_MAX_NODES", "400"))
 # cannot see a plan that has GROWN — an old manifest's unvisited URL families
 # read as MISSING_HS rows rather than as a cache miss.  Bump this whenever the
 # plan adds URLs; web_parity.sh then re-crawls each cached file on next use.
-# A pure RETIREMENT (the graph-route 0/0 probes) needs no bump: old manifests
-# are supersets, and web_diff.py drops the retired rows before pairing.
+# Dropping URLs from the plan needs no bump: a cached manifest is then a
+# superset, and web_diff.py drops the unpaired rows (the graph-route 0/0
+# probes) before pairing.
 PLAN_VERSION = 2
 PLAN_VERSION_KEY = "__plan_version__"
 
@@ -170,8 +171,8 @@ def main():
     # pinned by the server's own route tests.  `1/1` is the first real case,
     # which every route draws.
     for route in ["main", "json", "graph", "interactive-graph-def"]:
+        cases = ["0/0", "1/1"] if route == "main" else ["1/1"]
         for kind in ["raw", "refined"]:
-            cases = ["0/0", "1/1"] if route == "main" else ["1/1"]
             for case in cases:
                 record(f"/thy/trace/{idx}/{route}/cases/{kind}/{case}")
 

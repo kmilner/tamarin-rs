@@ -1492,12 +1492,13 @@ fn implied_apply_canon_cow(
     f: &crate::guarded::Guarded,
 ) -> std::borrow::Cow<'_, crate::guarded::Guarded> {
     use std::borrow::Cow;
-    let f2: Cow<crate::guarded::Guarded> = match crate::guarded::canonicalize_ac_in_guarded_cow(f) {
-        None => Cow::Borrowed(f),
-        Some(g) => Cow::Owned(g),
-    };
-    match crate::guarded::normalise_stored_formula_cow(f2.as_ref()) {
-        None => f2,
+    let ac_canon: Cow<crate::guarded::Guarded> =
+        match crate::guarded::canonicalize_ac_in_guarded_cow(f) {
+            None => Cow::Borrowed(f),
+            Some(g) => Cow::Owned(g),
+        };
+    match crate::guarded::normalise_stored_formula_cow(ac_canon.as_ref()) {
+        None => ac_canon,
         Some(g) => Cow::Owned(g),
     }
 }
