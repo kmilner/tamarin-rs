@@ -1416,14 +1416,14 @@ pub async fn intdot(
     State(state): State<Arc<AppState>>,
     Path((idx, raw_path)): Path<(usize, String)>,
 ) -> Response {
-    let Some(entry) = state.store.get(idx) else {
+    let Some(name) = state.store.name(idx) else {
         return not_found();
     };
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
     };
     let dotsrc = graph_json_url(idx, &path);
-    let title = crate::handlers::root::html_escape(&format!("Theory: {}", entry.name));
+    let title = crate::handlers::root::html_escape(&format!("Theory: {}", name));
     html_response(intdot_shell_html(&title, &dotsrc))
 }
 
@@ -1579,10 +1579,10 @@ pub async fn graph_json(
         return not_found();
     };
     let opts = graph_options_from_map(&query);
-    // The source-case list lives on the materialised proof state, so re-read
-    // the entry afterwards (as the `main` handler does).
+    // The source-case list lives on the materialised proof state, so the
+    // source branch re-reads the entry afterwards (as the `main` handler does).
     materialise_proof_state_if_needed(&state, idx, &path);
-    let Some(entry) = state.store.get(idx) else {
+    let Some(name) = state.store.name(idx) else {
         return not_found();
     };
     match &path {
@@ -1598,7 +1598,7 @@ pub async fn graph_json(
                 crate::graph::web_utils_abbrev::MIN_ABBREV_SIZE,
                 &sys,
             );
-            let label = format!("Theory: {} Lemma: {}", entry.name, lemma);
+            let label = format!("Theory: {} Lemma: {}", name, lemma);
             json_graph_response(crate::graph::json::sequents_to_json_pretty(
                 &opts,
                 &[(label, &sys)],
@@ -1609,10 +1609,13 @@ pub async fn graph_json(
             src_idx,
             case_idx,
         } => {
+            let Some(entry) = state.store.get(idx) else {
+                return not_found();
+            };
             let Some(sys) = source_case_system(&entry, kind, *src_idx, *case_idx) else {
                 return not_found();
             };
-            let label = format!("Theory: {} Case: {}:{}", entry.name, src_idx, case_idx);
+            let label = format!("Theory: {} Case: {}:{}", name, src_idx, case_idx);
             json_graph_response(crate::graph::json::sequents_to_json_pretty(
                 &opts,
                 &[(label, &sys)],

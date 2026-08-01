@@ -174,6 +174,16 @@ impl TheoryStore {
         self.inner.lock().by_idx.contains_key(&idx)
     }
 
+    /// The stored theory's name at `idx`, or `None` when no theory is stored
+    /// there.  This is what the handlers that only label a page with the name
+    /// take instead of [`get`], whose clone deep-copies `wf_report` and
+    /// `errors_html`.
+    ///
+    /// [`get`]: Self::get
+    pub fn name(&self, idx: usize) -> Option<String> {
+        self.inner.lock().by_idx.get(&idx).map(|e| e.name.clone())
+    }
+
     pub fn list(&self) -> Vec<TheoryEntry> {
         self.inner.lock().by_idx.values().cloned().collect()
     }
