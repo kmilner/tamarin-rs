@@ -10,6 +10,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use percent_encoding::percent_decode_str;
 use tower_http::trace::TraceLayer;
 
 use crate::handlers;
@@ -39,7 +40,7 @@ async fn not_found_page(req: Request, next: Next) -> Response {
     // theory that was never issued, which the handlers answer with the same
     // miss — so every index the port's `usize` route parameter would reject
     // lands on this page, never on a path-extractor 400.
-    if theory_index_piece(&raw_path).is_some_and(|piece| piece.parse::<usize>().is_err()) {
+    if theory_index_piece(&raw_path).is_some_and(|piece| !reads_as_theory_index(piece)) {
         return handlers::not_found_response(&raw_path);
     }
     let res = next.run(req).await;
@@ -49,14 +50,35 @@ async fn not_found_page(req: Request, next: Next) -> Response {
     res
 }
 
-/// The theory-index piece of a `/thy/trace/<idx>/…` or `/thy/equiv/<idx>/…`
-/// URL, for URLs of that shape.
+/// The still-encoded theory-index piece of a `/thy/trace/<idx>/…` or
+/// `/thy/equiv/<idx>/…` URL, for URLs of that shape.
+///
+/// Split on the raw path, as WAI splits `rawPathInfo` on `/` and only then
+/// decodes each segment: an escaped separator (`%2F`) belongs to the piece, it
+/// does not end it.
 fn theory_index_piece(raw_path: &str) -> Option<&str> {
     let rest = raw_path.strip_prefix("/thy/")?;
     let rest = rest
         .strip_prefix("trace/")
         .or_else(|| rest.strip_prefix("equiv/"))?;
     rest.split('/').next()
+}
+
+/// Whether an index piece names a theory the port's `usize` route parameter
+/// accepts.
+///
+/// The piece is percent-decoded first, because that is what both sides route
+/// on: Yesod dispatches on WAI's `pathInfo`, whose segments are decoded, so
+/// `%31` is theory 1 upstream, and axum's `Path` extractor decodes each capture
+/// the same way — so this probe and the extractor read every piece alike, and
+/// the extractor never sees an index it would answer with a `400`.  A piece
+/// whose escapes are not valid UTF-8 names no theory on either side: HS's
+/// lenient decode leaves replacement characters that `PathPiece Int` cannot
+/// read, and the extractor rejects the capture outright.
+fn reads_as_theory_index(piece: &str) -> bool {
+    percent_decode_str(piece)
+        .decode_utf8()
+        .is_ok_and(|idx| idx.parse::<usize>().is_ok())
 }
 
 pub fn router(state: Arc<AppState>) -> Router {

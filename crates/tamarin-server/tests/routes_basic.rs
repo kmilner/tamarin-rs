@@ -629,6 +629,54 @@ async fn test_unusable_theory_index_is_not_found() {
     }
 }
 
+/// Yesod dispatches on WAI's `pathInfo`, whose segments are percent-decoded,
+/// so an escaped index piece names the theory it decodes to: `%31` is theory 1
+/// and serves the very page the unescaped URL does (only the Not Found page's
+/// echoed path is the raw one).
+#[tokio::test]
+async fn test_percent_encoded_theory_index_resolves() {
+    let s = start_server_with_theory("issue193.spthy").await;
+    let plain = s
+        .client
+        .get(s.url("/thy/trace/1/overview/help"))
+        .send()
+        .await
+        .expect("send");
+    assert_eq!(plain.status(), 200);
+    let plain = plain.text().await.expect("text");
+    for path in [
+        "/thy/trace/%31/overview/help",
+        "/thy/trace/%30%31/overview/help",
+        "/thy/trace/%2B1/overview/help",
+    ] {
+        let res = s.client.get(s.url(path)).send().await.expect("send");
+        assert_eq!(res.status(), 200, "{path} must resolve to theory 1");
+        assert_eq!(res.text().await.expect("text"), plain, "{path}");
+    }
+    // An escaped separator belongs to the piece rather than ending it, and
+    // escapes that are not valid UTF-8 read as no index at all: both are the
+    // Not Found page, never a path-extractor 400.
+    for path in [
+        "/thy/trace/1%2F2/overview/help",
+        "/thy/trace/%FF/overview/help",
+    ] {
+        let res = s.client.get(s.url(path)).send().await.expect("send");
+        assert_eq!(res.status(), 404, "{path} must be a 404");
+        assert_eq!(
+            content_type(&res),
+            "text/html; charset=utf-8",
+            "{path} must carry the Not Found page's content type"
+        );
+        assert!(
+            res.text()
+                .await
+                .expect("text")
+                .contains(&format!("<p>{path}</p>")),
+            "{path} must echo its raw path"
+        );
+    }
+}
+
 /// `/static` is wai-app-static in HS, a separate WAI app whose miss never
 /// reaches Yesod's error handler: a bare `File not found`, `text/plain` with
 /// no charset.
