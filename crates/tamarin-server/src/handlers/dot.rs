@@ -697,14 +697,14 @@ impl DotBuilder {
             ));
         }
         let lbl = escape_dot_label(&format!("{{{}}}", rows.join("|")));
-        let color = rule_fillcolor(ru, manual_color, color_map);
+        let color = rule_fillcolor(ru, nid, manual_color, color_map);
         // HS `dotNodeCompact` record `attrs` (Dot.hs:257-259) also carry a
         // `fontcolor` and a `role`. The `fontcolor` keys off the PALETTE colour
         // (`M.lookup rInfoVal colorMap`), i.e. the raw map value — NOT the
         // resolved `fillcolor` — so an explicit/cluster override does not change
         // the font choice. `role = fromMaybe "Undefined" (getNodeRole node)`
         // (Dot.hs:236-379, see line 243).
-        let palette_color = color_map.lookup(&ru.info);
+        let palette_color = color_map.lookup_node(nid);
         let fontcolor = if color_uses_white_font(palette_color) {
             "white"
         } else {
@@ -1204,12 +1204,17 @@ fn explicit_rule_color(ru: &RuleACInst) -> Option<String> {
 /// (Dot.hs:248-256): `fromMaybe (maybe "white" rgbToHex color)
 /// (ruleColor' <|> manualNodeColor)` — the explicit `color:` attribute wins,
 /// then the cluster's `manualNodeColor`, then the `nodeColorMap` palette
-/// fallback (`maybe "white" rgbToHex (M.lookup rInfo colorMap)`): a rInfo
+/// fallback (`maybe "white" rgbToHex (M.lookup rInfo colorMap)`): a node
 /// present in the map yields its palette hex, an absent one yields `"white"`.
-fn rule_fillcolor(ru: &RuleACInst, manual_color: Option<&str>, color_map: &NodeColorMap) -> String {
+fn rule_fillcolor(
+    ru: &RuleACInst,
+    nid: &LVar,
+    manual_color: Option<&str>,
+    color_map: &NodeColorMap,
+) -> String {
     explicit_rule_color(ru)
         .or_else(|| manual_color.map(|c| c.to_string()))
-        .unwrap_or_else(|| match color_map.lookup(&ru.info) {
+        .unwrap_or_else(|| match color_map.lookup_node(nid) {
             Some(rgb) => tamarin_utils::color::rgb_to_hex(rgb),
             None => "white".to_string(),
         })
@@ -2140,20 +2145,23 @@ mod tests {
         let r = &nodes[0].1;
 
         // (3) palette fallback: no explicit colour, no manual colour.
-        assert_eq!(rule_fillcolor(r, None, &cm), "#d5d897");
+        assert_eq!(rule_fillcolor(r, &nid(0), None, &cm), "#d5d897");
         // (2) cluster manualNodeColor beats the palette.
-        assert_eq!(rule_fillcolor(r, Some("#123456"), &cm), "#123456");
+        assert_eq!(rule_fillcolor(r, &nid(0), Some("#123456"), &cm), "#123456");
         // (1) explicit `color:` attribute beats both manual and palette.
         let mut colored = named_proto_node(PRN::Stand("R"));
         if let TRuleInfo::Proto(p) = &mut colored.info {
             p.attributes.color = Some(Rgb::new(1.0, 0.5, 0.0));
         }
         let expect = tamarin_utils::color::rgb_to_hex(Rgb::new(1.0, 0.5, 0.0));
-        assert_eq!(rule_fillcolor(&colored, Some("#123456"), &cm), expect);
+        assert_eq!(
+            rule_fillcolor(&colored, &nid(0), Some("#123456"), &cm),
+            expect
+        );
 
-        // rInfo absent from the map -> HS `maybe "white" ...` = "white".
+        // Node absent from the map -> HS `maybe "white" ...` = "white".
         let absent = named_proto_node(PRN::Stand("NotInMap"));
-        assert_eq!(rule_fillcolor(&absent, None, &cm), "white");
+        assert_eq!(rule_fillcolor(&absent, &nid(9), None, &cm), "white");
     }
 
     #[test]

@@ -151,13 +151,14 @@ impl ProofState {
     /// `ndc_cache`: the theory's once-per-load NDC-checked intruder cache
     /// (`theory_io` ran `check_close_intr_rule` at load), injected into
     /// both the web session and the shared display context so neither
-    /// re-runs the check.
+    /// re-runs the check.  The borrowed handle is the same allocation the
+    /// `TheoryEntry` holds, so neither injection copies the rule list.
     pub fn new(
         parser_theory: &tamarin_parser::ast::Theory,
         maude_path: &str,
         cli_cut: Option<tamarin_theory::constraint::solver::context::CutStrategy>,
         in_file: &str,
-        ndc_cache: Option<&[tamarin_theory::rule::IntrRuleAC]>,
+        ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
     ) -> Result<Self, String> {
         // Effective cut strategy — HS `closeTheory` precedence
         // (TheoryLoader.hs:640-666): the CLI `--stop-on-trace` wins;
@@ -309,7 +310,7 @@ impl ProofState {
             rules,
             ctx_restrictions,
             &forced_injective_facts,
-            ndc_cache.map(<[_]>::to_vec),
+            ndc_cache.cloned(),
         );
         ctx.cut = cut;
         // Build the initial system for every lemma.

@@ -434,8 +434,23 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
                 return crate::term::f_app_ac(op, args);
             }
         }
-        // User-defined AC operator?
-        if is_ac_fct_ident(ident) {
+        // User-defined AC operator?  HS reaches this guard only from
+        // `parseFApp` (Parser.hs:372-386), i.e. after `(` has been consumed and
+        // `sepBy1` has yielded at least one argument; a bare identifier goes to
+        // `parseFAppConst` (Parser.hs:392), which never classifies as AC.  RS
+        // keeps that routing.
+        //
+        // Upstream classifies the identifier by containment —
+        // `BC.isInfixOf "tamPDA" ident` and its three siblings
+        // (Parser.hs:379-382) — which also scans the user's own name, so an
+        // ordinary non-AC function whose NAME contains a marker (`functions:
+        // tamXCAbar/1` -> `tamXCFUtamXCAbar`) is rebuilt as AC: at arity 1
+        // `fAppAC _ [a] = a` deletes the application, at arity >= 2 it
+        // fabricates a flattened/sorted AC term (see
+        // /home/kamilner/upstream-bug-ac-marker-collapse.md).  RS classifies by
+        // decoding the attribute block instead and deliberately diverges from
+        // upstream on exactly those names.
+        if !args.is_empty() && is_ac_fct_ident(ident) {
             return crate::term::f_app_ac(AcSym::AcFct(parse_fun_ac_sym(ident)), args);
         }
         // C operator (em)?
@@ -467,7 +482,7 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
             constructability: c,
             ndc,
         };
-        // Haskell `parseFunSym` (Parser.hs:331-344) errors when the decoded
+        // Haskell `parseFunSym` (Parser.hs:351-364) errors when the decoded
         // symbol is not in `allowedfunSyms` (consSym, nilSym, natOneSym plus
         // `noEqFunSyms msig`).  This runs on the live Maude reply path, not
         // just round-trip tests.  We intentionally keep a lenient pass here:
@@ -480,7 +495,7 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
     // for forward compatibility; this matches Haskell only for certain
     // built-ins (like Maude's own `true`).  HS gives the specially-handled
     // idents (`list`, `cons`, `nil`) `(Public, Constructor, NotNDC)` too
-    // (`parseFunSym`, Parser.hs:351-366).
+    // (`parseFunSym`, Parser.hs:351-364).
     let sym = NoEqSym {
         name: crate::intern::intern_bytes(ident),
         arity: args.len(),
@@ -491,19 +506,35 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
     Term::App(FunSym::NoEq(sym), args.into())
 }
 
-/// Maude identifiers of user-defined AC symbols: `tam` + the encoded
-/// (privacy, constructability) pair + the `A` that marks `IsAC`
-/// (see `maude_print::fun_sym_encode_attr`).
-const AC_FCT_IDENT_MARKERS: [&[u8]; 4] = [b"tamPDA", b"tamPCA", b"tamXDA", b"tamXCA"];
+/// Number of attribute characters `funSymEncodeAttr` emits between the
+/// `tam` prefix and the user-given name (HS Parser.hs:76-88, mirrored by
+/// `maude_print::fun_sym_encode_attr`; `funSymDecode` splits at the same
+/// width, Parser.hs:92-105).
+const ATTR_BLOCK_LEN: usize = 4;
 
-/// HS `appIdent`'s user-defined-AC guards (Parser.hs:373-386) are
-/// `BC.isInfixOf "tamPDA" ident` (and the three sibling encodings), i.e. they
-/// test the WHOLE identifier for containment rather than matching a prefix —
-/// mirrored here.
+/// Is `ident` the Maude encoding of a user-defined AC symbol?
+///
+/// The encoded layout is `funSymPrefix` (`tam`) + four attribute characters +
+/// the user's name (HS `ppMaudeACSym`/`ppMaudeNoEqSym`, Parser.hs:136-147):
+/// privacy `P`/`X`, constructability `C`/`D`, AC state `A`/`F`, NDC state
+/// `N`/`U`/`D`/`B`.  Only `ppMaudeACSym` writes `A` in the third slot, so
+/// decoding that block is an exact test: `tamXCFUtamXCAbar` (the free symbol
+/// `tamXCAbar`) carries `F` and falls through to the free-symbol decode below.
+///
+/// Upstream instead tests the whole identifier for containment of `tamPDA`,
+/// `tamPCA`, `tamXDA` or `tamXCA` (Parser.hs:379-382), which also scans the
+/// name; RS decodes and deliberately diverges there (see the `build_app` AC
+/// branch).
 fn is_ac_fct_ident(ident: &[u8]) -> bool {
-    AC_FCT_IDENT_MARKERS
-        .iter()
-        .any(|m| ident.windows(m.len()).any(|w| w == *m))
+    let Some(rest) = ident.strip_prefix(FUN_SYM_PREFIX.as_bytes()) else {
+        return false;
+    };
+    // `>` not `>=`: the name after the attribute block is never empty.
+    rest.len() > ATTR_BLOCK_LEN
+        && matches!(rest[0], b'P' | b'X')
+        && matches!(rest[1], b'C' | b'D')
+        && rest[2] == b'A'
+        && matches!(rest[3], b'N' | b'U' | b'D' | b'B')
 }
 
 /// HS `parseFunACSym` (Parser.hs:365-367): decode the attributes out of the
@@ -568,6 +599,107 @@ mod tests {
             }
             x => panic!("got {:?}", x),
         }
+    }
+
+    /// A bare identifier is a nullary free symbol: HS sends it through
+    /// `parseFAppConst` (Parser.hs:392), which never classifies as AC, so a
+    /// free symbol whose own name contains a marker (`functions: tamXCAfoo/0`
+    /// encodes to `tamXCFUtamXCAfoo`) stays a `NoEq` constant.  RS keeps that
+    /// routing.
+    #[test]
+    fn parse_nullary_ident_containing_ac_marker() {
+        let t = parse_reduce_reply(b"result Msg: tamXCFUtamXCAfoo\n").unwrap();
+        match t {
+            Term::App(FunSym::NoEq(s), args) => {
+                assert_eq!(s.name, b"tamXCAfoo");
+                assert_eq!(s.arity, 0);
+                assert_eq!(s.privacy, Privacy::Public);
+                assert_eq!(s.constructability, Constructability::Constructor);
+                assert_eq!(s.ndc, NdcState::NotNdc);
+                assert!(args.is_empty());
+            }
+            x => panic!("got {:?}", x),
+        }
+    }
+
+    /// The same identifier applied to arguments: upstream reaches `appIdent`'s
+    /// containment guards (Parser.hs:379-382), classifies it as AC, and
+    /// `fAppAC _ [a] = a` (Raw.hs:121) deletes the application.  RS decodes
+    /// the attribute block instead — the AC slot holds `F` — so the free
+    /// symbol `tamXCAfoo/1` survives.  Deliberate divergence from upstream
+    /// (/home/kamilner/upstream-bug-ac-marker-collapse.md).
+    #[test]
+    fn parse_unary_ident_containing_ac_marker_does_not_collapse() {
+        let t = parse_reduce_reply(b"result Msg: tamXCFUtamXCAfoo(x1:Msg)\n").unwrap();
+        match t {
+            Term::App(FunSym::NoEq(s), args) => {
+                assert_eq!(s.name, b"tamXCAfoo");
+                assert_eq!(s.arity, 1);
+                assert_eq!(s.privacy, Privacy::Public);
+                assert_eq!(s.constructability, Constructability::Constructor);
+                assert_eq!(s.ndc, NdcState::NotNdc);
+                assert_eq!(args.len(), 1);
+                assert!(matches!(
+                    args[0],
+                    Term::Lit(MaudeLit::MaudeVar(1, LSort::Msg))
+                ));
+            }
+            x => panic!("got {:?}", x),
+        }
+    }
+
+    /// At arity >= 2 the same identifier is where upstream's misclassification
+    /// fabricates a term: `fAppAC` flattens and SORTS the arguments
+    /// (Raw.hs:122-129), so `tamXCAfoo(c(2), c(1))` would come back as an AC
+    /// application over `[c(1), c(2)]`.  RS keeps the free symbol and Maude's
+    /// argument order.  Deliberate divergence from upstream
+    /// (/home/kamilner/upstream-bug-ac-marker-collapse.md).
+    #[test]
+    fn parse_binary_ident_containing_ac_marker_keeps_arg_order() {
+        let t = parse_reduce_reply(b"result Msg: tamXCFUtamXCAfoo(c(2), c(1))\n").unwrap();
+        match t {
+            Term::App(FunSym::NoEq(s), args) => {
+                assert_eq!(s.name, b"tamXCAfoo");
+                assert_eq!(s.arity, 2);
+                assert_eq!(args.len(), 2);
+                assert!(matches!(
+                    args[0],
+                    Term::Lit(MaudeLit::MaudeConst(2, LSort::Msg))
+                ));
+                assert!(matches!(
+                    args[1],
+                    Term::Lit(MaudeLit::MaudeConst(1, LSort::Msg))
+                ));
+            }
+            x => panic!("got {:?}", x),
+        }
+    }
+
+    /// Classifier level: the AC slot of the attribute block decides, not
+    /// containment anywhere in the identifier.
+    #[test]
+    fn ac_fct_ident_classified_by_attr_block() {
+        // Real user-AC symbols: `A` in the AC slot, covering each privacy,
+        // constructability and NDC letter `funSymEncodeAttr` can emit.
+        assert!(is_ac_fct_ident(b"tamXCAUmy-op"));
+        assert!(is_ac_fct_ident(b"tamPDANx"));
+        assert!(is_ac_fct_ident(b"tamPCADop"));
+        assert!(is_ac_fct_ident(b"tamXDABop"));
+        // A real user-AC symbol whose NAME also contains a marker: still AC.
+        assert!(is_ac_fct_ident(b"tamXCAUtamXCAfoo"));
+        // Free symbols whose NAME contains a marker: `F` in the AC slot.
+        assert!(!is_ac_fct_ident(b"tamXCFUtamXCAfoo"));
+        assert!(!is_ac_fct_ident(b"tamPDFNtamPDAbar"));
+        // Built-in operators carry no attribute block at all.
+        assert!(!is_ac_fct_ident(b"tammult"));
+        assert!(!is_ac_fct_ident(b"tamem"));
+        // An attribute block with an empty name is not a symbol.
+        assert!(!is_ac_fct_ident(b"tamXCAU"));
+        // Identifiers too short to carry a block, and non-`tam` ones.
+        assert!(!is_ac_fct_ident(b""));
+        assert!(!is_ac_fct_ident(b"tam"));
+        assert!(!is_ac_fct_ident(b"tamXCA"));
+        assert!(!is_ac_fct_ident(b"XCAUop"));
     }
 
     #[test]

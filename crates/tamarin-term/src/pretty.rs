@@ -79,10 +79,11 @@ fn pp_term_lnterm(t: &Term<Lit<Name, LVar>>, out: &mut String) {
         Term::App(FunSym::Ac(o), ts) => {
             // Haskell: `ppTerms <op> 1 "(" ")" ts` — parenthesised
             // infix list joined by the AC operator symbol.
+            let op = ac_op_symbol(*o);
             out.push('(');
             for (i, child) in ts.iter().enumerate() {
                 if i > 0 {
-                    out.push_str(ac_op_symbol(*o));
+                    out.push_str(op);
                 }
                 pp_term_lnterm(child, out);
             }

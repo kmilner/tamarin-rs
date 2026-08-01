@@ -143,8 +143,20 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, irreducible: &FunSig, maude: Option<&Maude
             //    only available when the caller supplied a `MaudeHandle`
             //    (`nf_via_haskell_maude`).  See subterm_rule.rs and
             //    builtin.rs.
-            for rule in &msig.st_rules {
-                if crate::maude_proc::term_ac_c_free(&rule.lhs) {
+            //    The Ac/C-freeness of each rule LHS is a full walk of that LHS,
+            //    so it is precomputed per rule by `MaudeSig::refresh`
+            //    (`st_lhs_ac_c_free`, in `st_rules` iteration order) rather
+            //    than recomputed here — this loop runs at every `App` node of
+            //    every NF check.  `None` means the cached vector's length no
+            //    longer matches `st_rules`, and the predicate is computed
+            //    inline.
+            let lhs_flags = msig.st_lhs_ac_c_free_cache();
+            for (i, rule) in msig.st_rules.iter().enumerate() {
+                let lhs_ac_c_free = match lhs_flags {
+                    Some(flags) => flags[i],
+                    None => crate::maude_proc::term_ac_c_free(&rule.lhs),
+                };
+                if lhs_ac_c_free {
                     // Head-symbol + arity precheck reproducing match_raw's
                     // first step for concrete-headed patterns (unification.rs
                     // `match_raw`, NoEq arm: `tf == pf && targs.len() ==
@@ -179,8 +191,7 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, irreducible: &FunSig, maude: Option<&Maude
                 }
                 // Ac-/C-containing LHS with no handle (pure
                 // `nf_via_haskell`): the no-AC matcher could never match
-                // this rule, so it is skipped — the pure entry point keeps
-                // its historical semantics.
+                // this rule, so it is skipped.
             }
             // 4. Reducible exponent / inverse / mult / xor patterns.
             if let FunSym::NoEq(s) = sym {
@@ -431,8 +442,7 @@ fn rule_applies_ac(
                 lhs: t.clone(),
                 rhs: lhs.clone(),
             }])
-            .map(|ms| !ms.is_empty())
-            .unwrap_or(false),
+            .is_ok_and(|ms| !ms.is_empty()),
     };
     if !matched {
         return false;
@@ -596,5 +606,26 @@ mod tests {
             nf_via_haskell_maude(&h, &ok),
             "xorr(~k, ~na) must remain NF"
         );
+    }
+
+    /// `go_nf`'s st-rule arm reads the per-rule Ac/C-free flags cached by
+    /// `MaudeSig::refresh`, falling back to `term_ac_c_free` when the cached
+    /// vector's length no longer matches `st_rules`.  Both routes must decide
+    /// identically:
+    /// `fst(pair(x1, x2))` is reducible by the pairing rule, `pair(x1, x2)` is
+    /// not.  No Maude handle needed — the pairing rule LHSes are Ac/C-free.
+    #[test]
+    fn go_nf_agrees_with_and_without_the_lhs_flag_cache() {
+        use crate::builtin::{fst, msg_var, pair};
+        let mut sig = pair_maude_sig();
+        let reducible = fst(pair(msg_var("x", 1), msg_var("x", 2)));
+        let normal = pair(msg_var("x", 1), msg_var("x", 2));
+        assert!(sig.st_lhs_ac_c_free_cache().is_some());
+        assert!(!nf_via_haskell(&sig, &reducible));
+        assert!(nf_via_haskell(&sig, &normal));
+        sig.st_lhs_ac_c_free.clear();
+        assert!(sig.st_lhs_ac_c_free_cache().is_none());
+        assert!(!nf_via_haskell(&sig, &reducible));
+        assert!(nf_via_haskell(&sig, &normal));
     }
 }

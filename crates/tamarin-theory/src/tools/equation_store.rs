@@ -586,7 +586,7 @@ impl EquationStore {
             }
             // HS walks `S.toList substs` (sorted) and rebuilds via
             // `S.fromList`; mirror with an explicit sort on both ends.
-            let mut rest: Vec<LNSubstVFresh> = disj.substs.clone();
+            let mut rest: Vec<LNSubstVFresh> = std::mem::take(&mut disj.substs);
             rest.sort();
             rest.dedup();
             // `removePerm r (s:rest) = removePerm (s : filter (not . isPerm s) r)
@@ -3155,30 +3155,30 @@ fn equal_subst_up_to_renaming(
     // `permute`: swap the v1/v2 DOMAIN keys.  `substFixing` rewrites images
     // only, so applying it before the swap (in `prepare_renaming`) gives the
     // same key-to-image association as HS's swap-then-fix order.
-    let permuted: Vec<(LVar, LNTerm)>;
-    let subst1_fixed: &[(LVar, LNTerm)] = if perm {
-        permuted = LNSubstVFresh::from_list(prep.subst1_fixed.iter().map(|(v, t)| {
-            if v == v1 {
-                (*v2, t.clone())
+    let permuted: Option<Vec<(LVar, LNTerm)>> = perm.then(|| {
+        LNSubstVFresh::from_list(prep.subst1_fixed.iter().map(|(v, t)| {
+            let key = if v == v1 {
+                *v2
             } else if v == v2 {
-                (*v1, t.clone())
+                *v1
             } else {
-                (*v, t.clone())
-            }
+                *v
+            };
+            (key, t.clone())
         }))
-        .to_list();
-        &permuted
-    } else {
-        &prep.subst1_fixed
-    };
+        .to_list()
+    });
+    let subst1_fixed: &[(LVar, LNTerm)] = permuted.as_deref().unwrap_or(&prep.subst1_fixed);
 
     // `matchers = solveMatchLNTerm (mconcat matchs)`: one joint matching
     // problem, term = s1 image, pattern = renamed s2 image.
     let eqs: Vec<Equal<LNTerm>> = subst1_fixed
         .iter()
-        .map(|(_, t)| t.clone())
-        .zip(prep.renamed2.iter().cloned())
-        .map(|(t1, t2)| Equal { lhs: t1, rhs: t2 })
+        .zip(&prep.renamed2)
+        .map(|((_, t1), t2)| Equal {
+            lhs: t1.clone(),
+            rhs: t2.clone(),
+        })
         .collect();
     maude
         .match_eqs(&eqs)

@@ -611,12 +611,12 @@ fn write_rterm(t: &RTerm, out: &mut String) {
             // ACSym derives Show as the constructor name (Union/Mult/Xor/NatPlus);
             // user-defined AC symbols print their own name.
             let name: std::borrow::Cow<'_, str> = match head {
-                Head::App { name, .. } => std::borrow::Cow::Borrowed(name.as_str()),
+                Head::App { name, .. } => name.as_str().into(),
                 Head::Ac { sym, .. } => match sym {
-                    AcSym::Union => std::borrow::Cow::Borrowed("Union"),
-                    AcSym::Mult => std::borrow::Cow::Borrowed("Mult"),
-                    AcSym::Xor => std::borrow::Cow::Borrowed("Xor"),
-                    AcSym::NatPlus => std::borrow::Cow::Borrowed("NatPlus"),
+                    AcSym::Union => "Union".into(),
+                    AcSym::Mult => "Mult".into(),
+                    AcSym::Xor => "Xor".into(),
+                    AcSym::NatPlus => "NatPlus".into(),
                     AcSym::AcFct(s) => String::from_utf8_lossy(s.name),
                 },
             };

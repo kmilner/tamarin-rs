@@ -9,16 +9,20 @@
 # Default port: 18901.
 #
 # Pre-requisites:
-#   - `tamarin-prover` on PATH
+#   - `tamarin-prover` on PATH, built from the submodule pin (the script
+#     refuses any other revision)
 #   - `curl` on PATH
 #   - The Tamarin source tree's `examples/regression/trace/issue193.spthy`
 #
 # Output: writes each captured response into
 #   tests/fixtures/haskell-responses/
 #
-# Re-run this whenever Haskell behaviour changes.  The Rust port tests
-# in `tests/routes_*.rs` compare the JSON envelope key set (not byte
-# equality) against these captures.
+# Re-run this whenever Haskell behaviour changes.  The Rust port tests in
+# `tests/routes_*.rs` compare against these captures several ways: byte
+# equality for the error pages and the JSON graph, label equality for the
+# dot graphs (the port's dot emitter writes the same graph in another
+# dialect), and JSON envelope key set for the route captures whose payload
+# is not yet byte-stable.
 
 set -euo pipefail
 
@@ -129,14 +133,13 @@ fetch kill.txt                  "/kill"
 fetch kill_path.txt             "/kill?path=foo"
 
 # ---------------- Yesod's 500 page (json graph route) ----------------
-# `graphJsonThyPath` indexes the source cases with `!!` and falls through to
-# `error` on any other theory path, so these four URLs raise; the bodies are
-# Yesod's error page and are asserted byte-for-byte in `routes_graph.rs`.
-# The case indices are read as signed `Int`s, so `1/-1` indexes off the front
-# of the case list exactly as `1/0` would.
-fetch json_cases_neg_index.html "/thy/trace/1/json/cases/refined/0/0"
-fetch json_cases_neg_case_index.html "/thy/trace/1/json/cases/refined/1/-1"
-fetch json_cases_too_large.html "/thy/trace/1/json/cases/refined/9/9"
+# `graphJsonThyPath` falls through to `error "Unhandled theory path. This is a
+# bug."` on any theory path that is neither a proof nor a source case, so this
+# URL raises; the body is Yesod's error page and is asserted byte-for-byte in
+# `routes_graph.rs`.  Its OTHER 500s — the ones an out-of-range `cases/<i>/<j>`
+# index raises inside `!!` — are captured by nothing on purpose: the port
+# answers those with the ordinary Not Found page instead (a deliberate
+# divergence, see `graph_json_out_of_range_source_index_is_not_found`).
 fetch json_rules.html           "/thy/trace/1/json/rules"
 
 # ---------------- Yesod's 404 page ----------------
@@ -159,17 +162,25 @@ fetch not_found_huge_idx.html   "/thy/trace/99999999999999999999/overview/help"
 # ---------------- The dot routes' theory-path dispatch ----------------
 # `/graph` (`imgThyPath`) and `/interactive-graph-def` (`dotGraphString`) draw
 # source cases and proof nodes; every other theory path is their catch-all
-# `error`, and an out-of-range case index raises from their own `!!`.  The dot
-# captures are the graph itself, asserted by label in `routes_graph.rs` (the
-# port's dot emitter writes the same graph in a different dialect).
+# `error`.  The dot captures are the graph itself, asserted by label in
+# `routes_graph.rs` (the port's dot emitter writes the same graph in a
+# different dialect).  Their out-of-range `cases/<i>/<j>` 500s are captured by
+# nothing on purpose — the port answers those with `notFound` (a deliberate
+# divergence, see `dot_routes_out_of_range_case_is_not_found`).
 fetch igd_cases_refined.dot     "/thy/trace/1/interactive-graph-def/cases/refined/1/1"
 fetch igd_cases_raw.dot         "/thy/trace/1/interactive-graph-def/cases/raw/1/1"
-fetch igd_cases_neg_index.html  "/thy/trace/1/interactive-graph-def/cases/refined/0/0"
-fetch igd_cases_too_large.html  "/thy/trace/1/interactive-graph-def/cases/refined/1/9"
 fetch igd_unhandled_path.html   "/thy/trace/1/interactive-graph-def/rules"
-fetch graph_cases_neg_index.html "/thy/trace/1/graph/cases/refined/0/0"
-fetch graph_cases_too_large.html "/thy/trace/1/graph/cases/refined/1/9"
 fetch graph_unhandled_path.html "/thy/trace/1/graph/help"
+
+# ---------------- The method route's out-of-range index ----------------
+# An `i` past the end of the ranked methods reaches `getTheoryPathMR`'s own
+# "Sorry" alert — a 200 JSON alert that allocates no new theory index, so it is
+# safe to capture in any order.  A non-positive `i` instead passes upstream's
+# `length methods >= i` guard and raises inside `!!`, which comes back as an
+# alert quoting the GHC CallStack; that one is captured by nothing on purpose,
+# since the port answers this same "Sorry" alert for it (a deliberate
+# divergence, see `test_method_out_of_range_index_alerts_match_haskell`).
+fetch method_out_of_range.json  "/thy/trace/1/main/method/debug/9999"
 
 # ---------------- Stubs (capture for documentation) ----------------
 fetch intdot.html               "/thy/trace/1/intdot/lemma/debug"
@@ -194,6 +205,13 @@ for i in {1..40}; do
   fi
   sleep 0.5
 done
+if ! curl -fs -o /dev/null "$BASE/" 2>/dev/null; then
+  echo "error: Haskell server never came up for BigTermProved on $BASE/ (log: /tmp/haskell-server.log)" >&2
+  cat /tmp/haskell-server.log >&2
+  kill "$SERVER_PID" 2>/dev/null || true
+  rm -rf "$BIGDIR"
+  exit 1
+fi
 fetch json_proof_abbrev.json    "/thy/trace/1/json/proof/done/_/Init/Init?abbrevInBackend=1"
 rm -rf "$BIGDIR"
 

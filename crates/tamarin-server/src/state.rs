@@ -164,6 +164,16 @@ impl TheoryStore {
         self.inner.lock().by_idx.get(&idx).cloned()
     }
 
+    /// Whether a theory is stored at `idx`.  This is the existence probe the
+    /// handlers run before they parse a theory path (Haskell `withTheory`'s
+    /// theory-map lookup, `src/Web/Handler.hs:662-672`); unlike [`get`] it
+    /// does not clone the entry.
+    ///
+    /// [`get`]: Self::get
+    pub fn contains(&self, idx: usize) -> bool {
+        self.inner.lock().by_idx.contains_key(&idx)
+    }
+
     pub fn list(&self) -> Vec<TheoryEntry> {
         self.inner.lock().by_idx.values().cloned().collect()
     }
@@ -275,12 +285,17 @@ impl TheoryStore {
                 entry.ndc_cache.clone(),
             )
         };
+        // The entry's `Arc` becomes the `ProofState`'s cache handle
+        // directly — the web session and the shared display context both
+        // share this allocation instead of copying the rule list.
+        let ndc_cache =
+            ndc_cache.map(tamarin_theory::constraint::solver::context::IntrRuleCache::from);
         let ps = Arc::new(ProofState::new(
             &parser_theory,
             &cfg.maude_path,
             cfg.stop_on_trace,
             &in_file,
-            ndc_cache.as_ref().map(|c| c.as_slice()),
+            ndc_cache.as_ref(),
         )?);
         // Re-lock and double-check: another thread may have built (and
         // stored) the proof state while we held no lock.  If so, prefer

@@ -415,11 +415,7 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
         for b in sym.name.iter() {
             out.push(if *b == b'_' { '-' } else { *b as char });
         }
-        out.push_str(" : ");
-        out.push_str("Msg Msg ");
-        out.push_str("-> Msg");
-        out.push_str(" [comm assoc]");
-        out.push_str(" .\n");
+        out.push_str(" : Msg Msg -> Msg [comm assoc] .\n");
     }
     // Rewrite rules.
     for rule in msig.rrules() {

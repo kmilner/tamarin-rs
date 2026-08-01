@@ -107,18 +107,18 @@ impl<S, H, C, V> ProtoFormula<S, H, C, V> {
 // =============================================================================
 // Quantifier introduction (Formula.hs:347-360) + the whole-formula closures
 // `existFormula` / `forAllFormula` (Formula.hs:528-538)
+//
+// Intentionally retained: faithful, unit-tested mirror of the HS quantifier
+// machinery at those two anchors (`quantify`/`forAll`/`exists` and
+// `existFormula`/`forAllFormula`); no caller yet — `close_rule` builds its
+// `Deduction` lemma as theory text.  Each item below names its own HS
+// counterpart.
 // =============================================================================
 
 /// The term type of an [`LNFormula`] atom: variables are `BVar`s, so a term
 /// mentions both the enclosing binders' De Bruijn indices and free `LVar`s.
 type BLNTerm = VTerm<Name, BVar<LVar>>;
 
-/// Intentionally retained: the quantifier helpers below (`formula_frees`,
-/// `subst_free_var`, `quantify`, `exists_var`/`for_all_var`,
-/// `exist_formula`/`for_all_formula`) are a faithful, unit-tested mirror of
-/// the HS Formula.hs quantifier machinery with no live caller;
-/// `close_rule` builds its `Deduction` lemma as theory text instead.
-///
 /// HS `frees` on an `LNFormula`, i.e. its `HasFrees` instance
 /// (Formula.hs:321-326): `foldFrees f = foldMap (foldFrees f)`, where the
 /// `Foldable (ProtoFormula ...)` instance (Formula.hs:197-199) descends into the
@@ -146,9 +146,9 @@ fn for_each_free_var(fm: &LNFormula, f: &mut dyn FnMut(&LVar)) {
     }
 }
 
-/// The derived `Foldable (ProtoAtom s)` traversal order (Atom.hs:60-72):
-/// `Action` visits its time-point term before the fact's terms; the binary
-/// atoms visit left then right; `Syntactic` holds no term of the folded type.
+/// The `Foldable (ProtoAtom s)` traversal order (Atom.hs:129-136): `Action`
+/// visits its time-point term before the fact's terms; the binary atoms visit
+/// left then right; `Syntactic` holds no term of the folded type.
 fn for_each_atom_term<T>(a: &ProtoAtom<Unit2, T>, f: &mut dyn FnMut(&T)) {
     match a {
         ProtoAtom::Action(t, fa) => {
@@ -166,7 +166,7 @@ fn for_each_atom_term<T>(a: &ProtoAtom<Unit2, T>, f: &mut dyn FnMut(&T)) {
     }
 }
 
-/// The derived `Functor (ProtoAtom s)` instance, borrowing its input.
+/// The `Functor (ProtoAtom s)` instance (Atom.hs:121-127), borrowing its input.
 fn map_atom_terms<T, U>(
     a: &ProtoAtom<Unit2, T>,
     f: &mut dyn FnMut(&T) -> U,
@@ -185,7 +185,8 @@ fn map_atom_terms<T, U>(
     }
 }
 
-/// HS `mapLits (fmap (>>= subst i))` on one atom term (Formula.hs:347-352):
+/// The inner substitution of HS `quantify`, `mapLits (fmap (>>= subst i))`
+/// applied to one atom term (Formula.hs:349-352):
 /// replace the free occurrences of `x` by the De Bruijn index `i`, leaving
 /// every other literal — including already-bound indices — untouched.
 /// Applications are rebuilt with `f_app`, which re-normalises AC argument
@@ -206,8 +207,9 @@ fn subst_free_var(t: &BLNTerm, x: &LVar, i: u64) -> BLNTerm {
 /// HS `quantify x` (Formula.hs:347-352): turn the free variable `x` into a
 /// bound one, using the De Bruijn index of the binder that is about to be put
 /// in front of the formula.  The index counts the binders between the atom and
-/// that new binder, threaded by HS `mapAtoms`/`foldFormulaScope`
-/// (Formula.hs:159-170).
+/// that new binder, threaded by HS `mapAtoms` (Formula.hs:266-270) over
+/// `foldFormulaScope` (Formula.hs:158-173), whose `Qua` case recurses with
+/// `succ i` (Formula.hs:173).
 pub fn quantify(x: &LVar, fm: LNFormula) -> LNFormula {
     quantify_at(x, fm, 0)
 }
@@ -258,10 +260,10 @@ pub fn for_all_formula(fm: LNFormula) -> LNFormula {
     })
 }
 
-// NOTE: Haskell `mapAtoms` (Formula.hs:264-267) is
+// NOTE: Haskell `mapAtoms` (Formula.hs:266-270) is
 // `foldFormulaScope (\i a -> Ato $ f i a) ...`, i.e. its callback receives
 // the De Bruijn binder-depth `i` (threaded via `go (succ i)` at each `Qua`,
-// Formula.hs:163-170). The scope-aware machinery in the Rust port lives
+// Formula.hs:173). The scope-aware machinery in the Rust port lives
 // elsewhere (depth-threaded rewrites in `guarded_types.rs`, macro
 // application in `macro_expand.rs::apply_macros_formula`), so no
 // depth-blind `mapAtoms` mirror is provided here.

@@ -483,8 +483,7 @@ fn has_builtin_suffix(name: &[u8], suffixes: &[&[u8]]) -> bool {
 /// `isBuiltInIntruderRule`: everything except user-symbol Constr/Destr rules.
 pub fn is_built_in_intruder_rule(rule: &IntrRuleAC) -> bool {
     match &rule.info {
-        IntrRuleACInfo::ConstrRule(x, _) => has_builtin_suffix(x, &built_in_destr_rule_incl_pair()),
-        IntrRuleACInfo::DestrRule(x, _, _, _, _) => {
+        IntrRuleACInfo::ConstrRule(x, _) | IntrRuleACInfo::DestrRule(x, _, _, _, _) => {
             has_builtin_suffix(x, &built_in_destr_rule_incl_pair())
         }
         IntrRuleACInfo::Coerce
@@ -509,8 +508,11 @@ pub fn is_ndc_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> Option<NdcSta
     }
 }
 
-/// `isNDCDiffRule`: `Just IsNDCDiff` iff the head function has the diff-mode
-/// NDC property.
+/// `isNDCDiffRule` (IntruderRules.hs:524-527): `Just IsNDCDiff` iff the head
+/// function has the diff-mode NDC property.
+///
+/// Intentionally retained: faithful mirror of HS `isNDCDiffRule`
+/// (IntruderRules.hs:524-527); no caller yet.
 pub fn is_ndc_diff_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> Option<NdcState> {
     match &rule.info {
         RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, _, _, _, funs)) => match funs.first() {
@@ -545,15 +547,19 @@ pub fn get_conc_fact(rule: &IntrRuleAC) -> &LNFact {
     }
 }
 
-/// `replaceMatchingRule`: replace a deconstruction rule by the version from
-/// `d` with the same name, premises, and conclusions (copying its chain
-/// limit); other rules are returned unchanged.
+/// `replaceMatchingRule` (Rule.hs:873-878): replace a deconstruction rule by
+/// the version from `d` with the same name, premises, and conclusions (copying
+/// its chain limit); other rules are returned unchanged.
+///
+/// Intentionally retained: faithful mirror of HS `replaceMatchingRule`
+/// (Rule.hs:873-878); no caller yet.
 pub fn replace_matching_rule(d: &[IntrRuleAC], rule: IntrRuleAC) -> IntrRuleAC {
     if !matches!(rule.info, IntrRuleACInfo::DestrRule(_, _, _, _, _)) {
         return rule;
     }
+    let name = intr_rule_name_string(&rule.info);
     for d1 in d {
-        if intr_rule_name_string(&d1.info) == intr_rule_name_string(&rule.info)
+        if intr_rule_name_string(&d1.info) == name
             && d1.premises == rule.premises
             && d1.conclusions == rule.conclusions
         {

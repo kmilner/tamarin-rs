@@ -42,6 +42,64 @@ use tamarin_term::maude_proc::{MaudeHandle, MaudePool};
 use crate::rule::IntrRuleAC;
 use crate::theory::OpenProtoRule;
 
+/// Shared handle on a theory's intruder-rule cache.
+///
+/// The rules are read-only once built: HS's `closeRuleCache` consumes
+/// `_thyCache` verbatim.  The load paths build the cache once per theory
+/// (the NDC pass, `close_rule::check_close_intr_rule`) and hand that one
+/// handle to every context derived from it, so the many per-probe /
+/// per-deduction / per-lemma contexts cost a refcount bump instead of a
+/// deep copy of the rule list.  A context built WITHOUT an injected cache
+/// assembles its own ([`ProofContext::assemble_intruder_rules`] plus the
+/// cache permutation) and shares that one with its own clones.
+///
+/// Reads go through the [`std::ops::Deref`] to `[IntrRuleAC]` (and the
+/// borrowing [`IntoIterator`]), which keeps the slice API — `.iter()`,
+/// indexing, `for r in &cache` — available on the handle.  There is
+/// deliberately no `DerefMut` and no interior mutability: sharing cannot
+/// change what any context sees.
+#[derive(Debug, Clone)]
+pub struct IntrRuleCache(std::sync::Arc<Vec<IntrRuleAC>>);
+
+impl From<Vec<IntrRuleAC>> for IntrRuleCache {
+    fn from(rules: Vec<IntrRuleAC>) -> Self {
+        IntrRuleCache(std::sync::Arc::new(rules))
+    }
+}
+
+/// Adopt an already-shared rule list without copying it.  The web
+/// `TheoryEntry` keeps its load-time cache as `Arc<Vec<IntrRuleAC>>`, so
+/// every `ProofState` built from that entry reuses the one allocation.
+impl From<std::sync::Arc<Vec<IntrRuleAC>>> for IntrRuleCache {
+    fn from(rules: std::sync::Arc<Vec<IntrRuleAC>>) -> Self {
+        IntrRuleCache(rules)
+    }
+}
+
+/// Copy a borrowed rule list into a fresh shared cache.  Used at the crate
+/// boundary, where a caller still hands in `&[IntrRuleAC]`; the copy happens
+/// once per entry point rather than once per context.
+impl From<&[IntrRuleAC]> for IntrRuleCache {
+    fn from(rules: &[IntrRuleAC]) -> Self {
+        Self::from(rules.to_vec())
+    }
+}
+
+impl std::ops::Deref for IntrRuleCache {
+    type Target = [IntrRuleAC];
+    fn deref(&self) -> &[IntrRuleAC] {
+        &self.0
+    }
+}
+
+impl<'a> IntoIterator for &'a IntrRuleCache {
+    type Item = &'a IntrRuleAC;
+    type IntoIter = std::slice::Iter<'a, IntrRuleAC>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
 /// Read-only, immutable-after-build bundle of a `ProofContext`.
 ///
 /// These fields are computed once at theory-load time (in
@@ -60,7 +118,10 @@ use crate::theory::OpenProtoRule;
 ///    fully independent — each lemma's `ensure_saturated` populates ITS
 ///    OWN `full_sources` cells under ITS OWN `typing_assumptions`, with
 ///    no cross-lemma contamination (byte-identical to the pre-Arc
-///    behaviour).
+///    behaviour).  `intruder_rules` is the one member that stays shared
+///    across such a clone: it is an [`IntrRuleCache`] handle over
+///    read-only rules with no interior mutability, so no lemma can
+///    observe another's use of it.
 ///  * `with_swapped_maude` SHARES this bundle (`Arc::clone`).  Its clones
 ///    are created only DURING a lemma's proof search — after
 ///    `ensure_saturated` has run and set `saturate_state = Done` — so the
@@ -74,8 +135,9 @@ pub struct ProofContextShared {
     /// Special intruder rules — `Coerce`, `PubConstr`, `FreshConstr`,
     /// `ISend`, `IRecv` (and `IEquality` in diff mode). These let the
     /// solver discharge `KU(_)` / `KD(_)` goals that arise from
-    /// `In(_)`-fact reasoning.
-    pub intruder_rules: Vec<IntrRuleAC>,
+    /// `In(_)`-fact reasoning.  Held as a shared [`IntrRuleCache`] handle,
+    /// so cloning the bundle shares the rule list instead of copying it.
+    pub intruder_rules: IntrRuleCache,
     /// Precomputed unique sources — for each fact tag with exactly
     /// one producing rule, we cache the producer name. Lets goal
     /// solving short-circuit candidate enumeration.
@@ -580,7 +642,14 @@ impl ProofContext {
         rules: Vec<OpenProtoRule>,
         restrictions: Vec<crate::guarded::Guarded>,
     ) -> Self {
-        Self::new_with_restrictions_pool_forced(maude, maude_pool, rules, restrictions, &[], None)
+        Self::new_with_restrictions_pool_forced(
+            maude,
+            maude_pool,
+            rules,
+            restrictions,
+            &[],
+            None::<IntrRuleCache>,
+        )
     }
 
     /// HS-faithful assembly of the intruder-rule cache
@@ -797,14 +866,17 @@ impl ProofContext {
     /// context reuses the tagged+permuted rules instead of re-assembling —
     /// HS `closeRuleCache` consumes `_thyCache` verbatim.  `None`
     /// assembles from the signature with the cache permutation applied
-    /// (no property check).
+    /// (no property check); it needs a type annotation
+    /// (`None::<IntrRuleCache>`) since nothing else fixes the parameter.
+    /// An [`IntrRuleCache`] argument shares the caller's rule list; an
+    /// owned `Vec<IntrRuleAC>` is moved into a fresh one.
     pub fn new_with_restrictions_pool_forced(
         maude: MaudeHandle,
         maude_pool: Option<std::sync::Arc<MaudePool>>,
         rules: Vec<OpenProtoRule>,
         restrictions: Vec<crate::guarded::Guarded>,
         forced_injective_facts: &[crate::fact::FactTag],
-        intr_override: Option<Vec<IntrRuleAC>>,
+        intr_override: Option<impl Into<IntrRuleCache>>,
     ) -> Self {
         Self::new_impl(
             maude,
@@ -812,7 +884,7 @@ impl ProofContext {
             rules,
             restrictions,
             forced_injective_facts,
-            intr_override,
+            intr_override.map(Into::into),
         )
     }
 
@@ -825,11 +897,14 @@ impl ProofContext {
     /// checked `_thyCache`, which HS probes inherit verbatim,
     /// MessageDerivationChecks.hs).  No NDC pass runs on the injected
     /// cache (HS's re-closing never re-checks).
+    /// Both callers build many contexts off ONE cache (one per probe rule,
+    /// one per decomposition of a checked rule pair), so the handle is
+    /// shared rather than copied per context.
     pub fn new_with_injected_intruder_rules(
         maude: MaudeHandle,
         rules: Vec<OpenProtoRule>,
         restrictions: Vec<crate::guarded::Guarded>,
-        intruder_rules: Vec<IntrRuleAC>,
+        intruder_rules: IntrRuleCache,
     ) -> Self {
         Self::new_impl(maude, None, rules, restrictions, &[], Some(intruder_rules))
     }
@@ -840,7 +915,7 @@ impl ProofContext {
         mut rules: Vec<OpenProtoRule>,
         restrictions: Vec<crate::guarded::Guarded>,
         forced_injective_facts: &[crate::fact::FactTag],
-        intr_override: Option<Vec<IntrRuleAC>>,
+        intr_override: Option<IntrRuleCache>,
     ) -> Self {
         // Inherit the maude signature from the handle so we can
         // synthesise per-symbol construction rules.
@@ -850,9 +925,11 @@ impl ProofContext {
         // Without one, assemble from the signature and apply the NDC
         // cache permutation — never the property check, which runs only
         // once per theory at load (`close_rule::check_close_intr_rule`).
-        let intruder_rules = match intr_override {
+        let intruder_rules: IntrRuleCache = match intr_override {
             Some(cache) => cache,
-            None => Self::ndc_check_cache_order(Self::assemble_intruder_rules(&sig, &maude)),
+            None => IntrRuleCache::from(Self::ndc_check_cache_order(
+                Self::assemble_intruder_rules(&sig, &maude),
+            )),
         };
         Self::dump_intruder_rules(&intruder_rules);
         // Detect injective fact instances ahead of time — mirrors
@@ -1370,5 +1447,74 @@ pub fn annotate_loop_breakers(
             .filter(|(rk, _)| rk == k)
             .map(|(_, p)| *p)
             .collect();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IntrRuleCache;
+    use crate::rule::IntrRuleAC;
+
+    /// A small Maude-free rule list: the special intruder rules
+    /// (`coerce`, `pub`, `fresh`, `isend`, `irecv`).
+    fn sample_rules() -> Vec<IntrRuleAC> {
+        let rules = crate::intruder_rules::special_intruder_rules(false);
+        assert!(rules.len() > 1, "sample needs several rules to compare");
+        rules
+    }
+
+    /// Cloning a handle must hand out the SAME rule list, not a copy —
+    /// this is what makes the per-probe / per-deduction / per-lemma
+    /// contexts cheap.
+    #[test]
+    fn intr_rule_cache_clone_shares_one_allocation() {
+        let cache = IntrRuleCache::from(sample_rules());
+        let shared = cache.clone();
+        assert_eq!(cache.as_ptr(), shared.as_ptr());
+        assert_eq!(&*cache, &*shared);
+    }
+
+    /// `From<&[_]>` is the boundary copy: a fresh allocation holding the
+    /// same rules in the same order.  Order is parity-relevant (it feeds
+    /// `solveAction`'s `disjunctionOfList rules`).
+    #[test]
+    fn intr_rule_cache_from_borrowed_slice_copies_without_reordering() {
+        let rules = sample_rules();
+        let cache = IntrRuleCache::from(rules.as_slice());
+        assert_ne!(cache.as_ptr(), rules.as_ptr());
+        assert_eq!(&*cache, rules.as_slice());
+    }
+
+    /// `From<Arc<Vec<_>>>` adopts the caller's allocation — this is what
+    /// lets the web `TheoryEntry`'s stored cache reach a `ProofContext`
+    /// without a copy.
+    #[test]
+    fn intr_rule_cache_from_arc_adopts_the_same_allocation() {
+        let shared = std::sync::Arc::new(sample_rules());
+        let ptr = shared.as_ptr();
+        let cache = IntrRuleCache::from(shared.clone());
+        assert_eq!(cache.as_ptr(), ptr);
+        assert_eq!(&*cache, shared.as_slice());
+    }
+
+    /// `From<Vec<_>>` — the conversion the `impl Into<IntrRuleCache>`
+    /// constructor parameter applies to owned rule lists — moves the rules
+    /// through verbatim.
+    #[test]
+    fn intr_rule_cache_from_vec_keeps_rules_verbatim() {
+        let rules = sample_rules();
+        let cache = IntrRuleCache::from(rules.clone());
+        assert_eq!(&*cache, rules.as_slice());
+    }
+
+    /// Borrowed iteration (`for r in &ctx.intruder_rules`, the form used
+    /// across the solver) walks the rules in cache order.
+    #[test]
+    fn intr_rule_cache_borrowed_iteration_matches_slice_order() {
+        let rules = sample_rules();
+        let cache = IntrRuleCache::from(rules.clone());
+        let walked: Vec<&IntrRuleAC> = (&cache).into_iter().collect();
+        let expected: Vec<&IntrRuleAC> = rules.iter().collect();
+        assert_eq!(walked, expected);
     }
 }

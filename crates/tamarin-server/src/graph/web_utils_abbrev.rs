@@ -39,10 +39,18 @@ use tamarin_theory::constraint::system::System;
 /// `graphJsonThyPath` (`src/Web/Theory.hs:1331`).
 pub const MIN_ABBREV_SIZE: usize = 30;
 
-/// Port of `getTerms` (Utils.hs:39-40): every fact term of every rule's
-/// conclusions followed by its premises, over `sNodes` in `NodeId` order.
+/// Port of `getTerms` (Utils.hs:40-41): every fact term of every rule's
+/// conclusions followed by its premises.
+///
+/// `get sNodes` is a `M.Map NodeId RuleACInst` (System.hs:383) and the outer
+/// `concatMap` folds it through `Foldable`, i.e. over `M.elems` — ascending
+/// `NodeId`, where `Ord LVar` compares idx, then sort, then name
+/// (LTerm.hs:546-548).  `System::nodes` is a `Vec` in insertion order, so the
+/// borrowed view is sorted first.
 fn get_terms(sys: &System) -> impl Iterator<Item = &LNTerm> {
-    sys.nodes.iter().flat_map(|(_, ru)| {
+    let mut ordered: Vec<_> = sys.nodes.iter().collect();
+    ordered.sort_by_key(|a| a.0);
+    ordered.into_iter().flat_map(|(_, ru)| {
         ru.conclusions
             .iter()
             .chain(ru.premises.iter())
@@ -128,7 +136,7 @@ mod tests {
     use tamarin_term::term::{f_app_ac, f_app_no_eq, lit};
     use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
     use tamarin_theory::rule::{
-        ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo,
+        ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleACInst, RuleAttributes, RuleInfo,
     };
 
     fn var(name: &str) -> LNTerm {
@@ -163,10 +171,9 @@ mod tests {
         lit(Lit::Con(Name::new(NameTag::Abbrev, id)))
     }
 
-    /// A system with a single rule whose one conclusion carries `terms`.
-    fn system_with(terms: Vec<LNTerm>) -> System {
-        let mut sys = System::default();
-        let ru = Rule::new(
+    /// A rule with no premises whose single conclusion carries `terms`.
+    fn rule_with(terms: Vec<LNTerm>) -> RuleACInst {
+        Rule::new(
             RuleInfo::<_, tamarin_theory::rule::IntrRuleACInfo>::Proto(ProtoRuleACInstInfo {
                 name: ProtoRuleName::Stand(tamarin_term::intern::intern_str("R")),
                 attributes: RuleAttributes::default(),
@@ -182,13 +189,29 @@ mod tests {
                 terms,
             )],
             Vec::new(),
-        );
-        sys.nodes_mut().push((LVar::new("i", LSort::Node, 1), ru));
+        )
+    }
+
+    /// A system with a single rule whose one conclusion carries `terms`.
+    fn system_with(terms: Vec<LNTerm>) -> System {
+        let mut sys = System::default();
+        sys.nodes_mut()
+            .push((LVar::new("i", LSort::Node, 1), rule_with(terms)));
         sys
     }
 
     fn conclusion_terms(sys: &System) -> Vec<LNTerm> {
         sys.nodes[0].1.conclusions[0].terms.to_vec()
+    }
+
+    /// The conclusion terms of the node stored under `#i.idx`.
+    fn node_conclusion_terms(sys: &System, idx: u64) -> Vec<LNTerm> {
+        let (_, ru) = sys
+            .nodes
+            .iter()
+            .find(|(id, _)| id.idx == idx)
+            .expect("node present");
+        ru.conclusions[0].terms.to_vec()
     }
 
     // A small term never reaches the size threshold, so the system comes back
@@ -238,6 +261,24 @@ mod tests {
             conclusion_terms(&out),
             vec![abbrev_const("f1"), abbrev_const("f1")]
         );
+    }
+
+    // `getTerms` folds `sNodes`, a `Map NodeId RuleACInst`, so it visits nodes
+    // in ascending `NodeId` order however they were stored.  The per-symbol
+    // counter runs across nodes, so the LOWEST id takes the bare `f` even when
+    // it was added last.  `System::nodes` itself keeps insertion order —
+    // `Reduction::set_nodes` relies on it to pick the surviving rule at an id
+    // collision — so only the abbreviation's view is sorted.
+    #[test]
+    fn abbreviation_counter_follows_node_id_order_not_insertion_order() {
+        let mut sys = System::default();
+        sys.add_node(LVar::new("i", LSort::Node, 2), rule_with(vec![big("x")]));
+        sys.add_node(LVar::new("i", LSort::Node, 1), rule_with(vec![big("y")]));
+        assert_eq!(sys.nodes[0].0.idx, 2);
+        let out = abbrev(true, MIN_ABBREV_SIZE, &sys);
+        assert_eq!(node_conclusion_terms(&out, 1), vec![abbrev_const("f")]);
+        assert_eq!(node_conclusion_terms(&out, 2), vec![abbrev_const("f1")]);
+        assert_eq!(out.nodes[0].0.idx, 2);
     }
 
     // `shorten` only rewrites `NoEq` applications; a large AC-headed term

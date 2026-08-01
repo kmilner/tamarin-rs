@@ -49,6 +49,7 @@
 //!   --precompute-only          run precomputation only
 //!   --open-chains=N, -cN       open-chain bound (parsed, not yet routed)
 //!   --derivcheck-timeout=N -dN message-derivation check timeout
+//!   --no-ndc                   deactivate the no-deconstruction-chain check
 //!   --no-reuse                 do not export reuse lemmas (parsed, not yet routed)
 //!   --no-restrictions          do not export restrictions (parsed, not yet routed)
 //!   --replication-bound=N      DeepSec replication bound (parsed, not yet routed)
@@ -928,6 +929,7 @@ pub fn help_text() -> String {
     s.push_str("  -s --saturation=N                     Saturation iterations.\n");
     s.push_str("  -c --open-chains=N                    Open-chain bound.\n");
     s.push_str("  -d --derivcheck-timeout=N             Derivation check timeout.\n");
+    s.push_str("     --no-ndc                           Deactivate the NDC check.\n");
     s.push_str("     --auto-sources                     Auto-generate sources lemmas.\n");
     s.push_str("     --oraclename=FILE                  Oracle file path.\n");
     s.push_str("     --oracle-only                      Stop if oracle ranks no goals.\n");

@@ -1246,7 +1246,10 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // mirroring HS's `closeRuleCache` consuming `_thyCache` verbatim.
         // The stderr markers are suppressed by `--quiet`, like the
         // sibling `[Theory X]` markers routed through `marker`.
-        let ndc_cache: Option<Vec<tamarin_theory::rule::IntrRuleAC>> =
+        // Held as a shared handle: the derivation-check probes, the
+        // auto-sources scratch contexts, the prover session and the
+        // per-lemma fallback all share this one allocation.
+        let ndc_cache: Option<tamarin_theory::constraint::solver::context::IntrRuleCache> =
             file_maude.as_ref().map(|m| {
                 let checked = tamarin_theory::close_rule::check_close_intr_rule(
                     m,
@@ -1261,7 +1264,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     }
                     elaborated.signature.maude_sig = sig;
                 }
-                checked.cache
+                checked.cache.into()
             });
 
         // Dynamic Message Derivation Checks (mirrors HS
@@ -1279,7 +1282,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     &parsed,
                     m,
                     deriv_timeout,
-                    ndc_cache.as_deref(),
+                    ndc_cache.clone(),
                 );
                 wf_report.extend(extra);
             }
@@ -1391,7 +1394,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     &mut elaborated,
                     maude.clone(),
                     file_maude_pool.clone(),
-                    ndc_cache.as_deref(),
+                    ndc_cache.as_ref(),
                 );
             }
             let session = tamarin_theory::prove::ProverSession::build_with_in_file_and_heuristic(
@@ -1401,7 +1404,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 in_file,
                 cli_heuristic.clone(),
                 cut,
-                ndc_cache.as_deref(),
+                ndc_cache.as_ref(),
             )
             .ok();
 
@@ -1452,7 +1455,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     (None, _) => tamarin_theory::prove::prove_lemma_with_pool_file_heuristic(
                         &parsed, &lemma_name, maude.clone(),
                         file_maude_pool.clone(), budget, in_file, &cli_heuristic, cut,
-                        ndc_cache.as_deref()),
+                        ndc_cache.as_ref()),
                 };
                 let (verdict, proof_steps, proof_body) = match outcome {
                     Ok(root) => {

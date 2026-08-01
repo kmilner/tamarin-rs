@@ -585,7 +585,10 @@ async fn test_not_found_page_escapes_the_request_path() {
         .expect("send");
     assert_eq!(res.status(), 404);
     assert!(
-        res.text().await.expect("text").contains("<p>/caf%C3%A9</p>"),
+        res.text()
+            .await
+            .expect("text")
+            .contains("<p>/caf%C3%A9</p>"),
         "the raw path is echoed undecoded, without the query string"
     );
 }

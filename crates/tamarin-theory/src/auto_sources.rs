@@ -29,7 +29,7 @@ use crate::fact::{proto_or_in_fact_view, proto_or_out_fact_view, FactTag, LNFact
 use crate::rule::{print_fact_position, print_position, rule_name_string, ExtendedPosition};
 use crate::theory::{OpenProtoRule, TheoryItem};
 use tamarin_parser::ast as p;
-use tamarin_term::lterm::LNTerm;
+use tamarin_term::lterm::{rename_avoiding, LNTerm};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::positions::{at_pos, deepest_prot_subterm, find_pos};
 use tamarin_term::rewriting::Equal;
@@ -431,7 +431,7 @@ pub fn add_auto_sources_lemma(
                         if rules[*rout_i].name() == rin_name {
                             continue;
                         }
-                        let fout = tamarin_term::lterm::rename_avoiding(tout.clone(), protterm);
+                        let fout = rename_avoiding(tout.clone(), protterm);
                         if maude
                             .unifiable(&[Equal {
                                 lhs: protterm.clone(),
@@ -466,7 +466,7 @@ pub fn add_auto_sources_lemma(
                         {
                             continue;
                         }
-                        let unifout = tamarin_term::lterm::rename_avoiding(fout.clone(), fact);
+                        let unifout = rename_avoiding(fout.clone(), fact);
                         if crate::rule::unifiable_ln_facts(maude, fact, &unifout).unwrap_or(false) {
                             outs.push((*rout_i, fout.clone()));
                         }
@@ -625,10 +625,13 @@ pub fn apply_auto_sources(
     elaborated: &mut crate::theory::Theory,
     maude: MaudeHandle,
     pool: Option<std::sync::Arc<tamarin_term::maude_proc::MaudePool>>,
-    ndc_cache: Option<&[crate::rule::IntrRuleAC]>,
+    ndc_cache: Option<&crate::constraint::solver::context::IntrRuleCache>,
 ) -> bool {
     use crate::constraint::solver::context::ProofContext;
     use crate::guarded::formula_to_guarded;
+
+    // Both scratch contexts below share the caller's one rule list.
+    let ndc_cache = ndc_cache.cloned();
 
     // Restrictions → guarded (mirrors ProverSession::build; skip on failure).
     let mut restrictions = Vec::new();
@@ -661,7 +664,7 @@ pub fn apply_auto_sources(
         rules.clone(),
         restrictions.clone(),
         &[],
-        ndc_cache.map(<[_]>::to_vec),
+        ndc_cache.clone(),
     );
     let raw_chains = collect_chains(&ctx_raw);
 
@@ -690,7 +693,7 @@ pub fn apply_auto_sources(
             rules.clone(),
             restrictions,
             &[],
-            ndc_cache.map(<[_]>::to_vec),
+            ndc_cache,
         );
         ctx_ref.typing_assumptions = typing_asms;
         !collect_chains(&ctx_ref).is_empty()

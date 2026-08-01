@@ -298,7 +298,9 @@ fn read_digits(s: &str, radix: u32) -> Option<(i64, &str)> {
     let mut value: i64 = 0;
     let mut end = 0;
     for (i, c) in s.char_indices() {
-        let Some(digit) = c.to_digit(radix) else { break };
+        let Some(digit) = c.to_digit(radix) else {
+            break;
+        };
         value = value
             .wrapping_mul(i64::from(radix))
             .wrapping_add(i64::from(digit));

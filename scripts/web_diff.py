@@ -34,6 +34,9 @@ def main():
     if len(sys.argv) < 4:
         print("usage: web_diff.py HS.json RS.json OUT.tsv [DIFFDIR]", file=sys.stderr)
         sys.exit(2)
+    # `manifest` holds URL rows only: web_crawl.py's `__plan_version__` stamp
+    # is a TOP-LEVEL sibling of it (beside base/lemmas/log/capped), so the URL
+    # union below never sees it and cannot report it as a MISSING_* row.
     hs = load(sys.argv[1])["manifest"]
     rs = load(sys.argv[2])["manifest"]
     out_tsv = sys.argv[3]
@@ -42,6 +45,21 @@ def main():
         os.makedirs(diffdir, exist_ok=True)
 
     urls = sorted(set(hs) | set(rs))
+    # Retired probe family: the three graph routes at case index 0/0.  The
+    # backends deliberately disagree there (upstream's unchecked `!!` answers
+    # a 500 exception page, the port answers Not Found — see the divergence
+    # notes in tamarin-server handlers/theory.rs), so the rows pair as
+    # neither MATCH nor a defect.  web_crawl.py does not probe them;
+    # manifests cached before the retirement still carry the HS rows, which
+    # are dropped here rather than surfacing as MISSING_RS.
+    urls = [
+        u
+        for u in urls
+        if not (
+            u.endswith("/0/0")
+            and any(f"/{r}/cases/" in u for r in ("json", "graph", "interactive-graph-def"))
+        )
+    ]
     rows = []
     counts = {}
     for u in urls:

@@ -26,7 +26,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use tamarin_term::function_symbols::{
-    diff_sym, exp_sym, nat_one_sym, pair_sym, CSym, FunSym, EMAP_SYM_STRING,
+    diff_sym, exp_sym, nat_one_sym, pair_sym, AcSym, CSym, FunSym, EMAP_SYM_STRING,
 };
 use tamarin_term::lterm::{LNTerm, LSort, LVar};
 use tamarin_term::pretty::{ac_op_symbol, pretty_lnterm};
@@ -415,9 +415,7 @@ fn lnterm_doc(t: &LNTerm) -> Doc {
         Term::Lit(_) => Doc::text(pretty_lnterm(t)),
         // #883 prettyTerm: a nullary user-AC application prints as the bare
         // symbol name (n-ary ones go through the generic AC arm below).
-        Term::App(FunSym::Ac(tamarin_term::function_symbols::AcSym::AcFct(s)), ts)
-            if ts.is_empty() =>
-        {
+        Term::App(FunSym::Ac(AcSym::AcFct(s)), ts) if ts.is_empty() => {
             Doc::text(String::from_utf8_lossy(s.name))
         }
         Term::App(FunSym::Ac(o), ts) => {

@@ -4332,7 +4332,7 @@ end"#;
         panic!("theory must contain an equation");
     }
 
-    // HS `functionAttribute` (Signature.hs:164-171) gained `AC`, `NDC-diff` and
+    // HS `functionAttribute` (Signature.hs:164-171) accepts `AC`, `NDC-diff` and
     // `NDC`; `function` (Signature.hs:183-225) folds them into the symbol's AC and
     // NDC state.
     #[test]

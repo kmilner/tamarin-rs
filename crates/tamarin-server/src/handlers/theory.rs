@@ -70,7 +70,7 @@ pub async fn interactive_overview(
     State(state): State<Arc<AppState>>,
     Path((idx, raw_path)): Path<(usize, String)>,
 ) -> Response {
-    if state.store.get(idx).is_none() {
+    if !state.store.contains(idx) {
         // Haskell's `notFound` returns 404 HTML; our overview is HTML
         // too so we match exactly.
         return not_found();
@@ -107,7 +107,7 @@ pub async fn theory_path_main(
     State(state): State<Arc<AppState>>,
     Path((idx, raw_path)): Path<(usize, String)>,
 ) -> Response {
-    if state.store.get(idx).is_none() {
+    if !state.store.contains(idx) {
         return not_found();
     }
     let Some(path) = parse_path(&raw_path) else {
@@ -151,7 +151,7 @@ fn overview_proof_url(idx: usize, lemma: &str, sub: &[String]) -> String {
 /// state and returns a JsonRedirect pointing at the resulting
 /// `overview/proof/<lemma>/<sub>` URL.  Mirrors Haskell's
 /// `applyMethodAtPath` + `modifyTheory` flow in
-/// `src/Web/Handler.hs:1013-1015` and `src/Web/Theory.hs:80-94`.
+/// `src/Web/Handler.hs:1078-1081` and `src/Web/Theory.hs:86-100`.
 fn apply_method_and_redirect(
     state: &AppState,
     idx: usize,
@@ -211,15 +211,27 @@ fn apply_method_and_redirect(
             )
         })
         .collect();
-        // The method number is 1-based and read as a signed `Int`, so 0 and
-        // negatives index off the front of the ranked list.
-        let Some(nth) = usize::try_from(method_nr - 1)
-            .ok()
-            .filter(|nth| *nth < methods.len())
+        // The method index is read signed (`safeRead` at `ReadS Int`,
+        // `src/Web/Types.hs:443`), so every `i` a client can type reaches
+        // here.  Upstream guards it with `length methods >= i` alone and then
+        // evaluates `methods !! (i-1)` (`src/Web/Theory.hs:99`), which admits
+        // every `i <= 0` into the `!!`: the raised `Prelude.!!` text — GHC
+        // CallStack and all — comes back as an ordinary 200 JSON alert, and
+        // only an `i` past the end reaches the intended
+        // "Sorry, but the prover failed on the selected method!"
+        // (`src/Web/Handler.hs:1081`).  RS deliberately corrects that: an
+        // index naming no ranked method is one failure, whichever side of the
+        // list it falls off, and it always answers that alert.
+        let n_methods = methods.len();
+        let Some(method) = method_nr
+            .checked_sub(1)
+            .and_then(|nth| usize::try_from(nth).ok())
+            .filter(|nth| *nth < n_methods)
+            .and_then(|nth| methods.into_iter().nth(nth))
         else {
             return json_resp::alert("Sorry, but the prover failed on the selected method!");
         };
-        methods.into_iter().nth(nth).unwrap()
+        method
     };
     // Allocate a fresh theory idx so the post-step state doesn't
     // overwrite the source (matches Haskell's `modifyTheory` →
@@ -241,7 +253,7 @@ fn apply_method_and_redirect(
         return json_resp::alert(format!("proof step failed: {}", e));
     }
     // Build the redirect URL.  Haskell's `getTheoryPathMR` for
-    // `TheoryMethod` (`src/Web/Handler.hs:1013-1016`) advances the target
+    // `TheoryMethod` (`src/Web/Handler.hs:1078-1081`) advances the target
     // via `nextSmartThyPath newThy (TheoryProof lemma proofPath)`, i.e. it
     // walks INTO the freshly created child case of the grown tree.  We do
     // the same: re-fetch the entry at `new_idx` (its `proof_state` Arc is
@@ -1443,8 +1455,6 @@ fn intdot_shell_html(title: &str, dotsrc: &str) -> String {
          <div id=\"popout-options\"><ul id=\"navigation\">\
          {options}</ul></div>\
          <dot-graph-viz dotsrc=\"{dotsrc}\"></dot-graph-viz>\n</div></body></html>",
-        title = title,
-        dotsrc = dotsrc,
         options = theory_html::OPTIONS_MENU_ITEMS,
     )
 }
@@ -1479,16 +1489,18 @@ pub async fn graph(
     Path((idx, raw_path)): Path<(usize, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
-    let Some(_entry) = state.store.get(idx) else {
+    if !state.store.contains(idx) {
         return not_found();
-    };
+    }
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
     };
     // HS `getTheoryGraphR` (`src/Web/Handler.hs:1418-1432`) answers
     // `imgThyPath`'s `Nothing` — a proof path that does not resolve — with a
-    // generic `notFound`; there is no placeholder SVG.
-    let sys = match dot_path_system(&state, idx, &path, &GRAPH_SITES) {
+    // generic `notFound`; there is no placeholder SVG.  In the port a source
+    // case whose indices name none is that same `Nothing` — upstream's `!!`
+    // raises there instead (see [`source_case_system`]).
+    let sys = match dot_path_system(&state, idx, &path, GRAPH_UNHANDLED_SITE) {
         Ok(Some(s)) => s,
         Ok(None) => return not_found(),
         Err(message) => return internal_server_error(&message),
@@ -1517,16 +1529,18 @@ pub async fn interactive_graph_def(
     Path((idx, raw_path)): Path<(usize, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
-    let Some(_entry) = state.store.get(idx) else {
+    if !state.store.contains(idx) {
         return not_found();
-    };
+    }
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
     };
     // HS `getTheoryInteractiveGraphR` (`src/Web/Handler.hs:1464-1470`) answers
     // `dotGraphString`'s `Nothing` — a proof path that does not resolve — with
-    // `notFound`.
-    let sys = match dot_path_system(&state, idx, &path, &INTERACTIVE_DOT_SITES) {
+    // `notFound`.  In the port a source case whose indices name none is that
+    // same `Nothing` — upstream's `!!` raises there instead (see
+    // [`source_case_system`]).
+    let sys = match dot_path_system(&state, idx, &path, INTERACTIVE_DOT_UNHANDLED_SITE) {
         Ok(Some(s)) => s,
         Ok(None) => return not_found(),
         Err(message) => return internal_server_error(&message),
@@ -1547,8 +1561,8 @@ pub async fn interactive_graph_def(
 ///   labelled `Theory: <thy> Lemma: <lemma>`.  An unresolvable proof path is
 ///   HS `fromMaybe ""`: a 200 with an EMPTY body.
 /// - `TheorySource kind i j` — the `(i-1, j-1)` case system, labelled
-///   `Theory: <thy> Case: <i>:<j>`, with no backend abbreviation.  HS indexes
-///   with `!!`, so an out-of-range index raises and Yesod answers 500.
+///   `Theory: <thy> Case: <i>:<j>`, with no backend abbreviation.  Indices
+///   naming no case are a 404 (see [`source_case_system`]).
 /// - every other path — HS `error "Unhandled theory path. This is a bug."`,
 ///   i.e. 500.
 ///
@@ -1560,7 +1574,7 @@ pub async fn graph_json(
     Path((idx, raw_path)): Path<(usize, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
-    if state.store.get(idx).is_none() {
+    if !state.store.contains(idx) {
         return not_found();
     }
     let Some(path) = parse_path(&raw_path) else {
@@ -1597,9 +1611,8 @@ pub async fn graph_json(
             src_idx,
             case_idx,
         } => {
-            let sys = match source_case_system(&entry, kind, *src_idx, *case_idx, &JSON_SITES) {
-                Ok(sys) => sys,
-                Err(message) => return internal_server_error(&message),
+            let Some(sys) = source_case_system(&entry, kind, *src_idx, *case_idx) else {
+                return not_found();
             };
             let label = format!("Theory: {} Case: {}:{}", entry.name, src_idx, case_idx);
             json_graph_response(crate::graph::json::sequents_to_json_pretty(
@@ -1607,7 +1620,7 @@ pub async fn graph_json(
                 &[(label, &sys)],
             ))
         }
-        _ => internal_server_error(&unhandled_theory_path(JSON_SITES.unhandled)),
+        _ => internal_server_error(&unhandled_theory_path(JSON_UNHANDLED_SITE)),
     }
 }
 
@@ -1621,47 +1634,25 @@ fn json_graph_response(body: String) -> Response {
     (StatusCode::OK, headers, body).into_response()
 }
 
-/// Where the `thyPathSystem` a route dispatches through sits in
-/// `src/Web/Theory.hs`, as `LINE:COLUMN` — the CallStacks the raised errors
-/// carry name the exact call, so each route reports its own copy.
-///
-/// The three copies are `graphJsonThyPath`'s (`/json`), `imgThyPath`'s
-/// (`/graph`) and `dotGraphString`'s (`/interactive-graph-def`); within each,
-/// `cases !! (i-1) !! (j-1)` supplies the two `!!` sites and the catch-all
-/// clause the `error` site.
-struct ThyPathSystemSites {
-    /// The `cases !! (i-1)` call — the source index.
-    source_index: &'static str,
-    /// The `… !! (j-1)` call on the same line — the case index.
-    case_index: &'static str,
-    /// The `error "Unhandled theory path. This is a bug."` clause.
-    unhandled: &'static str,
-}
+/// Where the `error "Unhandled theory path. This is a bug."` clause of the
+/// `thyPathSystem` a route dispatches through sits in `src/Web/Theory.hs`, as
+/// `LINE:COLUMN` — the CallStack the raised error carries names the exact
+/// call, so each route reports its own copy: `graphJsonThyPath`'s (`/json`),
+/// `imgThyPath`'s (`/graph`) and `dotGraphString`'s
+/// (`/interactive-graph-def`).  This `error` is upstream's DELIBERATE answer
+/// to a theory path the route does not draw, so the port reproduces its page
+/// byte-for-byte.
+const JSON_UNHANDLED_SITE: &str = "1318:31";
 
-/// `graphJsonThyPath` (`src/Web/Theory.hs:1318,1322`).
-const JSON_SITES: ThyPathSystemSites = ThyPathSystemSites {
-    source_index: "1322:108",
-    case_index: "1322:117",
-    unhandled: "1318:31",
-};
+/// `imgThyPath`'s clause — see [`JSON_UNHANDLED_SITE`].
+const GRAPH_UNHANDLED_SITE: &str = "1416:51";
 
-/// `imgThyPath` (`src/Web/Theory.hs:1416,1422`).
-const GRAPH_SITES: ThyPathSystemSites = ThyPathSystemSites {
-    source_index: "1422:38",
-    case_index: "1422:47",
-    unhandled: "1416:51",
-};
-
-/// `dotGraphString` (`src/Web/Theory.hs:2323,2329`).
-const INTERACTIVE_DOT_SITES: ThyPathSystemSites = ThyPathSystemSites {
-    source_index: "2329:38",
-    case_index: "2329:47",
-    unhandled: "2323:51",
-};
+/// `dotGraphString`'s clause — see [`JSON_UNHANDLED_SITE`].
+const INTERACTIVE_DOT_UNHANDLED_SITE: &str = "2323:51";
 
 /// The `error` `thyPathSystem`'s catch-all clause raises for a theory path that
 /// is neither a proof nor a source case, as GHC renders it into Yesod's error
-/// page.  `site` is the raising clause (see [`ThyPathSystemSites`]).
+/// page.  `site` is the raising clause (see [`JSON_UNHANDLED_SITE`]).
 fn unhandled_theory_path(site: &str) -> String {
     format!(
         "Unhandled theory path. This is a bug.\nCallStack (from HasCallStack):\n  \
@@ -1669,73 +1660,48 @@ fn unhandled_theory_path(site: &str) -> String {
     )
 }
 
-/// The `error` GHC's `!!` raises for an out-of-range index (`negIndex` /
-/// `tooLarge`, `libraries/base/GHC/List.hs:1366-1376`), as Yesod's error page
-/// renders it.
+/// HS `casesSystem k i j`: the `(i-1, j-1)` case of the `k` sources, or `None`
+/// when either 1-based index names no case.
 ///
-/// `one_based` is the index as it appears in the URL — signed, as
-/// `parseCases`'s `safeRead` reads it — so HS's `n = one_based - 1` is negative
-/// exactly when it is at most 0; `site` is the failing `!!` (see
-/// [`ThyPathSystemSites`]).
-fn bang_bang_error(one_based: i64, site: &str) -> String {
-    if one_based <= 0 {
-        format!(
-            "Prelude.!!: negative index\nCallStack (from HasCallStack):\n  \
-             error, called at libraries/base/GHC/List.hs:1369:12 in base:GHC.List\n  \
-             negIndex, called at libraries/base/GHC/List.hs:1373:17 in base:GHC.List\n  \
-             !!, called at src/Web/Theory.hs:{site} in main:Web.Theory"
-        )
-    } else {
-        format!(
-            "Prelude.!!: index too large\nCallStack (from HasCallStack):\n  \
-             error, called at libraries/base/GHC/List.hs:1366:14 in base:GHC.List\n  \
-             tooLarge, called at libraries/base/GHC/List.hs:1376:50 in base:GHC.List\n  \
-             !!, called at src/Web/Theory.hs:{site} in main:Web.Theory"
-        )
-    }
-}
-
-/// HS `casesSystem k i j`: the `(i-1, j-1)` case of the `k` sources, or the
-/// `error` its `!!` raises — the source index is indexed first, so an
-/// out-of-range `i` is reported even when `j` is out of range too.
+/// Both indices are read signed (`safeRead` at `ReadS Int`,
+/// `src/Web/Types.hs:443`), so every value a client can type in the address
+/// bar arrives here.  Upstream feeds them straight into `cases !! (i-1) !!
+/// (j-1)` behind no bounds check at all (`src/Web/Theory.hs:1322` for `/json`,
+/// `:1422` for `/graph`, `:2329` for `/interactive-graph-def`), so a
+/// non-positive or past-the-end index raises `Prelude.!!` and Yesod serves a
+/// 500 page whose body is the exception text with its GHC CallStack.  RS
+/// deliberately corrects that: an index that names no case is an ordinary
+/// miss, which the callers answer with [`not_found`].
 fn source_case_system(
     entry: &crate::state::TheoryEntry,
     kind: &path_parse::SourceKind,
     src_idx: i64,
     case_idx: i64,
-    sites: &ThyPathSystemSites,
-) -> Result<tamarin_theory::constraint::system::System, String> {
+) -> Option<tamarin_theory::constraint::system::System> {
     let want_refined = matches!(kind, path_parse::SourceKind::Refined);
     let sources = theory_html::compute_source_lists(entry, want_refined);
-    let Some((_, cases)) = src_idx
-        .checked_sub(1)
-        .and_then(|i| usize::try_from(i).ok())
-        .and_then(|i| sources.get(i))
-    else {
-        return Err(bang_bang_error(src_idx, sites.source_index));
-    };
-    let Some((_, sys)) = case_idx
-        .checked_sub(1)
-        .and_then(|j| usize::try_from(j).ok())
-        .and_then(|j| cases.get(j))
-    else {
-        return Err(bang_bang_error(case_idx, sites.case_index));
-    };
-    Ok(sys.clone())
+    let src_nth = usize::try_from(src_idx.checked_sub(1)?).ok()?;
+    let (_, cases) = sources.into_iter().nth(src_nth)?;
+    let case_nth = usize::try_from(case_idx.checked_sub(1)?).ok()?;
+    let (_, sys) = cases.into_iter().nth(case_nth)?;
+    Some(sys)
 }
 
 /// HS `thyPathSystem`, the system dispatch the two dot routes share
-/// (`imgThyPath` `src/Web/Theory.hs:1412-1414`, `dotGraphString` `:2319-2321`):
+/// (`imgThyPath` `src/Web/Theory.hs:1414-1416`, `dotGraphString` `:2321-2323`):
 ///
-///   - `TheorySource k i j` — the `casesSystem` case, or its `!!` error;
+///   - `TheorySource k i j` — the `casesSystem` case; `Nothing` when the
+///     indices name none, which is the port's correction of the raising `!!`
+///     upstream has there (see [`source_case_system`]);
 ///   - `TheoryProof lemma path` — the sub-proof's system, `Nothing` when the
-///     path does not resolve (both handlers answer that with `notFound`);
-///   - anything else — the catch-all `error`.
+///     path does not resolve (both handlers answer `Nothing` with `notFound`);
+///   - anything else — the catch-all `error`, at `unhandled_site` (see
+///     [`JSON_UNHANDLED_SITE`]).
 fn dot_path_system(
     state: &AppState,
     idx: usize,
     path: &path_parse::TheoryPath,
-    sites: &ThyPathSystemSites,
+    unhandled_site: &str,
 ) -> Result<Option<tamarin_theory::constraint::system::System>, String> {
     match path {
         path_parse::TheoryPath::Source {
@@ -1748,10 +1714,10 @@ fn dot_path_system(
             let Some(entry) = state.store.get(idx) else {
                 return Ok(None);
             };
-            source_case_system(&entry, kind, *src_idx, *case_idx, sites).map(Some)
+            Ok(source_case_system(&entry, kind, *src_idx, *case_idx))
         }
         path_parse::TheoryPath::Proof { .. } => Ok(resolve_system_for_path(state, idx, path)),
-        _ => Err(unhandled_theory_path(sites.unhandled)),
+        _ => Err(unhandled_theory_path(unhandled_site)),
     }
 }
 
@@ -1769,9 +1735,9 @@ pub async fn proof_step(
     State(state): State<Arc<AppState>>,
     Path((idx, raw_path)): Path<(usize, String)>,
 ) -> axum::Json<Value> {
-    let Some(_entry) = state.store.get(idx) else {
+    if !state.store.contains(idx) {
         return json_resp::alert(format!("theory index {} not found", idx));
-    };
+    }
     // Parse the path: `<lemma>/<case>/.../<method>` or
     // `<lemma>/<case>/.../<method>/<arg>`.  The shared decoder reverses
     // the Haskell `prefixWithUnderscore` invariant per segment.
@@ -1871,9 +1837,9 @@ pub async fn delete_step(
     State(state): State<Arc<AppState>>,
     Path((idx, raw_path)): Path<(usize, String)>,
 ) -> Response {
-    let Some(_entry) = state.store.get(idx) else {
+    if !state.store.contains(idx) {
         return json_resp::alert(format!("theory index {} not found", idx)).into_response();
-    };
+    }
     // Unparseable path → routing-level 404 (see `parse_path`).
     let Some(path) = parse_path(&raw_path) else {
         return not_found();

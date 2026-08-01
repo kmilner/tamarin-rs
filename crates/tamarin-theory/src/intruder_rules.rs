@@ -216,72 +216,68 @@ pub fn destruction_rules(
             }
             _ => return out,
         };
-        {
-            // Haskell `destructionRules` pattern #2 (IntruderRules.hs `go`):
-            //     go _ (viewTerm -> FApp _ _) (_:[]) _ _ | (frees rhs /= []) = []
-            // At the LAST position step, if the current term is an
-            // FApp AND rhs has free vars, return [] — neither emit
-            // nor recurse.  Current `t` is necessarily FApp here.
-            // Without this, Rust emits extra rules at deep positions like
-            // d_0_0_0_prefix_enc_pair or d_1_0_prefix_enc — see
-            // denning_sacco_symmetric_cbc which has rule
-            // `prefix(enc(<X,Y>,k)) = enc(X,k)` (positions [0,0,0]
-            // and [0,1]); at the LAST step into pair(X,Y) and
-            // enc(X,Y), Haskell skips.
-            if pos_iter.len() == step_idx + 1 && !rhs_frees_empty {
-                return out;
-            }
-            // Build uprems' = uprems ++ siblings.  The pre-sibling
-            // `uprems` value is never read again (the next iteration uses
-            // the extended one), so extend in place instead of cloning.
-            for (j, a) in args.iter().enumerate() {
-                if (j as i64) != i {
-                    uprems.push(a.clone());
-                }
-            }
-            let t_new = match args.get(i as usize) {
-                Some(t) => t.clone(),
-                None => return out, // invalid position
-            };
-            // Emit the rule unless the next step's term equals rhs
-            // and rhs already in uprems' (Haskell's filter).
-            let cond_emit = t_new != *rhs && !uprems.contains(rhs);
-            // Next step's position-name prefix `_<i><pd>`; reused both
-            // for the (conditional) rule name and to advance `posname`
-            // below — neither `i` nor `posname` changes in between.
-            let next_posname = format!("_{}{}", i, posname);
-            // funs' = funs ++ [fun] — the symbol chain walked so far,
-            // carried both in the rule name and in the DestrRule metadata.
-            let mut funs = funs_acc.clone();
-            funs.push(fun);
-            if cond_emit {
-                // `name i pd n fun`: `_<i><pd>` ++ concatMap ("_" ++
-                // showFunSymName) funs'.
-                let mut name = next_posname.as_bytes().to_vec();
-                for f in &funs {
-                    name.push(b'_');
-                    name.extend_from_slice(show_fun_sym_name(f).as_bytes());
-                }
-                // `rhs == lhs `atPos` pos`.  Use the AC-aware `at_pos`
-                // (Positions.hs) so paths traversing an AC operator index
-                // exactly as Haskell.  `pos` is the (valid) walked LHS
-                // position, so the lookup is `Some`; on the impossible
-                // invalid case fall back to `lhs`, keeping the boolean
-                // unchanged rather than panicking.
-                let at = tamarin_term::positions::at_pos(lhs, pos).unwrap_or_else(|| lhs.clone());
-                let info =
-                    IntrRuleACInfo::DestrRule(name, -1, rhs == &at, rhs_frees_empty, funs.clone());
-                let mut prems = vec![kd_fact(t_new.clone())];
-                for u in &uprems {
-                    prems.push(ku_fact(u.clone()));
-                }
-                out.push(Rule::new(info, prems, vec![kd_fact(rhs.clone())], vec![]));
-            }
-            // Update accumulators and walk down.
-            funs_acc = funs;
-            posname = next_posname;
-            t = t_new;
+        // Haskell `destructionRules` pattern #2 (IntruderRules.hs `go`):
+        //     go _ (viewTerm -> FApp _ _) (_:[]) _ _ | (frees rhs /= []) = []
+        // At the LAST position step, if the current term is an
+        // FApp AND rhs has free vars, return [] — neither emit
+        // nor recurse.  Current `t` is necessarily FApp here.
+        // Without this, Rust emits extra rules at deep positions like
+        // d_0_0_0_prefix_enc_pair or d_1_0_prefix_enc — see
+        // denning_sacco_symmetric_cbc which has rule
+        // `prefix(enc(<X,Y>,k)) = enc(X,k)` (positions [0,0,0]
+        // and [0,1]); at the LAST step into pair(X,Y) and
+        // enc(X,Y), Haskell skips.
+        if pos_iter.len() == step_idx + 1 && !rhs_frees_empty {
+            return out;
         }
+        // Build uprems' = uprems ++ siblings in place: the pre-sibling
+        // `uprems` value is never read again (the next iteration uses
+        // the extended one).
+        for (j, a) in args.iter().enumerate() {
+            if (j as i64) != i {
+                uprems.push(a.clone());
+            }
+        }
+        let t_new = match args.get(i as usize) {
+            Some(t) => t.clone(),
+            None => return out, // invalid position
+        };
+        // Emit the rule unless the next step's term equals rhs
+        // and rhs already in uprems' (Haskell's filter).
+        let cond_emit = t_new != *rhs && !uprems.contains(rhs);
+        // Next step's position-name prefix `_<i><pd>`; reused both
+        // for the (conditional) rule name and to advance `posname`
+        // below — neither `i` nor `posname` changes in between.
+        let next_posname = format!("_{}{}", i, posname);
+        // funs' = funs ++ [fun] — the symbol chain walked so far,
+        // carried both in the rule name and in the DestrRule metadata.
+        funs_acc.push(fun);
+        if cond_emit {
+            // `name i pd n fun`: `_<i><pd>` ++ concatMap ("_" ++
+            // showFunSymName) funs'.
+            let mut name = next_posname.as_bytes().to_vec();
+            for f in &funs_acc {
+                name.push(b'_');
+                name.extend_from_slice(show_fun_sym_name(f).as_bytes());
+            }
+            // `rhs == lhs `atPos` pos`.  Use the AC-aware `at_pos`
+            // (Positions.hs) so paths traversing an AC operator index
+            // exactly as Haskell.  `pos` is the (valid) walked LHS
+            // position, so the lookup is `Some`; on the impossible
+            // invalid case fall back to `lhs`, keeping the boolean
+            // unchanged rather than panicking.
+            let at = tamarin_term::positions::at_pos(lhs, pos).unwrap_or_else(|| lhs.clone());
+            let info =
+                IntrRuleACInfo::DestrRule(name, -1, rhs == &at, rhs_frees_empty, funs_acc.clone());
+            let mut prems = vec![kd_fact(t_new.clone())];
+            for u in &uprems {
+                prems.push(ku_fact(u.clone()));
+            }
+            out.push(Rule::new(info, prems, vec![kd_fact(rhs.clone())], vec![]));
+        }
+        // Update accumulators and walk down.
+        posname = next_posname;
+        t = t_new;
     }
     out
 }
@@ -289,17 +285,20 @@ pub fn destruction_rules(
 /// `showFunSymName` (Term.hs) — the plain-name rendering used for intruder
 /// rule names and case names: user symbols print their own name; the builtin
 /// AC/C operators print their `*SymString` names.
-pub fn show_fun_sym_name(f: &FunSym) -> String {
+pub fn show_fun_sym_name(f: &FunSym) -> std::borrow::Cow<'static, str> {
+    use std::borrow::Cow;
     use tamarin_term::function_symbols::{AcSym, CSym, FunSym};
     match f {
-        FunSym::NoEq(s) => String::from_utf8_lossy(s.name).into_owned(),
-        FunSym::Ac(AcSym::AcFct(s)) => String::from_utf8_lossy(s.name).into_owned(),
-        FunSym::Ac(AcSym::Union) => "mun".to_string(),
-        FunSym::Ac(AcSym::Mult) => "mult".to_string(),
-        FunSym::Ac(AcSym::Xor) => "xor".to_string(),
-        FunSym::Ac(AcSym::NatPlus) => "tplus".to_string(),
-        FunSym::C(CSym::EMap) => "em".to_string(),
-        FunSym::List => "List".to_string(),
+        // `name` is `&'static [u8]`, so the lossy conversion is already a
+        // `Cow<'static, str>` (borrowed whenever the name is valid UTF-8).
+        FunSym::NoEq(s) => String::from_utf8_lossy(s.name),
+        FunSym::Ac(AcSym::AcFct(s)) => String::from_utf8_lossy(s.name),
+        FunSym::Ac(AcSym::Union) => Cow::Borrowed("mun"),
+        FunSym::Ac(AcSym::Mult) => Cow::Borrowed("mult"),
+        FunSym::Ac(AcSym::Xor) => Cow::Borrowed("xor"),
+        FunSym::Ac(AcSym::NatPlus) => Cow::Borrowed("tplus"),
+        FunSym::C(CSym::EMap) => Cow::Borrowed("em"),
+        FunSym::List => Cow::Borrowed("List"),
     }
 }
 
@@ -463,10 +462,10 @@ fn minimize_intruder_rules(
     // dropping any rule matched by a peer in `checked ++ unchecked`.
     // We mirror exactly: walk by index, and when checking rule i, the
     // peers are { all kept rules so far } ∪ { all rules with index > i }.
-    // Collecting kept indices in encounter order equals HS's
-    // `reverse checked` (checked is built by prepending).
+    // Keeping the survivors in index order equals HS's `reverse checked`
+    // (checked is built by prepending).
     let n = rules.len();
-    let mut kept: Vec<usize> = Vec::with_capacity(n);
+    let mut kept: Vec<bool> = vec![false; n];
     for i in 0..n {
         let r_i = &rules[i];
         let dropped = (0..n).any(|j| {
@@ -476,20 +475,20 @@ fn minimize_intruder_rules(
             // Peer eligibility: either already-kept earlier (j < i and j in kept)
             // or still in `unchecked` (j > i).  Haskell's `checked++unchecked`
             // semantics.
-            if j < i && !kept.contains(&j) {
+            if j < i && !kept[j] {
                 return false;
             }
             let r_j = &rules[j];
             equal_duplicate_rule_up_to_renaming(maude, r_i, r_j)
                 || (!diff && equal_subset_rule_up_to_renaming(maude, r_i, r_j))
         });
-        if !dropped {
-            kept.push(i);
-        }
+        kept[i] = !dropped;
     }
-    kept.into_iter()
-        .map(|i| rules[i].clone())
-        .filter(|r| !is_double_premise_rule(r))
+    rules
+        .into_iter()
+        .zip(kept)
+        .filter(|(r, keep)| *keep && !is_double_premise_rule(r))
+        .map(|(r, _)| r)
         .collect()
 }
 
@@ -783,8 +782,7 @@ pub fn construction_rules(
 // destructor rules via `rrule_to_ctxt_st_rule` + `destruction_rules`
 // (`decompose_not_subterm`).  NoEq destructors additionally get their
 // consecutive-application budget from `max_applications` (N12).  Intruder
-// rules therefore arrive at the rule cache fully processed — there is no
-// per-close variant computation.
+// rules therefore arrive at the rule cache fully processed.
 // =============================================================================
 
 /// `isPrivateFunction` (Term.hs:203-205): top-level function symbol is Private.
@@ -1006,14 +1004,17 @@ pub fn destruction_rules_no_eq(
 /// destructor with the KD-premise/KD-conclusion shape (built-in-named or
 /// not); only rules failing that pattern reach the built-in-suffix
 /// passthrough and the subterm=False error clause.
-fn max_applications(maude: &tamarin_term::maude_proc::MaudeHandle, ir: IntrRuleAC) -> IntrRuleAC {
+fn max_applications(
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    mut ir: IntrRuleAC,
+) -> IntrRuleAC {
     use tamarin_term::lterm::contains_only_no_eq;
     use tamarin_term::positions::positions;
     use tamarin_term::rewriting::Equal;
 
     // Clause 1: budget = -1 AND leading single-term KD premise AND single
     // KD conclusion.
-    if let IntrRuleACInfo::DestrRule(name, -1, subterm, constant, funs) = &ir.info {
+    if matches!(ir.info, IntrRuleACInfo::DestrRule(_, -1, _, _, _)) {
         let kd_prem_t: Option<&LNTerm> = ir
             .premises
             .first()
@@ -1041,10 +1042,10 @@ fn max_applications(maude: &tamarin_term::maude_proc::MaudeHandle, ir: IntrRuleA
             } else {
                 0
             };
-            let mut ru = ir.clone();
-            ru.info =
-                IntrRuleACInfo::DestrRule(name.clone(), budget, *subterm, *constant, funs.clone());
-            return ru;
+            if let IntrRuleACInfo::DestrRule(_, b, _, _, _) = &mut ir.info {
+                *b = budget;
+            }
+            return ir;
         }
     }
     if let IntrRuleACInfo::DestrRule(name, _, subterm, _, _) = &ir.info {
@@ -1506,6 +1507,27 @@ pub fn equal_duplicate_rule_up_to_renaming(
     r1: &IntrRuleAC,
     r2: &IntrRuleAC,
 ) -> bool {
+    // Early reject, pure filter: `rename_avoiding` preserves fact tags and
+    // section lengths, so the `matchFacts` tag test that
+    // `equal_rule_up_to_renaming_ignoring_names` applies to the zipped
+    // `(prems++concs++acts)` pairs evaluates identically on the un-renamed
+    // rules — any tag mismatch forces that check to `false`.  This skips
+    // the rule clone/rename and the Maude round trip for such pairs.
+    let tags_match = r1
+        .premises
+        .iter()
+        .chain(r1.conclusions.iter())
+        .chain(r1.actions.iter())
+        .zip(
+            r2.premises
+                .iter()
+                .chain(r2.conclusions.iter())
+                .chain(r2.actions.iter()),
+        )
+        .all(|(f1, f2)| f1.tag == f2.tag);
+    if !tags_match {
+        return false;
+    }
     let r2_apart = tamarin_term::lterm::rename_avoiding(r2.clone(), r1);
     equal_rule_up_to_renaming_ignoring_names(maude, r1, &r2_apart)
 }
@@ -1548,6 +1570,27 @@ pub fn equal_subset_rule_up_to_renaming(
         (Some(a), Some(b)) => (a, b),
         _ => return false,
     };
+    // Early rejects, pure filters:
+    //  (a) mirrors the tag/term-count guards `unify_ln_fact_eqs` itself
+    //      applies before calling Maude — on a mismatch it yields zero
+    //      unifiers, i.e. HS `[] -> False` — evaluated here before the
+    //      fact clones are built;
+    //  (b) `premSubst` needs `srpr2 `subsetOf` spr1`, and substitution
+    //      preserves each fact's tag and term count while fact equality
+    //      implies both — so every `r2` premise must have an `r1` premise
+    //      with equal tag and term count, checkable before the Maude
+    //      round trip.
+    if co1.tag != co2.tag || co1.terms.len() != co2.terms.len() {
+        return false;
+    }
+    let prems_coverable = r2.premises.iter().all(|p2| {
+        r1.premises
+            .iter()
+            .any(|p1| p1.tag == p2.tag && p1.terms.len() == p2.terms.len())
+    });
+    if !prems_coverable {
+        return false;
+    }
     let unifs = match crate::rule::unify_ln_fact_eqs(
         maude,
         &[Equal {
@@ -2188,6 +2231,87 @@ mod tests {
         // would have kept both, since r_j has two KU(y) but r_i only one.)
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].premises, r_j.premises);
+    }
+
+    // The structural early-reject in `equal_duplicate_rule_up_to_renaming`
+    // (zipped fact-tag mismatch) is a pure filter: on every pair — ones that
+    // trip it and ones that pass it — the result must equal the unfiltered
+    // HS pipeline `equalRuleUpToRenamingIgnoringNames r1 (r2 `renameAvoiding`
+    // r1)` run directly.
+    #[test]
+    fn equal_duplicate_early_reject_agrees_with_unfiltered_check() {
+        use tamarin_term::vterm::var_term;
+        let maude = match maude_handle() {
+            Some(m) => m,
+            None => return,
+        };
+        let constr = ku_pair_rule_with_var("a", 0);
+        let x = var_term(LVar::new("x", LSort::Msg, 0));
+        let y = var_term(LVar::new("y", LSort::Msg, 0));
+        // Destructor layout: premises [KU(y), KU(y)], conclusion [KD(x)].
+        // Zipped against `constr`'s [KU] ++ [KU] ++ [KU] layout, the third
+        // pair is (KU, KD) resp. (KD, KU) — the filter trips both ways.
+        let destr = Rule::new(
+            IntrRuleACInfo::DestrRule(b"_dup_test".to_vec(), -1, true, false, vec![]),
+            vec![ku_fact(y.clone()), ku_fact(y.clone())],
+            vec![kd_fact(x.clone())],
+            vec![],
+        );
+        for (r1, r2) in [(&constr, &destr), (&destr, &constr), (&constr, &constr)] {
+            let unfiltered = equal_rule_up_to_renaming_ignoring_names(
+                &maude,
+                r1,
+                &tamarin_term::lterm::rename_avoiding(r2.clone(), r1),
+            );
+            assert_eq!(
+                equal_duplicate_rule_up_to_renaming(&maude, r1, r2),
+                unfiltered
+            );
+        }
+        // Sanity on the pair choices: the filter-tripping pairs are negatives,
+        // the filter-passing self-pair is a positive.
+        assert!(!equal_duplicate_rule_up_to_renaming(
+            &maude, &constr, &destr
+        ));
+        assert!(equal_duplicate_rule_up_to_renaming(
+            &maude, &constr, &constr
+        ));
+    }
+
+    // The early rejects in `equal_subset_rule_up_to_renaming` only fire on
+    // pairs whose unfiltered verdict is already false: (a) head-conclusion
+    // tag mismatch ⇒ `unifyLNFactEqs` = [] ⇒ HS `[] -> False`; (b) an `r2`
+    // premise with no tag/term-count-matching `r1` premise ⇒ `srpr2
+    // `subsetOf` spr1` impossible (substitution preserves both).  Pin the
+    // false verdicts on shapes that trip each filter; the true path through
+    // both filters is pinned by `minimize_drops_set_subsumed_rule`.
+    #[test]
+    fn equal_subset_early_rejects_are_necessary() {
+        use tamarin_term::vterm::var_term;
+        let maude = match maude_handle() {
+            Some(m) => m,
+            None => return,
+        };
+        let x = var_term(LVar::new("x", LSort::Msg, 0));
+        let y = var_term(LVar::new("y", LSort::Msg, 0));
+        let name = b"_subset_reject_test".to_vec();
+        let mk = |prems: Vec<LNFact>, conc: LNFact| {
+            Rule::new(
+                IntrRuleACInfo::DestrRule(name.clone(), -1, true, false, vec![]),
+                prems,
+                vec![conc],
+                vec![],
+            )
+        };
+        // (a) conclusion KD(x) vs KU(x): tags differ.
+        let r1 = mk(vec![ku_fact(y.clone())], kd_fact(x.clone()));
+        let r2 = mk(vec![ku_fact(y.clone())], ku_fact(x.clone()));
+        assert!(!equal_subset_rule_up_to_renaming(&maude, &r1, &r2));
+        // (b) r2's KD(y) premise has no KD premise in r1 to map onto, even
+        // though the KD(x) conclusions unify by a renaming.
+        let r1 = mk(vec![ku_fact(y.clone())], kd_fact(x.clone()));
+        let r2 = mk(vec![kd_fact(y.clone())], kd_fact(x.clone()));
+        assert!(!equal_subset_rule_up_to_renaming(&maude, &r1, &r2));
     }
 
     #[test]

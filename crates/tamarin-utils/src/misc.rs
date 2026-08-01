@@ -290,15 +290,13 @@ pub fn fixpoint<A: Eq, F: FnMut(&A) -> A>(mut f: F, x: A) -> A {
 /// maps to `[]`.
 pub fn map_head<A, F: FnOnce(A) -> A>(f: F, xs: Vec<A>) -> Vec<A> {
     let mut it = xs.into_iter();
-    match it.next() {
-        None => Vec::new(),
-        Some(head) => {
-            let mut out = Vec::with_capacity(it.len() + 1);
-            out.push(f(head));
-            out.extend(it);
-            out
-        }
-    }
+    let Some(head) = it.next() else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(it.len() + 1);
+    out.push(f(head));
+    out.extend(it);
+    out
 }
 
 // =============================================================================

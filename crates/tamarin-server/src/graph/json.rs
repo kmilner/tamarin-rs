@@ -348,7 +348,7 @@ fn classify_edge(edge: &GEdge, rules: &NodeRules<'_>) -> EdgeClass {
 
 /// Build a JSON object from `(key, value)` pairs inserted in the alphabetical
 /// order `Data.Aeson` emits.
-fn object(fields: Vec<(&str, Value)>) -> Value {
+fn object<'a>(fields: impl IntoIterator<Item = (&'a str, Value)>) -> Value {
     let mut m = Map::new();
     for (k, v) in fields {
         m.insert(k.to_string(), v);
@@ -374,10 +374,10 @@ fn json_term(t: &LNTerm, outermost: bool) -> Value {
         object(fields)
     };
     match t {
-        Term::Lit(l) => object(vec![("jgnConst", Value::String(show_lit(l)))]),
+        Term::Lit(l) => object([("jgnConst", Value::String(show_lit(l)))]),
         Term::App(FunSym::NoEq(s), ts) => funct(plain_show_bytes(s.name), ts),
         Term::App(FunSym::Ac(o), ts) => funct(show_ac_sym(o), ts),
-        _ => object(vec![(
+        _ => object([(
             "jgnConst",
             Value::String(format!("unknown term type: {}", show_lnterm(t))),
         )]),
@@ -403,11 +403,11 @@ fn json_fact(id: String, f: &LNFact) -> Value {
         Multiplicity::Linear => "",
         Multiplicity::Persistent => "!",
     };
-    object(vec![
+    object([
         ("jgnFactId", Value::String(id)),
         ("jgnFactMult", Value::String(mult.to_string())),
         ("jgnFactName", Value::String(show_fact_tag(&f.tag))),
-        ("jgnFactShow", Value::String(pps(fact_doc(f)))),
+        ("jgnFactShow", Value::String(pps(fact_doc_of(f)))),
         ("jgnFactTag", Value::String(tag.to_string())),
         (
             "jgnFactTerms",
@@ -416,30 +416,27 @@ fn json_fact(id: String, f: &LNFact) -> Value {
     ])
 }
 
-/// HS `prettyLNFact` as a `Doc` — shared with the DOT renderer so both emit
-/// the `nestShort'` inner-paren spacing (`!KU( ~ltk )`).
-fn fact_doc(f: &LNFact) -> Doc {
-    fact_doc_of(f)
-}
-
 /// Port of `factToJSONGraphNodeFact` (JSON.hs:315-317): premise/conclusion
 /// facts are identified by `<node>:<prefix><index>`, 0-based.
 fn json_indexed_fact(prefix: &str, n: &NodeId, idx: usize, f: &LNFact) -> Value {
     json_fact(format!("{}:{}{}", n, prefix, idx), f)
 }
 
+/// `jgnActs` (JSON.hs:335 and JSON.hs:365): every action fact carries the
+/// constant id "action"; only premise/conclusion facts get a record port.
+fn json_action_facts(facts: &[LNFact]) -> Value {
+    Value::Array(
+        facts
+            .iter()
+            .map(|f| json_fact("action".to_string(), f))
+            .collect(),
+    )
+}
+
 /// Port of `nodeToJSONGraphNodeMetadata` (JSON.hs:321-328).
 fn json_metadata(n: &NodeId, ru: &RuleACInst) -> Value {
-    object(vec![
-        (
-            "jgnActs",
-            Value::Array(
-                ru.actions
-                    .iter()
-                    .map(|f| json_fact("action".to_string(), f))
-                    .collect(),
-            ),
-        ),
+    object([
+        ("jgnActs", json_action_facts(&ru.actions)),
         (
             "jgnConcs",
             Value::Array(
@@ -466,7 +463,7 @@ fn json_metadata(n: &NodeId, ru: &RuleACInst) -> Value {
 /// A `JSONGraphNodeFact` with only its id set — the stub HS emits for a node
 /// referenced by an edge but absent from `sNodes` (JSON.hs:385-392/405-412).
 fn json_stub_fact(id: String) -> Value {
-    object(vec![
+    object([
         ("jgnFactId", Value::String(id)),
         ("jgnFactMult", Value::String(String::new())),
         ("jgnFactName", Value::String(String::new())),
@@ -483,7 +480,7 @@ fn json_node(node: &GNode, color_map: &NodeColorMap) -> Value {
     match &node.ty {
         NodeType::System(ru) => {
             let mut fields: Vec<(&str, Value)> = Vec::with_capacity(5);
-            if let Some(rgb) = color_map.lookup(&ru.info) {
+            if let Some(rgb) = color_map.lookup_node(&node.id) {
                 fields.push((
                     "jgnColor",
                     Value::String(tamarin_utils::color::rgb_to_hex(rgb)),
@@ -499,23 +496,15 @@ fn json_node(node: &GNode, color_map: &NodeColorMap) -> Value {
             // `pps $ fsep $ punctuate comma $ map prettyLNFact facts`.
             let label = pps(fsep(punctuate(
                 Doc::char(','),
-                facts.iter().map(fact_doc).collect(),
+                facts.iter().map(fact_doc_of).collect(),
             )));
-            object(vec![
+            object([
                 ("jgnId", Value::String(nid)),
                 ("jgnLabel", Value::String(label)),
                 (
                     "jgnMetadata",
-                    object(vec![
-                        (
-                            "jgnActs",
-                            Value::Array(
-                                facts
-                                    .iter()
-                                    .map(|f| json_fact("action".to_string(), f))
-                                    .collect(),
-                            ),
-                        ),
+                    object([
+                        ("jgnActs", json_action_facts(facts)),
                         ("jgnConcs", Value::Array(Vec::new())),
                         ("jgnPrems", Value::Array(Vec::new())),
                     ]),
@@ -523,45 +512,34 @@ fn json_node(node: &GNode, color_map: &NodeColorMap) -> Value {
                 ("jgnType", Value::String("unsolvedActionAtom".to_string())),
             ])
         }
-        NodeType::LastAction => object(vec![
+        NodeType::LastAction => object([
             ("jgnId", Value::String(nid.clone())),
             ("jgnLabel", Value::String(nid)),
             ("jgnType", Value::String("lastAtom".to_string())),
         ]),
-        // HS ignores the recorded conclusion/premise index and always emits
-        // `c0` / `p0` here (JSON.hs:374-375).
-        NodeType::Missing(MissingHint::Conc(_)) => object(vec![
-            ("jgnId", Value::String(nid.clone())),
-            ("jgnLabel", Value::String(String::new())),
-            (
-                "jgnMetadata",
-                object(vec![
-                    ("jgnActs", Value::Array(Vec::new())),
-                    (
-                        "jgnConcs",
-                        Value::Array(vec![json_stub_fact(format!("{}:c0", nid))]),
-                    ),
-                    ("jgnPrems", Value::Array(Vec::new())),
-                ]),
-            ),
-            ("jgnType", Value::String("missingNodeConc".to_string())),
-        ]),
-        NodeType::Missing(MissingHint::Prem(_)) => object(vec![
-            ("jgnId", Value::String(nid.clone())),
-            ("jgnLabel", Value::String(String::new())),
-            (
-                "jgnMetadata",
-                object(vec![
-                    ("jgnActs", Value::Array(Vec::new())),
-                    ("jgnConcs", Value::Array(Vec::new())),
-                    (
-                        "jgnPrems",
-                        Value::Array(vec![json_stub_fact(format!("{}:p0", nid))]),
-                    ),
-                ]),
-            ),
-            ("jgnType", Value::String("missingNodePrem".to_string())),
-        ]),
+        NodeType::Missing(hint) => {
+            // HS ignores the recorded conclusion/premise index and always
+            // emits `c0` / `p0` here (JSON.hs:374-375).
+            let stub =
+                |port: char| Value::Array(vec![json_stub_fact(format!("{}:{}0", nid, port))]);
+            let (ty, concs, prems) = match hint {
+                MissingHint::Conc(_) => ("missingNodeConc", stub('c'), Value::Array(Vec::new())),
+                MissingHint::Prem(_) => ("missingNodePrem", Value::Array(Vec::new()), stub('p')),
+            };
+            object([
+                ("jgnId", Value::String(nid)),
+                ("jgnLabel", Value::String(String::new())),
+                (
+                    "jgnMetadata",
+                    object([
+                        ("jgnActs", Value::Array(Vec::new())),
+                        ("jgnConcs", concs),
+                        ("jgnPrems", prems),
+                    ]),
+                ),
+                ("jgnType", Value::String(ty.to_string())),
+            ])
+        }
     }
 }
 
@@ -572,7 +550,7 @@ fn json_edge(edge: &GEdge, rules: &NodeRules<'_>) -> Value {
     let color = Value::String(class.color().to_string());
     let relation = Value::String(class.relation().to_string());
     match edge {
-        GEdge::System(src, tgt) | GEdge::UnsolvedChain(src, tgt) => object(vec![
+        GEdge::System(src, tgt) | GEdge::UnsolvedChain(src, tgt) => object([
             ("jgeColor", color),
             ("jgeRelation", relation),
             (
@@ -584,7 +562,7 @@ fn json_edge(edge: &GEdge, rules: &NodeRules<'_>) -> Value {
                 Value::String(format!("{}:p{}", tgt.0, tgt.1 .0)),
             ),
         ]),
-        GEdge::Less(la) => object(vec![
+        GEdge::Less(la) => object([
             ("jgeColor", color),
             ("jgeRelation", relation),
             ("jgeSource", Value::String(la.smaller.to_string())),
@@ -595,7 +573,7 @@ fn json_edge(edge: &GEdge, rules: &NodeRules<'_>) -> Value {
 
 /// Port of `graphClusterToJSONGraphCluster` (JSON.hs:488-496).
 fn json_cluster(cluster: &Cluster, rules: &NodeRules<'_>, color_map: &NodeColorMap) -> Value {
-    object(vec![
+    object([
         (
             "jgcEdges",
             Value::Array(cluster.edges.iter().map(|e| json_edge(e, rules)).collect()),
@@ -618,7 +596,7 @@ fn json_cluster(cluster: &Cluster, rules: &NodeRules<'_>, color_map: &NodeColorM
 fn json_graph(label: &str, graph: &Graph<'_>, color_map: &NodeColorMap) -> Value {
     // One index over the original system's nodes for every edge of this graph.
     let rules = graph.system.node_rule_map();
-    object(vec![
+    object([
         (
             "jgAbbrevs",
             Value::Array(
@@ -626,7 +604,7 @@ fn json_graph(label: &str, graph: &Graph<'_>, color_map: &NodeColorMap) -> Value
                     .into_iter()
                     // `graphAbbrevtoJSONGraphAbbrev` (JSON.hs:499-506).
                     .map(|(term, abbrev, expansion)| {
-                        object(vec![
+                        object([
                             ("jgaAbbrev", json_term(abbrev, true)),
                             ("jgaExpansion", json_term(expansion, true)),
                             ("jgaTerm", json_term(term, true)),
@@ -700,7 +678,7 @@ pub fn sequents_to_json_pretty(
             json_graph(label, &graph, &color_map)
         })
         .collect();
-    let root = object(vec![("graphs", Value::Array(graphs))]);
+    let root = object([("graphs", Value::Array(graphs))]);
     // `removePseudoUnicode $ encodePretty graphJSON`: the `<`/`>` unescaping
     // is a no-op against `serde_json`, whose output never contains the
     // `<`/`>` escapes it rewrites (see the module docs).
@@ -816,7 +794,7 @@ mod tests {
             vec![t0, t1],
         );
         assert_eq!(
-            pps(fact_doc(&fa)),
+            pps(fact_doc_of(&fa)),
             "Done( g(f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, \
              f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, \
              ~x))))))))))))))))))))), g(f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, \
@@ -824,21 +802,6 @@ mod tests {
              f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, \
              ~x.1))))))))))))))))))))))"
         );
-    }
-
-    // `plainstring (show sym)` is the Haskell string literal's escaped body:
-    // ordinary symbol names pass through, and the `\&` separator appears only
-    // where the literal would otherwise re-lex (a numeric escape before a
-    // digit, `\SO` before `H`).
-    #[test]
-    fn plain_show_bytes_matches_haskell_string_literal_body() {
-        assert_eq!(plain_show_bytes(b"aenc"), "aenc");
-        assert_eq!(plain_show_bytes(b"_exp"), "_exp");
-        assert_eq!(plain_show_bytes(b"a\"b\\c"), "a\\\"b\\\\c");
-        assert_eq!(plain_show_bytes(&[0xc3, b'7']), "\\195\\&7");
-        assert_eq!(plain_show_bytes(&[0xc3, b'x']), "\\195x");
-        assert_eq!(plain_show_bytes(&[0x0e, b'H']), "\\SO\\&H");
-        assert_eq!(plain_show_bytes(&[0x0e, b'I']), "\\SOI");
     }
 
     // The document reaches the wire as its own UTF-8, so the `⊕` an xor term's

@@ -20,6 +20,8 @@
 //! (DOT output) and [`crate::graph::json`] (JSON output) are both consumers,
 //! so this module sits under `graph/` rather than inside either renderer.
 
+use std::collections::BTreeMap;
+
 use tamarin_theory::constraint::constraints::{NodeId, Reason};
 use tamarin_theory::fact::LNFact;
 use tamarin_theory::pretty_hpj::Doc;
@@ -55,29 +57,50 @@ pub(crate) fn reason_color(r: Reason) -> &'static str {
 /// (`RuleInfo ProtoRuleACInstInfo IntrRuleACInfo`).
 pub(crate) type RInfo = RuleInfo<tamarin_theory::rule::ProtoRuleACInstInfo, IntrRuleACInfo>;
 
-/// Faithful port of HS `NodeColorMap` (Dot.hs:88-88) — the per-rule fill palette,
-/// keyed by a rule's `rInfo`. Built by [`build_node_color_map`] (port of
-/// `nodeColorMap`, Dot.hs:190-218). `rInfo` is not `Hash`/`Ord` in the Rust
-/// port (`ProtoRuleACInstInfo` only derives `PartialEq`), so we keep an
-/// association list and resolve lookups by equality. HS builds the map with
-/// `M.fromList`, which keeps the LAST value for equal keys, so [`lookup`]
-/// scans in reverse and returns the last matching entry.
+/// Faithful port of HS `NodeColorMap` (Dot.hs:88-88) — the per-rule fill
+/// palette, keyed in HS by a rule's `rInfo`. Built by [`build_node_color_map`]
+/// (port of `nodeColorMap`, Dot.hs:190-218).
 ///
-/// [`lookup`]: NodeColorMap::lookup
-pub(crate) struct NodeColorMap<'a> {
-    entries: Vec<(&'a RInfo, tamarin_utils::color::Rgb)>,
+/// `rInfo` is not `Hash`/`Ord` in the Rust port (`ProtoRuleACInstInfo` only
+/// derives `PartialEq`), and both renderers reach the palette from a node whose
+/// `NodeId` they already hold, so the map is stored keyed by `NodeId`: each
+/// entry is the colour that node's `rInfo` RESOLVES to under HS `M.fromList`,
+/// which keeps the LAST value for equal keys — so two nodes sharing an `rInfo`
+/// both carry the later entry's colour. The collapse is done once in
+/// [`build_node_color_map`], leaving [`lookup_node`] free of `rInfo` equality.
+///
+/// [`lookup_node`]: NodeColorMap::lookup_node
+pub(crate) struct NodeColorMap {
+    by_node: BTreeMap<NodeId, tamarin_utils::color::Rgb>,
 }
 
-impl NodeColorMap<'_> {
-    /// HS `M.lookup rInfoVal colorMap` (Dot.hs:236-379, see line 255). Returns the LAST entry
-    /// whose `rInfo` equals `info` (matching `M.fromList`'s last-wins), or
-    /// `None` when the rInfo is absent (→ `"white"` at the call site).
-    pub(crate) fn lookup(&self, info: &RInfo) -> Option<tamarin_utils::color::Rgb> {
-        self.entries
-            .iter()
-            .rev()
-            .find(|(k, _)| **k == *info)
-            .map(|(_, c)| *c)
+impl NodeColorMap {
+    /// HS `M.lookup rInfoVal colorMap` (Dot.hs:236-379, see line 255) for the
+    /// node that `id` names: the colour of the LAST map entry sharing that
+    /// node's `rInfo` (matching `M.fromList`'s last-wins), or `None` when the
+    /// node contributed no entry (→ `"white"` in the DOT renderer, an omitted
+    /// `jgnColor` in the JSON one).
+    pub(crate) fn lookup_node(&self, id: &NodeId) -> Option<tamarin_utils::color::Rgb> {
+        self.by_node.get(id).copied()
+    }
+}
+
+/// Bucketing key for the `M.fromList` collapse in [`build_node_color_map`]: a
+/// cheap `Ord` projection of an [`RInfo`] that any two EQUAL `rInfo`s share, so
+/// the structural `rInfo` comparison only ever runs between nodes in the same
+/// bucket. The protocol arm stops at the rule name because
+/// `ProtoRuleACInstInfo`'s `attributes` carry an `Option<PlainProcess>` — a
+/// whole SAPIC process tree — that comparing is far from free.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum ClassKey<'a> {
+    Proto(ProtoRuleName),
+    Intr(&'a IntrRuleACInfo),
+}
+
+fn class_key(info: &RInfo) -> ClassKey<'_> {
+    match info {
+        RuleInfo::Proto(p) => ClassKey::Proto(p.name),
+        RuleInfo::Intr(i) => ClassKey::Intr(i),
     }
 }
 
@@ -143,7 +166,7 @@ fn group_idx(ru: &RuleACInst) -> usize {
 /// palette default.  (The FILL colour is resolved separately via
 /// `explicit_rule_color` at the call site, so carrying the explicit colour
 /// here changes only the font decision, never the fill.)
-pub(crate) fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorMap<'_> {
+pub(crate) fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorMap {
     use tamarin_utils::color::{hsv_to_rgb, light_color_groups, Hsv, Rgb};
 
     // `M.elems $ get sNodes se`: iterate in NodeId (Map key) order.
@@ -152,10 +175,10 @@ pub(crate) fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorM
 
     // `groups = [ (gIdx, [ru | ru <- rules, gIdx == groupIdx ru]) | gIdx <- 0..3 ]`
     // — order-preserving partition into four groups.
-    let mut groups: [Vec<&RuleACInst>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    let mut groups: [Vec<&(NodeId, RuleACInst)>; 4] =
+        [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
     for pair in &ordered {
-        let ru = &pair.1;
-        groups[group_idx(ru)].push(ru);
+        groups[group_idx(&pair.1)].push(pair);
     }
     let sizes: [usize; 4] = [
         groups[0].len(),
@@ -169,36 +192,66 @@ pub(crate) fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorM
     // HS; the f64 port matches `rgbToHex`'s `floor(256*f)` quantisation for all
     // realistic group sizes (verified: 0/4.28M hex divergences).
     const INTRUDER_HUE: f64 = 18.0 / 360.0;
-    let palette = light_color_groups(INTRUDER_HUE, &sizes);
+    let palette: BTreeMap<(usize, usize), Hsv> = light_color_groups(INTRUDER_HUE, &sizes)
+        .into_iter()
+        .collect();
     let get_color = |gi: usize, mi: usize| -> Hsv {
+        // `getColor idx = fromMaybe (HSV 0 1 1) (M.lookup idx colors)`
+        // (Dot.hs:190-218, see line 209) — unreachable for a valid (gIdx, mIdx).
         palette
-            .iter()
-            .find(|((g, m), _)| *g == gi && *m == mi)
-            .map(|(_, hsv)| *hsv)
-            // `getColor idx = fromMaybe (HSV 0 1 1) (M.lookup idx colors)`
-            // (Dot.hs:190-218, see line 209) — unreachable for a valid (gIdx, mIdx).
+            .get(&(gi, mi))
+            .copied()
             .unwrap_or_else(|| Hsv::new(0.0, 1.0, 1.0))
     };
 
-    let mut entries: Vec<(&RInfo, Rgb)> = Vec::new();
+    // The list HS hands to `M.fromList`, walked in its own order (group-major,
+    // NodeId-ordered within a group).  Equal `rInfo`s collapse to ONE key whose
+    // value is the LAST entry's colour, so every entry is filed into an
+    // equivalence class of `rInfo`s (`class_info`) whose colour (`class_color`)
+    // the later entries overwrite.  `classes` buckets those classes by
+    // `class_key`, confining `rInfo` equality to same-key entries.
+    let mut classes: BTreeMap<ClassKey<'_>, Vec<usize>> = BTreeMap::new();
+    let mut class_info: Vec<&RInfo> = Vec::new();
+    let mut class_color: Vec<Rgb> = Vec::new();
+    let mut node_class: Vec<(NodeId, usize)> = Vec::with_capacity(ordered.len());
     for (gi, grp) in groups.iter().enumerate() {
-        for (mi, ru) in grp.iter().enumerate() {
+        for (mi, pair) in grp.iter().enumerate() {
+            let info = &pair.1.info;
             // `getColorForRule attrs gIdx mIdx = fromMaybe defaultColor
             // (ruleColor attrs)` (Dot.hs:190-218, see line 212): explicit `color:` wins, else the
             // palette default.  `ruleAttributes ru = praciAttributes` for a
             // RuleACInst (Rule.hs:673-675, see line 674) — the same attributes `explicit_rule_color`
             // reads, so a coloured rule maps to its own dark fill colour.
-            let color = match &ru.info {
+            let color = match info {
                 RuleInfo::Proto(p) => p
                     .attributes
                     .color
                     .unwrap_or_else(|| hsv_to_rgb(get_color(gi, mi))),
                 _ => hsv_to_rgb(get_color(gi, mi)),
             };
-            entries.push((&ru.info, color));
+            let bucket = classes.entry(class_key(info)).or_default();
+            let ci = match bucket.iter().copied().find(|&ci| *class_info[ci] == *info) {
+                Some(ci) => {
+                    class_color[ci] = color;
+                    ci
+                }
+                None => {
+                    class_info.push(info);
+                    class_color.push(color);
+                    bucket.push(class_info.len() - 1);
+                    class_info.len() - 1
+                }
+            };
+            node_class.push((pair.0, ci));
         }
     }
-    NodeColorMap { entries }
+    // Every node now takes its class's FINAL colour — the value `M.lookup
+    // rInfoVal colorMap` would return for it.
+    let by_node = node_class
+        .into_iter()
+        .map(|(id, ci)| (id, class_color[ci]))
+        .collect();
+    NodeColorMap { by_node }
 }
 
 #[cfg(test)]
@@ -217,8 +270,50 @@ mod tests {
     fn destr(n: &[u8]) -> IntrRuleACInfo {
         IntrRuleACInfo::DestrRule(n.to_vec(), 0, false, false, vec![])
     }
-    fn hex_of(cm: &NodeColorMap, ru: &RuleACInst) -> String {
-        tamarin_utils::color::rgb_to_hex(cm.lookup(&ru.info).unwrap())
+    fn hex_of(cm: &NodeColorMap, id: NodeId) -> String {
+        tamarin_utils::color::rgb_to_hex(cm.lookup_node(&id).unwrap())
+    }
+
+    /// Direct transcription of HS `M.lookup rInfoVal (nodeColorMap rules)`
+    /// (Dot.hs:190-218/255): rebuild the association list HS hands to
+    /// `M.fromList` and scan it in reverse for the last entry with an equal
+    /// `rInfo` — the semantics [`build_node_color_map`] resolves per node.
+    fn reference_lookup(
+        nodes: &[(NodeId, RuleACInst)],
+        info: &RInfo,
+    ) -> Option<tamarin_utils::color::Rgb> {
+        use tamarin_utils::color::{hsv_to_rgb, light_color_groups, Hsv, Rgb};
+        let mut ordered: Vec<&(NodeId, RuleACInst)> = nodes.iter().collect();
+        ordered.sort_by_key(|a| a.0);
+        let mut groups: [Vec<&RuleACInst>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+        for pair in &ordered {
+            groups[group_idx(&pair.1)].push(&pair.1);
+        }
+        let sizes: [usize; 4] = [
+            groups[0].len(),
+            groups[1].len(),
+            groups[2].len(),
+            groups[3].len(),
+        ];
+        let palette: BTreeMap<(usize, usize), Hsv> = light_color_groups(18.0 / 360.0, &sizes)
+            .into_iter()
+            .collect();
+        let mut entries: Vec<(&RInfo, Rgb)> = Vec::new();
+        for (gi, grp) in groups.iter().enumerate() {
+            for (mi, ru) in grp.iter().enumerate() {
+                let default = hsv_to_rgb(palette[&(gi, mi)]);
+                let color = match &ru.info {
+                    RuleInfo::Proto(p) => p.attributes.color.unwrap_or(default),
+                    _ => default,
+                };
+                entries.push((&ru.info, color));
+            }
+        }
+        entries
+            .iter()
+            .rev()
+            .find(|(k, _)| **k == *info)
+            .map(|(_, c)| *c)
     }
 
     #[test]
@@ -264,10 +359,10 @@ mod tests {
             (nid(3), named_proto_node(PRN::Fresh)),      // g3 (3,0)
         ];
         let cm = build_node_color_map(&n1111);
-        assert_eq!(hex_of(&cm, &n1111[0].1), "#ce90ac"); // (0,0)
-        assert_eq!(hex_of(&cm, &n1111[1].1), "#d5d897"); // (1,0)
-        assert_eq!(hex_of(&cm, &n1111[2].1), "#9ee1c3"); // (2,0)
-        assert_eq!(hex_of(&cm, &n1111[3].1), "#a8a4eb"); // (3,0)
+        assert_eq!(hex_of(&cm, nid(0)), "#ce90ac"); // (0,0)
+        assert_eq!(hex_of(&cm, nid(1)), "#d5d897"); // (1,0)
+        assert_eq!(hex_of(&cm, nid(2)), "#9ee1c3"); // (2,0)
+        assert_eq!(hex_of(&cm, nid(3)), "#a8a4eb"); // (3,0)
 
         // ---- sizes = [2, 1, 3, 1], member index tracks NodeId order ----
         let n2131: Vec<(NodeId, RuleACInst)> = vec![
@@ -292,13 +387,13 @@ mod tests {
             (nid(6), named_proto_node(PRN::Fresh)),      // g3 (3,0)
         ];
         let cm = build_node_color_map(&n2131);
-        assert_eq!(hex_of(&cm, &n2131[0].1), "#ce90ac"); // (0,0)
-        assert_eq!(hex_of(&cm, &n2131[1].1), "#d19292"); // (0,1)
-        assert_eq!(hex_of(&cm, &n2131[2].1), "#d5d897"); // (1,0)
-        assert_eq!(hex_of(&cm, &n2131[3].1), "#9ee1c3"); // (2,0)
-        assert_eq!(hex_of(&cm, &n2131[4].1), "#9fe3d9"); // (2,1)
-        assert_eq!(hex_of(&cm, &n2131[5].1), "#a0dbe5"); // (2,2)
-        assert_eq!(hex_of(&cm, &n2131[6].1), "#a8a4eb"); // (3,0)
+        assert_eq!(hex_of(&cm, nid(0)), "#ce90ac"); // (0,0)
+        assert_eq!(hex_of(&cm, nid(1)), "#d19292"); // (0,1)
+        assert_eq!(hex_of(&cm, nid(2)), "#d5d897"); // (1,0)
+        assert_eq!(hex_of(&cm, nid(3)), "#9ee1c3"); // (2,0)
+        assert_eq!(hex_of(&cm, nid(4)), "#9fe3d9"); // (2,1)
+        assert_eq!(hex_of(&cm, nid(5)), "#a0dbe5"); // (2,2)
+        assert_eq!(hex_of(&cm, nid(6)), "#a8a4eb"); // (3,0)
     }
 
     #[test]
@@ -314,8 +409,8 @@ mod tests {
         let cm = build_node_color_map(&shuffled);
         // d1 (nid 0) is member 0; d2 (nid 1) is member 1 — regardless of the
         // insertion order above.
-        assert_eq!(hex_of(&cm, &shuffled[1].1), "#ce90ac"); // d1 -> (0,0)
-        assert_eq!(hex_of(&cm, &shuffled[0].1), "#d19292"); // d2 -> (0,1)
+        assert_eq!(hex_of(&cm, nid(0)), "#ce90ac"); // d1 -> (0,0)
+        assert_eq!(hex_of(&cm, nid(1)), "#d19292"); // d2 -> (0,1)
     }
 
     #[test]
@@ -329,8 +424,77 @@ mod tests {
         ];
         let cm = build_node_color_map(&dup);
         // Both look up the LAST member's colour.
-        assert_eq!(hex_of(&cm, &dup[0].1), "#badb99");
-        assert_eq!(hex_of(&cm, &dup[1].1), "#badb99");
+        assert_eq!(hex_of(&cm, nid(0)), "#badb99");
+        assert_eq!(hex_of(&cm, nid(1)), "#badb99");
+    }
+
+    #[test]
+    fn node_color_map_separates_same_named_rules_with_distinct_rinfo() {
+        // Same `ProtoRuleName` — hence the same `class_key` bucket — but
+        // unequal `rInfo`s (one carries a `role:` attribute), so `M.fromList`
+        // keeps TWO keys and only the two equal ones collapse.
+        // sizes = [0, 3, 0, 0]: (1,0)=#d5d897, (1,1)=#c3da98, (1,2)=#b1dc9a.
+        let mut roled = named_proto_node(PRN::Stand("R"));
+        if let TRuleInfo::Proto(p) = &mut roled.info {
+            p.attributes.role = Some("A".to_string());
+        }
+        let mixed: Vec<(NodeId, RuleACInst)> = vec![
+            (nid(0), named_proto_node(PRN::Stand("R"))), // (1,0)
+            (nid(1), roled),                             // (1,1) — distinct rInfo
+            (nid(2), named_proto_node(PRN::Stand("R"))), // (1,2) — equal to nid 0
+        ];
+        let cm = build_node_color_map(&mixed);
+        // nid 0 collapses onto the LAST attribute-free "R" entry, nid 2.
+        assert_eq!(hex_of(&cm, nid(0)), "#b1dc9a");
+        assert_eq!(hex_of(&cm, nid(1)), "#c3da98");
+        assert_eq!(hex_of(&cm, nid(2)), "#b1dc9a");
+    }
+
+    #[test]
+    fn lookup_node_matches_rinfo_keyed_reverse_scan() {
+        // Every node's stored colour is the one its `rInfo` resolves to under
+        // `M.fromList`. The node set mixes both `rInfo` arms, duplicated
+        // `rInfo`s, same-name-but-unequal `rInfo`s, and an explicit `color:`.
+        let mut roled = named_proto_node(PRN::Stand("R"));
+        if let TRuleInfo::Proto(p) = &mut roled.info {
+            p.attributes.role = Some("A".to_string());
+        }
+        let mut painted = named_proto_node(PRN::Stand("P"));
+        if let TRuleInfo::Proto(p) = &mut painted.info {
+            p.attributes.color = Some(tamarin_utils::color::Rgb::new(0.1, 0.2, 0.3));
+        }
+        let nodes: Vec<(NodeId, RuleACInst)> = vec![
+            (nid(0), named_proto_node(PRN::Stand("R"))),
+            (nid(1), intr_node(destr(b"d1"))),
+            (nid(2), roled),
+            (nid(3), intr_node(destr(b"d1"))),
+            (nid(4), painted.clone()),
+            (nid(5), named_proto_node(PRN::Stand("R"))),
+            (nid(6), intr_node(IntrRuleACInfo::ISend)),
+            (nid(7), named_proto_node(PRN::Fresh)),
+            (nid(8), painted),
+            (nid(9), intr_node(IntrRuleACInfo::Coerce)),
+        ];
+        let cm = build_node_color_map(&nodes);
+        for (id, ru) in &nodes {
+            assert_eq!(
+                cm.lookup_node(id),
+                reference_lookup(&nodes, &ru.info),
+                "node {}",
+                id
+            );
+        }
+    }
+
+    #[test]
+    fn node_color_map_lookup_node_absent_is_none() {
+        // A node id that contributed no entry has no colour — HS `M.lookup`
+        // returning `Nothing`, which the renderers turn into `"white"` / an
+        // omitted `jgnColor`.
+        let one: Vec<(NodeId, RuleACInst)> = vec![(nid(0), named_proto_node(PRN::Stand("R")))];
+        let cm = build_node_color_map(&one);
+        assert!(cm.lookup_node(&nid(0)).is_some());
+        assert!(cm.lookup_node(&nid(7)).is_none());
     }
 
     /// A bare protocol-rule node (no facts) with the given name.

@@ -85,6 +85,7 @@ fn term_has_reducible_sym(t: &LNTerm, reducible: &crate::function_symbols::FunSi
 }
 
 /// True if `t` contains NO Ac- or C-headed application anywhere.  Backs
+/// `MaudeSig::st_lhs_ac_c_free` — the per-rule cache behind
 /// `MaudeProcessInner::st_lhs_ac_free` and `norm::go_nf`'s per-rule
 /// dispatch: `nf_via_haskell`'s pure st-rule arm matches with the no-AC
 /// matcher (`solve_match_lterm_no_ac`), whose `match_raw` raises
@@ -552,7 +553,7 @@ impl MaudeHandle {
             stdout,
             stats: MaudeStats::default(),
             cache_stats: MaudeCacheStats::default(),
-            st_lhs_ac_free: sig.st_rules.iter().all(|r| term_ac_c_free(&r.lhs)),
+            st_lhs_ac_free: sig.st_lhs_all_ac_c_free(),
             sig: Arc::clone(&sig),
             caches,
         };
@@ -2273,15 +2274,14 @@ mod tests {
             Some(p) => p,
             None => return,
         };
-        use crate::function_symbols::{Constructability, FunSym, NoEqSym, Privacy};
+        use crate::function_symbols::{Constructability, FunSym, NoEqSym, Privacy, UserDefinedSym};
         let pk_sym = NoEqSym::new(
             b"pk".to_vec(),
             1,
             Privacy::Public,
             Constructability::Constructor,
         );
-        let sig =
-            pair_maude_sig().add_fun_sym(crate::function_symbols::UserDefinedSym::NoEqUser(pk_sym));
+        let sig = pair_maude_sig().add_fun_sym(UserDefinedSym::NoEqUser(pk_sym));
         let h = MaudeHandle::start(&path, sig).expect("start");
         let a_pub = LVar::new("A", LSort::Pub, 0);
         let ltka = LVar::new("ltkA", LSort::Fresh, 0);
@@ -2553,15 +2553,17 @@ mod tests {
                 return;
             }
         };
-        use crate::function_symbols::{AcSym, Constructability, FunSym, NoEqSym, Privacy};
+        use crate::function_symbols::{
+            AcSym, Constructability, FunSym, NoEqSym, Privacy, UserDefinedSym,
+        };
         let pair_sym = NoEqSym::new(
             b"pair".to_vec(),
             2,
             Privacy::Public,
             Constructability::Constructor,
         );
-        let sig = crate::maude_sig::mset_maude_sig()
-            .add_fun_sym(crate::function_symbols::UserDefinedSym::NoEqUser(pair_sym));
+        let sig =
+            crate::maude_sig::mset_maude_sig().add_fun_sym(UserDefinedSym::NoEqUser(pair_sym));
         let h = MaudeHandle::start(&path, sig).expect("start");
         let mk = |v: LVar| -> LNTerm { crate::term::Term::Lit(Lit::Var(v)) };
         // ground "pair" payload a,b -> use public name constants
@@ -2718,15 +2720,14 @@ mod tests {
                 return;
             }
         };
-        use crate::function_symbols::{Constructability, FunSym, NoEqSym, Privacy};
+        use crate::function_symbols::{Constructability, FunSym, NoEqSym, Privacy, UserDefinedSym};
         let h_sym = NoEqSym::new(
             b"h".to_vec(),
             1,
             Privacy::Public,
             Constructability::Constructor,
         );
-        let sig =
-            pair_maude_sig().add_fun_sym(crate::function_symbols::UserDefinedSym::NoEqUser(h_sym));
+        let sig = pair_maude_sig().add_fun_sym(UserDefinedSym::NoEqUser(h_sym));
         let hnd = MaudeHandle::start(&path, sig).expect("start");
         let mk = |v: LVar| -> LNTerm { crate::term::Term::Lit(Lit::Var(v)) };
         let x = LVar::new("x", LSort::Msg, 0);

@@ -11,11 +11,12 @@ Deterministic click-through crawl:
      cases, …)
   5. GET every site-map URL; for each `main/proof/...` node also GET the
      `interactive-graph-def/...` (DOT), `json/...` (JSON graph) and
-  `intdot/...` (HTML shell) variants
+     `intdot/...` (HTML shell) variants
   6. also exercise next/prev on the lemma roots
 
 Writes a JSON manifest {norm_url: {kind, status, body}} keyed by
-idx-normalized URL, for web_diff.py to compare across HS and RS.
+idx-normalized URL, for web_diff.py to compare across HS and RS, stamped with
+the `PLAN_VERSION` of the crawl plan that produced it.
 
 Pure stdlib (urllib, json, re).  Usage:
   web_crawl.py BASE_URL OUT_MANIFEST.json [--max-nodes N]
@@ -38,6 +39,18 @@ from web_normalize import norm_url_key  # noqa: E402
 # so a genuinely-hung page is bounded regardless.
 TIMEOUT = int(os.environ.get("WEB_CRAWL_TIMEOUT", "120"))
 MAX_NODES_DEFAULT = int(os.environ.get("WEB_CRAWL_MAX_NODES", "400"))
+
+# Version of the URL PLAN below, stamped into every manifest under
+# PLAN_VERSION_KEY (a top-level sibling of "manifest", never a URL row).
+# v2 = statics + source cases + per-lemma roots/next/prev + autoprove + sitemap ×4 variants.
+# web_parity.sh's HS manifest cache is keyed on sha256(theory) alone, which
+# cannot see a plan that has GROWN — an old manifest's unvisited URL families
+# read as MISSING_HS rows rather than as a cache miss.  Bump this whenever the
+# plan adds URLs; web_parity.sh then re-crawls each cached file on next use.
+# A pure RETIREMENT (the graph-route 0/0 probes) needs no bump: old manifests
+# are supersets, and web_diff.py drops the retired rows before pairing.
+PLAN_VERSION = 2
+PLAN_VERSION_KEY = "__plan_version__"
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -148,12 +161,18 @@ def main():
 
     # Source cases, on every route that renders them: the sources pane, the
     # JSON graph and the two dot routes.  `0/0` is the index the left-pane nav
-    # link carries (both backends index off the front of the case list there,
-    # which the graph routes report as a server error); `1/1` is the first real
-    # case, which they draw.
+    # link carries; the sources pane renders it (both backends index off the
+    # front of the case list there) so it stays crawled on `main`.  On the
+    # three graph routes the backends deliberately disagree about it —
+    # upstream's unchecked `!!` raises a 500 exception page, the port answers
+    # Not Found (see the divergence notes in tamarin-server
+    # handlers/theory.rs) — so it is not probed there; the port's behaviour is
+    # pinned by the server's own route tests.  `1/1` is the first real case,
+    # which every route draws.
     for route in ["main", "json", "graph", "interactive-graph-def"]:
         for kind in ["raw", "refined"]:
-            for case in ["0/0", "1/1"]:
+            cases = ["0/0", "1/1"] if route == "main" else ["1/1"]
+            for case in cases:
                 record(f"/thy/trace/{idx}/{route}/cases/{kind}/{case}")
 
     # per-lemma root main + lemma views + graph at root
@@ -228,7 +247,8 @@ def main():
 
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump({"base": base, "lemmas": lemmas, "log": log,
-                   "capped": capped, "manifest": manifest}, f)
+                   "capped": capped, PLAN_VERSION_KEY: PLAN_VERSION,
+                   "manifest": manifest}, f)
     print(f"crawled {len(manifest)} urls, {len(proof_nodes)} proof nodes"
           f"{' (CAPPED)' if capped else ''}; lemmas={len(lemmas)}", file=sys.stderr)
 

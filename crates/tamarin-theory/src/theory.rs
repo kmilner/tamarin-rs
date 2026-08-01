@@ -416,11 +416,19 @@ impl<R, P, S> Theory<R, P, S> {
 
     /// Look up a restriction by name (HS `lookupRestriction`,
     /// TheoryObject.hs:671-672).
+    ///
+    /// Intentionally retained: faithful mirror of HS `lookupRestriction`
+    /// (TheoryObject.hs:671-672); its only caller is [`Theory::add_restriction`],
+    /// itself reached only from the equally caller-less
+    /// [`Theory::add_restrictions`].
     pub fn lookup_restriction(&self, name: &str) -> Option<&OpenRestriction> {
         self.restrictions().find(|r| r.name == name)
     }
 
     /// HS `addRules` (TheoryObject.hs:470-471): append rule items, in order.
+    ///
+    /// Intentionally retained: faithful mirror of HS `addRules`
+    /// (TheoryObject.hs:470-471); no caller yet.
     pub fn add_rules(&mut self, rules: impl IntoIterator<Item = R>) -> &mut Self {
         self.items.extend(rules.into_iter().map(TheoryItem::Rule));
         self
@@ -431,6 +439,10 @@ impl<R, P, S> Theory<R, P, S> {
     ///
     /// HS returns `Maybe (Theory ...)`; the `bool` here is that `Just`/`Nothing`
     /// distinction on an in-place update.
+    ///
+    /// Intentionally retained: faithful mirror of HS `addLemma`
+    /// (TheoryObject.hs:462-465); its only caller is the equally caller-less
+    /// [`Theory::add_lemmas`].
     pub fn add_lemma(&mut self, l: Lemma<P>) -> bool {
         if self.lookup_lemma(&l.name).is_some() {
             return false;
@@ -443,6 +455,9 @@ impl<R, P, S> Theory<R, P, S> {
     /// folds `addLemma` through a `Maybe` and `fromJust`s it, so a name clash
     /// leaves the theory as it was (and, mid-list, is a hard error); here a
     /// clashing lemma is simply skipped.
+    ///
+    /// Intentionally retained: faithful mirror of HS `addLemmas`
+    /// (TheoryObject.hs:467-468); no caller yet.
     pub fn add_lemmas(&mut self, lemmas: impl IntoIterator<Item = Lemma<P>>) -> &mut Self {
         for l in lemmas {
             self.add_lemma(l);
@@ -453,6 +468,10 @@ impl<R, P, S> Theory<R, P, S> {
     /// HS `addRestriction` (TheoryObject.hs:453-456): append the restriction
     /// unless one of that name is already present.  Returns whether it was
     /// added.
+    ///
+    /// Intentionally retained: faithful mirror of HS `addRestriction`
+    /// (TheoryObject.hs:453-456); its only caller is the equally caller-less
+    /// [`Theory::add_restrictions`].
     pub fn add_restriction(&mut self, r: OpenRestriction) -> bool {
         if self.lookup_restriction(&r.name).is_some() {
             return false;
@@ -463,6 +482,9 @@ impl<R, P, S> Theory<R, P, S> {
 
     /// HS `addRestrictions` (TheoryObject.hs:458-459): add each restriction in
     /// turn, skipping name clashes (see [`Theory::add_lemmas`]).
+    ///
+    /// Intentionally retained: faithful mirror of HS `addRestrictions`
+    /// (TheoryObject.hs:458-459); no caller yet.
     pub fn add_restrictions(
         &mut self,
         restrictions: impl IntoIterator<Item = OpenRestriction>,

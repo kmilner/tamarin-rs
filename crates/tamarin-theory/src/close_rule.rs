@@ -52,6 +52,7 @@ use tamarin_term::subst::apply_vterm;
 use tamarin_term::subst_vfresh::LNSubstVFresh;
 use tamarin_term::term::Term;
 
+use crate::constraint::solver::context::IntrRuleCache;
 use crate::fact::{Fact, FactTag, LNFact, Multiplicity};
 use crate::rule::{
     get_conc_fact, get_deconstr_rule_kd_prem, get_deconstr_rule_prems_tail,
@@ -171,6 +172,17 @@ pub(crate) fn partition_for_ndc(
 // dedNaive / decompose
 // =============================================================================
 
+/// Privacy of a function symbol's declaration.
+fn fun_sym_private(f: &FunSym) -> bool {
+    match f {
+        FunSym::NoEq(s) => s.privacy == Privacy::Private,
+        FunSym::Ac(tamarin_term::function_symbols::AcSym::AcFct(s)) => {
+            s.privacy == Privacy::Private
+        }
+        _ => false,
+    }
+}
+
 /// HS `dedNaive`: `fact` is directly present in `terms` or derivable from
 /// them by construction alone (recursively over public applications).
 fn ded_naive(fact: &LNTerm, terms: &[LNTerm]) -> bool {
@@ -178,34 +190,8 @@ fn ded_naive(fact: &LNTerm, terms: &[LNTerm]) -> bool {
         return true;
     }
     match fact {
-        Term::App(f, args) => {
-            let private = match f {
-                FunSym::NoEq(s) => s.privacy == Privacy::Private,
-                FunSym::Ac(tamarin_term::function_symbols::AcSym::AcFct(s)) => {
-                    s.privacy == Privacy::Private
-                }
-                _ => false,
-            };
-            if private {
-                return false;
-            }
-            args.iter().all(|a| ded_naive(a, terms))
-        }
+        Term::App(f, args) => !fun_sym_private(f) && args.iter().all(|a| ded_naive(a, terms)),
         Term::Lit(_) => false,
-    }
-}
-
-/// Head-privacy of an applied term (for `decompose`'s clause dispatch).
-fn app_head_private(t: &LNTerm) -> Option<bool> {
-    match t {
-        Term::App(f, _) => Some(match f {
-            FunSym::NoEq(s) => s.privacy == Privacy::Private,
-            FunSym::Ac(tamarin_term::function_symbols::AcSym::AcFct(s)) => {
-                s.privacy == Privacy::Private
-            }
-            _ => false,
-        }),
-        Term::Lit(_) => None,
     }
 }
 
@@ -215,56 +201,47 @@ fn app_head_private(t: &LNTerm) -> Option<bool> {
 /// (recursively).  Non-KU facts (and KU facts of literals) pass through
 /// unchanged.
 fn decompose(facts: &[LNFact]) -> Vec<Vec<LNFact>> {
-    match facts.split_first() {
-        None => vec![vec![]],
-        Some((f, rest)) => {
-            let rest_d = decompose(rest);
-            if f.tag == FactTag::Ku && f.terms.len() == 1 {
-                if let Some(private) = app_head_private(&f.terms[0]) {
-                    let as_kd =
-                        Fact::fresh_annotated(FactTag::Kd, f.annotations.clone(), f.terms.to_vec());
-                    let mut out: Vec<Vec<LNFact>> = rest_d
-                        .iter()
-                        .map(|l| {
-                            let mut l2 = Vec::with_capacity(l.len() + 1);
-                            l2.push(as_kd.clone());
-                            l2.extend(l.iter().cloned());
-                            l2
-                        })
-                        .collect();
-                    if !private {
-                        if let Term::App(_, args) = &f.terms[0] {
-                            let arg_kus: Vec<LNFact> = args
-                                .iter()
-                                .map(|a| {
-                                    Fact::fresh_annotated(
-                                        FactTag::Ku,
-                                        f.annotations.clone(),
-                                        vec![a.clone()],
-                                    )
-                                })
-                                .collect();
-                            for x1 in decompose(&arg_kus) {
-                                for y in &rest_d {
-                                    let mut l = x1.clone();
-                                    l.extend(y.iter().cloned());
-                                    out.push(l);
-                                }
-                            }
-                        }
+    let Some((f, rest)) = facts.split_first() else {
+        return vec![vec![]];
+    };
+    let rest_d = decompose(rest);
+    if f.tag == FactTag::Ku && f.terms.len() == 1 {
+        if let Term::App(head, args) = &f.terms[0] {
+            let as_kd = Fact::fresh_annotated(FactTag::Kd, f.annotations.clone(), f.terms.to_vec());
+            let mut out: Vec<Vec<LNFact>> = rest_d
+                .iter()
+                .map(|l| {
+                    let mut l2 = Vec::with_capacity(l.len() + 1);
+                    l2.push(as_kd.clone());
+                    l2.extend(l.iter().cloned());
+                    l2
+                })
+                .collect();
+            if !fun_sym_private(head) {
+                let arg_kus: Vec<LNFact> = args
+                    .iter()
+                    .map(|a| {
+                        Fact::fresh_annotated(FactTag::Ku, f.annotations.clone(), vec![a.clone()])
+                    })
+                    .collect();
+                for x1 in decompose(&arg_kus) {
+                    for y in &rest_d {
+                        let mut l = x1.clone();
+                        l.extend(y.iter().cloned());
+                        out.push(l);
                     }
-                    return out;
                 }
             }
-            rest_d
-                .into_iter()
-                .map(|mut l| {
-                    l.insert(0, f.clone());
-                    l
-                })
-                .collect()
+            return out;
         }
     }
+    rest_d
+        .into_iter()
+        .map(|mut l| {
+            l.insert(0, f.clone());
+            l
+        })
+        .collect()
 }
 
 // =============================================================================
@@ -413,7 +390,7 @@ fn render_deduction_theory(
     if with_only_once_d {
         out.push_str(
             "restriction OnlyOnceD:\n  \"All #ndci #ndcj #ndck. OnlyOnceD() @ #ndci & OnlyOnceD() @ #ndcj & OnlyOnceD() @ #ndck ==> #ndci = #ndcj | #ndci = #ndck | #ndcj = #ndck\"\n\n",
-    );
+        );
     }
     // Lemma: Not(Ex vars #t0 #t1. Generated_0(..) @ #t0 & K(t) @ #t1).
     let mut binder_vars: Vec<String> = Vec::new();
@@ -479,7 +456,7 @@ fn theory_snippet(src: &str) -> String {
 /// search is unbounded, which is the HS-faithful configuration.
 fn prove_deduction_theory(
     maude: &MaudeHandle,
-    intr_modified: &[IntrRuleAC],
+    intr_modified: &IntrRuleCache,
     s: &[LNFact],
     fact_term: &LNTerm,
     with_only_once_d: bool,
@@ -521,7 +498,7 @@ fn prove_deduction_theory(
         maude.clone(),
         rules,
         restrictions.clone(),
-        intr_modified.to_vec(),
+        intr_modified.clone(),
     );
     ctx.ensure_saturated();
     let lemma = elaborated.lookup_lemma("Deduction").unwrap_or_else(|| {
@@ -552,7 +529,7 @@ fn prove_deduction_theory(
 /// chaining?  `intr_modified` is the `boundToOne`-mapped cache.
 fn deduction_check(
     maude: &MaudeHandle,
-    intr_modified: &[IntrRuleAC],
+    intr_modified: &IntrRuleCache,
     fact: &LNFact,
     facts: &[LNFact],
 ) -> bool {
@@ -590,34 +567,27 @@ fn deduction_check(
 /// an NDC-set head fun; built-in deconstruction rules pass through;
 /// other unbounded (budget 0) destructors are bounded to one application.
 fn bound_to_one(rule: &IntrRuleAC, checked_fun: Option<FunSym>) -> IntrRuleAC {
-    if let IntrRuleACInfo::DestrRule(name, i, subterm, constant, funs) = &rule.info {
+    let mut out = rule.clone();
+    if let IntrRuleACInfo::DestrRule(name, i, _, _, funs) = &mut out.info {
         if get_destr_rule_function(rule) == checked_fun {
-            let mut funs2 = funs.clone();
-            if let Some(f) = funs2.first_mut() {
+            if let Some(f) = funs.first_mut() {
                 *f = f.set_ndc(NdcState::IsNdc);
             }
-            let mut r = rule.clone();
-            r.info = IntrRuleACInfo::DestrRule(name.clone(), *i, *subterm, *constant, funs2);
-            r.actions.push(crate::fact::proto_fact(
+            out.actions.push(crate::fact::proto_fact(
                 Multiplicity::Linear,
                 "OnlyOnceD",
                 vec![],
             ));
-            return r;
-        }
-        if crate::rule::built_in_destr_rule_incl_pair()
-            .iter()
-            .any(|s| name.ends_with(s))
-        {
-            return rule.clone();
-        }
-        if *i == 0 {
-            let mut r = rule.clone();
-            r.info = IntrRuleACInfo::DestrRule(name.clone(), 1, *subterm, *constant, funs.clone());
-            return r;
+        } else {
+            let is_built_in = crate::rule::built_in_destr_rule_incl_pair()
+                .iter()
+                .any(|s| name.ends_with(s));
+            if !is_built_in && *i == 0 {
+                *i = 1;
+            }
         }
     }
-    rule.clone()
+    out
 }
 
 /// The `boundToOne`-mapped intruder cache of one `apply_ndc_check` group.
@@ -628,7 +598,7 @@ fn bound_to_one(rule: &IntrRuleAC, checked_fun: Option<FunSym>) -> IntrRuleAC {
 struct BoundToOneCache<'a> {
     intr_r: &'a [IntrRuleAC],
     checked_fun: Option<FunSym>,
-    modified: std::cell::OnceCell<Vec<IntrRuleAC>>,
+    modified: std::cell::OnceCell<IntrRuleCache>,
 }
 
 impl<'a> BoundToOneCache<'a> {
@@ -640,12 +610,17 @@ impl<'a> BoundToOneCache<'a> {
         }
     }
 
-    fn modified(&self) -> &[IntrRuleAC] {
+    /// The mapped cache as a shared handle: one group runs a deduction proof
+    /// per decomposition per chainable pair, and each of those builds a
+    /// `ProofContext` off this same rule list.
+    fn modified(&self) -> &IntrRuleCache {
         self.modified.get_or_init(|| {
-            self.intr_r
-                .iter()
-                .map(|r| bound_to_one(r, self.checked_fun))
-                .collect()
+            IntrRuleCache::from(
+                self.intr_r
+                    .iter()
+                    .map(|r| bound_to_one(r, self.checked_fun))
+                    .collect::<Vec<_>>(),
+            )
         })
     }
 }
@@ -667,16 +642,17 @@ fn apply_subst_rule(
             })
             .collect()
     };
-    let mut out = r.clone();
-    out.premises = app_facts(&r.premises);
-    out.conclusions = app_facts(&r.conclusions);
-    out.actions = app_facts(&r.actions);
-    out.new_vars = r
-        .new_vars
-        .iter()
-        .map(|t| apply_vterm(sigma, t.clone()))
-        .collect();
-    out
+    IntrRuleAC {
+        info: r.info.clone(),
+        premises: app_facts(&r.premises),
+        conclusions: app_facts(&r.conclusions),
+        actions: app_facts(&r.actions),
+        new_vars: r
+            .new_vars
+            .iter()
+            .map(|t| apply_vterm(sigma, t.clone()))
+            .collect(),
+    }
 }
 
 /// HS `chainedRulesDeductionTest`: after chaining `inst_sigma` into
@@ -746,13 +722,10 @@ fn ndc_check_prepare(
     }
     // `applySubsts subst r freshInst1` — freshToFree each unifier with a
     // fresh supply threaded across the whole list, avoiding both rules.
-    let mut max_idx: Option<u64> = None;
-    let mut track = |v: &LVar| {
-        max_idx = Some(max_idx.map_or(v.idx, |m| m.max(v.idx)));
-    };
+    let mut counter: u64 = 0;
+    let mut track = |v: &LVar| counter = counter.max(v.idx + 1);
     r.for_each_free(&mut track);
     fresh_inst1.for_each_free(&mut track);
-    let mut counter = max_idx.map(|m| m + 1).unwrap_or(0);
     let insts = unifs
         .iter()
         .map(|u_pairs| {
@@ -823,29 +796,22 @@ fn apply_ndc_check(
             .flat_map(|x| group.iter().map(move |y| (x, y)))
             .filter_map(|(x, y)| ndc_check_prepare(maude, x, y))
             .collect();
-        let any_chainable = !chainable.is_empty();
-        let mut all_reduce = true;
-        for insts in chainable.iter().rev() {
-            if !ndc_check_eval(maude, &intr_modified, insts) {
-                all_reduce = false;
-                break;
-            }
-        }
-        let is_ndc = all_reduce && any_chainable;
+        let is_ndc = !chainable.is_empty()
+            && chainable
+                .iter()
+                .rev()
+                .all(|insts| ndc_check_eval(maude, &intr_modified, insts));
         let fun_name = crate::intruder_rules::show_fun_sym_name(&f);
         if is_ndc {
             eprintln!("Function {} has the NDC property.", fun_name);
             tagged.push(f);
-            for r in group {
-                let mut r2 = r;
-                if let IntrRuleACInfo::DestrRule(name, i, st, c, funs) = &r2.info {
-                    let mut funs2 = funs.clone();
-                    if let Some(h) = funs2.first_mut() {
+            for mut r in group {
+                if let IntrRuleACInfo::DestrRule(_, _, _, _, funs) = &mut r.info {
+                    if let Some(h) = funs.first_mut() {
                         *h = h.add_ndc(NdcState::IsNdc);
                     }
-                    r2.info = IntrRuleACInfo::DestrRule(name.clone(), *i, *st, *c, funs2);
                 }
-                out.push(r2);
+                out.push(r);
             }
         } else {
             eprintln!("Function {} does not have the NDC property.", fun_name);

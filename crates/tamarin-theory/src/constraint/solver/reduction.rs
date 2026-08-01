@@ -4385,7 +4385,8 @@ fn forbidden_edge(c_rule: &RuleACInst, p_rule: &RuleACInst) -> bool {
     if !cn.is_empty() && cn == pn && get_remaining_rule_applications(c_rule) == 1 {
         return true;
     }
-    if is_ndc_rule(c_rule).is_some() && is_ndc_rule(c_rule) == is_ndc_rule(p_rule) {
+    let c_ndc = is_ndc_rule(c_rule);
+    if c_ndc.is_some() && c_ndc == is_ndc_rule(p_rule) {
         return true;
     }
     false
@@ -5774,7 +5775,7 @@ pub fn chain_direct_case_name(fa_conc: &crate::fact::LNFact) -> Option<String> {
         // `showFunSymName` (Term.hs, #883 rendering): builtin AC/C symbols
         // print their `*SymString` names ("mun"/"mult"/"xor"/"tplus"/"em"),
         // user symbols their own name.
-        Term::App(sym, _) => crate::intruder_rules::show_fun_sym_name(sym),
+        Term::App(sym, _) => crate::intruder_rules::show_fun_sym_name(sym).into_owned(),
     })
 }
 
@@ -6853,6 +6854,15 @@ impl<'ctx> Reduction<'ctx> {
                 // counter position at the end of its solve work (see the
                 // single-case adoption below).  Parallel to `cases`.
                 let mut case_counters: Vec<u64> = Vec::new();
+                let goal_ac_headed = matches!(fa.tag, crate::fact::FactTag::Ku)
+                    && fa.terms.len() == 1
+                    && matches!(
+                        fa.terms[0],
+                        tamarin_term::term::Term::App(
+                            tamarin_term::function_symbols::FunSym::Ac(_),
+                            _
+                        )
+                    );
                 for (rule, constrs) in candidates {
                     // Mirror Haskell's `labelNodeId` (Goals.hs:218-261, see line 262) which
                     // exploits every candidate rule via Disj-monad,
@@ -6954,15 +6964,9 @@ impl<'ctx> Reduction<'ctx> {
                         // whose first two premises are `KU(x)` facts ever
                         // reach `removePermutations`, so anything else maps
                         // to `OtherRule` here.
-                        let is_ac = {
+                        let is_ac = if goal_ac_headed {
                             use tamarin_term::term::Term;
                             use tamarin_term::vterm::Lit;
-                            let goal_ac_headed = matches!(fa.tag, crate::fact::FactTag::Ku)
-                                && fa.terms.len() == 1
-                                && matches!(
-                                    fa.terms[0],
-                                    Term::App(tamarin_term::function_symbols::FunSym::Ac(_), _)
-                                );
                             let ku_var = |f: &crate::fact::LNFact| match (f.tag, f.terms.first()) {
                                 (crate::fact::FactTag::Ku, Some(Term::Lit(Lit::Var(v))))
                                     if f.terms.len() == 1 =>
@@ -6972,15 +6976,14 @@ impl<'ctx> Reduction<'ctx> {
                                 _ => None,
                             };
                             match (
-                                goal_ac_headed,
                                 renamed.premises.first().and_then(&ku_var),
                                 renamed.premises.get(1).and_then(&ku_var),
                             ) {
-                                (true, Some(v1), Some(v2)) => {
-                                    IsAcConstructor::AcConstructor(v1, v2)
-                                }
+                                (Some(v1), Some(v2)) => IsAcConstructor::AcConstructor(v1, v2),
                                 _ => IsAcConstructor::OtherRule,
                             }
+                        } else {
+                            IsAcConstructor::OtherRule
                         };
                         let res = sub.solve_fact_eqs_ac(
                             SplitStrategy::SplitNow,

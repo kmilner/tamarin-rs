@@ -340,7 +340,17 @@ use tamarin_theory::constraint::system::System;
 pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     let mut nodes: Vec<GNode> = Vec::new();
     // 1. System rule instances.
-    for (nid, ru) in sys.nodes.iter() {
+    // HS `systemNodes se = map systemNode (M.toList $ get Sys.sNodes se)`
+    // (Graph.hs:99-102) reads `sNodes`, a `M.Map NodeId RuleACInst`
+    // (System.hs:383), so the nodes come out in ASCENDING `NodeId` order
+    // (`Ord LVar` = idx, then sort, then name; LTerm.hs:546-548).  RS stores
+    // them in a `Vec` in insertion order — `Reduction::set_nodes` keeps
+    // first-occurrence order because that decides which rule survives an id
+    // collision — so materialise the `M.toList` order here, as for the
+    // `sEdges` / `sLessAtoms` sets below.
+    let mut sorted_nodes: Vec<_> = sys.nodes.iter().collect();
+    sorted_nodes.sort_by_key(|a| a.0);
+    for (nid, ru) in sorted_nodes {
         nodes.push(GNode {
             id: *nid,
             ty: NodeType::System(ru.clone()),
@@ -441,8 +451,8 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     for e in &sorted_edges {
         edges.push(GEdge::System(e.src, e.tgt));
     }
-    for la in &sorted_less {
-        edges.push(GEdge::Less((*la).clone()));
+    for la in sorted_less {
+        edges.push(GEdge::Less(la.clone()));
     }
     // HS `unsolvedChains` (System.hs:1600-1604) walks `M.toList sGoals`, so
     // its chain goals arrive in ascending `Goal` order — see step 2 for why
@@ -536,6 +546,23 @@ mod tests {
                 "#vk.6<#vk",
             ]
         );
+    }
+
+    // `sNodes` is a `Map NodeId RuleACInst` upstream and `systemNodes` reads it
+    // through `M.toList` (Graph.hs:100), so the emitted rule nodes are in
+    // ascending `NodeId` order — idx-major, so `#vr.5` precedes `#vk.6` —
+    // whatever order the solver stored them in.
+    #[test]
+    fn basic_repr_materialises_system_node_map_order() {
+        let mut sys = System::default();
+        // Added in a deliberately unsorted order, as a graft leaves them.
+        for (n, i) in [("vr", 5u64), ("vk", 6), ("i", 1)] {
+            sys.add_node(nid(n, i), proto_rule("R", None));
+        }
+        assert_eq!(sys.nodes[0].0, nid("vr", 5));
+        let repr = compute_basic_graph_repr(&sys);
+        let ids: Vec<String> = repr.nodes.iter().map(|n| n.id.to_string()).collect();
+        assert_eq!(ids, vec!["#i.1", "#vr.5", "#vk.6"]);
     }
 
     #[test]

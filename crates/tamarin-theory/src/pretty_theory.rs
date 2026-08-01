@@ -695,12 +695,11 @@ pub(crate) fn render_signature(sig: &tamarin_term::maude_sig::MaudeSig) -> Strin
     out
 }
 
-/// Render the function symbol list, sorted alphabetically by name (HS
-/// uses `S.toList` over a Set ordered by the same key).
+/// Render the function symbol list: HS `prettyMaudeSigExcept` with an empty
+/// exclusion set, i.e. the NoEq symbols in `S.toList` (BTreeSet) order
+/// followed by the user-defined AC symbols, each with its space-prefixed
+/// attribute list (`h/1 [destructor]`) and NDC attributes.
 fn render_fun_syms(sig: &tamarin_term::maude_sig::MaudeSig) -> Vec<String> {
-    // HS `prettyMaudeSigExcept`: NoEq symbols (BTreeSet order) followed by
-    // the user-defined AC symbols, with space-prefixed attribute lists
-    // (`h/1 [destructor]`) and NDC attributes.
     sig.pretty_fun_syms_except(&std::collections::BTreeSet::new())
 }
 
@@ -709,9 +708,11 @@ fn render_fun_syms(sig: &tamarin_term::maude_sig::MaudeSig) -> Vec<String> {
 /// one): the `function: f(t1, t2): t` typing line of a SAPIC theory, followed by
 /// the symbol's attributes.
 ///
-/// No call site: RS never produces `TranslationElement::FunctionTypingInfo`.  In
+/// Intentionally retained: faithful mirror of HS `prettyTranslationElement`'s
+/// two `FunctionTypingInfo` cases (TheoryObject.hs:800-819 and 820-838); no
+/// caller yet.  RS never produces `TranslationElement::FunctionTypingInfo`.  In
 /// HS these items only reach a printer through the OPEN theory (`typeTheoryEnv`
-/// rebuilds them from the typing environment, Typing.hs:204-227, see line 210);
+/// rebuilds them from the typing environment, Typing.hs:204-226, see line 210);
 /// `removeTranslationItems` strips every translation item before a theory is
 /// closed, so `--prove` output never carries them.  This is the faithful printer
 /// for whenever open-theory rendering is ported.

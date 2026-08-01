@@ -815,8 +815,8 @@ pub fn rename_avoiding_ignoring<S: HasFrees, T: HasFrees>(s: S, avoid_in: &T, va
     rename_ignoring(vars, s, &mut fresh)
 }
 
-/// `s `renameAvoiding` avoid_in` (LTerm.hs:695): replace all free variables
-/// in `s` by fresh variables avoiding the variables in `avoid_in`.
+/// `renameAvoiding s avoid_in` (LTerm.hs:696): replace all free variables in
+/// `s` by fresh variables avoiding the variables in `avoid_in`.
 pub fn rename_avoiding<S: HasFrees, T: HasFrees>(s: S, avoid_in: &T) -> S {
     let mut fresh = avoid(avoid_in);
     rename(s, &mut fresh)

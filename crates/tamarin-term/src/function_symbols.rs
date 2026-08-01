@@ -247,8 +247,9 @@ impl NoEqSym {
 
 /// User-defined AC function symbol — name plus privacy, constructability,
 /// and NDC property (arity is always 2). Mirrors the Haskell tuple
-/// `(ByteString, (Privacy, Constructability, NDCstate))`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+/// `(ByteString, (Privacy, Constructability, NDCstate))`; the field order is
+/// that tuple's, which the derived `Ord` reads off.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AcFctSym {
     /// Interned like `NoEqSym::name` (see there for the rationale).
     pub name: &'static [u8],
@@ -265,35 +266,6 @@ impl std::fmt::Debug for AcFctSym {
             .field("constructability", &self.constructability)
             .field("ndc", &self.ndc)
             .finish()
-    }
-}
-
-impl Ord for AcFctSym {
-    #[inline]
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // HS tuple order: name, privacy, constructability, ndc.
-        let AcFctSym {
-            name,
-            privacy,
-            constructability,
-            ndc,
-        } = self;
-        let AcFctSym {
-            name: other_name,
-            privacy: other_privacy,
-            constructability: other_constructability,
-            ndc: other_ndc,
-        } = other;
-        name.cmp(other_name)
-            .then_with(|| privacy.cmp(other_privacy))
-            .then_with(|| constructability.cmp(other_constructability))
-            .then_with(|| ndc.cmp(other_ndc))
-    }
-}
-impl PartialOrd for AcFctSym {
-    #[inline]
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
     }
 }
 
@@ -460,22 +432,25 @@ impl FunSym {
         matches!(self, FunSym::List)
     }
 
+    /// NDC state of the symbol, or `None` for the variants that carry no NDC
+    /// field: the built-in AC operators, `C`, and `LIST`.  Kept in step with
+    /// [`FunSym::set_ndc`], which writes back to exactly these two variants.
+    fn ndc_state(&self) -> Option<NdcState> {
+        match self {
+            FunSym::NoEq(s) => Some(s.ndc),
+            FunSym::Ac(AcSym::AcFct(s)) => Some(s.ndc),
+            _ => None,
+        }
+    }
+
     /// HS `isNDCFunSym`: NDC property (trace mode) of the symbol.
     pub fn is_ndc_fun_sym(&self) -> bool {
-        match self {
-            FunSym::NoEq(s) => s.ndc.has_ndc(),
-            FunSym::Ac(AcSym::AcFct(s)) => s.ndc.has_ndc(),
-            _ => false,
-        }
+        self.ndc_state().is_some_and(NdcState::has_ndc)
     }
 
     /// HS `isNDCDiffFunSym`: NDC property (diff mode) of the symbol.
     pub fn is_ndc_diff_fun_sym(&self) -> bool {
-        match self {
-            FunSym::NoEq(s) => s.ndc.has_ndc_diff(),
-            FunSym::Ac(AcSym::AcFct(s)) => s.ndc.has_ndc_diff(),
-            _ => false,
-        }
+        self.ndc_state().is_some_and(NdcState::has_ndc_diff)
     }
 
     /// HS `setNDC`: overwrite the NDC state (no-op on non-user symbols).
@@ -489,16 +464,9 @@ impl FunSym {
 
     /// HS `addNDC`: join the given NDC state onto the existing one.
     pub fn add_ndc(self, ndc: NdcState) -> FunSym {
-        match self {
-            FunSym::NoEq(s) => {
-                let joined = ndc.join(s.ndc);
-                FunSym::NoEq(s.with_ndc(joined))
-            }
-            FunSym::Ac(AcSym::AcFct(s)) => {
-                let joined = ndc.join(s.ndc);
-                FunSym::Ac(AcSym::AcFct(s.with_ndc(joined)))
-            }
-            other => other,
+        match self.ndc_state() {
+            Some(old) => self.set_ndc(ndc.join(old)),
+            None => self,
         }
     }
 }

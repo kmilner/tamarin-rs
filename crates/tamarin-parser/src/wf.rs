@@ -589,16 +589,7 @@ fn pp_wf_term(t: &Term, out: &mut String) {
         }
         BinOp(op, l, r) => {
             use crate::ast::BinOp as B;
-            let sym: std::borrow::Cow<'_, str> = match op {
-                B::Exp => "^".into(),
-                B::Mult => "*".into(),
-                B::Union => "++".into(),
-                B::Xor => "\u{2295}".into(),
-                B::NatPlus => "%+".into(),
-                // A user-declared `[AC]` symbol is separated by its name
-                // surrounded by spaces (Term/Term.hs:305).
-                B::AcFct(name) => format!(" {} ", name).into(),
-            };
+            let sym = binop_sym(op);
             // HS builds AC operators (Mult/Union/Xor/NatPlus and the
             // user-declared `[AC]` symbols) via `fAppAC`, which flattens the
             // chain, sorts the operands (Ord LTerm), and renders them
@@ -837,6 +828,20 @@ fn cmp_wf_term(a: &Term, b: &Term) -> std::cmp::Ordering {
             };
             cmp_wf_term(i1, i2)
         }
+    }
+}
+
+/// The separator rendered between the operands of a `BinOp`.  A user-declared
+/// `[AC]` symbol is separated by its name surrounded by spaces
+/// (Term/Term.hs:305).
+fn binop_sym(op: &BinOp) -> std::borrow::Cow<'static, str> {
+    match op {
+        BinOp::Exp => "^".into(),
+        BinOp::Mult => "*".into(),
+        BinOp::Union => "++".into(),
+        BinOp::Xor => "\u{2295}".into(),
+        BinOp::NatPlus => "%+".into(),
+        BinOp::AcFct(name) => format!(" {} ", name).into(),
     }
 }
 
@@ -2356,17 +2361,7 @@ fn pp_term_for_wf(t: &Term) -> String {
             format!("diff({}, {})", pp_term_for_wf(a), pp_term_for_wf(b))
         }
         Term::BinOp(op, a, b) => {
-            use crate::ast::BinOp;
-            let sym: std::borrow::Cow<'_, str> = match op {
-                BinOp::Exp => "^".into(),
-                BinOp::Mult => "*".into(),
-                BinOp::Union => "++".into(),
-                BinOp::Xor => "\u{2295}".into(),
-                BinOp::NatPlus => "%+".into(),
-                // A user-declared `[AC]` symbol is separated by its name
-                // surrounded by spaces.
-                BinOp::AcFct(name) => format!(" {} ", name).into(),
-            };
+            let sym = binop_sym(op);
             format!("({}{}{})", pp_term_for_wf(a), sym, pp_term_for_wf(b))
         }
         Term::PatMatch(inner) => pp_term_for_wf(inner),

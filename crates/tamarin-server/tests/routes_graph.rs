@@ -5,14 +5,19 @@
 // Ported from upstream tamarin-prover sources:
 //   src/Web/Handler.hs, src/Web/Types.hs
 
-//! Integration tests for the DOT-pipeline routes.
+//! Integration tests for the graph routes.
 //!
 //! Coverage:
 //!   - DOT output via the in-process `system_to_dot` against a
 //!     simple known-shape proof system.
-//!   - HTTP endpoints `/intdot` and `/interactive-graph-def` return
-//!     well-formed DOT text.
-//!   - `/graph` returns either SVG or DOT fallback.
+//!   - `/intdot` returns the HTML shell whose `dotsrc` points at `/json`.
+//!   - `/interactive-graph-def` draws proof nodes and source cases; for it
+//!     and `/graph`, every other theory path is Yesod's 500 page.
+//!   - `/json` returns the aeson-pretty JSON graph, with and without
+//!     `abbrevInBackend`.
+//!   - On all three, a source/case index naming no case is the Not Found
+//!     page — the port's deliberate divergence from upstream's unchecked
+//!     `!!`, whose 500 pages leak the GHC CallStack.
 
 mod common;
 
@@ -56,14 +61,17 @@ async fn intdot_returns_html_shell() {
 /// `TheorySource` and `TheoryProof`; help / message / rules / lemma hit its
 /// catch-all `error "Unhandled theory path. This is a bug."` — a 500, not a
 /// 404 — and each route's copy of the clause is named in the CallStack
-/// (`imgThyPath` at `src/Web/Theory.hs:1414`, `dotGraphString` at `:2321`).
+/// (`imgThyPath` at `src/Web/Theory.hs:1416`, `dotGraphString` at `:2323`).
 #[tokio::test]
 async fn dot_routes_unhandled_path_is_internal_error() {
     let s = start_server_with_theory("issue193.spthy").await;
     for (path, capture) in [
         ("/thy/trace/1/graph/help", "graph_unhandled_path.html"),
         ("/thy/trace/1/graph/rules", "graph_unhandled_path.html"),
-        ("/thy/trace/1/graph/lemma/debug", "graph_unhandled_path.html"),
+        (
+            "/thy/trace/1/graph/lemma/debug",
+            "graph_unhandled_path.html",
+        ),
         (
             "/thy/trace/1/interactive-graph-def/rules",
             "igd_unhandled_path.html",
@@ -170,59 +178,58 @@ async fn interactive_graph_def_renders_source_cases() {
         let res = s.client.get(s.url(path)).send().await.expect("send");
         assert_eq!(res.status(), 200, "{path} must be a 200");
         let body = res.text().await.expect("text");
-        let expected = haskell_capture(capture);
+        let labels = dot_label_texts(&body);
         assert_eq!(
-            dot_label_texts(&body),
-            dot_label_texts(&expected),
+            labels,
+            dot_label_texts(&haskell_capture(capture)),
             "{path} must draw the oracle's graph; got:\n{body}"
         );
-        assert!(
-            !dot_label_texts(&body).is_empty(),
-            "{path} must draw a non-empty graph"
-        );
+        assert!(!labels.is_empty(), "{path} must draw a non-empty graph");
     }
 }
 
-/// The `!!` on the source cases raises through the dot routes too, from each
-/// route's own call site (`src/Web/Theory.hs:1420` for `/graph`, `:2327` for
-/// `/interactive-graph-def`), source index first.
+/// A case index naming no case is a plain `notFound` on the dot routes: the
+/// Not Found page, 404, whichever end of the list the index falls off.
+///
+/// Upstream feeds the index into `cases !! (i-1) !! (j-1)` unchecked
+/// (`src/Web/Theory.hs:1422` for `/graph`, `:2329` for
+/// `/interactive-graph-def`), so these URLs answer 500 with the raw
+/// `Prelude.!!` text and its GHC CallStack; RS deliberately corrects that,
+/// which is why these are the only cases-route responses the port does not
+/// byte-compare against a capture.
 #[tokio::test]
-async fn dot_routes_out_of_range_case_is_internal_error() {
+async fn dot_routes_out_of_range_case_is_not_found() {
     let s = start_server_with_theory("issue193.spthy").await;
-    for (path, capture) in [
-        (
-            "/thy/trace/1/graph/cases/refined/0/0",
-            "graph_cases_neg_index.html",
-        ),
-        (
-            "/thy/trace/1/graph/cases/refined/-1/1",
-            "graph_cases_neg_index.html",
-        ),
-        (
-            "/thy/trace/1/graph/cases/refined/1/9",
-            "graph_cases_too_large.html",
-        ),
-        (
-            "/thy/trace/1/interactive-graph-def/cases/refined/0/0",
-            "igd_cases_neg_index.html",
-        ),
-        (
-            "/thy/trace/1/interactive-graph-def/cases/refined/-1/1",
-            "igd_cases_neg_index.html",
-        ),
-        (
-            "/thy/trace/1/interactive-graph-def/cases/refined/1/9",
-            "igd_cases_too_large.html",
-        ),
+    for path in [
+        "/thy/trace/1/graph/cases/refined/0/0",
+        "/thy/trace/1/graph/cases/refined/-1/1",
+        "/thy/trace/1/graph/cases/refined/1/9",
+        "/thy/trace/1/graph/cases/refined/-9223372036854775808/1",
+        "/thy/trace/1/interactive-graph-def/cases/refined/0/0",
+        "/thy/trace/1/interactive-graph-def/cases/refined/-1/1",
+        "/thy/trace/1/interactive-graph-def/cases/refined/-1/-1",
+        "/thy/trace/1/interactive-graph-def/cases/refined/9/9",
     ] {
-        let res = s.client.get(s.url(path)).send().await.expect("send");
-        assert_eq!(res.status(), 500, "{path} must be a 500");
-        assert_eq!(
-            res.text().await.expect("text"),
-            haskell_capture(capture),
-            "{path}"
-        );
+        assert_not_found_page(&s, path).await;
     }
+}
+
+/// The standard Not Found page, asserted as `routes_basic` does: 404, the
+/// error page's content type, and the `defaultErrorHandler` widget —
+/// `<h1>Not Found</h1>` over the request's raw path.
+async fn assert_not_found_page(s: &TestServer, path: &str) {
+    let res = s.client.get(s.url(path)).send().await.expect("send");
+    assert_eq!(res.status(), 404, "{path} must be a 404");
+    assert_eq!(
+        content_type(&res),
+        "text/html; charset=utf-8",
+        "{path} must carry the Not Found page's content type"
+    );
+    let body = res.text().await.expect("text");
+    assert!(
+        body.contains(&format!("<h1>Not Found</h1>\n<p>{path}</p>\n")),
+        "{path} must carry the Not Found widget over its own path; got: {body}"
+    );
 }
 
 #[tokio::test]
@@ -238,12 +245,7 @@ async fn graph_json_returns_json_graph_with_dot_json_content_type() {
         .await
         .expect("send");
     assert_eq!(res.status(), 200);
-    assert_eq!(
-        res.headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok()),
-        Some(".json")
-    );
+    assert_eq!(content_type(&res), ".json");
     let body = res.text().await.expect("text");
     assert!(
         body.starts_with("{\n    \"graphs\": ["),
@@ -327,10 +329,8 @@ async fn graph_json_unhandled_path_is_internal_error() {
         let res = s.client.get(s.url(path)).send().await.expect("send");
         assert_eq!(res.status(), 500, "{path} must be a 500");
         assert_eq!(
-            res.headers()
-                .get("content-type")
-                .and_then(|v| v.to_str().ok()),
-            Some("text/html; charset=utf-8"),
+            content_type(&res),
+            "text/html; charset=utf-8",
             "{path} must carry the error page's content type"
         );
         assert_eq!(res.text().await.expect("text"), expected, "{path}");
@@ -338,55 +338,29 @@ async fn graph_json_unhandled_path_is_internal_error() {
 }
 
 #[tokio::test]
-async fn graph_json_out_of_range_source_index_is_internal_error() {
-    // `casesCode`'s `cases !! (i-1) !! (j-1)` (`src/Web/Theory.hs:1320`): a
-    // path index of 0 makes HS's `i-1` negative (`!!`'s `negIndex`), a
-    // past-the-end one raises its `tooLarge`, and the CallStack in the error
-    // page names the failing `!!`.
-    //
+async fn graph_json_out_of_range_source_index_is_not_found() {
     // `parseCases` reads both indices with `safeRead` at `ReadS Int`
-    // (`src/Web/Types.hs:443`), so a NEGATIVE index parses too and lands on
-    // the same `negIndex` — the message names the `!!`, never the index, so
-    // `-1/1` and `0/0` carry the very same page.
+    // (`src/Web/Types.hs:443`), so 0, a negative one and `Int` minBound all
+    // parse and reach the handler alongside a past-the-end one.  Upstream
+    // hands every one of them to `casesCode`'s unchecked
+    // `cases !! (i-1) !! (j-1)` (`src/Web/Theory.hs:1322`), which raises: the
+    // response is a 500 whose body is `Prelude.!!: negative index` or
+    // `index too large` plus a CallStack naming the failing `!!` (minBound
+    // wraps `i-1` to maxBound, so even that one reports "too large").  RS
+    // deliberately corrects it — an index naming no case is a miss, and every
+    // one of these answers the ordinary Not Found page.
     let s = start_server_with_theory("issue193.spthy").await;
-    for (path, capture) in [
-        (
-            "/thy/trace/1/json/cases/refined/0/0",
-            "json_cases_neg_index.html",
-        ),
-        (
-            "/thy/trace/1/json/cases/refined/-1/1",
-            "json_cases_neg_index.html",
-        ),
-        (
-            "/thy/trace/1/json/cases/refined/-1/-1",
-            "json_cases_neg_index.html",
-        ),
-        (
-            // The source index resolves, so this is the SECOND `!!` failing —
-            // a different call site, hence a different CallStack.
-            "/thy/trace/1/json/cases/refined/1/-1",
-            "json_cases_neg_case_index.html",
-        ),
-        (
-            "/thy/trace/1/json/cases/refined/9/9",
-            "json_cases_too_large.html",
-        ),
+    for path in [
+        "/thy/trace/1/json/cases/refined/0/0",
+        "/thy/trace/1/json/cases/refined/-1/1",
+        "/thy/trace/1/json/cases/refined/-1/-1",
+        // The source index resolves; only the case index is out of range.
+        "/thy/trace/1/json/cases/refined/1/-1",
+        "/thy/trace/1/json/cases/refined/1/0",
+        "/thy/trace/1/json/cases/refined/9/9",
+        "/thy/trace/1/json/cases/refined/-9223372036854775808/1",
     ] {
-        let res = s.client.get(s.url(path)).send().await.expect("send");
-        assert_eq!(res.status(), 500, "{path} must be a 500");
-        assert_eq!(
-            res.headers()
-                .get("content-type")
-                .and_then(|v| v.to_str().ok()),
-            Some("text/html; charset=utf-8"),
-            "{path} must carry the error page's content type"
-        );
-        assert_eq!(
-            res.text().await.expect("text"),
-            haskell_capture(capture),
-            "{path}"
-        );
+        assert_not_found_page(&s, path).await;
     }
 }
 
@@ -395,7 +369,7 @@ async fn graph_json_source_case_returns_json_graph() {
     // `graphJsonThyPath`'s `TheorySource` branch (`src/Web/Theory.hs:1316`)
     // serialises the `(i-1, j-1)` case system under the label
     // `Theory: <thy> Case: <i>:<j>` — the 1-based indices straight from the
-    // path.  Covers the branch the out-of-range 500 above cannot reach.
+    // path.  Covers the branch the out-of-range 404 above cannot reach.
     let s = start_server_with_theory("issue193.spthy").await;
     let res = s
         .client
@@ -404,12 +378,7 @@ async fn graph_json_source_case_returns_json_graph() {
         .await
         .expect("send");
     assert_eq!(res.status(), 200);
-    assert_eq!(
-        res.headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok()),
-        Some(".json")
-    );
+    assert_eq!(content_type(&res), ".json");
     let body = res.text().await.expect("text");
     let v: serde_json::Value = serde_json::from_str(&body).expect("body must be valid JSON");
     assert_eq!(

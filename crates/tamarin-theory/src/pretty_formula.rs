@@ -2773,8 +2773,8 @@ mod tests {
             Constructability::Constructor,
             NdcState::NotNdc,
         );
-        let x = var_term(LVar::new("x".to_string(), LSort::Msg, 0));
-        let y = var_term(LVar::new("y".to_string(), LSort::Msg, 0));
+        let x = var_term(LVar::new("x", LSort::Msg, 0));
+        let y = var_term(LVar::new("y", LSort::Msg, 0));
         let t = f_app_ac(AcSym::AcFct(sym), vec![x, y]);
 
         let ast = crate::pretty_theory::lnterm_to_parser(&t);

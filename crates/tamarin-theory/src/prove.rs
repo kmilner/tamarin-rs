@@ -35,7 +35,7 @@
 
 use tamarin_parser::ast as p;
 
-use crate::constraint::solver::context::ProofContext;
+use crate::constraint::solver::context::{IntrRuleCache, ProofContext};
 use crate::constraint::solver::search::{run_proof_search, ProofNode};
 use crate::constraint::system::{formula_to_system, SourceKind};
 use crate::elaborate::elaborate;
@@ -644,7 +644,8 @@ impl ProverSession {
     /// `ndc_cache`: the theory's once-per-load NDC-checked intruder cache
     /// (`close_rule::check_close_intr_rule`), injected into the template
     /// context so the session reuses the tagged+permuted rules instead of
-    /// re-running the check.
+    /// re-running the check.  Taken as a borrowed handle: the caller keeps
+    /// the one cache and the template context shares its allocation.
     // keyed source cache constructor; lookup-only map;
     // std kept (byte-inert) — iteration order never reaches output.
     #[allow(clippy::disallowed_types)]
@@ -655,7 +656,7 @@ impl ProverSession {
         in_file: &str,
         cli_heuristic: CliHeuristic,
         cut: crate::constraint::solver::context::CutStrategy,
-        ndc_cache: Option<&[crate::rule::IntrRuleAC]>,
+        ndc_cache: Option<&IntrRuleCache>,
     ) -> Result<Self, ProveError> {
         // RAII-set the user-fn-symbol thread-locals for the WHOLE
         // session.  Per-lemma `term_to_lnterm` calls during search
@@ -704,7 +705,7 @@ impl ProverSession {
             rules,
             restrictions.clone(),
             &forced_injective_facts,
-            ndc_cache.map(<[_]>::to_vec),
+            ndc_cache.cloned(),
         );
         maude.reset_counter_to(setup_counter_before);
         Ok(ProverSession {
@@ -1235,7 +1236,8 @@ pub fn prove_lemma(
 /// `Some` it OVERRIDES the per-lemma / theory heuristic (HS `selectHeuristic`,
 /// Proof.hs:705-716, see line 707).  `ndc_cache` is the theory's
 /// once-per-load NDC-checked intruder cache, injected into the context so
-/// the fallback path never re-runs the check.
+/// the fallback path never re-runs the check; the borrowed handle lets a
+/// whole per-lemma loop share one cache allocation.
 pub fn prove_lemma_with_pool_file_heuristic(
     parser_theory: &p::Theory,
     lemma_name: &str,
@@ -1245,7 +1247,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
     in_file: &str,
     cli_heuristic: &CliHeuristic,
     cut: crate::constraint::solver::context::CutStrategy,
-    ndc_cache: Option<&[crate::rule::IntrRuleAC]>,
+    ndc_cache: Option<&IntrRuleCache>,
 ) -> Result<ProofNode, ProveError> {
     let trace = tamarin_utils::env_gate!("TAM_DBG_PHASE");
     // Per-phase wall-clock instrumentation, gated by TAM_DBG_PHASE.
@@ -1385,7 +1387,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
         rules,
         restrictions.clone(),
         &forced_injective_facts,
-        ndc_cache.map(<[_]>::to_vec),
+        ndc_cache.cloned(),
     );
     if trace {
         eprintln!(

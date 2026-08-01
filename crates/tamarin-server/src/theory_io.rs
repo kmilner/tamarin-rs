@@ -258,7 +258,7 @@ pub fn load_from_source(
     // (`check_close_intr_rule` below).  Stored on the `TheoryEntry` so
     // `ProofState::new` injects it into the web session / shared context
     // instead of re-running the check per context build.
-    let mut ndc_cache: Option<Vec<tamarin_theory::rule::IntrRuleAC>> = None;
+    let mut ndc_cache: Option<Arc<Vec<tamarin_theory::rule::IntrRuleAC>>> = None;
     if let Ok(maude) = MaudeHandle::start(maude_path, typed.signature.maude_sig.clone()) {
         tamarin_theory::tools::rule_variants::populate_rule_variants(&mut typed, &maude, None);
         // Annotate per-rule loop breakers on the stored theory so the web
@@ -307,7 +307,7 @@ pub fn load_from_source(
             }
             typed.signature.maude_sig = sig;
         }
-        ndc_cache = Some(checked.cache);
+        ndc_cache = Some(Arc::new(checked.cache));
 
         // Dynamic Message Derivation Checks (run.rs:974-995): HS
         // `checkVariableDeducability`, gated by `--derivcheck-timeout` (HS
@@ -328,7 +328,7 @@ pub fn load_from_source(
             &parser_theory,
             &maude,
             derivcheck_timeout,
-            ndc_cache.as_deref(),
+            ndc_cache.clone(),
         );
         wf_report.extend(extra);
         if derivcheck_timeout > 0 {
@@ -353,7 +353,7 @@ pub fn load_from_source(
         primary: true,
         wf_report,
         errors_html,
-        ndc_cache: ndc_cache.map(Arc::new),
+        ndc_cache,
         proof_state: None,
     })
 }

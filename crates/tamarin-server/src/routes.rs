@@ -56,7 +56,7 @@ fn theory_index_piece(raw_path: &str) -> Option<&str> {
     let rest = rest
         .strip_prefix("trace/")
         .or_else(|| rest.strip_prefix("equiv/"))?;
-    Some(rest.split('/').next().unwrap_or(rest))
+    rest.split('/').next()
 }
 
 pub fn router(state: Arc<AppState>) -> Router {

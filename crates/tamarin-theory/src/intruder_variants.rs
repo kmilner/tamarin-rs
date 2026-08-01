@@ -165,12 +165,17 @@ pub fn parse_intruder_rules(
     // identifiers like `one` / `DH_neutral` are recognised as constants.
     let _nullary_guard = elaborate::MaudeSigNullaryGuard::set(msig);
 
+    // HS `knownFuns = S.toList (funSyms msig)`.
+    let known_funs: Vec<tamarin_term::function_symbols::FunSym> =
+        msig.fun_syms.iter().copied().collect();
+
     let mut out = Vec::with_capacity(parser_rules.len());
     for r in parser_rules {
-        let intr = ast_rule_to_intr_rule_ac(msig, &r).map_err(|message| IntrRuleParseError {
-            ctxt_desc: ctxt_desc.to_string(),
-            message,
-        })?;
+        let intr =
+            ast_rule_to_intr_rule_ac(&known_funs, &r).map_err(|message| IntrRuleParseError {
+                ctxt_desc: ctxt_desc.to_string(),
+                message,
+            })?;
         out.push(intr);
     }
     Ok(out)
@@ -193,7 +198,7 @@ fn lookup_fun(
                 f,
                 known_funs
                     .iter()
-                    .map(|fun| crate::intruder_rules::show_fun_sym_name(fun))
+                    .map(crate::intruder_rules::show_fun_sym_name)
                     .collect::<Vec<_>>()
                     .join(", ")
             )
@@ -206,16 +211,14 @@ fn lookup_fun(
 /// the LEADING purely-numeric position segments (`supprPos` via
 /// `readMaybe :: Maybe Int`); errors on an empty result.
 fn constr_name_func(name: &str) -> Result<Vec<String>, String> {
-    // `tail . T.split (== '_')`.
-    let mut names: Vec<String> = name.split('_').skip(1).map(|s| s.to_string()).collect();
-    // `supprPos`: remove position information from the rule name.
-    while let Some(first) = names.first() {
-        if first.parse::<i64>().is_ok() {
-            names.remove(0);
-        } else {
-            break;
-        }
-    }
+    // `tail . T.split (== '_')`, then `supprPos` (remove position
+    // information from the rule name).
+    let names: Vec<String> = name
+        .split('_')
+        .skip(1)
+        .skip_while(|seg| seg.parse::<i64>().is_ok())
+        .map(|seg| seg.to_string())
+        .collect();
     if names.is_empty() {
         return Err("Failed parsing intruder rule name: empty name".to_string());
     }
@@ -265,29 +268,29 @@ fn constr_name_func(name: &str) -> Result<Vec<String>, String> {
 /// `True False` are HS hard-codes — see the FIXME in
 /// Theory/Text/Parser/Rule.hs ("Currently we (wrongly) always assume
 /// that we have a subterm rule").  Subterm=True / constant=False.
-fn ast_rule_to_intr_rule_ac(msig: &MaudeSig, r: &p::Rule) -> Result<IntrRuleAC, String> {
+fn ast_rule_to_intr_rule_ac(
+    known_funs: &[tamarin_term::function_symbols::FunSym],
+    r: &p::Rule,
+) -> Result<IntrRuleAC, String> {
     // HS `intrInfo` rejects non-c/d-prefixed names.  Mirror that here.
     let bytes = r.name.as_bytes();
     if bytes.is_empty() {
         return Err("empty intruder rule name".to_string());
     }
     let (kind, rest) = (bytes[0], &bytes[1..]);
-    // HS `knownFuns = S.toList (funSyms msig)`.
-    let known_funs: Vec<tamarin_term::function_symbols::FunSym> =
-        msig.fun_syms.iter().copied().collect();
     let info: IntrRuleACInfo = match kind {
         b'c' => {
             // `lookupFun knownFuns $ tail cname` — cname is `_<fun>`, so
             // `tail` strips the leading underscore.
             let cname = &r.name[1..];
-            let f = lookup_fun(&known_funs, cname.get(1..).unwrap_or(""))?;
+            let f = lookup_fun(known_funs, cname.get(1..).unwrap_or(""))?;
             IntrRuleACInfo::ConstrRule(rest.to_vec(), f)
         }
         b'd' => {
             let dname = &r.name[1..];
             let funs = constr_name_func(dname)?
                 .iter()
-                .map(|n| lookup_fun(&known_funs, n))
+                .map(|n| lookup_fun(known_funs, n))
                 .collect::<Result<Vec<_>, _>>()?;
             IntrRuleACInfo::DestrRule(
                 rest.to_vec(),

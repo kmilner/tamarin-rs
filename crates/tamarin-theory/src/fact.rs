@@ -498,9 +498,10 @@ pub fn is_nearly_trivial_ku_fact(
 /// Mirrors Haskell `isNearlyTrivialACKUFact` (Fact.hs:252-255): a KU-fact whose
 /// single term applies an AC operator to message variables only.
 ///
-/// No caller, in HS either: the KU-goal filter that motivates it
-/// (`openGoals`/`is_open_in_sys`) tests the goal TERM directly via
-/// `is_trivial_ac_fun_sym_term`.  Kept for parity with the exported HS API.
+/// Intentionally retained: faithful mirror of HS `isNearlyTrivialACKUFact`
+/// (Fact.hs:252-255); no caller yet — and none in HS either: the KU-goal filter
+/// that motivates it (`openGoals`/`is_open_in_sys`) tests the goal TERM directly
+/// via `is_trivial_ac_fun_sym_term`.
 pub fn is_nearly_trivial_ac_ku_fact(fa: &LNFact) -> bool {
     match &fa.terms[..] {
         [t] if fa.tag == FactTag::Ku => tamarin_term::lterm::is_trivial_ac_fun_sym_term(t),
@@ -602,6 +603,10 @@ pub fn proto_fact_ann(
 /// Mirrors Haskell `freesToFresh = map (freshFact . lvarToLnterm)`
 /// (Fact.hs:327-329): one `Fr`-premise per variable, with nat-sorted variables
 /// reinterpreted as fresh ones (see [`lvar_to_lnterm`]).
+///
+/// Intentionally retained: faithful mirror of HS `freesToFresh`
+/// (Fact.hs:327-329); no production caller yet (exercised only by the unit test
+/// below).
 pub fn frees_to_fresh(vs: &[LVar]) -> Vec<LNFact> {
     vs.iter().map(|v| fresh_fact(lvar_to_lnterm(v))).collect()
 }

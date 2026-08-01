@@ -71,6 +71,11 @@ pub enum Contradiction {
     NodeAfterLast(NodeId, NodeId),
 }
 
+/// Read-only `NodeId → rule` index (`System::node_rule_map`), built at most
+/// once per `contradictions` pass: the caller owns it in a `OnceCell` and
+/// each consumer forces it with `get_or_init`.
+type NodeRuleMap<'a> = tamarin_utils::FastMap<&'a NodeId, &'a crate::rule::RuleACInst>;
+
 /// Collect every contradiction currently witnessed by the system.
 pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> {
     let mut out = Vec::new();
@@ -188,6 +193,16 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     // this one does not), so it is built separately.
     let ab_adj = sys.build_always_before_adj();
 
+    // Shared node-id → rule index for the three map-consuming checks
+    // below (`has_forbidden_constr_chain`, `has_incompatible_edge_facts`,
+    // `non_injective_fact_instances`).  `sys` is held immutable for the
+    // whole body and `nodes` has no interior mutability, so one build
+    // serves all three.  `OnceCell` rather than an eager build: each
+    // consumer forces it only after its own early-outs (no AC-constructor
+    // node, no edges, no injective fact tags respectively), so a pass
+    // whose consumers all bail never builds it.
+    let node_rules: std::cell::OnceCell<NodeRuleMap<'_>> = std::cell::OnceCell::new();
+
     // 2. SubtermCyclic — `isContradictory subtermStore`.
     if sys.subterm_store.is_false() {
         out.push(Contradiction::SubtermCyclic);
@@ -226,7 +241,7 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     }
     // 8b. ForbiddenACConstrChain — AC-constructor chain check
     //     (Contradictions.hs `hasForbiddenConstrChain`).
-    if has_forbidden_constr_chain(sys) {
+    if has_forbidden_constr_chain(sys, &node_rules) {
         out.push(Contradiction::ForbiddenACConstrChain);
     }
     // 9. IncompatibleEqs — HS-faithful: `eqsIsFalse sEqStore`
@@ -247,7 +262,7 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     if has_sort_conflated_lvars(sys) {
         out.push(Contradiction::IncompatibleEqs);
     }
-    if has_incompatible_edge_facts(sys) {
+    if has_incompatible_edge_facts(sys, &node_rules) {
         out.push(Contradiction::IncompatibleEqs);
     }
     if has_fresh_fact_sort_violation(sys) {
@@ -262,7 +277,12 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     }
     // 11. NonInjectiveFactInstance (×n) — BEFORE NodeAfterLast, matching HS's
     //     list concatenation order in `contradictions` (Contradictions.hs).
-    out.extend(non_injective_fact_instances(_ctxt, sys, ab_adj.map()));
+    out.extend(non_injective_fact_instances(
+        _ctxt,
+        sys,
+        ab_adj.map(),
+        &node_rules,
+    ));
     // 12. NodeAfterLast (×n).
     out.extend(node_after_last(sys, ab_adj.map()));
     out
@@ -766,7 +786,10 @@ fn never_contains_fresh_priv(t: &tamarin_term::lterm::LNTerm) -> bool {
 /// same AC symbol applied to only msg-vars).  Union-find over the
 /// `LessAtom … Adversary` edges between AC-constructor nodes whose
 /// conclusion feeds the other's premise, run to a fixpoint.
-fn has_forbidden_constr_chain(sys: &System) -> bool {
+fn has_forbidden_constr_chain<'a>(
+    sys: &'a System,
+    node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
+) -> bool {
     use crate::constraint::constraints::Reason;
     use crate::rule::is_ac_constr_rule;
     use std::collections::{BTreeMap, BTreeSet};
@@ -778,7 +801,8 @@ fn has_forbidden_constr_chain(sys: &System) -> bool {
         FunSym,
     );
 
-    // Every candidate pair comes from an `Adversary` less-atom, so without one
+    // Every candidate pair comes from an `Adversary` less-atom whose two
+    // endpoints both carry AC-constructor rules, so lacking either one
     // `extracted` is empty and the fixpoint below cannot report a chain.  This
     // runs on every solver step, so bail out before touching the eq-store.
     if sys
@@ -786,6 +810,9 @@ fn has_forbidden_constr_chain(sys: &System) -> bool {
         .iter()
         .all(|la| la.reason != Reason::Adversary)
     {
+        return false;
+    }
+    if !sys.nodes.iter().any(|n| is_ac_constr_rule(&n.1).is_some()) {
         return false;
     }
 
@@ -809,25 +836,20 @@ fn has_forbidden_constr_chain(sys: &System) -> bool {
     // Facts are compared under the pending eq-store subst as well — same
     // rationale as the endpoint resolve above (HS compares post-substSystem
     // rule instances).  Comparison-only copies; `Fact` equality ignores the
-    // bloom cache.
+    // fingerprint cache, so `map_ref`'s placeholder fingerprints are fine.
     let subst_fact = |fa: &crate::fact::LNFact| -> crate::fact::LNFact {
-        let mut f = fa.clone();
-        f.terms = f
-            .terms
-            .iter()
-            .map(|t| tamarin_term::subst::apply_vterm(subst, t.clone()))
-            .collect();
-        f.recompute_bloom();
-        f
+        fa.map_ref(|t| tamarin_term::subst::apply_vterm(subst, t.clone()))
     };
 
     // `extractNodesAndRules`: for each `LessAtom n1 n2 Adversary` where both
     // nodes carry AC-constructor rules of the same symbol and r1's (single)
     // conclusion appears among r2's premises, record the two nodes'
-    // (substituted) premises and the symbol.  Both endpoints resolve through a
-    // single `node_rule_map` index — it is only `.get()`-ed, and it keeps the
-    // FIRST rule per id, so it answers exactly as `node_rule_safe` does.
-    let node_rules = sys.node_rule_map();
+    // (substituted) premises and the symbol.  Both endpoints resolve through
+    // the pass-shared `node_rule_map` index (forced here, AFTER the early-outs
+    // above, so the non-AC fast path never builds it) — it is only `.get()`-ed,
+    // and it keeps the FIRST rule per id, so it answers exactly as
+    // `node_rule_safe` does.
+    let node_rules = node_rules.get_or_init(|| sys.node_rule_map());
     let extracted: Vec<(
         crate::constraint::constraints::NodeId,
         Vec<crate::fact::LNFact>,
@@ -933,13 +955,12 @@ fn has_forbidden_constr_chain(sys: &System) -> bool {
             if *n != n2 {
                 continue;
             }
-            let (_, t3, _) = map
+            let mut nodes = map
                 .get(&c)
-                .cloned()
+                .map(|(_, t3, _)| t3.clone())
                 .expect("has_forbidden_constr_chain: root must be mapped");
-            let mut nodes = t1.clone();
+            nodes.extend(t1.iter().copied());
             nodes.extend(t2.iter().copied());
-            nodes.extend(t3.iter().copied());
             if nodes.len() >= 2 {
                 found = true;
             }
@@ -1833,10 +1854,11 @@ fn bp_over_complicated(
 ///
 /// Such a `(i, j, k)` triple witnesses two simultaneous "live"
 /// instances of the injective fact, contradicting injectivity.
-fn non_injective_fact_instances(
+fn non_injective_fact_instances<'a>(
     ctxt: &ProofContext,
-    sys: &System,
+    sys: &'a System,
     adj: &BTreeMap<NodeId, Vec<NodeId>>,
+    node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
 ) -> Vec<Contradiction> {
     let mut out = Vec::new();
     let inj_tags: BTreeSet<&crate::fact::FactTag> =
@@ -1865,9 +1887,10 @@ fn non_injective_fact_instances(
         reach_cache.borrow_mut().insert(*from, out.clone());
         out
     };
-    // Resolve node-id → rule via a once-built map instead of a linear
-    // `nodes.iter().find` per `i`/`j`.
-    let node_rule_map = sys.node_rule_map();
+    // Resolve node-id → rule via the pass-shared map (forced here, after
+    // the `inj_tags` early-out) instead of a linear `nodes.iter().find`
+    // per `i`/`j`.
+    let node_rule_map = node_rules.get_or_init(|| sys.node_rule_map());
     let lookup_node =
         |id: &NodeId| -> Option<&crate::rule::RuleACInst> { node_rule_map.get(id).copied() };
 
@@ -2081,10 +2104,17 @@ fn has_fresh_fact_sort_violation(sys: &System) -> bool {
 /// can arise when node-id substitution collapses a case node onto
 /// an unrelated live node — the edge survives the rename but
 /// connects incompatible facts.  Such a system has no model.
-fn has_incompatible_edge_facts(sys: &System) -> bool {
-    // One node-id → rule map (instead of two linear `nodes.iter().find`
-    // scans per edge → O(edges*nodes)).
-    let node_rule_map = sys.node_rule_map();
+fn has_incompatible_edge_facts<'a>(
+    sys: &'a System,
+    node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
+) -> bool {
+    // No edges → no edge can be incompatible; bail before touching the map.
+    if sys.edges.is_empty() {
+        return false;
+    }
+    // The pass-shared node-id → rule map (instead of two linear
+    // `nodes.iter().find` scans per edge → O(edges*nodes)).
+    let node_rule_map = node_rules.get_or_init(|| sys.node_rule_map());
     for e in &sys.edges {
         let src_rule = node_rule_map.get(&e.src.0).copied();
         let tgt_rule = node_rule_map.get(&e.tgt.0).copied();
@@ -2623,6 +2653,71 @@ mod tests {
             "expected at least one NonInjectiveFactInstance contradiction; got {:?}",
             cs
         );
+    }
+
+    /// The pass-shared `NodeRuleMap` is lazy: checks whose early-outs
+    /// fire must leave the `OnceCell` untouched, while a mismatched-tag
+    /// edge must both trip `has_incompatible_edge_facts` and populate it.
+    #[test]
+    fn shared_node_rule_map_lazy_and_incompatible_edge_detected() {
+        use crate::constraint::constraints::{Edge, LessAtom, Reason};
+        use crate::constraint::system::System;
+        use crate::fact::{Fact, FactTag, Multiplicity};
+        use crate::rule::{
+            ConcIdx, IntrRuleACInfo, PremIdx, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleACInst,
+            RuleAttributes, RuleInfo,
+        };
+        use tamarin_term::builtin::msg_var;
+
+        let a_fact = Fact::new(
+            FactTag::Proto(Multiplicity::Linear, "A", 1),
+            vec![msg_var("x", 0)],
+        );
+        let b_fact = Fact::new(
+            FactTag::Proto(Multiplicity::Linear, "B", 1),
+            vec![msg_var("x", 0)],
+        );
+        let proto = |name: &'static str,
+                     prems: Vec<crate::fact::LNFact>,
+                     concs: Vec<crate::fact::LNFact>|
+         -> RuleACInst {
+            Rule::new(
+                RuleInfo::<ProtoRuleACInstInfo, IntrRuleACInfo>::Proto(ProtoRuleACInstInfo {
+                    name: ProtoRuleName::Stand(name),
+                    attributes: RuleAttributes::empty(),
+                    loop_breakers: Vec::new(),
+                }),
+                prems,
+                concs,
+                vec![],
+            )
+        };
+
+        // Early-out paths: an Adversary less-atom over non-AC rules and
+        // no edges — neither check may force the shared map.
+        let i = n("1");
+        let k = n("2");
+        let mut sys = System::empty();
+        sys.add_node(i, proto("Src", vec![], vec![a_fact.clone()]));
+        sys.add_node(k, proto("Snk", vec![b_fact.clone()], vec![]));
+        sys.add_less(LessAtom::new(i, k, Reason::Adversary));
+        let cell = std::cell::OnceCell::new();
+        assert!(!has_forbidden_constr_chain(&sys, &cell));
+        assert!(!has_incompatible_edge_facts(&sys, &cell));
+        assert!(
+            cell.get().is_none(),
+            "early-outs must not build the shared map"
+        );
+
+        // A conclusion-A → premise-B edge is tag-incompatible; detecting
+        // it forces the shared map.
+        sys.add_edge(Edge {
+            src: (i, ConcIdx(0)),
+            tgt: (k, PremIdx(0)),
+        });
+        let cell = std::cell::OnceCell::new();
+        assert!(has_incompatible_edge_facts(&sys, &cell));
+        assert!(cell.get().is_some());
     }
 
     /// Two LVars sharing `(name, idx)` but with disjoint sub-sorts

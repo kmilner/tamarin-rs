@@ -321,10 +321,10 @@ fn pretty_eq_store(sys: &System) -> Doc {
 // sort as `perform_split`: raw `Ord` first (= `S.toList`), then the
 // stable `drop_name_hints` key (= `sortOnMemo dropNameHintsLNSubstVFresh`).
 fn pp_disj(d: &crate::tools::equation_store::EqDisj) -> Doc {
-    let mut substs = d.substs.clone();
+    let mut substs: Vec<&crate::tools::equation_store::LNSubstVFresh> = d.substs.iter().collect();
     substs.sort();
     substs.sort_by_cached_key(|s| s.drop_name_hints());
-    let conjs: Vec<Doc> = substs.iter().map(pp_subst_vfresh).collect();
+    let conjs: Vec<Doc> = substs.into_iter().map(pp_subst_vfresh).collect();
     Doc::text(format!("{}.", d.split_id.0)).beside_sp(numbered_prime(conjs))
 }
 
