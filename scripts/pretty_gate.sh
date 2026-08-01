@@ -60,6 +60,24 @@ RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 [ -x "$RS_PATH" ] || { echo "no RS binary at $RS_PATH" >&2; exit 2; }
 export RS_PATH HS_PATH HS_CACHE CORPUS_ROOT FLAGS_MAP FILE_TIMEOUT DERIVCHECK_TIMEOUT
 
+# Oracle-rev handshake (same idea as web_parity.sh's PLAN_VERSION check): the
+# cache key is sha256(theory)+flags, which cannot see an ORACLE change — a
+# bump that alters pretty output leaves stale entries under unchanged keys,
+# surfacing as false DIFFs rather than cache misses.  Stamp the oracle's git
+# revision into the cache dir and wipe the cache when it changes.
+if [ -n "${HS_PATH:-}" ] && [ -x "$HS_PATH" ]; then
+    oracle_rev=$("$HS_PATH" --version 2>/dev/null \
+        | awk '/^Git revision:/{gsub(",","",$3); print $3; exit}')
+    stamp="$HS_CACHE/.oracle_rev"
+    if [ -n "$oracle_rev" ]; then
+        if [ -f "$stamp" ] && [ "$(cat "$stamp")" != "$oracle_rev" ]; then
+            echo "pretty_gate: oracle changed ($(cat "$stamp") -> $oracle_rev) — wiping stale cache" >&2
+            rm -rf "$HS_CACHE"; mkdir -p "$HS_CACHE"
+        fi
+        printf '%s' "$oracle_rev" > "$stamp"
+    fi
+fi
+
 strip_env() {
     grep -v -e '^Git revision:' -e '^Compiled at:' \
             -e '^[[:space:]]*processing time:' -e '^[[:space:]]*analyzed:'
