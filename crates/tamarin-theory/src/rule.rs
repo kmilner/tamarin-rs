@@ -733,8 +733,8 @@ const RESERVED_RULE_NAMES: [&str; 7] = [
     "iequality",
 ];
 
-/// The reserved names as a set, for callers that probe membership repeatedly
-/// or need them ordered.
+/// `RESERVED_RULE_NAMES` as a set — the cross-crate form, used by
+/// `tamarin-server`'s own `prefixIfReserved` mirrors.
 pub fn reserved_rule_names() -> BTreeSet<&'static str> {
     RESERVED_RULE_NAMES.into_iter().collect()
 }

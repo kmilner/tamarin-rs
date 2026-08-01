@@ -32,7 +32,7 @@ fn one_key_set(k: &str) -> std::collections::BTreeSet<String> {
 }
 
 // ---------------------------------------------------------------------
-// Graph routes — now LIVE (DOT pipeline).
+// Graph routes — LIVE (DOT pipeline).
 //
 // `intdot` returns the HS `intdotLayout` HTML shell page (a
 // `<dot-graph-viz>` pointing at the `json` graph route);

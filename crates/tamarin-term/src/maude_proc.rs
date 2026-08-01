@@ -1846,16 +1846,16 @@ fn msubst_to_lnsubst_with_avoid(
     };
     // HS-faithful: both the unify/variants path (`msubstToLSubstVFresh`)
     // and the match path (`msubstToLSubstVFree`) convert in Maude's raw
-    // returned order — neither sorts the domain (Maude/Types.hs:127-138;
+    // returned order — neither sorts the domain (Maude/Types.hs:133-177;
     // the unsorted order is deliberate upstream, so do not sort here).
     for ((sort, idx), mt) in ms {
         let lv = crate::maude_types::substitute_lookup_var(ctx, *sort, *idx).ok_or_else(|| {
             MaudeError::Other(format!("no binding for Maude variable x{}:{:?}", idx, sort))
         })?;
-        // HS-faithful: HS's `msubstToLSubstVFresh` (Maude/Types.hs:137-157, see line 138)
+        // HS-faithful: HS's `msubstToLSubstVFresh` (Maude/Types.hs:137-157, see line 152)
         // UNCONDITIONALLY uses `"x"` as the name hint for Maude-introduced
         // witnesses inside `eqsConj` substitutions.  The commented-out
-        // alternative branch at Maude/Types.hs:134-137 (preserve domain
+        // alternative branch at Maude/Types.hs:147-151 (preserve domain
         // name for `xi → xj` renames) is explicitly marked "seems wrong".
         let name_hint: &str = "x";
         let t = mterm_to_lnterm(mt, ctx, name_hint, &mut next);

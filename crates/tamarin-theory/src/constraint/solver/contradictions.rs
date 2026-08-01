@@ -306,7 +306,7 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
 /// `struleApplicable` arm matches subterm-rule LHSes via
 /// `solveMatchLNTerm`, which needs Maude AC matching for rules whose
 /// LHS contains an Ac-/C-headed subterm (user `[AC]` equations); the
-/// port mirrors that with `nf_via_haskell_maude`.
+/// port mirrors that with `nf_via_haskell_maude_with_sig`.
 ///
 /// Walks every node's premise, conclusion, action facts and
 /// `new_vars`; for each subterm whose head could be reducible,

@@ -463,7 +463,8 @@ fn rule_applies_ac(
             // `g`-rooted subject for `f /= g`.  `match_raw` reports
             // `NeedsAc` for *any* two AC-headed sides — it deliberately
             // does not compare the symbols, mirroring HS `matchRaw`
-            // (Unification.hs:333-334) — so the comparison belongs here.
+            // (Unification.hs:336-360, see line 356) — so the comparison
+            // belongs here.
             (Term::App(FunSym::Ac(t_sym), _), Term::App(FunSym::Ac(lhs_sym), _))
                 if t_sym != lhs_sym =>
             {

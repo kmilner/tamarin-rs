@@ -120,8 +120,9 @@ async fn interactive_graph_def_returns_dot() {
 ///
 /// The two dot emitters serialise the same graph differently — `D.showDot`
 /// quotes every attribute value, names nodes `n<k>` and gives every record
-/// field a port, while the port's emitter writes bare values, names nodes after
-/// the node id and ports only the premise/conclusion fields — which is what the
+/// field a port, while the port's emitter leaves the simple attributes
+/// (`shape=`, `fontsize=`) unquoted, names nodes after the node id and ports
+/// only the premise/conclusion fields — which is what the
 /// web-parity gate's dot canonicalisation (`scripts/web_normalize.py`, graph
 /// compared by label rather than by serialisation) exists to see past.  What
 /// must agree is the graph drawn: the labels, in order.
@@ -135,7 +136,7 @@ fn dot_label_texts(dot: &str) -> Vec<String> {
                 // A quoted value ends at the first UNESCAPED quote: both
                 // emitters write an inner `"` as `\"` (HS `Text.Dot.showAttr`,
                 // the port's `escape_dot_label`), so a backslash always
-                // consumes the character behind it.
+                // consumes the character that follows it.
                 let mut end = inner.len();
                 let mut escaped = false;
                 for (i, ch) in inner.char_indices() {

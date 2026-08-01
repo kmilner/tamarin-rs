@@ -34,7 +34,7 @@ pub fn overview_page(entry: &TheoryEntry, path: &TheoryPath) -> String {
     let header_html = header(entry);
     let proof_state = proof_state(entry);
     let main_view = path_html(entry, path);
-    // Byte-faithful port of `overviewTpl` (Web/Hamlet.hs:290-317), the widget
+    // Byte-faithful port of `overviewTpl` (Web/Hamlet.hs:276-303), the widget
     // body inside the shared [`default_layout`] frame: a `$newline never`
     // single line (the only embedded newlines come from the postprocessed
     // `{proof_state}` west pane and the `{main_view}` centre pane).  Verbatim
@@ -1096,10 +1096,10 @@ fn sources_html(entry: &TheoryEntry, kind: &SourceKind) -> String {
 }
 
 /// Compute `getSource kind thy` — the raw or refined source list, as
-/// `(goal, cases)` pairs.  Shared by `sources_html` (the page),
-/// `source_case_counts` (the theory-index `(N cases, …)` annotation) and the
-/// JSON graph endpoint's `TheorySource` branch so they stay consistent.
-/// Returns empty when the proof state is not yet built.
+/// `(goal, cases)` pairs.  Shared by `sources_html` (the page) and
+/// `source_case_counts` (the theory-index `(N cases, …)` annotation) so they
+/// stay consistent; the graph routes take the single case they draw from
+/// [`source_list_case`].  Returns empty when the proof state is not yet built.
 pub(crate) fn compute_source_lists(
     entry: &TheoryEntry,
     want_refined: bool,
@@ -1154,10 +1154,11 @@ pub(crate) fn compute_source_lists(
 }
 
 /// The `[sources]`-lemma typing assumptions the refined list folds in (HS
-/// `refineWithSourceAsms`, Rule.hs:157) — empty for the raw list, and with no
-/// such lemma the refine is a plain relabel to `RefinedSource`
-/// (Sources.hs:617-618).  `formula_to_guarded` resolves user fun symbols, so
-/// callers must hold the theory's user-fn guard.
+/// `typAsms`, CloseRule.hs:117-119, fed to `refineWithSourceAsms`,
+/// Sources.hs:452-475) — empty for the raw list, and with no such lemma the
+/// refine is a plain relabel to `RefinedSource` (Sources.hs:458-459).
+/// `formula_to_guarded` resolves user fun symbols, so callers must hold the
+/// theory's user-fn guard.
 fn source_typ_asms(
     entry: &TheoryEntry,
     want_refined: bool,
@@ -1177,7 +1178,7 @@ fn source_typ_asms(
 }
 
 /// The one case system the `(src_idx, case_idx)` pair names in `getSource kind
-/// thy` — [`compute_source_lists`]'s selection without materialising the cases
+/// thy` — [`compute_source_lists`]'s selection without cloning out the cases
 /// the request does not serve.  Both indices are 1-based and read signed;
 /// `None` when either names no case, and when the proof state is not yet built.
 pub(crate) fn source_list_case(

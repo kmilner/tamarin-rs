@@ -26,8 +26,10 @@ pub(crate) fn text_response(s: String) -> Response {
 }
 
 /// Byte-faithful port of HS `defaultLayout'` (`src/Web/Types.hs:699-733`): the
-/// `$newline never` frame every page of the UI carries, around that page's
-/// `setTitle` text and its widget markup.
+/// `$newline never` frame Yesod's `defaultLayout` puts around a page's
+/// `setTitle` text and its widget markup.  The standalone graph shell is the
+/// one page with a frame of its own (HS `intdotLayout`, see
+/// `handlers::theory::intdot_shell_html`).
 ///
 /// The hamlet quirks are verbatim (unquoted URL attrs, doubled
 /// `</script></script>` closes, the `<p class="loading">` banner, the doubled

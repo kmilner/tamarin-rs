@@ -841,10 +841,10 @@ pub fn builtin_nullary_constants(name: &str) -> Vec<String> {
 
 /// Generates an RAII guard that swaps a fresh `BTreeSet<String>` into a
 /// thread-local for the guard's lifetime and restores the previous value on
-/// drop.  All four user-declared-function thread-locals (`USER_UNARY_FUNS`,
-/// `USER_NULLARY_FUNS`, `USER_PRIVATE_FUNS`, `USER_DESTRUCTOR_FUNS`) share
-/// this identical swap/restore logic; the macro is their single source of
-/// truth.
+/// drop.  All seven user-declared-function thread-locals (`USER_UNARY_FUNS`,
+/// `USER_NULLARY_FUNS`, `USER_PRIVATE_FUNS`, `USER_DESTRUCTOR_FUNS`,
+/// `USER_AC_FUNS`, `USER_NDC_FUNS`, `USER_NDC_DIFF_FUNS`) share this
+/// identical swap/restore logic; the macro is their single source of truth.
 macro_rules! btreeset_swap_guard {
     ($(#[$meta:meta])* $Guard:ident, $tl:path) => {
         $(#[$meta])*

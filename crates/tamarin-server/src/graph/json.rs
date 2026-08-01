@@ -268,17 +268,17 @@ fn get_rule_type(ru: &RuleACInst) -> &'static str {
     }
 }
 
-/// HS `check p`, shared by `getRelationType` (JSON.hs:424-425) and `colorEdge`'s
-/// `SystemEdge` arm (JSON.hs:442-443): the TARGET premise's fact is tested
+/// HS `check p`, shared by `getRelationType` (JSON.hs:434-435) and `colorEdge`'s
+/// `SystemEdge` arm (JSON.hs:452-453): the TARGET premise's fact is tested
 /// first, then the SOURCE conclusion's.
 fn edge_fact_check(prem: Option<&LNFact>, conc: Option<&LNFact>, p: fn(&LNFact) -> bool) -> bool {
     prem.is_some_and(p) || conc.is_some_and(p)
 }
 
-/// The single classification `graphEdgeToJSONGraphEdge` (JSON.hs:457-485) needs
+/// The single classification `graphEdgeToJSONGraphEdge` (JSON.hs:467-495) needs
 /// per edge.
 ///
-/// `getRelationType` (JSON.hs:422-431) and `colorEdge` (JSON.hs:434-453) walk
+/// `getRelationType` (JSON.hs:432-441) and `colorEdge` (JSON.hs:444-463) walk
 /// the IDENTICAL `check` cascade over a `SystemEdge`'s endpoint facts and
 /// differ only in the string each arm yields, so an edge is classified once
 /// and both strings are read off the result.
@@ -292,7 +292,7 @@ enum EdgeClass {
 }
 
 impl EdgeClass {
-    /// `colorEdge` (JSON.hs:434-453).
+    /// `colorEdge` (JSON.hs:444-463).
     fn color(&self) -> &'static str {
         match self {
             EdgeClass::SystemK => "orangered2",
@@ -304,7 +304,7 @@ impl EdgeClass {
         }
     }
 
-    /// `jgeRelation` (JSON.hs:457-485): `getRelationType` for a `SystemEdge`,
+    /// `jgeRelation` (JSON.hs:467-495): `getRelationType` for a `SystemEdge`,
     /// a literal for the other two edge kinds.
     fn relation(&self) -> &'static str {
         match self {
@@ -539,7 +539,7 @@ fn json_node(node: &GNode, color_map: &NodeColorMap) -> Value {
     }
 }
 
-/// Port of `graphEdgeToJSONGraphEdge` (JSON.hs:457-485).  Less-edges address
+/// Port of `graphEdgeToJSONGraphEdge` (JSON.hs:467-495).  Less-edges address
 /// their endpoints by bare node id; the other two kinds use record ports.
 fn json_edge(edge: &GEdge, rules: &NodeRules<'_>) -> Value {
     let class = classify_edge(edge, rules);
