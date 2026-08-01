@@ -251,8 +251,13 @@ pub fn find_connected_components<'a>(
 ///   3. removes those nodes and the intra-cluster edges from the
 ///      top-level `GraphRepr` fields,
 ///   4. leaves cross-cluster + non-clustered nodes/edges in place.
+///
+/// `nodes` is the node list `nodes_by_group` borrows from — the callers move
+/// it out of `repr` so the grouping cannot alias `repr` — and its un-clustered
+/// remainder becomes the new `repr.nodes`.
 pub fn add_cluster(
     repr: &mut GraphRepr,
+    nodes: &[GNode],
     nodes_by_group: BTreeMap<String, Vec<&GNode>>,
     name_suffix: &str,
 ) {
@@ -297,8 +302,7 @@ pub fn add_cluster(
         .into_iter()
         .filter(|e| !absorbed_edges_struct.iter().any(|ae| ae == e))
         .collect();
-    let remaining_nodes: Vec<GNode> = repr
-        .nodes
+    let remaining_nodes: Vec<GNode> = nodes
         .iter()
         .filter(|n| !absorbed_nodes.iter().any(|an| an == *n))
         .cloned()
@@ -310,18 +314,19 @@ pub fn add_cluster(
 
 /// Mirror of `addClusterByRole` — wrap `add_cluster` over role groupings.
 pub fn add_cluster_by_role(repr: &mut GraphRepr) {
-    // Clone nodes from `repr` so the grouping borrows from owned data
-    // and doesn't alias `repr`'s nodes field.
-    let nodes_owned: Vec<GNode> = repr.nodes.clone();
+    // Move the nodes out of `repr` so the grouping borrows from owned data
+    // that doesn't alias `repr`'s nodes field; `add_cluster` puts the
+    // un-clustered ones back.
+    let nodes_owned: Vec<GNode> = std::mem::take(&mut repr.nodes);
     let groups: BTreeMap<String, Vec<&GNode>> = group_nodes_by_role(&nodes_owned);
-    add_cluster(repr, groups, "_Session_");
+    add_cluster(repr, &nodes_owned, groups, "_Session_");
 }
 
 /// Mirror of `addIntelligentClusterUsingSimilarNames`.
 pub fn add_intelligent_cluster_using_similar_names(repr: &mut GraphRepr) {
-    let nodes_owned: Vec<GNode> = repr.nodes.clone();
+    let nodes_owned: Vec<GNode> = std::mem::take(&mut repr.nodes);
     let groups: BTreeMap<String, Vec<&GNode>> = group_by_similar_name(&nodes_owned);
-    add_cluster(repr, groups, "_Session_");
+    add_cluster(repr, &nodes_owned, groups, "_Session_");
 }
 
 // ---------------------------------------------------------------------
