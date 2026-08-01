@@ -109,7 +109,8 @@ each lemma along the way — and diffs the pages semantically
 (`web_crawl.py` / `web_normalize.py` / `web_diff.py`). HS crawl manifests
 are cached content-keyed under `scripts/.web_hs_cache/` (same staleness
 trap as above). Env knobs: `FILE_TIMEOUT`, `READY_TIMEOUT`, `HS_PORT`,
-`RS_PORT`, `MAX_NODES`, `CACHE`, `DIFFDIR`.
+`RS_PORT`, `MAX_NODES`, `CACHE`, `DIFFDIR`, `DERIVCHECK_TIMEOUT`,
+`SERVER_MEM_KB` (per-server address-space cap, 24 GiB).
 
 The known cosmetic residue (identical proof states rendered with different
 internal counter values on a few AC-heavy theories — see the README) lives
