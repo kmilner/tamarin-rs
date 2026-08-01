@@ -132,7 +132,22 @@ fn dot_label_texts(dot: &str) -> Vec<String> {
         rest = &rest[pos + "label=".len()..];
         let value = match rest.strip_prefix('"') {
             Some(inner) => {
-                let end = inner.find('"').unwrap_or(inner.len());
+                // A quoted value ends at the first UNESCAPED quote: both
+                // emitters write an inner `"` as `\"` (HS `Text.Dot.showAttr`,
+                // the port's `escape_dot_label`), so a backslash always
+                // consumes the character behind it.
+                let mut end = inner.len();
+                let mut escaped = false;
+                for (i, ch) in inner.char_indices() {
+                    if escaped {
+                        escaped = false;
+                    } else if ch == '\\' {
+                        escaped = true;
+                    } else if ch == '"' {
+                        end = i;
+                        break;
+                    }
+                }
                 let (value, tail) = inner.split_at(end);
                 rest = tail;
                 value
@@ -157,6 +172,19 @@ fn dot_label_texts(dot: &str) -> Vec<String> {
         out.push(cleaned);
     }
     out
+}
+
+/// The scanner reads a record label whole — its commas and its `|` separators
+/// belong to the value, only the `<port>` anchors and the whitespace go — and a
+/// label carrying an escaped quote runs to the closing quote, not to the `\"`.
+#[test]
+fn dot_label_texts_reads_whole_quoted_values() {
+    let dot = r#"n0[shape="record",label="{{<p0> Fr( ~x )|<p1> K( f(a, b) )}}",color="red"];
+n1[label="say \"hi\"",shape="ellipse"];"#;
+    assert_eq!(
+        dot_label_texts(dot),
+        ["{{Fr(~x)|K(f(a,b))}}", r#"say\"hi\""#]
+    );
 }
 
 /// `thyPathSystem`'s `TheorySource` arm draws the `(i-1, j-1)` case, so both
