@@ -244,6 +244,21 @@ pub fn find_connected_components<'a>(
     components
 }
 
+/// Bucket key for a [`GEdge`]: variant tag plus both endpoints' node id and
+/// index.  Structurally equal edges always share it — the endpoint pairs are
+/// compared in full by `GEdge`'s derived `PartialEq`, and `LessAtom`'s
+/// hand-written one compares exactly `smaller`/`larger` — so bucketing by it
+/// never separates two edges that compare equal.
+type EdgeKey = (u8, NodeId, usize, NodeId, usize);
+
+fn edge_key(e: &GEdge) -> EdgeKey {
+    match e {
+        GEdge::System((s, si), (t, ti)) => (0, *s, si.0, *t, ti.0),
+        GEdge::Less(la) => (1, la.smaller, 0, la.larger, 0),
+        GEdge::UnsolvedChain((s, si), (t, ti)) => (2, *s, si.0, *t, ti.0),
+    }
+}
+
 /// Generic `addCluster` from `GraphRepr.hs:117-130`.  Given a grouping
 /// of nodes (one group per cluster), it:
 ///   1. computes connected components within each group,
@@ -277,10 +292,13 @@ pub fn add_cluster(
             });
         }
     }
-    // Collect all the edges and nodes absorbed by sub_clusters.
+    // Index all the edges and nodes absorbed by sub_clusters, so the filters
+    // below compare each top-level element only against the absorbed ones
+    // sharing its key.
     // The cloned cluster edges live at different addresses than the
     // elements of `all_edges`, so absorbed edges must be filtered by
-    // structural equality (not pointer identity).
+    // structural equality (not pointer identity) — the [`EdgeKey`] bucket
+    // narrows the candidates, the `==` inside it decides.
     //
     // Nodes too must be removed by STRUCTURAL equality, mirroring HS
     // `remainingNodes = filter (`notElem` clusteredNodes) grNodes`
@@ -289,22 +307,35 @@ pub fn add_cluster(
     // `SystemNode` and as a free `LastAction` ellipse (see
     // `compute_basic_graph_repr`).  When the SystemNode is clustered,
     // an id-keyed filter would silently drop the free ellipse as well;
-    // HS keeps it at top level (it is not an element of the cluster).
-    let absorbed_nodes: Vec<GNode> = sub_clusters
-        .iter()
-        .flat_map(|c| c.nodes.iter().cloned())
-        .collect();
-    let absorbed_edges_struct: Vec<GEdge> = sub_clusters
-        .iter()
-        .flat_map(|c| c.edges.iter().cloned())
-        .collect();
+    // HS keeps it at top level (it is not an element of the cluster).  So the
+    // id only buckets the absorbed nodes — a bucket hit still has to compare
+    // the whole node, `ty` included.
+    let mut absorbed_nodes: BTreeMap<NodeId, Vec<&GNode>> = BTreeMap::new();
+    for n in sub_clusters.iter().flat_map(|c| c.nodes.iter()) {
+        absorbed_nodes.entry(n.id).or_default().push(n);
+    }
+    let mut absorbed_edges_struct: BTreeMap<EdgeKey, Vec<&GEdge>> = BTreeMap::new();
+    for e in sub_clusters.iter().flat_map(|c| c.edges.iter()) {
+        absorbed_edges_struct
+            .entry(edge_key(e))
+            .or_default()
+            .push(e);
+    }
     let remaining_edges: Vec<GEdge> = all_edges
         .into_iter()
-        .filter(|e| !absorbed_edges_struct.iter().any(|ae| ae == e))
+        .filter(|e| {
+            !absorbed_edges_struct
+                .get(&edge_key(e))
+                .is_some_and(|bucket| bucket.iter().any(|ae| *ae == e))
+        })
         .collect();
     let remaining_nodes: Vec<GNode> = nodes
         .iter()
-        .filter(|n| !absorbed_nodes.iter().any(|an| an == *n))
+        .filter(|n| {
+            !absorbed_nodes
+                .get(&n.id)
+                .is_some_and(|bucket| bucket.iter().any(|an| *an == *n))
+        })
         .cloned()
         .collect();
     repr.clusters = sub_clusters;
