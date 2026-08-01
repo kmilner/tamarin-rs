@@ -25,26 +25,34 @@ pub(crate) fn text_response(s: String) -> Response {
     (StatusCode::OK, headers, s).into_response()
 }
 
-/// HS `defaultLayout'` (`src/Web/Types.hs:699-733`) around the widget
-/// yesod-core's `defaultErrorHandler` builds for an error response, sent with
-/// `status`: `title` is the widget's `setTitle`, `body` its markup.
+/// Byte-faithful port of HS `defaultLayout'` (`src/Web/Types.hs:699-733`): the
+/// `$newline never` frame every page of the UI carries, around that page's
+/// `setTitle` text and its widget markup.
 ///
-/// The frame is the one every other page carries, so the same hamlet quirks are
-/// verbatim (unquoted URL attrs, doubled `</script></script>` closes, the
-/// `<p class="loading">` banner, the doubled `</a>` in the context menu).  The
-/// error widgets themselves are not `$newline never`, so their markup arrives
-/// with the newlines hamlet puts between their lines.
-fn error_page(status: StatusCode, title: &str, body: &str) -> Response {
-    let html = format!(
+/// The hamlet quirks are verbatim (unquoted URL attrs, doubled
+/// `</script></script>` closes, the `<p class="loading">` banner, the doubled
+/// `</a>` in the context menu).  `title` and `body` are spliced as given —
+/// every caller escapes what needs escaping.
+pub(crate) fn default_layout(title: &str, body: &str) -> String {
+    format!(
         r##"<!DOCTYPE html>
 <html><head><title>{title}</title><link rel="stylesheet" href="/static/css/intdot-style.css"><link rel="stylesheet" href="/static/css/tamarin-prover-ui.css"><link rel="stylesheet" href="/static/css/jquery-contextmenu.css"><link rel="stylesheet" href="/static/css/smoothness/jquery-ui.css"><script src="/static/js/jquery.js"></script></script><script src="/static/js/jquery-ui.js"></script></script><script src="/static/js/jquery-layout.js"></script></script><script src="/static/js/jquery-cookie.js"></script></script><script src="/static/js/jquery-superfish.js"></script></script><script src="/static/js/jquery-contextmenu.js"></script></script><script src="/static/js/tamarin-prover-ui.js"></script></script><script type="module" src="/static/js/intdot-graph.es.js"></script></script><script type="module" src="/static/js/intdot-staticgraph.es.js"></script></script><script type="module" src="/static/js/intdot-dynamicgraph.es.js"></script></script></head><body><p class="loading">Analyzing, please wait...  <a id=cancel href='#'>Cancel</a></p>{body}<div id="dialog"></div><div id="confirm-dialog"></div><ul id="contextMenu"><li class="autoprove"><a href="#autoprove">Autoprove</a></a></li></ul></body></html>"##
-    );
+    )
+}
+
+/// Shared error-response constructor: the [`default_layout`] frame around the
+/// widget yesod-core's `defaultErrorHandler` builds for an error response, sent
+/// with `status`.  `title` is the widget's `setTitle`, `body` its markup.
+///
+/// The error widgets themselves are not `$newline never`, so their markup
+/// arrives with the newlines hamlet puts between their lines.
+fn error_page(status: StatusCode, title: &str, body: &str) -> Response {
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
         header::HeaderValue::from_static("text/html; charset=utf-8"),
     );
-    (status, headers, html).into_response()
+    (status, headers, default_layout(title, body)).into_response()
 }
 
 /// Shared `500 Internal Server Error` response constructor: the page Yesod

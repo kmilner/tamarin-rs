@@ -16,6 +16,7 @@
 //! rules in the UI, and to wire `Autoprove` links the frontend
 //! recognises.
 
+use crate::handlers::default_layout;
 use crate::handlers::path_parse::{encode_sub_path, url_path_escape, SourceKind, TheoryPath};
 use crate::handlers::root::html_escape;
 use crate::state::TheoryEntry;
@@ -33,22 +34,21 @@ pub fn overview_page(entry: &TheoryEntry, path: &TheoryPath) -> String {
     let header_html = header(entry);
     let proof_state = proof_state(entry);
     let main_view = path_html(entry, path);
-    // Byte-faithful port of HS `defaultLayout'` (Web/Types.hs:686-723)
-    // wrapping `overviewTpl` (Web/Hamlet.hs:290-317): a `$newline never`
-    // single-line frame (the only embedded newlines come from the
-    // postprocessed `{proof_state}` west pane and the `{main_view}` centre
-    // pane).  Verbatim hamlet quirks: unquoted URL attrs, doubled
-    // `</script></script>` close tags, class-before-id attribute ordering,
-    // the ` </div></div></div>` pane closers and the doubled `</a>` in the
-    // context menu.  Volatile substitutions: `{name}` (title), and — inside
-    // `{header}` — the `{version}` field.
-    format!(
-        r##"<!DOCTYPE html>
-<html><head><title>Theory: {name}</title><link rel="stylesheet" href="/static/css/intdot-style.css"><link rel="stylesheet" href="/static/css/tamarin-prover-ui.css"><link rel="stylesheet" href="/static/css/jquery-contextmenu.css"><link rel="stylesheet" href="/static/css/smoothness/jquery-ui.css"><script src="/static/js/jquery.js"></script></script><script src="/static/js/jquery-ui.js"></script></script><script src="/static/js/jquery-layout.js"></script></script><script src="/static/js/jquery-cookie.js"></script></script><script src="/static/js/jquery-superfish.js"></script></script><script src="/static/js/jquery-contextmenu.js"></script></script><script src="/static/js/tamarin-prover-ui.js"></script></script><script type="module" src="/static/js/intdot-graph.es.js"></script></script><script type="module" src="/static/js/intdot-staticgraph.es.js"></script></script><script type="module" src="/static/js/intdot-dynamicgraph.es.js"></script></script></head><body><p class="loading">Analyzing, please wait...  <a id=cancel href='#'>Cancel</a></p><div class="ui-layout-north">{header}</div><div class="ui-layout-west"><h1 class="pane-head">Proof scripts</h1><div class="scroll-wrapper" id="proof-wrapper"><div class="monospace" id="proof">{proof_state} </div></div></div><div class="ui-layout-east"><h1 class="pane-head">&nbsp;Debug information</h1><div class="scroll-wrapper" id="debug-wrapper"><div id="ui-debug-display"></div></div></div><div class="ui-layout-center"><h1 class="pane-head" id="main-title">Visualization display</h1><div class="scroll-wrapper" id="main-wrapper" tabindex="0"><div id="ui-main-display">{main_view} </div></div></div><div id="dialog"></div><div id="confirm-dialog"></div><ul id="contextMenu"><li class="autoprove"><a href="#autoprove">Autoprove</a></a></li></ul></body></html>"##,
-        name = html_escape(&entry.name),
-        header = header_html,
-        proof_state = proof_state,
-        main_view = main_view,
+    // Byte-faithful port of `overviewTpl` (Web/Hamlet.hs:290-317), the widget
+    // body inside the shared [`default_layout`] frame: a `$newline never`
+    // single line (the only embedded newlines come from the postprocessed
+    // `{proof_state}` west pane and the `{main_view}` centre pane).  Verbatim
+    // hamlet quirks: class-before-id attribute ordering and the
+    // ` </div></div></div>` pane closers.  Volatile substitutions: the theory
+    // name in the title, and — inside `{header}` — the `{version}` field.
+    default_layout(
+        &format!("Theory: {}", html_escape(&entry.name)),
+        &format!(
+            r##"<div class="ui-layout-north">{header}</div><div class="ui-layout-west"><h1 class="pane-head">Proof scripts</h1><div class="scroll-wrapper" id="proof-wrapper"><div class="monospace" id="proof">{proof_state} </div></div></div><div class="ui-layout-east"><h1 class="pane-head">&nbsp;Debug information</h1><div class="scroll-wrapper" id="debug-wrapper"><div id="ui-debug-display"></div></div></div><div class="ui-layout-center"><h1 class="pane-head" id="main-title">Visualization display</h1><div class="scroll-wrapper" id="main-wrapper" tabindex="0"><div id="ui-main-display">{main_view} </div></div></div>"##,
+            header = header_html,
+            proof_state = proof_state,
+            main_view = main_view,
+        ),
     )
 }
 
