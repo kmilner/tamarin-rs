@@ -686,17 +686,28 @@ fn ndc_checkable(r: &IntrRuleAC) -> bool {
         && matches!(r.conclusions.as_slice(), [c] if c.tag == FactTag::Kd)
 }
 
+/// A chainable ordered rule pair: the unifiers of `conc(r)` with
+/// `kd_prem(r1)`, the two rules they instantiate, and the fresh supply
+/// seeded above both rules' free variables.  [`ndc_check_eval`] builds
+/// `applySubsts subst r freshInst1` from these, one unifier at a time.
+struct ChainablePair<'a> {
+    r: &'a IntrRuleAC,
+    fresh_inst1: IntrRuleAC,
+    unifs: Vec<Vec<(LVar, LNTerm)>>,
+    counter: u64,
+}
+
 /// Chainability phase of HS `ndcCheck`: `None` when the pair cannot chain
 /// (shape mismatch or no unifier of `conc(r)` with `kd_prem(r1)`);
-/// otherwise the unifier-instantiated rule pairs (`applySubsts subst r
-/// freshInst1`) for [`ndc_check_eval`].  HS keeps this same split
-/// implicitly: forcing `ndcCheck` to WHNF runs only the unification, the
-/// deduction work stays a thunk inside the `Just`.
-fn ndc_check_prepare(
+/// otherwise the pair's unifiers for [`ndc_check_eval`].  HS keeps this
+/// same split implicitly: forcing `ndcCheck` to WHNF runs only the
+/// unification, both the instantiation and the deduction work stay
+/// thunks inside the `Just`.
+fn ndc_check_prepare<'a>(
     maude: &MaudeHandle,
-    r: &IntrRuleAC,
+    r: &'a IntrRuleAC,
     r1: &IntrRuleAC,
-) -> Option<Vec<(IntrRuleAC, IntrRuleAC)>> {
+) -> Option<ChainablePair<'a>> {
     if !(ndc_checkable(r) && ndc_checkable(r1)) {
         return None;
     }
@@ -716,40 +727,50 @@ fn ndc_check_prepare(
     if unifs.is_empty() {
         return None;
     }
-    // `applySubsts subst r freshInst1` — freshToFree each unifier with a
-    // fresh supply threaded across the whole list, avoiding both rules.
+    // The fresh supply `applySubsts` threads across the unifier list,
+    // avoiding both rules.
     let mut counter: u64 = 0;
     let mut track = |v: &LVar| counter = counter.max(v.idx + 1);
     r.for_each_free(&mut track);
     fresh_inst1.for_each_free(&mut track);
-    let insts = unifs
-        .into_iter()
-        .map(|u_pairs| {
-            let s_fresh = LNSubstVFresh::from_list(u_pairs);
-            let sigma = s_fresh.fresh_to_free_avoiding(|n| {
-                let b = counter;
-                counter += n;
-                b
-            });
-            (
-                apply_subst_rule(&sigma, r),
-                apply_subst_rule(&sigma, &fresh_inst1),
-            )
-        })
-        .collect();
-    Some(insts)
+    Some(ChainablePair {
+        r,
+        fresh_inst1,
+        unifs,
+        counter,
+    })
 }
 
 /// Deduction phase of HS `ndcCheck` (`checkDeduction`): every unifier-
 /// instantiated pair must pass `chainedRulesDeductionTest`; the `&&`
-/// chain short-circuits on the first failure.
+/// chain short-circuits on the first failure, so the unifiers past it are
+/// never instantiated.
 fn ndc_check_eval(
     maude: &MaudeHandle,
     intr_modified: &BoundToOneCache<'_>,
-    insts: &[(IntrRuleAC, IntrRuleAC)],
+    pair: ChainablePair<'_>,
 ) -> bool {
-    insts.iter().all(|(inst_sigma, inst1_sigma)| {
-        chained_rules_deduction_test(maude, intr_modified, inst_sigma, inst1_sigma)
+    let ChainablePair {
+        r,
+        fresh_inst1,
+        unifs,
+        mut counter,
+    } = pair;
+    unifs.into_iter().all(|u_pairs| {
+        // `applySubsts subst r freshInst1` — freshToFree this unifier off
+        // the pair's supply, which the whole list shares in order.
+        let s_fresh = LNSubstVFresh::from_list(u_pairs);
+        let sigma = s_fresh.fresh_to_free_avoiding(|n| {
+            let b = counter;
+            counter += n;
+            b
+        });
+        chained_rules_deduction_test(
+            maude,
+            intr_modified,
+            &apply_subst_rule(&sigma, r),
+            &apply_subst_rule(&sigma, &fresh_inst1),
+        )
     })
 }
 
@@ -787,16 +808,16 @@ fn apply_ndc_check(
         // pair's own result — short-circuiting the remaining (earlier)
         // pairs once one fails.  Verdict `== (True, False)`: at least
         // one pair chains AND every forced deduction test passed.
-        let chainable: Vec<Vec<(IntrRuleAC, IntrRuleAC)>> = group
+        let chainable: Vec<ChainablePair<'_>> = group
             .iter()
             .flat_map(|x| group.iter().map(move |y| (x, y)))
             .filter_map(|(x, y)| ndc_check_prepare(maude, x, y))
             .collect();
         let is_ndc = !chainable.is_empty()
             && chainable
-                .iter()
+                .into_iter()
                 .rev()
-                .all(|insts| ndc_check_eval(maude, &intr_modified, insts));
+                .all(|pair| ndc_check_eval(maude, &intr_modified, pair));
         let fun_name = crate::intruder_rules::show_fun_sym_name(&f);
         if is_ndc {
             eprintln!("Function {} has the NDC property.", fun_name);
