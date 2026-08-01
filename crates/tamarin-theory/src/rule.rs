@@ -715,26 +715,28 @@ pub fn rule_name_string(rule: &RuleACInst) -> String {
 /// prefixes the name with `_` if it collides with a reserved rule name
 /// or already starts with `_`.
 pub(crate) fn prefix_if_reserved(s: &str) -> String {
-    let reserved = reserved_rule_names();
-    if reserved.contains(s) || s.starts_with('_') {
+    if RESERVED_RULE_NAMES.contains(&s) || s.starts_with('_') {
         format!("_{}", s)
     } else {
         s.to_string()
     }
 }
 
-/// `reservedRuleNames` from Haskell (Theory/Model/Rule.hs):
-/// `["Fresh", "irecv", "isend", "coerce", "fresh", "pub", "iequality"]`.
+/// `reservedRuleNames` from Haskell (Theory/Model/Rule.hs).
+const RESERVED_RULE_NAMES: [&str; 7] = [
+    "Fresh",
+    "irecv",
+    "isend",
+    "coerce",
+    "fresh",
+    "pub",
+    "iequality",
+];
+
+/// The reserved names as a set, for callers that probe membership repeatedly
+/// or need them ordered.
 pub fn reserved_rule_names() -> BTreeSet<&'static str> {
-    let mut s = BTreeSet::new();
-    s.insert("Fresh");
-    s.insert("irecv");
-    s.insert("isend");
-    s.insert("coerce");
-    s.insert("fresh");
-    s.insert("pub");
-    s.insert("iequality");
-    s
+    RESERVED_RULE_NAMES.into_iter().collect()
 }
 
 // =============================================================================
