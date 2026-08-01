@@ -958,7 +958,13 @@ fn has_forbidden_constr_chain<'a>(
     // `finalMap = fixpoint (\x -> foldr updateMap x extracted) (False, initialMap)`.
     let mut found = false;
     loop {
-        let before = (found, map.clone());
+        // Pre-pass value of every entry this pass writes (`None` = key absent).
+        // Entries no insert touched cannot differ, so testing just these against
+        // the map decides the whole-map `==` the fixpoint needs — and a pass
+        // that writes an entry back to the value it started with still counts
+        // as unchanged, exactly as a full comparison would have it.
+        let mut before: BTreeMap<crate::constraint::constraints::NodeId, Option<NodeInfo>> =
+            BTreeMap::new();
         // `foldr` walks the list right-to-left.
         for (a, _, b, _, n) in extracted.iter().rev() {
             if found {
@@ -983,11 +989,14 @@ fn has_forbidden_constr_chain<'a>(
             // HS `M.insert c … $ M.insert b … $ M.insert a … m` applies
             // right-to-left, so when `b == c` (the root itself) the
             // root's accumulated `nodes` entry must win — insert it LAST.
-            map.insert(*a, (c, t1, n2));
-            map.insert(*b, (c, t2, n2));
-            map.insert(c, (c, nodes, n2));
+            for (k, v) in [(*a, (c, t1, n2)), (*b, (c, t2, n2)), (c, (c, nodes, n2))] {
+                let old = map.insert(k, v);
+                before.entry(k).or_insert(old);
+            }
         }
-        if (found, &map) == (before.0, &before.1) {
+        // Once `found` is set the loop above breaks on its first statement, so
+        // no later pass can touch the map or the verdict.
+        if found || before.iter().all(|(k, v)| map.get(k) == v.as_ref()) {
             if tamarin_utils::env_gate!("TAM_RS_DBG_ACCHAIN") && !extracted.is_empty() {
                 eprintln!(
                     "[RS_ACCHAIN_RES] path={} found={}",
