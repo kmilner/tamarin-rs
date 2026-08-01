@@ -1333,6 +1333,29 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 }
             };
 
+        // `--auto-sources` (HS `closeTheoryWithMaude` autosources branch,
+        // Prover.hs:170-251, see line 171): when the raw sources contain
+        // partial deconstructions, annotate the rules with AUTO_* actions and
+        // add the `AUTO_typing` sources lemma.  HS applies this on EVERY
+        // theory close — the plain-load echo and the proving pipeline alike —
+        // so it runs before the load/prove branch below, mutating both
+        // `parsed` (for rendering) and `elaborated` (for lemma iteration and
+        // the proving session).  Auto-sources needs Maude (HS runs it in the
+        // `WithMaude` reader), so a missing handle is an error, same as the
+        // prove path's.
+        if auto_sources {
+            let m = file_maude
+                .clone()
+                .ok_or_else(|| RunError(format!("failed to start maude at {:?}", maude_path,)))?;
+            tamarin_theory::auto_sources::apply_auto_sources(
+                &mut parsed,
+                &mut elaborated,
+                m,
+                file_maude_pool.clone(),
+                ndc_cache.as_ref(),
+            );
+        }
+
         if args.precompute_only || (!prove_anything && !any_stored_proof) {
             push_skipped_results(&mut results, &elaborated);
         } else {
@@ -1379,22 +1402,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 oracle_name: args.oracle_name.clone(),
                 oracle_only: args.oracle_only,
             };
-            // `--auto-sources` (HS `closeTheoryWithMaude` autosources branch,
-            // Prover.hs:170-251, see line 171): when the raw sources contain partial
-            // deconstructions, annotate the rules with AUTO_* actions and add
-            // the `AUTO_typing` sources lemma — to the elaborated theory (so it
-            // renders + is iterated below) and the proving session alike.
-            // Both the scratch contexts here and the session below reuse the
-            // load-time NDC-checked cache (`ndc_cache`).
-            if auto_sources {
-                tamarin_theory::auto_sources::apply_auto_sources(
-                    &mut parsed,
-                    &mut elaborated,
-                    maude.clone(),
-                    file_maude_pool.clone(),
-                    ndc_cache.as_ref(),
-                );
-            }
             let session = tamarin_theory::prove::ProverSession::build_with_in_file_and_heuristic(
                 &parsed,
                 maude.clone(),
