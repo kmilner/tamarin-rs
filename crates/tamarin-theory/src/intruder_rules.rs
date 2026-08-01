@@ -142,7 +142,7 @@ pub fn destruction_rules(
     diff: bool,
     rule: &tamarin_term::subterm_rule::CtxtStRule,
 ) -> Vec<IntrRuleAC> {
-    use tamarin_term::function_symbols::{FunSym, Privacy};
+    use tamarin_term::function_symbols::{AcFctSym, AcSym, FunSym, NoEqSym, Privacy};
     use tamarin_term::lterm::frees;
     use tamarin_term::positions::Position;
     use tamarin_term::term::Term;
@@ -195,24 +195,24 @@ pub fn destruction_rules(
     let rhs_frees_empty = frees(rhs).is_empty();
     for (step_idx, &i) in pos_iter.iter().enumerate() {
         // A descent step applies at public NoEq and public user-AC
-        // applications alike (IntruderRules.hs `go` NoEq + ACfct cases);
-        // private symbols and leaves stop the walk.
+        // applications alike (IntruderRules.hs `go` NoEq + ACfct cases).
+        // Everything else stops the walk: a private symbol, any other
+        // function symbol, or a leaf hit with positions still remaining
+        // (invalid).
         let (fun, args) = match &t {
-            Term::App(f @ FunSym::NoEq(sym), args) => {
-                if sym.privacy != Privacy::Public {
-                    return out;
-                }
+            Term::App(f, args)
+                if matches!(
+                    f,
+                    FunSym::NoEq(NoEqSym {
+                        privacy: Privacy::Public,
+                        ..
+                    }) | FunSym::Ac(AcSym::AcFct(AcFctSym {
+                        privacy: Privacy::Public,
+                        ..
+                    }))
+                ) =>
+            {
                 (*f, args.clone())
-            }
-            Term::App(f @ FunSym::Ac(tamarin_term::function_symbols::AcSym::AcFct(sym)), args) => {
-                if sym.privacy != Privacy::Public {
-                    return out;
-                }
-                (*f, args.clone())
-            }
-            Term::Lit(_) => {
-                // Hit a leaf with positions still remaining — invalid.
-                return out;
             }
             _ => return out,
         };
