@@ -426,8 +426,10 @@ fn rule_applies(t: &LNTerm, lhs: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> b
 /// the same HS `solveMatchLNTerm (t `matchWith` lhs)` semantics, with the
 /// 3-way native matcher first and a Maude `match` only on `NeedsAc`
 /// (mirroring HS `matchViaMaude` on `Left ACProblem`,
-/// Term/Unification.hs:235-236).  Subject vars are rigid in the Maude
-/// `match` command on both sides of the port, so the outcomes agree.
+/// Term/Unification.hs:235-236), minus the `NeedsAc` pairs the module's
+/// axioms already answer (see the root-symbol note below).  Subject vars
+/// are rigid in the Maude `match` command on both sides of the port, so the
+/// outcomes agree.
 /// The trailing `StRhs` disambiguation is identical to [`rule_applies`].
 /// A Maude transport error is folded to "no match" — the conservative
 /// answer (term stays NF), matching the port's other best-effort Maude
@@ -445,12 +447,35 @@ fn rule_applies_ac(
     {
         MatchOutcome::NoMatcher => false,
         MatchOutcome::Matched(_) => true,
-        MatchOutcome::NeedsAc => maude
-            .match_eqs(&[crate::rewriting::Equal {
-                lhs: t.clone(),
-                rhs: lhs.clone(),
-            }])
-            .is_ok_and(|ms| !ms.is_empty()),
+        MatchOutcome::NeedsAc => match (t, lhs) {
+            // Two distinct AC root symbols have no matcher, so the pair is
+            // answered here instead of over IPC.  `match P <=? S` solves
+            // modulo the MSG module's AXIOMS, never its
+            // `eq _ = _ [variant]` equations, and the only axioms any
+            // operator carries there are `[comm assoc]` / `[comm]` — no
+            // identity element is ever declared
+            // (`maude_print.rs::op_ac`/`op_c` plus the user-AC `op` loop,
+            // mirroring HS `theoryOpAC`/`theoryOpACUser`,
+            // Parser.hs:217-267).  Commutativity and associativity each
+            // carry the same symbol at the root of both sides, so the root
+            // symbol is invariant across a term's axiom class, and no
+            // instance of an `f`-rooted pattern is axiom-equal to a
+            // `g`-rooted subject for `f /= g`.  `match_raw` reports
+            // `NeedsAc` for *any* two AC-headed sides — it deliberately
+            // does not compare the symbols, mirroring HS `matchRaw`
+            // (Unification.hs:333-334) — so the comparison belongs here.
+            (Term::App(FunSym::Ac(t_sym), _), Term::App(FunSym::Ac(lhs_sym), _))
+                if t_sym != lhs_sym =>
+            {
+                false
+            }
+            _ => maude
+                .match_eqs(&[crate::rewriting::Equal {
+                    lhs: t.clone(),
+                    rhs: lhs.clone(),
+                }])
+                .is_ok_and(|ms| !ms.is_empty()),
+        },
     };
     if !matched {
         return false;
@@ -613,6 +638,87 @@ mod tests {
         assert!(
             nf_via_haskell_maude(&h, &ok),
             "xorr(~k, ~na) must remain NF"
+        );
+    }
+
+    // A term rooted at one user-`[AC]` symbol is never reducible by an st
+    // rule rooted at a different one, however similarly shaped: `match`
+    // solves modulo the MSG module's `[comm assoc]` axioms, which preserve
+    // the root symbol.  `rule_applies_ac` answers that pair itself; this
+    // pins both halves — the answer, and Maude's agreement with it.
+    #[test]
+    fn cross_ac_symbol_strule_never_applies() {
+        use crate::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
+        use crate::rewriting::{Equal, RRule};
+        let path = match maude_path() {
+            Some(p) => p,
+            None => return,
+        };
+        let xorr = AcFctSym::new(
+            b"xorr".to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::IsNdc,
+        );
+        let yorr = AcFctSym::new(
+            b"yorr".to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::IsNdc,
+        );
+        let zeroo_sym = NoEqSym::new(
+            b"zeroo".to_vec(),
+            0,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
+        let mut sig = crate::maude_sig::pair_maude_sig();
+        sig.st_ac_fun_syms.insert(xorr);
+        sig.st_ac_fun_syms.insert(yorr);
+        sig.st_fun_syms.insert(zeroo_sym);
+        let x = crate::builtin::msg_var("x", 0);
+        let zeroo: LNTerm = crate::term::f_app_no_eq(zeroo_sym, vec![]);
+        // `xorr(x, x) = zeroo` and `yorr(x, zeroo) = x`.  Both roots must
+        // head a rule, else the term takes `go_nf`'s irreducible-top arm and
+        // the st-rule loop never runs.
+        let x_rule_lhs = crate::term::f_app_acfct(xorr, vec![x.clone(), x.clone()]);
+        let y_rule_lhs = crate::term::f_app_acfct(yorr, vec![x.clone(), zeroo.clone()]);
+        sig.st_rules.insert(
+            crate::subterm_rule::rrule_to_ctxt_st_rule(&RRule::new(
+                x_rule_lhs.clone(),
+                zeroo.clone(),
+            ))
+            .expect("ground-RHS st rule"),
+        );
+        sig.st_rules.insert(
+            crate::subterm_rule::rrule_to_ctxt_st_rule(&RRule::new(y_rule_lhs, x))
+                .expect("subterm-RHS st rule"),
+        );
+        let sig = sig.refresh();
+        let h = MaudeHandle::start(&path, sig).unwrap();
+        let k = crate::builtin::fresh_var("k", 0);
+        let dup = crate::term::f_app_acfct(yorr, vec![k.clone(), k.clone()]);
+        assert!(
+            nf_via_haskell_maude(&h, &dup),
+            "yorr(~k, ~k) must stay NF — the xorr rule cannot reach it"
+        );
+        // The yorr rule itself still fires, so the term above is NF because
+        // of the AC symbols, not because the st-rule loop went quiet.
+        let cancels = crate::term::f_app_acfct(yorr, vec![k, zeroo]);
+        assert!(
+            !nf_via_haskell_maude(&h, &cancels),
+            "yorr(~k, zeroo) must be non-NF via its own rule"
+        );
+        // The pattern is non-ground, so this is a real Maude round-trip and
+        // not the ground short-circuit in `match_eqs`.
+        assert!(
+            h.match_eqs(&[Equal {
+                lhs: dup,
+                rhs: x_rule_lhs,
+            }])
+            .expect("maude match")
+            .is_empty(),
+            "maude must report no match for a pattern rooted at another AC symbol"
         );
     }
 
