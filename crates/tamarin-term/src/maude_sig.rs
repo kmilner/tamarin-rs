@@ -68,10 +68,19 @@ pub struct MaudeSig {
     /// Maude-backed one — at every `App` node of every normal-form check, one
     /// of the proof search's hottest predicates.  Read it through
     /// [`MaudeSig::st_lhs_ac_c_free_cache`], which yields `None` once the
-    /// vector's length no longer matches `st_rules` (a caller mutated
-    /// `st_rules` without `refresh`), or through
+    /// vector's length no longer matches `st_rules`, or through
     /// [`MaudeSig::st_lhs_all_ac_c_free`], which then recomputes the
     /// predicate from the rules.
+    ///
+    /// That length check samples the alignment invariant rather than
+    /// establishing it: a mutation that keeps the CARDINALITY of `st_rules`
+    /// constant — swapping one rule for another, or the remove-then-insert
+    /// pair of [`MaudeSig::add_ctxt_st_rule`] — leaves the flags describing
+    /// the old rules while the cache still reports itself valid, and
+    /// `norm::go_nf` then reads a flag belonging to a different rule.  Every
+    /// in-tree writer of `st_rules` ends in [`MaudeSig::refresh`], which
+    /// rebuilds this vector; any further in-place edit of the `pub` field must
+    /// do the same.
     pub st_lhs_ac_c_free: Vec<bool>,
 }
 
@@ -92,9 +101,10 @@ impl MaudeSig {
 
     /// The per-rule Ac/C-free flags of [`MaudeSig::st_lhs_ac_c_free`], aligned
     /// with `st_rules` iteration order, or `None` when the vector's length no
-    /// longer matches `st_rules` (`st_rules` mutated without
-    /// [`MaudeSig::refresh`]) and the caller must compute
-    /// `maude_proc::term_ac_c_free` itself.
+    /// longer matches `st_rules` and the caller must compute
+    /// `maude_proc::term_ac_c_free` itself.  The length test catches only a
+    /// change in the NUMBER of rules — see the field's documentation for the
+    /// `refresh` obligation it does not enforce.
     pub fn st_lhs_ac_c_free_cache(&self) -> Option<&[bool]> {
         (self.st_lhs_ac_c_free.len() == self.st_rules.len())
             .then_some(self.st_lhs_ac_c_free.as_slice())
@@ -227,6 +237,13 @@ impl MaudeSig {
 
     /// HS `userDefinedFunSyms`: every free symbol of the signature plus every
     /// user-defined AC symbol, tagged with which kind it is.
+    ///
+    /// Intentionally retained: faithful mirror of HS `userDefinedFunSyms`
+    /// (Term/Maude/Signature.hs:163-164).  No call site in the port — HS calls
+    /// it from the parser (Theory/Text/Parser/Macro.hs:43,
+    /// Theory/Text/Parser/Term.hs:65), which resolves operator names from the
+    /// parser's own tables here; [`MaudeSig::user_defined_st_fun_syms`] is the
+    /// variant intruder-rule generation uses.
     pub fn user_defined_fun_syms(&self) -> UserDefinedSig {
         self.no_eq_fun_syms()
             .into_iter()
