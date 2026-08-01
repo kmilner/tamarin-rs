@@ -880,12 +880,6 @@ btreeset_swap_guard! {
     UserUnaryFunsGuard, USER_UNARY_FUNS
 }
 
-/// True if `name` is registered as a user-declared arity-1 function for
-/// the current elaboration.  Read from the `USER_UNARY_FUNS` thread-local.
-fn is_user_unary_fun(name: &str) -> bool {
-    USER_UNARY_FUNS.with(|c| c.borrow().contains(name))
-}
-
 btreeset_swap_guard! {
     /// Same as `UserUnaryFunsGuard` but for the `USER_NULLARY_FUNS` set.
     UserNullaryFunsGuard, USER_NULLARY_FUNS
@@ -900,19 +894,6 @@ pub(crate) fn is_user_nullary_fun(name: &str) -> bool {
 btreeset_swap_guard! {
     /// RAII guard for the USER_PRIVATE_FUNS thread-local.
     UserPrivateFunsGuard, USER_PRIVATE_FUNS
-}
-
-/// Returns `Privacy::Private` if `name` is a user-declared private
-/// function symbol; otherwise `Privacy::Public`.  Mirrors Haskell's
-/// `signature` lookup against the per-theory funSig.
-fn user_fun_privacy(name: &str) -> Privacy {
-    USER_PRIVATE_FUNS.with(|c| {
-        if c.borrow().contains(name) {
-            Privacy::Private
-        } else {
-            Privacy::Public
-        }
-    })
 }
 
 btreeset_swap_guard! {
@@ -955,37 +936,108 @@ fn ndc_state_of(ndc: bool, ndc_diff: bool) -> NdcState {
     a.join(b)
 }
 
-/// The NDC state of a user-declared symbol, read from the `[NDC]` /
-/// `[NDC-diff]` name sets.
-fn user_fun_ndc(name: &str) -> NdcState {
-    ndc_state_of(
-        USER_NDC_FUNS.with(|c| c.borrow().contains(name)),
-        USER_NDC_DIFF_FUNS.with(|c| c.borrow().contains(name)),
-    )
+/// The user-declared function-name sets consulted while converting one
+/// parser term.  Borrowed from the thread-locals once by
+/// [`with_user_fun_sets`] and threaded through the `term_to_vterm`
+/// recursion, so a term tree costs one thread-local access per set rather
+/// than one per node.
+struct UserFunSets<'a> {
+    unary: &'a BTreeSet<String>,
+    nullary: &'a BTreeSet<String>,
+    private: &'a BTreeSet<String>,
+    destructor: &'a BTreeSet<String>,
+    ac: &'a BTreeSet<String>,
+    ndc: &'a BTreeSet<String>,
+    ndc_diff: &'a BTreeSet<String>,
 }
 
-/// The `AcFctSym` for a user-declared `[AC]` name, carrying the privacy /
-/// constructability / NDC flags read off its declaration (HS `lookupArity`).
-fn user_ac_fct_sym(name: &str) -> tamarin_term::function_symbols::AcFctSym {
-    tamarin_term::function_symbols::AcFctSym::new(
-        name.as_bytes().to_vec(),
-        user_fun_privacy(name),
-        user_fun_constructability(name),
-        user_fun_ndc(name),
-    )
-}
+impl UserFunSets<'_> {
+    /// True if `name` is registered as a user-declared arity-1 function for
+    /// the current elaboration.  Read from the `USER_UNARY_FUNS` set.
+    fn is_user_unary_fun(&self, name: &str) -> bool {
+        self.unary.contains(name)
+    }
 
-/// Returns `Constructability::Destructor` if `name` is a user-declared
-/// `[destructor]` function symbol; otherwise `Constructability::Constructor`.
-/// Mirrors Haskell's `lookupArity`, which reads `(k,priv,cnstr)` straight
-/// from the signature (Theory/Text/Parser/Term.hs:61-63,84,92).
-fn user_fun_constructability(name: &str) -> Constructability {
-    USER_DESTRUCTOR_FUNS.with(|c| {
-        if c.borrow().contains(name) {
+    /// True if `name` is registered as a 0-arity function for the current
+    /// elaboration.  See `USER_NULLARY_FUNS` for the populating logic.
+    fn is_user_nullary_fun(&self, name: &str) -> bool {
+        self.nullary.contains(name)
+    }
+
+    /// True if `name` is a user-declared `[AC]` function symbol.
+    fn is_user_ac_fun(&self, name: &str) -> bool {
+        self.ac.contains(name)
+    }
+
+    /// Returns `Privacy::Private` if `name` is a user-declared private
+    /// function symbol; otherwise `Privacy::Public`.  Mirrors Haskell's
+    /// `signature` lookup against the per-theory funSig.
+    fn user_fun_privacy(&self, name: &str) -> Privacy {
+        if self.private.contains(name) {
+            Privacy::Private
+        } else {
+            Privacy::Public
+        }
+    }
+
+    /// Returns `Constructability::Destructor` if `name` is a user-declared
+    /// `[destructor]` function symbol; otherwise
+    /// `Constructability::Constructor`.  Mirrors Haskell's `lookupArity`,
+    /// which reads `(k,priv,cnstr)` straight from the signature
+    /// (Theory/Text/Parser/Term.hs:61-63,84,92).
+    fn user_fun_constructability(&self, name: &str) -> Constructability {
+        if self.destructor.contains(name) {
             Constructability::Destructor
         } else {
             Constructability::Constructor
         }
+    }
+
+    /// The NDC state of a user-declared symbol, read from the `[NDC]` /
+    /// `[NDC-diff]` name sets.
+    fn user_fun_ndc(&self, name: &str) -> NdcState {
+        ndc_state_of(self.ndc.contains(name), self.ndc_diff.contains(name))
+    }
+
+    /// The `AcFctSym` for a user-declared `[AC]` name, carrying the privacy /
+    /// constructability / NDC flags read off its declaration (HS `lookupArity`).
+    fn user_ac_fct_sym(&self, name: &str) -> tamarin_term::function_symbols::AcFctSym {
+        tamarin_term::function_symbols::AcFctSym::new(
+            name.as_bytes().to_vec(),
+            self.user_fun_privacy(name),
+            self.user_fun_constructability(name),
+            self.user_fun_ndc(name),
+        )
+    }
+}
+
+/// Borrows every user-declared function-name thread-local for the duration
+/// of `f`, which receives them bundled as a [`UserFunSets`].  The borrows
+/// are shared, so the free readers above still work inside `f`; installing
+/// or dropping one of the set guards there would panic.
+fn with_user_fun_sets<R>(f: impl FnOnce(&UserFunSets<'_>) -> R) -> R {
+    USER_UNARY_FUNS.with(|unary| {
+        USER_NULLARY_FUNS.with(|nullary| {
+            USER_PRIVATE_FUNS.with(|private| {
+                USER_DESTRUCTOR_FUNS.with(|destructor| {
+                    USER_AC_FUNS.with(|ac| {
+                        USER_NDC_FUNS.with(|ndc| {
+                            USER_NDC_DIFF_FUNS.with(|ndc_diff| {
+                                f(&UserFunSets {
+                                    unary: &unary.borrow(),
+                                    nullary: &nullary.borrow(),
+                                    private: &private.borrow(),
+                                    destructor: &destructor.borrow(),
+                                    ac: &ac.borrow(),
+                                    ndc: &ndc.borrow(),
+                                    ndc_diff: &ndc_diff.borrow(),
+                                })
+                            })
+                        })
+                    })
+                })
+            })
+        })
     })
 }
 
@@ -2334,17 +2386,19 @@ fn right_nest_pair<V>(items: Vec<VTerm<Name, V>>) -> Option<VTerm<Name, V>> {
 /// builds a plain `LVar` literal (with `nullaryApp` 0-arity recovery); SAPIC
 /// builds a typed `SapicLVar` literal (same recovery, additionally gated on an
 /// un-annotated variable).  Recursion is threaded back through `term_to_vterm`
-/// so the whole tree is built in one universe.
-fn term_to_vterm<V, F>(t: &p::Term, mk_var: &F) -> Option<VTerm<Name, V>>
+/// so the whole tree is built in one universe.  `funs` carries the
+/// user-declared function-name sets, borrowed once at the entry point by
+/// [`with_user_fun_sets`] and handed to every node (`mk_var` included).
+fn term_to_vterm<V, F>(t: &p::Term, mk_var: &F, funs: &UserFunSets<'_>) -> Option<VTerm<Name, V>>
 where
     V: Clone + Ord,
-    F: Fn(&p::VarSpec) -> Option<VTerm<Name, V>>,
+    F: Fn(&p::VarSpec, &UserFunSets<'_>) -> Option<VTerm<Name, V>>,
 {
     use tamarin_term::function_symbols::AcSym;
     use tamarin_term::term::f_app_ac;
 
     match t {
-        p::Term::Var(v) => mk_var(v),
+        p::Term::Var(v) => mk_var(v, funs),
         p::Term::PubLit(s) => {
             let n = Name::new(NameTag::Pub, s.clone());
             Some(Term::Lit(Lit::Con(n)))
@@ -2418,8 +2472,11 @@ where
             let unary_builtin = matches!(
                 name.as_str(),
                 "h" | "fst" | "snd" | "inv" | "pk" | "getMessage" | "get_rep" | "report"
-            ) || is_user_unary_fun(name.as_str());
-            let new_args: Option<Vec<_>> = args.iter().map(|a| term_to_vterm(a, mk_var)).collect();
+            ) || funs.is_user_unary_fun(name.as_str());
+            let new_args: Option<Vec<_>> = args
+                .iter()
+                .map(|a| term_to_vterm(a, mk_var, funs))
+                .collect();
             let mut new_args = new_args?;
             if unary_builtin && new_args.len() > 1 {
                 // Wrap the surplus args into one right-associative pair so the
@@ -2454,48 +2511,53 @@ where
             // lowers to an AC application (n-ary — the arity check applies
             // only to non-AC symbols); infix `a f b` produces the same
             // `App(f, [a, b])` parser node, so both forms land here.
-            if is_user_ac_fun(name.as_str()) {
-                return Some(f_app_ac(AcSym::AcFct(user_ac_fct_sym(name)), new_args));
+            if funs.is_user_ac_fun(name.as_str()) {
+                return Some(f_app_ac(AcSym::AcFct(funs.user_ac_fct_sym(name)), new_args));
             }
             let sym = NoEqSym::new(
                 name.as_bytes().to_vec(),
                 new_args.len(),
-                user_fun_privacy(name),
-                user_fun_constructability(name),
+                funs.user_fun_privacy(name),
+                funs.user_fun_constructability(name),
             )
-            .with_ndc(user_fun_ndc(name));
+            .with_ndc(funs.user_fun_ndc(name));
             Some(f_app_no_eq(sym, new_args))
         }
         p::Term::Pair(items) => {
-            let new_items: Option<Vec<_>> =
-                items.iter().map(|i| term_to_vterm(i, mk_var)).collect();
+            let new_items: Option<Vec<_>> = items
+                .iter()
+                .map(|i| term_to_vterm(i, mk_var, funs))
+                .collect();
             // Right-associative pair: <a, b, c> = pair(a, pair(b, c)).
             right_nest_pair(new_items?)
         }
         p::Term::AlgApp(name, a, b) => {
             // `f{a}b` desugars to `f(a, b)` semantically; users typically
             // use this for senc/aenc/sign/mac.
-            let aa = term_to_vterm(a, mk_var)?;
-            let bb = term_to_vterm(b, mk_var)?;
+            let aa = term_to_vterm(a, mk_var, funs)?;
+            let bb = term_to_vterm(b, mk_var, funs)?;
             // Haskell `binaryAlgApp` also reads `(k,priv,cnstr)` from the
             // signature via `lookupArity` (Theory/Text/Parser/Term.hs:96-106, see line 101),
             // so thread user privacy/constructability here too.
             // #883: `[AC]` symbols build an AC application here as well.
-            if is_user_ac_fun(name.as_str()) {
-                return Some(f_app_ac(AcSym::AcFct(user_ac_fct_sym(name)), vec![aa, bb]));
+            if funs.is_user_ac_fun(name.as_str()) {
+                return Some(f_app_ac(
+                    AcSym::AcFct(funs.user_ac_fct_sym(name)),
+                    vec![aa, bb],
+                ));
             }
             let sym = NoEqSym::new(
                 name.as_bytes().to_vec(),
                 2,
-                user_fun_privacy(name),
-                user_fun_constructability(name),
+                funs.user_fun_privacy(name),
+                funs.user_fun_constructability(name),
             )
-            .with_ndc(user_fun_ndc(name));
+            .with_ndc(funs.user_fun_ndc(name));
             Some(f_app_no_eq(sym, vec![aa, bb]))
         }
         p::Term::Diff(a, b) => {
-            let aa = term_to_vterm(a, mk_var)?;
-            let bb = term_to_vterm(b, mk_var)?;
+            let aa = term_to_vterm(a, mk_var, funs)?;
+            let bb = term_to_vterm(b, mk_var, funs)?;
             let sym = NoEqSym::new(
                 b"diff".to_vec(),
                 2,
@@ -2505,8 +2567,8 @@ where
             Some(f_app_no_eq(sym, vec![aa, bb]))
         }
         p::Term::BinOp(op, a, b) => {
-            let aa = term_to_vterm(a, mk_var)?;
-            let bb = term_to_vterm(b, mk_var)?;
+            let aa = term_to_vterm(a, mk_var, funs)?;
+            let bb = term_to_vterm(b, mk_var, funs)?;
             match op {
                 p::BinOp::Mult => Some(f_app_ac(AcSym::Mult, vec![aa, bb])),
                 p::BinOp::Union => Some(f_app_ac(AcSym::Union, vec![aa, bb])),
@@ -2516,9 +2578,10 @@ where
                 // application the `App(f, [a, b])` arm above builds, so it
                 // reads the same user-function signature for the symbol's
                 // privacy / constructability / NDC flags.
-                p::BinOp::AcFct(name) => {
-                    Some(f_app_ac(AcSym::AcFct(user_ac_fct_sym(name)), vec![aa, bb]))
-                }
+                p::BinOp::AcFct(name) => Some(f_app_ac(
+                    AcSym::AcFct(funs.user_ac_fct_sym(name)),
+                    vec![aa, bb],
+                )),
                 p::BinOp::Exp => {
                     let sym = NoEqSym::new(
                         b"exp".to_vec(),
@@ -2544,21 +2607,24 @@ pub fn term_to_lnterm(t: &p::Term) -> Option<tamarin_term::lterm::LNTerm> {
     // Msg-sort var named `true` if they explicitly annotate it (e.g.
     // `true:msg`), and the parser would emit `Untagged` only for the bare
     // form anyway.
-    let mk_var = |v: &p::VarSpec| -> Option<tamarin_term::lterm::LNTerm> {
-        if matches!(v.sort, p::SortHint::Untagged) && v.idx == 0 && is_user_nullary_fun(&v.name) {
+    let mk_var = |v: &p::VarSpec, funs: &UserFunSets<'_>| -> Option<tamarin_term::lterm::LNTerm> {
+        if matches!(v.sort, p::SortHint::Untagged)
+            && v.idx == 0
+            && funs.is_user_nullary_fun(&v.name)
+        {
             let sym = NoEqSym::new(
                 v.name.as_bytes().to_vec(),
                 0,
-                user_fun_privacy(&v.name),
+                funs.user_fun_privacy(&v.name),
                 Constructability::Constructor,
             )
-            .with_ndc(user_fun_ndc(&v.name));
+            .with_ndc(funs.user_fun_ndc(&v.name));
             return Some(f_app_no_eq(sym, vec![]));
         }
         let lv = LVar::new(v.name.clone(), sort_of(&v.sort), v.idx);
         Some(Term::Lit(Lit::Var(lv)))
     };
-    term_to_vterm(t, &mk_var)
+    with_user_fun_sets(|funs| term_to_vterm(t, &mk_var, funs))
 }
 
 // =============================================================================
@@ -2582,25 +2648,25 @@ pub fn term_to_sapic_term(t: &p::Term) -> Option<crate::sapic::SapicTerm> {
     // SAPIC `Var` case: a bare untagged idx-0 identifier may be a 0-arity NoEq
     // fun symbol (mirrors `term_to_lnterm`'s `nullaryApp` recovery, additionally
     // gated on an un-annotated variable); otherwise a typed `SapicLVar`.
-    let mk_var = |v: &p::VarSpec| -> Option<crate::sapic::SapicTerm> {
+    let mk_var = |v: &p::VarSpec, funs: &UserFunSets<'_>| -> Option<crate::sapic::SapicTerm> {
         if matches!(v.sort, p::SortHint::Untagged)
             && v.idx == 0
             && v.typ.is_none()
-            && is_user_nullary_fun(&v.name)
+            && funs.is_user_nullary_fun(&v.name)
         {
             let sym = NoEqSym::new(
                 v.name.as_bytes().to_vec(),
                 0,
-                user_fun_privacy(&v.name),
+                funs.user_fun_privacy(&v.name),
                 Constructability::Constructor,
             )
-            .with_ndc(user_fun_ndc(&v.name));
+            .with_ndc(funs.user_fun_ndc(&v.name));
             return Some(f_app_no_eq(sym, vec![]));
         }
         let lv = LVar::new(v.name.clone(), sort_of(&v.sort), v.idx);
         Some(Term::Lit(Lit::Var(SapicLVar::new(lv, v.typ.clone()))))
     };
-    term_to_vterm(t, &mk_var)
+    with_user_fun_sets(|funs| term_to_vterm(t, &mk_var, funs))
 }
 
 /// `parser::Fact` → `SapicNFact<SapicLVar>` (`Fact<SapicTerm>`).  Mirrors
