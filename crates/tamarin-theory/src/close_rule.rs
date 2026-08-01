@@ -272,13 +272,13 @@ fn pretty_var(v: &LVar) -> String {
 }
 
 /// Render the synthetic deduction theory for one decomposition `s`
-/// (HS `modifiedTheory1/2`): the parent signature, the `Out0` source
-/// rule, the `OnlyOnce` (and optionally `OnlyOnceD`) restrictions, and
-/// the `Deduction` lemma.  Rendered as `.spthy` text via the
+/// (HS `modifiedTheory1/2`): the parent signature `sig_text`, the `Out0`
+/// source rule, the `OnlyOnce` (and optionally `OnlyOnceD`) restrictions,
+/// and the `Deduction` lemma.  Rendered as `.spthy` text via the
 /// parity-grade printers and re-parsed — this reuses the battle-tested
 /// print/parse pipeline instead of hand-unparsing terms.
 fn render_deduction_theory(
-    sig: &tamarin_term::maude_sig::MaudeSig,
+    sig_text: &str,
     s: &[LNFact],
     fact_term: &LNTerm,
     with_only_once_d: bool,
@@ -370,7 +370,7 @@ fn render_deduction_theory(
     let pf = crate::pretty_system::pretty_fact;
     let mut out = String::new();
     out.push_str("theory checkDeduction\nbegin\n\n");
-    out.push_str(&crate::pretty_theory::render_signature(sig));
+    out.push_str(sig_text);
     out.push('\n');
     out.push_str(&format!(
         "rule Out0:\n  [ {} ]\n  --[ {}, {} ]->\n  [ {} ]\n\n",
@@ -452,6 +452,7 @@ fn theory_snippet(src: &str) -> String {
 fn prove_deduction_theory(
     maude: &MaudeHandle,
     intr_modified: &IntrRuleCache,
+    sig_text: &str,
     s: &[LNFact],
     fact_term: &LNTerm,
     with_only_once_d: bool,
@@ -460,7 +461,7 @@ fn prove_deduction_theory(
     use crate::constraint::solver::search::{proof_status, run_proof_search, ProofStatus};
     use crate::constraint::system::{formula_to_system, SourceKind};
 
-    let src = render_deduction_theory(&maude.maude_sig(), s, fact_term, with_only_once_d);
+    let src = render_deduction_theory(sig_text, s, fact_term, with_only_once_d);
     let parsed = tamarin_parser::parse_theory(&src, &[]).unwrap_or_else(|e| {
         panic!(
             "[ndc] synthetic deduction theory failed to parse ({}); theory:\n{}",
@@ -521,10 +522,13 @@ fn prove_deduction_theory(
 }
 
 /// HS `deductionCheck`: can `fact` be derived from `facts` without
-/// chaining?  `intr_modified` is the `boundToOne`-mapped cache.
+/// chaining?  `intr_modified` is the `boundToOne`-mapped cache,
+/// `sig_text` the rendered parent signature every decomposition's theory
+/// carries.
 fn deduction_check(
     maude: &MaudeHandle,
     intr_modified: &IntrRuleCache,
+    sig_text: &str,
     fact: &LNFact,
     facts: &[LNFact],
 ) -> bool {
@@ -548,7 +552,7 @@ fn deduction_check(
     let all_traces_found = |with_ood: bool| -> bool {
         set_d
             .iter()
-            .all(|s| prove_deduction_theory(maude, intr_modified, s, fact_term, with_ood))
+            .all(|s| prove_deduction_theory(maude, intr_modified, sig_text, s, fact_term, with_ood))
     };
     all_traces_found(true) || all_traces_found(false)
 }
@@ -653,10 +657,12 @@ fn apply_subst_rule(
 
 /// HS `chainedRulesDeductionTest`: after chaining `inst_sigma` into
 /// `inst1_sigma`, is the chained conclusion derivable from the combined
-/// premises without chaining?
+/// premises without chaining?  `sig_cell` holds the parent signature text
+/// shared by every synthetic theory of the pass (see [`apply_ndc_check`]).
 fn chained_rules_deduction_test(
     maude: &MaudeHandle,
     intr_modified: &BoundToOneCache<'_>,
+    sig_cell: &std::cell::OnceCell<String>,
     inst_sigma: &IntrRuleAC,
     inst1_sigma: &IntrRuleAC,
 ) -> bool {
@@ -674,7 +680,15 @@ fn chained_rules_deduction_test(
     if ded_naive(&fact_to_deduce.terms[0], &terms) {
         return true;
     }
-    deduction_check(maude, intr_modified.modified(), fact_to_deduce, &facts)
+    let sig_text =
+        sig_cell.get_or_init(|| crate::pretty_theory::render_signature(&maude.maude_sig()));
+    deduction_check(
+        maude,
+        intr_modified.modified(),
+        sig_text,
+        fact_to_deduce,
+        &facts,
+    )
 }
 
 /// Shape guard of HS `ndcCheck`'s first clause: a deconstruction rule with
@@ -748,6 +762,7 @@ fn ndc_check_prepare<'a>(
 fn ndc_check_eval(
     maude: &MaudeHandle,
     intr_modified: &BoundToOneCache<'_>,
+    sig_cell: &std::cell::OnceCell<String>,
     pair: ChainablePair<'_>,
 ) -> bool {
     let ChainablePair {
@@ -768,6 +783,7 @@ fn ndc_check_eval(
         chained_rules_deduction_test(
             maude,
             intr_modified,
+            sig_cell,
             &apply_subst_rule(&sigma, r),
             &apply_subst_rule(&sigma, &fresh_inst1),
         )
@@ -790,6 +806,11 @@ fn apply_ndc_check(
 ) -> (Vec<FunSym>, Vec<IntrRuleAC>) {
     let mut tagged: Vec<FunSym> = Vec::new();
     let mut out: Vec<IntrRuleAC> = Vec::new();
+    // Every synthetic deduction theory of this pass opens with the same
+    // parent signature — `maude`'s `Arc<MaudeSig>` is fixed at handle
+    // construction and the printer is a pure function of it — so the text is
+    // rendered once, on the first pair that reaches a deduction check.
+    let sig_cell: std::cell::OnceCell<String> = std::cell::OnceCell::new();
     for group in groups {
         let f = get_destr_rule_function(
             group
@@ -817,7 +838,7 @@ fn apply_ndc_check(
             && chainable
                 .into_iter()
                 .rev()
-                .all(|pair| ndc_check_eval(maude, &intr_modified, pair));
+                .all(|pair| ndc_check_eval(maude, &intr_modified, &sig_cell, pair));
         let fun_name = crate::intruder_rules::show_fun_sym_name(&f);
         if is_ndc {
             eprintln!("Function {} has the NDC property.", fun_name);
