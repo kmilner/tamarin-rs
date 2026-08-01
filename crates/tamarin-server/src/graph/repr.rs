@@ -326,7 +326,7 @@ pub fn add_cluster(
         .filter(|e| {
             !absorbed_edges_struct
                 .get(&edge_key(e))
-                .is_some_and(|bucket| bucket.iter().any(|ae| *ae == e))
+                .is_some_and(|bucket| bucket.contains(&e))
         })
         .collect();
     let remaining_nodes: Vec<GNode> = nodes
@@ -334,7 +334,7 @@ pub fn add_cluster(
         .filter(|n| {
             !absorbed_nodes
                 .get(&n.id)
-                .is_some_and(|bucket| bucket.iter().any(|an| *an == *n))
+                .is_some_and(|bucket| bucket.contains(n))
         })
         .cloned()
         .collect();
