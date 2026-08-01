@@ -792,6 +792,7 @@ fn has_forbidden_constr_chain<'a>(
 ) -> bool {
     use crate::constraint::constraints::Reason;
     use crate::rule::is_ac_constr_rule;
+    use std::borrow::Cow;
     use std::collections::{BTreeMap, BTreeSet};
     use tamarin_term::function_symbols::FunSym;
 
@@ -837,8 +838,16 @@ fn has_forbidden_constr_chain<'a>(
     // rationale as the endpoint resolve above (HS compares post-substSystem
     // rule instances).  Comparison-only copies; `Fact` equality ignores the
     // fingerprint cache, so `map_ref`'s placeholder fingerprints are fine.
-    let subst_fact = |fa: &crate::fact::LNFact| -> crate::fact::LNFact {
-        fa.map_ref(|t| tamarin_term::subst::apply_vterm(subst, t.clone()))
+    // An empty subst is the identity (`apply_vterm`'s empty-map fast path,
+    // subst.rs), so a rebuild reproduces the stored fact term for term; the
+    // borrowed arm hands back that fact instead, and only a subst with
+    // bindings pays the per-candidate rebuild.
+    let subst_fact = |fa: &'a crate::fact::LNFact| -> Cow<'a, crate::fact::LNFact> {
+        if subst.is_empty() {
+            Cow::Borrowed(fa)
+        } else {
+            Cow::Owned(fa.map_ref(|t| tamarin_term::subst::apply_vterm(subst, t.clone())))
+        }
     };
 
     // `extractNodesAndRules`: for each `LessAtom n1 n2 Adversary` where both
@@ -873,7 +882,8 @@ fn has_forbidden_constr_chain<'a>(
                 return None;
             }
             let conc = subst_fact(r1.conclusions.first()?);
-            let prems2: Vec<crate::fact::LNFact> = r2.premises.iter().map(&subst_fact).collect();
+            let prems2: Vec<Cow<'a, crate::fact::LNFact>> =
+                r2.premises.iter().map(&subst_fact).collect();
             if tamarin_utils::env_gate!("TAM_RS_DBG_ACCHAIN") {
                 eprintln!(
                     "[RS_ACCHAIN] path={} pair {:?}<{:?} conc={:?} prems2={:?} contains={}",
@@ -886,8 +896,13 @@ fn has_forbidden_constr_chain<'a>(
                 );
             }
             if prems2.contains(&conc) {
-                let prems1: Vec<crate::fact::LNFact> =
-                    r1.premises.iter().map(&subst_fact).collect();
+                let prems1: Vec<crate::fact::LNFact> = r1
+                    .premises
+                    .iter()
+                    .map(|fa| subst_fact(fa).into_owned())
+                    .collect();
+                let prems2: Vec<crate::fact::LNFact> =
+                    prems2.into_iter().map(Cow::into_owned).collect();
                 Some((n1, prems1, n2, prems2, name1))
             } else {
                 None
