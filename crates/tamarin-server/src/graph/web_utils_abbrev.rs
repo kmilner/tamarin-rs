@@ -100,15 +100,19 @@ fn compute_legend(n: usize, sys: &System) -> Legend {
 }
 
 /// Port of `updateSystem` (Utils.hs:92-106): rewrite the top-level terms of
-/// every rule's premises and conclusions through the legend.  Facts are
-/// rebuilt from `(tag, annotations, terms)`, i.e. without their cached
+/// every rule's premises and conclusions through the legend.  A rewritten fact
+/// is rebuilt from `(tag, annotations, terms)`, i.e. without its cached
 /// fingerprints — matching HS's `Fact tag a ts` and safe because this system
-/// only ever reaches the renderer.
+/// only ever reaches the renderer.  A fact holding no legend key would be
+/// rebuilt into an equal fact, so it is left in place: the rewrite is
+/// top-level-only, so the guard scans exactly the terms it would consult.
 fn update_system(legend: &Legend, sys: &mut System) {
     for (_, ru) in sys.nodes_mut().iter_mut() {
         for facts in [&mut ru.premises, &mut ru.conclusions] {
             for f in facts.iter_mut() {
-                *f = f.map_ref(|t| legend.get(t).unwrap_or(t).clone());
+                if f.terms.iter().any(|t| legend.contains_key(t)) {
+                    *f = f.map_ref(|t| legend.get(t).unwrap_or(t).clone());
+                }
             }
         }
     }
