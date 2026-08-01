@@ -929,17 +929,25 @@ pub(crate) fn ln_term_to_parser(t: &LNTerm) -> tamarin_parser::ast::Term {
             }
             p::Term::App(name, args.iter().map(ln_term_to_parser).collect())
         }
-        VTerm::App(FunSym::Ac(AcSym::AcFct(s)), args) => p::Term::App(
-            String::from_utf8_lossy(s.name).into_owned(),
-            args.iter().map(ln_term_to_parser).collect(),
-        ),
+        // HS `prettyTerm` (Term/Term.hs:304): `FApp (AC (ACfct (f,_))) [] ->
+        // text (BC.unpack f)` — a nullary user-AC symbol is the bare name,
+        // which the parser-AST printers render for a nullary `App`.
+        VTerm::App(FunSym::Ac(AcSym::AcFct(s)), args) if args.is_empty() => {
+            p::Term::App(String::from_utf8_lossy(s.name).into_owned(), Vec::new())
+        }
         VTerm::App(FunSym::Ac(op), args) => {
             let bop = match op {
                 AcSym::Mult => p::BinOp::Mult,
                 AcSym::Union => p::BinOp::Union,
                 AcSym::Xor => p::BinOp::Xor,
                 AcSym::NatPlus => p::BinOp::NatPlus,
-                AcSym::AcFct(_) => unreachable!("user-AC handled by the preceding arm"),
+                // HS renders a user-declared `[AC]` symbol INFIX too
+                // (Term/Term.hs:305): `ppTerms (" " ++ BC.unpack f ++ " ") 1
+                // "(" ")" ts`, i.e. `(x add y)` — same lowering as
+                // `pretty_theory::lnterm_to_parser`.
+                AcSym::AcFct(s) => p::BinOp::AcFct(tamarin_term::intern::intern_str(
+                    &String::from_utf8_lossy(s.name),
+                )),
             };
             // Fold the AC arg list left-associatively into BinOps.
             let mut it = args.iter();
