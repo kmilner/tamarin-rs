@@ -677,27 +677,47 @@ fn collect_user_funs(items: &[p::TheoryItem]) -> CollectedUserFuns {
     let is_builtin_pair_proj = |d: &p::FunctionDecl| -> bool {
         (d.name == "fst" || d.name == "snd") && d.arg_types.len() == 1 && !d.private
     };
-    let user_names = |pred: &dyn Fn(&p::FunctionDecl) -> bool| -> BTreeSet<String> {
-        items
-            .iter()
-            .filter_map(|it| {
-                if let p::TheoryItem::Functions(decls) = it {
-                    Some(decls.iter().filter(|d| pred(d)).map(|d| d.name.clone()))
-                } else {
-                    None
-                }
-            })
-            .flatten()
-            .collect()
-    };
-    // Attribute sets only (arity resolution via `unary`/`nullary` is
-    // unaffected: the builtin symbol has the same name and arity).
-    let user_attr_names = |pred: &dyn Fn(&p::FunctionDecl) -> bool| -> BTreeSet<String> {
-        user_names(&|d| pred(d) && !is_builtin_pair_proj(d))
-    };
-    let mut nullary = user_names(&|d| d.arg_types.is_empty());
-    let mut private = user_attr_names(&|d| d.private);
-    let mut destructor = user_attr_names(&|d| d.destructor);
+    let mut unary: BTreeSet<String> = BTreeSet::new();
+    let mut nullary: BTreeSet<String> = BTreeSet::new();
+    let mut private: BTreeSet<String> = BTreeSet::new();
+    let mut destructor: BTreeSet<String> = BTreeSet::new();
+    let mut ac: BTreeSet<String> = BTreeSet::new();
+    let mut ndc: BTreeSet<String> = BTreeSet::new();
+    let mut ndc_diff: BTreeSet<String> = BTreeSet::new();
+    for it in items {
+        let p::TheoryItem::Functions(decls) = it else {
+            continue;
+        };
+        for d in decls {
+            if d.arg_types.len() == 1 {
+                unary.insert(d.name.clone());
+            }
+            if d.arg_types.is_empty() {
+                nullary.insert(d.name.clone());
+            }
+            // The exemption gates the ATTRIBUTE sets only; arity resolution
+            // via `unary` / `nullary` is unaffected, since the builtin
+            // symbol has the same name and arity.
+            if is_builtin_pair_proj(d) {
+                continue;
+            }
+            if d.private {
+                private.insert(d.name.clone());
+            }
+            if d.destructor {
+                destructor.insert(d.name.clone());
+            }
+            if d.ac {
+                ac.insert(d.name.clone());
+            }
+            if d.ndc {
+                ndc.insert(d.name.clone());
+            }
+            if d.ndc_diff {
+                ndc_diff.insert(d.name.clone());
+            }
+        }
+    }
     for it in items {
         if let p::TheoryItem::Builtins(names) = it {
             for n in names {
@@ -727,13 +747,13 @@ fn collect_user_funs(items: &[p::TheoryItem]) -> CollectedUserFuns {
         }
     }
     CollectedUserFuns {
-        unary: user_names(&|d| d.arg_types.len() == 1),
+        unary,
         nullary,
         private,
         destructor,
-        ac: user_attr_names(&|d| d.ac),
-        ndc: user_attr_names(&|d| d.ndc),
-        ndc_diff: user_attr_names(&|d| d.ndc_diff),
+        ac,
+        ndc,
+        ndc_diff,
     }
 }
 
