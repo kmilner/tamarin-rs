@@ -1049,10 +1049,7 @@ fn max_applications(
     }
     if let IntrRuleACInfo::DestrRule(name, _, subterm, _, _) = &ir.info {
         // Clause 2: built-in deconstruction rules pass through untouched.
-        if crate::rule::built_in_destr_rule_incl_pair()
-            .iter()
-            .any(|s| name.ends_with(s))
-        {
+        if crate::rule::has_builtin_suffix(name, &crate::rule::built_in_destr_rule_incl_pair()) {
             return ir;
         }
         // Clause 3: non-subterm destructors must have been budgeted above.
