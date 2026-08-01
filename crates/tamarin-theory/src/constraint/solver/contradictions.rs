@@ -341,11 +341,12 @@ fn has_non_normal_terms(ctx: &ProofContext, sys: &System) -> bool {
     // `BTreeSet` of every candidate: the dedup is irrelevant to an OR, and
     // the NF check is a side-effect-free predicate of the term, so visiting a
     // subterm more than once cannot change the verdict.  The check runs
-    // through `nf_via_haskell_maude` — HS's `nf'` runs in the `WithMaude`
-    // reader, and the handle is what lets `struleApplicable` AC-match the
-    // user-`[AC]` cancellation equations (`xorr(x, x) = zeroo`).
+    // through `nf_via_haskell_maude_with_sig` — HS's `nf'` runs in the
+    // `WithMaude` reader, and the handle is what lets `struleApplicable`
+    // AC-match the user-`[AC]` cancellation equations (`xorr(x, x) = zeroo`).
     fn any_non_nf(
         maude: &tamarin_term::maude_proc::MaudeHandle,
+        msig: &tamarin_term::maude_sig::MaudeSig,
         irreducible: &tamarin_utils::FastSet<tamarin_term::function_symbols::FunSym>,
         t: &tamarin_term::lterm::LNTerm,
     ) -> bool {
@@ -357,9 +358,9 @@ fn has_non_normal_terms(ctx: &ProofContext, sys: &System) -> bool {
             // for every `Lit`), so skip the NF-check call.
             Term::Lit(Lit::Var(_)) => false,
             Term::App(sym, args) if irreducible.contains(sym) => {
-                args.iter().any(|a| any_non_nf(maude, irreducible, a))
+                args.iter().any(|a| any_non_nf(maude, msig, irreducible, a))
             }
-            _ => !tamarin_term::norm::nf_via_haskell_maude(maude, t),
+            _ => !tamarin_term::norm::nf_via_haskell_maude_with_sig(msig, maude, t),
         }
     }
 
@@ -371,13 +372,13 @@ fn has_non_normal_terms(ctx: &ProofContext, sys: &System) -> bool {
             .chain(&rule.actions)
         {
             for t in f.terms.iter() {
-                if any_non_nf(&ctx.maude, irreducible, t) {
+                if any_non_nf(&ctx.maude, &sig, irreducible, t) {
                     return true;
                 }
             }
         }
         for t in &rule.new_vars {
-            if any_non_nf(&ctx.maude, irreducible, t) {
+            if any_non_nf(&ctx.maude, &sig, irreducible, t) {
                 return true;
             }
         }
@@ -2479,6 +2480,7 @@ impl SubstNfChecker {
             *applied = Some((fsubst.clone(), terms));
         }
         let terms = &applied.as_ref().unwrap().1;
+        let sig = self.maude.maude_sig();
         for (t, tvars, fresh_start) in terms {
             if tvars.is_empty() {
                 continue;
@@ -2518,7 +2520,8 @@ impl SubstNfChecker {
             // arguments (multiset / mult / xor / nat-plus), so
             // `mult(tid, x)` and `mult(x, tid)` are different `Eq`
             // representations but both in NF.
-            let is_nf = tamarin_term::norm::nf_via_haskell_maude(&self.maude, &t_prime);
+            let is_nf =
+                tamarin_term::norm::nf_via_haskell_maude_with_sig(&sig, &self.maude, &t_prime);
             if !is_nf {
                 if tamarin_utils::env_gate!("TAM_RS_DBG_SUBST_NF") {
                     eprintln!("[rs-subst-nf] CREATES t={:?} t_prime={:?}", t, t_prime);

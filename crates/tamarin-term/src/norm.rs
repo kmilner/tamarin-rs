@@ -82,7 +82,13 @@ pub fn nf_via_haskell(msig: &MaudeSig, t: &LNTerm) -> bool {
 /// `isSplitGoalSmall` goal ranking and every later split-case number).
 pub fn nf_via_haskell_maude(maude: &MaudeHandle, t: &LNTerm) -> bool {
     let sig = maude.maude_sig();
-    go_nf(t, &sig, Some(maude))
+    nf_via_haskell_maude_with_sig(&sig, maude, t)
+}
+
+/// As [`nf_via_haskell_maude`], for callers that already hold the handle's
+/// [`MaudeSig`] — skips the per-call `Arc` clone.
+pub fn nf_via_haskell_maude_with_sig(msig: &MaudeSig, maude: &MaudeHandle, t: &LNTerm) -> bool {
+    go_nf(t, msig, Some(maude))
 }
 
 fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
