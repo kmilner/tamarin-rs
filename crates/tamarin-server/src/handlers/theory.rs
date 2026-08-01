@@ -1680,12 +1680,7 @@ fn source_case_system(
     case_idx: i64,
 ) -> Option<tamarin_theory::constraint::system::System> {
     let want_refined = matches!(kind, path_parse::SourceKind::Refined);
-    let sources = theory_html::compute_source_lists(entry, want_refined);
-    let src_nth = usize::try_from(src_idx.checked_sub(1)?).ok()?;
-    let (_, cases) = sources.into_iter().nth(src_nth)?;
-    let case_nth = usize::try_from(case_idx.checked_sub(1)?).ok()?;
-    let (_, sys) = cases.into_iter().nth(case_nth)?;
-    Some(sys)
+    theory_html::source_list_case(entry, want_refined, src_idx, case_idx)
 }
 
 /// HS `thyPathSystem`, the system dispatch the two dot routes share

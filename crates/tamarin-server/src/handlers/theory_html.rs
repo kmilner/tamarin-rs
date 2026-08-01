@@ -1117,22 +1117,7 @@ pub(crate) fn compute_source_lists(
     // thread-locals — install them (see `ProofState::user_funs`).
     let _user_funs_guard = ps.install_user_funs();
     let ctx = ps.ctx.lock();
-    // Refined sources fold in the `[sources]`-lemma typing assumptions
-    // (HS `refineWithSourceAsms`, Rule.hs:157).  With no such lemma the refine
-    // is a plain relabel to `RefinedSource` (Sources.hs:617-618).
-    let typ_asms: Vec<tamarin_theory::guarded::Guarded> = if want_refined {
-        entry
-            .typed_theory
-            .lemmas()
-            .filter(|l| {
-                matches!(l.trace_quantifier, TraceQuantifier::AllTraces)
-                    && l.attributes.iter().any(|a| matches!(a, LemmaAttr::Sources))
-            })
-            .filter_map(|l| tamarin_theory::guarded::formula_to_guarded(&l.formula).ok())
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let typ_asms = source_typ_asms(entry, want_refined);
 
     // `getSource kind thy`: raw = `ctx.full_sources` (precomputed + saturated);
     // refined = raw with `refineWithSourceAsms` applied (or relabeled).
@@ -1166,6 +1151,89 @@ pub(crate) fn compute_source_lists(
             })
             .collect()
     }
+}
+
+/// The `[sources]`-lemma typing assumptions the refined list folds in (HS
+/// `refineWithSourceAsms`, Rule.hs:157) — empty for the raw list, and with no
+/// such lemma the refine is a plain relabel to `RefinedSource`
+/// (Sources.hs:617-618).  `formula_to_guarded` resolves user fun symbols, so
+/// callers must hold the theory's user-fn guard.
+fn source_typ_asms(
+    entry: &TheoryEntry,
+    want_refined: bool,
+) -> Vec<tamarin_theory::guarded::Guarded> {
+    if !want_refined {
+        return Vec::new();
+    }
+    entry
+        .typed_theory
+        .lemmas()
+        .filter(|l| {
+            matches!(l.trace_quantifier, TraceQuantifier::AllTraces)
+                && l.attributes.iter().any(|a| matches!(a, LemmaAttr::Sources))
+        })
+        .filter_map(|l| tamarin_theory::guarded::formula_to_guarded(&l.formula).ok())
+        .collect()
+}
+
+/// The one case system the `(src_idx, case_idx)` pair names in `getSource kind
+/// thy` — [`compute_source_lists`]'s selection without materialising the cases
+/// the request does not serve.  Both indices are 1-based and read signed;
+/// `None` when either names no case, and when the proof state is not yet built.
+pub(crate) fn source_list_case(
+    entry: &TheoryEntry,
+    want_refined: bool,
+    src_idx: i64,
+    case_idx: i64,
+) -> Option<tamarin_theory::constraint::system::System> {
+    use tamarin_theory::constraint::system::SourceKind as SysSourceKind;
+    let ps = entry.proof_state.as_ref()?;
+    // Same thread-locals the whole-list build needs (see
+    // [`compute_source_lists`]).
+    let _user_funs_guard = ps.install_user_funs();
+    let ctx = ps.ctx.lock();
+    let typ_asms = source_typ_asms(entry, want_refined);
+    // The typing-assumption refine is a whole-list computation
+    // (`saturate_sources_with_simp` runs across sources), so that branch still
+    // builds every source and only the pick out of the result is selective.
+    if want_refined && !typ_asms.is_empty() {
+        let cloned: Vec<_> = ctx
+            .full_sources
+            .iter()
+            .map(|s| {
+                s.ensure_cases(&ctx);
+                s.clone()
+            })
+            .collect();
+        let refined = tamarin_theory::constraint::solver::sources::refine_with_source_asms(
+            cloned, &typ_asms, &ctx,
+        );
+        nth_case_system(&refined, src_idx, case_idx)
+    } else {
+        // `ensure_cases` is `cases()`'s materialisation without its per-case
+        // clone: the sources this request does not serve are forced exactly as
+        // the whole-list build forces them, and none of them is copied out.
+        for s in &ctx.full_sources {
+            s.ensure_cases(&ctx);
+        }
+        let mut sys = nth_case_system(&ctx.full_sources, src_idx, case_idx)?;
+        if want_refined {
+            sys.source_kind = Some(SysSourceKind::RefinedSources);
+        }
+        Some(sys)
+    }
+}
+
+/// `sources !! (src_idx - 1) !! (case_idx - 1)` over a materialised source
+/// list: `None` for any index that names no case.
+fn nth_case_system(
+    sources: &[tamarin_theory::constraint::solver::sources::Source],
+    src_idx: i64,
+    case_idx: i64,
+) -> Option<tamarin_theory::constraint::system::System> {
+    let src_nth = usize::try_from(src_idx.checked_sub(1)?).ok()?;
+    let case_nth = usize::try_from(case_idx.checked_sub(1)?).ok()?;
+    sources.get(src_nth)?.case_system_at(case_nth)
 }
 
 /// HS `casesInfo kind` (Web/Theory.hs:399-406): `(nCases, chainInfo)` where
