@@ -1403,4 +1403,43 @@ mod tests {
         let c = ProcessCombinator::CondEq(svar("a"), svar("b"));
         assert!(base_trans_comb(&c, &an, &p, &tx).is_err());
     }
+
+    // User-`[AC]` symbols must lower INFIX (`BinOp::AcFct`, left-folded),
+    // mirroring `pretty_theory::lnterm_to_parser` and HS `prettyTerm`
+    // (Term/Term.hs:305): a prefix `App("add", …)` here reaches emitted
+    // bytes un-canonicalized via `subst_cond_formula` → `pretty_sapic_comb`
+    // (SAPIC `if` predicates), diverging from the oracle in both the
+    // rendered predicate and the derived rule/restriction names.  No
+    // corpus theory combines SAPIC with a user `[AC]` symbol, so this
+    // shape is only pinned here.
+    #[test]
+    fn user_ac_terms_lower_infix() {
+        use tamarin_term::function_symbols::{AcFctSym, Constructability, NdcState, Privacy};
+        use tamarin_term::term::f_app_acfct;
+
+        let add = AcFctSym::new(
+            b"add".to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::NotNdc,
+        );
+        let op = tamarin_parser::ast::BinOp::AcFct(tamarin_term::intern::intern_str("add"));
+        let leaf = |n: &str| tamarin_term::term::Term::Lit(Lit::Var(lv(n, 0)));
+
+        for arity in [2usize, 3] {
+            let t = f_app_acfct(add, (0..arity).map(|i| leaf(&format!("x{i}"))).collect());
+            // Fold the expectation over the smart constructor's own
+            // (flattened, sorted) arg list so the test pins only the
+            // infix left-fold, not the AC argument order.
+            let tamarin_term::term::Term::App(_, args) = &t else {
+                panic!("f_app_acfct built a non-App term");
+            };
+            let mut it = args.iter().map(ln_term_to_parser);
+            let first = it.next().unwrap();
+            let expected = it.fold(first, |acc, a| {
+                tamarin_parser::ast::Term::BinOp(op, Box::new(acc), Box::new(a))
+            });
+            assert_eq!(ln_term_to_parser(&t), expected);
+        }
+    }
 }
