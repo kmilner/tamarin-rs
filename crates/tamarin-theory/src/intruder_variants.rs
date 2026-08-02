@@ -50,10 +50,12 @@
 //! production; the divergence is confined to the regenerator.
 
 use tamarin_parser as p;
+use tamarin_term::function_symbols::FunSym;
 use tamarin_term::maude_sig::MaudeSig;
 
 use crate::elaborate;
 use crate::fact::LNFact;
+use crate::intruder_rules::show_fun_sym_name;
 use crate::rule::{IntrRuleAC, IntrRuleACInfo, Rule};
 
 /// HS `dhIntruderVariantsFile` (TheoryLoader.hs:745-746, see line 746).
@@ -165,8 +167,7 @@ pub fn parse_intruder_rules(
     let _nullary_guard = elaborate::MaudeSigNullaryGuard::set(msig);
 
     // HS `knownFuns = S.toList (funSyms msig)`.
-    let known_funs: Vec<tamarin_term::function_symbols::FunSym> =
-        msig.fun_syms.iter().copied().collect();
+    let known_funs: Vec<FunSym> = msig.fun_syms.iter().copied().collect();
 
     let mut out = Vec::with_capacity(parser_rules.len());
     for r in parser_rules {
@@ -183,21 +184,18 @@ pub fn parse_intruder_rules(
 /// HS `lookupFun` (Theory/Text/Parser/Rule.hs): resolve a plain function
 /// name against the signature's known symbols (`S.toList (funSyms msig)`)
 /// by `showFunSymName` equality.
-fn lookup_fun(
-    known_funs: &[tamarin_term::function_symbols::FunSym],
-    f: &str,
-) -> Result<tamarin_term::function_symbols::FunSym, String> {
+fn lookup_fun(known_funs: &[FunSym], f: &str) -> Result<FunSym, String> {
     known_funs
         .iter()
         .copied()
-        .find(|fun| crate::intruder_rules::show_fun_sym_name(fun) == f)
+        .find(|fun| show_fun_sym_name(fun) == f)
         .ok_or_else(|| {
             format!(
                 "Failed parsing intruder rule name: no function named '{}' found in the signature (symbols: {})",
                 f,
                 known_funs
                     .iter()
-                    .map(crate::intruder_rules::show_fun_sym_name)
+                    .map(show_fun_sym_name)
                     .collect::<Vec<_>>()
                     .join(", ")
             )
@@ -209,6 +207,12 @@ fn lookup_fun(
 /// leading empty segment (the name starts with an underscore), then drops
 /// the LEADING purely-numeric position segments (`supprPos` via
 /// `readMaybe :: Maybe Int`); errors on an empty result.
+///
+/// The split is unconditional, so a function symbol whose own name contains
+/// `'_'` decomposes into several segments that [`lookup_fun`] cannot resolve
+/// — see the FIXME beside `name_decompose` in Theory/Text/Parser/Rule.hs
+/// ("there can be underscores in the name of a function").  Dormant for the
+/// two cached files, which only name builtin DH/BP symbols.
 fn constr_name_func(name: &str) -> Result<Vec<&str>, String> {
     // `tail . T.split (== '_')`, then `supprPos` (remove position
     // information from the rule name).
@@ -266,10 +270,7 @@ fn constr_name_func(name: &str) -> Result<Vec<&str>, String> {
 /// `True False` are HS hard-codes — see the FIXME in
 /// Theory/Text/Parser/Rule.hs ("Currently we (wrongly) always assume
 /// that we have a subterm rule").  Subterm=True / constant=False.
-fn ast_rule_to_intr_rule_ac(
-    known_funs: &[tamarin_term::function_symbols::FunSym],
-    r: &p::Rule,
-) -> Result<IntrRuleAC, String> {
+fn ast_rule_to_intr_rule_ac(known_funs: &[FunSym], r: &p::Rule) -> Result<IntrRuleAC, String> {
     // HS `intrInfo` rejects non-c/d-prefixed names.  Mirror that here.
     let bytes = r.name.as_bytes();
     if bytes.is_empty() {

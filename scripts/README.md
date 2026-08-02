@@ -3,15 +3,15 @@
 Every script compares the Rust port (`target/release/tamarin-rs`) against the
 patched Haskell oracle (`../tamarin-prover-testing/`, built by
 `./setup.sh testing`). Result TSVs land in `results/` (gitignored); the HS
-reference caches live in `.hs_file_cache/` and `.web_hs_cache/` (gitignored,
-content-keyed by sha256 of the theory file). Most scripts take `ALLOWLIST=`
-(file of corpus-relative paths) to run a subset, and `RS_PATH=`/`HS_PATH=` to
-point at other binaries.
+reference caches live in `.hs_file_cache/`, `.hs_pretty_cache/` and
+`.web_hs_cache/` (gitignored, content-keyed by sha256 of the theory file).
+Most scripts take `ALLOWLIST=` (file of corpus-relative paths) to run a
+subset, and `RS_PATH=`/`HS_PATH=` to point at other binaries.
 
 ## Primary gates — run these before trusting a change
 
 - **`corpus_file_diff.sh`** — the ground-truth batch gate: byte-diffs full
-  `--prove` stdout for all 419 corpus files against the HS cache (generating
+  `--prove` stdout for all 431 corpus files against the HS cache (generating
   missing cache entries from the oracle). Slow (~30–60 min cold); run at
   milestones or with `ALLOWLIST=` for touched families.
 - **`wf_gate.sh`** — fast (~72 s) wellformedness gate: diffs only the
@@ -101,8 +101,8 @@ point at other binaries.
 
 - **`file_flags.tsv`** — canonical per-file extra prover flags (`@cd`,
   defines, …); consumed by every gate.
-- **`parity_corpus.txt`** — the canonical 419-file gate corpus.
-- **`parity_corpus_fast.txt`** — the 351-file CI subset: every parity file
+- **`parity_corpus.txt`** — the canonical 431-file gate corpus.
+- **`parity_corpus_fast.txt`** — the 364-file CI subset: every parity file
   proving in ≤1.5 s (plus the fastest member of otherwise-absent families);
   sized so a GitHub runner finishes in minutes.
 - **`ci_ref_fast.tsv`** — committed reference for `rs_ref_check.sh`: per file,

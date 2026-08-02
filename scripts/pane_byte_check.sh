@@ -3,7 +3,9 @@
 # bodies (the JSON {html,title} envelope) against the HS reference cache
 # (scripts/.web_hs_cache), content-keyed by sha256(file).  Boots RS per file
 # (reusing web_parity's boot/crawl), then compares the two URL bodies byte-for-
-# byte.  Output TSV: file  url  MATCH|DIFF|MISSING_*  firstdiff_byte
+# byte.  Files come from ALLOWLIST (default: the accepted-residue ledger
+# scripts/websweep_residual.txt).
+# Output TSV: file  url  MATCH|DIFF|MISSING_*  firstdiff_byte
 set -u
 # OOM safeguards (per the campaign's oracle-script convention): make this driver
 # the first OOM victim and cap the address space so a runaway prover subprocess

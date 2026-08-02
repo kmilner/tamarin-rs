@@ -30,9 +30,10 @@
 //!
 //! Per-rule node FILL colours are a faithful port of HS `nodeColorMap`
 //! (Dot.hs:190-218): the size-dependent light-HSV palette keyed by
-//! `(groupIdx, memberIdx)` — see `build_node_color_map` / `NodeColorMap`
-//! below. An explicit per-rule `color:` attribute and a cluster's
-//! `manualNodeColor` still take priority (HS `dotNodeCompact`, Dot.hs:248-256).
+//! `(groupIdx, memberIdx)` — see `build_node_color_map` / `NodeColorMap` in
+//! `crate::graph::color`. An explicit per-rule `color:` attribute and a
+//! cluster's `manualNodeColor` still take priority (HS `dotNodeCompact`,
+//! Dot.hs:248-256).
 //! Each rule record also carries HS's `fontcolor` (`colorUsesWhiteFont` of the
 //! palette colour, Dot.hs:236-379, see line 258/284-287) and `role` (Dot.hs:236-379, see line 259) attributes.
 //!
@@ -741,9 +742,9 @@ impl DotBuilder {
             "darkblue"
         };
         // HS renders a loose action node via `mkSimpleNode (render lbl) attrs`
-        // = plain `D.node [("label", …), ("shape","ellipse")]` (Dot.hs:267-272,
-        // 289-290), NOT `D.record`.  A plain node label is a quoted string whose
-        // only metacharacters are `"` and newline (`escape_dot_label` =
+        // (Dot.hs:270-275) — plain `D.node [("label", …), ("shape","ellipse")]`
+        // (Dot.hs:292-293), NOT `D.record`.  A plain node label is a quoted
+        // string whose only metacharacters are `"` and newline (`escape_dot_label` =
         // `showAttr`, Text/Dot.hs:346-353); the record metacharacters
         // `{ } | < >` are LITERAL, so a tuple `<A, B, …>` in a goal fact must
         // stay `<…>` and NOT be `\<…\>`-escaped (only the `SystemNode`/

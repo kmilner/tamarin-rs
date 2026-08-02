@@ -496,16 +496,21 @@ pub fn is_built_in_intruder_rule(rule: &IntrRuleAC) -> bool {
     }
 }
 
+/// The head function of a deconstruction rule, for the `RuleInfo`-wrapped
+/// shape ([`get_destr_rule_function`] serves the bare `IntrRuleAC` one).
+fn destr_rule_head<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> Option<&FunSym> {
+    match &rule.info {
+        RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, _, _, _, funs)) => funs.first(),
+        _ => None,
+    }
+}
+
 /// `isNDCRule`: `Just IsNDC` iff the rule is a deconstruction rule whose head
 /// function has the (trace-mode) NDC property.
 pub fn is_ndc_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> Option<NdcState> {
-    match &rule.info {
-        RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, _, _, _, funs)) => match funs.first() {
-            Some(f) if f.is_ndc_fun_sym() => Some(NdcState::IsNdc),
-            _ => None,
-        },
-        _ => None,
-    }
+    destr_rule_head(rule)
+        .is_some_and(FunSym::is_ndc_fun_sym)
+        .then_some(NdcState::IsNdc)
 }
 
 /// `isNDCDiffRule` (IntruderRules.hs:524-527): `Just IsNDCDiff` iff the head
@@ -514,13 +519,9 @@ pub fn is_ndc_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> Option<NdcSta
 /// Intentionally retained: faithful mirror of HS `isNDCDiffRule`
 /// (IntruderRules.hs:524-527); no caller yet.
 pub fn is_ndc_diff_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> Option<NdcState> {
-    match &rule.info {
-        RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, _, _, _, funs)) => match funs.first() {
-            Some(f) if f.is_ndc_diff_fun_sym() => Some(NdcState::IsNdcDiff),
-            _ => None,
-        },
-        _ => None,
-    }
+    destr_rule_head(rule)
+        .is_some_and(FunSym::is_ndc_diff_fun_sym)
+        .then_some(NdcState::IsNdcDiff)
 }
 
 /// `getDeconstrRuleKDPrem`: the first premise fact of an intruder rule (the

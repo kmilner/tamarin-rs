@@ -41,10 +41,10 @@ HS_CACHE="${HS_CACHE:-$script_dir/.hs_pretty_cache}"
 CORPUS_ROOT="${CORPUS_ROOT:-$repo_root/tamarin-prover/examples}"
 FLAGS_MAP="${FLAGS_MAP:-$script_dir/file_flags.tsv}"
 JOBS="${JOBS:-4}"
-# 420 not 120: the csf26-ac AC-variant precomputation makes the HS oracle's
-# plain load take ~170s on three files (chaum_offline_anonymity, KCL07,
-# NSLPK3xor); a 120s cap turns them into permanent .nohs markers on every
-# cold cache fill.
+# Generous by design: the csf26-ac AC-variant precomputation makes the HS
+# oracle's plain load take ~170s on three files (chaum_offline_anonymity,
+# KCL07, NSLPK3xor), and a tighter cap turns those into permanent .nohs
+# markers on every cold cache fill.
 FILE_TIMEOUT="${FILE_TIMEOUT:-420}"
 DERIVCHECK_TIMEOUT="${DERIVCHECK_TIMEOUT:-10}"
 RESULTS_TSV="${RESULTS_TSV:-$script_dir/results/pretty_gate_results.tsv}"
@@ -69,7 +69,7 @@ export RS_PATH HS_PATH HS_CACHE CORPUS_ROOT FLAGS_MAP FILE_TIMEOUT DERIVCHECK_TI
 # bump that alters pretty output leaves stale entries under unchanged keys,
 # surfacing as false DIFFs rather than cache misses.  Stamp the oracle's git
 # revision into the cache dir and wipe the cache when it changes.
-if [ -n "${HS_PATH:-}" ] && [ -x "$HS_PATH" ]; then
+if [ -x "${HS_PATH:-}" ]; then
     oracle_rev=$("$HS_PATH" --version 2>/dev/null \
         | awk '/^Git revision:/{gsub(",","",$3); print $3; exit}')
     stamp="$HS_CACHE/.oracle_rev"

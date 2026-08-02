@@ -45,7 +45,7 @@
 //! `thyCache = intrRmodified`.
 
 use tamarin_term::function_symbols::{FunSym, NdcState, Privacy};
-use tamarin_term::lterm::{HasFrees, LSort, LVar};
+use tamarin_term::lterm::{HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::rewriting::Equal;
 use tamarin_term::subst::apply_vterm;
@@ -58,7 +58,6 @@ use crate::rule::{
     get_conc_fact, get_deconstr_rule_kd_prem, get_deconstr_rule_prems_tail,
     get_destr_rule_function, IntrRuleAC, IntrRuleACInfo,
 };
-use tamarin_term::lterm::LNTerm;
 
 // =============================================================================
 // Load-time entry (HS `checkCloseIntrRule`)
@@ -263,6 +262,20 @@ fn msg_to_fresh_terms(t: &LNTerm) -> LNTerm {
     }
 }
 
+/// Apply a free substitution to every term of a fact, keeping tag and
+/// annotations.
+fn apply_subst_fact(
+    sigma: &tamarin_term::subst::Subst<tamarin_term::lterm::Name, LVar>,
+    f: &LNFact,
+) -> LNFact {
+    let terms: Vec<LNTerm> = f
+        .terms
+        .iter()
+        .map(|t| apply_vterm(sigma, t.clone()))
+        .collect();
+    Fact::fresh_annotated(f.tag, f.annotations.clone(), terms)
+}
+
 fn pretty_term(t: &LNTerm) -> String {
     tamarin_term::pretty::pretty_lnterm(t)
 }
@@ -308,15 +321,7 @@ fn render_deduction_theory(
         })
         .collect();
     let sigma = tamarin_term::subst::Subst::from_list(rename);
-    let ren_fact = |f: &LNFact| -> LNFact {
-        let terms: Vec<LNTerm> = f
-            .terms
-            .iter()
-            .map(|t| apply_vterm(&sigma, t.clone()))
-            .collect();
-        Fact::fresh_annotated(f.tag, f.annotations.clone(), terms)
-    };
-    let s: Vec<LNFact> = s.iter().map(ren_fact).collect();
+    let s: Vec<LNFact> = s.iter().map(|f| apply_subst_fact(&sigma, f)).collect();
     let fact_term = apply_vterm(&sigma, fact_term.clone());
 
     // varD s (HS: `frees $ concatMap factTerms s` — `sortednub . freesList`;
@@ -478,18 +483,19 @@ fn prove_deduction_theory(
         )
     });
     let rules: Vec<crate::theory::OpenProtoRule> = elaborated.rules().cloned().collect();
-    let mut restrictions: Vec<crate::guarded::Guarded> = Vec::new();
-    for r in elaborated.restrictions() {
-        let g = crate::guarded::formula_to_guarded(&r.formula).unwrap_or_else(|e| {
-            panic!(
-                "[ndc] synthetic deduction theory restriction {} is not guarded ({}); theory:\n{}",
-                r.name,
-                e.message,
-                theory_snippet(&src)
-            )
-        });
-        restrictions.push(g);
-    }
+    let restrictions: Vec<crate::guarded::Guarded> = elaborated
+        .restrictions()
+        .map(|r| {
+            crate::guarded::formula_to_guarded(&r.formula).unwrap_or_else(|e| {
+                panic!(
+                    "[ndc] synthetic deduction theory restriction {} is not guarded ({}); theory:\n{}",
+                    r.name,
+                    e.message,
+                    theory_snippet(&src)
+                )
+            })
+        })
+        .collect();
     let ctx = ProofContext::new_with_injected_intruder_rules(
         maude.clone(),
         rules,
@@ -630,18 +636,8 @@ fn apply_subst_rule(
     sigma: &tamarin_term::subst::Subst<tamarin_term::lterm::Name, LVar>,
     r: &IntrRuleAC,
 ) -> IntrRuleAC {
-    let app_facts = |fs: &[LNFact]| -> Vec<LNFact> {
-        fs.iter()
-            .map(|f| {
-                let terms: Vec<LNTerm> = f
-                    .terms
-                    .iter()
-                    .map(|t| apply_vterm(sigma, t.clone()))
-                    .collect();
-                Fact::fresh_annotated(f.tag, f.annotations.clone(), terms)
-            })
-            .collect()
-    };
+    let app_facts =
+        |fs: &[LNFact]| -> Vec<LNFact> { fs.iter().map(|f| apply_subst_fact(sigma, f)).collect() };
     IntrRuleAC {
         info: r.info.clone(),
         premises: app_facts(&r.premises),

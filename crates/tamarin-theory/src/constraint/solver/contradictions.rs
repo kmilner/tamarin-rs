@@ -76,6 +76,20 @@ pub enum Contradiction {
 /// each consumer forces it with `get_or_init`.
 type NodeRuleMap<'a> = tamarin_utils::FastMap<&'a NodeId, &'a crate::rule::RuleACInst>;
 
+/// Push a node id through the eq-store substitution, keeping it as-is when the
+/// substitution does not map it to another variable.  The rationale for
+/// resolving at all — RS-only compensation for `subst_system` lagging HS's
+/// pre-check `substSystem` — is spelled out at the [`contradictions`] call
+/// site.
+fn resolve_node_id(subst: &crate::tools::equation_store::LNSubst, v: &NodeId) -> NodeId {
+    use tamarin_term::term::Term;
+    use tamarin_term::vterm::Lit;
+    match tamarin_term::subst::apply_vterm(subst, Term::Lit(Lit::Var(*v))) {
+        Term::Lit(Lit::Var(w)) => w,
+        _ => *v,
+    }
+}
+
 /// Collect every contradiction currently witnessed by the system.
 pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> {
     let mut out = Vec::new();
@@ -108,18 +122,8 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     // node-id lookups (LVar variable terms) — no term traversal needed. Do
     // not remove without proving RS always runs `subst_system` before
     // every `contradictions` call.
-    use tamarin_term::lterm::LVar;
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
     let subst = &sys.eq_store.subst;
-    let resolve = |v: &LVar| -> LVar {
-        let t = tamarin_term::subst::apply_vterm(subst, Term::Lit(Lit::Var(*v)));
-        if let Term::Lit(Lit::Var(w)) = t {
-            w
-        } else {
-            *v
-        }
-    };
+    let resolve = |v: &NodeId| resolve_node_id(subst, v);
     let mut all_less: Vec<LessAtom> = sys
         .less_atoms
         .iter()
@@ -794,14 +798,11 @@ fn has_forbidden_constr_chain<'a>(
     use crate::constraint::constraints::Reason;
     use crate::rule::is_ac_constr_rule;
     use std::borrow::Cow;
-    use std::collections::{BTreeMap, BTreeSet};
     use tamarin_term::function_symbols::FunSym;
 
-    type NodeInfo = (
-        crate::constraint::constraints::NodeId,
-        BTreeSet<crate::constraint::constraints::NodeId>,
-        FunSym,
-    );
+    // A node's union-find entry: its component root, the trivial instances
+    // accumulated under that root, and the component's AC symbol.
+    type NodeInfo = (NodeId, BTreeSet<NodeId>, FunSym);
 
     // Every candidate pair comes from an `Adversary` less-atom whose two
     // endpoints both carry AC-constructor rules, so lacking either one
@@ -823,17 +824,7 @@ fn has_forbidden_constr_chain<'a>(
     // (HS runs post-`substSystem`, so its `sLessAtoms` are already
     // canonical; RS's may lag one `subst_system` behind).
     let subst = &sys.eq_store.subst;
-    let resolve =
-        |v: &crate::constraint::constraints::NodeId| -> crate::constraint::constraints::NodeId {
-            use tamarin_term::term::Term;
-            use tamarin_term::vterm::Lit;
-            let t = tamarin_term::subst::apply_vterm(subst, Term::Lit(Lit::Var(*v)));
-            if let Term::Lit(Lit::Var(w)) = t {
-                w
-            } else {
-                *v
-            }
-        };
+    let resolve = |v: &NodeId| resolve_node_id(subst, v);
 
     // Facts are compared under the pending eq-store subst as well — same
     // rationale as the endpoint resolve above (HS compares post-substSystem
@@ -861,9 +852,9 @@ fn has_forbidden_constr_chain<'a>(
     // `node_rule_safe` does.
     let node_rules = node_rules.get_or_init(|| sys.node_rule_map());
     let extracted: Vec<(
-        crate::constraint::constraints::NodeId,
+        NodeId,
         Vec<crate::fact::LNFact>,
-        crate::constraint::constraints::NodeId,
+        NodeId,
         Vec<crate::fact::LNFact>,
         FunSym,
     )> = sys
@@ -913,10 +904,7 @@ fn has_forbidden_constr_chain<'a>(
 
     // `trivial r n iden`: the singleton {iden} iff some premise of `r` is a
     // trivial or nearly-trivial (same-symbol) KU fact.
-    let trivial = |prems: &[crate::fact::LNFact],
-                   n: &FunSym,
-                   iden: crate::constraint::constraints::NodeId|
-     -> BTreeSet<crate::constraint::constraints::NodeId> {
+    let trivial = |prems: &[crate::fact::LNFact], n: &FunSym, iden: NodeId| -> BTreeSet<NodeId> {
         if prems.iter().any(|fa| {
             crate::fact::is_trivial_ku_fact(fa) || crate::fact::is_nearly_trivial_ku_fact(n, fa)
         }) {
@@ -927,7 +915,7 @@ fn has_forbidden_constr_chain<'a>(
     };
 
     // `initialMap`: every endpoint maps to (itself, its trivial set, symbol).
-    let mut map: BTreeMap<crate::constraint::constraints::NodeId, NodeInfo> = BTreeMap::new();
+    let mut map: BTreeMap<NodeId, NodeInfo> = BTreeMap::new();
     for (n1, p1, n2, p2, n) in &extracted {
         map.insert(*n1, (*n1, trivial(p1, n, *n1), *n));
         map.insert(*n2, (*n2, trivial(p2, n, *n2), *n));
@@ -963,8 +951,7 @@ fn has_forbidden_constr_chain<'a>(
         // the map decides the whole-map `==` the fixpoint needs — and a pass
         // that writes an entry back to the value it started with still counts
         // as unchanged, exactly as a full comparison would have it.
-        let mut before: BTreeMap<crate::constraint::constraints::NodeId, Option<NodeInfo>> =
-            BTreeMap::new();
+        let mut before: BTreeMap<NodeId, Option<NodeInfo>> = BTreeMap::new();
         // `foldr` walks the list right-to-left.
         for (a, _, b, _, n) in extracted.iter().rev() {
             if found {

@@ -55,7 +55,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use tamarin_parser::ast as p;
-use tamarin_term::function_symbols::{Constructability, NdcState, NoEqSym, Privacy};
+use tamarin_term::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
 use tamarin_term::lterm::LSort;
 use tamarin_term::lterm::LVar;
 
@@ -725,8 +725,8 @@ fn collect_user_funs(items: &[p::TheoryItem]) -> CollectedUserFuns {
                 for c in builtin_nullary_constants(n) {
                     nullary.insert(c.to_string());
                 }
-                // HS `naryOpApp` / `lookupArity` (Theory/Text/Parser/Term.hs:61-63,
-                // 84,92) reads `(k, priv, cnstr)` straight from the per-theory
+                // HS `naryOpApp` / `lookupArity` (Theory/Text/Parser/Term.hs:63-65,93)
+                // reads `(k, priv, cnstr)` straight from the per-theory
                 // signature, which includes the BUILTIN symbols.  Mirror that by
                 // merging the privacy / constructability of each builtin's
                 // function symbols (most are public constructors, so this only
@@ -1001,10 +1001,24 @@ impl UserFunSets {
         ndc_state_of(self.ndc.contains(name), self.ndc_diff.contains(name))
     }
 
+    /// The `NoEqSym` for a user-declared name applied at `arity`, carrying
+    /// the privacy / constructability / NDC flags read off its declaration
+    /// (HS `lookupArity`).  The 0-arity `nullaryApp` recovery does not use
+    /// this: a bare constant is always a constructor there.
+    fn user_no_eq_sym(&self, name: &str, arity: usize) -> NoEqSym {
+        NoEqSym::new(
+            name.as_bytes().to_vec(),
+            arity,
+            self.user_fun_privacy(name),
+            self.user_fun_constructability(name),
+        )
+        .with_ndc(self.user_fun_ndc(name))
+    }
+
     /// The `AcFctSym` for a user-declared `[AC]` name, carrying the privacy /
     /// constructability / NDC flags read off its declaration (HS `lookupArity`).
-    fn user_ac_fct_sym(&self, name: &str) -> tamarin_term::function_symbols::AcFctSym {
-        tamarin_term::function_symbols::AcFctSym::new(
+    fn user_ac_fct_sym(&self, name: &str) -> AcFctSym {
+        AcFctSym::new(
             name.as_bytes().to_vec(),
             self.user_fun_privacy(name),
             self.user_fun_constructability(name),
@@ -1205,7 +1219,7 @@ fn elaborate_items(
                 out.signature.maude_sig = s;
             }
             p::TheoryItem::Functions(decls) => {
-                use tamarin_term::function_symbols::{AcFctSym, UserDefinedSym};
+                use tamarin_term::function_symbols::UserDefinedSym;
                 for d in decls {
                     let arity = d.arg_types.len();
                     let priv_ = if d.private {
@@ -1227,43 +1241,36 @@ fn elaborate_items(
                     // exemption (`builtins: dest-pairing` + `functions:
                     // fst/1` is an error), and consults `st_fun_syms`
                     // only, never `macro_names`.
-                    if reserved_builtin_names.iter().any(|n| n == &d.name) {
-                        let found = out
+                    if reserved_builtin_names.contains(&d.name) {
+                        let mismatched = out
                             .signature
                             .maude_sig
                             .st_fun_syms
                             .iter()
-                            .find(|s| s.name == d.name.as_bytes());
-                        match found {
-                            Some(b)
-                                if (b.arity, b.privacy, b.constructability, b.ndc)
-                                    != (arity, priv_, constr, ndc) =>
-                            {
-                                // `conflictingBuiltins` (Signature.hs:203)
-                                // scans the FULL static table, not just the
-                                // builtins this theory enabled.
-                                let conflicting: Vec<String> = builtin_reserved_names()
-                                    .into_iter()
-                                    .filter(|(_, ns)| ns.iter().any(|n| n == &d.name))
-                                    .map(|(b, _)| b.to_string())
-                                    .collect();
-                                return Err(ElabError {
-                                    message: format!(
-                                        "`{}` conflicts with builtin(s) {} (builtin: {}, \
-                                         requested: {})",
-                                        d.name,
-                                        show_name_list(&conflicting),
-                                        show_fun_options(
-                                            b.arity,
-                                            b.privacy,
-                                            b.constructability,
-                                            b.ndc
-                                        ),
-                                        show_fun_options(arity, priv_, constr, ndc),
-                                    ),
-                                });
-                            }
-                            _ => {}
+                            .find(|s| s.name == d.name.as_bytes())
+                            .filter(|b| {
+                                (b.arity, b.privacy, b.constructability, b.ndc)
+                                    != (arity, priv_, constr, ndc)
+                            });
+                        if let Some(b) = mismatched {
+                            // `conflictingBuiltins` (Signature.hs:203) scans
+                            // the FULL static table, not just the builtins
+                            // this theory enabled.
+                            let conflicting: Vec<String> = builtin_reserved_names()
+                                .into_iter()
+                                .filter(|(_, ns)| ns.contains(&d.name))
+                                .map(|(b, _)| b.to_string())
+                                .collect();
+                            return Err(ElabError {
+                                message: format!(
+                                    "`{}` conflicts with builtin(s) {} (builtin: {}, \
+                                     requested: {})",
+                                    d.name,
+                                    show_name_list(&conflicting),
+                                    show_fun_options(b.arity, b.privacy, b.constructability, b.ndc),
+                                    show_fun_options(arity, priv_, constr, ndc),
+                                ),
+                            });
                         }
                     }
                     // HS `function` conflict check against the existing
@@ -2384,7 +2391,7 @@ where
     F: Fn(&p::VarSpec, &UserFunSets) -> Option<VTerm<Name, V>>,
 {
     use tamarin_term::function_symbols::AcSym;
-    use tamarin_term::term::f_app_ac;
+    use tamarin_term::term::{f_app_ac, f_app_acfct};
 
     match t {
         p::Term::Var(v) => mk_var(v, funs),
@@ -2500,15 +2507,9 @@ where
             // only to non-AC symbols); infix `a f b` produces the same
             // `App(f, [a, b])` parser node, so both forms land here.
             if funs.is_user_ac_fun(name.as_str()) {
-                return Some(f_app_ac(AcSym::AcFct(funs.user_ac_fct_sym(name)), new_args));
+                return Some(f_app_acfct(funs.user_ac_fct_sym(name), new_args));
             }
-            let sym = NoEqSym::new(
-                name.as_bytes().to_vec(),
-                new_args.len(),
-                funs.user_fun_privacy(name),
-                funs.user_fun_constructability(name),
-            )
-            .with_ndc(funs.user_fun_ndc(name));
+            let sym = funs.user_no_eq_sym(name, new_args.len());
             Some(f_app_no_eq(sym, new_args))
         }
         p::Term::Pair(items) => {
@@ -2529,18 +2530,9 @@ where
             // so thread user privacy/constructability here too.
             // #883: `[AC]` symbols build an AC application here as well.
             if funs.is_user_ac_fun(name.as_str()) {
-                return Some(f_app_ac(
-                    AcSym::AcFct(funs.user_ac_fct_sym(name)),
-                    vec![aa, bb],
-                ));
+                return Some(f_app_acfct(funs.user_ac_fct_sym(name), vec![aa, bb]));
             }
-            let sym = NoEqSym::new(
-                name.as_bytes().to_vec(),
-                2,
-                funs.user_fun_privacy(name),
-                funs.user_fun_constructability(name),
-            )
-            .with_ndc(funs.user_fun_ndc(name));
+            let sym = funs.user_no_eq_sym(name, 2);
             Some(f_app_no_eq(sym, vec![aa, bb]))
         }
         p::Term::Diff(a, b) => {
@@ -2566,10 +2558,9 @@ where
                 // application the `App(f, [a, b])` arm above builds, so it
                 // reads the same user-function signature for the symbol's
                 // privacy / constructability / NDC flags.
-                p::BinOp::AcFct(name) => Some(f_app_ac(
-                    AcSym::AcFct(funs.user_ac_fct_sym(name)),
-                    vec![aa, bb],
-                )),
+                p::BinOp::AcFct(name) => {
+                    Some(f_app_acfct(funs.user_ac_fct_sym(name), vec![aa, bb]))
+                }
                 p::BinOp::Exp => {
                     let sym = NoEqSym::new(
                         b"exp".to_vec(),

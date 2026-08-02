@@ -65,8 +65,15 @@ pub fn parse_lsort_sym(s: &str) -> Option<LSort> {
 /// with Maude's own syntax (e.g. `true`, `not`, `if`).
 pub const FUN_SYM_PREFIX: &str = "tam";
 
-/// Encode privacy / constructability / AC-ness / NDC state into a 4-char
-/// prefix that follows `tam` for each user-defined symbol.
+/// Number of attribute characters between the `tam` prefix and the user-given
+/// name: `fun_sym_encode_attr` emits exactly this many, `fun_sym_decode`
+/// splits at the same width, and `maude_parse::is_ac_fct_ident` classifies on
+/// it (HS `funSymDecode`'s `BC.splitAt 4`, Parser.hs:89-104).
+pub(crate) const ATTR_BLOCK_LEN: usize = 4;
+
+/// Encode privacy / constructability / AC-ness / NDC state into the
+/// `ATTR_BLOCK_LEN`-char prefix that follows `tam` for each user-defined
+/// symbol.
 ///
 /// HS `funSymEncodeAttr` (Parser.hs:75-87) concatenates one char per
 /// attribute: `Private`->`P` / `Public`->`X`, `Constructor`->`C` /
@@ -122,7 +129,7 @@ pub fn fun_sym_encode_attr(
 }
 
 /// Decode a Maude-prefixed identifier back into the original
-/// `(name, p, c, ndc)`.  `prefix == "tam"` plus the 4 attribute chars
+/// `(name, p, c, ndc)`.  `prefix == "tam"` plus the attribute chars
 /// (see [`fun_sym_encode_attr`]) followed by the user-given name.
 ///
 /// HS `funSymDecode` (Parser.hs:89-104) reads the privacy from char 0, the
@@ -131,7 +138,7 @@ pub fn fun_sym_encode_attr(
 /// identifier's shape which of `fAppNoEq`/`fAppACfct` it is building.
 pub fn fun_sym_decode(s: &[u8]) -> (Vec<u8>, Privacy, Constructability, NdcState) {
     let prefix_len = FUN_SYM_PREFIX.len();
-    if s.len() < prefix_len + 4 {
+    if s.len() < prefix_len + ATTR_BLOCK_LEN {
         return (
             s.to_vec(),
             Privacy::Public,
@@ -139,8 +146,8 @@ pub fn fun_sym_decode(s: &[u8]) -> (Vec<u8>, Privacy, Constructability, NdcState
             NdcState::NotNdc,
         );
     }
-    let attr = &s[prefix_len..prefix_len + 4];
-    let ident = s[prefix_len + 4..].to_vec();
+    let attr = &s[prefix_len..prefix_len + ATTR_BLOCK_LEN];
+    let ident = s[prefix_len + ATTR_BLOCK_LEN..].to_vec();
     let priv_ = if attr[0] == b'P' {
         Privacy::Private
     } else {
@@ -373,21 +380,14 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
         // `args` already ends in a trailing space (or is empty), and the
         // literal " -> Msg" has a leading space, so there are two spaces
         // before `->` for arity>0 (and `name :  -> Msg` for arity 0).
-        // Emit the op line piecewise so the `replaceUnderscore` name bytes go
-        // straight into `out` without a `format!`/`String::from_utf8_lossy`
-        // round-trip; the resulting bytes are identical to the `op(..)` helper.
-        out.push_str("  op ");
-        out.push_str(FUN_SYM_PREFIX);
-        out.push_str(fun_sym_encode_attr(
+        op_user_head(
+            &mut out,
             sym.privacy,
             sym.constructability,
             AcState::NotAc,
             sym.ndc,
-        ));
-        // `replaceUnderscore`: map `_` -> `-` (names are ASCII).
-        for b in sym.name.iter() {
-            out.push(if *b == b'_' { '-' } else { *b as char });
-        }
+            sym.name,
+        );
         out.push_str(" : ");
         out.push_str(&args);
         out.push_str(" -> Msg");
@@ -399,22 +399,17 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
     for sym in &msig.st_ac_fun_syms {
         // Match HS `theoryACFunSym` (Parser.hs:246-267, see line 265) byte-for-byte:
         // `replaceUnderscore s <> " : " <> (concat $ replicate 2 "Msg ") <> "-> Msg"
-        //  <> " [comm assoc]"`, wrapped by `theoryOpACUser` into
-        // `"  op " <> funSymPrefix <> encoded attrs <> fsort <> " ."`.
-        // Unlike `theoryFunSym` above, the sort part has no extra space before
-        // `->`, so the line reads `name : Msg Msg -> Msg [comm assoc] .`.
-        out.push_str("  op ");
-        out.push_str(FUN_SYM_PREFIX);
-        out.push_str(fun_sym_encode_attr(
+        //  <> " [comm assoc]"`.  Unlike `theoryFunSym` above, the sort part has
+        // no extra space before `->`, so the line reads
+        // `name : Msg Msg -> Msg [comm assoc] .`.
+        op_user_head(
+            &mut out,
             sym.privacy,
             sym.constructability,
             AcState::IsAc,
             sym.ndc,
-        ));
-        // `replaceUnderscore`: map `_` -> `-` (names are ASCII).
-        for b in sym.name.iter() {
-            out.push(if *b == b'_' { '-' } else { *b as char });
-        }
+            sym.name,
+        );
         out.push_str(" : Msg Msg -> Msg [comm assoc] .\n");
     }
     // Rewrite rules.
@@ -423,6 +418,32 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
     }
     out.push_str("endfm\n");
     out
+}
+
+/// Emit the `  op tam<attrs><name>` head shared by the user-defined free and
+/// AC declarations — HS `theoryOp` and `theoryOpACUser` (Parser.hs:246-267,
+/// see lines 257-260) are the same `"  op " <> funSymPrefix <> attrs <> fsort
+/// <> " ."` string.  The caller appends the `fsort` tail and the trailing
+/// ` .\n`.
+///
+/// Written piecewise so the `replaceUnderscore` name bytes (`_` -> `-`; names
+/// are ASCII) go straight into `out` without a `format!` /
+/// `String::from_utf8_lossy` round-trip; the bytes are identical to what the
+/// `op(..)` helper produces.
+fn op_user_head(
+    out: &mut String,
+    p: Privacy,
+    c: Constructability,
+    ac: AcState,
+    ndc: NdcState,
+    name: &[u8],
+) {
+    out.push_str("  op ");
+    out.push_str(FUN_SYM_PREFIX);
+    out.push_str(fun_sym_encode_attr(p, c, ac, ndc));
+    for b in name {
+        out.push(if *b == b'_' { '-' } else { *b as char });
+    }
 }
 
 fn op_eq(out: &mut String, name: &str, sort: &str) {
@@ -537,7 +558,6 @@ mod tests {
     #[test]
     fn ac_user_fun_sym_op_line() {
         use crate::function_symbols::AcFctSym;
-        use crate::maude_sig::MaudeSig;
         let f = AcFctSym::new(
             b"my_op".to_vec(),
             Privacy::Public,

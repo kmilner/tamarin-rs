@@ -181,12 +181,7 @@ pub(crate) fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorM
     for pair in &ordered {
         groups[group_idx(&pair.1)].push(pair);
     }
-    let sizes: [usize; 4] = [
-        groups[0].len(),
-        groups[1].len(),
-        groups[2].len(),
-        groups[3].len(),
-    ];
+    let sizes: [usize; 4] = std::array::from_fn(|i| groups[i].len());
 
     // `colors = M.fromList $ lightColorGroups intruderHue (map (length . snd)
     // groups)`, `intruderHue = 18 % 360`. The palette is exact `Rational` in
@@ -246,7 +241,7 @@ pub(crate) fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorM
             node_class.push((pair.0, ci));
         }
     }
-    // Every node now takes its class's FINAL colour — the value `M.lookup
+    // Every node takes its class's FINAL colour — the value `M.lookup
     // rInfoVal colorMap` would return for it.
     let by_node = node_class
         .into_iter()

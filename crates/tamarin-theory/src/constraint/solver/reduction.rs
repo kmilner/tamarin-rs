@@ -3094,6 +3094,9 @@ impl<'ctx> Reduction<'ctx> {
         self.solve_term_eqs_ac(strategy, IsAcConstructor::OtherRule, eqs)
     }
 
+    /// [`solve_term_eqs`](Self::solve_term_eqs) with the AC-constructor tag
+    /// threaded through, so a `SplitNow` fan-out can drop unifier arms that
+    /// only permute the rule's two `KU` premise variables.
     #[track_caller]
     pub fn solve_term_eqs_ac(
         &mut self,
@@ -3460,6 +3463,8 @@ impl<'ctx> Reduction<'ctx> {
         self.solve_fact_eqs_ac(strategy, IsAcConstructor::OtherRule, eqs)
     }
 
+    /// [`solve_fact_eqs`](Self::solve_fact_eqs) with the AC-constructor tag
+    /// forwarded to [`solve_term_eqs_ac`](Self::solve_term_eqs_ac).
     #[track_caller]
     pub fn solve_fact_eqs_ac(
         &mut self,
@@ -6967,10 +6972,8 @@ impl<'ctx> Reduction<'ctx> {
                         let is_ac = if goal_ac_headed {
                             use tamarin_term::term::Term;
                             use tamarin_term::vterm::Lit;
-                            let ku_var = |f: &crate::fact::LNFact| match (f.tag, f.terms.first()) {
-                                (crate::fact::FactTag::Ku, Some(Term::Lit(Lit::Var(v))))
-                                    if f.terms.len() == 1 =>
-                                {
+                            let ku_var = |f: &crate::fact::LNFact| match &*f.terms {
+                                [Term::Lit(Lit::Var(v))] if f.tag == crate::fact::FactTag::Ku => {
                                     Some(*v)
                                 }
                                 _ => None,

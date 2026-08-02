@@ -1254,13 +1254,10 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     (!args.quiet).then_some(theory_name.as_str()),
                     elaborated.options.deduction_chain_check,
                 );
-                if !checked.ndc_funs.is_empty() {
-                    let mut sig = std::mem::take(&mut elaborated.signature.maude_sig);
-                    for f in &checked.ndc_funs {
-                        sig = sig
-                            .join_ndc_in_sig(*f, tamarin_term::function_symbols::NdcState::IsNdc);
-                    }
-                    elaborated.signature.maude_sig = sig;
+                for f in &checked.ndc_funs {
+                    let sig = std::mem::take(&mut elaborated.signature.maude_sig);
+                    elaborated.signature.maude_sig =
+                        sig.join_ndc_in_sig(*f, tamarin_term::function_symbols::NdcState::IsNdc);
                 }
                 checked.cache.into()
             });
@@ -1346,7 +1343,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         if auto_sources {
             let m = file_maude
                 .clone()
-                .ok_or_else(|| RunError(format!("failed to start maude at {:?}", maude_path,)))?;
+                .ok_or_else(|| RunError(format!("failed to start maude at {:?}", maude_path)))?;
             tamarin_theory::auto_sources::apply_auto_sources(
                 &mut parsed,
                 &mut elaborated,

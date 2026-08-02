@@ -525,7 +525,8 @@ impl FunSym {
 
     /// NDC state of the symbol, or `None` for the variants that carry no NDC
     /// field: the built-in AC operators, `C`, and `LIST`.  Kept in step with
-    /// [`FunSym::set_ndc`], which writes back to exactly these two variants.
+    /// [`FunSym::set_ndc`], which writes back to exactly the two variants that
+    /// do carry one.
     fn ndc_state(&self) -> Option<NdcState> {
         match self {
             FunSym::NoEq(s) => Some(s.ndc),

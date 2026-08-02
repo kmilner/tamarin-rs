@@ -63,14 +63,13 @@ command -v /usr/bin/time >/dev/null || { echo "bench.sh: needs GNU /usr/bin/time
 
 # Baseline identity check: the generated block's prose asserts a RELEASE
 # baseline, but find_hs() takes whatever `tamarin-prover` is first on PATH —
-# which on a gate-configured machine can be the develop oracle this repo pins.
-# The binary's own `Git revision:` (`Main/Console.hs:206-216`, always the full
-# hash) equal to the submodule pin ⇒ the baseline IS that develop oracle, so
-# the tables would be measured against develop under release prose.  Only that
-# exact revision is caught: a release (revision `UNKNOWN` for a tarball build,
-# otherwise a release hash) passes, and so does a develop build at any OTHER
-# revision.  An unpopulated submodule / a revision-less binary leaves the pin
-# or the revision empty, and the check is then skipped rather than guessing.
+# on a gate-configured machine, the develop oracle this repo pins.  The
+# binary's own `Git revision:` (`Main/Console.hs:206-216`, always the full
+# hash) equal to the submodule pin ⇒ the baseline IS that oracle.  Only that
+# exact revision is caught; a release (revision `UNKNOWN` for a tarball build,
+# otherwise a release hash) and a develop build at any other revision both
+# pass.  An unpopulated submodule or a revision-less binary leaves one side
+# empty, and the check is skipped rather than guessing.
 hs_pin="$(git -C "$repo_root/tamarin-prover" rev-parse HEAD 2>/dev/null)"
 hs_rev="$("$HS_PATH" --version 2>/dev/null | grep -oE 'Git revision: [0-9a-f]{7,40}' | head -1)"
 hs_rev="${hs_rev#Git revision: }"

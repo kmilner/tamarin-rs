@@ -625,8 +625,8 @@ pub enum BinOp {
     NatPlus, // %+
     /// A user-declared `[AC]` function symbol, applied infix (`(x add y)`).
     /// Carries the bare symbol name; the rendered separator is the name
-    /// surrounded by spaces.  The name is interned, so the derived `Copy` /
-    /// `Eq` / `Hash` stay cheap and content-based.
+    /// surrounded by spaces.  The name is interned, which is what lets the
+    /// variant borrow it for `'static` and keep the enum `Copy`.
     AcFct(&'static str),
 }
 

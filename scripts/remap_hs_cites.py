@@ -152,6 +152,11 @@ class Remapper:
             self._groups[path] = decl_groups(nl) if nl else []
         return self._groups[path]
 
+    def new_group_by_name(self, path, name):
+        """The same-named declaration at the new pin, when it is unambiguous."""
+        cands = [ng for ng in self.new_groups(path) if ng[2] == name]
+        return cands[0] if len(cands) == 1 else None
+
     def reanchor(self, path, line, prefer_lo=None, prefer_hi=None):
         """Semantic fallback for a line inside a changed hunk: exact-text
         match, restricted to [prefer_lo, prefer_hi] when given."""
@@ -170,12 +175,10 @@ class Remapper:
         old_groups = decl_groups(self.old_lines(path) or [])
 
         def target_decl():
+            """New-pin extent of the declaration the whole cite anchors into."""
             anchor = sees[0] if sees else parts[0][0]
             g = group_at(old_groups, anchor)
-            if not g:
-                return None
-            cands = [ng for ng in self.new_groups(path) if ng[2] == g[2]]
-            return (g, cands[0]) if len(cands) == 1 else None
+            return self.new_group_by_name(path, g[2]) if g else None
 
         decl = None
 
@@ -187,8 +190,7 @@ class Remapper:
             if decl is None:
                 decl = target_decl()
             if decl:
-                (_, _, _), (ns, ne, _) = decl[0], decl[1]
-                return self.reanchor(path, l, ns, ne)
+                return self.reanchor(path, l, decl[0], decl[1])
             return self.reanchor(path, l)
 
         new_parts = []
@@ -199,10 +201,9 @@ class Remapper:
                 g = group_at(old_groups, a)
                 if g and (a, b) in {(g[0], g[1]),
                                     trim_extent(self.old_lines(path), g[0], g[1])}:
-                    cands = [ng for ng in self.new_groups(path) if ng[2] == g[2]]
-                    if len(cands) == 1:
-                        ns, ne = trim_extent(self.new_lines(path), cands[0][0], cands[0][1])
-                        new_parts.append((ns, ne))
+                    ng = self.new_group_by_name(path, g[2])
+                    if ng:
+                        new_parts.append(trim_extent(self.new_lines(path), ng[0], ng[1]))
                         continue
             na = map_line(a)
             nb = map_line(b) if b is not None else None

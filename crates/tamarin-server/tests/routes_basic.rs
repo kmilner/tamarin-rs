@@ -14,9 +14,9 @@
 //!   - JSON envelope key set (for `/main/*` routes)
 //!
 //! Comparison with Haskell is done against captured responses under
-//! `tests/fixtures/haskell-responses/`.  The criterion is "same JSON
-//! envelope shape" or "same HTML structural markers" — NOT byte
-//! equality.
+//! `tests/fixtures/haskell-responses/`.  The criterion is byte equality
+//! for the error pages, and "same JSON envelope shape" or "same HTML
+//! structural markers" for the payload routes.
 //!
 //! Coverage matrix (LIVE routes):
 //!   - GET /                          [test_get_index]
@@ -531,6 +531,23 @@ async fn test_overview_with_missing_idx_returns_404_html() {
 // Yesod's Not Found page
 // ---------------------------------------------------------------------
 
+/// `path` answers the Not Found page byte-for-byte: 404, the page's content
+/// type, and the captured Haskell body.
+async fn assert_not_found_capture(s: &TestServer, path: &str, capture: &str) {
+    let res = s.client.get(s.url(path)).send().await.expect("send");
+    assert_eq!(res.status(), 404, "{path} must be a 404");
+    assert_eq!(
+        content_type(&res),
+        "text/html; charset=utf-8",
+        "{path} must carry the Not Found page's content type"
+    );
+    assert_eq!(
+        res.text().await.expect("text"),
+        haskell_capture(capture),
+        "{path}"
+    );
+}
+
 /// Every `notFound` carries the same page — the `defaultLayout` frame around
 /// `<h1>Not Found</h1>` and the request's raw path — whatever raised it:
 /// an unknown theory index, a theory path `parseTheoryPath` rejects, or a URL
@@ -543,18 +560,7 @@ async fn test_not_found_page_matches_haskell() {
         ("/thy/trace/1/json/main", "not_found_theory_path.html"),
         ("/nonexistent", "not_found_unknown_route.html"),
     ] {
-        let res = s.client.get(s.url(path)).send().await.expect("send");
-        assert_eq!(res.status(), 404, "{path} must be a 404");
-        assert_eq!(
-            content_type(&res),
-            "text/html; charset=utf-8",
-            "{path} must carry the Not Found page's content type"
-        );
-        assert_eq!(
-            res.text().await.expect("text"),
-            haskell_capture(capture),
-            "{path}"
-        );
+        assert_not_found_capture(&s, path, capture).await;
     }
 }
 
@@ -564,17 +570,7 @@ async fn test_not_found_page_matches_haskell() {
 #[tokio::test]
 async fn test_not_found_page_escapes_the_request_path() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/a&b'c%3Cd"))
-        .send()
-        .await
-        .expect("send");
-    assert_eq!(res.status(), 404);
-    assert_eq!(
-        res.text().await.expect("text"),
-        haskell_capture("not_found_escaped_path.html")
-    );
+    assert_not_found_capture(&s, "/a&b'c%3Cd", "not_found_escaped_path.html").await;
 
     // Percent-encoded bytes stay encoded, and `?…` is not part of the path.
     let res = s
@@ -609,18 +605,7 @@ async fn test_unusable_theory_index_is_not_found() {
             "not_found_huge_idx.html",
         ),
     ] {
-        let res = s.client.get(s.url(path)).send().await.expect("send");
-        assert_eq!(res.status(), 404, "{path} must be a 404");
-        assert_eq!(
-            content_type(&res),
-            "text/html; charset=utf-8",
-            "{path} must carry the Not Found page's content type"
-        );
-        assert_eq!(
-            res.text().await.expect("text"),
-            haskell_capture(capture),
-            "{path}"
-        );
+        assert_not_found_capture(&s, path, capture).await;
     }
     // `01` and `+1` are theory 1 — `PathPiece Int` reads both.
     for path in ["/thy/trace/01/overview/help", "/thy/trace/+1/overview/help"] {

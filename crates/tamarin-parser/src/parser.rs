@@ -1467,10 +1467,10 @@ impl<'a> Parser<'a> {
         if self.try_punct("[") {
             loop {
                 self.skip_ws();
-                match self.function_attribute() {
-                    Some(a) => atts.push(a),
-                    None => break,
-                }
+                let Some(a) = self.function_attribute() else {
+                    break;
+                };
+                atts.push(a);
                 if !self.try_punct(",") {
                     break;
                 }

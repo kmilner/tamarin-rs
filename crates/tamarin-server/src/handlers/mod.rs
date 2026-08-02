@@ -5,14 +5,19 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-/// Shared `200 OK` HTML response constructor (`text/html; charset=utf-8`).
-pub(crate) fn html_response(html: String) -> Response {
+/// Shared HTML response constructor (`text/html; charset=utf-8`).
+fn html_with_status(status: StatusCode, html: String) -> Response {
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
         header::HeaderValue::from_static("text/html; charset=utf-8"),
     );
-    (StatusCode::OK, headers, html).into_response()
+    (status, headers, html).into_response()
+}
+
+/// Shared `200 OK` HTML response constructor.
+pub(crate) fn html_response(html: String) -> Response {
+    html_with_status(StatusCode::OK, html)
 }
 
 /// Shared `200 OK` plain-text response constructor (`text/plain; charset=utf-8`).
@@ -49,12 +54,7 @@ pub(crate) fn default_layout(title: &str, body: &str) -> String {
 /// The error widgets themselves are not `$newline never`, so their markup
 /// arrives with the newlines hamlet puts between their lines.
 fn error_page(status: StatusCode, title: &str, body: &str) -> Response {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("text/html; charset=utf-8"),
-    );
-    (status, headers, default_layout(title, body)).into_response()
+    html_with_status(status, default_layout(title, body))
 }
 
 /// Shared `500 Internal Server Error` response constructor: the page Yesod

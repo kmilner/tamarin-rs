@@ -62,20 +62,16 @@ pub struct MaudeSig {
     pub irreducible_fun_syms_fast: tamarin_utils::FastSet<FunSym>,
     pub reducible_fun_syms_fast: tamarin_utils::FastSet<FunSym>,
     /// `maude_proc::term_ac_c_free` of each `st_rules` LHS, in `st_rules`
-    /// iteration order, kept in lock-step by [`MaudeSig::refresh`].  The
-    /// predicate is a full walk of the rule LHS and `norm::go_nf` needs it per
-    /// rule to choose between the pure no-AC st-rule matcher and the
-    /// Maude-backed one — at every `App` node of every normal-form check, one
-    /// of the proof search's hottest predicates.  Read it through
-    /// [`MaudeSig::st_lhs_ac_c_free_cache`], which yields `None` once the
-    /// vector's length no longer matches `st_rules`, or through
-    /// [`MaudeSig::st_lhs_all_ac_c_free`], which then recomputes the
-    /// predicate from the rules.
+    /// iteration order, kept in lock-step by [`MaudeSig::refresh`].  Computing
+    /// the predicate walks the whole rule LHS, and `norm::go_nf` needs it per
+    /// rule — at every `App` node of every normal-form check — to choose
+    /// between the pure no-AC st-rule matcher and the Maude-backed one.  Read
+    /// it through [`MaudeSig::st_lhs_ac_c_free_cache`] or
+    /// [`MaudeSig::st_lhs_all_ac_c_free`], which recompute from the rules once
+    /// the vector's length stops matching `st_rules`.
     ///
-    /// That length check samples the alignment invariant rather than
-    /// establishing it: a mutation that keeps the CARDINALITY of `st_rules`
-    /// constant — swapping one rule for another, or the remove-then-insert
-    /// pair of [`MaudeSig::add_ctxt_st_rule`] — leaves the flags describing
+    /// That length check only SAMPLES the alignment invariant: a mutation
+    /// keeping the CARDINALITY of `st_rules` constant leaves flags describing
     /// the old rules while the cache still reports itself valid, and
     /// `norm::go_nf` then reads a flag belonging to a different rule.  Every
     /// in-tree writer of `st_rules` ends in [`MaudeSig::refresh`], which
@@ -991,7 +987,6 @@ mod tests {
     /// `xorr(x, x) = zeroo` with `xorr/2 [AC]` — an st rule whose LHS is
     /// Ac-headed, so `term_ac_c_free` is false for it.
     fn ac_headed_st_rule() -> CtxtStRule {
-        use crate::function_symbols::{Constructability, NoEqSym, Privacy};
         let xorr = AcFctSym::new(
             b"xorr".to_vec(),
             Privacy::Public,

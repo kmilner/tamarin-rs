@@ -220,16 +220,16 @@ fn apply_method_and_redirect(
         // (`src/Web/Handler.hs:1081`).  RS deliberately corrects that: an
         // index naming no ranked method is one failure, whichever side of the
         // list it falls off, and it always answers that alert.
-        let n_methods = methods.len();
-        let Some(method) = method_nr
+        match method_nr
             .checked_sub(1)
             .and_then(|nth| usize::try_from(nth).ok())
-            .filter(|nth| *nth < n_methods)
             .and_then(|nth| methods.into_iter().nth(nth))
-        else {
-            return json_resp::alert("Sorry, but the prover failed on the selected method!");
-        };
-        method
+        {
+            Some(m) => m,
+            None => {
+                return json_resp::alert("Sorry, but the prover failed on the selected method!")
+            }
+        }
     };
     // Allocate a fresh theory idx so the post-step state doesn't
     // overwrite the source (matches Haskell's `modifyTheory` →
@@ -1579,9 +1579,6 @@ pub async fn graph_json(
         return not_found();
     };
     let opts = graph_options_from_map(&query);
-    // The source-case list lives on the materialised proof state, so the
-    // source branch re-reads the entry afterwards (as the `main` handler does).
-    materialise_proof_state_if_needed(&state, idx, &path);
     let Some(name) = state.store.name(idx) else {
         return not_found();
     };
@@ -1609,6 +1606,9 @@ pub async fn graph_json(
             src_idx,
             case_idx,
         } => {
+            // The source cases live on the materialised proof state, so the
+            // entry is re-read afterwards (as the `main` handler does).
+            materialise_proof_state_if_needed(&state, idx, &path);
             let Some(entry) = state.store.get(idx) else {
                 return not_found();
             };

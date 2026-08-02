@@ -56,6 +56,21 @@ fi
 
 mkdir -p "$RES_DIR"
 
+# Poll the just-launched $SERVER_PID until it serves the root page; dump its
+# log and give up otherwise.  Optional $1 names the theory it is serving.
+wait_for_server() {
+  for _ in {1..40}; do
+    if curl -fs -o /dev/null "$BASE/" 2>/dev/null; then
+      return
+    fi
+    sleep 0.5
+  done
+  echo "error: Haskell server never came up${1:+ for $1} on $BASE/ (log: /tmp/haskell-server.log)" >&2
+  cat /tmp/haskell-server.log >&2
+  kill "$SERVER_PID" 2>/dev/null || true
+  exit 1
+}
+
 # Spin Haskell up in its own work-dir so it doesn't dirty ours.
 WORKDIR="$(mktemp -d)"
 # BIGDIR is the second phase's work-dir (created further down); declaring it
@@ -68,20 +83,7 @@ cp "$FIXTURE" "$WORKDIR/issue193.spthy"
 echo "starting Haskell tamarin-prover on port $PORT ..."
 ( cd "$WORKDIR" && tamarin-prover interactive --port="$PORT" --no-logging ./ ) >/tmp/haskell-server.log 2>&1 &
 SERVER_PID=$!
-
-# Wait for the server to start serving.
-for i in {1..40}; do
-  if curl -fs -o /dev/null "$BASE/" 2>/dev/null; then
-    break
-  fi
-  sleep 0.5
-done
-if ! curl -fs -o /dev/null "$BASE/" 2>/dev/null; then
-  echo "error: Haskell server never came up on $BASE/ (log: /tmp/haskell-server.log)" >&2
-  cat /tmp/haskell-server.log >&2
-  kill "$SERVER_PID" 2>/dev/null || true
-  exit 1
-fi
+wait_for_server
 echo "Haskell server up, capturing fixtures into $RES_DIR ..."
 
 # Convenience helper.
@@ -125,7 +127,7 @@ fetch autoprove_on_proven.json  "/thy/trace/2/autoprove/idfs/0/False/proof/debug
 fetch autoprove_on_rules.json   "/thy/trace/1/autoprove/idfs/0/False/rules"
 fetch autoprove_all.json        "/thy/trace/1/autoproveAll/idfs/0/proof/debug"
 
-# ---------------- Live routes (now fully ported) ----------------
+# ---------------- Live routes (fully ported) ----------------
 fetch next.txt                  "/thy/trace/1/next/main/lemma/debug"
 fetch next_help.txt             "/thy/trace/1/next/main/help"
 fetch prev.txt                  "/thy/trace/1/prev/main/lemma/debug"
@@ -203,19 +205,7 @@ BIGDIR="$(mktemp -d)"
 cp "${SCRIPT_DIR}/fixtures/BigTermProved.spthy" "$BIGDIR/BigTermProved.spthy"
 ( cd "$BIGDIR" && tamarin-prover interactive --port="$PORT" --no-logging ./ ) >>/tmp/haskell-server.log 2>&1 &
 SERVER_PID=$!
-for i in {1..40}; do
-  if curl -fs -o /dev/null "$BASE/" 2>/dev/null; then
-    break
-  fi
-  sleep 0.5
-done
-if ! curl -fs -o /dev/null "$BASE/" 2>/dev/null; then
-  echo "error: Haskell server never came up for BigTermProved on $BASE/ (log: /tmp/haskell-server.log)" >&2
-  cat /tmp/haskell-server.log >&2
-  kill "$SERVER_PID" 2>/dev/null || true
-  rm -rf "$BIGDIR"
-  exit 1
-fi
+wait_for_server BigTermProved
 fetch json_proof_abbrev.json    "/thy/trace/1/json/proof/done/_/Init/Init?abbrevInBackend=1"
 rm -rf "$BIGDIR"
 

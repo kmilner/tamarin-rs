@@ -52,8 +52,9 @@ use tamarin_theory::rule::{
     is_pub_constr_rule_info, rule_name_string, ProtoRuleName, RuleACInst, RuleInfo,
 };
 
-use crate::graph::abbreviation::{compute_abbreviations, order_abbreviations_for_json};
-use crate::graph::abbreviation::{AbbreviationOptions, Abbreviations};
+use crate::graph::abbreviation::{
+    compute_abbreviations, order_abbreviations_for_json, AbbreviationOptions, Abbreviations,
+};
 use crate::graph::color::{build_node_color_map, fact_doc_of, reason_color, NodeColorMap};
 use crate::graph::options::GraphOptions;
 use crate::graph::render_system::RenderSystem;
@@ -149,49 +150,29 @@ fn resolve_node_conc_fact<'a>(conc: &NodeConc, rules: &NodeRules<'a>) -> Option<
 /// cleanString (c:xs)            = c : cleanString xs
 /// ```
 ///
-/// so a space is consed back onto the remaining input and matched again.  That
-/// single re-consed space is tracked by `pending_space`: the virtual input is
-/// one `' '` (when set) followed by `chars[i..]`.
+/// so a space is consed back onto the remaining input and matched again.  The
+/// only equations a re-consed space can match are the first and the third, so
+/// a space keeps absorbing `"\n "` and `" "` and is then emitted by the last
+/// equation — which is what the inner loop does.
 fn clean_string(s: &str) -> String {
     let chars: Vec<char> = s.chars().collect();
     let mut out = String::with_capacity(chars.len());
     let mut i = 0usize;
-    let mut pending_space = false;
-    let peek = |pending: bool, i: usize, k: usize| -> Option<char> {
-        if pending {
-            if k == 0 {
-                Some(' ')
-            } else {
-                chars.get(i + k - 1).copied()
+    while let Some(&c) = chars.get(i) {
+        i += 1;
+        match c {
+            '\n' => {}
+            ' ' => {
+                loop {
+                    match (chars.get(i), chars.get(i + 1)) {
+                        (Some('\n'), Some(' ')) => i += 2,
+                        (Some(' '), _) => i += 1,
+                        _ => break,
+                    }
+                }
+                out.push(' ');
             }
-        } else {
-            chars.get(i + k).copied()
-        }
-    };
-    // Consume `n` characters of the virtual input.
-    let drop_n = |n: usize, i: &mut usize, pending: &mut bool| {
-        if *pending {
-            *pending = false;
-            *i += n - 1;
-        } else {
-            *i += n;
-        }
-    };
-    while let Some(c0) = peek(pending_space, i, 0) {
-        if c0 == ' '
-            && peek(pending_space, i, 1) == Some('\n')
-            && peek(pending_space, i, 2) == Some(' ')
-        {
-            drop_n(3, &mut i, &mut pending_space);
-            pending_space = true;
-        } else if c0 == '\n' {
-            drop_n(1, &mut i, &mut pending_space);
-        } else if c0 == ' ' && peek(pending_space, i, 1) == Some(' ') {
-            drop_n(2, &mut i, &mut pending_space);
-            pending_space = true;
-        } else {
-            out.push(c0);
-            drop_n(1, &mut i, &mut pending_space);
+            _ => out.push(c),
         }
     }
     out

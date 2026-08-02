@@ -215,7 +215,7 @@ pub fn pp_name(n: &Name, out: &mut String) {
 }
 
 pub fn ac_op_symbol(op: AcSym) -> &'static str {
-    // Haskell `prettyTerm`'s AC arms (Term.hs).
+    // Haskell `prettyTerm`'s AC arms (Term.hs:304-309).
     //   Mult => "*"; Xor => "⊕"; Union => "++"; NatPlus => "%+"
     // We use the unicode char for Xor since the rest of the UI
     // already passes UTF-8 around and the JS frontend renders it.

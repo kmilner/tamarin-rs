@@ -304,8 +304,8 @@ pub struct Options {
     pub compress_events: bool,
     /// HS `_deductionChainCheck`: run the no-deconstruction-chain (NDC)
     /// check at theory load. Enabled by default; `--no-ndc` disables it.
-    /// Consulted by the load paths when they run the once-per-theory
-    /// `close_rule::check_close_intr_rule` pass (per-theory, like HS).
+    /// Consulted by the load paths that run the once-per-theory
+    /// `close_rule::check_close_intr_rule` pass.
     pub deduction_chain_check: bool,
     /// Auto-generated `default` heuristic used to discharge proofs when
     /// no explicit heuristic is supplied.

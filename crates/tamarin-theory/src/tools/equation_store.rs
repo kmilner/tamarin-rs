@@ -578,10 +578,7 @@ impl EquationStore {
             }
             Ok(out)
         }
-        for disj in self.conj.iter_mut() {
-            if disj.split_id != split_id {
-                continue;
-            }
+        for disj in self.conj.iter_mut().filter(|d| d.split_id == split_id) {
             // HS walks `S.toList substs` (sorted) and rebuilds via
             // `S.fromList`; mirror with an explicit sort on both ends.
             let mut rest: Vec<LNSubstVFresh> = std::mem::take(&mut disj.substs);
@@ -3105,8 +3102,8 @@ impl<'a> PermLhs<'a> {
         // leaves the images untouched, and both `v1` and `v2` are in the
         // context either way.
         let avoid_ctx: LNTerm = f_app_list(
-            std::iter::once(var_term(*v1))
-                .chain(std::iter::once(var_term(*v2)))
+            [var_term(*v1), var_term(*v2)]
+                .into_iter()
                 .chain(subst1_fixed.iter().map(|(v, _)| var_term(*v)))
                 .chain(subst1_fixed.iter().map(|(_, t)| t.clone()))
                 .collect(),

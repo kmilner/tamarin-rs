@@ -14,7 +14,9 @@ use crate::function_symbols::{
     MULT_SYM_STRING, MUN_SYM_STRING, NAT_PLUS_SYM_STRING, XOR_SYM_STRING,
 };
 use crate::lterm::LSort;
-use crate::maude_print::{fun_sym_decode, parse_lsort_sym, replace_minus, FUN_SYM_PREFIX};
+use crate::maude_print::{
+    fun_sym_decode, parse_lsort_sym, replace_minus, ATTR_BLOCK_LEN, FUN_SYM_PREFIX,
+};
 use crate::maude_types::{MSubst, MTerm, MaudeLit};
 use crate::term::Term;
 
@@ -505,12 +507,6 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
     };
     Term::App(FunSym::NoEq(sym), args.into())
 }
-
-/// Number of attribute characters `funSymEncodeAttr` emits between the
-/// `tam` prefix and the user-given name (HS Parser.hs:76-88, mirrored by
-/// `maude_print::fun_sym_encode_attr`; `funSymDecode` splits at the same
-/// width, Parser.hs:92-105).
-const ATTR_BLOCK_LEN: usize = 4;
 
 /// Is `ident` the Maude encoding of a user-defined AC symbol?
 ///

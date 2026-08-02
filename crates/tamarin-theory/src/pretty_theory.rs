@@ -764,7 +764,7 @@ pub fn pretty_function_typing_info(fti: &crate::theory::SapicFunSym) -> crate::p
         UserDefinedSym::NoEqUser(s) => (s.privacy, s.constructability, s.ndc, false),
         UserDefinedSym::AcFctUser(s) => (s.privacy, s.constructability, s.ndc, true),
     };
-    let name = String::from_utf8_lossy(fti.sym.name()).to_string();
+    let name = String::from_utf8_lossy(fti.sym.name());
     let args: Vec<Doc> = fti.arg_types.iter().map(print_type).collect();
     let mut d = Doc::text("function:")
         .beside_sp(Doc::text(name))
@@ -1696,18 +1696,9 @@ fn render_loop_breakers_line(breakers: &[crate::rule::PremIdx], indent: usize) -
     if breakers.is_empty() {
         return String::new();
     }
-    let mut body = String::from(if breakers.len() == 1 {
-        "loop breaker: ["
-    } else {
-        "loop breakers: ["
-    });
-    for (i, b) in breakers.iter().enumerate() {
-        if i > 0 {
-            body.push(',');
-        }
-        body.push_str(&b.0.to_string());
-    }
-    body.push(']');
+    let plural = if breakers.len() == 1 { "" } else { "s" };
+    let idxs: Vec<String> = breakers.iter().map(|b| b.0.to_string()).collect();
+    let body = format!("loop breaker{}: [{}]", plural, idxs.join(","));
     // HS `prettyLoopBreakers` emits this via `lineComment_` (Rule.hs:1419-1429,
     // see lines 1421,1429), so the HtmlDoc pane render wraps it in an
     // `hl_comment` span; the plain render is the bare `// …` text.

@@ -198,6 +198,12 @@ pub fn haskell_capture_keys(name: &str) -> std::collections::BTreeSet<String> {
     json_top_keys(&v)
 }
 
+/// The key set a single-field JSON envelope (`{alert}`, `{redirect}`) has.
+#[allow(dead_code)]
+pub fn one_key_set(k: &str) -> std::collections::BTreeSet<String> {
+    std::iter::once(k.to_string()).collect()
+}
+
 #[allow(dead_code)]
 pub fn json_top_keys(v: &serde_json::Value) -> std::collections::BTreeSet<String> {
     match v {

@@ -76,9 +76,9 @@ impl From<std::sync::Arc<Vec<IntrRuleAC>>> for IntrRuleCache {
     }
 }
 
-/// Copy a borrowed rule list into a fresh shared cache.  Used at the crate
-/// boundary, where a caller still hands in `&[IntrRuleAC]`; the copy happens
-/// once per entry point rather than once per context.
+/// Copy a borrowed rule list into a fresh shared cache: the borrowed arm of
+/// the `Option<impl Into<IntrRuleCache>>` constructor parameters, costing one
+/// copy per entry point rather than one per derived context.
 impl From<&[IntrRuleAC]> for IntrRuleCache {
     fn from(rules: &[IntrRuleAC]) -> Self {
         Self::from(rules.to_vec())
@@ -132,8 +132,11 @@ impl<'a> IntoIterator for &'a IntrRuleCache {
 ///    ORDER; it only avoids re-deep-copying identical read-only data.
 #[derive(Debug)]
 pub struct ProofContextShared {
-    /// Special intruder rules — `Coerce`, `PubConstr`, `FreshConstr`,
-    /// `ISend`, `IRecv` (and `IEquality` in diff mode). These let the
+    /// The theory's intruder-rule cache, in the assembly order of
+    /// [`ProofContext::assemble_intruder_rules`]: subterm constructor rules,
+    /// the special rules (`Coerce`, `PubConstr`, `FreshConstr`, `ISend`,
+    /// `IRecv`, plus `IEquality` in diff mode), the MSet/Xor rules, the
+    /// user-symbol destruction rules, then the DH/BP variants.  These let the
     /// solver discharge `KU(_)` / `KD(_)` goals that arise from
     /// `In(_)`-fact reasoning.  Held as a shared [`IntrRuleCache`] handle,
     /// so cloning the bundle shares the rule list instead of copying it.
@@ -571,33 +574,7 @@ impl ProofContext {
         // the stored cases, which are re-freshened from `avoid(live_sys)` on
         // every apply, so the global counter must not retain the advance.
         self.maude.reset_counter_to(saturate_cnt_before);
-        if tamarin_utils::env_gate!("TAM_RS_DBG_SOURCES_DUMP") {
-            for (i, src) in self.full_sources.iter().enumerate() {
-                let goal = match &src.goal {
-                    crate::constraint::constraints::Goal::Action(_, fa) => {
-                        format!("Action {}", crate::pretty_system::pretty_fact(fa))
-                    }
-                    crate::constraint::constraints::Goal::Premise(_, fa) => {
-                        format!("Premise {}", crate::pretty_system::pretty_fact(fa))
-                    }
-                    _ => "other".to_string(),
-                };
-                let names: Vec<String> = src
-                    .cases_cell
-                    .lock()
-                    .unwrap()
-                    .as_ref()
-                    .map(|cs| cs.iter().map(|(ns, _)| ns.join("_")).collect())
-                    .unwrap_or_default();
-                eprintln!(
-                    "[SRCDUMP] {} goal=<{}> ncases={} names={:?}",
-                    i,
-                    goal,
-                    names.len(),
-                    names
-                );
-            }
-        }
+        self.dump_sources();
         *self.saturate_state.lock().unwrap() = SaturateState::Done;
     }
 
@@ -784,38 +761,70 @@ impl ProofContext {
     /// Debug dump of the context's final intruder-rule cache, gated by
     /// `TAM_RS_DBG_INTR_DUMP`.
     fn dump_intruder_rules(out: &[IntrRuleAC]) {
-        if tamarin_utils::env_gate!("TAM_RS_DBG_INTR_DUMP") {
-            use crate::rule::IntrRuleACInfo;
-            for (i, r) in out.iter().enumerate() {
-                let kind = match &r.info {
-                    IntrRuleACInfo::ConstrRule(n, _) => {
-                        format!("CONSTR {}", String::from_utf8_lossy(n))
-                    }
-                    IntrRuleACInfo::DestrRule(n, b, s, c, _) => {
-                        format!(
-                            "DESTR {} b={} s={} c={}",
-                            String::from_utf8_lossy(n),
-                            b,
-                            s,
-                            c
-                        )
-                    }
-                    other => format!("{:?}", other),
-                };
-                let pf = |fs: &[crate::fact::LNFact]| {
-                    fs.iter()
-                        .map(crate::pretty_system::pretty_fact)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                };
-                eprintln!(
-                    "[INTRDUMP] {} {} | prems=[{}] concs=[{}]",
-                    i,
-                    kind,
-                    pf(&r.premises),
-                    pf(&r.conclusions)
-                );
-            }
+        if !tamarin_utils::env_gate!("TAM_RS_DBG_INTR_DUMP") {
+            return;
+        }
+        use crate::rule::IntrRuleACInfo;
+        let pf = |fs: &[crate::fact::LNFact]| {
+            fs.iter()
+                .map(crate::pretty_system::pretty_fact)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        for (i, r) in out.iter().enumerate() {
+            let kind = match &r.info {
+                IntrRuleACInfo::ConstrRule(n, _) => {
+                    format!("CONSTR {}", String::from_utf8_lossy(n))
+                }
+                IntrRuleACInfo::DestrRule(n, b, s, c, _) => format!(
+                    "DESTR {} b={} s={} c={}",
+                    String::from_utf8_lossy(n),
+                    b,
+                    s,
+                    c
+                ),
+                other => format!("{:?}", other),
+            };
+            eprintln!(
+                "[INTRDUMP] {} {} | prems=[{}] concs=[{}]",
+                i,
+                kind,
+                pf(&r.premises),
+                pf(&r.conclusions)
+            );
+        }
+    }
+
+    /// Debug dump of this context's precomputed sources — one line per
+    /// source, with its goal and its materialised case names — gated by
+    /// `TAM_RS_DBG_SOURCES_DUMP`.
+    fn dump_sources(&self) {
+        if !tamarin_utils::env_gate!("TAM_RS_DBG_SOURCES_DUMP") {
+            return;
+        }
+        use crate::constraint::constraints::Goal;
+        for (i, src) in self.full_sources.iter().enumerate() {
+            let goal = match &src.goal {
+                Goal::Action(_, fa) => format!("Action {}", crate::pretty_system::pretty_fact(fa)),
+                Goal::Premise(_, fa) => {
+                    format!("Premise {}", crate::pretty_system::pretty_fact(fa))
+                }
+                _ => "other".to_string(),
+            };
+            let names: Vec<String> = src
+                .cases_cell
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|cs| cs.iter().map(|(ns, _)| ns.join("_")).collect())
+                .unwrap_or_default();
+            eprintln!(
+                "[SRCDUMP] {} goal=<{}> ncases={} names={:?}",
+                i,
+                goal,
+                names.len(),
+                names
+            );
         }
     }
 

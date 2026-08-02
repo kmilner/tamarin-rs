@@ -229,12 +229,9 @@ def main():
         record(p)
     for p in proof_nodes:
         record(p)
-        gd = p.replace("/main/proof/", "/interactive-graph-def/proof/")
-        record(gd)
-        gj = p.replace("/main/proof/", "/json/proof/")
-        record(gj)
-        it = p.replace("/main/proof/", "/intdot/proof/")
-        record(it)
+        # same node under the DOT, JSON-graph and HTML-shell routes
+        for route in ("interactive-graph-def", "json", "intdot"):
+            record(p.replace("/main/proof/", f"/{route}/proof/"))
 
     # A dead or dying server (OOM-guard kill, per-request heap exhaustion)
     # yields REQUEST_ERROR bodies; a manifest containing them would be cached

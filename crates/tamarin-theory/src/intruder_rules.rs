@@ -142,7 +142,7 @@ pub fn destruction_rules(
     diff: bool,
     rule: &tamarin_term::subterm_rule::CtxtStRule,
 ) -> Vec<IntrRuleAC> {
-    use tamarin_term::function_symbols::{AcFctSym, AcSym, FunSym, NoEqSym, Privacy};
+    use tamarin_term::function_symbols::{AcFctSym, AcSym, NoEqSym, Privacy};
     use tamarin_term::lterm::frees;
     use tamarin_term::positions::Position;
     use tamarin_term::term::Term;
@@ -275,7 +275,7 @@ pub fn destruction_rules(
             }
             out.push(Rule::new(info, prems, vec![kd_fact(rhs.clone())], vec![]));
         }
-        // Update accumulators and walk down.
+        // Walk down into argument `i`.
         posname = next_posname;
         t = t_new;
     }
@@ -284,10 +284,13 @@ pub fn destruction_rules(
 
 /// `showFunSymName` (Term.hs) — the plain-name rendering used for intruder
 /// rule names and case names: user symbols print their own name; the builtin
-/// AC/C operators print their `*SymString` names.
+/// AC/C operators print their `*SymString` names.  Note `Union` renders as
+/// HS's `munSymString` ("mun"), NOT `unionSymString` ("union") — the two are
+/// distinct upstream, and `multiset_intruder_rules` names its rules from the
+/// latter.
 pub fn show_fun_sym_name(f: &FunSym) -> std::borrow::Cow<'static, str> {
     use std::borrow::Cow;
-    use tamarin_term::function_symbols::{AcSym, CSym, FunSym};
+    use tamarin_term::function_symbols::{AcSym, CSym};
     match f {
         // `name` is `&'static [u8]`, so the lossy conversion is already a
         // `Cow<'static, str>` (borrowed whenever the name is valid UTF-8).
@@ -721,6 +724,24 @@ pub fn construction_rules(
     use tamarin_term::function_symbols::{AcSym, Constructability, Privacy, UserDefinedSym};
     use tamarin_term::term::{f_app_ac, f_app_no_eq};
 
+    // `vars = take k [ varTerm (LVar "x" LSortMsg i) | i <- [0..] ]`.
+    let msg_vars = |k: usize| -> Vec<LNTerm> {
+        (0..k)
+            .map(|i| var_term(LVar::new("x", LSort::Msg, i as u64)))
+            .collect()
+    };
+    // Shared body of `createRuleNoEq` / `createRuleAC`:
+    // `(map kuFact vars) --[kuFact m]-> [kuFact m]`, named after the symbol.
+    let ku_constr_rule = |name: &[u8], fun: FunSym, prems: Vec<LNFact>, m: LNTerm| {
+        let concfact = ku_fact(m);
+        Rule::new(
+            IntrRuleACInfo::ConstrRule(underscore_prefixed(name), fun),
+            prems,
+            vec![concfact.clone()],
+            vec![concfact],
+        )
+    };
+
     let mut out = Vec::new();
     // `createRuleNoEq` comprehension — public NoEq constructors.
     for u in f_sig {
@@ -731,17 +752,14 @@ pub fn construction_rules(
         if s.privacy != Privacy::Public || s.constructability != Constructability::Constructor {
             continue;
         }
-        let arity = s.arity;
-        // Build vars x_0 ... x_{k-1} : Msg
-        let xs: Vec<tamarin_term::lterm::LNTerm> = (0..arity)
-            .map(|i| var_term(LVar::new("x", LSort::Msg, i as u64)))
-            .collect();
+        let xs = msg_vars(s.arity);
         let prems: Vec<LNFact> = xs.iter().cloned().map(ku_fact).collect();
-        let m = f_app_no_eq(*s, xs);
-        let conc = ku_fact(m.clone());
-        let act = ku_fact(m);
-        let info = IntrRuleACInfo::ConstrRule(underscore_prefixed(s.name), FunSym::NoEq(*s));
-        out.push(Rule::new(info, prems, vec![conc], vec![act]));
+        out.push(ku_constr_rule(
+            s.name,
+            FunSym::NoEq(*s),
+            prems,
+            f_app_no_eq(*s, xs),
+        ));
     }
     // `createRuleAC` comprehension — public AC constructors (arity 2).
     for u in f_sig {
@@ -752,16 +770,14 @@ pub fn construction_rules(
         if s.privacy != Privacy::Public || s.constructability != Constructability::Constructor {
             continue;
         }
-        let xs: Vec<tamarin_term::lterm::LNTerm> = (0..2u64)
-            .map(|i| var_term(LVar::new("x", LSort::Msg, i)))
-            .collect();
+        let xs = msg_vars(2);
         let prems: Vec<LNFact> = xs.iter().cloned().map(ku_fact).collect();
-        let m = f_app_ac(AcSym::AcFct(*s), xs);
-        let conc = ku_fact(m.clone());
-        let act = ku_fact(m);
-        let info =
-            IntrRuleACInfo::ConstrRule(underscore_prefixed(s.name), FunSym::Ac(AcSym::AcFct(*s)));
-        out.push(Rule::new(info, prems, vec![conc], vec![act]));
+        out.push(ku_constr_rule(
+            s.name,
+            FunSym::Ac(AcSym::AcFct(*s)),
+            prems,
+            f_app_ac(AcSym::AcFct(*s), xs),
+        ));
     }
     out
 }
@@ -786,7 +802,7 @@ pub fn construction_rules(
 
 /// `isPrivateFunction` (Term.hs:203-205): top-level function symbol is Private.
 pub fn is_private_function(t: &LNTerm) -> bool {
-    use tamarin_term::function_symbols::{FunSym, NoEqSym, Privacy};
+    use tamarin_term::function_symbols::{NoEqSym, Privacy};
     use tamarin_term::term::Term;
     matches!(
         t,
@@ -893,12 +909,9 @@ fn decompose_not_subterm(diff: bool, f: FunSym, rules: &[IntrRuleAC]) -> Vec<Int
             _ => continue,
         };
         // `flhs = FAPP f (lhs : foldMap getFactTerms other_prems)`.
-        let mut args: Vec<LNTerm> = vec![lhs.clone()];
-        for p in other_prems {
-            for t in p.terms.iter() {
-                args.push(t.clone());
-            }
-        }
+        let args: Vec<LNTerm> = std::iter::once(lhs.clone())
+            .chain(other_prems.iter().flat_map(|p| p.terms.iter().cloned()))
+            .collect();
         let flhs: LNTerm = Term::App(f, args.into());
         if let Some(context) = rrule_to_ctxt_st_rule(&RRule::new(flhs, tc.clone())) {
             out.extend(destruction_rules(diff, &context));
@@ -962,12 +975,9 @@ pub fn destruction_rules_no_eq(
                 .map(|i| var_term(LVar::new("x", LSort::Msg, i as u64)))
                 .collect();
             let mut prems = vec![kd_fact(vars[k - 1].clone())];
-            for v in vars.iter().take(k - 1) {
-                prems.push(ku_fact(v.clone()));
-            }
-            let mut rev = vars;
-            rev.reverse();
-            let concfact = kd_fact(f_app_no_eq(*f, rev));
+            prems.extend(vars.iter().take(k - 1).cloned().map(ku_fact));
+            // `concfact = kdFact (fAppNoEq f (reverse vars))`.
+            let concfact = kd_fact(f_app_no_eq(*f, vars.into_iter().rev().collect()));
             Rule::new(info, prems, vec![concfact.clone()], vec![concfact])
         } else {
             let concfact = kd_fact(f_app_no_eq(*f, vec![]));
@@ -1362,6 +1372,25 @@ fn variants_intruder_with(
     kept_idx.into_iter().rev().map(|k| rev[k].clone()).collect()
 }
 
+/// `map fst (varOccurences ru)` — a rule's distinct variables, sorted.
+fn rule_vars(r: &IntrRuleAC) -> Vec<LVar> {
+    use tamarin_term::lterm::HasFrees;
+    let mut s: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
+    r.for_each_free(&mut |v| {
+        s.insert(*v);
+    });
+    s.into_iter().collect()
+}
+
+/// `rPrems ++ rConcs ++ rActs` — the fact sequence HS's `matchFacts` walks,
+/// concatenated across section boundaries.
+fn rule_facts(r: &IntrRuleAC) -> impl Iterator<Item = &LNFact> {
+    r.premises
+        .iter()
+        .chain(r.conclusions.iter())
+        .chain(r.actions.iter())
+}
+
 /// `equalRuleUpToRenamingIgnoringNames` — port of
 /// `Theory.Model.Rule.equalRuleUpToRenamingIgnoringNames` (Rule.hs).
 ///
@@ -1393,7 +1422,6 @@ pub fn equal_rule_up_to_renaming_ignoring_names(
     r1: &IntrRuleAC,
     r2: &IntrRuleAC,
 ) -> bool {
-    use tamarin_term::lterm::HasFrees;
     use tamarin_term::rewriting::Equal;
     use tamarin_term::subst_vfresh::LNSubstVFresh;
 
@@ -1409,18 +1437,7 @@ pub fn equal_rule_up_to_renaming_ignoring_names(
             rhs: b.clone(),
         });
     }
-    let pair_iter = r1
-        .premises
-        .iter()
-        .chain(r1.conclusions.iter())
-        .chain(r1.actions.iter())
-        .zip(
-            r2.premises
-                .iter()
-                .chain(r2.conclusions.iter())
-                .chain(r2.actions.iter()),
-        );
-    for (f1, f2) in pair_iter {
+    for (f1, f2) in rule_facts(r1).zip(rule_facts(r2)) {
         if f1.tag != f2.tag {
             return false;
         }
@@ -1432,28 +1449,14 @@ pub fn equal_rule_up_to_renaming_ignoring_names(
         }
     }
 
-    // Collect each rule's vars (occurrences-set).
-    let vars_r1: Vec<LVar> = {
-        let mut s: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
-        r1.for_each_free(&mut |v| {
-            s.insert(*v);
-        });
-        s.into_iter().collect()
-    };
-    let vars_r2: Vec<LVar> = {
-        let mut s: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
-        r2.for_each_free(&mut |v| {
-            s.insert(*v);
-        });
-        s.into_iter().collect()
-    };
-
     // Trivial case: no constraints → identity unifier is trivially a
     // renaming (empty), so result is True.
     if term_eqs.is_empty() {
         return true;
     }
 
+    let vars_r1 = rule_vars(r1);
+    let vars_r2 = rule_vars(r2);
     let unifs = match maude.unify_at("equal_rule_up_to_renaming", &term_eqs) {
         Ok(u) => u,
         Err(_) => return false,
@@ -1509,17 +1512,8 @@ pub fn equal_duplicate_rule_up_to_renaming(
     // `(prems++concs++acts)` pairs evaluates identically on the un-renamed
     // rules — any tag mismatch forces that check to `false`.  This skips
     // the rule clone/rename and the Maude round trip for such pairs.
-    let tags_match = r1
-        .premises
-        .iter()
-        .chain(r1.conclusions.iter())
-        .chain(r1.actions.iter())
-        .zip(
-            r2.premises
-                .iter()
-                .chain(r2.conclusions.iter())
-                .chain(r2.actions.iter()),
-        )
+    let tags_match = rule_facts(r1)
+        .zip(rule_facts(r2))
         .all(|(f1, f2)| f1.tag == f2.tag);
     if !tags_match {
         return false;
@@ -1555,7 +1549,6 @@ pub fn equal_subset_rule_up_to_renaming(
     r1: &IntrRuleAC,
     r2: &IntrRuleAC,
 ) -> bool {
-    use tamarin_term::lterm::HasFrees;
     use tamarin_term::rewriting::Equal;
     use tamarin_term::subst::apply_vterm;
     use tamarin_term::subst_vfresh::LNSubstVFresh;
@@ -1601,16 +1594,8 @@ pub fn equal_subset_rule_up_to_renaming(
         return false;
     }
 
-    // `vars ru = map fst (varOccurences ru)` — each rule's distinct vars.
-    let vars_of = |r: &IntrRuleAC| -> Vec<LVar> {
-        let mut s: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
-        r.for_each_free(&mut |v| {
-            s.insert(*v);
-        });
-        s.into_iter().collect()
-    };
-    let vars_r1 = vars_of(r1);
-    let vars_r2 = vars_of(r2);
+    let vars_r1 = rule_vars(r1);
+    let vars_r2 = rule_vars(r2);
 
     // `evalFreshAvoiding ... (r1, r2)` — fresh idx allocation starts above
     // the maximum index occurring in either rule.

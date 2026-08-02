@@ -1796,8 +1796,8 @@ fn msubst_to_lnsubst(
     msubst_to_lnsubst_with_avoid(ms, ctx, 0)
 }
 
-/// Unify/variants-path conversion (HS `msubstToLSubstVFresh`).  Identical
-/// to `msubst_to_lnsubst` now that neither path sorts the domain (see the
+/// Unify/variants-path conversion (HS `msubstToLSubstVFresh`).  Identical to
+/// `msubst_to_lnsubst` because neither path sorts the domain (see the
 /// `msubst_to_lnsubst` doc); kept as a separate name to mark the
 /// VFresh-vs-VFree call sites.
 fn msubst_to_lnsubst_unify(

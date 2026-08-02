@@ -786,7 +786,7 @@ mod tests {
     #[test]
     fn json_abbrev_order_puts_nested_abbreviation_first() {
         let mut abbrevs = Abbreviations::new();
-        // PK1 = pk(a)
+        // PK1 = senc(a, b) — unrelated to the SE1/SE2 pair below.
         let pk = f_app_no_eq(senc_sym(), vec![var("a", LSort::Msg), var("b", LSort::Msg)]);
         abbrevs.insert(pk.clone(), (var("PK1", LSort::Msg), pk));
         // SE1 = senc(x, y)

@@ -99,34 +99,25 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
     match t {
         Term::Lit(_) => true,
         Term::App(sym, args) => {
-            // 1. Irreducible NoEq top: walk subterms.
-            // HS-faithful: HS's `nfViaHaskell` (Norm.hs:55-127, see line 62) checks
-            // `FAppNoEq o ts | (NoEq o) \`S.member\` irreducible` — the
-            // irreducible-set check is gated by `FAppNoEq` (i.e. NoEq
-            // function symbols only).  AC symbols like Mult are kept in
-            // `irreducible_fun_syms` for OTHER consumers
-            // (Contradictions.hs:149-150 `maybeNonNormalTerms` uses
-            // `S.member` on the FUN set to decide which subterms to NOT
-            // include), but Norm.hs's NF
-            // check uses pattern matching on `FAppNoEq` which only
-            // matches NoEq symbols.  Without this gate, RS treated
-            // `Mult(tid, ekI, ekR, inv(tid))` as NF (skipped section 5's
-            // invalidMult check entirely), under-filtering
-            // simpMinimize and admitting AC variants HS rejects.
-            // FList also counts as irreducible (HS: `FList ts -> all go ts`).
-            if matches!(sym, FunSym::NoEq(_)) && msig.irreducible_fun_syms.contains(sym) {
-                return args.iter().all(|a| go_nf(a, msig, maude));
-            }
-            // Irreducible user-defined AC top (HS
-            // `FAppACfct o ts | AC (ACfct o) \`S.member\` irreducible`),
-            // directly after the NoEq irreducible case.  The gate is again on
-            // the symbol KIND: the builtin AC operators are matched by their
-            // own `viewTerm2` constructors, so they never take this arm even
-            // when they are in `irreducible` (see the note above).
-            if matches!(sym, FunSym::Ac(AcSym::AcFct(_))) && msig.irreducible_fun_syms.contains(sym)
+            // 1. Irreducible NoEq / user-defined-AC top: walk subterms.
+            // HS's `nfViaHaskell` (Norm.hs:55-127, see line 62) gates the
+            // irreducible-set lookup on the symbol KIND — it checks
+            // `FAppNoEq o ts | (NoEq o) \`S.member\` irreducible` and
+            // `FAppACfct o ts | (AC (ACfct o)) \`S.member\` irreducible`.  The
+            // builtin AC operators sit in `irreducible_fun_syms` as well, for
+            // OTHER consumers (Contradictions.hs:149-150 `maybeNonNormalTerms`
+            // uses `S.member` on the FUN set to decide which subterms to NOT
+            // include), but Norm.hs matches them through their own `viewTerm2`
+            // constructors, so they must not take this arm: ungated,
+            // `Mult(tid, ekI, ekR, inv(tid))` counts as NF — skipping section
+            // 5's invalidMult check — which under-filters simpMinimize and
+            // admits AC variants HS rejects.
+            if matches!(sym, FunSym::NoEq(_) | FunSym::Ac(AcSym::AcFct(_)))
+                && msig.irreducible_fun_syms.contains(sym)
             {
                 return args.iter().all(|a| go_nf(a, msig, maude));
             }
+            // FList is irreducible unconditionally (HS: `FList ts -> all go ts`).
             if matches!(sym, FunSym::List) {
                 return args.iter().all(|a| go_nf(a, msig, maude));
             }
@@ -157,8 +148,8 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
             //    so it is precomputed per rule by `MaudeSig::refresh`
             //    (`st_lhs_ac_c_free`, in `st_rules` iteration order) rather
             //    than recomputed here — this loop runs at every `App` node of
-            //    every NF check.  `None` means the cached vector's length no
-            //    longer matches `st_rules`, and the predicate is computed
+            //    every NF check.  `None` means the cache is stale (its length
+            //    does not match `st_rules`), and the predicate is computed
             //    inline.
             let lhs_flags = msig.st_lhs_ac_c_free_cache();
             for (i, rule) in msig.st_rules.iter().enumerate() {
@@ -401,6 +392,12 @@ fn rule_applies(t: &LNTerm, lhs: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> b
     let problem = Match::match_with(t.clone(), lhs.clone());
     let matched =
         crate::unification::solve_match_lterm_no_ac(&|n| crate::lterm::sort_of_name(n), problem);
+    matched.is_some() && strule_rewrites(t, rhs)
+}
+
+/// The `StRhs` disambiguation both `struleApplicable` ports apply once the
+/// rule's LHS has matched `t`.
+fn strule_rewrites(t: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> bool {
     // HS (Norm.hs:107-110):
     //   _:_ -> case rhs of
     //            StRhs [] s -> not (t == s)   -- reducible, but RHS might equal t
@@ -410,15 +407,10 @@ fn rule_applies(t: &LNTerm, lhs: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> b
     // always yields non-empty positions (constantPositions of an FApp is
     // never empty; the non-ground branch returns None on empty), so the
     // `StRhs []` arm is effectively dead and a match always returns True.
-    match matched {
-        None => false,
-        Some(_) => {
-            if rhs.positions.is_empty() {
-                t != &rhs.term
-            } else {
-                true
-            }
-        }
+    if rhs.positions.is_empty() {
+        t != &rhs.term
+    } else {
+        true
     }
 }
 
@@ -430,7 +422,6 @@ fn rule_applies(t: &LNTerm, lhs: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> b
 /// axioms already answer (see the root-symbol note below).  Subject vars
 /// are rigid in the Maude `match` command on both sides of the port, so the
 /// outcomes agree.
-/// The trailing `StRhs` disambiguation is identical to [`rule_applies`].
 /// A Maude transport error is folded to "no match" — the conservative
 /// answer (term stays NF), matching the port's other best-effort Maude
 /// fallbacks (e.g. simplify.rs `match_atom_via_maude`).
@@ -478,14 +469,7 @@ fn rule_applies_ac(
                 .is_ok_and(|ms| !ms.is_empty()),
         },
     };
-    if !matched {
-        return false;
-    }
-    if rhs.positions.is_empty() {
-        t != &rhs.term
-    } else {
-        true
-    }
+    matched && strule_rewrites(t, rhs)
 }
 
 // NOTE: `maybeNotNfSubterms` (HS `Term/Rewriting/Norm.hs:162-168`) lives
@@ -724,8 +708,8 @@ mod tests {
     }
 
     /// `go_nf`'s st-rule arm reads the per-rule Ac/C-free flags cached by
-    /// `MaudeSig::refresh`, falling back to `term_ac_c_free` when the cached
-    /// vector's length no longer matches `st_rules`.  Both routes must decide
+    /// `MaudeSig::refresh`, falling back to `term_ac_c_free` when the cache is
+    /// stale (its length does not match `st_rules`).  Both routes must decide
     /// identically:
     /// `fst(pair(x1, x2))` is reducible by the pairing rule, `pair(x1, x2)` is
     /// not.  No Maude handle needed — the pairing rule LHSes are Ac/C-free.

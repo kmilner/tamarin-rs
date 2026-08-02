@@ -267,15 +267,16 @@ fn edge_key(e: &GEdge) -> EdgeKey {
 ///      top-level `GraphRepr` fields,
 ///   4. leaves cross-cluster + non-clustered nodes/edges in place.
 ///
-/// `nodes` is the node list `nodes_by_group` borrows from — the callers move
-/// it out of `repr` so the grouping cannot alias `repr` — and its un-clustered
-/// remainder becomes the new `repr.nodes`.
+/// `group` receives the nodes moved out of `repr` — grouping them in place
+/// would alias `repr.nodes` — whose un-clustered remainder is put back at the
+/// end.
 pub fn add_cluster(
     repr: &mut GraphRepr,
-    nodes: &[GNode],
-    nodes_by_group: BTreeMap<String, Vec<&GNode>>,
+    group: impl for<'a> Fn(&'a [GNode]) -> BTreeMap<String, Vec<&'a GNode>>,
     name_suffix: &str,
 ) {
+    let nodes = std::mem::take(&mut repr.nodes);
+    let nodes_by_group = group(&nodes);
     let all_edges = repr.edges.clone();
     let mut sub_clusters: Vec<Cluster> = Vec::new();
     for (group_name, group_nodes) in &nodes_by_group {
@@ -292,39 +293,31 @@ pub fn add_cluster(
             });
         }
     }
-    // Index all the edges and nodes absorbed by sub_clusters, so the filters
-    // below compare each top-level element only against the absorbed ones
-    // sharing its key.
-    // The cloned cluster edges live at different addresses than the
-    // elements of `all_edges`, so absorbed edges must be filtered by
-    // structural equality (not pointer identity) — the [`EdgeKey`] bucket
-    // narrows the candidates, the `==` inside it decides.
+    // Index the nodes and edges absorbed by `sub_clusters` so each top-level
+    // element is compared only against the absorbed ones sharing its key: the
+    // key narrows the candidates, the `==` inside the bucket decides.
     //
-    // Nodes too must be removed by STRUCTURAL equality, mirroring HS
-    // `remainingNodes = filter (`notElem` clusteredNodes) grNodes`
-    // (GraphRepr.hs:117-130, see line 127): a node id can appear TWICE in `grNodes` with
-    // different types — e.g. the last-atom id is pushed both as a
-    // `SystemNode` and as a free `LastAction` ellipse (see
-    // `compute_basic_graph_repr`).  When the SystemNode is clustered,
-    // an id-keyed filter would silently drop the free ellipse as well;
-    // HS keeps it at top level (it is not an element of the cluster).  So the
-    // id only buckets the absorbed nodes — a bucket hit still has to compare
-    // the whole node, `ty` included.
+    // Both filters have to decide by STRUCTURAL equality.  The cloned cluster
+    // edges live at different addresses than the elements of `all_edges`, so
+    // pointer identity is not available.  And HS `remainingNodes = filter
+    // (`notElem` clusteredNodes) grNodes` (GraphRepr.hs:117-130, see line 127)
+    // is by value too: a node id can appear TWICE in `grNodes` with different
+    // types — the last-atom id is pushed both as a `SystemNode` and as a free
+    // `LastAction` ellipse (see `compute_basic_graph_repr`) — and when the
+    // SystemNode is clustered, an id-keyed filter would silently drop the free
+    // ellipse that HS keeps at top level (it is not an element of the cluster).
     let mut absorbed_nodes: BTreeMap<NodeId, Vec<&GNode>> = BTreeMap::new();
     for n in sub_clusters.iter().flat_map(|c| c.nodes.iter()) {
         absorbed_nodes.entry(n.id).or_default().push(n);
     }
-    let mut absorbed_edges_struct: BTreeMap<EdgeKey, Vec<&GEdge>> = BTreeMap::new();
+    let mut absorbed_edges: BTreeMap<EdgeKey, Vec<&GEdge>> = BTreeMap::new();
     for e in sub_clusters.iter().flat_map(|c| c.edges.iter()) {
-        absorbed_edges_struct
-            .entry(edge_key(e))
-            .or_default()
-            .push(e);
+        absorbed_edges.entry(edge_key(e)).or_default().push(e);
     }
     let remaining_edges: Vec<GEdge> = all_edges
         .into_iter()
         .filter(|e| {
-            !absorbed_edges_struct
+            !absorbed_edges
                 .get(&edge_key(e))
                 .is_some_and(|bucket| bucket.contains(&e))
         })
@@ -345,19 +338,12 @@ pub fn add_cluster(
 
 /// Mirror of `addClusterByRole` — wrap `add_cluster` over role groupings.
 pub fn add_cluster_by_role(repr: &mut GraphRepr) {
-    // Move the nodes out of `repr` so the grouping borrows from owned data
-    // that doesn't alias `repr`'s nodes field; `add_cluster` puts the
-    // un-clustered ones back.
-    let nodes_owned: Vec<GNode> = std::mem::take(&mut repr.nodes);
-    let groups: BTreeMap<String, Vec<&GNode>> = group_nodes_by_role(&nodes_owned);
-    add_cluster(repr, &nodes_owned, groups, "_Session_");
+    add_cluster(repr, group_nodes_by_role, "_Session_");
 }
 
 /// Mirror of `addIntelligentClusterUsingSimilarNames`.
 pub fn add_intelligent_cluster_using_similar_names(repr: &mut GraphRepr) {
-    let nodes_owned: Vec<GNode> = std::mem::take(&mut repr.nodes);
-    let groups: BTreeMap<String, Vec<&GNode>> = group_by_similar_name(&nodes_owned);
-    add_cluster(repr, &nodes_owned, groups, "_Session_");
+    add_cluster(repr, group_by_similar_name, "_Session_");
 }
 
 // ---------------------------------------------------------------------

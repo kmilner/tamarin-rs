@@ -269,14 +269,13 @@ fn write_lnterm(t: &LNTerm, out: &mut String) {
             // FApp (AC (ACfct (s,_))) [] -> s ; FApp (AC (ACfct (s,_))) as ->
             // s(..) ; FApp (AC o) as -> show o (..)
             FunSym::Ac(o) => {
-                let name: std::borrow::Cow<'_, str> = match o {
-                    AcSym::Union => std::borrow::Cow::Borrowed("Union"),
-                    AcSym::Mult => std::borrow::Cow::Borrowed("Mult"),
-                    AcSym::Xor => std::borrow::Cow::Borrowed("Xor"),
-                    AcSym::NatPlus => std::borrow::Cow::Borrowed("NatPlus"),
-                    AcSym::AcFct(s) => String::from_utf8_lossy(s.name),
-                };
-                out.push_str(&name);
+                match o {
+                    AcSym::Union => out.push_str("Union"),
+                    AcSym::Mult => out.push_str("Mult"),
+                    AcSym::Xor => out.push_str("Xor"),
+                    AcSym::NatPlus => out.push_str("NatPlus"),
+                    AcSym::AcFct(s) => out.push_str(&String::from_utf8_lossy(s.name)),
+                }
                 // Only the user-defined AC symbols have a nullary arm
                 // (Term/Raw.hs:227-233) showing the bare name; the builtin AC
                 // operators always show a parenthesised argument list.

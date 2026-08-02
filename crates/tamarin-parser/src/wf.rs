@@ -841,7 +841,7 @@ fn binop_sym(op: &BinOp) -> std::borrow::Cow<'static, str> {
         BinOp::Union => "++".into(),
         BinOp::Xor => "\u{2295}".into(),
         BinOp::NatPlus => "%+".into(),
-        BinOp::AcFct(name) => format!(" {} ", name).into(),
+        BinOp::AcFct(name) => format!(" {name} ").into(),
     }
 }
 
