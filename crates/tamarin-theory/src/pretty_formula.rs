@@ -901,8 +901,10 @@ fn formula_to_doc(
     use crate::pretty_hpj as hpj;
     use p::Formula::*;
     match f {
-        True => doc_text("\u{22A4}"),
-        False => doc_text("\u{22A5}"),
+        // HS `pp (TF True) = operator_ "⊤"` / `pp (TF False) = operator_ "⊥"`
+        // (Formula.hs:485-486) — `hl_operator` spans in HtmlDoc mode.
+        True => hpj::operator_("\u{22A4}"),
+        False => hpj::operator_("\u{22A5}"),
         Atom(a) => atom_to_doc(a, scope),
         Not(p_) => {
             // HS: `operator_ "¬" <> opParens p'` — `<>` is no-break

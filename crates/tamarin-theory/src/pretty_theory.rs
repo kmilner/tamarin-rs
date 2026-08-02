@@ -1696,22 +1696,26 @@ fn render_loop_breakers_line(breakers: &[crate::rule::PremIdx], indent: usize) -
     if breakers.is_empty() {
         return String::new();
     }
-    let pad = " ".repeat(indent);
-    let mut s = String::new();
-    s.push_str(&pad);
-    s.push_str(if breakers.len() == 1 {
-        "// loop breaker: ["
+    let mut body = String::from(if breakers.len() == 1 {
+        "loop breaker: ["
     } else {
-        "// loop breakers: ["
+        "loop breakers: ["
     });
     for (i, b) in breakers.iter().enumerate() {
         if i > 0 {
-            s.push(',');
+            body.push(',');
         }
-        s.push_str(&b.0.to_string());
+        body.push_str(&b.0.to_string());
     }
-    s.push_str("]\n");
-    s
+    body.push(']');
+    // HS `prettyLoopBreakers` emits this via `lineComment_` (Rule.hs:1419-1429,
+    // see lines 1421,1429), so the HtmlDoc pane render wraps it in an
+    // `hl_comment` span; the plain render is the bare `// …` text.
+    format!(
+        "{}{}\n",
+        " ".repeat(indent),
+        crate::pretty_hpj::line_comment_(&body).render()
+    )
 }
 
 /// Compare the `(premises, conclusions, actions, new_vars)` of two
