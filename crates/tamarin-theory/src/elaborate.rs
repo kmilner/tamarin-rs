@@ -52,6 +52,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use tamarin_parser::ast as p;
 use tamarin_term::function_symbols::{Constructability, NdcState, NoEqSym, Privacy};
@@ -68,8 +69,8 @@ thread_local! {
     /// built-ins (h, fst, snd, inv, pk).  Without it, `PRF(pms, nc, ns)`
     /// for `functions: PRF/1` would reach Maude as a 3-arg call, which
     /// Maude silently rejects, and our `reduce` loop spins forever.
-    static USER_UNARY_FUNS: RefCell<BTreeSet<String>>
-        = const { RefCell::new(BTreeSet::new()) };
+    static USER_UNARY_FUNS: RefCell<Arc<BTreeSet<String>>>
+        = RefCell::new(Arc::new(BTreeSet::new()));
 
     /// Names of nullary (0-arity) function symbols available in the
     /// theory currently being elaborated.  Set by `elaborate()` from
@@ -85,8 +86,8 @@ thread_local! {
     /// `Eq_check_succeed` restriction trivially satisfies via the
     /// eq-store — undermining the signing builtin's semantics and
     /// causing TLS_Handshake-class lemmas to be wrong-falsified.
-    static USER_NULLARY_FUNS: RefCell<BTreeSet<String>>
-        = const { RefCell::new(BTreeSet::new()) };
+    static USER_NULLARY_FUNS: RefCell<Arc<BTreeSet<String>>>
+        = RefCell::new(Arc::new(BTreeSet::new()));
 
     /// Names of user-declared function symbols marked `private`.
     /// Populated from `FunctionDecl.private` across all arities.  Read
@@ -95,22 +96,22 @@ thread_local! {
     /// to Maude.  Without this, `KU(f)` for a private nullary `f` is
     /// filtered by `is_nullary_public_function` (because we say
     /// Public), causing `is_finished` to incorrectly report Solved.
-    static USER_PRIVATE_FUNS: RefCell<BTreeSet<String>>
-        = const { RefCell::new(BTreeSet::new()) };
+    static USER_PRIVATE_FUNS: RefCell<Arc<BTreeSet<String>>>
+        = RefCell::new(Arc::new(BTreeSet::new()));
 
     /// Names of user-declared `[AC]` function symbols.  Read by
     /// `term_to_lnterm` so applications lower to `f_app_ac(AcFct ..)`
     /// (n-ary, no arity check) instead of `f_app_no_eq`.
-    static USER_AC_FUNS: RefCell<BTreeSet<String>>
-        = const { RefCell::new(BTreeSet::new()) };
+    static USER_AC_FUNS: RefCell<Arc<BTreeSet<String>>>
+        = RefCell::new(Arc::new(BTreeSet::new()));
 
     /// Names of user-declared `[NDC]` function symbols.
-    static USER_NDC_FUNS: RefCell<BTreeSet<String>>
-        = const { RefCell::new(BTreeSet::new()) };
+    static USER_NDC_FUNS: RefCell<Arc<BTreeSet<String>>>
+        = RefCell::new(Arc::new(BTreeSet::new()));
 
     /// Names of user-declared `[NDC-diff]` function symbols.
-    static USER_NDC_DIFF_FUNS: RefCell<BTreeSet<String>>
-        = const { RefCell::new(BTreeSet::new()) };
+    static USER_NDC_DIFF_FUNS: RefCell<Arc<BTreeSet<String>>>
+        = RefCell::new(Arc::new(BTreeSet::new()));
 
     /// Names of user-declared function symbols marked `[destructor]`.
     /// Populated from `FunctionDecl.destructor` across all arities.
@@ -123,8 +124,8 @@ thread_local! {
     /// destructor tag is encoded into the Maude operator name (`XC` vs
     /// `XD`), so a Constructor-tagged term for a `[destructor]` symbol
     /// would print as an operator Maude never declared.
-    static USER_DESTRUCTOR_FUNS: RefCell<BTreeSet<String>>
-        = const { RefCell::new(BTreeSet::new()) };
+    static USER_DESTRUCTOR_FUNS: RefCell<Arc<BTreeSet<String>>>
+        = RefCell::new(Arc::new(BTreeSet::new()));
 }
 use tamarin_term::lterm::{Name, NameTag};
 use tamarin_term::maude_sig::{
@@ -849,14 +850,14 @@ macro_rules! btreeset_swap_guard {
     ($(#[$meta:meta])* $Guard:ident, $tl:path) => {
         $(#[$meta])*
         struct $Guard {
-            previous: BTreeSet<String>,
+            previous: Arc<BTreeSet<String>>,
         }
 
         impl $Guard {
             fn set(new: BTreeSet<String>) -> Self {
                 let previous = $tl.with(|c| {
                     let mut b = c.borrow_mut();
-                    std::mem::replace(&mut *b, new)
+                    std::mem::replace(&mut *b, Arc::new(new))
                 });
                 $Guard { previous }
             }
@@ -937,21 +938,22 @@ fn ndc_state_of(ndc: bool, ndc_diff: bool) -> NdcState {
 }
 
 /// The user-declared function-name sets consulted while converting one
-/// parser term.  Borrowed from the thread-locals once by
+/// parser term.  `Arc` snapshots of the thread-locals, taken once by
 /// [`with_user_fun_sets`] and threaded through the `term_to_vterm`
 /// recursion, so a term tree costs one thread-local access per set rather
-/// than one per node.
-struct UserFunSets<'a> {
-    unary: &'a BTreeSet<String>,
-    nullary: &'a BTreeSet<String>,
-    private: &'a BTreeSet<String>,
-    destructor: &'a BTreeSet<String>,
-    ac: &'a BTreeSet<String>,
-    ndc: &'a BTreeSet<String>,
-    ndc_diff: &'a BTreeSet<String>,
+/// than one per node.  No thread-local borrow outlives the snapshot, so
+/// the set guards can be installed or dropped freely while one is live.
+struct UserFunSets {
+    unary: Arc<BTreeSet<String>>,
+    nullary: Arc<BTreeSet<String>>,
+    private: Arc<BTreeSet<String>>,
+    destructor: Arc<BTreeSet<String>>,
+    ac: Arc<BTreeSet<String>>,
+    ndc: Arc<BTreeSet<String>>,
+    ndc_diff: Arc<BTreeSet<String>>,
 }
 
-impl UserFunSets<'_> {
+impl UserFunSets {
     /// True if `name` is registered as a user-declared arity-1 function for
     /// the current elaboration.  Read from the `USER_UNARY_FUNS` set.
     fn is_user_unary_fun(&self, name: &str) -> bool {
@@ -1011,34 +1013,21 @@ impl UserFunSets<'_> {
     }
 }
 
-/// Borrows every user-declared function-name thread-local for the duration
-/// of `f`, which receives them bundled as a [`UserFunSets`].  The borrows
-/// are shared, so the free readers above still work inside `f`; installing
-/// or dropping one of the set guards there would panic.
-fn with_user_fun_sets<R>(f: impl FnOnce(&UserFunSets<'_>) -> R) -> R {
-    USER_UNARY_FUNS.with(|unary| {
-        USER_NULLARY_FUNS.with(|nullary| {
-            USER_PRIVATE_FUNS.with(|private| {
-                USER_DESTRUCTOR_FUNS.with(|destructor| {
-                    USER_AC_FUNS.with(|ac| {
-                        USER_NDC_FUNS.with(|ndc| {
-                            USER_NDC_DIFF_FUNS.with(|ndc_diff| {
-                                f(&UserFunSets {
-                                    unary: &unary.borrow(),
-                                    nullary: &nullary.borrow(),
-                                    private: &private.borrow(),
-                                    destructor: &destructor.borrow(),
-                                    ac: &ac.borrow(),
-                                    ndc: &ndc.borrow(),
-                                    ndc_diff: &ndc_diff.borrow(),
-                                })
-                            })
-                        })
-                    })
-                })
-            })
-        })
-    })
+/// Snapshots every user-declared function-name thread-local (an `Arc` clone
+/// each) and hands them to `f` bundled as a [`UserFunSets`].  Each borrow
+/// ends within its `with` call, so nothing `f` does — including installing
+/// or dropping a set guard — can conflict with the snapshot.
+fn with_user_fun_sets<R>(f: impl FnOnce(&UserFunSets) -> R) -> R {
+    let sets = UserFunSets {
+        unary: USER_UNARY_FUNS.with(|c| c.borrow().clone()),
+        nullary: USER_NULLARY_FUNS.with(|c| c.borrow().clone()),
+        private: USER_PRIVATE_FUNS.with(|c| c.borrow().clone()),
+        destructor: USER_DESTRUCTOR_FUNS.with(|c| c.borrow().clone()),
+        ac: USER_AC_FUNS.with(|c| c.borrow().clone()),
+        ndc: USER_NDC_FUNS.with(|c| c.borrow().clone()),
+        ndc_diff: USER_NDC_DIFF_FUNS.with(|c| c.borrow().clone()),
+    };
+    f(&sets)
 }
 
 /// Bundles RAII guards for all the user-declared function thread-locals,
@@ -1124,13 +1113,13 @@ pub fn set_user_funs_from_collected(funs: &CollectedUserFuns) -> UserFunsForTheo
 /// identity relative to the calling thread.
 pub fn snapshot_user_funs() -> CollectedUserFuns {
     CollectedUserFuns {
-        unary: USER_UNARY_FUNS.with(|c| c.borrow().clone()),
-        nullary: USER_NULLARY_FUNS.with(|c| c.borrow().clone()),
-        private: USER_PRIVATE_FUNS.with(|c| c.borrow().clone()),
-        destructor: USER_DESTRUCTOR_FUNS.with(|c| c.borrow().clone()),
-        ac: USER_AC_FUNS.with(|c| c.borrow().clone()),
-        ndc: USER_NDC_FUNS.with(|c| c.borrow().clone()),
-        ndc_diff: USER_NDC_DIFF_FUNS.with(|c| c.borrow().clone()),
+        unary: USER_UNARY_FUNS.with(|c| c.borrow().as_ref().clone()),
+        nullary: USER_NULLARY_FUNS.with(|c| c.borrow().as_ref().clone()),
+        private: USER_PRIVATE_FUNS.with(|c| c.borrow().as_ref().clone()),
+        destructor: USER_DESTRUCTOR_FUNS.with(|c| c.borrow().as_ref().clone()),
+        ac: USER_AC_FUNS.with(|c| c.borrow().as_ref().clone()),
+        ndc: USER_NDC_FUNS.with(|c| c.borrow().as_ref().clone()),
+        ndc_diff: USER_NDC_DIFF_FUNS.with(|c| c.borrow().as_ref().clone()),
     }
 }
 
@@ -2387,12 +2376,12 @@ fn right_nest_pair<V>(items: Vec<VTerm<Name, V>>) -> Option<VTerm<Name, V>> {
 /// builds a typed `SapicLVar` literal (same recovery, additionally gated on an
 /// un-annotated variable).  Recursion is threaded back through `term_to_vterm`
 /// so the whole tree is built in one universe.  `funs` carries the
-/// user-declared function-name sets, borrowed once at the entry point by
+/// user-declared function-name sets, snapshotted once at the entry point by
 /// [`with_user_fun_sets`] and handed to every node (`mk_var` included).
-fn term_to_vterm<V, F>(t: &p::Term, mk_var: &F, funs: &UserFunSets<'_>) -> Option<VTerm<Name, V>>
+fn term_to_vterm<V, F>(t: &p::Term, mk_var: &F, funs: &UserFunSets) -> Option<VTerm<Name, V>>
 where
     V: Clone + Ord,
-    F: Fn(&p::VarSpec, &UserFunSets<'_>) -> Option<VTerm<Name, V>>,
+    F: Fn(&p::VarSpec, &UserFunSets) -> Option<VTerm<Name, V>>,
 {
     use tamarin_term::function_symbols::AcSym;
     use tamarin_term::term::f_app_ac;
@@ -2606,7 +2595,7 @@ pub fn term_to_lnterm(t: &p::Term) -> Option<tamarin_term::lterm::LNTerm> {
     // Msg-sort var named `true` if they explicitly annotate it (e.g.
     // `true:msg`), and the parser would emit `Untagged` only for the bare
     // form anyway.
-    let mk_var = |v: &p::VarSpec, funs: &UserFunSets<'_>| -> Option<tamarin_term::lterm::LNTerm> {
+    let mk_var = |v: &p::VarSpec, funs: &UserFunSets| -> Option<tamarin_term::lterm::LNTerm> {
         if matches!(v.sort, p::SortHint::Untagged)
             && v.idx == 0
             && funs.is_user_nullary_fun(&v.name)
@@ -2647,7 +2636,7 @@ pub fn term_to_sapic_term(t: &p::Term) -> Option<crate::sapic::SapicTerm> {
     // SAPIC `Var` case: a bare untagged idx-0 identifier may be a 0-arity NoEq
     // fun symbol (mirrors `term_to_lnterm`'s `nullaryApp` recovery, additionally
     // gated on an un-annotated variable); otherwise a typed `SapicLVar`.
-    let mk_var = |v: &p::VarSpec, funs: &UserFunSets<'_>| -> Option<crate::sapic::SapicTerm> {
+    let mk_var = |v: &p::VarSpec, funs: &UserFunSets| -> Option<crate::sapic::SapicTerm> {
         if matches!(v.sort, p::SortHint::Untagged)
             && v.idx == 0
             && v.typ.is_none()
