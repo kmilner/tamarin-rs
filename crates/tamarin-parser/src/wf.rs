@@ -1,11 +1,11 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, beschmi, jdreier, sans-sucre, PhilipLukertWork, rkunnema,
-//   kevinmorio, addap, Mathias-AURAND, Nynko, arcz, BTom-GH, rsasse,
-//   charlie-j, racoucho1u, felixlinker, ValentinYuri, xaDxelA, and
+//   jdreier, beschmi, meiersi, sans-sucre, PhilipLukertWork, rkunnema,
+//   kevinmorio, addap, BTom-GH, Mathias-AURAND, Nynko, arcz, rsasse,
+//   charlie-j, racoucho1u, felixlinker, xaDxelA, ValentinYuri, and
 //   other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Builtin/Signature.hs, lib/term/src/Term/LTerm.hs,
-//   lib/term/src/Term/SubtermRule.hs,
+//   lib/term/src/Term/SubtermRule.hs, lib/term/src/Term/Term.hs,
 //   lib/term/src/Term/Term/FunctionSymbols.hs,
 //   lib/term/src/Term/Term/Raw.hs, lib/term/src/Term/VTerm.hs,
 //   lib/theory/src/Theory/Text/Parser/Fact.hs,
@@ -589,32 +589,27 @@ fn pp_wf_term(t: &Term, out: &mut String) {
         }
         BinOp(op, l, r) => {
             use crate::ast::BinOp as B;
-            let sym = match op {
-                B::Exp => "^",
-                B::Mult => "*",
-                B::Union => "++",
-                B::Xor => "\u{2295}",
-                B::NatPlus => "%+",
-            };
-            // HS builds AC operators (Mult/Union/Xor/NatPlus) via `fAppAC`,
-            // which flattens the chain, sorts the operands (Ord LTerm), and
-            // renders them parenthesised by `prettyTerm` (e.g. `(%x%+%1%+%1)`).
+            let sym = binop_sym(op);
+            // HS builds AC operators (Mult/Union/Xor/NatPlus and the
+            // user-declared `[AC]` symbols) via `fAppAC`, which flattens the
+            // chain, sorts the operands (Ord LTerm), and renders them
+            // parenthesised by `prettyTerm` (e.g. `(%x%+%1%+%1)`).
             // Exp is NOT AC: rendered binary, no surrounding parens.
-            if matches!(op, B::Mult | B::Union | B::Xor | B::NatPlus) {
+            if matches!(op, B::Mult | B::Union | B::Xor | B::NatPlus | B::AcFct(_)) {
                 let mut flat: Vec<&Term> = Vec::new();
                 flatten_ac(*op, t, &mut flat);
                 flat.sort_by(|a, b| cmp_wf_term(a, b));
                 out.push('(');
                 for (i, a) in flat.iter().enumerate() {
                     if i > 0 {
-                        out.push_str(sym);
+                        out.push_str(&sym);
                     }
                     pp_wf_term(a, out);
                 }
                 out.push(')');
             } else {
                 pp_wf_term(l, out);
-                out.push_str(sym);
+                out.push_str(&sym);
                 pp_wf_term(r, out);
             }
         }
@@ -822,8 +817,8 @@ fn cmp_wf_term(a: &Term, b: &Term) -> std::cmp::Ordering {
             let BinOp(o2, l2, r2) = b else {
                 unreachable!("term class matched BinOp")
             };
-            (*o1 as u8)
-                .cmp(&(*o2 as u8))
+            binop_rank(o1)
+                .cmp(&binop_rank(o2))
                 .then_with(|| cmp_wf_term(l1, l2))
                 .then_with(|| cmp_wf_term(r1, r2))
         }
@@ -833,6 +828,35 @@ fn cmp_wf_term(a: &Term, b: &Term) -> std::cmp::Ordering {
             };
             cmp_wf_term(i1, i2)
         }
+    }
+}
+
+/// The separator rendered between the operands of a `BinOp`.  A user-declared
+/// `[AC]` symbol is separated by its name surrounded by spaces
+/// (Term/Term.hs:305).
+fn binop_sym(op: &BinOp) -> std::borrow::Cow<'static, str> {
+    match op {
+        BinOp::Exp => "^".into(),
+        BinOp::Mult => "*".into(),
+        BinOp::Union => "++".into(),
+        BinOp::Xor => "\u{2295}".into(),
+        BinOp::NatPlus => "%+".into(),
+        BinOp::AcFct(name) => format!(" {} ", name).into(),
+    }
+}
+
+/// Ordering key for a `BinOp` head: the declaration-order rank, plus the
+/// symbol name for a user-declared `[AC]` operator so two distinct `AcFct`
+/// heads are separated (`Ord ACfctSym` compares the name first).  The
+/// builtin operators carry an empty name.
+fn binop_rank(o: &BinOp) -> (u8, &'static str) {
+    match o {
+        BinOp::Exp => (0, ""),
+        BinOp::Mult => (1, ""),
+        BinOp::Union => (2, ""),
+        BinOp::Xor => (3, ""),
+        BinOp::NatPlus => (4, ""),
+        BinOp::AcFct(n) => (5, n),
     }
 }
 
@@ -1313,6 +1337,10 @@ fn show_debruijn_term(t: &Term, binders: &[&VarSpec]) -> String {
                 B::Union => "Union",
                 B::Xor => "Xor",
                 B::NatPlus => "NatPlus",
+                // `FApp (AC (ACfct (s,_))) as -> BC.unpack s ++ "(" ... ")"`
+                // (Term/Raw.hs:227-233): a user-defined AC symbol shows under
+                // its own name, not the `ACfct` constructor.
+                B::AcFct(n) => n,
             };
             format!(
                 "{}({},{})",
@@ -2333,14 +2361,7 @@ fn pp_term_for_wf(t: &Term) -> String {
             format!("diff({}, {})", pp_term_for_wf(a), pp_term_for_wf(b))
         }
         Term::BinOp(op, a, b) => {
-            use crate::ast::BinOp;
-            let sym = match op {
-                BinOp::Exp => "^",
-                BinOp::Mult => "*",
-                BinOp::Union => "++",
-                BinOp::Xor => "\u{2295}",
-                BinOp::NatPlus => "%+",
-            };
+            let sym = binop_sym(op);
             format!("({}{}{})", pp_term_for_wf(a), sym, pp_term_for_wf(b))
         }
         Term::PatMatch(inner) => pp_term_for_wf(inner),

@@ -52,9 +52,10 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use tamarin_parser::ast as p;
-use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
+use tamarin_term::function_symbols::{Constructability, NdcState, NoEqSym, Privacy};
 use tamarin_term::lterm::LSort;
 use tamarin_term::lterm::LVar;
 
@@ -68,8 +69,8 @@ thread_local! {
     /// built-ins (h, fst, snd, inv, pk).  Without it, `PRF(pms, nc, ns)`
     /// for `functions: PRF/1` would reach Maude as a 3-arg call, which
     /// Maude silently rejects, and our `reduce` loop spins forever.
-    static USER_UNARY_FUNS: RefCell<BTreeSet<String>>
-        = const { RefCell::new(BTreeSet::new()) };
+    static USER_UNARY_FUNS: RefCell<Arc<BTreeSet<String>>>
+        = RefCell::new(Arc::new(BTreeSet::new()));
 
     /// Names of nullary (0-arity) function symbols available in the
     /// theory currently being elaborated.  Set by `elaborate()` from
@@ -85,8 +86,8 @@ thread_local! {
     /// `Eq_check_succeed` restriction trivially satisfies via the
     /// eq-store — undermining the signing builtin's semantics and
     /// causing TLS_Handshake-class lemmas to be wrong-falsified.
-    static USER_NULLARY_FUNS: RefCell<BTreeSet<String>>
-        = const { RefCell::new(BTreeSet::new()) };
+    static USER_NULLARY_FUNS: RefCell<Arc<BTreeSet<String>>>
+        = RefCell::new(Arc::new(BTreeSet::new()));
 
     /// Names of user-declared function symbols marked `private`.
     /// Populated from `FunctionDecl.private` across all arities.  Read
@@ -95,8 +96,22 @@ thread_local! {
     /// to Maude.  Without this, `KU(f)` for a private nullary `f` is
     /// filtered by `is_nullary_public_function` (because we say
     /// Public), causing `is_finished` to incorrectly report Solved.
-    static USER_PRIVATE_FUNS: RefCell<BTreeSet<String>>
-        = const { RefCell::new(BTreeSet::new()) };
+    static USER_PRIVATE_FUNS: RefCell<Arc<BTreeSet<String>>>
+        = RefCell::new(Arc::new(BTreeSet::new()));
+
+    /// Names of user-declared `[AC]` function symbols.  Read by
+    /// `term_to_lnterm` so applications lower to `f_app_ac(AcFct ..)`
+    /// (n-ary, no arity check) instead of `f_app_no_eq`.
+    static USER_AC_FUNS: RefCell<Arc<BTreeSet<String>>>
+        = RefCell::new(Arc::new(BTreeSet::new()));
+
+    /// Names of user-declared `[NDC]` function symbols.
+    static USER_NDC_FUNS: RefCell<Arc<BTreeSet<String>>>
+        = RefCell::new(Arc::new(BTreeSet::new()));
+
+    /// Names of user-declared `[NDC-diff]` function symbols.
+    static USER_NDC_DIFF_FUNS: RefCell<Arc<BTreeSet<String>>>
+        = RefCell::new(Arc::new(BTreeSet::new()));
 
     /// Names of user-declared function symbols marked `[destructor]`.
     /// Populated from `FunctionDecl.destructor` across all arities.
@@ -104,13 +119,13 @@ thread_local! {
     /// user-defined function application so `Constructability::Destructor`
     /// propagates through, mirroring Haskell's `naryOpApp`/`lookupArity`
     /// which reads `(k,priv,cnstr)` from the signature
-    /// (Theory/Text/Parser/Term.hs:61-63,84,92).  `NoEqSym` derives
+    /// (Theory/Text/Parser/Term.hs:62-71,93).  `NoEqSym` derives
     /// Eq/Ord/Hash over `constructability`, and the constructor/
     /// destructor tag is encoded into the Maude operator name (`XC` vs
     /// `XD`), so a Constructor-tagged term for a `[destructor]` symbol
     /// would print as an operator Maude never declared.
-    static USER_DESTRUCTOR_FUNS: RefCell<BTreeSet<String>>
-        = const { RefCell::new(BTreeSet::new()) };
+    static USER_DESTRUCTOR_FUNS: RefCell<Arc<BTreeSet<String>>>
+        = RefCell::new(Arc::new(BTreeSet::new()));
 }
 use tamarin_term::lterm::{Name, NameTag};
 use tamarin_term::maude_sig::{
@@ -566,20 +581,23 @@ pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
             message: format!("predicate expansion failed: {}", e.message),
         });
     }
-    // Collect the user-declared unary / nullary / private / destructor
-    // function-name sets that drive `term_to_lnterm`.  Each is installed
-    // into its thread-local via an RAII guard, scoped so concurrent /
+    // Collect the user-declared unary / nullary / private / destructor / AC /
+    // NDC / NDC-diff function-name sets that drive `term_to_lnterm`.  Each is
+    // installed into its thread-local via an RAII guard, scoped so concurrent /
     // sequential elaborations on the same thread can't bleed stale state.
     let funs = collect_user_funs(&thy_clone.items);
     let _guard = UserUnaryFunsGuard::set(funs.unary);
     let _nullary_guard = UserNullaryFunsGuard::set(funs.nullary);
     let _private_guard = UserPrivateFunsGuard::set(funs.private);
     let _destructor_guard = UserDestructorFunsGuard::set(funs.destructor);
+    let _ac_guard = UserAcFunsGuard::set(funs.ac);
+    let _ndc_guard = UserNdcFunsGuard::set(funs.ndc);
+    let _ndc_diff_guard = UserNdcDiffFunsGuard::set(funs.ndc_diff);
     let mut thy = elaborate_already_expanded(&thy_clone)?;
 
     // HS folds surplus arguments of arity-1 function applications into a
     // single right-associative pair at PARSE time (`naryOpApp` `k == 1`,
-    // Theory/Text/Parser/Term.hs:79-93 + `tupleterm` line 187-188:
+    // Theory/Text/Parser/Term.hs:94-96 + `tupleterm` line 211-212:
     // `chainr1 (msetterm ...) (curry fAppPair <$ comma)`), so the surface
     // `h(a, b, c)` parses to `h(<a, b, c>)` = `h(fAppPair a (fAppPair b c))`.
     // Because the fold happens at parse time, the lemma/restriction formula
@@ -618,7 +636,7 @@ pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
     Ok(thy)
 }
 
-/// The four user-declared function-name sets read by `term_to_lnterm`.
+/// The user-declared function-name sets read by `term_to_lnterm`.
 #[derive(Clone, Default)]
 pub struct CollectedUserFuns {
     /// Arity-1 user `functions:` names (drives the auto-tuple fold, like
@@ -633,28 +651,74 @@ pub struct CollectedUserFuns {
     /// User `functions:` names marked `[destructor]` (any arity); threads
     /// `Constructability::Destructor` through synthesized NoEqSyms.
     destructor: BTreeSet<String>,
+    /// User `functions:` names marked `[AC]`; lowers applications to
+    /// `f_app_ac(AcFct ..)` instead of `f_app_no_eq`.
+    ac: BTreeSet<String>,
+    /// User `functions:` names marked `[NDC]`.
+    ndc: BTreeSet<String>,
+    /// User `functions:` names marked `[NDC-diff]`.
+    ndc_diff: BTreeSet<String>,
 }
 
 /// Single source of truth for collecting the user-declared function-name
 /// sets from a theory's items (shared by `elaborate` and
 /// `set_user_funs_for_theory`).
 fn collect_user_funs(items: &[p::TheoryItem]) -> CollectedUserFuns {
-    let user_names = |pred: fn(&p::FunctionDecl) -> bool| -> BTreeSet<String> {
-        items
-            .iter()
-            .filter_map(|it| {
-                if let p::TheoryItem::Functions(decls) = it {
-                    Some(decls.iter().filter(|d| pred(d)).map(|d| d.name.clone()))
-                } else {
-                    None
-                }
-            })
-            .flatten()
-            .collect()
+    // HS `function` (Theory/Text/Parser/Signature.hs): a re-declaration of
+    // `fst`/`snd` at arity 1 with public visibility resolves to the EXISTING
+    // builtin pair-projection symbol (`return (NoEqUser (f,kp'), ...)` with
+    // `kp'` the builtin's `(1, Public, Constructor, NotNDC)`) — every
+    // requested attribute is discarded and no symbol is added.  Mirror that
+    // here: such declarations must not contribute to the attribute sets,
+    // otherwise `term_to_lnterm` resolves the theory's own
+    // `fst(<x,y>) = x` equations with a Destructor-flagged symbol whose
+    // Maude encoding (`tamXDFUfst`) does not match the declared op
+    // (`tamXCFUfst`), killing the rewrite rule and with it the narrowed
+    // `_0_fst`/`_0_snd` intruder destructors (noise theories).
+    let is_builtin_pair_proj = |d: &p::FunctionDecl| -> bool {
+        (d.name == "fst" || d.name == "snd") && d.arg_types.len() == 1 && !d.private
     };
-    let mut nullary = user_names(|d| d.arg_types.is_empty());
-    let mut private = user_names(|d| d.private);
-    let mut destructor = user_names(|d| d.destructor);
+    let mut unary: BTreeSet<String> = BTreeSet::new();
+    let mut nullary: BTreeSet<String> = BTreeSet::new();
+    let mut private: BTreeSet<String> = BTreeSet::new();
+    let mut destructor: BTreeSet<String> = BTreeSet::new();
+    let mut ac: BTreeSet<String> = BTreeSet::new();
+    let mut ndc: BTreeSet<String> = BTreeSet::new();
+    let mut ndc_diff: BTreeSet<String> = BTreeSet::new();
+    for it in items {
+        let p::TheoryItem::Functions(decls) = it else {
+            continue;
+        };
+        for d in decls {
+            if d.arg_types.len() == 1 {
+                unary.insert(d.name.clone());
+            }
+            if d.arg_types.is_empty() {
+                nullary.insert(d.name.clone());
+            }
+            // The exemption gates the ATTRIBUTE sets only; arity resolution
+            // via `unary` / `nullary` is unaffected, since the builtin
+            // symbol has the same name and arity.
+            if is_builtin_pair_proj(d) {
+                continue;
+            }
+            if d.private {
+                private.insert(d.name.clone());
+            }
+            if d.destructor {
+                destructor.insert(d.name.clone());
+            }
+            if d.ac {
+                ac.insert(d.name.clone());
+            }
+            if d.ndc {
+                ndc.insert(d.name.clone());
+            }
+            if d.ndc_diff {
+                ndc_diff.insert(d.name.clone());
+            }
+        }
+    }
     for it in items {
         if let p::TheoryItem::Builtins(names) = it {
             for n in names {
@@ -684,10 +748,13 @@ fn collect_user_funs(items: &[p::TheoryItem]) -> CollectedUserFuns {
         }
     }
     CollectedUserFuns {
-        unary: user_names(|d| d.arg_types.len() == 1),
+        unary,
         nullary,
         private,
         destructor,
+        ac,
+        ndc,
+        ndc_diff,
     }
 }
 
@@ -775,22 +842,22 @@ pub fn builtin_nullary_constants(name: &str) -> Vec<String> {
 
 /// Generates an RAII guard that swaps a fresh `BTreeSet<String>` into a
 /// thread-local for the guard's lifetime and restores the previous value on
-/// drop.  All four user-declared-function thread-locals (`USER_UNARY_FUNS`,
-/// `USER_NULLARY_FUNS`, `USER_PRIVATE_FUNS`, `USER_DESTRUCTOR_FUNS`) share
-/// this identical swap/restore logic; the macro is their single source of
-/// truth.
+/// drop.  All seven user-declared-function thread-locals (`USER_UNARY_FUNS`,
+/// `USER_NULLARY_FUNS`, `USER_PRIVATE_FUNS`, `USER_DESTRUCTOR_FUNS`,
+/// `USER_AC_FUNS`, `USER_NDC_FUNS`, `USER_NDC_DIFF_FUNS`) share this
+/// identical swap/restore logic; the macro is their single source of truth.
 macro_rules! btreeset_swap_guard {
     ($(#[$meta:meta])* $Guard:ident, $tl:path) => {
         $(#[$meta])*
         struct $Guard {
-            previous: BTreeSet<String>,
+            previous: Arc<BTreeSet<String>>,
         }
 
         impl $Guard {
             fn set(new: BTreeSet<String>) -> Self {
                 let previous = $tl.with(|c| {
                     let mut b = c.borrow_mut();
-                    std::mem::replace(&mut *b, new)
+                    std::mem::replace(&mut *b, Arc::new(new))
                 });
                 $Guard { previous }
             }
@@ -814,12 +881,6 @@ btreeset_swap_guard! {
     UserUnaryFunsGuard, USER_UNARY_FUNS
 }
 
-/// True if `name` is registered as a user-declared arity-1 function for
-/// the current elaboration.  Read from the `USER_UNARY_FUNS` thread-local.
-fn is_user_unary_fun(name: &str) -> bool {
-    USER_UNARY_FUNS.with(|c| c.borrow().contains(name))
-}
-
 btreeset_swap_guard! {
     /// Same as `UserUnaryFunsGuard` but for the `USER_NULLARY_FUNS` set.
     UserNullaryFunsGuard, USER_NULLARY_FUNS
@@ -836,36 +897,137 @@ btreeset_swap_guard! {
     UserPrivateFunsGuard, USER_PRIVATE_FUNS
 }
 
-/// Returns `Privacy::Private` if `name` is a user-declared private
-/// function symbol; otherwise `Privacy::Public`.  Mirrors Haskell's
-/// `signature` lookup against the per-theory funSig.
-fn user_fun_privacy(name: &str) -> Privacy {
-    USER_PRIVATE_FUNS.with(|c| {
-        if c.borrow().contains(name) {
-            Privacy::Private
-        } else {
-            Privacy::Public
-        }
-    })
-}
-
 btreeset_swap_guard! {
     /// RAII guard for the USER_DESTRUCTOR_FUNS thread-local.
     UserDestructorFunsGuard, USER_DESTRUCTOR_FUNS
 }
 
-/// Returns `Constructability::Destructor` if `name` is a user-declared
-/// `[destructor]` function symbol; otherwise `Constructability::Constructor`.
-/// Mirrors Haskell's `lookupArity`, which reads `(k,priv,cnstr)` straight
-/// from the signature (Theory/Text/Parser/Term.hs:61-63,84,92).
-fn user_fun_constructability(name: &str) -> Constructability {
-    USER_DESTRUCTOR_FUNS.with(|c| {
-        if c.borrow().contains(name) {
+btreeset_swap_guard! {
+    /// RAII guard for the USER_AC_FUNS thread-local.
+    UserAcFunsGuard, USER_AC_FUNS
+}
+
+btreeset_swap_guard! {
+    /// RAII guard for the USER_NDC_FUNS thread-local.
+    UserNdcFunsGuard, USER_NDC_FUNS
+}
+
+btreeset_swap_guard! {
+    /// RAII guard for the USER_NDC_DIFF_FUNS thread-local.
+    UserNdcDiffFunsGuard, USER_NDC_DIFF_FUNS
+}
+
+/// True if `name` is a user-declared `[AC]` function symbol.
+pub(crate) fn is_user_ac_fun(name: &str) -> bool {
+    USER_AC_FUNS.with(|c| c.borrow().contains(name))
+}
+
+/// Join of the `[NDC]` and `[NDC-diff]` attributes (HS `function`'s `joinNDC`).
+fn ndc_state_of(ndc: bool, ndc_diff: bool) -> NdcState {
+    let a = if ndc {
+        NdcState::IsNdc
+    } else {
+        NdcState::NotNdc
+    };
+    let b = if ndc_diff {
+        NdcState::IsNdcDiff
+    } else {
+        NdcState::NotNdc
+    };
+    a.join(b)
+}
+
+/// The user-declared function-name sets consulted while converting one
+/// parser term.  `Arc` snapshots of the thread-locals, taken once by
+/// [`with_user_fun_sets`] and threaded through the `term_to_vterm`
+/// recursion, so a term tree costs one thread-local access per set rather
+/// than one per node.  No thread-local borrow outlives the snapshot, so
+/// the set guards can be installed or dropped freely while one is live.
+struct UserFunSets {
+    unary: Arc<BTreeSet<String>>,
+    nullary: Arc<BTreeSet<String>>,
+    private: Arc<BTreeSet<String>>,
+    destructor: Arc<BTreeSet<String>>,
+    ac: Arc<BTreeSet<String>>,
+    ndc: Arc<BTreeSet<String>>,
+    ndc_diff: Arc<BTreeSet<String>>,
+}
+
+impl UserFunSets {
+    /// True if `name` is registered as a user-declared arity-1 function for
+    /// the current elaboration.  Read from the `USER_UNARY_FUNS` set.
+    fn is_user_unary_fun(&self, name: &str) -> bool {
+        self.unary.contains(name)
+    }
+
+    /// True if `name` is registered as a 0-arity function for the current
+    /// elaboration.  See `USER_NULLARY_FUNS` for the populating logic.
+    fn is_user_nullary_fun(&self, name: &str) -> bool {
+        self.nullary.contains(name)
+    }
+
+    /// True if `name` is a user-declared `[AC]` function symbol.
+    fn is_user_ac_fun(&self, name: &str) -> bool {
+        self.ac.contains(name)
+    }
+
+    /// Returns `Privacy::Private` if `name` is a user-declared private
+    /// function symbol; otherwise `Privacy::Public`.  Mirrors Haskell's
+    /// `signature` lookup against the per-theory funSig.
+    fn user_fun_privacy(&self, name: &str) -> Privacy {
+        if self.private.contains(name) {
+            Privacy::Private
+        } else {
+            Privacy::Public
+        }
+    }
+
+    /// Returns `Constructability::Destructor` if `name` is a user-declared
+    /// `[destructor]` function symbol; otherwise
+    /// `Constructability::Constructor`.  Mirrors Haskell's `lookupArity`,
+    /// which reads `(k,priv,cnstr)` straight from the signature
+    /// (Theory/Text/Parser/Term.hs:62-71).
+    fn user_fun_constructability(&self, name: &str) -> Constructability {
+        if self.destructor.contains(name) {
             Constructability::Destructor
         } else {
             Constructability::Constructor
         }
-    })
+    }
+
+    /// The NDC state of a user-declared symbol, read from the `[NDC]` /
+    /// `[NDC-diff]` name sets.
+    fn user_fun_ndc(&self, name: &str) -> NdcState {
+        ndc_state_of(self.ndc.contains(name), self.ndc_diff.contains(name))
+    }
+
+    /// The `AcFctSym` for a user-declared `[AC]` name, carrying the privacy /
+    /// constructability / NDC flags read off its declaration (HS `lookupArity`).
+    fn user_ac_fct_sym(&self, name: &str) -> tamarin_term::function_symbols::AcFctSym {
+        tamarin_term::function_symbols::AcFctSym::new(
+            name.as_bytes().to_vec(),
+            self.user_fun_privacy(name),
+            self.user_fun_constructability(name),
+            self.user_fun_ndc(name),
+        )
+    }
+}
+
+/// Snapshots every user-declared function-name thread-local (an `Arc` clone
+/// each) and hands them to `f` bundled as a [`UserFunSets`].  Each borrow
+/// ends within its `with` call, so nothing `f` does — including installing
+/// or dropping a set guard — can conflict with the snapshot.
+fn with_user_fun_sets<R>(f: impl FnOnce(&UserFunSets) -> R) -> R {
+    let sets = UserFunSets {
+        unary: USER_UNARY_FUNS.with(|c| c.borrow().clone()),
+        nullary: USER_NULLARY_FUNS.with(|c| c.borrow().clone()),
+        private: USER_PRIVATE_FUNS.with(|c| c.borrow().clone()),
+        destructor: USER_DESTRUCTOR_FUNS.with(|c| c.borrow().clone()),
+        ac: USER_AC_FUNS.with(|c| c.borrow().clone()),
+        ndc: USER_NDC_FUNS.with(|c| c.borrow().clone()),
+        ndc_diff: USER_NDC_DIFF_FUNS.with(|c| c.borrow().clone()),
+    };
+    f(&sets)
 }
 
 /// Bundles RAII guards for all the user-declared function thread-locals,
@@ -876,6 +1038,9 @@ pub struct UserFunsForTheoryGuard {
     _nullary: UserNullaryFunsGuard,
     _private: UserPrivateFunsGuard,
     _destructor: UserDestructorFunsGuard,
+    _ac: UserAcFunsGuard,
+    _ndc: UserNdcFunsGuard,
+    _ndc_diff: UserNdcDiffFunsGuard,
 }
 
 /// RAII guard that swaps in the 0-arity NoEq function-symbol names from
@@ -933,6 +1098,9 @@ pub fn set_user_funs_from_collected(funs: &CollectedUserFuns) -> UserFunsForTheo
         _nullary: UserNullaryFunsGuard::set(funs.nullary.clone()),
         _private: UserPrivateFunsGuard::set(funs.private.clone()),
         _destructor: UserDestructorFunsGuard::set(funs.destructor.clone()),
+        _ac: UserAcFunsGuard::set(funs.ac.clone()),
+        _ndc: UserNdcFunsGuard::set(funs.ndc.clone()),
+        _ndc_diff: UserNdcDiffFunsGuard::set(funs.ndc_diff.clone()),
     }
 }
 
@@ -945,10 +1113,13 @@ pub fn set_user_funs_from_collected(funs: &CollectedUserFuns) -> UserFunsForTheo
 /// identity relative to the calling thread.
 pub fn snapshot_user_funs() -> CollectedUserFuns {
     CollectedUserFuns {
-        unary: USER_UNARY_FUNS.with(|c| c.borrow().clone()),
-        nullary: USER_NULLARY_FUNS.with(|c| c.borrow().clone()),
-        private: USER_PRIVATE_FUNS.with(|c| c.borrow().clone()),
-        destructor: USER_DESTRUCTOR_FUNS.with(|c| c.borrow().clone()),
+        unary: USER_UNARY_FUNS.with(|c| c.borrow().as_ref().clone()),
+        nullary: USER_NULLARY_FUNS.with(|c| c.borrow().as_ref().clone()),
+        private: USER_PRIVATE_FUNS.with(|c| c.borrow().as_ref().clone()),
+        destructor: USER_DESTRUCTOR_FUNS.with(|c| c.borrow().as_ref().clone()),
+        ac: USER_AC_FUNS.with(|c| c.borrow().as_ref().clone()),
+        ndc: USER_NDC_FUNS.with(|c| c.borrow().as_ref().clone()),
+        ndc_diff: USER_NDC_DIFF_FUNS.with(|c| c.borrow().as_ref().clone()),
     }
 }
 
@@ -979,17 +1150,37 @@ fn elaborate_already_expanded(parser_thy: &p::Theory) -> Result<Theory, ElabErro
         thy.items.push(TheoryItem::ConfigBlock(cfg.clone()));
     }
 
-    elaborate_items(&parser_thy.items, &mut thy)?;
+    elaborate_items(&parser_thy.items, parser_thy.is_diff, &mut thy)?;
     Ok(thy)
 }
 
-fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), ElabError> {
+fn elaborate_items(
+    items: &[p::TheoryItem],
+    is_diff: bool,
+    out: &mut Theory,
+) -> Result<(), ElabError> {
+    // HS `reservedBuiltinNames` parser state: appended only by the
+    // non-diff `builtins` parser (Theory/Text/Parser/Signature.hs:132-134);
+    // `diffbuiltins` (Signature.hs:141-148) never touches it, so diff
+    // theories reserve nothing and the builtin pre-check in the
+    // Functions arm below can never fire for them.
+    let mut reserved_builtin_names: Vec<String> = Vec::new();
     for item in items {
         match item {
             p::TheoryItem::Builtins(names) => {
                 let mut s = out.signature.maude_sig.clone();
                 for name in names {
                     if let Some(sig) = builtin_sig(name) {
+                        // The conflict checks and the reserved-name
+                        // accumulation belong to the non-diff `builtins`
+                        // parser only (`extendSig`, Theory/Text/Parser/
+                        // Signature.hs:102-135); diff theories go through
+                        // `diffbuiltins` (Signature.hs:141-148), which
+                        // merges unchecked and reserves nothing.
+                        if !is_diff {
+                            check_builtin_conflicts(name, &sig, &s)?;
+                            reserved_builtin_names.extend(reserved_names_of(&sig));
+                        }
                         s = s.merge(sig);
                     }
                     // HS `builtinsNames` (Theory/Text/Parser/Signature.hs:78-83)
@@ -1014,6 +1205,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 out.signature.maude_sig = s;
             }
             p::TheoryItem::Functions(decls) => {
+                use tamarin_term::function_symbols::{AcFctSym, UserDefinedSym};
                 for d in decls {
                     let arity = d.arg_types.len();
                     let priv_ = if d.private {
@@ -1026,13 +1218,143 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                     } else {
                         Constructability::Constructor
                     };
-                    let sym = NoEqSym::new(d.name.as_bytes().to_vec(), arity, priv_, constr);
+                    let ndc = ndc_state_of(d.ndc, d.ndc_diff);
+                    // HS builtin pre-check (Theory/Text/Parser/
+                    // Signature.hs:200-209): a name reserved by an enabled
+                    // builtin must be re-declared at EXACTLY the builtin's
+                    // (arity, privacy, constructability, NDC) tuple.  Runs
+                    // BEFORE the general conflict check, has NO fst/snd
+                    // exemption (`builtins: dest-pairing` + `functions:
+                    // fst/1` is an error), and consults `st_fun_syms`
+                    // only, never `macro_names`.
+                    if reserved_builtin_names.iter().any(|n| n == &d.name) {
+                        let found = out
+                            .signature
+                            .maude_sig
+                            .st_fun_syms
+                            .iter()
+                            .find(|s| s.name == d.name.as_bytes());
+                        match found {
+                            Some(b)
+                                if (b.arity, b.privacy, b.constructability, b.ndc)
+                                    != (arity, priv_, constr, ndc) =>
+                            {
+                                // `conflictingBuiltins` (Signature.hs:203)
+                                // scans the FULL static table, not just the
+                                // builtins this theory enabled.
+                                let conflicting: Vec<String> = builtin_reserved_names()
+                                    .into_iter()
+                                    .filter(|(_, ns)| ns.iter().any(|n| n == &d.name))
+                                    .map(|(b, _)| b.to_string())
+                                    .collect();
+                                return Err(ElabError {
+                                    message: format!(
+                                        "`{}` conflicts with builtin(s) {} (builtin: {}, \
+                                         requested: {})",
+                                        d.name,
+                                        show_name_list(&conflicting),
+                                        show_fun_options(
+                                            b.arity,
+                                            b.privacy,
+                                            b.constructability,
+                                            b.ndc
+                                        ),
+                                        show_fun_options(arity, priv_, constr, ndc),
+                                    ),
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+                    // HS `function` conflict check against the existing
+                    // signature (by name; fst/snd re-declarations return the
+                    // existing symbol without re-adding).  HS looks the name
+                    // up in `S.toList (stFunSyms sign) ++ S.toList (macroNames
+                    // sign)` (Theory/Text/Parser/Signature.hs:212), and
+                    // `lookup` takes the FIRST match — free symbols first,
+                    // then macros, which register as `(k, Private, Destructor,
+                    // NotNDC)` (Theory/Text/Parser/Macro.hs:46).
+                    let existing = out
+                        .signature
+                        .maude_sig
+                        .st_fun_syms
+                        .iter()
+                        .find(|s| s.name == d.name.as_bytes())
+                        .or_else(|| {
+                            out.signature
+                                .maude_sig
+                                .macro_names
+                                .iter()
+                                .find(|s| s.name == d.name.as_bytes())
+                        })
+                        .copied();
+                    if let Some(prev) = existing {
+                        let same = prev.arity == arity
+                            && prev.privacy == priv_
+                            && prev.constructability == constr
+                            && prev.ndc == ndc;
+                        let is_pair_proj = (d.name == "fst" || d.name == "snd")
+                            && arity == 1
+                            && priv_ == Privacy::Public;
+                        if !same && !is_pair_proj {
+                            // Message shape mirrors Signature.hs:214-216:
+                            // the existing tuple, then the requested one.
+                            return Err(ElabError {
+                                message: format!(
+                                    "conflicting arities/options {} and {} for `{}`. Please \
+                                     choose a different name for this function.",
+                                    show_fun_options(
+                                        prev.arity,
+                                        prev.privacy,
+                                        prev.constructability,
+                                        prev.ndc
+                                    ),
+                                    show_fun_options(arity, priv_, constr, ndc),
+                                    d.name
+                                ),
+                            });
+                        }
+                        // Name-only BY DESIGN — the byte-exact port of the
+                        // fst/snd short-circuit at Signature.hs:217, which
+                        // tests neither arity nor privacy.  For fst/snd HS
+                        // either errors above or returns the EXISTING
+                        // symbol here, never reaching addFunSym — so
+                        // `functions: fst/1 [destructor]` alone must NOT
+                        // flip the signature to the destructor variant
+                        // (only `builtins: dest-pairing` does that).  Do
+                        // not narrow this to the `is_pair_proj` predicate:
+                        // that would fall through into `add_fun_sym` and
+                        // mutate a signature HS leaves untouched.
+                        if d.name == "fst" || d.name == "snd" {
+                            continue;
+                        }
+                    }
+                    let user_sym = if d.ac {
+                        // HS: AC functions must be binary.
+                        if arity != 2 {
+                            return Err(ElabError {
+                                message: "conflicting arity : AC function must be binary"
+                                    .to_string(),
+                            });
+                        }
+                        UserDefinedSym::AcFctUser(AcFctSym::new(
+                            d.name.as_bytes().to_vec(),
+                            priv_,
+                            constr,
+                            ndc,
+                        ))
+                    } else {
+                        UserDefinedSym::NoEqUser(
+                            NoEqSym::new(d.name.as_bytes().to_vec(), arity, priv_, constr)
+                                .with_ndc(ndc),
+                        )
+                    };
                     // `add_fun_sym` consumes `self` by value; move the
                     // current sig out via `take` to avoid a per-declaration
                     // deep clone of the whole MaudeSig.  Output order and
                     // dedup are unchanged (same `add_fun_sym` path).
                     let cur = std::mem::take(&mut out.signature.maude_sig);
-                    out.signature.maude_sig = cur.add_fun_sym(sym);
+                    out.signature.maude_sig = cur.add_fun_sym(user_sym);
                 }
             }
             p::TheoryItem::Equations { eqs, convergent } => {
@@ -1622,6 +1944,12 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                 tamarin_term::lterm::NameTag::Fresh => p::Term::FreshLit(name.id.0.to_string()),
                 tamarin_term::lterm::NameTag::Nat => p::Term::NatLit(name.id.0.to_string()),
                 tamarin_term::lterm::NameTag::Node => p::Term::PubLit(name.id.0.to_string()),
+                // `show (Name AbbrevName n) = show n` (LTerm.hs:240) is the
+                // bare id, and a nullary `App` is the parser-AST term that
+                // renders that way.
+                tamarin_term::lterm::NameTag::Abbrev => {
+                    p::Term::App(name.id.0.to_string(), Vec::new())
+                }
             }
         }
         tamarin_term::term::Term::App(funsym, args) => {
@@ -1696,6 +2024,14 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                             AcSym::Union => p::BinOp::Union,
                             AcSym::Xor => p::BinOp::Xor,
                             AcSym::NatPlus => p::BinOp::NatPlus,
+                            // A user-declared `[AC]` symbol is infix in HS's
+                            // `prettyTerm` as well (Term/Term.hs:305:
+                            // `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")"
+                            // ts`), so it round-trips through the same parser
+                            // `BinOp` node as the builtin AC operators.
+                            AcSym::AcFct(s) => p::BinOp::AcFct(tamarin_term::intern::intern_str(
+                                &String::from_utf8_lossy(s.name),
+                            )),
                         };
                         // Left-fold: a parser BinOp is strictly arity-2,
                         // so fold left-to-right when more than 2 args.
@@ -1707,6 +2043,13 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                             acc = p::Term::BinOp(op, Box::new(acc), Box::new(next));
                         }
                         acc
+                    } else if let AcSym::AcFct(s) = ac {
+                        // HS `prettyTerm` renders a NULLARY user-AC symbol as
+                        // its bare name (Term/Term.hs:304), and `fAppAC`
+                        // collapses a one-element operand list to that operand
+                        // (Term/Term/Raw.hs:118-122) — neither shape carries an
+                        // infix operator, so both stay a named application.
+                        p::Term::App(String::from_utf8_lossy(s.name).into_owned(), parser_args)
                     } else {
                         // Defensive: 0- or 1-arg AC term shouldn't occur
                         // (AC operators are arity-2), but emit a
@@ -1716,6 +2059,7 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                             AcSym::Union => "?Union",
                             AcSym::Xor => "?Xor",
                             AcSym::NatPlus => "?NatPlus",
+                            AcSym::AcFct(_) => unreachable!("handled above"),
                         };
                         p::Term::App(name.to_string(), parser_args)
                     }
@@ -1735,7 +2079,7 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                     // Scott::key_secrecy: lemma verifies in HS but RS
                     // terminates `SOLVED // trace found` (wrong verdict).
                     // Mirrors HS's `viewTerm` round-trip via `FApp (C EMap)`
-                    // followed by `naryOpApp` at Theory/Text/Parser/Term.hs:79-93, see line 92.
+                    // followed by `naryOpApp` at Theory/Text/Parser/Term.hs:87-106, see line 103.
                     use tamarin_term::function_symbols::CSym;
                     let name = match c {
                         CSym::EMap => String::from_utf8(
@@ -1755,10 +2099,11 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
 }
 
 /// AC-canonicalise a parser-AST term: for every `BinOp(op, l, r)` where op
-/// is AC (Mult/Union/Xor/NatPlus), flatten the chain into the full
-/// multiset, sort it (via the existing `cmp_term` for GTerm — we convert
-/// through GTerm transiently), then re-fold right-leaning so the
-/// canonical form matches HS's flat-sorted `FApp (AC op) args`.
+/// is AC (Mult/Union/Xor/NatPlus, or a user-declared `[AC]` symbol),
+/// flatten the chain into the full multiset, sort it (via the existing
+/// `cmp_term` for GTerm — we convert through GTerm transiently), then
+/// re-fold right-leaning so the canonical form matches HS's flat-sorted
+/// `FApp (AC op) args`.
 ///
 /// Without this, parser-AST `BinOp` stays in the order the parser
 /// produced (left-associative left-to-right), so e.g.
@@ -1775,12 +2120,15 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
 /// two arguments (Raw.hs:132-133).  Mirror that here so the parser-AST
 /// display path matches HS — `em` args from let-block desugaring may
 /// arrive in source order, which can differ from canonical order.
-/// HS site: `Theory/Text/Parser/Term.hs:79-93, see line 92` / `Term/Term/Raw.hs:132-133`:
+/// HS site: `Theory/Text/Parser/Term.hs:87-106, see line 103` / `Term/Term/Raw.hs:132-133`:
 ///   `fAppC nacsym as = FAPP (C nacsym) (sort as)`
 pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
     use p::BinOp;
     fn is_ac(op: BinOp) -> bool {
-        matches!(op, BinOp::Mult | BinOp::Union | BinOp::Xor | BinOp::NatPlus)
+        matches!(
+            op,
+            BinOp::Mult | BinOp::Union | BinOp::Xor | BinOp::NatPlus | BinOp::AcFct(_)
+        )
     }
     fn flatten(op: BinOp, t: &p::Term, out: &mut Vec<p::Term>) {
         match t {
@@ -1790,6 +2138,20 @@ pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
             }
             _ => out.push(t.clone()),
         }
+    }
+    /// Sort a flattened AC operand list and re-fold it right-leaning into
+    /// `BinOp(op, x_0, BinOp(op, x_1, ...))` — the parser-AST spelling of
+    /// HS's flat, sorted `FApp (AC op) args` (`fAppAC`,
+    /// Term/Term/Raw.hs:118-122).  A one-element list collapses to that
+    /// element, mirroring `fAppAC _ [a] = a`.
+    fn sort_and_fold(op: BinOp, mut flat: Vec<p::Term>) -> p::Term {
+        flat.sort_by(cmp_pterm);
+        let mut iter = flat.into_iter().rev();
+        let mut acc = iter.next().expect("AC chain has at least one element");
+        for prev in iter {
+            acc = p::Term::BinOp(op, Box::new(prev), Box::new(acc));
+        }
+        acc
     }
     fn cmp_pterm(a: &p::Term, b: &p::Term) -> std::cmp::Ordering {
         // Convert to GTerm transiently for the canonical `cmp_term`
@@ -1820,6 +2182,20 @@ pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
             };
             p::Term::App(n.clone(), vec![first, second])
         }
+        // A user-declared `[AC]` symbol written in PREFIX form.  HS's
+        // `naryOpApp` builds `fAppAC (ACfct …) ts` for it whatever the
+        // written arity (Theory/Text/Parser/Term.hs:88-105), so the operands
+        // are flattened and sorted into the same AC node the infix spelling
+        // yields — and `prettyTerm` then renders that node infix
+        // (Term/Term.hs:305).
+        p::Term::App(n, args) if !args.is_empty() && is_user_ac_fun(n.as_str()) => {
+            let op = BinOp::AcFct(tamarin_term::intern::intern_str(n));
+            let mut flat: Vec<p::Term> = Vec::new();
+            for a in args {
+                flatten(op, &canonicalize_ac_in_pterm(a), &mut flat);
+            }
+            sort_and_fold(op, flat)
+        }
         p::Term::App(n, args) => p::Term::App(
             n.clone(),
             args.iter().map(canonicalize_ac_in_pterm).collect(),
@@ -1845,15 +2221,7 @@ pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
             let mut flat: Vec<p::Term> = Vec::new();
             flatten(*op, &l2, &mut flat);
             flatten(*op, &r2, &mut flat);
-            flat.sort_by(cmp_pterm);
-            // Right-fold into `BinOp(op, x_0, BinOp(op, x_1, ...))`.
-            let mut iter = flat.into_iter().rev();
-            let last = iter.next().expect("AC chain has at least one element");
-            let mut acc = last;
-            for prev in iter {
-                acc = p::Term::BinOp(*op, Box::new(prev), Box::new(acc));
-            }
-            acc
+            sort_and_fold(*op, flat)
         }
     }
 }
@@ -1898,7 +2266,7 @@ pub fn arity1_noeq_names(
 
 /// Re-fold surplus arguments of an arity-1 function application into a
 /// single right-associative pair, mirroring HS `naryOpApp` for `k == 1`
-/// (Theory/Text/Parser/Term.hs:84-87):
+/// (Theory/Text/Parser/Term.hs:94-96):
 ///   `ts <- parens $ if k == 1 then return <$> tupleterm ... else commaSep ...`
 /// where `tupleterm = chainr1 (...) (fAppPair <$ comma)`.  So for an arity-1
 /// symbol `f`, the surface `f(a, b, c)` parses to `f(<a, b, c>)` — a single
@@ -2007,17 +2375,19 @@ fn right_nest_pair<V>(items: Vec<VTerm<Name, V>>) -> Option<VTerm<Name, V>> {
 /// builds a plain `LVar` literal (with `nullaryApp` 0-arity recovery); SAPIC
 /// builds a typed `SapicLVar` literal (same recovery, additionally gated on an
 /// un-annotated variable).  Recursion is threaded back through `term_to_vterm`
-/// so the whole tree is built in one universe.
-fn term_to_vterm<V, F>(t: &p::Term, mk_var: &F) -> Option<VTerm<Name, V>>
+/// so the whole tree is built in one universe.  `funs` carries the
+/// user-declared function-name sets, snapshotted once at the entry point by
+/// [`with_user_fun_sets`] and handed to every node (`mk_var` included).
+fn term_to_vterm<V, F>(t: &p::Term, mk_var: &F, funs: &UserFunSets) -> Option<VTerm<Name, V>>
 where
     V: Clone + Ord,
-    F: Fn(&p::VarSpec) -> Option<VTerm<Name, V>>,
+    F: Fn(&p::VarSpec, &UserFunSets) -> Option<VTerm<Name, V>>,
 {
     use tamarin_term::function_symbols::AcSym;
     use tamarin_term::term::f_app_ac;
 
     match t {
-        p::Term::Var(v) => mk_var(v),
+        p::Term::Var(v) => mk_var(v, funs),
         p::Term::PubLit(s) => {
             let n = Name::new(NameTag::Pub, s.clone());
             Some(Term::Lit(Lit::Con(n)))
@@ -2081,7 +2451,7 @@ where
             // Builtin arity-1 NoEq symbols whose surplus comma-separated
             // args must be folded into a single tuple, mirroring HS's
             // signature-driven `naryOpApp` (`k == 1`) over `noEqFunSyms`
-            // (Theory/Text/Parser/Term.hs:84-87).  In addition to the
+            // (Theory/Text/Parser/Term.hs:94-96).  In addition to the
             // common ones (h / fst / snd / inv / pk), this covers the
             // less-common builtin unary symbols: `getMessage`
             // (revealing-signing) and `get_rep` / `report`
@@ -2091,8 +2461,11 @@ where
             let unary_builtin = matches!(
                 name.as_str(),
                 "h" | "fst" | "snd" | "inv" | "pk" | "getMessage" | "get_rep" | "report"
-            ) || is_user_unary_fun(name.as_str());
-            let new_args: Option<Vec<_>> = args.iter().map(|a| term_to_vterm(a, mk_var)).collect();
+            ) || funs.is_user_unary_fun(name.as_str());
+            let new_args: Option<Vec<_>> = args
+                .iter()
+                .map(|a| term_to_vterm(a, mk_var, funs))
+                .collect();
             let mut new_args = new_args?;
             if unary_builtin && new_args.len() > 1 {
                 // Wrap the surplus args into one right-associative pair so the
@@ -2101,9 +2474,8 @@ where
             }
             // HS-faithful: `em(a, b)` (bilinear-pairing builtin) must be
             // emitted as a C-symbol application, not NoEq.  Mirrors HS
-            // `naryOpApp` (Theory/Text/Parser/Term.hs:79-93, see line 92):
-            //   `let app o = if BC.pack op == emapSymString then fAppC EMap
-            //                else fAppNoEq o`
+            // `naryOpApp` (Theory/Text/Parser/Term.hs:87-106, see line 103):
+            //   `(o,(_,_,_,_)) | o == emapSymString -> return $ fAppC EMap ts`
             // Without this gate, RS builds `em` as a NoEq function symbol
             // → Maude theory declares `op tamem : Msg Msg -> Msg [comm]`
             //   (via `op_c`, maude_print.rs:299-306), but rule terms get
@@ -2123,39 +2495,57 @@ where
                 let b = it.next().unwrap();
                 return Some(tamarin_term::builtin::emap(a, b));
             }
+            // #883 `naryOpApp` IsAC case: a user-declared `[AC]` symbol
+            // lowers to an AC application (n-ary — the arity check applies
+            // only to non-AC symbols); infix `a f b` produces the same
+            // `App(f, [a, b])` parser node, so both forms land here.
+            if funs.is_user_ac_fun(name.as_str()) {
+                return Some(f_app_ac(AcSym::AcFct(funs.user_ac_fct_sym(name)), new_args));
+            }
             let sym = NoEqSym::new(
                 name.as_bytes().to_vec(),
                 new_args.len(),
-                user_fun_privacy(name),
-                user_fun_constructability(name),
-            );
+                funs.user_fun_privacy(name),
+                funs.user_fun_constructability(name),
+            )
+            .with_ndc(funs.user_fun_ndc(name));
             Some(f_app_no_eq(sym, new_args))
         }
         p::Term::Pair(items) => {
-            let new_items: Option<Vec<_>> =
-                items.iter().map(|i| term_to_vterm(i, mk_var)).collect();
+            let new_items: Option<Vec<_>> = items
+                .iter()
+                .map(|i| term_to_vterm(i, mk_var, funs))
+                .collect();
             // Right-associative pair: <a, b, c> = pair(a, pair(b, c)).
             right_nest_pair(new_items?)
         }
         p::Term::AlgApp(name, a, b) => {
             // `f{a}b` desugars to `f(a, b)` semantically; users typically
             // use this for senc/aenc/sign/mac.
-            let aa = term_to_vterm(a, mk_var)?;
-            let bb = term_to_vterm(b, mk_var)?;
+            let aa = term_to_vterm(a, mk_var, funs)?;
+            let bb = term_to_vterm(b, mk_var, funs)?;
             // Haskell `binaryAlgApp` also reads `(k,priv,cnstr)` from the
-            // signature via `lookupArity` (Theory/Text/Parser/Term.hs:96-106, see line 101),
+            // signature via `lookupArity` (Theory/Text/Parser/Term.hs:108-121, see line 114),
             // so thread user privacy/constructability here too.
+            // #883: `[AC]` symbols build an AC application here as well.
+            if funs.is_user_ac_fun(name.as_str()) {
+                return Some(f_app_ac(
+                    AcSym::AcFct(funs.user_ac_fct_sym(name)),
+                    vec![aa, bb],
+                ));
+            }
             let sym = NoEqSym::new(
                 name.as_bytes().to_vec(),
                 2,
-                user_fun_privacy(name),
-                user_fun_constructability(name),
-            );
+                funs.user_fun_privacy(name),
+                funs.user_fun_constructability(name),
+            )
+            .with_ndc(funs.user_fun_ndc(name));
             Some(f_app_no_eq(sym, vec![aa, bb]))
         }
         p::Term::Diff(a, b) => {
-            let aa = term_to_vterm(a, mk_var)?;
-            let bb = term_to_vterm(b, mk_var)?;
+            let aa = term_to_vterm(a, mk_var, funs)?;
+            let bb = term_to_vterm(b, mk_var, funs)?;
             let sym = NoEqSym::new(
                 b"diff".to_vec(),
                 2,
@@ -2165,13 +2555,21 @@ where
             Some(f_app_no_eq(sym, vec![aa, bb]))
         }
         p::Term::BinOp(op, a, b) => {
-            let aa = term_to_vterm(a, mk_var)?;
-            let bb = term_to_vterm(b, mk_var)?;
+            let aa = term_to_vterm(a, mk_var, funs)?;
+            let bb = term_to_vterm(b, mk_var, funs)?;
             match op {
                 p::BinOp::Mult => Some(f_app_ac(AcSym::Mult, vec![aa, bb])),
                 p::BinOp::Union => Some(f_app_ac(AcSym::Union, vec![aa, bb])),
                 p::BinOp::Xor => Some(f_app_ac(AcSym::Xor, vec![aa, bb])),
                 p::BinOp::NatPlus => Some(f_app_ac(AcSym::NatPlus, vec![aa, bb])),
+                // A user-declared `[AC]` symbol applied infix — the same
+                // application the `App(f, [a, b])` arm above builds, so it
+                // reads the same user-function signature for the symbol's
+                // privacy / constructability / NDC flags.
+                p::BinOp::AcFct(name) => Some(f_app_ac(
+                    AcSym::AcFct(funs.user_ac_fct_sym(name)),
+                    vec![aa, bb],
+                )),
                 p::BinOp::Exp => {
                     let sym = NoEqSym::new(
                         b"exp".to_vec(),
@@ -2197,20 +2595,24 @@ pub fn term_to_lnterm(t: &p::Term) -> Option<tamarin_term::lterm::LNTerm> {
     // Msg-sort var named `true` if they explicitly annotate it (e.g.
     // `true:msg`), and the parser would emit `Untagged` only for the bare
     // form anyway.
-    let mk_var = |v: &p::VarSpec| -> Option<tamarin_term::lterm::LNTerm> {
-        if matches!(v.sort, p::SortHint::Untagged) && v.idx == 0 && is_user_nullary_fun(&v.name) {
+    let mk_var = |v: &p::VarSpec, funs: &UserFunSets| -> Option<tamarin_term::lterm::LNTerm> {
+        if matches!(v.sort, p::SortHint::Untagged)
+            && v.idx == 0
+            && funs.is_user_nullary_fun(&v.name)
+        {
             let sym = NoEqSym::new(
                 v.name.as_bytes().to_vec(),
                 0,
-                user_fun_privacy(&v.name),
+                funs.user_fun_privacy(&v.name),
                 Constructability::Constructor,
-            );
+            )
+            .with_ndc(funs.user_fun_ndc(&v.name));
             return Some(f_app_no_eq(sym, vec![]));
         }
         let lv = LVar::new(v.name.clone(), sort_of(&v.sort), v.idx);
         Some(Term::Lit(Lit::Var(lv)))
     };
-    term_to_vterm(t, &mk_var)
+    with_user_fun_sets(|funs| term_to_vterm(t, &mk_var, funs))
 }
 
 // =============================================================================
@@ -2234,24 +2636,25 @@ pub fn term_to_sapic_term(t: &p::Term) -> Option<crate::sapic::SapicTerm> {
     // SAPIC `Var` case: a bare untagged idx-0 identifier may be a 0-arity NoEq
     // fun symbol (mirrors `term_to_lnterm`'s `nullaryApp` recovery, additionally
     // gated on an un-annotated variable); otherwise a typed `SapicLVar`.
-    let mk_var = |v: &p::VarSpec| -> Option<crate::sapic::SapicTerm> {
+    let mk_var = |v: &p::VarSpec, funs: &UserFunSets| -> Option<crate::sapic::SapicTerm> {
         if matches!(v.sort, p::SortHint::Untagged)
             && v.idx == 0
             && v.typ.is_none()
-            && is_user_nullary_fun(&v.name)
+            && funs.is_user_nullary_fun(&v.name)
         {
             let sym = NoEqSym::new(
                 v.name.as_bytes().to_vec(),
                 0,
-                user_fun_privacy(&v.name),
+                funs.user_fun_privacy(&v.name),
                 Constructability::Constructor,
-            );
+            )
+            .with_ndc(funs.user_fun_ndc(&v.name));
             return Some(f_app_no_eq(sym, vec![]));
         }
         let lv = LVar::new(v.name.clone(), sort_of(&v.sort), v.idx);
         Some(Term::Lit(Lit::Var(SapicLVar::new(lv, v.typ.clone()))))
     };
-    term_to_vterm(t, &mk_var)
+    with_user_fun_sets(|funs| term_to_vterm(t, &mk_var, funs))
 }
 
 /// `parser::Fact` → `SapicNFact<SapicLVar>` (`Fact<SapicTerm>`).  Mirrors
@@ -2295,6 +2698,143 @@ fn builtin_sig(name: &str) -> Option<MaudeSig> {
         "dest-pairing" => Some(pair_dest_maude_sig()), // pair-with-destructors
         _ => None,
     }
+}
+
+/// `getReservedNames` (Theory/Text/Parser/Signature.hs:174-176): the names
+/// of a MaudeSig's `stFunSyms`, in ascending set order.
+fn reserved_names_of(msig: &MaudeSig) -> Vec<String> {
+    msig.st_fun_syms
+        .iter()
+        .map(|s| String::from_utf8_lossy(s.name).into_owned())
+        .collect()
+}
+
+/// `builtinReservedNames` (Theory/Text/Parser/Signature.hs:179-181): one
+/// row per builtin that HAS a MaudeSig, in `builtinsNames` order
+/// (Signature.hs:80-86 — `locations-report` first, then the
+/// `builtinsDiffNames` rows, Signature.hs:59-76).  `reliable-channel`
+/// carries no MaudeSig (Signature.hs:84) and is excluded.  The builtins
+/// whose MaudeSig only sets an enable flag (diffie-hellman,
+/// bilinear-pairing, multiset, xor, natural-numbers) contribute empty
+/// rows: they reserve no names.
+fn builtin_reserved_names() -> Vec<(&'static str, Vec<String>)> {
+    const BUILTINS_NAMES_ORDER: [&str; 15] = [
+        "locations-report",
+        "diffie-hellman",
+        "bilinear-pairing",
+        "multiset",
+        "xor",
+        "symmetric-encryption",
+        "asymmetric-encryption",
+        "signing",
+        "dest-pairing",
+        "dest-symmetric-encryption",
+        "dest-asymmetric-encryption",
+        "dest-signing",
+        "revealing-signing",
+        "hashing",
+        "natural-numbers",
+    ];
+    BUILTINS_NAMES_ORDER
+        .iter()
+        .filter_map(|n| builtin_sig(n).map(|msig| (*n, reserved_names_of(&msig))))
+        .collect()
+}
+
+/// Derived `Show` of the HS `NoEqSym` payload
+/// `(Int,Privacy,Constructability,NDCstate)`: `(1,Public,Constructor,NotNDC)`
+/// — no spaces after the commas.
+fn show_fun_options(
+    arity: usize,
+    privacy: Privacy,
+    constructability: Constructability,
+    ndc: NdcState,
+) -> String {
+    let privacy = match privacy {
+        Privacy::Private => "Private",
+        Privacy::Public => "Public",
+    };
+    let constructability = match constructability {
+        Constructability::Constructor => "Constructor",
+        Constructability::Destructor => "Destructor",
+    };
+    let ndc = match ndc {
+        NdcState::IsNdc => "IsNDC",
+        NdcState::NotNdc => "NotNDC",
+        NdcState::IsNdcDiff => "IsNDCDiff",
+        NdcState::IsNdcBoth => "IsNDCBoth",
+    };
+    format!("({arity},{privacy},{constructability},{ndc})")
+}
+
+/// Haskell `show` of a `[String]` of function/builtin names:
+/// `["dest-pairing"]` — double-quoted elements, no spaces after commas.
+/// The names are identifiers or builtin keywords, so no character of the
+/// GHC string-literal escaping can occur in them.
+fn show_name_list(names: &[String]) -> String {
+    let quoted: Vec<String> = names.iter().map(|n| format!("\"{n}\"")).collect();
+    format!("[{}]", quoted.join(","))
+}
+
+/// The `extendSig` conflict checks (Theory/Text/Parser/Signature.hs:
+/// 102-129): a named builtin's MaudeSig may not introduce a function name
+/// that already exists in the current signature — or the macro table —
+/// with a different (arity, privacy, constructability, NDC) tuple.
+/// `dest-pairing` is exempt from the FUNCTION check only (its purpose is
+/// flipping fst/snd from constructor to destructor); the macro check has
+/// no exemption.
+fn check_builtin_conflicts(name: &str, bsig: &MaudeSig, cur: &MaudeSig) -> Result<(), ElabError> {
+    // `functionConflicts` (Signature.hs:110-115): outer loop over the
+    // builtin's syms, inner over the current ones, name-equal but
+    // tuple-different.
+    let mut function_conflicts: Vec<String> = Vec::new();
+    for b in &bsig.st_fun_syms {
+        for u in &cur.st_fun_syms {
+            if u.name == b.name
+                && (u.arity, u.privacy, u.constructability, u.ndc)
+                    != (b.arity, b.privacy, b.constructability, b.ndc)
+            {
+                function_conflicts.push(String::from_utf8_lossy(b.name).into_owned());
+            }
+        }
+    }
+    if !(function_conflicts.is_empty() || name == "dest-pairing") {
+        return Err(ElabError {
+            message: format!(
+                "Builtin '{}' conflicts with existing function(s) (same name, different \
+                 arity or function options): {}. Please remove these function definitions \
+                 or use different names.",
+                name,
+                show_name_list(&function_conflicts)
+            ),
+        });
+    }
+    // `macroConflicts` (Signature.hs:117-122): `lookup fname macroSyms`
+    // takes the FIRST macro entry with the name.
+    let macro_conflicts: Vec<String> = bsig
+        .st_fun_syms
+        .iter()
+        .filter(|b| {
+            cur.macro_names
+                .iter()
+                .find(|m| m.name == b.name)
+                .is_some_and(|m| {
+                    (m.arity, m.privacy, m.constructability, m.ndc)
+                        != (b.arity, b.privacy, b.constructability, b.ndc)
+                })
+        })
+        .map(|b| String::from_utf8_lossy(b.name).into_owned())
+        .collect();
+    if !macro_conflicts.is_empty() {
+        return Err(ElabError {
+            message: format!(
+                "Builtin '{}' conflicts with existing macro '{}'",
+                name,
+                show_name_list(&macro_conflicts)
+            ),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2368,6 +2908,183 @@ mod tests {
             "expected sign: {:?}",
             funs
         );
+    }
+
+    // Oracle probe t8: `builtins: dest-pairing` + `functions: fst/1`
+    // must fail via the builtin pre-check (Signature.hs:200-209), which
+    // has no fst/snd exemption — the requested constructor tuple
+    // differs from the merged destructor one.
+    #[test]
+    fn builtin_precheck_rejects_fst_after_dest_pairing() {
+        let src = "theory T8\nbegin\nbuiltins: dest-pairing\nfunctions: fst/1\nend\n";
+        let p = parse_theory(src, &[]).unwrap();
+        let e = elaborate(&p).unwrap_err();
+        assert!(
+            e.message
+                .contains("`fst` conflicts with builtin(s) [\"dest-pairing\"]"),
+            "message: {}",
+            e.message
+        );
+        assert!(
+            e.message.contains(
+                "(builtin: (1,Public,Destructor,NotNDC), requested: (1,Public,Constructor,NotNDC))"
+            ),
+            "message: {}",
+            e.message
+        );
+    }
+
+    // Oracle probe tz: `functions: h/2` + `builtins: hashing` must fail
+    // via the builtins-arm conflict check (Signature.hs:104-126).  An
+    // unconditional merge would produce a duplicate-name signature
+    // (`h/1` AND `h/2`) that HS can never build.
+    #[test]
+    fn builtins_arm_rejects_conflicting_prior_function() {
+        let src = "theory TZ\nbegin\nfunctions: h/2\nbuiltins: hashing\nend\n";
+        let p = parse_theory(src, &[]).unwrap();
+        let e = elaborate(&p).unwrap_err();
+        assert!(
+            e.message.contains(
+                "Builtin 'hashing' conflicts with existing function(s) (same name, \
+                 different arity or function options): [\"h\"]"
+            ),
+            "message: {}",
+            e.message
+        );
+        assert!(
+            e.message
+                .contains("Please remove these function definitions or use different names."),
+            "message: {}",
+            e.message
+        );
+    }
+
+    // A macro whose name collides with a later builtin's function symbol
+    // (macros register as (k,Private,Destructor,NotNDC), Macro.hs:46,
+    // never equal to a builtin tuple) — Signature.hs:117-129.
+    #[test]
+    fn builtins_arm_rejects_conflicting_prior_macro() {
+        let src = "theory TM\nbegin\nmacros: h(x) = x\nbuiltins: hashing\nend\n";
+        let p = parse_theory(src, &[]).unwrap();
+        let e = elaborate(&p).unwrap_err();
+        assert!(
+            e.message
+                .contains("Builtin 'hashing' conflicts with existing macro '[\"h\"]'"),
+            "message: {}",
+            e.message
+        );
+    }
+
+    // Matching-tuple redeclarations stay legal in BOTH orders (corpus
+    // regression fixtures issue753-5 / issue753-6, oracle probe td).
+    #[test]
+    fn builtin_matching_redeclaration_accepted() {
+        for src in [
+            "theory T begin builtins: hashing functions: h/1 end",
+            "theory T begin functions: h/1 builtins: hashing end",
+        ] {
+            let p = parse_theory(src, &[]).unwrap();
+            let t = elaborate(&p).unwrap();
+            let hs = t
+                .signature
+                .maude_sig
+                .st_fun_syms
+                .iter()
+                .filter(|s| s.name == b"h")
+                .count();
+            assert_eq!(hs, 1, "exactly one h sym for {src:?}");
+        }
+    }
+
+    // `dest-pairing` is exempt from the builtins-arm FUNCTION check
+    // (Signature.hs:124) — oracle probes tb / tc — and a destructor
+    // fst re-declaration matches its merged tuple, so the pre-check
+    // passes too.
+    #[test]
+    fn dest_pairing_exempt_from_builtins_arm_check() {
+        for src in [
+            "theory T begin functions: fst/1 builtins: dest-pairing end",
+            "theory T begin builtins: dest-pairing functions: fst/1 [destructor] end",
+        ] {
+            let p = parse_theory(src, &[]).unwrap();
+            let t = elaborate(&p).unwrap();
+            let fst = t
+                .signature
+                .maude_sig
+                .st_fun_syms
+                .iter()
+                .find(|s| s.name == b"fst")
+                .unwrap();
+            assert_eq!(
+                fst.constructability,
+                Constructability::Destructor,
+                "for {src:?}"
+            );
+        }
+    }
+
+    // Enable-flag-only builtins (dh/bp/mset/xor/nat) have empty
+    // `stFunSyms`, so they reserve nothing (oracle probe te: exp/3 is
+    // accepted alongside diffie-hellman's exp/2).
+    #[test]
+    fn enable_flag_builtins_reserve_no_names() {
+        let src = "theory T begin builtins: diffie-hellman functions: exp/3 end";
+        let p = parse_theory(src, &[]).unwrap();
+        let t = elaborate(&p).unwrap();
+        assert!(t
+            .signature
+            .maude_sig
+            .st_fun_syms
+            .iter()
+            .any(|s| s.name == b"exp" && s.arity == 3));
+    }
+
+    // Without `dest-pairing`, `fst`/`snd` are not builtin-reserved, so the
+    // pre-check is silent and the name-only short-circuit (Signature.hs:217)
+    // returns the existing symbol: the signature keeps the CONSTRUCTOR
+    // variant — oracle probe t1.
+    #[test]
+    fn fst_destructor_redeclaration_leaves_signature_untouched() {
+        let src = "theory T begin functions: fst/1 [destructor] end";
+        let p = parse_theory(src, &[]).unwrap();
+        let t = elaborate(&p).unwrap();
+        let fst = t
+            .signature
+            .maude_sig
+            .st_fun_syms
+            .iter()
+            .find(|s| s.name == b"fst")
+            .unwrap();
+        assert_eq!(fst.constructability, Constructability::Constructor);
+    }
+
+    // General conflict message carries both shown tuples
+    // (Signature.hs:214-216) — oracle probe t6.
+    #[test]
+    fn general_conflict_message_shows_tuples() {
+        let src = "theory T begin functions: ff/1, ff/2 end";
+        let p = parse_theory(src, &[]).unwrap();
+        let e = elaborate(&p).unwrap_err();
+        assert!(
+            e.message.contains(
+                "conflicting arities/options (1,Public,Constructor,NotNDC) and \
+                 (2,Public,Constructor,NotNDC) for `ff`. Please choose a different name \
+                 for this function."
+            ),
+            "message: {}",
+            e.message
+        );
+    }
+
+    // Diff theories go through HS `diffbuiltins` (Signature.hs:141-148),
+    // which merges builtin signatures UNCHECKED and reserves no names —
+    // the tz shape is legal there.
+    #[test]
+    fn diff_mode_builtins_merge_unchecked() {
+        let src = "theory TZ\nbegin\nfunctions: h/2\nbuiltins: hashing\nend\n";
+        let mut p = parse_theory(src, &[]).unwrap();
+        p.is_diff = true;
+        assert!(elaborate(&p).is_ok());
     }
 
     #[test]

@@ -9,7 +9,7 @@
 //! A macro is a triple `(name, params, body)`. `apply_macros` recursively
 //! expands every occurrence of any macro symbol in a term.
 
-use crate::function_symbols::{Constructability, FunSym, NoEqSym, Privacy};
+use crate::function_symbols::{Constructability, FunSym, NdcState, NoEqSym, Privacy};
 use crate::subst::{apply_vterm, Subst};
 use crate::term::{f_app, Term};
 use crate::vterm::VTerm;
@@ -43,7 +43,9 @@ impl<C, V> Macro<C, V> {
 }
 
 /// `macroToFunSym`: synthesise a private destructor `NoEqSym` for a macro
-/// of arity `params.len()`.
+/// of arity `params.len()`.  `NoEqSym::new` leaves the NDC state at
+/// `NotNdc`, matching HS `NoEq (op, (length args, Private, Destructor,
+/// NotNDC))`.
 pub fn macro_to_fun_sym<C, V>(m: &Macro<C, V>) -> FunSym {
     FunSym::NoEq(NoEqSym::new(
         m.name.clone(),
@@ -88,13 +90,17 @@ fn find_matching_macro<'a, C, V>(
     // Equivalent to HS `find (\m -> macroToFunSym m == f)` but compares
     // `fsym`'s fields directly instead of rebuilding (and heap-cloning the
     // name into) a fresh `NoEqSym` per macro per node. `macroToFunSym`
-    // always yields a private destructor `NoEq` of arity `params.len()`,
-    // so the equality reduces to a head check on those four fields.
+    // always yields a private destructor `NoEq` of arity `params.len()` with
+    // no NDC property, so the equality reduces to a head check on those
+    // fields.
     let s = match fsym {
         FunSym::NoEq(s) => s,
         _ => return None,
     };
-    if s.privacy != Privacy::Private || s.constructability != Constructability::Destructor {
+    if s.privacy != Privacy::Private
+        || s.constructability != Constructability::Destructor
+        || s.ndc != NdcState::NotNdc
+    {
         return None;
     }
     macros

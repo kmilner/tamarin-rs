@@ -45,6 +45,7 @@
 pub mod atom;
 pub mod auto_sources;
 pub mod check_terms;
+pub mod close_rule;
 pub mod constraint;
 pub mod deriv_check;
 pub mod elaborate;

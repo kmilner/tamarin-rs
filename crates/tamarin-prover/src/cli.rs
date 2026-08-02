@@ -1,7 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, arcz, meiersi, jdreier, addap, Nynko, rkunnema,
-//   felixlinker, yavivanov, ValentinYuri, gilcu3, beschmi, Azurios-git,
-//   rsasse, and other minor contributors (see upstream git history)
+//   kevinmorio, arcz, meiersi, jdreier, addap, Nynko, cascremers,
+//   felixlinker, yavivanov, ValentinYuri, rkunnema, beschmi, gilcu3,
+//   Azurios-git, rsasse, and other minor contributors (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Prover.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
@@ -48,6 +49,7 @@
 //!   --precompute-only          run precomputation only
 //!   --open-chains=N, -cN       open-chain bound (parsed, not yet routed)
 //!   --derivcheck-timeout=N -dN message-derivation check timeout
+//!   --no-ndc                   deactivate the no-deconstruction-chain check
 //!   --no-reuse                 do not export reuse lemmas (parsed, not yet routed)
 //!   --no-restrictions          do not export restrictions (parsed, not yet routed)
 //!   --replication-bound=N      DeepSec replication bound (parsed, not yet routed)
@@ -176,6 +178,9 @@ pub struct Args {
     pub defines: Vec<String>,
     pub diff: bool,
     pub quit_on_warning: bool,
+    /// `--no-ndc`: deactivate the no-deconstruction-chain (NDC) check
+    /// (enabled by default).
+    pub no_ndc: bool,
     pub auto_sources: bool,
     pub oracle_name: Option<String>,
     pub oracle_only: bool,
@@ -253,6 +258,7 @@ impl Default for Args {
             defines: Vec::new(),
             diff: false,
             quit_on_warning: false,
+            no_ndc: false,
             auto_sources: false,
             oracle_name: None,
             oracle_only: false,
@@ -439,6 +445,7 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                 }
                 "diff" => args.diff = true,
                 "quit-on-warning" => args.quit_on_warning = true,
+                "no-ndc" => args.no_ndc = true,
                 "auto-sources" => args.auto_sources = true,
                 "oraclename" => {
                     // Routed: sets the oracle relPath on every oracle ranking
@@ -922,6 +929,7 @@ pub fn help_text() -> String {
     s.push_str("  -s --saturation=N                     Saturation iterations.\n");
     s.push_str("  -c --open-chains=N                    Open-chain bound.\n");
     s.push_str("  -d --derivcheck-timeout=N             Derivation check timeout.\n");
+    s.push_str("     --no-ndc                           Deactivate the NDC check.\n");
     s.push_str("     --auto-sources                     Auto-generate sources lemmas.\n");
     s.push_str("     --oraclename=FILE                  Oracle file path.\n");
     s.push_str("     --oracle-only                      Stop if oracle ranks no goals.\n");

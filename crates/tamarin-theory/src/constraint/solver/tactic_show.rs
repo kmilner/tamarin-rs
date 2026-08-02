@@ -157,6 +157,10 @@ fn write_gterm(t: &GTerm, out: &mut String) {
                 p::BinOp::Union => "Union",
                 p::BinOp::Xor => "Xor",
                 p::BinOp::NatPlus => "NatPlus",
+                // `FApp (AC (ACfct (s,_))) as -> BC.unpack s ++ "(" ... ")"`
+                // (Term/Raw.hs:227-233): a user-defined AC symbol shows under
+                // its own name, not the `ACfct` constructor.
+                p::BinOp::AcFct(n) => n,
             };
             out.push_str(name);
             out.push('(');
@@ -262,23 +266,31 @@ fn write_lnterm(t: &LNTerm, out: &mut String) {
                 }
                 out.push(')');
             }
-            // FApp (AC o) as -> show o (..)  (constructor name)
+            // FApp (AC (ACfct (s,_))) [] -> s ; FApp (AC (ACfct (s,_))) as ->
+            // s(..) ; FApp (AC o) as -> show o (..)
             FunSym::Ac(o) => {
-                let name = match o {
-                    AcSym::Union => "Union",
-                    AcSym::Mult => "Mult",
-                    AcSym::Xor => "Xor",
-                    AcSym::NatPlus => "NatPlus",
+                let name: std::borrow::Cow<'_, str> = match o {
+                    AcSym::Union => std::borrow::Cow::Borrowed("Union"),
+                    AcSym::Mult => std::borrow::Cow::Borrowed("Mult"),
+                    AcSym::Xor => std::borrow::Cow::Borrowed("Xor"),
+                    AcSym::NatPlus => std::borrow::Cow::Borrowed("NatPlus"),
+                    AcSym::AcFct(s) => String::from_utf8_lossy(s.name),
                 };
-                out.push_str(name);
-                out.push('(');
-                for (i, a) in args.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
+                out.push_str(&name);
+                // Only the user-defined AC symbols have a nullary arm
+                // (Term/Raw.hs:227-233) showing the bare name; the builtin AC
+                // operators always show a parenthesised argument list.
+                let nullary_acfct = args.is_empty() && matches!(o, AcSym::AcFct(_));
+                if !nullary_acfct {
+                    out.push('(');
+                    for (i, a) in args.iter().enumerate() {
+                        if i > 0 {
+                            out.push(',');
+                        }
+                        write_lnterm(a, out);
                     }
-                    write_lnterm(a, out);
+                    out.push(')');
                 }
-                out.push(')');
             }
         },
     }
@@ -308,7 +320,7 @@ fn write_lvar(v: &tamarin_term::lterm::LVar, out: &mut String) {
     }
 }
 
-/// HS `show Name` (LTerm.hs:231-235).  Writes directly into `out`,
+/// HS `show Name` (LTerm.hs:235-240).  Writes directly into `out`,
 /// avoiding a throwaway intermediate `String`; byte-identical output.
 fn write_name(n: &Name, out: &mut String) {
     match n.tag {
@@ -316,6 +328,12 @@ fn write_name(n: &Name, out: &mut String) {
         NameTag::Pub => {}
         NameTag::Node => out.push('#'),
         NameTag::Nat => out.push('%'),
+        // `show (Name AbbrevName n) = show n` (LTerm.hs:240) — the bare name
+        // id, with neither a sigil nor the quotes the other four tags carry.
+        NameTag::Abbrev => {
+            out.push_str(n.id.0);
+            return;
+        }
     }
     out.push('\'');
     out.push_str(n.id.0);

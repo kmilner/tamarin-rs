@@ -89,6 +89,11 @@ point at other binaries.
 - **`extend_anchor_citations.py`** — rewrites bare `Foo.hs:162` citations
   into function-extent ranges (`Foo.hs:150-183, see line 162`) so blame
   scopes stay accurate.
+- **`remap_hs_cites.py`** — remaps every HS line cite in crates/ comments
+  across a submodule bump (`--old <pin> --new <pin> [--apply]`): pure line
+  shifts applied mechanically, moved declarations re-anchored by name,
+  ambiguous cites reported for a human pass. Run automatically by
+  `bump_submodule.sh`.
 - **`header_identities.json`** — email → GitHub-username map used by the
   header generator.
 

@@ -22,8 +22,10 @@ DIFFDIR="${DIFFDIR:-/tmp/pane_byte_diffs}"
 MAX_NODES="${MAX_NODES:-400}"
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 MAUDE_PATH="${MAUDE_PATH:-$(command -v maude)}"
+ALLOWLIST="${ALLOWLIST:-$script_dir/websweep_residual.txt}"
 mkdir -p "$DIFFDIR"
 [ -x "$RS_PATH" ] || { echo "no RS binary at $RS_PATH" >&2; exit 2; }
+[ -f "$ALLOWLIST" ] || { echo "pane_byte_check: ALLOWLIST '$ALLOWLIST' does not exist" >&2; exit 2; }
 
 # Wait (up to 30s) until nothing answers on the port — guards against a
 # still-dying server from the previous file, which would make a bind-failed

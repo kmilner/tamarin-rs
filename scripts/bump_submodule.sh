@@ -95,7 +95,7 @@ finalize() {
     # Gate caches key on oracle/theory-file content only — after an oracle
     # change they are silently stale, so archive them rather than trusting
     # any freshness heuristic.
-    for c in .hs_file_cache .web_hs_cache; do
+    for c in .hs_file_cache .web_hs_cache .hs_pretty_cache; do
         d="$root/scripts/$c"
         [ -d "$d" ] || continue
         dest="$d.pre-bump-$oldshort"
@@ -103,6 +103,13 @@ finalize() {
         mv "$d" "$dest"
         echo "archived scripts/$c -> scripts/$(basename "$dest")"
     done
+
+    # Comments across crates/ cite upstream Haskell line numbers relative to
+    # the pin; remap them through the bump's diff (pure shifts applied
+    # mechanically, moved declarations re-anchored, the rest reported).
+    echo
+    python3 "$root/scripts/remap_hs_cites.py" --old "$old" --new "$new" --apply \
+        || echo "WARNING: cite remap failed — run scripts/remap_hs_cites.py by hand" >&2
 
     if [ "${SKIP_BUILD:-0}" != 1 ]; then
         "$root/setup.sh" testing
@@ -120,6 +127,7 @@ finalize() {
     [ "${SKIP_BUILD:-0}" != 1 ] || echo "builds skipped (SKIP_BUILD=1): run ./setup.sh testing && cargo build --release"
     cat <<EOF
 staged (NOT committed): tamarin-prover gitlink + patches/$(basename "$patch")
+unstaged: any HS-cite remaps under crates/ (review with git diff, commit with the bump)
 Verify before committing:
   1. RESULTS_TSV=scripts/results/fullgate_bump.tsv scripts/corpus_file_diff.sh   # full batch gate, cold cache
      - heavy files (BP_IBS_2/3, fm24 C8, alethea_votingphase_malS_abstain) need FILE_TIMEOUT>=600 cold

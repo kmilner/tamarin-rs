@@ -124,6 +124,11 @@ struct Irreducible {
     /// is reducible).  HS keys on the `FunSym` value, which for AC ops is
     /// `AC <ACSym>`.
     ac: BTreeSet<AcSym>,
+    /// Names of the irreducible user-declared `[AC]` symbols.  HS's membership
+    /// test is on the whole `FunSym`, which for such a symbol is
+    /// `AC (ACfct (name, _))` and carries no arity — `naryOpApp`'s `IsAC`
+    /// branch accepts an application of any arity — so the name alone decides.
+    ac_fct_names: BTreeSet<Vec<u8>>,
     /// Names of all nullary NoEq symbols in the FULL signature.  Used to
     /// resolve a bare `Var` whose name is a declared nullary funsym into an
     /// application (mirrors HS resolving `f/0` to `FApp f []`).
@@ -134,6 +139,7 @@ impl Irreducible {
     fn from_sig(sig: &MaudeSig) -> Self {
         let mut noeq: BTreeMap<Vec<u8>, BTreeSet<usize>> = BTreeMap::new();
         let mut ac = BTreeSet::new();
+        let mut ac_fct_names = BTreeSet::new();
         for s in &sig.irreducible_fun_syms {
             match s {
                 FunSym::NoEq(n) => {
@@ -141,6 +147,9 @@ impl Irreducible {
                 }
                 FunSym::Ac(a) => {
                     ac.insert(*a);
+                    if let AcSym::AcFct(f) = a {
+                        ac_fct_names.insert(f.name.to_vec());
+                    }
                 }
                 _ => {}
             }
@@ -156,15 +165,21 @@ impl Irreducible {
         Irreducible {
             noeq,
             ac,
+            ac_fct_names,
             nullary_names,
         }
     }
 
-    /// Is the NoEq symbol `name/arity` irreducible?
+    /// Is the symbol applied under `name` with `arity` arguments irreducible?
+    /// A user-declared `[AC]` symbol matches on its name alone (see
+    /// `ac_fct_names`); every other name denotes a NoEq symbol, keyed by
+    /// (name, arity).
     fn is_irreducible(&self, name: &str, arity: usize) -> bool {
-        self.noeq
-            .get(name.as_bytes())
-            .is_some_and(|s| s.contains(&arity))
+        self.ac_fct_names.contains(name.as_bytes())
+            || self
+                .noeq
+                .get(name.as_bytes())
+                .is_some_and(|s| s.contains(&arity))
     }
 
     /// Is the AC symbol `a` irreducible?
@@ -404,6 +419,10 @@ fn resolve_term(t: &Term, scope: &Scope, irr: &Irreducible, pos: TermPos) -> RTe
                 BinOp::Mult => resolve_ac(AcSym::Mult, vec![ra, rb], irr),
                 BinOp::Xor => resolve_ac(AcSym::Xor, vec![ra, rb], irr),
                 BinOp::NatPlus => resolve_ac(AcSym::NatPlus, vec![ra, rb], irr),
+                // A user-declared `[AC]` symbol applied infix denotes the
+                // same application as `App(name, [a, b])`, so it resolves
+                // through the same named-symbol path.
+                BinOp::AcFct(name) => resolve_named(name, vec![ra, rb], irr),
             }
         }
         Term::PatMatch(inner) => resolve_term(inner, scope, irr, pos),
@@ -584,21 +603,24 @@ fn write_rterm(t: &RTerm, out: &mut String) {
             out.push('\'');
         }
         RTerm::App(head, args) => {
-            // HS `Show (Term a)` (Term/Raw.hs:219-227):
+            // HS `Show (Term a)` (Term/Raw.hs):
             //   FApp (NoEq (s,_)) [] -> s
             //   FApp (NoEq (s,_)) as -> s ++ "(" ++ intercalate "," ... ++ ")"
+            //   FApp (AC (ACfct (s,_))) as -> s ++ "(" ++ ... ++ ")"
             //   FApp (AC o) as       -> show o ++ "(" ++ ... ++ ")"
-            // ACSym derives Show as the constructor name (Union/Mult/Xor/NatPlus).
-            let name: &str = match head {
-                Head::App { name, .. } => name.as_str(),
+            // ACSym derives Show as the constructor name (Union/Mult/Xor/NatPlus);
+            // user-defined AC symbols print their own name.
+            let name: std::borrow::Cow<'_, str> = match head {
+                Head::App { name, .. } => name.as_str().into(),
                 Head::Ac { sym, .. } => match sym {
-                    AcSym::Union => "Union",
-                    AcSym::Mult => "Mult",
-                    AcSym::Xor => "Xor",
-                    AcSym::NatPlus => "NatPlus",
+                    AcSym::Union => "Union".into(),
+                    AcSym::Mult => "Mult".into(),
+                    AcSym::Xor => "Xor".into(),
+                    AcSym::NatPlus => "NatPlus".into(),
+                    AcSym::AcFct(s) => String::from_utf8_lossy(s.name),
                 },
             };
-            out.push_str(name);
+            out.push_str(&name);
             if !args.is_empty() {
                 out.push('(');
                 for (i, a) in args.iter().enumerate() {

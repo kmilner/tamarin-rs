@@ -1,9 +1,11 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, rkunnema, charlie-j, kevinmorio, yavivanov, felixlinker,
-//   BTom-GH, PhilipLukertWork, jWoc, ValentinYuri, jdreier, beschmi,
-//   rsasse, and other minor contributors (see upstream git history)
+//   meiersi, rkunnema, charlie-j, jdreier, kevinmorio, yavivanov,
+//   felixlinker, BTom-GH, PhilipLukertWork, jWoc, ValentinYuri, rsasse,
+//   and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term/Raw.hs,
+//   lib/term/src/Term/LTerm.hs,
+//   lib/term/src/Term/Term/FunctionSymbols.hs,
+//   lib/term/src/Term/Term/Raw.hs,
 //   lib/theory/src/Theory/Constraint/System/Guarded.hs,
 //   lib/theory/src/Theory/Model/Fact.hs,
 //   lib/theory/src/Theory/Sapic/Term.hs,
@@ -482,6 +484,19 @@ pub struct Parser<'a> {
     /// HS).  `#include "file"` resolves relative to this; `None` (no source
     /// file) means includes are taken verbatim, mirroring HS's `Nothing` case.
     base_dir: Option<PathBuf>,
+    /// Names of the user-declared AC function symbols (`functions:` entries
+    /// carrying the `[AC]` attribute), which `acterm` turns into infix
+    /// operators.  This is the parse-time signature state HS reads as
+    /// `stACFunSyms . sig <$> getState` (Theory/Text/Parser/Term.hs:165-174):
+    /// only symbols declared EARLIER in the file are infix operators for the
+    /// terms that follow.
+    ///
+    /// Held ascending by name (and deduplicated), matching the
+    /// `S.toList (stACFunSyms sig)` order HS's nested `parseACSym` recursion
+    /// consumes — `ACfctSym`'s `Ord` compares the name first, so set order is
+    /// name order.  The order is load-bearing: the LAST symbol in the list binds
+    /// tightest.
+    ac_fun_syms: Vec<String>,
 }
 
 impl<'a> Parser<'a> {
@@ -506,6 +521,7 @@ impl<'a> Parser<'a> {
             enable_mset: true,
             enable_nat: true,
             base_dir: None,
+            ac_fun_syms: Vec::new(),
         }
     }
 
@@ -1046,6 +1062,7 @@ impl<'a> Parser<'a> {
         let mut sub = Parser::new(content, &[], self.is_diff);
         // Thread parser state IN (HS `getState` before `parseFileWState`).
         sub.flags = self.flags.clone();
+        sub.ac_fun_syms = self.ac_fun_syms.clone();
         sub.base_dir = sub_base;
 
         // Parse the header-less item stream: same loop as a theory body, but it
@@ -1057,8 +1074,9 @@ impl<'a> Parser<'a> {
         }
 
         // Thread parser state BACK (HS `putState st'` + `sig st'` merge): pick up
-        // any new flags the included file declared.
+        // any new flags and AC function symbols the included file declared.
         self.flags = sub.flags;
+        self.ac_fun_syms = sub.ac_fun_syms;
 
         Ok(items)
     }
@@ -1443,19 +1461,15 @@ impl<'a> Parser<'a> {
             out_type = self.type_p()?;
             arg_types = args.into_iter().collect();
         }
-        // Optional attributes [private, constructor, destructor, ...]
-        let mut private = false;
-        let mut destructor = false;
+        // Optional attributes `[private, destructor, AC, NDC, NDC-diff, ...]`
+        // (HS `option [] $ list functionAttribute`).
+        let mut atts = Vec::new();
         if self.try_punct("[") {
             loop {
                 self.skip_ws();
-                if self.try_kw("private") {
-                    private = true;
-                } else if self.try_kw("constructor") {
-                } else if self.try_kw("destructor") {
-                    destructor = true;
-                } else {
-                    break;
+                match self.function_attribute() {
+                    Some(a) => atts.push(a),
+                    None => break,
                 }
                 if !self.try_punct(",") {
                     break;
@@ -1463,13 +1477,60 @@ impl<'a> Parser<'a> {
             }
             self.require_punct("]")?;
         }
+        // HS `function` (Signature.hs:183-225) folds the attribute list into one
+        // value per property, each defaulting to the "absent" case.
+        let private = atts.contains(&FctAttr::Private);
+        let destructor = atts.contains(&FctAttr::Destructor);
+        let ac = atts.contains(&FctAttr::Ac);
+        let ndc = atts.contains(&FctAttr::Ndc);
+        let ndc_diff = atts.contains(&FctAttr::NdcDiff);
+        // A binary `[AC]` symbol also becomes an infix operator for the terms
+        // that follow, mirroring HS's `modifyStateSig $ addFunSym (ACfctUser
+        // ...)`, which likewise runs only in the `IsAC` branch and only once
+        // `k == 2`; a non-binary `[AC]` declaration contributes no operator (HS
+        // rejects it outright: "conflicting arity : AC function must be binary").
+        if ac && arg_types.len() == 2 && !self.ac_fun_syms.contains(&name) {
+            self.ac_fun_syms.push(name.clone());
+            self.ac_fun_syms.sort();
+        }
         Ok(FunctionDecl {
             name,
             arg_types,
             out_type,
             private,
             destructor,
+            ac,
+            ndc,
+            ndc_diff,
         })
+    }
+
+    /// One function attribute inside the `[...]` list.  Port of HS
+    /// `functionAttribute` (Theory/Text/Parser/Signature.hs:164-171), whose
+    /// alternatives are tried in exactly this order; `None` here is HS's failing
+    /// `asum`, which ends the attribute list.
+    ///
+    /// `NDC-diff` must be tried BEFORE `NDC`: HS's `symbol` has no trailing word
+    /// boundary, so `symbol "NDC"` would otherwise swallow the `NDC` of
+    /// `NDC-diff` and leave `-diff` behind (hence the `try` in HS).  Here
+    /// `try_kw` additionally refuses a keyword followed by `-`, so the order is
+    /// belt-and-braces.
+    fn function_attribute(&mut self) -> Option<FctAttr> {
+        if self.try_kw("private") {
+            Some(FctAttr::Private)
+        } else if self.try_kw("destructor") {
+            Some(FctAttr::Destructor)
+        } else if self.try_kw("constructor") {
+            Some(FctAttr::Constructor)
+        } else if self.try_kw("AC") {
+            Some(FctAttr::Ac)
+        } else if self.try_kw("NDC-diff") {
+            Some(FctAttr::NdcDiff)
+        } else if self.try_kw("NDC") {
+            Some(FctAttr::Ndc)
+        } else {
+            None
+        }
     }
 
     /// SAPIC type: `<defaultSapicTypeS>` = `Any` placeholder, or an identifier.
@@ -1491,7 +1552,7 @@ impl<'a> Parser<'a> {
 
     fn equations(&mut self) -> Result<TheoryItem, ParseError> {
         self.require_kw("equations")?;
-        // HS `equations` (Signature.hs:219-224): `convergent` is set only when
+        // HS `equations` (Signature.hs:234-239): `convergent` is set only when
         // the literal `[convergent]` is present (`brackets (symbol "convergent")`);
         // an empty `[]` makes the `try` block fail (convergent=False) and the
         // subsequent `symbol "equations" *> colon` then errors on the `[`. So the
@@ -1506,22 +1567,24 @@ impl<'a> Parser<'a> {
         self.require_punct(":")?;
         let mut eqs = Vec::new();
         loop {
-            // HS `equation` (Signature.hs:230-231) parses both operands with
-            // `term llitNoPub True`. The `True` (eqn flag) gates AC/multiset/
-            // nat/xor/exp operators — matched here by `term(true)`. `llitNoPub`
-            // (Term.hs:53-54 = `asum [freshTerm <$> freshName, varTerm <$>
-            // msgvar]`) additionally forbids public-name literals `'foo'` and
-            // nat literals `%'n'` in operands, while still allowing fresh
-            // literals `~'n'` and all msgvar-sort variables (including `$x`
+            // HS `equation` (Signature.hs:245-246) parses both operands with
+            // `acterm True llitNoPub`. The `True` (eqn flag) gates multiset/
+            // nat/xor/mult/exp operators (but NOT the user-defined AC operators
+            // of `acterm`) — matched here by `acterm(true)`, which is what
+            // `term(true)` reduces to anyway once those gates are closed.
+            // `llitNoPub` (Term.hs:57-58 = `asum [freshTerm <$> freshName,
+            // varTerm <$> msgvar]`) additionally forbids public-name literals
+            // `'foo'` and nat literals `%'n'` in operands, while still allowing
+            // fresh literals `~'n'` and all msgvar-sort variables (including `$x`
             // pub-sort vars, since `msgvar = sortedLVar [Fresh,Pub,Nat,Msg]`).
-            // We deliberately use the public-name-allowing `term(true)` here:
+            // We deliberately use the public-name-allowing `acterm(true)` here:
             // accepting `'foo'`/`%'n'` is benign parser-level leniency — such
             // public/nat names are invalid in (convergent) equations and are
             // rejected during elaboration, so end-to-end `--prove` output is
             // unchanged on all valid theories.
-            let lhs = self.term(true)?;
+            let lhs = self.acterm(true)?;
             self.require_punct("=")?;
-            let rhs = self.term(true)?;
+            let rhs = self.acterm(true)?;
             eqs.push(Equation { lhs, rhs });
             if !self.try_punct(",") {
                 break;
@@ -2943,7 +3006,7 @@ impl<'a> Parser<'a> {
 
     fn multterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
         if eqn || !self.enable_dh {
-            return self.atom_term(eqn);
+            return self.acterm(eqn);
         }
         let mut lhs = self.expterm(eqn)?;
         loop {
@@ -2962,13 +3025,55 @@ impl<'a> Parser<'a> {
     }
 
     fn expterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
-        let mut lhs = self.atom_term(eqn)?;
+        let mut lhs = self.acterm(eqn)?;
         // HS `expterm` is "a left-associative sequence of exponentiations"
-        // (`chainl1`, Parser/Term.hs:150-152), so build left-associative
+        // (`chainl1`, Parser/Term.hs:174-176), so build left-associative
         // `^` trees here to match.
         while self.try_punct("^") {
-            let rhs = self.atom_term(eqn)?;
+            let rhs = self.acterm(eqn)?;
             lhs = Term::BinOp(BinOp::Exp, Box::new(lhs), Box::new(rhs));
+        }
+        Ok(lhs)
+    }
+
+    /// A left-associative sequence of user-defined AC operators — the infix
+    /// notation `t1 f t2` for a binary symbol declared `f/2 [AC]`.
+    ///
+    /// Port of HS `acterm` (Theory/Text/Parser/Term.hs:165-174):
+    /// ```haskell
+    /// acterm eqn plit = do
+    ///     acsyms <- stACFunSyms . sig <$> getState
+    ///     parseACSym $ S.toList acsyms
+    ///   where
+    ///     parseACSym [] = term eqn plit
+    ///     parseACSym (op:ops) = chainl1 (parseACSym ops) ((\a b -> fAppACfct op [a,b]) <$ opAC op)
+    /// ```
+    /// One `chainl1` level per declared AC symbol, nested in
+    /// `stACFunSyms`/`ac_fun_syms` order, so a later symbol in that
+    /// order binds tighter than an earlier one; the innermost level is a single
+    /// atomic term (HS `term`, here [`Self::atom_term`]).  The `eqn` flag is
+    /// only passed down: AC operators ARE accepted inside `equations:`, which is
+    /// how equational theories over AC symbols are written.
+    fn acterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
+        self.ac_chain(0, eqn)
+    }
+
+    /// The `parseACSym` recursion of [`Self::acterm`]: the `chainl1` level for
+    /// `ac_fun_syms[level]`, or the atomic-term base case once the list is
+    /// exhausted.
+    fn ac_chain(&mut self, level: usize, eqn: bool) -> Result<Term, ParseError> {
+        let Some(op) = self.ac_fun_syms.get(level).cloned() else {
+            return self.atom_term(eqn);
+        };
+        let mut lhs = self.ac_chain(level + 1, eqn)?;
+        // HS `opAC (op, _) = symbol_ (BC.unpack op)`, i.e. the symbol's own name
+        // as a plain token.  `try_kw` adds a word boundary that HS's `symbol`
+        // lacks, so HS would also accept the name as a PREFIX of the following
+        // token (`f(x) fg(y)` parsing as `f(f(x), g(y))` for an AC symbol `f`);
+        // such input is not valid syntax in any theory and errors here instead.
+        while self.try_kw(&op) {
+            let rhs = self.ac_chain(level + 1, eqn)?;
+            lhs = Term::App(op.clone(), vec![lhs, rhs]);
         }
         Ok(lhs)
     }
@@ -3429,6 +3534,27 @@ enum BranchEnd {
     Else,
     Endif,
     Eof,
+}
+
+/// One attribute of a `functions:` declaration.  Mirrors HS `FctAttr`
+/// (`Privacy Privacy | Constructability Constructability | ACstate ACstate |
+/// NDCstate NDCstate`, Term/Term/FunctionSymbols.hs:128-129) restricted to the
+/// six values the surface syntax can produce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FctAttr {
+    /// `private` (HS `Privacy Private`)
+    Private,
+    /// `destructor` (HS `Constructability Destructor`)
+    Destructor,
+    /// `constructor` (HS `Constructability Constructor`) — the default, so it is
+    /// collected but never inspected.
+    Constructor,
+    /// `AC` (HS `ACstate IsAC`)
+    Ac,
+    /// `NDC` (HS `NDCstate IsNDC`)
+    Ndc,
+    /// `NDC-diff` (HS `NDCstate IsNDCDiff`)
+    NdcDiff,
 }
 
 #[derive(Debug)]
@@ -4178,5 +4304,107 @@ end"#;
             })
             .expect("the top-level `rule two` must remain a separate item");
         assert_eq!(rule.name, "two");
+    }
+
+    // ---- user-defined AC function symbols (upstream #883) ----
+
+    fn fun_decl(t: &Theory, name: &str) -> FunctionDecl {
+        for it in &t.items {
+            if let TheoryItem::Functions(ds) = it {
+                for d in ds {
+                    if d.name == name {
+                        return d.clone();
+                    }
+                }
+            }
+        }
+        panic!("function {name} must be declared");
+    }
+
+    fn equation_lhs(src: &str) -> Term {
+        let t = parse_theory(src, &[]).expect("theory must parse");
+        for it in &t.items {
+            if let TheoryItem::Equations { eqs, .. } = it {
+                return eqs[0].lhs.clone();
+            }
+        }
+        panic!("theory must contain an equation");
+    }
+
+    // HS `functionAttribute` (Signature.hs:164-171) accepts `AC`, `NDC-diff` and
+    // `NDC`; `function` (Signature.hs:183-225) folds them into the symbol's AC and
+    // NDC state.
+    #[test]
+    fn function_attributes_ac_ndc() {
+        let t = parse_theory("theory T begin functions: a/2 [AC] end", &[]).unwrap();
+        let a = fun_decl(&t, "a");
+        assert!(a.ac && !a.ndc && !a.ndc_diff);
+
+        let t = parse_theory("theory T begin functions: b/2 [AC,NDC] end", &[]).unwrap();
+        let b = fun_decl(&t, "b");
+        assert!(b.ac && b.ndc && !b.ndc_diff);
+
+        // `NDC-diff` is tried before `NDC`, so it is never read as `NDC`
+        // followed by a stray `-diff`.
+        let t = parse_theory("theory T begin functions: c/2 [NDC-diff] end", &[]).unwrap();
+        let c = fun_decl(&t, "c");
+        assert!(!c.ac && !c.ndc && c.ndc_diff);
+
+        let src = "theory T begin functions: d/2 [AC, NDC-diff, NDC] end";
+        let t = parse_theory(src, &[]).unwrap();
+        let d = fun_decl(&t, "d");
+        assert!(d.ac && d.ndc && d.ndc_diff);
+
+        let src = "theory T begin functions: e/1 [private,destructor] end";
+        let t = parse_theory(src, &[]).unwrap();
+        let e = fun_decl(&t, "e");
+        assert!(e.private && e.destructor && !e.ac && !e.ndc && !e.ndc_diff);
+    }
+
+    // HS `acterm` (Term.hs:165-174): a binary `[AC]` symbol is also an infix,
+    // left-associative operator — the notation `prettyTerm` emits for such terms.
+    #[test]
+    fn ac_symbol_parses_infix_left_associative() {
+        let src = "theory T begin functions: add/2 [AC] equations: x add y = z end";
+        match equation_lhs(src) {
+            Term::App(f, args) => {
+                assert_eq!(f, "add");
+                assert_eq!(args.len(), 2);
+            }
+            other => panic!("expected an `add` application, got {other:?}"),
+        }
+        // `chainl1` associates to the LEFT.
+        let src = "theory T begin functions: add/2 [AC] equations: x add y add z = w end";
+        match equation_lhs(src) {
+            Term::App(f, args) if f == "add" => match &args[0] {
+                Term::App(g, inner) if g == "add" => assert_eq!(inner.len(), 2),
+                other => panic!("expected a nested `add` on the LEFT, got {other:?}"),
+            },
+            other => panic!("expected an `add` application, got {other:?}"),
+        }
+    }
+
+    // HS `acterm`'s `parseACSym` recursion nests one `chainl1` level per AC symbol
+    // in `S.toList (stACFunSyms sig)` (i.e. name) order, so the LAST symbol in
+    // that order binds tightest: `x f y g z` is `f(x, g(y,z))` however the two
+    // symbols were declared.
+    #[test]
+    fn ac_symbols_nest_in_name_order() {
+        let src = "theory T begin functions: g/2 [AC], f/2 [AC] equations: x f y g z = w end";
+        match equation_lhs(src) {
+            Term::App(op, args) if op == "f" => match &args[1] {
+                Term::App(inner_op, inner) if inner_op == "g" => assert_eq!(inner.len(), 2),
+                other => panic!("expected `g` to bind tighter than `f`, got {other:?}"),
+            },
+            other => panic!("expected `f` at the root, got {other:?}"),
+        }
+    }
+
+    // A symbol is an infix operator only once DECLARED `[AC]` (HS reads the AC
+    // symbols out of the parse-time signature state).
+    #[test]
+    fn ac_infix_requires_a_preceding_declaration() {
+        let src = "theory T begin equations: x add y = z end";
+        assert!(parse_theory(src, &[]).is_err(), "`add` is not infix here");
     }
 }

@@ -254,6 +254,11 @@ pub fn load_from_source(
         insert_wf_before(&mut wf_report, public_names, &after_public_names_topics());
     }
 
+    // The theory's once-per-load NDC-checked intruder cache
+    // (`check_close_intr_rule` below).  Stored on the `TheoryEntry` so
+    // `ProofState::new` injects it into the web session / shared context
+    // instead of re-running the check per context build.
+    let mut ndc_cache: Option<Arc<Vec<tamarin_theory::rule::IntrRuleAC>>> = None;
     if let Ok(maude) = MaudeHandle::start(maude_path, typed.signature.maude_sig.clone()) {
         tamarin_theory::tools::rule_variants::populate_rule_variants(&mut typed, &maude, None);
         // Annotate per-rule loop breakers on the stored theory so the web
@@ -282,6 +287,28 @@ pub fn load_from_source(
             }
         }
 
+        // Once-per-theory NDC pass (HS `checkCloseIntrRule` inside
+        // `checkTranslatedTheory`, TheoryLoader.hs — BEFORE the
+        // derivation checks; the web close has no `--no-ndc`, so
+        // `deduction_chain_check` is the default `true`).  Emits the
+        // `[Theory X] No Deconstruction Chain checks started/ended`
+        // markers plus the per-function verdict lines, and joins the
+        // verdicts into the stored theory's signature so every web
+        // rendering of the `functions:` header shows `[NDC]`.
+        let checked = tamarin_theory::close_rule::check_close_intr_rule(
+            &maude,
+            Some(&typed.name),
+            typed.options.deduction_chain_check,
+        );
+        if !checked.ndc_funs.is_empty() {
+            let mut sig = std::mem::take(&mut typed.signature.maude_sig);
+            for f in &checked.ndc_funs {
+                sig = sig.join_ndc_in_sig(*f, tamarin_term::function_symbols::NdcState::IsNdc);
+            }
+            typed.signature.maude_sig = sig;
+        }
+        ndc_cache = Some(Arc::new(checked.cache));
+
         // Dynamic Message Derivation Checks (run.rs:974-995): HS
         // `checkVariableDeducability`, gated by `--derivcheck-timeout` (HS
         // interactive default 5s).  The budget comes from ServerConfig
@@ -301,6 +328,7 @@ pub fn load_from_source(
             &parser_theory,
             &maude,
             derivcheck_timeout,
+            ndc_cache.clone(),
         );
         wf_report.extend(extra);
         if derivcheck_timeout > 0 {
@@ -325,6 +353,7 @@ pub fn load_from_source(
         primary: true,
         wf_report,
         errors_html,
+        ndc_cache,
         proof_state: None,
     })
 }

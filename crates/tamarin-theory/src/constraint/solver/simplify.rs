@@ -1456,13 +1456,13 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
     ChangeIndicator::Changed
 }
 
-/// Canonicalising key for implied-formula dedup: witness LVars `~mw#N → ~mw#0`,
-/// bound LVars normalised, then AC `BinOp` permutations re-sorted, then stored
-/// normal form.  This is the SINGLE source of the dedup canon — the existing/
-/// threaded canon vectors and the per-candidate site both call it, so they cannot
-/// drift out of lock-step.  Each of the three stages reuses its borrowed input
-/// when the transform is a structural no-op, so an already-canonical formula
-/// pays zero clones — the dedup only materialises (`into_owned`) a survivor.
+/// Canonicalising key for implied-formula dedup: AC `BinOp` permutations
+/// re-sorted, then stored normal form.  This is the SINGLE source of the dedup
+/// canon — the existing/threaded canon vectors and the per-candidate site both
+/// call it, so they cannot drift out of lock-step.  Both stages reuse their
+/// borrowed input when the transform is a structural no-op, so an
+/// already-canonical formula pays zero clones — the dedup only materialises
+/// (`into_owned`) a survivor.
 ///
 /// `normalize_bound_lvars` is currently an identity clone (the DeBruijn
 /// bound-var invariant already holds for formulas reaching dedup), so it is
@@ -1473,21 +1473,32 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
 /// normalises derived instances before the membership pre-check) — a raw
 /// duplicate-carrying candidate must match its normalised stored twin, or the
 /// pass re-fires it every simplifier iteration.
+///
+/// NO α-normalisation of variable idxs: HS's membership pre-check compares the
+/// (stored-normalised) instance RAW against `sFormulas`/`sSolvedFormulas`, and
+/// an implied instance is a deterministic function of (clause, matched
+/// actions) — guardedness means every opened clause var is bound by the match,
+/// so no per-call fresh mint reaches the instance.  Collapsing idxs (e.g.
+/// rewriting every `x`-named LVar to idx 0) merges instances HS keeps
+/// distinct whenever their matched action terms share a var NAME — e.g.
+/// csf26-ac counter.spthy, whose diagonal IH instances over a fresh `Inc`
+/// rule instance's `x.7`/`x.10` would merge with the iteration-1 `x`/`y.1`
+/// ones, suppressing 3 of HS's `insertGoalStatus` ticks and shifting every
+/// later goal `nr:` annotation in the web panes (batch output is unaffected).
+/// The AC stage is not α-normalisation: it repairs an RS-only representation
+/// artifact (`rename_precise_system` reorders stored AC args; HS's `fAppAC`
+/// keeps them sorted).
 fn implied_apply_canon_cow(
     f: &crate::guarded::Guarded,
 ) -> std::borrow::Cow<'_, crate::guarded::Guarded> {
     use std::borrow::Cow;
-    let f1: Cow<crate::guarded::Guarded> = match crate::guarded::normalize_witness_lvars_cow(f) {
-        None => Cow::Borrowed(f),
-        Some(g) => Cow::Owned(g),
-    };
-    let f2: Cow<crate::guarded::Guarded> =
-        match crate::guarded::canonicalize_ac_in_guarded_cow(f1.as_ref()) {
-            None => f1,
+    let ac_canon: Cow<crate::guarded::Guarded> =
+        match crate::guarded::canonicalize_ac_in_guarded_cow(f) {
+            None => Cow::Borrowed(f),
             Some(g) => Cow::Owned(g),
         };
-    match crate::guarded::normalise_stored_formula_cow(f2.as_ref()) {
-        None => f2,
+    match crate::guarded::normalise_stored_formula_cow(ac_canon.as_ref()) {
+        None => ac_canon,
         Some(g) => Cow::Owned(g),
     }
 }
@@ -2394,9 +2405,11 @@ fn match_atom_via_maude(
         StructMatch::Matched => vec![struct_subst.into_iter().collect()],
         // HS `(Left NoMatcher, _) -> []` (Unification.hs:204-224, see line 211): the pattern
         // structurally cannot match the subject — return empty WITHOUT any
-        // Maude round-trip.  This is the byte-for-byte equivalent of the
-        // surplus-`match`-eliminating change: HS issues 0 Maude `match`es
-        // here, so RS must too.
+        // Maude round-trip.  HS issues 0 Maude `match`es here, so RS must too:
+        // the matcher set is empty either way (byte-inert), but folding
+        // `NoMatcher` into the `NeedsAc` fallback would issue one Maude
+        // `match` per structurally-failing attempt — the surplus `match in
+        // MSG` flood (see `MatchOutcome`, tamarin-term/src/unification.rs).
         StructMatch::NoMatcher => return Vec::new(),
         // HS `(Left ACProblem, _) -> matchViaMaude hnd sortOf matchProblem`
         // (Unification.hs:212-213): an AC-/C-headed pair appeared on BOTH
@@ -2425,20 +2438,21 @@ fn match_atom_via_maude(
             // Therefore both sides must be skolemized with a SHARED map (same
             // LVar ⇒ same constant on both sides, so a free var occurring in
             // BOTH still matches itself) — exactly `match_eqs_skolemize_both`.
-            // The earlier `match_eqs_const_subject` only skolemized the
-            // SUBJECT, leaving the pattern's free non-universal vars as Maude
-            // VARIABLES that Maude binds to anything.  On DH key-exchange
-            // lemmas (csf12/STS_MAC_fix2, sp14/group_joux, csf12/JKL_TS1_*)
-            // the multi-guard `∀ … SesskRev(tpartner)@i3 ∧
-            // AcceptedR(tpartner,I,R,hki,hkr,kpartner)@i4 ⇒ ⊥` universal then
-            // over-matched a system `AcceptedR(tid,I.16,R.17,exp(g,x.21),
-            // exp(g,tid),KDF(exp(g,ekI*ekR)))`: the pattern's free system vars
-            // `I,R,ekI,ekR` (NOT in the universal's bound set) bound freely to
-            // the action's *different* skolem constants, so `gfalse` fired one
-            // node early (at /Init_1/…/Resp_1 instead of under the
-            // `splitEqs(1)` `case split`), verifying in fewer steps than HS.
-            // With shared skolemization those positions are constant-vs-
-            // constant and the match correctly fails there — matching HS.
+            // `match_eqs_const_subject` skolemizes only the SUBJECT, leaving
+            // the pattern's free non-universal vars as Maude VARIABLES that
+            // Maude binds to anything, so it over-matches here.  On DH
+            // key-exchange lemmas (csf12/STS_MAC_fix2, sp14/group_joux,
+            // csf12/JKL_TS1_*) the multi-guard `∀ … SesskRev(tpartner)@i3 ∧
+            // AcceptedR(tpartner,I,R,hki,hkr,kpartner)@i4 ⇒ ⊥` universal faces
+            // a system `AcceptedR(tid,I.16,R.17,exp(g,x.21),
+            // exp(g,tid),KDF(exp(g,ekI*ekR)))`: under subject-only
+            // skolemization the pattern's free system vars `I,R,ekI,ekR` (NOT
+            // in the universal's bound set) bind freely to the action's
+            // *different* skolem constants, firing `gfalse` one node early (at
+            // /Init_1/…/Resp_1 instead of under the `splitEqs(1)` `case
+            // split`) and verifying in fewer steps than HS.  Under shared
+            // skolemization those positions are constant-vs-constant and the
+            // match correctly fails there — matching HS.
             //
             // HS-faithful: Maude's AC `match` can return MULTIPLE matchers
             // for a single pattern/subject pair (e.g. `match Union(a,x) <=?

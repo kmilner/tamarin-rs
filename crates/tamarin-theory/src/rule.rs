@@ -21,6 +21,7 @@
 
 use std::collections::BTreeSet;
 
+use tamarin_term::function_symbols::{FunSym, NdcState};
 use tamarin_term::lterm::{HasFrees, LNTerm, LSort, LVar, Name};
 use tamarin_term::vterm::VTerm;
 use tamarin_utils::color::Rgb;
@@ -310,11 +311,14 @@ pub struct ProtoRuleACInstInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IntrRuleACInfo {
-    ConstrRule(Vec<u8>),
-    /// `(name, remaining_applications, rhs_is_proper_subterm, rhs_is_constant)`.
-    /// `remaining_applications` of `0` means unbounded; `-1` means not yet
-    /// determined.
-    DestrRule(Vec<u8>, i64, bool, bool),
+    /// `(name, function_symbol)` — the symbol this construction rule builds.
+    ConstrRule(Vec<u8>, FunSym),
+    /// `(name, remaining_applications, rhs_is_proper_subterm,
+    /// rhs_is_constant, function_symbols)`. `remaining_applications` of `0`
+    /// means unbounded; `-1` means not yet determined. The final field lists
+    /// the function symbols this rule's application corresponds to (head
+    /// first).
+    DestrRule(Vec<u8>, i64, bool, bool, Vec<FunSym>),
     Coerce,
     IRecv,
     ISend,
@@ -401,7 +405,7 @@ pub(crate) fn proto_rule_ac_to_rule_ac_inst(r: ProtoRuleAC) -> RuleACInst {
 // =============================================================================
 
 pub fn is_destr_rule_info(info: &IntrRuleACInfo) -> bool {
-    matches!(info, IntrRuleACInfo::DestrRule(_, _, _, _))
+    matches!(info, IntrRuleACInfo::DestrRule(_, _, _, _, _))
 }
 /// `isSubtermRule`: True iff the rule is a destruction rule whose
 /// RHS is a true subterm of the LHS, or the IEquality rule.
@@ -409,13 +413,13 @@ pub fn is_destr_rule_info(info: &IntrRuleACInfo) -> bool {
 /// (`lib/theory/src/Theory/Model/Rule.hs`).
 pub fn is_subterm_rule_info(info: &IntrRuleACInfo) -> bool {
     match info {
-        IntrRuleACInfo::DestrRule(_, _, subterm, _) => *subterm,
+        IntrRuleACInfo::DestrRule(_, _, subterm, _, _) => *subterm,
         IntrRuleACInfo::IEquality => true,
         _ => false,
     }
 }
 pub fn is_constr_rule_info(info: &IntrRuleACInfo) -> bool {
-    matches!(info, IntrRuleACInfo::ConstrRule(_))
+    matches!(info, IntrRuleACInfo::ConstrRule(_, _))
 }
 pub fn is_pub_constr_rule_info(info: &IntrRuleACInfo) -> bool {
     matches!(info, IntrRuleACInfo::PubConstr)
@@ -443,10 +447,154 @@ pub fn is_fresh_rule_info(info: &ProtoRuleEInfo) -> bool {
     info.name == ProtoRuleName::Fresh
 }
 
+/// `isACConstrRule`: the function symbol iff the rule is a construction rule
+/// for an AC symbol.
+pub fn is_ac_constr_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> Option<FunSym> {
+    match &rule.info {
+        RuleInfo::Intr(IntrRuleACInfo::ConstrRule(_, f @ FunSym::Ac(_))) => Some(*f),
+        _ => None,
+    }
+}
+
+/// `getDestrRuleFunction`: the function at the root of a deconstruction rule.
+pub fn get_destr_rule_function(rule: &IntrRuleAC) -> Option<FunSym> {
+    match &rule.info {
+        IntrRuleACInfo::DestrRule(_, _, _, _, funs) => funs.first().copied(),
+        _ => None,
+    }
+}
+
+/// `builtInDestrRule`: name suffixes identifying built-in deconstruction rules.
+pub fn built_in_destr_rule() -> [&'static [u8]; 6] {
+    [b"exp", b"inv", b"union", b"xor", b"pmult", b"em"]
+}
+
+/// `builtInDestrRuleInclPair`: `builtInDestrRule` plus the pair projections.
+pub fn built_in_destr_rule_incl_pair() -> [&'static [u8]; 8] {
+    [
+        b"exp", b"inv", b"union", b"xor", b"pmult", b"em", b"fst", b"snd",
+    ]
+}
+
+pub(crate) fn has_builtin_suffix(name: &[u8], suffixes: &[&[u8]]) -> bool {
+    suffixes.iter().any(|s| name.ends_with(s))
+}
+
+/// `isBuiltInIntruderRule`: everything except user-symbol Constr/Destr rules.
+pub fn is_built_in_intruder_rule(rule: &IntrRuleAC) -> bool {
+    match &rule.info {
+        IntrRuleACInfo::ConstrRule(x, _) | IntrRuleACInfo::DestrRule(x, _, _, _, _) => {
+            has_builtin_suffix(x, &built_in_destr_rule_incl_pair())
+        }
+        IntrRuleACInfo::Coerce
+        | IntrRuleACInfo::IRecv
+        | IntrRuleACInfo::ISend
+        | IntrRuleACInfo::PubConstr
+        | IntrRuleACInfo::NatConstr
+        | IntrRuleACInfo::FreshConstr
+        | IntrRuleACInfo::IEquality => true,
+    }
+}
+
+/// `isNDCRule`: `Just IsNDC` iff the rule is a deconstruction rule whose head
+/// function has the (trace-mode) NDC property.
+pub fn is_ndc_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> Option<NdcState> {
+    match &rule.info {
+        RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, _, _, _, funs)) => match funs.first() {
+            Some(f) if f.is_ndc_fun_sym() => Some(NdcState::IsNdc),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `isNDCDiffRule` (IntruderRules.hs:524-527): `Just IsNDCDiff` iff the head
+/// function has the diff-mode NDC property.
+///
+/// Intentionally retained: faithful mirror of HS `isNDCDiffRule`
+/// (IntruderRules.hs:524-527); no caller yet.
+pub fn is_ndc_diff_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> Option<NdcState> {
+    match &rule.info {
+        RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, _, _, _, funs)) => match funs.first() {
+            Some(f) if f.is_ndc_diff_fun_sym() => Some(NdcState::IsNdcDiff),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `getDeconstrRuleKDPrem`: the first premise fact of an intruder rule (the
+/// KD fact for a deconstruction rule).
+pub fn get_deconstr_rule_kd_prem(rule: &IntrRuleAC) -> &LNFact {
+    rule.premises
+        .first()
+        .expect("getDeconstrRuleKDPrem: deconstruction rules have at least one premise")
+}
+
+/// `getDeconstrRulePremsTail`: all premises except the leading KD fact.
+pub fn get_deconstr_rule_prems_tail(rule: &IntrRuleAC) -> &[LNFact] {
+    match rule.premises.split_first() {
+        Some((first, tail)) if first.tag == crate::fact::FactTag::Kd => tail,
+        _ => panic!("getDeconstrRulePremsTail: deconstruction rules have a leading KD premise"),
+    }
+}
+
+/// `getConcFact`: the single conclusion of an intruder rule.
+pub fn get_conc_fact(rule: &IntrRuleAC) -> &LNFact {
+    match rule.conclusions.as_slice() {
+        [fact] => fact,
+        _ => panic!("getConcFact: intruder rules have exactly one conclusion"),
+    }
+}
+
+/// `replaceMatchingRule` (Rule.hs:873-878): replace a deconstruction rule by
+/// the version from `d` with the same name, premises, and conclusions (copying
+/// its chain limit); other rules are returned unchanged.
+///
+/// Intentionally retained: faithful mirror of HS `replaceMatchingRule`
+/// (Rule.hs:873-878); no caller yet.
+pub fn replace_matching_rule(d: &[IntrRuleAC], rule: IntrRuleAC) -> IntrRuleAC {
+    if !matches!(rule.info, IntrRuleACInfo::DestrRule(_, _, _, _, _)) {
+        return rule;
+    }
+    let name = intr_rule_name_string(&rule.info);
+    for d1 in d {
+        if intr_rule_name_string(&d1.info) == name
+            && d1.premises == rule.premises
+            && d1.conclusions == rule.conclusions
+        {
+            return d1.clone();
+        }
+    }
+    rule
+}
+
+/// `getRuleName` restricted to intruder-rule infos (used where only an
+/// `IntrRuleAC` is at hand).
+pub fn intr_rule_name_string(info: &IntrRuleACInfo) -> String {
+    match info {
+        IntrRuleACInfo::ConstrRule(name, _) => format!(
+            "Constr{}",
+            prefix_if_reserved(&format!("c{}", String::from_utf8_lossy(name)))
+        ),
+        IntrRuleACInfo::DestrRule(name, _, _, _, _) => format!(
+            "Destr{}",
+            prefix_if_reserved(&format!("d{}", String::from_utf8_lossy(name)))
+        ),
+        IntrRuleACInfo::Coerce => "Coerce".to_string(),
+        IntrRuleACInfo::IRecv => "Recv".to_string(),
+        IntrRuleACInfo::ISend => "Send".to_string(),
+        IntrRuleACInfo::PubConstr => "PubConstr".to_string(),
+        IntrRuleACInfo::NatConstr => "NatConstr".to_string(),
+        IntrRuleACInfo::FreshConstr => "FreshConstr".to_string(),
+        IntrRuleACInfo::IEquality => "Equality".to_string(),
+    }
+}
+
 /// Generic destruction-rule predicate: matches `_<sym>` destructor
 /// rules (e.g. `_exp` for `isDExpRule`).
 fn is_d_rule_with_sym<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>, sym: &[u8]) -> bool {
-    if let RuleInfo::Intr(IntrRuleACInfo::DestrRule(name, _, _, _)) = &rule.info {
+    if let RuleInfo::Intr(IntrRuleACInfo::DestrRule(name, _, _, _, _)) = &rule.info {
         let mut expected = b"_".to_vec();
         expected.extend_from_slice(sym);
         name == &expected
@@ -481,7 +629,7 @@ pub fn is_coerce_rule_inst<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> bool 
 pub(crate) fn is_destr_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> bool {
     matches!(
         &rule.info,
-        RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, _, _, _))
+        RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, _, _, _, _))
             | RuleInfo::Intr(IntrRuleACInfo::IEquality)
     )
 }
@@ -501,7 +649,7 @@ pub(crate) fn is_subterm_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> bo
 /// destruction rules, or `0` for everything else.
 pub fn get_remaining_rule_applications<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> i64 {
     match &rule.info {
-        RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, n, _, _)) => *n,
+        RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, n, _, _, _)) => *n,
         _ => 0,
     }
 }
@@ -528,8 +676,8 @@ pub fn set_remaining_rule_applications<I>(
         new_vars,
     } = rule;
     let info = match info {
-        RuleInfo::Intr(IntrRuleACInfo::DestrRule(name, _, subterm, constant)) => {
-            RuleInfo::Intr(IntrRuleACInfo::DestrRule(name, n, subterm, constant))
+        RuleInfo::Intr(IntrRuleACInfo::DestrRule(name, _, subterm, constant, funs)) => {
+            RuleInfo::Intr(IntrRuleACInfo::DestrRule(name, n, subterm, constant, funs))
         }
         other => other,
     };
@@ -559,23 +707,7 @@ pub fn rule_name_string(rule: &RuleACInst) -> String {
             ProtoRuleName::Stand(s) => s.to_string(),
             ProtoRuleName::Fresh => "FreshRule".to_string(),
         },
-        RuleInfo::Intr(i) => match i {
-            IntrRuleACInfo::ConstrRule(name) => format!(
-                "Constr{}",
-                prefix_if_reserved(&format!("c{}", String::from_utf8_lossy(name)))
-            ),
-            IntrRuleACInfo::DestrRule(name, _, _, _) => format!(
-                "Destr{}",
-                prefix_if_reserved(&format!("d{}", String::from_utf8_lossy(name)))
-            ),
-            IntrRuleACInfo::Coerce => "Coerce".to_string(),
-            IntrRuleACInfo::IRecv => "Recv".to_string(),
-            IntrRuleACInfo::ISend => "Send".to_string(),
-            IntrRuleACInfo::PubConstr => "PubConstr".to_string(),
-            IntrRuleACInfo::NatConstr => "NatConstr".to_string(),
-            IntrRuleACInfo::FreshConstr => "FreshConstr".to_string(),
-            IntrRuleACInfo::IEquality => "Equality".to_string(),
-        },
+        RuleInfo::Intr(i) => intr_rule_name_string(i),
     }
 }
 
@@ -583,26 +715,28 @@ pub fn rule_name_string(rule: &RuleACInst) -> String {
 /// prefixes the name with `_` if it collides with a reserved rule name
 /// or already starts with `_`.
 pub(crate) fn prefix_if_reserved(s: &str) -> String {
-    let reserved = reserved_rule_names();
-    if reserved.contains(s) || s.starts_with('_') {
+    if RESERVED_RULE_NAMES.contains(&s) || s.starts_with('_') {
         format!("_{}", s)
     } else {
         s.to_string()
     }
 }
 
-/// `reservedRuleNames` from Haskell (Theory/Model/Rule.hs):
-/// `["Fresh", "irecv", "isend", "coerce", "fresh", "pub", "iequality"]`.
+/// `reservedRuleNames` from Haskell (Theory/Model/Rule.hs).
+const RESERVED_RULE_NAMES: [&str; 7] = [
+    "Fresh",
+    "irecv",
+    "isend",
+    "coerce",
+    "fresh",
+    "pub",
+    "iequality",
+];
+
+/// `RESERVED_RULE_NAMES` as a set — the cross-crate form, used by
+/// `tamarin-server`'s own `prefixIfReserved` mirrors.
 pub fn reserved_rule_names() -> BTreeSet<&'static str> {
-    let mut s = BTreeSet::new();
-    s.insert("Fresh");
-    s.insert("irecv");
-    s.insert("isend");
-    s.insert("coerce");
-    s.insert("fresh");
-    s.insert("pub");
-    s.insert("iequality");
-    s
+    RESERVED_RULE_NAMES.into_iter().collect()
 }
 
 // =============================================================================
@@ -827,14 +961,22 @@ mod tests {
 
     #[test]
     fn intruder_predicates() {
+        let f = FunSym::NoEq(tamarin_term::function_symbols::NoEqSym::new(
+            b"f".to_vec(),
+            1,
+            tamarin_term::function_symbols::Privacy::Public,
+            tamarin_term::function_symbols::Constructability::Constructor,
+        ));
         assert!(is_constr_rule_info(&IntrRuleACInfo::ConstrRule(
-            b"f".to_vec()
+            b"f".to_vec(),
+            f
         )));
         assert!(is_destr_rule_info(&IntrRuleACInfo::DestrRule(
             b"f".to_vec(),
             0,
             true,
-            false
+            false,
+            vec![f]
         )));
         assert!(is_coerce_rule_info(&IntrRuleACInfo::Coerce));
         assert!(!is_constr_rule_info(&IntrRuleACInfo::Coerce));
@@ -977,7 +1119,13 @@ mod tests {
     #[test]
     fn d_exp_pmult_emap_rule_classification() {
         let dexp: RuleACInst = Rule::new(
-            RuleInfo::Intr(IntrRuleACInfo::DestrRule(b"_exp".to_vec(), 0, false, false)),
+            RuleInfo::Intr(IntrRuleACInfo::DestrRule(
+                b"_exp".to_vec(),
+                0,
+                false,
+                false,
+                vec![],
+            )),
             vec![],
             vec![],
             vec![],
@@ -988,13 +1136,20 @@ mod tests {
                 0,
                 false,
                 false,
+                vec![],
             )),
             vec![],
             vec![],
             vec![],
         );
         let dem: RuleACInst = Rule::new(
-            RuleInfo::Intr(IntrRuleACInfo::DestrRule(b"_em".to_vec(), 0, false, false)),
+            RuleInfo::Intr(IntrRuleACInfo::DestrRule(
+                b"_em".to_vec(),
+                0,
+                false,
+                false,
+                vec![],
+            )),
             vec![],
             vec![],
             vec![],
@@ -1017,7 +1172,13 @@ mod tests {
     #[test]
     fn get_remaining_rule_applications_works() {
         let with_budget: RuleACInst = Rule::new(
-            RuleInfo::Intr(IntrRuleACInfo::DestrRule(b"_x".to_vec(), 3, false, false)),
+            RuleInfo::Intr(IntrRuleACInfo::DestrRule(
+                b"_x".to_vec(),
+                3,
+                false,
+                false,
+                vec![],
+            )),
             vec![],
             vec![],
             vec![],

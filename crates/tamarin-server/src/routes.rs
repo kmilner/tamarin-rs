@@ -3,14 +3,83 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::DefaultBodyLimit,
+    extract::{DefaultBodyLimit, Request},
+    http::StatusCode,
+    middleware::Next,
+    response::Response,
     routing::{get, post},
     Router,
 };
+use percent_encoding::percent_decode_str;
 use tower_http::trace::TraceLayer;
 
 use crate::handlers;
 use crate::state::AppState;
+
+/// Render every `404` this router produces as Yesod's Not Found page.
+///
+/// Yesod raises `notFound` as an error response and renders it centrally in
+/// `defaultErrorHandler`, which has the request at hand and embeds its
+/// `rawPathInfo` in the page; the handlers themselves only decide *that* the
+/// request is a miss.  The port keeps that split: handlers answer with a bare
+/// `404` status, and this layer turns each one — plus the routing-level miss
+/// for a URL that matches no route at all — into the page.
+///
+/// The `/static` subtree is nested after this layer is applied, so it keeps its
+/// own `File not found`, as in HS, where the static route is a separate
+/// wai-app-static WAI app that Yesod's error handler never sees.
+async fn not_found_page(req: Request, next: Next) -> Response {
+    // `Uri::path` is the raw, still-percent-encoded path, query excluded —
+    // WAI's `rawPathInfo`.
+    let raw_path = req.uri().path().to_owned();
+    // The theory-index route piece is `#Int` (`src/Web/Types.hs:580-616`), and
+    // Yesod's `PathPiece Int` takes an optional sign and decimal digits that
+    // fit an `Int`, nothing else: `01` and `+1` are theory 1, while `1x`, ` 1`,
+    // `(1)` and an over-long literal make the route not match at all, so
+    // routing answers `notFound`.  A piece that parses but is negative is a
+    // theory that was never issued, which the handlers answer with the same
+    // miss — so every index the port's `usize` route parameter would reject
+    // lands on this page, never on a path-extractor 400.
+    if theory_index_piece(&raw_path).is_some_and(|piece| !reads_as_theory_index(piece)) {
+        return handlers::not_found_response(&raw_path);
+    }
+    let res = next.run(req).await;
+    if res.status() == StatusCode::NOT_FOUND {
+        return handlers::not_found_response(&raw_path);
+    }
+    res
+}
+
+/// The still-encoded theory-index piece of a `/thy/trace/<idx>/…` or
+/// `/thy/equiv/<idx>/…` URL, for URLs of that shape.
+///
+/// Split on the raw path, as WAI splits `rawPathInfo` on `/` and only then
+/// decodes each segment: an escaped separator (`%2F`) belongs to the piece, it
+/// does not end it.
+fn theory_index_piece(raw_path: &str) -> Option<&str> {
+    let rest = raw_path.strip_prefix("/thy/")?;
+    let rest = rest
+        .strip_prefix("trace/")
+        .or_else(|| rest.strip_prefix("equiv/"))?;
+    rest.split('/').next()
+}
+
+/// Whether an index piece names a theory the port's `usize` route parameter
+/// accepts.
+///
+/// The piece is percent-decoded first, because that is what both sides route
+/// on: Yesod dispatches on WAI's `pathInfo`, whose segments are decoded, so
+/// `%31` is theory 1 upstream, and axum's `Path` extractor decodes each capture
+/// the same way — so this probe and the extractor read every piece alike, and
+/// the extractor never sees an index it would answer with a `400`.  A piece
+/// whose escapes are not valid UTF-8 names no theory on either side: HS's
+/// lenient decode leaves replacement characters that `PathPiece Int` cannot
+/// read, and the extractor rejects the capture outright.
+fn reads_as_theory_index(piece: &str) -> bool {
+    percent_decode_str(piece)
+        .decode_utf8()
+        .is_ok_and(|idx| idx.parse::<usize>().is_ok())
+}
 
 pub fn router(state: Arc<AppState>) -> Router {
     // Serving HTTP means an oracle exec failure is request-scoped, not
@@ -32,12 +101,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/favicon.ico", get(handlers::root::favicon))
         .route("/robots.txt", get(handlers::root::robots))
         .route("/kill", get(handlers::root::kill_thread))
-        // ----------------------------------------------------------------
-        // Static assets: serve `data/` with frontend-dist hoisting —
-        // the bundled `frontend/dist/` is served first for the
-        // `intdot-*` JS/CSS assets, falling back to `data/`.
-        // ----------------------------------------------------------------
-        .nest("/static", handlers::static_files::serve(state.clone()))
         // ----------------------------------------------------------------
         // Theory routes (trace lemmas only — diff is stubbed).
         // ----------------------------------------------------------------
@@ -86,6 +149,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/thy/trace/:idx/graph/*path", get(handlers::theory::graph))
         .route(
+            "/thy/trace/:idx/json/*path",
+            get(handlers::theory::graph_json),
+        )
+        .route(
             "/thy/trace/:idx/interactive-graph-def/*path",
             get(handlers::theory::interactive_graph_def),
         )
@@ -118,6 +185,17 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/thy/equiv/:idx/main/*path",
             get(handlers::theory::diff_stub),
         )
+        // Every miss among the routes above — and the routing-level miss for a
+        // URL matching none of them — is rendered as Yesod's Not Found page.
+        .layer(axum::middleware::from_fn(not_found_page))
+        // ----------------------------------------------------------------
+        // Static assets: serve `data/` with frontend-dist hoisting —
+        // the bundled `frontend/dist/` is served first for the
+        // `intdot-*` JS/CSS assets, falling back to `data/`.  Nested after
+        // the layer above, so a missing asset keeps wai-app-static's own
+        // `File not found` (HS serves `/static` from that separate WAI app).
+        // ----------------------------------------------------------------
+        .nest("/static", handlers::static_files::serve(state.clone()))
         .layer(upload_limit)
         .layer(TraceLayer::new_for_http())
         .with_state(state)

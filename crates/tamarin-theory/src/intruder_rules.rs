@@ -13,13 +13,17 @@
 
 //! Port of `Theory.Tools.IntruderRules` from
 //! `lib/theory/src/Theory/Tools/IntruderRules.hs` — covers the
-//! always-included "special" intruder rules plus the DH/XOR/multiset
+//! always-included "special" intruder rules, the DH/XOR/multiset
 //! variant generators (`dh_intruder_rules`, `xor_intruder_rules`,
-//! `multiset_intruder_rules`) and the `close_intr_rule` /
-//! `variants_intruder` / `construction_rules` narrowing pipeline (which
-//! drives Maude). Only the BP intruder rules lack a runtime generator
-//! here — those are loaded from the cached file via `intruder_variants.rs`.
+//! `multiset_intruder_rules`), the constructor generators
+//! (`subterm_constructor_rules` / `construction_rules`), and the
+//! narrowing-based destruction-rule generators for user-defined
+//! function symbols (`destruction_rules_no_eq` / `destruction_rules_ac`,
+//! all built on the `variants_intruder` pipeline that drives Maude).
+//! The production BP intruder rules are loaded from the cached file via
+//! `intruder_variants.rs`.
 
+use tamarin_term::function_symbols::FunSym;
 use tamarin_term::lterm::{LNTerm, LSort, LVar};
 use tamarin_term::vterm::var_term;
 
@@ -138,7 +142,7 @@ pub fn destruction_rules(
     diff: bool,
     rule: &tamarin_term::subterm_rule::CtxtStRule,
 ) -> Vec<IntrRuleAC> {
-    use tamarin_term::function_symbols::{FunSym, Privacy};
+    use tamarin_term::function_symbols::{AcFctSym, AcSym, FunSym, NoEqSym, Privacy};
     use tamarin_term::lterm::frees;
     use tamarin_term::positions::Position;
     use tamarin_term::term::Term;
@@ -184,233 +188,235 @@ pub fn destruction_rules(
     let mut out: Vec<IntrRuleAC> = Vec::new();
     let mut t = lhs.clone();
     let mut uprems: Vec<tamarin_term::lterm::LNTerm> = Vec::new();
-    let mut name_acc: Vec<u8> = Vec::new();
+    let mut funs_acc: Vec<FunSym> = Vec::new();
     let mut posname = String::new();
     let pos_iter: Vec<i64> = pos.clone();
     // `rhs` is loop-invariant, so compute `frees(rhs).is_empty()` once.
     let rhs_frees_empty = frees(rhs).is_empty();
     for (step_idx, &i) in pos_iter.iter().enumerate() {
-        match &t {
-            Term::App(FunSym::NoEq(sym), args) => {
-                if sym.privacy == Privacy::Private {
-                    return out;
-                }
-                let public = sym.privacy == Privacy::Public;
-                if !public {
-                    return out;
-                }
-                // Haskell `destructionRules` pattern #2 (IntruderRules.hs:129-157, see line 135):
-                //     go _ (viewTerm -> FApp _ _) (_:[]) _ _ | (frees rhs /= []) = []
-                // At the LAST position step, if the current term is an
-                // FApp AND rhs has free vars, return [] — neither emit
-                // nor recurse.  Current `t` is necessarily FApp here
-                // (we're inside the Term::App arm).  Without this,
-                // Rust emits extra rules at deep positions like
-                // d_0_0_0_prefix_enc_pair or d_1_0_prefix_enc — see
-                // denning_sacco_symmetric_cbc which has rule
-                // `prefix(enc(<X,Y>,k)) = enc(X,k)` (positions [0,0,0]
-                // and [0,1]); at the LAST step into pair(X,Y) and
-                // enc(X,Y), Haskell skips.
-                if pos_iter.len() == step_idx + 1 && !rhs_frees_empty {
-                    return out;
-                }
-                // Build uprems' = uprems ++ siblings.  The pre-sibling
-                // `uprems` value is never read again (the next iteration uses
-                // the extended one), so extend in place instead of cloning.
-                for (j, a) in args.iter().enumerate() {
-                    if (j as i64) != i {
-                        uprems.push(a.clone());
-                    }
-                }
-                let t_new = match args.get(i as usize) {
-                    Some(t) => t.clone(),
-                    None => return out, // invalid position
-                };
-                // Emit the rule unless the next step's term equals rhs
-                // and rhs already in uprems' (Haskell's filter).
-                let cond_emit = t_new != *rhs && !uprems.contains(rhs);
-                // Next step's position-name prefix `_<i><pd>`; reused both
-                // for the (conditional) rule name and to advance `posname`
-                // below — neither `i` nor `posname` changes in between.
-                let next_posname = format!("_{}{}", i, posname);
-                if cond_emit {
-                    // Build the rule name: `_<i><pd>` ++ funs.
-                    let mut name = next_posname.as_bytes().to_vec();
-                    let funs = {
-                        let mut f = name_acc.clone();
-                        f.extend_from_slice(b"_");
-                        f.extend_from_slice(sym.name);
-                        f
-                    };
-                    name.extend_from_slice(&funs);
-                    // `rhs == lhs `atPos` pos` (IntruderRules.hs:129-157, see line 145).  Use
-                    // the AC-aware `at_pos` (Positions.hs:28-43) so paths
-                    // traversing an AC operator index exactly as Haskell.
-                    // `pos` is the (valid) walked LHS position, so the
-                    // lookup is `Some`; on the impossible invalid case fall
-                    // back to `lhs`,
-                    // keeping the boolean unchanged rather than panicking.
-                    let at =
-                        tamarin_term::positions::at_pos(lhs, pos).unwrap_or_else(|| lhs.clone());
-                    let info = IntrRuleACInfo::DestrRule(name, -1, rhs == &at, rhs_frees_empty);
-                    let mut prems = vec![kd_fact(t_new.clone())];
-                    for u in &uprems {
-                        prems.push(ku_fact(u.clone()));
-                    }
-                    out.push(Rule::new(info, prems, vec![kd_fact(rhs.clone())], vec![]));
-                }
-                // Update accumulators and walk down.
-                name_acc.extend_from_slice(b"_");
-                name_acc.extend_from_slice(sym.name);
-                posname = next_posname;
-                t = t_new;
-            }
-            Term::Lit(_) => {
-                // Hit a leaf with positions still remaining — invalid.
-                return out;
+        // A descent step applies at public NoEq and public user-AC
+        // applications alike (IntruderRules.hs `go` NoEq + ACfct cases).
+        // Everything else stops the walk: a private symbol, any other
+        // function symbol, or a leaf hit with positions still remaining
+        // (invalid).
+        let (fun, args) = match &t {
+            Term::App(f, args)
+                if matches!(
+                    f,
+                    FunSym::NoEq(NoEqSym {
+                        privacy: Privacy::Public,
+                        ..
+                    }) | FunSym::Ac(AcSym::AcFct(AcFctSym {
+                        privacy: Privacy::Public,
+                        ..
+                    }))
+                ) =>
+            {
+                (*f, args.clone())
             }
             _ => return out,
+        };
+        // Haskell `destructionRules` pattern #2 (IntruderRules.hs `go`):
+        //     go _ (viewTerm -> FApp _ _) (_:[]) _ _ | (frees rhs /= []) = []
+        // At the LAST position step, if the current term is an
+        // FApp AND rhs has free vars, return [] — neither emit
+        // nor recurse.  Current `t` is necessarily FApp here.
+        // Without this, Rust emits extra rules at deep positions like
+        // d_0_0_0_prefix_enc_pair or d_1_0_prefix_enc — see
+        // denning_sacco_symmetric_cbc which has rule
+        // `prefix(enc(<X,Y>,k)) = enc(X,k)` (positions [0,0,0]
+        // and [0,1]); at the LAST step into pair(X,Y) and
+        // enc(X,Y), Haskell skips.
+        if pos_iter.len() == step_idx + 1 && !rhs_frees_empty {
+            return out;
         }
+        // Build uprems' = uprems ++ siblings in place: the pre-sibling
+        // `uprems` value is never read again (the next iteration uses
+        // the extended one).
+        for (j, a) in args.iter().enumerate() {
+            if (j as i64) != i {
+                uprems.push(a.clone());
+            }
+        }
+        let t_new = match args.get(i as usize) {
+            Some(t) => t.clone(),
+            None => return out, // invalid position
+        };
+        // Emit the rule unless the next step's term equals rhs
+        // and rhs already in uprems' (Haskell's filter).
+        let cond_emit = t_new != *rhs && !uprems.contains(rhs);
+        // Next step's position-name prefix `_<i><pd>`; reused both
+        // for the (conditional) rule name and to advance `posname`
+        // below — neither `i` nor `posname` changes in between.
+        let next_posname = format!("_{}{}", i, posname);
+        // funs' = funs ++ [fun] — the symbol chain walked so far,
+        // carried both in the rule name and in the DestrRule metadata.
+        funs_acc.push(fun);
+        if cond_emit {
+            // `name i pd n fun`: `_<i><pd>` ++ concatMap ("_" ++
+            // showFunSymName) funs'.
+            let mut name = next_posname.as_bytes().to_vec();
+            for f in &funs_acc {
+                name.push(b'_');
+                name.extend_from_slice(show_fun_sym_name(f).as_bytes());
+            }
+            // `rhs == lhs `atPos` pos`.  Use the AC-aware `at_pos`
+            // (Positions.hs) so paths traversing an AC operator index
+            // exactly as Haskell.  `pos` is the (valid) walked LHS
+            // position, so the lookup is `Some`; on the impossible
+            // invalid case fall back to `lhs`, keeping the boolean
+            // unchanged rather than panicking.
+            let at = tamarin_term::positions::at_pos(lhs, pos).unwrap_or_else(|| lhs.clone());
+            let info =
+                IntrRuleACInfo::DestrRule(name, -1, rhs == &at, rhs_frees_empty, funs_acc.clone());
+            let mut prems = vec![kd_fact(t_new.clone())];
+            for u in &uprems {
+                prems.push(ku_fact(u.clone()));
+            }
+            out.push(Rule::new(info, prems, vec![kd_fact(rhs.clone())], vec![]));
+        }
+        // Update accumulators and walk down.
+        posname = next_posname;
+        t = t_new;
     }
     out
 }
 
-/// `subtermIntruderRules` — direct port:
-/// `minimizeIntruderRules diff $ concatMap (destructionRules diff) (S.toList stRules)`
-/// `  ++ constructionRules (stFunSyms maudeSig) ++ privateConstructorRules (S.toList $ stRules maudeSig)`.
-///
-/// IntruderRules.hs:210-213.  The `minimizeIntruderRules` pass strips
-/// subsumed/duplicate destructor rules — without it, a single equation
-/// containing multiple variable positions of the same rhs (e.g. chaum's
-/// `unblind(sign(blind(m,r),k), r) = sign(m,k)` where m at [0,0,0] and
-/// k at [0,1] both walk through position [0]) emits the same `_0_unblind`
-/// destructor twice.  Those duplicates then cause `solve_chain_goal` to
-/// fan out 2 identical destructor branches (idx-renamed but otherwise
-/// equal), inflating source-case counts at saturate time
-/// (chaum::unforgeability KU(sign) goes from Haskell's 1 case to Rust's
-/// 4 cases).
-pub fn subterm_intruder_rules(
-    diff: bool,
-    sig: &tamarin_term::maude_sig::MaudeSig,
-) -> Vec<IntrRuleAC> {
-    let mut out: Vec<IntrRuleAC> = Vec::new();
-    for r in &sig.st_rules {
-        out.extend(destruction_rules(diff, r));
+/// `showFunSymName` (Term.hs) — the plain-name rendering used for intruder
+/// rule names and case names: user symbols print their own name; the builtin
+/// AC/C operators print their `*SymString` names.
+pub fn show_fun_sym_name(f: &FunSym) -> std::borrow::Cow<'static, str> {
+    use std::borrow::Cow;
+    use tamarin_term::function_symbols::{AcSym, CSym, FunSym};
+    match f {
+        // `name` is `&'static [u8]`, so the lossy conversion is already a
+        // `Cow<'static, str>` (borrowed whenever the name is valid UTF-8).
+        FunSym::NoEq(s) => String::from_utf8_lossy(s.name),
+        FunSym::Ac(AcSym::AcFct(s)) => String::from_utf8_lossy(s.name),
+        FunSym::Ac(AcSym::Union) => Cow::Borrowed("mun"),
+        FunSym::Ac(AcSym::Mult) => Cow::Borrowed("mult"),
+        FunSym::Ac(AcSym::Xor) => Cow::Borrowed("xor"),
+        FunSym::Ac(AcSym::NatPlus) => Cow::Borrowed("tplus"),
+        FunSym::C(CSym::EMap) => Cow::Borrowed("em"),
+        FunSym::List => Cow::Borrowed("List"),
     }
-    out.extend(construction_rules(sig));
-    out.extend(private_constructor_rules(&sig.st_rules));
-    minimize_intruder_rules(diff, out)
 }
 
-/// `privateConstructorRules` — port of IntruderRules.hs:177-184.
+/// `subtermConstructorRules` — direct port:
+///
+/// ```haskell
+/// subtermConstructorRules :: Bool -> MaudeHandle -> MaudeSig -> [IntrRuleAC]
+/// subtermConstructorRules diff hnd maudeSig =
+///     minimizeIntruderRules diff hnd
+///       (constructionRules (userDefinedSTFunSyms maudeSig)
+///          ++ privateConstructorRules (S.toList $ stRules maudeSig))
+/// ```
+///
+/// CONSTRUCTOR rules only: the per-symbol construction rules for the
+/// user-defined subterm signature plus the derivable-private-constant
+/// constructors.  The destruction rules for user-defined symbols are
+/// generated separately by the narrowing-based [`destruction_rules_no_eq`]
+/// / [`destruction_rules_ac`].
+pub fn subterm_constructor_rules(
+    diff: bool,
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    sig: &tamarin_term::maude_sig::MaudeSig,
+) -> Vec<IntrRuleAC> {
+    let mut out = construction_rules(&sig.user_defined_st_fun_syms());
+    out.extend(private_constructor_rules(&sig.st_rules));
+    minimize_intruder_rules(diff, maude, out)
+}
+
+/// `privateConstructorRules` — port of IntruderRules.hs.
 ///
 /// Returns the constructor rules for private constants that are
 /// consequences of the subterm rewrite rules in `st_rules`.  A private
 /// 0-arity constructor is "derivable" when there exists an equation whose
 /// RHS is that constant and whose LHS only mentions public functions (or
 /// already-derivable private constants) — computed by the
-/// `derivable_private_constants` fixpoint.  For each such constant `s` we
+/// `derivable_private_constants` fixpoint.  For each such constant we
 /// emit:
 ///
 /// ```text
-///   [] --[ KU(s) ]-> [ KU(s) ]    (ConstrRule "_<s>")
+///   [] --[ KU(s) ]-> [ KU(s) ]    (ConstrRule "_<s>" f)
 /// ```
 ///
 /// HS:
 /// ```haskell
 /// privateConstructorRules rules = map createRule $
 ///     derivablePrivateConstants (privateConstructorEquations rules) []
-///   where createRule s = Rule (ConstrRule (append (pack "_") s)) [] [concfact] [concfact] []
-///           where m        = fAppNoEq (s,(0,Private,Constructor)) []
-///                 concfact = kuFact m
+///   where createRule f@(NoEq (s, _)) = Rule (ConstrRule (append (pack "_") s) f) [] [concfact] [concfact] []
+///           where m         = fApp f []
+///                 concfact  = kuFact m
 /// ```
 fn private_constructor_rules(
     st_rules: &std::collections::BTreeSet<tamarin_term::subterm_rule::CtxtStRule>,
 ) -> Vec<IntrRuleAC> {
-    use tamarin_term::function_symbols::{Constructability, FunSym, NoEqSym, Privacy};
+    use tamarin_term::function_symbols::{NoEqSym, Privacy};
+    use tamarin_term::lterm::contains_no_private_except;
     use tamarin_term::term::Term;
 
-    // `privateConstructorEquations` (IntruderRules.hs:160-165): all
-    // equations whose RHS is a 0-arity Private constructor, paired with
-    // that constructor's name.
-    let eqs: Vec<(&LNTerm, Vec<u8>)> = st_rules
+    // `privateConstructorEquations` (IntruderRules.hs): all equations
+    // whose RHS is a 0-arity Private constructor, paired with that
+    // constructor's function symbol.
+    let eqs: Vec<(&LNTerm, FunSym)> = st_rules
         .iter()
         .filter_map(|r| match &r.rhs.term {
             Term::App(
-                FunSym::NoEq(NoEqSym {
-                    name,
+                f @ FunSym::NoEq(NoEqSym {
                     arity: 0,
                     privacy: Privacy::Private,
                     ..
                 }),
                 _,
-            ) => Some((&r.lhs, name.to_vec())),
+            ) => Some((&r.lhs, *f)),
             _ => None,
         })
         .collect();
 
-    // `containsNoPrivateExcept funs t` (LTerm.hs:373-377): True if `t`
-    // contains no private function symbols other than those named in
-    // `funs`.
-    fn contains_no_private_except(funs: &[Vec<u8>], t: &LNTerm) -> bool {
-        match t {
-            Term::Lit(_) => true,
-            Term::App(
-                FunSym::NoEq(NoEqSym {
-                    name,
-                    privacy: Privacy::Private,
-                    ..
-                }),
-                args,
-            ) => {
-                funs.iter().any(|f| f.as_slice() == &**name)
-                    && args.iter().all(|a| contains_no_private_except(funs, a))
-            }
-            Term::App(_, args) => args.iter().all(|a| contains_no_private_except(funs, a)),
-        }
-    }
-
-    // `derivablePrivateConstants eqs x` (IntruderRules.hs:169-175):
+    // `derivablePrivateConstants eqs except` (IntruderRules.hs):
     // fixpoint adding the RHS-constants of equations whose LHS only
     // contains public functions or already-derivable private constants.
+    // The exemption test (`containsNoPrivateExcept`, LTerm.hs) is on
+    // whole `FunSym`s, not names.
     fn derivable_private_constants(
-        mut eqs: Vec<(&LNTerm, Vec<u8>)>,
-        mut x: Vec<Vec<u8>>,
-    ) -> Vec<Vec<u8>> {
+        mut eqs: Vec<(&LNTerm, FunSym)>,
+        mut except: Vec<FunSym>,
+    ) -> Vec<FunSym> {
         loop {
-            // Both HS filters (drop + collect-names) use the OLD `x`, so
-            // snapshot it before augmenting.
-            let prev_x = x.clone();
+            // Both HS filters (drop + collect-syms) use the OLD `except`,
+            // so snapshot it before augmenting.
+            let prev = except.clone();
             let any_derivable = eqs
                 .iter()
-                .any(|(l, _)| contains_no_private_except(&prev_x, l));
+                .any(|(l, _)| contains_no_private_except(&prev, l));
             if !any_derivable {
-                return x;
+                return except;
             }
-            // `x ++ map snd (filter (containsNoPrivateExcept x . fst) eqs)`.
-            for (l, name) in eqs.iter() {
-                if contains_no_private_except(&prev_x, l) {
-                    x.push(name.clone());
+            // `except ++ map snd (filter (containsNoPrivateExcept except . fst) eqs)`.
+            for (l, f) in eqs.iter() {
+                if contains_no_private_except(&prev, l) {
+                    except.push(*f);
                 }
             }
-            // `filter (not . containsNoPrivateExcept x . fst) eqs`.
-            eqs.retain(|(l, _)| !contains_no_private_except(&prev_x, l));
+            // `filter (not . containsNoPrivateExcept except . fst) eqs`.
+            eqs.retain(|(l, _)| !contains_no_private_except(&prev, l));
         }
     }
 
     derivable_private_constants(eqs, Vec::new())
         .into_iter()
-        .map(|s| {
-            let sym = NoEqSym::new(
-                s.clone(),
-                0,
-                Privacy::Private,
-                Constructability::Constructor,
-            );
-            let m: LNTerm = Term::App(FunSym::NoEq(sym), Vec::<LNTerm>::new().into());
+        .map(|f| {
+            // HS `createRule f@(NoEq (s, _))` — the equations above only
+            // ever yield NoEq symbols.
+            let name = match f {
+                FunSym::NoEq(s) => s.name,
+                _ => unreachable!("privateConstructorRules: non-NoEq private constant"),
+            };
+            let m: LNTerm = Term::App(f, Vec::<LNTerm>::new().into());
             let concfact = ku_fact(m);
             Rule::new(
-                intr_constr_info(&s),
+                IntrRuleACInfo::ConstrRule(underscore_prefixed(name), f),
                 vec![],
                 vec![concfact.clone()],
                 vec![concfact],
@@ -419,51 +425,69 @@ fn private_constructor_rules(
         .collect()
 }
 
-/// Port of `minimizeIntruderRules` (IntruderRules.hs:186-206).
+/// Port of `minimizeIntruderRules` (IntruderRules.hs):
+///
+/// ```haskell
+/// minimizeIntruderRules :: Bool -> MaudeHandle -> [IntrRuleAC] -> [IntrRuleAC]
+/// minimizeIntruderRules diff hnd rules =
+///     filter (not . isDoublePremiseRule) $ go [] rules
+///   where
+///     go checked [] = reverse checked
+///     go checked (r:unchecked) = go checked' unchecked
+///       where
+///         checked' = if any (\r' -> (equalDuplicateRuleUpToRenaming r r' `runReader` hnd)
+///                                || ((not diff) && equalSubsetRuleUpToRenaming r r' `runReader` hnd))
+///                           (checked++unchecked)
+///                    then checked
+///                    else r:checked
+/// ```
 ///
 /// Two-stage filter:
-/// 1. **Subsumption** (skipped in `diff` mode): for each rule with
-///    `(prems, concs)`, drop it if any OTHER rule has the same `concs`
-///    and a premise set that is a subset of this rule's premises.
-///    Mirrors Haskell's `go` accumulator iteration; preserves the order
-///    of the first-kept duplicate.
+/// 1. **Dedup/subsumption** (run in BOTH modes; the subset check is
+///    skipped in `diff` mode): rule `r` is dropped iff some peer `r'` in
+///    `checked ++ unchecked` is a duplicate up to renaming, or (trace
+///    mode only) subsumes `r` via `equal_subset_rule_up_to_renaming`.
+///    Mirrors Haskell's `go` accumulator iteration; `reverse checked`
+///    recovers the original order of the kept rules.
 /// 2. **Double-premise filter** (always applied): drop rules whose KD
 ///    first-premise is a msg-var `t` and whose premises also include
 ///    `KU(t)` of the same term (with all terms private-free).
-fn minimize_intruder_rules(diff: bool, rules: Vec<IntrRuleAC>) -> Vec<IntrRuleAC> {
-    let after_subsumption = if diff {
-        rules
-    } else {
-        // Haskell `go checked unchecked`: process `unchecked` left-to-right,
-        // dropping any rule subsumed by a peer in `checked ++ unchecked`.
-        // We mirror exactly: walk by index, and when checking rule i, the
-        // peers are { all kept rules so far } ∪ { all rules with index > i }.
-        let n = rules.len();
-        let mut kept: Vec<usize> = Vec::with_capacity(n);
-        for i in 0..n {
-            let r_i = &rules[i];
-            let subsumed = (0..n).any(|j| {
-                if j == i {
-                    return false;
-                }
-                // Peer eligibility: either already-kept earlier (j < i and j in kept)
-                // or still in `unchecked` (j > i).  Haskell's `checked++unchecked`
-                // semantics.
-                if j < i && !kept.contains(&j) {
-                    return false;
-                }
-                let r_j = &rules[j];
-                r_j.conclusions == r_i.conclusions && is_subset_of(&r_j.premises, &r_i.premises)
-            });
-            if !subsumed {
-                kept.push(i);
+fn minimize_intruder_rules(
+    diff: bool,
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    rules: Vec<IntrRuleAC>,
+) -> Vec<IntrRuleAC> {
+    // Haskell `go checked unchecked`: process `unchecked` left-to-right,
+    // dropping any rule matched by a peer in `checked ++ unchecked`.
+    // We mirror exactly: walk by index, and when checking rule i, the
+    // peers are { all kept rules so far } ∪ { all rules with index > i }.
+    // Keeping the survivors in index order equals HS's `reverse checked`
+    // (checked is built by prepending).
+    let n = rules.len();
+    let mut kept: Vec<bool> = vec![false; n];
+    for i in 0..n {
+        let r_i = &rules[i];
+        let dropped = (0..n).any(|j| {
+            if j == i {
+                return false;
             }
-        }
-        kept.into_iter().map(|i| rules[i].clone()).collect()
-    };
-    after_subsumption
+            // Peer eligibility: either already-kept earlier (j < i and j in kept)
+            // or still in `unchecked` (j > i).  Haskell's `checked++unchecked`
+            // semantics.
+            if j < i && !kept[j] {
+                return false;
+            }
+            let r_j = &rules[j];
+            equal_duplicate_rule_up_to_renaming(maude, r_i, r_j)
+                || (!diff && equal_subset_rule_up_to_renaming(maude, r_i, r_j))
+        });
+        kept[i] = !dropped;
+    }
+    rules
         .into_iter()
-        .filter(|r| !is_double_premise_rule(r))
+        .zip(kept)
+        .filter(|(r, keep)| *keep && !is_double_premise_rule(r))
+        .map(|(r, _)| r)
         .collect()
 }
 
@@ -542,22 +566,21 @@ fn is_double_premise_rule(r: &IntrRuleAC) -> bool {
 ///         y_var = varTerm (LVar "y"  LSortMsg   0)
 ///
 /// mkDUnionRule t_prems t_conc =
-///     Rule (DestrRule (append (pack "_") unionSymString) 0 True False)
+///     Rule (DestrRule (append (pack "_") unionSymString) 0 True False [AC Union])
 ///          [kdFact $ fAppAC Union t_prems]
 ///          [kdFact t_conc] [] []
 ///
 /// mkCUnionRule terms =
-///     Rule (ConstrRule (append (pack "_") unionSymString))
+///     Rule (ConstrRule (append (pack "_") unionSymString) (AC Union))
 ///          (map kuFact terms)
 ///          [kuFact $ fAppAC Union terms] [kuFact $ fAppAC Union terms] []
 /// ```
 ///
-/// Added to the intruder rule pool when `enableMSet` (Main/TheoryLoader.hs:773-791, see line 788).
-/// Note budget=0 (NOT -1) — `closeIntrRule` clause 3 passes through without
-/// further variant expansion since budget is not -1.  HS computes budget=0
-/// at definition time, so we mirror that here.
+/// Added to the intruder rule pool when `enableMSet` (Main/TheoryLoader.hs).
+/// Note budget=0 (NOT -1) — HS computes budget=0 at definition time, so
+/// we mirror that here.
 pub fn multiset_intruder_rules() -> Vec<IntrRuleAC> {
-    use tamarin_term::function_symbols::{AcSym, FunSym, UNION_SYM_STRING};
+    use tamarin_term::function_symbols::{AcSym, UNION_SYM_STRING};
     use tamarin_term::term::Term;
     let x_var = var_term(LVar::new("x", LSort::Msg, 0));
     let y_var = var_term(LVar::new("y", LSort::Msg, 0));
@@ -567,14 +590,14 @@ pub fn multiset_intruder_rules() -> Vec<IntrRuleAC> {
     );
     let name = underscore_prefixed(UNION_SYM_STRING);
     let d_rule = Rule::new(
-        IntrRuleACInfo::DestrRule(name.clone(), 0, true, false),
+        IntrRuleACInfo::DestrRule(name.clone(), 0, true, false, vec![FunSym::Ac(AcSym::Union)]),
         vec![kd_fact(xy_union.clone())],
         vec![kd_fact(x_var.clone())],
         vec![],
     );
     let c_rule = {
         let mut r = Rule::new(
-            IntrRuleACInfo::ConstrRule(name),
+            IntrRuleACInfo::ConstrRule(name, FunSym::Ac(AcSym::Union)),
             vec![ku_fact(x_var.clone()), ku_fact(y_var)],
             vec![ku_fact(xy_union.clone())],
             vec![ku_fact(xy_union)],
@@ -585,15 +608,14 @@ pub fn multiset_intruder_rules() -> Vec<IntrRuleAC> {
     vec![d_rule, c_rule]
 }
 
-/// `xorIntruderRules` — port of HS `Theory.Tools.IntruderRules.xorIntruderRules`
-/// (IntruderRules.hs:345-349):
+/// `xorIntruderRules` — port of HS `Theory.Tools.IntruderRules.xorIntruderRules`:
 ///
 /// ```haskell
 /// xorIntruderRules = [
-///     mkDXorRule [x, y] [y, z] (x ⊕ z),   -- KD(x⊕y) ∧ KU(y⊕z) → KD(x⊕z)
-///     mkDXorRule [x, y] [y]    x,         -- KD(x⊕y) ∧ KU(y)   → KD(x)
-///     mkCXorRule x y (x ⊕ y),             -- KU(x)   ∧ KU(y)   → KU(x⊕y)
-///     zeroConstructor                     -- KU(zero)
+///     mkDXorRule [x, y] [y, z] (x ⊕ z),          -- KD(x⊕y) ∧ KU(y⊕z) → KD(x⊕z)
+///     mkDXorRuleSubterm [x, y] [y]    x,         -- KD(x⊕y) ∧ KU(y)   → KD(x)
+///     mkCXorRule x y (x ⊕ y),                    -- KU(x)   ∧ KU(y)   → KU(x⊕y)
+///     zeroConstructor                            -- KU(zero)
 /// ]
 /// ```
 ///
@@ -602,14 +624,16 @@ pub fn multiset_intruder_rules() -> Vec<IntrRuleAC> {
 /// (or `y⊕z`) themselves.  The constructor rule lets them XOR two known
 /// values together.  `zeroConstructor` makes `zero` always known.
 ///
+/// `mkDXorRule` (the 2-composed-premise rule) carries subterm=FALSE —
+/// `x⊕z` is not a syntactic subterm of `x⊕y`; only `mkDXorRuleSubterm`
+/// (the `[x,y] [y] → x` rule) is a true subterm destructor.
+///
 /// Wired in `ProofContext::new_with_restrictions_and_pool` when
 /// `sig.enable_xor`, after `special_intruder_rules` and before the
 /// DH/BP intruder variants — mirroring HS `addMessageDeductionRule
-/// Variants` (TheoryLoader.hs:786-789).
+/// Variants` (TheoryLoader.hs).
 pub fn xor_intruder_rules() -> Vec<IntrRuleAC> {
-    use tamarin_term::function_symbols::{
-        AcSym, Constructability, FunSym, NoEqSym, Privacy, XOR_SYM_STRING, ZERO_SYM_STRING,
-    };
+    use tamarin_term::function_symbols::{zero_sym, AcSym, XOR_SYM_STRING, ZERO_SYM_STRING};
     use tamarin_term::term::Term;
     let x = var_term(LVar::new("x", LSort::Msg, 0));
     let y = var_term(LVar::new("y", LSort::Msg, 0));
@@ -625,18 +649,19 @@ pub fn xor_intruder_rules() -> Vec<IntrRuleAC> {
     let name = underscore_prefixed(XOR_SYM_STRING);
 
     // Rule 1: KD(x⊕y) ∧ KU(y⊕z) → KD(x⊕z)
-    // HS: mkDXorRule [x, y] [y, z] x_xor_z
+    // HS: mkDXorRule [x, y] [y, z] x_xor_z — subterm=False.
     let d_rule_1 = Rule::new(
-        IntrRuleACInfo::DestrRule(name.clone(), 1, true, false),
+        IntrRuleACInfo::DestrRule(name.clone(), 1, false, false, vec![FunSym::Ac(AcSym::Xor)]),
         vec![kd_fact(x_xor_y.clone()), ku_fact(y_xor_z)],
         vec![kd_fact(x_xor_z)],
         vec![],
     );
     // Rule 2: KD(x⊕y) ∧ KU(y) → KD(x)
-    // HS: mkDXorRule [x, y] [y] x_var — note `fAppAC Xor [y]` is a singleton
-    // AC that the smart constructor strips to just `y`.
+    // HS: mkDXorRuleSubterm [x, y] [y] x_var — subterm=True; note
+    // `fAppAC Xor [y]` is a singleton AC that the smart constructor
+    // strips to just `y`.
     let d_rule_2 = Rule::new(
-        IntrRuleACInfo::DestrRule(name.clone(), 1, true, false),
+        IntrRuleACInfo::DestrRule(name.clone(), 1, true, false, vec![FunSym::Ac(AcSym::Xor)]),
         vec![kd_fact(x_xor_y.clone()), ku_fact(y.clone())],
         vec![kd_fact(x.clone())],
         vec![],
@@ -645,7 +670,7 @@ pub fn xor_intruder_rules() -> Vec<IntrRuleAC> {
     // HS: mkCXorRule x y x_xor_y — constructor, action emits `KU(x⊕y)`.
     let c_rule = {
         let mut r = Rule::new(
-            IntrRuleACInfo::ConstrRule(name.clone()),
+            IntrRuleACInfo::ConstrRule(name.clone(), FunSym::Ac(AcSym::Xor)),
             vec![ku_fact(x), ku_fact(y)],
             vec![ku_fact(x_xor_y.clone())],
             vec![ku_fact(x_xor_y)],
@@ -653,18 +678,13 @@ pub fn xor_intruder_rules() -> Vec<IntrRuleAC> {
         r.new_vars = vec![];
         r
     };
-    // Rule 4: zero constructor (HS `zeroConstructor`).
-    let zero_sym = NoEqSym::new(
-        ZERO_SYM_STRING.to_vec(),
-        0,
-        Privacy::Public,
-        Constructability::Constructor,
-    );
-    let zero_term: LNTerm = Term::App(FunSym::NoEq(zero_sym), Vec::<LNTerm>::new().into());
+    // Rule 4: zero constructor (HS `zeroConstructor`,
+    // `ConstrRule "_zero" (NoEq zeroSym)`).
+    let zero_term: LNTerm = Term::App(FunSym::NoEq(zero_sym()), Vec::<LNTerm>::new().into());
     let zero_name = underscore_prefixed(ZERO_SYM_STRING);
     let zero_rule = {
         let mut r = Rule::new(
-            IntrRuleACInfo::ConstrRule(zero_name),
+            IntrRuleACInfo::ConstrRule(zero_name, FunSym::NoEq(zero_sym())),
             vec![],
             vec![ku_fact(zero_term.clone())],
             vec![ku_fact(zero_term)],
@@ -675,36 +695,44 @@ pub fn xor_intruder_rules() -> Vec<IntrRuleAC> {
     vec![d_rule_1, d_rule_2, c_rule, zero_rule]
 }
 
-/// `constructionRules`: for every public constructor `f/n` in the
-/// signature, emit a KU rule:
+/// `constructionRules fSig` — port of IntruderRules.hs:
 ///
-/// `[KU(x_1), ..., KU(x_n)] --[KU(f(x_1, ..., x_n))]-> [KU(f(x_1, ..., x_n))]`
-pub fn construction_rules(sig: &tamarin_term::maude_sig::MaudeSig) -> Vec<IntrRuleAC> {
-    use tamarin_term::function_symbols::{Constructability, Privacy};
-    use tamarin_term::term::f_app_no_eq;
-    // HS-faithful: `constructionRules (stFunSyms maudeSig)`
-    // (IntruderRules.hs:210-213, see line 213).  `stFunSyms` is the SUBTERM-theory function
-    // signature — it EXCLUDES the DH / BP / MSet / Nat / Xor symbols
-    // (those are added into `fun_syms` by `refresh`,
-    // maude_sig.rs `fn refresh` lines 56-60, exposed as `fun_syms` at line 84).
-    // The DH / BP intruder constructors (`c_exp` / `c_inv` / `c_mult`
-    // / `c_one` / `c_DH_neutral` / `c_pmult` / `c_emap`) come from the
-    // cached `intruder_variants_{dh,bp}.spthy` files via
-    // `addMessageDeductionRuleVariants` (TheoryLoader.hs:773-781) —
-    // adding them here would duplicate every DH constructor in
-    // `intruder_rules`, doubling each `c_exp` / `c_inv` / etc. branch
-    // at `solve_action_goal` rule enumeration and causing case-list
-    // over-enumeration (e.g. KEA_plus_eCK::eCK_initiator_key
-    // `case exp_case_1` vs HS `case exp`).
+/// ```haskell
+/// constructionRules :: UserDefinedSig -> [IntrRuleAC]
+/// constructionRules fSig =
+///     [ createRuleNoEq s f k | NoEqUser f@(s,(k,Public,Constructor,_)) <- S.toList fSig ] ++
+///     [ createRuleAC s f | ACfctUser f@(s,(Public,Constructor,_)) <- S.toList fSig ]
+/// ```
+///
+/// For every public NoEq constructor `f/k`, a KU rule
+/// `[KU(x_0), ..., KU(x_{k-1})] --[KU(f(..))]-> [KU(f(..))]`; for every
+/// public AC constructor `f`, the 2-premise rule
+/// `[KU(x_0), KU(x_1)] --[KU(f(x_0, x_1))]-> [KU(f(x_0, x_1))]` with the
+/// term built via the AC smart constructor.  The two list comprehensions
+/// run separately over `fSig`, so ALL NoEq rules precede ALL AC rules.
+///
+/// `fSig` is the USER-DEFINED subterm signature (`userDefinedSTFunSyms`)
+/// — it excludes the DH / BP / MSet / Nat / Xor builtins, whose intruder
+/// constructors come from the cached `intruder_variants_{dh,bp}.spthy`
+/// files / the builtin generators instead.
+pub fn construction_rules(
+    f_sig: &tamarin_term::function_symbols::UserDefinedSig,
+) -> Vec<IntrRuleAC> {
+    use tamarin_term::function_symbols::{AcSym, Constructability, Privacy, UserDefinedSym};
+    use tamarin_term::term::{f_app_ac, f_app_no_eq};
+
     let mut out = Vec::new();
-    for s in &sig.st_fun_syms {
-        // `[ createRule s k | (s,(k,Public,Constructor)) <- ... ]` —
-        // only public constructors.
+    // `createRuleNoEq` comprehension — public NoEq constructors.
+    for u in f_sig {
+        let s = match u {
+            UserDefinedSym::NoEqUser(s) => s,
+            _ => continue,
+        };
         if s.privacy != Privacy::Public || s.constructability != Constructability::Constructor {
             continue;
         }
         let arity = s.arity;
-        // Build vars x_0 ... x_{n-1} : Msg
+        // Build vars x_0 ... x_{k-1} : Msg
         let xs: Vec<tamarin_term::lterm::LNTerm> = (0..arity)
             .map(|i| var_term(LVar::new("x", LSort::Msg, i as u64)))
             .collect();
@@ -712,43 +740,48 @@ pub fn construction_rules(sig: &tamarin_term::maude_sig::MaudeSig) -> Vec<IntrRu
         let m = f_app_no_eq(*s, xs);
         let conc = ku_fact(m.clone());
         let act = ku_fact(m);
-        // Encode the constructor name in the IntrRuleACInfo.
-        let info = intr_constr_info(s.name);
+        let info = IntrRuleACInfo::ConstrRule(underscore_prefixed(s.name), FunSym::NoEq(*s));
+        out.push(Rule::new(info, prems, vec![conc], vec![act]));
+    }
+    // `createRuleAC` comprehension — public AC constructors (arity 2).
+    for u in f_sig {
+        let s = match u {
+            UserDefinedSym::AcFctUser(s) => s,
+            _ => continue,
+        };
+        if s.privacy != Privacy::Public || s.constructability != Constructability::Constructor {
+            continue;
+        }
+        let xs: Vec<tamarin_term::lterm::LNTerm> = (0..2u64)
+            .map(|i| var_term(LVar::new("x", LSort::Msg, i)))
+            .collect();
+        let prems: Vec<LNFact> = xs.iter().cloned().map(ku_fact).collect();
+        let m = f_app_ac(AcSym::AcFct(*s), xs);
+        let conc = ku_fact(m.clone());
+        let act = ku_fact(m);
+        let info =
+            IntrRuleACInfo::ConstrRule(underscore_prefixed(s.name), FunSym::Ac(AcSym::AcFct(*s)));
         out.push(Rule::new(info, prems, vec![conc], vec![act]));
     }
     out
 }
 
 // =============================================================================
-// `closeIntrRule` + `variantsIntruder` — port of `Theory.Tools.IntruderRules`
-// and `Rule.closeIntrRule`.
+// User-defined destruction rules — port of
+// `Theory.Tools.IntruderRules.destructionRulesNoEq` / `destructionRulesAC` /
+// `decomposeNotSubterm` / `maxApplications`.
 //
-// Together these post-process the destructor rules in two ways:
+// For every public user-defined function symbol a generic destructor
 //
-//   1. For `DestrRule subterm=True` (the "syntactic-subterm" destructors
-//      like `sdec`, `fst`, `snd`) — compute the per-rule
-//      `paciRemainingApplications` budget (number of consecutive
-//      applications allowed before the loop-breaker fires). Rule.hs:104-114.
+//   [ KD(x_{k-1}), KU(x_0), .., KU(x_{k-2}) ] --[ KD(f(..)) ]-> [ KD(f(..)) ]
 //
-//   2. For `DestrRule subterm=False` (the convergent-equation
-//      destructors `d_0_comb`, `d_1_comb`, `d_0_transform` in issue216 —
-//      whose RHS is NOT a subterm of the LHS, e.g.
-//      `comb(transform(x, y), y) = x`, where `x` and `y` both appear
-//      in the RHS even though the RHS `x` is a sub-position of the LHS)
-//      — invoke Maude's `get variants` to enumerate ALL variant rules
-//      that the destructor can take.  Each Maude variant substitution is
-//      applied to the rule, normalised, and added to the pool.  Without
-//      this expansion, chains over `d_0_comb` etc. enumerate only the
-//      identity-variant — Haskell expects ~3 extra variant rules
-//      bringing the chain pool from `nRules=6` to `nRules=9` on issue216,
-//      and the 4 issue216 lemmas all need at least one of these variants
-//      to close.
-//
-// HS pipeline ORDER:
-//   intrRulesAC = concatMap (closeIntrRule hnd) intrRules
-//                       -- ^ AFTER `minimizeIntruderRules` (run inside
-//                       --   `subtermIntruderRules`)
-// Mirrors Rule.hs:121-176, see line 160.
+// is narrowed via `variants_intruder` (Maude `get variants`); each variant
+// is rebuilt into the rewrite rule `f(kd-term, prem-terms..) → conclusion`
+// and — when that is a context subterm rule — expanded into concrete
+// destructor rules via `rrule_to_ctxt_st_rule` + `destruction_rules`
+// (`decompose_not_subterm`).  NoEq destructors additionally get their
+// consecutive-application budget from `max_applications` (N12).  Intruder
+// rules therefore arrive at the rule cache fully processed.
 // =============================================================================
 
 /// `isPrivateFunction` (Term.hs:203-205): top-level function symbol is Private.
@@ -767,98 +800,282 @@ pub fn is_private_function(t: &LNTerm) -> bool {
     )
 }
 
-/// `closeIntrRule` — port of `Rule.closeIntrRule` (lib/theory/src/Rule.hs:103-116).
+/// `destructionRulesAC diff fSig` — port of
+/// `Theory.Tools.IntruderRules.destructionRulesAC`:
 ///
-/// HS shape:
 /// ```haskell
-/// closeIntrRule hnd (Rule (DestrRule name (-1) subterm constant)
-///                         prems@((Fact KDFact _ [t]):_)
-///                         concs@[Fact KDFact _ [rhs]] acts nvs) =
-///   if subterm then [ru] else variantsIntruder hnd id False ru
-///     where ru = ...budget-computed...
-/// closeIntrRule hnd ir@(Rule (DestrRule _ _ False _) _ _ _ _) =
-///     variantsIntruder hnd id False ir
-/// closeIntrRule _ ir = [ir]
+/// destructionRulesAC :: Bool -> ACfctFunSig -> WithMaude [IntrRuleAC]
+/// destructionRulesAC diff fSig = reader $ \hnd -> minimizeIntruderRules diff hnd $
+///     concatMap (decomposeNotSubterm diff . variantsIntruderAux hnd id True diff)
+///       [ (AC (ACfct f), createRule s f)
+///       | f@(s,(Public,_,_)) <- S.toList fSig, s `notElem` builtInDestrRule ]
+///   where
+///     createRule s f = Rule (DestrRule (append (pack "_") s) (-1) True True [AC (ACfct f)])
+///                           [kdFact x_0, kuFact x_1] [concfact] [concfact] []
+///       where concfact = kdFact (fAppACfct f [x_0, x_1])
 /// ```
 ///
-/// Note the THREE-way pattern split on Haskell:
-///   1. `DestrRule name (-1) subterm constant` + KD-single-fact shape  → compute budget,
-///      then either single-rule (subterm) or variantsIntruder (non-subterm).
-///   2. ANY `DestrRule _ _ False _` (subterm=False) that didn't match clause 1  → variantsIntruder.
-///   3. Default — pass through unchanged.
-///
-/// Clause 2 catches DestrRules whose shape doesn't match clause 1's narrow
-/// pattern (e.g. budget already set, multiple-concs, etc.) AND have
-/// subterm=False — these still need variant expansion.
-pub fn close_intr_rule(
+/// One generic 2-premise destructor per public user-defined AC symbol
+/// (the built-in destructor names are skipped), narrowed and decomposed
+/// into concrete destructor rules.
+pub fn destruction_rules_ac(
+    diff: bool,
     maude: &tamarin_term::maude_proc::MaudeHandle,
-    ir: &IntrRuleAC,
+    f_sig: &tamarin_term::function_symbols::AcFctFunSig,
 ) -> Vec<IntrRuleAC> {
-    use tamarin_term::positions::positions;
+    use tamarin_term::function_symbols::{AcSym, Privacy};
+    use tamarin_term::term::f_app_ac;
 
-    // Clause 1: budget = -1 AND single-KD-conclusion AND first-prem is KD.
-    if let IntrRuleACInfo::DestrRule(name, -1, subterm, constant) = &ir.info {
+    let x_0 = var_term(LVar::new("x", LSort::Msg, 0));
+    let x_1 = var_term(LVar::new("x", LSort::Msg, 1));
+    let mut generated: Vec<IntrRuleAC> = Vec::new();
+    for f in f_sig {
+        if f.privacy != Privacy::Public {
+            continue;
+        }
+        if crate::rule::built_in_destr_rule().contains(&f.name) {
+            continue;
+        }
+        let fun = FunSym::Ac(AcSym::AcFct(*f));
+        let concfact = kd_fact(f_app_ac(AcSym::AcFct(*f), vec![x_0.clone(), x_1.clone()]));
+        let base = Rule::new(
+            IntrRuleACInfo::DestrRule(underscore_prefixed(f.name), -1, true, true, vec![fun]),
+            vec![kd_fact(x_0.clone()), ku_fact(x_1.clone())],
+            vec![concfact.clone()],
+            vec![concfact],
+        );
+        let variants = variants_intruder(maude, true, diff, &base);
+        generated.extend(decompose_not_subterm(diff, fun, &variants));
+    }
+    minimize_intruder_rules(diff, maude, generated)
+}
+
+/// `decomposeNotSubterm` — port of
+/// `Theory.Tools.IntruderRules.decomposeNotSubterm`:
+///
+/// ```haskell
+/// decomposeNotSubterm bool (f, (Rule (DestrRule _ _ _ _ _)
+///                                    ((Fact KDFact _ (lhs:_)) : other_prems)
+///                                    [Fact KDFact _ [tc]] _ _) : rq) =
+///   case rRuleToCtxtStRule (flhs `RRule` tc) of
+///     Just context -> destructionRules bool context ++ decomposeNotSubterm bool (f, rq)
+///     Nothing      -> decomposeNotSubterm bool (f, rq)
+///   where flhs = FAPP f (lhs : foldMap getFactTerms other_prems)
+/// decomposeNotSubterm _ (_, []) = []
+/// ```
+///
+/// Rebuilds each destructor variant into the rewrite rule
+/// `f(kd-term, prem-terms..) → tc` and, when that forms a context subterm
+/// rule, expands it back into concrete destructor rules.  `FAPP` is the
+/// RAW term constructor — the rebuilt LHS is NOT AC-normalised here.
+fn decompose_not_subterm(diff: bool, f: FunSym, rules: &[IntrRuleAC]) -> Vec<IntrRuleAC> {
+    use tamarin_term::rewriting::RRule;
+    use tamarin_term::subterm_rule::rrule_to_ctxt_st_rule;
+    use tamarin_term::term::Term;
+
+    let mut out: Vec<IntrRuleAC> = Vec::new();
+    for r in rules {
+        // Variants of the generic destructors always match this shape
+        // (DestrRule info, leading single-term KD premise, single KD
+        // conclusion); anything else is skipped.
+        if !matches!(r.info, IntrRuleACInfo::DestrRule(..)) {
+            continue;
+        }
+        let (first, other_prems) = match r.premises.split_first() {
+            Some((first, rest)) if first.tag == FactTag::Kd && !first.terms.is_empty() => {
+                (first, rest)
+            }
+            _ => continue,
+        };
+        let lhs = &first.terms[0];
+        let tc = match r.conclusions.as_slice() {
+            [c] if c.tag == FactTag::Kd && c.terms.len() == 1 => &c.terms[0],
+            _ => continue,
+        };
+        // `flhs = FAPP f (lhs : foldMap getFactTerms other_prems)`.
+        let mut args: Vec<LNTerm> = vec![lhs.clone()];
+        for p in other_prems {
+            for t in p.terms.iter() {
+                args.push(t.clone());
+            }
+        }
+        let flhs: LNTerm = Term::App(f, args.into());
+        if let Some(context) = rrule_to_ctxt_st_rule(&RRule::new(flhs, tc.clone())) {
+            out.extend(destruction_rules(diff, &context));
+        }
+    }
+    out
+}
+
+/// `destructionRulesNoEq diff fSig` — port of
+/// `Theory.Tools.IntruderRules.destructionRulesNoEq` (the non-AC cases):
+///
+/// ```haskell
+/// destructionRulesNoEq :: Bool -> NoEqFunSig -> WithMaude [IntrRuleAC]
+/// destructionRulesNoEq diff fSig = reader $ \hnd ->
+///     map (maxApplications hnd) . minimizeIntruderRules diff hnd $
+///     concatMap (decomposeNotSubterm diff . variantsIntruderAux hnd id True diff)
+///       [ (NoEq f, createRule s f k)
+///       | f@(s,(k,Public,_,_)) <- S.toList fSig, s `notElem` builtInDestrRule ]
+///   where
+///     createRule s f k | k /= 0 =
+///         Rule (DestrRule (append (pack "_") s) (-1) True True [NoEq f])
+///              ((kdFact x_{k-1}) : take (k-1) (map kuFact vars))
+///              [concfact] [concfact] []
+///     -- the two booleans are set by default to True: the budget is computed just after
+///       where vars     = take k [ varTerm (LVar "x" LSortMsg i) | i <- [0..] ]
+///             concfact = kdFact (fAppNoEq f (reverse vars))
+///     createRule s f 0 = Rule (DestrRule (append (pack "_") s) (-1) True True [NoEq f])
+///                             [] [concfact] [concfact] []
+///       where concfact = kdFact (fAppNoEq f [])
+/// ```
+///
+/// Note the generic rule's shapes: the KD premise carries `x_{k-1}`, the
+/// KU premises carry `x_0 .. x_{k-2}`, and the conclusion applies `f` to
+/// the REVERSED variable list `f(x_{k-1}, .., x_0)`.
+pub fn destruction_rules_no_eq(
+    diff: bool,
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    f_sig: &tamarin_term::function_symbols::NoEqFunSig,
+) -> Vec<IntrRuleAC> {
+    use tamarin_term::function_symbols::Privacy;
+    use tamarin_term::term::f_app_no_eq;
+
+    let mut generated: Vec<IntrRuleAC> = Vec::new();
+    for f in f_sig {
+        if f.privacy != Privacy::Public {
+            continue;
+        }
+        if crate::rule::built_in_destr_rule().contains(&f.name) {
+            continue;
+        }
+        let k = f.arity;
+        let info = IntrRuleACInfo::DestrRule(
+            underscore_prefixed(f.name),
+            -1,
+            true,
+            true,
+            vec![FunSym::NoEq(*f)],
+        );
+        let base = if k != 0 {
+            let vars: Vec<LNTerm> = (0..k)
+                .map(|i| var_term(LVar::new("x", LSort::Msg, i as u64)))
+                .collect();
+            let mut prems = vec![kd_fact(vars[k - 1].clone())];
+            for v in vars.iter().take(k - 1) {
+                prems.push(ku_fact(v.clone()));
+            }
+            let mut rev = vars;
+            rev.reverse();
+            let concfact = kd_fact(f_app_no_eq(*f, rev));
+            Rule::new(info, prems, vec![concfact.clone()], vec![concfact])
+        } else {
+            let concfact = kd_fact(f_app_no_eq(*f, vec![]));
+            Rule::new(info, vec![], vec![concfact.clone()], vec![concfact])
+        };
+        let variants = variants_intruder(maude, true, diff, &base);
+        generated.extend(decompose_not_subterm(diff, FunSym::NoEq(*f), &variants));
+    }
+    minimize_intruder_rules(diff, maude, generated)
+        .into_iter()
+        .map(|r| max_applications(maude, r))
+        .collect()
+}
+
+/// `maxApplications` — compute the maximum number of consecutive
+/// applications of a deconstruction rule (implements N12):
+///
+/// ```haskell
+/// maxApplications hnd (Rule (DestrRule name (-1) subterm constant funs)
+///                           prems@((Fact KDFact _ [t]):_) concs@[Fact KDFact _ [rhs]] acts nvs) =
+///    Rule (DestrRule name (if containsOnlyNoEq rhs && containsOnlyNoEq t
+///                             && runMaude (unifiableLNTerms rhs t)
+///                          then length (positions t) - (if isPrivateFunction t then 1 else 2)
+///                          else 0) subterm constant funs) prems concs acts nvs
+/// maxApplications _ ir@(Rule (DestrRule name _ _ _ _) _ _ _ _)
+///     | any (`isSuffixOf` name) builtInDestrRuleInclPair = ir
+/// maxApplications _ (Rule (DestrRule _ _ False _ _) _ _ _ _) =
+///     error "maxApplications: This case should not happen, ..."
+/// maxApplications _ ir = ir
+/// ```
+///
+/// Clause order matters: the budget computation fires for ANY budget=-1
+/// destructor with the KD-premise/KD-conclusion shape (built-in-named or
+/// not); only rules failing that pattern reach the built-in-suffix
+/// passthrough and the subterm=False error clause.
+fn max_applications(
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    mut ir: IntrRuleAC,
+) -> IntrRuleAC {
+    use tamarin_term::lterm::contains_only_no_eq;
+    use tamarin_term::positions::positions;
+    use tamarin_term::rewriting::Equal;
+
+    // Clause 1: budget = -1 AND leading single-term KD premise AND single
+    // KD conclusion.
+    if matches!(ir.info, IntrRuleACInfo::DestrRule(_, -1, _, _, _)) {
         let kd_prem_t: Option<&LNTerm> = ir
             .premises
             .first()
             .filter(|f| f.tag == FactTag::Kd && f.terms.len() == 1)
             .map(|f| &f.terms[0]);
-        let single_kd_conc_rhs: Option<&LNTerm> = if ir.conclusions.len() == 1
-            && ir.conclusions[0].tag == FactTag::Kd
-            && ir.conclusions[0].terms.len() == 1
-        {
-            Some(&ir.conclusions[0].terms[0])
-        } else {
-            None
+        let kd_conc_rhs: Option<&LNTerm> = match ir.conclusions.as_slice() {
+            [c] if c.tag == FactTag::Kd && c.terms.len() == 1 => Some(&c.terms[0]),
+            _ => None,
         };
-        if let (Some(t), Some(rhs)) = (kd_prem_t, single_kd_conc_rhs) {
-            // Compute budget: `if runMaude (unifiableLNTerms rhs t)
-            //   then (length (positions t)) - (if (isPrivateFunction t) then 1 else 2)
-            //   else 0`.
-            use tamarin_term::rewriting::Equal;
-            let unifiable = maude
-                .unifiable(&[Equal {
-                    lhs: rhs.clone(),
-                    rhs: t.clone(),
-                }])
-                .unwrap_or(false);
-            let budget: i64 = if unifiable {
-                let np = positions(t).len() as i64;
-                let sub = if is_private_function(t) { 1 } else { 2 };
-                np - sub
+        if let (Some(t), Some(rhs)) = (kd_prem_t, kd_conc_rhs) {
+            let budget: i64 = if contains_only_no_eq(rhs)
+                && contains_only_no_eq(t)
+                && maude
+                    .unifiable(&[Equal {
+                        lhs: rhs.clone(),
+                        rhs: t.clone(),
+                    }])
+                    .unwrap_or(false)
+            {
+                // We do not need to count t itself, hence - 1.
+                // If t is a private function symbol we need to permit one
+                // more rule application as there is no associated
+                // constructor.
+                positions(t).len() as i64 - (if is_private_function(t) { 1 } else { 2 })
             } else {
                 0
             };
-            let mut ru = ir.clone();
-            ru.info = IntrRuleACInfo::DestrRule(name.clone(), budget, *subterm, *constant);
-            return if *subterm {
-                vec![ru]
-            } else {
-                variants_intruder(maude, false, &ru)
-            };
+            if let IntrRuleACInfo::DestrRule(_, b, _, _, _) = &mut ir.info {
+                *b = budget;
+            }
+            return ir;
         }
     }
-
-    // Clause 2: any DestrRule with subterm=False that didn't match clause 1.
-    if matches!(&ir.info, IntrRuleACInfo::DestrRule(_, _, false, _)) {
-        return variants_intruder(maude, false, ir);
+    if let IntrRuleACInfo::DestrRule(name, _, subterm, _, _) = &ir.info {
+        // Clause 2: built-in deconstruction rules pass through untouched.
+        if crate::rule::has_builtin_suffix(name, &crate::rule::built_in_destr_rule_incl_pair()) {
+            return ir;
+        }
+        // Clause 3: non-subterm destructors must have been budgeted above.
+        if !*subterm {
+            panic!(
+                "maxApplications: This case should not happen, please report it on the github page"
+            );
+        }
     }
-
-    // Clause 3: pass through.
-    vec![ir.clone()]
+    // Clause 4: pass through.
+    ir
 }
 
 /// `variantsIntruder` — port of
-/// `Theory.Tools.IntruderRules.variantsIntruder` (IntruderRules.hs:288-314).
+/// `Theory.Tools.IntruderRules.variantsIntruder`.
 ///
 /// HS shape (with `minimizeVariants = id`):
 /// ```haskell
-/// variantsIntruder hnd id applyFilters ru = go [] $ reverse $ do
+/// variantsIntruder hnd id applyFilters diff ru = go [] $ reverse $ do
 ///     let ruleTerms = concatMap factTerms (rPrems ru ++ rConcs ru ++ rActs ru)
 ///     fsigma <- computeVariants (fAppList ruleTerms) `runReader` hnd
 ///     let sigma     = freshToFree fsigma `evalFreshAvoiding` ruleTerms
 ///         ruvariant = normRule' (apply sigma ru) `runReader` hnd
-///     guard (... filter conditions ...)
+///     guard (not applyFilters || (frees (get rConcs ruvariant) /= [] || diff) &&
+///            (not applyFilters || ruvariant /= ru) &&
+///            (get rConcs ruvariant) \\ (get rPrems ruvariant) /= [])
 ///     case concatMap factTerms (rConcs ruvariant) of
 ///       [viewTerm -> FApp (AC Mult) _] -> fail "Rules with product conclusion redundant"
 ///       _ -> return ruvariant
@@ -875,9 +1092,9 @@ pub fn close_intr_rule(
 ///   * convert VFresh → free `Subst`, renaming range vars away from `ruleTerms`
 ///   * apply to the rule
 ///   * normalise every rule-term via Maude
-///   * if `applyFilters`: drop rules with ground conclusions, identity
-///     variants (ruvariant == ru), and rules whose conclusions are subsumed
-///     by their premises
+///   * if `applyFilters`: drop rules with ground conclusions (unless
+///     `diff`), identity variants (ruvariant == ru), and rules whose
+///     conclusions are subsumed by their premises
 ///   * drop rules whose single conclusion is an AC-Mult product
 ///
 /// Then `go [] $ reverse $ ...` walks the LIST FROM THE BACK and dedups via
@@ -886,22 +1103,22 @@ pub fn close_intr_rule(
 pub fn variants_intruder(
     maude: &tamarin_term::maude_proc::MaudeHandle,
     apply_filters: bool,
+    diff: bool,
     ru: &IntrRuleAC,
 ) -> Vec<IntrRuleAC> {
-    // HS hardcodes `minimizeVariants = id` for the DH/pmult call
-    // (`variantsIntruder hnd id True ...`, IntruderRules.hs:231-283, see line 242/390).
-    variants_intruder_with(maude, &|s| s, apply_filters, ru)
+    // HS hardcodes `minimizeVariants = id` for every call except the BP
+    // `em` destructor (`variantsIntruder hnd id True diff ...`).
+    variants_intruder_with(maude, &|s| s, apply_filters, diff, ru)
 }
 
 /// Core of `variantsIntruder` parameterised by the `minimizeVariants`
-/// hook — port of `Theory.Tools.IntruderRules.variantsIntruder`
-/// (IntruderRules.hs:288-314).
+/// hook — port of `Theory.Tools.IntruderRules.variantsIntruder`.
 ///
 /// HS:
 /// ```haskell
 /// variantsIntruder :: MaudeHandle -> ([LNSubstVFresh] -> [LNSubstVFresh])
-///                  -> Bool -> IntrRuleAC -> [IntrRuleAC]
-/// variantsIntruder hnd minimizeVariants applyFilters ru = go [] $ reverse $ do
+///                  -> Bool -> Bool -> IntrRuleAC -> [IntrRuleAC]
+/// variantsIntruder hnd minimizeVariants applyFilters diff ru = go [] $ reverse $ do
 ///     let ruleTerms = concatMap factTerms (rPrems ++ rConcs ++ rActs)
 ///     fsigma <- minimizeVariants $ computeVariants (fAppList ruleTerms) `runReader` hnd
 ///     ...
@@ -910,8 +1127,8 @@ pub fn variants_intruder(
 /// `minimizeVariants` is applied to the WHOLE cleaned variant-subst
 /// list before any rule is built (HS `fsigma <- minimizeVariants $
 /// computeVariants ...`).  The `id` instance recovers
-/// [`variants_intruder`] (the DH / pmult-destructor path) exactly; the
-/// BP `emap` destructor passes `nub . map canonize` via
+/// [`variants_intruder`] (the DH / pmult / user-destructor paths)
+/// exactly; the BP `emap` destructor passes `nub . map canonize` via
 /// [`bp_variants_intruder`].
 fn variants_intruder_with(
     maude: &tamarin_term::maude_proc::MaudeHandle,
@@ -919,9 +1136,10 @@ fn variants_intruder_with(
         Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
     ) -> Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
     apply_filters: bool,
+    diff: bool,
     ru: &IntrRuleAC,
 ) -> Vec<IntrRuleAC> {
-    use tamarin_term::function_symbols::{AcSym, FunSym};
+    use tamarin_term::function_symbols::AcSym;
     use tamarin_term::lterm::frees;
     use tamarin_term::subst::{apply_vterm, Subst};
     use tamarin_term::subst_vfresh::LNSubstVFresh;
@@ -1052,54 +1270,55 @@ fn variants_intruder_with(
             new_vars: new_nvs,
         };
 
-        // Filter conditions (HS IntruderRules.hs:295-301):
-        //   guard (not applyFilters || frees (rConcs ruvariant) /= []
+        // Filter conditions (HS):
+        //   guard (not applyFilters || (frees (rConcs ruvariant) /= [] || diff)
         //          && (not applyFilters || ruvariant /= ru)
         //          && (rConcs ruvariant) \\ (rPrems ruvariant) /= [])
         //
-        // Note the `\\` is the LAST condition and is NOT gated by
-        // `applyFilters` in HS: it's ALWAYS applied.  But the first two
-        // are gated.  The expression is `a && b && c` — short-circuits to
-        // false if any is false.  When applyFilters=False, a and b are
-        // True (trivially) so only c applies.
+        // `&&` (infixr 3) binds tighter than `||` (infixr 2), so the guard
+        // parses as `not applyFilters || (B && C && D)`: with applyFilters=True
+        // all three conjuncts apply, and with applyFilters=False the guard is
+        // vacuously True and NONE of them applies (including the
+        // conclusions-minus-premises test).  Ground conclusions are tolerated
+        // when `diff` holds.
         if apply_filters {
-            // Conclusions must have free vars.
+            // Conclusions must have free vars (or diff mode).
             let concs_have_frees = ruvariant
                 .conclusions
                 .iter()
                 .flat_map(|f| f.terms.iter())
                 .any(|t| !frees(t).is_empty());
-            if !concs_have_frees {
+            if !(concs_have_frees || diff) {
                 continue;
             }
             // Not the identity variant.
             if &ruvariant == ru {
                 continue;
             }
-        }
-        // Always-applied: `(rConcs ruvariant) \\ (rPrems ruvariant) /= []`.
-        // `Data.List.(\\)` is multiset difference — it removes ONE matching
-        // premise per conclusion (so concs=[A,A], prems=[A] yields [A]).
-        let concs_minus_prems_nonempty = {
-            let mut prem_avail: Vec<bool> = vec![true; ruvariant.premises.len()];
-            let mut any_remaining = false;
-            for c in &ruvariant.conclusions {
-                let mut matched = false;
-                for (j, p) in ruvariant.premises.iter().enumerate() {
-                    if prem_avail[j] && p == c {
-                        prem_avail[j] = false;
-                        matched = true;
-                        break;
+            // `(rConcs ruvariant) \\ (rPrems ruvariant) /= []`.
+            // `Data.List.(\\)` is multiset difference — it removes ONE matching
+            // premise per conclusion (so concs=[A,A], prems=[A] yields [A]).
+            let concs_minus_prems_nonempty = {
+                let mut prem_avail: Vec<bool> = vec![true; ruvariant.premises.len()];
+                let mut any_remaining = false;
+                for c in &ruvariant.conclusions {
+                    let mut matched = false;
+                    for (j, p) in ruvariant.premises.iter().enumerate() {
+                        if prem_avail[j] && p == c {
+                            prem_avail[j] = false;
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if !matched {
+                        any_remaining = true;
                     }
                 }
-                if !matched {
-                    any_remaining = true;
-                }
+                any_remaining
+            };
+            if !concs_minus_prems_nonempty {
+                continue;
             }
-            any_remaining
-        };
-        if !concs_minus_prems_nonempty {
-            continue;
         }
 
         // Drop rules with single product-conclusion (HS lines 303-305).
@@ -1143,11 +1362,11 @@ fn variants_intruder_with(
     kept_idx.into_iter().rev().map(|k| rev[k].clone()).collect()
 }
 
-/// `equalRuleUpToRenaming` — port of
-/// `Theory.Model.Rule.equalRuleUpToRenaming` (Rule.hs:1065-1077).
+/// `equalRuleUpToRenamingIgnoringNames` — port of
+/// `Theory.Model.Rule.equalRuleUpToRenamingIgnoringNames` (Rule.hs).
 ///
-/// Two rules are equal up to variable renaming iff:
-///   - Same `info`.
+/// Two rules are equal up to variable renaming (their `info`/names NOT
+/// considered) iff:
 ///   - Zipped (premises ++ concs ++ acts) have matching fact tags, and the
 ///     element-wise term-equalities admit a unifier that is a renaming
 ///     when restricted to either rule's variable occurrences (sorted).
@@ -1164,12 +1383,12 @@ fn variants_intruder_with(
 ///
 /// HS:
 /// ```haskell
-/// equalRuleUpToRenaming r1 r2 = reader $ \hnd ->
+/// equalRuleUpToRenamingIgnoringNames r1 r2 = reader $ \hnd ->
 ///   case eqs of
 ///     Nothing   -> False
-///     Just eqs' -> (rn1 == rn2) && any isRenamingPerRule (unifs eqs' hnd)
+///     Just eqs' -> any isRenamingPerRule (unifs eqs' hnd)
 /// ```
-pub fn equal_rule_up_to_renaming(
+pub fn equal_rule_up_to_renaming_ignoring_names(
     maude: &tamarin_term::maude_proc::MaudeHandle,
     r1: &IntrRuleAC,
     r2: &IntrRuleAC,
@@ -1177,10 +1396,6 @@ pub fn equal_rule_up_to_renaming(
     use tamarin_term::lterm::HasFrees;
     use tamarin_term::rewriting::Equal;
     use tamarin_term::subst_vfresh::LNSubstVFresh;
-
-    if r1.info != r2.info {
-        return false;
-    }
 
     // HS's `eqs` is initialised with `zipWith Equal nvs1 nvs2` (truncating),
     // then each tag-matching fact pair extends it by `zipWith Equal t1 t2`
@@ -1257,6 +1472,186 @@ pub fn equal_rule_up_to_renaming(
     false
 }
 
+/// `equalRuleUpToRenaming` — port of
+/// `Theory.Model.Rule.equalRuleUpToRenaming` (Rule.hs):
+///
+/// ```haskell
+/// equalRuleUpToRenaming r1@(Rule rn1 _ _ _ _) r2@(Rule rn2 _ _ _ _) =
+///   if rn1 == rn2 then equalRuleUpToRenamingIgnoringNames r1 r2
+///                 else return False
+/// ```
+pub fn equal_rule_up_to_renaming(
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    r1: &IntrRuleAC,
+    r2: &IntrRuleAC,
+) -> bool {
+    r1.info == r2.info && equal_rule_up_to_renaming_ignoring_names(maude, r1, r2)
+}
+
+/// `equalDuplicateRuleUpToRenaming` — port of
+/// `Theory.Model.Rule.equalDuplicateRuleUpToRenaming` (Rule.hs):
+///
+/// ```haskell
+/// equalDuplicateRuleUpToRenaming r1 r2 =
+///     equalRuleUpToRenamingIgnoringNames r1 (r2 `renameAvoiding` r1)
+/// ```
+///
+/// `r2` is renamed apart from `r1` first, so rules that merely share
+/// variable identities do not compare equal by accident.
+pub fn equal_duplicate_rule_up_to_renaming(
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    r1: &IntrRuleAC,
+    r2: &IntrRuleAC,
+) -> bool {
+    // Early reject, pure filter: `rename_avoiding` preserves fact tags and
+    // section lengths, so the `matchFacts` tag test that
+    // `equal_rule_up_to_renaming_ignoring_names` applies to the zipped
+    // `(prems++concs++acts)` pairs evaluates identically on the un-renamed
+    // rules — any tag mismatch forces that check to `false`.  This skips
+    // the rule clone/rename and the Maude round trip for such pairs.
+    let tags_match = r1
+        .premises
+        .iter()
+        .chain(r1.conclusions.iter())
+        .chain(r1.actions.iter())
+        .zip(
+            r2.premises
+                .iter()
+                .chain(r2.conclusions.iter())
+                .chain(r2.actions.iter()),
+        )
+        .all(|(f1, f2)| f1.tag == f2.tag);
+    if !tags_match {
+        return false;
+    }
+    let r2_apart = tamarin_term::lterm::rename_avoiding(r2.clone(), r1);
+    equal_rule_up_to_renaming_ignoring_names(maude, r1, &r2_apart)
+}
+
+/// `equalSubsetRuleUpToRenaming` — port of
+/// `Theory.Model.Rule.equalSubsetRuleUpToRenaming` (Rule.hs):
+///
+/// ```haskell
+/// equalSubsetRuleUpToRenaming r1@(Rule _ _ co1 _ _) r2@(Rule _ _ co2 _ _) = reader $ \hnd ->
+///   case unifyLNFactEqs [Equal (head co2) (head co1)] `runReader` hnd of
+///       []    -> False
+///       subst -> any (\x -> isRenamingPerRule x && premSubst x) subst
+///     where
+///       premSubst sub = srpr2 `subsetOf` spr1
+///         where
+///           (Rule _ spr1 _ _ _, Rule _ srpr2 _ _ _) =
+///               evalFreshAvoiding (appSubst sub r1 r2) (r1, r2)
+///           appSubst x inst0 inst1 = do
+///             s <- freshToFree x
+///             return (apply s (inst0, inst1))
+/// ```
+///
+/// True iff the head conclusions unify by a renaming-per-rule AND, after
+/// converting that unifier to a free substitution (fresh vars avoiding
+/// BOTH rules) and applying it to both rules, `r2`'s premises are a SET
+/// subset of `r1`'s premises — i.e. the peer `r2` subsumes `r1`.
+pub fn equal_subset_rule_up_to_renaming(
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    r1: &IntrRuleAC,
+    r2: &IntrRuleAC,
+) -> bool {
+    use tamarin_term::lterm::HasFrees;
+    use tamarin_term::rewriting::Equal;
+    use tamarin_term::subst::apply_vterm;
+    use tamarin_term::subst_vfresh::LNSubstVFresh;
+
+    // `unifyLNFactEqs [Equal (head co2) (head co1)]`.  Every rule that
+    // reaches `minimize_intruder_rules` has exactly one conclusion.
+    let (co1, co2) = match (r1.conclusions.first(), r2.conclusions.first()) {
+        (Some(a), Some(b)) => (a, b),
+        _ => return false,
+    };
+    // Early rejects, pure filters:
+    //  (a) mirrors the tag/term-count guards `unify_ln_fact_eqs` itself
+    //      applies before calling Maude — on a mismatch it yields zero
+    //      unifiers, i.e. HS `[] -> False` — evaluated here before the
+    //      fact clones are built;
+    //  (b) `premSubst` needs `srpr2 `subsetOf` spr1`, and substitution
+    //      preserves each fact's tag and term count while fact equality
+    //      implies both — so every `r2` premise must have an `r1` premise
+    //      with equal tag and term count, checkable before the Maude
+    //      round trip.
+    if co1.tag != co2.tag || co1.terms.len() != co2.terms.len() {
+        return false;
+    }
+    let prems_coverable = r2.premises.iter().all(|p2| {
+        r1.premises
+            .iter()
+            .any(|p1| p1.tag == p2.tag && p1.terms.len() == p2.terms.len())
+    });
+    if !prems_coverable {
+        return false;
+    }
+    let unifs = match crate::rule::unify_ln_fact_eqs(
+        maude,
+        &[Equal {
+            lhs: co2.clone(),
+            rhs: co1.clone(),
+        }],
+    ) {
+        Ok(u) => u,
+        Err(_) => return false,
+    };
+    if unifs.is_empty() {
+        return false;
+    }
+
+    // `vars ru = map fst (varOccurences ru)` — each rule's distinct vars.
+    let vars_of = |r: &IntrRuleAC| -> Vec<LVar> {
+        let mut s: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
+        r.for_each_free(&mut |v| {
+            s.insert(*v);
+        });
+        s.into_iter().collect()
+    };
+    let vars_r1 = vars_of(r1);
+    let vars_r2 = vars_of(r2);
+
+    // `evalFreshAvoiding ... (r1, r2)` — fresh idx allocation starts above
+    // the maximum index occurring in either rule.
+    let max_idx = vars_r1.iter().chain(vars_r2.iter()).map(|v| v.idx).max();
+
+    for u_pairs in &unifs {
+        let s_fresh = LNSubstVFresh::from_list(u_pairs.clone());
+        // `isRenamingPerRule`.
+        if !(s_fresh.restrict(&vars_r1).is_renaming() && s_fresh.restrict(&vars_r2).is_renaming()) {
+            continue;
+        }
+        // `premSubst`: freshToFree the unifier avoiding (r1, r2), apply to
+        // both rules' premises, then `srpr2 `subsetOf` spr1`.
+        let mut counter = max_idx.map(|m| m + 1).unwrap_or(0);
+        let sigma = s_fresh.fresh_to_free_avoiding(|n| {
+            let b = counter;
+            counter += n;
+            b
+        });
+        let subst_prems = |fs: &[LNFact]| -> Vec<LNFact> {
+            fs.iter()
+                .map(|f| {
+                    // subst rebuild — frees can change; recompute the bloom.
+                    let terms: Vec<LNTerm> = f
+                        .terms
+                        .iter()
+                        .map(|t| apply_vterm(&sigma, t.clone()))
+                        .collect();
+                    LNFact::fresh_annotated(f.tag, f.annotations.clone(), terms)
+                })
+                .collect()
+        };
+        let spr1 = subst_prems(&r1.premises);
+        let srpr2 = subst_prems(&r2.premises);
+        if is_subset_of(&srpr2, &spr1) {
+            return true;
+        }
+    }
+    false
+}
+
 // =============================================================================
 // `normRule'` — port of `Theory.Tools.IntruderRules.normRule'`
 // (IntruderRules.hs:316-321).
@@ -1313,16 +1708,16 @@ pub(crate) fn norm_rule(
 // HS shape:
 // ```haskell
 // dhIntruderRules :: Bool -> WithMaude [IntrRuleAC]
-// dhIntruderRules diff = reader $ \hnd -> minimizeIntruderRules diff $
-//     [ expRule  (ConstrRule (append (pack "_") expSymString))  kuFact return
-//     , invRule  (ConstrRule (append (pack "_") invSymString))  kuFact return
-//     , dhNeutralRule (ConstrRule (append (pack "_") dhNeutralSymString)) kuFact return
-//     , oneRule  (ConstrRule (append (pack "_") oneSymString))  kuFact return
-//     , multRule (ConstrRule (append (pack "_") multSymString)) kuFact return
+// dhIntruderRules diff = reader $ \hnd -> minimizeIntruderRules diff hnd $
+//     [ expRule  (ConstrRule (append (pack "_") expSymString) (NoEq expSym))  kuFact return
+//     , invRule  (ConstrRule (append (pack "_") invSymString) (NoEq invSym))  kuFact return
+//     , dhNeutralRule (ConstrRule (append (pack "_") dhNeutralSymString) (NoEq dhNeutralSym)) kuFact return
+//     , oneRule  (ConstrRule (append (pack "_") oneSymString) (NoEq oneSym))  kuFact return
+//     , multRule (ConstrRule (append (pack "_") multSymString) (AC Mult)) kuFact return
 //     ] ++
-//     concatMap (variantsIntruder hnd id True)
-//       [ expRule (DestrRule (append (pack "_") expSymString) 0 True False) kdFact (const [])
-//       , invRule (DestrRule (append (pack "_") invSymString) 0 True False) kdFact (const [])
+//     concatMap (variantsIntruder hnd id True diff)
+//       [ expRule (DestrRule (append (pack "_") expSymString) 0 True False [NoEq expSym]) kdFact (const [])
+//       , invRule (DestrRule (append (pack "_") invSymString) 0 True False [NoEq invSym]) kdFact (const [])
 //       ]
 //   where
 //     x_var_0 = varTerm (LVar "x" LSortMsg 0)
@@ -1355,19 +1750,17 @@ fn underscore_prefixed(sym: &[u8]) -> Vec<u8> {
     n
 }
 
-/// `ConstrRule (append (pack "_") xSymString)`.
-fn intr_constr_info(sym: &[u8]) -> IntrRuleACInfo {
-    IntrRuleACInfo::ConstrRule(underscore_prefixed(sym))
+/// `ConstrRule (append (pack "_") xSymString) f`.
+fn intr_constr_info(sym: &[u8], f: FunSym) -> IntrRuleACInfo {
+    IntrRuleACInfo::ConstrRule(underscore_prefixed(sym), f)
 }
 
-/// `DestrRule (append (pack "_") xSymString) 0 True False` (IntruderRules.hs:243-244).
-/// Note budget=0 (NOT -1), subterm=True, constant=False.  `closeIntrRule` is
-/// what assigns the budget=-1 sentinel in our pipeline for subtermIntruderRules'
-/// destructors; here HS assigns budget=0 directly because these are
-/// convergent-eq destructors for which the budget is irrelevant
-/// (variantsIntruder will expand them).
-fn intr_destr_info(sym: &[u8]) -> IntrRuleACInfo {
-    IntrRuleACInfo::DestrRule(underscore_prefixed(sym), 0, true, false)
+/// `DestrRule (append (pack "_") xSymString) 0 True False funs`.
+/// Note budget=0 (NOT -1), subterm=True, constant=False — these are the
+/// builtin DH/BP destructors whose budget is irrelevant (variantsIntruder
+/// expands them at build time).
+fn intr_destr_info(sym: &[u8], funs: Vec<FunSym>) -> IntrRuleACInfo {
+    IntrRuleACInfo::DestrRule(underscore_prefixed(sym), 0, true, false, funs)
 }
 
 /// `return :: a -> [a]` — singleton-list action constructor (HS).
@@ -1415,7 +1808,8 @@ pub fn dh_intruder_rules(
 ) -> Vec<IntrRuleAC> {
     use tamarin_term::builtin::{dh_neutral, exp, inv, mult, one_const};
     use tamarin_term::function_symbols::{
-        DH_NEUTRAL_SYM_STRING, EXP_SYM_STRING, INV_SYM_STRING, MULT_SYM_STRING, ONE_SYM_STRING,
+        dh_neutral_sym, exp_sym, inv_sym, one_sym, AcSym, DH_NEUTRAL_SYM_STRING, EXP_SYM_STRING,
+        INV_SYM_STRING, MULT_SYM_STRING, ONE_SYM_STRING,
     };
 
     // `x_var_0 = varTerm (LVar "x" LSortMsg 0)` etc.
@@ -1492,34 +1886,61 @@ pub fn dh_intruder_rules(
     let mk_empty: &dyn Fn(LNFact) -> Vec<LNFact> = &intr_mk_empty;
 
     let constrs: Vec<IntrRuleAC> = vec![
-        // expRule  (ConstrRule "_exp")        kuFact return
-        exp_rule(constr_info(EXP_SYM_STRING), ku_fact, mk_singleton),
-        // invRule  (ConstrRule "_inv")        kuFact return
-        inv_rule(constr_info(INV_SYM_STRING), ku_fact, mk_singleton),
-        // dhNeutralRule (ConstrRule "_DH_neutral") kuFact return
-        dh_neutral_rule(constr_info(DH_NEUTRAL_SYM_STRING), ku_fact, mk_singleton),
-        // oneRule  (ConstrRule "_one")        kuFact return
-        one_rule(constr_info(ONE_SYM_STRING), ku_fact, mk_singleton),
-        // multRule (ConstrRule "_mult")       kuFact return
-        mult_rule(constr_info(MULT_SYM_STRING), ku_fact, mk_singleton),
+        // expRule  (ConstrRule "_exp" (NoEq expSym))        kuFact return
+        exp_rule(
+            constr_info(EXP_SYM_STRING, FunSym::NoEq(exp_sym())),
+            ku_fact,
+            mk_singleton,
+        ),
+        // invRule  (ConstrRule "_inv" (NoEq invSym))        kuFact return
+        inv_rule(
+            constr_info(INV_SYM_STRING, FunSym::NoEq(inv_sym())),
+            ku_fact,
+            mk_singleton,
+        ),
+        // dhNeutralRule (ConstrRule "_DH_neutral" (NoEq dhNeutralSym)) kuFact return
+        dh_neutral_rule(
+            constr_info(DH_NEUTRAL_SYM_STRING, FunSym::NoEq(dh_neutral_sym())),
+            ku_fact,
+            mk_singleton,
+        ),
+        // oneRule  (ConstrRule "_one" (NoEq oneSym))        kuFact return
+        one_rule(
+            constr_info(ONE_SYM_STRING, FunSym::NoEq(one_sym())),
+            ku_fact,
+            mk_singleton,
+        ),
+        // multRule (ConstrRule "_mult" (AC Mult))           kuFact return
+        mult_rule(
+            constr_info(MULT_SYM_STRING, FunSym::Ac(AcSym::Mult)),
+            ku_fact,
+            mk_singleton,
+        ),
     ];
 
-    // Destructor variants: `concatMap (variantsIntruder hnd id True) [exp-destr, inv-destr]`.
-    // IntruderRules.hs:241-245.  Note `applyFilters=True` here (NOT False
-    // like in closeIntrRule's invocation) — this is the BUILD-time
-    // narrowing call, which expects the identity variant and ground-conc
-    // variants to be DROPPED.
-    let exp_destr = exp_rule(destr_info(EXP_SYM_STRING), kd_fact, mk_empty);
-    let inv_destr = inv_rule(destr_info(INV_SYM_STRING), kd_fact, mk_empty);
+    // Destructor variants: `concatMap (variantsIntruder hnd id True diff)
+    // [exp-destr, inv-destr]`.  Note `applyFilters=True` here — this is
+    // the BUILD-time narrowing call, which expects the identity variant
+    // and ground-conc variants to be DROPPED.
+    let exp_destr = exp_rule(
+        destr_info(EXP_SYM_STRING, vec![FunSym::NoEq(exp_sym())]),
+        kd_fact,
+        mk_empty,
+    );
+    let inv_destr = inv_rule(
+        destr_info(INV_SYM_STRING, vec![FunSym::NoEq(inv_sym())]),
+        kd_fact,
+        mk_empty,
+    );
 
     let mut destr_variants: Vec<IntrRuleAC> = Vec::new();
-    destr_variants.extend(variants_intruder(maude, true, &exp_destr));
-    destr_variants.extend(variants_intruder(maude, true, &inv_destr));
+    destr_variants.extend(variants_intruder(maude, true, diff, &exp_destr));
+    destr_variants.extend(variants_intruder(maude, true, diff, &inv_destr));
 
-    // `minimizeIntruderRules diff $ constrs ++ destr_variants`.
+    // `minimizeIntruderRules diff hnd $ constrs ++ destr_variants`.
     let mut all = constrs;
     all.extend(destr_variants);
-    minimize_intruder_rules(diff, all)
+    minimize_intruder_rules(diff, maude, all)
 }
 
 // =============================================================================
@@ -1529,14 +1950,14 @@ pub fn dh_intruder_rules(
 // HS shape:
 // ```haskell
 // bpIntruderRules :: Bool -> WithMaude [IntrRuleAC]
-// bpIntruderRules diff = reader $ \hnd -> minimizeIntruderRules diff $
-//     [ pmultRule (ConstrRule "_pmult") kuFact return
-//     , emapRule  (ConstrRule "_em")    kuFact return
+// bpIntruderRules diff = reader $ \hnd -> minimizeIntruderRules diff hnd $
+//     [ pmultRule (ConstrRule "_pmult" (NoEq pmultSym)) kuFact return
+//     , emapRule  (ConstrRule "_em" (C EMap))           kuFact return
 //     ]
-//     ++ (variantsIntruder hnd id True $
-//           pmultRule (DestrRule "_pmult" 0 True False) kdFact (const []))
-//     ++ (bpVariantsIntruder hnd $
-//           emapRule (DestrRule "_em" 0 True False) kdFact (const []))
+//     ++ (variantsIntruder hnd id True diff $
+//           pmultRule (DestrRule "_pmult" 0 True False [NoEq pmultSym]) kdFact (const []))
+//     ++ (bpVariantsIntruder diff hnd $
+//           emapRule (DestrRule "_em" 0 True False [C EMap]) kdFact (const []))
 //   where
 //     x_var_0 = varTerm (LVar "x" LSortMsg 0)
 //     x_var_1 = varTerm (LVar "x" LSortMsg 1)
@@ -1580,7 +2001,7 @@ pub fn bp_intruder_rules(
     maude: &tamarin_term::maude_proc::MaudeHandle,
 ) -> Vec<IntrRuleAC> {
     use tamarin_term::builtin::{emap, pmult};
-    use tamarin_term::function_symbols::{EMAP_SYM_STRING, PMULT_SYM_STRING};
+    use tamarin_term::function_symbols::{pmult_sym, CSym, EMAP_SYM_STRING, PMULT_SYM_STRING};
 
     // `x_var_0 = varTerm (LVar "x" LSortMsg 0)` etc. (IntruderRules.hs:396-397).
     let x_var_0 = var_term(LVar::new("x", LSort::Msg, 0));
@@ -1621,34 +2042,50 @@ pub fn bp_intruder_rules(
     let mk_singleton: &dyn Fn(LNFact) -> Vec<LNFact> = &intr_mk_singleton;
     let mk_empty: &dyn Fn(LNFact) -> Vec<LNFact> = &intr_mk_empty;
 
-    // Constructor rules: `pmultRule (ConstrRule "_pmult") kuFact return`
-    // and `emapRule (ConstrRule "_em") kuFact return`.
+    // Constructor rules: `pmultRule (ConstrRule "_pmult" (NoEq pmultSym))
+    // kuFact return` and `emapRule (ConstrRule "_em" (C EMap)) kuFact return`.
     let constrs: Vec<IntrRuleAC> = vec![
-        pmult_rule(constr_info(PMULT_SYM_STRING), ku_fact, mk_singleton),
-        emap_rule(constr_info(EMAP_SYM_STRING), ku_fact, mk_singleton),
+        pmult_rule(
+            constr_info(PMULT_SYM_STRING, FunSym::NoEq(pmult_sym())),
+            ku_fact,
+            mk_singleton,
+        ),
+        emap_rule(
+            constr_info(EMAP_SYM_STRING, FunSym::C(CSym::EMap)),
+            ku_fact,
+            mk_singleton,
+        ),
     ];
 
-    // pmult destructor variants — `variantsIntruder hnd id True`
+    // pmult destructor variants — `variantsIntruder hnd id True diff`
     // (like DH `exp`).
-    let pmult_destr = pmult_rule(destr_info(PMULT_SYM_STRING), kd_fact, mk_empty);
+    let pmult_destr = pmult_rule(
+        destr_info(PMULT_SYM_STRING, vec![FunSym::NoEq(pmult_sym())]),
+        kd_fact,
+        mk_empty,
+    );
     let mut all = constrs;
-    all.extend(variants_intruder(maude, true, &pmult_destr));
+    all.extend(variants_intruder(maude, true, diff, &pmult_destr));
 
-    // em destructor variants — `bpVariantsIntruder hnd` (canonicalised +
-    // KD→KU post-process).
-    let emap_destr = emap_rule(destr_info(EMAP_SYM_STRING), kd_fact, mk_empty);
-    all.extend(bp_variants_intruder(maude, &emap_destr));
+    // em destructor variants — `bpVariantsIntruder diff hnd`
+    // (canonicalised + KD→KU post-process).
+    let emap_destr = emap_rule(
+        destr_info(EMAP_SYM_STRING, vec![FunSym::C(CSym::EMap)]),
+        kd_fact,
+        mk_empty,
+    );
+    all.extend(bp_variants_intruder(diff, maude, &emap_destr));
 
-    // `minimizeIntruderRules diff $ ...`.
-    minimize_intruder_rules(diff, all)
+    // `minimizeIntruderRules diff hnd $ ...`.
+    minimize_intruder_rules(diff, maude, all)
 }
 
 /// `bpVariantsIntruder` — port of
-/// `Theory.Tools.IntruderRules.bpVariantsIntruder` (IntruderRules.hs:415-437).
+/// `Theory.Tools.IntruderRules.bpVariantsIntruder`.
 ///
 /// ```haskell
-/// bpVariantsIntruder hnd ru = do
-///     ruvariant <- variantsIntruder hnd minimizeVariants True ru
+/// bpVariantsIntruder diff hnd ru = do
+///     ruvariant <- variantsIntruder hnd minimizeVariants True diff ru
 ///     case ruvariant of
 ///       Rule i [Fact KDFact an args@[Lit (Var _)], yfact] cs as nvs ->
 ///         return $ Rule i [Fact KUFact an args, yfact] cs as nvs
@@ -1671,6 +2108,7 @@ pub fn bp_intruder_rules(
 /// `x, pmult(y,z) -> em(x,z)^y` / `pmult(y,z), x -> em(z,x)^y` variants a
 /// KU premise (the `x` becomes adversary-known).
 fn bp_variants_intruder(
+    diff: bool,
     maude: &tamarin_term::maude_proc::MaudeHandle,
     ru: &IntrRuleAC,
 ) -> Vec<IntrRuleAC> {
@@ -1703,7 +2141,7 @@ fn bp_variants_intruder(
         out
     };
 
-    let variants = variants_intruder_with(maude, &minimize_variants, true, ru);
+    let variants = variants_intruder_with(maude, &minimize_variants, true, diff, ru);
 
     // KD→KU post-process (IntruderRules.hs:424-429): if the first premise
     // is a KD-fact whose single arg is a bare Var, rewrite that premise's
@@ -1750,39 +2188,126 @@ mod tests {
         assert!(!is_subset_of(&b, &a));
     }
 
-    // minimize_intruder_rules subsumption uses the SET-subset `is_subset_of`
-    // (HS `prems' `subsetOf` prems`), so a peer whose DISTINCT premise set is a
-    // subset subsumes this rule even at higher multiplicity.  Pins HS
-    // IntruderRules.hs:195-197.
+    // minimize_intruder_rules' trace-mode subsumption goes through
+    // `equal_subset_rule_up_to_renaming`, whose premise check is the
+    // SET-subset `is_subset_of` (HS `srpr2 `subsetOf` spr1`): a peer whose
+    // DISTINCT premise set is a subset subsumes this rule even at higher
+    // multiplicity.
     #[test]
     fn minimize_drops_set_subsumed_rule() {
         use tamarin_term::vterm::var_term;
+        let maude = match maude_handle() {
+            Some(m) => m,
+            None => return,
+        };
         let x = var_term(LVar::new("x", LSort::Msg, 0));
         let y = var_term(LVar::new("y", LSort::Msg, 0));
         let z = var_term(LVar::new("z", LSort::Msg, 1));
         let name = b"_subsume_test".to_vec();
         // r_j (subsumer): premises [KU(y), KU(y)], conclusion KD(x).
         let r_j = Rule::new(
-            IntrRuleACInfo::DestrRule(name.clone(), -1, true, false),
+            IntrRuleACInfo::DestrRule(name.clone(), -1, true, false, vec![]),
             vec![ku_fact(y.clone()), ku_fact(y.clone())],
             vec![kd_fact(x.clone())],
             vec![],
         );
         // r_i (subsumed): premises [KU(y), KU(z)], same conclusion KD(x).
-        // Distinct premises of r_j ({KU(y)}) ⊆ distinct premises of r_i
-        // ({KU(y), KU(z)}), so r_j subsumes r_i → r_i dropped.  r_j itself is
-        // not dropped: KU(z) of r_i is absent from r_j's premise set.
+        // The conclusions unify by the empty (renaming) substitution, and
+        // distinct premises of r_j ({KU(y)}) ⊆ distinct premises of r_i
+        // ({KU(y), KU(z)}), so r_j subsumes r_i → r_i dropped.  r_j itself
+        // is not dropped: KU(z) of r_i is absent from r_j's premise set.
         let r_i = Rule::new(
-            IntrRuleACInfo::DestrRule(name.clone(), -1, true, false),
+            IntrRuleACInfo::DestrRule(name.clone(), -1, true, false, vec![]),
             vec![ku_fact(y.clone()), ku_fact(z.clone())],
             vec![kd_fact(x.clone())],
             vec![],
         );
-        let out = minimize_intruder_rules(false, vec![r_j.clone(), r_i.clone()]);
+        let out = minimize_intruder_rules(false, &maude, vec![r_j.clone(), r_i.clone()]);
         // Set-subset: r_i is dropped; only r_j survives.  (Multiset bookkeeping
         // would have kept both, since r_j has two KU(y) but r_i only one.)
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].premises, r_j.premises);
+    }
+
+    // The structural early-reject in `equal_duplicate_rule_up_to_renaming`
+    // (zipped fact-tag mismatch) is a pure filter: on every pair — ones that
+    // trip it and ones that pass it — the result must equal the unfiltered
+    // HS pipeline `equalRuleUpToRenamingIgnoringNames r1 (r2 `renameAvoiding`
+    // r1)` run directly.
+    #[test]
+    fn equal_duplicate_early_reject_agrees_with_unfiltered_check() {
+        use tamarin_term::vterm::var_term;
+        let maude = match maude_handle() {
+            Some(m) => m,
+            None => return,
+        };
+        let constr = ku_pair_rule_with_var("a", 0);
+        let x = var_term(LVar::new("x", LSort::Msg, 0));
+        let y = var_term(LVar::new("y", LSort::Msg, 0));
+        // Destructor layout: premises [KU(y), KU(y)], conclusion [KD(x)].
+        // Zipped against `constr`'s [KU] ++ [KU] ++ [KU] layout, the third
+        // pair is (KU, KD) resp. (KD, KU) — the filter trips both ways.
+        let destr = Rule::new(
+            IntrRuleACInfo::DestrRule(b"_dup_test".to_vec(), -1, true, false, vec![]),
+            vec![ku_fact(y.clone()), ku_fact(y.clone())],
+            vec![kd_fact(x.clone())],
+            vec![],
+        );
+        for (r1, r2) in [(&constr, &destr), (&destr, &constr), (&constr, &constr)] {
+            let unfiltered = equal_rule_up_to_renaming_ignoring_names(
+                &maude,
+                r1,
+                &tamarin_term::lterm::rename_avoiding(r2.clone(), r1),
+            );
+            assert_eq!(
+                equal_duplicate_rule_up_to_renaming(&maude, r1, r2),
+                unfiltered
+            );
+        }
+        // Sanity on the pair choices: the filter-tripping pairs are negatives,
+        // the filter-passing self-pair is a positive.
+        assert!(!equal_duplicate_rule_up_to_renaming(
+            &maude, &constr, &destr
+        ));
+        assert!(equal_duplicate_rule_up_to_renaming(
+            &maude, &constr, &constr
+        ));
+    }
+
+    // The early rejects in `equal_subset_rule_up_to_renaming` only fire on
+    // pairs whose unfiltered verdict is already false: (a) head-conclusion
+    // tag mismatch ⇒ `unifyLNFactEqs` = [] ⇒ HS `[] -> False`; (b) an `r2`
+    // premise with no tag/term-count-matching `r1` premise ⇒ `srpr2
+    // `subsetOf` spr1` impossible (substitution preserves both).  Pin the
+    // false verdicts on shapes that trip each filter; the true path through
+    // both filters is pinned by `minimize_drops_set_subsumed_rule`.
+    #[test]
+    fn equal_subset_early_rejects_are_necessary() {
+        use tamarin_term::vterm::var_term;
+        let maude = match maude_handle() {
+            Some(m) => m,
+            None => return,
+        };
+        let x = var_term(LVar::new("x", LSort::Msg, 0));
+        let y = var_term(LVar::new("y", LSort::Msg, 0));
+        let name = b"_subset_reject_test".to_vec();
+        let mk = |prems: Vec<LNFact>, conc: LNFact| {
+            Rule::new(
+                IntrRuleACInfo::DestrRule(name.clone(), -1, true, false, vec![]),
+                prems,
+                vec![conc],
+                vec![],
+            )
+        };
+        // (a) conclusion KD(x) vs KU(x): tags differ.
+        let r1 = mk(vec![ku_fact(y.clone())], kd_fact(x.clone()));
+        let r2 = mk(vec![ku_fact(y.clone())], ku_fact(x.clone()));
+        assert!(!equal_subset_rule_up_to_renaming(&maude, &r1, &r2));
+        // (b) r2's KD(y) premise has no KD premise in r1 to map onto, even
+        // though the KD(x) conclusions unify by a renaming.
+        let r1 = mk(vec![ku_fact(y.clone())], kd_fact(x.clone()));
+        let r2 = mk(vec![kd_fact(y.clone())], kd_fact(x.clone()));
+        assert!(!equal_subset_rule_up_to_renaming(&maude, &r1, &r2));
     }
 
     #[test]
@@ -1828,13 +2353,8 @@ mod tests {
     // Direct Haskell-spec mirror — Theory.Tools.IntruderRules.hs:
     //
     //     constructionRules fSig =
-    //         [ createRule s k | (s, (k, Public, Constructor)) <- S.toList fSig ]
-    //       where
-    //         createRule s k = Rule (ConstrRule (append (pack "_") s))
-    //                              (map kuFact vars) [concfact] [concfact] []
-    //           where vars = take k [varTerm (LVar "x" LSortMsg i) | i <- [0..]]
-    //                 m = fAppNoEq (s, (k, Public, Constructor)) vars
-    //                 concfact = kuFact m
+    //         [ createRuleNoEq s f k | NoEqUser f@(s,(k,Public,Constructor,_)) <- S.toList fSig ] ++
+    //         [ createRuleAC s f | ACfctUser f@(s,(Public,Constructor,_)) <- S.toList fSig ]
     // =========================================================================
 
     #[test]
@@ -1843,10 +2363,10 @@ mod tests {
         // pair is Public+Constructor → emits a KU rule;
         // fst, snd are Public+Destructor → no construction rule.
         let sig = tamarin_term::maude_sig::pair_maude_sig();
-        let rules = construction_rules(&sig);
+        let rules = construction_rules(&sig.user_defined_st_fun_syms());
         // Find the pair rule.
         let pair_rule = rules.iter().find(|r| match &r.info {
-            IntrRuleACInfo::ConstrRule(name) => name == b"_pair",
+            IntrRuleACInfo::ConstrRule(name, _) => name == b"_pair",
             _ => false,
         });
         let pair_rule = pair_rule.expect("expected pair construction rule");
@@ -1868,12 +2388,12 @@ mod tests {
     #[test]
     fn construction_rules_only_emits_constructor_info() {
         let sig = tamarin_term::maude_sig::pair_maude_sig();
-        let rules = construction_rules(&sig);
+        let rules = construction_rules(&sig.user_defined_st_fun_syms());
         // Every emitted rule should have `ConstrRule` info — never
         // a `DestrRule` (we filter on Constructability).
         for r in &rules {
             match &r.info {
-                IntrRuleACInfo::ConstrRule(_) => {}
+                IntrRuleACInfo::ConstrRule(_, _) => {}
                 other => panic!("expected ConstrRule, got {:?}", other),
             }
         }
@@ -1934,26 +2454,35 @@ mod tests {
         );
     }
 
-    /// `subtermIntruderRules` on a sym-enc signature should combine
-    /// construction (senc) + destruction (sdec).
+    /// `subtermConstructorRules` on a sym-enc signature yields only
+    /// CONSTRUCTOR rules (the senc constructor; the sdec destructors come
+    /// from the narrowing-based `destruction_rules_no_eq` instead).
     #[test]
-    fn subterm_intruder_rules_combines_construction_and_destruction() {
+    fn subterm_constructor_rules_emits_only_constructors() {
         let sig = tamarin_term::maude_sig::sym_enc_maude_sig();
-        let rules = subterm_intruder_rules(false, &sig);
-        let any_destr = rules
-            .iter()
-            .any(|r| matches!(r.info, IntrRuleACInfo::DestrRule(..)));
-        let any_constr = rules
-            .iter()
-            .any(|r| matches!(r.info, IntrRuleACInfo::ConstrRule(_)));
-        assert!(any_destr, "expected at least one DestrRule");
-        assert!(any_constr, "expected at least one ConstrRule");
+        let maude = match maude_bin_path()
+            .and_then(|p| tamarin_term::maude_proc::MaudeHandle::start(&p, sig.clone()).ok())
+        {
+            Some(m) => m,
+            None => return,
+        };
+        let rules = subterm_constructor_rules(false, &maude, &sig);
+        assert!(
+            rules
+                .iter()
+                .all(|r| matches!(r.info, IntrRuleACInfo::ConstrRule(_, _))),
+            "subterm_constructor_rules must yield only ConstrRules"
+        );
+        assert!(
+            !rules.is_empty(),
+            "sym-enc sig has at least the senc constructor"
+        );
     }
 
     #[test]
     fn construction_rules_premise_count_equals_arity() {
         let sig = tamarin_term::maude_sig::pair_maude_sig();
-        for r in construction_rules(&sig) {
+        for r in construction_rules(&sig.user_defined_st_fun_syms()) {
             // Pull the symbol's arity from the rule's KU action term.
             let conc_term = &r.conclusions[0].terms[0];
             let arity = match conc_term {
@@ -2101,11 +2630,12 @@ mod tests {
     /// `equal_rule_up_to_renaming` with two alpha-equivalent rules.
     fn ku_pair_rule_with_var(var_name: &str, idx: u64) -> IntrRuleAC {
         use tamarin_term::builtin::pair;
+        use tamarin_term::function_symbols::pair_sym;
         use tamarin_term::lterm::{LSort, LVar};
         let a = var_term(LVar::new(var_name, LSort::Msg, idx));
         let p = pair(a.clone(), a.clone());
         Rule::new(
-            IntrRuleACInfo::ConstrRule(b"_pair".to_vec()),
+            IntrRuleACInfo::ConstrRule(b"_pair".to_vec(), FunSym::NoEq(pair_sym())),
             vec![ku_fact(a.clone())],
             vec![ku_fact(p.clone())],
             vec![ku_fact(p)],
@@ -2162,7 +2692,10 @@ mod tests {
         // KU(pair(x, x)).  No renaming can make `KU(x)` == `KU(pair(x, x))`.
         let a = var_term(LVar::new("x", LSort::Msg, 0));
         let r2 = Rule::new(
-            IntrRuleACInfo::ConstrRule(b"_pair".to_vec()),
+            IntrRuleACInfo::ConstrRule(
+                b"_pair".to_vec(),
+                FunSym::NoEq(tamarin_term::function_symbols::pair_sym()),
+            ),
             vec![ku_fact(a.clone())],
             vec![ku_fact(a.clone())],
             vec![ku_fact(a)],
@@ -2176,7 +2709,10 @@ mod tests {
         );
         // Different info also makes them unequal even when terms match.
         let r3 = Rule::new(
-            IntrRuleACInfo::ConstrRule(b"_OTHER".to_vec()),
+            IntrRuleACInfo::ConstrRule(
+                b"_OTHER".to_vec(),
+                FunSym::NoEq(tamarin_term::function_symbols::pair_sym()),
+            ),
             r1.premises.clone(),
             r1.conclusions.clone(),
             r1.actions.clone(),
@@ -2214,15 +2750,15 @@ mod tests {
         // identity variant.  More may appear depending on the
         // signature loaded.
         let sig = tamarin_term::maude_sig::pair_maude_sig();
-        let cs = construction_rules(&sig);
+        let cs = construction_rules(&sig.user_defined_st_fun_syms());
         let pair_rule = cs
             .iter()
             .find(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(name) => name == b"_pair",
+                IntrRuleACInfo::ConstrRule(name, _) => name == b"_pair",
                 _ => false,
             })
             .expect("expected pair constructor rule");
-        let variants = variants_intruder(&maude, false, pair_rule);
+        let variants = variants_intruder(&maude, false, false, pair_rule);
         assert!(
             !variants.is_empty(),
             "variants_intruder must emit at least one rule (the identity \
@@ -2330,13 +2866,16 @@ mod tests {
         .ok()
     }
 
-    /// `bp_intruder_rules(false)` yields exactly 75 bilinear-pairing
+    /// `bp_intruder_rules(false)` yields exactly 74 bilinear-pairing
     /// intruder rules (2 constructors `_pmult`/`_em` + the pmult- and
     /// em-destructor variant expansions), matching HS `bpIntruderRules
-    /// False` on current Maude — the count the `variants` command emits
-    /// for the BP block (75 of the 126 total = 51 DH + 75 BP).
+    /// False` in the pinned upstream tree, whose Maude-backed
+    /// `minimizeIntruderRules` subsumption drops one BP destructor
+    /// variant.  Upstream's committed `data/intruder_variants_bp.spthy`
+    /// holds 75 rules; production loads that cached file byte-for-byte
+    /// (as HS does), so this count applies to the generator only.
     #[test]
-    fn bp_intruder_rules_yields_75() {
+    fn bp_intruder_rules_yields_74() {
         let maude = match bp_maude_handle() {
             Some(m) => m,
             None => return,
@@ -2344,15 +2883,15 @@ mod tests {
         let rules = bp_intruder_rules(false, &maude);
         assert_eq!(
             rules.len(),
-            75,
-            "bp_intruder_rules(false) must produce exactly 75 rules; got {}",
+            74,
+            "bp_intruder_rules(false) must produce exactly 74 rules; got {}",
             rules.len()
         );
         // Sanity: the two construction rules are present and named.
         let constr_names: Vec<&[u8]> = rules
             .iter()
             .filter_map(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n) => Some(n.as_slice()),
+                IntrRuleACInfo::ConstrRule(n, _) => Some(n.as_slice()),
                 _ => None,
             })
             .collect();
@@ -2363,8 +2902,8 @@ mod tests {
     /// Helper: extract the bytestring name of a ConstrRule or DestrRule.
     fn rule_name(info: &IntrRuleACInfo) -> Option<&[u8]> {
         match info {
-            IntrRuleACInfo::ConstrRule(n) => Some(n.as_slice()),
-            IntrRuleACInfo::DestrRule(n, _, _, _) => Some(n.as_slice()),
+            IntrRuleACInfo::ConstrRule(n, _) => Some(n.as_slice()),
+            IntrRuleACInfo::DestrRule(n, _, _, _, _) => Some(n.as_slice()),
             _ => None,
         }
     }
@@ -2392,7 +2931,7 @@ mod tests {
         let names: Vec<&[u8]> = rules
             .iter()
             .filter_map(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n) => Some(n.as_slice()),
+                IntrRuleACInfo::ConstrRule(n, _) => Some(n.as_slice()),
                 _ => None,
             })
             .collect();
@@ -2518,7 +3057,7 @@ mod tests {
             rules
                 .iter()
                 .find(|r| match &r.info {
-                    IntrRuleACInfo::ConstrRule(n) => n.as_slice() == name,
+                    IntrRuleACInfo::ConstrRule(n, _) => n.as_slice() == name,
                     _ => false,
                 })
                 .unwrap_or_else(|| {
@@ -2589,17 +3128,12 @@ mod tests {
         assert_eq!(find(b"_mult").premises.len(), 2, "_mult: 2 KU premises");
     }
 
-    /// `dh_intruder_rules(true)` (diff mode) skips the subsumption phase
-    /// of `minimizeIntruderRules` — see IntruderRules.hs:188-190:
-    /// ```haskell
-    /// minimizeIntruderRules diff rules =
-    ///     filter (not . isDoublePremiseRule)
-    ///        $ if diff then rules else go [] rules
-    /// ```
+    /// `dh_intruder_rules(true)` (diff mode) skips the SUBSET check of
+    /// `minimizeIntruderRules` (`(not diff) && equalSubsetRuleUpToRenaming`)
+    /// while still dropping duplicates and double-premise rules.
     ///
     /// Concretely: diff=true should produce AT LEAST as many rules as
-    /// diff=false (the diff filter is weaker — only the double-premise
-    /// filter still applies).
+    /// diff=false (the diff filter is weaker).
     #[test]
     fn dh_intruder_rules_diff_mode_is_at_least_as_large() {
         let maude = match dh_maude_handle() {
@@ -2619,7 +3153,7 @@ mod tests {
         let constr_names: Vec<&[u8]> = rules_diff
             .iter()
             .filter_map(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n) => Some(n.as_slice()),
+                IntrRuleACInfo::ConstrRule(n, _) => Some(n.as_slice()),
                 _ => None,
             })
             .collect();
@@ -2717,7 +3251,7 @@ mod tests {
         let exp_constr = rules
             .iter()
             .find(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n) => n.as_slice() == b"_exp",
+                IntrRuleACInfo::ConstrRule(n, _) => n.as_slice() == b"_exp",
                 _ => false,
             })
             .expect("_exp constructor rule must be present");

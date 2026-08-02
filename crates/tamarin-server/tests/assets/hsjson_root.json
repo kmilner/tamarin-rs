@@ -1,0 +1,13 @@
+{
+    "graphs": [
+        {
+            "jgAbbrevs": [],
+            "jgClusters": [],
+            "jgDirected": true,
+            "jgEdges": [],
+            "jgLabel": "Theory: NSPK3 Lemma: injective_agree",
+            "jgNodes": [],
+            "jgType": "Tamarin prover constraint system"
+        }
+    ]
+}

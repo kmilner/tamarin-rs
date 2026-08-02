@@ -49,6 +49,12 @@ pub fn fixture_path(name: &str) -> PathBuf {
 /// until the returned [`TestServer`] is dropped (`oneshot` cancels the
 /// listener, then the task exits).
 pub async fn start_server_with_theory(fixture_name: &str) -> TestServer {
+    // The same process-wide setup `serve` applies.  Without it the harness
+    // runs with the `--prove` CLI defaults: searched proof nodes drop their
+    // `System` (so every post-autoprove graph renders empty) and bare
+    // `render()` uses the console width instead of the web one.
+    tamarin_server::init_process_globals();
+
     let theory_path = fixture_path(fixture_name);
     assert!(
         theory_path.is_file(),

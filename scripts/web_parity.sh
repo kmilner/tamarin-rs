@@ -6,14 +6,17 @@
 # Per file, two strictly-sequential phases so HS and RS never contend:
 #   Phase 1 (HS): boot `HS tamarin-prover interactive` on a temp workdir with
 #                 the one theory, crawl it (web_crawl.py), cache the response
-#                 manifest content-keyed by sha256(file) under .web_hs_cache/.
+#                 manifest content-keyed by sha256(file) under .web_hs_cache/
+#                 (plus web_crawl.py's PLAN_VERSION, so a manifest crawled
+#                 under an older URL plan is re-crawled, not reused).
 #   Phase 2 (RS): boot RS on the same workdir, crawl, diff (web_diff.py) the
 #                 two manifests semantically (web_normalize.py) → per-url rows.
 #
 # Env: FILE_TIMEOUT (per-file cap, 300s), READY_TIMEOUT (server-boot wait, 90s),
 #      HS_PORT (3021), RS_PORT (3022), CORPUS_ROOT (tamarin-prover/examples/), ALLOWLIST
 #      (one relpath/line; default = seed list below), RESULTS_TSV, MAX_NODES
-#      (400), CACHE, HS_PATH, RS_PATH, MAUDE_PATH, TAM_RS_NO_AUTO_BUILD.
+#      (400), CACHE, HS_PATH, RS_PATH, MAUDE_PATH, SERVER_MEM_KB (per-server
+#      address-space cap, 24 GiB), TAM_RS_NO_AUTO_BUILD.
 # Output TSV (6 col): file  url  status  hs_http  rs_http  kind
 #   status ∈ MATCH | DIFF | MISSING_RS | MISSING_HS | SKIP_*
 set -u
@@ -30,6 +33,27 @@ RESULTS_TSV="${RESULTS_TSV:-/tmp/web_parity.tsv}"
 MAX_NODES="${MAX_NODES:-400}"
 DIFFDIR="${DIFFDIR:-/tmp/web_parity_diffs}"
 mkdir -p "$CACHE"
+
+# Crawl-plan version handshake.  The cache key is sha256(theory) alone, so it
+# cannot see a crawl PLAN that has grown: a manifest from an older plan simply
+# lacks the new URL families, which surface as MISSING_HS rows rather than as a
+# cache miss.  Import web_crawl.py's constant rather than re-parse it, so the
+# two sides cannot drift.
+PLAN_VERSION="$(python3 -c \
+    'import sys; sys.path.insert(0,sys.argv[1]); import web_crawl; print(web_crawl.PLAN_VERSION)' \
+    "$script_dir")"
+[ -n "$PLAN_VERSION" ] || { echo "cannot read PLAN_VERSION from web_crawl.py" >&2; exit 2; }
+
+# Plan version stamped in a cached HS manifest.  An ABSENT stamp means 2: every
+# stampless manifest in the cache is a v2 crawl, so those manifests MUST stay
+# valid; growing the plan bumps web_crawl.py's PLAN_VERSION to 3, which
+# invalidates each cached file lazily, on its next use.  A manifest that fails
+# to parse yields nothing and is likewise treated as stale.
+cached_plan_version() {
+    python3 -c 'import json,sys; sys.path.insert(0,sys.argv[2]); import web_crawl; \
+print(json.load(open(sys.argv[1])).get(web_crawl.PLAN_VERSION_KEY, 2))' \
+        "$1" "$script_dir" 2>/dev/null
+}
 
 find_hs_bin() {
     local c
@@ -53,6 +77,7 @@ fi
 seed_list() {
     cat <<EOF
 Tutorial.spthy
+csf26-ac/fast/counter.spthy
 EOF
 }
 filelist() {
@@ -70,8 +95,15 @@ boot_crawl() {
     # replacing the derivation report with a timeout block RS never emits
     # (48 bogus DIFF rows in the 2026-07-05 sweep).  RS parses the flag on
     # its web path too (hardcoded-5s load is a separate, tracked plumb).
-    setsid "$bin" interactive "$wd/thy" --port="$port" \
-        --derivcheck-timeout="${DERIVCHECK_TIMEOUT:-30}" >"$log" 2>&1 &
+    # OOM containment: the server (and the maude children that inherit
+    # these settings) is the sacrificial process, not the session — a
+    # theory whose source computation heap-exhausts (LAK06-class) must
+    # die at the cap and yield a SKIP/MISSING row, never take the
+    # machine down.  Same guards as wf_gate.sh / pretty_gate.sh.
+    ( echo 1000 > /proc/self/oom_score_adj 2>/dev/null
+      ulimit -v "${SERVER_MEM_KB:-25165824}" 2>/dev/null
+      exec setsid "$bin" interactive "$wd/thy" --port="$port" \
+        --derivcheck-timeout="${DERIVCHECK_TIMEOUT:-30}" ) >"$log" 2>&1 &
     pid=$!
     # wait for readiness
     local ok="" i
@@ -131,7 +163,14 @@ one_file() {
         cp "$(dirname "$f")/$__q" "$wd/thy/$__q"
     done < <(grep -E 'heuristic' "$f" | grep -oE '"[^"]+"' | tr -d '"' | sort -u)
 
-    # Phase 1: HS (cached)
+    # Phase 1: HS (cached, and only while the cached crawl plan is current)
+    if [ -f "$hs_manifest" ]; then
+        local hs_plan; hs_plan=$(cached_plan_version "$hs_manifest")
+        if [ "$hs_plan" != "$PLAN_VERSION" ]; then
+            echo "  stale HS manifest (crawl plan ${hs_plan:-?} != $PLAN_VERSION) — re-crawling" >&2
+            rm -f "$hs_manifest"
+        fi
+    fi
     if [ ! -f "$hs_manifest" ]; then
         if ! MAUDE_PATH="$MAUDE_PATH" boot_crawl "$HS_PATH" "$HS_PORT" "$wd" "$hs_manifest" hs; then
             rm -f "$hs_manifest"; rm -rf "$wd"

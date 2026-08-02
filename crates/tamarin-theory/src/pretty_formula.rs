@@ -502,10 +502,10 @@ fn intr_rule_name(r: &crate::rule::IntrRuleAC) -> String {
         }
     };
     match &r.info {
-        IntrRuleACInfo::ConstrRule(n) => {
+        IntrRuleACInfo::ConstrRule(n, _) => {
             prefix_if_reserved(format!("c{}", String::from_utf8_lossy(n)))
         }
-        IntrRuleACInfo::DestrRule(n, _, _, _) => {
+        IntrRuleACInfo::DestrRule(n, _, _, _, _) => {
             prefix_if_reserved(format!("d{}", String::from_utf8_lossy(n)))
         }
         IntrRuleACInfo::IRecv => "irecv".to_string(),
@@ -901,8 +901,10 @@ fn formula_to_doc(
     use crate::pretty_hpj as hpj;
     use p::Formula::*;
     match f {
-        True => doc_text("\u{22A4}"),
-        False => doc_text("\u{22A5}"),
+        // HS `pp (TF True) = operator_ "⊤"` / `pp (TF False) = operator_ "⊥"`
+        // (Formula.hs:485-486) — `hl_operator` spans in HtmlDoc mode.
+        True => hpj::operator_("\u{22A4}"),
+        False => hpj::operator_("\u{22A5}"),
         Atom(a) => atom_to_doc(a, scope),
         Not(p_) => {
             // HS: `operator_ "¬" <> opParens p'` — `<>` is no-break
@@ -1375,9 +1377,11 @@ pub fn term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
             //   `FApp (AC o) ts -> ppTerms (ppACOp o) 1 "(" ")" ts`  (wraps via fcat)
             //   `FApp (NoEq s) [t1,t2] | s == expSym -> ppTerm t1 <> "^" <> ppTerm t2`
             //     (flat beside, never breaks).
-            // exp renders flat; AC ops (Mult/Union/Xor/NatPlus) use the SAME
-            // fcat structure as pairs, with `(`/`)` lead/finish and the AC-op
-            // symbol as separator (no surrounding spaces).
+            // exp renders flat; AC ops (Mult/Union/Xor/NatPlus and the
+            // user-declared `[AC]` symbols) use the SAME fcat structure as
+            // pairs, with `(`/`)` lead/finish and the AC-op symbol as
+            // separator — bare for the builtins, space-surrounded for a
+            // user-declared symbol (see `binop_symbol`).
             if matches!(op, p::BinOp::Exp) {
                 // HS `prettyTerm` (Term/Term.hs:272-300, see line 274):
                 //   `FApp (NoEq s) [t1,t2] | s == expSym -> ppTerm t1 <> "^" <> ppTerm t2`
@@ -1863,7 +1867,11 @@ fn pp_term(t: &p::Term, scope: &[Bind], out: &mut String) {
             let is_exp = matches!(op, p::BinOp::Exp);
             let is_ac = matches!(
                 op,
-                p::BinOp::Mult | p::BinOp::Union | p::BinOp::Xor | p::BinOp::NatPlus
+                p::BinOp::Mult
+                    | p::BinOp::Union
+                    | p::BinOp::Xor
+                    | p::BinOp::NatPlus
+                    | p::BinOp::AcFct(_)
             );
             if is_ac {
                 let mut flat: Vec<&p::Term> = Vec::new();
@@ -1909,6 +1917,10 @@ fn binop_symbol(op: p::BinOp) -> &'static str {
         Union => "++",
         Xor => "\u{2295}", // ⊕
         NatPlus => "%+",
+        // HS `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts`
+        // (Term/Term.hs:305) — the spaces around a user-declared `[AC]`
+        // symbol's name are part of the separator.
+        AcFct(name) => tamarin_term::pretty::ac_fct_op_symbol(name),
     }
 }
 
@@ -2743,6 +2755,63 @@ mod tests {
             p::Term::Var(v("b", p::SortHint::Untagged)),
         ]);
         assert_eq!(pretty_term(&t), "<a, b>");
+    }
+
+    /// HS `prettyTerm` renders a user-declared `[AC]` symbol INFIX:
+    /// `FApp (AC (ACfct (f,_))) ts -> ppTerms (" " ++ BC.unpack f ++ " ") 1
+    /// "(" ")" ts` (Term/Term.hs:305), so `add(x, y)` prints as `(x add y)`.
+    /// `lnterm_to_parser` must therefore project it onto the AC-BinOp path,
+    /// not onto a prefix `App`.
+    #[test]
+    fn user_ac_symbol_renders_infix() {
+        use tamarin_term::function_symbols::{
+            AcFctSym, AcSym, Constructability, NdcState, Privacy,
+        };
+        use tamarin_term::lterm::{LSort, LVar};
+        use tamarin_term::term::f_app_ac;
+        use tamarin_term::vterm::var_term;
+
+        let sym = AcFctSym::new(
+            b"add".to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::NotNdc,
+        );
+        let x = var_term(LVar::new("x", LSort::Msg, 0));
+        let y = var_term(LVar::new("y", LSort::Msg, 0));
+        let t = f_app_ac(AcSym::AcFct(sym), vec![x, y]);
+
+        let ast = crate::pretty_theory::lnterm_to_parser(&t);
+        assert_eq!(term_to_doc(&ast, &[]).render(), "(x add y)");
+
+        // The same infix form must reach a rendered fact.
+        let fa = p::Fact {
+            persistent: false,
+            name: "F".to_string(),
+            args: vec![ast],
+            annotations: Vec::new(),
+        };
+        assert_eq!(fact_to_doc(&fa, &[]).render(), "F( (x add y) )");
+    }
+
+    /// A NULLARY user-AC symbol is HS `FApp (AC (ACfct (f,_))) [] ->
+    /// text (BC.unpack f)` (Term/Term.hs:304) — the bare name.
+    #[test]
+    fn user_ac_symbol_nullary_renders_bare_name() {
+        use tamarin_term::function_symbols::{
+            AcFctSym, AcSym, Constructability, FunSym, NdcState, Privacy,
+        };
+        use tamarin_term::term::Term;
+
+        let sym = AcFctSym::new(
+            b"add".to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::NotNdc,
+        );
+        let t = Term::App(FunSym::Ac(AcSym::AcFct(sym)), Vec::new().into());
+        let ast = crate::pretty_theory::lnterm_to_parser(&t);
+        assert_eq!(term_to_doc(&ast, &[]).render(), "add");
     }
 
     #[test]

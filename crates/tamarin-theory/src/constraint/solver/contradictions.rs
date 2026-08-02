@@ -57,6 +57,8 @@ pub enum Contradiction {
     ImpossibleChain,
     /// Has a forbidden chain.
     ForbiddenChain,
+    /// Has a forbidden AC constructor chain.
+    ForbiddenACConstrChain,
     /// Conflicting injective-fact instances.
     NonInjectiveFactInstance(NodeId, NodeId, NodeId),
     /// Equation store became false.
@@ -68,6 +70,11 @@ pub enum Contradiction {
     /// There is a node strictly after `last(...)`.
     NodeAfterLast(NodeId, NodeId),
 }
+
+/// Read-only `NodeId → rule` index (`System::node_rule_map`), built at most
+/// once per `contradictions` pass: the caller owns it in a `OnceCell` and
+/// each consumer forces it with `get_or_init`.
+type NodeRuleMap<'a> = tamarin_utils::FastMap<&'a NodeId, &'a crate::rule::RuleACInst>;
 
 /// Collect every contradiction currently witnessed by the system.
 pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> {
@@ -186,6 +193,16 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     // this one does not), so it is built separately.
     let ab_adj = sys.build_always_before_adj();
 
+    // Shared node-id → rule index for the three map-consuming checks
+    // below (`has_forbidden_constr_chain`, `has_incompatible_edge_facts`,
+    // `non_injective_fact_instances`).  `sys` is held immutable for the
+    // whole body and `nodes` has no interior mutability, so one build
+    // serves all three.  `OnceCell` rather than an eager build: each
+    // consumer forces it only after its own early-outs (no AC-constructor
+    // node, no edges, no injective fact tags respectively), so a pass
+    // whose consumers all bail never builds it.
+    let node_rules: std::cell::OnceCell<NodeRuleMap<'_>> = std::cell::OnceCell::new();
+
     // 2. SubtermCyclic — `isContradictory subtermStore`.
     if sys.subterm_store.is_false() {
         out.push(Contradiction::SubtermCyclic);
@@ -222,6 +239,11 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     if has_forbidden_chain(sys, &ab_adj) {
         out.push(Contradiction::ForbiddenChain);
     }
+    // 8b. ForbiddenACConstrChain — AC-constructor chain check
+    //     (Contradictions.hs `hasForbiddenConstrChain`).
+    if has_forbidden_constr_chain(sys, &node_rules) {
+        out.push(Contradiction::ForbiddenACConstrChain);
+    }
     // 9. IncompatibleEqs — HS-faithful: `eqsIsFalse sEqStore`
     //    (Contradictions.hs `contradictions`). The three preceding probes are RS-only
     //    soundness backstops, NOT a port of the eqsIsFalse check: each fires
@@ -240,7 +262,7 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     if has_sort_conflated_lvars(sys) {
         out.push(Contradiction::IncompatibleEqs);
     }
-    if has_incompatible_edge_facts(sys) {
+    if has_incompatible_edge_facts(sys, &node_rules) {
         out.push(Contradiction::IncompatibleEqs);
     }
     if has_fresh_fact_sort_violation(sys) {
@@ -255,7 +277,12 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     }
     // 11. NonInjectiveFactInstance (×n) — BEFORE NodeAfterLast, matching HS's
     //     list concatenation order in `contradictions` (Contradictions.hs).
-    out.extend(non_injective_fact_instances(_ctxt, sys, ab_adj.map()));
+    out.extend(non_injective_fact_instances(
+        _ctxt,
+        sys,
+        ab_adj.map(),
+        &node_rules,
+    ));
     // 12. NodeAfterLast (×n).
     out.extend(node_after_last(sys, ab_adj.map()));
     out
@@ -272,14 +299,18 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
 ///   where hnd = L.get sigmMaudeHandle sig
 /// ```
 ///
-/// And `nf' = nfViaHaskell` (Norm.hs:130-131) — a PURE structural
-/// NF check that walks the term tree against the reducibility
-/// patterns in Norm.hs:60-99.  This is NOT a Maude-driven check;
-/// it's pattern-based on the signature's reducibility shape.
+/// And `nf' = nfViaHaskell` (Norm.hs:130-131) — a structural NF check
+/// that walks the term tree against the reducibility patterns in
+/// Norm.hs:60-99 (NOT full Maude normalisation: no `reduce`, no AC
+/// re-canonicalisation).  It runs in the `WithMaude` reader because its
+/// `struleApplicable` arm matches subterm-rule LHSes via
+/// `solveMatchLNTerm`, which needs Maude AC matching for rules whose
+/// LHS contains an Ac-/C-headed subterm (user `[AC]` equations); the
+/// port mirrors that with `nf_via_haskell_maude_with_sig`.
 ///
 /// Walks every node's premise, conclusion, action facts and
 /// `new_vars`; for each subterm whose head could be reducible,
-/// asks `nf_via_haskell` whether the term is in normal form.  If
+/// asks the NF check whether the term is in normal form.  If
 /// any term is not in NF, the system is contradictory (we only
 /// ever construct normal-form-respecting traces).
 ///
@@ -289,14 +320,12 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
 /// destructors come from intruder rules, not subterm rewriting),
 /// no term can be in non-normal form structurally, so we skip
 /// the per-term check.
-///
-/// `nf_via_haskell` ports `nf'` (Norm.hs:130-131): a pure structural
-/// NF check, not the Maude-driven `nfViaMaude`.
 fn has_non_normal_terms(ctx: &ProofContext, sys: &System) -> bool {
-    // NF check is cheap (pure structural walk) but we call this
-    // from `is_finished` on every expand step, so the early-exit
-    // still helps for pair-only theories with no subterm rewrite
-    // rules.
+    // The NF check is cheap for AC-free-LHS signatures (pure structural
+    // walk; Maude is consulted only for Ac-/C-containing st-rule LHSes)
+    // but we call this from `is_finished` on every expand step, so the
+    // early-exit still helps for pair-only theories with no subterm
+    // rewrite rules.
     let sig = ctx.maude.maude_sig();
     if sig.reducible_fun_syms.is_empty() {
         return false;
@@ -305,15 +334,19 @@ fn has_non_normal_terms(ctx: &ProofContext, sys: &System) -> bool {
 
     // Short-circuiting structural walk: the moment a candidate subterm — a
     // variable or a reducible-headed `App` (the `_` arm of
-    // `maybe_not_nf_subterms`) — fails `nf_via_haskell`, the system has a
+    // `maybe_not_nf_subterms`) — fails the NF check, the system has a
     // non-normal term.  Constants are in NF; irreducible-headed apps recurse
     // into their args.  This is the boolean OR of `maybeNonNormalTerms` ∘
     // `maybeNotNfSubterms` over `nf'` (Norm.hs:130-131, see line 131), but without building the
     // `BTreeSet` of every candidate: the dedup is irrelevant to an OR, and
-    // `nf_via_haskell` is a side-effect-free structural check, so visiting a
-    // subterm more than once cannot change the verdict.
+    // the NF check is a side-effect-free predicate of the term, so visiting a
+    // subterm more than once cannot change the verdict.  The check runs
+    // through `nf_via_haskell_maude_with_sig` — HS's `nf'` runs in the
+    // `WithMaude` reader, and the handle is what lets `struleApplicable`
+    // AC-match the user-`[AC]` cancellation equations (`xorr(x, x) = zeroo`).
     fn any_non_nf(
-        sig: &tamarin_term::maude_sig::MaudeSig,
+        maude: &tamarin_term::maude_proc::MaudeHandle,
+        msig: &tamarin_term::maude_sig::MaudeSig,
         irreducible: &tamarin_utils::FastSet<tamarin_term::function_symbols::FunSym>,
         t: &tamarin_term::lterm::LNTerm,
     ) -> bool {
@@ -322,12 +355,12 @@ fn has_non_normal_terms(ctx: &ProofContext, sys: &System) -> bool {
         match t {
             Term::Lit(Lit::Con(_)) => false,
             // Bare variables are always in normal form (`go_nf` returns true
-            // for every `Lit`), so skip the `nf_via_haskell` call.
+            // for every `Lit`), so skip the NF-check call.
             Term::Lit(Lit::Var(_)) => false,
             Term::App(sym, args) if irreducible.contains(sym) => {
-                args.iter().any(|a| any_non_nf(sig, irreducible, a))
+                args.iter().any(|a| any_non_nf(maude, msig, irreducible, a))
             }
-            _ => !tamarin_term::norm::nf_via_haskell(sig, t),
+            _ => !tamarin_term::norm::nf_via_haskell_maude_with_sig(msig, maude, t),
         }
     }
 
@@ -339,13 +372,13 @@ fn has_non_normal_terms(ctx: &ProofContext, sys: &System) -> bool {
             .chain(&rule.actions)
         {
             for t in f.terms.iter() {
-                if any_non_nf(&sig, irreducible, t) {
+                if any_non_nf(&ctx.maude, &sig, irreducible, t) {
                     return true;
                 }
             }
         }
         for t in &rule.new_vars {
-            if any_non_nf(&sig, irreducible, t) {
+            if any_non_nf(&ctx.maude, &sig, irreducible, t) {
                 return true;
             }
         }
@@ -525,6 +558,11 @@ fn root_sym(t: &tamarin_term::lterm::LNTerm) -> Option<RootSym> {
                 NameTag::Fresh => LSort::Fresh,
                 NameTag::Nat => LSort::Nat,
                 NameTag::Node => LSort::Node,
+                // `sortOfName (Name AbbrevName _) = LSortMsg` (LTerm.hs:266),
+                // and HS's guard `Lit _ | sortOfLNTerm t == LSortMsg ->
+                // Nothing` (Contradictions.hs:255) drops every message-sorted
+                // literal, constants included.
+                NameTag::Abbrev => return None,
             };
             Some(RootSym::Sort(s))
         }
@@ -736,6 +774,237 @@ fn never_contains_fresh_priv(t: &tamarin_term::lterm::LNTerm) -> bool {
                 return false;
             }
             args.iter().all(never_contains_fresh_priv)
+        }
+    }
+}
+
+/// `hasForbiddenConstrChain` — port of Haskell's
+/// `Theory.Constraint.Solver.Contradictions.hasForbiddenConstrChain`.
+///
+/// Detects non-normal chains linking two instances of the SAME AC-symbol
+/// construction rule where the connected component contains at least two
+/// "trivial" instances (a premise that is a plain msg-var KU fact, or the
+/// same AC symbol applied to only msg-vars).  Union-find over the
+/// `LessAtom … Adversary` edges between AC-constructor nodes whose
+/// conclusion feeds the other's premise, run to a fixpoint.
+fn has_forbidden_constr_chain<'a>(
+    sys: &'a System,
+    node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
+) -> bool {
+    use crate::constraint::constraints::Reason;
+    use crate::rule::is_ac_constr_rule;
+    use std::borrow::Cow;
+    use std::collections::{BTreeMap, BTreeSet};
+    use tamarin_term::function_symbols::FunSym;
+
+    type NodeInfo = (
+        crate::constraint::constraints::NodeId,
+        BTreeSet<crate::constraint::constraints::NodeId>,
+        FunSym,
+    );
+
+    // Every candidate pair comes from an `Adversary` less-atom whose two
+    // endpoints both carry AC-constructor rules, so lacking either one
+    // `extracted` is empty and the fixpoint below cannot report a chain.  This
+    // runs on every solver step, so bail out before touching the eq-store.
+    if sys
+        .less_atoms
+        .iter()
+        .all(|la| la.reason != Reason::Adversary)
+    {
+        return false;
+    }
+    if !sys.nodes.iter().any(|n| is_ac_constr_rule(&n.1).is_some()) {
+        return false;
+    }
+
+    // Resolve less-atom endpoints through the eq-store subst before node
+    // lookup — the same RS-only compensation the cyclic check above applies
+    // (HS runs post-`substSystem`, so its `sLessAtoms` are already
+    // canonical; RS's may lag one `subst_system` behind).
+    let subst = &sys.eq_store.subst;
+    let resolve =
+        |v: &crate::constraint::constraints::NodeId| -> crate::constraint::constraints::NodeId {
+            use tamarin_term::term::Term;
+            use tamarin_term::vterm::Lit;
+            let t = tamarin_term::subst::apply_vterm(subst, Term::Lit(Lit::Var(*v)));
+            if let Term::Lit(Lit::Var(w)) = t {
+                w
+            } else {
+                *v
+            }
+        };
+
+    // Facts are compared under the pending eq-store subst as well — same
+    // rationale as the endpoint resolve above (HS compares post-substSystem
+    // rule instances).  Comparison-only copies; `Fact` equality ignores the
+    // fingerprint cache, so `map_ref`'s placeholder fingerprints are fine.
+    // An empty subst is the identity (`apply_vterm`'s empty-map fast path,
+    // subst.rs), so a rebuild reproduces the stored fact term for term; the
+    // borrowed arm hands back that fact instead, and only a subst with
+    // bindings pays the per-candidate rebuild.
+    let subst_fact = |fa: &'a crate::fact::LNFact| -> Cow<'a, crate::fact::LNFact> {
+        if subst.is_empty() {
+            Cow::Borrowed(fa)
+        } else {
+            Cow::Owned(fa.map_ref(|t| tamarin_term::subst::apply_vterm(subst, t.clone())))
+        }
+    };
+
+    // `extractNodesAndRules`: for each `LessAtom n1 n2 Adversary` where both
+    // nodes carry AC-constructor rules of the same symbol and r1's (single)
+    // conclusion appears among r2's premises, record the two nodes'
+    // (substituted) premises and the symbol.  Both endpoints resolve through
+    // the pass-shared `node_rule_map` index (forced here, AFTER the early-outs
+    // above, so the non-AC fast path never builds it) — it is only `.get()`-ed,
+    // and it keeps the FIRST rule per id, so it answers exactly as
+    // `node_rule_safe` does.
+    let node_rules = node_rules.get_or_init(|| sys.node_rule_map());
+    let extracted: Vec<(
+        crate::constraint::constraints::NodeId,
+        Vec<crate::fact::LNFact>,
+        crate::constraint::constraints::NodeId,
+        Vec<crate::fact::LNFact>,
+        FunSym,
+    )> = sys
+        .less_atoms
+        .iter()
+        .filter_map(|la| {
+            if la.reason != Reason::Adversary {
+                return None;
+            }
+            let n1 = resolve(&la.smaller);
+            let n2 = resolve(&la.larger);
+            let r1 = node_rules.get(&n1).copied()?;
+            let r2 = node_rules.get(&n2).copied()?;
+            let name1 = is_ac_constr_rule(r1)?;
+            let name2 = is_ac_constr_rule(r2)?;
+            if name1 != name2 {
+                return None;
+            }
+            let conc = subst_fact(r1.conclusions.first()?);
+            let prems2: Vec<Cow<'a, crate::fact::LNFact>> =
+                r2.premises.iter().map(&subst_fact).collect();
+            if tamarin_utils::env_gate!("TAM_RS_DBG_ACCHAIN") {
+                eprintln!(
+                    "[RS_ACCHAIN] path={} pair {:?}<{:?} conc={:?} prems2={:?} contains={}",
+                    crate::constraint::solver::trace::case_path_string(),
+                    n1,
+                    n2,
+                    conc,
+                    prems2,
+                    prems2.contains(&conc)
+                );
+            }
+            if prems2.contains(&conc) {
+                let prems1: Vec<crate::fact::LNFact> = r1
+                    .premises
+                    .iter()
+                    .map(|fa| subst_fact(fa).into_owned())
+                    .collect();
+                let prems2: Vec<crate::fact::LNFact> =
+                    prems2.into_iter().map(Cow::into_owned).collect();
+                Some((n1, prems1, n2, prems2, name1))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // `trivial r n iden`: the singleton {iden} iff some premise of `r` is a
+    // trivial or nearly-trivial (same-symbol) KU fact.
+    let trivial = |prems: &[crate::fact::LNFact],
+                   n: &FunSym,
+                   iden: crate::constraint::constraints::NodeId|
+     -> BTreeSet<crate::constraint::constraints::NodeId> {
+        if prems.iter().any(|fa| {
+            crate::fact::is_trivial_ku_fact(fa) || crate::fact::is_nearly_trivial_ku_fact(n, fa)
+        }) {
+            BTreeSet::from([iden])
+        } else {
+            BTreeSet::new()
+        }
+    };
+
+    // `initialMap`: every endpoint maps to (itself, its trivial set, symbol).
+    let mut map: BTreeMap<crate::constraint::constraints::NodeId, NodeInfo> = BTreeMap::new();
+    for (n1, p1, n2, p2, n) in &extracted {
+        map.insert(*n1, (*n1, trivial(p1, n, *n1), *n));
+        map.insert(*n2, (*n2, trivial(p2, n, *n2), *n));
+    }
+
+    if tamarin_utils::env_gate!("TAM_RS_DBG_ACCHAIN") && !extracted.is_empty() {
+        let trivias: Vec<String> = map
+            .iter()
+            .map(|(k, (root, tset, _))| {
+                format!(
+                    "{}_{}→root {}_{} triv={:?}",
+                    k.name,
+                    k.idx,
+                    root.name,
+                    root.idx,
+                    tset.iter().map(|v| v.idx).collect::<Vec<_>>()
+                )
+            })
+            .collect();
+        eprintln!(
+            "[RS_ACCHAIN_MAP] path={} pairs={} init: {}",
+            crate::constraint::solver::trace::case_path_string(),
+            extracted.len(),
+            trivias.join(" | ")
+        );
+    }
+
+    // `finalMap = fixpoint (\x -> foldr updateMap x extracted) (False, initialMap)`.
+    let mut found = false;
+    loop {
+        // Pre-pass value of every entry this pass writes (`None` = key absent).
+        // Entries no insert touched cannot differ, so testing just these against
+        // the map decides the whole-map `==` the fixpoint needs — and a pass
+        // that writes an entry back to the value it started with still counts
+        // as unchanged, exactly as a full comparison would have it.
+        let mut before: BTreeMap<crate::constraint::constraints::NodeId, Option<NodeInfo>> =
+            BTreeMap::new();
+        // `foldr` walks the list right-to-left.
+        for (a, _, b, _, n) in extracted.iter().rev() {
+            if found {
+                break;
+            }
+            let (Some((_, t1, _)), Some((c, t2, n2))) = (map.get(a).cloned(), map.get(b).cloned())
+            else {
+                continue;
+            };
+            if *n != n2 {
+                continue;
+            }
+            let mut nodes = map
+                .get(&c)
+                .map(|(_, t3, _)| t3.clone())
+                .expect("has_forbidden_constr_chain: root must be mapped");
+            nodes.extend(t1.iter().copied());
+            nodes.extend(t2.iter().copied());
+            if nodes.len() >= 2 {
+                found = true;
+            }
+            // HS `M.insert c … $ M.insert b … $ M.insert a … m` applies
+            // right-to-left, so when `b == c` (the root itself) the
+            // root's accumulated `nodes` entry must win — insert it LAST.
+            for (k, v) in [(*a, (c, t1, n2)), (*b, (c, t2, n2)), (c, (c, nodes, n2))] {
+                let old = map.insert(k, v);
+                before.entry(k).or_insert(old);
+            }
+        }
+        // Once `found` is set the loop above breaks on its first statement, so
+        // no later pass can touch the map or the verdict.
+        if found || before.iter().all(|(k, v)| map.get(k) == v.as_ref()) {
+            if tamarin_utils::env_gate!("TAM_RS_DBG_ACCHAIN") && !extracted.is_empty() {
+                eprintln!(
+                    "[RS_ACCHAIN_RES] path={} found={}",
+                    crate::constraint::solver::trace::case_path_string(),
+                    found
+                );
+            }
+            return found;
         }
     }
 }
@@ -1076,10 +1345,7 @@ fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltA
     // Mirror HS `forbiddenDExp` exactly.
     for (i, ru) in sys.nodes.iter() {
         // Only intruder DestrRules can be exp-down; cheap pre-filter.
-        if !matches!(
-            &ru.info,
-            RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, _, _, _))
-        ) {
+        if !matches!(&ru.info, RuleInfo::Intr(IntrRuleACInfo::DestrRule(..))) {
             continue;
         }
         if ru.premises.len() != 2 {
@@ -1613,10 +1879,11 @@ fn bp_over_complicated(
 ///
 /// Such a `(i, j, k)` triple witnesses two simultaneous "live"
 /// instances of the injective fact, contradicting injectivity.
-fn non_injective_fact_instances(
+fn non_injective_fact_instances<'a>(
     ctxt: &ProofContext,
-    sys: &System,
+    sys: &'a System,
     adj: &BTreeMap<NodeId, Vec<NodeId>>,
+    node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
 ) -> Vec<Contradiction> {
     let mut out = Vec::new();
     let inj_tags: BTreeSet<&crate::fact::FactTag> =
@@ -1645,9 +1912,10 @@ fn non_injective_fact_instances(
         reach_cache.borrow_mut().insert(*from, out.clone());
         out
     };
-    // Resolve node-id → rule via a once-built map instead of a linear
-    // `nodes.iter().find` per `i`/`j`.
-    let node_rule_map = sys.node_rule_map();
+    // Resolve node-id → rule via the pass-shared map (forced here, after
+    // the `inj_tags` early-out) instead of a linear `nodes.iter().find`
+    // per `i`/`j`.
+    let node_rule_map = node_rules.get_or_init(|| sys.node_rule_map());
     let lookup_node =
         |id: &NodeId| -> Option<&crate::rule::RuleACInst> { node_rule_map.get(id).copied() };
 
@@ -1861,10 +2129,17 @@ fn has_fresh_fact_sort_violation(sys: &System) -> bool {
 /// can arise when node-id substitution collapses a case node onto
 /// an unrelated live node — the edge survives the rename but
 /// connects incompatible facts.  Such a system has no model.
-fn has_incompatible_edge_facts(sys: &System) -> bool {
-    // One node-id → rule map (instead of two linear `nodes.iter().find`
-    // scans per edge → O(edges*nodes)).
-    let node_rule_map = sys.node_rule_map();
+fn has_incompatible_edge_facts<'a>(
+    sys: &'a System,
+    node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
+) -> bool {
+    // No edges → no edge can be incompatible; bail before touching the map.
+    if sys.edges.is_empty() {
+        return false;
+    }
+    // The pass-shared node-id → rule map (instead of two linear
+    // `nodes.iter().find` scans per edge → O(edges*nodes)).
+    let node_rule_map = node_rules.get_or_init(|| sys.node_rule_map());
     for e in &sys.edges {
         let src_rule = node_rule_map.get(&e.src.0).copied();
         let tgt_rule = node_rule_map.get(&e.tgt.0).copied();
@@ -2185,7 +2460,6 @@ impl SubstNfChecker {
         if base.is_empty() {
             return false;
         }
-        let sig = self.maude.maude_sig();
         let mut applied = self.applied.borrow_mut();
         let stale = match applied.as_ref() {
             Some((fs, _)) => fs != fsubst,
@@ -2215,6 +2489,7 @@ impl SubstNfChecker {
             *applied = Some((fsubst.clone(), terms));
         }
         let terms = &applied.as_ref().unwrap().1;
+        let sig = self.maude.maude_sig();
         for (t, tvars, fresh_start) in terms {
             if tvars.is_empty() {
                 continue;
@@ -2244,13 +2519,18 @@ impl SubstNfChecker {
             }
             // Slow path: structural NF check (HS-faithful).  Mirrors HS
             // `nfApply subst0 t = t == t' || nf' t' \`runReader\` hnd`
-            // where `nf' = nfViaHaskell` (Norm.hs:130-131).  This is a
-            // PURE structural check, NOT `maude.reduce(t) == t`.  The
+            // where `nf' = nfViaHaskell` (Norm.hs:130-131) — run with the
+            // handle, as HS does: the st-rule arm needs Maude AC matching
+            // for rules whose LHS contains an Ac-/C-headed subterm (user
+            // `[AC]` cancellation equations; csf26-ac CRxor `splitEqs(2)`
+            // keeps 6 cases instead of HS's 2 without it).  This is still
+            // the STRUCTURAL check, NOT `maude.reduce(t) == t`.  The
             // distinction matters because Maude canonicalises AC operator
             // arguments (multiset / mult / xor / nat-plus), so
             // `mult(tid, x)` and `mult(x, tid)` are different `Eq`
             // representations but both in NF.
-            let is_nf = tamarin_term::norm::nf_via_haskell(&sig, &t_prime);
+            let is_nf =
+                tamarin_term::norm::nf_via_haskell_maude_with_sig(&sig, &self.maude, &t_prime);
             if !is_nf {
                 if tamarin_utils::env_gate!("TAM_RS_DBG_SUBST_NF") {
                     eprintln!("[rs-subst-nf] CREATES t={:?} t_prime={:?}", t, t_prime);
@@ -2400,6 +2680,71 @@ mod tests {
             "expected at least one NonInjectiveFactInstance contradiction; got {:?}",
             cs
         );
+    }
+
+    /// The pass-shared `NodeRuleMap` is lazy: checks whose early-outs
+    /// fire must leave the `OnceCell` untouched, while a mismatched-tag
+    /// edge must both trip `has_incompatible_edge_facts` and populate it.
+    #[test]
+    fn shared_node_rule_map_lazy_and_incompatible_edge_detected() {
+        use crate::constraint::constraints::{Edge, LessAtom, Reason};
+        use crate::constraint::system::System;
+        use crate::fact::{Fact, FactTag, Multiplicity};
+        use crate::rule::{
+            ConcIdx, IntrRuleACInfo, PremIdx, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleACInst,
+            RuleAttributes, RuleInfo,
+        };
+        use tamarin_term::builtin::msg_var;
+
+        let a_fact = Fact::new(
+            FactTag::Proto(Multiplicity::Linear, "A", 1),
+            vec![msg_var("x", 0)],
+        );
+        let b_fact = Fact::new(
+            FactTag::Proto(Multiplicity::Linear, "B", 1),
+            vec![msg_var("x", 0)],
+        );
+        let proto = |name: &'static str,
+                     prems: Vec<crate::fact::LNFact>,
+                     concs: Vec<crate::fact::LNFact>|
+         -> RuleACInst {
+            Rule::new(
+                RuleInfo::<ProtoRuleACInstInfo, IntrRuleACInfo>::Proto(ProtoRuleACInstInfo {
+                    name: ProtoRuleName::Stand(name),
+                    attributes: RuleAttributes::empty(),
+                    loop_breakers: Vec::new(),
+                }),
+                prems,
+                concs,
+                vec![],
+            )
+        };
+
+        // Early-out paths: an Adversary less-atom over non-AC rules and
+        // no edges — neither check may force the shared map.
+        let i = n("1");
+        let k = n("2");
+        let mut sys = System::empty();
+        sys.add_node(i, proto("Src", vec![], vec![a_fact.clone()]));
+        sys.add_node(k, proto("Snk", vec![b_fact.clone()], vec![]));
+        sys.add_less(LessAtom::new(i, k, Reason::Adversary));
+        let cell = std::cell::OnceCell::new();
+        assert!(!has_forbidden_constr_chain(&sys, &cell));
+        assert!(!has_incompatible_edge_facts(&sys, &cell));
+        assert!(
+            cell.get().is_none(),
+            "early-outs must not build the shared map"
+        );
+
+        // A conclusion-A → premise-B edge is tag-incompatible; detecting
+        // it forces the shared map.
+        sys.add_edge(Edge {
+            src: (i, ConcIdx(0)),
+            tgt: (k, PremIdx(0)),
+        });
+        let cell = std::cell::OnceCell::new();
+        assert!(has_incompatible_edge_facts(&sys, &cell));
+        assert!(cell.get().is_some());
     }
 
     /// Two LVars sharing `(name, idx)` but with disjoint sub-sorts

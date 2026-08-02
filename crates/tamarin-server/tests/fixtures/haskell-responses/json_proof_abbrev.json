@@ -1,0 +1,509 @@
+{
+    "graphs": [
+        {
+            "jgAbbrevs": [],
+            "jgClusters": [],
+            "jgDirected": true,
+            "jgEdges": [
+                {
+                    "jgeColor": "black",
+                    "jgeRelation": "ProtoFact",
+                    "jgeSource": "#vr:c0",
+                    "jgeTarget": "#i:p0"
+                },
+                {
+                    "jgeColor": "black",
+                    "jgeRelation": "ProtoFact",
+                    "jgeSource": "#vr.1:c1",
+                    "jgeTarget": "#i:p1"
+                }
+            ],
+            "jgLabel": "Theory: BigTerm Lemma: done",
+            "jgNodes": [
+                {
+                    "jgnColor": "#d5d897",
+                    "jgnId": "#i",
+                    "jgnLabel": "Fin",
+                    "jgnMetadata": {
+                        "jgnActs": [
+                            {
+                                "jgnFactId": "action",
+                                "jgnFactMult": "",
+                                "jgnFactName": "Done",
+                                "jgnFactShow": "Done( g(f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, ~x))))))))))))))))))))), g(f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, ~x.1))))))))))))))))))))))",
+                                "jgnFactTag": "ProtoFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnFunct": "g",
+                                        "jgnParams": [
+                                            {
+                                                "jgnFunct": "f",
+                                                "jgnParams": [
+                                                    {
+                                                        "jgnConst": "~x"
+                                                    },
+                                                    {
+                                                        "jgnFunct": "f",
+                                                        "jgnParams": [
+                                                            {
+                                                                "jgnConst": "~x"
+                                                            },
+                                                            {
+                                                                "jgnFunct": "f",
+                                                                "jgnParams": [
+                                                                    {
+                                                                        "jgnConst": "~x"
+                                                                    },
+                                                                    {
+                                                                        "jgnFunct": "f",
+                                                                        "jgnParams": [
+                                                                            {
+                                                                                "jgnConst": "~x"
+                                                                            },
+                                                                            {
+                                                                                "jgnFunct": "f",
+                                                                                "jgnParams": [
+                                                                                    {
+                                                                                        "jgnConst": "~x"
+                                                                                    },
+                                                                                    {
+                                                                                        "jgnFunct": "f",
+                                                                                        "jgnParams": [
+                                                                                            {
+                                                                                                "jgnConst": "~x"
+                                                                                            },
+                                                                                            {
+                                                                                                "jgnFunct": "f",
+                                                                                                "jgnParams": [
+                                                                                                    {
+                                                                                                        "jgnConst": "~x"
+                                                                                                    },
+                                                                                                    {
+                                                                                                        "jgnFunct": "f",
+                                                                                                        "jgnParams": [
+                                                                                                            {
+                                                                                                                "jgnConst": "~x"
+                                                                                                            },
+                                                                                                            {
+                                                                                                                "jgnFunct": "f",
+                                                                                                                "jgnParams": [
+                                                                                                                    {
+                                                                                                                        "jgnConst": "~x"
+                                                                                                                    },
+                                                                                                                    {
+                                                                                                                        "jgnFunct": "f",
+                                                                                                                        "jgnParams": [
+                                                                                                                            {
+                                                                                                                                "jgnConst": "~x"
+                                                                                                                            },
+                                                                                                                            {
+                                                                                                                                "jgnFunct": "f",
+                                                                                                                                "jgnParams": [
+                                                                                                                                    {
+                                                                                                                                        "jgnConst": "~x"
+                                                                                                                                    },
+                                                                                                                                    {
+                                                                                                                                        "jgnFunct": "f",
+                                                                                                                                        "jgnParams": [
+                                                                                                                                            {
+                                                                                                                                                "jgnConst": "~x"
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                                "jgnFunct": "f",
+                                                                                                                                                "jgnParams": [
+                                                                                                                                                    {
+                                                                                                                                                        "jgnConst": "~x"
+                                                                                                                                                    },
+                                                                                                                                                    {
+                                                                                                                                                        "jgnFunct": "f",
+                                                                                                                                                        "jgnParams": [
+                                                                                                                                                            {
+                                                                                                                                                                "jgnConst": "~x"
+                                                                                                                                                            },
+                                                                                                                                                            {
+                                                                                                                                                                "jgnFunct": "f",
+                                                                                                                                                                "jgnParams": [
+                                                                                                                                                                    {
+                                                                                                                                                                        "jgnConst": "~x"
+                                                                                                                                                                    },
+                                                                                                                                                                    {
+                                                                                                                                                                        "jgnFunct": "f",
+                                                                                                                                                                        "jgnParams": [
+                                                                                                                                                                            {
+                                                                                                                                                                                "jgnConst": "~x"
+                                                                                                                                                                            },
+                                                                                                                                                                            {
+                                                                                                                                                                                "jgnFunct": "f",
+                                                                                                                                                                                "jgnParams": [
+                                                                                                                                                                                    {
+                                                                                                                                                                                        "jgnConst": "~x"
+                                                                                                                                                                                    },
+                                                                                                                                                                                    {
+                                                                                                                                                                                        "jgnFunct": "f",
+                                                                                                                                                                                        "jgnParams": [
+                                                                                                                                                                                            {
+                                                                                                                                                                                                "jgnConst": "~x"
+                                                                                                                                                                                            },
+                                                                                                                                                                                            {
+                                                                                                                                                                                                "jgnFunct": "f",
+                                                                                                                                                                                                "jgnParams": [
+                                                                                                                                                                                                    {
+                                                                                                                                                                                                        "jgnConst": "~x"
+                                                                                                                                                                                                    },
+                                                                                                                                                                                                    {
+                                                                                                                                                                                                        "jgnFunct": "f",
+                                                                                                                                                                                                        "jgnParams": [
+                                                                                                                                                                                                            {
+                                                                                                                                                                                                                "jgnConst": "~x"
+                                                                                                                                                                                                            },
+                                                                                                                                                                                                            {
+                                                                                                                                                                                                                "jgnConst": "~x"
+                                                                                                                                                                                                            }
+                                                                                                                                                                                                        ]
+                                                                                                                                                                                                    }
+                                                                                                                                                                                                ]
+                                                                                                                                                                                            }
+                                                                                                                                                                                        ]
+                                                                                                                                                                                    }
+                                                                                                                                                                                ]
+                                                                                                                                                                            }
+                                                                                                                                                                        ]
+                                                                                                                                                                    }
+                                                                                                                                                                ]
+                                                                                                                                                            }
+                                                                                                                                                        ]
+                                                                                                                                                    }
+                                                                                                                                                ]
+                                                                                                                                            }
+                                                                                                                                        ]
+                                                                                                                                    }
+                                                                                                                                ]
+                                                                                                                            }
+                                                                                                                        ]
+                                                                                                                    }
+                                                                                                                ]
+                                                                                                            }
+                                                                                                        ]
+                                                                                                    }
+                                                                                                ]
+                                                                                            }
+                                                                                        ]
+                                                                                    }
+                                                                                ]
+                                                                            }
+                                                                        ]
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ],
+                                        "jgnShow": "g(f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,~x)))))))))))))))))))))"
+                                    },
+                                    {
+                                        "jgnFunct": "g",
+                                        "jgnParams": [
+                                            {
+                                                "jgnFunct": "f",
+                                                "jgnParams": [
+                                                    {
+                                                        "jgnConst": "~x.1"
+                                                    },
+                                                    {
+                                                        "jgnFunct": "f",
+                                                        "jgnParams": [
+                                                            {
+                                                                "jgnConst": "~x.1"
+                                                            },
+                                                            {
+                                                                "jgnFunct": "f",
+                                                                "jgnParams": [
+                                                                    {
+                                                                        "jgnConst": "~x.1"
+                                                                    },
+                                                                    {
+                                                                        "jgnFunct": "f",
+                                                                        "jgnParams": [
+                                                                            {
+                                                                                "jgnConst": "~x.1"
+                                                                            },
+                                                                            {
+                                                                                "jgnFunct": "f",
+                                                                                "jgnParams": [
+                                                                                    {
+                                                                                        "jgnConst": "~x.1"
+                                                                                    },
+                                                                                    {
+                                                                                        "jgnFunct": "f",
+                                                                                        "jgnParams": [
+                                                                                            {
+                                                                                                "jgnConst": "~x.1"
+                                                                                            },
+                                                                                            {
+                                                                                                "jgnFunct": "f",
+                                                                                                "jgnParams": [
+                                                                                                    {
+                                                                                                        "jgnConst": "~x.1"
+                                                                                                    },
+                                                                                                    {
+                                                                                                        "jgnFunct": "f",
+                                                                                                        "jgnParams": [
+                                                                                                            {
+                                                                                                                "jgnConst": "~x.1"
+                                                                                                            },
+                                                                                                            {
+                                                                                                                "jgnFunct": "f",
+                                                                                                                "jgnParams": [
+                                                                                                                    {
+                                                                                                                        "jgnConst": "~x.1"
+                                                                                                                    },
+                                                                                                                    {
+                                                                                                                        "jgnFunct": "f",
+                                                                                                                        "jgnParams": [
+                                                                                                                            {
+                                                                                                                                "jgnConst": "~x.1"
+                                                                                                                            },
+                                                                                                                            {
+                                                                                                                                "jgnFunct": "f",
+                                                                                                                                "jgnParams": [
+                                                                                                                                    {
+                                                                                                                                        "jgnConst": "~x.1"
+                                                                                                                                    },
+                                                                                                                                    {
+                                                                                                                                        "jgnFunct": "f",
+                                                                                                                                        "jgnParams": [
+                                                                                                                                            {
+                                                                                                                                                "jgnConst": "~x.1"
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                                "jgnFunct": "f",
+                                                                                                                                                "jgnParams": [
+                                                                                                                                                    {
+                                                                                                                                                        "jgnConst": "~x.1"
+                                                                                                                                                    },
+                                                                                                                                                    {
+                                                                                                                                                        "jgnFunct": "f",
+                                                                                                                                                        "jgnParams": [
+                                                                                                                                                            {
+                                                                                                                                                                "jgnConst": "~x.1"
+                                                                                                                                                            },
+                                                                                                                                                            {
+                                                                                                                                                                "jgnFunct": "f",
+                                                                                                                                                                "jgnParams": [
+                                                                                                                                                                    {
+                                                                                                                                                                        "jgnConst": "~x.1"
+                                                                                                                                                                    },
+                                                                                                                                                                    {
+                                                                                                                                                                        "jgnFunct": "f",
+                                                                                                                                                                        "jgnParams": [
+                                                                                                                                                                            {
+                                                                                                                                                                                "jgnConst": "~x.1"
+                                                                                                                                                                            },
+                                                                                                                                                                            {
+                                                                                                                                                                                "jgnFunct": "f",
+                                                                                                                                                                                "jgnParams": [
+                                                                                                                                                                                    {
+                                                                                                                                                                                        "jgnConst": "~x.1"
+                                                                                                                                                                                    },
+                                                                                                                                                                                    {
+                                                                                                                                                                                        "jgnFunct": "f",
+                                                                                                                                                                                        "jgnParams": [
+                                                                                                                                                                                            {
+                                                                                                                                                                                                "jgnConst": "~x.1"
+                                                                                                                                                                                            },
+                                                                                                                                                                                            {
+                                                                                                                                                                                                "jgnFunct": "f",
+                                                                                                                                                                                                "jgnParams": [
+                                                                                                                                                                                                    {
+                                                                                                                                                                                                        "jgnConst": "~x.1"
+                                                                                                                                                                                                    },
+                                                                                                                                                                                                    {
+                                                                                                                                                                                                        "jgnFunct": "f",
+                                                                                                                                                                                                        "jgnParams": [
+                                                                                                                                                                                                            {
+                                                                                                                                                                                                                "jgnConst": "~x.1"
+                                                                                                                                                                                                            },
+                                                                                                                                                                                                            {
+                                                                                                                                                                                                                "jgnConst": "~x.1"
+                                                                                                                                                                                                            }
+                                                                                                                                                                                                        ]
+                                                                                                                                                                                                    }
+                                                                                                                                                                                                ]
+                                                                                                                                                                                            }
+                                                                                                                                                                                        ]
+                                                                                                                                                                                    }
+                                                                                                                                                                                ]
+                                                                                                                                                                            }
+                                                                                                                                                                        ]
+                                                                                                                                                                    }
+                                                                                                                                                                ]
+                                                                                                                                                            }
+                                                                                                                                                        ]
+                                                                                                                                                    }
+                                                                                                                                                ]
+                                                                                                                                            }
+                                                                                                                                        ]
+                                                                                                                                    }
+                                                                                                                                ]
+                                                                                                                            }
+                                                                                                                        ]
+                                                                                                                    }
+                                                                                                                ]
+                                                                                                            }
+                                                                                                        ]
+                                                                                                    }
+                                                                                                ]
+                                                                                            }
+                                                                                        ]
+                                                                                    }
+                                                                                ]
+                                                                            }
+                                                                        ]
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ],
+                                        "jgnShow": "g(f(~x.1,f(~x.1,f(~x.1,f(~x.1,f(~x.1,f(~x.1,f(~x.1,f(~x.1,f(~x.1,f(~x.1,f(~x.1,f(~x.1,f(~x.1,f(~x.1,f(~x.1,f(~x.1,f(~x.1,f(~x.1,f(~x.1,f(~x.1,~x.1)))))))))))))))))))))"
+                                    }
+                                ]
+                            }
+                        ],
+                        "jgnConcs": [],
+                        "jgnPrems": [
+                            {
+                                "jgnFactId": "#i:p0",
+                                "jgnFactMult": "",
+                                "jgnFactName": "A",
+                                "jgnFactShow": "A( g3 )",
+                                "jgnFactTag": "ProtoFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnConst": "g3"
+                                    }
+                                ]
+                            },
+                            {
+                                "jgnFactId": "#i:p1",
+                                "jgnFactMult": "",
+                                "jgnFactName": "B",
+                                "jgnFactShow": "B( g5 )",
+                                "jgnFactTag": "ProtoFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnConst": "g5"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    "jgnType": "isProtocolRule"
+                },
+                {
+                    "jgnColor": "#b1dc9a",
+                    "jgnId": "#vr",
+                    "jgnLabel": "Init",
+                    "jgnMetadata": {
+                        "jgnActs": [],
+                        "jgnConcs": [
+                            {
+                                "jgnFactId": "#vr:c0",
+                                "jgnFactMult": "",
+                                "jgnFactName": "A",
+                                "jgnFactShow": "A( g3 )",
+                                "jgnFactTag": "ProtoFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnConst": "g3"
+                                    }
+                                ]
+                            },
+                            {
+                                "jgnFactId": "#vr:c1",
+                                "jgnFactMult": "",
+                                "jgnFactName": "B",
+                                "jgnFactShow": "B( g3 )",
+                                "jgnFactTag": "ProtoFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnConst": "g3"
+                                    }
+                                ]
+                            }
+                        ],
+                        "jgnPrems": [
+                            {
+                                "jgnFactId": "#vr:p0",
+                                "jgnFactMult": "",
+                                "jgnFactName": "Fr",
+                                "jgnFactShow": "Fr( ~x )",
+                                "jgnFactTag": "FreshFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnConst": "~x"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    "jgnType": "isProtocolRule"
+                },
+                {
+                    "jgnColor": "#b1dc9a",
+                    "jgnId": "#vr.1",
+                    "jgnLabel": "Init",
+                    "jgnMetadata": {
+                        "jgnActs": [],
+                        "jgnConcs": [
+                            {
+                                "jgnFactId": "#vr.1:c0",
+                                "jgnFactMult": "",
+                                "jgnFactName": "A",
+                                "jgnFactShow": "A( g5 )",
+                                "jgnFactTag": "ProtoFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnConst": "g5"
+                                    }
+                                ]
+                            },
+                            {
+                                "jgnFactId": "#vr.1:c1",
+                                "jgnFactMult": "",
+                                "jgnFactName": "B",
+                                "jgnFactShow": "B( g5 )",
+                                "jgnFactTag": "ProtoFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnConst": "g5"
+                                    }
+                                ]
+                            }
+                        ],
+                        "jgnPrems": [
+                            {
+                                "jgnFactId": "#vr.1:p0",
+                                "jgnFactMult": "",
+                                "jgnFactName": "Fr",
+                                "jgnFactShow": "Fr( ~x.1 )",
+                                "jgnFactTag": "FreshFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnConst": "~x.1"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    "jgnType": "isProtocolRule"
+                }
+            ],
+            "jgType": "Tamarin prover constraint system"
+        }
+    ]
+}

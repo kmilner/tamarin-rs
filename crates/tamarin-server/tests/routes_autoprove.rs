@@ -4,7 +4,8 @@
 // Ported from upstream tamarin-prover sources:
 //   src/Web/Handler.hs
 
-//! Integration tests that exercise the autoprove endpoint.
+//! Integration tests that exercise the prover-driving endpoints: the
+//! autoprove routes and `main/method`'s single-step apply.
 //!
 //! These tests run the actual Rust solver via `prove_lemma` and so
 //! need a working `maude` binary: `MAUDE_PATH` if set, else a common
@@ -134,6 +135,54 @@ async fn test_autoprove_on_bad_path_returns_alert() {
     );
 }
 
+// ---------------------------------------------------------------------
+// /thy/trace/<idx>/main/method/<lemma>/<nr>
+// ---------------------------------------------------------------------
+
+/// An out-of-range method number has ONE answer: the 200 JSON alert
+/// `getTheoryPathMR` replies to a `Nothing` apply with
+/// (`src/Web/Handler.hs:1081`), byte-compared against the capture.
+///
+/// Upstream splits it three ways instead: `applyMethodAtPath` guards with
+/// `length methods >= i` alone and then evaluates `methods !! (i-1)`
+/// (`src/Web/Theory.hs:99`), so only an `i` past the end reaches that alert
+/// while `i <= 0` passes the guard and raises `!!`'s `negIndex` — and `Int`
+/// minBound passes it too, `i-1` wrapping to maxBound so `!!` raises
+/// `tooLarge`.  Both exceptions come back as 200 alerts quoting the GHC
+/// CallStack, because `modifyTheory` runs the apply under `evalInThread`
+/// (`src/Web/Handler.hs:743,753`).  RS deliberately corrects that: one
+/// out-of-range index, one alert.
+#[tokio::test]
+async fn test_method_out_of_range_index_alerts_match_haskell() {
+    let s = start_server_with_theory("issue193.spthy").await;
+    // Only two methods are ranked at the `debug` root, so `3` is the first
+    // index past the end; `9999` is the same answer, as are the non-positive
+    // ones and `Int` minBound.
+    for nr in ["0", "-1", "-9223372036854775808", "3", "9999"] {
+        let url = s.url(&format!("/thy/trace/1/main/method/debug/{nr}"));
+        let res = s.client.get(&url).send().await.expect("send method");
+        assert_eq!(res.status(), 200, "method/{nr} must be a 200");
+        assert_eq!(
+            res.text().await.expect("text"),
+            haskell_capture("method_out_of_range.json"),
+            "method/{nr}"
+        );
+    }
+
+    // The accept side of the very same guard: method `1` applies and redirects.
+    let res = s
+        .client
+        .get(s.url("/thy/trace/1/main/method/debug/1"))
+        .send()
+        .await
+        .expect("send method/1");
+    assert_eq!(res.status(), 200);
+    let v: serde_json::Value = res.json().await.expect("decode");
+    let keys = json_top_keys(&v);
+    let one: std::collections::BTreeSet<String> = std::iter::once("redirect".to_string()).collect();
+    assert_eq!(keys, one, "an in-range method must be {{redirect}}");
+}
+
 #[tokio::test]
 async fn test_autoprove_with_missing_idx_returns_404_html() {
     // Match Haskell: bad theory idx returns 404 HTML (see
@@ -174,11 +223,10 @@ async fn test_autoprove_on_unknown_lemma_returns_alert() {
 // Web-parity regression: after autoprove, `main/proof/<lemma>` must render
 // the "Applicable Proof Methods" + sequent snippet from the grown tree's
 // retained per-node systems — not an empty "Constraint System is Solved".
-// Guards the `set_keep_sys(true)` the interactive server enables at
-// startup (see `tamarin_server::serve`).
+// Guards the `set_keep_sys(true)` that `tamarin_server::init_process_globals`
+// applies for every server, the harness's included.
 #[tokio::test]
 async fn test_autoprove_proof_view_retains_systems() {
-    tamarin_theory::constraint::solver::search::set_keep_sys(true);
     let s = start_server_with_theory("Tutorial.spthy").await;
     let v: serde_json::Value = s
         .client

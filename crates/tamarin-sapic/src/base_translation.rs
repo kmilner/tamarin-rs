@@ -915,6 +915,10 @@ pub(crate) fn ln_term_to_parser(t: &LNTerm) -> tamarin_parser::ast::Term {
             NameTag::Fresh => p::Term::FreshLit(n.id.0.to_string()),
             NameTag::Nat => p::Term::NatLit(n.id.0.to_string()),
             NameTag::Node => p::Term::PubLit(n.id.0.to_string()),
+            // `show (Name AbbrevName n) = show n` (LTerm.hs:240) is the bare
+            // id, and a nullary `App` is the parser-AST term that renders
+            // that way.
+            NameTag::Abbrev => p::Term::App(n.id.0.to_string(), Vec::new()),
         },
         VTerm::App(FunSym::NoEq(sym), args) => {
             let name = String::from_utf8_lossy(sym.name).to_string();
@@ -925,12 +929,25 @@ pub(crate) fn ln_term_to_parser(t: &LNTerm) -> tamarin_parser::ast::Term {
             }
             p::Term::App(name, args.iter().map(ln_term_to_parser).collect())
         }
+        // HS `prettyTerm` (Term/Term.hs:304): `FApp (AC (ACfct (f,_))) [] ->
+        // text (BC.unpack f)` — a nullary user-AC symbol is the bare name,
+        // which the parser-AST printers render for a nullary `App`.
+        VTerm::App(FunSym::Ac(AcSym::AcFct(s)), args) if args.is_empty() => {
+            p::Term::App(String::from_utf8_lossy(s.name).into_owned(), Vec::new())
+        }
         VTerm::App(FunSym::Ac(op), args) => {
             let bop = match op {
                 AcSym::Mult => p::BinOp::Mult,
                 AcSym::Union => p::BinOp::Union,
                 AcSym::Xor => p::BinOp::Xor,
                 AcSym::NatPlus => p::BinOp::NatPlus,
+                // HS renders a user-declared `[AC]` symbol INFIX too
+                // (Term/Term.hs:305): `ppTerms (" " ++ BC.unpack f ++ " ") 1
+                // "(" ")" ts`, i.e. `(x add y)` — same lowering as
+                // `pretty_theory::lnterm_to_parser`.
+                AcSym::AcFct(s) => p::BinOp::AcFct(tamarin_term::intern::intern_str(
+                    &String::from_utf8_lossy(s.name),
+                )),
             };
             // Fold the AC arg list left-associatively into BinOps.
             let mut it = args.iter();
@@ -1385,5 +1402,44 @@ mod tests {
         let tx = BTreeSet::new();
         let c = ProcessCombinator::CondEq(svar("a"), svar("b"));
         assert!(base_trans_comb(&c, &an, &p, &tx).is_err());
+    }
+
+    // User-`[AC]` symbols must lower INFIX (`BinOp::AcFct`, left-folded),
+    // mirroring `pretty_theory::lnterm_to_parser` and HS `prettyTerm`
+    // (Term/Term.hs:305): a prefix `App("add", …)` here reaches emitted
+    // bytes un-canonicalized via `subst_cond_formula` → `pretty_sapic_comb`
+    // (SAPIC `if` predicates), diverging from the oracle in both the
+    // rendered predicate and the derived rule/restriction names.  No
+    // corpus theory combines SAPIC with a user `[AC]` symbol, so this
+    // shape is only pinned here.
+    #[test]
+    fn user_ac_terms_lower_infix() {
+        use tamarin_term::function_symbols::{AcFctSym, Constructability, NdcState, Privacy};
+        use tamarin_term::term::f_app_acfct;
+
+        let add = AcFctSym::new(
+            b"add".to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::NotNdc,
+        );
+        let op = tamarin_parser::ast::BinOp::AcFct(tamarin_term::intern::intern_str("add"));
+        let leaf = |n: &str| tamarin_term::term::Term::Lit(Lit::Var(lv(n, 0)));
+
+        for arity in [2usize, 3] {
+            let t = f_app_acfct(add, (0..arity).map(|i| leaf(&format!("x{i}"))).collect());
+            // Fold the expectation over the smart constructor's own
+            // (flattened, sorted) arg list so the test pins only the
+            // infix left-fold, not the AC argument order.
+            let tamarin_term::term::Term::App(_, args) = &t else {
+                panic!("f_app_acfct built a non-App term");
+            };
+            let mut it = args.iter().map(ln_term_to_parser);
+            let first = it.next().unwrap();
+            let expected = it.fold(first, |acc, a| {
+                tamarin_parser::ast::Term::BinOp(op, Box::new(acc), Box::new(a))
+            });
+            assert_eq!(ln_term_to_parser(&t), expected);
+        }
     }
 }

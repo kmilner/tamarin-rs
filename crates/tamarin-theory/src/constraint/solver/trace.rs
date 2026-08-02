@@ -592,6 +592,9 @@ fn write_lnterm_canon(
                 tamarin_term::lterm::NameTag::Fresh => format!("~'{}'", nm),
                 tamarin_term::lterm::NameTag::Nat => format!("%{}", nm),
                 tamarin_term::lterm::NameTag::Node => format!("#'{}'", nm),
+                // `show (Name AbbrevName n) = show n` (LTerm.hs:240) — the
+                // bare id.
+                tamarin_term::lterm::NameTag::Abbrev => nm.to_string(),
             }
         }
         Term::App(sym, args) => {

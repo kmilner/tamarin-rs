@@ -13,6 +13,9 @@
 //! - AC operators render in infix form: `Mult` => `*`, `Xor` => `⊕`
 //!   (the single character U+2295, matching the Haskell side's `\8853`),
 //!   `Union` => `++`, `NatPlus` => `%+`.
+//! - A user-defined AC symbol `f` renders infix with its name surrounded
+//!   by spaces (`(a f b)`), or as the bare name when applied to no
+//!   arguments.
 //! - `pair`-trees flatten into `<a,b,c>` notation.
 //! - `exp(a,b)` renders as `a^b`, `diff(a,b)` stays as `diff(a, b)`.
 //! - The `%1` constant (`tone`) prints as `%1`.
@@ -65,13 +68,22 @@ impl PrettyTerm for Term<Lit<Name, LVar>> {
 fn pp_term_lnterm(t: &Term<Lit<Name, LVar>>, out: &mut String) {
     match t {
         Term::Lit(l) => pp_lit_lnterm(l, out),
+        // Haskell `prettyTerm` matches the user-defined AC symbols BEFORE the
+        // builtin AC operators, and prints a nullary application as the bare
+        // symbol name (`FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)`).
+        // Non-nullary ones fall through to the generic AC arm below, whose
+        // separator `ac_op_symbol` renders as `" f "`.
+        Term::App(FunSym::Ac(AcSym::AcFct(sym)), ts) if ts.is_empty() => {
+            out.push_str(&String::from_utf8_lossy(sym.name));
+        }
         Term::App(FunSym::Ac(o), ts) => {
-            // Haskell: `ppTerms (ppACOp o) 1 "(" ")" ts` — parenthesised
+            // Haskell: `ppTerms <op> 1 "(" ")" ts` — parenthesised
             // infix list joined by the AC operator symbol.
+            let op = ac_op_symbol(*o);
             out.push('(');
             for (i, child) in ts.iter().enumerate() {
                 if i > 0 {
-                    out.push_str(ac_op_symbol(*o));
+                    out.push_str(op);
                 }
                 pp_term_lnterm(child, out);
             }
@@ -146,10 +158,15 @@ fn pp_term_lnterm(t: &Term<Lit<Name, LVar>>, out: &mut String) {
     }
 }
 
+/// HS `split` (Term.hs:323-324): `split (viewTerm2 -> FPair t1 t2) = t1 :
+/// split t2; split t = [t]`.  ONLY the RIGHT spine of a pair is flattened —
+/// `pair(t1, t2)` yields `t1` then recurses into `t2`.  A LEFT-nested pair
+/// such as `pair(pair(a,b), c)` therefore renders as `<<a, b>, c>` (the left
+/// child is printed by the recursive term printer, NOT flattened here).
 fn collect_pair_tail<'a>(t: &'a Term<Lit<Name, LVar>>, out: &mut Vec<&'a Term<Lit<Name, LVar>>>) {
     if let Term::App(FunSym::NoEq(sym), args) = t {
         if *sym == pair_sym() && args.len() == 2 {
-            collect_pair_tail(&args[0], out);
+            out.push(&args[0]);
             collect_pair_tail(&args[1], out);
             return;
         }
@@ -178,28 +195,27 @@ pub fn pp_lvar(v: &LVar, out: &mut String) {
     }
 }
 
-/// Mirror of Haskell `instance Show Name` (LTerm.hs:231-235).
+/// Mirror of Haskell `instance Show Name` (LTerm.hs:235-240).
 pub fn pp_name(n: &Name, out: &mut String) {
-    let body = format!("'{}'", n.id.0);
     match n.tag {
-        NameTag::Fresh => {
-            out.push('~');
-            out.push_str(&body);
-        }
-        NameTag::Pub => out.push_str(&body),
-        NameTag::Node => {
-            out.push('#');
-            out.push_str(&body);
-        }
-        NameTag::Nat => {
-            out.push('%');
-            out.push_str(&body);
+        NameTag::Fresh => out.push('~'),
+        NameTag::Pub => {}
+        NameTag::Node => out.push('#'),
+        NameTag::Nat => out.push('%'),
+        // `show (Name AbbrevName n) = show n` (LTerm.hs:240) — the bare name
+        // id, with neither a sigil nor the quotes the other four tags carry.
+        NameTag::Abbrev => {
+            out.push_str(n.id.0);
+            return;
         }
     }
+    out.push('\'');
+    out.push_str(n.id.0);
+    out.push('\'');
 }
 
 pub fn ac_op_symbol(op: AcSym) -> &'static str {
-    // Haskell `ppACOp` (Term.hs:283-286).
+    // Haskell `prettyTerm`'s AC arms (Term.hs).
     //   Mult => "*"; Xor => "⊕"; Union => "++"; NatPlus => "%+"
     // We use the unicode char for Xor since the rest of the UI
     // already passes UTF-8 around and the JS frontend renders it.
@@ -208,7 +224,17 @@ pub fn ac_op_symbol(op: AcSym) -> &'static str {
         AcSym::Xor => "\u{2295}",
         AcSym::Union => "++",
         AcSym::NatPlus => "%+",
+        AcSym::AcFct(sym) => ac_fct_op_symbol(&String::from_utf8_lossy(sym.name)),
     }
+}
+
+/// The infix separator of a user-defined AC symbol: Haskell
+/// `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts` (Term.hs:305) surrounds
+/// the symbol name by spaces, so the spaces are part of the separator (unlike
+/// the builtin ops).  Interned so it can be handed out as `&'static str` like
+/// the fixed ones; the pool is bounded by the theory's user-defined AC names.
+pub fn ac_fct_op_symbol(name: &str) -> &'static str {
+    crate::intern::intern_str(&format!(" {} ", name))
 }
 
 // ---------------------------------------------------------------------
@@ -318,6 +344,19 @@ mod tests {
         let inner = f_app_no_eq(pair_sym(), vec![b, c]);
         let outer = f_app_no_eq(pair_sym(), vec![a, inner]);
         assert_eq!(pretty_lnterm(&outer), "<a, b, c>");
+    }
+
+    #[test]
+    fn pretty_pair_left_nested_not_flattened() {
+        // HS `split` unrolls only the RIGHT spine: pair(pair(a,b), c)
+        // renders `<<a, b>, c>`, keeping the render round-trippable
+        // (`<a, b, c>` would re-parse as the right-nested pair(a, pair(b,c))).
+        let a = var("a", LSort::Msg);
+        let b = var("b", LSort::Msg);
+        let c = var("c", LSort::Msg);
+        let inner = f_app_no_eq(pair_sym(), vec![a, b]);
+        let outer = f_app_no_eq(pair_sym(), vec![inner, c]);
+        assert_eq!(pretty_lnterm(&outer), "<<a, b>, c>");
     }
 
     #[test]

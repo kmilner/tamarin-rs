@@ -9,11 +9,11 @@
 //! Port of `Term.Term.Raw` from `lib/term/src/Term/Term/Raw.hs`.
 //!
 //! The core term datatype with its smart constructors and view types.
-//! AC operators (Mult, Xor, Union, NatPlus) are normalised by [`f_app`]:
-//! arguments are flattened across nested same-symbol applications and
-//! sorted into a canonical order.
+//! AC operators (Mult, Xor, Union, NatPlus, and user-defined AC symbols)
+//! are normalised by [`f_app`]: arguments are flattened across nested
+//! same-symbol applications and sorted into a canonical order.
 
-use crate::function_symbols::{AcSym, CSym, FunSym, NoEqSym};
+use crate::function_symbols::{AcFctSym, AcSym, CSym, FunSym, NoEqSym};
 use std::sync::Arc;
 
 /// Diff annotation — whether the left or right interpretation of `diff` is
@@ -233,6 +233,12 @@ pub fn f_app_c<A: Ord + Clone>(sym: CSym, mut args: Vec<Term<A>>) -> Term<A> {
 /// Free (NoEq) smart constructor.
 pub fn f_app_no_eq<A>(sym: NoEqSym, args: Vec<Term<A>>) -> Term<A> {
     Term::App(FunSym::NoEq(sym), args.into())
+}
+
+/// Smart constructor for user-defined AC terms (HS `fAppACfct`,
+/// Term/Term/Raw.hs): the same AC normalisation as any other AC operator.
+pub fn f_app_acfct<A: Ord + Clone>(sym: AcFctSym, args: Vec<Term<A>>) -> Term<A> {
+    f_app_ac(AcSym::AcFct(sym), args)
 }
 
 /// `LIST` smart constructor.

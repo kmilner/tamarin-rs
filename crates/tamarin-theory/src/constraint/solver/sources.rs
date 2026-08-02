@@ -493,6 +493,15 @@ impl Source {
         self.cases_cell.lock().unwrap().as_ref().map_or(0, Vec::len)
     }
 
+    /// The `n`-th materialised case's system — `cases_or_empty()[n].1`
+    /// WITHOUT deep-cloning the cases either side of it.  Returns `None`
+    /// when the cell hasn't been forced yet or `n` is past the end.
+    pub fn case_system_at(&self, n: usize) -> Option<System> {
+        let g = self.cases_cell.lock().unwrap();
+        let (_, sys) = g.as_ref()?.get(n)?;
+        Some(sys.clone())
+    }
+
     /// Drain the materialised cases out of the cell, leaving it as
     /// `None`.  Used by saturate internals that re-build the cases
     /// list per iteration.  External-facing form (joined-String).
@@ -5714,6 +5723,11 @@ fn var_occurrences_nodes(
                 AcSym::Mult => Cow::Borrowed("AC Mult"),
                 AcSym::Xor => Cow::Borrowed("AC Xor"),
                 AcSym::NatPlus => Cow::Borrowed("AC NatPlus"),
+                // Derived HS `Show` of a user-defined AC symbol.
+                AcSym::AcFct(s) => Cow::Owned(format!(
+                    "AC (ACfct {})",
+                    tamarin_term::subsumption::show_acfct_sym(s)
+                )),
             },
             FunSym::C(c) => match c {
                 CSym::EMap => Cow::Borrowed("C EMap"),

@@ -1,15 +1,17 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   addap, beschmi, rkunnema, meiersi, jdreier, PhilipLukertWork,
-//   racoucho1u, charlie-j, rsasse, and other minor contributors (see
+//   addap, beschmi, rkunnema, jdreier, meiersi, PhilipLukertWork,
+//   charlie-j, racoucho1u, rsasse, and other minor contributors (see
 //   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Term.hs, lib/term/src/Term/Term/Raw.hs,
 //   lib/theory/src/Rule.hs,
+//   lib/theory/src/Theory/Constraint/System/Dot.hs,
 //   lib/theory/src/Theory/Constraint/System/Graph/Abbreviation.hs,
 //   lib/theory/src/Theory/Model/Rule.hs,
 //   lib/theory/src/Theory/Sapic/Term.hs,
 //   lib/theory/src/Theory/Text/Parser/Rule.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs
+//   lib/theory/src/Theory/Text/Parser/Term.hs,
+//   lib/utils/src/Text/Dot.hs
 
 //! Port of `Theory.Constraint.System.Graph.Abbreviation`.
 //!
@@ -24,7 +26,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use tamarin_term::function_symbols::{
-    diff_sym, exp_sym, nat_one_sym, pair_sym, CSym, FunSym, EMAP_SYM_STRING,
+    diff_sym, exp_sym, nat_one_sym, pair_sym, AcSym, CSym, FunSym, EMAP_SYM_STRING,
 };
 use tamarin_term::lterm::{LNTerm, LSort, LVar};
 use tamarin_term::pretty::{ac_op_symbol, pretty_lnterm};
@@ -281,8 +283,8 @@ fn dump_rule_info(buf: &mut String, info: &RuleInfo<ProtoRuleACInstInfo, IntrRul
             // `ConstrRule "<name>"` / `DestrRule "<name>" _ _ _`: the byte-string
             // name.  Remaining intruder variants carry no user string.
             let name: Option<&[u8]> = match i {
-                IntrRuleACInfo::ConstrRule(n) => Some(n),
-                IntrRuleACInfo::DestrRule(n, _, _, _) => Some(n),
+                IntrRuleACInfo::ConstrRule(n, _) => Some(n),
+                IntrRuleACInfo::DestrRule(n, _, _, _, _) => Some(n),
                 _ => None,
             };
             if let Some(n) = name {
@@ -411,6 +413,11 @@ fn rendered_term_len(t: &LNTerm) -> usize {
 fn lnterm_doc(t: &LNTerm) -> Doc {
     match t {
         Term::Lit(_) => Doc::text(pretty_lnterm(t)),
+        // #883 prettyTerm: a nullary user-AC application prints as the bare
+        // symbol name (n-ary ones go through the generic AC arm below).
+        Term::App(FunSym::Ac(AcSym::AcFct(s)), ts) if ts.is_empty() => {
+            Doc::text(String::from_utf8_lossy(s.name))
+        }
         Term::App(FunSym::Ac(o), ts) => {
             pp_terms(ac_op_symbol(*o), 1, "(", ")", ts.iter().collect())
         }
@@ -607,6 +614,90 @@ pub fn compute_abbreviations(repr: &GraphRepr, opts: &AbbreviationOptions) -> Ab
     out
 }
 
+// ---------------------------------------------------------------------
+// Ordering for the legend / JSON export
+// ---------------------------------------------------------------------
+
+/// Mirror Haskell `topoSortAbbrevs` (Dot.hs:421-436 and Dot.hs:484-499).
+///
+/// `entries` is the descending-name-sorted list of `(name, expansion)`.
+/// We build a graph with an edge `v -> u` whenever `entries[v].0` is a
+/// proper subterm of `entries[u].1` (i.e. abbreviation `v` is used inside
+/// abbreviation `u`), then return vertices in topological order so that
+/// used-inside abbreviations come first.
+///
+/// This reproduces `Data.Graph.graphFromEdges` + `Data.Graph.topSort`:
+/// keys are `[0..]` in the given order (already sorted), so vertex `i`
+/// corresponds to `entries[i]`; `topSort = reverse . postorder` of the DFS
+/// forest taken over vertices `0..n-1` in order.
+fn topo_sort_abbrevs(entries: &[(&LNTerm, &LNTerm)]) -> Vec<usize> {
+    use tamarin_term::term::is_proper_subterm;
+    let n = entries.len();
+    // Adjacency: successors of v in ascending vertex order (findLegendEdges
+    // iterates keyedElems in order, so target keys/vertices are ascending).
+    let adj: Vec<Vec<usize>> = (0..n)
+        .map(|v| {
+            (0..n)
+                .filter(|&u| is_proper_subterm(entries[v].0, entries[u].1))
+                .collect()
+        })
+        .collect();
+    // DFS forest over vertices 0..n-1, collecting postorder.
+    let mut visited = vec![false; n];
+    let mut postorder: Vec<usize> = Vec::with_capacity(n);
+    // Iterative DFS that emits a vertex on exit (postorder).
+    for start in 0..n {
+        if visited[start] {
+            continue;
+        }
+        // Stack of (vertex, next-successor-index).
+        let mut stack: Vec<(usize, usize)> = Vec::new();
+        visited[start] = true;
+        stack.push((start, 0));
+        while let Some(&(v, idx)) = stack.last() {
+            if idx < adj[v].len() {
+                let w = adj[v][idx];
+                stack.last_mut().unwrap().1 += 1;
+                if !visited[w] {
+                    visited[w] = true;
+                    stack.push((w, 0));
+                }
+            } else {
+                postorder.push(v);
+                stack.pop();
+            }
+        }
+    }
+    // topSort = reverse postorder.
+    postorder.reverse();
+    postorder
+}
+
+/// Port of `orderAbbreviationsForJSON` (Dot.hs:417-436).
+///
+/// `M.toList abbrevs` is the ascending-`LNTerm`-key iteration order of the
+/// [`Abbreviations`] `BTreeMap`; `sortOn (Down . render . prettyLNTerm . fst
+/// . snd)` sorts it descending by the RENDERED ABBREVIATION NAME with a
+/// stable sort (Rust `sort_by_key` is stable, matching `sortOn`), and
+/// [`topo_sort_abbrevs`] then reorders so an abbreviation appearing inside
+/// another's recursive expansion comes first.
+///
+/// Each entry is returned as `(term, abbrev, expansion)`.
+pub(crate) fn order_abbreviations_for_json(
+    abbrevs: &Abbreviations,
+) -> Vec<(&LNTerm, &LNTerm, &LNTerm)> {
+    let mut entries: Vec<(&LNTerm, &LNTerm, &LNTerm)> = abbrevs
+        .iter()
+        .map(|(term, (abbrev, expansion))| (term, abbrev, expansion))
+        .collect();
+    entries.sort_by_key(|e| std::cmp::Reverse(pretty_lnterm(e.1)));
+    let keyed: Vec<(&LNTerm, &LNTerm)> = entries.iter().map(|e| (e.1, e.2)).collect();
+    topo_sort_abbrevs(&keyed)
+        .into_iter()
+        .map(|i| entries[i])
+        .collect()
+}
+
 /// Apply replacement to PROPER subterms only -- not to the top-level
 /// term itself.  Mirror of `replaceProperSubterm`.
 fn apply_proper_subterms(lookup: &dyn Fn(&LNTerm) -> Option<LNTerm>, t: &LNTerm) -> LNTerm {
@@ -686,6 +777,38 @@ mod tests {
         let name = var("SE1", LSort::Msg);
         abbrevs.insert(t.clone(), (name.clone(), t.clone()));
         assert_eq!(lookup_abbreviation(&abbrevs, &t), Some(&name));
+    }
+
+    // `orderAbbreviationsForJSON` sorts DESCENDING by rendered abbreviation
+    // name and then topologically, so an abbreviation used inside another's
+    // recursive expansion is listed first: the name sort alone would put
+    // `SE2` before `SE1`, and the topological pass moves `SE1` ahead of it.
+    #[test]
+    fn json_abbrev_order_puts_nested_abbreviation_first() {
+        let mut abbrevs = Abbreviations::new();
+        // PK1 = pk(a)
+        let pk = f_app_no_eq(senc_sym(), vec![var("a", LSort::Msg), var("b", LSort::Msg)]);
+        abbrevs.insert(pk.clone(), (var("PK1", LSort::Msg), pk));
+        // SE1 = senc(x, y)
+        let se1 = f_app_no_eq(senc_sym(), vec![var("x", LSort::Msg), var("y", LSort::Msg)]);
+        abbrevs.insert(se1.clone(), (var("SE1", LSort::Msg), se1.clone()));
+        // SE2 = senc(SE1, k) — its expansion mentions SE1.
+        let se2 = f_app_no_eq(senc_sym(), vec![se1, var("k", LSort::Msg)]);
+        abbrevs.insert(
+            se2,
+            (
+                var("SE2", LSort::Msg),
+                f_app_no_eq(
+                    senc_sym(),
+                    vec![var("SE1", LSort::Msg), var("k", LSort::Msg)],
+                ),
+            ),
+        );
+        let names: Vec<String> = order_abbreviations_for_json(&abbrevs)
+            .into_iter()
+            .map(|(_, abbrev, _)| pretty_lnterm(abbrev))
+            .collect();
+        assert_eq!(names, vec!["PK1", "SE1", "SE2"]);
     }
 
     // A rule named `Se1` tokenises (via derived `show repr`) to `SE1`, exactly

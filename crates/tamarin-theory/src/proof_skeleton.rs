@@ -238,6 +238,7 @@ fn contradiction_label(
         None => "closed".to_string(),
         Some(K::Cyclic) => "cyclic".to_string(),
         Some(K::ForbiddenChain) => "forbidden chain".to_string(),
+        Some(K::ForbiddenACConstrChain) => "forbidden AC constructor chain".to_string(),
         Some(K::ForbiddenKD) => "forbidden KD-fact".to_string(),
         Some(K::ImpossibleChain) => "impossible chain".to_string(),
         Some(K::NodeAfterLast(..)) => "node after last".to_string(),

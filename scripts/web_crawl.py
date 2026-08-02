@@ -10,11 +10,13 @@ Deterministic click-through crawl:
      site map (every `main/*` link — proof nodes, methods, add/edit/delete,
      cases, …)
   5. GET every site-map URL; for each `main/proof/...` node also GET the
-     `interactive-graph-def/...` (DOT) and `intdot/...` (HTML shell) variants
+     `interactive-graph-def/...` (DOT), `json/...` (JSON graph) and
+     `intdot/...` (HTML shell) variants
   6. also exercise next/prev on the lemma roots
 
 Writes a JSON manifest {norm_url: {kind, status, body}} keyed by
-idx-normalized URL, for web_diff.py to compare across HS and RS.
+idx-normalized URL, for web_diff.py to compare across HS and RS, stamped with
+the `PLAN_VERSION` of the crawl plan that produced it.
 
 Pure stdlib (urllib, json, re).  Usage:
   web_crawl.py BASE_URL OUT_MANIFEST.json [--max-nodes N]
@@ -37,6 +39,19 @@ from web_normalize import norm_url_key  # noqa: E402
 # so a genuinely-hung page is bounded regardless.
 TIMEOUT = int(os.environ.get("WEB_CRAWL_TIMEOUT", "120"))
 MAX_NODES_DEFAULT = int(os.environ.get("WEB_CRAWL_MAX_NODES", "400"))
+
+# Version of the URL PLAN below, stamped into every manifest under
+# PLAN_VERSION_KEY (a top-level sibling of "manifest", never a URL row).
+# v2 = statics + source cases + per-lemma roots/next/prev + autoprove + sitemap ×4 variants.
+# web_parity.sh's HS manifest cache is keyed on sha256(theory) alone, which
+# cannot see a plan that has GROWN — an old manifest's unvisited URL families
+# read as MISSING_HS rows rather than as a cache miss.  Bump this whenever the
+# plan adds URLs; web_parity.sh then re-crawls each cached file on next use.
+# Dropping URLs from the plan needs no bump: a cached manifest is then a
+# superset, and web_diff.py drops the unpaired rows (the graph-route 0/0
+# probes) before pairing.
+PLAN_VERSION = 2
+PLAN_VERSION_KEY = "__plan_version__"
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -142,15 +157,31 @@ def main():
 
     # 2. static routes (overview/help already recorded in step 1)
     for r in ["source", "message", "main/rules", "main/help",
-              "main/message", "main/tactic",
-              "main/cases/raw/0/0", "main/cases/refined/0/0"]:
+              "main/message", "main/tactic"]:
         record(f"/thy/trace/{idx}/{r}")
+
+    # Source cases, on every route that renders them: the sources pane, the
+    # JSON graph and the two dot routes.  `0/0` is the index the left-pane nav
+    # link carries; the sources pane renders it (both backends index off the
+    # front of the case list there) so it stays crawled on `main`.  On the
+    # three graph routes the backends deliberately disagree about it —
+    # upstream's unchecked `!!` raises a 500 exception page, the port answers
+    # Not Found (see the divergence notes in tamarin-server
+    # handlers/theory.rs) — so it is not probed there; the port's behaviour is
+    # pinned by the server's own route tests.  `1/1` is the first real case,
+    # which every route draws.
+    for route in ["main", "json", "graph", "interactive-graph-def"]:
+        cases = ["0/0", "1/1"] if route == "main" else ["1/1"]
+        for kind in ["raw", "refined"]:
+            for case in cases:
+                record(f"/thy/trace/{idx}/{route}/cases/{kind}/{case}")
 
     # per-lemma root main + lemma views + graph at root
     for L in lemmas:
         record(f"/thy/trace/{idx}/main/lemma/{L}")
         record(f"/thy/trace/{idx}/main/proof/{L}")
         record(f"/thy/trace/{idx}/interactive-graph-def/proof/{L}")
+        record(f"/thy/trace/{idx}/json/proof/{L}")
         record(f"/thy/trace/{idx}/intdot/proof/{L}")
         # next/prev on the lemma root
         record(f"/thy/trace/{idx}/next/normal/proof/{L}")
@@ -200,12 +231,25 @@ def main():
         record(p)
         gd = p.replace("/main/proof/", "/interactive-graph-def/proof/")
         record(gd)
+        gj = p.replace("/main/proof/", "/json/proof/")
+        record(gj)
         it = p.replace("/main/proof/", "/intdot/proof/")
         record(it)
 
+    # A dead or dying server (OOM-guard kill, per-request heap exhaustion)
+    # yields REQUEST_ERROR bodies; a manifest containing them would be cached
+    # as valid and poison every later comparison against this theory.
+    errored = [u for u, e in manifest.items()
+               if e["body"].startswith("REQUEST_ERROR")]
+    if errored:
+        print(f"ERROR: {len(errored)} REQUEST_ERROR pages (first: {errored[0]}); "
+              f"refusing to write a poisoned manifest", file=sys.stderr)
+        sys.exit(3)
+
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump({"base": base, "lemmas": lemmas, "log": log,
-                   "capped": capped, "manifest": manifest}, f)
+                   "capped": capped, PLAN_VERSION_KEY: PLAN_VERSION,
+                   "manifest": manifest}, f)
     print(f"crawled {len(manifest)} urls, {len(proof_nodes)} proof nodes"
           f"{' (CAPPED)' if capped else ''}; lemmas={len(lemmas)}", file=sys.stderr)
 

@@ -16,7 +16,7 @@
 
 use std::collections::BTreeMap;
 
-use tamarin_term::function_symbols::NoEqSym;
+use tamarin_term::function_symbols::{NoEqSym, UserDefinedSym};
 use tamarin_term::lterm::{LSort, LVar, Name};
 use tamarin_term::vterm::{Lit, VTerm};
 use tamarin_utils::fresh::PreciseFreshState;
@@ -399,9 +399,11 @@ pub fn rename_unique(p: &PlainProcess) -> PlainProcess {
 // =============================================================================
 
 /// `TypingEnvironment` (Typing.hs:56-60).  We only need `vars` and `funs`.
+/// `funs` is keyed by `UserDefinedSym`, so a user-defined AC symbol has a
+/// typing entry alongside the free ones.
 pub struct TypingEnvironment {
     pub vars: BTreeMap<LVar, SapicType>,
-    pub funs: BTreeMap<NoEqSym, (Vec<SapicType>, SapicType)>,
+    pub funs: BTreeMap<UserDefinedSym, (Vec<SapicType>, SapicType)>,
 }
 
 /// `smallerType` (Typing.hs:32-35).
@@ -493,10 +495,13 @@ fn type_with(
                 // tuple-component variables untyped.
                 FunSym::NoEq(fs) if !is_special_viewterm2_sym(fs) => {
                     let n = fs.arity;
+                    // HS keys the typing environment by `NoEqUser fs`
+                    // (Typing.hs:63-124, see line 83).
+                    let key = UserDefinedSym::NoEqUser(*fs);
                     // First pass: refine output type from target.
-                    let (intypes1, outtype1) = get_fun(env, n, fs);
+                    let (intypes1, outtype1) = get_fun(env, n, &key);
                     let mintype1 = sqcap(&outtype1, tt)?;
-                    insert_fun(env, fs, (intypes1.clone(), mintype1))?;
+                    insert_fun(env, &key, (intypes1.clone(), mintype1))?;
                     // Type args (discard results, just to learn input types).
                     let ts: Vec<SapicTerm> = args.to_vec();
                     let mut ptypes: Vec<SapicType> = Vec::with_capacity(ts.len());
@@ -505,9 +510,9 @@ fn type_with(
                         ptypes.push(ty);
                     }
                     // Recompute output type, having learnt arg types.
-                    let (intypes2, outtype2) = get_fun(env, n, fs);
+                    let (intypes2, outtype2) = get_fun(env, n, &key);
                     let mintype2 = sqcap(&outtype2, tt)?;
-                    insert_fun(env, fs, (ptypes, mintype2))?;
+                    insert_fun(env, &key, (ptypes, mintype2))?;
                     // Type args for real.
                     let mut ts_new: Vec<SapicTerm> = Vec::with_capacity(ts.len());
                     let mut ptypes2: Vec<SapicType> = Vec::with_capacity(ts.len());
@@ -516,7 +521,7 @@ fn type_with(
                         ts_new.push(a_new);
                         ptypes2.push(ty);
                     }
-                    insert_fun(env, fs, (ptypes2, outtype2.clone()))?;
+                    insert_fun(env, &key, (ptypes2, outtype2.clone()))?;
                     Ok((tamarin_term::term::f_app(*sym, ts_new), outtype2))
                 }
                 // list / AC / C symbol: polymorphic, type args with Nothing.
@@ -535,7 +540,7 @@ fn type_with(
     }
 }
 
-fn get_fun(env: &TypingEnvironment, n: usize, fs: &NoEqSym) -> (Vec<SapicType>, SapicType) {
+fn get_fun(env: &TypingEnvironment, n: usize, fs: &UserDefinedSym) -> (Vec<SapicType>, SapicType) {
     env.funs
         .get(fs)
         .cloned()
@@ -544,7 +549,7 @@ fn get_fun(env: &TypingEnvironment, n: usize, fs: &NoEqSym) -> (Vec<SapicType>, 
 
 fn insert_fun(
     env: &mut TypingEnvironment,
-    fs: &NoEqSym,
+    fs: &UserDefinedSym,
     new_ty: (Vec<SapicType>, SapicType),
 ) -> Result<(), String> {
     match env.funs.get(fs).cloned() {
@@ -743,35 +748,57 @@ fn type_event_fact(
 // =============================================================================
 
 /// A user `functions:` typing declaration — the function name, its declared
-/// argument types and return type (HS `SapicFunSym = (NoEqSym, [SapicType],
-/// SapicType)`, the payload of `theoryFunctionTypingInfos`).
+/// argument types and return type (HS `SapicFunSym = (UserDefinedSym,
+/// [SapicType], SapicType)`, the payload of `theoryFunctionTypingInfos`).
 pub type UserFunTyping = (String, Vec<SapicType>, SapicType);
 
-/// `initTEFromSig` (Typing.hs:185-200): seed every signature function symbol
-/// with its `defaultFunctionType`, THEN overlay the user-declared function
-/// typings (`withUserDefinedFuns`, Typing.hs:191-192).  The user typings carry
-/// the declared argument / return types (e.g. `f(bitstring):bitstring`) that
-/// `typeWith` propagates onto the bound variables.
+/// `initTEFromSig` (Typing.hs:183-201): seed every signature function symbol —
+/// the free ones (`stFunSyms`) with `defaultFunctionType` of their arity and the
+/// user-defined AC ones (`stACFunSyms`) with `defaultFunctionType 2` — THEN
+/// overlay the user-declared function typings (`withUserDefinedFuns`,
+/// Typing.hs:195).  The user typings carry the declared argument / return types
+/// (e.g. `f(bitstring):bitstring`) that `typeWith` propagates onto the bound
+/// variables.
 fn init_te_from_sig(
     maude_sig: &tamarin_term::maude_sig::MaudeSig,
     user_fun_typings: &[UserFunTyping],
 ) -> TypingEnvironment {
-    let mut funs: BTreeMap<NoEqSym, (Vec<SapicType>, SapicType)> = BTreeMap::new();
+    let mut funs: BTreeMap<UserDefinedSym, (Vec<SapicType>, SapicType)> = BTreeMap::new();
     for fs in &maude_sig.st_fun_syms {
-        funs.insert(*fs, default_function_type(fs.arity));
+        funs.insert(
+            UserDefinedSym::NoEqUser(*fs),
+            default_function_type(fs.arity),
+        );
+    }
+    // AC symbols are binary, so their default type is `defaultFunctionType 2`.
+    for fs in &maude_sig.st_ac_fun_syms {
+        funs.insert(UserDefinedSym::AcFctUser(*fs), default_function_type(2));
     }
     // `withUserDefinedFuns`: overlay declared types onto the matching signature
     // symbol (matched by name + arity, so the BTreeMap key — the actual term
     // symbol — is preserved exactly, keeping the privacy/constructability flags
-    // that the process terms carry).
-    for (name, arg_types, out_type) in user_fun_typings {
+    // that the process terms carry).  A declaration matches a free symbol first
+    // and an AC symbol (always binary) otherwise.
+    // HS foldr: the first declaration of a name wins.
+    for (name, arg_types, out_type) in user_fun_typings.iter().rev() {
         let arity = arg_types.len();
-        if let Some(key) = maude_sig
+        let key = maude_sig
             .st_fun_syms
             .iter()
             .find(|fs| fs.name == name.as_bytes() && fs.arity == arity)
-        {
-            funs.insert(*key, (arg_types.clone(), out_type.clone()));
+            .map(|fs| UserDefinedSym::NoEqUser(*fs))
+            .or_else(|| {
+                if arity != 2 {
+                    return None;
+                }
+                maude_sig
+                    .st_ac_fun_syms
+                    .iter()
+                    .find(|fs| fs.name == name.as_bytes())
+                    .map(|fs| UserDefinedSym::AcFctUser(*fs))
+            });
+        if let Some(key) = key {
+            funs.insert(key, (arg_types.clone(), out_type.clone()));
         }
     }
     TypingEnvironment {

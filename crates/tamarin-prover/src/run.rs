@@ -1,8 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, meiersi, jdreier, arcz, rsasse, beschmi, rkunnema,
+//   kevinmorio, jdreier, meiersi, arcz, rsasse, beschmi, rkunnema,
 //   gilcu3, Nynko, felixlinker, addap, Hong-Thai, yavivanov,
-//   racoucho1u, ValentinYuri, BTom-GH, PhilipLukertWork, sans-sucre,
-//   Mathias-AURAND, Azurios-git, and other minor contributors (see
+//   racoucho1u, PhilipLukertWork, ValentinYuri, BTom-GH, Azurios-git,
+//   sans-sucre, Mathias-AURAND, and other minor contributors (see
 //   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/ClosedTheory.hs, lib/theory/src/Items/RuleItem.hs,
@@ -276,7 +276,7 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
     //     applies `remove_renamings` to drop redundant identity-variants.
     //   - BP: `bpIntruderRules False` (runtime).  Like HS
     //     (Intruder.hs:43-63, see line 50), we start a SECOND Maude handle on
-    //     `bp_maude_sig()` and generate the 75 BP rules at runtime via
+    //     `bp_maude_sig()` and generate the 74 BP rules at runtime via
     //     `bp_intruder_rules(false, ..)`.  This tracks the CURRENT Maude
     //     rather than the stale cached `data/intruder_variants_bp.spthy`
     //     (which production proving still parses via
@@ -773,6 +773,11 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // Elaborate (mainly to get the protocol-specific MaudeSig).
         let mut elaborated = elaborate(&parsed)
             .map_err(|e| RunError(format!("elaboration error in {}: {}", in_file, e.message)))?;
+        // HS `addParamsOptions` `addNdcOption`: `--no-ndc` disables the
+        // no-deconstruction-chain check for this theory.
+        if args.no_ndc {
+            elaborated.options.deduction_chain_check = false;
+        }
         let maude_sig = elaborated.signature.maude_sig.clone();
 
         // HS `checkEquationsSubtermConvergence` (Wellformedness.hs:1222-1232)
@@ -1228,6 +1233,38 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             }
         }
 
+        // Once-per-theory NDC pass (HS `checkCloseIntrRule` inside
+        // `checkTranslatedTheory`, TheoryLoader.hs — BEFORE the
+        // derivation checks): assemble the intruder cache, run the
+        // no-deconstruction-chain check (unless `--no-ndc`), and join
+        // the verdicts into the printed signature (`joinNDCinSigWMaude`)
+        // so every later rendering — including the no-prove and
+        // `--precompute-only` paths — shows `[NDC]` on tagged symbols.
+        // The checked cache is a shared handle injected into every
+        // `ProofContext` built for this theory below (derivation-check
+        // probes, auto-sources scratch contexts, the prover session, the
+        // per-lemma fallback), which all reuse this one allocation —
+        // mirroring HS's `closeRuleCache` consuming `_thyCache` verbatim.
+        // The stderr markers are suppressed by `--quiet`, like the
+        // sibling `[Theory X]` markers routed through `marker`.
+        let ndc_cache: Option<tamarin_theory::constraint::solver::context::IntrRuleCache> =
+            file_maude.as_ref().map(|m| {
+                let checked = tamarin_theory::close_rule::check_close_intr_rule(
+                    m,
+                    (!args.quiet).then_some(theory_name.as_str()),
+                    elaborated.options.deduction_chain_check,
+                );
+                if !checked.ndc_funs.is_empty() {
+                    let mut sig = std::mem::take(&mut elaborated.signature.maude_sig);
+                    for f in &checked.ndc_funs {
+                        sig = sig
+                            .join_ndc_in_sig(*f, tamarin_term::function_symbols::NdcState::IsNdc);
+                    }
+                    elaborated.signature.maude_sig = sig;
+                }
+                checked.cache.into()
+            });
+
         // Dynamic Message Derivation Checks (mirrors HS
         // `checkVariableDeducability`, gated by `--derivcheck-timeout`,
         // default 5s).  Needs Maude, so we run it AFTER elaboration
@@ -1243,6 +1280,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     &parsed,
                     m,
                     deriv_timeout,
+                    ndc_cache.clone(),
                 );
                 wf_report.extend(extra);
             }
@@ -1295,6 +1333,29 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 }
             };
 
+        // `--auto-sources` (HS `closeTheoryWithMaude` autosources branch,
+        // Prover.hs:170-251, see line 171): when the raw sources contain
+        // partial deconstructions, annotate the rules with AUTO_* actions and
+        // add the `AUTO_typing` sources lemma.  HS applies this on EVERY
+        // theory close — the plain-load echo and the proving pipeline alike —
+        // so it runs before the load/prove branch below, mutating both
+        // `parsed` (for rendering) and `elaborated` (for lemma iteration and
+        // the proving session).  Auto-sources needs Maude (HS runs it in the
+        // `WithMaude` reader), so a missing handle is an error, same as the
+        // prove path's.
+        if auto_sources {
+            let m = file_maude
+                .clone()
+                .ok_or_else(|| RunError(format!("failed to start maude at {:?}", maude_path,)))?;
+            tamarin_theory::auto_sources::apply_auto_sources(
+                &mut parsed,
+                &mut elaborated,
+                m,
+                file_maude_pool.clone(),
+                ndc_cache.as_ref(),
+            );
+        }
+
         if args.precompute_only || (!prove_anything && !any_stored_proof) {
             push_skipped_results(&mut results, &elaborated);
         } else {
@@ -1341,19 +1402,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 oracle_name: args.oracle_name.clone(),
                 oracle_only: args.oracle_only,
             };
-            // `--auto-sources` (HS `closeTheoryWithMaude` autosources branch,
-            // Prover.hs:170-251, see line 171): when the raw sources contain partial
-            // deconstructions, annotate the rules with AUTO_* actions and add
-            // the `AUTO_typing` sources lemma — to the elaborated theory (so it
-            // renders + is iterated below) and the proving session alike.
-            if auto_sources {
-                tamarin_theory::auto_sources::apply_auto_sources(
-                    &mut parsed,
-                    &mut elaborated,
-                    maude.clone(),
-                    file_maude_pool.clone(),
-                );
-            }
             let session = tamarin_theory::prove::ProverSession::build_with_in_file_and_heuristic(
                 &parsed,
                 maude.clone(),
@@ -1361,6 +1409,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 in_file,
                 cli_heuristic.clone(),
                 cut,
+                ndc_cache.as_ref(),
             )
             .ok();
 
@@ -1410,7 +1459,8 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                         s, &lemma_name, budget),
                     (None, _) => tamarin_theory::prove::prove_lemma_with_pool_file_heuristic(
                         &parsed, &lemma_name, maude.clone(),
-                        file_maude_pool.clone(), budget, in_file, &cli_heuristic, cut),
+                        file_maude_pool.clone(), budget, in_file, &cli_heuristic, cut,
+                        ndc_cache.as_ref()),
                 };
                 let (verdict, proof_steps, proof_body) = match outcome {
                     Ok(root) => {

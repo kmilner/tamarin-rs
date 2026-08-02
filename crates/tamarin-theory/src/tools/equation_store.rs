@@ -552,6 +552,60 @@ impl EquationStore {
         self.split_size(id).is_some()
     }
 
+    /// `removePermutations` (EquationStore.hs, #883): inside the disjunction
+    /// `split_id`, drop substitutions that are equal to a kept one up to a
+    /// permutation of the images of `v1` and `v2` (modulo a renaming of msg
+    /// vars).  Used when solving a KU goal against an AC-constructor rule,
+    /// where the two premise variables are interchangeable.
+    pub fn remove_permutations(
+        mut self,
+        maude: &tamarin_term::maude_proc::MaudeHandle,
+        split_id: SplitId,
+        v1: &LVar,
+        v2: &LVar,
+    ) -> Result<Self, AddEqsError> {
+        // `filter (not . isPerm s)`, propagating a Maude failure.
+        fn drop_perms_of(
+            maude: &tamarin_term::maude_proc::MaudeHandle,
+            lhs: &PermLhs<'_>,
+            substs: Vec<LNSubstVFresh>,
+        ) -> Result<Vec<LNSubstVFresh>, AddEqsError> {
+            let mut out = Vec::with_capacity(substs.len());
+            for x in substs {
+                if !is_perm_subst(maude, lhs, &x)? {
+                    out.push(x);
+                }
+            }
+            Ok(out)
+        }
+        for disj in self.conj.iter_mut() {
+            if disj.split_id != split_id {
+                continue;
+            }
+            // HS walks `S.toList substs` (sorted) and rebuilds via
+            // `S.fromList`; mirror with an explicit sort on both ends.
+            let mut rest: Vec<LNSubstVFresh> = std::mem::take(&mut disj.substs);
+            rest.sort();
+            rest.dedup();
+            // `removePerm r (s:rest) = removePerm (s : filter (not . isPerm s) r)
+            //                                     (filter (not . isPerm s) rest)`
+            let mut kept: Vec<LNSubstVFresh> = Vec::new();
+            while !rest.is_empty() {
+                let s = rest.remove(0);
+                // Everything `isPerm s` derives from `s` alone is shared by
+                // both passes and by every candidate they test.
+                let lhs = PermLhs::new(v1, v2, &s);
+                kept = drop_perms_of(maude, &lhs, kept)?;
+                rest = drop_perms_of(maude, &lhs, rest)?;
+                kept.push(s);
+            }
+            kept.sort();
+            kept.dedup();
+            disj.substs = kept;
+        }
+        Ok(self)
+    }
+
     /// Perform a case-split on the given disjunction, returning one
     /// fresh `EquationStore` per case.
     ///
@@ -2946,6 +3000,230 @@ fn sort_compare(
     tamarin_term::lterm::sort_compare(a, b)
 }
 
+/// `isPerm` (inside `removePermutations`, EquationStore.hs): `s2` is a
+/// permutation of `s1` — either literally with the images of `v1`/`v2`
+/// swapped and every other binding shared, or equal up to a renaming of
+/// msg variables (with and without the swap).  Everything that depends on
+/// `s1` alone comes from `lhs`.
+fn is_perm_subst(
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    lhs: &PermLhs<'_>,
+    s2: &LNSubstVFresh,
+) -> Result<bool, AddEqsError> {
+    let (v1, v2, s1) = (lhs.v1, lhs.v2, lhs.s1);
+    if s1.len() != s2.len() {
+        return Ok(false);
+    }
+    // Swapped-images branch: every binding outside {v1,v2} shared, and
+    // the v1/v2 images exchanged.  HS binds the four images lazily behind
+    // `&&`, so `t12`/`t21` are demanded only once `t11 == t22` holds — and
+    // none of them are demanded when a binding is unshared.
+    let others_shared = s1
+        .iter()
+        .all(|(x, t)| x == v1 || x == v2 || s2.image_of(x).is_some_and(|u| u == t));
+    if others_shared {
+        let t11 = s1
+            .image_of(v1)
+            .unwrap_or_else(|| panic!("Missing image for v1: {:?} in subst1: {:?}", v1, s1));
+        let t22 = s2
+            .image_of(v2)
+            .unwrap_or_else(|| panic!("Missing image for v2: {:?} in subst2: {:?}", v2, s2));
+        if t11 == t22 {
+            let t12 = s1
+                .image_of(v2)
+                .unwrap_or_else(|| panic!("Missing image for v2: {:?} in subst1: {:?}", v2, s1));
+            let t21 = s2
+                .image_of(v1)
+                .unwrap_or_else(|| panic!("Missing image for v1: {:?} in subst2: {:?}", v1, s2));
+            if t12 == t21 {
+                return Ok(true);
+            }
+        }
+    }
+    let renamed2 = lhs.rename_images(s2);
+    Ok(
+        equal_subst_up_to_renaming(maude, &lhs.subst1_permuted, &renamed2)?
+            || equal_subst_up_to_renaming(maude, &lhs.subst1_fixed, &renamed2)?,
+    )
+}
+
+/// The `s1`-only half of `equalUpToRenaming` (inside `removePermutations`,
+/// EquationStore.hs): the two `filter (not . isPerm s)` passes of one
+/// `removePerm` step share it across every candidate they test.
+struct PermLhs<'a> {
+    v1: &'a LVar,
+    v2: &'a LVar,
+    s1: &'a LNSubstVFresh,
+    /// `subst1''`.
+    subst1_fixed: Vec<(LVar, LNTerm)>,
+    /// `subst1''` under `permute`.
+    subst1_permuted: Vec<(LVar, LNTerm)>,
+    /// `([v1,v2],subst1'')`, the avoidance context of the renaming.
+    avoid_ctx: LNTerm,
+}
+
+impl<'a> PermLhs<'a> {
+    /// Fix `s1`'s non-msg range variables, build the `permute`d variant, and
+    /// pack the avoidance context.
+    ///
+    /// HS's `substFixing` covers the ranges of BOTH substitutions at once;
+    /// splitting it per substitution leaves every image unchanged, because
+    /// the constant is a function of the variable alone and `apply_vterm`
+    /// consults bindings only for the variables a term contains.
+    fn new(v1: &'a LVar, v2: &'a LVar, s1: &'a LNSubstVFresh) -> Self {
+        use tamarin_term::subst::apply_vterm;
+        use tamarin_term::term::f_app_list;
+        use tamarin_term::vterm::var_term;
+
+        let fixing = subst_fixing(s1.range());
+        let subst1_fixed: Vec<(LVar, LNTerm)> = s1
+            .to_list()
+            .into_iter()
+            .map(|(v, t)| (v, apply_vterm(&fixing, t)))
+            .collect();
+
+        // `permute`: swap the v1/v2 DOMAIN keys.  `substFixing` rewrites
+        // images only, so applying it before the swap gives the same
+        // key-to-image association as HS's swap-then-fix order.
+        let subst1_permuted: Vec<(LVar, LNTerm)> =
+            LNSubstVFresh::from_list(subst1_fixed.iter().map(|(v, t)| {
+                let key = if v == v1 {
+                    *v2
+                } else if v == v2 {
+                    *v1
+                } else {
+                    *v
+                };
+                (key, t.clone())
+            }))
+            .to_list();
+
+        // `renameAvoidingIgnoring`'s avoidance context `([v1,v2],subst1'')`
+        // is built from the UNPERMUTED `s1`, which yields the same renaming
+        // as the permuted one: `avoid` reads only the largest variable index
+        // of the context, `permute` is a bijection on the domain keys that
+        // leaves the images untouched, and both `v1` and `v2` are in the
+        // context either way.
+        let avoid_ctx: LNTerm = f_app_list(
+            std::iter::once(var_term(*v1))
+                .chain(std::iter::once(var_term(*v2)))
+                .chain(subst1_fixed.iter().map(|(v, _)| var_term(*v)))
+                .chain(subst1_fixed.iter().map(|(_, t)| t.clone()))
+                .collect(),
+        );
+
+        PermLhs {
+            v1,
+            v2,
+            s1,
+            subst1_fixed,
+            subst1_permuted,
+            avoid_ctx,
+        }
+    }
+
+    /// `renameAvoidingIgnoring (map snd subst2''') ([v1,v2],subst1'')
+    ///  (map fst subst2''')` = `map snd subst2''`: fix `s2`'s non-msg range
+    /// variables, then rename its image terms — coherently, keeping the
+    /// domain keys — avoiding everything in `([v1,v2], subst1'')`.  Terms are
+    /// packed into an `fAppList` so one shift renames all images
+    /// consistently.
+    fn rename_images(&self, s2: &LNSubstVFresh) -> Vec<LNTerm> {
+        use tamarin_term::lterm::rename_avoiding_ignoring;
+        use tamarin_term::subst::apply_vterm;
+        use tamarin_term::term::{f_app_list, Term};
+
+        let fixing = subst_fixing(s2.range());
+        let keys2: Vec<LVar> = s2.dom().copied().collect();
+        let packed2: LNTerm = f_app_list(
+            s2.range()
+                .map(|t| apply_vterm(&fixing, t.clone()))
+                .collect(),
+        );
+        match rename_avoiding_ignoring(packed2, &self.avoid_ctx, &keys2) {
+            Term::App(tamarin_term::function_symbols::FunSym::List, args) => args.to_vec(),
+            other => vec![other],
+        }
+    }
+}
+
+/// `substFixing` for one substitution's range: every non-msg variable
+/// occurring in `images` is fixed to a distinctive constant, so the matcher
+/// cannot absorb it into a renaming.
+fn subst_fixing<'a>(images: impl Iterator<Item = &'a LNTerm>) -> LNSubst {
+    use tamarin_term::lterm::{frees, LSort, Name, NameTag};
+    use tamarin_term::vterm::const_term;
+
+    let constant = |v: &LVar| -> LNTerm {
+        let sort_show = match v.sort {
+            LSort::Pub => "LSortPub",
+            LSort::Fresh => "LSortFresh",
+            LSort::Msg => "LSortMsg",
+            LSort::Node => "LSortNode",
+            LSort::Nat => "LSortNat",
+        };
+        let tag = if v.sort == LSort::Fresh {
+            NameTag::Fresh
+        } else {
+            NameTag::Pub
+        };
+        const_term(Name::new(
+            tag,
+            format!("constVar_{}_{}_{}", sort_show, v.idx, v.name),
+        ))
+    };
+    Subst::from_list(
+        images
+            .flat_map(frees)
+            .filter(|v| v.sort != LSort::Msg)
+            .map(|v| (v, constant(&v))),
+    )
+}
+
+/// `equalUpToRenaming` (inside `removePermutations`, EquationStore.hs):
+/// after fixing all non-msg range variables of both substitutions to
+/// per-variable constants and renaming `s2`'s images avoiding `s1`'s,
+/// `renamed2` matches the given `subst1''` — plain or `permute`d — as one
+/// joint AC matching problem with a nonempty matcher set.
+fn equal_subst_up_to_renaming(
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    subst1_fixed: &[(LVar, LNTerm)],
+    renamed2: &[LNTerm],
+) -> Result<bool, AddEqsError> {
+    use tamarin_term::rewriting::Equal;
+    use tamarin_term::vterm::is_ground_vterm;
+
+    // A ground pattern binds nothing, so the joint problem is unsolvable as
+    // soon as one of them differs from its subject: `match` works modulo the
+    // module's AC/C axioms alone, and RS keeps AC/C terms flattened+sorted at
+    // construction, so that is structural `==` — the same argument
+    // `match_eqs`' all-ground short-circuit rests on.  `substFixing` freezes
+    // every non-msg range variable to an index-bearing constant, which leaves
+    // most candidate pairs differing in a ground position.
+    if subst1_fixed
+        .iter()
+        .zip(renamed2)
+        .any(|((_, t1), t2)| is_ground_vterm(t2) && t1 != t2)
+    {
+        return Ok(false);
+    }
+
+    // `matchers = solveMatchLNTerm (mconcat matchs)`: one joint matching
+    // problem, term = s1 image, pattern = renamed s2 image.
+    let eqs: Vec<Equal<LNTerm>> = subst1_fixed
+        .iter()
+        .zip(renamed2)
+        .map(|((_, t1), t2)| Equal {
+            lhs: t1.clone(),
+            rhs: t2.clone(),
+        })
+        .collect();
+    maude
+        .match_eqs(&eqs)
+        .map(|sols| !sols.is_empty())
+        .map_err(|e| AddEqsError::Maude(format!("remove_permutations: {}", e)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3150,6 +3428,53 @@ mod tests {
         assert!(split.is_some(), "expected disjunction split");
         assert!(!store.is_false());
         assert!(!store.conj.is_empty());
+    }
+
+    /// `removePermutations` drops the substitutions of a disjunction that
+    /// only permute the images of the two given variables — here through the
+    /// `equalUpToRenaming` branch, whose swapped call fails on the pair-vs-var
+    /// shape and whose unswapped call matches.  Substitutions of a different
+    /// domain size are never permutations of each other and survive.
+    #[test]
+    fn remove_permutations_drops_renamed_variants() {
+        let path = match maude_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("skipping: no maude");
+                return;
+            }
+        };
+        let sig = tamarin_term::maude_sig::pair_maude_sig();
+        let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
+        use tamarin_term::function_symbols::{pair_sym, FunSym};
+        use tamarin_term::term::{f_app, Term};
+        use tamarin_term::vterm::Lit;
+        let msg = |n: &'static str, i: u64| LVar::new(n, LSort::Msg, i);
+        let var = |n: &'static str, i: u64| -> LNTerm { Term::Lit(Lit::Var(msg(n, i))) };
+        let pair = |t: LNTerm| f_app(FunSym::NoEq(pair_sym()), vec![t.clone(), t]);
+        let v1 = msg("x", 1);
+        let v2 = msg("x", 2);
+        // `keep` and `renamed` are equal up to a renaming of their msg-var
+        // images; `wider` binds a third variable.
+        let keep = SubstVFresh::from_list(vec![(v1, pair(var("y", 1))), (v2, var("y", 2))]);
+        let renamed = SubstVFresh::from_list(vec![(v1, pair(var("z", 3))), (v2, var("z", 4))]);
+        let wider = SubstVFresh::from_list(vec![
+            (v1, pair(var("y", 1))),
+            (v2, var("y", 2)),
+            (msg("w", 5), var("y", 6)),
+        ]);
+        let mut store = EquationStore::empty();
+        let id = store.add_disj(vec![keep.clone(), renamed, wider.clone()]);
+        let store = store
+            .remove_permutations(&h, id, &v1, &v2)
+            .expect("remove_permutations");
+        let kept = &store
+            .conj
+            .iter()
+            .find(|d| d.split_id == id)
+            .expect("split survives")
+            .substs;
+        assert_eq!(kept, &vec![keep, wider]);
     }
 
     #[test]

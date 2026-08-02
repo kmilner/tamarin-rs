@@ -17,6 +17,8 @@
 #   DERIV        --derivcheck-timeout passed to both    (default: 30)
 #   HS_PATH / RS_PATH    override the prover binaries
 #   README_PATH  file to rewrite in --write mode        (default: README.md)
+#   BENCH_ALLOW_DEVELOP=1  permit --write with the pinned develop oracle as the
+#                          HS baseline (the block's prose says RELEASE)
 #
 # Methodology:
 #   - Core control: HS `+RTS -Nk -RTS`; RS `--processors=k` (its Maude pool
@@ -46,19 +48,52 @@ for arg in "$@"; do
     esac
 done
 
-find_hs() { ls "$repo_root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover 2>/dev/null | head -1; }
+# Default HS baseline: a *released* tamarin-prover on PATH — the README tables
+# compare against what users actually run, not the develop-pinned parity
+# oracle.  Fall back to the ./setup.sh testing build; HS_PATH overrides.
+find_hs() {
+    command -v tamarin-prover 2>/dev/null \
+        || ls "$repo_root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover 2>/dev/null | head -1
+}
 HS_PATH="${HS_PATH:-$(find_hs)}"
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 [ -x "$HS_PATH" ] || { echo "bench.sh: no HS binary (set HS_PATH)" >&2; exit 2; }
 [ -x "$RS_PATH" ] || { echo "bench.sh: no RS binary at $RS_PATH" >&2; exit 2; }
 command -v /usr/bin/time >/dev/null || { echo "bench.sh: needs GNU /usr/bin/time" >&2; exit 2; }
 
-# measure <cmd...> → prints "<secs>|<mb>" (or "timeout|—" on cap).
+# Baseline identity check: the generated block's prose asserts a RELEASE
+# baseline, but find_hs() takes whatever `tamarin-prover` is first on PATH —
+# which on a gate-configured machine can be the develop oracle this repo pins.
+# The binary's own `Git revision:` (`Main/Console.hs:206-216`, always the full
+# hash) equal to the submodule pin ⇒ the baseline IS that develop oracle, so
+# the tables would be measured against develop under release prose.  Only that
+# exact revision is caught: a release (revision `UNKNOWN` for a tarball build,
+# otherwise a release hash) passes, and so does a develop build at any OTHER
+# revision.  An unpopulated submodule / a revision-less binary leaves the pin
+# or the revision empty, and the check is then skipped rather than guessing.
+hs_pin="$(git -C "$repo_root/tamarin-prover" rev-parse HEAD 2>/dev/null)"
+hs_rev="$("$HS_PATH" --version 2>/dev/null | grep -oE 'Git revision: [0-9a-f]{7,40}' | head -1)"
+hs_rev="${hs_rev#Git revision: }"
+if [ -n "$hs_pin" ] && [ "$hs_rev" = "$hs_pin" ]; then
+    if [ "$WRITE" = 1 ] && [ -z "${BENCH_ALLOW_DEVELOP:-}" ]; then
+        echo "bench.sh: REFUSING --write: the HS baseline $HS_PATH is the pinned" >&2
+        echo "  DEVELOP oracle (rev ${hs_pin:0:12}), but the block it would write says the" >&2
+        echo "  baseline is the most recent RELEASE.  Set HS_PATH to a release build, or" >&2
+        echo "  BENCH_ALLOW_DEVELOP=1 to write develop numbers under release prose anyway." >&2
+        exit 2
+    fi
+    echo "bench.sh: *** WARNING: HS baseline $HS_PATH is the pinned DEVELOP oracle" >&2
+    echo "  (rev ${hs_pin:0:12}), not a release — the block's prose says RELEASE. ***" >&2
+fi
+
+# measure <cmd...> → prints "<secs>|<mb>" ("timeout|—" on cap, "fail|—" on a
+# nonzero exit — e.g. prove_and_reverify.sh refusing a verdict mismatch).
 measure() {
     local e rc wall rss
     e=$(mktemp)
     timeout "$TIMEOUT" /usr/bin/time -v "$@" >/dev/null 2>"$e"; rc=$?
     if [ "$rc" = 124 ]; then rm -f "$e"; printf 'timeout|—'; return; fi
+    if [ "$rc" != 0 ]; then rm -f "$e"; printf 'fail|—'; return; fi
     wall=$(awk -F': ' '/Elapsed \(wall clock\)/{print $NF}' "$e")
     rss=$(awk -F': ' '/Maximum resident set size/{print $NF}' "$e")
     rm -f "$e"
@@ -68,7 +103,7 @@ measure() {
         printf "%.1f|%.0f", s, k/1024 }'
 }
 
-cell_t() { [ "$1" = timeout ] && printf 'timeout' || printf '%s s' "$1"; }
+cell_t() { case "$1" in timeout|fail) printf '%s' "$1" ;; *) printf '%s s' "$1" ;; esac; }
 cell_m() { [ "$1" = "—" ] && printf '—' || printf '%s MB' "$1"; }
 
 # pct <rs> <hs> → " (-44%)" (RS vs HS; negative = lower).  Empty when either
@@ -79,8 +114,24 @@ pct() {
         printf " (%+.0f%%)", (rs-hs)/hs*100 }'
 }
 # RS cells: value + parenthetical % vs the HS value in the same row.
-cell_rs_t() { [ "$1" = timeout ] && printf 'timeout' || printf '%s s%s' "$1" "$(pct "$1" "$2")"; }
+cell_rs_t() { case "$1" in timeout|fail) printf '%s' "$1" ;; *) printf '%s s%s' "$1" "$(pct "$1" "$2")" ;; esac; }
 cell_rs_m() { [ "$1" = "—" ] && printf '—' || printf '%s MB%s' "$1" "$(pct "$1" "$2")"; }
+
+# Theories whose emitted proofs the HS *release* cannot replay (upstream
+# #871 thread-count-dependent proofs / #881 reload normalisation — not port
+# failures; the ./setup.sh testing build re-verifies them).  Only these
+# render the linked note in the RS+HS column; any other failure still
+# prints a bare `fail` so new breakage stays loud.
+HS_REPLAY_UNSUPPORTED=" Joux wireguard "
+UNSUPPORTED_TEXT="not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below)"
+# Reverify (RS+HS) time cell: args <measured> <theory-base> <hs-time>.
+cell_rv_t() {
+    if [ "$1" = fail ] && [[ "$HS_REPLAY_UNSUPPORTED" == *" $2 "* ]]; then
+        printf '%s' "$UNSUPPORTED_TEXT"
+    else
+        cell_rs_t "$1" "$3"
+    fi
+}
 
 # Emit the full marker block (header comment + per-core tables) to stdout.
 gen_block() {
@@ -93,6 +144,12 @@ Regenerate these three tables in place:
 
     scripts/bench.sh --write     # measure, then rewrite this block
     scripts/bench.sh             # measure, print to stdout only
+
+The HS baseline is the most recent tamarin-prover RELEASE (the exact version
+is in the "last run" line below) — the prover users actually have installed —
+not the develop branch this repo's parity oracle is pinned to; develop has
+since gained performance work of its own, so the gap versus a develop build
+is smaller than these tables show.
 
 Both provers prove every lemma (--prove --derivcheck-timeout=30); HS at
 `+RTS -Nk`, RS at `--processors=k`; wall-clock + peak RSS come from
@@ -107,7 +164,9 @@ binaries via the FILES, CORES, TIMEOUT, DERIV, HS_PATH, RS_PATH env vars (see
 the scripts/bench.sh header).
 -->
 HDR
-    echo "<!-- last run: $(uname -m) Linux, $(nproc) cores -->"
+    local hs_ver
+    hs_ver="$("$HS_PATH" --version 2>/dev/null | grep -oE 'tamarin-prover [0-9]+(\.[0-9]+)*' | head -1)"
+    echo "<!-- last run: $(uname -m) Linux, $(nproc) cores; HS baseline: ${hs_ver:-unknown version} -->"
     for k in $CORES; do
         echo
         echo "**${k} core$([ "$k" = 1 ] && echo '' || echo 's')**"
@@ -122,7 +181,7 @@ HDR
             r=$(measure "$RS_PATH" --processors="$k" --derivcheck-timeout="$DERIV" --prove "$af")
             p=$(measure env THREADS="$k" HS_PATH="$HS_PATH" RS_PATH="$RS_PATH" \
                     "$repo_root/prove_and_reverify.sh" "$af" --derivcheck-timeout="$DERIV")
-            echo "| \`$base\` | $(cell_t "${h%|*}") | $(cell_rs_t "${p%|*}" "${h%|*}") | **$(cell_rs_t "${r%|*}" "${h%|*}")** | $(cell_m "${h#*|}") | $(cell_rs_m "${p#*|}" "${h#*|}") | **$(cell_rs_m "${r#*|}" "${h#*|}")** |"
+            echo "| \`$base\` | $(cell_t "${h%|*}") | $(cell_rv_t "${p%|*}" "$base" "${h%|*}") | **$(cell_rs_t "${r%|*}" "${h%|*}")** | $(cell_m "${h#*|}") | $(cell_rs_m "${p#*|}" "${h#*|}") | **$(cell_rs_m "${r#*|}" "${h#*|}")** |"
         done
     done
     echo

@@ -64,19 +64,37 @@ use tamarin_parser::ast as p;
 use tamarin_parser::wf::WfError;
 use tamarin_term::maude_proc::MaudeHandle;
 
+use crate::constraint::solver::context::IntrRuleCache;
+
 /// Run HS's per-variable derivability check on every rule.
 ///
 /// `timeout_secs == 0` disables the check (returns `vec![]`).  Otherwise
 /// each per-variable prove call is bounded by `timeout_secs` of wall-clock
 /// time (mirrors HS's `--derivcheck-timeout`).
+///
+/// `ndc_cache` is the parent theory's once-per-load NDC-checked intruder
+/// cache: HS's probe theories inherit the parent's checked `_thyCache`
+/// verbatim (`deleteRulesAndLemmasAndRestrictionsFromTheory` keeps the
+/// cache field; `deductionChainCheck = False` only prevents re-checking,
+/// MessageDerivationChecks.hs), so the probe contexts are built with it
+/// injected — NDC tags stay active in `forbidden_edge` during probe
+/// proofs.  `None` falls back to signature assembly with the cache
+/// permutation applied, and needs a type annotation
+/// (`None::<IntrRuleCache>`) since nothing else fixes the parameter.
+/// An [`IntrRuleCache`] argument shares the caller's rule list; a borrowed
+/// `&[IntrRuleAC]` is copied once here.
 pub fn check_message_derivation(
     parsed: &p::Theory,
     maude: &MaudeHandle,
     timeout_secs: u32,
+    ndc_cache: Option<impl Into<IntrRuleCache>>,
 ) -> Vec<WfError> {
     if timeout_secs == 0 {
         return Vec::new();
     }
+    // One shared handle for the whole per-rule walk below: each probe
+    // context points at this rule list instead of copying it.
+    let ndc_cache: Option<IntrRuleCache> = ndc_cache.map(Into::into);
     let timeout = Duration::from_secs(timeout_secs as u64);
     let dbg = tamarin_utils::env_gate!("TAM_DBG_DERIV_CHECK");
     // TAM_DBG_DERIV_TIMING=1: emit per-rule / per-variable wall-clock
@@ -201,6 +219,7 @@ pub fn check_message_derivation(
             timeout,
             dbg_timing,
             &rule.name,
+            ndc_cache.as_ref(),
         ) {
             Some(o) => o,
             None => continue,
@@ -716,6 +735,7 @@ struct ProbeOutcome {
 /// failure (caller continues to the next probe rule); otherwise returns
 /// a `ProbeOutcome` whose `undecidable` lists the variable names whose
 /// lemma did NOT find a trace (= non-derivable variables).
+#[allow(clippy::too_many_arguments)]
 fn prove_probe(
     probe: &p::Theory,
     maude: MaudeHandle,
@@ -724,6 +744,7 @@ fn prove_probe(
     timeout: Duration,
     dbg_timing: bool,
     rule_name: &str,
+    ndc_cache: Option<&IntrRuleCache>,
 ) -> Option<ProbeOutcome> {
     use crate::constraint::solver::context::ProofContext;
     use crate::constraint::solver::search::{run_proof_search, NodeStatus};
@@ -746,7 +767,16 @@ fn prove_probe(
         Err(_) => return None,
     };
     let rules: Vec<OpenProtoRule> = elaborated.rules().cloned().collect();
-    let mut ctx = ProofContext::new_with_restrictions(maude, rules, Vec::new());
+    // Probe contexts inherit the parent theory's checked cache verbatim
+    // (HS keeps `_thyCache` on the probe theory; `closeRuleCache`
+    // consumes it as-is), so the NDC tags — and the permutation — carry
+    // into probe proofs without re-running the check per probe.
+    let mut ctx = match ndc_cache {
+        Some(cache) => {
+            ProofContext::new_with_injected_intruder_rules(maude, rules, Vec::new(), cache.clone())
+        }
+        None => ProofContext::new_with_restrictions(maude, rules, Vec::new()),
+    };
     ctx.is_exists_trace = true;
     // Probes have no `[sources]`-tagged lemmas, so no typing
     // assumptions — but `ensure_saturated()` still must run to compute
@@ -921,7 +951,7 @@ mod tests {
             end
         "#;
         let thy = parse_theory(src, &[]).expect("parse");
-        let report = check_message_derivation(&thy, &m, 5);
+        let report = check_message_derivation(&thy, &m, 5, None::<IntrRuleCache>);
         // `x` appears in `In(x)` which is intruder-known → derivable.
         assert!(report.is_empty(), "expected no warnings, got {:?}", report);
     }
@@ -936,7 +966,7 @@ mod tests {
             end
         "#;
         let thy = parse_theory(src, &[]).expect("parse");
-        let report = check_message_derivation(&thy, &m, 5);
+        let report = check_message_derivation(&thy, &m, 5, None::<IntrRuleCache>);
         // Free `unbound` has no premise → not derivable.
         assert_eq!(report.len(), 1);
         assert!(
@@ -956,7 +986,7 @@ mod tests {
             end
         "#;
         let thy = parse_theory(src, &[]).expect("parse");
-        let report = check_message_derivation(&thy, &m, 0);
+        let report = check_message_derivation(&thy, &m, 0, None::<IntrRuleCache>);
         assert!(report.is_empty(), "timeout=0 should disable the check");
     }
 
@@ -1004,7 +1034,7 @@ mod tests {
         let Some((thy, m)) = maude_for(src) else {
             return;
         };
-        let report = check_message_derivation(&thy, &m, 10);
+        let report = check_message_derivation(&thy, &m, 10, None::<IntrRuleCache>);
         assert_eq!(report.len(), 1, "expected one report, got {:?}", report);
         assert!(
             report[0].message.contains("Reveal")
@@ -1034,7 +1064,7 @@ mod tests {
         let Some((thy, m)) = maude_for(src) else {
             return;
         };
-        let report = check_message_derivation(&thy, &m, 10);
+        let report = check_message_derivation(&thy, &m, 10, None::<IntrRuleCache>);
         assert!(
             report.is_empty(),
             "public `dec` → `m` derivable; expected no report, got {:?}",
