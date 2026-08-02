@@ -118,7 +118,7 @@ thread_local! {
     /// user-defined function application so `Constructability::Destructor`
     /// propagates through, mirroring Haskell's `naryOpApp`/`lookupArity`
     /// which reads `(k,priv,cnstr)` from the signature
-    /// (Theory/Text/Parser/Term.hs:61-63,84,92).  `NoEqSym` derives
+    /// (Theory/Text/Parser/Term.hs:62-71,93).  `NoEqSym` derives
     /// Eq/Ord/Hash over `constructability`, and the constructor/
     /// destructor tag is encoded into the Maude operator name (`XC` vs
     /// `XD`), so a Constructor-tagged term for a `[destructor]` symbol
@@ -596,7 +596,7 @@ pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
 
     // HS folds surplus arguments of arity-1 function applications into a
     // single right-associative pair at PARSE time (`naryOpApp` `k == 1`,
-    // Theory/Text/Parser/Term.hs:79-93 + `tupleterm` line 187-188:
+    // Theory/Text/Parser/Term.hs:94-96 + `tupleterm` line 211-212:
     // `chainr1 (msetterm ...) (curry fAppPair <$ comma)`), so the surface
     // `h(a, b, c)` parses to `h(<a, b, c>)` = `h(fAppPair a (fAppPair b c))`.
     // Because the fold happens at parse time, the lemma/restriction formula
@@ -984,7 +984,7 @@ impl UserFunSets<'_> {
     /// `[destructor]` function symbol; otherwise
     /// `Constructability::Constructor`.  Mirrors Haskell's `lookupArity`,
     /// which reads `(k,priv,cnstr)` straight from the signature
-    /// (Theory/Text/Parser/Term.hs:61-63,84,92).
+    /// (Theory/Text/Parser/Term.hs:62-71).
     fn user_fun_constructability(&self, name: &str) -> Constructability {
         if self.destructor.contains(name) {
             Constructability::Destructor
@@ -2090,7 +2090,7 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                     // Scott::key_secrecy: lemma verifies in HS but RS
                     // terminates `SOLVED // trace found` (wrong verdict).
                     // Mirrors HS's `viewTerm` round-trip via `FApp (C EMap)`
-                    // followed by `naryOpApp` at Theory/Text/Parser/Term.hs:79-93, see line 92.
+                    // followed by `naryOpApp` at Theory/Text/Parser/Term.hs:87-106, see line 103.
                     use tamarin_term::function_symbols::CSym;
                     let name = match c {
                         CSym::EMap => String::from_utf8(
@@ -2131,7 +2131,7 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
 /// two arguments (Raw.hs:132-133).  Mirror that here so the parser-AST
 /// display path matches HS — `em` args from let-block desugaring may
 /// arrive in source order, which can differ from canonical order.
-/// HS site: `Theory/Text/Parser/Term.hs:79-93, see line 92` / `Term/Term/Raw.hs:132-133`:
+/// HS site: `Theory/Text/Parser/Term.hs:87-106, see line 103` / `Term/Term/Raw.hs:132-133`:
 ///   `fAppC nacsym as = FAPP (C nacsym) (sort as)`
 pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
     use p::BinOp;
@@ -2277,7 +2277,7 @@ pub fn arity1_noeq_names(
 
 /// Re-fold surplus arguments of an arity-1 function application into a
 /// single right-associative pair, mirroring HS `naryOpApp` for `k == 1`
-/// (Theory/Text/Parser/Term.hs:84-87):
+/// (Theory/Text/Parser/Term.hs:94-96):
 ///   `ts <- parens $ if k == 1 then return <$> tupleterm ... else commaSep ...`
 /// where `tupleterm = chainr1 (...) (fAppPair <$ comma)`.  So for an arity-1
 /// symbol `f`, the surface `f(a, b, c)` parses to `f(<a, b, c>)` — a single
@@ -2462,7 +2462,7 @@ where
             // Builtin arity-1 NoEq symbols whose surplus comma-separated
             // args must be folded into a single tuple, mirroring HS's
             // signature-driven `naryOpApp` (`k == 1`) over `noEqFunSyms`
-            // (Theory/Text/Parser/Term.hs:84-87).  In addition to the
+            // (Theory/Text/Parser/Term.hs:94-96).  In addition to the
             // common ones (h / fst / snd / inv / pk), this covers the
             // less-common builtin unary symbols: `getMessage`
             // (revealing-signing) and `get_rep` / `report`
@@ -2485,9 +2485,8 @@ where
             }
             // HS-faithful: `em(a, b)` (bilinear-pairing builtin) must be
             // emitted as a C-symbol application, not NoEq.  Mirrors HS
-            // `naryOpApp` (Theory/Text/Parser/Term.hs:79-93, see line 92):
-            //   `let app o = if BC.pack op == emapSymString then fAppC EMap
-            //                else fAppNoEq o`
+            // `naryOpApp` (Theory/Text/Parser/Term.hs:87-106, see line 103):
+            //   `(o,(_,_,_,_)) | o == emapSymString -> return $ fAppC EMap ts`
             // Without this gate, RS builds `em` as a NoEq function symbol
             // → Maude theory declares `op tamem : Msg Msg -> Msg [comm]`
             //   (via `op_c`, maude_print.rs:299-306), but rule terms get
@@ -2537,7 +2536,7 @@ where
             let aa = term_to_vterm(a, mk_var, funs)?;
             let bb = term_to_vterm(b, mk_var, funs)?;
             // Haskell `binaryAlgApp` also reads `(k,priv,cnstr)` from the
-            // signature via `lookupArity` (Theory/Text/Parser/Term.hs:96-106, see line 101),
+            // signature via `lookupArity` (Theory/Text/Parser/Term.hs:108-121, see line 114),
             // so thread user privacy/constructability here too.
             // #883: `[AC]` symbols build an AC application here as well.
             if funs.is_user_ac_fun(name.as_str()) {
