@@ -38,7 +38,8 @@ See [License](#license) if you are interested in future prospects for redistribu
   431-file corpus — every theory under `tamarin-prover/examples/` that uses only ported
   features. Stored proofs replay and validate across provers in both
   directions, and the interactive web UI agrees page-for-page with the
-  Haskell server across ≈380 theories / ≈120,000 crawled pages.
+  Haskell server across a 75-theory sweep corpus / ≈63,800 compared pages
+  (`scripts/results/websweep_ef3f0468_post_review_20260801.tsv`).
 - **Performance:** 4.3–80× faster than the most recent Tamarin release
   (1.12.0) across 1–16 cores (median ≈16×), with peak memory 4.3–45×
   lower at one core — see [Performance](#performance).
