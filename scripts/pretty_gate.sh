@@ -41,7 +41,11 @@ HS_CACHE="${HS_CACHE:-$script_dir/.hs_pretty_cache}"
 CORPUS_ROOT="${CORPUS_ROOT:-$repo_root/tamarin-prover/examples}"
 FLAGS_MAP="${FLAGS_MAP:-$script_dir/file_flags.tsv}"
 JOBS="${JOBS:-4}"
-FILE_TIMEOUT="${FILE_TIMEOUT:-120}"
+# 420 not 120: the csf26-ac AC-variant precomputation makes the HS oracle's
+# plain load take ~170s on three files (chaum_offline_anonymity, KCL07,
+# NSLPK3xor); a 120s cap turns them into permanent .nohs markers on every
+# cold cache fill.
+FILE_TIMEOUT="${FILE_TIMEOUT:-420}"
 DERIVCHECK_TIMEOUT="${DERIVCHECK_TIMEOUT:-10}"
 RESULTS_TSV="${RESULTS_TSV:-$script_dir/results/pretty_gate_results.tsv}"
 mkdir -p "$(dirname "$RESULTS_TSV")"
