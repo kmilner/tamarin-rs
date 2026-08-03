@@ -5,6 +5,7 @@
 //   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Maude/Process.hs,
 //   lib/term/src/Term/Maude/Types.hs,
 //   lib/term/src/Term/Rewriting/Definitions.hs,
+//   lib/term/src/Term/Rewriting/Norm.hs,
 //   lib/term/src/Term/Substitution/SubstVFresh.hs,
 //   lib/term/src/Term/Subsumption.hs, lib/term/src/Term/Unification.hs,
 //   lib/theory/src/Theory/Constraint/System.hs,
@@ -85,7 +86,7 @@ fn term_has_reducible_sym(t: &LNTerm, reducible: &crate::function_symbols::FunSi
 }
 
 /// True if `t` contains NO Ac- or C-headed application anywhere.  Backs
-/// `MaudeSig::st_lhs_ac_c_free` — the per-rule cache behind
+/// the per-rule LHS flags `maude_sig::StRules` carries — behind
 /// `MaudeProcessInner::st_lhs_ac_free` and `norm::go_nf`'s per-rule
 /// dispatch: `nf_via_haskell`'s pure st-rule arm matches with the no-AC
 /// matcher (`solve_match_lterm_no_ac`), whose `match_raw` raises
@@ -1546,7 +1547,7 @@ impl MaudeHandle {
         // Without this, the shared `ctx.inverse` causes
         // `MaudeLit::FreshVar(N, sort)` to collide between variants —
         // variant 1's `#1:Msg` and variant 2's `%1:Msg` both parse to
-        // `FreshVar(1, Msg)` (parser at maude_parse.rs:293-297 collapses
+        // `FreshVar(1, Msg)` (`maude_parse.rs::parse_term` collapses
         // # and %) and the second lookup returns the first's LVar.
         //
         // HS-faithful: variant back-conversion uses hint "x" unconditionally
@@ -1664,8 +1665,8 @@ fn skolem_name(counter: u64, lv: &crate::lterm::LVar) -> crate::lterm::Name {
     use crate::lterm::{LSort, Name, NameTag};
     match lv.sort {
         LSort::Msg => {
-            // Sentinel-prefixed id; the rest mirrors the historical
-            // synthetic-string layout so distinct LVars stay distinct.
+            // Sentinel-prefixed id; the fields after the prefix follow the
+            // non-`Msg` branch's layout so distinct LVars stay distinct.
             let id = format!(
                 "{}{}_{}_{}_{}",
                 crate::maude_types::SKOLEM_MSG_PREFIX,
@@ -2666,8 +2667,8 @@ mod tests {
         // No universal-bound vars in these positions.
         let pattern_vars: std::collections::BTreeSet<(String, u64)> =
             std::collections::BTreeSet::new();
-        // const_subject (the OLD Action-guard path) OVER-MATCHES: the
-        // pattern's free `ekI`,`ekR` are Maude variables binding to x,tid.
+        // const_subject OVER-MATCHES: the pattern's free `ekI`,`ekR` are
+        // Maude variables binding to x,tid.
         let over = h.match_eqs_const_subject(&eqs, &pattern_vars).expect("m1");
         eprintln!(
             "[REPRO] const_subject matches = {} (over-match expected: >=1)",
@@ -2677,8 +2678,8 @@ mod tests {
             !over.is_empty(),
             "sanity: const_subject is expected to OVER-match here (the bug)"
         );
-        // skolemize_both (the FIX): ekI,ekR,x,tid are distinct constants,
-        // so neither equation can be satisfied → NO match, matching HS.
+        // skolemize_both: ekI,ekR,x,tid are distinct constants, so neither
+        // equation can be satisfied → NO match, matching HS.
         let fixed = h.match_eqs_skolemize_both(&eqs, &pattern_vars).expect("m2");
         eprintln!(
             "[REPRO] skolemize_both matches = {} (HS-faithful: 0)",

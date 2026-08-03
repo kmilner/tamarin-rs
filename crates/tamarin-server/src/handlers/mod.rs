@@ -5,6 +5,13 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
+use layout::error_page;
+
+/// The page frames live in the `layout` module; they are re-exported here so
+/// every renderer reaches them through the `handlers` facade, as it does the
+/// response constructors below.
+pub(crate) use layout::{default_layout, intdot_shell_html, OPTIONS_MENU_ITEMS};
+
 /// Shared HTML response constructor (`text/html; charset=utf-8`).
 fn html_with_status(status: StatusCode, html: String) -> Response {
     let mut headers = HeaderMap::new();
@@ -28,33 +35,6 @@ pub(crate) fn text_response(s: String) -> Response {
         header::HeaderValue::from_static("text/plain; charset=utf-8"),
     );
     (StatusCode::OK, headers, s).into_response()
-}
-
-/// Byte-faithful port of HS `defaultLayout'` (`src/Web/Types.hs:699-733`): the
-/// `$newline never` frame Yesod's `defaultLayout` puts around a page's
-/// `setTitle` text and its widget markup.  The standalone graph shell is the
-/// one page with a frame of its own (HS `intdotLayout`, see
-/// `handlers::theory::intdot_shell_html`).
-///
-/// The hamlet quirks are verbatim (unquoted URL attrs, doubled
-/// `</script></script>` closes, the `<p class="loading">` banner, the doubled
-/// `</a>` in the context menu).  `title` and `body` are spliced as given —
-/// every caller escapes what needs escaping.
-pub(crate) fn default_layout(title: &str, body: &str) -> String {
-    format!(
-        r##"<!DOCTYPE html>
-<html><head><title>{title}</title><link rel="stylesheet" href="/static/css/intdot-style.css"><link rel="stylesheet" href="/static/css/tamarin-prover-ui.css"><link rel="stylesheet" href="/static/css/jquery-contextmenu.css"><link rel="stylesheet" href="/static/css/smoothness/jquery-ui.css"><script src="/static/js/jquery.js"></script></script><script src="/static/js/jquery-ui.js"></script></script><script src="/static/js/jquery-layout.js"></script></script><script src="/static/js/jquery-cookie.js"></script></script><script src="/static/js/jquery-superfish.js"></script></script><script src="/static/js/jquery-contextmenu.js"></script></script><script src="/static/js/tamarin-prover-ui.js"></script></script><script type="module" src="/static/js/intdot-graph.es.js"></script></script><script type="module" src="/static/js/intdot-staticgraph.es.js"></script></script><script type="module" src="/static/js/intdot-dynamicgraph.es.js"></script></script></head><body><p class="loading">Analyzing, please wait...  <a id=cancel href='#'>Cancel</a></p>{body}<div id="dialog"></div><div id="confirm-dialog"></div><ul id="contextMenu"><li class="autoprove"><a href="#autoprove">Autoprove</a></a></li></ul></body></html>"##
-    )
-}
-
-/// Shared error-response constructor: the [`default_layout`] frame around the
-/// widget yesod-core's `defaultErrorHandler` builds for an error response, sent
-/// with `status`.  `title` is the widget's `setTitle`, `body` its markup.
-///
-/// The error widgets themselves are not `$newline never`, so their markup
-/// arrives with the newlines hamlet puts between their lines.
-fn error_page(status: StatusCode, title: &str, body: &str) -> Response {
-    html_with_status(status, default_layout(title, body))
 }
 
 /// Shared `500 Internal Server Error` response constructor: the page Yesod
@@ -110,6 +90,7 @@ pub(crate) fn not_found_response(raw_path: &str) -> Response {
 
 pub mod dot;
 pub mod json_resp;
+mod layout;
 pub mod path_parse;
 pub mod proof_tree;
 pub mod root;

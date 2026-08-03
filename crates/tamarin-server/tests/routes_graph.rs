@@ -1,9 +1,12 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   arcz, meiersi, felixlinker, cascremers, Kanakanajm, jdreier,
-//   rsasse, BTom-GH, beschmi, YannColomb, symphorien, xaDxelA, addap,
-//   and other minor contributors (see upstream git history)
+//   meiersi, arcz, jdreier, cascremers, beschmi, felixlinker, rsasse,
+//   Kanakanajm, Divya19gupta, PhilipLukertWork, addap, BTom-GH,
+//   YannColomb, Mathias-AURAND, xaDxelA, symphorien, Azurios-git,
+//   kevinmorio, racoucho1u, Esslingen-Security-Privacy, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   src/Web/Handler.hs, src/Web/Types.hs
+//   lib/term/src/Term/LTerm.hs, src/Web/Handler.hs, src/Web/Theory.hs,
+//   src/Web/Types.hs
 
 //! Integration tests for the graph routes.
 //!
@@ -14,7 +17,8 @@
 //!   - `/interactive-graph-def` draws proof nodes and source cases; for it
 //!     and `/graph`, every other theory path is Yesod's 500 page.
 //!   - `/json` returns the aeson-pretty JSON graph, with and without
-//!     `abbrevInBackend`.
+//!     `abbrevInBackend`; after an autoprove its nodes and edges are the
+//!     searched node's own system (the `set_keep_sys(true)` guard).
 //!   - On all three, a source/case index naming no case is the Not Found
 //!     page — the port's deliberate divergence from upstream's unchecked
 //!     `!!`, whose 500 pages leak the GHC CallStack.
@@ -122,10 +126,17 @@ async fn interactive_graph_def_returns_dot() {
 /// quotes every attribute value, names nodes `n<k>` and gives every record
 /// field a port, while the port's emitter leaves the simple attributes
 /// (`shape=`, `fontsize=`) unquoted, names nodes after the node id and ports
-/// only the premise/conclusion fields — which is what the
-/// web-parity gate's dot canonicalisation (`scripts/web_normalize.py`, graph
-/// compared by label rather than by serialisation) exists to see past.  What
-/// must agree is the graph drawn: the labels, in order.
+/// only the premise/conclusion fields.  What must agree is the graph drawn:
+/// the labels, in order.
+///
+/// SECOND CANONICALISER: `scripts/web_normalize.py`'s `canon_dot` /
+/// `_norm_record_label` do this same "same graph, different dialect" job for
+/// the web-parity gate, over the same two emitters.  The two are independent
+/// implementations by design — this one is a label sequence, that one a
+/// label-keyed structural form including attrs and edges — so a change to
+/// what either one sees past (escapes, attribute order, record bracketing)
+/// wants the matching change in the other.  A cross-reference sits on
+/// `canon_dot`.
 fn dot_label_texts(dot: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut rest = dot;
@@ -243,24 +254,6 @@ async fn dot_routes_out_of_range_case_is_not_found() {
     }
 }
 
-/// The standard Not Found page, asserted as `routes_basic` does: 404, the
-/// error page's content type, and the `defaultErrorHandler` widget —
-/// `<h1>Not Found</h1>` over the request's raw path.
-async fn assert_not_found_page(s: &TestServer, path: &str) {
-    let res = s.client.get(s.url(path)).send().await.expect("send");
-    assert_eq!(res.status(), 404, "{path} must be a 404");
-    assert_eq!(
-        content_type(&res),
-        "text/html; charset=utf-8",
-        "{path} must carry the Not Found page's content type"
-    );
-    let body = res.text().await.expect("text");
-    assert!(
-        body.contains(&format!("<h1>Not Found</h1>\n<p>{path}</p>\n")),
-        "{path} must carry the Not Found widget over its own path; got: {body}"
-    );
-}
-
 #[tokio::test]
 async fn graph_json_returns_json_graph_with_dot_json_content_type() {
     // HS `getTheoryGraphJsonR` (`src/Web/Handler.hs:1435-1444`) hands the
@@ -287,11 +280,18 @@ async fn graph_json_returns_json_graph_with_dot_json_content_type() {
         &body[..body.len().min(400)]
     );
     assert!(!body.ends_with('\n'), "no trailing newline");
+}
 
-    // The lemma root carries no rule instances yet, so the assertions above
-    // hold over an EMPTY graph and cannot see whether the solved systems
-    // survive.  Autoprove `debug` and re-read the witness node: its system
-    // must actually be there.
+/// `graph_json_returns_json_graph_with_dot_json_content_type` reads the lemma
+/// root, which carries no rule instances, so its assertions hold over an EMPTY
+/// graph and cannot see whether the solved systems survive.  Autoprove `debug`
+/// and re-read the witness node: its system must actually be there.  This is
+/// the regression guard for `init_process_globals`' `set_keep_sys(true)` —
+/// without it every searched proof node drops its `System` and every
+/// post-autoprove graph renders empty.
+#[tokio::test]
+async fn graph_json_after_autoprove_carries_the_system() {
+    let s = start_server_with_theory("issue193.spthy").await;
     let res = s
         .client
         .get(s.url("/thy/trace/1/autoprove/idfs/0/False/proof/debug"))

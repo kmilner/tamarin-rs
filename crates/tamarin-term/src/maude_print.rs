@@ -68,14 +68,14 @@ pub const FUN_SYM_PREFIX: &str = "tam";
 /// Number of attribute characters between the `tam` prefix and the user-given
 /// name: `fun_sym_encode_attr` emits exactly this many, `fun_sym_decode`
 /// splits at the same width, and `maude_parse::is_ac_fct_ident` classifies on
-/// it (HS `funSymDecode`'s `BC.splitAt 4`, Parser.hs:89-104).
+/// it (HS `funSymDecode`'s `BC.splitAt 4`, Parser.hs:92-105).
 pub(crate) const ATTR_BLOCK_LEN: usize = 4;
 
 /// Encode privacy / constructability / AC-ness / NDC state into the
 /// `ATTR_BLOCK_LEN`-char prefix that follows `tam` for each user-defined
 /// symbol.
 ///
-/// HS `funSymEncodeAttr` (Parser.hs:75-87) concatenates one char per
+/// HS `funSymEncodeAttr` (Parser.hs:76-88) concatenates one char per
 /// attribute: `Private`->`P` / `Public`->`X`, `Constructor`->`C` /
 /// `Destructor`->`D`, `IsAC`->`A` / `NotAC`->`F`, and `IsNDC`->`N` /
 /// `NotNDC`->`U` / `IsNDCDiff`->`D` / `IsNDCBoth`->`B`.  All 32
@@ -132,7 +132,7 @@ pub fn fun_sym_encode_attr(
 /// `(name, p, c, ndc)`.  `prefix == "tam"` plus the attribute chars
 /// (see [`fun_sym_encode_attr`]) followed by the user-given name.
 ///
-/// HS `funSymDecode` (Parser.hs:89-104) reads the privacy from char 0, the
+/// HS `funSymDecode` (Parser.hs:92-105) reads the privacy from char 0, the
 /// constructability from char 1 and the NDC state from char 3 — char 2 (the
 /// AC state) is not decoded, because the caller already knows from the
 /// identifier's shape which of `fAppNoEq`/`fAppACfct` it is building.
@@ -529,7 +529,7 @@ mod tests {
     }
 
     /// The attribute prefix is 4 chars: privacy, constructability, AC state,
-    /// NDC state (HS `funSymEncodeAttr`, Parser.hs:75-87).
+    /// NDC state (HS `funSymEncodeAttr`, Parser.hs:76-88).
     #[test]
     fn encode_attr_is_four_chars() {
         assert_eq!(
@@ -550,6 +550,48 @@ mod tests {
             ),
             "PDAB"
         );
+    }
+
+    /// Every one of the 32 attribute quadruples `fun_sym_encode_attr` spells
+    /// out survives a `tam` + attributes + name identifier being handed back
+    /// to `fun_sym_decode`, and the 32 encodings are pairwise distinct.
+    ///
+    /// The encoding is four independent injective maps concatenated, so
+    /// distinctness is a table invariant; together with the round trip it
+    /// pins each of the 32 arms against a transposed letter, which otherwise
+    /// only surfaces when Maude echoes a symbol back carrying the wrong
+    /// privacy / constructability / NDC flags.  The AC slot is not part of
+    /// the decoded triple — HS `funSymDecode` reads chars 0/1/3 only
+    /// (Parser.hs:92-105), because the caller already knows from the
+    /// identifier's shape which symbol kind it is rebuilding.
+    #[test]
+    fn every_attribute_quadruple_round_trips_through_decode() {
+        let mut seen: std::collections::BTreeSet<&'static str> = Default::default();
+        for p in [Privacy::Private, Privacy::Public] {
+            for c in [Constructability::Constructor, Constructability::Destructor] {
+                for ac in [AcState::IsAc, AcState::NotAc] {
+                    for ndc in [
+                        NdcState::IsNdc,
+                        NdcState::NotNdc,
+                        NdcState::IsNdcDiff,
+                        NdcState::IsNdcBoth,
+                    ] {
+                        let attr = fun_sym_encode_attr(p, c, ac, ndc);
+                        assert_eq!(attr.len(), ATTR_BLOCK_LEN, "{attr:?} is not 4 chars");
+                        assert!(seen.insert(attr), "{attr:?} encodes two quadruples");
+                        let mut ident = FUN_SYM_PREFIX.as_bytes().to_vec();
+                        ident.extend_from_slice(attr.as_bytes());
+                        ident.extend_from_slice(b"x");
+                        assert_eq!(
+                            fun_sym_decode(&ident),
+                            (b"x".to_vec(), p, c, ndc),
+                            "attribute block {attr:?} for {p:?}/{c:?}/{ac:?}/{ndc:?}"
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(seen.len(), 32);
     }
 
     /// A user-defined AC symbol is declared `[comm assoc]`, with a single

@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
 //   meiersi, jdreier, PhilipLukertWork, rkunnema, beschmi, felixlinker,
-//   rsasse, Nynko, Hong-Thai, yavivanov, ValentinYuri, charlie-j, and
+//   rsasse, yavivanov, Nynko, Hong-Thai, ValentinYuri, charlie-j, and
 //   other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs,
@@ -835,8 +835,8 @@ pub fn precompute_full_sources(
     //   (4) one fAppNoEq per non-implicit NoEq symbol of arity ≥ 1 OR Private
     // After `sortednub`, the list is sorted by `Ord LNTerm`.  Term Ord
     // tiebreaks first on the head FunSym; FunSym Ord is `NoEq < Ac < C`
-    // (see FunctionSymbols.hs:113-117; mirrored in
-    // `function_symbols.rs:62-69`).  So C(EMap)-headed em(...) sorts
+    // (see FunctionSymbols.hs:113-117; mirrored by the `enum FunSym`
+    // variant order in `function_symbols.rs`).  So C(EMap)-headed em(...) sorts
     // AFTER every NoEq-headed term — i.e. em ends up LAST in HS's
     // SAT-FINAL output for Chen_Kudla / Joux / RYY / Scott / TAK1.
     //
@@ -1604,7 +1604,7 @@ fn saturate_sources_with_simp_opt(
         // goal we solve adds a new node/edge whose fact constraints
         // get unified against the assumption's pattern, eventually
         // pruning typing-violating cases.  Bare simplify alone misses
-        // most of these because the impl_formulas pass relies on
+        // most of these because the insert_implied_formulas_pass relies on
         // term-shape match against system actions, which only get
         // grafted by goal-solving.
         let mut next: Vec<Source> = Vec::new();
@@ -2457,7 +2457,7 @@ fn run_solve_all_safe_goals_disj_with_progress(
             // path that put them into the live system also reused the
             // saturate-abstract node-id.  The Fresh-bearing check
             // approximates this collision pattern faithfully:
-            // pure-public KU terms (where this fix would over-mark)
+            // pure-public KU terms (which the mark would over-approximate)
             // are exactly those whose runtime node-id doesn't collide.
             let has_fresh_var = {
                 use tamarin_term::lterm::{HasFrees, LSort};
@@ -3181,7 +3181,7 @@ pub fn solve_with_source_cases_action_with_ctx(
             }
             let result = conjoin_refine_arm(ctx, sys, goal_node, fa_live, arm, red_maude);
             // Per-OUTPUT-arm continuation counter (task #23, A(ii)):
-            // `conjoin_refine_arm` now records each output arm's own
+            // `conjoin_refine_arm` records each output arm's own
             // thread position — fork + that branch's someInst +
             // conjoin + step-12-arm + E.5 + close-chains draws — so
             // the adopting caller continues every arm at ITS thread,
@@ -3554,7 +3554,7 @@ fn freshen_system_keep_with_shift(
     // the variant-disj witnesses on every matchToGoal rename, feeding the
     // cumulative inflation that rotates Responder_secrecy's 3-way split.
     // Match `freshen_system_some_inst`
-    // and `rename_precise.rs:98-109`: shift keys only.
+    // and `rename_precise_system`'s eq-store walk: shift keys only.
     //
     // NOTE: a uniform shift of the domain keys keeps the variant SplitG's
     // keys consistent with the surrounding (also-shifted) nodes/edges/goals
@@ -3678,7 +3678,7 @@ fn freshen_system_some_inst(
     }
     // sSubtermStore — HS-faithful Set walk in Ord order
     // (SubtermStore.hs `Set SubtermD` for both pos and neg + S.Set Set).
-    // Mirror `rename_precise.rs:129-142` Set-sorted walk so per-name
+    // Mirror `rename_precise_system`'s Set-sorted subterm walk so per-name
     // PreciseFresh counters / global FastFresh allocations land at the
     // same idxs HS does.
     let mut sub_sorted: Vec<&crate::tools::subterm_store::SubtermConstraint> =
@@ -3707,12 +3707,12 @@ fn freshen_system_some_inst(
     // range here would re-freshen the variant-disj witnesses on every
     // someInst, inflating them across saturate/conjoin iterations (e.g.
     // Responder_secrecy: ~k.6 → ~k.31) and rotating the 3-way split via
-    // `Ord LNSubstVFresh`.  Match `rename_precise.rs:98-109`
+    // `Ord LNSubstVFresh`.  Match `rename_precise_system`'s eq-store walk
     // and import keys only.
     // HS-faithful: inner `S.Set LNSubstVFresh` walks Ord-ascending
     // (`mapFrees (Set a) = fmap S.fromList . mapFrees f . S.toList`,
     // LTerm.hs:861-866, see line 866).  RS's `Vec` is in insertion order — sort to match
-    // (mirroring `rename_precise.rs:144-153`).
+    // (mirroring `rename_precise_system`'s inner-Set sort).
     for d in sys.eq_store.conj.iter() {
         let mut substs_sorted: Vec<
             &tamarin_term::subst_vfresh::SubstVFresh<
@@ -3753,7 +3753,7 @@ fn freshen_system_some_inst(
     // HS-faithful: `_sFormulas` / `_sSolvedFormulas` / `_sLemmas` are
     // `S.Set LNGuarded`; HS walks them in Ord-ascending (Term/LTerm.hs:861-866, see line 866
     // `foldMap (foldFrees f)`).  RS's `Vec<Guarded>` is in insertion order.
-    // Sort copies (mirroring `rename_precise.rs:178-189`) so per-name
+    // Sort copies (mirroring `rename_precise_system`'s formula walk) so per-name
     // counter assignment matches HS exactly.
     let mut formulas_sorted: Vec<&crate::guarded::Guarded> =
         sys.formulas.iter().map(|f| f.as_ref()).collect();
@@ -4728,8 +4728,8 @@ fn conjoin_refine_arm(
         // (F close_trivial_chains + output push) independently.  Each arm's
         // eq-store (from `perform_split`) PRESERVES the live system's other
         // disjunctions — `solve_term_eqs`'s `Cases` branch does NOT
-        // reinstall `self.sys.eq_store` (it leaves the `mem::take`'d default
-        // store, equation_store.rs:2159 / reduction.rs Cases arm), so the
+        // reinstall `self.sys.eq_store` (it leaves the default store that
+        // `System::take_eq_store` swapped in — reduction.rs's Cases arm), so the
         // caller MUST install an arm or the live `splitEqs` disjunctions
         // are silently dropped (would collapse Joux_EphkRev's cascade).
         // Each E.5 output arm carries its continuation counter (HS
@@ -5581,7 +5581,7 @@ fn graft_case_into_action(
     // the equation collapses to `x#3 → senc(<sec#4, ~mw#5>, ~mw#13)`
     // — but the case-INTERNAL chain vars (chain_sec etc.) never get
     // connected to the live vars.  Out_Initiator's terms still
-    // reference chain_sec, so impl_formulas's match against
+    // reference chain_sec, so insert_implied_formulas_pass's match against
     // `Out_Initiator(senc(<sec#4, ~mw#5>, ~mw#13))` fails, the
     // typing universal doesn't fire, and the typing-violating case
     // survives → false counterexample.
@@ -5726,7 +5726,7 @@ fn var_occurrences_nodes(
                 // Derived HS `Show` of a user-defined AC symbol.
                 AcSym::AcFct(s) => Cow::Owned(format!(
                     "AC (ACfct {})",
-                    tamarin_term::subsumption::show_acfct_sym(s)
+                    tamarin_term::function_symbols::show_acfct_sym(s)
                 )),
             },
             FunSym::C(c) => match c {

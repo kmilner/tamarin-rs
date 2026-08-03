@@ -2,7 +2,12 @@
 //   meiersi, felixlinker, beschmi, sans-sucre, PhilipLukertWork, and
 //   other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Constraint/System/Constraints.hs
+//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term/Raw.hs,
+//   lib/term/src/Term/VTerm.hs, lib/theory/src/Rule.hs,
+//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
+//   lib/theory/src/Theory/Model/Fact.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Tools/EquationStore.hs
 
 //! Port of `Theory.Constraint.System.Constraints` —
 //! graph-constraint primitives (`Edge`, `LessAtom`), goal types

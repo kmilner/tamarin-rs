@@ -280,11 +280,11 @@ fn dump_rule_info(buf: &mut String, info: &RuleInfo<ProtoRuleACInstInfo, IntrRul
             }
         }
         RuleInfo::Intr(i) => {
-            // `ConstrRule "<name>"` / `DestrRule "<name>" _ _ _`: the byte-string
-            // name.  Remaining intruder variants carry no user string.
+            // `ConstrRule { name, .. }` / `DestrRule { name, .. }`: the
+            // byte-string name.  Remaining intruder variants carry no user string.
             let name: Option<&[u8]> = match i {
-                IntrRuleACInfo::ConstrRule(n, _) => Some(n),
-                IntrRuleACInfo::DestrRule(n, _, _, _, _) => Some(n),
+                IntrRuleACInfo::ConstrRule { name, .. } => Some(name),
+                IntrRuleACInfo::DestrRule { name, .. } => Some(name),
                 _ => None,
             };
             if let Some(n) = name {

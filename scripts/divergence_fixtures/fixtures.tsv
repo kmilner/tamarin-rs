@@ -1,0 +1,25 @@
+# Divergence-visibility fixtures.  Consumed by capture.sh and check.sh.
+#
+# name    the <name>.spthy in this directory
+# slice   comma-separated list of blocks cut from ONE theory load:
+#           wf      the wellformedness report block (wf_gate.sh's slice)
+#           theory  the `theory … end` echo (pretty_gate.sh's slice)
+# mode    match    the port must reproduce the captured oracle bytes
+#         diverge  the port must reproduce <name>.<slice>.rs.txt, which must
+#                  still differ from the captured oracle bytes
+# flags   extra prover flags, passed to BOTH engines
+#
+# name<TAB>slice<TAB>mode<TAB>flags
+mixed_ac_wf	wf,theory	match	--derivcheck-timeout=0
+pair_echo_order	theory	match	--derivcheck-timeout=0
+wf_user_ac_report	wf,theory	match	--derivcheck-timeout=0
+sapic_lowering	theory	match	--derivcheck-timeout=0
+sapic_user_ac	theory	match	--derivcheck-timeout=0
+sapic_nullary_cond	theory	match	--derivcheck-timeout=0
+sapic_formula_terms	wf,theory	match	--derivcheck-timeout=0
+formula_terms_offenders	wf,theory	match	--derivcheck-timeout=0
+wf_topic_interleave	wf	match	--derivcheck-timeout=0
+guarded_name_collision	wf,theory	match	--derivcheck-timeout=0
+guarded_freshened_names	wf,theory	match	--derivcheck-timeout=0
+mult_restricted_report	wf,theory	match	--derivcheck-timeout=0
+ac_marker_collapse	theory	diverge	--derivcheck-timeout=0

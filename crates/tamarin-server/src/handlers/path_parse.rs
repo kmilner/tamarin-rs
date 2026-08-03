@@ -1,6 +1,7 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, arcz, Kanakanajm, rsasse, beschmi, felixlinker,
-//   addap, and other minor contributors (see upstream git history)
+//   meiersi, jdreier, arcz, cascremers, rsasse, Kanakanajm, beschmi,
+//   felixlinker, addap, and other minor contributors (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
 //   src/Web/Types.hs
 

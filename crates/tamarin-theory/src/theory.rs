@@ -1,9 +1,12 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, and other minor contributors (see upstream git history)
+//   rkunnema, jdreier, meiersi, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Items/LemmaItem.hs, lib/theory/src/Rule.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
-//   lib/theory/src/Theory/Model/Rule.hs, lib/theory/src/Theory/Proof.hs
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/Sapic/Term.hs, lib/theory/src/TheoryObject.hs
 
 //! Top-level `Theory` data type — port of `TheoryObject.Theory` and
 //! `Items.TheoryItem.TheoryItem`.
@@ -19,7 +22,7 @@ use tamarin_term::lterm::LVar;
 
 use crate::predicate::Predicate;
 use crate::restriction::ProtoRestriction;
-use crate::rule::{ProtoRuleAC, ProtoRuleE};
+use crate::rule::ProtoRuleE;
 use crate::sapic::PlainProcess;
 use crate::signature::SignaturePure;
 
@@ -28,21 +31,14 @@ use crate::signature::SignaturePure;
 /// carries an `LNFormula`.
 pub type OpenRestriction = ProtoRestriction<tamarin_parser::ast::Formula>;
 
-/// `OpenProtoRule = (ProtoRuleE, [ProtoRuleAC])` — a protocol rule
-/// modulo E together with its precomputed AC variants. Mirrors
-/// Haskell's `OpenProtoRule` newtype.
+/// A protocol rule modulo E with its variant machinery.  Mirrors the
+/// `ProtoRuleE` half of HS's `OpenProtoRule = (ProtoRuleE, [ProtoRuleAC])`;
+/// the port never materialises the `[ProtoRuleAC]` half — variants are
+/// enumerated lazily through `variant_substs` + `abstracted_rule` (the
+/// SplitG route).
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpenProtoRule {
     pub rule: ProtoRuleE,
-    /// Pre-applied variant rules — each entry is a fully-narrowed
-    /// `ProtoRuleAC` with its variant subst applied.  Populated by
-    /// `ProofContext::new` (context.rs) for rules with reducible-headed
-    /// sub-terms and still read by live code: `intruder_variants`
-    /// asserts intruder rules carry none, and `context.rs` short-circuits
-    /// (constraint/solver/context.rs:636 `if !o.variants.is_empty()`)
-    /// when this field is already filled.
-    /// The SplitG-based solving path uses `variant_substs` instead.
-    pub variants: Vec<ProtoRuleAC>,
     /// Variant substitutions as a disjunction (`RuleACConstrs` in
     /// Haskell — `Disj LNSubstVFresh`).  The canonical rule (`rule`)
     /// represents the un-narrowed E-rule; when this disjunction is
@@ -77,7 +73,6 @@ impl OpenProtoRule {
     pub fn new(rule: ProtoRuleE) -> Self {
         OpenProtoRule {
             rule,
-            variants: Vec::new(),
             variant_substs: Vec::new(),
             abstracted_rule: None,
             loop_breakers: Vec::new(),
@@ -182,8 +177,10 @@ pub struct Lemma<P = ProofSkeleton> {
     pub modulo: Option<String>,
     pub attributes: Vec<LemmaAttr>,
     pub trace_quantifier: TraceQuantifier,
-    /// The lemma's formula. We store as the parser's `Formula` for now;
-    /// once we have a typed formula AST we'll narrow this.
+    /// The lemma's formula, held in the parser's `Formula` form: both the
+    /// pretty-printers and `guarded::formula_to_guarded` start from that
+    /// form, so the guarded/`LNFormula` layers are derived on demand
+    /// rather than stored here.
     pub formula: tamarin_parser::ast::Formula,
     pub proof: P,
     /// Verbatim source text (comments stripped) — HS `_lPlaintext`

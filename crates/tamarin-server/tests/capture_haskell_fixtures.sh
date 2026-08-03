@@ -91,20 +91,25 @@ fetch() {
   local outfile="$1"; shift
   local url="$1"; shift
   local method="${1:-GET}"
-  # Note: we deliberately drop `curl -f`.  We *want* to capture the
-  # body for non-2xx responses (e.g. Haskell returns 500 for graph
-  # stubs and 404 for /thy/equiv/...; the body documents the route's
-  # default behaviour and is asserted against in the Rust tests).
-  # `--path-as-is` keeps the URL bytes curl sends identical to the ones
-  # written here, which the Not Found page echoes back.
+  # Every method shares one option set, so a flag added here reaches all of
+  # them:
+  #   -s            no progress meter (the run prints its own table)
+  #   -S            but DO report a transport failure on stderr; the `ERR`
+  #                 cell alone does not say what went wrong, and stderr is
+  #                 left alone so the message reaches the operator
+  #   --path-as-is  keep the URL bytes curl sends identical to the ones
+  #                 written below, which the Not Found page echoes back
+  # We deliberately drop `-f`: we *want* the body of a non-2xx response (e.g.
+  # Haskell returns 500 for graph stubs and 404 for /thy/equiv/...; the body
+  # documents the route's default behaviour and is asserted against in the
+  # Rust tests).
+  local opts=(-sS --path-as-is)
+  case "$method" in
+    POST) opts+=(-X POST) ;;
+    HEAD) opts+=(-I) ;;
+  esac
   local status
-  if [[ "$method" == "POST" ]]; then
-    status=$(curl -sS --path-as-is -X POST -o "${RES_DIR}/${outfile}" -w "%{http_code}" "${BASE}${url}" 2>/dev/null || echo "ERR")
-  elif [[ "$method" == "HEAD" ]]; then
-    status=$(curl -sI --path-as-is -o "${RES_DIR}/${outfile}" -w "%{http_code}" "${BASE}${url}" || echo "ERR")
-  else
-    status=$(curl -sS --path-as-is -o "${RES_DIR}/${outfile}" -w "%{http_code}" "${BASE}${url}" 2>/dev/null || echo "ERR")
-  fi
+  status=$(curl "${opts[@]}" -o "${RES_DIR}/${outfile}" -w "%{http_code}" "${BASE}${url}" || echo "ERR")
   printf "  %-30s %3s\n" "$url" "$status"
 }
 
@@ -188,7 +193,7 @@ fetch graph_unhandled_path.html "/thy/trace/1/graph/help"
 # divergence, see `test_method_out_of_range_index_alerts_match_haskell`).
 fetch method_out_of_range.json  "/thy/trace/1/main/method/debug/9999"
 
-# ---------------- Stubs (capture for documentation) ----------------
+# ---------------- Graph shell + the diff-theory stub ----------------
 fetch intdot.html               "/thy/trace/1/intdot/lemma/debug"
 fetch equiv_overview.json       "/thy/equiv/1/overview/help"
 

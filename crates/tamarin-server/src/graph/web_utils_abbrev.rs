@@ -1,12 +1,14 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   arcz, meiersi, jdreier, cascremers, felixlinker, Divya19gupta,
-//   rsasse, Kanakanajm, beschmi, addap, BTom-GH, PhilipLukertWork,
-//   YannColomb, xaDxelA, Mathias-AURAND, symphorien, racoucho1u,
-//   Esslingen-Security-Privacy, kevinmorio, and other minor
+//   meiersi, jdreier, arcz, beschmi, felixlinker, cascremers, rsasse,
+//   racoucho1u, Divya19gupta, PhilipLukertWork, Kanakanajm, addap,
+//   BTom-GH, kevinmorio, YannColomb, xaDxelA, Mathias-AURAND,
+//   yavivanov, Nick Moore, symphorien, rkunnema, katrielalex,
+//   Azurios-git, Esslingen-Security-Privacy, and other minor
 //   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, src/Web/Handler.hs, src/Web/Theory.hs,
-//   src/Web/Utils.hs
+//   lib/term/src/Term/LTerm.hs,
+//   lib/theory/src/Theory/Constraint/System.hs, src/Web/Handler.hs,
+//   src/Web/Theory.hs, src/Web/Utils.hs
 
 //! Port of `Web.Utils` (`src/Web/Utils.hs`) — the server-side term
 //! abbreviation the JSON graph endpoint applies when the request carries the
@@ -18,13 +20,15 @@
 //! keeps only the system (`src/Web/Theory.hs:1330-1333`), so the legend is not
 //! materialised here.
 //!
+//! The rewrite is display-only — it swaps abbreviation constants in for real
+//! terms and rebuilds facts without their cached fingerprints — so [`abbrev`]
+//! hands back a [`RenderSystem`], which cannot re-enter the prover.
+//!
 //! The short constant is `lit (Con (Name AbbrevName (NameId …)))`
 //! (Utils.hs:71-88), whose `NameId` is the head symbol's own name plus, from
 //! the second abbreviation of that symbol on, an occurrence counter (`aenc`,
 //! `aenc1`, `aenc2`, …).  It renders as that bare id: `show (Name AbbrevName
 //! n) = show n` (LTerm.hs:240), and its sort is `LSortMsg` (LTerm.hs:266).
-
-use std::borrow::Cow;
 
 use tamarin_term::function_symbols::FunSym;
 use tamarin_term::lterm::{LNTerm, Name, NameTag};
@@ -35,6 +39,8 @@ use tamarin_utils::FastMap;
 
 use tamarin_theory::constraint::system::System;
 
+use crate::graph::render_system::RenderSystem;
+
 /// HS `Web.Utils.abbrev`'s minimal term size, as passed by
 /// `graphJsonThyPath` (`src/Web/Theory.hs:1331`).
 pub const MIN_ABBREV_SIZE: usize = 30;
@@ -43,14 +49,10 @@ pub const MIN_ABBREV_SIZE: usize = 30;
 /// conclusions followed by its premises.
 ///
 /// `get sNodes` is a `M.Map NodeId RuleACInst` (System.hs:383) and the outer
-/// `concatMap` folds it through `Foldable`, i.e. over `M.elems` — ascending
-/// `NodeId`, where `Ord LVar` compares idx, then sort, then name
-/// (LTerm.hs:546-548).  `System::nodes` is a `Vec` in insertion order, so the
-/// borrowed view is sorted first.
+/// `concatMap` folds it through `Foldable`, i.e. over `M.elems` — the `M.Map`
+/// key order `System::nodes_in_map_order` materialises.
 fn get_terms(sys: &System) -> impl Iterator<Item = &LNTerm> {
-    let mut ordered: Vec<_> = sys.nodes.iter().collect();
-    ordered.sort_by_key(|a| a.0);
-    ordered.into_iter().flat_map(|(_, ru)| {
+    sys.nodes_in_map_order().into_iter().flat_map(|(_, ru)| {
         ru.conclusions
             .iter()
             .chain(ru.premises.iter())
@@ -102,10 +104,11 @@ fn compute_legend(n: usize, sys: &System) -> Legend {
 /// Port of `updateSystem` (Utils.hs:92-106): rewrite the top-level terms of
 /// every rule's premises and conclusions through the legend.  A rewritten fact
 /// is rebuilt from `(tag, annotations, terms)`, i.e. without its cached
-/// fingerprints — matching HS's `Fact tag a ts` and safe because this system
-/// only ever reaches the renderer.  A fact holding no legend key would be
-/// rebuilt into an equal fact, so it is left in place: the rewrite is
-/// top-level-only, so the guard scans exactly the terms it would consult.
+/// fingerprints — matching HS's `Fact tag a ts` and safe because the
+/// [`RenderSystem`] it writes into only ever reaches the renderer.  A fact
+/// holding no legend key would be rebuilt into an equal fact, so it is left in
+/// place: the rewrite is top-level-only, so the guard scans exactly the terms
+/// it would consult.
 fn update_system(legend: &Legend, sys: &mut System) {
     for (_, ru) in sys.nodes_mut().iter_mut() {
         for facts in [&mut ru.premises, &mut ru.conclusions] {
@@ -121,20 +124,22 @@ fn update_system(legend: &Legend, sys: &mut System) {
 /// Port of `abbrev` (Utils.hs:109-116).
 ///
 /// `abbreviate == false` is HS's `abbrev False _ sys = return (sys, M.empty)`,
-/// which hands the system back untouched.
-pub fn abbrev(abbreviate: bool, n: usize, sys: &System) -> Cow<'_, System> {
+/// which hands the system back untouched.  Either way the result is sealed as
+/// a [`RenderSystem`]: the caller's next stop is the JSON serialiser, and an
+/// abbreviated system must never re-enter the prover.
+pub fn abbrev(abbreviate: bool, n: usize, sys: System) -> RenderSystem {
     if !abbreviate {
-        return Cow::Borrowed(sys);
+        return RenderSystem::from_prover(sys);
     }
-    let legend = compute_legend(n, sys);
+    let legend = compute_legend(n, &sys);
     // An empty legend maps every term to itself, so `updateSystem` is the
     // identity and the system is handed back as-is.
     if legend.is_empty() {
-        return Cow::Borrowed(sys);
+        return RenderSystem::from_prover(sys);
     }
-    let mut out = sys.clone();
+    let mut out = RenderSystem::from_prover(sys);
     update_system(&legend, &mut out);
-    Cow::Owned(out)
+    out
 }
 
 #[cfg(test)]
@@ -228,7 +233,7 @@ mod tests {
     #[test]
     fn small_terms_are_left_alone() {
         let sys = system_with(vec![f(var("x"))]);
-        let out = abbrev(true, MIN_ABBREV_SIZE, &sys);
+        let out = abbrev(true, MIN_ABBREV_SIZE, sys.clone());
         assert_eq!(conclusion_terms(&out), conclusion_terms(&sys));
     }
 
@@ -237,14 +242,14 @@ mod tests {
     #[test]
     fn large_noeq_term_becomes_an_abbrev_constant() {
         let sys = system_with(vec![big("x")]);
-        let out = abbrev(true, MIN_ABBREV_SIZE, &sys);
+        let out = abbrev(true, MIN_ABBREV_SIZE, sys.clone());
         assert_eq!(conclusion_terms(&out), vec![abbrev_const("f")]);
         assert_eq!(
             Lit::<Name, LVar>::Con(Name::new(NameTag::Abbrev, "f")).to_string(),
             "f"
         );
         // Without the `abbrevInBackend` parameter nothing is rewritten.
-        let plain = abbrev(false, MIN_ABBREV_SIZE, &sys);
+        let plain = abbrev(false, MIN_ABBREV_SIZE, sys.clone());
         assert_eq!(conclusion_terms(&plain), conclusion_terms(&sys));
     }
 
@@ -253,7 +258,7 @@ mod tests {
     #[test]
     fn repeated_head_symbol_gets_a_counter_suffix() {
         let sys = system_with(vec![big("x"), big("y")]);
-        let out = abbrev(true, MIN_ABBREV_SIZE, &sys);
+        let out = abbrev(true, MIN_ABBREV_SIZE, sys);
         assert_eq!(
             conclusion_terms(&out),
             vec![abbrev_const("f"), abbrev_const("f1")]
@@ -265,7 +270,7 @@ mod tests {
     #[test]
     fn a_repeated_term_takes_its_last_abbreviation() {
         let sys = system_with(vec![big("x"), big("x")]);
-        let out = abbrev(true, MIN_ABBREV_SIZE, &sys);
+        let out = abbrev(true, MIN_ABBREV_SIZE, sys);
         assert_eq!(
             conclusion_terms(&out),
             vec![abbrev_const("f1"), abbrev_const("f1")]
@@ -284,7 +289,7 @@ mod tests {
         sys.add_node(LVar::new("i", LSort::Node, 2), rule_with(vec![big("x")]));
         sys.add_node(LVar::new("i", LSort::Node, 1), rule_with(vec![big("y")]));
         assert_eq!(sys.nodes[0].0.idx, 2);
-        let out = abbrev(true, MIN_ABBREV_SIZE, &sys);
+        let out = abbrev(true, MIN_ABBREV_SIZE, sys);
         assert_eq!(node_conclusion_terms(&out, 1), vec![abbrev_const("f")]);
         assert_eq!(node_conclusion_terms(&out, 2), vec![abbrev_const("f1")]);
         assert_eq!(out.nodes[0].0.idx, 2);
@@ -300,7 +305,7 @@ mod tests {
         );
         assert!(t.size() >= MIN_ABBREV_SIZE);
         let sys = system_with(vec![t]);
-        let out = abbrev(true, MIN_ABBREV_SIZE, &sys);
+        let out = abbrev(true, MIN_ABBREV_SIZE, sys.clone());
         assert_eq!(conclusion_terms(&out), conclusion_terms(&sys));
     }
 }

@@ -1,7 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, and other minor contributors (see upstream git history)
+//   rkunnema, meiersi, jdreier, racoucho1u, PhilipLukertWork,
+//   charlie-j, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   src/Main/Mode/Batch.hs
+//   lib/theory/src/Theory/Text/Parser/Term.hs, src/Main/Mode/Batch.hs
 
 //! End-to-end tests for the `tamarin-prover` CLI library.
 //!
@@ -219,4 +220,56 @@ fn diff_flag_is_rejected_with_clear_message() {
 fn invalid_int_value_for_bound_returns_parse_error() {
     let r = parse_args(&["--bound=not-a-number".to_string()]);
     assert!(r.is_err(), "expected parse error for non-int --bound");
+}
+
+/// A user `functions: em/2` WITHOUT the bilinear-pairing builtin is an
+/// ordinary NoEq symbol: the intruder's `c_em` construction rule applies and
+/// the trivial exists-trace lemma is `verified`, identically to the same
+/// theory with the function renamed.  DELIBERATE DIVERGENCE from HS, whose
+/// `naryOpApp` (Theory/Text/Parser/Term.hs:103) captures the NAME `em` as the
+/// C-symbol unconditionally and then crashes on the first Maude query over
+/// such a term (`tamem` is only declared under `enableBP`) — a documented
+/// upstream bug.  Classifying `em` as C here
+/// while emitting the NoEq intruder rule made the port silently FALSIFY this
+/// lemma (the two `em` symbols never unified), which is what this test pins
+/// against.  With bilinear-pairing enabled, `em` stays the C symbol
+/// (`term_to_vterm`'s gate; the bilinear corpus files cover that side).
+#[test]
+fn user_em_without_bp_builtin_is_a_plain_function() {
+    if !maude_available() {
+        eprintln!("skipping: maude not on path");
+        return;
+    }
+
+    let in_path = fixture("em_no_bp.spthy");
+    let out_dir = std::env::temp_dir().join("tamarin_prover_e2e_em_no_bp");
+    std::fs::create_dir_all(&out_dir).expect("mkdir out_dir");
+    let out_path = out_dir.join("em_no_bp_out.spthy");
+
+    let output_arg = format!("--output={}", out_path.to_str().unwrap());
+    let maude = maude_arg();
+    let mut argv: Vec<&str> = maude.as_deref().into_iter().collect();
+    argv.extend([
+        "--prove",
+        "--derivcheck-timeout=0",
+        &output_arg,
+        "--quiet",
+        in_path.to_str().unwrap(),
+    ]);
+    let args = args_from(&argv);
+    let code = run(&args).expect("run");
+    assert_eq!(code, 0, "expected exit code 0, got {}", code);
+
+    let body = std::fs::read_to_string(&out_path).expect("output written");
+    assert!(
+        body.contains("lemma l") && body.contains("SOLVED // trace found"),
+        "em/2 without bilinear-pairing must behave as a plain function \
+         (exists-trace provable via c_em); got:\n{}",
+        body
+    );
+    assert!(
+        !body.contains("has no variants"),
+        "no bogus empty-variant warning may appear; got:\n{}",
+        body
+    );
 }

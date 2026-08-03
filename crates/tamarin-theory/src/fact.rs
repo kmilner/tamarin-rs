@@ -405,7 +405,7 @@ pub fn fact_tag_arity(t: &FactTag) -> usize {
 }
 
 pub fn fact_tag_multiplicity(t: &FactTag) -> Multiplicity {
-    // Mirror Haskell's `factTagMultiplicity` (Fact.hs:353-358):
+    // Mirror Haskell's `factTagMultiplicity` (Fact.hs:383-388):
     //
     //   factTagMultiplicity tag = case tag of
     //       ProtoFact multi _ _ -> multi
@@ -433,7 +433,8 @@ impl<T> Fact<T> {
     pub fn is_persistent(&self) -> bool {
         fact_tag_multiplicity(&self.tag) == Multiplicity::Persistent
     }
-    // Intentionally retained: faithful HS port; no caller yet.
+    // Used by the web graph's protocol-edge classification
+    // (tamarin-server `graph::json`).
     pub fn is_proto(&self) -> bool {
         matches!(self.tag, FactTag::Proto(_, _, _))
     }

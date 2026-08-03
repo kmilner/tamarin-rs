@@ -1,12 +1,14 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, rkunnema, jdreier, beschmi, PhilipLukertWork, and other
-//   minor contributors (see upstream git history)
+//   meiersi, jdreier, beschmi, rkunnema, addap, PhilipLukertWork,
+//   rsasse, charlie-j, and other minor contributors (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Term.hs, lib/theory/src/Rule.hs,
-//   lib/theory/src/Theory/Model/Fact.hs,
+//   lib/term/src/Term/Term.hs, lib/term/src/Term/Term/Raw.hs,
+//   lib/theory/src/Rule.hs, lib/theory/src/Theory/Model/Fact.hs,
 //   lib/theory/src/Theory/Model/Rule.hs,
 //   lib/theory/src/Theory/Sapic/Print.hs,
 //   lib/theory/src/Theory/Sapic/Process.hs,
+//   lib/theory/src/Theory/Text/Parser/Term.hs,
 //   lib/utils/src/Text/PrettyPrint/Class.hs
 
 //! Port of the SAPIC process pretty-printers from
@@ -26,20 +28,20 @@
 //! A long term such as `<aenc(shared_key.1, pk(skV.1)),
 //! report(aenc(shared_key.1, pk(skV.1)))>` (70 cols > 67) therefore wraps
 //! INSIDE the rendered term, with continuation lines indented by the `nest 1`
-//! that `ppTerms`/pairs apply (Term.hs:288-290).  Each `render` starts at
+//! that `ppTerms`/pairs apply (Term.hs:319-321).  Each `render` starts at
 //! column 0 (the surrounding literals do not shift the wrap column), so we
 //! render each sub-Doc standalone via [`render_sapic`].
 //!
 //! HS references:
 //!   - `prettySapicTerm = prettyTerm (text . show)` (Term.hs:168-169), where
 //!     `show :: SapicLVar` is `show v ++ ":" ++ t` for typed vars (Term.hs:108-110).
-//!   - `prettyTerm` term Doc structure (Term/Term.hs:268-296): pairs via
-//!     `ppTerms ", " 1 "<" ">"` (fcat + `nest 1`), AC ops via
-//!     `ppTerms (ppACOp o) 1 "(" ")"`, functions via `ppFun = text(f++"(") <>
-//!     fsep (punctuate comma args) <> ")"`.
+//!   - `prettyTerm` term Doc structure (Term/Term.hs:299-327): pairs via
+//!     `ppTerms ", " 1 "<" ">"` (fcat + `nest 1`), AC ops via `ppTerms` over
+//!     the operator's own separator (Term.hs:304-309), functions via `ppFun =
+//!     text(f++"(") <> fsep (punctuate comma args) <> ")"`.
 //!   - `prettySapicFact = prettyFact prettySapicTerm` (Term.hs:171-172); a
 //!     fact renders as `Name( a, b )` via `nestShort' (n++"(") ")" . fsep .
-//!     punctuate comma` (Fact.hs:540-547, Class.hs:218-223).
+//!     punctuate comma` (Fact.hs:567-573, Class.hs:221-223).
 //!   - `prettySapicAction'` (Process.hs:450-469).
 //!   - `prettySapicTopLevel'` (Process.hs:514-524).
 //!
@@ -49,7 +51,7 @@
 //! so they never affect non-process theories.
 
 use tamarin_term::function_symbols::{diff_sym, exp_sym, nat_one_sym, pair_sym, EMAP_SYM_STRING};
-use tamarin_term::function_symbols::{CSym, FunSym};
+use tamarin_term::function_symbols::{AcSym, CSym, FunSym};
 use tamarin_term::vterm::{Lit, VTerm};
 
 use crate::pretty_hpj::{self as hpj, Doc};
@@ -85,7 +87,7 @@ fn show_sapic_lvar(v: &SapicLVar) -> String {
 }
 
 /// `render (prettySapicTerm t)` over a `SapicTerm` — HS `prettyTerm (text .
-/// show)` (Term.hs:268-296) built as a HughesPJ `Doc` then rendered standalone
+/// show)` (Term.hs:299-327) built as a HughesPJ `Doc` then rendered standalone
 /// at the default width (100 / 67), so long terms WRAP exactly as HS's inner
 /// `render` does.
 pub(crate) fn pretty_sapic_term(t: &SapicTerm) -> String {
@@ -120,8 +122,16 @@ fn sapic_term_to_doc(
             tamarin_term::pretty::pp_name(n, &mut s);
             Doc::text(s)
         }
+        // HS `prettyTerm` matches the user-defined AC symbols BEFORE the
+        // builtin AC operators and prints a nullary application as the bare
+        // symbol name (`FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)`,
+        // Term.hs:304).  Non-nullary ones fall through to the generic AC arm
+        // below, whose separator renders as `" f "`.
+        VTerm::App(FunSym::Ac(AcSym::AcFct(sym)), ts) if ts.is_empty() => {
+            Doc::text(String::from_utf8_lossy(sym.name))
+        }
         VTerm::App(FunSym::Ac(o), ts) => {
-            // HS `FApp (AC o) ts -> ppTerms (ppACOp o) 1 "(" ")" ts`.
+            // HS `FApp (AC o) ts -> ppTerms <op> 1 "(" ")" ts` (Term.hs:305-309).
             let refs: Vec<&SapicTerm> = ts.iter().collect();
             ac_op_doc(tamarin_term::pretty::ac_op_symbol(*o), &refs, match_vars)
         }
@@ -170,7 +180,7 @@ fn sapic_term_to_doc(
     }
 }
 
-/// HS `ppTerms ", " 1 "<" ">" flat` (Term/Term.hs:288-290): a fcat of `<`,
+/// HS `ppTerms ", " 1 "<" ">" flat` (Term/Term.hs:319-321): a fcat of `<`,
 /// each element `nest 1`'d and comma-suffixed (except the last), and `>`.
 fn pair_doc(
     flat: &[&SapicTerm],
@@ -179,9 +189,9 @@ fn pair_doc(
     hpj::fcat_bracketed("<", ", ", ">", flat, |t| sapic_term_to_doc(t, match_vars))
 }
 
-/// HS `ppTerms (ppACOp o) 1 "(" ")" ts` (Term/Term.hs:272-300, see line 273,288-290): like
-/// `pair_doc` with `(`/`)` lead/finish and the AC-op symbol (no surrounding
-/// spaces) as separator.
+/// HS `ppTerms <op> 1 "(" ")" ts` (Term/Term.hs:305-309, 319-321): like
+/// `pair_doc` with `(`/`)` lead/finish and the AC-op symbol as separator (the
+/// builtin ops carry no surrounding spaces; a user-defined AC name does).
 fn ac_op_doc(
     sym: &str,
     flat: &[&SapicTerm],
@@ -191,7 +201,7 @@ fn ac_op_doc(
 }
 
 /// HS `ppFun f ts = text (f ++ "(") <> fsep (punctuate comma (map ppTerm ts))
-/// <> text ")"` (Term/Term.hs:295-296).  The args are joined by a breakable
+/// <> text ")"` (Term/Term.hs:326-327).  The args are joined by a breakable
 /// `fsep` over a bare `,` (no following space — HS `comma = text ","`).
 fn fun_doc(
     name: &str,
@@ -209,7 +219,7 @@ fn pretty_pattern(t: &SapicTerm, match_vars: &std::collections::BTreeSet<SapicLV
     render_sapic(sapic_term_to_doc(t, Some(match_vars)))
 }
 
-/// HS `split` (Term.hs:292-293): `split (viewTerm2 -> FPair t1 t2) = t1 :
+/// HS `split` (Term.hs:323-324): `split (viewTerm2 -> FPair t1 t2) = t1 :
 /// split t2; split t = [t]`.  ONLY the RIGHT spine of a pair is flattened —
 /// `pair(t1, t2)` yields `t1` then recurses into `t2`.  A LEFT-nested pair such
 /// as `pair(pair(a,b), c)` therefore renders as `<<a, b>, c>` (the left child is
@@ -226,8 +236,8 @@ fn collect_pair_tail<'a>(t: &'a SapicTerm, out: &mut Vec<&'a SapicTerm>) {
 }
 
 /// `render (prettySapicFact a)` = `render (prettyFact prettySapicTerm a)`
-/// (Term.hs:171-172, Fact.hs:539-546).  Built as a `Doc` via `nestShort'
-/// (n++"(") ")" . fsep . punctuate comma` (Class.hs:218-223) then rendered
+/// (Term.hs:171-172, Fact.hs:567-573).  Built as a `Doc` via `nestShort'
+/// (n++"(") ")" . fsep . punctuate comma` (Class.hs:221-223) then rendered
 /// standalone at 100 / 67.  On one line this is `Name( a, b )` — the leading
 /// and trailing spaces come from `nestShort'`'s `sep [lead $$ nest k body,
 /// finish]` overlap; an empty arg list renders `Name( )`.  A wide event fact
@@ -236,7 +246,7 @@ fn pretty_sapic_fact(f: &crate::sapic::SapicLNFact) -> String {
     render_sapic(sapic_fact_to_doc(f))
 }
 
-/// HS `prettyFact prettySapicTerm` (Fact.hs:539-546): `ppFact (showFactTag
+/// HS `prettyFact prettySapicTerm` (Fact.hs:567-573): `ppFact (showFactTag
 /// tag) ts = nestShort' (n ++ "(") ")" . fsep . punctuate comma $ map
 /// prettySapicTerm ts`.  (SAPIC event facts never carry annotations, so the
 /// `<> ppAnn` suffix — empty for `S.null ann` — is omitted here, matching the
@@ -286,7 +296,15 @@ fn render_msr(
             // `ppRestr' fact = "_restrict(" <> ppRestr fact <> ")"`,
             // `ppRestr = prettySyntacticLNFormula . toLFormula` — the flat
             // single-line formula renderer (matches `Cond`'s formula path).
-            let inner = crate::pretty_formula::pretty_formula(phi);
+            // HS's payload is a formula over signature-built `SapicTerm`s, so
+            // `fAppAC`/`fAppC` flattened and sorted every AC/C application at
+            // parse time and `prettyTerm` prints AC nodes infix; the RS payload
+            // is the parser AST in written order, so canonicalise first — same
+            // treatment `ProcessCombinator::Cond` gets, and this render feeds
+            // both the `process="..."` attribute and the SAPIC-derived rule
+            // names, which must agree.
+            let canonical = crate::elaborate::canonicalize_ac_in_formula(phi);
+            let inner = crate::pretty_formula::pretty_formula(&canonical);
             items.push(Doc::text(format!("_restrict({inner})")));
         }
         hpj::fsep(vec![
@@ -374,12 +392,23 @@ fn pretty_sapic_comb(c: &ProcessCombinator<SapicLVar>) -> String {
         // (Process.hs:473-483, see line 476).  `prettySyntacticSapicFormula = prettySyntacticLNFormula
         // . toLFormula` (Term.hs:174-175); `toLFormula` just drops the SAPIC type
         // tags (`SapicLVar → LVar`), keeping the syntactic structure (predicates
-        // intact, formula un-expanded).  The RS `Cond` already carries the
-        // un-expanded parser-AST formula whose `VarSpec`s render WITHOUT type
-        // tags, so `pretty_formula` (the flat, single-line renderer) is
-        // byte-identical to `render . prettySyntacticSapicFormula`.
+        // intact, formula un-expanded).  The RS `Cond` carries the un-expanded
+        // parser-AST formula whose `VarSpec`s render WITHOUT type tags, so
+        // `pretty_formula` (the flat, single-line renderer) matches
+        // `render . prettySyntacticSapicFormula`.
+        //
+        // HS's payload is a formula over `SapicTerm`s built by the signature-aware
+        // term parser, so every AC application was flattened + sorted by `fAppAC`
+        // and every `C` application sorted by `fAppC` at parse time
+        // (`naryOpApp`, Theory/Text/Parser/Term.hs:88-105; Term/Term/Raw.hs:118-133),
+        // and `prettyTerm` then prints the AC node infix (Term/Term.hs:305).  The
+        // parser AST keeps the written order instead, so canonicalise here to
+        // reach the same operand order and the same infix spelling — this render
+        // feeds BOTH the `process="..."` attribute and the SAPIC-derived rule
+        // names, which must agree.
         ProcessCombinator::Cond(f) => {
-            format!("if {}", crate::pretty_formula::pretty_formula(f))
+            let canonical = crate::elaborate::canonicalize_ac_in_formula(f);
+            format!("if {}", crate::pretty_formula::pretty_formula(&canonical))
         }
         // HS `prettySapicComb (Lookup t v) = "lookup "++ p t ++ " as " ++ show v`
         // (Process.hs:473-483, see line 482).  `show v` on an (untyped) `SapicLVar` is just the
@@ -477,8 +506,183 @@ mod tests {
     }
 
     #[test]
+    fn user_ac_term_infix_and_nullary() {
+        use tamarin_term::function_symbols::{AcFctSym, AcSym, NdcState};
+        let f = AcFctSym::new(
+            b"f".to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::NotNdc,
+        );
+        let x = VTerm::Lit(Lit::Var(sv("x", 1, None)));
+        let y = VTerm::Lit(Lit::Var(sv("y", 1, None)));
+        let applied = tamarin_term::term::f_app_ac(AcSym::AcFct(f), vec![x, y]);
+        assert_eq!(
+            render_sapic(sapic_term_to_doc(&applied, None)),
+            "(x.1 f y.1)"
+        );
+        // HS `FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)` (Term.hs:304):
+        // the bare name, no parens.  `f_app_ac` rejects an empty argument list
+        // (HS `fAppAC` errors likewise, Raw.hs:120), so no theory text reaches
+        // this arm — it is here to keep the printer the shape of `prettyTerm`.
+        let nullary: SapicTerm = VTerm::App(FunSym::Ac(AcSym::AcFct(f)), vec![].into());
+        assert_eq!(render_sapic(sapic_term_to_doc(&nullary, None)), "f");
+    }
+
+    #[test]
     fn null_top_level() {
         let p: PlainProcess = Process::Null(ProcessParsedAnnotation::empty());
         assert_eq!(pretty_sapic_top_level(&p), "0");
+    }
+
+    /// `if <formula>` renders its user-`[AC]` applications the way HS's
+    /// signature-built `SapicTerm`s do: flattened, sorted, infix.
+    ///
+    /// Oracle bytes (pinned build, Git revision ef3f0468) for
+    /// `functions: add/2 [AC]` + `predicates: Eq(a, b) <=> a = b` +
+    /// `in(k); if Eq(<'g'^k, add(k,'a')>, k) then out('yes') else out('no')`:
+    ///   `process="if Eq( <'g'^k.1, ('a' add k.1)>, k.1 )"`
+    /// and for `if Eq(add(k, add('a','b')), k)`:
+    ///   `process="if Eq( ('a' add 'b' add k.1), k.1 )"`.
+    #[test]
+    fn cond_renders_user_ac_flattened_sorted_and_infix() {
+        use tamarin_parser::ast as p;
+
+        let k = p::Term::Var(p::VarSpec {
+            typ: None,
+            name: "k".into(),
+            sort: p::SortHint::Msg,
+            idx: 1,
+        });
+        let eq_cond = |args: Vec<p::Term>| {
+            let f = p::Formula::Atom(p::Atom::Pred(p::Fact {
+                persistent: false,
+                name: "Eq".into(),
+                args,
+                annotations: Vec::new(),
+            }));
+            let proc: PlainProcess = Process::Comb(
+                ProcessCombinator::Cond(f),
+                ProcessParsedAnnotation::empty(),
+                Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+                Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+            );
+            pretty_sapic_top_level(&proc)
+        };
+
+        // `<'g'^k.1, add(k.1, 'a')>`: the AC application is written prefix and
+        // in the non-canonical operand order.
+        let m1 = vec![
+            p::Term::Pair(vec![
+                p::Term::BinOp(
+                    p::BinOp::Exp,
+                    Box::new(p::Term::PubLit("g".into())),
+                    Box::new(k.clone()),
+                ),
+                p::Term::App("add".into(), vec![k.clone(), p::Term::PubLit("a".into())]),
+            ]),
+            k.clone(),
+        ];
+        // `add(k.1, add('a', 'b'))`: a nested chain that flattens to three
+        // operands under one AC node.
+        let m2 = vec![
+            p::Term::App(
+                "add".into(),
+                vec![
+                    k.clone(),
+                    p::Term::App(
+                        "add".into(),
+                        vec![p::Term::PubLit("a".into()), p::Term::PubLit("b".into())],
+                    ),
+                ],
+            ),
+            k.clone(),
+        ];
+
+        // Without the theory's `[AC]` set installed `add` is an ordinary
+        // function symbol, so it stays prefix — this is what makes the
+        // assertions below discriminating.
+        assert_eq!(
+            eq_cond(m1.clone()),
+            "if Eq( <'g'^k.1, add(k.1, 'a')>, k.1 )"
+        );
+
+        let theory =
+            tamarin_parser::parse_theory("theory T begin functions: add/2 [AC] end", &[]).unwrap();
+        let _guard = crate::elaborate::set_user_funs_for_theory(&theory);
+        assert_eq!(eq_cond(m1), "if Eq( <'g'^k.1, ('a' add k.1)>, k.1 )");
+        assert_eq!(eq_cond(m2), "if Eq( ('a' add 'b' add k.1), k.1 )");
+    }
+
+    /// An MSR's embedded `_restrict(...)` renders its user-`[AC]` applications
+    /// the same way `if <formula>` does — the render feeds both the
+    /// `process="..."` attribute and the SAPIC-derived rule/restriction names.
+    ///
+    /// Oracle bytes (pinned build, Git revision ef3f0468) for
+    /// `builtins: xor` + `functions: add/2 [AC]` +
+    /// `in(k); [ ] --[ Ev(add(k,'a')), _restrict(add(k,'a') = k) ]-> [ ]; out('y')`:
+    ///   `process=" [ ] --[ Ev( ('a' add k.1) ), _restrict(('a' add k.1) = k.1) ]-> [ ];"`
+    #[test]
+    fn msr_restriction_renders_user_ac_flattened_sorted_and_infix() {
+        use tamarin_parser::ast as p;
+
+        let k = p::Term::Var(p::VarSpec {
+            typ: None,
+            name: "k".into(),
+            sort: p::SortHint::Msg,
+            idx: 1,
+        });
+        let add_k_a = p::Term::App("add".into(), vec![k.clone(), p::Term::PubLit("a".into())]);
+        let restr = p::Formula::Atom(p::Atom::Eq(add_k_a, k.clone()));
+        let ev = crate::fact::Fact::new(
+            crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "Ev", 1),
+            vec![tamarin_term::term::f_app_ac(
+                tamarin_term::function_symbols::AcSym::AcFct(
+                    tamarin_term::function_symbols::AcFctSym::new(
+                        b"add".to_vec(),
+                        Privacy::Public,
+                        Constructability::Constructor,
+                        tamarin_term::function_symbols::NdcState::NotNdc,
+                    ),
+                ),
+                vec![
+                    VTerm::Lit(Lit::Var(sv("k", 1, None))),
+                    VTerm::Lit(Lit::Con(tamarin_term::lterm::Name::new(
+                        tamarin_term::lterm::NameTag::Pub,
+                        "a",
+                    ))),
+                ],
+            )],
+        );
+        let msr = |rest: Vec<p::Formula>| {
+            let proc: PlainProcess = Process::Action(
+                SapicAction::Msr {
+                    prems: Vec::new(),
+                    acts: vec![ev.clone()],
+                    concs: Vec::new(),
+                    rest,
+                    match_vars: std::collections::BTreeSet::new(),
+                },
+                ProcessParsedAnnotation::empty(),
+                Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+            );
+            pretty_sapic_top_level(&proc)
+        };
+
+        // Without the theory's `[AC]` set installed `add` is an ordinary
+        // function symbol, so it stays prefix — this is what makes the
+        // assertion below discriminating.
+        assert_eq!(
+            msr(vec![restr.clone()]),
+            " [ ] --[ Ev( ('a' add k.1) ), _restrict(add(k.1, 'a') = k.1) ]-> [ ];"
+        );
+
+        let theory =
+            tamarin_parser::parse_theory("theory T begin functions: add/2 [AC] end", &[]).unwrap();
+        let _guard = crate::elaborate::set_user_funs_for_theory(&theory);
+        assert_eq!(
+            msr(vec![restr]),
+            " [ ] --[ Ev( ('a' add k.1) ), _restrict(('a' add k.1) = k.1) ]-> [ ];"
+        );
     }
 }

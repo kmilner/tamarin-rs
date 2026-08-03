@@ -1,0 +1,12 @@
+theory MrBoth
+begin
+
+builtins: diffie-hellman
+
+rule R2:
+  [ In( fst(x) ), Fr(~a), Fr(~b) ] --[ Go( x ) ]-> [ Out( <x, (~a*~b)> ) ]
+
+lemma L1:
+  exists-trace "Ex y #i. Go(y) @ #i"
+
+end

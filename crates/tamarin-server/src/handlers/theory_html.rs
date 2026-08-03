@@ -1,8 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, arcz, cascremers, felixlinker, beschmi, rsasse, jdreier,
+//   meiersi, arcz, cascremers, jdreier, beschmi, felixlinker, rsasse,
 //   BTom-GH, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Term/Raw.hs,
+//   lib/term/src/Term/Term/Raw.hs, lib/theory/src/CloseRule.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
 //   lib/theory/src/Theory/Model/Rule.hs,
 //   lib/theory/src/Theory/Proof.hs,
@@ -16,9 +16,9 @@
 //! rules in the UI, and to wire `Autoprove` links the frontend
 //! recognises.
 
-use crate::handlers::default_layout;
 use crate::handlers::path_parse::{encode_sub_path, url_path_escape, SourceKind, TheoryPath};
 use crate::handlers::root::html_escape;
+use crate::handlers::{default_layout, OPTIONS_MENU_ITEMS};
 use crate::state::TheoryEntry;
 
 use tamarin_theory::constraint::solver::proof_method::{ProofMethod, Result as MethodResult};
@@ -51,26 +51,6 @@ pub fn overview_page(entry: &TheoryEntry, path: &TheoryPath) -> String {
         ),
     )
 }
-
-/// The "Options" drop-down's `<li>` run, from the `Options` anchor through the
-/// closing `</ul></li>` of the toggle list.
-///
-/// HS splices the same `optionsMenuItemTpl True` (Web/Types.hs:749-763) into
-/// both the theory-page header (Web/Hamlet.hs:190, via [`header`]) and the
-/// standalone graph shell's popout bar (`popoutOptionsTpl True`,
-/// Web/Types.hs:769-777, via `handlers::theory::intdot_shell_html`), so the
-/// two pages carry byte-identical menu markup.
-pub(crate) const OPTIONS_MENU_ITEMS: &str =
-    "<li><a href=\"#\">Options</a><ul class=\"list-with-toggles\">\
-<li><a id=abbrv-toggle href=\"#\">Abbreviate terms</a></li>\
-<li><a id=agent-toggle href=\"#\">Clustering by role</a></li>\
-<li><a id=auto-toggle href=\"#\">Show annotation auto-sources</a></li>\
-<li><a id=abstr-toggle href=\"#\">Abstract node content</a></li>\
-<li><a id=lvl0-toggle href=\"#\">Graph simplification off</a></li>\
-<li><a id=lvl1-toggle href=\"#\">Graph simplification L1</a></li>\
-<li><a id=lvl2-toggle href=\"#\">Graph simplification L2</a></li>\
-<li><a id=lvl3-toggle href=\"#\">Graph simplification L3</a></li>\
-</ul></li>";
 
 fn header(entry: &TheoryEntry) -> String {
     // Byte-faithful port of HS `headerTpl` (Web/Hamlet.hs:166-198): the
@@ -860,7 +840,7 @@ use tamarin_theory::rule::{IntrRuleAC, IntrRuleACInfo};
 fn is_constr_intr(info: &IntrRuleACInfo) -> bool {
     matches!(
         info,
-        IntrRuleACInfo::ConstrRule(_, _)
+        IntrRuleACInfo::ConstrRule { .. }
             | IntrRuleACInfo::FreshConstr
             | IntrRuleACInfo::PubConstr
             | IntrRuleACInfo::NatConstr
@@ -872,7 +852,7 @@ fn is_constr_intr(info: &IntrRuleACInfo) -> bool {
 fn is_destr_intr(info: &IntrRuleACInfo) -> bool {
     matches!(
         info,
-        IntrRuleACInfo::DestrRule(..) | IntrRuleACInfo::IEquality
+        IntrRuleACInfo::DestrRule { .. } | IntrRuleACInfo::IEquality
     )
 }
 

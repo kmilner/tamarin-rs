@@ -1,8 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   arcz, meiersi, felixlinker, cascremers, Kanakanajm, jdreier,
-//   kevinmorio, rsasse, BTom-GH, beschmi, symphorien, YannColomb,
-//   racoucho1u, xaDxelA, addap, Azurios-git, and other minor
-//   contributors (see upstream git history)
+//   meiersi, arcz, jdreier, cascremers, felixlinker, rsasse,
+//   Kanakanajm, beschmi, Divya19gupta, addap, BTom-GH,
+//   PhilipLukertWork, kevinmorio, YannColomb, Mathias-AURAND, xaDxelA,
+//   racoucho1u, symphorien, Azurios-git, Esslingen-Security-Privacy,
+//   and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
 //   lib/theory/src/Theory/Proof.hs,
@@ -31,7 +32,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::handlers::{
-    html_response, internal_server_error, json_resp, path_parse, text_response, theory_html,
+    html_response, intdot_shell_html, internal_server_error, json_resp, path_parse, text_response,
+    theory_html,
 };
 use crate::state::AppState;
 
@@ -61,6 +63,45 @@ fn not_found() -> Response {
     StatusCode::NOT_FOUND.into_response()
 }
 
+/// A theory looked up from the store, with its user-declared function-symbol
+/// sets installed on the request thread for as long as the value is held.
+///
+/// HS resolves a declared `[AC]` / nullary / unary symbol at PARSE time, so its
+/// terms are born resolved; the port resolves them through thread-locals, which
+/// start empty on every axum worker (see
+/// [`TheoryEntry::install_user_funs`](crate::state::TheoryEntry::install_user_funs)).
+/// Binding the sets to the looked-up theory makes that a property of the
+/// handler boundary rather than of each renderer remembering: a handler cannot
+/// hold the entry without them.  Renderers that install again nest harmlessly —
+/// the guards restore in reverse order and each installs the same sets.
+///
+/// Not held across an `.await`: the sets belong to the thread, and a suspended
+/// task can resume on another one.
+struct LoadedTheory {
+    entry: crate::state::TheoryEntry,
+    _user_funs: tamarin_theory::elaborate::UserFunsForTheoryGuard,
+}
+
+impl std::ops::Deref for LoadedTheory {
+    type Target = crate::state::TheoryEntry;
+
+    fn deref(&self) -> &Self::Target {
+        &self.entry
+    }
+}
+
+/// The theory at `idx` with its user-fn sets installed (see [`LoadedTheory`]),
+/// or `None` for an index naming no theory — HS `withTheory`'s `notFound`
+/// (`src/Web/Handler.hs:660-666`).
+fn load_theory(state: &AppState, idx: usize) -> Option<LoadedTheory> {
+    let entry = state.store.get(idx)?;
+    let user_funs = entry.install_user_funs();
+    Some(LoadedTheory {
+        entry,
+        _user_funs: user_funs,
+    })
+}
+
 // ---------------------------------------------------------------------
 // Overview / main view
 // ---------------------------------------------------------------------
@@ -86,7 +127,7 @@ pub async fn interactive_overview(
     // proto-only rule count.  Best-effort: a Maude failure leaves the counts
     // as-is.
     let _ = state.store.ensure_proof_state(idx, &state.cfg);
-    let Some(entry) = state.store.get(idx) else {
+    let Some(entry) = load_theory(&state, idx) else {
         return not_found();
     };
     html_response(theory_html::overview_page(&entry, &path))
@@ -121,7 +162,7 @@ pub async fn theory_path_main(
         return apply_method_and_redirect(&state, idx, lemma, *method_nr, sub).into_response();
     }
     materialise_proof_state_if_needed(&state, idx, &path);
-    let Some(entry) = state.store.get(idx) else {
+    let Some(entry) = load_theory(&state, idx) else {
         return not_found();
     };
     let title = title_for(&entry, &path);
@@ -474,7 +515,7 @@ pub async fn source_(State(state): State<Arc<AppState>>, Path(idx): Path<usize>)
     // `by sorry` bodies).  Mirrors the framed-page
     // handler's unconditional `ensure_proof_state`.
     let _ = state.store.ensure_proof_state(idx, &state.cfg);
-    let Some(entry) = state.store.get(idx) else {
+    let Some(entry) = load_theory(&state, idx) else {
         return not_found();
     };
     text_response(render_theory_source(&entry))
@@ -486,7 +527,7 @@ pub async fn message_deduction(
 ) -> Response {
     // See `source_` — identical output, identical proof-state need.
     let _ = state.store.ensure_proof_state(idx, &state.cfg);
-    let Some(entry) = state.store.get(idx) else {
+    let Some(entry) = load_theory(&state, idx) else {
         return not_found();
     };
     text_response(render_theory_source(&entry))
@@ -501,10 +542,10 @@ pub async fn message_deduction(
 /// `extractor` ∈ { characterize, idfs, bfs, seqdfs, sorry }
 /// `bound` is the prover bound (0 = unlimited)
 /// `quit` is `True`/`False` (Yesod `PathPiece Bool`; capital-cased).
-///   The URL extractor on this handler is `String`, but the router
-///   only matches when the `<quit>` segment is exactly one of those
-///   two strings — see [`parse_bool_path_piece`].  Anything else
-///   yields a 404 (the catch-all stub handler below).
+///   The URL extractor on this handler is `String`, so the segment
+///   reaches the body, where [`parse_bool_path_piece`] rejects
+///   anything else with the 404 Yesod's routing answers before its
+///   handler runs.
 /// `path`'s first segment is typically `proof/<lemma-name>`.
 pub async fn autoprove(
     State(state): State<Arc<AppState>>,
@@ -896,7 +937,7 @@ pub async fn verify(
     State(state): State<Arc<AppState>>,
     Path((idx, raw_path)): Path<(usize, String)>,
 ) -> Response {
-    let Some(entry) = state.store.get(idx) else {
+    let Some(entry) = load_theory(&state, idx) else {
         return json_resp::alert(format!("theory index {} not found", idx)).into_response();
     };
     // Unparseable path → routing-level 404 (see `parse_path`).
@@ -1015,7 +1056,7 @@ pub async fn download(
     // reflected in the saved file.  Same body as the `source_` handler,
     // different content-type/disposition.
     let _ = state.store.ensure_proof_state(idx, &state.cfg);
-    let Some(entry) = state.store.get(idx) else {
+    let Some(entry) = load_theory(&state, idx) else {
         return not_found();
     };
     let mut headers = HeaderMap::new();
@@ -1427,36 +1468,6 @@ pub async fn intdot(
     html_response(intdot_shell_html(&title, &dotsrc))
 }
 
-/// Byte-for-byte reproduction of `intdotLayout True` (`src/Web/Types.hs:795-825`)
-/// wrapping `popoutOptionsTpl True` (`src/Web/Types.hs:769-777`) and
-/// `optionsMenuItemTpl True` (`src/Web/Types.hs:749-763`).
-///
-/// The doubled `</script></script>` end tags are Hamlet's, and the stray tags
-/// shift DOM nesting — matching them verbatim is what makes the semantic gate
-/// see the same tree.
-fn intdot_shell_html(title: &str, dotsrc: &str) -> String {
-    format!(
-        "<!DOCTYPE html>\n<html><head>\
-         <meta charset=\"UTF-8\" />\
-         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\
-         <title>{title}</title>\
-         <style> body,html{{width: 100%; height: 100%; overflow: hidden; margin: 0; padding: 0; }}</style>\
-         <link rel=\"stylesheet\" href=\"/static/css/intdot-style.css\">\
-         <link rel=\"stylesheet\" href=\"/static/css/tamarin-prover-ui.css\">\
-         <script src=\"/static/js/jquery.js\"></script></script>\
-         <script src=\"/static/js/jquery-cookie.js\"></script></script>\
-         <script src=\"/static/js/jquery-superfish.js\"></script></script>\
-         <script>window.tamarinPopoutGraph = (window.self === window.top); if (!window.tamarinPopoutGraph) {{ document.documentElement.classList.add(\"graph-embedded\"); }}</script></script>\
-         <script src=\"/static/js/tamarin-prover-ui.js\"></script></script>\
-         <script type=\"module\" src=\"/static/js/intdot-graph.es.js\"></script></script>\
-         </head><body><div class=\"graph-page\">\
-         <div id=\"popout-options\"><ul id=\"navigation\">\
-         {options}</ul></div>\
-         <dot-graph-viz dotsrc=\"{dotsrc}\"></dot-graph-viz>\n</div></body></html>",
-        options = theory_html::OPTIONS_MENU_ITEMS,
-    )
-}
-
 /// Yesod `getUrlRender (TheoryGraphJsonR idx path)` — re-render the parsed
 /// path through `renderTheoryPath` + `prefixWithUnderscore` and percent-encode
 /// each segment, exactly as the other URL builders here do.
@@ -1487,20 +1498,23 @@ pub async fn graph(
     Path((idx, raw_path)): Path<(usize, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
-    if !state.store.contains(idx) {
+    // Held for the whole handler: the theory's user-fn sets stay installed
+    // until it drops (see [`LoadedTheory`]).
+    let Some(_theory) = load_theory(&state, idx) else {
         return not_found();
-    }
+    };
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
     };
     // HS `getTheoryGraphR` (`src/Web/Handler.hs:1418-1432`) answers
-    // `imgThyPath`'s `Nothing` — a proof path that does not resolve — with a
-    // generic `notFound`; there is no placeholder SVG.  In the port a source
-    // case whose indices name none is that same `Nothing` — upstream's `!!`
-    // raises there instead (see [`source_case_system`]).
-    let sys = match dot_path_system(&state, idx, &path, GRAPH_UNHANDLED_SITE) {
-        Ok(Some(s)) => s,
-        Ok(None) => return not_found(),
+    // `imgThyPath`'s `Nothing` with a generic `notFound`; there is no
+    // placeholder SVG.  The label `imgThyPath` also carries is for its JSON
+    // output format, which this route never asks for.
+    let sys = match thy_path_system(&state, idx, &path, GRAPH_UNHANDLED_SITE) {
+        Ok(resolved) => match resolved.into_system() {
+            Some(s) => s,
+            None => return not_found(),
+        },
         Err(message) => return internal_server_error(&message),
     };
     let opts = graph_options_from_map(&query);
@@ -1527,20 +1541,21 @@ pub async fn interactive_graph_def(
     Path((idx, raw_path)): Path<(usize, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
-    if !state.store.contains(idx) {
+    // See [`graph`]: the binding keeps the user-fn sets installed.
+    let Some(_theory) = load_theory(&state, idx) else {
         return not_found();
-    }
+    };
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
     };
     // HS `getTheoryInteractiveGraphR` (`src/Web/Handler.hs:1464-1470`) answers
-    // `dotGraphString`'s `Nothing` — a proof path that does not resolve — with
-    // `notFound`.  In the port a source case whose indices name none is that
-    // same `Nothing` — upstream's `!!` raises there instead (see
-    // [`source_case_system`]).
-    let sys = match dot_path_system(&state, idx, &path, INTERACTIVE_DOT_UNHANDLED_SITE) {
-        Ok(Some(s)) => s,
-        Ok(None) => return not_found(),
+    // `dotGraphString`'s `Nothing` with `notFound`.  `dotGraphString` discards
+    // the label its `thyPathSystem` returns (`(_, system) <- thyPathSystem …`).
+    let sys = match thy_path_system(&state, idx, &path, INTERACTIVE_DOT_UNHANDLED_SITE) {
+        Ok(resolved) => match resolved.into_system() {
+            Some(s) => s,
+            None => return not_found(),
+        },
         Err(message) => return internal_server_error(&message),
     };
     let opts = graph_options_from_map(&query);
@@ -1560,7 +1575,7 @@ pub async fn interactive_graph_def(
 ///   HS `fromMaybe ""`: a 200 with an EMPTY body.
 /// - `TheorySource kind i j` — the `(i-1, j-1)` case system, labelled
 ///   `Theory: <thy> Case: <i>:<j>`, with no backend abbreviation.  Indices
-///   naming no case are a 404 (see [`source_case_system`]).
+///   naming no case are a 404 (see [`thy_path_system`]).
 /// - every other path — HS `error "Unhandled theory path. This is a bug."`,
 ///   i.e. 500.
 ///
@@ -1572,56 +1587,53 @@ pub async fn graph_json(
     Path((idx, raw_path)): Path<(usize, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
-    if !state.store.contains(idx) {
+    // See [`graph`]: held for the whole handler, and the source of the theory
+    // name the `jsonLabel`s carry.
+    let Some(theory) = load_theory(&state, idx) else {
         return not_found();
-    }
+    };
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
     };
     let opts = graph_options_from_map(&query);
-    let Some(name) = state.store.name(idx) else {
-        return not_found();
+    let resolved = match thy_path_system(&state, idx, &path, JSON_UNHANDLED_SITE) {
+        Ok(r) => r,
+        Err(message) => return internal_server_error(&message),
     };
-    match &path {
-        path_parse::TheoryPath::Proof { lemma, .. } => {
-            let Some(sys) = resolve_system_for_path(&state, idx, &path) else {
+    let label = resolved.json_label(&theory.name);
+    match resolved {
+        // HS `proofPathCode`: `fromMaybe BL.empty`, i.e. an unresolvable proof
+        // path is a 200 with an empty body.
+        PathSystem::Proof { system, .. } => {
+            let Some(sys) = system else {
                 return json_graph_response(String::new());
             };
             // `Web.Utils.abbrev abbreviate 30 sequent`, with `abbreviate` set
-            // by the mere PRESENCE of `abbrevInBackend`.
+            // by the mere PRESENCE of `abbrevInBackend`.  This is the one
+            // route that abbreviates, and — as upstream — only on this arm.
             let abbreviate = query.contains_key("abbrevInBackend");
             let sys = crate::graph::web_utils_abbrev::abbrev(
                 abbreviate,
                 crate::graph::web_utils_abbrev::MIN_ABBREV_SIZE,
-                &sys,
+                sys,
             );
-            let label = format!("Theory: {} Lemma: {}", name, lemma);
             json_graph_response(crate::graph::json::sequents_to_json_pretty(
                 &opts,
                 &[(label, &sys)],
             ))
         }
-        path_parse::TheoryPath::Source {
-            kind,
-            src_idx,
-            case_idx,
-        } => {
-            // The source cases live on the materialised proof state, so the
-            // entry is re-read afterwards (as the `main` handler does).
-            materialise_proof_state_if_needed(&state, idx, &path);
-            let Some(entry) = state.store.get(idx) else {
+        PathSystem::Source { system, .. } => {
+            let Some(sys) = system else {
                 return not_found();
             };
-            let Some(sys) = source_case_system(&entry, kind, *src_idx, *case_idx) else {
-                return not_found();
-            };
-            let label = format!("Theory: {} Case: {}:{}", name, src_idx, case_idx);
+            // No backend abbreviation on this arm; the seal is the serialiser's
+            // entry condition, so the system crosses into it as a render copy.
+            let sys = crate::graph::RenderSystem::from_prover(sys);
             json_graph_response(crate::graph::json::sequents_to_json_pretty(
                 &opts,
                 &[(label, &sys)],
             ))
         }
-        _ => internal_server_error(&unhandled_theory_path(JSON_UNHANDLED_SITE)),
     }
 }
 
@@ -1662,17 +1674,8 @@ fn unhandled_theory_path(site: &str) -> String {
 }
 
 /// HS `casesSystem k i j`: the `(i-1, j-1)` case of the `k` sources, or `None`
-/// when either 1-based index names no case.
-///
-/// Both indices are read signed (`safeRead` at `ReadS Int`,
-/// `src/Web/Types.hs:443`), so every value a client can type in the address
-/// bar arrives here.  Upstream feeds them straight into `cases !! (i-1) !!
-/// (j-1)` behind no bounds check at all (`src/Web/Theory.hs:1322` for `/json`,
-/// `:1422` for `/graph`, `:2329` for `/interactive-graph-def`), so a
-/// non-positive or past-the-end index raises `Prelude.!!` and Yesod serves a
-/// 500 page whose body is the exception text with its GHC CallStack.  RS
-/// deliberately corrects that: an index that names no case is an ordinary
-/// miss, which the callers answer with [`not_found`].
+/// when either 1-based index names no case — the port's correction of the
+/// raising `!!` upstream has there (see [`thy_path_system`]).
 fn source_case_system(
     entry: &crate::state::TheoryEntry,
     kind: &path_parse::SourceKind,
@@ -1683,36 +1686,99 @@ fn source_case_system(
     theory_html::source_list_case(entry, want_refined, src_idx, case_idx)
 }
 
-/// HS `thyPathSystem`, the system dispatch the two dot routes share
-/// (`imgThyPath` `src/Web/Theory.hs:1414-1416`, `dotGraphString` `:2321-2323`):
+/// What [`thy_path_system`] resolved: the drawn system, plus the arm it came
+/// from and that arm's `jsonLabel` ingredients.
 ///
-///   - `TheorySource k i j` — the `casesSystem` case; `Nothing` when the
-///     indices name none, which is the port's correction of the raising `!!`
-///     upstream has there (see [`source_case_system`]);
-///   - `TheoryProof lemma path` — the sub-proof's system, `Nothing` when the
-///     path does not resolve (both handlers answer `Nothing` with `notFound`);
+/// The arm survives the resolution because the three graph routes answer an
+/// unresolved system differently — `/json`'s proof arm with an empty 200, every
+/// other combination with a `404`.
+enum PathSystem {
+    /// HS `proofPathSystem lemma proofPath`; `system` is `None` when the proof
+    /// path does not resolve.
+    Proof {
+        lemma: String,
+        system: Option<tamarin_theory::constraint::system::System>,
+    },
+    /// HS `casesSystem k i j`; `system` is `None` when the indices name no
+    /// case (see [`source_case_system`]).
+    Source {
+        src_idx: i64,
+        case_idx: i64,
+        system: Option<tamarin_theory::constraint::system::System>,
+    },
+}
+
+impl PathSystem {
+    /// The `jsonLabel` the resolving clause builds — the graph's title in the
+    /// JSON rendering.  Only `/json` asks for it; `imgThyPath` builds it for
+    /// its `OutJSON` format and `dotGraphString` discards it outright.
+    fn json_label(&self, thy_name: &str) -> String {
+        match self {
+            PathSystem::Proof { lemma, .. } => format!("Theory: {} Lemma: {}", thy_name, lemma),
+            PathSystem::Source {
+                src_idx, case_idx, ..
+            } => format!("Theory: {} Case: {}:{}", thy_name, src_idx, case_idx),
+        }
+    }
+
+    /// The system alone, for the two routes that draw it unlabelled.
+    fn into_system(self) -> Option<tamarin_theory::constraint::system::System> {
+        match self {
+            PathSystem::Proof { system, .. } | PathSystem::Source { system, .. } => system,
+        }
+    }
+}
+
+/// HS `thyPathSystem`, the `Maybe (String, System)` dispatch every graph route
+/// goes through (`graphJsonThyPath`'s `go` `src/Web/Theory.hs:1316-1318`,
+/// `imgThyPath` `:1414-1416`, `dotGraphString` `:2321-2323`):
+///
+///   - `TheorySource k i j` — the `casesSystem` case, labelled
+///     `Theory: <thy> Case: <i>:<j>`;
+///   - `TheoryProof lemma path` — the sub-proof's system, labelled
+///     `Theory: <thy> Lemma: <lemma>`;
 ///   - anything else — the catch-all `error`, at `unhandled_site` (see
-///     [`JSON_UNHANDLED_SITE`]).
-fn dot_path_system(
+///     [`JSON_UNHANDLED_SITE`]), which the routes render as a 500 page.
+///
+/// The port DIVERGES from upstream on the source-case indices.  Both are read
+/// signed (`safeRead` at `ReadS Int`, `src/Web/Types.hs:443`), so every value a
+/// client can type in the address bar arrives here, and upstream feeds them
+/// straight into `cases !! (i-1) !! (j-1)` behind no bounds check at all
+/// (`src/Web/Theory.hs:1322` for `/json`, `:1422` for `/graph`, `:2329` for
+/// `/interactive-graph-def`): a non-positive or past-the-end index raises
+/// `Prelude.!!` and Yesod serves a 500 page whose body is the exception text
+/// with its GHC CallStack.  Here an index that names no case is an ordinary
+/// miss — a `None` system, which every route answers with [`not_found`], the
+/// same answer upstream gives an unresolvable proof path.
+fn thy_path_system(
     state: &AppState,
     idx: usize,
     path: &path_parse::TheoryPath,
     unhandled_site: &str,
-) -> Result<Option<tamarin_theory::constraint::system::System>, String> {
+) -> Result<PathSystem, String> {
     match path {
         path_parse::TheoryPath::Source {
             kind,
             src_idx,
             case_idx,
         } => {
-            // The source cases live on the materialised proof state.
+            // The source cases live on the materialised proof state, so the
+            // entry is re-read afterwards (as the `main` handler does).
             materialise_proof_state_if_needed(state, idx, path);
-            let Some(entry) = state.store.get(idx) else {
-                return Ok(None);
-            };
-            Ok(source_case_system(&entry, kind, *src_idx, *case_idx))
+            let system = state
+                .store
+                .get(idx)
+                .and_then(|entry| source_case_system(&entry, kind, *src_idx, *case_idx));
+            Ok(PathSystem::Source {
+                src_idx: *src_idx,
+                case_idx: *case_idx,
+                system,
+            })
         }
-        path_parse::TheoryPath::Proof { .. } => Ok(resolve_system_for_path(state, idx, path)),
+        path_parse::TheoryPath::Proof { lemma, .. } => Ok(PathSystem::Proof {
+            lemma: lemma.clone(),
+            system: resolve_system_for_path(state, idx, path),
+        }),
         _ => Err(unhandled_theory_path(unhandled_site)),
     }
 }
@@ -1917,16 +1983,46 @@ pub async fn diff_stub(_: State<Arc<AppState>>, _: Path<(usize, String)>) -> axu
 mod tests {
     use super::*;
 
-    // The interactive-graph shell is a fixed template around the escaped
-    // theory title and the JSON graph URL; the fixture is the Haskell
-    // oracle's response for NSPK3 at
-    // `/thy/trace/2/intdot/proof/injective_agree/_`.
+    /// The pinned submodule's `src/Web/Theory.hs`, embedded at build time: a
+    /// submodule bump recompiles this module against the new source, so the
+    /// coordinate check below runs on every bump.
+    const WEB_THEORY_HS: &str = include_str!("../../../../tamarin-prover/src/Web/Theory.hs");
+
+    /// The `error "Unhandled theory path. …"` raised inside the top-level
+    /// binding `func`, as `LINE:COLUMN` — the coordinates GHC's `HasCallStack`
+    /// prints: both 1-based, the column that of the `error` token itself.
+    fn unhandled_site_in(func: &str) -> String {
+        const RAISE: &str = "error \"Unhandled theory path. This is a bug.\"";
+        let lines: Vec<&str> = WEB_THEORY_HS.lines().collect();
+        let signature = format!("{} ::", func);
+        let start = lines
+            .iter()
+            .position(|l| l.starts_with(&signature))
+            .unwrap_or_else(|| panic!("no top-level `{func}` in src/Web/Theory.hs"));
+        for (i, line) in lines.iter().enumerate().skip(start + 1) {
+            if let Some(off) = line.find(RAISE) {
+                return format!("{}:{}", i + 1, line[..off].chars().count() + 1);
+            }
+            // A new top-level signature ends the binding.
+            assert!(
+                !(line.starts_with(|c: char| c.is_ascii_alphabetic()) && line.contains("::")),
+                "`{func}` raises no unhandled-theory-path error"
+            );
+        }
+        panic!("`{func}` raises no unhandled-theory-path error");
+    }
+
+    // The three constants are pasted into 500 bodies verbatim, so nothing else
+    // notices when a bump moves the clauses they name: the fixtures those
+    // bodies are compared against were captured from the port, and move with
+    // the constants rather than with upstream.
     #[test]
-    fn intdot_shell_matches_haskell_layout() {
-        let html = intdot_shell_html("Theory: NSPK3", "/thy/trace/2/json/proof/injective_agree/_");
+    fn unhandled_site_constants_name_the_pinned_call_sites() {
+        assert_eq!(JSON_UNHANDLED_SITE, unhandled_site_in("graphJsonThyPath"));
+        assert_eq!(GRAPH_UNHANDLED_SITE, unhandled_site_in("imgThyPath"));
         assert_eq!(
-            html,
-            include_str!("../../tests/assets/hsjson_intdot_shell.html")
+            INTERACTIVE_DOT_UNHANDLED_SITE,
+            unhandled_site_in("dotGraphString")
         );
     }
 

@@ -1,0 +1,67 @@
+// The names in the `unguarded variable(s) …` diagnostic, against the other
+// spellings of the SAME binder in the same load.
+//
+// `formulaToGuarded` (Theory/Constraint/System/Guarded.hs:471-479) runs the
+// whole conversion inside one `Precise.evalFreshT … (avoidPrecise fmOrig)`
+// (line 474), and its quantifier arms draw their binders with
+// `openFormulaPrefix` (Guarded.hs:536,547) with no `scopeFreshness` around
+// them — so a single supply is threaded across the entire formula.
+// `noUnguardedVars` (Guarded.hs:507-514) then `show`s the survivors under
+// those freshened names (line 511).  The pretty printer has its own supply:
+// `prettyLNFormula` (Theory/Model/Formula.hs:518-520) seeds `avoidPrecise`
+// afresh, and `prettyLFormula` opens every prefix under `scopeFreshness`
+// (Formula.hs:503-505), which RESTORES the supply on the way out.  One binder
+// can therefore print differently in the report and in the echo:
+//
+//   - `Shadow`'s inner `x` is shadowed by the enclosing one, so both supplies
+//     have consumed `x` before it is drawn: the echoed lemma reads
+//     `∀ x.1 z.` and the diagnostic names 'x.1', 'z';
+//   - `GuardedFirst` puts a guardable `∀ x` conjunct FIRST, where nothing
+//     encloses the offending one.  The conversion carries that binder's `x`
+//     across into the second conjunct and reports 'x.1', while the printer's
+//     scope-restored supply prints the same conjunct `∀ x z.` — the report
+//     and the echo disagree by design;
+//   - `UnguardedFirst` is that formula mirrored, so the offending conjunct is
+//     reached with `x` still untouched and the report reads 'x', 'z'.
+//
+// A supply reset per quantifier, or one counting only ENCLOSING binders,
+// collapses those answers onto one.  The quoted SUBFORMULA is a spelling
+// again: `noUnguardedVars` quotes it as `ppFormula f0` (Guarded.hs:513) and
+// `ppFormula` (Guarded.hs:477) is `nest 2 . doubleQuotes . prettyLNFormula`,
+// whose `avoidPrecise` sees that subformula alone — so it reads `"∀ x z. …"`
+// beside a variable list that says 'x.1'.  `ppError` (Guarded.hs:479) prints
+// the whole formula the same way, which is why the trailer under `in the
+// formula` carries the printer's names and not the conversion's.
+//
+// Every probe here is a LEMMA on purpose.  `prettyRestriction`
+// (TheoryObject.hs:889-901) decides its `// safety formula` line with
+// `formulaToGuarded_` (Guarded.hs:466-467), which is `either (error . render)
+// id`, so the oracle DIES while printing an unguardable restriction and the
+// same formulas as restrictions yield no comparable bytes at all.  A lemma's
+// conversion reaches only `checkGuarded`'s `Either`
+// (Theory/Tools/Wellformedness.hs:988-993).
+//
+// No corpus theory carries an unguardable lemma or restriction — no corpus wf
+// block holds a " Formula guardedness" header at all.
+//
+// Compared slices: the wf report block AND the `theory … end` echo (see
+// check.sh) — the echo repeats each diagnostic inside the lemma's
+// `conversion to guarded formula failed:` comment and prints the printer's
+// own binder names beside it, which is half of the corner.
+
+theory GuardedFreshenedNames
+begin
+
+lemma Shadow:
+  "All x #NOW. Foo(x) @ #NOW ==> (All x z. (<x, z> = x) ==> F)"
+
+lemma GuardedFirst:
+  "(All x #i. Foo(x) @ #i ==> F) & (All x z. (<x, z> = x) ==> F)"
+
+lemma UnguardedFirst:
+  "(All x z. (<x, z> = x) ==> F) & (All x #i. Foo(x) @ #i ==> F)"
+
+rule A:
+  [ In( x ) ] --[ Foo( x ) ]-> [ ]
+
+end

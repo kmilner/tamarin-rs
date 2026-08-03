@@ -81,6 +81,78 @@ subset, and `RS_PATH=`/`HS_PATH=` to point at other binaries.
   the emitted proofs with the Haskell prover; stdout is the re-verified proof
   file.
 
+## Divergence fixtures — corners the corpus cannot reach
+
+`divergence_fixtures/` covers observable behaviour that no theory under the
+submodule's `examples/` tree exercises, so every corpus gate stays green
+across a regression in it. Corpus files live in the submodule, which is why
+these theories cannot simply join `parity_corpus.txt`; they carry their own
+committed oracle bytes instead.
+
+- **`divergence_fixtures/capture.sh`** — records the oracle's bytes for every
+  fixture into `divergence_fixtures/expected/`. It resolves the oracle inside
+  `tamarin-prover-testing/` and **refuses any binary whose baked git revision
+  differs from the submodule pin** (same policy as
+  `crates/tamarin-server/tests/capture_haskell_fixtures.sh`): these bytes are
+  the reference, so a capture from another revision would silently redefine
+  what the port is checked against. `--record-rs` additionally re-records the
+  port side of the deliberate-divergence fixture — never a side effect.
+- **`divergence_fixtures/check.sh`** — runs only the port and compares against
+  those captures. Cheap (no oracle, no proving), so it fits anywhere.
+- **`divergence_fixtures/fixtures.tsv`** — per fixture: which output slices are
+  compared (`wf` = `wf_gate.sh`'s block, `theory` = `pretty_gate.sh`'s echo;
+  several are cut from one theory load), whether the port must `match` the
+  oracle or `diverge` from it, and the flags both engines get.
+
+Today's fixtures, in manifest order:
+
+- **`mixed_ac_wf`** — AC operands headed by *different* operators, rendered in
+  a wellformedness message.
+- **`pair_echo_order`** — two same-headed `pair` chains in one AC chain, whose
+  order is decided below the head and is not by operand size.
+- **`wf_user_ac_report`** — a user-declared `[AC]` symbol in a wellformedness
+  message: its operand rank against the builtin AC operators, and its
+  space-padded infix spelling.
+- **`sapic_lowering`** — the SAPIC translation's `LNTerm` → parser-AST
+  projection: infix `exp`, right-spine `pair` splitting.
+- **`sapic_user_ac`** — a user-declared `[AC]` symbol inside a SAPIC process,
+  reaching a `let`'s and an `if`'s derived rule names, generated restrictions
+  and `process=` attributes.
+- **`sapic_nullary_cond`** — a nullary function symbol inside a SAPIC
+  conditional, reaching the derived rule and restriction names, the `process=`
+  attribute and the AC-variant block.
+- **`sapic_formula_terms`** — a SAPIC-generated restriction that fails the
+  `Formula terms` check, to be picked out of two generated candidates.
+- **`formula_terms_offenders`** — two offending lemmas sharing one `Formula
+  terms` header, one of them naming two offenders, spelled by HS's `Show` for
+  terms rather than by the pretty printer.
+- **`wf_topic_interleave`** — a wellformedness topic that closes and reopens
+  under a second header, because `formulaReports`' checks report per formula
+  and not per topic. An earlier and a later check's entries bracket the run,
+  so its position in the report is pinned as well as its internal order.
+- **`guarded_name_collision`** — an inner binder sharing a name with an
+  enclosing one, which stays guarded and keeps its `// safety formula` line.
+- **`guarded_freshened_names`** — the names in the `unguarded variable(s) …`
+  diagnostic, whose supply runs across the whole formula, against the pretty
+  printer's own names for the same binders, whose supply is restored per
+  quantifier. Lemmas only: the oracle dies while printing an unguardable
+  restriction.
+- **`mult_restricted_report`** — both triggers of the `Multiplication
+  restriction of rules` check, one rule each: a product in a conclusion, and a
+  reducible left-hand side whose abstraction orphans right-hand-side variables.
+  The same rule is printed at two different widths in the two slices.
+- **`ac_marker_collapse`** — a `tamXCA…`-named function, where the port
+  deliberately diverges from upstream — see
+  `~/upstream-bug-ac-marker-collapse.md`.
+
+All but `ac_marker_collapse` must reproduce the pinned oracle's bytes; that one
+must NOT. `check.sh` asserts BOTH sides of it, so it goes red if the port
+drifts, if the divergence disappears, or if it changes shape.
+
+`bump_submodule.sh`'s checklist runs both scripts: `capture.sh` re-reads the
+fixtures from the new oracle, and `git diff divergence_fixtures/expected/` is
+then upstream behaviour moving under them.
+
 ## Licensing / attribution
 
 - **`gen_license_headers.py`** — regenerates every ported file's GPL

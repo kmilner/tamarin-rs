@@ -23,6 +23,7 @@
 use std::collections::BTreeMap;
 
 use tamarin_theory::constraint::constraints::{NodeId, Reason};
+use tamarin_theory::constraint::system::nodes_in_map_order;
 use tamarin_theory::fact::LNFact;
 use tamarin_theory::pretty_hpj::Doc;
 use tamarin_theory::rule::{IntrRuleACInfo, ProtoRuleName, RuleACInst, RuleInfo};
@@ -155,8 +156,8 @@ fn group_idx(ru: &RuleACInst) -> usize {
 /// `colors = lightColorGroups intruderHue (map (length . snd) groups)` and
 /// `intruderHue = 18 % 360` (Dot.hs:190-218, see line 208,217-218).
 ///
-/// `rules` here is `M.elems $ get sNodes se` (Dot.hs:481-487, see line 485) — the raw system's
-/// nodes in NodeId order — so we sort by NodeId (`M.Map` key order) first.
+/// `rules` here is `M.elems $ get sNodes se` (Dot.hs:506-512, see line 510) — the raw system's
+/// nodes in `M.Map` key order, materialised by [`nodes_in_map_order`].
 /// Each entry's colour follows `getColorForRule attrs gIdx mIdx = fromMaybe
 /// defaultColor (ruleColor attrs)` (Dot.hs:190-218, see line 212): a rule with an explicit
 /// `color:` attribute maps to THAT colour, otherwise to the palette default
@@ -170,9 +171,8 @@ fn group_idx(ru: &RuleACInst) -> usize {
 pub(crate) fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorMap {
     use tamarin_utils::color::{hsv_to_rgb, light_color_groups, Hsv, Rgb};
 
-    // `M.elems $ get sNodes se`: iterate in NodeId (Map key) order.
-    let mut ordered: Vec<&(NodeId, RuleACInst)> = nodes.iter().collect();
-    ordered.sort_by_key(|a| a.0);
+    // `M.elems $ get sNodes se`: iterate in NodeId (`M.Map` key) order.
+    let ordered = nodes_in_map_order(nodes);
 
     // `groups = [ (gIdx, [ru | ru <- rules, gIdx == groupIdx ru]) | gIdx <- 0..3 ]`
     // — order-preserving partition into four groups.
@@ -264,7 +264,13 @@ mod tests {
         TRule::new(TRuleInfo::Intr(info), Vec::new(), Vec::new(), Vec::new())
     }
     fn destr(n: &[u8]) -> IntrRuleACInfo {
-        IntrRuleACInfo::DestrRule(n.to_vec(), 0, false, false, vec![])
+        IntrRuleACInfo::DestrRule {
+            name: n.to_vec(),
+            remaining_applications: 0,
+            rhs_is_proper_subterm: false,
+            rhs_is_constant: false,
+            funs: vec![],
+        }
     }
     fn hex_of(cm: &NodeColorMap, id: NodeId) -> String {
         tamarin_utils::color::rgb_to_hex(cm.lookup_node(&id).unwrap())
@@ -318,10 +324,10 @@ mod tests {
         assert_eq!(group_idx(&intr_node(destr(b"x"))), 0); // isDestrRule
         assert_eq!(group_idx(&intr_node(IntrRuleACInfo::IEquality)), 0);
         assert_eq!(
-            group_idx(&intr_node(IntrRuleACInfo::ConstrRule(
-                b"c".to_vec(),
-                tamarin_term::function_symbols::FunSym::List
-            ))),
+            group_idx(&intr_node(IntrRuleACInfo::ConstrRule {
+                name: b"c".to_vec(),
+                fun: tamarin_term::function_symbols::FunSym::List
+            })),
             2
         );
         assert_eq!(group_idx(&intr_node(IntrRuleACInfo::Coerce)), 2); // isConstrRule
@@ -347,10 +353,10 @@ mod tests {
             (nid(1), named_proto_node(PRN::Stand("R"))), // g1 (1,0)
             (
                 nid(2),
-                intr_node(IntrRuleACInfo::ConstrRule(
-                    b"c".to_vec(),
-                    tamarin_term::function_symbols::FunSym::List,
-                )),
+                intr_node(IntrRuleACInfo::ConstrRule {
+                    name: b"c".to_vec(),
+                    fun: tamarin_term::function_symbols::FunSym::List,
+                }),
             ), // g2 (2,0)
             (nid(3), named_proto_node(PRN::Fresh)),      // g3 (3,0)
         ];
@@ -367,17 +373,17 @@ mod tests {
             (nid(2), named_proto_node(PRN::Stand("R"))), // g1 (1,0)
             (
                 nid(3),
-                intr_node(IntrRuleACInfo::ConstrRule(
-                    b"c1".to_vec(),
-                    tamarin_term::function_symbols::FunSym::List,
-                )),
+                intr_node(IntrRuleACInfo::ConstrRule {
+                    name: b"c1".to_vec(),
+                    fun: tamarin_term::function_symbols::FunSym::List,
+                }),
             ), // g2 (2,0)
             (
                 nid(4),
-                intr_node(IntrRuleACInfo::ConstrRule(
-                    b"c2".to_vec(),
-                    tamarin_term::function_symbols::FunSym::List,
-                )),
+                intr_node(IntrRuleACInfo::ConstrRule {
+                    name: b"c2".to_vec(),
+                    fun: tamarin_term::function_symbols::FunSym::List,
+                }),
             ), // g2 (2,1)
             (nid(5), intr_node(IntrRuleACInfo::Coerce)), // g2 (2,2)
             (nid(6), named_proto_node(PRN::Fresh)),      // g3 (3,0)

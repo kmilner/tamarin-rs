@@ -1,5 +1,5 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   racoucho1u, rkunnema, meiersi, and other minor contributors (see
+//   racoucho1u, meiersi, rkunnema, and other minor contributors (see
 //   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,

@@ -6,7 +6,8 @@
 //   lib/term/src/Term/Maude/Process.hs,
 //   lib/theory/src/Theory/Sapic/Pattern.hs,
 //   lib/theory/src/Theory/Sapic/Process.hs,
-//   lib/theory/src/Theory/Text/Parser/Sapic.hs
+//   lib/theory/src/Theory/Text/Parser/Sapic.hs,
+//   lib/theory/src/Theory/Text/Parser/Term.hs
 
 //! Parser-AST → theory-AST process converter.
 //!
@@ -201,15 +202,34 @@ pub(crate) fn map_free_terms(
     rf(&mut bound, f, formula)
 }
 
+/// True when a bare parser-AST `Var` leaf actually denotes a 0-arity function
+/// symbol.  HS's term parser resolves such a token against the signature while
+/// parsing (`nullaryApp`, Theory/Text/Parser/Term.hs:76-79), so the formula an
+/// HS `Cond`/MSR-restriction carries holds an `FApp` leaf that contributes
+/// nothing to `freesList`.  The RS parser has no signature at hand and emits a
+/// `Var`, so the lookup happens here, through the shared SAPIC term elaborator
+/// — `term_to_sapic_term` reads the theory's own `functions:` declarations (and
+/// the enabled builtins' constants) and answers with an `App` for a declared
+/// 0-arity name.
+fn is_nullary_fun_leaf(v: &p::VarSpec) -> bool {
+    matches!(
+        term_to_sapic_term(&p::Term::Var(v.clone())),
+        Some(tamarin_term::vterm::VTerm::App(_, _))
+    )
+}
+
 /// Visit every FREE `Var` leaf of a parser-AST formula, calling `f(varspec,
 /// bound)` for each (quantifier-bound occurrences are skipped, tracking
-/// shadowing via the `bound` stack).  The traversal order is the depth-first,
-/// left-to-right order shared by `base_translation::formula_free_lvars` and
-/// `typing::cond_formula_free_lvars`.
+/// shadowing via the `bound` stack; leaves that name a 0-arity function symbol
+/// are constants, not variables, and are skipped too).  The traversal order is
+/// the depth-first, left-to-right order shared by
+/// `base_translation::formula_free_lvars` and `typing::cond_formula_free_lvars`.
 pub(crate) fn fold_free_vars(formula: &p::Formula, f: &mut dyn FnMut(&p::VarSpec, &[String])) {
     fn ct(bound: &[String], f: &mut dyn FnMut(&p::VarSpec, &[String]), t: &p::Term) {
         match t {
-            p::Term::Var(v) if !bound.iter().any(|n| n == &v.name) => f(v, bound),
+            p::Term::Var(v) if !bound.iter().any(|n| n == &v.name) && !is_nullary_fun_leaf(v) => {
+                f(v, bound)
+            }
             p::Term::App(_, args) | p::Term::Pair(args) => {
                 for a in args {
                     ct(bound, f, a);

@@ -1,0 +1,46 @@
+// A NULLARY function symbol inside a SAPIC conditional, end to end.
+//
+// A nullary application is neither a literal nor a parenthesised call: HS
+// `prettyTerm` matches `FApp (NoEq (f, _)) []` before the general `ppFun` case
+// and prints the bare name (Term/Term.hs:314), so `nil` carries no `()`.  A
+// condition is a FORMULA, so `prettySapicComb (Cond a)` renders it with
+// `prettySyntacticSapicFormula` (Theory/Sapic/Process.hs:476) rather than the
+// term printer a `let` right-hand side uses, and everything the translation
+// derives from the step reads off that one rendering:
+//
+//   - the rule name, `filter isAlpha` over `prettySapicTopLevel`
+//     (HS `toRule`, Sapic/Facts.hs:384,401), so the bare `nil` contributes its
+//     three letters and the names end `…nilk_0_1` / `…nilk_1_1`.  A
+//     parenthesised or dropped nullary spells them otherwise, and the
+//     restriction names are `Restr_` ++ the rule name;
+//   - the `process=` rule attribute, which reprints the whole condition;
+//   - the `Restr_…` action fact carrying the condition's terms, which appears
+//     inside the `variants (modulo AC)` block too — `'g'^k` is there to force
+//     that block, so `nil` is re-rendered under a substitution as well.
+//
+// `add/2 [AC]` puts a user-AC operand beside the nullary one in the same
+// tuple, so the nullary rides through the AC flatten-and-sort path rather than
+// only the verbatim one, and `nil/0` also pins the arity-0 entry of the
+// `functions:` signature echo.  The `then` and `else` sides mint two
+// restrictions from the one condition, so both carry the term.
+//
+// No corpus theory declares a nullary function symbol inside a SAPIC process.
+//
+// Compared slice: the whole `theory … end` echo (see check.sh).
+
+theory SapicNullaryCond
+begin
+
+builtins: diffie-hellman
+functions: add/2 [AC], nil/0
+
+predicates: Eq(a, b) <=> a = b
+
+process:
+  in(k);
+  if Eq(<'g'^k, add(k,'a'), nil>, k) then
+    out('yes')
+  else
+    out('no')
+
+end

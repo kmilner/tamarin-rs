@@ -1,10 +1,11 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, and other minor contributors (see upstream git
-//   history)
+//   beschmi, jdreier, meiersi, rkunnema, addap, racoucho1u,
+//   PhilipLukertWork, rsasse, charlie-j, and other minor contributors
+//   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs,
+//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Maude/Signature.hs,
 //   lib/term/src/Term/Term/FunctionSymbols.hs,
-//   lib/term/src/Term/Term/Raw.hs,
+//   lib/term/src/Term/Term/Raw.hs, lib/term/src/Term/VTerm.hs,
 //   lib/theory/src/Theory/Model/Formula.hs,
 //   lib/theory/src/Theory/Text/Parser/Term.hs,
 //   lib/theory/src/Theory/Text/Parser/Token.hs,
@@ -39,18 +40,35 @@
 //! bare `Var` whose name+arity matches a signature funsym into an
 //! application of that symbol before classifying it (so `K(f)` with
 //! `f/0 [private]` is an irreducible `FApp f []`, allowed — matching HS).
+//!
+//! # AC/C canonicalisation, and why it happens after De Bruijn assignment
+//!
+//! HS terms reach `checkTerms` in AC-normal form: every application node is
+//! built by the smart constructor `fApp` (`Term/Term/Raw.hs:110-136`), which
+//! splices nested same-symbol arguments and sorts them for an AC symbol
+//! (`fAppAC`) and sorts the argument list for a C symbol (`fAppC`).  The
+//! sort key is the derived `Ord` of `Term (Lit Name (BVar LVar))`, and the
+//! ordering is re-established on the BOUND form: `quantify`
+//! (`Theory/Model/Formula.hs:347-351`) rewrites a free variable to
+//! `Bound i` through `mapLits` (`:288-291`), which rebuilds every node with
+//! `fApp` and therefore re-sorts it.  The outermost binder's pass runs last
+//! and sees every lit in its final form, so the term the checker inspects is
+//! sorted by the POST-De-Bruijn ordering — under which `Bound` precedes
+//! every `Free` and `Bound i` orders by `i`.  [`resolve_term`] therefore
+//! builds `RTerm`s bottom-up with final De Bruijn indices already assigned
+//! and canonicalises at each node, and [`cmp_rterm`] is the sort key.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use tamarin_parser::ast as p;
 use tamarin_parser::ast::{Atom, BinOp, Formula, SortHint, SuffixSort, Term, VarSpec};
 use tamarin_parser::wf::WfError;
-use tamarin_term::function_symbols::{AcSym, FunSym};
+use tamarin_term::function_symbols::{AcFctSym, AcSym, CSym, FunSym, EMAP_SYM_STRING};
 use tamarin_term::maude_sig::MaudeSig;
 
 use crate::pretty_hpj::{fsep, punctuate, Doc};
 
-/// The fixed render budget for the "Formula terms" WF block, determined
+/// The fixed render budget for the formula-report WF blocks, determined
 /// empirically from HS output: HS lays the whole `/* WARNING ... */`
 /// comment at `lineLength = 110` / `ribbon = 73` (see
 /// [`crate::pretty_hpj::LINE_LENGTH`] / [`crate::pretty_hpj::RIBBON`]), but
@@ -64,8 +82,10 @@ use crate::pretty_hpj::{fsep, punctuate, Doc};
 /// We do not reproduce the outer warning-frame nesting in the `Doc`
 /// renderer, so if HS's `lineWidth` (Console.hs:227-239, see line 236) or the WARNING-frame
 /// indentation ever changes, this constant (used at both `render_with`
-/// call sites in `render_block`) must be re-derived against the new binary.
-const WF_WIDTH: usize = 69;
+/// call sites in `render_block` and by
+/// [`crate::formula_reports`]'s "Quantifier sorts" block, which HS lays out
+/// inside the same frame) must be re-derived against the new binary.
+pub(crate) const WF_WIDTH: usize = 69;
 
 /// The constant explanatory paragraph (HS `wrappedText "..."`).  The text
 /// never varies, so its wrapped form (at `WF_WIDTH`) is constant too.
@@ -87,10 +107,18 @@ enum Head {
     /// A NoEq (free) application whose head symbol is `reducible == false`
     /// iff it is in the irreducible set.
     App { name: String, reducible: bool },
-    /// An AC function symbol (Union/Mult/Xor/NatPlus).  `reducible` is set
-    /// from the signature's irreducible AC set, EXCEPT Union which HS
-    /// special-cases as always-allowed-if-args-allowed (`FUnion`).
+    /// An AC function symbol (Union/Mult/Xor/NatPlus, or a user-declared
+    /// `[AC]` symbol).  `reducible` is set from the signature's irreducible
+    /// AC set, EXCEPT Union which HS special-cases as
+    /// always-allowed-if-args-allowed (`FUnion`).
     Ac { sym: AcSym, reducible: bool },
+    /// A C (commutative, not associative) function symbol — `em`, HS's only
+    /// one.  It carries no `reducible` flag because it is never irreducible:
+    /// `C EMap` enters the signature only with `bilinear-pairing`, and
+    /// `bpReducibleFunSig` subtracts it again when it does
+    /// (`Term/Term/FunctionSymbols.hs:311-312`, `Term/Maude/Signature.hs:120-124`),
+    /// so the `S.member irreducible` guard of `allowed` fails either way.
+    C(CSym),
 }
 
 /// A resolved term in De-Bruijn form, sufficient to evaluate `allowed` and
@@ -129,6 +157,13 @@ struct Irreducible {
     /// `AC (ACfct (name, _))` and carries no arity — `naryOpApp`'s `IsAC`
     /// branch accepts an application of any arity — so the name alone decides.
     ac_fct_names: BTreeSet<Vec<u8>>,
+    /// Every user-declared `[AC]` symbol of the FULL signature, keyed by name.
+    /// HS's parser turns an application of such a symbol into
+    /// `fAppAC (ACfct …)` whether it is written prefix
+    /// (`naryOpApp`, Theory/Text/Parser/Term.hs:104-105), infix (`acterm`,
+    /// `:163-168`) or `op{a}b` (`binaryAlgApp`, `:120-121`), so the checker's
+    /// term view has to build the same flattened, sorted AC node.
+    ac_fct_syms: BTreeMap<Vec<u8>, AcFctSym>,
     /// Names of all nullary NoEq symbols in the FULL signature.  Used to
     /// resolve a bare `Var` whose name is a declared nullary funsym into an
     /// application (mirrors HS resolving `f/0` to `FApp f []`).
@@ -155,17 +190,23 @@ impl Irreducible {
             }
         }
         let mut nullary_names = BTreeSet::new();
+        let mut ac_fct_syms = BTreeMap::new();
         for s in sig.fun_syms.iter() {
-            if let FunSym::NoEq(n) = s {
-                if n.arity == 0 {
+            match s {
+                FunSym::NoEq(n) if n.arity == 0 => {
                     nullary_names.insert(n.name.to_vec());
                 }
+                FunSym::Ac(AcSym::AcFct(f)) => {
+                    ac_fct_syms.insert(f.name.to_vec(), *f);
+                }
+                _ => {}
             }
         }
         Irreducible {
             noeq,
             ac,
             ac_fct_names,
+            ac_fct_syms,
             nullary_names,
         }
     }
@@ -191,53 +232,71 @@ impl Irreducible {
     fn nullary_named(&self, name: &str) -> bool {
         self.nullary_names.contains(name.as_bytes())
     }
+
+    /// The user-declared `[AC]` symbol called `name`, if the signature has one.
+    fn ac_fct(&self, name: &str) -> Option<AcFctSym> {
+        self.ac_fct_syms.get(name.as_bytes()).copied()
+    }
 }
 
 // =============================================================================
 // Public entry point
 // =============================================================================
 
+/// The signature-derived state HS's `checkTerms` closes over — the
+/// irreducible funsym classification (`irreducibleFunSyms maudeSig`) and the
+/// arity-1 fold table.  Built once per theory; [`TermChecker::check`] runs
+/// the `checkTerms` arm of HS `formulaReports` (Wellformedness.hs:999-1005,
+/// see line 1003) for one annotated formula, so the combined per-formula
+/// pass in [`crate::formula_reports`] can interleave it with the other two
+/// arms.
+pub struct TermChecker {
+    irr: Irreducible,
+    /// HS folds surplus args of an arity-1 function into a pair at PARSE time
+    /// (`naryOpApp` `k == 1`, Theory/Text/Parser/Term.hs:94-96), so the AST the
+    /// wf check inspects already carries `h(<a, b>)` (an irreducible `h/1`
+    /// applied to a pair), NOT `h(a, b)`.  RS's arity-unaware parser keeps the
+    /// surplus args, so without this fold a unary `h(a, b)` resolves to a
+    /// non-existent reducible `h/2` and is spuriously flagged "uses terms of
+    /// the wrong form: reducible function symbols are disallowed".  Fold first
+    /// (mirrors the lemma/restriction pretty-printer in pretty_theory.rs).
+    // arity-1 no-eq function-name set; membership-only (.contains), never
+    // iterated; std kept (byte-inert) — iteration order never reaches output.
+    #[allow(clippy::disallowed_types)]
+    arity1: std::collections::HashSet<String>,
+}
+
+impl TermChecker {
+    pub fn new(sig: &MaudeSig) -> Self {
+        TermChecker {
+            irr: Irreducible::from_sig(sig),
+            arity1: crate::elaborate::arity1_noeq_names(sig),
+        }
+    }
+
+    /// The `checkTerms` finding for one annotated formula, if it has
+    /// offenders.  `header` is HS's `"Lemma `n'"` / `"Restriction `n'"`.
+    pub fn check(&self, header: &str, fm: &Formula) -> Option<WfError> {
+        let folded = crate::elaborate::rewrite_arity1_formula(fm, &self.arity1);
+        check_one(header, &folded, &self.irr).map(|msg| WfError::new("Formula terms", msg))
+    }
+}
+
 /// Port of HS `formulaReports`'s `checkTerms` arm (Wellformedness.hs:999-1014, see line 1003),
-/// for every lemma + restriction formula (in theory order, lemmas before
-/// restrictions — HS `annFormulas`).  Macros must already be expanded by
-/// the caller (HS applies `applyMacroInFormula` first).
+/// run on its own over every lemma + restriction formula (HS `annFormulas`
+/// order: all lemmas in theory order, then all restrictions).  Macros must
+/// already be expanded by the caller (HS applies `applyMacroInFormula` first).
+///
+/// The batch / web load pipelines instead go through
+/// [`crate::formula_reports::formula_reports`], which interleaves this arm
+/// with the other two per formula as HS's `msum` does; this entry point
+/// serves callers that want the `checkTerms` findings alone.
 pub fn check_terms_wf(thy: &p::Theory, sig: &MaudeSig) -> Vec<WfError> {
-    let irr = Irreducible::from_sig(sig);
-    let mut out = Vec::new();
-
-    // HS folds surplus args of an arity-1 function into a pair at PARSE time
-    // (`naryOpApp` `k == 1`, Theory/Text/Parser/Term.hs:84-87), so the AST the
-    // wf check inspects already carries `h(<a, b>)` (an irreducible `h/1`
-    // applied to a pair), NOT `h(a, b)`.  RS's arity-unaware parser keeps the
-    // surplus args, so without this fold a unary `h(a, b)` resolves to a
-    // non-existent reducible `h/2` and is spuriously flagged "uses terms of
-    // the wrong form: reducible function symbols are disallowed".  Fold first
-    // (mirrors the lemma/restriction pretty-printer in pretty_theory.rs).
-    let arity1 = crate::elaborate::arity1_noeq_names(sig);
-
-    // HS `annFormulas = lemmas <|> restrictions` — all lemmas (theory
-    // order) then all restrictions (theory order).
-    let mut lemmas: Vec<(String, Formula)> = Vec::new();
-    let mut restrictions: Vec<(String, Formula)> = Vec::new();
-    for item in &thy.items {
-        match item {
-            p::TheoryItem::Lemma(l) => lemmas.push((
-                format!("Lemma `{}'", l.name),
-                crate::elaborate::rewrite_arity1_formula(&l.formula, &arity1),
-            )),
-            p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => restrictions.push((
-                format!("Restriction `{}'", r.name),
-                crate::elaborate::rewrite_arity1_formula(&r.formula, &arity1),
-            )),
-            _ => {}
-        }
-    }
-    for (header, fm) in lemmas.into_iter().chain(restrictions) {
-        if let Some(msg) = check_one(&header, &fm, &irr) {
-            out.push(WfError::new("Formula terms", msg));
-        }
-    }
-    out
+    let checker = TermChecker::new(sig);
+    crate::formula_reports::ann_formulas(thy)
+        .into_iter()
+        .filter_map(|(header, fm)| checker.check(&header, fm))
+        .collect()
 }
 
 /// Run `checkTerms` for a single annotated formula.  Returns the formatted
@@ -387,12 +446,19 @@ fn resolve_term(t: &Term, scope: &Scope, irr: &Irreducible, pos: TermPos) -> RTe
         ),
         Term::App(name, args) => resolve_app(name, args, scope, irr),
         Term::AlgApp(name, a, b) => {
-            // `op{a}b` == `op(a, b)`.
+            // `op{a}b`.  HS `binaryAlgApp` (Theory/Text/Parser/Term.hs:108-121)
+            // builds `fAppAC (ACfct …)` for a user-declared `[AC]` symbol and
+            // `fAppNoEq` otherwise.  It has NO `em` arm, so `em{a}b` is a NoEq
+            // `em/2` application, NOT the C symbol `naryOpApp` builds for the
+            // prefix spelling `em(a, b)`.
             let args = vec![
                 resolve_term(a, scope, irr, TermPos::Message),
                 resolve_term(b, scope, irr, TermPos::Message),
             ];
-            resolve_named(name, args, irr)
+            match irr.ac_fct(name) {
+                Some(f) => resolve_ac(AcSym::AcFct(f), args, irr),
+                None => resolve_named(name, args, irr),
+            }
         }
         Term::Pair(items) => {
             // `<a, b, c>` is right-nested `pair(a, pair(b, c))`.
@@ -420,9 +486,13 @@ fn resolve_term(t: &Term, scope: &Scope, irr: &Irreducible, pos: TermPos) -> RTe
                 BinOp::Xor => resolve_ac(AcSym::Xor, vec![ra, rb], irr),
                 BinOp::NatPlus => resolve_ac(AcSym::NatPlus, vec![ra, rb], irr),
                 // A user-declared `[AC]` symbol applied infix denotes the
-                // same application as `App(name, [a, b])`, so it resolves
-                // through the same named-symbol path.
-                BinOp::AcFct(name) => resolve_named(name, vec![ra, rb], irr),
+                // same AC application as the prefix spelling `name(a, b)`
+                // (HS `acterm`, Theory/Text/Parser/Term.hs:163-168), so it
+                // resolves through the same AC path.
+                BinOp::AcFct(name) => match irr.ac_fct(name) {
+                    Some(f) => resolve_ac(AcSym::AcFct(f), vec![ra, rb], irr),
+                    None => resolve_named(name, vec![ra, rb], irr),
+                },
             }
         }
         Term::PatMatch(inner) => resolve_term(inner, scope, irr, pos),
@@ -434,6 +504,18 @@ fn resolve_app(name: &str, args: &[Term], scope: &Scope, irr: &Irreducible) -> R
         .iter()
         .map(|a| resolve_term(a, scope, irr, TermPos::Message))
         .collect();
+    // HS `naryOpApp` dispatches on the WRITTEN NAME before it dispatches on
+    // the signature entry: an application spelled `em(…)` becomes
+    // `fAppC EMap ts` whatever `lookupArity` found — the builtin `C EMap` of
+    // `bilinear-pairing`, a user `functions: em/2` declaration, even a user
+    // `[AC]` declaration all take that arm
+    // (HS `naryOpApp` Theory/Text/Parser/Term.hs:103).
+    if name.as_bytes() == EMAP_SYM_STRING {
+        return resolve_c(CSym::EMap, resolved);
+    }
+    if let Some(f) = irr.ac_fct(name) {
+        return resolve_ac(AcSym::AcFct(f), resolved, irr);
+    }
     resolve_named(name, resolved, irr)
 }
 
@@ -454,13 +536,47 @@ fn resolve_named(name: &str, args: Vec<RTerm>, irr: &Irreducible) -> RTerm {
 /// Build an AC application node, classifying via the irreducible AC set.
 /// Union is HS-special-cased (`FUnion` — always allowed-if-args-allowed)
 /// so we force `reducible = false` for it regardless of set membership.
+///
+/// The node is put in AC-normal form exactly as HS `fAppAC` does
+/// (Term/Term/Raw.hs:118-129): a one-argument application collapses to that
+/// argument, the arguments of every direct child under the same symbol are
+/// spliced into the list, and the list is sorted by [`cmp_rterm`].  Children
+/// are already normal (they were built by this same function), so splicing
+/// one level deep reproduces HS's fully flat argument list.
+///
+/// HS `fAppAC _ [] = error "Term.fAppAC: empty argument list"`; an empty node
+/// is kept here instead, so a source term that upstream aborts on (a
+/// user-`[AC]` symbol written with no arguments, which `naryOpApp`'s arity
+/// check lets through for `IsAC` symbols) still produces a wellformedness
+/// report.
 fn resolve_ac(sym: AcSym, args: Vec<RTerm>, irr: &Irreducible) -> RTerm {
+    let mut flat: Vec<RTerm> = Vec::with_capacity(args.len());
+    for a in args {
+        match a {
+            RTerm::App(Head::Ac { sym: inner, .. }, inner_args) if inner == sym => {
+                flat.extend(inner_args);
+            }
+            other => flat.push(other),
+        }
+    }
+    if flat.len() == 1 {
+        return flat.pop().expect("length checked");
+    }
+    flat.sort_by(cmp_rterm);
     let reducible = if matches!(sym, AcSym::Union) {
         false
     } else {
         !irr.is_ac_irreducible(sym)
     };
-    RTerm::App(Head::Ac { sym, reducible }, args)
+    RTerm::App(Head::Ac { sym, reducible }, flat)
+}
+
+/// Build a C (commutative, non-associative) application node.  HS `fAppC`
+/// sorts the argument list: `fAppC nacsym as = FAPP (C nacsym) (sort as)`
+/// (Term/Term/Raw.hs:132-133).
+fn resolve_c(sym: CSym, mut args: Vec<RTerm>) -> RTerm {
+    args.sort_by(cmp_rterm);
+    RTerm::App(Head::C(sym), args)
 }
 
 /// Right-nested pair construction matching HS's `<a,b,c> = pair(a, pair(b,
@@ -481,6 +597,13 @@ fn build_pair(mut items: Vec<RTerm>, irr: &Irreducible) -> RTerm {
 /// scope) or `Free` (otherwise) — UNLESS the name is a declared nullary
 /// function symbol with no matching binder, in which case it is an
 /// irreducible `FApp name []` (HS resolves `f/0` to `FApp f []`).
+///
+/// A `Free` keeps the CONCRETE sort its syntactic position gives it in HS
+/// (see [`lookup_bound`]): the parser has no untagged `LVar`, so an untagged
+/// use is `LSortMsg` in a message position and `LSortNode` under `@`/`<`/
+/// `last`.  Both `Show LVar` (which prefixes `#` for `LSortNode`) and the
+/// `LVar` ordering read that sort, so it is resolved here rather than left
+/// as `SortHint::Untagged`.
 fn resolve_var(v: &VarSpec, scope: &Scope, irr: &Irreducible, pos: TermPos) -> RTerm {
     if let Some(idx) = lookup_bound(v, scope, pos) {
         return RTerm::Bound(idx);
@@ -490,14 +613,21 @@ fn resolve_var(v: &VarSpec, scope: &Scope, irr: &Irreducible, pos: TermPos) -> R
     if matches!(v.sort, SortHint::Untagged) && irr.nullary_named(&v.name) {
         return resolve_named(&v.name, vec![], irr);
     }
-    RTerm::Free(v.clone())
+    let mut free = v.clone();
+    if matches!(free.sort, SortHint::Untagged) {
+        free.sort = match pos {
+            TermPos::Temporal => SortHint::Node,
+            TermPos::Message => SortHint::Msg,
+        };
+    }
+    RTerm::Free(free)
 }
 
 /// Find the innermost binder matching `v` and return its De-Bruijn index.
 ///
 /// HS binds a use to its binder via full `LVar` equality — name AND sort AND
 /// idx (`quantify x = ... | v == x = Bound i`, Formula.hs:340-345; `LVar` `Eq`
-/// compares `idx`, sort and name, LTerm.hs:516-517). We reproduce this exactly
+/// compares `idx`, sort and name, LTerm.hs:546-548). We reproduce this exactly
 /// on the sort-*kind*: the use's sort is concrete in HS, never approximate.
 /// The parser assigns every variable a concrete `LSort` before `quantify`
 /// runs (Formula.hs:114-119 `standardFormula msgvar nodevar`):
@@ -560,8 +690,82 @@ fn allowed(t: &RTerm) -> bool {
         RTerm::PubConst(_) => true,
         RTerm::App(Head::App { reducible, .. }, args)
         | RTerm::App(Head::Ac { reducible, .. }, args) => !*reducible && args.iter().all(allowed),
+        // `C EMap` is never irreducible (see `Head::C`), so it falls through
+        // to HS's catch-all `allowed _ = False` whatever its arguments are.
+        RTerm::App(Head::C(_), _) => false,
         // Free vars, fresh/nat name constants -> offenders.
         RTerm::Free(_) | RTerm::FreshConst(_) | RTerm::NatConst(_) => false,
+    }
+}
+
+// =============================================================================
+// Term ordering (HS derived `Ord (Term (Lit Name (BVar LVar)))`)
+// =============================================================================
+
+/// `Ord` on the terms HS sorts inside `fAppAC` / `fAppC`, restricted to the
+/// shapes an [`RTerm`] can take.
+///
+/// `Term a = LIT a | FAPP FunSym [Term a]` derives `Ord`
+/// (Term/Term/Raw.hs:72-74), so every `LIT` precedes every `FAPP`; two
+/// `FAPP`s compare their `FunSym` (see [`funsym_key`]) and then their
+/// argument lists positionally.  Inside `LIT`, `Lit c v = Con c | Var v`
+/// derives `Con < Var` (VTerm.hs:56-57); a `Con` is a `Name` compared by its
+/// `NameTag` (`FreshName | PubName | NodeName | NatName | AbbrevName`,
+/// LTerm.hs:219-220) and then by its `NameId` string; a `Var` is a
+/// `BVar LVar` with `Bound < Free` (LTerm.hs:476-478), `Bound` by index and
+/// `Free` by the `LVar` order `(idx, sort, name)` (LTerm.hs:546-548).
+fn cmp_rterm(a: &RTerm, b: &RTerm) -> std::cmp::Ordering {
+    match (a, b) {
+        (RTerm::App(ha, xs), RTerm::App(hb, ys)) => funsym_key(ha, xs.len())
+            .cmp(&funsym_key(hb, ys.len()))
+            .then_with(|| crate::guarded::cmp_slice(xs, ys, cmp_rterm)),
+        (RTerm::Bound(m), RTerm::Bound(n)) => m.cmp(n),
+        (RTerm::Free(v), RTerm::Free(w)) => crate::guarded::cmp_varspec(v, w),
+        (RTerm::FreshConst(m), RTerm::FreshConst(n))
+        | (RTerm::PubConst(m), RTerm::PubConst(n))
+        | (RTerm::NatConst(m), RTerm::NatConst(n)) => m.cmp(n),
+        // Different constructors: the tag alone decides.
+        _ => rterm_tag(a).cmp(&rterm_tag(b)),
+    }
+}
+
+/// Constructor rank of an [`RTerm`]: the three name constants in `NameTag`
+/// order, then `Bound`, then `Free` (all still `LIT`), then every `FAPP`.
+fn rterm_tag(t: &RTerm) -> u8 {
+    match t {
+        RTerm::FreshConst(_) => 0,
+        RTerm::PubConst(_) => 1,
+        RTerm::NatConst(_) => 2,
+        RTerm::Bound(_) => 3,
+        RTerm::Free(_) => 4,
+        RTerm::App(..) => 5,
+    }
+}
+
+/// HS `Ord FunSym` key for an application head: `(outer, name, k)`.
+///
+/// `outer` is the `FunSym` constructor order `NoEq(0) < AC(1) < C(2)`
+/// (List(3) has no `RTerm` spelling; FunctionSymbols.hs:150-154).  For a
+/// `NoEq` symbol `(name, k)` is `Ord NoEqSym`'s leading `(name, arity)` —
+/// privacy/constructability/NDC never disambiguate two symbols that share a
+/// name, since HS's `lookupArity` keys the whole declaration table on the
+/// name (Theory/Text/Parser/Term.hs:62-67).  The builtin AC ops carry no
+/// name, so their `ACSym` order `Union < Mult < Xor < NatPlus < ACfct`
+/// (FunctionSymbols.hs:138-139) rides in `k`, and their empty name keeps
+/// them ahead of every user `ACfct` — whose own name orders two `ACfct`s,
+/// mirroring `Ord ACfctSym`.  `CSym` is a single nullary constructor, so
+/// every `C` head ties on `name` and `k`.
+fn funsym_key(head: &Head, arity: usize) -> (u8, &[u8], usize) {
+    match head {
+        Head::App { name, .. } => (0, name.as_bytes(), arity),
+        Head::Ac { sym, .. } => match sym {
+            AcSym::Union => (1, b"", 0),
+            AcSym::Mult => (1, b"", 1),
+            AcSym::Xor => (1, b"", 2),
+            AcSym::NatPlus => (1, b"", 3),
+            AcSym::AcFct(f) => (1, f.name, 4),
+        },
+        Head::C(CSym::EMap) => (2, b"", 0),
     }
 }
 
@@ -607,6 +811,7 @@ fn write_rterm(t: &RTerm, out: &mut String) {
             //   FApp (NoEq (s,_)) [] -> s
             //   FApp (NoEq (s,_)) as -> s ++ "(" ++ intercalate "," ... ++ ")"
             //   FApp (AC (ACfct (s,_))) as -> s ++ "(" ++ ... ++ ")"
+            //   FApp (C EMap) as     -> "em" ++ "(" ++ ... ++ ")"
             //   FApp (AC o) as       -> show o ++ "(" ++ ... ++ ")"
             // ACSym derives Show as the constructor name (Union/Mult/Xor/NatPlus);
             // user-defined AC symbols print their own name.
@@ -619,6 +824,7 @@ fn write_rterm(t: &RTerm, out: &mut String) {
                     AcSym::NatPlus => "NatPlus".into(),
                     AcSym::AcFct(s) => String::from_utf8_lossy(s.name),
                 },
+                Head::C(CSym::EMap) => String::from_utf8_lossy(EMAP_SYM_STRING),
             };
             out.push_str(&name);
             if !args.is_empty() {
@@ -811,5 +1017,149 @@ mod tests {
             "got: {}",
             report[0].message
         );
+    }
+
+    /// The one offender rendering of the single block `report` produced.
+    fn one_offender(report: &[WfError], want: &str) {
+        assert_eq!(report.len(), 1, "expected one block, got {:?}", report);
+        assert!(
+            report[0].message.contains(want),
+            "expected offender {}, got:\n{}",
+            want,
+            report[0].message
+        );
+    }
+
+    #[test]
+    fn prefix_em_is_a_reducible_c_symbol_even_when_user_declared() {
+        // `functions: em/2` with NO `bilinear-pairing`: HS's `naryOpApp`
+        // still routes the prefix spelling `em(…)` to `fAppC EMap`
+        // (Theory/Text/Parser/Term.hs:103), and `C EMap` is not in the
+        // signature at all here — so the enclosing `*` is an offender even
+        // though `f/2`, `em/2` and `AC Mult` all look irreducible by name.
+        //
+        // Oracle bytes (ef3f0468, div2/user_em2.spthy):
+        //   Lemma `L1' uses terms of the wrong form:
+        //     `Mult(f('g','h'),em('g','h'))'
+        let src = "theory T begin\n\
+                   builtins: diffie-hellman\n\
+                   functions: em/2, f/2\n\
+                   lemma L1:\n  \"All #i. Test(em('g', 'h') * f('g', 'h')) @ #i ==> F\"\n\
+                   end\n";
+        let (thy, sig) = sig_of(src);
+        one_offender(
+            &check_terms_wf(&thy, &sig),
+            "`Mult(f('g','h'),em('g','h'))'",
+        );
+    }
+
+    #[test]
+    fn em_written_as_alg_app_stays_a_noeq_symbol() {
+        // `em{a}b` goes through `binaryAlgApp`, which has no `em` arm and
+        // builds `fAppNoEq ("em", …)` (Theory/Text/Parser/Term.hs:108-121).
+        // So it sorts among the NoEq symbols ("em" < "f") instead of after
+        // them, unlike the prefix spelling above.
+        //
+        // Oracle bytes (ef3f0468, div2/algapp_em.spthy):
+        //   `Mult(em('g','h'),f('g','h'))'
+        let src = "theory T begin\n\
+                   builtins: bilinear-pairing\n\
+                   functions: f/2\n\
+                   lemma L1:\n  \"All #i. Test(em{'g'}'h' * f('g', 'h')) @ #i ==> F\"\n\
+                   end\n";
+        let (thy, sig) = sig_of(src);
+        one_offender(
+            &check_terms_wf(&thy, &sig),
+            "`Mult(em('g','h'),f('g','h'))'",
+        );
+    }
+
+    #[test]
+    fn c_and_ac_arguments_sort_on_the_de_bruijn_form() {
+        // `em(x, y)` sorts its two arguments AFTER `quantify` has replaced
+        // them by De Bruijn indices, so the pair comes out ascending in the
+        // INDEX (`Bound 1` before `Bound 2`) — the reverse of the source
+        // order, in which `x` precedes `y`.  The enclosing `Mult` sorts its
+        // NoEq operand ahead of the C operand.
+        //
+        // Oracle bytes (ef3f0468, div2/em_c_tier.spthy lemma L2):
+        //     `Mult(aaa(Bound 2,Bound 1),em(Bound 1,Bound 2))',
+        //     `Mult(f(Bound 3,Bound 2),em(Bound 2,Bound 3))'
+        let src = "theory T begin\n\
+                   builtins: bilinear-pairing\n\
+                   functions: f/2, aaa/2\n\
+                   lemma L2:\n  \"All x y #i. Test2(em(x, y) * aaa(x, y)) @ #i ==> \
+                     Ex #j. Test(em(x, y) * f(x, y)) @ #j\"\n\
+                   end\n";
+        let (thy, sig) = sig_of(src);
+        let report = check_terms_wf(&thy, &sig);
+        assert_eq!(report.len(), 1, "expected one block, got {:?}", report);
+        assert!(
+            report[0].message.contains(
+                "`Mult(aaa(Bound 2,Bound 1),em(Bound 1,Bound 2))',\n    \
+                 `Mult(f(Bound 3,Bound 2),em(Bound 2,Bound 3))'"
+            ),
+            "got:\n{}",
+            report[0].message
+        );
+    }
+
+    #[test]
+    fn builtin_ac_arguments_are_flattened_and_sorted() {
+        // `('b' ++ 'a') ++ ('c' XOR 'd')`: `fAppAC` splices the nested
+        // `Union` node's arguments into the outer one and sorts the result,
+        // so the two constants precede the `Xor` application.
+        //
+        // Oracle bytes (ef3f0468):
+        //   `Union('a','b',Xor('c','d'))'
+        let src = "theory T begin\n\
+                   builtins: xor, multiset\n\
+                   lemma L3:\n  \"All #i. Test(('b' ++ 'a') ++ ('c' XOR 'd')) @ #i ==> F\"\n\
+                   end\n";
+        let (thy, sig) = sig_of(src);
+        one_offender(&check_terms_wf(&thy, &sig), "`Union('a','b',Xor('c','d'))'");
+    }
+
+    #[test]
+    fn user_ac_symbol_written_prefix_is_flattened_and_sorted() {
+        // A `[AC]` symbol applied prefix is `fAppAC (ACfct …)` whatever the
+        // written arity (Theory/Text/Parser/Term.hs:104-105), so the nested
+        // `uac('z','a')` is spliced in and the whole list sorted.
+        //
+        // Oracle bytes (ef3f0468):
+        //   Lemma `L1' ... `uac('a',red('b','a'))'
+        //   Lemma `L2' ... `uac('a','z',red('b','c'))'
+        let src = "theory T begin\n\
+                   functions: uac/2 [AC], red/2\n\
+                   equations: red(x, y) = x\n\
+                   lemma L1:\n  \"All #i. Test(uac(red('b','a'), 'a')) @ #i ==> F\"\n\
+                   lemma L2:\n  \"All #i. Test(uac(uac('z','a'), red('b','c'))) @ #i ==> F\"\n\
+                   end\n";
+        let (thy, sig) = sig_of(src);
+        let report = check_terms_wf(&thy, &sig);
+        assert_eq!(report.len(), 2, "expected two blocks, got {:?}", report);
+        assert!(
+            report[0].message.contains("`uac('a',red('b','a'))'"),
+            "got:\n{}",
+            report[0].message
+        );
+        assert!(
+            report[1].message.contains("`uac('a','z',red('b','c'))'"),
+            "got:\n{}",
+            report[1].message
+        );
+    }
+
+    #[test]
+    fn untagged_free_variable_under_at_keeps_its_node_sort() {
+        // `@ i` is parsed by `nodevar`, so the free `i` is an `LSortNode`
+        // `LVar` and `Show LVar` prefixes it with `#`.
+        //
+        // Oracle bytes (ef3f0468): `Free #i'
+        let src = "theory T begin\n\
+                   lemma L1:\n  \"All #j. K('c') @ i ==> F\"\n\
+                   end\n";
+        let (thy, sig) = sig_of(src);
+        one_offender(&check_terms_wf(&thy, &sig), "`Free #i'");
     }
 }

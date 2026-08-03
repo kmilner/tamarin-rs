@@ -1,5 +1,5 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, arcz, ValentinYuri, felixlinker, jdreier, Nynko, and other
+//   meiersi, arcz, ValentinYuri, jdreier, felixlinker, Nynko, and other
 //   minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Substitution/SubstVFresh.hs,
@@ -349,6 +349,21 @@ impl Doc {
             Doc::Empty
         } else {
             Doc::TextBeside(Rc::from(s), width, Rc::new(Doc::Empty))
+        }
+    }
+
+    /// `text s` for a run that may be EMPTY.  Unlike [`Doc::text`], `""`
+    /// stays a zero-width text run instead of collapsing to `Doc::Empty`,
+    /// which is what HughesPJ's `text ""` is: `nilBeside` (ported below as
+    /// `nil_beside`) drops a `<+>` separator only for `Empty`, so
+    /// `d <+> text ""` keeps its space while `d <+> empty` does not.  Use
+    /// this at any port of a `d <+> text s` chain over a possibly-absent `s`.
+    pub fn text_hs<S: AsRef<str>>(s: S) -> Doc {
+        let s = s.as_ref();
+        if s.is_empty() {
+            Doc::TextBeside(Rc::from(""), 0, Rc::new(Doc::Empty))
+        } else {
+            Doc::text(s)
         }
     }
 
@@ -1415,6 +1430,17 @@ mod tests {
     #[test]
     fn beside_sp_inserts_space() {
         assert_eq!(Doc::text("a").beside_sp(Doc::text("b")).render(), "a b");
+    }
+
+    #[test]
+    fn text_hs_keeps_the_empty_run() {
+        // HS `text "" <+> text "b"` = " b" and `d <+> text ""` = "a ";
+        // `Doc::text("")` collapses to `Empty`, which loses both spaces.
+        assert_eq!(Doc::text("a").beside_sp(Doc::text_hs("")).render(), "a ");
+        assert_eq!(Doc::text_hs("").beside_sp(Doc::text("b")).render(), " b");
+        assert_eq!(Doc::text("a").beside_sp(Doc::text("")).render(), "a");
+        // Non-empty runs are `Doc::text`.
+        assert_eq!(Doc::text("a").beside_sp(Doc::text_hs("b")).render(), "a b");
     }
 
     #[test]

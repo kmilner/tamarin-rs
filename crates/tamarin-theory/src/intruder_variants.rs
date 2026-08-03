@@ -1,7 +1,7 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, arcz, meiersi, rkunnema, jdreier, yavivanov, Nynko,
-//   Azurios-git, felixlinker, and other minor contributors (see
-//   upstream git history)
+//   kevinmorio, jdreier, arcz, meiersi, rkunnema, yavivanov, Nynko,
+//   beschmi, Azurios-git, felixlinker, and other minor contributors
+//   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Term/FunctionSymbols.hs,
 //   lib/theory/src/Theory/Model/Fact.hs,
@@ -167,7 +167,7 @@ pub fn parse_intruder_rules(
     let _nullary_guard = elaborate::MaudeSigNullaryGuard::set(msig);
 
     // HS `knownFuns = S.toList (funSyms msig)`.
-    let known_funs: Vec<FunSym> = msig.fun_syms.iter().copied().collect();
+    let known_funs = KnownFuns::new(msig.fun_syms.iter().copied().collect());
 
     let mut out = Vec::with_capacity(parser_rules.len());
     for r in parser_rules {
@@ -181,25 +181,56 @@ pub fn parse_intruder_rules(
     Ok(out)
 }
 
-/// HS `lookupFun` (Theory/Text/Parser/Rule.hs): resolve a plain function
-/// name against the signature's known symbols (`S.toList (funSyms msig)`)
-/// by `showFunSymName` equality.
-fn lookup_fun(known_funs: &[FunSym], f: &str) -> Result<FunSym, String> {
-    known_funs
-        .iter()
-        .copied()
-        .find(|fun| show_fun_sym_name(fun) == f)
-        .ok_or_else(|| {
+/// HS `knownFuns = S.toList (funSyms msig)` together with a display-name
+/// index over it, so [`KnownFuns::lookup`] is one `BTreeMap` probe rather
+/// than a scan of the whole signature.  Every constructor name and every
+/// `constr_name_func` segment of both cached files (126 rules) resolves
+/// through it on each theory load.
+struct KnownFuns {
+    /// The symbols in `S.toList` order, kept for the not-found message.
+    syms: Vec<FunSym>,
+    /// `show_fun_sym_name` → the FIRST symbol of `syms` carrying that name.
+    ///
+    /// FIRST-wins is load-bearing, not an implementation detail: HS
+    /// `lookupFun` is `find ((== f) . showFunSymName) knownFuns`, which
+    /// returns the earliest match in `S.toList` order, and two DISTINCT
+    /// symbols can share a `showFunSymName` — a user-defined AC symbol and a
+    /// user-defined NoEq symbol may carry the same name, and `Ord FunSym`
+    /// (FunctionSymbols.hs:150-154) orders `NoEq` before `AC`, so the NoEq
+    /// one is the earlier.  An `insert` loop would let the later symbol win
+    /// and silently change which `FunSym` lands in the rule info.
+    by_name: std::collections::BTreeMap<std::borrow::Cow<'static, str>, FunSym>,
+}
+
+impl KnownFuns {
+    /// `syms` must already be in `S.toList` order — `MaudeSig::fun_syms` is a
+    /// `BTreeSet`, so iterating it is exactly that order.
+    fn new(syms: Vec<FunSym>) -> KnownFuns {
+        let mut by_name = std::collections::BTreeMap::new();
+        for f in &syms {
+            // `or_insert`, never `insert`: the first symbol carrying a name
+            // is the one HS's `find` returns.
+            by_name.entry(show_fun_sym_name(f)).or_insert(*f);
+        }
+        KnownFuns { syms, by_name }
+    }
+
+    /// HS `lookupFun` (Theory/Text/Parser/Rule.hs): resolve a plain function
+    /// name against the signature's known symbols (`S.toList (funSyms msig)`)
+    /// by `showFunSymName` equality.
+    fn lookup(&self, f: &str) -> Result<FunSym, String> {
+        self.by_name.get(f).copied().ok_or_else(|| {
             format!(
                 "Failed parsing intruder rule name: no function named '{}' found in the signature (symbols: {})",
                 f,
-                known_funs
+                self.syms
                     .iter()
                     .map(show_fun_sym_name)
                     .collect::<Vec<_>>()
                     .join(", ")
             )
         })
+    }
 }
 
 /// HS `constrNameFunc` (Theory/Text/Parser/Rule.hs): recover the function
@@ -209,7 +240,7 @@ fn lookup_fun(known_funs: &[FunSym], f: &str) -> Result<FunSym, String> {
 /// `readMaybe :: Maybe Int`); errors on an empty result.
 ///
 /// The split is unconditional, so a function symbol whose own name contains
-/// `'_'` decomposes into several segments that [`lookup_fun`] cannot resolve
+/// `'_'` decomposes into several segments that [`KnownFuns::lookup`] cannot resolve
 /// — see the FIXME beside `name_decompose` in Theory/Text/Parser/Rule.hs
 /// ("there can be underscores in the name of a function").  Dormant for the
 /// two cached files, which only name builtin DH/BP symbols.
@@ -270,7 +301,7 @@ fn constr_name_func(name: &str) -> Result<Vec<&str>, String> {
 /// `True False` are HS hard-codes — see the FIXME in
 /// Theory/Text/Parser/Rule.hs ("Currently we (wrongly) always assume
 /// that we have a subterm rule").  Subterm=True / constant=False.
-fn ast_rule_to_intr_rule_ac(known_funs: &[FunSym], r: &p::Rule) -> Result<IntrRuleAC, String> {
+fn ast_rule_to_intr_rule_ac(known_funs: &KnownFuns, r: &p::Rule) -> Result<IntrRuleAC, String> {
     // HS `intrInfo` rejects non-c/d-prefixed names.  Mirror that here.
     let bytes = r.name.as_bytes();
     if bytes.is_empty() {
@@ -282,25 +313,28 @@ fn ast_rule_to_intr_rule_ac(known_funs: &[FunSym], r: &p::Rule) -> Result<IntrRu
             // `lookupFun knownFuns $ tail cname` — cname is `_<fun>`, so
             // `tail` strips the leading underscore.
             let cname = &r.name[1..];
-            let f = lookup_fun(known_funs, cname.get(1..).unwrap_or(""))?;
-            IntrRuleACInfo::ConstrRule(rest.to_vec(), f)
+            let f = known_funs.lookup(cname.get(1..).unwrap_or(""))?;
+            IntrRuleACInfo::ConstrRule {
+                name: rest.to_vec(),
+                fun: f,
+            }
         }
         b'd' => {
             let dname = &r.name[1..];
             let funs = constr_name_func(dname)?
                 .into_iter()
-                .map(|n| lookup_fun(known_funs, n))
+                .map(|n| known_funs.lookup(n))
                 .collect::<Result<Vec<_>, _>>()?;
-            IntrRuleACInfo::DestrRule(
-                rest.to_vec(),
+            IntrRuleACInfo::DestrRule {
+                name: rest.to_vec(),
                 // HS `fromIntegral limit` where `limit <- option 0 natural`.
                 // The cached files never specify a limit; we always see 0.
-                0,
+                remaining_applications: 0,
                 // HS hard-codes `True False` (subterm, constant).
-                true,
-                false,
+                rhs_is_proper_subterm: true,
+                rhs_is_constant: false,
                 funs,
-            )
+            }
         }
         _ => {
             return Err(format!(
@@ -341,7 +375,8 @@ fn ast_rule_to_intr_rule_ac(known_funs: &[FunSym], r: &p::Rule) -> Result<IntrRu
     }
 
     // Convert facts via the existing AST→LNFact path.  `fact_to_lnfact`
-    // already handles the `KU`/`KD`/etc. tag mapping (elaborate.rs:974).
+    // already handles the `KU`/`KD`/etc. tag mapping
+    // (`elaborate::fact_to_lnfact`).
     let prems: Vec<LNFact> = r
         .premises
         .iter()
@@ -472,7 +507,7 @@ mod tests {
         let constr_names: Vec<&[u8]> = rules
             .iter()
             .filter_map(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n, _) => Some(n.as_slice()),
+                IntrRuleACInfo::ConstrRule { name, .. } => Some(name.as_slice()),
                 _ => None,
             })
             .collect();
@@ -511,7 +546,7 @@ mod tests {
         let rules = mk_dh_intruder_variants(&dh_maude_sig());
         let destrs: Vec<&IntrRuleAC> = rules
             .iter()
-            .filter(|r| matches!(r.info, IntrRuleACInfo::DestrRule(..)))
+            .filter(|r| matches!(r.info, IntrRuleACInfo::DestrRule { .. }))
             .collect();
         assert_eq!(
             destrs.len(),
@@ -521,7 +556,14 @@ mod tests {
             destrs.len()
         );
         for d in &destrs {
-            if let IntrRuleACInfo::DestrRule(name, limit, subterm, constant, funs) = &d.info {
+            if let IntrRuleACInfo::DestrRule {
+                name,
+                remaining_applications: limit,
+                rhs_is_proper_subterm: subterm,
+                rhs_is_constant: constant,
+                funs,
+            } = &d.info
+            {
                 assert!(
                     name.starts_with(b"_"),
                     "destructor name must start with `_` (HS leading `d` is consumed, \
@@ -559,6 +601,67 @@ mod tests {
         }
     }
 
+    /// The name index behind [`KnownFuns::lookup`] must answer exactly what
+    /// HS `lookupFun`'s `find ((== f) . showFunSymName) knownFuns` answers,
+    /// INCLUDING on a name collision: `show_fun_sym_name` is not injective —
+    /// a user-defined AC symbol and a user-defined NoEq symbol may carry the
+    /// same name, and only their `FunSym` variant separates them.
+    ///
+    /// `Ord FunSym` puts `NoEq` before `AC` (FunctionSymbols.hs:150-154), so
+    /// in `S.toList` order the NoEq symbol is the earlier one and `find`
+    /// returns it.  An index built by plain `insert` would return the AC one.
+    #[test]
+    fn lookup_is_first_wins_when_two_symbols_share_a_name() {
+        use std::collections::BTreeSet;
+        use tamarin_term::function_symbols::{
+            AcFctSym, AcSym, Constructability, NdcState, NoEqSym, Privacy,
+        };
+
+        let noeq_foo = NoEqSym::new(
+            b"foo".to_vec(),
+            2,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
+        let ac_foo = AcFctSym::new(
+            b"foo".to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::NotNdc,
+        );
+        assert_eq!(
+            show_fun_sym_name(&FunSym::NoEq(noeq_foo)),
+            show_fun_sym_name(&FunSym::Ac(AcSym::AcFct(ac_foo))),
+            "the two symbols must collide for this test to mean anything"
+        );
+
+        // Same construction `parse_intruder_rules` uses: a `BTreeSet` drained
+        // in order, i.e. HS `S.toList (funSyms msig)`.
+        let syms: Vec<FunSym> = [FunSym::Ac(AcSym::AcFct(ac_foo)), FunSym::NoEq(noeq_foo)]
+            .into_iter()
+            .collect::<BTreeSet<FunSym>>()
+            .into_iter()
+            .collect();
+        let linear_scan = syms
+            .iter()
+            .copied()
+            .find(|fun| show_fun_sym_name(fun) == "foo")
+            .expect("linear scan must find `foo`");
+
+        assert_eq!(
+            KnownFuns::new(syms)
+                .lookup("foo")
+                .expect("index finds `foo`"),
+            linear_scan,
+            "the index must return the same symbol the linear `find` returns"
+        );
+        assert_eq!(
+            linear_scan,
+            FunSym::NoEq(noeq_foo),
+            "`NoEq` sorts before `AC`, so the NoEq `foo` is the first match"
+        );
+    }
+
     /// `parse_intruder_rules` is the public entry point with full HS
     /// signature `MaudeSig → ctxtDesc → source → Result`.  Verify it
     /// works directly on a tiny inline source.
@@ -569,10 +672,10 @@ mod tests {
             .expect("parse_intruder_rules on inline src");
         assert_eq!(rules.len(), 1);
         match &rules[0].info {
-            IntrRuleACInfo::ConstrRule(n, f) => {
-                assert_eq!(n.as_slice(), b"_exp");
+            IntrRuleACInfo::ConstrRule { name, fun } => {
+                assert_eq!(name.as_slice(), b"_exp");
                 assert_eq!(
-                    *f,
+                    *fun,
                     tamarin_term::function_symbols::FunSym::NoEq(
                         tamarin_term::function_symbols::exp_sym()
                     ),
@@ -606,8 +709,8 @@ mod tests {
         let rules = mk_dh_intruder_variants(&dh_maude_sig());
         for r in &rules {
             let n = match &r.info {
-                IntrRuleACInfo::ConstrRule(n, _) => n.as_slice(),
-                IntrRuleACInfo::DestrRule(n, _, _, _, _) => n.as_slice(),
+                IntrRuleACInfo::ConstrRule { name, .. } => name.as_slice(),
+                IntrRuleACInfo::DestrRule { name, .. } => name.as_slice(),
                 other => panic!("unexpected info kind: {:?}", other),
             };
             assert!(n.starts_with(b"_"),
@@ -651,14 +754,14 @@ mod tests {
         let cached_constrs: std::collections::BTreeSet<Vec<u8>> = cached
             .iter()
             .filter_map(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n, _) => Some(n.clone()),
+                IntrRuleACInfo::ConstrRule { name, .. } => Some(name.clone()),
                 _ => None,
             })
             .collect();
         let runtime_constrs: std::collections::BTreeSet<Vec<u8>> = runtime
             .iter()
             .filter_map(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n, _) => Some(n.clone()),
+                IntrRuleACInfo::ConstrRule { name, .. } => Some(name.clone()),
                 _ => None,
             })
             .collect();
@@ -716,14 +819,14 @@ mod tests {
         let c_one = rules
             .iter()
             .find(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n, _) => n.as_slice() == b"_one",
+                IntrRuleACInfo::ConstrRule { name, .. } => name.as_slice() == b"_one",
                 _ => false,
             })
             .expect("c_one rule should be present");
         let c_dh_neutral = rules
             .iter()
             .find(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n, _) => n.as_slice() == b"_DH_neutral",
+                IntrRuleACInfo::ConstrRule { name, .. } => name.as_slice() == b"_DH_neutral",
                 _ => false,
             })
             .expect("c_DH_neutral rule should be present");

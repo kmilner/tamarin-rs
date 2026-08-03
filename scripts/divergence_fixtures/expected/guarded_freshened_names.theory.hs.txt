@@ -1,0 +1,53 @@
+theory GuardedFreshenedNames
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+lemma Shadow:
+  all-traces
+  "∀ x #NOW. (Foo( x ) @ #NOW) ⇒ (∀ x.1 z. (<x.1, z> = x.1) ⇒ (⊥))"
+/*
+conversion to guarded formula failed:
+  unguarded variable(s) 'x.1', 'z' in the subformula
+    "∀ x z. (<x, z> = x) ⇒ (⊥)"
+  in the formula
+    "∀ x #NOW. (Foo( x ) @ #NOW) ⇒ (∀ x.1 z. (<x.1, z> = x.1) ⇒ (⊥))"
+*/
+by sorry
+
+lemma GuardedFirst:
+  all-traces
+  "(∀ x #i. (Foo( x ) @ #i) ⇒ (⊥)) ∧ (∀ x z. (<x, z> = x) ⇒ (⊥))"
+/*
+conversion to guarded formula failed:
+  unguarded variable(s) 'x.1', 'z' in the subformula
+    "∀ x z. (<x, z> = x) ⇒ (⊥)"
+  in the formula
+    "(∀ x #i. (Foo( x ) @ #i) ⇒ (⊥)) ∧ (∀ x z. (<x, z> = x) ⇒ (⊥))"
+*/
+by sorry
+
+lemma UnguardedFirst:
+  all-traces
+  "(∀ x z. (<x, z> = x) ⇒ (⊥)) ∧ (∀ x #i. (Foo( x ) @ #i) ⇒ (⊥))"
+/*
+conversion to guarded formula failed:
+  unguarded variable(s) 'x', 'z' in the subformula
+    "∀ x z. (<x, z> = x) ⇒ (⊥)"
+  in the formula
+    "(∀ x z. (<x, z> = x) ⇒ (⊥)) ∧ (∀ x #i. (Foo( x ) @ #i) ⇒ (⊥))"
+*/
+by sorry
+
+rule (modulo E) A:
+   [ In( x ) ] --[ Foo( x ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+
+
+end

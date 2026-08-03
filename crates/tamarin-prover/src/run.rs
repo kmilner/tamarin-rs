@@ -1,9 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, jdreier, meiersi, arcz, rsasse, beschmi, rkunnema,
-//   gilcu3, Nynko, felixlinker, addap, Hong-Thai, yavivanov,
-//   racoucho1u, PhilipLukertWork, ValentinYuri, BTom-GH, Azurios-git,
-//   sans-sucre, Mathias-AURAND, and other minor contributors (see
-//   upstream git history)
+//   kevinmorio, meiersi, jdreier, arcz, rsasse, beschmi, rkunnema,
+//   Nynko, gilcu3, cascremers, felixlinker, addap, Hong-Thai,
+//   yavivanov, racoucho1u, PhilipLukertWork, ValentinYuri, BTom-GH,
+//   Azurios-git, sans-sucre, Mathias-AURAND, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/ClosedTheory.hs, lib/theory/src/Items/RuleItem.hs,
 //   lib/theory/src/Prover.hs, lib/theory/src/Rule.hs,
@@ -48,8 +48,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use tamarin_parser::wf::{
-    after_public_names_topics, insert_wf_before, WF_AFTER_CHECK_GUARDED, WF_AFTER_CHECK_TERMS,
-    WF_AFTER_FACT_LHS, WF_AFTER_VARIANTS, WF_TOPIC_ORDER,
+    after_public_names_topics, after_unbound_topics, after_variants_topics, insert_wf_before,
+    WF_AFTER_CHECK_GUARDED, WF_AFTER_FACT_LHS, WF_AFTER_MULT_RESTRICTED, WF_TOPIC_ORDER,
 };
 use tamarin_term::maude_proc::{MaudeHandle, MaudePool, SharedMaudeCaches};
 use tamarin_theory::elaborate::elaborate;
@@ -366,6 +366,12 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // CLI `--stop-on-trace` — merged with each theory's `configuration:`
     // block at load time (`ProofState::new`), HS `closeTheory` precedence.
     cfg.stop_on_trace = cli_cut(args);
+    // `--no-ndc` — HS captures the CLI's `TheoryLoadOptions` in the
+    // `loadTheory thyLoadOptions` closure `withWebUI` runs for every web load
+    // (Interactive.hs:135); `addNdcOption` (TheoryLoader.hs:821-826) then writes
+    // `ndcCheck` = `not (--no-ndc)` (TheoryLoader.hs:365-366) into each loaded
+    // theory's `_deductionChainCheck`.  Set before the eager load below.
+    tamarin_server::theory_io::set_ndc_check(!args.no_ndc);
 
     // Positional args are theory files (Haskell uses a working
     // directory, but we accept either: a single dir arg, or one-or-more
@@ -591,7 +597,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     // through the contention-free `MaudePool`, so larger pools scale;
     // memory is budgeted via `--maude-processes`).
     // `--processors=1` falls back to a 1-thread pool, guaranteeing
-    // byte-identical output to the pre-parallel sequential path.
+    // byte-identical output to a fully sequential run.
     init_rayon_pool(args);
     if args.diff {
         return Err(RunError(
@@ -773,8 +779,13 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // Elaborate (mainly to get the protocol-specific MaudeSig).
         let mut elaborated = elaborate(&parsed)
             .map_err(|e| RunError(format!("elaboration error in {}: {}", in_file, e.message)))?;
-        // HS `addParamsOptions` `addNdcOption`: `--no-ndc` disables the
-        // no-deconstruction-chain check for this theory.
+        // HS `addParamsOptions`' `addNdcOption` (TheoryLoader.hs:821-826):
+        // `--no-ndc` disables the no-deconstruction-chain check for this theory.
+        //
+        // HS applies it inside `loadTheory` (TheoryLoader.hs:449-452), which both
+        // modes call; the interactive path reaches it through
+        // `tamarin_server::theory_io::set_ndc_check` (wired in
+        // `run_interactive`), which writes the same field on every web load.
         if args.no_ndc {
             elaborated.options.deduction_chain_check = false;
         }
@@ -797,63 +808,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // (TheoryLoader.hs:448-460, see line 454).
         marker("Theory translated");
 
-        // Port of HS `formulaReports.checkTerms` (Wellformedness.hs:960-985,
-        // "Formula terms" topic).  This check needs the elaborated `MaudeSig`
-        // (reducible/irreducible funsym classification, `irreducibleFunSyms
-        // maudeSig`) so it runs HERE (post-elaborate) rather than inside
-        // `check_theory` (parser-level).  Macros were already expanded into
-        // `parsed_for_wf`; `check_terms_wf` re-expands its own clone the same
-        // way (HS `applyMacroInFormula`).
-        //
-        // Position: HS `formulaReports` order is Quantifier sorts (8a),
-        // Formula terms (8b), Formula guardedness (8c).  After `groupOn`,
-        // "Formula terms" sorts before "Formula guardedness", so insert this
-        // block BEFORE the guardedness block below.  Insert before the first
-        // topic that comes after position 8b.
-        {
-            let term_errors =
-                tamarin_theory::check_terms::check_terms_wf(&parsed_for_wf, &maude_sig);
-            insert_wf_before(
-                &mut wf_report,
-                term_errors,
-                &WF_TOPIC_ORDER[WF_AFTER_CHECK_TERMS..],
-            );
-        }
-
-        // Port of HS `formulaReports.checkGuarded` (Wellformedness.hs:988-1004):
-        // for each lemma/restriction formula that cannot be converted to a
-        // guarded formula, emit a ` Formula guardedness` WF error.  This
-        // check needs `formula_to_guarded` (in tamarin-theory) so it runs
-        // HERE (post-elaborate) rather than inside `check_theory` (parser-level).
-        //
-        // HS `formulaReports` (Wellformedness.hs:999-1005) is a list-monad
-        // `do` block: for each formula it runs `msum [checkQuantifiers,
-        // checkTerms, checkGuarded]`.  `WfErrorReport` is a list, and for
-        // lists `msum = concat` (with `<$> = map`), so ALL three checks run
-        // UNCONDITIONALLY for every formula and their outputs are
-        // concatenated — there is no short-circuit gating `checkGuarded` on
-        // the earlier checks.  Running `check_guarded_wf` unconditionally is
-        // therefore HS-faithful.  In particular, a formula that fails both
-        // checkTerms and checkGuarded is double-reported by HS (one entry
-        // under "Formula terms", one under " Formula guardedness"), so both
-        // must keep running unconditionally to stay byte-identical.
-        //
-        // Position: after `check_theory`'s `formula_terms_report` (8b) and
-        // before `lemma_attribute_report` (9) — matches HS order.
-        {
-            let guard_errors = tamarin_theory::elaborate::check_guarded_wf(&parsed);
-            // Insert BEFORE the "Lemma annotations" entries that
-            // `check_theory` already put in `wf_report`, so the order
-            // matches HS: Formula guardedness (8c) before Lemma
-            // annotations (9).  Find the first index of a topic that
-            // comes after position 8 in HS's check order.
-            insert_wf_before(
-                &mut wf_report,
-                guard_errors,
-                &WF_TOPIC_ORDER[WF_AFTER_CHECK_GUARDED..],
-            );
-        }
-
         // SAPIC `process:` translation (HS `typeTheory` → `translate`,
         // TheoryLoader.hs:428-443, see line 430).  Runs ONLY for `is_sapic` theories (exactly one
         // top-level `process:`); a no-op otherwise, so non-process theories are
@@ -863,14 +817,14 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // run before `populate_rule_variants` below.  `user_set_heuristic` is
         // true iff a `heuristic:` item already populated `elaborated.heuristic`
         // (HS `addHeuristic` returns `Nothing` in that case).
-        // Install the user/builtin function-symbol flag sets
-        // (`USER_PRIVATE_FUNS` / `USER_DESTRUCTOR_FUNS` / …) for the duration
-        // of SAPIC translation AND the variant pre-computation below.  These
-        // thread-locals drive `term_to_lnterm`'s symbol resolution
-        // (privacy / constructability); `elaborate()` sets them only for its
-        // own scope, so without re-installing them here the SAPIC-injected
-        // rules' builtin symbols (`rep` private, `check_rep` / `get_rep`
-        // destructors from `locations-report`) re-elaborate with the default
+        // Install the user/builtin function-symbol flag sets (the
+        // `CollectedUserFuns` bundle) for the duration of SAPIC translation
+        // AND the variant pre-computation below.  That thread-local drives
+        // `term_to_lnterm`'s symbol resolution (privacy / constructability);
+        // `elaborate()` sets it only for its own scope, so without
+        // re-installing it here the SAPIC-injected rules' builtin symbols
+        // (`rep` private, `check_rep` / `get_rep` destructors from
+        // `locations-report`) re-elaborate with the default
         // public-constructor flags, serialising as `tamXC..` — which Maude
         // rejects, leaving the rule with "no variants".
         let _sapic_funs_guard = tamarin_theory::elaborate::set_user_funs_for_theory(&parsed);
@@ -934,17 +888,35 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         }
 
         // HS runs the full `checkWellformedness` on the TRANSLATED theory
-        // (TheoryLoader.hs:469-473, `checkTranslatedTheory`), i.e. AFTER SAPIC
+        // (TheoryLoader.hs:553-565, `checkTranslatedTheory`), i.e. AFTER SAPIC
         // `translate` has injected the generated rules.  Our `check_theory` ran
-        // earlier on the PRE-translation theory (line ~600), so the SAPIC rules
-        // were invisible to the rule-dependent fact checks.  Re-run
-        // `factLhsOccurNoRhs` on the post-translation parsed theory (macros
-        // expanded, as HS `thyProtoRules` does) so SAPIC-only premise facts —
-        // e.g. a `Message( c, m )` consumed by an `in(c,m)` with no producing
-        // `out` — are surfaced, byte-identically to HS.  For non-SAPIC theories
-        // this is a no-op (the pre- and post-translation rule sets are equal).
+        // earlier on the PRE-translation theory (above, before `apply_sapic`),
+        // so the SAPIC rules were invisible to the rule-dependent fact checks.
+        // Re-run `factLhsOccurNoRhs` on the post-translation parsed theory
+        // (macros expanded, as HS `thyProtoRules` does) so SAPIC-only premise
+        // facts — e.g. a `Message( c, m )` consumed by an `in(c,m)` with no
+        // producing `out` — are surfaced, byte-identically to HS.  For
+        // non-SAPIC theories this is a no-op (the pre- and post-translation
+        // rule sets are equal).
+        //
+        // `post_thy` is that translated theory with macros expanded, as HS
+        // `thyProtoRules` / `applyMacroInFormula` do before every check.
+        let post_thy = macro_expanded_clone(&parsed);
         if elaborated.is_sapic {
-            let post_thy = macro_expanded_clone(&parsed);
+            // HS `unboundReport` (Wellformedness.hs:514-519) also walks
+            // `thyProtoRules` of the TRANSLATED theory, so a variable that is
+            // free only inside a process's embedded `_restrict` — lifted into
+            // the generated rule's `Restr_<rule>_<i>( … )` action, bound by no
+            // premise — is reported against the generated rule.  Replace the
+            // pre-translation entries (user rules only) with the full
+            // post-translation set: `post_thy` keeps the user rules in source
+            // order and carries the generated ones appended after them,
+            // matching HS's item order.  Position: HS check index 2, so the
+            // findings splice before the first entry from a later check.
+            wf_report.retain(|e| e.topic != "Unbound variables");
+            let unbound = tamarin_parser::wf::unbound_report(&post_thy);
+            insert_wf_before(&mut wf_report, unbound, &after_unbound_topics());
+
             let topic = "Facts occur in the left-hand-side but not in any right-hand-side ";
             wf_report.retain(|e| e.topic != topic);
             let lhs_rhs = tamarin_parser::wf::fact_lhs_occur_no_rhs(&post_thy);
@@ -974,6 +946,68 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             wf_report.retain(|e| e.topic != caps_topic);
             let public_names = tamarin_theory::elaborate::sapic_public_names_report(&elaborated);
             insert_wf_before(&mut wf_report, public_names, &after_public_names_topics());
+        }
+
+        // Port of HS `formulaReports` (Wellformedness.hs:996-1015) — the whole
+        // check, all three arms.  It is ONE per-formula loop, `msum
+        // [checkQuantifiers, checkTerms, checkGuarded]` inside the
+        // `annFormulas` walk, so its three topics interleave in item order
+        // and a topic reopens after an intervening one; running the arms as
+        // separate whole-report splices would instead emit one block per
+        // topic.  `formula_reports` keeps HS's emission order.
+        //
+        // Two dependencies pin the call to this position:
+        //   - the elaborated `MaudeSig`, for `checkTerms`'s
+        //     reducible/irreducible funsym classification (HS
+        //     `irreducibleFunSyms maudeSig`), which the parser-level
+        //     `check_theory` cannot see; and
+        //   - the TRANSLATED theory, because HS's single `checkWellformedness`
+        //     pass runs on the `OpenTranslatedTheory` (`checkTranslatedTheory`,
+        //     TheoryLoader.hs:559-565, fed by `closeTheory` at :726-728), so
+        //     `annFormulas` (Wellformedness.hs:1006-1015) also covers the
+        //     restrictions SAPIC's `let … else` / `if` lowering mints
+        //     (`Restr_<rule>_<i>`, carrying the branch's terms verbatim — e.g.
+        //     an `exp` application from `<<'a'^'b','b'>, 'c'>`) and the lemmas
+        //     accountability's `translate` appends.  Both land in `parsed` only
+        //     after `apply_sapic` / `Acc::translate`, so the check reads
+        //     `post_thy`.
+        //
+        // Position: HS check index 8, so the findings splice before the first
+        // entry from a later check (`lemmaAttributeReport` onwards).
+        {
+            let formula_errors =
+                tamarin_theory::formula_reports::formula_reports(&post_thy, &maude_sig);
+            insert_wf_before(
+                &mut wf_report,
+                formula_errors,
+                &WF_TOPIC_ORDER[WF_AFTER_CHECK_GUARDED..],
+            );
+        }
+
+        // Port of HS `multRestrictedReport` (Wellformedness.hs:1108-1113,
+        // "Multiplication restriction of rules").  Pinned here by the same two
+        // dependencies as `formula_reports` above: the elaborated `MaudeSig`
+        // (HS `irreducibleFunSyms $ get (sigpMaudeSig . thySignature) thy`)
+        // and the TRANSLATED theory — HS's `thyProtoRules` reads the
+        // `OpenTranslatedTheory`'s rule items, so SAPIC's generated rules are
+        // in scope, and it must run BEFORE the no-variant rules are dropped
+        // from `elaborated` below (HS closes the theory only after
+        // `checkWellformedness`).
+        //
+        // Position: HS check index 10 — after `lemmaAttributeReport` (9),
+        // before `natWellSortedReport` (11), so splice before the first entry
+        // from a later check.
+        {
+            let mult_errors = tamarin_theory::mult_restricted::mult_restricted_report(
+                &post_thy,
+                &elaborated,
+                &maude_sig,
+            );
+            insert_wf_before(
+                &mut wf_report,
+                mult_errors,
+                &WF_TOPIC_ORDER[WF_AFTER_MULT_RESTRICTED..],
+            );
         }
 
         // Spawn a single Maude handle for this file.  Used by:
@@ -1008,7 +1042,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         //
         // - `--processors=1` ⇒ `effective_maude_processes=1`; we skip
         //   the auxiliary pool entirely (sequential path uses
-        //   `file_maude` only — byte-identical to pre-pool behaviour).
+        //   `file_maude` only — byte-identical to a single shared Maude).
         // - `M >= 2` ⇒ spawn M independent Maudes.  Each costs
         //   ~30-100 MB; `--maude-processes=N` lets the user override.
         //
@@ -1093,10 +1127,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // (all variant substs were filtered). The rule's `variant_substs`
         // stays empty, and `abstracted_rule` stays `None`.
         //
-        // Detection criterion: `file_maude` is `Some` (so we ran variant
-        // computation), the rule has at least one reducible RHS sub-term OR
-        // the rule has `variant_substs` empty after `populate_rule_variants`
-        // ran. Actually — `populate_rule_variants` only calls
+        // Detection criterion: `populate_rule_variants` only calls
         // `abstract_rule_and_variants` for rules WHERE the signature has
         // reducible funs. For signatures without reducible funs, the rule
         // can NEVER get `Nothing` from `variantsProtoRule` because HS also
@@ -1108,7 +1139,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // specified variants in the rule body) is non-empty and doesn't match
         // the recomputed variants. Requires comparing parsed `rule.variants`
         // vs `abstracted_rule + variant_substs`. Not yet ported (no corpus
-        // files affected); see implementation notes below.
+        // files affected).
         if let Some(ref wf_maude) = file_maude {
             use tamarin_parser::wf::underline_topic;
             use tamarin_parser::wf::WfError as WfE;
@@ -1144,7 +1175,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 // `isFreshRedundant` filtering.
                 //
                 // Sub-check 2: "Variants mismatch" — not yet ported; no
-                // corpus files affected (see step-0 analysis).
+                // corpus files affected.
                 let precomputed_no_variants = if sig_has_reducible {
                     Some(opr.abstracted_rule.is_none() && opr.variant_substs.is_empty())
                 } else {
@@ -1180,12 +1211,10 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             }
 
             // HS position 6: ruleVariantsReport comes BEFORE factReports
-            // (position 7).  Insert before factReports items.
-            insert_wf_before(
-                &mut wf_report,
-                variants_errors,
-                &WF_TOPIC_ORDER[WF_AFTER_VARIANTS..],
-            );
+            // (position 7) and AFTER unboundReport (position 2), so the
+            // anchors are every `WF_TOPIC_ORDER` topic but "Unbound
+            // variables".
+            insert_wf_before(&mut wf_report, variants_errors, &after_variants_topics());
 
             // HS closeProtoRule (Rule.hs:97-98): `ClosedProtoRule ruE <$>
             // maybeToList (variantsProtoRule hnd ruE)` — a rule with NO
@@ -1270,7 +1299,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         let deriv_timeout = args.derivcheck_timeout.unwrap_or(5) as u32;
         if deriv_timeout > 0 {
             // HS emits these markers around the per-variable derivability
-            // check (TheoryLoader.hs:463-533, see line 485, :498).
+            // check (TheoryLoader.hs:578-594, see line 581, :594).
             marker("Derivation checks started");
             if let Some(m) = file_maude.as_ref() {
                 let extra = tamarin_theory::deriv_check::check_message_derivation(
@@ -1566,8 +1595,8 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 // The plain-load check pass needs the session's
                 // check_and_extend arm; the pool fallback below always
                 // auto-proves.  If the session failed to build, keep the
-                // historical no-solver behaviour instead of launching
-                // searches nobody asked for.
+                // no-solver behaviour instead of launching searches nobody
+                // asked for.
                 push_skipped_results(&mut results, &elaborated);
             } else {
                 for l in elaborated.lemmas() {
@@ -1917,7 +1946,7 @@ mod tests {
             format_lemma_summary_line(&mk_result(LemmaVerdict::Invalidated, false, 3)),
             "L (all-traces): proof has been invalidated (3 steps)",
         );
-        // showProofStatus _ IncompleteProof = "analysis incomplete" (unchanged)
+        // showProofStatus _ IncompleteProof = "analysis incomplete"
         assert_eq!(
             format_lemma_summary_line(&mk_result(LemmaVerdict::Analyzed, false, 5)),
             "L (all-traces): analysis incomplete (5 steps)",

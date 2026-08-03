@@ -1,8 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, felixlinker, rkunnema, BTom-GH, jdreier, PhilipLukertWork,
-//   and other minor contributors (see upstream git history)
+//   jdreier, beschmi, meiersi, PhilipLukertWork, felixlinker, rkunnema,
+//   BTom-GH, rsasse, and other minor contributors (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Items/LemmaItem.hs,
+//   lib/term/src/Term/Term.hs, lib/theory/src/Items/LemmaItem.hs,
 //   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
 //   lib/theory/src/Theory/Constraint/System/Constraints.hs,
 //   lib/theory/src/Theory/Proof.hs,
@@ -630,6 +631,31 @@ pub enum BinOp {
     AcFct(&'static str),
 }
 
+impl BinOp {
+    /// The string HS `prettyTerm` puts between the operands of this operator.
+    ///
+    /// The five builtin operators are the literal separators of `prettyTerm`'s
+    /// `ppTerms`/`exp` arms (`*`, `⊕`, `++`, `%+`, `^`; Term/Term.hs:306-310).
+    /// A user-declared `[AC]` symbol is separated by `" " ++ BC.unpack f ++ " "`
+    /// (Term/Term.hs:305), i.e. its name with the spaces included, so that one
+    /// arm owns a `String`.
+    ///
+    /// This is the single separator table.  Printers that need a `&'static str`
+    /// (the `LNTerm` printer hands separators to a `Doc`) intern the owned arm
+    /// instead of re-spelling the builtins.
+    pub fn separator(&self) -> std::borrow::Cow<'static, str> {
+        use std::borrow::Cow;
+        match self {
+            BinOp::Exp => Cow::Borrowed("^"),
+            BinOp::Mult => Cow::Borrowed("*"),
+            BinOp::Union => Cow::Borrowed("++"),
+            BinOp::Xor => Cow::Borrowed("\u{2295}"),
+            BinOp::NatPlus => Cow::Borrowed("%+"),
+            BinOp::AcFct(name) => Cow::Owned(format!(" {name} ")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VarSpec {
     pub name: String,
@@ -671,4 +697,33 @@ pub enum FlagFormula {
     Not(Box<FlagFormula>),
     And(Box<FlagFormula>, Box<FlagFormula>),
     Or(Box<FlagFormula>, Box<FlagFormula>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BinOp;
+
+    /// The separator strings HS `prettyTerm` puts between operands
+    /// (Term/Term.hs:305-310).  Every printer of a `BinOp` reads them from
+    /// here, so a typo would move in lockstep across all of them — pin the
+    /// table itself.
+    #[test]
+    fn separator_table_matches_prettyterm() {
+        assert_eq!(BinOp::Exp.separator(), "^");
+        assert_eq!(BinOp::Mult.separator(), "*");
+        assert_eq!(BinOp::Union.separator(), "++");
+        assert_eq!(BinOp::Xor.separator(), "\u{2295}");
+        assert_eq!(BinOp::NatPlus.separator(), "%+");
+        // A user-declared `[AC]` symbol keeps the surrounding spaces.
+        assert_eq!(BinOp::AcFct("add").separator(), " add ");
+        // Only that arm needs to own its string.
+        assert!(matches!(
+            BinOp::Exp.separator(),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert!(matches!(
+            BinOp::AcFct("add").separator(),
+            std::borrow::Cow::Owned(_)
+        ));
+    }
 }

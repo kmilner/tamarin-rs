@@ -142,7 +142,7 @@ pub(crate) fn eq_term_subs(
 // dedup BP destructor variants byte-identically.
 // =============================================================================
 
-use crate::function_symbols::{AcSym, CSym, FunSym};
+use crate::function_symbols::{show_acfct_sym, AcSym, CSym, FunSym};
 use crate::lterm::LVar;
 use crate::subst_vfresh::LNSubstVFresh;
 use crate::term::Term;
@@ -154,10 +154,6 @@ use std::collections::BTreeSet;
 /// (`Occurence = [String]` in HS, where the path is cons'd as we
 /// descend — head is the innermost context label).
 type Occurence = Vec<String>;
-
-/// HS `show` of an `ACfctSym` — the shared derived-`Show` port, re-exported
-/// here for the context-label callers of this module.
-pub use crate::function_symbols::show_acfct_sym;
 
 /// HS `show` of a non-`NoEq` `FunSym` used as a context label
 /// (`foldFreesOcc f (show o:c) as` for AC/C symbols, LTerm.hs:741-754, see line 748).

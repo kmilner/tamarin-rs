@@ -43,7 +43,6 @@ use tamarin_term::vterm::Lit;
 
 use tamarin_theory::constraint::constraints::{NodeConc, NodeId, NodePrem, Reason};
 use tamarin_theory::constraint::solver::tactic_show::show_lnterm;
-use tamarin_theory::constraint::system::System;
 use tamarin_theory::fact::{fact_tag_multiplicity, show_fact_tag, FactTag, LNFact, Multiplicity};
 use tamarin_theory::pretty_hpj::{fsep, punctuate, Doc, WEB_LINE_LENGTH, WEB_RIBBON};
 use tamarin_theory::rule::{
@@ -52,65 +51,12 @@ use tamarin_theory::rule::{
     is_pub_constr_rule_info, rule_name_string, ProtoRuleName, RuleACInst, RuleInfo,
 };
 
-use crate::graph::abbreviation::{
-    compute_abbreviations, order_abbreviations_for_json, AbbreviationOptions, Abbreviations,
-};
+use crate::graph::abbreviation::order_abbreviations_for_json;
 use crate::graph::color::{build_node_color_map, fact_doc_of, reason_color, NodeColorMap};
 use crate::graph::options::GraphOptions;
 use crate::graph::render_system::RenderSystem;
-use crate::graph::repr::{
-    add_cluster_by_role, add_intelligent_cluster_using_similar_names, compute_basic_graph_repr,
-    Cluster, GEdge, GNode, GraphRepr, MissingHint, NodeType,
-};
-use crate::graph::simplify::{compress_system, simplify_system};
-
-// ---------------------------------------------------------------------
-// The abstract graph (HS `Theory.Constraint.System.Graph.Graph.Graph`)
-// ---------------------------------------------------------------------
-
-/// Mirror of HS `Graph` (Graph.hs:74-81) restricted to the fields the JSON
-/// serialiser reads.
-///
-/// `system` is the ORIGINAL, un-compressed/un-simplified system (HS
-/// `Graph se options repr abbrevs` stores the `systemToGraph` argument), which
-/// is what `resolveNodePremFact`/`resolveNodeConcFact` (Graph.hs:85-95) look
-/// facts up in when typing and colouring edges.
-struct Graph<'a> {
-    system: &'a System,
-    repr: GraphRepr,
-    abbreviations: Abbreviations,
-}
-
-/// Port of `systemToGraph` (Graph.hs:149-162).
-///
-/// Abbreviations are computed unconditionally — `goAbbreviate` gates only
-/// their APPLICATION in the DOT renderer, and the JSON export lists them
-/// verbatim while leaving node terms unabbreviated (the frontend performs the
-/// substitution), so `?unabbreviate` does not change this output.
-fn system_to_graph<'a>(sys: &'a System, options: &GraphOptions) -> Graph<'a> {
-    // Clone-for-render boundary: the compress/simplify passes mutate their
-    // working copy in ways that leave the `subst_system` stamps meaningless,
-    // so they run on a write-sealed `RenderSystem`.
-    let working = RenderSystem::from_prover(sys.clone());
-    let working = if options.compress {
-        compress_system(working)
-    } else {
-        working
-    };
-    let working = simplify_system(options.simplification_level, working);
-    let mut repr = compute_basic_graph_repr(&working);
-    if options.clustering_similar_names {
-        add_intelligent_cluster_using_similar_names(&mut repr);
-    } else {
-        add_cluster_by_role(&mut repr);
-    }
-    let abbreviations = compute_abbreviations(&repr, &AbbreviationOptions::default());
-    Graph {
-        system: sys,
-        repr,
-        abbreviations,
-    }
-}
+use crate::graph::repr::{Cluster, GEdge, GNode, MissingHint, NodeType};
+use crate::graph::{system_to_graph, Graph};
 
 /// `NodeId → &RuleACInst` index over the ORIGINAL system, built once per
 /// rendered graph.  HS's `resolveNodePremFact` / `resolveNodeConcFact`
@@ -118,7 +64,7 @@ fn system_to_graph<'a>(sys: &'a System, options: &GraphOptions) -> Graph<'a> {
 /// nodes in a `Vec`, and every edge resolves up to two of them.
 type NodeRules<'a> = tamarin_utils::FastMap<&'a NodeId, &'a RuleACInst>;
 
-/// HS `resolveNodePremFact` (System.hs:926-927) via Graph.hs:85-89.
+/// HS `resolveNodePremFact` (System.hs:926-927) via Graph.hs:87-90.
 fn resolve_node_prem_fact<'a>(prem: &NodePrem, rules: &NodeRules<'a>) -> Option<&'a LNFact> {
     rules
         .get(&prem.0)
@@ -126,7 +72,7 @@ fn resolve_node_prem_fact<'a>(prem: &NodePrem, rules: &NodeRules<'a>) -> Option<
         .and_then(|ru| ru.premises.get(prem.1 .0))
 }
 
-/// HS `resolveNodeConcFact` (System.hs:930-931) via Graph.hs:91-95.
+/// HS `resolveNodeConcFact` (System.hs:930-931) via Graph.hs:93-96.
 fn resolve_node_conc_fact<'a>(conc: &NodeConc, rules: &NodeRules<'a>) -> Option<&'a LNFact> {
     rules
         .get(&conc.0)
@@ -643,9 +589,13 @@ fn json_graph(label: &str, graph: &Graph<'_>, color_map: &NodeColorMap) -> Value
 /// `BL.writeFile` (JSON.hs:564-569, `src/Web/Theory.hs:1335-1340`), so the
 /// wire bytes are the document's own UTF-8 — which is what writing this
 /// `String` out as UTF-8 produces.
+///
+/// The inputs are [`RenderSystem`]s: this endpoint is reached with systems
+/// that `web_utils_abbrev::abbrev` may have rewritten into a display-only
+/// shape, so the whole route is typed render-only from that boundary on.
 pub fn sequents_to_json_pretty(
     graph_options: &GraphOptions,
-    systems: &[(String, &System)],
+    systems: &[(String, &RenderSystem)],
 ) -> String {
     let graphs: Vec<Value> = systems
         .iter()
@@ -678,6 +628,7 @@ mod tests {
     use tamarin_term::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
     use tamarin_term::lterm::{LSort, NameTag};
     use tamarin_term::term::{f_app_no_eq, lit};
+    use tamarin_theory::constraint::system::System;
     use tamarin_theory::fact::Fact;
 
     fn var(name: &str, sort: LSort) -> LNTerm {
@@ -788,7 +739,10 @@ mod tests {
     fn json_body_keeps_non_ascii_label_in_utf8() {
         let out = sequents_to_json_pretty(
             &GraphOptions::default(),
-            &[("Theory: ⊕".to_string(), &System::default())],
+            &[(
+                "Theory: ⊕".to_string(),
+                &RenderSystem::from_prover(System::default()),
+            )],
         );
         assert!(
             out.as_bytes().windows(3).any(|w| w == b"\xe2\x8a\x95"),
@@ -829,7 +783,7 @@ mod tests {
             &GraphOptions::default(),
             &[(
                 "Theory: NSPK3 Lemma: injective_agree".to_string(),
-                &System::default(),
+                &RenderSystem::from_prover(System::default()),
             )],
         );
         assert_eq!(out, include_str!("../../tests/assets/hsjson_root.json"));
@@ -860,7 +814,10 @@ mod tests {
             .push((Goal::Action(nid, fa), GoalStatus::default()));
         let out = sequents_to_json_pretty(
             &GraphOptions::default(),
-            &[("Theory: NSPK3 Lemma: injective_agree".to_string(), &sys)],
+            &[(
+                "Theory: NSPK3 Lemma: injective_agree".to_string(),
+                &RenderSystem::from_prover(sys),
+            )],
         );
         assert_eq!(out, include_str!("../../tests/assets/hsjson_simplify.json"));
     }

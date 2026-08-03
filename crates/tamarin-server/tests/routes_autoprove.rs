@@ -1,8 +1,11 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   only minor contributions per cited ranges (see upstream git
-//   history)
+//   arcz, meiersi, jdreier, cascremers, felixlinker, rsasse,
+//   Kanakanajm, beschmi, Divya19gupta, addap, BTom-GH,
+//   PhilipLukertWork, YannColomb, xaDxelA, Mathias-AURAND, symphorien,
+//   racoucho1u, Esslingen-Security-Privacy, kevinmorio, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   src/Web/Handler.hs
+//   src/Web/Handler.hs, src/Web/Theory.hs
 
 //! Integration tests that exercise the prover-driving endpoints: the
 //! autoprove routes and `main/method`'s single-step apply.

@@ -1,9 +1,10 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, beschmi, jdreier, PhilipLukertWork, and other minor
-//   contributors (see upstream git history)
+//   meiersi, beschmi, jdreier, PhilipLukertWork, Divya19gupta, and
+//   other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Unification.hs,
-//   lib/theory/src/Theory/Constraint/Solver/Sources.hs
+//   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
+//   src/Web/Utils.hs
 
 //! Port of `Term.LTerm` data types from `lib/term/src/Term/LTerm.hs`:
 //! sorts, names, logical variables, simple predicates and convertors,
@@ -753,29 +754,20 @@ impl<T: HasFrees> HasFrees for Option<T> {
 
 /// `rename t`: replace every free variable with a fresh one (preserving
 /// sort and name hint).
+///
+/// The empty-exemption case of [`rename_ignoring`]: HS states the two
+/// separately (`rename`, LTerm.hs:638-645) with bodies that differ only in the
+/// `elem … vars` test, which an empty list always answers `False`.
+#[inline]
 pub fn rename<T: HasFrees>(t: T, fresh: &mut tamarin_utils::fresh::FastFreshState) -> T {
-    let bounds = bounds_var_idx(&t);
-    match bounds {
-        None => t,
-        Some((min, max)) => {
-            let span = max - min + 1;
-            let fresh_start = fresh.fresh_idents(span);
-            let shift = fresh_start as i128 - min as i128;
-            // HS `rename` (LTerm.hs:607-614) uses `mapFrees (Monotone ...)`: the
-            // index shift is monotone, so AC arg order is preserved.
-            t.map_free_monotone(&mut |LVar { name, sort, idx }| LVar {
-                name,
-                sort,
-                idx: ((idx as i128) + shift) as u64,
-            })
-        }
-    }
+    rename_ignoring(&[], t, fresh)
 }
 
 /// `renameIgnoring vars t`: like [`rename`], but the variables in `vars` keep
 /// their index.  The shift is applied to every other free variable, so — as
 /// for `rename` — the result is not guaranteed to be equal for terms that are
 /// equal modulo variable indices.
+#[inline]
 pub fn rename_ignoring<T: HasFrees>(
     vars: &[LVar],
     t: T,
@@ -787,13 +779,18 @@ pub fn rename_ignoring<T: HasFrees>(
             let span = max - min + 1;
             let fresh_start = fresh.fresh_idents(span);
             let shift = fresh_start as i128 - min as i128;
-            // HS `renameIgnoring` (LTerm.hs:648-656) uses `mapFrees (Monotone
+            // HS `renameIgnoring` (LTerm.hs:650-657) uses `mapFrees (Monotone
             // ...)` here even though the `vars` exemption makes the map
             // non-monotone in general; transcribing HS verbatim (rather than
             // "fixing" it to an `Arbitrary` map) is what preserves AC arg
             // order — and byte parity — with the Haskell prover.
+            //
+            // `rename` is proof-search hot and reaches this through an empty
+            // `vars`, so the exemption scan is guarded by the slice's length:
+            // the guard is a single length test per free variable, and the
+            // `contains` walk is skipped entirely.
             t.map_free_monotone(&mut |v| {
-                if vars.contains(&v) {
+                if !vars.is_empty() && vars.contains(&v) {
                     v
                 } else {
                     LVar {
@@ -973,7 +970,8 @@ mod tests {
         assert!(LSort::Pub < LSort::Nat);
     }
 
-    /// LTerm.hs:215: `data NameTag = FreshName | PubName | NodeName | NatName`
+    /// LTerm.hs:218:
+    ///     data NameTag = FreshName | PubName | NodeName | NatName | AbbrevName
     #[test]
     fn name_tag_ord_matches_haskell_declaration() {
         // Fresh < Pub < Node < Nat

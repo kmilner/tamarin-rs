@@ -1,8 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, charlie-j, kevinmorio, arcz, and other minor contributors
-//   (see upstream git history)
+//   rkunnema, charlie-j, beschmi, jdreier, meiersi, kevinmorio, arcz,
+//   PhilipLukertWork, rsasse, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/Basetranslation.hs
+//   lib/sapic/src/Sapic/Basetranslation.hs, lib/term/src/Term/Term.hs
 
 //! Port of `Sapic.Basetranslation` (`lib/sapic/src/Sapic/Basetranslation.hs`):
 //!   - `baseInit`       (Basetranslation.hs:312-318)
@@ -900,87 +901,12 @@ fn let_else_restriction(
     }
 }
 
-/// `LNTerm` → parser-AST `Term` (for the `let` else restriction body).  The
-/// restriction is rendered through the parser-AST formula printer, so we lower
-/// the LN term into the parser term universe (variables keep their sort/idx).
-pub(crate) fn ln_term_to_parser(t: &LNTerm) -> tamarin_parser::ast::Term {
-    use tamarin_parser::ast as p;
-    use tamarin_term::function_symbols::{AcSym, FunSym};
-    use tamarin_term::lterm::NameTag;
-    use tamarin_term::vterm::{Lit, VTerm};
-    match t {
-        VTerm::Lit(Lit::Var(v)) => p::Term::Var(crate::convert::lvar_to_varspec(v)),
-        VTerm::Lit(Lit::Con(n)) => match n.tag {
-            NameTag::Pub => p::Term::PubLit(n.id.0.to_string()),
-            NameTag::Fresh => p::Term::FreshLit(n.id.0.to_string()),
-            NameTag::Nat => p::Term::NatLit(n.id.0.to_string()),
-            NameTag::Node => p::Term::PubLit(n.id.0.to_string()),
-            // `show (Name AbbrevName n) = show n` (LTerm.hs:240) is the bare
-            // id, and a nullary `App` is the parser-AST term that renders
-            // that way.
-            NameTag::Abbrev => p::Term::App(n.id.0.to_string(), Vec::new()),
-        },
-        VTerm::App(FunSym::NoEq(sym), args) => {
-            let name = String::from_utf8_lossy(sym.name).to_string();
-            if name == "pair" && args.len() == 2 {
-                let mut flat = Vec::new();
-                collect_pair(t, &mut flat);
-                return p::Term::Pair(flat);
-            }
-            p::Term::App(name, args.iter().map(ln_term_to_parser).collect())
-        }
-        // HS `prettyTerm` (Term/Term.hs:304): `FApp (AC (ACfct (f,_))) [] ->
-        // text (BC.unpack f)` — a nullary user-AC symbol is the bare name,
-        // which the parser-AST printers render for a nullary `App`.
-        VTerm::App(FunSym::Ac(AcSym::AcFct(s)), args) if args.is_empty() => {
-            p::Term::App(String::from_utf8_lossy(s.name).into_owned(), Vec::new())
-        }
-        VTerm::App(FunSym::Ac(op), args) => {
-            let bop = match op {
-                AcSym::Mult => p::BinOp::Mult,
-                AcSym::Union => p::BinOp::Union,
-                AcSym::Xor => p::BinOp::Xor,
-                AcSym::NatPlus => p::BinOp::NatPlus,
-                // HS renders a user-declared `[AC]` symbol INFIX too
-                // (Term/Term.hs:305): `ppTerms (" " ++ BC.unpack f ++ " ") 1
-                // "(" ")" ts`, i.e. `(x add y)` — same lowering as
-                // `pretty_theory::lnterm_to_parser`.
-                AcSym::AcFct(s) => p::BinOp::AcFct(tamarin_term::intern::intern_str(
-                    &String::from_utf8_lossy(s.name),
-                )),
-            };
-            // Fold the AC arg list left-associatively into BinOps.
-            let mut it = args.iter();
-            let first = it
-                .next()
-                .map(ln_term_to_parser)
-                .unwrap_or(p::Term::NumberOne);
-            it.fold(first, |acc, a| {
-                p::Term::BinOp(bop, Box::new(acc), Box::new(ln_term_to_parser(a)))
-            })
-        }
-        VTerm::App(FunSym::C(_), args) => p::Term::App(
-            "em".to_string(),
-            args.iter().map(ln_term_to_parser).collect(),
-        ),
-        VTerm::App(FunSym::List, args) => {
-            p::Term::Pair(args.iter().map(ln_term_to_parser).collect())
-        }
-    }
-}
-
-fn collect_pair(t: &LNTerm, out: &mut Vec<tamarin_parser::ast::Term>) {
-    use tamarin_term::function_symbols::FunSym;
-    use tamarin_term::vterm::VTerm;
-    if let VTerm::App(FunSym::NoEq(sym), args) = t {
-        if sym.name == b"pair" && args.len() == 2 {
-            collect_pair(&args[0], out);
-            collect_pair(&args[1], out);
-            return;
-        }
-    }
-    out.push(ln_term_to_parser(t));
-}
+/// `LNTerm` → parser-AST `Term`.  The SAPIC translation's restriction bodies
+/// and `if`-predicate conditions are parser-AST formulas, so they project their
+/// terms through the same lowering the theory printer uses — the one place that
+/// materialises HS `prettyTerm`'s special shapes (infix `exp`, right-spine
+/// `pair` split, infix AC chains, `LIST(…)`).
+pub(crate) use tamarin_theory::pretty_theory::lnterm_to_parser as ln_term_to_parser;
 
 /// `fromList (freesList f)` for a parser-AST formula — the formula's FREE
 /// variables (vars not bound by an enclosing quantifier), as `LVar`s for the
@@ -1404,6 +1330,63 @@ mod tests {
         assert!(base_trans_comb(&c, &an, &p, &tx).is_err());
     }
 
+    /// A bare token naming a declared 0-arity function symbol is a CONSTANT in
+    /// the conditional, not a free variable, so it never trips `WFUnbound`.
+    /// HS's term parser resolves it against the signature while parsing
+    /// (`nullaryApp`), leaving an `FApp` leaf that `freesList` ignores.
+    ///
+    /// Oracle bytes (pinned build, Git revision ef3f0468): `functions: nil/0` +
+    /// `predicates: Eq(a, b) <=> a = b` +
+    /// `in(k); if Eq(nil, k) then out('yes') else out('no')` LOADS, emitting
+    /// `process="if Eq( nil, k.1 )"`.
+    #[test]
+    fn cond_nullary_constant_is_not_an_unbound_var() {
+        use tamarin_parser::ast as p;
+
+        let leaf = |name: &str| {
+            p::Term::Var(p::VarSpec {
+                typ: None,
+                name: name.into(),
+                sort: p::SortHint::Untagged,
+                idx: 0,
+            })
+        };
+        // `Eq(nil, k)` — the predicate atom the surface `if Eq(nil, k)` parses to.
+        let f = p::Formula::Atom(p::Atom::Pred(p::Fact {
+            persistent: false,
+            name: "Eq".into(),
+            args: vec![leaf("nil"), leaf("k")],
+            annotations: Vec::new(),
+        }));
+        let c = ProcessCombinator::Cond(f);
+        let an = ProcessAnnotation::<LVar>::empty();
+        let pos: Vec<i64> = vec![];
+        // tildex binds only `k`.
+        let mut tx = BTreeSet::new();
+        tx.insert(lv("k", 0));
+
+        // Without the theory's 0-arity set installed `nil` is an ordinary
+        // variable and is (correctly) unbound — this is what makes the
+        // assertion below discriminating.
+        {
+            let empty = tamarin_parser::parse_theory("theory T begin end", &[]).unwrap();
+            let _guard = tamarin_theory::elaborate::set_user_funs_for_theory(&empty);
+            let err = base_trans_comb(&c, &an, &pos, &tx).unwrap_err();
+            assert!(
+                err.contains("nil"),
+                "expected WFUnbound over nil, got {err}"
+            );
+        }
+
+        let theory =
+            tamarin_parser::parse_theory("theory T begin functions: nil/0 end", &[]).unwrap();
+        let _guard = tamarin_theory::elaborate::set_user_funs_for_theory(&theory);
+        let (bodies, txl, txr) = base_trans_comb(&c, &an, &pos, &tx).unwrap();
+        assert_eq!(bodies.len(), 2);
+        assert_eq!(txl, tx);
+        assert_eq!(txr, Some(tx));
+    }
+
     // User-`[AC]` symbols must lower INFIX (`BinOp::AcFct`, left-folded),
     // mirroring `pretty_theory::lnterm_to_parser` and HS `prettyTerm`
     // (Term/Term.hs:305): a prefix `App("add", …)` here reaches emitted
@@ -1441,5 +1424,47 @@ mod tests {
             });
             assert_eq!(ln_term_to_parser(&t), expected);
         }
+    }
+
+    /// The lowering the SAPIC translation uses is the one HS `prettyTerm`
+    /// defines, so `exp` comes out infix and a `pair` chain is split down the
+    /// RIGHT spine only (Term/Term.hs:310,313,323-324).  Both shapes reach
+    /// emitted bytes through `let_else_restriction`: on
+    /// `let <x, y> = <'g'^k, <<'a','b'>,'c'>> in … else …` the pinned oracle
+    /// (ef3f0468) renders the generated action as
+    /// `Restr_letxygkabc_2_1_1( <'g'^k.1, <'a', 'b'>, 'c'> )`.
+    #[test]
+    fn exp_and_nested_pairs_lower_like_prettyterm() {
+        use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
+        use tamarin_term::term::{f_app_list, f_app_no_eq, Term as TTerm};
+
+        let sym = |n: &[u8], k| {
+            NoEqSym::new(
+                n.to_vec(),
+                k,
+                Privacy::Public,
+                Constructability::Constructor,
+            )
+        };
+        let leaf = |n: &str| TTerm::Lit(Lit::Var(lv(n, 0)));
+        let pair = |a: LNTerm, b: LNTerm| f_app_no_eq(sym(b"pair", 2), vec![a, b]);
+        let render =
+            |t: &LNTerm| tamarin_theory::pretty_formula::term_doc(&ln_term_to_parser(t)).render();
+
+        // `exp(a, b)` is the infix `a^b`, not a prefix application.
+        let e = f_app_no_eq(sym(b"exp", 2), vec![leaf("a"), leaf("b")]);
+        assert_eq!(render(&e), "a^b");
+
+        // `<'g'^k, <<'a','b'>,'c'>>` = pair(exp, pair(pair(a,b), c)): the right
+        // spine flattens, the LEFT-nested inner pair stays a 2-tuple.
+        let inner = pair(pair(leaf("a"), leaf("b")), leaf("c"));
+        assert_eq!(render(&pair(e.clone(), inner.clone())), "<a^b, <a, b>, c>");
+        assert_eq!(render(&inner), "<<a, b>, c>");
+
+        // `List` is HS `ppFun "LIST" ts` (Term/Term.hs:317), not a tuple.
+        assert_eq!(
+            render(&f_app_list(vec![leaf("a"), leaf("b")])),
+            "LIST(a, b)"
+        );
     }
 }

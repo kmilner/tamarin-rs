@@ -1,8 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
 //   meiersi, felixlinker, jdreier, rkunnema, racoucho1u, beschmi,
-//   rsasse, symphorien, PhilipLukertWork, kevinmorio, yavivanov,
-//   felixonmars, arcz, katrielalex, robert.kunnemann@cased.de, xaDxelA,
-//   and other minor contributors (see upstream git history)
+//   rsasse, symphorien, PhilipLukertWork, kevinmorio, felixonmars,
+//   yavivanov, katrielalex, xaDxelA, Azurios-git,
+//   robert.kunnemann@cased.de, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/theory/src/Prover.hs,
 //   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
@@ -872,11 +873,10 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             // skeleton-text parser captures only the time-var ROOT
             // name (e.g. `i` from `#i.3`) — LVar idxs in the skeleton
             // and runtime differ because HS pretty-prints idxs after a
-            // freshen but our skeleton-parse drops them.  When a lemma
-            // has multiple same-fact-shape goals at different
-            // timepoints, the root-name disambiguates; when only one
-            // matches the (name, arity, persistent) tuple regardless,
-            // we keep the legacy single-match policy.
+            // freshen but our skeleton-parse drops them.  The
+            // (name, arity, persistent) tuple is only a PRE-FILTER here;
+            // the exact-term and exact-timepoint-LVar narrowing below
+            // decides which goal (if any) the stored step binds.
             let want_name = &fact.name;
             let want_arity = fact.args.len();
             let want_persistent = fact.persistent;
@@ -1488,7 +1488,7 @@ mod tests {
 
     /// A `by contradiction` leaf on a system with no contradictions
     /// must NOT silently emit Finished(Contradictory).  Per the
-    /// walker contract (the contradiction-leaf branch, replay.rs:213-247),
+    /// walker contract (the contradiction-leaf branch, `finished_leaf`),
     /// when the runtime doesn't agree with the skeleton's `by contradiction`
     /// claim, the walker falls back to `run_proof_search` — the
     /// auto-prover then finds whatever the system actually proves

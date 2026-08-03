@@ -299,6 +299,43 @@ pub struct EqDisj {
     pub substs: Vec<LNSubstVFresh>,
 }
 
+/// `orderedSubsts = sortOnMemo dropNameHintsLNSubstVFresh . S.toList`
+/// (EquationStore.hs:223-224): a disjunction's cases in canonical split
+/// order.  The single source of truth for case ordering — `perform_split`
+/// and `pretty_system::pp_disj` (HS `ppDisj`, EquationStore.hs:659-662)
+/// both go through it, so the numbering shown for a disjunction matches
+/// the `split_case_i` labels a split of it emits.
+///
+/// Two stages, in this order:
+///  1. `sort()` is the `Data.Set LNSubstVFresh` `S.toList` raw-`Ord` order
+///     (RS stores the disjunction as an insertion-ordered `Vec`, so the
+///     set's enumeration order has to be materialised here).
+///  2. the stable `sort_by_cached_key(drop_name_hints)` re-sorts by the
+///     α-canonical key (`drop_name_hints` = `dropNameHintsLNSubstVFresh`,
+///     EquationStore.hs:143-147), which renumbers each subst's fresh
+///     witness range-vars by first appearance in domain-key order.  This
+///     makes `split_case_i` order independent of the Maude
+///     fresh-allocation counter (Rust's witness indices need not equal
+///     HS's), so case order is α-canonical and does not regress to the
+///     `analysis incomplete` symptom.
+///
+/// Ordering borrows rather than owned substs is order-identical: `Ord for
+/// &T` forwards to `T::cmp` and the key closure auto-derefs, so both
+/// stages see exactly the comparators they would see on owned values.
+///
+/// HS's `dropNameHintsBound` does NOT reach here: it is mapped only over
+/// the throwaway `addNormSys` copy in `removeRedundantCases`
+/// (Sources.hs:244-246, `map (fst . snd) ...` keeps the ORIGINAL case and
+/// discards the name-hint-dropped system; gated on `enableBP ||
+/// enableMSet`), so it never mutates the live `sEqStore` that
+/// `performSplit` later splits.
+pub(crate) fn ordered_substs(substs: &[LNSubstVFresh]) -> Vec<&LNSubstVFresh> {
+    let mut out: Vec<&LNSubstVFresh> = substs.iter().collect();
+    out.sort();
+    out.sort_by_cached_key(|s| s.drop_name_hints());
+    out
+}
+
 /// `EqStore`. Mirrors Haskell's `EqStore { _eqsSubst, _eqsConj,
 /// _eqsNextSplitId }`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -615,17 +652,15 @@ impl EquationStore {
         // store that drops `id` and adds a fresh single-case
         // disjunction containing just that subst.
         //
-        // Mirrors Haskell `performSplit` (EquationStore.hs) with
-        // the canonical-split-ordering fix (see the two-stage sort below):
-        //   mkNewEqStore before after <$> orderedSubsts
-        let mut sorted_substs: Vec<LNSubstVFresh> = disj.substs.clone();
+        // Mirrors Haskell `performSplit` (EquationStore.hs:228-237):
+        //   mkNewEqStore before after <$> orderedSubsts disj
         if tamarin_utils::env_gate!("TAM_DBG_PERFORM_SPLIT") {
             eprintln!(
                 "[perform_split] split_id={:?}, {} substs (pre-sort):",
                 id,
-                sorted_substs.len()
+                disj.substs.len()
             );
-            for (i, s) in sorted_substs.iter().enumerate() {
+            for (i, s) in disj.substs.iter().enumerate() {
                 eprintln!("[perform_split]   raw[{}]: {:?}", i, s.to_list());
             }
             // Show full eq_store.subst too — system substitution at this point
@@ -634,29 +669,7 @@ impl EquationStore {
                 eprintln!("[perform_split]   {:?} → {:?}", k, v);
             }
         }
-        // Canonical-split-ordering: mirror HS
-        //   orderedSubsts = sortOnMemo dropNameHintsLNSubstVFresh . S.toList
-        // (the chosen "Fix2" of the proof -N nondeterminism fix, which
-        // retires the witness-numbering "Fix1" in favour of canonicalising
-        // the SPLIT-CASE order directly).
-        //
-        // `sort()` is the `Data.Set LNSubstVFresh` `S.toList` raw-`Ord`
-        // order.  The stable `sort_by_cached_key(drop_name_hints)` then
-        // re-sorts by the α-canonical key (`drop_name_hints` =
-        // `dropNameHintsLNSubstVFresh`, EquationStore.hs), which
-        // renumbers each subst's fresh witness range-vars by first
-        // appearance in domain-key order.  This makes `split_case_i` order
-        // independent of the Maude fresh-allocation counter (Rust's witness
-        // indices need not equal HS's), so case order is α-canonical and
-        // does not regress to the `analysis incomplete` symptom.  HS's
-        // `dropNameHintsBound` does NOT reach here: it is mapped only over
-        // the throwaway `addNormSys` copy in `removeRedundantCases`
-        // (Sources.hs:244-246, `map (fst . snd) ...` keeps the ORIGINAL
-        // case and discards the name-hint-dropped system; gated on
-        // `enableBP || enableMSet`), so it never mutates the live
-        // `sEqStore` that `performSplit` later splits.
-        sorted_substs.sort();
-        sorted_substs.sort_by_cached_key(|s| s.drop_name_hints());
+        let sorted_substs = ordered_substs(&disj.substs);
         if tamarin_utils::env_gate!("TAM_DBG_PERFORM_SPLIT") {
             eprintln!("[perform_split] sorted result:");
             for (i, s) in sorted_substs.iter().enumerate() {
@@ -667,7 +680,7 @@ impl EquationStore {
         for subst in sorted_substs {
             let mut new_store = self.clone();
             new_store.conj.remove(pos);
-            new_store.add_disj(vec![subst]);
+            new_store.add_disj(vec![subst.clone()]);
             out.push(new_store);
         }
         Some(out)
@@ -3015,6 +3028,12 @@ fn is_perm_subst(
     // the v1/v2 images exchanged.  HS binds the four images lazily behind
     // `&&`, so `t12`/`t21` are demanded only once `t11 == t22` holds — and
     // none of them are demanded when a binding is unshared.
+    //
+    // `others_shared` also holds when neither `v1` nor `v2` is in the domain,
+    // and the panics below then abort the prover — faithful, since HS's
+    // `fromMaybe (error ...)` images are demanded under the same condition
+    // (EquationStore.hs:599-604).  Should a corpus theory ever trip it, the
+    // answer is a graceful `AddEqsError` plus an upstream-bug write-up.
     let others_shared = s1
         .iter()
         .all(|(x, t)| x == v1 || x == v2 || s2.image_of(x).is_some_and(|u| u == t));
@@ -3307,6 +3326,80 @@ mod tests {
     fn perform_split_unknown_id() {
         let s = EquationStore::empty();
         assert!(s.perform_split(SplitId(42)).is_none());
+    }
+
+    /// A subst mapping `x.k ↦ y.v` for each `(k, v)` pair.
+    fn subst_xy(pairs: &[(u64, u64)]) -> LNSubstVFresh {
+        SubstVFresh::from_list(pairs.iter().map(|(k, v)| {
+            (
+                LVar::new("x", LSort::Msg, *k),
+                tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(LVar::new(
+                    "y",
+                    LSort::Msg,
+                    *v,
+                ))),
+            )
+        }))
+    }
+
+    // `ordered_substs` needs BOTH stages, applied in that order: the
+    // α-canonical `drop_name_hints` key decides whenever two keys differ,
+    // and the raw `Ord` (`S.toList`) order underneath breaks the ties the
+    // key leaves, because the key sort is stable.
+    #[test]
+    fn ordered_substs_applies_both_sort_stages() {
+        // Canonical keys DIFFER here and disagree with raw `Ord`: raw
+        // compares the `x` images first (y.2 < y.5), while the canonical key
+        // ties on `x` (both renumber to _0) and compares the `x.1` images
+        // (_0 < _1).
+        let repeated = subst_xy(&[(0, 5), (1, 5)]); // canonical {x ↦ _0, x.1 ↦ _0}
+        let distinct = subst_xy(&[(0, 2), (1, 7)]); // canonical {x ↦ _0, x.1 ↦ _1}
+        assert!(distinct < repeated, "raw Ord puts `distinct` first");
+        assert!(
+            repeated.drop_name_hints() < distinct.drop_name_hints(),
+            "canonical key puts `repeated` first"
+        );
+        for input in [
+            vec![repeated.clone(), distinct.clone()],
+            vec![distinct.clone(), repeated.clone()],
+        ] {
+            assert_eq!(
+                ordered_substs(&input),
+                vec![&repeated, &distinct],
+                "canonical key must decide when the keys differ"
+            );
+        }
+
+        // Canonical keys TIE (both {x ↦ _0}), so the raw order underneath is
+        // what survives — and it is not the stored order.
+        let hi = subst_xy(&[(0, 5)]);
+        let lo = subst_xy(&[(0, 3)]);
+        assert_eq!(hi.drop_name_hints(), lo.drop_name_hints());
+        assert_eq!(ordered_substs(&[hi.clone(), lo.clone()]), vec![&lo, &hi]);
+    }
+
+    // The cases `perform_split` emits carry positional `split_case_i` labels,
+    // so their order is `ordered_substs`' order — the same helper
+    // `pretty_system::pp_disj` numbers a displayed disjunction with.
+    #[test]
+    fn perform_split_cases_follow_ordered_substs() {
+        let substs = vec![subst_xy(&[(0, 5)]), subst_xy(&[(0, 3)])];
+        let mut store = EquationStore::empty();
+        // Pushed verbatim: `add_disj` would apply the raw `Ord` sort itself.
+        store.conj.push(EqDisj {
+            split_id: SplitId(0),
+            substs: substs.clone(),
+        });
+        store.next_split = SplitId(1);
+        let cases: Vec<LNSubstVFresh> = store
+            .perform_split(SplitId(0))
+            .expect("split exists")
+            .into_iter()
+            .map(|b| b.conj[0].substs[0].clone())
+            .collect();
+        let expected: Vec<LNSubstVFresh> = ordered_substs(&substs).into_iter().cloned().collect();
+        assert_eq!(cases, expected);
+        assert_ne!(cases, substs, "the stored order is not the case order");
     }
 
     #[test]

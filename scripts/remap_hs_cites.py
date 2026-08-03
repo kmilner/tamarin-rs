@@ -19,6 +19,11 @@ file:
   * anything ambiguous is left untouched and reported as UNRESOLVED for a
     human pass.
 
+A cite whose parts list WRAPS onto the following comment line is joined first
+and remapped as one list, then written back at the same split (see
+`continuation`); the shape recognised is deliberately narrow, and
+bump_submodule.sh lints for the wrapped cites it declines to join.
+
 Dry run by default (prints every planned rewrite); `--apply` edits in
 place.  Only comment lines are touched — a cite is processed only when it
 sits after `//` (or `#` in scripts) on its line.  Exit status is 0 unless
@@ -53,6 +58,16 @@ CITE = re.compile(
     r"([A-Za-z][A-Za-z0-9_/.']*\.hs):"
     r"(\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)"
     r"((?:, see line \d+(?:,\d+)*)?)")
+
+# Wrapped-cite pieces: a line ending in `Foo.hs:61-63,` carries the rest of its
+# parts list on the next comment line (`// 84,92) reads …`).
+COMMENT_OPEN = re.compile(r"//+!?|#+!?")   # `//`, `///`, `//!`, `#`, `#!`
+WRAP_TAIL = re.compile(r",[ \t]*$")        # what follows the cite on line i
+CONT_FRAG = re.compile(r"\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*")   # tail on line i+1
+# The tail must END like a parts list: at the line end or against closing
+# punctuation.  `,` is excluded on purpose — `// 84, and see …` would otherwise
+# read as a continuation.
+CONT_END = re.compile(r"[)\]}.;:]|$")
 
 
 def git(args, cwd=SUB):
@@ -226,6 +241,38 @@ def comment_pos(line, fname):
     return min((line.find(m) for m in markers if m in line), default=-1)
 
 
+def comment_open(line, fname):
+    """`(marker, offset just past it)` for the line's comment, or None."""
+    cpos = comment_pos(line, fname)
+    if cpos < 0:
+        return None
+    m = COMMENT_OPEN.match(line, cpos)
+    return (m.group(0), m.end()) if m else None
+
+
+def continuation(lines, i, fname):
+    """The parts fragment on line i+1 that continues the cite ending line i.
+
+    -> `(start, end, parts)` as offsets into line i+1, or None.  Joining is
+    narrow by design: the next line must open the SAME comment marker and,
+    after whitespace, start with a parts fragment that ends at the line end or
+    against closing punctuation.  Prose opening with a number (`// 20 lines
+    below`) fails the terminator test and is left alone."""
+    if i + 1 >= len(lines):
+        return None
+    here, nxt = comment_open(lines[i], fname), comment_open(lines[i + 1], fname)
+    if not here or not nxt or here[0] != nxt[0]:
+        return None
+    body = lines[i + 1]
+    pos = nxt[1]
+    while pos < len(body) and body[pos] in " \t":
+        pos += 1
+    m = CONT_FRAG.match(body, pos)
+    if not m or not CONT_END.match(body, m.end()):
+        return None
+    return (m.start(), m.end(), parse_parts(m.group(0)))
+
+
 def rs_files(args_files):
     if args_files:
         return args_files
@@ -258,7 +305,7 @@ def main():
             cpos = comment_pos(line, rs)
             if cpos < 0:
                 continue
-            edits = []
+            edits, cont_edit = [], None
             for m in CITE.finditer(line):
                 if m.start() < cpos:
                     continue
@@ -271,6 +318,14 @@ def main():
                     continue
                 parts = parse_parts(m.group(2))
                 sees = [int(x) for x in re.findall(r"\d+", m.group(3))]
+                # Only a cite ending the line can wrap, and a `see line` tail
+                # would have to be re-emitted mid-list, so both are excluded.
+                cont = None
+                if not sees and WRAP_TAIL.match(line, m.end()):
+                    cont = continuation(lines, i, rs)
+                head_n = len(parts)
+                if cont:
+                    parts = parts + cont[2]
                 res, why = rm.remap_cite(path, parts, sees)
                 if res is None:
                     unresolved.append((rs, i + 1, m.group(0), why))
@@ -279,11 +334,21 @@ def main():
                 if new_parts == parts and new_sees == sees:
                     continue
                 see_txt = ", see line " + ",".join(map(str, new_sees)) if new_sees else ""
-                repl = f"{m.group(1)}:{fmt_parts(new_parts)}{see_txt}"
+                repl = f"{m.group(1)}:{fmt_parts(new_parts[:head_n])}{see_txt}"
                 edits.append((m.start(), m.end(), repl, m.group(0)))
+                if cont:
+                    tail = fmt_parts(new_parts[head_n:])
+                    cont_edit = (cont[0], cont[1], tail,
+                                 f"{m.group(1)}:...,{fmt_parts(cont[2])}",
+                                 f"{m.group(1)}:...,{tail}")
             for start, end, repl, old_txt in reversed(edits):
                 rewrites.append((rs, i + 1, old_txt, repl))
                 lines[i] = lines[i][:start] + repl + lines[i][end:]
+                changed_any = True
+            if cont_edit:
+                start, end, repl, shown_old, shown_new = cont_edit
+                rewrites.append((rs, i + 2, shown_old, shown_new))
+                lines[i + 1] = lines[i + 1][:start] + repl + lines[i + 1][end:]
                 changed_any = True
         if changed_any and args.apply:
             with open(rs, "w") as f:

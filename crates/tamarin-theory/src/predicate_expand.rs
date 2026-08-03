@@ -1,8 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, Hong-Thai, jdreier, meiersi, BTom-GH, yavivanov,
-//   kevinmorio, rsasse, xaDxelA, felixlinker, charlie-j, ValentinYuri,
-//   jWoc, racoucho1u, and other minor contributors (see upstream git
-//   history)
+//   rkunnema, jdreier, Hong-Thai, meiersi, BTom-GH, yavivanov,
+//   kevinmorio, rsasse, xaDxelA, felixlinker, ValentinYuri, jWoc,
+//   charlie-j, racoucho1u, and other minor contributors (see upstream
+//   git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term/Raw.hs,
 //   lib/theory/src/Items/CaseTestItem.hs,
@@ -652,7 +652,7 @@ mod tests {
         // P(x) <=> Ex z #i. Act(x, z) @ #i.  Applying it at use-site P(z)
         // (free z) must NOT let the body's `Ex z` capture the substituted
         // z: the binder is alpha-renamed, so no surviving quantifier binds
-        // `z`.  (Without capture-avoidance the body became Act(z, z).)
+        // `z`.  (Without capture-avoidance the body would become Act(z, z).)
         let preds = pred("P(x) <=> Ex z #i. Act(x, z) @ #i");
         let f = parse_formula_str("P(z)").unwrap();
         let expanded = expand_formula(&f, &preds).unwrap();

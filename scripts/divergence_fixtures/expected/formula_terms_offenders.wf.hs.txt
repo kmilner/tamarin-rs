@@ -1,0 +1,24 @@
+WARNING: the following wellformedness checks failed!
+
+Formula terms
+=============
+
+  Lemma `OneOffenderGround' uses terms of the wrong form:
+    `Mult(f('g','h'),em('g','h'))'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+  
+  Lemma `TwoOffendersBound' uses terms of the wrong form:
+    `Mult(aaa(Bound 2,Bound 1),em(Bound 1,Bound 2))',
+    `Mult(f(Bound 3,Bound 2),em(Bound 2,Bound 3))'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+*/

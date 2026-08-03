@@ -2,9 +2,10 @@
 //   meiersi, jdreier, PhilipLukertWork, addap, racoucho1u,
 //   Mathias-AURAND, rkunnema, rsasse, felixlinker, charlie-j,
 //   yavivanov, kevinmorio, niklasmedinger, beschmi, Nick Moore, arcz,
-//   sans-sucre, katrielalex, and other minor contributors (see upstream
-//   git history)
+//   sans-sucre, katrielalex, Divya19gupta, and other minor contributors
+//   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs,
 //   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Simplify.hs,
@@ -59,9 +60,9 @@ impl PrebuiltAdj {
 }
 
 /// Probe-index type for [`System::add_less_indexed`]: maps each stored
-/// atom's `(smaller, larger)` pair (the identity key — `Eq`/`Ord LessAtom`
-/// ignore the reason, constraints.rs:88-92) to the FIRST `less_atoms` index
-/// carrying it.
+/// atom's `(smaller, larger)` pair (the identity key — `LessAtom`'s manual
+/// `Eq`/`Ord` in constraints.rs ignore the reason) to the FIRST `less_atoms`
+/// index carrying it.
 ///
 /// The map is an *auxiliary* accelerator, not a container swap: the
 /// output-bearing `less_atoms` Vec (and its insertion order) is unchanged;
@@ -110,15 +111,15 @@ pub enum Side {
 /// constructor, so a `SealedEqStore` VALUE cannot be produced anywhere except
 /// `system.rs`.  That closes the residual subst-stamp hole at COMPILE time:
 /// the escape-hatch `content_mut_untracked()` hands out `&mut SystemContent`
-/// with the `pub eq_store` field visible, but `c.eq_store = …` now has no
+/// with the `pub eq_store` field visible, but `c.eq_store = …` has no
 /// expressible right-hand side (no value to assign, no `mem::take`/`replace`
 /// target, no struct-literal field), so the only reachable write path is
 /// `System::set_eq_store` / `take_eq_store` / `eq_store_mut`, each of which
 /// bumps `subst_stamp`.
 ///
 /// `Debug`/`PartialEq` are implemented manually, delegating to the inner
-/// `Arc`, so `SystemContent`'s derived `Debug`/`PartialEq` are byte-identical
-/// to the pre-seal `Arc<EquationStore>` field.
+/// `Arc`, so `SystemContent`'s derived `Debug`/`PartialEq` behave exactly as
+/// they would over a bare `Arc<EquationStore>` field.
 pub struct SealedEqStore(Arc<EquationStore>);
 
 impl std::ops::Deref for SealedEqStore {
@@ -130,7 +131,7 @@ impl std::ops::Deref for SealedEqStore {
 }
 
 // Delegate to the inner `Arc` so `{:?}` output (and any Debug-derived
-// serialisation) is identical to the pre-seal `Arc<EquationStore>` field.
+// serialisation) is identical to that of a bare `Arc<EquationStore>` field.
 impl std::fmt::Debug for SealedEqStore {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -663,6 +664,39 @@ fn trace_goal_insert() -> bool {
     tamarin_utils::env_gate!("TAM_RS_TRACE_GOAL_INSERT")
 }
 
+// =============================================================================
+// HS `M.Map` / `Data.Set` iteration order
+// =============================================================================
+
+/// `sNodes` in `M.toList` / `M.elems` order, i.e. ascending `NodeId`.
+///
+/// THE INVARIANT, stated once for all the order helpers: `sNodes` is an
+/// `M.Map NodeId RuleACInst` and `sEdges` / `sLessAtoms` are `Data.Set`s
+/// (System.hs:383-385), so every HS pass that walks them — through `M.toList`,
+/// `M.elems` or `S.toList` — sees them in ascending key/element order.  RS
+/// stores all three as `Vec`s in INSERTION order, which carries no map/set
+/// semantics: `Reduction::set_nodes` keeps first-occurrence order because that
+/// is what decides which rule survives an id collision, and the display-only
+/// `compress_system` pass (tamarin-server's `graph::simplify`) appends its
+/// reconnected edges / less-atoms instead of re-inserting them in order.  A
+/// port site that needs the HS order therefore has to materialise it at the
+/// `M.toList` / `S.toList` boundary — through this function or through
+/// [`System::nodes_in_map_order`], [`System::edges_in_set_order`],
+/// [`System::less_atoms_in_set_order`].
+///
+/// The orders are the HS instances: `Ord NodeId` is `Ord LVar` = idx, then
+/// sort, then name (LTerm.hs:546-548); `Edge`'s derived `Ord` is `src` then
+/// `tgt` (Constraints.hs:79-83); `LessAtom`'s manual `Ord` is
+/// `(smaller, larger)`, ignoring the reason tag (Constraints.hs:126-130).
+///
+/// Takes a slice rather than a `&System` so a call site holding only
+/// `&[(NodeId, RuleACInst)]` shares this one implementation.
+pub fn nodes_in_map_order(nodes: &[(NodeId, RuleACInst)]) -> Vec<&(NodeId, RuleACInst)> {
+    let mut ordered: Vec<&(NodeId, RuleACInst)> = nodes.iter().collect();
+    ordered.sort_by_key(|a| a.0);
+    ordered
+}
+
 impl System {
     pub fn empty() -> Self {
         let s = Self::default();
@@ -1127,6 +1161,26 @@ impl System {
         m
     }
 
+    /// `sNodes` in `M.toList` / `M.elems` order — see [`nodes_in_map_order`]
+    /// for the map/set-order invariant these three helpers materialise.
+    pub fn nodes_in_map_order(&self) -> Vec<&(NodeId, RuleACInst)> {
+        nodes_in_map_order(&self.nodes)
+    }
+
+    /// `sEdges` in `S.toList` order — see [`nodes_in_map_order`].
+    pub fn edges_in_set_order(&self) -> Vec<&Edge> {
+        let mut ordered: Vec<&Edge> = self.edges.iter().collect();
+        ordered.sort();
+        ordered
+    }
+
+    /// `sLessAtoms` in `S.toList` order — see [`nodes_in_map_order`].
+    pub fn less_atoms_in_set_order(&self) -> Vec<&LessAtom> {
+        let mut ordered: Vec<&LessAtom> = self.less_atoms.iter().collect();
+        ordered.sort();
+        ordered
+    }
+
     /// All `In`- and protocol-premise terms in the system, as
     /// `(node, premise, term-index, term)`. Port of HS `allPrems`
     /// (System.hs:894-899).
@@ -1472,8 +1526,8 @@ impl System {
         // it is itself a `Disj` (and only then can it match a `Disj`
         // `canon_g`; under `Goal`'s derived `PartialEq` distinct variants
         // never compare equal). For the common non-Disj case this compares
-        // `existing == &*canon_g` directly.  `canon_g` now BORROWS `g`
-        // (`Cow::Borrowed`), so scope it to this block: its borrow ends
+        // `existing == &*canon_g` directly.  `canon_g` BORROWS `g`
+        // (`Cow::Borrowed`), so it is scoped to this block: its borrow ends
         // before `g` is moved into the goal store below.
         let slot_idx = {
             let canon_g = canonical_goal_for_dedup(&g);
@@ -1789,7 +1843,7 @@ pub fn formula_to_system(
     // HS stores `_sDiffSystem = isdiff` on its `System` record
     // (System.hs:821-824/396).  The Rust `System` has no such field —
     // `side` encodes LHS/RHS, not diff — so diff-mode is carried on
-    // `ProofContext.is_diff` (context.rs:54) instead.  Nothing about
+    // `ProofContext.is_diff` (context.rs) instead.  Nothing about
     // `is_diff` is recorded on the System here.
     let _ = is_diff;
 
@@ -1824,6 +1878,98 @@ mod tests {
         assert!(s.nodes.is_empty());
         assert!(s.edges.is_empty());
         assert!(s.goals.is_empty());
+    }
+
+    // ===== HS `M.Map` / `Data.Set` order helpers =====
+
+    fn node_id(name: &str, idx: u64) -> NodeId {
+        LVar::new(name, LSort::Node, idx)
+    }
+
+    /// A bare rule instance — the order helpers only ever read the node id.
+    fn bare_rule() -> RuleACInst {
+        crate::rule::Rule::new(
+            crate::rule::RuleInfo::Intr(crate::rule::IntrRuleACInfo::Coerce),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn nodes_in_map_order_is_ascending_node_id_not_insertion_order() {
+        let mut s = System::empty();
+        // `Ord LVar` compares idx FIRST, then sort, then name, so the
+        // ascending-idx order here is the reverse of the alphabetical one.
+        for id in [node_id("a", 2), node_id("b", 1), node_id("c", 0)] {
+            s.nodes_mut().push((id, bare_rule()));
+        }
+        let ordered: Vec<(u64, String)> = s
+            .nodes_in_map_order()
+            .iter()
+            .map(|p| (p.0.idx, p.0.name.to_string()))
+            .collect();
+        assert_eq!(
+            ordered,
+            vec![
+                (0, "c".to_string()),
+                (1, "b".to_string()),
+                (2, "a".to_string())
+            ]
+        );
+        // The stored `Vec` keeps INSERTION order — `set_nodes` picks the
+        // surviving rule at an id collision by it — so only the view reorders.
+        let stored: Vec<u64> = s.nodes.iter().map(|(id, _)| id.idx).collect();
+        assert_eq!(stored, vec![2, 1, 0]);
+        // The slice-taking free function is the same materialisation.
+        let via_slice: Vec<u64> = nodes_in_map_order(&s.nodes)
+            .iter()
+            .map(|p| p.0.idx)
+            .collect();
+        assert_eq!(via_slice, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn edges_and_less_atoms_come_out_in_set_order() {
+        use crate::constraint::constraints::Reason;
+        use crate::rule::{ConcIdx, PremIdx};
+        let mut s = System::empty();
+        let n = |i| node_id("i", i);
+        // `Ord Edge` is derived — `src` then `tgt` — so the (1, ConcIdx 0)
+        // edge precedes the (1, ConcIdx 1) one regardless of its target.
+        s.content_mut().edges = vec![
+            Edge {
+                src: (n(2), ConcIdx(0)),
+                tgt: (n(3), PremIdx(0)),
+            },
+            Edge {
+                src: (n(1), ConcIdx(1)),
+                tgt: (n(2), PremIdx(0)),
+            },
+            Edge {
+                src: (n(1), ConcIdx(0)),
+                tgt: (n(9), PremIdx(0)),
+            },
+        ];
+        let edge_order: Vec<(u64, usize)> = s
+            .edges_in_set_order()
+            .iter()
+            .map(|e| (e.src.0.idx, e.src.1 .0))
+            .collect();
+        assert_eq!(edge_order, vec![(1, 0), (1, 1), (2, 0)]);
+        // `Ord LessAtom` is `(smaller, larger)` and IGNORES the reason tag:
+        // ordering by `Reason` would put Adversary last, not first.
+        s.content_mut().less_atoms = vec![
+            LessAtom::new(n(2), n(3), Reason::Formula),
+            LessAtom::new(n(1), n(5), Reason::NormalForm),
+            LessAtom::new(n(1), n(2), Reason::Adversary),
+        ];
+        let less_order: Vec<(u64, u64)> = s
+            .less_atoms_in_set_order()
+            .iter()
+            .map(|la| (la.smaller.idx, la.larger.idx))
+            .collect();
+        assert_eq!(less_order, vec![(1, 2), (1, 5), (2, 3)]);
     }
 
     // ===== verified-identity subst_system skip: stamp lifecycle =====

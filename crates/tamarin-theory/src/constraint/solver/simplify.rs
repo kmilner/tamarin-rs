@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
 //   meiersi, PhilipLukertWork, jdreier, beschmi, rkunnema, charlie-j,
-//   rsasse, niklasmedinger, felixlinker, ValentinYuri, and other minor
+//   niklasmedinger, rsasse, felixlinker, ValentinYuri, and other minor
 //   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Maude/Types.hs, lib/term/src/Term/Subsumption.hs,
@@ -992,13 +992,13 @@ fn partial_atom_valuation_with(
                 }
                 // False direction: if no rule action could possibly
                 // AC-unify with `fa`, then the action is False at `n`
-                // in every model.  This is the core soundness gap
-                // Addresses: e.g. a Reveal_ltk rule's
+                // in every model.  The AC-unifiability test is what keeps
+                // that sound: e.g. a Reveal_ltk rule's
                 // `RevLtk(?key)` action does unify with a Skolemised
                 // lemma guard `RevLtk(?A_skolem)`, so we must NOT
                 // mark the universal vacuously satisfied here — we
-                // return None and let `impl_formulas` enumerate the
-                // assignment and propagate the body.
+                // return None and let `insert_implied_formulas_pass`
+                // enumerate the assignment and propagate the body.
                 let mut all_non_unif = true;
                 for a in &rule.actions {
                     match crate::rule::unifiable_ln_facts(maude, &lnfa, a) {
@@ -2549,11 +2549,11 @@ fn normalise_less_atoms_pass(red: &mut Reduction) -> ChangeIndicator {
     }
     // HS-faithful dedup post-normalise: HS's `sLessAtoms` is a `Set`;
     // post-subst image collapsing two distinct atoms is auto-deduped.
-    // See `subst_system_once` (reduction.rs:664+) for full rationale.
+    // See `subst_system_once` (reduction.rs) for full rationale.
     let pre_len = red.sys.less_atoms.len();
     let mut new_less: Vec<crate::constraint::constraints::LessAtom> = Vec::with_capacity(pre_len);
-    // First-occurrence-wins dedup: `LessAtom` Eq ignores the reason
-    // (constraints.rs:88-92), so the identity key is the `(smaller,larger)`
+    // First-occurrence-wins dedup: `LessAtom`'s manual `Eq` (constraints.rs)
+    // ignores the reason, so the identity key is the `(smaller,larger)`
     // pair.  A `FastSet` membership probe: the atom is pushed iff its pair
     // is unseen — the same relation a linear `any(|x| x == &la)` scan tests
     // — turning the O(n²) dedup into O(n).  The set
@@ -4006,7 +4006,8 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
     //   isNegatedInside && !isInside → Just False
     // The `cyclic || natCyclic → Just False` arm (SubtermStore.hs:334-371, see line 361,
     // 365-366) is deliberately deferred to propagate_subterm_obvious /
-    // the contradiction pass — same porting strategy as simplify.rs:1051-1054.
+    // the contradiction pass — same porting strategy as the `Subterm` arm
+    // of `partial_atom_valuation_with`.
     let is_true_false = |s: &tamarin_term::lterm::LNTerm,
                          t: &tamarin_term::lterm::LNTerm|
      -> Option<bool> {
@@ -5029,7 +5030,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
     // `isContradictory ||= hasSubtermCycle reducible sst3` runs BETWEEN
     // negativeSubtermVars and simpNatCycles.  The cyclic pairs REMAIN in
     // the store (only the flag is set) — since trivially-false pairs are
-    // now retained too (phase 2), a cycle such as `a ⊏ a` keeps its edge
+    // retained too (phase 2), a cycle such as `a ⊏ a` keeps its edge
     // and must be flagged here, matching HS's rendered
     // `Contradictory: yes` header.
     // -------------------------------------------------------------

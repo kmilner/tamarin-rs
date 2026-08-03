@@ -1,10 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   addap, Mathias-AURAND, meiersi, rkunnema, jdreier, Divya19gupta,
-//   felixlinker, sans-sucre, yavivanov, and other minor contributors
+//   addap, Mathias-AURAND, meiersi, rkunnema, arcz, jdreier,
+//   Divya19gupta, sans-sucre, yavivanov, and other minor contributors
 //   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Rule.hs, lib/theory/src/Theory/Constraint/System.hs,
-//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
 //   lib/theory/src/Theory/Constraint/System/Dot.hs,
 //   lib/theory/src/Theory/Constraint/System/Graph/Graph.hs,
 //   lib/theory/src/Theory/Constraint/System/Graph/GraphRepr.hs,
@@ -363,16 +362,9 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     let mut nodes: Vec<GNode> = Vec::new();
     // 1. System rule instances.
     // HS `systemNodes se = map systemNode (M.toList $ get Sys.sNodes se)`
-    // (Graph.hs:99-102) reads `sNodes`, a `M.Map NodeId RuleACInst`
-    // (System.hs:383), so the nodes come out in ASCENDING `NodeId` order
-    // (`Ord LVar` = idx, then sort, then name; LTerm.hs:546-548).  RS stores
-    // them in a `Vec` in insertion order — `Reduction::set_nodes` keeps
-    // first-occurrence order because that decides which rule survives an id
-    // collision — so materialise the `M.toList` order here, as for the
-    // `sEdges` / `sLessAtoms` sets below.
-    let mut sorted_nodes: Vec<_> = sys.nodes.iter().collect();
-    sorted_nodes.sort_by_key(|a| a.0);
-    for (nid, ru) in sorted_nodes {
+    // (Graph.hs:99-102) reads `sNodes` in `M.Map` key order — materialised by
+    // `System::nodes_in_map_order`, which carries the invariant.
+    for (nid, ru) in sys.nodes_in_map_order() {
         nodes.push(GNode {
             id: *nid,
             ty: NodeType::System(ru.clone()),
@@ -430,19 +422,11 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
             ty: NodeType::LastAction,
         });
     }
-    // HS reaches `sEdges` / `sLessAtoms` through `S.toList` (Graph.hs:116-127,
-    // 138-147), so both come out in ASCENDING element order.  RS stores each
-    // set as a `Vec` whose element order carries no set semantics — the
-    // display-only `compress_system` pass appends its reconnected edges /
-    // less-atoms (`graph/simplify.rs`) instead of re-inserting in order — so
-    // materialise the set order here, at the same `S.toList` boundary.
-    // `Edge`'s derived `Ord` is `src` then `tgt` (matching HS's derived
-    // instance) and `LessAtom`'s is `(smaller, larger)`, ignoring the reason
-    // tag (matching HS's manual instance, Constraints.hs:126-130).
-    let mut sorted_edges: Vec<_> = sys.edges.iter().collect();
-    sorted_edges.sort();
-    let mut sorted_less: Vec<_> = sys.less_atoms.iter().collect();
-    sorted_less.sort();
+    // HS reaches `sEdges` / `sLessAtoms` through `S.toList` (Graph.hs:116-128,
+    // 140-150) — `Data.Set` element order, materialised by
+    // `System::edges_in_set_order` / `System::less_atoms_in_set_order`.
+    let sorted_edges = sys.edges_in_set_order();
+    let sorted_less = sys.less_atoms_in_set_order();
     // 4. Missing nodes referenced by edges.
     // HS `systemMissingNodes se = mapMaybe missingNode (S.toList sEdges)`
     // (Graph.hs:116-122): each edge yields AT MOST ONE missing node — `missingNode`

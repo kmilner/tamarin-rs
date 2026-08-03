@@ -1,21 +1,23 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, kevinmorio, rkunnema, beschmi, felixlinker, jdreier,
-//   charlie-j, arcz, rsasse, racoucho1u, yavivanov, PhilipLukertWork,
-//   Nynko, BTom-GH, Azurios-git, ValentinYuri, symphorien, xaDxelA,
-//   robert.kunnemann@cased.de, and other minor contributors (see
-//   upstream git history)
+//   jdreier, meiersi, kevinmorio, rkunnema, beschmi, felixlinker,
+//   charlie-j, rsasse, arcz, racoucho1u, Azurios-git, yavivanov,
+//   PhilipLukertWork, Nynko, Hong-Thai, ValentinYuri, BTom-GH,
+//   symphorien, xaDxelA, Mathias-AURAND, robert.kunnemann@cased.de, and
+//   other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Maude/Parser.hs, lib/theory/src/ClosedTheory.hs,
-//   lib/theory/src/Rule.hs,
+//   lib/term/src/Term/Maude/Parser.hs, lib/theory/src/CloseRule.hs,
+//   lib/theory/src/ClosedTheory.hs, lib/theory/src/Rule.hs,
 //   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
 //   lib/theory/src/Theory/Constraint/System.hs,
 //   lib/theory/src/Theory/Model/Fact.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
 //   lib/theory/src/Theory/Proof.hs, lib/theory/src/Theory/Sapic.hs,
 //   lib/theory/src/Theory/Text/Parser.hs,
 //   lib/theory/src/Theory/Tools/IntruderRules.hs,
 //   lib/theory/src/Theory/Tools/LoopBreakers.hs,
+//   lib/theory/src/Theory/Tools/MessageDerivationChecks.hs,
 //   lib/theory/src/Theory/Tools/RuleVariants.hs,
 //   src/Main/Mode/Intruder.hs, src/Main/TheoryLoader.hs
 
@@ -76,15 +78,6 @@ impl From<std::sync::Arc<Vec<IntrRuleAC>>> for IntrRuleCache {
     }
 }
 
-/// Copy a borrowed rule list into a fresh shared cache: the borrowed arm of
-/// the `Option<impl Into<IntrRuleCache>>` constructor parameters, costing one
-/// copy per entry point rather than one per derived context.
-impl From<&[IntrRuleAC]> for IntrRuleCache {
-    fn from(rules: &[IntrRuleAC]) -> Self {
-        Self::from(rules.to_vec())
-    }
-}
-
 impl std::ops::Deref for IntrRuleCache {
     type Target = [IntrRuleAC];
     fn deref(&self) -> &[IntrRuleAC] {
@@ -117,11 +110,10 @@ impl<'a> IntoIterator for &'a IntrRuleCache {
 ///    cloned contents), so per-lemma clones (`template_ctx.clone()`) stay
 ///    fully independent — each lemma's `ensure_saturated` populates ITS
 ///    OWN `full_sources` cells under ITS OWN `typing_assumptions`, with
-///    no cross-lemma contamination (byte-identical to the pre-Arc
-///    behaviour).  `intruder_rules` is the one member that stays shared
-///    across such a clone: it is an [`IntrRuleCache`] handle over
-///    read-only rules with no interior mutability, so no lemma can
-///    observe another's use of it.
+///    no cross-lemma contamination.  `intruder_rules` is the one member
+///    that stays shared across such a clone: it is an [`IntrRuleCache`]
+///    handle over read-only rules with no interior mutability, so no
+///    lemma can observe another's use of it.
 ///  * `with_swapped_maude` SHARES this bundle (`Arc::clone`).  Its clones
 ///    are created only DURING a lemma's proof search — after
 ///    `ensure_saturated` has run and set `saturate_state = Done` — so the
@@ -327,10 +319,10 @@ impl Clone for ProofContext {
     /// DEEP clone: the owned fields are cloned by value and the shared
     /// bundle is re-materialised into a FRESH `Arc` (`Arc::new(…clone)`),
     /// NOT refcount-bumped.  This keeps per-lemma clones
-    /// (`template_ctx.clone()`) fully independent — byte-identical to the
-    /// pre-Arc behaviour — so each lemma saturates its own
-    /// `full_sources` under its own `typing_assumptions`.  The cheap
-    /// refcount-bump form lives only in [`Self::with_swapped_maude`].
+    /// (`template_ctx.clone()`) fully independent, so each lemma saturates
+    /// its own `full_sources` under its own `typing_assumptions`.  The
+    /// cheap refcount-bump form lives only in
+    /// [`Self::with_swapped_maude`].
     fn clone(&self) -> Self {
         ProofContext {
             maude: self.maude.clone(),
@@ -427,8 +419,8 @@ impl ProofContext {
     /// [`ProofContextShared`] for the full sharing-vs-cloning argument.
     ///
     /// The small owned fields (`rules`, `injective_fact_insts`,
-    /// per-lemma `typing_assumptions` / `heuristic` / names) are still
-    /// cloned by value, exactly as before.
+    /// per-lemma `typing_assumptions` / `heuristic` / names) are cloned by
+    /// value.
     ///
     /// The new context drops `maude_pool` (set to None): the worker
     /// already owns a per-task subprocess for the task's duration, and
@@ -619,14 +611,7 @@ impl ProofContext {
         rules: Vec<OpenProtoRule>,
         restrictions: Vec<crate::guarded::Guarded>,
     ) -> Self {
-        Self::new_with_restrictions_pool_forced(
-            maude,
-            maude_pool,
-            rules,
-            restrictions,
-            &[],
-            None::<IntrRuleCache>,
-        )
+        Self::new_with_restrictions_pool_forced(maude, maude_pool, rules, restrictions, &[], None)
     }
 
     /// HS-faithful assembly of the intruder-rule cache
@@ -687,10 +672,10 @@ impl ProofContext {
         // for XOR cancellation (KD(x⊕y) ∧ KU(y⊕z) → KD(x⊕z) and
         // KD(x⊕y) ∧ KU(y) → KD(x)), one constructor (KU(x⊕y) from
         // KU(x), KU(y)), plus the `zero` constructor.  Without
-        // these every XOR-using theory was unsound: the canonical
-        // adversary attack `(x⊕y) ⊕ y = x` was unreachable, so
+        // these every XOR-using theory is unsound: the canonical
+        // adversary attack `(x⊕y) ⊕ y = x` is unreachable, so
         // `xor.spthy::Secret` and all `recentalive_tag`-style lemmas
-        // wrongly verified.  Mirrors HS's enableXor branch.
+        // wrongly verify.  Mirrors HS's enableXor branch.
         if sig.enable_xor {
             intruder_rules.extend(crate::intruder_rules::xor_intruder_rules());
         }
@@ -773,15 +758,21 @@ impl ProofContext {
         };
         for (i, r) in out.iter().enumerate() {
             let kind = match &r.info {
-                IntrRuleACInfo::ConstrRule(n, _) => {
-                    format!("CONSTR {}", String::from_utf8_lossy(n))
+                IntrRuleACInfo::ConstrRule { name, .. } => {
+                    format!("CONSTR {}", String::from_utf8_lossy(name))
                 }
-                IntrRuleACInfo::DestrRule(n, b, s, c, _) => format!(
+                IntrRuleACInfo::DestrRule {
+                    name,
+                    remaining_applications,
+                    rhs_is_proper_subterm,
+                    rhs_is_constant,
+                    ..
+                } => format!(
                     "DESTR {} b={} s={} c={}",
-                    String::from_utf8_lossy(n),
-                    b,
-                    s,
-                    c
+                    String::from_utf8_lossy(name),
+                    remaining_applications,
+                    rhs_is_proper_subterm,
+                    rhs_is_constant
                 ),
                 other => format!("{:?}", other),
             };
@@ -854,13 +845,16 @@ impl ProofContext {
     /// the load paths run the check once per theory
     /// (`close_rule::check_close_intr_rule`) and inject its result, so a
     /// non-injected construction never re-runs the proving work.
+    /// The concatenation order lives in `close_rule::ndc_cache_order`,
+    /// shared with `pretty_ndc_check` so the two cannot drift.
     fn ndc_check_cache_order(rules: Vec<IntrRuleAC>) -> Vec<IntrRuleAC> {
         let (builtin_or_constr_or_ndc, checked_groups, all_subterm) =
             crate::close_rule::partition_for_ndc(rules);
-        let mut permuted: Vec<IntrRuleAC> = checked_groups.into_iter().flatten().collect();
-        permuted.extend(builtin_or_constr_or_ndc);
-        permuted.extend(all_subterm);
-        permuted
+        crate::close_rule::ndc_cache_order(
+            checked_groups.into_iter().flatten().collect(),
+            builtin_or_constr_or_ndc,
+            all_subterm,
+        )
     }
 
     /// Like [`new_with_restrictions_and_pool`] but also unions the FORCED
@@ -875,17 +869,15 @@ impl ProofContext {
     /// context reuses the tagged+permuted rules instead of re-assembling —
     /// HS `closeRuleCache` consumes `_thyCache` verbatim.  `None`
     /// assembles from the signature with the cache permutation applied
-    /// (no property check); it needs a type annotation
-    /// (`None::<IntrRuleCache>`) since nothing else fixes the parameter.
-    /// An [`IntrRuleCache`] argument shares the caller's rule list; an
-    /// owned `Vec<IntrRuleAC>` is moved into a fresh one.
+    /// (no property check).  A `Some` argument shares the caller's rule
+    /// list rather than copying it.
     pub fn new_with_restrictions_pool_forced(
         maude: MaudeHandle,
         maude_pool: Option<std::sync::Arc<MaudePool>>,
         rules: Vec<OpenProtoRule>,
         restrictions: Vec<crate::guarded::Guarded>,
         forced_injective_facts: &[crate::fact::FactTag],
-        intr_override: Option<impl Into<IntrRuleCache>>,
+        intr_override: Option<IntrRuleCache>,
     ) -> Self {
         Self::new_impl(
             maude,
@@ -893,7 +885,7 @@ impl ProofContext {
             rules,
             restrictions,
             forced_injective_facts,
-            intr_override.map(Into::into),
+            intr_override,
         )
     }
 
@@ -1047,7 +1039,7 @@ impl ProofContext {
         )> = Vec::new();
         // SplitG variants is the Haskell-faithful path
         // (`someRuleACInst` + `solveRuleConstraints` from Rule.hs:933 /
-        // Reduction.hs:766-774).  Always on — there is no legacy fallback.
+        // Reduction.hs:766-774).  Always on.
         //
         // HS-faithful (RuleVariants.hs:75-129): `variantsProtoRule` runs
         // UNCONDITIONALLY for every closed protocol rule.  For rules with no
@@ -1059,17 +1051,14 @@ impl ProofContext {
         // calls `insertGoal (SplitG splitId) False` — bumping `sNextGoalNr`
         // by 1 at every `labelNodeId` call regardless of whether the rule has
         // any destructors.  Skipping the variant-substs computation for
-        // non-destructor rules under-bumped that counter and desynchronised
+        // non-destructor rules would under-bump that counter and desynchronise
         // RS's gsNr trace from HS's at every destructor-free `labelNodeId`
         // (e.g. Yubikey.spthy::Server, Yubikey.spthy::Setup), which the
-        // smart-rank tie-breaker then resolved differently.
+        // smart-rank tie-breaker would then resolve differently.
         for (idx, o) in rules.iter().enumerate() {
-            if !o.variants.is_empty() {
-                continue;
-            }
             // The constraint solver reads only `abstracted_rule` +
             // `variant_substs` (`canonical_rule_inst` /
-            // `rule_insts_with_constrs`, reduction.rs:2868,2895); it never
+            // `rule_insts_with_constrs` in reduction.rs); it never
             // reads `o.variants`.  We therefore skip the RAW `get variants`
             // Maude query (the single biggest Maude cost on bilinear
             // protocols) and compute only the abstracted form + substs.
@@ -1198,7 +1187,7 @@ impl ProofContext {
         //
         // Install the variant substitutions in their disjunction form.
         // These are consumed by `solve_rule_constraints` at search time
-        // (`rule_insts_with_constrs`, reduction.rs:2895).  For reducible
+        // (`rule_insts_with_constrs` in reduction.rs).  For reducible
         // rules the disjunction comes from the abstracted-rule install
         // below; for non-reducible rules it is the trivial
         // `[emptySubstVFresh]` computed above.
@@ -1483,17 +1472,6 @@ mod tests {
         assert_eq!(&*cache, &*shared);
     }
 
-    /// `From<&[_]>` is the boundary copy: a fresh allocation holding the
-    /// same rules in the same order.  Order is parity-relevant (it feeds
-    /// `solveAction`'s `disjunctionOfList rules`).
-    #[test]
-    fn intr_rule_cache_from_borrowed_slice_copies_without_reordering() {
-        let rules = sample_rules();
-        let cache = IntrRuleCache::from(rules.as_slice());
-        assert_ne!(cache.as_ptr(), rules.as_ptr());
-        assert_eq!(&*cache, rules.as_slice());
-    }
-
     /// `From<Arc<Vec<_>>>` adopts the caller's allocation — this is what
     /// lets the web `TheoryEntry`'s stored cache reach a `ProofContext`
     /// without a copy.
@@ -1504,26 +1482,5 @@ mod tests {
         let cache = IntrRuleCache::from(shared.clone());
         assert_eq!(cache.as_ptr(), ptr);
         assert_eq!(&*cache, shared.as_slice());
-    }
-
-    /// `From<Vec<_>>` — the conversion the `impl Into<IntrRuleCache>`
-    /// constructor parameter applies to owned rule lists — moves the rules
-    /// through verbatim.
-    #[test]
-    fn intr_rule_cache_from_vec_keeps_rules_verbatim() {
-        let rules = sample_rules();
-        let cache = IntrRuleCache::from(rules.clone());
-        assert_eq!(&*cache, rules.as_slice());
-    }
-
-    /// Borrowed iteration (`for r in &ctx.intruder_rules`, the form used
-    /// across the solver) walks the rules in cache order.
-    #[test]
-    fn intr_rule_cache_borrowed_iteration_matches_slice_order() {
-        let rules = sample_rules();
-        let cache = IntrRuleCache::from(rules.clone());
-        let walked: Vec<&IntrRuleAC> = (&cache).into_iter().collect();
-        let expected: Vec<&IntrRuleAC> = rules.iter().collect();
-        assert_eq!(walked, expected);
     }
 }

@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, arcz, meiersi, jdreier, addap, Nynko, cascremers,
-//   felixlinker, yavivanov, ValentinYuri, rkunnema, beschmi, gilcu3,
+//   kevinmorio, arcz, meiersi, jdreier, cascremers, addap, Nynko,
+//   felixlinker, yavivanov, ValentinYuri, rkunnema, gilcu3, beschmi,
 //   Azurios-git, rsasse, and other minor contributors (see upstream git
 //   history)
 // Ported from upstream tamarin-prover sources:
@@ -1416,8 +1416,9 @@ mod tests {
     #[test]
     fn effective_maude_processes_default_is_one_to_one() {
         let a = parse(&["--processors=8", "x.spthy"]);
-        // Default is now 1:1 (= processors) so B1 lemma-level + within-lemma
-        // fan-out don't exhaust the pool and fall back to the shared Maude.
+        // The default is 1:1 (= processors) so the lemma-level and
+        // within-lemma fan-outs don't exhaust the pool and fall back to the
+        // shared Maude.
         assert_eq!(a.effective_maude_processes(), 8);
     }
 

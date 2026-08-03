@@ -1,9 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   Mathias-AURAND, beschmi, jdreier, cdumenil, meiersi
+//   Mathias-AURAND, jdreier, beschmi, cdumenil, meiersi, and other
+//   minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Builtin/Signature.hs,
-//   lib/term/src/Term/Maude/Signature.hs,
-//   lib/term/src/Term/SubtermRule.hs
+//   lib/term/src/Term/SubtermRule.hs,
+//   lib/theory/src/Theory/Text/Parser/Signature.hs
 
 //! Port of `Term.SubtermRule` from `lib/term/src/Term/SubtermRule.hs`.
 
@@ -127,30 +127,35 @@ fn constant_positions(lhs: &LNTerm) -> Vec<Position> {
                 positions(lhs)
             } else {
                 let pos = subterms(args);
-                if pos.is_empty() { positions(lhs) } else { pos }
+                if pos.is_empty() {
+                    positions(lhs)
+                } else {
+                    pos
+                }
             }
         }
-        // HS `constantPositions` (SubtermRule.hs:65-69) has ONLY the
-        // `FApp _ args` clause; line 2 sets `-fno-warn-incomplete-patterns`.
-        // A non-FApp (Lit) LHS — e.g. a ground equation `x = c` — therefore
-        // hits a non-exhaustive-pattern bottom in HS. The thunk is forced when
-        // the rule is inserted into the `stRules` Set (Signature.hs:162-164,
-        // via the `Ord` instance over the `[Position]` field), aborting the
-        // run with:
-        //   src/Term/SubtermRule.hs:(65,5)-(69,47): Non-exhaustive patterns
-        //   in function constantPositions
-        // We panic here to mirror that abort rather than silently accepting
-        // the rule. Unreachable on real input (no equation reaching here has
-        // a literal LHS in practice).
-        _ => panic!(
-            "src/Term/SubtermRule.hs:(65,5)-(69,47): Non-exhaustive patterns in function constantPositions"
-        ),
+        // Sole caller `rrule_to_ctxt_st_rule` rejects non-`App` LHS terms
+        // before reaching here (the deliberate-divergence guard documented
+        // there), so a `Lit` cannot arrive.
+        _ => unreachable!("constant_positions: non-App LHS is rejected by rrule_to_ctxt_st_rule"),
     }
 }
 
 /// `rRuleToCtxtStRule`: convert an `RRule` to a `CtxtStRule` if possible.
+///
+/// DELIBERATE DIVERGENCE (documented upstream bug): on a
+/// ground-RHS equation whose LHS is a bare literal (`equations: x = c`), HS
+/// aborts the whole run — `constantPositions` (SubtermRule.hs:67-71) has only
+/// an `FApp` clause under `-fno-warn-incomplete-patterns`, and the bottom is
+/// forced when the rule enters the `stRules` Set (Signature.hs:162-164).  For
+/// the NON-ground sibling (`x = h(x)`) HS instead fails cleanly with "Not a
+/// correct equation: …" (Theory/Text/Parser/Signature.hs:232-234).  The port
+/// answers `None` here, routing the ground case into that same clean failure.
 pub fn rrule_to_ctxt_st_rule(rule: &RRule<LNTerm>) -> Option<CtxtStRule> {
     if frees(&rule.rhs).is_empty() {
+        if !matches!(rule.lhs, Term::App(_, _)) {
+            return None;
+        }
         // Pure right-hand-side: the positions are the LHS's constant
         // positions — HS `constantPositions` (a sibling-subterm search),
         // NOT all non-variable positions.
@@ -250,16 +255,16 @@ mod tests {
         assert_eq!(ctxt.rhs.positions, vec![vec![0i64], Vec::<i64>::new()]);
     }
 
-    /// HS `constantPositions` (SubtermRule.hs:65-69) has only the `FApp`
-    /// clause under `-fno-warn-incomplete-patterns`; a literal LHS produces a
-    /// non-exhaustive-pattern bottom. Verified against the real HS prover:
-    /// loading `x = c` (with `c/0`) aborts with
-    ///   src/Term/SubtermRule.hs:(65,5)-(69,47): Non-exhaustive patterns in
-    ///   function constantPositions
-    /// We mirror that abort with a panic.
+    /// A literal LHS with a ground RHS (`equations: x = c`) is rejected as
+    /// not-a-subterm-rule, which elaboration reports as "Not a correct
+    /// equation" — the same clean failure both engines produce for the
+    /// non-ground sibling `x = h(x)` ("Not a correct equation: RRule x h(x)"
+    /// from the pinned oracle).  HS instead ABORTS on the ground case
+    /// (non-exhaustive `constantPositions`, SubtermRule.hs:67-71 under
+    /// `-fno-warn-incomplete-patterns`); the port deliberately diverges from
+    /// that documented upstream bug.
     #[test]
-    #[should_panic(expected = "Non-exhaustive patterns in function constantPositions")]
-    fn literal_lhs_ground_equation_panics() {
+    fn literal_lhs_ground_equation_is_rejected_not_crashed() {
         use crate::function_symbols::{Constructability, NoEqSym, Privacy};
         use crate::term::f_app_no_eq;
         let c_sym = NoEqSym::new(
@@ -271,6 +276,6 @@ mod tests {
         let lhs = msg_var("x", 0); // literal (Var) LHS
         let rhs: LNTerm = f_app_no_eq(c_sym, vec![]); // ground RHS `c`
         let rule = RRule::new(lhs, rhs);
-        let _ = rrule_to_ctxt_st_rule(&rule);
+        assert!(rrule_to_ctxt_st_rule(&rule).is_none());
     }
 }
