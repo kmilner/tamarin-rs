@@ -865,8 +865,8 @@ pub const BUILD_TIMESTAMP: &str = env!("TAMARIN_BUILD_TIMESTAMP");
 /// precedes `Generated from:`.  We reproduce that blank line here exactly.
 /// The reported maude version comes from `getVersionIO`'s argument, which is
 /// `ensureMaude`'s `out` (the raw `maude --version` output, Console.hs:156-161).
-pub fn version_text() -> String {
-    let mv = detect_maude_version_pub().unwrap_or_else(|| "unknown version".to_string());
+pub fn version_text(maude_path: &str) -> String {
+    let mv = detect_maude_version_at(maude_path).unwrap_or_else(|| "unknown version".to_string());
     format!(
         // versionStr: banner + license (Console.hs:220-231), unlines-terminated,
         // then putStrLn's extra newline gives the blank line before the block.
@@ -890,36 +890,24 @@ pub fn version_text() -> String {
 /// `. OK.` (`Right (strip out ++ ". OK.")`, Console.hs:151-185, see line 165); ` checking
 /// installation: ` carries `OK.` (Console.hs:151-185, see line 171).  Returned without a
 /// trailing newline so the caller can `eprintln!` it as one block.
-pub fn version_maude_stderr_text() -> String {
-    let maude_version = detect_maude_version_pub();
+pub fn version_maude_stderr_text(disp: &str, maude_path: &str) -> String {
+    let maude_version = detect_maude_version_at(maude_path);
     let maude_ok = maude_version.is_some();
     let mv = maude_version.unwrap_or_else(|| "unknown".to_string());
     let ok = if maude_ok { "OK." } else { "FAILED." };
     format!(
-        "maude tool: 'maude'\n\
+        "maude tool: '{disp}'\n\
          \x20checking version: {mv}. {ok}\n\
          \x20checking installation: {ok}",
     )
 }
 
-/// Probe `maude --version` on `PATH` and return the trimmed version
-/// string when Maude is reachable, `None` otherwise.
-///
-/// Mirrors HS `maudePath = fromMaybe "maude" . findArg "withMaude"`
-/// (Console.hs:84-85): when no `--with-maude` is supplied, HS probes the
-/// bare `maude` binary on `PATH` — it never consults hardcoded
-/// developer-box paths.  Use [`detect_maude_version_at`] to honor an
-/// explicit `--with-maude` path.
-pub fn detect_maude_version_pub() -> Option<String> {
-    detect_maude_version_at("maude")
-}
-
 /// Probe `<path> --version` and return the trimmed version string when
-/// the binary is reachable, `None` otherwise.  A caller that has an
-/// explicit `--with-maude` path can pass it here so the reported version
-/// matches the binary the prover will actually invoke (HS `ensureMaude`
-/// uses `maudePath`).  No current caller does — the only caller is
-/// [`detect_maude_version_pub`], which probes the bare `maude` binary.
+/// the binary is reachable, `None` otherwise.  Callers pass the maude the
+/// run will actually invoke (the `--with-maude` path when given, else the
+/// probed default), so the reported version always matches the invoked
+/// binary — HS `ensureMaude` reads the same `maudePath` for both
+/// (Console.hs:156-161).
 pub fn detect_maude_version_at(path: &str) -> Option<String> {
     if let Ok(out) = std::process::Command::new(path).arg("--version").output() {
         if out.status.success() {
@@ -1764,7 +1752,7 @@ mod tests {
         // unlines `\n`) produces a blank line before `Generated from:`.  The
         // maude self-check lines must NOT appear on stdout.  Probed against the
         // installed HS binary: stdout ends `...LICENSE'.\n\nGenerated from:`.
-        let out = version_text();
+        let out = version_text("maude");
         assert!(
             out.contains("'https://github.com/tamarin-prover/tamarin-prover/blob/master/LICENSE'.\n\nGenerated from:\n"),
             "stdout must have a blank line between the license and `Generated from:`\n--- got ---\n{out}"
@@ -1797,7 +1785,7 @@ mod tests {
         //   maude tool: 'maude'
         //    checking version: 3.5.1. OK.
         //    checking installation: OK.
-        let err = version_maude_stderr_text();
+        let err = version_maude_stderr_text("maude", "maude");
         let lines: Vec<&str> = err.lines().collect();
         assert_eq!(
             lines.len(),

@@ -180,8 +180,14 @@ pub fn run(args: &Args) -> Result<i32, RunError> {
         // license + `Generated from:` block go to STDOUT, the three maude
         // self-check lines to STDERR (`ensureMaude` -> `hPutStrLn stderr`).
         // version_text() already carries its own trailing newline.
-        print!("{}", crate::cli::version_text());
-        eprintln!("{}", crate::cli::version_maude_stderr_text());
+        print!("{}", crate::cli::version_text(&maude_invocation_path(args)));
+        eprintln!(
+            "{}",
+            crate::cli::version_maude_stderr_text(
+                &maude_display_name(args),
+                &maude_invocation_path(args),
+            )
+        );
         return Ok(0);
     }
 
@@ -203,10 +209,10 @@ pub fn run(args: &Args) -> Result<i32, RunError> {
 /// effort; until then we run the prover's own lib tests at build time
 /// instead (`cargo test`).  Returns rc=0 on Maude/dot reachable,
 /// rc=1 otherwise.
-fn run_test(_args: &Args) -> Result<i32, RunError> {
+fn run_test(args: &Args) -> Result<i32, RunError> {
     println!("Self-testing the tamarin-prover installation.\n");
     println!("*** Testing the availability of the required tools ***");
-    let mv = crate::cli::detect_maude_version_pub();
+    let mv = crate::cli::detect_maude_version_at(&maude_invocation_path(args));
     match &mv {
         Some(v) => println!("{}. OK.\n checking installation: OK.", v),
         None => {
@@ -273,7 +279,7 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
     })?;
     // HS emits the maude tool/version banner on STDERR (via `ensureMaude`),
     // not stdout — the rule dump alone goes to stdout.  Mirror that.
-    if let Some(v) = crate::cli::detect_maude_version_pub() {
+    if let Some(v) = crate::cli::detect_maude_version_at(&maude_path) {
         print_maude_banner(&maude_path, Some(&v));
     }
     // HS `Main.Mode.Intruder.run` (Intruder.hs:48-53) generates BOTH the DH
@@ -392,7 +398,7 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // gated on any flag — `--quiet` leaves them in place (see `Args::quiet`).
     print_maude_banner(
         &maude_display_name(args),
-        crate::cli::detect_maude_version_pub().as_deref(),
+        crate::cli::detect_maude_version_at(&maude_invocation_path(args)).as_deref(),
     );
     eprintln!("GraphViz tool: 'dot'");
     // HS lowercases `dot -V`'s stderr banner, strips the trailing
@@ -569,7 +575,7 @@ fn cli_cut(args: &Args) -> Option<tamarin_theory::constraint::solver::context::C
 /// can't re-introspect the flag downstream, so we key off `args.maude_path`
 /// being `None` (the default) vs `Some` (user-supplied).
 fn maude_display_name(args: &Args) -> String {
-    let raw_path = args.maude_path.clone().unwrap_or_else(default_maude_path);
+    let raw_path = maude_invocation_path(args);
     if args.maude_path.is_some() {
         raw_path
     } else {
@@ -579,6 +585,14 @@ fn maude_display_name(args: &Args) -> String {
             .unwrap_or(&raw_path)
             .to_string()
     }
+}
+
+/// The maude binary this run invokes: the `--with-maude` path when given,
+/// else the probed default.  HS `ensureMaude` reads the same `maudePath`
+/// for both the version check and every later maude spawn (Console.hs:
+/// 156-161), so the reported version is always the invoked binary's.
+fn maude_invocation_path(args: &Args) -> String {
+    args.maude_path.clone().unwrap_or_else(default_maude_path)
 }
 
 /// Emit the `maude tool:` + version + installation banner to stderr (HS
@@ -679,10 +693,12 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     let parser_flags: Vec<&str> = args.defines.iter().map(String::as_str).collect();
 
     // The Maude version is constant for the whole run, but detecting it
-    // spawns a `maude --version` subprocess.  Detect it ONCE here and
-    // reuse the cached value for both the banner and every file's
-    // `BuildInfo`, avoiding one `maude --version` subprocess per file.
-    let maude_version: Option<String> = crate::cli::detect_maude_version_pub();
+    // spawns a `maude --version` subprocess.  Detect it ONCE here — from the
+    // binary this run will actually invoke — and reuse the cached value for
+    // both the banner and every file's `BuildInfo`, avoiding one
+    // `maude --version` subprocess per file.
+    let maude_version: Option<String> =
+        crate::cli::detect_maude_version_at(&maude_invocation_path(args));
 
     // HS prints the maude tool + version banner ONCE at the top of the
     // batch run (`Main.Console.argExists` path).  Mirror that here:

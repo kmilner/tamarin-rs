@@ -63,10 +63,29 @@ fn strip_maude_banner(stderr: &str) -> String {
     rest
 }
 
+/// `<maude> --version` of the same binary [`run_binary`] hands the prover:
+/// `MAUDE_PATH` when set, else the default-path probe list the binary uses.
+fn local_maude_version() -> Option<String> {
+    let path = std::env::var("MAUDE_PATH").ok().or_else(|| {
+        ["/usr/local/bin/maude", "/usr/bin/maude"]
+            .iter()
+            .find(|c| std::path::Path::new(c).exists())
+            .map(|c| c.to_string())
+    })?;
+    let out = Command::new(&path).arg("--version").output().ok()?;
+    let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!v.is_empty()).then_some(v)
+}
+
 /// Blank the build-local lines of the `Generated from:` block, the temp-dir
 /// input path and the wall-clock measurement, so what remains is comparable
-/// across machines.
+/// across machines.  The `Maude version` line is blanked ONLY when it names
+/// the local maude's actual version — a mismatch (e.g. `unknown` because the
+/// binary probed the wrong maude) must keep failing the byte comparison.
 fn normalize_stdout(stdout: &str) -> String {
+    let local_maude = local_maude_version()
+        .map(|v| format!("Maude version {v}"))
+        .unwrap_or_default();
     stdout
         .lines()
         .filter(|l| !l.starts_with("  processing time: "))
@@ -75,6 +94,8 @@ fn normalize_stdout(stdout: &str) -> String {
                 "<build info>"
             } else if l.starts_with("analyzed: ") {
                 "analyzed: <in file>"
+            } else if !local_maude.is_empty() && l == local_maude {
+                "Maude version <local maude>"
             } else {
                 l
             }
@@ -161,7 +182,7 @@ const EXPECTED_STDOUT: &[&str] = &[
     "/*",
     "Generated from:",
     "Tamarin version 1.13.0",
-    "Maude version 3.5.1",
+    "Maude version <local maude>",
     "<build info>",
     "<build info>",
     "*/",
