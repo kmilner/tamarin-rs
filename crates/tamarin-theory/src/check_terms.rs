@@ -152,18 +152,18 @@ struct Irreducible {
     /// is reducible).  HS keys on the `FunSym` value, which for AC ops is
     /// `AC <ACSym>`.
     ac: BTreeSet<AcSym>,
-    /// Names of the irreducible user-declared `[AC]` symbols.  HS's membership
-    /// test is on the whole `FunSym`, which for such a symbol is
-    /// `AC (ACfct (name, _))` and carries no arity — `naryOpApp`'s `IsAC`
-    /// branch accepts an application of any arity — so the name alone decides.
-    ac_fct_names: BTreeSet<Vec<u8>>,
     /// Every user-declared `[AC]` symbol of the FULL signature, keyed by name.
-    /// HS's parser turns an application of such a symbol into
-    /// `fAppAC (ACfct …)` whether it is written prefix
-    /// (`naryOpApp`, Theory/Text/Parser/Term.hs:104-105), infix (`acterm`,
-    /// `:163-168`) or `op{a}b` (`binaryAlgApp`, `:120-121`), so the checker's
-    /// term view has to build the same flattened, sorted AC node.
+    /// The INFIX spelling of such a symbol is always `fAppAC (ACfct …)` (HS
+    /// `acterm`, Theory/Text/Parser/Term.hs:163-168); the prefix and `op{a}b`
+    /// spellings are too (`naryOpApp` `:104-105`, `binaryAlgApp` `:120-121`)
+    /// UNLESS the name is also a `NoEq` symbol of the full signature — see
+    /// [`Irreducible::prefix_ac_fct`] — so the checker's term view builds the
+    /// same flattened, sorted AC node exactly where HS does.
     ac_fct_syms: BTreeMap<Vec<u8>, AcFctSym>,
+    /// Names (any arity) of every NoEq symbol of the FULL signature — HS
+    /// `noEqFunSyms maudeSig` over `funSyms` (Term/Maude/Signature.hs:157-158).
+    /// Read by [`Irreducible::prefix_ac_fct`].
+    noeq_names: BTreeSet<Vec<u8>>,
     /// Names of all nullary NoEq symbols in the FULL signature.  Used to
     /// resolve a bare `Var` whose name is a declared nullary funsym into an
     /// application (mirrors HS resolving `f/0` to `FApp f []`).
@@ -174,7 +174,6 @@ impl Irreducible {
     fn from_sig(sig: &MaudeSig) -> Self {
         let mut noeq: BTreeMap<Vec<u8>, BTreeSet<usize>> = BTreeMap::new();
         let mut ac = BTreeSet::new();
-        let mut ac_fct_names = BTreeSet::new();
         for s in &sig.irreducible_fun_syms {
             match s {
                 FunSym::NoEq(n) => {
@@ -182,19 +181,20 @@ impl Irreducible {
                 }
                 FunSym::Ac(a) => {
                     ac.insert(*a);
-                    if let AcSym::AcFct(f) = a {
-                        ac_fct_names.insert(f.name.to_vec());
-                    }
                 }
                 _ => {}
             }
         }
         let mut nullary_names = BTreeSet::new();
+        let mut noeq_names = BTreeSet::new();
         let mut ac_fct_syms = BTreeMap::new();
         for s in sig.fun_syms.iter() {
             match s {
-                FunSym::NoEq(n) if n.arity == 0 => {
-                    nullary_names.insert(n.name.to_vec());
+                FunSym::NoEq(n) => {
+                    noeq_names.insert(n.name.to_vec());
+                    if n.arity == 0 {
+                        nullary_names.insert(n.name.to_vec());
+                    }
                 }
                 FunSym::Ac(AcSym::AcFct(f)) => {
                     ac_fct_syms.insert(f.name.to_vec(), *f);
@@ -205,22 +205,29 @@ impl Irreducible {
         Irreducible {
             noeq,
             ac,
-            ac_fct_names,
             ac_fct_syms,
+            noeq_names,
             nullary_names,
         }
     }
 
-    /// Is the symbol applied under `name` with `arity` arguments irreducible?
-    /// A user-declared `[AC]` symbol matches on its name alone (see
-    /// `ac_fct_names`); every other name denotes a NoEq symbol, keyed by
-    /// (name, arity).
+    /// Is the NoEq symbol applied under `name` with `arity` arguments
+    /// irreducible?  HS's guard is ``o `S.member` irreducible``
+    /// (Wellformedness.hs:982) on the whole `FunSym`, so a NoEq head is
+    /// matched only against NoEq members of the irreducible set, keyed by
+    /// (name, arity).  A user-declared `[AC]` symbol of the same name is the
+    /// distinct `FunSym` `AC (ACfct (name, _))` and cannot satisfy that test
+    /// for a NoEq head; AC heads are classified by [`Self::is_ac_irreducible`]
+    /// instead.  The two coexist: under `builtins: diffie-hellman` plus
+    /// `functions: exp/2 [AC]`, `'a' ^ 'b'` parses as `fAppExp`
+    /// (`Term/Term.hs:164`), a NoEq `exp/2` that `dhReducibleFunSig`
+    /// (`Term/Term/FunctionSymbols.hs:307-308`) subtracts from the irreducible
+    /// set (`Term/Maude/Signature.hs:121-124`), while the user's
+    /// `AC (ACfct exp)` stays irreducible.
     fn is_irreducible(&self, name: &str, arity: usize) -> bool {
-        self.ac_fct_names.contains(name.as_bytes())
-            || self
-                .noeq
-                .get(name.as_bytes())
-                .is_some_and(|s| s.contains(&arity))
+        self.noeq
+            .get(name.as_bytes())
+            .is_some_and(|s| s.contains(&arity))
     }
 
     /// Is the AC symbol `a` irreducible?
@@ -236,6 +243,22 @@ impl Irreducible {
     /// The user-declared `[AC]` symbol called `name`, if the signature has one.
     fn ac_fct(&self, name: &str) -> Option<AcFctSym> {
         self.ac_fct_syms.get(name.as_bytes()).copied()
+    }
+
+    /// The AC symbol a PREFIX (or `op{a}b`) application of `name` denotes, if
+    /// any.  HS `lookupArity` resolves those spellings by a list lookup over
+    /// `S.toList (userDefinedFunSyms maudeSig)` in which every `NoEqUser`
+    /// sorts before every `ACfctUser` (Theory/Text/Parser/Term.hs:62-72,
+    /// constructor order of `UserDefinedSym`,
+    /// Term/Term/FunctionSymbols.hs:146-147), so a name that is ALSO a `NoEq`
+    /// symbol of the full signature resolves to that `NoEq` symbol, never the
+    /// AC one.  The infix spelling bypasses `lookupArity` (`acterm`,
+    /// Term.hs:163-168) and keeps using [`Self::ac_fct`].
+    fn prefix_ac_fct(&self, name: &str) -> Option<AcFctSym> {
+        if self.noeq_names.contains(name.as_bytes()) {
+            return None;
+        }
+        self.ac_fct(name)
     }
 }
 
@@ -255,11 +278,14 @@ pub struct TermChecker {
     /// HS folds surplus args of an arity-1 function into a pair at PARSE time
     /// (`naryOpApp` `k == 1`, Theory/Text/Parser/Term.hs:94-96), so the AST the
     /// wf check inspects already carries `h(<a, b>)` (an irreducible `h/1`
-    /// applied to a pair), NOT `h(a, b)`.  RS's arity-unaware parser keeps the
-    /// surplus args, so without this fold a unary `h(a, b)` resolves to a
-    /// non-existent reducible `h/2` and is spuriously flagged "uses terms of
-    /// the wrong form: reducible function symbols are disallowed".  Fold first
-    /// (mirrors the lemma/restriction pretty-printer in pretty_theory.rs).
+    /// applied to a pair), NOT `h(a, b)`.  RS's parser performs the same fold
+    /// (its `lookup_arity`-resolved `k == 1` branch parses one tuple), so on
+    /// theory ASTs this fold is a no-op kept as belt-and-braces for ASTs from
+    /// other producers (e.g. structural-mode parses): a unary `h(a, b)` left
+    /// unfolded would resolve to a non-existent reducible `h/2` and be
+    /// spuriously flagged "uses terms of the wrong form: reducible function
+    /// symbols are disallowed".  (Mirrors the lemma/restriction
+    /// pretty-printer in pretty_theory.rs.)
     // arity-1 no-eq function-name set; membership-only (.contains), never
     // iterated; std kept (byte-inert) — iteration order never reaches output.
     #[allow(clippy::disallowed_types)]
@@ -447,15 +473,17 @@ fn resolve_term(t: &Term, scope: &Scope, irr: &Irreducible, pos: TermPos) -> RTe
         Term::App(name, args) => resolve_app(name, args, scope, irr),
         Term::AlgApp(name, a, b) => {
             // `op{a}b`.  HS `binaryAlgApp` (Theory/Text/Parser/Term.hs:108-121)
-            // builds `fAppAC (ACfct …)` for a user-declared `[AC]` symbol and
-            // `fAppNoEq` otherwise.  It has NO `em` arm, so `em{a}b` is a NoEq
+            // resolves the name through `lookupArity`, so a user-declared
+            // `[AC]` symbol builds `fAppAC (ACfct …)` only when no `NoEq`
+            // symbol shares the name ([`Irreducible::prefix_ac_fct`]);
+            // otherwise `fAppNoEq`.  It has NO `em` arm, so `em{a}b` is a NoEq
             // `em/2` application, NOT the C symbol `naryOpApp` builds for the
             // prefix spelling `em(a, b)`.
             let args = vec![
                 resolve_term(a, scope, irr, TermPos::Message),
                 resolve_term(b, scope, irr, TermPos::Message),
             ];
-            match irr.ac_fct(name) {
+            match irr.prefix_ac_fct(name) {
                 Some(f) => resolve_ac(AcSym::AcFct(f), args, irr),
                 None => resolve_named(name, args, irr),
             }
@@ -485,10 +513,12 @@ fn resolve_term(t: &Term, scope: &Scope, irr: &Irreducible, pos: TermPos) -> RTe
                 BinOp::Mult => resolve_ac(AcSym::Mult, vec![ra, rb], irr),
                 BinOp::Xor => resolve_ac(AcSym::Xor, vec![ra, rb], irr),
                 BinOp::NatPlus => resolve_ac(AcSym::NatPlus, vec![ra, rb], irr),
-                // A user-declared `[AC]` symbol applied infix denotes the
-                // same AC application as the prefix spelling `name(a, b)`
-                // (HS `acterm`, Theory/Text/Parser/Term.hs:163-168), so it
-                // resolves through the same AC path.
+                // A user-declared `[AC]` symbol applied infix is ALWAYS the
+                // AC application (HS `acterm` builds `fAppACfct` straight
+                // from `stACFunSyms`, Theory/Text/Parser/Term.hs:163-168) —
+                // even when a `NoEq` symbol shares the name and claims the
+                // prefix spelling, so this arm deliberately bypasses
+                // [`Irreducible::prefix_ac_fct`]'s NoEq-wins rule.
                 BinOp::AcFct(name) => match irr.ac_fct(name) {
                     Some(f) => resolve_ac(AcSym::AcFct(f), vec![ra, rb], irr),
                     None => resolve_named(name, vec![ra, rb], irr),
@@ -513,7 +543,7 @@ fn resolve_app(name: &str, args: &[Term], scope: &Scope, irr: &Irreducible) -> R
     if name.as_bytes() == EMAP_SYM_STRING {
         return resolve_c(CSym::EMap, resolved);
     }
-    if let Some(f) = irr.ac_fct(name) {
+    if let Some(f) = irr.prefix_ac_fct(name) {
         return resolve_ac(AcSym::AcFct(f), resolved, irr);
     }
     resolve_named(name, resolved, irr)

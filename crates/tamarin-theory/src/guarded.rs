@@ -1624,10 +1624,10 @@ fn convert(
             // (Theory/Model/Formula.hs:296-309, LTerm.hs:301-302) BEFORE
             // `noUnguardedVars` inspects the prefix, so a shadowed binder is
             // reported under its freshened index.  `freshened` is that
-            // renaming, positionally
-            // parallel to `xs`; only the DIAGNOSTIC consumes it, because the
-            // body carried into `convert_all`/`convert_ex` keeps the source
-            // names that `remaining_unguarded` and `close_guarded` match on.
+            // renaming, positionally parallel to `xs`; only the DIAGNOSTIC
+            // consumes it, because the body carried into
+            // `convert_all`/`convert_ex` keeps the source names that
+            // `remaining_unguarded` and `close_guarded` match on.
             let freshened: Vec<p::VarSpec> = xs
                 .iter()
                 .map(|v| p::VarSpec {

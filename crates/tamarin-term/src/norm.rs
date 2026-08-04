@@ -146,12 +146,11 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
             //    variable is Ac/C-free and matches ANY subject term, so it
             //    reaches the pure arm on both entry points and would otherwise
             //    make every `Mult`/`Xor`/`Union`/`NatPlus`/`em`-headed term
-            //    reducible where HS reports normal form.  (Such a rule is not
-            //    constructible from a `.spthy`: `rrule_to_ctxt_st_rule` rejects
-            //    a bare-literal LHS outright on its ground-RHS branch, and
-            //    rejects a non-ground RHS because every position it can find
-            //    inside a variable LHS is the empty one — see subterm_rule.rs.
-            //    The gate is the structural guarantee.)
+            //    reducible where HS reports normal form.  (No `.spthy` yields
+            //    such a rule — `rrule_to_ctxt_st_rule` rejects a bare-variable
+            //    LHS on both of its branches, see subterm_rule.rs — so the gate
+            //    is a structural guarantee, not a filter that fires in
+            //    practice.)
             //    HS uses `solveMatchLNTerm (t `matchWith` lhs)`
             //    (Norm.hs:107-113).
             //    All builtin subterm rules (pair / senc / sdec / aenc /

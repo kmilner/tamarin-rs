@@ -394,12 +394,13 @@ pub fn check_theory(thy: &Theory) -> WfReport {
     // (`tamarin_theory::formula_reports::formula_reports`): it needs the
     // elaborated signature's irreducible funsyms and the TRANSLATED theory's
     // formulas.
-    // lemmaAttributeReport, natWellSortedReport:
+    // lemmaAttributeReport:
     report.extend(lemma_attribute_report(thy));
     // multRestrictedReport — spliced by the load pipelines
     // (`tamarin_theory::mult_restricted`): it needs the elaborated
     // signature's irreducible funsyms and the HughesPJ rule renderer,
     // neither of which the parser crate reaches.
+    // natWellSortedReport:
     report.extend(nat_well_sorted_report(thy));
     // checkEquationsSubtermConvergence:
     report.extend(subterm_convergence_report(thy));
@@ -853,10 +854,6 @@ fn wf_ac_chain_doc(t: &Term, sepa: &str, ac: &AcSyms) -> WfDoc {
     }
 }
 
-fn pp_wf_term(t: &Term, out: &mut String, ac: &AcSyms) {
-    wf_term_doc(t, ac).write_flat(out);
-}
-
 /// HS `prettyTerm` (Term/Term.hs:298-327) over a parser-AST term: the
 /// skeleton whose break points HS's `fsep`/`fcat` own.
 fn wf_term_doc(t: &Term, ac: &AcSyms) -> WfDoc {
@@ -1014,31 +1011,56 @@ fn subst_let_term(t: &Term, key: &Term, val: &Term) -> Term {
     }
 }
 
-/// The names of a theory's user-declared `[AC]` function symbols.
+/// The names whose PREFIX application denotes a user-declared `[AC]` symbol.
 ///
 /// HS carries this information in the signature: `functions: add/2 [AC]`
 /// registers an `ACfctUser` symbol
-/// (Theory/Text/Parser/Signature.hs:219-222, see line 221), so every term
-/// built over `add` is an `FAPP (AC (ACfct …))` rather than a `NoEq`
-/// application, whatever its source spelling.  The parser AST has no
-/// signature, so the wellformedness printers reconstruct the set from the
-/// theory's own `functions:` declarations — the same declarations HS reads.
+/// (Theory/Text/Parser/Signature.hs:219-222, see line 221), and `lookupArity`
+/// resolves a prefix application by a list lookup over
+/// `S.toList (userDefinedFunSyms maudeSig)` in which every `NoEqUser` sorts
+/// before every `ACfctUser` (Theory/Text/Parser/Term.hs:62-72,
+/// Term/Term/FunctionSymbols.hs:146-147).  A name that is ALSO a `NoEq`
+/// symbol of the full signature therefore resolves to the `NoEq` symbol and
+/// is NOT in this set; only the remaining `[AC]` names build
+/// `FAPP (AC (ACfct …))` from the prefix spelling.  (The INFIX spelling is
+/// always the AC symbol — HS `acterm`, Term.hs:165-174 — which the AST
+/// records as [`BinOp::AcFct`], classified by shape, not via this set.)
+/// The parser AST has no signature, so the wellformedness printers
+/// reconstruct the set from the theory's own `functions:` and `builtins:`
+/// declarations — the same declarations HS reads.
 type AcSyms = BTreeSet<String>;
 
 /// The `[AC]`-attributed function symbols declared by `thy` (HS
-/// `stACFunSyms . sig`, Theory/Text/Parser/Term.hs:165-174).
+/// `stACFunSyms . sig`, Theory/Text/Parser/Term.hs:165-174), minus the names
+/// that are also `NoEq` symbols of the full signature — see [`AcSyms`].  The
+/// `NoEq` side is the non-`[AC]` `functions:` declarations, each enabled
+/// builtin's contribution ([`crate::parser::builtin_noeq_sym_names`]), and
+/// the always-present pair signature (`minimalMaudeSig` is `pairFunSig` —
+/// `pair`/`fst`/`snd` — Term/Maude/Signature.hs:224-226).
 fn user_ac_fun_names(thy: &Theory) -> AcSyms {
-    let mut out = AcSyms::new();
+    let mut ac = AcSyms::new();
+    let mut noeq: BTreeSet<&str> = ["pair", "fst", "snd"].into_iter().collect();
     for it in &thy.items {
-        if let TheoryItem::Functions(decls) = it {
-            for d in decls {
-                if d.ac {
-                    out.insert(d.name.clone());
+        match it {
+            TheoryItem::Functions(decls) => {
+                for d in decls {
+                    if d.ac {
+                        ac.insert(d.name.clone());
+                    } else {
+                        noeq.insert(d.name.as_str());
+                    }
                 }
             }
+            TheoryItem::Builtins(names) => {
+                for n in names {
+                    noeq.extend(crate::parser::builtin_noeq_sym_names(n));
+                }
+            }
+            _ => {}
         }
     }
-    out
+    ac.retain(|n| !noeq.contains(n.as_str()));
+    ac
 }
 
 /// The symbol name when `t` is an application of a user-declared `[AC]`
@@ -1088,8 +1110,7 @@ fn ac_operands(t: &Term) -> Vec<&Term> {
 /// arguments of every same-head child whichever way it was written.
 fn flatten_ac<'a>(head: (u8, &str, usize), t: &'a Term, out: &mut Vec<&'a Term>, ac: &AcSyms) {
     let t = ac_collapse(t, ac);
-    let k = wf_funsym_key(t, ac);
-    if k.0 == head.0 && k.1 == head.1 && k.2 == head.2 {
+    if wf_funsym_key(t, ac) == head {
         for child in ac_operands(t) {
             flatten_ac(head, child, out, ac);
         }
@@ -1148,12 +1169,12 @@ fn cmp_wf_term(a: &Term, b: &Term, ac: &AcSyms) -> std::cmp::Ordering {
         return sa.cmp(&sb);
     }
     use Term::*;
-    // LIT class only: `wf_term_class` gives each of its variants a unique
-    // sub-tag, so the early return above leaves `a` and `b` the same variant
-    // and each `let … else` binding of `b` is infallible.  The FAPP variants
-    // returned above; a new `Term` variant is forced to declare itself in
-    // `wf_term_class`, `wf_funsym_key` and `hs_fapp_args`, none of which has a
-    // wildcard arm.
+    // LIT class only — the FAPP variants have already returned above.
+    // `wf_term_class` gives each LIT variant a unique sub-tag, so the early
+    // return above leaves `a` and `b` the same variant and each `let … else`
+    // binding of `b` is infallible.  A new `Term` variant must still declare
+    // itself in `wf_term_class`, `wf_funsym_key` and `hs_fapp_args`, none of
+    // which has a wildcard arm.
     match a {
         Var(v1) => {
             let Var(v2) = b else {
@@ -2782,7 +2803,7 @@ pub fn subterm_convergence_report(thy: &Theory) -> WfReport {
     vec![WfError::new("Subterm Convergence Warning", msg)]
 }
 
-/// [`pp_wf_term`] — HS `prettyLNTerm` — as a `String`-returning helper.
+/// [`wf_term_doc`] — HS `prettyLNTerm` — laid out flat.
 ///
 /// Sharing the one printer is what keeps these messages AC-canonical: HS's
 /// terms are built by the smart constructors `fAppAC`/`fAppC`
@@ -2793,9 +2814,7 @@ pub fn subterm_convergence_report(thy: &Theory) -> WfReport {
 /// (No HughesPJ wrapping — the messages using this helper are expected to
 /// fit on one line.)
 fn pp_term_for_wf(t: &Term, ac: &AcSyms) -> String {
-    let mut s = String::new();
-    pp_wf_term(t, &mut s, ac);
-    s
+    wf_term_doc(t, ac).to_flat()
 }
 
 fn is_subterm_convergent(lhs: &Term, rhs: &Term, nullary_funs: &BTreeSet<String>) -> bool {
@@ -3150,8 +3169,8 @@ mod tests {
     /// `Exp < Union < Mult < Xor < NatPlus < AcFct`, with two `AcFct` heads
     /// separated by name.  `funsym_key` is the source of truth — `binop_rank`
     /// restates the order because `tamarin-parser` is dependency-free and
-    /// cannot call into `tamarin-theory` — so this test is what keeps the two
-    /// copies from drifting.
+    /// cannot call into `tamarin-theory` — so this test spells the order out
+    /// for the copy that lives here.
     #[test]
     fn binop_rank_matches_funsym_key_order() {
         use crate::ast::BinOp as B;
@@ -3263,9 +3282,9 @@ mod tests {
     /// `reservedFactNameRules'` and `unboundCheck` are HS `fsep` paragraph
     /// fills, which break before any cell that would pass column
     /// [`WF_FILL_RIBBON`] measured from the 4-space nesting.  This is
-    /// [`WfError::message`]'s flat-cell rendering, which every cell here fits
-    /// inside the ribbon and so equals the pinned oracle's bytes (ef3f0468);
-    /// the layout that ships — including the descent into an over-wide cell —
+    /// [`WfError::message`]'s flat-cell rendering; every cell here fits inside
+    /// the ribbon, so it equals the pinned oracle's bytes (ef3f0468).  The
+    /// layout that ships — including the descent into an over-wide cell —
     /// is pinned by `tamarin-theory/tests/wf_fact_fill_layout.rs`.
     #[test]
     fn wf_entry_fills_comma_lists_at_the_report_ribbon() {

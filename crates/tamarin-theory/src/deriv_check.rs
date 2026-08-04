@@ -548,8 +548,8 @@ fn synthesise_probe_theory(
     //
     // The Rust intruder-rule generation (intruder_rules.rs: `destruction_rules`'
     // private/free-var skip, `construction_rules`' Public-only filter and
-    // `private_constructor_rules`)
-    // already matches IntruderRules.hs:129-157, see line 149/219 once the privacy flags survive.
+    // `private_constructor_rules`) already matches IntruderRules.hs:129-157,
+    // see line 149/219 once the privacy flags survive.
     for it in &src.items {
         match it {
             p::TheoryItem::Functions(_)
@@ -755,8 +755,7 @@ fn prove_probe(
     // `TAM_PROVE_DEADLINE_MS` env var) so it bounds only the probe proofs
     // below and cannot truncate an unrelated search another thread starts
     // while a probe is running.  The RAII guard restores the prior cap on
-    // EVERY exit path (including any future early-return), so the deadline
-    // can't leak into the main prove loop either.
+    // EVERY exit path, so the deadline cannot leak into the main prove loop.
     let ms = (timeout.as_millis() as u64).max(1);
     let _deadline_guard = crate::constraint::solver::search::ProofDeadlineGuard::set_ms(ms);
 

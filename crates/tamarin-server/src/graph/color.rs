@@ -171,7 +171,6 @@ fn group_idx(ru: &RuleACInst) -> usize {
 pub(crate) fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorMap {
     use tamarin_utils::color::{hsv_to_rgb, light_color_groups, Hsv, Rgb};
 
-    // `M.elems $ get sNodes se`: iterate in NodeId (`M.Map` key) order.
     let ordered = nodes_in_map_order(nodes);
 
     // `groups = [ (gIdx, [ru | ru <- rules, gIdx == groupIdx ru]) | gIdx <- 0..3 ]`

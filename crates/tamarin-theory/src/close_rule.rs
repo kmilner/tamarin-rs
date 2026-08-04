@@ -96,8 +96,7 @@ pub struct NdcCheckedCache {
 /// intrRules)` branch.
 ///
 /// `theory_name` feeds the two `[Theory NAME] No Deconstruction Chain
-/// checks started/ended` markers; `None` suppresses them (the `--quiet`
-/// batch path, matching the other `[Theory X]` progress markers).
+/// checks started/ended` markers; `None` suppresses them.
 pub fn check_close_intr_rule(
     maude: &MaudeHandle,
     theory_name: Option<&str>,
@@ -1158,7 +1157,7 @@ fn apply_ndc_check(
 /// assembled intruder-rule cache.  Emits the two `[Theory NAME] No
 /// Deconstruction Chain checks started/ended` stderr markers
 /// unconditionally (HS `traceM`s them even when no group is checkable);
-/// `theory_name = None` suppresses them (the `--quiet` batch path).
+/// `theory_name = None` suppresses them.
 /// Returns the NDC-tagged function symbols (for the signature join /
 /// `functions:` header) and the final cache
 /// `checked ++ builtInOrConstrOrNDC ++ all-subterm`.

@@ -1478,10 +1478,11 @@ mod tests {
     }
 
     /// Build a two-node system plus the edge between them, and a second copy of
-    /// it with `hidden` dropped from `sNodes` — the shape `compressSystem`'s
-    /// `hideRule` (Simplification.hs:125-152) leaves behind: the node is gone
-    /// from the drawn system while an edge still names it, so
-    /// `systemMissingNodes` (Graph.hs:116-122) draws it as a trapezium.
+    /// it with one endpoint's node dropped from `sNodes` (`hidden` = 0 for the
+    /// source, 1 for the target) — the shape `compressSystem`'s `hideRule`
+    /// (Simplification.hs:125-152) leaves behind: the node is gone from the
+    /// drawn system while an edge still names it, so `systemMissingNodes`
+    /// (Graph.hs:116-122) draws it as a trapezium.
     fn hidden_endpoint_graph(
         src_conc: LNFact,
         tgt_prem: LNFact,

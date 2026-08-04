@@ -124,6 +124,14 @@ pub fn load_from_source(
     // `loadAndCloseTheory srcContent filename`).  `LoadError::Parse` then holds
     // the byte-for-byte parsec frame.
     let source_name = origin.label();
+    // Deliberate divergence, same policy as the other web error surfaces: a
+    // theory that trips one of the GHC `error`s inside HS's parser (`macro`'s
+    // reserved name / duplicate argument, Theory/Text/Parser/Macro.hs:34-38)
+    // takes down the HS web handler with an uncaught exception.  Here the
+    // failure travels as an ordinary `LoadError::Parse` and reaches the user
+    // through the normal parse-error surface — `Display for ParseError` renders
+    // a GHC `error` as its bare message, without the parsec frame the position
+    // would fake or the `HasCallStack` block that only the CLI reproduces.
     let mut parser_theory = parse_theory(src, &[])
         .map_err(|e| LoadError::Parse(e.with_source(source_name).to_string()))?;
 
@@ -190,9 +198,9 @@ pub fn load_from_source(
     wf_report.extend(tamarin_theory::pretty_theory::subterm_convergence_report_wf(&maude_sig));
 
     // SAPIC `process:` translation — mirror `run_batch`'s CLI-side pass so
-    // the web load path renders SAPIC theories exactly like `--prove`.
-    // Runs ONLY for `is_sapic` theories (exactly one
-    // top-level `process:`); `apply_sapic` returns `Ok(vec![])` when
+    // the web load path renders SAPIC theories exactly like `--prove`.  Runs
+    // ONLY for `is_sapic` theories (exactly one top-level `process:`);
+    // `apply_sapic` returns `Ok(vec![])` when
     // `!typed.is_sapic`, so it is safe to call unconditionally and leaves
     // non-process theories byte-unchanged.  It injects the generated MSR
     // rules + `single_session` restriction + `heuristic: p` into BOTH
@@ -207,9 +215,8 @@ pub fn load_from_source(
     // of BOTH the SAPIC translation AND the variant pre-computation below.
     // That thread-local bundle drives `term_to_lnterm`'s symbol resolution
     // (privacy / constructability); `elaborate()` sets it only for its own
-    // scope, so
-    // without re-installing them here the SAPIC-injected rules' builtin
-    // symbols (`rep` private, `check_rep` / `get_rep` destructors from
+    // scope, so without re-installing it here the SAPIC-injected rules'
+    // builtin symbols (`rep` private, `check_rep` / `get_rep` destructors from
     // `locations-report`) re-elaborate with the default public-constructor
     // flags, serialising as `tamXC..` — which Maude rejects, leaving the rule
     // with "no variants".  The guard must therefore stay alive across the
@@ -247,10 +254,10 @@ pub fn load_from_source(
 
     // HS re-runs the full `checkWellformedness` on the TRANSLATED theory
     // (`checkTranslatedTheory`, mirrored by `run_batch`): re-run
-    // `factLhsOccurNoRhs` on the post-translation parsed theory so
-    // SAPIC-only premise facts (e.g. a `Message(c,m)` consumed
-    // by an `in(c,m)` with no producing `out`) are surfaced.  No-op for
-    // non-SAPIC theories (pre- and post-translation rule sets are equal).
+    // `factLhsOccurNoRhs` on the post-translation parsed theory so SAPIC-only
+    // premise facts (e.g. a `Message(c,m)` consumed by an `in(c,m)` with no
+    // producing `out`) are surfaced.  No-op for non-SAPIC theories (pre- and
+    // post-translation rule sets are equal).
     //
     // `post_thy` is the translated theory with macros expanded, as HS
     // `thyProtoRules` / `applyMacroInFormula` do before every check.
@@ -277,11 +284,10 @@ pub fn load_from_source(
         // HS `publicNamesReport` runs on the TRANSLATED rules — the
         // parser-level report cannot see the source process a generated
         // rule carries as its `process=` attribute (e.g. CentralizedMonitor's
-        // `rule "Init":  name 'C', 'c'`).  Same
-        // replace + splice as the batch path; the boundary list is
-        // WF_TOPIC_ORDER minus "Unbound variables" (unboundReport runs
-        // BEFORE publicNames in HS, so it must not act as a boundary),
-        // headed by the variable-sorts topic.
+        // `rule "Init":  name 'C', 'c'`).  Same replace + splice as the batch
+        // path; the boundary list is WF_TOPIC_ORDER minus "Unbound variables"
+        // (unboundReport runs BEFORE publicNames in HS, so it must not act as
+        // a boundary), headed by the variable-sorts topic.
         let caps_topic = "Public constants with mismatching capitalization";
         wf_report.retain(|e| e.topic != caps_topic);
         let public_names = tamarin_theory::elaborate::sapic_public_names_report(&typed);
@@ -320,7 +326,7 @@ pub fn load_from_source(
     // `lemmaAttributeReport` and `natWellSortedReport`.
     {
         let mult_errors =
-            tamarin_theory::mult_restricted::mult_restricted_report(&post_thy, &typed, &maude_sig);
+            tamarin_theory::mult_restricted::mult_restricted_report(&typed, &maude_sig);
         insert_wf_before(
             &mut wf_report,
             mult_errors,

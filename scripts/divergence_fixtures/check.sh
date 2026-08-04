@@ -7,8 +7,8 @@
 # Each fixture is a theory whose interesting output survives in one or more gate
 # slices (fixtures.tsv says which).  All but ac_marker_collapse must reproduce
 # the pinned oracle's captured bytes; that one must NOT, and must diverge in
-# exactly the documented upstream-bug shape — so the check
-# goes red both when the port moves and when a submodule bump moves upstream.
+# exactly the documented upstream-bug shape — so the check goes red both when
+# the port moves and when a submodule bump moves upstream.
 #
 # Only the port runs here: the oracle side is the committed capture under
 # expected/, refreshed by capture.sh at bump time.  Nothing in the corpus
@@ -41,10 +41,10 @@ report() { printf '  %-24s %-6s %-8s %s\n' "$1" "$2" "$3" "$4"; }
 divergence_shape() {
     case "$1.$2" in
     ac_marker_collapse.theory)
-        # Documented upstream bug: upstream rebuilds the reply as
-        # an AC term and `fAppAC _ [a] = a` deletes the unary application, so
-        # the oracle's closed rule outputs the bare argument; the port keeps
-        # the application.
+        # Documented upstream bug: upstream rebuilds the Maude reply as an AC
+        # term and `fAppAC _ [a] = a` deletes the unary application, so the
+        # oracle's closed rule outputs the bare argument; the port keeps the
+        # application.
         grep -qF "Out( (a++y) )"            "$expected/$1.$2.hs.txt" \
             || { echo "    oracle side no longer collapses tamXCAbar(a) — expected \`Out( (a++y) )\`" >&2; return 1; }
         grep -qF "Out( (y++tamXCAbar(a)) )" "$expected/$1.$2.rs.txt" \

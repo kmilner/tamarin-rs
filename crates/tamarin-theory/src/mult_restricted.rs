@@ -75,12 +75,13 @@ const WF_RIBBON: usize = 67;
 /// Port of HS `multRestrictedReport` (Wellformedness.hs:1108-1113):
 /// `multRestrictedReport' (irreducibleFunSyms …) (thyProtoRules thy)`.
 ///
-/// `parsed` supplies each rule's surface attribute list for the
-/// `prettyRuleAttributes` part of the dumped rule header; `elab` supplies the
-/// rules themselves (HS `thyProtoRules`, i.e. macro-applied E-rules of the
-/// translated theory) and `sig` the irreducible-symbol classification.
-pub fn mult_restricted_report(parsed: &p::Theory, elab: &Theory, sig: &MaudeSig) -> Vec<WfError> {
-    let attrs_by_name = rule_attrs_by_name(parsed);
+/// `elab` supplies the rules (HS `thyProtoRules`, i.e. macro-applied E-rules of
+/// the translated theory) and `sig` the irreducible-symbol classification.
+/// Each entry's attribute block comes from the rule it dumps: HS's
+/// `prettyRuleAttributes` (Rule.hs:1330-1334) reads
+/// `ruleAttributes ru = L.get (preAttributes . rInfo)` (Rule.hs:670-674) off
+/// the rule itself.
+pub fn mult_restricted_report(elab: &Theory, sig: &MaudeSig) -> Vec<WfError> {
     let irreducible = &sig.irreducible_fun_syms;
     let mut out = Vec::new();
     for opr in elab.rules() {
@@ -106,27 +107,55 @@ pub fn mult_restricted_report(parsed: &p::Theory, elab: &Theory, sig: &MaudeSig)
             continue;
         }
         let name = opr.name();
-        let attrs: &[p::RuleAttr] = attrs_by_name.get(name).map_or(&[][..], |v| v.as_slice());
+        let attrs = surface_attrs(&ru.info.attributes);
         out.push(WfError::new(
             TOPIC,
-            entry_doc(name, attrs, ru, &abstracted, &mults, &unbounds)
+            entry_doc(name, &attrs, ru, &abstracted, &mults, &unbounds)
                 .render_with(WF_LINE_LENGTH, WF_RIBBON),
         ));
     }
     out
 }
 
-/// Surface rule attributes keyed by rule name.  HS reads them off the
-/// `ProtoRuleEInfo` the same rule carries; the RS elaborated rule's
-/// `RuleAttributes` is derived from this list, and `render_rule` (the theory
-/// body's rule echo) renders from the list, so sourcing both dumps from it
-/// keeps the two renderings of one rule byte-identical.
-fn rule_attrs_by_name(parsed: &p::Theory) -> BTreeMap<&str, &Vec<p::RuleAttr>> {
-    let mut out = BTreeMap::new();
-    for item in &parsed.items {
-        if let p::TheoryItem::Rule(r) = item {
-            out.insert(r.name.as_str(), &r.attributes);
-        }
+/// A rule's own `RuleAttributes` in the `Vec<p::RuleAttr>` shape
+/// [`crate::pretty_theory::rule_attributes_doc`] — the port's single
+/// implementation of HS `prettyRuleAttributes` (Rule.hs:1330-1334) — consumes.
+///
+/// HS's `prettyRuleAttribute` (Rule.hs:1314-1327) renders the record's fields
+/// as `catMaybes [color, process, no_derivcheck, issapicrule, role]`;
+/// `rule_attribute_parts` re-derives that order from the list, so the order
+/// here is not load-bearing.  An all-default record maps to the empty list,
+/// which `rule_attributes_doc` renders as HS's `ruleAttributes ru == mempty ⇒
+/// emptyDoc` branch.
+fn surface_attrs(attr: &crate::rule::RuleAttributes) -> Vec<p::RuleAttr> {
+    let mut out = Vec::new();
+    if let Some(c) = &attr.color {
+        // HS `text "color=" <> text (rgbToHex c)`; `rule_attribute_parts`
+        // re-attaches the `#` that `rgbToHex` (Data/Color.hs:140-147) prefixes.
+        out.push(p::RuleAttr::Color(
+            tamarin_utils::color::rgb_to_hex(*c)
+                .trim_start_matches('#')
+                .to_string(),
+        ));
+    }
+    if let Some(proc) = &attr.process {
+        // HS `ppProcess p = text "process=" <> text ("\"" ++
+        // prettySapicTopLevel' f p ++ "\"")` (Rule.hs:1324-1327).  Only the
+        // SAPIC translation fills this field — HS's attribute parser
+        // `parseAndIgnore`s a user-written `process=` (Parser/Rule.hs:68-93,
+        // see line 72), as does RS's.
+        out.push(p::RuleAttr::Process(
+            crate::pretty_sapic::pretty_sapic_top_level(proc),
+        ));
+    }
+    if attr.ignore_deriv_checks {
+        out.push(p::RuleAttr::NoDerivCheck);
+    }
+    if attr.is_sapic_rule {
+        out.push(p::RuleAttr::IsSapicRule);
+    }
+    if let Some(r) = &attr.role {
+        out.push(p::RuleAttr::Role(r.clone()));
     }
     out
 }

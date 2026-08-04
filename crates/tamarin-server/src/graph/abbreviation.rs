@@ -398,12 +398,12 @@ fn rendered_term_len(t: &LNTerm) -> usize {
 /// HS `prettyLNTerm` = `prettyTerm (text . show)` as a HughesPJ `Doc`
 /// (Term.hs:268-296), built directly on `LNTerm`.
 ///
-/// tamarin-theory has the same Doc under `pretty_formula::term_doc` via the
-/// `pub(crate)` parser-AST projection `lnterm_to_parser`; that path is not
-/// reachable from this crate, and widening its visibility would touch a
-/// shared module for a server-only need — so the (small, closed) `ppTerm`
-/// case split is mirrored here instead, using `pretty_hpj`'s public
-/// combinators.  Case order and Doc shape follow Term.hs exactly:
+/// tamarin-theory has the same Doc under `pretty_formula::term_doc`, reached
+/// through the parser-AST projection `pretty_theory::lnterm_to_parser`; going
+/// that way from here would convert every rendered term through the parser
+/// AST — so the (small, closed) `ppTerm` case split is mirrored here instead,
+/// using `pretty_hpj`'s public combinators.  Case order and Doc shape follow
+/// Term.hs exactly:
 ///   - literals: `text (show l)` — one unbreakable token (the single-line
 ///     `pretty_lnterm` of a literal IS `show l`);
 ///   - AC:   `ppTerms (ppACOp o) 1 "(" ")" ts`;

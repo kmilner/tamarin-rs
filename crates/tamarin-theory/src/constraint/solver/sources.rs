@@ -1604,7 +1604,7 @@ fn saturate_sources_with_simp_opt(
         // goal we solve adds a new node/edge whose fact constraints
         // get unified against the assumption's pattern, eventually
         // pruning typing-violating cases.  Bare simplify alone misses
-        // most of these because the insert_implied_formulas_pass relies on
+        // most of these because `insert_implied_formulas_pass` relies on
         // term-shape match against system actions, which only get
         // grafted by goal-solving.
         let mut next: Vec<Source> = Vec::new();
@@ -5581,8 +5581,8 @@ fn graft_case_into_action(
     // the equation collapses to `x#3 → senc(<sec#4, ~mw#5>, ~mw#13)`
     // — but the case-INTERNAL chain vars (chain_sec etc.) never get
     // connected to the live vars.  Out_Initiator's terms still
-    // reference chain_sec, so insert_implied_formulas_pass's match against
-    // `Out_Initiator(senc(<sec#4, ~mw#5>, ~mw#13))` fails, the
+    // reference chain_sec, so `insert_implied_formulas_pass`'s match
+    // against `Out_Initiator(senc(<sec#4, ~mw#5>, ~mw#13))` fails, the
     // typing universal doesn't fire, and the typing-violating case
     // survives → false counterexample.
     //

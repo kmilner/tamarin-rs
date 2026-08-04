@@ -785,10 +785,8 @@ pub fn rename_ignoring<T: HasFrees>(
             // "fixing" it to an `Arbitrary` map) is what preserves AC arg
             // order — and byte parity — with the Haskell prover.
             //
-            // `rename` is proof-search hot and reaches this through an empty
-            // `vars`, so the exemption scan is guarded by the slice's length:
-            // the guard is a single length test per free variable, and the
-            // `contains` walk is skipped entirely.
+            // `rename` reaches this with an empty `vars` on the proof-search
+            // hot path, where the length test skips the `contains` walk.
             t.map_free_monotone(&mut |v| {
                 if !vars.is_empty() && vars.contains(&v) {
                     v
@@ -974,10 +972,10 @@ mod tests {
     ///     data NameTag = FreshName | PubName | NodeName | NatName | AbbrevName
     #[test]
     fn name_tag_ord_matches_haskell_declaration() {
-        // Fresh < Pub < Node < Nat
         assert!(NameTag::Fresh < NameTag::Pub);
         assert!(NameTag::Pub < NameTag::Node);
         assert!(NameTag::Node < NameTag::Nat);
+        assert!(NameTag::Nat < NameTag::Abbrev);
     }
 
     /// Haskell `sortCompare` (LTerm.hs:177-187) is a PARTIAL ORDER, NOT

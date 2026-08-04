@@ -27,7 +27,7 @@ use tamarin_theory::pretty_theory::format_wf_block;
 fn block(src: &str) -> Option<String> {
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
-    let errs = mult_restricted_report(&thy, &elaborated, &elaborated.signature.maude_sig);
+    let errs = mult_restricted_report(&elaborated, &elaborated.signature.maude_sig);
     if errs.is_empty() {
         return None;
     }
@@ -167,5 +167,136 @@ fn every_conclusion_product_is_listed_in_term_order() {
     assert!(
         rendered.ends_with("\n    Terms with multiplication:  (~c*~d), (~c*~c*~d)\n*/"),
         "block: {rendered}"
+    );
+}
+
+/// The source of [`ATTRS_ENTRY`]: one rule carrying every attribute HS's
+/// `prettyRuleAttribute` (Model/Rule.hs:1314-1327) can render off a
+/// user-written attribute list.
+const ATTRS_SRC: &str = "theory MrAttrs begin\n\
+                         rule R1 [color=Ff00Aa, no_derivcheck, role='Alice', issapicrule]:\n\
+                         \x20 [ In( fst(x) ) ] --[ Go( x ) ]-> [ Out( x ) ]\n\
+                         end\n";
+
+/// The entry [`ATTRS_SRC`] produces, oracle bytes (pinned build, Git revision
+/// ef3f0468).  `catMaybes [color, process, no_derivcheck, issapicrule, role]`
+/// fixes the render order regardless of the source order, `rgbToHex`
+/// (Data/Color.hs:140-147) lowercases the six hex digits, and the block's
+/// `fsep` wraps at the wellformedness comment's 100/67 with the continuation
+/// hanging right after the `[`.
+const ATTRS_ENTRY: &str = "  The following rule is not multiplication restricted:\n    \
+                           rule (modulo E) R1[color=#ff00aa, no_derivcheck, issapicrule,\n\
+                           \x20                      role='Alice']:\n       \
+                           [ In( fst(x) ) ] --[ Go( x ) ]-> [ Out( x ) ]\n  \n  \
+                           After replacing reducible function symbols in lhs with variables:\n    \
+                           rule (modulo E) R1[color=#ff00aa, no_derivcheck, issapicrule,\n\
+                           \x20                      role='Alice']:\n       \
+                           [ In( x.1 ) ] --[ Go( x ) ]-> [ Out( x ) ]\n  \n    \
+                           Variables that occur only in rhs:  x\n*/";
+
+/// The dumped rule header carries the whole attribute block, laid out by the
+/// same `prettyRuleAttributes` the theory body's rule echo uses.
+#[test]
+fn attribute_block_renders_in_hs_field_order_and_wraps_with_the_header() {
+    assert_eq!(
+        block(ATTRS_SRC).expect("rhs-only var must be reported"),
+        format!("{HEADER}{ATTRS_ENTRY}")
+    );
+}
+
+/// `process=` reaches the dump the same way, and it can reach it no other way:
+/// the attribute lives only in the rule's `RuleAttributes` (HS `ruleProcess`,
+/// rendered by `ppProcess`, Model/Rule.hs:1324-1327), since HS's attribute
+/// parser `parseAndIgnore`s a user-written `process=`
+/// (Text/Parser/Rule.hs:68-93, see line 72) and RS's drops it likewise.  The
+/// SAPIC translation is what fills the field, on the rules it generates.
+///
+/// Oracle bytes (pinned build, Git revision ef3f0468) for the theory
+/// `theory MrSapicMsr begin process: [ In( fst(x) ) ] --[ Go( x ) ]-> [ Out( x ) ] end`,
+/// whose generated `InfstxGoxOutx_0_` rule is the one reported.  The rule and
+/// its colour/`issapicrule`/`role` are rebuilt here from surface syntax (the
+/// oracle renders that hand-written rule identically), and the process the
+/// translation attaches is rebuilt as the embedded MSR it came from.
+#[test]
+fn a_generated_rules_process_attribute_is_rendered_from_its_own_record() {
+    use std::collections::BTreeSet;
+    use tamarin_term::lterm::LNTerm;
+    use tamarin_term::term::{f_app, Term};
+    use tamarin_term::vterm::Lit;
+    use tamarin_theory::fact::{Fact, LNFact};
+    use tamarin_theory::sapic::{
+        PlainProcess, Process, ProcessParsedAnnotation, SapicAction, SapicLNFact, SapicLVar,
+    };
+    use tamarin_theory::theory::TheoryItem;
+
+    // `LNTerm`/`LNFact` in the `SapicLVar`-annotated shape a `Process` carries;
+    // the translation's own facts are untyped, as `SapicLVar::untyped` is.
+    fn sapic_term(t: &LNTerm) -> tamarin_theory::sapic::SapicTerm {
+        match t {
+            Term::Lit(Lit::Var(v)) => Term::Lit(Lit::Var(SapicLVar::untyped(*v))),
+            Term::Lit(Lit::Con(n)) => Term::Lit(Lit::Con(*n)),
+            Term::App(f, args) => f_app(*f, args.iter().map(sapic_term).collect()),
+        }
+    }
+    fn sapic_facts(facts: &[LNFact]) -> Vec<SapicLNFact> {
+        facts
+            .iter()
+            .map(|f| Fact::new(f.tag, f.terms.iter().map(sapic_term).collect()))
+            .collect()
+    }
+
+    // The subprocess the translation renders into the attribute: the source
+    // theory's top-level embedded MSR.
+    let src_proc = "theory MrProc begin\n\
+                    rule P: [ In( fst(x.1) ) ] --[ Go( x.1 ) ]-> [ Out( x.1 ) ]\n\
+                    end\n";
+    let proc_thy = parse_theory(src_proc, &[]).expect("parse");
+    let proc_elab = tamarin_theory::elaborate::elaborate(&proc_thy).expect("elaborate");
+    let msr = proc_elab.rules().next().expect("rule P").rule.clone();
+    let process: PlainProcess = Process::Action(
+        SapicAction::Msr {
+            prems: sapic_facts(&msr.premises),
+            acts: sapic_facts(&msr.actions),
+            concs: sapic_facts(&msr.conclusions),
+            rest: Vec::new(),
+            match_vars: BTreeSet::new(),
+        },
+        ProcessParsedAnnotation::empty(),
+        Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+    );
+
+    let src = "theory MrSapicShaped begin\n\
+               rule InfstxGoxOutx_0_ [color=ffffff, issapicrule, role='Process']:\n\
+               \x20 [ State_( ), In( fst(x.1) ) ] --[ Go( x.1 ) ]-> [ State_1( x.1 ), Out( x.1 ) ]\n\
+               end\n";
+    let thy = parse_theory(src, &[]).expect("parse");
+    let mut elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
+    for item in &mut elaborated.items {
+        if let TheoryItem::Rule(r) = item {
+            r.rule.info.attributes.process = Some(process.clone());
+        }
+    }
+
+    let errs = mult_restricted_report(&elaborated, &elaborated.signature.maude_sig);
+    assert_eq!(
+        format_wf_block(&errs),
+        format!(
+            "{HEADER}  \
+             The following rule is not multiplication restricted:\n    \
+             rule (modulo E) InfstxGoxOutx_0_[color=#ffffff,\n\
+             \x20                                    process=\" [ In( fst(x.1) ) ] --[ Go( x.1 ) ]-> [ Out( x.1 ) ];\",\n\
+             \x20                                    issapicrule, role='Process']:\n       \
+             [ State_( ), In( fst(x.1) ) ]\n      \
+             --[ Go( x.1 ) ]->\n       \
+             [ State_1( x.1 ), Out( x.1 ) ]\n  \n  \
+             After replacing reducible function symbols in lhs with variables:\n    \
+             rule (modulo E) InfstxGoxOutx_0_[color=#ffffff,\n\
+             \x20                                    process=\" [ In( fst(x.1) ) ] --[ Go( x.1 ) ]-> [ Out( x.1 ) ];\",\n\
+             \x20                                    issapicrule, role='Process']:\n       \
+             [ State_( ), In( x.2 ) ]\n      \
+             --[ Go( x.1 ) ]->\n       \
+             [ State_1( x.1 ), Out( x.1 ) ]\n  \n    \
+             Variables that occur only in rhs:  x.1\n*/"
+        )
     );
 }

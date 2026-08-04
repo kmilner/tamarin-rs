@@ -124,14 +124,16 @@ impl<'a> IntoIterator for &'a IntrRuleCache {
 ///    ORDER; it only avoids re-deep-copying identical read-only data.
 #[derive(Debug)]
 pub struct ProofContextShared {
-    /// The theory's intruder-rule cache, in the assembly order of
-    /// [`ProofContext::assemble_intruder_rules`]: subterm constructor rules,
-    /// the special rules (`Coerce`, `PubConstr`, `FreshConstr`, `ISend`,
-    /// `IRecv`, plus `IEquality` in diff mode), the MSet/Xor rules, the
-    /// user-symbol destruction rules, then the DH/BP variants.  These let the
-    /// solver discharge `KU(_)` / `KD(_)` goals that arise from
-    /// `In(_)`-fact reasoning.  Held as a shared [`IntrRuleCache`] handle,
-    /// so cloning the bundle shares the rule list instead of copying it.
+    /// The theory's intruder-rule cache: either the once-per-load
+    /// NDC-checked cache injected by the loader, or
+    /// [`ProofContext::assemble_intruder_rules`] (subterm constructor rules,
+    /// the special rules — `Coerce`, `PubConstr`, `FreshConstr`, `ISend`,
+    /// `IRecv`, plus `IEquality` in diff mode — the MSet/Xor rules, the
+    /// user-symbol destruction rules, then the DH/BP variants) run through
+    /// `ndc_check_cache_order`.  These let the solver discharge `KU(_)` /
+    /// `KD(_)` goals that arise from `In(_)`-fact reasoning.  Held as a
+    /// shared [`IntrRuleCache`] handle, so cloning the bundle shares the
+    /// rule list instead of copying it.
     pub intruder_rules: IntrRuleCache,
     /// Precomputed unique sources — for each fact tag with exactly
     /// one producing rule, we cache the producer name. Lets goal
@@ -1058,10 +1060,10 @@ impl ProofContext {
         for (idx, o) in rules.iter().enumerate() {
             // The constraint solver reads only `abstracted_rule` +
             // `variant_substs` (`canonical_rule_inst` /
-            // `rule_insts_with_constrs` in reduction.rs); it never
-            // reads `o.variants`.  We therefore skip the RAW `get variants`
-            // Maude query (the single biggest Maude cost on bilinear
-            // protocols) and compute only the abstracted form + substs.
+            // `rule_insts_with_constrs` in reduction.rs), so the RAW
+            // `get variants` Maude query (the single biggest Maude cost on
+            // bilinear protocols) is skipped and only the abstracted form +
+            // substs are computed.
             //
             // The variant substitutions and the abstracted rule are computed
             // ONCE, HS-faithfully, by `abstract_rule_and_variants` (the

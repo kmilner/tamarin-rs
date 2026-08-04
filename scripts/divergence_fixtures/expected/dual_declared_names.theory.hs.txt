@@ -1,0 +1,48 @@
+theory DualDeclaredNames
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: f/2, fst/1, g/0, pair/2, red/2, snd/1, f/2 [AC], g/2 [AC]
+equations: fst(<x.1, x.2>) = x.1, red(x, y) = x, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) R:
+   [ ]
+  --[ A( ('a' f 'b') ), B( f('a', 'b') ), C( f('c', 'd') ), D( g ) ]->
+   [ ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) R2:
+   [ In( f(x, y) ) ] --> [ Out( ('a' f y) ) ]
+
+  /* has exactly the trivial AC variant */
+
+lemma L1:
+  all-traces "∀ #i. (Test( f('b', red('c', 'd')) ) @ #i) ⇒ (⊥)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ #i. (Test( f('b', red('c', 'd')) ) @ #i)"
+*/
+by sorry
+
+lemma L2:
+  all-traces "∀ #i. (Test( f(f('z', 'a'), 'b') ) @ #i) ⇒ (⊥)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ #i. (Test( f(f('z', 'a'), 'b') ) @ #i)"
+*/
+by sorry
+
+lemma L3:
+  all-traces "∀ #i. (Test( ('a' f 'z' f red('b', 'c')) ) @ #i) ⇒ (⊥)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ #i. (Test( ('a' f 'z' f red('b', 'c')) ) @ #i)"
+*/
+by sorry
+
+
+
+end

@@ -116,7 +116,7 @@ fn subterms(args: &[LNTerm]) -> Vec<Position> {
     out
 }
 
-/// `constantPositions` (SubtermRule.hs:56-69): for an `FApp _ args` LHS,
+/// `constantPositions` (SubtermRule.hs:67-71): for an `FApp _ args` LHS,
 /// the sibling-subterm positions of its args; if the LHS contains a
 /// private function symbol, or no sibling-subterm is found, every
 /// position of the LHS.
@@ -143,14 +143,14 @@ fn constant_positions(lhs: &LNTerm) -> Vec<Position> {
 
 /// `rRuleToCtxtStRule`: convert an `RRule` to a `CtxtStRule` if possible.
 ///
-/// DELIBERATE DIVERGENCE (documented upstream bug): on a
-/// ground-RHS equation whose LHS is a bare literal (`equations: x = c`), HS
-/// aborts the whole run — `constantPositions` (SubtermRule.hs:67-71) has only
-/// an `FApp` clause under `-fno-warn-incomplete-patterns`, and the bottom is
-/// forced when the rule enters the `stRules` Set (Signature.hs:162-164).  For
-/// the NON-ground sibling (`x = h(x)`) HS instead fails cleanly with "Not a
-/// correct equation: …" (Theory/Text/Parser/Signature.hs:232-234).  The port
-/// answers `None` here, routing the ground case into that same clean failure.
+/// DELIBERATE DIVERGENCE (documented upstream bug): on a ground-RHS equation
+/// whose LHS is a bare literal (`equations: x = c`), HS aborts the whole run —
+/// `constantPositions` (SubtermRule.hs:67-71) has only an `FApp` clause under
+/// `-fno-warn-incomplete-patterns`, and the bottom is forced when the rule
+/// enters the `stRules` Set (Term/Maude/Signature.hs:181-183).  For the
+/// NON-ground sibling (`x = h(x)`) HS instead fails cleanly with "Not a correct
+/// equation: …" (Theory/Text/Parser/Signature.hs:247-249).  The port answers
+/// `None` here, routing the ground case into that same clean failure.
 pub fn rrule_to_ctxt_st_rule(rule: &RRule<LNTerm>) -> Option<CtxtStRule> {
     if frees(&rule.rhs).is_empty() {
         if !matches!(rule.lhs, Term::App(_, _)) {

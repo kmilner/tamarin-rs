@@ -1626,8 +1626,8 @@ pub async fn graph_json(
             let Some(sys) = system else {
                 return not_found();
             };
-            // No backend abbreviation on this arm; the seal is the serialiser's
-            // entry condition, so the system crosses into it as a render copy.
+            // No backend abbreviation on this arm; the serialiser takes a
+            // `RenderSystem`, which the proof arm gets back from `abbrev`.
             let sys = crate::graph::RenderSystem::from_prover(sys);
             json_graph_response(crate::graph::json::sequents_to_json_pretty(
                 &opts,

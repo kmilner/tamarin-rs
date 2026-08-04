@@ -92,7 +92,6 @@ fn multiplication_restriction_topic_prints_its_underlined_header() {
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
     let errs = tamarin_theory::mult_restricted::mult_restricted_report(
-        &thy,
         &elaborated,
         &elaborated.signature.maude_sig,
     );
@@ -120,7 +119,7 @@ fn multiplication_restriction_topic_prints_its_underlined_header() {
     );
 }
 
-/// The paragraph every `checkTerms` body ends with (Wellformedness.hs:975-983),
+/// The paragraph every `checkTerms` body ends with (Wellformedness.hs:968-973),
 /// already at the two-space indent `ppTopic` gives a group's bodies.
 const ALLOWED_LINES: &[&str] = &[
     "  The only allowed terms are public constants and bound node and",

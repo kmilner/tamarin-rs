@@ -188,6 +188,20 @@ pub fn haskell_capture(name: &str) -> String {
         .unwrap_or_else(|e| panic!("read capture {}: {}", path.display(), e))
 }
 
+/// GET `path`, assert the status and content type of Yesod's Not Found page,
+/// and hand the body back for the caller's own assertion.
+#[allow(dead_code)]
+async fn not_found_body(s: &TestServer, path: &str) -> String {
+    let res = s.client.get(s.url(path)).send().await.expect("send");
+    assert_eq!(res.status(), 404, "{path} must be a 404");
+    assert_eq!(
+        content_type(&res),
+        "text/html; charset=utf-8",
+        "{path} must carry the Not Found page's content type"
+    );
+    res.text().await.expect("text")
+}
+
 /// Assert that `path` answers Yesod's Not Found page: 404, the error page's
 /// content type, and the `defaultErrorHandler` widget — `<h1>Not Found</h1>`
 /// over the request's raw path.  Every `notFound` carries this one page
@@ -195,33 +209,18 @@ pub fn haskell_capture(name: &str) -> String {
 /// shared assertion for the routes that answer a miss without a capture.
 #[allow(dead_code)]
 pub async fn assert_not_found_page(s: &TestServer, path: &str) {
-    let res = s.client.get(s.url(path)).send().await.expect("send");
-    assert_eq!(res.status(), 404, "{path} must be a 404");
-    assert_eq!(
-        content_type(&res),
-        "text/html; charset=utf-8",
-        "{path} must carry the Not Found page's content type"
-    );
-    let body = res.text().await.expect("text");
+    let body = not_found_body(s, path).await;
     assert!(
         body.contains(&format!("<h1>Not Found</h1>\n<p>{path}</p>\n")),
         "{path} must carry the Not Found widget over its own path; got: {body}"
     );
 }
 
-/// The same page, pinned byte-for-byte: 404, the page's content type, and the
-/// captured Haskell body.
+/// The same page, pinned byte-for-byte against the captured Haskell body.
 #[allow(dead_code)]
 pub async fn assert_not_found_capture(s: &TestServer, path: &str, capture: &str) {
-    let res = s.client.get(s.url(path)).send().await.expect("send");
-    assert_eq!(res.status(), 404, "{path} must be a 404");
     assert_eq!(
-        content_type(&res),
-        "text/html; charset=utf-8",
-        "{path} must carry the Not Found page's content type"
-    );
-    assert_eq!(
-        res.text().await.expect("text"),
+        not_found_body(s, path).await,
         haskell_capture(capture),
         "{path}"
     );

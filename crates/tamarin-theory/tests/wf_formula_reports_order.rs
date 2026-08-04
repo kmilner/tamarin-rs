@@ -31,7 +31,7 @@ fn wf_block(src: &str) -> String {
     format_wf_block(&errs)
 }
 
-/// The paragraph every `checkTerms` body ends with (Wellformedness.hs:975-983),
+/// The paragraph every `checkTerms` body ends with (Wellformedness.hs:968-973),
 /// already at the two-space indent `ppTopic` gives a group's bodies.
 const ALLOWED_LINES: &[&str] = &[
     "  The only allowed terms are public constants and bound node and",

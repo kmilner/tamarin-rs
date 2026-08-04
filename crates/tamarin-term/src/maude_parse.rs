@@ -448,10 +448,9 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
         // ordinary non-AC function whose NAME contains a marker (`functions:
         // tamXCAbar/1` -> `tamXCFUtamXCAbar`) is rebuilt as AC: at arity 1
         // `fAppAC _ [a] = a` deletes the application, at arity >= 2 it
-        // fabricates a flattened/sorted AC term (a documented upstream
-        // bug).  RS classifies by
-        // decoding the attribute block instead and deliberately diverges from
-        // upstream on exactly those names.
+        // fabricates a flattened/sorted AC term.  RS classifies by decoding the
+        // attribute block instead and deliberately diverges from that upstream
+        // bug on exactly those names.
         if !args.is_empty() && is_ac_fct_ident(ident) {
             return crate::term::f_app_acfct(parse_fun_ac_sym(ident), args);
         }
@@ -622,8 +621,8 @@ mod tests {
     /// containment guards (Parser.hs:379-382), classifies it as AC, and
     /// `fAppAC _ [a] = a` (Raw.hs:121) deletes the application.  RS decodes
     /// the attribute block instead — the AC slot holds `F` — so the free
-    /// symbol `tamXCAfoo/1` survives.  Deliberate divergence from a
-    /// documented upstream bug.
+    /// symbol `tamXCAfoo/1` survives.  Deliberate divergence from that
+    /// upstream bug.
     #[test]
     fn parse_unary_ident_containing_ac_marker_does_not_collapse() {
         let t = parse_reduce_reply(b"result Msg: tamXCFUtamXCAfoo(x1:Msg)\n").unwrap();
@@ -648,8 +647,7 @@ mod tests {
     /// fabricates a term: `fAppAC` flattens and SORTS the arguments
     /// (Raw.hs:122-129), so `tamXCAfoo(c(2), c(1))` would come back as an AC
     /// application over `[c(1), c(2)]`.  RS keeps the free symbol and Maude's
-    /// argument order.  Deliberate divergence from a documented upstream
-    /// bug.
+    /// argument order.  Deliberate divergence from that upstream bug.
     #[test]
     fn parse_binary_ident_containing_ac_marker_keeps_arg_order() {
         let t = parse_reduce_reply(b"result Msg: tamXCFUtamXCAfoo(c(2), c(1))\n").unwrap();

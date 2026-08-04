@@ -640,9 +640,8 @@ impl BinOp {
     /// (Term/Term.hs:305), i.e. its name with the spaces included, so that one
     /// arm owns a `String`.
     ///
-    /// This is the single separator table.  Printers that need a `&'static str`
-    /// (the `LNTerm` printer hands separators to a `Doc`) intern the owned arm
-    /// instead of re-spelling the builtins.
+    /// This is the single separator table: printers that need a `&'static str`
+    /// (the `LNTerm` printer hands separators to a `Doc`) intern the owned arm.
     pub fn separator(&self) -> std::borrow::Cow<'static, str> {
         use std::borrow::Cow;
         match self {

@@ -3032,8 +3032,7 @@ fn is_perm_subst(
     // `others_shared` also holds when neither `v1` nor `v2` is in the domain,
     // and the panics below then abort the prover — faithful, since HS's
     // `fromMaybe (error ...)` images are demanded under the same condition
-    // (EquationStore.hs:599-604).  Should a corpus theory ever trip it, the
-    // answer is a graceful `AddEqsError` plus an upstream-bug write-up.
+    // (EquationStore.hs:599-604).
     let others_shared = s1
         .iter()
         .all(|(x, t)| x == v1 || x == v2 || s2.image_of(x).is_some_and(|u| u == t));

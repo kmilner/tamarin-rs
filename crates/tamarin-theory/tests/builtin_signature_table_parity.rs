@@ -10,8 +10,8 @@
 //! `stFunSyms . sig <$> getState`, the signature the `builtins` parser merged
 //! (`Theory/Text/Parser/Signature.hs:102-135`).  The Rust port has two: the
 //! parser needs the symbols at parse time to reproduce `function`'s conflict
-//! diagnostics with a parsec frame, but it cannot depend on `tamarin-theory`
-//! (or on `tamarin-term`'s `MaudeSig`) without a dependency cycle, so it
+//! diagnostics with a parsec frame, but `tamarin-theory` — which owns the
+//! builtin-name → `MaudeSig` mapping — depends on the parser, so the parser
 //! carries a static table instead.  This test pins the two together — the
 //! `MaudeSig` side is what `elaborate`'s `builtin_sig` / `builtin_fun_attrs`
 //! read, so a drift here is a drift in what the two stages believe a builtin
@@ -50,6 +50,26 @@ fn builtin_sig(name: &str) -> Option<MaudeSig> {
     })
 }
 
+/// The `builtinsNames` rows that carry a signature (Signature.hs:78-86), in the
+/// order that list is walked.
+const BUILTINS_WITH_SIGNATURE: [&str; 15] = [
+    "locations-report",
+    "diffie-hellman",
+    "bilinear-pairing",
+    "multiset",
+    "xor",
+    "symmetric-encryption",
+    "asymmetric-encryption",
+    "signing",
+    "dest-pairing",
+    "dest-symmetric-encryption",
+    "dest-asymmetric-encryption",
+    "dest-signing",
+    "revealing-signing",
+    "hashing",
+    "natural-numbers",
+];
+
 /// Every builtin the parser's table names must resolve to a `MaudeSig`, and the
 /// row must be that signature's `st_fun_syms` — same names, same arities, same
 /// privacy, same constructability, in the same (ascending set) order.
@@ -86,23 +106,7 @@ fn parser_builtin_table_matches_the_maude_signatures() {
 /// row without a signature (Signature.hs:84) and is absent from both sides.
 #[test]
 fn every_builtin_with_a_signature_is_in_the_parser_table() {
-    for name in [
-        "locations-report",
-        "diffie-hellman",
-        "bilinear-pairing",
-        "multiset",
-        "xor",
-        "symmetric-encryption",
-        "asymmetric-encryption",
-        "signing",
-        "dest-pairing",
-        "dest-symmetric-encryption",
-        "dest-asymmetric-encryption",
-        "dest-signing",
-        "revealing-signing",
-        "hashing",
-        "natural-numbers",
-    ] {
+    for name in BUILTINS_WITH_SIGNATURE {
         assert!(
             builtin_st_fun_syms(name).is_some(),
             "builtin `{name}` is missing from the parser's table"
@@ -121,24 +125,5 @@ fn every_builtin_with_a_signature_is_in_the_parser_table() {
 #[test]
 fn parser_builtin_table_is_in_builtins_names_order() {
     let order: Vec<&str> = builtin_st_fun_sym_names().collect();
-    assert_eq!(
-        order,
-        vec![
-            "locations-report",
-            "diffie-hellman",
-            "bilinear-pairing",
-            "multiset",
-            "xor",
-            "symmetric-encryption",
-            "asymmetric-encryption",
-            "signing",
-            "dest-pairing",
-            "dest-symmetric-encryption",
-            "dest-asymmetric-encryption",
-            "dest-signing",
-            "revealing-signing",
-            "hashing",
-            "natural-numbers",
-        ]
-    );
+    assert_eq!(order, BUILTINS_WITH_SIGNATURE);
 }

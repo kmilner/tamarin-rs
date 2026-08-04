@@ -1084,9 +1084,9 @@ mod tests {
             "the Ac-headed LHS must show up"
         );
 
-        // Mutating the `pub` field directly, with no `refresh` afterwards —
-        // a rule removed and re-added at the same cardinality is the case a
-        // length check over a parallel vector could not catch.
+        // Mutating the `pub` field directly, with no `refresh` afterwards:
+        // the flags follow a removal and a re-insertion that together leave
+        // the rule count unchanged.
         assert!(sig.st_rules.remove(&fst_rule()));
         assert!(flags_match(&sig.st_rules));
         assert!(sig.st_rules.insert(snd_dest_rule()));

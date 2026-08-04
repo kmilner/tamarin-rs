@@ -230,7 +230,8 @@ mod tests {
                    restriction rC: \"All ~q #i. A(~q) @ i ==> F\"\n\
                    lemma lD: \"All ~r #j. A(~r) @ j ==> F\"\n\
                    end\n";
-        let got: Vec<(&str, &str)> = reports(src)
+        let errs = reports(src);
+        let got: Vec<(&str, &str)> = errs
             .iter()
             .map(|e| {
                 let item = e
@@ -243,7 +244,6 @@ mod tests {
                     item.split_whitespace().nth(1).expect("item name"),
                 )
             })
-            .map(|(t, n)| (t, Box::leak(n.to_string().into_boxed_str()) as &str))
             .collect();
         assert_eq!(
             got,

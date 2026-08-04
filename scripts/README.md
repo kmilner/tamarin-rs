@@ -149,7 +149,7 @@ All but `ac_marker_collapse` must reproduce the pinned oracle's bytes; that one
 must NOT. `check.sh` asserts BOTH sides of it, so it goes red if the port
 drifts, if the divergence disappears, or if it changes shape.
 
-`bump_submodule.sh`'s checklist runs both scripts: `capture.sh` re-reads the
+`bump_submodule.sh`'s checklist lists both scripts: `capture.sh` re-reads the
 fixtures from the new oracle, and `git diff divergence_fixtures/expected/` is
 then upstream behaviour moving under them.
 

@@ -324,7 +324,8 @@ pub enum IntrRuleACInfo {
     /// corresponds to (head first).
     ///
     /// Field order is load-bearing: the derived `Ord`/`Hash` compare fields
-    /// in declaration order, and rule-info ordering reaches emitted output.
+    /// in declaration order, so it must keep matching the positional order of
+    /// the HS constructor.
     DestrRule {
         name: Vec<u8>,
         remaining_applications: i64,
@@ -1016,13 +1017,9 @@ mod tests {
 
     /// `IntrRuleACInfo`'s derived `Ord`/`Hash` walk the variants in
     /// declaration order and, within a variant, the fields in declaration
-    /// order — and that order reaches emitted output through every
-    /// `BTreeSet`/`sort` over rule infos.  Pin both: the variant sequence
-    /// `ConstrRule < DestrRule < Coerce`, and, inside `DestrRule`, `name`
-    /// dominating `remaining_applications` dominating
-    /// `rhs_is_proper_subterm` dominating `rhs_is_constant` dominating
-    /// `funs` (HS `DestrRule BC.ByteString Int Bool Bool [FunSym]`,
-    /// Rule.hs:541).
+    /// order.  Pin both against a reshuffle: the variant sequence
+    /// `ConstrRule < DestrRule < Coerce`, and the `DestrRule` field order of
+    /// HS `DestrRule BC.ByteString Int Bool Bool [FunSym]` (Rule.hs:541).
     #[test]
     fn intr_rule_ac_info_ord_follows_declaration_order() {
         let sym = |n: &[u8]| {

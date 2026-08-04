@@ -2573,16 +2573,17 @@ impl<'ctx> Reduction<'ctx> {
                 // `[STATE] solved_formulas=N` count and avoids
                 // accumulating per-Conj-child duplicates that don't
                 // semantically need tracking — Conj bodies aren't
-                // "re-inserted" anywhere; only top-level insert_implied_formulas_pass
-                // outputs reach the Atom branch with mark=True.
+                // "re-inserted" anywhere; only top-level
+                // `insert_implied_formulas_pass` outputs reach the Atom
+                // branch with mark=True.
                 //
                 // Dedup-by-normalize still applies at mark=True: Maude
                 // unification mints fresh `~mw#N` witnesses per call,
                 // so structurally-identical derivations from
-                // insert_implied_formulas_pass would otherwise accumulate.  Compare
-                // normalized form (apply eq-store, then normalize
-                // witness LVars `~mw#N → ~mw#0`, then alpha-canon
-                // GGuarded bound vars).
+                // `insert_implied_formulas_pass` would otherwise
+                // accumulate.  Compare normalized form (apply eq-store,
+                // then normalize witness LVars `~mw#N → ~mw#0`, then
+                // alpha-canon GGuarded bound vars).
                 if mark {
                     // σ rebuilt only when the subst axis moved since the
                     // cached copy (see `eq_vs_cache`); a stamp hit is
@@ -3079,7 +3080,7 @@ pub enum IsAcConstructor {
 /// premises and nowhere else.  HS forces `head prems` / `prems !! 1` lazily
 /// and `error`s on any other premise shape; RS reads the same two slots and
 /// answers `OtherRule` instead, which leaves every unifier arm in place.
-pub(crate) fn ku_vars(rule: &crate::rule::RuleACInst) -> IsAcConstructor {
+fn ku_vars(rule: &crate::rule::RuleACInst) -> IsAcConstructor {
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
     let ku_var = |f: &crate::fact::LNFact| match &*f.terms {

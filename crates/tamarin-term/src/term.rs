@@ -191,11 +191,57 @@ pub fn f_app<A: Ord + Clone>(fsym: FunSym, ts: Vec<Term<A>>) -> Term<A> {
     }
 }
 
+/// The panic payload prefix that marks a rendered HS `error` (see
+/// [`hs_error_text`]).  A control character no HS message contains, so it can
+/// never collide with a payload that merely starts with the same words.
+const HS_ERROR_MARKER: &str = "\u{1}tamarin-hs-error\u{1}";
+
+/// The package id GHC stamps into the `HasCallStack` frames of this crate's
+/// HS counterpart, as the pinned oracle build prints it.  Refreshed at a
+/// submodule bump together with [`FAPP_AC_EMPTY_SITE`].
+const TERM_ERROR_PACKAGE: &str = "tamarin-prover-term-1.13.0-HEWlVEyEBKAFHPl3i5M61g";
+
+/// `LINE:COLUMN` of `fAppAC`'s empty-list `error` in
+/// `lib/term/src/Term/Term/Raw.hs` — see [`TERM_ERROR_PACKAGE`].  The frame
+/// names the path relative to the `tamarin-prover-term` package root, i.e.
+/// `src/Term/Term/Raw.hs`.
+const FAPP_AC_EMPTY_SITE: &str = "120:20";
+
+/// HS `error "Term.fAppAC: empty argument list"` (Raw.hs:120).
+const FAPP_AC_EMPTY_MSG: &str = "Term.fAppAC: empty argument list";
+
+/// Raise the HS `error` at `call_site`, GHC-style.
+///
+/// GHC has no `Result` to return here: `error` throws, and with nothing
+/// catching it the runtime prints `tamarin-prover: ` ++ `displayException`
+/// (message + `HasCallStack` frame) on stderr and exits 1.  `f_app_ac`'s
+/// callers reach into every layer of the port and cannot carry a `Result`
+/// either, so the port raises a panic whose payload carries exactly the text
+/// GHC would print; the binary's panic hook recognises it via
+/// [`hs_error_text`] and reproduces the stream and exit code.
+fn hs_error(message: &str, call_site: String) -> ! {
+    panic!("{HS_ERROR_MARKER}{message}\nCallStack (from HasCallStack):\n  error, called at {call_site}");
+}
+
+/// The rendered HS `error` a panic payload carries, or `None` for an ordinary
+/// Rust panic.  The text is `displayException`'s: the message, then the
+/// one-frame `HasCallStack` block, with no trailing newline.
+pub fn hs_error_text(payload: &(dyn std::any::Any + Send)) -> Option<&str> {
+    payload
+        .downcast_ref::<String>()?
+        .strip_prefix(HS_ERROR_MARKER)
+}
+
 /// AC smart constructor: flattens nested same-symbol applications, sorts
 /// the resulting argument list, and unwraps singletons.
 pub fn f_app_ac<A: Ord + Clone>(sym: AcSym, args: Vec<Term<A>>) -> Term<A> {
     if args.is_empty() {
-        panic!("f_app_ac: empty argument list");
+        hs_error(
+            FAPP_AC_EMPTY_MSG,
+            format!(
+                "src/Term/Term/Raw.hs:{FAPP_AC_EMPTY_SITE} in {TERM_ERROR_PACKAGE}:Term.Term.Raw"
+            ),
+        );
     }
     if args.len() == 1 {
         return args.into_iter().next().unwrap();
@@ -665,5 +711,29 @@ mod tests {
             "BVar::Bound must sort before BVar::Free \
                  (Haskell LTerm.hs:451 declaration order)"
         );
+    }
+
+    /// `fAppAC _ [] = error "Term.fAppAC: empty argument list"` (Raw.hs:120).
+    /// The payload carries GHC's `displayException` text so the binary's hook
+    /// can print it verbatim; the end-to-end stderr and exit code are pinned in
+    /// `tamarin-prover/tests/ac_empty_args_error.rs`.
+    #[test]
+    fn empty_ac_argument_list_raises_the_hs_error_payload() {
+        use crate::function_symbols::AcSym;
+
+        let raised = std::panic::catch_unwind(|| f_app_ac::<u32>(AcSym::Mult, Vec::new()))
+            .expect_err("an empty argument list must raise");
+        assert_eq!(
+            hs_error_text(raised.as_ref()),
+            Some(
+                "Term.fAppAC: empty argument list\nCallStack (from HasCallStack):\n  \
+                 error, called at src/Term/Term/Raw.hs:120:20 in \
+                 tamarin-prover-term-1.13.0-HEWlVEyEBKAFHPl3i5M61g:Term.Term.Raw"
+            )
+        );
+        // An ordinary Rust panic keeps Rust's own report.
+        let plain =
+            std::panic::catch_unwind(|| panic!("boom")).expect_err("the closure must panic");
+        assert_eq!(hs_error_text(plain.as_ref()), None);
     }
 }

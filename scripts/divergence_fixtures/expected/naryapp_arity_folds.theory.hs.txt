@@ -1,0 +1,31 @@
+theory NaryappArityFolds
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: f/0, fst/1, g/2, h/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+macros: m( x ) =  <x, x>
+
+rule (modulo E) r:
+   [ ]
+  -->
+   [
+   Out( h(<'a', 'b'>) ), Out( m(<'c', 'd'>) ), Out( f ), Out( g('e', 'f') )
+   ]
+
+  /*
+  rule (modulo AC) r:
+     [ ]
+    -->
+     [
+     Out( h(<'a', 'b'>) ), Out( <<'c', 'd'>, 'c', 'd'> ), Out( f ),
+     Out( g('e', 'f') )
+     ]
+  */
+
+
+
+end

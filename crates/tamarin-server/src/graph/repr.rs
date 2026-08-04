@@ -266,9 +266,8 @@ fn edge_key(e: &GEdge) -> EdgeKey {
 ///      top-level `GraphRepr` fields,
 ///   4. leaves cross-cluster + non-clustered nodes/edges in place.
 ///
-/// `group` receives the nodes moved out of `repr` — grouping them in place
-/// would alias `repr.nodes` — whose un-clustered remainder is put back at the
-/// end.
+/// `group` receives the nodes moved out of `repr` (grouping them in place would
+/// alias `repr.nodes`); their un-clustered remainder is put back at the end.
 pub fn add_cluster(
     repr: &mut GraphRepr,
     group: impl for<'a> Fn(&'a [GNode]) -> BTreeMap<String, Vec<&'a GNode>>,

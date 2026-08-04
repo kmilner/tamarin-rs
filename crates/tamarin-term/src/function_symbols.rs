@@ -320,10 +320,9 @@ pub fn plain_show_bytes(name: &[u8]) -> String {
 
 // -- Derived `Show` of the attribute enums -------------------------------------
 //
-// The Rust variant names are spelled in Rust's naming convention, so
-// `{:?}` would print `IsNdc` where GHC prints `IsNDC`.  These three
-// functions are the single source of truth for the Haskell spellings, and
-// every port that renders an attribute into output goes through them.
+// The Rust variant names follow Rust's naming convention, so `{:?}` would
+// print `IsNdc` where GHC prints `IsNDC`; these three functions spell the
+// GHC constructor names.
 
 /// Derived `Show` of `Privacy` (FunctionSymbols.hs:111-112).
 pub fn show_privacy(privacy: Privacy) -> &'static str {
@@ -665,10 +664,8 @@ mod tests {
     }
 
     /// Every variant's derived-`Show` spelling, which is GHC's constructor
-    /// name — not the Rust one (`IsNdc` renders as `IsNDC`).  These strings
-    /// reach output through `show_acfct_sym`, the elaborator's signature
-    /// conflict messages and the graph JSON, so they are pinned per variant
-    /// rather than only where they are composed.
+    /// name — not the Rust one (`IsNdc` renders as `IsNDC`).  Pinned per
+    /// variant, not just at the tuples `show_acfct_sym` composes them into.
     #[test]
     fn attribute_shows_match_the_haskell_constructor_names() {
         assert_eq!(show_privacy(Privacy::Private), "Private");

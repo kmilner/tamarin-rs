@@ -129,8 +129,10 @@ fn collect_action_vars(
             // are not `v`).  They seed the `renameUnique` avoidance set, so a
             // variable occurring ONLY in a restriction still shifts the fresh
             // indices minted for the rest of the process.
-            for lv in cond_formula_free_lvars_iter(rest) {
-                out.insert(SapicLVar::untyped(lv));
+            for f in rest {
+                for lv in cond_formula_free_lvars(f) {
+                    out.insert(SapicLVar::untyped(lv));
+                }
             }
         }
         SapicAction::Rep => {}
@@ -174,14 +176,9 @@ fn collect_comb_vars(
     }
 }
 
-/// [`cond_formula_free_lvars`] over a list of formulas, in order.
-fn cond_formula_free_lvars_iter(fs: &[tamarin_parser::ast::Formula]) -> Vec<LVar> {
-    fs.iter().flat_map(cond_formula_free_lvars).collect()
-}
-
-/// Free `LVar`s of a `Cond` parser-AST formula (vars not bound by an enclosing
-/// quantifier).  Used to seed the `renameUnique` avoidance set and as the
-/// rename domain.
+/// Free `LVar`s of a parser-AST process formula — a `Cond` condition or an
+/// MSR's embedded `_restrict` (vars not bound by an enclosing quantifier).
+/// Used to seed the `renameUnique` avoidance set and as the rename domain.
 fn cond_formula_free_lvars(f: &tamarin_parser::ast::Formula) -> Vec<LVar> {
     let mut out = Vec::new();
     crate::convert::fold_free_vars(f, &mut |v, _bound| {

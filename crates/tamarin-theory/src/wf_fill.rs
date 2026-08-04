@@ -31,7 +31,7 @@
 //!
 //! Width: the report is baked into the theory by `addComment`, which renders
 //! with HughesPJ's DEFAULT style — `lineLength = 100`, `ribbonsPerLine = 1.5`,
-//! so `ribbonLen = round (100 / 1.5) = 67` (TheoryObject.hs:716-717) — not the
+//! so `ribbonLen = round (100 / 1.5) = 67` (TheoryObject.hs:717-718) — not the
 //! console's 110/73.  See [`crate::mult_restricted`], which renders its own
 //! entry bodies at the same width for the same reason.
 
@@ -40,7 +40,7 @@ use tamarin_parser::wf::{WfDoc, WfFill};
 use crate::pretty_hpj::{self as hpj, Doc};
 
 /// `lineLength` of the style HughesPJ's `render` uses, reached from HS through
-/// `addComment`'s `render` (TheoryObject.hs:716-717).
+/// `addComment`'s `render` (TheoryObject.hs:717-718).
 const WF_LINE_LENGTH: usize = 100;
 /// `ribbonLen = round (100 / 1.5) = 67` for [`WF_LINE_LENGTH`].
 const WF_RIBBON: usize = 67;

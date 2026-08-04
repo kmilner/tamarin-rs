@@ -28,8 +28,8 @@
 //! - [`pretty_lnterm`] returns a `String` (port of `prettyLNTerm`).
 //! - `impl Display for LNTerm` (technically on `Term<Lit<Name, LVar>>`).
 
-use std::cell::RefCell;
 use std::fmt;
+use std::sync::{OnceLock, RwLock};
 
 use tamarin_utils::FastMap;
 
@@ -233,28 +233,33 @@ pub fn ac_op_symbol(op: AcSym) -> &'static str {
     }
 }
 
-thread_local! {
-    /// Per-thread cache of user-defined AC separators, keyed on the IDENTITY
-    /// of the symbol's interned name.  `AcFctSym::new` draws `name` from the
-    /// byte intern pool, so the pointer is valid for the whole process and
-    /// equal names share one address; `(ptr, len)` therefore names exactly
-    /// one immutable byte string, and a hit returns the same `&'static str`
-    /// the interning path below would.  Bounded per worker thread by the
-    /// theory's user-defined AC signature.
-    static AC_FCT_OP_L1: RefCell<FastMap<(usize, usize), &'static str>> =
-        RefCell::new(FastMap::default());
+/// One process-wide cache of user-defined AC separators, keyed on the IDENTITY
+/// of the symbol's interned name.  `AcFctSym::new` draws `name` from the byte
+/// intern pool, so the pointer is valid for the whole process and equal names
+/// share one address; `(ptr, len)` therefore names exactly one immutable byte
+/// string.  Every entry is a canonical `&'static str` from the string intern
+/// pool, determined by the key's content alone, so all threads see the one
+/// separator per name whether they hit or miss.  Bounded by the theory's
+/// user-defined AC signature.
+fn ac_fct_op_cache() -> &'static RwLock<FastMap<(usize, usize), &'static str>> {
+    static C: OnceLock<RwLock<FastMap<(usize, usize), &'static str>>> = OnceLock::new();
+    C.get_or_init(|| RwLock::new(FastMap::default()))
 }
 
-/// [`ac_fct_op_symbol`] for a symbol name that is already interned: the
-/// separator comes out of the per-thread cache, so rendering a user-AC
+/// [`ac_fct_op_symbol`] for a symbol name that is already interned: a hit is a
+/// read-locked lookup on the `(ptr, len)` key, so rendering a user-AC
 /// application allocates nothing.
 fn ac_fct_op_symbol_interned(name: &'static [u8]) -> &'static str {
     let key = (name.as_ptr() as usize, name.len());
-    if let Some(sep) = AC_FCT_OP_L1.with(|c| c.borrow().get(&key).copied()) {
+    if let Some(&sep) = ac_fct_op_cache().read().unwrap().get(&key) {
         return sep;
     }
+    // Resolved before the write lock is taken: `ac_fct_op_symbol` locks the
+    // intern pool, and holding both at once would nest the two locks.  A
+    // concurrent miss on the same key resolves to the same canonical pointer,
+    // so the losing insert overwrites the entry with an identical value.
     let sep = ac_fct_op_symbol(&String::from_utf8_lossy(name));
-    AC_FCT_OP_L1.with(|c| c.borrow_mut().insert(key, sep));
+    ac_fct_op_cache().write().unwrap().insert(key, sep);
     sep
 }
 
@@ -502,6 +507,59 @@ mod tests {
             NdcState::NotNdc,
         );
         assert_eq!(ac_op_symbol(AcSym::AcFct(longer)), " opq ");
+    }
+
+    /// The separator cache is shared by every thread: a symbol first rendered
+    /// on one thread yields the identical `&'static str` — same pointer, same
+    /// bytes — on all the others.
+    ///
+    /// Bytes from the oracle on a theory declaring `f/2 [AC]`, `op/2 [AC]`,
+    /// `opq/2 [AC]` and a rule emitting `f(~a,~b)`, `op(~a,~b)`, `opq(~a,~b)`;
+    /// it renders them `(~a f ~b)`, `(~a op ~b)`, `(~a opq ~b)` (HS
+    /// `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts`, Term.hs:305).
+    #[test]
+    fn ac_fct_separator_shared_across_threads() {
+        use crate::function_symbols::{AcFctSym, AcSym, NdcState};
+        let syms: Vec<AcSym> = [&b"f"[..], b"op", b"opq"]
+            .iter()
+            .map(|n| {
+                AcSym::AcFct(AcFctSym::new(
+                    n.to_vec(),
+                    Privacy::Public,
+                    Constructability::Constructor,
+                    NdcState::NotNdc,
+                ))
+            })
+            .collect();
+        let a = var("a", LSort::Fresh);
+        let b = var("b", LSort::Fresh);
+        let render = |syms: &[AcSym]| -> Vec<(String, usize)> {
+            syms.iter()
+                .map(|o| {
+                    let t = f_app_ac(*o, vec![a.clone(), b.clone()]);
+                    (pretty_lnterm(&t), ac_op_symbol(*o).as_ptr() as usize)
+                })
+                .collect()
+        };
+        let expected = ["(~a f ~b)", "(~a op ~b)", "(~a opq ~b)"];
+
+        let first = render(&syms);
+        let rendered: Vec<&str> = first.iter().map(|(s, _)| s.as_str()).collect();
+        assert_eq!(rendered, expected);
+
+        // Warm on this thread, then read from four others at once.
+        let others: Vec<Vec<(String, usize)>> = std::thread::scope(|s| {
+            let hs: Vec<_> = (0..4)
+                .map(|_| {
+                    let syms = syms.clone();
+                    s.spawn(move || render(&syms))
+                })
+                .collect();
+            hs.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        for other in &others {
+            assert_eq!(other, &first);
+        }
     }
 
     #[test]

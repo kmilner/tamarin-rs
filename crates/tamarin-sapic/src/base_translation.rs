@@ -1387,14 +1387,13 @@ mod tests {
         assert_eq!(txr, Some(tx));
     }
 
-    // User-`[AC]` symbols must lower INFIX (`BinOp::AcFct`, left-folded),
-    // mirroring `pretty_theory::lnterm_to_parser` and HS `prettyTerm`
-    // (Term/Term.hs:305): a prefix `App("add", …)` here reaches emitted
-    // bytes un-canonicalized via `subst_cond_formula` → `pretty_sapic_comb`
-    // (SAPIC `if` predicates), diverging from the oracle in both the
-    // rendered predicate and the derived rule/restriction names.  No
-    // corpus theory combines SAPIC with a user `[AC]` symbol, so this
-    // shape is only pinned here.
+    // User-`[AC]` symbols must lower INFIX (`BinOp::AcFct`, left-folded), as
+    // HS `prettyTerm` renders them (Term/Term.hs:305): a prefix
+    // `App("add", …)` here reaches emitted bytes un-canonicalized via
+    // `subst_cond_formula` → `pretty_sapic_comb` (SAPIC `if` predicates),
+    // diverging from the oracle in both the rendered predicate and the
+    // derived rule/restriction names.  No corpus theory combines SAPIC with a
+    // user `[AC]` symbol, so this shape is only pinned here.
     #[test]
     fn user_ac_terms_lower_infix() {
         use tamarin_term::function_symbols::{AcFctSym, Constructability, NdcState, Privacy};

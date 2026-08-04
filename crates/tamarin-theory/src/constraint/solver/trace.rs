@@ -518,9 +518,9 @@ pub fn trace_state(sys: &crate::constraint::system::System) {
         // content (the canonical [STATE] line above suppresses idxs).
         // These are Ex-decomposed action atoms that haven't been folded
         // into nodes yet — they participate in
-        // `insert_implied_formulas_pass` matching
-        // and are critical for diagnosing IH-Forall-fires-but-misses-
-        // gfalse divergences at case-3 (Helper_Loop_and_success).
+        // `insert_implied_formulas_pass` matching and are critical for
+        // diagnosing IH-Forall-fires-but-misses-gfalse divergences at
+        // case-3 (Helper_Loop_and_success).
         use crate::constraint::constraints::Goal;
         for (g, st) in sys.goals.iter() {
             if st.solved {
