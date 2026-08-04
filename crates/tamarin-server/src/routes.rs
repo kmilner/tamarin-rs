@@ -1,3 +1,8 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   rsasse, and other minor contributors (see upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   src/Web/Types.hs
+
 //! Axum router wiring, mirroring `Web.Dispatch`'s route table.
 
 use std::sync::Arc;
@@ -7,7 +12,7 @@ use axum::{
     http::StatusCode,
     middleware::Next,
     response::Response,
-    routing::{get, post},
+    routing::{get, post, MethodRouter},
     Router,
 };
 use percent_encoding::percent_decode_str;
@@ -50,17 +55,24 @@ async fn not_found_page(req: Request, next: Next) -> Response {
     res
 }
 
-/// The still-encoded theory-index piece of a `/thy/trace/<idx>/…` or
-/// `/thy/equiv/<idx>/…` URL, for URLs of that shape.
+/// The URL prefixes whose next segment is a theory index — the `/thy/<kind>/`
+/// of every route in [`theory_routes`] that captures `:idx`.
+///
+/// [`theory_index_piece`] probes exactly these, and
+/// `every_idx_route_sits_behind_a_probed_prefix` pins the two together, so a
+/// new route family carrying an index cannot quietly lose the probe.
+const THEORY_INDEX_PREFIXES: [&str; 2] = ["/thy/trace/", "/thy/equiv/"];
+
+/// The still-encoded theory-index piece of a URL under one of
+/// [`THEORY_INDEX_PREFIXES`], for URLs of that shape.
 ///
 /// Split on the raw path, as WAI splits `rawPathInfo` on `/` and only then
 /// decodes each segment: an escaped separator (`%2F`) belongs to the piece, it
 /// does not end it.
 fn theory_index_piece(raw_path: &str) -> Option<&str> {
-    let rest = raw_path.strip_prefix("/thy/")?;
-    let rest = rest
-        .strip_prefix("trace/")
-        .or_else(|| rest.strip_prefix("equiv/"))?;
+    let rest = THEORY_INDEX_PREFIXES
+        .iter()
+        .find_map(|prefix| raw_path.strip_prefix(prefix))?;
     rest.split('/').next()
 }
 
@@ -81,6 +93,101 @@ fn reads_as_theory_index(piece: &str) -> bool {
         .is_ok_and(|idx| idx.parse::<usize>().is_ok())
 }
 
+/// The `/thy/…` half of `Web.Dispatch`'s route table, as `(path, handler)`
+/// pairs.
+///
+/// Kept as data rather than a `.route()` chain so the theory-index probe above
+/// can be checked against it — every path here that captures `:idx` has to sit
+/// behind a prefix [`theory_index_piece`] recognises.
+fn theory_routes() -> Vec<(&'static str, MethodRouter<Arc<AppState>>)> {
+    vec![
+        // ----------------------------------------------------------------
+        // Theory routes (trace lemmas only — diff is stubbed).
+        // ----------------------------------------------------------------
+        (
+            "/thy/trace/:idx/overview/*path",
+            get(handlers::theory::interactive_overview),
+        ),
+        (
+            "/thy/trace/:idx/main/*path",
+            get(handlers::theory::theory_path_main),
+        ),
+        ("/thy/trace/:idx/source", get(handlers::theory::source_)),
+        (
+            "/thy/trace/:idx/message",
+            get(handlers::theory::message_deduction),
+        ),
+        (
+            "/thy/trace/:idx/autoprove/:extractor/:bound/:quit/*path",
+            get(handlers::theory::autoprove),
+        ),
+        (
+            "/thy/trace/:idx/autoproveAll/:extractor/:bound/*path",
+            get(handlers::theory::autoprove_all),
+        ),
+        (
+            "/thy/trace/:idx/verify/*path",
+            get(handlers::theory::verify),
+        ),
+        ("/thy/trace/:idx/unload", get(handlers::theory::unload)),
+        (
+            "/thy/trace/:idx/next/:section/*path",
+            get(handlers::theory::next_path),
+        ),
+        (
+            "/thy/trace/:idx/prev/:section/*path",
+            get(handlers::theory::prev_path),
+        ),
+        (
+            "/thy/trace/:idx/download/:name",
+            get(handlers::theory::download),
+        ),
+        // -- graph rendering (live: DOT pipeline) --
+        (
+            "/thy/trace/:idx/intdot/*path",
+            get(handlers::theory::intdot),
+        ),
+        ("/thy/trace/:idx/graph/*path", get(handlers::theory::graph)),
+        (
+            "/thy/trace/:idx/json/*path",
+            get(handlers::theory::graph_json),
+        ),
+        (
+            "/thy/trace/:idx/interactive-graph-def/*path",
+            get(handlers::theory::interactive_graph_def),
+        ),
+        // -- live proof-tree mutation --
+        (
+            "/thy/trace/:idx/proof-step/*path",
+            get(handlers::theory::proof_step),
+        ),
+        (
+            "/thy/trace/:idx/edit/*path",
+            post(handlers::theory::edit_stub),
+        ),
+        (
+            "/thy/trace/:idx/del/path/*path",
+            get(handlers::theory::delete_step),
+        ),
+        ("/thy/trace/:idx/reload", post(handlers::theory::reload)),
+        (
+            "/thy/trace/:idx/get_and_append/:name",
+            post(handlers::theory::append_new_lemmas),
+        ),
+        // ----------------------------------------------------------------
+        // Diff theory routes — stubbed (return alert).
+        // ----------------------------------------------------------------
+        (
+            "/thy/equiv/:idx/overview/*path",
+            get(handlers::theory::diff_stub),
+        ),
+        (
+            "/thy/equiv/:idx/main/*path",
+            get(handlers::theory::diff_stub),
+        ),
+    ]
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     // Serving HTTP means an oracle exec failure is request-scoped, not
     // process-fatal (HS confines the `readProcess` exception to the Warp
@@ -93,98 +200,18 @@ pub fn router(state: Arc<AppState>) -> Router {
     // 100 MB upload cap — generous, but bounded.
     let upload_limit = DefaultBodyLimit::max(100 * 1024 * 1024);
 
-    Router::new()
-        // ----------------------------------------------------------------
-        // Root + housekeeping.
-        // ----------------------------------------------------------------
+    // ----------------------------------------------------------------
+    // Root + housekeeping.
+    // ----------------------------------------------------------------
+    let mut router = Router::new()
         .route("/", get(handlers::root::get).post(handlers::root::post))
         .route("/favicon.ico", get(handlers::root::favicon))
         .route("/robots.txt", get(handlers::root::robots))
-        .route("/kill", get(handlers::root::kill_thread))
-        // ----------------------------------------------------------------
-        // Theory routes (trace lemmas only — diff is stubbed).
-        // ----------------------------------------------------------------
-        .route(
-            "/thy/trace/:idx/overview/*path",
-            get(handlers::theory::interactive_overview),
-        )
-        .route(
-            "/thy/trace/:idx/main/*path",
-            get(handlers::theory::theory_path_main),
-        )
-        .route("/thy/trace/:idx/source", get(handlers::theory::source_))
-        .route(
-            "/thy/trace/:idx/message",
-            get(handlers::theory::message_deduction),
-        )
-        .route(
-            "/thy/trace/:idx/autoprove/:extractor/:bound/:quit/*path",
-            get(handlers::theory::autoprove),
-        )
-        .route(
-            "/thy/trace/:idx/autoproveAll/:extractor/:bound/*path",
-            get(handlers::theory::autoprove_all),
-        )
-        .route(
-            "/thy/trace/:idx/verify/*path",
-            get(handlers::theory::verify),
-        )
-        .route("/thy/trace/:idx/unload", get(handlers::theory::unload))
-        .route(
-            "/thy/trace/:idx/next/:section/*path",
-            get(handlers::theory::next_path),
-        )
-        .route(
-            "/thy/trace/:idx/prev/:section/*path",
-            get(handlers::theory::prev_path),
-        )
-        .route(
-            "/thy/trace/:idx/download/:name",
-            get(handlers::theory::download),
-        )
-        // -- graph rendering (live: DOT pipeline) --
-        .route(
-            "/thy/trace/:idx/intdot/*path",
-            get(handlers::theory::intdot),
-        )
-        .route("/thy/trace/:idx/graph/*path", get(handlers::theory::graph))
-        .route(
-            "/thy/trace/:idx/json/*path",
-            get(handlers::theory::graph_json),
-        )
-        .route(
-            "/thy/trace/:idx/interactive-graph-def/*path",
-            get(handlers::theory::interactive_graph_def),
-        )
-        // -- live proof-tree mutation --
-        .route(
-            "/thy/trace/:idx/proof-step/*path",
-            get(handlers::theory::proof_step),
-        )
-        .route(
-            "/thy/trace/:idx/edit/*path",
-            post(handlers::theory::edit_stub),
-        )
-        .route(
-            "/thy/trace/:idx/del/path/*path",
-            get(handlers::theory::delete_step),
-        )
-        .route("/thy/trace/:idx/reload", post(handlers::theory::reload))
-        .route(
-            "/thy/trace/:idx/get_and_append/:name",
-            post(handlers::theory::append_new_lemmas),
-        )
-        // ----------------------------------------------------------------
-        // Diff theory routes — stubbed (return alert).
-        // ----------------------------------------------------------------
-        .route(
-            "/thy/equiv/:idx/overview/*path",
-            get(handlers::theory::diff_stub),
-        )
-        .route(
-            "/thy/equiv/:idx/main/*path",
-            get(handlers::theory::diff_stub),
-        )
+        .route("/kill", get(handlers::root::kill_thread));
+    for (path, handler) in theory_routes() {
+        router = router.route(path, handler);
+    }
+    router
         // Every miss among the routes above — and the routing-level miss for a
         // URL matching none of them — is rendered as Yesod's Not Found page.
         .layer(axum::middleware::from_fn(not_found_page))
@@ -199,4 +226,38 @@ pub fn router(state: Arc<AppState>) -> Router {
         .layer(upload_limit)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A route that captures `:idx` behind a prefix `theory_index_piece` does
+    // not recognise would answer a non-numeric index with the `Path`
+    // extractor's `400`, where Yesod's routing answers its Not Found page.
+    #[test]
+    fn every_idx_route_sits_behind_a_probed_prefix() {
+        let mut probed = [false; THEORY_INDEX_PREFIXES.len()];
+        for (path, _) in theory_routes() {
+            if !path.contains("/:idx") {
+                continue;
+            }
+            let which = THEORY_INDEX_PREFIXES
+                .iter()
+                .position(|prefix| path.starts_with(prefix))
+                .unwrap_or_else(|| panic!("route {path} captures :idx behind no probed prefix"));
+            probed[which] = true;
+            // End to end: an index the `usize` capture would reject is caught
+            // by the probe, so the layer answers the Not Found page.
+            let url = path.replace(":idx", "1x");
+            assert_eq!(theory_index_piece(&url), Some("1x"), "probing {url}");
+            assert!(!reads_as_theory_index("1x"));
+        }
+        for (prefix, seen) in THEORY_INDEX_PREFIXES.iter().zip(probed) {
+            assert!(
+                seen,
+                "{prefix} is probed but no route captures an index behind it"
+            );
+        }
+    }
 }

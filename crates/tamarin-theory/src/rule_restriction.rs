@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, rkunnema, beschmi, PhilipLukertWork, Hong-Thai,
-//   rsasse, yavivanov, ValentinYuri, charlie-j, and other minor
+//   meiersi, jdreier, rkunnema, beschmi, PhilipLukertWork, yavivanov,
+//   rsasse, Hong-Thai, charlie-j, ValentinYuri, and other minor
 //   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/theory/src/Rule.hs,
@@ -14,7 +14,7 @@
 //!
 //! Expands the `_restrict(...)` embedded-restriction construct that the
 //! parser captures into `Rule.embedded_restrictions: Vec<Formula>`
-//! (parser ast.rs:104).  For each such formula, HS:
+//! (parser `ast.rs`).  For each such formula, HS:
 //!   1. expands predicate atoms (`liftedExpandFormula`),
 //!   2. abstracts every subterm containing free variables into a fresh
 //!      `x`/`x.1`/… var (`rewrite`),
@@ -626,7 +626,14 @@ mod tests {
     use tamarin_parser::parser::parse_formula_str;
 
     fn preds(decl: &str) -> Vec<p::Predicate> {
-        let src = format!("theory T begin\npredicates: {}\nend", decl);
+        // `functions:` declares the symbols the predicate bodies apply —
+        // the parser resolves prefix applications through `lookupArity`
+        // (like HS) and an undeclared head would reparse as a variable and
+        // fail, as in `lift_inserts_restriction_before_rule`'s theory.
+        let src = format!(
+            "theory T begin\nfunctions: true/0, eq/2\npredicates: {}\nend",
+            decl
+        );
         let thy = tamarin_parser::parse_theory(&src, &[]).unwrap();
         thy.items
             .into_iter()

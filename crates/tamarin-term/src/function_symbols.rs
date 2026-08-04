@@ -1,7 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   beschmi, PhilipLukertWork, jdreier, charlie-j, rkunnema, and other
-//   minor contributors (see upstream git history)
+//   beschmi, jdreier, meiersi, PhilipLukertWork, charlie-j, rsasse,
+//   rkunnema, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Term.hs,
 //   lib/term/src/Term/Term/FunctionSymbols.hs
 
 //! Port of `Term.Term.FunctionSymbols` from
@@ -12,6 +13,9 @@
 //! reasoning.
 
 use std::collections::BTreeSet;
+
+// HS bundles the four attribute enums below into `FctAttr`
+// (FunctionSymbols.hs:128); tamarin-parser carries the surface-shaped copy.
 
 /// A function symbol can be either private (unknown to the adversary) or public.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -73,20 +77,6 @@ impl NdcState {
     }
 }
 
-/// A parsed function-symbol attribute (`[private]`, `[destructor]`, `[AC]`,
-/// `[NDC]`, `[NDC-diff]`, …).
-///
-/// Intentionally retained: faithful mirror of HS `FctAttr`
-/// (Term/Term/FunctionSymbols.hs). The parser carries its own
-/// surface-restricted copy; this one has no call site.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum FctAttr {
-    Privacy(Privacy),
-    Constructability(Constructability),
-    AcState(AcState),
-    NdcState(NdcState),
-}
-
 /// Free (no-equation) function symbol — name plus arity, privacy,
 /// constructability, and NDC property. Mirrors the Haskell tuple
 /// `(ByteString, (Int, Privacy, Constructability, NDCstate))`.
@@ -119,106 +109,79 @@ impl std::fmt::Debug for NoEqSym {
     }
 }
 
-// Hand-written `Eq`/`Ord` with an interned-name pointer fast-path.  `name` is
-// interned (`intern_bytes`), so equal content ⇒ equal pointer; therefore an
-// `as_ptr()` match is true exactly on the common same-symbol path and lets us
-// skip the byte `memcmp` that dominated `FunSig::contains` and term comparison
-// in the proof search.  Correctness does NOT depend on the interning
-// invariant: equal data pointers always imply equal content (same allocation),
-// and on a pointer MISmatch we fall back to the full byte comparison — so the
-// boolean/total-order is identical to a derived, content-based one.
-impl PartialEq for NoEqSym {
-    #[inline]
-    fn eq(&self, other: &Self) -> bool {
-        // Destructure without `..` so a new field forces an equality decision
-        // here and in the sibling Hash/Ord impls; all five fields participate.
-        let NoEqSym {
-            name,
-            arity,
-            privacy,
-            constructability,
-            ndc,
-        } = self;
-        let NoEqSym {
-            name: other_name,
-            arity: other_arity,
-            privacy: other_privacy,
-            constructability: other_constructability,
-            ndc: other_ndc,
-        } = other;
-        (std::ptr::eq(name.as_ptr(), other_name.as_ptr()) || name == other_name)
-            && arity == other_arity
-            && privacy == other_privacy
-            && constructability == other_constructability
-            && ndc == other_ndc
-    }
-}
-impl Eq for NoEqSym {}
-// Hand-written `Hash` (rather than `derive`d) so it sits alongside the manual
-// `PartialEq`/`Ord` above without tripping `clippy::derived_hash_with_manual_eq`
+// `Eq`/`Hash`/`Ord` for a symbol struct whose first field is an interned name,
+// generated from the field list in comparison order — the HS tuple's order,
+// which all three impls read off.  That order is load-bearing: `AcSym` and
+// `FunSym` derive their `Ord` from these, and `BTreeSet` iteration order
+// reaches the emitted Maude module text and the pretty-printed signature.
+//
+// The name comparison carries a pointer fast-path.  `name` is interned
+// (`intern_bytes`), so equal content ⇒ equal pointer; therefore an `as_ptr()`
+// match is true exactly on the common same-symbol path and lets us skip the
+// byte `memcmp` that dominated `FunSig::contains` and term comparison in the
+// proof search.  Correctness does NOT depend on the interning invariant: equal
+// data pointers always imply equal content (same allocation), and on a pointer
+// MISmatch we fall back to the full byte comparison — so the boolean/total-order
+// is identical to a derived, content-based one.
+//
+// `Hash` is generated here rather than `derive`d so that it sits alongside the
+// manual `PartialEq`/`Ord` without tripping `clippy::derived_hash_with_manual_eq`
 // (a correctness lint: a derived `Hash` next to a hand-written `Eq` risks the
 // `a == b ⇒ hash(a) == hash(b)` invariant being violated).  Here both are
 // content-based — the `Eq`/`Ord` pointer fast-path only ever returns early when
-// the contents are provably equal — so the invariant holds.  The field order matches
-// Eq/Ord's (name, arity, privacy, constructability, ndc).
-impl std::hash::Hash for NoEqSym {
-    #[inline]
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // Destructure without `..` so a new field forces a hash decision here,
-        // keeping this in step with Eq/Ord; all five fields are hashed.
-        let NoEqSym {
-            name,
-            arity,
-            privacy,
-            constructability,
-            ndc,
-        } = self;
-        name.hash(state);
-        arity.hash(state);
-        privacy.hash(state);
-        constructability.hash(state);
-        ndc.hash(state);
-    }
+// the contents are provably equal — so the invariant holds.
+//
+// Each impl destructures `self` without `..`, so a new struct field fails to
+// compile until it is added to the invocation's field list below, which then
+// forces the same decision for equality, hashing, and ordering at once.
+macro_rules! interned_name_sym_impls {
+    ($ty:ident { $name:ident, $($tail:ident),+ $(,)? }) => {
+        impl PartialEq for $ty {
+            #[inline]
+            fn eq(&self, other: &Self) -> bool {
+                let $ty { $name, $($tail),+ } = self;
+                (std::ptr::eq($name.as_ptr(), other.$name.as_ptr()) || *$name == other.$name)
+                    $(&& *$tail == other.$tail)+
+            }
+        }
+        impl Eq for $ty {}
+        impl std::hash::Hash for $ty {
+            #[inline]
+            fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+                let $ty { $name, $($tail),+ } = self;
+                $name.hash(state);
+                $($tail.hash(state);)+
+            }
+        }
+        impl Ord for $ty {
+            #[inline]
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                let $ty { $name, $($tail),+ } = self;
+                // Only the name compare gains the ptr fast-path.
+                let name_ord = if std::ptr::eq($name.as_ptr(), other.$name.as_ptr()) {
+                    std::cmp::Ordering::Equal
+                } else {
+                    $name.cmp(&other.$name)
+                };
+                name_ord$(.then_with(|| $tail.cmp(&other.$tail)))+
+            }
+        }
+        impl PartialOrd for $ty {
+            #[inline]
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+    };
 }
-impl Ord for NoEqSym {
-    #[inline]
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Field order: name, arity, privacy, constructability, ndc (the HS
-        // tuple order, consistent with Eq/Hash).  Only the name compare gains
-        // the ptr fast-path.  Destructure without `..` so a new field forces
-        // an ordering decision here.
-        let NoEqSym {
-            name,
-            arity,
-            privacy,
-            constructability,
-            ndc,
-        } = self;
-        let NoEqSym {
-            name: other_name,
-            arity: other_arity,
-            privacy: other_privacy,
-            constructability: other_constructability,
-            ndc: other_ndc,
-        } = other;
-        let name_ord = if std::ptr::eq(name.as_ptr(), other_name.as_ptr()) {
-            std::cmp::Ordering::Equal
-        } else {
-            name.cmp(other_name)
-        };
-        name_ord
-            .then_with(|| arity.cmp(other_arity))
-            .then_with(|| privacy.cmp(other_privacy))
-            .then_with(|| constructability.cmp(other_constructability))
-            .then_with(|| ndc.cmp(other_ndc))
-    }
-}
-impl PartialOrd for NoEqSym {
-    #[inline]
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
+
+interned_name_sym_impls!(NoEqSym {
+    name,
+    arity,
+    privacy,
+    constructability,
+    ndc
+});
 
 impl NoEqSym {
     pub fn new(
@@ -269,96 +232,12 @@ impl std::fmt::Debug for AcFctSym {
     }
 }
 
-// Hand-written `Eq`/`Ord`/`Hash` with the same interned-name pointer fast-path
-// as `NoEqSym` above (see the rationale there): `name` comes from
-// `intern_bytes`, so an `as_ptr()` match settles the name comparison without
-// the byte `memcmp`, and a MISmatch falls back to the full byte comparison —
-// the boolean/total-order is identical to a derived, content-based one.  That
-// order is load-bearing: `AcSym::AcFct` (and through it `FunSym`) derives
-// its `Ord` from this one, and `BTreeSet<AcFctSym>` iteration order reaches
-// the emitted Maude module text and the pretty-printed signature.
-impl PartialEq for AcFctSym {
-    #[inline]
-    fn eq(&self, other: &Self) -> bool {
-        // Destructure without `..` so a new field forces an equality decision
-        // here and in the sibling Hash/Ord impls; all four fields participate.
-        let AcFctSym {
-            name,
-            privacy,
-            constructability,
-            ndc,
-        } = self;
-        let AcFctSym {
-            name: other_name,
-            privacy: other_privacy,
-            constructability: other_constructability,
-            ndc: other_ndc,
-        } = other;
-        (std::ptr::eq(name.as_ptr(), other_name.as_ptr()) || name == other_name)
-            && privacy == other_privacy
-            && constructability == other_constructability
-            && ndc == other_ndc
-    }
-}
-impl Eq for AcFctSym {}
-// Hand-written `Hash` (rather than `derive`d) for the same reason as
-// `NoEqSym`'s: it sits alongside a manual `PartialEq` without tripping
-// `clippy::derived_hash_with_manual_eq`, and both are content-based, so
-// `a == b ⇒ hash(a) == hash(b)` holds.  Field order matches Eq/Ord's
-// (name, privacy, constructability, ndc).
-impl std::hash::Hash for AcFctSym {
-    #[inline]
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // Destructure without `..` so a new field forces a hash decision here,
-        // keeping this in step with Eq/Ord; all four fields are hashed.
-        let AcFctSym {
-            name,
-            privacy,
-            constructability,
-            ndc,
-        } = self;
-        name.hash(state);
-        privacy.hash(state);
-        constructability.hash(state);
-        ndc.hash(state);
-    }
-}
-impl Ord for AcFctSym {
-    #[inline]
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Field order: name, privacy, constructability, ndc (the HS tuple
-        // order, consistent with Eq/Hash).  Only the name compare gains the
-        // ptr fast-path.  Destructure without `..` so a new field forces an
-        // ordering decision here.
-        let AcFctSym {
-            name,
-            privacy,
-            constructability,
-            ndc,
-        } = self;
-        let AcFctSym {
-            name: other_name,
-            privacy: other_privacy,
-            constructability: other_constructability,
-            ndc: other_ndc,
-        } = other;
-        let name_ord = if std::ptr::eq(name.as_ptr(), other_name.as_ptr()) {
-            std::cmp::Ordering::Equal
-        } else {
-            name.cmp(other_name)
-        };
-        name_ord
-            .then_with(|| privacy.cmp(other_privacy))
-            .then_with(|| constructability.cmp(other_constructability))
-            .then_with(|| ndc.cmp(other_ndc))
-    }
-}
-impl PartialOrd for AcFctSym {
-    #[inline]
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
+interned_name_sym_impls!(AcFctSym {
+    name,
+    privacy,
+    constructability,
+    ndc
+});
 
 impl AcFctSym {
     pub fn new(
@@ -439,31 +318,49 @@ pub fn plain_show_bytes(name: &[u8]) -> String {
     out
 }
 
-/// Derived `Show` of `Privacy` / `Constructability` / `NDCstate` and of the
-/// `ACfctSym` tuple `(ByteString, (Privacy, Constructability, NDCstate))`:
-/// `("name",(Public,Constructor,NotNDC))` — no spaces after the commas, and
-/// the `ByteString` name as a string literal's escaped body.
-pub fn show_acfct_sym(sym: &AcFctSym) -> String {
-    let privacy = match sym.privacy {
+// -- Derived `Show` of the attribute enums -------------------------------------
+//
+// The Rust variant names follow Rust's naming convention, so `{:?}` would
+// print `IsNdc` where GHC prints `IsNDC`; these three functions spell the
+// GHC constructor names.
+
+/// Derived `Show` of `Privacy` (FunctionSymbols.hs:111-112).
+pub fn show_privacy(privacy: Privacy) -> &'static str {
+    match privacy {
         Privacy::Private => "Private",
         Privacy::Public => "Public",
-    };
-    let constructability = match sym.constructability {
+    }
+}
+
+/// Derived `Show` of `Constructability` (FunctionSymbols.hs:116-117).
+pub fn show_constructability(constructability: Constructability) -> &'static str {
+    match constructability {
         Constructability::Constructor => "Constructor",
         Constructability::Destructor => "Destructor",
-    };
-    let ndc = match sym.ndc {
+    }
+}
+
+/// Derived `Show` of `NDCstate` (FunctionSymbols.hs:125-126).
+pub fn show_ndc_state(ndc: NdcState) -> &'static str {
+    match ndc {
         NdcState::IsNdc => "IsNDC",
         NdcState::NotNdc => "NotNDC",
         NdcState::IsNdcDiff => "IsNDCDiff",
         NdcState::IsNdcBoth => "IsNDCBoth",
-    };
+    }
+}
+
+/// Derived `Show` of the `ACfctSym` tuple
+/// `(ByteString, (Privacy, Constructability, NDCstate))`:
+/// `("name",(Public,Constructor,NotNDC))` — no spaces after the commas, and
+/// the `ByteString` name as a string literal's escaped body.
+pub fn show_acfct_sym(sym: &AcFctSym) -> String {
     format!(
         "(\"{}\",({},{},{}))",
         plain_show_bytes(sym.name),
-        privacy,
-        constructability,
-        ndc
+        show_privacy(sym.privacy),
+        show_constructability(sym.constructability),
+        show_ndc_state(sym.ndc)
     )
 }
 
@@ -525,7 +422,8 @@ impl FunSym {
 
     /// NDC state of the symbol, or `None` for the variants that carry no NDC
     /// field: the built-in AC operators, `C`, and `LIST`.  Kept in step with
-    /// [`FunSym::set_ndc`], which writes back to exactly these two variants.
+    /// [`FunSym::set_ndc`], which writes back to exactly the two variants that
+    /// do carry one.
     fn ndc_state(&self) -> Option<NdcState> {
         match self {
             FunSym::NoEq(s) => Some(s.ndc),
@@ -591,6 +489,9 @@ pub const NAT_ONE_SYM_STRING: &[u8] = b"tone";
 pub const UNION_SYM_STRING: &[u8] = b"union";
 pub const EMAP_SYM_STRING: &[u8] = b"em";
 pub const PMULT_SYM_STRING: &[u8] = b"pmult";
+/// Display name of [`FunSym::List`].  HS has no `listSymString`:
+/// `showFunSymName`'s `List` arm spells the literal (Term.hs:296).
+pub const LIST_SYM_STRING: &[u8] = b"List";
 
 // -- Predefined NoEq symbols --------------------------------------------------
 
@@ -762,6 +663,27 @@ mod tests {
         assert_eq!(plain_show_bytes(&[0x0e, b'I']), "\\SOI");
     }
 
+    /// Every variant's derived-`Show` spelling, which is GHC's constructor
+    /// name — not the Rust one (`IsNdc` renders as `IsNDC`).  Pinned per
+    /// variant, not just at the tuples `show_acfct_sym` composes them into.
+    #[test]
+    fn attribute_shows_match_the_haskell_constructor_names() {
+        assert_eq!(show_privacy(Privacy::Private), "Private");
+        assert_eq!(show_privacy(Privacy::Public), "Public");
+        assert_eq!(
+            show_constructability(Constructability::Constructor),
+            "Constructor"
+        );
+        assert_eq!(
+            show_constructability(Constructability::Destructor),
+            "Destructor"
+        );
+        assert_eq!(show_ndc_state(NdcState::IsNdc), "IsNDC");
+        assert_eq!(show_ndc_state(NdcState::NotNdc), "NotNDC");
+        assert_eq!(show_ndc_state(NdcState::IsNdcDiff), "IsNDCDiff");
+        assert_eq!(show_ndc_state(NdcState::IsNdcBoth), "IsNDCBoth");
+    }
+
     /// Derived `Show` of the `ACfctSym` tuple.
     #[test]
     fn show_acfct_sym_matches_derived_show() {
@@ -885,6 +807,250 @@ mod tests {
         );
     }
 
+    /// `Hash` feeds the same field sequence as `Eq`/`Ord` — the name, then the
+    /// remaining fields in declared order — so it agrees with those fields
+    /// hashed by hand into the same hasher.
+    #[test]
+    fn interned_name_sym_hash_feeds_the_declared_field_sequence() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        fn hash_of(value: impl Hash) -> u64 {
+            let mut state = DefaultHasher::new();
+            value.hash(&mut state);
+            state.finish()
+        }
+        let no_eq = NoEqSym::new(
+            b"f".to_vec(),
+            2,
+            Privacy::Private,
+            Constructability::Destructor,
+        )
+        .with_ndc(NdcState::IsNdcDiff);
+        let mut state = DefaultHasher::new();
+        no_eq.name.hash(&mut state);
+        no_eq.arity.hash(&mut state);
+        no_eq.privacy.hash(&mut state);
+        no_eq.constructability.hash(&mut state);
+        no_eq.ndc.hash(&mut state);
+        assert_eq!(hash_of(no_eq), state.finish());
+
+        let ac = AcFctSym::new(
+            b"f".to_vec(),
+            Privacy::Private,
+            Constructability::Destructor,
+            NdcState::IsNdcDiff,
+        );
+        let mut state = DefaultHasher::new();
+        ac.name.hash(&mut state);
+        ac.privacy.hash(&mut state);
+        ac.constructability.hash(&mut state);
+        ac.ndc.hash(&mut state);
+        assert_eq!(hash_of(ac), state.finish());
+    }
+
+    /// The `NoEqSym` `Ord` orders on the HS tuple's field chain
+    /// `(name, (arity, privacy, constructability, ndc))`: the name dominates,
+    /// and the tail decides between equal names — `arity` first, so it outranks
+    /// privacy.  This order reaches the emitted Maude module (`st_fun_syms` is
+    /// a `BTreeSet`) and term canonicalization through `FunSym`.
+    #[test]
+    fn no_eq_sym_ord_follows_the_haskell_tuple_field_chain() {
+        let sym = |name: &str, arity, p, c, ndc| {
+            NoEqSym::new(name.as_bytes().to_vec(), arity, p, c).with_ndc(ndc)
+        };
+        let base = sym(
+            "f",
+            1,
+            Privacy::Private,
+            Constructability::Constructor,
+            NdcState::IsNdc,
+        );
+        // Two separately built symbols with the same fields: the interned name
+        // makes the `Eq`/`Ord` pointer fast-path fire, and it must agree with
+        // the byte comparison it replaces.
+        let same = sym(
+            "f",
+            1,
+            Privacy::Private,
+            Constructability::Constructor,
+            NdcState::IsNdc,
+        );
+        assert_eq!(base, same);
+        assert_eq!(base.cmp(&same), std::cmp::Ordering::Equal);
+        // Each field breaks the tie only once every field before it is equal.
+        assert!(
+            base < sym(
+                "f",
+                2,
+                Privacy::Private,
+                Constructability::Constructor,
+                NdcState::IsNdc
+            )
+        );
+        assert!(
+            base < sym(
+                "f",
+                1,
+                Privacy::Public,
+                Constructability::Constructor,
+                NdcState::IsNdc
+            )
+        );
+        assert!(
+            base < sym(
+                "f",
+                1,
+                Privacy::Private,
+                Constructability::Destructor,
+                NdcState::IsNdc
+            )
+        );
+        assert!(
+            base < sym(
+                "f",
+                1,
+                Privacy::Private,
+                Constructability::Constructor,
+                NdcState::NotNdc
+            )
+        );
+        // Arity outranks privacy: the greater arity wins even though its
+        // privacy sorts first.
+        assert!(
+            sym(
+                "f",
+                1,
+                Privacy::Public,
+                Constructability::Constructor,
+                NdcState::IsNdc
+            ) < sym(
+                "f",
+                2,
+                Privacy::Private,
+                Constructability::Constructor,
+                NdcState::IsNdc
+            )
+        );
+        // The name dominates: the greatest tail under "f" still sorts before
+        // the smallest tail under "g".
+        assert!(
+            sym(
+                "f",
+                usize::MAX,
+                Privacy::Public,
+                Constructability::Destructor,
+                NdcState::IsNdcBoth
+            ) < sym(
+                "g",
+                0,
+                Privacy::Private,
+                Constructability::Constructor,
+                NdcState::IsNdc
+            )
+        );
+        // `BTreeSet<NoEqSym>` iterates name-major, then by the remaining fields
+        // in declared order.
+        let set: std::collections::BTreeSet<NoEqSym> = [
+            sym(
+                "g",
+                0,
+                Privacy::Private,
+                Constructability::Constructor,
+                NdcState::IsNdc,
+            ),
+            sym(
+                "f",
+                1,
+                Privacy::Private,
+                Constructability::Constructor,
+                NdcState::NotNdc,
+            ),
+            sym(
+                "f",
+                1,
+                Privacy::Private,
+                Constructability::Destructor,
+                NdcState::IsNdc,
+            ),
+            sym(
+                "f",
+                1,
+                Privacy::Public,
+                Constructability::Constructor,
+                NdcState::IsNdc,
+            ),
+            base,
+            sym(
+                "f",
+                0,
+                Privacy::Public,
+                Constructability::Destructor,
+                NdcState::IsNdcBoth,
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let order: Vec<(String, usize, Privacy, Constructability, NdcState)> = set
+            .iter()
+            .map(|s| {
+                (
+                    String::from_utf8_lossy(s.name).into_owned(),
+                    s.arity,
+                    s.privacy,
+                    s.constructability,
+                    s.ndc,
+                )
+            })
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                (
+                    "f".to_string(),
+                    0,
+                    Privacy::Public,
+                    Constructability::Destructor,
+                    NdcState::IsNdcBoth
+                ),
+                (
+                    "f".to_string(),
+                    1,
+                    Privacy::Private,
+                    Constructability::Constructor,
+                    NdcState::IsNdc
+                ),
+                (
+                    "f".to_string(),
+                    1,
+                    Privacy::Private,
+                    Constructability::Constructor,
+                    NdcState::NotNdc
+                ),
+                (
+                    "f".to_string(),
+                    1,
+                    Privacy::Private,
+                    Constructability::Destructor,
+                    NdcState::IsNdc
+                ),
+                (
+                    "f".to_string(),
+                    1,
+                    Privacy::Public,
+                    Constructability::Constructor,
+                    NdcState::IsNdc
+                ),
+                (
+                    "g".to_string(),
+                    0,
+                    Privacy::Private,
+                    Constructability::Constructor,
+                    NdcState::IsNdc
+                ),
+            ]
+        );
+    }
+
     /// FunctionSymbols.hs:
     ///     data NDCstate = IsNDC | NotNDC | IsNDCDiff | IsNDCBoth
     #[test]
@@ -894,7 +1060,7 @@ mod tests {
         assert!(NdcState::IsNdcDiff < NdcState::IsNdcBoth);
     }
 
-    /// FunctionSymbols.hs:97:
+    /// FunctionSymbols.hs:111:
     ///     data Privacy = Private | Public
     #[test]
     fn privacy_ord_matches_haskell_declaration() {
@@ -904,14 +1070,14 @@ mod tests {
         );
     }
 
-    /// FunctionSymbols.hs:102:
+    /// FunctionSymbols.hs:116:
     ///     data Constructability = Constructor | Destructor
     #[test]
     fn constructability_ord_matches_haskell_declaration() {
         assert!(Constructability::Constructor < Constructability::Destructor);
     }
 
-    /// FunctionSymbols.hs:113-116:
+    /// FunctionSymbols.hs:150-153:
     ///     data FunSym = NoEq NoEqSym | AC ACSym | C CSym | List
     ///
     /// `NoEq` comes FIRST.  This ordering matters because BTreeSet<FunSym>

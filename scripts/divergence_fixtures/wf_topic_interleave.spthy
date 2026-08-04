@@ -1,0 +1,64 @@
+// A wellformedness TOPIC that closes and reopens, inside the run of checks
+// around it.
+//
+// HS `checkWellformedness` (Theory/Tools/Wellformedness.hs:1270-1286) is one
+// ordered list of checks (lines 1272-1282), and `formulaReports`
+// (Wellformedness.hs:999-1014) is a single one of them.  Inside it, `msum
+// [checkQuantifiers, checkTerms, checkGuarded]` (lines 1002-1004) runs on
+// EVERY annotated formula; `WfErrorReport` is a list, so `msum` is `concat`
+// and all three arms report unconditionally, per formula, in item order.
+// `prettyWfErrorReport` (Wellformedness.hs:118-125) then groups with `groupOn
+// fst` (line 120), which is `groupBy ((==) `on` fst)` (Extension/Prelude.hs:96-97)
+// and merges only CONSECUTIVE entries.  A topic therefore gets a second
+// underlined header when another topic falls between its findings:
+//
+//   - `Redu` and `Redu2` both trip `checkTerms` and `NoGuard` trips
+//     `checkGuarded` between them, so "Formula terms" closes around
+//     " Formula guardedness" and opens again.  Collecting a topic's findings
+//     into one block instead gives a single header and reorders the bodies;
+//   - `RQ` trips `checkQuantifiers` (Wellformedness.hs:948-957).  Its entry
+//     sits with the formula it came from, not with its topic: `annFormulas`
+//     (Wellformedness.hs:1007-1014) is `lemmas <|> restrictions`, so the
+//     restriction's block follows every lemma's, after the reopened one.
+//
+// The two bracketing entries are what pin the whole run's POSITION: the rule's
+// free `u` trips `unboundReport` (Wellformedness.hs:514-519) from an earlier
+// check, and the reusable exists-trace lemma trips `lemmaAttributeReport`
+// (Wellformedness.hs:924-932) from the next one.  RS reaches `formulaReports`
+// only after the parser-level pass — the arms need the elaborated signature
+// and the translated theory — and splices its findings into that report, so
+// without an entry on each side the splice lands at the end whatever anchor
+// list it uses and its position says nothing.
+//
+// No corpus theory reaches this: not one corpus wf block carries a repeated
+// topic header, a "Quantifier sorts" header or a " Formula guardedness"
+// header.
+//
+// Compared slices: the wf report block (see check.sh).  Every offender list
+// here fits the report's ribbon without a break, so what the fixture answers
+// for is the order of the headers and their bodies, not the fills.
+
+theory WfTopicInterleave
+begin
+
+builtins: diffie-hellman
+
+rule R:
+  [ In( x ) ] --[ A( x ) ]-> [ Out( <x, u> ) ]
+
+lemma Redu:
+  "All x #i. A(x^x) @ i ==> F"
+
+lemma NoGuard:
+  "All z. z = z"
+
+lemma Redu2:
+  "All y #j. A(y^y) @ j ==> F"
+
+lemma Reuse [reuse]:
+  exists-trace "Ex x #i. A(x) @ #i"
+
+restriction RQ:
+  "All ~q #i. A(~q) @ i ==> F"
+
+end

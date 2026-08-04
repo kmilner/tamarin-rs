@@ -1,0 +1,12 @@
+theory SapicUnboundBeforeVariants
+begin
+
+rule NoVar:
+  [ In(~x), Fr(~x) ] --[ N(~x) ]-> [ ]
+
+process:
+  in(m);
+  [ ] --[ Ev(m), _restrict(k.5 = 'b') ]-> [ ];
+  in(k); out(k)
+
+end

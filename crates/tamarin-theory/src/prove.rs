@@ -1,9 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
 //   meiersi, jdreier, rkunnema, beschmi, felixlinker, charlie-j,
-//   rsasse, racoucho1u, kevinmorio, yavivanov, PhilipLukertWork,
-//   Hong-Thai, gilcu3, arcz, BTom-GH, ValentinYuri, Azurios-git,
-//   xaDxelA, robert.kunnemann@cased.de, and other minor contributors
-//   (see upstream git history)
+//   kevinmorio, racoucho1u, rsasse, yavivanov, PhilipLukertWork,
+//   gilcu3, Hong-Thai, arcz, BTom-GH, ValentinYuri, xaDxelA,
+//   Azurios-git, robert.kunnemann@cased.de, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Maude/Parser.hs, lib/theory/src/ClosedTheory.hs,
 //   lib/theory/src/Items/RuleItem.hs, lib/theory/src/Lemma.hs,

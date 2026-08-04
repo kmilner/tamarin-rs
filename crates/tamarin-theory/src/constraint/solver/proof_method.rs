@@ -1,5 +1,5 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, felixlinker, jdreier, PhilipLukertWork, rkunnema, beschmi,
+//   meiersi, jdreier, felixlinker, PhilipLukertWork, rkunnema, beschmi,
 //   rsasse, racoucho1u, charlie-j, niklasmedinger, Nynko, yavivanov,
 //   ValentinYuri, robert.kunnemann@cased.de, xaDxelA, and other minor
 //   contributors (see upstream git history)
@@ -396,7 +396,7 @@ pub fn exec_proof_method(
             // Without fan-out, RS collapses 7 HS siblings to 1 on
             // Yubikey's `no_replay` (and 50 → 1 on
             // `slightly_weaker_invariant`), because `solve_action_goal`'s
-            // Cases outcome was discarded.
+            // Cases outcome would be discarded.
             let case_systems: Vec<System> =
                 crate::constraint::solver::simplify::simplify_system_with_fanout(ctx, sys.clone());
             // No-op shortcut: mid-proof, every case system was already
@@ -453,8 +453,8 @@ pub fn exec_proof_method(
             // `Learn_A_Ys(A,S,<'ys',<y1,no1>++<y2,no2>>)` — the straight
             // vs swapped pairing), HS collapses them via
             // `compareSystemsUpToNewVars` to a SINGLE surviving case (no
-            // top-level `case N`), whereas RS surfaced both as `case 1`/
-            // `case 2`.  Gated on BP/MSet by `remove_redundant_cases`'s
+            // top-level `case N`); without this call RS would surface both
+            // as `case 1`/`case 2`.  Gated on BP/MSet by `remove_redundant_cases`'s
             // own guard (HS short-circuits to `cases0` otherwise), and
             // empty stable_vars (HS passes `[]`).  Runs BEFORE the
             // single-case `sys' /= cleanup sys` check, matching HS's order

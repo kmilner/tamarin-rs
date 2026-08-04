@@ -114,10 +114,25 @@ fn collect_action_vars(
             }
         }
         SapicAction::Msr {
-            prems, acts, concs, ..
+            prems,
+            acts,
+            concs,
+            rest,
+            ..
         } => {
             for f in prems.iter().chain(acts).chain(concs) {
                 collect_fact_vars(f, out);
+            }
+            // HS's derived `Foldable (SapicAction v)` reaches the `iRest ::
+            // [SapicNFormula v]` field too, so `varsProc` counts the embedded
+            // `_restrict` formulas' FREE variables (bound `BVar` quantifier vars
+            // are not `v`).  They seed the `renameUnique` avoidance set, so a
+            // variable occurring ONLY in a restriction still shifts the fresh
+            // indices minted for the rest of the process.
+            for f in rest {
+                for lv in cond_formula_free_lvars(f) {
+                    out.insert(SapicLVar::untyped(lv));
+                }
             }
         }
         SapicAction::Rep => {}
@@ -161,9 +176,9 @@ fn collect_comb_vars(
     }
 }
 
-/// Free `LVar`s of a `Cond` parser-AST formula (vars not bound by an enclosing
-/// quantifier).  Used to seed the `renameUnique` avoidance set and as the
-/// rename domain.
+/// Free `LVar`s of a parser-AST process formula — a `Cond` condition or an
+/// MSR's embedded `_restrict` (vars not bound by an enclosing quantifier).
+/// Used to seed the `renameUnique` avoidance set and as the rename domain.
 fn cond_formula_free_lvars(f: &tamarin_parser::ast::Formula) -> Vec<LVar> {
     let mut out = Vec::new();
     crate::convert::fold_free_vars(f, &mut |v, _bound| {
@@ -176,11 +191,12 @@ fn cond_formula_free_lvars(f: &tamarin_parser::ast::Formula) -> Vec<LVar> {
     out
 }
 
-/// Rename the FREE variables of a `Cond` parser-AST formula according to `subst`
-/// (`LVar → LVar`), mirroring HS `mapTermsComb (apply subst) ... (Cond fa) =
-/// Cond (apply subst fa)` (Process.hs:165).  Quantifier-bound vars are left
-/// untouched (they are not in the subst domain — process renaming only renames
-/// process-bound variables).
+/// Rename the FREE variables of a parser-AST process formula (a `Cond`
+/// condition or an MSR's embedded `_restrict`) according to `subst`
+/// (`LVar → LVar`), mirroring the `ff = apply subst` argument HS threads into
+/// `mapTermsComb`/`mapTermsAction` (Process.hs:155,165).  Quantifier-bound vars
+/// are left untouched (they are not in the subst domain — process renaming only
+/// renames process-bound variables).
 fn rename_cond_formula(
     subst: &BTreeMap<LVar, LVar>,
     f: &tamarin_parser::ast::Formula,
@@ -270,7 +286,11 @@ fn rename_action(
             prems: prems.iter().map(|f| rename_fact(subst, f)).collect(),
             acts: acts.iter().map(|f| rename_fact(subst, f)).collect(),
             concs: concs.iter().map(|f| rename_fact(subst, f)).collect(),
-            rest: rest.clone(),
+            // HS `mapTermsAction f ff fv (MSR l a r rest mv) = MSR .. (fmap ff
+            // rest) ..` (Process.hs:155) maps the embedded restriction formulas
+            // with the SAME substitution as the fact rows, so the formula's free
+            // variables alpha-rename along with the rule body.
+            rest: rest.iter().map(|f| rename_cond_formula(subst, f)).collect(),
             match_vars: match_vars.iter().map(|v| rename_sv(subst, v)).collect(),
         },
         SapicAction::Rep => SapicAction::Rep,
@@ -843,5 +863,75 @@ mod tests {
         } else {
             panic!("expected New action");
         }
+    }
+
+    /// An MSR's embedded `_restrict(...)` alpha-renames with the rest of the
+    /// rule body: HS maps the formula list with the SAME substitution as the
+    /// fact rows (`mapTermsAction f ff fv (MSR ..) = MSR .. (fmap ff rest) ..`).
+    /// A stale variable here leaks into the `process="..."` attribute AND into
+    /// the generated `Restr_*` action fact's arguments.
+    ///
+    /// Oracle bytes (pinned build, Git revision ef3f0468) for
+    /// `in(k); [ ] --[ Ev(k), _restrict(k = 'b') ]-> [ ]; out('y')`:
+    ///   `_restrict(k.1 = 'b')` — index 1, matching the renamed `Ev( k.1 )`.
+    #[test]
+    fn rename_unique_renames_msr_embedded_restriction() {
+        use tamarin_parser::ast as p;
+
+        let k = || {
+            p::Term::Var(p::VarSpec {
+                typ: None,
+                name: "k".into(),
+                sort: p::SortHint::Msg,
+                idx: 0,
+            })
+        };
+        let restr = p::Formula::Atom(p::Atom::Eq(k(), p::Term::PubLit("b".into())));
+        let ev = tamarin_theory::fact::Fact::new(
+            tamarin_theory::fact::FactTag::Proto(
+                tamarin_theory::fact::Multiplicity::Linear,
+                "Ev",
+                1,
+            ),
+            vec![VTerm::Lit(Lit::Var(slv("k", 0, None)))],
+        );
+        let msr = Process::Action(
+            SapicAction::Msr {
+                prems: Vec::new(),
+                acts: vec![ev],
+                concs: Vec::new(),
+                rest: vec![restr],
+                match_vars: std::collections::BTreeSet::new(),
+            },
+            ProcessParsedAnnotation::empty(),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+        );
+        // `new k; <msr>` — the binder renames `k` to `k.1` throughout the body.
+        let proc = Process::Action(
+            SapicAction::New(slv("k", 0, None)),
+            ProcessParsedAnnotation::empty(),
+            Box::new(msr),
+        );
+
+        let Process::Action(_, _, body) = rename_unique(&proc) else {
+            panic!("expected New action");
+        };
+        let Process::Action(SapicAction::Msr { acts, rest, .. }, _, _) = *body else {
+            panic!("expected MSR action");
+        };
+        // The action row renamed...
+        assert_eq!(
+            acts[0].terms[0],
+            VTerm::Lit(Lit::Var(slv("k", 1, None))),
+            "Ev's argument must be k.1"
+        );
+        // ...and so did the embedded restriction.
+        let p::Formula::Atom(p::Atom::Eq(lhs, _)) = &rest[0] else {
+            panic!("expected an equality restriction");
+        };
+        let p::Term::Var(v) = lhs else {
+            panic!("expected a variable on the left");
+        };
+        assert_eq!((v.name.as_str(), v.idx), ("k", 1));
     }
 }

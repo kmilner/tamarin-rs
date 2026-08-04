@@ -1,14 +1,18 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, arcz, addap, Mathias-AURAND, cascremers, felixlinker,
-//   rkunnema, jdreier, Kanakanajm, Divya19gupta, rsasse, beschmi,
-//   BTom-GH, YannColomb, symphorien, xaDxelA, sans-sucre, and other
-//   minor contributors (see upstream git history)
+//   meiersi, jdreier, arcz, addap, Mathias-AURAND, racoucho1u,
+//   felixlinker, cascremers, rkunnema, rsasse, Kanakanajm, beschmi,
+//   Divya19gupta, PhilipLukertWork, yavivanov, BTom-GH, kevinmorio,
+//   YannColomb, Nick Moore, sans-sucre, symphorien, katrielalex,
+//   xaDxelA, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs,
+//   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
+//   lib/theory/src/Theory/Constraint/System.hs,
 //   lib/theory/src/Theory/Constraint/System/Constraints.hs,
 //   lib/theory/src/Theory/Constraint/System/Dot.hs,
 //   lib/theory/src/Theory/Constraint/System/Graph/Graph.hs,
 //   lib/theory/src/Theory/Constraint/System/Graph/GraphRepr.hs,
+//   lib/theory/src/Theory/Constraint/System/Graph/Simplification.hs,
 //   lib/theory/src/Theory/Model/Fact.hs,
 //   lib/theory/src/Theory/Model/Rule.hs,
 //   lib/theory/src/Theory/Text/Parser/Fact.hs,
@@ -30,9 +34,10 @@
 //!
 //! Per-rule node FILL colours are a faithful port of HS `nodeColorMap`
 //! (Dot.hs:190-218): the size-dependent light-HSV palette keyed by
-//! `(groupIdx, memberIdx)` — see `build_node_color_map` / `NodeColorMap`
-//! below. An explicit per-rule `color:` attribute and a cluster's
-//! `manualNodeColor` still take priority (HS `dotNodeCompact`, Dot.hs:248-256).
+//! `(groupIdx, memberIdx)` — see `build_node_color_map` / `NodeColorMap` in
+//! `crate::graph::color`. An explicit per-rule `color:` attribute and a
+//! cluster's `manualNodeColor` still take priority (HS `dotNodeCompact`,
+//! Dot.hs:248-256).
 //! Each rule record also carries HS's `fontcolor` (`colorUsesWhiteFont` of the
 //! palette colour, Dot.hs:236-379, see line 258/284-287) and `role` (Dot.hs:236-379, see line 259) attributes.
 //!
@@ -45,7 +50,7 @@
 //!     (see `rule_node`): under the default node style, intruder rules and the
 //!     `Fresh` rule collapse to a PLAIN `mkSimpleNode` ellipse (Dot.hs:289-290)
 //!     with no fill/font/role attrs. The label is `show v : showDotRuleCaseName
-//!     ru` when the node has an outgoing edge (`hasOutgoingEdge`, Dot.hs:277-279,
+//!     ru` when the node has an outgoing edge (`hasOutgoingEdge`, Dot.hs:280-283,
 //!     over the TOP-LEVEL `grEdges` only), else the full rule label incl. the
 //!     bracketed action row. The `uncompact`/`FullBoringNodes` toggle is not
 //!     plumbed through the RS handler (see `graph/options.rs`), so this route is
@@ -59,7 +64,7 @@
 //!     rendered identically.
 //!
 //! Reference:
-//!   - `lib/theory/src/Theory/Constraint/System/Dot.hs` (605 lines)
+//!   - `lib/theory/src/Theory/Constraint/System/Dot.hs`
 //!   - `lib/theory/src/Theory/Constraint/System/Graph/Graph.hs`
 //!   - `lib/theory/src/Theory/Constraint/System/Graph/GraphRepr.hs`
 //!
@@ -117,17 +122,18 @@ use tamarin_theory::rule::{rule_name_string, IntrRuleACInfo, ProtoRuleName, Rule
 use tamarin_utils::dot::fix_multi_line_label;
 
 use crate::graph::abbreviation::{
-    apply_abbreviations_fact, compute_abbreviations, order_abbreviations_for_json,
-    AbbreviationOptions, Abbreviations,
+    apply_abbreviations_fact, order_abbreviations_for_json, Abbreviations,
 };
 use crate::graph::color::{build_node_color_map, fact_doc_of, reason_color, NodeColorMap};
 use crate::graph::options::GraphOptions;
-use crate::graph::render_system::RenderSystem;
-use crate::graph::repr::{
-    add_cluster_by_role, add_intelligent_cluster_using_similar_names, compute_basic_graph_repr,
-    extract_base_name, extract_role, GEdge, GNode, MissingHint, NodeType,
-};
-use crate::graph::simplify::{compress_system, simplify_system};
+use crate::graph::repr::{extract_base_name, extract_role, GEdge, GNode, MissingHint, NodeType};
+use crate::graph::{system_to_graph, Graph};
+
+/// `NodeId -> &RuleACInst` index over the ORIGINAL system: the `_gSystem` that
+/// `resolveNodePremFact`/`resolveNodeConcFact` (Graph.hs:87-96) look an edge
+/// endpoint up in, reducing HS's `M.lookup v sNodes` (System.hs:927/931) to one
+/// hash lookup per endpoint.
+type OrigNodeRules<'a> = tamarin_utils::FastMap<&'a LVar, &'a RuleACInst>;
 
 // ---------------------------------------------------------------------
 // Public API
@@ -145,48 +151,66 @@ pub fn system_to_dot(sys: &System) -> String {
 /// abbreviation discovery before emitting DOT, mirroring Haskell's
 /// `systemToGraph` + `dotSystemCompact`.
 pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
-    // 1. Pre-render simplification.  Clone-for-render boundary: from here on the
-    //    working copy is a `RenderSystem` (display-only, write-sealed) so it can
-    //    never be fed back into the prover — the compress/simplify passes mutate
-    //    it in ways that leave the `subst_system` stamps meaningless.
-    let working = RenderSystem::from_prover(sys.clone());
-    let working = if opts.compress {
-        compress_system(working)
-    } else {
-        working
-    };
-    let working = simplify_system(opts.simplification_level, working);
-    // 2. Build the GraphRepr.  `compute_basic_graph_repr` takes `&System`;
-    //    `&RenderSystem` derefs to it.
-    let mut repr = compute_basic_graph_repr(&working);
-    if opts.clustering_similar_names {
-        add_intelligent_cluster_using_similar_names(&mut repr);
-    } else {
-        add_cluster_by_role(&mut repr);
-    }
-    // 3. Compute abbreviations.
-    let abbrevs: Abbreviations = if opts.abbreviate {
-        compute_abbreviations(&repr, &AbbreviationOptions::default())
-    } else {
-        Abbreviations::new()
-    };
-    // 4. Emit DOT.
-    let mut g = DotBuilder::new();
-    // HS `dotSystemCompact` (Dot.hs:481-487) computes the node colour map from
-    // the RAW system's nodes (`nodeColorMap (M.elems $ get sNodes se)`), NOT
-    // the compressed/simplified `working` used for the graph. Mirror that: the
-    // palette is sized by the whole rule set, so it must see every original
-    // node.
+    // 1. HS `systemToGraph se graphOptions` (Dot.hs:508): simplify, cluster and
+    //    compute abbreviations.  The abbreviations come back whatever
+    //    `opts.abbreviate` says; that flag gates only their APPLICATION, below.
+    let graph = system_to_graph(sys, opts);
+    // HS `dotSystemCompact` (Dot.hs:506-512, see line 510) computes the node
+    // colour map from the RAW system's nodes (`nodeColorMap (M.elems $ get
+    // sNodes se)`), NOT the compressed/simplified copy the repr was built from.
+    // Mirror that: the palette is sized by the whole rule set, so it must see
+    // every original node.
     let color_map = build_node_color_map(&sys.nodes);
-    // HS `dotGraphCompact` (Dot.hs:490-513, see line 503) switches the graph-level defaults to
+    // 2. Emit DOT.
+    dot_graph_compact(opts, &color_map, &graph)
+}
+
+/// Port of `dotGraphCompact` (Dot.hs:514-538): emit a [`Graph`]'s repr as DOT
+/// under a precomputed [`NodeColorMap`].
+///
+/// Kept separate from [`system_to_dot_with`] because the two halves read
+/// DIFFERENT systems, exactly as HS does: the colour map and `dotEdge`'s fact
+/// resolution go through the ORIGINAL system, while the nodes, clusters and
+/// edges laid out here come from the compressed/simplified copy in
+/// [`Graph::repr`].
+fn dot_graph_compact(opts: &GraphOptions, color_map: &NodeColorMap, graph: &Graph<'_>) -> String {
+    let repr = &graph.repr;
+    let abbrevs = &graph.abbreviations;
+    let mut g = DotBuilder::new();
+    // HS `dotGraphCompact` (Dot.hs:515-538, see line 528) switches the graph-level defaults to
     // `setDefaultAttributesIfCluster` when the repr has any clusters.
     g.preamble(!repr.clusters.is_empty());
-    let abbrev_lookup = |t: &LNTerm| -> Option<LNTerm> { abbrevs.get(t).map(|(a, _)| a.clone()) };
-    // Precompute a node-id -> rule map so edge styling is O(1) per edge
-    // instead of scanning `working.nodes` per edge.
-    let node_map: HashMap<&LVar, &RuleACInst> =
-        working.nodes.iter().map(|(id, ru)| (id, ru)).collect();
-    // HS `hasOutgoingEdge graph v` (Dot.hs:277-279): a node has an outgoing edge
+    // HS `renderLNFact` (Dot.hs:228-236) asks for the abbreviated fact only
+    // when `goAbbreviate` is set and renders the original otherwise; an
+    // always-`None` lookup leaves every fact untouched, which is that `else`
+    // arm.
+    let abbrev_lookup = |t: &LNTerm| -> Option<LNTerm> {
+        if !opts.abbreviate {
+            return None;
+        }
+        abbrevs.get(t).map(|(a, _)| a.clone())
+    };
+    // Precompute a node-id -> rule map so the record-port decision is O(1) per
+    // edge endpoint instead of scanning the simplified system's nodes per edge.
+    // This is the SIMPLIFIED system, which is what backs HS's `dsConcs`/`dsPrems`
+    // (Dot.hs:265-268 — filled while `dotNodeCompact` walks the repr's nodes),
+    // the maps `dotGenEdge` (Dot.hs:403-406) resolves an edge's endpoints
+    // through.
+    let node_map: HashMap<&LVar, &RuleACInst> = graph
+        .simplified
+        .nodes
+        .iter()
+        .map(|(id, ru)| (id, ru))
+        .collect();
+    // Fact resolution for the edge STYLE reads a different system: `dotEdge`'s
+    // `check` (Dot.hs:391-392) calls `resolveNodePremFact`/`resolveNodeConcFact`
+    // from Graph.hs (:87-96), which look the endpoint up in `_gSystem` — the
+    // ORIGINAL system `systemToGraph` stores alongside the repr (`Graph se
+    // options repr abbrevs`, Graph.hs:164), not the compressed/simplified copy
+    // the repr's nodes come from.  A node the compression hid is therefore still
+    // resolvable here even though it is drawn as a `MissingNode` trapezium.
+    let orig_node_map = graph.system.node_rule_map();
+    // HS `hasOutgoingEdge graph v` (Dot.hs:280-283): a node has an outgoing edge
     // iff it is the conclusion-side source of some `SystemEdge` in the graph's
     // TOP-LEVEL edge set (`get grEdges repr`). Clustering removes a cluster's
     // internal edges from `grEdges` (GraphRepr.hs:126-129), so we mirror HS and
@@ -278,9 +302,9 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
         };
         ds_nodes.insert(node.id, id);
     }
-    // 4a. Top-level (ungrouped) nodes.
+    // 2a. Top-level (ungrouped) nodes.
     //
-    // HS `dotGraphCompact` (Dot.hs:505-510) emits, in order: the FREE
+    // HS `dotGraphCompact` (Dot.hs:530-535) emits, in order: the FREE
     // (ungrouped) nodes (`mapM_ dotNodeCompact nodes`), THEN the clusters
     // (`mapM_ dotCluster clusters`), THEN the edges.  The free nodes — e.g. an
     // unsolved-action-atom ellipse like `Unlock_0(..) @ #t2.1` — therefore
@@ -293,17 +317,17 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
             node,
             &abbrev_lookup,
             opts,
-            &color_map,
+            color_map,
             &has_outgoing,
             &ellipse_dot_ids,
         );
     }
-    // 4b. Clusters as subgraphs.
+    // 2b. Clusters as subgraphs.
     //
-    // HS `dotCluster` (Dot.hs:547-562): each cluster gets a `roleColor`
+    // HS `dotCluster` (Dot.hs:572-587): each cluster gets a `roleColor`
     // derived from `extractBaseName name`, the subgraph is `style=filled`
     // with that colour, and the colour is threaded to the child nodes as
-    // their `manualNodeColor` (Dot.hs:547-562, see line 562). HS also defers ALL of a
+    // their `manualNodeColor` (Dot.hs:572-587, see line 587). HS also defers ALL of a
     // cluster's edges to `dotClustersEdges` (Dot.hs:507-510/517-522), which
     // runs `mergeLessEdges` over the concatenation of every cluster's edges
     // and emits them AFTER every node/cluster — so we collect them here.
@@ -320,7 +344,7 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
                 &abbrev_lookup,
                 opts,
                 Some(&color),
-                &color_map,
+                color_map,
                 &has_outgoing,
                 &ellipse_dot_ids,
             );
@@ -328,14 +352,16 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
         g.close_subgraph();
         cluster_edges.extend(cluster.edges.iter().cloned());
     }
-    // 4c. Edges. HS emits `restEdges` (non-less) before the merged
-    // `lessEdges` within each scope (`dotGraphCompact`, Dot.hs:508-509),
+    // 2c. Edges. HS emits `restEdges` (non-less) before the merged
+    // `lessEdges` within each scope (`dotGraphCompact`, Dot.hs:533-534),
     // then the cluster edges last (`dotClustersEdges`).
-    emit_edges_merged(&mut g, &repr.edges, &node_map, &ds_nodes);
-    emit_edges_merged(&mut g, &cluster_edges, &node_map, &ds_nodes);
-    // 4d. Legend (if any abbreviations were chosen).
-    if !abbrevs.is_empty() {
-        g.legend(&abbrevs);
+    emit_edges_merged(&mut g, &repr.edges, &node_map, &orig_node_map, &ds_nodes);
+    emit_edges_merged(&mut g, &cluster_edges, &node_map, &orig_node_map, &ds_nodes);
+    // 2d. Legend.  HS `when abbreviate generateLegend` (Dot.hs:538) gates the
+    // whole legend on the option, and `generateLegend` itself skips an empty
+    // abbreviation map (`unless (null abbrevs)`, Dot.hs:443).
+    if opts.abbreviate && !abbrevs.is_empty() {
+        g.legend(abbrevs);
     }
     g.close();
     g.into_string()
@@ -364,7 +390,7 @@ fn emit_node(
 
 /// `emit_node` with an optional `manual_color` — the cluster `roleColor`
 /// that HS `dotCluster` threads to its child nodes as `manualNodeColor`
-/// (Dot.hs:547-562, see line 562). Only the `SystemNode` branch consults it (HS
+/// (Dot.hs:572-587, see line 587). Only the `SystemNode` branch consults it (HS
 /// `dotNodeCompact`, Dot.hs:248-256); the other node kinds ignore it.
 fn emit_node_colored(
     g: &mut DotBuilder,
@@ -427,13 +453,14 @@ fn emit_edges_merged(
     g: &mut DotBuilder,
     edges: &[GEdge],
     node_map: &HashMap<&LVar, &RuleACInst>,
+    orig_node_map: &OrigNodeRules<'_>,
     ds_nodes: &std::collections::BTreeMap<LVar, String>,
 ) {
     // restEdges: keep original order, drop less-edges.
     for edge in edges {
         match edge {
             GEdge::System(src, tgt) => {
-                g.edge(node_map, src, tgt);
+                g.edge(node_map, orig_node_map, src, tgt);
             }
             GEdge::UnsolvedChain(src, tgt) => g.chain_edge(node_map, src, tgt),
             GEdge::Less(_) => {}
@@ -741,9 +768,9 @@ impl DotBuilder {
             "darkblue"
         };
         // HS renders a loose action node via `mkSimpleNode (render lbl) attrs`
-        // = plain `D.node [("label", …), ("shape","ellipse")]` (Dot.hs:267-272,
-        // 289-290), NOT `D.record`.  A plain node label is a quoted string whose
-        // only metacharacters are `"` and newline (`escape_dot_label` =
+        // (Dot.hs:270-275) — plain `D.node [("label", …), ("shape","ellipse")]`
+        // (Dot.hs:292-293), NOT `D.record`.  A plain node label is a quoted
+        // string whose only metacharacters are `"` and newline (`escape_dot_label` =
         // `showAttr`, Text/Dot.hs:346-353); the record metacharacters
         // `{ } | < >` are LITERAL, so a tuple `<A, B, …>` in a goal fact must
         // stay `<…>` and NOT be `\<…\>`-escaped (only the `SystemNode`/
@@ -797,12 +824,14 @@ impl DotBuilder {
     fn edge(
         &mut self,
         node_map: &HashMap<&LVar, &RuleACInst>,
+        orig_node_map: &OrigNodeRules<'_>,
         src: &tamarin_theory::constraint::constraints::NodeConc,
         tgt: &tamarin_theory::constraint::constraints::NodePrem,
     ) {
-        // Look up the target premise's fact tag so we can colour
-        // the edge.
-        let style = edge_style(node_map, src, tgt);
+        // The endpoint FACTS that colour the edge come from the original system
+        // (`dotEdge`'s `check`, Dot.hs:391-392); the endpoint PORTS come from the
+        // simplified one (`dotGenEdge`'s `dsConcs`/`dsPrems`, Dot.hs:403-406).
+        let style = edge_style(orig_node_map, src, tgt);
         let src_ref = conc_port_ref(node_map, src);
         let tgt_ref = prem_port_ref(node_map, tgt);
         let _ = writeln!(self.buf, "  {} -> {} [{}];", src_ref, tgt_ref, style);
@@ -823,7 +852,7 @@ impl DotBuilder {
     }
     /// Open a subgraph (Graphviz `subgraph cluster_<n> { ... }`).
     /// `idx` is a numeric disambiguator; `name` is shown as the label and
-    /// `color` is the cluster's `roleColor` (HS `dotCluster`, Dot.hs:547-562).
+    /// `color` is the cluster's `roleColor` (HS `dotCluster`, Dot.hs:572-587).
     ///
     /// The attribute block mirrors HS `dotCluster`'s sequence exactly:
     /// `nodesep=0.6`, `ranksep=0.6`, `label`, `style=filled`, `color`,
@@ -1169,11 +1198,11 @@ fn intr_case_name(i: &IntrRuleACInfo) -> String {
         IntrRuleACInfo::PubConstr => "pub".into(),
         IntrRuleACInfo::NatConstr => "nat".into(),
         IntrRuleACInfo::IEquality => "iequality".into(),
-        IntrRuleACInfo::ConstrRule(n, _) => {
-            prefix_if_reserved(&format!("c{}", String::from_utf8_lossy(n)))
+        IntrRuleACInfo::ConstrRule { name, .. } => {
+            prefix_if_reserved(&format!("c{}", String::from_utf8_lossy(name)))
         }
-        IntrRuleACInfo::DestrRule(n, _, _, _, _) => {
-            prefix_if_reserved(&format!("d{}", String::from_utf8_lossy(n)))
+        IntrRuleACInfo::DestrRule { name, .. } => {
+            prefix_if_reserved(&format!("d{}", String::from_utf8_lossy(name)))
         }
     }
 }
@@ -1273,24 +1302,34 @@ fn prem_port_ref(
     }
 }
 
+/// `dotEdge`'s `SystemEdge` arm (Dot.hs:386-399).
+///
+/// `orig_node_map` indexes the ORIGINAL system: `check p` resolves both
+/// endpoints through `resolveNodePremFact`/`resolveNodeConcFact` **on the
+/// `Graph`** (Dot.hs:391-392), and those read `_gSystem` (Graph.hs:87-96) —
+/// the un-compressed, un-simplified system, not the copy the drawn nodes and
+/// their record ports come from.
 fn edge_style(
-    node_map: &HashMap<&LVar, &RuleACInst>,
+    orig_node_map: &OrigNodeRules<'_>,
     src: &tamarin_theory::constraint::constraints::NodeConc,
     tgt: &tamarin_theory::constraint::constraints::NodePrem,
 ) -> String {
     // Look up tag of the source-conclusion or target-premise.
-    let conc_tag = lookup_conc_tag(node_map, src);
-    let prem_tag = lookup_prem_tag(node_map, tgt);
+    let conc_tag = lookup_conc_tag(orig_node_map, src);
+    let prem_tag = lookup_prem_tag(orig_node_map, tgt);
     let is_proto = |t: Option<&FactTag>| -> bool { matches!(t, Some(FactTag::Proto(_, _, _))) };
+    // HS `isPersistentFact` (Fact.hs:379-380) reads the tag's multiplicity, and
+    // HS `factTagMultiplicity` (Fact.hs:383-388) makes `KUFact`/`KDFact`
+    // persistent alongside `ProtoFact Persistent _ _`.  Only the proto arm can
+    // fire below: the branch is gated on `check isProtoFact`, and both endpoints
+    // of an `Edge` carry the same tag because HS `insertEdges`
+    // (Reduction.hs:281-284) unifies the two facts through `solveFactEqs`, whose
+    // first act is `contradictoryIf` on unequal tags (Reduction.hs:766-769).
     let is_persistent = |t: Option<&FactTag>| -> bool {
-        matches!(
-            t,
-            Some(FactTag::Proto(
-                tamarin_theory::fact::Multiplicity::Persistent,
-                _,
-                _
-            ))
-        )
+        t.is_some_and(|tag| {
+            tamarin_theory::fact::fact_tag_multiplicity(tag)
+                == tamarin_theory::fact::Multiplicity::Persistent
+        })
     };
     let is_k = |t: Option<&FactTag>| -> bool { matches!(t, Some(FactTag::Ku) | Some(FactTag::Kd)) };
     if is_proto(conc_tag.as_ref()) || is_proto(prem_tag.as_ref()) {
@@ -1306,21 +1345,25 @@ fn edge_style(
     }
 }
 
+/// HS `resolveNodeConcFact` (System.hs:930-931) reached through Graph.hs:93-96,
+/// keeping only the tag `dotEdge`'s predicates test.
 fn lookup_conc_tag(
-    node_map: &HashMap<&LVar, &RuleACInst>,
+    orig_node_map: &OrigNodeRules<'_>,
     nc: &tamarin_theory::constraint::constraints::NodeConc,
 ) -> Option<FactTag> {
     let (nid, idx) = nc;
-    let ru = node_map.get(nid)?;
+    let ru = orig_node_map.get(nid)?;
     ru.conclusions.get(idx.0).map(|fa| fa.tag)
 }
 
+/// HS `resolveNodePremFact` (System.hs:926-927) reached through Graph.hs:87-90,
+/// keeping only the tag `dotEdge`'s predicates test.
 fn lookup_prem_tag(
-    node_map: &HashMap<&LVar, &RuleACInst>,
+    orig_node_map: &OrigNodeRules<'_>,
     np: &tamarin_theory::constraint::constraints::NodePrem,
 ) -> Option<FactTag> {
     let (nid, idx) = np;
-    let ru = node_map.get(nid)?;
+    let ru = orig_node_map.get(nid)?;
     ru.premises.get(idx.0).map(|fa| fa.tag)
 }
 
@@ -1434,7 +1477,190 @@ mod tests {
         assert!(s.contains("Out"));
     }
 
-    // Minimized web-parity repro for task #20 (dot shape): the premise /
+    /// Build a two-node system plus the edge between them, and a second copy of
+    /// it with one endpoint's node dropped from `sNodes` (`hidden` = 0 for the
+    /// source, 1 for the target) — the shape `compressSystem`'s `hideRule`
+    /// (Simplification.hs:125-152) leaves behind: the node is gone from the
+    /// drawn system while an edge still names it, so `systemMissingNodes`
+    /// (Graph.hs:116-122) draws it as a trapezium.
+    fn hidden_endpoint_graph(
+        src_conc: LNFact,
+        tgt_prem: LNFact,
+        hidden: usize,
+    ) -> (System, System, GEdge) {
+        use tamarin_term::lterm::{LSort, LVar};
+        use tamarin_theory::rule::{
+            ConcIdx, PremIdx, ProtoRuleACInstInfo, Rule, RuleAttributes, RuleInfo,
+        };
+        let mk = |name: &'static str, prems: Vec<LNFact>, concs: Vec<LNFact>| {
+            let info: RuleInfo<ProtoRuleACInstInfo, IntrRuleACInfo> =
+                RuleInfo::Proto(ProtoRuleACInstInfo {
+                    name: ProtoRuleName::Stand(name),
+                    attributes: RuleAttributes::empty(),
+                    loop_breakers: Vec::new(),
+                });
+            Rule::new(info, prems, concs, Vec::new())
+        };
+        let n1 = LVar::new("vr", LSort::Node, 1);
+        let n2 = LVar::new("vr", LSort::Node, 2);
+        let mut sys = System::empty();
+        sys.add_node(n1, mk("Producer", Vec::new(), vec![src_conc]));
+        sys.add_node(n2, mk("Consumer", vec![tgt_prem], Vec::new()));
+        let src = (n1, ConcIdx(0));
+        let tgt = (n2, PremIdx(0));
+        sys.add_edge(tamarin_theory::constraint::constraints::Edge { src, tgt });
+        let mut drawn = sys.clone();
+        let gone = if hidden == 0 { n1 } else { n2 };
+        drawn.nodes_mut().retain(|(id, _)| id != &gone);
+        (sys, drawn, GEdge::System(src, tgt))
+    }
+
+    /// Render `drawn`'s repr while resolving edge facts as HS does.
+    fn dot_of(orig: &System, drawn: System) -> String {
+        use crate::graph::render_system::RenderSystem;
+        use crate::graph::repr::compute_basic_graph_repr;
+        let simplified = RenderSystem::from_prover(drawn);
+        let repr = compute_basic_graph_repr(&simplified);
+        let graph = Graph {
+            system: orig,
+            simplified,
+            repr,
+            abbreviations: Abbreviations::new(),
+        };
+        let color_map = build_node_color_map(&orig.nodes);
+        dot_graph_compact(&GraphOptions::default(), &color_map, &graph)
+    }
+
+    fn edge_line(dot: &str) -> String {
+        dot.lines()
+            .find(|l| l.contains("->"))
+            .unwrap_or_else(|| panic!("no edge in\n{dot}"))
+            .to_string()
+    }
+
+    /// `dotEdge`'s `check p` (Dot.hs:391-392) resolves an edge's endpoints with
+    /// the Graph-level `resolveNodePremFact`/`resolveNodeConcFact`
+    /// (Graph.hs:87-96), which read `_gSystem` — the ORIGINAL system
+    /// `systemToGraph` stores (Graph.hs:164) — while the nodes on screen come
+    /// from the compressed/simplified copy.  So a conclusion whose node the
+    /// compression hid still types the edge, even though that endpoint renders
+    /// as a portless `MissingNode` trapezium (Dot.hs:277).
+    ///
+    /// The two endpoints carry deliberately different fact tags: every edge a
+    /// real system holds joins two copies of the SAME fact, so only an
+    /// asymmetric pair can tell the two systems apart.  Resolving against the
+    /// drawn system instead would find only `Fr( ~k )` — neither proto nor K —
+    /// and emit `color="gray30"`.
+    ///
+    /// HS spells the surviving attribute list `[style="bold",weight="10.0",
+    /// color="gray50"]`, as captured for the missing-node edge in
+    /// `tests/fixtures/haskell-responses/igd_cases_raw.dot`.
+    #[test]
+    fn edge_style_resolves_hidden_source_conc_from_original_system() {
+        use tamarin_term::lterm::{LSort, LVar};
+        use tamarin_term::term::Term;
+        use tamarin_term::vterm::Lit;
+        use tamarin_theory::fact::{fresh_fact, proto_fact, Multiplicity};
+        let a = Term::Lit(Lit::Var(LVar::new("A", LSort::Pub, 0)));
+        let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
+        let (orig, drawn, _) = hidden_endpoint_graph(
+            proto_fact(Multiplicity::Persistent, "Reg", vec![a]),
+            fresh_fact(k),
+            0,
+        );
+        let dot = dot_of(&orig, drawn);
+        assert!(
+            dot.contains("trapezium"),
+            "the hidden conclusion's node must draw as a MissingNode: {dot}"
+        );
+        let edge = edge_line(&dot);
+        assert!(edge.contains("style=\"bold\""), "{edge}");
+        assert!(edge.contains("color=\"gray50\""), "{edge}");
+        assert!(!edge.contains("gray30"), "{edge}");
+    }
+
+    /// The premise half of the same rule: `check` tests the TARGET premise
+    /// first (Dot.hs:391), also through the original system, so a hidden target
+    /// node types the edge even when the visible source conclusion (`Out`) is
+    /// neither a proto nor a K fact and would yield `color="gray30"` on its own.
+    #[test]
+    fn edge_style_resolves_hidden_target_prem_from_original_system() {
+        use tamarin_term::lterm::{LSort, LVar};
+        use tamarin_term::term::Term;
+        use tamarin_term::vterm::Lit;
+        use tamarin_theory::fact::{out_fact, proto_fact, Multiplicity};
+        let a = Term::Lit(Lit::Var(LVar::new("A", LSort::Pub, 0)));
+        let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
+        let (orig, drawn, _) = hidden_endpoint_graph(
+            out_fact(k),
+            proto_fact(Multiplicity::Persistent, "Reg", vec![a]),
+            1,
+        );
+        let dot = dot_of(&orig, drawn);
+        assert!(
+            dot.contains("trapezium"),
+            "the hidden premise's node must draw as a MissingNode: {dot}"
+        );
+        let edge = edge_line(&dot);
+        assert!(edge.contains("style=\"bold\""), "{edge}");
+        assert!(edge.contains("color=\"gray50\""), "{edge}");
+        assert!(!edge.contains("gray30"), "{edge}");
+    }
+
+    /// `edge_style`'s persistence test is HS `isPersistentFact`
+    /// (Fact.hs:379-380), i.e. HS `factTagMultiplicity` (Fact.hs:383-388),
+    /// which maps `KUFact` and `KDFact` to `Persistent` alongside `ProtoFact
+    /// Persistent _ _`.  An edge with a LINEAR proto fact at one end and a
+    /// KU/KD fact at the other therefore takes the bold proto branch
+    /// (Dot.hs:393-395) AND its `gray50` colour, because `check` tests BOTH
+    /// endpoints for each predicate independently (Dot.hs:391-392).
+    ///
+    /// The mixed endpoint pair is not reachable from a solver-built system:
+    /// HS `insertEdges` (Reduction.hs:281-284) unifies an edge's two facts with
+    /// `solveFactEqs`, which is `contradictoryIf` their tags differ
+    /// (Reduction.hs:766-769), and the two raw `sEdges` writers pair an `In`/`Fr`
+    /// premise with the matching conclusion of the `ISend`/`Fresh` rule they mint
+    /// (HS `exploitPrem`, Reduction.hs:243-260).  So this pins the predicate on a
+    /// hand-built system rather than on oracle bytes, using a persistent-proto
+    /// edge as the reference attribute string.
+    #[test]
+    fn edge_style_treats_k_facts_as_persistent() {
+        use tamarin_term::lterm::{LSort, LVar};
+        use tamarin_term::term::Term;
+        use tamarin_term::vterm::Lit;
+        use tamarin_theory::fact::{kd_fact, ku_fact, proto_fact, Multiplicity};
+        let a = Term::Lit(Lit::Var(LVar::new("A", LSort::Pub, 0)));
+        let m = Term::Lit(Lit::Var(LVar::new("m", LSort::Msg, 0)));
+        // `hidden_endpoint_graph`'s drawn copy is irrelevant here: `edge_style`
+        // reads only the original system.
+        let style_of = |conc: LNFact, prem: LNFact| -> String {
+            let (orig, _, edge) = hidden_endpoint_graph(conc, prem, 1);
+            let GEdge::System(src, tgt) = edge else {
+                unreachable!("hidden_endpoint_graph builds a SystemEdge")
+            };
+            edge_style(&orig.node_rule_map(), &src, &tgt)
+        };
+        let linear = || proto_fact(Multiplicity::Linear, "Use", vec![a.clone()]);
+        let persistent = style_of(
+            proto_fact(Multiplicity::Persistent, "Reg", vec![a.clone()]),
+            linear(),
+        );
+        assert!(persistent.contains("style=\"bold\""), "{persistent}");
+        assert!(persistent.contains("color=\"gray50\""), "{persistent}");
+        // Two linear proto facts stay bold but uncoloured.
+        let both_linear = style_of(linear(), linear());
+        assert!(both_linear.contains("style=\"bold\""), "{both_linear}");
+        assert!(!both_linear.contains("gray50"), "{both_linear}");
+        // A KU/KD endpoint is persistent, at either end of the edge.
+        for k in [ku_fact(m.clone()), kd_fact(m.clone())] {
+            let conc_side = style_of(k.clone(), linear());
+            assert_eq!(conc_side, persistent, "KU/KD conclusion: {k:?}");
+            let prem_side = style_of(linear(), k.clone());
+            assert_eq!(prem_side, persistent, "KU/KD premise: {k:?}");
+        }
+    }
+
+    // Minimized web-parity repro (dot shape): the premise /
     // conclusion rows of OIDC_Implicit's `Browser_Redirects_To_URI` record
     // node must be laid out by HS `renderRow`/`renderBalanced`
     // (Dot.hs:357-379) — each field at width `max 30 (round (1.3 * 100 *
@@ -1731,7 +1957,7 @@ mod tests {
     }
 
     #[test]
-    fn dot_emits_legend_when_abbreviating_long_terms() {
+    fn dot_abbreviations_and_legend_appear_only_when_abbreviate_is_set() {
         // Build a System whose nodes carry a long, frequently-repeated
         // compound term -- the abbreviation algorithm should emit a legend.
         use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
@@ -1774,6 +2000,30 @@ mod tests {
         // label (Haskell `generateLegend` emits no heading row).
         assert!(s.contains("legend ["), "no legend node: {}", s);
         assert!(s.contains("<TABLE"), "no abbreviations table: {}", s);
+        assert!(s.contains("Out( SE1 )"), "facts not abbreviated: {}", s);
+
+        // `goAbbreviate` gates only the APPLICATION of the abbreviations
+        // (`renderLNFact`, Dot.hs:228-236, and `when abbreviate
+        // generateLegend`, Dot.hs:538) — `systemToGraph` computes them either
+        // way.  With the flag clear, the same system renders every term
+        // spelled out, carries no legend, and mentions no generated name.
+        let opts = GraphOptions {
+            abbreviate: false,
+            ..GraphOptions::default()
+        };
+        let plain = system_to_dot_with(&sys, &opts);
+        assert!(
+            plain.contains("Out( senc(senc(argument, payload), session_key) )"),
+            "terms should be spelled out: {}",
+            plain
+        );
+        assert!(!plain.contains("legend ["), "unexpected legend: {}", plain);
+        assert!(!plain.contains("<TABLE"), "unexpected table: {}", plain);
+        assert!(
+            !plain.contains("SE1"),
+            "abbreviation name leaked: {}",
+            plain
+        );
     }
 
     // Build a simple proto rule node with the given premises/actions/concs.

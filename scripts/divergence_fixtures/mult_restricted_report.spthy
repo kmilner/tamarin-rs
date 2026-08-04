@@ -1,0 +1,54 @@
+// BOTH triggers of the multiplication-restriction check, one rule each.
+//
+// HS `multRestrictedReport'` (Theory/Tools/Wellformedness.hs:1047-1099) reports
+// a rule when `restrictedFailures ru` is not `([],[])`, and its two halves fire
+// independently — each rule below trips exactly one, so each entry carries its
+// own trailing line ALONE:
+//
+//   - `ConclusionProduct` trips the `mults` half.  `multTerms`
+//     (Wellformedness.hs:1094-1096) walks the CONCLUSIONS only, so the two
+//     products in the `Out` fact are listed and the two in the action facts are
+//     not — that silence on action-only products is what keeps the whole DH
+//     corpus off this topic.  The listed spelling is the flattened, sorted
+//     multiset, so the source `(~b*~a*~a)` comes back `(~a*~a*~b)`, and
+//     `prettyLNTermList = fsep . punctuate comma . map prettyLNTerm`
+//     (Wellformedness.hs:146-147) joins the two in conclusion-term order.
+//   - `LhsAbstraction` trips the `unbound ruAbstr \\ unbound ru` half with no
+//     multiplication anywhere.  `abstractTerm` (Wellformedness.hs:1073-1076)
+//     descends through the irreducible `pair` head and replaces each
+//     reducible-headed sub-term with a fresh variable, so the premise binds
+//     `x.1`/`x.2` instead of `z`/`w` and both stop being bound.
+//     `prettyVarList` (TheoryObject.hs:858-859) lists the survivors in
+//     `Ord LVar` order, so the source order `z`, `w` prints as `w, z`.
+//
+// Neither trigger is visible on the surface syntax: they need the elaborated
+// signature's `irreducibleFunSyms` (Term/Maude/Signature.hs:105) and the
+// `x.<n>` variables `abstractRule` mints.  No corpus theory reaches either one.
+//
+// `ConclusionProduct`'s action list is long enough that the two places the SAME
+// rule is printed lay it out differently: the report goes through
+// `addComment`'s `render` (TheoryObject.hs:717-718) at HughesPJ's default
+// 100/67, the theory echo through `renderDoc` (Main/Console.hs:243,399) at the
+// console's 110/73, so the actions stay on one line in the echo and break onto
+// their own line under `--[` in the report.  Shortening any action fact loses
+// that.
+//
+// Compared slices: the wf report block AND the `theory … end` echo (see
+// check.sh).  A reducible-headed left-hand side is what the second trigger is
+// made of, so the echo also carries `LhsAbstraction`'s `variants (modulo AC)`
+// block; it cannot be separated from the corner.
+
+theory MultRestrictedReport
+begin
+
+builtins: diffie-hellman
+
+rule ConclusionProduct:
+  [ Fr(~a), Fr(~b), Fr(~c) ]
+  --[ ActionOnly( (~a*~c) ), ActionOnly( (~c*~c*~a) ), ActionOnly( ~b ) ]->
+  [ Out( <(~a*~b), (~b*~a*~a)> ) ]
+
+rule LhsAbstraction:
+  [ In( <fst(z), snd(w)> ) ] --[ Seen( 'c' ) ]-> [ Out( <z, w> ) ]
+
+end

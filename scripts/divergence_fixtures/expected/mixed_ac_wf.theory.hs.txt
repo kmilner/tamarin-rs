@@ -1,0 +1,42 @@
+theory MixedAcWf
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: diffie-hellman, multiset, natural-numbers, xor
+functions: fst/1, h/1, pair/2, snd/1, zz/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) CrossOp:
+   [ Out( (c^d++(x*y)++(a⊕b)++(%e%+%f)) ) ] --> [ ]
+
+  /*
+  rule (modulo AC) CrossOp:
+     [ Out( (z++z.1++(x*y)++(%e%+%f)) ) ] --> [ ]
+  */
+
+rule (modulo E) UnionVsMult:
+   [ Out( ((a++b)⊕(x*y)) ) ] --> [ ]
+
+  /*
+  rule (modulo AC) UnionVsMult:
+     [ Out( z ) ] --> [ ]
+  */
+
+rule (modulo E) Heads:
+   [ Out( (DH_neutral++c^d++h(e)++one++<a, b>++zz(f)++(u⊕v)) ) ] --> [ ]
+
+  /*
+  rule (modulo AC) Heads:
+     [ Out( (z++z.1++DH_neutral++h(e)++one++<a, b>++zz(f)) ) ] --> [ ]
+  */
+
+rule (modulo E) SameHead:
+   [ Out( ((a*b*c)++(b*z)) ) ] --> [ ]
+
+  /* has exactly the trivial AC variant */
+
+
+
+end

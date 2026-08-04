@@ -1,10 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   addap, Mathias-AURAND, meiersi, rkunnema, jdreier, Divya19gupta,
-//   felixlinker, sans-sucre, yavivanov, and other minor contributors
+//   addap, Mathias-AURAND, meiersi, rkunnema, arcz, jdreier,
+//   Divya19gupta, sans-sucre, yavivanov, and other minor contributors
 //   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Rule.hs, lib/theory/src/Theory/Constraint/System.hs,
-//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
 //   lib/theory/src/Theory/Constraint/System/Dot.hs,
 //   lib/theory/src/Theory/Constraint/System/Graph/Graph.hs,
 //   lib/theory/src/Theory/Constraint/System/Graph/GraphRepr.hs,
@@ -267,15 +266,15 @@ fn edge_key(e: &GEdge) -> EdgeKey {
 ///      top-level `GraphRepr` fields,
 ///   4. leaves cross-cluster + non-clustered nodes/edges in place.
 ///
-/// `nodes` is the node list `nodes_by_group` borrows from — the callers move
-/// it out of `repr` so the grouping cannot alias `repr` — and its un-clustered
-/// remainder becomes the new `repr.nodes`.
+/// `group` receives the nodes moved out of `repr` (grouping them in place would
+/// alias `repr.nodes`); their un-clustered remainder is put back at the end.
 pub fn add_cluster(
     repr: &mut GraphRepr,
-    nodes: &[GNode],
-    nodes_by_group: BTreeMap<String, Vec<&GNode>>,
+    group: impl for<'a> Fn(&'a [GNode]) -> BTreeMap<String, Vec<&'a GNode>>,
     name_suffix: &str,
 ) {
+    let nodes = std::mem::take(&mut repr.nodes);
+    let nodes_by_group = group(&nodes);
     let all_edges = repr.edges.clone();
     let mut sub_clusters: Vec<Cluster> = Vec::new();
     for (group_name, group_nodes) in &nodes_by_group {
@@ -292,39 +291,31 @@ pub fn add_cluster(
             });
         }
     }
-    // Index all the edges and nodes absorbed by sub_clusters, so the filters
-    // below compare each top-level element only against the absorbed ones
-    // sharing its key.
-    // The cloned cluster edges live at different addresses than the
-    // elements of `all_edges`, so absorbed edges must be filtered by
-    // structural equality (not pointer identity) — the [`EdgeKey`] bucket
-    // narrows the candidates, the `==` inside it decides.
+    // Index the nodes and edges absorbed by `sub_clusters` so each top-level
+    // element is compared only against the absorbed ones sharing its key: the
+    // key narrows the candidates, the `==` inside the bucket decides.
     //
-    // Nodes too must be removed by STRUCTURAL equality, mirroring HS
-    // `remainingNodes = filter (`notElem` clusteredNodes) grNodes`
-    // (GraphRepr.hs:117-130, see line 127): a node id can appear TWICE in `grNodes` with
-    // different types — e.g. the last-atom id is pushed both as a
-    // `SystemNode` and as a free `LastAction` ellipse (see
-    // `compute_basic_graph_repr`).  When the SystemNode is clustered,
-    // an id-keyed filter would silently drop the free ellipse as well;
-    // HS keeps it at top level (it is not an element of the cluster).  So the
-    // id only buckets the absorbed nodes — a bucket hit still has to compare
-    // the whole node, `ty` included.
+    // Both filters have to decide by STRUCTURAL equality.  The cloned cluster
+    // edges live at different addresses than the elements of `all_edges`, so
+    // pointer identity is not available.  And HS `remainingNodes = filter
+    // (`notElem` clusteredNodes) grNodes` (GraphRepr.hs:117-130, see line 127)
+    // is by value too: a node id can appear TWICE in `grNodes` with different
+    // types — the last-atom id is pushed both as a `SystemNode` and as a free
+    // `LastAction` ellipse (see `compute_basic_graph_repr`) — and when the
+    // SystemNode is clustered, an id-keyed filter would silently drop the free
+    // ellipse that HS keeps at top level (it is not an element of the cluster).
     let mut absorbed_nodes: BTreeMap<NodeId, Vec<&GNode>> = BTreeMap::new();
     for n in sub_clusters.iter().flat_map(|c| c.nodes.iter()) {
         absorbed_nodes.entry(n.id).or_default().push(n);
     }
-    let mut absorbed_edges_struct: BTreeMap<EdgeKey, Vec<&GEdge>> = BTreeMap::new();
+    let mut absorbed_edges: BTreeMap<EdgeKey, Vec<&GEdge>> = BTreeMap::new();
     for e in sub_clusters.iter().flat_map(|c| c.edges.iter()) {
-        absorbed_edges_struct
-            .entry(edge_key(e))
-            .or_default()
-            .push(e);
+        absorbed_edges.entry(edge_key(e)).or_default().push(e);
     }
     let remaining_edges: Vec<GEdge> = all_edges
         .into_iter()
         .filter(|e| {
-            !absorbed_edges_struct
+            !absorbed_edges
                 .get(&edge_key(e))
                 .is_some_and(|bucket| bucket.contains(&e))
         })
@@ -345,19 +336,12 @@ pub fn add_cluster(
 
 /// Mirror of `addClusterByRole` — wrap `add_cluster` over role groupings.
 pub fn add_cluster_by_role(repr: &mut GraphRepr) {
-    // Move the nodes out of `repr` so the grouping borrows from owned data
-    // that doesn't alias `repr`'s nodes field; `add_cluster` puts the
-    // un-clustered ones back.
-    let nodes_owned: Vec<GNode> = std::mem::take(&mut repr.nodes);
-    let groups: BTreeMap<String, Vec<&GNode>> = group_nodes_by_role(&nodes_owned);
-    add_cluster(repr, &nodes_owned, groups, "_Session_");
+    add_cluster(repr, group_nodes_by_role, "_Session_");
 }
 
 /// Mirror of `addIntelligentClusterUsingSimilarNames`.
 pub fn add_intelligent_cluster_using_similar_names(repr: &mut GraphRepr) {
-    let nodes_owned: Vec<GNode> = std::mem::take(&mut repr.nodes);
-    let groups: BTreeMap<String, Vec<&GNode>> = group_by_similar_name(&nodes_owned);
-    add_cluster(repr, &nodes_owned, groups, "_Session_");
+    add_cluster(repr, group_by_similar_name, "_Session_");
 }
 
 // ---------------------------------------------------------------------
@@ -377,16 +361,9 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     let mut nodes: Vec<GNode> = Vec::new();
     // 1. System rule instances.
     // HS `systemNodes se = map systemNode (M.toList $ get Sys.sNodes se)`
-    // (Graph.hs:99-102) reads `sNodes`, a `M.Map NodeId RuleACInst`
-    // (System.hs:383), so the nodes come out in ASCENDING `NodeId` order
-    // (`Ord LVar` = idx, then sort, then name; LTerm.hs:546-548).  RS stores
-    // them in a `Vec` in insertion order — `Reduction::set_nodes` keeps
-    // first-occurrence order because that decides which rule survives an id
-    // collision — so materialise the `M.toList` order here, as for the
-    // `sEdges` / `sLessAtoms` sets below.
-    let mut sorted_nodes: Vec<_> = sys.nodes.iter().collect();
-    sorted_nodes.sort_by_key(|a| a.0);
-    for (nid, ru) in sorted_nodes {
+    // (Graph.hs:99-102) reads `sNodes` in `M.Map` key order — materialised by
+    // `System::nodes_in_map_order`, which carries the invariant.
+    for (nid, ru) in sys.nodes_in_map_order() {
         nodes.push(GNode {
             id: *nid,
             ty: NodeType::System(ru.clone()),
@@ -444,19 +421,11 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
             ty: NodeType::LastAction,
         });
     }
-    // HS reaches `sEdges` / `sLessAtoms` through `S.toList` (Graph.hs:116-127,
-    // 138-147), so both come out in ASCENDING element order.  RS stores each
-    // set as a `Vec` whose element order carries no set semantics — the
-    // display-only `compress_system` pass appends its reconnected edges /
-    // less-atoms (`graph/simplify.rs`) instead of re-inserting in order — so
-    // materialise the set order here, at the same `S.toList` boundary.
-    // `Edge`'s derived `Ord` is `src` then `tgt` (matching HS's derived
-    // instance) and `LessAtom`'s is `(smaller, larger)`, ignoring the reason
-    // tag (matching HS's manual instance, Constraints.hs:126-130).
-    let mut sorted_edges: Vec<_> = sys.edges.iter().collect();
-    sorted_edges.sort();
-    let mut sorted_less: Vec<_> = sys.less_atoms.iter().collect();
-    sorted_less.sort();
+    // HS reaches `sEdges` / `sLessAtoms` through `S.toList` (Graph.hs:116-128,
+    // 140-150) — `Data.Set` element order, materialised by
+    // `System::edges_in_set_order` / `System::less_atoms_in_set_order`.
+    let sorted_edges = sys.edges_in_set_order();
+    let sorted_less = sys.less_atoms_in_set_order();
     // 4. Missing nodes referenced by edges.
     // HS `systemMissingNodes se = mapMaybe missingNode (S.toList sEdges)`
     // (Graph.hs:116-122): each edge yields AT MOST ONE missing node — `missingNode`

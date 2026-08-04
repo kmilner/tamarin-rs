@@ -1,9 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, jdreier, meiersi, arcz, rsasse, beschmi, rkunnema,
-//   gilcu3, Nynko, felixlinker, addap, Hong-Thai, yavivanov,
-//   racoucho1u, PhilipLukertWork, ValentinYuri, BTom-GH, Azurios-git,
-//   sans-sucre, Mathias-AURAND, and other minor contributors (see
-//   upstream git history)
+//   kevinmorio, meiersi, jdreier, arcz, rsasse, beschmi, rkunnema,
+//   Nynko, gilcu3, cascremers, felixlinker, addap, Hong-Thai,
+//   yavivanov, racoucho1u, PhilipLukertWork, ValentinYuri, BTom-GH,
+//   Azurios-git, sans-sucre, Mathias-AURAND, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/ClosedTheory.hs, lib/theory/src/Items/RuleItem.hs,
 //   lib/theory/src/Prover.hs, lib/theory/src/Rule.hs,
@@ -32,8 +32,10 @@
 //! Haskell's `prettyClosedTheory`, which interleaves the theory items
 //! with their per-lemma proof/summary annotations.
 //!
-//! `--parse-only` is the one path that re-emits the source verbatim
-//! (no analysis); all other modes go through the pretty-printer.
+//! `--parse-only` stops after parsing and prints the pretty-printed OPEN
+//! theory to stdout (HS `prettyOpenTheory`, Batch.hs:91-95 — always stdout,
+//! `-o`/`-O` are ignored there); all other modes close the theory and go
+//! through `prettyClosedTheory`.
 
 // Sanctioned stdout path: this is the batch-mode CLI output module — it emits
 // the analyzed-theory document and progress lines to stdout by design (the
@@ -48,8 +50,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use tamarin_parser::wf::{
-    after_public_names_topics, insert_wf_before, WF_AFTER_CHECK_GUARDED, WF_AFTER_CHECK_TERMS,
-    WF_AFTER_FACT_LHS, WF_AFTER_VARIANTS, WF_TOPIC_ORDER,
+    after_public_names_topics, after_unbound_topics, after_variants_topics, insert_wf_before,
+    WF_AFTER_CHECK_GUARDED, WF_AFTER_FACT_LHS, WF_AFTER_MULT_RESTRICTED, WF_TOPIC_ORDER,
 };
 use tamarin_term::maude_proc::{MaudeHandle, MaudePool, SharedMaudeCaches};
 use tamarin_theory::elaborate::elaborate;
@@ -165,7 +167,12 @@ pub struct FileResult {
 /// the exit code the binary should use (0 for success).
 pub fn run(args: &Args) -> Result<i32, RunError> {
     if args.show_help {
-        println!("{}", crate::cli::help_text());
+        // HS installs one `TamarinMode` per command and `defaultMain` dispatches
+        // on the mode BEFORE the mode's own `run` sees `--help`
+        // (Console.hs:333-338, 362-372), so each command prints its own help
+        // text.  `--help` is answered here, after `parse_args` has fixed the
+        // subcommand, for the same reason.
+        println!("{}", crate::cli::help_text(args.subcommand));
         return Ok(0);
     }
     if args.show_version {
@@ -173,8 +180,14 @@ pub fn run(args: &Args) -> Result<i32, RunError> {
         // license + `Generated from:` block go to STDOUT, the three maude
         // self-check lines to STDERR (`ensureMaude` -> `hPutStrLn stderr`).
         // version_text() already carries its own trailing newline.
-        print!("{}", crate::cli::version_text());
-        eprintln!("{}", crate::cli::version_maude_stderr_text());
+        print!("{}", crate::cli::version_text(&maude_invocation_path(args)));
+        eprintln!(
+            "{}",
+            crate::cli::version_maude_stderr_text(
+                &maude_display_name(args),
+                &maude_invocation_path(args),
+            )
+        );
         return Ok(0);
     }
 
@@ -196,10 +209,10 @@ pub fn run(args: &Args) -> Result<i32, RunError> {
 /// effort; until then we run the prover's own lib tests at build time
 /// instead (`cargo test`).  Returns rc=0 on Maude/dot reachable,
 /// rc=1 otherwise.
-fn run_test(_args: &Args) -> Result<i32, RunError> {
+fn run_test(args: &Args) -> Result<i32, RunError> {
     println!("Self-testing the tamarin-prover installation.\n");
     println!("*** Testing the availability of the required tools ***");
-    let mv = crate::cli::detect_maude_version_pub();
+    let mv = crate::cli::detect_maude_version_at(&maude_invocation_path(args));
     match &mv {
         Some(v) => println!("{}. OK.\n checking installation: OK.", v),
         None => {
@@ -266,7 +279,7 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
     })?;
     // HS emits the maude tool/version banner on STDERR (via `ensureMaude`),
     // not stdout — the rule dump alone goes to stdout.  Mirror that.
-    if let Some(v) = crate::cli::detect_maude_version_pub() {
+    if let Some(v) = crate::cli::detect_maude_version_at(&maude_path) {
         print_maude_banner(&maude_path, Some(&v));
     }
     // HS `Main.Mode.Intruder.run` (Intruder.hs:48-53) generates BOTH the DH
@@ -366,66 +379,69 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // CLI `--stop-on-trace` — merged with each theory's `configuration:`
     // block at load time (`ProofState::new`), HS `closeTheory` precedence.
     cfg.stop_on_trace = cli_cut(args);
+    // `--no-ndc` — HS captures the CLI's `TheoryLoadOptions` in the
+    // `loadTheory thyLoadOptions` closure `withWebUI` runs for every web load
+    // (Interactive.hs:135); `addNdcOption` (TheoryLoader.hs:821-826) then writes
+    // `ndcCheck` = `not (--no-ndc)` (TheoryLoader.hs:365-366) into each loaded
+    // theory's `_deductionChainCheck`.  Set before the eager load below.
+    tamarin_server::theory_io::set_ndc_check(!args.no_ndc);
 
     // Positional args are theory files (Haskell uses a working
     // directory, but we accept either: a single dir arg, or one-or-more
     // .spthy paths).
     let theory_paths: Vec<PathBuf> = collect_theory_paths(&args.in_files)?;
 
-    if !args.quiet {
-        // HS interactive runs the tool checks BEFORE the banner
-        // (Interactive.hs:86-91): `ensureMaudeAndGetVersion` prints the
-        // maude block (Console.hs:150-155) and `ensureGraphVizDot` the
-        // GraphViz block (Environment.hs:72-87), both on stderr.
-        {
-            print_maude_banner(
-                &maude_display_name(args),
-                crate::cli::detect_maude_version_pub().as_deref(),
-            );
-            eprintln!("GraphViz tool: 'dot'");
-            // HS lowercases `dot -V`'s stderr banner, strips the trailing
-            // newline, and appends ". OK." (Environment.hs:81-87); PNG
-            // support = "png" appears in the `dot -T?` error listing.
-            if let Ok(out) = std::process::Command::new("dot").arg("-V").output() {
-                let banner = String::from_utf8_lossy(&out.stderr).to_lowercase();
-                if banner.contains("graphviz") {
-                    eprintln!(" checking version: {}. OK.", banner.trim_end_matches('\n'));
-                    let png_ok = std::process::Command::new("dot")
-                        .arg("-T?")
-                        .output()
-                        .map(|o| {
-                            let s = format!(
-                                "{}{}",
-                                String::from_utf8_lossy(&o.stdout),
-                                String::from_utf8_lossy(&o.stderr),
-                            );
-                            s.to_lowercase().contains("png")
-                        })
-                        .unwrap_or(false);
-                    if png_ok {
-                        eprintln!(" checking PNG support: OK.");
-                    }
-                }
+    // HS interactive runs the tool checks BEFORE the banner
+    // (Interactive.hs:86-91): `ensureMaudeAndGetVersion` prints the
+    // maude block (Console.hs:150-155) and `ensureGraphVizDot` the
+    // GraphViz block (Environment.hs:72-87), both on stderr.  Neither is
+    // gated on any flag — `--quiet` leaves them in place (see `Args::quiet`).
+    print_maude_banner(
+        &maude_display_name(args),
+        crate::cli::detect_maude_version_at(&maude_invocation_path(args)).as_deref(),
+    );
+    eprintln!("GraphViz tool: 'dot'");
+    // HS lowercases `dot -V`'s stderr banner, strips the trailing
+    // newline, and appends ". OK." (Environment.hs:81-87); PNG
+    // support = "png" appears in the `dot -T?` error listing.
+    if let Ok(out) = std::process::Command::new("dot").arg("-V").output() {
+        let banner = String::from_utf8_lossy(&out.stderr).to_lowercase();
+        if banner.contains("graphviz") {
+            eprintln!(" checking version: {}. OK.", banner.trim_end_matches('\n'));
+            let png_ok = std::process::Command::new("dot")
+                .arg("-T?")
+                .output()
+                .map(|o| {
+                    let s = format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&o.stdout),
+                        String::from_utf8_lossy(&o.stderr),
+                    );
+                    s.to_lowercase().contains("png")
+                })
+                .unwrap_or(false);
+            if png_ok {
+                eprintln!(" checking PNG support: OK.");
             }
         }
-
-        // HS startup banner (Interactive.hs:95-101) — stdout (`putStrLn`),
-        // including the "Loading the security protocol theories" line and
-        // the trailing blank line (`intercalate "\n" [.., ""]` plus
-        // putStrLn's newline).  HS shows `workDir </> "*.spthy"`; we accept
-        // dir-or-files, so a single dir arg renders HS-style and explicit
-        // file paths are listed verbatim.
-        let loading_what = match &args.in_files[..] {
-            [one] if std::path::Path::new(one).is_dir() => {
-                format!("{}", std::path::Path::new(one).join("*.spthy").display())
-            }
-            files => files.join(", "),
-        };
-        println!(
-            "The server is starting up on port {}.\nBrowse to http://{} once the server is ready.\n\nLoading the security protocol theories '{}' ...\n",
-            port, bind_addr, loading_what,
-        );
     }
+
+    // HS startup banner (Interactive.hs:95-101) — stdout (`putStrLn`),
+    // including the "Loading the security protocol theories" line and
+    // the trailing blank line (`intercalate "\n" [.., ""]` plus
+    // putStrLn's newline).  HS shows `workDir </> "*.spthy"`; we accept
+    // dir-or-files, so a single dir arg renders HS-style and explicit
+    // file paths are listed verbatim.
+    let loading_what = match &args.in_files[..] {
+        [one] if std::path::Path::new(one).is_dir() => {
+            format!("{}", std::path::Path::new(one).join("*.spthy").display())
+        }
+        files => files.join(", "),
+    };
+    println!(
+        "The server is starting up on port {}.\nBrowse to http://{} once the server is ready.\n\nLoading the security protocol theories '{}' ...\n",
+        port, bind_addr, loading_what,
+    );
 
     // Spin up a tokio runtime and run the server. We use a multi-thread
     // runtime so background `spawn_blocking` proof tasks don't park the
@@ -559,7 +575,7 @@ fn cli_cut(args: &Args) -> Option<tamarin_theory::constraint::solver::context::C
 /// can't re-introspect the flag downstream, so we key off `args.maude_path`
 /// being `None` (the default) vs `Some` (user-supplied).
 fn maude_display_name(args: &Args) -> String {
-    let raw_path = args.maude_path.clone().unwrap_or_else(default_maude_path);
+    let raw_path = maude_invocation_path(args);
     if args.maude_path.is_some() {
         raw_path
     } else {
@@ -569,6 +585,14 @@ fn maude_display_name(args: &Args) -> String {
             .unwrap_or(&raw_path)
             .to_string()
     }
+}
+
+/// The maude binary this run invokes: the `--with-maude` path when given,
+/// else the probed default.  HS `ensureMaude` reads the same `maudePath`
+/// for both the version check and every later maude spawn (Console.hs:
+/// 156-161), so the reported version is always the invoked binary's.
+fn maude_invocation_path(args: &Args) -> String {
+    args.maude_path.clone().unwrap_or_else(default_maude_path)
 }
 
 /// Emit the `maude tool:` + version + installation banner to stderr (HS
@@ -591,7 +615,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     // through the contention-free `MaudePool`, so larger pools scale;
     // memory is budgeted via `--maude-processes`).
     // `--processors=1` falls back to a 1-thread pool, guaranteeing
-    // byte-identical output to the pre-parallel sequential path.
+    // byte-identical output to a fully sequential run.
     init_rayon_pool(args);
     if args.diff {
         return Err(RunError(
@@ -627,6 +651,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     //                  (confIndent = Spaces 4, confTrailingNewline = False)
     //                  ⇒ exactly `{\n    "graphs": []\n}` (20 bytes, NO
     //                  trailing newline; empty array renders inline).
+    //
+    // The two warnings have no HS counterpart, so `--quiet` may drop them
+    // without costing parity (see `Args::quiet`).
     if let Some(p) = &args.trace_json {
         if !args.quiet {
             eprintln!("warning: --output-json: trace graph serialisation not yet ported; writing empty stub to {}", p);
@@ -641,27 +668,45 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         fs::write(p, "").map_err(|e| RunError(format!("failed to write {}: {}", p, e)))?;
     }
     if args.in_files.is_empty() {
-        return Err(RunError(
-            "no input files given\n\n".to_string() + &crate::cli::help_text(),
-        ));
+        // HS `batchMode`'s run: `null inFiles = helpAndExit thisMode (Just "no
+        // input files given")` (Batch.hs:90).  `helpAndExit`
+        // (Console.hs:341-359) `putStrLn`s the `error: <msg>` header and the
+        // mode's help — STDOUT, not stderr — and then `exitFailure`.  Not an
+        // error value: HS never routes this through its error channel, and
+        // returning one here would send the block to stderr.
+        println!(
+            "error: no input files given\n\n{}",
+            crate::cli::help_text(Subcommand::Batch)
+        );
+        return Ok(1);
     }
     let mut overall_status = 0i32;
     let mut file_results: Vec<FileResult> = Vec::new();
+    // `--parse-only` docs, buffered and printed AFTER the file loop: HS
+    // (Batch.hs:91-95) runs `mapM (processThy "") inFiles` to completion
+    // BEFORE the `mapM_ (putStrLn . renderDoc) docs` — so a parse error in a
+    // later file aborts the run (`die`) with NOTHING printed for the earlier
+    // files, and the stderr `[Theory X] Theory loaded` markers all precede
+    // the stdout docs.
+    let mut parse_only_docs: Vec<String> = Vec::new();
 
     let parser_flags: Vec<&str> = args.defines.iter().map(String::as_str).collect();
 
     // The Maude version is constant for the whole run, but detecting it
-    // spawns a `maude --version` subprocess.  Detect it ONCE here and
-    // reuse the cached value for both the banner and every file's
-    // `BuildInfo`, avoiding one `maude --version` subprocess per file.
-    let maude_version: Option<String> = crate::cli::detect_maude_version_pub();
+    // spawns a `maude --version` subprocess.  Detect it ONCE here — from the
+    // binary this run will actually invoke — and reuse the cached value for
+    // both the banner and every file's `BuildInfo`, avoiding one
+    // `maude --version` subprocess per file.
+    let maude_version: Option<String> =
+        crate::cli::detect_maude_version_at(&maude_invocation_path(args));
 
     // HS prints the maude tool + version banner ONCE at the top of the
     // batch run (`Main.Console.argExists` path).  Mirror that here:
     // emit `maude tool: 'maude'\n checking version: X. OK.\n checking
-    // installation: OK.` before the first theory is loaded.  Suppressed
-    // by `--quiet`.
-    if !args.quiet && !args.parse_only {
+    // installation: OK.` before the first theory is loaded.  `--parse-only`
+    // never starts Maude (Batch.hs:91-95), so the banner is skipped there;
+    // `--quiet` does NOT suppress it (see `Args::quiet`).
+    if !args.parse_only {
         print_maude_banner(&maude_display_name(args), maude_version.as_deref());
     }
 
@@ -678,6 +723,17 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         {
             Ok(thy) => thy,
             Err(e) => {
+                if let Some(g) = &e.ghc_error {
+                    // A GHC `error` raised inside the HS parser (e.g. `macro`'s
+                    // two rejections, Theory/Text/Parser/Macro.hs:34-38) never
+                    // reaches `handleError`: the exception escapes to GHC's
+                    // runtime, which writes `tamarin-prover: ` ++
+                    // `displayException` — message plus `HasCallStack` frame —
+                    // to stderr and exits 1.  No parsec frame, no `SourcePos`
+                    // header; the maude banner above has already printed.
+                    eprintln!("tamarin-prover: {}", g.display_exception());
+                    return Ok(1);
+                }
                 // HS batch: `handleError e@(ParserError _) = die $ show e`
                 // (Main/Mode/Batch.hs:87-316, see line 234).  `die` writes `show e` — the raw
                 // parsec frame, with `inFile` as the `SourcePos` name — to
@@ -703,17 +759,75 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             ))
         })?;
         // HS emits this trace marker as soon as the theory parses
-        // (TheoryLoader.hs:401-424, see line 409).  `--parse-only` and `--quiet` skip it.
+        // (TheoryLoader.hs:451).
         let theory_name = parsed.name.clone();
-        // HS `[Theory X] …` progress markers go to stderr and are suppressed
-        // by `--quiet` / `--parse-only`.  Route all of them through one guard
-        // so the suppression rule lives in a single place.
+        // HS `[Theory X] …` progress markers are `traceM`s (TheoryLoader.hs:451,
+        // 496, 581, 594, 696) and land on stderr.  They are NOT gated by
+        // `--quiet` (see `Args::quiet`).  `loadTheory`'s `Theory loaded`
+        // marker fires in EVERY mode, `--parse-only` included
+        // (TheoryLoader.hs:449-452 — Batch.hs's parseOnly branch still calls
+        // `loadTheory` via `processThy`); the later translate/close markers
+        // are unreachable under `--parse-only` (the branch below `continue`s
+        // first).
         let marker = |msg: &str| {
-            if !args.quiet && !args.parse_only {
-                eprintln!("[Theory {}] {}", theory_name, msg);
-            }
+            eprintln!("[Theory {}] {}", theory_name, msg);
         };
         marker("Theory loaded");
+
+        if args.parse_only {
+            // HS-faithful `--parse-only` (Batch.hs:91-95 + TheoryLoader.hs:
+            // 443-460): parse, emit the marker above, pretty-print the OPEN
+            // theory (`prettyOpenTheory`) — no wellformedness, no
+            // configuration-block processing (that happens in `closeTheory`,
+            // TheoryLoader.hs:640-666), no Maude, no output files (`-o`/`-O`
+            // are ignored: the parseOnly branch never consults `writeOutput`),
+            // no `summary of summaries`.
+            //
+            // The elaborated theory here only supplies the parse-time
+            // signature + hoisted heuristic/tactic headers + the arity-1
+            // fold set — elaboration is RS's signature-construction step
+            // (HS builds the same `SignaturePure` during parsing).
+            let elaborated = elaborate(&parsed).map_err(|e| {
+                RunError(format!("elaboration error in {}: {}", in_file, e.message))
+            })?;
+            // Formula→guarded conversion inside the lemma/restriction
+            // renderers resolves user function symbols through this
+            // thread-local (same guard the closed path installs).
+            let _user_funs_guard = tamarin_theory::elaborate::set_user_funs_for_theory(&parsed);
+            // Parsed `process:` / `let` bodies are converted to SAPIC
+            // `PlainProcess` for the Doc-based `prettySapic'` port; the
+            // conversion lives in `tamarin-sapic` (dependency direction).
+            // `convert_process_with_defs` mirrors HS's PARSER, which inlines
+            // each `P(args)` call and wraps it in a `ProcessCall` marker
+            // action (Theory/Text/Parser/Sapic.hs:293-312) — `prettySapic'`
+            // then prints just `P(args)` for the marker (Process.hs:496).
+            let process_defs = tamarin_sapic::inline::collect_process_defs(&parsed);
+            let conv = |proc: &tamarin_parser::ast::Process| {
+                tamarin_sapic::inline::convert_process_with_defs(proc, &process_defs)
+                    .map_err(|e| e.message)
+            };
+            let body = tamarin_theory::pretty_theory::pretty_open_theory(
+                &parsed,
+                &elaborated,
+                in_file,
+                &conv,
+            )
+            .map_err(|e| {
+                RunError(format!(
+                    "open-theory rendering of {} failed: {}",
+                    in_file, e
+                ))
+            })?;
+            parse_only_docs.push(body);
+            file_results.push(FileResult {
+                in_file: in_file.clone(),
+                out_file: None,
+                results: Vec::new(),
+                elapsed_ms: t0.elapsed().as_millis(),
+                wf_count: 0,
+            });
+            continue;
+        }
 
         // Effective cut strategy + auto-sources for THIS theory: CLI flags
         // merged with the in-file `configuration:` block per HS
@@ -721,9 +835,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         let (cut, auto_sources) = effective_config(args, &parsed)?;
 
         // Wellformedness checks — mirrors HS `checkWellformedness`
-        // (`Theory.Tools.Wellformedness:1270`).  Runs on every file
-        // (not gated by `--parse-only`) so a malformed theory is
-        // surfaced even without proving.
+        // (`Theory.Tools.Wellformedness:1270`).  Runs on every file that
+        // reaches the close pipeline, so a malformed theory is surfaced
+        // even without proving.
         //
         // HS-faithful: HS's `thyProtoRules` (Wellformedness.hs:133-134, see line 134)
         // applies `applyMacroInRule (theoryMacros thy)` to every rule
@@ -734,11 +848,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         let mut wf_report = tamarin_parser::wf::check_theory(&parsed_for_wf);
         // Strip the static "Message Derivation Checks" entry — the
         // dynamic check below replaces it with the prover-based result.
-        // We keep the static check available for the `--parse-only`
-        // path (where no Maude is started).
-        if !args.parse_only {
-            wf_report.retain(|e| e.topic != "Message Derivation Checks");
-        }
+        // (`--parse-only` never reaches this point — it `continue`d above,
+        // before any wellformedness runs, matching HS Batch.hs:91-95.)
+        wf_report.retain(|e| e.topic != "Message Derivation Checks");
         // HS `checkIfLemmasInTheory` (Wellformedness.hs:1156-1171) — FIRST
         // in HS's checkWellformedness list (line 1272).  Checks that every
         // --prove=X / --lemma=X name corresponds to a theory lemma.  This
@@ -755,26 +867,16 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             }
         }
 
-        if args.parse_only {
-            // HS-faithful: `--parse-only` does NOT run wellformedness
-            // (checkWellformedness only fires inside `--prove`'s
-            // close-theory pipeline).  Just re-emit the source verbatim.
-            emit_output(args, in_file, &src)?;
-            file_results.push(FileResult {
-                in_file: in_file.clone(),
-                out_file: out_path_for(args, in_file),
-                results: Vec::new(),
-                elapsed_ms: t0.elapsed().as_millis(),
-                wf_count: 0,
-            });
-            continue;
-        }
-
         // Elaborate (mainly to get the protocol-specific MaudeSig).
         let mut elaborated = elaborate(&parsed)
             .map_err(|e| RunError(format!("elaboration error in {}: {}", in_file, e.message)))?;
-        // HS `addParamsOptions` `addNdcOption`: `--no-ndc` disables the
-        // no-deconstruction-chain check for this theory.
+        // HS `addParamsOptions`' `addNdcOption` (TheoryLoader.hs:821-826):
+        // `--no-ndc` disables the no-deconstruction-chain check for this theory.
+        //
+        // HS applies it inside `loadTheory` (TheoryLoader.hs:449-452), which both
+        // modes call; the interactive path reaches it through
+        // `tamarin_server::theory_io::set_ndc_check` (wired in
+        // `run_interactive`), which writes the same field on every web load.
         if args.no_ndc {
             elaborated.options.deduction_chain_check = false;
         }
@@ -797,63 +899,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // (TheoryLoader.hs:448-460, see line 454).
         marker("Theory translated");
 
-        // Port of HS `formulaReports.checkTerms` (Wellformedness.hs:960-985,
-        // "Formula terms" topic).  This check needs the elaborated `MaudeSig`
-        // (reducible/irreducible funsym classification, `irreducibleFunSyms
-        // maudeSig`) so it runs HERE (post-elaborate) rather than inside
-        // `check_theory` (parser-level).  Macros were already expanded into
-        // `parsed_for_wf`; `check_terms_wf` re-expands its own clone the same
-        // way (HS `applyMacroInFormula`).
-        //
-        // Position: HS `formulaReports` order is Quantifier sorts (8a),
-        // Formula terms (8b), Formula guardedness (8c).  After `groupOn`,
-        // "Formula terms" sorts before "Formula guardedness", so insert this
-        // block BEFORE the guardedness block below.  Insert before the first
-        // topic that comes after position 8b.
-        {
-            let term_errors =
-                tamarin_theory::check_terms::check_terms_wf(&parsed_for_wf, &maude_sig);
-            insert_wf_before(
-                &mut wf_report,
-                term_errors,
-                &WF_TOPIC_ORDER[WF_AFTER_CHECK_TERMS..],
-            );
-        }
-
-        // Port of HS `formulaReports.checkGuarded` (Wellformedness.hs:988-1004):
-        // for each lemma/restriction formula that cannot be converted to a
-        // guarded formula, emit a ` Formula guardedness` WF error.  This
-        // check needs `formula_to_guarded` (in tamarin-theory) so it runs
-        // HERE (post-elaborate) rather than inside `check_theory` (parser-level).
-        //
-        // HS `formulaReports` (Wellformedness.hs:999-1005) is a list-monad
-        // `do` block: for each formula it runs `msum [checkQuantifiers,
-        // checkTerms, checkGuarded]`.  `WfErrorReport` is a list, and for
-        // lists `msum = concat` (with `<$> = map`), so ALL three checks run
-        // UNCONDITIONALLY for every formula and their outputs are
-        // concatenated — there is no short-circuit gating `checkGuarded` on
-        // the earlier checks.  Running `check_guarded_wf` unconditionally is
-        // therefore HS-faithful.  In particular, a formula that fails both
-        // checkTerms and checkGuarded is double-reported by HS (one entry
-        // under "Formula terms", one under " Formula guardedness"), so both
-        // must keep running unconditionally to stay byte-identical.
-        //
-        // Position: after `check_theory`'s `formula_terms_report` (8b) and
-        // before `lemma_attribute_report` (9) — matches HS order.
-        {
-            let guard_errors = tamarin_theory::elaborate::check_guarded_wf(&parsed);
-            // Insert BEFORE the "Lemma annotations" entries that
-            // `check_theory` already put in `wf_report`, so the order
-            // matches HS: Formula guardedness (8c) before Lemma
-            // annotations (9).  Find the first index of a topic that
-            // comes after position 8 in HS's check order.
-            insert_wf_before(
-                &mut wf_report,
-                guard_errors,
-                &WF_TOPIC_ORDER[WF_AFTER_CHECK_GUARDED..],
-            );
-        }
-
         // SAPIC `process:` translation (HS `typeTheory` → `translate`,
         // TheoryLoader.hs:428-443, see line 430).  Runs ONLY for `is_sapic` theories (exactly one
         // top-level `process:`); a no-op otherwise, so non-process theories are
@@ -863,14 +908,14 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // run before `populate_rule_variants` below.  `user_set_heuristic` is
         // true iff a `heuristic:` item already populated `elaborated.heuristic`
         // (HS `addHeuristic` returns `Nothing` in that case).
-        // Install the user/builtin function-symbol flag sets
-        // (`USER_PRIVATE_FUNS` / `USER_DESTRUCTOR_FUNS` / …) for the duration
-        // of SAPIC translation AND the variant pre-computation below.  These
-        // thread-locals drive `term_to_lnterm`'s symbol resolution
-        // (privacy / constructability); `elaborate()` sets them only for its
-        // own scope, so without re-installing them here the SAPIC-injected
-        // rules' builtin symbols (`rep` private, `check_rep` / `get_rep`
-        // destructors from `locations-report`) re-elaborate with the default
+        // Install the user/builtin function-symbol flag sets (the
+        // `CollectedUserFuns` bundle) for the duration of SAPIC translation
+        // AND the variant pre-computation below.  That thread-local drives
+        // `term_to_lnterm`'s symbol resolution (privacy / constructability);
+        // `elaborate()` sets it only for its own scope, so without
+        // re-installing it here the SAPIC-injected rules' builtin symbols
+        // (`rep` private, `check_rep` / `get_rep` destructors from
+        // `locations-report`) re-elaborate with the default
         // public-constructor flags, serialising as `tamXC..` — which Maude
         // rejects, leaving the rule with "no variants".
         let _sapic_funs_guard = tamarin_theory::elaborate::set_user_funs_for_theory(&parsed);
@@ -886,14 +931,23 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             let acc_wf = tamarin_accountability::check_wellformedness(&parsed);
 
             let user_set_heuristic = !elaborated.heuristic.is_empty();
-            let sapic_wf =
-                tamarin_sapic::apply::apply_sapic(&mut parsed, &mut elaborated, user_set_heuristic)
-                    .map_err(|e| {
-                        RunError(format!(
-                            "SAPIC translation error in {}: {}",
-                            in_file, e.message
-                        ))
-                    })?;
+            let sapic_wf = match tamarin_sapic::apply::apply_sapic(
+                &mut parsed,
+                &mut elaborated,
+                user_set_heuristic,
+            ) {
+                Ok(w) => w,
+                Err(e) => {
+                    // HS: exceptions SAPIC `translate` raises — e.g. the
+                    // `addProtoRule` name clash on inserting a generated rule
+                    // (`duplicate rule: <name>`, OpenTheory.hs:727-733) —
+                    // escape to GHC's runtime, which writes
+                    // `tamarin-prover: <show exception>` to stderr and exits
+                    // 1, exactly like the accountability arm below.
+                    eprintln!("tamarin-prover: {}", e.message);
+                    return Ok(1);
+                }
+            };
 
             // Accountability translation (HS `Acc.translate`, TheoryLoader.hs:428-443, see line 430):
             // `Sapic.translate >=> Acc.translate`.  Expands each
@@ -934,17 +988,34 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         }
 
         // HS runs the full `checkWellformedness` on the TRANSLATED theory
-        // (TheoryLoader.hs:469-473, `checkTranslatedTheory`), i.e. AFTER SAPIC
-        // `translate` has injected the generated rules.  Our `check_theory` ran
-        // earlier on the PRE-translation theory (line ~600), so the SAPIC rules
-        // were invisible to the rule-dependent fact checks.  Re-run
-        // `factLhsOccurNoRhs` on the post-translation parsed theory (macros
-        // expanded, as HS `thyProtoRules` does) so SAPIC-only premise facts —
-        // e.g. a `Message( c, m )` consumed by an `in(c,m)` with no producing
-        // `out` — are surfaced, byte-identically to HS.  For non-SAPIC theories
-        // this is a no-op (the pre- and post-translation rule sets are equal).
+        // (TheoryLoader.hs:553-565, `checkTranslatedTheory`), i.e. AFTER SAPIC
+        // `translate` has injected the generated rules, whereas our
+        // `check_theory` runs earlier on the PRE-translation theory (above,
+        // before `apply_sapic`), where the SAPIC rules are invisible to the
+        // rule-dependent checks.  The checks below therefore run on `post_thy`:
+        // that translated theory with macros expanded, as HS `thyProtoRules` /
+        // `applyMacroInFormula` do before every check.  For non-SAPIC theories
+        // the re-runs are no-ops (the pre- and post-translation rule sets are
+        // equal).
+        let post_thy = macro_expanded_clone(&parsed);
         if elaborated.is_sapic {
-            let post_thy = macro_expanded_clone(&parsed);
+            // HS `unboundReport` (Wellformedness.hs:514-519) also walks
+            // `thyProtoRules` of the TRANSLATED theory, so a variable that is
+            // free only inside a process's embedded `_restrict` — lifted into
+            // the generated rule's `Restr_<rule>_<i>( … )` action, bound by no
+            // premise — is reported against the generated rule.  Replace the
+            // pre-translation entries (user rules only) with the full
+            // post-translation set: `post_thy` keeps the user rules in source
+            // order and carries the generated ones appended after them,
+            // matching HS's item order.  Position: HS check index 2, so the
+            // findings splice before the first entry from a later check.
+            wf_report.retain(|e| e.topic != "Unbound variables");
+            let unbound = tamarin_parser::wf::unbound_report(&post_thy);
+            insert_wf_before(&mut wf_report, unbound, &after_unbound_topics());
+
+            // HS `factLhsOccurNoRhs` likewise sees the generated rules, so
+            // SAPIC-only premise facts — e.g. a `Message( c, m )` consumed by
+            // an `in(c,m)` with no producing `out` — are surfaced too.
             let topic = "Facts occur in the left-hand-side but not in any right-hand-side ";
             wf_report.retain(|e| e.topic != topic);
             let lhs_rhs = tamarin_parser::wf::fact_lhs_occur_no_rhs(&post_thy);
@@ -976,6 +1047,65 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             insert_wf_before(&mut wf_report, public_names, &after_public_names_topics());
         }
 
+        // Port of HS `formulaReports` (Wellformedness.hs:996-1015) — the whole
+        // check, all three arms.  It is ONE per-formula loop, `msum
+        // [checkQuantifiers, checkTerms, checkGuarded]` inside the
+        // `annFormulas` walk, so its three topics interleave in item order
+        // and a topic reopens after an intervening one; running the arms as
+        // separate whole-report splices would instead emit one block per
+        // topic.  `formula_reports` keeps HS's emission order.
+        //
+        // Two dependencies pin the call to this position:
+        //   - the elaborated `MaudeSig`, for `checkTerms`'s
+        //     reducible/irreducible funsym classification (HS
+        //     `irreducibleFunSyms maudeSig`), which the parser-level
+        //     `check_theory` cannot see; and
+        //   - the TRANSLATED theory, because HS's single `checkWellformedness`
+        //     pass runs on the `OpenTranslatedTheory` (`checkTranslatedTheory`,
+        //     TheoryLoader.hs:559-565, fed by `closeTheory` at :726-728), so
+        //     `annFormulas` (Wellformedness.hs:1006-1015) also covers the
+        //     restrictions SAPIC's `let … else` / `if` lowering mints
+        //     (`Restr_<rule>_<i>`, carrying the branch's terms verbatim — e.g.
+        //     an `exp` application from `<<'a'^'b','b'>, 'c'>`) and the lemmas
+        //     accountability's `translate` appends.  Both land in `parsed` only
+        //     after `apply_sapic` / `Acc::translate`, so the check reads
+        //     `post_thy`.
+        //
+        // Position: HS check index 8, so the findings splice before the first
+        // entry from a later check (`lemmaAttributeReport` onwards).
+        {
+            let formula_errors =
+                tamarin_theory::formula_reports::formula_reports(&post_thy, &maude_sig);
+            insert_wf_before(
+                &mut wf_report,
+                formula_errors,
+                &WF_TOPIC_ORDER[WF_AFTER_CHECK_GUARDED..],
+            );
+        }
+
+        // Port of HS `multRestrictedReport` (Wellformedness.hs:1108-1113,
+        // "Multiplication restriction of rules").  Pinned here by the same two
+        // dependencies as `formula_reports` above: the elaborated `MaudeSig`
+        // (HS `irreducibleFunSyms $ get (sigpMaudeSig . thySignature) thy`)
+        // and the TRANSLATED theory — HS's `thyProtoRules` reads the
+        // `OpenTranslatedTheory`'s rule items, so SAPIC's generated rules are
+        // in scope, and it must run BEFORE the no-variant rules are dropped
+        // from `elaborated` below (HS closes the theory only after
+        // `checkWellformedness`).
+        //
+        // Position: HS check index 10 — after `lemmaAttributeReport` (9),
+        // before `natWellSortedReport` (11), so splice before the first entry
+        // from a later check.
+        {
+            let mult_errors =
+                tamarin_theory::mult_restricted::mult_restricted_report(&elaborated, &maude_sig);
+            insert_wf_before(
+                &mut wf_report,
+                mult_errors,
+                &WF_TOPIC_ORDER[WF_AFTER_MULT_RESTRICTED..],
+            );
+        }
+
         // Spawn a single Maude handle for this file.  Used by:
         //   - the rule-variants computation that populates each rule's
         //     `variant_substs` + `abstracted_rule` (so the pretty-printer
@@ -988,17 +1118,15 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // query issued from any of these subprocesses reuses the memoized
         // result.  See `SharedMaudeCaches` (maude_proc.rs) for the
         // byte-parity argument and lock-order invariant.
+        // (`--parse-only` never reaches here — it `continue`d before any
+        // Maude is needed, Batch.hs:91-95.)
         let session_maude_caches = std::sync::Arc::new(SharedMaudeCaches::default());
-        let file_maude: Option<MaudeHandle> = if !args.parse_only {
-            MaudeHandle::start_with_caches(
-                &maude_path,
-                maude_sig.clone(),
-                std::sync::Arc::clone(&session_maude_caches),
-            )
-            .ok()
-        } else {
-            None
-        };
+        let file_maude: Option<MaudeHandle> = MaudeHandle::start_with_caches(
+            &maude_path,
+            maude_sig.clone(),
+            std::sync::Arc::clone(&session_maude_caches),
+        )
+        .ok();
 
         // Spawn an auxiliary MaudePool of `effective_maude_processes()`
         // EXTRA subprocesses for use at the rayon parallel sites
@@ -1008,7 +1136,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         //
         // - `--processors=1` ⇒ `effective_maude_processes=1`; we skip
         //   the auxiliary pool entirely (sequential path uses
-        //   `file_maude` only — byte-identical to pre-pool behaviour).
+        //   `file_maude` only — byte-identical to a single shared Maude).
         // - `M >= 2` ⇒ spawn M independent Maudes.  Each costs
         //   ~30-100 MB; `--maude-processes=N` lets the user override.
         //
@@ -1019,29 +1147,30 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // consult `session_maude_caches`, so a memo result computed on
         // any of the session's subprocesses is visible to all of them.
         let pool_size = args.effective_maude_processes();
-        let file_maude_pool: Option<std::sync::Arc<MaudePool>> =
-            if !args.parse_only && pool_size >= 2 {
-                match MaudePool::new(
-                    &maude_path,
-                    maude_sig.clone(),
-                    pool_size,
-                    std::sync::Arc::clone(&session_maude_caches),
-                ) {
-                    Ok(p) => Some(std::sync::Arc::new(p)),
-                    Err(e) => {
-                        if !args.quiet {
-                            eprintln!(
-                                "[warn] failed to spawn MaudePool({}): {} \
+        let file_maude_pool: Option<std::sync::Arc<MaudePool>> = if pool_size >= 2 {
+            match MaudePool::new(
+                &maude_path,
+                maude_sig.clone(),
+                pool_size,
+                std::sync::Arc::clone(&session_maude_caches),
+            ) {
+                Ok(p) => Some(std::sync::Arc::new(p)),
+                Err(e) => {
+                    // RS-only diagnostic (HS has no Maude pool), so
+                    // `--quiet` may drop it — see `Args::quiet`.
+                    if !args.quiet {
+                        eprintln!(
+                            "[warn] failed to spawn MaudePool({}): {} \
                                 — falling back to single shared Maude",
-                                pool_size, e
-                            );
-                        }
-                        None
+                            pool_size, e
+                        );
                     }
+                    None
                 }
-            } else {
-                None
-            };
+            }
+        } else {
+            None
+        };
 
         // Populate variant_substs + abstracted_rule for each protocol
         // rule whose RHS contains reducible-headed sub-terms.  Without
@@ -1093,10 +1222,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // (all variant substs were filtered). The rule's `variant_substs`
         // stays empty, and `abstracted_rule` stays `None`.
         //
-        // Detection criterion: `file_maude` is `Some` (so we ran variant
-        // computation), the rule has at least one reducible RHS sub-term OR
-        // the rule has `variant_substs` empty after `populate_rule_variants`
-        // ran. Actually — `populate_rule_variants` only calls
+        // Detection criterion: `populate_rule_variants` only calls
         // `abstract_rule_and_variants` for rules WHERE the signature has
         // reducible funs. For signatures without reducible funs, the rule
         // can NEVER get `Nothing` from `variantsProtoRule` because HS also
@@ -1108,7 +1234,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // specified variants in the rule body) is non-empty and doesn't match
         // the recomputed variants. Requires comparing parsed `rule.variants`
         // vs `abstracted_rule + variant_substs`. Not yet ported (no corpus
-        // files affected); see implementation notes below.
+        // files affected).
         if let Some(ref wf_maude) = file_maude {
             use tamarin_parser::wf::underline_topic;
             use tamarin_parser::wf::WfError as WfE;
@@ -1144,7 +1270,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 // `isFreshRedundant` filtering.
                 //
                 // Sub-check 2: "Variants mismatch" — not yet ported; no
-                // corpus files affected (see step-0 analysis).
+                // corpus files affected.
                 let precomputed_no_variants = if sig_has_reducible {
                     Some(opr.abstracted_rule.is_none() && opr.variant_substs.is_empty())
                 } else {
@@ -1180,12 +1306,10 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             }
 
             // HS position 6: ruleVariantsReport comes BEFORE factReports
-            // (position 7).  Insert before factReports items.
-            insert_wf_before(
-                &mut wf_report,
-                variants_errors,
-                &WF_TOPIC_ORDER[WF_AFTER_VARIANTS..],
-            );
+            // (position 7) and AFTER unboundReport (position 2), so the
+            // anchors are every `WF_TOPIC_ORDER` topic but "Unbound
+            // variables".
+            insert_wf_before(&mut wf_report, variants_errors, &after_variants_topics());
 
             // HS closeProtoRule (Rule.hs:97-98): `ClosedProtoRule ruE <$>
             // maybeToList (variantsProtoRule hnd ruE)` — a rule with NO
@@ -1245,22 +1369,23 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // probes, auto-sources scratch contexts, the prover session, the
         // per-lemma fallback), which all reuse this one allocation —
         // mirroring HS's `closeRuleCache` consuming `_thyCache` verbatim.
-        // The stderr markers are suppressed by `--quiet`, like the
-        // sibling `[Theory X]` markers routed through `marker`.
+        // The `No Deconstruction Chain checks started/ended` markers ride the
+        // same rule as the sibling `[Theory X]` markers routed through
+        // `marker`: printed whenever the stage runs, `--quiet` notwithstanding.
+        // `file_maude` is `Some` only when the Maude spawn succeeded, and
+        // `--parse-only` `continue`d long before this stage — so the stage
+        // and its markers are confined to the close pipeline.
         let ndc_cache: Option<tamarin_theory::constraint::solver::context::IntrRuleCache> =
             file_maude.as_ref().map(|m| {
                 let checked = tamarin_theory::close_rule::check_close_intr_rule(
                     m,
-                    (!args.quiet).then_some(theory_name.as_str()),
+                    Some(theory_name.as_str()),
                     elaborated.options.deduction_chain_check,
                 );
-                if !checked.ndc_funs.is_empty() {
-                    let mut sig = std::mem::take(&mut elaborated.signature.maude_sig);
-                    for f in &checked.ndc_funs {
-                        sig = sig
-                            .join_ndc_in_sig(*f, tamarin_term::function_symbols::NdcState::IsNdc);
-                    }
-                    elaborated.signature.maude_sig = sig;
+                for f in &checked.ndc_funs {
+                    let sig = std::mem::take(&mut elaborated.signature.maude_sig);
+                    elaborated.signature.maude_sig =
+                        sig.join_ndc_in_sig(*f, tamarin_term::function_symbols::NdcState::IsNdc);
                 }
                 checked.cache.into()
             });
@@ -1273,7 +1398,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         let deriv_timeout = args.derivcheck_timeout.unwrap_or(5) as u32;
         if deriv_timeout > 0 {
             // HS emits these markers around the per-variable derivability
-            // check (TheoryLoader.hs:463-533, see line 485, :498).
+            // check (TheoryLoader.hs:578-594, see line 581, :594).
             marker("Derivation checks started");
             if let Some(m) = file_maude.as_ref() {
                 let extra = tamarin_theory::deriv_check::check_message_derivation(
@@ -1346,7 +1471,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         if auto_sources {
             let m = file_maude
                 .clone()
-                .ok_or_else(|| RunError(format!("failed to start maude at {:?}", maude_path,)))?;
+                .ok_or_else(|| RunError(format!("failed to start maude at {:?}", maude_path)))?;
             tamarin_theory::auto_sources::apply_auto_sources(
                 &mut parsed,
                 &mut elaborated,
@@ -1569,8 +1694,8 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 // The plain-load check pass needs the session's
                 // check_and_extend arm; the pool fallback below always
                 // auto-proves.  If the session failed to build, keep the
-                // historical no-solver behaviour instead of launching
-                // searches nobody asked for.
+                // no-solver behaviour instead of launching searches nobody
+                // asked for.
                 push_skipped_results(&mut results, &elaborated);
             } else {
                 for l in elaborated.lemmas() {
@@ -1652,10 +1777,18 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         }
     }
 
-    // HS-faithful: `--parse-only` skips the `summary of summaries:`
-    // block entirely.  Only `--prove` (or any flag that actually runs
-    // the prover) emits it.
-    if !args.quiet && !args.parse_only {
+    // HS-faithful: `--parse-only` returns from `Batch.hs:91-95` before
+    // `ppRep` runs, so it skips the `summary of summaries:` block entirely
+    // and instead prints each file's open-theory doc via
+    // `mapM_ (putStrLn . renderDoc)` — one trailing newline per doc, always
+    // to stdout (`-o`/`-O` ignored), after ALL files were processed.
+    // Every other batch run emits the summary on stdout, `--quiet`
+    // notwithstanding (see `Args::quiet`).
+    if args.parse_only {
+        for doc in &parse_only_docs {
+            println!("{}", doc);
+        }
+    } else {
         print_overall_summary(&file_results, args.prove_mode);
     }
 
@@ -1874,10 +2007,13 @@ mod tests {
     }
 
     #[test]
-    fn no_input_files_errors() {
+    fn no_input_files_is_help_and_exit_not_an_error() {
+        // HS `helpAndExit` (Console.hs:341-359) prints to STDOUT and
+        // `exitFailure`s; it never builds an error value, so neither does this.
+        // The bytes and streams are pinned end-to-end in
+        // `tests/help_output.rs::no_input_files_reprints_the_help_after_an_error_line_on_stdout`.
         let a = parse(&[]);
-        let r = run(&a);
-        assert!(r.is_err());
+        assert_eq!(run(&a).expect("help-and-exit is not an error"), 1);
     }
 
     #[test]
@@ -1920,7 +2056,7 @@ mod tests {
             format_lemma_summary_line(&mk_result(LemmaVerdict::Invalidated, false, 3)),
             "L (all-traces): proof has been invalidated (3 steps)",
         );
-        // showProofStatus _ IncompleteProof = "analysis incomplete" (unchanged)
+        // showProofStatus _ IncompleteProof = "analysis incomplete"
         assert_eq!(
             format_lemma_summary_line(&mk_result(LemmaVerdict::Analyzed, false, 5)),
             "L (all-traces): analysis incomplete (5 steps)",

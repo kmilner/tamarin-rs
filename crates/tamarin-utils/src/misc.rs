@@ -1,5 +1,5 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, beschmi, sans-sucre, and other minor contributors
+//   jdreier, meiersi, beschmi, sans-sucre, and other minor contributors
 //   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/utils/src/Utils/Misc.hs

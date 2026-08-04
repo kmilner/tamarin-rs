@@ -1,11 +1,10 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, meiersi, jdreier, beschmi, Hong-Thai, PhilipLukertWork,
-//   kevinmorio, BTom-GH, rsasse, xaDxelA, and other minor contributors
-//   (see upstream git history)
+//   rkunnema, jdreier, Hong-Thai, meiersi, kevinmorio, rsasse, xaDxelA,
+//   and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/theory/src/Items/RuleItem.hs,
-//   lib/theory/src/OpenTheory.hs, lib/theory/src/Prover.hs,
-//   lib/theory/src/Rule.hs, lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Items/RuleItem.hs, lib/theory/src/OpenTheory.hs,
+//   lib/theory/src/Prover.hs, lib/theory/src/Rule.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
 //   lib/theory/src/Theory/ProofSkeleton.hs
 
 //! Port of Haskell's `--auto-sources` lemma generation

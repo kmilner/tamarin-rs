@@ -1,5 +1,5 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   BTom-GH, ValentinYuri, jdreier, meiersi, and other minor
+//   BTom-GH, jdreier, ValentinYuri, meiersi, rsasse, and other minor
 //   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Macro.hs, lib/theory/src/ClosedTheory.hs,

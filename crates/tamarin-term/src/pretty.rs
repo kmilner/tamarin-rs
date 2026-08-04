@@ -1,11 +1,11 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, beschmi, jdreier, PhilipLukertWork, rsasse, charlie-j,
-//   rkunnema, and other minor contributors (see upstream git history)
+//   meiersi, beschmi, jdreier, PhilipLukertWork, rsasse, charlie-j, and
+//   other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term.hs
 
 //! Port of `prettyLNTerm`/`prettyTerm` from
-//! `lib/term/src/Term/Term.hs` (lines 267-297) and the `Show LVar` /
+//! `lib/term/src/Term/Term.hs` (lines 298-327) and the `Show LVar` /
 //! `Show Name` instances from `lib/term/src/Term/LTerm.hs`.
 //!
 //! Produces the same surface syntax Tamarin's interactive UI uses:
@@ -29,6 +29,9 @@
 //! - `impl Display for LNTerm` (technically on `Term<Lit<Name, LVar>>`).
 
 use std::fmt;
+use std::sync::{OnceLock, RwLock};
+
+use tamarin_utils::FastMap;
 
 use crate::function_symbols::{
     diff_sym, exp_sym, nat_one_sym, pair_sym, AcSym, CSym, FunSym, EMAP_SYM_STRING,
@@ -78,8 +81,10 @@ fn pp_term_lnterm(t: &Term<Lit<Name, LVar>>, out: &mut String) {
         }
         Term::App(FunSym::Ac(o), ts) => {
             // Haskell: `ppTerms <op> 1 "(" ")" ts` — parenthesised
-            // infix list joined by the AC operator symbol.
-            let op = ac_op_symbol(*o);
+            // infix list joined by the AC operator symbol.  The separator
+            // only ever appears BETWEEN operands, so a 1-element `ts` never
+            // resolves one.
+            let op = if ts.len() > 1 { ac_op_symbol(*o) } else { "" };
             out.push('(');
             for (i, child) in ts.iter().enumerate() {
                 if i > 0 {
@@ -91,7 +96,7 @@ fn pp_term_lnterm(t: &Term<Lit<Name, LVar>>, out: &mut String) {
         }
         // Haskell `prettyTerm` matches full `NoEqSym` equality (incl.
         // privacy/constructability), e.g. `s == expSym` — not just the
-        // name+arity (Term.hs:274-277).
+        // name+arity (Term.hs:310-313).
         Term::App(FunSym::NoEq(sym), ts) if ts.len() == 2 && *sym == exp_sym() => {
             pp_term_lnterm(&ts[0], out);
             out.push('^');
@@ -215,7 +220,7 @@ pub fn pp_name(n: &Name, out: &mut String) {
 }
 
 pub fn ac_op_symbol(op: AcSym) -> &'static str {
-    // Haskell `prettyTerm`'s AC arms (Term.hs).
+    // Haskell `prettyTerm`'s AC arms (Term.hs:304-309).
     //   Mult => "*"; Xor => "⊕"; Union => "++"; NatPlus => "%+"
     // We use the unicode char for Xor since the rest of the UI
     // already passes UTF-8 around and the JS frontend renders it.
@@ -224,8 +229,38 @@ pub fn ac_op_symbol(op: AcSym) -> &'static str {
         AcSym::Xor => "\u{2295}",
         AcSym::Union => "++",
         AcSym::NatPlus => "%+",
-        AcSym::AcFct(sym) => ac_fct_op_symbol(&String::from_utf8_lossy(sym.name)),
+        AcSym::AcFct(sym) => ac_fct_op_symbol_interned(sym.name),
     }
+}
+
+/// One process-wide cache of user-defined AC separators, keyed on the IDENTITY
+/// of the symbol's interned name.  `AcFctSym::new` draws `name` from the byte
+/// intern pool, so the pointer is valid for the whole process and equal names
+/// share one address; `(ptr, len)` therefore names exactly one immutable byte
+/// string.  Every entry is a canonical `&'static str` from the string intern
+/// pool, determined by the key's content alone, so all threads see the one
+/// separator per name whether they hit or miss.  Bounded by the theory's
+/// user-defined AC signature.
+fn ac_fct_op_cache() -> &'static RwLock<FastMap<(usize, usize), &'static str>> {
+    static C: OnceLock<RwLock<FastMap<(usize, usize), &'static str>>> = OnceLock::new();
+    C.get_or_init(|| RwLock::new(FastMap::default()))
+}
+
+/// [`ac_fct_op_symbol`] for a symbol name that is already interned: a hit is a
+/// read-locked lookup on the `(ptr, len)` key, so rendering a user-AC
+/// application allocates nothing.
+fn ac_fct_op_symbol_interned(name: &'static [u8]) -> &'static str {
+    let key = (name.as_ptr() as usize, name.len());
+    if let Some(&sep) = ac_fct_op_cache().read().unwrap().get(&key) {
+        return sep;
+    }
+    // Resolved before the write lock is taken: `ac_fct_op_symbol` locks the
+    // intern pool, and holding both at once would nest the two locks.  A
+    // concurrent miss on the same key resolves to the same canonical pointer,
+    // so the losing insert overwrites the entry with an identical value.
+    let sep = ac_fct_op_symbol(&String::from_utf8_lossy(name));
+    ac_fct_op_cache().write().unwrap().insert(key, sep);
+    sep
 }
 
 /// The infix separator of a user-defined AC symbol: Haskell
@@ -233,6 +268,8 @@ pub fn ac_op_symbol(op: AcSym) -> &'static str {
 /// the symbol name by spaces, so the spaces are part of the separator (unlike
 /// the builtin ops).  Interned so it can be handed out as `&'static str` like
 /// the fixed ones; the pool is bounded by the theory's user-defined AC names.
+/// This is the by-content entry point (the parser-AST printer holds names as
+/// `String`s); [`ac_op_symbol`] reaches the same strings by symbol identity.
 pub fn ac_fct_op_symbol(name: &str) -> &'static str {
     crate::intern::intern_str(&format!(" {} ", name))
 }
@@ -274,7 +311,7 @@ impl fmt::Display for Name {
 }
 
 // Convenience: `LSort` display matches Haskell's `sortSuffix`
-// (`Term.LTerm` lines 198-203), NOT the derived `Show LSort`
+// (`Term.LTerm` lines 202-207), NOT the derived `Show LSort`
 // (which yields constructor names like `LSortMsg`).
 impl fmt::Display for LSort {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -418,6 +455,111 @@ mod tests {
         let m = var("m", LSort::Msg);
         let t = f_app_no_eq(senc, vec![k, m]);
         assert_eq!(pretty_lnterm(&t), "senc(k, m)");
+    }
+
+    #[test]
+    fn pretty_user_ac_infix_and_nullary() {
+        use crate::function_symbols::{AcFctSym, AcSym, NdcState};
+        let f = AcFctSym::new(
+            b"f".to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::NotNdc,
+        );
+        let a = var("a", LSort::Msg);
+        let b = var("b", LSort::Msg);
+        let t = f_app_ac(AcSym::AcFct(f), vec![a, b]);
+        assert_eq!(pretty_lnterm(&t), "(a f b)");
+        // HS `FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)` (Term.hs:304):
+        // the bare name, no parens.  `f_app_ac` rejects an empty argument list
+        // (HS `fAppAC` errors likewise), so the arm is reachable only by direct
+        // construction.
+        let nullary: Term<Lit<Name, LVar>> = Term::App(FunSym::Ac(AcSym::AcFct(f)), vec![].into());
+        assert_eq!(pretty_lnterm(&nullary), "f");
+    }
+
+    #[test]
+    fn ac_fct_separator_shared_across_attributes() {
+        use crate::function_symbols::{AcFctSym, AcSym, NdcState};
+        let plain = AcFctSym::new(
+            b"op".to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::NotNdc,
+        );
+        // Same name, every other field different: the separator depends on the
+        // name alone, so both resolve to the one interned string.
+        let decorated = AcFctSym::new(
+            b"op".to_vec(),
+            Privacy::Private,
+            Constructability::Destructor,
+            NdcState::IsNdc,
+        );
+        let a = ac_op_symbol(AcSym::AcFct(plain));
+        let b = ac_op_symbol(AcSym::AcFct(decorated));
+        assert_eq!(a, " op ");
+        assert_eq!(a.as_ptr(), b.as_ptr());
+        // A name of which `op` is a prefix gets its own separator.
+        let longer = AcFctSym::new(
+            b"opq".to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::NotNdc,
+        );
+        assert_eq!(ac_op_symbol(AcSym::AcFct(longer)), " opq ");
+    }
+
+    /// The separator cache is shared by every thread: a symbol first rendered
+    /// on one thread yields the identical `&'static str` — same pointer, same
+    /// bytes — on all the others.
+    ///
+    /// Bytes from the oracle on a theory declaring `f/2 [AC]`, `op/2 [AC]`,
+    /// `opq/2 [AC]` and a rule emitting `f(~a,~b)`, `op(~a,~b)`, `opq(~a,~b)`;
+    /// it renders them `(~a f ~b)`, `(~a op ~b)`, `(~a opq ~b)` (HS
+    /// `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts`, Term.hs:305).
+    #[test]
+    fn ac_fct_separator_shared_across_threads() {
+        use crate::function_symbols::{AcFctSym, AcSym, NdcState};
+        let syms: Vec<AcSym> = [&b"f"[..], b"op", b"opq"]
+            .iter()
+            .map(|n| {
+                AcSym::AcFct(AcFctSym::new(
+                    n.to_vec(),
+                    Privacy::Public,
+                    Constructability::Constructor,
+                    NdcState::NotNdc,
+                ))
+            })
+            .collect();
+        let a = var("a", LSort::Fresh);
+        let b = var("b", LSort::Fresh);
+        let render = |syms: &[AcSym]| -> Vec<(String, usize)> {
+            syms.iter()
+                .map(|o| {
+                    let t = f_app_ac(*o, vec![a.clone(), b.clone()]);
+                    (pretty_lnterm(&t), ac_op_symbol(*o).as_ptr() as usize)
+                })
+                .collect()
+        };
+        let expected = ["(~a f ~b)", "(~a op ~b)", "(~a opq ~b)"];
+
+        let first = render(&syms);
+        let rendered: Vec<&str> = first.iter().map(|(s, _)| s.as_str()).collect();
+        assert_eq!(rendered, expected);
+
+        // Warm on this thread, then read from four others at once.
+        let others: Vec<Vec<(String, usize)>> = std::thread::scope(|s| {
+            let hs: Vec<_> = (0..4)
+                .map(|_| {
+                    let syms = syms.clone();
+                    s.spawn(move || render(&syms))
+                })
+                .collect();
+            hs.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        for other in &others {
+            assert_eq!(other, &first);
+        }
     }
 
     #[test]

@@ -1,10 +1,12 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, kevinmorio, rkunnema, arcz, PhilipLukertWork,
-//   yavivanov, Hong-Thai, beschmi, racoucho1u, rsasse, Azurios-git,
-//   Nynko, ValentinYuri, felixlinker, charlie-j, and other minor
-//   contributors (see upstream git history)
+//   kevinmorio, jdreier, meiersi, arcz, rkunnema, yavivanov, Nynko,
+//   rsasse, Hong-Thai, felixlinker, Azurios-git, PhilipLukertWork, and
+//   other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   lib/theory/src/CloseRule.hs, src/Main/TheoryLoader.hs
+//   lib/theory/src/CloseRule.hs, lib/theory/src/Theory/Model/Fact.hs,
+//   lib/theory/src/Theory/Text/Parser/Rule.hs,
+//   lib/theory/src/Theory/Text/Parser/Token.hs,
+//   src/Main/TheoryLoader.hs
 
 //! No-deconstruction-chain (NDC) check — port of the NDC parts of HS
 //! `CloseRule.hs` (`prettyNDCcheck` / `applyNDCcheck` / `ndcCheck` /
@@ -38,14 +40,19 @@
 //! every later `ProofContext` construction for the theory (the
 //! `intr_override` constructor parameter), so no context re-runs the
 //! check — HS's `closeRuleCache` likewise consumes `_thyCache` verbatim.
-//! The synthetic deduction theories are rendered to `.spthy` TEXT via the
-//! parity-grade pretty-printers, re-parsed, and proved with an INJECTED
-//! intruder cache (`bound_to_one` of the parent's pre-check cache) —
+//! The synthetic deduction theories are built STRUCTURALLY — the `Out0`
+//! rule, the restriction(s) and the `Deduction` lemma constructed as
+//! values, mirroring HS's `addRules`/`addLemmas`/`addRestrictions` over
+//! `emptyThy` (CloseRule.hs:242-252) — and proved with an INJECTED
+//! intruder cache (`bound_to_one` of the parent's pre-check cache),
 //! mirroring HS's `closeTheoryWithMaude sig t` with
-//! `thyCache = intrRmodified`.
+//! `thyCache = intrRmodified`.  A text render → parse → elaborate
+//! pipeline of the same theories is kept under `cfg(test)` as the
+//! differential reference for the structural builders (see the tests).
 
+use tamarin_parser::ast as p;
 use tamarin_term::function_symbols::{FunSym, NdcState, Privacy};
-use tamarin_term::lterm::{HasFrees, LSort, LVar};
+use tamarin_term::lterm::{HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::rewriting::Equal;
 use tamarin_term::subst::apply_vterm;
@@ -54,11 +61,11 @@ use tamarin_term::term::Term;
 
 use crate::constraint::solver::context::IntrRuleCache;
 use crate::fact::{Fact, FactTag, LNFact, Multiplicity};
+use crate::guarded::Guarded;
 use crate::rule::{
     get_conc_fact, get_deconstr_rule_kd_prem, get_deconstr_rule_prems_tail,
     get_destr_rule_function, IntrRuleAC, IntrRuleACInfo,
 };
-use tamarin_term::lterm::LNTerm;
 
 // =============================================================================
 // Load-time entry (HS `checkCloseIntrRule`)
@@ -89,8 +96,7 @@ pub struct NdcCheckedCache {
 /// intrRules)` branch.
 ///
 /// `theory_name` feeds the two `[Theory NAME] No Deconstruction Chain
-/// checks started/ended` markers; `None` suppresses them (the `--quiet`
-/// batch path, matching the other `[Theory X]` progress markers).
+/// checks started/ended` markers; `None` suppresses them.
 pub fn check_close_intr_rule(
     maude: &MaudeHandle,
     theory_name: Option<&str>,
@@ -161,6 +167,25 @@ pub(crate) fn partition_for_ndc(
         }
     }
     (builtin_or_constr_or_ndc, checked_groups, all_subterm)
+}
+
+/// Final cache permutation of HS `prettyNDCcheck`: `concat t ++
+/// builtInOrConstrOrNDC ++ concat subtermRules` — checked destructor
+/// groups first, then the builtin/constructor/pre-tagged-NDC rules in
+/// assembly order, then the all-subterm groups.  The order feeds chain
+/// extension and source-case numbering, so it is parity-relevant; this is
+/// the single place that fixes it.  Callers: [`pretty_ndc_check`] (checked
+/// groups tagged by the property check) and `ProofContext`'s non-injected
+/// construction (context.rs `ndc_check_cache_order`, check bypassed).
+pub(crate) fn ndc_cache_order(
+    checked: Vec<IntrRuleAC>,
+    builtin_or_constr_or_ndc: Vec<IntrRuleAC>,
+    all_subterm: Vec<IntrRuleAC>,
+) -> Vec<IntrRuleAC> {
+    let mut out = checked;
+    out.extend(builtin_or_constr_or_ndc);
+    out.extend(all_subterm);
+    out
 }
 
 // =============================================================================
@@ -263,31 +288,38 @@ fn msg_to_fresh_terms(t: &LNTerm) -> LNTerm {
     }
 }
 
+/// Apply a free substitution to every term of a fact, keeping tag and
+/// annotations.
+fn apply_subst_fact(
+    sigma: &tamarin_term::subst::Subst<tamarin_term::lterm::Name, LVar>,
+    f: &LNFact,
+) -> LNFact {
+    let terms: Vec<LNTerm> = f
+        .terms
+        .iter()
+        .map(|t| apply_vterm(sigma, t.clone()))
+        .collect();
+    Fact::fresh_annotated(f.tag, f.annotations.clone(), terms)
+}
+
+#[cfg(test)]
 fn pretty_term(t: &LNTerm) -> String {
     tamarin_term::pretty::pretty_lnterm(t)
 }
 
+#[cfg(test)]
 fn pretty_var(v: &LVar) -> String {
     pretty_term(&tamarin_term::vterm::var_term(*v))
 }
 
-/// Render the synthetic deduction theory for one decomposition `s`
-/// (HS `modifiedTheory1/2`): the parent signature `sig_text`, the `Out0`
-/// source rule, the `OnlyOnce` (and optionally `OnlyOnceD`) restrictions,
-/// and the `Deduction` lemma.  Rendered as `.spthy` text via the
-/// parity-grade printers and re-parsed — this reuses the battle-tested
-/// print/parse pipeline instead of hand-unparsing terms.
-fn render_deduction_theory(
-    sig_text: &str,
-    s: &[LNFact],
-    fact_term: &LNTerm,
-    with_only_once_d: bool,
-) -> String {
-    // Alpha-rename every variable of `s` and `fact_term` to a simple
-    // idx-0 name (`ndcvN`).  Verdict-invariant, and keeps the rendered
-    // theory parseable (unifier-instantiated rules carry dotted indices)
-    // while sidestepping the name-keyed binder resolution in
-    // `formula_to_guarded` for same-named vars of different sorts.
+/// The text pipeline's alpha-rename: every variable of `s` and
+/// `fact_term` to a simple idx-0 name (`ndcvN`).  Verdict-invariant, and
+/// exists only for parseability — unifier-instantiated rules carry dotted
+/// indices (`x.5`), which the `.spthy` grammar cannot express.  The
+/// structural builders take the raw variables instead; the tests apply
+/// this rename to their inputs so the two pipelines compare byte-equal.
+#[cfg(test)]
+fn rename_for_render(s: &[LNFact], fact_term: &LNTerm) -> (Vec<LNFact>, LNTerm) {
     let mut all_vars: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
     for f in s {
         f.for_each_free(&mut |v| {
@@ -308,16 +340,28 @@ fn render_deduction_theory(
         })
         .collect();
     let sigma = tamarin_term::subst::Subst::from_list(rename);
-    let ren_fact = |f: &LNFact| -> LNFact {
-        let terms: Vec<LNTerm> = f
-            .terms
-            .iter()
-            .map(|t| apply_vterm(&sigma, t.clone()))
-            .collect();
-        Fact::fresh_annotated(f.tag, f.annotations.clone(), terms)
-    };
-    let s: Vec<LNFact> = s.iter().map(ren_fact).collect();
-    let fact_term = apply_vterm(&sigma, fact_term.clone());
+    (
+        s.iter().map(|f| apply_subst_fact(&sigma, f)).collect(),
+        apply_vterm(&sigma, fact_term.clone()),
+    )
+}
+
+/// Render the synthetic deduction theory for one decomposition `s`
+/// (HS `modifiedTheory1/2`): the parent signature `sig_text`, the `Out0`
+/// source rule, the `OnlyOnce` (and optionally `OnlyOnceD`) restrictions,
+/// and the `Deduction` lemma, as `.spthy` text via the parity-grade
+/// printers.  Test-only: the production path builds the same theory
+/// structurally ([`prove_deduction_theory`]); this renderer plus
+/// [`elaborate_deduction_theory_via_text`] are the differential reference
+/// the tests hold the structural builders against.
+#[cfg(test)]
+fn render_deduction_theory(
+    sig_text: &str,
+    s: &[LNFact],
+    fact_term: &LNTerm,
+    with_only_once_d: bool,
+) -> String {
+    let (s, fact_term) = rename_for_render(s, fact_term);
 
     // varD s (HS: `frees $ concatMap factTerms s` — `sortednub . freesList`;
     // the ordering fixes the `Generated_0` argument order, used consistently
@@ -419,6 +463,7 @@ fn render_deduction_theory(
 /// Head and tail of a rendered deduction theory, for panic context: the
 /// header/signature and the `Out0` rule plus `Deduction` lemma, without
 /// dumping a signature of arbitrary size.
+#[cfg(test)]
 fn theory_snippet(src: &str) -> String {
     const HEAD: usize = 300;
     const TAIL: usize = 300;
@@ -431,18 +476,259 @@ fn theory_snippet(src: &str) -> String {
     format!("{}\n...\n{}", head, tail)
 }
 
-/// Close and auto-prove one synthetic deduction theory; `true` iff the
+/// HS `newRules` (CloseRule.hs:257-262): the `Out0` source rule for one
+/// decomposition `s`, built as a value.  Premises `Fr` each free variable
+/// of `s`'s terms (`pre = freesToFresh . varFresh`: Msg vars retyped
+/// Fresh by `msgToFreshVars`, Nat vars by `lvarToLnterm`); conclusions
+/// `Out` every fact term with Msg vars retyped (`co`); actions
+/// `Generated_0` over the retyped variables plus `OnlyOnce` (`a`).
+/// `rNewVars` is HS's literal `[]` — the structural rule never runs the
+/// parser's `newVariables` computation (Parser/Rule.hs:135).
+fn deduction_rule(s: &[LNFact]) -> crate::theory::OpenProtoRule {
+    // varD s (HS: `frees $ concatMap factTerms s` — `sortednub .
+    // freesList`; the ordering fixes the `Generated_0` argument order,
+    // used consistently on the rule and lemma sides).
+    let var_d: Vec<LVar> = tamarin_term::lterm::frees(&s.to_vec());
+    let prems: Vec<LNFact> = var_d
+        .iter()
+        .map(|v| crate::fact::fresh_fact(crate::fact::lvar_to_lnterm(&msg_to_fresh_var(v))))
+        .collect();
+    let concs: Vec<LNFact> = s
+        .iter()
+        .flat_map(|f| f.terms.iter())
+        .map(|t| crate::fact::out_fact(msg_to_fresh_terms(t)))
+        .collect();
+    let gen_args: Vec<LNTerm> = var_d
+        .iter()
+        .map(|v| msg_to_fresh_terms(&crate::fact::lvar_to_lnterm(v)))
+        .collect();
+    let acts = vec![
+        crate::fact::proto_fact(Multiplicity::Linear, "Generated_0", gen_args),
+        crate::fact::proto_fact(Multiplicity::Linear, "OnlyOnce", vec![]),
+    ];
+    crate::theory::OpenProtoRule::new(crate::rule::Rule::new(
+        crate::rule::ProtoRuleEInfo::standard("Out0"),
+        prems,
+        concs,
+        acts,
+    ))
+}
+
+/// A `#`-sorted idx-0 parser-AST variable — the timepoint/binder shape
+/// the restriction and lemma formulas quantify over.
+fn ndc_node_var(name: &str) -> p::VarSpec {
+    p::VarSpec {
+        name: name.to_string(),
+        idx: 0,
+        sort: p::SortHint::Node,
+        typ: None,
+    }
+}
+
+/// `FACT() @ #tv` — HS `factAnd`/`factAndD` (CloseRule.hs:273,277): a
+/// nullary Linear proto fact at a Node-sorted timepoint.
+fn nullary_action_at(fact_name: &str, tv: &p::VarSpec) -> p::Formula {
+    p::Formula::Atom(p::Atom::Action(
+        p::Fact {
+            persistent: false,
+            name: fact_name.to_string(),
+            args: Vec::new(),
+            annotations: Vec::new(),
+        },
+        p::Term::Var(tv.clone()),
+    ))
+}
+
+/// `#a = #b` — HS `factEq` (CloseRule.hs:274).
+fn time_eq(a: &p::VarSpec, b: &p::VarSpec) -> p::Formula {
+    p::Formula::Atom(p::Atom::Eq(
+        p::Term::Var(a.clone()),
+        p::Term::Var(b.clone()),
+    ))
+}
+
+/// HS `newRestriction0` (CloseRule.hs:269-275):
+/// `All #ndci #ndcj. OnlyOnce() @ #ndci & OnlyOnce() @ #ndcj ==>
+/// #ndci = #ndcj`, as the parser-AST value the parse of that text yields.
+/// HS names the binders `i`/`j` (LSortNode); the `ndc`-prefixed names are
+/// hints only, invisible outside the synthetic proof search.
+fn only_once_restriction_ast() -> p::Formula {
+    let i = ndc_node_var("ndci");
+    let j = ndc_node_var("ndcj");
+    p::Formula::Forall(
+        vec![i.clone(), j.clone()],
+        Box::new(p::Formula::Implies(
+            Box::new(p::Formula::And(
+                Box::new(nullary_action_at("OnlyOnce", &i)),
+                Box::new(nullary_action_at("OnlyOnce", &j)),
+            )),
+            Box::new(time_eq(&i, &j)),
+        )),
+    )
+}
+
+/// HS `newRestriction2` (CloseRule.hs:280-283):
+/// `All #ndci #ndcj #ndck. OnlyOnceD() @ #ndci & OnlyOnceD() @ #ndcj &
+/// OnlyOnceD() @ #ndck ==> #ndci = #ndcj | #ndci = #ndck | #ndcj = #ndck`
+/// (`&`/`|` left-associated, as the parser builds them).
+fn only_once_d_restriction_ast() -> p::Formula {
+    let i = ndc_node_var("ndci");
+    let j = ndc_node_var("ndcj");
+    let k = ndc_node_var("ndck");
+    p::Formula::Forall(
+        vec![i.clone(), j.clone(), k.clone()],
+        Box::new(p::Formula::Implies(
+            Box::new(p::Formula::And(
+                Box::new(p::Formula::And(
+                    Box::new(nullary_action_at("OnlyOnceD", &i)),
+                    Box::new(nullary_action_at("OnlyOnceD", &j)),
+                )),
+                Box::new(nullary_action_at("OnlyOnceD", &k)),
+            )),
+            Box::new(p::Formula::Or(
+                Box::new(p::Formula::Or(
+                    Box::new(time_eq(&i, &j)),
+                    Box::new(time_eq(&i, &k)),
+                )),
+                Box::new(time_eq(&j, &k)),
+            )),
+        )),
+    )
+}
+
+/// HS `addRestrictions [newRestriction0, newRestriction2]` (theory-1) /
+/// `[newRestriction0]` (theory-2) — CloseRule.hs:247,252 — as guarded
+/// values in theory order (`OnlyOnce` first).  The formulas are closed
+/// constants whose every binder is action-guarded, so the conversion
+/// cannot fail.
+fn deduction_restrictions(with_only_once_d: bool) -> Vec<Guarded> {
+    let mut asts = vec![only_once_restriction_ast()];
+    if with_only_once_d {
+        asts.push(only_once_d_restriction_ast());
+    }
+    asts.iter()
+        .map(|f| {
+            crate::guarded::formula_to_guarded(f).unwrap_or_else(|e| {
+                panic!(
+                    "[ndc] deduction restriction failed guarded conversion: {}",
+                    e.message
+                )
+            })
+        })
+        .collect()
+}
+
+/// Push every variable of a parser-AST term onto `out` in traversal
+/// order, first occurrence wins.  Fixes the lemma's data-binder order.
+fn collect_var_specs(t: &p::Term, out: &mut Vec<p::VarSpec>) {
+    match t {
+        p::Term::Var(v) => {
+            if !out.contains(v) {
+                out.push(v.clone());
+            }
+        }
+        p::Term::App(_, args) | p::Term::Pair(args) => {
+            for a in args {
+                collect_var_specs(a, out);
+            }
+        }
+        p::Term::AlgApp(_, a, b) | p::Term::Diff(a, b) | p::Term::BinOp(_, a, b) => {
+            collect_var_specs(a, out);
+            collect_var_specs(b, out);
+        }
+        p::Term::PatMatch(inner) => collect_var_specs(inner, out),
+        _ => {}
+    }
+}
+
+/// HS `newLemmas`' formula (CloseRule.hs:263-267):
+/// `Not (existFormula (landFormula (aLemma s ++ [kLogFact fact_term])))`,
+/// i.e. ¬∃ vars #t0 #t1. Generated_0(varD s) @ #t0 ∧ K(fact_term) @ #t1
+/// — with `aLemma`'s arguments NOT Msg→Fresh-retyped (only
+/// `lvarToLnterm`'s Nat→Fresh), and `kLogFact = protoFact Linear "K"`
+/// (Fact.hs:302-303).  Built over the parser-AST formula layer (the
+/// `Guarded` leaf type) via `lnterm_to_parser` and converted by the same
+/// `formula_to_guarded` the load path applies to user lemmas.
+///
+/// Same-named binders stay distinct without renaming: binder resolution
+/// keys on (name, idx, sort) (guarded_types.rs `subst_free_term_cow`),
+/// mirroring HS's sort-aware `LVar` identity — so a Nat variable (Fresh
+/// in the `Generated_0` args via `lvarToLnterm`, Nat inside the K term)
+/// and dotted-index unifier variables (`x.5`) resolve to their own
+/// binders.  Binder names and order: HS quantifies `frees` under their
+/// own names with timepoints `"0"`/`"1"`; here the data binders keep
+/// first-occurrence order with `ndct`-named timepoints last — names and
+/// prefix order are hints only, invisible outside the synthetic search.
+fn deduction_lemma_guarded(s: &[LNFact], fact_term: &LNTerm) -> Guarded {
+    let var_d: Vec<LVar> = tamarin_term::lterm::frees(&s.to_vec());
+    // `lnterm_to_parser` hints a Msg variable `SortHint::Msg` — the same
+    // concrete sort the parser pins on a prefixless quantifier binder
+    // (`quantifier_binder`, HS `msgvar` Token.hs:440-441), so the binder
+    // list below is byte-identical to a parsed one.
+    let lower = crate::pretty_theory::lnterm_to_parser;
+    // aLemma s (CloseRule.hs:263): `map lvarToLnterm (varD s)`.
+    let gen_args: Vec<p::Term> = var_d
+        .iter()
+        .map(|v| lower(&crate::fact::lvar_to_lnterm(v)))
+        .collect();
+    let k_arg = lower(fact_term);
+    let mut binders: Vec<p::VarSpec> = Vec::new();
+    for t in gen_args.iter().chain(std::iter::once(&k_arg)) {
+        collect_var_specs(t, &mut binders);
+    }
+    let t0 = ndc_node_var("ndct0");
+    let t1 = ndc_node_var("ndct1");
+    let gen_at = p::Formula::Atom(p::Atom::Action(
+        p::Fact {
+            persistent: false,
+            name: "Generated_0".to_string(),
+            args: gen_args,
+            annotations: Vec::new(),
+        },
+        p::Term::Var(t0.clone()),
+    ));
+    let k_at = p::Formula::Atom(p::Atom::Action(
+        p::Fact {
+            persistent: false,
+            name: "K".to_string(),
+            args: vec![k_arg],
+            annotations: Vec::new(),
+        },
+        p::Term::Var(t1.clone()),
+    ));
+    binders.push(t0);
+    binders.push(t1);
+    let ast = p::Formula::Not(Box::new(p::Formula::Exists(
+        binders,
+        Box::new(p::Formula::And(Box::new(gen_at), Box::new(k_at))),
+    )));
+    // Every binder occurs in one of the two Action guard atoms by
+    // construction, so the conversion cannot fail on guardedness.
+    crate::guarded::formula_to_guarded(&ast).unwrap_or_else(|e| {
+        panic!(
+            "[ndc] deduction lemma failed guarded conversion: {}",
+            e.message
+        )
+    })
+}
+
+/// Build and auto-prove one synthetic deduction theory; `true` iff the
 /// `Deduction` lemma's proof status folds to `TraceFound` (an attack on
 /// the all-traces lemma = the fact IS derivable without chaining).
 ///
-/// The theory is generated by [`render_deduction_theory`], so a parse,
-/// elaboration, guarded-conversion or lemma-lookup failure is an
-/// internal-consistency violation rather than a user error: each aborts —
-/// HS builds the same theory structurally, where such a failure aborts the
-/// load — instead of answering "not derivable".  Solver panics propagate for
-/// the same reason (and because a panic raised while the shared Maude mutex
-/// guard is held leaves the handle poisoned).  `false` therefore means
-/// exactly one thing: the proof search completed without finding a trace.
+/// The theory is HS `modifiedTheory1/2` (CloseRule.hs:247-252), built
+/// structurally over the parent signature already on `maude`: the `Out0`
+/// rule, the restriction(s) and the `Deduction` lemma are constructed as
+/// values ([`deduction_rule`], [`deduction_restrictions`],
+/// [`deduction_lemma_guarded`]) — no text render, parse or re-elaborate.
+/// The guarded-term instantiation inside the search reads the ambient
+/// user-fun bundle; the load paths (run.rs, theory_io.rs) hold the
+/// parent theory's guard around the whole NDC pass, and the synthetic
+/// theory's signature IS the parent's, so the sets match.  Solver panics
+/// propagate (HS aborts the load on the same failures, and a panic
+/// raised while the shared Maude mutex guard is held leaves the handle
+/// poisoned), so `false` means exactly one thing: the proof search
+/// completed without finding a trace.
 ///
 /// `run_proof_search` re-reads the opt-in `TAM_PROVE_DEADLINE_MS` wall-clock
 /// cap for every search it runs (search.rs `proof_deadline`), this one
@@ -452,7 +738,6 @@ fn theory_snippet(src: &str) -> String {
 fn prove_deduction_theory(
     maude: &MaudeHandle,
     intr_modified: &IntrRuleCache,
-    sig_text: &str,
     s: &[LNFact],
     fact_term: &LNTerm,
     with_only_once_d: bool,
@@ -461,6 +746,41 @@ fn prove_deduction_theory(
     use crate::constraint::solver::search::{proof_status, run_proof_search, ProofStatus};
     use crate::constraint::system::{formula_to_system, SourceKind};
 
+    let rules = vec![deduction_rule(s)];
+    let restrictions = deduction_restrictions(with_only_once_d);
+    let g = deduction_lemma_guarded(s, fact_term);
+    let ctx = ProofContext::new_with_injected_intruder_rules(
+        maude.clone(),
+        rules,
+        restrictions.clone(),
+        intr_modified.clone(),
+    );
+    ctx.ensure_saturated();
+    let sys = formula_to_system(
+        restrictions,
+        SourceKind::RefinedSources,
+        tamarin_parser::ast::TraceQuantifier::AllTraces,
+        false,
+        &g,
+    );
+    let root = run_proof_search(&ctx, sys, usize::MAX);
+    proof_status(&root) == ProofStatus::TraceFound
+}
+
+/// The text pipeline's elaborated forms for one synthetic deduction
+/// theory: render ([`render_deduction_theory`]), parse, elaborate, and
+/// project exactly the fields [`prove_deduction_theory`] hands the
+/// prover — the `Out0` rule, the restrictions as guarded formulas, and
+/// the `Deduction` lemma's guarded formula.  Differential reference for
+/// the structural builders; any failure panics with the rendered theory
+/// attached.
+#[cfg(test)]
+fn elaborate_deduction_theory_via_text(
+    sig_text: &str,
+    s: &[LNFact],
+    fact_term: &LNTerm,
+    with_only_once_d: bool,
+) -> (crate::theory::OpenProtoRule, Vec<Guarded>, Guarded) {
     let src = render_deduction_theory(sig_text, s, fact_term, with_only_once_d);
     let parsed = tamarin_parser::parse_theory(&src, &[]).unwrap_or_else(|e| {
         panic!(
@@ -477,26 +797,25 @@ fn prove_deduction_theory(
             theory_snippet(&src)
         )
     });
-    let rules: Vec<crate::theory::OpenProtoRule> = elaborated.rules().cloned().collect();
-    let mut restrictions: Vec<crate::guarded::Guarded> = Vec::new();
-    for r in elaborated.restrictions() {
-        let g = crate::guarded::formula_to_guarded(&r.formula).unwrap_or_else(|e| {
-            panic!(
-                "[ndc] synthetic deduction theory restriction {} is not guarded ({}); theory:\n{}",
-                r.name,
-                e.message,
-                theory_snippet(&src)
-            )
-        });
-        restrictions.push(g);
-    }
-    let ctx = ProofContext::new_with_injected_intruder_rules(
-        maude.clone(),
-        rules,
-        restrictions.clone(),
-        intr_modified.clone(),
+    let mut rules: Vec<crate::theory::OpenProtoRule> = elaborated.rules().cloned().collect();
+    assert_eq!(
+        rules.len(),
+        1,
+        "synthetic deduction theory carries exactly the Out0 rule"
     );
-    ctx.ensure_saturated();
+    let restrictions: Vec<Guarded> = elaborated
+        .restrictions()
+        .map(|r| {
+            crate::guarded::formula_to_guarded(&r.formula).unwrap_or_else(|e| {
+                panic!(
+                    "[ndc] synthetic deduction theory restriction {} is not guarded ({}); theory:\n{}",
+                    r.name,
+                    e.message,
+                    theory_snippet(&src)
+                )
+            })
+        })
+        .collect();
     let lemma = elaborated.lookup_lemma("Deduction").unwrap_or_else(|| {
         panic!(
             "[ndc] synthetic deduction theory has no Deduction lemma; theory:\n{}",
@@ -510,25 +829,15 @@ fn prove_deduction_theory(
             theory_snippet(&src)
         )
     });
-    let sys = formula_to_system(
-        restrictions,
-        SourceKind::RefinedSources,
-        tamarin_parser::ast::TraceQuantifier::AllTraces,
-        false,
-        &g,
-    );
-    let root = run_proof_search(&ctx, sys, usize::MAX);
-    proof_status(&root) == ProofStatus::TraceFound
+    (rules.remove(0), restrictions, g)
 }
 
-/// HS `deductionCheck`: can `fact` be derived from `facts` without
-/// chaining?  `intr_modified` is the `boundToOne`-mapped cache,
-/// `sig_text` the rendered parent signature every decomposition's theory
-/// carries.
+/// HS `deductionCheck` (CloseRule.hs:215): can `fact` be derived from
+/// `facts` without chaining?  `intr_modified` is the `boundToOne`-mapped
+/// cache injected into every decomposition's theory.
 fn deduction_check(
     maude: &MaudeHandle,
     intr_modified: &IntrRuleCache,
-    sig_text: &str,
     fact: &LNFact,
     facts: &[LNFact],
 ) -> bool {
@@ -552,7 +861,7 @@ fn deduction_check(
     let all_traces_found = |with_ood: bool| -> bool {
         set_d
             .iter()
-            .all(|s| prove_deduction_theory(maude, intr_modified, sig_text, s, fact_term, with_ood))
+            .all(|s| prove_deduction_theory(maude, intr_modified, s, fact_term, with_ood))
     };
     all_traces_found(true) || all_traces_found(false)
 }
@@ -567,7 +876,13 @@ fn deduction_check(
 /// other unbounded (budget 0) destructors are bounded to one application.
 fn bound_to_one(rule: &IntrRuleAC, checked_fun: Option<FunSym>) -> IntrRuleAC {
     let mut out = rule.clone();
-    if let IntrRuleACInfo::DestrRule(name, i, _, _, funs) = &mut out.info {
+    if let IntrRuleACInfo::DestrRule {
+        name,
+        remaining_applications,
+        funs,
+        ..
+    } = &mut out.info
+    {
         if get_destr_rule_function(rule) == checked_fun {
             if let Some(f) = funs.first_mut() {
                 *f = f.set_ndc(NdcState::IsNdc);
@@ -582,8 +897,8 @@ fn bound_to_one(rule: &IntrRuleAC, checked_fun: Option<FunSym>) -> IntrRuleAC {
                 name.as_slice(),
                 &crate::rule::built_in_destr_rule_incl_pair(),
             );
-            if !is_built_in && *i == 0 {
-                *i = 1;
+            if !is_built_in && *remaining_applications == 0 {
+                *remaining_applications = 1;
             }
         }
     }
@@ -630,18 +945,8 @@ fn apply_subst_rule(
     sigma: &tamarin_term::subst::Subst<tamarin_term::lterm::Name, LVar>,
     r: &IntrRuleAC,
 ) -> IntrRuleAC {
-    let app_facts = |fs: &[LNFact]| -> Vec<LNFact> {
-        fs.iter()
-            .map(|f| {
-                let terms: Vec<LNTerm> = f
-                    .terms
-                    .iter()
-                    .map(|t| apply_vterm(sigma, t.clone()))
-                    .collect();
-                Fact::fresh_annotated(f.tag, f.annotations.clone(), terms)
-            })
-            .collect()
-    };
+    let app_facts =
+        |fs: &[LNFact]| -> Vec<LNFact> { fs.iter().map(|f| apply_subst_fact(sigma, f)).collect() };
     IntrRuleAC {
         info: r.info.clone(),
         premises: app_facts(&r.premises),
@@ -657,12 +962,10 @@ fn apply_subst_rule(
 
 /// HS `chainedRulesDeductionTest`: after chaining `inst_sigma` into
 /// `inst1_sigma`, is the chained conclusion derivable from the combined
-/// premises without chaining?  `sig_cell` holds the parent signature text
-/// shared by every synthetic theory of the pass (see [`apply_ndc_check`]).
+/// premises without chaining?
 fn chained_rules_deduction_test(
     maude: &MaudeHandle,
     intr_modified: &BoundToOneCache<'_>,
-    sig_cell: &std::cell::OnceCell<String>,
     inst_sigma: &IntrRuleAC,
     inst1_sigma: &IntrRuleAC,
 ) -> bool {
@@ -680,21 +983,19 @@ fn chained_rules_deduction_test(
     if ded_naive(&fact_to_deduce.terms[0], &terms) {
         return true;
     }
-    let sig_text =
-        sig_cell.get_or_init(|| crate::pretty_theory::render_signature(&maude.maude_sig()));
-    deduction_check(
-        maude,
-        intr_modified.modified(),
-        sig_text,
-        fact_to_deduce,
-        &facts,
-    )
+    deduction_check(maude, intr_modified.modified(), fact_to_deduce, &facts)
 }
 
 /// Shape guard of HS `ndcCheck`'s first clause: a deconstruction rule with
 /// a leading KD premise, a single KD conclusion, and budget ≠ 1.
 fn ndc_checkable(r: &IntrRuleAC) -> bool {
-    let budget_ok = matches!(&r.info, IntrRuleACInfo::DestrRule(_, i, _, _, _) if *i != 1);
+    let budget_ok = matches!(
+        &r.info,
+        IntrRuleACInfo::DestrRule {
+            remaining_applications,
+            ..
+        } if *remaining_applications != 1
+    );
     budget_ok
         && r.premises.first().is_some_and(|f| f.tag == FactTag::Kd)
         && matches!(r.conclusions.as_slice(), [c] if c.tag == FactTag::Kd)
@@ -762,7 +1063,6 @@ fn ndc_check_prepare<'a>(
 fn ndc_check_eval(
     maude: &MaudeHandle,
     intr_modified: &BoundToOneCache<'_>,
-    sig_cell: &std::cell::OnceCell<String>,
     pair: ChainablePair<'_>,
 ) -> bool {
     let ChainablePair {
@@ -783,7 +1083,6 @@ fn ndc_check_eval(
         chained_rules_deduction_test(
             maude,
             intr_modified,
-            sig_cell,
             &apply_subst_rule(&sigma, r),
             &apply_subst_rule(&sigma, &fresh_inst1),
         )
@@ -806,11 +1105,6 @@ fn apply_ndc_check(
 ) -> (Vec<FunSym>, Vec<IntrRuleAC>) {
     let mut tagged: Vec<FunSym> = Vec::new();
     let mut out: Vec<IntrRuleAC> = Vec::new();
-    // Every synthetic deduction theory of this pass opens with the same
-    // parent signature — `maude`'s `Arc<MaudeSig>` is fixed at handle
-    // construction and the printer is a pure function of it — so the text is
-    // rendered once, on the first pair that reaches a deduction check.
-    let sig_cell: std::cell::OnceCell<String> = std::cell::OnceCell::new();
     for group in groups {
         let f = get_destr_rule_function(
             group
@@ -838,13 +1132,13 @@ fn apply_ndc_check(
             && chainable
                 .into_iter()
                 .rev()
-                .all(|pair| ndc_check_eval(maude, &intr_modified, &sig_cell, pair));
+                .all(|pair| ndc_check_eval(maude, &intr_modified, pair));
         let fun_name = crate::intruder_rules::show_fun_sym_name(&f);
         if is_ndc {
             eprintln!("Function {} has the NDC property.", fun_name);
             tagged.push(f);
             for mut r in group {
-                if let IntrRuleACInfo::DestrRule(_, _, _, _, funs) = &mut r.info {
+                if let IntrRuleACInfo::DestrRule { funs, .. } = &mut r.info {
                     if let Some(h) = funs.first_mut() {
                         *h = h.add_ndc(NdcState::IsNdc);
                     }
@@ -863,7 +1157,7 @@ fn apply_ndc_check(
 /// assembled intruder-rule cache.  Emits the two `[Theory NAME] No
 /// Deconstruction Chain checks started/ended` stderr markers
 /// unconditionally (HS `traceM`s them even when no group is checkable);
-/// `theory_name = None` suppresses them (the `--quiet` batch path).
+/// `theory_name = None` suppresses them.
 /// Returns the NDC-tagged function symbols (for the signature join /
 /// `functions:` header) and the final cache
 /// `checked ++ builtInOrConstrOrNDC ++ all-subterm`.
@@ -891,8 +1185,328 @@ pub fn pretty_ndc_check(
     let (tagged, checked_rules) = apply_ndc_check(maude, &init_rules, checked_groups);
     maude.reset_counter_to(cnt_before);
     marker("ended");
-    let mut out = checked_rules;
-    out.extend(builtin_or_constr_or_ndc);
-    out.extend(all_subterm);
-    (tagged, out)
+    (
+        tagged,
+        ndc_cache_order(checked_rules, builtin_or_constr_or_ndc, all_subterm),
+    )
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fact::Fact;
+    use tamarin_term::vterm::var_term;
+
+    /// KCL07's signature (examples/csf26-ac/fast/KCL07.spthy) plus a Seed
+    /// rule whose Probe action supplies canonically-elaborated test terms:
+    /// a user-AC symbol whose destructor group contains a non-subterm rule
+    /// (`xorr(x, x) = zeroo`) — exactly the family the NDC pass checks.
+    const XORR_PARENT: &str = "theory NdcStructuralParent\nbegin\n\n\
+functions: fst/1, h/1, pair/2, snd/1, xorr/2 [AC], zeroo/0\n\
+equations:\n\
+    fst(<x.1, x.2>) = x.1,\n\
+    snd(<x.1, x.2>) = x.2,\n\
+    xorr(xorr(x, y), x) = y,\n\
+    xorr(x, x) = zeroo,\n\
+    xorr(x, zeroo) = x\n\n\
+rule Seed:\n\
+  [ Fr( ~k ), In( a ), In( b ), In( c ) ]\n\
+  --[ Probe( xorr(a, b), xorr(a, xorr(b, c)), h(<~k, $p, a>), fst(c), zeroo ) ]->\n\
+  [ ]\n\n\
+end\n";
+
+    /// Parse + elaborate [`XORR_PARENT`]; returns the guard (hold it for
+    /// the test's whole body — production holds the parent theory's guard
+    /// around the NDC pass the same way), the parent `MaudeSig`, and the
+    /// Probe action's five elaborated terms.
+    fn xorr_parent() -> (
+        crate::elaborate::UserFunsForTheoryGuard,
+        tamarin_term::maude_sig::MaudeSig,
+        Vec<LNTerm>,
+    ) {
+        let parsed = tamarin_parser::parse_theory(XORR_PARENT, &[]).expect("parent parses");
+        let guard = crate::elaborate::set_user_funs_for_theory(&parsed);
+        let elab = crate::elaborate::elaborate(&parsed).expect("parent elaborates");
+        let rule = elab.rules().next().expect("Seed rule present");
+        let probe = rule.rule.actions[0].terms.to_vec();
+        assert_eq!(probe.len(), 5, "Probe carries five terms");
+        (guard, elab.signature.maude_sig, probe)
+    }
+
+    fn kd(t: LNTerm) -> LNFact {
+        Fact::fresh_annotated(FactTag::Kd, Default::default(), vec![t])
+    }
+
+    fn ku(t: LNTerm) -> LNFact {
+        Fact::fresh_annotated(FactTag::Ku, Default::default(), vec![t])
+    }
+
+    /// Differential rail: on the SAME (alpha-canonical) inputs, the
+    /// structural builders and the cfg(test) text pipeline (render →
+    /// parse → elaborate → guarded) must produce identical values for
+    /// every field [`prove_deduction_theory`] hands the prover.  The
+    /// inputs are canonicalised through the text pipeline's own rename
+    /// first because the rename is internal to that pipeline (the
+    /// structural path keeps raw variables); on a renamed input the
+    /// rename is the identity, so names compare byte-for-byte.
+    ///
+    /// The text side runs under the SYNTHETIC theory's user-fun guard
+    /// (installed by `elaborate_deduction_theory_via_text`) while the
+    /// structural side runs under the ambient parent guard, so equality
+    /// here also exercises the parent-vs-synthetic guard-set equivalence
+    /// the production path relies on.
+    fn assert_structural_matches_text(
+        sig_text: &str,
+        s: &[LNFact],
+        fact_term: &LNTerm,
+        with_only_once_d: bool,
+        label: &str,
+    ) {
+        let (s1, t1) = rename_for_render(s, fact_term);
+        let (s2, t2) = rename_for_render(&s1, &t1);
+        {
+            // The rename must have converged (its output re-sorts to the
+            // order it assigned), or the byte-comparison below would be
+            // comparing differently-named theories.
+            let (s3, t3) = rename_for_render(&s2, &t2);
+            assert_eq!((&s3, &t3), (&s2, &t2), "{label}: rename converged");
+        }
+        let (text_rule, text_restrictions, text_lemma) =
+            elaborate_deduction_theory_via_text(sig_text, &s2, &t2, with_only_once_d);
+        let struct_rule = deduction_rule(&s2);
+        let struct_restrictions = deduction_restrictions(with_only_once_d);
+        let struct_lemma = deduction_lemma_guarded(&s2, &t2);
+        // Whole-struct equality: premises/conclusions/actions, rule info
+        // (name + attributes), and `new_vars` — the structural side's HS
+        // `[]` (CloseRule.hs:257) must coincide with the text side's
+        // parser-recomputed `newVariables` on these inputs (they diverge
+        // only for Nat-sorted variables, which `lvarToLnterm` retypes in
+        // the premises; keep Nat out of the differential inputs).
+        assert_eq!(struct_rule, text_rule, "{label}: Out0 rule");
+        assert_eq!(
+            struct_restrictions, text_restrictions,
+            "{label}: restrictions as guarded"
+        );
+        assert_eq!(struct_lemma, text_lemma, "{label}: Deduction lemma guarded");
+    }
+
+    /// The differential rail over the representative deduction shapes:
+    /// user-AC terms (2-ary and flattened 3-ary `xorr`), builtin
+    /// application + pair + fresh/pub variables, a destructor-headed
+    /// term, and the zero-data-variable ground case — for both
+    /// restriction sets (theory-1 with `OnlyOnceD`, theory-2 without).
+    #[test]
+    fn structural_deduction_theory_matches_text_pipeline() {
+        let (_guard, sig, probe) = xorr_parent();
+        let sig_text = crate::pretty_theory::render_signature(&sig);
+        let (xorr2, xorr3, h_pair, fst_c, zeroo) =
+            (&probe[0], &probe[1], &probe[2], &probe[3], &probe[4]);
+        let a = var_term(
+            tamarin_term::lterm::frees(&vec![xorr2.clone()])
+                .into_iter()
+                .next()
+                .expect("xorr(a, b) has free vars"),
+        );
+        let cases: Vec<(Vec<LNFact>, &LNTerm, &str)> = vec![
+            (
+                vec![kd(xorr2.clone()), ku(a.clone())],
+                xorr3,
+                "user-AC (flat 3-ary xorr under K)",
+            ),
+            (
+                vec![kd(h_pair.clone()), ku(fst_c.clone())],
+                h_pair,
+                "builtin app + pair + fresh/pub vars + destructor head",
+            ),
+            (vec![kd(zeroo.clone())], zeroo, "ground, zero data binders"),
+        ];
+        for (s, fact_term, label) in &cases {
+            for ood in [true, false] {
+                assert_structural_matches_text(
+                    &sig_text,
+                    s,
+                    fact_term,
+                    ood,
+                    &format!("{label}, with_only_once_d={ood}"),
+                );
+            }
+        }
+    }
+
+    /// The structural restriction ASTs are exactly what the parser
+    /// produces for the restriction text the render pipeline emits.
+    #[test]
+    fn restriction_asts_equal_their_parsed_text() {
+        let src = "theory R\nbegin\n\
+restriction OnlyOnce:\n  \"All #ndci #ndcj. OnlyOnce() @ #ndci & OnlyOnce() @ #ndcj ==> #ndci = #ndcj\"\n\
+restriction OnlyOnceD:\n  \"All #ndci #ndcj #ndck. OnlyOnceD() @ #ndci & OnlyOnceD() @ #ndcj & OnlyOnceD() @ #ndck ==> #ndci = #ndcj | #ndci = #ndck | #ndcj = #ndck\"\n\
+end\n";
+        let parsed = tamarin_parser::parse_theory(src, &[]).expect("restriction theory parses");
+        let formulas: Vec<&p::Formula> = parsed
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                p::TheoryItem::Restriction(r) => Some(&r.formula),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(formulas.len(), 2);
+        assert_eq!(*formulas[0], only_once_restriction_ast(), "OnlyOnce");
+        assert_eq!(*formulas[1], only_once_d_restriction_ast(), "OnlyOnceD");
+    }
+
+    /// HS `landFormula` seeds the lemma conjunction with `ltrue`
+    /// (CloseRule.hs:200-201: a `foldl` of `.&&.` over `ltrue`), so HS's formula is
+    /// `(⊤ ∧ Gen@#0) ∧ K@#1` where this module builds `Gen@t0 ∧ K@t1`.
+    /// `gconj` drops ⊤, making the two shapes convert to the same
+    /// guarded value — pinned here so the shape difference stays
+    /// invisible.
+    #[test]
+    fn lemma_guarded_is_invariant_to_hs_ltrue_conjunct() {
+        let x = ndc_node_var("ndct0");
+        let y = ndc_node_var("ndct1");
+        let v = p::VarSpec {
+            name: "v".to_string(),
+            idx: 0,
+            sort: p::SortHint::Untagged,
+            typ: None,
+        };
+        let gen_at = p::Formula::Atom(p::Atom::Action(
+            p::Fact {
+                persistent: false,
+                name: "Generated_0".to_string(),
+                args: vec![p::Term::Var(v.clone())],
+                annotations: Vec::new(),
+            },
+            p::Term::Var(x.clone()),
+        ));
+        let k_at = p::Formula::Atom(p::Atom::Action(
+            p::Fact {
+                persistent: false,
+                name: "K".to_string(),
+                args: vec![p::Term::Var(v.clone())],
+                annotations: Vec::new(),
+            },
+            p::Term::Var(y.clone()),
+        ));
+        let binders = vec![v, x, y];
+        let ours = p::Formula::Not(Box::new(p::Formula::Exists(
+            binders.clone(),
+            Box::new(p::Formula::And(
+                Box::new(gen_at.clone()),
+                Box::new(k_at.clone()),
+            )),
+        )));
+        let hs_shaped = p::Formula::Not(Box::new(p::Formula::Exists(
+            binders,
+            Box::new(p::Formula::And(
+                Box::new(p::Formula::And(
+                    Box::new(p::Formula::True),
+                    Box::new(gen_at),
+                )),
+                Box::new(k_at),
+            )),
+        )));
+        assert_eq!(
+            crate::guarded::formula_to_guarded(&ours).expect("ours converts"),
+            crate::guarded::formula_to_guarded(&hs_shaped).expect("HS shape converts"),
+        );
+    }
+
+    /// The shapes only the structural path faces — dotted unifier indices
+    /// (`x.5`) and same-named variables of different sorts (a Nat var:
+    /// Fresh in the `Generated_0` args via `lvarToLnterm`, Nat inside the
+    /// K term) — must still produce a CLOSED guarded lemma: every
+    /// occurrence resolves to its own binder via (name, idx, sort)-keyed
+    /// matching, mirroring HS's sort-aware `LVar` identity.  (The text
+    /// pipeline never sees these: its alpha-rename plus the `{name}f`
+    /// retype-rename in `render_deduction_theory` erase both.)
+    #[test]
+    fn structural_lemma_closes_dotted_and_cross_sort_binders() {
+        let x0 = var_term(LVar::new("x", LSort::Msg, 0));
+        let x5 = var_term(LVar::new("x", LSort::Msg, 5));
+        let n = var_term(LVar::new("n", LSort::Nat, 0));
+        let s = vec![
+            kd(tamarin_term::builtin::pair(x0.clone(), x5.clone())),
+            ku(n.clone()),
+        ];
+        let g = deduction_lemma_guarded(&s, &n);
+        assert!(
+            crate::guarded::free_vars(&g).is_empty(),
+            "every occurrence must resolve to a binder; free vars: {:?}",
+            crate::guarded::free_vars(&g)
+        );
+        match &g {
+            Guarded::GGuarded {
+                qua: crate::guarded::Quant::All,
+                vars,
+                guards,
+                body,
+            } => {
+                // Binders: x.0, x.5 (Msg), n:fresh (Generated_0 arg),
+                // n:nat (K term), and the two timepoints.
+                assert_eq!(vars.len(), 6, "bindings: {:?}", vars);
+                assert_eq!(guards.len(), 2, "Generated_0 and K guard atoms");
+                assert_eq!(**body, crate::guarded::gfalse());
+            }
+            other => panic!("negated Ex lemma must convert to GGuarded All, got {other:?}"),
+        }
+        // The rule side of the same inputs: one Fr premise per free var,
+        // HS's literal empty `rNewVars`.
+        let rule = deduction_rule(&s);
+        assert_eq!(rule.rule.premises.len(), 3);
+        assert!(rule.rule.new_vars.is_empty(), "HS newRules passes []");
+    }
+
+    /// Locate the Maude binary (`MAUDE_PATH` env override, else the common
+    /// install paths).  `None` skips the Maude-backed test below.
+    fn maude_bin_path() -> Option<String> {
+        std::env::var("MAUDE_PATH").ok().or_else(|| {
+            for c in ["/usr/local/bin/maude", "maude"] {
+                if std::path::Path::new(c).exists() {
+                    return Some(c.to_string());
+                }
+            }
+            None
+        })
+    }
+
+    /// End-to-end verdict pin through the structural path: on the KCL07
+    /// signature the ef3f0468 oracle reports `Function xorr has the NDC
+    /// property.` on stderr, so `check_close_intr_rule` must tag `xorr`
+    /// and NDC-mark every xorr destructor rule in the returned cache.
+    #[test]
+    fn check_close_intr_rule_tags_xorr_on_kcl07_signature() {
+        let Some(mp) = maude_bin_path() else { return };
+        let (_guard, sig, _probe) = xorr_parent();
+        let maude = tamarin_term::maude_proc::MaudeHandle::start(&mp, sig)
+            .expect("maude starts on the KCL07 signature");
+        let checked = check_close_intr_rule(&maude, None, true);
+        let names: Vec<String> = checked
+            .ndc_funs
+            .iter()
+            .map(|f| crate::intruder_rules::show_fun_sym_name(f).into_owned())
+            .collect();
+        assert_eq!(names, vec!["xorr".to_string()]);
+        let xorr_destr: Vec<&IntrRuleAC> = checked
+            .cache
+            .iter()
+            .filter(|r| {
+                get_destr_rule_function(r)
+                    .is_some_and(|f| crate::intruder_rules::show_fun_sym_name(&f) == "xorr")
+            })
+            .collect();
+        assert!(
+            !xorr_destr.is_empty(),
+            "cache carries xorr destructor rules"
+        );
+        assert!(
+            xorr_destr.iter().all(|r| is_ndc_cache_rule(r)),
+            "every xorr destructor rule carries the NDC-tagged head"
+        );
+    }
 }

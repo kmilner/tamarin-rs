@@ -1,8 +1,11 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   only minor contributions per cited ranges (see upstream git
-//   history)
+//   arcz, meiersi, jdreier, cascremers, felixlinker, rsasse,
+//   Kanakanajm, beschmi, Divya19gupta, addap, BTom-GH,
+//   PhilipLukertWork, YannColomb, xaDxelA, Mathias-AURAND, symphorien,
+//   racoucho1u, Esslingen-Security-Privacy, kevinmorio, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   src/Web/Handler.hs
+//   src/Web/Handler.hs, src/Web/Theory.hs
 
 //! Integration tests that exercise the prover-driving endpoints: the
 //! autoprove routes and `main/method`'s single-step apply.
@@ -119,9 +122,11 @@ async fn test_autoprove_on_bad_path_returns_alert() {
         .expect("send autoprove-rules");
     assert_eq!(res.status(), 200);
     let v: serde_json::Value = res.json().await.expect("decode");
-    let keys = json_top_keys(&v);
-    let one: std::collections::BTreeSet<String> = std::iter::once("alert".to_string()).collect();
-    assert_eq!(keys, one, "autoprove on non-lemma path should be {{alert}}");
+    assert_eq!(
+        json_top_keys(&v),
+        one_key_set("alert"),
+        "autoprove on non-lemma path should be {{alert}}"
+    );
 
     // The captured Haskell alert is exactly
     // "Can't run the autoprover () on the given theory path!" — we
@@ -178,9 +183,11 @@ async fn test_method_out_of_range_index_alerts_match_haskell() {
         .expect("send method/1");
     assert_eq!(res.status(), 200);
     let v: serde_json::Value = res.json().await.expect("decode");
-    let keys = json_top_keys(&v);
-    let one: std::collections::BTreeSet<String> = std::iter::once("redirect".to_string()).collect();
-    assert_eq!(keys, one, "an in-range method must be {{redirect}}");
+    assert_eq!(
+        json_top_keys(&v),
+        one_key_set("redirect"),
+        "an in-range method must be {{redirect}}"
+    );
 }
 
 #[tokio::test]
@@ -210,9 +217,11 @@ async fn test_autoprove_on_unknown_lemma_returns_alert() {
     let res = s.client.get(&url).send().await.expect("send");
     assert_eq!(res.status(), 200);
     let v: serde_json::Value = res.json().await.expect("decode");
-    let keys = json_top_keys(&v);
-    let one: std::collections::BTreeSet<String> = std::iter::once("alert".to_string()).collect();
-    assert_eq!(keys, one, "unknown-lemma autoprove must be {{alert}}");
+    assert_eq!(
+        json_top_keys(&v),
+        one_key_set("alert"),
+        "unknown-lemma autoprove must be {{alert}}"
+    );
     let alert = v.get("alert").and_then(|x| x.as_str()).unwrap_or("");
     assert!(
         alert.contains("Sorry") && alert.contains("autoprover"),

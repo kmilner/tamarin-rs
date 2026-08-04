@@ -201,7 +201,7 @@ fn keep_sys() -> bool {
 /// Per-child parallel expansion is ON by default;
 /// `TAM_RS_DISABLE_PARALLEL_EXPAND=1` forces serial sibling expansion
 /// (debug escape hatch).  Output-neutrality depends on every worker
-/// closure replicating the calling thread's user-fun thread-locals
+/// closure replicating the calling thread's user-fun bundle
 /// (`snapshot_user_funs` / `set_user_funs_from_collected` in the
 /// fan-out preamble): a stolen worker thread outside any lemma guard
 /// has EMPTY sets, and `term_to_lnterm` on such a thread lifts a
@@ -230,16 +230,60 @@ fn disable_parallel_expand() -> bool {
 /// HS counterpart — see `run_proof_search`).  A cutoff is
 /// applied ONLY when the caller explicitly opts in via the
 /// `TAM_PROVE_DEADLINE_MS` env var (e.g. corpus sweeps that want to bound
-/// per-lemma wall time).
+/// per-lemma wall time) or, for one thread only, via
+/// [`ProofDeadlineGuard`].
 fn proof_deadline() -> std::time::Instant {
-    match std::env::var("TAM_PROVE_DEADLINE_MS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-    {
+    match deadline_cap_ms() {
         Some(ms) => std::time::Instant::now() + std::time::Duration::from_millis(ms),
-        // No env override → run unbounded (faithful to HS).  ~10 years is
+        // No override → run unbounded (faithful to HS).  ~10 years is
         // effectively infinite and safe against `Instant` overflow.
         None => std::time::Instant::now() + std::time::Duration::from_secs(10 * 365 * 24 * 3600),
+    }
+}
+
+thread_local! {
+    /// Thread-scoped wall-clock cap for the searches this thread starts,
+    /// installed by [`ProofDeadlineGuard`].  Takes precedence over the
+    /// `TAM_PROVE_DEADLINE_MS` env var; `None` (the default) falls back
+    /// to it.
+    static DEADLINE_CAP_MS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// The wall-clock cap in force for a search started on THIS thread: the
+/// [`ProofDeadlineGuard`] override if one is installed, else the
+/// `TAM_PROVE_DEADLINE_MS` env var, else `None` (unbounded).
+fn deadline_cap_ms() -> Option<u64> {
+    DEADLINE_CAP_MS.with(|c| c.get()).or_else(|| {
+        std::env::var("TAM_PROVE_DEADLINE_MS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+    })
+}
+
+/// RAII guard installing a wall-clock cap on the searches started by the
+/// current thread, restoring the previous cap on drop.
+///
+/// Callers that need to bound a nested, self-contained prove (the message
+/// derivation check's per-variable probes) must use this rather than
+/// setting `TAM_PROVE_DEADLINE_MS`: the env var is process-global, so a
+/// probe's short cap would also truncate any unrelated `run_proof_search`
+/// that another thread happens to start inside the probe's window —
+/// silently turning a would-be-`TraceFound` search into a no-trace one.
+pub struct ProofDeadlineGuard {
+    previous: Option<u64>,
+}
+
+impl ProofDeadlineGuard {
+    /// Cap searches started on this thread at `ms` milliseconds.
+    pub fn set_ms(ms: u64) -> Self {
+        let previous = DEADLINE_CAP_MS.with(|c| c.replace(Some(ms)));
+        ProofDeadlineGuard { previous }
+    }
+}
+
+impl Drop for ProofDeadlineGuard {
+    fn drop(&mut self) {
+        DEADLINE_CAP_MS.with(|c| c.set(self.previous));
     }
 }
 
@@ -346,10 +390,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
     // who explicitly set it want this behaviour.  Grace defaults to
     // 30s but is configurable via `TAM_PROVE_DEADLINE_GRACE_MS`.
     if tamarin_utils::env_gate!("TAM_PROVE_DEADLINE_HARD_KILL") {
-        let total_ms: u64 = std::env::var("TAM_PROVE_DEADLINE_MS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(30_000);
+        let total_ms: u64 = deadline_cap_ms().unwrap_or(30_000);
         let grace_ms: u64 = std::env::var("TAM_PROVE_DEADLINE_GRACE_MS")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -844,8 +885,7 @@ fn expand_inner(
     // before the depth limit would make our case_2 close at max_depth=8
     // and short-circuit before case_1 is reachable at deeper iterations.
     //
-    // See [[project_rust_id_dfs]] for the original ID-DFS port and
-    // KAS2_eCK::eCK_key_secrecy for the case that motivated this fix.
+    // KAS2_eCK::eCK_key_secrecy is the lemma this ordering decides.
     let max_depth = MAX_DEPTH.with(|m| m.get());
     if depth >= max_depth {
         DEPTH_LIMIT_HIT.with(|f| f.set(true));
@@ -1088,7 +1128,7 @@ fn expand_inner(
                     status: NodeStatus::Open,
                     annotated: true,
                 };
-                // Each worker gets its own budget cell — siblings no longer
+                // Each worker gets its own budget cell — siblings do not
                 // share a single counter, but with the default usize::MAX
                 // (no terminal cutoff) that's faithful: HS's lazy Disj
                 // exploration also doesn't share a counter.

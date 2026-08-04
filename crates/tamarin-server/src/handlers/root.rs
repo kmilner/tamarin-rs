@@ -1,8 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, cascremers, arcz, jdreier, rsasse, and other minor
-//   contributors (see upstream git history)
+//   meiersi, cascremers, arcz, jdreier, and other minor contributors
+//   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   src/Web/Hamlet.hs, src/Web/Handler.hs, src/Web/Types.hs
+//   src/Web/Hamlet.hs, src/Web/Handler.hs
 
 //! Root + housekeeping handlers.
 

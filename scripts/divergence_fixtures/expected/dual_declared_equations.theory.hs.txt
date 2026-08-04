@@ -1,0 +1,20 @@
+theory DualDeclaredEquations
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: f/2, fst/1, pair/2, snd/1, f/2 [AC]
+equations: f(x, y) = x, fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+lemma L1:
+  all-traces "∀ #i. (Test( f('a', 'b') ) @ #i) ⇒ (⊥)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ #i. (Test( f('a', 'b') ) @ #i)"
+*/
+by sorry
+
+
+
+end

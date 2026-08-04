@@ -1,0 +1,52 @@
+// A user-declared AC symbol reaching a SAPIC-GENERATED restriction.
+//
+// The `let` below writes its right-hand side as a nested prefix application,
+// `add(k, add('a','b'))`, but the translation holds the process as terms, so
+// the AC head is flattened and its operands sorted before anything prints it,
+// and HS `prettySapicComb` renders the `Let` right-hand side with the term
+// printer — infix.  Everything the translation derives from a process step
+// reads off that one rendering:
+//
+//   - the rule name, `filter isAlpha` over `prettySapicTopLevel`
+//     (HS `Sapic.Facts.toRule`), so `('a' add 'b' add k.1)` contributes
+//     `aaddbaddk`; prefix output or source operand order spells it otherwise;
+//   - the `let`'s else-branch restriction, `Restr_` ++ that rule name
+//     (HS `fromRuleRestriction`), together with its `// safety formula` line;
+//   - the `process=` rule attribute, and the `Restr_…` action fact — the fact
+//     also inside the `variants (modulo AC)` block, which `'g'^k` is there to
+//     force, so the AC term is re-rendered under a substitution too.
+//
+// The `if` in the else branch puts a second user-AC term on a DIFFERENT
+// printer: a condition is a formula, so HS `prettySapicComb` renders it with
+// `prettySyntacticSapicFormula` rather than the term printer the `Let` case
+// uses, and the same observables are read off that.  Its argument is
+// LEFT-nested, `add(add('c', k), 'a')`, so flattening runs down the other
+// spine and sorting reorders the operands against source order — infix,
+// flattened and sorted, `('a' add 'c' add k.1)` spells `aaddcaddk`, while
+// source order would spell `caddkadda`.  The `then` and `else` sides mint two
+// restrictions from the one condition, so both carry the term.
+//
+// `add` is the theory's only AC symbol: no builtin puts a term on the AC path
+// here, and no corpus theory declares an AC symbol inside a SAPIC process.
+//
+// Compared slice: the whole `theory … end` echo (see check.sh).
+
+theory SapicUserAcRestr
+begin
+
+builtins: diffie-hellman
+functions: add/2 [AC]
+
+predicates: Eq(a, b) <=> a = b
+
+process:
+  in(k);
+  let <u, v> = <'g'^k, add(k, add('a','b'))> in
+    out(<u,v>)
+  else
+    if Eq(<'g'^k, add(add('c', k), 'a')>, k) then
+      out('yes')
+    else
+      out('no')
+
+end

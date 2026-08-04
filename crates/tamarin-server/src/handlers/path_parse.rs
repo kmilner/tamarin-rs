@@ -1,6 +1,7 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, arcz, Kanakanajm, rsasse, beschmi, felixlinker,
-//   addap, and other minor contributors (see upstream git history)
+//   meiersi, jdreier, arcz, cascremers, rsasse, Kanakanajm, beschmi,
+//   felixlinker, addap, and other minor contributors (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
 //   src/Web/Types.hs
 
@@ -257,17 +258,29 @@ fn safe_read_int(s: &str) -> Option<i64> {
 }
 
 /// One `reads`-style `Int` with the input it did not consume.
+///
+/// `readNumber`'s `parens` accepts any nesting depth, so the opening run is
+/// counted rather than recursed through — the segment is client-supplied and
+/// arbitrarily long.
 fn read_int_token(s: &str) -> Option<(i64, &str)> {
-    let s = s.trim_start();
-    if let Some(inner) = s.strip_prefix('(') {
-        let (value, rest) = read_int_token(inner)?;
-        return Some((value, rest.trim_start().strip_prefix(')')?));
+    let mut head = s.trim_start();
+    let mut depth = 0usize;
+    while let Some(inner) = head.strip_prefix('(') {
+        depth += 1;
+        head = inner.trim_start();
     }
-    if let Some(after_sign) = s.strip_prefix('-') {
-        let (value, rest) = read_number_token(after_sign.trim_start())?;
-        return Some((value.wrapping_neg(), rest));
+    // `-` negates the number token that follows it, and sits INSIDE the parens.
+    let (value, mut rest) = match head.strip_prefix('-') {
+        Some(after_sign) => {
+            let (value, rest) = read_number_token(after_sign.trim_start())?;
+            (value.wrapping_neg(), rest)
+        }
+        None => read_number_token(head)?,
+    };
+    for _ in 0..depth {
+        rest = rest.trim_start().strip_prefix(')')?;
     }
-    read_number_token(s)
+    Some((value, rest))
 }
 
 /// One `Text.Read.Lex` number token, converted as `Read Int`'s `convertInt`
@@ -438,6 +451,12 @@ mod tests {
         // `fromInteger` truncates to a 64-bit `Int`.
         assert_eq!(read("99999999999999999999"), Some(7766279631452241919));
         assert_eq!(read("-99999999999999999999"), Some(-7766279631452241919));
+        // Nesting depth is bounded only by the segment length, and the segment
+        // comes from the URL.
+        let deep = format!("{}-1{}", "(".repeat(100_000), ")".repeat(100_000));
+        assert_eq!(read(&deep), Some(-1));
+        // One `)` short: still unbalanced, still no parse.
+        assert_eq!(read(&deep[..deep.len() - 1]), None);
     }
     // Haskell `parseProof (y:ys) = Just (TheoryProof y ys)`: no trailing
     // strip — `proof/<lemma>` is the root (sub=[]), `proof/<lemma>/_`

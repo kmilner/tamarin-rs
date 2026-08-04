@@ -1,0 +1,44 @@
+// Cross-operator AC operand ordering in the WELLFORMEDNESS report.
+//
+// `Out` on a rule's left-hand side raises the "Special facts" check, whose
+// message renders the offending fact — the only wf entry that prints a whole
+// AC-headed term.  Each rule below pins one layer of the operand order that
+// tamarin-parser's `wf::cmp_wf_term` reproduces from HS's derived `Ord (Term
+// a)`; no corpus theory reaches these shapes.
+//
+// Compared slices: the wf report block AND the `theory … end` echo (see
+// check.sh) — the echo carries the same terms through the rule printer.
+
+theory MixedAcWf
+begin
+
+builtins: multiset, xor, natural-numbers, hashing, diffie-hellman
+functions: zz/1
+
+// Operands of ONE AC chain headed by DIFFERENT AC operators.  The
+// cross-operator rank is the `Ord FunSym` one: Exp < Union < Mult < Xor <
+// NatPlus.
+rule CrossOp:
+  [ Out( (x*y) ++ (a XOR b) ++ (c^d) ++ (%e %+ %f) ) ] --[ ]-> [ ]
+
+// Union vs Mult in isolation — the adjacent pair the rank ordering is easiest
+// to get backwards.  Both sit under an outer XOR chain so that neither
+// flattens into it.
+rule UnionVsMult:
+  [ Out( (x*y) XOR (a++b) ) ] --[ ]-> [ ]
+
+// Operands headed by non-AC symbols are ordered by the symbol NAME, not by any
+// syntactic class: exp < h < one < pair < zz.  `1` (`one`) and `DH_neutral`
+// are nullary applications, not literals, so they sort in that same tier, and
+// the AC-headed operand comes after all of them.
+rule Heads:
+  [ Out( <a,b> ++ (c^d) ++ h(e) ++ zz(f) ++ 1 ++ DH_neutral ++ (u XOR v) ) ]
+  --[ ]-> [ ]
+
+// Two operands with the SAME head compare their HS argument lists; for an AC
+// head that list is the flattened, sorted multiset rather than the source
+// term's binary tree.
+rule SameHead:
+  [ Out( ((b*c)*a) ++ (b*z) ) ] --[ ]-> [ ]
+
+end

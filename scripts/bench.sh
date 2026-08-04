@@ -63,14 +63,13 @@ command -v /usr/bin/time >/dev/null || { echo "bench.sh: needs GNU /usr/bin/time
 
 # Baseline identity check: the generated block's prose asserts a RELEASE
 # baseline, but find_hs() takes whatever `tamarin-prover` is first on PATH —
-# which on a gate-configured machine can be the develop oracle this repo pins.
-# The binary's own `Git revision:` (`Main/Console.hs:206-216`, always the full
-# hash) equal to the submodule pin ⇒ the baseline IS that develop oracle, so
-# the tables would be measured against develop under release prose.  Only that
-# exact revision is caught: a release (revision `UNKNOWN` for a tarball build,
-# otherwise a release hash) passes, and so does a develop build at any OTHER
-# revision.  An unpopulated submodule / a revision-less binary leaves the pin
-# or the revision empty, and the check is then skipped rather than guessing.
+# on a gate-configured machine, the develop oracle this repo pins.  The
+# binary's own `Git revision:` (`Main/Console.hs:206-216`, always the full
+# hash) equal to the submodule pin ⇒ the baseline IS that oracle.  Only that
+# exact revision is caught; a release (revision `UNKNOWN` for a tarball build,
+# otherwise a release hash) and a develop build at any other revision both
+# pass.  An unpopulated submodule or a revision-less binary leaves one side
+# empty, and the check is skipped rather than guessing.
 hs_pin="$(git -C "$repo_root/tamarin-prover" rev-parse HEAD 2>/dev/null)"
 hs_rev="$("$HS_PATH" --version 2>/dev/null | grep -oE 'Git revision: [0-9a-f]{7,40}' | head -1)"
 hs_rev="${hs_rev#Git revision: }"
@@ -86,14 +85,16 @@ if [ -n "$hs_pin" ] && [ "$hs_rev" = "$hs_pin" ]; then
     echo "  (rev ${hs_pin:0:12}), not a release — the block's prose says RELEASE. ***" >&2
 fi
 
-# measure <cmd...> → prints "<secs>|<mb>" ("timeout|—" on cap, "fail|—" on a
-# nonzero exit — e.g. prove_and_reverify.sh refusing a verdict mismatch).
+# measure <cmd...> → prints "<secs>|<mb>" ("timeout|—" on cap, "fail:<rc>|—" on
+# a nonzero exit).  The exit code is carried through because cell_rv_t
+# discriminates on it: prove_and_reverify.sh exits 3 only when the HS RE-CHECK
+# rejected the proof, and 1 when the Rust side failed.
 measure() {
     local e rc wall rss
     e=$(mktemp)
     timeout "$TIMEOUT" /usr/bin/time -v "$@" >/dev/null 2>"$e"; rc=$?
     if [ "$rc" = 124 ]; then rm -f "$e"; printf 'timeout|—'; return; fi
-    if [ "$rc" != 0 ]; then rm -f "$e"; printf 'fail|—'; return; fi
+    if [ "$rc" != 0 ]; then rm -f "$e"; printf 'fail:%s|—' "$rc"; return; fi
     wall=$(awk -F': ' '/Elapsed \(wall clock\)/{print $NF}' "$e")
     rss=$(awk -F': ' '/Maximum resident set size/{print $NF}' "$e")
     rm -f "$e"
@@ -103,7 +104,7 @@ measure() {
         printf "%.1f|%.0f", s, k/1024 }'
 }
 
-cell_t() { case "$1" in timeout|fail) printf '%s' "$1" ;; *) printf '%s s' "$1" ;; esac; }
+cell_t() { case "$1" in timeout) printf 'timeout' ;; fail:*) printf 'fail' ;; *) printf '%s s' "$1" ;; esac; }
 cell_m() { [ "$1" = "—" ] && printf '—' || printf '%s MB' "$1"; }
 
 # pct <rs> <hs> → " (-44%)" (RS vs HS; negative = lower).  Empty when either
@@ -114,19 +115,24 @@ pct() {
         printf " (%+.0f%%)", (rs-hs)/hs*100 }'
 }
 # RS cells: value + parenthetical % vs the HS value in the same row.
-cell_rs_t() { case "$1" in timeout|fail) printf '%s' "$1" ;; *) printf '%s s%s' "$1" "$(pct "$1" "$2")" ;; esac; }
+cell_rs_t() { case "$1" in timeout) printf 'timeout' ;; fail:*) printf 'fail' ;; *) printf '%s s%s' "$1" "$(pct "$1" "$2")" ;; esac; }
 cell_rs_m() { [ "$1" = "—" ] && printf '—' || printf '%s MB%s' "$1" "$(pct "$1" "$2")"; }
 
 # Theories whose emitted proofs the HS *release* cannot replay (upstream
 # #871 thread-count-dependent proofs / #881 reload normalisation — not port
-# failures; the ./setup.sh testing build re-verifies them).  Only these
-# render the linked note in the RS+HS column; any other failure still
-# prints a bare `fail` so new breakage stays loud.
+# failures; the ./setup.sh testing build re-verifies them).  The note is
+# rendered only when BOTH hold: the theory is one of these, AND the run failed
+# with prove_and_reverify.sh's HS-rejected code.  The code alone would
+# attribute any unreplayable proof — including one an RS regression emitted on
+# some other theory — to these two upstream issues; the name alone would
+# render the note for an RS crash on Joux/wireguard too.
+# Every other failure prints a bare `fail`, so new breakage stays loud.
 HS_REPLAY_UNSUPPORTED=" Joux wireguard "
+HS_REJECTED_RC=3
 UNSUPPORTED_TEXT="not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below)"
 # Reverify (RS+HS) time cell: args <measured> <theory-base> <hs-time>.
 cell_rv_t() {
-    if [ "$1" = fail ] && [[ "$HS_REPLAY_UNSUPPORTED" == *" $2 "* ]]; then
+    if [ "$1" = "fail:$HS_REJECTED_RC" ] && [[ "$HS_REPLAY_UNSUPPORTED" == *" $2 "* ]]; then
         printf '%s' "$UNSUPPORTED_TEXT"
     else
         cell_rs_t "$1" "$3"

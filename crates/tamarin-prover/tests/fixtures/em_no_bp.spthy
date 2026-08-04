@@ -1,0 +1,6 @@
+theory EmConstr
+begin
+functions: em/2
+rule A: [ In(em(x, y)) ] --[ Got(x, y) ]-> [ ]
+lemma l: exists-trace "Ex x y #i. Got(x, y) @ #i"
+end

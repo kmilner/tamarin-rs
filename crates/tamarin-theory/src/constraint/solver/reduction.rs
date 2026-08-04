@@ -1,8 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, PhilipLukertWork, rkunnema, beschmi, racoucho1u,
-//   felixlinker, rsasse, yavivanov, kevinmorio, katrielalex, arcz, Nick
-//   Moore, ValentinYuri, addap, charlie-j, and other minor contributors
-//   (see upstream git history)
+//   meiersi, jdreier, PhilipLukertWork, rkunnema, racoucho1u, beschmi,
+//   felixlinker, rsasse, yavivanov, kevinmorio, katrielalex, Nick
+//   Moore, ValentinYuri, arcz, addap, charlie-j, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs,
 //   lib/term/src/Term/Substitution/SubstVFree.hs,
@@ -1217,11 +1217,12 @@ impl<'ctx> Reduction<'ctx> {
         let mut new_less: Vec<crate::constraint::constraints::LessAtom> =
             Vec::with_capacity(self.sys.less_atoms.len());
         // Dedup by `(smaller, larger)`: `LessAtom`'s `Eq` ignores `reason`
-        // (constraints.rs:92-95), so a `FastSet` of seen pairs reproduces the
-        // previous `new_less.iter().any(|x| x == &la)` scan exactly — first
-        // occurrence wins, insertion order preserved, bit-identical Vec — but
-        // in O(1) per atom instead of O(n²) over the growing list (this scan
-        // was ~half of `subst_system_once` self-time on Less-heavy systems).
+        // (`impl PartialEq for LessAtom`, constraints.rs), so a `FastSet` of
+        // seen pairs gives exactly what a `new_less.iter().any(|x| x == &la)`
+        // rescan would — first occurrence wins, insertion order preserved,
+        // bit-identical Vec — at O(1) per atom instead of O(n²) over the
+        // growing list (that rescan costs ~half of `subst_system_once`
+        // self-time on Less-heavy systems).
         let mut seen_less: tamarin_utils::FastSet<(
             crate::constraint::constraints::NodeId,
             crate::constraint::constraints::NodeId,
@@ -1622,7 +1623,7 @@ impl<'ctx> Reduction<'ctx> {
                 // with `matchingComm := <a>++<b>`) leaves a nested/unsorted
                 // `Union(rest, Union(a,b))` that no longer structurally matches
                 // the flat-sorted form `impliedFormulas` produces
-                // (`canonicalize_ac_in_guarded`, simplify.rs:1545) — defeating
+                // (`implied_apply_canon_cow`, simplify.rs) — defeating
                 // the `solved_formulas` dedup, so the prover re-derives and
                 // re-solves a disjunction HS already discharged
                 // (UM_three_pass `CK_secure_UM3`).  HS's AC constructors
@@ -1681,7 +1682,8 @@ impl<'ctx> Reduction<'ctx> {
             // `Ex.PCR_Write(h(<'pcr0',~n#1>))` and
             // `Ex.PCR_Write(h(<'pcr0',~n#0>))` formulas which collapse to
             // the same `Ex.PCR_Write(h(<'pcr0',~n#0>))` once eq_store binds
-            // `~n#1 → ~n#0`.  HS dedups via Set semantics; RS now mirrors.
+            // `~n#1 → ~n#0`.  HS dedups via Set semantics; the dedup below
+            // mirrors that.
             //
             // Concrete trigger: Envelope.spthy::Secret_and_Denied_exclusive
             // at path `/.../PCR_Quote/PCR_Extend/Alice2` — two distinct
@@ -1689,14 +1691,13 @@ impl<'ctx> Reduction<'ctx> {
             // to the same formula once eq_store binds `~n#1 → ~n#0`; without
             // dedup, both survive in RS's Vec though HS's Set stores one.
             //
-            // Note: the Envelope proof-tree diff is unchanged by this fix
-            // alone — the divergent goal pick at the cascading
+            // Note: the dedup alone does not close the Envelope proof-tree
+            // diff — the divergent goal pick at the cascading
             // `/Alice2/CreateLockedKey` state involves additional state
-            // differences (HS has Action(PCR_Write('pcr0')) goal RS lacks;
+            // differences (HS has an Action(PCR_Write('pcr0')) goal RS lacks;
             // upstream the smart-ranker tie-breaker on Premise(PCR/1) NRs
-            // also differs).  This fix is a real HS-faithfulness gap that
-            // happens to be load-bearing for many other lemmas via
-            // formula-count parity.
+            // also differs).  It is nonetheless load-bearing for many other
+            // lemmas via formula-count parity.
             dedup_preserve_order(self.sys.formulas_mut_untracked());
             dedup_preserve_order(self.sys.solved_formulas_mut_untracked());
             dedup_preserve_order(&mut self.sys.content_mut_untracked().lemmas);
@@ -2572,16 +2573,17 @@ impl<'ctx> Reduction<'ctx> {
                 // `[STATE] solved_formulas=N` count and avoids
                 // accumulating per-Conj-child duplicates that don't
                 // semantically need tracking — Conj bodies aren't
-                // "re-inserted" anywhere; only top-level impl_formulas
-                // outputs reach the Atom branch with mark=True.
+                // "re-inserted" anywhere; only top-level
+                // `insert_implied_formulas_pass` outputs reach the Atom
+                // branch with mark=True.
                 //
                 // Dedup-by-normalize still applies at mark=True: Maude
                 // unification mints fresh `~mw#N` witnesses per call,
                 // so structurally-identical derivations from
-                // impl_formulas would otherwise accumulate.  Compare
-                // normalized form (apply eq-store, then normalize
-                // witness LVars `~mw#N → ~mw#0`, then alpha-canon
-                // GGuarded bound vars).
+                // `insert_implied_formulas_pass` would otherwise
+                // accumulate.  Compare normalized form (apply eq-store,
+                // then normalize witness LVars `~mw#N → ~mw#0`, then
+                // alpha-canon GGuarded bound vars).
                 if mark {
                     // σ rebuilt only when the subst axis moved since the
                     // cached copy (see `eq_vs_cache`); a stamp hit is
@@ -3068,6 +3070,32 @@ pub enum IsAcConstructor {
     OtherRule,
 }
 
+/// HS `getKUVars` applied to the first two premises of the rule
+/// `solveAction` just labelled the node with — the
+/// `ACConstructor (head prems) (prems!!1)` tag it hands to `solveFactEqs`
+/// (Goals.hs:227-229, see line 229; `getKUVars`, Goals.hs:249-252).
+///
+/// `removePermutations` may only drop unifier arms that permute the rule's
+/// OWN `KU` premise variables, so the two variables must come from `KU(x)`
+/// premises and nowhere else.  HS forces `head prems` / `prems !! 1` lazily
+/// and `error`s on any other premise shape; RS reads the same two slots and
+/// answers `OtherRule` instead, which leaves every unifier arm in place.
+fn ku_vars(rule: &crate::rule::RuleACInst) -> IsAcConstructor {
+    use tamarin_term::term::Term;
+    use tamarin_term::vterm::Lit;
+    let ku_var = |f: &crate::fact::LNFact| match &*f.terms {
+        [Term::Lit(Lit::Var(v))] if f.tag == crate::fact::FactTag::Ku => Some(*v),
+        _ => None,
+    };
+    match (
+        rule.premises.first().and_then(&ku_var),
+        rule.premises.get(1).and_then(&ku_var),
+    ) {
+        (Some(v1), Some(v2)) => IsAcConstructor::AcConstructor(v1, v2),
+        _ => IsAcConstructor::OtherRule,
+    }
+}
+
 /// Outcome of an equality-solving step.
 #[derive(Debug)]
 pub enum SolveOutcome {
@@ -3094,8 +3122,11 @@ impl<'ctx> Reduction<'ctx> {
         self.solve_term_eqs_ac(strategy, IsAcConstructor::OtherRule, eqs)
     }
 
+    /// [`solve_term_eqs`](Self::solve_term_eqs) with the AC-constructor tag
+    /// threaded through, so a `SplitNow` fan-out can drop unifier arms that
+    /// only permute the rule's two `KU` premise variables.
     #[track_caller]
-    pub fn solve_term_eqs_ac(
+    fn solve_term_eqs_ac(
         &mut self,
         strategy: SplitStrategy,
         is_ac: IsAcConstructor,
@@ -3460,8 +3491,10 @@ impl<'ctx> Reduction<'ctx> {
         self.solve_fact_eqs_ac(strategy, IsAcConstructor::OtherRule, eqs)
     }
 
+    /// [`solve_fact_eqs`](Self::solve_fact_eqs) with the AC-constructor tag
+    /// forwarded to [`solve_term_eqs_ac`](Self::solve_term_eqs_ac).
     #[track_caller]
-    pub fn solve_fact_eqs_ac(
+    fn solve_fact_eqs_ac(
         &mut self,
         strategy: SplitStrategy,
         is_ac: IsAcConstructor,
@@ -3471,7 +3504,7 @@ impl<'ctx> Reduction<'ctx> {
             if e.lhs.tag != e.rhs.tag || e.lhs.terms.len() != e.rhs.terms.len() {
                 // Set eq_store.is_false so the SolveGoal-arm mzero
                 // proxy filter (the SolveGoal-arm eq_store.is_false()
-                // case-drop in exec_proof_method, proof_method.rs:584)
+                // case-drop in `exec_proof_method`, proof_method.rs)
                 // sees the contradiction even if the caller `let _ = ...`s
                 // our result.  Mirrors Haskell's `contradictoryIf`
                 // (Reduction.hs:743-745, see line 745) firing mzero on tag mismatch.
@@ -4140,7 +4173,7 @@ fn non_silent_rule_insts_with_constrs(
     let is_constr_hs = |info: &IntrRuleACInfo| {
         matches!(
             info,
-            IntrRuleACInfo::ConstrRule(_, _)
+            IntrRuleACInfo::ConstrRule { .. }
                 | IntrRuleACInfo::FreshConstr
                 | IntrRuleACInfo::PubConstr
                 | IntrRuleACInfo::NatConstr
@@ -4150,7 +4183,7 @@ fn non_silent_rule_insts_with_constrs(
     let is_destr_hs = |info: &IntrRuleACInfo| {
         matches!(
             info,
-            IntrRuleACInfo::DestrRule(..) | IntrRuleACInfo::IEquality
+            IntrRuleACInfo::DestrRule { .. } | IntrRuleACInfo::IEquality
         )
     };
 
@@ -4985,7 +5018,7 @@ pub fn bounds_max_rest(sys: &System) -> u64 {
     // 546-548) folds `negSt <> st <> solvedSt`.  RS's SubtermStore is a
     // 3-field subset (subterms = HS's `st`, solved_subterms = HS's
     // `solvedSt`), so walk both here.  Without this, `avoid sys` (the
-    // per-step Maude-counter reset seed, proof_method.rs:265 ≈ HS
+    // per-step Maude-counter reset seed in `exec_proof_method` ≈ HS
     // `runReduction … (avoid sys)`) under-counts when a lemma has live
     // subterm constraints (e.g. `Ex x. x << t`), so RS could mint a
     // witness colliding with a subterm-store var that HS's `avoid`
@@ -5049,13 +5082,13 @@ pub fn bounds_max_rest(sys: &System) -> u64 {
     // `avoid sys = freshAvoiding (frees sys)`, and `frees` over the variant
     // disj uses `foldFrees (SubstVFresh n LVar) = foldFrees f . M.keys`
     // (SubstVFresh.hs:196-202) — i.e. ONLY the DOMAIN keys, NOT the range
-    // (witnesses).  Walking the range here over-counted `avoid sys`, so the
-    // per-step Maude-counter reset (proof_method.rs:265 ≈ HS
-    // `runReduction … (avoid sys)`) seeded too high, inflating witnesses
+    // (witnesses).  Walking the range here would over-count `avoid sys`, so
+    // the per-step Maude-counter reset (`exec_proof_method` ≈ HS
+    // `runReduction … (avoid sys)`) would seed too high, inflating witnesses
     // minted by `someInst`/`applyBound` (e.g. Responder_secrecy: the
-    // Setup_Key `~k` nonce came out at ~k.31 vs HS ~k.3, rotating the
-    // 3-way split via `Ord LNSubstVFresh`).  Match `rename_precise.rs:
-    // 98-109` and count keys only.
+    // Setup_Key `~k` nonce at ~k.31 against HS's ~k.3, rotating the
+    // 3-way split via `Ord LNSubstVFresh`).  Match `rename_precise_system`
+    // and count keys only.
     for d in &sys.eq_store.conj {
         for s in &d.substs {
             for v in s.dom() {
@@ -5852,7 +5885,7 @@ pub fn rule_case_name(rule: &crate::rule::RuleACInst) -> String {
             ProtoRuleName::Stand(s) => s.to_string(),
         },
         RuleInfo::Intr(i) => match i {
-            IntrRuleACInfo::ConstrRule(name, _) => {
+            IntrRuleACInfo::ConstrRule { name, .. } => {
                 // The constructor's stored name carries a leading
                 // underscore (see `intruder_rules.rs`); strip it
                 // here so the case label matches Haskell's printer:
@@ -5861,7 +5894,7 @@ pub fn rule_case_name(rule: &crate::rule::RuleACInst) -> String {
                 let trimmed = s.strip_prefix('_').unwrap_or(&s);
                 format!("c_{}", trimmed)
             }
-            IntrRuleACInfo::DestrRule(name, ..) => {
+            IntrRuleACInfo::DestrRule { name, .. } => {
                 let s = String::from_utf8_lossy(name);
                 let trimmed = s.strip_prefix('_').unwrap_or(&s);
                 format!("d_{}", trimmed)
@@ -5892,7 +5925,7 @@ pub fn rule_case_name(rule: &crate::rule::RuleACInst) -> String {
 ///
 /// Naming:
 ///   ConstrRule x   → "Constr" ++ prefixIfReserved('c' : x)
-///   DestrRule  x _ _ _ → "Destr" ++ prefixIfReserved('d' : x)
+///   DestrRule  x .. → "Destr" ++ prefixIfReserved('d' : x)
 ///   CoerceRule     → "Coerce"
 ///   IRecvRule      → "Recv"
 ///   ISendRule      → "Send"
@@ -5904,7 +5937,7 @@ pub fn rule_case_name(rule: &crate::rule::RuleACInst) -> String {
 ///   StandRule s    → s   (no prefixIfReserved — that's the pretty path)
 ///
 /// The `x` for Constr/Destr is stored with HS's leading underscore
-/// (see `intruder_rules.rs`), so `ConstrRule(b"_fst")` yields
+/// (see `intruder_rules.rs`), so `ConstrRule { name: b"_fst", .. }` yields
 /// `c` + `_fst` = `c_fst` and `prefixIfReserved` leaves it as-is.
 pub fn rule_trace_name(rule: &crate::rule::RuleACInst) -> String {
     use crate::rule::{IntrRuleACInfo, ProtoRuleName, RuleInfo};
@@ -5914,14 +5947,14 @@ pub fn rule_trace_name(rule: &crate::rule::RuleACInst) -> String {
             ProtoRuleName::Stand(s) => s.to_string(),
         },
         RuleInfo::Intr(i) => match i {
-            IntrRuleACInfo::ConstrRule(name, _) => {
+            IntrRuleACInfo::ConstrRule { name, .. } => {
                 let s = String::from_utf8_lossy(name);
                 format!(
                     "Constr{}",
                     crate::rule::prefix_if_reserved(&format!("c{}", s))
                 )
             }
-            IntrRuleACInfo::DestrRule(name, ..) => {
+            IntrRuleACInfo::DestrRule { name, .. } => {
                 let s = String::from_utf8_lossy(name);
                 format!(
                     "Destr{}",
@@ -6661,8 +6694,8 @@ impl<'ctx> Reduction<'ctx> {
                             // performSplit`, Reduction.hs:712-731).  On
                             // `Cases`, `solve_term_eqs` returns the arms
                             // WITHOUT installing any into `sub.sys`
-                            // (it leaves the `mem::take`'d default
-                            // eq-store, equation_store.rs:2159) — so we
+                            // (it leaves the default eq-store that
+                            // `System::take_eq_store` swapped in) — so we
                             // MUST install an arm per continuation,
                             // otherwise `sub.sys` carries a wiped
                             // eq-store (conj=[], next_split=0) that drops
@@ -6959,29 +6992,9 @@ impl<'ctx> Reduction<'ctx> {
                         // #883 `solveAction`: for `KU` goals headed by an AC
                         // operator, pass the chosen rule's first two premise
                         // variables (`getKUVars`) so the SplitNow fan-out can
-                        // drop unifier arms that only permute them.  HS forces
-                        // `head prems` / `prems !! 1` lazily — only rules
-                        // whose first two premises are `KU(x)` facts ever
-                        // reach `removePermutations`, so anything else maps
-                        // to `OtherRule` here.
+                        // drop unifier arms that only permute them.
                         let is_ac = if goal_ac_headed {
-                            use tamarin_term::term::Term;
-                            use tamarin_term::vterm::Lit;
-                            let ku_var = |f: &crate::fact::LNFact| match (f.tag, f.terms.first()) {
-                                (crate::fact::FactTag::Ku, Some(Term::Lit(Lit::Var(v))))
-                                    if f.terms.len() == 1 =>
-                                {
-                                    Some(*v)
-                                }
-                                _ => None,
-                            };
-                            match (
-                                renamed.premises.first().and_then(&ku_var),
-                                renamed.premises.get(1).and_then(&ku_var),
-                            ) {
-                                (Some(v1), Some(v2)) => IsAcConstructor::AcConstructor(v1, v2),
-                                _ => IsAcConstructor::OtherRule,
-                            }
+                            ku_vars(&renamed)
                         } else {
                             IsAcConstructor::OtherRule
                         };
@@ -7645,15 +7658,15 @@ impl<'ctx> Reduction<'ctx> {
                 //   Rule (DestrRule "_union" 0 True False [AC Union])
                 //        [kdFact (Union args)] [kdFact arg_i] [] []
                 let ir = crate::rule::IntrRuleAC::new(
-                    crate::rule::IntrRuleACInfo::DestrRule(
-                        union_name.clone(),
-                        0,
-                        true,
-                        false,
-                        vec![tamarin_term::function_symbols::FunSym::Ac(
+                    crate::rule::IntrRuleACInfo::DestrRule {
+                        name: union_name.clone(),
+                        remaining_applications: 0,
+                        rhs_is_proper_subterm: true,
+                        rhs_is_constant: false,
+                        funs: vec![tamarin_term::function_symbols::FunSym::Ac(
                             tamarin_term::function_symbols::AcSym::Union,
                         )],
-                    ),
+                    },
                     vec![crate::fact::kd_fact(xy_union.clone())],
                     vec![crate::fact::kd_fact(arg_i.clone())],
                     vec![],
@@ -8365,6 +8378,66 @@ mod tests {
         };
         let r = Reduction::new(&ctx, System::empty());
         assert_eq!(r.changed, ChangeIndicator::Unchanged);
+    }
+
+    /// `ku_vars` must read the two variables `removePermutations` permutes
+    /// off the AC constructor rules' own `KU(x)`, `KU(y)` premises — and
+    /// answer `OtherRule` for every other premise shape, including the
+    /// `KD`-headed destruction rules generated alongside them.
+    #[test]
+    fn ku_vars_reads_the_ac_constructor_premise_variables() {
+        use crate::rule::{IntrRuleAC, ProtoRuleACInstInfo, Rule, RuleACInst, RuleInfo};
+        use tamarin_term::function_symbols::{AcSym, FunSym};
+
+        let inst = |r: &IntrRuleAC| -> RuleACInst {
+            Rule::new(
+                RuleInfo::<ProtoRuleACInstInfo, _>::Intr(r.info.clone()),
+                r.premises.clone(),
+                r.conclusions.clone(),
+                r.actions.clone(),
+            )
+        };
+        // c_xor / c_mult (`multisetIntruderRules`' union constructor) are
+        // the two builtin AC construction rules solveAction can label an
+        // AC-headed `KU` goal with.
+        for (rules, sym) in [
+            (crate::intruder_rules::xor_intruder_rules(), AcSym::Xor),
+            (
+                crate::intruder_rules::multiset_intruder_rules(),
+                AcSym::Union,
+            ),
+        ] {
+            let constr = rules
+                .iter()
+                .find(|r| crate::rule::is_ac_constr_rule(&inst(r)) == Some(FunSym::Ac(sym)))
+                .expect("generator emits one AC construction rule");
+            let ru = inst(constr);
+            let IsAcConstructor::AcConstructor(v1, v2) = ku_vars(&ru) else {
+                panic!("{sym:?} construction rule must yield two KU premise vars");
+            };
+            // Exactly the rule's own premise variables, in premise order.
+            let prem_var = |i: usize| match &*ru.premises[i].terms {
+                [tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(v))] => *v,
+                other => panic!("premise {i} is not a single-variable fact: {other:?}"),
+            };
+            assert_eq!(ru.premises[0].tag, crate::fact::FactTag::Ku);
+            assert_eq!(ru.premises[1].tag, crate::fact::FactTag::Ku);
+            assert_eq!((v1, v2), (prem_var(0), prem_var(1)));
+            assert_ne!(v1, v2);
+
+            // The destruction rules from the same generator lead with a
+            // `KD` premise, so they carry no permutable variable pair.
+            for d in rules
+                .iter()
+                .filter(|r| matches!(r.info, crate::rule::IntrRuleACInfo::DestrRule { .. }))
+            {
+                assert_eq!(
+                    ku_vars(&inst(d)),
+                    IsAcConstructor::OtherRule,
+                    "destruction rule must not claim an AC-constructor var pair"
+                );
+            }
+        }
     }
 
     #[test]

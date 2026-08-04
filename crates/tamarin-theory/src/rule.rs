@@ -3,7 +3,8 @@
 //   rsasse, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Constraint/Solver/Goals.hs,
-//   lib/theory/src/Theory/Model/Rule.hs
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Tools/IntruderRules.hs
 
 //! Port of `Theory.Model.Rule` from `lib/theory/src/Theory/Model/Rule.hs`.
 //!
@@ -311,14 +312,27 @@ pub struct ProtoRuleACInstInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IntrRuleACInfo {
-    /// `(name, function_symbol)` — the symbol this construction rule builds.
-    ConstrRule(Vec<u8>, FunSym),
-    /// `(name, remaining_applications, rhs_is_proper_subterm,
-    /// rhs_is_constant, function_symbols)`. `remaining_applications` of `0`
-    /// means unbounded; `-1` means not yet determined. The final field lists
-    /// the function symbols this rule's application corresponds to (head
-    /// first).
-    DestrRule(Vec<u8>, i64, bool, bool, Vec<FunSym>),
+    /// HS `ConstrRule BC.ByteString FunSym` (Rule.hs:540); `fun` is the
+    /// symbol this construction rule builds.
+    ConstrRule {
+        name: Vec<u8>,
+        fun: FunSym,
+    },
+    /// HS `DestrRule BC.ByteString Int Bool Bool [FunSym]` (Rule.hs:541).
+    /// `remaining_applications` of `0` means unbounded; `-1` means not yet
+    /// determined. `funs` lists the function symbols this rule's application
+    /// corresponds to (head first).
+    ///
+    /// Field order is load-bearing: the derived `Ord`/`Hash` compare fields
+    /// in declaration order, so it must keep matching the positional order of
+    /// the HS constructor.
+    DestrRule {
+        name: Vec<u8>,
+        remaining_applications: i64,
+        rhs_is_proper_subterm: bool,
+        rhs_is_constant: bool,
+        funs: Vec<FunSym>,
+    },
     Coerce,
     IRecv,
     ISend,
@@ -405,7 +419,7 @@ pub(crate) fn proto_rule_ac_to_rule_ac_inst(r: ProtoRuleAC) -> RuleACInst {
 // =============================================================================
 
 pub fn is_destr_rule_info(info: &IntrRuleACInfo) -> bool {
-    matches!(info, IntrRuleACInfo::DestrRule(_, _, _, _, _))
+    matches!(info, IntrRuleACInfo::DestrRule { .. })
 }
 /// `isSubtermRule`: True iff the rule is a destruction rule whose
 /// RHS is a true subterm of the LHS, or the IEquality rule.
@@ -413,13 +427,16 @@ pub fn is_destr_rule_info(info: &IntrRuleACInfo) -> bool {
 /// (`lib/theory/src/Theory/Model/Rule.hs`).
 pub fn is_subterm_rule_info(info: &IntrRuleACInfo) -> bool {
     match info {
-        IntrRuleACInfo::DestrRule(_, _, subterm, _, _) => *subterm,
+        IntrRuleACInfo::DestrRule {
+            rhs_is_proper_subterm,
+            ..
+        } => *rhs_is_proper_subterm,
         IntrRuleACInfo::IEquality => true,
         _ => false,
     }
 }
 pub fn is_constr_rule_info(info: &IntrRuleACInfo) -> bool {
-    matches!(info, IntrRuleACInfo::ConstrRule(_, _))
+    matches!(info, IntrRuleACInfo::ConstrRule { .. })
 }
 pub fn is_pub_constr_rule_info(info: &IntrRuleACInfo) -> bool {
     matches!(info, IntrRuleACInfo::PubConstr)
@@ -451,7 +468,10 @@ pub fn is_fresh_rule_info(info: &ProtoRuleEInfo) -> bool {
 /// for an AC symbol.
 pub fn is_ac_constr_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> Option<FunSym> {
     match &rule.info {
-        RuleInfo::Intr(IntrRuleACInfo::ConstrRule(_, f @ FunSym::Ac(_))) => Some(*f),
+        RuleInfo::Intr(IntrRuleACInfo::ConstrRule {
+            fun: fun @ FunSym::Ac(_),
+            ..
+        }) => Some(*fun),
         _ => None,
     }
 }
@@ -459,7 +479,7 @@ pub fn is_ac_constr_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> Option<
 /// `getDestrRuleFunction`: the function at the root of a deconstruction rule.
 pub fn get_destr_rule_function(rule: &IntrRuleAC) -> Option<FunSym> {
     match &rule.info {
-        IntrRuleACInfo::DestrRule(_, _, _, _, funs) => funs.first().copied(),
+        IntrRuleACInfo::DestrRule { funs, .. } => funs.first().copied(),
         _ => None,
     }
 }
@@ -483,8 +503,8 @@ pub(crate) fn has_builtin_suffix(name: &[u8], suffixes: &[&[u8]]) -> bool {
 /// `isBuiltInIntruderRule`: everything except user-symbol Constr/Destr rules.
 pub fn is_built_in_intruder_rule(rule: &IntrRuleAC) -> bool {
     match &rule.info {
-        IntrRuleACInfo::ConstrRule(x, _) | IntrRuleACInfo::DestrRule(x, _, _, _, _) => {
-            has_builtin_suffix(x, &built_in_destr_rule_incl_pair())
+        IntrRuleACInfo::ConstrRule { name, .. } | IntrRuleACInfo::DestrRule { name, .. } => {
+            has_builtin_suffix(name, &built_in_destr_rule_incl_pair())
         }
         IntrRuleACInfo::Coerce
         | IntrRuleACInfo::IRecv
@@ -496,16 +516,21 @@ pub fn is_built_in_intruder_rule(rule: &IntrRuleAC) -> bool {
     }
 }
 
+/// The head function of a deconstruction rule, for the `RuleInfo`-wrapped
+/// shape ([`get_destr_rule_function`] serves the bare `IntrRuleAC` one).
+fn destr_rule_head<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> Option<&FunSym> {
+    match &rule.info {
+        RuleInfo::Intr(IntrRuleACInfo::DestrRule { funs, .. }) => funs.first(),
+        _ => None,
+    }
+}
+
 /// `isNDCRule`: `Just IsNDC` iff the rule is a deconstruction rule whose head
 /// function has the (trace-mode) NDC property.
 pub fn is_ndc_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> Option<NdcState> {
-    match &rule.info {
-        RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, _, _, _, funs)) => match funs.first() {
-            Some(f) if f.is_ndc_fun_sym() => Some(NdcState::IsNdc),
-            _ => None,
-        },
-        _ => None,
-    }
+    destr_rule_head(rule)
+        .is_some_and(FunSym::is_ndc_fun_sym)
+        .then_some(NdcState::IsNdc)
 }
 
 /// `isNDCDiffRule` (IntruderRules.hs:524-527): `Just IsNDCDiff` iff the head
@@ -514,13 +539,9 @@ pub fn is_ndc_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> Option<NdcSta
 /// Intentionally retained: faithful mirror of HS `isNDCDiffRule`
 /// (IntruderRules.hs:524-527); no caller yet.
 pub fn is_ndc_diff_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> Option<NdcState> {
-    match &rule.info {
-        RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, _, _, _, funs)) => match funs.first() {
-            Some(f) if f.is_ndc_diff_fun_sym() => Some(NdcState::IsNdcDiff),
-            _ => None,
-        },
-        _ => None,
-    }
+    destr_rule_head(rule)
+        .is_some_and(FunSym::is_ndc_diff_fun_sym)
+        .then_some(NdcState::IsNdcDiff)
 }
 
 /// `getDeconstrRuleKDPrem`: the first premise fact of an intruder rule (the
@@ -554,7 +575,7 @@ pub fn get_conc_fact(rule: &IntrRuleAC) -> &LNFact {
 /// Intentionally retained: faithful mirror of HS `replaceMatchingRule`
 /// (Rule.hs:873-878); no caller yet.
 pub fn replace_matching_rule(d: &[IntrRuleAC], rule: IntrRuleAC) -> IntrRuleAC {
-    if !matches!(rule.info, IntrRuleACInfo::DestrRule(_, _, _, _, _)) {
+    if !matches!(rule.info, IntrRuleACInfo::DestrRule { .. }) {
         return rule;
     }
     let name = intr_rule_name_string(&rule.info);
@@ -573,11 +594,11 @@ pub fn replace_matching_rule(d: &[IntrRuleAC], rule: IntrRuleAC) -> IntrRuleAC {
 /// `IntrRuleAC` is at hand).
 pub fn intr_rule_name_string(info: &IntrRuleACInfo) -> String {
     match info {
-        IntrRuleACInfo::ConstrRule(name, _) => format!(
+        IntrRuleACInfo::ConstrRule { name, .. } => format!(
             "Constr{}",
             prefix_if_reserved(&format!("c{}", String::from_utf8_lossy(name)))
         ),
-        IntrRuleACInfo::DestrRule(name, _, _, _, _) => format!(
+        IntrRuleACInfo::DestrRule { name, .. } => format!(
             "Destr{}",
             prefix_if_reserved(&format!("d{}", String::from_utf8_lossy(name)))
         ),
@@ -594,7 +615,7 @@ pub fn intr_rule_name_string(info: &IntrRuleACInfo) -> String {
 /// Generic destruction-rule predicate: matches `_<sym>` destructor
 /// rules (e.g. `_exp` for `isDExpRule`).
 fn is_d_rule_with_sym<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>, sym: &[u8]) -> bool {
-    if let RuleInfo::Intr(IntrRuleACInfo::DestrRule(name, _, _, _, _)) = &rule.info {
+    if let RuleInfo::Intr(IntrRuleACInfo::DestrRule { name, .. }) = &rule.info {
         let mut expected = b"_".to_vec();
         expected.extend_from_slice(sym);
         name == &expected
@@ -629,7 +650,7 @@ pub fn is_coerce_rule_inst<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> bool 
 pub(crate) fn is_destr_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> bool {
     matches!(
         &rule.info,
-        RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, _, _, _, _))
+        RuleInfo::Intr(IntrRuleACInfo::DestrRule { .. })
             | RuleInfo::Intr(IntrRuleACInfo::IEquality)
     )
 }
@@ -649,14 +670,16 @@ pub(crate) fn is_subterm_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> bo
 /// destruction rules, or `0` for everything else.
 pub fn get_remaining_rule_applications<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> i64 {
     match &rule.info {
-        RuleInfo::Intr(IntrRuleACInfo::DestrRule(_, n, _, _, _)) => *n,
+        RuleInfo::Intr(IntrRuleACInfo::DestrRule {
+            remaining_applications,
+            ..
+        }) => *remaining_applications,
         _ => 0,
     }
 }
 
 /// `setRemainingRuleApplications`: writes a new budget into the
-/// DestrRule remaining-applications Int field (the 2nd field of
-/// `DestrRule name n subterm constant`).  Non-destr rules are returned
+/// `DestrRule::remaining_applications` field.  Non-destr rules are returned
 /// unchanged.  Mirrors Haskell `setRemainingRuleApplications`
 /// (Theory/Model/Rule.hs).
 ///
@@ -676,9 +699,19 @@ pub fn set_remaining_rule_applications<I>(
         new_vars,
     } = rule;
     let info = match info {
-        RuleInfo::Intr(IntrRuleACInfo::DestrRule(name, _, subterm, constant, funs)) => {
-            RuleInfo::Intr(IntrRuleACInfo::DestrRule(name, n, subterm, constant, funs))
-        }
+        RuleInfo::Intr(IntrRuleACInfo::DestrRule {
+            name,
+            rhs_is_proper_subterm,
+            rhs_is_constant,
+            funs,
+            ..
+        }) => RuleInfo::Intr(IntrRuleACInfo::DestrRule {
+            name,
+            remaining_applications: n,
+            rhs_is_proper_subterm,
+            rhs_is_constant,
+            funs,
+        }),
         other => other,
     };
     Rule {
@@ -967,19 +1000,72 @@ mod tests {
             tamarin_term::function_symbols::Privacy::Public,
             tamarin_term::function_symbols::Constructability::Constructor,
         ));
-        assert!(is_constr_rule_info(&IntrRuleACInfo::ConstrRule(
-            b"f".to_vec(),
-            f
-        )));
-        assert!(is_destr_rule_info(&IntrRuleACInfo::DestrRule(
-            b"f".to_vec(),
-            0,
-            true,
-            false,
-            vec![f]
-        )));
+        assert!(is_constr_rule_info(&IntrRuleACInfo::ConstrRule {
+            name: b"f".to_vec(),
+            fun: f
+        }));
+        assert!(is_destr_rule_info(&IntrRuleACInfo::DestrRule {
+            name: b"f".to_vec(),
+            remaining_applications: 0,
+            rhs_is_proper_subterm: true,
+            rhs_is_constant: false,
+            funs: vec![f]
+        }));
         assert!(is_coerce_rule_info(&IntrRuleACInfo::Coerce));
         assert!(!is_constr_rule_info(&IntrRuleACInfo::Coerce));
+    }
+
+    /// `IntrRuleACInfo`'s derived `Ord`/`Hash` walk the variants in
+    /// declaration order and, within a variant, the fields in declaration
+    /// order.  Pin both against a reshuffle: the variant sequence
+    /// `ConstrRule < DestrRule < Coerce`, and the `DestrRule` field order of
+    /// HS `DestrRule BC.ByteString Int Bool Bool [FunSym]` (Rule.hs:541).
+    #[test]
+    fn intr_rule_ac_info_ord_follows_declaration_order() {
+        let sym = |n: &[u8]| {
+            FunSym::NoEq(tamarin_term::function_symbols::NoEqSym::new(
+                n.to_vec(),
+                1,
+                tamarin_term::function_symbols::Privacy::Public,
+                tamarin_term::function_symbols::Constructability::Constructor,
+            ))
+        };
+        let destr = |name: &[u8], rem: i64, sub: bool, con: bool, funs: Vec<FunSym>| {
+            IntrRuleACInfo::DestrRule {
+                name: name.to_vec(),
+                remaining_applications: rem,
+                rhs_is_proper_subterm: sub,
+                rhs_is_constant: con,
+                funs,
+            }
+        };
+        let base = destr(b"a", 0, false, false, vec![]);
+        // `name` outranks every later field.
+        assert!(base < destr(b"b", -1, false, false, vec![]));
+        // `remaining_applications` outranks fields 3-5.
+        assert!(base < destr(b"a", 1, false, false, vec![]));
+        assert!(destr(b"a", -1, true, true, vec![sym(b"z")]) < base);
+        // `rhs_is_proper_subterm` outranks fields 4-5.
+        assert!(base < destr(b"a", 0, true, false, vec![]));
+        assert!(destr(b"a", 0, false, true, vec![sym(b"z")]) < destr(b"a", 0, true, false, vec![]));
+        // `rhs_is_constant` outranks `funs`.
+        assert!(base < destr(b"a", 0, false, true, vec![]));
+        assert!(
+            destr(b"a", 0, false, false, vec![sym(b"z")]) < destr(b"a", 0, false, true, vec![])
+        );
+        // `funs` breaks the remaining tie.
+        assert!(base < destr(b"a", 0, false, false, vec![sym(b"a")]));
+
+        // `ConstrRule`: `name` outranks `fun`.
+        let constr = |name: &[u8], fun: FunSym| IntrRuleACInfo::ConstrRule {
+            name: name.to_vec(),
+            fun,
+        };
+        assert!(constr(b"a", sym(b"z")) < constr(b"b", sym(b"a")));
+
+        // Variant order.
+        assert!(constr(b"z", sym(b"z")) < destr(b"a", 0, false, false, vec![]));
+        assert!(destr(b"z", i64::MAX, true, true, vec![sym(b"z")]) < IntrRuleACInfo::Coerce);
     }
 
     #[test]
@@ -1119,37 +1205,37 @@ mod tests {
     #[test]
     fn d_exp_pmult_emap_rule_classification() {
         let dexp: RuleACInst = Rule::new(
-            RuleInfo::Intr(IntrRuleACInfo::DestrRule(
-                b"_exp".to_vec(),
-                0,
-                false,
-                false,
-                vec![],
-            )),
+            RuleInfo::Intr(IntrRuleACInfo::DestrRule {
+                name: b"_exp".to_vec(),
+                remaining_applications: 0,
+                rhs_is_proper_subterm: false,
+                rhs_is_constant: false,
+                funs: vec![],
+            }),
             vec![],
             vec![],
             vec![],
         );
         let dpmult: RuleACInst = Rule::new(
-            RuleInfo::Intr(IntrRuleACInfo::DestrRule(
-                b"_pmult".to_vec(),
-                0,
-                false,
-                false,
-                vec![],
-            )),
+            RuleInfo::Intr(IntrRuleACInfo::DestrRule {
+                name: b"_pmult".to_vec(),
+                remaining_applications: 0,
+                rhs_is_proper_subterm: false,
+                rhs_is_constant: false,
+                funs: vec![],
+            }),
             vec![],
             vec![],
             vec![],
         );
         let dem: RuleACInst = Rule::new(
-            RuleInfo::Intr(IntrRuleACInfo::DestrRule(
-                b"_em".to_vec(),
-                0,
-                false,
-                false,
-                vec![],
-            )),
+            RuleInfo::Intr(IntrRuleACInfo::DestrRule {
+                name: b"_em".to_vec(),
+                remaining_applications: 0,
+                rhs_is_proper_subterm: false,
+                rhs_is_constant: false,
+                funs: vec![],
+            }),
             vec![],
             vec![],
             vec![],
@@ -1172,13 +1258,13 @@ mod tests {
     #[test]
     fn get_remaining_rule_applications_works() {
         let with_budget: RuleACInst = Rule::new(
-            RuleInfo::Intr(IntrRuleACInfo::DestrRule(
-                b"_x".to_vec(),
-                3,
-                false,
-                false,
-                vec![],
-            )),
+            RuleInfo::Intr(IntrRuleACInfo::DestrRule {
+                name: b"_x".to_vec(),
+                remaining_applications: 3,
+                rhs_is_proper_subterm: false,
+                rhs_is_constant: false,
+                funs: vec![],
+            }),
             vec![],
             vec![],
             vec![],

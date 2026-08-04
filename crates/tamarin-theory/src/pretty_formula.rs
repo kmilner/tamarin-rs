@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
 //   meiersi, beschmi, jdreier, PhilipLukertWork, rkunnema, rsasse,
-//   BTom-GH, charlie-j, arcz, and other minor contributors (see
+//   addap, charlie-j, arcz, BTom-GH, and other minor contributors (see
 //   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term.hs,
@@ -17,7 +17,6 @@
 //   lib/theory/src/Theory/ProofSkeleton.hs,
 //   lib/theory/src/Theory/Syntactic/Predicate.hs,
 //   lib/theory/src/Theory/Text/Parser/Formula.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs,
 //   lib/theory/src/Theory/Text/Pretty.hs,
 //   lib/theory/src/TheoryObject.hs,
 //   lib/utils/src/Text/PrettyPrint/Class.hs,
@@ -502,11 +501,11 @@ fn intr_rule_name(r: &crate::rule::IntrRuleAC) -> String {
         }
     };
     match &r.info {
-        IntrRuleACInfo::ConstrRule(n, _) => {
-            prefix_if_reserved(format!("c{}", String::from_utf8_lossy(n)))
+        IntrRuleACInfo::ConstrRule { name, .. } => {
+            prefix_if_reserved(format!("c{}", String::from_utf8_lossy(name)))
         }
-        IntrRuleACInfo::DestrRule(n, _, _, _, _) => {
-            prefix_if_reserved(format!("d{}", String::from_utf8_lossy(n)))
+        IntrRuleACInfo::DestrRule { name, .. } => {
+            prefix_if_reserved(format!("d{}", String::from_utf8_lossy(name)))
         }
         IntrRuleACInfo::IRecv => "irecv".to_string(),
         IntrRuleACInfo::ISend => "isend".to_string(),
@@ -989,7 +988,8 @@ fn atom_to_doc(a: &p::Atom, scope: &[Bind]) -> crate::pretty_hpj::Doc {
         // (Theory/Text/Parser/Formula.hs:30-38) parses `(<)` to
         // `Pred Smaller`, and `expandFormula` (Predicate.hs:82-93) rewrites
         // it to `∃ z. r = l ++ z` BEFORE any pretty-printing — see
-        // `predicate_expand::expand_atom`, which runs in elaborate.rs:311.
+        // `predicate_expand::expand_atom`, reached from
+        // `predicate_expand::expand_theory_formulas` during elaboration.
         // So this arm is unreachable on the elaborated formula/restriction
         // path; it is a defensive fallback that renders the pre-expansion
         // shape only if a raw `LessMset` is ever printed directly.
@@ -1260,7 +1260,7 @@ fn pp_fact(fa: &p::Fact, scope: &[Bind], out: &mut String) {
 // =============================================================================
 // Term / Fact — HughesPJ Doc engine (HS-faithful wrapping)
 //
-// `term_to_doc` mirrors HS `prettyTerm` (Term/Term.hs:268-296): pairs use
+// `term_to_doc` mirrors HS `prettyTerm` (Term/Term.hs:298-327): pairs use
 // `ppTerms ", " 1 "<" ">" = fcat . (text "<":) . (++[text ">"]) . map (nest 1)
 // . punctuate ", " . map ppTerm`; function applications use
 // `ppFun f ts = text (f ++ "(") <> fsep (punctuate comma (map ppTerm ts))
@@ -1337,24 +1337,29 @@ pub fn term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
             pp_term(t, scope, &mut s);
             Doc::text(s)
         }
-        Pair(items) => {
-            // Flatten right-associative pairs exactly as HS `split` does
-            // (Term/Term.hs:292-293), splicing a trailing Pair.
-            let flat = flatten_pair_terms(items);
-            pair_doc(&flat, scope)
+        // HS `prettyTerm` (Term/Term.hs:313):
+        //   `FApp (NoEq s) _ | s == pairSym -> ppTerms ", " 1 "<" ">" (split t)`
+        // The arm fires on the pair SHAPE, so the prefix spelling `pair(a, b)`
+        // renders `<a, b>` exactly like the `<a, b>` spelling; `split`
+        // (`flatten_pair_terms`) walks the right spine of either form.  The
+        // `App` case precedes the generic `App` arm below, which would
+        // otherwise print `pair(a, b)` through `ppFun`.
+        Pair(_) => pair_doc(&flatten_pair_terms(t), scope),
+        App(name, args) if name == "pair" && args.len() == 2 => {
+            pair_doc(&flatten_pair_terms(t), scope)
         }
         App(name, args) => {
             if args.is_empty() {
                 // HS checks `s == natOneSym` BEFORE the generic nullary
                 // fallthrough: `FApp (NoEq s) [] | s == natOneSym -> text
-                // "%1"` (Term/Term.hs:272-300, see line 276).  `natOneSym = ("tone",
+                // "%1"` (Term/Term.hs:298-327, see line 312).  `natOneSym = ("tone",
                 // (0,Public,Constructor))`; the parser AST keeps only the
                 // name, so match on nullary "tone" (runtime nat-one reaches
                 // here as `App("tone", [])` via `lnterm_to_parser`).
                 if name == "tone" {
                     Doc::text("%1")
                 } else {
-                    // HS `FApp (NoEq (f,_)) [] -> text f` (Term/Term.hs:272-300, see line 278).
+                    // HS `FApp (NoEq (f,_)) [] -> text f` (Term/Term.hs:298-327, see line 314).
                     Doc::text(name.clone())
                 }
             } else {
@@ -1362,7 +1367,7 @@ pub fn term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
             }
         }
         AlgApp(name, l, r) => fun_doc_two(name, l, r, scope),
-        // HS `prettyTerm` dedicated diff case (Term/Term.hs:272-300, see line 275):
+        // HS `prettyTerm` dedicated diff case (Term/Term.hs:298-327, see line 311):
         //   `... | s == diffSym -> text "diff" <> "(" <> ppTerm t1 <>
         //         ", " <> ppTerm t2 <> ")"` — all `<>` (no `fsep`), so it is
         //   fully flat and never breaks at the comma (unlike the generic
@@ -1373,7 +1378,7 @@ pub fn term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
             .beside(term_to_doc(r, scope))
             .beside(Doc::text(")")),
         BinOp(op, l, r) => {
-            // HS `prettyTerm` (Term/Term.hs:273-274):
+            // HS `prettyTerm` (Term/Term.hs:305-310):
             //   `FApp (AC o) ts -> ppTerms (ppACOp o) 1 "(" ")" ts`  (wraps via fcat)
             //   `FApp (NoEq s) [t1,t2] | s == expSym -> ppTerm t1 <> "^" <> ppTerm t2`
             //     (flat beside, never breaks).
@@ -1383,7 +1388,7 @@ pub fn term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
             // separator — bare for the builtins, space-surrounded for a
             // user-declared symbol (see `binop_symbol`).
             if matches!(op, p::BinOp::Exp) {
-                // HS `prettyTerm` (Term/Term.hs:272-300, see line 274):
+                // HS `prettyTerm` (Term/Term.hs:298-327, see line 310):
                 //   `FApp (NoEq s) [t1,t2] | s == expSym -> ppTerm t1 <> "^" <> ppTerm t2`
                 // The exp itself never breaks at the `^`, but its operands are
                 // recursively `ppTerm`'d, so an AC exponent (e.g.
@@ -1433,56 +1438,69 @@ fn flatten_ac_gterms<'a>(
     }
 }
 
-/// Flatten a right-associative pair tree into a flat arg slice exactly as HS
-/// `split` does (Term/Term.hs:292-293): splice a trailing `Pair`.  Parser-AST
-/// variant.
-fn flatten_pair_terms(items: &[p::Term]) -> Vec<&p::Term> {
-    let mut flat: Vec<&p::Term> = Vec::with_capacity(items.len());
-    let mut cur: &[p::Term] = items;
-    loop {
-        let n = cur.len();
-        if n == 0 {
-            break;
+/// HS `prettyTerm`'s `split` (Term/Term.hs:323-324): the operand list a
+/// pair-headed term renders between `<` and `>`.  `split` recurses on the
+/// RIGHT child while that child is itself `pairSym`-headed (`FPair`,
+/// Term/Term/Raw.hs:194), so `pair(a, pair(b, c))` yields `[a, b, c]` while
+/// the left-nested `pair(pair(a, b), c)` yields `[pair(a, b), c]`.  A non-pair
+/// `t` yields `[t]`.
+///
+/// Both parser spellings feed the same spine: `Pair` holds `<a, b, c>` flat
+/// where HS nests it `pair(a, pair(b, c))`, so every element but the last is
+/// an operand and the last continues the spine; `App("pair", [a, b])` pushes
+/// its left operand and continues on the right.  Mirror of
+/// `tamarin_parser::wf`'s `pair_split`.  Parser-AST variant.
+fn pair_split_terms<'a>(t: &'a p::Term, out: &mut Vec<&'a p::Term>) {
+    match t {
+        p::Term::Pair(items) => {
+            if let Some((last, init)) = items.split_last() {
+                out.extend(init.iter());
+                pair_split_terms(last, out);
+            }
         }
-        for it in &cur[..n - 1] {
-            flat.push(it);
+        p::Term::App(n, args) if n == "pair" && args.len() == 2 => {
+            out.push(&args[0]);
+            pair_split_terms(&args[1], out);
         }
-        let last = &cur[n - 1];
-        if let p::Term::Pair(inner) = last {
-            cur = inner;
-        } else {
-            flat.push(last);
-            break;
-        }
+        _ => out.push(t),
     }
+}
+
+/// [`pair_split_terms`] as a `Vec`-returning helper for the two render paths.
+fn flatten_pair_terms(t: &p::Term) -> Vec<&p::Term> {
+    let mut flat: Vec<&p::Term> = Vec::new();
+    pair_split_terms(t, &mut flat);
     flat
 }
 
-/// `flatten_pair_terms` over `GTerm` (the guarded-formula term AST).
-fn flatten_pair_gterms(items: &[crate::guarded::GTerm]) -> Vec<&crate::guarded::GTerm> {
-    let mut flat: Vec<&crate::guarded::GTerm> = Vec::with_capacity(items.len());
-    let mut cur: &[crate::guarded::GTerm] = items;
-    loop {
-        let n = cur.len();
-        if n == 0 {
-            break;
+/// [`pair_split_terms`] over `GTerm` (the guarded-formula term AST).
+fn pair_split_gterms<'a>(t: &'a crate::guarded::GTerm, out: &mut Vec<&'a crate::guarded::GTerm>) {
+    use crate::guarded::GTerm;
+    match t {
+        GTerm::Pair(items) => {
+            if let Some((last, init)) = items.split_last() {
+                out.extend(init.iter());
+                pair_split_gterms(last, out);
+            }
         }
-        for it in &cur[..n - 1] {
-            flat.push(it);
+        GTerm::App(n, args) if &**n == "pair" && args.len() == 2 => {
+            out.push(&args[0]);
+            pair_split_gterms(&args[1], out);
         }
-        let last = &cur[n - 1];
-        if let crate::guarded::GTerm::Pair(inner) = last {
-            cur = inner;
-        } else {
-            flat.push(last);
-            break;
-        }
+        _ => out.push(t),
     }
+}
+
+/// [`flatten_pair_terms`] over `GTerm` (the guarded-formula term AST).
+fn flatten_pair_gterms(t: &crate::guarded::GTerm) -> Vec<&crate::guarded::GTerm> {
+    let mut flat: Vec<&crate::guarded::GTerm> = Vec::new();
+    pair_split_gterms(t, &mut flat);
     flat
 }
 
-/// HS `ppTerms (ppACOp o) 1 "(" ")" ts` (Term/Term.hs:272-300, see line 273,288-290) — a fcat
-/// of `text "("`, each element `nest 1`'d and AC-op-suffixed (except last),
+/// HS `ppTerms (ppACOp o) 1 "(" ")" ts` (Term/Term.hs:305-309; `ppTerms` at
+/// Term/Term.hs:319-321) — a fcat of `text "("`, each element `nest 1`'d and
+/// AC-op-suffixed (except last),
 /// and `text ")"`.  Structurally identical to `pair_doc` with different
 /// lead/finish/separator.  The AC-op symbol carries NO surrounding spaces
 /// (HS `punctuate (text sepa)` with `sepa = "++"`/`"*"`/`"⊕"`/`"%+"`).
@@ -1490,7 +1508,7 @@ fn ac_op_doc(sym: &str, flat: &[&p::Term], scope: &[Bind]) -> crate::pretty_hpj:
     crate::pretty_hpj::fcat_bracketed("(", sym, ")", flat, |t| term_to_doc(t, scope))
 }
 
-/// HS `ppTerms ", " 1 "<" ">" flat` (Term/Term.hs:288-290) — a fcat of
+/// HS `ppTerms ", " 1 "<" ">" flat` (Term/Term.hs:313,319-321) — a fcat of
 /// `text "<"`, each element `nest 1`'d and comma-suffixed (except last),
 /// and `text ">"`.
 fn pair_doc(flat: &[&p::Term], scope: &[Bind]) -> crate::pretty_hpj::Doc {
@@ -1500,7 +1518,7 @@ fn pair_doc(flat: &[&p::Term], scope: &[Bind]) -> crate::pretty_hpj::Doc {
 }
 
 /// HS `ppFun f ts = text (f ++ "(") <> fsep (punctuate comma (map ppTerm ts))
-/// <> text ")"` (Term/Term.hs:295-296), over a slice of `&Term` so callers
+/// <> text ")"` (Term/Term.hs:326-327), over a slice of `&Term` so callers
 /// (incl. the boxed-pair binary shapes) need not clone the subtrees.
 fn fun_doc_refs(name: &str, args: &[&p::Term], scope: &[Bind]) -> crate::pretty_hpj::Doc {
     crate::pretty_hpj::fun_app_doc(name, args, |a| term_to_doc(a, scope))
@@ -1547,7 +1565,7 @@ pub fn fact_to_doc(fa: &p::Fact, scope: &[Bind]) -> crate::pretty_hpj::Doc {
 // =============================================================================
 // GTerm / GFact / GAtom — HughesPJ Doc engine (HS-faithful wrapping)
 //
-// HS has ONE term renderer: `prettyTerm` (Term/Term.hs:268-296). The guarded
+// HS has ONE term renderer: `prettyTerm` (Term/Term.hs:298-327). The guarded
 // path's `prettyNAtom = prettyAtom prettyNTerm` (Atom.hs:230-231) and
 // `prettyNTerm = prettyTerm (text . show)` (LTerm.hs:852-853) use the EXACT
 // same `prettyTerm`, only with
@@ -1558,7 +1576,7 @@ pub fn fact_to_doc(fa: &p::Fact, scope: &[Bind]) -> crate::pretty_hpj::Doc {
 // =============================================================================
 
 /// Pretty-print a `GTerm` as a `Doc`, faithful to HS `prettyTerm`
-/// (Term/Term.hs:268-296) — the SAME renderer the rule-body / parser-Term
+/// (Term/Term.hs:298-327) — the SAME renderer the rule-body / parser-Term
 /// path uses via `term_to_doc`. Mirrors that function's structure exactly.
 fn gterm_to_doc(t: &crate::guarded::GTerm, scope: &[Vec<Bind>]) -> crate::pretty_hpj::Doc {
     use crate::guarded::GTerm::*;
@@ -1572,10 +1590,14 @@ fn gterm_to_doc(t: &crate::guarded::GTerm, scope: &[Vec<Bind>]) -> crate::pretty
             pp_gterm(t, scope, &mut s);
             Doc::text(s)
         }
-        Pair(items) => {
-            // HS `split` flattens right-associative pairs (Term/Term.hs:292-293).
-            let flat = flatten_pair_gterms(items);
-            gpair_doc(&flat, scope)
+        // HS `prettyTerm` (Term/Term.hs:313) fires its pair arm on the pair
+        // SHAPE, so the prefix spelling `pair(a, b)` renders `<a, b>` like the
+        // `<a, b>` spelling; `split` (`flatten_pair_gterms`) walks the right
+        // spine of either form.  The `App` case precedes the generic `App` arm
+        // below, which would otherwise print `pair(a, b)` through `ppFun`.
+        Pair(_) => gpair_doc(&flatten_pair_gterms(t), scope),
+        App(name, args) if &**name == "pair" && args.len() == 2 => {
+            gpair_doc(&flatten_pair_gterms(t), scope)
         }
         App(name, args) => {
             if args.is_empty() {
@@ -1585,15 +1607,16 @@ fn gterm_to_doc(t: &crate::guarded::GTerm, scope: &[Vec<Bind>]) -> crate::pretty
             }
         }
         AlgApp(name, l, r) => {
-            // The curly-brace form `name{a}b` is parser-only sugar
-            // (parser.rs:2111); HS `prettyTerm`/`ppFun` (Term/Term.hs:268-296)
-            // has no brace case and emits these NoEq applications in function
-            // form `name(a, b)`.  Render identically to `App(name, [l, r])`,
-            // passing the operands by reference (no subtree clone).
+            // The curly-brace form `name{a}b` is parser-only sugar (the `{`
+            // branch of `atom_term` in `parser.rs`); HS `prettyTerm`/`ppFun`
+            // (Term/Term.hs:298-327) has no brace case and emits these NoEq
+            // applications in function form `name(a, b)`.  Render identically
+            // to `App(name, [l, r])`, passing the operands by reference (no
+            // subtree clone).
             gfun_doc_refs(name, &[&**l, &**r], scope)
         }
         Diff(l, r) => {
-            // HS `prettyTerm` dedicated diff case (Term/Term.hs:272-300, see line 275): fully
+            // HS `prettyTerm` dedicated diff case (Term/Term.hs:298-327, see line 311): fully
             // flat `text "diff" <> "(" <> ppTerm t1 <> ", " <> ppTerm t2 <>
             // ")"` (all `<>`, no `fsep`), so it never breaks at the comma
             // (unlike the generic `gfun_doc` path).
@@ -1605,7 +1628,7 @@ fn gterm_to_doc(t: &crate::guarded::GTerm, scope: &[Vec<Bind>]) -> crate::pretty
         }
         BinOp(op, l, r) => {
             // exp never breaks at `^`, but its operands are recursively
-            // `ppTerm`'d (Term/Term.hs:272-300, see line 274 `ppTerm t1 <> "^" <> ppTerm t2`),
+            // `ppTerm`'d (Term/Term.hs:298-327, see line 310 `ppTerm t1 <> "^" <> ppTerm t2`),
             // so an AC exponent (`'g'^(~a*~b)`) keeps its inner `fcat` break
             // points.  Composing operand Docs with `beside` preserves them.
             if matches!(op, p::BinOp::Exp) {
@@ -1753,6 +1776,20 @@ fn gatom_to_doc(a: &crate::guarded::GAtom, scope: &[Vec<Bind>]) -> crate::pretty
     }
 }
 
+/// HS `ppTerms ", " 1 "<" ">" (split t)` (Term/Term.hs:313,319-321) as a
+/// string: `pair_doc`'s twin on the `pp_term` path, for a pair-shaped `t`.
+fn pp_pair_term(t: &p::Term, scope: &[Bind], out: &mut String) {
+    let flat = flatten_pair_terms(t);
+    out.push('<');
+    for (i, it) in flat.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        pp_term(it, scope, out);
+    }
+    out.push('>');
+}
+
 fn pp_term(t: &p::Term, scope: &[Bind], out: &mut String) {
     use p::Term::*;
     match t {
@@ -1775,44 +1812,34 @@ fn pp_term(t: &p::Term, scope: &[Bind], out: &mut String) {
             out.push('\'');
         }
         Number(n) => out.push_str(&n.to_string()),
-        // HS `fAppOne = fAppNoEq oneSym []` (Term/Term.hs:126-127, see line 127), and
-        // `prettyTerm` has NO special case for `oneSym` (Term/Term.hs:266-280)
+        // HS `fAppOne = fAppNoEq oneSym []` (Term/Term.hs:147-148), and
+        // `prettyTerm` has NO special case for `oneSym` (Term/Term.hs:298-327)
         // — a nullary `NoEq` symbol falls through to `text (BC.unpack f)`,
-        // i.e. its symbol string `"one"` (FunctionSymbols.hs:134-134,163).  The
+        // i.e. its symbol string `"one"` (`oneSymString`,
+        // Term/Term/FunctionSymbols.hs:226; `oneSym` at 255).  The
         // `1` keyword is only a *parser* spelling for this constant; HS always
         // renders it back as `one`.
         NumberOne => out.push_str("one"),
         NatOne => out.push_str("%1"),
         // HS `dhNeutralSym` is a nullary NoEq public constructor; HS
         // `prettyTerm` renders `FApp (NoEq (f,_)) []` as `text f` =
-        // `dhNeutralSymString` = "DH_neutral" (Term/Term.hs:73,278,
-        // function_symbols.rs:93).  NOT `1:msg`/`1`.
+        // `dhNeutralSymString` = "DH_neutral" (Term/Term.hs:314;
+        // Term/Term/FunctionSymbols.hs:229, mirrored by
+        // `function_symbols::DH_NEUTRAL_SYM_STRING`).  NOT `1:msg`/`1`.
         DhNeutral => out.push_str("DH_neutral"),
-        Pair(items) => {
-            // HS `prettyTerm` (Term/Term.hs:272-300, see line 277,292-293):
-            //   `FApp pairSym _ -> ppTerms ", " 1 "<" ">" (split t)`
-            //   `split (FPair t1 t2) = t1 : split t2`
-            // HS's right-associative `tupleterm` parser
-            // (Theory/Text/Parser/Term.hs:187-188, see line 188) makes `<a, b, c>` into
-            // `Pair(a, Pair(b, c))`. When the last item of a Pair is
-            // itself a Pair (as in `<a, b, <c, d>>` →
-            // `Pair(a, Pair(b, Pair(c, d)))`), HS's recursive `split`
-            // walks the rightmost child and emits a flat
-            // `<a, b, c, d>`. Mirror that here: splice the last item
-            // when it's a Pair.
-            let flat = flatten_pair_terms(items);
-            out.push('<');
-            for (i, it) in flat.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                pp_term(it, scope, out);
-            }
-            out.push('>');
-        }
+        // HS `prettyTerm` (Term/Term.hs:313):
+        //   `FApp (NoEq s) _ | s == pairSym -> ppTerms ", " 1 "<" ">" (split t)`
+        // The arm fires on the pair SHAPE, so both parser spellings — the
+        // `<a, b, c>` syntax (`Pair`) and the prefix application `pair(a, b)`
+        // (`App`) — render between `<` and `>`, with `split`
+        // (`flatten_pair_terms`) walking the right spine of either form.  The
+        // `App` case precedes the generic `App` arm below, which would
+        // otherwise print `pair(a, b)` through `ppFun`.
+        Pair(_) => pp_pair_term(t, scope, out),
+        App(name, args) if name == "pair" && args.len() == 2 => pp_pair_term(t, scope, out),
         App(name, args) => {
             // Nullary nat-one first, as in HS: `FApp (NoEq s) [] | s ==
-            // natOneSym -> text "%1"` (Term/Term.hs:272-300, see line 276) — the runtime
+            // natOneSym -> text "%1"` (Term/Term.hs:298-327, see line 312) — the runtime
             // constant reaches here as `App("tone", [])` via
             // `lnterm_to_parser` (see the `term_to_doc` twin arm).
             if name == "tone" && args.is_empty() {
@@ -1849,7 +1876,7 @@ fn pp_term(t: &p::Term, scope: &[Bind], out: &mut String) {
             out.push(')');
         }
         BinOp(op, l, r) => {
-            // HS `prettyTerm` (Term/Term.hs:273-274):
+            // HS `prettyTerm` (Term/Term.hs:305-310):
             //   `FApp (AC o)   ts -> ppTerms (ppACOp o) 1 "(" ")" ts`
             //   `FApp (NoEq s) [t1,t2] | s == expSym -> ppTerm t1 <> text "^" <> ppTerm t2`
             // — AC ops always print with surrounding `(` `)` (the
@@ -1909,18 +1936,18 @@ fn pp_term(t: &p::Term, scope: &[Bind], out: &mut String) {
     }
 }
 
+/// The separator table on [`p::BinOp`], narrowed to the `&'static str` the
+/// `Doc` builders take.  A user-declared `[AC]` symbol's separator is its name
+/// surrounded by spaces (HS `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts`,
+/// Term/Term.hs:305); `ac_fct_op_symbol` is the interning fast path for it, so
+/// rendering a user-AC application allocates nothing.
 fn binop_symbol(op: p::BinOp) -> &'static str {
-    use p::BinOp::*;
     match op {
-        Exp => "^",
-        Mult => "*",
-        Union => "++",
-        Xor => "\u{2295}", // ⊕
-        NatPlus => "%+",
-        // HS `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts`
-        // (Term/Term.hs:305) — the spaces around a user-declared `[AC]`
-        // symbol's name are part of the separator.
-        AcFct(name) => tamarin_term::pretty::ac_fct_op_symbol(name),
+        p::BinOp::AcFct(name) => tamarin_term::pretty::ac_fct_op_symbol(name),
+        _ => match op.separator() {
+            std::borrow::Cow::Borrowed(s) => s,
+            std::borrow::Cow::Owned(s) => tamarin_term::intern::intern_str(&s),
+        },
     }
 }
 
@@ -2479,6 +2506,20 @@ fn pp_gfact(fa: &crate::guarded::GFact, scope: &[Vec<Bind>], out: &mut String) {
     }
 }
 
+/// [`pp_pair_term`] over `GTerm`: HS `ppTerms ", " 1 "<" ">" (split t)`
+/// (Term/Term.hs:313,319-321) as a string, for a pair-shaped `t`.
+fn pp_pair_gterm(t: &crate::guarded::GTerm, scope: &[Vec<Bind>], out: &mut String) {
+    let flat = flatten_pair_gterms(t);
+    out.push('<');
+    for (i, it) in flat.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        pp_gterm(it, scope, out);
+    }
+    out.push('>');
+}
+
 fn pp_gterm(t: &crate::guarded::GTerm, scope: &[Vec<Bind>], out: &mut String) {
     use crate::guarded::{BVar, GTerm};
     match t {
@@ -2517,12 +2558,19 @@ fn pp_gterm(t: &crate::guarded::GTerm, scope: &[Vec<Bind>], out: &mut String) {
             out.push_str(&n.to_string());
         }
         // HS `oneSym` renders as its symbol string `"one"` — see note in
-        // `pp_term` (no `prettyTerm` special case; Term/Term.hs:266-280).
+        // `pp_term` (no `prettyTerm` special case; Term/Term.hs:298-327).
         GTerm::NumberOne => out.push_str("one"),
         GTerm::NatOne => out.push_str("%1"),
         // HS renders `dhNeutralSym` (nullary NoEq) as its symbol string
-        // "DH_neutral" (Term/Term.hs:272-300, see line 278), not `1`.
+        // "DH_neutral" (Term/Term.hs:298-327, see line 314), not `1`.
         GTerm::DhNeutral => out.push_str("DH_neutral"),
+        // HS `prettyTerm` (Term/Term.hs:313) fires its pair arm on the pair
+        // SHAPE, so the prefix spelling `pair(a, b)` renders `<a, b>`.  This
+        // arm precedes the generic `App` arm below, which would otherwise
+        // print `pair(a, b)` through `ppFun`.
+        GTerm::App(name, args) if &**name == "pair" && args.len() == 2 => {
+            pp_pair_gterm(t, scope, out)
+        }
         GTerm::App(name, args) => {
             out.push_str(name);
             out.push('(');
@@ -2535,10 +2583,10 @@ fn pp_gterm(t: &crate::guarded::GTerm, scope: &[Vec<Bind>], out: &mut String) {
             out.push(')');
         }
         GTerm::AlgApp(name, a, b) => {
-            // Curly-brace form `name{a}b` is parser-only sugar
-            // (parser.rs:2111); HS `prettyTerm`/`ppFun` (Term/Term.hs:268-296)
-            // has no brace case and renders these in function form
-            // `name(a, b)`.
+            // Curly-brace form `name{a}b` is parser-only sugar (the `{` branch
+            // of `atom_term` in `parser.rs`); HS `prettyTerm`/`ppFun`
+            // (Term/Term.hs:298-327) has no brace case and renders these in
+            // function form `name(a, b)`.
             out.push_str(name);
             out.push('(');
             pp_gterm(a, scope, out);
@@ -2546,16 +2594,7 @@ fn pp_gterm(t: &crate::guarded::GTerm, scope: &[Vec<Bind>], out: &mut String) {
             pp_gterm(b, scope, out);
             out.push(')');
         }
-        GTerm::Pair(items) => {
-            out.push('<');
-            for (i, it) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                pp_gterm(it, scope, out);
-            }
-            out.push('>');
-        }
+        GTerm::Pair(_) => pp_pair_gterm(t, scope, out),
         GTerm::Diff(l, r) => {
             out.push_str("diff(");
             pp_gterm(l, scope, out);
@@ -2564,7 +2603,7 @@ fn pp_gterm(t: &crate::guarded::GTerm, scope: &[Vec<Bind>], out: &mut String) {
             out.push(')');
         }
         GTerm::BinOp(op, l, r) => {
-            // HS `prettyTerm` (Term/Term.hs:273-274,287-290):
+            // HS `prettyTerm` (Term/Term.hs:305-310, `ppTerms` at 319-321):
             //   `FApp (AC o)   ts -> ppTerms (ppACOp o) 1 "(" ")" ts`
             //   `FApp (NoEq s) [t1,t2] | s == expSym -> ppTerm t1 <> "^" <> ppTerm t2`
             // AC ops (Mult/Union/Xor/NatPlus) ALWAYS print with a SINGLE
@@ -2845,7 +2884,7 @@ mod tests {
 
     /// Build the parser Term `<'1', g1> ++ <'2', g2> ++ <'3', g3>` where the
     /// pair payloads are long enough that the flat AC chain exceeds the ribbon
-    /// and HS `prettyTerm` (Term/Term.hs:272-300, see line 273 `FApp (AC o) -> ppTerms ...`) must
+    /// and HS `prettyTerm` (Term/Term.hs:298-327, see line 305-309 `FApp (AC o) -> ppTerms ...`) must
     /// wrap it with the `++` operator at line ends and each element `nest 1`'d.
     fn ac_chain_term() -> p::Term {
         let pair = |n: &str, payload: &str| {
@@ -2908,7 +2947,7 @@ mod tests {
     }
 
     /// Regression: the AC `*` exponent inside an `exp` term must keep its
-    /// `fcat` break points.  HS `prettyTerm` (Term/Term.hs:272-300, see line 274) renders exp as
+    /// `fcat` break points.  HS `prettyTerm` (Term/Term.hs:298-327, see line 310) renders exp as
     /// `ppTerm t1 <> "^" <> ppTerm t2`, so the exponent `t2 = (~a*~b)` stays a
     /// breakable `fcat`: `hmac('g'^(~a*~b), ...)` must wrap the `*`-operands
     /// like HS rather than run past LINE_LENGTH=110.  Mirrors the spdm
@@ -2957,9 +2996,10 @@ mod tests {
         assert_eq!(flat, "'g'^(~longFreshPrivKeyOne*~longFreshPrivKeyTwo)");
     }
 
-    // The curly-brace form `name{a}b` in the source is parser-only sugar
-    // (parser.rs:2111); HS `prettyTerm`/`ppFun` (Term/Term.hs:268-296) has no
-    // brace case and re-emits these NoEq applications in function form
+    // The curly-brace form `name{a}b` in the source is parser-only sugar (the
+    // `{` branch of `atom_term` in `parser.rs`); HS `prettyTerm`/`ppFun`
+    // (Term/Term.hs:298-327) has no brace case
+    // and re-emits these NoEq applications in function form
     // `name(a, b)`.  Every term renderer (flat + Doc, parser-AST + GTerm) must
     // match that.
     #[test]

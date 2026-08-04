@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, arcz, jdreier, beschmi, kevinmorio, Kanakanajm, rsasse,
-//   addap, yavivanov, felixlinker, and other minor contributors (see
+//   meiersi, arcz, jdreier, cascremers, kevinmorio, beschmi, rsasse,
+//   Kanakanajm, addap, felixlinker, and other minor contributors (see
 //   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   src/Main/Mode/Interactive.hs, src/Main/TheoryLoader.hs,

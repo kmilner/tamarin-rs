@@ -21,9 +21,12 @@
 # verified against the pristine new pin, and installed. The script then stages
 # the new gitlink and patch, resets + re-patches + rebuilds the testing oracle
 # via ./setup.sh testing, rebuilds the Rust binary (it embeds submodule data
-# files at compile time), and archives the gate caches (their entries key on
-# oracle output, so a new oracle silently invalidates them). It never commits:
-# run the batch and web gates first (it prints the checklist).
+# files at compile time), archives the gate caches (their entries key on
+# oracle output, so a new oracle silently invalidates them), and remaps the
+# Haskell line cites in crates/ comments onto the new pin
+# (scripts/remap_hs_cites.py, whose report — rewrites, UNRESOLVED cites and the
+# wrapped-cite lint — is teed to scripts/results/cite_remap_<newpin>.txt).
+# It never commits: run the batch and web gates first (it prints the checklist).
 set -eu
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -106,10 +109,32 @@ finalize() {
 
     # Comments across crates/ cite upstream Haskell line numbers relative to
     # the pin; remap them through the bump's diff (pure shifts applied
-    # mechanically, moved declarations re-anchored, the rest reported).
+    # mechanically, moved declarations re-anchored, the rest reported).  The
+    # rewrites are applied unreviewed and the UNRESOLVED list needs a human
+    # pass, so keep both in a file: on the console they scroll away behind the
+    # oracle and cargo builds that follow.
     echo
+    mkdir -p "$root/scripts/results"
+    remap_report="scripts/results/cite_remap_$newshort.txt"
     python3 "$root/scripts/remap_hs_cites.py" --old "$old" --new "$new" --apply \
-        || echo "WARNING: cite remap failed — run scripts/remap_hs_cites.py by hand" >&2
+        2>&1 | tee "$root/$remap_report"
+    [ "${PIPESTATUS[0]}" = 0 ] \
+        || echo "WARNING: cite remap failed — see $remap_report; run scripts/remap_hs_cites.py by hand" >&2
+
+    # Backstop lint for cites the remapper cannot join: a parts list ending the
+    # line carries its tail on the next comment line, which remap_hs_cites.py
+    # joins only when that line opens the same comment and starts with a parts
+    # fragment.  Anything else leaves an orphaned half that no bump ever moves.
+    wrapped="$(cd "$root" && grep -rnE '\.hs:[0-9]+([,-][0-9]+)*,[[:space:]]*$' \
+        crates --include='*.rs' || true)"
+    if [ -n "$wrapped" ]; then
+        { echo
+          echo "WRAPPED CITES (parts continue on the next comment line) — check each"
+          echo "remapped as a whole; the tool joins only the narrow shape it recognises:"
+          printf '%s\n' "$wrapped"
+        } >> "$root/$remap_report"
+        echo "NOTE: $(printf '%s\n' "$wrapped" | wc -l) wrapped cite(s) listed at the end of $remap_report"
+    fi
 
     if [ "${SKIP_BUILD:-0}" != 1 ]; then
         "$root/setup.sh" testing
@@ -129,11 +154,20 @@ finalize() {
 staged (NOT committed): tamarin-prover gitlink + patches/$(basename "$patch")
 unstaged: any HS-cite remaps under crates/ (review with git diff, commit with the bump)
 Verify before committing:
-  1. RESULTS_TSV=scripts/results/fullgate_bump.tsv scripts/corpus_file_diff.sh   # full batch gate, cold cache
-     - heavy files (BP_IBS_2/3, fm24 C8, alethea_votingphase_malS_abstain) need FILE_TIMEOUT>=600 cold
+  1. $remap_report — the applied cite rewrites, the UNRESOLVED list (fix those
+     by hand) and the wrapped cites the remapper cannot join; re-run the lint after:
+     grep -rnE '\.hs:[0-9]+([,-][0-9]+)*,[[:space:]]*\$' crates --include='*.rs'
+  2. RESULTS_TSV=scripts/results/fullgate_bump.tsv scripts/corpus_file_diff.sh   # full batch gate, cold cache
+     - heavy files (BP_IBS_2/3, alethea_votingphase_malS_abstain) need FILE_TIMEOUT>=600 cold
      - retries short-circuit on cached markers: find scripts/.hs_file_cache -name '*.timeout' -delete first
-  2. Web ladder: guards -> family files -> scripts/websweep_residual.txt (regenerates scripts/.web_hs_cache)
-  3. git commit -m "chore: bump tamarin-prover submodule to $newshort"
+  3. Web ladder: guards -> family files -> scripts/websweep_residual.txt (regenerates scripts/.web_hs_cache)
+  4. scripts/divergence_fixtures/capture.sh && scripts/divergence_fixtures/check.sh
+     - the corners no corpus theory reaches; capture.sh re-reads them from
+       the NEW oracle, so review git diff scripts/divergence_fixtures/expected/
+     - a changed .hs.txt is upstream behaviour moving under a fixture; check.sh
+       goes red if the port drifts OR if the recorded upstream-bug divergence
+       (the documented AC-marker collapse) disappears or changes shape
+  5. git commit -m "chore: bump tamarin-prover submodule to $newshort"
 EOF
 }
 

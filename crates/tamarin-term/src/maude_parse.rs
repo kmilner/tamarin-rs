@@ -1,8 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   beschmi, jdreier, rkunnema, PhilipLukertWork, meiersi, and other
-//   minor contributors (see upstream git history)
+//   beschmi, jdreier, meiersi, addap, rkunnema, PhilipLukertWork, and
+//   other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Maude/Parser.hs
+//   lib/term/src/Term/Maude/Parser.hs, lib/term/src/Term/Term/Raw.hs
 
 //! Port of `Term.Maude.Parser`'s reply-parsing portion.
 //!
@@ -14,7 +14,9 @@ use crate::function_symbols::{
     MULT_SYM_STRING, MUN_SYM_STRING, NAT_PLUS_SYM_STRING, XOR_SYM_STRING,
 };
 use crate::lterm::LSort;
-use crate::maude_print::{fun_sym_decode, parse_lsort_sym, replace_minus, FUN_SYM_PREFIX};
+use crate::maude_print::{
+    fun_sym_decode, parse_lsort_sym, replace_minus, ATTR_BLOCK_LEN, FUN_SYM_PREFIX,
+};
 use crate::maude_types::{MSubst, MTerm, MaudeLit};
 use crate::term::Term;
 
@@ -446,10 +448,9 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
         // ordinary non-AC function whose NAME contains a marker (`functions:
         // tamXCAbar/1` -> `tamXCFUtamXCAbar`) is rebuilt as AC: at arity 1
         // `fAppAC _ [a] = a` deletes the application, at arity >= 2 it
-        // fabricates a flattened/sorted AC term (see
-        // /home/kamilner/upstream-bug-ac-marker-collapse.md).  RS classifies by
-        // decoding the attribute block instead and deliberately diverges from
-        // upstream on exactly those names.
+        // fabricates a flattened/sorted AC term.  RS classifies by decoding the
+        // attribute block instead and deliberately diverges from that upstream
+        // bug on exactly those names.
         if !args.is_empty() && is_ac_fct_ident(ident) {
             return crate::term::f_app_acfct(parse_fun_ac_sym(ident), args);
         }
@@ -505,12 +506,6 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
     };
     Term::App(FunSym::NoEq(sym), args.into())
 }
-
-/// Number of attribute characters `funSymEncodeAttr` emits between the
-/// `tam` prefix and the user-given name (HS Parser.hs:76-88, mirrored by
-/// `maude_print::fun_sym_encode_attr`; `funSymDecode` splits at the same
-/// width, Parser.hs:92-105).
-const ATTR_BLOCK_LEN: usize = 4;
 
 /// Is `ident` the Maude encoding of a user-defined AC symbol?
 ///
@@ -626,8 +621,8 @@ mod tests {
     /// containment guards (Parser.hs:379-382), classifies it as AC, and
     /// `fAppAC _ [a] = a` (Raw.hs:121) deletes the application.  RS decodes
     /// the attribute block instead — the AC slot holds `F` — so the free
-    /// symbol `tamXCAfoo/1` survives.  Deliberate divergence from upstream
-    /// (/home/kamilner/upstream-bug-ac-marker-collapse.md).
+    /// symbol `tamXCAfoo/1` survives.  Deliberate divergence from that
+    /// upstream bug.
     #[test]
     fn parse_unary_ident_containing_ac_marker_does_not_collapse() {
         let t = parse_reduce_reply(b"result Msg: tamXCFUtamXCAfoo(x1:Msg)\n").unwrap();
@@ -652,8 +647,7 @@ mod tests {
     /// fabricates a term: `fAppAC` flattens and SORTS the arguments
     /// (Raw.hs:122-129), so `tamXCAfoo(c(2), c(1))` would come back as an AC
     /// application over `[c(1), c(2)]`.  RS keeps the free symbol and Maude's
-    /// argument order.  Deliberate divergence from upstream
-    /// (/home/kamilner/upstream-bug-ac-marker-collapse.md).
+    /// argument order.  Deliberate divergence from that upstream bug.
     #[test]
     fn parse_binary_ident_containing_ac_marker_keeps_arg_order() {
         let t = parse_reduce_reply(b"result Msg: tamXCFUtamXCAfoo(c(2), c(1))\n").unwrap();

@@ -56,6 +56,21 @@ fi
 
 mkdir -p "$RES_DIR"
 
+# Poll the just-launched $SERVER_PID until it serves the root page; dump its
+# log and give up otherwise.  Optional $1 names the theory it is serving.
+wait_for_server() {
+  for _ in {1..40}; do
+    if curl -fs -o /dev/null "$BASE/" 2>/dev/null; then
+      return
+    fi
+    sleep 0.5
+  done
+  echo "error: Haskell server never came up${1:+ for $1} on $BASE/ (log: /tmp/haskell-server.log)" >&2
+  cat /tmp/haskell-server.log >&2
+  kill "$SERVER_PID" 2>/dev/null || true
+  exit 1
+}
+
 # Spin Haskell up in its own work-dir so it doesn't dirty ours.
 WORKDIR="$(mktemp -d)"
 # BIGDIR is the second phase's work-dir (created further down); declaring it
@@ -68,20 +83,7 @@ cp "$FIXTURE" "$WORKDIR/issue193.spthy"
 echo "starting Haskell tamarin-prover on port $PORT ..."
 ( cd "$WORKDIR" && tamarin-prover interactive --port="$PORT" --no-logging ./ ) >/tmp/haskell-server.log 2>&1 &
 SERVER_PID=$!
-
-# Wait for the server to start serving.
-for i in {1..40}; do
-  if curl -fs -o /dev/null "$BASE/" 2>/dev/null; then
-    break
-  fi
-  sleep 0.5
-done
-if ! curl -fs -o /dev/null "$BASE/" 2>/dev/null; then
-  echo "error: Haskell server never came up on $BASE/ (log: /tmp/haskell-server.log)" >&2
-  cat /tmp/haskell-server.log >&2
-  kill "$SERVER_PID" 2>/dev/null || true
-  exit 1
-fi
+wait_for_server
 echo "Haskell server up, capturing fixtures into $RES_DIR ..."
 
 # Convenience helper.
@@ -89,20 +91,25 @@ fetch() {
   local outfile="$1"; shift
   local url="$1"; shift
   local method="${1:-GET}"
-  # Note: we deliberately drop `curl -f`.  We *want* to capture the
-  # body for non-2xx responses (e.g. Haskell returns 500 for graph
-  # stubs and 404 for /thy/equiv/...; the body documents the route's
-  # default behaviour and is asserted against in the Rust tests).
-  # `--path-as-is` keeps the URL bytes curl sends identical to the ones
-  # written here, which the Not Found page echoes back.
+  # Every method shares one option set, so a flag added here reaches all of
+  # them:
+  #   -s            no progress meter (the run prints its own table)
+  #   -S            but DO report a transport failure on stderr; the `ERR`
+  #                 cell alone does not say what went wrong, and stderr is
+  #                 left alone so the message reaches the operator
+  #   --path-as-is  keep the URL bytes curl sends identical to the ones
+  #                 written below, which the Not Found page echoes back
+  # We deliberately drop `-f`: we *want* the body of a non-2xx response (e.g.
+  # Haskell returns 500 for graph stubs and 404 for /thy/equiv/...; the body
+  # documents the route's default behaviour and is asserted against in the
+  # Rust tests).
+  local opts=(-sS --path-as-is)
+  case "$method" in
+    POST) opts+=(-X POST) ;;
+    HEAD) opts+=(-I) ;;
+  esac
   local status
-  if [[ "$method" == "POST" ]]; then
-    status=$(curl -sS --path-as-is -X POST -o "${RES_DIR}/${outfile}" -w "%{http_code}" "${BASE}${url}" 2>/dev/null || echo "ERR")
-  elif [[ "$method" == "HEAD" ]]; then
-    status=$(curl -sI --path-as-is -o "${RES_DIR}/${outfile}" -w "%{http_code}" "${BASE}${url}" || echo "ERR")
-  else
-    status=$(curl -sS --path-as-is -o "${RES_DIR}/${outfile}" -w "%{http_code}" "${BASE}${url}" 2>/dev/null || echo "ERR")
-  fi
+  status=$(curl "${opts[@]}" -o "${RES_DIR}/${outfile}" -w "%{http_code}" "${BASE}${url}" || echo "ERR")
   printf "  %-30s %3s\n" "$url" "$status"
 }
 
@@ -125,7 +132,7 @@ fetch autoprove_on_proven.json  "/thy/trace/2/autoprove/idfs/0/False/proof/debug
 fetch autoprove_on_rules.json   "/thy/trace/1/autoprove/idfs/0/False/rules"
 fetch autoprove_all.json        "/thy/trace/1/autoproveAll/idfs/0/proof/debug"
 
-# ---------------- Live routes (now fully ported) ----------------
+# ---------------- Live routes (fully ported) ----------------
 fetch next.txt                  "/thy/trace/1/next/main/lemma/debug"
 fetch next_help.txt             "/thy/trace/1/next/main/help"
 fetch prev.txt                  "/thy/trace/1/prev/main/lemma/debug"
@@ -186,7 +193,7 @@ fetch graph_unhandled_path.html "/thy/trace/1/graph/help"
 # divergence, see `test_method_out_of_range_index_alerts_match_haskell`).
 fetch method_out_of_range.json  "/thy/trace/1/main/method/debug/9999"
 
-# ---------------- Stubs (capture for documentation) ----------------
+# ---------------- Graph shell + the diff-theory stub ----------------
 fetch intdot.html               "/thy/trace/1/intdot/lemma/debug"
 fetch equiv_overview.json       "/thy/equiv/1/overview/help"
 
@@ -203,19 +210,7 @@ BIGDIR="$(mktemp -d)"
 cp "${SCRIPT_DIR}/fixtures/BigTermProved.spthy" "$BIGDIR/BigTermProved.spthy"
 ( cd "$BIGDIR" && tamarin-prover interactive --port="$PORT" --no-logging ./ ) >>/tmp/haskell-server.log 2>&1 &
 SERVER_PID=$!
-for i in {1..40}; do
-  if curl -fs -o /dev/null "$BASE/" 2>/dev/null; then
-    break
-  fi
-  sleep 0.5
-done
-if ! curl -fs -o /dev/null "$BASE/" 2>/dev/null; then
-  echo "error: Haskell server never came up for BigTermProved on $BASE/ (log: /tmp/haskell-server.log)" >&2
-  cat /tmp/haskell-server.log >&2
-  kill "$SERVER_PID" 2>/dev/null || true
-  rm -rf "$BIGDIR"
-  exit 1
-fi
+wait_for_server BigTermProved
 fetch json_proof_abbrev.json    "/thy/trace/1/json/proof/done/_/Init/Init?abbrevInBackend=1"
 rm -rf "$BIGDIR"
 

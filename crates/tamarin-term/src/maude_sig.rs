@@ -1,10 +1,13 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   beschmi, BTom-GH, charlie-j, PhilipLukertWork, jdreier, meiersi,
-//   rsasse, and other minor contributors (see upstream git history)
+//   jdreier, beschmi, rkunnema, meiersi, PhilipLukertWork,
+//   ValentinYuri, BTom-GH, charlie-j, racoucho1u, rsasse, and other
+//   minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Builtin/Rules.hs,
 //   lib/term/src/Term/Maude/Signature.hs,
-//   lib/theory/src/Theory/Text/Parser/Signature.hs
+//   lib/theory/src/Theory/Text/Parser/Macro.hs,
+//   lib/theory/src/Theory/Text/Parser/Signature.hs,
+//   lib/theory/src/Theory/Text/Parser/Term.hs
 
 //! Port of `Term.Maude.Signature` from
 //! `lib/term/src/Term/Maude/Signature.hs`.
@@ -31,6 +34,97 @@ use crate::rewriting::RRule;
 use crate::subterm_rule::CtxtStRule;
 use crate::term::Term;
 
+/// HS `stRules :: S.Set CtxtStRule` (Signature.hs:99), paired with the
+/// `maude_proc::term_ac_c_free` verdict of each rule's LHS.
+///
+/// `norm::go_nf` needs that verdict per rule — at every `App` node of every
+/// normal-form check — to choose between the pure no-AC st-rule matcher and
+/// the Maude-backed one, and computing it walks the whole LHS, so it is held
+/// rather than recomputed.  Both fields are private and are rebuilt together
+/// by every mutator, so a flag can never describe a rule other than the one it
+/// is read alongside; the pairing is only observable through
+/// [`StRules::iter_with_lhs_ac_c_free`], which zips the two.
+///
+/// Reading is otherwise the `BTreeSet`'s own API, via `Deref` — including the
+/// `S.toList` iteration order that reaches the emitted Maude text, the
+/// `equations:` pretty-print and the wellformedness report.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct StRules {
+    rules: BTreeSet<CtxtStRule>,
+    lhs_ac_c_free: Vec<bool>,
+}
+
+impl StRules {
+    /// Each rule together with the Ac/C-freeness of its LHS, in `BTreeSet`
+    /// iteration order.
+    pub fn iter_with_lhs_ac_c_free(&self) -> impl Iterator<Item = (&CtxtStRule, bool)> + '_ {
+        self.rules.iter().zip(self.lhs_ac_c_free.iter().copied())
+    }
+
+    /// True iff EVERY rule LHS is Ac/C-free.
+    pub fn all_lhs_ac_c_free(&self) -> bool {
+        self.lhs_ac_c_free.iter().all(|&b| b)
+    }
+
+    /// `BTreeSet::insert`, re-deriving the LHS flags.
+    pub fn insert(&mut self, rule: CtxtStRule) -> bool {
+        let added = self.rules.insert(rule);
+        if added {
+            self.derive_lhs_ac_c_free();
+        }
+        added
+    }
+
+    /// `BTreeSet::remove`, re-deriving the LHS flags.
+    pub fn remove(&mut self, rule: &CtxtStRule) -> bool {
+        let removed = self.rules.remove(rule);
+        if removed {
+            self.derive_lhs_ac_c_free();
+        }
+        removed
+    }
+
+    fn derive_lhs_ac_c_free(&mut self) {
+        self.lhs_ac_c_free = self
+            .rules
+            .iter()
+            .map(|r| crate::maude_proc::term_ac_c_free(&r.lhs))
+            .collect();
+    }
+}
+
+impl std::ops::Deref for StRules {
+    type Target = BTreeSet<CtxtStRule>;
+    fn deref(&self) -> &Self::Target {
+        &self.rules
+    }
+}
+
+impl<'a> IntoIterator for &'a StRules {
+    type Item = &'a CtxtStRule;
+    type IntoIter = std::collections::btree_set::Iter<'a, CtxtStRule>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.rules.iter()
+    }
+}
+
+impl From<BTreeSet<CtxtStRule>> for StRules {
+    fn from(rules: BTreeSet<CtxtStRule>) -> Self {
+        let mut s = StRules {
+            rules,
+            lhs_ac_c_free: Vec::new(),
+        };
+        s.derive_lhs_ac_c_free();
+        s
+    }
+}
+
+impl FromIterator<CtxtStRule> for StRules {
+    fn from_iter<I: IntoIterator<Item = CtxtStRule>>(iter: I) -> Self {
+        Self::from(iter.into_iter().collect::<BTreeSet<CtxtStRule>>())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MaudeSig {
     pub enable_dh: bool,
@@ -44,7 +138,9 @@ pub struct MaudeSig {
     /// symbols declared `[AC]` in the theory's `functions:` block; the
     /// built-in AC operators live in the `enable_*` flags instead.
     pub st_ac_fun_syms: BTreeSet<AcFctSym>,
-    pub st_rules: BTreeSet<CtxtStRule>,
+    /// The subterm rewrite rules, each carrying the Ac/C-freeness of its LHS
+    /// (see [`StRules`]).
+    pub st_rules: StRules,
     pub macro_names: BTreeSet<NoEqSym>,
     pub eq_convergent: bool,
     pub fun_syms: FunSig,
@@ -61,27 +157,6 @@ pub struct MaudeSig {
     /// so the two are membership-identical and the output is unchanged.
     pub irreducible_fun_syms_fast: tamarin_utils::FastSet<FunSym>,
     pub reducible_fun_syms_fast: tamarin_utils::FastSet<FunSym>,
-    /// `maude_proc::term_ac_c_free` of each `st_rules` LHS, in `st_rules`
-    /// iteration order, kept in lock-step by [`MaudeSig::refresh`].  The
-    /// predicate is a full walk of the rule LHS and `norm::go_nf` needs it per
-    /// rule to choose between the pure no-AC st-rule matcher and the
-    /// Maude-backed one — at every `App` node of every normal-form check, one
-    /// of the proof search's hottest predicates.  Read it through
-    /// [`MaudeSig::st_lhs_ac_c_free_cache`], which yields `None` once the
-    /// vector's length no longer matches `st_rules`, or through
-    /// [`MaudeSig::st_lhs_all_ac_c_free`], which then recomputes the
-    /// predicate from the rules.
-    ///
-    /// That length check samples the alignment invariant rather than
-    /// establishing it: a mutation that keeps the CARDINALITY of `st_rules`
-    /// constant — swapping one rule for another, or the remove-then-insert
-    /// pair of [`MaudeSig::add_ctxt_st_rule`] — leaves the flags describing
-    /// the old rules while the cache still reports itself valid, and
-    /// `norm::go_nf` then reads a flag belonging to a different rule.  Every
-    /// in-tree writer of `st_rules` ends in [`MaudeSig::refresh`], which
-    /// rebuilds this vector; any further in-place edit of the `pub` field must
-    /// do the same.
-    pub st_lhs_ac_c_free: Vec<bool>,
 }
 
 impl MaudeSig {
@@ -99,32 +174,14 @@ impl MaudeSig {
             && self.st_ac_fun_syms.is_empty()
     }
 
-    /// The per-rule Ac/C-free flags of [`MaudeSig::st_lhs_ac_c_free`], aligned
-    /// with `st_rules` iteration order, or `None` when the vector's length no
-    /// longer matches `st_rules` and the caller must compute
-    /// `maude_proc::term_ac_c_free` itself.  The length test catches only a
-    /// change in the NUMBER of rules — see the field's documentation for the
-    /// `refresh` obligation it does not enforce.
-    pub fn st_lhs_ac_c_free_cache(&self) -> Option<&[bool]> {
-        (self.st_lhs_ac_c_free.len() == self.st_rules.len())
-            .then_some(self.st_lhs_ac_c_free.as_slice())
-    }
-
     /// True iff EVERY `st_rules` LHS is Ac/C-free, i.e. the no-AC st-rule
     /// matcher of `norm::nf_via_haskell` is complete for this signature.
     pub fn st_lhs_all_ac_c_free(&self) -> bool {
-        match self.st_lhs_ac_c_free_cache() {
-            Some(flags) => flags.iter().all(|&b| b),
-            None => self
-                .st_rules
-                .iter()
-                .all(|r| crate::maude_proc::term_ac_c_free(&r.lhs)),
-        }
+        self.st_rules.all_lhs_ac_c_free()
     }
 
     /// Refresh the cached `fun_syms` / `irreducible_fun_syms` /
-    /// `reducible_fun_syms` / `st_lhs_ac_c_free` from the source-of-truth
-    /// flags.
+    /// `reducible_fun_syms` from the source-of-truth flags.
     pub fn refresh(mut self) -> Self {
         if self.enable_bp {
             self.enable_dh = true;
@@ -154,12 +211,10 @@ impl MaudeSig {
         // Reducible roots: any function symbol at the root of an stRules LHS,
         // plus DH/BP/XOR reducible. AC Mult is intentionally absent.
         let mut reducible_without_mult: FunSig = BTreeSet::new();
-        let mut st_lhs_ac_c_free: Vec<bool> = Vec::with_capacity(self.st_rules.len());
         for r in &self.st_rules {
             if let Term::App(o, _) = &r.lhs {
                 reducible_without_mult.insert(*o);
             }
-            st_lhs_ac_c_free.push(crate::maude_proc::term_ac_c_free(&r.lhs));
         }
         reducible_without_mult.extend(dh_reducible_fun_sig());
         reducible_without_mult.extend(bp_reducible_fun_sig());
@@ -185,7 +240,6 @@ impl MaudeSig {
         self.fun_syms = all_funs;
         self.irreducible_fun_syms = irreducible;
         self.reducible_fun_syms = reducible;
-        self.st_lhs_ac_c_free = st_lhs_ac_c_free;
         self
     }
 
@@ -244,7 +298,7 @@ impl MaudeSig {
     /// Theory/Text/Parser/Term.hs:65), whereas the port resolves operator
     /// names from tables of its own: the infix `[AC]` levels off
     /// `parser.rs::ac_fun_syms`, and `lookupArity`'s arity / privacy /
-    /// constructability / NDC off the user-fn thread-locals in `elaborate.rs`.
+    /// constructability / NDC off `elaborate.rs::CollectedUserFuns`.
     /// [`MaudeSig::user_defined_st_fun_syms`] is the variant intruder-rule
     /// generation uses.
     pub fn user_defined_fun_syms(&self) -> UserDefinedSig {
@@ -451,7 +505,7 @@ impl MaudeSig {
                 .union(&other.st_ac_fun_syms)
                 .copied()
                 .collect(),
-            st_rules: union_except_pair_rules(&self.st_rules, &other.st_rules),
+            st_rules: union_except_pair_rules(&self.st_rules, &other.st_rules).into(),
             macro_names: self
                 .macro_names
                 .union(&other.macro_names)
@@ -463,7 +517,6 @@ impl MaudeSig {
             reducible_fun_syms: BTreeSet::new(),
             irreducible_fun_syms_fast: tamarin_utils::FastSet::default(),
             reducible_fun_syms_fast: tamarin_utils::FastSet::default(),
-            st_lhs_ac_c_free: Vec::new(),
         };
         merged.refresh()
     }
@@ -690,7 +743,7 @@ pub fn xor_maude_sig() -> MaudeSig {
 pub fn pair_maude_sig() -> MaudeSig {
     MaudeSig {
         st_fun_syms: pair_fun_sig(),
-        st_rules: crate::builtin::pair_rules(),
+        st_rules: crate::builtin::pair_rules().into(),
         ..MaudeSig::default()
     }
     .refresh()
@@ -702,7 +755,7 @@ pub fn pair_maude_sig() -> MaudeSig {
 pub fn pair_dest_maude_sig() -> MaudeSig {
     MaudeSig {
         st_fun_syms: pair_fun_dest_sig(),
-        st_rules: crate::builtin::pair_dest_rules(),
+        st_rules: crate::builtin::pair_dest_rules().into(),
         ..MaudeSig::default()
     }
     .refresh()
@@ -720,7 +773,7 @@ pub fn hash_maude_sig() -> MaudeSig {
 pub fn sym_enc_maude_sig() -> MaudeSig {
     MaudeSig {
         st_fun_syms: sym_enc_fun_sig(),
-        st_rules: crate::builtin::sym_enc_rules(),
+        st_rules: crate::builtin::sym_enc_rules().into(),
         ..MaudeSig::default()
     }
     .refresh()
@@ -729,7 +782,7 @@ pub fn sym_enc_maude_sig() -> MaudeSig {
 pub fn asym_enc_maude_sig() -> MaudeSig {
     MaudeSig {
         st_fun_syms: asym_enc_fun_sig(),
-        st_rules: crate::builtin::asym_enc_rules(),
+        st_rules: crate::builtin::asym_enc_rules().into(),
         ..MaudeSig::default()
     }
     .refresh()
@@ -738,7 +791,7 @@ pub fn asym_enc_maude_sig() -> MaudeSig {
 pub fn signature_maude_sig() -> MaudeSig {
     MaudeSig {
         st_fun_syms: signature_fun_sig(),
-        st_rules: crate::builtin::signature_rules(),
+        st_rules: crate::builtin::signature_rules().into(),
         ..MaudeSig::default()
     }
     .refresh()
@@ -747,7 +800,7 @@ pub fn signature_maude_sig() -> MaudeSig {
 pub fn reveal_signature_maude_sig() -> MaudeSig {
     MaudeSig {
         st_fun_syms: reveal_signature_fun_sig(),
-        st_rules: crate::builtin::reveal_signature_rules(),
+        st_rules: crate::builtin::reveal_signature_rules().into(),
         ..MaudeSig::default()
     }
     .refresh()
@@ -756,7 +809,7 @@ pub fn reveal_signature_maude_sig() -> MaudeSig {
 pub fn location_report_maude_sig() -> MaudeSig {
     MaudeSig {
         st_fun_syms: location_report_fun_sig(),
-        st_rules: crate::builtin::location_report_rules(),
+        st_rules: crate::builtin::location_report_rules().into(),
         ..MaudeSig::default()
     }
     .refresh()
@@ -765,7 +818,7 @@ pub fn location_report_maude_sig() -> MaudeSig {
 pub fn sym_enc_dest_maude_sig() -> MaudeSig {
     MaudeSig {
         st_fun_syms: sym_enc_fun_dest_sig(),
-        st_rules: crate::builtin::sym_enc_dest_rules(),
+        st_rules: crate::builtin::sym_enc_dest_rules().into(),
         ..MaudeSig::default()
     }
     .refresh()
@@ -774,7 +827,7 @@ pub fn sym_enc_dest_maude_sig() -> MaudeSig {
 pub fn asym_enc_dest_maude_sig() -> MaudeSig {
     MaudeSig {
         st_fun_syms: asym_enc_fun_dest_sig(),
-        st_rules: crate::builtin::asym_enc_dest_rules(),
+        st_rules: crate::builtin::asym_enc_dest_rules().into(),
         ..MaudeSig::default()
     }
     .refresh()
@@ -783,7 +836,7 @@ pub fn asym_enc_dest_maude_sig() -> MaudeSig {
 pub fn signature_dest_maude_sig() -> MaudeSig {
     MaudeSig {
         st_fun_syms: signature_fun_dest_sig(),
-        st_rules: crate::builtin::signature_dest_rules(),
+        st_rules: crate::builtin::signature_dest_rules().into(),
         ..MaudeSig::default()
     }
     .refresh()
@@ -793,7 +846,7 @@ pub fn minimal_maude_sig(diff: bool) -> MaudeSig {
     MaudeSig {
         enable_diff: diff,
         st_fun_syms: pair_fun_sig(),
-        st_rules: crate::builtin::pair_rules(),
+        st_rules: crate::builtin::pair_rules().into(),
         ..MaudeSig::default()
     }
     .refresh()
@@ -895,9 +948,9 @@ mod tests {
 
     /// `add_ctxt_st_rule` must PRESERVE eq_convergent (no reset), because the
     /// Rust elaborator sets eq_convergent BEFORE the add_ctxt_st_rule loop
-    /// (elaborate.rs:666 then :683), then refreshes — matching the printed
-    /// `equations [convergent]:` for the normal functions-before-equations
-    /// corpus ordering.
+    /// (elaborate.rs's `TheoryItem::Equations` arm), then refreshes — matching
+    /// the printed `equations [convergent]:` for the normal
+    /// functions-before-equations corpus ordering.
     #[test]
     fn add_ctxt_st_rule_preserves_eq_convergent() {
         let sig = MaudeSig {
@@ -991,7 +1044,6 @@ mod tests {
     /// `xorr(x, x) = zeroo` with `xorr/2 [AC]` — an st rule whose LHS is
     /// Ac-headed, so `term_ac_c_free` is false for it.
     fn ac_headed_st_rule() -> CtxtStRule {
-        use crate::function_symbols::{Constructability, NoEqSym, Privacy};
         let xorr = AcFctSym::new(
             b"xorr".to_vec(),
             Privacy::Public,
@@ -1011,60 +1063,122 @@ mod tests {
             .expect("ground-RHS st rule")
     }
 
-    /// `refresh` fills `st_lhs_ac_c_free` with one flag per `st_rules` entry,
-    /// in `st_rules` iteration order.
+    /// Every flag `st_rules` hands out describes the rule it is paired with —
+    /// through `add_ctxt_st_rule`, through a bare `insert`, and after a
+    /// `remove` that shifts the surviving rules' positions.
     #[test]
-    fn refresh_caches_per_rule_lhs_ac_c_free() {
+    fn st_rules_pair_every_rule_with_its_own_lhs_flag() {
+        fn flags_match(rules: &StRules) -> bool {
+            rules
+                .iter_with_lhs_ac_c_free()
+                .all(|(r, f)| f == crate::maude_proc::term_ac_c_free(&r.lhs))
+        }
         let sig = pair_maude_sig();
-        assert_eq!(sig.st_lhs_ac_c_free.len(), sig.st_rules.len());
-        assert!(sig.st_lhs_ac_c_free.iter().all(|&b| b));
+        assert!(flags_match(&sig.st_rules));
         assert!(sig.st_lhs_all_ac_c_free());
 
-        let sig = sig.add_ctxt_st_rule(ac_headed_st_rule());
-        assert_eq!(sig.st_lhs_ac_c_free.len(), sig.st_rules.len());
-        let expected: Vec<bool> = sig
-            .st_rules
-            .iter()
-            .map(|r| crate::maude_proc::term_ac_c_free(&r.lhs))
-            .collect();
-        assert_eq!(sig.st_lhs_ac_c_free, expected);
-        assert!(expected.contains(&false), "the Ac-headed LHS must show up");
+        let mut sig = sig.add_ctxt_st_rule(ac_headed_st_rule());
+        assert!(flags_match(&sig.st_rules));
+        assert!(
+            !sig.st_lhs_all_ac_c_free(),
+            "the Ac-headed LHS must show up"
+        );
+
+        // Mutating the `pub` field directly, with no `refresh` afterwards:
+        // the flags follow a removal and a re-insertion that together leave
+        // the rule count unchanged.
+        assert!(sig.st_rules.remove(&fst_rule()));
+        assert!(flags_match(&sig.st_rules));
+        assert!(sig.st_rules.insert(snd_dest_rule()));
+        assert!(flags_match(&sig.st_rules));
         assert!(!sig.st_lhs_all_ac_c_free());
     }
 
-    /// `merge` rebuilds the cache for the united rule set.
+    /// `merge` carries the flags of the united rule set.
     #[test]
-    fn merge_refreshes_st_lhs_ac_c_free() {
+    fn merge_keeps_the_lhs_flags_with_their_rules() {
         let ac_sig = MaudeSig {
             st_rules: [ac_headed_st_rule()].into_iter().collect(),
             ..MaudeSig::default()
         }
         .refresh();
         let merged = pair_maude_sig().merge(ac_sig);
-        assert_eq!(merged.st_lhs_ac_c_free.len(), merged.st_rules.len());
-        assert_eq!(
-            merged.st_lhs_ac_c_free,
-            merged
-                .st_rules
-                .iter()
-                .map(|r| crate::maude_proc::term_ac_c_free(&r.lhs))
-                .collect::<Vec<bool>>()
-        );
+        assert!(merged
+            .st_rules
+            .iter_with_lhs_ac_c_free()
+            .all(|(r, f)| f == crate::maude_proc::term_ac_c_free(&r.lhs)));
         assert!(!merged.st_lhs_all_ac_c_free());
     }
 
-    /// Inserting into `st_rules` without `refresh` leaves the cache shorter
-    /// than the rule set: the accessor reports `None` and the conjunction
-    /// recomputes from the rules rather than trusting the stale vector.
+    /// HS `joinNDCinSig` (Signature.hs:236-246) is a record update over
+    /// `stFunSyms`/`stACFunSyms` that does NOT re-run `maudeSig`, so every
+    /// derived cache keeps its pre-join NDC states — and `ndc` participates in
+    /// `NoEqSym`/`AcFctSym` `Eq`/`Ord`, so those are DIFFERENT symbols, not the
+    /// same symbol read twice.
+    ///
+    /// This pins the staleness the port inherits, so that adding a `refresh()`
+    /// to `join_ndc_in_sig` fails here rather than silently diverging:
+    ///   * `fun_syms` (and `no_eq_fun_syms`/`ac_user_fun_syms`/the
+    ///     irreducible+reducible sets read off it) keep `NotNdc`;
+    ///   * `user_defined_st_fun_syms` (HS `userDefinedSTFunSyms`,
+    ///     Signature.hs:166-167) reads the joined `st_fun_syms` for its free
+    ///     half but the stale `acUserFunSyms` (Signature.hs:160-161) for its AC
+    ///     half, so with one name carried by both a free and an `[AC]` symbol
+    ///     the two halves disagree about NDC.
     #[test]
-    fn st_lhs_ac_c_free_cache_none_when_st_rules_grew_without_refresh() {
-        let mut sig = pair_maude_sig();
-        assert!(sig.st_lhs_ac_c_free_cache().is_some());
-        sig.st_rules.insert(ac_headed_st_rule());
-        assert!(sig.st_lhs_ac_c_free_cache().is_none());
-        assert!(!sig.st_lhs_all_ac_c_free());
-        let sig = sig.refresh();
-        assert!(sig.st_lhs_ac_c_free_cache().is_some());
-        assert!(!sig.st_lhs_all_ac_c_free());
+    fn join_ndc_in_sig_leaves_every_derived_cache_stale() {
+        let f_free = NoEqSym::new(
+            b"f".to_vec(),
+            1,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
+        let f_ac = AcFctSym::new(
+            b"f".to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::NotNdc,
+        );
+        let sig = MaudeSig {
+            st_fun_syms: [f_free].into_iter().collect(),
+            st_ac_fun_syms: [f_ac].into_iter().collect(),
+            ..MaudeSig::default()
+        }
+        .refresh();
+        let joined = sig.join_ndc_in_sig(FunSym::NoEq(f_free), NdcState::IsNdc);
+
+        // Source of truth: both subterm-signature sets are joined, by NAME.
+        let f_free_ndc = f_free.with_ndc(NdcState::IsNdc);
+        let f_ac_ndc = f_ac.with_ndc(NdcState::IsNdc);
+        assert!(joined.st_fun_syms.contains(&f_free_ndc));
+        assert!(joined.st_ac_fun_syms.contains(&f_ac_ndc));
+
+        // Derived caches: untouched, i.e. still carrying the pre-join symbols.
+        assert!(joined.fun_syms.contains(&FunSym::NoEq(f_free)));
+        assert!(joined.fun_syms.contains(&FunSym::Ac(AcSym::AcFct(f_ac))));
+        assert!(!joined.fun_syms.contains(&FunSym::NoEq(f_free_ndc)));
+        assert!(!joined
+            .fun_syms
+            .contains(&FunSym::Ac(AcSym::AcFct(f_ac_ndc))));
+        assert!(joined.no_eq_fun_syms().contains(&f_free));
+        assert!(joined.ac_user_fun_syms().contains(&f_ac));
+        assert!(joined.irreducible_fun_syms.contains(&FunSym::NoEq(f_free)));
+        assert!(joined
+            .irreducible_fun_syms_fast
+            .contains(&FunSym::NoEq(f_free)));
+
+        // The two halves of `user_defined_st_fun_syms` disagree about `f`.
+        let user_st = joined.user_defined_st_fun_syms();
+        assert!(user_st.contains(&UserDefinedSym::NoEqUser(f_free_ndc)));
+        assert!(user_st.contains(&UserDefinedSym::AcFctUser(f_ac)));
+        assert!(!user_st.contains(&UserDefinedSym::AcFctUser(f_ac_ndc)));
+
+        // `refresh` is what would close the gap — it is deliberately not called
+        // by `join_ndc_in_sig`.
+        let refreshed = joined.refresh();
+        assert!(refreshed.fun_syms.contains(&FunSym::NoEq(f_free_ndc)));
+        assert!(refreshed
+            .user_defined_st_fun_syms()
+            .contains(&UserDefinedSym::AcFctUser(f_ac_ndc)));
     }
 }

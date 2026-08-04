@@ -10,7 +10,7 @@
 //!   - Genuine stubs that still return {alert} or 501
 //!
 //! Coverage matrix:
-//!   - GET  /thy/trace/<idx>/intdot/*path                 LIVE — text/plain DOT
+//!   - GET  /thy/trace/<idx>/intdot/*path                 LIVE — HTML shell page
 //!   - GET  /thy/trace/<idx>/graph/*path                  LIVE — SVG or DOT fallback
 //!   - GET  /thy/trace/<idx>/interactive-graph-def/*path  LIVE — text/plain DOT
 //!   - POST /thy/trace/<idx>/edit/*path                   ({alert})
@@ -26,10 +26,6 @@
 mod common;
 
 use common::*;
-
-fn one_key_set(k: &str) -> std::collections::BTreeSet<String> {
-    std::iter::once(k.to_string()).collect()
-}
 
 // ---------------------------------------------------------------------
 // Graph routes — LIVE (DOT pipeline).

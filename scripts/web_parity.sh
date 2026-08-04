@@ -15,8 +15,9 @@
 # Env: FILE_TIMEOUT (per-file cap, 300s), READY_TIMEOUT (server-boot wait, 90s),
 #      HS_PORT (3021), RS_PORT (3022), CORPUS_ROOT (tamarin-prover/examples/), ALLOWLIST
 #      (one relpath/line; default = seed list below), RESULTS_TSV, MAX_NODES
-#      (400), CACHE, HS_PATH, RS_PATH, MAUDE_PATH, SERVER_MEM_KB (per-server
-#      address-space cap, 24 GiB), TAM_RS_NO_AUTO_BUILD.
+#      (400), CACHE, DIFFDIR, HS_PATH, RS_PATH, MAUDE_PATH, DERIVCHECK_TIMEOUT
+#      (both servers, 30s), SERVER_MEM_KB (per-server address-space cap,
+#      24 GiB), TAM_RS_NO_AUTO_BUILD.
 # Output TSV (6 col): file  url  status  hs_http  rs_http  kind
 #   status ∈ MATCH | DIFF | MISSING_RS | MISSING_HS | SKIP_*
 set -u
@@ -35,23 +36,37 @@ DIFFDIR="${DIFFDIR:-/tmp/web_parity_diffs}"
 mkdir -p "$CACHE"
 
 # Crawl-plan version handshake.  The cache key is sha256(theory) alone, so it
-# cannot see a crawl PLAN that has grown: a manifest from an older plan simply
-# lacks the new URL families, which surface as MISSING_HS rows rather than as a
-# cache miss.  Import web_crawl.py's constant rather than re-parse it, so the
-# two sides cannot drift.
+# cannot see a crawl PLAN that has grown (see web_crawl.py's PLAN_VERSION):
+# a manifest from an older plan lacks the new URL families, which surface as
+# MISSING_HS rows rather than as a cache miss.  Import the constant rather than
+# re-parse it, so the two sides cannot drift.
 PLAN_VERSION="$(python3 -c \
     'import sys; sys.path.insert(0,sys.argv[1]); import web_crawl; print(web_crawl.PLAN_VERSION)' \
     "$script_dir")"
 [ -n "$PLAN_VERSION" ] || { echo "cannot read PLAN_VERSION from web_crawl.py" >&2; exit 2; }
 
-# Plan version stamped in a cached HS manifest.  An ABSENT stamp means 2: every
-# stampless manifest in the cache is a v2 crawl, so those manifests MUST stay
-# valid; growing the plan bumps web_crawl.py's PLAN_VERSION to 3, which
-# invalidates each cached file lazily, on its next use.  A manifest that fails
-# to parse yields nothing and is likewise treated as stale.
+# Plan version of a cached HS manifest.  A stamp is authoritative.  An ABSENT
+# stamp is NOT evidence of the current plan: stamping was introduced together
+# with PLAN_VERSION 2, so a stampless manifest is a v1 or v2 crawl, and the two
+# are told apart by CONTENT — v2 added the source-case routes, so it visits
+# `json/cases/…` and `main/cases/…/1/1`, which a v1 crawl never requested.
+# Missing either ⇒ 1, i.e. stale, so a cache predating the plan growth is
+# re-crawled instead of surfacing its unvisited URL families as MISSING_HS.
+# The probe never needs extending for a future plan: every crawl from v2 on
+# stamps itself, so "stampless" can only ever mean "v1 or v2".  A manifest that
+# fails to parse yields nothing and is likewise treated as stale.
 cached_plan_version() {
-    python3 -c 'import json,sys; sys.path.insert(0,sys.argv[2]); import web_crawl; \
-print(json.load(open(sys.argv[1])).get(web_crawl.PLAN_VERSION_KEY, 2))' \
+    python3 -c '
+import json, sys
+sys.path.insert(0, sys.argv[2])
+import web_crawl
+d = json.load(open(sys.argv[1]))
+v = d.get(web_crawl.PLAN_VERSION_KEY)
+if v is None:
+    urls = d.get("manifest", {})
+    v = 2 if (any("/json/cases/" in u for u in urls)
+              and any(u.endswith("/main/cases/raw/1/1") for u in urls)) else 1
+print(v)' \
         "$1" "$script_dir" 2>/dev/null
 }
 
@@ -93,8 +108,9 @@ boot_crawl() {
     # Pin the derivcheck budget like corpus_file_diff.sh does (30s): HS's
     # 5s default expires deterministically on ~12 corpus files even idle,
     # replacing the derivation report with a timeout block RS never emits
-    # (48 bogus DIFF rows in the 2026-07-05 sweep).  RS parses the flag on
-    # its web path too (hardcoded-5s load is a separate, tracked plumb).
+    # (48 bogus DIFF rows in the 2026-07-05 sweep).  RS honours the flag on
+    # its web path too: `run_interactive` writes it into `ServerConfig`, and
+    # every theory load reads it from there.
     # OOM containment: the server (and the maude children that inherit
     # these settings) is the sacrificial process, not the session — a
     # theory whose source computation heap-exhausts (LAK06-class) must

@@ -1,7 +1,7 @@
 // Currently GPL 3.0 until granted permission by the following authors:
 //   meiersi, jdreier, racoucho1u, beschmi, felixlinker, rkunnema,
 //   PhilipLukertWork, rsasse, yavivanov, kevinmorio, sans-sucre, Nick
-//   Moore, katrielalex, arcz, addap, charlie-j,
+//   Moore, katrielalex, arcz, addap, Azurios-git, charlie-j,
 //   robert.kunnemann@cased.de, xaDxelA, and other minor contributors
 //   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
@@ -3024,7 +3024,7 @@ mod tests {
     // So the constructor tag order is:
     //     Action < Chain < Premise < Split < Disj < Subterm
     //
-    // The Rust `Goal` enum (constraints.rs:138) preserves this variant
+    // The Rust `Goal` enum (constraints.rs) preserves this variant
     // order, so its derived structural order — if we had one — would be
     // the same.  But `goal_cmp` (this file) hand-codes a `tag` function,
     // and any divergence between that and the variant order would silently

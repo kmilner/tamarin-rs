@@ -1,8 +1,10 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   beschmi, meiersi, jdreier, and other minor contributors (see
-//   upstream git history)
+//   beschmi, meiersi, jdreier, rkunnema, and other minor contributors
+//   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/Maude/Parser.hs,
 //   lib/term/src/Term/Rewriting/Norm.hs,
+//   lib/term/src/Term/SubtermRule.hs, lib/term/src/Term/Unification.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Contradictions.hs
 
 //! Port of `Term.Rewriting.Norm` — normalisation and normal-form
@@ -69,7 +71,7 @@ pub fn nf_via_haskell(msig: &MaudeSig, t: &LNTerm) -> bool {
 /// but the subterm-rule arm can also fire for rules whose LHS contains an
 /// Ac-/C-headed subterm (e.g. the user-`[AC]` cancellation equations
 /// `xorr(x, x) = zeroo` / `xorr(xorr(x, y), x) = y`).  HS's
-/// `struleApplicable` (Norm.hs:104-110) matches via `solveMatchLNTerm`
+/// `struleApplicable` (Norm.hs:107-113) matches via `solveMatchLNTerm`
 /// inside the `WithMaude` reader, so AC-headed rule LHSes match through
 /// Maude; the pure no-AC matcher used by [`nf_via_haskell`] can never
 /// match them (its `match_raw` raises `NeedsAC` on any Ac-vs-Ac pair).
@@ -99,34 +101,25 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
     match t {
         Term::Lit(_) => true,
         Term::App(sym, args) => {
-            // 1. Irreducible NoEq top: walk subterms.
-            // HS-faithful: HS's `nfViaHaskell` (Norm.hs:55-127, see line 62) checks
-            // `FAppNoEq o ts | (NoEq o) \`S.member\` irreducible` — the
-            // irreducible-set check is gated by `FAppNoEq` (i.e. NoEq
-            // function symbols only).  AC symbols like Mult are kept in
-            // `irreducible_fun_syms` for OTHER consumers
-            // (Contradictions.hs:149-150 `maybeNonNormalTerms` uses
-            // `S.member` on the FUN set to decide which subterms to NOT
-            // include), but Norm.hs's NF
-            // check uses pattern matching on `FAppNoEq` which only
-            // matches NoEq symbols.  Without this gate, RS treated
-            // `Mult(tid, ekI, ekR, inv(tid))` as NF (skipped section 5's
-            // invalidMult check entirely), under-filtering
-            // simpMinimize and admitting AC variants HS rejects.
-            // FList also counts as irreducible (HS: `FList ts -> all go ts`).
-            if matches!(sym, FunSym::NoEq(_)) && msig.irreducible_fun_syms.contains(sym) {
-                return args.iter().all(|a| go_nf(a, msig, maude));
-            }
-            // Irreducible user-defined AC top (HS
-            // `FAppACfct o ts | AC (ACfct o) \`S.member\` irreducible`),
-            // directly after the NoEq irreducible case.  The gate is again on
-            // the symbol KIND: the builtin AC operators are matched by their
-            // own `viewTerm2` constructors, so they never take this arm even
-            // when they are in `irreducible` (see the note above).
-            if matches!(sym, FunSym::Ac(AcSym::AcFct(_))) && msig.irreducible_fun_syms.contains(sym)
+            // 1. Irreducible NoEq / user-defined-AC top: walk subterms.
+            // HS's `nfViaHaskell` (Norm.hs:55-127, see line 62) gates the
+            // irreducible-set lookup on the symbol KIND — it checks
+            // `FAppNoEq o ts | (NoEq o) \`S.member\` irreducible` and
+            // `FAppACfct o ts | (AC (ACfct o)) \`S.member\` irreducible`.  The
+            // builtin AC operators sit in `irreducible_fun_syms` as well, for
+            // OTHER consumers (Contradictions.hs:149-150 `maybeNonNormalTerms`
+            // uses `S.member` on the FUN set to decide which subterms to NOT
+            // include), but Norm.hs matches them through their own `viewTerm2`
+            // constructors, so they must not take this arm: ungated,
+            // `Mult(tid, ekI, ekR, inv(tid))` counts as NF — skipping section
+            // 5's invalidMult check — which under-filters simpMinimize and
+            // admits AC variants HS rejects.
+            if matches!(sym, FunSym::NoEq(_) | FunSym::Ac(AcSym::AcFct(_)))
+                && msig.irreducible_fun_syms.contains(sym)
             {
                 return args.iter().all(|a| go_nf(a, msig, maude));
             }
+            // FList is irreducible unconditionally (HS: `FList ts -> all go ts`).
             if matches!(sym, FunSym::List) {
                 return args.iter().all(|a| go_nf(a, msig, maude));
             }
@@ -141,10 +134,25 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
                     return true;
                 }
             }
-            // 3. Subterm-rule LHS match → reducible.  HS gates this on a NoEq
-            //    or user-defined-AC top (`FAppNoEq _ _` / `FAppACfct _ _`);
-            //    both reach here.  HS uses
-            //    `solveMatchLNTerm (t `matchWith` lhs)` (Norm.hs:104-110).
+            // 3. Subterm-rule LHS match → reducible.  Both of HS's st-rule
+            //    arms are guarded on the top symbol's KIND — `FAppNoEq _ _`
+            //    and `FAppACfct _ _` (Norm.hs:73-74) — so only NoEq- and
+            //    user-`[AC]`-headed terms are ever offered to
+            //    `struleApplicable`.  Builtin-AC- and C-headed terms have
+            //    their own dedicated reducibility patterns (sections 5-6
+            //    below) and fall straight past this loop.  The gate wraps the
+            //    whole loop rather than either matcher arm, exactly as it sits
+            //    above the two arms in HS: an st rule whose LHS is a bare
+            //    variable is Ac/C-free and matches ANY subject term, so it
+            //    reaches the pure arm on both entry points and would otherwise
+            //    make every `Mult`/`Xor`/`Union`/`NatPlus`/`em`-headed term
+            //    reducible where HS reports normal form.  (No `.spthy` yields
+            //    such a rule — `rrule_to_ctxt_st_rule` rejects a bare-variable
+            //    LHS on both of its branches, see subterm_rule.rs — so the gate
+            //    is a structural guarantee, not a filter that fires in
+            //    practice.)
+            //    HS uses `solveMatchLNTerm (t `matchWith` lhs)`
+            //    (Norm.hs:107-113).
             //    All builtin subterm rules (pair / senc / sdec / aenc /
             //    adec / sign / verify / ...) have AC-free LHS, so the
             //    no-AC matcher is complete for them; a rule whose LHS
@@ -154,54 +162,42 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
             //    (`nf_via_haskell_maude`).  See subterm_rule.rs and
             //    builtin.rs.
             //    The Ac/C-freeness of each rule LHS is a full walk of that LHS,
-            //    so it is precomputed per rule by `MaudeSig::refresh`
-            //    (`st_lhs_ac_c_free`, in `st_rules` iteration order) rather
-            //    than recomputed here — this loop runs at every `App` node of
-            //    every NF check.  `None` means the cached vector's length no
-            //    longer matches `st_rules`, and the predicate is computed
-            //    inline.
-            let lhs_flags = msig.st_lhs_ac_c_free_cache();
-            for (i, rule) in msig.st_rules.iter().enumerate() {
-                let lhs_ac_c_free = match lhs_flags {
-                    Some(flags) => flags[i],
-                    None => crate::maude_proc::term_ac_c_free(&rule.lhs),
-                };
-                if lhs_ac_c_free {
-                    // Head-symbol + arity precheck reproducing match_raw's
-                    // first step for concrete-headed patterns (unification.rs
-                    // `match_raw`, NoEq arm: `tf == pf && targs.len() ==
-                    // pargs.len()`).  When the LHS is an `App`, a mismatched
-                    // head or arity means `match_raw` yields `NoUnifier` (for
-                    // NoEq/List patterns) — a definitive no-match — so skip
-                    // the full `rule_applies` call.  A non-`App` LHS (bare
-                    // Var/Lit) is not pre-skipped — the `if let` simply falls
-                    // through to `rule_applies`.  An Ac-/C-free pattern never
-                    // raises `NeedsAC` in `match_raw`, so this pure path is
-                    // exactly HS's `solveMatchLNTerm` (no Maude involved).
-                    if let Term::App(lhs_head, lhs_args) = &rule.lhs {
-                        if lhs_head != sym || lhs_args.len() != args.len() {
-                            continue;
+            //    so each rule carries it (`MaudeSig::st_rules`, a `StRules`)
+            //    rather than having it recomputed here — this loop runs at
+            //    every `App` node of every NF check.
+            if matches!(sym, FunSym::NoEq(_) | FunSym::Ac(AcSym::AcFct(_))) {
+                for (rule, lhs_ac_c_free) in msig.st_rules.iter_with_lhs_ac_c_free() {
+                    if lhs_ac_c_free {
+                        // Head-symbol + arity precheck reproducing match_raw's
+                        // first step for concrete-headed patterns
+                        // (unification.rs `match_raw`, NoEq arm: `tf == pf &&
+                        // targs.len() == pargs.len()`).  When the LHS is an
+                        // `App`, a mismatched head or arity means `match_raw`
+                        // yields `NoUnifier` (for NoEq/List patterns) — a
+                        // definitive no-match — so skip the full
+                        // `rule_applies` call.  A non-`App` LHS (bare Var/Lit)
+                        // is not pre-skipped — the `if let` simply falls
+                        // through to `rule_applies`.  An Ac-/C-free pattern
+                        // never raises `NeedsAC` in `match_raw`, so this pure
+                        // path is exactly HS's `solveMatchLNTerm` (no Maude
+                        // involved).
+                        if let Term::App(lhs_head, lhs_args) = &rule.lhs {
+                            if lhs_head != sym || lhs_args.len() != args.len() {
+                                continue;
+                            }
+                        }
+                        if rule_applies(t, &rule.lhs, &rule.rhs) {
+                            return false;
+                        }
+                    } else if let Some(hnd) = maude {
+                        if rule_applies_ac(hnd, t, &rule.lhs, &rule.rhs) {
+                            return false;
                         }
                     }
-                    if rule_applies(t, &rule.lhs, &rule.rhs) {
-                        return false;
-                    }
-                } else if let Some(hnd) = maude {
-                    // HS's st-rule arms fire only on NoEq-/ACfct-headed
-                    // terms (Norm.hs:74-75 `FAppNoEq _ _` / `FAppACfct _ _`);
-                    // builtin-AC- and C-headed terms have their own dedicated
-                    // reducibility patterns (sections 4-6 below) and never
-                    // reach `struleApplicable`.
-                    if !matches!(sym, FunSym::NoEq(_) | FunSym::Ac(AcSym::AcFct(_))) {
-                        continue;
-                    }
-                    if rule_applies_ac(hnd, t, &rule.lhs, &rule.rhs) {
-                        return false;
-                    }
+                    // Ac-/C-containing LHS with no handle (pure
+                    // `nf_via_haskell`): the no-AC matcher could never match
+                    // this rule, so it is skipped.
                 }
-                // Ac-/C-containing LHS with no handle (pure
-                // `nf_via_haskell`): the no-AC matcher could never match
-                // this rule, so it is skipped.
             }
             // 4. Reducible exponent / inverse / mult / xor patterns.
             if let FunSym::NoEq(s) = sym {
@@ -330,7 +326,7 @@ fn is_xor(t: &LNTerm) -> bool {
     matches!(t, Term::App(FunSym::Ac(AcSym::Xor), _))
 }
 
-/// `invalidMult` — HS `Norm.hs:112-118`.  Detects mult patterns that
+/// `invalidMult` — HS `Norm.hs:115-121`.  Detects mult patterns that
 /// are not in NF due to inverse cancellation.
 fn invalid_mult(ts: &[LNTerm]) -> bool {
     use crate::function_symbols::AcSym;
@@ -379,7 +375,7 @@ fn multiset_diff_changes(xs: &[&LNTerm], ys: &[&LNTerm]) -> bool {
     removed_any
 }
 
-/// `invalidXor` — HS `Norm.hs:120-123`.  True iff `ts` contains
+/// `invalidXor` — HS `Norm.hs:123-126`.  True iff `ts` contains
 /// duplicates.
 fn invalid_xor(ts: &[LNTerm]) -> bool {
     // O(n^2) is fine here — typical xor arities are tiny.
@@ -393,7 +389,7 @@ fn invalid_xor(ts: &[LNTerm]) -> bool {
     false
 }
 
-/// `struleApplicable` — HS `Norm.hs:104-110`.  Returns true iff the
+/// `struleApplicable` — HS `Norm.hs:107-113`.  Returns true iff the
 /// rule's LHS matches `t` AND the rule actually rewrites `t` to
 /// something different.
 fn rule_applies(t: &LNTerm, lhs: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> bool {
@@ -401,7 +397,13 @@ fn rule_applies(t: &LNTerm, lhs: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> b
     let problem = Match::match_with(t.clone(), lhs.clone());
     let matched =
         crate::unification::solve_match_lterm_no_ac(&|n| crate::lterm::sort_of_name(n), problem);
-    // HS (Norm.hs:107-110):
+    matched.is_some() && strule_rewrites(t, rhs)
+}
+
+/// The `StRhs` disambiguation both `struleApplicable` ports apply once the
+/// rule's LHS has matched `t`.
+fn strule_rewrites(t: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> bool {
+    // HS (Norm.hs:110-113):
     //   _:_ -> case rhs of
     //            StRhs [] s -> not (t == s)   -- reducible, but RHS might equal t
     //            StRhs _  _ -> True
@@ -410,15 +412,10 @@ fn rule_applies(t: &LNTerm, lhs: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> b
     // always yields non-empty positions (constantPositions of an FApp is
     // never empty; the non-ground branch returns None on empty), so the
     // `StRhs []` arm is effectively dead and a match always returns True.
-    match matched {
-        None => false,
-        Some(_) => {
-            if rhs.positions.is_empty() {
-                t != &rhs.term
-            } else {
-                true
-            }
-        }
+    if rhs.positions.is_empty() {
+        t != &rhs.term
+    } else {
+        true
     }
 }
 
@@ -430,7 +427,6 @@ fn rule_applies(t: &LNTerm, lhs: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> b
 /// axioms already answer (see the root-symbol note below).  Subject vars
 /// are rigid in the Maude `match` command on both sides of the port, so the
 /// outcomes agree.
-/// The trailing `StRhs` disambiguation is identical to [`rule_applies`].
 /// A Maude transport error is folded to "no match" — the conservative
 /// answer (term stays NF), matching the port's other best-effort Maude
 /// fallbacks (e.g. simplify.rs `match_atom_via_maude`).
@@ -478,17 +474,10 @@ fn rule_applies_ac(
                 .is_ok_and(|ms| !ms.is_empty()),
         },
     };
-    if !matched {
-        return false;
-    }
-    if rhs.positions.is_empty() {
-        t != &rhs.term
-    } else {
-        true
-    }
+    matched && strule_rewrites(t, rhs)
 }
 
-// NOTE: `maybeNotNfSubterms` (HS `Term/Rewriting/Norm.hs:162-168`) lives
+// NOTE: `maybeNotNfSubterms` (HS `Term/Rewriting/Norm.hs:165-171`) lives
 // in the solver, not here — see `contradictions.rs::maybe_not_nf_subterms`,
 // which is the HS-faithful copy (it returns `[t]` for a bare `Lit (Var _)`,
 // matching HS's `_ -> [t]` wildcard, and `[]` only for `Lit (Con _)`).
@@ -723,23 +712,142 @@ mod tests {
         );
     }
 
-    /// `go_nf`'s st-rule arm reads the per-rule Ac/C-free flags cached by
-    /// `MaudeSig::refresh`, falling back to `term_ac_c_free` when the cached
-    /// vector's length no longer matches `st_rules`.  Both routes must decide
-    /// identically:
-    /// `fst(pair(x1, x2))` is reducible by the pairing rule, `pair(x1, x2)` is
-    /// not.  No Maude handle needed — the pairing rule LHSes are Ac/C-free.
+    /// Both of HS's st-rule arms are guarded on the top symbol's kind —
+    /// `FAppNoEq _ _` and `FAppACfct _ _` (Norm.hs:73-74) — so a term headed
+    /// by a builtin AC operator or by `em` never reaches `struleApplicable`,
+    /// however permissive the rule's LHS.  The sharpest witness is an st rule
+    /// whose LHS is a bare variable: it matches every subject term, so an
+    /// ungated loop would report every `Mult`/`Xor`/`Union`/`NatPlus`/`em`
+    /// term reducible where HS reports normal form.  The gate has to sit above
+    /// the pure/Maude matcher split, since a variable LHS is Ac/C-free and so
+    /// takes the pure arm on both entry points.
+    ///
+    /// The rule is built directly because the text frontend cannot produce it:
+    /// `rrule_to_ctxt_st_rule`'s ground-RHS branch rejects a bare-literal LHS
+    /// outright (the deliberate divergence from HS's non-exhaustive
+    /// `constantPositions`, SubtermRule.hs:67-71), and its non-ground branch
+    /// rejects because every position it can find inside a variable LHS is the
+    /// empty one.  `CtxtStRule` is `pub`, so the gate is what keeps `go_nf`
+    /// HS-faithful for any in-process constructor.
     #[test]
-    fn go_nf_agrees_with_and_without_the_lhs_flag_cache() {
+    fn bare_variable_strule_lhs_never_reduces_builtin_ac_or_c_terms() {
+        use crate::builtin::{emap, fresh_var, fst, msg_var};
+        use crate::function_symbols::{Constructability, NoEqSym, Privacy};
+        use crate::subterm_rule::{CtxtStRule, StRhs};
+        use crate::term::{f_app_ac, f_app_no_eq};
+        let zeroo_sym = NoEqSym::new(
+            b"zeroo".to_vec(),
+            0,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
+        let mut sig = pair_maude_sig();
+        sig.st_fun_syms.insert(zeroo_sym);
+        // `x = zeroo`: bare-variable LHS, ground RHS, empty positions — the
+        // `StRhs [] s` arm of `strule_rewrites`, which reduces every term that
+        // is not `zeroo` itself.
+        sig.st_rules.insert(CtxtStRule::new(
+            msg_var("x", 0),
+            StRhs {
+                positions: Vec::new(),
+                term: f_app_no_eq(zeroo_sym, vec![]),
+            },
+        ));
+        let sig = sig.refresh();
+        let k = fresh_var("k", 0);
+        let na = fresh_var("na", 0);
+        let subjects = [
+            f_app_ac(AcSym::Mult, vec![k.clone(), na.clone()]),
+            f_app_ac(AcSym::Xor, vec![k.clone(), na.clone()]),
+            f_app_ac(AcSym::Union, vec![k.clone(), na.clone()]),
+            f_app_ac(AcSym::NatPlus, vec![k.clone(), na.clone()]),
+            emap(k.clone(), na.clone()),
+        ];
+        // Arm 1: no handle — the rule's LHS is Ac/C-free, so this is the pure
+        // matcher's arm, the one whose head+arity precheck a non-`App` LHS
+        // slips past.
+        for s in &subjects {
+            assert!(
+                nf_via_haskell(&sig, s),
+                "builtin-AC-/C-headed terms are not offered to struleApplicable: {s:?}"
+            );
+        }
+        // Control: a NoEq-headed term IS offered, so HS's `FAppNoEq _ _` arm
+        // fires and the rule reduces it — the loop is gated, not inert.
+        let fst_k = fst(k.clone());
+        assert!(
+            !nf_via_haskell(&sig, &fst_k),
+            "a NoEq-headed term must still reach the st-rule loop"
+        );
+        // Arm 2: same verdicts with a handle in hand.  The handle carries the
+        // plain pairing signature rather than `sig`: emitting `eq x = zeroo
+        // [variant]` into the MSG module makes every Maude `reduce` diverge
+        // (the Haskell prover hangs on the equivalent `.spthy`), and the gate
+        // means no rule of `sig` is ever sent over IPC anyway.
+        let path = match maude_path() {
+            Some(p) => p,
+            None => return,
+        };
+        let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+        for s in &subjects {
+            assert!(
+                nf_via_haskell_maude_with_sig(&sig, &h, s),
+                "the Maude-backed arm applies the same kind gate: {s:?}"
+            );
+        }
+        assert!(
+            !nf_via_haskell_maude_with_sig(&sig, &h, &fst_k),
+            "a NoEq-headed term must still reach the st-rule loop"
+        );
+    }
+
+    /// `go_nf`'s st-rule arm reads the Ac/C-free flag each `st_rules` entry
+    /// carries, so the flag it sees always belongs to the rule it is matching.
+    /// An insert that never reaches `refresh` cannot shift a flag onto its
+    /// neighbour: the Ac-headed rule added here sorts among the pairing rules,
+    /// and both verdicts (`fst(pair(x1, x2))` reducible, `pair(x1, x2)` normal)
+    /// survive it.  No Maude handle needed — the pairing rule LHSes are
+    /// Ac/C-free, and the pure entry point skips the Ac-headed one.
+    #[test]
+    fn go_nf_reads_each_rule_s_own_lhs_flag() {
         use crate::builtin::{fst, msg_var, pair};
+        use crate::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
+        use crate::rewriting::RRule;
         let mut sig = pair_maude_sig();
         let reducible = fst(pair(msg_var("x", 1), msg_var("x", 2)));
         let normal = pair(msg_var("x", 1), msg_var("x", 2));
-        assert!(sig.st_lhs_ac_c_free_cache().is_some());
         assert!(!nf_via_haskell(&sig, &reducible));
         assert!(nf_via_haskell(&sig, &normal));
-        sig.st_lhs_ac_c_free.clear();
-        assert!(sig.st_lhs_ac_c_free_cache().is_none());
+
+        // `xorr(x, x) = zeroo`, whose LHS is Ac-headed (flag `false`).
+        let xorr = AcFctSym::new(
+            b"xorr".to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::IsNdc,
+        );
+        let zeroo_sym = NoEqSym::new(
+            b"zeroo".to_vec(),
+            0,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
+        let x = crate::builtin::msg_var("x", 0);
+        let ac_rule = crate::subterm_rule::rrule_to_ctxt_st_rule(&RRule::new(
+            crate::term::f_app_acfct(xorr, vec![x.clone(), x]),
+            crate::term::f_app_no_eq(zeroo_sym, vec![]),
+        ))
+        .expect("ground-RHS st rule");
+        sig.st_rules.insert(ac_rule);
+        assert_eq!(
+            sig.st_rules
+                .iter_with_lhs_ac_c_free()
+                .map(|(r, f)| (crate::maude_proc::term_ac_c_free(&r.lhs), f))
+                .filter(|(want, got)| want != got)
+                .count(),
+            0,
+            "every flag must describe the rule it is paired with"
+        );
         assert!(!nf_via_haskell(&sig, &reducible));
         assert!(nf_via_haskell(&sig, &normal));
     }

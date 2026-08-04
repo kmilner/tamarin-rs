@@ -7,8 +7,17 @@
 # Haskell re-check has agreed on every verdict — so redirecting stdout is a
 # drop-in replacement for `tamarin-rs --prove --output=…`, with the
 # re-verification as the added guarantee.  All progress/summary chatter goes
-# to stderr.  On a verdict mismatch nothing is written to stdout and the
-# script exits 1.
+# to stderr.
+#
+# Exit status:
+#   0  both provers agree; the proof file is on stdout
+#   1  the Rust side failed (prover exit, or no lemma summaries to compare)
+#   2  usage / environment error (bad arguments, missing binary)
+#   3  the HS RE-CHECK rejected the proof: tamarin-prover exited nonzero on the
+#      emitted theory, or its per-lemma verdicts differ from the Rust ones.
+#      Nothing is written to stdout.  Callers that know a theory hits an
+#      upstream replay limitation (scripts/bench.sh) key on this code, so it
+#      must never widen to cover an RS-side failure.
 #
 # tamarin-rs proves the theory and writes the analyzed output (the theory
 # with embedded proof scripts) to a temp file; the Haskell tamarin-prover
@@ -81,7 +90,7 @@ t0=$SECONDS
 "$HS_PATH" "$tmp/analyzed.spthy" "${hs_threads[@]}" "$@" \
     > "$tmp/hs.out" 2> "$tmp/hs.err"
 rc=$?
-[ $rc = 0 ] || { echo "tamarin-prover failed (exit $rc):" >&2; tail -5 "$tmp/hs.err" >&2; exit 1; }
+[ $rc = 0 ] || { echo "tamarin-prover failed (exit $rc):" >&2; tail -5 "$tmp/hs.err" >&2; exit 3; }
 echo "  re-verified in $((SECONDS - t0))s" >&2
 
 summary_lines "$tmp/rs.out" > "$tmp/rs.sum"
@@ -115,5 +124,5 @@ else
       diff -u --label "rust prove" --label "haskell reverify" \
           "$tmp/rs.sum" "$tmp/hs.sum" | sed 's/^/  /'
     } >&2
-    exit 1
+    exit 3
 fi

@@ -1,0 +1,15 @@
+theory SapicRestrictUnboundOrder
+begin
+
+rule ArityR:
+  [ Fr(~x) ] --[ A(~x) ]-> [ St(~x) ]
+
+rule ArityR2:
+  [ St(~x, ~y) ] --[ B(~y) ]-> [ ]
+
+process:
+  in(m);
+  [ ] --[ Ev(m), _restrict(k.5 = 'b') ]-> [ ];
+  in(k); out(k)
+
+end

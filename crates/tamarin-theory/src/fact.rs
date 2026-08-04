@@ -405,7 +405,7 @@ pub fn fact_tag_arity(t: &FactTag) -> usize {
 }
 
 pub fn fact_tag_multiplicity(t: &FactTag) -> Multiplicity {
-    // Mirror Haskell's `factTagMultiplicity` (Fact.hs:353-358):
+    // Mirror Haskell's `factTagMultiplicity` (Fact.hs:383-388):
     //
     //   factTagMultiplicity tag = case tag of
     //       ProtoFact multi _ _ -> multi
@@ -433,7 +433,8 @@ impl<T> Fact<T> {
     pub fn is_persistent(&self) -> bool {
         fact_tag_multiplicity(&self.tag) == Multiplicity::Persistent
     }
-    // Intentionally retained: faithful HS port; no caller yet.
+    // Used by the web graph's protocol-edge classification
+    // (tamarin-server `graph::json`).
     pub fn is_proto(&self) -> bool {
         matches!(self.tag, FactTag::Proto(_, _, _))
     }
@@ -474,13 +475,19 @@ pub fn is_kd_xor_fact(fa: &LNFact) -> bool {
     matches!(&fa.terms[0], Term::App(FunSym::Ac(AcSym::Xor), _))
 }
 
+/// The single term of a KU-fact — the shape shared by the `isTrivialKUFact`
+/// family below (Fact.hs:242-255).
+fn ku_fact_term(fa: &LNFact) -> Option<&LNTerm> {
+    match &fa.terms[..] {
+        [t] if fa.tag == FactTag::Ku => Some(t),
+        _ => None,
+    }
+}
+
 /// Mirrors Haskell `isTrivialKUFact` (Fact.hs:242-245): a KU-fact whose single
 /// term is a plain message variable.
 pub fn is_trivial_ku_fact(fa: &LNFact) -> bool {
-    match &fa.terms[..] {
-        [t] if fa.tag == FactTag::Ku => tamarin_term::lterm::is_msg_var(t),
-        _ => false,
-    }
+    ku_fact_term(fa).is_some_and(tamarin_term::lterm::is_msg_var)
 }
 
 /// Mirrors Haskell `isNearlyTrivialKUFact` (Fact.hs:247-250): a KU-fact whose
@@ -489,10 +496,7 @@ pub fn is_nearly_trivial_ku_fact(
     sym: &tamarin_term::function_symbols::FunSym,
     fa: &LNFact,
 ) -> bool {
-    match &fa.terms[..] {
-        [t] if fa.tag == FactTag::Ku => tamarin_term::lterm::is_trivial_fun_sym_term(t, sym),
-        _ => false,
-    }
+    ku_fact_term(fa).is_some_and(|t| tamarin_term::lterm::is_trivial_fun_sym_term(t, sym))
 }
 
 /// Mirrors Haskell `isNearlyTrivialACKUFact` (Fact.hs:252-255): a KU-fact whose
@@ -503,10 +507,7 @@ pub fn is_nearly_trivial_ku_fact(
 /// that motivates it (`openGoals`/`is_open_in_sys`) tests the goal TERM directly
 /// via `is_trivial_ac_fun_sym_term`.
 pub fn is_nearly_trivial_ac_ku_fact(fa: &LNFact) -> bool {
-    match &fa.terms[..] {
-        [t] if fa.tag == FactTag::Ku => tamarin_term::lterm::is_trivial_ac_fun_sym_term(t),
-        _ => false,
-    }
+    ku_fact_term(fa).is_some_and(tamarin_term::lterm::is_trivial_ac_fun_sym_term)
 }
 
 // =============================================================================

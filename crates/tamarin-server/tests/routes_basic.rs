@@ -1,8 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   arcz, meiersi, cascremers, felixlinker, and other minor
-//   contributors (see upstream git history)
+//   arcz, meiersi, cascremers, felixlinker, rsasse, jdreier,
+//   Divya19gupta, and other minor contributors (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
-//   src/Web/Handler.hs, src/Web/Theory.hs
+//   src/Web/Handler.hs, src/Web/Theory.hs, src/Web/Types.hs
 
 //! Integration tests for the LIVE routes that don't run the solver.
 //!
@@ -14,25 +15,58 @@
 //!   - JSON envelope key set (for `/main/*` routes)
 //!
 //! Comparison with Haskell is done against captured responses under
-//! `tests/fixtures/haskell-responses/`.  The criterion is "same JSON
-//! envelope shape" or "same HTML structural markers" — NOT byte
-//! equality.
+//! `tests/fixtures/haskell-responses/`.  The criterion is byte equality
+//! for the error pages, and "same JSON envelope shape" or "same HTML
+//! structural markers" for the payload routes.
 //!
 //! Coverage matrix (LIVE routes):
-//!   - GET /                          [test_get_index]
-//!   - GET /favicon.ico               [test_favicon]
-//!   - GET /robots.txt                [test_robots]
-//!   - GET /kill                      [test_kill]
-//!   - GET /thy/trace/1/overview/...  [test_overview_help]
-//!   - GET /thy/trace/1/main/help     [test_main_help_envelope]
-//!   - GET /thy/trace/1/main/rules    [test_main_rules_envelope]
-//!   - GET /thy/trace/1/main/message  [test_main_message_envelope]
-//!   - GET /thy/trace/1/main/lemma/X  [test_main_lemma_envelope]
-//!   - GET /thy/trace/1/source        [test_source]
-//!   - GET /thy/trace/1/message       [test_message_deduction]
-//!   - GET /thy/trace/1/download/...  [test_download]
-//!   - GET /thy/trace/1/unload        [test_unload_redirect]
-//!   - GET /thy/trace/99/main/help    [test_404_for_missing_idx]
+//!   - GET  /
+//!       [test_get_index_returns_html_with_theory_listed]
+//!   - GET  /favicon.ico
+//!       [test_favicon_redirects_to_static_image]
+//!   - GET  /robots.txt
+//!       [test_robots_txt]
+//!   - GET  /kill  and  /kill?path=
+//!       [test_kill_without_path_returns_400]
+//!       [test_kill_with_path_returns_canceled_request]
+//!   - GET  /thy/trace/1/overview/help
+//!       [test_overview_help_html_structure]
+//!       [test_overview_help_panes_are_direct_body_children]
+//!   - GET  /thy/trace/1/main/help
+//!       [test_main_help_envelope_matches_haskell_keys]
+//!   - GET  /thy/trace/1/main/rules
+//!       [test_main_rules_envelope]
+//!   - GET  /thy/trace/1/main/message
+//!       [test_main_message_envelope]
+//!   - GET  /thy/trace/1/main/lemma/debug
+//!       [test_main_lemma_envelope]
+//!   - GET  /thy/trace/1/source
+//!       [test_source_returns_plain_text]
+//!   - GET  /thy/trace/1/message
+//!       [test_message_deduction_returns_plain_text]
+//!   - GET  /thy/trace/1/download/x.spthy
+//!       [test_download_for_local_theory_returns_source_file]
+//!   - GET  /thy/trace/1/unload
+//!       [test_unload_redirects_to_root]
+//!   - POST /thy/trace/1/reload
+//!       [test_reload_returns_redirect_json_same_idx]
+//!
+//! Coverage matrix (Not Found, i.e. the `notFound` page and wai-app-static's
+//! own miss).  Status + content type only where the body is not captured:
+//!   - GET  /thy/trace/99/main/help
+//!       [test_main_with_missing_idx_returns_404_html]
+//!   - GET  /thy/trace/99/download/x.spthy
+//!       [test_download_for_missing_idx_returns_404_html]
+//!   - GET  /thy/trace/99/overview/help, /thy/trace/1/json/main, /nonexistent
+//!       [test_not_found_page_matches_haskell]
+//!   - GET  /a&b'c%3Cd, /caf%C3%A9?q=1
+//!       [test_not_found_page_escapes_the_request_path]
+//!   - GET  /thy/trace/{-1,1x,99999999999999999999}/overview/help
+//!       [test_unusable_theory_index_is_not_found]
+//!   - GET  /thy/trace/{%31,%30%31,%2B1,1%2F2,%FF}/overview/help
+//!       [test_percent_encoded_theory_index_resolves]
+//!   - GET  /static/js/does-not-exist.js
+//!       [test_missing_static_asset_matches_haskell]
 
 mod common;
 
@@ -512,21 +546,6 @@ async fn test_main_with_missing_idx_returns_404_html() {
     );
 }
 
-#[tokio::test]
-async fn test_overview_with_missing_idx_returns_404_html() {
-    // Same property for the framed HTML route.
-    let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/99/overview/help"))
-        .send()
-        .await
-        .expect("send overview with bad idx");
-    assert_eq!(res.status(), 404);
-    let ct = content_type(&res);
-    assert!(ct.starts_with("text/html"));
-}
-
 // ---------------------------------------------------------------------
 // Yesod's Not Found page
 // ---------------------------------------------------------------------
@@ -535,6 +554,7 @@ async fn test_overview_with_missing_idx_returns_404_html() {
 /// `<h1>Not Found</h1>` and the request's raw path — whatever raised it:
 /// an unknown theory index, a theory path `parseTheoryPath` rejects, or a URL
 /// matching no route at all.  Byte-for-byte the captured Haskell responses.
+/// The framed HTML route's missing-index 404 is the first of these.
 #[tokio::test]
 async fn test_not_found_page_matches_haskell() {
     let s = start_server_with_theory("issue193.spthy").await;
@@ -543,18 +563,7 @@ async fn test_not_found_page_matches_haskell() {
         ("/thy/trace/1/json/main", "not_found_theory_path.html"),
         ("/nonexistent", "not_found_unknown_route.html"),
     ] {
-        let res = s.client.get(s.url(path)).send().await.expect("send");
-        assert_eq!(res.status(), 404, "{path} must be a 404");
-        assert_eq!(
-            content_type(&res),
-            "text/html; charset=utf-8",
-            "{path} must carry the Not Found page's content type"
-        );
-        assert_eq!(
-            res.text().await.expect("text"),
-            haskell_capture(capture),
-            "{path}"
-        );
+        assert_not_found_capture(&s, path, capture).await;
     }
 }
 
@@ -564,17 +573,7 @@ async fn test_not_found_page_matches_haskell() {
 #[tokio::test]
 async fn test_not_found_page_escapes_the_request_path() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/a&b'c%3Cd"))
-        .send()
-        .await
-        .expect("send");
-    assert_eq!(res.status(), 404);
-    assert_eq!(
-        res.text().await.expect("text"),
-        haskell_capture("not_found_escaped_path.html")
-    );
+    assert_not_found_capture(&s, "/a&b'c%3Cd", "not_found_escaped_path.html").await;
 
     // Percent-encoded bytes stay encoded, and `?…` is not part of the path.
     let res = s
@@ -609,18 +608,7 @@ async fn test_unusable_theory_index_is_not_found() {
             "not_found_huge_idx.html",
         ),
     ] {
-        let res = s.client.get(s.url(path)).send().await.expect("send");
-        assert_eq!(res.status(), 404, "{path} must be a 404");
-        assert_eq!(
-            content_type(&res),
-            "text/html; charset=utf-8",
-            "{path} must carry the Not Found page's content type"
-        );
-        assert_eq!(
-            res.text().await.expect("text"),
-            haskell_capture(capture),
-            "{path}"
-        );
+        assert_not_found_capture(&s, path, capture).await;
     }
     // `01` and `+1` are theory 1 — `PathPiece Int` reads both.
     for path in ["/thy/trace/01/overview/help", "/thy/trace/+1/overview/help"] {
@@ -660,20 +648,7 @@ async fn test_percent_encoded_theory_index_resolves() {
         "/thy/trace/1%2F2/overview/help",
         "/thy/trace/%FF/overview/help",
     ] {
-        let res = s.client.get(s.url(path)).send().await.expect("send");
-        assert_eq!(res.status(), 404, "{path} must be a 404");
-        assert_eq!(
-            content_type(&res),
-            "text/html; charset=utf-8",
-            "{path} must carry the Not Found page's content type"
-        );
-        assert!(
-            res.text()
-                .await
-                .expect("text")
-                .contains(&format!("<p>{path}</p>")),
-            "{path} must echo its raw path"
-        );
+        assert_not_found_page(&s, path).await;
     }
 }
 

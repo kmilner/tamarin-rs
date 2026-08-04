@@ -280,11 +280,11 @@ fn dump_rule_info(buf: &mut String, info: &RuleInfo<ProtoRuleACInstInfo, IntrRul
             }
         }
         RuleInfo::Intr(i) => {
-            // `ConstrRule "<name>"` / `DestrRule "<name>" _ _ _`: the byte-string
-            // name.  Remaining intruder variants carry no user string.
+            // `ConstrRule { name, .. }` / `DestrRule { name, .. }`: the
+            // byte-string name.  Remaining intruder variants carry no user string.
             let name: Option<&[u8]> = match i {
-                IntrRuleACInfo::ConstrRule(n, _) => Some(n),
-                IntrRuleACInfo::DestrRule(n, _, _, _, _) => Some(n),
+                IntrRuleACInfo::ConstrRule { name, .. } => Some(name),
+                IntrRuleACInfo::DestrRule { name, .. } => Some(name),
                 _ => None,
             };
             if let Some(n) = name {
@@ -398,12 +398,12 @@ fn rendered_term_len(t: &LNTerm) -> usize {
 /// HS `prettyLNTerm` = `prettyTerm (text . show)` as a HughesPJ `Doc`
 /// (Term.hs:268-296), built directly on `LNTerm`.
 ///
-/// tamarin-theory has the same Doc under `pretty_formula::term_doc` via the
-/// `pub(crate)` parser-AST projection `lnterm_to_parser`; that path is not
-/// reachable from this crate, and widening its visibility would touch a
-/// shared module for a server-only need — so the (small, closed) `ppTerm`
-/// case split is mirrored here instead, using `pretty_hpj`'s public
-/// combinators.  Case order and Doc shape follow Term.hs exactly:
+/// tamarin-theory has the same Doc under `pretty_formula::term_doc`, reached
+/// through the parser-AST projection `pretty_theory::lnterm_to_parser`; going
+/// that way from here would convert every rendered term through the parser
+/// AST — so the (small, closed) `ppTerm` case split is mirrored here instead,
+/// using `pretty_hpj`'s public combinators.  Case order and Doc shape follow
+/// Term.hs exactly:
 ///   - literals: `text (show l)` — one unbreakable token (the single-line
 ///     `pretty_lnterm` of a literal IS `show l`);
 ///   - AC:   `ppTerms (ppACOp o) 1 "(" ")" ts`;
@@ -786,7 +786,7 @@ mod tests {
     #[test]
     fn json_abbrev_order_puts_nested_abbreviation_first() {
         let mut abbrevs = Abbreviations::new();
-        // PK1 = pk(a)
+        // PK1 = senc(a, b) — unrelated to the SE1/SE2 pair below.
         let pk = f_app_no_eq(senc_sym(), vec![var("a", LSort::Msg), var("b", LSort::Msg)]);
         abbrevs.insert(pk.clone(), (var("PK1", LSort::Msg), pk));
         // SE1 = senc(x, y)

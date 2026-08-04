@@ -1,11 +1,11 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   arcz, meiersi, jdreier, felixlinker, cascremers, rsasse,
-//   Kanakanajm, beschmi, addap, BTom-GH, PhilipLukertWork, YannColomb,
-//   xaDxelA, Mathias-AURAND, symphorien, racoucho1u,
+//   arcz, meiersi, jdreier, cascremers, felixlinker, beschmi, rsasse,
+//   Kanakanajm, Divya19gupta, addap, PhilipLukertWork, BTom-GH,
+//   YannColomb, xaDxelA, Mathias-AURAND, symphorien, racoucho1u,
 //   Esslingen-Security-Privacy, kevinmorio, and other minor
 //   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   src/Web/Handler.hs, src/Web/Theory.hs
+//   lib/term/src/Term/Term.hs, src/Web/Handler.hs, src/Web/Theory.hs
 
 //! In-memory store of loaded theories, mirroring Haskell `TheoryMap`.
 //!
@@ -95,13 +95,17 @@ impl TheoryEntry {
     ///
     /// Request handlers run on axum worker threads, whose sets start EMPTY;
     /// the renderers they reach resolve a declared `[AC]` / nullary / unary
-    /// symbol through those thread-locals (`elaborate::is_user_ac_fun` in
-    /// `canonicalize_ac_in_pterm`, `term_to_lnterm`, `term_to_gterm`).  An
+    /// symbol through those thread-locals (`CollectedUserFuns::is_user_ac_fun` in
+    /// `canonicalize_ac_in_pterm`, `term_to_lnterm`, `term_to_gterm_free`).  An
     /// unset `[AC]` symbol prints prefix (`add(x, z)`) instead of the infix
     /// form HS's `prettyTerm` emits (`(x add z)`, Term/Term.hs:305).
     ///
     /// Uses the [`ProofState`]'s cached sets when the proof state is built,
     /// and re-collects them from the parser theory otherwise.
+    ///
+    /// The per-theory handlers install this at their boundary, on the lookup
+    /// that puts the entry in hand (`handlers::theory::load_theory`); the
+    /// renderers reached from there install again and nest harmlessly.
     pub fn install_user_funs(&self) -> tamarin_theory::elaborate::UserFunsForTheoryGuard {
         match &self.proof_state {
             Some(ps) => ps.install_user_funs(),
