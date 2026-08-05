@@ -350,9 +350,10 @@ impl ParseError {
         }
     }
 
-    pub fn expected(&self) -> Option<&[String]> {
+    pub fn expected(&self) -> Option<Vec<String>> {
         match self {
             ParseError::UnexpectedKeyword { expected, .. }
+            | ParseError::ExpectedTheoryItem { expected, .. }
             | ParseError::ExpectedPunctuation { expected, .. }
             | ParseError::ExpectedStringLiteral { expected, .. }
             | ParseError::ExpectedIdentifier { expected, .. }
@@ -371,7 +372,7 @@ impl ParseError {
             | ParseError::ExpectedVariable { expected, .. }
             | ParseError::TrailingGarbageInFormulaString { expected, .. }
             | ParseError::TrailingGarbageInTermString { expected, .. }
-            | ParseError::UnterminatedDelimiter { expected, .. } => Some(expected),
+            | ParseError::UnterminatedDelimiter { expected, .. } => Some(expected.clone()),
             ParseError::UnknownLemmaAttribute { .. }
             | ParseError::UnknownRuleAttribute { .. }
             | ParseError::FactNameMustStartWithUppercase { .. }
@@ -379,12 +380,23 @@ impl ParseError {
             | ParseError::FactArityMismatch { .. }
             | ParseError::UnexpectedTrailingInput { .. }
             | ParseError::IoError { .. } => None,
-            ParseError::ExpectedTheoryItem {
-                expected, found, ..
-            } => {
-                todo!()
-            }
         }
+        .map(|expected| match self {
+            ParseError::ExpectedTheoryItem { found, .. } => {
+                if let Some(found) = found {
+                    let mut ranked: Vec<(usize, usize, String)> = expected
+                        .into_iter()
+                        .enumerate()
+                        .map(|(idx, exp)| (edit_distance(found, &exp), idx, exp))
+                        .collect();
+                    ranked.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+                    ranked.into_iter().take(3).map(|(_, _, exp)| exp).collect()
+                } else {
+                    expected.into_iter().take(3).collect()
+                }
+            }
+            _ => expected,
+        })
     }
 
     pub fn description(&self) -> &'static str {
@@ -470,13 +482,14 @@ impl ParseError {
                     expected,
                 )]
             }
-            ParseError::ExpectedTheoryItem {
-                found, expected, ..
-            } => {
+            ParseError::ExpectedTheoryItem { found, .. } => {
+                // Using the function on self instead of the field computes
+                // edit-distance for ExpectedTheoryItem. Not a pretty way to do this though.
+                let expected = self.expected().unwrap_or_default();
                 vec![format_found_expected_note(
                     "theory item",
                     found.as_deref(),
-                    expected,
+                    &expected,
                 )]
             }
             ParseError::ExpectedPunctuation {
@@ -635,6 +648,27 @@ fn format_found_expected_note(kind: &str, found: Option<&str>, expected: &[Strin
         ),
         None => format!("expected {kind} {}", format_expected_list(expected)),
     }
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b_chars.len()).collect();
+    let mut curr = vec![0; b_chars.len() + 1];
+
+    for (i, a_ch) in a_chars.iter().enumerate() {
+        curr[0] = i + 1;
+        for (j, b_ch) in b_chars.iter().enumerate() {
+            let cost = if a_ch == b_ch { 0 } else { 1 };
+            let del = prev[j + 1] + 1;
+            let ins = curr[j] + 1;
+            let sub = prev[j] + cost;
+            curr[j + 1] = del.min(ins).min(sub);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+
+    prev[b_chars.len()]
 }
 
 impl std::error::Error for ParseError {}
