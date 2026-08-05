@@ -32,6 +32,7 @@ use crate::ast::*;
 use crate::lexer::{is_ident_char, Lexer, Pos};
 use crate::proof_tree::parse_proof_tree;
 
+#[derive(Debug, Clone, Copy)]
 pub struct Location {
     pub line: u32,
     pub col: u32,
@@ -40,12 +41,15 @@ pub struct Location {
 }
 
 impl Location {
-    pub fn location_of(word: Option<&str>, pos: &Pos) -> Location {
+    pub fn location_of<S>(word: &Option<S>, pos: Pos) -> Location
+    where
+        S: AsRef<str>,
+    {
         Location {
             line: pos.line,
             col: pos.col,
-            start: pos.offset - 1,
-            end: pos.offset - 1 + word.map_or(0, |s| s.len()),
+            start: pos.offset,
+            end: pos.offset + word.as_ref().map_or(0, |s| s.as_ref().len()),
         }
     }
 }
@@ -61,97 +65,579 @@ impl From<Pos> for Location {
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum ParseError {
     UnexpectedKeyword {
         found: Option<String>,
-        expected: Vec<&'static str>,
+        expected: Vec<String>,
         at: Location,
     },
-    ExpectedTheoryItem(),
-    ExpectedPunctuation(),
-    ExpectedStringLiteral(),
-    ExpectedIdentifier(),
-    ExpectedNaturalNumber(),
-    UnknownPreprocessorDirective(),
+    ExpectedTheoryItem {
+        found: Option<String>,
+        expected: Vec<String>,
+        at: Location,
+    },
+    ExpectedPunctuation {
+        found: Option<String>,
+        expected: Vec<String>,
+        at: Location,
+    },
+    ExpectedStringLiteral {
+        found: Option<String>,
+        expected: Vec<String>,
+        at: Location,
+    },
+    ExpectedIdentifier {
+        found: Option<String>,
+        expected: Vec<String>,
+        at: Location,
+    },
+    ExpectedNaturalNumber {
+        found: Option<String>,
+        expected: Vec<String>,
+        at: Location,
+    },
+    UnknownPreprocessorDirective {
+        found: Option<String>,
+        expected: Vec<String>,
+        at: Location,
+    },
+    ExpectedPreprocessorDirective {
+        found: Option<String>,
+        expected: Vec<String>,
+        at: Location,
+    },
+    ExpectedHexColor {
+        found: Option<String>,
+        expected: Vec<String>,
+        at: Location,
+    },
+    ExpectedQuotedString {
+        found: Option<String>,
+        expected: Vec<String>,
+        at: Location,
+    },
+    UnterminatedDelimiter {
+        opening: String,
+        opening_at: Location,
+        found: Option<String>,
+        found_at: Location,
+        expected: Vec<String>,
+    },
+    UnknownRuleAttribute {
+        attribute: String,
+        at: Location,
+    },
+    UnknownLemmaAttribute {
+        attribute: String,
+        at: Location,
+    },
+    ExpectedExportBodyString {
+        found: Option<String>,
+        expected: Vec<String>,
+        at: Location,
+    },
+    ExpectedProcess {
+        found: Option<String>,
+        expected: Vec<String>,
+        at: Location,
+    },
+    FactNameMustStartWithUppercase {
+        name: String,
+        at: Location,
+    },
+    FreshFactCannotBePersistent {
+        at: Location,
+    },
+    FactArityMismatch {
+        name: String,
+        arity: usize,
+        at: Location,
+    },
+    ExpectedFormulaAtom {
+        found: Option<String>,
+        expected: Vec<String>,
+        at: Location,
+    },
+    BadFreshLiteral {
+        found: Option<String>,
+        expected: Vec<String>,
+        at: Location,
+    },
+    BadNatLiteral {
+        found: Option<String>,
+        expected: Vec<String>,
+        at: Location,
+    },
+    BadPublicLiteral {
+        found: Option<String>,
+        expected: Vec<String>,
+        at: Location,
+    },
+    ExpectedTerm {
+        found: Option<String>,
+        expected: Vec<String>,
+        at: Location,
+    },
+    ExpectedVariable {
+        found: Option<String>,
+        expected: Vec<String>,
+        at: Location,
+    },
+    UnexpectedTrailingInput {
+        context: String,
+        found: String,
+        at: Location,
+    },
+    IoError {
+        path: String,
+        message: String,
+        at: Location,
+    },
+    TrailingGarbageInFormulaString {
+        found: Option<String>,
+        expected: Vec<String>,
+        at: Location,
+    },
+    TrailingGarbageInTermString {
+        found: Option<String>,
+        expected: Vec<String>,
+        at: Location,
+    },
 }
 
-/// parsec `clean = nub . filter (not . null)` — drop empties, dedup preserving
-/// first occurrence.
-fn clean_dedup(items: &[&str]) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for s in items {
-        if s.is_empty() || out.iter().any(|x| x == s) {
-            continue;
+#[derive(Debug, Clone)]
+pub struct ParseErrorLabel {
+    pub at: Location,
+    pub message: String,
+    pub is_primary: bool,
+}
+
+impl ParseError {
+    /// Add an expected item to the error's `expected` list, if it has one.
+    fn add_expected(&mut self, exp: String) {
+        match self {
+            ParseError::UnexpectedKeyword { expected, .. }
+            | ParseError::ExpectedTheoryItem { expected, .. }
+            | ParseError::ExpectedPunctuation { expected, .. }
+            | ParseError::ExpectedStringLiteral { expected, .. }
+            | ParseError::ExpectedIdentifier { expected, .. }
+            | ParseError::ExpectedNaturalNumber { expected, .. }
+            | ParseError::UnknownPreprocessorDirective { expected, .. }
+            | ParseError::ExpectedPreprocessorDirective { expected, .. }
+            | ParseError::ExpectedHexColor { expected, .. }
+            | ParseError::ExpectedQuotedString { expected, .. }
+            | ParseError::ExpectedExportBodyString { expected, .. }
+            | ParseError::ExpectedProcess { expected, .. }
+            | ParseError::ExpectedFormulaAtom { expected, .. }
+            | ParseError::BadFreshLiteral { expected, .. }
+            | ParseError::BadNatLiteral { expected, .. }
+            | ParseError::BadPublicLiteral { expected, .. }
+            | ParseError::ExpectedTerm { expected, .. }
+            | ParseError::ExpectedVariable { expected, .. }
+            | ParseError::TrailingGarbageInFormulaString { expected, .. }
+            | ParseError::TrailingGarbageInTermString { expected, .. }
+            | ParseError::UnterminatedDelimiter { expected, .. } => {
+                if !expected.contains(&exp) {
+                    expected.push(exp);
+                }
+            }
+            // Explicity match to force compile-time error for new variants
+            ParseError::UnknownLemmaAttribute { .. }
+            | ParseError::FactNameMustStartWithUppercase { .. }
+            | ParseError::FreshFactCannotBePersistent { .. }
+            | ParseError::FactArityMismatch { .. }
+            | ParseError::UnexpectedTrailingInput { .. }
+            | ParseError::UnknownRuleAttribute { .. }
+            | ParseError::IoError { .. } => {}
         }
-        out.push((*s).to_string());
     }
-    out
+
+    pub fn location(&self) -> &Location {
+        match self {
+            ParseError::UnexpectedKeyword { at, .. }
+            | ParseError::ExpectedTheoryItem { at, .. }
+            | ParseError::ExpectedPunctuation { at, .. }
+            | ParseError::ExpectedStringLiteral { at, .. }
+            | ParseError::ExpectedIdentifier { at, .. }
+            | ParseError::ExpectedNaturalNumber { at, .. }
+            | ParseError::UnknownPreprocessorDirective { at, .. }
+            | ParseError::ExpectedPreprocessorDirective { at, .. }
+            | ParseError::ExpectedHexColor { at, .. }
+            | ParseError::ExpectedQuotedString { at, .. }
+            | ParseError::UnknownLemmaAttribute { at, .. }
+            | ParseError::ExpectedExportBodyString { at, .. }
+            | ParseError::ExpectedProcess { at, .. }
+            | ParseError::FactNameMustStartWithUppercase { at, .. }
+            | ParseError::FreshFactCannotBePersistent { at }
+            | ParseError::FactArityMismatch { at, .. }
+            | ParseError::ExpectedFormulaAtom { at, .. }
+            | ParseError::BadFreshLiteral { at, .. }
+            | ParseError::BadNatLiteral { at, .. }
+            | ParseError::BadPublicLiteral { at, .. }
+            | ParseError::ExpectedTerm { at, .. }
+            | ParseError::ExpectedVariable { at, .. }
+            | ParseError::UnexpectedTrailingInput { at, .. }
+            | ParseError::IoError { at, .. }
+            | ParseError::TrailingGarbageInFormulaString { at, .. }
+            | ParseError::TrailingGarbageInTermString { at, .. }
+            | ParseError::UnknownRuleAttribute { at, .. }
+            | ParseError::UnterminatedDelimiter { found_at: at, .. } => at,
+        }
+    }
+
+    fn into_found(self) -> Option<String> {
+        match self {
+            ParseError::UnexpectedKeyword { found, .. }
+            | ParseError::ExpectedTheoryItem { found, .. }
+            | ParseError::ExpectedPunctuation { found, .. }
+            | ParseError::ExpectedStringLiteral { found, .. }
+            | ParseError::ExpectedIdentifier { found, .. }
+            | ParseError::ExpectedNaturalNumber { found, .. }
+            | ParseError::UnknownPreprocessorDirective { found, .. }
+            | ParseError::ExpectedPreprocessorDirective { found, .. }
+            | ParseError::ExpectedHexColor { found, .. }
+            | ParseError::ExpectedQuotedString { found, .. }
+            | ParseError::ExpectedExportBodyString { found, .. }
+            | ParseError::ExpectedProcess { found, .. }
+            | ParseError::ExpectedFormulaAtom { found, .. }
+            | ParseError::BadFreshLiteral { found, .. }
+            | ParseError::BadNatLiteral { found, .. }
+            | ParseError::BadPublicLiteral { found, .. }
+            | ParseError::ExpectedTerm { found, .. }
+            | ParseError::ExpectedVariable { found, .. }
+            | ParseError::TrailingGarbageInFormulaString { found, .. }
+            | ParseError::TrailingGarbageInTermString { found, .. }
+            | ParseError::UnterminatedDelimiter { found, .. } => found,
+            ParseError::UnknownRuleAttribute { attribute, .. }
+            | ParseError::UnknownLemmaAttribute { attribute, .. } => Some(attribute),
+            ParseError::FactNameMustStartWithUppercase { name, .. }
+            | ParseError::FactArityMismatch { name, .. }
+            | ParseError::UnexpectedTrailingInput { found: name, .. } => Some(name),
+            ParseError::FreshFactCannotBePersistent { .. } | ParseError::IoError { .. } => None,
+        }
+    }
+
+    pub fn found(&self) -> Option<&str> {
+        match self {
+            ParseError::UnexpectedKeyword { found, .. }
+            | ParseError::ExpectedTheoryItem { found, .. }
+            | ParseError::ExpectedPunctuation { found, .. }
+            | ParseError::ExpectedStringLiteral { found, .. }
+            | ParseError::ExpectedIdentifier { found, .. }
+            | ParseError::ExpectedNaturalNumber { found, .. }
+            | ParseError::UnknownPreprocessorDirective { found, .. }
+            | ParseError::ExpectedPreprocessorDirective { found, .. }
+            | ParseError::ExpectedHexColor { found, .. }
+            | ParseError::ExpectedQuotedString { found, .. }
+            | ParseError::ExpectedExportBodyString { found, .. }
+            | ParseError::ExpectedProcess { found, .. }
+            | ParseError::ExpectedFormulaAtom { found, .. }
+            | ParseError::BadFreshLiteral { found, .. }
+            | ParseError::BadNatLiteral { found, .. }
+            | ParseError::BadPublicLiteral { found, .. }
+            | ParseError::ExpectedTerm { found, .. }
+            | ParseError::ExpectedVariable { found, .. }
+            | ParseError::TrailingGarbageInFormulaString { found, .. }
+            | ParseError::TrailingGarbageInTermString { found, .. }
+            | ParseError::UnterminatedDelimiter { found, .. } => found.as_deref(),
+            ParseError::UnknownRuleAttribute { attribute, .. }
+            | ParseError::UnknownLemmaAttribute { attribute, .. } => Some(attribute.as_str()),
+            ParseError::FactNameMustStartWithUppercase { name, .. }
+            | ParseError::FactArityMismatch { name, .. } => Some(name.as_str()),
+            ParseError::UnexpectedTrailingInput { found, .. } => Some(found.as_str()),
+            ParseError::FreshFactCannotBePersistent { .. } | ParseError::IoError { .. } => None,
+        }
+    }
+
+    pub fn expected(&self) -> Option<&[String]> {
+        match self {
+            ParseError::UnexpectedKeyword { expected, .. }
+            | ParseError::ExpectedPunctuation { expected, .. }
+            | ParseError::ExpectedStringLiteral { expected, .. }
+            | ParseError::ExpectedIdentifier { expected, .. }
+            | ParseError::ExpectedNaturalNumber { expected, .. }
+            | ParseError::UnknownPreprocessorDirective { expected, .. }
+            | ParseError::ExpectedPreprocessorDirective { expected, .. }
+            | ParseError::ExpectedHexColor { expected, .. }
+            | ParseError::ExpectedQuotedString { expected, .. }
+            | ParseError::ExpectedExportBodyString { expected, .. }
+            | ParseError::ExpectedProcess { expected, .. }
+            | ParseError::ExpectedFormulaAtom { expected, .. }
+            | ParseError::BadFreshLiteral { expected, .. }
+            | ParseError::BadNatLiteral { expected, .. }
+            | ParseError::BadPublicLiteral { expected, .. }
+            | ParseError::ExpectedTerm { expected, .. }
+            | ParseError::ExpectedVariable { expected, .. }
+            | ParseError::TrailingGarbageInFormulaString { expected, .. }
+            | ParseError::TrailingGarbageInTermString { expected, .. }
+            | ParseError::UnterminatedDelimiter { expected, .. } => Some(expected),
+            ParseError::UnknownLemmaAttribute { .. }
+            | ParseError::UnknownRuleAttribute { .. }
+            | ParseError::FactNameMustStartWithUppercase { .. }
+            | ParseError::FreshFactCannotBePersistent { .. }
+            | ParseError::FactArityMismatch { .. }
+            | ParseError::UnexpectedTrailingInput { .. }
+            | ParseError::IoError { .. } => None,
+            ParseError::ExpectedTheoryItem {
+                expected, found, ..
+            } => {
+                todo!()
+            }
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            ParseError::UnexpectedKeyword { .. } => "Unexpected keyword",
+            ParseError::ExpectedTheoryItem { .. } => "Expected theory item",
+            ParseError::ExpectedPunctuation { .. } => "Expected punctuation",
+            ParseError::ExpectedStringLiteral { .. } => "Expected string literal",
+            ParseError::ExpectedIdentifier { .. } => "Expected identifier",
+            ParseError::ExpectedNaturalNumber { .. } => "Expected natural number",
+            ParseError::UnknownPreprocessorDirective { .. } => "Unknown preprocessor directive",
+            ParseError::ExpectedPreprocessorDirective { .. } => "Expected preprocessor directive",
+            ParseError::ExpectedHexColor { .. } => "Expected hex color",
+            ParseError::ExpectedQuotedString { .. } => "Expected quoted string",
+            ParseError::UnterminatedDelimiter { .. } => "Unterminated delimiter",
+            ParseError::UnknownLemmaAttribute { .. } => "Unknown lemma attribute",
+            ParseError::ExpectedExportBodyString { .. } => "Expected export body string",
+            ParseError::ExpectedProcess { .. } => "Expected process",
+            ParseError::FactNameMustStartWithUppercase { .. } => {
+                "Fact name must start with uppercase"
+            }
+            ParseError::FreshFactCannotBePersistent { .. } => "Fresh fact cannot be persistent",
+            ParseError::FactArityMismatch { .. } => "Fact arity mismatch",
+            ParseError::ExpectedFormulaAtom { .. } => "Expected formula atom",
+            ParseError::BadFreshLiteral { .. } => "Bad fresh literal",
+            ParseError::BadNatLiteral { .. } => "Bad nat literal",
+            ParseError::BadPublicLiteral { .. } => "Bad public literal",
+            ParseError::ExpectedTerm { .. } => "Expected term",
+            ParseError::ExpectedVariable { .. } => "Expected variable",
+            ParseError::UnexpectedTrailingInput { .. } => "Unexpected trailing input",
+            ParseError::IoError { .. } => "I/O error",
+            ParseError::TrailingGarbageInFormulaString { .. } => {
+                "Trailing garbage in formula string"
+            }
+            ParseError::TrailingGarbageInTermString { .. } => "Trailing garbage in term string",
+            ParseError::UnknownRuleAttribute { .. } => "Unknown rule attribute",
+        }
+    }
+
+    pub fn labels(&self) -> Vec<ParseErrorLabel> {
+        match self {
+            ParseError::UnterminatedDelimiter {
+                opening,
+                opening_at,
+                found,
+                found_at,
+                expected,
+            } => {
+                let primary_at = if found.is_some() {
+                    *found_at
+                } else {
+                    *opening_at
+                };
+                vec![
+                    ParseErrorLabel {
+                        at: primary_at,
+                        message: format!("expected closing {}", format_expected_list(expected)),
+                        is_primary: true,
+                    },
+                    ParseErrorLabel {
+                        at: *opening_at,
+                        message: format!("opening `{opening}` starts here"),
+                        is_primary: false,
+                    },
+                ]
+            }
+            _ => vec![ParseErrorLabel {
+                at: *self.location(),
+                message: self.description().to_string(),
+                is_primary: true,
+            }],
+        }
+    }
+
+    pub fn notes(&self) -> Vec<String> {
+        match self {
+            ParseError::UnexpectedKeyword {
+                found, expected, ..
+            } => {
+                vec![format_found_expected_note(
+                    "keyword",
+                    found.as_deref(),
+                    expected,
+                )]
+            }
+            ParseError::ExpectedTheoryItem {
+                found, expected, ..
+            } => {
+                vec![format_found_expected_note(
+                    "theory item",
+                    found.as_deref(),
+                    expected,
+                )]
+            }
+            ParseError::ExpectedPunctuation {
+                found, expected, ..
+            }
+            | ParseError::ExpectedStringLiteral {
+                found, expected, ..
+            }
+            | ParseError::ExpectedIdentifier {
+                found, expected, ..
+            }
+            | ParseError::ExpectedNaturalNumber {
+                found, expected, ..
+            }
+            | ParseError::UnknownPreprocessorDirective {
+                found, expected, ..
+            }
+            | ParseError::ExpectedPreprocessorDirective {
+                found, expected, ..
+            }
+            | ParseError::ExpectedHexColor {
+                found, expected, ..
+            }
+            | ParseError::ExpectedQuotedString {
+                found, expected, ..
+            }
+            | ParseError::ExpectedExportBodyString {
+                found, expected, ..
+            }
+            | ParseError::ExpectedProcess {
+                found, expected, ..
+            }
+            | ParseError::ExpectedFormulaAtom {
+                found, expected, ..
+            }
+            | ParseError::BadFreshLiteral {
+                found, expected, ..
+            }
+            | ParseError::BadNatLiteral {
+                found, expected, ..
+            }
+            | ParseError::BadPublicLiteral {
+                found, expected, ..
+            }
+            | ParseError::ExpectedTerm {
+                found, expected, ..
+            }
+            | ParseError::ExpectedVariable {
+                found, expected, ..
+            }
+            | ParseError::TrailingGarbageInFormulaString {
+                found, expected, ..
+            }
+            | ParseError::TrailingGarbageInTermString {
+                found, expected, ..
+            } => {
+                vec![format_found_expected_note(
+                    "token",
+                    found.as_deref(),
+                    expected,
+                )]
+            }
+            ParseError::UnterminatedDelimiter {
+                opening,
+                opening_at,
+                found,
+                found_at,
+                expected,
+            } => {
+                let mut notes = vec![format!(
+                    "delimiter `{opening}` was opened at line {}, column {} and needs closing {}",
+                    opening_at.line,
+                    opening_at.col,
+                    format_expected_list(expected)
+                )];
+                if let Some(found) = found {
+                    notes.push(format!(
+                        "encountered `{found}` at line {}, column {} before a closing delimiter",
+                        found_at.line, found_at.col
+                    ));
+                }
+                notes
+            }
+            ParseError::UnknownLemmaAttribute { attribute, .. } => {
+                vec![format!("unknown lemma attribute `{attribute}`")]
+            }
+            ParseError::UnknownRuleAttribute { attribute, .. } => {
+                vec![format!("unknown rule attribute `{attribute}`")]
+            }
+            ParseError::FactNameMustStartWithUppercase { name, .. } => {
+                vec![format!(
+                    "fact name `{name}` must start with an uppercase letter"
+                )]
+            }
+            ParseError::FreshFactCannotBePersistent { .. } => {
+                vec!["fresh facts (`Fr`) cannot be persistent facts".to_string()]
+            }
+            ParseError::FactArityMismatch { name, arity, .. } => {
+                vec![format!(
+                    "fact `{name}` was used with arity {arity}, but it must have arity 1"
+                )]
+            }
+            ParseError::UnexpectedTrailingInput { context, found, .. } => {
+                vec![format!("unexpected trailing token `{found}` in {context}")]
+            }
+            ParseError::IoError { path, message, .. } => {
+                vec![format!("failed to read included file `{path}`: {message}")]
+            }
+        }
+    }
+
+    pub fn message(&self) -> String {
+        self.description().to_string()
+    }
+
+    pub fn label_message(&self) -> String {
+        self.description().to_string()
+    }
 }
 
-/// parsec `commasOr` (with `msgOr = "or"`): join with ", " and " or " before
-/// the last element.
-fn commas_or(items: &[String]) -> String {
-    match items {
-        [] => String::new(),
-        [m] => m.clone(),
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message())
+    }
+}
+
+fn format_expected_list(expected: &[String]) -> String {
+    match expected.len() {
+        0 => "EOF".to_string(),
+        1 => format!("`{}`", expected[0]),
+        2 => format!("`{}` or `{}`", expected[0], expected[1]),
         _ => {
-            let (init, last) = items.split_at(items.len() - 1);
-            // commaSep = separate ", " . clean  (init is already clean here)
-            format!("{} or {}", init.join(", "), last[0])
+            let mut s = String::new();
+            for (idx, item) in expected.iter().enumerate() {
+                if idx > 0 {
+                    if idx == expected.len() - 1 {
+                        s.push_str(", or ");
+                    } else {
+                        s.push_str(", ");
+                    }
+                }
+                s.push('`');
+                s.push_str(item);
+                s.push('`');
+            }
+            s
         }
     }
 }
 
-/// parsec `showMany pre msgs`: clean+dedup, then `commasOr`, optionally prefixed
-/// by `pre` and a space.
-fn show_many(pre: &str, msgs: &[&str]) -> String {
-    let cleaned = clean_dedup(msgs);
-    if cleaned.is_empty() {
-        return String::new();
-    }
-    let co = commas_or(&cleaned);
-    if pre.is_empty() {
-        co
-    } else {
-        format!("{pre} {co}")
+fn format_found_expected_note(kind: &str, found: Option<&str>, expected: &[String]) -> String {
+    match found {
+        Some(found) => format!(
+            "expected {kind} {}, but found `{found}`",
+            format_expected_list(expected)
+        ),
+        None => format!("expected {kind} {}", format_expected_list(expected)),
     }
 }
 
-/// The show of a single-character token as parsec's Char-stream primitives
-/// render it: `show [c]` (Haskell `show :: String -> String` of a one-char
-/// string).  parsec's `Text.Parsec.Char.satisfy`/`string` use `show [c]` for
-/// the `SysUnExpect` token, so an unexpected `t` prints as `"t"`, a space as
-/// `" "`, a quote as `"\""`, a newline as `"\n"`, etc.
-fn show_char_token(c: char) -> String {
-    let mut s = String::from('"');
-    show_lit_char(c, &mut s);
-    s.push('"');
-    s
-}
-
-/// Port of GHC's `showLitChar` for the characters that appear inside a
-/// double-quoted string literal (`show :: String -> String`).  We only ever
-/// show a *single* char, so the `\&` empty-string separator (only emitted
-/// between a numeric escape and a following digit) never applies.
-fn show_lit_char(c: char, out: &mut String) {
-    match c {
-        '"' => out.push_str("\\\""),
-        '\\' => out.push_str("\\\\"),
-        '\n' => out.push_str("\\n"),
-        '\t' => out.push_str("\\t"),
-        '\r' => out.push_str("\\r"),
-        '\u{0B}' => out.push_str("\\v"),
-        '\u{0C}' => out.push_str("\\f"),
-        '\u{07}' => out.push_str("\\a"),
-        '\u{08}' => out.push_str("\\b"),
-        c if (' '..='~').contains(&c) => out.push(c),
-        // Control / non-ASCII: GHC uses a decimal escape `\NNN`.
-        c => {
-            out.push('\\');
-            out.push_str(&(c as u32).to_string());
-        }
-    }
-}
+impl std::error::Error for ParseError {}
 
 /// The merged `expecting` labels of the top-level item alternation, in HS's
 /// exact order and spelling.  This is the base set parsec accumulates from
@@ -431,22 +917,23 @@ impl<'a> Parser<'a> {
         }
         true
     }
-    fn require_kw(&mut self, kw: &'static str) -> Result<(), ParseError> {
+    fn require_kw(&mut self, kw: &str) -> Result<(), ParseError> {
         // HS `symbol_ kw` = `void (try (T.symbol spthy kw) <?> ("\""++kw++"\""))`
         // (Token.hs:272-277): on failure, Expect is the quoted keyword.
         if self.try_kw(kw) {
             Ok(())
         } else {
             let found = self.lx.peek_until_ws();
+            let at = Location::location_of(&found, self.lx.pos());
             Err(ParseError::UnexpectedKeyword {
                 found: found.map(|s| s.to_string()),
-                expected: vec![kw],
-                at: Location::location_of(found, &self.lx.pos()),
+                expected: vec![kw.to_string()],
+                at,
             })
         }
     }
 
-    fn require_punct(&mut self, p: &'static str) -> Result<(), ParseError> {
+    fn require_punct(&mut self, p: &str) -> Result<(), ParseError> {
         self.skip_ws();
         if self.lx.eat_str(p) {
             self.skip_ws();
@@ -520,6 +1007,111 @@ impl<'a> Parser<'a> {
             .ok_or_else(|| self.expected_string_literal_err(vec!["string literal"]))
     }
 
+    fn found_token(&mut self) -> (Option<String>, Location) {
+        self.found_token_until(|c| c.is_whitespace())
+    }
+
+    fn found_token_until(&mut self, f: impl FnMut(char) -> bool) -> (Option<String>, Location) {
+        let saved_pos = self.lx.pos();
+        self.lx.skip_ws();
+        let found_pos = self.lx.pos();
+        let tok = self.lx.peek_until(f).map(|s| s.to_string());
+        self.lx.set_pos(saved_pos);
+        let loc = Location::location_of(&tok.as_ref(), found_pos);
+        (tok, loc)
+    }
+
+    fn expected_keyword_err<I, S>(&mut self, expected: I) -> ParseError
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let (found, at) = self.found_token();
+        ParseError::UnexpectedKeyword {
+            found,
+            expected: expected.into_iter().map(Into::into).collect(),
+            at,
+        }
+    }
+
+    fn expected_theory_item_err(&mut self, expected: &[&str]) -> ParseError {
+        let (found, at) = self.found_token();
+        ParseError::ExpectedTheoryItem {
+            found,
+            expected: expected.iter().map(|s| (*s).to_string()).collect(),
+            at,
+        }
+    }
+
+    fn expected_punctuation_err<I, S>(&mut self, expected: I) -> ParseError
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let (found, at) = self.found_token();
+        ParseError::ExpectedPunctuation {
+            found,
+            expected: expected.into_iter().map(Into::into).collect(),
+            at,
+        }
+    }
+
+    fn expected_string_literal_err<I, S>(&mut self, expected: I) -> ParseError
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let (found, at) = self.found_token();
+        ParseError::ExpectedStringLiteral {
+            found,
+            expected: expected.into_iter().map(Into::into).collect(),
+            at,
+        }
+    }
+
+    fn expected_identifier_err<I, S>(&mut self, expected: I) -> ParseError
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let (found, at) = self.found_token();
+        ParseError::ExpectedIdentifier {
+            found,
+            expected: expected.into_iter().map(Into::into).collect(),
+            at,
+        }
+    }
+
+    fn expected_natural_number_err<I, S>(&mut self, expected: I) -> ParseError
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let (found, at) = self.found_token();
+        ParseError::ExpectedNaturalNumber {
+            found,
+            expected: expected.into_iter().map(Into::into).collect(),
+            at,
+        }
+    }
+
+    fn unknown_preproc_err<I, S>(
+        &mut self,
+        expected: I,
+        found: Option<String>,
+        at: Location,
+    ) -> ParseError
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        ParseError::UnknownPreprocessorDirective {
+            found,
+            expected: expected.into_iter().map(Into::into).collect(),
+            at,
+        }
+    }
+
     // =========================================================================
     // Top-level theory
     // =========================================================================
@@ -543,7 +1135,9 @@ impl<'a> Parser<'a> {
             //      <?> "configuration or begin"` (Parser.hs:230-393, see line 233) — the whole
             // choice is relabelled, so the failure Expect is the single custom
             // label, not the two quoted keywords.
-            return Err(self.expected_keyword_err(vec!["configuration".into(), "begin".into()]));
+            return Err(
+                self.expected_keyword_err(vec!["configuration".to_string(), "begin".to_string()])
+            );
         }
         let items = self.theory_items_until_end()?;
         // HS `addItems … <* symbol_ "end"` (Parser.hs:230-393, see line 240): when `end` is
@@ -551,7 +1145,7 @@ impl<'a> Parser<'a> {
         // error, so report the full item-position error rather than a bare
         // `expecting "end"`.
         if !self.try_kw("end") {
-            return Err(self.expected_keyword_err(vec!["end".into()]));
+            return Err(self.expected_keyword_err(vec!["end".to_string()]));
         }
         // Parsing stops at `end`; any trailing text is left unconsumed (callers
         // ignore it), as Haskell's parser does.
@@ -730,13 +1324,8 @@ impl<'a> Parser<'a> {
             }
             other => Err(self.unknown_preproc_err(
                 vec!["define", "include", "endif", "else"],
-                (
-                    other.into(),
-                    Span {
-                        start: pos_before_ascii.offset - 1,
-                        end: pos_before_ascii.offset - 1 + other.len(),
-                    },
-                ),
+                Some(other.to_string()),
+                pos_before_ascii.into(),
             )),
         }
     }
@@ -772,10 +1361,10 @@ impl<'a> Parser<'a> {
     fn expand_ifdef(&mut self) -> Result<Vec<TheoryItem>, ParseError> {
         self.skip_ws();
         if !self.lx.eat_str("#") {
-            return Err(self.expected_keyword_err(vec!["#ifdef".into()]));
+            return Err(self.expected_keyword_err(vec!["#ifdef".to_string()]));
         }
         if self.lx.ascii_alpha_run() != "ifdef" {
-            return Err(self.expected_keyword_err(vec!["#ifdef"]));
+            return Err(self.expected_keyword_err(vec!["#ifdef".to_string()]));
         }
         self.skip_ws();
         let cond = self.flag_disjuncts()?;
@@ -785,7 +1374,9 @@ impl<'a> Parser<'a> {
                 // Else branch text is skipped.
                 self.skip_until("#endif");
             } else if !self.try_punct("#endif") {
-                return Err(self.expected_keyword_err(vec!["#endif", "#else"]));
+                return Err(
+                    self.expected_keyword_err(vec!["#endif".to_string(), "#else".to_string()])
+                );
             }
             Ok(items)
         } else {
@@ -797,7 +1388,7 @@ impl<'a> Parser<'a> {
                     Ok(items)
                 }
                 BranchEnd::Endif => Ok(Vec::new()),
-                BranchEnd::Eof => Err(self.expected_keyword_err(vec!["#endif"])),
+                BranchEnd::Eof => Err(self.expected_keyword_err(vec!["#endif".to_string()])),
             }
         }
     }
@@ -806,7 +1397,12 @@ impl<'a> Parser<'a> {
         // Consume `#include`.
         self.skip_ws();
         if !self.lx.eat_str("#include") {
-            return Err(self.err("expected `#include`"));
+            let (found, at) = self.found_token();
+            return Err(ParseError::ExpectedPreprocessorDirective {
+                found,
+                expected: vec!["#include".to_string()],
+                at,
+            });
         }
         self.skip_ws();
         let raw_path = self.string_literal()?;
@@ -818,12 +1414,10 @@ impl<'a> Parser<'a> {
             None => PathBuf::from(&raw_path),
         };
 
-        let content = std::fs::read_to_string(&resolved).map_err(|e| {
-            self.err(format!(
-                "failed to read included file {}: {}",
-                resolved.display(),
-                e
-            ))
+        let content = std::fs::read_to_string(&resolved).map_err(|e| ParseError::IoError {
+            path: resolved.display().to_string(),
+            message: e.to_string(),
+            at: self.lx.pos().into(),
         })?;
 
         // Nested includes in the fragment resolve relative to ITS directory
@@ -856,7 +1450,12 @@ impl<'a> Parser<'a> {
         let items = sub.theory_items_until_end()?;
         sub.skip_ws();
         if !sub.lx.is_eof() {
-            return Err(sub.err("unexpected trailing input in included file"));
+            let (found, at) = sub.found_token();
+            return Err(ParseError::UnexpectedTrailingInput {
+                context: "included file".to_string(),
+                found: found.unwrap_or_else(|| "EOF".to_string()),
+                at,
+            });
         }
 
         // Thread parser state BACK (HS `putState st'` + `sig st'` merge): pick up
@@ -1238,7 +1837,12 @@ impl<'a> Parser<'a> {
             arg_types = vec![None; k as usize];
             out_type = None;
         } else {
-            self.require_punct("(")?;
+            self.require_punct("(").map_err(|mut e| {
+                // Due to the if/else the error that would surface here does not
+                // report the "/" as an expected token.
+                e.add_expected("/".to_string());
+                e
+            })?;
             // HS `parens (commaSep typep)` (Signature.hs:149-160, see line 156): `sepEndBy`
             // permits a trailing comma before `)`.
             let args = self.sep_end_by(")", |p| p.type_p())?;
@@ -1422,9 +2026,18 @@ impl<'a> Parser<'a> {
     /// `doubleQuoted parseFormula` rather than reading a string literal and
     /// re-parsing it.
     fn double_quoted_formula(&mut self) -> Result<Formula, ParseError> {
+        self.lx.skip_ws();
+        let opening_pos = self.lx.pos();
         self.require_punct("\"")?;
         let f = self.formula()?;
-        self.require_punct("\"")?;
+        self.require_punct("\"")
+            .map_err(|e| ParseError::UnterminatedDelimiter {
+                opening: "\"".to_string(),
+                opening_at: Location::location_of(&Some("\""), opening_pos),
+                found_at: *e.location(),
+                found: e.into_found(),
+                expected: vec!["\"".to_string()],
+            })?;
         Ok(f)
     }
 
@@ -1618,10 +2231,14 @@ impl<'a> Parser<'a> {
             // colour=, color=
             if self.try_kw("colour") || self.try_kw("color") {
                 self.require_punct("=")?;
-                let c = self
-                    .lx
-                    .hex_color()
-                    .ok_or_else(|| self.err("expected hex color"))?;
+                let c = self.lx.hex_color().ok_or_else(|| {
+                    let (found, at) = self.found_token();
+                    ParseError::ExpectedHexColor {
+                        found,
+                        expected: vec!["hex color".to_string()],
+                        at,
+                    }
+                })?;
                 attrs.push(RuleAttr::Color(c));
             } else if self.try_kw("process") {
                 // HS `ruleAttribute` (Parser/Rule.hs:68-93, see line 72) `parseAndIgnore`s
@@ -1652,7 +2269,12 @@ impl<'a> Parser<'a> {
                     attrs.push(RuleAttr::External(ext, val));
                 } else {
                     self.restore(save);
-                    break;
+                    let (found, at) =
+                        self.found_token_until(|c| c == ']' || c == ',' || c.is_whitespace());
+                    return Err(ParseError::UnknownRuleAttribute {
+                        attribute: found.unwrap_or("EOF".to_string()),
+                        at,
+                    });
                 }
             }
             if !self.try_punct(",") {
@@ -1671,7 +2293,12 @@ impl<'a> Parser<'a> {
         if let Some(s) = self.lx.single_quoted() {
             return Ok(s);
         }
-        Err(self.err("expected quoted string"))
+        let (found, at) = self.found_token();
+        Err(ParseError::ExpectedQuotedString {
+            found,
+            expected: vec!["quoted string".to_string()],
+            at,
+        })
     }
 
     /// Read an identifier or a balanced parenthesised token (for `process=...`).
@@ -1694,17 +2321,34 @@ impl<'a> Parser<'a> {
         if let Some(c) = self.lx.peek() {
             for (l, r) in pairs.iter() {
                 if c == *l {
+                    let opening_at = self.lx.pos().into();
                     self.lx.bump();
                     let mut s = String::new();
                     loop {
                         match self.lx.peek() {
-                            None => return Err(self.err("unterminated bracketed value")),
+                            None => {
+                                let (found, found_at) = self.found_token();
+                                return Err(ParseError::UnterminatedDelimiter {
+                                    found,
+                                    expected: vec![r.to_string()],
+                                    opening: l.to_string(),
+                                    opening_at,
+                                    found_at,
+                                });
+                            }
                             // Stop at the first `l` or `r` (matches
                             // `manyCharsExcept`, which does not nest); the closer
                             // `r` is then consumed by `between`.
                             Some(ch) if ch == *r || ch == *l => {
                                 if ch != *r {
-                                    return Err(self.err("unterminated bracketed value"));
+                                    let (found, found_at) = self.found_token();
+                                    return Err(ParseError::UnterminatedDelimiter {
+                                        found,
+                                        expected: vec![r.to_string()],
+                                        opening: l.to_string(),
+                                        opening_at,
+                                        found_at,
+                                    });
                                 }
                                 self.lx.bump();
                                 break;
@@ -1948,7 +2592,8 @@ impl<'a> Parser<'a> {
                 if raw.is_empty() {
                     break;
                 }
-                return Err(self.err(format!("unknown lemma attribute: {raw}")));
+                let at = Location::location_of(&Some(&raw), self.lx.pos());
+                return Err(ParseError::UnknownLemmaAttribute { attribute: raw, at });
             }
             if !self.try_punct(",") {
                 break;
@@ -2137,10 +2782,14 @@ impl<'a> Parser<'a> {
         self.require_punct(":")?;
         // Export bodies use the strict `bodyChar` grammar (Signature.hs:282-287),
         // NOT the general string-literal escape decoding.
-        let body = self
-            .lx
-            .export_body()
-            .ok_or_else(|| self.err("expected export body string"))?;
+        let body = self.lx.export_body().ok_or_else(|| {
+            let (found, at) = self.found_token();
+            ParseError::ExpectedExportBodyString {
+                found,
+                expected: vec!["export body string".to_string()],
+                at,
+            }
+        })?;
         Ok(TheoryItem::Export { tag, body })
     }
 
@@ -2327,7 +2976,12 @@ impl<'a> Parser<'a> {
             return Ok(Process::Call { name: id, args });
         }
         self.restore(save2);
-        Err(self.err("expected process"))
+        let (found, at) = self.found_token();
+        Err(ParseError::ExpectedProcess {
+            found,
+            expected: vec!["process".to_string()],
+            at,
+        })
     }
 
     fn else_process(&mut self) -> Result<Process, ParseError> {
@@ -2405,9 +3059,11 @@ impl<'a> Parser<'a> {
     fn fact(&mut self) -> Result<Fact, ParseError> {
         self.skip_ws();
         let persistent = self.try_punct("!");
+        let name_pos = self.lx.pos();
         let name = self.ident()?;
         if !name.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
-            return Err(self.err(format!("fact name `{}` must start with uppercase", name)));
+            let at = Location::location_of(&Some(&name), name_pos);
+            return Err(ParseError::FactNameMustStartWithUppercase { name, at });
         }
         self.require_punct("(")?;
         // HS `parens (commaSep pterm)` (Fact.hs:39-63, see line 47): trailing comma OK.
@@ -2466,15 +3122,17 @@ impl<'a> Parser<'a> {
         if let Some((cname, cpersistent, keep_ann)) = canonical {
             // `!Fr(...)` is a parse error (Fact.hs:39-63, see line 45).
             if upper == "FR" && persistent {
-                return Err(self.err("fresh facts cannot be persistent"));
+                let at = Location::location_of(&Some(&name), name_pos);
+                return Err(ParseError::FreshFactCannotBePersistent { at });
             }
             // `singleTerm`: special facts have arity one (Fact.hs:52-54).
             if args.len() != 1 {
-                return Err(self.err(format!(
-                    "fact '{}' used with arity {} instead of arity one",
+                let at = Location::location_of(&Some(&name), name_pos);
+                return Err(ParseError::FactArityMismatch {
                     name,
-                    args.len()
-                )));
+                    arity: args.len(),
+                    at,
+                });
             }
             return Ok(Fact {
                 persistent: cpersistent,
@@ -2654,7 +3312,12 @@ impl<'a> Parser<'a> {
             let rhs = self.term(false)?;
             return Ok(Formula::Atom(Atom::Less(lhs, rhs)));
         }
-        Err(self.err("expected formula atom"))
+        let (found, at) = self.found_token();
+        Err(ParseError::ExpectedFormulaAtom {
+            found,
+            expected: vec!["formula atom".to_string()],
+            at,
+        })
     }
 
     // =========================================================================
@@ -2872,10 +3535,14 @@ impl<'a> Parser<'a> {
             probe.bump();
             if c == '~' && probe.peek() == Some('\'') {
                 self.lx.bump();
-                let s = self
-                    .lx
-                    .single_quoted()
-                    .ok_or_else(|| self.err("bad fresh literal"))?;
+                let s = self.lx.single_quoted().ok_or_else(|| {
+                    let (found, at) = self.found_token();
+                    ParseError::BadFreshLiteral {
+                        found,
+                        expected: vec!["fresh literal".to_string()],
+                        at,
+                    }
+                })?;
                 return Ok(Term::FreshLit(s));
             }
             // Otherwise: variable.
@@ -2892,10 +3559,14 @@ impl<'a> Parser<'a> {
             match probe.peek() {
                 Some('\'') => {
                     self.lx.bump();
-                    let s = self
-                        .lx
-                        .single_quoted()
-                        .ok_or_else(|| self.err("bad nat literal"))?;
+                    let s = self.lx.single_quoted().ok_or_else(|| {
+                        let (found, at) = self.found_token();
+                        ParseError::BadNatLiteral {
+                            found,
+                            expected: vec!["nat literal".to_string()],
+                            at,
+                        }
+                    })?;
                     return Ok(Term::NatLit(s));
                 }
                 Some(c) if c.is_ascii_alphabetic() => {
@@ -2909,10 +3580,14 @@ impl<'a> Parser<'a> {
         }
         // Literal `'foo'` is a public name term.
         if self.lx.peek() == Some('\'') {
-            let s = self
-                .lx
-                .single_quoted()
-                .ok_or_else(|| self.err("bad public literal"))?;
+            let s = self.lx.single_quoted().ok_or_else(|| {
+                let (found, at) = self.found_token();
+                ParseError::BadPublicLiteral {
+                    expected: vec!["public literal".to_string()],
+                    found,
+                    at,
+                }
+            })?;
             return Ok(Term::PubLit(s));
         }
         // diff(a, b) — HS `diffOp = symbol "diff" *> parens ...` (Term.hs:108-110).
@@ -3010,7 +3685,12 @@ impl<'a> Parser<'a> {
             return Ok(Term::Var(v));
         }
         self.restore(save_id);
-        Err(self.err("expected term"))
+        let (found, at) = self.found_token();
+        Err(ParseError::ExpectedTerm {
+            found,
+            expected: vec!["term".to_string()],
+            at,
+        })
     }
 
     fn attach_sort_suffix(&mut self, mut v: VarSpec) -> Result<VarSpec, ParseError> {
@@ -3104,9 +3784,14 @@ impl<'a> Parser<'a> {
     }
 
     fn var_spec(&mut self) -> Result<VarSpec, ParseError> {
-        let v = self
-            .try_var_spec()?
-            .ok_or_else(|| self.err("expected variable"))?;
+        let v = self.try_var_spec()?.ok_or_else(|| {
+            let (found, at) = self.found_token();
+            ParseError::ExpectedVariable {
+                found,
+                expected: vec!["variable".to_string()],
+                at,
+            }
+        })?;
         // Allow `: msg | pub | fresh | node | nat` sort suffix or a SAPIC
         // type annotation after the variable.
         self.attach_sort_suffix(v)
@@ -3256,7 +3941,12 @@ pub fn parse_formula_str(s: &str) -> Result<Formula, ParseError> {
     let f = p.formula()?;
     p.skip_ws();
     if !p.lx.is_eof() {
-        return Err(p.err("trailing garbage in formula string"));
+        let (found, at) = p.found_token();
+        return Err(ParseError::TrailingGarbageInFormulaString {
+            found,
+            expected: vec!["end of input".to_string()],
+            at,
+        });
     }
     Ok(f)
 }
@@ -3275,7 +3965,12 @@ pub fn parse_term_str(s: &str) -> Result<Term, ParseError> {
     let t = p.term(false)?;
     p.skip_ws();
     if !p.lx.is_eof() {
-        return Err(p.err("trailing garbage in term string"));
+        let (found, at) = p.found_token();
+        return Err(ParseError::TrailingGarbageInTermString {
+            found,
+            expected: vec!["end of input".to_string()],
+            at,
+        });
     }
     Ok(t)
 }
@@ -3284,159 +3979,42 @@ pub fn parse_term_str(s: &str) -> Result<Term, ParseError> {
 mod tests {
     use super::*;
 
-    // ---- parsec frame-rendering port (Text.Parsec.Error) ----
-
-    fn pe(source: &str, line: u32, col: u32, messages: Vec<Message>) -> String {
-        ParseError {
-            line,
-            col,
-            offset: 0,
-            source: source.to_string(),
-            messages,
+    #[test]
+    fn formula_trailing_garbage_uses_structured_variant() {
+        let e = parse_formula_str("T & F junk").unwrap_err();
+        match e {
+            ParseError::TrailingGarbageInFormulaString {
+                found,
+                expected,
+                at,
+            } => {
+                assert_eq!(found.as_deref(), Some("junk"));
+                assert_eq!(expected, vec!["end of input".to_string()]);
+                assert_eq!(at.line, 1);
+                assert_eq!(at.col, 7);
+            }
+            other => panic!("unexpected variant: {other:?}"),
         }
-        .to_string()
     }
 
     #[test]
-    fn frame_sysunexpect_and_expect() {
-        // parsec: `unexpected "t"` / `expecting "theory"`.
-        let s = pe(
-            "f.spthy",
-            1,
-            1,
-            vec![
-                Message::SysUnExpect("\"t\"".into()),
-                Message::Expect("\"theory\"".into()),
-            ],
-        );
-        assert_eq!(
-            s,
-            "\"f.spthy\" (line 1, column 1):\nunexpected \"t\"\nexpecting \"theory\""
-        );
-    }
-
-    #[test]
-    fn frame_eof_is_end_of_input() {
-        // Empty SysUnExpect string renders as "unexpected end of input".
-        let s = pe(
-            "f",
-            5,
-            1,
-            vec![
-                Message::SysUnExpect(String::new()),
-                Message::Expect("\"end\"".into()),
-            ],
-        );
-        assert_eq!(
-            s,
-            "\"f\" (line 5, column 1):\nunexpected end of input\nexpecting \"end\""
-        );
-    }
-
-    #[test]
-    fn frame_expecting_commas_or() {
-        // showMany: `a, b or c` (comma-separated, "or" before the last).
-        let s = pe(
-            "f",
-            4,
-            7,
-            vec![
-                Message::SysUnExpect("\"]\"".into()),
-                Message::Expect("\".\"".into()),
-                Message::Expect("\",\"".into()),
-                Message::Expect("\")\"".into()),
-            ],
-        );
-        assert_eq!(
-            s,
-            "\"f\" (line 4, column 7):\nunexpected \"]\"\nexpecting \".\", \",\" or \")\""
-        );
-    }
-
-    #[test]
-    fn frame_dedup_and_message_ordering() {
-        // clean = nub . filter (not . null): duplicate/empty Expects collapse,
-        // and sort orders SysUnExpect < Expect < Message regardless of input.
-        let s = pe(
-            "f",
-            2,
-            3,
-            vec![
-                Message::Message("raw note".into()),
-                Message::Expect("\"a\"".into()),
-                Message::Expect("\"a\"".into()),
-                Message::Expect(String::new()),
-                Message::SysUnExpect("\"x\"".into()),
-            ],
-        );
-        assert_eq!(
-            s,
-            "\"f\" (line 2, column 3):\nunexpected \"x\"\nexpecting \"a\"\nraw note"
-        );
-    }
-
-    #[test]
-    fn frame_sysunexpect_suppressed_by_unexpect() {
-        // showSysUnExpect = "" when a user UnExpect is present.
-        let s = pe(
-            "f",
-            1,
-            1,
-            vec![
-                Message::SysUnExpect("\"z\"".into()),
-                Message::UnExpect("something".into()),
-                Message::Expect("\"a\"".into()),
-            ],
-        );
-        assert_eq!(
-            s,
-            "\"f\" (line 1, column 1):\nunexpected something\nexpecting \"a\""
-        );
-    }
-
-    #[test]
-    fn frame_empty_messages_is_unknown() {
-        // parsec: `| null msgs = msgUnknown` — no leading newline.
-        let s = pe("f", 1, 1, vec![]);
-        assert_eq!(s, "\"f\" (line 1, column 1):unknown parse error");
-    }
-
-    #[test]
-    fn frame_null_source_omits_quoted_name() {
-        // `instance Show SourcePos`: null name → no `"name" ` prefix.
-        let s = pe("", 3, 2, vec![Message::Message("m".into())]);
-        assert_eq!(s, "(line 3, column 2):\nm");
-    }
-
-    #[test]
-    fn show_char_token_escapes_like_haskell() {
-        assert_eq!(show_char_token('t'), "\"t\"");
-        assert_eq!(show_char_token(' '), "\" \"");
-        assert_eq!(show_char_token('"'), "\"\\\"\"");
-        assert_eq!(show_char_token('\n'), "\"\\n\"");
-        assert_eq!(show_char_token('\t'), "\"\\t\"");
-    }
-
-    #[test]
-    fn theory_keyword_error_matches_parsec() {
-        // End-to-end: the top-level `theory` keyword mismatch renders exactly
-        // like HS's `symbol_ "theory"` failure.
+    fn theory_keyword_error() {
         let e = parse_theory("theary Foo\nbegin\nend\n", &[]).unwrap_err();
-        assert_eq!(
-            e.with_source("f.spthy").to_string(),
-            "\"f.spthy\" (line 1, column 1):\nunexpected \"t\"\nexpecting \"theory\""
-        );
-    }
-
-    #[test]
-    fn item_position_letters_expect_letter_or_comment() {
-        // Garbage identifier at item position → `letter or "{*"` after the
-        // consumed letters (formalComment `many1 letter <* string "{*"`).
-        let e = parse_theory("theory Foo\nbegin\nrul R:\n[]-->[]\nend\n", &[]).unwrap_err();
-        assert_eq!(
-            e.with_source("f").to_string(),
-            "\"f\" (line 3, column 4):\nunexpected \" \"\nexpecting letter or \"{*\""
-        );
+        match e {
+            ParseError::UnexpectedKeyword {
+                found,
+                expected,
+                at,
+            } => {
+                assert_eq!(found.as_deref(), Some("theary"));
+                assert_eq!(expected, vec!["\"theory\"".to_string()]);
+                assert_eq!(at.line, 1);
+                assert_eq!(at.col, 1);
+                assert_eq!(at.start, 0);
+                assert_eq!(at.end, 6);
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
     }
 
     #[test]

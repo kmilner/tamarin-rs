@@ -86,9 +86,10 @@ pub fn load_from_source(
     // `parseString` (Dispatch.hs:149-209, see line 167 `thLoad srcThy path`; Handler.hs:785-817, see line 800
     // `loadAndCloseTheory srcContent filename`).  `LoadError::Parse` then holds
     // the byte-for-byte parsec frame.
+    // TODO: Look at this again once the new ParseError type is done.
     let source_name = origin.label();
-    let mut parser_theory = parse_theory(src, &[])
-        .map_err(|e| LoadError::Parse(e.with_source(source_name).to_string()))?;
+    let mut parser_theory =
+        parse_theory(src, &[]).map_err(|e| LoadError::Parse(format!("{}", e)))?;
 
     // HS `liftedAddProtoRule` (Theory/Text/Parser.hs:166-193) expands each
     // rule's `_restrict(φ)` into a fresh `Restr_<rule>_<i>` restriction

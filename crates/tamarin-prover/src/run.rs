@@ -1747,7 +1747,7 @@ fn print_overall_summary(file_results: &[FileResult], prove_mode: bool) {
 }
 
 ///
-fn report_parser_error(mut err: tamarin_parser::ParseError, src_name: &str, src_content: &str) {
+fn report_parser_error(err: tamarin_parser::ParseError, src_name: &str, src_content: &str) {
     use codespan_reporting::diagnostic::{Diagnostic, Label};
     use codespan_reporting::files::SimpleFiles;
     use codespan_reporting::term::{
@@ -1756,31 +1756,25 @@ fn report_parser_error(mut err: tamarin_parser::ParseError, src_name: &str, src_
     };
 
     let mut files = SimpleFiles::new();
-    // Just for sanity we deduplicate?
-    err.messages.dedup();
-    // Sorts error messages by their severity
-    err.messages.sort();
-    let sorted_messages = err.messages;
     let file_id = files.add(src_name, src_content);
 
-    let message = sorted_messages
-        .get(0)
-        .map(|m| m.string().to_owned())
-        .unwrap_or("ParseError".to_owned());
-
-    let label = Label::primary(file_id, err.offset - 1..err.offset);
-
-    let notes = sorted_messages
+    let labels: Vec<Label<usize>> = err
+        .labels()
         .into_iter()
-        .skip(1)
-        .rev()
-        .map(|m| m.string().to_owned())
-        .collect::<Vec<_>>();
+        .map(|label| {
+            let range = label.at.start..label.at.end;
+            if label.is_primary {
+                Label::primary(file_id, range).with_message(label.message)
+            } else {
+                Label::secondary(file_id, range).with_message(label.message)
+            }
+        })
+        .collect();
 
     let diagnostic = Diagnostic::error()
-        .with_message(message)
-        .with_notes(notes)
-        .with_label(label);
+        .with_message(err.message())
+        .with_labels(labels)
+        .with_notes(err.notes());
 
     let writer = StandardStream::stderr(ColorChoice::Always);
     let config = codespan_reporting::term::Config::default();
