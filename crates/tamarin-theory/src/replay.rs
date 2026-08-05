@@ -1534,7 +1534,7 @@ mod tests {
         let i = LVar::new("t", LSort::Node, 0);
         let tag = FactTag::Proto(Multiplicity::Linear, "Setup", 0);
         let fact = Fact::new(tag, Vec::new());
-        let goal = Goal::Action(i.clone(), fact);
+        let goal = Goal::Action(i, fact);
         let mut sys = System::empty();
         sys.goals_mut().push((goal.clone(), Default::default()));
         let spec = GoalSpec::Action {
@@ -1595,16 +1595,16 @@ mod tests {
         // Two goals with the same fact tag/arity but different
         // timepoints.
         let g1 = Goal::Action(
-            i1.clone(),
+            i1,
             Fact::new(
-                tag.clone(),
+                tag,
                 vec![tamarin_term::term::Term::Lit(
                     tamarin_term::vterm::Lit::Var(LVar::new("x", LSort::Msg, 0)),
                 )],
             ),
         );
         let g2 = Goal::Action(
-            i2.clone(),
+            i2,
             Fact::new(
                 tag,
                 vec![tamarin_term::term::Term::Lit(
@@ -1698,7 +1698,7 @@ mod tests {
         let n1 = LVar::new("u", LSort::Node, 0);
         let n2 = LVar::new("v", LSort::Node, 0);
         let tag = FactTag::Proto(Multiplicity::Linear, "Inp", 0);
-        let g1 = Goal::Premise((n1, PremIdx(0)), Fact::new(tag.clone(), Vec::new()));
+        let g1 = Goal::Premise((n1, PremIdx(0)), Fact::new(tag, Vec::new()));
         let g2 = Goal::Premise((n2, PremIdx(0)), Fact::new(tag, Vec::new()));
         let mut sys = System::empty();
         sys.goals_mut().push((g1, Default::default()));
@@ -1731,8 +1731,8 @@ mod tests {
         let i = LVar::new("i", LSort::Node, 3);
         let j = LVar::new("j", LSort::Node, 5);
         let k = LVar::new("k", LSort::Node, 7);
-        let g_ij = Goal::Chain((i.clone(), ConcIdx(0)), (j.clone(), PremIdx(2)));
-        let g_jk = Goal::Chain((j.clone(), ConcIdx(1)), (k.clone(), PremIdx(0)));
+        let g_ij = Goal::Chain((i, ConcIdx(0)), (j, PremIdx(2)));
+        let g_jk = Goal::Chain((j, ConcIdx(1)), (k, PremIdx(0)));
         let mut sys = System::empty();
         sys.goals_mut().push((g_ij.clone(), Default::default()));
         sys.goals_mut().push((g_jk.clone(), Default::default()));

@@ -145,7 +145,7 @@ fn inline_call(
     for (param, arg) in params.iter().zip(sapic_args.iter()) {
         pairs.push((param.clone(), arg.clone()));
         if param.stype.is_some() {
-            pairs.push((SapicLVar::untyped(param.var.clone()), arg.clone()));
+            pairs.push((SapicLVar::untyped(param.var), arg.clone()));
         }
     }
     let subst = SapicSubst::from_list(pairs);
@@ -211,7 +211,7 @@ fn apply_m_process(subst: &SapicSubst, p: PlainProcess) -> Result<PlainProcess, 
 /// True iff a substitution maps `v` (in either typed or untyped form) — i.e.
 /// `v ∈ dom subst`, used for the capture checks.
 fn in_domain(subst: &SapicSubst, v: &SapicLVar) -> bool {
-    subst.image_of(v).is_some() || subst.image_of(&SapicLVar::untyped(v.var.clone())).is_some()
+    subst.image_of(v).is_some() || subst.image_of(&SapicLVar::untyped(v.var)).is_some()
 }
 
 /// `applyM` for `SapicAction` (Process.hs:392-408): substitute terms, raising
@@ -357,7 +357,7 @@ fn apply_match_vars(
     for v in vs {
         let img = subst
             .image_of(v)
-            .or_else(|| subst.image_of(&SapicLVar::untyped(v.var.clone())));
+            .or_else(|| subst.image_of(&SapicLVar::untyped(v.var)));
         match img {
             Some(t) => {
                 for w in tamarin_term::vterm::vars_vterm_in_order(t) {

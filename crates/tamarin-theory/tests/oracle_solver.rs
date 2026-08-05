@@ -1588,7 +1588,7 @@ fn probe_nspk3_cyclic_leaf() {
             for prem in &ru.premises {
                 if matches!(prem.tag, tamarin_theory::fact::FactTag::Fresh) {
                     let mut vars = Vec::new();
-                    prem.for_each_free(&mut |v| vars.push(v.clone()));
+                    prem.for_each_free(&mut |v| vars.push(*v));
                     if let Some(v) = vars
                         .into_iter()
                         .find(|v| v.sort == tamarin_term::lterm::LSort::Fresh)
@@ -1597,7 +1597,7 @@ fn probe_nspk3_cyclic_leaf() {
                             .chars()
                             .take(60)
                             .collect::<String>();
-                        fresh_consumers.push((id.clone(), v, info));
+                        fresh_consumers.push((*id, v, info));
                     }
                 }
             }
@@ -2604,4 +2604,70 @@ fn fixture_disj_lemma_round_trip() {
     // The lemma body contains a top-level disjunction. Tamarin's
     // pretty-printed parse-only form should preserve the `|`.
     assert!(out.contains('|') || out.contains('∨'));
+}
+
+/// Regression: `insert_implied_formulas_pass` must derive a `[reuse]`
+/// lemma's implied consequence even when the triggering action's
+/// argument is a Nat-sorted `App` term (e.g. `tone()`, the internal
+/// form of `%1`) rather than a `Lit`. A prior bug in `structural_match`
+/// classified every `App` as sort `Msg`, so a Nat-sorted pattern
+/// variable never matched — silently dropping the reuse lemma's
+/// `HonestSignatureKey` consequence whenever no sibling action offered
+/// a free-variable fallback. The verdict alone doesn't catch this: the
+/// buggy port still finds `Solved` via a shorter path that skips
+/// `HonestSignatureKey` entirely. So this checks the proof tree
+/// explicitly contains a `HonestSignatureKey` step.
+#[test]
+fn fixture_nat_sort_reuse_lemma_derives_implied_fact() {
+    use tamarin_theory::constraint::constraints::Goal;
+    use tamarin_theory::constraint::solver::proof_method::ProofMethod;
+    use tamarin_theory::constraint::solver::search::{NodeStatus, ProofNode};
+    use tamarin_theory::prove::prove_lemma;
+
+    let mp = match maude_path() {
+        Some(p) => p,
+        None => return,
+    };
+    let path = fixtures_dir().join("nat_sort_regression.spthy");
+    let src = std::fs::read_to_string(&path).expect("read fixture");
+    let theory = parse_theory(&src, &[]).expect("parse");
+    let elab = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
+    let h = tamarin_term::maude_proc::MaudeHandle::start(&mp, elab.signature.maude_sig.clone())
+        .unwrap();
+    let root = prove_lemma(&theory, "CanForgeAndPost", h, 500).expect("prove_lemma");
+    assert_eq!(root.status, NodeStatus::Solved, "expected a witness trace");
+
+    fn contains_honest_signature_key(n: &ProofNode) -> bool {
+        if let ProofMethod::SolveGoal(Goal::Action(_, fa)) = &n.method {
+            if tamarin_theory::fact::fact_tag_name(&fa.tag) == "HonestSignatureKey" {
+                return true;
+            }
+        }
+        n.children.values().any(contains_honest_signature_key)
+    }
+    assert!(
+        contains_honest_signature_key(&root),
+        "proof must solve HonestSignatureKey as an explicit step; \
+         the reuse lemma's implied fact was silently dropped"
+    );
+
+    // Confirm tamarin agrees, when the binary is available.
+    if !tamarin_available() {
+        return;
+    }
+    let proved = run_tamarin_prove(&path).expect("tamarin");
+    let summary = extract_summary(&proved).expect("summary");
+    let line = summary
+        .lines()
+        .find(|l| l.contains("CanForgeAndPost ("))
+        .expect("summary line for CanForgeAndPost");
+    assert!(
+        line.contains("verified"),
+        "tamarin should verify CanForgeAndPost; got line:\n{}",
+        line
+    );
+    assert!(
+        proved.contains("HonestSignatureKey( pk(~sk_sign_trustee1) ) @ #k"),
+        "tamarin's own proof must solve HonestSignatureKey explicitly"
+    );
 }

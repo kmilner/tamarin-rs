@@ -23,6 +23,8 @@ scripts/.corpus_full_truedl_*.txt
 scripts/__pycache__/
 scripts/results/
 scripts/*.tsv
+# …except the committed CI parity reference (rs_ref_check.sh / rs-parity job).
+!scripts/ci_ref_fast.tsv
 # scratch workflow scripts dropped by tooling runs
 scripts/.wf_*.js
 

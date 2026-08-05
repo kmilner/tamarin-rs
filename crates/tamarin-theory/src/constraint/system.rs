@@ -278,7 +278,7 @@ impl Clone for SystemContent {
             formulas: self.formulas.clone(),
             solved_formulas: self.solved_formulas.clone(),
             lemmas: self.lemmas.clone(),
-            last_atom: self.last_atom.clone(),
+            last_atom: self.last_atom,
             eq_store: SealedEqStore(self.eq_store.0.clone()),
             subterm_store: self.subterm_store.clone(),
             goals: self.goals.clone(),
@@ -1143,7 +1143,7 @@ impl System {
             for (j, fa) in ru.enumerate_premises() {
                 if let Some(ms) = crate::fact::proto_or_in_fact_view(fa) {
                     for (k, m) in ms.into_iter().enumerate() {
-                        out.push((i.clone(), j, k, m));
+                        out.push((*i, j, k, m));
                     }
                 }
             }
@@ -1166,7 +1166,7 @@ impl System {
                 continue;
             }
             if let Goal::Chain(from, to) = g {
-                out.push((from.clone(), to.clone()));
+                out.push((*from, *to));
             }
         }
         out
@@ -1187,7 +1187,7 @@ impl System {
                 continue;
             }
             if let Goal::Premise(premidx, fa) = g {
-                out.push((premidx.clone(), fa.clone()));
+                out.push((*premidx, fa.clone()));
             }
         }
         out
@@ -1592,8 +1592,7 @@ impl System {
     pub fn build_less_index(&self) -> LessIndex {
         let mut idx: LessIndex = tamarin_utils::FastMap::default();
         for (i, la) in self.less_atoms.iter().enumerate() {
-            idx.entry((la.smaller.clone(), la.larger.clone()))
-                .or_insert(i);
+            idx.entry((la.smaller, la.larger)).or_insert(i);
         }
         idx
     }
@@ -1616,7 +1615,7 @@ impl System {
     /// the last indexed insert (within `enforce_fresh_ordering_pass` the only
     /// mutators are these calls — Maude unifiability queries are read-only).
     pub fn add_less_indexed(&mut self, l: LessAtom, idx: &mut LessIndex) -> bool {
-        let key = (l.smaller.clone(), l.larger.clone());
+        let key = (l.smaller, l.larger);
         if let Some(&pos) = idx.get(&key) {
             self.content.less_atoms[pos] = l;
             false
@@ -1651,14 +1650,10 @@ impl System {
         let mut adj: std::collections::BTreeMap<NodeId, Vec<NodeId>> =
             std::collections::BTreeMap::new();
         for l in &self.less_atoms {
-            adj.entry(l.smaller.clone())
-                .or_default()
-                .push(l.larger.clone());
+            adj.entry(l.smaller).or_default().push(l.larger);
         }
         for e in &self.edges {
-            adj.entry(e.src.0.clone())
-                .or_default()
-                .push(e.tgt.0.clone());
+            adj.entry(e.src.0).or_default().push(e.tgt.0);
         }
         // HS-faithful `unsolvedChains` contribution to rawEdgeRel
         // (`System.hs`).
@@ -1667,7 +1662,7 @@ impl System {
                 continue;
             }
             if let crate::constraint::constraints::Goal::Chain(c, p) = g {
-                adj.entry(c.0.clone()).or_default().push(p.0.clone());
+                adj.entry(c.0).or_default().push(p.0);
             }
         }
         PrebuiltAdj { adj }
@@ -1694,16 +1689,16 @@ impl System {
         // BFS from i until j.
         let mut frontier: std::collections::VecDeque<NodeId> = std::collections::VecDeque::new();
         let mut visited: std::collections::BTreeSet<NodeId> = std::collections::BTreeSet::new();
-        frontier.push_back(i.clone());
-        visited.insert(i.clone());
+        frontier.push_back(*i);
+        visited.insert(*i);
         while let Some(n) = frontier.pop_front() {
             if let Some(nbrs) = adj.get(&n) {
                 for nb in nbrs {
                     if nb == j {
                         return true;
                     }
-                    if visited.insert(nb.clone()) {
-                        frontier.push_back(nb.clone());
+                    if visited.insert(*nb) {
+                        frontier.push_back(*nb);
                     }
                 }
             }
@@ -1747,6 +1742,23 @@ impl System {
     pub fn is_initial(&self) -> bool {
         self.solved_formulas.is_empty()
             && !crate::guarded::stores_contains(&self.formulas, &crate::guarded::gfalse())
+    }
+
+    /// Port of Haskell's `cleanup` (`ProofMethod.hs:310-311`):
+    ///
+    /// Resets the system's variable indices and clears the substitution.
+    pub fn cleanup(mut self) -> Self {
+        crate::constraint::solver::rename_precise::rename_precise_system(&mut self);
+        self.eq_store_mut().subst = tamarin_term::subst::Subst::from_list(Vec::new());
+        // The subst is inside `bounds_max`'s walk (dom + range,
+        // reduction.rs `bounds_max_rest`), so clearing it can LOWER the
+        // max free-var idx — while `rename_precise_system` invalidates
+        // the cache only when some var was actually remapped.  After an
+        // all-identity rename a pre-populated cache would survive with
+        // the pre-clear max (stale-high ⇒ fresh idxs minted above HS's).
+        // Invalidate so the next `bounds_max` recomputes post-clear.
+        self.invalidate_max_var_idx_cache();
+        self
     }
 }
 
@@ -2298,6 +2310,31 @@ mod tests {
         let c0 = s.content_stamp.get();
         s.set_last_atom(None);
         assert_ne!(s.content_stamp.get(), c0);
+    }
+
+    #[test]
+    fn cleanup_invalidates_max_var_idx_cache() {
+        use crate::constraint::solver::reduction::{bounds_max, bounds_max_uncached};
+        use tamarin_term::term::Term;
+        use tamarin_term::vterm::Lit;
+
+        // Per-name idxs dense from 0 make `rename_precise_system` the
+        // identity (no remap ⇒ no invalidation from the rename itself),
+        // while the subst holds the global max idx: `x.1` occurs nowhere
+        // outside the subst range, so `cleanup`'s subst-clear lowers the
+        // true max from 1 to 0.
+        let mut s = System::empty();
+        s.set_last_atom(Some(LVar::new("i", LSort::Node, 0)));
+        s.eq_store_mut().subst = tamarin_term::subst::Subst::from_list([(
+            LVar::new("x", LSort::Msg, 0),
+            Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 1))),
+        )]);
+        // Populate the cache with the pre-cleanup max (held by the subst).
+        assert_eq!(bounds_max(&s), 1);
+        let s = s.cleanup();
+        assert_eq!(bounds_max_uncached(&s), 0);
+        // The cached read must match — a stale cache would return 1 here.
+        assert_eq!(bounds_max(&s), 0);
     }
 
     #[test]

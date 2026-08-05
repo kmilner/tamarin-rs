@@ -354,7 +354,7 @@ mod tests {
     #[test]
     fn round_trip_var() {
         let v = LVar::new("x", LSort::Msg, 0);
-        let t: LNTerm = var_term(v.clone());
+        let t: LNTerm = var_term(v);
         let _ = t;
         // Direct construction with the lit literal so we don't need to
         // construct an LNTerm from an LVar via var_term (which expects
@@ -382,7 +382,7 @@ mod tests {
         // Bind MaudeVar(6, Fresh) -> ~k1 (a Fresh-sorted LVar).
         let k1 = LVar::new("~k", LSort::Fresh, 1);
         ctx.inverse
-            .insert(MaudeLit::MaudeVar(6, LSort::Fresh), Lit::Var(k1.clone()));
+            .insert(MaudeLit::MaudeVar(6, LSort::Fresh), Lit::Var(k1));
         // Maude references it back with a WIDENED sort (Msg); the strict
         // (6, Msg) key misses, but the (idx, any-sort) fallback recovers
         // the original Fresh-sorted LVar.
@@ -403,7 +403,7 @@ mod tests {
         // ctx only has MaudeVar(idx, Fresh) bound.
         let k = LVar::new("~k", LSort::Fresh, 3);
         ctx.inverse
-            .insert(MaudeLit::MaudeVar(4, LSort::Fresh), Lit::Var(k.clone()));
+            .insert(MaudeLit::MaudeVar(4, LSort::Fresh), Lit::Var(k));
         // Maude hands back the SAME idx widened to Msg.
         let mt: MTerm = Term::Lit(MaudeLit::MaudeVar(4, LSort::Msg));
         let mut next = 50;
@@ -431,8 +431,8 @@ mod tests {
         let mut ctx = ConvCtx::new();
         let m0 = MaudeLit::MaudeVar(0, LSort::Msg);
         let m1 = MaudeLit::MaudeVar(1, LSort::Msg);
-        ctx.inverse.insert(m0.clone(), Lit::Var(x10.clone()));
-        ctx.inverse.insert(m1.clone(), Lit::Var(x9.clone()));
+        ctx.inverse.insert(m0.clone(), Lit::Var(x10));
+        ctx.inverse.insert(m1.clone(), Lit::Var(x9));
 
         let mt: MTerm = Term::App(
             FunSym::C(CSym::EMap),

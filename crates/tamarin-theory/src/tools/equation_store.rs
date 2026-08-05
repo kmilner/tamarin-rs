@@ -72,7 +72,7 @@ fn freshen_witness_range(
     use std::collections::BTreeMap;
     use tamarin_term::lterm::HasFrees;
     let trace = tamarin_utils::env_gate!("TAM_DBG_FRESHEN_WITNESS");
-    let domain: BTreeSet<LVar> = raw.iter().map(|(v, _)| v.clone()).collect();
+    let domain: BTreeSet<LVar> = raw.iter().map(|(v, _)| *v).collect();
     // Witnesses = range-only vars that are neither a domain key nor an
     // input var (i.e. auxiliaries the Maude unifier introduced); these are
     // the ones that need a globally-unique idx.
@@ -85,7 +85,7 @@ fn freshen_witness_range(
             if input_vars.contains(w) {
                 return;
             }
-            witnesses.insert(w.clone());
+            witnesses.insert(*w);
         });
     }
     if witnesses.is_empty() {
@@ -97,7 +97,7 @@ fn freshen_witness_range(
     let mut renames: BTreeMap<LVar, LVar> = BTreeMap::new();
     for v in witnesses {
         let next = maude.fresh_idx();
-        renames.insert(v.clone(), LVar { idx: next, ..v });
+        renames.insert(v, LVar { idx: next, ..v });
     }
     if trace && !renames.is_empty() {
         eprintln!("[freshen_witness] {} witness renames", renames.len());
@@ -105,8 +105,8 @@ fn freshen_witness_range(
     // Apply the rename across each (var, term).  Keys get renamed too.
     raw.into_iter()
         .map(|(v, t)| {
-            let new_v = renames.get(&v).cloned().unwrap_or(v);
-            let new_t = t.map_free(&mut |w| renames.get(&w).cloned().unwrap_or(w));
+            let new_v = renames.get(&v).copied().unwrap_or(v);
+            let new_t = t.map_free(&mut |w| renames.get(&w).copied().unwrap_or(w));
             (new_v, new_t)
         })
         .collect()
@@ -413,7 +413,7 @@ impl EquationStore {
                                 break;
                             }
                         }
-                        seen.insert(v_str, (k.clone(), vv.clone()));
+                        seen.insert(v_str, (*k, *vv));
                     }
                 }
                 if found_bad {
@@ -849,10 +849,10 @@ impl EquationStore {
                 std::collections::BTreeSet::new();
             for e in &ac_residuals {
                 e.lhs.for_each_free(&mut |v| {
-                    input_vars.insert(v.clone());
+                    input_vars.insert(*v);
                 });
                 e.rhs.for_each_free(&mut |v| {
-                    input_vars.insert(v.clone());
+                    input_vars.insert(*v);
                 });
             }
             let raw = freshen_witness_range(
@@ -986,7 +986,7 @@ impl EquationStore {
     ) -> Result<SplitId, &'static str> {
         // Domain-disjointness check: free-subst domain must not
         // overlap with any variant's domain.
-        let free_dom: BTreeSet<LVar> = self.subst.dom().cloned().collect();
+        let free_dom: BTreeSet<LVar> = self.subst.dom().copied().collect();
         for v in &variants {
             if v.dom().any(|x| free_dom.contains(x)) {
                 return Err("addRuleVariants: nonempty intersection between domain \
@@ -1228,7 +1228,7 @@ impl EquationStore {
                     .iter()
                     .all(|s| s.image_of(v).map(|got| got == t).unwrap_or(false));
                 if common {
-                    common_mapping = Some((v.clone(), t.clone(), idx));
+                    common_mapping = Some((*v, t.clone(), idx));
                     break;
                 }
             }
@@ -1242,7 +1242,7 @@ impl EquationStore {
         };
         // Compose `{v → t}` into the free substitution and drop `v`
         // from every subst in disjunction `idx`.
-        let factor = LNSubst::from_list(vec![(v.clone(), t)]);
+        let factor = LNSubst::from_list(vec![(v, t)]);
         // HS-faithful order (`foreachDisj`, EquationStore.hs):
         // REPLACE the disj FIRST, THEN applyEqStore.  (For simpAbstractName
         // the factor's range is a constant; we follow the HS replace-then-
@@ -1349,7 +1349,7 @@ impl EquationStore {
                 for (i, (v, t)) in entries.iter().enumerate() {
                     for (v2, t2) in entries.iter().skip(i + 1) {
                         if t == t2 && v < v2 {
-                            out.push(((*v).clone(), (*v2).clone()));
+                            out.push((*(*v), *(*v2)));
                         }
                     }
                 }
@@ -1362,7 +1362,7 @@ impl EquationStore {
                     i1.is_some() && i1 == i2
                 });
                 if agrees {
-                    to_apply = Some((v.clone(), v2.clone(), idx));
+                    to_apply = Some((*v, *v2, idx));
                     break;
                 }
             }
@@ -1377,13 +1377,13 @@ impl EquationStore {
         // Decide which to keep: the variable with the larger sort
         // (Tamarin says "GT means keep first"; we use the same rule).
         let (keep, remove) = match sort_compare(v.sort, v2.sort) {
-            Some(std::cmp::Ordering::Greater) => (v2.clone(), v.clone()),
-            Some(_) => (v.clone(), v2.clone()),
+            Some(std::cmp::Ordering::Greater) => (v2, v),
+            Some(_) => (v, v2),
             None => return false, // incomparable sorts; bail
         };
         let factor = LNSubst::from_list(vec![(
-            remove.clone(),
-            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(keep.clone())),
+            remove,
+            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(keep)),
         )]);
         // HS-faithful: apply factor via apply_eq_store (re-unifies
         // variants against new free subst).  Falls back to compose if
@@ -1460,7 +1460,7 @@ impl EquationStore {
             // Borrowing scan — entries are cloned only on match.
             for (v, t) in first.iter() {
                 let lx = match t {
-                    Term::Lit(Lit::Var(lx)) => lx.clone(),
+                    Term::Lit(Lit::Var(lx)) => *lx,
                     _ => continue,
                 };
                 if !matches!(
@@ -1469,12 +1469,12 @@ impl EquationStore {
                 ) {
                     continue;
                 }
-                let mut lvs: Vec<LVar> = vec![lx.clone()];
+                let mut lvs: Vec<LVar> = vec![lx];
                 let mut all_match = true;
                 for other in d.substs.iter().skip(1) {
                     match other.image_of(v) {
                         Some(Term::Lit(Lit::Var(ly))) if ly.sort == lx.sort => {
-                            lvs.push(ly.clone());
+                            lvs.push(*ly);
                         }
                         _ => {
                             all_match = false;
@@ -1483,7 +1483,7 @@ impl EquationStore {
                     }
                 }
                 if all_match {
-                    to_apply = Some((v.clone(), lx.sort, lvs, idx));
+                    to_apply = Some((*v, lx.sort, lvs, idx));
                     break;
                 }
             }
@@ -1509,7 +1509,7 @@ impl EquationStore {
             );
         }
         // Compose {v → Var(fv)} into the free substitution.
-        let factor = LNSubst::from_list(vec![(v.clone(), Term::Lit(Lit::Var(fv.clone())))]);
+        let factor = LNSubst::from_list(vec![(v, Term::Lit(Lit::Var(fv)))]);
         // HS-faithful: foreachDisj (EquationStore.hs) REPLACES
         // the disj with the abstracted substs FIRST, THEN calls
         // `applyEqStore hnd msubst`.  Apply the abstraction to the disj
@@ -1523,7 +1523,7 @@ impl EquationStore {
             .zip(lvs.iter())
             .map(|(s, lv)| {
                 let mut kept = without_key(s, &v);
-                kept.push((fv.clone(), Term::Lit(Lit::Var(lv.clone()))));
+                kept.push((fv, Term::Lit(Lit::Var(*lv))));
                 LNSubstVFresh::from_list(kept)
             })
             .collect();
@@ -1587,7 +1587,7 @@ impl EquationStore {
                     }
                 }
                 if ok {
-                    to_apply = Some((idx, v.clone(), op, argss));
+                    to_apply = Some((idx, *v, op, argss));
                     break 'outer;
                 }
             }
@@ -1628,13 +1628,10 @@ impl EquationStore {
             }
             // Build factor `{v → op(x1, ..., xk)}`.
             let factor = LNSubst::from_list(vec![(
-                v.clone(),
+                v,
                 Term::App(
                     op,
-                    fvars
-                        .iter()
-                        .map(|fv| Term::Lit(Lit::Var(fv.clone())))
-                        .collect(),
+                    fvars.iter().map(|fv| Term::Lit(Lit::Var(*fv))).collect(),
                 ),
             )]);
             // Apply factor (via apply_eq_store if maude available).
@@ -1669,7 +1666,7 @@ impl EquationStore {
                 .map(|(s, args)| {
                     let mut kept = without_key(s, &v);
                     for (fv, a) in fvars.iter().zip(args.iter()) {
-                        kept.push((fv.clone(), a.clone()));
+                        kept.push((*fv, a.clone()));
                     }
                     LNSubstVFresh::from_list(kept)
                 })
@@ -1697,14 +1694,10 @@ impl EquationStore {
             }
             // Factor: `{v → op(fv1, fv2)}`
             let factor = LNSubst::from_list(vec![(
-                v.clone(),
+                v,
                 Term::App(
                     op,
-                    vec![
-                        Term::Lit(Lit::Var(fv1.clone())),
-                        Term::Lit(Lit::Var(fv2.clone())),
-                    ]
-                    .into(),
+                    vec![Term::Lit(Lit::Var(fv1)), Term::Lit(Lit::Var(fv2))].into(),
                 ),
             )]);
             // HS-faithful order (`foreachDisj`): replace the disj FIRST,
@@ -1734,8 +1727,8 @@ impl EquationStore {
                         // `newMappings (a:as) = [(fv1,a),(fv2,fApp o as)]`
                         [a1, rest @ ..] => (a1.clone(), Term::App(op, rest.to_vec().into())),
                     };
-                    kept.push((fv1.clone(), a1));
-                    kept.push((fv2.clone(), a_rest));
+                    kept.push((fv1, a1));
+                    kept.push((fv2, a_rest));
                     LNSubstVFresh::from_list(kept)
                 })
                 .collect();
@@ -2288,7 +2281,7 @@ impl EquationStore {
                         new_subst_range_max = v.idx;
                     }
                     if !new_subst_range_vars.contains(v) {
-                        new_subst_range_vars.insert(v.clone());
+                        new_subst_range_vars.insert(*v);
                     }
                 });
             }
@@ -2422,7 +2415,7 @@ impl EquationStore {
                     .iter()
                     .zip(renamed_rhs)
                     .map(|(&(lv, _), t)| {
-                        let lv_t = Term::Lit(Lit::Var(lv.clone()));
+                        let lv_t = Term::Lit(Lit::Var(*lv));
                         Equal {
                             lhs: tamarin_term::subst::apply_vterm(&new_subst, lv_t),
                             rhs: t,
@@ -2561,7 +2554,7 @@ impl EquationStore {
                 // witness and renames it, breaking the binding to the
                 // rule's premise (Client_auth Ltk vs In ltkS desync).
                 let orig_dom: tamarin_utils::FastSet<LVar> =
-                    bindings.iter().map(|&(k, _)| k.clone()).collect();
+                    bindings.iter().map(|&(k, _)| *k).collect();
                 for raw in unifiers {
                     // TAM_DBG_RAW_UNIFIER=1: dump Maude's raw output.
                     if aes_dbg_raw_unifier() {
@@ -2624,7 +2617,7 @@ impl EquationStore {
                     // `to_lift` carries the byte-visible order), so hash
                     // sets replace the per-unifier BTreeSet builds.
                     let current_dom: tamarin_utils::FastSet<LVar> =
-                        raw.iter().map(|(k, _)| k.clone()).collect();
+                        raw.iter().map(|(k, _)| *k).collect();
                     // `orig_dom` (this variant's ORIGINAL bindings.keys —
                     // the variant's system vars from its domain) is hoisted
                     // above the unifier loop; it participates in the
@@ -2638,8 +2631,8 @@ impl EquationStore {
                         t.for_each_free(&mut |v: &LVar| {
                             let is_system =
                                 new_subst_range_vars.contains(v) || orig_dom.contains(v);
-                            if is_system && !current_dom.contains(v) && seen.insert(v.clone()) {
-                                to_lift.push(v.clone());
+                            if is_system && !current_dom.contains(v) && seen.insert(*v) {
+                                to_lift.push(*v);
                             }
                         });
                     }
@@ -2668,13 +2661,13 @@ impl EquationStore {
                                 sort: s.sort,
                                 idx: base + i as u64,
                             };
-                            witnesses.push((s.clone(), w));
+                            witnesses.push((*s, w));
                         }
                     }
                     let witness_map: std::collections::BTreeMap<LVar, LVar> =
-                        witnesses.iter().cloned().collect();
+                        witnesses.iter().copied().collect();
                     let rename_term = |t: LNTerm| -> LNTerm {
-                        t.map_free(&mut |v: LVar| witness_map.get(&v).cloned().unwrap_or(v))
+                        t.map_free(&mut |v: LVar| witness_map.get(&v).copied().unwrap_or(v))
                     };
                     // Build lifted subst: rename range values, add
                     // S → Var(W) entries to domain.
@@ -2812,7 +2805,7 @@ impl EquationStore {
                                     break;
                                 }
                             }
-                            seen.insert(v_str, k.clone());
+                            seen.insert(v_str, *k);
                         }
                     }
                 }
@@ -3115,8 +3108,8 @@ mod tests {
         use tamarin_term::vterm::Lit;
         let v = LVar::new("x", LSort::Msg, 0);
         let foo: LNTerm = Term::Lit(Lit::Con(Name::new(NameTag::Pub, "foo".to_string())));
-        let s1 = LNSubstVFresh::from_list(vec![(v.clone(), foo.clone())]);
-        let s2 = LNSubstVFresh::from_list(vec![(v.clone(), foo.clone())]);
+        let s1 = LNSubstVFresh::from_list(vec![(v, foo.clone())]);
+        let s2 = LNSubstVFresh::from_list(vec![(v, foo.clone())]);
         let mut store = EquationStore::empty();
         let _ = store.add_disj(vec![s1, s2]);
         assert!(store.simp_abstract_name());
@@ -3229,8 +3222,8 @@ mod tests {
         let e10 = LVar::new("e", LSort::Msg, 10);
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
-        let lt1: LNTerm = Term::Lit(Lit::Var(t1.clone()));
-        let le10: LNTerm = Term::Lit(Lit::Var(e10.clone()));
+        let lt1: LNTerm = Term::Lit(Lit::Var(t1));
+        let le10: LNTerm = Term::Lit(Lit::Var(e10));
 
         let mut store = EquationStore::empty();
         let split = store
@@ -3283,8 +3276,8 @@ mod tests {
         let y = LVar::new("y", LSort::Msg, 0);
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
-        let tx: LNTerm = Term::Lit(Lit::Var(x.clone()));
-        let ty: LNTerm = Term::Lit(Lit::Var(y.clone()));
+        let tx: LNTerm = Term::Lit(Lit::Var(x));
+        let ty: LNTerm = Term::Lit(Lit::Var(y));
         let mut store = EquationStore::empty();
         let _ = store
             .add_eqs(&h, &[tamarin_term::rewriting::Equal { lhs: tx, rhs: ty }])
@@ -3339,8 +3332,8 @@ mod tests {
         let y = LVar::new("y", LSort::Msg, 5);
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
-        let tx: LNTerm = Term::Lit(Lit::Var(x.clone()));
-        let ty: LNTerm = Term::Lit(Lit::Var(y.clone()));
+        let tx: LNTerm = Term::Lit(Lit::Var(x));
+        let ty: LNTerm = Term::Lit(Lit::Var(y));
         let mut store = EquationStore::empty();
         let _ = store
             .add_eqs(
@@ -3351,13 +3344,13 @@ mod tests {
                 }],
             )
             .expect("first add_eqs");
-        let dom_before: Vec<LVar> = store.subst.dom().cloned().collect();
+        let dom_before: Vec<LVar> = store.subst.dom().copied().collect();
 
         // Repeat — should be a no-op.
         let _ = store
             .add_eqs(&h, &[tamarin_term::rewriting::Equal { lhs: tx, rhs: ty }])
             .expect("second add_eqs");
-        let dom_after: Vec<LVar> = store.subst.dom().cloned().collect();
+        let dom_after: Vec<LVar> = store.subst.dom().copied().collect();
         assert_eq!(
             dom_before, dom_after,
             "Repeated add_eqs of an already-implied equation must \

@@ -26,6 +26,13 @@ point at other binaries.
 - **`pane_byte_check.sh`** — byte-exact (not just semantic) check of the
   `main/message` + `main/rules` panes against the web cache. Run when byte
   fidelity of pane HTML matters.
+- **`rs_ref_check.sh`** — CI parity gate: `check` compares one binary's
+  stripped `--prove` output hashes against the committed reference
+  `ci_ref_fast.tsv` (what the `rs-parity` CI job runs on every PR);
+  `generate` rewrites that reference from a trusted build of main — manual,
+  needed only after a deliberate output change, a submodule bump, or a Maude
+  version change (the pinned version is recorded in the reference header and
+  enforced).
 
 ## Web-gate internals (invoked by the gates, rarely by hand)
 
@@ -42,8 +49,11 @@ point at other binaries.
   lemma-level granularity in a sweep.
 - **`compare_parity_tsv.py`** — diff two `corpus_raw_diff` TSVs to list
   regressions/improvements between two runs.
-- **`rs_vs_rs_diff.sh`** — sweep TWO Rust binaries (pre/post refactor) over
-  the corpus with no HS involved; proves a refactor behaviorally inert.
+- **`rs_vs_rs_diff.sh`** — sweep TWO Rust binaries (pre/post refactor, via
+  `PRE=`/`POST=`) over the corpus with no HS involved; proves a refactor
+  behaviorally inert.  Applies `file_flags.tsv` per file, defaults to the
+  parity corpus, and reports prover failures as `ERROR_*` rows rather than
+  scoring identical failure output as agreement.
 - **`triage_diff_vs_hs.sh`** — 3-way follow-up for `rs_vs_rs_diff` DIFFs:
   did the refactor move RS toward or away from HS?
 - **`diff_maude_io.sh`** — side-by-side HS↔RS Maude command/response trace
@@ -52,7 +62,8 @@ point at other binaries.
   site between engines; deep-solver flow triage.
 - **`corpus_full_trace_diff.sh`** + **`canonicalize_trace.py`** +
   **`diff_trace.py`** — canonicalized `[EXEC]` solver-trace diffing across
-  the corpus; the heavy artillery for step-level divergence hunting.
+  the corpus; the most detailed comparison, for locating the exact solver
+  step where two runs diverge.
 - **`diff_proof_tree.sh`** + **`canon_proof_tree.py`** +
   **`corpus_diff_proof_trees.sh`** — STRUCTURAL proof-tree comparison from
   the pre-byte-parity era; superseded by the byte gates (identical bytes ⇒
@@ -77,14 +88,20 @@ point at other binaries.
   spans); `--check` for CI-style staleness, `--preview FILE` for one file.
 - **`extend_anchor_citations.py`** — rewrites bare `Foo.hs:162` citations
   into function-extent ranges (`Foo.hs:150-183, see line 162`) so blame
-  scopes stay honest.
+  scopes stay accurate.
 - **`header_identities.json`** — email → GitHub-username map used by the
   header generator.
 
-## Data files (tracked, load-bearing)
+## Data files (tracked)
 
 - **`file_flags.tsv`** — canonical per-file extra prover flags (`@cd`,
   defines, …); consumed by every gate.
 - **`parity_corpus.txt`** — the canonical 419-file gate corpus.
+- **`parity_corpus_fast.txt`** — the 351-file CI subset: every parity file
+  proving in ≤1.5 s (plus the fastest member of otherwise-absent families);
+  sized so a GitHub runner finishes in minutes.
+- **`ci_ref_fast.tsv`** — committed reference for `rs_ref_check.sh`: per file,
+  an input key (theory sha + flags hash) and the sha256 of main's stripped
+  `--prove` stdout.
 - **`websweep_residual.txt`** — the accepted web-parity residue ledger
   (witness-index family); consulted on submodule bumps.

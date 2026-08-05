@@ -170,7 +170,7 @@ pub fn trimmed_pair_terms(
         .zip(behaviours.iter())
         .flat_map(|(term, behaviour)| {
             let leaves = shape_term(term, behaviour.len());
-            behaviour.iter().cloned().zip(leaves).collect::<Vec<_>>()
+            behaviour.iter().copied().zip(leaves).collect::<Vec<_>>()
         })
         .collect();
     Some((first, pairs))
@@ -331,8 +331,8 @@ pub fn simple_injective_fact_instances(
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
         match t {
-            Term::Lit(Lit::Con(n)) => Some(Term::Lit(Lit::Con(n.clone()))),
-            Term::Lit(Lit::Var(BVar::Free(v))) => Some(Term::Lit(Lit::Var(v.clone()))),
+            Term::Lit(Lit::Con(n)) => Some(Term::Lit(Lit::Con(*n))),
+            Term::Lit(Lit::Var(BVar::Free(v))) => Some(Term::Lit(Lit::Var(*v))),
             Term::Lit(Lit::Var(BVar::Bound(_))) => None,
             Term::App(sym, args) => {
                 let mapped: Option<Vec<LNTerm>> = args.iter().map(bvar_term_to_lnterm).collect();
@@ -364,7 +364,7 @@ pub fn simple_injective_fact_instances(
     let mut candidates: BTreeMap<FactTag, Vec<Vec<MonotonicBehaviour>>> = BTreeMap::new();
     for &r in rules {
         let prem_tags: std::collections::BTreeSet<FactTag> =
-            r.premises.iter().map(|p| p.tag.clone()).collect();
+            r.premises.iter().map(|p| p.tag).collect();
         for conc in &r.conclusions {
             let tag = &conc.tag;
             if !matches!(tag, FactTag::Proto(_, _, _)) {
@@ -382,7 +382,7 @@ pub fn simple_injective_fact_instances(
                 }
                 let shape = combine_shapes(&get_shape(conc), &get_shape(prem));
                 candidates
-                    .entry(tag.clone())
+                    .entry(*tag)
                     .and_modify(|existing| *existing = combine_shapes(existing, &shape))
                     .or_insert(shape);
             }
@@ -494,7 +494,7 @@ pub fn simple_injective_fact_instances(
             .iter()
             .map(|&r| get_maybe_eq_strict(tag, r, default_shape));
         if let Some(behaviours) = combine_all(per_rule, default_shape) {
-            out.push((tag.clone(), behaviours));
+            out.push((*tag, behaviours));
         }
     }
     out
@@ -536,7 +536,7 @@ pub fn union_forced_injective_fact_instances(
         // `S.union` is LEFT-biased; the forced entry wins on collision.
         let arity = fact_tag_arity(tag);
         let behaviour = vec![vec![MonotonicBehaviour::Unspecified]; arity];
-        map.insert(tag.clone(), behaviour);
+        map.insert(*tag, behaviour);
     }
     map.into_iter().collect()
 }
@@ -569,7 +569,7 @@ mod tests {
         use tamarin_term::builtin::msg_var;
 
         let a_tag = FactTag::Proto(Multiplicity::Linear, "A", 1);
-        let a_fact = Fact::new(a_tag.clone(), vec![msg_var("x", 0)]);
+        let a_fact = Fact::new(a_tag, vec![msg_var("x", 0)]);
         let start: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("Start"),
             vec![fresh_fact(msg_var("x", 0))],
@@ -604,7 +604,7 @@ mod tests {
         use tamarin_term::builtin::msg_var;
 
         let s_tag = FactTag::Proto(Multiplicity::Linear, "S", 2);
-        let s_fact = Fact::new(s_tag.clone(), vec![msg_var("id", 0), msg_var("k", 0)]);
+        let s_fact = Fact::new(s_tag, vec![msg_var("id", 0), msg_var("k", 0)]);
         let init: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("Init"),
             vec![fresh_fact(msg_var("id", 0))],
@@ -636,7 +636,7 @@ mod tests {
         use tamarin_term::builtin::msg_var;
 
         let b_tag = FactTag::Proto(Multiplicity::Linear, "B", 1);
-        let b_fact = Fact::new(b_tag.clone(), vec![msg_var("y", 0)]);
+        let b_fact = Fact::new(b_tag, vec![msg_var("y", 0)]);
         // No Fresh premise binding `y`, no `B` premise.
         let weird: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("Weird"),
@@ -661,18 +661,18 @@ mod tests {
 
         let s_tag = FactTag::Proto(Multiplicity::Linear, "S", 2);
         let prem_fact = Fact::new(
-            s_tag.clone(),
+            s_tag,
             vec![msg_var("id", 0), pair(msg_var("a", 0), msg_var("b", 0))],
         );
         let conc_fact = Fact::new(
-            s_tag.clone(),
+            s_tag,
             vec![msg_var("id", 0), pair(msg_var("a", 0), msg_var("c", 0))],
         );
         let init: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("Init"),
             vec![fresh_fact(msg_var("id", 0))],
             vec![Fact::new(
-                s_tag.clone(),
+                s_tag,
                 vec![msg_var("id", 0), pair(msg_var("a", 0), msg_var("b", 0))],
             )],
             vec![],
@@ -708,7 +708,7 @@ mod tests {
         use tamarin_term::builtin::msg_var;
 
         let a_tag = FactTag::Proto(Multiplicity::Linear, "A", 1);
-        let a_fact = Fact::new(a_tag.clone(), vec![msg_var("x", 0)]);
+        let a_fact = Fact::new(a_tag, vec![msg_var("x", 0)]);
         let r: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("Dup"),
             vec![a_fact.clone()],
@@ -756,7 +756,7 @@ mod tests {
         use tamarin_term::builtin::msg_var;
 
         let st_tag = FactTag::Proto(Multiplicity::Linear, "St", 2);
-        let st_fact = Fact::new(st_tag.clone(), vec![msg_var("x", 0), msg_var("k", 0)]);
+        let st_fact = Fact::new(st_tag, vec![msg_var("x", 0), msg_var("k", 0)]);
         // Step1 creates St but doesn't consume it.
         let step1: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("Step1"),
@@ -794,7 +794,7 @@ mod tests {
         use tamarin_term::builtin::msg_var;
 
         let p_tag = FactTag::Proto(Multiplicity::Persistent, "P", 1);
-        let p_fact = Fact::new(p_tag.clone(), vec![msg_var("x", 0)]);
+        let p_fact = Fact::new(p_tag, vec![msg_var("x", 0)]);
         // Even with both prems + concs (which would normally pass the
         // candidate filter), Persistent disqualifies.
         let r: ProtoRuleE = Rule::new(
@@ -822,7 +822,7 @@ mod tests {
         use crate::rule::{ProtoRuleEInfo, Rule};
 
         let z_tag = FactTag::Proto(Multiplicity::Linear, "Z", 0);
-        let z_fact = Fact::new(z_tag.clone(), vec![]);
+        let z_fact = Fact::new(z_tag, vec![]);
         let r: ProtoRuleE = Rule::new(
             ProtoRuleEInfo::standard("R"),
             vec![z_fact.clone()],

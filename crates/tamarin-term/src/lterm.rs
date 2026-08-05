@@ -84,7 +84,7 @@ pub fn sort_suffix(s: LSort) -> &'static str {
 // Names
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NameId(pub &'static str);
 
 impl NameId {
@@ -104,7 +104,7 @@ pub enum NameTag {
     Nat,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Name {
     pub tag: NameTag,
     pub id: NameId,
@@ -168,7 +168,7 @@ pub fn sort_of_name(n: &Name) -> LSort {
 /// pattern vars (small idx like t.1, t.2) are NEVER keys, so all
 /// stable-keyed bindings drop and pattern vars stay unbound for runtime
 /// `applySource` to bind cleanly.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct LVar {
     /// Interned `&'static str` (see [`crate::intern`]): clone is a pointer
     /// copy — no alloc, no atomic refcount — and equal names share one copy.
@@ -474,7 +474,7 @@ pub trait HasFrees {
 /// `freesList`: every free `LVar`, in traversal order (with duplicates).
 pub fn frees_list<T: HasFrees>(t: &T) -> Vec<LVar> {
     let mut out = Vec::new();
-    t.for_each_free(&mut |v| out.push(v.clone()));
+    t.for_each_free(&mut |v| out.push(*v));
     out
 }
 
@@ -785,7 +785,7 @@ mod tests {
     #[test]
     fn lvar_predicates() {
         let v = LVar::new("x", LSort::Msg, 0);
-        let t: LNTerm = var_term(v.clone());
+        let t: LNTerm = var_term(v);
         assert!(is_msg_var(&t));
         assert!(!is_pub_var(&t));
         assert_eq!(get_var(&t), Some(&v));

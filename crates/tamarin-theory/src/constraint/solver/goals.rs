@@ -2666,14 +2666,14 @@ pub(crate) fn reachable_set_adj(
     use std::collections::{BTreeSet, VecDeque};
     let mut seen: BTreeSet<crate::constraint::constraints::NodeId> = BTreeSet::new();
     let mut q: VecDeque<crate::constraint::constraints::NodeId> = VecDeque::new();
-    q.push_back(from.clone());
+    q.push_back(*from);
     while let Some(n) = q.pop_front() {
-        if !seen.insert(n.clone()) {
+        if !seen.insert(n) {
             continue;
         }
         if let Some(succs) = adj.get(&n) {
             for s in succs {
-                q.push_back(s.clone());
+                q.push_back(*s);
             }
         }
     }
@@ -3046,9 +3046,9 @@ mod tests {
         let n: NodeId = LVar::new("i", LSort::Node, 0);
         let f: LNFact = LNFact::new(FactTag::Proto(Multiplicity::Linear, "F", 0), vec![]);
 
-        let action: Goal = Goal::Action(v.clone(), f.clone());
-        let chain: Goal = Goal::Chain((n.clone(), ConcIdx(0)), (n.clone(), PremIdx(0)));
-        let premise: Goal = Goal::Premise((n.clone(), PremIdx(0)), f.clone());
+        let action: Goal = Goal::Action(v, f.clone());
+        let chain: Goal = Goal::Chain((n, ConcIdx(0)), (n, PremIdx(0)));
+        let premise: Goal = Goal::Premise((n, PremIdx(0)), f.clone());
         let split: Goal = Goal::Split(SplitId(0));
         let disj: Goal = Goal::Disj(Disj::<crate::guarded::Guarded>::new(vec![]));
         // Use plain msg vars for the Subterm pair.
@@ -3131,9 +3131,9 @@ mod tests {
 
         // Build one of each variant in Haskell's declaration order.
         let variants = [
-            Goal::Action(v.clone(), f.clone()),
-            Goal::Chain((n.clone(), ConcIdx(0)), (n.clone(), PremIdx(0))),
-            Goal::Premise((n.clone(), PremIdx(0)), f.clone()),
+            Goal::Action(v, f.clone()),
+            Goal::Chain((n, ConcIdx(0)), (n, PremIdx(0))),
+            Goal::Premise((n, PremIdx(0)), f.clone()),
             Goal::Split(SplitId(0)),
             Goal::Disj(Disj::<crate::guarded::Guarded>::new(vec![])),
             Goal::Subterm((

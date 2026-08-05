@@ -7,8 +7,8 @@
 //! Integration tests that exercise the autoprove endpoint.
 //!
 //! These tests run the actual Rust solver via `prove_lemma` and so
-//! need a working `maude` binary on PATH (any common location detected
-//! by `start_server_with_theory`).  They are tagged with the small
+//! need a working `maude` binary: `MAUDE_PATH` if set, else a common
+//! location probed by `start_server_with_theory`, else `maude` on PATH.  They are tagged with the small
 //! `issue193.spthy` fixture because it has only one trivial
 //! exists-trace lemma (`debug`) that the solver dispatches in well
 //! under a second.

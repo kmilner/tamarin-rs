@@ -392,7 +392,7 @@ pub fn add_auto_sources_lemma(
             let t_is_eligible = tamarin_term::term::is_pair(&t)
                 || tamarin_term::term::is_ac(&t)
                 || tamarin_term::lterm::is_msg_var(&t);
-            if is_proto && t_is_eligible && unsolved_prem_keys.contains(&(nodeid.clone(), pid)) {
+            if is_proto && t_is_eligible && unsolved_prem_keys.contains(&(nodeid, pid)) {
                 for pos in &positions {
                     input_rules.push((ri, InRule::Fact(premise.clone()), (pid, tidx, pos.clone())));
                 }

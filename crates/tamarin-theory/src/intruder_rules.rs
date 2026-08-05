@@ -972,7 +972,7 @@ fn variants_intruder_with(
     // is applied to.
     // `restrict` key-set is loop-invariant (`packed_frees` never mutates), so
     // materialise the `Vec<LVar>` once rather than per variant subst.
-    let packed_frees_vec: Vec<LVar> = packed_frees.iter().cloned().collect();
+    let packed_frees_vec: Vec<LVar> = packed_frees.iter().copied().collect();
     let cleaned: Vec<LNSubstVFresh> = raw_substs
         .into_iter()
         .map(|pairs| {
@@ -1036,7 +1036,7 @@ fn variants_intruder_with(
                 .map(|f| {
                     // norm/subst rebuild — frees can change; recompute the bloom.
                     let terms: Vec<LNTerm> = f.terms.iter().map(|t| norm_t(t.clone())).collect();
-                    LNFact::fresh_annotated(f.tag.clone(), f.annotations.clone(), terms)
+                    LNFact::fresh_annotated(f.tag, f.annotations.clone(), terms)
                 })
                 .collect()
         };
@@ -1221,14 +1221,14 @@ pub fn equal_rule_up_to_renaming(
     let vars_r1: Vec<LVar> = {
         let mut s: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
         r1.for_each_free(&mut |v| {
-            s.insert(v.clone());
+            s.insert(*v);
         });
         s.into_iter().collect()
     };
     let vars_r2: Vec<LVar> = {
         let mut s: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
         r2.for_each_free(&mut |v| {
-            s.insert(v.clone());
+            s.insert(*v);
         });
         s.into_iter().collect()
     };
@@ -1294,7 +1294,7 @@ pub(crate) fn norm_rule(
     let norm_fact = |f: &LNFact| -> LNFact {
         // norm rebuild — frees can change; recompute the bloom.
         let terms: Vec<LNTerm> = f.terms.iter().map(&norm_t).collect();
-        LNFact::fresh_annotated(f.tag.clone(), f.annotations.clone(), terms)
+        LNFact::fresh_annotated(f.tag, f.annotations.clone(), terms)
     };
     Rule {
         info: ru.info.clone(),
@@ -1688,7 +1688,7 @@ fn bp_variants_intruder(
         let mut out: Vec<LNSubstVFresh> = Vec::new();
         for s in substs {
             let mappings = s.to_list();
-            let doms: Vec<LVar> = mappings.iter().map(|(d, _)| d.clone()).collect();
+            let doms: Vec<LVar> = mappings.iter().map(|(d, _)| *d).collect();
             let mut rngs: Vec<LNTerm> = mappings.iter().map(|(_, t)| t.clone()).collect();
             // `sort rngs` — `Ord LNTerm`.
             rngs.sort();
@@ -2260,7 +2260,7 @@ mod tests {
             tag: NameTag::Pub,
             id: NameId::new("b"),
         };
-        let pa: LNTerm = Term::Lit(Lit::Con(pub_a.clone()));
+        let pa: LNTerm = Term::Lit(Lit::Con(pub_a));
         let pb: LNTerm = Term::Lit(Lit::Con(pub_b));
         let lhs = senc(Term::Lit(Lit::Var(x)), pair(pa.clone(), pb));
         let rhs_st = StRhs {

@@ -45,11 +45,11 @@ pub fn compress_system(mut sys: RenderSystem) -> RenderSystem {
     // name).
     let mut frees: BTreeSet<NodeId> = BTreeSet::new();
     for la in &sys.less_atoms {
-        frees.insert(la.smaller.clone());
-        frees.insert(la.larger.clone());
+        frees.insert(la.smaller);
+        frees.insert(la.larger);
     }
     for (id, _) in sys.nodes.iter() {
-        frees.insert(id.clone());
+        frees.insert(*id);
     }
     for v in frees {
         sys = try_hide_node_id(&v, sys);
@@ -93,7 +93,7 @@ fn unsolved_chain_pairs(sys: &System) -> Vec<(NodeId, NodeId)> {
                 return None;
             }
             if let Goal::Chain(src, tgt) = g {
-                Some((src.0.clone(), tgt.0.clone()))
+                Some((src.0, tgt.0))
             } else {
                 None
             }
@@ -106,9 +106,7 @@ fn unsolved_chain_pairs(sys: &System) -> Vec<(NodeId, NodeId)> {
 fn build_raw_edge_adjacency(sys: &System) -> BTreeMap<NodeId, Vec<NodeId>> {
     let mut adj: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
     for e in &sys.edges {
-        adj.entry(e.src.0.clone())
-            .or_default()
-            .push(e.tgt.0.clone());
+        adj.entry(e.src.0).or_default().push(e.tgt.0);
     }
     for (from, to) in unsolved_chain_pairs(sys) {
         adj.entry(from).or_default().push(to);
@@ -120,17 +118,17 @@ fn reachable(adj: &BTreeMap<NodeId, Vec<NodeId>>, from: &NodeId, to: &NodeId) ->
     if from == to {
         return false;
     }
-    let mut stack: Vec<NodeId> = vec![from.clone()];
+    let mut stack: Vec<NodeId> = vec![*from];
     let mut visited: BTreeSet<NodeId> = BTreeSet::new();
-    visited.insert(from.clone());
+    visited.insert(*from);
     while let Some(cur) = stack.pop() {
         if let Some(nbrs) = adj.get(&cur) {
             for nb in nbrs {
                 if nb == to {
                     return true;
                 }
-                if visited.insert(nb.clone()) {
-                    stack.push(nb.clone());
+                if visited.insert(*nb) {
+                    stack.push(*nb);
                 }
             }
         }
@@ -246,7 +244,7 @@ fn try_hide_action(v: &NodeId, sys: RenderSystem) -> Result<RenderSystem, Render
             }
             if let Goal::Action(n, fa) = g {
                 if n == v && matches!(fa.tag, FactTag::Ku) && !fa.terms.is_empty() {
-                    return Some((n.clone(), fa.clone()));
+                    return Some((*n, fa.clone()));
                 }
             }
             None
@@ -299,8 +297,8 @@ fn try_hide_action(v: &NodeId, sys: RenderSystem) -> Result<RenderSystem, Render
         .iter()
         .flat_map(|i| {
             l_outs.iter().map(move |o| LessAtom {
-                smaller: i.smaller.clone(),
-                larger: o.larger.clone(),
+                smaller: i.smaller,
+                larger: o.larger,
                 reason: o.reason,
             })
         })
@@ -374,8 +372,8 @@ fn try_hide_rule(
         .iter()
         .flat_map(|ei| {
             e_outs.iter().map(move |eo| Edge {
-                src: ei.src.clone(),
-                tgt: eo.tgt.clone(),
+                src: ei.src,
+                tgt: eo.tgt,
             })
         })
         .collect();
@@ -484,10 +482,10 @@ pub fn transitive_reduction(sys: RenderSystem, total_red: bool) -> RenderSystem 
     let mut old_lesses: Vec<(NodeId, NodeId)> = sys
         .less_atoms
         .iter()
-        .map(|la| (la.smaller.clone(), la.larger.clone()))
+        .map(|la| (la.smaller, la.larger))
         .collect();
     for e in &sys.edges {
-        old_lesses.push((e.src.0.clone(), e.tgt.0.clone()));
+        old_lesses.push((e.src.0, e.tgt.0));
     }
     old_lesses.extend(unsolved_chain_pairs(&sys));
     // If there's a cycle in the combined graph we bail, matching Haskell's
@@ -504,7 +502,7 @@ pub fn transitive_reduction(sys: RenderSystem, total_red: bool) -> RenderSystem 
         .collect();
     let mut sys = sys;
     sys.content_mut().less_atoms.retain(|la| {
-        let p = (la.smaller.clone(), la.larger.clone());
+        let p = (la.smaller, la.larger);
         if total_red {
             kept.contains(&p)
         } else {
@@ -639,16 +637,16 @@ mod tests {
         let n1 = nid("i", 1);
         let n2 = nid("i", 2);
         let n3 = nid("i", 3);
-        sys.add_node(n1.clone(), r1);
-        sys.add_node(n2.clone(), r2);
-        sys.add_node(n3.clone(), r3);
+        sys.add_node(n1, r1);
+        sys.add_node(n2, r2);
+        sys.add_node(n3, r3);
         sys.content_mut().edges.push(Edge {
-            src: (n1.clone(), ConcIdx(0)),
-            tgt: (n2.clone(), PremIdx(0)),
+            src: (n1, ConcIdx(0)),
+            tgt: (n2, PremIdx(0)),
         });
         sys.content_mut().edges.push(Edge {
-            src: (n2.clone(), ConcIdx(0)),
-            tgt: (n3.clone(), PremIdx(0)),
+            src: (n2, ConcIdx(0)),
+            tgt: (n3, PremIdx(0)),
         });
         let out = compress_system(RenderSystem::from_prover(sys));
         assert!(
@@ -682,7 +680,7 @@ mod tests {
             vec![out_fact(kvar.clone())], // has an action
         );
         let n1 = nid("i", 1);
-        sys.add_node(n1.clone(), r1);
+        sys.add_node(n1, r1);
         let out = compress_system(RenderSystem::from_prover(sys));
         assert!(out.nodes.iter().any(|(id, _)| id == &n1));
     }
@@ -724,16 +722,16 @@ mod tests {
         let n1 = nid("i", 1);
         let n2 = nid("i", 2);
         let n3 = nid("i", 3);
-        sys.add_node(n1.clone(), r1);
-        sys.add_node(n2.clone(), r2);
-        sys.add_node(n3.clone(), r3);
+        sys.add_node(n1, r1);
+        sys.add_node(n2, r2);
+        sys.add_node(n3, r3);
         sys.content_mut().edges.push(Edge {
-            src: (n1.clone(), ConcIdx(0)),
-            tgt: (n2.clone(), PremIdx(0)),
+            src: (n1, ConcIdx(0)),
+            tgt: (n2, PremIdx(0)),
         });
         sys.content_mut().edges.push(Edge {
-            src: (n2.clone(), ConcIdx(0)),
-            tgt: (n3.clone(), PremIdx(0)),
+            src: (n2, ConcIdx(0)),
+            tgt: (n3, PremIdx(0)),
         });
         let out = compress_system(RenderSystem::from_prover(sys));
         assert!(

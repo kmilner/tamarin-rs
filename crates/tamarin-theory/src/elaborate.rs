@@ -1564,7 +1564,7 @@ fn compute_new_vars(
 fn collect_vars(t: &tamarin_term::lterm::LNTerm, out: &mut BTreeSet<LVar>) {
     match t {
         Term::Lit(Lit::Var(v)) => {
-            out.insert(v.clone());
+            out.insert(*v);
         }
         Term::Lit(_) => {}
         Term::App(_, args) => {

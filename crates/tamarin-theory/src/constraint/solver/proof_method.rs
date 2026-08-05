@@ -427,16 +427,6 @@ pub fn exec_proof_method(
                 };
             }
             simp_noop_stat(false);
-            // HS-faithful `cleanup` (ProofMethod.hs): EVERY
-            // proof method's cases pass through `map (fmap cleanup .
-            // fst)`, and `Simplify` goes through `process` — so its
-            // output is ALSO cleaned.
-            let cleanup = |s: &System| -> System {
-                let mut s2 = s.clone();
-                crate::constraint::solver::rename_precise::rename_precise_system(&mut s2);
-                s2.eq_store_mut().subst = tamarin_term::subst::Subst::from_list(Vec::new());
-                s2
-            };
             // HS-faithful filter: cases whose eq_store is false were
             // mzero'd by `contradictoryIf` during simplify; they don't
             // show up in HS's surviving Disj.  (Other contradiction
@@ -444,17 +434,13 @@ pub fn exec_proof_method(
             let cleaned: Vec<System> = case_systems
                 .into_iter()
                 .filter(|s| !s.eq_store.is_false())
-                .map(|mut s| {
+                .map(|s| {
                     // HS-faithful `cleanup` (ProofMethod.hs) applied in
                     // place: `case_systems` is owned here (from
                     // `simplify_system_with_fanout`'s into_iter), so we
                     // rename and clear the subst on the owned System
-                    // directly.  Value-identical to `cleanup(&s)`; that
-                    // closure only clones because its callers hand it a
-                    // `&System` (the borrowed `cleanup(sys)` site below).
-                    crate::constraint::solver::rename_precise::rename_precise_system(&mut s);
-                    s.eq_store_mut().subst = tamarin_term::subst::Subst::from_list(Vec::new());
-                    s
+                    // directly.
+                    s.cleanup()
                 })
                 .collect();
             // HS-faithful `removeRedundantCases ctxt [] snd`
@@ -488,7 +474,7 @@ pub fn exec_proof_method(
             if cleaned.is_empty() {
                 return Some(Vec::new());
             }
-            let cleaned_input = cleanup(sys);
+            let cleaned_input = sys.clone().cleanup();
             if cleaned.len() == 1 {
                 // Single-case path: HS's `Simplify` arm (ProofMethod.hs)
                 // checks whether the simplified system equals the cleaned
@@ -561,16 +547,7 @@ pub fn exec_proof_method(
                 // `cleanup` (ProofMethod.hs):
                 //   cleanup s = L.set sSubst emptySubst
                 //                       (renamePrecise s)
-                let mut out: Vec<System> = Vec::with_capacity(raw_systems.len());
-                for mut s in raw_systems {
-                    crate::constraint::solver::rename_precise::rename_precise_system(&mut s);
-                    if !s.eq_store.is_false() {
-                        s.invalidate_max_var_idx_cache();
-                        s.eq_store_mut().subst = tamarin_term::subst::Subst::from_list(Vec::new());
-                    }
-                    out.push(s);
-                }
-                out
+                raw_systems.into_iter().map(|s| s.cleanup()).collect()
             };
             // Filter cases the same way Haskell's `runReduction` does:
             // when a CR-rule called `contradictoryIf` during simplify
@@ -751,11 +728,6 @@ pub fn exec_proof_method(
             // execs Induction while the batch search does not).
             // Route through `simplify_system_with_fanout` exactly like the
             // `Simplify` and `SolveGoal` arms.
-            let cleanup = |s: &mut System| {
-                crate::constraint::solver::rename_precise::rename_precise_system(s);
-                s.invalidate_max_var_idx_cache();
-                s.eq_store_mut().subst = tamarin_term::subst::Subst::from_list(Vec::new());
-            };
             // HS branch order: `disjunctionOfList [("empty_trace", base),
             // ("non_empty_trace", step)]` — base first, then step; each
             // branch's simplify sub-branches keep DisjT order (the same
@@ -772,7 +744,7 @@ pub fn exec_proof_method(
                 case_sys.formulas_mut().push(std::sync::Arc::new(fm_case));
                 let sub_systems: Vec<System> =
                     crate::constraint::solver::simplify::simplify_system_with_fanout(ctx, case_sys);
-                for mut s in sub_systems {
+                for s in sub_systems {
                     // mzero'd branches (eq-store false) don't survive HS's
                     // Disj — same filter as the Simplify/SolveGoal arms.
                     if s.eq_store.is_false() {
@@ -783,8 +755,7 @@ pub fn exec_proof_method(
                     // subst.  Without it the IH disjunction's free vars
                     // keep their high `.N` indices (e.g. `last(#z.7)`)
                     // instead of the canonical idx-0 form (`last(#z)`).
-                    cleanup(&mut s);
-                    named.push((name.to_string(), s));
+                    named.push((name.to_string(), s.cleanup()));
                 }
             }
             // HS `process` tail: `removeRedundantCases ctxt [] snd`
