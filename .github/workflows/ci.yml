@@ -25,7 +25,26 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
+    # Release compilation of the workspace's ~60 test targets (not test
+    # execution, which is ~1.5m) dominates this job, so it is split into
+    # three legs that build and run concurrently.  The legs together cover
+    # every workspace member exactly once.
+    name: test (${{ matrix.name }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: term-parser
+            packages: -p tamarin-utils -p tamarin-term -p tamarin-parser -p tamarin-export
+          - name: theory
+            packages: -p tamarin-theory
+          - name: prover-server
+            packages: -p tamarin-sapic -p tamarin-accountability -p tamarin-prover -p tamarin-server
+    env:
+      # The ~44 integration-test binaries each link the full stack; lld
+      # links them several times faster than the default bfd ld.
+      RUSTFLAGS: -C link-arg=-fuse-ld=lld
     steps:
       # Submodule: intruder-variant data the build include_str!'s.
       - uses: actions/checkout@v7
@@ -33,6 +52,11 @@ jobs:
           submodules: true
       - run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Matrix values are not part of the action's automatic key.
+          key: ${{ matrix.name }}
+      - name: Install lld
+        run: command -v ld.lld >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq lld)
       # Same pinned Maude as the rs-parity job (see the comment there).
       - name: Install Maude 3.5.1
         run: |
@@ -44,7 +68,7 @@ jobs:
       # Without it they skip SILENTLY — their fallback probes check hardcoded
       # paths (/usr/local/bin, CWD), never $PATH — and the suite reports the
       # skipped tests as passes.
-      - run: cargo test --release --workspace
+      - run: cargo test --release ${{ matrix.packages }}
         env:
           MAUDE_PATH: /opt/maude/maude
 
