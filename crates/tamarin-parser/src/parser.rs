@@ -4167,15 +4167,21 @@ impl<'a> Parser<'a> {
         self.restore(snap);
 
         // Trace quantifier
+        self.skip_ws();
         let trace_q_pos = self.lx.pos();
-        let trace_identifier = self.lx.peek_until_ws();
+        let trace_identifier = self
+            .lx
+            .peek_until(|c| !c.is_alphabetic() && c != '-')
+            // Filter out edge case: `lx.peek_until` returns `Some("")` if
+            // the first char already fulfills the stopping condition.
+            .filter(|s| !s.is_empty());
         let trace_quantifier = match trace_identifier {
             Some(s) if s == "all-traces" => {
-                self.lx.eat_str("all-traces");
+                self.lx.eat_str(s);
                 TraceQuantifier::AllTraces
             }
             Some(s) if s == "exists-trace" => {
-                self.lx.eat_str("exists-trace");
+                self.lx.eat_str(s);
                 TraceQuantifier::ExistsTrace
             }
             None => TraceQuantifier::AllTraces,
