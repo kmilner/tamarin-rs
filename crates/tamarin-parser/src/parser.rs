@@ -4167,12 +4167,25 @@ impl<'a> Parser<'a> {
         self.restore(snap);
 
         // Trace quantifier
-        let trace_quantifier = if self.try_kw("all-traces") {
-            TraceQuantifier::AllTraces
-        } else if self.try_kw("exists-trace") {
-            TraceQuantifier::ExistsTrace
-        } else {
-            TraceQuantifier::AllTraces
+        let trace_q_pos = self.lx.pos();
+        let trace_identifier = self.lx.peek_until_ws();
+        let trace_quantifier = match trace_identifier {
+            Some(s) if s == "all-traces" => {
+                self.lx.eat_str("all-traces");
+                TraceQuantifier::AllTraces
+            }
+            Some(s) if s == "exists-trace" => {
+                self.lx.eat_str("exists-trace");
+                TraceQuantifier::ExistsTrace
+            }
+            None => TraceQuantifier::AllTraces,
+            Some(other) => {
+                return Err(ParseError::UnexpectedKeyword {
+                    found: Some(other.into()),
+                    expected: vec!["all-traces".into(), "exists-trace".into()],
+                    at: Location::location_of(&Some(other), trace_q_pos),
+                });
+            }
         };
         let formula = self.double_quoted_formula()?;
         let proof = self.try_proof_skeleton()?;
