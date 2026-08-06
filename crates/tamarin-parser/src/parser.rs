@@ -1574,6 +1574,25 @@ impl<'a> Parser<'a> {
         self.err_fail(msg)
     }
 
+    fn err_unterminated_delimiter(
+        &self,
+        opening: impl Into<String>,
+        opening_at: Pos,
+        found_at: Location,
+        found: Option<String>,
+        expected: Vec<String>,
+    ) -> ParseError {
+        let opening = opening.into();
+        let opening_at = Location::location_of(&Some(&opening), opening_at);
+        ParseError::UnterminatedDelimiter {
+            opening,
+            opening_at,
+            found_at,
+            found,
+            expected,
+        }
+    }
+
     /// Byte offset just past `name`'s characters for the identifier lexeme
     /// that began at `start` — i.e. BEFORE the lexeme's trailing whitespace,
     /// which `Lexer::identifier` has already skipped.  Replays the lexeme like
