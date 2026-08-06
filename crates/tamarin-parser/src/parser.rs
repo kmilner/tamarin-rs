@@ -1677,25 +1677,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn err_unterminated_delimiter(
-        &self,
-        opening: impl Into<String>,
-        opening_at: Pos,
-        found_at: Location,
-        found: Option<String>,
-        expected: Vec<String>,
-    ) -> ParseError {
-        let opening = opening.into();
-        let opening_at = Location::location_of(&Some(&opening), opening_at);
-        ParseError::UnterminatedDelimiter {
-            opening,
-            opening_at,
-            found_at,
-            found,
-            expected,
-        }
-    }
-
     /// The error at a top-level *item* position when no item alternative
     /// matches: the full item-keyword set, with the suggestion machinery of
     /// [`ParseError::ExpectedTheoryItem`] picking near-misses from it.
