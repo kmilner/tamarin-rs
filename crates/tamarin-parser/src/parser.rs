@@ -1677,6 +1677,25 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn err_unterminated_delimiter(
+        &self,
+        opening: impl Into<String>,
+        opening_at: Pos,
+        found_at: Location,
+        found: Option<String>,
+        expected: Vec<String>,
+    ) -> ParseError {
+        let opening = opening.into();
+        let opening_at = Location::location_of(&Some(&opening), opening_at);
+        ParseError::UnterminatedDelimiter {
+            opening,
+            opening_at,
+            found_at,
+            found,
+            expected,
+        }
+    }
+
     /// The error at a top-level *item* position when no item alternative
     /// matches: the full item-keyword set, with the suggestion machinery of
     /// [`ParseError::ExpectedTheoryItem`] picking near-misses from it.
@@ -2815,8 +2834,10 @@ impl<'a> Parser<'a> {
     fn sep_end_by<T>(
         &mut self,
         close: &str,
+        opening: (&str, Pos),
         mut elem: impl FnMut(&mut Self) -> Result<T, ParseError>,
     ) -> Result<Vec<T>, ParseError> {
+        let (opening, opening_at) = opening;
         let mut v = Vec::new();
         if !self.try_punct(close) {
             loop {
@@ -2835,8 +2856,15 @@ impl<'a> Parser<'a> {
                 // and operator labels, a fact's `"["` annotation attempt) —
                 // the frame of Fact.hs:47's `parens (commaSep pterm)` and
                 // every other `commaSep`-then-close context.
-                let close_label = format!("\"{close}\"");
-                return Err(self.err_expect_after_term(&["\",\"", &close_label]));
+                let (found, found_at) = self.found_token();
+                let e = self.err_unterminated_delimiter(
+                    opening,
+                    opening_at,
+                    found_at,
+                    found,
+                    vec![close.into()],
+                );
+                return Err(e);
             }
         }
         Ok(v)
@@ -3237,9 +3265,10 @@ impl<'a> Parser<'a> {
             if Self::RESERVED_BUILTINS.contains(&name.as_str()) {
                 return Err(self.macro_reserved_name_error(&name));
             }
+            let opening = ("(", self.lx.pos());
             self.require_punct("(")?;
             // HS `parens $ commaSep lvar` (Macro.hs:29-49, see line 36): trailing comma OK.
-            let args = self.sep_end_by(")", |p| p.var_spec())?;
+            let args = self.sep_end_by(")", opening, |p| p.var_spec())?;
             // HS `unless (length args == length (nub args)) $ error …`
             // (Macro.hs:37-38), the second GHC `error`: `nub` compares FULL
             // `LVar`s, so name, sort and index all count — `m(x, x:pub)` and
@@ -3480,14 +3509,15 @@ impl<'a> Parser<'a> {
         let opening_pos = self.lx.pos();
         self.require_punct("\"")?;
         let f = self.formula()?;
-        self.require_punct("\"")
-            .map_err(|e| ParseError::UnterminatedDelimiter {
-                opening: "\"".to_string(),
-                opening_at: Location::location_of(&Some("\""), opening_pos),
-                found_at: *e.location(),
-                found: e.into_found(),
-                expected: vec!["\"".to_string()],
-            })?;
+        self.require_punct("\"").map_err(|e| {
+            self.err_unterminated_delimiter(
+                "\"",
+                opening_pos,
+                *e.location(),
+                e.into_found(),
+                vec!["\"".to_string()],
+            )
+        })?;
         Ok(f)
     }
 
@@ -4090,19 +4120,24 @@ impl<'a> Parser<'a> {
     }
 
     fn fact_list(&mut self) -> Result<Vec<Fact>, ParseError> {
+        let opening = ("[", self.lx.pos());
         self.require_punct("[")?;
         // HS `list (fact ...)` (Rule.hs:181-191, see line 183/188) = `brackets . commaSep`
         // (Token.hs:362-363) with `commaSep = sepEndBy comma`: the list may
         // be empty and a trailing comma before `]` is OK.
-        self.sep_end_by("]", |p| p.fact())
+        self.sep_end_by("]", opening, |p| p.fact())
     }
 
     fn fact_or_restr(&mut self) -> Result<FactOrRestr, ParseError> {
         // `_restrict(formula)` or fact.
         if self.try_kw("_restrict") {
+            let opening_at = self.lx.pos();
             self.require_punct("(")?;
             let phi = self.formula()?;
-            self.require_punct(")")?;
+            self.require_punct(")").map_err(|_| {
+                let (found, found_at) = self.found_token();
+                self.err_unterminated_delimiter("(", opening_at, found_at, found, vec![")".into()])
+            })?;
             Ok(FactOrRestr::Restr(phi))
         } else {
             Ok(FactOrRestr::Fact(self.fact()?))
@@ -4252,10 +4287,11 @@ impl<'a> Parser<'a> {
                 attrs.push(LemmaAttr::Heuristic(raw));
             } else if self.try_kw("output") {
                 self.require_punct("=")?;
+                let opening = ("[", self.lx.pos());
                 self.require_punct("[")?;
                 // HS `list constructorp` (Lemma.hs:39-53, see line 49) = `brackets . commaSep`:
                 // trailing comma before `]` is permitted.
-                let outs = self.sep_end_by("]", |p| p.ident())?;
+                let outs = self.sep_end_by("]", opening, |p| p.ident())?;
                 attrs.push(LemmaAttr::Output(outs));
             } else if self.try_kw("left") {
                 attrs.push(LemmaAttr::Left);
@@ -4430,9 +4466,10 @@ impl<'a> Parser<'a> {
     fn process_def(&mut self) -> Result<TheoryItem, ParseError> {
         self.require_kw("let")?;
         let name = self.ident()?;
+        let opening = ("(", self.lx.pos());
         let vars = if self.try_punct("(") {
             // HS `parens $ commaSep sapicvar` (Sapic.hs:64-72, see line 69): trailing comma OK.
-            Some(self.sep_end_by(")", |p| p.var_spec())?)
+            Some(self.sep_end_by(")", opening, |p| p.var_spec())?)
         } else {
             None
         };
@@ -4653,10 +4690,11 @@ impl<'a> Parser<'a> {
         let save2 = self.save();
         if let Some(id) = self.lx.identifier() {
             // Heuristic: if followed by `(`, parse as call args.
+            let opening = ("(", self.lx.pos());
             let args = if self.try_punct("(") {
                 // HS `parens $ commaSep (msetterm ...)` (Sapic.hs:224-312, see line 296):
                 // trailing comma before `)` is permitted.
-                self.sep_end_by(")", |p| p.term(false))?
+                self.sep_end_by(")", opening, |p| p.term(false))?
             } else {
                 vec![]
             };
@@ -4752,9 +4790,10 @@ impl<'a> Parser<'a> {
             let at = Location::location_of(&Some(&name), name_pos);
             return Err(ParseError::FactNameMustStartWithUppercase { name, at });
         }
+        let opening = ("(", self.lx.pos());
         self.require_punct("(")?;
         // HS `parens (commaSep pterm)` (Fact.hs:39-63, see line 47): trailing comma OK.
-        let args = self.sep_end_by(")", |p| p.term(false))?;
+        let args = self.sep_end_by(")", opening, |p| p.term(false))?;
         let mut annotations = Vec::new();
         // `option [] $ list factAnnotation` (Fact.hs:48): when no annotation
         // list follows, the failed `[` attempt leaves its label at the
@@ -4940,6 +4979,16 @@ impl<'a> Parser<'a> {
             if let Ok(f) = self.iff() {
                 if self.try_punct(")") {
                     return Ok(f);
+                } else {
+                    // No other atom can consume a leading `(`, so this is an unterminated parenthesised formula.
+                    let (found, found_at) = self.found_token();
+                    return Err(self.err_unterminated_delimiter(
+                        "(",
+                        save_p,
+                        found_at,
+                        found,
+                        vec![")".to_string()],
+                    ));
                 }
             }
             self.restore(save_p);
@@ -5425,6 +5474,7 @@ impl<'a> Parser<'a> {
             }
         }
         // Parens for grouping
+        let opening_at = self.save();
         if self.try_punct("(") {
             let t = self.msetterm(eqn)?;
             // `(` … `)` is grouping only: Tamarin spells pairs `<a, b>`, so a
@@ -5432,7 +5482,14 @@ impl<'a> Parser<'a> {
             // (Term.hs:141), whose closing `symbol ")"` merges the term's
             // hangovers when it fails.
             if !self.try_punct(")") {
-                return Err(self.err_expect_after_term(&["\")\""]));
+                let (found, found_at) = self.found_token();
+                return Err(self.err_unterminated_delimiter(
+                    "(",
+                    opening_at,
+                    found_at,
+                    found,
+                    vec![")".into()],
+                ));
             }
             // The atom's last lexeme is the `)`, even when the grouped term
             // collapses to a bare variable node.
@@ -5443,6 +5500,7 @@ impl<'a> Parser<'a> {
         // `<=>` iff operators only appear at formula level — at term level a
         // bare `<` always opens a tuple. We do refuse `<-` (process arrow).
         if self.lx.peek() == Some('<') {
+            let opening_at = self.save();
             let r = self.lx.rest();
             if !r.starts_with("<-") {
                 self.lx.bump(); // consume '<'
@@ -5465,7 +5523,14 @@ impl<'a> Parser<'a> {
                 // ">"` both sit at the last operand's stop position, merged
                 // with its hangovers.
                 if !self.try_punct(">") {
-                    return Err(self.err_expect_after_term(&["\",\"", "\">\""]));
+                    let (found, found_at) = self.found_token();
+                    return Err(self.err_unterminated_delimiter(
+                        "<",
+                        opening_at,
+                        found_at,
+                        found,
+                        vec!["\",\"".into(), "\">\"".into()],
+                    ));
                 }
                 // The atom's last lexeme is the `>`, even when a singleton
                 // `<a>` collapses to its operand's node.
@@ -5656,6 +5721,7 @@ impl<'a> Parser<'a> {
             }
             self.last_ident_end = Some(self.ident_end_from(save_id, &id));
             self.skip_ws();
+            let opening_at = self.save();
             if self.lx.peek() == Some('(') {
                 // Look one token ahead inside `(`: if it's `<)` (the multiset
                 // less-than operator at process level), this isn't a
@@ -5713,29 +5779,50 @@ impl<'a> Parser<'a> {
                                 break;
                             }
                         }
-                        self.require_punct(")")?;
+                        self.require_punct(")").map_err(|_| {
+                            let (found, found_at) = self.found_token();
+                            self.err_unterminated_delimiter(
+                                "(",
+                                opening_at,
+                                found_at,
+                                found,
+                                vec![")".into()],
+                            )
+                        })?;
                     }
                     return Ok(Term::App(id, ts));
                 }
-            } else if self.lx.peek() == Some('{') {
-                if self.resolve_prefix_apps {
-                    // HS `binaryAlgApp` (Term.hs:109-121): same lookup, arity
-                    // fixed at 2, same wholesale backtrack on failure.
-                    if let Some(res) = self.lookup_arity(&id) {
-                        let save_app = self.save();
-                        match self.binary_alg_app(&id, res, eqn) {
-                            Ok(t) => return Ok(t),
-                            Err(e) if matches!(e, ParseError::Abort { .. }) => return Err(e),
-                            Err(_) => self.restore(save_app),
+            } else {
+                let opening_at = self.save();
+                if self.lx.peek() == Some('{') {
+                    if self.resolve_prefix_apps {
+                        // HS `binaryAlgApp` (Term.hs:109-121): same lookup, arity
+                        // fixed at 2, same wholesale backtrack on failure.
+                        if let Some(res) = self.lookup_arity(&id) {
+                            let save_app = self.save();
+                            match self.binary_alg_app(&id, res, eqn) {
+                                Ok(t) => return Ok(t),
+                                Err(e) if matches!(e, ParseError::Abort { .. }) => return Err(e),
+                                Err(_) => self.restore(save_app),
+                            }
                         }
+                    } else {
+                        self.lx.bump();
+                        self.skip_ws();
+                        let arg1 = self.tuple_contents(eqn)?;
+                        self.require_punct("}").map_err(|_| {
+                            let (found, found_at) = self.found_token();
+                            self.err_unterminated_delimiter(
+                                "{",
+                                opening_at,
+                                found_at,
+                                found,
+                                vec!["}".into()],
+                            )
+                        })?;
+                        let arg2 = self.atom_term(eqn)?;
+                        return Ok(Term::AlgApp(id, Box::new(arg1), Box::new(arg2)));
                     }
-                } else {
-                    self.lx.bump();
-                    self.skip_ws();
-                    let arg1 = self.tuple_contents(eqn)?;
-                    self.require_punct("}")?;
-                    let arg2 = self.atom_term(eqn)?;
-                    return Ok(Term::AlgApp(id, Box::new(arg1), Box::new(arg2)));
                 }
             }
             // Bare identifier: untagged variable. Optionally with index `.<n>`
@@ -5801,16 +5888,27 @@ impl<'a> Parser<'a> {
     /// Every `Err` return is discarded by the caller's backtrack, mirroring
     /// the enclosing `try` — the messages never surface.
     fn prefix_app_args(&mut self, id: &str, res: ArityRes, eqn: bool) -> Result<Term, ParseError> {
-        self.lx.bump(); // the '(' the caller peeked
+        // the '(' the caller peeked
+        let opening = ("(", self.save());
+        self.lx.bump();
         self.skip_ws();
         match res {
             ArityRes::NoEq { arity: 1 } => {
                 let arg = self.tuple_contents(eqn)?;
-                self.require_punct(")")?;
+                self.require_punct(")").map_err(|_| {
+                    let (found, found_at) = self.found_token();
+                    self.err_unterminated_delimiter(
+                        "(",
+                        opening.1,
+                        found_at,
+                        found,
+                        vec![")".into()],
+                    )
+                })?;
                 Ok(Term::App(id.to_string(), vec![arg]))
             }
             ArityRes::NoEq { arity } => {
-                let ts = self.sep_end_by(")", |p| p.msetterm(eqn))?;
+                let ts = self.sep_end_by(")", opening, |p| p.msetterm(eqn))?;
                 if ts.len() != arity {
                     return Err(self.err(format!(
                         "operator `{id}' has arity {arity}, but here it is used with arity {}",
@@ -5820,7 +5918,7 @@ impl<'a> Parser<'a> {
                 Ok(Term::App(id.to_string(), ts))
             }
             ArityRes::Ac => {
-                let ts = self.sep_end_by(")", |p| p.msetterm(eqn))?;
+                let ts = self.sep_end_by(")", opening, |p| p.msetterm(eqn))?;
                 let sym = intern_ac_name(id);
                 let mut it = ts.into_iter();
                 match (it.next(), it.next()) {
