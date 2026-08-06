@@ -5759,6 +5759,9 @@ impl<'a> Parser<'a> {
                     // `error`s escape.
                     if let Some(res) = self.lookup_arity(&id) {
                         let save_app = self.save();
+                        // TODO: Surface the error here instead of restoring in the `Err(_)` case.
+                        // TODO: Since we have already parsed a `(`, we know that parsing will fail.
+                        // return self.prefix_app_args(&id, res, eqn);
                         match self.prefix_app_args(&id, res, eqn) {
                             Ok(t) => return Ok(t),
                             Err(e) if matches!(e, ParseError::Abort { .. }) => return Err(e),
@@ -5800,6 +5803,9 @@ impl<'a> Parser<'a> {
                         // fixed at 2, same wholesale backtrack on failure.
                         if let Some(res) = self.lookup_arity(&id) {
                             let save_app = self.save();
+                            // TODO: Surface the error here instead of restoring in the `Err(_)` case.
+                            // TODO: Since we have already parsed a `{`, we know that parsing will fail.
+                            // return self.binary_alg_app(&id, res, eqn);
                             match self.binary_alg_app(&id, res, eqn) {
                                 Ok(t) => return Ok(t),
                                 Err(e) if matches!(e, ParseError::Abort { .. }) => return Err(e),
@@ -5950,10 +5956,15 @@ impl<'a> Parser<'a> {
     /// `fAppNoEq`/`fAppAC` by the head's AC state.  There is no `em` special
     /// case here (`naryOpApp`'s Term.hs:103 is prefix-only).
     fn binary_alg_app(&mut self, id: &str, res: ArityRes, eqn: bool) -> Result<Term, ParseError> {
-        self.lx.bump(); // the '{' the caller peeked
+        // the '{' the caller peeked
+        let opening_at = self.save();
+        self.lx.bump();
         self.skip_ws();
         let arg1 = self.tuple_contents(eqn)?;
-        self.require_punct("}")?;
+        self.require_punct("}").map_err(|_| {
+            let (found, found_at) = self.found_token();
+            self.err_unterminated_delimiter("{", opening_at, found_at, found, vec!["}".into()])
+        })?;
         let arg2 = self.atom_term(eqn)?;
         match res {
             ArityRes::Ac => Ok(Term::BinOp(
