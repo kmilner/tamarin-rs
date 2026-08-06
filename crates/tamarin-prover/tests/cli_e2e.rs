@@ -240,6 +240,40 @@ fn no_input_files_exits_one_without_an_error_value() {
 }
 
 #[test]
+fn unreadable_input_file_prints_ghc_iox_shape() {
+    // HS never guards the theory read: `openFile` throws an IOException that
+    // escapes to GHC's runtime, which prints `tamarin-prover: <path>:
+    // openFile: <reason>` on stderr and exits 1.  Oracle-pinned for a missing
+    // path and a directory path; `--parse-only` keeps Maude out of the run
+    // (the oracle emits the same error there, minus the banner).
+    for (path, reason) in [
+        (
+            "/nonexistent/no_such_file.spthy".to_string(),
+            "does not exist (No such file or directory)",
+        ),
+        (
+            std::env::temp_dir()
+                .to_str()
+                .expect("utf-8 tmpdir")
+                .to_string(),
+            "inappropriate type (is a directory)",
+        ),
+    ] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_tamarin-rs"))
+            .args(["--parse-only", &path])
+            .output()
+            .expect("run tamarin-rs");
+        assert_eq!(out.status.code(), Some(1), "{path}");
+        assert!(out.stdout.is_empty(), "{path}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr),
+            format!("tamarin-prover: {path}: openFile: {reason}\n"),
+            "{path}"
+        );
+    }
+}
+
+#[test]
 fn diff_flag_is_rejected_with_clear_message() {
     let in_path = fixture("single_recv.spthy");
     let args = args_from(&["--diff", in_path.to_str().unwrap()]);

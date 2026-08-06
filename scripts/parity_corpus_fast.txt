@@ -1,3 +1,4 @@
+../../crates/tamarin-theory/tests/fixtures/nat_sort_regression.spthy
 Tutorial.spthy
 accountability/csf21-acc-unbounded/previous/ocsps-msr-untrusted.spthy
 accountability/csf21-acc-unbounded/previous/ocsps-msr.spthy

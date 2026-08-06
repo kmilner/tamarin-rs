@@ -186,7 +186,8 @@ pub struct ProofContextShared {
     /// `full_sources` cells it guards so that a shared clone
     /// (`with_swapped_maude`) sees the same `Done` gate as the cells.
     pub(crate) saturate_state: std::sync::Mutex<SaturateState>,
-    /// Cached saturation limit (from `IntegerParameters::default()`).
+    /// Cached saturation limit (from `IntegerParameters::current()` — the
+    /// HS default 5 unless `-s/--saturation` overrode it).
     pub(crate) saturation_limit: usize,
 }
 
@@ -1156,11 +1157,14 @@ impl ProofContext {
                 restrictions,
                 pc_true_subterm,
                 saturate_state: std::sync::Mutex::new(SaturateState::Pending),
+                // The debug env knob outranks the CLI `-s` (a developer
+                // setting it mid-bisect expects it to win); `current()`
+                // folds the CLI override over the HS default.
                 saturation_limit: std::env::var("TAM_SATURATION_LIMIT")
                     .ok()
                     .and_then(|s| s.parse::<usize>().ok())
                     .unwrap_or_else(|| {
-                        crate::constraint::solver::sources::IntegerParameters::default()
+                        crate::constraint::solver::sources::IntegerParameters::current()
                             .saturation_limit as usize
                     }),
             }),
@@ -1170,7 +1174,7 @@ impl ProofContext {
         // `with_swapped_maude` clone exists yet), so `Arc::get_mut`
         // always succeeds here.  `precompute_sources` borrows `&ctx`
         // immutably and returns before we take the `&mut`.
-        let params = crate::constraint::solver::sources::IntegerParameters::default();
+        let params = crate::constraint::solver::sources::IntegerParameters::current();
         let unique_sources = crate::constraint::solver::sources::precompute_sources(&params, &ctx);
         std::sync::Arc::get_mut(&mut ctx.shared)
             .expect("ProofContext shared bundle is uniquely owned during construction")

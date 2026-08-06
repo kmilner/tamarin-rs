@@ -11,7 +11,7 @@ subset, and `RS_PATH=`/`HS_PATH=` to point at other binaries.
 ## Primary gates — run these before trusting a change
 
 - **`corpus_file_diff.sh`** — the ground-truth batch gate: byte-diffs full
-  `--prove` stdout for all 431 corpus files against the HS cache (generating
+  `--prove` stdout for all 432 corpus files against the HS cache (generating
   missing cache entries from the oracle). Slow (~30–60 min cold); run at
   milestones or with `ALLOWLIST=` for touched families.
 - **`wf_gate.sh`** — fast (~72 s) wellformedness gate: diffs only the
@@ -85,9 +85,10 @@ subset, and `RS_PATH=`/`HS_PATH=` to point at other binaries.
 
 `divergence_fixtures/` covers observable behaviour that no theory under the
 submodule's `examples/` tree exercises, so every corpus gate stays green
-across a regression in it. Corpus files live in the submodule, which is why
-these theories cannot simply join `parity_corpus.txt`; they carry their own
-committed oracle bytes instead.
+across a regression in it. These fixtures pin slice-level bytes — including
+one deliberate divergence, which the MATCH-only corpus gates cannot express —
+against oracle captures committed in-tree, so the check needs no oracle
+binary.
 
 - **`divergence_fixtures/capture.sh`** — records the oracle's bytes for every
   fixture into `divergence_fixtures/expected/`. It resolves the oracle inside
@@ -173,8 +174,13 @@ then upstream behaviour moving under them.
 
 - **`file_flags.tsv`** — canonical per-file extra prover flags (`@cd`,
   defines, …); consumed by every gate.
-- **`parity_corpus.txt`** — the canonical 431-file gate corpus.
-- **`parity_corpus_fast.txt`** — the 364-file CI subset: every parity file
+- **`parity_corpus.txt`** — the canonical 432-file gate corpus: the
+  submodule's examples plus one repo-local fixture
+  (`../../crates/tamarin-theory/tests/fixtures/nat_sort_regression.spthy`,
+  the only Nat+reuse theory — no upstream example combines the two).
+  Entries resolve against `CORPUS_ROOT`, so `../..`-relative paths reach
+  files outside the submodule; the caches key on content, not path.
+- **`parity_corpus_fast.txt`** — the 365-file CI subset: every parity file
   proving in ≤1.5 s (plus the fastest member of otherwise-absent families);
   sized so a GitHub runner finishes in minutes.
 - **`ci_ref_fast.tsv`** — committed reference for `rs_ref_check.sh`: per file,

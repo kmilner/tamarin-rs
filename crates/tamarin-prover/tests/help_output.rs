@@ -94,35 +94,27 @@ const PINS: [HelpPin; 4] = [
 
 /// Oracle flags whose rows the batch help omits, because [`parse_args`] answers
 /// `Unknown flag` for each (HS `theoryLoadFlags`, TheoryLoader.hs:187-207).
-const OMITTED_ORACLE_FLAGS: [&str; 5] = [
-    "--proverif-no-reuse-lemmas",
+const OMITTED_ORACLE_FLAGS: [&str; 3] = [
     "--proverif-no-source-lemmas",
-    "--proverif-no-restrictions",
     "--proverif-no-multiset",
     "--proverif-no-precise",
 ];
 
-/// As [`OMITTED_ORACLE_FLAGS`], for `interactive`: the same five rows plus the
+/// As [`OMITTED_ORACLE_FLAGS`], for `interactive`: the same three rows plus the
 /// two `interactiveMode`-only flags the port has no arm for (Interactive.hs:61
 /// and 63-64).
-const OMITTED_INTERACTIVE_FLAGS: [&str; 7] = [
+const OMITTED_INTERACTIVE_FLAGS: [&str; 5] = [
     "--browser",
     "--load-json",
-    "--proverif-no-reuse-lemmas",
     "--proverif-no-source-lemmas",
-    "--proverif-no-restrictions",
     "--proverif-no-multiset",
     "--proverif-no-precise",
 ];
 
-/// The twelve batch-help lines the port drops: the [`OMITTED_ORACLE_FLAGS`]
+/// The eight batch-help lines the port drops: the [`OMITTED_ORACLE_FLAGS`]
 /// rows plus their wrapped continuation lines, verbatim from the capture.
-const DROPPED_ORACLE_ROWS: &str = r"     --proverif-no-reuse-lemmas                                             Do not export reuse lemmas as
+const DROPPED_ORACLE_ROWS: &str = r"     --proverif-no-source-lemmas                                            Do not export source lemmas as
                                                                             ProVerif axioms
-     --proverif-no-source-lemmas                                            Do not export source lemmas as
-                                                                            ProVerif axioms
-     --proverif-no-restrictions                                             Do not export restrictions to
-                                                                            ProVerif
      --proverif-no-multiset                                                 Do not export multiset
                                                                             semantics to ProVerif
                                                                             (DistinctFact events and
@@ -130,14 +122,12 @@ const DROPPED_ORACLE_ROWS: &str = r"     --proverif-no-reuse-lemmas             
      --proverif-no-precise                                                  Do not set preciseActions in
                                                                             ProVerif output";
 
-/// The nine `interactive`-help lines the port drops — see
+/// The seven `interactive`-help lines the port drops — see
 /// [`OMITTED_INTERACTIVE_FLAGS`].
 const DROPPED_INTERACTIVE_ROWS: &str = r"     --browser                                    Open the interactive interface in the default web browser
      --load-json[=FILE]                           Load a JSON graph file (see --output-json) for standalone
                                                   viewing at /loadjson (WORKDIR may be omitted)
-     --proverif-no-reuse-lemmas                   Do not export reuse lemmas as ProVerif axioms
      --proverif-no-source-lemmas                  Do not export source lemmas as ProVerif axioms
-     --proverif-no-restrictions                   Do not export restrictions to ProVerif
      --proverif-no-multiset                       Do not export multiset semantics to ProVerif
                                                   (DistinctFact events and restriction)
      --proverif-no-precise                        Do not set preciseActions in ProVerif output";
@@ -146,8 +136,6 @@ const DROPPED_INTERACTIVE_ROWS: &str = r"     --browser                         
 const RS_ONLY_TRAILER: &str = r"------------------------------------------------------------------------------
 Flags accepted by this Rust port only; the Haskell tamarin-prover rejects
 every flag below with 'Unknown flag'.
-     --no-reuse                                                             Do not export reuse lemmas
-     --no-restrictions                                                      Do not export restrictions
      --processors=N                                                         Worker threads for internal
                                                                             parallelism (default: all cores;
                                                                             N=1 is byte-identical to
@@ -173,8 +161,6 @@ which this port also accepts here:
 const RS_ONLY_TRAILER_COL50: &str = r"------------------------------------------------------------------------------
 Flags accepted by this Rust port only; the Haskell tamarin-prover rejects
 every flag below with 'Unknown flag'.
-     --no-reuse                                   Do not export reuse lemmas
-     --no-restrictions                            Do not export restrictions
      --processors=N                               Worker threads for internal parallelism (default: all
                                                   cores; N=1 is byte-identical to sequential output)
      --maude-processes=M                          Maude subprocesses the workers share (default:
@@ -193,8 +179,6 @@ help documents is accepted here too, though the Haskell prover answers
 const RS_ONLY_TRAILER_COL26: &str = r"------------------------------------------------------------------------------
 Flags accepted by this Rust port only; the Haskell tamarin-prover rejects
 every flag below with 'Unknown flag'.
-     --no-reuse           Do not export reuse lemmas
-     --no-restrictions    Do not export restrictions
      --processors=N       Worker threads for internal parallelism (default: all cores; N=1 is byte-identical
                           to sequential output)
      --maude-processes=M  Maude subprocesses the workers share (default: --processors; ~30-100 MB each; M=1
@@ -708,6 +692,30 @@ fn no_input_files_reprints_the_help_after_an_error_line_on_stdout() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     let want = format!("error: no input files given\n\n{}", printed_help(&PINS[0]));
+    assert_eq!(stdout, want);
+}
+
+#[test]
+fn interactive_without_workdir_reprints_the_help_after_an_error_line_on_stdout() {
+    // HS `Interactive.run` dispatches on the WORKDIR argument before any tool
+    // check: `helpAndExit thisMode (Just "no working directory specified")`
+    // (Interactive.hs:76-80).  Oracle-pinned: the error header and the
+    // `interactive` help on STDOUT, nothing on stderr (no maude banner), rc 1.
+    let out = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"))
+        .arg("interactive")
+        .output()
+        .expect("run tamarin-rs interactive");
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        out.stderr.is_empty(),
+        "the help-and-exit path writes nothing to stderr; got {:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let want = format!(
+        "error: no working directory specified\n\n{}",
+        printed_help(&PINS[1])
+    );
     assert_eq!(stdout, want);
 }
 

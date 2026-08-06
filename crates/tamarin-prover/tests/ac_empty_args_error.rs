@@ -15,12 +15,13 @@
 //! panic that the binary's hook renders the same way (a Rust panic would
 //! print a `thread 'main' panicked at …` report and exit 101).
 //!
-//! Known residual: the oracle is lazy and does not force the term until after
-//! the theory is translated, so its stderr carries three more `[Theory …]`
-//! progress lines (`Theory translated`, `No Deconstruction Chain checks
-//! started`, `… ended`) before the error.  The port builds terms eagerly
-//! during elaboration and dies right after `Theory loaded`.  Everything from
-//! the error line on is byte-identical, as is the exit code.
+//! The oracle is lazy and does not force the term until the close pipeline,
+//! so its stderr carries three more `[Theory …]` progress lines (`Theory
+//! translated`, `No Deconstruction Chain checks started`, `… ended` — only
+//! the first under `--no-ndc`) before the error.  The port builds terms
+//! eagerly during elaboration; the batch loop parks those pending marker
+//! lines for the panic hook to replay (`run::take_deferred_hs_error_markers`),
+//! so the whole death sequence is byte-identical, as is the exit code.
 
 use std::process::Command;
 
@@ -53,12 +54,9 @@ const ORACLE_TAIL: &str = "tamarin-prover: Term.fAppAC: empty argument list\n\
      CallStack (from HasCallStack):\n  error, called at src/Term/Term/Raw.hs:120:20 in \
      tamarin-prover-term-1.13.0-HEWlVEyEBKAFHPl3i5M61g:Term.Term.Raw\n";
 
-#[test]
-fn empty_ac_application_dies_with_the_hs_error_bytes_and_rc_1() {
-    if !maude_available() {
-        eprintln!("skipping: no maude binary found");
-        return;
-    }
+/// Run the binary on the theory with `extra` flags and return its stderr,
+/// after the shared rc-1 / empty-stdout / no-Rust-panic assertions.
+fn death_stderr(extra: &[&str]) -> String {
     let dir = std::env::temp_dir().join("tamarin_prover_ac_empty");
     std::fs::create_dir_all(&dir).expect("mkdir");
     let path = dir.join("ac_empty.spthy");
@@ -68,7 +66,11 @@ fn empty_ac_application_dies_with_the_hs_error_bytes_and_rc_1() {
     if let Some(a) = maude_arg() {
         cmd.arg(a);
     }
-    let out = cmd.arg(&path).output().expect("spawn tamarin-rs");
+    let out = cmd
+        .arg(&path)
+        .args(extra)
+        .output()
+        .expect("spawn tamarin-rs");
 
     // rc 1 (GHC's uncaught-exception code), not 101 (Rust's panic code).
     assert_eq!(out.status.code(), Some(1), "exit code");
@@ -79,17 +81,52 @@ fn empty_ac_application_dies_with_the_hs_error_bytes_and_rc_1() {
     );
     let stderr = String::from_utf8(out.stderr).expect("utf-8 stderr");
     assert!(
-        stderr.ends_with(ORACLE_TAIL),
-        "stderr must end with the oracle's error block; got:\n{stderr}"
-    );
-    // No Rust panic report anywhere.
-    assert!(
         !stderr.contains("panicked at"),
         "the panic must be rendered GHC-style, not by Rust's hook; got:\n{stderr}"
     );
-    // The progress marker the port does reach still precedes it.
+    stderr
+}
+
+#[test]
+fn empty_ac_application_dies_with_the_hs_error_bytes_and_rc_1() {
+    if !maude_available() {
+        eprintln!("skipping: no maude binary found");
+        return;
+    }
+    let stderr = death_stderr(&[]);
+    // GHC forces the term only after translation and the NDC stage; the
+    // deferred-marker replay must reproduce that exact sequence.
+    let tail = format!(
+        "[Theory ACEmpty] Theory loaded\n\
+         [Theory ACEmpty] Theory translated\n\
+         [Theory ACEmpty] No Deconstruction Chain checks started\n\
+         [Theory ACEmpty] No Deconstruction Chain checks ended\n\
+         {ORACLE_TAIL}"
+    );
     assert!(
-        stderr.contains("[Theory ACEmpty] Theory loaded\n"),
-        "got:\n{stderr}"
+        stderr.ends_with(&tail),
+        "stderr must end with the oracle's marker + error sequence; got:\n{stderr}"
+    );
+}
+
+#[test]
+fn no_ndc_suppresses_the_deconstruction_chain_markers_before_the_death() {
+    if !maude_available() {
+        eprintln!("skipping: no maude binary found");
+        return;
+    }
+    let stderr = death_stderr(&["--no-ndc"]);
+    let tail = format!(
+        "[Theory ACEmpty] Theory loaded\n\
+         [Theory ACEmpty] Theory translated\n\
+         {ORACLE_TAIL}"
+    );
+    assert!(
+        stderr.ends_with(&tail),
+        "stderr must end with the oracle's marker + error sequence; got:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Deconstruction"),
+        "--no-ndc must suppress the NDC markers, matching the oracle; got:\n{stderr}"
     );
 }

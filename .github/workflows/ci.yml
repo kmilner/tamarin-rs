@@ -26,6 +26,10 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    env:
+      # The ~44 integration-test binaries each link the full stack; lld
+      # links them several times faster than the default bfd ld.
+      RUSTFLAGS: -C link-arg=-fuse-ld=lld
     steps:
       # Submodule: intruder-variant data the build include_str!'s.
       - uses: actions/checkout@v7
@@ -33,6 +37,8 @@ jobs:
           submodules: true
       - run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install lld
+        run: command -v ld.lld >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq lld)
       # Same pinned Maude as the rs-parity job (see the comment there).
       - name: Install Maude 3.5.1
         run: |
@@ -44,7 +50,10 @@ jobs:
       # Without it they skip SILENTLY — their fallback probes check hardcoded
       # paths (/usr/local/bin, CWD), never $PATH — and the suite reports the
       # skipped tests as passes.
-      - run: cargo test --release --workspace
+      # profile ci = release opt without fat-LTO links / serial codegen (see
+      # Cargo.toml) — the release profile re-runs whole-graph LTO at every
+      # test-binary link, which dwarfs everything else this job does.
+      - run: cargo test --profile ci --workspace
         env:
           MAUDE_PATH: /opt/maude/maude
 

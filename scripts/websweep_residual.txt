@@ -1,3 +1,4 @@
+accountability/masters-thesis-morio/CentralizedMonitor.spthy
 ake/bilinear/Joux_EphkRev.spthy
 ake/bilinear/Joux.spthy
 ake/bilinear/RYY.spthy
@@ -16,6 +17,7 @@ csf12/KEA_plus_hwPFS.spthy
 csf12/KEA_plus_KCI_hwPFS.spthy
 csf12/KEA_plus_KI_KCI.spthy
 csf12/KEA_plus.spthy
+csf12/NAXOS_eCK.spthy
 csf12/SignedDH_PFS.spthy
 csf12/STS_MAC_fix1.spthy
 csf12/STS_MAC_fix2.spthy

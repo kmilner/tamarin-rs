@@ -76,3 +76,12 @@ inherits = "release"
 debug = 1
 lto = "thin"
 strip = false
+
+# Test-build profile (CI uses it): release optimisation without fat LTO and
+# serial codegen — LTO re-optimises the whole dependency graph at every one
+# of the ~44 test-binary links, which no build cache can absorb.  Not for
+# benchmarking or parity-perf runs; those need the real release profile.
+[profile.ci]
+inherits = "release"
+lto = false
+codegen-units = 16

@@ -33,6 +33,13 @@ fn install_hs_error_panic_hook() {
         move |info| match tamarin_term::term::hs_error_text(info.payload()) {
             Some(text) => {
                 let mut err = std::io::stderr().lock();
+                // GHC's laziness defers these errors past progress markers
+                // the eager port has not printed yet; the batch loop parks
+                // the pending lines for exactly that span (see
+                // `run::take_deferred_hs_error_markers`).
+                if let Some(markers) = tamarin_prover::run::take_deferred_hs_error_markers() {
+                    let _ = write!(err, "{markers}");
+                }
                 let _ = writeln!(err, "tamarin-prover: {text}");
                 let _ = err.flush();
                 std::process::exit(1);
