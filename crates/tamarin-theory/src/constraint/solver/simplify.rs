@@ -654,12 +654,18 @@ fn exploit_unique_msg_order(red: &mut Reduction) {
     if ku_act.is_empty() {
         return;
     }
-    // Intersection: for every term in both maps, add the ordering.
+    // Intersection: for every term in both maps, add the ordering.  HS
+    // inserts UNCONDITIONALLY (`F.mapM_ insertLess … M.intersectionWith`,
+    // Simplify.hs:166-169) — including the REFLEXIVE `LessAtom i i` when one
+    // node both concludes KD(m) and carries a KU(m) action.  That self-edge
+    // makes `rawLessRel` cyclic, so the contradiction check kills the
+    // system: exactly how HS prunes source cases built from (wf-invalid)
+    // protocol rules that use the reserved KU/KD facts (regression/trace/
+    // issue515.spthy).  An `i_kd != i_ku` guard here would keep a spurious
+    // source case for every such KU pattern whose premises are solvable.
     for (m, i_kd) in &kd_conc {
         if let Some(i_ku) = ku_act.get(m) {
-            if i_kd != i_ku {
-                red.insert_less(LessAtom::new(*i_kd, *i_ku, Reason::NormalForm));
-            }
+            red.insert_less(LessAtom::new(*i_kd, *i_ku, Reason::NormalForm));
         }
     }
 }

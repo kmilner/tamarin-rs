@@ -249,7 +249,17 @@ fn lemma_index(
     // source operand order and never wrapped, so `++`-operand order and
     // the fcat break-spaces inside tuples/AC chains diverged (the alethea
     // overview family).
-    let canon = tamarin_theory::elaborate::canonicalize_ac_in_formula(&l.formula);
+    // HS's theory stores every lemma predicate-EXPANDED (`liftedAddLemma` →
+    // `expandLemma`); the port's accountability `translate` injects its
+    // generated lemmas with `Pred` sugar intact, deferring expansion to
+    // consumers — apply it here exactly as the batch renderer does, or the
+    // acc-generated lemmas render `IsInvalid( a )` where HS shows the body.
+    // A no-op for ordinary lemmas (elaboration already expanded them).
+    let expanded = tamarin_theory::pretty_theory::expand_lemma_formula_for_display(
+        &entry.parser_theory,
+        &l.formula,
+    );
+    let canon = tamarin_theory::elaborate::canonicalize_ac_in_formula(&expanded);
     // `nest 2 (sep [prettyTraceQuantifier tq, doubleQuotes (prettyLNFormula f)])`
     // — rendered under the active `HtmlDocGuard` (proof_state's), so operators
     // become `hl_operator` spans and the formula text is entity-escaped, while
@@ -616,15 +626,17 @@ pub fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> String {
             //   ppSection "Tactic(s)" (prettyTactic <$> _thyTactic)
             // ppSection h s = withTag "h2" [] (text h) $$ withTag "p"
             //   [("class","monospace rules")] (vcat (intersperse (text "") s))
-            // rendered through the `HtmlDoc Doc` transformer + postprocess.  A
-            // literal '<' inside a tactic (e.g. regex lookbehind `(?<!'g'^)`)
-            // is entity-escaped by `Doc::text` under the guard.
-            let _html = tamarin_theory::pretty_hpj::HtmlDocGuard::enable();
+            // rendered through the `HtmlDoc Doc` transformer + postprocess,
+            // which entity-escapes every text node.  `Tactic::render` builds a
+            // plain String that never passes through `Doc::text`, so escape it
+            // here — a literal '<' inside a tactic (e.g. the noise theories'
+            // regex lookbehind `(?<!'g'^)`) must reach the pane as `&lt;`, not
+            // as a pseudo-tag the browser (and the parity normalizer) eats.
             // `vcat (intersperse (text "") s)` = tactics joined by a blank line.
             let body = typed
                 .tactic
                 .iter()
-                .map(|t| t.render())
+                .map(|t| tamarin_theory::pretty_hpj::escape_html_entities(&t.render()))
                 .collect::<Vec<_>>()
                 .join("\n\n");
             assemble_pane(vec![Some(section_fragment(

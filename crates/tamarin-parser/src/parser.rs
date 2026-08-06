@@ -3340,20 +3340,20 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_rule(&mut self) -> Result<Rule, ParseError> {
+        self.skip_ws();
+        let kw_end = self.lx.pos().offset + "rule".len();
         self.require_kw("rule")?;
         let modulo = self.try_modulo();
-        let name = self.ident()?;
+        let name = self.rule_name_ident(kw_end)?;
         let had_attributes = self.peek_punct("[");
         let attributes = self.rule_attributes()?;
         self.require_rule_colon(had_attributes)?;
         // Optional let block.
-        let let_block = if self.at_keyword("let") {
-            self.parse_let_block()?
+        let (let_block, premises) = if self.at_keyword("let") {
+            (self.parse_let_block()?, self.fact_list()?)
         } else {
-            vec![]
+            (vec![], self.premises_after_absent_let()?)
         };
-        // Premises [..]
-        let premises = self.fact_list()?;
         // Actions / restrictions either `--[..]->` or `-->`
         let (actions, embedded_restrictions) = self.parse_actions_and_restrictions()?;
         let conclusions = self.fact_list()?;
@@ -3412,16 +3412,15 @@ impl<'a> Parser<'a> {
         // `(modulo AC)` head is absent and parsing proceeds. (More lenient than
         // Haskell, but still accepts all valid Haskell input.)
         let modulo = self.try_modulo();
-        let name = self.ident()?;
+        let name = self.rule_name_ident(usize::MAX)?;
         let had_attributes = self.peek_punct("[");
         let attributes = self.rule_attributes()?;
         self.require_rule_colon(had_attributes)?;
-        let let_block = if self.at_keyword("let") {
-            self.parse_let_block()?
+        let (let_block, premises) = if self.at_keyword("let") {
+            (self.parse_let_block()?, self.fact_list()?)
         } else {
-            vec![]
+            (vec![], self.premises_after_absent_let()?)
         };
-        let premises = self.fact_list()?;
         let (actions, embedded_restrictions) = self.parse_actions_and_restrictions()?;
         let conclusions = self.fact_list()?;
         Ok(Rule {
@@ -3719,6 +3718,51 @@ impl<'a> Parser<'a> {
         // Consume the `in` terminator if present.
         let _ = self.try_kw("in");
         Ok(bs)
+    }
+
+    /// The rule-name `identifier`, with the parsec frame HS leaves when it is
+    /// missing.  `moduloE`'s failed `option` probe puts `Expect "\"(\""`
+    /// ahead of `identifier` at the name position (Rule.hs:127-131, via
+    /// `protoRuleInfo`); and when the failure sits DIRECTLY after the `rule`
+    /// letters (`kw_end_offset`), the item alternation's `formalComment`
+    /// retry — `try (many1 letter <* string "{*")` (Token.hs:377-378) —
+    /// re-consumes them and fails at the same offset, so its
+    /// `letter`/`"{*"` labels merge behind (bare `rule` at EOF, `rule!x`).
+    /// Callers outside the top-level item alternation (variants sub-rules)
+    /// pass `usize::MAX`: no formalComment alternative exists there.
+    fn rule_name_ident(&mut self, kw_end_offset: usize) -> Result<String, ParseError> {
+        if let Some(id) = self.lx.identifier() {
+            return Ok(id);
+        }
+        if let Some(e) = self.err_reserved_word() {
+            return Err(e);
+        }
+        let mut e = self.err_expect(&["\"(\"", "identifier"]);
+        if e.offset == kw_end_offset {
+            e.messages.push(Message::Expect("letter".to_string()));
+            e.messages.push(Message::Expect("\"{*\"".to_string()));
+        }
+        Err(e)
+    }
+
+    /// The premise [`Parser::fact_list`] of a rule whose optional `let` block
+    /// is absent.  HS sequences `option emptySubst letBlock` before
+    /// `genericRule` (Rule.hs:131, :151): the failed non-consuming `letBlock`
+    /// leaves `Expect "\"let\""` at the probe offset, and a premise-`[`
+    /// failure at that SAME offset merges the two — `expecting "let" or "["`
+    /// (parsec merge is position-gated, so a failure deeper inside the list
+    /// keeps its own labels).
+    fn premises_after_absent_let(&mut self) -> Result<Vec<Fact>, ParseError> {
+        self.skip_ws();
+        let probe_offset = self.lx.pos().offset;
+        self.fact_list().map_err(|mut e| {
+            if e.offset == probe_offset {
+                let at = usize::from(matches!(e.messages.first(), Some(Message::SysUnExpect(_))));
+                e.messages
+                    .insert(at, Message::Expect("\"let\"".to_string()));
+            }
+            e
+        })
     }
 
     fn fact_list(&mut self) -> Result<Vec<Fact>, ParseError> {

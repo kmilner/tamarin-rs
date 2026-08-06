@@ -3110,6 +3110,16 @@ fn expand_predicates_for_display(f: &p::Formula, predicates: &[p::Predicate]) ->
     crate::predicate_expand::expand_formula(f, predicates).unwrap_or_else(|_| f.clone())
 }
 
+/// [`expand_predicates_for_display`] against every predicate `parsed`
+/// declares.  Pub for the web's `lemmaIndex` mirror: HS theories store
+/// lemmas already predicate-expanded (`liftedAddLemma` → `expandLemma`,
+/// TheoryObject.hs:430-446), while the port's accountability `translate`
+/// injects its generated lemmas with `Pred` sugar intact and defers the
+/// expansion to consumers — so every lemma-formula renderer must apply it.
+pub fn expand_lemma_formula_for_display(parsed: &p::Theory, f: &p::Formula) -> p::Formula {
+    expand_predicates_for_display(f, &collect_predicates(parsed))
+}
+
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]

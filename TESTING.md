@@ -27,7 +27,7 @@ output**, after stripping only the environment-volatile header lines
 |---|---|---|
 | 1 | `cargo test` | Rust unit + integration suites (~1000 tests) |
 | 2 | `scripts/diff_proof_raw.sh <file> <lemma>` | one lemma, raw HS↔RS diff |
-| 3 | `scripts/corpus_file_diff.sh` | the batch gate: 431-file corpus, byte parity |
+| 3 | `scripts/corpus_file_diff.sh` | the batch gate: 432-file corpus, byte parity |
 | 4 | `scripts/web_parity.sh` | interactive-mode gate: crawl + semantic diff |
 | 5 | `scripts/bench.sh` | performance tables (see README) |
 
@@ -64,11 +64,12 @@ existing build).
 
 ```bash
 ALLOWLIST=scripts/parity_corpus.txt RESULTS_TSV=/tmp/gate.tsv scripts/corpus_file_diff.sh
-awk -F'\t' '{print $2}' /tmp/gate.tsv | sort | uniq -c     # expect: 431 MATCH
+awk -F'\t' '{print $2}' /tmp/gate.tsv | sort | uniq -c     # expect: 432 MATCH
 ```
 
-Whole-file `--prove` diff over the canonical 431-file corpus
-(`scripts/parity_corpus.txt`). Two strictly sequential phases: Haskell
+Whole-file `--prove` diff over the canonical 432-file corpus
+(`scripts/parity_corpus.txt` — the submodule's examples plus one repo-local
+Nat+reuse fixture listed by `../..`-relative path). Two strictly sequential phases: Haskell
 output is computed once per file-content hash and cached under
 `scripts/.hs_file_cache/`; the Rust binary is then diffed against the cache
 — so re-runs after Rust-only changes skip the Haskell side entirely.
@@ -194,7 +195,7 @@ The list is not exhaustive — grep the sources for `TAM_DBG_` / `TAM_RS_` /
 | Script | Purpose |
 |---|---|
 | `corpus_file_diff.sh` | the batch byte gate (cached HS, per-file) |
-| `parity_corpus.txt` | canonical 431-file corpus list |
+| `parity_corpus.txt` | canonical 432-file corpus list |
 | `file_flags.tsv` | per-file extra prover flags (both sides) |
 | `diff_proof_raw.sh` | one lemma, raw HS↔RS diff |
 | `corpus_raw_diff.sh` | raw per-lemma diff across the corpus |

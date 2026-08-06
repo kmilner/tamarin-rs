@@ -243,14 +243,17 @@ impl Drop for InitialSourceCasesGuard {
 /// Solver-tuning parameters mirroring Haskell's `IntegerParameters`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntegerParameters {
-    /// Maximum number of open destruction chains a single proof may
-    /// carry before bailing. Retained for HS-shape fidelity; the live
-    /// chains limit at the saturation call site is the literal `10`.
+    /// Maximum number of open destruction chains `solveAllSafeGoals` may
+    /// solve during saturation before chain goals stop being safe (HS
+    /// `paramOpenChainsLimit`, fed from `-c/--open-chains`).
     pub open_chains_limit: i64,
-    /// Maximum saturation iterations during source refinement.
+    /// Maximum saturation iterations during source refinement (HS
+    /// `paramSaturationLimit`, fed from `-s/--saturation`).
     pub saturation_limit: i64,
-    /// HS-shape field; the saturation loop does not currently emit a
-    /// per-step trace.
+    /// HS-shape field; the live trace gate is the process-global
+    /// [`set_show_saturation_steps`] (the flag is toggled dynamically
+    /// around the precompute-only forcing, which a value snapshotted at
+    /// context construction couldn't express).
     pub show_saturation_steps: bool,
 }
 
@@ -263,6 +266,46 @@ impl Default for IntegerParameters {
             saturation_limit: 5,
             show_saturation_steps: false,
         }
+    }
+}
+
+/// CLI overrides for [`IntegerParameters`] (HS threads `-c`/`-s` from
+/// `TheoryLoadOptions` into every `closeRuleCache`; the port's contexts are
+/// built in too many places to thread a value through each, so the CLI layer
+/// stores the overrides process-globally and [`IntegerParameters::current`]
+/// folds them over the defaults).  `-1` = unset; the CLI parser rejects
+/// negative values, so every real override is `>= 0`.
+static CLI_OPEN_CHAINS_LIMIT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
+static CLI_SATURATION_LIMIT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
+
+/// Install the `-c/--open-chains` and `-s/--saturation` CLI values (`None`
+/// leaves the HS default in force).  Called once per process by the CLI
+/// entry points before any theory is loaded.
+pub fn set_cli_solver_limits(open_chains: Option<u64>, saturation: Option<u64>) {
+    use std::sync::atomic::Ordering;
+    if let Some(c) = open_chains {
+        CLI_OPEN_CHAINS_LIMIT.store(c as i64, Ordering::Relaxed);
+    }
+    if let Some(s) = saturation {
+        CLI_SATURATION_LIMIT.store(s as i64, Ordering::Relaxed);
+    }
+}
+
+impl IntegerParameters {
+    /// The parameters in force for this process: HS defaults with any CLI
+    /// overrides applied.
+    pub fn current() -> Self {
+        use std::sync::atomic::Ordering;
+        let mut p = IntegerParameters::default();
+        let c = CLI_OPEN_CHAINS_LIMIT.load(Ordering::Relaxed);
+        if c >= 0 {
+            p.open_chains_limit = c;
+        }
+        let s = CLI_SATURATION_LIMIT.load(Ordering::Relaxed);
+        if s >= 0 {
+            p.saturation_limit = s;
+        }
+        p
     }
 }
 
@@ -1359,12 +1402,12 @@ pub fn refine_with_source_asms(
     // assumption-augmented cases.  This step is critical — it
     // propagates the typing constraints through the recursive premise
     // expansion, pruning cases whose continuation introduces premises
-    // that violate the [sources] typing.
-    // Haskell uses `paramSaturationLimit=5` for `saturateSources`. Our
-    // multi-branch port grows the case set with each iteration (each
-    // iter forks at every source-pick).  Capping iterations bounds
-    // growth.
-    let limit: usize = 5;
+    // that violate the [sources] typing.  Haskell threads the SAME
+    // `paramSaturationLimit` into this saturate as into the raw one
+    // (`refineWithSourceAsms parameters … = saturateSources parameters …`,
+    // Sources.hs:460-462), so a `-s` override applies here too — the
+    // ctx carries it.
+    let limit: usize = ctx.saturation_limit;
     let saturated = saturate_sources_with_simp(intermediate, limit, ctx);
 
     // Step 3 (Haskell `removeFormulas`): strip formulas + solved
@@ -1485,7 +1528,10 @@ fn refine_one_source(
                 ctx,
                 sys,
                 ths_snapshot,
-                /*chains_limit*/ 10,
+                // HS `solveAllSafeGoals (filter goodTh ths) (get
+                // paramOpenChainsLimit parameters)` (Sources.hs:382-383):
+                // the `-c/--open-chains` limit, default 10.
+                IntegerParameters::current().open_chains_limit,
                 outer_cap,
                 branch_cap,
                 name_list,
@@ -1548,6 +1594,18 @@ fn refine_one_source(
     (new_cases, changed, count)
 }
 
+/// HS `showSaturationSteps` (Sources.hs:363-376): when set, `saturateSources`
+/// traces `[Saturating Sources] …` progress lines to stderr.  HS defaults the
+/// parameter off and only `--precompute-only` batch mode observes it on, so
+/// the flag is process-global here: `run_batch`'s precompute path enables it;
+/// every other caller (proving, web) leaves it off.
+static SHOW_SATURATION_STEPS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_show_saturation_steps(on: bool) {
+    SHOW_SATURATION_STEPS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 fn saturate_sources_with_simp_opt(
     sources: Vec<Source>,
     limit: usize,
@@ -1555,6 +1613,7 @@ fn saturate_sources_with_simp_opt(
     aggressive_drop: bool,
 ) -> Vec<Source> {
     use rayon::prelude::*;
+    let show_steps = SHOW_SATURATION_STEPS.load(std::sync::atomic::Ordering::Relaxed);
     let mut current = sources;
     // HS-faithful: ONE pass per saturate iter via `refineSource solver`
     // where `solver = solveAllSafeGoals` (`Sources.hs`).  The
@@ -1579,7 +1638,7 @@ fn saturate_sources_with_simp_opt(
     // behaviour).  Looping only `limit` times left chaum_offline_anonymity's
     // Ku(sign) source one refinement short (29 vs HS's 33 cases), dropping
     // the deepest nested-blind C_2 source cases.
-    for _iter_n in 0..=limit {
+    for iter_n in 0..=limit {
         // Haskell-faithful `goodTh` filter (Sources.hs:380-381):
         //
         //   goodTh th = length (getDisj (get cdCases th)) <= 1
@@ -1745,6 +1804,27 @@ fn saturate_sources_with_simp_opt(
             // another iter because of a count drop — that was the
             // saturate over-iteration that killed PRF's C_2/S_2 chain
             // cases at iter 3 in TLS_Handshake.  See [project_prf_source_cache_undercount].
+        }
+        // HS trace guards (Sources.hs:361-377), with n = iter_n + 1 (HS's
+        // `go thsInit 1` is 1-based):
+        //   guard1 `changes && n <= limit` → "Step n (Max limit)", recurse;
+        //   guard2 `n > limit`             → "Saturation aborted, …" — fires
+        //     at the n = limit+1 pass REGARDLESS of convergence (guard order:
+        //     guard1 already failed on `n <= limit`);
+        //   otherwise (no changes, n ≤ limit) → "Done".
+        // The aborted text's "can be change" typo is HS's, kept verbatim.
+        if show_steps {
+            let n = iter_n + 1;
+            if changed && n <= limit {
+                eprintln!("[Saturating Sources] Step {n} (Max {limit})");
+            } else if n > limit {
+                eprintln!(
+                    "[Saturating Sources] Saturation aborted, more than {limit} \
+                     iterations. (Limit can be change with -s=)"
+                );
+            } else {
+                eprintln!("[Saturating Sources] Done");
+            }
         }
         current = next;
         if !changed {
@@ -2150,7 +2230,22 @@ fn run_solve_all_safe_goals_disj_with_progress(
         // no-op for most cases — but it is the HS-faithful behaviour.
         let is_safe = |g: &Goal| -> bool {
             match g {
-                Goal::Chain(_, _) => chains_left > 0,
+                Goal::Chain(_, _) => {
+                    if chains_left > 0 {
+                        true
+                    } else {
+                        // HS `safeGoal` traces UNCONDITIONALLY (no
+                        // `showSaturationSteps` gate) each time it rejects a
+                        // chain goal for an exhausted budget
+                        // (Sources.hs:153-155) — every mode, stderr.
+                        eprintln!(
+                            "[Open Chains] Too many chain constraints, \
+                             stopping precomputation. Open Chains limits (can \
+                             be changed with -c=): {chains_limit}"
+                        );
+                        false
+                    }
+                }
                 Goal::Action(_, fa) => !matches!(fa.tag, FactTag::Ku),
                 Goal::Premise(_, fa) => {
                     !matches!(fa.tag, FactTag::Ku)
@@ -2165,11 +2260,24 @@ fn run_solve_all_safe_goals_disj_with_progress(
         };
         // HS-faithful: kdPremGoals uses UNFILTERED goals (Sources.hs:144-225, see line 200),
         // safeGoals uses FILTERED (line 195).  Match HS by deriving each
-        // candidate from the correct source.
+        // candidate from the correct source.  `safeGoals` is a SHARED lazy
+        // list in HS — each element is tested by `safeGoal` at most once
+        // per iteration — so compute the head once and reuse it for the
+        // pick fallback, the chains decrement, and the lastChainTerm
+        // update.  (The `[Open Chains]` trace count inside `is_safe` still
+        // differs from HS's demand-driven forcing — a documented deliberate
+        // divergence; line content and phase placement match.)
+        let first_safe = filtered_goals.iter().find(|(g, _)| is_safe(g));
+        // HS `remainingChains safeGoals` (Sources.hs:196-197,215-216) keys
+        // the chains decrement on the HEAD OF `safeGoals` — not on the goal
+        // actually solved — so a kd-prem step still burns a chain tick
+        // whenever the first safe goal is a chain, and a chain-prem1 kd
+        // pick burns none when it isn't.
+        let safe_head_is_chain = matches!(first_safe, Some((Goal::Chain(_, _), _)));
         let pick = goals
             .iter()
             .find(|(g, _)| is_kd_prem(g) || is_chain_prem1(g))
-            .or_else(|| filtered_goals.iter().find(|(g, _)| is_safe(g)));
+            .or(first_safe);
         // HS-faithful update of `lastChainTerm'` (Sources.hs:209-211):
         //   case (kdPremGoals, safeGoals) of
         //     ([], ((ChainG c _):_)) -> ... (t <|> lastChainTerm) =<< kConcTerm c
@@ -2180,7 +2288,6 @@ fn run_solve_all_safe_goals_disj_with_progress(
         let kd_prem_empty = !goals
             .iter()
             .any(|(g, _)| is_kd_prem(g) || is_chain_prem1(g));
-        let first_safe = filtered_goals.iter().find(|(g, _)| is_safe(g));
         let new_last_chain_term = if kd_prem_empty {
             if let Some((Goal::Chain(c, _), _)) = first_safe {
                 let t = k_conc_term_for_chain(&red.sys, c);
@@ -2195,7 +2302,7 @@ fn run_solve_all_safe_goals_disj_with_progress(
 
         if let Some((goal, _)) = pick {
             let goal = goal.clone();
-            let new_chains_left = if matches!(goal, Goal::Chain(_, _)) {
+            let new_chains_left = if safe_head_is_chain {
                 chains_left - 1
             } else {
                 chains_left

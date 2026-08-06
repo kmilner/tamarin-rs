@@ -1,3 +1,4 @@
+../../crates/tamarin-theory/tests/fixtures/nat_sort_regression.spthy
 accountability/csf21-acc-unbounded/mixnets/basic/dmn-basic.spthy
 accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-1.spthy
 accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-2.spthy

@@ -34,7 +34,7 @@
 //!                              --prove every value parses and is ignored,
 //!                              as in HS.
 //!   --bound=N, -bN             proof-depth bound
-//!   --saturation=N, -sN        saturation iterations (parsed, not yet routed)
+//!   --saturation=N, -sN        bound on saturation iterations (default 5)
 //!   --heuristic=...            heuristic ranking sequence (overrides per-lemma)
 //!   --partial-evaluation=...   partial-evaluation mode (parsed, not yet routed)
 //!   -D|--defines=STRING        preprocessor `#define` flags. Repeatable.
@@ -48,11 +48,11 @@
 //!   --verbose, -v              verbose proof-search output
 //!   --parse-only               parse + pretty-print, no analysis
 //!   --precompute-only          run precomputation only
-//!   --open-chains=N, -cN       open-chain bound (parsed, not yet routed)
+//!   --open-chains=N, -cN       bound on open chains during saturation (default 10)
 //!   --derivcheck-timeout=N -dN message-derivation check timeout
 //!   --no-ndc                   deactivate the no-deconstruction-chain check
-//!   --no-reuse                 do not export reuse lemmas (parsed, not yet routed)
-//!   --no-restrictions          do not export restrictions (parsed, not yet routed)
+//!   --proverif-no-reuse-lemmas do not export reuse lemmas (parsed, not yet routed)
+//!   --proverif-no-restrictions do not export restrictions (parsed, not yet routed)
 //!   --replication-bound=N      DeepSec replication bound (parsed, not yet routed)
 //!   --no-compress              do not compress sequents (parsed, not yet routed)
 //!   --output=FILE, -oFILE      write the analyzed theory to FILE
@@ -202,8 +202,8 @@ pub struct Args {
     pub open_chains: Option<u64>,
     pub saturation: Option<u64>,
     pub derivcheck_timeout: Option<u64>,
-    pub no_reuse: bool,
-    pub no_restrictions: bool,
+    pub proverif_no_reuse_lemmas: bool,
+    pub proverif_no_restrictions: bool,
     pub replication_bound: Option<u32>,
     pub no_compress: bool,
     pub parse_only: bool,
@@ -280,8 +280,8 @@ impl Default for Args {
             open_chains: None,
             saturation: None,
             derivcheck_timeout: None,
-            no_reuse: false,
-            no_restrictions: false,
+            proverif_no_reuse_lemmas: false,
+            proverif_no_restrictions: false,
             replication_bound: None,
             no_compress: false,
             parse_only: false,
@@ -503,8 +503,8 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                     let v = flag_opt(val_inline, "5");
                     args.derivcheck_timeout = Some(parse_int(&v, "derivcheck-timeout")?);
                 }
-                "no-reuse" => args.no_reuse = true,
-                "no-restrictions" => args.no_restrictions = true,
+                "proverif-no-reuse-lemmas" => args.proverif_no_reuse_lemmas = true,
+                "proverif-no-restrictions" => args.proverif_no_restrictions = true,
                 "replication-bound" => {
                     let v = flag_opt(val_inline, "3");
                     args.replication_bound = Some(parse_int(&v, "replication-bound")?);
@@ -941,14 +941,13 @@ pub fn detect_maude_version_at(path: &str) -> Option<String> {
 ///
 /// Two deliberate divergences from that rendering:
 ///
-/// 1. Five oracle rows are absent — `--proverif-no-reuse-lemmas`,
-///    `--proverif-no-source-lemmas`, `--proverif-no-restrictions`,
+/// 1. Three oracle rows are absent — `--proverif-no-source-lemmas`,
 ///    `--proverif-no-multiset` and `--proverif-no-precise`
 ///    (TheoryLoader.hs:187-207).  [`parse_args`] has no arm for any of them,
 ///    so the binary answers `Unknown flag: --proverif-...`, and help must not
 ///    advertise a flag the binary refuses.  Dropping the rows leaves every
 ///    other byte intact: cmdargs derives the description column from the
-///    widest left cell, and all five left cells are far narrower than the
+///    widest left cell, and all three left cells are far narrower than the
 ///    retained `-m --output-module[=...]` row.
 ///
 /// 2. [`RS_ONLY_HELP_TRAILER`] follows the oracle's README block, listing the
@@ -1030,6 +1029,10 @@ Flags:
   -d --derivcheck-timeout[=INT]                                             Set timeout for message
                                                                             derivation checks in sec (default
                                                                             5). 0 deactivates check.
+     --proverif-no-reuse-lemmas                                             Do not export reuse lemmas as
+                                                                            ProVerif axioms
+     --proverif-no-restrictions                                             Do not export restrictions to
+                                                                            ProVerif
      --replication-bound[=INT]                                              Replication bound for DeepSec
                                                                             export
      --no-ndc                                                               Deactivate the no
@@ -1092,8 +1095,6 @@ for usage instructions and pointers to examples.
 const RS_ONLY_HELP_TRAILER: &str = r"------------------------------------------------------------------------------
 Flags accepted by this Rust port only; the Haskell tamarin-prover rejects
 every flag below with 'Unknown flag'.
-     --no-reuse                                                             Do not export reuse lemmas
-     --no-restrictions                                                      Do not export restrictions
      --processors=N                                                         Worker threads for internal
                                                                             parallelism (default: all cores;
                                                                             N=1 is byte-identical to
@@ -1121,11 +1122,11 @@ which this port also accepts here:
 /// Its widest left cell is `     --stop-on-trace[=DFS|BFS|SEQDFS|SORRY|NONE]`
 /// (48 bytes), so cmdargs starts descriptions at byte 50 and wraps at 59.
 ///
-/// Seven oracle rows are absent, by the same rule that drops five from
+/// Five oracle rows are absent, by the same rule that drops three from
 /// [`ORACLE_HELP_HEAD`] — [`parse_args`] answers `Unknown flag` for each, and
-/// help must not advertise a flag the binary refuses: the same five
+/// help must not advertise a flag the binary refuses: the same three
 /// `--proverif-*` rows (TheoryLoader.hs:187-207) plus `--browser` and
-/// `--load-json` (Interactive.hs:61 and 63-64).  All seven left cells are narrower
+/// `--load-json` (Interactive.hs:61 and 63-64).  All five left cells are narrower
 /// than the retained `--stop-on-trace` row, so the column is unchanged.
 const ORACLE_INTERACTIVE_HELP_HEAD: &str = r"interactive [COMMAND] ... [OPTIONS] WORKDIR
   Start a web-server to construct proofs interactively.
@@ -1164,6 +1165,8 @@ Flags:
                                                   (default 5)
   -d --derivcheck-timeout[=INT]                   Set timeout for message derivation checks in sec (default
                                                   5). 0 deactivates check.
+     --proverif-no-reuse-lemmas                   Do not export reuse lemmas as ProVerif axioms
+     --proverif-no-restrictions                   Do not export restrictions to ProVerif
      --replication-bound[=INT]                    Replication bound for DeepSec export
      --no-ndc                                     Deactivate the no deconstruction chain (NDC) check
                                                   (enabled by default)
@@ -1246,12 +1249,10 @@ for usage instructions and pointers to examples.
 /// parser ([`parse_args`]), so every subcommand accepts every other
 /// subcommand's flags, and spelling that out per mode would restate most of
 /// `tamarin-prover --help` three times.  The batch trailer enumerates its
-/// five extras because that list is short.
+/// four extras because that list is short.
 const RS_ONLY_HELP_TRAILER_COL50: &str = r"------------------------------------------------------------------------------
 Flags accepted by this Rust port only; the Haskell tamarin-prover rejects
 every flag below with 'Unknown flag'.
-     --no-reuse                                   Do not export reuse lemmas
-     --no-restrictions                            Do not export restrictions
      --processors=N                               Worker threads for internal parallelism (default: all
                                                   cores; N=1 is byte-identical to sequential output)
      --maude-processes=M                          Maude subprocesses the workers share (default:
@@ -1272,8 +1273,6 @@ help documents is accepted here too, though the Haskell prover answers
 const RS_ONLY_HELP_TRAILER_COL26: &str = r"------------------------------------------------------------------------------
 Flags accepted by this Rust port only; the Haskell tamarin-prover rejects
 every flag below with 'Unknown flag'.
-     --no-reuse           Do not export reuse lemmas
-     --no-restrictions    Do not export restrictions
      --processors=N       Worker threads for internal parallelism (default: all cores; N=1 is byte-identical
                           to sequential output)
      --maude-processes=M  Maude subprocesses the workers share (default: --processors; ~30-100 MB each; M=1

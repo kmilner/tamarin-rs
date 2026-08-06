@@ -590,6 +590,20 @@ fn gather_typing_assumptions(
     Ok((typing_assumptions, source_key))
 }
 
+/// `--precompute-only` stats (HS `prettyPrecomputation`, ClosedTheory.hs:553-575):
+/// protocol-rule count, raw/refined source-GROUP counts (`length cases` over
+/// `getSource kind thy` — the number of `Source` entries, not the per-case
+/// total), unsolved-chain sums, and whether the label needs the
+/// "and restrictions" suffix (`theoryRestrictions thy` non-empty).
+pub struct PrecomputationStats {
+    pub rules: usize,
+    pub raw_cases: usize,
+    pub raw_chains: usize,
+    pub refined_cases: usize,
+    pub refined_chains: usize,
+    pub has_restrictions: bool,
+}
+
 /// Resolve the goal-ranking heuristic for a lemma, mirroring HS
 /// `selectHeuristic prover ctx = apDefaultHeuristic prover <|> L.get
 /// pcHeuristic ctx` (Proof.hs:707-708): the CLI `--heuristic`
@@ -630,6 +644,95 @@ fn resolve_heuristic(
 }
 
 impl ProverSession {
+    /// Compute the `--precompute-only` stats (HS `prettyPrecomputation`,
+    /// ClosedTheory.hs:553-575).  Forces the template's source cells
+    /// (`ensure_saturated`), so it is intended for the precompute-only
+    /// path where the session serves no proving afterwards.  Installs the
+    /// session's own user-fun sets for the duration (the typing-assumption
+    /// `formula_to_guarded` calls and the refine's term conversions read
+    /// the thread-locals), so it is safe to call from any thread and with
+    /// other sessions' guards active.
+    pub fn precomputation_stats(
+        &self,
+        parsed: &p::Theory,
+    ) -> Result<PrecomputationStats, ProveError> {
+        use crate::constraint::solver::sources::{
+            refine_with_source_asms, unsolved_chain_constraints, Source,
+        };
+        let _user_funs_guard = crate::elaborate::set_user_funs_from_collected(&self.user_funs);
+        // HS `length (getClassifiedRules thy)._crProtocol`: the user
+        // protocol rules plus the intruder members of `crProtocol` —
+        // everything that is neither a construction rule (`isConstrRule`,
+        // Model/Rule.hs:684-691) nor a destruction rule (`isDestrRule`,
+        // Model/Rule.hs:671-675), i.e. ISend/IRecv/IRecvNC/Fresh.  Same
+        // computation as the web index's `proto_rule_count`.
+        use crate::rule::IntrRuleACInfo as I;
+        let rules = crate::pretty_theory::web_proto_rules(parsed, &self.theory).len()
+            + self
+                .template_ctx
+                .intruder_rules
+                .iter()
+                .filter(|ir| {
+                    !matches!(
+                        ir.info,
+                        I::ConstrRule { .. }
+                            | I::FreshConstr
+                            | I::PubConstr
+                            | I::NatConstr
+                            | I::Coerce
+                            | I::DestrRule { .. }
+                            | I::IEquality
+                    )
+                })
+                .count();
+
+        // Raw = the saturated precompute (HS `precomputeSources`,
+        // CloseRule.hs:426).  The template ctx carries no typing
+        // assumptions, so `ensure_saturated` stops at the raw saturate
+        // and the cells hold exactly `getSource RawSource thy`.
+        self.template_ctx.ensure_saturated();
+        let chains_of = |sources: &[Source]| -> usize {
+            sources
+                .iter()
+                .map(|s| {
+                    s.cases_or_empty()
+                        .iter()
+                        .map(|(_, sys)| unsolved_chain_constraints(sys))
+                        .sum::<usize>()
+                })
+                .sum()
+        };
+        let raw_cases = self.template_ctx.full_sources.len();
+        let raw_chains = chains_of(&self.template_ctx.full_sources);
+
+        // Refined = `refineWithSourceAsms typAsms` over the raw set
+        // (CloseRule.hs:427).  `typAsms` = every `[sources]` AllTraces
+        // lemma's guarded formula ("" matches no lemma name, so nothing
+        // is excluded).  With no such lemma HS's refine is a plain
+        // relabel (Sources.hs:458-459) — counts identical to raw.
+        let (typ_asms, _key) =
+            gather_typing_assumptions(&self.theory, "", SourceKind::RefinedSources)?;
+        let (refined_cases, refined_chains) = if typ_asms.is_empty() {
+            (raw_cases, raw_chains)
+        } else {
+            let refined = refine_with_source_asms(
+                self.template_ctx.full_sources.to_vec(),
+                &typ_asms,
+                &self.template_ctx,
+            );
+            (refined.len(), chains_of(&refined))
+        };
+
+        Ok(PrecomputationStats {
+            rules,
+            raw_cases,
+            raw_chains,
+            refined_cases,
+            refined_chains,
+            has_restrictions: !self.restrictions.is_empty(),
+        })
+    }
+
     /// Build the shared per-file state, also setting `theory.in_file` for
     /// oracle path resolution (HS Parser.hs).  Does the expensive
     /// once-per-file work: theory elaboration, restriction conversion, full
