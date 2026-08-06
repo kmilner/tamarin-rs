@@ -1,0 +1,33 @@
+WARNING: the following wellformedness checks failed!
+
+Multiplication restriction of rules
+===================================
+
+  The following rule is not multiplication restricted:
+    rule (modulo E) ConclusionProduct:
+       [ Fr( ~a ), Fr( ~b ), Fr( ~c ) ]
+      --[
+      ActionOnly( (~a*~c) ), ActionOnly( (~a*~c*~c) ), ActionOnly( ~b )
+      ]->
+       [ Out( <(~a*~b), (~a*~a*~b)> ) ]
+  
+  After replacing reducible function symbols in lhs with variables:
+    rule (modulo E) ConclusionProduct:
+       [ Fr( ~a ), Fr( ~b ), Fr( ~c ) ]
+      --[
+      ActionOnly( (~a*~c) ), ActionOnly( (~a*~c*~c) ), ActionOnly( ~b )
+      ]->
+       [ Out( <(~a*~b), (~a*~a*~b)> ) ]
+  
+    Terms with multiplication:  (~a*~b), (~a*~a*~b)
+  
+  The following rule is not multiplication restricted:
+    rule (modulo E) LhsAbstraction:
+       [ In( <fst(z), snd(w)> ) ] --[ Seen( 'c' ) ]-> [ Out( <z, w> ) ]
+  
+  After replacing reducible function symbols in lhs with variables:
+    rule (modulo E) LhsAbstraction:
+       [ In( <x.1, x.2> ) ] --[ Seen( 'c' ) ]-> [ Out( <z, w> ) ]
+  
+    Variables that occur only in rhs:  w, z
+*/

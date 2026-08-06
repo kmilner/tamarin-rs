@@ -1,0 +1,42 @@
+theory DualDeclaredExp
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: diffie-hellman
+functions: fst/1, pair/2, red/2, snd/1, exp/2 [AC]
+equations: fst(<x.1, x.2>) = x.1, red(x, y) = x, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) R:
+   [ ] --[ A( 'a'^'b' ), B( 'a'^'b' ), C( ('a' exp 'b') ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+lemma L1:
+  all-traces "∀ #i. (Test( 'a'^'b' ) @ #i) ⇒ (⊥)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ #i. (Test( 'a'^'b' ) @ #i)"
+*/
+by sorry
+
+lemma L2:
+  all-traces "∀ #i. (Test( 'b'^red('c', 'd') ) @ #i) ⇒ (⊥)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ #i. (Test( 'b'^red('c', 'd') ) @ #i)"
+*/
+by sorry
+
+lemma L3:
+  all-traces "∀ #i. (Test( 'b'^'a'^'c' ) @ #i) ⇒ (⊥)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ #i. (Test( 'b'^'a'^'c' ) @ #i)"
+*/
+by sorry
+
+
+
+end

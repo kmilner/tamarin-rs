@@ -1,0 +1,11 @@
+theory SapicLookupBinder
+begin
+
+process:
+  in(m);
+  lookup m as v in
+    event Ev(v)
+  else
+    event No()
+
+end

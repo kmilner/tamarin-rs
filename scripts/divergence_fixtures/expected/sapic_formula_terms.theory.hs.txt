@@ -1,0 +1,206 @@
+theory SapicFormulaTerms
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: diffie-hellman
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+heuristic: p
+
+rule (modulo E) Init[color=#ffffff, process="in(k.1);", issapicrule,
+                     role='Process']:
+   [ ] --[ Init( ) ]-> [ State_( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ink_0_[color=#ffffff, process="in(k.1);", issapicrule,
+                       role='Process']:
+   [ State_( ), In( k.1 ) ] --> [ State_1( k.1 ) ]
+
+  /*
+  rule (modulo AC) ink_0_[color=#ffffff, process="in(k.1);", issapicrule,
+                          role='Process']:
+     [ State_( ), In( k ) ] --> [ State_1( k ) ]
+  */
+
+rule (modulo E) letpqrabbc_0_1[color=#ffffff,
+                               process="let <<p.1, q.1>, r.1>=<<'a'^'b', 'b'>, 'c'>", issapicrule,
+                               role='Process']:
+   [ State_1( k.1 ) ] --> [ Let_11( <<'a'^'b', 'b'>, 'c'>, k.1 ) ]
+
+  /*
+  rule (modulo AC) letpqrabbc_0_1[color=#ffffff,
+                                  process="let <<p.1, q.1>, r.1>=<<'a'^'b', 'b'>, 'c'>", issapicrule,
+                                  role='Process']:
+     [ State_1( k ) ] --> [ Let_11( <<'a'^'b', 'b'>, 'c'>, k ) ]
+  */
+
+rule (modulo E) letpqrabbc_1_1[color=#ffffff,
+                               process="let <<p.1, q.1>, r.1>=<<'a'^'b', 'b'>, 'c'>", issapicrule,
+                               role='Process']:
+   [ Let_11( <<p.1, q.1>, r.1>, k.1 ) ]
+  -->
+   [ State_11( k.1, p.1, q.1, r.1 ) ]
+
+  /*
+  rule (modulo AC) letpqrabbc_1_1[color=#ffffff,
+                                  process="let <<p.1, q.1>, r.1>=<<'a'^'b', 'b'>, 'c'>", issapicrule,
+                                  role='Process']:
+     [ Let_11( <<p, q>, r>, k ) ] --> [ State_11( k, p, q, r ) ]
+  */
+
+restriction Restr_letpqrabbc_2_1_1:
+  "∀ #NOW.
+    (Restr_letpqrabbc_2_1_1( ) @ #NOW) ⇒
+    (∀ p q r. (<<p, q>, r> = <<'a'^'b', 'b'>, 'c'>) ⇒ (⊥))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ #NOW.
+    (Restr_letpqrabbc_2_1_1( ) @ #NOW) ⇒
+    (∀ p q r. (<<p, q>, r> = <<'a'^'b', 'b'>, 'c'>) ⇒ (⊥))"
+  */
+
+rule (modulo E) letpqrabbc_2_1[color=#ffffff,
+                               process="let <<p.1, q.1>, r.1>=<<'a'^'b', 'b'>, 'c'>", issapicrule,
+                               role='Process']:
+   [ Let_11( <<'a'^'b', 'b'>, 'c'>, k.1 ) ]
+  --[ Restr_letpqrabbc_2_1_1( ) ]->
+   [ State_12( k.1 ) ]
+
+  /*
+  rule (modulo AC) letpqrabbc_2_1[color=#ffffff,
+                                  process="let <<p.1, q.1>, r.1>=<<'a'^'b', 'b'>, 'c'>", issapicrule,
+                                  role='Process']:
+     [ Let_11( <<'a'^'b', 'b'>, 'c'>, k ) ]
+    --[ Restr_letpqrabbc_2_1_1( ) ]->
+     [ State_12( k ) ]
+  */
+
+rule (modulo E) outpqr_0_11[color=#ffffff,
+                            process="out(<p.1, q.1, r.1>);", issapicrule, role='Process']:
+   [ State_11( k.1, p.1, q.1, r.1 ) ]
+  -->
+   [ State_111( k.1, p.1, q.1, r.1 ), Out( <p.1, q.1, r.1> ) ]
+
+  /*
+  rule (modulo AC) outpqr_0_11[color=#ffffff,
+                               process="out(<p.1, q.1, r.1>);", issapicrule, role='Process']:
+     [ State_11( k, p, q, r ) ]
+    -->
+     [ State_111( k, p, q, r ), Out( <p, q, r> ) ]
+  */
+
+rule (modulo E) p_0_111[color=#ffffff, process="0", issapicrule,
+                        role='Process']:
+   [ State_111( k.1, p.1, q.1, r.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_111[color=#ffffff, process="0", issapicrule,
+                           role='Process']:
+     [ State_111( k, p, q, r ) ] --> [ ]
+  */
+
+rule (modulo E) letstke_0_12[color=#ffffff,
+                             process="let <s.1, t.1>=<k.1, 'e'>", issapicrule, role='Process']:
+   [ State_12( k.1 ) ] --> [ Let_121( <k.1, 'e'>, k.1 ) ]
+
+  /*
+  rule (modulo AC) letstke_0_12[color=#ffffff,
+                                process="let <s.1, t.1>=<k.1, 'e'>", issapicrule, role='Process']:
+     [ State_12( k ) ] --> [ Let_121( <k, 'e'>, k ) ]
+  */
+
+rule (modulo E) letstke_1_12[color=#ffffff,
+                             process="let <s.1, t.1>=<k.1, 'e'>", issapicrule, role='Process']:
+   [ Let_121( <s.1, t.1>, k.1 ) ] --> [ State_121( k.1, s.1, t.1 ) ]
+
+  /*
+  rule (modulo AC) letstke_1_12[color=#ffffff,
+                                process="let <s.1, t.1>=<k.1, 'e'>", issapicrule, role='Process']:
+     [ Let_121( <s, t>, k ) ] --> [ State_121( k, s, t ) ]
+  */
+
+restriction Restr_letstke_2_12_1:
+  "∀ x #NOW.
+    (Restr_letstke_2_12_1( x ) @ #NOW) ⇒ (∀ s t. (<s, t> = x) ⇒ (⊥))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #NOW.
+    (Restr_letstke_2_12_1( x ) @ #NOW) ⇒ (∀ s t. (<s, t> = x) ⇒ (⊥))"
+  */
+
+rule (modulo E) letstke_2_12[color=#ffffff,
+                             process="let <s.1, t.1>=<k.1, 'e'>", issapicrule, role='Process']:
+   [ Let_121( <k.1, 'e'>, k.1 ) ]
+  --[ Restr_letstke_2_12_1( <k.1, 'e'> ) ]->
+   [ State_122( k.1 ) ]
+
+  /*
+  rule (modulo AC) letstke_2_12[color=#ffffff,
+                                process="let <s.1, t.1>=<k.1, 'e'>", issapicrule, role='Process']:
+     [ Let_121( <k, 'e'>, k ) ]
+    --[ Restr_letstke_2_12_1( <k, 'e'> ) ]->
+     [ State_122( k ) ]
+  */
+
+rule (modulo E) outst_0_121[color=#ffffff, process="out(<s.1, t.1>);",
+                            issapicrule, role='Process']:
+   [ State_121( k.1, s.1, t.1 ) ]
+  -->
+   [ State_1211( k.1, s.1, t.1 ), Out( <s.1, t.1> ) ]
+
+  /*
+  rule (modulo AC) outst_0_121[color=#ffffff, process="out(<s.1, t.1>);",
+                               issapicrule, role='Process']:
+     [ State_121( k, s, t ) ] --> [ State_1211( k, s, t ), Out( <s, t> ) ]
+  */
+
+rule (modulo E) p_0_1211[color=#ffffff, process="0", issapicrule,
+                         role='Process']:
+   [ State_1211( k.1, s.1, t.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_1211[color=#ffffff, process="0", issapicrule,
+                            role='Process']:
+     [ State_1211( k, s, t ) ] --> [ ]
+  */
+
+rule (modulo E) outno_0_122[color=#ffffff, process="out('no');",
+                            issapicrule, role='Process']:
+   [ State_122( k.1 ) ] --> [ State_1221( k.1 ), Out( 'no' ) ]
+
+  /*
+  rule (modulo AC) outno_0_122[color=#ffffff, process="out('no');",
+                               issapicrule, role='Process']:
+     [ State_122( k ) ] --> [ State_1221( k ), Out( 'no' ) ]
+  */
+
+rule (modulo E) p_0_1221[color=#ffffff, process="0", issapicrule,
+                         role='Process']:
+   [ State_1221( k.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_1221[color=#ffffff, process="0", issapicrule,
+                            role='Process']:
+     [ State_1221( k ) ] --> [ ]
+  */
+
+restriction single_session:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  */
+
+
+
+end

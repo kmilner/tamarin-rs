@@ -10,7 +10,7 @@
 //!   - Genuine stubs that still return {alert} or 501
 //!
 //! Coverage matrix:
-//!   - GET  /thy/trace/<idx>/intdot/*path                 LIVE — text/plain DOT
+//!   - GET  /thy/trace/<idx>/intdot/*path                 LIVE — HTML shell page
 //!   - GET  /thy/trace/<idx>/graph/*path                  LIVE — SVG or DOT fallback
 //!   - GET  /thy/trace/<idx>/interactive-graph-def/*path  LIVE — text/plain DOT
 //!   - POST /thy/trace/<idx>/edit/*path                   ({alert})
@@ -27,15 +27,11 @@ mod common;
 
 use common::*;
 
-fn one_key_set(k: &str) -> std::collections::BTreeSet<String> {
-    std::iter::once(k.to_string()).collect()
-}
-
 // ---------------------------------------------------------------------
-// Graph routes — now LIVE (DOT pipeline).
+// Graph routes — LIVE (DOT pipeline).
 //
 // `intdot` returns the HS `intdotLayout` HTML shell page (a
-// `<dot-graph-viz>` pointing at `interactive-graph-def`);
+// `<dot-graph-viz>` pointing at the `json` graph route);
 // `interactive-graph-def` returns the raw DOT source; `graph` returns
 // SVG (or DOT fallback when `dot` is missing).  `intdot` is
 // system-agnostic (HS `getInteractiveDotGraphR` only does `withTheory`),
@@ -63,10 +59,12 @@ async fn test_intdot_returns_html_shell() {
 
 #[tokio::test]
 async fn test_graph_returns_image_or_dot() {
+    // A proof node — the paths `thyPathSystem` draws.  A lemma / help / rules
+    // path is its catch-all `error` instead (see `routes_graph.rs`).
     let s = start_server_with_theory("issue193.spthy").await;
     let res = s
         .client
-        .get(s.url("/thy/trace/1/graph/lemma/debug"))
+        .get(s.url("/thy/trace/1/graph/proof/debug"))
         .send()
         .await
         .expect("send");
@@ -89,10 +87,11 @@ async fn test_graph_returns_image_or_dot() {
 
 #[tokio::test]
 async fn test_interactive_graph_def_returns_dot_text() {
+    // As above: a proof node is what this route draws.
     let s = start_server_with_theory("issue193.spthy").await;
     let res = s
         .client
-        .get(s.url("/thy/trace/1/interactive-graph-def/lemma/debug"))
+        .get(s.url("/thy/trace/1/interactive-graph-def/proof/debug"))
         .send()
         .await
         .expect("send");

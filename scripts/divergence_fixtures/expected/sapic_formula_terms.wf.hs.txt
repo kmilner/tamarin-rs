@@ -1,0 +1,14 @@
+WARNING: the following wellformedness checks failed!
+
+Formula terms
+=============
+
+  Restriction `Restr_letpqrabbc_2_1_1' uses terms of the wrong form:
+    `pair(pair(exp('a','b'),'b'),'c')'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+*/

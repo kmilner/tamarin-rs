@@ -1,0 +1,40 @@
+theory FormulaTermsOffenders
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: diffie-hellman, bilinear-pairing
+functions: aaa/2, f/2, fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) R:
+   [ Fr( ~a ), Fr( ~b ) ] --[ Test( ~a ), Test2( ~b ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+lemma OneOffenderGround:
+  all-traces "∀ #i. (Test( (f('g', 'h')*em('g', 'h')) ) @ #i) ⇒ (⊥)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ #i. (Test( (f('g', 'h')*em('g', 'h')) ) @ #i)"
+*/
+by sorry
+
+lemma TwoOffendersBound:
+  all-traces
+  "∀ x y #i.
+    (Test2( (aaa(x, y)*em(x, y)) ) @ #i) ⇒
+    (∃ #j. Test( (f(x, y)*em(x, y)) ) @ #j)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ x y #i.
+  (Test2( (aaa(x, y)*em(x, y)) ) @ #i)
+ ∧
+  ∀ #j. (Test( (f(x, y)*em(x, y)) ) @ #j) ⇒ ⊥"
+*/
+by sorry
+
+
+
+end

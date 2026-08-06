@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
 //   jdreier, meiersi, racoucho1u, rsasse, felixlinker,
-//   PhilipLukertWork, kevinmorio, yavivanov, beschmi, arcz, Nick Moore,
+//   PhilipLukertWork, kevinmorio, yavivanov, beschmi, Nick Moore, arcz,
 //   katrielalex, rkunnema, addap, and other minor contributors (see
 //   upstream git history)
 // Ported from upstream tamarin-prover sources:

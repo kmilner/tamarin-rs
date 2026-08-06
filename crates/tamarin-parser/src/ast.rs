@@ -1,14 +1,16 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, felixlinker, rkunnema, PhilipLukertWork, and other minor
-//   contributors (see upstream git history)
+//   jdreier, beschmi, meiersi, PhilipLukertWork, felixlinker, rkunnema,
+//   BTom-GH, rsasse, and other minor contributors (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Items/LemmaItem.hs,
+//   lib/term/src/Term/Term.hs, lib/theory/src/Items/LemmaItem.hs,
 //   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
 //   lib/theory/src/Theory/Constraint/System/Constraints.hs,
 //   lib/theory/src/Theory/Proof.hs,
 //   lib/theory/src/Theory/Text/Parser/Lemma.hs,
 //   lib/theory/src/Theory/Text/Parser/Proof.hs,
-//   lib/theory/src/Theory/Text/Parser/Rule.hs
+//   lib/theory/src/Theory/Text/Parser/Rule.hs,
+//   lib/theory/src/Theory/Text/Parser/Signature.hs
 
 //! Surface-syntax AST for `.spthy` files: the loose tree [`crate::parser`]
 //! produces and [`crate::wf`] (plus, downstream, `tamarin-theory`'s
@@ -83,6 +85,21 @@ pub struct FunctionDecl {
     pub out_type: Option<String>,
     pub private: bool,
     pub destructor: bool,
+    /// `[AC]`: the symbol is a user-defined associative-commutative operator
+    /// (HS `ACstate IsAC`).  HS requires such a symbol to be binary and
+    /// registers it as an `ACfctUser` rather than a `NoEqUser` symbol; a binary
+    /// one is additionally usable in infix notation (`Parser::acterm`).
+    pub ac: bool,
+    /// `[NDC]`: the "no deconstruction chain" property is asserted for the
+    /// trace intruder rules (HS `NDCstate IsNDC`).
+    pub ndc: bool,
+    /// `[NDC-diff]`: the "no deconstruction chain" property is asserted for the
+    /// diff-mode intruder rules (HS `NDCstate IsNDCDiff`).
+    ///
+    /// The symbol's NDC state is the join of the two flags (HS `function`,
+    /// Theory/Text/Parser/Signature.hs:183-225): neither = `NotNDC`, `ndc`
+    /// alone = `IsNDC`, `ndc_diff` alone = `IsNDCDiff`, both = `IsNDCBoth`.
+    pub ndc_diff: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -607,6 +624,35 @@ pub enum BinOp {
     Union,   // + or ++
     Xor,     // XOR or ⊕
     NatPlus, // %+
+    /// A user-declared `[AC]` function symbol, applied infix (`(x add y)`).
+    /// Carries the bare symbol name; the rendered separator is the name
+    /// surrounded by spaces.  The name is interned, which is what lets the
+    /// variant borrow it for `'static` and keep the enum `Copy`.
+    AcFct(&'static str),
+}
+
+impl BinOp {
+    /// The string HS `prettyTerm` puts between the operands of this operator.
+    ///
+    /// The five builtin operators are the literal separators of `prettyTerm`'s
+    /// `ppTerms`/`exp` arms (`*`, `⊕`, `++`, `%+`, `^`; Term/Term.hs:306-310).
+    /// A user-declared `[AC]` symbol is separated by `" " ++ BC.unpack f ++ " "`
+    /// (Term/Term.hs:305), i.e. its name with the spaces included, so that one
+    /// arm owns a `String`.
+    ///
+    /// This is the single separator table: printers that need a `&'static str`
+    /// (the `LNTerm` printer hands separators to a `Doc`) intern the owned arm.
+    pub fn separator(&self) -> std::borrow::Cow<'static, str> {
+        use std::borrow::Cow;
+        match self {
+            BinOp::Exp => Cow::Borrowed("^"),
+            BinOp::Mult => Cow::Borrowed("*"),
+            BinOp::Union => Cow::Borrowed("++"),
+            BinOp::Xor => Cow::Borrowed("\u{2295}"),
+            BinOp::NatPlus => Cow::Borrowed("%+"),
+            BinOp::AcFct(name) => Cow::Owned(format!(" {name} ")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -650,4 +696,33 @@ pub enum FlagFormula {
     Not(Box<FlagFormula>),
     And(Box<FlagFormula>, Box<FlagFormula>),
     Or(Box<FlagFormula>, Box<FlagFormula>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BinOp;
+
+    /// The separator strings HS `prettyTerm` puts between operands
+    /// (Term/Term.hs:305-310).  Every printer of a `BinOp` reads them from
+    /// here, so a typo would move in lockstep across all of them — pin the
+    /// table itself.
+    #[test]
+    fn separator_table_matches_prettyterm() {
+        assert_eq!(BinOp::Exp.separator(), "^");
+        assert_eq!(BinOp::Mult.separator(), "*");
+        assert_eq!(BinOp::Union.separator(), "++");
+        assert_eq!(BinOp::Xor.separator(), "\u{2295}");
+        assert_eq!(BinOp::NatPlus.separator(), "%+");
+        // A user-declared `[AC]` symbol keeps the surrounding spaces.
+        assert_eq!(BinOp::AcFct("add").separator(), " add ");
+        // Only that arm needs to own its string.
+        assert!(matches!(
+            BinOp::Exp.separator(),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert!(matches!(
+            BinOp::AcFct("add").separator(),
+            std::borrow::Cow::Owned(_)
+        ));
+    }
 }

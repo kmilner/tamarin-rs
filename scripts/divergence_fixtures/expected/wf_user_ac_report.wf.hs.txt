@@ -1,0 +1,11 @@
+WARNING: the following wellformedness checks failed!
+
+Special facts
+=============
+
+  rule `Operand' uses disallowed facts on left-hand-side:
+    Out( (z++(p add q)) )
+  
+  rule `CrossOp' uses disallowed facts on left-hand-side:
+    Out( ((%e%+%f)++(p add q)) )
+*/

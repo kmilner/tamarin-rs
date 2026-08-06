@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, arcz, jdreier, beschmi, kevinmorio, Kanakanajm, rsasse,
-//   addap, yavivanov, felixlinker, and other minor contributors (see
+//   meiersi, arcz, jdreier, cascremers, kevinmorio, beschmi, rsasse,
+//   Kanakanajm, addap, felixlinker, and other minor contributors (see
 //   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   src/Main/Mode/Interactive.hs, src/Main/TheoryLoader.hs,
@@ -111,13 +111,19 @@ impl ServerConfig {
     }
 }
 
-/// Start the server, blocking until shutdown.
+/// Apply the process-wide `tamarin-theory` settings the web UI depends on.
 ///
-/// Initial theory files (paths) are loaded eagerly.
-pub async fn serve(
-    cfg: ServerConfig,
-    theory_paths: Vec<PathBuf>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+/// Both statics default to what the `--prove` CLI wants, so a process that
+/// serves HTTP must opt out of those defaults BEFORE the first request —
+/// [`set_keep_sys`](tamarin_theory::constraint::solver::search::set_keep_sys)
+/// in particular before the first `autoprove` search, since a search that
+/// runs without it leaves every proof node's `System` dropped and the
+/// `/json/` and constraint-system panes render empty.
+///
+/// Every entry point that stands this server up calls this: [`serve`] and the
+/// `tests/common` harness.  Anything process-wide the server relies on belongs
+/// here rather than inline in `serve`, so the two cannot drift.
+pub fn init_process_globals() {
     // The web UI renders every HTTP response at HS's web width (100/67),
     // not the CLI console width (110/73) — HS `getTheorySourceR` uses
     // `render` (HughesPJ default `style`) and every HTML fragment goes
@@ -134,8 +140,18 @@ pub async fn serve(
     // proof never reprints a per-node system), but the interactive UI
     // renders the annotated system + applicable proof methods at every
     // proof path — HS keeps a `Just System` on every `IncrementalProof`
-    // node.  Must be set before the first `autoprove` runs a search.
+    // node.
     tamarin_theory::constraint::solver::search::set_keep_sys(true);
+}
+
+/// Start the server, blocking until shutdown.
+///
+/// Initial theory files (paths) are loaded eagerly.
+pub async fn serve(
+    cfg: ServerConfig,
+    theory_paths: Vec<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    init_process_globals();
 
     let store = TheoryStore::default();
 

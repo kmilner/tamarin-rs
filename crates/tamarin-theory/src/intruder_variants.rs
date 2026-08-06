@@ -1,7 +1,7 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, arcz, meiersi, rkunnema, jdreier, yavivanov, Nynko,
-//   Azurios-git, felixlinker, and other minor contributors (see
-//   upstream git history)
+//   kevinmorio, jdreier, arcz, meiersi, rkunnema, yavivanov, Nynko,
+//   beschmi, Azurios-git, felixlinker, and other minor contributors
+//   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Term/FunctionSymbols.hs,
 //   lib/theory/src/Theory/Model/Fact.hs,
@@ -39,12 +39,23 @@
 //! for the Rust port of `dhIntruderRules`, which IS still used as a
 //! regenerator (the function that PRODUCES the cache file) but is not
 //! the production runtime path.
+//!
+//! The committed BP cache holds 75 rules, one more than the regenerator
+//! emits: `minimizeIntruderRules` (IntruderRules.hs:190-208) subsumes
+//! rules via the Maude-backed `equalDuplicateRuleUpToRenaming` /
+//! `equalSubsetRuleUpToRenaming`, collapsing one `d_em` variant that the
+//! cached file still lists, so `tamarin-prover variants` on the pinned
+//! upstream tree emits 74 BP rules.  Both HS and RS parse the committed
+//! 75 rules on every theory load, so the two stay byte-identical in
+//! production; the divergence is confined to the regenerator.
 
 use tamarin_parser as p;
+use tamarin_term::function_symbols::FunSym;
 use tamarin_term::maude_sig::MaudeSig;
 
 use crate::elaborate;
 use crate::fact::LNFact;
+use crate::intruder_rules::show_fun_sym_name;
 use crate::rule::{IntrRuleAC, IntrRuleACInfo, Rule};
 
 /// HS `dhIntruderVariantsFile` (TheoryLoader.hs:745-746, see line 746).
@@ -155,39 +166,127 @@ pub fn parse_intruder_rules(
     // identifiers like `one` / `DH_neutral` are recognised as constants.
     let _nullary_guard = elaborate::MaudeSigNullaryGuard::set(msig);
 
+    // HS `knownFuns = S.toList (funSyms msig)`.
+    let known_funs = KnownFuns::new(msig.fun_syms.iter().copied().collect());
+
     let mut out = Vec::with_capacity(parser_rules.len());
     for r in parser_rules {
-        let intr = ast_rule_to_intr_rule_ac(&r).map_err(|message| IntrRuleParseError {
-            ctxt_desc: ctxt_desc.to_string(),
-            message,
-        })?;
+        let intr =
+            ast_rule_to_intr_rule_ac(&known_funs, &r).map_err(|message| IntrRuleParseError {
+                ctxt_desc: ctxt_desc.to_string(),
+                message,
+            })?;
         out.push(intr);
     }
     Ok(out)
 }
 
-/// HS `intrRule` (Theory/Text/Parser/Rule.hs:155-169):
+/// HS `knownFuns = S.toList (funSyms msig)` together with a display-name
+/// index over it, so [`KnownFuns::lookup`] is one `BTreeMap` probe rather
+/// than a scan of the whole signature.  Every constructor name and every
+/// `constr_name_func` segment of both cached files (126 rules) resolves
+/// through it on each theory load.
+struct KnownFuns {
+    /// The symbols in `S.toList` order, kept for the not-found message.
+    syms: Vec<FunSym>,
+    /// `show_fun_sym_name` → the FIRST symbol of `syms` carrying that name.
+    ///
+    /// FIRST-wins is load-bearing, not an implementation detail: HS
+    /// `lookupFun` is `find ((== f) . showFunSymName) knownFuns`, which
+    /// returns the earliest match in `S.toList` order, and two DISTINCT
+    /// symbols can share a `showFunSymName` — a user-defined AC symbol and a
+    /// user-defined NoEq symbol may carry the same name, and `Ord FunSym`
+    /// (FunctionSymbols.hs:150-154) orders `NoEq` before `AC`, so the NoEq
+    /// one is the earlier.  An `insert` loop would let the later symbol win
+    /// and silently change which `FunSym` lands in the rule info.
+    by_name: std::collections::BTreeMap<std::borrow::Cow<'static, str>, FunSym>,
+}
+
+impl KnownFuns {
+    /// `syms` must already be in `S.toList` order — `MaudeSig::fun_syms` is a
+    /// `BTreeSet`, so iterating it is exactly that order.
+    fn new(syms: Vec<FunSym>) -> KnownFuns {
+        let mut by_name = std::collections::BTreeMap::new();
+        for f in &syms {
+            // `or_insert`, never `insert`: the first symbol carrying a name
+            // is the one HS's `find` returns.
+            by_name.entry(show_fun_sym_name(f)).or_insert(*f);
+        }
+        KnownFuns { syms, by_name }
+    }
+
+    /// HS `lookupFun` (Theory/Text/Parser/Rule.hs): resolve a plain function
+    /// name against the signature's known symbols (`S.toList (funSyms msig)`)
+    /// by `showFunSymName` equality.
+    fn lookup(&self, f: &str) -> Result<FunSym, String> {
+        self.by_name.get(f).copied().ok_or_else(|| {
+            format!(
+                "Failed parsing intruder rule name: no function named '{}' found in the signature (symbols: {})",
+                f,
+                self.syms
+                    .iter()
+                    .map(show_fun_sym_name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+    }
+}
+
+/// HS `constrNameFunc` (Theory/Text/Parser/Rule.hs): recover the function
+/// names encoded in a destructor rule name.  Splits on `'_'`, drops the
+/// leading empty segment (the name starts with an underscore), then drops
+/// the LEADING purely-numeric position segments (`supprPos` via
+/// `readMaybe :: Maybe Int`); errors on an empty result.
+///
+/// The split is unconditional, so a function symbol whose own name contains
+/// `'_'` decomposes into several segments that [`KnownFuns::lookup`] cannot resolve
+/// — see the FIXME beside `name_decompose` in Theory/Text/Parser/Rule.hs
+/// ("there can be underscores in the name of a function").  Dormant for the
+/// two cached files, which only name builtin DH/BP symbols.
+fn constr_name_func(name: &str) -> Result<Vec<&str>, String> {
+    // `tail . T.split (== '_')`, then `supprPos` (remove position
+    // information from the rule name).
+    let names: Vec<&str> = name
+        .split('_')
+        .skip(1)
+        .skip_while(|seg| seg.parse::<i64>().is_ok())
+        .collect();
+    if names.is_empty() {
+        return Err("Failed parsing intruder rule name: empty name".to_string());
+    }
+    Ok(names)
+}
+
+/// HS `intrRule` (Theory/Text/Parser/Rule.hs):
 ///
 /// ```haskell
 /// intrRule :: Parser IntrRuleAC
 /// intrRule = do
-///     info <- try (symbol "rule" *> moduloAC *> intrInfo <* colon)
+///     (name, info)  <- try (symbol "rule" *> moduloAC *> intrInfo <* colon)
 ///     (ps,as,cs,[]) <- genericRule msgvar nodevar
 ///     return $ Rule info ps cs as (newVariables ps cs)
 ///   where
 ///     intrInfo = do
-///         name     <- identifier
-///         limit    <- option 0 natural
+///         name  <- identifier
+///         limit <- option 0 natural
+///         msig  <- sig <$> getState
+///         let knownFuns = S.toList (funSyms msig)
 ///         case name of
-///           'c':cname -> return $ ConstrRule (BC.pack cname)
-///           'd':dname -> return $ DestrRule (BC.pack dname)
-///                                   (fromIntegral limit) True False
-///           _         -> fail $ "invalid intruder rule name '" ++ name ++ "'"
+///           'c':cname -> return (cname, ConstrRule (BC.pack cname)
+///                                         (lookupFun knownFuns $ tail cname))
+///           'd':dname -> return (dname, DestrRule (BC.pack dname)
+///                                         (fromIntegral limit) True False
+///                                         (map (lookupFun knownFuns) (constrNameFunc dname)))
 /// ```
 ///
 /// The first character of the parsed name (`c` or `d`) is the rule-kind
 /// dispatch; the REMAINING name string is what goes into the `Vec<u8>`
-/// (e.g. `c_exp` → `ConstrRule "_exp"`, `d_exp` → `DestrRule "_exp" 0 True False`).
+/// (e.g. `c_exp` → `ConstrRule "_exp" (NoEq expSym)`, `d_exp` →
+/// `DestrRule "_exp" 0 True False [NoEq expSym]`).  The attached function
+/// symbols are resolved against the signature: constructors via the name
+/// after the underscore (`tail cname`), destructors via `constrNameFunc`
+/// (split on `'_'`, position segments stripped).
 ///
 /// `option 0 natural` defaults `limit` to 0.  The cached `.spthy` files
 /// never emit a non-zero limit (they're produced by the canonical HS
@@ -202,7 +301,7 @@ pub fn parse_intruder_rules(
 /// `True False` are HS hard-codes — see the FIXME in
 /// Theory/Text/Parser/Rule.hs ("Currently we (wrongly) always assume
 /// that we have a subterm rule").  Subterm=True / constant=False.
-fn ast_rule_to_intr_rule_ac(r: &p::Rule) -> Result<IntrRuleAC, String> {
+fn ast_rule_to_intr_rule_ac(known_funs: &KnownFuns, r: &p::Rule) -> Result<IntrRuleAC, String> {
     // HS `intrInfo` rejects non-c/d-prefixed names.  Mirror that here.
     let bytes = r.name.as_bytes();
     if bytes.is_empty() {
@@ -210,20 +309,37 @@ fn ast_rule_to_intr_rule_ac(r: &p::Rule) -> Result<IntrRuleAC, String> {
     }
     let (kind, rest) = (bytes[0], &bytes[1..]);
     let info: IntrRuleACInfo = match kind {
-        b'c' => IntrRuleACInfo::ConstrRule(rest.to_vec()),
-        b'd' => IntrRuleACInfo::DestrRule(
-            rest.to_vec(),
-            // HS `fromIntegral limit` where `limit <- option 0 natural`.
-            // The cached files never specify a limit; we always see 0.
-            0,
-            // HS hard-codes `True False` (subterm, constant).
-            true,
-            false,
-        ),
+        b'c' => {
+            // `lookupFun knownFuns $ tail cname` — cname is `_<fun>`, so
+            // `tail` strips the leading underscore.
+            let cname = &r.name[1..];
+            let f = known_funs.lookup(cname.get(1..).unwrap_or(""))?;
+            IntrRuleACInfo::ConstrRule {
+                name: rest.to_vec(),
+                fun: f,
+            }
+        }
+        b'd' => {
+            let dname = &r.name[1..];
+            let funs = constr_name_func(dname)?
+                .into_iter()
+                .map(|n| known_funs.lookup(n))
+                .collect::<Result<Vec<_>, _>>()?;
+            IntrRuleACInfo::DestrRule {
+                name: rest.to_vec(),
+                // HS `fromIntegral limit` where `limit <- option 0 natural`.
+                // The cached files never specify a limit; we always see 0.
+                remaining_applications: 0,
+                // HS hard-codes `True False` (subterm, constant).
+                rhs_is_proper_subterm: true,
+                rhs_is_constant: false,
+                funs,
+            }
+        }
         _ => {
             return Err(format!(
                 "invalid intruder rule name '{}': must start with `c` (constructor) \
-             or `d` (destructor) — HS Rule.hs:166-169",
+             or `d` (destructor)",
                 r.name
             ))
         }
@@ -259,7 +375,8 @@ fn ast_rule_to_intr_rule_ac(r: &p::Rule) -> Result<IntrRuleAC, String> {
     }
 
     // Convert facts via the existing AST→LNFact path.  `fact_to_lnfact`
-    // already handles the `KU`/`KD`/etc. tag mapping (elaborate.rs:974).
+    // already handles the `KU`/`KD`/etc. tag mapping
+    // (`elaborate::fact_to_lnfact`).
     let prems: Vec<LNFact> = r
         .premises
         .iter()
@@ -347,353 +464,5 @@ fn compute_new_vars(prems: &[LNFact], concs: &[LNFact]) -> Vec<tamarin_term::lte
 // =============================================================================
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tamarin_term::maude_sig::{bp_maude_sig, dh_maude_sig};
-
-    /// The cached DH file is documented to contain exactly 51 rules:
-    /// 5 constructors (`c_exp`, `c_inv`, `c_one`, `c_DH_neutral`, `c_mult`)
-    /// + 45 `d_exp` destructor variants + 1 `d_inv` destructor variant.
-    ///   `grep -c "^rule " data/intruder_variants_dh.spthy` = 51.
-    #[test]
-    fn dh_variants_file_parses_to_51_rules() {
-        let rules = mk_dh_intruder_variants(&dh_maude_sig());
-        assert_eq!(
-            rules.len(),
-            51,
-            "data/intruder_variants_dh.spthy should yield exactly 51 rules \
-             (HS-cached output of `dhIntruderRules`); got {}",
-            rules.len()
-        );
-    }
-
-    /// Count check for the BP cached file
-    /// (`grep -c "^rule " data/intruder_variants_bp.spthy` = 75).
-    #[test]
-    fn bp_variants_file_parses_to_75_rules() {
-        let rules = mk_bp_intruder_variants(&bp_maude_sig());
-        assert_eq!(
-            rules.len(),
-            75,
-            "data/intruder_variants_bp.spthy should yield exactly 75 rules; got {}",
-            rules.len()
-        );
-    }
-
-    /// The 5 constructor rules MUST be present with their HS-canonical
-    /// underscore-prefixed names (`c_exp` → `ConstrRule "_exp"`, etc).
-    /// HS reference: Theory/Tools/IntruderRules.hs:233-244 +
-    /// Theory/Text/Parser/Rule.hs:155-169, see line 167 (`'c':cname → ConstrRule (BC.pack cname)`).
-    #[test]
-    fn dh_variants_contains_five_constructors_with_underscore_prefix() {
-        let rules = mk_dh_intruder_variants(&dh_maude_sig());
-        let constr_names: Vec<&[u8]> = rules
-            .iter()
-            .filter_map(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n) => Some(n.as_slice()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            constr_names.len(),
-            5,
-            "expected exactly 5 ConstrRules; got {:?}",
-            constr_names
-                .iter()
-                .map(|n| String::from_utf8_lossy(n).to_string())
-                .collect::<Vec<_>>()
-        );
-        for expected in &[&b"_exp"[..], b"_inv", b"_DH_neutral", b"_one", b"_mult"] {
-            assert!(
-                constr_names.contains(expected),
-                "missing constructor named {} in DH variants; got names {:?}",
-                String::from_utf8_lossy(expected),
-                constr_names
-                    .iter()
-                    .map(|n| String::from_utf8_lossy(n).to_string())
-                    .collect::<Vec<_>>()
-            );
-        }
-    }
-
-    /// Every destructor rule in DH must have shape `DestrRule name 0 True False`
-    /// (HS Rule.hs:168 hard-codes `(fromIntegral limit) True False`, and
-    /// `option 0 natural` means limit=0 when none is parsed — none of the
-    /// cached destructors have a numeric limit).  The name must start
-    /// with `_` (HS strips the leading `d` and keeps the `_<rest>` as-is).
-    #[test]
-    fn dh_variants_destructors_are_d_exp_or_d_inv_with_limit_0() {
-        let rules = mk_dh_intruder_variants(&dh_maude_sig());
-        let destrs: Vec<&IntrRuleAC> = rules
-            .iter()
-            .filter(|r| matches!(r.info, IntrRuleACInfo::DestrRule(..)))
-            .collect();
-        assert_eq!(
-            destrs.len(),
-            46,
-            "DH cached file: 5 constr + 46 destr = 51 (45 d_exp + 1 d_inv); \
-             got {} destructors",
-            destrs.len()
-        );
-        for d in &destrs {
-            if let IntrRuleACInfo::DestrRule(name, limit, subterm, constant) = &d.info {
-                assert!(
-                    name.starts_with(b"_"),
-                    "destructor name must start with `_` (HS leading `d` is consumed, \
-                     rest goes to the bytestring); got {}",
-                    String::from_utf8_lossy(name)
-                );
-                assert_eq!(
-                    *limit, 0,
-                    "DestrRule limit must be 0 (HS Rule.hs:168 `fromIntegral limit` \
-                     with `option 0 natural` and no numeric in the cached file); \
-                     got {}",
-                    limit
-                );
-                assert!(
-                    *subterm,
-                    "DestrRule subterm must be True (HS Rule.hs:168 hard-codes True)"
-                );
-                assert!(
-                    !(*constant),
-                    "DestrRule constant must be False (HS Rule.hs:168 hard-codes False)"
-                );
-                // Names in the DH file: only `_exp` and `_inv`.
-                assert!(
-                    name == b"_exp" || name == b"_inv",
-                    "DH destructor name must be `_exp` or `_inv`; got {}",
-                    String::from_utf8_lossy(name)
-                );
-            }
-        }
-    }
-
-    /// `parse_intruder_rules` is the public entry point with full HS
-    /// signature `MaudeSig → ctxtDesc → source → Result`.  Verify it
-    /// works directly on a tiny inline source.
-    #[test]
-    fn parse_intruder_rules_handles_tiny_inline() {
-        let src = "rule (modulo AC) c_exp:\n   [ !KU( x ), !KU( x.1 ) ] --[ !KU( x^x.1 ) ]-> [ !KU( x^x.1 ) ]\n";
-        let rules = parse_intruder_rules(&dh_maude_sig(), "<inline>", src)
-            .expect("parse_intruder_rules on inline src");
-        assert_eq!(rules.len(), 1);
-        match &rules[0].info {
-            IntrRuleACInfo::ConstrRule(n) => assert_eq!(n.as_slice(), b"_exp"),
-            other => panic!("expected ConstrRule, got {:?}", other),
-        }
-    }
-
-    /// Rule names that don't start with `c` or `d` must be rejected
-    /// (HS Rule.hs:169 — `fail "invalid intruder rule name ..."`).
-    #[test]
-    fn parse_intruder_rules_rejects_non_c_d_prefix() {
-        let src = "rule (modulo AC) xfoo:\n   [ ] --> [ ]\n";
-        let err = parse_intruder_rules(&dh_maude_sig(), "<bad>", src)
-            .expect_err("rule named `xfoo` should be rejected");
-        assert!(
-            err.message.contains("invalid intruder rule name"),
-            "expected `invalid intruder rule name` in error; got {}",
-            err.message
-        );
-    }
-
-    /// Round-trip: every rule produced by `mk_dh_intruder_variants` has
-    /// a name starting with `_` (the byte after the consumed `c`/`d`).
-    /// Mirrors the same property checked for the runtime generator
-    /// `dh_intruder_rules` in `dh_variants_all_names_have_underscore_prefix`.
-    #[test]
-    fn dh_variants_all_names_have_underscore_prefix() {
-        let rules = mk_dh_intruder_variants(&dh_maude_sig());
-        for r in &rules {
-            let n = match &r.info {
-                IntrRuleACInfo::ConstrRule(n) => n.as_slice(),
-                IntrRuleACInfo::DestrRule(n, _, _, _) => n.as_slice(),
-                other => panic!("unexpected info kind: {:?}", other),
-            };
-            assert!(n.starts_with(b"_"),
-                "DH variant name must start with `_` (HS `'c':cname`/`'d':dname` consumes the prefix); \
-                 got {}", String::from_utf8_lossy(n));
-        }
-    }
-
-    /// Bridge check: the runtime generator `dh_intruder_rules` and the
-    /// cached-file parser `mk_dh_intruder_variants` SHOULD agree on the
-    /// number and names of rules — both are different paths to the same
-    /// HS `dhIntruderRules` output.  We don't assert strict equality
-    /// (Maude variant ordering / re-renaming can legitimately differ)
-    /// — just the rule count and the constructor-rule names.  A mismatch
-    /// here is a hint that Maude version drift may have invalidated the
-    /// cached file.
-    #[test]
-    fn bridge_runtime_generator_matches_cached_file_on_counts_and_names() {
-        // The runtime generator needs a Maude handle; skip if not available
-        // (mirroring the `maude_handle`/`dh_maude_handle` gating in
-        // intruder_rules.rs).
-        let maude_path = std::env::var("MAUDE_PATH").ok().or_else(|| {
-            for c in ["/usr/local/bin/maude", "maude"] {
-                if std::path::Path::new(c).exists() {
-                    return Some(c.to_string());
-                }
-            }
-            None
-        });
-        let maude = match maude_path
-            .and_then(|p| tamarin_term::maude_proc::MaudeHandle::start(&p, dh_maude_sig()).ok())
-        {
-            Some(m) => m,
-            None => return,
-        };
-
-        let cached = mk_dh_intruder_variants(&dh_maude_sig());
-        let runtime = crate::intruder_rules::dh_intruder_rules(false, &maude);
-
-        // Constructor names should be identical sets.
-        let cached_constrs: std::collections::BTreeSet<Vec<u8>> = cached
-            .iter()
-            .filter_map(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n) => Some(n.clone()),
-                _ => None,
-            })
-            .collect();
-        let runtime_constrs: std::collections::BTreeSet<Vec<u8>> = runtime
-            .iter()
-            .filter_map(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n) => Some(n.clone()),
-                _ => None,
-            })
-            .collect();
-        if cached_constrs != runtime_constrs {
-            eprintln!("bridge test: cached constr names ≠ runtime constr names");
-            eprintln!(
-                "  cached  = {:?}",
-                cached_constrs
-                    .iter()
-                    .map(|n| String::from_utf8_lossy(n).to_string())
-                    .collect::<Vec<_>>()
-            );
-            eprintln!(
-                "  runtime = {:?}",
-                runtime_constrs
-                    .iter()
-                    .map(|n| String::from_utf8_lossy(n).to_string())
-                    .collect::<Vec<_>>()
-            );
-        }
-        assert_eq!(
-            cached_constrs, runtime_constrs,
-            "runtime and cached DH constr name sets should match"
-        );
-
-        // Destructor counts should be EQUAL or DIFFER (the cached file
-        // is authoritative — log a diff but don't fail).  Counts may
-        // legitimately differ if today's Maude produces a different
-        // variant enumeration order than the cached file's day.
-        if cached.len() != runtime.len() {
-            eprintln!(
-                "bridge test note: cached DH rule count = {}, runtime = {} \
-                 — investigate if today's Maude has drifted from the cached file",
-                cached.len(),
-                runtime.len()
-            );
-        }
-    }
-
-    /// Regression test for the `c_one` / `c_DH_neutral` soundness invariant:
-    /// under `dh_maude_sig()`, the rule `[ ] --[ !KU( one ) ]-> [ !KU( one ) ]`
-    /// must have ROOT = the 0-arity NoEq application `oneSym{}`, NOT a Msg-sort
-    /// var `one` (which would unify with every KU goal, falsely closing 8+ DH
-    /// corpus branches).  HS: Theory/Text/Parser/Term.hs:139-143 (`nullaryApp`
-    /// against `funSyms maudeSig`) and
-    /// lib/term/src/Term/Term/FunctionSymbols.hs:163-163
-    /// (`oneSym = ("one",(0,Public,Constructor))`).
-    #[test]
-    fn dh_one_and_dh_neutral_parse_as_constants() {
-        use tamarin_term::function_symbols::{DH_NEUTRAL_SYM_STRING, ONE_SYM_STRING};
-        use tamarin_term::term::Term;
-        use tamarin_term::vterm::Lit;
-
-        let rules = mk_dh_intruder_variants(&dh_maude_sig());
-        let c_one = rules
-            .iter()
-            .find(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n) => n.as_slice() == b"_one",
-                _ => false,
-            })
-            .expect("c_one rule should be present");
-        let c_dh_neutral = rules
-            .iter()
-            .find(|r| match &r.info {
-                IntrRuleACInfo::ConstrRule(n) => n.as_slice() == b"_DH_neutral",
-                _ => false,
-            })
-            .expect("c_DH_neutral rule should be present");
-
-        // Each rule has shape `[ ] --[ !KU( <const> ) ]-> [ !KU( <const> ) ]`.
-        // The action and conclusion fact must carry a 0-arity NoEq term
-        // whose name is the canonical sym-string.  Crucially, it must
-        // NOT be a `Term::Lit(Lit::Var(_))`.
-        for (label, rule, expected_name) in [
-            ("c_one", c_one, ONE_SYM_STRING),
-            ("c_DH_neutral", c_dh_neutral, DH_NEUTRAL_SYM_STRING),
-        ] {
-            assert_eq!(rule.actions.len(), 1, "{}: expected one action", label);
-            let action_term = &rule.actions[0].terms[0];
-            match action_term {
-                Term::App(sym, args) => {
-                    if let tamarin_term::function_symbols::FunSym::NoEq(s) = sym {
-                        assert_eq!(s.name, expected_name, "{}: action term sym name", label);
-                        assert_eq!(s.arity, 0, "{}: action term arity", label);
-                        assert!(args.is_empty(), "{}: action term args", label);
-                    } else {
-                        panic!("{}: expected NoEq sym, got {:?}", label, sym);
-                    }
-                }
-                Term::Lit(Lit::Var(v)) => panic!(
-                    "{}: REGRESSION — action term is a free variable {:?} \
-                     instead of a 0-arity NoEq constant. The `{}` symbol \
-                     was not recognised against the MaudeSig; check that \
-                     `parse_intruder_rules` threads the MaudeSig through \
-                     `MaudeSigNullaryGuard`.",
-                    label,
-                    v,
-                    String::from_utf8_lossy(expected_name),
-                ),
-                other => panic!("{}: unexpected action term {:?}", label, other),
-            }
-        }
-    }
-
-    /// Counterpart to `dh_one_and_dh_neutral_parse_as_constants`: with
-    /// NO DH builtin enabled, parsing a rule containing a bare `one`
-    /// must NOT magically convert it to a constant — the
-    /// `USER_NULLARY_FUNS` lookup is gated on the MaudeSig.  HS
-    /// behaviour: under `pairMaudeSig`, `funSyms` excludes `oneSym`, so
-    /// `nullaryApp` falls through to `plit` and `one` parses as a
-    /// variable.  Confirms our MaudeSig gating mirrors HS.
-    #[test]
-    fn one_is_var_when_no_dh_builtin_in_maude_sig() {
-        use tamarin_term::maude_sig::pair_maude_sig;
-        use tamarin_term::term::Term;
-        use tamarin_term::vterm::Lit;
-
-        let src = "rule (modulo AC) c_test:\n   [ ] --[ !KU( one ) ]-> [ !KU( one ) ]\n";
-        let rules = parse_intruder_rules(&pair_maude_sig(), "<no-dh>", src)
-            .expect("parse_intruder_rules under pair_maude_sig");
-        assert_eq!(rules.len(), 1);
-        let action_term = &rules[0].actions[0].terms[0];
-        match action_term {
-            Term::Lit(Lit::Var(v)) => {
-                assert_eq!(
-                    v.name, "one",
-                    "under pair_maude_sig, `one` should remain a Var; HS-equivalent: \
-                     `funSyms pairMaudeSig` does not include `oneSym`"
-                );
-            }
-            other => panic!(
-                "expected Var (no DH builtin → MaudeSig has no `one` constant), \
-                 got {:?}",
-                other,
-            ),
-        }
-    }
-}
+#[path = "intruder_variants_tests.rs"]
+mod tests;

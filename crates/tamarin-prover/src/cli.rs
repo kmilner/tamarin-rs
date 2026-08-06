@@ -1,7 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, arcz, meiersi, jdreier, addap, Nynko, rkunnema,
-//   felixlinker, yavivanov, ValentinYuri, gilcu3, beschmi, Azurios-git,
-//   rsasse, and other minor contributors (see upstream git history)
+//   kevinmorio, arcz, meiersi, jdreier, cascremers, addap, Nynko,
+//   felixlinker, yavivanov, ValentinYuri, rkunnema, gilcu3, beschmi,
+//   Azurios-git, rsasse, and other minor contributors (see upstream git
+//   history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Prover.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
@@ -33,7 +34,7 @@
 //!                              --prove every value parses and is ignored,
 //!                              as in HS.
 //!   --bound=N, -bN             proof-depth bound
-//!   --saturation=N, -sN        saturation iterations (parsed, not yet routed)
+//!   --saturation=N, -sN        bound on saturation iterations (default 5)
 //!   --heuristic=...            heuristic ranking sequence (overrides per-lemma)
 //!   --partial-evaluation=...   partial-evaluation mode (parsed, not yet routed)
 //!   -D|--defines=STRING        preprocessor `#define` flags. Repeatable.
@@ -42,14 +43,16 @@
 //!   --auto-sources             auto-generate sources lemmas
 //!   --oraclename=FILE          oracle script for --heuristic oracle rankings
 //!   --oracle-only              oracle-only mode (quit-on-empty-oracle)
-//!   --quiet                    suppress chatter on stderr
+//!   --quiet                    accepted; suppresses only RS-only diagnostics
+//!                              (HS never reads the flag — see `Args::quiet`)
 //!   --verbose, -v              verbose proof-search output
 //!   --parse-only               parse + pretty-print, no analysis
 //!   --precompute-only          run precomputation only
-//!   --open-chains=N, -cN       open-chain bound (parsed, not yet routed)
+//!   --open-chains=N, -cN       bound on open chains during saturation (default 10)
 //!   --derivcheck-timeout=N -dN message-derivation check timeout
-//!   --no-reuse                 do not export reuse lemmas (parsed, not yet routed)
-//!   --no-restrictions          do not export restrictions (parsed, not yet routed)
+//!   --no-ndc                   deactivate the no-deconstruction-chain check
+//!   --proverif-no-reuse-lemmas do not export reuse lemmas (parsed, not yet routed)
+//!   --proverif-no-restrictions do not export restrictions (parsed, not yet routed)
 //!   --replication-bound=N      DeepSec replication bound (parsed, not yet routed)
 //!   --no-compress              do not compress sequents (parsed, not yet routed)
 //!   --output=FILE, -oFILE      write the analyzed theory to FILE
@@ -124,7 +127,7 @@ impl PartialEval {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Subcommand {
     /// The default batch mode (prove + emit theory).
     Batch,
@@ -176,16 +179,31 @@ pub struct Args {
     pub defines: Vec<String>,
     pub diff: bool,
     pub quit_on_warning: bool,
+    /// `--no-ndc`: deactivate the no-deconstruction-chain (NDC) check
+    /// (enabled by default).
+    pub no_ndc: bool,
     pub auto_sources: bool,
     pub oracle_name: Option<String>,
     pub oracle_only: bool,
+    /// `--quiet`: accepted, but it suppresses nothing HS emits.
+    ///
+    /// HS registers the flag (TheoryLoader.hs:159-163, help text "Do not
+    /// display computation steps of oracle or tactic.") and never reads it —
+    /// the only consumer is commented out (TheoryLoader.hs:414-416), and
+    /// `argExists "quiet"` appears nowhere else in the tree.  So the maude /
+    /// GraphViz banners, the `[Theory X] …` markers and the `summary of
+    /// summaries:` block all print under `--quiet`, batch and interactive
+    /// alike.  RS mirrors that; the flag gates only RS-only diagnostics that
+    /// have no HS counterpart (`--output-json` / `--output-dot` stub
+    /// warnings, the `MaudePool` spawn fallback), where dropping them moves
+    /// output toward the oracle rather than away from it.
     pub quiet: bool,
     pub verbose: bool,
     pub open_chains: Option<u64>,
     pub saturation: Option<u64>,
     pub derivcheck_timeout: Option<u64>,
-    pub no_reuse: bool,
-    pub no_restrictions: bool,
+    pub proverif_no_reuse_lemmas: bool,
+    pub proverif_no_restrictions: bool,
     pub replication_bound: Option<u32>,
     pub no_compress: bool,
     pub parse_only: bool,
@@ -253,6 +271,7 @@ impl Default for Args {
             defines: Vec::new(),
             diff: false,
             quit_on_warning: false,
+            no_ndc: false,
             auto_sources: false,
             oracle_name: None,
             oracle_only: false,
@@ -261,8 +280,8 @@ impl Default for Args {
             open_chains: None,
             saturation: None,
             derivcheck_timeout: None,
-            no_reuse: false,
-            no_restrictions: false,
+            proverif_no_reuse_lemmas: false,
+            proverif_no_restrictions: false,
             replication_bound: None,
             no_compress: false,
             parse_only: false,
@@ -293,12 +312,30 @@ impl Default for Args {
 pub enum CliError {
     /// User-facing message (already formatted).
     Msg(String),
+    /// An argv token no mode declares a flag for.
+    ///
+    /// HS never reaches its own code for this: `processArgs`
+    /// (`System.Console.CmdArgs.Explicit`, called from `defaultMain`,
+    /// Console.hs:362-372) rejects the command line itself, writes the bare
+    /// message to STDERR and exits 1 — no `error:` prefix, no help block, and
+    /// nothing on stdout.  Carried as its own variant so the binary can
+    /// reproduce that stream shape without pattern-matching on message text.
+    UnknownFlag(String),
+}
+
+impl CliError {
+    /// cmdargs' rejection text for an undeclared flag, as the oracle writes it
+    /// (`tamarin-prover --nonsense x.spthy` → `Unknown flag: --nonsense\n` on
+    /// stderr, rc 1).  A `--flag=VALUE` token reports the NAME only.
+    fn unknown_flag(flag: &str) -> CliError {
+        CliError::UnknownFlag(format!("Unknown flag: {flag}"))
+    }
 }
 
 impl std::fmt::Display for CliError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CliError::Msg(m) => f.write_str(m),
+            CliError::Msg(m) | CliError::UnknownFlag(m) => f.write_str(m),
         }
     }
 }
@@ -439,6 +476,7 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                 }
                 "diff" => args.diff = true,
                 "quit-on-warning" => args.quit_on_warning = true,
+                "no-ndc" => args.no_ndc = true,
                 "auto-sources" => args.auto_sources = true,
                 "oraclename" => {
                     // Routed: sets the oracle relPath on every oracle ranking
@@ -465,8 +503,8 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                     let v = flag_opt(val_inline, "5");
                     args.derivcheck_timeout = Some(parse_int(&v, "derivcheck-timeout")?);
                 }
-                "no-reuse" => args.no_reuse = true,
-                "no-restrictions" => args.no_restrictions = true,
+                "proverif-no-reuse-lemmas" => args.proverif_no_reuse_lemmas = true,
+                "proverif-no-restrictions" => args.proverif_no_restrictions = true,
                 "replication-bound" => {
                     let v = flag_opt(val_inline, "3");
                     args.replication_bound = Some(parse_int(&v, "replication-bound")?);
@@ -553,7 +591,7 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                     args.data_dir = Some(v);
                 }
                 other => {
-                    return Err(CliError::Msg(format!("unknown flag: --{}", other)));
+                    return Err(CliError::unknown_flag(&format!("--{other}")));
                 }
             }
             i += 1;
@@ -593,6 +631,11 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                     Some(inline_raw)
                 };
                 match key {
+                    // `-?` is the oracle's help short flag (`helpFlag =
+                    // flagHelpSimple`, Console.hs:291-292).  `-h` is a
+                    // deliberate port-only convenience: the oracle answers
+                    // `Unknown flag: -h`, and this port keeps accepting it and
+                    // advertises it in the RS-only group of `--help`.
                     'h' | '?' => {
                         args.show_help = true;
                         continue;
@@ -642,7 +685,7 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                         args.interface = Some(flag_opt(inline, ""));
                     }
                     other => {
-                        return Err(CliError::Msg(format!("unknown short flag: -{}", other)));
+                        return Err(CliError::unknown_flag(&format!("-{other}")));
                     }
                 }
                 // A value-taking flag consumed the remainder of the
@@ -822,8 +865,8 @@ pub const BUILD_TIMESTAMP: &str = env!("TAMARIN_BUILD_TIMESTAMP");
 /// precedes `Generated from:`.  We reproduce that blank line here exactly.
 /// The reported maude version comes from `getVersionIO`'s argument, which is
 /// `ensureMaude`'s `out` (the raw `maude --version` output, Console.hs:156-161).
-pub fn version_text() -> String {
-    let mv = detect_maude_version_pub().unwrap_or_else(|| "unknown version".to_string());
+pub fn version_text(maude_path: &str) -> String {
+    let mv = detect_maude_version_at(maude_path).unwrap_or_else(|| "unknown version".to_string());
     format!(
         // versionStr: banner + license (Console.hs:220-231), unlines-terminated,
         // then putStrLn's extra newline gives the blank line before the block.
@@ -847,36 +890,24 @@ pub fn version_text() -> String {
 /// `. OK.` (`Right (strip out ++ ". OK.")`, Console.hs:151-185, see line 165); ` checking
 /// installation: ` carries `OK.` (Console.hs:151-185, see line 171).  Returned without a
 /// trailing newline so the caller can `eprintln!` it as one block.
-pub fn version_maude_stderr_text() -> String {
-    let maude_version = detect_maude_version_pub();
+pub fn version_maude_stderr_text(disp: &str, maude_path: &str) -> String {
+    let maude_version = detect_maude_version_at(maude_path);
     let maude_ok = maude_version.is_some();
     let mv = maude_version.unwrap_or_else(|| "unknown".to_string());
     let ok = if maude_ok { "OK." } else { "FAILED." };
     format!(
-        "maude tool: 'maude'\n\
+        "maude tool: '{disp}'\n\
          \x20checking version: {mv}. {ok}\n\
          \x20checking installation: {ok}",
     )
 }
 
-/// Probe `maude --version` on `PATH` and return the trimmed version
-/// string when Maude is reachable, `None` otherwise.
-///
-/// Mirrors HS `maudePath = fromMaybe "maude" . findArg "withMaude"`
-/// (Console.hs:84-85): when no `--with-maude` is supplied, HS probes the
-/// bare `maude` binary on `PATH` — it never consults hardcoded
-/// developer-box paths.  Use [`detect_maude_version_at`] to honor an
-/// explicit `--with-maude` path.
-pub fn detect_maude_version_pub() -> Option<String> {
-    detect_maude_version_at("maude")
-}
-
 /// Probe `<path> --version` and return the trimmed version string when
-/// the binary is reachable, `None` otherwise.  A caller that has an
-/// explicit `--with-maude` path can pass it here so the reported version
-/// matches the binary the prover will actually invoke (HS `ensureMaude`
-/// uses `maudePath`).  No current caller does — the only caller is
-/// [`detect_maude_version_pub`], which probes the bare `maude` binary.
+/// the binary is reachable, `None` otherwise.  Callers pass the maude the
+/// run will actually invoke (the `--with-maude` path when given, else the
+/// probed default), so the reported version always matches the invoked
+/// binary — HS `ensureMaude` reads the same `maudePath` for both
+/// (Console.hs:156-161).
 pub fn detect_maude_version_at(path: &str) -> Option<String> {
     if let Ok(out) = std::process::Command::new(path).arg("--version").output() {
         if out.status.success() {
@@ -891,595 +922,370 @@ pub fn detect_maude_version_at(path: &str) -> Option<String> {
     None
 }
 
-pub fn help_text() -> String {
-    let mut s = String::new();
-    s.push_str("tamarin-prover [COMMAND] ... [OPTIONS] FILES\n");
-    s.push_str("  Security protocol analysis and verification (Rust port).\n");
-    s.push('\n');
-    s.push_str("Commands:\n");
-    s.push_str("  interactive  Start a web-server to construct proofs interactively.\n");
-    s.push_str("  variants     Compute intruder-rule variants.\n");
-    s.push_str("  test         Self-test.\n");
-    s.push('\n');
-    s.push_str("Interactive-mode flags (used with the `interactive` subcommand):\n");
-    s.push_str("  -p --port=PORT                        Port to listen on (default 3001).\n");
-    s.push_str(
-        "  -i --interface=INTERFACE              Interface to listen on (default 127.0.0.1).\n",
-    );
-    s.push_str("     --image-format=PNG|SVG             Image format for graphs (default SVG).\n");
-    s.push_str("     --debug                            Show server debugging output.\n");
-    s.push_str("     --no-logging                       Suppress web server logs.\n");
-    s.push_str(
-        "     --data-dir=DIR                     Override path to the bundled `data/` dir.\n",
-    );
-    s.push('\n');
-    s.push_str("Lemma selection / proof options:\n");
-    s.push_str("     --prove[=LEMMAPREFIX*|LEMMANAME]   Prove the named lemma(s). Repeatable.\n");
-    s.push_str("     --lemma[=LEMMAPREFIX*|LEMMANAME]   Restrict to lemma(s) by name/prefix.\n");
-    s.push_str("     --stop-on-trace=DFS|BFS|SEQDFS|SORRY|NONE   Trace search policy.\n");
-    s.push_str("  -b --bound=INT                        Bound proof depth.\n");
-    s.push_str("     --heuristic=...                    Heuristic ranking sequence.\n");
-    s.push_str("  -s --saturation=N                     Saturation iterations.\n");
-    s.push_str("  -c --open-chains=N                    Open-chain bound.\n");
-    s.push_str("  -d --derivcheck-timeout=N             Derivation check timeout.\n");
-    s.push_str("     --auto-sources                     Auto-generate sources lemmas.\n");
-    s.push_str("     --oraclename=FILE                  Oracle file path.\n");
-    s.push_str("     --oracle-only                      Stop if oracle ranks no goals.\n");
-    s.push_str("     --partial-evaluation=SUMMARY|VERBOSE   Partial-evaluation mode.\n");
-    s.push('\n');
-    s.push_str("Parser options:\n");
-    s.push_str("  -D --defines=STRING                   Define pseudo-preprocessor flag.\n");
-    s.push_str("     --diff                             Diff (observational equivalence) mode.\n");
-    s.push_str("     --quit-on-warning                  Treat wellformedness warnings as fatal.\n");
-    s.push_str("     --parse-only                       Just parse + pretty-print.\n");
-    s.push_str("     --precompute-only                  Just run precomputation.\n");
-    s.push_str(
-        "     --processors=N                     Rayon worker count for internal parallelism.\n",
-    );
-    s.push_str("                                        Default: available_parallelism() (full machine).\n");
-    s.push_str(
-        "                                        N=1 → byte-identical to sequential output.\n",
-    );
-    s.push_str(
-        "     --maude-processes=M                Maude subprocesses in the per-task pool.\n",
-    );
-    s.push_str(
-        "                                        Default: processors (1:1 with the worker pool,\n",
-    );
-    s.push_str("                                        or 1 when --processors=1).  Each costs\n");
-    s.push_str(
-        "                                        ~30-100 MB RAM; lower if memory is tight.\n",
-    );
-    s.push_str(
-        "                                        M=1 → single Maude (pre-pool behaviour).\n",
-    );
-    s.push('\n');
-    s.push_str("Output:\n");
-    s.push_str("  -o --output=FILE                      Write analyzed theory to FILE.\n");
-    s.push_str("  -O --Output=DIR                       Write to DIR/<basename>_analyzed.spthy.\n");
-    s.push_str("  -m --output-module=MOD                Output module selector.\n");
-    s.push_str("     --output-json=FILE                 Serialize traces to JSON.\n");
-    s.push_str("     --output-dot=FILE                  Serialize traces to dot.\n");
-    s.push('\n');
-    s.push_str("Tools:\n");
-    s.push_str("     --with-maude=PATH                  Path to `maude` binary.\n");
-    s.push_str("     --with-dot=PATH                    Path to `dot`.\n");
-    s.push_str("     --with-json=PATH                   Path to JSON tool.\n");
-    s.push('\n');
-    s.push_str("Misc:\n");
-    s.push_str("     --quiet                            Suppress progress output.\n");
-    s.push_str("  -v --verbose                          Verbose proof-search output.\n");
-    s.push_str("     --no-reuse                         Do not export reuse lemmas.\n");
-    s.push_str("     --no-restrictions                  Do not export restrictions.\n");
-    s.push_str("     --replication-bound=N              Replication bound for DeepSec.\n");
-    s.push_str("     --no-compress                      Do not compress sequents.\n");
-    s.push_str("  -h --help                             Display this help.\n");
-    s.push_str("  -V --version                          Print version.\n");
+/// The `--help` text.
+///
+/// The head is the pinned oracle's `tamarin-prover --help` stdout
+/// byte-for-byte.  HS renders it with
+/// `showText (Wrap lineWidth) $ helpText header HelpFormatOne mode`
+/// (Console.hs:341-359, see line 343-344) at `lineWidth = 110`
+/// (Console.hs:242-243); cmdargs sizes the description column from the
+/// widest left cell — `  -m --output-module[=spthytyped|...|deepsec]`, 74
+/// bytes — plus a two-byte gutter, so descriptions start at byte 76 and wrap
+/// at 33 bytes.  The rows come from `theoryLoadFlags`
+/// (TheoryLoader.hs:94-218), `batchMode`'s own `no-compress` / `parse-only` /
+/// `precompute-only` group with `outputFlags` (Batch.hs:44-84), `toolFlags`
+/// (Environment.hs:29-34), and the `About:` group `defaultMain` installs
+/// (`helpFlag` + `flagVersion`, Console.hs:362-387, see line 373-384).  The
+/// `------` / README block that closes it is `helpAndExit`'s second
+/// `putStrLn` over a 78-dash `separator` (Console.hs:346-356).
+///
+/// Two deliberate divergences from that rendering:
+///
+/// 1. Three oracle rows are absent — `--proverif-no-source-lemmas`,
+///    `--proverif-no-multiset` and `--proverif-no-precise`
+///    (TheoryLoader.hs:187-207).  [`parse_args`] has no arm for any of them,
+///    so the binary answers `Unknown flag: --proverif-...`, and help must not
+///    advertise a flag the binary refuses.  Dropping the rows leaves every
+///    other byte intact: cmdargs derives the description column from the
+///    widest left cell, and all three left cells are far narrower than the
+///    retained `-m --output-module[=...]` row.
+///
+/// 2. [`RS_ONLY_HELP_TRAILER`] follows the oracle's README block, listing the
+///    flags this port accepts on top of the oracle's batch surface.
+///
+/// Returned without its final newline: the callers emit it with `println!`,
+/// which supplies the blank line the oracle's `putStrLn` leaves at the end.
+///
+/// `mode` selects which of the oracle's four help texts to reproduce: HS
+/// installs one `TamarinMode` per command and `helpAndExit` renders
+/// `tmode.cmdArgsMode` (Console.hs:341-345), so `--help` after a subcommand
+/// name prints that command's own flag table, sized to its own widest left
+/// cell.
+pub fn help_text(mode: Subcommand) -> String {
+    let (head, trailer) = match mode {
+        Subcommand::Batch => (ORACLE_HELP_HEAD, RS_ONLY_HELP_TRAILER),
+        Subcommand::Interactive => (ORACLE_INTERACTIVE_HELP_HEAD, RS_ONLY_HELP_TRAILER_COL50),
+        Subcommand::Variants => (ORACLE_VARIANTS_HELP_HEAD, RS_ONLY_HELP_TRAILER_COL26),
+        Subcommand::Test => (ORACLE_TEST_HELP_HEAD, RS_ONLY_HELP_TRAILER_COL26),
+    };
+    let mut s = String::with_capacity(head.len() + trailer.len());
+    s.push_str(head);
+    s.push_str(trailer);
+    s.pop();
     s
 }
 
+/// The oracle-identical head of [`help_text`] — see there for the HS
+/// provenance of the layout and for the five rows deliberately absent.
+const ORACLE_HELP_HEAD: &str = r"tamarin-prover [COMMAND] ... [OPTIONS] FILES
+  Security protocol analysis and verification.
+
+Commands:
+  interactive  Start a web-server to construct proofs interactively.
+  variants     Compute the variants of the intruder rules for DH-exponentiation.
+  test         Self-test the tamarin-prover installation.
+
+Flags:
+     --prove[=LEMMAPREFIX*|LEMMANAME]                                       Attempt to prove all lemmas
+                                                                            that start with LEMMAPREFIX or
+                                                                            the lemma which name is LEMMANAME
+                                                                            (can be repeated).
+     --lemma[=LEMMAPREFIX*|LEMMANAME]                                       Select lemma(s) by name or
+                                                                            prefx (can be repeated)
+     --stop-on-trace[=DFS|BFS|SEQDFS|SORRY|NONE]                            How to search for traces
+                                                                            (default DFS)
+  -b --bound[=INT]                                                          Bound the depth of the proofs
+     --heuristic[=(C|I|O|P|S|c|i|o|p|s|{.})+]                               Sequence of proof method
+                                                                            rankings to use (default 's')
+     --partial-evaluation[=SUMMARY|VERBOSE]                                 Partially evaluate multiset
+                                                                            rewriting system
+  -D --defines[=STRING]                                                     Define flags for
+                                                                            pseudo-preprocessor.
+     --diff                                                                 Turn on observational
+                                                                            equivalence mode using diff
+                                                                            terms.
+     --quit-on-warning                                                      Strict mode that quits on any
+                                                                            warning that is emitted.
+     --auto-sources                                                         Try to auto-generate sources
+                                                                            lemmas
+     --oraclename[=FILE]                                                    Path to the oracle heuristic
+                                                                            (default
+                                                                            './theory_filename.oracle',
+                                                                            fallback './oracle')
+     --oracle-only                                                          When set, the oracle heuristic
+                                                                            will stop proof search if the
+                                                                            oracle does not rank any proof
+                                                                            goals.
+     --quiet                                                                Do not display computation
+                                                                            steps of oracle or tactic.
+  -v --verbose                                                              Display full information when
+                                                                            calculating proof.
+  -c --open-chains[=PositiveInteger]                                        Limits the number of open
+                                                                            chains to be resoled during
+                                                                            precomputations (default 10)
+  -s --saturation[=PositiveInteger]                                         Limits the number of
+                                                                            saturations during
+                                                                            precomputations (default 5)
+  -d --derivcheck-timeout[=INT]                                             Set timeout for message
+                                                                            derivation checks in sec (default
+                                                                            5). 0 deactivates check.
+     --proverif-no-reuse-lemmas                                             Do not export reuse lemmas as
+                                                                            ProVerif axioms
+     --proverif-no-restrictions                                             Do not export restrictions to
+                                                                            ProVerif
+     --replication-bound[=INT]                                              Replication bound for DeepSec
+                                                                            export
+     --no-ndc                                                               Deactivate the no
+                                                                            deconstruction chain (NDC) check
+                                                                            (enabled by default)
+     --no-compress                                                          Do not use compressed sequent
+                                                                            visualization
+     --parse-only                                                           Just parse the input file and
+                                                                            pretty print it as-is
+     --precompute-only                                                      Just run precomputation and
+                                                                            show partial deconstructions
+  -o --output[=FILE]                                                        Output file
+  -O --Output[=DIR]                                                         Output directory
+  -m --output-module[=spthytyped|spthy|msr|proverifequiv|proverif|deepsec]  What to output:
+                                                                             -spthy with explicit types
+                                                                            inferred
+                                                                             -spthy (including Sapic
+                                                                            Processes)
+                                                                             -pure msrs (with Sapic
+                                                                            translation)
+                                                                             -ProVerif export for the
+                                                                            equivalence lemmas
+                                                                             -ProVerif export for the
+                                                                            reachability lemmas
+                                                                             -DeepSec export for the
+                                                                            equivalences lemmas.
+     --output-json=FILE --oj                                                Serialize found traces as JSON
+                                                                            to FILE.
+     --output-dot=FILE --od                                                 Serialize found traces as dot
+                                                                            to FILE.
+     --with-dot[=FILE]                                                      Path to GraphViz 'dot' tool
+     --with-json[=FILE]                                                     Path to JSON rendering tool
+                                                                            (not working with --diff)
+     --with-maude[=FILE]                                                    Path to 'maude' rewriting tool
+About:
+  -? --help                                                                 Display help message
+  -V --version                                                              Print version information
+
+------------------------------------------------------------------------------
+To show help for different commands, type tamarin-prover [Command] --help.
+------------------------------------------------------------------------------
+See 'https://github.com/tamarin-prover/tamarin-prover/blob/master/README.md'
+for usage instructions and pointers to examples.
+------------------------------------------------------------------------------
+
+";
+
+/// `--help` rows for the flags this port accepts and the oracle's batch mode
+/// rejects with `Unknown flag`.  Laid out in the same cmdargs geometry as
+/// [`ORACLE_HELP_HEAD`] (description column at byte 76, wrapped at 33) and
+/// fenced by the same 78-dash separator HS uses in `helpAndExit`
+/// (Console.hs:346-356, `shortLineWidth = 78` at Console.hs:245-246), so the
+/// oracle-identical head stays a contiguous prefix of the output.
+///
+/// The second group's flags are real HS flags, but of `interactiveMode`
+/// (Interactive.hs:53-70), which documents them under
+/// `tamarin-prover interactive --help`; this port runs one flat parser
+/// ([`parse_args`]) and accepts them at top level too, so they are listed
+/// here rather than in the head.
+const RS_ONLY_HELP_TRAILER: &str = r"------------------------------------------------------------------------------
+Flags accepted by this Rust port only; the Haskell tamarin-prover rejects
+every flag below with 'Unknown flag'.
+     --processors=N                                                         Worker threads for internal
+                                                                            parallelism (default: all cores;
+                                                                            N=1 is byte-identical to
+                                                                            sequential output)
+     --maude-processes=M                                                    Maude subprocesses the workers
+                                                                            share (default: --processors;
+                                                                            ~30-100 MB each; M=1 uses one)
+     --data-dir=DIR                                                         Override the bundled data/ dir
+  -h                                                                        Alias for -?
+------------------------------------------------------------------------------
+Flags the Haskell prover documents under its 'interactive' mode help,
+which this port also accepts here:
+  -p --port[=PORT]                                                          Port to listen on
+  -i --interface[=INTERFACE]                                                Interface to listen on
+     --image-format[=PNG|SVG]                                               image format used for graphs
+                                                                            (default SVG)
+     --debug                                                                Show server debugging output
+     --no-logging                                                           Suppress web server logs.
+------------------------------------------------------------------------------
+";
+
+/// The oracle-identical head of `tamarin-prover interactive --help`
+/// (4854 bytes, exit 0, stderr empty), rendered from `interactiveMode`'s
+/// flag table (Interactive.hs:57-71) plus `theoryLoadFlags` and `toolFlags`.
+/// Its widest left cell is `     --stop-on-trace[=DFS|BFS|SEQDFS|SORRY|NONE]`
+/// (48 bytes), so cmdargs starts descriptions at byte 50 and wraps at 59.
+///
+/// Five oracle rows are absent, by the same rule that drops three from
+/// [`ORACLE_HELP_HEAD`] — [`parse_args`] answers `Unknown flag` for each, and
+/// help must not advertise a flag the binary refuses: the same three
+/// `--proverif-*` rows (TheoryLoader.hs:187-207) plus `--browser` and
+/// `--load-json` (Interactive.hs:61 and 63-64).  All five left cells are narrower
+/// than the retained `--stop-on-trace` row, so the column is unchanged.
+const ORACLE_INTERACTIVE_HELP_HEAD: &str = r"interactive [COMMAND] ... [OPTIONS] WORKDIR
+  Start a web-server to construct proofs interactively.
+
+Commands:
+  interactive  Start a web-server to construct proofs interactively.
+  variants     Compute the variants of the intruder rules for DH-exponentiation.
+  test         Self-test the tamarin-prover installation.
+
+Flags:
+  -p --port[=PORT]                                Port to listen on
+  -i --interface[=INTERFACE]                      Interface to listen on (use '*4' for all IPv4 interfaces)
+     --image-format[=PNG|SVG]                     image format used for graphs (default SVG)
+     --debug                                      Show server debugging output
+     --no-logging                                 Suppress web server logs.
+     --prove[=LEMMAPREFIX*|LEMMANAME]             Attempt to prove all lemmas that start with LEMMAPREFIX
+                                                  or the lemma which name is LEMMANAME (can be repeated).
+     --lemma[=LEMMAPREFIX*|LEMMANAME]             Select lemma(s) by name or prefx (can be repeated)
+     --stop-on-trace[=DFS|BFS|SEQDFS|SORRY|NONE]  How to search for traces (default DFS)
+  -b --bound[=INT]                                Bound the depth of the proofs
+     --heuristic[=(C|I|O|P|S|c|i|o|p|s|{.})+]     Sequence of proof method rankings to use (default 's')
+     --partial-evaluation[=SUMMARY|VERBOSE]       Partially evaluate multiset rewriting system
+  -D --defines[=STRING]                           Define flags for pseudo-preprocessor.
+     --diff                                       Turn on observational equivalence mode using diff terms.
+     --quit-on-warning                            Strict mode that quits on any warning that is emitted.
+     --auto-sources                               Try to auto-generate sources lemmas
+     --oraclename[=FILE]                          Path to the oracle heuristic (default
+                                                  './theory_filename.oracle', fallback './oracle')
+     --oracle-only                                When set, the oracle heuristic will stop proof search if
+                                                  the oracle does not rank any proof goals.
+     --quiet                                      Do not display computation steps of oracle or tactic.
+  -v --verbose                                    Display full information when calculating proof.
+  -c --open-chains[=PositiveInteger]              Limits the number of open chains to be resoled during
+                                                  precomputations (default 10)
+  -s --saturation[=PositiveInteger]               Limits the number of saturations during precomputations
+                                                  (default 5)
+  -d --derivcheck-timeout[=INT]                   Set timeout for message derivation checks in sec (default
+                                                  5). 0 deactivates check.
+     --proverif-no-reuse-lemmas                   Do not export reuse lemmas as ProVerif axioms
+     --proverif-no-restrictions                   Do not export restrictions to ProVerif
+     --replication-bound[=INT]                    Replication bound for DeepSec export
+     --no-ndc                                     Deactivate the no deconstruction chain (NDC) check
+                                                  (enabled by default)
+     --with-dot[=FILE]                            Path to GraphViz 'dot' tool
+     --with-json[=FILE]                           Path to JSON rendering tool (not working with --diff)
+     --with-maude[=FILE]                          Path to 'maude' rewriting tool
+About:
+  -? --help                                       Display help message
+
+------------------------------------------------------------------------------
+To show help for different commands, type tamarin-prover [Command] --help.
+------------------------------------------------------------------------------
+See 'https://github.com/tamarin-prover/tamarin-prover/blob/master/README.md'
+for usage instructions and pointers to examples.
+------------------------------------------------------------------------------
+
+";
+
+/// `tamarin-prover variants --help` from the pinned oracle (855 bytes, exit 0,
+/// stderr empty), verbatim.  `intruderMode` declares one flag beyond `About:`
+/// (`-O --Output`, Intruder.hs:26-39, see line 39), and its `  -O --Output[=DIR]` left cell
+/// (19 bytes) puts descriptions at byte 21.  [`parse_args`] accepts every row,
+/// so no row is dropped.
+const ORACLE_VARIANTS_HELP_HEAD: &str = r"variants [COMMAND] ... [OPTIONS]
+  Compute the variants of the intruder rules for DH-exponentiation.
+
+Commands:
+  interactive  Start a web-server to construct proofs interactively.
+  variants     Compute the variants of the intruder rules for DH-exponentiation.
+  test         Self-test the tamarin-prover installation.
+
+Flags:
+  -O --Output[=DIR]  Output directory
+About:
+  -? --help          Display help message
+
+------------------------------------------------------------------------------
+To show help for different commands, type tamarin-prover [Command] --help.
+------------------------------------------------------------------------------
+See 'https://github.com/tamarin-prover/tamarin-prover/blob/master/README.md'
+for usage instructions and pointers to examples.
+------------------------------------------------------------------------------
+
+";
+
+/// `tamarin-prover test --help` from the pinned oracle (992 bytes, exit 0,
+/// stderr empty), verbatim.  `testMode` carries only `toolFlags`
+/// (Test.hs:25-38, see line 35; Environment.hs:29-34), whose widest left cell
+/// `     --with-maude[=FILE]` (23 bytes) puts descriptions at byte 25.
+/// [`parse_args`] accepts every row, so no row is dropped.
+const ORACLE_TEST_HELP_HEAD: &str = r"test [COMMAND] ... [OPTIONS] FILES
+  Self-test the tamarin-prover installation.
+
+Commands:
+  interactive  Start a web-server to construct proofs interactively.
+  variants     Compute the variants of the intruder rules for DH-exponentiation.
+  test         Self-test the tamarin-prover installation.
+
+Flags:
+     --with-dot[=FILE]    Path to GraphViz 'dot' tool
+     --with-json[=FILE]   Path to JSON rendering tool (not working with --diff)
+     --with-maude[=FILE]  Path to 'maude' rewriting tool
+About:
+  -? --help               Display help message
+
+------------------------------------------------------------------------------
+To show help for different commands, type tamarin-prover [Command] --help.
+------------------------------------------------------------------------------
+See 'https://github.com/tamarin-prover/tamarin-prover/blob/master/README.md'
+for usage instructions and pointers to examples.
+------------------------------------------------------------------------------
+
+";
+
+/// [`RS_ONLY_HELP_TRAILER`]'s first group re-laid out for
+/// [`ORACLE_INTERACTIVE_HELP_HEAD`]'s geometry (descriptions at byte 50,
+/// wrapped so no line exceeds 109 bytes).
+///
+/// The second group is prose rather than a table: this port runs one flat
+/// parser ([`parse_args`]), so every subcommand accepts every other
+/// subcommand's flags, and spelling that out per mode would restate most of
+/// `tamarin-prover --help` three times.  The batch trailer enumerates its
+/// four extras because that list is short.
+const RS_ONLY_HELP_TRAILER_COL50: &str = r"------------------------------------------------------------------------------
+Flags accepted by this Rust port only; the Haskell tamarin-prover rejects
+every flag below with 'Unknown flag'.
+     --processors=N                               Worker threads for internal parallelism (default: all
+                                                  cores; N=1 is byte-identical to sequential output)
+     --maude-processes=M                          Maude subprocesses the workers share (default:
+                                                  --processors; ~30-100 MB each; M=1 uses one)
+     --data-dir=DIR                               Override the bundled data/ dir
+  -h                                              Alias for -?
+------------------------------------------------------------------------------
+This port runs one flat argument parser: every flag the other commands'
+help documents is accepted here too, though the Haskell prover answers
+'Unknown flag' for it under this command.
+------------------------------------------------------------------------------
+";
+
+/// [`RS_ONLY_HELP_TRAILER_COL50`] for the two narrow modes.  Their own
+/// description columns (21 for `variants`, 25 for `test`) are too narrow for
+/// `     --maude-processes=M`, so this block uses the widest RS-only left cell
+/// plus cmdargs' two-byte gutter, 26.
+const RS_ONLY_HELP_TRAILER_COL26: &str = r"------------------------------------------------------------------------------
+Flags accepted by this Rust port only; the Haskell tamarin-prover rejects
+every flag below with 'Unknown flag'.
+     --processors=N       Worker threads for internal parallelism (default: all cores; N=1 is byte-identical
+                          to sequential output)
+     --maude-processes=M  Maude subprocesses the workers share (default: --processors; ~30-100 MB each; M=1
+                          uses one)
+     --data-dir=DIR       Override the bundled data/ dir
+  -h                      Alias for -?
+------------------------------------------------------------------------------
+This port runs one flat argument parser: every flag the other commands'
+help documents is accepted here too, though the Haskell prover answers
+'Unknown flag' for it under this command.
+------------------------------------------------------------------------------
+";
+
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn parse(args: &[&str]) -> Args {
-        parse_args(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("parse")
-    }
-
-    #[test]
-    fn default_is_batch() {
-        let a = parse(&[]);
-        assert_eq!(a.subcommand, Subcommand::Batch);
-        assert!(a.in_files.is_empty());
-        assert!(!a.prove_mode);
-    }
-
-    #[test]
-    fn positional_file() {
-        let a = parse(&["foo.spthy", "bar.spthy"]);
-        assert_eq!(a.in_files, vec!["foo.spthy", "bar.spthy"]);
-    }
-
-    #[test]
-    fn prove_with_value() {
-        let a = parse(&["--prove=secrecy", "x.spthy"]);
-        assert!(a.prove_mode);
-        assert_eq!(a.lemma_names, vec!["secrecy".to_string()]);
-        assert_eq!(a.in_files, vec!["x.spthy".to_string()]);
-    }
-
-    #[test]
-    fn prove_bare_means_all() {
-        let a = parse(&["--prove", "x.spthy"]);
-        assert!(a.prove_mode);
-        assert_eq!(a.lemma_names, vec!["".to_string()]);
-        assert_eq!(a.in_files, vec!["x.spthy".to_string()]);
-    }
-
-    #[test]
-    fn prove_all_is_unknown_flag() {
-        // HS has no `--prove-all`; theoryLoadFlags (TheoryLoader.hs:85-193)
-        // defines only `prove`/`lemma`.  Verified on the installed HS binary:
-        // `tamarin-prover --prove-all t1.spthy` -> `Unknown flag: --prove-all`.
-        let r = parse_args(&["--prove-all".to_string(), "x.spthy".to_string()]);
-        assert!(r.is_err());
-        // Bare `--prove` still sets prove_mode and pushes the match-all sentinel.
-        let a = parse(&["--prove", "x.spthy"]);
-        assert!(a.prove_mode);
-        assert_eq!(a.lemma_names, vec!["".to_string()]);
-    }
-
-    #[test]
-    fn prove_repeated() {
-        let a = parse(&["--prove=foo", "--prove=bar*", "x.spthy"]);
-        assert_eq!(a.lemma_names, vec!["foo", "bar*"]);
-    }
-
-    #[test]
-    fn rts_sections_are_stripped() {
-        // GHC removes `+RTS ... -RTS` before the program sees argv
-        // (rts/RtsFlags.c), so an HS-style invocation parses the same here.
-        let a = parse(&["+RTS", "-N16", "-RTS", "--prove", "x.spthy"]);
-        assert!(a.prove_mode);
-        assert_eq!(a.in_files, vec!["x.spthy".to_string()]);
-        assert_eq!(a.processors, None);
-        // Unclosed `+RTS` swallows the rest; a stray `-RTS` is a no-op.
-        let a = parse(&["--prove", "x.spthy", "+RTS", "-N4"]);
-        assert_eq!(a.in_files, vec!["x.spthy".to_string()]);
-        let a = parse(&["-RTS", "x.spthy"]);
-        assert_eq!(a.in_files, vec!["x.spthy".to_string()]);
-        // `--RTS` ends RTS processing: the rest passes through verbatim,
-        // so a later `+RTS` reaches the parser as a plain positional.
-        let a = parse(&["--RTS", "x.spthy", "+RTS"]);
-        assert_eq!(a.in_files, vec!["x.spthy".to_string(), "+RTS".to_string()]);
-        // `--` also ends RTS processing and is kept for the parser.
-        let a = parse(&["+RTS", "-N4", "-RTS", "--", "x.spthy"]);
-        assert_eq!(a.in_files, vec!["x.spthy".to_string()]);
-    }
-
-    #[test]
-    fn maude_path_inline() {
-        // with-maude is flagOpt (Environment.hs:29-34, see line 33); only `=VALUE` sets it.
-        let a = parse(&["--with-maude=/opt/maude/maude"]);
-        assert_eq!(a.maude_path.as_deref(), Some("/opt/maude/maude"));
-        // A space-separated token is NOT consumed: it stays positional and
-        // the flag records its default "maude".  Mirrors HS flagOpt.
-        let a = parse(&["--with-maude", "/opt/maude/maude"]);
-        assert_eq!(a.maude_path.as_deref(), Some("maude"));
-        assert_eq!(a.in_files, vec!["/opt/maude/maude".to_string()]);
-    }
-
-    #[test]
-    fn output_file_and_dir() {
-        // flagOpt inline forms set the value.
-        let a = parse(&["-oout.spthy", "input.spthy"]);
-        assert_eq!(a.output_file.as_deref(), Some("out.spthy"));
-        assert_eq!(a.in_files, vec!["input.spthy".to_string()]);
-        let a = parse(&["-Ooutdir", "input.spthy"]);
-        assert_eq!(a.output_dir.as_deref(), Some("outdir"));
-        let a = parse(&["--output=foo.spthy"]);
-        assert_eq!(a.output_file.as_deref(), Some("foo.spthy"));
-        let a = parse(&["--Output=bar"]);
-        assert_eq!(a.output_dir.as_deref(), Some("bar"));
-        // Space-separated `-o out.spthy`: HS keeps `out.spthy` positional
-        // (verified: `-o out.spthy t.spthy` -> `out.spthy: openFile: does
-        // not exist`) and the flag records its empty default.
-        let a = parse(&["-o", "out.spthy", "input.spthy"]);
-        assert_eq!(a.output_file.as_deref(), Some(""));
-        assert_eq!(
-            a.in_files,
-            vec!["out.spthy".to_string(), "input.spthy".to_string()]
-        );
-    }
-
-    #[test]
-    fn output_dir_alias_is_unknown_flag() {
-        // HS registers only `--Output`/`-O` (Batch.hs:44-84, see line 77); there is no
-        // `--output-dir` alias.  Verified on the HS binary:
-        // `tamarin-prover --output-dir=foo t.spthy` -> `Unknown flag: --output-dir`.
-        assert!(parse_args(&["--output-dir=foo".to_string()]).is_err());
-        // `--Output=foo` still sets the directory.
-        let a = parse(&["--Output=foo"]);
-        assert_eq!(a.output_dir.as_deref(), Some("foo"));
-    }
-
-    #[test]
-    fn quiet_and_verbose_flags() {
-        let a = parse(&["--quiet", "--verbose"]);
-        assert!(a.quiet);
-        assert!(a.verbose);
-    }
-
-    #[test]
-    fn bound_inline_short_and_long() {
-        // bound is flagOpt "5" (TheoryLoader.hs:105-110): inline forms set it.
-        let a = parse(&["-b12"]);
-        assert_eq!(a.bound, Some(12));
-        let a = parse(&["--bound=99"]);
-        assert_eq!(a.bound, Some(99));
-    }
-
-    #[test]
-    fn bound_space_separated_is_positional() {
-        // Load-bearing flagOpt behaviour, verified on the HS binary:
-        // `--bound 5 t.spthy` -> `5: openFile: does not exist` (the `5` is a
-        // POSITIONAL file, not the bound).  The bare `--bound` records the
-        // flagOpt default "5" => Some(5).
-        let a = parse(&["--bound", "5", "t.spthy"]);
-        assert_eq!(a.bound, Some(5)); // default, not the next token
-        assert_eq!(a.in_files, vec!["5".to_string(), "t.spthy".to_string()]);
-        // Same for the short form.
-        let a = parse(&["-b", "5", "t.spthy"]);
-        assert_eq!(a.bound, Some(5));
-        assert_eq!(a.in_files, vec!["5".to_string(), "t.spthy".to_string()]);
-    }
-
-    #[test]
-    fn bound_bare_vs_absent() {
-        // HS `proofBound = parseIntArg (findArg "bound") Nothing Just`:
-        // absent `--bound` => None (unbounded), bare `--bound` => Some(5)
-        // (bounded with the flagOpt default).
-        let absent = parse(&["t.spthy"]);
-        assert_eq!(absent.bound, None);
-        let bare = parse(&["--bound", "t.spthy"]);
-        assert_eq!(bare.bound, Some(5));
-        assert_eq!(bare.in_files, vec!["t.spthy".to_string()]);
-    }
-
-    #[test]
-    fn saturation_inline_short_and_long() {
-        let a = parse(&["-s7"]);
-        assert_eq!(a.saturation, Some(7));
-        let a = parse(&["--saturation=4"]);
-        assert_eq!(a.saturation, Some(4));
-    }
-
-    #[test]
-    fn open_chains_inline_short_and_long() {
-        let a = parse(&["-c20"]);
-        assert_eq!(a.open_chains, Some(20));
-        let a = parse(&["--open-chains=11"]);
-        assert_eq!(a.open_chains, Some(11));
-    }
-
-    #[test]
-    fn heuristic_passthrough() {
-        let a = parse(&["--heuristic=S"]);
-        assert_eq!(a.heuristic.as_deref(), Some("S"));
-    }
-
-    #[test]
-    fn stop_on_trace_known() {
-        let a = parse(&["--stop-on-trace=DFS"]);
-        assert_eq!(a.stop_on_trace, Some(StopOnTrace::Dfs));
-        let a = parse(&["--stop-on-trace=BFS"]);
-        assert_eq!(a.stop_on_trace, Some(StopOnTrace::Bfs));
-        let a = parse(&["--stop-on-trace=SeqDFS"]);
-        assert_eq!(a.stop_on_trace, Some(StopOnTrace::SeqDfs));
-        let a = parse(&["--stop-on-trace=NONE"]);
-        assert_eq!(a.stop_on_trace, Some(StopOnTrace::None));
-    }
-
-    #[test]
-    fn stop_on_trace_unknown_is_err() {
-        let r = parse_args(&["--stop-on-trace=banana".to_string()]);
-        assert!(r.is_err());
-    }
-
-    #[test]
-    fn diff_flag_parsed() {
-        let a = parse(&["--diff", "x.spthy"]);
-        assert!(a.diff);
-    }
-
-    #[test]
-    fn quit_on_warning_parsed() {
-        let a = parse(&["--quit-on-warning"]);
-        assert!(a.quit_on_warning);
-    }
-
-    #[test]
-    fn defines_repeatable() {
-        let a = parse(&["-DFLAG_A", "--defines=FLAG_B"]);
-        assert_eq!(a.defines, vec!["FLAG_A", "FLAG_B"]);
-    }
-
-    #[test]
-    fn parse_only_and_precompute_only() {
-        let a = parse(&["--parse-only"]);
-        assert!(a.parse_only);
-        let a = parse(&["--precompute-only"]);
-        assert!(a.precompute_only);
-    }
-
-    #[test]
-    fn interactive_subcommand_recognised() {
-        let a = parse(&["interactive", "x.spthy"]);
-        assert_eq!(a.subcommand, Subcommand::Interactive);
-    }
-
-    #[test]
-    fn variants_subcommand_recognised() {
-        let a = parse(&["variants"]);
-        assert_eq!(a.subcommand, Subcommand::Variants);
-    }
-
-    #[test]
-    fn test_subcommand_recognised() {
-        let a = parse(&["test"]);
-        assert_eq!(a.subcommand, Subcommand::Test);
-    }
-
-    #[test]
-    fn help_short_and_long() {
-        let a = parse(&["--help"]);
-        assert!(a.show_help);
-        let a = parse(&["-h"]);
-        assert!(a.show_help);
-        let a = parse(&["-?"]);
-        assert!(a.show_help);
-    }
-
-    #[test]
-    fn version_short_and_long() {
-        let a = parse(&["--version"]);
-        assert!(a.show_version);
-        let a = parse(&["-V"]);
-        assert!(a.show_version);
-    }
-
-    #[test]
-    fn output_module_parsed() {
-        // output-module is flagOpt "spthy" (Batch.hs:44-84, see line 78): inline only.
-        let a = parse(&["-mmsr"]);
-        assert_eq!(a.output_module.as_deref(), Some("msr"));
-        let a = parse(&["--output-module=msr"]);
-        assert_eq!(a.output_module.as_deref(), Some("msr"));
-        // Bare `-m` records the default "spthy".
-        let a = parse(&["-m", "x.spthy"]);
-        assert_eq!(a.output_module.as_deref(), Some("spthy"));
-        assert_eq!(a.in_files, vec!["x.spthy".to_string()]);
-    }
-
-    #[test]
-    fn output_dot_and_json_are_flag_req() {
-        // output-json/output-dot are flagReq (Batch.hs:79-80): they DO consume
-        // the next space-separated token, unlike the flagOpt family.  Verified
-        // on the HS binary: `--output-json trace.json t.spthy` writes trace.json.
-        let a = parse(&["--output-dot=trace.dot", "--output-json=trace.json"]);
-        assert_eq!(a.trace_dot.as_deref(), Some("trace.dot"));
-        assert_eq!(a.trace_json.as_deref(), Some("trace.json"));
-        let a = parse(&["--output-json", "trace.json", "t.spthy"]);
-        assert_eq!(a.trace_json.as_deref(), Some("trace.json"));
-        assert_eq!(a.in_files, vec!["t.spthy".to_string()]);
-    }
-
-    #[test]
-    fn auto_sources_flag_parsed() {
-        let a = parse(&["--auto-sources"]);
-        assert!(a.auto_sources);
-    }
-
-    #[test]
-    fn oracle_flags_parsed() {
-        let a = parse(&["--oraclename=./my.oracle", "--oracle-only"]);
-        assert_eq!(a.oracle_name.as_deref(), Some("./my.oracle"));
-        assert!(a.oracle_only);
-    }
-
-    #[test]
-    fn ddash_routes_to_positional() {
-        let a = parse(&["--", "--prove", "weird-name"]);
-        assert_eq!(a.in_files, vec!["--prove", "weird-name"]);
-        assert!(!a.prove_mode);
-    }
-
-    #[test]
-    fn unknown_long_flag_is_err() {
-        let r = parse_args(&["--nonsense".to_string()]);
-        assert!(r.is_err());
-    }
-
-    #[test]
-    fn unknown_short_flag_is_err() {
-        let r = parse_args(&["-Z".to_string()]);
-        assert!(r.is_err());
-    }
-
-    #[test]
-    fn lemma_matches_exact() {
-        let f = vec!["foo".to_string()];
-        assert!(lemma_matches(&f, "foo"));
-        assert!(!lemma_matches(&f, "bar"));
-    }
-
-    #[test]
-    fn lemma_matches_prefix_star() {
-        let f = vec!["secrecy*".to_string()];
-        assert!(lemma_matches(&f, "secrecy_alice"));
-        assert!(lemma_matches(&f, "secrecy"));
-        assert!(!lemma_matches(&f, "auth"));
-    }
-
-    #[test]
-    fn lemma_matches_empty_filter_matches_all() {
-        let f: Vec<String> = vec![];
-        assert!(lemma_matches(&f, "anything"));
-        let f = vec![String::new()];
-        assert!(lemma_matches(&f, "anything"));
-    }
-
-    #[test]
-    fn lemma_matches_any_in_filter() {
-        let f = vec!["foo".to_string(), "bar*".to_string()];
-        assert!(lemma_matches(&f, "foo"));
-        assert!(lemma_matches(&f, "barbaric"));
-        assert!(!lemma_matches(&f, "baz"));
-    }
-
-    #[test]
-    fn lemma_matches_two_empties_match_all() {
-        // HS lemmaSelector special-cases `["", ""]` to True.
-        let f = vec![String::new(), String::new()];
-        assert!(lemma_matches(&f, "anything"));
-    }
-
-    #[test]
-    fn lemma_matches_three_empties_match_nothing() {
-        // HS lemmaSelector only special-cases null/[""]/["",""]; three
-        // bare entries fall through to `any lemmaMatches` and an empty
-        // pattern only matches a lemma literally named "".
-        let f = vec![String::new(), String::new(), String::new()];
-        assert!(!lemma_matches(&f, "anything"));
-        assert!(lemma_matches(&f, ""));
-    }
-
-    #[test]
-    fn clustered_boolean_shorts() {
-        // GNU-style clustering: `-vh` sets both verbose and help.
-        let a = parse(&["-vh"]);
-        assert!(a.verbose);
-        assert!(a.show_help);
-        let a = parse(&["-hV"]);
-        assert!(a.show_help);
-        assert!(a.show_version);
-    }
-
-    #[test]
-    fn clustered_bool_then_value_short() {
-        // A value-taking short ends the cluster, consuming the rest as
-        // its inline value: `-vb12` = verbose + bound 12.
-        let a = parse(&["-vb12"]);
-        assert!(a.verbose);
-        assert_eq!(a.bound, Some(12));
-    }
-
-    #[test]
-    fn partial_eval_unknown_message() {
-        let r = parse_args(&["--partial-evaluation=banana".to_string()]);
-        match r {
-            Err(CliError::Msg(m)) => {
-                assert_eq!(m, "partial-evaluation: unknown option");
-            }
-            _ => panic!("expected error"),
-        }
-    }
-
-    #[test]
-    fn maude_processes_parsed() {
-        let a = parse(&["--maude-processes=3", "x.spthy"]);
-        assert_eq!(a.maude_processes, Some(3));
-    }
-
-    #[test]
-    fn maude_processes_zero_rejected() {
-        let r = parse_args(&["--maude-processes=0".to_string()]);
-        assert!(r.is_err());
-    }
-
-    #[test]
-    fn effective_maude_processes_single_processor_forces_one() {
-        let a = parse(&["--processors=1", "--maude-processes=8", "x.spthy"]);
-        // When processors=1, pool size collapses to 1 regardless of
-        // --maude-processes (no parallelism to exploit).
-        assert_eq!(a.effective_maude_processes(), 1);
-    }
-
-    #[test]
-    fn effective_maude_processes_default_is_one_to_one() {
-        let a = parse(&["--processors=8", "x.spthy"]);
-        // Default is now 1:1 (= processors) so B1 lemma-level + within-lemma
-        // fan-out don't exhaust the pool and fall back to the shared Maude.
-        assert_eq!(a.effective_maude_processes(), 8);
-    }
-
-    #[test]
-    fn effective_maude_processes_explicit_override() {
-        let a = parse(&["--processors=8", "--maude-processes=2", "x.spthy"]);
-        assert_eq!(a.effective_maude_processes(), 2);
-    }
-
-    #[test]
-    fn version_stdout_has_blank_line_before_generated_from_and_no_maude_lines() {
-        // HS (Console.hs:326-330) puts the banner + license + `Generated from:`
-        // block on STDOUT.  `putStrLn versionStr` (versionStr ends with the
-        // unlines `\n`) produces a blank line before `Generated from:`.  The
-        // maude self-check lines must NOT appear on stdout.  Probed against the
-        // installed HS binary: stdout ends `...LICENSE'.\n\nGenerated from:`.
-        let out = version_text();
-        assert!(
-            out.contains("'https://github.com/tamarin-prover/tamarin-prover/blob/master/LICENSE'.\n\nGenerated from:\n"),
-            "stdout must have a blank line between the license and `Generated from:`\n--- got ---\n{out}"
-        );
-        assert!(
-            !out.contains("maude tool:"),
-            "stdout must NOT contain the maude self-check lines"
-        );
-        assert!(
-            !out.contains("checking version:"),
-            "stdout must NOT contain the maude self-check lines"
-        );
-        assert!(
-            !out.contains("checking installation:"),
-            "stdout must NOT contain the maude self-check lines"
-        );
-        // The banner is the first line.
-        assert!(out.starts_with("tamarin-prover "));
-        // getVersionIO's block is present and ends with the compile-time line.
-        assert!(out.contains("\nTamarin version "));
-        assert!(out.contains("\nMaude version "));
-        assert!(out.contains("\nCompiled at: "));
-    }
-
-    #[test]
-    fn version_stderr_has_the_three_maude_self_check_lines() {
-        // HS `ensureMaude` writes these to STDERR via `hPutStrLn stderr` /
-        // `testProcess` (Console.hs:151-165).  Probed against the HS binary,
-        // stderr is exactly:
-        //   maude tool: 'maude'
-        //    checking version: 3.5.1. OK.
-        //    checking installation: OK.
-        let err = version_maude_stderr_text();
-        let lines: Vec<&str> = err.lines().collect();
-        assert_eq!(
-            lines.len(),
-            3,
-            "stderr block must be exactly three lines: {err:?}"
-        );
-        assert_eq!(lines[0], "maude tool: 'maude'");
-        assert!(
-            lines[1].starts_with(" checking version: "),
-            "got {:?}",
-            lines[1]
-        );
-        assert!(
-            lines[1].ends_with(". OK.") || lines[1].ends_with(". FAILED."),
-            "got {:?}",
-            lines[1]
-        );
-        assert!(
-            lines[2] == " checking installation: OK."
-                || lines[2] == " checking installation: FAILED."
-        );
-    }
-}
+#[path = "cli_tests.rs"]
+mod tests;

@@ -1,0 +1,12 @@
+theory SapicElseBranchExp
+begin
+
+builtins: diffie-hellman
+
+process:
+  let <<p, q>, r> = <<'a'^'b','b'>,'c'> in
+    out(<p,q,r>)
+  else
+    out('no')
+
+end

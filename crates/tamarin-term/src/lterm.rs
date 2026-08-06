@@ -1,9 +1,10 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, beschmi, jdreier, PhilipLukertWork, and other minor
-//   contributors (see upstream git history)
+//   meiersi, beschmi, jdreier, PhilipLukertWork, Divya19gupta, and
+//   other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Unification.hs,
-//   lib/theory/src/Theory/Constraint/Solver/Sources.hs
+//   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
+//   src/Web/Utils.hs
 
 //! Port of `Term.LTerm` data types from `lib/term/src/Term/LTerm.hs`:
 //! sorts, names, logical variables, simple predicates and convertors,
@@ -96,12 +97,20 @@ impl NameId {
     }
 }
 
+/// Variant order mirrors the Haskell constructor order
+/// (`data NameTag = FreshName | PubName | NodeName | NatName | AbbrevName`,
+/// LTerm.hs:219), which the derived `Ord` on both sides reads off.
+///
+/// `Abbrev` is the tag `Web.Utils.shorten` (`src/Web/Utils.hs:71-88`) puts on
+/// the short constant it substitutes for a long term; it never occurs in a
+/// parsed or solved term.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NameTag {
     Fresh,
     Pub,
     Node,
     Nat,
+    Abbrev,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -135,6 +144,8 @@ pub fn sort_of_name(n: &Name) -> LSort {
         NameTag::Pub => LSort::Pub,
         NameTag::Node => LSort::Node,
         NameTag::Nat => LSort::Nat,
+        // LTerm.hs:266.
+        NameTag::Abbrev => LSort::Msg,
     }
 }
 
@@ -305,6 +316,48 @@ pub fn contains_private<A>(t: &Term<A>) -> bool {
             s.privacy == Privacy::Private || args.iter().any(contains_private)
         }
         Term::App(_, args) => args.iter().any(contains_private),
+    }
+}
+
+/// `containsOnlyNoEq t`: does `t` contain only NoEq function symbols (i.e.
+/// no AC and no C symbol)?  A literal trivially qualifies.
+pub fn contains_only_no_eq<A>(t: &Term<A>) -> bool {
+    match t {
+        Term::Lit(_) => true,
+        Term::App(FunSym::NoEq(_), args) => args.iter().all(contains_only_no_eq),
+        Term::App(_, _) => false,
+    }
+}
+
+/// `containsNoPrivateExcept funs t`: does `t` contain no private function
+/// symbol other than those in `funs`?  The membership test is on the whole
+/// `FunSym`, so a symbol differing in arity/constructability/NDC state from
+/// its `funs` entry is not exempted.
+pub fn contains_no_private_except<A>(funs: &[FunSym], t: &Term<A>) -> bool {
+    match t {
+        Term::Lit(_) => true,
+        Term::App(f @ FunSym::NoEq(s), args) if s.privacy == Privacy::Private => {
+            funs.contains(f) && args.iter().all(|a| contains_no_private_except(funs, a))
+        }
+        Term::App(_, args) => args.iter().all(|a| contains_no_private_except(funs, a)),
+    }
+}
+
+/// `isTrivialFunSymTerm t sym`: is `t` an application of `sym` whose
+/// arguments are all message variables?
+pub fn is_trivial_fun_sym_term(t: &LNTerm, sym: &FunSym) -> bool {
+    match t {
+        Term::App(f, args) => f == sym && args.iter().all(is_msg_var),
+        Term::Lit(_) => false,
+    }
+}
+
+/// `isTrivialACFunSymTerm t`: is `t` an application of any AC function
+/// symbol whose arguments are all message variables?
+pub fn is_trivial_ac_fun_sym_term(t: &LNTerm) -> bool {
+    match t {
+        Term::App(FunSym::Ac(_), args) => args.iter().all(is_msg_var),
+        _ => false,
     }
 }
 
@@ -701,23 +754,67 @@ impl<T: HasFrees> HasFrees for Option<T> {
 
 /// `rename t`: replace every free variable with a fresh one (preserving
 /// sort and name hint).
+///
+/// The empty-exemption case of [`rename_ignoring`]: HS states the two
+/// separately (`rename`, LTerm.hs:638-645) with bodies that differ only in the
+/// `elem … vars` test, which an empty list always answers `False`.
+#[inline]
 pub fn rename<T: HasFrees>(t: T, fresh: &mut tamarin_utils::fresh::FastFreshState) -> T {
-    let bounds = bounds_var_idx(&t);
-    match bounds {
+    rename_ignoring(&[], t, fresh)
+}
+
+/// `renameIgnoring vars t`: like [`rename`], but the variables in `vars` keep
+/// their index.  The shift is applied to every other free variable, so — as
+/// for `rename` — the result is not guaranteed to be equal for terms that are
+/// equal modulo variable indices.
+#[inline]
+pub fn rename_ignoring<T: HasFrees>(
+    vars: &[LVar],
+    t: T,
+    fresh: &mut tamarin_utils::fresh::FastFreshState,
+) -> T {
+    match bounds_var_idx(&t) {
         None => t,
         Some((min, max)) => {
             let span = max - min + 1;
             let fresh_start = fresh.fresh_idents(span);
             let shift = fresh_start as i128 - min as i128;
-            // HS `rename` (LTerm.hs:607-614) uses `mapFrees (Monotone ...)`: the
-            // index shift is monotone, so AC arg order is preserved.
-            t.map_free_monotone(&mut |LVar { name, sort, idx }| LVar {
-                name,
-                sort,
-                idx: ((idx as i128) + shift) as u64,
+            // HS `renameIgnoring` (LTerm.hs:650-657) uses `mapFrees (Monotone
+            // ...)` here even though the `vars` exemption makes the map
+            // non-monotone in general; transcribing HS verbatim (rather than
+            // "fixing" it to an `Arbitrary` map) is what preserves AC arg
+            // order — and byte parity — with the Haskell prover.
+            //
+            // `rename` reaches this with an empty `vars` on the proof-search
+            // hot path, where the length test skips the `contains` walk.
+            t.map_free_monotone(&mut |v| {
+                if !vars.is_empty() && vars.contains(&v) {
+                    v
+                } else {
+                    LVar {
+                        name: v.name,
+                        sort: v.sort,
+                        idx: ((v.idx as i128) + shift) as u64,
+                    }
+                }
             })
         }
     }
+}
+
+/// `renameAvoidingIgnoring s t vars`: replace all free variables in `s`
+/// except those in `vars` by fresh variables avoiding the variables in
+/// `avoid_in`.
+pub fn rename_avoiding_ignoring<S: HasFrees, T: HasFrees>(s: S, avoid_in: &T, vars: &[LVar]) -> S {
+    let mut fresh = avoid(avoid_in);
+    rename_ignoring(vars, s, &mut fresh)
+}
+
+/// `renameAvoiding s avoid_in` (LTerm.hs:696): replace all free variables in
+/// `s` by fresh variables avoiding the variables in `avoid_in`.
+pub fn rename_avoiding<S: HasFrees, T: HasFrees>(s: S, avoid_in: &T) -> S {
+    let mut fresh = avoid(avoid_in);
+    rename(s, &mut fresh)
 }
 
 // Intentionally retained: faithful HS port of `natToFreshVars` (LTerm.hs).
@@ -871,13 +968,14 @@ mod tests {
         assert!(LSort::Pub < LSort::Nat);
     }
 
-    /// LTerm.hs:215: `data NameTag = FreshName | PubName | NodeName | NatName`
+    /// LTerm.hs:218:
+    ///     data NameTag = FreshName | PubName | NodeName | NatName | AbbrevName
     #[test]
     fn name_tag_ord_matches_haskell_declaration() {
-        // Fresh < Pub < Node < Nat
         assert!(NameTag::Fresh < NameTag::Pub);
         assert!(NameTag::Pub < NameTag::Node);
         assert!(NameTag::Node < NameTag::Nat);
+        assert!(NameTag::Nat < NameTag::Abbrev);
     }
 
     /// Haskell `sortCompare` (LTerm.hs:177-187) is a PARTIAL ORDER, NOT

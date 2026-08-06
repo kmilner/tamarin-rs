@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   jdreier, meiersi, racoucho1u, beschmi, charlie-j, rkunnema,
-//   felixlinker, rsasse, yavivanov, PhilipLukertWork, kevinmorio, arcz,
+//   jdreier, meiersi, racoucho1u, beschmi, charlie-j, rkunnema, rsasse,
+//   felixlinker, kevinmorio, PhilipLukertWork, yavivanov, arcz,
 //   BTom-GH, Nick Moore, ValentinYuri, addap, katrielalex, felixonmars,
 //   and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
@@ -84,10 +84,12 @@ pub struct LemmaProofState {
 ///
 /// Mirrors `tamarin_theory::prove::prove_lemma`:
 ///   - `use_induction`: `UseInduction` iff the lemma carries `[use_induction]`
-///     or `[sources]` (prove.rs:749-753); else the `AvoidInduction` default.
+///     or `[sources]` (`prove_lemma`'s `force_induction` check); else the
+///     `AvoidInduction` default.
 ///   - `heuristic`: per-lemma `[heuristic=..]` > theory-level `heuristic:`
 ///     directive, parsed via `parse_heuristic_str_with_tactics`
-///     (prove.rs:601-623, minus the CLI `--heuristic` the web path never has).
+///     (prove.rs's `resolve_heuristic`, minus the CLI `--heuristic` the web
+///     path never has).
 ///     `None` ⇒ HS default `Smart`.
 ///
 /// Built ONCE in [`ProofState::new`] and never mutated → held lock-free
@@ -116,7 +118,7 @@ pub struct ProofState {
     /// `use_induction` + `heuristic` for the lemma being ranked.
     pub lemma_settings: Arc<BTreeMap<String, LemmaSearchSettings>>,
     /// User-declared function-symbol name sets for this theory.
-    /// `formula_to_guarded` / `term_to_gterm` / `term_to_lnterm` resolve
+    /// `formula_to_guarded` / `term_to_gterm_free` / `term_to_lnterm` resolve
     /// symbols through THREAD-LOCALS (HS resolves them at parse time via
     /// `nullaryApp`, so its formulas are born resolved).  The batch path
     /// installs them per proving thread (prove.rs `_lemma_user_funs_guard`);
@@ -147,11 +149,18 @@ impl ProofState {
     /// Build the [`ProofContext`] + initial per-lemma roots for a
     /// freshly loaded theory.  Mirrors the construction in
     /// `tamarin_theory::prove::prove_lemma` minus the search loop.
+    ///
+    /// `ndc_cache`: the theory's once-per-load NDC-checked intruder cache
+    /// (`theory_io` ran `check_close_intr_rule` at load), injected into
+    /// both the web session and the shared display context so neither
+    /// re-runs the check.  The borrowed handle is the same allocation the
+    /// `TheoryEntry` holds, so neither injection copies the rule list.
     pub fn new(
         parser_theory: &tamarin_parser::ast::Theory,
         maude_path: &str,
         cli_cut: Option<tamarin_theory::constraint::solver::context::CutStrategy>,
         in_file: &str,
+        ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
     ) -> Result<Self, String> {
         // Effective cut strategy — HS `closeTheory` precedence
         // (TheoryLoader.hs:640-666): the CLI `--stop-on-trace` wins;
@@ -248,6 +257,7 @@ impl ProofState {
                 &typed.in_file,
                 tamarin_theory::prove::CliHeuristic::default(),
                 cut,
+                ndc_cache,
             ) {
                 Ok(s) => Some(Arc::new(s)),
                 Err(e) => {
@@ -302,6 +312,7 @@ impl ProofState {
             rules,
             ctx_restrictions,
             &forced_injective_facts,
+            ndc_cache.cloned(),
         );
         ctx.cut = cut;
         // Build the initial system for every lemma.
@@ -312,7 +323,7 @@ impl ProofState {
         let mut lemma_settings: BTreeMap<String, LemmaSearchSettings> = BTreeMap::new();
         for lemma in typed.lemmas() {
             let lname = lemma.name.clone();
-            // --- Per-lemma search settings (prove.rs:601-623,749-753) -------
+            // --- Per-lemma search settings (see `LemmaSearchSettings`) ------
             // `use_induction`: forced on by `[use_induction]` or `[sources]`.
             let use_induction = if lemma
                 .attributes
@@ -344,7 +355,7 @@ impl ProofState {
                 // Oracle paths resolve against the theory file's directory
                 // (HS `oraclePath = workDir </> relPath`, System.hs:574-575)
                 // — same prefixing the batch session applies
-                // (prove.rs `resolve_lemma_rankings`); without it the dmn
+                // (prove.rs `resolve_heuristic`); without it the dmn
                 // family's `heuristic: o "./oracle-…"` exec fails cwd-relative.
                 tamarin_theory::prove::prepend_theory_dir_to_oracle_paths(
                     &mut rankings,
@@ -1332,7 +1343,7 @@ lemma trivial: exists-trace
 end
 "#;
         let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
-        let state = ProofState::new(&pt, &mp, None, "").expect("build state");
+        let state = ProofState::new(&pt, &mp, None, "", None).expect("build state");
         // Should have one lemma initialised.
         let root = state.get_root("trivial").expect("trivial root");
         assert!(matches!(root.method, ProofMethod::Sorry(_)));
@@ -1353,7 +1364,7 @@ lemma trivial: exists-trace
 end
 "#;
         let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
-        let state = ProofState::new(&pt, &mp, None, "").expect("build state");
+        let state = ProofState::new(&pt, &mp, None, "", None).expect("build state");
         // Apply simplify at the root.
         let path: Vec<String> = Vec::new();
         let r = state.apply_at_path("trivial", &path, ProofMethod::Simplify);

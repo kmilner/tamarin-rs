@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
 //   meiersi, jdreier, gilcu3, rkunnema, beschmi, rsasse, felixlinker,
-//   Hong-Thai, racoucho1u, BTom-GH, PhilipLukertWork, ValentinYuri, and
+//   Hong-Thai, racoucho1u, PhilipLukertWork, BTom-GH, ValentinYuri, and
 //   other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Maude/Types.hs,
@@ -452,7 +452,7 @@ pub fn abstract_rule_and_variants(
             name: tamarin_term::intern::intern_str(&name_hint(t)),
             // HS-faithful `abstrTerm` (RuleVariants.hs:61-134, see line 104):
             // `importBinding (\`LVar\` sortOfLNTerm t) t (getHint t)`.
-            // `sort_of_lnterm` (lterm.rs:216) IS HS `sortOfLNTerm`:
+            // `sort_of_lnterm` (lterm.rs) IS HS `sortOfLNTerm`:
             // Con -> sort_of_name (Fresh/Pub/Node/Nat by tag), Var ->
             // v.sort, NatPlus/NatOne -> Nat, _ -> Msg.
             sort: tamarin_term::lterm::sort_of_lnterm(t),
@@ -627,8 +627,8 @@ pub fn abstract_rule_and_variants(
     // (RuleVariants.hs:61-134, see line 77) AND `composeVFresh vsubst abstractionSubst`
     // (RuleVariants.hs:61-134, see line 75), each `vsubst` is already removeRenamings'd.
     //
-    // RS's `maude.variants()` (maude_proc.rs:1418) does NOT apply
-    // `remove_renamings` (unlike the unify path, maude_proc.rs:886-892), so
+    // RS's `MaudeHandle::variants` (maude_proc.rs) does NOT apply
+    // `remove_renamings` (unlike `MaudeHandle::unify`, which does), so
     // we clean each variant HERE — once, up front — to match HS.  This puts
     // the H20/`isFreshRedundant` filter (below) and the compose loop on the
     // SAME cleaned form HS uses.  `remove_renamings` filters entries WITHIN

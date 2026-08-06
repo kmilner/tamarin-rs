@@ -1,0 +1,190 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   meiersi, rsasse, jdreier, rkunnema, and other minor contributors (see
+//   upstream git history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/OpenTheory.hs, lib/theory/src/TheoryObject.hs,
+//   lib/theory/src/Theory/Text/Parser.hs,
+//   lib/theory/src/Theory/Text/Parser/Exceptions.hs
+
+//! Parity for the duplicate-rule / duplicate-restriction guards
+//! `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) runs after each
+//! protocol rule parses:
+//!
+//!   * `addOpenProtoRule` (OpenTheory.hs:691-702) rejects a rule whose name is
+//!     already bound to a DIFFERENT rule — an identical duplicate passes the
+//!     guard and is appended a second time;
+//!   * each `_restrict` formula's minted `Restr_<rule>_<i>` restriction goes
+//!     through `addRestriction` (TheoryObject.hs:453-456) FIRST, which rejects
+//!     on an existing NAME alone.
+//!
+//! Both rejections are `throwM` → `fail (show e)` (Token.hs:210-211) with
+//! `show (DuplicateItem …)` (Parser/Exceptions.hs:38-40): a recoverable
+//! failure at the position after the rule, which the port reports as a
+//! [`ParseError::Custom`] carrying HS's message.  Every message and position
+//! below is the pinned Haskell oracle's (Git revision ef3f0468) for the same
+//! theory; every accepted theory loads with exit 0 there.
+
+use tamarin_parser::ast::TheoryItem;
+use tamarin_parser::{parse_theory, ParseError};
+
+/// The `fail`ed message of `src`'s parse error, with its `(line, column)`.
+#[track_caller]
+fn custom(src: &str) -> (String, u32, u32) {
+    check(parse_theory(src, &[]))
+}
+
+/// [`custom`] for an already-run parse.
+#[track_caller]
+fn check<T>(res: Result<T, ParseError>) -> (String, u32, u32) {
+    let e = match res {
+        Ok(_) => panic!("the probes below must all fail to parse"),
+        Err(e) => e,
+    };
+    let at = *e.location();
+    let ParseError::Custom { message, .. } = e else {
+        panic!("expected a `fail`-style error, got {e:?}");
+    };
+    (message, at.line, at.col)
+}
+
+/// The names of the protocol-rule items in `src`'s parsed theory.
+fn rule_names(src: &str) -> Vec<String> {
+    parse_theory(src, &[])
+        .expect("theory should parse")
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            TheoryItem::Rule(r) => Some(r.name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Same name, different `color=` attribute: attributes are part of the
+/// `ProtoRuleE` the guard compares (`ru ==`, OpenTheory.hs:697), so this is a
+/// different rule and dies at the second rule's add — the failure sits at the
+/// next token (`end`), after the second rule's trailing `variants` attempt.
+#[test]
+fn different_color_same_name_is_a_duplicate() {
+    let src = "theory T begin\n\n\
+               rule R1[color=ff0000]: [ ] --> [ ]\n\
+               rule R1[color=00ff00]: [ ] --> [ ]\n\n\
+               end\n";
+    assert_eq!(custom(src), ("duplicate rule: R1".to_string(), 6, 1));
+}
+
+/// Same name, different conclusions.
+#[test]
+fn different_body_same_name_is_a_duplicate() {
+    let src = "theory T begin\n\n\
+               rule R1: [ ] --> [ Out('a') ]\n\
+               rule R1: [ ] --> [ Out('b') ]\n\n\
+               end\n";
+    assert_eq!(custom(src), ("duplicate rule: R1".to_string(), 6, 1));
+}
+
+/// The guard fires as soon as the second rule has parsed — mid-file, before a
+/// later parse error is ever reached: the position is that of the following
+/// `rule` keyword, not of the broken rule's own failure.
+#[test]
+fn duplicate_fires_before_a_later_parse_error() {
+    let src = "theory T begin\n\n\
+               rule R1: [ ] --> [ Out('a') ]\n\
+               rule R1: [ ] --> [ Out('b') ]\n\n\
+               rule Broken: [ ] --> [\n\
+               end\n";
+    assert_eq!(custom(src), ("duplicate rule: R1".to_string(), 6, 1));
+}
+
+/// A byte-identical duplicate passes `addOpenProtoRule`'s
+/// `maybe True (ru ==) …` guard and is appended AGAIN — both copies are
+/// items (and both render).  The corpus relies on this (e.g.
+/// examples/asiaccs20-POIDC/OIDC_CodeFlow_with_ClientSecret.spthy carries
+/// two identical `Get_pk` rules); the oracle loads this theory with exit 0
+/// and prints `rule (modulo E) R1` twice.
+#[test]
+fn identical_duplicate_is_accepted_and_appended_twice() {
+    let src = "theory T begin\n\n\
+               rule R1: [ ] --> [ ]\n\
+               rule R1: [ ] --> [ ]\n\n\
+               end\n";
+    assert_eq!(rule_names(src), ["R1", "R1"]);
+}
+
+/// The corpus shape: two identical rules with a premise and conclusion.
+#[test]
+fn corpus_shape_identical_duplicate_is_accepted() {
+    let src = "theory T begin\n\n\
+               rule Get_pk:\n    [ !Pk(A, pubkey) ]\n  -->\n    [ Out(pubkey) ]\n\n\
+               rule Get_pk:\n    [ !Pk(A, pubkey) ]\n  -->\n    [ Out(pubkey) ]\n\n\
+               end\n";
+    assert_eq!(rule_names(src), ["Get_pk", "Get_pk"]);
+}
+
+/// Two `_restrict`-carrying rules with the same name die at the RESTRICTION
+/// guard, before the rule-equality comparison: `liftedAddProtoRule` adds the
+/// expanded `Restr_<rule>_<i>` restrictions first (Parser.hs:177-179), and
+/// `addRestriction` rejects on the existing NAME even though both rules (and
+/// both restrictions) are byte-identical.
+#[test]
+fn identical_restrict_duplicate_dies_at_the_restriction() {
+    let src = "theory T begin\n\n\
+               rule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j ) ]-> [ Out('a') ]\n\
+               rule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j ) ]-> [ Out('a') ]\n\n\
+               end\n";
+    assert_eq!(
+        custom(src),
+        ("duplicate restriction: Restr_R1_1".to_string(), 6, 1)
+    );
+}
+
+/// A user restriction that happens to carry a minted `Restr_<rule>_<i>` name
+/// blocks the `_restrict` expansion the same way — `addRestriction` checks
+/// against ALL restrictions in the theory.
+#[test]
+fn user_restriction_blocks_restrict_expansion() {
+    let src = "theory T begin\n\n\
+               restriction Restr_R1_1:\n  \
+               \"All x #i #j. B(x) @ #i & B(x) @ #j ==> #i = #j\"\n\n\
+               rule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j ) ]-> [ Out('a') ]\n\n\
+               end\n";
+    assert_eq!(
+        custom(src),
+        ("duplicate restriction: Restr_R1_1".to_string(), 8, 1)
+    );
+}
+
+/// When only the SECOND rule carries `_restrict`, its restriction name is
+/// fresh, so the restriction adds fine and the guard falls through to the
+/// rule comparison — which fails on the differing actions.
+#[test]
+fn second_rule_with_restrict_is_a_duplicate_rule() {
+    let src = "theory T begin\n\n\
+               rule R1: [ ] --> [ Out('a') ]\n\
+               rule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j ) ]-> [ Out('a') ]\n\n\
+               end\n";
+    assert_eq!(custom(src), ("duplicate rule: R1".to_string(), 6, 1));
+}
+
+/// The guard spans `#include` fragments: HS runs one `addItems` accumulation
+/// across included files, so a rule in the fragment collides with a
+/// different same-named rule in the including file.  The error sits in the
+/// including file, at the token after its rule.
+#[test]
+fn duplicate_across_include_is_rejected() {
+    let dir = std::env::temp_dir().join("tamarin_parser_dup_rule_names");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::write(
+        dir.join("frag.spthy"),
+        "rule R1[color=ff0000]: [ ] --> [ ]\n",
+    )
+    .expect("write fragment");
+    let src = "theory T begin\n\n\
+               #include \"frag.spthy\"\n\n\
+               rule R1[color=00ff00]: [ ] --> [ ]\n\n\
+               end\n";
+    assert_eq!(
+        check(tamarin_parser::parse_theory_with_base(src, &[], Some(dir))),
+        ("duplicate rule: R1".to_string(), 7, 1)
+    );
+}

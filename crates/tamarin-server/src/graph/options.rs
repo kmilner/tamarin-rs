@@ -1,7 +1,7 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   arcz, meiersi, felixlinker, addap, cascremers, jdreier, Kanakanajm,
-//   rsasse, BTom-GH, beschmi, YannColomb, symphorien, xaDxelA, and
-//   other minor contributors (see upstream git history)
+//   arcz, meiersi, cascremers, felixlinker, addap, jdreier, Kanakanajm,
+//   rsasse, Divya19gupta, BTom-GH, beschmi, YannColomb, symphorien,
+//   xaDxelA, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Constraint/System/Graph/Graph.hs,
 //   src/Web/Handler.hs

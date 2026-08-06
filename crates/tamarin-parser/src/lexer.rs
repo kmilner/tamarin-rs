@@ -96,15 +96,26 @@ impl<'a> Lexer<'a> {
     }
 
     /// Advance one char, updating line/col.
+    ///
+    /// Columns follow parsec's `updatePosChar` (Text/Parsec/Pos.hs): `\n`
+    /// starts a new line at column 1, a tab advances to the next 8-column
+    /// tab stop (`col + 8 - ((col-1) mod 8)`), and every other character
+    /// advances by one.  The tab rule is load-bearing for byte parity: the
+    /// `SourcePos` in a parse-error frame is the one parsec computed, so a
+    /// tab-indented line reports the expanded column (e.g.
+    /// `examples/csf18-alethea/alethea_selectionphase_anonymity.spthy`
+    /// line 104 is two tabs deep and its error is at column 66, not 52).
     pub fn bump(&mut self) -> Option<char> {
         let c = self.peek()?;
         let len = c.len_utf8();
         self.pos.offset += len;
-        if c == '\n' {
-            self.pos.line += 1;
-            self.pos.col = 1;
-        } else {
-            self.pos.col += 1;
+        match c {
+            '\n' => {
+                self.pos.line += 1;
+                self.pos.col = 1;
+            }
+            '\t' => self.pos.col += 8 - ((self.pos.col - 1) % 8),
+            _ => self.pos.col += 1,
         }
         Some(c)
     }

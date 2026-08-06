@@ -299,6 +299,43 @@ pub struct EqDisj {
     pub substs: Vec<LNSubstVFresh>,
 }
 
+/// `orderedSubsts = sortOnMemo dropNameHintsLNSubstVFresh . S.toList`
+/// (EquationStore.hs:223-224): a disjunction's cases in canonical split
+/// order.  The single source of truth for case ordering — `perform_split`
+/// and `pretty_system::pp_disj` (HS `ppDisj`, EquationStore.hs:659-662)
+/// both go through it, so the numbering shown for a disjunction matches
+/// the `split_case_i` labels a split of it emits.
+///
+/// Two stages, in this order:
+///  1. `sort()` is the `Data.Set LNSubstVFresh` `S.toList` raw-`Ord` order
+///     (RS stores the disjunction as an insertion-ordered `Vec`, so the
+///     set's enumeration order has to be materialised here).
+///  2. the stable `sort_by_cached_key(drop_name_hints)` re-sorts by the
+///     α-canonical key (`drop_name_hints` = `dropNameHintsLNSubstVFresh`,
+///     EquationStore.hs:143-147), which renumbers each subst's fresh
+///     witness range-vars by first appearance in domain-key order.  This
+///     makes `split_case_i` order independent of the Maude
+///     fresh-allocation counter (Rust's witness indices need not equal
+///     HS's), so case order is α-canonical and does not regress to the
+///     `analysis incomplete` symptom.
+///
+/// Ordering borrows rather than owned substs is order-identical: `Ord for
+/// &T` forwards to `T::cmp` and the key closure auto-derefs, so both
+/// stages see exactly the comparators they would see on owned values.
+///
+/// HS's `dropNameHintsBound` does NOT reach here: it is mapped only over
+/// the throwaway `addNormSys` copy in `removeRedundantCases`
+/// (Sources.hs:244-246, `map (fst . snd) ...` keeps the ORIGINAL case and
+/// discards the name-hint-dropped system; gated on `enableBP ||
+/// enableMSet`), so it never mutates the live `sEqStore` that
+/// `performSplit` later splits.
+pub(crate) fn ordered_substs(substs: &[LNSubstVFresh]) -> Vec<&LNSubstVFresh> {
+    let mut out: Vec<&LNSubstVFresh> = substs.iter().collect();
+    out.sort();
+    out.sort_by_cached_key(|s| s.drop_name_hints());
+    out
+}
+
 /// `EqStore`. Mirrors Haskell's `EqStore { _eqsSubst, _eqsConj,
 /// _eqsNextSplitId }`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -552,6 +589,57 @@ impl EquationStore {
         self.split_size(id).is_some()
     }
 
+    /// `removePermutations` (EquationStore.hs, #883): inside the disjunction
+    /// `split_id`, drop substitutions that are equal to a kept one up to a
+    /// permutation of the images of `v1` and `v2` (modulo a renaming of msg
+    /// vars).  Used when solving a KU goal against an AC-constructor rule,
+    /// where the two premise variables are interchangeable.
+    pub fn remove_permutations(
+        mut self,
+        maude: &tamarin_term::maude_proc::MaudeHandle,
+        split_id: SplitId,
+        v1: &LVar,
+        v2: &LVar,
+    ) -> Result<Self, AddEqsError> {
+        // `filter (not . isPerm s)`, propagating a Maude failure.
+        fn drop_perms_of(
+            maude: &tamarin_term::maude_proc::MaudeHandle,
+            lhs: &PermLhs<'_>,
+            substs: Vec<LNSubstVFresh>,
+        ) -> Result<Vec<LNSubstVFresh>, AddEqsError> {
+            let mut out = Vec::with_capacity(substs.len());
+            for x in substs {
+                if !is_perm_subst(maude, lhs, &x)? {
+                    out.push(x);
+                }
+            }
+            Ok(out)
+        }
+        for disj in self.conj.iter_mut().filter(|d| d.split_id == split_id) {
+            // HS walks `S.toList substs` (sorted) and rebuilds via
+            // `S.fromList`; mirror with an explicit sort on both ends.
+            let mut rest: Vec<LNSubstVFresh> = std::mem::take(&mut disj.substs);
+            rest.sort();
+            rest.dedup();
+            // `removePerm r (s:rest) = removePerm (s : filter (not . isPerm s) r)
+            //                                     (filter (not . isPerm s) rest)`
+            let mut kept: Vec<LNSubstVFresh> = Vec::new();
+            while !rest.is_empty() {
+                let s = rest.remove(0);
+                // Everything `isPerm s` derives from `s` alone is shared by
+                // both passes and by every candidate they test.
+                let lhs = PermLhs::new(v1, v2, &s);
+                kept = drop_perms_of(maude, &lhs, kept)?;
+                rest = drop_perms_of(maude, &lhs, rest)?;
+                kept.push(s);
+            }
+            kept.sort();
+            kept.dedup();
+            disj.substs = kept;
+        }
+        Ok(self)
+    }
+
     /// Perform a case-split on the given disjunction, returning one
     /// fresh `EquationStore` per case.
     ///
@@ -564,17 +652,15 @@ impl EquationStore {
         // store that drops `id` and adds a fresh single-case
         // disjunction containing just that subst.
         //
-        // Mirrors Haskell `performSplit` (EquationStore.hs) with
-        // the canonical-split-ordering fix (see the two-stage sort below):
-        //   mkNewEqStore before after <$> orderedSubsts
-        let mut sorted_substs: Vec<LNSubstVFresh> = disj.substs.clone();
+        // Mirrors Haskell `performSplit` (EquationStore.hs:228-237):
+        //   mkNewEqStore before after <$> orderedSubsts disj
         if tamarin_utils::env_gate!("TAM_DBG_PERFORM_SPLIT") {
             eprintln!(
                 "[perform_split] split_id={:?}, {} substs (pre-sort):",
                 id,
-                sorted_substs.len()
+                disj.substs.len()
             );
-            for (i, s) in sorted_substs.iter().enumerate() {
+            for (i, s) in disj.substs.iter().enumerate() {
                 eprintln!("[perform_split]   raw[{}]: {:?}", i, s.to_list());
             }
             // Show full eq_store.subst too — system substitution at this point
@@ -583,29 +669,7 @@ impl EquationStore {
                 eprintln!("[perform_split]   {:?} → {:?}", k, v);
             }
         }
-        // Canonical-split-ordering: mirror HS
-        //   orderedSubsts = sortOnMemo dropNameHintsLNSubstVFresh . S.toList
-        // (the chosen "Fix2" of the proof -N nondeterminism fix, which
-        // retires the witness-numbering "Fix1" in favour of canonicalising
-        // the SPLIT-CASE order directly).
-        //
-        // `sort()` is the `Data.Set LNSubstVFresh` `S.toList` raw-`Ord`
-        // order.  The stable `sort_by_cached_key(drop_name_hints)` then
-        // re-sorts by the α-canonical key (`drop_name_hints` =
-        // `dropNameHintsLNSubstVFresh`, EquationStore.hs), which
-        // renumbers each subst's fresh witness range-vars by first
-        // appearance in domain-key order.  This makes `split_case_i` order
-        // independent of the Maude fresh-allocation counter (Rust's witness
-        // indices need not equal HS's), so case order is α-canonical and
-        // does not regress to the `analysis incomplete` symptom.  HS's
-        // `dropNameHintsBound` does NOT reach here: it is mapped only over
-        // the throwaway `addNormSys` copy in `removeRedundantCases`
-        // (Sources.hs:244-246, `map (fst . snd) ...` keeps the ORIGINAL
-        // case and discards the name-hint-dropped system; gated on
-        // `enableBP || enableMSet`), so it never mutates the live
-        // `sEqStore` that `performSplit` later splits.
-        sorted_substs.sort();
-        sorted_substs.sort_by_cached_key(|s| s.drop_name_hints());
+        let sorted_substs = ordered_substs(&disj.substs);
         if tamarin_utils::env_gate!("TAM_DBG_PERFORM_SPLIT") {
             eprintln!("[perform_split] sorted result:");
             for (i, s) in sorted_substs.iter().enumerate() {
@@ -616,7 +680,7 @@ impl EquationStore {
         for subst in sorted_substs {
             let mut new_store = self.clone();
             new_store.conj.remove(pos);
-            new_store.add_disj(vec![subst]);
+            new_store.add_disj(vec![subst.clone()]);
             out.push(new_store);
         }
         Some(out)
@@ -2946,446 +3010,235 @@ fn sort_compare(
     tamarin_term::lterm::sort_compare(a, b)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tamarin_term::lterm::LSort;
-    use tamarin_term::subst_vfresh::SubstVFresh;
-
-    fn fresh_subst() -> LNSubstVFresh {
-        let v = LVar::new("x", LSort::Msg, 0);
-        let t = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(LVar::new(
-            "y",
-            LSort::Msg,
-            0,
-        )));
-        SubstVFresh::from_list(vec![(v, t)])
+/// `isPerm` (inside `removePermutations`, EquationStore.hs): `s2` is a
+/// permutation of `s1` — either literally with the images of `v1`/`v2`
+/// swapped and every other binding shared, or equal up to a renaming of
+/// msg variables (with and without the swap).  Everything that depends on
+/// `s1` alone comes from `lhs`.
+fn is_perm_subst(
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    lhs: &PermLhs<'_>,
+    s2: &LNSubstVFresh,
+) -> Result<bool, AddEqsError> {
+    let (v1, v2, s1) = (lhs.v1, lhs.v2, lhs.s1);
+    if s1.len() != s2.len() {
+        return Ok(false);
     }
-
-    // A distinct subst per `idx`.  `add_disj`/`add_rule_variants` dedup
-    // identical substs (HS-faithful `S.fromList`, EquationStore.hs),
-    // so building a multi-element disjunction from repeated `fresh_subst()`
-    // collapses to a single element.  Tests that need a genuine N-element
-    // disjunction use distinct substs via this helper.
-    fn fresh_subst_n(idx: u64) -> LNSubstVFresh {
-        let v = LVar::new("x", LSort::Msg, idx);
-        let t = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(LVar::new(
-            "y",
-            LSort::Msg,
-            idx,
-        )));
-        SubstVFresh::from_list(vec![(v, t)])
-    }
-
-    #[test]
-    fn empty_store_is_consistent() {
-        let s = EquationStore::empty();
-        assert!(!s.is_false());
-        assert!(s.splits().is_empty());
-    }
-
-    #[test]
-    fn empty_disj_makes_store_false() {
-        let mut s = EquationStore::empty();
-        let id = s.add_disj(vec![]);
-        assert_eq!(id, SplitId(0));
-        assert!(s.is_false());
-    }
-
-    #[test]
-    fn add_disj_assigns_fresh_ids() {
-        let mut s = EquationStore::empty();
-        let id1 = s.add_disj(vec![fresh_subst()]);
-        let id2 = s.add_disj(vec![fresh_subst_n(0), fresh_subst_n(1)]);
-        assert_eq!(id1, SplitId(0));
-        assert_eq!(id2, SplitId(1));
-        assert!(!s.is_false());
-        assert_eq!(s.split_size(id1), Some(1));
-        assert_eq!(s.split_size(id2), Some(2));
-        assert!(s.split_exists(id2));
-    }
-
-    #[test]
-    fn splits_sorted_by_size() {
-        let mut s = EquationStore::empty();
-        let big = s.add_disj(vec![fresh_subst(), fresh_subst(), fresh_subst()]);
-        let small = s.add_disj(vec![fresh_subst()]);
-        let sorted = s.splits();
-        assert_eq!(sorted[0], small);
-        assert_eq!(sorted[1], big);
-    }
-
-    #[test]
-    fn perform_split_branches() {
-        let mut s = EquationStore::empty();
-        let id = s.add_disj(vec![fresh_subst_n(0), fresh_subst_n(1)]);
-        let branches = s.perform_split(id).unwrap();
-        assert_eq!(branches.len(), 2);
-        // Each branch contains a single-case disjunction.
-        for b in &branches {
-            assert_eq!(b.conj.len(), 1);
-            assert_eq!(b.conj[0].substs.len(), 1);
-        }
-    }
-
-    #[test]
-    fn perform_split_unknown_id() {
-        let s = EquationStore::empty();
-        assert!(s.perform_split(SplitId(42)).is_none());
-    }
-
-    #[test]
-    fn set_false_marks_store_false() {
-        let s = EquationStore::empty().set_false();
-        assert!(s.is_false());
-    }
-
-    fn maude_path() -> Option<String> {
-        if let Ok(p) = std::env::var("MAUDE_PATH") {
-            return Some(p);
-        }
-        let candidates = ["/usr/local/bin/maude", "/usr/bin/maude", "maude"];
-        for c in &candidates {
-            if std::path::Path::new(c).exists() {
-                return Some((*c).to_string());
-            }
-        }
-        None
-    }
-
-    #[test]
-    fn rule_variants_added_as_disjunction() {
-        let mut store = EquationStore::empty();
-        let id = store
-            .add_rule_variants(vec![fresh_subst_n(0), fresh_subst_n(1)])
-            .expect("add_rule_variants");
-        assert_eq!(id, SplitId(0));
-        assert_eq!(store.split_size(id), Some(2));
-    }
-
-    #[test]
-    fn rule_variants_rejects_overlapping_domain() {
-        let mut store = EquationStore::empty();
-        // Pre-populate the free subst with `x`.
-        let v = LVar::new("x", LSort::Msg, 0);
-        let t = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(LVar::new(
-            "z",
-            LSort::Msg,
-            0,
-        )));
-        store.subst = LNSubst::from_list(vec![(v, t)]);
-        // Variant subst also touches `x`.
-        let res = store.add_rule_variants(vec![fresh_subst()]);
-        assert!(res.is_err());
-    }
-
-    #[test]
-    fn simp_empty_disj_makes_store_false() {
-        let mut store = EquationStore::empty();
-        // Add an empty disjunction.
-        let _ = store.add_disj(vec![]);
-        let changed = store.simp_empty_disj();
-        assert!(changed);
-        assert!(store.is_false());
-    }
-
-    #[test]
-    fn simp_idempotent_on_consistent_store() {
-        let mut store = EquationStore::empty();
-        let _ = store.add_disj(vec![fresh_subst()]);
-        let store = store.simp(|_, _| false);
-        assert!(!store.is_false());
-        assert!(!store.conj.is_empty());
-    }
-
-    #[test]
-    fn simp_abstract_name_factors_common_constant() {
-        // Build a disjunction where every subst maps `x → 'foo'` (pub
-        // constant). simp_abstract_name should hoist that into the
-        // free substitution.
-        use tamarin_term::lterm::{Name, NameTag};
-        use tamarin_term::term::Term;
-        use tamarin_term::vterm::Lit;
-        let v = LVar::new("x", LSort::Msg, 0);
-        let foo: LNTerm = Term::Lit(Lit::Con(Name::new(NameTag::Pub, "foo".to_string())));
-        let s1 = LNSubstVFresh::from_list(vec![(v, foo.clone())]);
-        let s2 = LNSubstVFresh::from_list(vec![(v, foo.clone())]);
-        let mut store = EquationStore::empty();
-        let _ = store.add_disj(vec![s1, s2]);
-        assert!(store.simp_abstract_name());
-        // Free subst should now contain x → foo.
-        let dom: Vec<&LVar> = store.subst.dom().collect();
-        assert_eq!(dom, vec![&v]);
-    }
-
-    #[test]
-    fn add_eqs_xor_produces_disjunction() {
-        let path = match maude_path() {
-            Some(p) => p,
-            None => {
-                eprintln!("skipping: no maude");
-                return;
-            }
-        };
-        let sig = tamarin_term::maude_sig::xor_maude_sig();
-        let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
-        // x XOR a =? b XOR y has multiple AC unifiers.
-        use tamarin_term::function_symbols::AcSym;
-        use tamarin_term::term::{f_app_ac, Term};
-        use tamarin_term::vterm::Lit;
-        let v = |n: &str| LVar::new(n, LSort::Msg, 0);
-        let lhs: LNTerm = f_app_ac(
-            AcSym::Xor,
-            vec![Term::Lit(Lit::Var(v("x"))), Term::Lit(Lit::Var(v("a")))],
-        );
-        let rhs: LNTerm = f_app_ac(
-            AcSym::Xor,
-            vec![Term::Lit(Lit::Var(v("b"))), Term::Lit(Lit::Var(v("y")))],
-        );
-        let mut store = EquationStore::empty();
-        let split = store
-            .add_eqs(&h, &[tamarin_term::rewriting::Equal { lhs, rhs }])
-            .expect("add_eqs xor");
-        // AC unification has many unifiers, so we should get a fresh disjunction.
-        assert!(split.is_some(), "expected disjunction split");
-        assert!(!store.is_false());
-        assert!(!store.conj.is_empty());
-    }
-
-    #[test]
-    fn add_eqs_two_vars_via_maude() {
-        let path = match maude_path() {
-            Some(p) => p,
-            None => {
-                eprintln!("skipping: no maude");
-                return;
-            }
-        };
-        let sig = tamarin_term::maude_sig::pair_maude_sig();
-        let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
-        // Unify x =? y — single mgu, no disjunction, just composes into subst.
-        let x = LVar::new("x", LSort::Msg, 0);
-        let y = LVar::new("y", LSort::Msg, 0);
-        use tamarin_term::term::Term;
-        use tamarin_term::vterm::Lit;
-        let tx: LNTerm = Term::Lit(Lit::Var(x));
-        let ty: LNTerm = Term::Lit(Lit::Var(y));
-        let mut store = EquationStore::empty();
-        let split = store
-            .add_eqs(&h, &[tamarin_term::rewriting::Equal { lhs: tx, rhs: ty }])
-            .expect("add_eqs");
-        // Single mgu → composed into subst, no new disjunction.
-        assert!(split.is_none());
-        assert!(!store.is_false());
-        // The free substitution must now bind one variable to the other.
-        assert!(
-            !store.subst.is_empty(),
-            "subst should be populated, got {:?}",
-            store.subst
-        );
-    }
-
-    // =========================================================================
-    // Haskell-faithfulness invariants for `add_eqs`.
+    // Swapped-images branch: every binding outside {v1,v2} shared, and
+    // the v1/v2 images exchanged.  HS binds the four images lazily behind
+    // `&&`, so `t12`/`t21` are demanded only once `t11 == t22` holds — and
+    // none of them are demanded when a binding is unshared.
     //
-    // These tests pin orientation choices in the eq-store that we missed
-    // for weeks.  See `unification::haskell_invariants` for the rationale.
-    // =========================================================================
-
-    /// `add_eqs` for AC-free, same-sort var-var input must orient the
-    /// resulting subst with LARGER-idx as KEY (Haskell `unifyRaw`
-    /// convention, Unification.hs:235-243, see line 241).
-    ///
-    /// This is the most important orientation invariant for downstream
-    /// `restrict stableVars`: stable pattern vars (small idx) must stay
-    /// on the VALUE side so they get filtered out (they're never keys
-    /// in Haskell's subst).
-    ///
-    /// **If this test fails, foo_eligibility-class divergences will
-    /// silently appear in the corpus.**
-    #[test]
-    fn add_eqs_ac_free_var_var_uses_haskell_orientation() {
-        let path = match maude_path() {
-            Some(p) => p,
-            None => {
-                eprintln!("skipping: no maude");
-                return;
+    // `others_shared` also holds when neither `v1` nor `v2` is in the domain,
+    // and the panics below then abort the prover — faithful, since HS's
+    // `fromMaybe (error ...)` images are demanded under the same condition
+    // (EquationStore.hs:599-604).
+    let others_shared = s1
+        .iter()
+        .all(|(x, t)| x == v1 || x == v2 || s2.image_of(x).is_some_and(|u| u == t));
+    if others_shared {
+        let t11 = s1
+            .image_of(v1)
+            .unwrap_or_else(|| panic!("Missing image for v1: {:?} in subst1: {:?}", v1, s1));
+        let t22 = s2
+            .image_of(v2)
+            .unwrap_or_else(|| panic!("Missing image for v2: {:?} in subst2: {:?}", v2, s2));
+        if t11 == t22 {
+            let t12 = s1
+                .image_of(v2)
+                .unwrap_or_else(|| panic!("Missing image for v2: {:?} in subst1: {:?}", v2, s1));
+            let t21 = s2
+                .image_of(v1)
+                .unwrap_or_else(|| panic!("Missing image for v1: {:?} in subst2: {:?}", v1, s2));
+            if t12 == t21 {
+                return Ok(true);
             }
-        };
-        let sig = tamarin_term::maude_sig::pair_maude_sig();
-        let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
-
-        // Mimic the foo_eligibility shape: stable pattern var t.1 unified
-        // with rule-internal var e.10.  Both Msg, same sort.  Haskell
-        // convention: e.10 (larger idx) is the key.
-        let t1 = LVar::new("t", LSort::Msg, 1);
-        let e10 = LVar::new("e", LSort::Msg, 10);
-        use tamarin_term::term::Term;
-        use tamarin_term::vterm::Lit;
-        let lt1: LNTerm = Term::Lit(Lit::Var(t1));
-        let le10: LNTerm = Term::Lit(Lit::Var(e10));
-
-        let mut store = EquationStore::empty();
-        let split = store
-            .add_eqs(
-                &h,
-                &[tamarin_term::rewriting::Equal {
-                    lhs: lt1,
-                    rhs: le10,
-                }],
-            )
-            .expect("add_eqs");
-        assert!(split.is_none(), "var-var unification produces a single mgu");
-        assert!(!store.is_false());
-
-        // Haskell-faithful: e.10 (larger idx) is the KEY.
-        assert!(
-            store.subst.image_of(&e10).is_some(),
-            "add_eqs MUST orient same-sort var-var with larger-idx (e.10) \
-                 as KEY.  If this fails, foo_eligibility::eligibility and \
-                 friends will silently diverge from Haskell.  See \
-                 project_rust_lvar_ord_idx_first_landed.md."
-        );
-        assert!(
-            store.subst.image_of(&t1).is_none(),
-            "smaller-idx (t.1, the stable pattern var) must NOT be a key"
-        );
-    }
-
-    /// `add_eqs` for an unbinding (`x = y` where neither is in the
-    /// existing subst) must NOT introduce a Maude witness ~mw.
-    ///
-    /// We use the local non-AC fast path for AC-free signatures, which
-    /// just orients the bind directly.  If we accidentally regress to
-    /// the witness-heavy Maude shape (`{x → ~mw, y → ~mw}`), the
-    /// downstream `enforce_fresh_node_uniqueness_pass` will bucket
-    /// nodes by witness and merge Fresh nodes that should stay
-    /// distinct (the TLS_Handshake prem_idx_clash class).
-    #[test]
-    fn add_eqs_ac_free_var_var_does_not_introduce_witness() {
-        let path = match maude_path() {
-            Some(p) => p,
-            None => {
-                eprintln!("skipping: no maude");
-                return;
-            }
-        };
-        let sig = tamarin_term::maude_sig::pair_maude_sig();
-        let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
-        let x = LVar::new("x", LSort::Msg, 0);
-        let y = LVar::new("y", LSort::Msg, 0);
-        use tamarin_term::term::Term;
-        use tamarin_term::vterm::Lit;
-        let tx: LNTerm = Term::Lit(Lit::Var(x));
-        let ty: LNTerm = Term::Lit(Lit::Var(y));
-        let mut store = EquationStore::empty();
-        let _ = store
-            .add_eqs(&h, &[tamarin_term::rewriting::Equal { lhs: tx, rhs: ty }])
-            .expect("add_eqs");
-
-        // Unifying two free Msg vars must yield a simple orientation
-        // between x and y (HS-faithful var-var orient gives `{y → x}`),
-        // NOT a fresh `~mw`-style witness.  So flag any subst var that is
-        // neither x nor y — that would be a freshly-introduced witness.
-        // (Witness introduction here regressed TLS_Handshake::prem_idx_clash.)
-        // x legitimately appears in the range of `{y → x}`, so the check
-        // below flags any subst var other than x or y, not just non-`x`
-        // values.
-        use tamarin_term::lterm::HasFrees;
-        let mut witness_found = false;
-        for (key, term) in store.subst.to_list() {
-            if key.name != "x" && key.name != "y" {
-                witness_found = true;
-            }
-            term.for_each_free(&mut |v| {
-                if v.name != "x" && v.name != "y" {
-                    witness_found = true;
-                }
-            });
         }
-        assert!(
-            !witness_found,
-            "AC-free var-var unification must NOT introduce ~mw \
-                 witnesses.  Witness introduction here regressed \
-                 TLS_Handshake::prem_idx_clash historically."
+    }
+    let renamed2 = lhs.rename_images(s2);
+    Ok(
+        equal_subst_up_to_renaming(maude, &lhs.subst1_permuted, &renamed2)?
+            || equal_subst_up_to_renaming(maude, &lhs.subst1_fixed, &renamed2)?,
+    )
+}
+
+/// The `s1`-only half of `equalUpToRenaming` (inside `removePermutations`,
+/// EquationStore.hs): the two `filter (not . isPerm s)` passes of one
+/// `removePerm` step share it across every candidate they test.
+struct PermLhs<'a> {
+    v1: &'a LVar,
+    v2: &'a LVar,
+    s1: &'a LNSubstVFresh,
+    /// `subst1''`.
+    subst1_fixed: Vec<(LVar, LNTerm)>,
+    /// `subst1''` under `permute`.
+    subst1_permuted: Vec<(LVar, LNTerm)>,
+    /// `([v1,v2],subst1'')`, the avoidance context of the renaming.
+    avoid_ctx: LNTerm,
+}
+
+impl<'a> PermLhs<'a> {
+    /// Fix `s1`'s non-msg range variables, build the `permute`d variant, and
+    /// pack the avoidance context.
+    ///
+    /// HS's `substFixing` covers the ranges of BOTH substitutions at once;
+    /// splitting it per substitution leaves every image unchanged, because
+    /// the constant is a function of the variable alone and `apply_vterm`
+    /// consults bindings only for the variables a term contains.
+    fn new(v1: &'a LVar, v2: &'a LVar, s1: &'a LNSubstVFresh) -> Self {
+        use tamarin_term::subst::apply_vterm;
+        use tamarin_term::term::f_app_list;
+        use tamarin_term::vterm::var_term;
+
+        let fixing = subst_fixing(s1.range());
+        let subst1_fixed: Vec<(LVar, LNTerm)> = s1
+            .to_list()
+            .into_iter()
+            .map(|(v, t)| (v, apply_vterm(&fixing, t)))
+            .collect();
+
+        // `permute`: swap the v1/v2 DOMAIN keys.  `substFixing` rewrites
+        // images only, so applying it before the swap gives the same
+        // key-to-image association as HS's swap-then-fix order.
+        let subst1_permuted: Vec<(LVar, LNTerm)> =
+            LNSubstVFresh::from_list(subst1_fixed.iter().map(|(v, t)| {
+                let key = if v == v1 {
+                    *v2
+                } else if v == v2 {
+                    *v1
+                } else {
+                    *v
+                };
+                (key, t.clone())
+            }))
+            .to_list();
+
+        // `renameAvoidingIgnoring`'s avoidance context `([v1,v2],subst1'')`
+        // is built from the UNPERMUTED `s1`, which yields the same renaming
+        // as the permuted one: `avoid` reads only the largest variable index
+        // of the context, `permute` is a bijection on the domain keys that
+        // leaves the images untouched, and both `v1` and `v2` are in the
+        // context either way.
+        let avoid_ctx: LNTerm = f_app_list(
+            [var_term(*v1), var_term(*v2)]
+                .into_iter()
+                .chain(subst1_fixed.iter().map(|(v, _)| var_term(*v)))
+                .chain(subst1_fixed.iter().map(|(_, t)| t.clone()))
+                .collect(),
         );
+
+        PermLhs {
+            v1,
+            v2,
+            s1,
+            subst1_fixed,
+            subst1_permuted,
+            avoid_ctx,
+        }
     }
 
-    /// `add_eqs` is idempotent for an already-implied equation.
-    ///
-    /// If the eq-store already has `x → 1`, calling `add_eqs([x = 1])`
-    /// must NOT introduce new bindings or witnesses or contradictions.
-    /// This is a regression guard for the eq-store's snapshot/apply
-    /// chain in `add_eqs_inner` (we apply `self.subst` to inputs first).
-    #[test]
-    fn add_eqs_idempotent_for_already_implied_eq() {
-        let path = match maude_path() {
-            Some(p) => p,
-            None => {
-                eprintln!("skipping: no maude");
-                return;
-            }
-        };
-        let sig = tamarin_term::maude_sig::pair_maude_sig();
-        let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
-        let x = LVar::new("x", LSort::Msg, 0);
-        let y = LVar::new("y", LSort::Msg, 5);
-        use tamarin_term::term::Term;
-        use tamarin_term::vterm::Lit;
-        let tx: LNTerm = Term::Lit(Lit::Var(x));
-        let ty: LNTerm = Term::Lit(Lit::Var(y));
-        let mut store = EquationStore::empty();
-        let _ = store
-            .add_eqs(
-                &h,
-                &[tamarin_term::rewriting::Equal {
-                    lhs: tx.clone(),
-                    rhs: ty.clone(),
-                }],
-            )
-            .expect("first add_eqs");
-        let dom_before: Vec<LVar> = store.subst.dom().copied().collect();
+    /// `renameAvoidingIgnoring (map snd subst2''') ([v1,v2],subst1'')
+    ///  (map fst subst2''')` = `map snd subst2''`: fix `s2`'s non-msg range
+    /// variables, then rename its image terms — coherently, keeping the
+    /// domain keys — avoiding everything in `([v1,v2], subst1'')`.  Terms are
+    /// packed into an `fAppList` so one shift renames all images
+    /// consistently.
+    fn rename_images(&self, s2: &LNSubstVFresh) -> Vec<LNTerm> {
+        use tamarin_term::lterm::rename_avoiding_ignoring;
+        use tamarin_term::subst::apply_vterm;
+        use tamarin_term::term::{f_app_list, Term};
 
-        // Repeat — should be a no-op.
-        let _ = store
-            .add_eqs(&h, &[tamarin_term::rewriting::Equal { lhs: tx, rhs: ty }])
-            .expect("second add_eqs");
-        let dom_after: Vec<LVar> = store.subst.dom().copied().collect();
-        assert_eq!(
-            dom_before, dom_after,
-            "Repeated add_eqs of an already-implied equation must \
-                    not change the subst domain."
+        let fixing = subst_fixing(s2.range());
+        let keys2: Vec<LVar> = s2.dom().copied().collect();
+        let packed2: LNTerm = f_app_list(
+            s2.range()
+                .map(|t| apply_vterm(&fixing, t.clone()))
+                .collect(),
         );
-        assert!(
-            !store.is_false(),
-            "Repeating an equation must not produce a contradiction."
-        );
-    }
-
-    /// `add_eqs` with an unsatisfiable input marks the store false.
-    ///
-    /// Constructor mismatch (pair vs pk) is unsatisfiable in non-AC.
-    /// Our `add_eqs_inner` should set the store to false, not panic or
-    /// silently succeed.
-    #[test]
-    fn add_eqs_unsatisfiable_sets_store_false() {
-        let path = match maude_path() {
-            Some(p) => p,
-            None => {
-                eprintln!("skipping: no maude");
-                return;
-            }
-        };
-        let sig = tamarin_term::maude_sig::pair_maude_sig();
-        let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
-        use tamarin_term::builtin::{msg_var, pair, pk};
-        let lhs: LNTerm = pair(msg_var("a", 1), msg_var("b", 2));
-        let rhs: LNTerm = pk(msg_var("c", 3));
-        let mut store = EquationStore::empty();
-        let _ = store.add_eqs(&h, &[tamarin_term::rewriting::Equal { lhs, rhs }]);
-        assert!(
-            store.is_false(),
-            "constructor mismatch must set store to false"
-        );
+        match rename_avoiding_ignoring(packed2, &self.avoid_ctx, &keys2) {
+            Term::App(tamarin_term::function_symbols::FunSym::List, args) => args.to_vec(),
+            other => vec![other],
+        }
     }
 }
+
+/// `substFixing` for one substitution's range: every non-msg variable
+/// occurring in `images` is fixed to a distinctive constant, so the matcher
+/// cannot absorb it into a renaming.
+fn subst_fixing<'a>(images: impl Iterator<Item = &'a LNTerm>) -> LNSubst {
+    use tamarin_term::lterm::{frees, LSort, Name, NameTag};
+    use tamarin_term::vterm::const_term;
+
+    let constant = |v: &LVar| -> LNTerm {
+        let sort_show = match v.sort {
+            LSort::Pub => "LSortPub",
+            LSort::Fresh => "LSortFresh",
+            LSort::Msg => "LSortMsg",
+            LSort::Node => "LSortNode",
+            LSort::Nat => "LSortNat",
+        };
+        let tag = if v.sort == LSort::Fresh {
+            NameTag::Fresh
+        } else {
+            NameTag::Pub
+        };
+        const_term(Name::new(
+            tag,
+            format!("constVar_{}_{}_{}", sort_show, v.idx, v.name),
+        ))
+    };
+    Subst::from_list(
+        images
+            .flat_map(frees)
+            .filter(|v| v.sort != LSort::Msg)
+            .map(|v| (v, constant(&v))),
+    )
+}
+
+/// `equalUpToRenaming` (inside `removePermutations`, EquationStore.hs):
+/// after fixing all non-msg range variables of both substitutions to
+/// per-variable constants and renaming `s2`'s images avoiding `s1`'s,
+/// `renamed2` matches the given `subst1''` — plain or `permute`d — as one
+/// joint AC matching problem with a nonempty matcher set.
+fn equal_subst_up_to_renaming(
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    subst1_fixed: &[(LVar, LNTerm)],
+    renamed2: &[LNTerm],
+) -> Result<bool, AddEqsError> {
+    use tamarin_term::rewriting::Equal;
+    use tamarin_term::vterm::is_ground_vterm;
+
+    // A ground pattern binds nothing, so the joint problem is unsolvable as
+    // soon as one of them differs from its subject: `match` works modulo the
+    // module's AC/C axioms alone, and RS keeps AC/C terms flattened+sorted at
+    // construction, so that is structural `==` — the same argument
+    // `match_eqs`' all-ground short-circuit rests on.  `substFixing` freezes
+    // every non-msg range variable to an index-bearing constant, which leaves
+    // most candidate pairs differing in a ground position.
+    if subst1_fixed
+        .iter()
+        .zip(renamed2)
+        .any(|((_, t1), t2)| is_ground_vterm(t2) && t1 != t2)
+    {
+        return Ok(false);
+    }
+
+    // `matchers = solveMatchLNTerm (mconcat matchs)`: one joint matching
+    // problem, term = s1 image, pattern = renamed s2 image.
+    let eqs: Vec<Equal<LNTerm>> = subst1_fixed
+        .iter()
+        .zip(renamed2)
+        .map(|((_, t1), t2)| Equal {
+            lhs: t1.clone(),
+            rhs: t2.clone(),
+        })
+        .collect();
+    maude
+        .match_eqs(&eqs)
+        .map(|sols| !sols.is_empty())
+        .map_err(|e| AddEqsError::Maude(format!("remove_permutations: {}", e)))
+}
+
+#[cfg(test)]
+#[path = "equation_store_tests.rs"]
+mod tests;

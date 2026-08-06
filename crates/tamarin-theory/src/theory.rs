@@ -1,9 +1,12 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, and other minor contributors (see upstream git history)
+//   rkunnema, jdreier, meiersi, and other minor contributors (see
+//   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Items/LemmaItem.hs, lib/theory/src/Rule.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
-//   lib/theory/src/Theory/Model/Rule.hs, lib/theory/src/Theory/Proof.hs
+//   lib/theory/src/Theory/Model/Rule.hs,
+//   lib/theory/src/Theory/Proof.hs,
+//   lib/theory/src/Theory/Sapic/Term.hs, lib/theory/src/TheoryObject.hs
 
 //! Top-level `Theory` data type — port of `TheoryObject.Theory` and
 //! `Items.TheoryItem.TheoryItem`.
@@ -19,7 +22,7 @@ use tamarin_term::lterm::LVar;
 
 use crate::predicate::Predicate;
 use crate::restriction::ProtoRestriction;
-use crate::rule::{ProtoRuleAC, ProtoRuleE};
+use crate::rule::ProtoRuleE;
 use crate::sapic::PlainProcess;
 use crate::signature::SignaturePure;
 
@@ -28,21 +31,14 @@ use crate::signature::SignaturePure;
 /// carries an `LNFormula`.
 pub type OpenRestriction = ProtoRestriction<tamarin_parser::ast::Formula>;
 
-/// `OpenProtoRule = (ProtoRuleE, [ProtoRuleAC])` — a protocol rule
-/// modulo E together with its precomputed AC variants. Mirrors
-/// Haskell's `OpenProtoRule` newtype.
+/// A protocol rule modulo E with its variant machinery.  Mirrors the
+/// `ProtoRuleE` half of HS's `OpenProtoRule = (ProtoRuleE, [ProtoRuleAC])`;
+/// the port never materialises the `[ProtoRuleAC]` half — variants are
+/// enumerated lazily through `variant_substs` + `abstracted_rule` (the
+/// SplitG route).
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpenProtoRule {
     pub rule: ProtoRuleE,
-    /// Pre-applied variant rules — each entry is a fully-narrowed
-    /// `ProtoRuleAC` with its variant subst applied.  Populated by
-    /// `ProofContext::new` (context.rs) for rules with reducible-headed
-    /// sub-terms and still read by live code: `intruder_variants`
-    /// asserts intruder rules carry none, and `context.rs` short-circuits
-    /// (constraint/solver/context.rs:636 `if !o.variants.is_empty()`)
-    /// when this field is already filled.
-    /// The SplitG-based solving path uses `variant_substs` instead.
-    pub variants: Vec<ProtoRuleAC>,
     /// Variant substitutions as a disjunction (`RuleACConstrs` in
     /// Haskell — `Disj LNSubstVFresh`).  The canonical rule (`rule`)
     /// represents the un-narrowed E-rule; when this disjunction is
@@ -77,7 +73,6 @@ impl OpenProtoRule {
     pub fn new(rule: ProtoRuleE) -> Self {
         OpenProtoRule {
             rule,
-            variants: Vec::new(),
             variant_substs: Vec::new(),
             abstracted_rule: None,
             loop_breakers: Vec::new(),
@@ -104,11 +99,13 @@ pub struct ProcessDef {
 }
 
 /// Lightweight placeholder for `Theory.Sapic.SapicFunSym` —
-/// `((NoEqSym), [SapicType], SapicType)`. Backs the not-yet-produced
-/// `TranslationElement::FunctionTypingInfo` variant — kept for the HS port.
+/// `(UserDefinedSym, [SapicType], SapicType)` (Theory/Sapic/Term.hs:78), so a
+/// typing declaration can name a free OR a user-defined AC symbol. Backs the
+/// not-yet-produced `TranslationElement::FunctionTypingInfo` variant — kept for
+/// the HS port.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SapicFunSym {
-    pub sym: tamarin_term::function_symbols::NoEqSym,
+    pub sym: tamarin_term::function_symbols::UserDefinedSym,
     pub arg_types: Vec<crate::sapic::SapicType>,
     pub out_type: crate::sapic::SapicType,
 }
@@ -180,8 +177,10 @@ pub struct Lemma<P = ProofSkeleton> {
     pub modulo: Option<String>,
     pub attributes: Vec<LemmaAttr>,
     pub trace_quantifier: TraceQuantifier,
-    /// The lemma's formula. We store as the parser's `Formula` for now;
-    /// once we have a typed formula AST we'll narrow this.
+    /// The lemma's formula, held in the parser's `Formula` form: both the
+    /// pretty-printers and `guarded::formula_to_guarded` start from that
+    /// form, so the guarded/`LNFormula` layers are derived on demand
+    /// rather than stored here.
     pub formula: tamarin_parser::ast::Formula,
     pub proof: P,
     /// Verbatim source text (comments stripped) — HS `_lPlaintext`
@@ -291,7 +290,7 @@ pub enum Side {
 // =============================================================================
 
 /// `Option` block — translation/proof-driver options set per theory.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Options {
     pub trans_progress: bool,
     pub trans_report: bool,
@@ -300,11 +299,33 @@ pub struct Options {
     pub state_channel_opt: bool,
     pub asynchronous_channels: bool,
     pub compress_events: bool,
+    /// HS `_deductionChainCheck`: run the no-deconstruction-chain (NDC)
+    /// check at theory load. Enabled by default; `--no-ndc` disables it.
+    /// Consulted by the load paths that run the once-per-theory
+    /// `close_rule::check_close_intr_rule` pass.
+    pub deduction_chain_check: bool,
     /// Auto-generated `default` heuristic used to discharge proofs when
     /// no explicit heuristic is supplied.
     pub default_heuristic: Option<String>,
     /// Lemmas the user requested to prove via `--prove=NAME`.
     pub lemmas_to_prove: Vec<String>,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Options {
+            trans_progress: false,
+            trans_report: false,
+            trans_reliable: false,
+            trans_allow_pattern_matching_in_lookup: false,
+            state_channel_opt: false,
+            asynchronous_channels: false,
+            compress_events: false,
+            deduction_chain_check: true,
+            default_heuristic: None,
+            lemmas_to_prove: Vec::new(),
+        }
+    }
 }
 
 /// Top-level theory containing rules, lemmas, restrictions, etc.
@@ -388,6 +409,87 @@ impl<R, P, S> Theory<R, P, S> {
     /// Look up a lemma by name.
     pub fn lookup_lemma(&self, name: &str) -> Option<&Lemma<P>> {
         self.lemmas().find(|l| l.name == name)
+    }
+
+    /// Look up a restriction by name (HS `lookupRestriction`,
+    /// TheoryObject.hs:671-672).
+    ///
+    /// Intentionally retained: faithful mirror of HS `lookupRestriction`
+    /// (TheoryObject.hs:671-672); its only caller is [`Theory::add_restriction`],
+    /// itself reached only from the equally caller-less
+    /// [`Theory::add_restrictions`].
+    pub fn lookup_restriction(&self, name: &str) -> Option<&OpenRestriction> {
+        self.restrictions().find(|r| r.name == name)
+    }
+
+    /// HS `addRules` (TheoryObject.hs:470-471): append rule items, in order.
+    ///
+    /// Intentionally retained: faithful mirror of HS `addRules`
+    /// (TheoryObject.hs:470-471); no caller yet.
+    pub fn add_rules(&mut self, rules: impl IntoIterator<Item = R>) -> &mut Self {
+        self.items.extend(rules.into_iter().map(TheoryItem::Rule));
+        self
+    }
+
+    /// HS `addLemma` (TheoryObject.hs:462-465): append the lemma unless one of
+    /// that name is already present.  Returns whether it was added.
+    ///
+    /// HS returns `Maybe (Theory ...)`; the `bool` here is that `Just`/`Nothing`
+    /// distinction on an in-place update.
+    ///
+    /// Intentionally retained: faithful mirror of HS `addLemma`
+    /// (TheoryObject.hs:462-465); its only caller is the equally caller-less
+    /// [`Theory::add_lemmas`].
+    pub fn add_lemma(&mut self, l: Lemma<P>) -> bool {
+        if self.lookup_lemma(&l.name).is_some() {
+            return false;
+        }
+        self.items.push(TheoryItem::Lemma(l));
+        true
+    }
+
+    /// HS `addLemmas` (TheoryObject.hs:467-468): add each lemma in turn.  HS
+    /// folds `addLemma` through a `Maybe` and `fromJust`s it, so a name clash
+    /// leaves the theory as it was (and, mid-list, is a hard error); here a
+    /// clashing lemma is simply skipped.
+    ///
+    /// Intentionally retained: faithful mirror of HS `addLemmas`
+    /// (TheoryObject.hs:467-468); no caller yet.
+    pub fn add_lemmas(&mut self, lemmas: impl IntoIterator<Item = Lemma<P>>) -> &mut Self {
+        for l in lemmas {
+            self.add_lemma(l);
+        }
+        self
+    }
+
+    /// HS `addRestriction` (TheoryObject.hs:453-456): append the restriction
+    /// unless one of that name is already present.  Returns whether it was
+    /// added.
+    ///
+    /// Intentionally retained: faithful mirror of HS `addRestriction`
+    /// (TheoryObject.hs:453-456); its only caller is the equally caller-less
+    /// [`Theory::add_restrictions`].
+    pub fn add_restriction(&mut self, r: OpenRestriction) -> bool {
+        if self.lookup_restriction(&r.name).is_some() {
+            return false;
+        }
+        self.items.push(TheoryItem::Restriction(r));
+        true
+    }
+
+    /// HS `addRestrictions` (TheoryObject.hs:458-459): add each restriction in
+    /// turn, skipping name clashes (see [`Theory::add_lemmas`]).
+    ///
+    /// Intentionally retained: faithful mirror of HS `addRestrictions`
+    /// (TheoryObject.hs:458-459); no caller yet.
+    pub fn add_restrictions(
+        &mut self,
+        restrictions: impl IntoIterator<Item = OpenRestriction>,
+    ) -> &mut Self {
+        for r in restrictions {
+            self.add_restriction(r);
+        }
+        self
     }
 }
 

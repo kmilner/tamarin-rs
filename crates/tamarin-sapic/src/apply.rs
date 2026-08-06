@@ -157,6 +157,30 @@ pub fn apply_sapic(
         let mut parsed_rule = synth_parsed_rule(rule);
         parsed_rule.embedded_restrictions = restr_formulas.clone();
 
+        // HS `foldM liftedAddProtoRule th (map (`OpenProtoRule` []) eProtoRule)`
+        // (Sapic.hs:74): each generated rule goes through the same
+        // `addOpenProtoRule` name guard as a parsed rule (OpenTheory.hs:
+        // 691-702) — it fails when the name is already bound to a DIFFERENT
+        // rule, so a user rule named like a generated one (e.g. `rule Init`
+        // alongside a `process:`) aborts the translation with
+        // `duplicate rule: <name>`.  The thrown `DuplicateItem` exception
+        // escapes to GHC's runtime, which prints `tamarin-prover: duplicate
+        // rule: <name>` to stderr and exits 1; here the message rides the
+        // existing `ElabError` channel.  (Generated rules never collide with
+        // each other — their names encode unique process positions — and never
+        // compare equal to a user rule: the parser drops `process=` attributes
+        // while `synth_parsed_rule` keeps them.)
+        if let Some(prev) = parsed.items.iter().find_map(|i| match i {
+            p::TheoryItem::Rule(r) if r.name == parsed_rule.name => Some(r),
+            _ => None,
+        }) {
+            if *prev != parsed_rule {
+                return Err(ElabError {
+                    message: format!("duplicate rule: {}", parsed_rule.name),
+                });
+            }
+        }
+
         if restr_formulas.is_empty() {
             // No `_restrict` — inject directly (linear / state / lookup rules).
             parsed.items.push(p::TheoryItem::Rule(parsed_rule));

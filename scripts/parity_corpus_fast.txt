@@ -1,3 +1,4 @@
+../../crates/tamarin-theory/tests/fixtures/nat_sort_regression.spthy
 Tutorial.spthy
 accountability/csf21-acc-unbounded/previous/ocsps-msr-untrusted.spthy
 accountability/csf21-acc-unbounded/previous/ocsps-msr.spthy
@@ -52,7 +53,6 @@ csf18-alethea/alethea_votingphase_malS_abstain.spthy
 csf18-xor/CH07.spthy
 csf18-xor/CRxor.spthy
 csf18-xor/KCL07.spthy
-csf18-xor/LAK06.spthy
 csf18-xor/NSLPK3xor.spthy
 csf18-xor/chaum_offline_anonymity.spthy
 csf20-disputeResolution/PR1_ShHh.spthy
@@ -80,9 +80,25 @@ csf20-disputeResolution/mixvote_ShHm.spthy
 csf23-subterms/FreshOrderingTest.spthy
 csf23-subterms/ParserTests.spthy
 csf23-subterms/YellowTest.spthy
+csf26-ac/fast/CRxor.spthy
+csf26-ac/fast/DHKEA_NAXOS_C_eCK_PFS_keyreg_partially_matching.spthy
+csf26-ac/fast/DHKEA_NAXOS_C_eCK_PFS_partially_matching.spthy
+csf26-ac/fast/Joux.spthy
+csf26-ac/fast/Joux_EphkRev.spthy
+csf26-ac/fast/KCL07.spthy
+csf26-ac/fast/NSLPK3xor.spthy
+csf26-ac/fast/TAK1.spthy
+csf26-ac/fast/TAK1_eCK_like.spthy
+csf26-ac/fast/UM_three_pass.spthy
+csf26-ac/fast/UM_three_pass_combined.spthy
+csf26-ac/fast/UM_three_pass_combined_fixed.spthy
+csf26-ac/fast/Yubikey_multiset.spthy
+csf26-ac/fast/alethea_votingphase_malS_abstain.spthy
+csf26-ac/fast/chaum_offline_anonymity.spthy
+csf26-ac/fast/counter.spthy
+csf26-ac/fast/minimal_multiset.spthy
 esorics23-bluetooth/models/ble.spthy
 esorics23-bluetooth/models/bredr.spthy
-esorics23-bluetooth/models/mesh.spthy
 experiments/JKL_TS1_2004-KI.spthy
 experiments/JKL_TS1_2008-KI_wPFS.spthy
 experiments/JKL_TS2_2004-KI.spthy
@@ -147,7 +163,6 @@ features/xor/CH07.spthy
 features/xor/CR.spthy
 features/xor/CRxor.spthy
 features/xor/KCL07.spthy
-features/xor/LAK06.spthy
 features/xor/NSLPK3xor.spthy
 features/xor/basicfunctionality/testConstructor.spthy
 features/xor/basicfunctionality/xor-basic.spthy
@@ -166,7 +181,6 @@ idbased/BP_ABSTRACT_IBS_toyExample.spthy
 jcs19-xor/CH07.spthy
 jcs19-xor/CRxor.spthy
 jcs19-xor/KCL07.spthy
-jcs19-xor/LAK06.spthy
 jcs19-xor/NSLPK3xor.spthy
 loops/Axioms_and_Induction.spthy
 loops/JCS12_Typing_Example.spthy

@@ -1,3 +1,4 @@
+accountability/masters-thesis-morio/CentralizedMonitor.spthy
 ake/bilinear/Joux_EphkRev.spthy
 ake/bilinear/Joux.spthy
 ake/bilinear/RYY.spthy
@@ -16,6 +17,7 @@ csf12/KEA_plus_hwPFS.spthy
 csf12/KEA_plus_KCI_hwPFS.spthy
 csf12/KEA_plus_KI_KCI.spthy
 csf12/KEA_plus.spthy
+csf12/NAXOS_eCK.spthy
 csf12/SignedDH_PFS.spthy
 csf12/STS_MAC_fix1.spthy
 csf12/STS_MAC_fix2.spthy
@@ -29,7 +31,6 @@ csf18-alethea/alethea_selectionphase_malS.spthy
 csf18-alethea/alethea_votingphase_malS_abstain.spthy
 csf18-alethea/alethea_votingphase_malS.spthy
 csf18-xor/chaum_offline_anonymity.spthy
-csf18-xor/LAK06.spthy
 csf19-wrapping/gcm.spthy
 csf19-wrapping/siv.spthy
 csf20-disputeResolution/mixvote_ShHm.spthy
@@ -45,9 +46,7 @@ features/multiset/counter.spthy
 features/multiset/NumberSubtermTests.spthy
 features/noise/secrecy_4_passiveINpsk1_proof.spthy
 features/noise/secrecy_4_passiveINpsk1.spthy
-features/xor/LAK06.spthy
 idbased/BP_IBS_4.spthy
-jcs19-xor/LAK06.spthy
 loops/Minimal_Create_Use_Destroy.spthy
 loops/Minimal_Loop_Example.spthy
 post17/chaum_unforgeability.spthy

@@ -1,0 +1,44 @@
+theory GuardedNameCollision
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+restriction Collision:
+  "∀ x #NOW. (Foo( x ) @ #NOW) ⇒ (∀ x.1 z. (<x.1, z> = x) ⇒ (⊥))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #NOW. (Foo( x ) @ #NOW) ⇒ (∀ x.1 z. (<x.1, z> = x) ⇒ (⊥))"
+  */
+
+restriction NoCollision:
+  "∀ x #NOW. (Foo( x ) @ #NOW) ⇒ (∀ y z. (<y, z> = x) ⇒ (⊥))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #NOW. (Foo( x ) @ #NOW) ⇒ (∀ y z. (<y, z> = x) ⇒ (⊥))"
+  */
+
+restriction SigillessTimepoint:
+  "∀ x #i. (Foo( x ) @ #i) ⇒ (∀ #j. (Bar( x ) @ #j) ⇒ (⊥))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #i. (Foo( x ) @ #i) ⇒ (∀ #j. (Bar( x ) @ #j) ⇒ (⊥))"
+  */
+
+rule (modulo E) A:
+   [ In( x ) ] --[ Foo( x ), Bar( x ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+
+
+end

@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, charlie-j, meiersi, arcz, beschmi, kevinmorio, jdreier,
-//   and other minor contributors (see upstream git history)
+//   rkunnema, charlie-j, meiersi, arcz, beschmi, kevinmorio, and other
+//   minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/sapic/src/Sapic.hs, lib/sapic/src/Sapic/Annotation.hs,
 //   lib/sapic/src/Sapic/Basetranslation.hs,

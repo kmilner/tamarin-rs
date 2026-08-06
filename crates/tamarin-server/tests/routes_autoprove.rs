@@ -1,10 +1,14 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   only minor contributions per cited ranges (see upstream git
-//   history)
+//   arcz, meiersi, jdreier, cascremers, felixlinker, rsasse,
+//   Kanakanajm, beschmi, Divya19gupta, addap, BTom-GH,
+//   PhilipLukertWork, YannColomb, xaDxelA, Mathias-AURAND, symphorien,
+//   racoucho1u, Esslingen-Security-Privacy, kevinmorio, and other minor
+//   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   src/Web/Handler.hs
+//   src/Web/Handler.hs, src/Web/Theory.hs
 
-//! Integration tests that exercise the autoprove endpoint.
+//! Integration tests that exercise the prover-driving endpoints: the
+//! autoprove routes and `main/method`'s single-step apply.
 //!
 //! These tests run the actual Rust solver via `prove_lemma` and so
 //! need a working `maude` binary: `MAUDE_PATH` if set, else a common
@@ -118,9 +122,11 @@ async fn test_autoprove_on_bad_path_returns_alert() {
         .expect("send autoprove-rules");
     assert_eq!(res.status(), 200);
     let v: serde_json::Value = res.json().await.expect("decode");
-    let keys = json_top_keys(&v);
-    let one: std::collections::BTreeSet<String> = std::iter::once("alert".to_string()).collect();
-    assert_eq!(keys, one, "autoprove on non-lemma path should be {{alert}}");
+    assert_eq!(
+        json_top_keys(&v),
+        one_key_set("alert"),
+        "autoprove on non-lemma path should be {{alert}}"
+    );
 
     // The captured Haskell alert is exactly
     // "Can't run the autoprover () on the given theory path!" — we
@@ -131,6 +137,56 @@ async fn test_autoprove_on_bad_path_returns_alert() {
         v.get("alert").and_then(|x| x.as_str()),
         captured_v.get("alert").and_then(|x| x.as_str()),
         "alert text must match Haskell verbatim",
+    );
+}
+
+// ---------------------------------------------------------------------
+// /thy/trace/<idx>/main/method/<lemma>/<nr>
+// ---------------------------------------------------------------------
+
+/// An out-of-range method number has ONE answer: the 200 JSON alert
+/// `getTheoryPathMR` replies to a `Nothing` apply with
+/// (`src/Web/Handler.hs:1081`), byte-compared against the capture.
+///
+/// Upstream splits it three ways instead: `applyMethodAtPath` guards with
+/// `length methods >= i` alone and then evaluates `methods !! (i-1)`
+/// (`src/Web/Theory.hs:99`), so only an `i` past the end reaches that alert
+/// while `i <= 0` passes the guard and raises `!!`'s `negIndex` — and `Int`
+/// minBound passes it too, `i-1` wrapping to maxBound so `!!` raises
+/// `tooLarge`.  Both exceptions come back as 200 alerts quoting the GHC
+/// CallStack, because `modifyTheory` runs the apply under `evalInThread`
+/// (`src/Web/Handler.hs:743,753`).  RS deliberately corrects that: one
+/// out-of-range index, one alert.
+#[tokio::test]
+async fn test_method_out_of_range_index_alerts_match_haskell() {
+    let s = start_server_with_theory("issue193.spthy").await;
+    // Only two methods are ranked at the `debug` root, so `3` is the first
+    // index past the end; `9999` is the same answer, as are the non-positive
+    // ones and `Int` minBound.
+    for nr in ["0", "-1", "-9223372036854775808", "3", "9999"] {
+        let url = s.url(&format!("/thy/trace/1/main/method/debug/{nr}"));
+        let res = s.client.get(&url).send().await.expect("send method");
+        assert_eq!(res.status(), 200, "method/{nr} must be a 200");
+        assert_eq!(
+            res.text().await.expect("text"),
+            haskell_capture("method_out_of_range.json"),
+            "method/{nr}"
+        );
+    }
+
+    // The accept side of the very same guard: method `1` applies and redirects.
+    let res = s
+        .client
+        .get(s.url("/thy/trace/1/main/method/debug/1"))
+        .send()
+        .await
+        .expect("send method/1");
+    assert_eq!(res.status(), 200);
+    let v: serde_json::Value = res.json().await.expect("decode");
+    assert_eq!(
+        json_top_keys(&v),
+        one_key_set("redirect"),
+        "an in-range method must be {{redirect}}"
     );
 }
 
@@ -161,9 +217,11 @@ async fn test_autoprove_on_unknown_lemma_returns_alert() {
     let res = s.client.get(&url).send().await.expect("send");
     assert_eq!(res.status(), 200);
     let v: serde_json::Value = res.json().await.expect("decode");
-    let keys = json_top_keys(&v);
-    let one: std::collections::BTreeSet<String> = std::iter::once("alert".to_string()).collect();
-    assert_eq!(keys, one, "unknown-lemma autoprove must be {{alert}}");
+    assert_eq!(
+        json_top_keys(&v),
+        one_key_set("alert"),
+        "unknown-lemma autoprove must be {{alert}}"
+    );
     let alert = v.get("alert").and_then(|x| x.as_str()).unwrap_or("");
     assert!(
         alert.contains("Sorry") && alert.contains("autoprover"),
@@ -174,11 +232,10 @@ async fn test_autoprove_on_unknown_lemma_returns_alert() {
 // Web-parity regression: after autoprove, `main/proof/<lemma>` must render
 // the "Applicable Proof Methods" + sequent snippet from the grown tree's
 // retained per-node systems — not an empty "Constraint System is Solved".
-// Guards the `set_keep_sys(true)` the interactive server enables at
-// startup (see `tamarin_server::serve`).
+// Guards the `set_keep_sys(true)` that `tamarin_server::init_process_globals`
+// applies for every server, the harness's included.
 #[tokio::test]
 async fn test_autoprove_proof_view_retains_systems() {
-    tamarin_theory::constraint::solver::search::set_keep_sys(true);
     let s = start_server_with_theory("Tutorial.spthy").await;
     let v: serde_json::Value = s
         .client

@@ -1,0 +1,45 @@
+// Variable IDENTITY in the guarded-formula conversion's unguarded-variable
+// check.
+//
+// HS `remainingUnguarded` (Theory.Constraint.System.Guarded) works over
+// `[LVar]`, so its `\\` and `intersect` use `instance Eq LVar` (Term.LTerm) —
+// name AND index AND sort.  Two spellings that share only the name are two
+// different variables, and a guard that mentions one of them does not cover
+// the other.  Every restriction below is closed and existential-free, so each
+// carries a `// safety formula` line and none raises a `Formula guardedness`
+// warning; conflating any component of that identity drops a binder into the
+// unguarded set and answers with a WARNING block instead.
+//
+//   - `Collision` binds `x.1` under an enclosing `x`.  The guard's right-hand
+//     side is the OUTER `x`, which is not itself a binder here and so is
+//     covered, and that is what lets the left-hand side guard `x.1` and `z`.
+//     `x` is taken by the enclosing binder, so the conversion cannot drop the
+//     index and the binder prints as `∀ x.1 z.`;
+//   - `NoCollision` is the same shape one letter apart.  `y.1` collides with
+//     nothing, so the conversion renames it and the same source prints
+//     `∀ y z.` — the index-bearing spelling is not what carries the corner;
+//   - `SigillessTimepoint` writes the guard's timepoint without the `#`
+//     sigil.  HS parses an action atom's `@`-argument as `LSortNode` whatever
+//     the sigil, so `j` there is the binder `#j`; reading it as a message
+//     variable leaves `#j` unguarded.
+//
+// Compared slices: the wf report block AND the `theory … end` echo (see
+// check.sh) — the former is the whole assertion for the guardedness check,
+// which prints nothing when it passes.
+
+theory GuardedNameCollision
+begin
+
+restriction Collision:
+  "All x #NOW. Foo(x) @ #NOW ==> (All x.1 z. (<x.1, z> = x) ==> F)"
+
+restriction NoCollision:
+  "All x #NOW. Foo(x) @ #NOW ==> (All y.1 z. (<y.1, z> = x) ==> F)"
+
+restriction SigillessTimepoint:
+  "All x #i. Foo(x) @ #i ==> (All #j. Bar(x) @ j ==> F)"
+
+rule A:
+  [ In(x) ] --[ Foo(x), Bar(x) ]-> [ ]
+
+end

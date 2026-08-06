@@ -49,6 +49,12 @@ pub fn fixture_path(name: &str) -> PathBuf {
 /// until the returned [`TestServer`] is dropped (`oneshot` cancels the
 /// listener, then the task exits).
 pub async fn start_server_with_theory(fixture_name: &str) -> TestServer {
+    // The same process-wide setup `serve` applies.  Without it the harness
+    // runs with the `--prove` CLI defaults: searched proof nodes drop their
+    // `System` (so every post-autoprove graph renders empty) and bare
+    // `render()` uses the console width instead of the web one.
+    tamarin_server::init_process_globals();
+
     let theory_path = fixture_path(fixture_name);
     assert!(
         theory_path.is_file(),
@@ -182,6 +188,44 @@ pub fn haskell_capture(name: &str) -> String {
         .unwrap_or_else(|e| panic!("read capture {}: {}", path.display(), e))
 }
 
+/// GET `path`, assert the status and content type of Yesod's Not Found page,
+/// and hand the body back for the caller's own assertion.
+#[allow(dead_code)]
+async fn not_found_body(s: &TestServer, path: &str) -> String {
+    let res = s.client.get(s.url(path)).send().await.expect("send");
+    assert_eq!(res.status(), 404, "{path} must be a 404");
+    assert_eq!(
+        content_type(&res),
+        "text/html; charset=utf-8",
+        "{path} must carry the Not Found page's content type"
+    );
+    res.text().await.expect("text")
+}
+
+/// Assert that `path` answers Yesod's Not Found page: 404, the error page's
+/// content type, and the `defaultErrorHandler` widget — `<h1>Not Found</h1>`
+/// over the request's raw path.  Every `notFound` carries this one page
+/// (`handlers::mod::not_found_response`), whatever raised it, so this is the
+/// shared assertion for the routes that answer a miss without a capture.
+#[allow(dead_code)]
+pub async fn assert_not_found_page(s: &TestServer, path: &str) {
+    let body = not_found_body(s, path).await;
+    assert!(
+        body.contains(&format!("<h1>Not Found</h1>\n<p>{path}</p>\n")),
+        "{path} must carry the Not Found widget over its own path; got: {body}"
+    );
+}
+
+/// The same page, pinned byte-for-byte against the captured Haskell body.
+#[allow(dead_code)]
+pub async fn assert_not_found_capture(s: &TestServer, path: &str, capture: &str) {
+    assert_eq!(
+        not_found_body(s, path).await,
+        haskell_capture(capture),
+        "{path}"
+    );
+}
+
 /// Parse a captured Haskell JSON response and return its top-level keys.
 /// Used for the "same JSON envelope" assertion.
 #[allow(dead_code)]
@@ -190,6 +234,12 @@ pub fn haskell_capture_keys(name: &str) -> std::collections::BTreeSet<String> {
     let v: serde_json::Value =
         serde_json::from_str(&s).unwrap_or_else(|e| panic!("parse capture {}: {}", name, e));
     json_top_keys(&v)
+}
+
+/// The key set a single-field JSON envelope (`{alert}`, `{redirect}`) has.
+#[allow(dead_code)]
+pub fn one_key_set(k: &str) -> std::collections::BTreeSet<String> {
+    std::iter::once(k.to_string()).collect()
 }
 
 #[allow(dead_code)]

@@ -98,9 +98,9 @@ printf '%s\n' "${FILES[@]}" | xargs -P "$JOBS" -I{} bash -c 'one "$@"' _ {} | so
 
 bad=0
 if [ "$MODE" = generate ]; then
-    if grep -qE '\t(TIMEOUT|ERROR=[0-9]+|NOFILE)\t' "$RUN"; then
+    if grep -qE $'\t(TIMEOUT|ERROR=[0-9]+|NOFILE)\t' "$RUN"; then
         echo "rs_ref_check: refusing to write an incomplete reference — failed rows:" >&2
-        grep -E '\t(TIMEOUT|ERROR=[0-9]+|NOFILE)\t' "$RUN" >&2
+        grep -E $'\t(TIMEOUT|ERROR=[0-9]+|NOFILE)\t' "$RUN" >&2
         rm -f "$RUN"; exit 1
     fi
     { echo "# rs_ref_check reference — regenerate with: scripts/rs_ref_check.sh generate"

@@ -1,0 +1,22 @@
+/*
+ * POSITIONAL prefix resolution: `lookupArity` reads the signature built SO
+ * FAR (Theory/Text/Parser/Term.hs:62-72), and every `NoEqUser` outranks
+ * every `ACfctUser` once both exist.  A use BETWEEN the `[AC]` declaration
+ * and a later NoEq declaration of the same name therefore resolves AC
+ * (r1 — rendered infix), while a use AFTER both resolves NoEq
+ * (r2 — rendered prefix).
+ */
+theory PositionalAcPrefix
+begin
+
+functions: f/2 [AC]
+
+rule r1:
+  [ ] --> [ Out(f('a','b')) ]
+
+functions: f/2
+
+rule r2:
+  [ ] --> [ Out(f('a','b')) ]
+
+end

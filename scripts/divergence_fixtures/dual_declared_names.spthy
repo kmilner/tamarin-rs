@@ -1,0 +1,42 @@
+// Dual-declared name resolution: `f` is BOTH a NoEq funsym and a user
+// `[AC]` symbol, `g` a NoEq constant and a user `[AC]` symbol.  HS resolves
+// the prefix and `op{a}b` spellings through `lookupArity`'s NoEq-first list
+// lookup (Theory/Text/Parser/Term.hs:62-72; NoEqUser sorts before ACfctUser,
+// Term/Term/FunctionSymbols.hs:146-147), while the infix spelling stays the
+// AC symbol (`acterm`, Term.hs:163-174) and a bare nullary name the NoEq
+// constant (`nullaryApp`, Term.hs:158-163).  No corpus theory declares such
+// a collision.
+//
+// Compared slices: the wf report block AND the `theory … end` echo — the
+// echo pins prefix NoEq rendering (`f('a', 'b')`, unflattened/unsorted)
+// against infix AC (`('a' f 'b')`, flattened/sorted), and the wf block pins
+// the Formula-terms classification of both heads.
+
+theory DualDeclaredNames
+begin
+
+functions: f/2 [AC], f/2, g/2 [AC], g/0, red/2
+equations: red(x, y) = x
+
+// One rule, all four spellings: infix (AC), prefix (NoEq), `op{a}b` (NoEq),
+// bare nullary (NoEq constant).
+rule R:
+  [ ] --[ A('a' f 'b'), B(f('a','b')), C(f{'c'}'d'), D(g) ]-> [ ]
+
+// Variables drive the variant computation with BOTH `f` operators in the
+// Maude signature at once.
+rule R2:
+  [ In(f(x,y)) ] --> [ Out('a' f y) ]
+
+// The NoEq `f` nests without AC flattening/sorting; only a reducible
+// ARGUMENT (`red`) flags a lemma.
+lemma L1:
+  "All #i. Test(f('b', red('c','d'))) @ #i ==> F"
+lemma L2:
+  "All #i. Test(f(f('z','a'), 'b')) @ #i ==> F"
+// The infix chain IS the AC symbol: flattened and sorted, with the same
+// reducible-argument rule.
+lemma L3:
+  "All #i. Test(('a' f red('b','c')) f 'z') @ #i ==> F"
+
+end

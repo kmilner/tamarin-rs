@@ -1,0 +1,37 @@
+// AC operand order decided BELOW the operands' own head, in the theory echo.
+//
+// HS `fAppAC` (Term/Term/Raw.hs:119) sorts a flattened AC chain's operands
+// with the derived `Ord (Term a)`, and `data Term a = LIT a | FAPP FunSym
+// [Term a]` (Term/Term/Raw.hs:73-75) makes that comparison structural:
+// constructor first — every `LIT` before every `FAPP` — then the head symbol,
+// then the argument list elementwise.  Both operands of each `++` below are
+// `pair`-headed, so neither the constructor nor the head decides and the
+// comparison has to descend.
+//
+//   - `Depth` decides one level down: at argument 1 the 2-tuple holds a `LIT`
+//     and the 3-tuple an `FAPP`, so `<a, z>` comes first;
+//   - `NotLength` puts the same 3-tuple against `<a, <z, z>>`, whose argument 1
+//     is an `FAPP` too.  The comparison descends a second level, `b` before
+//     `z`, and the 3-tuple comes FIRST — operand size is not what orders them.
+//
+// `<a, b, c>` and `<a, z, z>` are also the flattened spelling HS `prettyTerm`
+// prints for a right-nested `pair` chain (`split`, Term/Term.hs:313,323-324),
+// so the echo shows three operands where the order was read off two: the
+// printer's flattening is not the tree `Ord` walks.
+//
+// No corpus theory puts two same-headed `pair` chains in one AC chain.
+//
+// Compared slice: the whole `theory … end` echo (see check.sh).
+
+theory PairEchoOrder
+begin
+
+builtins: multiset
+
+rule Depth:
+  [ In(a), In(b), In(c), In(z) ] --[ ]-> [ Out( <a,b,c> ++ <a,z> ) ]
+
+rule NotLength:
+  [ In(a), In(b), In(c), In(z) ] --[ ]-> [ Out( <a,b,c> ++ <a,<z,z>> ) ]
+
+end
