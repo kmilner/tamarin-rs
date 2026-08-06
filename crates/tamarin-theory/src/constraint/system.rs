@@ -1867,4 +1867,5 @@ pub fn formula_to_system(
 }
 
 #[cfg(test)]
+#[path = "system_tests.rs"]
 mod tests;

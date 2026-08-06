@@ -840,4 +840,5 @@ fn split_top_level_commas(s: &str) -> Vec<String> {
 // =============================================================================
 
 #[cfg(test)]
+#[path = "proof_tree_tests.rs"]
 mod tests;

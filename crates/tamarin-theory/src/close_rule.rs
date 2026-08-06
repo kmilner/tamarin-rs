@@ -957,4 +957,5 @@ pub fn pretty_ndc_check(
 // =============================================================================
 
 #[cfg(test)]
+#[path = "close_rule_tests.rs"]
 mod tests;

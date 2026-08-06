@@ -617,4 +617,5 @@ pub fn nat_fun_sig() -> FunSig {
 }
 
 #[cfg(test)]
+#[path = "function_symbols_tests.rs"]
 mod tests;

@@ -542,4 +542,5 @@ pub fn union_forced_injective_fact_instances(
 }
 
 #[cfg(test)]
+#[path = "injective_fact_instances_tests.rs"]
 mod tests;

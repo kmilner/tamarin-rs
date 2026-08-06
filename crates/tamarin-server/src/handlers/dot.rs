@@ -1433,4 +1433,5 @@ fn escape_dot_label(s: &str) -> String {
 }
 
 #[cfg(test)]
+#[path = "dot_tests.rs"]
 mod tests;

@@ -2485,4 +2485,5 @@ fn bp_variants_intruder(
 }
 
 #[cfg(test)]
+#[path = "intruder_rules_tests.rs"]
 mod tests;

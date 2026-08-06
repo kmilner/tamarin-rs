@@ -2143,4 +2143,5 @@ impl<'a> Drop for PooledMaude<'a> {
 }
 
 #[cfg(test)]
+#[path = "maude_proc_tests.rs"]
 mod tests;

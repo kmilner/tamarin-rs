@@ -483,4 +483,5 @@ fn rule_applies_ac(
 // matching HS's `_ -> [t]` wildcard, and `[]` only for `Lit (Con _)`).
 
 #[cfg(test)]
+#[path = "norm_tests.rs"]
 mod tests;

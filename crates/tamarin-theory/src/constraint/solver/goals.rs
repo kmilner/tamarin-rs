@@ -2949,4 +2949,5 @@ fn fact_term_head(
 }
 
 #[cfg(test)]
+#[path = "goals_tests.rs"]
 mod tests;

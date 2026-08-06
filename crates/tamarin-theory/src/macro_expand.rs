@@ -364,4 +364,5 @@ fn expand_rule(macros: &[p::Macro], r: &mut p::Rule) {
 }
 
 #[cfg(test)]
+#[path = "macro_expand_tests.rs"]
 mod tests;

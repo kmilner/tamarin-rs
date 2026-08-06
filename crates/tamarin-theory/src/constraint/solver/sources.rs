@@ -7370,4 +7370,5 @@ where
 // at runtime as a deeper `case split` step, never as sibling source cases.
 
 #[cfg(test)]
+#[path = "sources_tests.rs"]
 mod tests;

@@ -2710,4 +2710,5 @@ fn builtin_sig(name: &str) -> Option<MaudeSig> {
 }
 
 #[cfg(test)]
+#[path = "elaborate_tests.rs"]
 mod tests;

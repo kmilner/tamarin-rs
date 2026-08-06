@@ -3240,4 +3240,5 @@ fn equal_subst_up_to_renaming(
 }
 
 #[cfg(test)]
+#[path = "equation_store_tests.rs"]
 mod tests;

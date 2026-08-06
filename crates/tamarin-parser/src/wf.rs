@@ -3119,4 +3119,5 @@ fn not_only_nat<'a>(t: &'a Term, out: &mut Vec<&'a Term>, ac: &AcSyms) {
 // =============================================================================
 
 #[cfg(test)]
+#[path = "wf_tests.rs"]
 mod tests;

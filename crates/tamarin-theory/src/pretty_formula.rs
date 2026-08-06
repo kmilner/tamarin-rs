@@ -2653,4 +2653,5 @@ fn body_is_true(g: &Guarded) -> bool {
 }
 
 #[cfg(test)]
+#[path = "pretty_formula_tests.rs"]
 mod tests;

@@ -2589,4 +2589,5 @@ impl SubstNfChecker {
 }
 
 #[cfg(test)]
+#[path = "contradictions_tests.rs"]
 mod tests;

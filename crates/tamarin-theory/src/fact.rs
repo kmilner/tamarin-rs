@@ -630,4 +630,5 @@ pub fn lvar_to_lnterm(v: &LVar) -> LNTerm {
 }
 
 #[cfg(test)]
+#[path = "fact_tests.rs"]
 mod tests;

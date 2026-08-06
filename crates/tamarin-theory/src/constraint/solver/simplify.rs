@@ -5653,4 +5653,5 @@ fn nat_subterm_equalities(
 }
 
 #[cfg(test)]
+#[path = "simplify_tests.rs"]
 mod tests;

@@ -1633,4 +1633,5 @@ pub fn prove_lemma_with_pool_file_heuristic(
 }
 
 #[cfg(test)]
+#[path = "prove_tests.rs"]
 mod tests;

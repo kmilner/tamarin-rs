@@ -516,6 +516,7 @@ where
 }
 
 #[cfg(test)]
+#[path = "unification_tests.rs"]
 mod tests;
 
 // =============================================================================
@@ -535,4 +536,5 @@ mod tests;
 // References to Haskell source are checked-in as of the May 2026 port
 // state; line numbers may drift but the contracts shouldn't.
 #[cfg(test)]
+#[path = "unification_haskell_invariants_tests.rs"]
 mod haskell_invariants_tests;

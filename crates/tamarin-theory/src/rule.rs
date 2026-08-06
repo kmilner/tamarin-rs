@@ -925,4 +925,5 @@ pub fn unifiable_rule_ac_insts(
 // =============================================================================
 
 #[cfg(test)]
+#[path = "rule_tests.rs"]
 mod tests;

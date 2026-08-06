@@ -861,4 +861,5 @@ pub fn enable_diff_maude_sig() -> MaudeSig {
 }
 
 #[cfg(test)]
+#[path = "maude_sig_tests.rs"]
 mod tests;

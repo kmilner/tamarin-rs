@@ -5884,4 +5884,5 @@ pub fn parse_term_str(s: &str) -> Result<Term, ParseError> {
 }
 
 #[cfg(test)]
+#[path = "parser_tests.rs"]
 mod tests;

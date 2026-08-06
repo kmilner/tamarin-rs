@@ -464,4 +464,5 @@ fn compute_new_vars(prems: &[LNFact], concs: &[LNFact]) -> Vec<tamarin_term::lte
 // =============================================================================
 
 #[cfg(test)]
+#[path = "intruder_variants_tests.rs"]
 mod tests;

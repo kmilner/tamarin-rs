@@ -1287,4 +1287,5 @@ help documents is accepted here too, though the Haskell prover answers
 ";
 
 #[cfg(test)]
+#[path = "cli_tests.rs"]
 mod tests;

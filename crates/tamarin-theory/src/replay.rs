@@ -1406,4 +1406,5 @@ fn tag_persistent(tag: &FactTag) -> bool {
 }
 
 #[cfg(test)]
+#[path = "replay_tests.rs"]
 mod tests;

@@ -8348,4 +8348,5 @@ impl<'ctx> Reduction<'ctx> {
 }
 
 #[cfg(test)]
+#[path = "reduction_tests.rs"]
 mod tests;

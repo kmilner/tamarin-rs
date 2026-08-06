@@ -249,23 +249,37 @@ fn content_untracked_callers_are_enumerated() {
             }
         }
     }
-    // Out-of-line test modules — `#[cfg(test)]` + `mod <name>;` in a parent
-    // `foo.rs` puts the module's code in `foo/<name>.rs` — are whole files of
-    // test code; collect them so the scan below skips them entirely.
+    // Out-of-line test modules — `#[cfg(test)]` + `#[path = "<file>"]` +
+    // `mod <name>;` in a parent `foo.rs` puts the module's code in a sibling
+    // `<file>` (without the path attribute it would be `foo/<name>.rs`) — are
+    // whole files of test code; collect them so the scan below skips them
+    // entirely.
     let mut test_files: tamarin_utils::FastSet<std::path::PathBuf> =
         tamarin_utils::FastSet::default();
     for path in &files {
         let src = std::fs::read_to_string(path).expect("read source");
         let mut lines = src.lines().peekable();
         while let Some(line) = lines.next() {
-            if line.trim_start() == "#[cfg(test)]" {
-                if let Some(name) = lines
-                    .peek()
-                    .and_then(|n| n.trim_start().strip_prefix("mod "))
-                    .and_then(|r| r.strip_suffix(';'))
-                {
-                    test_files.insert(path.with_extension("").join(format!("{name}.rs")));
-                }
+            if line.trim_start() != "#[cfg(test)]" {
+                continue;
+            }
+            let path_attr = lines
+                .peek()
+                .and_then(|n| n.trim_start().strip_prefix("#[path = \""))
+                .and_then(|r| r.strip_suffix("\"]"))
+                .map(str::to_string);
+            if path_attr.is_some() {
+                lines.next();
+            }
+            if let Some(name) = lines
+                .peek()
+                .and_then(|n| n.trim_start().strip_prefix("mod "))
+                .and_then(|r| r.strip_suffix(';'))
+            {
+                test_files.insert(match &path_attr {
+                    Some(file) => path.parent().expect("src file has a parent").join(file),
+                    None => path.with_extension("").join(format!("{name}.rs")),
+                });
             }
         }
     }
