@@ -1,0 +1,25 @@
+theory PairEchoOrder
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: multiset
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) Depth:
+   [ In( a ), In( b ), In( c ), In( z ) ] --> [ Out( (<a, z>++<a, b, c>) ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) NotLength:
+   [ In( a ), In( b ), In( c ), In( z ) ]
+  -->
+   [ Out( (<a, b, c>++<a, z, z>) ) ]
+
+  /* has exactly the trivial AC variant */
+
+
+
+end

@@ -1,0 +1,42 @@
+// A USER-declared AC symbol inside the wellformedness report.
+//
+// `Out` on a rule's left-hand side raises the "Special facts" check, whose
+// message renders the offending fact with `prettyLNFact`
+// (HS `specialFactsUsage'`, Theory/Tools/Wellformedness.hs:553-566) — the one
+// wf entry that prints a whole AC-headed term, and so the one that exposes
+// tamarin-parser's `wf::cmp_wf_term` to a user `[AC]` head.
+//
+//   - `Operand` pins the operand ORDER against a bare variable: `Ord (Term a)`
+//     puts every `LIT` before every `FAPP` (Term/Term/Raw.hs:73-75), so the
+//     `add` application follows `z` however the source spells the chain;
+//   - `CrossOp` pins the CROSS-OPERATOR rank, where both operands are
+//     AC-headed and `Ord ACSym` decides.  `ACfct` is the last constructor of
+//     `data ACSym = Union | Mult | Xor | NatPlus | ACfct ACfctSym`
+//     (Term/Term/FunctionSymbols.hs:138), so a user-AC operand sorts after
+//     every builtin one — `NatPlus` is the adjacent case and the one an
+//     off-by-one rank gets backwards.
+//
+// The two also pin the two INFIX spellings apart: HS `prettyTerm` renders a
+// user AC symbol as `" " ++ name ++ " "` (Term/Term.hs:305) but the builtin
+// operators without surrounding spaces (Term/Term.hs:308-309), so one term
+// carries `(p add q)` and the other `(%e%+%f)`.
+//
+// No corpus theory declares an `[AC]` symbol in a rule that trips a wf check.
+//
+// Compared slices: the wf report block AND the `theory … end` echo (see
+// check.sh) — the echo carries the same two terms through the rule printer and
+// the `add/2 [AC]` signature line.
+
+theory WfUserAcReport
+begin
+
+builtins: multiset, natural-numbers
+functions: add/2 [AC]
+
+rule Operand:
+  [ Out( (p add q) ++ z ) ] --[ ]-> [ ]
+
+rule CrossOp:
+  [ Out( (%e %+ %f) ++ (p add q) ) ] --[ ]-> [ ]
+
+end

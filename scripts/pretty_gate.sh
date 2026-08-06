@@ -41,7 +41,11 @@ HS_CACHE="${HS_CACHE:-$script_dir/.hs_pretty_cache}"
 CORPUS_ROOT="${CORPUS_ROOT:-$repo_root/tamarin-prover/examples}"
 FLAGS_MAP="${FLAGS_MAP:-$script_dir/file_flags.tsv}"
 JOBS="${JOBS:-4}"
-FILE_TIMEOUT="${FILE_TIMEOUT:-120}"
+# Generous by design: the csf26-ac AC-variant precomputation makes the HS
+# oracle's plain load take ~170s on three files (chaum_offline_anonymity,
+# KCL07, NSLPK3xor), and a tighter cap turns those into permanent .nohs
+# markers on every cold cache fill.
+FILE_TIMEOUT="${FILE_TIMEOUT:-420}"
 DERIVCHECK_TIMEOUT="${DERIVCHECK_TIMEOUT:-10}"
 RESULTS_TSV="${RESULTS_TSV:-$script_dir/results/pretty_gate_results.tsv}"
 mkdir -p "$(dirname "$RESULTS_TSV")"
@@ -59,6 +63,30 @@ HS_PATH="${HS_PATH:-$(find_hs_bin "$repo_root")}" || true
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 [ -x "$RS_PATH" ] || { echo "no RS binary at $RS_PATH" >&2; exit 2; }
 export RS_PATH HS_PATH HS_CACHE CORPUS_ROOT FLAGS_MAP FILE_TIMEOUT DERIVCHECK_TIMEOUT
+
+# Oracle-rev handshake (same idea as web_parity.sh's PLAN_VERSION check): the
+# cache key is sha256(theory)+flags, which cannot see an ORACLE change — a
+# bump that alters pretty output leaves stale entries under unchanged keys,
+# surfacing as false DIFFs rather than cache misses.  Stamp the oracle's git
+# revision into the cache dir and wipe the cache when it changes.  Wiping is
+# only safe when phase 0 can refill: under NO_HS_FILL a wipe would leave every
+# file SKIP_NO_HS, so a stamp mismatch is a hard error there instead.
+if [ -x "${HS_PATH:-}" ]; then
+    oracle_rev=$("$HS_PATH" --version 2>/dev/null \
+        | awk '/^Git revision:/{gsub(",","",$3); print $3; exit}')
+    stamp="$HS_CACHE/.oracle_rev"
+    if [ -n "$oracle_rev" ]; then
+        if [ -f "$stamp" ] && [ "$(cat "$stamp")" != "$oracle_rev" ]; then
+            if [ -n "$NO_HS_FILL" ]; then
+                echo "pretty_gate: oracle changed ($(cat "$stamp") -> $oracle_rev) and NO_HS_FILL=1 — refusing to wipe a cache nothing would refill; rerun without NO_HS_FILL, or point HS_PATH at the stamped oracle" >&2
+                exit 2
+            fi
+            echo "pretty_gate: oracle changed ($(cat "$stamp") -> $oracle_rev) — wiping stale cache" >&2
+            rm -rf "$HS_CACHE"; mkdir -p "$HS_CACHE"
+        fi
+        printf '%s' "$oracle_rev" > "$stamp"
+    fi
+fi
 
 strip_env() {
     grep -v -e '^Git revision:' -e '^Compiled at:' \
@@ -152,5 +180,11 @@ filelist | grep . | xargs -P"$JOBS" -I{} bash -c 'one "$@"' _ {} | sort > "$RESU
 m=$(awk -F'\t' '$2=="MATCH"' "$RESULTS_TSV" | wc -l)
 diff=$(awk -F'\t' '$2=="DIFF"' "$RESULTS_TSV" | wc -l)
 skip=$(awk -F'\t' '$2 ~ /^SKIP/' "$RESULTS_TSV" | wc -l)
+total=$(grep -c . "$RESULTS_TSV")
 echo "pretty_gate: MATCH=$m DIFF=$diff SKIP=$skip  ->  $RESULTS_TSV"
+# An all-SKIP run compares nothing, so DIFF=0 says nothing about parity.
+if [ "$total" = 0 ] || [ "$skip" = "$total" ]; then
+    echo "pretty_gate: nothing compared ($skip SKIP of $total files) — empty or unfilled HS cache ($HS_CACHE)" >&2
+    exit 1
+fi
 [ "$diff" = 0 ]

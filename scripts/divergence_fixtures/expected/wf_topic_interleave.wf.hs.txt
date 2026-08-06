@@ -1,0 +1,49 @@
+WARNING: the following wellformedness checks failed!
+
+Unbound variables
+=================
+
+  rule `R' has unbound variables: 
+    u
+
+Formula terms
+=============
+
+  Lemma `Redu' uses terms of the wrong form: `exp(Bound 1,Bound 1)'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+
+ Formula guardedness
+====================
+
+  Lemma `NoGuard' cannot be converted to a guarded formula:
+    universal quantifier without toplevel implication
+      "∀ z. z = z"
+    in the formula
+      "∀ z. z = z"
+
+Formula terms
+=============
+
+  Lemma `Redu2' uses terms of the wrong form: `exp(Bound 1,Bound 1)'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+
+Quantifier sorts
+================
+
+  Restriction `RQ' uses quantifiers with wrong sort: ("q",LSortFresh)
+
+Lemma annotations
+=================
+
+  Lemma `Reuse': cannot reuse 'exists-trace' lemmas
+*/

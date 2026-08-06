@@ -1,0 +1,49 @@
+// SAPIC term lowering: the `LNTerm` -> parser-AST projection the translation
+// shares with the theory printer (`pretty_theory::lnterm_to_parser`).
+//
+// The shapes it has to materialise are the ones HS `prettyTerm` special-cases.
+// Two of them reach emitted bytes here:
+//
+//   - through the lowering itself, in the `let` else-restriction formulas: a
+//     `pair` chain splits down the RIGHT spine only, so `<u, <v, w>>` prints
+//     as the 3-tuple `<u, v, w>` while `<<p, q>, r>` stays a 2-tuple;
+//   - through the derived restriction names and the `process=` annotations,
+//     which the SAPIC process printer feeds: `exp` is infix, giving
+//     `Restr_letuvwgkab_…` and `'g'^k.1`.
+//
+// An `exp` inside an else-restriction FORMULA is not exercised: the oracle
+// answers such a theory with an extra "Formula terms" wellformedness warning
+// (reducible symbols are disallowed there), which is its own divergence and
+// would drown this one.
+//
+// Compared slice: the whole `theory … end` echo (see check.sh).
+
+theory SapicLowering
+begin
+
+builtins: diffie-hellman
+
+predicates: Eq(a, b) <=> a = b
+
+process:
+  in(k);
+  // Right-spine pattern: the else-restriction quantifies u, v, w over the
+  // FLATTENED `<u, v, w>`.
+  let <u, <v, w>> = <'g'^k, <'a','b'>> in
+    out(<u,v,w>)
+  else
+    // Left-nested pattern: `<<p, q>, r>` does NOT flatten, and this let's
+    // right-hand side is ground, so both sides of the equality in the
+    // else-restriction are lowered terms.
+    ( let <<p, q>, r> = <<'a','b'>,'c'> in
+        out(<p,q,r>)
+      else
+        // The `if` predicate's condition is a parser-AST formula whose free
+        // variable carries the `let` image, so the lowering runs over a term
+        // holding both an `exp` and a nested pair.
+        ( let z = <'g'^k, <<'a','b'>,'c'>> in
+            if Eq(z, k) then out('yes') else out('no')
+        )
+    )
+
+end

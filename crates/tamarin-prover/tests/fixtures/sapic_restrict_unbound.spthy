@@ -1,0 +1,15 @@
+theory SapicRestrictUnbound
+begin
+
+rule ZUserA:
+  [ In(a) ] --[ Uv(b) ]-> [ Out(a) ]
+
+process:
+  in(m);
+  [ ] --[ Ev(m), _restrict(k.5 = 'b') ]-> [ ];
+  in(k); out(k)
+
+rule AUserB:
+  [ In(c) ] --[ Uv(d) ]-> [ Out(c) ]
+
+end

@@ -1,0 +1,17 @@
+WARNING: the following wellformedness checks failed!
+
+Special facts
+=============
+
+  rule `CrossOp' uses disallowed facts on left-hand-side:
+    Out( (c^d++(x*y)++(a⊕b)++(%e%+%f)) )
+  
+  rule `UnionVsMult' uses disallowed facts on left-hand-side:
+    Out( ((a++b)⊕(x*y)) )
+  
+  rule `Heads' uses disallowed facts on left-hand-side:
+    Out( (DH_neutral++c^d++h(e)++one++<a, b>++zz(f)++(u⊕v)) )
+  
+  rule `SameHead' uses disallowed facts on left-hand-side:
+    Out( ((a*b*c)++(b*z)) )
+*/

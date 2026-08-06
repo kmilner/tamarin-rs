@@ -1,15 +1,20 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, beschmi, jdreier, sans-sucre, PhilipLukertWork, rkunnema,
-//   kevinmorio, addap, Mathias-AURAND, Nynko, arcz, BTom-GH, rsasse,
-//   charlie-j, racoucho1u, felixlinker, ValentinYuri, xaDxelA, and
+//   jdreier, beschmi, meiersi, sans-sucre, PhilipLukertWork, rkunnema,
+//   kevinmorio, addap, BTom-GH, Mathias-AURAND, Nynko, arcz, rsasse,
+//   charlie-j, racoucho1u, felixlinker, xaDxelA, ValentinYuri, and
 //   other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/Builtin/Signature.hs, lib/term/src/Term/LTerm.hs,
-//   lib/term/src/Term/SubtermRule.hs,
+//   lib/term/src/Term/SubtermRule.hs, lib/term/src/Term/Term.hs,
 //   lib/term/src/Term/Term/FunctionSymbols.hs,
 //   lib/term/src/Term/Term/Raw.hs, lib/term/src/Term/VTerm.hs,
-//   lib/theory/src/Theory/Text/Parser/Fact.hs,
+//   lib/theory/src/Theory/Model/Fact.hs,
+//   lib/theory/src/Theory/Model/Restriction.hs,
+//   lib/theory/src/Theory/Sapic/Process.hs,
+//   lib/theory/src/Theory/Text/Parser/Formula.hs,
 //   lib/theory/src/Theory/Text/Parser/Let.hs,
+//   lib/theory/src/Theory/Text/Parser/Rule.hs,
+//   lib/theory/src/Theory/Text/Parser/Signature.hs,
 //   lib/theory/src/Theory/Text/Parser/Term.hs,
 //   lib/theory/src/Theory/Tools/MessageDerivationChecks.hs,
 //   lib/theory/src/Theory/Tools/Wellformedness.hs,
@@ -20,21 +25,28 @@
 //! Wellformedness checks operating on the parser AST.
 //!
 //! Port of `Theory.Tools.Wellformedness` from
-//! `lib/theory/src/Theory/Tools/Wellformedness.hs`. This implementation
-//! works directly on the surface syntax tree because we don't yet have
-//! a typed `Theory` AST. As a consequence:
+//! `lib/theory/src/Theory/Tools/Wellformedness.hs`. The checks here work
+//! directly on the surface syntax tree, because `tamarin-parser` is
+//! dependency-free and so cannot reach the elaborated signature, the
+//! SAPIC-translated theory or the HughesPJ renderer. As a consequence:
 //!
 //! - Checks that need term-level sort inference (e.g. `Nat Sorts`) work
 //!   over the parser's [`SortHint`] / sigil annotations rather than a
 //!   full sort assignment.
-//! - Checks that depend on Maude (`Variants`, `Rule has no variants`)
-//!   are not implemented yet.
-//! - The error messages we emit may not match Tamarin's word-for-word,
-//!   but the *topic strings* (the underlined headers) match exactly so
-//!   the fixture runner can compare topic sets.
+//! - Checks that DO need one of those three — `formulaReports`,
+//!   `multRestrictedReport`, `ruleVariantsReport` — live in
+//!   `tamarin-theory` and are spliced into this report by the batch
+//!   (`run.rs`) and web (`theory_io.rs`) load pipelines; see
+//!   [`WF_TOPIC_ORDER`] and [`insert_wf_before`].
+//! - Bodies reproduce HS's formatters byte-for-byte except where an
+//!   individual check documents a departure: [`reserved_prefix_report`]
+//!   and [`left_right_rule_report`] emit only a topic-faithful
+//!   best-effort body (neither fires on the corpus), and
+//!   [`message_derivation_report`] is a static approximation of HS's
+//!   prover-driven check.
 //!
-//! Each public `check_*` function corresponds to a Haskell `*Report`
-//! function. The umbrella entry point is [`check_theory`].
+//! Each public check function corresponds to a Haskell `*Report` /
+//! `*Check` function. The umbrella entry point is [`check_theory`].
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -57,6 +69,14 @@ pub struct WfError {
     /// concatenates the messages, separated by blank lines, beneath
     /// the topic header (which is part of `message`).
     pub message: String,
+    /// Set by the checks whose body is HS's paragraph fill `text info $-$
+    /// nest 2 (fsep $ punctuate comma cells)`.  `message` carries that body
+    /// with every cell laid out FLAT — the widest layout decision the parser
+    /// crate can make on its own — and
+    /// `tamarin_theory::pretty_theory::render_wf_error_report` re-lays the
+    /// body out with the HughesPJ engine, which additionally descends INTO a
+    /// cell that overruns the ribbon.
+    pub fill: Option<WfFill>,
 }
 
 impl WfError {
@@ -64,6 +84,141 @@ impl WfError {
         WfError {
             topic: topic.into(),
             message: message.into(),
+            fill: None,
+        }
+    }
+
+    /// A `WfError` whose body is HS's `text info $-$ nest 2 (fsep $ punctuate
+    /// comma cells)` paragraph fill — `unboundCheck`
+    /// (Wellformedness.hs:497-498), `reservedFactNameRules'`
+    /// (Wellformedness.hs:546) and `specialFactsUsage'`
+    /// (Wellformedness.hs:563).
+    ///
+    /// `info` is the body's first line WITHOUT the `nest 2` that
+    /// `prettyWfErrorReport` applies to every body of a topic group;
+    /// [`WfError::message`] gets that indent and the flat fill.
+    pub fn filled(topic: impl Into<String>, info: impl Into<String>, cells: Vec<WfDoc>) -> Self {
+        let info = info.into();
+        let flat: Vec<String> = cells.iter().map(WfDoc::to_flat).collect();
+        let message = format!("  {info}\n{}", fsep_comma_fill(&flat));
+        WfError {
+            topic: topic.into(),
+            message,
+            fill: Some(WfFill { info, cells }),
+        }
+    }
+}
+
+/// The `fsep`-filled body of a wellformedness entry: HS `text info $-$
+/// nest 2 (fsep $ punctuate comma cells)`.
+#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
+pub struct WfFill {
+    /// HS `text info` — the body's first line, WITHOUT `prettyWfErrorReport`'s
+    /// per-body `nest 2` (Wellformedness.hs:118-125).
+    pub info: String,
+    /// The cells `punctuate comma` separates: one `prettyLNFact` per offending
+    /// fact, or one `prettyLVar` per variable (`prettyVarList`,
+    /// TheoryObject.hs:858-859).
+    pub cells: Vec<WfDoc>,
+}
+
+/// The layout skeleton of one `prettyTerm` / `prettyLNFact` rendering
+/// (Term/Term.hs:298-327, Theory/Model/Fact.hs:567-572).
+///
+/// HS builds these as HughesPJ `Doc`s, so a fact that overruns the render
+/// ribbon breaks at its OWN `sep`/`fsep`/`fcat` points — `prettyLNFact` drops
+/// its closing `)` onto the next line and refills the argument list at a
+/// deeper indent.  That engine lives in `tamarin-theory`, so the printers
+/// here build this skeleton instead: [`WfDoc::to_flat`] renders it with every
+/// break point taken horizontally, and `tamarin_theory::wf_fill` maps each
+/// variant onto the HughesPJ combinator HS used.
+#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
+pub enum WfDoc {
+    /// HS `text s` — a leaf with no internal break point.
+    Text(String),
+    /// HS `<>` — juxtaposition; the parts keep their own break points.
+    Beside(Vec<WfDoc>),
+    /// HS `ppFun f ts = text (f ++ "(") <> fsep (punctuate comma (map ppTerm
+    /// ts)) <> text ")"` (Term/Term.hs:326-327).
+    Fun(String, Vec<WfDoc>),
+    /// HS `ppTerms sepa 1 lead finish ts` (Term/Term.hs:319-321) — the `fcat`
+    /// of `text lead`, the `nest 1`'d and `sepa`-punctuated operands, and
+    /// `text finish`: pairs (`<`, `, `, `>`) and AC chains (`(`, the operator,
+    /// `)`).
+    Terms {
+        lead: String,
+        sep: String,
+        finish: String,
+        items: Vec<WfDoc>,
+    },
+    /// HS `ppFact n ts = nestShort' (n ++ "(") ")" (fsep (punctuate comma (map
+    /// ppTerm ts)))` (Fact.hs:572), i.e. `sep [text lead $$ nest (length lead +
+    /// 1) body, text ")"]` (Text/PrettyPrint/Class.hs:218-223).
+    Fact { lead: String, args: Vec<WfDoc> },
+}
+
+impl WfDoc {
+    /// Render with every break point taken horizontally — the layout HughesPJ
+    /// picks while the doc fits the ribbon.
+    pub fn to_flat(&self) -> String {
+        let mut s = String::new();
+        self.write_flat(&mut s);
+        s
+    }
+
+    fn write_flat(&self, out: &mut String) {
+        match self {
+            WfDoc::Text(s) => out.push_str(s),
+            WfDoc::Beside(parts) => {
+                for p in parts {
+                    p.write_flat(out);
+                }
+            }
+            WfDoc::Fun(name, args) => {
+                out.push_str(name);
+                out.push('(');
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        // `punctuate comma` + the space `fsep` joins with.
+                        out.push_str(", ");
+                    }
+                    a.write_flat(out);
+                }
+                out.push(')');
+            }
+            WfDoc::Terms {
+                lead,
+                sep,
+                finish,
+                items,
+            } => {
+                out.push_str(lead);
+                for (i, it) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(sep);
+                    }
+                    it.write_flat(out);
+                }
+                out.push_str(finish);
+            }
+            WfDoc::Fact { lead, args } => {
+                // `nestShort'`'s two spaces: `$$` overlaps the nested body onto
+                // the lead's line one column past it, and the enclosing `sep`
+                // joins that with the closing `)`.  An argument-less fact keeps
+                // only the `sep` space (`text lead $$ nest n emptyDoc` is just
+                // the lead), so it renders `A( )`.
+                out.push_str(lead);
+                if !args.is_empty() {
+                    out.push(' ');
+                    for (i, a) in args.iter().enumerate() {
+                        if i > 0 {
+                            out.push_str(", ");
+                        }
+                        a.write_flat(out);
+                    }
+                }
+                out.push_str(" )");
+            }
         }
     }
 }
@@ -90,6 +245,7 @@ pub const WF_TOPIC_ORDER: &[&str] = &[
     "Fact capitalization issues",
     "Facts occur in the left-hand-side but not in any right-hand-side ",
     "Unbound variables",
+    "Quantifier sorts",
     "Formula terms",
     " Formula guardedness",
     "Lemma annotations",
@@ -101,18 +257,18 @@ pub const WF_TOPIC_ORDER: &[&str] = &[
 ];
 
 // First `WF_TOPIC_ORDER` index whose topic sorts after each splicing check.
-pub const WF_AFTER_VARIANTS: usize = 0; // ruleVariantsReport → before factReports
-pub const WF_AFTER_FACT_LHS: usize = 8; // "Formula terms"
-pub const WF_AFTER_CHECK_TERMS: usize = 9; // " Formula guardedness"
-pub const WF_AFTER_CHECK_GUARDED: usize = 10; // "Lemma annotations"
+pub const WF_AFTER_FACT_LHS: usize = 8; // "Quantifier sorts"
+pub const WF_AFTER_CHECK_GUARDED: usize = 11; // "Lemma annotations"
+pub const WF_AFTER_MULT_RESTRICTED: usize = 13; // "Nat Sorts"
 
 /// Splice `errors` into `report` immediately before the first existing entry
 /// whose `topic` is one of `anchors` (its HS check-order position), or at the
 /// end if none match, preserving the relative order of both the existing tail
 /// and the inserted errors.  Shared by the batch (`run.rs`) and web
-/// (`theory_io.rs`) ordered-splice call sites — checkTerms / checkGuarded /
-/// SAPIC lhs-rhs / ruleVariants — which differ only in their `anchors` slice
-/// and the source of `errors`.  No-op when `errors` is empty.
+/// (`theory_io.rs`) ordered-splice call sites — the SAPIC unbound / lhs-rhs /
+/// publicNames re-splices, formulaReports, multRestricted and ruleVariants —
+/// which differ only in their `anchors` slice and the source of `errors`.
+/// No-op when `errors` is empty.
 pub fn insert_wf_before(report: &mut Vec<WfError>, errors: Vec<WfError>, anchors: &[&str]) {
     if errors.is_empty() {
         return;
@@ -133,6 +289,59 @@ pub fn insert_wf_before(report: &mut Vec<WfError>, errors: Vec<WfError>, anchors
 /// the first entry from a later check.
 pub fn after_public_names_topics() -> Vec<&'static str> {
     std::iter::once("Variable with mismatching sorts or capitalization")
+        .chain(
+            WF_TOPIC_ORDER
+                .iter()
+                .copied()
+                .filter(|t| *t != "Unbound variables"),
+        )
+        .collect()
+}
+
+/// Anchor list for the `ruleVariantsReport` splice (HS check index 6): every
+/// [`WF_TOPIC_ORDER`] topic EXCEPT "Unbound variables", whose `unboundReport`
+/// (index 2) runs earlier and so must not act as a boundary.  The three checks
+/// between them — `freshNamesReport`, `publicNamesReport`, `ruleSortsReport` —
+/// emit topics `WF_TOPIC_ORDER` does not carry, so they are already outside
+/// the list.  ruleVariants therefore splices before the first `factReports`
+/// entry.
+pub fn after_variants_topics() -> Vec<&'static str> {
+    WF_TOPIC_ORDER
+        .iter()
+        .copied()
+        .filter(|t| *t != "Unbound variables")
+        .collect()
+}
+
+/// Topics emitted by a check that runs after `unboundReport`, but which
+/// [`WF_TOPIC_ORDER`] does not carry: `freshNamesReport` (HS index 3),
+/// `publicNamesReport` (4), `ruleSortsReport` (5), `ruleVariantsReport` (6),
+/// the `reservedPrefixReport` arm of `factReports` (7), the `checkQuantifiers`
+/// arm of `formulaReports` (8), and `leftRightRuleReportDiff`, which
+/// `checkWellformednessDiff` (Wellformedness.hs:1248-1265, see line 1259) runs
+/// between those last two.
+const AFTER_UNBOUND_EXTRA_TOPICS: &[&str] = &[
+    "Fresh public constants",
+    "Public constants with mismatching capitalization",
+    "Variable with mismatching sorts or capitalization",
+    "Rule has no variants",
+    "Reserved prefixes",
+    "Left rule",
+    "Right rule",
+];
+
+/// Anchor list for the SAPIC `unboundReport` re-splice (HS check index 2):
+/// every topic a LATER check emits.  `unboundReport` is the first entry of
+/// `checkWellformedness`'s list past `checkIfLemmasInTheory`
+/// (Wellformedness.hs:1270-1287), so the boundary set is every topic except
+/// its own and those of the checks ahead of it — the `preReport` topics (SAPIC
+/// process warnings, the accountability RP check) and the `--prove`/`--lemma`
+/// argument check.  Their absence is what keeps the re-spliced entries behind
+/// them.
+pub fn after_unbound_topics() -> Vec<&'static str> {
+    AFTER_UNBOUND_EXTRA_TOPICS
+        .iter()
+        .copied()
         .chain(
             WF_TOPIC_ORDER
                 .iter()
@@ -163,7 +372,9 @@ pub fn check_theory(thy: &Theory) -> WfReport {
     // `variable_sort_clashes` ("Variable with mismatching sorts or
     // capitalization").
     report.extend(variable_sort_clashes(thy));
-    // ruleVariantsReport — not ported (needs MaudeHandle + variant solver).
+    // ruleVariantsReport — spliced by the batch load pipeline (`run.rs`,
+    // anchored by `after_variants_topics`): it needs a MaudeHandle and the
+    // variant solver, neither of which the parser crate reaches.
     // factReports group:
     report.extend(reserved_report(thy));
     report.extend(reserved_fact_name_rules(thy));
@@ -178,11 +389,18 @@ pub fn check_theory(thy: &Theory) -> WfReport {
     // factReports and leftRightRule in HS but is unported, so it does not
     // affect placement.)
     report.extend(left_right_rule_report(thy));
-    // formulaReports group:
-    // checkQuantifiers / checkGuarded — partial via formula_free_var_report.
-    // lemmaAttributeReport, multRestrictedReport, natWellSortedReport:
+    // formulaReports group (checkQuantifiers / checkTerms / checkGuarded) —
+    // spliced by the load pipelines as one interleaved per-formula pass
+    // (`tamarin_theory::formula_reports::formula_reports`): it needs the
+    // elaborated signature's irreducible funsyms and the TRANSLATED theory's
+    // formulas.
+    // lemmaAttributeReport:
     report.extend(lemma_attribute_report(thy));
-    report.extend(mult_restricted_report(thy));
+    // multRestrictedReport — spliced by the load pipelines
+    // (`tamarin_theory::mult_restricted`): it needs the elaborated
+    // signature's irreducible funsyms and the HughesPJ rule renderer,
+    // neither of which the parser crate reaches.
+    // natWellSortedReport:
     report.extend(nat_well_sorted_report(thy));
     // checkEquationsSubtermConvergence:
     report.extend(subterm_convergence_report(thy));
@@ -495,132 +713,236 @@ fn numbered_index_width(count: usize) -> usize {
     count.to_string().len()
 }
 
-/// Pretty-print a parser-AST fact in HS's `prettyLNFact` style:
-/// `!Name( arg, arg, ... )` for persistent, `Name( arg, arg, ... )`
-/// for linear.  Internal spaces match `nestShort'`.
-fn pp_wf_fact(fa: &Fact) -> String {
-    let mut s = String::new();
-    if fa.persistent {
-        s.push('!');
-    }
-    s.push_str(&fa.name);
-    s.push_str("( ");
-    for (i, a) in fa.args.iter().enumerate() {
-        if i > 0 {
-            s.push_str(", ");
+/// Column budget of one wellformedness-report fill line, measured from the
+/// fill's own left edge.
+///
+/// The report is baked into the theory by `addComment`, which renders with
+/// HughesPJ's DEFAULT style — `lineLength = 100`, `ribbonsPerLine = 1.5`, so
+/// `ribbonLen = round (100 / 1.5) = 67` (TheoryObject.hs:717-718).  HughesPJ
+/// keeps a `fill` item on the current line iff `fits ((w `min` r) - sl)`,
+/// where `w` is the line width left after the nesting and `sl` the column
+/// already used inside it.  The fills below sit at `nest 2` inside the
+/// `nest 2` `prettyWfErrorReport` wraps every body in (Wellformedness.hs:118-125),
+/// so `w = 100 - 4 = 96` and the ribbon is what binds.
+const WF_FILL_RIBBON: usize = 67;
+
+/// The `nest 2` (check) + `nest 2` (`prettyWfErrorReport`) indent every filled
+/// list below is rendered at.
+const WF_FILL_INDENT: &str = "    ";
+
+/// HS `nest 2 (fsep $ punctuate comma $ map pp xs)` — the paragraph-fill list
+/// shared by `specialFactsUsage'` (Wellformedness.hs:563),
+/// `reservedFactNameRules'` (Wellformedness.hs:546) and `prettyVarList`
+/// (TheoryObject.hs:858-859).
+///
+/// `punctuate comma` attaches the separator to the item it follows, so each
+/// cell but the last carries a trailing `,`; `fsep` then joins cells with a
+/// space, breaking to a new line — and re-applying the [`WF_FILL_INDENT`]
+/// nesting — before any cell that would pass [`WF_FILL_RIBBON`].
+///
+/// Cells are measured in characters, matching HughesPJ's `text` length.
+///
+/// This is the FLAT FALLBACK layout: every cell is rendered flat, so a cell
+/// wider than the ribbon on its own gets a line to itself.  HS descends into
+/// such a cell's own layout instead (`prettyLNFact` breaks its closing `)`
+/// onto the following line), which needs the HughesPJ `Doc` engine
+/// `tamarin-theory` owns.  The shipped bytes therefore come from
+/// `tamarin_theory::wf_fill`, which lays the [`WfDoc`] skeletons the checks
+/// stash in [`WfError::fill`] out again; what this function produces is the
+/// flat rendering [`WfError::message`] carries, for callers that read the
+/// report without that engine.
+fn fsep_comma_fill(items: &[String]) -> String {
+    let last = items.len().saturating_sub(1);
+    let mut out = String::new();
+    let mut col = 0usize;
+    for (i, item) in items.iter().enumerate() {
+        let cell_width = item.chars().count() + usize::from(i != last);
+        if i == 0 {
+            out.push_str(WF_FILL_INDENT);
+        } else if col + 1 + cell_width <= WF_FILL_RIBBON {
+            out.push(' ');
+            col += 1;
+        } else {
+            out.push('\n');
+            out.push_str(WF_FILL_INDENT);
+            col = 0;
         }
-        pp_wf_term(a, &mut s);
+        out.push_str(item);
+        if i != last {
+            out.push(',');
+        }
+        col += cell_width;
     }
-    s.push_str(" )");
-    s
+    out
 }
 
-fn pp_wf_term(t: &Term, out: &mut String) {
+/// HS `prettyLNFact = prettyFact prettyNTerm` (Fact.hs:581-582): the fact's
+/// `ppFact` skeleton `[!]Name(` … `)` over `prettyTerm`'d arguments.
+fn wf_fact_doc(fa: &Fact, ac: &AcSyms) -> WfDoc {
+    let mut lead = String::new();
+    if fa.persistent {
+        lead.push('!');
+    }
+    lead.push_str(&fa.name);
+    lead.push('(');
+    WfDoc::Fact {
+        lead,
+        args: fa.args.iter().map(|a| wf_term_doc(a, ac)).collect(),
+    }
+}
+
+/// [`wf_fact_doc`] laid out flat: `!Name( arg, arg, ... )` for persistent,
+/// `Name( arg, arg, ... )` for linear.
+fn pp_wf_fact(fa: &Fact, ac: &AcSyms) -> String {
+    wf_fact_doc(fa, ac).to_flat()
+}
+
+/// HS `prettyTerm`'s `split` (Term/Term.hs:323-324): the operand list a
+/// pair-headed term renders between `<` and `>`.  `split` recurses on the
+/// RIGHT child while that child is itself `pairSym`-headed
+/// (`FPair`, Term/Term/Raw.hs:194), so `pair(a, pair(b, c))` yields
+/// `[a, b, c]` while the left-nested `pair(pair(a, b), c)` yields
+/// `[pair(a, b), c]`.  A non-pair `t` yields `[t]`.
+///
+/// Both parser spellings feed the same spine: `Pair` holds `<a, b, c>` flat
+/// where HS nests it `pair(a, pair(b, c))`, so every element but the last is
+/// an operand and the last continues the spine; `App("pair", [a, b])` is the
+/// source form `pair(a, b)`, which HS parses to that same `pairSym` FAPP
+/// (`naryOpApp`, Theory/Text/Parser/Term.hs:88-105, see line 104).
+fn pair_split<'a>(t: &'a Term, out: &mut Vec<&'a Term>) {
+    match t {
+        Term::Pair(items) => {
+            if let Some((last, init)) = items.split_last() {
+                out.extend(init.iter());
+                pair_split(last, out);
+            }
+        }
+        Term::App(name, args) if name == "pair" && args.len() == 2 => {
+            out.push(&args[0]);
+            pair_split(&args[1], out);
+        }
+        _ => out.push(t),
+    }
+}
+
+/// HS `prettyTerm`'s pair arm `ppTerms ", " 1 "<" ">" (split t)`
+/// (Term/Term.hs:313), for a `t` that is `pairSym`-headed.
+fn wf_pair_doc(t: &Term, ac: &AcSyms) -> WfDoc {
+    let mut items: Vec<&Term> = Vec::new();
+    pair_split(t, &mut items);
+    WfDoc::Terms {
+        lead: "<".to_string(),
+        sep: ", ".to_string(),
+        finish: ">".to_string(),
+        items: items.iter().map(|it| wf_term_doc(it, ac)).collect(),
+    }
+}
+
+/// HS `prettyTerm`'s AC arms (Term/Term.hs:304-309): the flattened, sorted
+/// operand list of an `FAPP (AC …)` rendered inside `(` `)` with `sepa`
+/// between operands (`ppTerms sepa 1 "(" ")" ts`).
+fn wf_ac_chain_doc(t: &Term, sepa: &str, ac: &AcSyms) -> WfDoc {
+    let head = wf_funsym_key(t, ac);
+    let mut flat: Vec<&Term> = Vec::new();
+    flatten_ac(head, t, &mut flat, ac);
+    flat.sort_by(|a, b| cmp_wf_term(a, b, ac));
+    WfDoc::Terms {
+        lead: "(".to_string(),
+        sep: sepa.to_string(),
+        finish: ")".to_string(),
+        items: flat.iter().map(|a| wf_term_doc(a, ac)).collect(),
+    }
+}
+
+/// HS `prettyTerm` (Term/Term.hs:298-327) over a parser-AST term: the
+/// skeleton whose break points HS's `fsep`/`fcat` own.
+fn wf_term_doc(t: &Term, ac: &AcSyms) -> WfDoc {
     use Term::*;
+    let t = ac_collapse(t, ac);
+    // HS `prettyTerm` matches `FApp (AC (ACfct (f, _))) ts` BEFORE any
+    // builtin-symbol arm (Term/Term.hs:304-305), and the separator is the
+    // symbol name with a space on each side — the same string
+    // `crate::ast::BinOp::AcFct`'s `separator` builds for the infix spelling.
+    if let Some(name) = ac_app_name(t, ac) {
+        return wf_ac_chain_doc(t, &format!(" {name} "), ac);
+    }
+    // The leaves HS renders with a single `text` — no break point inside.
+    let leaf = |s: String| WfDoc::Text(s);
     match t {
         Var(v) => {
-            out.push_str(sort_prefix(&v.sort));
-            out.push_str(&v.name);
+            let mut s = String::new();
+            s.push_str(sort_prefix(&v.sort));
+            s.push_str(&v.name);
             if v.idx > 0 {
-                out.push('.');
-                out.push_str(&v.idx.to_string());
+                s.push('.');
+                s.push_str(&v.idx.to_string());
             }
+            leaf(s)
         }
-        PubLit(s) => {
-            out.push('\'');
-            out.push_str(s);
-            out.push('\'');
-        }
-        FreshLit(s) => {
-            out.push_str("~'");
-            out.push_str(s);
-            out.push('\'');
-        }
-        NatLit(s) => {
-            out.push_str("%'");
-            out.push_str(s);
-            out.push('\'');
-        }
-        Number(n) => out.push_str(&n.to_string()),
+        PubLit(s) => leaf(format!("'{s}'")),
+        FreshLit(s) => leaf(format!("~'{s}'")),
+        NatLit(s) => leaf(format!("%'{s}'")),
+        Number(n) => leaf(n.to_string()),
         // HS `prettyTerm` renders the nullary builtins via `text (BC.unpack f)`
         // except natOneSym ("%1"): oneSym → "one", dhNeutralSym → "DH_neutral"
-        // (FunctionSymbols.hs:134-134,137,144; Term.hs:276,278).
-        NumberOne => out.push_str("one"),
-        NatOne => out.push_str("%1"),
-        DhNeutral => out.push_str("DH_neutral"),
-        Pair(items) => {
-            out.push('<');
-            for (i, it) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                pp_wf_term(it, out);
-            }
-            out.push('>');
+        // (FunctionSymbols.hs:255,257,267; Term.hs:312,314).
+        NumberOne => leaf("one".to_string()),
+        NatOne => leaf("%1".to_string()),
+        DhNeutral => leaf("DH_neutral".to_string()),
+        Pair(_) => wf_pair_doc(t, ac),
+        App(name, args) if name == "pair" && args.len() == 2 => wf_pair_doc(t, ac),
+        // `em` is HS's sole `C` symbol (`CSym = EMap`,
+        // FunctionSymbols.hs:142-143), and `fAppC nacsym as = FAPP (C nacsym)
+        // (sort as)` (Term/Term/Raw.hs:132-134, see line 134) sorts its
+        // arguments at construction, so `prettyTerm` never sees the written
+        // order.
+        App(name, args) if name == "em" && args.len() == 2 => {
+            let mut sorted: Vec<&Term> = args.iter().collect();
+            sorted.sort_by(|a, b| cmp_wf_term(a, b, ac));
+            WfDoc::Fun(
+                name.clone(),
+                sorted.iter().map(|a| wf_term_doc(a, ac)).collect(),
+            )
         }
-        App(name, args) => {
-            out.push_str(name);
-            if !args.is_empty() {
-                out.push('(');
-                for (i, a) in args.iter().enumerate() {
-                    if i > 0 {
-                        out.push_str(", ");
-                    }
-                    pp_wf_term(a, out);
-                }
-                out.push(')');
-            }
-        }
+        // HS `FApp (NoEq (f,_)) [] -> text f` (Term.hs:314) — a nullary symbol
+        // has no `ppFun` parentheses at all.
+        App(name, args) if args.is_empty() => leaf(name.clone()),
+        App(name, args) => WfDoc::Fun(
+            name.clone(),
+            args.iter().map(|a| wf_term_doc(a, ac)).collect(),
+        ),
+        // HS canonicalises `aenc{m}pk` as `aenc(m, pk)`.
         AlgApp(name, l, r) => {
-            // HS canonicalises `aenc{m}pk` as `aenc(m, pk)`.
-            out.push_str(name);
-            out.push('(');
-            pp_wf_term(l, out);
-            out.push_str(", ");
-            pp_wf_term(r, out);
-            out.push(')');
+            WfDoc::Fun(name.clone(), vec![wf_term_doc(l, ac), wf_term_doc(r, ac)])
         }
-        Diff(l, r) => {
-            out.push_str("diff(");
-            pp_wf_term(l, out);
-            out.push_str(", ");
-            pp_wf_term(r, out);
-            out.push(')');
-        }
+        // HS `prettyTerm`'s diff arm (Term.hs:311) joins with `<>`, not the
+        // breakable `fsep` `ppFun` uses.
+        Diff(l, r) => WfDoc::Beside(vec![
+            WfDoc::Text("diff(".to_string()),
+            wf_term_doc(l, ac),
+            WfDoc::Text(", ".to_string()),
+            wf_term_doc(r, ac),
+            WfDoc::Text(")".to_string()),
+        ]),
         BinOp(op, l, r) => {
-            use crate::ast::BinOp as B;
-            let sym = match op {
-                B::Exp => "^",
-                B::Mult => "*",
-                B::Union => "++",
-                B::Xor => "\u{2295}",
-                B::NatPlus => "%+",
-            };
-            // HS builds AC operators (Mult/Union/Xor/NatPlus) via `fAppAC`,
-            // which flattens the chain, sorts the operands (Ord LTerm), and
-            // renders them parenthesised by `prettyTerm` (e.g. `(%x%+%1%+%1)`).
-            // Exp is NOT AC: rendered binary, no surrounding parens.
-            if matches!(op, B::Mult | B::Union | B::Xor | B::NatPlus) {
-                let mut flat: Vec<&Term> = Vec::new();
-                flatten_ac(*op, t, &mut flat);
-                flat.sort_by(|a, b| cmp_wf_term(a, b));
-                out.push('(');
-                for (i, a) in flat.iter().enumerate() {
-                    if i > 0 {
-                        out.push_str(sym);
-                    }
-                    pp_wf_term(a, out);
-                }
-                out.push(')');
+            let sym = op.separator();
+            // HS builds AC operators (Mult/Union/Xor/NatPlus and the
+            // user-declared `[AC]` symbols) via `fAppAC`, which flattens the
+            // chain, sorts the operands (Ord LTerm), and renders them
+            // parenthesised by `prettyTerm` (e.g. `(%x%+%1%+%1)`).
+            // Exp is NOT AC: rendered binary with `<>`, no surrounding parens.
+            if is_ac_binop(op) {
+                wf_ac_chain_doc(t, &sym, ac)
             } else {
-                pp_wf_term(l, out);
-                out.push_str(sym);
-                pp_wf_term(r, out);
+                WfDoc::Beside(vec![
+                    wf_term_doc(l, ac),
+                    WfDoc::Text(sym.into_owned()),
+                    wf_term_doc(r, ac),
+                ])
             }
         }
         PatMatch(inner) => {
-            out.push('=');
-            pp_wf_term(inner, out);
+            WfDoc::Beside(vec![WfDoc::Text("=".to_string()), wf_term_doc(inner, ac)])
         }
     }
 }
@@ -689,15 +1011,111 @@ fn subst_let_term(t: &Term, key: &Term, val: &Term) -> Term {
     }
 }
 
-/// Flatten an AC `BinOp` chain (same operator) into its operand list,
-/// mirroring HS `fAppAC`'s flatten-then-sort (Term/Term/Raw.hs:118-128).
-fn flatten_ac<'a>(op: crate::ast::BinOp, t: &'a Term, out: &mut Vec<&'a Term>) {
-    match t {
-        Term::BinOp(inner, l, r) if *inner == op => {
-            flatten_ac(op, l, out);
-            flatten_ac(op, r, out);
+/// The names whose PREFIX application denotes a user-declared `[AC]` symbol.
+///
+/// HS carries this information in the signature: `functions: add/2 [AC]`
+/// registers an `ACfctUser` symbol
+/// (Theory/Text/Parser/Signature.hs:219-222, see line 221), and `lookupArity`
+/// resolves a prefix application by a list lookup over
+/// `S.toList (userDefinedFunSyms maudeSig)` in which every `NoEqUser` sorts
+/// before every `ACfctUser` (Theory/Text/Parser/Term.hs:62-72,
+/// Term/Term/FunctionSymbols.hs:146-147).  A name that is ALSO a `NoEq`
+/// symbol of the full signature therefore resolves to the `NoEq` symbol and
+/// is NOT in this set; only the remaining `[AC]` names build
+/// `FAPP (AC (ACfct …))` from the prefix spelling.  (The INFIX spelling is
+/// always the AC symbol — HS `acterm`, Term.hs:165-174 — which the AST
+/// records as [`BinOp::AcFct`], classified by shape, not via this set.)
+/// The parser AST has no signature, so the wellformedness printers
+/// reconstruct the set from the theory's own `functions:` and `builtins:`
+/// declarations — the same declarations HS reads.
+type AcSyms = BTreeSet<String>;
+
+/// The `[AC]`-attributed function symbols declared by `thy` (HS
+/// `stACFunSyms . sig`, Theory/Text/Parser/Term.hs:165-174), minus the names
+/// that are also `NoEq` symbols of the full signature — see [`AcSyms`].  The
+/// `NoEq` side is the non-`[AC]` `functions:` declarations, each enabled
+/// builtin's contribution ([`crate::parser::builtin_noeq_sym_names`]), and
+/// the always-present pair signature (`minimalMaudeSig` is `pairFunSig` —
+/// `pair`/`fst`/`snd` — Term/Maude/Signature.hs:224-226).
+fn user_ac_fun_names(thy: &Theory) -> AcSyms {
+    let mut ac = AcSyms::new();
+    let mut noeq: BTreeSet<&str> = ["pair", "fst", "snd"].into_iter().collect();
+    for it in &thy.items {
+        match it {
+            TheoryItem::Functions(decls) => {
+                for d in decls {
+                    if d.ac {
+                        ac.insert(d.name.clone());
+                    } else {
+                        noeq.insert(d.name.as_str());
+                    }
+                }
+            }
+            TheoryItem::Builtins(names) => {
+                for n in names {
+                    noeq.extend(crate::parser::builtin_noeq_sym_names(n));
+                }
+            }
+            _ => {}
         }
-        _ => out.push(t),
+    }
+    ac.retain(|n| !noeq.contains(n.as_str()));
+    ac
+}
+
+/// The symbol name when `t` is an application of a user-declared `[AC]`
+/// symbol, i.e. HS's `FAPP (AC (ACfct …)) ts`.
+///
+/// HS `naryOpApp` (Theory/Text/Parser/Term.hs:88-105, see line 105) builds
+/// `fAppAC (ACfct …) ts` for an `IsAC` symbol, and its arity check is guarded
+/// on `NotAC` (line 98), so `add(p, q, r)` is a legal ternary AC application.
+/// One-argument applications are excluded because [`ac_collapse`] has already
+/// replaced them by their argument.
+fn ac_app_name<'a>(t: &'a Term, ac: &AcSyms) -> Option<&'a str> {
+    match t {
+        Term::App(n, args) if args.len() >= 2 && ac.contains(n.as_str()) => Some(n.as_str()),
+        _ => None,
+    }
+}
+
+/// HS `fAppAC _ [a] = a` (Term/Term/Raw.hs:118-129, see line 121): a
+/// one-argument AC application IS its argument, so `add(x)` is the term `x`
+/// and carries no `add` node at all.
+fn ac_collapse<'a>(t: &'a Term, ac: &AcSyms) -> &'a Term {
+    let mut t = t;
+    while let Term::App(n, args) = t {
+        if args.len() == 1 && ac.contains(n.as_str()) {
+            t = &args[0];
+        } else {
+            break;
+        }
+    }
+    t
+}
+
+/// The direct operands of an AC-headed term — the `ts` of HS's
+/// `FAPP (AC …) ts`, before [`flatten_ac`] merges same-head nesting.
+fn ac_operands(t: &Term) -> Vec<&Term> {
+    match t {
+        Term::BinOp(_, l, r) => vec![l, r],
+        Term::App(_, args) => args.iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Flatten an AC chain headed by the [`wf_funsym_key`] `head` into its operand
+/// list, mirroring HS `fAppAC`'s flatten-then-sort (Term/Term/Raw.hs:118-129).
+/// Both AC spellings feed the same spine: the builtin operators parse to
+/// `BinOp` and a user `[AC]` symbol to `App`, and HS's `fAppAC` hoists the
+/// arguments of every same-head child whichever way it was written.
+fn flatten_ac<'a>(head: (u8, &str, usize), t: &'a Term, out: &mut Vec<&'a Term>, ac: &AcSyms) {
+    let t = ac_collapse(t, ac);
+    if wf_funsym_key(t, ac) == head {
+        for child in ac_operands(t) {
+            flatten_ac(head, child, out, ac);
+        }
+    } else {
+        out.push(t);
     }
 }
 
@@ -707,45 +1125,56 @@ fn flatten_ac<'a>(op: crate::ast::BinOp, t: &'a Term, out: &mut Vec<&'a Term>) {
 /// `LIT _ < FAPP _ _`, and within `LIT`, `Con < Var`, with constant Names
 /// ordered by NameTag (Fresh < Pub < Nat, LTerm.hs:215-216).  The nullary
 /// builtins `1`/`%1`/`DH-neutral` are `fAppNoEq … []` so they live in the
-/// FAPP class.  Within a class we fall back to a structural tie-break that
-/// is enough for the AC operand lists that arise here.
-fn cmp_wf_term(a: &Term, b: &Term) -> std::cmp::Ordering {
-    fn class(t: &Term) -> (u8, u8) {
-        use Term::*;
-        match t {
-            // LIT (Con name): constants, by NameTag Fresh<Pub<Nat.
-            FreshLit(_) => (0, 0),
-            PubLit(_) => (0, 1),
-            NatLit(_) => (0, 2),
-            Number(_) => (0, 3),
-            // LIT (Var v): variables sort after all constants.
-            Var(_) => (0, 4),
-            // FAPP: nullary builtins are NoEq applications, not literals.
-            NumberOne => (1, 0),
-            NatOne => (1, 1),
-            DhNeutral => (1, 2),
-            App(..) => (1, 3),
-            AlgApp(..) => (1, 4),
-            Pair(_) => (1, 5),
-            Diff(..) => (1, 6),
-            BinOp(..) => (1, 7),
-            PatMatch(_) => (1, 8),
-        }
-    }
-    let (ca, sa) = class(a);
-    let (cb, sb) = class(b);
+/// FAPP class.
+///
+/// Two FAPP terms compare by their `FunSym` first and only then by the
+/// argument list, exactly as the derived `Ord (Term a)` does — so the FAPP
+/// order is NAME-based, not Rust-variant-based (HS sorts `exp(a,b)` before
+/// `pair(a,b)` because `"exp" < "pair"`).  [`wf_funsym_key`] carries that key.
+fn cmp_wf_term(a: &Term, b: &Term, ac: &AcSyms) -> std::cmp::Ordering {
+    let a = ac_collapse(a, ac);
+    let b = ac_collapse(b, ac);
+    let (ca, sa) = wf_term_class(a, ac);
+    let (cb, sb) = wf_term_class(b, ac);
     if ca != cb {
         return ca.cmp(&cb);
+    }
+    if ca == 1 {
+        // FAPP class: `compare fsym` then `compare ts` (Term/Term/Raw.hs:72-74,
+        // see line 74).
+        let ka = wf_funsym_key(a, ac);
+        let kb = wf_funsym_key(b, ac);
+        let key =
+            ka.0.cmp(&kb.0)
+                .then_with(|| ka.1.cmp(kb.1))
+                .then_with(|| ka.2.cmp(&kb.2));
+        if key != std::cmp::Ordering::Equal {
+            return key;
+        }
+        // Same FunSym.  An AC head stores its arguments flattened and sorted
+        // (HS `fAppAC`, Term/Term/Raw.hs:118-131, see line 122), so its operand
+        // list is the sorted multiset rather than the parser's binary tree.
+        if ka.0 == 1 {
+            let mut fa: Vec<&Term> = Vec::new();
+            let mut fb: Vec<&Term> = Vec::new();
+            flatten_ac(ka, a, &mut fa, ac);
+            flatten_ac(kb, b, &mut fb, ac);
+            fa.sort_by(|x, y| cmp_wf_term(x, y, ac));
+            fb.sort_by(|x, y| cmp_wf_term(x, y, ac));
+            return cmp_term_refs(&fa, &fb, ac);
+        }
+        return cmp_term_slices(&hs_fapp_args(a, ac), &hs_fapp_args(b, ac), ac);
     }
     if sa != sb {
         return sa.cmp(&sb);
     }
     use Term::*;
-    // `class` maps every variant to a unique `(class, subclass)`, so the two
-    // early returns above guarantee `a` and `b` are the same variant and each
-    // `let … else` binding of `b` is infallible.  Match `a` exhaustively (no
-    // wildcard) so a new `Term` variant forces an ordering decision here.  The
-    // nullary FAPP builtins carry no payload, so same-variant pairs are `Equal`.
+    // LIT class only — the FAPP variants have already returned above.
+    // `wf_term_class` gives each LIT variant a unique sub-tag, so the early
+    // return above leaves `a` and `b` the same variant and each `let … else`
+    // binding of `b` is infallible.  A new `Term` variant must still declare
+    // itself in `wf_term_class`, `wf_funsym_key` and `hs_fapp_args`, none of
+    // which has a wildcard arm.
     match a {
         Var(v1) => {
             let Var(v2) = b else {
@@ -781,67 +1210,131 @@ fn cmp_wf_term(a: &Term, b: &Term) -> std::cmp::Ordering {
             };
             n1.cmp(n2)
         }
-        NumberOne => std::cmp::Ordering::Equal,
-        NatOne => std::cmp::Ordering::Equal,
-        DhNeutral => std::cmp::Ordering::Equal,
-        // HS derived `Ord (Term a)` for two FAPP terms compares the FunSym
-        // first (for NoEq this is the function-name ByteString,
-        // FunctionSymbols.hs:106-106,113-117) and then the operand list
-        // element-wise (Term/Term/Raw.hs:72-74).  We approximate that here:
-        // App compares by name then args; the other FAPP classes (already
-        // separated by `class`) compare their operands element-wise.  This
-        // gives a total order on the AC operand lists that arise, rather than
-        // tying distinct complex operands as Equal.
-        App(n1, a1) => {
-            let App(n2, a2) = b else {
-                unreachable!("term class matched App")
-            };
-            n1.cmp(n2).then_with(|| cmp_term_slices(a1, a2))
-        }
-        AlgApp(n1, l1, r1) => {
-            let AlgApp(n2, l2, r2) = b else {
-                unreachable!("term class matched AlgApp")
-            };
-            n1.cmp(n2)
-                .then_with(|| cmp_wf_term(l1, l2))
-                .then_with(|| cmp_wf_term(r1, r2))
-        }
-        Pair(a1) => {
-            let Pair(a2) = b else {
-                unreachable!("term class matched Pair")
-            };
-            cmp_term_slices(a1, a2)
-        }
-        Diff(l1, r1) => {
-            let Diff(l2, r2) = b else {
-                unreachable!("term class matched Diff")
-            };
-            cmp_wf_term(l1, l2).then_with(|| cmp_wf_term(r1, r2))
-        }
-        BinOp(o1, l1, r1) => {
-            let BinOp(o2, l2, r2) = b else {
-                unreachable!("term class matched BinOp")
-            };
-            (*o1 as u8)
-                .cmp(&(*o2 as u8))
-                .then_with(|| cmp_wf_term(l1, l2))
-                .then_with(|| cmp_wf_term(r1, r2))
-        }
-        PatMatch(i1) => {
-            let PatMatch(i2) = b else {
-                unreachable!("term class matched PatMatch")
-            };
-            cmp_wf_term(i1, i2)
-        }
+        _ => std::cmp::Ordering::Equal,
+    }
+}
+
+/// `(class, sub_tag)` for a parser term: class 0 is HS's `LIT`, class 1 its
+/// `FAPP` (`LIT _ < FAPP _ _`, Term/Term/Raw.hs:72-74).  The sub-tag orders
+/// the LIT class only — `Con < Var` (VTerm.hs:56-57) and, among constants, by
+/// `NameTag` (Fresh < Pub < Nat, LTerm.hs:215-216).  FAPP terms are ordered by
+/// [`wf_funsym_key`], so their sub-tag is never consulted.
+fn wf_term_class(t: &Term, ac: &AcSyms) -> (u8, u8) {
+    use Term::*;
+    match ac_collapse(t, ac) {
+        FreshLit(_) => (0, 0),
+        PubLit(_) => (0, 1),
+        NatLit(_) => (0, 2),
+        Number(_) => (0, 3),
+        Var(_) => (0, 4),
+        NumberOne | NatOne | DhNeutral | App(..) | AlgApp(..) | Pair(_) | Diff(..) | BinOp(..)
+        | PatMatch(_) => (1, 0),
+    }
+}
+
+/// HS `FunSym` ordering key `(outer, name, arity)` for a FAPP-class parser
+/// term, mirroring `tamarin_theory::guarded::funsym_key` over the same shapes.
+///
+/// `outer` is the derived `Ord FunSym` constructor order `NoEq(0) < AC(1) <
+/// C(2) < List(3)` (FunctionSymbols.hs:150-154).  Within `NoEq`, `Ord NoEqSym`
+/// compares `(name, arity)` first (FunctionSymbols.hs:132) — so the parser's
+/// dedicated variants key by the HS symbol name they stand for (`pair`, `exp`,
+/// `diff`, `one`, `tone`, `DH_neutral`; FunctionSymbols.hs:222,224,226,229,236,247).
+/// The builtin AC operators carry no name; their `ACSym` order `Union < Mult <
+/// Xor < NatPlus < ACfct` (FunctionSymbols.hs:138-139) rides in the arity slot,
+/// and a user `ACfct` carries the name that `Ord ACfctSym` compares first
+/// (FunctionSymbols.hs:135).
+///
+/// A parser `App` is classified by name+arity because the AST carries no
+/// signature: `em/2` is HS's sole `C` symbol (`CSym = EMap`,
+/// FunctionSymbols.hs:142-143), and `LIST` never has source syntax.  An `App`
+/// of a user-declared `[AC]` name is the `ACfct` case, which HS's `Ord`
+/// reaches through `AC`, not `NoEq` — it is tested first because HS resolves
+/// the name against the signature before any builtin-symbol identity holds.
+fn wf_funsym_key<'a>(t: &'a Term, ac: &AcSyms) -> (u8, &'a str, usize) {
+    use Term::*;
+    let t = ac_collapse(t, ac);
+    if let Some(n) = ac_app_name(t, ac) {
+        return (1, n, 4);
+    }
+    match t {
+        Pair(_) => (0, "pair", 2),
+        BinOp(crate::ast::BinOp::Exp, _, _) => (0, "exp", 2),
+        Diff(..) => (0, "diff", 2),
+        NumberOne => (0, "one", 0),
+        NatOne => (0, "tone", 0),
+        DhNeutral => (0, "DH_neutral", 0),
+        App(n, args) if n == "em" && args.len() == 2 => (2, "", 0),
+        App(n, args) => (0, n.as_str(), args.len()),
+        AlgApp(n, _, _) => (0, n.as_str(), 2),
+        BinOp(o, _, _) => binop_rank(o),
+        // `=t` is SAPIC pattern-match syntax with no HS term counterpart.
+        PatMatch(_) => (255, "", 0),
+        // LIT-class terms never reach here.
+        Var(_) | PubLit(_) | FreshLit(_) | NatLit(_) | Number(_) => (254, "", 0),
+    }
+}
+
+/// The positional argument list HS's `Term` carries for a FAPP-class parser
+/// term.  `Pair` is the only variant whose parser shape differs from HS's: the
+/// AST holds `<a, b, c>` flat, while HS builds the right-nested
+/// `pair(a, pair(b, c))` that `prettyTerm`'s `split` walks back out
+/// (Term/Term.hs:313,323-324), so the tail is re-nested here.
+fn hs_fapp_args(t: &Term, ac: &AcSyms) -> Vec<Term> {
+    use Term::*;
+    match ac_collapse(t, ac) {
+        App(_, x) => x.clone(),
+        Pair(x) if x.len() > 2 => vec![x[0].clone(), Pair(x[1..].to_vec())],
+        Pair(x) => x.clone(),
+        AlgApp(_, l, r) | Diff(l, r) | BinOp(_, l, r) => vec![(**l).clone(), (**r).clone()],
+        PatMatch(x) => vec![(**x).clone()],
+        NumberOne | NatOne | DhNeutral => Vec::new(),
+        Var(_) | PubLit(_) | FreshLit(_) | NatLit(_) | Number(_) => Vec::new(),
+    }
+}
+
+/// Which `BinOp`s are AC?  Mult, Union, Xor, NatPlus and the user-declared
+/// `[AC]` symbols are the `ACSym` constructors (FunctionSymbols.hs:138-139);
+/// `Exp` is the `NoEq` symbol `exp` (FunctionSymbols.hs:251).
+fn is_ac_binop(o: &BinOp) -> bool {
+    matches!(
+        o,
+        BinOp::Mult | BinOp::Union | BinOp::Xor | BinOp::NatPlus | BinOp::AcFct(_)
+    )
+}
+
+/// [`wf_funsym_key`] for a `BinOp` head, split out because
+/// `binop_rank_matches_funsym_key_order` pins it against
+/// `tamarin_theory::guarded::funsym_key`, which is the source of truth for
+/// this order (`tamarin-parser` is dependency-free and cannot call it).
+fn binop_rank(o: &BinOp) -> (u8, &str, usize) {
+    match o {
+        BinOp::Exp => (0, "exp", 2),
+        BinOp::Union => (1, "", 0),
+        BinOp::Mult => (1, "", 1),
+        BinOp::Xor => (1, "", 2),
+        BinOp::NatPlus => (1, "", 3),
+        BinOp::AcFct(n) => (1, n, 4),
     }
 }
 
 /// Lexicographic comparison of two operand lists by `cmp_wf_term`, with the
 /// shorter list ordering first on a common prefix (matching Haskell's derived
 /// `Ord [a]`).
-fn cmp_term_slices(a: &[Term], b: &[Term]) -> std::cmp::Ordering {
+fn cmp_term_slices(a: &[Term], b: &[Term], ac: &AcSyms) -> std::cmp::Ordering {
     for (x, y) in a.iter().zip(b.iter()) {
-        let o = cmp_wf_term(x, y);
+        let o = cmp_wf_term(x, y, ac);
+        if o != std::cmp::Ordering::Equal {
+            return o;
+        }
+    }
+    a.len().cmp(&b.len())
+}
+
+/// [`cmp_term_slices`] over borrowed operands (the flattened AC arg lists).
+fn cmp_term_refs(a: &[&Term], b: &[&Term], ac: &AcSyms) -> std::cmp::Ordering {
+    for (x, y) in a.iter().zip(b.iter()) {
+        let o = cmp_wf_term(x, y, ac);
         if o != std::cmp::Ordering::Equal {
             return o;
         }
@@ -889,6 +1382,11 @@ fn is_msg_sort_or_untagged(s: &SortHint) -> bool {
 
 fn is_pub_sort(s: &SortHint) -> bool {
     matches!(s, SortHint::Pub | SortHint::Suffix(SuffixSort::Pub))
+}
+
+/// True if a sort hint indicates a node- (temporal-) sort variable.
+fn is_node_sort(s: &SortHint) -> bool {
+    matches!(s, SortHint::Node | SortHint::Suffix(SuffixSort::Node))
 }
 
 fn is_nat_sort(s: &SortHint) -> bool {
@@ -948,6 +1446,7 @@ pub fn reserved_report(thy: &Theory) -> WfReport {
 const KLOG_NAMES: &[&str] = &["KU", "KD", "K"];
 
 pub fn reserved_fact_name_rules(thy: &Theory) -> WfReport {
+    let ac = user_ac_fun_names(thy);
     let mut out = Vec::new();
     for r in theory_rules(thy) {
         // HS checks the let-substituted `ProtoRuleE`, so the emitted facts
@@ -982,18 +1481,18 @@ pub fn reserved_fact_name_rules(thy: &Theory) -> WfReport {
                 // grouped/nested by `prettyWfErrorReport` (text topic $-$
                 // nest 2 body): the rule line gets 2-space indent, the fact
                 // line 4-space (2 from ppTopic + 2 from the inner nest 2).
-                let facts: Vec<String> = fs.iter().map(|f| pp_wf_fact(f)).collect();
+                let facts: Vec<WfDoc> = fs.iter().map(|f| wf_fact_doc(f, &ac)).collect();
                 // Headerless body (no trailing newline); `format_wf_block`
                 // emits the single "Reserved names" header for the group and
                 // joins per-rule/side bodies with the 2-space blank separator.
-                let mut s = String::new();
-                s.push_str(&format!(
-                    "  Rule `{}' contains facts with reserved names {}:\n",
-                    r.name, msg,
+                out.push(WfError::filled(
+                    "Reserved names",
+                    format!(
+                        "Rule `{}' contains facts with reserved names {}:",
+                        r.name, msg
+                    ),
+                    facts,
                 ));
-                s.push_str("    ");
-                s.push_str(&facts.join(", "));
-                out.push(WfError::new("Reserved names", s));
             }
         }
     }
@@ -1018,10 +1517,9 @@ pub fn reserved_prefix_report(thy: &Theory) -> WfReport {
     // width) and `show factInfo` of the `(tag, arity, multiplicity)` tuple —
     // neither reproducible in the parser crate (the HughesPJ renderer lives in
     // `tamarin-theory`).  This check produces NO output on any corpus input, so
-    // per the module-header disclaimer (only the topic string is guaranteed
-    // byte-faithful) we emit a topic-faithful best-effort body and use the HS
-    // `quote` form for the rule name.  topic "Reserved prefixes" matches HS
-    // `underlineTopic`.
+    // per the module-header disclaimer it is one of the two that emit only a
+    // topic-faithful best-effort body; it uses the HS `quote` form for the rule
+    // name, and topic "Reserved prefixes" matches HS `underlineTopic`.
     let mut out = Vec::new();
     if !thy.is_diff {
         return out;
@@ -1048,6 +1546,7 @@ pub fn reserved_prefix_report(thy: &Theory) -> WfReport {
 // =============================================================================
 
 pub fn special_facts_usage(thy: &Theory) -> WfReport {
+    let ac = user_ac_fun_names(thy);
     let mut out = Vec::new();
     for r in theory_rules(thy) {
         // HS `specialFactsUsage'` (Wellformedness.hs:553-566) reads
@@ -1072,18 +1571,15 @@ pub fn special_facts_usage(thy: &Theory) -> WfReport {
                 // grouped/nested by `prettyWfErrorReport` exactly like the
                 // "Reserved names" sibling.  Note HS uses lowercase `"rule "`
                 // here (vs capital `"Rule "` for reserved names).
-                let facts: Vec<String> = fs.iter().map(|f| pp_wf_fact(f)).collect();
+                let facts: Vec<WfDoc> = fs.iter().map(|f| wf_fact_doc(f, &ac)).collect();
                 // Headerless body (no trailing newline); `format_wf_block`
                 // emits the single "Special facts" header for the group and
                 // joins per-rule/side bodies with the 2-space blank separator.
-                let mut s = String::new();
-                s.push_str(&format!(
-                    "  rule `{}' uses disallowed facts {}:\n",
-                    r.name, msg,
+                out.push(WfError::filled(
+                    "Special facts",
+                    format!("rule `{}' uses disallowed facts {}:", r.name, msg),
+                    facts,
                 ));
-                s.push_str("    ");
-                s.push_str(&facts.join(", "));
-                out.push(WfError::new("Special facts", s));
             }
         }
     }
@@ -1094,28 +1590,8 @@ pub fn special_facts_usage(thy: &Theory) -> WfReport {
 // Fr facts must use a fresh- or msg-variable
 // =============================================================================
 
-/// Compact term pretty-printer for wf error messages.  Matches HS's
-/// `Theory.Tools.Wellformedness` rendering of variable sorts:
-///   `$name`  — public, `~name` — fresh, `#name` — node, `%name` — nat,
-///   bare `name` for msg-sorted or untagged variables.  Function
-///   applications use `f(arg, ...)` form.
-fn pp_term_short(t: &Term) -> String {
-    match t {
-        Term::Var(v) => {
-            format!("{}{}", sort_prefix(&v.sort), v.name)
-        }
-        Term::App(name, args) => {
-            let parts: Vec<String> = args.iter().map(pp_term_short).collect();
-            format!("{}({})", name, parts.join(", "))
-        }
-        Term::PubLit(s) => format!("'{}'", s),
-        // Fall back to the shared prettyLNTerm-style printer rather than Rust's
-        // derived Debug (which would leak `App("h", [Var(VarSpec{..})])`).
-        _ => pp_term_for_wf(t),
-    }
-}
-
 pub fn fresh_fact_arguments(thy: &Theory) -> WfReport {
+    let ac = user_ac_fun_names(thy);
     let mut out = Vec::new();
     for r in theory_rules(thy) {
         for f in &r.premises {
@@ -1134,9 +1610,13 @@ pub fn fresh_fact_arguments(thy: &Theory) -> WfReport {
                 _ => false,
             };
             if !ok {
+                // HS `freshFactArguments'` (Wellformedness.hs:569-576, see
+                // line 576) renders the WHOLE fact with `prettyLNFact`, so the
+                // argument carries `prettyLVar`'s `.idx` suffix and
+                // `prettyTerm`'s AC canonicalisation.
                 out.push(WfError::new(
                     "Fr facts must only use a fresh- or a msg-variable",
-                    format!("rule `{}' fact: Fr( {} )", r.name, pp_term_short(arg)),
+                    format!("rule `{}' fact: {}", r.name, pp_wf_fact(f, &ac)),
                 ));
             }
         }
@@ -1163,6 +1643,7 @@ struct FactObservation {
 }
 
 fn collect_fact_observations(thy: &Theory) -> Vec<FactObservation> {
+    let ac = user_ac_fun_names(thy);
     // HS `theoryFacts` (Wellformedness.hs:597-607): rule facts (E rules) then
     // lemma-formula facts.  (AC-rule facts only differ for non-trivial-variant
     // rules and never introduce a new arity/cap clash, so we omit them.)
@@ -1183,7 +1664,7 @@ fn collect_fact_observations(thy: &Theory) -> Vec<FactObservation> {
                 name: f.name.clone(),
                 arity: f.args.len(),
                 persistent: f.persistent,
-                pp: pp_wf_fact(f),
+                pp: pp_wf_fact(f, &ac),
             });
         }
     }
@@ -1198,10 +1679,11 @@ fn collect_fact_observations(thy: &Theory) -> Vec<FactObservation> {
 /// `show` of `Fact (VTerm Name (BVar LVar))` — `Fact {factTag = ProtoFact
 /// Linear "X" n, factAnnotations = fromList [], factTerms = [Bound i, ...]}`.
 fn lemma_fact_observations(thy: &Theory) -> Vec<FactObservation> {
+    let ac = user_ac_fun_names(thy);
     let mut out = Vec::new();
     for l in theory_lemmas(thy) {
         let mut facts: Vec<(Fact, Vec<String>)> = Vec::new();
-        collect_formula_facts(&l.formula, &mut Vec::new(), &mut facts);
+        collect_formula_facts(&l.formula, &mut Vec::new(), &ac, &mut facts);
         for (fa, dbterms) in facts {
             // HS show of the Fact: see `show_debruijn_fact`.
             let pp = show_debruijn_fact(&fa, &dbterms);
@@ -1224,6 +1706,7 @@ fn lemma_fact_observations(thy: &Theory) -> Vec<FactObservation> {
 fn collect_formula_facts<'a>(
     f: &'a Formula,
     binders: &mut Vec<&'a VarSpec>,
+    ac: &AcSyms,
     out: &mut Vec<(Fact, Vec<String>)>,
 ) {
     match f {
@@ -1231,22 +1714,22 @@ fn collect_formula_facts<'a>(
             let terms = fa
                 .args
                 .iter()
-                .map(|t| show_debruijn_term(t, binders))
+                .map(|t| show_debruijn_term(t, binders, ac))
                 .collect();
             out.push((fa.clone(), terms));
         }
         Formula::Atom(_) | Formula::True | Formula::False => {}
-        Formula::Not(a) => collect_formula_facts(a, binders, out),
+        Formula::Not(a) => collect_formula_facts(a, binders, ac, out),
         Formula::And(a, b) | Formula::Or(a, b) | Formula::Implies(a, b) | Formula::Iff(a, b) => {
-            collect_formula_facts(a, binders, out);
-            collect_formula_facts(b, binders, out);
+            collect_formula_facts(a, binders, ac, out);
+            collect_formula_facts(b, binders, ac, out);
         }
         Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
             let n = vars.len();
             for v in vars {
                 binders.push(v);
             }
-            collect_formula_facts(body, binders, out);
+            collect_formula_facts(body, binders, ac, out);
             for _ in 0..n {
                 binders.pop();
             }
@@ -1254,78 +1737,155 @@ fn collect_formula_facts<'a>(
     }
 }
 
-/// HS `show` of a `VTerm Name (BVar LVar)` (Term Show: `Lit l -> show l`,
-/// `FApp s as -> s(...)`, Term/Raw.hs:219-227; Lit Show: `Var v -> show v`,
-/// `Con n -> show n`, VTerm.hs:98-100; BVar `Bound i`/`Free v` derived).
-fn show_debruijn_term(t: &Term, binders: &[&VarSpec]) -> String {
-    match t {
-        Term::Var(v) => {
-            // Nearest (innermost) matching binder → Bound n; else Free.
-            for (pos, b) in binders.iter().enumerate().rev() {
-                if b.name == v.name && sort_tag(&b.sort) == sort_tag(&v.sort) && b.idx == v.idx {
-                    return format!("Bound {}", binders.len() - 1 - pos);
-                }
-            }
-            format!("Free {}", render_var(v))
+/// The De Bruijn index of the innermost binder `v` refers to, or `None` when
+/// `v` is free.
+///
+/// HS binds a use to its binder by full `LVar` equality — name AND sort AND
+/// idx (`quantify x = … | v == x = Bound i`, Formula.hs:347-351;
+/// `Eq LVar`, LTerm.hs:541-542).
+fn db_index(v: &VarSpec, binders: &[&VarSpec]) -> Option<usize> {
+    binders.iter().enumerate().rev().find_map(|(pos, b)| {
+        (b.name == v.name && sort_tag(&b.sort) == sort_tag(&v.sort) && b.idx == v.idx)
+            .then(|| binders.len() - 1 - pos)
+    })
+}
+
+/// [`wf_term_class`] refined for the De Bruijn form: a variable use is a
+/// `BVar`, and `Bound _ < Free _` (LTerm.hs:476-478) splits the single `Var`
+/// sub-tag in two.
+fn db_term_class(t: &Term, binders: &[&VarSpec], ac: &AcSyms) -> (u8, u8) {
+    match ac_collapse(t, ac) {
+        Term::Var(v) if db_index(v, binders).is_none() => (0, 5),
+        other => wf_term_class(other, ac),
+    }
+}
+
+/// [`cmp_wf_term`] over terms whose variables have been resolved to De
+/// Bruijn form.
+///
+/// The lemma-formula terms HS sorts are `VTerm Name (BVar LVar)`, not
+/// `LNTerm`: `quantify` rewrites a free variable to `Bound i` through
+/// `mapLits` (Formula.hs:288-291,347-351), which rebuilds every node with
+/// `fApp` and so re-sorts it, and the outermost binder's pass runs last over
+/// the fully-bound term.  So the operand order is the one `Bound _ < Free _`
+/// induces, NOT the `LVar` order [`cmp_wf_term`] uses.
+fn cmp_db_term(a: &Term, b: &Term, binders: &[&VarSpec], ac: &AcSyms) -> std::cmp::Ordering {
+    let a = ac_collapse(a, ac);
+    let b = ac_collapse(b, ac);
+    let (ca, sa) = db_term_class(a, binders, ac);
+    let (cb, sb) = db_term_class(b, binders, ac);
+    if ca != cb {
+        return ca.cmp(&cb);
+    }
+    if ca == 1 {
+        // FAPP class: `compare fsym` then `compare ts` (Term/Term/Raw.hs:72-74).
+        let ka = wf_funsym_key(a, ac);
+        let kb = wf_funsym_key(b, ac);
+        let key =
+            ka.0.cmp(&kb.0)
+                .then_with(|| ka.1.cmp(kb.1))
+                .then_with(|| ka.2.cmp(&kb.2));
+        if key != std::cmp::Ordering::Equal {
+            return key;
         }
+        let xa = db_fapp_args(a, binders, ac);
+        let xb = db_fapp_args(b, binders, ac);
+        for (x, y) in xa.iter().zip(xb.iter()) {
+            let o = cmp_db_term(x, y, binders, ac);
+            if o != std::cmp::Ordering::Equal {
+                return o;
+            }
+        }
+        return xa.len().cmp(&xb.len());
+    }
+    if sa != sb {
+        return sa.cmp(&sb);
+    }
+    if sa == 4 {
+        // Both bound: `Bound Integer` compares by index.
+        if let (Term::Var(v1), Term::Var(v2)) = (a, b) {
+            return db_index(v1, binders).cmp(&db_index(v2, binders));
+        }
+    }
+    // Free variables and the constant literals order exactly as they do
+    // outside a formula.
+    cmp_wf_term(a, b, ac)
+}
+
+/// The argument list HS's `Term` carries for a FAPP-class term of a lemma
+/// formula: [`hs_fapp_args`], canonicalised the way the smart constructors
+/// do it (Term/Term/Raw.hs:118-134) — an `AC` head flattens its same-head
+/// children and sorts, a `C` head (`em`) only sorts.
+fn db_fapp_args(t: &Term, binders: &[&VarSpec], ac: &AcSyms) -> Vec<Term> {
+    let t = ac_collapse(t, ac);
+    let key = wf_funsym_key(t, ac);
+    match key.0 {
+        1 => {
+            let mut flat: Vec<&Term> = Vec::new();
+            flatten_ac(key, t, &mut flat, ac);
+            let mut args: Vec<Term> = flat.into_iter().cloned().collect();
+            args.sort_by(|x, y| cmp_db_term(x, y, binders, ac));
+            args
+        }
+        2 => {
+            let mut args = hs_fapp_args(t, ac);
+            args.sort_by(|x, y| cmp_db_term(x, y, binders, ac));
+            args
+        }
+        _ => hs_fapp_args(t, ac),
+    }
+}
+
+/// The head name HS's `Show (Term a)` prints for a FAPP-class parser term
+/// (Term/Term/Raw.hs:227-237).  It is [`wf_funsym_key`]'s name everywhere a
+/// `FunSym` carries one; the builtin `ACSym`s print their derived
+/// constructor name instead, and the sole `CSym` prints `emapSymString`
+/// (FunctionSymbols.hs:242).
+fn show_debruijn_head<'a>(t: &'a Term, ac: &AcSyms) -> &'a str {
+    use crate::ast::BinOp as B;
+    match t {
+        Term::BinOp(B::Mult, _, _) => "Mult",
+        Term::BinOp(B::Union, _, _) => "Union",
+        Term::BinOp(B::Xor, _, _) => "Xor",
+        Term::BinOp(B::NatPlus, _, _) => "NatPlus",
+        Term::App(n, args) if n == "em" && args.len() == 2 => "em",
+        _ => wf_funsym_key(t, ac).1,
+    }
+}
+
+/// HS `show` of a `VTerm Name (BVar LVar)` (Term Show: `Lit l -> show l`,
+/// `FApp s as -> s(...)`, Term/Term/Raw.hs:227-237; Lit Show: `Var v -> show v`,
+/// `Con n -> show n`, VTerm.hs:98-100; BVar `Bound i`/`Free v` derived).
+fn show_debruijn_term(t: &Term, binders: &[&VarSpec], ac: &AcSyms) -> String {
+    let t = ac_collapse(t, ac);
+    match t {
+        Term::Var(v) => match db_index(v, binders) {
+            Some(i) => format!("Bound {}", i),
+            None => format!("Free {}", render_var(v)),
+        },
         Term::PubLit(s) => format!("'{}'", s),
         Term::FreshLit(s) => format!("~'{}'", s),
         Term::NatLit(s) => format!("%'{}'", s),
-        Term::App(name, args) if args.is_empty() => name.clone(),
-        Term::App(name, args) => format!(
-            "{}({})",
-            name,
-            args.iter()
-                .map(|a| show_debruijn_term(a, binders))
-                .collect::<Vec<_>>()
-                .join(",")
-        ),
-        Term::Pair(items) => format!(
-            "pair({})",
-            items
-                .iter()
-                .map(|a| show_debruijn_term(a, binders))
-                .collect::<Vec<_>>()
-                .join(",")
-        ),
-        // Remaining `FApp` forms in HS `show` (Term/Raw.hs:219-227):
-        // `FApp (NoEq (s,_)) as -> s ++ "(" ++ intercalate "," (map show as) ++ ")"`
-        // and `FApp (AC o) as -> show o ++ "(" ++ ... ++ ")"` (show ACSym is the
-        // derived constructor name "Mult"/"Union"/"Xor"/"NatPlus").  Nullary
-        // builtins show via their symbol string.  Rendered explicitly here
-        // rather than via Rust's derived Debug.
-        Term::AlgApp(name, a, b) => format!(
-            "{}({},{})",
-            name,
-            show_debruijn_term(a, binders),
-            show_debruijn_term(b, binders)
-        ),
-        Term::Diff(a, b) => format!(
-            "diff({},{})",
-            show_debruijn_term(a, binders),
-            show_debruijn_term(b, binders)
-        ),
-        Term::BinOp(op, a, b) => {
-            use crate::ast::BinOp as B;
-            let head = match op {
-                B::Exp => "exp",
-                B::Mult => "Mult",
-                B::Union => "Union",
-                B::Xor => "Xor",
-                B::NatPlus => "NatPlus",
-            };
-            format!(
-                "{}({},{})",
-                head,
-                show_debruijn_term(a, binders),
-                show_debruijn_term(b, binders)
-            )
-        }
-        Term::PatMatch(inner) => show_debruijn_term(inner, binders),
         Term::Number(n) => n.to_string(),
-        Term::NumberOne => "one".to_string(),
-        Term::NatOne => "tone".to_string(),
-        Term::DhNeutral => "DH_neutral".to_string(),
+        // `=t` is SAPIC pattern-match syntax with no HS term counterpart.
+        Term::PatMatch(inner) => show_debruijn_term(inner, binders, ac),
+        // Every remaining variant is a FAPP: `s`, or `s ++ "(" ++
+        // intercalate "," (map show as) ++ ")"`.  `db_fapp_args` supplies the
+        // operand list HS's term carries — right-nested for `<a, b, c>`
+        // (`tupleterm`'s `chainr1`, Theory/Text/Parser/Term.hs:211-212),
+        // flattened and sorted under an AC head, sorted under `em`.
+        _ => {
+            let head = show_debruijn_head(t, ac);
+            let args = db_fapp_args(t, binders, ac);
+            if args.is_empty() {
+                return head.to_string();
+            }
+            let args_s: Vec<String> = args
+                .iter()
+                .map(|a| show_debruijn_term(a, binders, ac))
+                .collect();
+            format!("{}({})", head, args_s.join(","))
+        }
     }
 }
 
@@ -1792,6 +2352,29 @@ fn collect_nullary_fun_names(thy: &Theory) -> BTreeSet<String> {
     out
 }
 
+/// The rendered variable a SAPIC `lookup t as v` combinator binds, for a rule
+/// whose top-level source process IS such a combinator — HS's
+/// `match v (Just (ProcessComb (Lookup _ v') _ _ _)) = v == slvar v'`
+/// (Wellformedness.hs:501-503).  HS pattern-matches the `ruleProcess`
+/// attribute's `Process` value; the parser AST holds that attribute already
+/// rendered, by `prettySapicComb (Lookup t v) = "lookup " ++ p t ++ " as " ++
+/// show v` (Theory/Sapic/Process.hs:473-483, see line 482) — the only
+/// combinator rendering that starts `lookup `, and the only one whose text
+/// ends in a bare `show v`.  `p t` precedes the separator and `show v` is a
+/// single token, so the binder is the text past the LAST ` as `.  Every
+/// user-written rule yields `None`: HS's rule-attribute parser discards a
+/// written `process=` (`parseAndIgnore`, Parser/Rule.hs:68-93, see line 72),
+/// so [`RuleAttr::Process`] exists only on SAPIC-generated rules.
+fn lookup_binder_render(r: &Rule) -> Option<&str> {
+    r.attributes.iter().find_map(|a| match a {
+        RuleAttr::Process(p) => p
+            .strip_prefix("lookup ")
+            .and_then(|rest| rest.rsplit_once(" as "))
+            .map(|(_, v)| v),
+        _ => None,
+    })
+}
+
 /// Collect a rule's unbound variables (conclusion/action vars NOT in
 /// any premise / let-binding).  Returns the list in first-occurrence
 /// order, deduped, excluding pub-sort variables (which are implicitly
@@ -1805,20 +2388,16 @@ fn collect_rule_unbound_vars(r: &Rule, nullary_funs: &BTreeSet<String>) -> Vec<V
     // before the check — the let value's free vars are NOT bound, only the
     // (now-substituted-away) let variable.  Mirror by inlining lets here.
     //
-    // HS `unboundVars` carries two extra exclusions we do NOT replicate
-    // because both are SAPIC-translation artifacts that cannot occur on the
-    // raw parser AST this check runs over:
-    //   - `isNowNode v` (Wellformedness.hs:504-505): suppresses an unbound
-    //     `LSortNode` var literally named "NOW" (a `#NOW` node introduced by
-    //     process translation).
-    //   - `originatesFromLookup v` (Wellformedness.hs:506-510): suppresses
-    //     vars bound by a process `lookup`, matched against
-    //     `ruleProcess (preAttributes (rInfo ru))`.
-    // If SAPIC-translated rules are ever routed through this check, port both
-    // guards.  Also note HS collects `frees (rConcs, rActs, rInfo)`; we iterate
-    // only `acts.chain(concs)` and so do NOT fold in raw embedded-restriction
+    // HS collects `frees (rConcs, rActs, rInfo)`; we iterate only
+    // `acts.chain(concs)` and so do NOT fold in raw embedded-restriction
     // (`rInfo`) free vars — a distinct, currently-out-of-scope gap.
     let (prems, acts, concs) = rule_facts_with_lets(r);
+    // HS `originatesFromLookup` (Wellformedness.hs:501-503, 506-510): the
+    // variable a `lookup t as v` combinator binds reaches the generated rule
+    // through its `IsIn( t, v )` action rather than a premise, so it is not
+    // unbound.  `lookup_binder_render` is `None` for every non-`lookup` rule,
+    // which is every user-written one.
+    let lookup_binder = lookup_binder_render(r);
     // HS `boundVars = S.fromList $ frees (get rPrems ru)` keys on the full
     // LVar (name AND sort AND idx), so `~ltk` (fresh) does NOT bind `ltk`
     // (msg).  Key on (name, sort_tag, idx).
@@ -1833,6 +2412,16 @@ fn collect_rule_unbound_vars(r: &Rule, nullary_funs: &BTreeSet<String>) -> Vec<V
     for f in acts.iter().chain(&concs) {
         for v in fact_vars(f) {
             if is_pub_sort(&v.sort) {
+                continue;
+            }
+            // HS `isNowNode v = lvarSort v == LSortNode && lvarName v == "NOW"`
+            // (Wellformedness.hs:504-505): the `#NOW` node `varNow`
+            // (Theory/Model/Restriction.hs:86-88) that embedded-restriction
+            // expansion mints is never premise-bound.
+            if is_node_sort(&v.sort) && v.name == "NOW" {
+                continue;
+            }
+            if lookup_binder.is_some_and(|b| b == render_var(&v)) {
                 continue;
             }
             if nullary_funs.contains(&v.name) {
@@ -1885,22 +2474,18 @@ pub fn unbound_report(thy: &Theory) -> WfReport {
         let unbound = collect_rule_unbound_vars(r, &nullary_funs);
         if !unbound.is_empty() {
             // HS `prettyVarList = fsep . punctuate comma . map prettyLVar`
-            // (TheoryObject.hs:815-816): comma-separated, word-wrapped.  The
-            // sibling `reservedFactNameRules` block renders its list the
-            // same way; we comma-join at the 4-space inner `nest 2` indent
-            // (variable lists are short, so the fsep wrap never triggers in
-            // practice — identical bytes to HS for the common case).
-            let names: Vec<String> = unbound.iter().map(render_var).collect();
+            // (TheoryObject.hs:858-859): the same paragraph fill the sibling
+            // `reservedFactNameRules`/`specialFactsUsage` fact lists use, at
+            // the same 4-space inner `nest 2` indent.  `prettyLVar` is a bare
+            // `text`, so these cells have no break point of their own.
+            let names: Vec<WfDoc> = unbound.iter().map(|v| WfDoc::Text(render_var(v))).collect();
             // Body only: `  rule `{name}' has unbound variables: ` (2-space
             // ppTopic nest, trailing space from HS's `info`) then the
             // variable list at 4 spaces.  format_wf_block adds the header.
-            out.push(WfError::new(
+            out.push(WfError::filled(
                 "Unbound variables",
-                format!(
-                    "  rule `{}' has unbound variables: \n    {}",
-                    r.name,
-                    names.join(", ")
-                ),
+                format!("rule `{}' has unbound variables: ", r.name),
+                names,
             ));
         }
     }
@@ -1909,18 +2494,17 @@ pub fn unbound_report(thy: &Theory) -> WfReport {
 
 /// Static analog of HS's `checkVariableDeducability`
 /// (`Theory.Tools.MessageDerivationChecks`).  HS spawns the prover on a
-/// synthetic theory per rule + per variable; we instead emit the
-/// SAME set of variables that `unbound_report` flags, under the
-/// distinct topic HS uses.
+/// synthetic theory per rule + per variable; this emits the SAME set of
+/// variables that [`unbound_report`] flags, under the distinct topic HS uses.
 ///
-/// HS's check is a superset of ours: it also catches variables that ARE
-/// bound by a premise but whose containing fact is never produced by
-/// any other rule, so the intruder can't derive them.  Catching that
-/// requires the prover (see HS's `proveTheory` per-variable loop) and
-/// is gated behind `--derivcheck-timeout` (default 5s).  We currently
-/// implement only the static intersection — the common case — and
-/// preserve byte-identical output for it.  Extending to the dynamic
-/// check is documented as future work.
+/// HS's check is a superset: it also catches variables that ARE bound by a
+/// premise but whose containing fact is never produced by any other rule, so
+/// the intruder can't derive them.  Catching that requires the prover (HS's
+/// `proveTheory` per-variable loop) and is gated behind
+/// `--derivcheck-timeout` (default 5s), so it lives in
+/// `tamarin_theory::deriv_check`.  Both load pipelines drop this entry from
+/// the report and substitute that Maude-backed result; what stays here serves
+/// the `--parse-only` batch path, which starts no Maude.
 pub fn message_derivation_report(thy: &Theory) -> WfReport {
     // Aggregate (rule_name, [unbound_var_names]) pairs across the
     // theory, skipping rules with the `no_derivcheck` attribute.
@@ -1975,83 +2559,6 @@ fn render_var(v: &VarSpec) -> String {
 }
 
 // =============================================================================
-// Multiplication restriction of rules
-// =============================================================================
-
-/// HS `multRestrictedReport'` (Wellformedness.hs:1047-1099). HS only
-/// flags a rule when:
-///   (a) it has any multiplication term `*` in its RHS conclusions, OR
-///   (b) abstracting reducible-headed terms in the rule introduces new
-///       unbound (non-public) vars in the RHS that weren't present
-///       pre-abstraction.
-///
-/// HS does NOT warn on every rule whose LHS contains any reducible op
-/// (xor / exp / inv) — those are explicitly permitted as long as (a)
-/// and (b) hold.
-///
-/// Keep this check FAITHFUL to HS's narrower trigger: skip when no `*` is
-/// in RHS and no unbound is introduced. Do NOT broaden it to fire on every
-/// rule with a reducible LHS op (xor/exp/inv) — that produces
-/// false-positive WF warnings (CRxor/CH07/LAK06).
-///
-/// Two known divergences from HS, both corpus-unreachable (this report
-/// fires on no corpus input):
-///   - BODY: HS emits a multi-line block (Wellformedness.hs:1055-1064)
-///     `"The following rule is not multiplication restricted:" $-$ nest 2
-///      (prettyProtoRuleE ru) $-$ "" $-$ "After replacing reducible
-///      function symbols in lhs with variables:" $-$ nest 2
-///      (prettyProtoRuleE (abstractRule ru)) $-$ "" $-$ ["Terms with
-///      multiplication: " <-> prettyLNTermList mults] $-$ ["Variables
-///      that occur only in rhs: " <-> prettyVarList unbounds]`.
-///     Reproducing it needs `prettyProtoRuleE` (kwRuleModulo "E"), which
-///     has no equivalent in the parser crate, so per the module-header
-///     disclaimer we emit only a topic-faithful one-liner.
-///   - TRIGGER (b): HS `restrictedFailures ru = (mults, unbound ruAbstr
-///     \\ unbound ru)` also flags a rule with NO `*` in its RHS when
-///     abstracting reducible-headed lhs sub-terms (against the IRREDUCIBLE
-///     FunSig) introduces new non-pub rhs-only vars.  That abstraction
-///     needs the elaborated `irreducibleFunSyms (sigpMaudeSig ...)`, which
-///     is signature-level, not available on the raw parser AST — so the
-///     (b) unbound trigger is NOT ported here, and rules that fail ONLY
-///     via rhs-only abstracted vars are silently passed.  (a) below is the
-///     ported trigger: a `*` directly in an RHS conclusion.
-pub fn mult_restricted_report(thy: &Theory) -> WfReport {
-    let mut out = Vec::new();
-    for r in theory_rules(thy) {
-        // (a) HS `multTerms` over RHS conclusions: gather any `AC Mult`
-        //     sub-terms. Skip if RHS has no multiplication.
-        let rhs_has_mult = r
-            .conclusions
-            .iter()
-            .flat_map(|f| f.args.iter())
-            .any(term_has_mult_subterm);
-        if !rhs_has_mult {
-            continue;
-        }
-        out.push(WfError::new(
-            "Multiplication restriction of rules",
-            format!("rule `{}' has multiplication in its RHS", r.name),
-        ));
-    }
-    out
-}
-
-/// True if `t` has any `AC Mult` (`*`) sub-term (mirrors HS `multTerms
-/// t = case viewTerm t of FApp (AC Mult) _ -> [t]; FApp _ ts ->
-/// concatMap multTerms ts; _ -> []`).
-fn term_has_mult_subterm(t: &Term) -> bool {
-    match t {
-        Term::BinOp(BinOp::Mult, _, _) => true,
-        Term::App(_, args) | Term::Pair(args) => args.iter().any(term_has_mult_subterm),
-        Term::AlgApp(_, a, b) => term_has_mult_subterm(a) || term_has_mult_subterm(b),
-        Term::Diff(a, b) => term_has_mult_subterm(a) || term_has_mult_subterm(b),
-        Term::BinOp(_, a, b) => term_has_mult_subterm(a) || term_has_mult_subterm(b),
-        Term::PatMatch(inner) => term_has_mult_subterm(inner),
-        _ => false,
-    }
-}
-
-// =============================================================================
 // Lemma annotations — reuse on exists-trace
 // =============================================================================
 
@@ -2076,9 +2583,10 @@ pub fn lemma_attribute_report(thy: &Theory) -> WfReport {
         .collect();
     // NB: the corpus has at most one reuse-exists lemma per file, so the
     // multi-body path is exercised only synthetically; the per-lemma error
-    // COUNT in the `N wellformedness check failed` summary still collapses to
-    // one here — matching that would require the wider `format_wf_block`
-    // refactor that renders topic headers from raw body-only entries.
+    // COUNT in the `N wellformedness check failed` summary collapses to one
+    // here.  Matching HS's count would mean emitting one header-less body per
+    // lemma and adding "Lemma annotations" to the headerless-preamble set in
+    // `tamarin_theory::pretty_theory`.
     grouped_topic_block(topic, bodies)
 }
 
@@ -2258,10 +2766,11 @@ pub fn subterm_convergence_report(thy: &Theory) -> WfReport {
     // HS's outer `$-$` / `vcat` adds no extra indent — each rule renders
     // with its own `nest 2` inside the sep.  Result: `    {lhs} = {rhs}`
     // (4 leading spaces, as observed in HS output).
+    let ac = user_ac_fun_names(thy);
     let mut eq_lines = String::new();
     for (lhs, rhs) in &non_conv {
-        let lhs_s = pp_term_for_wf(lhs);
-        let rhs_s = pp_term_for_wf(rhs);
+        let lhs_s = pp_term_for_wf(lhs, &ac);
+        let rhs_s = pp_term_for_wf(rhs, &ac);
         // `sep [nest 2 lhsDoc, "=" <-> rhsDoc]` inline → `  lhs = rhs`
         // HS output observed: `    unblind(...) = sign(...)` (4-space indent).
         // The top-level `$-$ vcat (map pretty ...) $-$` gives no extra indent,
@@ -2294,57 +2803,18 @@ pub fn subterm_convergence_report(thy: &Theory) -> WfReport {
     vec![WfError::new("Subterm Convergence Warning", msg)]
 }
 
-/// Minimal pretty-printer for parser-AST `Term` for the WF subterm-convergence
-/// warning.  Mirrors HS `prettyLNTerm` output for the restricted case of
-/// equations: function applications, variables, public/fresh literals.
-/// (No HughesPJ wrapping needed — equations are expected to fit on one line.)
-fn pp_term_for_wf(t: &Term) -> String {
-    match t {
-        // HS `prettyLVar = text . show`, and `show LVar` prepends the
-        // `sortPrefix` (`~`/`$`/`#`/`%`, LTerm.hs:189-194) — so a fresh var
-        // renders as `~x`, not `x`.  Defer to `render_var` for the sigil +
-        // optional `.idx` suffix.
-        Term::Var(v) => render_var(v),
-        Term::PubLit(s) => format!("'{}'", s),
-        Term::FreshLit(s) => format!("~'{}'", s),
-        Term::NatLit(s) => format!("%'{}'", s),
-        Term::Number(n) => n.to_string(),
-        // HS `prettyTerm`: oneSym → "one", natOneSym → "%1",
-        // dhNeutralSym → "DH_neutral" (Term.hs:276,278; FunctionSymbols.hs:134-134,137).
-        Term::NumberOne => "one".to_string(),
-        Term::NatOne => "%1".to_string(),
-        Term::DhNeutral => "DH_neutral".to_string(),
-        Term::App(name, args) => {
-            if args.is_empty() {
-                name.clone()
-            } else {
-                let args_s: Vec<String> = args.iter().map(pp_term_for_wf).collect();
-                format!("{}({})", name, args_s.join(", "))
-            }
-        }
-        Term::AlgApp(name, a, b) => {
-            format!("{}({}, {})", name, pp_term_for_wf(a), pp_term_for_wf(b))
-        }
-        Term::Pair(items) => {
-            let parts: Vec<String> = items.iter().map(pp_term_for_wf).collect();
-            format!("<{}>", parts.join(", "))
-        }
-        Term::Diff(a, b) => {
-            format!("diff({}, {})", pp_term_for_wf(a), pp_term_for_wf(b))
-        }
-        Term::BinOp(op, a, b) => {
-            use crate::ast::BinOp;
-            let sym = match op {
-                BinOp::Exp => "^",
-                BinOp::Mult => "*",
-                BinOp::Union => "++",
-                BinOp::Xor => "\u{2295}",
-                BinOp::NatPlus => "%+",
-            };
-            format!("({}{}{})", pp_term_for_wf(a), sym, pp_term_for_wf(b))
-        }
-        Term::PatMatch(inner) => pp_term_for_wf(inner),
-    }
+/// [`wf_term_doc`] — HS `prettyLNTerm` — laid out flat.
+///
+/// Sharing the one printer is what keeps these messages AC-canonical: HS's
+/// terms are built by the smart constructors `fAppAC`/`fAppC`
+/// (Term/Term/Raw.hs:118-134), so every `prettyTerm` call site sees a
+/// flattened, sorted AC spine and a sorted `C` argument list, whatever the
+/// source spelling was.
+///
+/// (No HughesPJ wrapping — the messages using this helper are expected to
+/// fit on one line.)
+fn pp_term_for_wf(t: &Term, ac: &AcSyms) -> String {
+    wf_term_doc(t, ac).to_flat()
 }
 
 fn is_subterm_convergent(lhs: &Term, rhs: &Term, nullary_funs: &BTreeSet<String>) -> bool {
@@ -2422,9 +2892,10 @@ fn contains_subterm(haystack: &Term, needle: &Term) -> bool {
 // =============================================================================
 
 // NOTE: the actual HS `checkTerms` ("Formula terms" topic) is ported
-// faithfully in `tamarin_theory::check_terms::check_terms_wf`, which needs
-// the elaborated `MaudeSig` (for reducible/irreducible funsym classification)
-// and so runs post-elaboration in `run.rs`.  The parser-level
+// faithfully in `tamarin_theory::check_terms`, which needs the elaborated
+// `MaudeSig` (for reducible/irreducible funsym classification) and so runs
+// post-elaboration, interleaved with `checkQuantifiers`/`checkGuarded` by
+// `tamarin_theory::formula_reports::formula_reports`.  The parser-level
 // "Variable with mismatching sorts or capitalization" sub-check (a different
 // topic, no signature needed) is `variable_sort_clashes` below; callers
 // invoke it directly.
@@ -2526,16 +2997,17 @@ pub fn nat_well_sorted_report(thy: &Theory) -> WfReport {
     // corpus case byte-for-byte; the multi-error count-collapse only differs
     // synthetically, as with `fresh_names_report`/`lemma_attribute_report`).
     let topic = "Nat Sorts";
+    let ac = user_ac_fun_names(thy);
     let mut bodies: Vec<String> = Vec::new();
     for r in theory_rules(thy) {
         for t in rule_terms(r) {
             let mut errs: Vec<&Term> = Vec::new();
-            non_well_sorted(t, &mut errs);
+            non_well_sorted(t, &mut errs, &ac);
             for err in errs {
                 bodies.push(format!(
                     "  {} in term {} must be of sort nat",
-                    pp_term_for_wf(err),
-                    pp_term_for_wf(t)
+                    pp_term_for_wf(err, &ac),
+                    pp_term_for_wf(t, &ac)
                 ));
             }
         }
@@ -2547,15 +3019,58 @@ pub fn nat_well_sorted_report(thy: &Theory) -> WfReport {
     grouped_topic_block(topic, bodies)
 }
 
+/// The direct operands of a parser term — the `ts` of HS's `FAPP _ ts`
+/// before any smart-constructor canonicalisation.
+fn wf_direct_children(t: &Term) -> Vec<&Term> {
+    use Term::*;
+    match t {
+        App(_, args) | Pair(args) => args.iter().collect(),
+        AlgApp(_, a, b) | Diff(a, b) | BinOp(_, a, b) => vec![a, b],
+        PatMatch(inner) => vec![inner],
+        Var(_) | PubLit(_) | FreshLit(_) | NatLit(_) | Number(_) | NumberOne | NatOne
+        | DhNeutral => Vec::new(),
+    }
+}
+
+/// The operand list HS's term carries for `t`: an `AC` head's flattened,
+/// sorted chain and a `C` head's sorted arguments (`fAppAC`/`fAppC`,
+/// Term/Term/Raw.hs:118-134), otherwise the direct children.
+///
+/// This is [`hs_fapp_args`]'s borrowing sibling, for the wellformedness
+/// WALKS that report references into the term rather than rendering it —
+/// they see the same operand ORDER HS's checks traverse.  `Pair`'s
+/// right-nesting is left flat: a walk over `[a, b, c]` reaches the same
+/// leaves in the same order as one over `[a, pair(b, c)]`.
+fn wf_canon_children<'a>(t: &'a Term, ac: &AcSyms) -> Vec<&'a Term> {
+    let t = ac_collapse(t, ac);
+    let key = wf_funsym_key(t, ac);
+    match key.0 {
+        1 => {
+            let mut flat: Vec<&Term> = Vec::new();
+            flatten_ac(key, t, &mut flat, ac);
+            flat.sort_by(|a, b| cmp_wf_term(a, b, ac));
+            flat
+        }
+        2 => {
+            let mut args = wf_direct_children(t);
+            args.sort_by(|a, b| cmp_wf_term(a, b, ac));
+            args
+        }
+        _ => wf_direct_children(t),
+    }
+}
+
 /// Faithful port of HS `nonWellSorted` (Wellformedness.hs:293-303): collect
 /// the operands appearing under a `%+` (`FNatPlus`) that are not themselves
 /// nat-well-sorted.  Pushes references to the offending sub-terms onto `out`.
-fn non_well_sorted<'a>(t: &'a Term, out: &mut Vec<&'a Term>) {
+fn non_well_sorted<'a>(t: &'a Term, out: &mut Vec<&'a Term>, ac: &AcSyms) {
+    let t = ac_collapse(t, ac);
     match t {
         // FNatPlus list -> concatMap notOnlyNat list
-        Term::BinOp(BinOp::NatPlus, a, b) => {
-            not_only_nat(a, out);
-            not_only_nat(b, out);
+        Term::BinOp(BinOp::NatPlus, _, _) => {
+            for a in wf_canon_children(t, ac) {
+                not_only_nat(a, out, ac);
+            }
         }
         // NatOne -> []; Lit _ -> []
         Term::NatOne
@@ -2567,16 +3082,11 @@ fn non_well_sorted<'a>(t: &'a Term, out: &mut Vec<&'a Term>) {
         | Term::NumberOne
         | Term::DhNeutral => {}
         // FApp _ ts -> concatMap nonWellSorted ts (recurse into children)
-        Term::App(_, args) | Term::Pair(args) => {
-            for a in args {
-                non_well_sorted(a, out);
+        _ => {
+            for a in wf_canon_children(t, ac) {
+                non_well_sorted(a, out, ac);
             }
         }
-        Term::AlgApp(_, a, b) | Term::Diff(a, b) | Term::BinOp(_, a, b) => {
-            non_well_sorted(a, out);
-            non_well_sorted(b, out);
-        }
-        Term::PatMatch(inner) => non_well_sorted(inner, out),
     }
 }
 
@@ -2586,12 +3096,14 @@ fn non_well_sorted<'a>(t: &'a Term, out: &mut Vec<&'a Term>) {
 /// everything else (including untagged/msg/pub vars and nat *literals* like
 /// `%'a'`, which are `Con` names, not vars — matching HS's `isNatVar`, which
 /// is true only for `Lit (Var v)` with `lvarSort v == LSortNat`).
-fn not_only_nat<'a>(t: &'a Term, out: &mut Vec<&'a Term>) {
+fn not_only_nat<'a>(t: &'a Term, out: &mut Vec<&'a Term>, ac: &AcSyms) {
+    let t = ac_collapse(t, ac);
     match t {
         // FNatPlus l -> concatMap notOnlyNat l
-        Term::BinOp(BinOp::NatPlus, a, b) => {
-            not_only_nat(a, out);
-            not_only_nat(b, out);
+        Term::BinOp(BinOp::NatPlus, _, _) => {
+            for a in wf_canon_children(t, ac) {
+                not_only_nat(a, out, ac);
+            }
         }
         // NatOne -> []
         Term::NatOne => {}
@@ -2607,175 +3119,5 @@ fn not_only_nat<'a>(t: &'a Term, out: &mut Vec<&'a Term>) {
 // =============================================================================
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::parse_theory;
-
-    fn parse(src: &str) -> Theory {
-        parse_theory(src, &["diff"]).expect("parse")
-    }
-
-    #[test]
-    fn unbound_var_detected() {
-        let t = parse("theory T begin rule R: [] --[ ]-> [ Out(~k) ] end");
-        let r = check_theory(&t);
-        assert!(topics(&r).contains("Unbound variables"), "report: {:?}", r);
-    }
-
-    #[test]
-    fn fact_arity_clash_detected() {
-        let t = parse(
-            r#"theory T begin
-            rule R1: [Fr(~x)] --[ ]-> [Foo(~x)]
-            rule R2: [Fr(~x), Fr(~y)] --[ ]-> [Foo(~x, ~y)]
-        end"#,
-        );
-        let r = check_theory(&t);
-        assert!(topics(&r).contains("Fact arity issues"));
-    }
-
-    #[test]
-    fn special_facts_misuse_detected() {
-        let t = parse("theory T begin rule R: [Out(x)] --[ ]-> [] end");
-        let r = check_theory(&t);
-        assert!(topics(&r).contains("Special facts"));
-    }
-
-    #[test]
-    fn reserved_name_detected() {
-        let t = parse(
-            r#"theory T begin
-            rule R: [Fr(~k)] --[ ]-> [KU(~k)]
-        end"#,
-        );
-        let r = check_theory(&t);
-        assert!(topics(&r).contains("Reserved names"));
-    }
-
-    /// Return the single `WfError` whose topic matches `topic`.
-    fn only(report: &WfReport, topic: &str) -> String {
-        let hits: Vec<&WfError> = report.iter().filter(|e| e.topic == topic).collect();
-        assert_eq!(
-            hits.len(),
-            1,
-            "expected exactly one {:?} entry, got {:?}",
-            topic,
-            report
-        );
-        hits[0].message.clone()
-    }
-
-    /// Probed against tamarin-prover v1.13.0 on `Out(%a %+ ~x)`:
-    ///   `~x in term (~x%+%a) must be of sort nat`
-    /// i.e. the offending operand is the fresh var `~x` (NOT the nat-sorted
-    /// `%a`), the message has NO rule name, and `t` is the WHOLE fact-arg
-    /// term.  (The AC operand order `(~x%+%a)` is a pre-existing pretty-print
-    /// limitation: RS renders source order `(%a%+~x)`; the message FORMAT
-    /// matches HS exactly.)
-    #[test]
-    fn nat_sorts_message_format() {
-        let t = parse(
-            "theory T begin builtins: natural-numbers \
-            rule R: [ Fr(~x) ] --[ ]-> [ Out(%a %+ ~x) ] end",
-        );
-        let msg = only(&check_theory(&t), "Nat Sorts");
-        // Header + 2-space-nested single body.
-        assert_eq!(
-            msg,
-            "Nat Sorts\n=========\n\n  ~x in term (%a%+~x) must be of sort nat"
-        );
-    }
-
-    /// `%a` (nat-sorted var) is ACCEPTED; only `~x` (fresh) is flagged —
-    /// matching HS `notOnlyNat`/`isNatVar` (which accepts only NatOne and
-    /// nat-sorted *variables*).
-    #[test]
-    fn nat_sorts_accepts_nat_var_flags_fresh() {
-        let t = parse(
-            "theory T begin builtins: natural-numbers \
-            rule R: [ Fr(~x) ] --[ ]-> [ Out(%a %+ ~x) ] end",
-        );
-        let msg = only(&check_theory(&t), "Nat Sorts");
-        assert!(msg.contains("~x in term"), "should flag ~x: {}", msg);
-        assert!(!msg.contains("%a in term"), "should NOT flag %a: {}", msg);
-    }
-
-    /// A nat *literal* `%'a'` (a `Con` name, not a var) IS flagged, matching
-    /// HS `isNatVar` (true only for `Lit (Var ..)` with LSortNat).  Probed:
-    ///   `%'a' in term (%'a'%+%y) must be of sort nat`
-    #[test]
-    fn nat_sorts_flags_nat_literal() {
-        let t = parse(
-            "theory T begin builtins: natural-numbers \
-            rule R: [ Fr(~x) ] --[ ]-> [ Out(%'a' %+ %y) ] end",
-        );
-        let msg = only(&check_theory(&t), "Nat Sorts");
-        assert!(msg.contains("%'a' in term"), "should flag %'a': {}", msg);
-        assert!(
-            !msg.contains("%y in term"),
-            "should NOT flag nat var %y: {}",
-            msg
-        );
-    }
-
-    /// Probed against tamarin-prover v1.13.0 on `Out(<~k, ~'foo'>)`:
-    ///   rule name uses the HS `quote` form (backtick + apostrophe) and the
-    ///   fresh constant renders via `show (Name FreshName ..)` = `~'foo'`.
-    #[test]
-    fn fresh_public_constants_message_format() {
-        let t = parse(
-            "theory T begin \
-            rule R: [ Fr(~k) ] --[ ]-> [ Out(<~k, ~'foo'>) ] end",
-        );
-        let msg = only(&check_theory(&t), "Fresh public constants");
-        assert_eq!(
-            msg,
-            "Fresh public constants\n======================\n\n  \
-             rule `R': fresh public constants are not allowed: ~'foo'"
-        );
-    }
-
-    /// A free variable literally named `True` IS reported as unbound — there
-    /// is no builtin `True` nullary (only `true`), so HS does not suppress it.
-    /// (Regression for removing `"True"` from `is_known_nullary_constant_name`.)
-    #[test]
-    fn variable_named_true_is_unbound() {
-        let t = parse("theory T begin rule R: [ ] --[ ]-> [ Out(True) ] end");
-        assert!(
-            topics(&check_theory(&t)).contains("Unbound variables"),
-            "True must be reported as unbound"
-        );
-    }
-
-    /// `equations [convergent]` as the LAST equations block suppresses the
-    /// whole Subterm Convergence Warning (HS `isUserMarkedConvergent`,
-    /// last-write-wins), even with a non-convergent regular block present.
-    #[test]
-    fn subterm_convergence_global_convergent_guard() {
-        let t = parse(
-            "theory T begin functions: f/1, g/1, a/0, b/0 \
-            equations: f(x) = g(x) \
-            equations [convergent]: g(y) = a end",
-        );
-        assert!(
-            !topics(&check_theory(&t)).contains("Subterm Convergence Warning"),
-            "global convergent flag (last-write-wins) must suppress the check"
-        );
-    }
-
-    /// A `[convergent]` block FIRST followed by a regular block LAST does NOT
-    /// suppress (last-write-wins => flag false), so the non-convergent
-    /// equation is reported.
-    #[test]
-    fn subterm_convergence_last_write_wins() {
-        let t = parse(
-            "theory T begin functions: f/1, g/1, a/0, b/0 \
-            equations [convergent]: g(y) = a \
-            equations: f(x) = g(x) end",
-        );
-        assert!(
-            topics(&check_theory(&t)).contains("Subterm Convergence Warning"),
-            "regular block last => flag false => warning fires"
-        );
-    }
-}
+#[path = "wf_tests.rs"]
+mod tests;

@@ -1,0 +1,26 @@
+/*
+ * lookupArity-driven argument-list shapes of `naryOpApp`
+ * (Theory/Text/Parser/Term.hs:88-105) that no corpus theory reaches:
+ *
+ *   - h('a','b')   arity-1 head: `k == 1` parses ONE `tupleterm`, so the
+ *                  commas fold into a right-associative pair — h(<'a', 'b'>);
+ *   - m('c','d')   the SAME fold applies to macro heads (macroNames are in
+ *                  lookupArity's list at the macro's arity);
+ *   - f()          arity-0 head: `commaSep` admits the empty list and the
+ *                  arity check passes — the nullary application `f`;
+ *   - g('e','f',)  arity != 1: `commaSep` is `sepEndBy`, so a trailing
+ *                  comma is accepted.
+ */
+theory NaryappArityFolds
+begin
+
+builtins: hashing
+
+functions: f/0, g/2
+
+macros: m(x) = <x, x>
+
+rule r:
+  [ ] --> [ Out(h('a','b')), Out(m('c','d')), Out(f()), Out(g('e','f',)) ]
+
+end

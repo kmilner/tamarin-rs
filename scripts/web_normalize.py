@@ -358,6 +358,12 @@ def canon_dot(body: str) -> str:
     We compare: graph-level kv (nodesep/ranksep/graph[]), the set of effective
     node labels (normalized) + attrs, and the set of effective edges
     (endpoints resolved to normalized labels) + attrs.
+
+    SECOND CANONICALISER: `dot_label_texts` in
+    `crates/tamarin-server/tests/routes_graph.rs` does this same "same graph,
+    different dialect" job for the dot-route integration tests (a label
+    sequence rather than a structural form).  A change to what either one sees
+    past wants the matching change in the other.
     """
     body = norm_env(body)
     # collect id -> label and node attrs, and edges by id

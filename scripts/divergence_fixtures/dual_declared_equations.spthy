@@ -1,0 +1,19 @@
+// An `equations:` LHS written prefix over a dual-declared name resolves to
+// the NoEq symbol too (`naryOpApp` with eqn=true still goes through
+// `lookupArity`'s NoEq-first lookup, Theory/Text/Parser/Term.hs:62-72,88-105):
+// the equation registers under NoEq `f`, the signature echo prints it
+// `f(x, y) = x` sorted among the pair projections by the derived
+// `Ord CtxtStRule`, and the now-reducible NoEq `f` flags the lemma.
+//
+// Compared slices: the wf report block AND the `theory … end` echo.
+
+theory DualDeclaredEquations
+begin
+
+functions: f/2 [AC], f/2
+equations: f(x, y) = x
+
+lemma L1:
+  "All #i. Test(f('a','b')) @ #i ==> F"
+
+end

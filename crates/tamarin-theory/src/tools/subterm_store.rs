@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   PhilipLukertWork, rkunnema, meiersi, charlie-j, and other minor
-//   contributors (see upstream git history)
+//   PhilipLukertWork, rkunnema, meiersi, and other minor contributors
+//   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/theory/src/Theory/Sapic/Term.hs,
 //   lib/theory/src/Theory/Tools/SubtermStore.hs

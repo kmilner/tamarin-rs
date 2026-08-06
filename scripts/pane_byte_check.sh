@@ -3,7 +3,9 @@
 # bodies (the JSON {html,title} envelope) against the HS reference cache
 # (scripts/.web_hs_cache), content-keyed by sha256(file).  Boots RS per file
 # (reusing web_parity's boot/crawl), then compares the two URL bodies byte-for-
-# byte.  Output TSV: file  url  MATCH|DIFF|MISSING_*  firstdiff_byte
+# byte.  Files come from ALLOWLIST (default: the accepted-residue ledger
+# scripts/websweep_residual.txt).
+# Output TSV: file  url  MATCH|DIFF|MISSING_*  firstdiff_byte
 set -u
 # OOM safeguards (per the campaign's oracle-script convention): make this driver
 # the first OOM victim and cap the address space so a runaway prover subprocess
@@ -22,8 +24,10 @@ DIFFDIR="${DIFFDIR:-/tmp/pane_byte_diffs}"
 MAX_NODES="${MAX_NODES:-400}"
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 MAUDE_PATH="${MAUDE_PATH:-$(command -v maude)}"
+ALLOWLIST="${ALLOWLIST:-$script_dir/websweep_residual.txt}"
 mkdir -p "$DIFFDIR"
 [ -x "$RS_PATH" ] || { echo "no RS binary at $RS_PATH" >&2; exit 2; }
+[ -f "$ALLOWLIST" ] || { echo "pane_byte_check: ALLOWLIST '$ALLOWLIST' does not exist" >&2; exit 2; }
 
 # Wait (up to 30s) until nothing answers on the port — guards against a
 # still-dying server from the previous file, which would make a bind-failed

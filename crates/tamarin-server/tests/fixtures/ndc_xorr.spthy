@@ -1,0 +1,13 @@
+theory NdcXorr
+begin
+
+functions: xorr/2 [AC], zeroo/0
+equations:
+    xorr(xorr(x, y), x) = y,
+    xorr(x, x) = zeroo,
+    xorr(x, zeroo) = x
+
+rule Setup:
+  [ Fr( ~k ), In( a ) ] --[ Probe( xorr(a, ~k) ) ]-> [ Out( xorr(a, ~k) ) ]
+
+end

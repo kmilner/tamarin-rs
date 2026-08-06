@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   racoucho1u, meiersi, jdreier, and other minor contributors (see
-//   upstream git history)
+//   meiersi, beschmi, jdreier, racoucho1u, PhilipLukertWork, and other
+//   minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs,
 //   lib/term/src/Term/Term/FunctionSymbols.hs,
@@ -22,7 +22,7 @@
 //! NOT the same as the user-facing pretty-printer:
 //!   - `show LVar`  : `sortPrefix s ++ body`  (LTerm.hs:526-533)
 //!   - `show Name`  : `~'n'` / `'n'` / `#'n'` / `%'n'` (LTerm.hs:231-235)
-//!   - `show (Term a)` (raw form, Term/Raw.hs:219-227):
+//!   - `show (Term a)` (raw form, Term/Raw.hs:227-237):
 //!     ```text
 //!     Lit l                -> show l
 //!     FApp (NoEq (s,_)) [] -> s
@@ -85,7 +85,7 @@ fn write_varspec(v: &p::VarSpec, out: &mut String) {
 // =============================================================================
 
 /// HS `Show (Term a)` applied to `VTerm Name (BVar LVar)`
-/// (Term/Raw.hs:219-227 + the derived `Show (BVar v)`).
+/// (Term/Raw.hs:227-237 + the derived `Show (BVar v)`).
 pub(crate) fn show_gterm(t: &GTerm) -> String {
     let mut s = String::new();
     write_gterm(t, &mut s);
@@ -130,7 +130,7 @@ fn write_gterm(t: &GTerm, out: &mut String) {
         // `fAppOne` = `NoEq oneSym` with `oneSymString = "one"` and
         // `fAppNatOne` = `NoEq natOneSym` with `natOneSymString = "tone"`
         // (FunctionSymbols.hs:134-134,144). `show (FApp (NoEq (s,_)) [])` = `s`
-        // (Term/Raw.hs:219-230, see line 222), so the two nullary symbols show differently.
+        // (Term/Raw.hs:227-237, see line 231), so the two nullary symbols show differently.
         GTerm::NumberOne => out.push_str("one"),
         GTerm::NatOne => out.push_str("tone"),
         GTerm::DhNeutral => out.push_str("DH_neutral"),
@@ -149,7 +149,7 @@ fn write_gterm(t: &GTerm, out: &mut String) {
             out.push(')');
         }
         // `^` (exp) is a NoEq symbol named "exp"; the AC ops render with
-        // their derived constructor name (Term/Raw.hs:219-230, see line 227 `show o`).
+        // their derived constructor name (Term/Raw.hs:227-237, see line 237 `show o`).
         GTerm::BinOp(op, a, b) => {
             let name = match op {
                 p::BinOp::Exp => "exp",
@@ -157,6 +157,10 @@ fn write_gterm(t: &GTerm, out: &mut String) {
                 p::BinOp::Union => "Union",
                 p::BinOp::Xor => "Xor",
                 p::BinOp::NatPlus => "NatPlus",
+                // `FApp (AC (ACfct (s,_))) as -> BC.unpack s ++ "(" ... ")"`
+                // (Term/Raw.hs:227-233): a user-defined AC symbol shows under
+                // its own name, not the `ACfct` constructor.
+                p::BinOp::AcFct(n) => n,
             };
             out.push_str(name);
             out.push('(');
@@ -212,7 +216,7 @@ fn write_pair(items: &[GTerm], out: &mut String) {
 // isFactName, isInFactTerms
 // =============================================================================
 
-/// HS `Show (Term a)` applied to `LNTerm = VTerm Name LVar` (Term/Raw.hs:219-230).
+/// HS `Show (Term a)` applied to `LNTerm = VTerm Name LVar` (Term/Raw.hs:227-237).
 pub fn show_lnterm(t: &LNTerm) -> String {
     let mut s = String::new();
     write_lnterm(t, &mut s);
@@ -230,58 +234,52 @@ fn write_lnterm(t: &LNTerm, out: &mut String) {
                 let name = String::from_utf8_lossy(s.name);
                 out.push_str(&name);
                 if !args.is_empty() {
-                    out.push('(');
-                    for (i, a) in args.iter().enumerate() {
-                        if i > 0 {
-                            out.push(',');
-                        }
-                        write_lnterm(a, out);
-                    }
-                    out.push(')');
+                    write_args(args, out);
                 }
             }
             // FApp (C EMap) as -> "em"(..)
             FunSym::C(CSym::EMap) => {
-                out.push_str("em(");
-                for (i, a) in args.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    write_lnterm(a, out);
-                }
-                out.push(')');
+                out.push_str("em");
+                write_args(args, out);
             }
             // FApp List as -> "LIST"(..)
             FunSym::List => {
-                out.push_str("LIST(");
-                for (i, a) in args.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    write_lnterm(a, out);
-                }
-                out.push(')');
+                out.push_str("LIST");
+                write_args(args, out);
             }
-            // FApp (AC o) as -> show o (..)  (constructor name)
+            // FApp (AC (ACfct (s,_))) [] -> s ; FApp (AC (ACfct (s,_))) as ->
+            // s(..) ; FApp (AC o) as -> show o (..)
             FunSym::Ac(o) => {
-                let name = match o {
-                    AcSym::Union => "Union",
-                    AcSym::Mult => "Mult",
-                    AcSym::Xor => "Xor",
-                    AcSym::NatPlus => "NatPlus",
-                };
-                out.push_str(name);
-                out.push('(');
-                for (i, a) in args.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    write_lnterm(a, out);
+                match o {
+                    AcSym::Union => out.push_str("Union"),
+                    AcSym::Mult => out.push_str("Mult"),
+                    AcSym::Xor => out.push_str("Xor"),
+                    AcSym::NatPlus => out.push_str("NatPlus"),
+                    AcSym::AcFct(s) => out.push_str(&String::from_utf8_lossy(s.name)),
                 }
-                out.push(')');
+                // Only the user-defined AC symbols have a nullary arm
+                // (Term/Raw.hs:227-233) showing the bare name; the builtin AC
+                // operators always show a parenthesised argument list.
+                let nullary_acfct = args.is_empty() && matches!(o, AcSym::AcFct(_));
+                if !nullary_acfct {
+                    write_args(args, out);
+                }
             }
         },
     }
+}
+
+/// The parenthesised, comma-separated argument list shared by every
+/// applied-symbol arm of [`write_lnterm`] (`(a1,a2,..)`, `()` when empty).
+fn write_args(args: &[LNTerm], out: &mut String) {
+    out.push('(');
+    for (i, a) in args.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        write_lnterm(a, out);
+    }
+    out.push(')');
 }
 
 /// HS `show LVar` for the typed `LVar` (LTerm.hs:526-533).  Writes
@@ -308,7 +306,7 @@ fn write_lvar(v: &tamarin_term::lterm::LVar, out: &mut String) {
     }
 }
 
-/// HS `show Name` (LTerm.hs:231-235).  Writes directly into `out`,
+/// HS `show Name` (LTerm.hs:235-240).  Writes directly into `out`,
 /// avoiding a throwaway intermediate `String`; byte-identical output.
 fn write_name(n: &Name, out: &mut String) {
     match n.tag {
@@ -316,6 +314,12 @@ fn write_name(n: &Name, out: &mut String) {
         NameTag::Pub => {}
         NameTag::Node => out.push('#'),
         NameTag::Nat => out.push('%'),
+        // `show (Name AbbrevName n) = show n` (LTerm.hs:240) — the bare name
+        // id, with neither a sigil nor the quotes the other four tags carry.
+        NameTag::Abbrev => {
+            out.push_str(n.id.0);
+            return;
+        }
     }
     out.push('\'');
     out.push_str(n.id.0);
@@ -584,6 +588,64 @@ mod tests {
     fn show_fact_tag_proto() {
         let t = FactTag::Proto(Multiplicity::Linear, "Foo", 2);
         assert_eq!(show_fact_tag(&t), "ProtoFact Linear \"Foo\" 2");
+    }
+
+    /// Every applied-symbol arm of `Show (Term a)` (Term/Raw.hs:227-237):
+    /// the `NoEq` nullary/applied pair, `C EMap`, `List`, the four builtin
+    /// AC operators (whose derived `show ACSym` names always take an
+    /// argument list) and the user-`[AC]` nullary/applied pair.
+    #[test]
+    fn show_lnterm_covers_every_applied_symbol_arm() {
+        use tamarin_term::builtin::{emap, msg_var, mult, nat_plus, union, xor};
+        use tamarin_term::function_symbols::{
+            AcFctSym, Constructability, NdcState, NoEqSym, Privacy,
+        };
+        use tamarin_term::term::{f_app_acfct, f_app_list, f_app_no_eq};
+
+        let (x, y) = (msg_var("x", 0), msg_var("y", 0));
+        let noeq = |n: &[u8], a: usize| {
+            NoEqSym::new(
+                n.to_vec(),
+                a,
+                Privacy::Public,
+                Constructability::Constructor,
+            )
+        };
+        let acfct = |n: &[u8]| {
+            AcFctSym::new(
+                n.to_vec(),
+                Privacy::Public,
+                Constructability::Constructor,
+                NdcState::NotNdc,
+            )
+        };
+
+        assert_eq!(show_lnterm(&f_app_no_eq(noeq(b"g", 0), vec![])), "g");
+        assert_eq!(
+            show_lnterm(&f_app_no_eq(noeq(b"h", 2), vec![x.clone(), y.clone()])),
+            "h(x,y)"
+        );
+        assert_eq!(show_lnterm(&emap(x.clone(), y.clone())), "em(x,y)");
+        assert_eq!(
+            show_lnterm(&f_app_list(vec![x.clone(), y.clone()])),
+            "LIST(x,y)"
+        );
+        assert_eq!(show_lnterm(&union(x.clone(), y.clone())), "Union(x,y)");
+        assert_eq!(show_lnterm(&mult(x.clone(), y.clone())), "Mult(x,y)");
+        assert_eq!(show_lnterm(&xor(x.clone(), y.clone())), "Xor(x,y)");
+        assert_eq!(show_lnterm(&nat_plus(x.clone(), y.clone())), "NatPlus(x,y)");
+        assert_eq!(
+            show_lnterm(&f_app_acfct(acfct(b"xorr"), vec![x.clone(), y.clone()])),
+            "xorr(x,y)"
+        );
+        // `FApp (AC (ACfct (s,_))) [] -> s` — the bare name, no parens.
+        assert_eq!(
+            show_lnterm(&tamarin_term::term::Term::App(
+                tamarin_term::function_symbols::FunSym::Ac(AcSym::AcFct(acfct(b"nil"))),
+                Vec::new().into(),
+            )),
+            "nil"
+        );
     }
 
     #[test]

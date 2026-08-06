@@ -1,8 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, arcz, cascremers, felixlinker, beschmi, rsasse, jdreier,
+//   meiersi, arcz, cascremers, jdreier, beschmi, felixlinker, rsasse,
 //   BTom-GH, and other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Term/Raw.hs,
+//   lib/term/src/Term/Term/Raw.hs, lib/theory/src/CloseRule.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
 //   lib/theory/src/Theory/Model/Rule.hs,
 //   lib/theory/src/Theory/Proof.hs,
@@ -18,6 +18,7 @@
 
 use crate::handlers::path_parse::{encode_sub_path, url_path_escape, SourceKind, TheoryPath};
 use crate::handlers::root::html_escape;
+use crate::handlers::{default_layout, OPTIONS_MENU_ITEMS};
 use crate::state::TheoryEntry;
 
 use tamarin_theory::constraint::solver::proof_method::{ProofMethod, Result as MethodResult};
@@ -26,25 +27,28 @@ use tamarin_theory::theory::{LemmaAttr, TraceQuantifier};
 
 /// Full overview/framing page (the one served at `/thy/trace/<idx>/overview/...`).
 pub fn overview_page(entry: &TheoryEntry, path: &TheoryPath) -> String {
+    // The west pane's lemma list and the centre pane both AC-canonicalise
+    // parser-AST terms, which reads the user-fn thread-locals — empty on an
+    // axum worker thread.  See `TheoryEntry::install_user_funs`.
+    let _user_funs_guard = entry.install_user_funs();
     let header_html = header(entry);
     let proof_state = proof_state(entry);
     let main_view = path_html(entry, path);
-    // Byte-faithful port of HS `defaultLayout'` (Web/Types.hs:686-723)
-    // wrapping `overviewTpl` (Web/Hamlet.hs:290-317): a `$newline never`
-    // single-line frame (the only embedded newlines come from the
-    // postprocessed `{proof_state}` west pane and the `{main_view}` centre
-    // pane).  Verbatim hamlet quirks: unquoted URL attrs, doubled
-    // `</script></script>` close tags, class-before-id attribute ordering,
-    // the ` </div></div></div>` pane closers and the doubled `</a>` in the
-    // context menu.  Volatile substitutions: `{name}` (title), and — inside
-    // `{header}` — the `{version}` field.
-    format!(
-        r##"<!DOCTYPE html>
-<html><head><title>Theory: {name}</title><link rel="stylesheet" href="/static/css/intdot-style.css"><link rel="stylesheet" href="/static/css/tamarin-prover-ui.css"><link rel="stylesheet" href="/static/css/jquery-contextmenu.css"><link rel="stylesheet" href="/static/css/smoothness/jquery-ui.css"><script src="/static/js/jquery.js"></script></script><script src="/static/js/jquery-ui.js"></script></script><script src="/static/js/jquery-layout.js"></script></script><script src="/static/js/jquery-cookie.js"></script></script><script src="/static/js/jquery-superfish.js"></script></script><script src="/static/js/jquery-contextmenu.js"></script></script><script src="/static/js/tamarin-prover-ui.js"></script></script><script type="module" src="/static/js/intdot-graph.es.js"></script></script><script type="module" src="/static/js/intdot-staticgraph.es.js"></script></script><script type="module" src="/static/js/intdot-dynamicgraph.es.js"></script></script></head><body><p class="loading">Analyzing, please wait...  <a id=cancel href='#'>Cancel</a></p><div class="ui-layout-north">{header}</div><div class="ui-layout-west"><h1 class="pane-head">Proof scripts</h1><div class="scroll-wrapper" id="proof-wrapper"><div class="monospace" id="proof">{proof_state} </div></div></div><div class="ui-layout-east"><h1 class="pane-head">&nbsp;Debug information</h1><div class="scroll-wrapper" id="debug-wrapper"><div id="ui-debug-display"></div></div></div><div class="ui-layout-center"><h1 class="pane-head" id="main-title">Visualization display</h1><div class="scroll-wrapper" id="main-wrapper" tabindex="0"><div id="ui-main-display">{main_view} </div></div></div><div id="dialog"></div><div id="confirm-dialog"></div><ul id="contextMenu"><li class="autoprove"><a href="#autoprove">Autoprove</a></a></li></ul></body></html>"##,
-        name = html_escape(&entry.name),
-        header = header_html,
-        proof_state = proof_state,
-        main_view = main_view,
+    // Byte-faithful port of `overviewTpl` (Web/Hamlet.hs:276-303), the widget
+    // body inside the shared [`default_layout`] frame: a `$newline never`
+    // single line (the only embedded newlines come from the postprocessed
+    // `{proof_state}` west pane and the `{main_view}` centre pane).  Verbatim
+    // hamlet quirks: class-before-id attribute ordering and the
+    // ` </div></div></div>` pane closers.  Volatile substitutions: the theory
+    // name in the title, and — inside `{header}` — the `{version}` field.
+    default_layout(
+        &format!("Theory: {}", html_escape(&entry.name)),
+        &format!(
+            r##"<div class="ui-layout-north">{header}</div><div class="ui-layout-west"><h1 class="pane-head">Proof scripts</h1><div class="scroll-wrapper" id="proof-wrapper"><div class="monospace" id="proof">{proof_state} </div></div></div><div class="ui-layout-east"><h1 class="pane-head">&nbsp;Debug information</h1><div class="scroll-wrapper" id="debug-wrapper"><div id="ui-debug-display"></div></div></div><div class="ui-layout-center"><h1 class="pane-head" id="main-title">Visualization display</h1><div class="scroll-wrapper" id="main-wrapper" tabindex="0"><div id="ui-main-display">{main_view} </div></div></div>"##,
+            header = header_html,
+            proof_state = proof_state,
+            main_view = main_view,
+        ),
     )
 }
 
@@ -56,6 +60,9 @@ fn header(entry: &TheoryEntry) -> String {
     // `target=_blank`, `href=/thy/...`), the `#id`/`.class` shorthands are
     // quoted (`id="header-info"`), and literal `id=abbrv-toggle` attrs stay
     // unquoted.  No "(Rust port)" suffix — HS renders `Running … Tamarin … 1.13.0`.
+    // The "Options" drop-down is `optionsMenuItemTpl True` (Web/Types.hs:749-763,
+    // spliced at Web/Hamlet.hs:190) — the trace-theory variant, which includes
+    // the `abstr-toggle` entry.
     let is_local = matches!(entry.origin, crate::state::TheoryOrigin::Local(_));
     let idx = entry.idx;
     let filename = html_escape(&format!("{}.spthy", entry.name));
@@ -81,20 +88,13 @@ fn header(entry: &TheoryEntry) -> String {
 <li><a href=/thy/trace/{idx}/download/{filename}>Download source</a></li>\
 {append_form}\
 </ul></li>\
-<li><a href=\"#\">Options</a><ul class=\"list-with-toggles\">\
-<li><a id=abbrv-toggle href=\"#\">Abbreviate terms</a></li>\
-<li><a id=agent-toggle href=\"#\">Clustering by role</a></li>\
-<li><a id=auto-toggle href=\"#\">Show annotation auto-sources</a></li>\
-<li><a id=lvl0-toggle href=\"#\">Graph simplification off</a></li>\
-<li><a id=lvl1-toggle href=\"#\">Graph simplification L1</a></li>\
-<li><a id=lvl2-toggle href=\"#\">Graph simplification L2</a></li>\
-<li><a id=lvl3-toggle href=\"#\">Graph simplification L3</a></li>\
-</ul></li></ul></div>",
+{options}</ul></div>",
         version = env!("CARGO_PKG_VERSION"),
         idx = idx,
         filename = filename,
         reload_form = reload_form,
         append_form = append_form,
+        options = OPTIONS_MENU_ITEMS,
     )
 }
 
@@ -249,7 +249,17 @@ fn lemma_index(
     // source operand order and never wrapped, so `++`-operand order and
     // the fcat break-spaces inside tuples/AC chains diverged (the alethea
     // overview family).
-    let canon = tamarin_theory::elaborate::canonicalize_ac_in_formula(&l.formula);
+    // HS's theory stores every lemma predicate-EXPANDED (`liftedAddLemma` →
+    // `expandLemma`); the port's accountability `translate` injects its
+    // generated lemmas with `Pred` sugar intact, deferring expansion to
+    // consumers — apply it here exactly as the batch renderer does, or the
+    // acc-generated lemmas render `IsInvalid( a )` where HS shows the body.
+    // A no-op for ordinary lemmas (elaboration already expanded them).
+    let expanded = tamarin_theory::pretty_theory::expand_lemma_formula_for_display(
+        &entry.parser_theory,
+        &l.formula,
+    );
+    let canon = tamarin_theory::elaborate::canonicalize_ac_in_formula(&expanded);
     // `nest 2 (sep [prettyTraceQuantifier tq, doubleQuotes (prettyLNFormula f)])`
     // — rendered under the active `HtmlDocGuard` (proof_state's), so operators
     // become `hl_operator` spans and the formula text is entity-escaped, while
@@ -602,6 +612,10 @@ fn render_attrs(attrs: &[LemmaAttr], in_file: &str) -> String {
 
 /// Main pane: render the content for a given path.
 pub fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> String {
+    // The rule / lemma / restriction renderers reached below AC-canonicalise
+    // parser-AST terms, which reads the user-fn thread-locals — empty on an
+    // axum worker thread.  See `TheoryEntry::install_user_funs`.
+    let _user_funs_guard = entry.install_user_funs();
     let typed = &entry.typed_theory;
     match path {
         TheoryPath::Help => help_html(entry),
@@ -612,15 +626,17 @@ pub fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> String {
             //   ppSection "Tactic(s)" (prettyTactic <$> _thyTactic)
             // ppSection h s = withTag "h2" [] (text h) $$ withTag "p"
             //   [("class","monospace rules")] (vcat (intersperse (text "") s))
-            // rendered through the `HtmlDoc Doc` transformer + postprocess.  A
-            // literal '<' inside a tactic (e.g. regex lookbehind `(?<!'g'^)`)
-            // is entity-escaped by `Doc::text` under the guard.
-            let _html = tamarin_theory::pretty_hpj::HtmlDocGuard::enable();
+            // rendered through the `HtmlDoc Doc` transformer + postprocess,
+            // which entity-escapes every text node.  `Tactic::render` builds a
+            // plain String that never passes through `Doc::text`, so escape it
+            // here — a literal '<' inside a tactic (e.g. the noise theories'
+            // regex lookbehind `(?<!'g'^)`) must reach the pane as `&lt;`, not
+            // as a pseudo-tag the browser (and the parity normalizer) eats.
             // `vcat (intersperse (text "") s)` = tactics joined by a blank line.
             let body = typed
                 .tactic
                 .iter()
-                .map(|t| t.render())
+                .map(|t| tamarin_theory::pretty_hpj::escape_html_entities(&t.render()))
                 .collect::<Vec<_>>()
                 .join("\n\n");
             assemble_pane(vec![Some(section_fragment(
@@ -836,7 +852,7 @@ use tamarin_theory::rule::{IntrRuleAC, IntrRuleACInfo};
 fn is_constr_intr(info: &IntrRuleACInfo) -> bool {
     matches!(
         info,
-        IntrRuleACInfo::ConstrRule(_)
+        IntrRuleACInfo::ConstrRule { .. }
             | IntrRuleACInfo::FreshConstr
             | IntrRuleACInfo::PubConstr
             | IntrRuleACInfo::NatConstr
@@ -848,7 +864,7 @@ fn is_constr_intr(info: &IntrRuleACInfo) -> bool {
 fn is_destr_intr(info: &IntrRuleACInfo) -> bool {
     matches!(
         info,
-        IntrRuleACInfo::DestrRule(..) | IntrRuleACInfo::IEquality
+        IntrRuleACInfo::DestrRule { .. } | IntrRuleACInfo::IEquality
     )
 }
 
@@ -1073,9 +1089,10 @@ fn sources_html(entry: &TheoryEntry, kind: &SourceKind) -> String {
 
 /// Compute `getSource kind thy` — the raw or refined source list, as
 /// `(goal, cases)` pairs.  Shared by `sources_html` (the page) and
-/// `source_case_counts` (the theory-index `(N cases, …)` annotation) so both
-/// stay consistent.  Returns empty when the proof state is not yet built.
-fn compute_source_lists(
+/// `source_case_counts` (the theory-index `(N cases, …)` annotation) so they
+/// stay consistent; the graph routes take the single case they draw from
+/// [`source_list_case`].  Returns empty when the proof state is not yet built.
+pub(crate) fn compute_source_lists(
     entry: &TheoryEntry,
     want_refined: bool,
 ) -> Vec<(
@@ -1092,38 +1109,12 @@ fn compute_source_lists(
     // thread-locals — install them (see `ProofState::user_funs`).
     let _user_funs_guard = ps.install_user_funs();
     let ctx = ps.ctx.lock();
-    // Refined sources fold in the `[sources]`-lemma typing assumptions
-    // (HS `refineWithSourceAsms`, Rule.hs:157).  With no such lemma the refine
-    // is a plain relabel to `RefinedSource` (Sources.hs:617-618).
-    let typ_asms: Vec<tamarin_theory::guarded::Guarded> = if want_refined {
-        entry
-            .typed_theory
-            .lemmas()
-            .filter(|l| {
-                matches!(l.trace_quantifier, TraceQuantifier::AllTraces)
-                    && l.attributes.iter().any(|a| matches!(a, LemmaAttr::Sources))
-            })
-            .filter_map(|l| tamarin_theory::guarded::formula_to_guarded(&l.formula).ok())
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let typ_asms = source_typ_asms(entry, want_refined);
 
     // `getSource kind thy`: raw = `ctx.full_sources` (precomputed + saturated);
     // refined = raw with `refineWithSourceAsms` applied (or relabeled).
     if want_refined && !typ_asms.is_empty() {
-        let cloned: Vec<_> = ctx
-            .full_sources
-            .iter()
-            .map(|s| {
-                let _ = s.cases(&ctx);
-                s.clone()
-            })
-            .collect();
-        let refined = tamarin_theory::constraint::solver::sources::refine_with_source_asms(
-            cloned, &typ_asms, &ctx,
-        );
-        refined
+        refined_sources(&ctx, &typ_asms)
             .iter()
             .map(|s| (s.goal.clone(), s.cases_or_empty()))
             .collect()
@@ -1141,6 +1132,98 @@ fn compute_source_lists(
             })
             .collect()
     }
+}
+
+/// The `[sources]`-lemma typing assumptions the refined list folds in (HS
+/// `typAsms`, CloseRule.hs:117-119, fed to `refineWithSourceAsms`,
+/// Sources.hs:452-475) — empty for the raw list, and with no such lemma the
+/// refine is a plain relabel to `RefinedSource` (Sources.hs:458-459).
+/// `formula_to_guarded` resolves user fun symbols, so callers must hold the
+/// theory's user-fn guard.
+fn source_typ_asms(
+    entry: &TheoryEntry,
+    want_refined: bool,
+) -> Vec<tamarin_theory::guarded::Guarded> {
+    if !want_refined {
+        return Vec::new();
+    }
+    entry
+        .typed_theory
+        .lemmas()
+        .filter(|l| {
+            matches!(l.trace_quantifier, TraceQuantifier::AllTraces)
+                && l.attributes.iter().any(|a| matches!(a, LemmaAttr::Sources))
+        })
+        .filter_map(|l| tamarin_theory::guarded::formula_to_guarded(&l.formula).ok())
+        .collect()
+}
+
+/// `refineWithSourceAsms typAsms (getSource RawSource thy)`: the raw sources,
+/// each forced, refined against the `[sources]`-lemma typing assumptions.
+///
+/// The refine is a whole-list computation (`saturate_sources_with_simp` runs
+/// across sources), so every source is built even for a caller that wants a
+/// single case out of the result.
+fn refined_sources(
+    ctx: &tamarin_theory::constraint::solver::context::ProofContext,
+    typ_asms: &[tamarin_theory::guarded::Guarded],
+) -> Vec<tamarin_theory::constraint::solver::sources::Source> {
+    // `ensure_cases` is `cases()`'s materialisation without its per-case clone.
+    let forced: Vec<_> = ctx
+        .full_sources
+        .iter()
+        .map(|s| {
+            s.ensure_cases(ctx);
+            s.clone()
+        })
+        .collect();
+    tamarin_theory::constraint::solver::sources::refine_with_source_asms(forced, typ_asms, ctx)
+}
+
+/// The one case system the `(src_idx, case_idx)` pair names in `getSource kind
+/// thy` — [`compute_source_lists`]'s selection without cloning out the cases
+/// the request does not serve.  Both indices are 1-based and read signed;
+/// `None` when either names no case, and when the proof state is not yet built.
+pub(crate) fn source_list_case(
+    entry: &TheoryEntry,
+    want_refined: bool,
+    src_idx: i64,
+    case_idx: i64,
+) -> Option<tamarin_theory::constraint::system::System> {
+    use tamarin_theory::constraint::system::SourceKind as SysSourceKind;
+    let ps = entry.proof_state.as_ref()?;
+    // Same thread-locals the whole-list build needs (see
+    // [`compute_source_lists`]).
+    let _user_funs_guard = ps.install_user_funs();
+    let ctx = ps.ctx.lock();
+    let typ_asms = source_typ_asms(entry, want_refined);
+    if want_refined && !typ_asms.is_empty() {
+        nth_case_system(&refined_sources(&ctx, &typ_asms), src_idx, case_idx)
+    } else {
+        // `ensure_cases` is `cases()`'s materialisation without its per-case
+        // clone: the sources this request does not serve are forced exactly as
+        // the whole-list build forces them, and none of them is copied out.
+        for s in &ctx.full_sources {
+            s.ensure_cases(&ctx);
+        }
+        let mut sys = nth_case_system(&ctx.full_sources, src_idx, case_idx)?;
+        if want_refined {
+            sys.source_kind = Some(SysSourceKind::RefinedSources);
+        }
+        Some(sys)
+    }
+}
+
+/// `sources !! (src_idx - 1) !! (case_idx - 1)` over a materialised source
+/// list: `None` for any index that names no case.
+fn nth_case_system(
+    sources: &[tamarin_theory::constraint::solver::sources::Source],
+    src_idx: i64,
+    case_idx: i64,
+) -> Option<tamarin_theory::constraint::system::System> {
+    let src_nth = usize::try_from(src_idx.checked_sub(1)?).ok()?;
+    let case_nth = usize::try_from(case_idx.checked_sub(1)?).ok()?;
+    sources.get(src_nth)?.case_system_at(case_nth)
 }
 
 /// HS `casesInfo kind` (Web/Theory.hs:399-406): `(nCases, chainInfo)` where

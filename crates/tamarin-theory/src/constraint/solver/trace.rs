@@ -1,8 +1,9 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, PhilipLukertWork, jdreier, beschmi, charlie-j, rkunnema,
-//   niklasmedinger, felixlinker, ValentinYuri, yavivanov, and other
-//   minor contributors (see upstream git history)
+//   meiersi, jdreier, PhilipLukertWork, beschmi, charlie-j, rkunnema,
+//   niklasmedinger, felixlinker, rsasse, ValentinYuri, yavivanov, and
+//   other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
+//   lib/term/src/Term/LTerm.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Goals.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Simplify.hs
@@ -10,7 +11,7 @@
 //! RS-only execution-trace diagnostic scaffolding.
 //!
 //! This is a Rust-only facility with no counterpart in the canonical
-//! Haskell tree.  It was designed to diff against a *private/local*
+//! Haskell tree.  It is designed to diff against a *private/local*
 //! instrumented build of the Haskell tamarin-prover; the matching
 //! Haskell side (an `[EXEC]`-style `traceExecM` patch) was never
 //! committed upstream, so the labels below have no canonical
@@ -64,7 +65,7 @@ thread_local! {
 /// `current_op_label` / `OpLabelGuard`) is pure overhead — each guard
 /// clones a thread-local `String` and runs `label.to_string()` — so the
 /// operations below early-return as no-ops.  Byte-safe: when the consuming
-/// flag IS set the label behaves exactly as before; when it is unset the
+/// flag IS set the label machinery runs in full; when it is unset the
 /// label is never observed, so skipping the clones changes nothing.
 pub fn op_label_enabled() -> bool {
     tamarin_utils::env_gate!("TAM_RS_DBG_APPLY_EQ_STORE")
@@ -516,9 +517,10 @@ pub fn trace_state(sys: &crate::constraint::system::System) {
         // Also dump open Action goals with their idx-preserved fact
         // content (the canonical [STATE] line above suppresses idxs).
         // These are Ex-decomposed action atoms that haven't been folded
-        // into nodes yet — they participate in `impl_formulas` matching
-        // and are critical for diagnosing IH-Forall-fires-but-misses-
-        // gfalse divergences at case-3 (Helper_Loop_and_success).
+        // into nodes yet — they participate in
+        // `insert_implied_formulas_pass` matching and are critical for
+        // diagnosing IH-Forall-fires-but-misses-gfalse divergences at
+        // case-3 (Helper_Loop_and_success).
         use crate::constraint::constraints::Goal;
         for (g, st) in sys.goals.iter() {
             if st.solved {
@@ -592,6 +594,9 @@ fn write_lnterm_canon(
                 tamarin_term::lterm::NameTag::Fresh => format!("~'{}'", nm),
                 tamarin_term::lterm::NameTag::Nat => format!("%{}", nm),
                 tamarin_term::lterm::NameTag::Node => format!("#'{}'", nm),
+                // `show (Name AbbrevName n) = show n` (LTerm.hs:240) — the
+                // bare id.
+                tamarin_term::lterm::NameTag::Abbrev => nm.to_string(),
             }
         }
         Term::App(sym, args) => {

@@ -1,21 +1,23 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, kevinmorio, rkunnema, beschmi, felixlinker, jdreier,
-//   charlie-j, arcz, rsasse, racoucho1u, yavivanov, PhilipLukertWork,
-//   Nynko, BTom-GH, Azurios-git, ValentinYuri, symphorien, xaDxelA,
-//   robert.kunnemann@cased.de, and other minor contributors (see
-//   upstream git history)
+//   jdreier, meiersi, kevinmorio, rkunnema, beschmi, felixlinker,
+//   charlie-j, rsasse, arcz, racoucho1u, Azurios-git, yavivanov,
+//   PhilipLukertWork, Nynko, Hong-Thai, ValentinYuri, BTom-GH,
+//   symphorien, xaDxelA, Mathias-AURAND, robert.kunnemann@cased.de, and
+//   other minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Maude/Parser.hs, lib/theory/src/ClosedTheory.hs,
-//   lib/theory/src/Rule.hs,
+//   lib/term/src/Term/Maude/Parser.hs, lib/theory/src/CloseRule.hs,
+//   lib/theory/src/ClosedTheory.hs, lib/theory/src/Rule.hs,
 //   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
 //   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
 //   lib/theory/src/Theory/Constraint/System.hs,
 //   lib/theory/src/Theory/Model/Fact.hs,
+//   lib/theory/src/Theory/Model/Rule.hs,
 //   lib/theory/src/Theory/Proof.hs, lib/theory/src/Theory/Sapic.hs,
 //   lib/theory/src/Theory/Text/Parser.hs,
 //   lib/theory/src/Theory/Tools/IntruderRules.hs,
 //   lib/theory/src/Theory/Tools/LoopBreakers.hs,
+//   lib/theory/src/Theory/Tools/MessageDerivationChecks.hs,
 //   lib/theory/src/Theory/Tools/RuleVariants.hs,
 //   src/Main/Mode/Intruder.hs, src/Main/TheoryLoader.hs
 
@@ -42,6 +44,55 @@ use tamarin_term::maude_proc::{MaudeHandle, MaudePool};
 use crate::rule::IntrRuleAC;
 use crate::theory::OpenProtoRule;
 
+/// Shared handle on a theory's intruder-rule cache.
+///
+/// The rules are read-only once built: HS's `closeRuleCache` consumes
+/// `_thyCache` verbatim.  The load paths build the cache once per theory
+/// (the NDC pass, `close_rule::check_close_intr_rule`) and hand that one
+/// handle to every context derived from it, so the many per-probe /
+/// per-deduction / per-lemma contexts cost a refcount bump instead of a
+/// deep copy of the rule list.  A context built WITHOUT an injected cache
+/// assembles its own ([`ProofContext::assemble_intruder_rules`] plus the
+/// cache permutation) and shares that one with its own clones.
+///
+/// Reads go through the [`std::ops::Deref`] to `[IntrRuleAC]` (and the
+/// borrowing [`IntoIterator`]), which keeps the slice API — `.iter()`,
+/// indexing, `for r in &cache` — available on the handle.  There is
+/// deliberately no `DerefMut` and no interior mutability: sharing cannot
+/// change what any context sees.
+#[derive(Debug, Clone)]
+pub struct IntrRuleCache(std::sync::Arc<Vec<IntrRuleAC>>);
+
+impl From<Vec<IntrRuleAC>> for IntrRuleCache {
+    fn from(rules: Vec<IntrRuleAC>) -> Self {
+        IntrRuleCache(std::sync::Arc::new(rules))
+    }
+}
+
+/// Adopt an already-shared rule list without copying it.  The web
+/// `TheoryEntry` keeps its load-time cache as `Arc<Vec<IntrRuleAC>>`, so
+/// every `ProofState` built from that entry reuses the one allocation.
+impl From<std::sync::Arc<Vec<IntrRuleAC>>> for IntrRuleCache {
+    fn from(rules: std::sync::Arc<Vec<IntrRuleAC>>) -> Self {
+        IntrRuleCache(rules)
+    }
+}
+
+impl std::ops::Deref for IntrRuleCache {
+    type Target = [IntrRuleAC];
+    fn deref(&self) -> &[IntrRuleAC] {
+        &self.0
+    }
+}
+
+impl<'a> IntoIterator for &'a IntrRuleCache {
+    type Item = &'a IntrRuleAC;
+    type IntoIter = std::slice::Iter<'a, IntrRuleAC>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
 /// Read-only, immutable-after-build bundle of a `ProofContext`.
 ///
 /// These fields are computed once at theory-load time (in
@@ -59,8 +110,10 @@ use crate::theory::OpenProtoRule;
 ///    cloned contents), so per-lemma clones (`template_ctx.clone()`) stay
 ///    fully independent — each lemma's `ensure_saturated` populates ITS
 ///    OWN `full_sources` cells under ITS OWN `typing_assumptions`, with
-///    no cross-lemma contamination (byte-identical to the pre-Arc
-///    behaviour).
+///    no cross-lemma contamination.  `intruder_rules` is the one member
+///    that stays shared across such a clone: it is an [`IntrRuleCache`]
+///    handle over read-only rules with no interior mutability, so no
+///    lemma can observe another's use of it.
 ///  * `with_swapped_maude` SHARES this bundle (`Arc::clone`).  Its clones
 ///    are created only DURING a lemma's proof search — after
 ///    `ensure_saturated` has run and set `saturate_state = Done` — so the
@@ -71,11 +124,17 @@ use crate::theory::OpenProtoRule;
 ///    ORDER; it only avoids re-deep-copying identical read-only data.
 #[derive(Debug)]
 pub struct ProofContextShared {
-    /// Special intruder rules — `Coerce`, `PubConstr`, `FreshConstr`,
-    /// `ISend`, `IRecv` (and `IEquality` in diff mode). These let the
-    /// solver discharge `KU(_)` / `KD(_)` goals that arise from
-    /// `In(_)`-fact reasoning.
-    pub intruder_rules: Vec<IntrRuleAC>,
+    /// The theory's intruder-rule cache: either the once-per-load
+    /// NDC-checked cache injected by the loader, or
+    /// [`ProofContext::assemble_intruder_rules`] (subterm constructor rules,
+    /// the special rules — `Coerce`, `PubConstr`, `FreshConstr`, `ISend`,
+    /// `IRecv`, plus `IEquality` in diff mode — the MSet/Xor rules, the
+    /// user-symbol destruction rules, then the DH/BP variants) run through
+    /// `ndc_check_cache_order`.  These let the solver discharge `KU(_)` /
+    /// `KD(_)` goals that arise from `In(_)`-fact reasoning.  Held as a
+    /// shared [`IntrRuleCache`] handle, so cloning the bundle shares the
+    /// rule list instead of copying it.
+    pub intruder_rules: IntrRuleCache,
     /// Precomputed unique sources — for each fact tag with exactly
     /// one producing rule, we cache the producer name. Lets goal
     /// solving short-circuit candidate enumeration.
@@ -127,7 +186,8 @@ pub struct ProofContextShared {
     /// `full_sources` cells it guards so that a shared clone
     /// (`with_swapped_maude`) sees the same `Done` gate as the cells.
     pub(crate) saturate_state: std::sync::Mutex<SaturateState>,
-    /// Cached saturation limit (from `IntegerParameters::default()`).
+    /// Cached saturation limit (from `IntegerParameters::current()` — the
+    /// HS default 5 unless `-s/--saturation` overrode it).
     pub(crate) saturation_limit: usize,
 }
 
@@ -262,10 +322,10 @@ impl Clone for ProofContext {
     /// DEEP clone: the owned fields are cloned by value and the shared
     /// bundle is re-materialised into a FRESH `Arc` (`Arc::new(…clone)`),
     /// NOT refcount-bumped.  This keeps per-lemma clones
-    /// (`template_ctx.clone()`) fully independent — byte-identical to the
-    /// pre-Arc behaviour — so each lemma saturates its own
-    /// `full_sources` under its own `typing_assumptions`.  The cheap
-    /// refcount-bump form lives only in [`Self::with_swapped_maude`].
+    /// (`template_ctx.clone()`) fully independent, so each lemma saturates
+    /// its own `full_sources` under its own `typing_assumptions`.  The
+    /// cheap refcount-bump form lives only in
+    /// [`Self::with_swapped_maude`].
     fn clone(&self) -> Self {
         ProofContext {
             maude: self.maude.clone(),
@@ -362,8 +422,8 @@ impl ProofContext {
     /// [`ProofContextShared`] for the full sharing-vs-cloning argument.
     ///
     /// The small owned fields (`rules`, `injective_fact_insts`,
-    /// per-lemma `typing_assumptions` / `heuristic` / names) are still
-    /// cloned by value, exactly as before.
+    /// per-lemma `typing_assumptions` / `heuristic` / names) are cloned by
+    /// value.
     ///
     /// The new context drops `maude_pool` (set to None): the worker
     /// already owns a per-task subprocess for the task's duration, and
@@ -509,6 +569,7 @@ impl ProofContext {
         // the stored cases, which are re-freshened from `avoid(live_sys)` on
         // every apply, so the global counter must not retain the advance.
         self.maude.reset_counter_to(saturate_cnt_before);
+        self.dump_sources();
         *self.saturate_state.lock().unwrap() = SaturateState::Done;
     }
 
@@ -553,79 +614,52 @@ impl ProofContext {
         rules: Vec<OpenProtoRule>,
         restrictions: Vec<crate::guarded::Guarded>,
     ) -> Self {
-        Self::new_with_restrictions_pool_forced(maude, maude_pool, rules, restrictions, &[])
+        Self::new_with_restrictions_pool_forced(maude, maude_pool, rules, restrictions, &[], None)
     }
 
     /// HS-faithful assembly of the intruder-rule cache
-    /// (`addMessageDeductionRuleVariants`, TheoryLoader.hs:776-791): subterm
-    /// rules, per-rule `closeIntrRule`, special rules, then the theory-specific
-    /// Nat/MSet/Xor/DH/BP variants — all in HS order.  Depends only on `sig`
-    /// and `maude`.
+    /// (`addMessageDeductionRuleVariants`, TheoryLoader.hs): subterm
+    /// constructor rules, special rules, the theory-specific MSet/Xor
+    /// rules, the narrowing-based destruction rules for user-defined
+    /// symbols, then the DH/BP cached variants — all in HS order.
+    /// Depends only on `sig` and `maude`.
     ///
-    /// Order: subterm rules FIRST, then special rules.  Mirrors
-    /// Haskell's `addMessageDeductionRuleVariants` (TheoryLoader.hs:784-789):
-    ///     rules = subtermIntruderRules False msig
-    ///          ++ specialIntruderRules False
-    ///          ++ ...
+    /// Mirrors Haskell's `addMessageDeductionRuleVariants`:
+    ///
+    /// ```haskell
+    /// rules0 = reader $ \hnd -> subtermConstructorRules False hnd msig
+    ///                ++ specialIntruderRules False
+    ///                ++ (if enableMSet msig then multisetIntruderRules else [])
+    ///                ++ (if enableXor msig then xorIntruderRules else [])
+    /// rulesAC   = destructionRulesAC False (acUserFunSyms msig)
+    /// rulesNoEq = destructionRulesNoEq False (noEqFunSyms msig)
+    /// rules     = liftA2 (++) rules0 (liftA2 (++) rulesAC rulesNoEq)
+    /// ```
+    ///
+    /// (Note that HS's trace-mode `rules0` does NOT include
+    /// `natIntruderRules` — only the diff-mode assembly adds it.)
+    /// Intruder rules arrive here fully processed: the destruction-rule
+    /// generators already compute variants and per-rule chain budgets, so
+    /// no per-rule closing pass runs at cache-build time (HS
+    /// `closeRuleCache`: `rulesAC = (fmap IntrInfo <$> intrRules) <|> ...`).
+    ///
     /// The ORDER MATTERS for solveAction's `disjunctionOfList rules` —
     /// a `KU(aenc(t1,t2))` goal is matched against c_aenc BEFORE
     /// coerce, producing cdCases = [c_aenc, coerce] instead of
     /// [coerce, c_aenc].  This downstream determines which case
     /// applies first in the proof renderer (e.g. NSPK3 injective_agree
     /// picks `case c_aenc` like Haskell does).
-    fn assemble_intruder_rules(
+    ///
+    /// `pub(crate)` for the load-time NDC pass
+    /// (`close_rule::check_close_intr_rule`), which assembles the same
+    /// cache once per theory before checking/permuting it.
+    pub(crate) fn assemble_intruder_rules(
         sig: &tamarin_term::maude_sig::MaudeSig,
         maude: &MaudeHandle,
     ) -> Vec<IntrRuleAC> {
-        let mut intruder_rules = crate::intruder_rules::subterm_intruder_rules(false, sig);
-        // HS-faithful: run `closeIntrRule` over EACH intr rule BEFORE
-        // `special_intruder_rules` are appended.  Mirrors Haskell
-        // `Rule.closeRuleCache` (lib/theory/src/Rule.hs:121-176, see line 160):
-        //     intrRulesAC = concat $ map (closeIntrRule hnd) intrRules
-        //
-        // `closeIntrRule` does two things:
-        //   (a) For `DestrRule subterm=True` it computes the per-rule
-        //       `paciRemainingApplications` budget (number of consecutive
-        //       chain applications).
-        //   (b) For `DestrRule subterm=False` (convergent-equation
-        //       destructors like `d_0_comb` in issue216) it invokes
-        //       `variantsIntruder` to enumerate Maude variants and add
-        //       them to the pool.  Without this, the chain pool for
-        //       issue216 has `nRules=6` instead of HS's `nRules=9`, and
-        //       all 4 issue216 lemmas fail to close.
-        //
-        // Per HS, `closeIntrRule` runs AFTER `minimizeIntruderRules`
-        // (already done inside `subterm_intruder_rules`) and BEFORE the
-        // `special_intruder_rules` append (since HS appends specials
-        // separately in `addMessageDeductionRuleVariants`).
-        intruder_rules = intruder_rules
-            .into_iter()
-            .flat_map(|ir| crate::intruder_rules::close_intr_rule(maude, &ir))
-            .collect();
+        let mut intruder_rules =
+            crate::intruder_rules::subterm_constructor_rules(false, maude, sig);
         intruder_rules.extend(crate::intruder_rules::special_intruder_rules(false));
-        // HS-faithful: theory-specific intruder rules (Nat, MSet, Xor) —
-        // port of `Main.TheoryLoader.addMessageDeductionRuleVariants`
-        // (src/Main/TheoryLoader.hs:786-789):
-        //
-        // ```haskell
-        // rules =
-        //   subtermIntruderRules False msig
-        //   ++ specialIntruderRules False
-        //   ++ (if enableNat  msig then natIntruderRules     else [])
-        //   ++ (if enableMSet msig then multisetIntruderRules else [])
-        //   ++ (if enableXor  msig then xorIntruderRules     else [])
-        // ```
-        //
-        // For nat: the single `nat` constructor
-        // `[] --[ KU(%x) ]-> [ KU(%x) ]` (natIntruderRules,
-        // IntruderRules.hs:113-120).  Without it the precomputed
-        // source-cases for nat-sorted `KU` goals are empty ("0 cases"
-        // where HS shows the `nat` source) and the `/main/message`
-        // page omits the rule.  Ordered between special and mset as in
-        // the HS list above.
-        if sig.enable_nat {
-            intruder_rules.extend(crate::intruder_rules::nat_intruder_rules());
-        }
         // For multiset: adds `_union` destructor (`KD(x++y) → KD(x)`,
         // subterm=True, budget=0) and `_union` constructor.  Without these,
         // the precomputed `KU(t)` source-cases miss the chain-extension
@@ -641,16 +675,37 @@ impl ProofContext {
         // for XOR cancellation (KD(x⊕y) ∧ KU(y⊕z) → KD(x⊕z) and
         // KD(x⊕y) ∧ KU(y) → KD(x)), one constructor (KU(x⊕y) from
         // KU(x), KU(y)), plus the `zero` constructor.  Without
-        // these every XOR-using theory was unsound: the canonical
-        // adversary attack `(x⊕y) ⊕ y = x` was unreachable, so
+        // these every XOR-using theory is unsound: the canonical
+        // adversary attack `(x⊕y) ⊕ y = x` is unreachable, so
         // `xor.spthy::Secret` and all `recentalive_tag`-style lemmas
-        // wrongly verified.  Mirrors HS's enableXor branch.
+        // wrongly verify.  Mirrors HS's enableXor branch.
         if sig.enable_xor {
             intruder_rules.extend(crate::intruder_rules::xor_intruder_rules());
         }
+        // Narrowing-based destruction rules for user-defined function
+        // symbols — HS `rulesACNoEq`:
+        //
+        // ```haskell
+        // rulesAC   = destructionRulesAC False (acUserFunSyms msig)
+        // rulesNoEq = destructionRulesNoEq False (noEqFunSyms msig)
+        // rulesACNoEq = liftA2 (++) rulesAC rulesNoEq
+        // ```
+        //
+        // AC first, then NoEq; appended after `rules0` and before the
+        // DH/BP cached variants.
+        intruder_rules.extend(crate::intruder_rules::destruction_rules_ac(
+            false,
+            maude,
+            &sig.ac_user_fun_syms(),
+        ));
+        intruder_rules.extend(crate::intruder_rules::destruction_rules_no_eq(
+            false,
+            maude,
+            &sig.no_eq_fun_syms(),
+        ));
         // DH / BP intruder variants — port of HS
         // `Main.TheoryLoader.addMessageDeductionRuleVariants`
-        // (src/Main/TheoryLoader.hs:776-791):
+        // (src/Main/TheoryLoader.hs):
         //
         // ```haskell
         // addMessageDeductionRuleVariants thy0
@@ -691,23 +746,196 @@ impl ProofContext {
         intruder_rules
     }
 
+    /// Debug dump of the context's final intruder-rule cache, gated by
+    /// `TAM_RS_DBG_INTR_DUMP`.
+    fn dump_intruder_rules(out: &[IntrRuleAC]) {
+        if !tamarin_utils::env_gate!("TAM_RS_DBG_INTR_DUMP") {
+            return;
+        }
+        use crate::rule::IntrRuleACInfo;
+        let pf = |fs: &[crate::fact::LNFact]| {
+            fs.iter()
+                .map(crate::pretty_system::pretty_fact)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        for (i, r) in out.iter().enumerate() {
+            let kind = match &r.info {
+                IntrRuleACInfo::ConstrRule { name, .. } => {
+                    format!("CONSTR {}", String::from_utf8_lossy(name))
+                }
+                IntrRuleACInfo::DestrRule {
+                    name,
+                    remaining_applications,
+                    rhs_is_proper_subterm,
+                    rhs_is_constant,
+                    ..
+                } => format!(
+                    "DESTR {} b={} s={} c={}",
+                    String::from_utf8_lossy(name),
+                    remaining_applications,
+                    rhs_is_proper_subterm,
+                    rhs_is_constant
+                ),
+                other => format!("{:?}", other),
+            };
+            eprintln!(
+                "[INTRDUMP] {} {} | prems=[{}] concs=[{}]",
+                i,
+                kind,
+                pf(&r.premises),
+                pf(&r.conclusions)
+            );
+        }
+    }
+
+    /// Debug dump of this context's precomputed sources — one line per
+    /// source, with its goal and its materialised case names — gated by
+    /// `TAM_RS_DBG_SOURCES_DUMP`.
+    fn dump_sources(&self) {
+        if !tamarin_utils::env_gate!("TAM_RS_DBG_SOURCES_DUMP") {
+            return;
+        }
+        use crate::constraint::constraints::Goal;
+        for (i, src) in self.full_sources.iter().enumerate() {
+            let goal = match &src.goal {
+                Goal::Action(_, fa) => format!("Action {}", crate::pretty_system::pretty_fact(fa)),
+                Goal::Premise(_, fa) => {
+                    format!("Premise {}", crate::pretty_system::pretty_fact(fa))
+                }
+                _ => "other".to_string(),
+            };
+            let names: Vec<String> = src
+                .cases_cell
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|cs| cs.iter().map(|(ns, _)| ns.join("_")).collect())
+                .unwrap_or_default();
+            eprintln!(
+                "[SRCDUMP] {} goal=<{}> ncases={} names={:?}",
+                i,
+                goal,
+                names.len(),
+                names
+            );
+        }
+    }
+
+    /// Cache permutation performed by HS `prettyNDCcheck` (CloseRule.hs),
+    /// which `checkCloseIntrRule` (TheoryLoader.hs:569) runs on the
+    /// assembled cache right after `addMessageDeductionRuleVariants`:
+    ///
+    /// ```haskell
+    /// (builtInOrConstrOrNDC, nonBuiltInDestr) = partition
+    ///     (\x -> isBuiltInIntruderRule x || isConstrRule x
+    ///            || isJust (isNDCRule x)) initRules
+    /// t' = groupBy ((==) `on` getDestrRuleFunction)
+    ///          $ sortOn getDestrRuleFunction nonBuiltInDestr
+    /// (subtermRules, t) = partition (all isSubtermRule) t'
+    /// -- result: concat t ++ builtInOrConstrOrNDC ++ concat subtermRules
+    /// ```
+    ///
+    /// i.e. checked (non-all-subterm) user destructor groups first, then the
+    /// builtin/constructor/NDC-tagged rules in assembly order, then the
+    /// all-subterm user destructor groups.  The order feeds chain-extension
+    /// and source-case enumeration, so it is parity-relevant (e.g. the
+    /// `C_2_case_NN` source numbering of csf18-xor/chaum theories).
+    ///
+    /// Only the permutation is applied here — the property check itself
+    /// (`crate::close_rule::pretty_ndc_check`) is bypassed.  Applied to
+    /// contexts built WITHOUT an injected cache (tests / library callers):
+    /// the load paths run the check once per theory
+    /// (`close_rule::check_close_intr_rule`) and inject its result, so a
+    /// non-injected construction never re-runs the proving work.
+    /// The concatenation order lives in `close_rule::ndc_cache_order`,
+    /// shared with `pretty_ndc_check` so the two cannot drift.
+    fn ndc_check_cache_order(rules: Vec<IntrRuleAC>) -> Vec<IntrRuleAC> {
+        let (builtin_or_constr_or_ndc, checked_groups, all_subterm) =
+            crate::close_rule::partition_for_ndc(rules);
+        crate::close_rule::ndc_cache_order(
+            checked_groups.into_iter().flatten().collect(),
+            builtin_or_constr_or_ndc,
+            all_subterm,
+        )
+    }
+
     /// Like [`new_with_restrictions_and_pool`] but also unions the FORCED
     /// injective fact tags into `injective_fact_insts` BEFORE source
     /// precomputation — mirroring HS `closeRuleCache` (Rule.hs:147-157), where
     /// `injFactInstances` (forced ∪ simple) seeds `ctxt0`, which then drives
     /// `precomputeSources`.  Used for the SAPIC state-channel optimisation
     /// (`setforcedInjectiveFacts {L_PureState, L_CellLocked}`, Sapic.hs:84).
+    ///
+    /// `intr_override`: the theory's once-per-load NDC-checked intruder
+    /// cache (`close_rule::check_close_intr_rule`), injected so this
+    /// context reuses the tagged+permuted rules instead of re-assembling —
+    /// HS `closeRuleCache` consumes `_thyCache` verbatim.  `None`
+    /// assembles from the signature with the cache permutation applied
+    /// (no property check).  A `Some` argument shares the caller's rule
+    /// list rather than copying it.
     pub fn new_with_restrictions_pool_forced(
+        maude: MaudeHandle,
+        maude_pool: Option<std::sync::Arc<MaudePool>>,
+        rules: Vec<OpenProtoRule>,
+        restrictions: Vec<crate::guarded::Guarded>,
+        forced_injective_facts: &[crate::fact::FactTag],
+        intr_override: Option<IntrRuleCache>,
+    ) -> Self {
+        Self::new_impl(
+            maude,
+            maude_pool,
+            rules,
+            restrictions,
+            forced_injective_facts,
+            intr_override,
+        )
+    }
+
+    /// Build a context whose intruder-rule cache is INJECTED rather than
+    /// assembled from the signature.  Used by the NDC deduction check's
+    /// synthetic theories (cache = the parent's pre-check cache mapped
+    /// through `boundToOne`; HS `closeTheoryWithMaude sig t` with
+    /// `thyCache = intrRmodified`, CloseRule.hs) and by the
+    /// message-derivation probe contexts (cache = the parent theory's
+    /// checked `_thyCache`, which HS probes inherit verbatim,
+    /// MessageDerivationChecks.hs).  No NDC pass runs on the injected
+    /// cache (HS's re-closing never re-checks).
+    /// Both callers build many contexts off ONE cache (one per probe rule,
+    /// one per decomposition of a checked rule pair), so the handle is
+    /// shared rather than copied per context.
+    pub fn new_with_injected_intruder_rules(
+        maude: MaudeHandle,
+        rules: Vec<OpenProtoRule>,
+        restrictions: Vec<crate::guarded::Guarded>,
+        intruder_rules: IntrRuleCache,
+    ) -> Self {
+        Self::new_impl(maude, None, rules, restrictions, &[], Some(intruder_rules))
+    }
+
+    fn new_impl(
         maude: MaudeHandle,
         maude_pool: Option<std::sync::Arc<MaudePool>>,
         mut rules: Vec<OpenProtoRule>,
         restrictions: Vec<crate::guarded::Guarded>,
         forced_injective_facts: &[crate::fact::FactTag],
+        intr_override: Option<IntrRuleCache>,
     ) -> Self {
         // Inherit the maude signature from the handle so we can
         // synthesise per-symbol construction rules.
         let sig = maude.maude_sig();
-        let intruder_rules = Self::assemble_intruder_rules(&sig, &maude);
+        // Injected cache = the theory's once-per-load NDC-checked rules,
+        // consumed verbatim (HS `closeRuleCache` on `_thyCache`).
+        // Without one, assemble from the signature and apply the NDC
+        // cache permutation — never the property check, which runs only
+        // once per theory at load (`close_rule::check_close_intr_rule`).
+        let intruder_rules: IntrRuleCache = match intr_override {
+            Some(cache) => cache,
+            None => IntrRuleCache::from(Self::ndc_check_cache_order(
+                Self::assemble_intruder_rules(&sig, &maude),
+            )),
+        };
+        Self::dump_intruder_rules(&intruder_rules);
         // Detect injective fact instances ahead of time — mirrors
         // Haskell's `pcInjectiveFactInsts` precomputation.
         let proto_rules: Vec<crate::rule::ProtoRuleE> =
@@ -814,7 +1042,7 @@ impl ProofContext {
         )> = Vec::new();
         // SplitG variants is the Haskell-faithful path
         // (`someRuleACInst` + `solveRuleConstraints` from Rule.hs:933 /
-        // Reduction.hs:766-774).  Always on — there is no legacy fallback.
+        // Reduction.hs:766-774).  Always on.
         //
         // HS-faithful (RuleVariants.hs:75-129): `variantsProtoRule` runs
         // UNCONDITIONALLY for every closed protocol rule.  For rules with no
@@ -826,20 +1054,17 @@ impl ProofContext {
         // calls `insertGoal (SplitG splitId) False` — bumping `sNextGoalNr`
         // by 1 at every `labelNodeId` call regardless of whether the rule has
         // any destructors.  Skipping the variant-substs computation for
-        // non-destructor rules under-bumped that counter and desynchronised
+        // non-destructor rules would under-bump that counter and desynchronise
         // RS's gsNr trace from HS's at every destructor-free `labelNodeId`
         // (e.g. Yubikey.spthy::Server, Yubikey.spthy::Setup), which the
-        // smart-rank tie-breaker then resolved differently.
+        // smart-rank tie-breaker would then resolve differently.
         for (idx, o) in rules.iter().enumerate() {
-            if !o.variants.is_empty() {
-                continue;
-            }
             // The constraint solver reads only `abstracted_rule` +
             // `variant_substs` (`canonical_rule_inst` /
-            // `rule_insts_with_constrs`, reduction.rs:2868,2895); it never
-            // reads `o.variants`.  We therefore skip the RAW `get variants`
-            // Maude query (the single biggest Maude cost on bilinear
-            // protocols) and compute only the abstracted form + substs.
+            // `rule_insts_with_constrs` in reduction.rs), so the RAW
+            // `get variants` Maude query (the single biggest Maude cost on
+            // bilinear protocols) is skipped and only the abstracted form +
+            // substs are computed.
             //
             // The variant substitutions and the abstracted rule are computed
             // ONCE, HS-faithfully, by `abstract_rule_and_variants` (the
@@ -932,11 +1157,14 @@ impl ProofContext {
                 restrictions,
                 pc_true_subterm,
                 saturate_state: std::sync::Mutex::new(SaturateState::Pending),
+                // The debug env knob outranks the CLI `-s` (a developer
+                // setting it mid-bisect expects it to win); `current()`
+                // folds the CLI override over the HS default.
                 saturation_limit: std::env::var("TAM_SATURATION_LIMIT")
                     .ok()
                     .and_then(|s| s.parse::<usize>().ok())
                     .unwrap_or_else(|| {
-                        crate::constraint::solver::sources::IntegerParameters::default()
+                        crate::constraint::solver::sources::IntegerParameters::current()
                             .saturation_limit as usize
                     }),
             }),
@@ -946,7 +1174,7 @@ impl ProofContext {
         // `with_swapped_maude` clone exists yet), so `Arc::get_mut`
         // always succeeds here.  `precompute_sources` borrows `&ctx`
         // immutably and returns before we take the `&mut`.
-        let params = crate::constraint::solver::sources::IntegerParameters::default();
+        let params = crate::constraint::solver::sources::IntegerParameters::current();
         let unique_sources = crate::constraint::solver::sources::precompute_sources(&params, &ctx);
         std::sync::Arc::get_mut(&mut ctx.shared)
             .expect("ProofContext shared bundle is uniquely owned during construction")
@@ -965,7 +1193,7 @@ impl ProofContext {
         //
         // Install the variant substitutions in their disjunction form.
         // These are consumed by `solve_rule_constraints` at search time
-        // (`rule_insts_with_constrs`, reduction.rs:2895).  For reducible
+        // (`rule_insts_with_constrs` in reduction.rs).  For reducible
         // rules the disjunction comes from the abstracted-rule install
         // below; for non-reducible rules it is the trivial
         // `[emptySubstVFresh]` computed above.
@@ -1223,5 +1451,42 @@ pub fn annotate_loop_breakers(
             .filter(|(rk, _)| rk == k)
             .map(|(_, p)| *p)
             .collect();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IntrRuleCache;
+    use crate::rule::IntrRuleAC;
+
+    /// A small Maude-free rule list: the special intruder rules
+    /// (`coerce`, `pub`, `fresh`, `isend`, `irecv`).
+    fn sample_rules() -> Vec<IntrRuleAC> {
+        let rules = crate::intruder_rules::special_intruder_rules(false);
+        assert!(rules.len() > 1, "sample needs several rules to compare");
+        rules
+    }
+
+    /// Cloning a handle must hand out the SAME rule list, not a copy —
+    /// this is what makes the per-probe / per-deduction / per-lemma
+    /// contexts cheap.
+    #[test]
+    fn intr_rule_cache_clone_shares_one_allocation() {
+        let cache = IntrRuleCache::from(sample_rules());
+        let shared = cache.clone();
+        assert_eq!(cache.as_ptr(), shared.as_ptr());
+        assert_eq!(&*cache, &*shared);
+    }
+
+    /// `From<Arc<Vec<_>>>` adopts the caller's allocation — this is what
+    /// lets the web `TheoryEntry`'s stored cache reach a `ProofContext`
+    /// without a copy.
+    #[test]
+    fn intr_rule_cache_from_arc_adopts_the_same_allocation() {
+        let shared = std::sync::Arc::new(sample_rules());
+        let ptr = shared.as_ptr();
+        let cache = IntrRuleCache::from(shared.clone());
+        assert_eq!(cache.as_ptr(), ptr);
+        assert_eq!(&*cache, shared.as_slice());
     }
 }

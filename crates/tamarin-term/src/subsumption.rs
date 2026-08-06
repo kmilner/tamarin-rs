@@ -142,7 +142,7 @@ pub(crate) fn eq_term_subs(
 // dedup BP destructor variants byte-identically.
 // =============================================================================
 
-use crate::function_symbols::{AcSym, CSym, FunSym};
+use crate::function_symbols::{show_acfct_sym, AcSym, CSym, FunSym};
 use crate::lterm::LVar;
 use crate::subst_vfresh::LNSubstVFresh;
 use crate::term::Term;
@@ -160,15 +160,15 @@ type Occurence = Vec<String>;
 /// Mirrors the derived `Show` for `FunSym`/`ACSym`/`CSym`.
 fn show_funsym_ac_c(sym: &FunSym) -> String {
     match sym {
-        FunSym::Ac(a) => {
-            let name = match a {
-                AcSym::Union => "Union",
-                AcSym::Mult => "Mult",
-                AcSym::Xor => "Xor",
-                AcSym::NatPlus => "NatPlus",
-            };
-            format!("AC {}", name)
-        }
+        FunSym::Ac(a) => match a {
+            AcSym::Union => "AC Union".to_string(),
+            AcSym::Mult => "AC Mult".to_string(),
+            AcSym::Xor => "AC Xor".to_string(),
+            AcSym::NatPlus => "AC NatPlus".to_string(),
+            // Derived `Show` parenthesises the nested constructor
+            // application; `show` of the `ACfctSym` tuple follows.
+            AcSym::AcFct(s) => format!("AC (ACfct {})", show_acfct_sym(s)),
+        },
         FunSym::C(c) => {
             let name = match c {
                 CSym::EMap => "EMap",

@@ -1,8 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, kevinmorio, rkunnema, arcz, PhilipLukertWork,
-//   yavivanov, Hong-Thai, beschmi, racoucho1u, rsasse, Azurios-git,
-//   Nynko, ValentinYuri, felixlinker, charlie-j, and other minor
-//   contributors (see upstream git history)
+//   jdreier, meiersi, kevinmorio, rkunnema, arcz, Azurios-git,
+//   PhilipLukertWork, yavivanov, beschmi, rsasse, racoucho1u,
+//   Hong-Thai, Nynko, ValentinYuri, felixlinker, BTom-GH, and other
+//   minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs, lib/theory/src/Prover.hs,
 //   lib/theory/src/Rule.hs, lib/theory/src/Theory/Model/Fact.hs,
@@ -64,15 +64,29 @@ use tamarin_parser::ast as p;
 use tamarin_parser::wf::WfError;
 use tamarin_term::maude_proc::MaudeHandle;
 
+use crate::constraint::solver::context::IntrRuleCache;
+
 /// Run HS's per-variable derivability check on every rule.
 ///
 /// `timeout_secs == 0` disables the check (returns `vec![]`).  Otherwise
 /// each per-variable prove call is bounded by `timeout_secs` of wall-clock
 /// time (mirrors HS's `--derivcheck-timeout`).
+///
+/// `ndc_cache` is the parent theory's once-per-load NDC-checked intruder
+/// cache: HS's probe theories inherit the parent's checked `_thyCache`
+/// verbatim (`deleteRulesAndLemmasAndRestrictionsFromTheory` keeps the
+/// cache field; `deductionChainCheck = False` only prevents re-checking,
+/// MessageDerivationChecks.hs), so the probe contexts are built with it
+/// injected — NDC tags stay active in `forbidden_edge` during probe
+/// proofs.  `None` falls back to signature assembly with the cache
+/// permutation applied.  A `Some` argument is one shared handle for the
+/// whole per-rule walk below: each probe context points at that rule list
+/// instead of copying it.
 pub fn check_message_derivation(
     parsed: &p::Theory,
     maude: &MaudeHandle,
     timeout_secs: u32,
+    ndc_cache: Option<IntrRuleCache>,
 ) -> Vec<WfError> {
     if timeout_secs == 0 {
         return Vec::new();
@@ -201,6 +215,7 @@ pub fn check_message_derivation(
             timeout,
             dbg_timing,
             &rule.name,
+            ndc_cache.as_ref(),
         ) {
             Some(o) => o,
             None => continue,
@@ -531,9 +546,10 @@ fn synthesise_probe_theory(
     //     resolve to the real public signature symbol and re-introduce the
     //     divergence.  So we mirror HS by doing NEITHER: keep privacy as-is.
     //
-    // The Rust intruder-rule generation (intruder_rules.rs:164 destructor-skip,
-    // :648 Public-only `construction_rules` filter, `private_constructor_rules`)
-    // already matches IntruderRules.hs:129-157, see line 149/219 once the privacy flags survive.
+    // The Rust intruder-rule generation (intruder_rules.rs: `destruction_rules`'
+    // private/free-var skip, `construction_rules`' Public-only filter and
+    // `private_constructor_rules`) already matches IntruderRules.hs:129-157,
+    // see line 149/219 once the privacy flags survive.
     for it in &src.items {
         match it {
             p::TheoryItem::Functions(_)
@@ -716,6 +732,7 @@ struct ProbeOutcome {
 /// failure (caller continues to the next probe rule); otherwise returns
 /// a `ProbeOutcome` whose `undecidable` lists the variable names whose
 /// lemma did NOT find a trace (= non-derivable variables).
+#[allow(clippy::too_many_arguments)]
 fn prove_probe(
     probe: &p::Theory,
     maude: MaudeHandle,
@@ -724,6 +741,7 @@ fn prove_probe(
     timeout: Duration,
     dbg_timing: bool,
     rule_name: &str,
+    ndc_cache: Option<&IntrRuleCache>,
 ) -> Option<ProbeOutcome> {
     use crate::constraint::solver::context::ProofContext;
     use crate::constraint::solver::search::{run_proof_search, NodeStatus};
@@ -732,13 +750,14 @@ fn prove_probe(
     use crate::guarded::formula_to_guarded;
     use crate::theory::OpenProtoRule;
 
-    // Per-prove deadline gate: set TAM_PROVE_DEADLINE_MS from `timeout`
-    // so each variable's `run_proof_search` still honours the deadline.
-    // The RAII guard restores the prior value on EVERY exit path (including
-    // any future early-return), so the deadline can't leak into the main
-    // prove loop.
+    // Per-prove deadline gate: cap each variable's `run_proof_search` at
+    // `timeout`.  The cap is THREAD-scoped (not the process-global
+    // `TAM_PROVE_DEADLINE_MS` env var) so it bounds only the probe proofs
+    // below and cannot truncate an unrelated search another thread starts
+    // while a probe is running.  The RAII guard restores the prior cap on
+    // EVERY exit path, so the deadline cannot leak into the main prove loop.
     let ms = (timeout.as_millis() as u64).max(1);
-    let _deadline_guard = DeadlineEnvGuard::set(ms);
+    let _deadline_guard = crate::constraint::solver::search::ProofDeadlineGuard::set_ms(ms);
 
     let _user_funs_guard = crate::elaborate::set_user_funs_for_theory(probe);
     let elaborated = match elaborate(probe) {
@@ -746,7 +765,16 @@ fn prove_probe(
         Err(_) => return None,
     };
     let rules: Vec<OpenProtoRule> = elaborated.rules().cloned().collect();
-    let mut ctx = ProofContext::new_with_restrictions(maude, rules, Vec::new());
+    // Probe contexts inherit the parent theory's checked cache verbatim
+    // (HS keeps `_thyCache` on the probe theory; `closeRuleCache`
+    // consumes it as-is), so the NDC tags — and the permutation — carry
+    // into probe proofs without re-running the check per probe.
+    let mut ctx = match ndc_cache {
+        Some(cache) => {
+            ProofContext::new_with_injected_intruder_rules(maude, rules, Vec::new(), cache.clone())
+        }
+        None => ProofContext::new_with_restrictions(maude, rules, Vec::new()),
+    };
     ctx.is_exists_trace = true;
     // Probes have no `[sources]`-tagged lemmas, so no typing
     // assumptions — but `ensure_saturated()` still must run to compute
@@ -822,32 +850,6 @@ fn prove_probe(
     })
 }
 
-/// RAII guard for the `TAM_PROVE_DEADLINE_MS` env var (mirrors the
-/// thread-local `User*FunsGuard` idiom in `elaborate.rs`).  On `set` it
-/// records the prior value and installs `ms`; on drop it restores the
-/// prior value (or removes it if unset).  This guarantees the per-probe
-/// deadline cannot leak into the main prove loop on any exit path.
-struct DeadlineEnvGuard {
-    previous: Option<String>,
-}
-
-impl DeadlineEnvGuard {
-    fn set(ms: u64) -> Self {
-        let previous = std::env::var("TAM_PROVE_DEADLINE_MS").ok();
-        std::env::set_var("TAM_PROVE_DEADLINE_MS", ms.to_string());
-        DeadlineEnvGuard { previous }
-    }
-}
-
-impl Drop for DeadlineEnvGuard {
-    fn drop(&mut self) {
-        match self.previous.take() {
-            Some(v) => std::env::set_var("TAM_PROVE_DEADLINE_MS", v),
-            None => std::env::remove_var("TAM_PROVE_DEADLINE_MS"),
-        }
-    }
-}
-
 fn format_deriv_report(per_rule: &[(String, Vec<String>)]) -> Vec<WfError> {
     if per_rule.is_empty() {
         return Vec::new();
@@ -921,7 +923,7 @@ mod tests {
             end
         "#;
         let thy = parse_theory(src, &[]).expect("parse");
-        let report = check_message_derivation(&thy, &m, 5);
+        let report = check_message_derivation(&thy, &m, 5, None);
         // `x` appears in `In(x)` which is intruder-known → derivable.
         assert!(report.is_empty(), "expected no warnings, got {:?}", report);
     }
@@ -936,7 +938,7 @@ mod tests {
             end
         "#;
         let thy = parse_theory(src, &[]).expect("parse");
-        let report = check_message_derivation(&thy, &m, 5);
+        let report = check_message_derivation(&thy, &m, 5, None);
         // Free `unbound` has no premise → not derivable.
         assert_eq!(report.len(), 1);
         assert!(
@@ -956,14 +958,14 @@ mod tests {
             end
         "#;
         let thy = parse_theory(src, &[]).expect("parse");
-        let report = check_message_derivation(&thy, &m, 0);
+        let report = check_message_derivation(&thy, &m, 0, None);
         assert!(report.is_empty(), "timeout=0 should disable the check");
     }
 
     /// Start a Maude handle whose signature is elaborated from `src` (so the
     /// theory's own `functions:`/`equations:` symbols — including a private
     /// destructor — are present), exactly as the real driver does via
-    /// `elaborated.signature.maude_sig` (run.rs:644).  Returns `None` if Maude
+    /// `elaborated.signature.maude_sig` (run.rs).  Returns `None` if Maude
     /// is unavailable.
     fn maude_for(src: &str) -> Option<(p::Theory, MaudeHandle)> {
         let p = maude_bin()?;
@@ -1004,7 +1006,7 @@ mod tests {
         let Some((thy, m)) = maude_for(src) else {
             return;
         };
-        let report = check_message_derivation(&thy, &m, 10);
+        let report = check_message_derivation(&thy, &m, 10, None);
         assert_eq!(report.len(), 1, "expected one report, got {:?}", report);
         assert!(
             report[0].message.contains("Reveal")
@@ -1034,7 +1036,7 @@ mod tests {
         let Some((thy, m)) = maude_for(src) else {
             return;
         };
-        let report = check_message_derivation(&thy, &m, 10);
+        let report = check_message_derivation(&thy, &m, 10, None);
         assert!(
             report.is_empty(),
             "public `dec` → `m` derivable; expected no report, got {:?}",

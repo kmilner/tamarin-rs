@@ -1,11 +1,11 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   arcz, meiersi, jdreier, felixlinker, cascremers, rsasse,
-//   Kanakanajm, beschmi, addap, BTom-GH, PhilipLukertWork, YannColomb,
-//   xaDxelA, Mathias-AURAND, symphorien, racoucho1u,
+//   arcz, meiersi, jdreier, cascremers, felixlinker, beschmi, rsasse,
+//   Kanakanajm, Divya19gupta, addap, PhilipLukertWork, BTom-GH,
+//   YannColomb, xaDxelA, Mathias-AURAND, symphorien, racoucho1u,
 //   Esslingen-Security-Privacy, kevinmorio, and other minor
 //   contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   src/Web/Handler.hs, src/Web/Theory.hs
+//   lib/term/src/Term/Term.hs, src/Web/Handler.hs, src/Web/Theory.hs
 
 //! In-memory store of loaded theories, mirroring Haskell `TheoryMap`.
 //!
@@ -71,6 +71,13 @@ pub struct TheoryEntry {
     /// *closed* theory's wellformedness report in a `<div class="wf-warning">`.
     /// Empty string when the report is empty (HS `makeWfErrorsHtml [] = ""`).
     pub errors_html: String,
+    /// The theory's once-per-load NDC-checked intruder cache
+    /// (`close_rule::check_close_intr_rule`, run in `theory_io` before
+    /// the derivation checks).  Injected into every `ProofContext` the
+    /// lazily built [`ProofState`] constructs (web session + shared
+    /// display ctx) so no context re-runs the check.  `None` when the
+    /// load-time Maude boot failed.
+    pub ndc_cache: Option<Arc<Vec<tamarin_theory::rule::IntrRuleAC>>>,
     /// Live proof state — built lazily on first request that needs it
     /// (theory load → only kept-around-but-empty until `ensure_proof_state`
     /// is asked for).  `None` here means "not yet built"; on first
@@ -79,6 +86,32 @@ pub struct TheoryEntry {
     /// per theory for Maude startup + source precompute, which is
     /// fine but pushes start-of-server latency.
     pub proof_state: Option<Arc<ProofState>>,
+}
+
+impl TheoryEntry {
+    /// Install this theory's user-declared function-symbol sets into the
+    /// calling thread's thread-locals, returning an RAII guard that restores
+    /// the previous values on drop.
+    ///
+    /// Request handlers run on axum worker threads, whose sets start EMPTY;
+    /// the renderers they reach resolve a declared `[AC]` / nullary / unary
+    /// symbol through those thread-locals (`CollectedUserFuns::is_user_ac_fun` in
+    /// `canonicalize_ac_in_pterm`, `term_to_lnterm`, `term_to_gterm_free`).  An
+    /// unset `[AC]` symbol prints prefix (`add(x, z)`) instead of the infix
+    /// form HS's `prettyTerm` emits (`(x add z)`, Term/Term.hs:305).
+    ///
+    /// Uses the [`ProofState`]'s cached sets when the proof state is built,
+    /// and re-collects them from the parser theory otherwise.
+    ///
+    /// The per-theory handlers install this at their boundary, on the lookup
+    /// that puts the entry in hand (`handlers::theory::load_theory`); the
+    /// renderers reached from there install again and nest harmlessly.
+    pub fn install_user_funs(&self) -> tamarin_theory::elaborate::UserFunsForTheoryGuard {
+        match &self.proof_state {
+            Some(ps) => ps.install_user_funs(),
+            None => tamarin_theory::elaborate::set_user_funs_for_theory(&self.parser_theory),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -133,6 +166,26 @@ impl TheoryStore {
 
     pub fn get(&self, idx: usize) -> Option<TheoryEntry> {
         self.inner.lock().by_idx.get(&idx).cloned()
+    }
+
+    /// Whether a theory is stored at `idx`.  This is the existence probe the
+    /// handlers run before they parse a theory path (Haskell `withTheory`'s
+    /// theory-map lookup, `src/Web/Handler.hs:662-672`); unlike [`get`] it
+    /// does not clone the entry.
+    ///
+    /// [`get`]: Self::get
+    pub fn contains(&self, idx: usize) -> bool {
+        self.inner.lock().by_idx.contains_key(&idx)
+    }
+
+    /// The stored theory's name at `idx`, or `None` when no theory is stored
+    /// there.  This is what the handlers that only label a page with the name
+    /// take instead of [`get`], whose clone deep-copies `wf_report` and
+    /// `errors_html`.
+    ///
+    /// [`get`]: Self::get
+    pub fn name(&self, idx: usize) -> Option<String> {
+        self.inner.lock().by_idx.get(&idx).map(|e| e.name.clone())
     }
 
     pub fn list(&self) -> Vec<TheoryEntry> {
@@ -231,7 +284,7 @@ impl TheoryStore {
         // `ProofState::new` (Maude boot + source precompute) so unrelated
         // handlers — and other tokio workers — aren't blocked for its
         // duration.
-        let (parser_theory, in_file) = {
+        let (parser_theory, in_file, ndc_cache) = {
             let inner = self.inner.lock();
             let entry = inner
                 .by_idx
@@ -240,13 +293,23 @@ impl TheoryStore {
             if let Some(ps) = &entry.proof_state {
                 return Ok(ps.clone());
             }
-            (entry.parser_theory.clone(), entry.origin.label())
+            (
+                entry.parser_theory.clone(),
+                entry.origin.label(),
+                entry.ndc_cache.clone(),
+            )
         };
+        // The entry's `Arc` becomes the `ProofState`'s cache handle
+        // directly — the web session and the shared display context both
+        // share this allocation instead of copying the rule list.
+        let ndc_cache =
+            ndc_cache.map(tamarin_theory::constraint::solver::context::IntrRuleCache::from);
         let ps = Arc::new(ProofState::new(
             &parser_theory,
             &cfg.maude_path,
             cfg.stop_on_trace,
             &in_file,
+            ndc_cache.as_ref(),
         )?);
         // Re-lock and double-check: another thread may have built (and
         // stored) the proof state while we held no lock.  If so, prefer

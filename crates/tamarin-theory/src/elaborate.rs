@@ -1,12 +1,12 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, rkunnema, jdreier, beschmi, racoucho1u, charlie-j,
-//   PhilipLukertWork, felixlinker, kevinmorio, rsasse, BTom-GH,
-//   ValentinYuri, sans-sucre, and other minor contributors (see
+//   meiersi, jdreier, beschmi, rkunnema, PhilipLukertWork, charlie-j,
+//   BTom-GH, racoucho1u, felixlinker, rsasse, kevinmorio, ValentinYuri,
+//   Mathias-AURAND, sans-sucre, and other minor contributors (see
 //   upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/sapic/src/Sapic/Basetranslation.hs,
 //   lib/term/src/Term/Builtin/Signature.hs, lib/term/src/Term/LTerm.hs,
-//   lib/term/src/Term/Macro.hs,
+//   lib/term/src/Term/Macro.hs, lib/term/src/Term/Maude/Parser.hs,
 //   lib/term/src/Term/Substitution/SubstVFree.hs,
 //   lib/term/src/Term/Term.hs,
 //   lib/term/src/Term/Term/FunctionSymbols.hs,
@@ -51,66 +51,30 @@
 //! `R`"), with no internal panics.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use tamarin_parser::ast as p;
-use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
+use tamarin_term::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
 use tamarin_term::lterm::LSort;
 use tamarin_term::lterm::LVar;
 
 thread_local! {
-    /// User-declared arity-1 function names for the theory currently
-    /// being elaborated.  Set by `elaborate()` from the theory's
-    /// `functions:` declarations, read by `term_to_lnterm`'s arity-1
-    /// auto-tuple branch.  In Tamarin's surface syntax, `f(a, b, c)`
-    /// for a function declared `f/1` is sugar for `f(<a, b, c>)`.  This
-    /// set must include user-declared arity-1 names in addition to the
-    /// built-ins (h, fst, snd, inv, pk).  Without it, `PRF(pms, nc, ns)`
-    /// for `functions: PRF/1` would reach Maude as a 3-arg call, which
-    /// Maude silently rejects, and our `reduce` loop spins forever.
-    static USER_UNARY_FUNS: RefCell<BTreeSet<String>>
-        = const { RefCell::new(BTreeSet::new()) };
-
-    /// Names of nullary (0-arity) function symbols available in the
-    /// theory currently being elaborated.  Set by `elaborate()` from
-    /// both user `functions: f/0` declarations and the builtins that
-    /// introduce 0-arity constants (`signing`/`dest-signing`/
-    /// `revealing-signing` add `true`; `xor` adds `zero`; etc.).
-    /// Read by `term_to_lnterm`'s `Var` branch so a bare `true` (which
-    /// the lexer-level surface parser renders as `Var("true",Untagged)`
-    /// for lack of a signature lookup) is converted into a 0-arity
-    /// `f_app_no_eq` constant instead of a free variable.  Without
-    /// this, `Eq(verify(...), true)` in a rule's actions becomes an
-    /// `Eq` over `verify(...)` and a Msg-sort variable, which the
-    /// `Eq_check_succeed` restriction trivially satisfies via the
-    /// eq-store — undermining the signing builtin's semantics and
-    /// causing TLS_Handshake-class lemmas to be wrong-falsified.
-    static USER_NULLARY_FUNS: RefCell<BTreeSet<String>>
-        = const { RefCell::new(BTreeSet::new()) };
-
-    /// Names of user-declared function symbols marked `private`.
-    /// Populated from `FunctionDecl.private` across all arities.  Read
-    /// by `term_to_lnterm` when synthesizing `NoEqSym` for user-defined
-    /// function applications so `Privacy::Private` propagates through
-    /// to Maude.  Without this, `KU(f)` for a private nullary `f` is
-    /// filtered by `is_nullary_public_function` (because we say
-    /// Public), causing `is_finished` to incorrectly report Solved.
-    static USER_PRIVATE_FUNS: RefCell<BTreeSet<String>>
-        = const { RefCell::new(BTreeSet::new()) };
-
-    /// Names of user-declared function symbols marked `[destructor]`.
-    /// Populated from `FunctionDecl.destructor` across all arities.
-    /// Read by `term_to_lnterm` when synthesizing the `NoEqSym` for a
-    /// user-defined function application so `Constructability::Destructor`
-    /// propagates through, mirroring Haskell's `naryOpApp`/`lookupArity`
-    /// which reads `(k,priv,cnstr)` from the signature
-    /// (Theory/Text/Parser/Term.hs:61-63,84,92).  `NoEqSym` derives
-    /// Eq/Ord/Hash over `constructability`, and the constructor/
-    /// destructor tag is encoded into the Maude operator name (`XC` vs
-    /// `XD`), so a Constructor-tagged term for a `[destructor]` symbol
-    /// would print as an operator Maude never declared.
-    static USER_DESTRUCTOR_FUNS: RefCell<BTreeSet<String>>
-        = const { RefCell::new(BTreeSet::new()) };
+    /// The user-declared function-name sets of the theory currently being
+    /// elaborated or proved, held as one shared bundle.  Installed by
+    /// [`set_user_funs_for_theory`] / [`set_user_funs_from_collected`] /
+    /// [`MaudeSigNullaryGuard`], each of which returns an RAII guard that
+    /// restores the previous bundle on drop, so nested or sequential
+    /// elaborations on one thread cannot bleed each other's sets.  Read by
+    /// `term_to_vterm` (through the [`with_user_fun_sets`] snapshot), by
+    /// `canonicalize_ac_in_pterm` and by the guarded-formula conversion.
+    /// [`CollectedUserFuns`] documents what each set drives.
+    ///
+    /// A freshly spawned thread starts with every set EMPTY, so a rayon
+    /// worker that converts terms must install a [`snapshot_user_funs`]
+    /// bundle of the spawning thread's sets first.
+    static USER_FUNS: RefCell<Arc<CollectedUserFuns>>
+        = RefCell::new(Arc::new(CollectedUserFuns::default()));
 }
 use tamarin_term::lterm::{Name, NameTag};
 use tamarin_term::maude_sig::{
@@ -157,11 +121,11 @@ pub struct GuardDiagnostic {
 /// Haskell's `formulaReports.checkGuarded`.
 ///
 /// NOTE: this is an example-only convenience (used by
-/// `examples/elaborate_all.rs`), NOT part of the run.rs prove pipeline,
-/// which uses [`check_guarded_wf`] to produce the byte-exact WF report.
-/// The two perform the same `formula_to_guarded` scan but format their
-/// output differently; keep them in sync if the guardedness check
-/// itself changes.
+/// `examples/elaborate_all.rs`), NOT part of the prove pipeline, which
+/// produces the byte-exact WF report via
+/// [`crate::formula_reports::formula_reports`].  The two perform the same
+/// `formula_to_guarded` scan but format their output differently; keep them
+/// in sync if the guardedness check itself changes.
 pub fn elaborate_with_diagnostics(
     parser_thy: &p::Theory,
 ) -> Result<(Theory, Vec<GuardDiagnostic>), ElabError> {
@@ -219,10 +183,12 @@ pub fn elaborate_with_diagnostics(
 /// `checkGuarded` always runs unconditionally for every
 /// lemma/restriction.  This function does the same: it runs the
 /// guardedness check unconditionally on every lemma/restriction.
+///
+/// The batch / web load pipelines instead go through
+/// [`crate::formula_reports::formula_reports`], which interleaves this arm
+/// with the other two per formula as HS's `msum` does; this entry point
+/// serves callers that want the `checkGuarded` findings alone.
 pub fn check_guarded_wf(parser_thy: &p::Theory) -> Vec<tamarin_parser::wf::WfError> {
-    use crate::pretty_formula::pretty_formula;
-    use tamarin_parser::wf::underline_topic;
-
     // Apply macros so the WF check sees the expanded formulas, just as
     // HS's `formulaReports` applies `applyMacroInFormula` before checking.
     let mut thy_clone = parser_thy.clone();
@@ -247,83 +213,90 @@ pub fn check_guarded_wf(parser_thy: &p::Theory) -> Vec<tamarin_parser::wf::WfErr
     // guardedness check still runs on what it can.
     let _ = crate::predicate_expand::expand_theory_formulas(&mut thy_clone);
 
-    let mut out: Vec<tamarin_parser::wf::WfError> = Vec::new();
+    // Iterate lemmas and restrictions in HS `annFormulas` order — all lemmas
+    // in theory order, then all restrictions (`formulaReports`,
+    // Wellformedness.hs:1007-1014).
+    crate::formula_reports::ann_formulas(&thy_clone)
+        .into_iter()
+        .filter_map(|(header, formula)| check_guarded_entry(&header, formula))
+        .collect()
+}
 
-    // Iterate lemmas and restrictions in theory order, mirroring HS's
-    // `annFormulas` list monad in `formulaReports` (Wellformedness.hs:1007-1014).
-    for item in &thy_clone.items {
-        let (header, formula) = match item {
-            p::TheoryItem::Lemma(l) => (format!("Lemma `{}'", l.name), &l.formula),
-            p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => {
-                (format!("Restriction `{}'", r.name), &r.formula)
-            }
-            _ => continue,
-        };
+/// The `checkGuarded` finding for one annotated formula, if it fails
+/// `formulaToGuarded`.  `header` is HS's `"Lemma `n'"` / `"Restriction `n'"`;
+/// the formula must already be macro- and predicate-expanded (see
+/// [`check_guarded_wf`], which does both before calling this).  Split out so
+/// the combined per-formula pass in [`crate::formula_reports`] can interleave
+/// this arm with `checkQuantifiers` / `checkTerms` as HS's `msum` does.
+pub fn check_guarded_entry(
+    header: &str,
+    formula: &p::Formula,
+) -> Option<tamarin_parser::wf::WfError> {
+    use crate::pretty_formula::pretty_formula;
+    use tamarin_parser::wf::underline_topic;
 
-        let e = match formula_to_guarded(formula) {
-            Ok(_) => continue, // guard check passed
-            Err(e) => e,
-        };
+    let e = match formula_to_guarded(formula) {
+        Ok(_) => return None, // guard check passed
+        Err(e) => e,
+    };
 
-        // Render the formula text (the full formula).
-        let full_formula_text = pretty_formula(formula);
+    // Render the formula text (the full formula).
+    let full_formula_text = pretty_formula(formula);
 
-        // Render the sub-formula text (the innermost failing quantifier,
-        // or the full formula if no sub-formula was tracked — which
-        // matches HS's `ppFormula fmOrig` for the top-level case).
-        let sub_formula_text = e
-            .subject_formula
-            .as_ref()
-            .map(pretty_formula)
-            .unwrap_or_else(|| full_formula_text.clone());
+    // Render the sub-formula text (the innermost failing quantifier,
+    // or the full formula if no sub-formula was tracked — which
+    // matches HS's `ppFormula fmOrig` for the top-level case).
+    let sub_formula_text = e
+        .subject_formula
+        .as_ref()
+        .map(pretty_formula)
+        .unwrap_or_else(|| full_formula_text.clone());
 
-        // Build the HS-faithful message block.
-        // Layout (indent levels):
-        //   2:  "{header} cannot be converted to a guarded formula:"
-        //   4:  "{error_text}"
-        //   6:  '"{sub_formula}"'     (if sub_formula != full_formula)
-        //   4:  "in the formula"
-        //   6:  '"{full_formula}"'
-        //
-        // The `underlineTopic` of " Formula guardedness" includes the
-        // trailing newline; we add one blank line before the body (from
-        // `$-$` in `ppTopic` of `prettyWfErrorReport`).
-        let topic = " Formula guardedness";
-        let mut msg = String::new();
-        msg.push_str(&underline_topic(topic));
-        msg.push('\n'); // blank line between header and body
-        msg.push_str("  "); // nest 2 (prettyWfErrorReport)
-        msg.push_str(&header);
-        msg.push_str(" cannot be converted to a guarded formula:\n");
+    // Build the HS-faithful message block.
+    // Layout (indent levels):
+    //   2:  "{header} cannot be converted to a guarded formula:"
+    //   4:  "{error_text}"
+    //   6:  '"{sub_formula}"'     (if sub_formula != full_formula)
+    //   4:  "in the formula"
+    //   6:  '"{full_formula}"'
+    //
+    // The `underlineTopic` of " Formula guardedness" includes the
+    // trailing newline; we add one blank line before the body (from
+    // `$-$` in `ppTopic` of `prettyWfErrorReport`).
+    let topic = " Formula guardedness";
+    let mut msg = String::new();
+    msg.push_str(&underline_topic(topic));
+    msg.push('\n'); // blank line between header and body
+    msg.push_str("  "); // nest 2 (prettyWfErrorReport)
+    msg.push_str(header);
+    msg.push_str(" cannot be converted to a guarded formula:\n");
 
-        // Indent the error body by 4 spaces (nest 2 inside checkGuarded).
-        for line in e.message.lines() {
-            msg.push_str("    ");
-            msg.push_str(line);
-            msg.push('\n');
-        }
-
-        // If the sub-formula is different from the full formula (nested
-        // quantifier case), emit the sub-formula line (6 spaces).
-        // This mirrors HS's `noUnguardedVars` which includes `ppFormula f0`
-        // (the sub-formula) as part of the `d` doc, then `ppError` appends
-        // "in the formula" + full formula.
-        // When sub == full (top-level quantifier failure), HS still emits
-        // the formula once under the error text and once under "in the formula"
-        // — the same text appears twice.
-        msg.push_str("      "); // 6 spaces
-        msg.push('"');
-        msg.push_str(&sub_formula_text);
-        msg.push_str("\"\n");
-        msg.push_str("    in the formula\n");
-        msg.push_str("      "); // 6 spaces
-        msg.push('"');
-        msg.push_str(&full_formula_text);
-        msg.push_str("\"\n");
-
-        out.push(tamarin_parser::wf::WfError::new(topic, msg));
+    // Indent the error body by 4 spaces (nest 2 inside checkGuarded).
+    for line in e.message.lines() {
+        msg.push_str("    ");
+        msg.push_str(line);
+        msg.push('\n');
     }
-    out
+
+    // If the sub-formula is different from the full formula (nested
+    // quantifier case), emit the sub-formula line (6 spaces).
+    // This mirrors HS's `noUnguardedVars` which includes `ppFormula f0`
+    // (the sub-formula) as part of the `d` doc, then `ppError` appends
+    // "in the formula" + full formula.
+    // When sub == full (top-level quantifier failure), HS still emits
+    // the formula once under the error text and once under "in the formula"
+    // — the same text appears twice.
+    msg.push_str("      "); // 6 spaces
+    msg.push('"');
+    msg.push_str(&sub_formula_text);
+    msg.push_str("\"\n");
+    msg.push_str("    in the formula\n");
+    msg.push_str("      "); // 6 spaces
+    msg.push('"');
+    msg.push_str(&full_formula_text);
+    msg.push_str("\"\n");
+
+    Some(tamarin_parser::wf::WfError::new(topic, msg))
 }
 
 /// Post-translation port of HS `publicNamesReport'` (Wellformedness.hs:463-484)
@@ -337,8 +310,8 @@ pub fn check_guarded_wf(parser_thy: &p::Theory) -> Vec<tamarin_parser::wf::WfErr
 /// is invisible to it.  Walk the ELABORATED rules' facts AND their `process`
 /// attribute here to recover those constants.
 ///
-/// The root `Init` rule carries the WHOLE process (`base_init`,
-/// tamarin-sapic base_translation.rs:952; HS `baseInit`,
+/// The root `Init` rule carries the WHOLE process (`base_init` in
+/// tamarin-sapic's base_translation.rs; HS `baseInit`,
 /// Basetranslation.hs:312-317, see line 313 — the rule's annotation is `anP`, the full
 /// process) and is emitted first, so under `clashesOn`'s
 /// first-occurrence dedup it wins every public name — reproducing HS's
@@ -566,20 +539,16 @@ pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
             message: format!("predicate expansion failed: {}", e.message),
         });
     }
-    // Collect the user-declared unary / nullary / private / destructor
-    // function-name sets that drive `term_to_lnterm`.  Each is installed
-    // into its thread-local via an RAII guard, scoped so concurrent /
+    // Collect the user-declared unary / nullary / private / destructor / AC /
+    // NDC / NDC-diff function-name sets that drive `term_to_lnterm`.  The
+    // bundle is installed via an RAII guard, scoped so concurrent /
     // sequential elaborations on the same thread can't bleed stale state.
-    let funs = collect_user_funs(&thy_clone.items);
-    let _guard = UserUnaryFunsGuard::set(funs.unary);
-    let _nullary_guard = UserNullaryFunsGuard::set(funs.nullary);
-    let _private_guard = UserPrivateFunsGuard::set(funs.private);
-    let _destructor_guard = UserDestructorFunsGuard::set(funs.destructor);
+    let _guard = UserFunsForTheoryGuard::set(Arc::new(collect_user_funs(&thy_clone.items)));
     let mut thy = elaborate_already_expanded(&thy_clone)?;
 
     // HS folds surplus arguments of arity-1 function applications into a
     // single right-associative pair at PARSE time (`naryOpApp` `k == 1`,
-    // Theory/Text/Parser/Term.hs:79-93 + `tupleterm` line 187-188:
+    // Theory/Text/Parser/Term.hs:94-96 + `tupleterm` line 211-212:
     // `chainr1 (msetterm ...) (curry fAppPair <$ comma)`), so the surface
     // `h(a, b, c)` parses to `h(<a, b, c>)` = `h(fAppPair a (fAppPair b c))`.
     // Because the fold happens at parse time, the lemma/restriction formula
@@ -618,51 +587,209 @@ pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
     Ok(thy)
 }
 
-/// The four user-declared function-name sets read by `term_to_lnterm`.
+/// The user-declared function-name sets read by `term_to_lnterm`.
+///
+/// One bundle serves as both the value installed in the `USER_FUNS`
+/// thread-local and the snapshot handed around for re-installation on
+/// another thread.
 #[derive(Clone, Default)]
 pub struct CollectedUserFuns {
     /// Arity-1 user `functions:` names (drives the auto-tuple fold, like
-    /// the built-in unary names h / fst / snd / ...).
+    /// the built-in unary names h / fst / snd / ...).  In Tamarin's surface
+    /// syntax `f(a, b, c)` for a function declared `f/1` is sugar for
+    /// `f(<a, b, c>)`.  Without this set, `PRF(pms, nc, ns)` for
+    /// `functions: PRF/1` would reach Maude as a 3-arg call, which Maude
+    /// silently rejects, and our `reduce` loop spins forever.
     unary: BTreeSet<String>,
     /// 0-arity names from user `functions:` plus any enabled builtin's
-    /// 0-arity constants (mirroring HS's parser-state `nullaryApp` lookup).
+    /// 0-arity constants (`signing`/`dest-signing`/`revealing-signing` add
+    /// `true`; `xor` adds `zero`; etc.), mirroring HS's parser-state
+    /// `nullaryApp` lookup.  Read by `term_to_lnterm`'s `Var` branch so a
+    /// bare `true` (which the lexer-level surface parser renders as
+    /// `Var("true",Untagged)` for lack of a signature lookup) becomes a
+    /// 0-arity `f_app_no_eq` constant instead of a free variable.  Without
+    /// it, `Eq(verify(...), true)` in a rule's actions becomes an `Eq` over
+    /// `verify(...)` and a Msg-sort variable, which the `Eq_check_succeed`
+    /// restriction trivially satisfies via the eq-store — undermining the
+    /// signing builtin's semantics and causing TLS_Handshake-class lemmas
+    /// to be wrong-falsified.
     nullary: BTreeSet<String>,
-    /// User `functions:` names marked `private` (any arity); threads
-    /// `Privacy::Private` through synthesized NoEqSyms.
+    /// NON-`[AC]` user `functions:` names marked `private` (any arity), plus
+    /// the private symbols of each enabled builtin; threads
+    /// `Privacy::Private` through synthesized NoEqSyms.  Without it, `KU(f)`
+    /// for a private nullary `f` is filtered by
+    /// `is_nullary_public_function` (because we say Public), causing
+    /// `is_finished` to incorrectly report Solved.
+    ///
+    /// `[AC]` declarations are excluded here (and from `destructor` / `ndc` /
+    /// `ndc_diff`): their options live on the `AcFctSym` stored in `ac`.  See
+    /// that field for why the two must not share one name-keyed set.
     private: BTreeSet<String>,
-    /// User `functions:` names marked `[destructor]` (any arity); threads
-    /// `Constructability::Destructor` through synthesized NoEqSyms.
+    /// NON-`[AC]` user `functions:` names marked `[destructor]` (any arity),
+    /// plus the destructor symbols of each enabled builtin; threads
+    /// `Constructability::Destructor` through synthesized NoEqSyms,
+    /// mirroring Haskell's `naryOpApp`/`lookupArity`, which reads
+    /// `(k,priv,cnstr)` from the signature
+    /// (Theory/Text/Parser/Term.hs:62-71,93).  `NoEqSym` derives
+    /// Eq/Ord/Hash over `constructability`, and the constructor/destructor
+    /// tag is encoded into the Maude operator name (`XC` vs `XD`), so a
+    /// Constructor-tagged term for a `[destructor]` symbol would print as
+    /// an operator Maude never declared.
     destructor: BTreeSet<String>,
+    /// The user-declared `[AC]` symbols, keyed by name and carrying THAT
+    /// declaration's own privacy / constructability / NDC options.  A prefix
+    /// application of such a name lowers to `f_app_ac(AcFct ..)` (n-ary, no
+    /// arity check) instead of `f_app_no_eq` — unless the name is also in
+    /// `noeq_names`, see
+    /// [`CollectedUserFuns::prefix_resolves_to_user_ac`].
+    ///
+    /// The options ride on the symbol rather than in the name-keyed
+    /// `private` / `destructor` / `ndc` / `ndc_diff` sets because HS keeps a
+    /// dual-declared name's two symbols in two different places — the NoEq
+    /// one in `stFunSyms`, the AC one in `stACFunSyms`
+    /// (Term/Maude/Signature.hs:97-98) — each with its own options tuple.
+    /// `functions: f/2 [AC, destructor], f/2` declares a DESTRUCTOR AC `f`
+    /// and a CONSTRUCTOR NoEq `f`; conflating them encodes the NoEq `f` as
+    /// the Maude operator `tamXDFUf`, which the theory module never declares,
+    /// so `get variants` comes back empty and the rule reports "has no
+    /// variants".
+    ///
+    /// A name declared `[AC]` twice with differing options keeps the least
+    /// symbol by `Ord AcFctSym`, mirroring HS `lookupArity`'s `lookup` over
+    /// the ascending `S.toList (userDefinedFunSyms maudeSig)`
+    /// (Theory/Text/Parser/Term.hs:62-72).
+    ac: BTreeMap<String, AcFctSym>,
+    /// Names (any arity) of every `NoEq` symbol of the full signature — the
+    /// non-`[AC]` user `functions:` declarations, each enabled builtin's
+    /// `NoEq` contribution to `funSyms`, and the always-present pair
+    /// signature (`minimalMaudeSig` is `pairFunSig` — `pair`/`fst`/`snd` —
+    /// Term/Maude/Signature.hs:224-226).  Mirrors HS
+    /// `noEqFunSyms maudeSig` (Signature.hs:157-158); read by
+    /// [`CollectedUserFuns::prefix_resolves_to_user_ac`].
+    noeq_names: BTreeSet<String>,
+    /// NON-`[AC]` user `functions:` names marked `[NDC]`.
+    ndc: BTreeSet<String>,
+    /// NON-`[AC]` user `functions:` names marked `[NDC-diff]`.
+    ndc_diff: BTreeSet<String>,
+    /// Whether the `bilinear-pairing` builtin is enabled.  Gates the
+    /// name-keyed `em` → C-symbol lowering in `term_to_vterm`.
+    bp: bool,
 }
 
 /// Single source of truth for collecting the user-declared function-name
 /// sets from a theory's items (shared by `elaborate` and
 /// `set_user_funs_for_theory`).
 fn collect_user_funs(items: &[p::TheoryItem]) -> CollectedUserFuns {
-    let user_names = |pred: fn(&p::FunctionDecl) -> bool| -> BTreeSet<String> {
-        items
-            .iter()
-            .filter_map(|it| {
-                if let p::TheoryItem::Functions(decls) = it {
-                    Some(decls.iter().filter(|d| pred(d)).map(|d| d.name.clone()))
-                } else {
-                    None
-                }
-            })
-            .flatten()
-            .collect()
+    // HS `function` (Theory/Text/Parser/Signature.hs): a re-declaration of
+    // `fst`/`snd` at arity 1 with public visibility resolves to the EXISTING
+    // builtin pair-projection symbol (`return (NoEqUser (f,kp'), ...)` with
+    // `kp'` the builtin's `(1, Public, Constructor, NotNDC)`) — every
+    // requested attribute is discarded and no symbol is added.  Mirror that
+    // here: such declarations must not contribute to the attribute sets,
+    // otherwise `term_to_lnterm` resolves the theory's own
+    // `fst(<x,y>) = x` equations with a Destructor-flagged symbol whose
+    // Maude encoding (`tamXDFUfst`) does not match the declared op
+    // (`tamXCFUfst`), killing the rewrite rule and with it the narrowed
+    // `_0_fst`/`_0_snd` intruder destructors (noise theories).
+    let is_builtin_pair_proj = |d: &p::FunctionDecl| -> bool {
+        (d.name == "fst" || d.name == "snd") && d.arg_types.len() == 1 && !d.private
     };
-    let mut nullary = user_names(|d| d.arg_types.is_empty());
-    let mut private = user_names(|d| d.private);
-    let mut destructor = user_names(|d| d.destructor);
+    let mut unary: BTreeSet<String> = BTreeSet::new();
+    let mut nullary: BTreeSet<String> = BTreeSet::new();
+    let mut private: BTreeSet<String> = BTreeSet::new();
+    let mut destructor: BTreeSet<String> = BTreeSet::new();
+    let mut ac: BTreeMap<String, AcFctSym> = BTreeMap::new();
+    let mut ndc: BTreeSet<String> = BTreeSet::new();
+    let mut ndc_diff: BTreeSet<String> = BTreeSet::new();
+    // `pairFunSig` is in every signature (`minimalMaudeSig`,
+    // Term/Maude/Signature.hs:224-226).
+    let mut noeq_names: BTreeSet<String> = ["pair", "fst", "snd"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    for it in items {
+        let p::TheoryItem::Functions(decls) = it else {
+            continue;
+        };
+        for d in decls {
+            if d.arg_types.len() == 1 {
+                unary.insert(d.name.clone());
+            }
+            if d.arg_types.is_empty() {
+                nullary.insert(d.name.clone());
+            }
+            if !d.ac {
+                noeq_names.insert(d.name.clone());
+            }
+            // The exemption gates the ATTRIBUTE sets only; arity resolution
+            // via `unary` / `nullary` is unaffected, since the builtin
+            // symbol has the same name and arity.
+            if is_builtin_pair_proj(d) {
+                continue;
+            }
+            // An `[AC]` declaration contributes an `ACfctUser` symbol to
+            // `stACFunSyms` and NOTHING to `stFunSyms` (HS `function`,
+            // Theory/Text/Parser/Signature.hs:220-222), so its options must
+            // stay on that symbol instead of joining the NoEq-keyed sets
+            // below — a same-named `NoEqUser` declaration keeps its own
+            // (see the `ac` field).
+            if d.ac {
+                let sym = AcFctSym::new(
+                    d.name.as_bytes().to_vec(),
+                    if d.private {
+                        Privacy::Private
+                    } else {
+                        Privacy::Public
+                    },
+                    if d.destructor {
+                        Constructability::Destructor
+                    } else {
+                        Constructability::Constructor
+                    },
+                    ndc_state_of(d.ndc, d.ndc_diff),
+                );
+                ac.entry(d.name.clone())
+                    .and_modify(|cur| {
+                        if sym < *cur {
+                            *cur = sym;
+                        }
+                    })
+                    .or_insert(sym);
+                continue;
+            }
+            if d.private {
+                private.insert(d.name.clone());
+            }
+            if d.destructor {
+                destructor.insert(d.name.clone());
+            }
+            if d.ndc {
+                ndc.insert(d.name.clone());
+            }
+            if d.ndc_diff {
+                ndc_diff.insert(d.name.clone());
+            }
+        }
+    }
+    let mut bp = false;
     for it in items {
         if let p::TheoryItem::Builtins(names) = it {
             for n in names {
+                if n == "bilinear-pairing" {
+                    bp = true;
+                }
                 for c in builtin_nullary_constants(n) {
                     nullary.insert(c.to_string());
                 }
-                // HS `naryOpApp` / `lookupArity` (Theory/Text/Parser/Term.hs:61-63,
-                // 84,92) reads `(k, priv, cnstr)` straight from the per-theory
+                // Every `NoEq` name the builtin folds into `funSyms` — the
+                // set `lookupArity` ranks ahead of the `ACfctUser` entries
+                // (Theory/Text/Parser/Term.hs:62-72), e.g. `exp` under
+                // `builtins: diffie-hellman`.
+                for c in builtin_noeq_fun_names(n) {
+                    noeq_names.insert(c);
+                }
+                // HS `naryOpApp` / `lookupArity` (Theory/Text/Parser/Term.hs:63-65,93)
+                // reads `(k, priv, cnstr)` straight from the per-theory
                 // signature, which includes the BUILTIN symbols.  Mirror that by
                 // merging the privacy / constructability of each builtin's
                 // function symbols (most are public constructors, so this only
@@ -684,10 +811,15 @@ fn collect_user_funs(items: &[p::TheoryItem]) -> CollectedUserFuns {
         }
     }
     CollectedUserFuns {
-        unary: user_names(|d| d.arg_types.len() == 1),
+        unary,
         nullary,
         private,
         destructor,
+        ac,
+        noeq_names,
+        ndc,
+        ndc_diff,
+        bp,
     }
 }
 
@@ -725,19 +857,20 @@ fn builtin_fun_attrs(name: &str) -> Vec<(String, Privacy, Constructability)> {
 }
 
 /// Extracts the 0-arity NoEq function-symbol names from a `MaudeSig`.
-/// Mirrors HS `nullaryApp` (Theory/Text/Parser/Term.hs:139-143):
+/// Mirrors HS `nullaryApp` (Theory/Text/Parser/Term.hs:158-163):
 ///
 /// ```haskell
 /// nullaryApp = do
 ///   maudeSig <- sig <$> getState
 ///   asum [ try (symbol (BC.unpack sym)) $> fApp fs []
-///        | fs@(NoEq (sym,(0,_,_))) <- S.toList $ funSyms maudeSig ]
+///        | fs@(NoEq (sym,(0,_,_,_))) <- S.toList $
+///            funSyms maudeSig `S.union` S.map NoEq (macroNames maudeSig) ]
 /// ```
 ///
 /// HS's parser consults `funSyms maudeSig` when disambiguating a bare
 /// identifier from a free variable.  Our parser is too lexer-driven to
 /// thread the MaudeSig through the parser-state, so we populate the
-/// `USER_NULLARY_FUNS` thread-local with the same names instead.  By
+/// installed bundle's `nullary` set with the same names instead.  By
 /// asking the MaudeSig directly here (rather than maintaining a parallel
 /// hand-curated table) we guarantee the set we recognise matches HS's
 /// `funSyms`, e.g. `oneSymString = "one"` and
@@ -773,145 +906,266 @@ pub fn builtin_nullary_constants(name: &str) -> Vec<String> {
     }
 }
 
-/// Generates an RAII guard that swaps a fresh `BTreeSet<String>` into a
-/// thread-local for the guard's lifetime and restores the previous value on
-/// drop.  All four user-declared-function thread-locals (`USER_UNARY_FUNS`,
-/// `USER_NULLARY_FUNS`, `USER_PRIVATE_FUNS`, `USER_DESTRUCTOR_FUNS`) share
-/// this identical swap/restore logic; the macro is their single source of
-/// truth.
-macro_rules! btreeset_swap_guard {
-    ($(#[$meta:meta])* $Guard:ident, $tl:path) => {
-        $(#[$meta])*
-        struct $Guard {
-            previous: BTreeSet<String>,
-        }
-
-        impl $Guard {
-            fn set(new: BTreeSet<String>) -> Self {
-                let previous = $tl.with(|c| {
-                    let mut b = c.borrow_mut();
-                    std::mem::replace(&mut *b, new)
-                });
-                $Guard { previous }
-            }
-        }
-
-        impl Drop for $Guard {
-            fn drop(&mut self) {
-                $tl.with(|c| {
-                    *c.borrow_mut() = std::mem::take(&mut self.previous);
-                });
-            }
-        }
+/// The names (any arity) of every `NoEq` function symbol a given `builtins:`
+/// declaration folds into `funSyms` — both its `stFunSyms` (`h`, `aenc`, …)
+/// and its enable flags' theory-level contributions (`exp`/`inv`/`one`/
+/// `DH_neutral` for `diffie-hellman`, Term/Maude/Signature.hs:110-125) —
+/// read off the same `MaudeSig` as [`builtin_nullary_constants`].  These are
+/// the names `lookupArity` resolves as `NoEqUser` ahead of any `ACfctUser`
+/// entry (Theory/Text/Parser/Term.hs:62-72).  Empty for unknown names, as
+/// with [`builtin_nullary_constants`].
+fn builtin_noeq_fun_names(name: &str) -> Vec<String> {
+    let Some(msig) = builtin_sig(name) else {
+        return Vec::new();
     };
+    msig.fun_syms
+        .iter()
+        .filter_map(|fs| match fs {
+            tamarin_term::function_symbols::FunSym::NoEq(s) => {
+                String::from_utf8(s.name.to_vec()).ok()
+            }
+            _ => None,
+        })
+        .collect()
 }
 
-btreeset_swap_guard! {
-    /// RAII guard that swaps in a fresh `USER_UNARY_FUNS` set for the
-    /// duration of an `elaborate()` call and restores the previous value
-    /// on drop.  Ensures nested or sequential elaborations don't bleed
-    /// each other's arity-1 function sets.
-    UserUnaryFunsGuard, USER_UNARY_FUNS
-}
-
-/// True if `name` is registered as a user-declared arity-1 function for
-/// the current elaboration.  Read from the `USER_UNARY_FUNS` thread-local.
-fn is_user_unary_fun(name: &str) -> bool {
-    USER_UNARY_FUNS.with(|c| c.borrow().contains(name))
-}
-
-btreeset_swap_guard! {
-    /// Same as `UserUnaryFunsGuard` but for the `USER_NULLARY_FUNS` set.
-    UserNullaryFunsGuard, USER_NULLARY_FUNS
+/// The bundle currently installed in [`USER_FUNS`] on this thread, as an
+/// `Arc` clone.  The thread-local borrow ends inside this call, so the
+/// caller may install or drop guards while holding the returned snapshot.
+fn current_user_funs() -> Arc<CollectedUserFuns> {
+    USER_FUNS.with(|c| c.borrow().clone())
 }
 
 /// True if `name` is registered as a 0-arity function for the current
-/// elaboration.  See `USER_NULLARY_FUNS` for the populating logic.
+/// elaboration.  See `CollectedUserFuns::nullary` for the populating logic.
 pub(crate) fn is_user_nullary_fun(name: &str) -> bool {
-    USER_NULLARY_FUNS.with(|c| c.borrow().contains(name))
+    USER_FUNS.with(|c| c.borrow().nullary.contains(name))
 }
 
-btreeset_swap_guard! {
-    /// RAII guard for the USER_PRIVATE_FUNS thread-local.
-    UserPrivateFunsGuard, USER_PRIVATE_FUNS
+/// Join of the `[NDC]` and `[NDC-diff]` attributes (HS `function`'s `joinNDC`).
+fn ndc_state_of(ndc: bool, ndc_diff: bool) -> NdcState {
+    let a = if ndc {
+        NdcState::IsNdc
+    } else {
+        NdcState::NotNdc
+    };
+    let b = if ndc_diff {
+        NdcState::IsNdcDiff
+    } else {
+        NdcState::NotNdc
+    };
+    a.join(b)
 }
 
-/// Returns `Privacy::Private` if `name` is a user-declared private
-/// function symbol; otherwise `Privacy::Public`.  Mirrors Haskell's
-/// `signature` lookup against the per-theory funSig.
-fn user_fun_privacy(name: &str) -> Privacy {
-    USER_PRIVATE_FUNS.with(|c| {
-        if c.borrow().contains(name) {
+/// The symbol-resolution reads `term_to_vterm` performs against the
+/// user-declared name sets.  The recursion carries one `Arc` snapshot of the
+/// installed bundle, taken once at the entry point by `with_user_fun_sets`,
+/// so a term tree costs one thread-local access rather than one per node.
+impl CollectedUserFuns {
+    /// True if `name` is registered as a user-declared arity-1 function for
+    /// the current elaboration.  Read from the `unary` set.
+    fn is_user_unary_fun(&self, name: &str) -> bool {
+        self.unary.contains(name)
+    }
+
+    /// True if `name` is registered as a 0-arity function for the current
+    /// elaboration.  See the `nullary` field for the populating logic.
+    fn is_user_nullary_fun(&self, name: &str) -> bool {
+        self.nullary.contains(name)
+    }
+
+    /// True if `name` is a user-declared `[AC]` function symbol — the raw
+    /// declaration-set probe the `USER_FUNS` install/restore tests key on.
+    /// Term resolution goes through
+    /// [`CollectedUserFuns::prefix_resolves_to_user_ac`] instead.
+    #[cfg(test)]
+    fn is_user_ac_fun(&self, name: &str) -> bool {
+        self.ac.contains_key(name)
+    }
+
+    /// True if a PREFIX (or `op{a}b`) application of `name` denotes the
+    /// user-declared `[AC]` symbol.  HS `lookupArity` resolves those
+    /// spellings by a list lookup over `S.toList (userDefinedFunSyms
+    /// maudeSig)` in which every `NoEqUser` sorts before every `ACfctUser`
+    /// (Theory/Text/Parser/Term.hs:62-72, constructor order of
+    /// `UserDefinedSym`, Term/Term/FunctionSymbols.hs:146-147), so a name
+    /// that is ALSO a `NoEq` symbol of the full signature resolves to that
+    /// `NoEq` symbol, never the AC one.  The infix spelling bypasses
+    /// `lookupArity` (`acterm`, Term.hs:163-168): `BinOp::AcFct` readers do
+    /// not consult this.
+    fn prefix_resolves_to_user_ac(&self, name: &str) -> bool {
+        self.ac.contains_key(name) && !self.noeq_names.contains(name)
+    }
+
+    /// True when a PREFIX `exp(a, b)` resolves to THE DH exponentiation
+    /// symbol, which HS `prettyTerm` renders infix: `FApp (NoEq s) [t1,t2] |
+    /// s == expSym -> ppTerm t1 <> text "^" <> ppTerm t2` (Term/Term.hs:310)
+    /// with `expSym = ("exp",(2,Public,Constructor,NotNDC))`
+    /// (Term/Term/FunctionSymbols.hs:251).  The guard is on the WHOLE symbol:
+    /// the name must resolve NoEq (so a lone `exp/2 [AC]` declaration stays
+    /// the infix AC symbol) at arity 2 with default attributes — a
+    /// `functions: exp/2 [private]` re-declaration is a different symbol and
+    /// keeps the prefix rendering.
+    fn prefix_exp_is_dh_exp(&self) -> bool {
+        self.noeq_names.contains("exp")
+            && !self.unary.contains("exp")
+            && !self.nullary.contains("exp")
+            && self.user_fun_privacy("exp") == Privacy::Public
+            && self.user_fun_constructability("exp") == Constructability::Constructor
+            && self.user_fun_ndc("exp") == NdcState::NotNdc
+    }
+
+    /// True if the theory enables the `bilinear-pairing` builtin.
+    fn is_bp_enabled(&self) -> bool {
+        self.bp
+    }
+
+    /// Returns `Privacy::Private` if the NoEq symbol called `name` is
+    /// private; otherwise `Privacy::Public`.  Mirrors Haskell's `signature`
+    /// lookup against the per-theory funSig.  A same-named `[AC]`
+    /// declaration's privacy is NOT read here — see the `ac` field.
+    fn user_fun_privacy(&self, name: &str) -> Privacy {
+        if self.private.contains(name) {
             Privacy::Private
         } else {
             Privacy::Public
         }
-    })
-}
+    }
 
-btreeset_swap_guard! {
-    /// RAII guard for the USER_DESTRUCTOR_FUNS thread-local.
-    UserDestructorFunsGuard, USER_DESTRUCTOR_FUNS
-}
-
-/// Returns `Constructability::Destructor` if `name` is a user-declared
-/// `[destructor]` function symbol; otherwise `Constructability::Constructor`.
-/// Mirrors Haskell's `lookupArity`, which reads `(k,priv,cnstr)` straight
-/// from the signature (Theory/Text/Parser/Term.hs:61-63,84,92).
-fn user_fun_constructability(name: &str) -> Constructability {
-    USER_DESTRUCTOR_FUNS.with(|c| {
-        if c.borrow().contains(name) {
+    /// Returns `Constructability::Destructor` if the NoEq symbol called
+    /// `name` is a `[destructor]`; otherwise
+    /// `Constructability::Constructor`.  Mirrors Haskell's `lookupArity`,
+    /// which reads `(k,priv,cnstr)` straight from the signature
+    /// (Theory/Text/Parser/Term.hs:62-71).  A same-named `[AC]`
+    /// declaration's constructability is NOT read here — see the `ac` field.
+    fn user_fun_constructability(&self, name: &str) -> Constructability {
+        if self.destructor.contains(name) {
             Constructability::Destructor
         } else {
             Constructability::Constructor
         }
-    })
+    }
+
+    /// The NDC state of the NoEq symbol called `name`, read from the `[NDC]`
+    /// / `[NDC-diff]` name sets.  A same-named `[AC]` declaration's NDC state
+    /// is NOT read here — see the `ac` field.
+    fn user_fun_ndc(&self, name: &str) -> NdcState {
+        ndc_state_of(self.ndc.contains(name), self.ndc_diff.contains(name))
+    }
+
+    /// The `NoEqSym` for a user-declared name applied at `arity`, carrying
+    /// the privacy / constructability / NDC flags read off its declaration
+    /// (HS `lookupArity`).  The 0-arity `nullaryApp` recovery does not use
+    /// this: a bare constant is always a constructor there.
+    fn user_no_eq_sym(&self, name: &str, arity: usize) -> NoEqSym {
+        NoEqSym::new(
+            name.as_bytes().to_vec(),
+            arity,
+            self.user_fun_privacy(name),
+            self.user_fun_constructability(name),
+        )
+        .with_ndc(self.user_fun_ndc(name))
+    }
+
+    /// The `AcFctSym` for a user-declared `[AC]` name, carrying the privacy /
+    /// constructability / NDC flags read off ITS OWN declaration (HS
+    /// `lookupArity` / `acterm` both hand back the whole `ACfctUser` tuple
+    /// stored in `stACFunSyms`, Theory/Text/Parser/Term.hs:62-72,163-168) —
+    /// never the flags of a same-named `NoEq` declaration.
+    ///
+    /// The default-attribute fallback covers a name the bundle has no `[AC]`
+    /// declaration for, which the callers cannot produce: both prefix arms
+    /// are gated on [`Self::prefix_resolves_to_user_ac`], and the parser only
+    /// emits `BinOp::AcFct` for a name it saw declared `[AC]`.
+    fn user_ac_fct_sym(&self, name: &str) -> AcFctSym {
+        self.ac.get(name).copied().unwrap_or_else(|| {
+            AcFctSym::new(
+                name.as_bytes().to_vec(),
+                Privacy::Public,
+                Constructability::Constructor,
+                NdcState::NotNdc,
+            )
+        })
+    }
 }
 
-/// Bundles RAII guards for all the user-declared function thread-locals,
-/// scoped to the lifetime of an outer call (typically `prove_lemma`).
+/// Snapshots the installed user-declared function-name bundle (one `Arc`
+/// clone) and hands it to `f`.  The thread-local borrow ends before `f`
+/// runs, so nothing `f` does — including installing or dropping a guard —
+/// can conflict with the snapshot.
+fn with_user_fun_sets<R>(f: impl FnOnce(&CollectedUserFuns) -> R) -> R {
+    let sets = current_user_funs();
+    f(&sets)
+}
+
+/// RAII guard that installs a user-declared function-name bundle into
+/// `USER_FUNS` for the guard's lifetime, scoped to an outer call
+/// (typically `prove_lemma`), and restores the previous bundle on drop.
+///
+/// Guards nest: the server installs one per renderer inside the per-theory
+/// one (`TheoryEntry::install_user_funs`).  Restoration is by saved value,
+/// so nesting behaves as a stack as long as the guards are dropped in
+/// reverse installation order — which holding them in `let` bindings (or in
+/// a struct that outlives the inner scopes, as `prove.rs`'s session does)
+/// guarantees.
 #[must_use = "dropping this guard immediately ends the scope it protects"]
 pub struct UserFunsForTheoryGuard {
-    _unary: UserUnaryFunsGuard,
-    _nullary: UserNullaryFunsGuard,
-    _private: UserPrivateFunsGuard,
-    _destructor: UserDestructorFunsGuard,
+    previous: Arc<CollectedUserFuns>,
+}
+
+impl UserFunsForTheoryGuard {
+    /// Make `funs` the current bundle, saving the one it displaces.
+    fn set(funs: Arc<CollectedUserFuns>) -> Self {
+        let previous = USER_FUNS.with(|c| {
+            let mut b = c.borrow_mut();
+            std::mem::replace(&mut *b, funs)
+        });
+        UserFunsForTheoryGuard { previous }
+    }
+}
+
+impl Drop for UserFunsForTheoryGuard {
+    fn drop(&mut self) {
+        USER_FUNS.with(|c| {
+            *c.borrow_mut() = std::mem::take(&mut self.previous);
+        });
+    }
 }
 
 /// RAII guard that swaps in the 0-arity NoEq function-symbol names from
 /// a `MaudeSig` for the duration of a parse, then restores the previous
-/// `USER_NULLARY_FUNS` on drop.  Use this around any call that builds
-/// LNTerms via [`term_to_lnterm`] from a string the user/HS wrote
-/// against a specific MaudeSig (e.g. the cached intruder-variant files
-/// in `data/`).
+/// bundle on drop.  Only the nullary set is replaced — the other sets are
+/// carried over from the bundle installed at construction.  Use this around
+/// any call that builds LNTerms via [`term_to_lnterm`] from a string the
+/// user/HS wrote against a specific MaudeSig (e.g. the cached
+/// intruder-variant files in `data/`).
 ///
 /// HS analogue: the parser-state MaudeSig consulted by `nullaryApp`
 /// (Theory/Text/Parser/Term.hs:139-143).  HS sets it via
 /// `setState (mkStateSig msig)` at the top of `parseIntruderRules`
 /// (Theory/Text/Parser/Rule.hs:200-204).
 pub struct MaudeSigNullaryGuard {
-    _nullary: UserNullaryFunsGuard,
+    _funs: UserFunsForTheoryGuard,
 }
 
 impl MaudeSigNullaryGuard {
-    /// Push the 0-arity NoEq names from `msig` into `USER_NULLARY_FUNS`.
+    /// Push the 0-arity NoEq names from `msig` into the nullary set.
     pub fn set(msig: &MaudeSig) -> Self {
-        let nullary_funs: BTreeSet<String> =
-            builtin_nullary_names_from_msig(msig).into_iter().collect();
+        let mut funs = current_user_funs().as_ref().clone();
+        funs.nullary = builtin_nullary_names_from_msig(msig).into_iter().collect();
         MaudeSigNullaryGuard {
-            _nullary: UserNullaryFunsGuard::set(nullary_funs),
+            _funs: UserFunsForTheoryGuard::set(Arc::new(funs)),
         }
     }
 }
 
-/// Re-collects the user-declared unary / nullary / private function
-/// names from `parser_theory` and pushes them into the thread-locals
-/// read by `term_to_lnterm`.  Returns an RAII guard whose drop
-/// restores the previous values.  Use from `prove_lemma` so search-
-/// time term conversions see the right per-theory signature info.
+/// Re-collects the user-declared function-name sets from `parser_theory`
+/// and installs them as the current bundle read by `term_to_lnterm`.
+/// Returns an RAII guard whose drop restores the previous bundle.  Use
+/// from `prove_lemma` so search-time term conversions see the right
+/// per-theory signature info.
 pub fn set_user_funs_for_theory(parser_theory: &p::Theory) -> UserFunsForTheoryGuard {
-    let funs = collect_user_funs(&parser_theory.items);
-    set_user_funs_from_collected(&funs)
+    UserFunsForTheoryGuard::set(Arc::new(collect_user_funs(&parser_theory.items)))
 }
 
 /// Collect the user-declared function-name sets from a parser theory, to
@@ -922,34 +1176,24 @@ pub fn collect_user_funs_for_theory(parser_theory: &p::Theory) -> CollectedUserF
     collect_user_funs(&parser_theory.items)
 }
 
-/// Install the cached user-fn sets into the current thread's thread-locals,
-/// returning an RAII guard that restores the previous values on drop.
-/// `term_to_lnterm` / `term_to_gterm` read these thread-locals, so any
-/// thread that performs search-time term conversion must have them set —
-/// including rayon worker threads proving lemmas in parallel.
+/// Install the cached user-fn sets as the current thread's bundle,
+/// returning an RAII guard that restores the previous one on drop.
+/// `term_to_lnterm` / `term_to_gterm` read the bundle, so any thread that
+/// performs search-time term conversion must have it set — including rayon
+/// worker threads proving lemmas in parallel.
 pub fn set_user_funs_from_collected(funs: &CollectedUserFuns) -> UserFunsForTheoryGuard {
-    UserFunsForTheoryGuard {
-        _unary: UserUnaryFunsGuard::set(funs.unary.clone()),
-        _nullary: UserNullaryFunsGuard::set(funs.nullary.clone()),
-        _private: UserPrivateFunsGuard::set(funs.private.clone()),
-        _destructor: UserDestructorFunsGuard::set(funs.destructor.clone()),
-    }
+    UserFunsForTheoryGuard::set(Arc::new(funs.clone()))
 }
 
-/// Snapshot the calling thread's user-fun thread-locals so a rayon
-/// fan-out can replicate them onto its worker threads (which spawn with
-/// EMPTY sets).  Capture this BEFORE `par_iter`, then install per worker
-/// with [`set_user_funs_from_collected`]; a worker that converts terms
-/// without them mis-classifies user nullary/unary symbols (e.g. a
-/// declared `true/0` lifts to a free variable), silently changing term
-/// identity relative to the calling thread.
+/// Snapshot the calling thread's user-fun bundle so a rayon fan-out can
+/// replicate it onto its worker threads (which spawn with EMPTY sets).
+/// Capture this BEFORE `par_iter`, then install per worker with
+/// [`set_user_funs_from_collected`]; a worker that converts terms without
+/// it mis-classifies user nullary/unary symbols (e.g. a declared `true/0`
+/// lifts to a free variable), silently changing term identity relative to
+/// the calling thread.
 pub fn snapshot_user_funs() -> CollectedUserFuns {
-    CollectedUserFuns {
-        unary: USER_UNARY_FUNS.with(|c| c.borrow().clone()),
-        nullary: USER_NULLARY_FUNS.with(|c| c.borrow().clone()),
-        private: USER_PRIVATE_FUNS.with(|c| c.borrow().clone()),
-        destructor: USER_DESTRUCTOR_FUNS.with(|c| c.borrow().clone()),
-    }
+    current_user_funs().as_ref().clone()
 }
 
 fn elaborate_already_expanded(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
@@ -984,6 +1228,12 @@ fn elaborate_already_expanded(parser_thy: &p::Theory) -> Result<Theory, ElabErro
 }
 
 fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), ElabError> {
+    // Signature-conflict rules (HS `extendSig` / `function`,
+    // Theory/Text/Parser/Signature.hs:102-135, 200-222) are enforced at
+    // parse time (`Parser::enable_builtin` / `Parser::function_decl`) — the
+    // single point where theories are ingested — so the declarations
+    // reaching here are conflict-free and the arms below only BUILD the
+    // signature.
     for item in items {
         match item {
             p::TheoryItem::Builtins(names) => {
@@ -1014,6 +1264,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 out.signature.maude_sig = s;
             }
             p::TheoryItem::Functions(decls) => {
+                use tamarin_term::function_symbols::UserDefinedSym;
                 for d in decls {
                     let arity = d.arg_types.len();
                     let priv_ = if d.private {
@@ -1026,13 +1277,43 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                     } else {
                         Constructability::Constructor
                     };
-                    let sym = NoEqSym::new(d.name.as_bytes().to_vec(), arity, priv_, constr);
+                    let ndc = ndc_state_of(d.ndc, d.ndc_diff);
+                    // HS `function`'s fst/snd short-circuit (Theory/Text/
+                    // Parser/Signature.hs:217, name-only by design — it tests
+                    // neither arity nor privacy): a re-declared fst/snd
+                    // resolves to the EXISTING symbol and `addFunSym` is
+                    // never reached, so `functions: fst/1 [destructor]`
+                    // alone must NOT flip the signature to the destructor
+                    // variant (only `builtins: dest-pairing` does that).
+                    if (d.name == "fst" || d.name == "snd")
+                        && out
+                            .signature
+                            .maude_sig
+                            .st_fun_syms
+                            .iter()
+                            .any(|s| s.name == d.name.as_bytes())
+                    {
+                        continue;
+                    }
+                    let user_sym = if d.ac {
+                        UserDefinedSym::AcFctUser(AcFctSym::new(
+                            d.name.as_bytes().to_vec(),
+                            priv_,
+                            constr,
+                            ndc,
+                        ))
+                    } else {
+                        UserDefinedSym::NoEqUser(
+                            NoEqSym::new(d.name.as_bytes().to_vec(), arity, priv_, constr)
+                                .with_ndc(ndc),
+                        )
+                    };
                     // `add_fun_sym` consumes `self` by value; move the
                     // current sig out via `take` to avoid a per-declaration
                     // deep clone of the whole MaudeSig.  Output order and
                     // dedup are unchanged (same `add_fun_sym` path).
                     let cur = std::mem::take(&mut out.signature.maude_sig);
-                    out.signature.maude_sig = cur.add_fun_sym(sym);
+                    out.signature.maude_sig = cur.add_fun_sym(user_sym);
                 }
             }
             p::TheoryItem::Equations { eqs, convergent } => {
@@ -1622,6 +1903,12 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                 tamarin_term::lterm::NameTag::Fresh => p::Term::FreshLit(name.id.0.to_string()),
                 tamarin_term::lterm::NameTag::Nat => p::Term::NatLit(name.id.0.to_string()),
                 tamarin_term::lterm::NameTag::Node => p::Term::PubLit(name.id.0.to_string()),
+                // `show (Name AbbrevName n) = show n` (LTerm.hs:240) is the
+                // bare id, and a nullary `App` is the parser-AST term that
+                // renders that way.
+                tamarin_term::lterm::NameTag::Abbrev => {
+                    p::Term::App(name.id.0.to_string(), Vec::new())
+                }
             }
         }
         tamarin_term::term::Term::App(funsym, args) => {
@@ -1640,8 +1927,8 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                         p::Term::Pair(flat)
                     } else if name == "exp" && parser_args.len() == 2 {
                         // Round-trip the `exp` NoEq head back to parser
-                        // `BinOp(Exp, ..)` (the inverse of `term_to_lnterm`'s
-                        // `p::BinOp::Exp` arm at elaborate.rs:1721-1724).
+                        // `BinOp(Exp, ..)` (the inverse of the
+                        // `p::BinOp::Exp` arm in `term_to_vterm` below).
                         // HS `viewTerm` exposes `exp(b,e)` as
                         // `FApp (NoEq s) [t1,t2] | s == expSym`, and
                         // `prettyTerm` (Term/Term.hs:272-300, see line 274) renders that arm as
@@ -1696,6 +1983,14 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                             AcSym::Union => p::BinOp::Union,
                             AcSym::Xor => p::BinOp::Xor,
                             AcSym::NatPlus => p::BinOp::NatPlus,
+                            // A user-declared `[AC]` symbol is infix in HS's
+                            // `prettyTerm` as well (Term/Term.hs:305:
+                            // `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")"
+                            // ts`), so it round-trips through the same parser
+                            // `BinOp` node as the builtin AC operators.
+                            AcSym::AcFct(s) => p::BinOp::AcFct(tamarin_term::intern::intern_str(
+                                &String::from_utf8_lossy(s.name),
+                            )),
                         };
                         // Left-fold: a parser BinOp is strictly arity-2,
                         // so fold left-to-right when more than 2 args.
@@ -1707,6 +2002,13 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                             acc = p::Term::BinOp(op, Box::new(acc), Box::new(next));
                         }
                         acc
+                    } else if let AcSym::AcFct(s) = ac {
+                        // HS `prettyTerm` renders a NULLARY user-AC symbol as
+                        // its bare name (Term/Term.hs:304), and `fAppAC`
+                        // collapses a one-element operand list to that operand
+                        // (Term/Term/Raw.hs:118-122) — neither shape carries an
+                        // infix operator, so both stay a named application.
+                        p::Term::App(String::from_utf8_lossy(s.name).into_owned(), parser_args)
                     } else {
                         // Defensive: 0- or 1-arg AC term shouldn't occur
                         // (AC operators are arity-2), but emit a
@@ -1716,6 +2018,7 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                             AcSym::Union => "?Union",
                             AcSym::Xor => "?Xor",
                             AcSym::NatPlus => "?NatPlus",
+                            AcSym::AcFct(_) => unreachable!("handled above"),
                         };
                         p::Term::App(name.to_string(), parser_args)
                     }
@@ -1724,8 +2027,8 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                     // HS-faithful: round-trip a C-symbol (bilinear-pairing
                     // `em`) back through the parser AST under its proper
                     // builtin name so a later `term_to_lnterm` rebuilds it
-                    // as `FunSym::C(EMap)` (via the `em` gate at
-                    // elaborate.rs:1201).  Without this, `lnterm_to_term`
+                    // as `FunSym::C(EMap)` (via the `em` arm of
+                    // `term_to_vterm`).  Without this, `lnterm_to_term`
                     // emits `App("?", [a,b])` which `term_to_lnterm` rebuilds
                     // as `NoEqSym(name="?", arity=2, Public, Constructor)` —
                     // Maude rejects `tamXC?` as a bad token, returns empty
@@ -1735,7 +2038,7 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                     // Scott::key_secrecy: lemma verifies in HS but RS
                     // terminates `SOLVED // trace found` (wrong verdict).
                     // Mirrors HS's `viewTerm` round-trip via `FApp (C EMap)`
-                    // followed by `naryOpApp` at Theory/Text/Parser/Term.hs:79-93, see line 92.
+                    // followed by `naryOpApp` at Theory/Text/Parser/Term.hs:87-106, see line 103.
                     use tamarin_term::function_symbols::CSym;
                     let name = match c {
                         CSym::EMap => String::from_utf8(
@@ -1755,10 +2058,11 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
 }
 
 /// AC-canonicalise a parser-AST term: for every `BinOp(op, l, r)` where op
-/// is AC (Mult/Union/Xor/NatPlus), flatten the chain into the full
-/// multiset, sort it (via the existing `cmp_term` for GTerm — we convert
-/// through GTerm transiently), then re-fold right-leaning so the
-/// canonical form matches HS's flat-sorted `FApp (AC op) args`.
+/// is AC (Mult/Union/Xor/NatPlus, or a user-declared `[AC]` symbol),
+/// flatten the chain into the full multiset, sort it (via the existing
+/// `cmp_term` for GTerm — we convert through GTerm transiently), then
+/// re-fold right-leaning so the canonical form matches HS's flat-sorted
+/// `FApp (AC op) args`.
 ///
 /// Without this, parser-AST `BinOp` stays in the order the parser
 /// produced (left-associative left-to-right), so e.g.
@@ -1775,12 +2079,23 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
 /// two arguments (Raw.hs:132-133).  Mirror that here so the parser-AST
 /// display path matches HS — `em` args from let-block desugaring may
 /// arrive in source order, which can differ from canonical order.
-/// HS site: `Theory/Text/Parser/Term.hs:79-93, see line 92` / `Term/Term/Raw.hs:132-133`:
+/// HS site: `Theory/Text/Parser/Term.hs:87-106, see line 103` / `Term/Term/Raw.hs:132-133`:
 ///   `fAppC nacsym as = FAPP (C nacsym) (sort as)`
 pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
+    with_user_fun_sets(|funs| canonicalize_ac_in_pterm_with(t, funs))
+}
+
+/// [`canonicalize_ac_in_pterm`] against an already-snapshotted bundle: the
+/// user-`[AC]` name set is read from `funs`, so a whole term tree — and, via
+/// the fact / atom / formula wrappers below, a whole item — costs one
+/// thread-local access instead of one per `App` node.
+fn canonicalize_ac_in_pterm_with(t: &p::Term, funs: &CollectedUserFuns) -> p::Term {
     use p::BinOp;
     fn is_ac(op: BinOp) -> bool {
-        matches!(op, BinOp::Mult | BinOp::Union | BinOp::Xor | BinOp::NatPlus)
+        matches!(
+            op,
+            BinOp::Mult | BinOp::Union | BinOp::Xor | BinOp::NatPlus | BinOp::AcFct(_)
+        )
     }
     fn flatten(op: BinOp, t: &p::Term, out: &mut Vec<p::Term>) {
         match t {
@@ -1790,6 +2105,20 @@ pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
             }
             _ => out.push(t.clone()),
         }
+    }
+    /// Sort a flattened AC operand list and re-fold it right-leaning into
+    /// `BinOp(op, x_0, BinOp(op, x_1, ...))` — the parser-AST spelling of
+    /// HS's flat, sorted `FApp (AC op) args` (`fAppAC`,
+    /// Term/Term/Raw.hs:118-122).  A one-element list collapses to that
+    /// element, mirroring `fAppAC _ [a] = a`.
+    fn sort_and_fold(op: BinOp, mut flat: Vec<p::Term>) -> p::Term {
+        flat.sort_by(cmp_pterm);
+        let mut iter = flat.into_iter().rev();
+        let mut acc = iter.next().expect("AC chain has at least one element");
+        for prev in iter {
+            acc = p::Term::BinOp(op, Box::new(prev), Box::new(acc));
+        }
+        acc
     }
     fn cmp_pterm(a: &p::Term, b: &p::Term) -> std::cmp::Ordering {
         // Convert to GTerm transiently for the canonical `cmp_term`
@@ -1811,8 +2140,8 @@ pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
         // `em(a, b)` — commutative C-symbol: sort the two args to match
         // HS `fAppC EMap [a,b] = FAPP (C EMap) (sort [a,b])` (Raw.hs:132-133).
         p::Term::App(n, args) if n == "em" && args.len() == 2 => {
-            let a2 = canonicalize_ac_in_pterm(&args[0]);
-            let b2 = canonicalize_ac_in_pterm(&args[1]);
+            let a2 = canonicalize_ac_in_pterm_with(&args[0], funs);
+            let b2 = canonicalize_ac_in_pterm_with(&args[1], funs);
             let (first, second) = if cmp_pterm(&a2, &b2) != std::cmp::Ordering::Greater {
                 (a2, b2)
             } else {
@@ -1820,24 +2149,71 @@ pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
             };
             p::Term::App(n.clone(), vec![first, second])
         }
+        // A user-declared `[AC]` symbol written in PREFIX form — when no
+        // `NoEq` symbol shares the name (`lookupArity`'s NoEq-first lookup,
+        // see [`CollectedUserFuns::prefix_resolves_to_user_ac`]).  HS's
+        // `naryOpApp` builds `fAppAC (ACfct …) ts` for it whatever the
+        // written arity (Theory/Text/Parser/Term.hs:88-105), so the operands
+        // are flattened and sorted into the same AC node the infix spelling
+        // yields — and `prettyTerm` then renders that node infix
+        // (Term/Term.hs:305).
+        p::Term::App(n, args) if !args.is_empty() && funs.prefix_resolves_to_user_ac(n) => {
+            let op = BinOp::AcFct(tamarin_term::intern::intern_str(n));
+            let mut flat: Vec<p::Term> = Vec::new();
+            for a in args {
+                flatten(op, &canonicalize_ac_in_pterm_with(a, funs), &mut flat);
+            }
+            sort_and_fold(op, flat)
+        }
+        // `exp(a, b)` written prefix, resolving to the DH exponentiation
+        // symbol ([`CollectedUserFuns::prefix_exp_is_dh_exp`]): surface the
+        // same `BinOp::Exp` node the `^` spelling parses to, so the printers
+        // render HS `prettyTerm`'s `t1^t2` (Term/Term.hs:310).
+        p::Term::App(n, args) if n == "exp" && args.len() == 2 && funs.prefix_exp_is_dh_exp() => {
+            p::Term::BinOp(
+                BinOp::Exp,
+                Box::new(canonicalize_ac_in_pterm_with(&args[0], funs)),
+                Box::new(canonicalize_ac_in_pterm_with(&args[1], funs)),
+            )
+        }
         p::Term::App(n, args) => p::Term::App(
             n.clone(),
-            args.iter().map(canonicalize_ac_in_pterm).collect(),
+            args.iter()
+                .map(|a| canonicalize_ac_in_pterm_with(a, funs))
+                .collect(),
         ),
+        // `op{a}b` resolves through the same `lookupArity` NoEq-first lookup
+        // (HS `binaryAlgApp`, Theory/Text/Parser/Term.hs:108-121), so a name
+        // it resolves to the `[AC]` symbol builds the flattened, sorted AC
+        // node `prettyTerm` renders infix — `f{'a'}'b'` prints `('a' f 'b')`.
+        p::Term::AlgApp(n, a, b) if funs.prefix_resolves_to_user_ac(n) => {
+            let op = BinOp::AcFct(tamarin_term::intern::intern_str(n));
+            let mut flat: Vec<p::Term> = Vec::new();
+            flatten(op, &canonicalize_ac_in_pterm_with(a, funs), &mut flat);
+            flatten(op, &canonicalize_ac_in_pterm_with(b, funs), &mut flat);
+            sort_and_fold(op, flat)
+        }
         p::Term::AlgApp(n, a, b) => p::Term::AlgApp(
             n.clone(),
-            Box::new(canonicalize_ac_in_pterm(a)),
-            Box::new(canonicalize_ac_in_pterm(b)),
+            Box::new(canonicalize_ac_in_pterm_with(a, funs)),
+            Box::new(canonicalize_ac_in_pterm_with(b, funs)),
         ),
-        p::Term::Pair(items) => p::Term::Pair(items.iter().map(canonicalize_ac_in_pterm).collect()),
+        p::Term::Pair(items) => p::Term::Pair(
+            items
+                .iter()
+                .map(|i| canonicalize_ac_in_pterm_with(i, funs))
+                .collect(),
+        ),
         p::Term::Diff(a, b) => p::Term::Diff(
-            Box::new(canonicalize_ac_in_pterm(a)),
-            Box::new(canonicalize_ac_in_pterm(b)),
+            Box::new(canonicalize_ac_in_pterm_with(a, funs)),
+            Box::new(canonicalize_ac_in_pterm_with(b, funs)),
         ),
-        p::Term::PatMatch(inner) => p::Term::PatMatch(Box::new(canonicalize_ac_in_pterm(inner))),
+        p::Term::PatMatch(inner) => {
+            p::Term::PatMatch(Box::new(canonicalize_ac_in_pterm_with(inner, funs)))
+        }
         p::Term::BinOp(op, l, r) => {
-            let l2 = canonicalize_ac_in_pterm(l);
-            let r2 = canonicalize_ac_in_pterm(r);
+            let l2 = canonicalize_ac_in_pterm_with(l, funs);
+            let r2 = canonicalize_ac_in_pterm_with(r, funs);
             if !is_ac(*op) {
                 return p::Term::BinOp(*op, Box::new(l2), Box::new(r2));
             }
@@ -1845,27 +2221,23 @@ pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
             let mut flat: Vec<p::Term> = Vec::new();
             flatten(*op, &l2, &mut flat);
             flatten(*op, &r2, &mut flat);
-            flat.sort_by(cmp_pterm);
-            // Right-fold into `BinOp(op, x_0, BinOp(op, x_1, ...))`.
-            let mut iter = flat.into_iter().rev();
-            let last = iter.next().expect("AC chain has at least one element");
-            let mut acc = last;
-            for prev in iter {
-                acc = p::Term::BinOp(*op, Box::new(prev), Box::new(acc));
-            }
-            acc
+            sort_and_fold(*op, flat)
         }
     }
 }
 
 /// Apply `canonicalize_ac_in_pterm` to every term in a fact.
 pub fn canonicalize_ac_in_pfact(f: &p::Fact) -> p::Fact {
-    crate::macro_expand::map_fact_terms(f, &|t| canonicalize_ac_in_pterm(t))
+    with_user_fun_sets(|funs| {
+        crate::macro_expand::map_fact_terms(f, &|t| canonicalize_ac_in_pterm_with(t, funs))
+    })
 }
 
 /// Apply `canonicalize_ac_in_pterm` to every term in a parser-AST atom.
 pub fn canonicalize_ac_in_atom(a: &p::Atom) -> p::Atom {
-    crate::macro_expand::map_atom_terms(a, &|t| canonicalize_ac_in_pterm(t))
+    with_user_fun_sets(|funs| {
+        crate::macro_expand::map_atom_terms(a, &|t| canonicalize_ac_in_pterm_with(t, funs))
+    })
 }
 
 /// Apply `canonicalize_ac_in_pterm` to every term in a parser-AST formula.
@@ -1877,7 +2249,9 @@ pub fn canonicalize_ac_in_atom(a: &p::Atom) -> p::Atom {
 /// order on the free-variable parser AST so the subsequent guarded conversion
 /// (Free→Bound abstraction) preserves exactly what HS would have produced.
 pub fn canonicalize_ac_in_formula(f: &p::Formula) -> p::Formula {
-    crate::macro_expand::map_formula_terms(f, &|t| canonicalize_ac_in_pterm(t))
+    with_user_fun_sets(|funs| {
+        crate::macro_expand::map_formula_terms(f, &|t| canonicalize_ac_in_pterm_with(t, funs))
+    })
 }
 
 /// Names of arity-1 NoEq function symbols in the (closed-theory) signature.
@@ -1898,7 +2272,7 @@ pub fn arity1_noeq_names(
 
 /// Re-fold surplus arguments of an arity-1 function application into a
 /// single right-associative pair, mirroring HS `naryOpApp` for `k == 1`
-/// (Theory/Text/Parser/Term.hs:84-87):
+/// (Theory/Text/Parser/Term.hs:94-96):
 ///   `ts <- parens $ if k == 1 then return <$> tupleterm ... else commaSep ...`
 /// where `tupleterm = chainr1 (...) (fAppPair <$ comma)`.  So for an arity-1
 /// symbol `f`, the surface `f(a, b, c)` parses to `f(<a, b, c>)` — a single
@@ -1907,13 +2281,14 @@ pub fn arity1_noeq_names(
 /// HS performs this fold at PARSE time, so every downstream consumer (the
 /// lemma/restriction pretty-printer, the guarded-formula conversion, and the
 /// "Formula terms" wellformedness check) sees the already-folded form.  RS's
-/// term parser is arity-unaware and keeps `App("f", [a, b, c])`, so the
-/// prover-side LNTerm conversion folds it back in `term_to_lnterm`, but the
-/// parser-AST formula consumers (which run on the un-folded AST) need this
-/// same fold applied first.  This is the shared root behind the alethea
-/// `h(<a,b>)` formula-rendering divergence AND the spurious "reducible
-/// function symbols are disallowed" wf warning (a unary `h` applied with
-/// surplus args looks to the wf check like an unknown reducible `h/n`).
+/// term parser performs the same fold (its `lookup_arity`-resolved `k == 1`
+/// branch parses one tuple), so on theory ASTs this pass is a no-op; it is
+/// kept as belt-and-braces for ASTs from other producers (e.g. the parser's
+/// structural mode, which is arity-unaware and keeps `App("f", [a, b, c])`).
+/// Historically this was the shared root behind the alethea `h(<a,b>)`
+/// formula-rendering divergence AND the spurious "reducible function symbols
+/// are disallowed" wf warning (a unary `h` applied with surplus args looks
+/// to the wf check like an unknown reducible `h/n`).
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
@@ -2007,17 +2382,19 @@ fn right_nest_pair<V>(items: Vec<VTerm<Name, V>>) -> Option<VTerm<Name, V>> {
 /// builds a plain `LVar` literal (with `nullaryApp` 0-arity recovery); SAPIC
 /// builds a typed `SapicLVar` literal (same recovery, additionally gated on an
 /// un-annotated variable).  Recursion is threaded back through `term_to_vterm`
-/// so the whole tree is built in one universe.
-fn term_to_vterm<V, F>(t: &p::Term, mk_var: &F) -> Option<VTerm<Name, V>>
+/// so the whole tree is built in one universe.  `funs` carries the
+/// user-declared function-name sets, snapshotted once at the entry point by
+/// [`with_user_fun_sets`] and handed to every node (`mk_var` included).
+fn term_to_vterm<V, F>(t: &p::Term, mk_var: &F, funs: &CollectedUserFuns) -> Option<VTerm<Name, V>>
 where
     V: Clone + Ord,
-    F: Fn(&p::VarSpec) -> Option<VTerm<Name, V>>,
+    F: Fn(&p::VarSpec, &CollectedUserFuns) -> Option<VTerm<Name, V>>,
 {
     use tamarin_term::function_symbols::AcSym;
-    use tamarin_term::term::f_app_ac;
+    use tamarin_term::term::{f_app_ac, f_app_acfct};
 
     match t {
-        p::Term::Var(v) => mk_var(v),
+        p::Term::Var(v) => mk_var(v, funs),
         p::Term::PubLit(s) => {
             let n = Name::new(NameTag::Pub, s.clone());
             Some(Term::Lit(Lit::Con(n)))
@@ -2081,7 +2458,7 @@ where
             // Builtin arity-1 NoEq symbols whose surplus comma-separated
             // args must be folded into a single tuple, mirroring HS's
             // signature-driven `naryOpApp` (`k == 1`) over `noEqFunSyms`
-            // (Theory/Text/Parser/Term.hs:84-87).  In addition to the
+            // (Theory/Text/Parser/Term.hs:94-96).  In addition to the
             // common ones (h / fst / snd / inv / pk), this covers the
             // less-common builtin unary symbols: `getMessage`
             // (revealing-signing) and `get_rep` / `report`
@@ -2091,87 +2468,116 @@ where
             let unary_builtin = matches!(
                 name.as_str(),
                 "h" | "fst" | "snd" | "inv" | "pk" | "getMessage" | "get_rep" | "report"
-            ) || is_user_unary_fun(name.as_str());
-            let new_args: Option<Vec<_>> = args.iter().map(|a| term_to_vterm(a, mk_var)).collect();
+            ) || funs.is_user_unary_fun(name.as_str());
+            let new_args: Option<Vec<_>> = args
+                .iter()
+                .map(|a| term_to_vterm(a, mk_var, funs))
+                .collect();
             let mut new_args = new_args?;
             if unary_builtin && new_args.len() > 1 {
                 // Wrap the surplus args into one right-associative pair so the
                 // call stays arity-1.
                 new_args = vec![right_nest_pair(new_args)?];
             }
-            // HS-faithful: `em(a, b)` (bilinear-pairing builtin) must be
-            // emitted as a C-symbol application, not NoEq.  Mirrors HS
-            // `naryOpApp` (Theory/Text/Parser/Term.hs:79-93, see line 92):
-            //   `let app o = if BC.pack op == emapSymString then fAppC EMap
-            //                else fAppNoEq o`
-            // Without this gate, RS builds `em` as a NoEq function symbol
-            // → Maude theory declares `op tamem : Msg Msg -> Msg [comm]`
-            //   (via `op_c`, maude_print.rs:299-306), but rule terms get
-            //   emitted with the NoEq prefix `tamXCem` (maude_print.rs:118-123)
-            //   → Maude rejects the unknown `tamXCem` operator and `get
-            //     variants` returns an empty parse-error reply.  This is the
-            //   root cause of RYY_PFS::key_secrecy_PFS picking
-            //   `Init_1 → c_em → Reveal_ltk_case_1 → c_hp` (12-line diff)
-            //   vs HS's `Reveal_ltk_case_1 → split_case_1 → Init_1 → c_hp`:
-            //   variant disjunctions for `Init_2`/`Resp_1` were never
-            //   computed, so smartRanking saw the un-narrowed `em` shape
-            //   alongside `exp(Y,~ex)` at c_kdf instead of HS's normalised
-            //   `exp(em(hp($A),hp($B)),~n)`.
-            if name == "em" && new_args.len() == 2 {
+            // `em(a, b)` under the bilinear-pairing builtin lowers to a
+            // C-symbol application, not NoEq.  Mirrors HS `naryOpApp`
+            // (Theory/Text/Parser/Term.hs:87-106, see line 103):
+            //   `(o,(_,_,_,_)) | o == emapSymString -> return $ fAppC EMap ts`
+            // Classifying `em` as NoEq instead would declare the Maude
+            // operator as `op tamem : Msg Msg -> Msg [comm]` (`op_c` in
+            // maude_print.rs) while rule terms carry the NoEq prefix
+            // `tamXCem` (`pp_maude_no_eq_sym_into`); Maude then rejects the
+            // unknown operator and `get variants` returns an empty
+            // parse-error reply, so variant disjunctions go missing and
+            // smartRanking ranks un-narrowed `em` shapes (the RYY_PFS
+            // `key_secrecy_PFS` proof-path divergence).
+            //
+            // DELIBERATE DIVERGENCE (documented upstream bug):
+            // HS's arm is name-keyed with NO builtin gate, so a user
+            // `functions: em/2` WITHOUT bilinear-pairing also becomes C EMap —
+            // whose Maude operator (`tamem`) is only declared under `enableBP`,
+            // so upstream's first `get variants` query over such a term crashes
+            // the run.  Mirroring that ungated classification here would leave
+            // the port silently wrong instead (empty variant replies swallowed
+            // as "no variants"; the intruder's NoEq `c_em` rule never unifying
+            // with C-classified protocol terms, flipping exists-trace
+            // verdicts), so the arm is gated on the builtin: without it, `em`
+            // stays an ordinary user symbol.
+            if name == "em" && new_args.len() == 2 && funs.is_bp_enabled() {
                 let mut it = new_args.into_iter();
                 let a = it.next().unwrap();
                 let b = it.next().unwrap();
                 return Some(tamarin_term::builtin::emap(a, b));
             }
-            let sym = NoEqSym::new(
-                name.as_bytes().to_vec(),
-                new_args.len(),
-                user_fun_privacy(name),
-                user_fun_constructability(name),
-            );
+            // #883 `naryOpApp` IsAC case: a user-declared `[AC]` symbol
+            // lowers to an AC application (n-ary — the arity check applies
+            // only to non-AC symbols) — unless a `NoEq` symbol shares the
+            // name, in which case `lookupArity`'s NoEq-first lookup resolves
+            // the prefix spelling to that symbol instead
+            // ([`CollectedUserFuns::prefix_resolves_to_user_ac`]).  The infix
+            // spelling is the `BinOp::AcFct` arm below.
+            if funs.prefix_resolves_to_user_ac(name.as_str()) {
+                return Some(f_app_acfct(funs.user_ac_fct_sym(name), new_args));
+            }
+            let sym = funs.user_no_eq_sym(name, new_args.len());
             Some(f_app_no_eq(sym, new_args))
         }
         p::Term::Pair(items) => {
-            let new_items: Option<Vec<_>> =
-                items.iter().map(|i| term_to_vterm(i, mk_var)).collect();
+            let new_items: Option<Vec<_>> = items
+                .iter()
+                .map(|i| term_to_vterm(i, mk_var, funs))
+                .collect();
             // Right-associative pair: <a, b, c> = pair(a, pair(b, c)).
             right_nest_pair(new_items?)
         }
         p::Term::AlgApp(name, a, b) => {
             // `f{a}b` desugars to `f(a, b)` semantically; users typically
             // use this for senc/aenc/sign/mac.
-            let aa = term_to_vterm(a, mk_var)?;
-            let bb = term_to_vterm(b, mk_var)?;
+            let aa = term_to_vterm(a, mk_var, funs)?;
+            let bb = term_to_vterm(b, mk_var, funs)?;
             // Haskell `binaryAlgApp` also reads `(k,priv,cnstr)` from the
-            // signature via `lookupArity` (Theory/Text/Parser/Term.hs:96-106, see line 101),
+            // signature via `lookupArity` (Theory/Text/Parser/Term.hs:108-121, see line 114),
             // so thread user privacy/constructability here too.
-            let sym = NoEqSym::new(
-                name.as_bytes().to_vec(),
-                2,
-                user_fun_privacy(name),
-                user_fun_constructability(name),
-            );
+            // #883: `[AC]` symbols build an AC application here as well —
+            // under the same NoEq-first name resolution as the prefix
+            // spelling ([`CollectedUserFuns::prefix_resolves_to_user_ac`]).
+            if funs.prefix_resolves_to_user_ac(name.as_str()) {
+                return Some(f_app_acfct(funs.user_ac_fct_sym(name), vec![aa, bb]));
+            }
+            let sym = funs.user_no_eq_sym(name, 2);
             Some(f_app_no_eq(sym, vec![aa, bb]))
         }
         p::Term::Diff(a, b) => {
-            let aa = term_to_vterm(a, mk_var)?;
-            let bb = term_to_vterm(b, mk_var)?;
-            let sym = NoEqSym::new(
-                b"diff".to_vec(),
-                2,
-                Privacy::Public,
-                Constructability::Constructor,
-            );
-            Some(f_app_no_eq(sym, vec![aa, bb]))
+            let aa = term_to_vterm(a, mk_var, funs)?;
+            let bb = term_to_vterm(b, mk_var, funs)?;
+            // `diffOp` builds `fAppDiff` (Theory/Text/Parser/Term.hs:135), i.e.
+            // `fAppNoEq diffSym` (Term/Term.hs:162) — and `diff` is PRIVATE
+            // (`diffSym = (diffSymString,(2,Private,Constructor,NotNDC))`,
+            // Term/Term/FunctionSymbols.hs:249).  The privacy is observable:
+            // it is the first attribute char of the Maude operator name
+            // (`tamPCFUdiff`), and `contains_private` keys off it.
+            Some(f_app_no_eq(
+                tamarin_term::function_symbols::diff_sym(),
+                vec![aa, bb],
+            ))
         }
         p::Term::BinOp(op, a, b) => {
-            let aa = term_to_vterm(a, mk_var)?;
-            let bb = term_to_vterm(b, mk_var)?;
+            let aa = term_to_vterm(a, mk_var, funs)?;
+            let bb = term_to_vterm(b, mk_var, funs)?;
             match op {
                 p::BinOp::Mult => Some(f_app_ac(AcSym::Mult, vec![aa, bb])),
                 p::BinOp::Union => Some(f_app_ac(AcSym::Union, vec![aa, bb])),
                 p::BinOp::Xor => Some(f_app_ac(AcSym::Xor, vec![aa, bb])),
                 p::BinOp::NatPlus => Some(f_app_ac(AcSym::NatPlus, vec![aa, bb])),
+                // A user-declared `[AC]` symbol applied infix — ALWAYS the AC
+                // application (HS `acterm` builds `fAppACfct` straight from
+                // `stACFunSyms`, Theory/Text/Parser/Term.hs:163-168), even
+                // when a `NoEq` symbol shares the name and claims the prefix
+                // spelling.  It reads the same user-function signature for
+                // the symbol's privacy / constructability / NDC flags.
+                p::BinOp::AcFct(name) => {
+                    Some(f_app_acfct(funs.user_ac_fct_sym(name), vec![aa, bb]))
+                }
                 p::BinOp::Exp => {
                     let sym = NoEqSym::new(
                         b"exp".to_vec(),
@@ -2197,20 +2603,25 @@ pub fn term_to_lnterm(t: &p::Term) -> Option<tamarin_term::lterm::LNTerm> {
     // Msg-sort var named `true` if they explicitly annotate it (e.g.
     // `true:msg`), and the parser would emit `Untagged` only for the bare
     // form anyway.
-    let mk_var = |v: &p::VarSpec| -> Option<tamarin_term::lterm::LNTerm> {
-        if matches!(v.sort, p::SortHint::Untagged) && v.idx == 0 && is_user_nullary_fun(&v.name) {
-            let sym = NoEqSym::new(
-                v.name.as_bytes().to_vec(),
-                0,
-                user_fun_privacy(&v.name),
-                Constructability::Constructor,
-            );
-            return Some(f_app_no_eq(sym, vec![]));
-        }
-        let lv = LVar::new(v.name.clone(), sort_of(&v.sort), v.idx);
-        Some(Term::Lit(Lit::Var(lv)))
-    };
-    term_to_vterm(t, &mk_var)
+    let mk_var =
+        |v: &p::VarSpec, funs: &CollectedUserFuns| -> Option<tamarin_term::lterm::LNTerm> {
+            if matches!(v.sort, p::SortHint::Untagged)
+                && v.idx == 0
+                && funs.is_user_nullary_fun(&v.name)
+            {
+                let sym = NoEqSym::new(
+                    v.name.as_bytes().to_vec(),
+                    0,
+                    funs.user_fun_privacy(&v.name),
+                    Constructability::Constructor,
+                )
+                .with_ndc(funs.user_fun_ndc(&v.name));
+                return Some(f_app_no_eq(sym, vec![]));
+            }
+            let lv = LVar::new(v.name.clone(), sort_of(&v.sort), v.idx);
+            Some(Term::Lit(Lit::Var(lv)))
+        };
+    with_user_fun_sets(|funs| term_to_vterm(t, &mk_var, funs))
 }
 
 // =============================================================================
@@ -2234,24 +2645,25 @@ pub fn term_to_sapic_term(t: &p::Term) -> Option<crate::sapic::SapicTerm> {
     // SAPIC `Var` case: a bare untagged idx-0 identifier may be a 0-arity NoEq
     // fun symbol (mirrors `term_to_lnterm`'s `nullaryApp` recovery, additionally
     // gated on an un-annotated variable); otherwise a typed `SapicLVar`.
-    let mk_var = |v: &p::VarSpec| -> Option<crate::sapic::SapicTerm> {
+    let mk_var = |v: &p::VarSpec, funs: &CollectedUserFuns| -> Option<crate::sapic::SapicTerm> {
         if matches!(v.sort, p::SortHint::Untagged)
             && v.idx == 0
             && v.typ.is_none()
-            && is_user_nullary_fun(&v.name)
+            && funs.is_user_nullary_fun(&v.name)
         {
             let sym = NoEqSym::new(
                 v.name.as_bytes().to_vec(),
                 0,
-                user_fun_privacy(&v.name),
+                funs.user_fun_privacy(&v.name),
                 Constructability::Constructor,
-            );
+            )
+            .with_ndc(funs.user_fun_ndc(&v.name));
             return Some(f_app_no_eq(sym, vec![]));
         }
         let lv = LVar::new(v.name.clone(), sort_of(&v.sort), v.idx);
         Some(Term::Lit(Lit::Var(SapicLVar::new(lv, v.typ.clone()))))
     };
-    term_to_vterm(t, &mk_var)
+    with_user_fun_sets(|funs| term_to_vterm(t, &mk_var, funs))
 }
 
 /// `parser::Fact` → `SapicNFact<SapicLVar>` (`Fact<SapicTerm>`).  Mirrors
@@ -2298,305 +2710,5 @@ fn builtin_sig(name: &str) -> Option<MaudeSig> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tamarin_parser::parse_theory;
-
-    #[test]
-    fn canonicalize_ac_in_pterm_flattens_and_sorts() {
-        use tamarin_parser::ast as p;
-        // Build: BinOp(Xor, BinOp(Xor, na, k), nb)
-        let na = p::Term::Var(p::VarSpec {
-            typ: None,
-            name: "na".into(),
-            sort: p::SortHint::Msg,
-            idx: 0,
-        });
-        let k = p::Term::Var(p::VarSpec {
-            typ: None,
-            name: "k".into(),
-            sort: p::SortHint::Fresh,
-            idx: 0,
-        });
-        let nb = p::Term::Var(p::VarSpec {
-            typ: None,
-            name: "nb".into(),
-            sort: p::SortHint::Fresh,
-            idx: 0,
-        });
-        let inner = p::Term::BinOp(p::BinOp::Xor, Box::new(na.clone()), Box::new(k.clone()));
-        let outer = p::Term::BinOp(p::BinOp::Xor, Box::new(inner), Box::new(nb.clone()));
-        // Canonicalised right-fold should be `BinOp(Xor, k, BinOp(Xor, nb, na))`.
-        let canon = canonicalize_ac_in_pterm(&outer);
-        let expected = p::Term::BinOp(
-            p::BinOp::Xor,
-            Box::new(k),
-            Box::new(p::Term::BinOp(p::BinOp::Xor, Box::new(nb), Box::new(na))),
-        );
-        assert_eq!(canon, expected);
-        // And the LNTerm-side via `term_to_lnterm` should produce the
-        // flat sorted form (already byte-identical to HS).
-        let l = term_to_lnterm(&outer).unwrap();
-        assert_eq!(
-            tamarin_term::pretty::pretty_lnterm(&l),
-            "(~k\u{2295}~nb\u{2295}na)"
-        );
-    }
-
-    #[test]
-    fn elaborate_empty_theory() {
-        let p = parse_theory("theory T begin end", &[]).unwrap();
-        let t = elaborate(&p).unwrap();
-        assert_eq!(t.name, "T");
-    }
-
-    #[test]
-    fn elaborate_builtins() {
-        let p = parse_theory("theory T begin builtins: hashing, signing end", &[]).unwrap();
-        let t = elaborate(&p).unwrap();
-        // hashing adds h/1, signing adds sign/2 etc.
-        let funs: Vec<String> = t
-            .signature
-            .maude_sig
-            .st_fun_syms
-            .iter()
-            .map(|s| String::from_utf8_lossy(s.name).to_string())
-            .collect();
-        assert!(funs.iter().any(|n| n == "h"), "expected h: {:?}", funs);
-        assert!(
-            funs.iter().any(|n| n == "sign"),
-            "expected sign: {:?}",
-            funs
-        );
-    }
-
-    #[test]
-    fn elaborate_simple_rule() {
-        let src = r#"theory T begin
-            rule R: [Fr(~k)] --[Foo(~k)]-> [Out(~k)]
-        end"#;
-        let p = parse_theory(src, &[]).unwrap();
-        let t = elaborate(&p).unwrap();
-        let rules: Vec<_> = t.rules().collect();
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].name(), "R");
-    }
-
-    #[test]
-    fn elaborate_lemma_passthrough() {
-        let src = r#"theory T begin
-            rule R: [Fr(~k)] --[Foo(~k)]-> [Out(~k)]
-            lemma secret: "All k #i. Foo(k) @ i ==> F"
-        end"#;
-        let p = parse_theory(src, &[]).unwrap();
-        let t = elaborate(&p).unwrap();
-        assert_eq!(t.lemmas().count(), 1);
-        let l = t.lemmas().next().unwrap();
-        assert_eq!(l.name, "secret");
-        assert_eq!(l.trace_quantifier, TraceQuantifier::AllTraces);
-    }
-
-    // =========================================================================
-    // lnterm_to_term round-tripping correctness
-    // =========================================================================
-
-    fn parser_var(name: &str, idx: u64, sort: p::SortHint) -> p::Term {
-        p::Term::Var(p::VarSpec {
-            name: name.into(),
-            idx,
-            sort,
-            typ: None,
-        })
-    }
-
-    #[test]
-    fn lnterm_to_term_round_trip_var_msg() {
-        let v = parser_var("x", 7, p::SortHint::Msg);
-        let lt = term_to_lnterm(&v).unwrap();
-        let back = lnterm_to_term(&lt);
-        assert_eq!(back, v);
-    }
-
-    #[test]
-    fn lnterm_to_term_round_trip_var_fresh() {
-        let v = parser_var("k", 3, p::SortHint::Fresh);
-        let lt = term_to_lnterm(&v).unwrap();
-        assert_eq!(lnterm_to_term(&lt), v);
-    }
-
-    #[test]
-    fn lnterm_to_term_round_trip_var_node() {
-        let v = parser_var("i", 0, p::SortHint::Node);
-        let lt = term_to_lnterm(&v).unwrap();
-        assert_eq!(lnterm_to_term(&lt), v);
-    }
-
-    #[test]
-    fn lnterm_to_term_round_trip_pub_lit() {
-        let pl = p::Term::PubLit("Alice".into());
-        let lt = term_to_lnterm(&pl).unwrap();
-        assert_eq!(lnterm_to_term(&lt), pl);
-    }
-
-    #[test]
-    fn lnterm_to_term_round_trip_fresh_lit() {
-        let fl = p::Term::FreshLit("n42".into());
-        let lt = term_to_lnterm(&fl).unwrap();
-        assert_eq!(lnterm_to_term(&lt), fl);
-    }
-
-    #[test]
-    fn lnterm_to_term_round_trip_pair() {
-        // <a, b> → pair(a, b) → back to Pair([a, b]).
-        let pair = p::Term::Pair(vec![
-            parser_var("a", 0, p::SortHint::Msg),
-            parser_var("b", 0, p::SortHint::Msg),
-        ]);
-        let lt = term_to_lnterm(&pair).unwrap();
-        let back = lnterm_to_term(&lt);
-        assert_eq!(back, pair);
-    }
-
-    #[test]
-    fn lnterm_to_term_round_trip_triple() {
-        // <a, b, c> → pair(a, pair(b, c)) → back to Pair([a, b, c]).
-        let triple = p::Term::Pair(vec![
-            parser_var("a", 0, p::SortHint::Msg),
-            parser_var("b", 0, p::SortHint::Msg),
-            parser_var("c", 0, p::SortHint::Msg),
-        ]);
-        let lt = term_to_lnterm(&triple).unwrap();
-        let back = lnterm_to_term(&lt);
-        assert_eq!(back, triple);
-    }
-
-    #[test]
-    fn lnterm_to_term_round_trip_nested_app() {
-        // f(g(x), y) → ... → f(g(x), y).
-        let inner = p::Term::App("g".into(), vec![parser_var("x", 0, p::SortHint::Msg)]);
-        let outer = p::Term::App(
-            "f".into(),
-            vec![inner.clone(), parser_var("y", 0, p::SortHint::Msg)],
-        );
-        let lt = term_to_lnterm(&outer).unwrap();
-        let back = lnterm_to_term(&lt);
-        assert_eq!(back, outer);
-    }
-
-    // =========================================================================
-    // Rule let-block desugaring
-    // =========================================================================
-    //
-    // Haskell tamarin desugars `rule R: let x = t in body` by substituting
-    // `t` for occurrences of `x` in the body before any further analysis.
-    // These tests pin our `apply_let_block` to the same semantics.
-
-    #[test]
-    fn let_block_substitutes_in_premises() {
-        // rule R: let r = ~k in [In(r)] --[]-> []
-        // After desugaring: [In(~k)] --[]-> []
-        let src = r#"theory T begin
-            rule R: let r = ~k in [In(r), Fr(~k)] --[]-> []
-        end"#;
-        let p = parse_theory(src, &[]).unwrap();
-        let r = match &p.items[0] {
-            p::TheoryItem::Rule(r) => r,
-            _ => unreachable!(),
-        };
-        let desugared = apply_let_block(r);
-        assert!(desugared.let_block.is_empty());
-        // Premise In should now hold ~k (Var with sort Fresh), not local `r`.
-        let in_fact = &desugared.premises[0];
-        assert_eq!(in_fact.name, "In");
-        match &in_fact.args[0] {
-            p::Term::Var(vs) if vs.name == "k" && vs.sort == p::SortHint::Fresh => {}
-            other => panic!("expected ~k after subst, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn let_block_sequential_bindings() {
-        // let a = ~k; b = h(a) in [In(b)] --[]-> []
-        // After desugaring: [In(h(~k))]
-        let src = r#"theory T begin
-            rule R: let a = ~k b = h(a) in [In(b), Fr(~k)] --[]-> []
-        end"#;
-        let p = parse_theory(src, &[]).unwrap();
-        let r = match &p.items[0] {
-            p::TheoryItem::Rule(r) => r,
-            _ => unreachable!(),
-        };
-        let desugared = apply_let_block(r);
-        let in_fact = &desugared.premises[0];
-        match &in_fact.args[0] {
-            p::Term::App(name, args) if name == "h" => match &args[0] {
-                p::Term::Var(vs) if vs.name == "k" && vs.sort == p::SortHint::Fresh => {}
-                other => panic!("expected h(~k), got h({:?})", other),
-            },
-            other => panic!("expected h(~k), got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn let_block_forward_reference_stays_free() {
-        // HS bottom-up semantics (Parser/Let.hs:22,34): a binding whose
-        // RHS references a LATER binding keeps that name as a free var —
-        // by the time `a`'s application introduces `b` into the body,
-        // `b`'s singleton substitution has already been applied.
-        //   let a = h(b) b = ~k in [In(a), Fr(~k)]
-        // After desugaring: In(h(b)) with `b` a free Msg-var, NOT h(~k).
-        let src = r#"theory T begin
-            rule R: let a = h(b) b = ~k in [In(a), Fr(~k)] --[]-> []
-        end"#;
-        let p = parse_theory(src, &[]).unwrap();
-        let r = match &p.items[0] {
-            p::TheoryItem::Rule(r) => r,
-            _ => unreachable!(),
-        };
-        let desugared = apply_let_block(r);
-        let in_fact = &desugared.premises[0];
-        match &in_fact.args[0] {
-            p::Term::App(name, args) if name == "h" => match &args[0] {
-                p::Term::Var(vs) if vs.name == "b" && vs.sort != p::SortHint::Fresh => {}
-                other => panic!("expected h(b) with free b, got h({:?})", other),
-            },
-            other => panic!("expected h(b), got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn let_block_substitutes_in_actions_and_conclusions() {
-        let src = r#"theory T begin
-            rule R: let r = ~k in [Fr(~k)] --[Use(r)]-> [Out(r)]
-        end"#;
-        let p = parse_theory(src, &[]).unwrap();
-        let r = match &p.items[0] {
-            p::TheoryItem::Rule(r) => r,
-            _ => unreachable!(),
-        };
-        let desugared = apply_let_block(r);
-        let use_act = &desugared.actions[0];
-        match &use_act.args[0] {
-            p::Term::Var(vs) if vs.name == "k" && vs.sort == p::SortHint::Fresh => {}
-            other => panic!("expected Use(~k), got Use({:?})", other),
-        }
-        let out_conc = &desugared.conclusions[0];
-        match &out_conc.args[0] {
-            p::Term::Var(vs) if vs.name == "k" && vs.sort == p::SortHint::Fresh => {}
-            other => panic!("expected Out(~k), got Out({:?})", other),
-        }
-    }
-
-    #[test]
-    fn let_block_end_to_end_elaborates() {
-        // The desugared rule should elaborate cleanly through `elaborate`.
-        let src = r#"theory T begin
-            rule R: let r = ~k in [Fr(~k)] --[Use(r)]-> [Out(r)]
-            lemma trivial: "All k #i. Use(k) @ i ==> Use(k) @ i"
-        end"#;
-        let p = parse_theory(src, &[]).unwrap();
-        let t = elaborate(&p).unwrap();
-        let rules: Vec<_> = t.rules().collect();
-        assert_eq!(rules.len(), 1);
-    }
-}
+#[path = "elaborate_tests.rs"]
+mod tests;

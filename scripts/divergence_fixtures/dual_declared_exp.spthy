@@ -1,0 +1,33 @@
+// Dual-declared `exp` under `builtins: diffie-hellman`: the builtin
+// contributes the NoEq `exp/2` (dhFunSig, Term/Maude/Signature.hs:110-125),
+// so a user `functions: exp/2 [AC]` collides with a THEORY-contributed NoEq
+// symbol.  Prefix `exp(a, b)` resolves to that NoEq symbol — which is
+// `expSym`, so `prettyTerm` renders it `a^b` (Term/Term.hs:310) and the
+// Formula-terms check flags it REDUCIBLE (`dhReducibleFunSig`,
+// Term/Term/FunctionSymbols.hs:307-308) — while infix `a exp b` stays the
+// user's irreducible AC symbol.
+//
+// Compared slices: the wf report block AND the `theory … end` echo.
+
+theory DualDeclaredExp
+begin
+
+builtins: diffie-hellman
+functions: exp/2 [AC], red/2
+equations: red(x, y) = x
+
+// `^`, prefix and infix side by side: the first two are the same NoEq
+// symbol (both render `'a'^'b'`), the third is the AC symbol.
+rule R:
+  [ ] --[ A('a' ^ 'b'), B(exp('a','b')), C('a' exp 'b') ]-> [ ]
+
+// Every NoEq-exp use is a Formula-terms offender, rendered prefix,
+// unflattened and unsorted; the infix AC use in C above is not.
+lemma L1:
+  "All #i. Test('a' ^ 'b') @ #i ==> F"
+lemma L2:
+  "All #i. Test(exp('b', red('c','d'))) @ #i ==> F"
+lemma L3:
+  "All #i. Test(exp('b', 'a') ^ 'c') @ #i ==> F"
+
+end

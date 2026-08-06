@@ -1,3 +1,9 @@
+// Currently GPL 3.0 until granted permission by the following authors:
+//   only minor contributions per cited ranges (see upstream git
+//   history)
+// Ported from upstream tamarin-prover sources:
+//   lib/theory/src/Theory/Tools/Wellformedness.hs
+
 //! Integration test: every fixture in `tests/wellformedness_fixtures/`
 //! must (a) parse and (b) cause our wf checker to emit every topic
 //! listed in `expected.txt`. This test does NOT shell out to
@@ -92,14 +98,23 @@ fn every_fixture_parses_and_matches() {
             .collect();
         // The "Formula terms" check (HS `checkTerms`) needs the elaborated
         // `MaudeSig` for reducible/irreducible funsym classification, so it
-        // lives in `tamarin_theory::check_terms` and runs post-elaboration
-        // (wired in `tamarin-prover`'s `run.rs`) — NOT in the parser-level
+        // lives in `tamarin_theory::check_terms` and runs post-elaboration —
+        // spliced by the load pipelines through
+        // `tamarin_theory::formula_reports` — NOT in the parser-level
         // `check_theory`.  It is covered by `check_terms`'s own unit tests
         // and the corpus raw-diff sweep.  Drop it from this parser-only
         // comparison so the fixtures that exercise it aren't spuriously
         // failed here.
         let mut expected = fx.expected.clone();
         expected.remove("Formula terms");
+        // Same split for HS `multRestrictedReport` (Wellformedness.hs:1108-1113):
+        // its `abstractRule` needs the elaborated `MaudeSig`
+        // (`irreducibleFunSyms`) and its body needs the HughesPJ rule
+        // renderer, so it lives in `tamarin_theory::mult_restricted` and is
+        // spliced by the load pipelines.  Covered by that module's own tests
+        // (`tamarin-theory/tests/mult_restricted_report.rs`) and the corpus
+        // wf gate.
+        expected.remove("Multiplication restriction of rules");
         if !expected.is_subset(&topics) {
             let missing: Vec<_> = expected.difference(&topics).collect();
             failures.push(format!(

@@ -1,0 +1,10 @@
+digraph "G" {
+nodesep="0.3";
+ranksep="0.3";
+node[fontsize="8",fontname="Helvetica",width="0.3",height="0.2"];
+edge[fontsize="8",fontname="Helvetica"];
+n5[shape="record",label="{{<n0> Fr( ~sk.3 )|<n1> Fr( ~random.3 )}|{<n2> #vr.2 : ONE}|{<n3> Out( revealSign(~random.3, ~sk.3) )|<n4> Key( ~sk.3 )}}",fillcolor="#d5d897",style="filled",fontcolor="black",role="Undefined"];
+n6[label="(#i, 0)",shape="invtrapezium"];
+n5:n4 -> n6[style="bold",weight="10.0"];
+
+}

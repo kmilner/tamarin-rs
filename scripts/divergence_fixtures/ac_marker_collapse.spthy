@@ -1,0 +1,31 @@
+// DELIBERATE DIVERGENCE from a documented upstream bug.
+//
+// Upstream's Maude reply parser classifies an identifier as a user-defined AC
+// symbol by SUBSTRING containment of the four encoding markers over the whole
+// encoded identifier, the user's own function name included
+// (`appIdent`, lib/term/src/Term/Maude/Parser.hs).  `tamXCAbar/1` encodes to
+// `tamXCFUtamXCAbar`, which contains `tamXCA`, so every Maude reply carrying
+// this application is rebuilt as an AC term — and `fAppAC _ [a] = a` then
+// deletes the unary application outright.
+//
+// The port classifies by DECODING the attribute block instead
+// (`tamarin_term::maude_parse::is_ac_fct_ident`), so it keeps the application.
+// The `builtins: multiset` and the reducible `fst(<_, _>)` are what force the
+// term through Maude; renaming the function is the only change needed to make
+// both engines agree.
+//
+// Compared slice: the whole `theory … end` echo (see check.sh), which carries
+// the closed rule both engines disagree about.
+
+theory MarkerNorm
+begin
+
+builtins: multiset
+functions: tamXCAbar/1
+
+rule Gen:
+  [ In(a), In(y) ] --[ D() ]-> [ Out(fst(<tamXCAbar(a), y>) ++ y) ]
+
+lemma triv: exists-trace "Ex #i. D() @ i"
+
+end

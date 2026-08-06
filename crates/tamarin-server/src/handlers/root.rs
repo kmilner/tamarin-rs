@@ -1,8 +1,8 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, cascremers, arcz, jdreier, rsasse, and other minor
-//   contributors (see upstream git history)
+//   meiersi, cascremers, arcz, jdreier, and other minor contributors
+//   (see upstream git history)
 // Ported from upstream tamarin-prover sources:
-//   src/Web/Hamlet.hs, src/Web/Handler.hs, src/Web/Types.hs
+//   src/Web/Hamlet.hs, src/Web/Handler.hs
 
 //! Root + housekeeping handlers.
 
@@ -15,7 +15,7 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 
-use crate::handlers::html_response;
+use crate::handlers::{default_layout, html_response};
 use crate::state::{AppState, TheoryOrigin};
 use crate::theory_io;
 
@@ -187,17 +187,18 @@ fn render_index(state: &AppState) -> String {
         }
         format!("<table><thead><th>Theory name</th><th>Time</th><th>Version</th><th>Origin</th></thead>{rows}</table><br>")
     };
-    // Byte-faithful port of HS `defaultLayout'` (Web/Types.hs:686-723) wrapping
-    // `rootTpl` + `introTpl` (Web/Hamlet.hs).  Volatile substitutions: the
-    // `{version}` header field (matches `showVersion version`) and the
+    // Byte-faithful port of `rootTpl` + `introTpl` (Web/Hamlet.hs), the widget
+    // body inside the shared [`default_layout`] frame.  Volatile substitutions:
+    // the `{version}` header field (matches `showVersion version`) and the
     // `{theories_content}` table.  Everything else — including hamlet's
-    // unquoted `href=/`, the doubled `</script></script>` close tags, the
-    // `<p class="loading">` banner and the `contextMenu` — is verbatim.
-    format!(
-        r##"<!DOCTYPE html>
-<html><head><title>Welcome to the Tamarin prover</title><link rel="stylesheet" href="/static/css/intdot-style.css"><link rel="stylesheet" href="/static/css/tamarin-prover-ui.css"><link rel="stylesheet" href="/static/css/jquery-contextmenu.css"><link rel="stylesheet" href="/static/css/smoothness/jquery-ui.css"><script src="/static/js/jquery.js"></script></script><script src="/static/js/jquery-ui.js"></script></script><script src="/static/js/jquery-layout.js"></script></script><script src="/static/js/jquery-cookie.js"></script></script><script src="/static/js/jquery-superfish.js"></script></script><script src="/static/js/jquery-contextmenu.js"></script></script><script src="/static/js/tamarin-prover-ui.js"></script></script><script type="module" src="/static/js/intdot-graph.es.js"></script></script><script type="module" src="/static/js/intdot-staticgraph.es.js"></script></script><script type="module" src="/static/js/intdot-dynamicgraph.es.js"></script></script></head><body><p class="loading">Analyzing, please wait...  <a id=cancel href='#'>Cancel</a></p><div class="ui-layout-container"><div class="ui-layout-north"><div class="ui-layout-pane"><div class="layout-pane-north"><div class="ui-layout-pane-north"><div id="introbar"><div id="header-info">Running <a href=/><span class="tamarin">Tamarin</span></a> {version}</div></div></div></div></div></div></div><div id="logo"><p><img src="/static/img/tamarin-logo-3-0-0.png"></p></div><noscript><div class="warning">Warning: JavaScript must be enabled for the <span class="tamarin">Tamarin</span> prover GUI to function properly.</div></noscript><div class="intropage"><p>Core team: <a href="https://www.inf.ethz.ch/personal/basin/">David Basin</a>, <a href="https://cispa.saarland/group/cremers/">Cas Cremers</a>, <a href="https://www.jannikdreier.net">Jannik Dreier</a>, <a href="mailto:iridcode@gmail.com">Simon Meier</a>, <a href="https://people.inf.ethz.ch/rsasse/">Ralf Sasse</a>, <a href="https://beschmi.net">Benedikt Schmidt</a><br>Tamarin is a collaborative effort: see the <a href="https://tamarin-prover.com/manual/index.html">manual</a> for a more extensive overview of its development and additional contributors.</p><p>This program comes with ABSOLUTELY NO WARRANTY. It is free software, and you are welcome to redistribute it according to its <a href="/static/LICENSE" type="text/plain">LICENSE.</a></p><p>More information about Tamarin and technical papers describing the underlying theory can be found on the <a href="https://tamarin-prover.com"><span class="tamarin">Tamarin</span> webpage</a>.</p></div><div class="intropage"><p>{theories_content}</p><h2>Loading a new theory</h2><p>You can load a new theory file from disk in order to work with it.</p><form class="root-form" enctype="multipart/form-data" action="/" method="POST">Filename:<input type="file" name="uploadedTheory"><div class="submit-form"><input type="submit" value="Load new theory"></div></form><p>Note: You can save a theory by downloading the source from the Actions menu.</p></div><div id="dialog"></div><div id="confirm-dialog"></div><ul id="contextMenu"><li class="autoprove"><a href="#autoprove">Autoprove</a></a></li></ul></body></html>"##,
-        version = env!("CARGO_PKG_VERSION"),
-        theories_content = theories_content,
+    // unquoted `href=/` — is verbatim.
+    default_layout(
+        "Welcome to the Tamarin prover",
+        &format!(
+            r##"<div class="ui-layout-container"><div class="ui-layout-north"><div class="ui-layout-pane"><div class="layout-pane-north"><div class="ui-layout-pane-north"><div id="introbar"><div id="header-info">Running <a href=/><span class="tamarin">Tamarin</span></a> {version}</div></div></div></div></div></div></div><div id="logo"><p><img src="/static/img/tamarin-logo-3-0-0.png"></p></div><noscript><div class="warning">Warning: JavaScript must be enabled for the <span class="tamarin">Tamarin</span> prover GUI to function properly.</div></noscript><div class="intropage"><p>Core team: <a href="https://www.inf.ethz.ch/personal/basin/">David Basin</a>, <a href="https://cispa.saarland/group/cremers/">Cas Cremers</a>, <a href="https://www.jannikdreier.net">Jannik Dreier</a>, <a href="mailto:iridcode@gmail.com">Simon Meier</a>, <a href="https://people.inf.ethz.ch/rsasse/">Ralf Sasse</a>, <a href="https://beschmi.net">Benedikt Schmidt</a><br>Tamarin is a collaborative effort: see the <a href="https://tamarin-prover.com/manual/index.html">manual</a> for a more extensive overview of its development and additional contributors.</p><p>This program comes with ABSOLUTELY NO WARRANTY. It is free software, and you are welcome to redistribute it according to its <a href="/static/LICENSE" type="text/plain">LICENSE.</a></p><p>More information about Tamarin and technical papers describing the underlying theory can be found on the <a href="https://tamarin-prover.com"><span class="tamarin">Tamarin</span> webpage</a>.</p></div><div class="intropage"><p>{theories_content}</p><h2>Loading a new theory</h2><p>You can load a new theory file from disk in order to work with it.</p><form class="root-form" enctype="multipart/form-data" action="/" method="POST">Filename:<input type="file" name="uploadedTheory"><div class="submit-form"><input type="submit" value="Load new theory"></div></form><p>Note: You can save a theory by downloading the source from the Actions menu.</p></div>"##,
+            version = env!("CARGO_PKG_VERSION"),
+            theories_content = theories_content,
+        ),
     )
 }
 

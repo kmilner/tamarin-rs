@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, felixlinker, PhilipLukertWork, and other minor
-//   contributors (see upstream git history)
+//   meiersi, jdreier, felixlinker, PhilipLukertWork, beschmi, and other
+//   minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/term/src/Term/LTerm.hs,
 //   lib/term/src/Term/Substitution/SubstVFree.hs,
@@ -16,7 +16,7 @@
 //! Pretty-printer for the constraint `System`.
 //!
 //! Port of `prettyNonGraphSystem` from
-//! `lib/theory/src/Theory/Constraint/System.hs:1673-1686`.  Emits the same
+//! `lib/theory/src/Theory/Constraint/System.hs:1672-1685`.  Emits the same
 //! ordered section list the Haskell interactive UI shows in its
 //! "Constraint system" pane:
 //!
@@ -32,7 +32,7 @@
 //!
 //! NOTE: the `subterms` and `equations` section bodies are faithful
 //! ports of Haskell's `prettySubtermStore` (SubtermStore.hs:569-581) and
-//! `prettyEqStore` (EquationStore.hs:876-896) — same `Contradictory` /
+//! `prettyEqStore` (EquationStore.hs:650-670) — same `Contradictory` /
 //! `CONTRADICTORY` headers, numbered keyword sections and `∃`-quantified
 //! disjuncts — built on the `pretty_hpj` HughesPJ Doc engine.  The whole
 //! pane is ONE Doc (`vsep $ map combine_ …`, System.hs:1675-1686) rendered
@@ -122,7 +122,7 @@ fn lnterm_doc(t: &tamarin_term::lterm::LNTerm) -> Doc {
 // last_atom
 // ---------------------------------------------------------------------
 
-// HS `maybe (text "none") prettyNodeId $ L.get sLastAtom se` (System.hs:1673-1686, see line 1676).
+// HS `maybe (text "none") prettyNodeId $ L.get sLastAtom se` (System.hs:1672-1685, see line 1674).
 fn pretty_last(sys: &System) -> Doc {
     match &sys.last_atom {
         None => Doc::text("none"),
@@ -135,7 +135,7 @@ fn pretty_last(sys: &System) -> Doc {
 // ---------------------------------------------------------------------
 
 /// Render a guarded-formula collection whose Haskell counterpart is a
-/// `S.Set LNGuarded` (System.hs:1673-1686, see line 1679 renders `sLemmas` via `S.toList`,
+/// `S.Set LNGuarded` (System.hs:1672-1685, see line 1678 renders `sLemmas` via `S.toList`,
 /// i.e. ascending `Ord LNGuarded` with structural dedup).  RS stores
 /// `sLemmas` as a `Vec<Guarded>` in *insertion* order (see
 /// `System::insert_lemma`), so the raw Vec would render in a different
@@ -153,7 +153,7 @@ fn pretty_last(sys: &System) -> Doc {
 /// is reached only from the interactive/web constraint-system pane, never
 /// from `--prove` output.
 ///
-/// HS: `vsep $ map prettyGuarded $ S.toList` (System.hs:1673-1686, see line 1677/1680/1682) —
+/// HS: `vsep $ map prettyGuarded $ S.toList` (System.hs:1672-1685, see line 1675/1678/1680) —
 /// each formula is a real Doc (`guarded_doc`) and formulas are separated
 /// by a blank line (`vsep` = fold `$--$`).
 fn pretty_formula_set(items: &[std::sync::Arc<Guarded>]) -> Doc {
@@ -212,7 +212,7 @@ fn blank_text() -> Doc {
 }
 
 // HS `combine (header, d) = fsep [keyword_ header <> colon, nest 2 d]`
-// (SubtermStore.hs:569-581, see line 576 / EquationStore.hs:568-588, see line 574) — the section header is a
+// (SubtermStore.hs:569-581, see line 578 / EquationStore.hs:650-670, see line 658) — the section header is a
 // `keyword_` span, the colon is plain.  `keyword_` is the identity in plain mode.
 fn combine(header: &str, d: Doc) -> Doc {
     fsep(vec![
@@ -282,7 +282,7 @@ fn pretty_subterm_store(sys: &System) -> Doc {
     vcat_doc(sections)
 }
 
-// Faithful port of Haskell `prettyEqStore` (EquationStore.hs:876-896).
+// Faithful port of Haskell `prettyEqStore` (EquationStore.hs:650-670).
 // Emits a leading `CONTRADICTORY` line when `eqsIsFalse`, then a `subst:`
 // section (`prettySubst (text.show) (text.show)`, i.e. `t <~ {vars}`
 // lines) and a `conj:` section whose disjuncts are `N.` followed by
@@ -314,9 +314,14 @@ fn pretty_eq_store(sys: &System) -> Doc {
 }
 
 // HS `ppDisj (idx, substs) = text (show idx ++ ".") <-> numbered' conjs`
-// where `conjs = map ppSubst (S.toList substs)`.
+// where `conjs = map ppSubst (orderedSubsts substs)`
+// (EquationStore.hs:659-662): the displayed case order is the same
+// α-canonical order `performSplit` produces, so the numbering shown for a
+// disjunction matches the `split_case_i` labels a split of it emits.  The
+// shared `ordered_substs` helper is what makes the two agree.
 fn pp_disj(d: &crate::tools::equation_store::EqDisj) -> Doc {
-    let conjs: Vec<Doc> = d.substs.iter().map(pp_subst_vfresh).collect();
+    let substs = crate::tools::equation_store::ordered_substs(&d.substs);
+    let conjs: Vec<Doc> = substs.into_iter().map(pp_subst_vfresh).collect();
     Doc::text(format!("{}.", d.split_id.0)).beside_sp(numbered_prime(conjs))
 }
 
@@ -612,6 +617,52 @@ mod tests {
         assert!(out.contains("conj:"), "got:\n{out}");
         // The disjunction index is rendered with a trailing dot.
         assert!(out.contains("0."), "got:\n{out}");
+    }
+
+    // `pp_disj` numbers a disjunction's cases in the order a split of it
+    // emits them, because both go through `ordered_substs`.  The pair below
+    // has tying α-canonical keys, so the displayed order is decided by the
+    // raw `Ord` stage and is NOT the stored order.
+    #[test]
+    fn eq_store_disj_numbering_matches_split_case_order() {
+        use crate::tools::equation_store::{EqDisj, EquationStore, LNSubstVFresh, SplitId};
+        use tamarin_term::lterm::{LSort, LVar};
+        use tamarin_term::subst_vfresh::SubstVFresh;
+        use tamarin_term::vterm::var_term;
+
+        let subst = |img: u64| -> LNSubstVFresh {
+            SubstVFresh::from_list(vec![(
+                LVar::new("x", LSort::Msg, 0),
+                var_term(LVar::new("y", LSort::Msg, img)),
+            )])
+        };
+        let stored = vec![subst(5), subst(3)];
+
+        let mut eq = EquationStore::empty();
+        eq.conj.push(EqDisj {
+            split_id: SplitId(0),
+            substs: stored.clone(),
+        });
+        eq.next_split = SplitId(1);
+
+        let cases: Vec<LNSubstVFresh> = eq
+            .perform_split(SplitId(0))
+            .expect("split exists")
+            .into_iter()
+            .map(|b| b.conj[0].substs[0].clone())
+            .collect();
+        assert_eq!(cases, vec![subst(3), subst(5)]);
+
+        let mut sys = System::empty();
+        sys.set_eq_store(std::sync::Arc::new(eq));
+        let out = pretty_eq_store(&sys).render();
+        let at3 = out
+            .find("y.3")
+            .unwrap_or_else(|| panic!("no y.3 in:\n{out}"));
+        let at5 = out
+            .find("y.5")
+            .unwrap_or_else(|| panic!("no y.5 in:\n{out}"));
+        assert!(at3 < at5, "displayed case order disagrees with:\n{out}");
     }
 
     // Minimized web-pane repro for task #20 (json shape): the UM_three_pass

@@ -1,0 +1,148 @@
+theory SapicNullaryCond
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: diffie-hellman
+functions: fst/1, nil/0, pair/2, snd/1, add/2 [AC]
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+heuristic: p
+
+predicate: Eq( a, b )<=>a = b
+
+rule (modulo E) Init[color=#ffffff, process="in(k.1);", issapicrule,
+                     role='Process']:
+   [ ] --[ Init( ) ]-> [ State_( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ink_0_[color=#ffffff, process="in(k.1);", issapicrule,
+                       role='Process']:
+   [ State_( ), In( k.1 ) ] --> [ State_1( k.1 ) ]
+
+  /*
+  rule (modulo AC) ink_0_[color=#ffffff, process="in(k.1);", issapicrule,
+                          role='Process']:
+     [ State_( ), In( k ) ] --> [ State_1( k ) ]
+  */
+
+restriction Restr_ifEqgkaaddknilk_0_1_1:
+  "∀ x #NOW x.1.
+    (Restr_ifEqgkaaddknilk_0_1_1( x, x.1 ) @ #NOW) ⇒ (x = x.1)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #NOW x.1.
+    (Restr_ifEqgkaaddknilk_0_1_1( x, x.1 ) @ #NOW) ⇒ (x = x.1)"
+  */
+
+rule (modulo E) ifEqgkaaddknilk_0_1[color=#ffffff,
+                                    process="if Eq( <'g'^k.1, ('a' add k.1), nil>, k.1 )", issapicrule,
+                                    role='Process']:
+   [ State_1( k.1 ) ]
+  --[ Restr_ifEqgkaaddknilk_0_1_1( <'g'^k.1, ('a' add k.1), nil>, k.1 ) ]->
+   [ State_11( k.1 ) ]
+
+  /*
+  rule (modulo AC) ifEqgkaaddknilk_0_1[color=#ffffff,
+                                       process="if Eq( <'g'^k.1, ('a' add k.1), nil>, k.1 )", issapicrule,
+                                       role='Process']:
+     [ State_1( k ) ]
+    --[ Restr_ifEqgkaaddknilk_0_1_1( <z, ('a' add k), nil>, k ) ]->
+     [ State_11( k ) ]
+    variants (modulo AC)
+    1. k     = k.5
+       z     = 'g'^k.5
+    
+    2. k     = one
+       z     = 'g'
+  */
+
+restriction Restr_ifEqgkaaddknilk_1_1_1:
+  "∀ x #NOW x.1.
+    (Restr_ifEqgkaaddknilk_1_1_1( x, x.1 ) @ #NOW) ⇒ (¬(x = x.1))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #NOW x.1.
+    (Restr_ifEqgkaaddknilk_1_1_1( x, x.1 ) @ #NOW) ⇒ (¬(x = x.1))"
+  */
+
+rule (modulo E) ifEqgkaaddknilk_1_1[color=#ffffff,
+                                    process="if Eq( <'g'^k.1, ('a' add k.1), nil>, k.1 )", issapicrule,
+                                    role='Process']:
+   [ State_1( k.1 ) ]
+  --[ Restr_ifEqgkaaddknilk_1_1_1( <'g'^k.1, ('a' add k.1), nil>, k.1 ) ]->
+   [ State_12( k.1 ) ]
+
+  /*
+  rule (modulo AC) ifEqgkaaddknilk_1_1[color=#ffffff,
+                                       process="if Eq( <'g'^k.1, ('a' add k.1), nil>, k.1 )", issapicrule,
+                                       role='Process']:
+     [ State_1( k ) ]
+    --[ Restr_ifEqgkaaddknilk_1_1_1( <z, ('a' add k), nil>, k ) ]->
+     [ State_12( k ) ]
+    variants (modulo AC)
+    1. k     = k.5
+       z     = 'g'^k.5
+    
+    2. k     = one
+       z     = 'g'
+  */
+
+rule (modulo E) outyes_0_11[color=#ffffff, process="out('yes');",
+                            issapicrule, role='Process']:
+   [ State_11( k.1 ) ] --> [ State_111( k.1 ), Out( 'yes' ) ]
+
+  /*
+  rule (modulo AC) outyes_0_11[color=#ffffff, process="out('yes');",
+                               issapicrule, role='Process']:
+     [ State_11( k ) ] --> [ State_111( k ), Out( 'yes' ) ]
+  */
+
+rule (modulo E) p_0_111[color=#ffffff, process="0", issapicrule,
+                        role='Process']:
+   [ State_111( k.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_111[color=#ffffff, process="0", issapicrule,
+                           role='Process']:
+     [ State_111( k ) ] --> [ ]
+  */
+
+rule (modulo E) outno_0_12[color=#ffffff, process="out('no');",
+                           issapicrule, role='Process']:
+   [ State_12( k.1 ) ] --> [ State_121( k.1 ), Out( 'no' ) ]
+
+  /*
+  rule (modulo AC) outno_0_12[color=#ffffff, process="out('no');",
+                              issapicrule, role='Process']:
+     [ State_12( k ) ] --> [ State_121( k ), Out( 'no' ) ]
+  */
+
+rule (modulo E) p_0_121[color=#ffffff, process="0", issapicrule,
+                        role='Process']:
+   [ State_121( k.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_121[color=#ffffff, process="0", issapicrule,
+                           role='Process']:
+     [ State_121( k ) ] --> [ ]
+  */
+
+restriction single_session:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  */
+
+
+
+end

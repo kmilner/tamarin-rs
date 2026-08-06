@@ -1,0 +1,48 @@
+theory MultRestrictedReport
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: diffie-hellman
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) ConclusionProduct:
+   [ Fr( ~a ), Fr( ~b ), Fr( ~c ) ]
+  --[ ActionOnly( (~a*~c) ), ActionOnly( (~a*~c*~c) ), ActionOnly( ~b ) ]->
+   [ Out( <(~a*~b), (~a*~a*~b)> ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) LhsAbstraction:
+   [ In( <fst(z), snd(w)> ) ] --[ Seen( 'c' ) ]-> [ Out( <z, w> ) ]
+
+  /*
+  rule (modulo AC) LhsAbstraction:
+     [ In( <z.1, z.2> ) ] --[ Seen( 'c' ) ]-> [ Out( <z, w> ) ]
+    variants (modulo AC)
+    1. w     = w.6
+       z     = z.7
+       z.1   = fst(z.7)
+       z.2   = snd(w.6)
+    
+    2. w     = w.8
+       z     = <z.10, x.13>
+       z.1   = z.10
+       z.2   = snd(w.8)
+    
+    3. w     = <x.11, z.10>
+       z     = z.8
+       z.1   = fst(z.8)
+       z.2   = z.10
+    
+    4. w     = <x.11, z.10>
+       z     = <z.9, x.14>
+       z.1   = z.9
+       z.2   = z.10
+  */
+
+
+
+end

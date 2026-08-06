@@ -1,0 +1,38 @@
+// A SAPIC-generated restriction that FAILS the `Formula terms` check.
+//
+// HS runs its wellformedness pass over the TRANSLATED theory
+// (`TheoryLoader.checkTranslatedTheory`), so the `annFormulas` of
+// `formulaReports` walk the `Restr_*` restrictions the `let … else` lowering
+// mints, not only the restrictions the source declares.
+//
+// What those restrictions carry is decided by HS `rewrite`
+// (Theory.Model.Restriction), which abstracts every subterm holding a free
+// variable into a fresh `x` and leaves the rest verbatim:
+//
+//   - `<<'a'^'b', 'b'>, 'c'>` is ground, so it stays inside the restriction
+//     FORMULA, and its reducible `exp` is what `checkTerms` reports;
+//   - `<k, 'e'>` holds the bound-in `k`, so its restriction quantifies `x`
+//     instead and is generated WITHOUT being reported — the check has to pick
+//     the offender out of two candidates.
+//
+// Compared slices: the wf report block AND the `theory … end` echo (see
+// check.sh), the latter for both generated restrictions and the
+// `// safety formula` line each of them carries.
+
+theory SapicFormulaTerms
+begin
+
+builtins: diffie-hellman
+
+process:
+  in(k);
+  let <<p, q>, r> = <<'a'^'b','b'>,'c'> in
+    out(<p,q,r>)
+  else
+    ( let <s, t> = <k, 'e'> in
+        out(<s,t>)
+      else
+        out('no')
+    )
+
+end

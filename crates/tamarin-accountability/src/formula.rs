@@ -1,6 +1,6 @@
 // Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, meiersi, rkunnema, arcz, beschmi, and other minor
-//   contributors (see upstream git history)
+//   kevinmorio, meiersi, rkunnema, arcz, beschmi, jdreier, and other
+//   minor contributors (see upstream git history)
 // Ported from upstream tamarin-prover sources:
 //   lib/accountability/src/Accountability/Generation.hs,
 //   lib/term/src/Term/LTerm.hs, lib/theory/src/Theory/Model/Formula.hs,
