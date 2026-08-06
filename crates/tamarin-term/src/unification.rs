@@ -535,4 +535,4 @@ mod tests;
 // References to Haskell source are checked-in as of the May 2026 port
 // state; line numbers may drift but the contracts shouldn't.
 #[cfg(test)]
-mod haskell_invariants;
+mod haskell_invariants_tests;

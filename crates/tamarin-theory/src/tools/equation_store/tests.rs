@@ -354,7 +354,7 @@ fn add_eqs_two_vars_via_maude() {
 // Haskell-faithfulness invariants for `add_eqs`.
 //
 // These tests pin orientation choices in the eq-store that we missed
-// for weeks.  See `unification::haskell_invariants` for the rationale.
+// for weeks.  See `unification::haskell_invariants_tests` for the rationale.
 // =========================================================================
 
 /// `add_eqs` for AC-free, same-sort var-var input must orient the

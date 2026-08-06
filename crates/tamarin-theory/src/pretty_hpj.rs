@@ -1416,4 +1416,4 @@ pub fn punctuate(sep: Doc, ds: Vec<Doc>) -> Vec<Doc> {
 mod tests;
 
 #[cfg(test)]
-mod sep_nb_regression;
+mod sep_nb_regression_tests;

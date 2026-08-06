@@ -450,7 +450,7 @@ mod tests {
     // =============================================================================
     //
     // These tests pin semantic choices that were easy to miss.  See
-    // `unification::haskell_invariants` for the rationale section.
+    // `unification::haskell_invariants_tests` for the rationale section.
 
     /// `restrict` is a PURE KEY-FILTER (no chain-chase).
     ///
