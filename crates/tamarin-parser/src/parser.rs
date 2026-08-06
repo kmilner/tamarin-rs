@@ -4052,18 +4052,11 @@ impl<'a> Parser<'a> {
             {
                 break;
             }
-            let lhs_save = self.save();
-            let lhs = match self.term(false) {
-                Ok(t) => t,
-                Err(_) => {
-                    self.restore(lhs_save);
-                    break;
-                }
-            };
-            if !self.try_punct("=") {
-                self.restore(lhs_save);
-                break;
-            }
+
+            let lhs = self.term(false)?;
+
+            self.require_punct("=")?;
+
             let rhs = self.term(false)?;
             bs.push(LetBinding {
                 var: lhs,
