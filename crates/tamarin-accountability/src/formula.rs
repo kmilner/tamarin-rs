@@ -1,10 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, meiersi, rkunnema, arcz, beschmi, jdreier, and other
-//   minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/accountability/src/Accountability/Generation.hs,
-//   lib/term/src/Term/LTerm.hs, lib/theory/src/Theory/Model/Formula.hs,
-//   lib/theory/src/Theory/Text/Parser/Formula.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Locally-nameless `SyntacticLNFormula` and the pure transforms the
 //! accountability lemma generation runs on it.

@@ -1,18 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, beschmi, racoucho1u, PhilipLukertWork, rsasse,
-//   felixlinker, rkunnema, kevinmorio, yavivanov, charlie-j, Nick
-//   Moore, arcz, katrielalex, addap, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Rewriting/Norm.hs,
-//   lib/theory/src/Theory/Constraint/Solver/Contradictions.hs,
-//   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
-//   lib/theory/src/Theory/Constraint/Solver/Simplify.hs,
-//   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
-//   lib/theory/src/Theory/Constraint/System.hs,
-//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
-//   lib/theory/src/Theory/Sapic/Substitution.hs,
-//   lib/theory/src/Theory/Tools/EquationStore.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Theory.Constraint.Solver.Contradictions`.
 //!

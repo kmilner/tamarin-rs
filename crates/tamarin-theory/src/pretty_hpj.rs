@@ -1,17 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, arcz, ValentinYuri, jdreier, felixlinker, Nynko, and other
-//   minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Substitution/SubstVFresh.hs,
-//   lib/term/src/Term/Term.hs,
-//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
-//   lib/theory/src/Theory/Constraint/System/Dot.hs,
-//   lib/theory/src/Theory/Text/Pretty.hs,
-//   lib/utils/src/Control/Monad/Disj/Class.hs,
-//   lib/utils/src/Text/PrettyPrint/Class.hs,
-//   lib/utils/src/Text/PrettyPrint/Highlight.hs,
-//   lib/utils/src/Text/PrettyPrint/Html.hs, src/Main/Console.hs,
-//   src/Web/Handler.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! HughesPJ-faithful pretty-printer Doc engine.
 //!

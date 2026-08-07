@@ -1,12 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   beschmi, jdreier, meiersi, rsasse, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Maude/Parser.hs,
-//   lib/term/src/Term/Maude/Signature.hs,
-//   lib/term/src/Term/Term/FunctionSymbols.hs,
-//   lib/theory/src/Theory/Text/Parser/Signature.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Byte-pins the OPTIONS (privacy / constructability / NDC) each symbol of a
 //! DUAL-DECLARED name carries when the two declarations disagree — e.g.

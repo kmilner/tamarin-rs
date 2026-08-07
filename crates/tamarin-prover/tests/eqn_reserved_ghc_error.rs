@@ -1,8 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, meiersi, jdreier, charlie-j, and other minor contributors
-//   (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Text/Parser/Term.hs, src/Main/Mode/Batch.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! End-to-end stderr / exit-code parity for `naryOpApp`'s reserved-builtin
 //! rejection inside `equations:` (Theory/Text/Parser/Term.hs:90-92).

@@ -1,15 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   beschmi, jdreier, meiersi, rkunnema, addap, racoucho1u,
-//   PhilipLukertWork, rsasse, charlie-j, and other minor contributors
-//   (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Maude/Signature.hs,
-//   lib/term/src/Term/Term/FunctionSymbols.hs,
-//   lib/term/src/Term/Term/Raw.hs, lib/term/src/Term/VTerm.hs,
-//   lib/theory/src/Theory/Model/Formula.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs,
-//   lib/theory/src/Theory/Text/Parser/Token.hs,
-//   lib/theory/src/Theory/Tools/Wellformedness.hs, src/Main/Console.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Faithful port of HS `checkTerms` (the "Formula terms" wellformedness
 //! check) from `lib/theory/src/Theory/Tools/Wellformedness.hs:960-985`,

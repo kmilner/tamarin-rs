@@ -1,14 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, arcz, jdreier, cascremers, felixlinker, rsasse,
-//   Kanakanajm, beschmi, Divya19gupta, addap, BTom-GH,
-//   PhilipLukertWork, kevinmorio, YannColomb, Mathias-AURAND, xaDxelA,
-//   racoucho1u, symphorien, Azurios-git, Esslingen-Security-Privacy,
-//   and other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
-//   lib/theory/src/Theory/Proof.hs,
-//   lib/utils/src/Text/PrettyPrint/Html.hs, src/Main/TheoryLoader.hs,
-//   src/Web/Handler.hs, src/Web/Theory.hs, src/Web/Types.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Per-theory HTTP handlers.  Each one looks up the theory by idx,
 //! parses the trailing wildcard path, and emits HTML or the JSON

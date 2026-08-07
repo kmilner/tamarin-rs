@@ -1,22 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, rkunnema, beschmi, felixlinker, charlie-j,
-//   kevinmorio, racoucho1u, rsasse, yavivanov, PhilipLukertWork,
-//   gilcu3, Hong-Thai, arcz, BTom-GH, ValentinYuri, xaDxelA,
-//   Azurios-git, robert.kunnemann@cased.de, and other minor
-//   contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Maude/Parser.hs, lib/theory/src/ClosedTheory.hs,
-//   lib/theory/src/Items/RuleItem.hs, lib/theory/src/Lemma.hs,
-//   lib/theory/src/Prover.hs, lib/theory/src/Rule.hs,
-//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
-//   lib/theory/src/Theory/Constraint/System.hs,
-//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
-//   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/Proof.hs,
-//   lib/theory/src/Theory/ProofSkeleton.hs,
-//   lib/theory/src/Theory/Sapic.hs,
-//   lib/theory/src/Theory/Text/Parser.hs, src/Main/TheoryLoader.hs,
-//   src/Web/Theory.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! End-to-end `prove_lemma` entry point.
 //!

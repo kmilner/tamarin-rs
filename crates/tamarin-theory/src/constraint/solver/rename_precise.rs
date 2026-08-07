@@ -1,18 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, PhilipLukertWork, rkunnema, felixlinker, beschmi, jdreier,
-//   racoucho1u, rsasse, yavivanov, robert.kunnemann@cased.de, xaDxelA,
-//   and other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs,
-//   lib/term/src/Term/Substitution/SubstVFree.hs,
-//   lib/term/src/Term/Substitution/SubstVFresh.hs,
-//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
-//   lib/theory/src/Theory/Constraint/System.hs,
-//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
-//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
-//   lib/theory/src/Theory/Model/Atom.hs,
-//   lib/theory/src/Theory/Tools/EquationStore.hs,
-//   lib/theory/src/Theory/Tools/SubtermStore.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Term.LTerm.renamePrecise` applied to a `System`.
 //!

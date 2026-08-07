@@ -1,13 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, meiersi, beschmi, charlie-j, and other minor contributors
-//   (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/Basetranslation.hs,
-//   lib/term/src/Term/Maude/Process.hs,
-//   lib/theory/src/Theory/Sapic/Pattern.hs,
-//   lib/theory/src/Theory/Sapic/Process.hs,
-//   lib/theory/src/Theory/Text/Parser/Sapic.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Parser-AST → theory-AST process converter.
 //!

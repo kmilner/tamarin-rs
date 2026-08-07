@@ -1,14 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, arcz, beschmi, felixlinker, cascremers, rsasse,
-//   racoucho1u, Divya19gupta, PhilipLukertWork, Kanakanajm, addap,
-//   BTom-GH, kevinmorio, YannColomb, xaDxelA, Mathias-AURAND,
-//   yavivanov, Nick Moore, symphorien, rkunnema, katrielalex,
-//   Azurios-git, Esslingen-Security-Privacy, and other minor
-//   contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs,
-//   lib/theory/src/Theory/Constraint/System.hs, src/Web/Handler.hs,
-//   src/Web/Theory.hs, src/Web/Utils.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Web.Utils` (`src/Web/Utils.hs`) — the server-side term
 //! abbreviation the JSON graph endpoint applies when the request carries the

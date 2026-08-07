@@ -1,16 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   jdreier, beschmi, meiersi, PhilipLukertWork, felixlinker, rkunnema,
-//   BTom-GH, rsasse, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Term.hs, lib/theory/src/Items/LemmaItem.hs,
-//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
-//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
-//   lib/theory/src/Theory/Proof.hs,
-//   lib/theory/src/Theory/Text/Parser/Lemma.hs,
-//   lib/theory/src/Theory/Text/Parser/Proof.hs,
-//   lib/theory/src/Theory/Text/Parser/Rule.hs,
-//   lib/theory/src/Theory/Text/Parser/Signature.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Surface-syntax AST for `.spthy` files: the loose tree [`crate::parser`]
 //! produces and [`crate::wf`] (plus, downstream, `tamarin-theory`'s

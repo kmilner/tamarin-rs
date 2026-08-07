@@ -1,10 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, meiersi, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/Exceptions.hs, lib/sapic/src/Sapic/Warnings.hs,
-//   lib/term/src/Term/LTerm.hs, lib/theory/src/Theory/Sapic/Term.hs,
-//   lib/theory/src/Theory/Tools/Wellformedness.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Sapic.Warnings` (`lib/sapic/src/Sapic/Warnings.hs`).
 //!

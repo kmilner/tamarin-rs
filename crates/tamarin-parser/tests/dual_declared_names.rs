@@ -1,10 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, BTom-GH, charlie-j, jdreier, meiersi, and other minor
-//   contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Text/Parser/Signature.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs,
-//   lib/term/src/Term/Term/FunctionSymbols.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Declaration-side parity for DUAL-DECLARED names — one name that is both a
 //! `NoEq` funsym and a user-declared `[AC]` symbol.

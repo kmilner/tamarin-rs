@@ -1,26 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   jdreier, beschmi, meiersi, sans-sucre, PhilipLukertWork, rkunnema,
-//   kevinmorio, addap, BTom-GH, Mathias-AURAND, Nynko, arcz, rsasse,
-//   charlie-j, racoucho1u, felixlinker, xaDxelA, ValentinYuri, and
-//   other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Builtin/Signature.hs, lib/term/src/Term/LTerm.hs,
-//   lib/term/src/Term/SubtermRule.hs, lib/term/src/Term/Term.hs,
-//   lib/term/src/Term/Term/FunctionSymbols.hs,
-//   lib/term/src/Term/Term/Raw.hs, lib/term/src/Term/VTerm.hs,
-//   lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Model/Restriction.hs,
-//   lib/theory/src/Theory/Sapic/Process.hs,
-//   lib/theory/src/Theory/Text/Parser/Formula.hs,
-//   lib/theory/src/Theory/Text/Parser/Let.hs,
-//   lib/theory/src/Theory/Text/Parser/Rule.hs,
-//   lib/theory/src/Theory/Text/Parser/Signature.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs,
-//   lib/theory/src/Theory/Tools/MessageDerivationChecks.hs,
-//   lib/theory/src/Theory/Tools/Wellformedness.hs,
-//   lib/theory/src/TheoryObject.hs,
-//   lib/utils/src/Text/PrettyPrint/Class.hs, src/Main/Mode/Batch.hs,
-//   src/Main/TheoryLoader.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Wellformedness checks operating on the parser AST.
 //!

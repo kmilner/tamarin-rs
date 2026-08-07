@@ -1,19 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   addap, Esslingen-Security-Privacy, Divya19gupta, arcz, meiersi,
-//   kevinmorio, cascremers, gilcu3, jdreier, and other minor
-//   contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs,
-//   lib/term/src/Term/Term/FunctionSymbols.hs,
-//   lib/term/src/Term/VTerm.hs, lib/theory/src/Rule.hs,
-//   lib/theory/src/Theory/Constraint/System.hs,
-//   lib/theory/src/Theory/Constraint/System/Graph/Graph.hs,
-//   lib/theory/src/Theory/Constraint/System/JSON.hs,
-//   lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/Text/Parser/Fact.hs,
-//   lib/theory/src/Theory/Text/Parser/Rule.hs, src/Main/Mode/Batch.hs,
-//   src/Web/Handler.hs, src/Web/Theory.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Theory.Constraint.System.JSON` — serialise the graph part of a
 //! constraint [`System`] to the JSON graph format the interactive frontend

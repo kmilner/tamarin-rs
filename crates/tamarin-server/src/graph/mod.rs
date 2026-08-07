@@ -1,16 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   addap, meiersi, Mathias-AURAND, Divya19gupta, rkunnema,
-//   Esslingen-Security-Privacy, cascremers, sans-sucre, arcz,
-//   felixlinker, jdreier, yavivanov, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Constraint/System/Dot.hs,
-//   lib/theory/src/Theory/Constraint/System/Graph/Abbreviation.hs,
-//   lib/theory/src/Theory/Constraint/System/Graph/Graph.hs,
-//   lib/theory/src/Theory/Constraint/System/Graph/GraphRepr.hs,
-//   lib/theory/src/Theory/Constraint/System/Graph/Simplification.hs,
-//   lib/theory/src/Theory/Constraint/System/JSON.hs,
-//   lib/utils/src/Text/Dot.hs, src/Web/Utils.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Graph representation, simplification, abbreviations.
 //!

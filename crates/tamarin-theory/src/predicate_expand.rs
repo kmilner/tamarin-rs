@@ -1,17 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, jdreier, Hong-Thai, meiersi, BTom-GH, yavivanov,
-//   kevinmorio, rsasse, xaDxelA, felixlinker, ValentinYuri, jWoc,
-//   charlie-j, racoucho1u, and other minor contributors (see upstream
-//   git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term/Raw.hs,
-//   lib/theory/src/Items/CaseTestItem.hs,
-//   lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Syntactic/Predicate.hs,
-//   lib/theory/src/Theory/Text/Parser.hs,
-//   lib/theory/src/Theory/Text/Parser/Exceptions.hs,
-//   lib/theory/src/Theory/Text/Parser/Formula.hs,
-//   lib/theory/src/TheoryObject.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Theory.Syntactic.Predicate.expandFormula` —
 //! substitutes predicate-atom occurrences in a formula with the body

@@ -1,7 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, meiersi
-// Ported from upstream tamarin-prover sources:
-//   lib/utils/src/System/Timing.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `System.Timing` from `lib/utils/src/System/Timing.hs`.
 //!

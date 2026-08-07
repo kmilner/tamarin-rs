@@ -1,18 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, PhilipLukertWork, addap, racoucho1u,
-//   Mathias-AURAND, rkunnema, rsasse, felixlinker, charlie-j,
-//   yavivanov, kevinmorio, niklasmedinger, beschmi, Nick Moore, arcz,
-//   sans-sucre, katrielalex, Divya19gupta, and other minor contributors
-//   (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs,
-//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
-//   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
-//   lib/theory/src/Theory/Constraint/Solver/Simplify.hs,
-//   lib/theory/src/Theory/Constraint/System.hs,
-//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
-//   lib/theory/src/Theory/Constraint/System/Dot.hs,
-//   lib/utils/src/Data/DAG/Simple.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! The `System` sequent — the solver's working state.
 //!

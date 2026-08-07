@@ -1,8 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, beschmi, jdreier, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Term/Raw.hs, src/Main/Mode/Batch.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! End-to-end stderr / exit-code parity for `fAppAC`'s empty-argument-list
 //! rejection (`error "Term.fAppAC: empty argument list"`, Raw.hs:120).

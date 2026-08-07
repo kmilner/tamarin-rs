@@ -1,12 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, beschmi, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/Tools/Wellformedness.hs,
-//   lib/theory/src/TheoryObject.hs,
-//   lib/utils/src/Control/Monad/Bind.hs,
-//   lib/utils/src/Text/PrettyPrint/Class.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Faithful port of HS `multRestrictedReport` / `multRestrictedReport'`
 //! (`lib/theory/src/Theory/Tools/Wellformedness.hs:1039-1099`) — the

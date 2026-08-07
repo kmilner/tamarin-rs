@@ -1,11 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   beschmi, meiersi, jdreier, rkunnema, and other minor contributors
-//   (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Maude/Parser.hs,
-//   lib/term/src/Term/Rewriting/Norm.hs,
-//   lib/term/src/Term/SubtermRule.hs, lib/term/src/Term/Unification.hs,
-//   lib/theory/src/Theory/Constraint/Solver/Contradictions.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Term.Rewriting.Norm` — normalisation and normal-form
 //! checks via the Maude bridge.

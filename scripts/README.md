@@ -156,9 +156,11 @@ then upstream behaviour moving under them.
 
 ## Licensing / attribution
 
-- **`gen_license_headers.py`** — regenerates every ported file's GPL
-  provenance header from its upstream citations (range-blame over cited
-  spans); `--check` for CI-style staleness, `--preview FILE` for one file.
+- **`gen_license_headers.py`** — maintains the constant GPL notice on every
+  file whose upstream citations resolve (no blame needed; `--check` for
+  CI-style staleness, `--preview FILE` for one file). `--authors FILE`
+  computes that file's pending-permission author list on demand
+  (range-blame over its cited spans at the pinned submodule commit).
 - **`extend_anchor_citations.py`** — rewrites bare `Foo.hs:162` citations
   into function-extent ranges (`Foo.hs:150-183, see line 162`) so blame
   scopes stay accurate.

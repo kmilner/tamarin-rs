@@ -1,9 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   arcz, rkunnema, kevinmorio, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic.hs, lib/sapic/src/Sapic/Warnings.hs,
-//   lib/theory/src/Theory/Text/Parser.hs, src/Main/TheoryLoader.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Wiring: run the SAPIC translation and inject the generated rules +
 //! restriction + heuristic into BOTH the parsed theory (so the pretty-printer

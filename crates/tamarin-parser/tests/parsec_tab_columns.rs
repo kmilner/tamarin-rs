@@ -1,8 +1,3 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, and other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Text/Parser/Token.hs
-
 //! Byte-pinned parity for the column a parse-error frame reports on a line
 //! that contains tab characters.
 //!

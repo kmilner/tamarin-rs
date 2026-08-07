@@ -1,12 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, felixlinker, jdreier, rkunnema, racoucho1u, beschmi,
-//   rsasse, symphorien, PhilipLukertWork, felixonmars, yavivanov,
-//   katrielalex, robert.kunnemann@cased.de, xaDxelA, and other minor
-//   contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Constraint/Solver/Contradictions.hs,
-//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
-//   lib/theory/src/Theory/Proof.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Proof-skeleton printer + Haskell `--output=` extractor for
 //! cross-checking that our proof trees structurally match

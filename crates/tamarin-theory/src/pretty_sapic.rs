@@ -1,15 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, beschmi, rkunnema, addap, PhilipLukertWork,
-//   rsasse, charlie-j, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Term.hs, lib/term/src/Term/Term/Raw.hs,
-//   lib/theory/src/Rule.hs, lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/Sapic/Print.hs,
-//   lib/theory/src/Theory/Sapic/Process.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs,
-//   lib/utils/src/Text/PrettyPrint/Class.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of the SAPIC process pretty-printers from
 //! `lib/theory/src/Theory/Sapic/{Term,Process}.hs` and

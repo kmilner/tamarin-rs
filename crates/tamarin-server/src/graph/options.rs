@@ -1,10 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   arcz, meiersi, cascremers, felixlinker, addap, jdreier, Kanakanajm,
-//   rsasse, Divya19gupta, BTom-GH, beschmi, YannColomb, symphorien,
-//   xaDxelA, and other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Constraint/System/Graph/Graph.hs,
-//   src/Web/Handler.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `GraphOptions` from `Graph.hs`.
 

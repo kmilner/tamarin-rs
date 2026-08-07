@@ -1,16 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, arcz, meiersi, jdreier, cascremers, addap, Nynko,
-//   felixlinker, yavivanov, ValentinYuri, rkunnema, gilcu3, beschmi,
-//   Azurios-git, rsasse, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Prover.hs,
-//   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
-//   lib/theory/src/Theory/Proof.hs,
-//   lib/theory/src/Theory/Text/Parser/Proof.hs,
-//   lib/theory/src/TheoryObject.hs, src/Main/Console.hs,
-//   src/Main/Environment.hs, src/Main/Mode/Batch.hs,
-//   src/Main/Mode/Interactive.hs, src/Main/TheoryLoader.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Command-line argument parsing for `tamarin-prover` (Rust port).
 //!

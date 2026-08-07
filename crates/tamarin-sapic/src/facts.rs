@@ -1,12 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   jdreier, meiersi, rkunnema, kevinmorio, charlie-j, arcz, yavivanov,
-//   beschmi, Hong-Thai, rsasse, PhilipLukertWork, ValentinYuri, and
-//   other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/Basetranslation.hs,
-//   lib/sapic/src/Sapic/Facts.hs, lib/theory/src/Rule.hs,
-//   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/Text/Parser/Rule.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Sapic.Facts` (`lib/sapic/src/Sapic/Facts.hs`) — the
 //! translation-specific fact/action types (`TransFact` / `TransAction`), their

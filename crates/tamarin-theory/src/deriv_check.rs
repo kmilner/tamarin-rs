@@ -1,16 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   jdreier, meiersi, kevinmorio, rkunnema, arcz, Azurios-git,
-//   PhilipLukertWork, yavivanov, beschmi, rsasse, racoucho1u,
-//   Hong-Thai, Nynko, ValentinYuri, felixlinker, BTom-GH, and other
-//   minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/theory/src/Prover.hs,
-//   lib/theory/src/Rule.hs, lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs,
-//   lib/theory/src/Theory/Tools/IntruderRules.hs,
-//   lib/theory/src/Theory/Tools/MessageDerivationChecks.hs,
-//   src/Main/TheoryLoader.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Dynamic message-derivation check.
 //!
