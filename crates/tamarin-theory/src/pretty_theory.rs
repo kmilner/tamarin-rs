@@ -356,14 +356,20 @@ pub fn pretty_closed_theory(
     // `CollectedUserFuns` bundle — replicate the calling thread's sets onto
     // each render worker (a stolen thread outside any guard has EMPTY sets).
     let user_funs_snapshot = crate::elaborate::snapshot_user_funs();
+    // Per-item occurrence ordinal of each rule item's name among earlier
+    // rule items (0 for non-rule items).  Drives the positional rule
+    // pairing in `render_parsed_item` — see `nth_rule_named`.
+    let rule_occs = rule_name_occurrences(&parsed.items);
     let rendered: Vec<Option<String>> = parsed
         .items
         .par_iter()
-        .map(|item| {
+        .enumerate()
+        .map(|(idx, item)| {
             let _user_funs_guard =
                 crate::elaborate::set_user_funs_from_collected(&user_funs_snapshot);
             render_parsed_item(
                 item,
+                rule_occs[idx],
                 &macros,
                 &predicates,
                 elaborated,
@@ -430,6 +436,54 @@ pub fn pretty_closed_theory(
 pub type OpenProcessConv<'a> =
     &'a dyn Fn(&p::Process) -> Result<crate::sapic::PlainProcess, String>;
 
+/// The `Sapic.typeTheoryEnv` output overlaid onto the open print: the typed
+/// (`renameUnique` + `typeProcess`) processes replace the parse-time ones at
+/// render time, keyed by occurrence order.  Produced by
+/// `tamarin_sapic::type_theory::type_theory_env`; the parser AST itself stays
+/// untouched (HS instead rewrites the theory's `TranslationItem`s in place,
+/// `mapMProcesses`/`mapMProcessesDef`, TheoryObject.hs:279-301).
+#[derive(Debug, Clone, Default)]
+pub struct TypedOverlay {
+    /// One typed process per process-bearing occurrence, in item order:
+    /// `TopLevelProcess` and `DiffEquivLemma` contribute one each,
+    /// `EquivLemma` two (first, then second) — HS `mapMProcesses`'s `f'`
+    /// arms (TheoryObject.hs:279-291).
+    pub processes: Vec<crate::sapic::PlainProcess>,
+    /// One `(vars, body)` per `ProcessDef` item, in item order (HS
+    /// `mapMProcessesDef`, TheoryObject.hs:294-301).  After typing, `vars`
+    /// is always `Some` — `Some(vec![])` for a parameterless `let P = …`
+    /// (Typing.hs:217-225), which renders as `let  P () =`.
+    pub defs: Vec<(
+        Option<Vec<crate::sapic::SapicLVar>>,
+        crate::sapic::PlainProcess,
+    )>,
+}
+
+/// Options for the by-module open print (`prettyOpenTheoryByModule`,
+/// TheoryLoader.hs:783-801).
+///
+/// - `spthy`: all defaults (the plain `prettyOpenTheory`).
+/// - `spthytyped`: `typed = Some(overlay)` + `extra_function_items` — the
+///   overlay also DROPS every source-positioned `Functions` item
+///   (`clearFunctionTypingInfos`, TheoryObject.hs:504-508), and the extra
+///   items re-emit the recomputed `function:` blocks at the end
+///   (Typing.hs:210 `Map.foldrWithKey addFunctionTypingInfo'` — the caller
+///   passes them in DESCENDING key order).
+/// - `msr`: `drop_translation_items = true` — every `TranslationElement`
+///   analogue renders empty (`prettyOpenTranslatedTheory` after
+///   `removeTranslationItems`, OpenTheory.hs:47-52, 891-898).
+#[derive(Debug, Clone, Default)]
+pub struct OpenPrintOpts {
+    pub typed: Option<TypedOverlay>,
+    /// Recomputed `function:` typing items appended after the source items
+    /// (before the wellformedness / version comment blocks).
+    pub extra_function_items: Vec<crate::theory::SapicFunSym>,
+    /// Zero out the `TranslationElement` set: `Builtins`, `Functions`,
+    /// `TopLevelProcess`, `ProcessDef`, `EquivLemma`, `DiffEquivLemma`,
+    /// `Export`, `AccLemma`, `CaseTest` (Items/TheoryItem.hs:43-53).
+    pub drop_translation_items: bool,
+}
+
 /// Pretty-print the parsed open theory — HS `prettyOpenTheory` as emitted by
 /// `--parse-only` (Batch.hs:91-95 `putStrLn . renderDoc`; the returned string
 /// carries NO trailing newline, the caller's `println!` supplies `putStrLn`'s).
@@ -444,6 +498,45 @@ pub fn pretty_open_theory(
     in_file: &str,
     conv: OpenProcessConv<'_>,
 ) -> Result<String, String> {
+    let mut blocks =
+        open_theory_blocks(parsed, elaborated, in_file, conv, &OpenPrintOpts::default())?;
+    blocks.push("end".to_string());
+    Ok(blocks.join("\n\n"))
+}
+
+/// The by-module open print — HS `prettyOpenTheoryByModule`'s
+/// `spthy`/`spthytyped`/`msr` arms (TheoryLoader.hs:783-801) followed by the
+/// two trailing comment `TextItem`s `withVersionAndReport` appends
+/// (TheoryLoader.hs:636-660): the wellformedness block (`reportToDoc` — pass
+/// the pre-rendered [`format_wf_block`] string) and the `Generated from:`
+/// version block.  Which theory shape gets rendered is entirely in `opts`
+/// (see [`OpenPrintOpts`]); the returned string carries NO trailing newline
+/// (`putStrLn`'s caller supplies it, and `-o FILE` writes it verbatim).
+pub fn pretty_open_theory_by_module(
+    parsed: &p::Theory,
+    elaborated: &Theory,
+    in_file: &str,
+    conv: OpenProcessConv<'_>,
+    opts: &OpenPrintOpts,
+    wf_block: &str,
+    build: &BuildInfo,
+) -> Result<String, String> {
+    let mut blocks = open_theory_blocks(parsed, elaborated, in_file, conv, opts)?;
+    blocks.push(wf_block.to_string());
+    blocks.push(render_generated_from(build));
+    blocks.push("end".to_string());
+    Ok(blocks.join("\n\n"))
+}
+
+/// Shared block list of the open print: everything from `theory <name>` up to
+/// (but not including) the final `end`, one `vsep` block per entry.
+fn open_theory_blocks(
+    parsed: &p::Theory,
+    elaborated: &Theory,
+    in_file: &str,
+    conv: OpenProcessConv<'_>,
+    opts: &OpenPrintOpts,
+) -> Result<Vec<String>, String> {
     // HS `prettyTheory` (TheoryObject.hs:757-770) = `vsep` over:
     //   [ kwTheoryName, configBlocks…, kwTheoryBegin, lineComment_ "…",
     //     ppSig, tactics?, heuristic?, ppCache ] ++ items ++ [kwEnd].
@@ -490,11 +583,27 @@ pub fn pretty_open_theory(
     // TheoryObject.hs:767 — parallel render, sequential vsep order).
     let predicates: Vec<p::Predicate> = collect_predicates(parsed);
     let arity1 = arity1_noeq_names(elaborated);
+    let mut proc_idx = 0usize;
+    let mut def_idx = 0usize;
     for item in &parsed.items {
-        blocks.extend(render_open_item(item, &predicates, in_file, &arity1, conv)?);
+        blocks.extend(render_open_item(
+            item,
+            &predicates,
+            in_file,
+            &arity1,
+            conv,
+            opts,
+            &mut proc_idx,
+            &mut def_idx,
+        )?);
     }
-    blocks.push("end".to_string());
-    Ok(blocks.join("\n\n"))
+    // Recomputed `function:` items land at the END of `thyItems`
+    // (`addFunctionTypingInfo` appends, TheoryObject.hs:492-493) — i.e. after
+    // every source item, before the wf/version comments the caller appends.
+    for fti in &opts.extra_function_items {
+        blocks.push(pretty_function_typing_info(fti).render());
+    }
+    Ok(blocks)
 }
 
 /// One parsed theory item → its open-print blocks (usually 0 or 1; a
@@ -504,15 +613,94 @@ pub fn pretty_open_theory(
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
+#[allow(clippy::too_many_arguments)]
 fn render_open_item(
     item: &p::TheoryItem,
     predicates: &[p::Predicate],
     in_file: &str,
     arity1: &std::collections::HashSet<String>,
     conv: OpenProcessConv<'_>,
+    opts: &OpenPrintOpts,
+    proc_idx: &mut usize,
+    def_idx: &mut usize,
 ) -> Result<Vec<String>, String> {
     use crate::pretty_hpj::Doc;
     use p::TheoryItem::*;
+    // `msr`: `removeTranslationItems` maps every `TranslationItem _` to
+    // `TranslationItem ()` (OpenTheory.hs:47-52) and
+    // `prettyOpenTranslatedTheory` renders those as `emptyDoc`
+    // (OpenTheory.hs:891-898 with `emptyString`), so the whole
+    // `TranslationElement` set (Items/TheoryItem.hs:43-53) vanishes.
+    if opts.drop_translation_items {
+        if let Builtins(_)
+        | Functions(_)
+        | TopLevelProcess(_)
+        | ProcessDef(_)
+        | EquivLemma(..)
+        | DiffEquivLemma(_)
+        | Export { .. }
+        | AccLemma(_)
+        | CaseTest(_) = item
+        {
+            return Ok(Vec::new());
+        }
+    }
+    // `spthytyped`: substitute the typed processes/defs by occurrence order
+    // and drop the source-positioned `function:` items
+    // (`clearFunctionTypingInfos`; the recomputed set is re-appended at the
+    // end by `open_theory_blocks`).
+    if let Some(overlay) = &opts.typed {
+        let take_proc = |idx: &mut usize| -> Result<&crate::sapic::PlainProcess, String> {
+            let p = overlay
+                .processes
+                .get(*idx)
+                .ok_or_else(|| "typed overlay: process count mismatch".to_string())?;
+            *idx += 1;
+            Ok(p)
+        };
+        match item {
+            Functions(_) => return Ok(Vec::new()),
+            TopLevelProcess(_) => {
+                let pp = take_proc(proc_idx)?;
+                return Ok(vec![Doc::text("process:")
+                    .above_g(open_process_doc(pp).nest(2))
+                    .render()]);
+            }
+            EquivLemma(_, _) => {
+                let d1 = take_proc(proc_idx)?;
+                let d2 = take_proc(proc_idx)?;
+                return Ok(vec![Doc::text("equivLemma:")
+                    .above_g(open_process_doc(d1).nest(2))
+                    .above(open_process_doc(d2).nest(2))
+                    .render()]);
+            }
+            DiffEquivLemma(_) => {
+                let d = take_proc(proc_idx)?;
+                return Ok(vec![Doc::text("diffEquivLemma:")
+                    .above_g(open_process_doc(d).nest(2))
+                    .render()]);
+            }
+            ProcessDef(pd) => {
+                let (vars, body) = overlay
+                    .defs
+                    .get(*def_idx)
+                    .ok_or_else(|| "typed overlay: process-def count mismatch".to_string())?;
+                *def_idx += 1;
+                let mut d = Doc::text("let ").beside_sp(Doc::text(pd.name.clone()));
+                if let Some(vs) = vars {
+                    // `map show l` over typed `SapicLVar`s (Theory/Sapic/
+                    // Term.hs:108-110): LVar display plus `:type` suffix.
+                    let shown: Vec<String> = vs.iter().map(show_typed_def_var).collect();
+                    d = d.beside_sp(Doc::text(format!("({})", shown.join(","))));
+                }
+                d = d
+                    .beside_sp(Doc::text("="))
+                    .beside_sp(open_process_doc(body).nest(2));
+                return Ok(vec![d.render()]);
+            }
+            _ => {}
+        }
+    }
     Ok(match item {
         // Every `builtins:` entry appends `TranslationItem (SignatureBuiltin
         // name)` (Signature.hs:89-99, see line 97), rendered
@@ -718,6 +906,21 @@ fn function_decl_typing_info(d: &p::FunctionDecl) -> crate::theory::SapicFunSym 
     }
 }
 
+/// `show` on a TYPED process-def formal (HS `Show SapicLVar`,
+/// Theory/Sapic/Term.hs:108-110): `show lvar` (sort sigil + name + `.idx`
+/// when non-zero) plus `:type` when annotated.  The typed-overlay sibling of
+/// [`show_open_varspec`], over the post-`typeTheoryEnv` `SapicLVar`s (whose
+/// indices are the `renameUnique` fresh ones, e.g. `c.1`).
+fn show_typed_def_var(v: &crate::sapic::SapicLVar) -> String {
+    let mut s = String::new();
+    tamarin_term::pretty::pp_lvar(&v.var, &mut s);
+    if let Some(t) = &v.stype {
+        s.push(':');
+        s.push_str(t);
+    }
+    s
+}
+
 /// `show` on a parse-time process-def formal (HS `Show SapicLVar`,
 /// Theory/Sapic/Term.hs:108-110): the LVar display (sigil + name, `.idx`
 /// when non-zero) plus `:type` when annotated.
@@ -847,6 +1050,13 @@ fn render_open_restriction(
 /// only on the continuation cases).  This reproduces upstream's layout
 /// verbatim, including the surprising `then-branch if-cond else-branch`
 /// operand order of `ProcessComb` (oracle-verified).
+///
+/// `prettyProcess = prettySapic = prettySapic' rulePrinter`
+/// (TheoryObject.hs:851-852, Print.hs:52-53), so an embedded MSR renders its
+/// premises through `unextractMatchingVariables mv` — every pattern-match
+/// variable keeps its `=` marker.  This is the printer that
+/// [`crate::pretty_sapic::pretty_sapic_top_level`] selects; the
+/// `process="..."` rule attribute uses the other one.
 fn open_process_doc(pr: &crate::sapic::PlainProcess) -> crate::pretty_hpj::Doc {
     use crate::pretty_hpj::{parens, Doc};
     use crate::sapic::{Process, SapicAction};
@@ -1081,13 +1291,16 @@ pub fn web_proto_rules(parsed: &p::Theory, elaborated: &Theory) -> Vec<String> {
     let (macros, _preds) = collect_macros_predicates(parsed);
     let arity1 = arity1_noeq_names(elaborated);
     let manual_variants = contains_manual_rule_variants(parsed, elaborated, false);
+    // Same positional `(name, occurrence)` pairing as `pretty_closed_theory`
+    // — see `nth_rule_named`.
+    let rule_occs = rule_name_occurrences(&parsed.items);
     parsed
         .items
         .iter()
-        .filter_map(|item| match item {
-            p::TheoryItem::Rule(r) if elaborated.rules().any(|er| er.name() == r.name) => Some(
-                render_rule(r, elaborated, &macros, &arity1, manual_variants, false),
-            ),
+        .enumerate()
+        .filter_map(|(idx, item)| match item {
+            p::TheoryItem::Rule(r) => nth_rule_named(elaborated, &r.name, rule_occs[idx])
+                .map(|er| render_rule(r, er, &macros, &arity1, manual_variants, false)),
             _ => None,
         })
         .collect()
@@ -1318,6 +1531,147 @@ pub fn pretty_function_typing_info(fti: &crate::theory::SapicFunSym) -> crate::p
     d = d.beside_sp(Doc::text_hs(show_priv(privacy)));
     d = d.beside_sp(Doc::text_hs(show_const(constructability)));
     d.beside_sp(Doc::text_hs(show_ndc(ndc)))
+}
+
+#[cfg(test)]
+mod open_print_opts_tests {
+    use super::*;
+    use crate::sapic::{PlainProcess, Process, ProcessParsedAnnotation};
+
+    fn no_conv(_: &p::Process) -> Result<PlainProcess, String> {
+        Err("conv must not be called for overlaid/dropped items".to_string())
+    }
+
+    fn null_proc() -> PlainProcess {
+        Process::Null(ProcessParsedAnnotation::empty())
+    }
+
+    fn render_item(
+        item: &p::TheoryItem,
+        opts: &OpenPrintOpts,
+        proc_idx: &mut usize,
+        def_idx: &mut usize,
+    ) -> Vec<String> {
+        // arity-1 set / predicates are irrelevant to the arms under test.
+        #[allow(clippy::disallowed_types)]
+        let arity1 = std::collections::HashSet::new();
+        render_open_item(
+            item,
+            &[],
+            "f.spthy",
+            &arity1,
+            &no_conv,
+            opts,
+            proc_idx,
+            def_idx,
+        )
+        .unwrap()
+    }
+
+    fn fdecl(name: &str) -> p::FunctionDecl {
+        p::FunctionDecl {
+            name: name.to_string(),
+            arg_types: vec![None],
+            out_type: None,
+            private: false,
+            destructor: false,
+            ac: false,
+            ndc: false,
+            ndc_diff: false,
+        }
+    }
+
+    /// `msr`: every `TranslationElement` analogue renders empty
+    /// (`removeTranslationItems` + `emptyString`, OpenTheory.hs:47-52,
+    /// 891-898); non-translation items are untouched.
+    #[test]
+    fn drop_translation_items_zeroes_the_translation_element_set() {
+        let opts = OpenPrintOpts {
+            typed: None,
+            extra_function_items: Vec::new(),
+            drop_translation_items: true,
+        };
+        let (mut pi, mut di) = (0usize, 0usize);
+        let dropped = [
+            p::TheoryItem::Builtins(vec!["multiset".to_string()]),
+            p::TheoryItem::Functions(vec![fdecl("h")]),
+            p::TheoryItem::TopLevelProcess(p::Process::Null),
+            p::TheoryItem::ProcessDef(p::ProcessDef {
+                name: "P".to_string(),
+                vars: None,
+                body: p::Process::Null,
+            }),
+            p::TheoryItem::EquivLemma(p::Process::Null, p::Process::Null),
+            p::TheoryItem::DiffEquivLemma(p::Process::Null),
+            p::TheoryItem::Export {
+                tag: "queries".to_string(),
+                body: "q".to_string(),
+            },
+        ];
+        for item in &dropped {
+            assert!(
+                render_item(item, &opts, &mut pi, &mut di).is_empty(),
+                "expected empty render for {item:?}"
+            );
+        }
+        // A non-translation item still renders.
+        let keep = p::TheoryItem::FormalComment {
+            header: String::new(),
+            body: "keep".to_string(),
+        };
+        assert_eq!(
+            render_item(&keep, &opts, &mut pi, &mut di),
+            vec!["/*\nkeep\n*/".to_string()]
+        );
+    }
+
+    /// `spthytyped`: process-bearing items render the OVERLAY processes (conv
+    /// is never consulted), `ProcessDef` renders the overlay `(vars, body)` —
+    /// `Some(vec![])` as the `let  P () =` empty parens — and
+    /// source-positioned `Functions` items vanish
+    /// (`clearFunctionTypingInfos`).
+    #[test]
+    fn typed_overlay_substitutes_processes_and_defs() {
+        let opts = OpenPrintOpts {
+            typed: Some(TypedOverlay {
+                processes: vec![null_proc()],
+                defs: vec![(Some(Vec::new()), null_proc())],
+            }),
+            extra_function_items: Vec::new(),
+            drop_translation_items: false,
+        };
+        let (mut pi, mut di) = (0usize, 0usize);
+        assert_eq!(
+            render_item(
+                &p::TheoryItem::TopLevelProcess(p::Process::Null),
+                &opts,
+                &mut pi,
+                &mut di
+            ),
+            vec!["process:\n  0".to_string()]
+        );
+        assert_eq!(
+            render_item(
+                &p::TheoryItem::ProcessDef(p::ProcessDef {
+                    name: "P".to_string(),
+                    vars: None,
+                    body: p::Process::Null,
+                }),
+                &opts,
+                &mut pi,
+                &mut di
+            ),
+            vec!["let  P () = 0".to_string()]
+        );
+        assert!(render_item(
+            &p::TheoryItem::Functions(vec![fdecl("h")]),
+            &opts,
+            &mut pi,
+            &mut di
+        )
+        .is_empty());
+        assert_eq!((pi, di), (1, 1), "one process and one def consumed");
+    }
 }
 
 #[cfg(test)]
@@ -1652,7 +2006,7 @@ fn wf_headerless_preamble(topic: &str) -> Option<(String, bool)> {
         // (Wellformedness.hs:118-125, see line 124).  So the per-error bodies (each
         // `"  Variable bound twice: x."`) sit directly under a plain header.
         "Wellformedness-error in Process" => Some((format!("{topic}\n"), false)),
-        // These four bake the `nest 2` into their own bytes — the `fsep` fills
+        // These five bake the `nest 2` into their own bytes — the `Doc` fills
         // via `crate::wf_fill::fill_body`, `multRestrictedReport'`
         // (Wellformedness.hs:1047-1064) via `crate::mult_restricted`.  Their
         // bodies wrap at `sep`/`fsep` points that depend on the absolute
@@ -1661,6 +2015,7 @@ fn wf_headerless_preamble(topic: &str) -> Option<(String, bool)> {
         "Unbound variables"
         | "Reserved names"
         | "Special facts"
+        | "Nat Sorts"
         | "Multiplication restriction of rules" => {
             Some((format!("{}\n", underline_topic(topic)), false))
         }
@@ -1764,12 +2119,56 @@ fn sep_block_with_lead(
 // Item dispatch
 // =============================================================================
 
+/// Per-item occurrence ordinal of each rule item's NAME among the rule
+/// items before it (0 for non-rule items).  The `(name, occurrence)` pair
+/// is the key of the positional rule pairing — see [`nth_rule_named`].
+fn rule_name_occurrences(items: &[p::TheoryItem]) -> Vec<usize> {
+    let mut counts: tamarin_utils::FastMap<&str, usize> = Default::default();
+    items
+        .iter()
+        .map(|item| match item {
+            p::TheoryItem::Rule(r) => {
+                let c = counts.entry(r.name.as_str()).or_default();
+                let o = *c;
+                *c += 1;
+                o
+            }
+            _ => 0,
+        })
+        .collect()
+}
+
+/// The `occ`-th elaborated rule named `name`, pairing a parsed rule item
+/// with its elaborated counterpart by `(name, occurrence-ordinal)` rather
+/// than by name alone.
+///
+/// INVARIANT: for every rule name `N`, the k-th parsed rule item named `N`
+/// corresponds to the k-th elaborated rule named `N`.
+/// * Without partial evaluation rule names are unique (duplicates are a
+///   parse error), so `occ` is always 0 and this is exactly the
+///   name-keyed `find` — including the no-variant drop (run.rs), which
+///   removes a rule from the elaborated theory only: its parsed leftover
+///   has zero elaborated occurrences and is not rendered.
+/// * After `apply_partial_evaluation` names can repeat (one rule refining
+///   into several); both item lists are then regenerated 1:1 from the same
+///   refined-rule list in the same order, so same-name groups align
+///   positionally.  A pass that drops refined rules from only ONE of the
+///   two lists would break this alignment — drop from both, or not at all.
+fn nth_rule_named<'a>(
+    elab: &'a Theory,
+    name: &str,
+    occ: usize,
+) -> Option<&'a crate::theory::OpenProtoRule> {
+    elab.rules().filter(|er| er.name() == name).nth(occ)
+}
+
 #[allow(clippy::too_many_arguments)]
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
 fn render_parsed_item(
     item: &p::TheoryItem,
+    rule_occ: usize,
     macros: &[p::Macro],
     predicates: &[p::Predicate],
     elab: &Theory,
@@ -1794,18 +2193,10 @@ fn render_parsed_item(
             // variants yields NO closed rule, so it is absent from the
             // closed theory and never rendered.  Such rules are removed
             // from the elaborated theory in run.rs; mirror the absence here.
-            if elab.rules().any(|er| er.name() == r.name) {
-                Some(render_rule(
-                    r,
-                    elab,
-                    macros,
-                    arity1,
-                    manual_variants,
-                    auto_sources,
-                ))
-            } else {
-                None
-            }
+            // The lookup is positional (`(name, occurrence)`) because
+            // partial evaluation makes rule names non-unique.
+            nth_rule_named(elab, &r.name, rule_occ)
+                .map(|er| render_rule(r, er, macros, arity1, manual_variants, auto_sources))
         }
         IntrRule(_) => None,
         Lemma(l) => Some(render_parsed_lemma(
@@ -2204,7 +2595,7 @@ fn render_rule_e_block(
 #[allow(clippy::disallowed_types)]
 fn render_rule(
     parsed_rule: &p::Rule,
-    elab: &Theory,
+    elab_rule: &crate::theory::OpenProtoRule,
     macros: &[p::Macro],
     arity1: &std::collections::HashSet<String>,
     manual_variants: bool,
@@ -2213,8 +2604,9 @@ fn render_rule(
     let name = &parsed_rule.name;
     let (mut out, premises, actions, conclusions) = render_rule_e_block(parsed_rule, arity1);
 
-    // Look up the elaborated rule by name to decide between
-    // "trivial AC variant" and the full `/* rule (modulo AC) ... */`
+    // `elab_rule` is the elaborated counterpart of `parsed_rule`, resolved
+    // by the caller's positional pairing (`nth_rule_named`) — it decides
+    // between "trivial AC variant" and the full `/* rule (modulo AC) ... */`
     // block.  HS-faithful: matches `prettyClosedProtoRule`
     // (ClosedTheory.hs:332-363).
     //
@@ -2240,9 +2632,9 @@ fn render_rule(
     // which still has macro calls) matches the elaborated body.  If they
     // differ, even a rule with no AC variants must show the AC comment block
     // containing the expanded form.
-    let elab_rule = elab.rules().find(|r| r.name() == name);
-    let trivial = elab_rule
-        .map(|r| {
+    let trivial = {
+        let r = elab_rule;
+        {
             let no_residual_substs = r.variant_substs.iter().all(|s| s.is_empty());
             // HS `isTrivialProtoVariantAC` (Rule.hs:761-764):
             //   variants == [emptySubstVFresh] && ps == ps' && as == as' && cs == cs' && nvs == nvs'
@@ -2313,13 +2705,8 @@ fn render_rule(
                 Some(ac) => same_rule_body(&r.rule, ac) && no_macro_in_display,
             };
             no_residual_substs && ac_body_matches
-        })
-        // INVARIANT: `render_rule` is only called when the caller has confirmed
-        // `elab.rules().any(|er| er.name() == r.name)` (see `render_parsed_item`'s
-        // `Rule` arm), so `elab_rule` is always `Some` here.  The `unwrap_or(true)`
-        // fallback is therefore unreachable; it is retained only as a defensive
-        // default (and `outer_loop_breaker`'s `unwrap_or_default()` similarly).
-        .unwrap_or(true);
+        }
+    };
 
     // HS `prettyClosedProtoRule` (ClosedTheory.hs:337-339, 352-354) emits
     // `prettyLoopBreakers` at `nest 2` BEFORE the trailing
@@ -2339,12 +2726,10 @@ fn render_rule(
     // trivial-AC-variant rule whose AC form equals its E form (no manual
     // variants, no AUTO action).  Without the gate the closed renderer
     // (`prettyClosedProtoRule`) always shows them — unchanged.
-    let open_ac_nonempty = rule_open_ac_nonempty(parsed_rule, elab_rule, auto_sources);
+    let open_ac_nonempty = rule_open_ac_nonempty(parsed_rule, Some(elab_rule), auto_sources);
     let show_loop_breakers = !manual_variants || open_ac_nonempty;
     let outer_loop_breaker = if show_loop_breakers {
-        elab_rule
-            .map(|r| render_loop_breakers_line(&r.loop_breakers, 2))
-            .unwrap_or_default()
+        render_loop_breakers_line(&elab_rule.loop_breakers, 2)
     } else {
         String::new()
     };
@@ -2359,10 +2744,14 @@ fn render_rule(
         out.push_str(
             &crate::pretty_hpj::multi_comment_(&["has exactly the trivial AC variant"]).render(),
         );
-    } else if let Some(r) = elab_rule {
+    } else {
         out.push_str("\n\n");
         out.push_str(&outer_loop_breaker);
-        out.push_str(&render_ac_variants_block(name, r, &parsed_rule.attributes));
+        out.push_str(&render_ac_variants_block(
+            name,
+            elab_rule,
+            &parsed_rule.attributes,
+        ));
     }
     out
 }

@@ -1512,7 +1512,7 @@ pub async fn graph(
     let opts = graph_options_from_map(&query);
     // Try to render with dot; fall back to DOT-as-text when
     // unavailable.
-    match crate::handlers::dot::render_svg_or_dot_with(&sys, &opts) {
+    match crate::handlers::dot::render_svg_or_dot_with(&sys, &opts, &state.cfg.dot_path) {
         crate::handlers::dot::RenderResult::Svg(bytes) => {
             let mut headers = HeaderMap::new();
             headers.insert(header::CONTENT_TYPE, "image/svg+xml".parse().unwrap());

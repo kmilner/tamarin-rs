@@ -12,7 +12,8 @@ use std::sync::Arc;
 use tamarin_parser::parse_theory;
 use tamarin_parser::wf::{
     after_public_names_topics, after_unbound_topics, insert_wf_before, WfError,
-    WF_AFTER_CHECK_GUARDED, WF_AFTER_FACT_LHS, WF_AFTER_MULT_RESTRICTED, WF_TOPIC_ORDER,
+    WF_AFTER_CHECK_GUARDED, WF_AFTER_FACT_LHS, WF_AFTER_MULT_RESTRICTED, WF_AFTER_NAT_SORTED,
+    WF_TOPIC_ORDER,
 };
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_theory::elaborate::elaborate;
@@ -323,6 +324,21 @@ pub fn load_from_source(
             &mut wf_report,
             mult_errors,
             &WF_TOPIC_ORDER[WF_AFTER_MULT_RESTRICTED..],
+        );
+    }
+
+    // HS `natWellSortedReport` reads `thyProtoRules` of the
+    // `OpenTranslatedTheory` (as in `run_batch`), so a `%+` operand that is a
+    // msg-sorted process variable — e.g. `let j:nat = i%+%1`, where the `:nat`
+    // is a SAPIC TYPE and `i` stays msg-sorted — is only visible once the
+    // process has become rules.  Position: HS check index 11.
+    if typed.is_sapic {
+        wf_report.retain(|e| e.topic != "Nat Sorts");
+        let nat_errors = tamarin_parser::wf::nat_well_sorted_report(&post_thy);
+        insert_wf_before(
+            &mut wf_report,
+            nat_errors,
+            &WF_TOPIC_ORDER[WF_AFTER_NAT_SORTED..],
         );
     }
 

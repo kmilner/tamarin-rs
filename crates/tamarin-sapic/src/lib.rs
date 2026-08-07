@@ -10,7 +10,7 @@
 //! - [`annotation`] ← `Sapic.Annotation`
 //! - [`secret_channels`] ← `Sapic.SecretChannels`
 //! - [`facts`] ← `Sapic.Facts`
-//! - [`typing`] ← `Sapic.Typing`
+//! - [`typing`] / [`type_theory`] ← `Sapic.Typing`
 //! - [`locks`] ← `Sapic.Locks` (lock annotation; `checkLocks` not ported)
 //! - [`inline`] ← process-call inlining (HS does this in the parser,
 //!   `Theory.Text.Parser.Sapic.actionprocess`)
@@ -54,5 +54,6 @@ pub mod report;
 pub mod secret_channels;
 pub mod states;
 pub mod translate;
+pub mod type_theory;
 pub mod typing;
 pub mod warnings;

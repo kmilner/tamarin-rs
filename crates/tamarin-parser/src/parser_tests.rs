@@ -1369,3 +1369,70 @@ fn ac_infix_requires_a_preceding_declaration() {
     let src = "theory T begin equations: x add y = z end";
     assert!(parse_theory(src, &[]).is_err(), "`add` is not infix here");
 }
+
+// A `:` after a variable means different things inside and outside a SAPIC
+// process.  Rules/formulas use `msgvar`/`lvar` = `sortedLVar`, whose
+// `mkSuffixParser` reads `x:nat` as the NAT-SORTED `x` (Token.hs:407-432);
+// processes use `sapicvar` = `lvarNoSuffix` (prefix sorts only) plus
+// `option Nothing (colon *> typep)`, so the same text is the msg-sorted `x`
+// carrying the SAPIC TYPE `"nat"` (Token.hs:487-510).  `typep`'s `Any` is the
+// untyped placeholder.
+#[test]
+fn colon_suffix_is_a_sapic_type_in_a_process_and_a_sort_in_a_rule() {
+    fn process_let_binder(src: &str) -> VarSpec {
+        let thy = parse_theory(src, &[]).expect("parses");
+        for item in &thy.items {
+            if let TheoryItem::TopLevelProcess(Process::Comb {
+                comb: ProcessComb::Let {
+                    pat: Term::Var(v), ..
+                },
+                ..
+            }) = item
+            {
+                return v.clone();
+            }
+        }
+        panic!("no let binder in {src}");
+    }
+
+    let v = process_let_binder(
+        "theory T begin builtins: natural-numbers process: let x:nat = %c %+ %1 in 0 end",
+    );
+    assert_eq!(
+        (v.sort, v.typ.as_deref()),
+        (SortHint::Untagged, Some("nat"))
+    );
+    let v = process_let_binder("theory T begin process: let x:msg = y in 0 end");
+    assert_eq!(
+        (v.sort, v.typ.as_deref()),
+        (SortHint::Untagged, Some("msg"))
+    );
+    let v = process_let_binder("theory T begin process: let x:Any = y in 0 end");
+    assert_eq!((v.sort, v.typ.as_deref()), (SortHint::Untagged, None));
+    // The `%` PREFIX still sorts a process variable (`lvarNoSuffix` keeps every
+    // prefix parser), and a type may follow it.
+    let v = process_let_binder(
+        "theory T begin builtins: natural-numbers process: let %x:nat = %c in 0 end",
+    );
+    assert_eq!((v.sort, v.typ.as_deref()), (SortHint::Nat, Some("nat")));
+
+    // Same text in a rule: a sort suffix, no type.
+    let thy = parse_theory(
+        "theory T begin builtins: natural-numbers rule R: [ In(x:nat) ] --[ ]-> [ ] end",
+        &[],
+    )
+    .expect("parses");
+    let mut seen = None;
+    for item in &thy.items {
+        if let TheoryItem::Rule(r) = item {
+            if let Term::Var(v) = &r.premises[0].args[0] {
+                seen = Some(v.clone());
+            }
+        }
+    }
+    let v = seen.expect("rule premise variable");
+    assert_eq!(
+        (v.sort, v.typ.as_deref()),
+        (SortHint::Suffix(SuffixSort::Nat), None)
+    );
+}

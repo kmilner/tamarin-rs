@@ -35,6 +35,7 @@
 //!   [`pretty_hpj`] ← theory / system / formula pretty-printing;
 //!   [`pretty_sapic`] ← `Theory.Sapic.{Term,Process}` pretty-printing
 //! - [`auto_sources`] ← `OpenTheory` `addAutoSourcesLemma` (`--auto-sources`)
+//! - [`module`] ← `Theory.Module` (the `--output-module` selector)
 //! - [`state_trace`] ← solver state tracing
 //!
 //! The `.spthy` parser lives in the sibling `tamarin-parser` crate.
@@ -57,6 +58,7 @@ pub mod guarded_types;
 pub mod intruder_rules;
 pub mod intruder_variants;
 pub mod macro_expand;
+pub mod module;
 pub mod mult_restricted;
 pub mod predicate;
 pub mod predicate_expand;

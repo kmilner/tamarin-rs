@@ -49,10 +49,10 @@ pub struct WfError {
     /// concatenates the messages, separated by blank lines, beneath
     /// the topic header (which is part of `message`).
     pub message: String,
-    /// Set by the checks whose body is HS's paragraph fill `text info $-$
-    /// nest 2 (fsep $ punctuate comma cells)`.  `message` carries that body
-    /// with every cell laid out FLAT — the widest layout decision the parser
-    /// crate can make on its own — and
+    /// Set by the checks whose body HS builds as one `Doc` and hands to the
+    /// layout engine.  `message` carries that body with every break point
+    /// taken horizontally — the widest layout decision the parser crate can
+    /// make on its own — and
     /// `tamarin_theory::pretty_theory::render_wf_error_report` re-lays the
     /// body out with the HughesPJ engine, which additionally descends INTO a
     /// cell that overruns the ribbon.
@@ -84,22 +84,41 @@ impl WfError {
         WfError {
             topic: topic.into(),
             message,
-            fill: Some(WfFill { info, cells }),
+            fill: Some(WfFill::Paragraph { info, cells }),
+        }
+    }
+
+    /// A `WfError` whose body is a single `<>`-juxtaposed `Doc` — HS
+    /// `natSortErrors` (Wellformedness.hs:315-316), `prettyLNTerm err <> text
+    /// " in term " <> prettyLNTerm t <> text " must be of sort nat"`.  The
+    /// terms inside break at their OWN `fcat`/`fsep` points once the body
+    /// passes the ribbon, so the layout is the engine's.
+    pub fn beside(topic: impl Into<String>, parts: Vec<WfDoc>) -> Self {
+        let doc = WfDoc::Beside(parts);
+        WfError {
+            topic: topic.into(),
+            message: format!("  {}", doc.to_flat()),
+            fill: Some(WfFill::Beside(doc)),
         }
     }
 }
 
-/// The `fsep`-filled body of a wellformedness entry: HS `text info $-$
-/// nest 2 (fsep $ punctuate comma cells)`.
+/// The body of a wellformedness entry that HS lays out as one HughesPJ `Doc`.
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
-pub struct WfFill {
-    /// HS `text info` — the body's first line, WITHOUT `prettyWfErrorReport`'s
-    /// per-body `nest 2` (Wellformedness.hs:118-125).
-    pub info: String,
-    /// The cells `punctuate comma` separates: one `prettyLNFact` per offending
-    /// fact, or one `prettyLVar` per variable (`prettyVarList`,
-    /// TheoryObject.hs:858-859).
-    pub cells: Vec<WfDoc>,
+pub enum WfFill {
+    /// HS `text info $-$ nest 2 (fsep $ punctuate comma cells)`.
+    Paragraph {
+        /// HS `text info` — the body's first line, WITHOUT
+        /// `prettyWfErrorReport`'s per-body `nest 2`
+        /// (Wellformedness.hs:118-125).
+        info: String,
+        /// The cells `punctuate comma` separates: one `prettyLNFact` per
+        /// offending fact, or one `prettyLVar` per variable
+        /// (`prettyVarList`, TheoryObject.hs:858-859).
+        cells: Vec<WfDoc>,
+    },
+    /// A `<>` chain with no top-level fill of its own.
+    Beside(WfDoc),
 }
 
 /// The layout skeleton of one `prettyTerm` / `prettyLNFact` rendering
@@ -240,6 +259,7 @@ pub const WF_TOPIC_ORDER: &[&str] = &[
 pub const WF_AFTER_FACT_LHS: usize = 8; // "Quantifier sorts"
 pub const WF_AFTER_CHECK_GUARDED: usize = 11; // "Lemma annotations"
 pub const WF_AFTER_MULT_RESTRICTED: usize = 13; // "Nat Sorts"
+pub const WF_AFTER_NAT_SORTED: usize = 14; // "Subterm Convergence Warning"
 
 /// Splice `errors` into `report` immediately before the first existing entry
 /// whose `topic` is one of `anchors` (its HS check-order position), or at the
@@ -884,6 +904,9 @@ fn wf_term_doc(t: &Term, ac: &AcSyms) -> WfDoc {
                 sorted.iter().map(|a| wf_term_doc(a, ac)).collect(),
             )
         }
+        // HS checks `s == natOneSym` BEFORE the generic nullary arm:
+        // `FApp (NoEq s) [] | s == natOneSym -> text "%1"` (Term.hs:312).
+        App(name, args) if args.is_empty() && name == "tone" => leaf("%1".to_string()),
         // HS `FApp (NoEq (f,_)) [] -> text f` (Term.hs:314) — a nullary symbol
         // has no `ppFun` parentheses at all.
         App(name, args) if args.is_empty() => leaf(name.clone()),
@@ -2972,22 +2995,25 @@ pub fn nat_well_sorted_report(thy: &Theory) -> WfReport {
     //
     // HS produces one WfError per (t, err); `prettyWfErrorReport` groups them
     // under a single "Nat Sorts" header (bodies 2-space-nested, separated by a
-    // `  ` blank line).  "Nat Sorts" is not in the headerless-preamble set, so
-    // we bake the whole block into one WfError (matching the single-error
-    // corpus case byte-for-byte; the multi-error count-collapse only differs
-    // synthetically, as with `fresh_names_report`/`lemma_attribute_report`).
+    // `  ` blank line), which the headerless-preamble path reproduces.  The
+    // body is a `<>` chain of two `prettyLNTerm`s, so a term that overruns the
+    // ribbon breaks at its own `fcat` points — hence the [`WfDoc`] fill.
     let topic = "Nat Sorts";
     let ac = user_ac_fun_names(thy);
-    let mut bodies: Vec<String> = Vec::new();
+    let mut report = WfReport::new();
     for r in theory_rules(thy) {
         for t in rule_terms(r) {
             let mut errs: Vec<&Term> = Vec::new();
             non_well_sorted(t, &mut errs, &ac);
             for err in errs {
-                bodies.push(format!(
-                    "  {} in term {} must be of sort nat",
-                    pp_term_for_wf(err, &ac),
-                    pp_term_for_wf(t, &ac)
+                report.push(WfError::beside(
+                    topic,
+                    vec![
+                        wf_term_doc(err, &ac),
+                        WfDoc::Text(" in term ".to_string()),
+                        wf_term_doc(t, &ac),
+                        WfDoc::Text(" must be of sort nat".to_string()),
+                    ],
                 ));
             }
         }
@@ -2996,7 +3022,7 @@ pub fn nat_well_sorted_report(thy: &Theory) -> WfReport {
     // of LemmaItem/RestrictionItem/PredicateItem (Wellformedness.hs:327-329).
     // That formula-term walk is not yet implemented here; the nat checks that
     // fire in the corpus all sit inside rules.
-    grouped_topic_block(topic, bodies)
+    report
 }
 
 /// The direct operands of a parser term — the `ts` of HS's `FAPP _ ts`
@@ -3070,6 +3096,20 @@ fn non_well_sorted<'a>(t: &'a Term, out: &mut Vec<&'a Term>, ac: &AcSyms) {
     }
 }
 
+/// HS `natOneSym = ("tone", (0,Public,Constructor))` — the `%1` of
+/// `builtins: natural-numbers`.  Source text spells it `%1`
+/// (`Term::NatOne`); a term that has been through the theory layer and back
+/// — every fact of a rule SAPIC's translation generates — carries the
+/// signature symbol instead, as the nullary application `tone`.  Both are
+/// HS's `FApp (NoEq natOneSym) []`.
+fn is_nat_one(t: &Term) -> bool {
+    match t {
+        Term::NatOne => true,
+        Term::App(name, args) => name == "tone" && args.is_empty(),
+        _ => false,
+    }
+}
+
 /// Faithful port of HS `notOnlyNat` (Wellformedness.hs:296-300): the inner
 /// recursion under `%+`.  Accepts `NatOne` and genuine nat-sorted *variables*
 /// (`isNatVar`, LTerm.hs:327-329); recurses through nested `%+`; flags
@@ -3086,7 +3126,7 @@ fn not_only_nat<'a>(t: &'a Term, out: &mut Vec<&'a Term>, ac: &AcSyms) {
             }
         }
         // NatOne -> []
-        Term::NatOne => {}
+        _ if is_nat_one(t) => {}
         // t | isNatVar t = []  (nat-sorted VARIABLE only)
         Term::Var(v) if is_nat_sort(&v.sort) => {}
         // t = [t]  (anything else is an offending operand)

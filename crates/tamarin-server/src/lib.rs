@@ -91,6 +91,18 @@ pub struct ServerConfig {
     /// per HS `closeTheory` precedence (TheoryLoader.hs:640-666): the CLI
     /// value wins; the block is consulted only when this is `None`.
     pub stop_on_trace: Option<tamarin_theory::constraint::solver::context::CutStrategy>,
+    /// CLI `--with-dot` — the GraphViz binary every graph render shells out
+    /// to, the bare `"dot"` (resolved through `$PATH`) when the flag is
+    /// absent.  That is HS `readOutputCommand`'s `OutDot` branch
+    /// (Environment.hs:41-45), whose string `dotToImg` invokes verbatim
+    /// (Web/Theory.hs:1494-1497).
+    pub dot_path: String,
+    /// CLI `--with-json` (`None` = flag absent).  HS `readOutputCommand`
+    /// (Environment.hs:41-45) lets its presence override `--with-dot` and
+    /// switches the interactive graph route to `<cmd> <img> <json>`
+    /// (Web/Theory.hs:1484-1491).  Rendering here still goes through
+    /// [`ServerConfig::dot_path`]; only the startup banner honours the flag.
+    pub json_path: Option<String>,
 }
 
 impl ServerConfig {
@@ -103,6 +115,8 @@ impl ServerConfig {
             max_steps: 500,
             derivcheck_timeout: 5,
             stop_on_trace: None,
+            dot_path: "dot".to_string(),
+            json_path: None,
         }
     }
 }

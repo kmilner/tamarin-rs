@@ -147,6 +147,24 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
     dot_graph_compact(opts, &color_map, &graph)
 }
 
+/// HS `D.showDot label $ dotSystemCompact graphOptions dotOptions system`
+/// (Batch.hs:256) — the batch `--output-dot` entry point.
+///
+/// Same graph body as [`system_to_dot_with`], framed the way `showDot`
+/// (Text/Dot.hs:234-248) frames it: the digraph id is QUOTED and carries
+/// `label` (only `"` is escaped, to `\"`; backslashes pass through), and the
+/// element block is followed by `"\n}\n"`, i.e. a blank line before the closing
+/// brace.  The web routes keep [`system_to_dot_with`]'s unquoted `digraph G {`
+/// / brace-on-the-next-line framing.
+///
+/// The graph BODY is the RS DOT dialect, not HS `Text.Dot`'s — see the
+/// KNOWN DIVERGENCES block in this module's header.
+pub fn system_to_dot_labeled(sys: &System, opts: &GraphOptions, label: &str) -> String {
+    let graph = system_to_graph(sys, opts);
+    let color_map = build_node_color_map(&sys.nodes);
+    dot_graph_compact_framed(opts, &color_map, &graph, Some(label))
+}
+
 /// Port of `dotGraphCompact` (Dot.hs:514-538): emit a [`Graph`]'s repr as DOT
 /// under a precomputed [`NodeColorMap`].
 ///
@@ -156,9 +174,21 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
 /// edges laid out here come from the compressed/simplified copy in
 /// [`Graph::repr`].
 fn dot_graph_compact(opts: &GraphOptions, color_map: &NodeColorMap, graph: &Graph<'_>) -> String {
+    dot_graph_compact_framed(opts, color_map, graph, None)
+}
+
+/// [`dot_graph_compact`] with the framing selector: `None` is the web routes'
+/// `digraph G {` … `}`, `Some(label)` is HS `showDot`'s quoted-id framing
+/// (see [`system_to_dot_labeled`]).
+fn dot_graph_compact_framed(
+    opts: &GraphOptions,
+    color_map: &NodeColorMap,
+    graph: &Graph<'_>,
+    label: Option<&str>,
+) -> String {
     let repr = &graph.repr;
     let abbrevs = &graph.abbreviations;
-    let mut g = DotBuilder::new();
+    let mut g = DotBuilder::new(label);
     // HS `dotGraphCompact` (Dot.hs:515-538, see line 528) switches the graph-level defaults to
     // `setDefaultAttributesIfCluster` when the repr has any clusters.
     g.preamble(!repr.clusters.is_empty());
@@ -484,14 +514,15 @@ fn abbreviate_rule(ru: &RuleACInst, abbrev: &dyn Fn(&LNTerm) -> Option<LNTerm>) 
 }
 
 /// Helper used by handlers to render the [`System`] as DOT and pipe it
-/// through `/usr/bin/dot -Tsvg` (or whatever's on `$PATH`) under the given
-/// graph options.  Returns the SVG bytes on success.  When `dot` is
-/// missing or fails, returns the DOT source instead (the frontend's
+/// through `<dot_cmd> -Tsvg` under the given graph options.  `dot_cmd` is
+/// HS `dotPath` (Environment.hs:37-38): the `--with-dot` value, or the bare
+/// `"dot"` resolved via `$PATH`.  Returns the SVG bytes on success.  When
+/// `dot` is missing or fails, returns the DOT source instead (the frontend's
 /// `intdot-staticgraph` can render DOT client-side via viz.js, so this
 /// stays a useful response).
-pub fn render_svg_or_dot_with(sys: &System, opts: &GraphOptions) -> RenderResult {
+pub fn render_svg_or_dot_with(sys: &System, opts: &GraphOptions, dot_cmd: &str) -> RenderResult {
     let dot = system_to_dot_with(sys, opts);
-    match try_render_dot_to_svg(&dot) {
+    match try_render_dot_to_svg(&dot, dot_cmd) {
         Ok(svg) => RenderResult::Svg(svg),
         Err(_) => RenderResult::Dot(dot),
     }
@@ -505,10 +536,10 @@ pub enum RenderResult {
     Dot(String),
 }
 
-fn try_render_dot_to_svg(dot: &str) -> std::io::Result<Vec<u8>> {
+fn try_render_dot_to_svg(dot: &str, dot_cmd: &str) -> std::io::Result<Vec<u8>> {
     use std::io::Write;
     use std::process::{Command, Stdio};
-    let mut child = Command::new("dot")
+    let mut child = Command::new(dot_cmd)
         .args(["-Tsvg"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -545,17 +576,35 @@ fn try_render_dot_to_svg(dot: &str) -> std::io::Result<Vec<u8>> {
 
 struct DotBuilder {
     buf: String,
+    /// `Some(label)` selects HS `showDot`'s framing (Text/Dot.hs:234-248):
+    /// a quoted digraph id and a blank line before the closing brace.
+    /// `None` is the web routes' framing.
+    label: Option<String>,
 }
 
 impl DotBuilder {
-    fn new() -> Self {
-        DotBuilder { buf: String::new() }
+    fn new(label: Option<&str>) -> Self {
+        DotBuilder {
+            buf: String::new(),
+            label: label.map(str::to_string),
+        }
     }
     fn into_string(self) -> String {
         self.buf
     }
     fn preamble(&mut self, has_clusters: bool) {
-        let _ = writeln!(self.buf, "digraph G {{");
+        match &self.label {
+            // `"digraph " ++ "\"" ++ escapedLabel ++ "\"" ++ " {\n"`, with
+            // `escapedLabel` escaping `"` and nothing else (Text/Dot.hs:241,
+            // 246-248).
+            Some(l) => {
+                let escaped = l.replace('"', "\\\"");
+                let _ = writeln!(self.buf, "digraph \"{}\" {{", escaped);
+            }
+            None => {
+                let _ = writeln!(self.buf, "digraph G {{");
+            }
+        }
         if has_clusters {
             // HS `setDefaultAttributesIfCluster` (Dot.hs:140-161): a richer
             // attribute block for clustered graphs.
@@ -598,6 +647,13 @@ impl DotBuilder {
         }
     }
     fn close(&mut self) {
+        // `unlines (map showGraphElement elems) ++ "\n}\n"` (Text/Dot.hs:248):
+        // every element line is already newline-terminated, so the extra `\n`
+        // leaves one blank line before the brace.  Framing-only, so the web
+        // routes' output is unchanged.
+        if self.label.is_some() {
+            self.buf.push('\n');
+        }
         let _ = writeln!(self.buf, "}}");
     }
     fn dot_node_id(nid: &LVar) -> String {

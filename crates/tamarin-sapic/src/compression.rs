@@ -355,15 +355,15 @@ fn cmp_info(a: &ProtoRuleEInfo, b: &ProtoRuleEInfo) -> std::cmp::Ordering {
 /// isSAPiCRule, role)`.  Color compared by rendered hex (a total order), process
 /// by its top-level rendering.
 fn cmp_attrs(a: &RuleAttributes, b: &RuleAttributes) -> std::cmp::Ordering {
-    use tamarin_theory::pretty_sapic::pretty_sapic_top_level;
+    use tamarin_theory::pretty_sapic::pretty_sapic_top_level_attr;
     let color_key = |c: &Option<tamarin_utils::color::Rgb>| {
         c.as_ref().map(|c| tamarin_utils::color::rgb_to_hex(*c))
     };
     color_key(&a.color)
         .cmp(&color_key(&b.color))
         .then_with(|| {
-            let pa = a.process.as_ref().map(pretty_sapic_top_level);
-            let pb = b.process.as_ref().map(pretty_sapic_top_level);
+            let pa = a.process.as_ref().map(pretty_sapic_top_level_attr);
+            let pb = b.process.as_ref().map(pretty_sapic_top_level_attr);
             pa.cmp(&pb)
         })
         .then_with(|| a.ignore_deriv_checks.cmp(&b.ignore_deriv_checks))

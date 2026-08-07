@@ -142,14 +142,20 @@ fn redeclaration_conflict_outranks_the_ac_arity_check() {
 }
 
 /// Signature.hs:213 exempts a `fst`/`snd` re-declaration at the pair
-/// projections' own shape, and :217 then returns the EXISTING symbol — so the
-/// arity check never runs and `[AC]` is dropped.  The oracle accepts
-/// `fst/1 [AC]` and `snd/1 [AC]` at exit 0 and prints the full theory.
+/// projections' own shape, and :217 then returns the EXISTING symbol
+/// `NoEqUser (f, kp')` — so the arity check never runs, `[AC]` is dropped, and
+/// the whole requested option tuple gives way to the builtin pair projection's
+/// `(1, Public, Constructor, NotNDC)`.  The oracle accepts `fst/1 [AC]` and
+/// `snd/1 [AC]` at exit 0 and prints the full theory.
 #[test]
 fn pair_projection_redeclaration_short_circuits_the_ac_check() {
     for src in [
         "theory D1 begin\n\nfunctions: fst/1 [AC]\n\nend\n",
         "theory D2 begin\n\nfunctions: snd/1 [AC]\n\nend\n",
+        // Every other attribute is discarded the same way; the open theory's
+        // `function:` typing line therefore shows none of them.
+        "theory D1 begin\n\nfunctions: fst/1 [destructor, NDC, NDC-diff]\n\nend\n",
+        "theory D2 begin\n\nfunctions: snd/1 [destructor, NDC, NDC-diff]\n\nend\n",
     ] {
         let thy = parse_theory(src, &[]).expect("pair projection re-declaration is accepted");
         let Some(TheoryItem::Functions(decls)) = thy
@@ -159,7 +165,14 @@ fn pair_projection_redeclaration_short_circuits_the_ac_check() {
         else {
             panic!("no functions item in {src}");
         };
-        assert!(!decls[0].ac, "the `[AC]` attribute is dropped");
+        assert!(!decls[0].ac, "the `[AC]` attribute is dropped: {src}");
+        assert!(!decls[0].private, "privacy comes from `kp'`: {src}");
+        assert!(
+            !decls[0].destructor,
+            "constructability comes from `kp'`: {src}"
+        );
+        assert!(!decls[0].ndc, "the NDC state comes from `kp'`: {src}");
+        assert!(!decls[0].ndc_diff, "the NDC state comes from `kp'`: {src}");
     }
 
     // The exemption tests name, arity AND privacy, so these still conflict.

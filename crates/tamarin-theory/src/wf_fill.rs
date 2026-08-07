@@ -51,16 +51,26 @@ pub fn fill_body(fill: &WfFill) -> String {
     // on the web routes too — which render this under an active
     // `HtmlDocGuard`.
     let _plain = hpj::HtmlDocGuard::disable();
-    let cells: Vec<Doc> = fill.cells.iter().map(cell_doc).collect();
-    // HS `fsep $ punctuate comma cells` with `comma = char ','` (Text/PrettyPrint/Class.hs:121).
-    let list = hpj::fsep(hpj::punctuate(Doc::char(','), cells));
-    // `above_g` is HughesPJ's `$+$`, which HS's `$-$` maps to
-    // (Text/PrettyPrint/Class.hs:180); `info` is a single `text` (its `<->` join cannot break),
-    // so it keeps its trailing spaces on the line above the fill.
-    Doc::text(&fill.info)
-        .above_g(list.nest(2))
-        .nest(2)
-        .render_with(WF_LINE_LENGTH, WF_RIBBON)
+    match fill {
+        WfFill::Paragraph { info, cells } => {
+            let cells: Vec<Doc> = cells.iter().map(cell_doc).collect();
+            // HS `fsep $ punctuate comma cells` with `comma = char ','`
+            // (Text/PrettyPrint/Class.hs:121).
+            let list = hpj::fsep(hpj::punctuate(Doc::char(','), cells));
+            // `above_g` is HughesPJ's `$+$`, which HS's `$-$` maps to
+            // (Text/PrettyPrint/Class.hs:180); `info` is a single `text` (its
+            // `<->` join cannot break), so it keeps its trailing spaces on the
+            // line above the fill.
+            Doc::text(info)
+                .above_g(list.nest(2))
+                .nest(2)
+                .render_with(WF_LINE_LENGTH, WF_RIBBON)
+        }
+        // HS `natSortErrors` (Wellformedness.hs:315-316) builds the body with
+        // `<>` alone; the only break points are the ones the two `prettyLNTerm`
+        // documents carry inside them.
+        WfFill::Beside(doc) => cell_doc(doc).nest(2).render_with(WF_LINE_LENGTH, WF_RIBBON),
+    }
 }
 
 /// One [`WfDoc`] skeleton as the HughesPJ `Doc` HS's `prettyTerm` /

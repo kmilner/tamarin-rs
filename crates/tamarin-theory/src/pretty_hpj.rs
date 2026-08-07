@@ -1398,6 +1398,80 @@ pub fn punctuate(sep: Doc, ds: Vec<Doc>) -> Vec<Doc> {
 }
 
 // ============================================================================
+// Numbered lists + blank-line vertical join (HS Class.hs `numbered`,
+// `numbered'`, `$--$`).
+// ============================================================================
+
+/// HS `flushRight` (`Extension/Prelude.hs:204-209`): left-pad `s` with
+/// spaces to width `n` (no truncation when `s` is longer).
+fn flush_right(n: usize, s: &str) -> String {
+    let pad = n.saturating_sub(s.chars().count());
+    let mut out = String::with_capacity(pad + s.len());
+    for _ in 0..pad {
+        out.push(' ');
+    }
+    out.push_str(s);
+    out
+}
+
+/// HS `$--$` (`Class.hs:112-114`): vertical concatenation with an empty
+/// line in between — `caseEmptyDoc`-guarded `d1 $-$ text "" $-$ d2`, where
+/// Class's `$-$` is HughesPJ `$+$` (`Class.hs:180`) = [`Doc::above_g`].
+/// The separator is [`Doc::text_hs`]`("")` so it survives as a blank line
+/// (indented under a surrounding `nest`).
+pub fn above_blank(d1: Doc, d2: Doc) -> Doc {
+    if matches!(d2, Doc::Empty) {
+        return d1;
+    }
+    if matches!(d1, Doc::Empty) {
+        return d2;
+    }
+    d1.above_g(Doc::text_hs("")).above_g(d2)
+}
+
+/// HS `numbered` (`Class.hs:252-259`):
+/// `foldr1 ($-$) $ intersperse vsep $ map pp $ zip [1..] ds` with
+/// `pp (i, d) = text (flushRight nWidth (show i)) <> d` and
+/// `nWidth = length (show (length ds))`.  `[]` yields the empty doc.
+pub fn numbered(vsep: Doc, ds: Vec<Doc>) -> Doc {
+    if ds.is_empty() {
+        return Doc::Empty;
+    }
+    let n_width = ds.len().to_string().len();
+    let entries: Vec<Doc> = ds
+        .into_iter()
+        .enumerate()
+        .map(|(i, d)| Doc::text(flush_right(n_width, &(i + 1).to_string())).beside(d))
+        .collect();
+    // `foldr1 ($-$) (intersperse vsep entries)` — right fold over the
+    // interleaved list.
+    let n = entries.len();
+    let mut interleaved: Vec<Doc> = Vec::with_capacity(2 * n - 1);
+    for (i, e) in entries.into_iter().enumerate() {
+        if i > 0 {
+            interleaved.push(vsep.clone());
+        }
+        interleaved.push(e);
+    }
+    let mut acc = interleaved
+        .pop()
+        .expect("numbered: non-empty by construction");
+    for d in interleaved.into_iter().rev() {
+        acc = d.above_g(acc);
+    }
+    acc
+}
+
+/// HS `numbered'` (`Class.hs:263-264`):
+/// `numbered (text "") . map (text ". " <>)`.
+pub fn numbered_prime(ds: Vec<Doc>) -> Doc {
+    numbered(
+        Doc::text_hs(""),
+        ds.into_iter().map(|d| Doc::text(". ").beside(d)).collect(),
+    )
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 

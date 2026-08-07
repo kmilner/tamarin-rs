@@ -19,7 +19,7 @@ use tamarin_parser::ast as p;
 use tamarin_parser::wf::WfError;
 
 use tamarin_theory::elaborate::ElabError;
-use tamarin_theory::pretty_sapic::pretty_sapic_top_level;
+use tamarin_theory::pretty_sapic::pretty_sapic_top_level_attr;
 use tamarin_theory::pretty_theory::lnfact_to_parser;
 use tamarin_theory::rule::{ProtoRuleE, ProtoRuleName};
 use tamarin_theory::theory::{OpenProtoRule, OpenRestriction, Theory, TheoryItem};
@@ -341,7 +341,7 @@ fn synth_attrs(attr: &tamarin_theory::rule::RuleAttributes) -> Vec<p::RuleAttr> 
         out.push(p::RuleAttr::Color(hex.trim_start_matches('#').to_string()));
     }
     if let Some(proc) = &attr.process {
-        out.push(p::RuleAttr::Process(pretty_sapic_top_level(proc)));
+        out.push(p::RuleAttr::Process(pretty_sapic_top_level_attr(proc)));
     }
     if attr.ignore_deriv_checks {
         out.push(p::RuleAttr::NoDerivCheck);

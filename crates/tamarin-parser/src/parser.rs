@@ -1010,6 +1010,14 @@ pub struct Parser<'a> {
     /// re-parse RENDERED term text with no signature state, where every
     /// application must be accepted structurally.
     resolve_prefix_apps: bool,
+    /// Whether a `:` after a variable names a SAPIC TYPE rather than a sort
+    /// suffix.  Set while parsing a SAPIC process (and a process definition's
+    /// parameter list), where HS uses `sapicvar` — `lvarNoSuffix` plus
+    /// `option Nothing (colon *> typep)` (Token.hs:487-510) — instead of the
+    /// suffix-accepting `msgvar`/`lvar` used everywhere else.  So `x:nat`
+    /// inside a process is `x` typed `"nat"`, while the same text in a rule is
+    /// the nat-sorted `x`.
+    sapic_var_types: bool,
     /// The `expecting` labels a completed top-level item leaves behind at the
     /// byte offset it stopped at, and that offset.
     ///
@@ -1081,6 +1089,7 @@ impl<'a> Parser<'a> {
             term_carry: None,
             fact_annot_hangover: None,
             resolve_prefix_apps: true,
+            sapic_var_types: false,
             item_hangover: None,
             seen_rules: Vec::new(),
             seen_restriction_names: Vec::new(),
@@ -2674,19 +2683,24 @@ impl<'a> Parser<'a> {
                 ));
             }
             if name == "fst" || name == "snd" {
-                // Signature.hs:217 returns the EXISTING symbol as a
-                // `NoEqUser`: any `[AC]` attribute is dropped, the arity check
-                // never runs, and nothing is registered.
+                // Signature.hs:217 returns `NoEqUser (f, kp')`, i.e. the
+                // EXISTING symbol's option tuple: the declared argument and
+                // result types survive, but privacy, constructability and the
+                // NDC state are those of `kp'`, `[AC]` is dropped, the arity
+                // check never runs, and nothing is registered.  Discarding the
+                // requested attributes is what keeps `functions: fst/1
+                // [destructor]` printing as `function: fst (Any) : Any` in the
+                // open theory's typing lines (TheoryObject.hs:820-838).
                 return Ok((
                     FunctionDecl {
                         name,
                         arg_types,
                         out_type,
-                        private,
-                        destructor,
+                        private: prev.private,
+                        destructor: prev.destructor,
                         ac: false,
-                        ndc,
-                        ndc_diff,
+                        ndc: prev.ndc,
+                        ndc_diff: prev.ndc_diff,
                     },
                     had_attrs,
                 ));
@@ -4085,7 +4099,13 @@ impl<'a> Parser<'a> {
         let name = self.ident()?;
         let vars = if self.try_punct("(") {
             // HS `parens $ commaSep sapicvar` (Sapic.hs:64-72, see line 69): trailing comma OK.
-            Some(self.sep_end_by(")", |p| p.var_spec())?)
+            // `sapicvar`, so a `:` here types the parameter (see
+            // [`Parser::sapic_var_types`]).
+            let saved = self.sapic_var_types;
+            self.sapic_var_types = true;
+            let r = self.sep_end_by(")", |p| p.var_spec());
+            self.sapic_var_types = saved;
+            Some(r?)
         } else {
             None
         };
@@ -4133,7 +4153,17 @@ impl<'a> Parser<'a> {
     // Process parser (SAPIC)
     // =========================================================================
 
+    /// A SAPIC process.  Every variable inside is HS `sapicvar`, so a trailing
+    /// `:` names a type rather than a sort — see [`Parser::sapic_var_types`].
     fn process(&mut self) -> Result<Process, ParseError> {
+        let saved = self.sapic_var_types;
+        self.sapic_var_types = true;
+        let r = self.process_body();
+        self.sapic_var_types = saved;
+        r
+    }
+
+    fn process_body(&mut self) -> Result<Process, ParseError> {
         // Left-associative parallel / NDC composition.
         let mut left = self.action_process()?;
         loop {
@@ -5559,6 +5589,19 @@ impl<'a> Parser<'a> {
         // Suffix syntax: `<id>:msg`, `:pub`, `:fresh`, `:node`, `:nat`.
         let save = self.save();
         if self.try_punct(":") {
+            // Inside a SAPIC process every variable comes from HS `sapicvar =
+            // lvarNoSuffix; option Nothing (colon *> typep)` (Token.hs:506-510).
+            // `lvarNoSuffix` (Token.hs:487-501) offers PREFIX sorts only, so a
+            // colon there always introduces a SAPIC TYPE — `x:nat` is the
+            // msg-sorted `x` typed `"nat"`, not a nat-sorted variable — and
+            // `typep`'s `Any` is the untyped placeholder (Token.hs:472-473).
+            if self.sapic_var_types {
+                match self.type_p_element() {
+                    Some((t, _)) => v.typ = t,
+                    None => self.restore(save),
+                }
+                return Ok(v);
+            }
             // Distinguish suffix sort vs SAPIC type annotation.
             let snap = self.save();
             if self.try_kw("msg") {

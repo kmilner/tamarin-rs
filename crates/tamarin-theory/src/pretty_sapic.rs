@@ -4,8 +4,9 @@
 
 //! Port of the SAPIC process pretty-printers from
 //! `lib/theory/src/Theory/Sapic/{Term,Process}.hs` and
-//! `lib/theory/src/Theory/Model/Fact.hs`, used for the `process="..."` rule
-//! attribute and the SAPIC-generated rule names.
+//! `lib/theory/src/Theory/Model/Fact.hs`, used for the open theory's
+//! `process:` blocks, the `process="..."` rule attribute and the
+//! SAPIC-generated rule names.
 //!
 //! WRAPPING.  The `process="..."` attribute value is NOT a single
 //! `text` — `prettySapicAction'` (Process.hs:450-469) builds it by string
@@ -243,33 +244,69 @@ fn pretty_sapic_fact(f: &crate::sapic::SapicLNFact) -> String {
 /// `<> ppAnn` suffix — empty for `S.null ann` — is omitted here, matching the
 /// committed gate.)
 fn sapic_fact_to_doc(f: &crate::sapic::SapicLNFact) -> Doc {
+    sapic_fact_to_doc_pat(f, None)
+}
+
+/// `prettyFact` over a fact whose terms carry pattern markers: `match_vars`,
+/// when `Some`, is the `unextractMatchingVariables` set applied to every term
+/// (HS `rulePrinter`'s `l' = fmap (fmap (unextractMatchingVariables mv)) l`,
+/// Print.hs:45).
+fn sapic_fact_to_doc_pat(
+    f: &crate::sapic::SapicLNFact,
+    match_vars: Option<&std::collections::BTreeSet<SapicLVar>>,
+) -> Doc {
     let name = crate::fact::show_fact_tag(&f.tag);
     let lead = format!("{name}(");
-    let arg_docs: Vec<Doc> = f.terms.iter().map(|t| sapic_term_to_doc(t, None)).collect();
+    let arg_docs: Vec<Doc> = f
+        .terms
+        .iter()
+        .map(|t| sapic_term_to_doc(t, match_vars))
+        .collect();
     let body = hpj::fsep(hpj::punctuate(Doc::char(','), arg_docs));
     hpj::nest_short_doc(&lead, ")", body)
 }
 
-/// The MSR `process="..."` attribute printer.  HS `prettyRuleAttribute`'s
-/// local `ppProcess.f l a r rest _` (Rule.hs:1211-1214) — NOT `rulePrinter` —
-/// renders the rule's `ruleProcess` MSR node via `prettyRuleRestr (map toLNFact
-/// l) (map toLNFact a) (map toLNFact r) (map toLFormula rest)`, IGNORING the
-/// match-var set (the `_`).  So the premises render as PLAIN LN facts (no `=v`
-/// markers), unlike the `Theory.Sapic.Print.rulePrinter` path that re-applies
-/// `unextractMatchingVariables mv`.  `prettyRuleRestr = prettyRuleRestrGen
-/// prettyLNFact prettySyntacticLNFormula` (Rule.hs:1253-1273): builds
+/// Which MSR rule printer `prettySapic'` / `prettySapicTopLevel'` is
+/// instantiated with.  HS takes it as a parameter because its two callers
+/// disagree about the premise rendering.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MsrPrinter {
+    /// `Theory.Sapic.Print.rulePrinter` (Print.hs:34-46): re-applies
+    /// `unextractMatchingVariables mv` to the PREMISES, so each match variable
+    /// prints with a leading `=`; the actions and conclusions get `mempty`, so
+    /// they stay unmarked.  Used by `prettySapic` / `prettySapicTopLevel`,
+    /// i.e. the `process:` / `let` / `equivLemma` blocks of an open theory.
+    Sapic,
+    /// `prettyRuleAttribute`'s local `ppProcess.f l a r rest _`
+    /// (Rule.hs:1324-1327): DISCARDS the match-var set, rendering the premises
+    /// as plain facts.  Used for the `process="..."` rule attribute.
+    Attribute,
+}
+
+/// The embedded-MSR rule printer.  Both HS instantiations go through
+/// `prettyRuleRestrGen` (Rule.hs:1253-1273), which builds
 /// `[ prems ] --[ acts (+ _restrict(..)) ]-> [ concls ]`; with no actions and
-/// no restrictions the arrow collapses to `-->`.
+/// no restrictions the arrow collapses to `-->`.  They differ only in the fact
+/// printer: [`MsrPrinter::Sapic`] marks the premises' match variables with `=`,
+/// [`MsrPrinter::Attribute`] does not.
 fn render_msr(
     prems: &[crate::sapic::SapicLNFact],
     acts: &[crate::sapic::SapicLNFact],
     concls: &[crate::sapic::SapicLNFact],
     rest: &[tamarin_parser::ast::Formula],
-    _match_vars: &std::collections::BTreeSet<SapicLVar>,
+    match_vars: &std::collections::BTreeSet<SapicLVar>,
+    printer: MsrPrinter,
 ) -> String {
+    let prem_mv = match printer {
+        MsrPrinter::Sapic => Some(match_vars),
+        MsrPrinter::Attribute => None,
+    };
+
     // `ppFactsList list = fsep [ "[", fsep (punctuate "," (map ppFact list)), "]" ]`.
-    let pp_facts_list = |facts: &[crate::sapic::SapicLNFact]| -> Doc {
-        let inner: Vec<Doc> = facts.iter().map(sapic_fact_to_doc).collect();
+    let pp_facts_list = |facts: &[crate::sapic::SapicLNFact],
+                         mv: Option<&std::collections::BTreeSet<SapicLVar>>|
+     -> Doc {
+        let inner: Vec<Doc> = facts.iter().map(|f| sapic_fact_to_doc_pat(f, mv)).collect();
         hpj::fsep(vec![
             Doc::char('['),
             hpj::fsep(hpj::punctuate(Doc::char(','), inner)),
@@ -306,15 +343,15 @@ fn render_msr(
     };
 
     let doc = hpj::sep(vec![
-        pp_facts_list(prems).nest(1),
+        pp_facts_list(prems, prem_mv).nest(1),
         arrow_row,
-        pp_facts_list(concls).nest(1),
+        pp_facts_list(concls, None).nest(1),
     ]);
     render_sapic(doc)
 }
 
 /// `prettySapicAction'` (Process.hs:450-469), linear subset.
-fn pretty_sapic_action(a: &SapicAction<SapicLVar>) -> String {
+fn pretty_sapic_action(a: &SapicAction<SapicLVar>, printer: MsrPrinter) -> String {
     match a {
         SapicAction::New(v) => format!("new {}", show_sapic_lvar(v)),
         SapicAction::Rep => "!".to_string(),
@@ -359,14 +396,15 @@ fn pretty_sapic_action(a: &SapicAction<SapicLVar>) -> String {
             format!("{}({})", s, body)
         }
         // HS `prettySapicAction' prettyRule' (MSR p a c r mv) = prettyRule' p a c r mv`
-        // (Process.hs:450-471, see line 470), where `prettyRule' = rulePrinter` (Print.hs:41-46).
+        // (Process.hs:450-471, see line 470); `prettyRule'` is the caller-supplied
+        // printer selected by `printer`.
         SapicAction::Msr {
             prems,
             acts,
             concs,
             rest,
             match_vars,
-        } => render_msr(prems, acts, concs, rest, match_vars),
+        } => render_msr(prems, acts, concs, rest, match_vars, printer),
     }
 }
 
@@ -427,15 +465,28 @@ fn pretty_sapic_comb(c: &ProcessCombinator<SapicLVar>) -> String {
     }
 }
 
-/// `prettySapicTopLevel'` (Process.hs:514-524): used for rule names and the
-/// `process=` attribute.  Only inspects the TOP node.
-pub fn pretty_sapic_top_level(p: &PlainProcess) -> String {
+/// `prettySapicTopLevel' prettyRule'` (Process.hs:514-524).  Only inspects the
+/// TOP node.
+pub fn pretty_sapic_top_level_with(p: &PlainProcess, printer: MsrPrinter) -> String {
     match p {
         Process::Null(_) => "0".to_string(),
         Process::Comb(c, _, _, _) => pretty_sapic_comb(c),
-        Process::Action(SapicAction::Rep, _, _) => pretty_sapic_action(&SapicAction::Rep),
-        Process::Action(a, _, _) => format!("{};", pretty_sapic_action(a)),
+        Process::Action(SapicAction::Rep, _, _) => pretty_sapic_action(&SapicAction::Rep, printer),
+        Process::Action(a, _, _) => format!("{};", pretty_sapic_action(a, printer)),
     }
+}
+
+/// `prettySapicTopLevel = prettySapicTopLevel' rulePrinter` (Print.hs:56):
+/// the `process:` / `let` / `equivLemma` block printer and the source of the
+/// SAPIC-generated rule names.
+pub fn pretty_sapic_top_level(p: &PlainProcess) -> String {
+    pretty_sapic_top_level_with(p, MsrPrinter::Sapic)
+}
+
+/// `prettySapicTopLevel' f` with `prettyRuleAttribute`'s local `f`
+/// (Rule.hs:1324-1327): the `process="..."` rule-attribute value.
+pub fn pretty_sapic_top_level_attr(p: &PlainProcess) -> String {
+    pretty_sapic_top_level_with(p, MsrPrinter::Attribute)
 }
 
 #[cfg(test)]

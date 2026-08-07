@@ -284,8 +284,35 @@ fn output_module_parsed() {
 }
 
 #[test]
+fn output_module_never_consumes_the_next_token() {
+    // flagOpt: a space-separated value stays POSITIONAL and the flag
+    // records its default — `-m msr t.spthy` treats `msr` as a file.
+    let a = parse(&["-m", "msr", "t.spthy"]);
+    assert_eq!(a.output_module.as_deref(), Some("spthy"));
+    assert_eq!(a.in_files, vec!["msr".to_string(), "t.spthy".to_string()]);
+    let a = parse(&["--output-module", "msr", "t.spthy"]);
+    assert_eq!(a.output_module.as_deref(), Some("spthy"));
+    assert_eq!(a.in_files, vec!["msr".to_string(), "t.spthy".to_string()]);
+}
+
+#[test]
+fn output_module_value_is_unvalidated_at_parse_time() {
+    // HS validates in `mkTheoryLoadOptions` (TheoryLoader.hs:373-377), not
+    // in cmdargs — `-m=bogus` parses fine and dies later in `run_batch`
+    // with the `output mode not supported.` GHC error (Batch.hs:163:33).
+    let a = parse(&["-m=bogus", "t.spthy"]);
+    assert_eq!(a.output_module.as_deref(), Some("bogus"));
+    // `--output-module=` records the EMPTY string (also rejected at run
+    // time — `ModuleType::from_show("")` is None).
+    let a = parse(&["--output-module=", "t.spthy"]);
+    assert_eq!(a.output_module.as_deref(), Some(""));
+    let a = parse(&["--output-module=spthytyped", "t.spthy"]);
+    assert_eq!(a.output_module.as_deref(), Some("spthytyped"));
+}
+
+#[test]
 fn output_dot_and_json_are_flag_req() {
-    // output-json/output-dot are flagReq (Batch.hs:79-80): they DO consume
+    // output-json/output-dot are flagReq (Batch.hs:80-81): they DO consume
     // the next space-separated token, unlike the flagOpt family.  Verified
     // on the HS binary: `--output-json trace.json t.spthy` writes trace.json.
     let a = parse(&["--output-dot=trace.dot", "--output-json=trace.json"]);
@@ -413,14 +440,30 @@ fn clustered_bool_then_value_short() {
 }
 
 #[test]
-fn partial_eval_unknown_message() {
-    let r = parse_args(&["--partial-evaluation=banana".to_string()]);
-    match r {
-        Err(CliError::Msg(m)) => {
-            assert_eq!(m, "partial-evaluation: unknown option");
-        }
-        _ => panic!("expected error"),
-    }
+fn partial_eval_unknown_value_is_deferred_not_a_parse_error() {
+    // HS cmdargs accepts any value; `ArgumentError "partial-evaluation:
+    // unknown option"` fires only when `mkTheoryLoadOptions` is forced
+    // (TheoryLoader.hs:354-358), after the maude banner — so `parse_args`
+    // must succeed and leave the rejection to `run_batch`.
+    let a = parse(&["--partial-evaluation=banana", "t.spthy"]);
+    assert_eq!(a.partial_evaluation, None);
+    assert_eq!(a.partial_evaluation_raw.as_deref(), Some("banana"));
+    assert_eq!(a.in_files, vec!["t.spthy".to_string()]);
+}
+
+#[test]
+fn partial_eval_known_values_and_bare_default() {
+    // Case-insensitive (`map toLower`, TheoryLoader.hs:354); a bare flag
+    // records the flagOpt default, which is the lowercase literal
+    // `"summary"` (TheoryLoader.hs:126-131).
+    let a = parse(&["--partial-evaluation=SUMMARY"]);
+    assert_eq!(a.partial_evaluation, Some(PartialEval::Summary));
+    assert_eq!(a.partial_evaluation_raw.as_deref(), Some("SUMMARY"));
+    let a = parse(&["--partial-evaluation=Verbose"]);
+    assert_eq!(a.partial_evaluation, Some(PartialEval::Verbose));
+    let a = parse(&["--partial-evaluation"]);
+    assert_eq!(a.partial_evaluation, Some(PartialEval::Summary));
+    assert_eq!(a.partial_evaluation_raw.as_deref(), Some("summary"));
 }
 
 #[test]

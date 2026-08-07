@@ -26,7 +26,7 @@
 //!   --bound=N, -bN             proof-depth bound
 //!   --saturation=N, -sN        bound on saturation iterations (default 5)
 //!   --heuristic=...            heuristic ranking sequence (overrides per-lemma)
-//!   --partial-evaluation=...   partial-evaluation mode (parsed, not yet routed)
+//!   --partial-evaluation=...   partial-evaluation mode (SUMMARY|VERBOSE)
 //!   -D|--defines=STRING        preprocessor `#define` flags. Repeatable.
 //!   --diff                     observational-equivalence mode (errors: not yet ported)
 //!   --quit-on-warning          treat wellformedness warnings as fatal
@@ -44,15 +44,58 @@
 //!   --proverif-no-reuse-lemmas do not export reuse lemmas (parsed, not yet routed)
 //!   --proverif-no-restrictions do not export restrictions (parsed, not yet routed)
 //!   --replication-bound=N      DeepSec replication bound (parsed, not yet routed)
-//!   --no-compress              do not compress sequents (parsed, not yet routed)
+//!   --no-compress              accepted and ignored, as in HS: Batch.hs:60-61
+//!                              registers the flag but nothing ever reads the
+//!                              `noCompress` arg, and `outputTraces` hard-codes
+//!                              `defaultGraphOptions` (Batch.hs:254).  The web
+//!                              UI's compression is the `uncompress` GET param
+//!                              (Web/Handler.hs:1400), not this flag.
 //!   --output=FILE, -oFILE      write the analyzed theory to FILE
 //!   --Output=DIR, -ODIR        write analyzed theory to DIR/<basename>_analyzed.spthy
-//!   --output-module=MODULE -mMODULE  output module selector (errors: not yet ported)
-//!   --output-json=FILE, --oj   serialize traces to JSON (writes empty stub + warns; not yet ported)
-//!   --output-dot=FILE, --od    serialize traces to dot (writes empty stub + warns; not yet ported)
+//!   --output-module=MODULE -mMODULE  translate-only output module (Batch.hs:101-113).
+//!                              spthy | spthytyped | msr are supported;
+//!                              proverifequiv | proverif | deepsec error (export
+//!                              backends not yet ported); any other value dies
+//!                              with HS's `output mode not supported.` GHC error
+//!                              (run.rs, after the maude banner).  Ignored under
+//!                              --parse-only / --precompute-only, as in HS.
+//!   --output-json=FILE, --oj   serialize the constraint system of every
+//!                              solved proof node to FILE as JSON
+//!                              (`outputTraces`, Batch.hs:249-317).  Written
+//!                              once per input file (last file wins) and only
+//!                              on the close-and-prove path: --parse-only,
+//!                              --precompute-only, -m and a run with no input
+//!                              files never create FILE.  No traces ⇒
+//!                              `{"graphs": []}`.
+//!   --output-dot=FILE, --od    the same traces as dot — one
+//!                              `digraph "<label>"` per solved node, separated
+//!                              by a blank line; no traces ⇒ a 0-byte file.
+//!                              DIVERGENCE: the graph BODIES are the port's
+//!                              DOT dialect, not HS `Text.Dot`'s (node ids,
+//!                              record ports, cluster ids and attribute
+//!                              quoting differ — see the KNOWN DIVERGENCES
+//!                              block in `tamarin-server`'s
+//!                              `handlers/dot.rs`).  Labels and container
+//!                              framing are byte-exact.
 //!   --with-maude=PATH          path to `maude` (default: looked up via PATH)
-//!   --with-dot=PATH            path to GraphViz `dot` (parsed, not yet routed)
-//!   --with-json=PATH           path to JSON renderer (parsed, not yet routed)
+//!   --with-dot=PATH            path to GraphViz `dot`; used by the `test`
+//!                              subcommand's version probe and by interactive
+//!                              mode for the startup banner and every graph
+//!                              render.  Inert in batch mode, as in HS: its
+//!                              two readers are `ensureGraphVizDot`
+//!                              (Environment.hs:72-101) and
+//!                              `readOutputCommand` (Environment.hs:41-45),
+//!                              and Batch.hs calls neither.
+//!   --with-json=PATH           path to JSON renderer.  Its presence overrides
+//!                              --with-dot (Environment.hs:41-45) and replaces
+//!                              interactive mode's GraphViz banner with the
+//!                              `Graph rendering command:` / `which` probe
+//!                              (Environment.hs:104-115).  Divergence: graph
+//!                              rendering still goes through `dot -Tsvg`,
+//!                              where HS runs `<cmd> <img> <json>`
+//!                              (Web/Theory.hs:1484-1491).  Inert in batch
+//!                              mode, as in HS (`readOutputCommand` is only
+//!                              called from Interactive.hs:106,138).
 //!   -h|-?|--help               print help and exit
 //!   -V|--version               print version and exit
 //!
@@ -76,7 +119,7 @@
 //! space-separated `--foo VALUE` (that next token stays positional,
 //! exactly as the HS binary treats `--bound 5 t.spthy` -> `5` is a file).
 //! The only exceptions are `--output-json`/`--output-dot`, which are
-//! `flagReq` and DO consume the following token (Batch.hs:79-80).
+//! `flagReq` and DO consume the following token (Batch.hs:80-81).
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StopOnTrace {
@@ -107,12 +150,16 @@ pub enum PartialEval {
 }
 
 impl PartialEval {
-    fn parse(s: &str) -> Result<Self, String> {
+    /// HS `partialEvaluation` (TheoryLoader.hs:354-358): `map toLower` then an
+    /// exact match against `summary` / `verbose`.  `None` is HS's
+    /// `ArgumentError "partial-evaluation: unknown option"` branch, which the
+    /// port raises from the batch run rather than here — see
+    /// [`Args::partial_evaluation_raw`].
+    fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
-            "summary" => Ok(PartialEval::Summary),
-            "verbose" => Ok(PartialEval::Verbose),
-            // Mirror HS TheoryLoader.hs:320: `ArgumentError "partial-evaluation: unknown option"`.
-            _ => Err("partial-evaluation: unknown option".to_string()),
+            "summary" => Some(PartialEval::Summary),
+            "verbose" => Some(PartialEval::Verbose),
+            _ => None,
         }
     }
 }
@@ -165,7 +212,17 @@ pub struct Args {
     pub stop_on_trace: Option<StopOnTrace>,
     pub bound: Option<u32>,
     pub heuristic: Option<String>,
+    /// The resolved `--partial-evaluation` style; `None` when the flag is
+    /// absent OR its value is unknown — see [`Args::partial_evaluation_raw`].
     pub partial_evaluation: Option<PartialEval>,
+    /// The raw `--partial-evaluation` value as given.  HS cmdargs accepts any
+    /// string here; the `ArgumentError "partial-evaluation: unknown option"`
+    /// only fires when `mkTheoryLoadOptions` is forced (TheoryLoader.hs:
+    /// 354-358) — inside the batch run, after the maude banner, dying via
+    /// `error e` at Batch.hs:163:33.  `parse_args` mirrors that laziness:
+    /// it records the raw value and leaves the rejection to `run_batch`
+    /// (`Some` here + `None` in `partial_evaluation` = unknown value).
+    pub partial_evaluation_raw: Option<String>,
     pub defines: Vec<String>,
     pub diff: bool,
     pub quit_on_warning: bool,
@@ -184,9 +241,8 @@ pub struct Args {
     /// GraphViz banners, the `[Theory X] …` markers and the `summary of
     /// summaries:` block all print under `--quiet`, batch and interactive
     /// alike.  RS mirrors that; the flag gates only RS-only diagnostics that
-    /// have no HS counterpart (`--output-json` / `--output-dot` stub
-    /// warnings, the `MaudePool` spawn fallback), where dropping them moves
-    /// output toward the oracle rather than away from it.
+    /// have no HS counterpart (the `MaudePool` spawn fallback), where
+    /// dropping them moves output toward the oracle rather than away from it.
     pub quiet: bool,
     pub verbose: bool,
     pub open_chains: Option<u64>,
@@ -258,6 +314,7 @@ impl Default for Args {
             bound: None,
             heuristic: None,
             partial_evaluation: None,
+            partial_evaluation_raw: None,
             defines: Vec::new(),
             diff: false,
             quit_on_warning: false,
@@ -456,8 +513,12 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                     }
                 }
                 "partial-evaluation" => {
+                    // flagOpt "summary" (TheoryLoader.hs:126-131); cmdargs
+                    // accepts any value — the unknown-option rejection is
+                    // deferred to the run (see `Args::partial_evaluation_raw`).
                     let v = flag_opt(val_inline, "summary");
-                    args.partial_evaluation = Some(PartialEval::parse(&v).map_err(CliError::Msg)?);
+                    args.partial_evaluation = PartialEval::parse(&v);
+                    args.partial_evaluation_raw = Some(v);
                 }
                 "defines" => {
                     // flagOpt "" — bare `-D`/`--defines` records the empty
@@ -521,7 +582,7 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                     args.output_file = Some(flag_opt(val_inline, ""));
                 }
                 // The long form in Haskell is `--Output` (capital O) for the
-                // directory variant (Batch.hs:44-84, see line 77 registers only `Output`/`O`);
+                // directory variant (Batch.hs:44-84, see line 78 registers only `Output`/`O`);
                 // there is no `--output-dir` alias, so it falls through to the
                 // unknown-flag arm, exactly as HS does.
                 "Output" => {
@@ -530,7 +591,7 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                 "output-module" => {
                     args.output_module = Some(flag_opt(val_inline, "spthy"));
                 }
-                // output-json / output-dot are flagReq (Batch.hs:79-80): they
+                // output-json / output-dot are flagReq (Batch.hs:80-81): they
                 // REQUIRE a value and DO consume a separate next token.
                 "output-json" | "oj" => {
                     let v = take_val(&mut i, raw, val_inline, "output-json")?;

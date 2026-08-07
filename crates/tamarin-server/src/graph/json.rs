@@ -8,18 +8,26 @@
 //!
 //! See `lib/theory/src/Theory/Constraint/System/JSON.hs`.
 //!
-//! Only the `sequentsToJSONPretty` variant (JSON.hs:553-558) is ported: it is
+//! Only the `sequentsToJSONPretty` variant (JSON.hs:564-569) is ported: it is
 //! the one both the web handler (`src/Web/Handler.hs:1435-1444`) and the batch
 //! trace export (`src/Main/Mode/Batch.hs`) call, so the HS `pretty` flag is
 //! always `True` here — every fact carries its `prettyLNFact` rendering and
 //! every outermost term its `show`n form.
 //!
-//! Output shape reproduces aeson-pretty's default `Config` (4-space indent,
-//! no trailing newline) with the object keys in the alphabetical order
-//! `Data.Aeson.Object` serialises them in.  HS post-processes the encoder's
-//! `<`/`>` escapes back into literal `<`/`>` (`removePseudoUnicode`,
-//! JSON.hs:225-229); `serde_json` never escapes those characters, so the
-//! literal form comes out directly.
+//! The bytes come out of `to_pretty_string`, a port of aeson-pretty's
+//! `encodePretty` at `defConfig` (4-space indent, `": "` between key and
+//! value, empty containers inline, no trailing newline) over
+//! `Data.Aeson.Text`'s string escaper — aeson-pretty's `fromValue` hands
+//! every scalar to `Aeson.encodeToTextBuilder` — followed by
+//! `removePseudoUnicode` (JSON.hs:228-239).  That escaper differs from
+//! `serde_json`'s: 0x08 and 0x0c take the generic `\u00xx` form where
+//! `serde_json` emits `\b` / `\f`, so the encoder cannot be delegated to
+//! `serde_json`.  `<`, `>` and `&` all reach the wire literally
+//! (oracle-verified: a pub name `'a&b'` arrives as a literal `&`), so
+//! `removePseudoUnicode` can only bite payload text that itself spells out
+//! the six characters of a `\u003c` / `\u003e` escape.  Object keys are
+//! emitted in the ascending order `Data.Aeson.Object` serialises them in,
+//! which is what `serde_json::Map`'s `BTreeMap` iteration yields.
 
 use serde_json::{Map, Value};
 
@@ -71,7 +79,7 @@ fn resolve_node_conc_fact<'a>(conc: &NodeConc, rules: &NodeRules<'a>) -> Option<
 // String helpers
 // ---------------------------------------------------------------------
 
-/// Port of `cleanString` (JSON.hs:212-217) — flatten a rendered pretty-printer
+/// Port of `cleanString` (JSON.hs:213-218) — flatten a rendered pretty-printer
 /// document onto one line.
 ///
 /// The HS equations rewrite and then RE-EXAMINE the rewritten prefix:
@@ -149,7 +157,7 @@ fn show_lit(l: &Lit<Name, LVar>) -> String {
 // Rule / edge classification
 // ---------------------------------------------------------------------
 
-/// Port of `getRuleType` (JSON.hs:237-250).  Guard ORDER is significant: the
+/// Port of `getRuleType` (JSON.hs:247-260).  Guard ORDER is significant: the
 /// generic `isIntruderRule` / `isProtocolRule` tests come last.
 fn get_rule_type(ru: &RuleACInst) -> &'static str {
     match &ru.info {
@@ -266,10 +274,10 @@ fn object<'a>(fields: impl IntoIterator<Item = (&'a str, Value)>) -> Value {
     Value::Object(m)
 }
 
-/// Port of `lntermToJSONGraphNodeTerm` (JSON.hs:275-292) at `pretty = True`.
+/// Port of `lntermToJSONGraphNodeTerm` (JSON.hs:285-302) at `pretty = True`.
 ///
 /// `jgnShow` is populated for the OUTERMOST term only and omitted entirely
-/// when empty (JSON.hs:76-81), so nested subterms carry just `jgnFunct` /
+/// when empty (JSON.hs:77-82), so nested subterms carry just `jgnFunct` /
 /// `jgnParams`.  Terms that are neither a literal nor a `NoEq`/`AC`
 /// application fall into HS's catch-all `Const ("unknown term type: " ++ show
 /// t)`.
@@ -294,7 +302,7 @@ fn json_term(t: &LNTerm, outermost: bool) -> Value {
     }
 }
 
-/// Port of `itemToJSONGraphNodeFact` (JSON.hs:295-309) at `pretty = True`.
+/// Port of `itemToJSONGraphNodeFact` (JSON.hs:305-319) at `pretty = True`.
 fn json_fact(id: String, f: &LNFact) -> Value {
     // `show (factTag f)` is the DERIVED Show of `FactTag`
     // (Fact.hs:137-148); the `ProtoFact` constructor never reaches it
@@ -326,7 +334,7 @@ fn json_fact(id: String, f: &LNFact) -> Value {
     ])
 }
 
-/// Port of `factToJSONGraphNodeFact` (JSON.hs:315-317): premise/conclusion
+/// Port of `factToJSONGraphNodeFact` (JSON.hs:325-327): premise/conclusion
 /// facts are identified by `<node>:<prefix><index>`, 0-based.
 fn json_indexed_fact(prefix: &str, n: &NodeId, idx: usize, f: &LNFact) -> Value {
     json_fact(format!("{}:{}{}", n, prefix, idx), f)
@@ -343,7 +351,7 @@ fn json_action_facts(facts: &[LNFact]) -> Value {
     )
 }
 
-/// Port of `nodeToJSONGraphNodeMetadata` (JSON.hs:321-328).
+/// Port of `nodeToJSONGraphNodeMetadata` (JSON.hs:331-338).
 fn json_metadata(n: &NodeId, ru: &RuleACInst) -> Value {
     object([
         ("jgnActs", json_action_facts(&ru.actions)),
@@ -371,7 +379,7 @@ fn json_metadata(n: &NodeId, ru: &RuleACInst) -> Value {
 }
 
 /// A `JSONGraphNodeFact` with only its id set — the stub HS emits for a node
-/// referenced by an edge but absent from `sNodes` (JSON.hs:385-392/405-412).
+/// referenced by an edge but absent from `sNodes` (JSON.hs:395-402/415-422).
 fn json_stub_fact(id: String) -> Value {
     object([
         ("jgnFactId", Value::String(id)),
@@ -383,8 +391,8 @@ fn json_stub_fact(id: String) -> Value {
     ])
 }
 
-/// Port of `graphNodeToJSONGraphNode` (JSON.hs:331-418).  `jgnMetadata` and
-/// `jgnColor` are omitted when absent (JSON.hs:200-207).
+/// Port of `graphNodeToJSONGraphNode` (JSON.hs:341-428).  `jgnMetadata` and
+/// `jgnColor` are omitted when absent (JSON.hs:201-208).
 fn json_node(node: &GNode, color_map: &NodeColorMap) -> Value {
     let nid = node.id.to_string();
     match &node.ty {
@@ -429,7 +437,7 @@ fn json_node(node: &GNode, color_map: &NodeColorMap) -> Value {
         ]),
         NodeType::Missing(hint) => {
             // HS ignores the recorded conclusion/premise index and always
-            // emits `c0` / `p0` here (JSON.hs:374-375).
+            // emits `c0` / `p0` here (JSON.hs:385).
             let stub =
                 |port: char| Value::Array(vec![json_stub_fact(format!("{}:{}0", nid, port))]);
             let (ty, concs, prems) = match hint {
@@ -481,7 +489,7 @@ fn json_edge(edge: &GEdge, rules: &NodeRules<'_>) -> Value {
     }
 }
 
-/// Port of `graphClusterToJSONGraphCluster` (JSON.hs:488-496).
+/// Port of `graphClusterToJSONGraphCluster` (JSON.hs:498-506).
 fn json_cluster(cluster: &Cluster, rules: &NodeRules<'_>, color_map: &NodeColorMap) -> Value {
     object([
         (
@@ -502,7 +510,7 @@ fn json_cluster(cluster: &Cluster, rules: &NodeRules<'_>, color_map: &NodeColorM
     ])
 }
 
-/// Port of `sequentToJSONGraph` (JSON.hs:510-529).
+/// Port of `sequentToJSONGraph` (JSON.hs:520-539).
 fn json_graph(label: &str, graph: &Graph<'_>, color_map: &NodeColorMap) -> Value {
     // One index over the original system's nodes for every edge of this graph.
     let rules = graph.system.node_rule_map();
@@ -512,7 +520,7 @@ fn json_graph(label: &str, graph: &Graph<'_>, color_map: &NodeColorMap) -> Value
             Value::Array(
                 order_abbreviations_for_json(&graph.abbreviations)
                     .into_iter()
-                    // `graphAbbrevtoJSONGraphAbbrev` (JSON.hs:499-506).
+                    // `graphAbbrevtoJSONGraphAbbrev` (JSON.hs:509-516).
                     .map(|(term, abbrev, expansion)| {
                         object([
                             ("jgaAbbrev", json_term(abbrev, true)),
@@ -565,7 +573,7 @@ fn json_graph(label: &str, graph: &Graph<'_>, color_map: &NodeColorMap) -> Value
     ])
 }
 
-/// Port of `sequentsToJSONPretty` (JSON.hs:553-558).
+/// Port of `sequentsToJSONPretty` (JSON.hs:564-569).
 ///
 /// Renders `{"graphs": [...]}` with aeson-pretty's default 4-space indent and
 /// NO trailing newline.  The node colour palette is keyed off each system's
@@ -593,20 +601,124 @@ pub fn sequents_to_json_pretty(
         })
         .collect();
     let root = object([("graphs", Value::Array(graphs))]);
-    // `removePseudoUnicode $ encodePretty graphJSON`: the `<`/`>` unescaping
-    // is a no-op against `serde_json`, whose output never contains the
-    // `<`/`>` escapes it rewrites (see the module docs).
+    // `removePseudoUnicode $ encodePretty graphJSON`.
     to_pretty_string(&root)
 }
 
-/// aeson-pretty `encodePretty` layout: 4-space indent, `": "` between key and
-/// value, empty arrays/objects inline, no trailing newline.
+/// aeson-pretty's indentation unit at `defConfig` (`confIndent = Spaces 4`).
+const INDENT: &str = "    ";
+
+/// Port of `Data.Aeson.Text.string` (aeson 2.1.2.1) — the escaper
+/// aeson-pretty's `fromValue` reaches for every string scalar and every
+/// object key by handing them to `Aeson.encodeToTextBuilder`.
+///
+/// Only `"`, `\` and the C0 controls are escaped at all: `"`, `\`, `\n`,
+/// `\r` and `\t` get short forms, and every other character below 0x20 —
+/// including `\x08` and `\x0c`, which JSON also spells `\b` and `\f` —
+/// takes the `\u00xx` form with LOWERCASE hex digits (`showHex`).
+/// Everything at or above 0x20 is passed through verbatim, so `<`, `>`,
+/// `&`, DEL and astral-plane characters all reach the wire as themselves;
+/// `removePseudoUnicode` therefore has no encoder-produced escape to undo
+/// (see [`to_pretty_string`]).
+fn escape_into(out: &mut String, s: &str) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c < '\u{20}' => {
+                let b = c as u32;
+                out.push_str("\\u00");
+                out.push(HEX[(b >> 4) as usize] as char);
+                out.push(HEX[(b & 0xf) as usize] as char);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+/// Port of aeson-pretty's `fromValue` / `fromCompound` at `defConfig`: an
+/// item list is `pNewline`-separated and indented one level deeper than its
+/// brackets, the closing bracket sits at the parent's indent, and an EMPTY
+/// container collapses to `[]` / `{}` with no newline inside.
+///
+/// The schema this module builds holds only strings, arrays, objects and the
+/// single `jgDirected: true`; `null` and numbers cannot occur in it.  Their
+/// arms below (numbers through `serde_json`'s own `Display`, which is not
+/// aeson-pretty's `confNumFormat` rendering) keep the writer total over
+/// `Value`.
+fn write_value(out: &mut String, v: &Value, level: usize) {
+    match v {
+        Value::Object(m) => {
+            write_compound(out, level, ('{', '}'), m, |out, (k, val), level| {
+                escape_into(out, k);
+                out.push_str(": ");
+                write_value(out, val, level);
+            });
+        }
+        Value::Array(a) => {
+            write_compound(out, level, ('[', ']'), a, |out, item, level| {
+                write_value(out, item, level);
+            });
+        }
+        Value::String(s) => escape_into(out, s),
+        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Value::Null => out.push_str("null"),
+        Value::Number(n) => out.push_str(&n.to_string()),
+    }
+}
+
+/// `fromCompound` (aeson-pretty): the bracket/indent frame shared by objects
+/// and arrays.  `item` writes one element at the already-indented cursor, at
+/// nesting depth `level + 1`.
+fn write_compound<T>(
+    out: &mut String,
+    level: usize,
+    (open, close): (char, char),
+    items: impl IntoIterator<Item = T>,
+    mut item: impl FnMut(&mut String, T, usize),
+) {
+    out.push(open);
+    let mut empty = true;
+    for (i, elem) in items.into_iter().enumerate() {
+        empty = false;
+        if i > 0 {
+            out.push(',');
+        }
+        out.push('\n');
+        for _ in 0..=level {
+            out.push_str(INDENT);
+        }
+        item(out, elem, level + 1);
+    }
+    if !empty {
+        out.push('\n');
+        for _ in 0..level {
+            out.push_str(INDENT);
+        }
+    }
+    out.push(close);
+}
+
+/// `removePseudoUnicode $ encodePretty v` (JSON.hs:228-239).
+///
+/// `encodePretty` is aeson-pretty at `defConfig` and `removePseudoUnicode` is
+/// two literal byte-substring rewrites over the WHOLE document, applied in the
+/// order the HS composition gives them: `\u003c` → `<` first, then
+/// `\u003e` → `>`.  Neither is string-aware, so a source string holding the
+/// six characters `\u003c` is escaped to `\\u003c` and then rewritten to the
+/// invalid-JSON `\<` — reproduced here rather than avoided.  Since the
+/// encoder itself never emits a `\u003c` / `\u003e` escape, that mangling is
+/// the pass's only observable effect.
 fn to_pretty_string(v: &Value) -> String {
-    let mut buf: Vec<u8> = Vec::new();
-    let formatter = serde_json::ser::PrettyFormatter::with_indent(b"    ");
-    let mut ser = serde_json::Serializer::with_formatter(&mut buf, formatter);
-    serde::Serialize::serialize(v, &mut ser).expect("serialising a serde_json::Value cannot fail");
-    String::from_utf8(buf).expect("serde_json emits UTF-8")
+    let mut out = String::new();
+    write_value(&mut out, v, 0);
+    out.replace("\\u003c", "<").replace("\\u003e", ">")
 }
 
 #[cfg(test)]
@@ -807,5 +919,107 @@ mod tests {
             )],
         );
         assert_eq!(out, include_str!("../../tests/assets/hsjson_simplify.json"));
+    }
+
+    // `Data.Aeson.Text.string` short-forms only `\"`, `\\`, `\n`, `\r`
+    // and `\t`; `<`, `>` and `&` all reach the wire literally.  0x08 and 0x0c
+    // take the generic `\u00xx` form rather than JSON's `\b` / `\f`, and the
+    // hex digits are lowercase.
+    #[test]
+    fn escapes_match_data_aeson_text() {
+        let label = "a&b<c>d\"e\\f\ng\rh\ti\u{0}j\u{8}k\u{c}l\u{1f}m";
+        let out = sequents_to_json_pretty(
+            &GraphOptions::default(),
+            &[(
+                label.to_string(),
+                &RenderSystem::from_prover(System::default()),
+            )],
+        );
+        assert_eq!(
+            out,
+            concat!(
+                "{\n",
+                "    \"graphs\": [\n",
+                "        {\n",
+                "            \"jgAbbrevs\": [],\n",
+                "            \"jgClusters\": [],\n",
+                "            \"jgDirected\": true,\n",
+                "            \"jgEdges\": [],\n",
+                "            \"jgLabel\": \"a&b<c>d\\\"e\\\\f\\ng\\rh\\ti\\u0000j\\u0008k\\u000cl\\u001fm\",\n",
+                "            \"jgNodes\": [],\n",
+                "            \"jgType\": \"Tamarin prover constraint system\"\n",
+                "        }\n",
+                "    ]\n",
+                "}",
+            )
+        );
+    }
+
+    // The escaper runs over every string in the document, not just the label.
+    // A pub-name literal carrying `&`, `<` and `>` is the reachable route:
+    // `singleQuotedString` (Token.hs:452-453) accepts every character but
+    // `'` and newline, and the name lands in `jgnLabel`, `jgnFactShow` and
+    // `jgnConst` alike — all of them literal on the wire.
+    #[test]
+    fn pub_name_specials_reach_the_wire_literally() {
+        use tamarin_theory::constraint::constraints::Goal;
+        use tamarin_theory::constraint::system::GoalStatus;
+        let mut sys = System::default();
+        let nid = LVar::new("i", LSort::Node, 0);
+        let fa: LNFact = Fact::new(
+            FactTag::Proto(
+                Multiplicity::Linear,
+                tamarin_term::intern::intern_str("Ev"),
+                1,
+            ),
+            vec![lit(Lit::Con(Name::new(NameTag::Pub, "a&b<c>d")))],
+        );
+        sys.goals_mut()
+            .push((Goal::Action(nid, fa), GoalStatus::default()));
+        let out = sequents_to_json_pretty(
+            &GraphOptions::default(),
+            &[("L".to_string(), &RenderSystem::from_prover(sys))],
+        );
+        assert!(
+            out.contains("\"jgnConst\": \"'a&b<c>d'\""),
+            "jgnConst: {out}"
+        );
+        assert!(
+            out.contains("\"jgnLabel\": \"Ev( 'a&b<c>d' )\""),
+            "jgnLabel: {out}"
+        );
+        assert!(
+            out.contains("\"jgnFactShow\": \"Ev( 'a&b<c>d' )\""),
+            "jgnFactShow: {out}"
+        );
+        // No `\u0026` anywhere: the writer must not have re-grown the
+        // over-escaping the oracle probe disproved.
+        assert!(!out.contains("\\u0026"), "{out}");
+    }
+
+    // `removePseudoUnicode` is a raw byte rewrite over the WHOLE document, not
+    // a string-aware pass: a label holding the six characters `\u003c` is
+    // escaped to `\\u003c` and the pass then eats the tail of that escape,
+    // leaving the invalid-JSON `\<`.  HS emits exactly this.
+    #[test]
+    fn pseudo_unicode_pass_mangles_a_literal_escape_in_the_payload() {
+        let out = sequents_to_json_pretty(
+            &GraphOptions::default(),
+            &[(
+                "x\\u003cy\\u003ez".to_string(),
+                &RenderSystem::from_prover(System::default()),
+            )],
+        );
+        assert!(out.contains("\"jgLabel\": \"x\\<y\\>z\","), "{out}");
+        assert!(serde_json::from_str::<Value>(&out).is_err());
+    }
+
+    // No traces at all: the empty array stays inline and the document is the
+    // same 20 bytes `--output-json` writes for a theory with nothing solved.
+    #[test]
+    fn empty_graph_list_is_twenty_bytes() {
+        let out = sequents_to_json_pretty(&GraphOptions::default(), &[]);
+        assert_eq!(out, "{\n    \"graphs\": []\n}");
+        assert_eq!(out.len(), 20);
     }
 }

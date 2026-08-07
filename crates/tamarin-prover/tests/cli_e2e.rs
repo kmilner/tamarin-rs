@@ -95,6 +95,15 @@ fn prove_chain_writes_output_with_verified_summary() {
         "output file should contain the completed chain proof; got:\n{}",
         body
     );
+    // HS writes `renderDoc d` VERBATIM to the `-o` file (`writeFileWithDirs`,
+    // Batch.hs:127); only the stdout arm goes through `putStrLn` (Batch.hs:133).
+    // The file therefore ends with the bytes `end` — no trailing newline
+    // (oracle-verified on this fixture and on the `-m` translate captures).
+    assert!(
+        body.ends_with("end"),
+        "-o file must end with `end`, no trailing newline; got tail: {:?}",
+        &body[body.len().saturating_sub(8)..]
+    );
 }
 
 #[test]

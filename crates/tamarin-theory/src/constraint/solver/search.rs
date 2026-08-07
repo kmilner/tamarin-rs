@@ -160,6 +160,51 @@ pub fn proof_status(node: &ProofNode) -> ProofStatus {
     s
 }
 
+/// HS `proofSystems` (Batch.hs:284-288): every solved constraint system
+/// in the tree, paired with its proof path (the case names from the
+/// root, outermost first).
+///
+/// ```text
+/// proofSystems (LNode (ProofStep (Finished Solved) (Just rootSystem)) _) = [([], rootSystem)]
+/// proofSystems (LNode (ProofStep _ _) children) =
+///   [(l : ls, system) | (l, subProof) <- M.toList children
+///                     , (ls, system) <- proofSystems subProof ]
+/// ```
+///
+/// The first equation matches REGARDLESS of children (`_`) and does not
+/// recurse into them.  `Just rootSystem` is RS `annotated == true`: a
+/// `Finished(Solved)` step whose annotation was lost (HS `Nothing`,
+/// printed `/* unannotated */`) falls through to the second equation and
+/// is recursed into like any other node.  `M.toList` is ascending
+/// `CaseName` order == `BTreeMap<String>` iteration order.
+///
+/// The systems only survive a `--prove` run when
+/// [`set_keep_solved_sys`] was enabled beforehand; on the stored-proof
+/// replay path (`replay::check_and_extend_lemma_in_session`) they are
+/// always live.
+pub fn solved_systems(node: &ProofNode) -> Vec<(Vec<String>, &System)> {
+    let mut out = Vec::new();
+    let mut path = Vec::new();
+    collect_solved_systems(node, &mut path, &mut out);
+    out
+}
+
+fn collect_solved_systems<'a>(
+    node: &'a ProofNode,
+    path: &mut Vec<String>,
+    out: &mut Vec<(Vec<String>, &'a System)>,
+) {
+    if matches!(node.method, ProofMethod::Finished(MethodResult::Solved)) && node.annotated {
+        out.push((path.clone(), &node.sys));
+        return;
+    }
+    for (case, child) in &node.children {
+        path.push(case.clone());
+        collect_solved_systems(child, path, out);
+        path.pop();
+    }
+}
+
 // --- Cached kill-switch / debug env flags -------------------------------
 // `expand`/`expand_inner` run once per proof-tree node (thousands of
 // times per lemma); these env vars are constant for the process, so cache
@@ -191,6 +236,28 @@ fn keep_sys() -> bool {
     }
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("TAM_RS_KEEP_SYS").is_some())
+}
+
+/// Narrow sibling of [`KEEP_SYS_OVERRIDE`]: retain the `System` of
+/// `Finished(Solved)` nodes ONLY.  HS `outputTraces` (Batch.hs:262-288)
+/// reads exactly the `ProofStep (Finished Solved) (Just sys)` nodes, so
+/// batch trace output (`--output-dot` / `--output-json`) needs those
+/// systems and no others.  Unlike [`set_keep_sys`] this leaves peak RSS
+/// at the `--prove` baseline: a solved node is a leaf, and
+/// `extract_solved_path` (HS `extractSolved`) keeps at most one per
+/// lemma.  Default `false` → CLI behaviour unchanged.
+static KEEP_SOLVED_SYS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Enable/disable `Finished(Solved)`-node `System` retention across the
+/// whole process.  Call before any `run_proof_search`.
+pub fn set_keep_solved_sys(retain: bool) {
+    KEEP_SOLVED_SYS.store(retain, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether solved-node `System`s are retained (see [`KEEP_SOLVED_SYS`]).
+#[inline]
+pub fn keep_solved_sys() -> bool {
+    KEEP_SOLVED_SYS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Per-child parallel expansion is ON by default;
@@ -835,16 +902,34 @@ fn expand(
     // After expansion, `sys` is no longer read EXCEPT on
     // `Sorry: depth limit` leaves, which `re_expand_depth_limited`
     // (defined below in this file) re-runs `expand` on during the next
-    // ID-DFS iteration — those need their sys.  Everything else
-    // (resolved leaves, interior nodes, terminal Sorrys) can drop.
+    // ID-DFS iteration — those need their sys — and on `Finished(Solved)`
+    // leaves when batch trace output asked for them via
+    // `set_keep_solved_sys`.  Everything else (other resolved leaves,
+    // interior nodes, terminal Sorrys) can drop.  See
+    // `drop_sys_after_expand`.
     // Profile: csf17::injectivity 1010-step proof tree holds ~200 MB
     // peak; this drain reduces peak RSS to ~14 MB (~ same as small
     // lemmas — most of HS's residue is the closed branches we can
     // now free).
-    let keep_for_redoexpand = is_depth_limited(node);
-    if !keep_for_redoexpand && !keep_sys() {
+    if drop_sys_after_expand(node, keep_sys(), keep_solved_sys()) {
         node.sys = crate::constraint::system::System::default();
     }
+}
+
+/// The [`expand`] drop decision, as a pure predicate over the node and
+/// the two retention switches (`keep_all` = [`keep_sys`], `keep_solved`
+/// = [`keep_solved_sys`]).  `sys` survives when the node is a
+/// `Sorry: depth limit` frontier stub (re-expanded next ID-DFS
+/// iteration), when every node is retained, or when solved-node
+/// retention is on and this node is `Finished(Solved)` — HS
+/// `outputTraces`' selector (Batch.hs:285).  Keyed on `method`, not on
+/// the aggregate [`NodeStatus`], which rolls up from children and would
+/// retain interior nodes too.
+fn drop_sys_after_expand(node: &ProofNode, keep_all: bool, keep_solved: bool) -> bool {
+    let keep_for_redoexpand = is_depth_limited(node);
+    let keep_for_traces =
+        keep_solved && matches!(node.method, ProofMethod::Finished(MethodResult::Solved));
+    !keep_for_redoexpand && !keep_all && !keep_for_traces
 }
 
 fn expand_inner(
@@ -1638,5 +1723,230 @@ mod tests {
             root.status,
             NodeStatus::Contradictory | NodeStatus::Sorry | NodeStatus::Solved
         ));
+    }
+
+    // --- `solved_systems` (HS `proofSystems`) + solved-sys retention ----
+    //
+    // Maude-free: these drive hand-built proof trees and the pure
+    // `drop_sys_after_expand` predicate, so they run unconditionally.
+
+    /// A `System` tagged with `id` recoverable by [`sys_tag`], so a walk
+    /// result can be matched to the node it came from.
+    fn tagged_sys(id: usize) -> System {
+        let mut sys = System::empty();
+        for _ in 0..id {
+            sys.solved_formulas_mut()
+                .push(std::sync::Arc::new(crate::guarded::gtrue()));
+        }
+        sys
+    }
+
+    fn sys_tag(sys: &System) -> usize {
+        sys.solved_formulas.len()
+    }
+
+    fn node(
+        method: ProofMethod,
+        id: usize,
+        children: Vec<(&str, ProofNode)>,
+        annotated: bool,
+    ) -> ProofNode {
+        ProofNode {
+            method,
+            sys: tagged_sys(id),
+            children: children
+                .into_iter()
+                .map(|(n, c)| (n.to_string(), c))
+                .collect(),
+            status: NodeStatus::Solved,
+            annotated,
+        }
+    }
+
+    fn solved(id: usize) -> ProofNode {
+        node(
+            ProofMethod::Finished(MethodResult::Solved),
+            id,
+            Vec::new(),
+            true,
+        )
+    }
+
+    fn walk(root: &ProofNode) -> Vec<(Vec<String>, usize)> {
+        solved_systems(root)
+            .into_iter()
+            .map(|(p, s)| (p, sys_tag(s)))
+            .collect()
+    }
+
+    #[test]
+    fn solved_systems_root_leaf_yields_empty_path() {
+        assert_eq!(walk(&solved(3)), vec![(Vec::<String>::new(), 3)]);
+    }
+
+    #[test]
+    fn solved_systems_walks_children_in_btreemap_order() {
+        // Insertion order deliberately reversed w.r.t. the expected
+        // output: `M.toList` / `BTreeMap` iterate ascending by key.
+        let root = node(
+            ProofMethod::Simplify,
+            9,
+            vec![
+                (
+                    "case_2",
+                    node(ProofMethod::Induction, 8, vec![("z", solved(2))], true),
+                ),
+                (
+                    "case_1",
+                    node(
+                        ProofMethod::Induction,
+                        7,
+                        vec![("b", solved(4)), ("a", solved(1))],
+                        true,
+                    ),
+                ),
+                (
+                    "",
+                    node(ProofMethod::Simplify, 6, vec![("k", solved(5))], true),
+                ),
+            ],
+            true,
+        );
+        assert_eq!(
+            walk(&root),
+            vec![
+                (vec![String::new(), "k".to_string()], 5),
+                (vec!["case_1".to_string(), "a".to_string()], 1),
+                (vec!["case_1".to_string(), "b".to_string()], 4),
+                (vec!["case_2".to_string(), "z".to_string()], 2),
+            ]
+        );
+    }
+
+    #[test]
+    fn solved_systems_skips_unannotated_solved_node() {
+        // HS's first equation needs `Just sys`; an unannotated
+        // (`Nothing`) solved step falls through to the recursive
+        // equation, so its own system is dropped but its children are
+        // still walked.
+        let unannotated = node(
+            ProofMethod::Finished(MethodResult::Solved),
+            5,
+            vec![("c", solved(6))],
+            false,
+        );
+        let root = node(ProofMethod::Simplify, 9, vec![("a", unannotated)], true);
+        assert_eq!(
+            walk(&root),
+            vec![(vec!["a".to_string(), "c".to_string()], 6)]
+        );
+        // A childless unannotated solved node contributes nothing.
+        let bare = node(
+            ProofMethod::Finished(MethodResult::Solved),
+            5,
+            Vec::new(),
+            false,
+        );
+        assert!(walk(&bare).is_empty());
+    }
+
+    #[test]
+    fn solved_systems_does_not_recurse_into_solved_node() {
+        // Batch.hs:285 matches `_` children and returns immediately: the
+        // solved node's own system is the only result, its solved
+        // descendants are invisible.
+        let root = node(
+            ProofMethod::Finished(MethodResult::Solved),
+            1,
+            vec![("a", solved(2)), ("b", solved(3))],
+            true,
+        );
+        assert_eq!(walk(&root), vec![(Vec::<String>::new(), 1)]);
+    }
+
+    #[test]
+    fn solved_systems_other_finished_kinds_are_not_collected() {
+        let root = node(
+            ProofMethod::Simplify,
+            9,
+            vec![
+                (
+                    "a",
+                    node(
+                        ProofMethod::Finished(MethodResult::Unfinishable),
+                        1,
+                        Vec::new(),
+                        true,
+                    ),
+                ),
+                ("b", node(ProofMethod::Sorry(None), 2, Vec::new(), true)),
+                ("c", node(ProofMethod::Invalidated, 3, Vec::new(), true)),
+            ],
+            true,
+        );
+        assert!(walk(&root).is_empty());
+    }
+
+    #[test]
+    fn drop_sys_after_expand_retains_only_solved_when_switch_on() {
+        let solved_leaf = solved(1);
+        let simplify = node(ProofMethod::Simplify, 1, Vec::new(), true);
+        let contradictory = node(
+            ProofMethod::Finished(MethodResult::Contradictory(None)),
+            1,
+            Vec::new(),
+            true,
+        );
+        // Switch off: everything but a depth-limit stub is dropped.
+        for n in [&solved_leaf, &simplify, &contradictory] {
+            assert!(drop_sys_after_expand(n, false, false));
+        }
+        // Switch on: the solved node keeps its system, ONLY it.
+        assert!(!drop_sys_after_expand(&solved_leaf, false, true));
+        assert!(drop_sys_after_expand(&simplify, false, true));
+        assert!(drop_sys_after_expand(&contradictory, false, true));
+        // An unannotated solved node still counts here — `expand` never
+        // produces one, and `solved_systems` filters it out anyway.
+        let unannotated = node(
+            ProofMethod::Finished(MethodResult::Solved),
+            1,
+            Vec::new(),
+            false,
+        );
+        assert!(!drop_sys_after_expand(&unannotated, false, true));
+        // `keep_sys` (interactive server) still retains everything.
+        assert!(!drop_sys_after_expand(&simplify, true, false));
+    }
+
+    #[test]
+    fn drop_sys_after_expand_keeps_depth_limited_frontier() {
+        let mut stub = node(
+            ProofMethod::Sorry(Some("depth limit".into())),
+            1,
+            Vec::new(),
+            true,
+        );
+        stub.status = NodeStatus::Sorry;
+        assert!(!drop_sys_after_expand(&stub, false, false));
+        // A terminal (non-frontier) sorry is still dropped.
+        let terminal = node(
+            ProofMethod::Sorry(Some("budget exhausted".into())),
+            1,
+            Vec::new(),
+            true,
+        );
+        assert!(drop_sys_after_expand(&terminal, false, false));
+    }
+
+    #[test]
+    fn keep_solved_sys_switch_round_trips() {
+        // Process-global, like `set_keep_sys`; restore it so a
+        // concurrently running proof search sees the default.
+        let before = keep_solved_sys();
+        set_keep_solved_sys(true);
+        assert!(keep_solved_sys());
+        set_keep_solved_sys(false);
+        assert!(!keep_solved_sys());
+        set_keep_solved_sys(before);
     }
 }

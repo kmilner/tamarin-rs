@@ -98,6 +98,66 @@ pub fn lift_rule_restrictions(thy: &mut p::Theory) -> Result<(), ExpandError> {
     Ok(())
 }
 
+/// Free variables of each rule's `_restrict` formulas, keyed by rule name.
+///
+/// HS keeps the (let-applied, predicate-unexpanded) `_restrict` formulas on
+/// the rule as `preRestriction` forever: the parser stores them
+/// (Parser/Rule.hs:135) and `liftedAddProtoRule` (Parser.hs:166-193) appends
+/// the generated actions without clearing the field.  `HasFrees
+/// ProtoRuleEInfo` (Rule.hs:491-498) folds over those formulas while `Apply
+/// ProtoRuleEInfo` is the identity (Rule.hs:500-501), so every closed rule
+/// carries their frees, never substituted.  RS clears the parsed
+/// `embedded_restrictions` in [`lift_rule_restrictions`]; this helper — run
+/// BEFORE the lift — captures the same frees for the one downstream consumer
+/// whose bytes depend on them: partial evaluation's rename/dedup
+/// (`tools::abstract_interpretation`).
+///
+/// Variable conversion mirrors elaboration's rule-body conversion
+/// (`elaborate::sort_of`) so the collected frees share identity with the
+/// elaborated rule's variables.  Bare nullary constants — which HS resolves
+/// to 0-ary applications at parse time (`nullaryApp`) but the RS parser
+/// leaves as untagged vars — are resolved away first, exactly as
+/// `lift_one_rule` does before its own rewrite.
+pub fn restriction_frees_by_rule(
+    thy: &p::Theory,
+) -> BTreeMap<String, Vec<tamarin_term::lterm::LVar>> {
+    let nullary = crate::elaborate::nullary_fun_names(&thy.items);
+    let mut map: BTreeMap<String, Vec<tamarin_term::lterm::LVar>> = BTreeMap::new();
+    for item in &thy.items {
+        let p::TheoryItem::Rule(rule) = item else {
+            continue;
+        };
+        if rule.embedded_restrictions.is_empty() {
+            continue;
+        }
+        // Same let application as `lift_one_rule` (HS applies the let block
+        // to the restriction formulas at parse, Parser/Rule.hs:132-135).
+        let rule = if rule.let_block.is_empty() {
+            rule.clone()
+        } else {
+            crate::elaborate::apply_let_block(rule)
+        };
+        let mut frees: Vec<tamarin_term::lterm::LVar> = Vec::new();
+        for phi in &rule.embedded_restrictions {
+            let phi = resolve_nullary_constants(phi, &nullary);
+            for v in frees_list(&phi) {
+                let lv = tamarin_term::lterm::LVar::new(
+                    &v.name,
+                    crate::elaborate::sort_of(&v.sort),
+                    v.idx,
+                );
+                if !frees.contains(&lv) {
+                    frees.push(lv);
+                }
+            }
+        }
+        if !frees.is_empty() {
+            map.insert(rule.name.clone(), frees);
+        }
+    }
+    map
+}
+
 /// Lift one rule's embedded restrictions.  Returns the generated
 /// restrictions (in `1..n` order) and the rewritten rule.
 ///

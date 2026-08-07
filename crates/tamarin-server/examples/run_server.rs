@@ -67,6 +67,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         max_steps: 500,
         derivcheck_timeout: 5,
         stop_on_trace: None,
+        dot_path: "dot".to_string(),
+        json_path: None,
     };
     tamarin_server::serve(cfg, theories).await
 }

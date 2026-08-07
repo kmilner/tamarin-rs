@@ -139,7 +139,7 @@ fn surface_attrs(attr: &crate::rule::RuleAttributes) -> Vec<p::RuleAttr> {
         // `parseAndIgnore`s a user-written `process=` (Parser/Rule.hs:68-93,
         // see line 72), as does RS's.
         out.push(p::RuleAttr::Process(
-            crate::pretty_sapic::pretty_sapic_top_level(proc),
+            crate::pretty_sapic::pretty_sapic_top_level_attr(proc),
         ));
     }
     if attr.ignore_deriv_checks {

@@ -1247,7 +1247,7 @@ impl ProofContext {
 /// 2. Lift to the premise-solving relation by pairing every `(ruTo,
 ///    premIdx)` with every premise of `ruFrom`:
 ///    `((ruTo, premIdx), (ruFrom, fromPrem))`
-/// 3. `dfs_loop_breakers` returns the set of `(rule_name, prem_idx)`
+/// 3. `dfs_loop_breakers` returns the set of `(rule, prem_idx)`
 ///    targets to mark — the premises whose goals should be tagged
 ///    loop-breaker.
 pub fn annotate_loop_breakers(
@@ -1255,17 +1255,32 @@ pub fn annotate_loop_breakers(
     maude: &tamarin_term::maude_proc::MaudeHandle,
 ) {
     use crate::rule::PremIdx;
-    use crate::rule::ProtoRuleName;
 
-    // Helper: stable string key for a rule by its `ProtoRuleName`.
-    fn rule_key(r: &OpenProtoRule) -> String {
-        match &r.rule.info.name {
-            ProtoRuleName::Stand(s) => format!("S:{}", s),
-            ProtoRuleName::Fresh => "Fresh".to_string(),
-        }
+    // HS keys the relation nodes by the WHOLE closed theory item under its
+    // derived `Ord` (`useAutoLoopBreakersAC`'s carrier `a`, matched back to
+    // rules with full `ru == ru'` equality, LoopBreakers.hs:72-81) — NOT by
+    // rule name.  After partial evaluation several refined rules share one
+    // name with different bodies; each is its own graph node in HS, while a
+    // name key would collapse them and fabricate cycles (e.g. the refined
+    // `ChanIn_A` rules of csf20-disputeResolution/PR1_ShHh.spthy, where the
+    // oracle renders zero breakers).  Key each rule by the index of the
+    // first structurally-equal rule: structurally identical items collapse
+    // exactly as HS's `Ord`-keyed sets collapse them, and everything else
+    // stays distinct.  `loop_breakers` is deliberately NOT part of the
+    // identity — HS compares the pre-annotation items, where every
+    // `pracLoopBreakers` is still `[]`.
+    let same_item = |a: &OpenProtoRule, b: &OpenProtoRule| -> bool {
+        a.rule == b.rule
+            && a.variant_substs == b.variant_substs
+            && a.abstracted_rule == b.abstracted_rule
+    };
+    let mut keys: Vec<usize> = Vec::with_capacity(rules.len());
+    for i in 0..rules.len() {
+        let k = (0..i)
+            .find(|&j| same_item(&rules[j], &rules[i]))
+            .unwrap_or(i);
+        keys.push(k);
     }
-    // Indexed view.
-    let keys: Vec<String> = rules.iter().map(rule_key).collect();
 
     // HS `premSolvingRelAC` builds the dataflow relation over `instances`:
     //   `instances ru fa = [ apply (subst `freshToFreeAvoiding` fa) fa
@@ -1359,7 +1374,7 @@ pub fn annotate_loop_breakers(
         .iter()
         .map(|o| o.abstracted_rule.as_ref().unwrap_or(&o.rule))
         .collect();
-    let mut relation: Vec<((String, PremIdx), (String, PremIdx))> = Vec::new();
+    let mut relation: Vec<((usize, PremIdx), (usize, PremIdx))> = Vec::new();
     for (i_from, _ru_from) in rules.iter().enumerate() {
         let ru_from_ac = ac_rules[i_from];
         for (i_to, _ru_to) in rules.iter().enumerate() {
@@ -1414,18 +1429,17 @@ pub fn annotate_loop_breakers(
                     continue;
                 }
                 for (from_prem_idx, _) in ru_from_ac.enumerate_premises() {
-                    relation.push((
-                        (keys[i_to].clone(), to_prem_idx),
-                        (keys[i_from].clone(), from_prem_idx),
-                    ));
+                    relation.push(((keys[i_to], to_prem_idx), (keys[i_from], from_prem_idx)));
                 }
             }
         }
     }
     // Run DFS loop-breaker selection. `dfsLoopBreakers` lives in HS
     // `Data.DAG.Simple`, ported to `tamarin_utils::dag`.
-    let breakers: Vec<(String, PremIdx)> = tamarin_utils::dag::dfs_loop_breakers(&relation);
-    // Annotate each rule's `loop_breakers` with the picked premises.
+    let breakers: Vec<(usize, PremIdx)> = tamarin_utils::dag::dfs_loop_breakers(&relation);
+    // Annotate each rule's `loop_breakers` with the picked premises (HS
+    // `[ u | (ru', u) <- breakers, ru == ru' ]` — equal items share one
+    // node and therefore one breaker set).
     for (k, ru) in keys.iter().zip(rules.iter_mut()) {
         ru.loop_breakers = breakers
             .iter()

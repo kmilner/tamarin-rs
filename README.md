@@ -287,16 +287,27 @@ refined sources are computed once and shared across lemmas.
   `dfs`/`bfs`/`seqdfs`/`sorry`/`none` — including in-file
   `configuration:` blocks), `-D` defines, `--parse-only`,
   `--precompute-only`, `-O/--output`, `--quiet`, `-v/--verbose`,
-  `--quit-on-warning`; exit codes and summary lines mirror HS.
+  `--quit-on-warning`, `--saturation`, `--open-chains`,
+  `--partial-evaluation=summary|verbose` (abstract-interpretation
+  fixpoint, refined-rule re-emission, stderr step trace),
+  `--output-json`/`--output-dot` (solved-trace export; JSON is
+  byte-exact aeson-pretty, dot labels/framing byte-exact over the
+  web renderer's body dialect), `-m/--output-module` for
+  `spthy`/`spthytyped`/`msr` (translate-only mode), and the
+  `interactive`-mode `--with-dot`/`--with-json`/`--no-compress`;
+  exit codes and summary lines mirror HS.
 - **Subcommands:** `interactive` (HTTP server), `variants` (DH/BP
   intruder-rule variants dump), `test` (install self-check).
 
 ## Not yet ported
 
 - **`diff(...)` / `--diff`** — observational-equivalence mode.
-- Parse-only CLI flags: `--saturation`, `--open-chains`,
-  `--partial-evaluation`, `--replication-bound`;
-  `--output-json`/`--output-dot` write stubs and `--output-module=…` errors.
+- Export modules: `-m proverif`/`proverifequiv`/`deepsec` and their
+  satellite flags (`--replication-bound`, the `--proverif-no-*`
+  family) — the HS `Export.hs` backend. Note the pinned upstream
+  oracle itself crashes on all 21 of its own export examples (the
+  `dest-*` builtins bug), so there is currently no oracle output to
+  port against.
 
 Theories using these features are tracked in `scripts/file_flags.tsv` and
 re-enter the gate automatically once the feature lands.
