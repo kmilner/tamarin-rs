@@ -154,7 +154,7 @@ impl PartialEval {
     /// exact match against `summary` / `verbose`.  `None` is HS's
     /// `ArgumentError "partial-evaluation: unknown option"` branch, which the
     /// port raises from the batch run rather than here — see
-    /// [`Args::partial_evaluation_raw`].
+    /// [`Args::partial_evaluation`].
     fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "summary" => Some(PartialEval::Summary),
@@ -212,17 +212,17 @@ pub struct Args {
     pub stop_on_trace: Option<StopOnTrace>,
     pub bound: Option<u32>,
     pub heuristic: Option<String>,
-    /// The resolved `--partial-evaluation` style; `None` when the flag is
-    /// absent OR its value is unknown — see [`Args::partial_evaluation_raw`].
-    pub partial_evaluation: Option<PartialEval>,
-    /// The raw `--partial-evaluation` value as given.  HS cmdargs accepts any
-    /// string here; the `ArgumentError "partial-evaluation: unknown option"`
-    /// only fires when `mkTheoryLoadOptions` is forced (TheoryLoader.hs:
-    /// 354-358) — inside the batch run, after the maude banner, dying via
-    /// `error e` at Batch.hs:163:33.  `parse_args` mirrors that laziness:
-    /// it records the raw value and leaves the rejection to `run_batch`
-    /// (`Some` here + `None` in `partial_evaluation` = unknown value).
-    pub partial_evaluation_raw: Option<String>,
+    /// `--partial-evaluation`: absent (`None`), resolved to a style
+    /// (`Some(Ok(_))`), or given with an unknown value (`Some(Err(()))`).
+    ///
+    /// HS cmdargs accepts any string here; the `ArgumentError
+    /// "partial-evaluation: unknown option"` only fires when
+    /// `mkTheoryLoadOptions` is forced (TheoryLoader.hs:354-358) — inside the
+    /// batch run, after the maude banner, dying via `error e` at
+    /// Batch.hs:163:33.  `parse_args` mirrors that laziness: it records the
+    /// rejection and leaves the death to `run_batch`.  The rejected string
+    /// itself never reaches the message, so it is not kept.
+    pub partial_evaluation: Option<Result<PartialEval, ()>>,
     pub defines: Vec<String>,
     pub diff: bool,
     pub quit_on_warning: bool,
@@ -314,7 +314,6 @@ impl Default for Args {
             bound: None,
             heuristic: None,
             partial_evaluation: None,
-            partial_evaluation_raw: None,
             defines: Vec::new(),
             diff: false,
             quit_on_warning: false,
@@ -515,10 +514,9 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                 "partial-evaluation" => {
                     // flagOpt "summary" (TheoryLoader.hs:126-131); cmdargs
                     // accepts any value — the unknown-option rejection is
-                    // deferred to the run (see `Args::partial_evaluation_raw`).
+                    // deferred to the run (see `Args::partial_evaluation`).
                     let v = flag_opt(val_inline, "summary");
-                    args.partial_evaluation = PartialEval::parse(&v);
-                    args.partial_evaluation_raw = Some(v);
+                    args.partial_evaluation = Some(PartialEval::parse(&v).ok_or(()));
                 }
                 "defines" => {
                     // flagOpt "" — bare `-D`/`--defines` records the empty

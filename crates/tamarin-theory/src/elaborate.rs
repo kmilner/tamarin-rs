@@ -1330,11 +1330,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             p::TheoryItem::Macros(macros) => {
                 let mut ms = Vec::new();
                 for m in macros {
-                    let args: Vec<LVar> = m
-                        .args
-                        .iter()
-                        .map(|v| LVar::new(v.name.clone(), sort_of(&v.sort), v.idx))
-                        .collect();
+                    let args: Vec<LVar> = m.args.iter().map(varspec_to_lvar).collect();
                     // HS `macro` parses the body with `msetterm False llit`
                     // (Macro.hs:41), which has no pattern-match (`=t`)
                     // production, so a body that converts to a `PatMatch`
@@ -1849,6 +1845,15 @@ pub(crate) fn sort_of(s: &p::SortHint) -> LSort {
             LSort::Msg
         }
     }
+}
+
+/// A parse-time variable occurrence as the solver's `LVar`: the surface sort
+/// hint resolved through [`sort_of`], name and index carried over.  The
+/// SAPIC-typed variant wraps this in a `SapicLVar` with the `:type`
+/// annotation; the `VarSpec.typ` field has no `LVar` counterpart and is
+/// dropped here.
+pub(crate) fn varspec_to_lvar(v: &p::VarSpec) -> LVar {
+    LVar::new(&v.name, sort_of(&v.sort), v.idx)
 }
 
 /// Convert an `LNTerm` back to a parser-AST term. Used when we
@@ -2597,8 +2602,7 @@ pub fn term_to_lnterm(t: &p::Term) -> Option<tamarin_term::lterm::LNTerm> {
                 .with_ndc(funs.user_fun_ndc(&v.name));
                 return Some(f_app_no_eq(sym, vec![]));
             }
-            let lv = LVar::new(v.name.clone(), sort_of(&v.sort), v.idx);
-            Some(Term::Lit(Lit::Var(lv)))
+            Some(Term::Lit(Lit::Var(varspec_to_lvar(v))))
         };
     with_user_fun_sets(|funs| term_to_vterm(t, &mk_var, funs))
 }
@@ -2639,8 +2643,10 @@ pub fn term_to_sapic_term(t: &p::Term) -> Option<crate::sapic::SapicTerm> {
             .with_ndc(funs.user_fun_ndc(&v.name));
             return Some(f_app_no_eq(sym, vec![]));
         }
-        let lv = LVar::new(v.name.clone(), sort_of(&v.sort), v.idx);
-        Some(Term::Lit(Lit::Var(SapicLVar::new(lv, v.typ.clone()))))
+        Some(Term::Lit(Lit::Var(SapicLVar::new(
+            varspec_to_lvar(v),
+            v.typ.clone(),
+        ))))
     };
     with_user_fun_sets(|funs| term_to_vterm(t, &mk_var, funs))
 }

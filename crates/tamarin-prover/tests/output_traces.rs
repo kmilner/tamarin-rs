@@ -23,8 +23,11 @@
 //! SKIPS every solved-trace pin here and reports green; run with
 //! `MAUDE_PATH=/path/to/maude cargo test -p tamarin-prover`.
 
+mod common;
+
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+use common::{fixture, maude_available};
 
 /// The 186-byte in-repo fixture: two rules and one exists-trace lemma
 /// `chain`, satisfied by the theory, so `--prove=chain` yields exactly one
@@ -43,26 +46,6 @@ const SECOND_RECV: &str = "theory SecondRecv\nbegin\n\nrule Send:\n  \
 /// separator between `chain` and the proof path: the root's only case name is
 /// the empty string, so `intercalate "-" ["", "Send"]` contributes `-Send`.
 const SR_LABEL: &str = "trace_SingleRecv_SL2-AS0-CL0-A1-C1-NB_chain-Send";
-
-fn maude_available() -> bool {
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        return std::path::Path::new(&p).exists();
-    }
-    for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
-        if std::path::Path::new(c).exists() {
-            return true;
-        }
-    }
-    false
-}
-
-fn fixture(name: &str) -> PathBuf {
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.push("tests");
-    p.push("fixtures");
-    p.push(name);
-    p
-}
 
 /// A fresh per-test temp dir holding the two trace paths.
 struct Case {
@@ -90,23 +73,14 @@ impl Case {
     }
 
     /// Run the binary with both trace flags plus `extra`, returning the exit
-    /// code.  `--with-maude` is threaded from `MAUDE_PATH` when set, matching
-    /// the other e2e suites.
+    /// code.  The trace flags precede `extra` so a test can still override
+    /// them positionally.
     fn run(&self, extra: &[&str], inputs: &[&Path]) -> i32 {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
-        if let Ok(p) = std::env::var("MAUDE_PATH") {
-            cmd.arg(format!("--with-maude={p}"));
-        }
-        cmd.arg(format!("--output-json={}", self.json.display()));
-        cmd.arg(format!("--output-dot={}", self.dot.display()));
-        for e in extra {
-            cmd.arg(e);
-        }
-        for i in inputs {
-            cmd.arg(i);
-        }
-        let out = cmd.output().expect("spawn tamarin-rs");
-        out.status.code().unwrap_or(-1)
+        let json = format!("--output-json={}", self.json.display());
+        let dot = format!("--output-dot={}", self.dot.display());
+        let mut flags: Vec<&str> = vec![&json, &dot];
+        flags.extend_from_slice(extra);
+        common::run_binary(&flags, inputs).0
     }
 
     fn assert_neither_exists(&self, mode: &str) {

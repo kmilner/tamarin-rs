@@ -1,16 +1,18 @@
 # Documented pre-existing residuals for the parity sweeps (sweep_common.sh
 # apply_ledger). A DIFF/ERROR row whose file is listed here for its sweep is
-# reported LEDGERED; a listed file that comes back OK is flagged LEDGER-STALE
-# so the entry can be dropped. Columns (tab-separated):
-#   sweep	path relative to tamarin-prover/	class	note
+# reported LEDGERED; an entry none of whose rows diverged is flagged
+# LEDGER-STALE so it can be dropped. Columns (tab-separated):
+#   sweep	path relative to tamarin-prover/	class	note	[sub-unit]
+#
+# The optional 5th column narrows an entry to ONE sub-unit of the file — for
+# the module sweep, one of spthy/spthytyped/msr. Left empty (or absent) the
+# entry covers every row of the file, so a file ledgered for `msr` only still
+# reports a fresh `spthy` divergence as DIFF.
 #
 # Classes:
 #   stderr-oracle-calls    HS derivation checks invoke the theory's oracle
 #                          heuristic and emit ">>>> START ... Oracle call"
 #                          stderr blocks; RS deriv checks never call oracles.
-#   stderr-openchains-double  RS emits "[Open Chains] Too many chain
-#                          constraints" twice where HS emits it once (module
-#                          sweep collapses it; pe sweep ledgers it).
 #   capacity               RS aborts (rc 134, stack/OOM at the 16GiB guard) or
 #                          both sides exhaust the 600s retry cap.
 #   hs-timeout             HS cannot load the file inside the cap while RS
@@ -25,7 +27,6 @@
 #                          lines on stderr that RS does not.
 #
 # pe sweep
-pe	examples/classic/TLS_Handshake.spthy	stderr-openchains-double	pe path has no nerr() collapse
 pe	examples/features/heuristic/OracleRanking.spthy	stderr-oracle-calls	-
 pe	examples/features/configuration/configuration.spthy	stderr-saturating-sources	HS prints "[Saturating Sources] Done" lines RS does not
 pe	examples/thesis-LaraSchmid-evoting/chapter3_Alethea/aletheaD_sel_ShHh.spthy	stderr-oracle-calls	-
@@ -45,12 +46,12 @@ module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-m
 module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-2.spthy	stderr-oracle-calls	-
 module	examples/features/heuristic/OracleRanking.spthy	stderr-oracle-calls	-
 module	examples/features/macros/MacroTestWithOracleRanking.spthy	stderr-oracle-calls	-
-module	examples/features/noise/secrecy_4_passiveINpsk1_proof.spthy	stored-proof-echo	spthy echo only
+module	examples/features/noise/secrecy_4_passiveINpsk1_proof.spthy	stored-proof-echo	echo divergence	spthy
 module	examples/sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-5-fixed.spthy	capacity	deep process recursion, rs=134 at plain load
-module	examples/sapic/export/5G_AKA/5G_AKA.spthy	sapic-export-echo	-
-module	examples/sapic/export/ExistingSapicModels/AKE.spthy	sapic-export-echo	msr only
-module	examples/sapic/export/KEMTLS/kemtls-noaead.spthy	sapic-export-echo	msr only
-module	examples/sapic/export/KEMTLS/kemtls.spthy	sapic-export-echo	msr only
+module	examples/sapic/export/5G_AKA/5G_AKA.spthy	sapic-export-echo	all three modules
+module	examples/sapic/export/ExistingSapicModels/AKE.spthy	sapic-export-echo	-	msr
+module	examples/sapic/export/KEMTLS/kemtls-noaead.spthy	sapic-export-echo	-	msr
+module	examples/sapic/export/KEMTLS/kemtls.spthy	sapic-export-echo	-	msr
 #
 # json sweep
 json	case-studies-regression/accountability/csf21-acc-unbounded/previous/whodunit_analyzed.spthy	capacity	both sides hit the cap

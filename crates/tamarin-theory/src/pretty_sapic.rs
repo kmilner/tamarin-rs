@@ -68,7 +68,10 @@ fn render_sapic(d: Doc) -> String {
 }
 
 /// `show :: SapicLVar` (Term.hs:108-110): `show lvar (++ ":" ++ type)`.
-fn show_sapic_lvar(v: &SapicLVar) -> String {
+/// Also the typed-overlay process-def formal printer in `pretty_theory`, over
+/// the post-`typeTheoryEnv` `SapicLVar`s (whose indices are the
+/// `renameUnique` fresh ones, e.g. `c.1`).
+pub(crate) fn show_sapic_lvar(v: &SapicLVar) -> String {
     let mut s = String::new();
     tamarin_term::pretty::pp_lvar(&v.var, &mut s);
     if let Some(t) = &v.stype {

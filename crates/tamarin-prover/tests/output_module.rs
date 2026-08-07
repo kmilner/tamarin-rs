@@ -24,7 +24,12 @@
 //! [`strip_maude_banner`] is the positive control: it panics when a run that
 //! should have started maude produced no banner.
 
-use std::process::Command;
+mod common;
+
+use common::{joined, maude_available, normalize_stdout, strip_maude_banner};
+
+/// The temp subdirectory this suite writes its theories to.
+const TMP_DIR: &str = "tamarin_prover_output_module";
 
 /// `examples/sapic/fast/basic/replication.spthy`, verbatim.
 const REPLICATION: &str = r#"/*
@@ -85,92 +90,10 @@ in(<=x,=x>); // allowed, because clear semantics...
 end
 "#;
 
-fn maude_available() -> bool {
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        return std::path::Path::new(&p).exists();
-    }
-    for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
-        if std::path::Path::new(c).exists() {
-            return true;
-        }
-    }
-    false
-}
-
-/// `--with-maude=PATH` from the `MAUDE_PATH` env override, when set.
-fn maude_arg() -> Option<String> {
-    std::env::var("MAUDE_PATH")
-        .ok()
-        .map(|p| format!("--with-maude={p}"))
-}
-
-/// Drop the three-line maude banner (Console.hs:150-155) — machine-local path
-/// and version — and ASSERT it was present: a run that skipped maude entirely
-/// must fail here, not pass vacuously.
-fn strip_maude_banner(stderr: &str) -> String {
-    let rest: String = stderr
-        .split_inclusive('\n')
-        .skip_while(|l| l.starts_with("maude tool: '") || l.starts_with(" checking "))
-        .collect();
-    assert_ne!(
-        rest, stderr,
-        "expected a `maude tool:` banner on stderr; got:\n{stderr}"
-    );
-    rest
-}
-
-/// Blank the build-local `Generated from:` lines.  Translate-only output has
-/// no `analyzed:` / `processing time:` lines (no summary block at all), so
-/// only the version comment needs normalizing.
-fn normalize_stdout(stdout: &str) -> String {
-    stdout
-        .lines()
-        .map(|l| {
-            if l.starts_with("Git revision: ") || l.starts_with("Compiled at: ") {
-                "<build info>"
-            } else if l.starts_with("Maude version ") {
-                "Maude version <local maude>"
-            } else {
-                l
-            }
-        })
-        .fold(String::new(), |mut acc, l| {
-            acc.push_str(l);
-            acc.push('\n');
-            acc
-        })
-}
-
-/// Join oracle-captured lines back into the stream they came from.
-fn joined(lines: &[&str]) -> String {
-    lines.iter().fold(String::new(), |mut acc, l| {
-        acc.push_str(l);
-        acc.push('\n');
-        acc
-    })
-}
-
 /// Write `theory` to a per-stem temp file and run the binary on it with
 /// `extra` flags; returns `(exit code, raw stdout, raw stderr)`.
 fn run_raw(stem: &str, theory: &str, extra: &[&str]) -> (i32, String, String) {
-    let dir = std::env::temp_dir().join("tamarin_prover_output_module");
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    let path = dir.join(format!("{stem}.spthy"));
-    std::fs::write(&path, theory).expect("write theory");
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
-    if let Some(a) = maude_arg() {
-        cmd.arg(a);
-    }
-    let out = cmd
-        .args(extra)
-        .arg(&path)
-        .output()
-        .expect("spawn tamarin-rs");
-    (
-        out.status.code().expect("exit code"),
-        String::from_utf8(out.stdout).expect("utf-8 stdout"),
-        String::from_utf8(out.stderr).expect("utf-8 stderr"),
-    )
+    common::run_raw(TMP_DIR, stem, theory, extra)
 }
 
 /// [`run_raw`] + stdout normalization + banner strip.

@@ -121,7 +121,10 @@ pub fn mult_restricted_report(elab: &Theory, sig: &MaudeSig) -> Vec<WfError> {
 /// here is not load-bearing.  An all-default record maps to the empty list,
 /// which `rule_attributes_doc` renders as HS's `ruleAttributes ru == mempty ⇒
 /// emptyDoc` branch.
-fn surface_attrs(attr: &crate::rule::RuleAttributes) -> Vec<p::RuleAttr> {
+///
+/// Also the attribute half of [`crate::pretty_theory::proto_rule_to_parsed`],
+/// the parser-AST projection of a synthesised rule.
+pub(crate) fn surface_attrs(attr: &crate::rule::RuleAttributes) -> Vec<p::RuleAttr> {
     let mut out = Vec::new();
     if let Some(c) = &attr.color {
         // HS `text "color=" <> text (rgbToHex c)`; `rule_attribute_parts`

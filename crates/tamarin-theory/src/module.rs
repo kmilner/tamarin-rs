@@ -6,13 +6,11 @@
 //!
 //! HS `ModuleType` (Theory/Module.hs:16-25) derives `Enum`/`Bounded`, and
 //! `moduleList` (Batch.hs:82-84) renders `[minBound ..]` with `show` to build
-//! the flag's placeholder `spthytyped|spthy|msr|proverifequiv|proverif|deepsec`.
-//! The declaration order is load-bearing twice over: it fixes that placeholder
-//! and, per the upstream comment (Theory/Module.hs:17-19), keeps no `show`
-//! value a prefix of a later one.
-
-use std::fmt;
-use std::str::FromStr;
+//! the flag's placeholder `spthytyped|spthy|msr|proverifequiv|proverif|deepsec`
+//! — which `tamarin-prover`'s help text spells out literally rather than
+//! deriving.  The declaration order is load-bearing twice over: it fixes that
+//! placeholder and, per the upstream comment (Theory/Module.hs:17-19), keeps
+//! no `show` value a prefix of a later one.
 
 /// HS `ModuleType` (Theory/Module.hs:16-25).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -54,47 +52,11 @@ impl ModuleType {
         }
     }
 
-    /// HS `description` (Theory/Module.hs:35-41), used to build the flag's
-    /// help text (`moduleDescriptions`, Batch.hs:84).
-    pub fn description(self) -> &'static str {
-        match self {
-            ModuleType::SpthyTyped => "spthy with explicit types inferred",
-            ModuleType::Spthy => "spthy (including Sapic Processes)",
-            ModuleType::Msr => "pure msrs (with Sapic translation)",
-            ModuleType::ProVerifEquivalence => "ProVerif export for the equivalence lemmas",
-            ModuleType::ProVerif => "ProVerif export for the reachability lemmas",
-            ModuleType::DeepSec => "DeepSec export for the equivalences lemmas",
-        }
-    }
-
     /// HS `find ((str ==) . show) [minBound ..]` (TheoryLoader.hs:373-376):
     /// exact match against the `show` strings, no prefixes and no aliases.
     /// `None` is HS's `ArgumentError "output mode not supported."`.
     pub fn from_show(s: &str) -> Option<ModuleType> {
         ModuleType::ALL.into_iter().find(|m| m.as_str() == s)
-    }
-
-    /// HS `moduleList` (Batch.hs:83) — the `-m` placeholder text.
-    pub fn module_list() -> String {
-        ModuleType::ALL
-            .iter()
-            .map(|m| m.as_str())
-            .collect::<Vec<_>>()
-            .join("|")
-    }
-}
-
-impl fmt::Display for ModuleType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for ModuleType {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, ()> {
-        ModuleType::from_show(s).ok_or(())
     }
 }
 
@@ -114,14 +76,6 @@ mod tests {
                 "proverif",
                 "deepsec"
             ]
-        );
-    }
-
-    #[test]
-    fn module_list_matches_hs_placeholder() {
-        assert_eq!(
-            ModuleType::module_list(),
-            "spthytyped|spthy|msr|proverifequiv|proverif|deepsec"
         );
     }
 
@@ -146,8 +100,8 @@ mod tests {
                 assert!(
                     !b.as_str().starts_with(a.as_str()),
                     "{} is a prefix of the later {}",
-                    a,
-                    b
+                    a.as_str(),
+                    b.as_str()
                 );
             }
         }

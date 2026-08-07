@@ -32,15 +32,13 @@
 //! and do not affect proof results or golden `--prove` output.
 
 use tamarin_term::pretty::{pp_lvar, pretty_lnterm};
-// HS `flushRight n str` (Extension.Prelude): left-pad `str` with spaces to width n.
-use tamarin_utils::prelude_ext::flush_right;
 
 use crate::constraint::constraints::{Goal, NodeId};
 use crate::constraint::system::{SourceKind, System};
 use crate::fact::{fact_tag_name, LNFact};
 use crate::guarded::Guarded;
 use crate::pretty_formula::guarded_doc;
-use crate::pretty_hpj::{fsep, punctuate, Doc};
+use crate::pretty_hpj::{above_blank, fsep, numbered_prime, punctuate, Doc};
 
 /// Emit just the non-graph-part of the system, matching Haskell's
 /// `prettyNonGraphSystem` (System.hs:1675-1686):
@@ -74,22 +72,8 @@ pub fn pretty_non_graph_system(sys: &System) -> String {
 }
 
 // ---------------------------------------------------------------------
-// vsep / $--$ (HS Pretty.hs:83-84, Class.hs:112-114)
+// vsep (HS Pretty.hs:83-84)
 // ---------------------------------------------------------------------
-
-// HS `d1 $--$ d2 = caseEmptyDoc d2 (caseEmptyDoc d1 (d1 $-$ text "" $-$ d2)
-// d2) d1` (Class.hs:112-114): if d1 is Empty → d2; else if d2 is Empty →
-// d1; else the two separated by a blank line (`$-$ text "" $-$`).
-// `isEmpty` matches only the literal `Empty` constructor (HughesPJ).
-fn above_blank(d1: Doc, d2: Doc) -> Doc {
-    if matches!(d1, Doc::Empty) {
-        return d2;
-    }
-    if matches!(d2, Doc::Empty) {
-        return d1;
-    }
-    d1.above_g(blank_text()).above_g(d2)
-}
 
 // HS `vsep = foldr ($--$) emptyDoc` (Pretty.hs:83-84) — RIGHT fold.
 fn vsep_docs(ds: Vec<Doc>) -> Doc {
@@ -160,45 +144,6 @@ fn pretty_formula_set(items: &[std::sync::Arc<Guarded>]) -> Doc {
 // ---------------------------------------------------------------------
 
 // --- Doc helpers mirroring `Text.PrettyPrint.Class` -------------------
-
-// HS `numbered vsep ds` (Class.hs:252-259): right-flushed 1-based indices,
-// items joined vertically (`$-$`) with `vsep` interspersed between them.
-fn numbered(vsep: Doc, ds: Vec<Doc>) -> Doc {
-    if ds.is_empty() {
-        return Doc::empty();
-    }
-    let n = ds.len();
-    let n_width = n.to_string().len();
-    let mut acc: Option<Doc> = None;
-    for (i, d) in ds.into_iter().enumerate() {
-        // `text (flushRight nWidth (show i)) <> d`
-        let label = flush_right(n_width, &(i + 1).to_string());
-        let item = Doc::text(label).beside(d);
-        acc = Some(match acc {
-            None => item,
-            // intersperse vsep, fold with `$-$` (above_g)
-            Some(prev) => prev.above_g(vsep.clone()).above_g(item),
-        });
-    }
-    acc.unwrap_or_else(Doc::empty)
-}
-
-// HS `numbered'` (Class.hs:263-264): `numbered (text "") . map (". " <>)`.
-// `text ""` is a zero-width text run (NOT `empty`); interspersed with `$-$`
-// it inserts a *blank line* between numbered items.  `Doc::text("")`
-// collapses to `Doc::Empty` (which would be dropped by `$-$`), so we build
-// the zero-width text run explicitly via `blank_text`.
-fn numbered_prime(ds: Vec<Doc>) -> Doc {
-    let mapped: Vec<Doc> = ds.into_iter().map(|d| Doc::text(". ").beside(d)).collect();
-    numbered(blank_text(), mapped)
-}
-
-// HS `text ""` — a zero-width, zero-column text run.  Distinct from
-// `Doc::Empty`: under `$$`/`$-$` it contributes a blank line, whereas
-// `Empty` is the layout identity and collapses away.
-fn blank_text() -> Doc {
-    Doc::TextBeside(std::rc::Rc::from(""), 0, std::rc::Rc::new(Doc::Empty))
-}
 
 // HS `combine (header, d) = fsep [keyword_ header <> colon, nest 2 d]`
 // (SubtermStore.hs:569-581, see line 578 / EquationStore.hs:650-670, see line 658) — the section header is a

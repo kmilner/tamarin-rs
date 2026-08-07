@@ -4101,10 +4101,7 @@ impl<'a> Parser<'a> {
             // HS `parens $ commaSep sapicvar` (Sapic.hs:64-72, see line 69): trailing comma OK.
             // `sapicvar`, so a `:` here types the parameter (see
             // [`Parser::sapic_var_types`]).
-            let saved = self.sapic_var_types;
-            self.sapic_var_types = true;
-            let r = self.sep_end_by(")", |p| p.var_spec());
-            self.sapic_var_types = saved;
+            let r = self.with_sapic_var_types(|p| p.sep_end_by(")", |p| p.var_spec()));
             Some(r?)
         } else {
             None
@@ -4153,14 +4150,20 @@ impl<'a> Parser<'a> {
     // Process parser (SAPIC)
     // =========================================================================
 
+    /// Run `f` with [`Parser::sapic_var_types`] on, restoring the previous
+    /// value afterwards — the HS `sapicvar` regions.
+    fn with_sapic_var_types<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let saved = self.sapic_var_types;
+        self.sapic_var_types = true;
+        let r = f(self);
+        self.sapic_var_types = saved;
+        r
+    }
+
     /// A SAPIC process.  Every variable inside is HS `sapicvar`, so a trailing
     /// `:` names a type rather than a sort — see [`Parser::sapic_var_types`].
     fn process(&mut self) -> Result<Process, ParseError> {
-        let saved = self.sapic_var_types;
-        self.sapic_var_types = true;
-        let r = self.process_body();
-        self.sapic_var_types = saved;
-        r
+        self.with_sapic_var_types(|p| p.process_body())
     }
 
     fn process_body(&mut self) -> Result<Process, ParseError> {

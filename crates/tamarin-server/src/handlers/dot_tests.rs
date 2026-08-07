@@ -847,6 +847,43 @@ fn dot_explicit_rule_color_attribute_sets_fillcolor() {
 }
 
 #[test]
+fn labeled_framing_wraps_the_web_framing_body_verbatim() {
+    // Pins HS `showDot`'s framing (Text/Dot.hs:236-248) byte-for-byte against
+    // the web routes' `digraph G {` framing: the two renderings share the same
+    // element block and differ ONLY in the opening line (a QUOTED digraph id
+    // carrying the label, with `"` escaped to `\"` and backslashes passed
+    // through) and in the blank line `showDot`'s `"\n}\n"` leaves before the
+    // closing brace.
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::term::Term;
+    use tamarin_term::vterm::Lit;
+    use tamarin_theory::fact::{fresh_fact, out_fact};
+    let mut sys = System::empty();
+    let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
+    let ru = proto_node(
+        "Setup",
+        vec![fresh_fact(k.clone())],
+        vec![],
+        vec![out_fact(k)],
+    );
+    sys.add_node(LVar::new("i", LSort::Node, 0), ru);
+    let opts = GraphOptions::default();
+
+    let plain = system_to_dot_with(&sys, &opts);
+    let body = plain
+        .strip_prefix("digraph G {\n")
+        .and_then(|b| b.strip_suffix("}\n"))
+        .unwrap_or_else(|| panic!("web framing changed: {}", plain));
+    assert!(body.contains("nodesep"), "empty body under test: {}", plain);
+
+    let labeled = system_to_dot_labeled(&sys, &opts, "a \"b\" \\c");
+    assert_eq!(
+        labeled,
+        format!("digraph \"a \\\"b\\\" \\c\" {{\n{}\n}}\n", body)
+    );
+}
+
+#[test]
 fn dot_no_cluster_preamble_sets_node_size_and_less_edge_color_first() {
     // No-cluster preamble mirrors HS setDefaultAttributes (Dot.hs:130-135)
     // — including `width=0.3,height=0.2` on the node defaults. The less

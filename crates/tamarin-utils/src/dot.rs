@@ -8,10 +8,11 @@
 //! is a `State` monad; in Rust we expose a `DotGraph` struct with mutating
 //! methods. `scope` and `cluster` take a closure for the nested graph.
 //!
-//! NOTE: the builder API (`DotGraph`, records) has no consumer in the tree
-//! yet; retained as a reserved API for a future Rust DOT pipeline. The live
-//! DOT path — `tamarin-server/src/handlers/dot.rs` — uses
-//! `fix_multi_line_label` from this module directly.
+//! NOTE: the live DOT path — `tamarin-server/src/handlers/dot.rs`, which backs
+//! both the interactive graph routes and `--output-dot` — emits its own
+//! dialect and only borrows this module's leaf helpers
+//! (`fix_multi_line_label`, [`escape_dot_graph_label`]). The builder API
+//! (`DotGraph`, records) has no consumer beyond this module's tests.
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum NodeId {
@@ -175,18 +176,26 @@ impl DotGraph {
     }
 }
 
-/// `showDot label`: render a graph with the given digraph id.
-pub fn show_dot(label: &str, graph: &DotGraph) -> String {
-    let mut out = String::new();
-    out.push_str("digraph \"");
-    // Inline label escaping (`"`→`\"`): push each char directly instead of
-    // collecting a per-char Vec<char>.
+/// `showDot`'s `escapedLabel` (Text/Dot.hs:241): the digraph-id escape, which
+/// touches `"` (→ `\"`) and NOTHING else — backslashes included.  Distinct
+/// from `showAttr`'s attribute-value escape, which also maps `\n` to `\l`
+/// (see `write_attr`).
+pub fn escape_dot_graph_label(label: &str) -> String {
+    let mut out = String::with_capacity(label.len());
     for c in label.chars() {
         if c == '"' {
             out.push('\\');
         }
         out.push(c);
     }
+    out
+}
+
+/// `showDot label`: render a graph with the given digraph id.
+pub fn show_dot(label: &str, graph: &DotGraph) -> String {
+    let mut out = String::new();
+    out.push_str("digraph \"");
+    out.push_str(&escape_dot_graph_label(label));
     out.push_str("\" {\n");
     for e in graph.elements() {
         write_element(&mut out, e);

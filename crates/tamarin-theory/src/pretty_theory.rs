@@ -356,10 +356,9 @@ pub fn pretty_closed_theory(
     // `CollectedUserFuns` bundle — replicate the calling thread's sets onto
     // each render worker (a stolen thread outside any guard has EMPTY sets).
     let user_funs_snapshot = crate::elaborate::snapshot_user_funs();
-    // Per-item occurrence ordinal of each rule item's name among earlier
-    // rule items (0 for non-rule items).  Drives the positional rule
-    // pairing in `render_parsed_item` — see `nth_rule_named`.
-    let rule_occs = rule_name_occurrences(&parsed.items);
+    // Positional `(name, occurrence)` pairing of each parsed rule item with
+    // its elaborated counterpart — see `pair_elaborated_rules`.
+    let elab_rules = pair_elaborated_rules(&parsed.items, elaborated);
     let rendered: Vec<Option<String>> = parsed
         .items
         .par_iter()
@@ -369,7 +368,7 @@ pub fn pretty_closed_theory(
                 crate::elaborate::set_user_funs_from_collected(&user_funs_snapshot);
             render_parsed_item(
                 item,
-                rule_occs[idx],
+                elab_rules[idx],
                 &macros,
                 &predicates,
                 elaborated,
@@ -583,8 +582,11 @@ fn open_theory_blocks(
     // TheoryObject.hs:767 — parallel render, sequential vsep order).
     let predicates: Vec<p::Predicate> = collect_predicates(parsed);
     let arity1 = arity1_noeq_names(elaborated);
-    let mut proc_idx = 0usize;
-    let mut def_idx = 0usize;
+    let mut st = OpenPrintState {
+        opts,
+        proc_idx: 0,
+        def_idx: 0,
+    };
     for item in &parsed.items {
         blocks.extend(render_open_item(
             item,
@@ -592,9 +594,7 @@ fn open_theory_blocks(
             in_file,
             &arity1,
             conv,
-            opts,
-            &mut proc_idx,
-            &mut def_idx,
+            &mut st,
         )?);
     }
     // Recomputed `function:` items land at the END of `thyItems`
@@ -606,6 +606,19 @@ fn open_theory_blocks(
     Ok(blocks)
 }
 
+/// The print options plus the two overlay cursors threaded through the
+/// per-item render: HS consumes the typed processes / process-defs by
+/// occurrence order (`mapMProcesses` / `mapMProcessesDef`,
+/// TheoryObject.hs:279-301), so each `TypedOverlay` slot is taken exactly
+/// once as the item list is walked.
+struct OpenPrintState<'a> {
+    opts: &'a OpenPrintOpts,
+    /// Next unconsumed [`TypedOverlay::processes`] index.
+    proc_idx: usize,
+    /// Next unconsumed [`TypedOverlay::defs`] index.
+    def_idx: usize,
+}
+
 /// One parsed theory item → its open-print blocks (usually 0 or 1; a
 /// `builtins:`/`functions:`/`predicates:` line yields one block PER declared
 /// entry, since HS appends one `TheoryItem` per entry — Signature.hs:97,
@@ -613,19 +626,17 @@ fn open_theory_blocks(
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
-#[allow(clippy::too_many_arguments)]
 fn render_open_item(
     item: &p::TheoryItem,
     predicates: &[p::Predicate],
     in_file: &str,
     arity1: &std::collections::HashSet<String>,
     conv: OpenProcessConv<'_>,
-    opts: &OpenPrintOpts,
-    proc_idx: &mut usize,
-    def_idx: &mut usize,
+    st: &mut OpenPrintState<'_>,
 ) -> Result<Vec<String>, String> {
     use crate::pretty_hpj::Doc;
     use p::TheoryItem::*;
+    let opts = st.opts;
     // `msr`: `removeTranslationItems` maps every `TranslationItem _` to
     // `TranslationItem ()` (OpenTheory.hs:47-52) and
     // `prettyOpenTranslatedTheory` renders those as `emptyDoc`
@@ -661,21 +672,21 @@ fn render_open_item(
         match item {
             Functions(_) => return Ok(Vec::new()),
             TopLevelProcess(_) => {
-                let pp = take_proc(proc_idx)?;
+                let pp = take_proc(&mut st.proc_idx)?;
                 return Ok(vec![Doc::text("process:")
                     .above_g(open_process_doc(pp).nest(2))
                     .render()]);
             }
             EquivLemma(_, _) => {
-                let d1 = take_proc(proc_idx)?;
-                let d2 = take_proc(proc_idx)?;
+                let d1 = take_proc(&mut st.proc_idx)?;
+                let d2 = take_proc(&mut st.proc_idx)?;
                 return Ok(vec![Doc::text("equivLemma:")
                     .above_g(open_process_doc(d1).nest(2))
                     .above(open_process_doc(d2).nest(2))
                     .render()]);
             }
             DiffEquivLemma(_) => {
-                let d = take_proc(proc_idx)?;
+                let d = take_proc(&mut st.proc_idx)?;
                 return Ok(vec![Doc::text("diffEquivLemma:")
                     .above_g(open_process_doc(d).nest(2))
                     .render()]);
@@ -683,14 +694,17 @@ fn render_open_item(
             ProcessDef(pd) => {
                 let (vars, body) = overlay
                     .defs
-                    .get(*def_idx)
+                    .get(st.def_idx)
                     .ok_or_else(|| "typed overlay: process-def count mismatch".to_string())?;
-                *def_idx += 1;
+                st.def_idx += 1;
                 let mut d = Doc::text("let ").beside_sp(Doc::text(pd.name.clone()));
                 if let Some(vs) = vars {
                     // `map show l` over typed `SapicLVar`s (Theory/Sapic/
                     // Term.hs:108-110): LVar display plus `:type` suffix.
-                    let shown: Vec<String> = vs.iter().map(show_typed_def_var).collect();
+                    let shown: Vec<String> = vs
+                        .iter()
+                        .map(crate::pretty_sapic::show_sapic_lvar)
+                        .collect();
                     d = d.beside_sp(Doc::text(format!("({})", shown.join(","))));
                 }
                 d = d
@@ -904,21 +918,6 @@ fn function_decl_typing_info(d: &p::FunctionDecl) -> crate::theory::SapicFunSym 
         arg_types: d.arg_types.clone(),
         out_type: d.out_type.clone(),
     }
-}
-
-/// `show` on a TYPED process-def formal (HS `Show SapicLVar`,
-/// Theory/Sapic/Term.hs:108-110): `show lvar` (sort sigil + name + `.idx`
-/// when non-zero) plus `:type` when annotated.  The typed-overlay sibling of
-/// [`show_open_varspec`], over the post-`typeTheoryEnv` `SapicLVar`s (whose
-/// indices are the `renameUnique` fresh ones, e.g. `c.1`).
-fn show_typed_def_var(v: &crate::sapic::SapicLVar) -> String {
-    let mut s = String::new();
-    tamarin_term::pretty::pp_lvar(&v.var, &mut s);
-    if let Some(t) = &v.stype {
-        s.push(':');
-        s.push_str(t);
-    }
-    s
 }
 
 /// `show` on a parse-time process-def formal (HS `Show SapicLVar`,
@@ -1292,14 +1291,14 @@ pub fn web_proto_rules(parsed: &p::Theory, elaborated: &Theory) -> Vec<String> {
     let arity1 = arity1_noeq_names(elaborated);
     let manual_variants = contains_manual_rule_variants(parsed, elaborated, false);
     // Same positional `(name, occurrence)` pairing as `pretty_closed_theory`
-    // — see `nth_rule_named`.
-    let rule_occs = rule_name_occurrences(&parsed.items);
+    // — see `pair_elaborated_rules`.
+    let elab_rules = pair_elaborated_rules(&parsed.items, elaborated);
     parsed
         .items
         .iter()
         .enumerate()
         .filter_map(|(idx, item)| match item {
-            p::TheoryItem::Rule(r) => nth_rule_named(elaborated, &r.name, rule_occs[idx])
+            p::TheoryItem::Rule(r) => elab_rules[idx]
                 .map(|er| render_rule(r, er, &macros, &arity1, manual_variants, false)),
             _ => None,
         })
@@ -1546,26 +1545,11 @@ mod open_print_opts_tests {
         Process::Null(ProcessParsedAnnotation::empty())
     }
 
-    fn render_item(
-        item: &p::TheoryItem,
-        opts: &OpenPrintOpts,
-        proc_idx: &mut usize,
-        def_idx: &mut usize,
-    ) -> Vec<String> {
+    fn render_item(item: &p::TheoryItem, st: &mut OpenPrintState<'_>) -> Vec<String> {
         // arity-1 set / predicates are irrelevant to the arms under test.
         #[allow(clippy::disallowed_types)]
         let arity1 = std::collections::HashSet::new();
-        render_open_item(
-            item,
-            &[],
-            "f.spthy",
-            &arity1,
-            &no_conv,
-            opts,
-            proc_idx,
-            def_idx,
-        )
-        .unwrap()
+        render_open_item(item, &[], "f.spthy", &arity1, &no_conv, st).unwrap()
     }
 
     fn fdecl(name: &str) -> p::FunctionDecl {
@@ -1591,7 +1575,11 @@ mod open_print_opts_tests {
             extra_function_items: Vec::new(),
             drop_translation_items: true,
         };
-        let (mut pi, mut di) = (0usize, 0usize);
+        let mut st = OpenPrintState {
+            opts: &opts,
+            proc_idx: 0,
+            def_idx: 0,
+        };
         let dropped = [
             p::TheoryItem::Builtins(vec!["multiset".to_string()]),
             p::TheoryItem::Functions(vec![fdecl("h")]),
@@ -1610,7 +1598,7 @@ mod open_print_opts_tests {
         ];
         for item in &dropped {
             assert!(
-                render_item(item, &opts, &mut pi, &mut di).is_empty(),
+                render_item(item, &mut st).is_empty(),
                 "expected empty render for {item:?}"
             );
         }
@@ -1620,7 +1608,7 @@ mod open_print_opts_tests {
             body: "keep".to_string(),
         };
         assert_eq!(
-            render_item(&keep, &opts, &mut pi, &mut di),
+            render_item(&keep, &mut st),
             vec!["/*\nkeep\n*/".to_string()]
         );
     }
@@ -1640,14 +1628,13 @@ mod open_print_opts_tests {
             extra_function_items: Vec::new(),
             drop_translation_items: false,
         };
-        let (mut pi, mut di) = (0usize, 0usize);
+        let mut st = OpenPrintState {
+            opts: &opts,
+            proc_idx: 0,
+            def_idx: 0,
+        };
         assert_eq!(
-            render_item(
-                &p::TheoryItem::TopLevelProcess(p::Process::Null),
-                &opts,
-                &mut pi,
-                &mut di
-            ),
+            render_item(&p::TheoryItem::TopLevelProcess(p::Process::Null), &mut st),
             vec!["process:\n  0".to_string()]
         );
         assert_eq!(
@@ -1657,20 +1644,16 @@ mod open_print_opts_tests {
                     vars: None,
                     body: p::Process::Null,
                 }),
-                &opts,
-                &mut pi,
-                &mut di
+                &mut st
             ),
             vec!["let  P () = 0".to_string()]
         );
-        assert!(render_item(
-            &p::TheoryItem::Functions(vec![fdecl("h")]),
-            &opts,
-            &mut pi,
-            &mut di
-        )
-        .is_empty());
-        assert_eq!((pi, di), (1, 1), "one process and one def consumed");
+        assert!(render_item(&p::TheoryItem::Functions(vec![fdecl("h")]), &mut st).is_empty());
+        assert_eq!(
+            (st.proc_idx, st.def_idx),
+            (1, 1),
+            "one process and one def consumed"
+        );
     }
 }
 
@@ -2119,34 +2102,19 @@ fn sep_block_with_lead(
 // Item dispatch
 // =============================================================================
 
-/// Per-item occurrence ordinal of each rule item's NAME among the rule
-/// items before it (0 for non-rule items).  The `(name, occurrence)` pair
-/// is the key of the positional rule pairing — see [`nth_rule_named`].
-fn rule_name_occurrences(items: &[p::TheoryItem]) -> Vec<usize> {
-    let mut counts: tamarin_utils::FastMap<&str, usize> = Default::default();
-    items
-        .iter()
-        .map(|item| match item {
-            p::TheoryItem::Rule(r) => {
-                let c = counts.entry(r.name.as_str()).or_default();
-                let o = *c;
-                *c += 1;
-                o
-            }
-            _ => 0,
-        })
-        .collect()
-}
-
-/// The `occ`-th elaborated rule named `name`, pairing a parsed rule item
-/// with its elaborated counterpart by `(name, occurrence-ordinal)` rather
-/// than by name alone.
+/// Pair every parsed theory item with its elaborated rule, keyed by
+/// `(name, occurrence-ordinal)` rather than by name alone — `None` for a
+/// non-rule item and for a parsed rule with no elaborated counterpart.
+///
+/// One pass groups the elaborated rules by name (in theory order); the
+/// occurrence ordinal of a parsed rule item among the earlier rule items of
+/// the same name indexes straight into its group.
 ///
 /// INVARIANT: for every rule name `N`, the k-th parsed rule item named `N`
 /// corresponds to the k-th elaborated rule named `N`.
 /// * Without partial evaluation rule names are unique (duplicates are a
-///   parse error), so `occ` is always 0 and this is exactly the
-///   name-keyed `find` — including the no-variant drop (run.rs), which
+///   parse error), so the ordinal is always 0 and this is exactly a
+///   name-keyed lookup — including the no-variant drop (run.rs), which
 ///   removes a rule from the elaborated theory only: its parsed leftover
 ///   has zero elaborated occurrences and is not rendered.
 /// * After `apply_partial_evaluation` names can repeat (one rule refining
@@ -2154,12 +2122,31 @@ fn rule_name_occurrences(items: &[p::TheoryItem]) -> Vec<usize> {
 ///   refined-rule list in the same order, so same-name groups align
 ///   positionally.  A pass that drops refined rules from only ONE of the
 ///   two lists would break this alignment — drop from both, or not at all.
-fn nth_rule_named<'a>(
+fn pair_elaborated_rules<'a>(
+    items: &[p::TheoryItem],
     elab: &'a Theory,
-    name: &str,
-    occ: usize,
-) -> Option<&'a crate::theory::OpenProtoRule> {
-    elab.rules().filter(|er| er.name() == name).nth(occ)
+) -> Vec<Option<&'a crate::theory::OpenProtoRule>> {
+    let mut by_name: tamarin_utils::FastMap<&str, Vec<&'a crate::theory::OpenProtoRule>> =
+        Default::default();
+    for er in elab.rules() {
+        by_name.entry(er.name()).or_default().push(er);
+    }
+    let mut counts: tamarin_utils::FastMap<&str, usize> = Default::default();
+    items
+        .iter()
+        .map(|item| match item {
+            p::TheoryItem::Rule(r) => {
+                let c = counts.entry(r.name.as_str()).or_default();
+                let occ = *c;
+                *c += 1;
+                by_name
+                    .get(r.name.as_str())
+                    .and_then(|group| group.get(occ))
+                    .copied()
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2168,7 +2155,7 @@ fn nth_rule_named<'a>(
 #[allow(clippy::disallowed_types)]
 fn render_parsed_item(
     item: &p::TheoryItem,
-    rule_occ: usize,
+    elab_rule: Option<&crate::theory::OpenProtoRule>,
     macros: &[p::Macro],
     predicates: &[p::Predicate],
     elab: &Theory,
@@ -2195,8 +2182,7 @@ fn render_parsed_item(
             // from the elaborated theory in run.rs; mirror the absence here.
             // The lookup is positional (`(name, occurrence)`) because
             // partial evaluation makes rule names non-unique.
-            nth_rule_named(elab, &r.name, rule_occ)
-                .map(|er| render_rule(r, er, macros, arity1, manual_variants, auto_sources))
+            elab_rule.map(|er| render_rule(r, er, macros, arity1, manual_variants, auto_sources))
         }
         IntrRule(_) => None,
         Lemma(l) => Some(render_parsed_lemma(
@@ -2633,79 +2619,76 @@ fn render_rule(
     // differ, even a rule with no AC variants must show the AC comment block
     // containing the expanded form.
     let trivial = {
-        let r = elab_rule;
-        {
-            let no_residual_substs = r.variant_substs.iter().all(|s| s.is_empty());
-            // HS `isTrivialProtoVariantAC` (Rule.hs:761-764):
-            //   variants == [emptySubstVFresh] && ps == ps' && as == as' && cs == cs' && nvs == nvs'
-            //
-            // In HS, `cprRuleE` (E-rule) and `cprRuleAC` (AC-rule) live in
-            // the SAME term universe — AC smart-constructors normalise at
-            // construction time everywhere, so the only difference between
-            // them arises from (a) genuine non-trivial AC variants or (b)
-            // macro expansion changing terms.
-            //
-            // In RS: `abstracted_rule = Some(ac)` iff Maude found a
-            // non-trivial abstraction (reducible sub-terms, yielding a
-            // different AC form) — compare the E-rule against the abstracted
-            // AC form via `same_rule_body`.
-            // `abstracted_rule = None` means `abstract_rule_and_variants`
-            // returned `Ok(None)` (common_subst empty AND no residual
-            // substs) — i.e., the AC form IS the E form.  The only remaining
-            // source of divergence is macro expansion: if the display body
-            // (`premises`/`actions`/`conclusions`, from `parsed_rule` before
-            // macro expansion) contains macro calls, it differs from the
-            // elaborated form and HS's `ps != ps'` would fire.  Detect this
-            // by applying macros to the display facts and checking whether
-            // any term changed (HS `applyMacroInRule` / Rule.hs:98).
-            //
-            // Crucially: do NOT compare rendered text across AST↔LN spaces —
-            // AC ordering and nat-constant representation differ between the
-            // parsed form and `lnfacts_to_parser(r.rule.*)`, producing false
-            // negatives for plain rules like those in ParserTests.spthy.
-            // HS `isTrivialProtoVariantAC` (Rule.hs:762-764) compares the AC
-            // rule body against the E rule body (`ps==ps' && as==as' &&
-            // cs==cs' && nvs==nvs'`).  `closeProtoRule` stores `cprRuleE`
-            // (the ORIGINAL rule, WITH macro calls) untouched and computes
-            // `cprRuleAC` from the macro-EXPANDED, variant-base rule
-            // (Rule.hs:96-98).  So a macro call makes `ps != ps'` and the
-            // rule is NOT trivial — it must render the AC block showing the
-            // expanded body.  Detect a macro in the display (E) body by
-            // expanding it: if anything changes, the E (macro) form differs
-            // from the AC (expanded) form.  This holds REGARDLESS of whether
-            // Maude abstracted the rule, so it MUST gate BOTH branches below:
-            // a rule that is both macro-using AND abstracted (e.g. a `^`/DH
-            // rule whose body is a macro call) is NOT trivial
-            // (regression/trace/issue777: `pk(x)='g'^x`, `Out(pk(~x))`).
-            // Fast path: with no macro definitions, `apply_macros_fact` is an
-            // identity rebuild (no macro can match), so the comparison below is
-            // always `true`.  Skip the three deep-clone passes entirely.
-            let no_macro_in_display = macros.is_empty() || {
-                let mp: Vec<p::Fact> = premises
-                    .iter()
-                    .map(|f| crate::macro_expand::apply_macros_fact(macros, f))
-                    .collect();
-                let ma: Vec<p::Fact> = actions
-                    .iter()
-                    .map(|f| crate::macro_expand::apply_macros_fact(macros, f))
-                    .collect();
-                let mc: Vec<p::Fact> = conclusions
-                    .iter()
-                    .map(|f| crate::macro_expand::apply_macros_fact(macros, f))
-                    .collect();
-                mp == premises && ma == actions && mc == conclusions
-            };
-            let ac_body_matches = match &r.abstracted_rule {
-                // No Maude abstraction: AC form == E form structurally, so
-                // trivial iff no macro changes the display body.
-                None => no_macro_in_display,
-                // Maude abstracted the rule: the AC (abstracted) body must
-                // match the elaborated body AND no macro may differ between
-                // the display (E) and expanded (AC) forms.
-                Some(ac) => same_rule_body(&r.rule, ac) && no_macro_in_display,
-            };
-            no_residual_substs && ac_body_matches
-        }
+        let no_residual_substs = elab_rule.variant_substs.iter().all(|s| s.is_empty());
+        // HS `isTrivialProtoVariantAC` (Rule.hs:761-764):
+        //   variants == [emptySubstVFresh] && ps == ps' && as == as' && cs == cs' && nvs == nvs'
+        //
+        // In HS, `cprRuleE` (E-rule) and `cprRuleAC` (AC-rule) live in
+        // the SAME term universe — AC smart-constructors normalise at
+        // construction time everywhere, so the only difference between
+        // them arises from (a) genuine non-trivial AC variants or (b)
+        // macro expansion changing terms.
+        //
+        // In RS: `abstracted_rule = Some(ac)` iff Maude found a
+        // non-trivial abstraction (reducible sub-terms, yielding a
+        // different AC form) — compare the E-rule against the abstracted
+        // AC form via `same_rule_body`.
+        // `abstracted_rule = None` means `abstract_rule_and_variants`
+        // returned `Ok(None)` (common_subst empty AND no residual
+        // substs) — i.e., the AC form IS the E form.  The only remaining
+        // source of divergence is macro expansion: if the display body
+        // (`premises`/`actions`/`conclusions`, from `parsed_rule` before
+        // macro expansion) contains macro calls, it differs from the
+        // elaborated form and HS's `ps != ps'` would fire.  Detect this
+        // by applying macros to the display facts and checking whether
+        // any term changed (HS `applyMacroInRule` / Rule.hs:98).
+        //
+        // Crucially: do NOT compare rendered text across AST↔LN spaces —
+        // AC ordering and nat-constant representation differ between the
+        // parsed form and `lnfacts_to_parser(elab_rule.rule.*)`, producing
+        // false negatives for plain rules like those in ParserTests.spthy.
+        // HS `isTrivialProtoVariantAC` (Rule.hs:762-764) compares the AC
+        // rule body against the E rule body (`ps==ps' && as==as' &&
+        // cs==cs' && nvs==nvs'`).  `closeProtoRule` stores `cprRuleE`
+        // (the ORIGINAL rule, WITH macro calls) untouched and computes
+        // `cprRuleAC` from the macro-EXPANDED, variant-base rule
+        // (Rule.hs:96-98).  So a macro call makes `ps != ps'` and the
+        // rule is NOT trivial — it must render the AC block showing the
+        // expanded body.  Detect a macro in the display (E) body by
+        // expanding it: if anything changes, the E (macro) form differs
+        // from the AC (expanded) form.  This holds REGARDLESS of whether
+        // Maude abstracted the rule, so it MUST gate BOTH branches below:
+        // a rule that is both macro-using AND abstracted (e.g. a `^`/DH
+        // rule whose body is a macro call) is NOT trivial
+        // (regression/trace/issue777: `pk(x)='g'^x`, `Out(pk(~x))`).
+        // Fast path: with no macro definitions, `apply_macros_fact` is an
+        // identity rebuild (no macro can match), so the comparison below is
+        // always `true`.  Skip the three deep-clone passes entirely.
+        let no_macro_in_display = macros.is_empty() || {
+            let mp: Vec<p::Fact> = premises
+                .iter()
+                .map(|f| crate::macro_expand::apply_macros_fact(macros, f))
+                .collect();
+            let ma: Vec<p::Fact> = actions
+                .iter()
+                .map(|f| crate::macro_expand::apply_macros_fact(macros, f))
+                .collect();
+            let mc: Vec<p::Fact> = conclusions
+                .iter()
+                .map(|f| crate::macro_expand::apply_macros_fact(macros, f))
+                .collect();
+            mp == premises && ma == actions && mc == conclusions
+        };
+        let ac_body_matches = match &elab_rule.abstracted_rule {
+            // No Maude abstraction: AC form == E form structurally, so
+            // trivial iff no macro changes the display body.
+            None => no_macro_in_display,
+            // Maude abstracted the rule: the AC (abstracted) body must
+            // match the elaborated body AND no macro may differ between
+            // the display (E) and expanded (AC) forms.
+            Some(ac) => same_rule_body(&elab_rule.rule, ac) && no_macro_in_display,
+        };
+        no_residual_substs && ac_body_matches
     };
 
     // HS `prettyClosedProtoRule` (ClosedTheory.hs:337-339, 352-354) emits
@@ -3054,6 +3037,35 @@ fn render_node_id_str(name: &str, idx: u32) -> String {
 /// reuse the parser-AST fact rendering path.
 pub(crate) fn lnfacts_to_parser(facts: &[crate::fact::LNFact]) -> Vec<p::Fact> {
     facts.iter().map(lnfact_to_parser).collect()
+}
+
+/// Materialise an elaborated `ProtoRuleE` as a parser-AST rule item, so a
+/// synthesised rule (SAPIC translation, partial evaluation) can join the
+/// parsed-item stream `pretty_closed_theory` renders from — the display facts
+/// come from here.
+///
+/// The body is the elaborated E-rule projected back through
+/// [`lnfacts_to_parser`], so it is already macro/let expanded: the render
+/// path's `apply_let_block` / macro checks are no-ops, and AC argument order
+/// is canonicalised at render time (`render_rule_body`), exactly as for the
+/// modulo-AC comment blocks.  The attributes carry color / process /
+/// no_derivcheck / issapicrule / role, as HS's `toRule` produced them.
+pub fn proto_rule_to_parsed(r: &crate::rule::ProtoRuleE) -> p::Rule {
+    p::Rule {
+        name: match &r.info.name {
+            crate::rule::ProtoRuleName::Stand(s) => s.to_string(),
+            crate::rule::ProtoRuleName::Fresh => "Fresh".to_string(),
+        },
+        modulo: None,
+        attributes: crate::mult_restricted::surface_attrs(&r.info.attributes),
+        let_block: Vec::new(),
+        premises: lnfacts_to_parser(&r.premises),
+        actions: lnfacts_to_parser(&r.actions),
+        conclusions: lnfacts_to_parser(&r.conclusions),
+        embedded_restrictions: Vec::new(),
+        variants: Vec::new(),
+        left_right: None,
+    }
 }
 
 pub fn lnfact_to_parser(fa: &crate::fact::LNFact) -> p::Fact {

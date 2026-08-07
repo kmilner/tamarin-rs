@@ -38,7 +38,8 @@ use tamarin_theory::theory::{SapicFunSym, Theory};
 
 use crate::inline::{collect_process_defs, convert_process_with_defs, ProcessDefMap};
 use crate::typing::{
-    collect_user_fun_typings, init_env, type_and_rename_process_in, vars_proc, TypingEnvironment,
+    collect_user_fun_typings, init_te_from_sig, type_and_rename_process_in, vars_proc,
+    TypingEnvironment,
 };
 
 /// Everything `typeTheoryEnv` returns, split for the RS consumers: the typed
@@ -66,8 +67,10 @@ pub fn type_theory_env(
 
     let user_fun_typings = collect_user_fun_typings(parsed);
     let mut env =
-        init_env(&elaborated.signature.maude_sig, &user_fun_typings).map_err(|e| ElabError {
-            message: format!("SAPIC typing: {e}"),
+        init_te_from_sig(&elaborated.signature.maude_sig, &user_fun_typings).map_err(|e| {
+            ElabError {
+                message: format!("SAPIC typing: {e}"),
+            }
         })?;
 
     let defs = collect_process_defs(parsed);
@@ -164,8 +167,14 @@ fn type_process_def(
     let pr = convert_process_with_defs(&pd.body, defs).map_err(|e| ElabError {
         message: format!("SAPIC translation: {}", e.message),
     })?;
-    let pvars: Vec<SapicLVar> = match &pd.vars {
-        Some(vs) => vs.iter().map(crate::convert::varspec_to_sapic).collect(),
+    // The def's DECLARED formals (`_pVars`), which both the `pVars` seeding
+    // below and HS's "should not be taken" fallback hand back unchanged.
+    let declared: Option<Vec<SapicLVar>> = pd
+        .vars
+        .as_ref()
+        .map(|vs| vs.iter().map(crate::convert::varspec_to_sapic).collect());
+    let pvars: Vec<SapicLVar> = match &declared {
+        Some(vs) => vs.clone(),
         None => {
             // `S.toList (varsProc pr) List.\\ accBindings pr` — the left list
             // is a dup-free set list, so `\\` (remove ONE occurrence per
@@ -193,37 +202,30 @@ fn type_process_def(
     let renamed = type_and_rename_process_in(env, &aux).map_err(|e| ElabError {
         message: format!("SAPIC typing: {e}"),
     })?;
-    match renamed {
-        Process::Action(SapicAction::ChIn { msg, .. }, _, body) => {
-            let VTerm::App(FunSym::List, t_vars) = msg else {
-                // HS `_ -> return p` ("should not be taken").
-                return Ok((
-                    pd.vars
-                        .as_ref()
-                        .map(|vs| vs.iter().map(crate::convert::varspec_to_sapic).collect()),
-                    pr,
-                ));
-            };
-            // `map termVar' tVars` (VTerm.hs:139-141) — every list element is
-            // a variable (typing preserves the term structure).
-            let vars = t_vars
-                .iter()
-                .map(|t| match t {
-                    VTerm::Lit(Lit::Var(v)) => Ok(v.clone()),
-                    other => Err(ElabError {
-                        message: format!("termVar': non-variable term {other:?}"),
-                    }),
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok((Some(vars), *body))
-        }
-        _ => Ok((
-            pd.vars
-                .as_ref()
-                .map(|vs| vs.iter().map(crate::convert::varspec_to_sapic).collect()),
-            pr,
-        )),
-    }
+    let Process::Action(
+        SapicAction::ChIn {
+            msg: VTerm::App(FunSym::List, t_vars),
+            ..
+        },
+        _,
+        body,
+    ) = renamed
+    else {
+        // HS `_ -> return p` ("should not be taken").
+        return Ok((declared, pr));
+    };
+    // `map termVar' tVars` (VTerm.hs:139-141) — every list element is
+    // a variable (typing preserves the term structure).
+    let vars = t_vars
+        .iter()
+        .map(|t| match t {
+            VTerm::Lit(Lit::Var(v)) => Ok(v.clone()),
+            other => Err(ElabError {
+                message: format!("termVar': non-variable term {other:?}"),
+            }),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((Some(vars), *body))
 }
 
 #[cfg(test)]

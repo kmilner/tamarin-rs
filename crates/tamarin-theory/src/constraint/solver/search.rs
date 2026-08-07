@@ -205,6 +205,32 @@ fn collect_solved_systems<'a>(
     }
 }
 
+/// Consuming variant of [`solved_systems`]: takes the tree by value so
+/// callers that are done rendering it can move the solved `System`s out
+/// instead of cloning them.  Same DFS, same order, same selection.
+pub fn into_solved_systems(node: ProofNode) -> Vec<(Vec<String>, System)> {
+    let mut out = Vec::new();
+    let mut path = Vec::new();
+    collect_solved_systems_owned(node, &mut path, &mut out);
+    out
+}
+
+fn collect_solved_systems_owned(
+    node: ProofNode,
+    path: &mut Vec<String>,
+    out: &mut Vec<(Vec<String>, System)>,
+) {
+    if matches!(node.method, ProofMethod::Finished(MethodResult::Solved)) && node.annotated {
+        out.push((path.clone(), node.sys));
+        return;
+    }
+    for (case, child) in node.children {
+        path.push(case);
+        collect_solved_systems_owned(child, path, out);
+        path.pop();
+    }
+}
+
 // --- Cached kill-switch / debug env flags -------------------------------
 // `expand`/`expand_inner` run once per proof-tree node (thousands of
 // times per lemma); these env vars are constant for the process, so cache

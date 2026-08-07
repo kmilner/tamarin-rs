@@ -446,8 +446,7 @@ fn partial_eval_unknown_value_is_deferred_not_a_parse_error() {
     // (TheoryLoader.hs:354-358), after the maude banner — so `parse_args`
     // must succeed and leave the rejection to `run_batch`.
     let a = parse(&["--partial-evaluation=banana", "t.spthy"]);
-    assert_eq!(a.partial_evaluation, None);
-    assert_eq!(a.partial_evaluation_raw.as_deref(), Some("banana"));
+    assert_eq!(a.partial_evaluation, Some(Err(())));
     assert_eq!(a.in_files, vec!["t.spthy".to_string()]);
 }
 
@@ -457,13 +456,11 @@ fn partial_eval_known_values_and_bare_default() {
     // records the flagOpt default, which is the lowercase literal
     // `"summary"` (TheoryLoader.hs:126-131).
     let a = parse(&["--partial-evaluation=SUMMARY"]);
-    assert_eq!(a.partial_evaluation, Some(PartialEval::Summary));
-    assert_eq!(a.partial_evaluation_raw.as_deref(), Some("SUMMARY"));
+    assert_eq!(a.partial_evaluation, Some(Ok(PartialEval::Summary)));
     let a = parse(&["--partial-evaluation=Verbose"]);
-    assert_eq!(a.partial_evaluation, Some(PartialEval::Verbose));
+    assert_eq!(a.partial_evaluation, Some(Ok(PartialEval::Verbose)));
     let a = parse(&["--partial-evaluation"]);
-    assert_eq!(a.partial_evaluation, Some(PartialEval::Summary));
-    assert_eq!(a.partial_evaluation_raw.as_deref(), Some("summary"));
+    assert_eq!(a.partial_evaluation, Some(Ok(PartialEval::Summary)));
 }
 
 #[test]

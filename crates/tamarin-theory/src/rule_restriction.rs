@@ -141,11 +141,7 @@ pub fn restriction_frees_by_rule(
         for phi in &rule.embedded_restrictions {
             let phi = resolve_nullary_constants(phi, &nullary);
             for v in frees_list(&phi) {
-                let lv = tamarin_term::lterm::LVar::new(
-                    &v.name,
-                    crate::elaborate::sort_of(&v.sort),
-                    v.idx,
-                );
+                let lv = crate::elaborate::varspec_to_lvar(&v);
                 if !frees.contains(&lv) {
                     frees.push(lv);
                 }

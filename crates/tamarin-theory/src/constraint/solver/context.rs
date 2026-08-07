@@ -942,7 +942,7 @@ impl ProofContext {
         // exists iff some conclusion of `R_from` is Maude AC-unifiable
         // with `R_to.prem`.  Loop-breaker analysis runs on
         // `(rule_name, prem_idx)` pairs.
-        annotate_loop_breakers(&mut rules, &maude);
+        annotate_loop_breakers(&mut rules.iter_mut().collect::<Vec<_>>(), &maude);
         // Compute rule variants — direct port of Haskell's
         // `variantsProtoRule` over every protocol rule.  For rules
         // containing reducible (destructor) sub-terms, Maude produces
@@ -1250,8 +1250,13 @@ impl ProofContext {
 /// 3. `dfs_loop_breakers` returns the set of `(rule, prem_idx)`
 ///    targets to mark — the premises whose goals should be tagged
 ///    loop-breaker.
+///
+/// The rules are taken by `&mut` reference each, so a caller holding them
+/// inside a theory can borrow them where they live: only `loop_breakers` is
+/// written, and a `Vec<OpenProtoRule>` copy would deep-clone every rule's
+/// `variant_substs` and `abstracted_rule` just to copy that one field back.
 pub fn annotate_loop_breakers(
-    rules: &mut [OpenProtoRule],
+    rules: &mut [&mut OpenProtoRule],
     maude: &tamarin_term::maude_proc::MaudeHandle,
 ) {
     use crate::rule::PremIdx;
@@ -1276,9 +1281,7 @@ pub fn annotate_loop_breakers(
     };
     let mut keys: Vec<usize> = Vec::with_capacity(rules.len());
     for i in 0..rules.len() {
-        let k = (0..i)
-            .find(|&j| same_item(&rules[j], &rules[i]))
-            .unwrap_or(i);
+        let k = (0..i).find(|&j| same_item(rules[j], rules[i])).unwrap_or(i);
         keys.push(k);
     }
 

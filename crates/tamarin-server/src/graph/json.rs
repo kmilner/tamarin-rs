@@ -620,25 +620,39 @@ const INDENT: &str = "    ";
 /// `&`, DEL and astral-plane characters all reach the wire as themselves;
 /// `removePseudoUnicode` therefore has no encoder-produced escape to undo
 /// (see [`to_pretty_string`]).
+///
+/// Escapes are rare enough in this schema that the pass-through characters are
+/// copied a run at a time: `clean` tracks the start of the verbatim span still
+/// owed to `out`, and only an escaped character flushes it.
 fn escape_into(out: &mut String, s: &str) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c < '\u{20}' => {
+    let mut clean = 0;
+    for (i, c) in s.char_indices() {
+        let short = match c {
+            '"' => Some("\\\""),
+            '\\' => Some("\\\\"),
+            '\n' => Some("\\n"),
+            '\r' => Some("\\r"),
+            '\t' => Some("\\t"),
+            // The remaining C0 controls take the generic `\u00xx` form.
+            _ if c < '\u{20}' => None,
+            // Verbatim: extend the clean run.
+            _ => continue,
+        };
+        out.push_str(&s[clean..i]);
+        match short {
+            Some(esc) => out.push_str(esc),
+            None => {
                 let b = c as u32;
                 out.push_str("\\u00");
                 out.push(HEX[(b >> 4) as usize] as char);
                 out.push(HEX[(b & 0xf) as usize] as char);
             }
-            c => out.push(c),
         }
+        clean = i + c.len_utf8();
     }
+    out.push_str(&s[clean..]);
     out.push('"');
 }
 
@@ -714,11 +728,18 @@ fn write_compound<T>(
 /// six characters `\u003c` is escaped to `\\u003c` and then rewritten to the
 /// invalid-JSON `\<` — reproduced here rather than avoided.  Since the
 /// encoder itself never emits a `\u003c` / `\u003e` escape, that mangling is
-/// the pass's only observable effect.
+/// the pass's only observable effect.  Each rewrite is therefore guarded by a
+/// scan for its needle, which keeps the usual whole-document copy off the path.
 fn to_pretty_string(v: &Value) -> String {
     let mut out = String::new();
     write_value(&mut out, v, 0);
-    out.replace("\\u003c", "<").replace("\\u003e", ">")
+    if out.contains("\\u003c") {
+        out = out.replace("\\u003c", "<");
+    }
+    if out.contains("\\u003e") {
+        out = out.replace("\\u003e", ">");
+    }
+    out
 }
 
 #[cfg(test)]

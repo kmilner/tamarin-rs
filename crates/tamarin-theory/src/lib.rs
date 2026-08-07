@@ -26,7 +26,8 @@
 //!   abstract interpretation, loop breakers, rule-variants,
 //!   injective-fact instances)
 //! - [`check_terms`] ← well-formedness checks; [`deriv_check`] ←
-//!   message-derivation checks
+//!   message-derivation checks; [`translated_wf`] ← the
+//!   `checkTranslatedTheory` re-runs both drivers share
 //! - [`theory`] ← top-level `Theory` (open/closed theories);
 //!   [`elaborate`] ← theory elaboration/closing
 //! - [`tactic`] ← heuristic tactics; [`proof_skeleton`] / [`replay`] /
@@ -79,4 +80,5 @@ pub mod state_trace;
 pub mod tactic;
 pub mod theory;
 pub mod tools;
+pub mod translated_wf;
 pub mod wf_fill;

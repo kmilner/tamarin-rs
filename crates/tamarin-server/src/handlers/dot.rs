@@ -101,7 +101,7 @@ use tamarin_theory::rule::{rule_name_string, IntrRuleACInfo, ProtoRuleName, Rule
 // replaced 1:1 by `&nbsp;` and is re-joined with `unlines` — which appends a
 // TRAILING newline (→ a trailing `\l` after `showAttr`).  Single-line labels
 // pass through untouched.
-use tamarin_utils::dot::fix_multi_line_label;
+use tamarin_utils::dot::{escape_dot_graph_label, fix_multi_line_label};
 
 use crate::graph::abbreviation::{
     apply_abbreviations_fact, order_abbreviations_for_json, Abbreviations,
@@ -162,7 +162,7 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
 pub fn system_to_dot_labeled(sys: &System, opts: &GraphOptions, label: &str) -> String {
     let graph = system_to_graph(sys, opts);
     let color_map = build_node_color_map(&sys.nodes);
-    dot_graph_compact_framed(opts, &color_map, &graph, Some(label))
+    dot_graph_compact_labeled(opts, &color_map, &graph, label)
 }
 
 /// Port of `dotGraphCompact` (Dot.hs:514-538): emit a [`Graph`]'s repr as DOT
@@ -174,21 +174,38 @@ pub fn system_to_dot_labeled(sys: &System, opts: &GraphOptions, label: &str) -> 
 /// edges laid out here come from the compressed/simplified copy in
 /// [`Graph::repr`].
 fn dot_graph_compact(opts: &GraphOptions, color_map: &NodeColorMap, graph: &Graph<'_>) -> String {
-    dot_graph_compact_framed(opts, color_map, graph, None)
+    format!(
+        "digraph G {{\n{}}}\n",
+        dot_graph_compact_body(opts, color_map, graph)
+    )
 }
 
-/// [`dot_graph_compact`] with the framing selector: `None` is the web routes'
-/// `digraph G {` … `}`, `Some(label)` is HS `showDot`'s quoted-id framing
-/// (see [`system_to_dot_labeled`]).
-fn dot_graph_compact_framed(
+/// [`dot_graph_compact`]'s body under HS `showDot`'s framing instead
+/// (Text/Dot.hs:236-248): a QUOTED digraph id carrying `label`, and the
+/// `"\n}\n"` tail that leaves a blank line before the closing brace.
+fn dot_graph_compact_labeled(
     opts: &GraphOptions,
     color_map: &NodeColorMap,
     graph: &Graph<'_>,
-    label: Option<&str>,
+    label: &str,
+) -> String {
+    format!(
+        "digraph \"{}\" {{\n{}\n}}\n",
+        escape_dot_graph_label(label),
+        dot_graph_compact_body(opts, color_map, graph)
+    )
+}
+
+/// The graph body both framings wrap: the attribute preamble and the element
+/// block, with no `digraph` header and no closing brace.
+fn dot_graph_compact_body(
+    opts: &GraphOptions,
+    color_map: &NodeColorMap,
+    graph: &Graph<'_>,
 ) -> String {
     let repr = &graph.repr;
     let abbrevs = &graph.abbreviations;
-    let mut g = DotBuilder::new(label);
+    let mut g = DotBuilder::new();
     // HS `dotGraphCompact` (Dot.hs:515-538, see line 528) switches the graph-level defaults to
     // `setDefaultAttributesIfCluster` when the repr has any clusters.
     g.preamble(!repr.clusters.is_empty());
@@ -375,7 +392,6 @@ fn dot_graph_compact_framed(
     if opts.abbreviate && !abbrevs.is_empty() {
         g.legend(abbrevs);
     }
-    g.close();
     g.into_string()
 }
 
@@ -574,37 +590,21 @@ fn try_render_dot_to_svg(dot: &str, dot_cmd: &str) -> std::io::Result<Vec<u8>> {
 // DOT construction
 // ---------------------------------------------------------------------
 
+/// Accumulates the UNFRAMED graph body — the attribute preamble and the
+/// element block.  The `digraph …{` header and the closing brace are the
+/// caller's ([`dot_graph_compact`] / [`dot_graph_compact_labeled`]).
 struct DotBuilder {
     buf: String,
-    /// `Some(label)` selects HS `showDot`'s framing (Text/Dot.hs:234-248):
-    /// a quoted digraph id and a blank line before the closing brace.
-    /// `None` is the web routes' framing.
-    label: Option<String>,
 }
 
 impl DotBuilder {
-    fn new(label: Option<&str>) -> Self {
-        DotBuilder {
-            buf: String::new(),
-            label: label.map(str::to_string),
-        }
+    fn new() -> Self {
+        DotBuilder { buf: String::new() }
     }
     fn into_string(self) -> String {
         self.buf
     }
     fn preamble(&mut self, has_clusters: bool) {
-        match &self.label {
-            // `"digraph " ++ "\"" ++ escapedLabel ++ "\"" ++ " {\n"`, with
-            // `escapedLabel` escaping `"` and nothing else (Text/Dot.hs:241,
-            // 246-248).
-            Some(l) => {
-                let escaped = l.replace('"', "\\\"");
-                let _ = writeln!(self.buf, "digraph \"{}\" {{", escaped);
-            }
-            None => {
-                let _ = writeln!(self.buf, "digraph G {{");
-            }
-        }
         if has_clusters {
             // HS `setDefaultAttributesIfCluster` (Dot.hs:140-161): a richer
             // attribute block for clustered graphs.
@@ -645,16 +645,6 @@ impl DotBuilder {
             );
             let _ = writeln!(self.buf, "  edge [fontsize=8,fontname=\"Helvetica\"];");
         }
-    }
-    fn close(&mut self) {
-        // `unlines (map showGraphElement elems) ++ "\n}\n"` (Text/Dot.hs:248):
-        // every element line is already newline-terminated, so the extra `\n`
-        // leaves one blank line before the brace.  Framing-only, so the web
-        // routes' output is unchanged.
-        if self.label.is_some() {
-            self.buf.push('\n');
-        }
-        let _ = writeln!(self.buf, "}}");
     }
     fn dot_node_id(nid: &LVar) -> String {
         // Sanitise to a valid DOT identifier.

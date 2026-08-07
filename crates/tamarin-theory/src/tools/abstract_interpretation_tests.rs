@@ -10,7 +10,7 @@
 
 use super::*;
 use crate::fact::{proto_fact, Multiplicity};
-use crate::rule::ProtoRuleEInfo;
+use crate::rule::{ProtoRuleEInfo, Rule};
 use crate::signature::SignaturePure;
 use tamarin_term::builtin::{fresh_var, msg_var};
 use tamarin_term::lterm::pub_term;
@@ -744,7 +744,7 @@ fn loop_breakers_key_same_named_refined_rules_apart() {
 
     // Acyclic per item: Step('1') feeds Back, Back feeds Step('2') — no
     // node reaches itself unless the two Steps are conflated by name.
-    let mut rules = vec![
+    let mut rules = [
         rule(
             "Gen",
             vec![crate::fact::fresh_fact(fresh_var("x", 0))],
@@ -766,7 +766,7 @@ fn loop_breakers_key_same_named_refined_rules_apart() {
             vec![fact("A", pub_term("2"))],
         ),
     ];
-    annotate_loop_breakers(&mut rules, &h);
+    annotate_loop_breakers(&mut rules.iter_mut().collect::<Vec<_>>(), &h);
     assert!(
         rules.iter().all(|r| r.loop_breakers.is_empty()),
         "acyclic per-item graph must yield no breakers; got {:?}",
@@ -776,7 +776,7 @@ fn loop_breakers_key_same_named_refined_rules_apart() {
     // Real cycle: Step('1') → B('1') → Back → A('1') → Step('1').  Rules
     // in the refined theory's (name-sorted) order; the oracle marks Back
     // premise 0.
-    let mut rules = vec![
+    let mut rules = [
         rule(
             "Back",
             vec![fact("B", pub_term("1"))],
@@ -793,7 +793,7 @@ fn loop_breakers_key_same_named_refined_rules_apart() {
             vec![fact("B", pub_term("1"))],
         ),
     ];
-    annotate_loop_breakers(&mut rules, &h);
+    annotate_loop_breakers(&mut rules.iter_mut().collect::<Vec<_>>(), &h);
     let breakers: Vec<&[PremIdx]> = rules.iter().map(|r| r.loop_breakers.as_slice()).collect();
     assert_eq!(
         breakers,

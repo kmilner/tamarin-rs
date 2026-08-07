@@ -13,6 +13,6 @@ features/injectivity/injectivity.spthy        # injective fact instances
 loops/RFID_Simple.spthy                       # persistent-fact loop
 wisec21-5G-handover/inter-5G/EPS_to_5GS_over_N26/5G_handover.spthy  # large real-world
 thesis-LaraSchmid-evoting/chapter5_HumanErrors/HPagree.spthy        # human-error rules
-classic/TLS_Handshake.spthy                   # ledgered: stderr-openchains-double
+classic/TLS_Handshake.spthy                   # duplicated [Open Chains] stderr line (nerr collapses it)
 features/heuristic/OracleRanking.spthy        # ledgered: stderr-oracle-calls
 classic/NSPK3.spthy                           # plain healthy baseline

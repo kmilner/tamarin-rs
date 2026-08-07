@@ -56,10 +56,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tamarin_parser::ast as p;
 use tamarin_term::function_symbols::FunSym;
-use tamarin_term::lterm::{avoid, rename, sort_of_lnterm, HasFrees, LNTerm, LSort, LVar, Name};
+use tamarin_term::lterm::{avoid, rename, sort_of_lnterm, HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::maude_proc::{MaudeError, MaudeHandle};
 use tamarin_term::rewriting::Equal;
-use tamarin_term::subst::{apply_vterm, Subst};
 use tamarin_term::subst_vfresh::LNSubstVFresh;
 use tamarin_term::term::{f_app, Term};
 use tamarin_term::vterm::{var_term, Lit};
@@ -68,7 +67,7 @@ use tamarin_utils::fresh::FastFreshState;
 use crate::fact::{fresh_fact, in_fact, out_fact, FactTag, LNFact};
 use crate::pretty_formula as pf;
 use crate::pretty_hpj::{self as hpj, Doc};
-use crate::rule::{unify_ln_fact_eqs, ProtoRuleE, ProtoRuleName, Rule};
+use crate::rule::{unify_ln_fact_eqs, ProtoRuleE, ProtoRuleName};
 use crate::theory::{OpenProtoRule, Theory, TheoryItem};
 
 /// How to report on performing a partial evaluation.  HS
@@ -128,7 +127,7 @@ fn abs_term(t: &LNTerm, st: &mut AbsState) -> LNTerm {
 /// dropped — `outFact` builds a default-annotation fact); any other fact
 /// keeps its tag and annotations with the terms abstracted left-to-right
 /// under one per-fact binding map / counter.
-pub fn abs_fact(fa: &LNFact) -> LNFact {
+pub(crate) fn abs_fact(fa: &LNFact) -> LNFact {
     match fa.tag {
         FactTag::Out => out_fact(var_term(LVar::new("z", LSort::Msg, 0))),
         _ => {
@@ -145,34 +144,6 @@ pub fn abs_fact(fa: &LNFact) -> LNFact {
 // =============================================================================
 // interpretAbstractly (AbstractInterpretation.hs:44-83)
 // =============================================================================
-
-/// Apply a free substitution to every fact (and new-var term) of a rule;
-/// `info` untouched (HS `Apply s ProtoRuleEInfo = id`, Rule.hs:500-501).
-fn apply_subst_rule_e(sigma: &Subst<Name, LVar>, r: &ProtoRuleE) -> ProtoRuleE {
-    let app_facts = |fs: &[LNFact]| -> Vec<LNFact> {
-        fs.iter()
-            .map(|f| {
-                let terms: Vec<LNTerm> = f
-                    .terms
-                    .iter()
-                    .map(|t| apply_vterm(sigma, t.clone()))
-                    .collect();
-                LNFact::fresh_annotated(f.tag, f.annotations.clone(), terms)
-            })
-            .collect()
-    };
-    Rule {
-        info: r.info.clone(),
-        premises: app_facts(&r.premises),
-        conclusions: app_facts(&r.conclusions),
-        actions: app_facts(&r.actions),
-        new_vars: r
-            .new_vars
-            .iter()
-            .map(|t| apply_vterm(sigma, t.clone()))
-            .collect(),
-    }
-}
 
 /// HS `refineRule` (AbstractInterpretation.hs:76-83), the `FreshT []`
 /// nondeterminism made explicit as a DFS: for each premise (in order),
@@ -210,7 +181,7 @@ fn refine_rule(
                 // (each unifier alternative starts from the same value).
                 let mut c = counter.clone();
                 let sigma = s_fresh.fresh_to_free_avoiding(|n| c.fresh_idents(n));
-                out.push(apply_subst_rule_e(&sigma, ru));
+                out.push(crate::close_rule::apply_subst_rule(&sigma, ru));
             }
             return Ok(());
         }
@@ -231,31 +202,38 @@ fn refine_rule(
     // maximum free variable index.  HS's `avoid` folds the rule info too
     // (`HasFrees (Rule i)`, Rule.hs:291-298), so the `_restrict` formulas'
     // frees participate in the bound; `extra_frees` carries them.
-    let mut seed = avoid(ru);
-    let used = seed.fresh_idents(0);
-    let want = extra_frees.iter().map(|v| v.idx + 1).max().unwrap_or(0);
-    if want > used {
-        seed.fresh_idents(want - used);
-    }
+    let body_bound = avoid(ru).fresh_idents(0);
+    let info_bound = extra_frees.iter().map(|v| v.idx + 1).max().unwrap_or(0);
+    let seed = FastFreshState::seeded(body_bound.max(info_bound));
     let mut eqs: Vec<Equal<LNFact>> = Vec::new();
     go(maude, state_facts, ru, 0, seed, &mut eqs, out)
 }
 
-/// HS `interpretAbstractly` (AbstractInterpretation.hs:44-83),
-/// instantiated at its single upstream use (`S.Set LNFact` state,
-/// `S.insert . absFact` add, `unifyLNFactEqs` unification).  Returns the
-/// full iteration sequence: pairs of (state, rules refined against that
-/// state); the state of pair `i+1` is pair `i`'s state extended with the
-/// abstracted conclusions of pair `i`'s rules, and the last pair's state
-/// equals its successor's (the fixpoint).  `restr_frees` carries each
-/// rule's `_restrict`-formula frees (see the module doc), which extend
-/// the per-rule `avoid` seed exactly as HS's info-folding `HasFrees`
-/// does.
-pub fn interpret_abstractly(
+/// HS `interpretAbstractly` (AbstractInterpretation.hs:44-83) fused with
+/// `partialEvaluation`'s `consumeEvaluation` (AbstractInterpretation.hs:100-118),
+/// instantiated at their single upstream use (`S.Set LNFact` state,
+/// `S.insert . absFact` add, `unifyLNFactEqs` unification).
+///
+/// HS produces a LAZY list of `(state, rules refined against that state)`
+/// pairs which `consumeEvaluation` walks, tracing each adjacent pair and
+/// keeping only the last.  Materialising that list would hold every
+/// iteration's rule vector at once, so the per-step trace is built as the
+/// loop runs — same values, same order, same bytes — and only the current
+/// state plus the last iteration's rules are retained.
+///
+/// Returns `(fixpoint state, the rules refined against it, trace)`.  The
+/// fixpoint iteration itself contributes no trace line: HS traces adjacent
+/// pairs, and the final pair's state equals its predecessor's successor.
+///
+/// `restr_frees` carries each rule's `_restrict`-formula frees (see the
+/// module doc), which extend the per-rule `avoid` seed exactly as HS's
+/// info-folding `HasFrees` does.
+pub(crate) fn interpret_abstractly(
     maude: &MaudeHandle,
+    style: EvaluationStyle,
     rules: &[ProtoRuleE],
     restr_frees: &BTreeMap<String, Vec<LVar>>,
-) -> Result<Vec<(BTreeSet<LNFact>, Vec<ProtoRuleE>)>, MaudeError> {
+) -> Result<(BTreeSet<LNFact>, Vec<ProtoRuleE>, String), MaudeError> {
     let mut st: BTreeSet<LNFact> = BTreeSet::new();
     st.insert(abs_fact(&fresh_fact(var_term(LVar::new(
         "z",
@@ -264,18 +242,21 @@ pub fn interpret_abstractly(
     )))));
     st.insert(abs_fact(&in_fact(var_term(LVar::new("z", LSort::Msg, 0)))));
 
-    let mut out: Vec<(BTreeSet<LNFact>, Vec<ProtoRuleE>)> = Vec::new();
+    let mut trace = String::new();
+    let mut step = 0usize;
     loop {
-        let state_facts: Vec<&LNFact> = st.iter().collect();
         let mut refined: Vec<ProtoRuleE> = Vec::new();
-        for ru in rules {
-            refine_rule(
-                maude,
-                &state_facts,
-                ru,
-                info_frees(restr_frees, ru),
-                &mut refined,
-            )?;
+        {
+            let state_facts: Vec<&LNFact> = st.iter().collect();
+            for ru in rules {
+                refine_rule(
+                    maude,
+                    &state_facts,
+                    ru,
+                    info_frees(restr_frees, ru),
+                    &mut refined,
+                )?;
+            }
         }
         // Only CONCLUSIONS feed the state (HS `get rConcs`).  `S.insert`
         // REPLACES an existing equal element, and `Eq`/`Ord LNFact` compare
@@ -290,11 +271,31 @@ pub fn interpret_abstractly(
                 st_next.replace(abs_fact(c));
             }
         }
-        let stable = st_next == st;
-        out.push((std::mem::replace(&mut st, st_next), refined));
-        if stable {
-            return Ok(out);
+        if st_next == st {
+            return Ok((st, refined, trace));
         }
+        // HS `withTrace` over the step from `st` to `st_next`
+        // (AbstractInterpretation.hs:109-118).
+        let added = st_next.len() - st.len();
+        match style {
+            EvaluationStyle::Silent => {}
+            EvaluationStyle::Summary => {
+                trace.push_str(&format!(
+                    " partial evaluation: step {} added {} facts\n",
+                    step, added
+                ));
+            }
+            EvaluationStyle::Tracing => {
+                let diff: Vec<Doc> = st_next.difference(&st).map(state_fact_doc).collect();
+                let body = render_default_style(hpj::numbered_prime(diff).nest(2));
+                trace.push_str(&format!(
+                    " partial evaluation: step {} added {} facts\n\n{}\n\n",
+                    step, added, body
+                ));
+            }
+        }
+        step += 1;
+        st = st_next;
     }
 }
 
@@ -394,42 +395,13 @@ fn render_default_style(d: Doc) -> String {
 ///   `Silent`.  NOT printed here: HS's trace thunks fire during rendering,
 ///   after the `[Theory X] Theory closed` marker, so the caller must
 ///   `eprint!` the returned string at that point.
-pub fn partial_evaluation(
+pub(crate) fn partial_evaluation(
     maude: &MaudeHandle,
     style: EvaluationStyle,
     ru_es: &[ProtoRuleE],
     restr_frees: &BTreeMap<String, Vec<LVar>>,
 ) -> Result<(BTreeSet<LNFact>, Vec<ProtoRuleE>, String), MaudeError> {
-    let pairs = interpret_abstractly(maude, ru_es, restr_frees)?;
-    // consumeEvaluation: a trace per adjacent pair (the last pair, the
-    // fixpoint, produces none).
-    let mut trace = String::new();
-    for (i, w) in pairs.windows(2).enumerate() {
-        let (st, _) = &w[0];
-        let (st_next, _) = &w[1];
-        let added = st_next.len() - st.len();
-        match style {
-            EvaluationStyle::Silent => {}
-            EvaluationStyle::Summary => {
-                trace.push_str(&format!(
-                    " partial evaluation: step {} added {} facts\n",
-                    i, added
-                ));
-            }
-            EvaluationStyle::Tracing => {
-                let diff: Vec<Doc> = st_next.difference(st).map(state_fact_doc).collect();
-                let body = render_default_style(hpj::numbered_prime(diff).nest(2));
-                trace.push_str(&format!(
-                    " partial evaluation: step {} added {} facts\n\n{}\n\n",
-                    i, added, body
-                ));
-            }
-        }
-    }
-    let (final_st, final_rules) = pairs
-        .into_iter()
-        .next_back()
-        .expect("interpret_abstractly returns at least one pair");
+    let (final_st, final_rules, trace) = interpret_abstractly(maude, style, ru_es, restr_frees)?;
     // `map ((`evalFresh` nothingUsed) . rename)`: per rule, a uniform
     // index shift making the minimum free var index 0.  The minimum is
     // taken over the body frees AND the rule's unsubstituted
@@ -452,18 +424,15 @@ pub fn partial_evaluation(
 /// uniformly so the minimum becomes 0.  `extra` is shifted too (HS's
 /// `mapFrees` maps the info) and returned for the dedup's canon pass.
 fn rename_rule_from_zero(r: ProtoRuleE, extra: Vec<LVar>) -> (ProtoRuleE, Vec<LVar>) {
-    let mut min_max: Option<(u64, u64)> = None;
+    let mut lo: Option<u64> = None;
     let mut see = |idx: u64| {
-        min_max = Some(match min_max {
-            None => (idx, idx),
-            Some((lo, hi)) => (lo.min(idx), hi.max(idx)),
-        });
+        lo = Some(lo.map_or(idx, |m: u64| m.min(idx)));
     };
     r.for_each_free(&mut |v| see(v.idx));
     for v in &extra {
         see(v.idx);
     }
-    let Some((min, _)) = min_max else {
+    let Some(min) = lo else {
         return (r, extra);
     };
     // `freshIdents` on `nothingUsed` returns 0, so the shift is `-min`.
@@ -495,7 +464,7 @@ fn proto_rule_cmp(a: &ProtoRuleE, b: &ProtoRuleE) -> std::cmp::Ordering {
 /// The `text{* … *}` report body (HS `ppAbsState`, Prover.hs:255-262),
 /// byte-exact: leading space, `$--$`-joined header / `numbered'` fact list
 /// / footer, trailing `".\n\n"` from the footer's literal newlines.
-pub fn abs_state_report(st: &BTreeSet<LNFact>, n_refined: usize, n_orig: usize) -> String {
+pub(crate) fn abs_state_report(st: &BTreeSet<LNFact>, n_refined: usize, n_orig: usize) -> String {
     let header = Doc::text(format!(
         " the abstract state after partial evaluation contains {} facts:",
         st.len()
@@ -510,53 +479,6 @@ pub fn abs_state_report(st: &BTreeSet<LNFact>, n_refined: usize, n_orig: usize) 
         hpj::above_blank(header, hpj::numbered_prime(facts)),
         footer,
     ))
-}
-
-/// `RuleAttributes` back to the parser-AST attribute list for a
-/// synthesised rule item.  Inverse of `rule_attributes_from_parser`
-/// (elaborate.rs); render order is fixed downstream by
-/// `rule_attribute_parts` so list order is immaterial.  `process` has no
-/// `RuleAttributes` field on the RS side (elaboration drops it), so it
-/// cannot be reconstructed here.
-fn rule_attrs_to_parser(a: &crate::rule::RuleAttributes) -> Vec<p::RuleAttr> {
-    let mut out = Vec::new();
-    if let Some(c) = a.color {
-        out.push(p::RuleAttr::Color(tamarin_utils::color::rgb_to_hex(c)));
-    }
-    if a.ignore_deriv_checks {
-        out.push(p::RuleAttr::NoDerivCheck);
-    }
-    if a.is_sapic_rule {
-        out.push(p::RuleAttr::IsSapicRule);
-    }
-    if let Some(r) = &a.role {
-        out.push(p::RuleAttr::Role(r.clone()));
-    }
-    out
-}
-
-/// Materialise a refined `ProtoRuleE` as a parser-AST rule item so
-/// `pretty_closed_theory`'s parsed-item stream can render it (the display
-/// facts come from here).  The synthesised rule is already macro/let
-/// expanded, so the render path's `apply_let_block` / macro checks are
-/// no-ops; AC argument order is canonicalised at render time
-/// (`render_rule_body`), exactly as for the modulo-AC comment blocks.
-fn proto_rule_to_parsed(r: &ProtoRuleE) -> p::Rule {
-    p::Rule {
-        name: match &r.info.name {
-            ProtoRuleName::Stand(s) => s.to_string(),
-            ProtoRuleName::Fresh => "Fresh".to_string(),
-        },
-        modulo: None,
-        attributes: rule_attrs_to_parser(&r.info.attributes),
-        let_block: vec![],
-        premises: crate::pretty_theory::lnfacts_to_parser(&r.premises),
-        actions: crate::pretty_theory::lnfacts_to_parser(&r.actions),
-        conclusions: crate::pretty_theory::lnfacts_to_parser(&r.conclusions),
-        embedded_restrictions: vec![],
-        variants: vec![],
-        left_right: None,
-    }
 }
 
 /// HS `applyPartialEvaluation` (Prover.hs:237-264), operating on RS's
@@ -623,45 +545,62 @@ pub fn apply_partial_evaluation(
     let (st, refined, trace) = partial_evaluation(maude, style, &ru_es, restr_frees)?;
     let body = abs_state_report(&st, refined.len(), ru_es.len());
 
-    // Parsed-side splice.
-    let old_items = std::mem::take(&mut parsed.items);
-    let mut new_items: Vec<p::TheoryItem> = Vec::with_capacity(old_items.len() + refined.len() + 1);
-    for (i, it) in old_items.into_iter().enumerate() {
-        if i < p_anchor {
-            new_items.push(it);
-        } else if i == p_anchor {
-            new_items.push(p::TheoryItem::FormalComment {
-                header: "text".to_string(),
-                body: body.clone(),
-            });
-            for r in &refined {
-                new_items.push(p::TheoryItem::Rule(proto_rule_to_parsed(r)));
-            }
-        } else if !matches!(it, p::TheoryItem::Rule(_)) {
-            new_items.push(it);
-        }
-    }
-    parsed.items = new_items;
+    // Parsed-side splice: the report block, then one rule item per refined
+    // rule.  Borrows `refined` so the elaborated side can consume it.
+    let mut inserted: Vec<p::TheoryItem> = Vec::with_capacity(refined.len() + 1);
+    inserted.push(p::TheoryItem::FormalComment {
+        header: "text".to_string(),
+        body: body.clone(),
+    });
+    inserted.extend(
+        refined
+            .iter()
+            .map(|r| p::TheoryItem::Rule(crate::pretty_theory::proto_rule_to_parsed(r))),
+    );
+    parsed.items = splice_refined(
+        std::mem::take(&mut parsed.items),
+        p_anchor,
+        |it| matches!(it, p::TheoryItem::Rule(_)),
+        inserted,
+    );
 
     // Elaborated-side splice (same shape; the refined rules carry empty
     // variant/loop-breaker fields for the caller's re-close).
-    let old_items = std::mem::take(&mut elaborated.items);
-    let mut new_items: Vec<TheoryItem> = Vec::with_capacity(old_items.len() + refined.len() + 1);
-    for (i, it) in old_items.into_iter().enumerate() {
-        if i < e_anchor {
-            new_items.push(it);
-        } else if i == e_anchor {
-            new_items.push(TheoryItem::Text(("text".to_string(), body.clone())));
-            for r in &refined {
-                new_items.push(TheoryItem::Rule(OpenProtoRule::new(r.clone())));
-            }
-        } else if !matches!(it, TheoryItem::Rule(_)) {
-            new_items.push(it);
-        }
-    }
-    elaborated.items = new_items;
+    let mut inserted: Vec<TheoryItem> = Vec::with_capacity(refined.len() + 1);
+    inserted.push(TheoryItem::Text(("text".to_string(), body)));
+    inserted.extend(
+        refined
+            .into_iter()
+            .map(|r| TheoryItem::Rule(OpenProtoRule::new(r))),
+    );
+    elaborated.items = splice_refined(
+        std::mem::take(&mut elaborated.items),
+        e_anchor,
+        |it| matches!(it, TheoryItem::Rule(_)),
+        inserted,
+    );
 
     Ok(trace)
+}
+
+/// HS `replaceProtoRules` as one list rewrite, shared by the parsed and
+/// elaborated item lists: keep everything before `anchor` verbatim, put
+/// `inserted` (the report block followed by the refined rules) in the
+/// anchor's place, then keep the later NON-rule items in order.  `anchor`
+/// itself is a rule item, so the `is_rule` filter over the tail drops it
+/// along with every later rule item.
+fn splice_refined<T>(
+    items: Vec<T>,
+    anchor: usize,
+    is_rule: impl Fn(&T) -> bool,
+    inserted: Vec<T>,
+) -> Vec<T> {
+    let mut out = items;
+    let tail = out.split_off(anchor);
+    out.reserve(inserted.len() + tail.len());
+    out.extend(inserted);
+    out.extend(tail.into_iter().filter(|it| !is_rule(it)));
+    out
 }
 
 #[cfg(test)]

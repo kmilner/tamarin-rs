@@ -29,7 +29,12 @@
 //! [`strip_maude_banner`] is the positive control: it panics when a run that
 //! should have started maude produced no banner.
 
-use std::process::Command;
+mod common;
+
+use common::{joined, maude_available, normalize_stdout, strip_maude_banner};
+
+/// The temp subdirectory this suite writes its theories to.
+const TMP_DIR: &str = "tamarin_prover_partial_evaluation";
 
 /// `crates/tamarin-prover/tests/fixtures/single_recv.spthy`, inline: two
 /// rules declared `Send` then `Recv`, so the alphabetical re-emission that
@@ -41,116 +46,13 @@ const THEORY: &str = "theory SingleRecv\nbegin\n\n\
                       lemma chain:\n  exists-trace\n  \
                       \"Ex k #i #j. S(k) @ i & R(k) @ j\"\n\nend\n";
 
-fn maude_available() -> bool {
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        return std::path::Path::new(&p).exists();
-    }
-    for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
-        if std::path::Path::new(c).exists() {
-            return true;
-        }
-    }
-    false
-}
-
-/// `--with-maude=PATH` from the `MAUDE_PATH` env override, when set.
-fn maude_arg() -> Option<String> {
-    std::env::var("MAUDE_PATH")
-        .ok()
-        .map(|p| format!("--with-maude={p}"))
-}
-
-/// Drop the `maude tool: '<path>'` line and the ` checking …: OK.` lines that
-/// follow it (Console.hs:150-155): the path comes from `--with-maude` and the
-/// version from the local maude, so only their presence is portable.  Applied
-/// per test rather than inside [`run_binary`], because `--parse-only` never
-/// starts Maude (Batch.hs:91-95) and so prints no banner at all.
-fn strip_maude_banner(stderr: &str) -> String {
-    let rest: String = stderr
-        .split_inclusive('\n')
-        .skip_while(|l| l.starts_with("maude tool: '") || l.starts_with(" checking "))
-        .collect();
-    assert_ne!(
-        rest, stderr,
-        "expected a `maude tool:` banner on stderr; got:\n{stderr}"
-    );
-    rest
-}
-
-/// `<maude> --version` of the same binary [`run_binary`] hands the prover:
-/// `MAUDE_PATH` when set, else the default-path probe list the binary uses.
-fn local_maude_version() -> Option<String> {
-    let path = std::env::var("MAUDE_PATH").ok().or_else(|| {
-        ["/usr/local/bin/maude", "/usr/bin/maude"]
-            .iter()
-            .find(|c| std::path::Path::new(c).exists())
-            .map(|c| c.to_string())
-    })?;
-    let out = Command::new(&path).arg("--version").output().ok()?;
-    let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!v.is_empty()).then_some(v)
-}
-
-/// Blank the build-local lines of the `Generated from:` block, the temp-dir
-/// input path and the wall-clock measurement, so what remains is comparable
-/// across machines.  The `Maude version` line is blanked ONLY when it names
-/// the local maude's actual version — a mismatch (e.g. `unknown` because the
-/// binary probed the wrong maude) must keep failing the byte comparison.
-fn normalize_stdout(stdout: &str) -> String {
-    let local_maude = local_maude_version()
-        .map(|v| format!("Maude version {v}"))
-        .unwrap_or_default();
-    stdout
-        .lines()
-        .filter(|l| !l.starts_with("  processing time: "))
-        .map(|l| {
-            if l.starts_with("Git revision: ") || l.starts_with("Compiled at: ") {
-                "<build info>"
-            } else if l.starts_with("analyzed: ") {
-                "analyzed: <in file>"
-            } else if !local_maude.is_empty() && l == local_maude {
-                "Maude version <local maude>"
-            } else {
-                l
-            }
-        })
-        .fold(String::new(), |mut acc, l| {
-            acc.push_str(l);
-            acc.push('\n');
-            acc
-        })
-}
-
 /// Run the built binary on [`THEORY`] with `extra` flags, returning
-/// `(exit code, normalized stdout, raw stderr)`.
+/// `(exit code, normalized stdout, raw stderr)`.  The banner is NOT stripped
+/// here: `--parse-only` never starts Maude (Batch.hs:91-95), so the tests that
+/// want it gone call [`strip_maude_banner`] themselves.
 fn run_binary(stem: &str, extra: &[&str]) -> (i32, String, String) {
-    let dir = std::env::temp_dir().join("tamarin_prover_partial_evaluation");
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    let path = dir.join(format!("{stem}.spthy"));
-    std::fs::write(&path, THEORY).expect("write theory");
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
-    if let Some(a) = maude_arg() {
-        cmd.arg(a);
-    }
-    let out = cmd
-        .args(extra)
-        .arg(&path)
-        .output()
-        .expect("spawn tamarin-rs");
-    (
-        out.status.code().expect("exit code"),
-        normalize_stdout(&String::from_utf8(out.stdout).expect("utf-8 stdout")),
-        String::from_utf8(out.stderr).expect("utf-8 stderr"),
-    )
-}
-
-/// Join oracle-captured lines back into the stream they came from.
-fn joined(lines: &[&str]) -> String {
-    lines.iter().fold(String::new(), |mut acc, l| {
-        acc.push_str(l);
-        acc.push('\n');
-        acc
-    })
+    let (code, stdout, stderr) = common::run_raw(TMP_DIR, stem, THEORY, extra);
+    (code, normalize_stdout(&stdout), stderr)
 }
 
 /// The oracle's `--partial-evaluation=summary` stdout for [`THEORY`],

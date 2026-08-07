@@ -10,11 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tamarin_parser::parse_theory;
-use tamarin_parser::wf::{
-    after_public_names_topics, after_unbound_topics, insert_wf_before, WfError,
-    WF_AFTER_CHECK_GUARDED, WF_AFTER_FACT_LHS, WF_AFTER_MULT_RESTRICTED, WF_AFTER_NAT_SORTED,
-    WF_TOPIC_ORDER,
-};
+use tamarin_parser::wf::WfError;
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_theory::elaborate::elaborate;
 
@@ -246,101 +242,16 @@ pub fn load_from_source(
     }
 
     // HS re-runs the full `checkWellformedness` on the TRANSLATED theory
-    // (`checkTranslatedTheory`, mirrored by `run_batch`): re-run
-    // `factLhsOccurNoRhs` on the post-translation parsed theory so SAPIC-only
-    // premise facts (e.g. a `Message(c,m)` consumed by an `in(c,m)` with no
-    // producing `out`) are surfaced.  No-op for non-SAPIC theories (pre- and
-    // post-translation rule sets are equal).
-    //
-    // `post_thy` is the translated theory with macros expanded, as HS
-    // `thyProtoRules` / `applyMacroInFormula` do before every check.
-    let post_thy = tamarin_theory::macro_expand::macro_expanded_clone(&parser_theory);
-    if typed.is_sapic {
-        // HS `unboundReport` walks the TRANSLATED `thyProtoRules`, so a
-        // variable free only inside a process's embedded `_restrict` — lifted
-        // into the generated rule's `Restr_<rule>_<i>( … )` action and bound by
-        // no premise — is reported against that generated rule.  Same replace
-        // + splice as the batch path; the boundary list is every topic a check
-        // past HS index 2 emits.
-        wf_report.retain(|e| e.topic != "Unbound variables");
-        let unbound = tamarin_parser::wf::unbound_report(&post_thy);
-        insert_wf_before(&mut wf_report, unbound, &after_unbound_topics());
-
-        let topic = "Facts occur in the left-hand-side but not in any right-hand-side ";
-        wf_report.retain(|e| e.topic != topic);
-        let lhs_rhs = tamarin_parser::wf::fact_lhs_occur_no_rhs(&post_thy);
-        insert_wf_before(
-            &mut wf_report,
-            lhs_rhs,
-            &WF_TOPIC_ORDER[WF_AFTER_FACT_LHS..],
-        );
-        // HS `publicNamesReport` runs on the TRANSLATED rules — the
-        // parser-level report cannot see the source process a generated
-        // rule carries as its `process=` attribute (e.g. CentralizedMonitor's
-        // `rule "Init":  name 'C', 'c'`).  Same replace + splice as the batch
-        // path; the boundary list is WF_TOPIC_ORDER minus "Unbound variables"
-        // (unboundReport runs BEFORE publicNames in HS, so it must not act as
-        // a boundary), headed by the variable-sorts topic.
-        let caps_topic = "Public constants with mismatching capitalization";
-        wf_report.retain(|e| e.topic != caps_topic);
-        let public_names = tamarin_theory::elaborate::sapic_public_names_report(&typed);
-        insert_wf_before(&mut wf_report, public_names, &after_public_names_topics());
-    }
-
-    // The whole of HS `formulaReports` — `checkQuantifiers` / `checkTerms` /
-    // `checkGuarded` interleaved per formula (as in `run_batch`).  It needs the
-    // elaborated MaudeSig (reducible/irreducible funsym classification), so it
-    // runs here rather than inside `check_theory`.  It reads the
-    // POST-translation `post_thy` because HS's single `checkWellformedness`
-    // pass runs on the `OpenTranslatedTheory` (`checkTranslatedTheory`,
-    // TheoryLoader.hs:559-565, fed by `closeTheory` at :726-728), so
-    // `annFormulas` (Wellformedness.hs:1006-1015) also covers the restrictions
-    // SAPIC's `let … else` / `if` lowering mints (`Restr_<rule>_<i>`, carrying
-    // the branch's terms verbatim — e.g. an `exp` application from
-    // `<<'a'^'b','b'>, 'c'>`) and the lemmas accountability's `translate`
-    // appends.  Both land in `parser_theory` only after `apply_sapic` /
-    // `Acc::translate`.  Position: HS check index 8, so the findings splice
-    // before the first entry from a later check.
-    {
-        let formula_errors =
-            tamarin_theory::formula_reports::formula_reports(&post_thy, &maude_sig);
-        insert_wf_before(
-            &mut wf_report,
-            formula_errors,
-            &WF_TOPIC_ORDER[WF_AFTER_CHECK_GUARDED..],
-        );
-    }
-
-    // Multiplication restriction of rules (as in `run_batch`): needs the
-    // elaborated MaudeSig (HS `irreducibleFunSyms`) and the TRANSLATED rule
-    // set (HS `thyProtoRules` over the `OpenTranslatedTheory`), so it runs
-    // here — after `apply_sapic` injected the generated rules and before the
-    // maude block closes the theory.  Position: HS check index 10, between
-    // `lemmaAttributeReport` and `natWellSortedReport`.
-    {
-        let mult_errors =
-            tamarin_theory::mult_restricted::mult_restricted_report(&typed, &maude_sig);
-        insert_wf_before(
-            &mut wf_report,
-            mult_errors,
-            &WF_TOPIC_ORDER[WF_AFTER_MULT_RESTRICTED..],
-        );
-    }
-
-    // HS `natWellSortedReport` reads `thyProtoRules` of the
-    // `OpenTranslatedTheory` (as in `run_batch`), so a `%+` operand that is a
-    // msg-sorted process variable — e.g. `let j:nat = i%+%1`, where the `:nat`
-    // is a SAPIC TYPE and `i` stays msg-sorted — is only visible once the
-    // process has become rules.  Position: HS check index 11.
-    if typed.is_sapic {
-        wf_report.retain(|e| e.topic != "Nat Sorts");
-        let nat_errors = tamarin_parser::wf::nat_well_sorted_report(&post_thy);
-        insert_wf_before(
-            &mut wf_report,
-            nat_errors,
-            &WF_TOPIC_ORDER[WF_AFTER_NAT_SORTED..],
-        );
-    }
+    // (`checkTranslatedTheory`), i.e. after `apply_sapic` / `Acc::translate`
+    // injected the generated rules and lemmas.  The six re-runs and their
+    // splice positions are shared with the batch path (`run_batch`) — see
+    // `tamarin_theory::translated_wf`.
+    tamarin_theory::translated_wf::splice_translated_wf_reports(
+        &parser_theory,
+        &typed,
+        &maude_sig,
+        &mut wf_report,
+    );
 
     // The theory's once-per-load NDC-checked intruder cache
     // (`check_close_intr_rule` below).  Stored on the `TheoryEntry` so
@@ -354,26 +265,18 @@ pub fn load_from_source(
         // comments — HS `prettyClosedProtoRule` reads them from the
         // `ProtoRuleACInfo` baked into every closed rule.  Our prover computes
         // them inside `ProofContext::new` on a local copy; mirror `run.rs`'s
-        // CLI-side pass here on the load path (identical writeback in source
-        // order) so the byte-faithful `web_proto_rules` printer has them.
+        // CLI-side pass here on the load path (same in-place annotation in
+        // source order) so the byte-faithful `web_proto_rules` printer has them.
         use tamarin_theory::theory::{OpenProtoRule, TheoryItem};
-        let mut rules: Vec<OpenProtoRule> = typed
+        let mut rules: Vec<&mut OpenProtoRule> = typed
             .items
-            .iter()
+            .iter_mut()
             .filter_map(|i| match i {
-                TheoryItem::Rule(r) => Some(r.clone()),
+                TheoryItem::Rule(r) => Some(r),
                 _ => None,
             })
             .collect();
         tamarin_theory::constraint::solver::context::annotate_loop_breakers(&mut rules, &maude);
-        let mut iter = rules.into_iter();
-        for item in typed.items.iter_mut() {
-            if let TheoryItem::Rule(opr) = item {
-                if let Some(updated) = iter.next() {
-                    opr.loop_breakers = updated.loop_breakers;
-                }
-            }
-        }
 
         // Once-per-theory NDC pass (HS `checkCloseIntrRule` inside
         // `checkTranslatedTheory`, TheoryLoader.hs — BEFORE the

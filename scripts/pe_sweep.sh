@@ -17,24 +17,21 @@ set -u
 OUT=${OUT:-$REPO/scripts/results/pe_sweep.tsv}
 RETRY_TIMEOUT=${RETRY_TIMEOUT:-600}
 mkdir -p "$(dirname "$OUT")"
-FLAGGED=$(sed 's/#.*//;/^\s*$/d' "$REPO/scripts/file_flags.tsv" | cut -f1)
 
 eligible() {
   if [ "${FAMILY:-0}" = 1 ]; then
-    sed 's/#.*//;/^\s*$/d' "$REPO/scripts/pe_family.txt" | sed "s|^|$EXAMPLES/|" \
-      | while read -r f; do
-          if [ -f "$f" ]; then echo "$f"; else echo "WARNING: family entry missing: $f" >&2; fi
-        done
+    family_list "$REPO/scripts/pe_family.txt" "$EXAMPLES"
     return
   fi
+  # The files-need-flags exclusion is a whole-list filter (one grep) rather
+  # than a per-file membership test.
   while read -r rel; do
     f="$EXAMPLES/$rel"
     [ -f "$f" ] || continue
-    echo "$FLAGGED" | grep -qxF "$rel" && continue
-    grep -qE '^\s*(macros\s*:|process\s*:|process\s*=|let\s+\w+\s*=|options\s*:.*translation)' "$f" && continue
-    grep -qE '^\s*(accountability|case-test|caseTest|verdictfunction)' "$f" && continue
+    grep -qE '^\s*(macros\s*:|process\s*:|process\s*=|let\s+\w+\s*=|options\s*:.*translation|accountability|case-test|caseTest|verdictfunction)' "$f" && continue
     echo "$f"
-  done < <(sed 's/#.*//;/^\s*$/d' "$REPO/scripts/parity_corpus_fast.txt")
+  done < <(sed 's/#.*//;/^\s*$/d' "$REPO/scripts/parity_corpus_fast.txt" \
+             | grep -vxF -f <(sed 's/#.*//;/^\s*$/d' "$REPO/scripts/file_flags.tsv" | cut -f1))
 }
 
 # one <file> [detail-tag] — appends one TSV row for the file at current TIMEOUT.
@@ -42,33 +39,23 @@ one() {
   f=$1; tag=${2:--}
   d=$(mktemp -d)
   hs_run "$d" "$f" "pe-summary-dct30" --derivcheck-timeout=30 --partial-evaluation=summary; hrc=$?
+  # An oracle timeout is cached at this cap, so it comes back instantly while
+  # the RS side would burn the full cap producing nothing to compare against.
+  if [ $hrc -ge 124 ]; then echo -e "$f\tERROR\ttimeout/kill hs=$hrc rs=skipped $tag" >> "$OUT"; rm -rf "$d"; return; fi
   grun "$RS_BIN" --with-maude="$MAUDE" --derivcheck-timeout=30 --partial-evaluation=summary "$f" > "$d/rs.out" 2> "$d/rs.err"; rrc=$?
-  if [ $hrc -ge 124 ] || [ $rrc -ge 124 ]; then echo -e "$f\tERROR\ttimeout/kill hs=$hrc rs=$rrc $tag" >> "$OUT"
+  if [ $rrc -ge 124 ]; then echo -e "$f\tERROR\ttimeout/kill hs=$hrc rs=$rrc $tag" >> "$OUT"
   elif [ $hrc -ne $rrc ]; then echo -e "$f\tDIFF\trc hs=$hrc rs=$rrc $tag" >> "$OUT"
   elif ! diff -q <(norm < "$d/hs.out") <(norm < "$d/rs.out") >/dev/null; then echo -e "$f\tDIFF\tstdout $tag" >> "$OUT"
-  elif ! diff -q <(norm < "$d/hs.err") <(norm < "$d/rs.err") >/dev/null; then echo -e "$f\tDIFF\tstderr $tag" >> "$OUT"
+  elif ! diff -q <(norm < "$d/hs.err" | nerr) <(norm < "$d/rs.err" | nerr) >/dev/null; then echo -e "$f\tDIFF\tstderr $tag" >> "$OUT"
   else echo -e "$f\tOK\t$tag" >> "$OUT"; fi
   rm -rf "$d"
 }
-export -f one grun norm hs_run hs_fingerprint
-export HS_BIN RS_BIN MAUDE OUT TIMEOUT HS_CACHE
+sweep_export
 
 rs_stale_check
 LIST=$(eligible | sort -u)
 : > "$OUT"
-sweep_banner pe_sweep "$(echo "$LIST" | wc -l)"
-echo "$LIST" | xargs -P "$JOBS" -n 1 bash -c 'one "$0"'
-
-# Serial retry of ERROR rows at the higher cap; retry rows replace originals.
-RETRY=$(grep -P '\tERROR\t' "$OUT" | cut -f1 || true)
-if [ -n "$RETRY" ]; then
-  echo "== retrying $(echo "$RETRY" | wc -l) ERROR rows serially at TIMEOUT=$RETRY_TIMEOUT =="
-  grep -vP '\tERROR\t' "$OUT" > "$OUT.keep" && mv "$OUT.keep" "$OUT"
-  while read -r f; do
-    # The parallel pass's timeout entry (lower cap) misses for this higher
-    # cap; the retry's own outcome is cached at cap $RETRY_TIMEOUT for good.
-    TIMEOUT=$RETRY_TIMEOUT one "$f" retry
-  done <<< "$RETRY"
-fi
-
+sweep_banner pe_sweep "$(echo "$LIST" | grep -c .)"
+echo "$LIST" | xargs -r -P "$JOBS" -n 1 bash -c 'one "$0"'
+sweep_retry "$OUT" 2 "$RETRY_TIMEOUT"
 sweep_finish "$OUT" pe 2

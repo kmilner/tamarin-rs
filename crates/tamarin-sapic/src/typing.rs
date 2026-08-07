@@ -837,7 +837,10 @@ fn type_rule(
 /// rewrite rule (`stRules`) of the signature, so declared function types
 /// propagate through the theory's equations into `funs` (and equation-side
 /// variables remain in `vars` — HS clears `vars` per process, not here).
-fn init_te_from_sig(
+///
+/// This is the environment `typeTheoryEnv` seeds before threading it through
+/// every process (Typing.hs:207).
+pub fn init_te_from_sig(
     maude_sig: &tamarin_term::maude_sig::MaudeSig,
     user_fun_typings: &[UserFunTyping],
 ) -> Result<TypingEnvironment, String> {
@@ -892,15 +895,6 @@ fn init_te_from_sig(
     Ok(env)
 }
 
-/// Public entry to `initTEFromSig`: the environment `typeTheoryEnv` seeds
-/// before threading it through every process (Typing.hs:207).
-pub fn init_env(
-    maude_sig: &tamarin_term::maude_sig::MaudeSig,
-    user_fun_typings: &[UserFunTyping],
-) -> Result<TypingEnvironment, String> {
-    init_te_from_sig(maude_sig, user_fun_typings)
-}
-
 /// `typeAndRenameProcess` as run inside `typeTheoryEnv` (Typing.hs:213-216):
 /// `renameUnique`, clear the per-process `vars` map (`modify' (\s -> s { vars
 /// = Map.empty})`), then `typeProcess` — against a SHARED environment whose
@@ -937,8 +931,10 @@ pub fn vars_proc(p: &PlainProcess) -> Vec<SapicLVar> {
 
 /// Collect the user `functions:` typing declarations of a parsed theory (HS
 /// `theoryFunctionTypingInfos`; every parsed `FunctionDecl` becomes a
-/// `FunctionTypingInfo` item, Theory/Text/Parser.hs:254-257) as the
-/// `(name, arg_types, out_type)` triples [`init_env`] overlays.
+/// `FunctionTypingInfo` item, Theory/Text/Parser.hs:254-257 `addFunctionTypingInfo`)
+/// as the `(name, arg_types, out_type)` triples [`init_te_from_sig`] overlays.
+/// Plain `f/2` declarations carry `Nothing` types (the `defaultFunctionType`),
+/// which the typing env already holds — so they are harmless overlays.
 pub fn collect_user_fun_typings(parsed: &tamarin_parser::ast::Theory) -> Vec<UserFunTyping> {
     let mut out = Vec::new();
     for item in &parsed.items {
@@ -1087,7 +1083,7 @@ mod tests {
     /// `g(f(x)) = x` with `f(bitstring):bitstring` teaches `g` the argument
     /// type `bitstring` (from `f`'s output type).
     #[test]
-    fn init_env_types_signature_equations() {
+    fn init_te_from_sig_types_signature_equations() {
         use tamarin_term::function_symbols::{Constructability, FunSym, Privacy};
         use tamarin_term::subterm_rule::{CtxtStRule, StRhs};
         use tamarin_term::term::f_app;
@@ -1121,7 +1117,7 @@ mod tests {
             },
         ));
 
-        let env = init_env(
+        let env = init_te_from_sig(
             &sig,
             &[(
                 "f".to_string(),

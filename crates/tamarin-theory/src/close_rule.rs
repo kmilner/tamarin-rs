@@ -58,7 +58,7 @@ use crate::fact::{Fact, FactTag, LNFact, Multiplicity};
 use crate::guarded::Guarded;
 use crate::rule::{
     get_conc_fact, get_deconstr_rule_kd_prem, get_deconstr_rule_prems_tail,
-    get_destr_rule_function, IntrRuleAC, IntrRuleACInfo,
+    get_destr_rule_function, IntrRuleAC, IntrRuleACInfo, Rule,
 };
 
 // =============================================================================
@@ -696,13 +696,16 @@ impl<'a> BoundToOneCache<'a> {
 }
 
 /// Apply a free substitution to every fact (and new-var term) of a rule.
-fn apply_subst_rule(
+/// `info` is untouched — HS's `Apply` instances for the rule-info types are
+/// the identity (`Apply s ProtoRuleEInfo = id`, Rule.hs:500-501), so a
+/// refined `ProtoRuleE` keeps its original restriction frees unsubstituted.
+pub(crate) fn apply_subst_rule<I: Clone>(
     sigma: &tamarin_term::subst::Subst<tamarin_term::lterm::Name, LVar>,
-    r: &IntrRuleAC,
-) -> IntrRuleAC {
+    r: &Rule<I>,
+) -> Rule<I> {
     let app_facts =
         |fs: &[LNFact]| -> Vec<LNFact> { fs.iter().map(|f| apply_subst_fact(sigma, f)).collect() };
-    IntrRuleAC {
+    Rule {
         info: r.info.clone(),
         premises: app_facts(&r.premises),
         conclusions: app_facts(&r.conclusions),

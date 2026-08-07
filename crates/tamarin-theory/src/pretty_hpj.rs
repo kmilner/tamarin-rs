@@ -29,6 +29,10 @@
 
 use std::rc::Rc;
 
+// HS `flushRight` (`Extension/Prelude.hs:204-209`): left-pad with spaces to a
+// given character width, no truncation.
+use tamarin_utils::prelude_ext::flush_right;
+
 /// HS `lineWidth` from `src/Main/Console.hs`, threaded into HughesPJ's
 /// `lineLength` field.
 pub const LINE_LENGTH: usize = 110;
@@ -1402,24 +1406,12 @@ pub fn punctuate(sep: Doc, ds: Vec<Doc>) -> Vec<Doc> {
 // `numbered'`, `$--$`).
 // ============================================================================
 
-/// HS `flushRight` (`Extension/Prelude.hs:204-209`): left-pad `s` with
-/// spaces to width `n` (no truncation when `s` is longer).
-fn flush_right(n: usize, s: &str) -> String {
-    let pad = n.saturating_sub(s.chars().count());
-    let mut out = String::with_capacity(pad + s.len());
-    for _ in 0..pad {
-        out.push(' ');
-    }
-    out.push_str(s);
-    out
-}
-
 /// HS `$--$` (`Class.hs:112-114`): vertical concatenation with an empty
 /// line in between — `caseEmptyDoc`-guarded `d1 $-$ text "" $-$ d2`, where
 /// Class's `$-$` is HughesPJ `$+$` (`Class.hs:180`) = [`Doc::above_g`].
 /// The separator is [`Doc::text_hs`]`("")` so it survives as a blank line
 /// (indented under a surrounding `nest`).
-pub fn above_blank(d1: Doc, d2: Doc) -> Doc {
+pub(crate) fn above_blank(d1: Doc, d2: Doc) -> Doc {
     if matches!(d2, Doc::Empty) {
         return d1;
     }
@@ -1433,7 +1425,7 @@ pub fn above_blank(d1: Doc, d2: Doc) -> Doc {
 /// `foldr1 ($-$) $ intersperse vsep $ map pp $ zip [1..] ds` with
 /// `pp (i, d) = text (flushRight nWidth (show i)) <> d` and
 /// `nWidth = length (show (length ds))`.  `[]` yields the empty doc.
-pub fn numbered(vsep: Doc, ds: Vec<Doc>) -> Doc {
+pub(crate) fn numbered(vsep: Doc, ds: Vec<Doc>) -> Doc {
     if ds.is_empty() {
         return Doc::Empty;
     }
@@ -1464,7 +1456,7 @@ pub fn numbered(vsep: Doc, ds: Vec<Doc>) -> Doc {
 
 /// HS `numbered'` (`Class.hs:263-264`):
 /// `numbered (text "") . map (text ". " <>)`.
-pub fn numbered_prime(ds: Vec<Doc>) -> Doc {
+pub(crate) fn numbered_prime(ds: Vec<Doc>) -> Doc {
     numbered(
         Doc::text_hs(""),
         ds.into_iter().map(|d| Doc::text(". ").beside(d)).collect(),

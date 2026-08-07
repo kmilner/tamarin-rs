@@ -35,11 +35,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use tamarin_parser::wf::{
-    after_public_names_topics, after_unbound_topics, after_variants_topics, insert_wf_before,
-    WF_AFTER_CHECK_GUARDED, WF_AFTER_FACT_LHS, WF_AFTER_MULT_RESTRICTED, WF_AFTER_NAT_SORTED,
-    WF_TOPIC_ORDER,
-};
+use tamarin_parser::wf::{after_variants_topics, insert_wf_before};
 use tamarin_term::maude_proc::{MaudeHandle, MaudePool, SharedMaudeCaches};
 use tamarin_theory::constraint::system::System;
 use tamarin_theory::elaborate::elaborate;
@@ -735,31 +731,64 @@ fn batch_argument_error(message: &str) -> i32 {
         message: message.to_string(),
         call_site: "src/Main/Mode/Batch.hs:163:33 in main:Main.Mode.Batch".to_string(),
     };
-    eprintln!("tamarin-prover: {}", g.display_exception());
+    ghc_exception(&g.display_exception())
+}
+
+/// Report an exception that escaped to GHC's runtime the way its top-level
+/// handler does: `tamarin-prover: <msg>` on stderr — no batch `error:`
+/// prefix, no `[Theory …]` wrapper, nothing on stdout — and exit 1.  Returns
+/// that exit code for the caller to propagate.
+fn ghc_exception(msg: &str) -> i32 {
+    eprintln!("tamarin-prover: {}", msg);
     1
+}
+
+/// HS `mkOutPath`'s miss — `-o=` with no `-O` — `die`s with this exact line
+/// (Batch.hs:118-123) instead of falling back to stdout: the line on stderr,
+/// stdout empty, exit 1.  Returns that exit code for the caller to propagate.
+fn missing_output_path() -> i32 {
+    eprintln!("Please specify a valid output file/directory");
+    1
+}
+
+/// HS `writeFileWithDirs` (Utils.hs:20-23): create the target's parent
+/// directories, then write `body` VERBATIM.
+fn write_file_with_dirs(path: &str, body: &str) -> Result<(), RunError> {
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|e| RunError(format!("failed to create {}: {}", parent.display(), e)))?;
+        }
+    }
+    fs::write(path, body).map_err(|e| RunError(format!("failed to write {}: {}", path, e)))
 }
 
 /// HS `traceLabelOptions` (Batch.hs:305-317): the fixed middle segment of an
 /// `outputTraces` label.  Batch always feeds it `defaultGraphOptions`
 /// (Graph.hs:66-72) and `defaultDotOptions` (Dot.hs:84-87) — Batch.hs:254-255
 /// hard-codes both, so no CLI flag (`--no-compress` included) can move it.
-fn trace_label_options() -> String {
-    let o = tamarin_server::graph::GraphOptions::default();
-    // `show graphOptions._goSimplificationLevel` — the derived `Show`, i.e.
-    // the bare constructor name `SL0`..`SL3`.
-    let s1 = format!("{:?}", o.simplification_level);
-    let s2 = if o.show_auto_source { "AS1" } else { "AS0" };
-    let s3 = if o.clustering_similar_names {
-        "CL1"
-    } else {
-        "CL0"
-    };
-    let s4 = if o.abbreviate { "A1" } else { "A0" };
-    let s5 = if o.compress { "C1" } else { "C0" };
-    // `_doNodeStyle`: RS has no `DotOptions` type — `handlers::dot` renders
-    // `CompactBoringNodes` unconditionally, which is `defaultDotOptions`.
-    let s6 = "NB";
-    format!("{}-{}-{}-{}-{}-{}", s1, s2, s3, s4, s5, s6)
+/// Every input is a compile-time constant, so the segment is derived once and
+/// reused by every label the run emits.
+fn trace_label_options() -> &'static str {
+    static LABEL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    LABEL.get_or_init(|| {
+        let o = tamarin_server::graph::GraphOptions::default();
+        // `show graphOptions._goSimplificationLevel` — the derived `Show`, i.e.
+        // the bare constructor name `SL0`..`SL3`.
+        let s1 = format!("{:?}", o.simplification_level);
+        let s2 = if o.show_auto_source { "AS1" } else { "AS0" };
+        let s3 = if o.clustering_similar_names {
+            "CL1"
+        } else {
+            "CL0"
+        };
+        let s4 = if o.abbreviate { "A1" } else { "A0" };
+        let s5 = if o.compress { "C1" } else { "C0" };
+        // `_doNodeStyle`: RS has no `DotOptions` type — `handlers::dot` renders
+        // `CompactBoringNodes` unconditionally, which is `defaultDotOptions`.
+        let s6 = "NB";
+        format!("{}-{}-{}-{}-{}-{}", s1, s2, s3, s4, s5, s6)
+    })
 }
 
 /// HS `traceOutputLabel` (Batch.hs:290-303): the digraph id (`--output-dot`)
@@ -814,6 +843,17 @@ fn write_output_traces(args: &Args, traces: Vec<(String, System)>) -> Result<(),
         fs::write(p, body).map_err(|e| RunError(format!("failed to write {}: {}", p, e)))?;
     }
     Ok(())
+}
+
+/// The `-m`/`--output-module` values translate mode actually renders: HS's
+/// `ModuleType` minus the three export backends, which are rejected before the
+/// file loop.  Narrowing here is what lets the per-file render match
+/// exhaustively over the modules that can reach it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TranslateModule {
+    Spthy,
+    SpthyTyped,
+    Msr,
 }
 
 fn run_batch(args: &Args) -> Result<i32, RunError> {
@@ -918,9 +958,11 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     // rejection (TheoryLoader.hs:354-358) precedes `--output-module`'s
     // (TheoryLoader.hs:373-377) in the record, so it fires first when both
     // values are bad.
-    if args.partial_evaluation_raw.is_some() && args.partial_evaluation.is_none() {
-        return Ok(batch_argument_error("partial-evaluation: unknown option"));
-    }
+    let partial_evaluation: Option<crate::cli::PartialEval> = match &args.partial_evaluation {
+        Some(Err(())) => return Ok(batch_argument_error("partial-evaluation: unknown option")),
+        Some(Ok(pe)) => Some(pe.clone()),
+        None => None,
+    };
     // `--output-module`: exact match against the six `show` strings
     // (TheoryLoader.hs:373-377) — anything else, the empty string included,
     // is `ArgumentError "output mode not supported."`.
@@ -934,26 +976,44 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     // Batch.hs:91-113 guard order: parseOnly > precomputeOnly > outModule >
     // normal — `--parse-only -m msr` behaves as plain `--parse-only`, and
     // `--prove -m spthy` does not prove.
-    let translate_module: Option<ModuleType> = if args.parse_only || args.precompute_only {
+    let requested_module: Option<ModuleType> = if args.parse_only || args.precompute_only {
         None
     } else {
         output_module
     };
-    if let Some(
-        m @ (ModuleType::ProVerifEquivalence | ModuleType::ProVerif | ModuleType::DeepSec),
-    ) = translate_module
-    {
-        return Err(RunError(format!(
-            "--output-module={}: the ProVerif / DeepSec export backends are not yet ported to \
-             the Rust prover.",
-            m.as_str()
-        )));
-    }
+    let translate_module: Option<TranslateModule> = match requested_module {
+        None => None,
+        Some(ModuleType::Spthy) => Some(TranslateModule::Spthy),
+        Some(ModuleType::SpthyTyped) => Some(TranslateModule::SpthyTyped),
+        Some(ModuleType::Msr) => Some(TranslateModule::Msr),
+        Some(
+            m @ (ModuleType::ProVerifEquivalence | ModuleType::ProVerif | ModuleType::DeepSec),
+        ) => {
+            return Err(RunError(format!(
+                "--output-module={}: the ProVerif / DeepSec export backends are not yet ported to \
+                 the Rust prover.",
+                m.as_str()
+            )));
+        }
+    };
     let translate_mode = translate_module.is_some();
     // Translate-only docs, buffered and emitted AFTER the file loop
     // (Batch.hs:101-113: `mapM processThy` to completion, then either the
     // `-o`/`-O` writes or `mapM_ (putStrLn . renderDoc)`).
     let mut translate_docs: Vec<String> = Vec::new();
+
+    // The `Generated from:` block's metadata (HS `withVersionAndReport`,
+    // TheoryLoader.hs:636-660).  Every field is build- or argv-constant, so
+    // one value serves every file's render.
+    let build_info = tamarin_theory::pretty_theory::BuildInfo {
+        tamarin_version: crate::cli::VERSION.to_string(),
+        maude_version: maude_version
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string()),
+        git_revision: crate::cli::GIT_REV.to_string(),
+        git_branch: crate::cli::GIT_BRANCH.to_string(),
+        compiled_at: crate::cli::BUILD_TIMESTAMP.to_string(),
+    };
 
     for in_file in &args.in_files {
         let t0 = Instant::now();
@@ -996,8 +1056,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     // `displayException` — message plus `HasCallStack` frame —
                     // to stderr and exits 1.  No parsec frame, no `SourcePos`
                     // header; the maude banner above has already printed.
-                    eprintln!("tamarin-prover: {}", g.display_exception());
-                    return Ok(1);
+                    return Ok(ghc_exception(&g.display_exception()));
                 }
                 // HS batch: `handleError e@(ParserError _) = die $ show e`
                 // (Main/Mode/Batch.hs:87-316, see line 234).  `die` writes `show e` — the raw
@@ -1020,9 +1079,14 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // Capture the `_restrict` formulas' free variables per rule BEFORE
         // the lift clears them: HS keeps the formulas on the rule
         // (`preRestriction`) and partial evaluation's rename/dedup depends
-        // on their frees (see `restriction_frees_by_rule`).
-        let restriction_frees =
-            tamarin_theory::rule_restriction::restriction_frees_by_rule(&parsed);
+        // on their frees (see `restriction_frees_by_rule`) — its only
+        // consumer, so the walk runs only under `--partial-evaluation`.  The
+        // position is fixed: the frees are gone once the lift below runs.
+        let restriction_frees = if partial_evaluation.is_some() {
+            tamarin_theory::rule_restriction::restriction_frees_by_rule(&parsed)
+        } else {
+            Default::default()
+        };
         tamarin_theory::rule_restriction::lift_rule_restrictions(&mut parsed).map_err(|e| {
             RunError(format!(
                 "_restrict expansion failed in {}: {}",
@@ -1207,10 +1271,26 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // public-constructor flags, serialising as `tamXC..` — which Maude
         // rejects, leaving the rule with "no variants".
         let _sapic_funs_guard = tamarin_theory::elaborate::set_user_funs_for_theory(&parsed);
-        // `-m spthytyped`'s `Sapic.typeTheory` result (typed-process overlay +
-        // recomputed `function:` items), consumed by the translate-mode render
-        // below.  `None` in every other mode.
-        let mut typed_result: Option<tamarin_sapic::type_theory::TypeTheoryResult> = None;
+        // The translate-mode render's print options, one per module
+        // (`prettyOpenTheoryByModule`, TheoryLoader.hs:783-801).  `Some` iff
+        // `-m` is in force: `spthy` and `msr` are fixed, while `spthytyped`
+        // carries `Sapic.typeTheory`'s per-file result and is therefore filled
+        // by the SAPIC block below, at the position where HS runs the typing.
+        // `None` in every other mode.
+        let mut print_opts: Option<tamarin_theory::pretty_theory::OpenPrintOpts> =
+            match translate_module {
+                // `spthy`: the plain open print (`prettyOpenTheory`).
+                Some(TranslateModule::Spthy) => {
+                    Some(tamarin_theory::pretty_theory::OpenPrintOpts::default())
+                }
+                // `msr`: drop the TranslationElement set
+                // (`prettyOpenTranslatedTheory . removeTranslationItems`).
+                Some(TranslateModule::Msr) => Some(tamarin_theory::pretty_theory::OpenPrintOpts {
+                    drop_translation_items: true,
+                    ..Default::default()
+                }),
+                Some(TranslateModule::SpthyTyped) | None => None,
+            };
         {
             // HS `Acc.checkWellformedness t` (translateTheory, TheoryLoader.hs:448-460, see line 455)
             // runs on the PRE-translation theory `t` — the report is computed
@@ -1230,47 +1310,40 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // Acc.translate` pipeline.
             let skip_translation = matches!(
                 translate_module,
-                Some(ModuleType::Spthy) | Some(ModuleType::SpthyTyped)
+                Some(TranslateModule::Spthy) | Some(TranslateModule::SpthyTyped)
             );
             let sapic_wf = if skip_translation {
                 // `translateTheory`'s preReport (`Sapic.checkWellformedness t`,
                 // Warnings.hs:37-38) still runs on the pre-translation process
-                // — the same inlined `PlainProcess` `apply_sapic` would check.
+                // — the same inlined `PlainProcess` `apply_sapic` checks.
                 let mut wf: Vec<tamarin_parser::wf::WfError> = Vec::new();
                 if elaborated.is_sapic {
-                    let top = parsed.items.iter().find_map(|i| match i {
-                        tamarin_parser::ast::TheoryItem::TopLevelProcess(proc) => {
-                            Some(proc.clone())
-                        }
-                        _ => None,
-                    });
-                    if let Some(top) = top {
-                        let defs = tamarin_sapic::inline::collect_process_defs(&parsed);
-                        match tamarin_sapic::inline::convert_process_with_defs(&top, &defs) {
-                            Ok(plain) => wf = tamarin_sapic::warnings::check_wellformedness(&plain),
-                            Err(e) => {
-                                // Same GHC-exception shape as the apply_sapic
-                                // arm below.
-                                eprintln!("tamarin-prover: {}", e.message);
-                                return Ok(1);
-                            }
-                        }
+                    match tamarin_sapic::apply::sapic_pre_report(&parsed) {
+                        Ok(Some((report, _))) => wf = report,
+                        // `is_sapic` set with no `TopLevelProcess`.
+                        Ok(None) => {}
+                        // Same GHC-exception shape as the apply_sapic arm below.
+                        Err(e) => return Ok(ghc_exception(&e.message)),
                     }
                 }
-                if translate_module == Some(ModuleType::SpthyTyped) {
+                if translate_module == Some(TranslateModule::SpthyTyped) {
                     // `Sapic.typeTheory` (`typeTheoryEnv`, Typing.hs:204-226)
                     // over the SAME parsed theory the renderer sees — the
                     // parser AST stays untouched, the typed processes/defs
-                    // ride the overlay.
+                    // ride the overlay, and the recomputed `function:` items
+                    // are appended in descending key order.
                     match tamarin_sapic::type_theory::type_theory_env(&parsed, &elaborated) {
-                        Ok(r) => typed_result = Some(r),
-                        Err(e) => {
-                            // HS: `ProcessNotWellformed` / typing exceptions
-                            // escape to GHC's runtime — `tamarin-prover: …`,
-                            // exit 1.
-                            eprintln!("tamarin-prover: {}", e.message);
-                            return Ok(1);
+                        Ok(r) => {
+                            print_opts = Some(tamarin_theory::pretty_theory::OpenPrintOpts {
+                                typed: Some(r.overlay),
+                                extra_function_items: r.fun_items,
+                                drop_translation_items: false,
+                            })
                         }
+                        // HS: `ProcessNotWellformed` / typing exceptions
+                        // escape to GHC's runtime — `tamarin-prover: …`,
+                        // exit 1.
+                        Err(e) => return Ok(ghc_exception(&e.message)),
                     }
                 }
                 wf
@@ -1281,16 +1354,13 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     user_set_heuristic,
                 ) {
                     Ok(w) => w,
-                    Err(e) => {
-                        // HS: exceptions SAPIC `translate` raises — e.g. the
-                        // `addProtoRule` name clash on inserting a generated rule
-                        // (`duplicate rule: <name>`, OpenTheory.hs:727-733) —
-                        // escape to GHC's runtime, which writes
-                        // `tamarin-prover: <show exception>` to stderr and exits
-                        // 1, exactly like the accountability arm below.
-                        eprintln!("tamarin-prover: {}", e.message);
-                        return Ok(1);
-                    }
+                    // HS: exceptions SAPIC `translate` raises — e.g. the
+                    // `addProtoRule` name clash on inserting a generated rule
+                    // (`duplicate rule: <name>`, OpenTheory.hs:727-733) —
+                    // escape to GHC's runtime, which writes
+                    // `tamarin-prover: <show exception>` to stderr and exits
+                    // 1, exactly like the accountability arm below.
+                    Err(e) => return Ok(ghc_exception(&e.message)),
                 }
             };
 
@@ -1316,8 +1386,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     // 1 — no batch `error:` / `[Theory …]` wrapper (the maude banner
                     // + the `Theory loaded`/`Theory translated` markers already
                     // printed).
-                    eprintln!("tamarin-prover: {}", e);
-                    return Ok(1);
+                    return Ok(ghc_exception(&e.to_string()));
                 }
             }
 
@@ -1347,7 +1416,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // attribute (`lemmaSelectorByModule`) is deliberately NOT honoured
         // here — HS consults it only in `closeTranslatedTheory`
         // (TheoryLoader.hs:706-707), which translate mode never reaches.
-        if translate_module == Some(ModuleType::Msr) {
+        if translate_module == Some(TranslateModule::Msr) {
             parsed.items.retain(|i| match i {
                 tamarin_parser::ast::TheoryItem::Lemma(l) => {
                     lemma_matches(&args.lemma_names, &l.name)
@@ -1361,136 +1430,16 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // `translate` has injected the generated rules, whereas our
         // `check_theory` runs earlier on the PRE-translation theory (above,
         // before `apply_sapic`), where the SAPIC rules are invisible to the
-        // rule-dependent checks.  The checks below therefore run on `post_thy`:
-        // that translated theory with macros expanded, as HS `thyProtoRules` /
-        // `applyMacroInFormula` do before every check.  For non-SAPIC theories
-        // the re-runs are no-ops (the pre- and post-translation rule sets are
-        // equal).
-        let post_thy = macro_expanded_clone(&parsed);
-        if elaborated.is_sapic {
-            // HS `unboundReport` (Wellformedness.hs:514-519) also walks
-            // `thyProtoRules` of the TRANSLATED theory, so a variable that is
-            // free only inside a process's embedded `_restrict` — lifted into
-            // the generated rule's `Restr_<rule>_<i>( … )` action, bound by no
-            // premise — is reported against the generated rule.  Replace the
-            // pre-translation entries (user rules only) with the full
-            // post-translation set: `post_thy` keeps the user rules in source
-            // order and carries the generated ones appended after them,
-            // matching HS's item order.  Position: HS check index 2, so the
-            // findings splice before the first entry from a later check.
-            wf_report.retain(|e| e.topic != "Unbound variables");
-            let unbound = tamarin_parser::wf::unbound_report(&post_thy);
-            insert_wf_before(&mut wf_report, unbound, &after_unbound_topics());
-
-            // HS `factLhsOccurNoRhs` likewise sees the generated rules, so
-            // SAPIC-only premise facts — e.g. a `Message( c, m )` consumed by
-            // an `in(c,m)` with no producing `out` — are surfaced too.
-            let topic = "Facts occur in the left-hand-side but not in any right-hand-side ";
-            wf_report.retain(|e| e.topic != topic);
-            let lhs_rhs = tamarin_parser::wf::fact_lhs_occur_no_rhs(&post_thy);
-            // Insert at the factReports position (after fact_usage, before
-            // formulaReports), matching HS check order.
-            insert_wf_before(
-                &mut wf_report,
-                lhs_rhs,
-                &WF_TOPIC_ORDER[WF_AFTER_FACT_LHS..],
-            );
-
-            // HS `publicNamesReport` (Wellformedness.hs:463-484) also runs on
-            // the TRANSLATED rules (`checkWellformedness` over the OpenTranslated
-            // theory).  Our parser-level `public_names_report` ran pre-translation
-            // (no generated rules) and cannot see the source process a rule
-            // carries as its `process=` attribute; re-run over the ELABORATED
-            // rules (facts + process attribute) so a constant appearing only in
-            // the process — e.g. `'C'` in `insert <'roles', x, 'C'>` clashing
-            // with `'c'` — is surfaced, attributed to the root `Init` rule
-            // exactly as HS.  Position: publicNames is HS check index 4, so it
-            // splices before the first entry from a LATER check — ruleSorts (HS
-            // index 5, our `variable_sort_clashes` topic) or any
-            // `WF_TOPIC_ORDER` topic except "Unbound variables"
-            // (`unboundReport`, HS index 2, runs BEFORE publicNames, so its
-            // entries must not act as a boundary).
-            let caps_topic = "Public constants with mismatching capitalization";
-            wf_report.retain(|e| e.topic != caps_topic);
-            let public_names = tamarin_theory::elaborate::sapic_public_names_report(&elaborated);
-            insert_wf_before(&mut wf_report, public_names, &after_public_names_topics());
-        }
-
-        // Port of HS `formulaReports` (Wellformedness.hs:996-1015) — the whole
-        // check, all three arms.  It is ONE per-formula loop, `msum
-        // [checkQuantifiers, checkTerms, checkGuarded]` inside the
-        // `annFormulas` walk, so its three topics interleave in item order
-        // and a topic reopens after an intervening one; running the arms as
-        // separate whole-report splices would instead emit one block per
-        // topic.  `formula_reports` keeps HS's emission order.
-        //
-        // Two dependencies pin the call to this position:
-        //   - the elaborated `MaudeSig`, for `checkTerms`'s
-        //     reducible/irreducible funsym classification (HS
-        //     `irreducibleFunSyms maudeSig`), which the parser-level
-        //     `check_theory` cannot see; and
-        //   - the TRANSLATED theory, because HS's single `checkWellformedness`
-        //     pass runs on the `OpenTranslatedTheory` (`checkTranslatedTheory`,
-        //     TheoryLoader.hs:559-565, fed by `closeTheory` at :726-728), so
-        //     `annFormulas` (Wellformedness.hs:1006-1015) also covers the
-        //     restrictions SAPIC's `let … else` / `if` lowering mints
-        //     (`Restr_<rule>_<i>`, carrying the branch's terms verbatim — e.g.
-        //     an `exp` application from `<<'a'^'b','b'>, 'c'>`) and the lemmas
-        //     accountability's `translate` appends.  Both land in `parsed` only
-        //     after `apply_sapic` / `Acc::translate`, so the check reads
-        //     `post_thy`.
-        //
-        // Position: HS check index 8, so the findings splice before the first
-        // entry from a later check (`lemmaAttributeReport` onwards).
-        {
-            let formula_errors =
-                tamarin_theory::formula_reports::formula_reports(&post_thy, &maude_sig);
-            insert_wf_before(
-                &mut wf_report,
-                formula_errors,
-                &WF_TOPIC_ORDER[WF_AFTER_CHECK_GUARDED..],
-            );
-        }
-
-        // Port of HS `multRestrictedReport` (Wellformedness.hs:1108-1113,
-        // "Multiplication restriction of rules").  Pinned here by the same two
-        // dependencies as `formula_reports` above: the elaborated `MaudeSig`
-        // (HS `irreducibleFunSyms $ get (sigpMaudeSig . thySignature) thy`)
-        // and the TRANSLATED theory — HS's `thyProtoRules` reads the
-        // `OpenTranslatedTheory`'s rule items, so SAPIC's generated rules are
-        // in scope, and it must run BEFORE the no-variant rules are dropped
-        // from `elaborated` below (HS closes the theory only after
-        // `checkWellformedness`).
-        //
-        // Position: HS check index 10 — after `lemmaAttributeReport` (9),
-        // before `natWellSortedReport` (11), so splice before the first entry
-        // from a later check.
-        {
-            let mult_errors =
-                tamarin_theory::mult_restricted::mult_restricted_report(&elaborated, &maude_sig);
-            insert_wf_before(
-                &mut wf_report,
-                mult_errors,
-                &WF_TOPIC_ORDER[WF_AFTER_MULT_RESTRICTED..],
-            );
-        }
-
-        // HS `natWellSortedReport` (Wellformedness.hs:318-333) reads
-        // `thyProtoRules` of the `OpenTranslatedTheory`, so the rules SAPIC's
-        // translation generates are in scope: a `%+` operand that is a
-        // msg-sorted process variable (e.g. `let j:nat = i%+%1`, where the
-        // `:nat` is a SAPIC TYPE and `i` stays msg-sorted) is only visible
-        // once the process has become rules.  Position: HS check index 11, so
-        // the findings splice before the first entry from a later check.
-        if elaborated.is_sapic {
-            wf_report.retain(|e| e.topic != "Nat Sorts");
-            let nat_errors = tamarin_parser::wf::nat_well_sorted_report(&post_thy);
-            insert_wf_before(
-                &mut wf_report,
-                nat_errors,
-                &WF_TOPIC_ORDER[WF_AFTER_NAT_SORTED..],
-            );
-        }
+        // rule-dependent checks.  The six re-runs and their splice positions
+        // are shared with the web load path — see
+        // `tamarin_theory::translated_wf`.  The seventh, Maude-dependent
+        // "Rule variants" block is batch-only and stays below.
+        tamarin_theory::translated_wf::splice_translated_wf_reports(
+            &parsed,
+            &elaborated,
+            &maude_sig,
+            &mut wf_report,
+        );
 
         // Spawn a single Maude handle for this file.  Used by:
         //   - the rule-variants computation that populates each rule's
@@ -1833,7 +1782,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // hold them here and print them at the marker sites below.
         let mut pe_trace = String::new();
         if let (Some(pe), Some(m)) = (
-            args.partial_evaluation.as_ref().filter(|_| !translate_mode),
+            partial_evaluation.as_ref().filter(|_| !translate_mode),
             file_maude.as_ref(),
         ) {
             // TheoryLoader.hs:354-358: `SUMMARY` → `Summary`, `VERBOSE` →
@@ -1874,6 +1823,19 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             annotate_theory_loop_breakers(&mut elaborated, m);
         }
 
+        // `[Theory X] Theory closed` (TheoryLoader.hs:569-615, see line 596)
+        // followed by `--partial-evaluation`'s `Debug.Trace` lines, which the
+        // oracle forces right after the marker
+        // (AbstractInterpretation.hs:109-119).  `pe_trace` is empty unless the
+        // flag ran and is already newline-terminated.  Both close paths — the
+        // prove loop's and the no-prove / precompute-only one — emit this
+        // pair; the `--quit-on-warning` abort above precedes partial
+        // evaluation and so prints the marker alone.
+        let closed_marker = || {
+            marker("Theory closed");
+            eprint!("{}", pe_trace);
+        };
+
         // Decide which lemmas to prove.  Without --prove, HS still runs
         // the close-time `checkAndExtendProver` replay over every stored
         // proof skeleton (`closeTheory`, Prover.hs:174-185) — a plain
@@ -1884,6 +1846,10 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         let lemma_filter: &[String] = &args.lemma_names;
         let prove_anything = args.prove_mode;
         let any_stored_proof = elaborated.lemmas().any(|l| l.proof.tree.is_some());
+        // The modes that skip the prove loop entirely: `--precompute-only`
+        // renders stats instead, and a plain load with no stored skeleton to
+        // replay has nothing to run.
+        let skips_prove_loop = args.precompute_only || (!prove_anything && !any_stored_proof);
 
         let mut results: Vec<LemmaResult> = Vec::new();
         // Mirrors HS's per-lemma proof body for embedding in the
@@ -1955,7 +1921,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // `translateAndCheckTheory` skips `closeTranslatedTheory`'s
         // `proveTheory` entirely (TheoryLoader.hs:768-781) — so it takes the
         // cheap arm regardless of `--prove` / stored proofs.
-        if translate_mode || args.precompute_only || (!prove_anything && !any_stored_proof) {
+        if translate_mode || skips_prove_loop {
             push_skipped_results(&mut results, &elaborated);
         } else {
             // Reuse the per-file maude handle.  The `maude tool: ...`
@@ -2020,11 +1986,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // marker here (before the prove loop) to match HS's observable
             // stderr order.  The no-prove / precompute-only paths (which skip
             // the prove loop) emit it below instead.
-            marker("Theory closed");
-            // `--partial-evaluation`'s `Debug.Trace` lines, forced after the
-            // marker on the oracle (AbstractInterpretation.hs:109-119).  Empty
-            // unless the flag ran; already newline-terminated.
-            eprint!("{}", pe_trace);
+            closed_marker();
 
             let run_lemma = |l: &tamarin_theory::theory::Lemma<_>| -> (
                 tamarin_theory::pretty_theory::ProvedLemma,
@@ -2079,24 +2041,15 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     ),
                 };
                 // HS `systemsWithMetadata` (Batch.hs:290-299) reads the proof
-                // tree of every lemma, so the collection has to happen here,
-                // while `root` is alive — `run_lemma` drops it below.  Both
-                // arms above feed it: a stored `SOLVED` proof surfaces
-                // through `check_and_extend_lemma_in_session`, which is why
+                // tree of every lemma, so the collection has to happen here —
+                // the tree is consumed for its solved `System`s once verdict
+                // and proof body are rendered.  Both arms above feed it: a
+                // stored `SOLVED` proof surfaces through
+                // `check_and_extend_lemma_in_session`, which is why
                 // `_analyzed` theories carry traces without `--prove`.
                 let mut lemma_traces: Vec<(String, System)> = Vec::new();
                 let (verdict, proof_steps, proof_body) = match outcome {
                     Ok(root) => {
-                        if want_traces {
-                            for (path, sys) in
-                                tamarin_theory::constraint::solver::search::solved_systems(&root)
-                            {
-                                lemma_traces.push((
-                                    trace_output_label(&theory_name, &lemma_name, &path),
-                                    sys.clone(),
-                                ));
-                            }
-                        }
                         let steps = count_proof_steps(&root);
                         // HS lemma verdict = `getProofStatus` (Proof.hs)
                         // folded over the WHOLE tree, NOT the root's
@@ -2143,6 +2096,18 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                                 ProofStatus::Invalidated => LemmaVerdict::Invalidated,
                             };
                         let body = tamarin_theory::pretty_theory::pretty_proof_body(&root);
+                        if want_traces {
+                            for (path, sys) in
+                                tamarin_theory::constraint::solver::search::into_solved_systems(
+                                    root,
+                                )
+                            {
+                                lemma_traces.push((
+                                    trace_output_label(&theory_name, &lemma_name, &path),
+                                    sys,
+                                ));
+                            }
+                        }
                         (v, steps, Some(body))
                     }
                     Err(tamarin_theory::prove::ProveError::Guarded(msg)) => {
@@ -2152,8 +2117,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                         // whole run — message on stderr, exit 1, and NO
                         // theory output on stdout (HS renders lazily after
                         // proving, so the abort precedes all stdout output).
-                        eprintln!("tamarin-prover: {}", msg);
-                        std::process::exit(1);
+                        std::process::exit(ghc_exception(&msg));
                     }
                     Err(e) => (LemmaVerdict::Error(format!("{}", e)), 0, None),
                 };
@@ -2243,10 +2207,8 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // closes — `translateAndCheckTheory` has no `closeTranslatedTheory`
         // call, so its `traceM` (TheoryLoader.hs:694) never fires and the
         // stderr stream ends with the derivation-check markers.
-        if !translate_mode && (args.precompute_only || (!prove_anything && !any_stored_proof)) {
-            marker("Theory closed");
-            // See the sibling `eprint!` at the prove path's marker.
-            eprint!("{}", pe_trace);
+        if !translate_mode && skips_prove_loop {
+            closed_marker();
         }
 
         if args.precompute_only {
@@ -2278,7 +2240,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             .map_err(|e| RunError(e.to_string()))?;
             let wf_len = wf_report.len();
             precompute_pending.push((session, parsed, wf_len));
-        } else if let Some(module) = translate_module {
+        } else if let Some(opts) = print_opts {
             // Translate-only render (`prettyOpenTheoryByModule`,
             // TheoryLoader.hs:783-801, followed by `withVersionAndReport`'s
             // two trailing comment items, TheoryLoader.hs:636-660).  The doc
@@ -2286,40 +2248,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // doc is printed or written.  `_sapic_funs_guard` is still held
             // here, so formula→guarded conversion inside the lemma renderers
             // resolves user symbols exactly as the parse-only path does.
-            let build_info = tamarin_theory::pretty_theory::BuildInfo {
-                tamarin_version: crate::cli::VERSION.to_string(),
-                maude_version: maude_version
-                    .clone()
-                    .unwrap_or_else(|| "unknown".to_string()),
-                git_revision: crate::cli::GIT_REV.to_string(),
-                git_branch: crate::cli::GIT_BRANCH.to_string(),
-                compiled_at: crate::cli::BUILD_TIMESTAMP.to_string(),
-            };
             let wf_block = tamarin_theory::pretty_theory::format_wf_block(&wf_report);
-            let opts = match module {
-                // `spthy`: the plain open print (`prettyOpenTheory`).
-                ModuleType::Spthy => tamarin_theory::pretty_theory::OpenPrintOpts::default(),
-                // `spthytyped`: overlay the typed processes/defs and append
-                // the recomputed `function:` items (descending key order).
-                ModuleType::SpthyTyped => {
-                    let r = typed_result
-                        .take()
-                        .expect("spthytyped ran type_theory_env above");
-                    tamarin_theory::pretty_theory::OpenPrintOpts {
-                        typed: Some(r.overlay),
-                        extra_function_items: r.fun_items,
-                        drop_translation_items: false,
-                    }
-                }
-                // `msr`: drop the TranslationElement set
-                // (`prettyOpenTranslatedTheory . removeTranslationItems`).
-                ModuleType::Msr => tamarin_theory::pretty_theory::OpenPrintOpts {
-                    drop_translation_items: true,
-                    ..Default::default()
-                },
-                // The export modules returned an error before the file loop.
-                _ => unreachable!("export modules rejected before the file loop"),
-            };
             let process_defs = tamarin_sapic::inline::collect_process_defs(&parsed);
             let conv = |proc: &tamarin_parser::ast::Process| {
                 tamarin_sapic::inline::convert_process_with_defs(proc, &process_defs)
@@ -2361,15 +2290,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // prefix and AC-variant comments, lemmas with inline guarded
             // formula and proof body, wellformedness block, and
             // Generated-from footer.
-            let build_info = tamarin_theory::pretty_theory::BuildInfo {
-                tamarin_version: crate::cli::VERSION.to_string(),
-                maude_version: maude_version
-                    .clone()
-                    .unwrap_or_else(|| "unknown".to_string()),
-                git_revision: crate::cli::GIT_REV.to_string(),
-                git_branch: crate::cli::GIT_BRANCH.to_string(),
-                compiled_at: crate::cli::BUILD_TIMESTAMP.to_string(),
-            };
             let wf_block = tamarin_theory::pretty_theory::format_wf_block(&wf_report);
             let body = tamarin_theory::pretty_theory::pretty_closed_theory(
                 &parsed,
@@ -2390,8 +2310,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             if (args.output_file.is_some() || args.output_dir.is_some())
                 && out_path_for(args, in_file).is_none()
             {
-                eprintln!("Please specify a valid output file/directory");
-                return Ok(1);
+                return Ok(missing_output_path());
             }
             emit_output(args, in_file, &body)?;
         }
@@ -2493,26 +2412,14 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             for f in &args.in_files {
                 match out_path_for(args, f) {
                     Some(p) => out_files.push(p),
-                    None => {
-                        eprintln!("Please specify a valid output file/directory");
-                        return Ok(1);
-                    }
+                    None => return Ok(missing_output_path()),
                 }
             }
             for (out, doc) in out_files.iter().zip(&translate_docs) {
-                // `writeFileWithDirs o (renderDoc d)` — parent dirs created,
-                // doc written VERBATIM (no trailing newline; the stdout arm's
-                // `putStrLn` newline is absent here — 881 vs 882 bytes on
-                // typing4.spthy).
-                if let Some(parent) = std::path::Path::new(out).parent() {
-                    if !parent.as_os_str().is_empty() {
-                        fs::create_dir_all(parent).map_err(|e| {
-                            RunError(format!("failed to create {}: {}", parent.display(), e))
-                        })?;
-                    }
-                }
-                fs::write(out, doc)
-                    .map_err(|e| RunError(format!("failed to write {}: {}", out, e)))?;
+                // `writeFileWithDirs o (renderDoc d)` — doc written VERBATIM
+                // (no trailing newline; the stdout arm's `putStrLn` newline is
+                // absent here — 881 vs 882 bytes on typing4.spthy).
+                write_file_with_dirs(out, doc)?;
             }
         } else {
             for doc in &translate_docs {
@@ -2528,6 +2435,26 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     Ok(overall_status)
 }
 
+/// Run `annotate_loop_breakers` over the theory's rules, in place and in
+/// source order.  Used by the first close (mirroring the breaker pass of HS
+/// `closeTheoryWithMaude`) and again by the `--partial-evaluation` re-close
+/// (`applyPartialEvaluation`'s second `closeTheoryWithMaude`, Prover.hs:240).
+fn annotate_theory_loop_breakers(
+    elaborated: &mut tamarin_theory::theory::Theory,
+    m: &tamarin_term::maude_proc::MaudeHandle,
+) {
+    use tamarin_theory::theory::TheoryItem;
+    let mut rules: Vec<&mut tamarin_theory::theory::OpenProtoRule> = elaborated
+        .items
+        .iter_mut()
+        .filter_map(|i| match i {
+            TheoryItem::Rule(r) => Some(r),
+            _ => None,
+        })
+        .collect();
+    tamarin_theory::constraint::solver::context::annotate_loop_breakers(&mut rules, m);
+}
+
 /// Install rayon's global worker pool to the size requested via
 /// `--processors=N` (or a sensible default).
 ///
@@ -2541,36 +2468,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
 /// would otherwise serialise every worker on a single subprocess, so
 /// users can productively scale to every core.  Memory budget is
 /// mediated by `--maude-processes`, which defaults to `processors` (1:1).
-/// Run `annotate_loop_breakers` over the theory's rules and write the
-/// results back in source order.  Used by the first close (mirroring the
-/// breaker pass of HS `closeTheoryWithMaude`) and again by the
-/// `--partial-evaluation` re-close (`applyPartialEvaluation`'s second
-/// `closeTheoryWithMaude`, Prover.hs:240).
-fn annotate_theory_loop_breakers(
-    elaborated: &mut tamarin_theory::theory::Theory,
-    m: &tamarin_term::maude_proc::MaudeHandle,
-) {
-    use tamarin_theory::theory::TheoryItem;
-    let mut rules: Vec<tamarin_theory::theory::OpenProtoRule> = elaborated
-        .items
-        .iter()
-        .filter_map(|i| match i {
-            TheoryItem::Rule(r) => Some(r.clone()),
-            _ => None,
-        })
-        .collect();
-    tamarin_theory::constraint::solver::context::annotate_loop_breakers(&mut rules, m);
-    // Sequential writeback in source order.
-    let mut iter = rules.into_iter();
-    for item in elaborated.items.iter_mut() {
-        if let TheoryItem::Rule(opr) = item {
-            if let Some(updated) = iter.next() {
-                opr.loop_breakers = updated.loop_breakers;
-            }
-        }
-    }
-}
-
 fn init_rayon_pool(args: &Args) {
     let n = args.effective_processors();
     // `build_global` is idempotent-error: the SECOND call returns Err
@@ -2602,16 +2499,7 @@ fn default_maude_path() -> String {
 /// the file with the bytes `end`.
 fn emit_output(args: &Args, in_file: &str, body: &str) -> Result<(), RunError> {
     if let Some(out) = out_path_for(args, in_file) {
-        // Ensure parent dir exists.
-        if let Some(parent) = std::path::Path::new(&out).parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent).map_err(|e| {
-                    RunError(format!("failed to create {}: {}", parent.display(), e))
-                })?;
-            }
-        }
-        let doc = body.strip_suffix('\n').unwrap_or(body);
-        fs::write(&out, doc).map_err(|e| RunError(format!("failed to write {}: {}", out, e)))?;
+        write_file_with_dirs(&out, body.strip_suffix('\n').unwrap_or(body))?;
     } else {
         // stdout
         print!("{}", body);
