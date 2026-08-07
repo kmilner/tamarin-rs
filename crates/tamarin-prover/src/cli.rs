@@ -74,9 +74,9 @@
 //!                              DOT dialect, not HS `Text.Dot`'s (node ids,
 //!                              record ports, cluster ids and attribute
 //!                              quoting differ — see the KNOWN DIVERGENCES
-//!                              block in `tamarin-server`'s
-//!                              `handlers/dot.rs`).  Labels and container
-//!                              framing are byte-exact.
+//!                              block in `tamarin-theory`'s
+//!                              `constraint/system/dot.rs`).  Labels and
+//!                              container framing are byte-exact.
 //!   --with-maude=PATH          path to `maude` (default: looked up via PATH)
 //!   --with-dot=PATH            path to GraphViz `dot`; used by the `test`
 //!                              subcommand's version probe and by interactive

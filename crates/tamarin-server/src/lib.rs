@@ -53,11 +53,11 @@
 // the `disallowed_macros` freeze is allowed for this file.
 #![allow(clippy::disallowed_macros)]
 
-pub mod graph;
 pub mod handlers;
 pub mod routes;
 pub mod state;
 pub mod theory_io;
+pub mod web_utils_abbrev;
 
 pub use routes::router;
 pub use state::{AppState, TheoryEntry, TheoryStore};

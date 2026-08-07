@@ -12,13 +12,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::render_system::RenderSystem;
-use tamarin_term::lterm::{sort_of_lnterm, LNTerm, LSort};
-use tamarin_theory::constraint::constraints::{Edge, Goal, LessAtom, NodeId, Reason};
-use tamarin_theory::constraint::system::System;
-use tamarin_theory::fact::FactTag;
-use tamarin_theory::rule::{
+use crate::constraint::constraints::{Edge, Goal, LessAtom, NodeId, Reason};
+use crate::constraint::system::System;
+use crate::fact::FactTag;
+use crate::rule::{
     is_coerce_rule_info, is_irecv_rule_info, is_isend_rule_info, RuleACInst, RuleInfo,
 };
+use tamarin_term::lterm::{sort_of_lnterm, LNTerm, LSort};
 
 // ---------------------------------------------------------------------
 // Compression (compressSystem)
@@ -175,15 +175,12 @@ fn mentioned_in_unsolved_chains(v: &NodeId, sys: &System) -> bool {
     })
 }
 
-fn mentioned_in_formulas(
-    v: &NodeId,
-    formulas: &[std::sync::Arc<tamarin_theory::guarded::Guarded>],
-) -> bool {
+fn mentioned_in_formulas(v: &NodeId, formulas: &[std::sync::Arc<crate::guarded::Guarded>]) -> bool {
     formulas.iter().any(|g| guarded_mentions_node(v, g))
 }
 
-fn guarded_mentions_node(v: &NodeId, g: &tamarin_theory::guarded::Guarded) -> bool {
-    use tamarin_theory::guarded::Guarded;
+fn guarded_mentions_node(v: &NodeId, g: &crate::guarded::Guarded) -> bool {
+    use crate::guarded::Guarded;
     match g {
         Guarded::Conj(items) | Guarded::Disj(items) => {
             items.iter().any(|x| guarded_mentions_node(v, x))
@@ -198,8 +195,8 @@ fn guarded_mentions_node(v: &NodeId, g: &tamarin_theory::guarded::Guarded) -> bo
     }
 }
 
-fn atom_mentions_node(v: &NodeId, at: &tamarin_theory::guarded_types::GAtom) -> bool {
-    use tamarin_theory::guarded_types::{BVar, GAtom, GTerm};
+fn atom_mentions_node(v: &NodeId, at: &crate::guarded_types::GAtom) -> bool {
+    use crate::guarded_types::{BVar, GAtom, GTerm};
     let mentions_term = |t: &GTerm| -> bool {
         if let GTerm::Var(BVar::Free(spec)) = t {
             // HS `notOccursIn proj = not $ getAny $ foldFrees (Any . (v ==))
@@ -230,7 +227,7 @@ fn atom_mentions_node(v: &NodeId, at: &tamarin_theory::guarded_types::GAtom) -> 
 
 fn try_hide_action(v: &NodeId, sys: RenderSystem) -> Result<RenderSystem, RenderSystem> {
     // Collect KU action atoms at v.
-    let ku_actions: Vec<(NodeId, tamarin_theory::fact::LNFact)> = sys
+    let ku_actions: Vec<(NodeId, crate::fact::LNFact)> = sys
         .goals
         .iter()
         .filter_map(|(g, st)| {
@@ -433,7 +430,7 @@ fn rule_eligible(ru: &RuleACInst) -> bool {
         }
         RuleInfo::Proto(p) => {
             // isFreshRule treats only the Fresh proto-rule as fresh.
-            p.name == tamarin_theory::rule::ProtoRuleName::Fresh
+            p.name == crate::rule::ProtoRuleName::Fresh
         }
     };
     is_special || (ru.actions.is_empty() && ru.premises.len() <= 1 && ru.conclusions.len() <= 1)
@@ -510,15 +507,15 @@ pub fn transitive_reduction(sys: RenderSystem, total_red: bool) -> RenderSystem 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    use tamarin_theory::constraint::system::System;
-    use tamarin_theory::fact::{fresh_fact, in_fact, out_fact};
-    use tamarin_theory::rule::{
+    use crate::constraint::system::System;
+    use crate::fact::{fresh_fact, in_fact, out_fact};
+    use crate::rule::{
         ConcIdx, IntrRuleACInfo, PremIdx, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes,
         RuleInfo,
     };
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::term::Term;
+    use tamarin_term::vterm::Lit;
 
     fn nid(name: &str, idx: u64) -> NodeId {
         LVar::new(name, LSort::Node, idx)

@@ -13,7 +13,8 @@
 //!
 //! The expectations below are the pinned v1.13.0 oracle's bytes, with one
 //! documented exception: the dot graph BODIES are the port's DOT dialect (see
-//! the KNOWN DIVERGENCES block in `tamarin-server`'s `handlers/dot.rs`), so
+//! the KNOWN DIVERGENCES block in `tamarin-theory`'s
+//! `constraint/system/dot.rs`), so
 //! only the labels and the `showDot` container framing are byte-asserted
 //! there.  The JSON is byte-asserted in full.
 //!

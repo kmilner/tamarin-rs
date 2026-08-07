@@ -11,7 +11,7 @@
 //! - `someRuleACInst*` (rule instantiation) — in
 //!   `constraint::solver::reduction` (`canonical_rule_inst`).
 //! - Pretty-printing — `render_rule` in `pretty_theory.rs`; graph/dot
-//!   rendering of rule instances lives in `tamarin-server` (`handlers/dot.rs`).
+//!   rendering of rule instances lives in `constraint::system::dot`.
 //!
 //! The Haskell version uses `fclabels` lenses heavily; we replace those
 //! with public fields plus accessor methods.

@@ -8,7 +8,8 @@
 //! is a `State` monad; in Rust we expose a `DotGraph` struct with mutating
 //! methods. `scope` and `cluster` take a closure for the nested graph.
 //!
-//! NOTE: the live DOT path — `tamarin-server/src/handlers/dot.rs`, which backs
+//! NOTE: the live DOT path —
+//! `tamarin-theory/src/constraint/system/dot.rs`, which backs
 //! both the interactive graph routes and `--output-dot` — emits its own
 //! dialect and only borrows this module's leaf helpers
 //! (`fix_multi_line_label`, [`escape_dot_graph_label`]). The builder API

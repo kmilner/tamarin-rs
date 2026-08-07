@@ -2,7 +2,8 @@
 //! [`System`].
 //!
 //! The interactive graph-render pipeline (`graph::simplify`,
-//! `handlers::dot`) works on a **clone** of a prover `System` that it mutates
+//! [`crate::constraint::system::dot`]) works on a **clone** of a prover
+//! `System` that it mutates
 //! for display: it drops entailed order constraints, hides intruder/coerce
 //! nodes, and transitively reduces the `less` relation.  Those mutations go
 //! through `content_mut()`, which leaves the system's verified-identity
@@ -23,7 +24,7 @@
 //! unchanged via the deref coercions, and any function taking `&System`
 //! (e.g. `compute_basic_graph_repr`) accepts `&RenderSystem` directly.
 
-use tamarin_theory::constraint::system::System;
+use crate::constraint::system::System;
 
 /// A prover [`System`] clone dedicated to graph rendering.  See the module
 /// docs: constructed one-way via [`RenderSystem::from_prover`], never yields

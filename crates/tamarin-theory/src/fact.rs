@@ -430,8 +430,8 @@ impl<T> Fact<T> {
     pub fn is_persistent(&self) -> bool {
         fact_tag_multiplicity(&self.tag) == Multiplicity::Persistent
     }
-    // Used by the web graph's protocol-edge classification
-    // (tamarin-server `graph::json`).
+    // Used by the graph's protocol-edge classification
+    // (`constraint::system::json`).
     pub fn is_proto(&self) -> bool {
         matches!(self.tag, FactTag::Proto(_, _, _))
     }

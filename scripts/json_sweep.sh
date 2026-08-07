@@ -3,7 +3,7 @@
 # theories. No --prove: closeTheory replays stored proofs, so *_analyzed.spthy
 # files yield real traces. JSON compared byte-for-byte; DOT compared on
 # digraph-label lines only (body dialect is an accepted divergence, documented
-# in crates/tamarin-server/src/handlers/dot.rs). Documented residuals resolve
+# in crates/tamarin-theory/src/constraint/system/dot.rs). Documented residuals resolve
 # to LEDGERED via scripts/sweep_expected.tsv. FAMILY=1 restricts to
 # scripts/json_family.txt (paths relative to case-studies-regression/).
 #

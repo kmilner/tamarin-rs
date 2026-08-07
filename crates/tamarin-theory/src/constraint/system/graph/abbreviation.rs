@@ -22,12 +22,10 @@ use tamarin_term::pretty::{ac_op_symbol, pretty_lnterm};
 use tamarin_term::term::{is_pair, Term};
 use tamarin_term::vterm::Lit;
 
-use tamarin_theory::pretty_hpj::{fcat, fsep, punctuate, Doc, WEB_LINE_LENGTH, WEB_RIBBON};
+use crate::pretty_hpj::{fcat, fsep, punctuate, Doc, WEB_LINE_LENGTH, WEB_RIBBON};
 
-use tamarin_theory::fact::LNFact;
-use tamarin_theory::rule::{
-    IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, RuleACInst, RuleInfo,
-};
+use crate::fact::LNFact;
+use crate::rule::{IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, RuleACInst, RuleInfo};
 
 use super::repr::{GraphRepr, NodeType};
 
@@ -285,7 +283,7 @@ fn dump_rule_info(buf: &mut String, info: &RuleInfo<ProtoRuleACInstInfo, IntrRul
 
 fn dump_fact(buf: &mut String, fa: &LNFact) {
     use std::fmt::Write as _;
-    let _ = write!(buf, "{}", tamarin_theory::fact::fact_tag_name(&fa.tag));
+    let _ = write!(buf, "{}", crate::fact::fact_tag_name(&fa.tag));
     for t in fa.terms.iter() {
         let _ = write!(buf, "{} ", pretty_lnterm(t));
     }
@@ -808,8 +806,8 @@ mod tests {
     #[test]
     fn rule_name_blocks_aliasing_abbreviation() {
         use super::super::repr::{GNode, NodeType};
-        use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
-        use tamarin_theory::rule::{ProtoRuleACInstInfo, Rule, RuleAttributes};
+        use crate::fact::{Fact, FactTag, Multiplicity};
+        use crate::rule::{ProtoRuleACInstInfo, Rule, RuleAttributes};
 
         // A senc(...) term long enough to clear the weight>=10 threshold and
         // appearing in two facts so its occurrence count exceeds 1.

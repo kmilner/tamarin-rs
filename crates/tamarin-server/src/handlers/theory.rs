@@ -1474,10 +1474,12 @@ fn graph_json_url(idx: usize, path: &path_parse::TheoryPath) -> String {
 
 /// Build `GraphOptions` from a parsed query map.  Re-uses the same
 /// query parameter names as `graph_options_from_query`.
-fn graph_options_from_map(qs: &HashMap<String, String>) -> crate::graph::GraphOptions {
+fn graph_options_from_map(
+    qs: &HashMap<String, String>,
+) -> tamarin_theory::constraint::system::graph::GraphOptions {
     // Read the parsed map directly via the shared keyed-lookup helper,
     // avoiding a round-trip through a re-serialised `key=value&...` string.
-    crate::graph::graph_options_from_params(qs)
+    tamarin_theory::constraint::system::graph::graph_options_from_params(qs)
 }
 
 /// `GET /thy/trace/<idx>/graph/*path` — return an SVG image of the
@@ -1551,7 +1553,7 @@ pub async fn interactive_graph_def(
         Err(message) => return internal_server_error(&message),
     };
     let opts = graph_options_from_map(&query);
-    let dot = crate::handlers::dot::system_to_dot_with(&sys, &opts);
+    let dot = tamarin_theory::constraint::system::dot::system_to_dot_with(&sys, &opts);
     text_response(dot)
 }
 
@@ -1604,15 +1606,17 @@ pub async fn graph_json(
             // by the mere PRESENCE of `abbrevInBackend`.  This is the one
             // route that abbreviates, and — as upstream — only on this arm.
             let abbreviate = query.contains_key("abbrevInBackend");
-            let sys = crate::graph::web_utils_abbrev::abbrev(
+            let sys = crate::web_utils_abbrev::abbrev(
                 abbreviate,
-                crate::graph::web_utils_abbrev::MIN_ABBREV_SIZE,
+                crate::web_utils_abbrev::MIN_ABBREV_SIZE,
                 sys,
             );
-            json_graph_response(crate::graph::json::sequents_to_json_pretty(
-                &opts,
-                &[(label, &sys)],
-            ))
+            json_graph_response(
+                tamarin_theory::constraint::system::json::sequents_to_json_pretty(
+                    &opts,
+                    &[(label, &sys)],
+                ),
+            )
         }
         PathSystem::Source { system, .. } => {
             let Some(sys) = system else {
@@ -1620,11 +1624,13 @@ pub async fn graph_json(
             };
             // No backend abbreviation on this arm; the serialiser takes a
             // `RenderSystem`, which the proof arm gets back from `abbrev`.
-            let sys = crate::graph::RenderSystem::from_prover(sys);
-            json_graph_response(crate::graph::json::sequents_to_json_pretty(
-                &opts,
-                &[(label, &sys)],
-            ))
+            let sys = tamarin_theory::constraint::system::graph::RenderSystem::from_prover(sys);
+            json_graph_response(
+                tamarin_theory::constraint::system::json::sequents_to_json_pretty(
+                    &opts,
+                    &[(label, &sys)],
+                ),
+            )
         }
     }
 }

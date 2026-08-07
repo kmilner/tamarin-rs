@@ -6,30 +6,24 @@
 //!
 //! This module itself is the top-level `Graph.hs`: it holds [`Graph`] and
 //! [`system_to_graph`], the single pipeline both renderers
-//! (`handlers::dot` -> `Dot.hs`, [`json`] -> `JSON.hs`) consume.  The rest
-//! mirrors the layout of `lib/theory/src/Theory/Constraint/System/Graph/`:
+//! ([`super::dot`] -> `Dot.hs`, [`super::json`] -> `JSON.hs`) consume.  The
+//! rest mirrors the layout of
+//! `lib/theory/src/Theory/Constraint/System/Graph/`:
 //!
 //! - [`repr`]         -> `GraphRepr.hs`
 //! - [`simplify`]     -> `Simplification.hs`
 //! - [`abbreviation`] -> `Abbreviation.hs`
 //! - [`options`]      -> the `Graph.hs` `GraphOptions` record.
 //!
-//! Two further modules serve the JSON graph endpoint:
-//!
-//! - [`json`]              -> `Theory/Constraint/System/JSON.hs`
-//! - [`web_utils_abbrev`]  -> `src/Web/Utils.hs`
-//!
 //! and [`color`] holds the `nodeColorMap` palette both renderers key node
 //! fills off (`Dot.hs`).
 
 pub mod abbreviation;
 pub mod color;
-pub mod json;
 pub mod options;
 pub mod render_system;
 pub mod repr;
 pub mod simplify;
-pub mod web_utils_abbrev;
 
 pub use render_system::RenderSystem;
 
@@ -43,7 +37,7 @@ pub use repr::{
 };
 pub use simplify::{compress_system, simplify_system, SimplificationLevel};
 
-use tamarin_theory::constraint::system::System;
+use crate::constraint::system::System;
 
 /// Mirror of HS `Graph` (Graph.hs:76-81) restricted to the fields the two
 /// renderers read.

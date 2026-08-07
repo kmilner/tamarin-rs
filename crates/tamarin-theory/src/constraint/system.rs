@@ -19,6 +19,20 @@ use crate::guarded::Guarded;
 use crate::rule::RuleACInst;
 use crate::tools::{EquationStore, SubtermStore};
 
+// The pure `System` serializers, mirroring the Haskell children of
+// `Theory.Constraint.System`:
+//
+// - [`mod@dot`]   -> `Theory/Constraint/System/Dot.hs`
+// - [`mod@json`]  -> `Theory/Constraint/System/JSON.hs`
+// - [`mod@graph`] -> `Theory/Constraint/System/Graph/`
+//
+// Both the batch `--output-dot`/`--output-json` writers and the interactive
+// server's graph routes render through them, which is why they live in the
+// theory library rather than in either front end.
+pub mod dot;
+pub mod graph;
+pub mod json;
+
 // =============================================================================
 // Prebuilt always-before adjacency
 // =============================================================================
@@ -665,7 +679,7 @@ fn trace_goal_insert() -> bool {
 /// stores all three as `Vec`s in INSERTION order, which carries no map/set
 /// semantics: `Reduction::set_nodes` keeps first-occurrence order because that
 /// is what decides which rule survives an id collision, and the display-only
-/// `compress_system` pass (tamarin-server's `graph::simplify`) appends its
+/// `compress_system` pass ([`mod@graph::simplify`]) appends its
 /// reconnected edges / less-atoms instead of re-inserting them in order.  A
 /// port site that needs the HS order therefore has to materialise it at the
 /// `M.toList` / `S.toList` boundary — through this function or through

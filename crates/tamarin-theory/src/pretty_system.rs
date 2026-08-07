@@ -426,7 +426,7 @@ fn pretty_source_kind(sk: Option<SourceKind>) -> String {
 /// `!` prefix), the term list in parentheses (always emitted, even for
 /// zero-arity facts, matching `nestShort'`), and a trailing `[...]`
 /// annotation block. Used by the proof pretty-printer here and by the
-/// web DOT renderer (`tamarin-server`'s `dot::format_fact`).
+/// DOT renderer (`constraint::system::dot`).
 pub fn pretty_fact(fa: &LNFact) -> String {
     use crate::fact::{fact_tag_multiplicity, FactAnnotation, Multiplicity};
     // Matches Haskell `showFactTag` (Fact.hs:519-523): the `!` prefix is

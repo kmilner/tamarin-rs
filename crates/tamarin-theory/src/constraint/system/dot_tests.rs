@@ -3,7 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
-use tamarin_theory::constraint::system::System;
+use crate::constraint::system::System;
 
 #[test]
 fn dot_for_empty_system() {
@@ -16,16 +16,14 @@ fn dot_for_empty_system() {
 
 #[test]
 fn dot_for_node_with_rule() {
+    use crate::fact::{fresh_fact, out_fact};
+    use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_theory::fact::{fresh_fact, out_fact};
-    use tamarin_theory::rule::{
-        ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo,
-    };
     let mut sys = System::empty();
     let kvar = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-    let info: RuleInfo<ProtoRuleACInstInfo, tamarin_theory::rule::IntrRuleACInfo> =
+    let info: RuleInfo<ProtoRuleACInstInfo, crate::rule::IntrRuleACInfo> =
         RuleInfo::Proto(ProtoRuleACInstInfo {
             name: ProtoRuleName::Stand("Setup"),
             attributes: RuleAttributes::empty(),
@@ -56,10 +54,8 @@ fn hidden_endpoint_graph(
     tgt_prem: LNFact,
     hidden: usize,
 ) -> (System, System, GEdge) {
+    use crate::rule::{ConcIdx, PremIdx, ProtoRuleACInstInfo, Rule, RuleAttributes, RuleInfo};
     use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_theory::rule::{
-        ConcIdx, PremIdx, ProtoRuleACInstInfo, Rule, RuleAttributes, RuleInfo,
-    };
     let mk = |name: &'static str, prems: Vec<LNFact>, concs: Vec<LNFact>| {
         let info: RuleInfo<ProtoRuleACInstInfo, IntrRuleACInfo> =
             RuleInfo::Proto(ProtoRuleACInstInfo {
@@ -76,7 +72,7 @@ fn hidden_endpoint_graph(
     sys.add_node(n2, mk("Consumer", vec![tgt_prem], Vec::new()));
     let src = (n1, ConcIdx(0));
     let tgt = (n2, PremIdx(0));
-    sys.add_edge(tamarin_theory::constraint::constraints::Edge { src, tgt });
+    sys.add_edge(crate::constraint::constraints::Edge { src, tgt });
     let mut drawn = sys.clone();
     let gone = if hidden == 0 { n1 } else { n2 };
     drawn.nodes_mut().retain(|(id, _)| id != &gone);
@@ -85,8 +81,8 @@ fn hidden_endpoint_graph(
 
 /// Render `drawn`'s repr while resolving edge facts as HS does.
 fn dot_of(orig: &System, drawn: System) -> String {
-    use crate::graph::render_system::RenderSystem;
-    use crate::graph::repr::compute_basic_graph_repr;
+    use crate::constraint::system::graph::render_system::RenderSystem;
+    use crate::constraint::system::graph::repr::compute_basic_graph_repr;
     let simplified = RenderSystem::from_prover(drawn);
     let repr = compute_basic_graph_repr(&simplified);
     let graph = Graph {
@@ -125,10 +121,10 @@ fn edge_line(dot: &str) -> String {
 /// `tests/fixtures/haskell-responses/igd_cases_raw.dot`.
 #[test]
 fn edge_style_resolves_hidden_source_conc_from_original_system() {
+    use crate::fact::{fresh_fact, proto_fact, Multiplicity};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_theory::fact::{fresh_fact, proto_fact, Multiplicity};
     let a = Term::Lit(Lit::Var(LVar::new("A", LSort::Pub, 0)));
     let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
     let (orig, drawn, _) = hidden_endpoint_graph(
@@ -153,10 +149,10 @@ fn edge_style_resolves_hidden_source_conc_from_original_system() {
 /// neither a proto nor a K fact and would yield `color="gray30"` on its own.
 #[test]
 fn edge_style_resolves_hidden_target_prem_from_original_system() {
+    use crate::fact::{out_fact, proto_fact, Multiplicity};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_theory::fact::{out_fact, proto_fact, Multiplicity};
     let a = Term::Lit(Lit::Var(LVar::new("A", LSort::Pub, 0)));
     let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
     let (orig, drawn, _) = hidden_endpoint_graph(
@@ -193,10 +189,10 @@ fn edge_style_resolves_hidden_target_prem_from_original_system() {
 /// edge as the reference attribute string.
 #[test]
 fn edge_style_treats_k_facts_as_persistent() {
+    use crate::fact::{kd_fact, ku_fact, proto_fact, Multiplicity};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_theory::fact::{kd_fact, ku_fact, proto_fact, Multiplicity};
     let a = Term::Lit(Lit::Var(LVar::new("A", LSort::Pub, 0)));
     let m = Term::Lit(Lit::Var(LVar::new("m", LSort::Msg, 0)));
     // `hidden_endpoint_graph`'s drawn copy is irrelevant here: `edge_style`
@@ -239,10 +235,10 @@ fn edge_style_treats_k_facts_as_persistent() {
 // `&nbsp;`→space, record escapes undone).
 #[test]
 fn render_balanced_matches_hs_oidc_rows() {
+    use crate::fact::{proto_fact, Multiplicity};
     use tamarin_term::builtin::pair;
     use tamarin_term::lterm::{pub_term, LSort, LVar};
     use tamarin_term::vterm::var_term;
-    use tamarin_theory::fact::{proto_fact, Multiplicity};
 
     let mv = |n: &str| var_term(LVar::new(n, LSort::Msg, 0));
     let pv = |n: &str| var_term(LVar::new(n, LSort::Pub, 0));
@@ -348,16 +344,14 @@ fn render_balanced_matches_hs_oidc_rows() {
 fn dot_uses_pretty_printing_for_terms() {
     // Two pub var literals should render as $a, $b not as cryptic
     // M:0 placeholders.
+    use crate::fact::{fresh_fact, out_fact};
+    use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_theory::fact::{fresh_fact, out_fact};
-    use tamarin_theory::rule::{
-        ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo,
-    };
     let mut sys = System::empty();
     let a = Term::Lit(Lit::Var(LVar::new("a", LSort::Pub, 0)));
-    let info: RuleInfo<ProtoRuleACInstInfo, tamarin_theory::rule::IntrRuleACInfo> =
+    let info: RuleInfo<ProtoRuleACInstInfo, crate::rule::IntrRuleACInfo> =
         RuleInfo::Proto(ProtoRuleACInstInfo {
             name: ProtoRuleName::Stand("Setup"),
             attributes: RuleAttributes::empty(),
@@ -377,13 +371,11 @@ fn dot_uses_pretty_printing_for_terms() {
 
 #[test]
 fn dot_emits_cluster_for_role() {
+    use crate::fact::out_fact;
+    use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_theory::fact::out_fact;
-    use tamarin_theory::rule::{
-        ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo,
-    };
     let mut sys = System::empty();
     let kvar = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
     let mk = |name: &str, role: Option<&str>| -> RuleACInst {
@@ -416,7 +408,7 @@ fn dot_emits_cluster_for_role() {
 fn dot_with_sl0_does_not_collapse_less() {
     // Construct a system with a transitive less-chain; verify SL2/SL3
     // drops the redundant edge and SL0 keeps it.
-    use tamarin_theory::constraint::constraints::LessAtom;
+    use crate::constraint::constraints::LessAtom;
     let mut sys = System::empty();
     let a = LVar::new("a", tamarin_term::lterm::LSort::Node, 0);
     let b = LVar::new("b", tamarin_term::lterm::LSort::Node, 0);
@@ -430,18 +422,18 @@ fn dot_with_sl0_does_not_collapse_less() {
     sys.content_mut()
         .less_atoms
         .push(LessAtom::new(a, c, Reason::Fresh));
-    let opts_sl0 = crate::graph::GraphOptions {
-        simplification_level: crate::graph::SimplificationLevel::SL0,
+    let opts_sl0 = crate::constraint::system::graph::GraphOptions {
+        simplification_level: crate::constraint::system::graph::SimplificationLevel::SL0,
         compress: false,
-        ..crate::graph::GraphOptions::default()
+        ..crate::constraint::system::graph::GraphOptions::default()
     };
     let s0 = system_to_dot_with(&sys, &opts_sl0);
     // Count dashed less-edges by `style=\"dashed\"` occurrences.
     let dashed_sl0 = s0.matches("style=\"dashed\"").count();
-    let opts_sl3 = crate::graph::GraphOptions {
-        simplification_level: crate::graph::SimplificationLevel::SL3,
+    let opts_sl3 = crate::constraint::system::graph::GraphOptions {
+        simplification_level: crate::constraint::system::graph::SimplificationLevel::SL3,
         compress: false,
-        ..crate::graph::GraphOptions::default()
+        ..crate::constraint::system::graph::GraphOptions::default()
     };
     let s3 = system_to_dot_with(&sys, &opts_sl3);
     let dashed_sl3 = s3.matches("style=\"dashed\"").count();
@@ -458,10 +450,12 @@ fn dot_query_params_select_simplification() {
     // Smoke test for graph_options_from_query, matching HS `getOptions`
     // (Handler.hs): the `simplification` param reads `SL0..SL3` via the
     // derived `Read`, and `uncompress` presence turns compression off.
-    let opts = crate::graph::graph_options_from_query("simplification=SL3&uncompress=");
+    let opts = crate::constraint::system::graph::graph_options_from_query(
+        "simplification=SL3&uncompress=",
+    );
     assert_eq!(
         opts.simplification_level,
-        crate::graph::SimplificationLevel::SL3
+        crate::constraint::system::graph::SimplificationLevel::SL3
     );
     assert!(!opts.compress);
 }
@@ -470,13 +464,11 @@ fn dot_query_params_select_simplification() {
 fn dot_with_cluster_passes_graphviz_lint() {
     // Render a small system with a cluster and (if `dot` is on
     // PATH) verify the output parses without errors.
+    use crate::fact::out_fact;
+    use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_theory::fact::out_fact;
-    use tamarin_theory::rule::{
-        ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo,
-    };
     let mut sys = System::empty();
     let kvar = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
     let mk = |name: &str, role: Option<&str>| -> RuleACInst {
@@ -528,14 +520,12 @@ fn dot_with_cluster_passes_graphviz_lint() {
 fn dot_abbreviations_and_legend_appear_only_when_abbreviate_is_set() {
     // Build a System whose nodes carry a long, frequently-repeated
     // compound term -- the abbreviation algorithm should emit a legend.
+    use crate::fact::{Fact, FactTag};
+    use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo};
     use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::{f_app_no_eq, Term};
     use tamarin_term::vterm::Lit;
-    use tamarin_theory::fact::{Fact, FactTag};
-    use tamarin_theory::rule::{
-        ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo,
-    };
     let mut sys = System::empty();
     let a = Term::Lit(Lit::Var(LVar::new("argument", LSort::Msg, 0)));
     let b = Term::Lit(Lit::Var(LVar::new("payload", LSort::Msg, 0)));
@@ -597,7 +587,7 @@ fn dot_abbreviations_and_legend_appear_only_when_abbreviate_is_set() {
 // Build a simple proto rule node with the given premises/actions/concs.
 #[cfg(test)]
 fn proto_node(name: &str, prems: Vec<LNFact>, acts: Vec<LNFact>, concs: Vec<LNFact>) -> RuleACInst {
-    use tamarin_theory::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes};
+    use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes};
     Rule::new(
         RuleInfo::Proto(ProtoRuleACInstInfo {
             name: ProtoRuleName::Stand(tamarin_term::intern::intern_str(name)),
@@ -621,10 +611,10 @@ fn dot_persistent_fact_keeps_bang_prefix_and_zero_arity_parens() {
     // Authenticated against the repo's HS prover (v1.13.0) on a minimal
     // theory: `--prove` shows `[ Fr( ~k ) ] --> [ !Reg( ~k ), Started( ) ]`
     // — i.e. the `!` prefix on `!Reg` and the spaced empty parens on `Started`.
+    use crate::fact::{fresh_fact, proto_fact, Multiplicity};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_theory::fact::{fresh_fact, proto_fact, Multiplicity};
     let mut sys = System::empty();
     let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
     let reg = proto_fact(Multiplicity::Persistent, "Reg", vec![k.clone()]);
@@ -652,10 +642,10 @@ fn dot_node_id_uses_show_lvar_format() {
     // and `#i.2` when idx==2 (`instance Show LVar`, LTerm.hs:525-532;
     // sortPrefix LSortNode = "#", LTerm.hs:190-195, see line 194). The rule-node header is
     // `prettyNodeId v <-> colon <-> showDotRuleCaseName` (Dot.hs:236-379, see line 336).
+    use crate::fact::out_fact;
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_theory::fact::out_fact;
     let opts = GraphOptions {
         compress: false,
         abbreviate: false,
@@ -691,10 +681,10 @@ fn dot_drops_diff_annotation_action_fact() {
     // `Diff<getRuleNameDiff ru>` linear proto fact from the action row.
     // For a standard proto rule `R`, getRuleNameDiff = "ProtoR", so the
     // dropped fact is `ProtoFact Linear "DiffProtoR" 0`.
+    use crate::fact::{out_fact, proto_fact, Multiplicity};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_theory::fact::{out_fact, proto_fact, Multiplicity};
     let mut sys = System::empty();
     let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
     let diff = proto_fact(Multiplicity::Linear, "DiffProtoR", vec![]);
@@ -726,12 +716,12 @@ fn dot_compact_intruder_node_is_plain_ellipse() {
     // With an outgoing edge the label is `#id : name` (actions dropped);
     // without one it is the full `#id : name[acts]`. Compact endpoints also
     // carry no record ports (Dot.hs:303-304).
+    use crate::constraint::constraints::Edge;
+    use crate::fact::{in_fact, out_fact, proto_fact, Multiplicity};
+    use crate::rule::{ConcIdx, IntrRuleACInfo, PremIdx, Rule};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_theory::constraint::constraints::Edge;
-    use tamarin_theory::fact::{in_fact, out_fact, proto_fact, Multiplicity};
-    use tamarin_theory::rule::{ConcIdx, IntrRuleACInfo, PremIdx, Rule};
     let opts = GraphOptions {
         compress: false,
         abbreviate: false,
@@ -807,11 +797,11 @@ fn dot_explicit_rule_color_attribute_sets_fillcolor() {
     // HS `dotNodeCompact` prefers `ruleColor'` (the explicit `color:`
     // attribute) over the colormap (Dot.hs:248-256). The hex is
     // `rgbToHex` of the attribute's Rgb.
+    use crate::fact::out_fact;
+    use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_theory::fact::out_fact;
-    use tamarin_theory::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes};
     use tamarin_utils::color::Rgb;
     let mut sys = System::empty();
     let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
@@ -854,10 +844,10 @@ fn labeled_framing_wraps_the_web_framing_body_verbatim() {
     // carrying the label, with `"` escaped to `\"` and backslashes passed
     // through) and in the blank line `showDot`'s `"\n}\n"` leaves before the
     // closing brace.
+    use crate::fact::{fresh_fact, out_fact};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_theory::fact::{fresh_fact, out_fact};
     let mut sys = System::empty();
     let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
     let ru = proto_node(
@@ -888,8 +878,8 @@ fn dot_no_cluster_preamble_sets_node_size_and_less_edge_color_first() {
     // No-cluster preamble mirrors HS setDefaultAttributes (Dot.hs:130-135)
     // — including `width=0.3,height=0.2` on the node defaults. The less
     // edge emits `color` before `style` (HS dotLessEdge, Dot.hs:406-410, see line 410).
+    use crate::constraint::constraints::LessAtom;
     use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_theory::constraint::constraints::LessAtom;
     let mut sys = System::empty();
     let a = LVar::new("a", LSort::Node, 0);
     let b = LVar::new("b", LSort::Node, 0);
@@ -899,7 +889,7 @@ fn dot_no_cluster_preamble_sets_node_size_and_less_edge_color_first() {
     let opts = GraphOptions {
         compress: false,
         abbreviate: false,
-        simplification_level: crate::graph::SimplificationLevel::SL0,
+        simplification_level: crate::constraint::system::graph::SimplificationLevel::SL0,
         ..GraphOptions::default()
     };
     let s = system_to_dot_with(&sys, &opts);
@@ -920,11 +910,11 @@ fn dot_no_cluster_preamble_sets_node_size_and_less_edge_color_first() {
 fn dot_cluster_preamble_uses_cluster_attributes() {
     // When clusters exist HS switches to setDefaultAttributesIfCluster
     // (Dot.hs:140-161), which sets `packmode`/`pack`/etc.
+    use crate::fact::out_fact;
+    use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_theory::fact::out_fact;
-    use tamarin_theory::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes};
     let mut sys = System::empty();
     let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
     let mk = |name: &str, role: &str| -> RuleACInst {
@@ -962,11 +952,11 @@ fn dot_cluster_preamble_uses_cluster_attributes() {
 // ---- palette-driven node attributes (HS Dot.hs:236-379) ------------------
 // The `nodeColorMap` palette itself is exercised in `graph::color`.
 
-use tamarin_term::lterm::{LSort, LVar};
-use tamarin_theory::constraint::constraints::{NodeId, Reason};
-use tamarin_theory::rule::{
+use crate::constraint::constraints::{NodeId, Reason};
+use crate::rule::{
     ProtoRuleACInstInfo, ProtoRuleName as PRN, Rule as TRule, RuleAttributes, RuleInfo as TRuleInfo,
 };
+use tamarin_term::lterm::{LSort, LVar};
 
 /// A bare protocol-rule node (no facts) with the given name.
 fn named_proto_node(name: PRN) -> RuleACInst {
@@ -1017,9 +1007,9 @@ fn rule_fillcolor_priority_matches_hs() {
 fn dot_rule_node_uses_faithful_palette_fillcolor() {
     // End-to-end through system_to_dot_with: a lone protocol rule is the
     // sole member of group 1, so its fill colour is the (1,0) palette hex #d5d897.
+    use crate::fact::out_fact;
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_theory::fact::out_fact;
     let mut sys = System::empty();
     let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
     sys.add_node(
@@ -1068,9 +1058,9 @@ fn color_uses_white_font_matches_hs_luminance() {
 fn rule_node_emits_role_attribute() {
     // HS `role = fromMaybe "Undefined" (getNodeRole node)` (Dot.hs:236-379, see line 243,259):
     // a rule carrying a `role` attribute renders it verbatim.
+    use crate::fact::out_fact;
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_theory::fact::out_fact;
     let mut sys = System::empty();
     let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
     let mut ru = named_proto_node_with_out(PRN::Stand("R"), out_fact(k));

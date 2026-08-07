@@ -772,7 +772,7 @@ fn write_file_with_dirs(path: &str, body: &str) -> Result<(), RunError> {
 fn trace_label_options() -> &'static str {
     static LABEL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     LABEL.get_or_init(|| {
-        let o = tamarin_server::graph::GraphOptions::default();
+        let o = tamarin_theory::constraint::system::graph::GraphOptions::default();
         // `show graphOptions._goSimplificationLevel` — the derived `Show`, i.e.
         // the bare constructor name `SL0`..`SL3`.
         let s1 = format!("{:?}", o.simplification_level);
@@ -784,7 +784,7 @@ fn trace_label_options() -> &'static str {
         };
         let s4 = if o.abbreviate { "A1" } else { "A0" };
         let s5 = if o.compress { "C1" } else { "C0" };
-        // `_doNodeStyle`: RS has no `DotOptions` type — `handlers::dot` renders
+        // `_doNodeStyle`: RS has no `DotOptions` type — `constraint::system::dot` renders
         // `CompactBoringNodes` unconditionally, which is `defaultDotOptions`.
         let s6 = "NB";
         format!("{}-{}-{}-{}-{}-{}", s1, s2, s3, s4, s5, s6)
@@ -815,7 +815,7 @@ fn trace_output_label(theory_name: &str, lemma_name: &str, path: &[String]) -> S
 /// `traces` is the labelled `(label, system)` list in HS's order: lemma
 /// declaration order, then `proofSystems`' case-name walk.
 fn write_output_traces(args: &Args, traces: Vec<(String, System)>) -> Result<(), RunError> {
-    use tamarin_server::graph::{GraphOptions, RenderSystem};
+    use tamarin_theory::constraint::system::graph::{GraphOptions, RenderSystem};
     let opts = GraphOptions::default();
     if let Some(p) = &args.trace_dot {
         // `intercalate "\n" $ map serializeDot labelledSystems`.  Each graph
@@ -824,7 +824,7 @@ fn write_output_traces(args: &Args, traces: Vec<(String, System)>) -> Result<(),
         let graphs: Vec<String> = traces
             .iter()
             .map(|(label, sys)| {
-                tamarin_server::handlers::dot::system_to_dot_labeled(sys, &opts, label)
+                tamarin_theory::constraint::system::dot::system_to_dot_labeled(sys, &opts, label)
             })
             .collect();
         fs::write(p, graphs.join("\n"))
@@ -839,7 +839,7 @@ fn write_output_traces(args: &Args, traces: Vec<(String, System)>) -> Result<(),
         let rendered: Vec<RenderSystem> =
             systems.into_iter().map(RenderSystem::from_prover).collect();
         let pairs: Vec<(String, &RenderSystem)> = labels.into_iter().zip(rendered.iter()).collect();
-        let body = tamarin_server::graph::json::sequents_to_json_pretty(&opts, &pairs);
+        let body = tamarin_theory::constraint::system::json::sequents_to_json_pretty(&opts, &pairs);
         fs::write(p, body).map_err(|e| RunError(format!("failed to write {}: {}", p, e)))?;
     }
     Ok(())

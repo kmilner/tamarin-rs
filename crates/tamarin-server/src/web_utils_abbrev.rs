@@ -29,9 +29,8 @@ use tamarin_term::vterm::Lit;
 
 use tamarin_utils::FastMap;
 
+use tamarin_theory::constraint::system::graph::render_system::RenderSystem;
 use tamarin_theory::constraint::system::System;
-
-use crate::graph::render_system::RenderSystem;
 
 /// HS `Web.Utils.abbrev`'s minimal term size, as passed by
 /// `graphJsonThyPath` (`src/Web/Theory.hs:1331`).

@@ -36,22 +36,24 @@ use tamarin_term::lterm::{LNTerm, LVar, Name};
 use tamarin_term::term::Term;
 use tamarin_term::vterm::Lit;
 
-use tamarin_theory::constraint::constraints::{NodeConc, NodeId, NodePrem, Reason};
-use tamarin_theory::constraint::solver::tactic_show::show_lnterm;
-use tamarin_theory::fact::{fact_tag_multiplicity, show_fact_tag, FactTag, LNFact, Multiplicity};
-use tamarin_theory::pretty_hpj::{fsep, punctuate, Doc, WEB_LINE_LENGTH, WEB_RIBBON};
-use tamarin_theory::rule::{
+use crate::constraint::constraints::{NodeConc, NodeId, NodePrem, Reason};
+use crate::constraint::solver::tactic_show::show_lnterm;
+use crate::fact::{fact_tag_multiplicity, show_fact_tag, FactTag, LNFact, Multiplicity};
+use crate::pretty_hpj::{fsep, punctuate, Doc, WEB_LINE_LENGTH, WEB_RIBBON};
+use crate::rule::{
     is_coerce_rule_info, is_constr_rule_info, is_destr_rule_info, is_fresh_constr_rule_info,
     is_iequality_rule_info, is_irecv_rule_info, is_isend_rule_info, is_nat_constr_rule_info,
     is_pub_constr_rule_info, rule_name_string, ProtoRuleName, RuleACInst, RuleInfo,
 };
 
-use crate::graph::abbreviation::order_abbreviations_for_json;
-use crate::graph::color::{build_node_color_map, fact_doc_of, reason_color, NodeColorMap};
-use crate::graph::options::GraphOptions;
-use crate::graph::render_system::RenderSystem;
-use crate::graph::repr::{Cluster, GEdge, GNode, MissingHint, NodeType};
-use crate::graph::{system_to_graph, Graph};
+use crate::constraint::system::graph::abbreviation::order_abbreviations_for_json;
+use crate::constraint::system::graph::color::{
+    build_node_color_map, fact_doc_of, reason_color, NodeColorMap,
+};
+use crate::constraint::system::graph::options::GraphOptions;
+use crate::constraint::system::graph::render_system::RenderSystem;
+use crate::constraint::system::graph::repr::{Cluster, GEdge, GNode, MissingHint, NodeType};
+use crate::constraint::system::graph::{system_to_graph, Graph};
 
 /// `NodeId → &RuleACInst` index over the ORIGINAL system, built once per
 /// rendered graph.  HS's `resolveNodePremFact` / `resolveNodeConcFact`
@@ -148,7 +150,7 @@ fn show_ac_sym(o: &AcSym) -> String {
 ///
 /// `Show Name` covers `FreshName` (`~'x'`), `PubName` (`'x'`), `NodeName`
 /// (`#'x'`), `NatName` (`%'x'`) and `AbbrevName` (`x` — the bare id, see
-/// [`crate::graph::web_utils_abbrev`]).
+/// tamarin-server's `web_utils_abbrev`).
 fn show_lit(l: &Lit<Name, LVar>) -> String {
     l.to_string()
 }
@@ -745,11 +747,11 @@ fn to_pretty_string(v: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constraint::system::System;
+    use crate::fact::Fact;
     use tamarin_term::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
     use tamarin_term::lterm::{LSort, NameTag};
     use tamarin_term::term::{f_app_no_eq, lit};
-    use tamarin_theory::constraint::system::System;
-    use tamarin_theory::fact::Fact;
 
     fn var(name: &str, sort: LSort) -> LNTerm {
         lit(Lit::Var(LVar::new(name, sort, 0)))
@@ -906,7 +908,7 @@ mod tests {
                 &RenderSystem::from_prover(System::default()),
             )],
         );
-        assert_eq!(out, include_str!("../../tests/assets/hsjson_root.json"));
+        assert_eq!(out, include_str!("../../../tests/assets/hsjson_root.json"));
     }
 
     // A single unsolved action atom reproduces the `simplify.json` fixture:
@@ -914,8 +916,8 @@ mod tests {
     // `prettyLNFact` spacing in `jgnFactShow`.
     #[test]
     fn unsolved_action_atom_matches_simplify_fixture() {
-        use tamarin_theory::constraint::constraints::Goal;
-        use tamarin_theory::constraint::system::GoalStatus;
+        use crate::constraint::constraints::Goal;
+        use crate::constraint::system::GoalStatus;
         let mut sys = System::default();
         let nid = LVar::new("i", LSort::Node, 0);
         let fa: LNFact = Fact::new(
@@ -939,7 +941,10 @@ mod tests {
                 &RenderSystem::from_prover(sys),
             )],
         );
-        assert_eq!(out, include_str!("../../tests/assets/hsjson_simplify.json"));
+        assert_eq!(
+            out,
+            include_str!("../../../tests/assets/hsjson_simplify.json")
+        );
     }
 
     // `Data.Aeson.Text.string` short-forms only `\"`, `\\`, `\n`, `\r`
@@ -983,8 +988,8 @@ mod tests {
     // `jgnConst` alike — all of them literal on the wire.
     #[test]
     fn pub_name_specials_reach_the_wire_literally() {
-        use tamarin_theory::constraint::constraints::Goal;
-        use tamarin_theory::constraint::system::GoalStatus;
+        use crate::constraint::constraints::Goal;
+        use crate::constraint::system::GoalStatus;
         let mut sys = System::default();
         let nid = LVar::new("i", LSort::Node, 0);
         let fa: LNFact = Fact::new(

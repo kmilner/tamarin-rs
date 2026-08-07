@@ -1368,6 +1368,7 @@ dependencies = [
  "mimalloc",
  "rayon",
  "rustc-hash",
+ "serde_json",
  "tamarin-parser",
  "tamarin-term",
  "tamarin-utils",

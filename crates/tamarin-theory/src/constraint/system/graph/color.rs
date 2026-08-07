@@ -7,17 +7,18 @@
 //! Holds the port of HS `nodeColorMap` / `NodeColorMap` (Dot.hs:88,
 //! Dot.hs:190-218) — the size-dependent light-HSV palette keyed by a rule's
 //! `rInfo` — together with the less-edge `reasonColor` table and the
-//! `prettyLNFact` `Doc` both renderers label facts with.  `handlers::dot`
-//! (DOT output) and [`crate::graph::json`] (JSON output) are both consumers,
-//! so this module sits under `graph/` rather than inside either renderer.
+//! `prettyLNFact` `Doc` both renderers label facts with.
+//! [`crate::constraint::system::dot`] (DOT output) and
+//! [`crate::constraint::system::json`] (JSON output) are both consumers, so
+//! this module sits under `graph/` rather than inside either renderer.
 
 use std::collections::BTreeMap;
 
-use tamarin_theory::constraint::constraints::{NodeId, Reason};
-use tamarin_theory::constraint::system::nodes_in_map_order;
-use tamarin_theory::fact::LNFact;
-use tamarin_theory::pretty_hpj::Doc;
-use tamarin_theory::rule::{IntrRuleACInfo, ProtoRuleName, RuleACInst, RuleInfo};
+use crate::constraint::constraints::{NodeId, Reason};
+use crate::constraint::system::nodes_in_map_order;
+use crate::fact::LNFact;
+use crate::pretty_hpj::Doc;
+use crate::rule::{IntrRuleACInfo, ProtoRuleName, RuleACInst, RuleInfo};
 
 /// The `Doc` of an `LNFact` exactly as Haskell `prettyLNFact`
 /// (Fact.hs:581-582), the printer `renderLNFact` (Dot.hs:227-233) feeds
@@ -30,7 +31,7 @@ use tamarin_theory::rule::{IntrRuleACInfo, ProtoRuleName, RuleACInst, RuleInfo};
 /// on the parser-AST projection), NOT `pretty_system::pretty_fact` (which
 /// omits those spaces).
 pub(crate) fn fact_doc_of(fa: &LNFact) -> Doc {
-    tamarin_theory::pretty_formula::fact_doc(&tamarin_theory::pretty_theory::lnfact_to_parser(fa))
+    crate::pretty_formula::fact_doc(&crate::pretty_theory::lnfact_to_parser(fa))
 }
 
 /// HS `toColor` — the per-`Reason` less-edge colour, spelled identically in
@@ -48,7 +49,7 @@ pub(crate) fn reason_color(r: Reason) -> &'static str {
 
 /// Key of HS `NodeColorMap` (Dot.hs:91): a rule's `rInfo`
 /// (`RuleInfo ProtoRuleACInstInfo IntrRuleACInfo`).
-pub(crate) type RInfo = RuleInfo<tamarin_theory::rule::ProtoRuleACInstInfo, IntrRuleACInfo>;
+pub(crate) type RInfo = RuleInfo<crate::rule::ProtoRuleACInstInfo, IntrRuleACInfo>;
 
 /// Faithful port of HS `NodeColorMap` (Dot.hs:91) — the per-rule fill
 /// palette, keyed in HS by a rule's `rInfo`. Built by [`build_node_color_map`]
@@ -104,7 +105,7 @@ fn class_key(info: &RInfo) -> ClassKey<'_> {
 ///   * `isFreshRule` (proto `Fresh`) or `isISendRule`           → 3
 ///   * otherwise (protocol rules, IRecv, …)                     → 1
 fn group_idx(ru: &RuleACInst) -> usize {
-    use tamarin_theory::rule::{
+    use crate::rule::{
         is_coerce_rule_info, is_constr_rule_info, is_destr_rule_info, is_fresh_constr_rule_info,
         is_iequality_rule_info, is_isend_rule_info, is_nat_constr_rule_info,
         is_pub_constr_rule_info,
@@ -243,11 +244,11 @@ pub(crate) fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorM
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_theory::rule::{
+    use crate::rule::{
         IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName as PRN, Rule as TRule, RuleAttributes,
         RuleInfo as TRuleInfo,
     };
+    use tamarin_term::lterm::{LSort, LVar};
 
     /// A bare intruder-rule node (no facts) with the given `IntrRuleACInfo`.
     fn intr_node(info: IntrRuleACInfo) -> RuleACInst {

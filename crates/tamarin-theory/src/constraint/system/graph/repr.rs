@@ -10,9 +10,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tamarin_theory::constraint::constraints::{LessAtom, NodeConc, NodeId, NodePrem};
-use tamarin_theory::fact::LNFact;
-use tamarin_theory::rule::{ConcIdx, PremIdx, ProtoRuleName, RuleACInst, RuleInfo};
+use crate::constraint::constraints::{LessAtom, NodeConc, NodeId, NodePrem};
+use crate::fact::LNFact;
+use crate::rule::{ConcIdx, PremIdx, ProtoRuleName, RuleACInst, RuleInfo};
 
 /// Mirrors Haskell `NodeType` from `GraphRepr.hs:58-63`.
 #[derive(Debug, Clone, PartialEq)]
@@ -131,7 +131,7 @@ pub fn rule_name_by_node(n: &GNode) -> Option<String> {
         if let RuleInfo::Proto(p) = &ru.info {
             return Some(match &p.name {
                 ProtoRuleName::Stand(s) => {
-                    let reserved = tamarin_theory::rule::reserved_rule_names();
+                    let reserved = crate::rule::reserved_rule_names();
                     if reserved.contains(s) || s.starts_with('_') {
                         format!("_{s}")
                     } else {
@@ -339,8 +339,8 @@ pub fn add_intelligent_cluster_using_similar_names(repr: &mut GraphRepr) {
 // Building a basic repr from a System
 // ---------------------------------------------------------------------
 
-use tamarin_theory::constraint::constraints::{cmp_goal, Goal};
-use tamarin_theory::constraint::system::System;
+use crate::constraint::constraints::{cmp_goal, Goal};
+use crate::constraint::system::System;
 
 /// Port of `computeBasicGraphRepr` from `Graph.hs:140-150`.
 /// Collects from a `System`:
@@ -470,8 +470,8 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes};
     use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_theory::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes};
 
     fn proto_rule(name: &str, role: Option<&str>) -> RuleACInst {
         let attrs = RuleAttributes {
@@ -502,7 +502,7 @@ mod tests {
     // edges must land at their sorted position rather than at the end.
     #[test]
     fn basic_repr_materialises_edge_and_less_set_order() {
-        use tamarin_theory::constraint::constraints::{Edge, Reason};
+        use crate::constraint::constraints::{Edge, Reason};
         let mut sys = System::default();
         // Pushed in a deliberately unsorted order, as compression leaves them.
         for (s, si, t, ti) in [
