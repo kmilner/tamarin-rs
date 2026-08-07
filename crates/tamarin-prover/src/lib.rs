@@ -6,6 +6,7 @@
 //! from integration tests without spawning a subprocess.
 
 pub mod cli;
+mod probe;
 pub mod run;
 
 pub use cli::{parse_args, Args, CliError, Subcommand};

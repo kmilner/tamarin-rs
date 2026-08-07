@@ -214,46 +214,33 @@ pub fn run(args: &Args) -> Result<i32, RunError> {
 ///
 /// We do (1) and (2) here.  Porting the unit test suite is a separate
 /// effort; until then we run the prover's own lib tests at build time
-/// instead (`cargo test`).  Returns rc=0 on Maude/dot reachable,
-/// rc=1 otherwise.
+/// instead (`cargo test`), so neither its `*** Testing the unification
+/// infrastructure ***` topic line nor its HUnit progress counter appears, and
+/// the summary says `All tool checks successful.` rather than claiming a test
+/// suite ran.  Returns rc=0 on Maude/dot reachable, rc=1 otherwise.
 fn run_test(args: &Args) -> Result<i32, RunError> {
     println!("Self-testing the tamarin-prover installation.\n");
     println!("*** Testing the availability of the required tools ***");
+    // HS `ensureMaude` (Console.hs:151-161) runs its two probes through
+    // `testProcess`, so the whole maude block lands on STDERR — the `***`
+    // topic lines around it are the only part of this section on stdout.
+    // The port synthesizes that block from a single `maude --version`
+    // (`print_maude_banner`) instead of running the two probes.
     let mv = crate::cli::detect_maude_version_at(&maude_invocation_path(args));
-    match &mv {
-        Some(v) => println!("{}. OK.\n checking installation: OK.", v),
-        None => {
-            eprintln!("Maude check FAILED — not found on $PATH.");
-            return Ok(1);
-        }
-    }
+    print_maude_banner(&maude_display_name(args), mv.as_deref());
+    let success_maude = mv.is_some();
+    // Test.hs:49 — a bare `putStrLn ""` separates the two tool blocks.
+    println!();
     // HS `ensureGraphVizDot` (Test.hs:50) reads `dotPath`
     // (Environment.hs:37-38): the `--with-dot` value, else the bare `"dot"`.
     let dot_cmd = args.dot_path.as_deref().unwrap_or("dot");
-    let dot = std::process::Command::new(dot_cmd).arg("-V").output();
     // HS `successGraphVizDot = isJust maybeSuccessGraphVizDot` (Test.hs:42-112, see line 51):
     // a missing/unavailable `dot` is a test FAILURE, not a silent skip.
-    let success_graphviz = match dot {
-        Ok(out) if out.status.success() => {
-            let s = String::from_utf8_lossy(&out.stderr);
-            println!(
-                "GraphViz tool: '{}'\n checking version: {}OK.",
-                dot_cmd,
-                s.trim()
-            );
-            true
-        }
-        _ => {
-            println!("GraphViz check skipped (`dot` not found).");
-            false
-        }
-    };
+    let success_graphviz = crate::probe::ensure_graph_viz_dot(dot_cmd).is_some();
     println!("\n*** TEST SUMMARY ***");
     // HS `success = successMaude && successGraphVizDot && successTerm`
     // (Test.hs:42-112, see line 96); on failure it warns and `exitFailure` (Test.hs:97-105).
-    // Maude reachability is asserted above (early `Ok(1)` return), so the
-    // only failure reachable here is a missing GraphViz `dot`.
-    if success_graphviz {
+    if success_maude && success_graphviz {
         println!("All tool checks successful.");
         println!("The tamarin-prover should work as intended.\n");
         println!("           :-) happy proving (-:");
@@ -263,68 +250,6 @@ fn run_test(args: &Args) -> Result<i32, RunError> {
         println!("The tamarin-prover might NOT WORK AS INTENDED.\n");
         Ok(1)
     }
-}
-
-/// HS `testProcess`' failure report (Console.hs:114-121) for the `which`
-/// probe: the `reason` line, then the `Detailed results` block echoing the
-/// command line (`commandLine`, Console.hs:94-95) and the three captured
-/// streams.  `reason` carries its own embedded newlines — HS builds it with
-/// `unlines`, and `putStrErrLn` adds one more.  The `stdin:`/`stdout:`/
-/// `stderr:` labels are padded to a fixed width, so their trailing spaces
-/// survive even when the stream is empty.
-fn which_probe_error_report(reason: &str, cmd: &str, out: &str, err: &str) -> String {
-    format!(
-        "{reason}\nDetailed results from testing 'which'\n command: which {cmd}\n stdin:   \n stdout:  {out}\n stderr:  {err}\n"
-    )
-}
-
-/// HS `ensureGraphCommand` (Environment.hs:104-115) — the `--with-json`
-/// startup probe.  `Checking availablity ...` reproduces the upstream typo
-/// and, unlike the maude/dot checks, carries no leading space and no
-/// trailing newline (`putStrErr`, Console.hs:109/137).  The verdict is
-/// discarded by `Interactive.hs:106`, so this never aborts startup.
-fn ensure_graph_command(cmd: &str) {
-    eprintln!("Graph rendering command: {}", cmd);
-    eprint!("Checking availablity ...");
-    let probe = std::process::Command::new("which").arg(cmd).output();
-    let out = match probe {
-        Ok(out) => out,
-        Err(e) => {
-            // HS `testProcess`' `IOException` handler (Console.hs:139-149);
-            // `maudeTest` is `False` here, so it falls through to the blank
-            // line and a `Nothing` verdict.  `putStrErrLn` continues the
-            // unterminated `Checking availablity ...` line.
-            eprintln!("caught exception while executing:");
-            eprintln!("which {}", cmd);
-            eprintln!("with input: ");
-            eprintln!("Exception: ");
-            eprintln!("   {}", e);
-            eprintln!();
-            return;
-        }
-    };
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    // HS checks the exit code first (`ignoreExitCode` is `False`), then the
-    // `check` predicate `err == ""` (Environment.hs:111-113).  Both failure
-    // arms print `errMsg`, whose default message is `unlines ["Command not
-    // found"]` (Environment.hs:114-115).
-    let reason = if out.status.success() {
-        if stderr.is_empty() {
-            eprintln!(" OK.");
-            return;
-        }
-        "Command not found\n".to_string()
-    } else {
-        format!(
-            "failed with exit code {}\n\nCommand not found\n",
-            out.status.code().unwrap_or(1)
-        )
-    };
-    eprint!(
-        "{}",
-        which_probe_error_report(&reason, cmd, &stdout, &stderr)
-    );
 }
 
 /// `tamarin-prover variants` — mirror HS's `Main.Mode.Intruder.run`.
@@ -510,33 +435,9 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // startup.  `--with-json` also overrides `--with-dot` (Environment.hs:41-45).
     let dot_cmd = args.dot_path.as_deref().unwrap_or("dot");
     if let Some(json_cmd) = args.json_path.as_deref() {
-        ensure_graph_command(json_cmd);
+        let _ = crate::probe::ensure_graph_command(json_cmd);
     } else {
-        eprintln!("GraphViz tool: '{}'", dot_cmd);
-        // HS lowercases `dot -V`'s stderr banner, strips the trailing
-        // newline, and appends ". OK." (Environment.hs:81-87); PNG
-        // support = "png" appears in the `dot -T?` error listing.
-        if let Ok(out) = std::process::Command::new(dot_cmd).arg("-V").output() {
-            let banner = String::from_utf8_lossy(&out.stderr).to_lowercase();
-            if banner.contains("graphviz") {
-                eprintln!(" checking version: {}. OK.", banner.trim_end_matches('\n'));
-                let png_ok = std::process::Command::new(dot_cmd)
-                    .arg("-T?")
-                    .output()
-                    .map(|o| {
-                        let s = format!(
-                            "{}{}",
-                            String::from_utf8_lossy(&o.stdout),
-                            String::from_utf8_lossy(&o.stderr),
-                        );
-                        s.to_lowercase().contains("png")
-                    })
-                    .unwrap_or(false);
-                if png_ok {
-                    eprintln!(" checking PNG support: OK.");
-                }
-            }
-        }
+        let _ = crate::probe::ensure_graph_viz_dot(dot_cmd);
     }
 
     // HS startup banner (Interactive.hs:95-101) — stdout (`putStrLn`),
@@ -2595,53 +2496,6 @@ mod tests {
 
     fn parse(args: &[&str]) -> Args {
         parse_args(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("parse")
-    }
-
-    /// Byte-exact against the oracle's `--with-json=/no/such/jsonbin`
-    /// interactive startup transcript (HS `testProcess`' `errMsg`,
-    /// Console.hs:114-121, with `ensureGraphCommand`'s default message,
-    /// Environment.hs:114-115).  The `stdin:`/`stdout:`/`stderr:` labels keep
-    /// their padding spaces on empty streams.
-    #[test]
-    fn which_probe_failure_report_is_byte_exact() {
-        let got = which_probe_error_report(
-            "failed with exit code 1\n\nCommand not found\n",
-            "/no/such/jsonbin",
-            "",
-            "",
-        );
-        assert_eq!(
-            got,
-            "failed with exit code 1\n\
-             \n\
-             Command not found\n\
-             \n\
-             Detailed results from testing 'which'\n \
-             command: which /no/such/jsonbin\n \
-             stdin:   \n \
-             stdout:  \n \
-             stderr:  \n"
-        );
-    }
-
-    #[test]
-    fn which_probe_report_echoes_captured_streams() {
-        let got = which_probe_error_report(
-            "Command not found\n",
-            "jsonbin",
-            "/usr/bin/jsonbin\n",
-            "warn\n",
-        );
-        assert_eq!(
-            got,
-            "Command not found\n\
-             \n\
-             Detailed results from testing 'which'\n \
-             command: which jsonbin\n \
-             stdin:   \n \
-             stdout:  /usr/bin/jsonbin\n\n \
-             stderr:  warn\n\n"
-        );
     }
 
     #[test]
