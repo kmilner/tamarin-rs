@@ -1,27 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, beschmi, jdreier, PhilipLukertWork, rkunnema, rsasse,
-//   addap, charlie-j, arcz, BTom-GH, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term.hs,
-//   lib/term/src/Term/Term/FunctionSymbols.hs,
-//   lib/term/src/Term/Term/Raw.hs, lib/theory/src/Lemma.hs,
-//   lib/theory/src/Theory/Constraint/System.hs,
-//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
-//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
-//   lib/theory/src/Theory/Model/Atom.hs,
-//   lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Model/Formula.hs,
-//   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/Proof.hs,
-//   lib/theory/src/Theory/ProofSkeleton.hs,
-//   lib/theory/src/Theory/Syntactic/Predicate.hs,
-//   lib/theory/src/Theory/Text/Parser/Formula.hs,
-//   lib/theory/src/Theory/Text/Pretty.hs,
-//   lib/theory/src/TheoryObject.hs,
-//   lib/utils/src/Text/PrettyPrint/Class.hs,
-//   lib/utils/src/Text/PrettyPrint/Highlight.hs, src/Main/Console.hs,
-//   src/Main/Mode/Intruder.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Pretty-printer for `tamarin_parser::ast::Formula` /
 //! `tamarin_theory::guarded::Guarded`.

@@ -1,20 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, felixlinker, jdreier, rkunnema, racoucho1u, beschmi,
-//   rsasse, symphorien, PhilipLukertWork, kevinmorio, felixonmars,
-//   yavivanov, katrielalex, xaDxelA, Azurios-git,
-//   robert.kunnemann@cased.de, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/theory/src/Prover.hs,
-//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
-//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
-//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
-//   lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Proof.hs,
-//   lib/theory/src/Theory/ProofSkeleton.hs,
-//   lib/theory/src/Theory/Text/Parser/Formula.hs,
-//   lib/theory/src/Theory/Text/Parser/Proof.hs,
-//   src/Main/TheoryLoader.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Skeleton-replay prover — port of HS `replaceSorryProver`
 //! (lib/theory/src/Theory/Proof.hs).

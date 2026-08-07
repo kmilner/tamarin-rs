@@ -1,9 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, addap, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   lib/utils/src/Extension/Data/Monoid.hs,
-//   lib/utils/src/Extension/Prelude.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Extension.Prelude` (and `Extension.Data.Monoid::MinMax`) from
 //! `lib/utils/src/Extension/Prelude.hs` and `Extension/Data/Monoid.hs`.

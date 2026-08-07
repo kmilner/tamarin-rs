@@ -1,13 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   jdreier, beschmi, rkunnema, meiersi, PhilipLukertWork,
-//   ValentinYuri, BTom-GH, charlie-j, racoucho1u, rsasse, and other
-//   minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Builtin/Rules.hs,
-//   lib/term/src/Term/Maude/Signature.hs,
-//   lib/theory/src/Theory/Text/Parser/Macro.hs,
-//   lib/theory/src/Theory/Text/Parser/Signature.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Term.Maude.Signature` from
 //! `lib/term/src/Term/Maude/Signature.hs`.

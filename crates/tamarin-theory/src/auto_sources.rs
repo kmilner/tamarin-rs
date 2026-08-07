@@ -1,11 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, jdreier, Hong-Thai, meiersi, kevinmorio, rsasse, xaDxelA,
-//   and other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Items/RuleItem.hs, lib/theory/src/OpenTheory.hs,
-//   lib/theory/src/Prover.hs, lib/theory/src/Rule.hs,
-//   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/ProofSkeleton.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of Haskell's `--auto-sources` lemma generation
 //! (`addAutoSourcesLemma`, `lib/theory/src/OpenTheory.hs:138-538`).

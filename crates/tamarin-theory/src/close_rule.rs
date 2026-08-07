@@ -1,12 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, jdreier, meiersi, arcz, rkunnema, yavivanov, Nynko,
-//   rsasse, Hong-Thai, felixlinker, Azurios-git, PhilipLukertWork, and
-//   other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/CloseRule.hs, lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Text/Parser/Rule.hs,
-//   lib/theory/src/Theory/Text/Parser/Token.hs,
-//   src/Main/TheoryLoader.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! No-deconstruction-chain (NDC) check — port of the NDC parts of HS
 //! `CloseRule.hs` (`prettyNDCcheck` / `applyNDCcheck` / `ndcCheck` /

@@ -1,11 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   beschmi, jdreier, and other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Maude/Signature.hs,
-//   lib/term/src/Term/Term.hs,
-//   lib/term/src/Term/Term/FunctionSymbols.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs,
-//   lib/theory/src/Theory/Tools/Wellformedness.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Byte-pins `checkTerms`' irreducibility test when a user-declared `[AC]`
 //! symbol shares its NAME with a reducible builtin.

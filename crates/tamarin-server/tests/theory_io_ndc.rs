@@ -1,9 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, arcz, jdreier, meiersi, cascremers, yavivanov, Nynko,
-//   beschmi, felixlinker, Azurios-git, and other minor contributors
-//   (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   src/Main/Mode/Interactive.hs, src/Main/TheoryLoader.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! `--no-ndc` on the web load path.
 //!

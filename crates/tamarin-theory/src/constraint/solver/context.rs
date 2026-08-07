@@ -1,25 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   jdreier, meiersi, kevinmorio, rkunnema, beschmi, felixlinker,
-//   charlie-j, rsasse, arcz, racoucho1u, Azurios-git, yavivanov,
-//   PhilipLukertWork, Nynko, Hong-Thai, ValentinYuri, BTom-GH,
-//   symphorien, xaDxelA, Mathias-AURAND, robert.kunnemann@cased.de, and
-//   other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Maude/Parser.hs, lib/theory/src/CloseRule.hs,
-//   lib/theory/src/ClosedTheory.hs, lib/theory/src/Rule.hs,
-//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
-//   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
-//   lib/theory/src/Theory/Constraint/Solver/Sources.hs,
-//   lib/theory/src/Theory/Constraint/System.hs,
-//   lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/Proof.hs, lib/theory/src/Theory/Sapic.hs,
-//   lib/theory/src/Theory/Text/Parser.hs,
-//   lib/theory/src/Theory/Tools/IntruderRules.hs,
-//   lib/theory/src/Theory/Tools/LoopBreakers.hs,
-//   lib/theory/src/Theory/Tools/MessageDerivationChecks.hs,
-//   lib/theory/src/Theory/Tools/RuleVariants.hs,
-//   src/Main/Mode/Intruder.hs, src/Main/TheoryLoader.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Solver context — port of the `ProofContext` data type from
 //! `Theory.Constraint.System`.

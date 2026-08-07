@@ -354,12 +354,13 @@ so as to not inherit any information about the GPL 3.0 source code beyond broad 
 etc). Early experiments with clean room implementation of the formatting code had limited success,
 so for now there is no active work on this.
 
-Code with GPL 3.0 attribution is stated at the top of the header file, including the associated
-github usernames that have not yet granted permission for reuse. Currently, this is everyone,
-because I haven't started asking yet. If you want to preempt this and give your permission please
-send me an email or file a github issue!
+Ported files carry a short GPL 3.0 notice at the top; the upstream authors whose permission a
+given file awaits are computed on demand from its citations with
+`scripts/gen_license_headers.py --authors <file>` (range-blame at the pinned submodule commit).
+Currently no one has granted permission, because I haven't started asking yet. If you want to
+preempt this and give your permission please send me an email or file a github issue!
 
-You can regenerate these headers (and inspect how they were generated) in scripts/gen_license_headers.py
+You can regenerate the notices with scripts/gen_license_headers.py (`--check` verifies them).
 
 So, in summary:
 - All Rust code in this repository (`crates/`, `scripts/`, `tests/`) is

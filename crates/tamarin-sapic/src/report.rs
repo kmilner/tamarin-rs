@@ -1,7 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   charlie-j, rkunnema, arcz
-// Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/Report.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Sapic.Report` (`lib/sapic/src/Sapic/Report.hs`) — the
 //! `locations-report` (`builtins: locations-report`) translation, gated on

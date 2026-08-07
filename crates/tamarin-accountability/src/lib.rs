@@ -1,19 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, arcz, rkunnema, meiersi, and other minor contributors
-//   (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/accountability/src/Accountability.hs,
-//   lib/accountability/src/Accountability/Generation.hs,
-//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Maude/Parser.hs,
-//   lib/theory/src/Items/CaseTestItem.hs,
-//   lib/theory/src/Theory/ProofSkeleton.hs,
-//   lib/theory/src/Theory/Syntactic/Predicate.hs,
-//   lib/theory/src/Theory/Text/Parser.hs,
-//   lib/theory/src/Theory/Text/Parser/Exceptions.hs,
-//   lib/theory/src/Theory/Text/Parser/Rule.hs,
-//   lib/theory/src/Theory/Text/Parser/Signature.hs,
-//   lib/theory/src/Theory/Tools/Wellformedness.hs,
-//   lib/theory/src/TheoryObject.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Accountability translation for the Tamarin prover (Rust port).
 //!

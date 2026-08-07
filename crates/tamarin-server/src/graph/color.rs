@@ -1,15 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   addap, meiersi, rkunnema, Mathias-AURAND, Divya19gupta, sans-sucre,
-//   yavivanov, and other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Rule.hs,
-//   lib/theory/src/Theory/Constraint/System/Dot.hs,
-//   lib/theory/src/Theory/Constraint/System/JSON.hs,
-//   lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/Text/Parser/Fact.hs,
-//   lib/theory/src/Theory/Text/Parser/Rule.hs,
-//   lib/utils/src/Text/Dot.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Per-rule node colouring shared by the two graph renderers.
 //!

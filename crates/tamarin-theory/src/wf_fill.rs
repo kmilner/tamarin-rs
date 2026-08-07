@@ -1,14 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, sans-sucre, beschmi, PhilipLukertWork, BTom-GH,
-//   Mathias-AURAND, Nynko, kevinmorio, felixlinker, rkunnema, rsasse,
-//   xaDxelA, ValentinYuri, and other minor contributors (see upstream
-//   git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Term.hs, lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Tools/Wellformedness.hs,
-//   lib/theory/src/TheoryObject.hs,
-//   lib/utils/src/Text/PrettyPrint/Class.hs,
-//   lib/utils/src/Text/PrettyPrint/Html.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! HughesPJ layout of the wellformedness report's paragraph fills.
 //!

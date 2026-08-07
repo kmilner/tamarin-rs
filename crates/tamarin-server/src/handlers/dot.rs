@@ -1,24 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, arcz, addap, Mathias-AURAND, racoucho1u,
-//   felixlinker, cascremers, rkunnema, rsasse, Kanakanajm, beschmi,
-//   Divya19gupta, PhilipLukertWork, yavivanov, BTom-GH, kevinmorio,
-//   YannColomb, Nick Moore, sans-sucre, symphorien, katrielalex,
-//   xaDxelA, and other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs,
-//   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
-//   lib/theory/src/Theory/Constraint/System.hs,
-//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
-//   lib/theory/src/Theory/Constraint/System/Dot.hs,
-//   lib/theory/src/Theory/Constraint/System/Graph/Graph.hs,
-//   lib/theory/src/Theory/Constraint/System/Graph/GraphRepr.hs,
-//   lib/theory/src/Theory/Constraint/System/Graph/Simplification.hs,
-//   lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/Text/Parser/Fact.hs,
-//   lib/utils/src/Control/Monad/Disj/Class.hs,
-//   lib/utils/src/Text/Dot.hs, lib/utils/src/Text/PrettyPrint/Class.hs,
-//   src/Web/Handler.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of Haskell's `Theory.Constraint.System.Dot` +
 //! `Theory.Constraint.System.Graph.*` — convert a `System` into a

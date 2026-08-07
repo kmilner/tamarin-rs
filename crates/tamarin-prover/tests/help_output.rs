@@ -1,11 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, arcz, meiersi, jdreier, cascremers, addap, Nynko,
-//   felixlinker, yavivanov, ValentinYuri, rkunnema, gilcu3, beschmi,
-//   Azurios-git, rsasse, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   src/Main/Console.hs, src/Main/Environment.hs, src/Main/Mode/Batch.hs,
-//   src/Main/Mode/Interactive.hs, src/Main/TheoryLoader.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Byte-parity pins for `tamarin-rs --help` and the three subcommand helps.
 //!

@@ -1,41 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, rkunnema, jdreier, arcz, beschmi, felixlinker, racoucho1u,
-//   rsasse, PhilipLukertWork, kevinmorio, addap, BTom-GH, Hong-Thai,
-//   cascremers, Divya19gupta, Kanakanajm, yavivanov, Mathias-AURAND,
-//   xaDxelA, charlie-j, sans-sucre, ValentinYuri, Nynko, YannColomb,
-//   Azurios-git, Esslingen-Security-Privacy, robert.kunnemann@cased.de,
-//   and other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/Typing.hs, lib/sapic/src/Sapic/Warnings.hs,
-//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Maude/Signature.hs,
-//   lib/term/src/Term/Substitution/SubstVFresh.hs,
-//   lib/term/src/Term/SubtermRule.hs, lib/term/src/Term/Term.hs,
-//   lib/term/src/Term/Term/Raw.hs, lib/theory/src/ClosedTheory.hs,
-//   lib/theory/src/Lemma.hs, lib/theory/src/OpenTheory.hs,
-//   lib/theory/src/Pretty.hs,
-//   lib/theory/src/Theory/Constraint/Solver/Contradictions.hs,
-//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
-//   lib/theory/src/Theory/Constraint/System.hs,
-//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
-//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
-//   lib/theory/src/Theory/Model/Atom.hs,
-//   lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/ProofSkeleton.hs,
-//   lib/theory/src/Theory/Sapic.hs,
-//   lib/theory/src/Theory/Syntactic/Predicate.hs,
-//   lib/theory/src/Theory/Text/Parser.hs,
-//   lib/theory/src/Theory/Text/Parser/Proof.hs,
-//   lib/theory/src/Theory/Text/Parser/Rule.hs,
-//   lib/theory/src/Theory/Text/Parser/Signature.hs,
-//   lib/theory/src/Theory/Text/Parser/Tactics.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs,
-//   lib/theory/src/Theory/Tools/Wellformedness.hs,
-//   lib/theory/src/TheoryObject.hs,
-//   lib/utils/src/Control/Monad/Disj/Class.hs,
-//   lib/utils/src/Data/Color.hs, lib/utils/src/Extension/Prelude.hs,
-//   lib/utils/src/Text/PrettyPrint/Class.hs, src/Main/Console.hs,
-//   src/Main/Mode/Batch.hs, src/Web/Dispatch.hs, src/Web/Theory.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Theory pretty-printer.  Port of Haskell's `prettyClosedTheory`
 //! (ClosedTheory.hs:382-418) — top-level renderer for `--prove` output.

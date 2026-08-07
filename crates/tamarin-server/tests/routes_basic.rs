@@ -1,9 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   arcz, meiersi, cascremers, felixlinker, rsasse, jdreier,
-//   Divya19gupta, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   src/Web/Handler.hs, src/Web/Theory.hs, src/Web/Types.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Integration tests for the LIVE routes that don't run the solver.
 //!

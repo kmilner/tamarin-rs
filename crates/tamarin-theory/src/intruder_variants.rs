@@ -1,14 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, jdreier, arcz, meiersi, rkunnema, yavivanov, Nynko,
-//   beschmi, Azurios-git, felixlinker, and other minor contributors
-//   (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Term/FunctionSymbols.hs,
-//   lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Text/Parser/Rule.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs,
-//   lib/theory/src/Theory/Tools/IntruderRules.hs,
-//   src/Main/Mode/Intruder.hs, src/Main/TheoryLoader.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Pre-computed intruder-variant rule loaders.
 //!

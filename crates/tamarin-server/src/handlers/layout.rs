@@ -1,9 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, arcz, cascremers, rsasse, Kanakanajm, beschmi,
-//   felixlinker, addap, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   src/Web/Hamlet.hs, src/Web/Types.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Page furniture: the two HTML frames a response is wrapped in and the
 //! Options menu both of them splice.

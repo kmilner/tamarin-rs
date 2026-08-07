@@ -1,10 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, meiersi, charlie-j, beschmi, arcz, jdreier, and other
-//   minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/Typing.hs, lib/term/src/Term/Maude/Process.hs,
-//   lib/term/src/Term/Term/Raw.hs,
-//   lib/theory/src/Theory/Sapic/Process.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Sapic.Typing` (`lib/sapic/src/Sapic/Typing.hs`) — the
 //! uniqueness-renaming pass (`renameUnique`) and the lightweight type

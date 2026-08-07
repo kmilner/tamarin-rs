@@ -1,12 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, charlie-j, kevinmorio
-// Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/Basetranslation.hs,
-//   lib/sapic/src/Sapic/Bindings.hs,
-//   lib/sapic/src/Sapic/ProcessUtils.hs, lib/sapic/src/Sapic/Typing.hs,
-//   lib/theory/src/Theory/Sapic.hs,
-//   lib/theory/src/Theory/Sapic/Process.hs,
-//   lib/theory/src/Theory/Sapic/Term.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Theory.Sapic.{Position, Term, Annotation, Process}` from
 //! `lib/theory/src/Theory/Sapic/`.
