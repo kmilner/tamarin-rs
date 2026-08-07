@@ -33,6 +33,18 @@ subset, and `RS_PATH=`/`HS_PATH=` to point at other binaries.
   needed only after a deliberate output change, a submodule bump, or a Maude
   version change (the pinned version is recorded in the reference header and
   enforced).
+- **`pe_sweep.sh` / `module_sweep.sh` / `json_sweep.sh`** — flag-parity
+  sweeps for `--partial-evaluation`, `-m/--output-module`, and
+  `--output-json`/`--output-dot`. Built on `sweep_common.sh`: oracle outputs
+  are cached content-keyed under `.hs_sweep_cache/` (timeouts cached with
+  their cap), so re-sweeping after a Rust change costs only the Rust side;
+  a stale `target/release` binary aborts the run (`ALLOW_STALE_BIN=1`
+  overrides). Documented residuals live in `sweep_expected.tsv` and report
+  as LEDGERED — any bare DIFF/ERROR row is a regression, and a ledgered
+  file that comes back OK prints LEDGER-STALE so the entry gets dropped.
+  `FAMILY=1` restricts to the per-sweep `*_family.txt` subset (one
+  representative per divergence class, seconds on a warm cache) for
+  inner-loop iteration; the full corpora are the milestone runs.
 
 ## Web-gate internals (invoked by the gates, rarely by hand)
 

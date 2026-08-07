@@ -1,0 +1,18 @@
+# Family subset for pe_sweep.sh (FAMILY=1): one representative per
+# divergence class exercised by --partial-evaluation. Paths relative to
+# tamarin-prover/examples/.
+loops/Minimal_Loop_Example.spthy              # loop-breaker cycle survives PE
+csf20-disputeResolution/PR1_ShHh.spthy        # duplicate-name refined rules, zero breakers
+features/predicates/minimal.spthy             # restriction-frees avoid-seed numbering (x.2)
+features/multiset/counter.spthy               # multiset + breakers
+features/multiset/NumberSubtermTests.spthy    # nat sort
+csf23-subterms/ParserTests.spthy              # subterm store
+csf26-ac/fast/counter.spthy                   # user-AC theory
+csf26-ac/fast/Yubikey_multiset.spthy          # AC + multiset
+features/injectivity/injectivity.spthy        # injective fact instances
+loops/RFID_Simple.spthy                       # persistent-fact loop
+wisec21-5G-handover/inter-5G/EPS_to_5GS_over_N26/5G_handover.spthy  # large real-world
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/HPagree.spthy        # human-error rules
+classic/TLS_Handshake.spthy                   # ledgered: stderr-openchains-double
+features/heuristic/OracleRanking.spthy        # ledgered: stderr-oracle-calls
+classic/NSPK3.spthy                           # plain healthy baseline

@@ -1,0 +1,11 @@
+# Family subset for json_sweep.sh (FAMILY=1): representatives for the
+# stored-proof trace-export path. Paths relative to
+# tamarin-prover/case-studies-regression/.
+sapic/fast/feature-export/export-tag_analyzed.spthy       # smallest SAPIC trace
+regression/trace/issue310_analyzed.spthy                  # regression trace shape
+features/configuration/configuration_analyzed.spthy       # config-carrying theory
+csf26-ac/fast/minimal_multiset_analyzed.spthy             # AC multiset traces
+sapic/fast/feature-predicates/timepoints_analyzed.spthy   # predicate + timepoints
+sapic/fast/basic/channels1_analyzed.spthy                 # SAPIC channels
+features/macros/MacroInLemmasAndRestrictions_analyzed.spthy  # macro theory
+csf26-ac/fast/Yubikey_multiset_analyzed.spthy             # ledgered: replay-empty-json

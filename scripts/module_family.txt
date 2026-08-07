@@ -1,0 +1,12 @@
+# Family subset for module_sweep.sh (FAMILY=1): representatives for the
+# translate-only -m modes. Paths relative to tamarin-prover/examples/.
+classic/NSPK3.spthy                           # plain baseline, all three modules
+features/predicates/minimal.spthy             # predicate expansion
+features/multiset/NumberSubtermTests.spthy    # nat sort rendering
+csf26-ac/fast/counter.spthy                   # user-AC theory
+sapic/export/5G_AKA/5G_AKA.spthy              # x:nat SAPIC typing; ledgered sapic-export-echo
+sapic/export/States/canauth.spthy             # x:nat SAPIC typing
+sapic/fast/feature-progress/mini2.spthy       # =x pattern markers in embedded MSR
+sapic/fast/basic/channels1.spthy              # SAPIC channels
+features/heuristic/OracleRanking.spthy        # ledgered: stderr-oracle-calls
+accountability/csf21-acc-unbounded/mixnets/basic/dmn-basic.spthy  # accountability translation; ledgered

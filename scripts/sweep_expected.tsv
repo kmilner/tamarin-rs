@@ -1,0 +1,82 @@
+# Documented pre-existing residuals for the parity sweeps (sweep_common.sh
+# apply_ledger). A DIFF/ERROR row whose file is listed here for its sweep is
+# reported LEDGERED; a listed file that comes back OK is flagged LEDGER-STALE
+# so the entry can be dropped. Columns (tab-separated):
+#   sweep	path relative to tamarin-prover/	class	note
+#
+# Classes:
+#   stderr-oracle-calls    HS derivation checks invoke the theory's oracle
+#                          heuristic and emit ">>>> START ... Oracle call"
+#                          stderr blocks; RS deriv checks never call oracles.
+#   stderr-openchains-double  RS emits "[Open Chains] Too many chain
+#                          constraints" twice where HS emits it once (module
+#                          sweep collapses it; pe sweep ledgers it).
+#   capacity               RS aborts (rc 134, stack/OOM at the 16GiB guard) or
+#                          both sides exhaust the 600s retry cap.
+#   hs-timeout             HS cannot load the file inside the cap while RS
+#                          completes (HS-side capacity, rc hs=124).
+#   replay-empty-json      csf26-ac stored-proof replay diverges to sorry
+#                          (#874 numbering/eq-store class) so --output-json
+#                          emits the empty 20-byte document vs HS's graphs.
+#   sapic-export-echo      sapic/export corner files whose -m echo/rc diverged
+#                          before this campaign (PRE-binary evidence).
+#   stored-proof-echo      pre-existing stored-proof echo divergence.
+#   stderr-saturating-sources  HS prints "[Saturating Sources] ..." progress
+#                          lines on stderr that RS does not.
+#
+# pe sweep
+pe	examples/classic/TLS_Handshake.spthy	stderr-openchains-double	pe path has no nerr() collapse
+pe	examples/features/heuristic/OracleRanking.spthy	stderr-oracle-calls	-
+pe	examples/features/configuration/configuration.spthy	stderr-saturating-sources	HS prints "[Saturating Sources] Done" lines RS does not
+pe	examples/thesis-LaraSchmid-evoting/chapter3_Alethea/aletheaD_sel_ShHh.spthy	stderr-oracle-calls	-
+pe	examples/thesis-LaraSchmid-evoting/chapter3_Alethea/alethea_sel_ShHh.spthy	stderr-oracle-calls	-
+pe	examples/csf23-subterms/FreshOrderingTest.spthy	capacity	PE explodes both sides: hs=124 rs=134 at 600s serial
+pe	examples/related_work/TPM_DKRS_CSF11/TPM_Exclusive_Secrets.spthy	capacity	hs=124 rs=134 at 600s serial
+pe	examples/features/auto-sources/tamarin-repo/related_work/TPM_DKRS_CSF11/TPM_Exclusive_Secrets.spthy	capacity	same file, auto-sources copy
+#
+# module sweep (-m): all attributed pre-existing at a10cc1b with PRE-binary evidence
+module	examples/accountability/csf21-acc-unbounded/mixnets/basic/dmn-basic.spthy	stderr-oracle-calls	-
+module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-1.spthy	stderr-oracle-calls	-
+module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-2.spthy	stderr-oracle-calls	-
+module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-3.spthy	stderr-oracle-calls	-
+module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-4.spthy	stderr-oracle-calls	-
+module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-5.spthy	stderr-oracle-calls	-
+module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-1.spthy	stderr-oracle-calls	-
+module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-2.spthy	stderr-oracle-calls	-
+module	examples/features/heuristic/OracleRanking.spthy	stderr-oracle-calls	-
+module	examples/features/macros/MacroTestWithOracleRanking.spthy	stderr-oracle-calls	-
+module	examples/features/noise/secrecy_4_passiveINpsk1_proof.spthy	stored-proof-echo	spthy echo only
+module	examples/sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-5-fixed.spthy	capacity	deep process recursion, rs=134 at plain load
+module	examples/sapic/export/5G_AKA/5G_AKA.spthy	sapic-export-echo	-
+module	examples/sapic/export/ExistingSapicModels/AKE.spthy	sapic-export-echo	msr only
+module	examples/sapic/export/KEMTLS/kemtls-noaead.spthy	sapic-export-echo	msr only
+module	examples/sapic/export/KEMTLS/kemtls.spthy	sapic-export-echo	msr only
+#
+# json sweep
+json	case-studies-regression/accountability/csf21-acc-unbounded/previous/whodunit_analyzed.spthy	capacity	both sides hit the cap
+json	case-studies-regression/csf26-ac/fast/chaum_offline_anonymity_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/csf26-ac/fast/CRxor_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/csf26-ac/fast/alethea_votingphase_malS_abstain_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/csf26-ac/fast/Joux_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/csf26-ac/fast/Joux_EphkRev_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/csf26-ac/fast/KCL07_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/csf26-ac/fast/NSLPK3xor_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/csf26-ac/fast/DHKEA_NAXOS_C_eCK_PFS_partially_matching_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/csf26-ac/fast/DHKEA_NAXOS_C_eCK_PFS_keyreg_partially_matching_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/csf26-ac/fast/TAK1_eCK_like_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/csf26-ac/fast/Yubikey_multiset_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/fast-tests/csf26-ac/fast/chaum_offline_anonymity_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/fast-tests/csf26-ac/fast/CRxor_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/fast-tests/csf26-ac/fast/alethea_votingphase_malS_abstain_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/fast-tests/csf26-ac/fast/Joux_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/fast-tests/csf26-ac/fast/Joux_EphkRev_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/fast-tests/csf26-ac/fast/KCL07_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/fast-tests/csf26-ac/fast/NSLPK3xor_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/fast-tests/csf26-ac/fast/DHKEA_NAXOS_C_eCK_PFS_partially_matching_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/fast-tests/csf26-ac/fast/DHKEA_NAXOS_C_eCK_PFS_keyreg_partially_matching_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/fast-tests/csf26-ac/fast/TAK1_eCK_like_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/fast-tests/csf26-ac/fast/Yubikey_multiset_analyzed.spthy	replay-empty-json	-
+json	case-studies-regression/fast-tests/sapic/fast/feature-secret-channel/U2F_analyzed.spthy	hs-timeout	rs completes
+json	case-studies-regression/sapic/fast/feature-secret-channel/U2F_analyzed.spthy	hs-timeout	rs completes
+json	case-studies-regression/sapic/slow/encWrapDecUnwrap/encwrapdecunwrap_analyzed.spthy	capacity	rs=134
+json	case-studies-regression/sapic/slow/PKCS11/pkcs11-templates_analyzed.spthy	capacity	hs=124 rs=134
