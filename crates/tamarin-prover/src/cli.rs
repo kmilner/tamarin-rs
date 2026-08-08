@@ -35,7 +35,9 @@
 //!   --oracle-only              oracle-only mode (quit-on-empty-oracle)
 //!   --quiet                    accepted; suppresses only RS-only diagnostics
 //!                              (HS never reads the flag — see `Args::quiet`)
-//!   --verbose, -v              verbose proof-search output
+//!   --verbose, -v              verbose proof-search output (parsed, not yet
+//!                              routed: HS's `solved goal nr. N (directly|
+//!                              precomputed): …` stderr trace has no port yet)
 //!   --parse-only               parse + pretty-print, no analysis
 //!   --precompute-only          run precomputation only
 //!   --open-chains=N, -cN       bound on open chains during saturation (default 10)
@@ -358,15 +360,15 @@ impl Default for Args {
 pub enum CliError {
     /// User-facing message (already formatted).
     Msg(String),
-    /// An argv token no mode declares a flag for.
+    /// A command line `processArgs` rejects before the program runs.
     ///
-    /// HS never reaches its own code for this: `processArgs`
+    /// HS never reaches its own code for these: `processArgs`
     /// (`System.Console.CmdArgs.Explicit`, called from `defaultMain`,
     /// Console.hs:362-372) rejects the command line itself, writes the bare
     /// message to STDERR and exits 1 — no `error:` prefix, no help block, and
     /// nothing on stdout.  Carried as its own variant so the binary can
     /// reproduce that stream shape without pattern-matching on message text.
-    UnknownFlag(String),
+    CmdArgsReject(String),
 }
 
 impl CliError {
@@ -374,14 +376,22 @@ impl CliError {
     /// (`tamarin-prover --nonsense x.spthy` → `Unknown flag: --nonsense\n` on
     /// stderr, rc 1).  A `--flag=VALUE` token reports the NAME only.
     fn unknown_flag(flag: &str) -> CliError {
-        CliError::UnknownFlag(format!("Unknown flag: {flag}"))
+        CliError::CmdArgsReject(format!("Unknown flag: {flag}"))
+    }
+
+    /// cmdargs' rejection text for a `flagReq` flag given with no value at all
+    /// (`tamarin-prover --prove --oj` → `Flag requires argument: --oj\n` on
+    /// stderr, rc 1).  The flag is echoed as the user spelled it, so the alias
+    /// reports `--oj` rather than `--output-json`.
+    fn flag_requires_argument(flag: &str) -> CliError {
+        CliError::CmdArgsReject(format!("Flag requires argument: {flag}"))
     }
 }
 
 impl std::fmt::Display for CliError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CliError::Msg(m) | CliError::UnknownFlag(m) => f.write_str(m),
+            CliError::Msg(m) | CliError::CmdArgsReject(m) => f.write_str(m),
         }
     }
 }
@@ -592,12 +602,10 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                 // output-json / output-dot are flagReq (Batch.hs:80-81): they
                 // REQUIRE a value and DO consume a separate next token.
                 "output-json" | "oj" => {
-                    let v = take_val(&mut i, raw, val_inline, "output-json")?;
-                    args.trace_json = Some(v);
+                    args.trace_json = Some(take_req_val(&mut i, raw, val_inline, key)?);
                 }
                 "output-dot" | "od" => {
-                    let v = take_val(&mut i, raw, val_inline, "output-dot")?;
-                    args.trace_dot = Some(v);
+                    args.trace_dot = Some(take_req_val(&mut i, raw, val_inline, key)?);
                 }
                 // toolFlags are flagOpt (Environment.hs:31-33): defaults
                 // maude/dot/json; bare flag records the default, no token.
@@ -670,14 +678,18 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
             // not exist`); `-b5` is inline; bare `-b` uses default 5.
             for (idx, key) in rest.char_indices() {
                 // Bytes after this char in the token form a potential
-                // inline value for a value-taking flag.  Strip a single
-                // leading `=` to keep `-b=12` working.
+                // inline value for a value-taking flag; a single leading `=`
+                // separates it (`-b=12` == `-b12`).  A trailing `=` with
+                // nothing after it is an EXPLICIT empty value, not a bare
+                // short: cmdargs records `""` there, so `-m=` is
+                // `output mode not supported.` and `-b=` is
+                // `bound: invalid bound given`, where `-m` / `-b` take the
+                // flag's default.
                 let after = &rest[idx + key.len_utf8()..];
-                let inline_raw = after.strip_prefix('=').unwrap_or(after);
-                let inline: Option<&str> = if inline_raw.is_empty() {
-                    None
-                } else {
-                    Some(inline_raw)
+                let inline: Option<&str> = match after.strip_prefix('=') {
+                    Some(v) => Some(v),
+                    None if after.is_empty() => None,
+                    None => Some(after),
                 };
                 match key {
                     // `-?` is the oracle's help short flag (`helpFlag =
@@ -725,8 +737,12 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                     'm' => {
                         args.output_module = Some(flag_opt(inline, "spthy"));
                     }
+                    // An empty value behaves like an absent flag, as in the
+                    // long form: HS reads the port leniently and falls back
+                    // to `defaultPort` (Interactive.hs:134-139), so `-p=`
+                    // must not be an argv rejection.
                     'p' => {
-                        if let Some(v) = inline {
+                        if let Some(v) = inline.filter(|v| !v.is_empty()) {
                             args.port = Some(parse_int(v, "port")?);
                         }
                     }
@@ -815,6 +831,34 @@ fn split_eq(s: &str) -> (&str, Option<&str>) {
 /// file (`5: openFile: does not exist`), while bare `--bound` uses default 5.
 fn flag_opt(inline: Option<&str>, default: &str) -> String {
     inline.unwrap_or(default).to_string()
+}
+
+/// Take a `cmdargs` `flagReq` value: the inline `=VALUE` when present, else
+/// the next argv token — UNCONDITIONALLY, a leading `-` and all.  cmdargs
+/// hands `System.Console.CmdArgs.Explicit`'s argument grabber whatever token
+/// follows, so the oracle's `--output-json --prove t.spthy` writes a file
+/// literally named `--prove` and never sets `--prove`; only a flag with no
+/// following token at all is rejected, by `processArgs` itself
+/// ([`CliError::flag_requires_argument`]).
+///
+/// `flag` is the long name as the user spelled it (`oj` as well as
+/// `output-json`), because the rejection echoes that spelling.
+fn take_req_val(
+    i: &mut usize,
+    raw: &[String],
+    inline: Option<&str>,
+    flag: &str,
+) -> Result<String, CliError> {
+    if let Some(v) = inline {
+        return Ok(v.to_string());
+    }
+    match raw.get(*i + 1) {
+        Some(next) => {
+            *i += 1;
+            Ok(next.clone())
+        }
+        None => Err(CliError::flag_requires_argument(&format!("--{flag}"))),
+    }
 }
 
 fn take_val(

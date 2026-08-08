@@ -40,6 +40,39 @@ norm() { sed -e 's/^Git revision:.*/GITREV/' -e 's/^Compiled at:.*/COMPILED/' \
 # duplicates of that exact line on both sides.
 nerr() { awk '!(/^\[Open Chains\] Too many chain constraints/ && $0 == prev) { print } { prev = $0 }'; }
 
+# sweep_preflight — refuse to sweep unless both sides can actually run.
+#
+# A broken maude is the silent killer: `ensureMaude` aborts on BOTH sides with
+# byte-identical stderr and the same rc, every row compares equal, and the
+# sweep reports 100% OK without having compared a single theory. Verified:
+# with MAUDE_PATH=/nonexistent/maude the pe rows come back OK. A missing
+# oracle or RS binary is the same class of false green (and `find -newer`
+# cannot see a binary that is not there at all). All three are hard errors —
+# there is no ALLOW_ override, because none of them leaves anything to compare.
+# Run at source time so no sweep can forget it.
+sweep_preflight() {
+  local v
+  if [ -z "$HS_BIN" ] || [ ! -x "$HS_BIN" ]; then
+    echo "ERROR: no HS oracle binary (HS_PATH=${HS_PATH:-unset}, resolved '$HS_BIN')" >&2
+    exit 2
+  fi
+  if [ ! -x "$RS_BIN" ]; then
+    echo "ERROR: RS binary '$RS_BIN' is missing or not executable — build it first" >&2
+    exit 2
+  fi
+  if [ ! -x "$MAUDE" ]; then
+    echo "ERROR: maude '$MAUDE' is missing or not executable — both sides would abort" \
+         "identically and EVERY row would read OK (set MAUDE_PATH)" >&2
+    exit 2
+  fi
+  v=$("$MAUDE" --version 2>/dev/null) || v=
+  if [ -z "$v" ]; then
+    echo "ERROR: '$MAUDE --version' produced nothing — that is not a working maude" >&2
+    exit 2
+  fi
+}
+sweep_preflight
+
 # Oracle-binary fingerprint, part of every cache key. Loop-invariant, so it is
 # taken once here rather than per cached lookup.
 HS_FP=$(stat -c '%s.%Y' "$HS_BIN")
@@ -105,8 +138,11 @@ sweep_retry() {
   [ -n "$rows" ] || return 0
   echo "== retrying $(grep -c . <<< "$rows") ERROR rows serially at TIMEOUT=$cap =="
   awk -F'\t' -v col="$col" '$col != "ERROR"' "$out" > "$out.keep" && mv "$out.keep" "$out"
+  # `one` runs children on the loop's stdin; give them /dev/null instead, so a
+  # child that reads stdin cannot swallow the remaining rows and silently
+  # shrink the retry set.
   while IFS=$'\t' read -r -a fields; do
-    TIMEOUT=$cap one "${fields[@]:0:$((col - 1))}" retry
+    TIMEOUT=$cap one "${fields[@]:0:$((col - 1))}" retry < /dev/null
   done <<< "$rows"
 }
 
@@ -115,6 +151,9 @@ sweep_retry() {
 rs_stale_check() {
   local newest
   newest=$(find "$REPO/crates" \( -name '*.rs' -o -name 'Cargo.toml' \) -newer "$RS_BIN" -print -quit 2>/dev/null)
+  # The workspace root manifests are inputs too: a dependency bump there
+  # rebuilds the binary but leaves every file under crates/ untouched.
+  [ -n "$newest" ] || newest=$(find "$REPO/Cargo.toml" "$REPO/Cargo.lock" -newer "$RS_BIN" -print -quit 2>/dev/null)
   if [ -n "$newest" ]; then
     echo "ERROR: $RS_BIN is older than $newest — rebuild first (ALLOW_STALE_BIN=1 to override)" >&2
     [ "${ALLOW_STALE_BIN:-0}" = 1 ] || exit 2

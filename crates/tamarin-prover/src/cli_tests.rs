@@ -311,6 +311,34 @@ fn output_module_value_is_unvalidated_at_parse_time() {
 }
 
 #[test]
+fn short_flag_trailing_equals_is_an_explicit_empty_value() {
+    // A SHORT flag's trailing `=` records `""`, exactly as the long form
+    // does — it is not a bare `-X`.  Oracle-checked: `-m= t.spthy` dies with
+    // `output mode not supported.` (rc 1, empty stdout) where bare `-m` runs
+    // the `spthy` translate mode, and `-b=` / `-s=` / `-c=` / `-d=` each die
+    // with their `... invalid bound given` instead of taking the default.
+    let a = parse(&["-m=", "t.spthy"]);
+    assert_eq!(a.output_module.as_deref(), Some(""));
+    for (flag, name) in [
+        ("-b=", "bound"),
+        ("-s=", "saturation"),
+        ("-c=", "open-chains"),
+        ("-d=", "derivcheck-timeout"),
+    ] {
+        let e = parse_args(&[flag.to_string(), "t.spthy".to_string()])
+            .expect_err("an empty integer value is rejected");
+        assert_eq!(e.to_string(), format!("{name}: expected integer, got \"\""));
+    }
+    // The bare forms still take their documented defaults.
+    let a = parse(&["-m", "-b", "-s", "-c", "-d", "t.spthy"]);
+    assert_eq!(a.output_module.as_deref(), Some("spthy"));
+    assert_eq!(a.bound, Some(5));
+    assert_eq!(a.saturation, Some(5));
+    assert_eq!(a.open_chains, Some(10));
+    assert_eq!(a.derivcheck_timeout, Some(5));
+}
+
+#[test]
 fn help_spells_out_the_module_type_show_strings() {
     // The `-m` row's placeholder is HS `moduleList` (Batch.hs:82-84),
     // `intercalate "|" $ map show [minBound ..]`.  The help text is a
@@ -351,6 +379,60 @@ fn output_dot_and_json_are_flag_req() {
 }
 
 #[test]
+fn output_dot_and_json_swallow_a_flag_shaped_value() {
+    // cmdargs hands a `flagReq` whatever token follows, `-` prefix and all.
+    // Oracle-verified: `--output-json --prove t.spthy` exits 0 having written
+    // a file literally NAMED `--prove`, and `--prove` never took effect.
+    let a = parse(&["--output-json", "--prove", "t.spthy"]);
+    assert_eq!(a.trace_json.as_deref(), Some("--prove"));
+    assert!(!a.prove_mode);
+    assert_eq!(a.in_files, vec!["t.spthy".to_string()]);
+    let a = parse(&["--od", "--output-dot", "t.spthy"]);
+    assert_eq!(a.trace_dot.as_deref(), Some("--output-dot"));
+    assert_eq!(a.in_files, vec!["t.spthy".to_string()]);
+}
+
+#[test]
+fn output_dot_and_json_without_a_value_are_a_cmdargs_rejection() {
+    // With no token left at all, `processArgs` rejects the command line
+    // itself: `Flag requires argument: <flag>` alone on stderr, rc 1, no help
+    // block — the [`CliError::CmdArgsReject`] stream shape.  The flag is
+    // echoed as spelled, so the aliases report themselves.  Oracle-verified
+    // byte-for-byte for all four spellings.
+    for (argv, want) in [
+        (
+            vec!["--prove", "--output-json"],
+            "Flag requires argument: --output-json",
+        ),
+        (
+            vec!["--prove", "--output-dot"],
+            "Flag requires argument: --output-dot",
+        ),
+        (vec!["--prove", "--oj"], "Flag requires argument: --oj"),
+        (vec!["--prove", "--od"], "Flag requires argument: --od"),
+    ] {
+        let owned: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
+        match parse_args(&owned) {
+            Err(e @ CliError::CmdArgsReject(_)) => assert_eq!(e.to_string(), want),
+            other => panic!("{argv:?}: expected CmdArgsReject, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn short_port_empty_value_falls_back_to_the_default() {
+    // `-p=` records `""`, and HS reads the port leniently — `readMaybe ""`
+    // misses and `defaultPort` stands (Interactive.hs:134-139).  So it must
+    // NOT be an argv rejection: oracle-verified, `interactive -p=` reaches
+    // the `no working directory specified` help path, exit 1.
+    for argv in [vec!["interactive", "-p="], vec!["interactive", "--port="]] {
+        let a = parse(&argv);
+        assert_eq!(a.port, None, "{argv:?}");
+    }
+    assert_eq!(parse(&["interactive", "-p3002"]).port, Some(3002));
+}
+
+#[test]
 fn auto_sources_flag_parsed() {
     let a = parse(&["--auto-sources"]);
     assert!(a.auto_sources);
@@ -382,10 +464,10 @@ fn unknown_long_flag_is_err() {
     ] {
         let raw: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
         match parse_args(&raw) {
-            Err(e @ CliError::UnknownFlag(_)) => {
+            Err(e @ CliError::CmdArgsReject(_)) => {
                 assert_eq!(e.to_string(), "Unknown flag: --nonsense", "{argv:?}");
             }
-            other => panic!("{argv:?}: expected UnknownFlag, got {other:?}"),
+            other => panic!("{argv:?}: expected CmdArgsReject, got {other:?}"),
         }
     }
 }
@@ -393,8 +475,8 @@ fn unknown_long_flag_is_err() {
 #[test]
 fn unknown_short_flag_is_err() {
     match parse_args(&["-Z".to_string()]) {
-        Err(e @ CliError::UnknownFlag(_)) => assert_eq!(e.to_string(), "Unknown flag: -Z"),
-        other => panic!("expected UnknownFlag, got {other:?}"),
+        Err(e @ CliError::CmdArgsReject(_)) => assert_eq!(e.to_string(), "Unknown flag: -Z"),
+        other => panic!("expected CmdArgsReject, got {other:?}"),
     }
 }
 

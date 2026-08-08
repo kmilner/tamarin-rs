@@ -641,6 +641,44 @@ fn ghc_exception(msg: &str) -> i32 {
     1
 }
 
+/// Report a failed input-file read the way GHC's runtime does.
+///
+/// HS never guards the read: `openFile` throws an IOException that escapes to
+/// the runtime, which writes `tamarin-prover: <path>: openFile: <reason>` (the
+/// IOException `Show` instance, GHC.IO.Exception) to stderr and exits 1.
+/// Reproduce the three reasons an input path can hit; anything rarer keeps the
+/// port's own message.  EISDIR is matched by errno: Rust only surfaces read(2)'s
+/// failure on a directory, and `ErrorKind::IsADirectory` needs Rust 1.83
+/// (workspace MSRV is 1.78).
+fn report_open_file_error(in_file: &str, e: &std::io::Error) -> Result<i32, RunError> {
+    let reason = match e.kind() {
+        std::io::ErrorKind::NotFound => "does not exist (No such file or directory)",
+        std::io::ErrorKind::PermissionDenied => "permission denied (Permission denied)",
+        _ if e.raw_os_error() == Some(21) => "inappropriate type (is a directory)",
+        _ => return Err(RunError(format!("failed to read {}: {}", in_file, e))),
+    };
+    eprintln!("tamarin-prover: {in_file}: openFile: {reason}");
+    Ok(1)
+}
+
+/// Report a non-UTF-8 input the way GHC's runtime does.
+///
+/// The file OPENED, so this failure is not `openFile`'s but the decoder's,
+/// raised from `hGetContents` and naming the first byte it rejected in decimal
+/// (GHC.IO.Encoding.Failure).  `valid_up_to` indexes exactly that byte — the
+/// start of the offending sequence, so a truncated `c3 28` reports 195.
+fn report_decode_error(in_file: &str, e: &std::string::FromUtf8Error) -> i32 {
+    let bad = e
+        .as_bytes()
+        .get(e.utf8_error().valid_up_to())
+        .copied()
+        .unwrap_or_default();
+    ghc_exception(&format!(
+        "{in_file}: hGetContents: invalid argument \
+         (cannot decode byte sequence starting from {bad})"
+    ))
+}
+
 /// HS `mkOutPath`'s miss — `-o=` with no `-O` — `die`s with this exact line
 /// (Batch.hs:118-123) instead of falling back to stdout: the line on stderr,
 /// stdout empty, exit 1.  Returns that exit code for the caller to propagate.
@@ -649,16 +687,113 @@ fn missing_output_path() -> i32 {
     1
 }
 
+/// GHC's `show` for an `IOException` that escapes an unguarded file write:
+/// `<path>: <op>: <description> (<strerror>)` (the `Show IOException`
+/// instance, GHC.IO.Exception).  `op` is the frame that opened the handle —
+/// `withFile` for `writeFile`, `withBinaryFile` for `BL.writeFile`, and
+/// `createDirectory` for `createDirectoryIfMissing`.
+///
+/// `<description>` is `Show IOErrorType` of the type `errnoToIOError` picks
+/// for the errno (Foreign.C.Error), and the parenthesised tail is
+/// `strerror(errno)` — the very text Rust's `Display` prints ahead of its own
+/// ` (os error N)` suffix, which GHC has no counterpart for.  An errno outside
+/// the table keeps Rust's message whole, suffix included.
+///
+/// The errnos are matched numerically: `ErrorKind::IsADirectory` and friends
+/// need Rust 1.83 and the workspace MSRV is 1.78.
+fn write_io_exception(path: &str, op: &str, e: &std::io::Error) -> String {
+    let errno = e.raw_os_error();
+    let ioe_type = match errno {
+        // EPERM, EACCES, EROFS
+        Some(1) | Some(13) | Some(30) => Some("permission denied"),
+        // ENOENT
+        Some(2) => Some("does not exist"),
+        // EEXIST
+        Some(17) => Some("already exists"),
+        // ENOTDIR, EISDIR
+        Some(20) | Some(21) => Some("inappropriate type"),
+        // EINVAL, ENAMETOOLONG, ELOOP
+        Some(22) | Some(36) | Some(40) => Some("invalid argument"),
+        // ENOSPC, EMLINK, EDQUOT
+        Some(28) | Some(31) | Some(122) => Some("resource exhausted"),
+        _ => None,
+    };
+    let rust = e.to_string();
+    let reason = match (ioe_type, errno) {
+        (Some(t), Some(n)) => {
+            let strerror = rust
+                .strip_suffix(&format!(" (os error {n})"))
+                .unwrap_or(&rust);
+            format!("{t} ({strerror})")
+        }
+        _ => rust,
+    };
+    format!("{path}: {op}: {reason}")
+}
+
 /// HS `writeFileWithDirs` (Utils.hs:20-23): create the target's parent
-/// directories, then write `body` VERBATIM.
-fn write_file_with_dirs(path: &str, body: &str) -> Result<(), RunError> {
+/// directories, then write `body` VERBATIM.  Neither step is guarded there,
+/// so a failure escapes as the [`write_io_exception`] text — returned here for
+/// the caller to report through [`ghc_exception`].
+fn write_file_with_dirs(path: &str, body: &str) -> Result<(), String> {
     if let Some(parent) = std::path::Path::new(path).parent() {
         if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)
-                .map_err(|e| RunError(format!("failed to create {}: {}", parent.display(), e)))?;
+            create_dirs(parent).map_err(|(dir, e)| {
+                write_io_exception(&dir.to_string_lossy(), "createDirectory", &e)
+            })?;
         }
     }
-    fs::write(path, body).map_err(|e| RunError(format!("failed to write {}: {}", path, e)))
+    fs::write(path, body).map_err(|e| write_io_exception(path, "withFile", &e))
+}
+
+/// `createDirectoryIfMissing True` (directory's `createDirs`): try the DEEPEST
+/// directory first and walk UP only while `mkdir` reports `ENOENT`, retrying
+/// each level on the way back down.  The `IOException` a failure raises names
+/// the level that raised it, so that order decides which ancestor the report
+/// blames: a missing chain blames the shallowest unreachable link, while an
+/// `EEXIST`/`ENOTDIR` stops at the level that hit it.  `std`'s
+/// `create_dir_all` walks the same levels but re-raises under the path it was
+/// called with, which is why it cannot serve here.
+///
+/// `Err` carries that level alongside its error.
+fn create_dirs(dir: &std::path::Path) -> Result<(), (std::path::PathBuf, std::io::Error)> {
+    let blame = |e: std::io::Error| (dir.to_path_buf(), e);
+    match create_dir_once(dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // `parents` bottoms out at the first path component, whose
+            // `createDir` gets no not-exist handler and reports itself.
+            match dir.parent() {
+                Some(p) if !p.as_os_str().is_empty() => create_dirs(p)?,
+                _ => return Err(blame(e)),
+            }
+            create_dir_once(dir).map_err(blame)
+        }
+        r => r.map_err(blame),
+    }
+}
+
+/// `createDir`'s own `mkdir` step: an `EEXIST` naming a path that is already a
+/// directory is swallowed — `mkdir` cannot tell an existing directory from an
+/// existing file, so the type is checked here — and every other outcome is the
+/// caller's.  `EEXIST` is the only errno that reaches the check: Linux reports
+/// an existing directory that way even when its parent denies write.
+fn create_dir_once(dir: &std::path::Path) -> std::io::Result<()> {
+    fs::create_dir(dir).or_else(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists && dir.is_dir() {
+            Ok(())
+        } else {
+            Err(e)
+        }
+    })
+}
+
+/// The `GraphOptions` every `outputTraces` graph is rendered with.  The label
+/// [`trace_label_options`] builds ADVERTISES these very values (the
+/// `SL2-AS0-CL0-A1-C1-NB` segment), so the renderers and the label read one
+/// source: two independent reads can drift into a label that describes a body
+/// it did not produce.
+fn trace_graph_options() -> tamarin_theory::constraint::system::graph::GraphOptions {
+    tamarin_theory::constraint::system::graph::GraphOptions::default()
 }
 
 /// HS `traceLabelOptions` (Batch.hs:305-317): the fixed middle segment of an
@@ -670,7 +805,7 @@ fn write_file_with_dirs(path: &str, body: &str) -> Result<(), RunError> {
 fn trace_label_options() -> &'static str {
     static LABEL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     LABEL.get_or_init(|| {
-        let o = tamarin_theory::constraint::system::graph::GraphOptions::default();
+        let o = trace_graph_options();
         // `show graphOptions._goSimplificationLevel` — the derived `Show`, i.e.
         // the bare constructor name `SL0`..`SL3`.
         let s1 = format!("{:?}", o.simplification_level);
@@ -712,9 +847,9 @@ fn trace_output_label(theory_name: &str, lemma_name: &str, path: &[String]) -> S
 ///
 /// `traces` is the labelled `(label, system)` list in HS's order: lemma
 /// declaration order, then `proofSystems`' case-name walk.
-fn write_output_traces(args: &Args, traces: Vec<(String, System)>) -> Result<(), RunError> {
-    use tamarin_theory::constraint::system::graph::{GraphOptions, RenderSystem};
-    let opts = GraphOptions::default();
+fn write_output_traces(args: &Args, traces: Vec<(String, System)>) -> Result<(), String> {
+    use tamarin_theory::constraint::system::graph::RenderSystem;
+    let opts = trace_graph_options();
     if let Some(p) = &args.trace_dot {
         // `intercalate "\n" $ map serializeDot labelledSystems`.  Each graph
         // already ends `}\n`, so the separator yields one blank line between
@@ -725,8 +860,9 @@ fn write_output_traces(args: &Args, traces: Vec<(String, System)>) -> Result<(),
                 tamarin_theory::constraint::system::dot::system_to_dot_labeled(sys, &opts, label)
             })
             .collect();
-        fs::write(p, graphs.join("\n"))
-            .map_err(|e| RunError(format!("failed to write {}: {}", p, e)))?;
+        // `writeFile` — an unguarded text write, so a failure escapes as
+        // GHC's `withFile` IOException.
+        fs::write(p, graphs.join("\n")).map_err(|e| write_io_exception(p, "withFile", &e))?;
     }
     if let Some(p) = &args.trace_json {
         // `sequentsToJSONPretty graphOptions labelledSystems` — one document
@@ -738,7 +874,9 @@ fn write_output_traces(args: &Args, traces: Vec<(String, System)>) -> Result<(),
             systems.into_iter().map(RenderSystem::from_prover).collect();
         let pairs: Vec<(String, &RenderSystem)> = labels.into_iter().zip(rendered.iter()).collect();
         let body = tamarin_theory::constraint::system::json::sequents_to_json_pretty(&opts, &pairs);
-        fs::write(p, body).map_err(|e| RunError(format!("failed to write {}: {}", p, e)))?;
+        // `BL.writeFile` — the lazy-ByteString writer, whose IOException
+        // names `withBinaryFile` instead.
+        fs::write(p, body).map_err(|e| write_io_exception(p, "withBinaryFile", &e))?;
     }
     Ok(())
 }
@@ -2057,7 +2195,18 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     // AFTER the maude banner — see `batch_argument_error`).
     let opts: TheoryLoadOptions = match mk_theory_load_options(args) {
         Ok(o) => o,
-        Err(msg) => return Ok(batch_argument_error(&msg)),
+        Err(msg) => {
+            // `processThy` forces the record only after `readFile inFile`
+            // (Batch.hs:167-169), so a FIRST input file that cannot be OPENED
+            // reports its own IOException and this rejection is never reached.
+            // Only the open counts: `readFile` is lazy, so a file that opens
+            // and then fails to decode raises `hGetContents` LATER, after the
+            // rejection — which is why the bytes are read but never decoded.
+            match args.in_files.first().map(fs::read) {
+                Some(Err(e)) => return report_open_file_error(&args.in_files[0], &e),
+                _ => return Ok(batch_argument_error(&msg)),
+            }
+        }
     };
 
     let parser_flags: Vec<&str> = opts.defines.iter().map(String::as_str).collect();
@@ -2106,27 +2255,15 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
 
     for in_file in &args.in_files {
         let t0 = Instant::now();
-        let src = match fs::read_to_string(in_file) {
-            Ok(s) => s,
-            Err(e) => {
-                // HS never guards the read: `openFile` throws an IOException
-                // that escapes to GHC's runtime, which writes
-                // `tamarin-prover: <path>: openFile: <reason>` (the
-                // IOException `Show` instance, GHC.IO.Exception) to stderr
-                // and exits 1.  Reproduce the three reasons an input path
-                // can hit; anything rarer keeps the port's own message.
-                // EISDIR is matched by errno: Rust only surfaces read(2)'s
-                // failure on a directory, and `ErrorKind::IsADirectory`
-                // needs Rust 1.83 (workspace MSRV is 1.78).
-                let reason = match e.kind() {
-                    std::io::ErrorKind::NotFound => "does not exist (No such file or directory)",
-                    std::io::ErrorKind::PermissionDenied => "permission denied (Permission denied)",
-                    _ if e.raw_os_error() == Some(21) => "inappropriate type (is a directory)",
-                    _ => return Err(RunError(format!("failed to read {}: {}", in_file, e))),
-                };
-                eprintln!("tamarin-prover: {in_file}: openFile: {reason}");
-                return Ok(1);
-            }
+        // Bytes first, then the decode: the two failures are DIFFERENT HS
+        // exceptions — `openFile`'s for a path that cannot be read at all,
+        // `hGetContents`' for a file that opens but is not UTF-8.
+        let src = match fs::read(in_file) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(s) => s,
+                Err(e) => return Ok(report_decode_error(in_file, &e)),
+            },
+            Err(e) => return report_open_file_error(in_file, &e),
         };
         // Thread the including file's directory so `#include "file"` resolves
         // relative to it (HS `takeDirectory inFile0`, Parser.hs:323-343).
@@ -2474,7 +2611,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     // write is an `IO` action inside `processThy`, while the doc is
                     // rendered later in `Batch.hs`'s output phase.
                     if want_traces {
-                        write_output_traces(args, closed.trace_systems)?;
+                        if let Err(io) = write_output_traces(args, closed.trace_systems) {
+                            return Ok(ghc_exception(&io));
+                        }
                     }
                     // Build the HS-faithful theory pretty-print body.  This replaces
                     // the verbatim source dump with HS's `prettyClosedTheory`
@@ -2504,7 +2643,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     {
                         return Ok(missing_output_path());
                     }
-                    emit_output(args, in_file, &body)?;
+                    if let Err(io) = emit_output(args, in_file, &body) {
+                        return Ok(ghc_exception(&io));
+                    }
                 }
                 closed.results
             }
@@ -2614,7 +2755,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 // `writeFileWithDirs o (renderDoc d)` — doc written VERBATIM
                 // (no trailing newline; the stdout arm's `putStrLn` newline is
                 // absent here — 881 vs 882 bytes on typing4.spthy).
-                write_file_with_dirs(out, doc)?;
+                if let Err(io) = write_file_with_dirs(out, doc) {
+                    return Ok(ghc_exception(&io));
+                }
             }
         } else {
             for doc in &translate_docs {
@@ -2672,7 +2815,10 @@ fn default_maude_path() -> String {
 /// no newline.  `body` carries the stdout form (one trailing newline), so the
 /// file write drops it — oracle-verified: a v1.13.0 `--output=FILE` run ends
 /// the file with the bytes `end`.
-fn emit_output(args: &Args, in_file: &str, body: &str) -> Result<(), RunError> {
+///
+/// `Err` is the [`write_io_exception`] text for the caller to report through
+/// [`ghc_exception`].
+fn emit_output(args: &Args, in_file: &str, body: &str) -> Result<(), String> {
     if let Some(out) = out_path_for(args, in_file) {
         write_file_with_dirs(&out, body.strip_suffix('\n').unwrap_or(body))?;
     } else {
@@ -2794,6 +2940,50 @@ mod tests {
     fn out_path_for_none_means_stdout() {
         let a = parse(&["in.spthy"]);
         assert_eq!(out_path_for(&a, "in.spthy"), None);
+    }
+
+    // `createDirectoryIfMissing True` blames the level whose `mkdir` raised,
+    // not the level it was asked for.  Oracle-verified against the pinned
+    // v1.13.0 binary with `-o`:
+    //   -o/nonexistentdir/sub/deep/x.spthy
+    //     -> /nonexistentdir: createDirectory: permission denied (Permission denied)
+    //   -o<regular-file>/sub/x.spthy
+    //     -> <regular-file>/sub: createDirectory: inappropriate type (Not a directory)
+    // The two rows differ because only ENOENT sends `createDirs` up a level.
+    #[test]
+    fn create_dirs_blames_the_level_whose_mkdir_failed() {
+        // An unwritable root: the deepest reachable ancestor is the blamed one.
+        let (dir, e) = create_dirs(std::path::Path::new("/nonexistentdir/sub/deep"))
+            .expect_err("/ is not writable in the test environment");
+        assert_eq!(dir, std::path::Path::new("/nonexistentdir"));
+        assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
+
+        // ENOTDIR is not ENOENT, so the walk stops where it hit — one level
+        // BELOW the regular file, not at the file itself.
+        let file = std::env::temp_dir().join("tamarin_rs_create_dirs_pin");
+        fs::write(&file, "").expect("seed a regular file");
+        let (dir, e) = create_dirs(&file.join("sub")).expect_err("a file is not a directory");
+        assert_eq!(dir, file.join("sub"));
+        assert_eq!(e.raw_os_error(), Some(20), "ENOTDIR");
+
+        // The file itself is the blamed level when it IS the target.
+        let (dir, e) = create_dirs(&file).expect_err("a file is not a directory");
+        assert_eq!(dir, file);
+        assert_eq!(e.raw_os_error(), Some(17), "EEXIST");
+        assert_eq!(
+            write_io_exception(&dir.to_string_lossy(), "createDirectory", &e),
+            format!(
+                "{}: createDirectory: already exists (File exists)",
+                file.display()
+            ),
+        );
+        let _ = fs::remove_file(&file);
+
+        // An existing directory is a no-op, however deep.
+        let deep = std::env::temp_dir().join("tamarin_rs_create_dirs_pin_d/a/b");
+        create_dirs(&deep).expect("mkdir -p");
+        create_dirs(&deep).expect("second pass is a no-op");
+        let _ = fs::remove_dir_all(std::env::temp_dir().join("tamarin_rs_create_dirs_pin_d"));
     }
 
     // HS `mkTheoryLoadOptions` is applicative over the record fields, so the

@@ -28,9 +28,21 @@ pub const MAUDE_CANDIDATES: [&str; 2] = ["/usr/local/bin/maude", "/usr/bin/maude
 
 /// The maude the binary will invoke: `$MAUDE_PATH` when set, else the first
 /// existing candidate.
+///
+/// A `MAUDE_PATH` that names a file which does not exist is a
+/// MISCONFIGURATION, not a reason to skip: silently returning `None` there
+/// would turn every maude-backed pin in these suites green on a CI whose
+/// image moved maude (`.github/workflows/ci.yml` sets
+/// `MAUDE_PATH=/opt/maude/maude`).  Panic instead, so the run goes red.
 pub fn maude_path() -> Option<String> {
     if let Ok(p) = std::env::var("MAUDE_PATH") {
-        return Path::new(&p).exists().then_some(p);
+        assert!(
+            Path::new(&p).exists(),
+            "MAUDE_PATH={p} does not exist; unset it to fall back to \
+             {MAUDE_CANDIDATES:?}, or point it at a real maude — skipping \
+             every maude-backed pin here would report green vacuously"
+        );
+        return Some(p);
     }
     MAUDE_CANDIDATES
         .iter()

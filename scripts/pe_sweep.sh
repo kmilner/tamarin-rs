@@ -25,13 +25,25 @@ eligible() {
   fi
   # The files-need-flags exclusion is a whole-list filter (one grep) rather
   # than a per-file membership test.
+  local kept=0 dropped=0 droplet=0
   while read -r rel; do
     f="$EXAMPLES/$rel"
     [ -f "$f" ] || continue
-    grep -qE '^\s*(macros\s*:|process\s*:|process\s*=|let\s+\w+\s*=|options\s*:.*translation|accountability|case-test|caseTest|verdictfunction)' "$f" && continue
+    if grep -qE '^\s*(macros\s*:|process\s*:|process\s*=|let\s+\w+\s*=|options\s*:.*translation|accountability|case-test|caseTest|verdictfunction)' "$f"; then
+      dropped=$((dropped + 1))
+      grep -qE '^\s*(macros\s*:|process\s*:|process\s*=|options\s*:.*translation|accountability|case-test|caseTest|verdictfunction)' "$f" \
+        || droplet=$((droplet + 1))
+      continue
+    fi
+    kept=$((kept + 1))
     echo "$f"
   done < <(sed 's/#.*//;/^\s*$/d' "$REPO/scripts/parity_corpus_fast.txt" \
              | grep -vxF -f <(sed 's/#.*//;/^\s*$/d' "$REPO/scripts/file_flags.tsv" | cut -f1))
+  # Report the shrinkage rather than letting it hide inside the denominator:
+  # the `let <ident> =` clause is meant for SAPIC process definitions but also
+  # fires on rule-local `let ... in` blocks, which is why `droplet` (files the
+  # let-clause alone excludes) is broken out.
+  echo "== pe_sweep eligibility: kept $kept, excluded $dropped (of which $droplet by the let-clause alone) ==" >&2
 }
 
 # one <file> [detail-tag] — appends one TSV row for the file at current TIMEOUT.

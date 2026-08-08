@@ -23,6 +23,22 @@ use std::process::ExitCode;
 
 use tamarin_prover::cli::{CliError, Subcommand};
 
+/// Does this panic payload come from a `print!`/`println!` whose write to a
+/// closed stdout failed?
+///
+/// `std::io::stdio` panics with exactly this message rather than returning the
+/// error, so a reader that leaves early (`tamarin-prover --help | head -0`)
+/// would turn a normal run into a Rust panic report and rc 101.  GHC treats
+/// the same `EPIPE` as a non-event: `flushStdHandles` swallows it and
+/// `runMainIO` still exits 0 with an empty stderr.
+fn is_stdout_broken_pipe(payload: &(dyn std::any::Any + Send)) -> bool {
+    let msg = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied());
+    msg.is_some_and(|m| m.starts_with("failed printing to stdout") && m.contains("Broken pipe"))
+}
+
 /// Stand in for GHC's top-level exception handler, which prints an uncaught
 /// `ErrorCall` as `tamarin-prover: ` ++ `displayException` (the message plus
 /// its `HasCallStack` frame) on stderr and exits 1.
@@ -30,11 +46,16 @@ use tamarin_prover::cli::{CliError, Subcommand};
 /// A few HS `error`s live below the port's error-returning layers, in code
 /// whose callers cannot carry a `Result` (`Term.fAppAC`, Raw.hs:120).  Those
 /// sites panic with a payload [`tamarin_term::term::hs_error_text`] recognises;
-/// everything else keeps Rust's own panic report.
+/// a closed stdout is recognised by [`is_stdout_broken_pipe`]; everything else
+/// keeps Rust's own panic report.
 fn install_hs_error_panic_hook() {
     let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(
-        move |info| match tamarin_term::term::hs_error_text(info.payload()) {
+    std::panic::set_hook(Box::new(move |info| {
+        if is_stdout_broken_pipe(info.payload()) {
+            // GHC's shape: nothing on either stream, exit 0.
+            std::process::exit(0);
+        }
+        match tamarin_term::term::hs_error_text(info.payload()) {
             Some(text) => {
                 let mut err = std::io::stderr().lock();
                 // GHC's laziness defers these errors past progress markers
@@ -49,8 +70,8 @@ fn install_hs_error_panic_hook() {
                 std::process::exit(1);
             }
             None => default_hook(info),
-        },
-    ));
+        }
+    }));
 }
 
 fn main() -> ExitCode {
@@ -58,7 +79,7 @@ fn main() -> ExitCode {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let args = match tamarin_prover::parse_args(&raw) {
         Ok(a) => a,
-        Err(CliError::UnknownFlag(m)) => {
+        Err(CliError::CmdArgsReject(m)) => {
             // cmdargs rejects the command line before `defaultMain` dispatches
             // (Console.hs:362-372): the bare message goes to stderr, nothing to
             // stdout, no help block, rc 1.

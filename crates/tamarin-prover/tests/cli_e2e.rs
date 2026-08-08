@@ -281,6 +281,122 @@ fn unreadable_input_file_prints_ghc_iox_shape() {
 }
 
 #[test]
+fn non_utf8_input_prints_the_hgetcontents_iox_shape() {
+    // A file that OPENS but is not UTF-8 fails one layer later, in the
+    // `hGetContents` decoder, which names the first byte it rejected in
+    // decimal.  Oracle-pinned byte-for-byte on all three shapes: a lone
+    // continuation byte, a truncated two-byte sequence (which reports its LEAD
+    // byte, 195), and an invalid byte at EOF.
+    let dir = std::env::temp_dir().join("tamarin_rs_non_utf8_input");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    for (name, body, want_byte) in [
+        (
+            "lone_continuation.spthy",
+            b"theory A\nbegin\n\x80\n".to_vec(),
+            128,
+        ),
+        (
+            "truncated_pair.spthy",
+            b"theory A\nbegin\n\xc3\x28\n".to_vec(),
+            195,
+        ),
+        (
+            "bad_at_eof.spthy",
+            b"theory A\nbegin\nend\n\xfe".to_vec(),
+            254,
+        ),
+    ] {
+        let path = dir.join(name);
+        std::fs::write(&path, &body).expect("write fixture");
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_tamarin-rs"))
+            .args(["--parse-only", path.to_str().expect("utf-8 path")])
+            .output()
+            .expect("run tamarin-rs");
+        assert_eq!(out.status.code(), Some(1), "{name}");
+        assert!(out.stdout.is_empty(), "{name}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr),
+            format!(
+                "tamarin-prover: {}: hGetContents: invalid argument \
+                 (cannot decode byte sequence starting from {want_byte})\n",
+                path.display()
+            ),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_deferred_argument_error_yields_to_the_first_file_s_open_failure() {
+    // `mkTheoryLoadOptions`' `ArgumentError` is an `error` thunk forced inside
+    // `processThy`, AFTER `readFile inFile` (Batch.hs:167-169), so a first input
+    // file that cannot be OPENED reports its own IOException and the rejection is
+    // never reached.  Only the OPEN gets there first: `readFile` is lazy, so a
+    // file that opens and merely fails to DECODE raises `hGetContents` later and
+    // the rejection still wins.  Oracle-pinned on all three shapes under
+    // `--parse-only`, which keeps Maude (and its banner) out of the run.
+    let dir = std::env::temp_dir().join("tamarin_rs_deferred_argument_error");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let readable = dir.join("readable.spthy");
+    std::fs::write(&readable, "theory A\nbegin\nend\n").expect("write fixture");
+    let non_utf8 = dir.join("non_utf8.spthy");
+    std::fs::write(&non_utf8, b"theory A\nbegin\n\x80\nend\n").expect("write fixture");
+    let missing = dir.join("no_such_file.spthy");
+
+    let rejection = "tamarin-prover: output mode not supported.\n\
+                     CallStack (from HasCallStack):\n  \
+                     error, called at src/Main/Mode/Batch.hs:163:33 in main:Main.Mode.Batch\n"
+        .to_string();
+    for (file, want) in [
+        (&readable, rejection.clone()),
+        (&non_utf8, rejection.clone()),
+        (
+            &missing,
+            format!(
+                "tamarin-prover: {}: openFile: does not exist (No such file or directory)\n",
+                missing.display()
+            ),
+        ),
+    ] {
+        let path = file.to_str().expect("utf-8 path");
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_tamarin-rs"))
+            .args(["--parse-only", "--output-module=bogus", path])
+            .output()
+            .expect("run tamarin-rs");
+        assert_eq!(out.status.code(), Some(1), "{path}");
+        assert!(out.stdout.is_empty(), "{path}");
+        assert_eq!(String::from_utf8_lossy(&out.stderr), want, "{path}");
+    }
+}
+
+#[test]
+fn closed_stdout_pipe_exits_quietly() {
+    // A reader that leaves early (`tamarin-prover --help | head -0`) makes
+    // Rust's `println!` PANIC — rc 101 plus a backtrace note on stderr.  GHC
+    // treats the same EPIPE as a non-event: `flushStdHandles` swallows it and
+    // `runMainIO` still exits 0 with an empty stderr.  Oracle-verified on
+    // `--help` and on a full batch run.
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_tamarin-rs"))
+        .arg("--help")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn tamarin-rs");
+    // Close the read end before the child can drain its buffer.
+    drop(child.stdout.take().expect("piped stdout"));
+    let out = child.wait_with_output().expect("wait");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !err.contains("panicked"),
+        "a closed stdout must not surface as a Rust panic; got:\n{err}"
+    );
+    assert_eq!(out.status.code(), Some(0), "stderr was:\n{err}");
+    assert_eq!(err, "");
+}
+
+#[test]
 fn diff_flag_is_rejected_with_clear_message() {
     let in_path = fixture("single_recv.spthy");
     let args = args_from(&["--diff", in_path.to_str().unwrap()]);

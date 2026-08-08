@@ -239,6 +239,28 @@ fn solved_trace_dot_carries_the_hs_label_and_framing() {
         &dot[dot.len().saturating_sub(16)..],
     );
     assert_eq!(dot.matches("\n}\n").count(), 1, "exactly one graph");
+    // The label ADVERTISES the `GraphOptions` the body was rendered with
+    // (`…_SL2-AS0-CL0-A1-C1-NB_…`) but `trace_label_options` derives it from
+    // `GraphOptions::default()` independently of the value the writer passes,
+    // so the two can drift with nothing above catching it.  The framing
+    // assertions above cannot see it either: they hold for an EMPTY body.
+    // Pin the two consequences observable on this fixture — a populated body,
+    // and compression (the label's `C1`) having folded the `Fresh` node into
+    // its consumer, where an uncompressed render adds a `#vf : Fresh` ellipse
+    // and two more edges.
+    assert!(
+        dot.lines().any(|l| l.contains("[shape=record")),
+        "no rule nodes in the graph body:\n{dot}"
+    );
+    assert!(
+        dot.lines().any(|l| l.contains(" -> ")),
+        "no edges in the graph body:\n{dot}"
+    );
+    assert!(
+        !dot.contains(": Fresh"),
+        "the label claims C1, so compression must have folded the Fresh node \
+         away; the body was rendered with different options:\n{dot}"
+    );
 }
 
 /// HS `writeFile` truncates, and `processThy` runs once per input file
@@ -266,4 +288,91 @@ fn last_input_file_wins() {
     let dot = c.dot_text();
     assert!(dot.contains("digraph \"trace_SecondRecv_"));
     assert!(!dot.contains("digraph \"trace_SingleRecv_"));
+}
+
+// ---------------------------------------------------------------------
+// Unwritable targets: the IOException that escapes `outputTraces`
+// ---------------------------------------------------------------------
+
+/// Neither writer is guarded in HS (`writeFile` / `BL.writeFile`,
+/// Batch.hs:262-271), so a target that cannot be opened raises an
+/// `IOException` that escapes to GHC's runtime: `tamarin-prover: <path>:
+/// <opener>: <reason>` on stderr, NOTHING on stdout, exit 1.  The opener names
+/// the frame that opened the handle and so differs between the two writers —
+/// `withFile` for the dot text writer, `withBinaryFile` for the lazy
+/// ByteString JSON one.
+///
+/// Oracle-verified per row against the pinned v1.13.0 binary (byte-identical
+/// stderr, rc 1, empty stdout).
+#[test]
+fn unwritable_trace_targets_report_the_ghc_io_exception() {
+    if !maude_available() {
+        eprintln!("skipping: maude not on path");
+        return;
+    }
+    let c = Case::new("unwritable_targets");
+    let thy = fixture(SINGLE_RECV);
+    let a_dir = c.dir.join("a_dir");
+    std::fs::create_dir_all(&a_dir).expect("mkdir");
+    let dangling = c.dir.join("no_such_dir").join("x.out");
+    // A path whose PARENT is a regular file: `open` stops at ENOTDIR, which
+    // shares `InappropriateType` with EISDIR but carries its own `strerror`.
+    let under_file = Path::new(&thy).join("x.out");
+    // ENAMETOOLONG, the one reachable `InvalidArgument`.
+    let too_long = c.dir.join("a".repeat(400));
+
+    // (flag, path, expected `<path>: <opener>: <reason>` tail)
+    let cases: [(&str, PathBuf, &str); 8] = [
+        (
+            "--output-json",
+            a_dir.clone(),
+            "withBinaryFile: inappropriate type (Is a directory)",
+        ),
+        (
+            "--output-dot",
+            a_dir.clone(),
+            "withFile: inappropriate type (Is a directory)",
+        ),
+        (
+            "--output-json",
+            dangling.clone(),
+            "withBinaryFile: does not exist (No such file or directory)",
+        ),
+        (
+            "--output-dot",
+            dangling.clone(),
+            "withFile: does not exist (No such file or directory)",
+        ),
+        (
+            "--output-json",
+            under_file.clone(),
+            "withBinaryFile: inappropriate type (Not a directory)",
+        ),
+        (
+            "--output-dot",
+            under_file.clone(),
+            "withFile: inappropriate type (Not a directory)",
+        ),
+        (
+            "--output-json",
+            too_long.clone(),
+            "withBinaryFile: invalid argument (File name too long)",
+        ),
+        (
+            "--output-dot",
+            too_long.clone(),
+            "withFile: invalid argument (File name too long)",
+        ),
+    ];
+    for (flag, path, tail) in cases {
+        let arg = format!("{flag}={}", path.display());
+        let (rc, out, err) = common::run_binary(&["--prove=chain", &arg], &[&thy]);
+        assert_eq!(rc, 1, "{arg}: HS exits 1");
+        assert_eq!(out, "", "{arg}: HS writes nothing to stdout");
+        let want = format!("tamarin-prover: {}: {tail}\n", path.display());
+        assert!(
+            err.ends_with(&want),
+            "{arg}: expected stderr to end with\n{want}\ngot:\n{err}",
+        );
+    }
 }
