@@ -3,7 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 //! Installation self-probes — the port of HS `Main.Console.testProcess`
-//! (Console.hs:97-149) and the two `Main.Environment` callers that drive it.
+//! (Console.hs:97-149) and the callers that drive it.
 //!
 //! HS runs every "is this tool here and does it work?" check through ONE
 //! combinator, so all of them share a report shape: an unterminated test-name
@@ -11,7 +11,12 @@
 //! block — the `Detailed results from testing '<prog>'` dump for a bad exit
 //! code / rejected output, the `caught exception while executing:` dump when
 //! the process cannot be started at all.  [`test_process`] is that combinator;
-//! [`ensure_graph_viz_dot`] and [`ensure_graph_command`] are the callers.
+//! [`ensure_maude`] (Console.hs:151-185), [`ensure_graph_viz_dot`] and
+//! [`ensure_graph_command`] are the callers.
+//!
+//! The maude probes are the only ones whose failure is fatal: `testProcess`'
+//! `maudeTest` flag turns a spawn failure into a GHC `error`, so a run whose
+//! maude cannot be started stops right there.
 //!
 //! Everything here writes to STDERR (HS `putStrErr`/`putStrErrLn` and the
 //! callers' own `hPutStrLn stderr`), which is why the `test` command's tool
@@ -60,19 +65,28 @@ fn error_report(
     )
 }
 
-/// HS `testProcess`' `IOException` handler (Console.hs:139-149) with
-/// `maudeTest = False`: the exception block, then the blank line from
-/// `putStrErrLn ""`.  Its first line continues the unterminated test-name
-/// prefix [`test_process`] has already written.
-fn exception_report(prog: &str, args: &[&str], inp: &str, exception: &str) -> String {
+/// HS `testProcess`' `IOException` handler (Console.hs:139-149): the exception
+/// block, whose first line continues the unterminated test-name prefix
+/// [`test_process`] has already written.  The trailing blank line is
+/// `putStrErrLn ""`, which only the `maudeTest = False` branch reaches — a
+/// maude probe raises [`MAUDE_ABORT_MSG`] instead, and the oracle's abort
+/// report follows the exception line with no blank line between them.
+fn exception_report(
+    prog: &str,
+    args: &[&str],
+    inp: &str,
+    exception: &str,
+    maude_test: bool,
+) -> String {
     format!(
         "caught exception while executing:\n\
          {cmd}\n\
          with input: {inp}\n\
          Exception: \n\
          \x20  {exception}\n\
-         \n",
+         {tail}",
         cmd = command_line(prog, args),
+        tail = if maude_test { "" } else { "\n" },
     )
 }
 
@@ -144,20 +158,30 @@ fn read_process_with_exit_code(
 /// report — continues it.  `default_msg` is used ONLY for the bad-exit-code
 /// reason, which is checked before `check` runs unless `ignore_exit_code`.
 ///
-/// HS's eighth argument, `maudeTest`, turns a spawn failure into a hard
-/// `error` abort.  It is omitted here: the port's maude banner is synthesized
-/// by `run::print_maude_banner` from `cli::detect_maude_version_at` rather
-/// than routed through this combinator, so no caller passes it.
+/// `maude_test` is HS's eighth argument: with it set, a spawn failure is not
+/// merely reported but raised as the GHC `error` at Console.hs:147, which
+/// stops the whole run.
+///
+/// `prog` is HS's `prog` — the name every report shows — and `exec` is the
+/// binary actually spawned.  HS has one string for both, because `maudePath`
+/// hands the probes the literal `"maude"` whenever `--with-maude` is absent
+/// and lets `PATH` resolve it; the port resolves that default to an absolute
+/// path of its own (`run::default_maude_path`) but still reports the name HS
+/// would print, so the two differ only in which of two identical binaries is
+/// spawned.
 ///
 /// Returns HS's `Maybe String` — `Some(stdout)` exactly when the test passed.
+#[allow(clippy::too_many_arguments)]
 fn test_process(
     check: impl Fn(&str, &str) -> Result<String, String>,
     default_msg: &str,
     test_name: &str,
     prog: &str,
+    exec: &str,
     args: &[&str],
     inp: &str,
     ignore_exit_code: bool,
+    maude_test: bool,
 ) -> Option<String> {
     // `putStrErr testName` then `hFlush stdout; hFlush stderr`
     // (Console.hs:109-111): the flushes keep the probe lines ordered against
@@ -166,11 +190,18 @@ fn test_process(
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
 
-    let (status, out, err) = match read_process_with_exit_code(prog, args, inp) {
+    let (status, out, err) = match read_process_with_exit_code(exec, args, inp) {
         Ok(t) => t,
         Err(e) => {
             let exception = spawn_exception_text(prog, &e);
-            eprint!("{}", exception_report(prog, args, inp, &exception));
+            eprint!(
+                "{}",
+                exception_report(prog, args, inp, &exception, maude_test)
+            );
+            if maude_test {
+                // Console.hs:146-147: the maude probes never return from here.
+                tamarin_term::term::hs_error(MAUDE_ABORT_MSG, MAUDE_ABORT_SITE.to_string());
+            }
             return None;
         }
     };
@@ -194,6 +225,134 @@ fn test_process(
     };
     eprint!("{}", error_report(&reason, prog, args, inp, &out, &err));
     None
+}
+
+/// The message HS applies `error` to when a maude probe cannot start the tool
+/// (Console.hs:147).
+const MAUDE_ABORT_MSG: &str = "Maude is not installed. Ensure Maude is available and on the path.";
+
+/// The `HasCallStack` frame that abort prints, as the pinned oracle renders
+/// it: `error` at Console.hs:147:9, in the `main` package's `Main.Console`.
+/// The coordinates are oracle data — refresh them at a submodule bump.
+const MAUDE_ABORT_SITE: &str = "src/Main/Console.hs:147:9 in main:Main.Console";
+
+/// HS `ensureMaude`'s `supportedVersions` (Console.hs:176): the ` checking
+/// version: ` probe accepts these strings and no others.  2.7.0 and earlier
+/// are excluded upstream because their `get variants` command is incompatible.
+const SUPPORTED_MAUDE_VERSIONS: [&str; 10] = [
+    "2.7.1", "3.0", "3.1", "3.2.1", "3.2.2", "3.3", "3.3.1", "3.4", "3.5", "3.5.1",
+];
+
+/// HS `ensureMaude`'s local `errMsg` (Console.hs:180-185) — `unlines` of
+/// `WARNING:`, a blank line, the caller's `reason` and the supported-version
+/// list, so the result already ends in a newline (which leaves a blank line
+/// before the `Detailed results` block that follows it).
+fn maude_err_msg(reason: &str) -> String {
+    format!(
+        "WARNING:\n\
+         \n\
+         {reason}\n\
+         \x20Please install one of the following versions of Maude: {versions}\n",
+        versions = SUPPORTED_MAUDE_VERSIONS.join(", "),
+    )
+}
+
+/// HS `ensureMaude`'s `checkVersion` (Console.hs:164-167): `maude --version`'s
+/// stdout with TRAILING whitespace dropped (`reverse . dropWhile isSpace .
+/// reverse`) must be one of [`SUPPORTED_MAUDE_VERSIONS`].  The rejected string
+/// is echoed into the reason verbatim, however many lines it spans.
+fn check_maude_version(out: &str) -> Result<String, String> {
+    let stripped = out.trim_end();
+    if SUPPORTED_MAUDE_VERSIONS.contains(&stripped) {
+        Ok(format!("{stripped}. OK."))
+    } else {
+        Err(maude_err_msg(&format!(
+            " 'maude --version' returned unsupported version '{stripped}'"
+        )))
+    }
+}
+
+/// HS `ensureMaude`'s `checkInstall` (Console.hs:171-172): the interpreter run
+/// must leave stderr EMPTY — stdout (maude's banner) is ignored.  Anything on
+/// stderr becomes the `errMsg` reason as-is.
+fn check_maude_install(err: &str) -> Result<String, String> {
+    if err.is_empty() {
+        Ok("OK.".to_string())
+    } else {
+        Err(maude_err_msg(err))
+    }
+}
+
+/// HS `ensureMaude` (Console.hs:151-185) — the maude probe every mode but
+/// `--parse-only` runs first: `test` (Test.hs:46), `variants` (Intruder.hs:45),
+/// `interactive` and batch through `ensureMaudeAndGetVersion`
+/// (Interactive.hs:103, Batch.hs:97/102/115), and `--version`
+/// (Console.hs:336).
+///
+/// Two [`test_process`] calls with `maudeTest = True`: `maude --version` must
+/// report a supported version, and `maude` fed `quit\n` must run the
+/// interpreter without writing to stderr.  Because `maudeTest` is set, a maude
+/// that cannot be STARTED never returns from here — the run aborts with
+/// [`MAUDE_ABORT_MSG`].  A maude that starts but fails a check only returns
+/// `false`; every caller but `test` discards that verdict and carries on.
+///
+/// `maude` is the tool name to report (HS `maudePath`), `exec` the binary to
+/// spawn — see [`test_process`].
+///
+/// Returns HS's `(Bool, String)`: the verdict, and the version data
+/// `getVersionIO` puts in the `Generated from:` block — the raw
+/// `maude --version` stdout (newline included) when both probes passed, else
+/// `unknown version\n` or `<version> (unsupported)\n`.
+pub fn ensure_maude(maude: &str, exec: &str) -> (bool, String) {
+    eprintln!("maude tool: '{maude}'");
+    // HS `errMsg'` (Console.hs:178): one default message shared by both
+    // probes, reached only through the bad-exit-code reason.
+    let default_msg = maude_err_msg(&format!("'{maude}' executable not found / does not work"));
+    let version = test_process(
+        |out, _| check_maude_version(out),
+        &default_msg,
+        " checking version: ",
+        maude,
+        exec,
+        &["--version"],
+        "",
+        false,
+        true,
+    );
+    let install = test_process(
+        |_, err| check_maude_install(err),
+        &default_msg,
+        " checking installation: ",
+        maude,
+        exec,
+        &[],
+        "quit\n",
+        false,
+        true,
+    );
+    // Console.hs:156: HS re-runs `maude --version` a third time for the
+    // version data.  On the passing path that is the stdout the version probe
+    // already returned, so only a failed version probe pays for the rerun.
+    let out = match &version {
+        Some(out) => out.clone(),
+        None => read_process_with_exit_code(exec, &["--version"], "")
+            .map(|(_, out, _)| out)
+            .unwrap_or_default(),
+    };
+    if version.is_none() || install.is_none() {
+        if out.is_empty() {
+            (false, "unknown version\n".to_string())
+        } else {
+            // HS `init out ++ " (unsupported)\n"` (Console.hs:159): `init`
+            // drops the version output's trailing newline.
+            let mut unsupported = out;
+            unsupported.pop();
+            unsupported.push_str(" (unsupported)\n");
+            (false, unsupported)
+        }
+    } else {
+        (true, out)
+    }
 }
 
 /// HS `ensureGraphVizDot`'s `errMsg1` (Environment.hs:88-95) — the default
@@ -253,8 +412,10 @@ pub fn ensure_graph_viz_dot(dot: &str) -> Option<String> {
         ERR_MSG_NOT_GRAPHVIZ,
         " checking version: ",
         dot,
+        dot,
         &["-V"],
         "",
+        false,
         false,
     );
     if dot_exists.is_some() {
@@ -263,9 +424,11 @@ pub fn ensure_graph_viz_dot(dot: &str) -> Option<String> {
             ERR_MSG_NO_PNG,
             " checking PNG support: ",
             dot,
+            dot,
             &["-T?"],
             "",
             true,
+            false,
         )
     } else {
         dot_exists
@@ -291,8 +454,10 @@ pub fn ensure_graph_command(cmd: &str) -> Option<String> {
         ERR_MSG_COMMAND_NOT_FOUND,
         "Checking availablity ...",
         "which",
+        "which",
         &[cmd],
         "",
+        false,
         false,
     )
 }

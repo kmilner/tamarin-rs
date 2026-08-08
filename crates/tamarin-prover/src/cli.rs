@@ -900,75 +900,39 @@ pub const GIT_REV: &str = env!("TAMARIN_GIT_REV");
 pub const GIT_BRANCH: &str = env!("TAMARIN_GIT_BRANCH");
 pub const BUILD_TIMESTAMP: &str = env!("TAMARIN_BUILD_TIMESTAMP");
 
-/// The STDOUT half of `--version` output.  Mirrors HS `--version` handling
-/// (Console.hs:326-330): `putStrLn versionStr` emits the banner + license to
-/// stdout, and `putStrLn versionMaude` emits the `Generated from:` block
-/// returned by `getVersionIO` (Console.hs:87-92) to stdout.  The maude
-/// self-check lines (`maude tool:`, ` checking version:`, ` checking
-/// installation:`) go to STDERR — see [`version_maude_stderr_text`] — because
-/// `ensureMaude` writes them with `hPutStrLn stderr` (Console.hs:151-185, see line 153) and
-/// `testProcess` via `putStrErr = hPutStr stderr` (Console.hs:97-149, see line 109,136-137).
+/// HS `versionStr` (Console.hs:227-239) as `putStrLn` emits it: the banner and
+/// the license paragraph.  `versionStr` is built with `unlines`, so it ends in
+/// `\n`; `putStrLn` appends a second one, and that blank line is what
+/// separates it from the `Generated from:` block printed next.
 ///
-/// `versionStr` is built with `unlines` (Console.hs:219-220, see line 221), so it ends in `\n`;
-/// `putStrLn` then appends a second `\n`, yielding the blank line that
-/// precedes `Generated from:`.  We reproduce that blank line here exactly.
-/// The reported maude version comes from `getVersionIO`'s argument, which is
-/// `ensureMaude`'s `out` (the raw `maude --version` output, Console.hs:156-161).
-pub fn version_text(maude_path: &str) -> String {
-    let mv = detect_maude_version_at(maude_path).unwrap_or_else(|| "unknown version".to_string());
+/// STDOUT only — the maude self-check lines the run's `ensureMaude` writes
+/// between the two blocks go to STDERR (`hPutStrLn stderr`, Console.hs:153,
+/// and `testProcess`' `putStrErr`, Console.hs:136-137).
+pub fn version_banner_text() -> String {
     format!(
-        // versionStr: banner + license (Console.hs:220-231), unlines-terminated,
-        // then putStrLn's extra newline gives the blank line before the block.
         "tamarin-prover {VERSION}, (C) David Basin, Cas Cremers, Jannik Dreier, Simon Meier, Ralf Sasse, Benedikt Schmidt, 2010-2023\n\
          \n\
          This program comes with ABSOLUTELY NO WARRANTY. It is free software, and you\n\
          are welcome to redistribute it according to its LICENSE, see\n\
          'https://github.com/tamarin-prover/tamarin-prover/blob/master/LICENSE'.\n\
-         \n\
-         Generated from:\n\
+         \n",
+    )
+}
+
+/// HS `getVersionIO` (Console.hs:87-92) as `putStrLn` emits it: the
+/// `Generated from:` block, closed by the compile-time line.
+///
+/// `maude_version` is spliced in RAW — it is `ensureMaude`'s version data
+/// (`probe::ensure_maude`'s second component), which already ends in the
+/// newline that separates it from the `Git revision:` line.
+pub fn generated_from_text(maude_version: &str) -> String {
+    format!(
+        "Generated from:\n\
          Tamarin version {VERSION}\n\
-         Maude version {mv}\n\
+         Maude version {maude_version}\
          Git revision: {GIT_REV}, branch: {GIT_BRANCH}\n\
          Compiled at: {BUILD_TIMESTAMP}\n",
     )
-}
-
-/// The STDERR half of `--version` output: the three maude self-check lines
-/// `ensureMaude` writes via `hPutStrLn stderr` / `testProcess` (Console.hs:
-/// 151-165).  ` checking version: ` carries the *maude* version followed by
-/// `. OK.` (`Right (strip out ++ ". OK.")`, Console.hs:151-185, see line 165); ` checking
-/// installation: ` carries `OK.` (Console.hs:151-185, see line 171).  Returned without a
-/// trailing newline so the caller can `eprintln!` it as one block.
-pub fn version_maude_stderr_text(disp: &str, maude_path: &str) -> String {
-    let maude_version = detect_maude_version_at(maude_path);
-    let maude_ok = maude_version.is_some();
-    let mv = maude_version.unwrap_or_else(|| "unknown".to_string());
-    let ok = if maude_ok { "OK." } else { "FAILED." };
-    format!(
-        "maude tool: '{disp}'\n\
-         \x20checking version: {mv}. {ok}\n\
-         \x20checking installation: {ok}",
-    )
-}
-
-/// Probe `<path> --version` and return the trimmed version string when
-/// the binary is reachable, `None` otherwise.  Callers pass the maude the
-/// run will actually invoke (the `--with-maude` path when given, else the
-/// probed default), so the reported version always matches the invoked
-/// binary — HS `ensureMaude` reads the same `maudePath` for both
-/// (Console.hs:156-161).
-pub fn detect_maude_version_at(path: &str) -> Option<String> {
-    if let Ok(out) = std::process::Command::new(path).arg("--version").output() {
-        if out.status.success() {
-            let s = String::from_utf8_lossy(&out.stdout);
-            // Maude prints just the version number, e.g. "3.5.1".
-            let v = s.trim().to_string();
-            if !v.is_empty() {
-                return Some(v);
-            }
-        }
-    }
-    None
 }
 
 /// The `--help` text.
@@ -1026,6 +990,11 @@ pub fn help_text(mode: Subcommand) -> String {
 
 /// The oracle-identical head of [`help_text`] — see there for the HS
 /// provenance of the layout and for the five rows deliberately absent.
+///
+/// Its `-m --output-module[=…]` cell repeats the `show` strings of
+/// [`ModuleType::ALL`](tamarin_theory::module::ModuleType::ALL), which owns
+/// them; `help_spells_out_the_module_type_show_strings` holds the two
+/// hand-written spellings together.
 const ORACLE_HELP_HEAD: &str = r"tamarin-prover [COMMAND] ... [OPTIONS] FILES
   Security protocol analysis and verification.
 

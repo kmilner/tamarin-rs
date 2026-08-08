@@ -4,11 +4,13 @@
 
 //! Transcript pins for the tool-probe section HS `testProcess`
 //! (Console.hs:97-149) writes, driven through the `test` command's
-//! `ensureGraphVizDot` caller (Test.hs:50, Environment.hs:72-101).
+//! `ensureGraphVizDot` caller (Test.hs:50, Environment.hs:72-101) and through
+//! `ensureMaude` (Console.hs:151-185), which every mode but `--parse-only`
+//! runs first.
 //!
-//! Both expected stderr blocks are oracle captures of the pinned Haskell
+//! Every expected stderr block is an oracle capture of the pinned Haskell
 //! prover run with the same flags.  The `test` command is the cheap way to
-//! reach the probes — interactive mode runs the same
+//! reach the dot probes — interactive mode runs the same
 //! `ensureGraphVizDot`/`ensureGraphCommand` calls (Interactive.hs:106-108) but
 //! then binds a socket and blocks.
 
@@ -144,4 +146,167 @@ fn working_dot_reports_version_and_png_ok() {
         lines[1]
     );
     assert_eq!(lines[2], " checking PNG support: OK.");
+}
+
+/// The stderr a maude that cannot be started produces, whatever mode asked for
+/// it: `testProcess`' exception block — with NO trailing blank line, because
+/// `maudeTest` takes the `error` branch instead of `putStrErrLn ""` — followed
+/// by GHC's top-level report of that `error` (Console.hs:147).
+const MISSING_MAUDE_STDERR: &str = "maude tool: '/nonexistent/maude'\n\
+     \x20checking version: caught exception while executing:\n\
+     /nonexistent/maude --version\n\
+     with input: \n\
+     Exception: \n\
+     \x20  /nonexistent/maude: readCreateProcessWithExitCode: posix_spawnp: \
+     does not exist (No such file or directory)\n\
+     tamarin-prover: Maude is not installed. Ensure Maude is available and on the path.\n\
+     CallStack (from HasCallStack):\n\
+     \x20 error, called at src/Main/Console.hs:147:9 in main:Main.Console\n";
+
+/// Oracle (`test --with-maude=/nonexistent/maude`): the version probe's spawn
+/// throws, and because it is a maude probe the handler raises rather than
+/// returning — so the `test` command never reaches its dot block or its
+/// summary, and the run exits 1 with the two topic lines already on stdout.
+#[test]
+fn missing_maude_aborts_the_test_command() {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
+    let out = cmd
+        .args(["test", "--with-maude=/nonexistent/maude"])
+        .output()
+        .expect("spawn tamarin-rs");
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8(out.stdout).expect("utf-8 stdout"),
+        "Self-testing the tamarin-prover installation.\n\
+         \n\
+         *** Testing the availability of the required tools ***\n"
+    );
+    assert_eq!(
+        String::from_utf8(out.stderr).expect("utf-8 stderr"),
+        MISSING_MAUDE_STDERR
+    );
+}
+
+/// Oracle (`--with-maude=/nonexistent/maude tiny.spthy`): a batch run's
+/// `ensureMaudeAndGetVersion` (Batch.hs:115) aborts in the same place, before
+/// the first `[Theory …]` marker, leaving stdout completely empty.
+#[test]
+fn missing_maude_aborts_a_batch_run() {
+    let dir = std::env::temp_dir().join("tamarin_rs_probe_reports_nomaude");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let thy = dir.join("tiny.spthy");
+    std::fs::write(
+        &thy,
+        "theory Tiny\nbegin\n\nrule Init:\n  [ Fr(~x) ] --> [ Out(~x) ]\n\nend\n",
+    )
+    .expect("write theory");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
+    let out = cmd
+        .arg("--with-maude=/nonexistent/maude")
+        .arg(&thy)
+        .output()
+        .expect("spawn tamarin-rs");
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(String::from_utf8(out.stdout).expect("utf-8 stdout"), "");
+    assert_eq!(
+        String::from_utf8(out.stderr).expect("utf-8 stderr"),
+        MISSING_MAUDE_STDERR
+    );
+}
+
+/// Oracle (`--version --with-maude=/nonexistent/maude`): `putStrLn versionStr`
+/// has already run, so the banner stands on stdout — but the abort happens
+/// inside `ensureMaudeAndGetVersion`, so the `Generated from:` block that
+/// would follow it never appears.
+#[test]
+fn missing_maude_aborts_version_before_the_generated_from_block() {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
+    let out = cmd
+        .args(["--version", "--with-maude=/nonexistent/maude"])
+        .output()
+        .expect("spawn tamarin-rs");
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8(out.stdout).expect("utf-8 stdout");
+    assert!(
+        stdout.starts_with("tamarin-prover "),
+        "expected the version banner, got:\n{stdout}"
+    );
+    assert!(
+        stdout.ends_with(
+            "'https://github.com/tamarin-prover/tamarin-prover/blob/master/LICENSE'.\n\n"
+        ),
+        "stdout must stop after the license paragraph, got:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("Generated from:"),
+        "the aborted run must not print the version block, got:\n{stdout}"
+    );
+    assert_eq!(
+        String::from_utf8(out.stderr).expect("utf-8 stderr"),
+        MISSING_MAUDE_STDERR
+    );
+}
+
+/// A maude that STARTS but reports an unsupported version is not fatal: the
+/// version probe's `Left` reason is `errMsg`, the installation probe still
+/// runs, and the run carries on (`ensureMaude`'s `Bool` is discarded
+/// everywhere but `test`).  `/bin/echo` stands in: it answers `--version`
+/// with coreutils' banner and, run bare, writes nothing to stderr.
+#[test]
+fn unsupported_maude_reports_but_does_not_abort() {
+    if !Path::new("/bin/echo").exists() {
+        eprintln!("skipping: no /bin/echo to stand in for an unsupported maude");
+        return;
+    }
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
+    let out = cmd
+        .args([
+            "test",
+            "--with-maude=/bin/echo",
+            "--with-dot=/nonexistent/dot",
+        ])
+        .output()
+        .expect("spawn tamarin-rs");
+    let stderr = String::from_utf8(out.stderr).expect("utf-8 stderr");
+    let echo_version = String::from_utf8(
+        Command::new("/bin/echo")
+            .arg("--version")
+            .output()
+            .expect("spawn /bin/echo")
+            .stdout,
+    )
+    .expect("utf-8 echo --version");
+    assert_eq!(
+        stderr,
+        format!(
+            "maude tool: '/bin/echo'\n\
+             \x20checking version: WARNING:\n\
+             \n\
+             \x20'maude --version' returned unsupported version '{stripped}'\n\
+             \x20Please install one of the following versions of Maude: \
+             2.7.1, 3.0, 3.1, 3.2.1, 3.2.2, 3.3, 3.3.1, 3.4, 3.5, 3.5.1\n\
+             \n\
+             Detailed results from testing '/bin/echo'\n\
+             \x20command: /bin/echo --version\n\
+             \x20stdin:   \n\
+             \x20stdout:  {echo_version}\n\
+             \x20stderr:  \n\
+             \x20checking installation: OK.\n\
+             GraphViz tool: '/nonexistent/dot'\n\
+             \x20checking version: caught exception while executing:\n\
+             /nonexistent/dot -V\n\
+             with input: \n\
+             Exception: \n\
+             \x20  /nonexistent/dot: readCreateProcessWithExitCode: posix_spawnp: \
+             does not exist (No such file or directory)\n\
+             \n",
+            stripped = echo_version.trim_end(),
+        )
+    );
+    // The dot probe ran, so the run reached the summary rather than aborting.
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8(out.stdout).expect("utf-8 stdout"),
+        FAILED_RUN_STDOUT
+    );
 }

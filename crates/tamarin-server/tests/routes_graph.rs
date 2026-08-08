@@ -12,7 +12,7 @@
 //!     and `/graph`, every other theory path is Yesod's 500 page.
 //!   - `/json` returns the aeson-pretty JSON graph, with and without
 //!     `abbrevInBackend`; after an autoprove its nodes and edges are the
-//!     searched node's own system (the `set_keep_sys(true)` guard).
+//!     searched node's own system (the `SysRetention::KeepAll` guard).
 //!   - On all three, a source/case index naming no case is the Not Found
 //!     page — the port's deliberate divergence from upstream's unchecked
 //!     `!!`, whose 500 pages leak the GHC CallStack.
@@ -280,7 +280,7 @@ async fn graph_json_returns_json_graph_with_dot_json_content_type() {
 /// root, which carries no rule instances, so its assertions hold over an EMPTY
 /// graph and cannot see whether the solved systems survive.  Autoprove `debug`
 /// and re-read the witness node: its system must actually be there.  This is
-/// the regression guard for `init_process_globals`' `set_keep_sys(true)` —
+/// the regression guard for `init_process_globals`' `SysRetention::KeepAll` —
 /// without it every searched proof node drops its `System` and every
 /// post-autoprove graph renders empty.
 #[tokio::test]

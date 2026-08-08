@@ -100,6 +100,7 @@ fn exception_report_matches_missing_tool() {
         "",
         "/nonexistent/dot: readCreateProcessWithExitCode: posix_spawnp: \
          does not exist (No such file or directory)",
+        false,
     );
     assert_eq!(
         got,
@@ -118,7 +119,7 @@ fn exception_report_matches_missing_tool() {
 /// it — and its newline — on the `with input:` line.
 #[test]
 fn exception_report_echoes_stdin() {
-    let got = exception_report("maude", &[], "quit\n", "boom");
+    let got = exception_report("maude", &[], "quit\n", "boom", false);
     assert_eq!(
         got,
         "caught exception while executing:\n\
@@ -128,6 +129,116 @@ fn exception_report_echoes_stdin() {
          Exception: \n\
          \x20  boom\n\
          \n"
+    );
+}
+
+/// Oracle (`--with-maude=/nonexistent/maude`): with `maudeTest` set the
+/// handler raises instead of running `putStrErrLn ""`, so the block ends at
+/// the exception line and the abort report follows it immediately.
+#[test]
+fn exception_report_drops_the_blank_line_for_maude() {
+    let got = exception_report(
+        "/nonexistent/maude",
+        &["--version"],
+        "",
+        "/nonexistent/maude: readCreateProcessWithExitCode: posix_spawnp: \
+         does not exist (No such file or directory)",
+        true,
+    );
+    assert_eq!(
+        got,
+        "caught exception while executing:\n\
+         /nonexistent/maude --version\n\
+         with input: \n\
+         Exception: \n\
+         \x20  /nonexistent/maude: readCreateProcessWithExitCode: posix_spawnp: \
+         does not exist (No such file or directory)\n"
+    );
+}
+
+/// The GHC `error` a failed maude spawn raises, as the oracle prints it under
+/// `tamarin-prover: ` (Console.hs:147).
+#[test]
+fn maude_abort_is_the_console_hs_error() {
+    assert_eq!(
+        MAUDE_ABORT_MSG,
+        "Maude is not installed. Ensure Maude is available and on the path."
+    );
+    assert_eq!(
+        MAUDE_ABORT_SITE,
+        "src/Main/Console.hs:147:9 in main:Main.Console"
+    );
+}
+
+/// Oracle (`--with-maude=/bin/echo`): `errMsg` is `unlines`, so it opens with
+/// `WARNING:` and a blank line and closes with the version list — the trailing
+/// newline is what leaves a blank line before `Detailed results`.  The
+/// rejected version is echoed with only TRAILING whitespace stripped, so a
+/// multi-line reply keeps its interior newlines.
+#[test]
+fn maude_version_check_rejects_unsupported_versions() {
+    assert_eq!(
+        check_maude_version("3.9.0\n"),
+        Err("WARNING:\n\
+             \n\
+             \x20'maude --version' returned unsupported version '3.9.0'\n\
+             \x20Please install one of the following versions of Maude: \
+             2.7.1, 3.0, 3.1, 3.2.1, 3.2.2, 3.3, 3.3.1, 3.4, 3.5, 3.5.1\n"
+            .to_string())
+    );
+    assert_eq!(
+        check_maude_version("first\nsecond\n"),
+        Err("WARNING:\n\
+             \n\
+             \x20'maude --version' returned unsupported version 'first\nsecond'\n\
+             \x20Please install one of the following versions of Maude: \
+             2.7.1, 3.0, 3.1, 3.2.1, 3.2.2, 3.3, 3.3.1, 3.4, 3.5, 3.5.1\n"
+            .to_string())
+    );
+}
+
+/// Oracle: ` checking version: 3.5.1. OK.` — the stripped version plus
+/// `. OK.`, for every version on the supported list.
+#[test]
+fn maude_version_check_accepts_the_supported_list() {
+    for v in SUPPORTED_MAUDE_VERSIONS {
+        assert_eq!(
+            check_maude_version(&format!("{v}\n")),
+            Ok(format!("{v}. OK."))
+        );
+    }
+    // Leading whitespace is NOT stripped — HS's `strip` only drops a suffix.
+    assert!(check_maude_version(" 3.5.1\n").is_err());
+}
+
+/// The installation probe reads STDERR only: maude's interpreter banner on
+/// stdout is irrelevant, anything on stderr becomes the `errMsg` reason.
+#[test]
+fn maude_install_check_reads_stderr_only() {
+    assert_eq!(check_maude_install(""), Ok("OK.".to_string()));
+    assert_eq!(
+        check_maude_install("Warning: <standard input>, line 1: boom\n"),
+        Err("WARNING:\n\
+             \n\
+             Warning: <standard input>, line 1: boom\n\
+             \n\
+             \x20Please install one of the following versions of Maude: \
+             2.7.1, 3.0, 3.1, 3.2.1, 3.2.2, 3.3, 3.3.1, 3.4, 3.5, 3.5.1\n"
+            .to_string())
+    );
+}
+
+/// HS `errMsg'` (Console.hs:181) — the default message both maude probes pass,
+/// reached only through the bad-exit-code reason.
+#[test]
+fn maude_default_message_names_the_tool() {
+    assert_eq!(
+        maude_err_msg("'/bin/false' executable not found / does not work"),
+        "WARNING:\n\
+         \n\
+         '/bin/false' executable not found / does not work\n\
+         \x20Please install one of the following versions of Maude: \
+         2.7.1, 3.0, 3.1, 3.2.1, 3.2.2, 3.3, 3.3.1, 3.4, 3.5, 3.5.1\n"
     );
 }
 

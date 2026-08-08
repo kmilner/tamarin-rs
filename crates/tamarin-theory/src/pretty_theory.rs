@@ -2324,6 +2324,30 @@ fn rule_open_ac_nonempty(
 /// [`rule_open_ac_nonempty`].  When True the theory renders via the
 /// open-as-closed path, which suppresses loop-breaker comments on
 /// trivial-AC-variant rules whose AC form equals their E form.
+///
+/// Each parsed rule item resolves to its elaborated counterpart by NAME
+/// alone, not by the renderer's positional `(name, occurrence-ordinal)`
+/// pairing ([`pair_elaborated_rules`]).  The two resolutions cannot disagree
+/// here, because [`rule_open_ac_nonempty`] is constant across the elaborated
+/// rules that share a name:
+/// * Without `auto_sources` the elaborated rule is never read — the
+///   predicate is the parsed item's own `variants` block, else False.
+/// * With `auto_sources` it asks only whether the elaborated rule carries an
+///   `AUTO_IN_*`/`AUTO_OUT_*` action, and those actions are attached BY
+///   NAME: HS `addLabels` folds into a rule every act whose source rule has
+///   the SAME NAME (`filter ((ruleName ru ==) . ruleName . fst3) acts`,
+///   OpenTheory.hs:138-538, see line 359,364), and
+///   [`crate::auto_sources::apply_auto_sources`] mirrors that, applying each
+///   `(rule name, action)` pair to every elaborated rule of that name.  So
+///   same-named rules always carry the same AUTO actions.
+///
+/// Same-named elaborated rules arise only two ways, and neither can break
+/// that: [`crate::tools::apply_partial_evaluation`] refines ONE original
+/// rule into several, and substitution leaves their action fact tags
+/// identical; and a rule declaration repeated VERBATIM is admitted (HS
+/// `addProtoRule`'s `maybe True (ruE ==)`, OpenTheory.hs:727-733), so its
+/// copies are equal.  Any other duplicate name is the parser's
+/// `duplicate rule: <name>` error.
 fn contains_manual_rule_variants(
     parsed: &p::Theory,
     elaborated: &Theory,
@@ -4387,6 +4411,128 @@ mod oracle_goal_tests {
         assert!(
             collapsed.starts_with(' '),
             "regression: oracle disj goal lost its leading space (render_at/lay2 bug)",
+        );
+    }
+}
+
+#[cfg(test)]
+mod manual_rule_variants_tests {
+    use super::*;
+    use crate::fact::{proto_fact, Multiplicity};
+    use crate::rule::{ProtoRuleE, ProtoRuleEInfo, Rule};
+    use crate::signature::SignaturePure;
+    use crate::theory::{OpenProtoRule, TheoryItem};
+
+    fn parsed_rule(name: &str) -> p::TheoryItem {
+        p::TheoryItem::Rule(p::Rule {
+            name: name.to_string(),
+            modulo: None,
+            attributes: vec![],
+            let_block: vec![],
+            premises: vec![],
+            actions: vec![],
+            conclusions: vec![],
+            embedded_restrictions: vec![],
+            variants: vec![],
+            left_right: None,
+        })
+    }
+
+    /// An elaborated rule named `name`, carrying `action_names` as actions.
+    fn elab_rule(name: &str, action_names: &[&str]) -> TheoryItem {
+        let acts = action_names
+            .iter()
+            .map(|a| proto_fact(Multiplicity::Linear, a, vec![]))
+            .collect();
+        let r: ProtoRuleE = Rule::new(ProtoRuleEInfo::standard(name), vec![], vec![], acts);
+        TheoryItem::Rule(OpenProtoRule::new(r))
+    }
+
+    fn theories(names: &[&str], elab: Vec<TheoryItem>) -> (p::Theory, Theory) {
+        let parsed = p::Theory {
+            is_diff: false,
+            name: "T".to_string(),
+            configuration: None,
+            items: names.iter().map(|n| parsed_rule(n)).collect(),
+        };
+        let mut elaborated: Theory = Theory::new("T", SignaturePure::empty(false));
+        elaborated.items = elab;
+        (parsed, elaborated)
+    }
+
+    /// The same OR computed with the renderer's positional
+    /// `(name, occurrence-ordinal)` pairing instead of the name-keyed
+    /// lookup.
+    fn positional(parsed: &p::Theory, elaborated: &Theory, auto_sources: bool) -> bool {
+        let paired = pair_elaborated_rules(&parsed.items, elaborated);
+        parsed
+            .items
+            .iter()
+            .zip(paired)
+            .any(|(item, er)| match item {
+                p::TheoryItem::Rule(r) => rule_open_ac_nonempty(r, er, auto_sources),
+                _ => false,
+            })
+    }
+
+    /// Partial evaluation refines one rule into several of the SAME name;
+    /// auto-sources then annotates them by name, so every member of a
+    /// same-name group carries the same `AUTO_*` action.  On that shape the
+    /// name-keyed lookup and the positional pairing agree.
+    #[test]
+    fn auto_actions_are_uniform_across_same_named_rules() {
+        let auto_out = "AUTO_OUT_TERM_1_0_0__Recv";
+        let (parsed, elaborated) = theories(
+            &["Send", "Send", "Recv"],
+            vec![
+                elab_rule("Send", &[auto_out]),
+                elab_rule("Send", &[auto_out]),
+                elab_rule("Recv", &["AUTO_IN_TERM_1_0_0__Recv"]),
+            ],
+        );
+        assert!(contains_manual_rule_variants(&parsed, &elaborated, true));
+        assert_eq!(
+            contains_manual_rule_variants(&parsed, &elaborated, true),
+            positional(&parsed, &elaborated, true),
+        );
+    }
+
+    /// A theory whose duplicated rules carry no `AUTO_*` action leaves the
+    /// gate off — under both resolutions.
+    #[test]
+    fn no_auto_action_leaves_the_gate_off() {
+        let (parsed, elaborated) = theories(
+            &["Send", "Send", "Recv"],
+            vec![
+                elab_rule("Send", &["Plain"]),
+                elab_rule("Send", &["Plain"]),
+                elab_rule("Recv", &[]),
+            ],
+        );
+        assert!(!contains_manual_rule_variants(&parsed, &elaborated, true));
+        assert_eq!(
+            contains_manual_rule_variants(&parsed, &elaborated, true),
+            positional(&parsed, &elaborated, true),
+        );
+    }
+
+    /// Without `--auto-sources` the elaborated rule is not consulted at all:
+    /// the gate is the parsed items' `variants` blocks, which the refined
+    /// rules partial evaluation emits never have.
+    #[test]
+    fn without_auto_sources_the_elaborated_rule_is_not_consulted() {
+        let auto_out = "AUTO_OUT_TERM_1_0_0__Recv";
+        let (parsed, elaborated) = theories(
+            &["Send", "Send"],
+            vec![
+                elab_rule("Send", &[auto_out]),
+                elab_rule("Send", &[auto_out]),
+            ],
+        );
+        assert!(!contains_manual_rule_variants(&parsed, &elaborated, false));
+        assert_eq!(
+            contains_manual_rule_variants(&parsed, &elaborated, false),
+            positional(&parsed, &elaborated, false),
         );
     }
 }

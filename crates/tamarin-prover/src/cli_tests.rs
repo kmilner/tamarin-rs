@@ -311,6 +311,33 @@ fn output_module_value_is_unvalidated_at_parse_time() {
 }
 
 #[test]
+fn help_spells_out_the_module_type_show_strings() {
+    // The `-m` row's placeholder is HS `moduleList` (Batch.hs:82-84),
+    // `intercalate "|" $ map show [minBound ..]`.  The help text is a
+    // byte-pinned literal (the widest left cell, which sizes the whole
+    // description column) while `ModuleType` owns the `show` strings, so the
+    // two hand-written spellings are pinned to each other here: adding or
+    // removing a module fails this and names both sites.
+    let help = help_text(Subcommand::Batch);
+    let rows: Vec<&str> = help
+        .lines()
+        .filter(|l| l.trim_start().starts_with("-m --output-module[="))
+        .collect();
+    assert_eq!(rows.len(), 1, "expected exactly one -m row, got {rows:?}");
+    let placeholder = rows[0]
+        .split_once("[=")
+        .and_then(|(_, rest)| rest.split_once(']'))
+        .map(|(inner, _)| inner)
+        .expect("the -m row spells its values as `[=a|b|...]`");
+    assert_eq!(
+        placeholder.split('|').collect::<Vec<_>>(),
+        tamarin_theory::module::ModuleType::ALL
+            .map(tamarin_theory::module::ModuleType::as_str)
+            .to_vec(),
+    );
+}
+
+#[test]
 fn output_dot_and_json_are_flag_req() {
     // output-json/output-dot are flagReq (Batch.hs:80-81): they DO consume
     // the next space-separated token, unlike the flagOpt family.  Verified
@@ -500,12 +527,17 @@ fn effective_maude_processes_explicit_override() {
 
 #[test]
 fn version_stdout_has_blank_line_before_generated_from_and_no_maude_lines() {
-    // HS (Console.hs:326-330) puts the banner + license + `Generated from:`
-    // block on STDOUT.  `putStrLn versionStr` (versionStr ends with the
-    // unlines `\n`) produces a blank line before `Generated from:`.  The
-    // maude self-check lines must NOT appear on stdout.  Probed against the
-    // installed HS binary: stdout ends `...LICENSE'.\n\nGenerated from:`.
-    let out = version_text("maude");
+    // HS (Console.hs:334-337) puts the banner + license and then the
+    // `Generated from:` block on STDOUT, with `ensureMaude`'s stderr block
+    // between the two `putStrLn`s.  `putStrLn versionStr` (versionStr ends
+    // with the unlines `\n`) produces the blank line before `Generated from:`.
+    // Probed against the installed HS binary: stdout reads
+    // `...LICENSE'.\n\nGenerated from:`.
+    let out = format!(
+        "{}{}",
+        version_banner_text(),
+        generated_from_text("3.5.1\n")
+    );
     assert!(
             out.contains("'https://github.com/tamarin-prover/tamarin-prover/blob/master/LICENSE'.\n\nGenerated from:\n"),
             "stdout must have a blank line between the license and `Generated from:`\n--- got ---\n{out}"
@@ -526,37 +558,18 @@ fn version_stdout_has_blank_line_before_generated_from_and_no_maude_lines() {
     assert!(out.starts_with("tamarin-prover "));
     // getVersionIO's block is present and ends with the compile-time line.
     assert!(out.contains("\nTamarin version "));
-    assert!(out.contains("\nMaude version "));
+    assert!(out.contains("\nMaude version 3.5.1\nGit revision: "));
     assert!(out.contains("\nCompiled at: "));
+    assert!(out.ends_with('\n'));
 }
 
+/// `getVersionIO` splices `ensureMaude`'s version data raw, so the
+/// unsupported-maude form — which carries its own suffix and newline — lands
+/// on the `Maude version` line unchanged.
 #[test]
-fn version_stderr_has_the_three_maude_self_check_lines() {
-    // HS `ensureMaude` writes these to STDERR via `hPutStrLn stderr` /
-    // `testProcess` (Console.hs:151-165).  Probed against the HS binary,
-    // stderr is exactly:
-    //   maude tool: 'maude'
-    //    checking version: 3.5.1. OK.
-    //    checking installation: OK.
-    let err = version_maude_stderr_text("maude", "maude");
-    let lines: Vec<&str> = err.lines().collect();
-    assert_eq!(
-        lines.len(),
-        3,
-        "stderr block must be exactly three lines: {err:?}"
-    );
-    assert_eq!(lines[0], "maude tool: 'maude'");
-    assert!(
-        lines[1].starts_with(" checking version: "),
-        "got {:?}",
-        lines[1]
-    );
-    assert!(
-        lines[1].ends_with(". OK.") || lines[1].ends_with(". FAILED."),
-        "got {:?}",
-        lines[1]
-    );
-    assert!(
-        lines[2] == " checking installation: OK." || lines[2] == " checking installation: FAILED."
-    );
+fn generated_from_splices_the_version_data_verbatim() {
+    let out = generated_from_text("3.9 (unsupported)\n");
+    assert!(out.contains("\nMaude version 3.9 (unsupported)\nGit revision: "));
+    let out = generated_from_text("unknown version\n");
+    assert!(out.contains("\nMaude version unknown version\nGit revision: "));
 }

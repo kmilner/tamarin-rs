@@ -210,12 +210,17 @@ const FAPP_AC_EMPTY_MSG: &str = "Term.fAppAC: empty argument list";
 ///
 /// GHC has no `Result` to return here: `error` throws, and with nothing
 /// catching it the runtime prints `tamarin-prover: ` ++ `displayException`
-/// (message + `HasCallStack` frame) on stderr and exits 1.  `f_app_ac`'s
-/// callers reach into every layer of the port and cannot carry a `Result`
-/// either, so the port raises a panic whose payload carries exactly the text
-/// GHC would print; the binary's panic hook recognises it via
-/// [`hs_error_text`] and reproduces the stream and exit code.
-fn hs_error(message: &str, call_site: String) -> ! {
+/// (message + `HasCallStack` frame) on stderr and exits 1.  The `error`s this
+/// stands in for sit below the port's error-returning layers, in code whose
+/// callers cannot carry a `Result` (`Term.fAppAC`, Raw.hs:120;
+/// `Main.Console.testProcess`' maude abort, Console.hs:147), so the port
+/// raises a panic whose payload carries exactly the text GHC would print; the
+/// binary's panic hook recognises it via [`hs_error_text`] and reproduces the
+/// stream and exit code.
+///
+/// `call_site` is the frame's `src/<path>:<line>:<column> in <package>:<module>`
+/// text, hardcoded from the oracle build at each raise site.
+pub fn hs_error(message: &str, call_site: String) -> ! {
     panic!("{HS_ERROR_MARKER}{message}\nCallStack (from HasCallStack):\n  error, called at {call_site}");
 }
 

@@ -447,7 +447,7 @@ fn probe_safety_unique_proof_shape() {
     let _ = root.status;
 }
 
-/// Web-parity regression: with `set_keep_sys(true)` (what the
+/// Web-parity regression: under `SysRetention::KeepAll` (what the
 /// interactive server sets at startup), `run_proof_search` must
 /// RETAIN each proof node's constraint `System` instead of dropping
 /// it to `System::default()` (the `--prove` RSS optimisation in
@@ -470,7 +470,14 @@ lemma always_A:
   "All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j"
 end
 "#;
-    crate::constraint::solver::search::set_keep_sys(true);
+    // The policy is process-wide; hold the lock its other writer takes so
+    // no concurrent test stores a lower one mid-search.
+    let _guard = crate::constraint::solver::search::SYS_RETENTION_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    crate::constraint::solver::search::set_sys_retention(
+        crate::constraint::solver::search::SysRetention::KeepAll,
+    );
     let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
     let root = prove_lemma(&pt, "always_A", h, 200).expect("prove");
     // Root = the initial constraint system (the negated goal formula),

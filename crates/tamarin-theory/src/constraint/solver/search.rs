@@ -178,8 +178,9 @@ pub fn proof_status(node: &ProofNode) -> ProofStatus {
 /// is recursed into like any other node.  `M.toList` is ascending
 /// `CaseName` order == `BTreeMap<String>` iteration order.
 ///
-/// The systems only survive a `--prove` run when
-/// [`set_keep_solved_sys`] was enabled beforehand; on the stored-proof
+/// The systems only survive a `--prove` run when the process-wide
+/// [`SysRetention`] was raised to at least
+/// [`KeepSolved`](SysRetention::KeepSolved) beforehand; on the stored-proof
 /// replay path (`replay::check_and_extend_lemma_in_session`) they are
 /// always live.
 ///
@@ -212,57 +213,90 @@ fn collect_solved_systems_owned(
 // --- Cached kill-switch / debug env flags -------------------------------
 // `expand`/`expand_inner` run once per proof-tree node (thousands of
 // times per lemma); these env vars are constant for the process, so cache
-// each behind a `OnceLock<bool>` (mirroring `trace::flag()`).  Semantics
-// preserved exactly: `TAM_RS_KEEP_SYS` is `var_os`-presence, so cache it
-// as the affirmative `keep_sys()` and negate at the call site.
+// each behind a `OnceLock<bool>` (mirroring `trace::flag()`).
+// `TAM_RS_KEEP_SYS` is `var_os`-presence, cached as the affirmative
+// `keep_sys_env()`.
 
-/// Programmatic override for [`keep_sys`], set by the interactive web
-/// server at startup.  `--prove` drops each node's `System` after
-/// expansion to keep peak RSS low (the text proof never reprints a
-/// per-node system).  The interactive server, in contrast, renders the
-/// annotated constraint system + applicable proof methods at every proof
-/// path (HS keeps a `Just System` on every `IncrementalProof` node), so
-/// it must retain them.  Call `set_keep_sys(true)` before any
-/// `run_proof_search`.  Default `false` → CLI behaviour unchanged.
-static KEEP_SYS_OVERRIDE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// How much of a proof tree keeps its per-node constraint `System` once
+/// [`expand`] has returned — a process-wide switch, since the three front
+/// ends want three different answers:
+///
+/// * [`DropAll`](SysRetention::DropAll) — `--prove`, which never reprints
+///   a per-node system in its text proof and so trades them for a low
+///   peak RSS.
+/// * [`KeepSolved`](SysRetention::KeepSolved) — batch trace output
+///   (`--output-dot` / `--output-json`), whose HS `outputTraces`
+///   (Batch.hs:262-288) reads exactly the
+///   `ProofStep (Finished Solved) (Just sys)` nodes and no others.  Peak
+///   RSS stays at the `--prove` baseline: a solved node is a leaf, and
+///   `extract_solved_path` (HS `extractSolved`) keeps at most one per
+///   lemma.
+/// * [`KeepAll`](SysRetention::KeepAll) — the interactive web server,
+///   which renders the annotated constraint system + applicable proof
+///   methods at every proof path (HS keeps a `Just System` on every
+///   `IncrementalProof` node).
+///
+/// A `Sorry: depth limit` frontier stub keeps its system under every
+/// policy: the next ID-DFS iteration re-expands it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SysRetention {
+    /// Drop every expanded node's `System`.
+    DropAll = 0,
+    /// Retain the `System` of `Finished(Solved)` nodes only.
+    KeepSolved = 1,
+    /// Retain every node's `System`.
+    KeepAll = 2,
+}
 
-/// Enable/disable per-node `System` retention across the whole process.
-pub fn set_keep_sys(retain: bool) {
-    KEEP_SYS_OVERRIDE.store(retain, std::sync::atomic::Ordering::Relaxed);
+impl SysRetention {
+    /// Inverse of the `#[repr(u8)]` discriminant, for [`SYS_RETENTION`].
+    #[inline]
+    fn from_u8(v: u8) -> SysRetention {
+        match v {
+            0 => SysRetention::DropAll,
+            1 => SysRetention::KeepSolved,
+            _ => SysRetention::KeepAll,
+        }
+    }
+}
+
+/// The process-wide [`SysRetention`], held as its discriminant.  Default
+/// [`SysRetention::DropAll`] → CLI behaviour unchanged; the interactive
+/// server (at startup) and the batch trace writers (before the first
+/// lemma) raise it via [`set_sys_retention`].
+static SYS_RETENTION: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(SysRetention::DropAll as u8);
+
+/// Set the process-wide `System` retention policy.  Call before any
+/// `run_proof_search`.
+pub fn set_sys_retention(policy: SysRetention) {
+    SYS_RETENTION.store(policy as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The policy in force: [`SYS_RETENTION`], raised to
+/// [`SysRetention::KeepAll`] by the `TAM_RS_KEEP_SYS` env presence
+/// (diagnostic).
+#[inline]
+fn sys_retention() -> SysRetention {
+    let stored = SysRetention::from_u8(SYS_RETENTION.load(std::sync::atomic::Ordering::Relaxed));
+    if stored != SysRetention::KeepAll && keep_sys_env() {
+        return SysRetention::KeepAll;
+    }
+    stored
 }
 
 #[inline]
-fn keep_sys() -> bool {
-    // Programmatic override (interactive server) OR the `TAM_RS_KEEP_SYS`
-    // env presence (diagnostic).  Either forces retention.
-    if KEEP_SYS_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
-        return true;
-    }
+fn keep_sys_env() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("TAM_RS_KEEP_SYS").is_some())
 }
 
-/// Narrow sibling of [`KEEP_SYS_OVERRIDE`]: retain the `System` of
-/// `Finished(Solved)` nodes ONLY.  HS `outputTraces` (Batch.hs:262-288)
-/// reads exactly the `ProofStep (Finished Solved) (Just sys)` nodes, so
-/// batch trace output (`--output-dot` / `--output-json`) needs those
-/// systems and no others.  Unlike [`set_keep_sys`] this leaves peak RSS
-/// at the `--prove` baseline: a solved node is a leaf, and
-/// `extract_solved_path` (HS `extractSolved`) keeps at most one per
-/// lemma.  Default `false` → CLI behaviour unchanged.
-static KEEP_SOLVED_SYS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Enable/disable `Finished(Solved)`-node `System` retention across the
-/// whole process.  Call before any `run_proof_search`.
-pub fn set_keep_solved_sys(retain: bool) {
-    KEEP_SOLVED_SYS.store(retain, std::sync::atomic::Ordering::Relaxed);
-}
-
-/// Whether solved-node `System`s are retained (see [`KEEP_SOLVED_SYS`]).
-#[inline]
-pub fn keep_solved_sys() -> bool {
-    KEEP_SOLVED_SYS.load(std::sync::atomic::Ordering::Relaxed)
-}
+/// Serialises the tests that write [`SYS_RETENTION`] against each other:
+/// the slot is process-wide, and a policy stored mid-search changes what
+/// a concurrently running proof retains.
+#[cfg(test)]
+pub(crate) static SYS_RETENTION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Per-child parallel expansion is ON by default;
 /// `TAM_RS_DISABLE_PARALLEL_EXPAND=1` forces serial sibling expansion
@@ -908,32 +942,37 @@ fn expand(
     // (defined below in this file) re-runs `expand` on during the next
     // ID-DFS iteration — those need their sys — and on `Finished(Solved)`
     // leaves when batch trace output asked for them via
-    // `set_keep_solved_sys`.  Everything else (other resolved leaves,
+    // `SysRetention::KeepSolved`.  Everything else (other resolved leaves,
     // interior nodes, terminal Sorrys) can drop.  See
     // `drop_sys_after_expand`.
     // Profile: csf17::injectivity 1010-step proof tree holds ~200 MB
     // peak; this drain reduces peak RSS to ~14 MB (~ same as small
     // lemmas — most of HS's residue is the closed branches we can
     // now free).
-    if drop_sys_after_expand(node, keep_sys(), keep_solved_sys()) {
+    if drop_sys_after_expand(node, sys_retention()) {
         node.sys = crate::constraint::system::System::default();
     }
 }
 
 /// The [`expand`] drop decision, as a pure predicate over the node and
-/// the two retention switches (`keep_all` = [`keep_sys`], `keep_solved`
-/// = [`keep_solved_sys`]).  `sys` survives when the node is a
+/// the [`SysRetention`] policy.  `sys` survives when the node is a
 /// `Sorry: depth limit` frontier stub (re-expanded next ID-DFS
 /// iteration), when every node is retained, or when solved-node
 /// retention is on and this node is `Finished(Solved)` — HS
 /// `outputTraces`' selector (Batch.hs:285).  Keyed on `method`, not on
 /// the aggregate [`NodeStatus`], which rolls up from children and would
 /// retain interior nodes too.
-fn drop_sys_after_expand(node: &ProofNode, keep_all: bool, keep_solved: bool) -> bool {
-    let keep_for_redoexpand = is_depth_limited(node);
-    let keep_for_traces =
-        keep_solved && matches!(node.method, ProofMethod::Finished(MethodResult::Solved));
-    !keep_for_redoexpand && !keep_all && !keep_for_traces
+fn drop_sys_after_expand(node: &ProofNode, retention: SysRetention) -> bool {
+    if is_depth_limited(node) {
+        return false;
+    }
+    match retention {
+        SysRetention::DropAll => true,
+        SysRetention::KeepSolved => {
+            !matches!(node.method, ProofMethod::Finished(MethodResult::Solved))
+        }
+        SysRetention::KeepAll => false,
+    }
 }
 
 fn expand_inner(
@@ -1901,14 +1940,20 @@ mod tests {
             Vec::new(),
             true,
         );
-        // Switch off: everything but a depth-limit stub is dropped.
+        // `DropAll`: everything but a depth-limit stub is dropped.
         for n in [&solved_leaf, &simplify, &contradictory] {
-            assert!(drop_sys_after_expand(n, false, false));
+            assert!(drop_sys_after_expand(n, SysRetention::DropAll));
         }
-        // Switch on: the solved node keeps its system, ONLY it.
-        assert!(!drop_sys_after_expand(&solved_leaf, false, true));
-        assert!(drop_sys_after_expand(&simplify, false, true));
-        assert!(drop_sys_after_expand(&contradictory, false, true));
+        // `KeepSolved`: the solved node keeps its system, ONLY it.
+        assert!(!drop_sys_after_expand(
+            &solved_leaf,
+            SysRetention::KeepSolved
+        ));
+        assert!(drop_sys_after_expand(&simplify, SysRetention::KeepSolved));
+        assert!(drop_sys_after_expand(
+            &contradictory,
+            SysRetention::KeepSolved
+        ));
         // An unannotated solved node still counts here — `expand` never
         // produces one, and `into_solved_systems` filters it out anyway.
         let unannotated = node(
@@ -1917,9 +1962,12 @@ mod tests {
             Vec::new(),
             false,
         );
-        assert!(!drop_sys_after_expand(&unannotated, false, true));
-        // `keep_sys` (interactive server) still retains everything.
-        assert!(!drop_sys_after_expand(&simplify, true, false));
+        assert!(!drop_sys_after_expand(
+            &unannotated,
+            SysRetention::KeepSolved
+        ));
+        // `KeepAll` (interactive server) retains everything.
+        assert!(!drop_sys_after_expand(&simplify, SysRetention::KeepAll));
     }
 
     #[test]
@@ -1931,7 +1979,7 @@ mod tests {
             true,
         );
         stub.status = NodeStatus::Sorry;
-        assert!(!drop_sys_after_expand(&stub, false, false));
+        assert!(!drop_sys_after_expand(&stub, SysRetention::DropAll));
         // A terminal (non-frontier) sorry is still dropped.
         let terminal = node(
             ProofMethod::Sorry(Some("budget exhausted".into())),
@@ -1939,18 +1987,30 @@ mod tests {
             Vec::new(),
             true,
         );
-        assert!(drop_sys_after_expand(&terminal, false, false));
+        assert!(drop_sys_after_expand(&terminal, SysRetention::DropAll));
     }
 
     #[test]
-    fn keep_solved_sys_switch_round_trips() {
-        // Process-global, like `set_keep_sys`; restore it so a
-        // concurrently running proof search sees the default.
-        let before = keep_solved_sys();
-        set_keep_solved_sys(true);
-        assert!(keep_solved_sys());
-        set_keep_solved_sys(false);
-        assert!(!keep_solved_sys());
-        set_keep_solved_sys(before);
+    fn sys_retention_switch_round_trips() {
+        // `TAM_RS_KEEP_SYS` pins every reading to `KeepAll`, which is not
+        // what this asserts.
+        if keep_sys_env() {
+            return;
+        }
+        // Process-global: hold the lock the other writer takes, and
+        // restore the policy a concurrently running proof search expects.
+        let _guard = SYS_RETENTION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let before = sys_retention();
+        for policy in [
+            SysRetention::KeepAll,
+            SysRetention::KeepSolved,
+            SysRetention::DropAll,
+        ] {
+            set_sys_retention(policy);
+            assert_eq!(sys_retention(), policy);
+        }
+        set_sys_retention(before);
     }
 }

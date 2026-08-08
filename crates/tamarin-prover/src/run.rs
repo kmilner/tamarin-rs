@@ -184,19 +184,18 @@ pub fn run(args: &Args) -> Result<i32, RunError> {
         return Ok(0);
     }
     if args.show_version {
-        // HS (Console.hs:326-330) splits the two streams: the banner +
-        // license + `Generated from:` block go to STDOUT, the three maude
-        // self-check lines to STDERR (`ensureMaude` -> `hPutStrLn stderr`).
-        // version_text() already carries its own trailing newline.
+        // HS (Console.hs:335-337) interleaves the two streams: `putStrLn
+        // versionStr` (stdout), then `ensureMaudeAndGetVersion` — whose
+        // `ensureMaude` writes the maude self-check block to stderr and, when
+        // maude cannot be started, aborts before the second `putStrLn` — then
+        // the `Generated from:` block `getVersionIO` built from the version
+        // data the probe returned (stdout).  Both halves carry their own
+        // trailing newline.
         let maude_path = maude_invocation_path(args);
-        print!("{}", crate::cli::version_text(&maude_path));
-        eprintln!(
-            "{}",
-            crate::cli::version_maude_stderr_text(
-                &maude_display_name(args, &maude_path),
-                &maude_path,
-            )
-        );
+        print!("{}", crate::cli::version_banner_text());
+        let (_, maude_version) =
+            crate::probe::ensure_maude(&maude_display_name(args, &maude_path), &maude_path);
+        print!("{}", crate::cli::generated_from_text(&maude_version));
         return Ok(0);
     }
 
@@ -223,15 +222,14 @@ pub fn run(args: &Args) -> Result<i32, RunError> {
 fn run_test(args: &Args) -> Result<i32, RunError> {
     println!("Self-testing the tamarin-prover installation.\n");
     println!("*** Testing the availability of the required tools ***");
-    // HS `ensureMaude` (Console.hs:151-161) runs its two probes through
-    // `testProcess`, so the whole maude block lands on STDERR — the `***`
-    // topic lines around it are the only part of this section on stdout.
-    // The port synthesizes that block from a single `maude --version`
-    // (`print_maude_banner`) instead of running the two probes.
+    // HS `ensureMaude` (Test.hs:46) runs its two probes through `testProcess`,
+    // so the whole maude block lands on STDERR — the `***` topic lines around
+    // it are the only part of this section on stdout.  A maude that cannot be
+    // started aborts the run inside the probe, so `success_maude` is `false`
+    // only for a maude that ran but failed a check.
     let maude_path = maude_invocation_path(args);
-    let mv = crate::cli::detect_maude_version_at(&maude_path);
-    print_maude_banner(&maude_display_name(args, &maude_path), mv.as_deref());
-    let success_maude = mv.is_some();
+    let (success_maude, _) =
+        crate::probe::ensure_maude(&maude_display_name(args, &maude_path), &maude_path);
     // Test.hs:49 — a bare `putStrLn ""` separates the two tool blocks.
     println!();
     // HS `ensureGraphVizDot` (Test.hs:50) reads `dotPath`
@@ -266,6 +264,12 @@ fn run_test(args: &Args) -> Result<i32, RunError> {
 /// `rule (modulo AC) NAME:` shape.  The BP half is a known gap (see body).
 fn run_variants(args: &Args) -> Result<i32, RunError> {
     let maude_path = args.maude_path.clone().unwrap_or_else(default_maude_path);
+    // HS `Main.Mode.Intruder.run` runs `ensureMaude` BEFORE it starts either
+    // handle (Intruder.hs:45), so the tool block — stderr only, the rule dump
+    // alone goes to stdout — precedes any Maude spawn, and a maude that cannot
+    // be started aborts here rather than in `MaudeHandle::start`.  The verdict
+    // is discarded (`_ <- ensureMaude as`).
+    let _ = crate::probe::ensure_maude(&maude_display_name(args, &maude_path), &maude_path);
     // HS `Main.Mode.Intruder.run` (Intruder.hs:44-53) starts TWO SEPARATE
     // Maude handles — one on `dhMaudeSig`, one on `bpMaudeSig` — and
     // generates `dhIntruderRules False` then `bpIntruderRules False`, then
@@ -281,11 +285,6 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
             maude_path, e
         ))
     })?;
-    // HS emits the maude tool/version banner on STDERR (via `ensureMaude`),
-    // not stdout — the rule dump alone goes to stdout.  Mirror that.
-    if let Some(v) = crate::cli::detect_maude_version_at(&maude_path) {
-        print_maude_banner(&maude_path, Some(&v));
-    }
     // HS `Main.Mode.Intruder.run` (Intruder.hs:48-53) generates BOTH the DH
     // and the bilinear-pairing variants and emits `dhS ++ bpS`:
     //   - DH: `dhIntruderRules False` (runtime, via Maude).  RS's runtime
@@ -425,14 +424,14 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     let theory_paths: Vec<PathBuf> = collect_theory_paths(&args.in_files)?;
 
     // HS interactive runs the tool checks BEFORE the banner
-    // (Interactive.hs:86-91): `ensureMaudeAndGetVersion` prints the
-    // maude block (Console.hs:150-155) and `ensureGraphVizDot` the
+    // (Interactive.hs:103-108): `ensureMaudeAndGetVersion` prints the
+    // maude block (Console.hs:151-185) and `ensureGraphVizDot` the
     // GraphViz block (Environment.hs:72-87), both on stderr.  Neither is
     // gated on any flag — `--quiet` leaves them in place (see `Args::quiet`).
-    print_maude_banner(
-        &maude_display,
-        crate::cli::detect_maude_version_at(&cfg.maude_path).as_deref(),
-    );
+    // The version data feeds HS's `__versionPrettyPrint__` argument, which
+    // this port's web UI does not surface, so only the probe's stderr and its
+    // abort-on-missing-maude matter here.
+    let _ = crate::probe::ensure_maude(&maude_display, &cfg.maude_path);
     // HS picks the graph-tool check by `(readOutputCommand as).ocFormat`
     // (Interactive.hs:106-108): `--with-json` selects `ensureGraphCommand`
     // (Environment.hs:104-115) and the `GraphViz tool:` block does not run at
@@ -616,17 +615,6 @@ fn maude_display_name(args: &Args, raw_path: &str) -> String {
 /// 156-161), so the reported version is always the invoked binary's.
 fn maude_invocation_path(args: &Args) -> String {
     args.maude_path.clone().unwrap_or_else(default_maude_path)
-}
-
-/// Emit the `maude tool:` + version + installation banner to stderr (HS
-/// `ensureMaudeAndGetVersion`, Console.hs:150-155).  `disp` is the tool name
-/// to show; when `ver` is present the two ` checking …: OK.` lines follow.
-fn print_maude_banner(disp: &str, ver: Option<&str>) {
-    eprintln!("maude tool: '{}'", disp);
-    if let Some(v) = ver {
-        eprintln!(" checking version: {}. OK.", v);
-        eprintln!(" checking installation: OK.");
-    }
 }
 
 /// Report an `ArgumentError` forced out of `mkTheoryLoadOptions` the way the
@@ -1995,14 +1983,16 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     // `--output-json` / `--output-dot`: HS `outputTraces` (Batch.hs:249-317)
     // serialises the constraint system of every `Finished Solved` proof node.
     // The solver drops each node's `System` after expansion unless told
-    // otherwise, so the retention switch has to be flipped for the whole
-    // process BEFORE the first lemma is proved.  It is scoped to solved nodes
-    // (`set_keep_solved_sys`, not `set_keep_sys`), so a run without these
-    // flags pays nothing and a run with them retains only the systems
+    // otherwise, so the retention policy has to be raised for the whole
+    // process BEFORE the first lemma is proved.  `KeepSolved` (not
+    // `KeepAll`) is scoped to solved nodes, so a run without these flags
+    // pays nothing and a run with them retains only the systems
     // `outputTraces` actually reads.
     let want_traces = args.trace_dot.is_some() || args.trace_json.is_some();
     if want_traces {
-        tamarin_theory::constraint::solver::search::set_keep_solved_sys(true);
+        tamarin_theory::constraint::solver::search::set_sys_retention(
+            tamarin_theory::constraint::solver::search::SysRetention::KeepSolved,
+        );
     }
     if args.in_files.is_empty() {
         // HS `batchMode`'s run: `null inFiles = helpAndExit thisMode (Just "no
@@ -2045,25 +2035,22 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     // version check and to every file's pipeline state.
     let maude_path = maude_invocation_path(args);
 
-    // The Maude version is constant for the whole run, but detecting it
-    // spawns a `maude --version` subprocess.  Detect it ONCE here — from the
-    // binary this run will actually invoke — and reuse the cached value for
-    // both the banner and every file's `BuildInfo`, avoiding one
-    // `maude --version` subprocess per file.
-    let maude_version: Option<String> = crate::cli::detect_maude_version_at(&maude_path);
-
-    // HS prints the maude tool + version banner ONCE at the top of the
-    // batch run (`Main.Console.argExists` path).  Mirror that here:
-    // emit `maude tool: 'maude'\n checking version: X. OK.\n checking
-    // installation: OK.` before the first theory is loaded.  `--parse-only`
-    // never starts Maude (Batch.hs:91-95), so the banner is skipped there;
-    // `--quiet` does NOT suppress it (see `Args::quiet`).
-    if !args.parse_only {
-        print_maude_banner(
-            &maude_display_name(args, &maude_path),
-            maude_version.as_deref(),
-        );
-    }
+    // HS runs `ensureMaudeAndGetVersion` ONCE at the top of the batch run
+    // (Batch.hs:97/102/115), before the first theory is loaded: it writes the
+    // tool block to stderr and returns the version data every file's
+    // `Generated from:` block reports.  `--parse-only` is the one branch that
+    // does NOT run it (Batch.hs:91-95), so no probe and no banner there;
+    // `--quiet` does not suppress it either (see `Args::quiet`).
+    let maude_version: Option<String> = if args.parse_only {
+        None
+    } else {
+        let (_, version_data) =
+            crate::probe::ensure_maude(&maude_display_name(args, &maude_path), &maude_path);
+        // `getVersionIO` splices the version data — which ends in maude's own
+        // newline — straight into the block; `BuildInfo` holds the line's
+        // content instead, so drop it here.
+        Some(version_data.trim_end().to_string())
+    };
 
     // The deferred `mkTheoryLoadOptions` argument checks (HS forces the
     // record lazily inside the file loop, so the `error e` report lands

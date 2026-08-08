@@ -39,9 +39,10 @@ fn main() {
     // `git status --porcelain` is non-empty — i.e. it also flags untracked
     // files (unlike `git diff-index --quiet HEAD --`). Mirror that: any
     // non-empty porcelain output means dirty. Injecting the suffix into `rev`
-    // here feeds both consumers of TAMARIN_GIT_REV — cli.rs `version_text`
-    // (`--version`) and pretty_theory.rs `render_generated_from` (the `--prove`
-    // Generated-from footer) — so both `Git revision:` lines match HS.
+    // here feeds both consumers of TAMARIN_GIT_REV — cli.rs
+    // `generated_from_text` (`--version`) and pretty_theory.rs
+    // `render_generated_from` (the `--prove` Generated-from footer) — so both
+    // `Git revision:` lines match HS.
     let dirty = Command::new("git")
         .args(["status", "--porcelain"])
         .output()

@@ -127,10 +127,10 @@ impl ServerConfig {
 ///
 /// Both statics default to what the `--prove` CLI wants, so a process that
 /// serves HTTP must opt out of those defaults BEFORE the first request —
-/// [`set_keep_sys`](tamarin_theory::constraint::solver::search::set_keep_sys)
-/// in particular before the first `autoprove` search, since a search that
-/// runs without it leaves every proof node's `System` dropped and the
-/// `/json/` and constraint-system panes render empty.
+/// the [`SysRetention`](tamarin_theory::constraint::solver::search::SysRetention)
+/// policy in particular before the first `autoprove` search, since a search
+/// that runs under the default leaves every proof node's `System` dropped and
+/// the `/json/` and constraint-system panes render empty.
 ///
 /// Every entry point that stands this server up calls this: [`serve`] and the
 /// `tests/common` harness.  Anything process-wide the server relies on belongs
@@ -153,7 +153,9 @@ pub fn init_process_globals() {
     // renders the annotated system + applicable proof methods at every
     // proof path — HS keeps a `Just System` on every `IncrementalProof`
     // node.
-    tamarin_theory::constraint::solver::search::set_keep_sys(true);
+    tamarin_theory::constraint::solver::search::set_sys_retention(
+        tamarin_theory::constraint::solver::search::SysRetention::KeepAll,
+    );
 }
 
 /// Start the server, blocking until shutdown.
