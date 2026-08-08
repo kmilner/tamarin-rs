@@ -37,6 +37,7 @@ use std::time::Instant;
 
 use tamarin_parser::wf::{after_variants_topics, insert_wf_before};
 use tamarin_term::maude_proc::{MaudeHandle, MaudePool, SharedMaudeCaches};
+use tamarin_theory::constraint::solver::context::annotate_theory_loop_breakers;
 use tamarin_theory::constraint::system::System;
 use tamarin_theory::elaborate::elaborate;
 use tamarin_theory::macro_expand::macro_expanded_clone;
@@ -187,12 +188,13 @@ pub fn run(args: &Args) -> Result<i32, RunError> {
         // license + `Generated from:` block go to STDOUT, the three maude
         // self-check lines to STDERR (`ensureMaude` -> `hPutStrLn stderr`).
         // version_text() already carries its own trailing newline.
-        print!("{}", crate::cli::version_text(&maude_invocation_path(args)));
+        let maude_path = maude_invocation_path(args);
+        print!("{}", crate::cli::version_text(&maude_path));
         eprintln!(
             "{}",
             crate::cli::version_maude_stderr_text(
-                &maude_display_name(args),
-                &maude_invocation_path(args),
+                &maude_display_name(args, &maude_path),
+                &maude_path,
             )
         );
         return Ok(0);
@@ -226,8 +228,9 @@ fn run_test(args: &Args) -> Result<i32, RunError> {
     // topic lines around it are the only part of this section on stdout.
     // The port synthesizes that block from a single `maude --version`
     // (`print_maude_banner`) instead of running the two probes.
-    let mv = crate::cli::detect_maude_version_at(&maude_invocation_path(args));
-    print_maude_banner(&maude_display_name(args), mv.as_deref());
+    let maude_path = maude_invocation_path(args);
+    let mv = crate::cli::detect_maude_version_at(&maude_path);
+    print_maude_banner(&maude_display_name(args, &maude_path), mv.as_deref());
     let success_maude = mv.is_some();
     // Test.hs:49 — a bare `putStrLn ""` separates the two tool blocks.
     println!();
@@ -388,6 +391,9 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     let frontend_dist = guess_frontend_dist(&data_dir);
 
     let maude_path = args.maude_path.clone().unwrap_or_else(default_maude_path);
+    // Taken before `cfg` adopts the path; the banner below reads it back out
+    // of `cfg.maude_path`.
+    let maude_display = maude_display_name(args, &maude_path);
 
     let mut cfg = tamarin_server::ServerConfig::new(bind_addr, data_dir, maude_path);
     cfg.frontend_dist = frontend_dist;
@@ -424,8 +430,8 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // GraphViz block (Environment.hs:72-87), both on stderr.  Neither is
     // gated on any flag — `--quiet` leaves them in place (see `Args::quiet`).
     print_maude_banner(
-        &maude_display_name(args),
-        crate::cli::detect_maude_version_at(&maude_invocation_path(args)).as_deref(),
+        &maude_display,
+        crate::cli::detect_maude_version_at(&cfg.maude_path).as_deref(),
     );
     // HS picks the graph-tool check by `(readOutputCommand as).ocFormat`
     // (Interactive.hs:106-108): `--with-json` selects `ensureGraphCommand`
@@ -588,15 +594,18 @@ fn cli_cut(args: &Args) -> Option<tamarin_theory::constraint::solver::context::C
 /// `--maude-path`, and the full path when they did (Console.hs:97-149, see line 150).  We
 /// can't re-introspect the flag downstream, so we key off `args.maude_path`
 /// being `None` (the default) vs `Some` (user-supplied).
-fn maude_display_name(args: &Args) -> String {
-    let raw_path = maude_invocation_path(args);
+///
+/// `raw_path` is [`maude_invocation_path`]'s answer, taken as a parameter so a
+/// caller that already resolved it (resolving the default probes the
+/// filesystem) does not pay for it twice.
+fn maude_display_name(args: &Args, raw_path: &str) -> String {
     if args.maude_path.is_some() {
-        raw_path
+        raw_path.to_string()
     } else {
-        std::path::Path::new(&raw_path)
+        std::path::Path::new(raw_path)
             .file_name()
             .and_then(|s| s.to_str())
-            .unwrap_or(&raw_path)
+            .unwrap_or(raw_path)
             .to_string()
     }
 }
@@ -868,16 +877,18 @@ fn theory_marker(theory_name: &str, msg: &str) {
 /// depending on whether --lemma had any effect.  (Shared by translate mode,
 /// the no-prove / precompute-only close path, and the session-build failure
 /// fallback inside the prove branch.)
-fn push_skipped_results(
-    results: &mut Vec<LemmaResult>,
+fn skipped_results(
     elaborated: &tamarin_theory::theory::Theory,
     lemma_filter: &[String],
-) {
-    for l in elaborated.lemmas() {
-        results.push(LemmaResult {
+) -> Vec<LemmaResult> {
+    elaborated
+        .lemmas()
+        .map(|l| LemmaResult {
             name: l.name.clone(),
-            verdict: if lemma_filter.is_empty() || lemma_matches(lemma_filter, &l.name) {
-                // Empty filter, or selected but no prove flag — skipped.
+            // `lemma_matches` is `lemmaSelector` whole, empty-filter arm
+            // included, so it alone decides selection here.
+            verdict: if lemma_matches(lemma_filter, &l.name) {
+                // Selected (or no filter at all) but no prove flag — skipped.
                 LemmaVerdict::Skipped
             } else {
                 LemmaVerdict::Filtered
@@ -892,8 +903,8 @@ fn push_skipped_results(
                 l.trace_quantifier,
                 tamarin_theory::theory::TraceQuantifier::ExistsTrace,
             ),
-        });
-    }
+        })
+        .collect()
 }
 
 /// What [`TheoryPipeline::close_translated_theory`] hands back to the
@@ -924,6 +935,13 @@ struct ClosedOutcome {
 struct TheoryPipeline<'a> {
     args: &'a Args,
     opts: &'a TheoryLoadOptions,
+    /// Which of HS's two pipelines this file runs: `Some` selects
+    /// `translateAndCheckTheory` and the module the open render uses, `None`
+    /// selects `closeTheory`.  Resolved once per run in [`run_batch`] — it is
+    /// NOT `opts.output_module`, which the `--parse-only` / `--precompute-only`
+    /// guards outrank (Batch.hs:91-113); every stage below reads this field so
+    /// no arm can re-derive the answer differently.
+    translate_module: Option<TranslateModule>,
     in_file: &'a str,
     theory_name: String,
     parsed: tamarin_parser::ast::Theory,
@@ -942,8 +960,9 @@ struct TheoryPipeline<'a> {
     /// rename/dedup reads them (see `restriction_frees_by_rule`).
     restriction_frees: std::collections::BTreeMap<String, Vec<tamarin_term::lterm::LVar>>,
     /// The maude binary this run invokes (`--with-maude` or the probed
-    /// default), reused by every spawn and spawn-failure message.
-    maude_path: String,
+    /// default), resolved once per run and reused by every spawn and
+    /// spawn-failure message.
+    maude_path: &'a str,
     file_maude: Option<MaudeHandle>,
     file_maude_pool: Option<std::sync::Arc<MaudePool>>,
     ndc_cache: Option<tamarin_theory::constraint::solver::context::IntrRuleCache>,
@@ -953,9 +972,6 @@ struct TheoryPipeline<'a> {
     /// `translateAndCheckTheory` binds `(postReport, _, _)` and discards it
     /// (TheoryLoader.hs:775-778).
     ndc_funs: Vec<tamarin_term::function_symbols::FunSym>,
-    /// `--partial-evaluation`'s buffered `Debug.Trace` output, flushed by
-    /// [`Self::closed_marker`]; empty unless the hook ran.
-    pe_trace: String,
 }
 
 impl TheoryPipeline<'_> {
@@ -972,9 +988,51 @@ impl TheoryPipeline<'_> {
     /// prove loop's and the no-prove / precompute-only one — emit this pair;
     /// the `--quit-on-warning` abort (loop-side) precedes partial evaluation
     /// and so prints the marker alone.
-    fn closed_marker(&self) {
+    fn closed_marker(&self, pe_trace: &str) {
         self.marker("Theory closed");
-        eprint!("{}", self.pe_trace);
+        eprint!("{pe_trace}");
+    }
+
+    /// This file's Maude handle, or the spawn-failure error every close-time
+    /// stage reports.  `file_maude` is `Some` whenever the per-file spawn in
+    /// [`Self::check_translated_theory`] succeeded.
+    fn require_maude(&self) -> Result<MaudeHandle, RunError> {
+        self.file_maude
+            .clone()
+            .ok_or_else(|| RunError(format!("failed to start maude at {:?}", self.maude_path)))
+    }
+
+    /// The CLI half of HS `constructAutoProver` (TheoryLoader.hs:702-706).
+    /// When `--heuristic` is given it OVERRIDES the per-lemma / theory
+    /// heuristic for every lemma (HS `selectHeuristic`, Proof.hs:705-716, see
+    /// line 707).
+    fn cli_heuristic(&self) -> tamarin_theory::prove::CliHeuristic {
+        tamarin_theory::prove::CliHeuristic {
+            raw: self.opts.heuristic.clone(),
+            oracle_name: self.opts.oracle_name.clone(),
+            oracle_only: self.opts.oracle_only,
+        }
+    }
+
+    /// Build this file's shared prover session — the `closeTheory` analog,
+    /// which does the file-level setup (intruder rules, Maude variants,
+    /// `precompute_full_sources`) ONCE, as HS does at theory-close time.
+    /// Both close-time consumers go through here:
+    /// [`Self::close_translated_theory`]'s prove loop and
+    /// `--precompute-only`'s stats.
+    fn build_prover_session(
+        &self,
+        maude: MaudeHandle,
+    ) -> Result<tamarin_theory::prove::ProverSession, tamarin_theory::prove::ProveError> {
+        tamarin_theory::prove::ProverSession::build_with_in_file_and_heuristic(
+            &self.parsed,
+            maude,
+            self.file_maude_pool.clone(),
+            self.in_file,
+            self.cli_heuristic(),
+            self.cut,
+            self.ndc_cache.as_ref(),
+        )
     }
 
     /// HS `translateTheory` (TheoryLoader.hs:487-503) plus the
@@ -993,7 +1051,6 @@ impl TheoryPipeline<'_> {
     /// message is already on stderr (the GHC-exception shape).
     fn translate_theory(
         &mut self,
-        translate_module: Option<TranslateModule>,
     ) -> Result<
         (
             Option<tamarin_theory::pretty_theory::OpenPrintOpts>,
@@ -1001,6 +1058,7 @@ impl TheoryPipeline<'_> {
         ),
         i32,
     > {
+        let translate_module = self.translate_module;
         // HS emits this marker at the top of `translateTheory`
         // (TheoryLoader.hs:448-460, see line 454).
         self.marker("Theory translated");
@@ -1197,9 +1255,10 @@ impl TheoryPipeline<'_> {
     /// `close_translated_theory`, mirroring how HS's `closeTheory` adopts
     /// this stage's `sign'` while `translateAndCheckTheory` discards it.
     ///
-    /// `translate_mode` gates only the loop-breaker annotation — see the
-    /// comment at that block.
-    fn check_translated_theory(&mut self, translate_mode: bool) {
+    /// [`Self::translate_module`] gates only the loop-breaker annotation —
+    /// see the comment at that block.
+    fn check_translated_theory(&mut self) {
+        let translate_mode = self.translate_module.is_some();
         // HS runs the full `checkWellformedness` on the TRANSLATED theory
         // (TheoryLoader.hs:553-565, `checkTranslatedTheory`), i.e. AFTER SAPIC
         // `translate` has injected the generated rules, whereas our
@@ -1232,7 +1291,7 @@ impl TheoryPipeline<'_> {
         // Maude is needed, Batch.hs:91-95.)
         let session_maude_caches = std::sync::Arc::new(SharedMaudeCaches::default());
         self.file_maude = MaudeHandle::start_with_caches(
-            &self.maude_path,
+            self.maude_path,
             self.maude_sig.clone(),
             std::sync::Arc::clone(&session_maude_caches),
         )
@@ -1259,7 +1318,7 @@ impl TheoryPipeline<'_> {
         let pool_size = self.args.effective_maude_processes();
         self.file_maude_pool = if pool_size >= 2 {
             match MaudePool::new(
-                &self.maude_path,
+                self.maude_path,
                 self.maude_sig.clone(),
                 pool_size,
                 std::sync::Arc::clone(&session_maude_caches),
@@ -1548,7 +1607,9 @@ impl TheoryPipeline<'_> {
         // The returned string is HS's `Debug.Trace` output.  Those traces are
         // lazy thunks forced while the theory is rendered, so on the oracle
         // they appear on stderr AFTER the `[Theory X] Theory closed` marker —
-        // held in `pe_trace` and printed at the `closed_marker` sites below.
+        // held here and printed at the `closed_marker` sites below.  It stays
+        // empty unless the hook runs.
+        let mut pe_trace = String::new();
         if let (Some(pe), Some(m)) = (
             self.opts.partial_evaluation.as_ref(),
             self.file_maude.as_ref(),
@@ -1559,7 +1620,7 @@ impl TheoryPipeline<'_> {
                 crate::cli::PartialEval::Summary => tamarin_theory::tools::EvaluationStyle::Summary,
                 crate::cli::PartialEval::Verbose => tamarin_theory::tools::EvaluationStyle::Tracing,
             };
-            self.pe_trace = tamarin_theory::tools::apply_partial_evaluation(
+            pe_trace = tamarin_theory::tools::apply_partial_evaluation(
                 &mut self.parsed,
                 &mut self.elaborated,
                 m,
@@ -1629,9 +1690,7 @@ impl TheoryPipeline<'_> {
         // `WithMaude` reader), so a missing handle is an error, same as the
         // prove path's.
         if self.auto_sources {
-            let m = self.file_maude.clone().ok_or_else(|| {
-                RunError(format!("failed to start maude at {:?}", self.maude_path))
-            })?;
+            let m = self.require_maude()?;
             tamarin_theory::auto_sources::apply_auto_sources(
                 &mut self.parsed,
                 &mut self.elaborated,
@@ -1642,19 +1701,17 @@ impl TheoryPipeline<'_> {
         }
 
         if skips_prove_loop {
-            push_skipped_results(&mut results, &self.elaborated, lemma_filter);
+            results = skipped_results(&self.elaborated, lemma_filter);
             // HS emits the `Theory closed` marker after `closeTheory`
             // finishes (TheoryLoader.hs:569-615, see line 596).  This site
             // covers the no-prove / precompute-only paths, which skip the
             // prove loop; the prove branch below emits it before its loop
             // instead.
-            self.closed_marker();
+            self.closed_marker(&pe_trace);
         } else {
             // Reuse the per-file maude handle.  The `maude tool: ...`
             // banner is printed once at the top of the batch run, matching HS.
-            let maude = self.file_maude.clone().ok_or_else(|| {
-                RunError(format!("failed to start maude at {:?}", self.maude_path))
-            })?;
+            let maude = self.require_maude()?;
 
             // Per-lemma proof loop.
             //
@@ -1668,40 +1725,17 @@ impl TheoryPipeline<'_> {
             // that would be ignored.
             let budget: usize = usize::MAX;
 
-            // Build the per-file shared prover session ONCE.  Profile
-            // showed that constructing a fresh `ProofContext` per lemma
-            // re-ran ~3s of file-level setup (intruder rules, Maude
-            // variants, `precompute_full_sources`) per lemma; HS does
-            // this work once at theory-close time.  `ProverSession`
-            // captures it once; each lemma clones the cheap template
-            // and runs only the per-lemma `ensure_saturated`
-            // refinement against its own typing assumptions.
+            // Each lemma clones the session's cheap template and runs only
+            // the per-lemma `ensure_saturated` refinement against its own
+            // typing assumptions.
             //
-            // Fall-through path: if `ProverSession::build` errors we
+            // Fall-through path: if `build_prover_session` errors we
             // fall back to the per-lemma `prove_lemma_with_pool` path
             // (which re-runs the setup per lemma but is more tolerant
             // of theories where elaboration fails on a subset of
             // lemmas).  Almost never hits in practice.
-            //
-            // CLI `--heuristic`/`--oraclename`/`--oracle-only` (HS
-            // `AutoProver` via `constructAutoProver`, TheoryLoader.hs:702-706).
-            // When `--heuristic` is given it OVERRIDES the per-lemma / theory
-            // heuristic for every lemma (HS `selectHeuristic`, Proof.hs:705-716, see line 707).
-            let cli_heuristic = tamarin_theory::prove::CliHeuristic {
-                raw: self.opts.heuristic.clone(),
-                oracle_name: self.opts.oracle_name.clone(),
-                oracle_only: self.opts.oracle_only,
-            };
-            let session = tamarin_theory::prove::ProverSession::build_with_in_file_and_heuristic(
-                &self.parsed,
-                maude.clone(),
-                self.file_maude_pool.clone(),
-                in_file,
-                cli_heuristic.clone(),
-                self.cut,
-                self.ndc_cache.as_ref(),
-            )
-            .ok();
+            let cli_heuristic = self.cli_heuristic();
+            let session = self.build_prover_session(maude.clone()).ok();
 
             // HS prints "[Theory X] Theory closed" right after `closeTheory`
             // (TheoryLoader.hs:569-615, see line 596) and BEFORE the proof search, which it
@@ -1710,7 +1744,7 @@ impl TheoryPipeline<'_> {
             // `ProverSession::build` is the `closeTheory` analog, so emit the
             // marker here (before the prove loop) to match HS's observable
             // stderr order.
-            self.closed_marker();
+            self.closed_marker(&pe_trace);
 
             let parsed = &self.parsed;
             let elaborated = &self.elaborated;
@@ -1910,7 +1944,7 @@ impl TheoryPipeline<'_> {
                 // auto-proves.  If the session failed to build, keep the
                 // no-solver behaviour instead of launching searches nobody
                 // asked for.
-                push_skipped_results(&mut results, elaborated, lemma_filter);
+                results = skipped_results(elaborated, lemma_filter);
             } else {
                 for l in elaborated.lemmas() {
                     let (pl, lr, tr) = run_lemma(l);
@@ -2006,13 +2040,17 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         usize,
     )> = Vec::new();
 
+    // The maude binary this run invokes is argv-constant, and resolving the
+    // default probes the filesystem — resolve it ONCE here and lend it to the
+    // version check and to every file's pipeline state.
+    let maude_path = maude_invocation_path(args);
+
     // The Maude version is constant for the whole run, but detecting it
     // spawns a `maude --version` subprocess.  Detect it ONCE here — from the
     // binary this run will actually invoke — and reuse the cached value for
     // both the banner and every file's `BuildInfo`, avoiding one
     // `maude --version` subprocess per file.
-    let maude_version: Option<String> =
-        crate::cli::detect_maude_version_at(&maude_invocation_path(args));
+    let maude_version: Option<String> = crate::cli::detect_maude_version_at(&maude_path);
 
     // HS prints the maude tool + version banner ONCE at the top of the
     // batch run (`Main.Console.argExists` path).  Mirror that here:
@@ -2021,7 +2059,10 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     // never starts Maude (Batch.hs:91-95), so the banner is skipped there;
     // `--quiet` does NOT suppress it (see `Args::quiet`).
     if !args.parse_only {
-        print_maude_banner(&maude_display_name(args), maude_version.as_deref());
+        print_maude_banner(
+            &maude_display_name(args, &maude_path),
+            maude_version.as_deref(),
+        );
     }
 
     // The deferred `mkTheoryLoadOptions` argument checks (HS forces the
@@ -2310,6 +2351,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         let mut st = TheoryPipeline {
             args,
             opts: &opts,
+            translate_module,
             in_file: in_file.as_str(),
             theory_name,
             parsed,
@@ -2319,20 +2361,19 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             cut,
             auto_sources,
             restriction_frees,
-            maude_path: args.maude_path.clone().unwrap_or_else(default_maude_path),
+            maude_path: &maude_path,
             file_maude: None,
             file_maude_pool: None,
             ndc_cache: None,
             ndc_funs: Vec::new(),
-            pe_trace: String::new(),
         };
 
-        let (print_opts, _sapic_funs_guard) = match st.translate_theory(translate_module) {
+        let (print_opts, _sapic_funs_guard) = match st.translate_theory() {
             Ok(v) => v,
             Err(code) => return Ok(code),
         };
 
-        st.check_translated_theory(translate_module.is_some());
+        st.check_translated_theory();
 
         // `--quit-on-warning` (HS `withVersionAndReport`, TheoryLoader.hs:
         // 643-660, see line 656): a non-empty report throws `WarningError`
@@ -2346,7 +2387,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // `die`s on stderr — exit 1, NO theory output, NO summary.
         if opts.quit_on_warning && !st.wf_report.is_empty() {
             if translate_module.is_none() {
-                theory_marker(&st.theory_name, "Theory closed");
+                st.marker("Theory closed");
             }
             let mut rep = tamarin_theory::pretty_theory::render_wf_error_report(&st.wf_report);
             while rep.ends_with('\n') {
@@ -2368,8 +2409,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 // `closeTranslatedTheory`'s `proveTheory` entirely
                 // (TheoryLoader.hs:768-781) — so every lemma is a skipped
                 // summary row.
-                let mut results: Vec<LemmaResult> = Vec::new();
-                push_skipped_results(&mut results, &st.elaborated, &opts.lemma_names);
+                let results = skipped_results(&st.elaborated, &opts.lemma_names);
 
                 // Translate-only render (`prettyOpenTheoryByModule`,
                 // TheoryLoader.hs:783-801, followed by `withVersionAndReport`'s
@@ -2429,24 +2469,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     // session (the `closeTheory` analog) here — in-loop, like HS's
                     // eager close — but defer forcing the sources to the print
                     // phase below, where HS's lazy renderDoc forces them.
-                    let maude = st.file_maude.clone().ok_or_else(|| {
-                        RunError(format!("failed to start maude at {:?}", st.maude_path))
-                    })?;
-                    let cli_heuristic = tamarin_theory::prove::CliHeuristic {
-                        raw: opts.heuristic.clone(),
-                        oracle_name: opts.oracle_name.clone(),
-                        oracle_only: opts.oracle_only,
-                    };
-                    let session =
-                        tamarin_theory::prove::ProverSession::build_with_in_file_and_heuristic(
-                            &st.parsed,
-                            maude,
-                            st.file_maude_pool.clone(),
-                            in_file,
-                            cli_heuristic,
-                            st.cut,
-                            st.ndc_cache.as_ref(),
-                        )
+                    let maude = st.require_maude()?;
+                    let session = st
+                        .build_prover_session(maude)
                         .map_err(|e| RunError(e.to_string()))?;
                     let wf_len = st.wf_report.len();
                     precompute_pending.push((session, st.parsed, wf_len));
@@ -2616,26 +2641,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     }
 
     Ok(overall_status)
-}
-
-/// Run `annotate_loop_breakers` over the theory's rules, in place and in
-/// source order.  Used by the first close (mirroring the breaker pass of HS
-/// `closeTheoryWithMaude`) and again by the `--partial-evaluation` re-close
-/// (`applyPartialEvaluation`'s second `closeTheoryWithMaude`, Prover.hs:240).
-fn annotate_theory_loop_breakers(
-    elaborated: &mut tamarin_theory::theory::Theory,
-    m: &tamarin_term::maude_proc::MaudeHandle,
-) {
-    use tamarin_theory::theory::TheoryItem;
-    let mut rules: Vec<&mut tamarin_theory::theory::OpenProtoRule> = elaborated
-        .items
-        .iter_mut()
-        .filter_map(|i| match i {
-            TheoryItem::Rule(r) => Some(r),
-            _ => None,
-        })
-        .collect();
-    tamarin_theory::constraint::solver::context::annotate_loop_breakers(&mut rules, m);
 }
 
 /// Install rayon's global worker pool to the size requested via

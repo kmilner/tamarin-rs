@@ -49,7 +49,6 @@ use tamarin_term::function_symbols::{FunSym, NdcState, Privacy};
 use tamarin_term::lterm::{HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::rewriting::Equal;
-use tamarin_term::subst::apply_vterm;
 use tamarin_term::subst_vfresh::LNSubstVFresh;
 use tamarin_term::term::Term;
 
@@ -57,8 +56,8 @@ use crate::constraint::solver::context::IntrRuleCache;
 use crate::fact::{Fact, FactTag, LNFact, Multiplicity};
 use crate::guarded::Guarded;
 use crate::rule::{
-    get_conc_fact, get_deconstr_rule_kd_prem, get_deconstr_rule_prems_tail,
-    get_destr_rule_function, IntrRuleAC, IntrRuleACInfo, Rule,
+    apply_subst_rule, get_conc_fact, get_deconstr_rule_kd_prem, get_deconstr_rule_prems_tail,
+    get_destr_rule_function, IntrRuleAC, IntrRuleACInfo,
 };
 
 // =============================================================================
@@ -280,20 +279,6 @@ fn msg_to_fresh_terms(t: &LNTerm) -> LNTerm {
         Term::Lit(_) => t.clone(),
         Term::App(f, args) => Term::App(*f, args.iter().map(msg_to_fresh_terms).collect()),
     }
-}
-
-/// Apply a free substitution to every term of a fact, keeping tag and
-/// annotations.
-fn apply_subst_fact(
-    sigma: &tamarin_term::subst::Subst<tamarin_term::lterm::Name, LVar>,
-    f: &LNFact,
-) -> LNFact {
-    let terms: Vec<LNTerm> = f
-        .terms
-        .iter()
-        .map(|t| apply_vterm(sigma, t.clone()))
-        .collect();
-    Fact::fresh_annotated(f.tag, f.annotations.clone(), terms)
 }
 
 /// HS `newRules` (CloseRule.hs:257-262): the `Out0` source rule for one
@@ -692,29 +677,6 @@ impl<'a> BoundToOneCache<'a> {
                     .collect::<Vec<_>>(),
             )
         })
-    }
-}
-
-/// Apply a free substitution to every fact (and new-var term) of a rule.
-/// `info` is untouched — HS's `Apply` instances for the rule-info types are
-/// the identity (`Apply s ProtoRuleEInfo = id`, Rule.hs:500-501), so a
-/// refined `ProtoRuleE` keeps its original restriction frees unsubstituted.
-pub(crate) fn apply_subst_rule<I: Clone>(
-    sigma: &tamarin_term::subst::Subst<tamarin_term::lterm::Name, LVar>,
-    r: &Rule<I>,
-) -> Rule<I> {
-    let app_facts =
-        |fs: &[LNFact]| -> Vec<LNFact> { fs.iter().map(|f| apply_subst_fact(sigma, f)).collect() };
-    Rule {
-        info: r.info.clone(),
-        premises: app_facts(&r.premises),
-        conclusions: app_facts(&r.conclusions),
-        actions: app_facts(&r.actions),
-        new_vars: r
-            .new_vars
-            .iter()
-            .map(|t| apply_vterm(sigma, t.clone()))
-            .collect(),
     }
 }
 

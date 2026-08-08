@@ -2591,7 +2591,7 @@ fn render_rule(
     let (mut out, premises, actions, conclusions) = render_rule_e_block(parsed_rule, arity1);
 
     // `elab_rule` is the elaborated counterpart of `parsed_rule`, resolved
-    // by the caller's positional pairing (`nth_rule_named`) — it decides
+    // by the caller's positional pairing (`pair_elaborated_rules`) — it decides
     // between "trivial AC variant" and the full `/* rule (modulo AC) ... */`
     // block.  HS-faithful: matches `prettyClosedProtoRule`
     // (ClosedTheory.hs:332-363).

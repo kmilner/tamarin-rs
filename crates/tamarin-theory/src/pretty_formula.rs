@@ -461,30 +461,21 @@ fn ln_rule_body_to_doc(
 /// `c`/`d` prefix for Constr/Destr, fixed lowercase keywords otherwise, all
 /// wrapped in `prefixIfReserved` (prepend `_` for reserved names / names
 /// already starting with `_`).
-fn intr_rule_name(r: &crate::rule::IntrRuleAC) -> String {
-    use crate::rule::IntrRuleACInfo;
-    let prefix_if_reserved = |n: String| -> String {
-        const RESERVED: [&str; 7] = [
-            "Fresh",
-            "irecv",
-            "isend",
-            "coerce",
-            "fresh",
-            "pub",
-            "iequality",
-        ];
-        if RESERVED.contains(&n.as_str()) || n.starts_with('_') {
-            format!("_{}", n)
-        } else {
-            n
-        }
-    };
-    match &r.info {
+///
+/// Also the intruder half of the DOT node labels' rule case name
+/// (`constraint::system::dot`, HS `showDotRuleCaseName`), which renders the
+/// same function.
+pub(crate) fn intr_rule_name(info: &crate::rule::IntrRuleACInfo) -> String {
+    use crate::rule::{prefix_if_reserved, IntrRuleACInfo};
+    match info {
+        // ConstrRule/DestrRule names already carry a leading `_` (e.g.
+        // `_exp`), so the Haskell `'c' : name` yields e.g. `c_exp` (a single
+        // underscore), and `prefixIfReserved` is applied on top.
         IntrRuleACInfo::ConstrRule { name, .. } => {
-            prefix_if_reserved(format!("c{}", String::from_utf8_lossy(name)))
+            prefix_if_reserved(&format!("c{}", String::from_utf8_lossy(name)))
         }
         IntrRuleACInfo::DestrRule { name, .. } => {
-            prefix_if_reserved(format!("d{}", String::from_utf8_lossy(name)))
+            prefix_if_reserved(&format!("d{}", String::from_utf8_lossy(name)))
         }
         IntrRuleACInfo::IRecv => "irecv".to_string(),
         IntrRuleACInfo::ISend => "isend".to_string(),
@@ -509,7 +500,7 @@ pub fn pretty_intruder_variants(rules: &[crate::rule::IntrRuleAC]) -> String {
         .map(|r| {
             // HS `prettyNamedRule` header: `kwRuleModulo "AC" <-> name <> ":"`.
             let header = crate::pretty_hpj::kw_rule_modulo("AC")
-                .beside_sp(Doc::text(intr_rule_name(r)))
+                .beside_sp(Doc::text(intr_rule_name(&r.info)))
                 .beside(Doc::text(":"));
             // Render header and body separately (as `render_rule` does): the
             // header is one logical line, the body starts fresh at `nest 2`.

@@ -513,6 +513,21 @@ pub fn is_nearly_trivial_ac_ku_fact(fa: &LNFact) -> bool {
 
 pub type LNFact = Fact<LNTerm>;
 
+/// HS `instance Apply s t => Apply s (Fact t)` (Fact.hs:196-197,
+/// `apply subst = fmap (apply subst)`): a free substitution applied to every
+/// term of a fact, tag and annotations kept.
+pub(crate) fn apply_subst_fact(
+    sigma: &tamarin_term::subst::Subst<tamarin_term::lterm::Name, LVar>,
+    f: &LNFact,
+) -> LNFact {
+    let terms: Vec<LNTerm> = f
+        .terms
+        .iter()
+        .map(|t| tamarin_term::subst::apply_vterm(sigma, t.clone()))
+        .collect();
+    Fact::fresh_annotated(f.tag, f.annotations.clone(), terms)
+}
+
 // LNFact producers: route through the bloom-COMPUTING
 // `Fact::fresh` so the dominant node/action-fact skip fires.
 pub fn fresh_fact(t: LNTerm) -> LNFact {

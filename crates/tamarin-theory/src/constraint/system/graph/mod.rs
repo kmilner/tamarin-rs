@@ -13,7 +13,10 @@
 //! - [`repr`]         -> `GraphRepr.hs`
 //! - [`simplify`]     -> `Simplification.hs`
 //! - [`abbreviation`] -> `Abbreviation.hs`
-//! - [`options`]      -> the `Graph.hs` `GraphOptions` record.
+//! - [`options`]      -> the `Graph.hs` `GraphOptions` record (reading it out
+//!                       of a web request's query parameters is HS
+//!                       `getOptions`, `Web/Handler.hs`, and stays in
+//!                       `tamarin-server`).
 //!
 //! and [`color`] holds the `nodeColorMap` palette both renderers key node
 //! fills off (`Dot.hs`).
@@ -30,12 +33,15 @@ pub use render_system::RenderSystem;
 pub use abbreviation::{
     apply_abbreviations_fact, compute_abbreviations, AbbreviationOptions, Abbreviations,
 };
-pub use options::{graph_options_from_params, graph_options_from_query, GraphOptions};
+pub use options::GraphOptions;
 pub use repr::{
-    add_cluster_by_role, add_intelligent_cluster_using_similar_names, compute_basic_graph_repr,
-    Cluster, GEdge, GNode, GraphRepr, MissingHint, NodeType,
+    add_cluster_by_role, add_intelligent_cluster_using_similar_names, Cluster, GEdge, GNode,
+    GraphRepr, MissingHint, NodeType,
 };
 pub use simplify::{compress_system, simplify_system, SimplificationLevel};
+
+// `Graph.hs` builds on `computeBasicGraphRepr` without exporting it.
+use repr::compute_basic_graph_repr;
 
 use crate::constraint::system::System;
 

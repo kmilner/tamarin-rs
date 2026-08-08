@@ -182,32 +182,10 @@ pub fn proof_status(node: &ProofNode) -> ProofStatus {
 /// [`set_keep_solved_sys`] was enabled beforehand; on the stored-proof
 /// replay path (`replay::check_and_extend_lemma_in_session`) they are
 /// always live.
-pub fn solved_systems(node: &ProofNode) -> Vec<(Vec<String>, &System)> {
-    let mut out = Vec::new();
-    let mut path = Vec::new();
-    collect_solved_systems(node, &mut path, &mut out);
-    out
-}
-
-fn collect_solved_systems<'a>(
-    node: &'a ProofNode,
-    path: &mut Vec<String>,
-    out: &mut Vec<(Vec<String>, &'a System)>,
-) {
-    if matches!(node.method, ProofMethod::Finished(MethodResult::Solved)) && node.annotated {
-        out.push((path.clone(), &node.sys));
-        return;
-    }
-    for (case, child) in &node.children {
-        path.push(case.clone());
-        collect_solved_systems(child, path, out);
-        path.pop();
-    }
-}
-
-/// Consuming variant of [`solved_systems`]: takes the tree by value so
-/// callers that are done rendering it can move the solved `System`s out
-/// instead of cloning them.  Same DFS, same order, same selection.
+///
+/// The tree is taken BY VALUE: the only caller reaches here once the proof
+/// body has been rendered, so the solved `System`s are moved out rather
+/// than cloned.
 pub fn into_solved_systems(node: ProofNode) -> Vec<(Vec<String>, System)> {
     let mut out = Vec::new();
     let mut path = Vec::new();
@@ -1798,16 +1776,16 @@ mod tests {
         )
     }
 
-    fn walk(root: &ProofNode) -> Vec<(Vec<String>, usize)> {
-        solved_systems(root)
+    fn walk(root: ProofNode) -> Vec<(Vec<String>, usize)> {
+        into_solved_systems(root)
             .into_iter()
-            .map(|(p, s)| (p, sys_tag(s)))
+            .map(|(p, s)| (p, sys_tag(&s)))
             .collect()
     }
 
     #[test]
     fn solved_systems_root_leaf_yields_empty_path() {
-        assert_eq!(walk(&solved(3)), vec![(Vec::<String>::new(), 3)]);
+        assert_eq!(walk(solved(3)), vec![(Vec::<String>::new(), 3)]);
     }
 
     #[test]
@@ -1839,7 +1817,7 @@ mod tests {
             true,
         );
         assert_eq!(
-            walk(&root),
+            walk(root),
             vec![
                 (vec![String::new(), "k".to_string()], 5),
                 (vec!["case_1".to_string(), "a".to_string()], 1),
@@ -1863,7 +1841,7 @@ mod tests {
         );
         let root = node(ProofMethod::Simplify, 9, vec![("a", unannotated)], true);
         assert_eq!(
-            walk(&root),
+            walk(root),
             vec![(vec!["a".to_string(), "c".to_string()], 6)]
         );
         // A childless unannotated solved node contributes nothing.
@@ -1873,7 +1851,7 @@ mod tests {
             Vec::new(),
             false,
         );
-        assert!(walk(&bare).is_empty());
+        assert!(walk(bare).is_empty());
     }
 
     #[test]
@@ -1887,7 +1865,7 @@ mod tests {
             vec![("a", solved(2)), ("b", solved(3))],
             true,
         );
-        assert_eq!(walk(&root), vec![(Vec::<String>::new(), 1)]);
+        assert_eq!(walk(root), vec![(Vec::<String>::new(), 1)]);
     }
 
     #[test]
@@ -1910,7 +1888,7 @@ mod tests {
             ],
             true,
         );
-        assert!(walk(&root).is_empty());
+        assert!(walk(root).is_empty());
     }
 
     #[test]
@@ -1932,7 +1910,7 @@ mod tests {
         assert!(drop_sys_after_expand(&simplify, false, true));
         assert!(drop_sys_after_expand(&contradictory, false, true));
         // An unannotated solved node still counts here — `expand` never
-        // produces one, and `solved_systems` filters it out anyway.
+        // produces one, and `into_solved_systems` filters it out anyway.
         let unannotated = node(
             ProofMethod::Finished(MethodResult::Solved),
             1,

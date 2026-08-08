@@ -34,9 +34,10 @@
 //!     with no fill/font/role attrs. The label is `show v : showDotRuleCaseName
 //!     ru` when the node has an outgoing edge (`hasOutgoingEdge`, Dot.hs:280-283,
 //!     over the TOP-LEVEL `grEdges` only), else the full rule label incl. the
-//!     bracketed action row. The `uncompact`/`FullBoringNodes` toggle is not
-//!     plumbed through the RS handler (see `graph/options.rs`), so this route is
-//!     always compact — matching the HS default (`defaultDotOptions`, Dot.hs:81-84, see line 82).
+//!     bracketed action row. The `uncompact`/`FullBoringNodes` toggle belongs
+//!     to HS `DotOptions`, which RS has no counterpart for, so this renderer
+//!     is always compact — matching the HS default (`defaultDotOptions`,
+//!     Dot.hs:81-84, see line 82).
 //!   * SERIALIZATION form only (normalised away by the parse-and-compare gate):
 //!     protocol-rule RECORD labels use RS port ids `<p0>`/`<c0>` and spaced
 //!     `{ .. } | .. | { .. }` bracketing, where HS's `Text.Dot.renderRecord`
@@ -81,7 +82,8 @@
 // `has_outgoing` / `port_owner_ids` / `used_dot_ids` (`.contains` / `.insert`
 // dedup).  DOT output ORDER is driven by iterating the ordered
 // `repr.nodes` / `repr.edges` Vecs; these maps/sets are never iterated into
-// output.  Also off the batch `--prove` byte-parity surface (server graph UI).
+// output, so their iteration order — the one thing that differs from the
+// ordered std types — cannot reach the `--output-dot` bytes.
 // std kept (byte-inert).
 #![allow(clippy::disallowed_types)]
 
@@ -92,7 +94,7 @@ use crate::constraint::constraints::LessAtom;
 use crate::constraint::system::System;
 use crate::fact::{FactTag, LNFact};
 use crate::pretty_hpj::{self, Doc, WEB_LINE_LENGTH, WEB_RIBBON};
-use crate::rule::{rule_name_string, IntrRuleACInfo, ProtoRuleName, RuleACInst, RuleInfo};
+use crate::rule::{prefix_if_reserved, rule_name_string, ProtoRuleName, RuleACInst, RuleInfo};
 use tamarin_term::lterm::{LNTerm, LVar};
 use tamarin_term::pretty::pretty_lnterm;
 // `fix_multi_line_label` is HS `fixMultiLineLabel` (Text/Dot.hs:355-363),
@@ -101,7 +103,7 @@ use tamarin_term::pretty::pretty_lnterm;
 // replaced 1:1 by `&nbsp;` and is re-joined with `unlines` — which appends a
 // TRAILING newline (→ a trailing `\l` after `showAttr`).  Single-line labels
 // pass through untouched.
-use tamarin_utils::dot::{escape_dot_graph_label, fix_multi_line_label};
+use tamarin_utils::dot::{escape_dot_graph_label, escape_record, fix_multi_line_label};
 
 use crate::constraint::system::graph::abbreviation::{
     apply_abbreviations_fact, order_abbreviations_for_json, Abbreviations,
@@ -671,29 +673,21 @@ impl DotBuilder {
                 "{{{}}}",
                 ps.iter()
                     .enumerate()
-                    .map(|(i, s)| format!(
-                        "<p{}> {}",
-                        i,
-                        escape_record_field(&fix_multi_line_label(s))
-                    ))
+                    .map(|(i, s)| format!("<p{}> {}", i, escape_record(&fix_multi_line_label(s))))
                     .collect::<Vec<_>>()
                     .join("|")
             ));
         }
         rows.push(format!(
             "{{{}}}",
-            escape_record_field(&fix_multi_line_label(&mid))
+            escape_record(&fix_multi_line_label(&mid))
         ));
         if !cs.is_empty() {
             rows.push(format!(
                 "{{{}}}",
                 cs.iter()
                     .enumerate()
-                    .map(|(i, s)| format!(
-                        "<c{}> {}",
-                        i,
-                        escape_record_field(&fix_multi_line_label(s))
-                    ))
+                    .map(|(i, s)| format!("<c{}> {}", i, escape_record(&fix_multi_line_label(s))))
                     .collect::<Vec<_>>()
                     .join("|")
             ));
@@ -1137,7 +1131,8 @@ fn rule_case_name(ru: &RuleACInst) -> String {
             }
             ProtoRuleName::Fresh => "Fresh".to_string(),
         },
-        RuleInfo::Intr(i) => intr_case_name(i),
+        // `prettyIntrRuleACInfo`, shared with the intruder-variants printer.
+        RuleInfo::Intr(i) => crate::pretty_formula::intr_rule_name(i),
     }
 }
 
@@ -1158,39 +1153,6 @@ fn trim_sapic_name(name: &str) -> String {
         }
     }
     name.to_string()
-}
-
-fn intr_case_name(i: &IntrRuleACInfo) -> String {
-    // Mirror Haskell `prettyIntrRuleACInfo` (Theory/Model/Rule.hs:1225-1234).
-    // Note: ConstrRule/DestrRule names already carry a leading `_` (e.g.
-    // `_exp`), so the Haskell `'c' : name` yields e.g. `c_exp` (a single
-    // underscore), then `prefixIfReserved` is applied.
-    match i {
-        IntrRuleACInfo::IRecv => "irecv".into(),
-        IntrRuleACInfo::ISend => "isend".into(),
-        IntrRuleACInfo::Coerce => "coerce".into(),
-        IntrRuleACInfo::FreshConstr => "fresh".into(),
-        IntrRuleACInfo::PubConstr => "pub".into(),
-        IntrRuleACInfo::NatConstr => "nat".into(),
-        IntrRuleACInfo::IEquality => "iequality".into(),
-        IntrRuleACInfo::ConstrRule { name, .. } => {
-            prefix_if_reserved(&format!("c{}", String::from_utf8_lossy(name)))
-        }
-        IntrRuleACInfo::DestrRule { name, .. } => {
-            prefix_if_reserved(&format!("d{}", String::from_utf8_lossy(name)))
-        }
-    }
-}
-
-/// Mirror Haskell `prefixIfReserved` (Theory/Model/Rule.hs:1154-1162):
-/// prefixes with `_` if the name is reserved or already starts with `_`.
-fn prefix_if_reserved(n: &str) -> String {
-    use crate::rule::reserved_rule_names;
-    if reserved_rule_names().contains(n) || n.starts_with('_') {
-        format!("_{}", n)
-    } else {
-        n.to_string()
-    }
 }
 
 /// HS `ruleColor'` (Dot.hs:248-253): `rgbToHex` of the proto rule's explicit
@@ -1369,31 +1331,12 @@ fn role_color(name: &str) -> String {
     )
 }
 
-/// Escape a record FIELD's text, mirroring HS `Text.Dot.renderRecord`'s
-/// `escape` (Text/Dot.hs:273-280): exactly the record metacharacters
-/// `| { } < >` get a backslash — NOT `"` / `\` / newline, which are handled
-/// once at the attribute level by `showAttr` (see `escape_dot_label`).
-fn escape_record_field(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '|' => out.push_str("\\|"),
-            '{' => out.push_str("\\{"),
-            '}' => out.push_str("\\}"),
-            '<' => out.push_str("\\<"),
-            '>' => out.push_str("\\>"),
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
 /// Escape a Graphviz attribute VALUE, mirroring HS `Text.Dot.showAttr`
 /// (Text/Dot.hs:346-353): only `"` (→ `\"`) and newline (→ `\l`, graphviz's
 /// left-justified line break) are escaped.  This is the LAST escaping pass
 /// for every label — plain ellipse labels (where record metacharacters
 /// `{ } | < >` must stay literal) and record labels (whose field text was
-/// already record-escaped by `escape_record_field`) alike.
+/// already record-escaped by [`escape_record`]) alike.
 fn escape_dot_label(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {

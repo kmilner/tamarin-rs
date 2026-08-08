@@ -168,7 +168,10 @@ pub fn apply_sapic(
     //                 the appended `Restr_*` actions are present).
     for (rule, restr_formulas) in &translation.rules {
         // Synthesise the parser-AST rule, carrying the embedded restrictions.
-        let mut parsed_rule = synth_parsed_rule(rule);
+        // `proto_rule_to_parsed` projects the elaborated E-rule back to parser
+        // facts and carries color / process / no_derivcheck / issapicrule /
+        // role exactly as HS's `toRule` produced them.
+        let mut parsed_rule = tamarin_theory::pretty_theory::proto_rule_to_parsed(rule);
         parsed_rule.embedded_restrictions = restr_formulas.clone();
 
         // HS `foldM liftedAddProtoRule th (map (`OpenProtoRule` []) eProtoRule)`
@@ -183,7 +186,7 @@ pub fn apply_sapic(
         // existing `ElabError` channel.  (Generated rules never collide with
         // each other — their names encode unique process positions — and never
         // compare equal to a user rule: the parser drops `process=` attributes
-        // while `synth_parsed_rule` keeps them.)
+        // while `proto_rule_to_parsed` keeps them.)
         if let Some(prev) = parsed.items.iter().find_map(|i| match i {
             p::TheoryItem::Rule(r) if r.name == parsed_rule.name => Some(r),
             _ => None,
@@ -301,13 +304,4 @@ fn reelaborate_rule_body(
         tamarin_theory::rule::Rule::new(original.info.clone(), prems, concs, acts)
             .with_new_vars(new_vars),
     )
-}
-
-/// Build the synthetic parsed-AST rule for a SAPIC-generated `ProtoRuleE`:
-/// the shared `ProtoRuleE` → `p::Rule` projection, whose body is the
-/// elaborated E-rule converted back to parser facts and whose attributes
-/// carry color / process / no_derivcheck / issapicrule / role exactly as HS's
-/// `toRule` produced them.
-fn synth_parsed_rule(rule: &ProtoRuleE) -> p::Rule {
-    tamarin_theory::pretty_theory::proto_rule_to_parsed(rule)
 }

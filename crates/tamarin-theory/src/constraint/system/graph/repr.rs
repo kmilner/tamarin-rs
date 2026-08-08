@@ -130,14 +130,7 @@ pub fn rule_name_by_node(n: &GNode) -> Option<String> {
     if let NodeType::System(ru) = &n.ty {
         if let RuleInfo::Proto(p) = &ru.info {
             return Some(match &p.name {
-                ProtoRuleName::Stand(s) => {
-                    let reserved = crate::rule::reserved_rule_names();
-                    if reserved.contains(s) || s.starts_with('_') {
-                        format!("_{s}")
-                    } else {
-                        s.to_string()
-                    }
-                }
+                ProtoRuleName::Stand(s) => crate::rule::prefix_if_reserved(s),
                 ProtoRuleName::Fresh => "Fresh".to_string(),
             });
         }
@@ -146,7 +139,8 @@ pub fn rule_name_by_node(n: &GNode) -> Option<String> {
 }
 
 /// Mirror of `groupBySimilarName` — group nodes by their rule's base name.
-pub fn group_by_similar_name<'a>(nodes: &'a [GNode]) -> BTreeMap<String, Vec<&'a GNode>> {
+/// Module-private, as in `GraphRepr.hs`.
+fn group_by_similar_name<'a>(nodes: &'a [GNode]) -> BTreeMap<String, Vec<&'a GNode>> {
     let mut out: BTreeMap<String, Vec<&'a GNode>> = BTreeMap::new();
     for n in nodes {
         if let Some(rn) = rule_name_by_node(n) {
@@ -159,8 +153,9 @@ pub fn group_by_similar_name<'a>(nodes: &'a [GNode]) -> BTreeMap<String, Vec<&'a
 }
 
 /// Filter edges keeping only those whose endpoints are both in `node_ids`.
-/// Mirror of `filterEdgesForCluster`.
-pub fn filter_edges_for_cluster(node_ids: &BTreeSet<NodeId>, edges: &[GEdge]) -> Vec<GEdge> {
+/// Mirror of `filterEdgesForCluster`, which `GraphRepr.hs` keeps
+/// module-private.
+fn filter_edges_for_cluster(node_ids: &BTreeSet<NodeId>, edges: &[GEdge]) -> Vec<GEdge> {
     edges
         .iter()
         .filter(|e| match e {
@@ -174,11 +169,9 @@ pub fn filter_edges_for_cluster(node_ids: &BTreeSet<NodeId>, edges: &[GEdge]) ->
 }
 
 /// Group `nodes` into weakly-connected components under the projection
-/// from `edges`.  Mirror of `findConnectedComponents`.
-pub fn find_connected_components<'a>(
-    nodes: &'a [&'a GNode],
-    edges: &[GEdge],
-) -> Vec<Vec<&'a GNode>> {
+/// from `edges`.  Mirror of `findConnectedComponents`, which `GraphRepr.hs`
+/// keeps module-private.
+fn find_connected_components<'a>(nodes: &'a [&'a GNode], edges: &[GEdge]) -> Vec<Vec<&'a GNode>> {
     // Build undirected adjacency.  Mirror of `expandCluster`, which walks
     // ONLY `SystemEdge`s for connectivity — `LessEdge`/`UnsolvedChain`
     // edges are not matched and so never join two nodes into one component.
@@ -259,7 +252,9 @@ fn edge_key(e: &GEdge) -> EdgeKey {
 ///
 /// `group` receives the nodes moved out of `repr` (grouping them in place would
 /// alias `repr.nodes`); their un-clustered remainder is put back at the end.
-pub fn add_cluster(
+/// Module-private, as in `GraphRepr.hs`: the two `addClusterBy*` wrappers are
+/// the exported entry points.
+fn add_cluster(
     repr: &mut GraphRepr,
     group: impl for<'a> Fn(&'a [GNode]) -> BTreeMap<String, Vec<&'a GNode>>,
     name_suffix: &str,
@@ -348,7 +343,10 @@ use crate::constraint::system::System;
 ///   - unsolved-action atoms (KU goals etc.),
 ///   - the optional last-atom node,
 ///   - missing nodes referenced by edges.
-pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
+///
+/// Crate-internal: `Graph.hs` keeps `computeBasicGraphRepr` out of its export
+/// list, exposing only `systemToGraph`.
+pub(crate) fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     let mut nodes: Vec<GNode> = Vec::new();
     // 1. System rule instances.
     // HS `systemNodes se = map systemNode (M.toList $ get Sys.sNodes se)`

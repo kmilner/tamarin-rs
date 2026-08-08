@@ -1452,6 +1452,32 @@ pub fn annotate_loop_breakers(
     }
 }
 
+/// Run [`annotate_loop_breakers`] over a theory's rules, in place and in
+/// source order.
+///
+/// Both front ends need the annotation on the theory they keep: the batch
+/// close (mirroring the breaker pass of HS `closeTheoryWithMaude`) and its
+/// `--partial-evaluation` re-close (`applyPartialEvaluation`'s second
+/// `closeTheoryWithMaude`, Prover.hs:240), and the web load path, whose
+/// rule/source/message renderers print HS's `// loop breaker: [<idx>]`
+/// comments.  Sharing one traversal keeps the two from drifting in which
+/// rules they hand the pass, and in what order.
+pub fn annotate_theory_loop_breakers(
+    theory: &mut crate::theory::Theory,
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+) {
+    use crate::theory::TheoryItem;
+    let mut rules: Vec<&mut OpenProtoRule> = theory
+        .items
+        .iter_mut()
+        .filter_map(|i| match i {
+            TheoryItem::Rule(r) => Some(r),
+            _ => None,
+        })
+        .collect();
+    annotate_loop_breakers(&mut rules, maude);
+}
+
 #[cfg(test)]
 mod tests {
     use super::IntrRuleCache;

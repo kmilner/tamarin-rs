@@ -3,7 +3,8 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
-use crate::fact::Fact;
+use crate::fact::{apply_subst_fact, Fact};
+use tamarin_term::subst::apply_vterm;
 use tamarin_term::vterm::var_term;
 
 /// KCL07's signature (examples/csf26-ac/fast/KCL07.spthy) plus a Seed

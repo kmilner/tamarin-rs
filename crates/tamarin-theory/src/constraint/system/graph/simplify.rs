@@ -466,7 +466,10 @@ pub fn simplify_system(level: SimplificationLevel, sys: RenderSystem) -> RenderS
 ///
 /// `total_red = True`  -> retain only `(x,y) ∈ transRed sLess`
 /// `total_red = False` -> retain `(x,y) ∈ transRed sLess` OR reason ∈ {Formula, Adversary}
-pub fn transitive_reduction(sys: RenderSystem, total_red: bool) -> RenderSystem {
+///
+/// Module-private, as in HS: `Simplification.hs` exports only
+/// `simplifySystem` and `compressSystem`.
+fn transitive_reduction(sys: RenderSystem, total_red: bool) -> RenderSystem {
     // Haskell: `oldLesses = rawLessRel sys`, used for BOTH `Dag.cyclic`
     // and `Dag.transRed` (Simplification.hs:61-74).  `rawLessRel se =
     // getLessRel sLessAtoms ++ rawEdgeRel se` (System.hs:1621-1622), and

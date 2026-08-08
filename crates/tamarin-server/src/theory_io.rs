@@ -264,19 +264,12 @@ pub fn load_from_source(
         // rules / source / message renderers emit HS's `// loop breaker: [<n>]`
         // comments — HS `prettyClosedProtoRule` reads them from the
         // `ProtoRuleACInfo` baked into every closed rule.  Our prover computes
-        // them inside `ProofContext::new` on a local copy; mirror `run.rs`'s
-        // CLI-side pass here on the load path (same in-place annotation in
-        // source order) so the byte-faithful `web_proto_rules` printer has them.
-        use tamarin_theory::theory::{OpenProtoRule, TheoryItem};
-        let mut rules: Vec<&mut OpenProtoRule> = typed
-            .items
-            .iter_mut()
-            .filter_map(|i| match i {
-                TheoryItem::Rule(r) => Some(r),
-                _ => None,
-            })
-            .collect();
-        tamarin_theory::constraint::solver::context::annotate_loop_breakers(&mut rules, &maude);
+        // them inside `ProofContext::new` on a local copy; run the same
+        // whole-theory pass `run.rs` runs on the CLI side so the
+        // byte-faithful `web_proto_rules` printer has them.
+        tamarin_theory::constraint::solver::context::annotate_theory_loop_breakers(
+            &mut typed, &maude,
+        );
 
         // Once-per-theory NDC pass (HS `checkCloseIntrRule` inside
         // `checkTranslatedTheory`, TheoryLoader.hs — BEFORE the

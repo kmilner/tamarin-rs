@@ -181,7 +181,7 @@ fn refine_rule(
                 // (each unifier alternative starts from the same value).
                 let mut c = counter.clone();
                 let sigma = s_fresh.fresh_to_free_avoiding(|n| c.fresh_idents(n));
-                out.push(crate::close_rule::apply_subst_rule(&sigma, ru));
+                out.push(crate::rule::apply_subst_rule(&sigma, ru));
             }
             return Ok(());
         }
@@ -505,7 +505,7 @@ pub(crate) fn abs_state_report(st: &BTreeSet<LNFact>, n_refined: usize, n_orig: 
 /// `annotate_loop_breakers` on the rewritten theory — HS's second
 /// `closeTheoryWithMaude`.  The parsed and elaborated refined rule items
 /// are inserted 1:1 in the same order, which is what keeps
-/// `pretty_theory::nth_rule_named`'s `(name, occurrence-ordinal)` pairing
+/// `pretty_theory::pair_elaborated_rules`'s `(name, occurrence-ordinal)` pairing
 /// aligned once partial evaluation makes rule names non-unique.
 ///
 /// Returns the stderr trace bytes to emit after the "Theory closed"

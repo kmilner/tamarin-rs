@@ -54,7 +54,9 @@ fn hidden_endpoint_graph(
     tgt_prem: LNFact,
     hidden: usize,
 ) -> (System, System, GEdge) {
-    use crate::rule::{ConcIdx, PremIdx, ProtoRuleACInstInfo, Rule, RuleAttributes, RuleInfo};
+    use crate::rule::{
+        ConcIdx, IntrRuleACInfo, PremIdx, ProtoRuleACInstInfo, Rule, RuleAttributes, RuleInfo,
+    };
     use tamarin_term::lterm::{LSort, LVar};
     let mk = |name: &'static str, prems: Vec<LNFact>, concs: Vec<LNFact>| {
         let info: RuleInfo<ProtoRuleACInstInfo, IntrRuleACInfo> =
@@ -443,21 +445,6 @@ fn dot_with_sl0_does_not_collapse_less() {
         dashed_sl0,
         dashed_sl3
     );
-}
-
-#[test]
-fn dot_query_params_select_simplification() {
-    // Smoke test for graph_options_from_query, matching HS `getOptions`
-    // (Handler.hs): the `simplification` param reads `SL0..SL3` via the
-    // derived `Read`, and `uncompress` presence turns compression off.
-    let opts = crate::constraint::system::graph::graph_options_from_query(
-        "simplification=SL3&uncompress=",
-    );
-    assert_eq!(
-        opts.simplification_level,
-        crate::constraint::system::graph::SimplificationLevel::SL3
-    );
-    assert!(!opts.compress);
 }
 
 #[test]

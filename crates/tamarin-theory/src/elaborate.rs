@@ -1541,7 +1541,7 @@ pub fn elaborate_lemma_attr(a: &p::LemmaAttr) -> LemmaAttr {
 /// This restores the SAPIC display attributes (role / color / issapicrule) onto
 /// the re-elaborated proving rules — HS's `toRule` bakes them straight into the
 /// `ProtoRuleE`, but the RS pipeline round-trips SAPIC rules through the parser
-/// AST (`apply_sapic`'s `synth_parsed_rule`) and re-elaborates the parser theory
+/// AST (`apply_sapic`'s `proto_rule_to_parsed`) and re-elaborates the parser theory
 /// for proving (`prove.rs`), so they must be re-read here.  Display-only: no
 /// solver / `--prove`-text path reads these fields (only the web graph renderer
 /// does), so populating them is `--prove`-inert.

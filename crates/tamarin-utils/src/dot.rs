@@ -12,8 +12,9 @@
 //! `tamarin-theory/src/constraint/system/dot.rs`, which backs
 //! both the interactive graph routes and `--output-dot` — emits its own
 //! dialect and only borrows this module's leaf helpers
-//! (`fix_multi_line_label`, [`escape_dot_graph_label`]). The builder API
-//! (`DotGraph`, records) has no consumer beyond this module's tests.
+//! (`fix_multi_line_label`, [`escape_dot_graph_label`], [`escape_record`]).
+//! The builder API (`DotGraph`, records) has no consumer beyond this module's
+//! tests.
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum NodeId {
@@ -409,7 +410,11 @@ fn record_label<P: Clone>(graph: &mut DotGraph, rec: &Record<P>) -> (String, Vec
     render(graph, rec, true)
 }
 
-fn escape_record(s: &str) -> String {
+/// `renderRecord`'s `escape` (Text/Dot.hs:273-280): the record
+/// metacharacters `| { } < >` get a backslash and NOTHING else does —
+/// `"` / `\` / newline are the attribute level's business (see
+/// [`escape_dot_graph_label`] and `write_attr`).
+pub fn escape_record(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {

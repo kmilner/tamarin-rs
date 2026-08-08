@@ -162,6 +162,36 @@ impl<I: Clone> HasFrees for Rule<I> {
     }
 }
 
+/// HS `instance Apply LNSubst i => Apply LNSubst (Rule i)` (Rule.hs:308-310):
+/// a free substitution applied to every fact and new-var term of a rule.
+///
+/// `info` is carried over untouched, which is what HS's `apply subst i` comes
+/// to for the info types this port instantiates: the `Apply` instances for
+/// `ProtoRuleEInfo` / `ProtoRuleACInstInfo` / `IntrRuleACInfo` are all the
+/// identity (Rule.hs:500-501, 517-518, 619-620).  So a refined `ProtoRuleE`
+/// keeps its original restriction frees unsubstituted.
+pub(crate) fn apply_subst_rule<I: Clone>(
+    sigma: &tamarin_term::subst::Subst<Name, LVar>,
+    r: &Rule<I>,
+) -> Rule<I> {
+    let app_facts = |fs: &[LNFact]| -> Vec<LNFact> {
+        fs.iter()
+            .map(|f| crate::fact::apply_subst_fact(sigma, f))
+            .collect()
+    };
+    Rule {
+        info: r.info.clone(),
+        premises: app_facts(&r.premises),
+        conclusions: app_facts(&r.conclusions),
+        actions: app_facts(&r.actions),
+        new_vars: r
+            .new_vars
+            .iter()
+            .map(|t| tamarin_term::subst::apply_vterm(sigma, t.clone()))
+            .collect(),
+    }
+}
+
 // =============================================================================
 // Premise / conclusion indices
 // =============================================================================
@@ -762,8 +792,9 @@ const RESERVED_RULE_NAMES: [&str; 7] = [
     "iequality",
 ];
 
-/// `RESERVED_RULE_NAMES` as a set — the cross-crate form, used by
-/// `tamarin-server`'s own `prefixIfReserved` mirrors.
+/// `RESERVED_RULE_NAMES` as a set.  The name check every renderer wants is
+/// [`prefix_if_reserved`]; this accessor exposes the bare list, and the unit
+/// test pins its contents through it.
 pub fn reserved_rule_names() -> BTreeSet<&'static str> {
     RESERVED_RULE_NAMES.into_iter().collect()
 }
