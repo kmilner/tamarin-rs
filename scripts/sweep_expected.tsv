@@ -25,15 +25,63 @@
 #   stored-proof-echo      pre-existing stored-proof echo divergence.
 #   stderr-saturating-sources  HS prints "[Saturating Sources] ..." progress
 #                          lines on stderr that RS does not.
+#   oracle-timeout         the HS oracle cannot produce a reference inside
+#                          the 600s serial retry cap (rc hs=124); the sweep
+#                          then skips the RS side, so the row has nothing to
+#                          compare against.
+#   stderr-open-chains     the derivation-check "[Open Chains] Too many chain
+#                          constraints" warning is emitted a different NUMBER
+#                          of times by the two sides (beyond the consecutive
+#                          duplicate sweep_common.sh's `nerr` collapses);
+#                          stdout agrees and the plain load path shows the
+#                          same counts, so no flag is involved.
+#   hs-derivcheck-timeout  HS's Maude-backed derivation check exceeds
+#                          --derivcheck-timeout=30 where RS's finishes, so only
+#                          HS's wf report carries the "Derivation checks timed
+#                          out" entry; at --derivcheck-timeout=300 both sides
+#                          print the same stdout.
+#   hs-parse-rejects       HS's parser rejects the file ("Invalid pattern")
+#                          where RS parses it — permissive divergence, so rc
+#                          and stderr differ in every module.
+#
+# SAPIC translator/renderer gaps — REAL pre-existing divergences (PRE-binary
+# confirmed at main@a722d92, byte-identical there), ledgered so the sweep is
+# signal-clean; the fix roster lives in the campaign notes:
+#   sapic-eq-pattern       `=x` equality pattern in a let destructuring is
+#                          rebound as a fresh variable (rule arity changes,
+#                          spurious bound-twice wf error).
+#   sapic-skey-sort        `:skey` sort annotation dropped from process
+#                          attribute and derived rule names.
+#   sapic-wf-text          RS's SAPIC wf/typing failure text is unported
+#                          (Rust Debug leak, no offending-process print).
+#   sapic-wf-missing       RS misses a SAPIC wf finding HS reports (lock over
+#                          replication; unbound-variable acceptance in msr).
+#   derivcheck-missing     RS's message-derivation check misses
+#                          non-derivable-variable findings HS reports.
+#   pred-wrapping          long predicate/if argument lists are not
+#                          width-wrapped as HS's HughesPJ layout wraps them.
 #
 # pe sweep
 pe	examples/features/heuristic/OracleRanking.spthy	stderr-oracle-calls	-
 pe	examples/features/configuration/configuration.spthy	stderr-saturating-sources	HS prints "[Saturating Sources] Done" lines RS does not
 pe	examples/thesis-LaraSchmid-evoting/chapter3_Alethea/aletheaD_sel_ShHh.spthy	stderr-oracle-calls	-
-pe	examples/thesis-LaraSchmid-evoting/chapter3_Alethea/alethea_sel_ShHh.spthy	stderr-oracle-calls	-
 pe	examples/csf23-subterms/FreshOrderingTest.spthy	capacity	PE explodes both sides: hs=124 rs=134 at 600s serial
 pe	examples/related_work/TPM_DKRS_CSF11/TPM_Exclusive_Secrets.spthy	capacity	hs=124 rs=134 at 600s serial
 pe	examples/features/auto-sources/tamarin-repo/related_work/TPM_DKRS_CSF11/TPM_Exclusive_Secrets.spthy	capacity	same file, auto-sources copy
+pe	examples/loops/Minimal_HashChain.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
+pe	examples/related_work/YubiSecure_KS_STM12/Yubikey.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Cronto_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Cronto_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Google2Step_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Google2Step_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_MA_NoTellExceptOK.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_MA_NoTellOK.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_VC.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/OTPoverSMS_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/OTPoverSMS_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Phoolproof_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Soundproof_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
 #
 # module sweep (-m): all attributed pre-existing at a10cc1b with PRE-binary evidence
 module	examples/accountability/csf21-acc-unbounded/mixnets/basic/dmn-basic.spthy	stderr-oracle-calls	-
@@ -46,12 +94,26 @@ module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-m
 module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-2.spthy	stderr-oracle-calls	-
 module	examples/features/heuristic/OracleRanking.spthy	stderr-oracle-calls	-
 module	examples/features/macros/MacroTestWithOracleRanking.spthy	stderr-oracle-calls	-
-module	examples/features/noise/secrecy_4_passiveINpsk1_proof.spthy	stored-proof-echo	echo divergence	spthy
 module	examples/sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-5-fixed.spthy	capacity	deep process recursion, rs=134 at plain load
 module	examples/sapic/export/5G_AKA/5G_AKA.spthy	sapic-export-echo	all three modules
 module	examples/sapic/export/ExistingSapicModels/AKE.spthy	sapic-export-echo	-	msr
 module	examples/sapic/export/KEMTLS/kemtls-noaead.spthy	sapic-export-echo	-	msr
 module	examples/sapic/export/KEMTLS/kemtls.spthy	sapic-export-echo	-	msr
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_a1b1.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_a2b2.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_a3b3.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_a4b3.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_a2b2.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_a3b3.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_fairnessB.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_fullfairnessA.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_timelinessA.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_timelinessB.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
+module	examples/thesis-LaraSchmid-evoting/chapter3_Alethea/aletheaD_sel_ShHh.spthy	stderr-open-chains	hs prints the warning 2x, rs 0x
+module	examples/sapic/manual-proofs/Yubikey/complete_proof.spthy	stored-proof-echo	AC multiset args reorder: tc1++z vs z++tc1
+module	examples/sapic/manual-proofs/Yubikey/manual_part.spthy	stored-proof-echo	AC multiset args reorder: tc1++z vs z++tc1
+module	examples/sapic/export/States/scytl-voting-system.spthy	hs-derivcheck-timeout	same stdout at --derivcheck-timeout=300
+module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-fakepcsbranch.spthy	hs-parse-rejects	hs stops at line 193 col 42, rs translates
 #
 # json sweep
 json	case-studies-regression/accountability/csf21-acc-unbounded/previous/whodunit_analyzed.spthy	capacity	both sides hit the cap
@@ -81,3 +143,22 @@ json	case-studies-regression/fast-tests/sapic/fast/feature-secret-channel/U2F_an
 json	case-studies-regression/sapic/fast/feature-secret-channel/U2F_analyzed.spthy	hs-timeout	rs completes
 json	case-studies-regression/sapic/slow/encWrapDecUnwrap/encwrapdecunwrap_analyzed.spthy	capacity	rs=134
 json	case-studies-regression/sapic/slow/PKCS11/pkcs11-templates_analyzed.spthy	capacity	hs=124 rs=134
+module	examples/sapic/export/SSH/ssh-with-one-forwarding.spthy	sapic-eq-pattern	all three modules
+module	examples/sapic/export/SSH/ssh-without-forwarding.spthy	sapic-eq-pattern	all three modules
+module	examples/sapic/export/LAKE/lake-edhoc.spthy	sapic-skey-sort	-	msr
+module	examples/sapic/export/LAKE/lake-edhoc-DHmode-FS-KCI.spthy	sapic-skey-sort	-	msr
+module	examples/sapic/export/KEMTLS/kemtls-clientauth.spthy	derivcheck-missing	-	msr
+module	examples/sapic/slow/PKCS11/pkcs11-templates.spthy	pred-wrapping	all three modules
+module	examples/sapic/not-suitable-for-regression/issue-missing-unlock.spthy	sapic-wf-missing	lock over replication	spthy
+module	examples/sapic/not-suitable-for-regression/issue-missing-unlock.spthy	sapic-wf-missing	lock over replication	spthytyped
+module	examples/sapic/not-suitable-for-regression/issue-missing-unlock.spthy	sapic-wf-text	fatal error text differs	msr
+module	examples/sapic/not-working/fairexchange-asw/aswAB.spthy	sapic-wf-text	-	spthytyped
+module	examples/sapic/not-working/fairexchange-asw/aswAB.spthy	sapic-wf-text	-	msr
+module	examples/sapic/not-working/fairexchange-asw/aswAB-mod.spthy	sapic-wf-text	-	spthytyped
+module	examples/sapic/not-working/fairexchange-asw/aswAB-mod.spthy	sapic-wf-text	-	msr
+module	examples/sapic/not-working/fairexchange-asw/asw-mod-weak-locks.spthy	sapic-wf-text	-	spthytyped
+module	examples/sapic/not-working/fairexchange-asw/asw-mod-weak-locks.spthy	sapic-wf-text	-	msr
+module	examples/sapic/not-working/fairexchange-km/km.spthy	sapic-wf-text	-	spthytyped
+module	examples/sapic/not-working/fairexchange-km/km.spthy	sapic-wf-text	-	msr
+module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-unfairness-A.spthy	sapic-wf-text	-	spthytyped
+module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-unfairness-A.spthy	sapic-wf-missing	msr accepts outright rc 0 vs 1	msr

@@ -2666,8 +2666,10 @@ fn fixture_nat_sort_reuse_lemma_derives_implied_fact() {
         "tamarin should verify CanForgeAndPost; got line:\n{}",
         line
     );
+    // `solve(` only wraps explicit proof-tree steps, so this doesn't
+    // depend on argument pretty-printing or timepoint variable naming.
     assert!(
-        proved.contains("HonestSignatureKey( pk(~sk_sign_trustee1) ) @ #k"),
+        proved.contains("solve( HonestSignatureKey("),
         "tamarin's own proof must solve HonestSignatureKey explicitly"
     );
 }

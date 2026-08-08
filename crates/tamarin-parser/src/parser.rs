@@ -3080,6 +3080,19 @@ impl<'a> Parser<'a> {
 
     fn legacy_axiom(&mut self) -> Result<TheoryItem, ParseError> {
         let r = self.restriction("axiom")?;
+        // HS `legacyAxiom` builds the restriction through
+        // `trace "Deprecation Warning: ..." Restriction <$> ...`
+        // (Theory/Text/Parser/Restriction.hs:88-92).  The traced value is a
+        // shared CAF, so the message reaches stderr at most once per process,
+        // and it is only forced once a COMPLETE `axiom` item has been built —
+        // an axiom whose formula fails to parse prints nothing.
+        static AXIOM_DEPRECATION: std::sync::Once = std::sync::Once::new();
+        AXIOM_DEPRECATION.call_once(|| {
+            eprintln!(
+                "Deprecation Warning: using 'axiom' is retired notation, replace all uses of \
+                 'axiom' by 'restriction'."
+            );
+        });
         Ok(TheoryItem::LegacyAxiom(r))
     }
 
