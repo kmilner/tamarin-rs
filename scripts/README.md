@@ -5,11 +5,13 @@ patched Haskell oracle (`../tamarin-prover-testing/`, built by
 `./setup.sh testing`). Result TSVs land in `results/` (gitignored); the HS
 reference caches live in `.hs_file_cache/`, `.hs_pretty_cache/`,
 `.hs_sweep_cache/` and `.web_hs_cache/` (all gitignored). They are not keyed
-alike: `.hs_sweep_cache/` keys on the theory sha PLUS the flag set, the oracle
-binary's fingerprint and the maude path, so rebuilding the oracle invalidates
-it by itself, while the other three key on the theory sha alone and must be
-cleared by hand after a submodule bump or an oracle rebuild
-(`bump_submodule.sh`'s checklist says so).
+alike: `.hs_sweep_cache/` keys on the theory sha PLUS the sha of every file it
+`#include`s, the flag set, the oracle binary's fingerprint and the maude path,
+so rebuilding the oracle invalidates it by itself, while the other three key on
+the theory sha alone and must be cleared by hand after a submodule bump or an
+oracle rebuild (`bump_submodule.sh`'s checklist says so) — and the other three
+still key an `#include`ing theory on the includer alone, so an edit below
+`testParser/include/` leaves them serving the pre-edit oracle.
 Most scripts take `ALLOWLIST=` (file of corpus-relative paths) to run a
 subset, and `RS_PATH=`/`HS_PATH=` to point at other binaries.
 
@@ -25,6 +27,14 @@ subset, and `RS_PATH=`/`HS_PATH=` to point at other binaries.
 - **`pretty_gate.sh`** — fast theory pretty-print gate: diffs the load-time
   `theory … end` echo against the oracle. Run when touching parsing or
   printing.
+
+  All three carry their verdict in the exit status and repeat it on the last
+  line (`verdict=`): nonzero on a DIFF, on any `SKIP_*` row, and when fewer
+  rows land than files were listed. A SKIP is a file whose bytes were never
+  compared, which a DIFF count of 0 cannot distinguish from a match — clear
+  `.hs_file_cache/` (as a submodule bump requires) and `wf_gate.sh` has no
+  reference side at all. A set-but-unreadable `ALLOWLIST` is `exit 2` in all
+  three rather than a silent fall-through to the whole 432-file corpus.
 - **`web_parity.sh`** — interactive-mode gate: crawls both web servers per
   theory and diffs the responses — pane/JSON semantically, graph routes
   byte-for-byte. Run on server changes. `ALLOWLIST=` is REQUIRED (one
@@ -51,10 +61,17 @@ subset, and `RS_PATH=`/`HS_PATH=` to point at other binaries.
   are cached content-keyed under `.hs_sweep_cache/` (timeouts cached with
   their cap), so re-sweeping after a Rust change costs only the Rust side;
   a stale `target/release` binary aborts the run (`ALLOW_STALE_BIN=1`
-  overrides). Documented residuals live in `sweep_expected.tsv` and report
+  overrides), where "stale" spans cargo's whole dep-info list, not just
+  `crates/**/*.rs` — `tamarin-prover/data/intruder_variants_{dh,bp}.spthy`
+  are `include_str!`ed into the binary. An oracle whose baked git revision is
+  not the submodule pin is refused up front (`ALLOW_ORACLE_REV_MISMATCH=1`
+  overrides), the same policy `divergence_fixtures/capture.sh` applies to its
+  captures. Documented residuals live in `sweep_expected.tsv` and report
   as LEDGERED — any bare DIFF/ERROR row is a regression, and an entry that
   has stopped excusing anything is called out on stderr (LEDGER-STALE /
-  LEDGER-UNMATCHED / LEDGER-DUP) so it gets dropped. An entry names the one
+  LEDGER-UNMATCHED / LEDGER-DUP) AND counted into the verdict, so it gets
+  dropped rather than sitting in the ledger as a mask waiting for the file to
+  regress under it. An entry names the one
   SYMPTOM it excuses (`stdout`, `stderr`, `rc`, `json`, `dot`, `timeout/kill`)
   in its 6th column, so a file ledgered for a stderr divergence still reports a
   fresh stdout regression beside it as DIFF. A row where neither side produced
@@ -70,7 +87,10 @@ subset, and `RS_PATH=`/`HS_PATH=` to point at other binaries.
 
 - **`web_crawl.py`** — crawls a running server into a response manifest.
 - **`web_diff.py`** / **`web_normalize.py`** — semantic manifest diff and the
-  normalizer it uses.
+  normalizer it uses. Markup routes compare structurally; the `dot` and
+  `text` routes compare byte for byte bar the env-volatile tokens, because
+  the port serialises both verbatim and whitespace is content there — the
+  `source`/`message` panes carry the pretty printer's own trailing spaces.
 
 ## Triage tools — when a gate reports a DIFF
 
@@ -177,6 +197,24 @@ Today's fixtures, in manifest order:
 - **`ac_marker_collapse`** — a `tamXCA…`-named function, where the port
   deliberately diverges from upstream — see
   `~/upstream-bug-ac-marker-collapse.md`.
+- **`dual_declared_names`** — one name declared BOTH as a NoEq funsym and as a
+  user `[AC]` symbol: the prefix and `op{a}b` spellings resolve NoEq, the infix
+  spelling stays AC, and a bare nullary name the NoEq constant.
+- **`dual_declared_exp`** — the same collision against a symbol the BUILTINS
+  contribute (`exp/2` under `diffie-hellman`), so prefix `exp(a,b)` renders
+  `a^b` and is a reducible Formula-terms offender while infix `a exp b` is not.
+- **`dual_declared_equations`** — an `equations:` left-hand side written prefix
+  over such a name: the equation registers under the NoEq symbol and makes it
+  reducible.
+- **`naryapp_arity_folds`** — `naryOpApp`'s argument-list shapes: an arity-1
+  head folding its commas into a right-associative pair (function and macro
+  heads alike), an arity-0 head applied as `f()`, and a trailing comma.
+- **`ac_prefix_arities`** — prefix and `op{t1}t2` applications of a user `[AC]`
+  symbol, whose arity check is skipped: any argument count parses, and the
+  singleton application collapses to its argument.
+- **`positional_ac_prefix`** — the same name declared `[AC]` and then NoEq, with
+  a use between the two declarations and a use after both: prefix resolution
+  reads the signature built so far, so the two uses render differently.
 
 All but `ac_marker_collapse` must reproduce the pinned oracle's bytes; that one
 must NOT. `check.sh` asserts BOTH sides of it, so it goes red if the port
@@ -208,8 +246,8 @@ then upstream behaviour moving under them.
   `see line N` outside the extent it annotates). Nothing else catches a cite
   that has drifted — `remap_hs_cites.py` reports ambiguity rather than
   failing on it — so this is the post-bump gate. `--crate NAME` and
-  `--skip CLASS` are repeatable; `--crate tamarin-prover` is currently the
-  only crate at zero findings.
+  `--skip CLASS` are repeatable; `--crate tamarin-prover` and `--crate
+  tamarin-export` are currently the only crates at zero findings.
 - **`header_identities.json`** — email → GitHub-username map used by the
   header generator.
 

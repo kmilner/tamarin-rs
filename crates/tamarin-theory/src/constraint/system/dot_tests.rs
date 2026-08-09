@@ -139,8 +139,12 @@ fn edge_attrs(dot: &str) -> String {
 /// and emit `color="gray30"`.
 ///
 /// HS spells the surviving attribute list `[style="bold",weight="10.0",
-/// color="gray50"]`, as captured for the missing-node edge in
-/// `tests/fixtures/haskell-responses/igd_cases_raw.dot`.
+/// color="gray50"]`.  The `[style="bold",weight="10.0"]` prefix is the
+/// missing-node edge of `tests/fixtures/haskell-responses/igd_cases_raw.dot`,
+/// whose endpoint fact is LINEAR and so takes no colour; the `color="gray50"`
+/// suffix is the persistent branch, captured with `--prove=reach --output-dot`
+/// on `rule Reg: [Fr(~k)] --[R(~k)]-> [!Key(~k)]` /
+/// `rule Use: [!Key(k)] --[U(k)]-> [Out(k)]`.
 #[test]
 fn classify_edge_resolves_hidden_source_conc_from_original_system() {
     use crate::fact::{fresh_fact, proto_fact, Multiplicity};
@@ -423,8 +427,25 @@ fn dot_emits_cluster_for_role() {
         "missing Alice cluster: {}",
         s
     );
-    assert!(s.contains("Alice"), "missing Alice cluster label: {}", s);
-    assert!(s.contains("Bob"), "missing Bob cluster label: {}", s);
+    assert!(
+        s.contains("subgraph \"cluster_Bob_Session_1\" {"),
+        "missing Bob cluster: {}",
+        s
+    );
+    // `label` is the cluster's own attribute (Dot.hs:580), NOT the subgraph
+    // id: asking only whether the role name appears anywhere is answered by
+    // the id asserted above, so a `dotCluster` emitting no label at all
+    // would satisfy it.
+    assert!(
+        s.contains("\nlabel=\"Alice_Session_1\";\n"),
+        "missing Alice cluster label: {}",
+        s
+    );
+    assert!(
+        s.contains("\nlabel=\"Bob_Session_1\";\n"),
+        "missing Bob cluster label: {}",
+        s
+    );
 }
 
 #[test]
@@ -993,7 +1014,18 @@ fn dot_no_cluster_preamble_sets_node_size_and_less_edge_color_first() {
 #[test]
 fn dot_cluster_preamble_uses_cluster_attributes() {
     // When clusters exist HS switches to setDefaultAttributesIfCluster
-    // (Dot.hs:143-164), which sets `packmode`/`pack`/etc.
+    // (Dot.hs:143-164), and `dotCluster` (Dot.hs:572-587) opens each subgraph
+    // with nine attributes of its own (Dot.hs:578-586).  Both blocks are
+    // pinned byte-for-byte: a check on one or two attributes is blind to a
+    // dropped `label`, a flipped `pack`, or a `roleColor` whose alpha or
+    // channel scale moved.
+    //
+    // Oracle bytes: `--prove --output-dot` of the pinned v1.13.0 binary on
+    // `examples/sapic/fast/basic/channels1.spthy`, whose roles are `P`,
+    // `Process` and `Q`.  The preamble carries no theory-specific text, and
+    // the two hexes below are that capture's own `cluster_P_Session_1` and
+    // `cluster_Q_Session_1` colours — `roleColor` keys on the base name
+    // alone (Dot.hs:559-569), so the session index does not move them.
     use crate::fact::out_fact;
     use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes};
     use tamarin_term::lterm::{LSort, LVar};
@@ -1017,19 +1049,60 @@ fn dot_cluster_preamble_uses_cluster_attributes() {
             vec![out_fact(k.clone())],
         )
     };
-    sys.add_node(LVar::new("a", LSort::Node, 1), mk("InitA", "Alice"));
-    sys.add_node(LVar::new("b", LSort::Node, 2), mk("InitB", "Bob"));
+    sys.add_node(LVar::new("a", LSort::Node, 1), mk("InitA", "P"));
+    sys.add_node(LVar::new("b", LSort::Node, 2), mk("InitB", "Q"));
     let s = system_to_dot(&sys);
-    assert!(
-        s.contains("packmode=\"cluster\""),
-        "cluster preamble must set packmode: {}",
-        s
+    const PREAMBLE: &str = concat!(
+        "digraph \"G\" {\n",
+        "nodesep=\"0.8\";\n",
+        "ranksep=\"0.8\";\n",
+        "sep=\"4\";\n",
+        "splines=\"true\";\n",
+        "overlap=\"false\";\n",
+        "pack=\"true\";\n",
+        "packmode=\"cluster\";\n",
+        "concentrate=\"true\";\n",
+        "compound=\"true\";\n",
+        "remincross=\"true\";\n",
+        "mclimit=\"10\";\n",
+        "nslimit=\"20\";\n",
+        "nslimit1=\"20\";\n",
+        "ordering=\"out\";\n",
+        "rankdir=\"TB\";\n",
+        "showboxes=\"false\";\n",
+        "clusterrank=\"local\";\n",
+        "node[fontsize=\"8\",fontname=\"Helvetica\",width=\"0.3\",height=\"0.2\",\
+         margin=\"0.05,0.05\",shape=\"ellipse\"];\n",
+        "edge[fontsize=\"8\",fontname=\"Helvetica\",penwidth=\"1.5\",arrowsize=\"0.5\",\
+         color=\"black\",style=\"solid\",weight=\"8\"];\n",
     );
-    // Cluster subgraph styling: filled with the roleColor.
     assert!(
-        s.contains("style=\"filled\";"),
-        "cluster must be style=filled: {}",
-        s
+        s.starts_with(PREAMBLE),
+        "cluster preamble must be the oracle's, byte for byte:\n{s}"
+    );
+    // `dotCluster`'s own nine attributes, in HS's order, with `roleColor`
+    // (Dot.hs:559-569) resolved from the base name.
+    let cluster_block = |name: &str, hex: &str| {
+        format!(
+            "subgraph \"cluster_{name}\" {{\n\
+             nodesep=\"0.6\";\n\
+             ranksep=\"0.6\";\n\
+             label=\"{name}\";\n\
+             style=\"filled\";\n\
+             color=\"{hex}\";\n\
+             penwidth=\"2\";\n\
+             fillcolor=\"{hex}\";\n\
+             overlap=\"false\";\n\
+             sep=\"4\";\n"
+        )
+    };
+    assert!(
+        s.contains(&cluster_block("P_Session_1", "#D8364B4C")),
+        "P cluster block:\n{s}"
+    );
+    assert!(
+        s.contains(&cluster_block("Q_Session_1", "#3649D84C")),
+        "Q cluster block:\n{s}"
     );
 }
 

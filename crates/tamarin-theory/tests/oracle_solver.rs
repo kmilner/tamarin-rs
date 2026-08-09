@@ -1,5 +1,6 @@
-//! Solver-component oracle: cross-check our Rust pipeline against
-//! `tamarin-prover 1.12.0` on small fixture `.spthy` files.
+//! Solver-component oracle: cross-check our Rust pipeline against the PINNED
+//! `tamarin-prover` — the `tamarin-prover-testing` build of the submodule
+//! revision, or `HS_PATH` — on small fixture `.spthy` files.
 //!
 //! For each fixture we verify:
 //! 1. The Rust parser/elaborator accepts the file.
@@ -12,8 +13,8 @@
 //! 5. The number of lemmas we elaborate equals what tamarin sees.
 //! 6. For each lemma, the guarded conversion succeeds.
 //!
-//! The harness skips silently when `tamarin-prover` isn't on `PATH`,
-//! so the test stays fast in environments without the binary.
+//! The harness skips silently when the pinned oracle has not been built
+//! (`./setup.sh testing`), so the test stays fast in environments without it.
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -48,16 +49,61 @@ fn maude_path() -> Option<String> {
     None
 }
 
+/// The pinned oracle, discovered the way every parity script discovers it:
+/// `HS_PATH` when set, else the `tamarin-prover-testing` stack-work build.
+///
+/// A bare `tamarin-prover` on `PATH` is deliberately NOT accepted.  It is
+/// whatever the machine happens to have installed — on this box a packaged
+/// release 1.12.0, a different upstream release from the submodule pin — and
+/// a differential test that compares against the wrong release is comparing
+/// against the wrong specification.
+fn oracle_binary() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("HS_PATH") {
+        let p = PathBuf::from(p);
+        return p.is_file().then_some(p);
+    }
+    // .stack-work/install/<arch>/<pkg-hash>/<ghc-version>/bin/tamarin-prover
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tamarin-prover-testing/.stack-work/install");
+    let mut level = vec![root];
+    for _ in 0..3 {
+        let mut next = Vec::new();
+        for dir in level {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            next.extend(entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()));
+        }
+        level = next;
+    }
+    level
+        .into_iter()
+        .map(|d| d.join("bin/tamarin-prover"))
+        .find(|p| p.is_file())
+}
+
+/// The oracle needs maude, and the box that runs these tests keeps it outside
+/// `PATH` — the same `MAUDE_PATH` override the rest of the suite uses.
+fn oracle_command() -> Option<Command> {
+    let mut cmd = Command::new(oracle_binary()?);
+    if let Some(m) = maude_path() {
+        cmd.arg(format!("--with-maude={m}"));
+    }
+    Some(cmd)
+}
+
 fn tamarin_available() -> bool {
-    Command::new("tamarin-prover")
-        .arg("--help")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    oracle_binary().is_some_and(|p| {
+        Command::new(p)
+            .arg("--help")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
 }
 
 fn run_tamarin_parse_only(path: &Path) -> Option<String> {
-    let out = Command::new("tamarin-prover")
+    let out = oracle_command()?
         .arg("--parse-only")
         .arg(path)
         .output()
@@ -69,11 +115,7 @@ fn run_tamarin_parse_only(path: &Path) -> Option<String> {
 }
 
 fn run_tamarin_prove(path: &Path) -> Option<String> {
-    let out = Command::new("tamarin-prover")
-        .arg("--prove")
-        .arg(path)
-        .output()
-        .ok()?;
+    let out = oracle_command()?.arg("--prove").arg(path).output().ok()?;
     if !out.status.success() {
         return None;
     }

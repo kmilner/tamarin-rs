@@ -70,8 +70,9 @@
 #                          deliberate corruption step, so it needs a decision
 #                          against the never-port-an-upstream-bug policy.
 #   (No stderr-saturating-sources class exists: sweep_common.sh's `nerr` drops
-#    "[Saturating Sources]" lines on both sides, so that divergence — HS prints
-#    them, RS mostly does not — never reaches a verdict here.)
+#    "[Saturating Sources]" lines on both sides, so that divergence — both
+#    sides trace, with structurally different sequence counts — never reaches a
+#    verdict here.)
 #   oracle-timeout         the HS oracle cannot produce a reference inside
 #                          the 600s serial retry cap (rc hs=124); the sweep
 #                          then skips the RS side, so the row has nothing to

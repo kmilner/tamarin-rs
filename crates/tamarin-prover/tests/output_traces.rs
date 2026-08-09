@@ -291,6 +291,39 @@ fn several_solved_lemmas_are_joined_by_one_blank_line() {
         2,
         "one graph per solved node:\n{dot}"
     );
+    // `getLemmas thy` DECLARATION order (Batch.hs:278) — `sent` before
+    // `chain`, whatever order a parallel prover finished them in.  Counting
+    // graphs, or asserting each label is present, cannot see a reversed list;
+    // both digraph ids are verbatim from the oracle's `--prove --output-dot`
+    // on this theory.
+    let dot_labels: Vec<&str> = dot
+        .lines()
+        .filter(|l| l.starts_with("digraph \""))
+        .collect();
+    assert_eq!(
+        dot_labels,
+        vec![
+            "digraph \"trace_TwoLemmas_SL2-AS0-CL0-A1-C1-NB_sent\" {",
+            "digraph \"trace_TwoLemmas_SL2-AS0-CL0-A1-C1-NB_chain-Send\" {",
+        ],
+        "graphs must come in lemma declaration order:\n{dot}"
+    );
+    // The JSON writer consumes the same labelled list, so it carries the
+    // same order.
+    let json = String::from_utf8(c.json_bytes()).expect("utf-8 json");
+    let json_labels: Vec<&str> = json
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("\"jgLabel\""))
+        .collect();
+    assert_eq!(
+        json_labels,
+        vec![
+            "\"jgLabel\": \"trace_TwoLemmas_SL2-AS0-CL0-A1-C1-NB_sent\",",
+            "\"jgLabel\": \"trace_TwoLemmas_SL2-AS0-CL0-A1-C1-NB_chain-Send\",",
+        ],
+        "--output-json must share the dot writer's order:\n{json}"
+    );
     assert_eq!(
         dot.matches("}\n\ndigraph \"").count(),
         1,

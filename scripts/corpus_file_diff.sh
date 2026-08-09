@@ -25,6 +25,9 @@
 #      line; default = derive from $PREV_TSV column 1).
 # Output TSV (5 col, tab-sep): relpath  status  HS_lines  RS_lines  diffcount
 #   status ∈ MATCH | DIFF | SKIP_HS_TIMEOUT | SKIP_NO_HS | SKIP_RS_TIMEOUT
+# Exit status carries the verdict, which the DONE line repeats: nonzero on any
+# DIFF, on any SKIP_* (a file whose bytes were never compared), and when fewer
+# rows land than files were listed.
 set -u
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
@@ -92,8 +95,14 @@ export -f ckey
 # --- file list (allowlist) ---
 # Precedence: explicit ALLOWLIST env > committed canonical corpus
 # (scripts/parity_corpus.txt) > derive from PREV_TSV.
+# A set-but-unreadable ALLOWLIST is a typo, not a request for the default: it
+# used to fall through to the whole 432-file corpus, so the run silently
+# stopped being the one that was asked for.
+if [ -n "$ALLOWLIST" ] && [ ! -r "$ALLOWLIST" ]; then
+    echo "ALLOWLIST '$ALLOWLIST' is not a readable file" >&2; exit 2
+fi
 filelist() {
-    if [ -n "$ALLOWLIST" ] && [ -f "$ALLOWLIST" ]; then
+    if [ -n "$ALLOWLIST" ]; then
         cat "$ALLOWLIST"
     elif [ -f "$script_dir/parity_corpus.txt" ]; then
         cat "$script_dir/parity_corpus.txt"
@@ -171,6 +180,9 @@ rs_one() {
 export -f rs_one
 
 N=$(filelist | grep -c .)
+# Zero files is the whole-run form of comparing nothing: no rows, an empty
+# summary, and a DONE line that reads exactly like a clean gate.
+[ "$N" -gt 0 ] || { echo "the file list resolved to 0 entries — nothing to compare" >&2; exit 2; }
 echo "corpus_file_diff: $N files, JOBS=$JOBS, -N$HS_N, FILE_TIMEOUT=${FILE_TIMEOUT}s, cache=$CACHE"
 echo "=== PHASE 1: Haskell (all files first, no RS) ==="
 filelist | grep . | xargs -P "$JOBS" -I{} bash -c 'hs_one "$@"' _ {}
@@ -181,4 +193,16 @@ sort -o "$RESULTS_TSV" "$RESULTS_TSV"
 echo "=== SUMMARY ==="
 awk -F'\t' '{c[$2]++} END{for(k in c) printf "  %-18s %d\n", k, c[k]}' "$RESULTS_TSV"
 echo "  results: $RESULTS_TSV"
-echo "DONE_CORPUS_FILE_DIFF"
+# Verdict — the histogram above is the whole story only if someone reads it.
+# A SKIP_* row is a file whose bytes were never compared (no HS reference, or
+# either side out of time), and a file that produced no row at all left the run
+# unnoticed; both are indistinguishable from MATCH in an exit status of 0.
+diffs=$(awk -F'\t' '$2=="DIFF"' "$RESULTS_TSV" | grep -c .)
+skips=$(awk -F'\t' '$2 ~ /^SKIP/' "$RESULTS_TSV" | grep -c .)
+rows=$(grep -c . "$RESULTS_TSV")
+bad=''
+[ "$diffs" = 0 ] || bad="DIFF=$diffs"
+[ "$skips" = 0 ] || bad="${bad:+$bad }SKIPPED=$skips"
+[ "$rows" = "$N" ] || bad="${bad:+$bad }ROW-COUNT=$rows/$N"
+echo "DONE_CORPUS_FILE_DIFF verdict=${bad:-OK}"
+[ -z "$bad" ]

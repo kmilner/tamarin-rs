@@ -35,7 +35,9 @@ TIMEOUT=${TIMEOUT:-120}
 RETRY_TIMEOUT=${RETRY_TIMEOUT:-600}
 JOBS=${JOBS:-3}
 HS_CACHE=${HS_CACHE:-$REPO/scripts/.hs_sweep_cache}
-LEDGER=$REPO/scripts/sweep_expected.tsv
+# Overridable so the ledger machinery can be exercised against a mutated copy
+# without editing the real one.
+LEDGER=${LEDGER:-$REPO/scripts/sweep_expected.tsv}
 
 grun() { ( echo 1000 > /proc/self/oom_score_adj; ulimit -v 16777216; timeout "$TIMEOUT" "$@" ); }
 
@@ -54,14 +56,17 @@ norm() { sed -e 's/^Git revision:.*/GITREV/' -e 's/^Compiled at:.*/COMPILED/' \
 #   [Open Chains]        RS's derivation-check stage emits the "Too many chain
 #                        constraints" warning twice where HS emits it once;
 #                        consecutive duplicates of that exact line collapse.
-#   [Saturating Sources] HS traces saturation progress on every CLI close
-#                        (TheoryLoader closes with showSaturation = True), while
-#                        RS gates the trace on a process-global that only the
-#                        --precompute-only path sets; where RS does trace, it
-#                        produces 2 sequences to HS's 4 (see run.rs's note on
-#                        the redundant auto-sources closes). 282 of the 372
-#                        case-studies-regression theories differ by these lines
-#                        alone.
+#   [Saturating Sources] Both sides trace saturation progress on every CLI
+#                        close (showSaturation = True), but the SEQUENCE COUNTS
+#                        still differ structurally: HS traces once per force of
+#                        a ClosedRuleCache thunk, RS once per saturation it
+#                        actually runs — one extra sequence on a theory with a
+#                        [sources] lemma, one where HS emits none on a theory
+#                        whose proofs never consult a source case, and counts
+#                        differing both ways under --auto-sources (run.rs's
+#                        close_translated_theory enumerates all three). 282 of
+#                        the 372 case-studies-regression theories differ by
+#                        these lines alone.
 #
 # Dropping them is the only way the stderr axis can police ANYTHING else: left
 # in, the class alone paints the corpus red and a genuinely new warning hides
@@ -224,12 +229,60 @@ sweep_preflight() {
     echo "ERROR: '$MAUDE --version' produced nothing — that is not a working maude" >&2
     exit 2
   fi
+  # The oracle IS the specification, so it has to be the build of the submodule
+  # pin. An oracle from another revision compares the port against a different
+  # upstream and reports the result as parity — the same policy
+  # divergence_fixtures/capture.sh enforces on its captures. Skipped when the
+  # gitlink cannot be read or the binary prints no `Git revision:` line at all,
+  # since neither absence is evidence of a mismatch; ALLOW_ORACLE_REV_MISMATCH=1
+  # for a deliberate cross-revision comparison.  A binary built outside a git
+  # checkout stamps the literal `UNKNOWN`, and that IS evidence: the oracle is
+  # built from the pinned worktree, so anything unstamped is a packaged release
+  # (the box carries a 1.12.0 one) rather than the specification.  `--version`
+  # prints the `Git revision:` line as
+  # part of `ensureMaudeAndGetVersion`'s block (Console.hs:333-338), so it needs
+  # `--with-maude=$MAUDE`: without it the probe resolves `maude` on PATH, dies
+  # before the line, and leaves `binrev` empty — the guard would then skip on
+  # exactly the boxes that keep maude off PATH, which is why MAUDE exists.
+  local pin binrev
+  pin=$(git -C "$REPO" rev-parse :tamarin-prover 2>/dev/null) || pin=
+  binrev=$(timeout 60 "$HS_BIN" --with-maude="$MAUDE" --version 2>/dev/null \
+           | sed -n 's/^Git revision: \([^,]*\),.*/\1/p')
+  if [ -n "$pin" ] && [ -n "$binrev" ] && [ "$pin" != "$binrev" ]; then
+    echo "ERROR: oracle '$HS_BIN' is revision $binrev but the submodule pin is $pin" \
+         "— it would certify the port against the wrong upstream" \
+         "(rebuild with ./setup.sh testing, or ALLOW_ORACLE_REV_MISMATCH=1)" >&2
+    [ "${ALLOW_ORACLE_REV_MISMATCH:-0}" = 1 ] || exit 2
+  fi
 }
 sweep_preflight
 
 # Oracle-binary fingerprint, part of every cache key. Loop-invariant, so it is
 # taken once here rather than per cached lookup.
 HS_FP=$(stat -c '%s.%Y' "$HS_BIN")
+
+# include_shas <theory> [depth]
+#   sha + name of every file the theory pulls in with `#include "..."`, depth
+#   first and transitively, resolved against the INCLUDING file's directory
+#   (the spelling upstream uses: examples/testParser/include/include1.spthy,
+#   which parity_corpus.txt carries, reaches include_2.spthy and
+#   include/include3.spthy that way). Those files are oracle inputs, so a
+#   theory sha alone cannot key its output: edit an included file and the
+#   cached entry keeps answering for the old one.
+#   Prints NOTHING for a theory with no includes, which is every corpus file
+#   but three — so the digest fed to the key is byte-identical there and the
+#   existing cache stays valid.
+include_shas() {
+  local f=$1 depth=${2:-0} dir inc
+  [ "$depth" -ge 8 ] && return 0
+  dir=$(dirname "$f")
+  while IFS= read -r inc; do
+    [ -n "$inc" ] && [ -f "$dir/$inc" ] || continue
+    printf '%s %s\n' "$(sha256sum "$dir/$inc" | cut -d' ' -f1)" "$inc"
+    include_shas "$dir/$inc" $((depth + 1))
+  done < <(grep -oE '#include[[:space:]]*"[^"]+"' "$f" 2>/dev/null \
+           | sed 's/.*"\(.*\)"/\1/')
+}
 
 # hs_run <workdir> <theory> <tag> <flag...>
 #   Executes  grun $HS_BIN --with-maude=$MAUDE <flag...> <theory>
@@ -240,7 +293,8 @@ HS_FP=$(stat -c '%s.%Y' "$HS_BIN")
 hs_run() {
   local wd=$1 f=$2 tag=$3; shift 3
   local key
-  key=$( { sha256sum "$f" | cut -d' ' -f1; echo "$tag"; echo "$HS_FP"; echo "$MAUDE"; } | sha256sum | cut -d' ' -f1 )
+  key=$( { sha256sum "$f" | cut -d' ' -f1; echo "$tag"; echo "$HS_FP"; echo "$MAUDE"
+           include_shas "$f"; } | sha256sum | cut -d' ' -f1 )
   local dir="$HS_CACHE/${key:0:2}/$key"
   if [ -f "$dir/rc" ]; then
     local crc ccap
@@ -296,8 +350,17 @@ resolve_list() {
   fi
 }
 
-# sweep_out <default-path> — resolve $OUT and make sure its directory exists.
-sweep_out() { OUT=${OUT:-$1}; mkdir -p "$(dirname "$OUT")"; }
+# sweep_out <default-path> — resolve $OUT, make sure its directory exists, and
+#   prove it is writable now rather than discovering it when the first child
+#   tries to append: an unwritable OUT leaves every `row` write failing into
+#   stderr and the sweep reaching sweep_finish with no file at all.
+sweep_out() {
+  OUT=${OUT:-$1}
+  mkdir -p "$(dirname "$OUT")" && : > "$OUT" || {
+    echo "ERROR: cannot write OUT '$OUT' — no row of this sweep would land" >&2
+    exit 2
+  }
+}
 
 # sweep_export [extra function names...]
 #   Hand the helpers and settings to the `bash -uc 'one ...'` children xargs
@@ -306,7 +369,8 @@ sweep_out() { OUT=${OUT:-$1}; mkdir -p "$(dirname "$OUT")"; }
 #   aborts the child instead of expanding to empty, and the row it never wrote
 #   turns up in sweep_finish's row-count check.
 sweep_export() {
-  export -f one row grun norm nerr io_diff infra_abort nonempty_compared nocompare_check hs_run "$@"
+  export -f one row grun norm nerr io_diff infra_abort nonempty_compared nocompare_check \
+            include_shas hs_run "$@"
   export HS_BIN RS_BIN MAUDE OUT TIMEOUT HS_CACHE HS_FP
 }
 
@@ -334,12 +398,30 @@ sweep_retry() {
 
 # Refuse to sweep when target/release/tamarin-rs predates the sources — a stale
 # binary silently certifies the wrong code (ALLOW_STALE_BIN=1 overrides).
+#
+# A `crates/**/*.rs` glob is not the whole input set. The binary also bakes in
+# files from OUTSIDE crates/ via `include_str!` — `tamarin-prover/data/
+# intruder_variants_{dh,bp}.spthy` are compiled into `intruder_variants.rs`,
+# so a submodule bump that edits them changes the port's behaviour on every DH
+# theory while leaving every path the glob covers untouched. Cargo already
+# records the complete list next to the binary in its dep-info file, so read
+# that when it is there rather than re-deriving it. Paths under `.git/` are
+# excluded: build.rs watches HEAD/refs/packed-refs to bake the revision and
+# timestamp into `Git revision:` / `Compiled at:`, and every gate normalizes
+# those two lines away, so a commit is not a reason to rebuild.
 rs_stale_check() {
-  local newest
+  local newest dep p
   newest=$(find "$REPO/crates" \( -name '*.rs' -o -name 'Cargo.toml' \) -newer "$RS_BIN" -print -quit 2>/dev/null)
   # The workspace root manifests are inputs too: a dependency bump there
   # rebuilds the binary but leaves every file under crates/ untouched.
   [ -n "$newest" ] || newest=$(find "$REPO/Cargo.toml" "$REPO/Cargo.lock" -newer "$RS_BIN" -print -quit 2>/dev/null)
+  dep="$RS_BIN.d"
+  if [ -z "$newest" ] && [ -f "$dep" ]; then
+    while read -r p; do
+      case $p in '' | */.git/*) continue ;; esac
+      if [ -e "$p" ] && [ "$p" -nt "$RS_BIN" ]; then newest=$p; break; fi
+    done < <(head -1 "$dep" | cut -d: -f2- | tr ' ' '\n')
+  fi
   if [ -n "$newest" ]; then
     echo "ERROR: $RS_BIN is older than $newest — rebuild first (ALLOW_STALE_BIN=1 to override)" >&2
     [ "${ALLOW_STALE_BIN:-0}" = 1 ] || exit 2
@@ -392,10 +474,16 @@ sweep_banner() {
 #                       out of scope by construction.
 #     LEDGER-DUP        two entries share a (path, sub-unit) key, so only the
 #                       later one is reachable.
+#   All three set LEDGER_REPORTS, which sweep_finish folds into the verdict: an
+#   entry that excuses nothing today is a mask waiting for the file to regress
+#   under it, and a report nothing fails on is a report that stays in the
+#   ledger.
 apply_ledger() {
-  local out=$1 sweep=$2 col=$3 unitcol=${4:-0} full=1
+  local out=$1 sweep=$2 col=$3 unitcol=${4:-0} full=1 rep
+  LEDGER_REPORTS=0
   [ -f "$LEDGER" ] || return 0
   [ "${FAMILY:-0}" = 1 ] && full=0
+  rep=$(mktemp) || return 1
   awk -F'\t' -v OFS='\t' -v sweep="$sweep" -v col="$col" -v unitcol="$unitcol" \
       -v ledger="$LEDGER" -v prefix="$REPO/tamarin-prover/" -v full="$full" '
     BEGIN {
@@ -440,7 +528,10 @@ apply_ledger() {
               " matched no row of this sweep — the entry can never be reported stale" > "/dev/stderr"
       }
     }
-  ' "$out" > "$out.ledgered" && mv "$out.ledgered" "$out"
+  ' "$out" 2> "$rep" > "$out.ledgered" && mv "$out.ledgered" "$out"
+  cat "$rep" >&2
+  LEDGER_REPORTS=$(grep -c . "$rep")
+  rm -f "$rep"
 }
 
 # sweep_finish <out.tsv> <sweep-name> <status-col> [sub-unit-col]
@@ -459,7 +550,11 @@ sweep_finish() {
   cut -f"$col" "$out" | sort | uniq -c
   awk -F'\t' -v col="$col" '$col == "DIFF" || $col == "ERROR"' "$out" | head -40
   nc=$(awk -F'\t' -v col="$col" '$col == "NO-COMPARE"' "$out" | grep -c .)
-  rows=$(grep -c . "$out")
+  # An ABSENT out.tsv makes grep print nothing at all, and an empty `rows`
+  # turns the row-count test below into a shell error that leaves the flag
+  # unset — the one state (no file, so no comparison whatsoever) that most
+  # needs the flag.
+  rows=$(grep -c . "$out" 2>/dev/null) || rows=0
   total=${SWEEP_TOTAL:-$rows}
   # A row still reading DIFF/ERROR after the ledger pass is an undocumented
   # divergence, so the sentinel must not read OK above a list of them.
@@ -473,6 +568,10 @@ sweep_finish() {
   if [ "$rows" -ne "$total" ]; then
     bad="${bad:+$bad }ROW-COUNT=$rows/$total"
     echo "== $rows rows for $total items — the missing ones were never compared =="
+  fi
+  if [ "${LEDGER_REPORTS:-0}" -gt 0 ]; then
+    bad="${bad:+$bad }LEDGER=$LEDGER_REPORTS"
+    echo "== $LEDGER_REPORTS ledger entry/entries excuse nothing (see LEDGER-* on stderr) — drop them =="
   fi
   echo "== DONE $sweep $(date -u +%FT%TZ) verdict=${bad:-OK} =="
   [ -z "$bad" ]

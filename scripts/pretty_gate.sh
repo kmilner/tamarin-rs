@@ -164,8 +164,14 @@ one() {
 }
 export -f one
 
+# A set-but-unreadable ALLOWLIST is a typo, not a request for the default: it
+# used to fall through to the whole 432-file corpus, so the run silently
+# stopped being the one that was asked for.
+if [ -n "${ALLOWLIST:-}" ] && [ ! -r "$ALLOWLIST" ]; then
+    echo "ALLOWLIST '$ALLOWLIST' is not a readable file" >&2; exit 2
+fi
 filelist() {
-    if [ -n "${ALLOWLIST:-}" ] && [ -f "$ALLOWLIST" ]; then cat "$ALLOWLIST"
+    if [ -n "${ALLOWLIST:-}" ]; then cat "$ALLOWLIST"
     elif [ -f "$script_dir/parity_corpus.txt" ]; then cat "$script_dir/parity_corpus.txt"
     else (cd "$CORPUS_ROOT" && find . -name '*.spthy' | sed 's|^\./||'); fi
 }
@@ -182,9 +188,11 @@ diff=$(awk -F'\t' '$2=="DIFF"' "$RESULTS_TSV" | wc -l)
 skip=$(awk -F'\t' '$2 ~ /^SKIP/' "$RESULTS_TSV" | wc -l)
 total=$(grep -c . "$RESULTS_TSV")
 echo "pretty_gate: MATCH=$m DIFF=$diff SKIP=$skip  ->  $RESULTS_TSV"
-# An all-SKIP run compares nothing, so DIFF=0 says nothing about parity.
-if [ "$total" = 0 ] || [ "$skip" = "$total" ]; then
-    echo "pretty_gate: nothing compared ($skip SKIP of $total files) — empty or unfilled HS cache ($HS_CACHE)" >&2
-    exit 1
-fi
-[ "$diff" = 0 ]
+# Every SKIP is a file that was not compared, so DIFF=0 covers only the rest of
+# the list; at skip == total it covers nothing at all.
+bad=''
+[ "$diff" = 0 ] || bad="DIFF=$diff"
+[ "$skip" = 0 ] || bad="${bad:+$bad }SKIPPED=$skip/$total (never compared; unfilled HS cache $HS_CACHE)"
+[ "$total" -gt 0 ] || bad="NO-ROWS (the file list resolved to nothing)"
+echo "pretty_gate: verdict=${bad:-OK}"
+[ -z "$bad" ]

@@ -72,15 +72,31 @@ one() {
 }
 export -f one
 
+# A set-but-unreadable ALLOWLIST is a typo, not a request for the default: it
+# used to fall through to the whole 432-file corpus, so the run silently
+# stopped being the one that was asked for.
+if [ -n "${ALLOWLIST:-}" ] && [ ! -r "$ALLOWLIST" ]; then
+    echo "ALLOWLIST '$ALLOWLIST' is not a readable file" >&2; exit 2
+fi
 filelist() {
-    if [ -n "${ALLOWLIST:-}" ] && [ -f "$ALLOWLIST" ]; then cat "$ALLOWLIST"
+    if [ -n "${ALLOWLIST:-}" ]; then cat "$ALLOWLIST"
     elif [ -f "$script_dir/parity_corpus.txt" ]; then cat "$script_dir/parity_corpus.txt"
     else (cd "$CORPUS_ROOT" && find . -name '*.spthy' | sed 's|^\./||'); fi
 }
 
-filelist | xargs -P"$JOBS" -I{} bash -c 'one "$@"' _ {} | sort > "$RESULTS_TSV"
+filelist | grep . | xargs -P"$JOBS" -I{} bash -c 'one "$@"' _ {} | sort > "$RESULTS_TSV"
 m=$(awk -F'\t' '$2=="MATCH"' "$RESULTS_TSV" | wc -l)
 diff=$(awk -F'\t' '$2=="DIFF"' "$RESULTS_TSV" | wc -l)
 skip=$(awk -F'\t' '$2 ~ /^SKIP/' "$RESULTS_TSV" | wc -l)
+total=$(grep -c . "$RESULTS_TSV")
 echo "wf_gate: MATCH=$m DIFF=$diff SKIP=$skip  ->  $RESULTS_TSV"
-[ "$diff" = 0 ]
+# The reference side is corpus_file_diff.sh's --prove cache, which the bump
+# checklist says to clear by hand. Cleared, every file reports SKIP_NO_HS and
+# DIFF=0 holds having compared nothing, so the skip count decides the verdict
+# alongside the diff count.
+bad=''
+[ "$diff" = 0 ] || bad="DIFF=$diff"
+[ "$skip" = 0 ] || bad="${bad:+$bad }SKIPPED=$skip (never compared; refill $HS_CACHE with corpus_file_diff.sh)"
+[ "$total" -gt 0 ] || bad="NO-ROWS (the file list resolved to nothing)"
+echo "wf_gate: verdict=${bad:-OK}"
+[ -z "$bad" ]

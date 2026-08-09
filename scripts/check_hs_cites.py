@@ -459,6 +459,14 @@ def main():
         scanned += 1
         check_file(oracle, rs, findings, advisories, stats)
 
+    if not scanned:
+        # "0 findings over 0 files" is the same exit status as a clean run, so
+        # a misspelt --crate would gate a bump on nothing at all.
+        print("no .rs files matched"
+              + (f" --crate {' '.join(sorted(args.crate))}" if args.crate else "")
+              + f" under {CRATES}", file=sys.stderr)
+        return 2
+
     findings = [f for f in findings if f[1] not in set(args.skip)]
     for here, cls, cite, detail in findings:
         print(f"{here}\t{cls}\t{cite}\t{detail}")

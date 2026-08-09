@@ -1035,6 +1035,68 @@ mod tests {
         assert!(serde_json::from_str::<Value>(&out).is_err());
     }
 
+    // `roleCluster` groups a rule's nodes under `<role>_Session_<n>`, and
+    // `sequentToJSONGraph` (JSON.hs:520-539) then serialises them through
+    // `graphClusterToJSONGraphCluster` (JSON.hs:498-506) instead of the
+    // top-level node list.  Every other pin in this module renders an
+    // UNCLUSTERED system, so `jgClusters` is `[]` in all of them and the
+    // cluster writer is unexercised.
+    //
+    // Oracle shape, read off `--prove --output-json` of the pinned v1.13.0
+    // binary on `examples/sapic/fast/basic/channels1.spthy` (roles `P`,
+    // `Process`, `Q`): top-level `jgNodes` is EMPTY while three clusters
+    // carry every node, each cluster object is exactly
+    // `{jgcEdges, jgcName, jgcNodes}` in that order, and `jgcName` is the
+    // cluster's FULL name (`P_Session_1`) — `extractBaseName` picks the
+    // colour, never the name.
+    #[test]
+    fn clustered_system_serialises_through_jg_clusters() {
+        use crate::fact::out_fact;
+        use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo};
+        let k = lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
+        let mk = |name: &'static str, role: &str| {
+            Rule::new(
+                RuleInfo::Proto(ProtoRuleACInstInfo {
+                    name: ProtoRuleName::Stand(name),
+                    attributes: RuleAttributes {
+                        role: Some(role.to_string()),
+                        ..Default::default()
+                    },
+                    loop_breakers: Vec::new(),
+                }),
+                Vec::new(),
+                vec![out_fact(k.clone())],
+                vec![out_fact(k.clone())],
+            )
+        };
+        let mut sys = System::empty();
+        sys.add_node(LVar::new("a", LSort::Node, 1), mk("InitA", "P"));
+        sys.add_node(LVar::new("b", LSort::Node, 2), mk("InitB", "Q"));
+        let out = sequents_to_json_pretty(
+            &GraphOptions::default(),
+            &[("L".to_string(), &RenderSystem::from_prover(sys))],
+        );
+        assert!(
+            out.contains("            \"jgNodes\": [],\n"),
+            "clustered nodes must leave the top-level list empty:\n{out}"
+        );
+        for (name, node) in [("P_Session_1", "#a.1"), ("Q_Session_1", "#b.2")] {
+            let block = format!(
+                "                {{\n\
+                 \x20                   \"jgcEdges\": [],\n\
+                 \x20                   \"jgcName\": \"{name}\",\n\
+                 \x20                   \"jgcNodes\": [\n\
+                 \x20                       {{\n\
+                 \x20                           \"jgnColor\": \""
+            );
+            assert!(out.contains(&block), "{name} cluster object:\n{out}");
+            assert!(
+                out.contains(&format!("\"jgnId\": \"{node}\",")),
+                "{name} must carry its node {node}:\n{out}"
+            );
+        }
+    }
+
     // No traces at all: the empty array stays inline and the document is the
     // same 20 bytes `--output-json` writes for a theory with nothing solved.
     #[test]

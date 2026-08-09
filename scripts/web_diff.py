@@ -86,12 +86,17 @@ def main():
                     extra += f"# KIND MISMATCH hs={h['kind']} rs={r['kind']}\n"
                 if status_mismatch:
                     extra += f"# HTTP MISMATCH hs={h['status']} rs={r['status']}\n"
+                # keepends: the graph and text routes are compared byte for
+                # byte, and `splitlines()` throws away the line terminators —
+                # a body that differs only by a trailing newline then produced
+                # an EMPTY diff beside a DIFF row, which reads as the differ
+                # having failed rather than as the divergence it is.
                 ud = difflib.unified_diff(
-                    ch.splitlines(), cr.splitlines(),
-                    fromfile="HS", tofile="RS", lineterm="")
+                    ch.splitlines(keepends=True), cr.splitlines(keepends=True),
+                    fromfile="HS", tofile="RS")
                 with open(os.path.join(diffdir, safe_name(u) + ".diff"), "w",
                           encoding="utf-8") as f:
-                    f.write(f"# URL {u}\n{extra}" + "\n".join(ud) + "\n")
+                    f.write(f"# URL {u}\n{extra}" + "".join(ud) + "\n")
         rows.append((u, status, str(h["status"]), str(r["status"]), kind))
         counts[status] = counts.get(status, 0) + 1
 
