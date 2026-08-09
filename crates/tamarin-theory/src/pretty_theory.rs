@@ -816,9 +816,23 @@ fn render_open_restriction(
         ));
     use crate::pretty_hpj::{keyword_, line_comment_};
     let mut out = String::new();
+
     out.push_str(&keyword_("restriction").render());
     out.push(' ');
     out.push_str(&r.name);
+    if !r.attributes.is_empty() {
+        out.push_str(" [");
+        let attrs: Vec<&str> = r
+            .attributes
+            .iter()
+            .map(|a| match a {
+                p::RestrictionAttr::LeftRestriction => "left",
+                p::RestrictionAttr::RightRestriction => "right",
+            })
+            .collect();
+        out.push_str(&attrs.join(", "));
+        out.push(']');
+    }
     out.push_str(":\n");
     out.push_str(&pf::formula_doublequoted_nested(&original, 2));
     if is_safety_formula(&original) {
