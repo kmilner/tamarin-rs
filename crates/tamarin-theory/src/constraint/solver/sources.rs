@@ -1575,10 +1575,22 @@ fn refine_one_source(
 }
 
 /// HS `showSaturationSteps` (Sources.hs:363-376): when set, `saturateSources`
-/// traces `[Saturating Sources] …` progress lines to stderr.  HS defaults the
-/// parameter off and only `--precompute-only` batch mode observes it on, so
-/// the flag is process-global here: `run_batch`'s precompute path enables it;
-/// every other caller (proving, web) leaves it off.
+/// traces `[Saturating Sources] …` progress lines to stderr.
+///
+/// The value is `closeTheoryWithMaude`'s last argument (CloseRule.hs:57),
+/// which every CLI theory close passes as `True` — `closeTranslatedTheory`
+/// (TheoryLoader.hs:679, the batch/`--prove`/`--precompute-only`/web load),
+/// `closeTheory` (Prover.hs:51) and `applyPartialEvaluation`
+/// (Prover.hs:238-240).  Only the two auxiliary closes pass `False`: the NDC
+/// deduction check (CloseRule.hs:246,251) and the message-derivation check
+/// (MessageDerivationChecks.hs:42).  HS then emits nothing on theories whose
+/// proofs never force `crcRawSources`/`crcRefinedSources`, since `trace`
+/// fires at thunk-force time.
+///
+/// The port's contexts are built in too many places to thread a value
+/// through each, so the gate is process-global: `run_batch` disarms it
+/// around the NDC and derivation-check stages and arms it for the close
+/// proper.
 static SHOW_SATURATION_STEPS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -1693,9 +1705,9 @@ fn saturate_sources_with_simp_opt(
         // `src_meta[i]` lines up with `per_source[i]`.  This lets us move
         // `current`'s Systems into `refine_one_source` (which consumes
         // them) instead of deep-cloning every source first.
-        let src_meta: Vec<(crate::constraint::constraints::Goal, bool, usize)> = current
+        let src_meta: Vec<(crate::constraint::constraints::Goal, bool)> = current
             .iter()
-            .map(|s| (s.goal.clone(), s.incomplete, s.cases_len()))
+            .map(|s| (s.goal.clone(), s.incomplete))
             .collect();
         let saturated_indexed: Vec<(usize, Source)> = std::mem::take(&mut current)
             .into_iter()
@@ -1741,14 +1753,22 @@ fn saturate_sources_with_simp_opt(
                 }
             })
             .collect();
-        for ((new_cases, per_changed, _), meta) in per_source.into_iter().zip(src_meta) {
-            let src_goal_and_incomplete = (meta.0, meta.1);
-            let prev_case_count = meta.2;
+        for ((new_cases, per_changed, _), (src_goal, src_incomplete)) in
+            per_source.into_iter().zip(src_meta)
+        {
+            // HS `saturateSources` (Sources.hs:479-498) derives its
+            // per-source change bit SOLELY from the solver's result:
+            //   solver = do names <- solveAllSafeGoals …
+            //               return (not $ null names, names)
+            // `per_changed` is that `not (null names)` — whether
+            // `solveAllSafeGoals` took at least one step on any of the
+            // source's cases.  Nothing else feeds `changes`: neither an
+            // emptied case list (every branch `mzero`'d) nor a grown one
+            // re-arms the loop on its own, because both can only arise
+            // from a step the solver already reported.
             if per_changed {
                 changed = true;
             }
-            // Determine if the case count changed for this source.
-            let new_case_count = new_cases.len();
             // HS-faithful `refineSource` (Sources.hs:131-133):
             //   refineSource ctxt proofStep th = (..., set cdCases newCases th)
             // and `saturateSources` (Sources.hs:498):
@@ -1765,25 +1785,7 @@ fn saturate_sources_with_simp_opt(
             // Dropping it would leave the STALE *initial* cases in the cell
             // (e.g. a builtin `check_rep`/`get_rep` coerce case), inflating the
             // locations-report SAPiC proofs.
-            let new_cases_empty = new_cases.is_empty();
-            next.push(Source::eager_list(
-                src_goal_and_incomplete.0,
-                new_cases,
-                src_goal_and_incomplete.1,
-            ));
-            if new_cases_empty {
-                changed = true;
-            }
-            if new_case_count > prev_case_count {
-                changed = true;
-            }
-            // HS-faithful fixpoint: if case_count went DOWN or stayed,
-            // this source is at fixpoint (HS's `change = not (null
-            // names)` would be False here — solveAllSafeGoals reached
-            // a state where no more steps progress).  Don't trigger
-            // another iter because of a count drop — that was the
-            // saturate over-iteration that killed PRF's C_2/S_2 chain
-            // cases at iter 3 in TLS_Handshake.  See [project_prf_source_cache_undercount].
+            next.push(Source::eager_list(src_goal, new_cases, src_incomplete));
         }
         // HS trace guards (Sources.hs:361-377), with n = iter_n + 1 (HS's
         // `go thsInit 1` is 1-based):

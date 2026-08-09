@@ -302,6 +302,11 @@ sweep_banner() {
 #   field — `stderr`, `json`, `dot-labels`, …) must equal it. Without one an
 #   entry excuses whatever goes wrong with that file, so a documented stderr
 #   divergence would also swallow a brand-new json regression beside it.
+#   Staleness ignores that 6th column. An OK row carries the detail `-`, which
+#   matches no symptom, so gating the OK branch on it would make a
+#   symptom-narrowed entry UNREPORTABLE as stale — it would sit in the ledger
+#   forever, excusing a symptom the file had stopped producing. A file that
+#   comes back OK produced no symptom at all, so every entry naming it is stale.
 apply_ledger() {
   local out=$1 sweep=$2 col=$3 unitcol=${4:-0}
   [ -f "$LEDGER" ] || return 0
@@ -318,9 +323,10 @@ apply_ledger() {
       sub(/^.*\/tamarin-prover\//, "", rel)
       key = rel SUBSEP ""
       if (!(key in cls) && unitcol > 0) key = rel SUBSEP $unitcol
-      if (key in cls && (det[key] == "" || det[key] == $NF)) {
-        if ($col == "DIFF" || $col == "ERROR") { $col = "LEDGERED"; $NF = $NF " [" cls[key] "]"; hit[key] = 1 }
-        else if ($col == "OK") ok[key] = 1
+      if (key in cls) {
+        if (($col == "DIFF" || $col == "ERROR") && (det[key] == "" || det[key] == $NF)) {
+          $col = "LEDGERED"; $NF = $NF " [" cls[key] "]"; hit[key] = 1
+        } else if ($col == "OK") ok[key] = 1
       }
       print
     }

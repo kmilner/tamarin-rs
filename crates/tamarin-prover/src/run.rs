@@ -1645,6 +1645,16 @@ impl TheoryPipeline<'_> {
             annotate_theory_loop_breakers(&mut self.elaborated, m);
         }
 
+        // `showSaturation` is the last argument of `closeTheoryWithMaude`
+        // (CloseRule.hs:57), and exactly two closes pass `False`: the NDC
+        // deduction check (`closeTheoryWithMaude sig t False False`,
+        // CloseRule.hs:246,251) and the message-derivation check
+        // (`closeTheoryWithMaude sig t sources False`,
+        // MessageDerivationChecks.hs:42). Both are what this method runs, so
+        // the trace is silent across it; `close_translated_theory` re-arms it
+        // for the close proper.
+        tamarin_theory::constraint::solver::sources::set_show_saturation_steps(false);
+
         // Once-per-theory NDC pass (HS `checkCloseIntrRule` inside
         // `checkTranslatedTheory`, TheoryLoader.hs — BEFORE the
         // derivation checks): assemble the intruder cache, run the
@@ -1707,6 +1717,36 @@ impl TheoryPipeline<'_> {
     /// `--auto-sources` are inert there even though the flags are still read.
     fn close_translated_theory(&mut self, want_traces: bool) -> Result<ClosedOutcome, RunError> {
         let in_file = self.in_file;
+
+        // The close proper: HS's `closeTranslatedTheory` (TheoryLoader.hs:679),
+        // `Prover.closeTheory` (Prover.hs:51) and `applyPartialEvaluation`
+        // (Prover.hs:238-240) all pass `showSaturation = True`, so every
+        // saturation from here on — auto-sources, the prover session, the
+        // `--precompute-only` forcing that runs after the per-file loop —
+        // traces.
+        //
+        // KNOWN RESIDUAL DIVERGENCES. HS traces once per FORCE of one of the
+        // two `ClosedRuleCache` thunks (`crcRawSources`, `crcRefinedSources =
+        // refineWithSourceAsms … crcRawSources`, CloseRule.hs:426-427), and
+        // this port's source lifecycle neither shares nor defers identically:
+        //  1. A theory with a `[sources]` lemma emits one EXTRA sequence. HS
+        //     forces the single shared `crcRawSources` thunk once and the
+        //     refine reuses it; the port saturates the raw set once per
+        //     distinct `source_key`
+        //     (`ProverSession::presaturate_shared_sources`), so the raw pass
+        //     runs for the `[]` key and again inside the refined key's
+        //     `ensure_saturated`.
+        //  2. A theory whose proofs never consult a source case emits one
+        //     sequence where HS emits none: HS never forces the thunk, while
+        //     `presaturate_shared_sources` saturates eagerly for every lemma
+        //     carrying a stored skeleton.
+        //  3. Under `--auto-sources` the counts differ both ways. HS closes the
+        //     rule cache up to three times (`cache items` for the trigger
+        //     check, `cache itemsModAC` inside `addAutoSourcesLemma`, then
+        //     `cache items'`, CloseRule.hs:56-112) where `apply_auto_sources`
+        //     builds one probe context, and the port's probe saturation lands
+        //     BEFORE the `Theory closed` marker instead of after it.
+        tamarin_theory::constraint::solver::sources::set_show_saturation_steps(true);
 
         // Adopt the NDC verdicts into the printed signature
         // (`joinNDCinSigWMaude`): `check_translated_theory` stashed the
@@ -2678,23 +2718,12 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // each file's stats here (traces, then its doc) reproduces HS's
         // renderDoc-time stderr order — see `precompute_pending`.
         for (session, parsed, wf_len) in &precompute_pending {
-            // HS prints the trace lines only under `showSaturationSteps`
-            // (on in this mode alone).  Scope the flag tightly around the
-            // forcing so no other phase can emit trace lines.
-            //
-            // DELIBERATE DIVERGENCE (--auto-sources only): HS also traces
-            // the redundant cache closes inside its auto-sources branch
-            // (`closeTheoryWithMaude` forces `cache items` for the trigger
-            // check and `cache itemsModAC` inside `addAutoSourcesLemma`,
-            // CloseRule.hs:56-110), emitting 4 sequences where RS emits
-            // the 2 that produce the reported sources (final raw +
-            // refined).  Stdout stats match byte-for-byte; matching the
-            // extra sequences would mean re-running those redundant
-            // saturations.
-            tamarin_theory::constraint::solver::sources::set_show_saturation_steps(true);
-            let stats = session.precomputation_stats(parsed);
-            tamarin_theory::constraint::solver::sources::set_show_saturation_steps(false);
-            let stats = stats.map_err(|e| RunError(e.to_string()))?;
+            // The trace is already armed: each file's `close_translated_theory`
+            // left it on, matching HS, where this forcing happens inside the
+            // same `showSaturation = True` close.
+            let stats = session
+                .precomputation_stats(parsed)
+                .map_err(|e| RunError(e.to_string()))?;
             // HS `casesInfo` (ClosedTheory.hs:563-570).
             let chain_info = |n: usize| -> String {
                 if n == 0 {
