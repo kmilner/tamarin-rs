@@ -34,16 +34,34 @@
 #   stored-proof-echo      stored-proof echo divergence. Two distinct causes
 #                          remain. (a) pe/module Yubikey rows: AC multiset
 #                          arguments are echoed in a different order. (b) the
-#                          four json UM_three_pass rows are an UPSTREAM bug in
-#                          which the port is the more correct side — HS's
-#                          prettyTerm prints a user-AC application unparenthesised
-#                          under `^`, but its own parser binds AC tighter than
-#                          exponentiation, so HS misreads the proof text it just
-#                          wrote and emits "invalid proof step encountered"
-#                          against itself. RS round-trips faithfully and applies
-#                          the step. A bug-compatible RS was built and reverted:
-#                          it regressed `counter` and ake/dh/UM_three_pass and
-#                          needs sort-inference changes under the pretty gate.
+#                          four json UM_three_pass rows are an UPSTREAM printer
+#                          bug. HS's prettyTerm brackets a user-AC APPLICATION
+#                          but not its arguments (Term.hs:305,310), while the
+#                          grammar puts user-AC operators BELOW `^`
+#                          (Parser/Term.hs:176), so an exponentiation argument
+#                          is printed undelimited: `add(rest,'g'^~ex)` prints
+#                          `(rest add 'g'^~ex)`, which reads back as
+#                          `('g' add rest)^~ex`. HS cannot re-read its own
+#                          file and emits "invalid proof step encountered"
+#                          against itself, 5x on UM_three_pass_combined_fixed.
+#                          NOT a parser divergence: RS parses that text to the
+#                          SAME term HS does (verified on a minimal repro).
+#                          RS survives only because disj replay matches STORED
+#                          TEXT against freshly RENDERED text (replay.rs
+#                          match_goal disj arm) instead of parsing the text to
+#                          a term and looking it up — string comparison is
+#                          invariant under a non-round-tripping printer.
+#                          Write-up: ~/upstream-bug-ac-exponent-precedence.md.
+#                          FILED UPSTREAM 2026-08-09. The expected fix is on
+#                          the printer, and OUR printer currently reproduces
+#                          the buggy form byte-for-byte — so the next submodule
+#                          bump must port the same bracketing or every user-AC
+#                          file goes red. These 4 rows should then go
+#                          LEDGER-STALE; see [[bump-playbook]] before touching.
+#                          To go bug-compatible, round-trip the stored alt text
+#                          through parse+render before comparing; that is a
+#                          deliberate corruption step, so it needs a decision
+#                          against the never-port-an-upstream-bug policy.
 #   (stderr-saturating-sources is RETIRED as a ledger class: sweep_common.sh's
 #    `nerr` filters those lines on both sides. The old doc read:)
 #   stderr-saturating-sources  HS prints "[Saturating Sources] ..." progress
