@@ -128,13 +128,10 @@ pub enum ParseError {
         found_at: Location,
         expected: Vec<String>,
     },
-    UnknownRuleAttribute {
+    UnknownAttribute {
         attribute: String,
         at: Location,
-    },
-    UnknownLemmaAttribute {
-        attribute: String,
-        at: Location,
+        context: String,
     },
     ExpectedExportBodyString {
         found: Option<String>,
@@ -268,12 +265,11 @@ impl ParseError {
                 }
             }
             // Explicity match to force compile-time error for new variants
-            ParseError::UnknownLemmaAttribute { .. }
-            | ParseError::FactNameMustStartWithUppercase { .. }
+            ParseError::FactNameMustStartWithUppercase { .. }
             | ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::FactArityMismatch { .. }
             | ParseError::UnexpectedTrailingInput { .. }
-            | ParseError::UnknownRuleAttribute { .. }
+            | ParseError::UnknownAttribute { .. }
             | ParseError::Custom { .. }
             | ParseError::Abort { .. } => {}
             ParseError::IoError { .. } => {}
@@ -292,7 +288,6 @@ impl ParseError {
             | ParseError::ExpectedPreprocessorDirective { at, .. }
             | ParseError::ExpectedHexColor { at, .. }
             | ParseError::ExpectedQuotedString { at, .. }
-            | ParseError::UnknownLemmaAttribute { at, .. }
             | ParseError::ExpectedExportBodyString { at, .. }
             | ParseError::ExpectedProcess { at, .. }
             | ParseError::FactNameMustStartWithUppercase { at, .. }
@@ -308,7 +303,7 @@ impl ParseError {
             | ParseError::IoError { at, .. }
             | ParseError::TrailingGarbageInFormulaString { at, .. }
             | ParseError::TrailingGarbageInTermString { at, .. }
-            | ParseError::UnknownRuleAttribute { at, .. }
+            | ParseError::UnknownAttribute { at, .. }
             | ParseError::Expected { at, .. }
             | ParseError::Custom { at, .. }
             | ParseError::Abort { at, .. }
@@ -340,8 +335,7 @@ impl ParseError {
             | ParseError::TrailingGarbageInTermString { found, .. }
             | ParseError::Expected { found, .. }
             | ParseError::UnterminatedDelimiter { found, .. } => found,
-            ParseError::UnknownRuleAttribute { attribute, .. }
-            | ParseError::UnknownLemmaAttribute { attribute, .. } => Some(attribute),
+            ParseError::UnknownAttribute { attribute, .. } => Some(attribute),
             ParseError::FactNameMustStartWithUppercase { name, .. }
             | ParseError::FactArityMismatch { name, .. }
             | ParseError::UnexpectedTrailingInput { found: name, .. } => Some(name),
@@ -376,8 +370,7 @@ impl ParseError {
             | ParseError::TrailingGarbageInTermString { found, .. }
             | ParseError::Expected { found, .. }
             | ParseError::UnterminatedDelimiter { found, .. } => found.as_deref(),
-            ParseError::UnknownRuleAttribute { attribute, .. }
-            | ParseError::UnknownLemmaAttribute { attribute, .. } => Some(attribute.as_str()),
+            ParseError::UnknownAttribute { attribute, .. } => Some(attribute.as_str()),
             ParseError::FactNameMustStartWithUppercase { name, .. }
             | ParseError::FactArityMismatch { name, .. } => Some(name.as_str()),
             ParseError::UnexpectedTrailingInput { found, .. } => Some(found.as_str()),
@@ -412,11 +405,10 @@ impl ParseError {
             | ParseError::TrailingGarbageInTermString { expected, .. }
             | ParseError::Expected { expected, .. }
             | ParseError::UnterminatedDelimiter { expected, .. } => Some(expected.clone()),
-            ParseError::UnknownLemmaAttribute { .. }
-            | ParseError::UnknownRuleAttribute { .. }
-            | ParseError::FactNameMustStartWithUppercase { .. }
+            ParseError::FactNameMustStartWithUppercase { .. }
             | ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::FactArityMismatch { .. }
+            | ParseError::UnknownAttribute { .. }
             | ParseError::UnexpectedTrailingInput { .. }
             | ParseError::Custom { .. }
             | ParseError::Abort { .. }
@@ -453,7 +445,10 @@ impl ParseError {
             ParseError::ExpectedHexColor { .. } => "Expected hex color",
             ParseError::ExpectedQuotedString { .. } => "Expected quoted string",
             ParseError::UnterminatedDelimiter { .. } => "Unterminated delimiter",
-            ParseError::UnknownLemmaAttribute { .. } => "Unknown lemma attribute",
+            ParseError::UnknownAttribute { context, .. } => {
+                // Using a string to include the context in the message
+                Box::leak(format!("Unknown {} attribute", context).into_boxed_str())
+            }
             ParseError::ExpectedExportBodyString { .. } => "Expected export body string",
             ParseError::ExpectedProcess { .. } => "Expected process",
             ParseError::FactNameMustStartWithUppercase { .. } => {
@@ -473,7 +468,6 @@ impl ParseError {
                 "Trailing garbage in formula string"
             }
             ParseError::TrailingGarbageInTermString { .. } => "Trailing garbage in term string",
-            ParseError::UnknownRuleAttribute { .. } => "Unknown rule attribute",
             ParseError::Expected { .. } => "Unexpected input",
             ParseError::Custom { .. } => "Parse error",
             ParseError::Abort { .. } => "Invalid input",
@@ -624,11 +618,10 @@ impl ParseError {
                 }
                 notes
             }
-            ParseError::UnknownLemmaAttribute { attribute, .. } => {
-                vec![format!("unknown lemma attribute `{attribute}`")]
-            }
-            ParseError::UnknownRuleAttribute { attribute, .. } => {
-                vec![format!("unknown rule attribute `{attribute}`")]
+            ParseError::UnknownAttribute {
+                attribute, context, ..
+            } => {
+                vec![format!("unknown {context} attribute `{attribute}`")]
             }
             ParseError::FactNameMustStartWithUppercase { name, .. } => {
                 vec![format!(
@@ -3469,21 +3462,39 @@ impl<'a> Parser<'a> {
         self.require_kw(kw)?;
         let name = self.ident()?;
         let mut attributes = Vec::new();
+        let opening_at = self.lx.pos();
         if self.try_punct("[") {
             loop {
                 self.skip_ws();
-                if self.try_kw("left") {
+                if self.peek_punct("]") {
+                    break;
+                } else if self.try_kw("left") {
                     attributes.push(RestrictionAttr::LeftRestriction);
                 } else if self.try_kw("right") {
                     attributes.push(RestrictionAttr::RightRestriction);
                 } else {
-                    break;
+                    let (found, found_at) =
+                        self.found_token_until(|c| c.is_whitespace() || c == ']');
+                    return Err(ParseError::UnknownAttribute {
+                        attribute: found.unwrap_or("end of file".to_string()),
+                        at: found_at,
+                        context: "restriction".into(),
+                    });
                 }
                 if !self.try_punct(",") {
                     break;
                 }
             }
-            self.require_punct("]")?;
+            self.require_punct("]").map_err(|_| {
+                let (found, found_at) = self.found_token_until(|c| c.is_whitespace() || c == ']');
+                self.err_unterminated_delimiter(
+                    '[',
+                    opening_at,
+                    found_at,
+                    found,
+                    vec!["]".to_string(), "left".to_string(), "right".to_string()],
+                )
+            })?;
         }
         self.require_punct(":")?;
         let phi = self.double_quoted_formula()?;
@@ -3828,6 +3839,7 @@ impl<'a> Parser<'a> {
 
     fn rule_attributes(&mut self) -> Result<Vec<RuleAttr>, ParseError> {
         let mut attrs = Vec::new();
+        let opening_at = self.lx.pos();
         if !self.try_punct("[") {
             return Ok(attrs);
         }
@@ -3862,7 +3874,6 @@ impl<'a> Parser<'a> {
                 attrs.push(RuleAttr::IsSapicRule);
             } else {
                 // External attribute: x-<id> [= raw]
-                let save = self.save();
                 if let Some(ext) = self.lx.ext_identifier() {
                     let val = if self.try_punct("=") {
                         Some(self.read_balanced_token()?)
@@ -3871,12 +3882,18 @@ impl<'a> Parser<'a> {
                     };
                     attrs.push(RuleAttr::External(ext, val));
                 } else {
-                    self.restore(save);
+                    if self.peek_punct(":") || self.peek_punct("]") {
+                        // Peek a ":" so that `rule name[:` fails with an unterminated
+                        // delimiter error rather than an unknown attribute error.
+                        // Peek a "]" so that trailing commas are allowed.
+                        break;
+                    }
                     let (found, at) =
                         self.found_token_until(|c| c == ']' || c == ',' || c.is_whitespace());
-                    return Err(ParseError::UnknownRuleAttribute {
+                    return Err(ParseError::UnknownAttribute {
                         attribute: found.unwrap_or("EOF".to_string()),
                         at,
+                        context: "rule".into(),
                     });
                 }
             }
@@ -3884,7 +3901,10 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        self.require_punct("]")?;
+        self.require_punct("]").map_err(|_| {
+            let (found, found_at) = self.found_token_until(|c| c.is_whitespace() || c == ']');
+            self.err_unterminated_delimiter("[", opening_at, found_at, found, vec!["]".into()])
+        })?;
         Ok(attrs)
     }
 
@@ -4316,19 +4336,20 @@ impl<'a> Parser<'a> {
             } else if self.try_kw("right") {
                 attrs.push(LemmaAttr::Right);
             } else {
-                // HS `lemmaAttribute` (Lemma.hs:39-53) is a closed `asum` of the
-                // recognised attributes with no catch-all; an unknown attribute
-                // makes `list (lemmaAttribute ...)` fail and `protoLemma`'s outer
-                // `try` backtrack into a load error. An empty read here means we
-                // are at `]` (empty list) or a trailing `,`, both of which are
-                // permitted by `commaSep` — so break in that case, otherwise
-                // reject the unknown attribute to match Haskell.
-                let raw = self.read_until_attribute_end();
-                if raw.is_empty() {
+                if self.peek_punct(":") || self.peek_punct("]") {
+                    // Peek a ":" so that `lemma name[:` fails with an unterminated
+                    // delimiter error rather than an unknown attribute error.
+                    // Peek a "]" so that trailing commas are allowed.
                     break;
                 }
-                let at = Location::location_of(&Some(&raw), self.lx.pos());
-                return Err(ParseError::UnknownLemmaAttribute { attribute: raw, at });
+
+                let (found, at) =
+                    self.found_token_until(|c| c == ']' || c == ',' || c.is_whitespace());
+                return Err(ParseError::UnknownAttribute {
+                    attribute: found.unwrap_or("EOF".to_string()),
+                    at,
+                    context: "lemma".into(),
+                });
             }
             if !self.try_punct(",") {
                 break;
