@@ -442,10 +442,8 @@ fn deduction_restrictions(with_only_once_d: bool) -> Vec<Guarded> {
 /// order, first occurrence wins.  Fixes the lemma's data-binder order.
 fn collect_var_specs(t: &p::Term, out: &mut Vec<p::VarSpec>) {
     match t {
-        p::Term::Var(v) => {
-            if !out.contains(v) {
-                out.push(v.clone());
-            }
+        p::Term::Var(v) if !out.contains(v) => {
+            out.push(v.clone());
         }
         p::Term::App(_, args) | p::Term::Pair(args) => {
             for a in args {

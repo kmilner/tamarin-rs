@@ -3187,7 +3187,7 @@ fn render_restriction_attributes(attrs: &[p::RestrictionAttr], out: &mut String)
         return;
     }
 
-    out.push_str("[");
+    out.push('[');
     let attr_strs: Vec<&str> = attrs
         .iter()
         .map(|a| match a {
