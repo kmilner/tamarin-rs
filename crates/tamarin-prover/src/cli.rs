@@ -72,13 +72,11 @@
 //!   --output-dot=FILE, --od    the same traces as dot — one
 //!                              `digraph "<label>"` per solved node, separated
 //!                              by a blank line; no traces ⇒ a 0-byte file.
-//!                              DIVERGENCE: the graph BODIES are the port's
-//!                              DOT dialect, not HS `Text.Dot`'s (node ids,
-//!                              record ports, cluster ids and attribute
-//!                              quoting differ — see the KNOWN DIVERGENCES
-//!                              block in `tamarin-theory`'s
-//!                              `constraint/system/dot.rs`).  Labels and
-//!                              container framing are byte-exact.
+//!                              Bodies come from the same `showDot` port the
+//!                              interactive graph routes use
+//!                              (`tamarin-theory`'s
+//!                              `constraint/system/dot.rs`), so the whole
+//!                              document is byte-exact.
 //!   --with-maude=PATH          path to `maude` (default: looked up via PATH)
 //!   --with-dot=PATH            path to GraphViz `dot`; used by the `test`
 //!                              subcommand's version probe and by interactive
@@ -511,15 +509,17 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                     args.bound = Some(parse_int(&v, "bound")?);
                 }
                 "heuristic" => {
-                    // flagOpt default = head of defaultRankings False; that
-                    // default rebuilds the Rust default downstream, so a bare
-                    // flag is behaviourally equal to absent — leave None.
-                    // Routed: when set, this OVERRIDES the per-lemma / theory
-                    // heuristic for every lemma (HS `selectHeuristic`:
-                    // `apDefaultHeuristic <|> pcHeuristic`, Theory/Proof.hs:705-716, see line 707).
-                    if let Some(v) = val_inline {
-                        args.heuristic = Some(v.to_string());
-                    }
+                    // flagOpt default = `prettyGoalRanking (head (defaultRankings
+                    // False))` = `"s"` (Constraint/System.hs:526, 586), so a BARE
+                    // `--heuristic` records smart ranking rather than nothing.
+                    // That matters because a recorded value OVERRIDES the theory's
+                    // own `heuristic:` / per-lemma ranking for every lemma
+                    // (HS `selectHeuristic`: `apDefaultHeuristic <|> pcHeuristic`,
+                    // Theory/Proof.hs:705-716, see line 707) — with an in-file
+                    // `heuristic: o` the bare flag is what stops the oracle from
+                    // being consulted at all.  `--heuristic=` records `""`, which
+                    // `mk_theory_load_options` rejects as HS field 5 does.
+                    args.heuristic = Some(flag_opt(val_inline, "s"));
                 }
                 "partial-evaluation" => {
                     // flagOpt "summary" (TheoryLoader.hs:126-131); cmdargs

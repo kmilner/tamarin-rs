@@ -490,7 +490,7 @@ fn render_theory_source(entry: &crate::state::TheoryEntry) -> String {
             .collect(),
         None => Vec::new(),
     };
-    tamarin_theory::pretty_theory::pretty_closed_theory(
+    let mut body = tamarin_theory::pretty_theory::pretty_closed_theory(
         &entry.parser_theory,
         &entry.typed_theory,
         &proved,
@@ -498,7 +498,29 @@ fn render_theory_source(entry: &crate::state::TheoryEntry) -> String {
         &build,
         &in_file,
         false,
-    )
+    );
+    // `getTheorySourceR` / `getTheoryMessageDeductionR` / `getDownloadTheoryR`
+    // are all `render . prettyClosedTheory` (Handler.hs:1015-1022, :1050-1056,
+    // :1763-1766), and HughesPJ's `render` ends at the document's last
+    // character — the batch path's trailing newline is `putStrLn`'s, not the
+    // document's (Batch.hs:114-134, which is why `-o` files are written
+    // without it).  `pretty_closed_theory` carries that newline for the
+    // stdout caller, so the body served here is one byte shorter.
+    if body.ends_with('\n') {
+        body.pop();
+    }
+    // OPEN DIVERGENCE, width: `render` is HughesPJ's DEFAULT style, 100/67
+    // (Text/PrettyPrint/Class.hs:77-78), where batch `renderDoc` pins
+    // `lineLength = 110` -> ribbon 73 (Console.hs:243, 398-399).
+    // `pretty_closed_theory` renders at 110/73 for its stdout caller and takes
+    // no width, so these routes serve the wider layout: a group that fits 73
+    // but not 67 stays on one line here and wraps upstream.  Visible on
+    // `regression/trace/issue193.spthy`, whose captured oracle body is
+    // `tests/fixtures/haskell-responses/source.txt`; the web gate's allowlist
+    // holds no theory that crosses the boundary, so all 186 of its text rows
+    // match.  Closing it means threading a width through the shared renderer,
+    // whose acceptance test is the 432-file batch gate.
+    body
 }
 
 pub async fn source_(State(state): State<Arc<AppState>>, Path(idx): Path<usize>) -> Response {

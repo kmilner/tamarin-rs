@@ -287,7 +287,11 @@ fn run_test(args: &Args) -> Result<i32, RunError> {
 /// We mirror the DH half: spin up Maude with `dh_maude_sig()`, generate the
 /// rules via [`tamarin_theory::intruder_rules::dh_intruder_rules`] with the
 /// HS-hardcoded `False` flag, and pretty-print each rule in HS's
-/// `rule (modulo AC) NAME:` shape.  The BP half is a known gap (see body).
+/// `rule (modulo AC) NAME:` shape, and the BP half the same way on a second
+/// handle (see body for why the two signatures stay separate).
+/// `-O`/`--Output` additionally writes the two blocks to files, as HS's
+/// `writeRules` does (see the tail of the body).  Both blocks and the stdout
+/// dump are byte-identical to the oracle's — 5811 / 10426 / 16238 bytes.
 fn run_variants(args: &Args) -> Result<i32, RunError> {
     let maude_path = maude_invocation_path(args);
     // HS `Main.Mode.Intruder.run` runs `ensureMaude` BEFORE it starts either
@@ -340,6 +344,23 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
     let bp_s = tamarin_theory::pretty_formula::pretty_intruder_variants(&bp_rules);
     print!("{}{}", dh_s, bp_s);
     println!();
+    // HS `writeRules` (Intruder.hs:57-62): with `-O`/`--Output` the two blocks
+    // ALSO go to `<outDir>/data/intruder_variants_{dh,bp}.spthy`
+    // (`dhIntruderVariantsFile`/`bpIntruderVariantsFile`,
+    // TheoryLoader.hs:853-858) — each block alone, without the newline
+    // `putStrLn` gave the stdout dump.  `writeFileWithDirs` creates the `data`
+    // level; a bare `-O` records `""`, which `</>` resolves against the cwd.
+    if let Some(out_dir) = &args.output_dir {
+        for (rel, body) in [
+            ("data/intruder_variants_dh.spthy", &dh_s),
+            ("data/intruder_variants_bp.spthy", &bp_s),
+        ] {
+            let path = PathBuf::from(out_dir).join(rel);
+            if let Err(io) = write_file_with_dirs(&path.to_string_lossy(), body) {
+                return Ok(ghc_exception(&io));
+            }
+        }
+    }
     Ok(0)
 }
 
@@ -677,16 +698,19 @@ fn ghc_exception(msg: &str) -> i32 {
 /// HS never guards the read: `openFile` throws an IOException that escapes to
 /// the runtime, which writes `tamarin-prover: <path>: openFile: <reason>` (the
 /// IOException `Show` instance, GHC.IO.Exception) to stderr and exits 1.
-/// Reproduce the three reasons an input path can hit; anything rarer keeps the
-/// port's own message.  EISDIR is matched by errno: Rust only surfaces read(2)'s
-/// failure on a directory, and `ErrorKind::IsADirectory` needs Rust 1.83
-/// (workspace MSRV is 1.78).
+///
+/// A directory is the one reason GHC does not take from the errno: `openFile`
+/// checks the file type itself and raises `InappropriateType` with the
+/// hand-written description `is a directory` (GHC.IO.FD), where the write
+/// side's EISDIR carries `strerror`'s capitalised `Is a directory`.  Every
+/// other reason is the shared errno rendering — [`io_exception_reason`].
+/// EISDIR is matched numerically because `ErrorKind::IsADirectory` needs Rust
+/// 1.83 and the workspace MSRV is 1.78.
 fn report_open_file_error(in_file: &str, e: &std::io::Error) -> Result<i32, RunError> {
-    let reason = match e.kind() {
-        std::io::ErrorKind::NotFound => "does not exist (No such file or directory)",
-        std::io::ErrorKind::PermissionDenied => "permission denied (Permission denied)",
-        _ if e.raw_os_error() == Some(21) => "inappropriate type (is a directory)",
-        _ => return Err(RunError(format!("failed to read {}: {}", in_file, e))),
+    let reason = if e.raw_os_error() == Some(21) {
+        "inappropriate type (is a directory)".to_string()
+    } else {
+        io_exception_reason(e)
     };
     eprintln!("tamarin-prover: {in_file}: openFile: {reason}");
     Ok(1)
@@ -729,10 +753,18 @@ fn missing_output_path() -> i32 {
 /// `strerror(errno)` — the very text Rust's `Display` prints ahead of its own
 /// ` (os error N)` suffix, which GHC has no counterpart for.  An errno outside
 /// the table keeps Rust's message whole, suffix included.
+fn write_io_exception(path: &str, op: &str, e: &std::io::Error) -> String {
+    format!("{path}: {op}: {}", io_exception_reason(e))
+}
+
+/// The `<description> (<strerror>)` tail of an `IOException`'s `show` — see
+/// [`write_io_exception`], whose two halves this is the errno-derived one of.
+/// Shared with [`report_open_file_error`], which prefixes the same tail with
+/// its own `openFile` frame.
 ///
 /// The errnos are matched numerically: `ErrorKind::IsADirectory` and friends
 /// need Rust 1.83 and the workspace MSRV is 1.78.
-fn write_io_exception(path: &str, op: &str, e: &std::io::Error) -> String {
+fn io_exception_reason(e: &std::io::Error) -> String {
     let errno = e.raw_os_error();
     let ioe_type = match errno {
         // EPERM, EACCES, EROFS
@@ -750,7 +782,7 @@ fn write_io_exception(path: &str, op: &str, e: &std::io::Error) -> String {
         _ => None,
     };
     let rust = e.to_string();
-    let reason = match (ioe_type, errno) {
+    match (ioe_type, errno) {
         (Some(t), Some(n)) => {
             let strerror = rust
                 .strip_suffix(&format!(" (os error {n})"))
@@ -758,8 +790,7 @@ fn write_io_exception(path: &str, op: &str, e: &std::io::Error) -> String {
             format!("{t} ({strerror})")
         }
         _ => rust,
-    };
-    format!("{path}: {op}: {reason}")
+    }
 }
 
 /// HS `writeFileWithDirs` (Main/Utils.hs:20-23): create the target's parent
@@ -995,6 +1026,15 @@ struct TheoryLoadOptions {
 /// field order.  `Err` carries HS's `ArgumentError` message, reported by the
 /// caller via [`batch_argument_error`] (the GHC `error e` at Batch.hs:163:33).
 fn mk_theory_load_options(args: &Args) -> Result<TheoryLoadOptions, String> {
+    // `--heuristic` (HS field 5, TheoryLoader.hs:339-347): cmdargs records the
+    // empty string for `--heuristic=`, and the `Just [] -> throwError` arm
+    // rejects it.  Field 5 precedes both deferred checks below, so it wins
+    // when several values are bad.  Only an explicit `--heuristic=` reaches
+    // here: a bare `--heuristic` records the flag's default and `parse_args`
+    // leaves the field `None`.
+    if args.heuristic.as_deref() == Some("") {
+        return Err("heuristic: at least one ranking must be given".to_string());
+    }
     // `--partial-evaluation` (HS field 7, TheoryLoader.hs:354-358).  Its
     // unknown-option rejection precedes `--output-module`'s in the record,
     // so it fires first when both values are bad.
@@ -2916,7 +2956,7 @@ fn print_overall_summary(file_results: &[FileResult], prove_mode: bool) {
         println!("  ");
         if fr.wf_count > 0 {
             println!("  WARNING: {} wellformedness check failed!", fr.wf_count);
-            // HS Batch.hs:87-316, see line 246 emits this second line only in prove mode:
+            // HS Batch.hs:87-316, see line 247 emits this second line only in prove mode:
             //   [ Pretty.text "         The analysis results might be wrong!"
             //   | thyLoadOptions.proveMode ]
             if prove_mode {
@@ -3048,6 +3088,49 @@ mod tests {
             mk_theory_load_options(&a).unwrap_err(),
             "output mode not supported.",
         );
+    }
+
+    // `heuristic` is field 5, ahead of both — `--heuristic=` beats a bad
+    // `--partial-evaluation` and a bad `-m`.  A bare `--heuristic` records the
+    // flag's default and is accepted.
+    #[test]
+    fn mk_theory_load_options_rejects_empty_heuristic_before_the_other_two() {
+        for argv in [
+            vec!["--heuristic=", "x.spthy"],
+            vec!["--heuristic=", "--partial-evaluation=bogus", "x.spthy"],
+            vec!["--heuristic=", "-m=bogus", "x.spthy"],
+        ] {
+            let a = parse(&argv);
+            assert_eq!(
+                mk_theory_load_options(&a).unwrap_err(),
+                "heuristic: at least one ranking must be given",
+                "{argv:?}",
+            );
+        }
+        let a = parse(&["--heuristic", "x.spthy"]);
+        assert!(mk_theory_load_options(&a).is_ok());
+    }
+
+    // GHC renders an `openFile` failure from the errno, bar the directory
+    // check it makes itself: `errnoToIOError`'s `IOErrorType` then
+    // `strerror`.  Pinned against the oracle's own bytes for the five errnos
+    // an input path reaches.
+    #[test]
+    fn open_file_reasons_follow_errno_to_io_error() {
+        let cases = [
+            (2, "does not exist (No such file or directory)"),
+            (13, "permission denied (Permission denied)"),
+            (20, "inappropriate type (Not a directory)"),
+            (36, "invalid argument (File name too long)"),
+            (40, "invalid argument (Too many levels of symbolic links)"),
+        ];
+        for (errno, expected) in cases {
+            assert_eq!(
+                io_exception_reason(&std::io::Error::from_raw_os_error(errno)),
+                expected,
+                "errno {errno}",
+            );
+        }
     }
 
     #[test]

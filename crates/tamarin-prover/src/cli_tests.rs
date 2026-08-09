@@ -169,6 +169,37 @@ fn bound_bare_vs_absent() {
 }
 
 #[test]
+fn heuristic_bare_vs_absent() {
+    // `flagOpt (prettyGoalRanking (head (defaultRankings False)))`
+    // (TheoryLoader.hs:120-125) records `"s"` for a bare `--heuristic`
+    // (Constraint/System.hs:526 `SmartRanking False`, :586 its `"s"`
+    // identifier).  Absent stays `None`, which is NOT the same thing: a
+    // recorded value overrides the theory's own ranking
+    // (`apDefaultHeuristic <|> pcHeuristic`).  Oracle-checked on a theory
+    // carrying `heuristic: o` with no oracle script beside it —
+    // `--prove --heuristic` proves it on both sides (rc 0) because the bare
+    // flag displaces the oracle ranking, where the same run without the flag
+    // dies on the missing script (rc 1) on both.
+    let absent = parse(&["t.spthy"]);
+    assert_eq!(absent.heuristic, None);
+    let bare = parse(&["--heuristic", "t.spthy"]);
+    assert_eq!(bare.heuristic.as_deref(), Some("s"));
+    assert_eq!(bare.in_files, vec!["t.spthy".to_string()]);
+    // The next token is positional, as for every other flagOpt.
+    let spaced = parse(&["--heuristic", "C", "t.spthy"]);
+    assert_eq!(spaced.heuristic.as_deref(), Some("s"));
+    assert_eq!(
+        spaced.in_files,
+        vec!["C".to_string(), "t.spthy".to_string()]
+    );
+    // An explicit empty value is the one HS rejects, in `mk_theory_load_options`.
+    assert_eq!(
+        parse(&["--heuristic=", "t.spthy"]).heuristic.as_deref(),
+        Some("")
+    );
+}
+
+#[test]
 fn saturation_inline_short_and_long() {
     let a = parse(&["-s7"]);
     assert_eq!(a.saturation, Some(7));
@@ -272,7 +303,7 @@ fn version_short_and_long() {
 
 #[test]
 fn output_module_parsed() {
-    // output-module is flagOpt "spthy" (Batch.hs:44-84, see line 78): inline only.
+    // output-module is flagOpt "spthy" (Batch.hs:44-84, see line 79): inline only.
     let a = parse(&["-mmsr"]);
     assert_eq!(a.output_module.as_deref(), Some("msr"));
     let a = parse(&["--output-module=msr"]);
