@@ -8,8 +8,10 @@
 //!   - DOT output via the in-process `system_to_dot` against a
 //!     simple known-shape proof system.
 //!   - `/intdot` returns the HTML shell whose `dotsrc` points at `/json`.
-//!   - `/interactive-graph-def` draws proof nodes and source cases; for it
-//!     and `/graph`, every other theory path is Yesod's 500 page.
+//!   - `/interactive-graph-def` draws proof nodes and source cases, the
+//!     latter byte-for-byte against the oracle's own document (the route
+//!     serialises through `showDot`, exactly as upstream's does); for it and
+//!     `/graph`, every other theory path is Yesod's 500 page.
 //!   - `/json` returns the aeson-pretty JSON graph, with and without
 //!     `abbrevInBackend`; after an autoprove its nodes and edges are the
 //!     searched node's own system (the `SysRetention::KeepAll` guard).
@@ -24,7 +26,7 @@ use common::*;
 #[tokio::test]
 async fn intdot_returns_html_shell() {
     // HS `getInteractiveDotGraphR` (`src/Web/Handler.hs:903-911`) returns the
-    // `intdotLayout True` HTML shell page (`src/Web/Types.hs:795-825`) — a
+    // `intdotLayout True` HTML shell page (`src/Web/Types.hs:795-824`) — a
     // `<dot-graph-viz>` custom element whose `dotsrc` points at the JSON graph
     // route (which the bundled client-side viz fetches and draws), wrapped in
     // the `.graph-page` container with the floating Options bar.  It is NOT
@@ -100,7 +102,13 @@ async fn interactive_graph_def_returns_dot() {
         .expect("send");
     assert_eq!(res.status(), 200);
     let body = res.text().await.expect("text");
-    assert!(body.contains("digraph"));
+    // The route answers `D.showDot "G"`'s container verbatim (`dotGraphString`,
+    // `src/Web/Theory.hs:2312-2318`): the QUOTED digraph id, and the blank line
+    // `"\n}\n"` leaves before the closing brace (`src/Text/Dot.hs:246-248`).
+    // The document between them is pinned byte for byte against the oracle by
+    // `interactive_graph_def_renders_source_cases`.
+    assert!(body.starts_with("digraph \"G\" {\n"), "header: {body:.40}");
+    assert!(body.ends_with("\n\n}\n"), "trailer: {body:?}");
 
     // A proof path that does not resolve is `dotGraphString`'s `Nothing`,
     // which `getTheoryInteractiveGraphR` (`src/Web/Handler.hs:1464-1470`)
@@ -112,85 +120,6 @@ async fn interactive_graph_def_returns_dot() {
         .await
         .expect("send");
     assert_eq!(res.status(), 404);
-}
-
-/// The dot labels of a graph, port anchors and whitespace dropped.
-///
-/// The two dot emitters serialise the same graph differently — `D.showDot`
-/// quotes every attribute value, names nodes `n<k>` and gives every record
-/// field a port, while the port's emitter leaves the simple attributes
-/// (`shape=`, `fontsize=`) unquoted, names nodes after the node id and ports
-/// only the premise/conclusion fields.  What must agree is the graph drawn:
-/// the labels, in order.
-///
-/// SECOND CANONICALISER: `scripts/web_normalize.py`'s `canon_dot` /
-/// `_norm_record_label` do this same "same graph, different dialect" job for
-/// the web-parity gate, over the same two emitters.  The two are independent
-/// implementations by design — this one is a label sequence, that one a
-/// label-keyed structural form including attrs and edges — so a change to
-/// what either one sees past (escapes, attribute order, record bracketing)
-/// wants the matching change in the other.  A cross-reference sits on
-/// `canon_dot`.
-fn dot_label_texts(dot: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut rest = dot;
-    while let Some(pos) = rest.find("label=") {
-        rest = &rest[pos + "label=".len()..];
-        let value = match rest.strip_prefix('"') {
-            Some(inner) => {
-                // A quoted value ends at the first UNESCAPED quote: both
-                // emitters write an inner `"` as `\"` (HS `Text.Dot.showAttr`,
-                // the port's `escape_dot_label`), so a backslash always
-                // consumes the character that follows it.
-                let mut end = inner.len();
-                let mut escaped = false;
-                for (i, ch) in inner.char_indices() {
-                    if escaped {
-                        escaped = false;
-                    } else if ch == '\\' {
-                        escaped = true;
-                    } else if ch == '"' {
-                        end = i;
-                        break;
-                    }
-                }
-                let (value, tail) = inner.split_at(end);
-                rest = tail;
-                value
-            }
-            None => {
-                let end = rest.find([',', ']', ';', '\n']).unwrap_or(rest.len());
-                let (value, tail) = rest.split_at(end);
-                rest = tail;
-                value
-            }
-        };
-        let mut cleaned = String::new();
-        let mut in_port = false;
-        for ch in value.chars() {
-            match ch {
-                '<' => in_port = true,
-                '>' => in_port = false,
-                _ if in_port || ch.is_whitespace() => {}
-                _ => cleaned.push(ch),
-            }
-        }
-        out.push(cleaned);
-    }
-    out
-}
-
-/// The scanner reads a record label whole — its commas and its `|` separators
-/// belong to the value, only the `<port>` anchors and the whitespace go — and a
-/// label carrying an escaped quote runs to the closing quote, not to the `\"`.
-#[test]
-fn dot_label_texts_reads_whole_quoted_values() {
-    let dot = r#"n0[shape="record",label="{{<p0> Fr( ~x )|<p1> K( f(a, b) )}}",color="red"];
-n1[label="say \"hi\"",shape="ellipse"];"#;
-    assert_eq!(
-        dot_label_texts(dot),
-        ["{{Fr(~x)|K(f(a,b))}}", r#"say\"hi\""#]
-    );
 }
 
 /// `thyPathSystem`'s `TheorySource` arm draws the `(i-1, j-1)` case, so both
@@ -212,13 +141,11 @@ async fn interactive_graph_def_renders_source_cases() {
         let res = s.client.get(s.url(path)).send().await.expect("send");
         assert_eq!(res.status(), 200, "{path} must be a 200");
         let body = res.text().await.expect("text");
-        let labels = dot_label_texts(&body);
         assert_eq!(
-            labels,
-            dot_label_texts(&haskell_capture(capture)),
-            "{path} must draw the oracle's graph; got:\n{body}"
+            body,
+            haskell_capture(capture),
+            "{path} must be the oracle's document byte for byte"
         );
-        assert!(!labels.is_empty(), "{path} must draw a non-empty graph");
     }
 }
 
@@ -458,9 +385,16 @@ async fn graph_json_abbrev_in_backend_shortens_long_terms() {
 
 #[test]
 fn dot_output_for_a_simple_system() {
-    // In-process test against a known-shape proof system.  We build
-    // a System with a single rule node + an Out edge and confirm
-    // the DOT output contains the expected structural pieces.
+    // The whole document `system_to_dot` produces for a one-rule system, which
+    // is the only exercise that entry point gets: it pairs the batch writer's
+    // options (`Batch.hs:254-255`) with the web routes' label, a combination no
+    // upstream call site makes.  Every byte here is `Text.Dot`'s, anchored on
+    // the oracle by
+    // `constraint::system::dot::showdot::tests::single_rule_matches_the_oracle_bytes`:
+    // unindented statements, quoted numeric attribute values, `node[…]`
+    // abutting its id, the three record PORTS (`n0`/`n1`/`n2`) allocated off
+    // the graph-global counter before the node itself (`n3`), and the blank
+    // line `showDot` leaves before the closing brace.
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
@@ -488,12 +422,18 @@ fn dot_output_for_a_simple_system() {
     let nid = LVar::new("i", LSort::Node, 0);
     sys.add_node(nid, rule);
     let dot = system_to_dot(&sys);
-    assert!(dot.starts_with("digraph G {"), "header: {}", &dot[..40]);
-    assert!(dot.contains("Setup"), "rule name should appear");
-    assert!(dot.contains("Fr"), "Fresh-fact tag should appear");
-    assert!(dot.contains("Out"), "Out-fact tag should appear");
-    // Each rule's prems / concs should be DOT record ports.
-    assert!(dot.contains("<p0>"));
-    assert!(dot.contains("<c0>"));
-    assert!(dot.trim_end().ends_with('}'));
+    assert_eq!(
+        dot,
+        concat!(
+            "digraph \"G\" {\n",
+            "nodesep=\"0.3\";\n",
+            "ranksep=\"0.3\";\n",
+            "node[fontsize=\"8\",fontname=\"Helvetica\",width=\"0.3\",height=\"0.2\"];\n",
+            "edge[fontsize=\"8\",fontname=\"Helvetica\"];\n",
+            "n3[shape=\"record\",label=\"{{<n0> Fr( ~k )}|{<n1> #i : Setup}|{<n2> Out( ~k )}}\"\
+             ,fillcolor=\"#d5d897\",style=\"filled\",fontcolor=\"black\",role=\"Undefined\"];\n",
+            "\n",
+            "}\n",
+        )
+    );
 }

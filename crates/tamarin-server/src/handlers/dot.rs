@@ -7,8 +7,9 @@
 //!
 //! The DOT document itself is produced by
 //! [`tamarin_theory::constraint::system::dot`] (HS
-//! `Theory.Constraint.System.Dot`), which the batch `--output-dot` writer
-//! shares; only the process spawning is web-side, exactly as in Haskell.
+//! `Theory.Constraint.System.Dot`) — the same serializer, at the same label,
+//! that the batch `--output-dot` writer uses; only the process spawning is
+//! web-side, exactly as in Haskell.
 
 use tamarin_theory::constraint::system::dot::system_to_dot_with;
 use tamarin_theory::constraint::system::graph::GraphOptions;

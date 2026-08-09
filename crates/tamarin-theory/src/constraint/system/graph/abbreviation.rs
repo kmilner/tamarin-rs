@@ -69,10 +69,6 @@ impl Default for AbbreviationOptions {
 pub type Abbreviations = BTreeMap<LNTerm, (LNTerm, LNTerm)>;
 
 /// Lookup the abbreviation for a single term.  Mirror of `lookupAbbreviation`.
-///
-/// Retained for HS API parity (the live caller in `dot.rs` does the lookup
-/// inline); no cross-crate caller yet.
-#[allow(dead_code)] // HS API parity; exercised by tests, no production caller (dot.rs inlines the lookup)
 pub(crate) fn lookup_abbreviation<'a>(
     abbrevs: &'a Abbreviations,
     t: &LNTerm,

@@ -8,13 +8,38 @@
 //! is a `State` monad; in Rust we expose a `DotGraph` struct with mutating
 //! methods. `scope` and `cluster` take a closure for the nested graph.
 //!
-//! NOTE: two DOT paths sit on top of this module. The batch `--output-dot`
-//! serializer (`tamarin-theory/src/constraint/system/dot_showdot.rs`) drives
-//! the full builder API and [`show_dot`], so its bytes are `Text.Dot`'s. The
-//! interactive graph routes
-//! (`tamarin-theory/src/constraint/system/dot.rs`) emit their own dialect and
-//! borrow only the leaf helpers (`fix_multi_line_label`,
-//! [`escape_dot_graph_label`], [`escape_record`]).
+//! Its one consumer is the workspace's single DOT serializer
+//! (`tamarin-theory/src/constraint/system/dot_showdot.rs`), which drives the
+//! full builder API and [`show_dot`], so the bytes reaching both the batch
+//! `--output-dot` writer and the interactive graph routes are `Text.Dot`'s.
+//!
+//! What is `pub` here tracks `Text.Dot`'s own export list (Text/Dot.hs:14-69),
+//! so a combinator with no RS caller yet still carries the visibility its
+//! upstream counterpart has.  The escapers are the other side of that rule:
+//! `escapeRecord` / `fixMultiLineLabel` / `escapeDotGraphLabel` are internal
+//! to the Haskell module, so they are private here too.
+//!
+//! Two places are WIDER than the export list, both because Rust cannot express
+//! what Haskell does there:
+//!   * `NodeId` and `Record` are exported abstract upstream (the `-- abstract`
+//!     notes at Text/Dot.hs:23 and :44), but a Rust enum's variants inherit the
+//!     enum's visibility, so hiding the constructors would need a wrapper type.
+//!     Nothing outside this module names a variant.
+//!   * `GraphElement` is not exported at all upstream, yet it appears in the
+//!     signatures of `addElements` (Text/Dot.hs:152) and
+//!     `getDotGenStateElements` (Text/Dot.hs:135), which ARE exported; Haskell
+//!     allows that, Rust does not.
+//!
+//! Two `pub` items answer to something other than a NAME in that list:
+//! [`NodeId::to_dot_string`] is `instance Show NodeId` (Text/Dot.hs:86-90),
+//! which an abstract type carries to its users anyway, and
+//! [`DotGraph::scope_named`] is `createSubGraph` (Text/Dot.hs:148-149) at a
+//! `Just cid`, the shape `cluster` itself uses (Text/Dot.hs:211-215).
+//!
+//! The combinators upstream exports that have no counterpart here are `runDot`,
+//! `modifyDotGenState`, `htmlLabel` (whose `("html_label", …)` pair `write_attr`
+//! special-cases directly) and the `'`/`_` result-shape variants of
+//! `hcat`/`vcat`/`record`/`mrecord`.
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum NodeId {
@@ -200,7 +225,7 @@ impl DotGraph {
 /// touches `"` (→ `\"`) and NOTHING else — backslashes included.  Distinct
 /// from `showAttr`'s attribute-value escape, which also maps `\n` to `\l`
 /// (see `write_attr`).
-pub fn escape_dot_graph_label(label: &str) -> String {
+fn escape_dot_graph_label(label: &str) -> String {
     let mut out = String::with_capacity(label.len());
     for c in label.chars() {
         if c == '"' {
@@ -329,7 +354,7 @@ fn quote_dot_id(s: &str) -> String {
 /// with `unlines`, which appends a trailing newline (matched here by iterating
 /// `lines()` and pushing `'\n'` after every line). Single-line labels (no
 /// `\n`) pass through untouched.
-pub fn fix_multi_line_label(s: &str) -> String {
+fn fix_multi_line_label(s: &str) -> String {
     if !s.contains('\n') {
         return s.to_string();
     }
@@ -432,7 +457,7 @@ fn record_label<P: Clone>(graph: &mut DotGraph, rec: &Record<P>) -> (String, Vec
 /// metacharacters `| { } < >` get a backslash and NOTHING else does —
 /// `"` / `\` / newline are the attribute level's business (see
 /// [`escape_dot_graph_label`] and `write_attr`).
-pub fn escape_record(s: &str) -> String {
+fn escape_record(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -496,10 +521,12 @@ mod tests {
 
     #[test]
     fn empty_graph_renders() {
+        // `" {\n" ++ unlines (map showGraphElement elems) ++ "\n}\n"`
+        // (Text/Dot.hs:246-248): with no elements `unlines` contributes the
+        // empty string, so an empty graph still carries the blank line the
+        // trailing `"\n}\n"` puts before the closing brace.
         let g = DotGraph::new();
-        let s = show_dot("g", &g);
-        assert!(s.starts_with("digraph \"g\" {\n"));
-        assert!(s.ends_with("}\n"));
+        assert_eq!(show_dot("g", &g), "digraph \"g\" {\n\n}\n");
     }
 
     #[test]

@@ -2,7 +2,7 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! Unit pins for the batch `--output-dot` serializer.
+//! Unit pins for the DOT serializer's `Text.Dot` bytes.
 
 use super::*;
 use crate::constraint::system::graph::SimplificationLevel;

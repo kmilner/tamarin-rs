@@ -2,14 +2,15 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! The batch `--output-dot` serializer: HS
+//! The DOT serializer: HS
 //! `D.showDot label $ dotSystemCompact graphOptions dotOptions system`
-//! (Batch.hs:256).
-//!
-//! Same graph CONTENT as the interactive renderer in [`super`] — whose label,
-//! colour, filtering and ordering helpers this module reuses wholesale — but
-//! built as a `Text.Dot` element tree ([`tamarin_utils::dot`]) and rendered by
-//! `showDot`, which is what makes the bytes HS's:
+//! (Batch.hs:256 for `--output-dot`; `dotGraphString`,
+//! `Web/Theory.hs:2312-2318`, at label `"G"` for the interactive graph route).
+//! Upstream has only this one serializer, and so do we — [`super`] is the
+//! entry point and the graph-CONTENT layer
+//! (label, colour, filtering and ordering helpers, reused wholesale here),
+//! while the bytes are built here as a `Text.Dot` element tree
+//! ([`tamarin_utils::dot`]) and rendered by `showDot`:
 //!
 //!   * NODE IDS come from `Text.Dot`'s single monotonic counter
 //!     (`rawNode`, Text/Dot.hs:156-162): `n0`, `n1`, … in ALLOCATION order,
@@ -36,13 +37,13 @@ use tamarin_utils::dot::{
 };
 
 use super::*;
-use crate::constraint::constraints::{NodeConc, NodeId, NodePrem, Reason};
+use crate::constraint::constraints::{LessAtom, NodeConc, NodeId, NodePrem, Reason};
 use crate::constraint::system::graph::repr::{Cluster, GraphRepr};
 use crate::rule::{ConcIdx, PremIdx};
 
 /// HS's record port type `Maybe (Either PremIdx ConcIdx)` (Dot.hs:295-296):
 /// the key each record field is tagged with, and thus the key `dotNodeCompact`
-/// sorts the returned association list by (Dot.hs:264-269).
+/// splits the returned association list on (Dot.hs:265-269).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RowKey {
     /// `Just (Left i)` — a premise field, cached into `dsPrems`.
@@ -74,24 +75,26 @@ struct Env<'a> {
     graph: &'a Graph<'a>,
     /// `resolveNodePremFact`/`resolveNodeConcFact`'s system (Graph.hs:87-96) —
     /// the ORIGINAL one, not the simplified copy the repr was built from.
-    orig_node_map: OrigNodeRules<'a>,
-    /// `hasOutgoingEdge graph v` (Dot.hs:280-283), over the TOP-LEVEL edges.
+    orig_node_map: NodeRuleMap<'a>,
+    /// `hasOutgoingEdge graph v` (Dot.hs:280-282), over the TOP-LEVEL edges.
     has_outgoing: tamarin_utils::FastSet<NodeId>,
 }
 
 impl Env<'_> {
-    /// HS `renderLNFact`'s abbreviation step (Dot.hs:228-236): `goAbbreviate`
+    /// HS `renderLNFact`'s abbreviation step (Dot.hs:227-235): `goAbbreviate`
     /// gates the substitution, so an always-`None` lookup is the `else` arm.
     fn abbrev(&self, t: &LNTerm) -> Option<LNTerm> {
         if !self.opts.abbreviate {
             return None;
         }
-        self.graph.abbreviations.get(t).map(|(a, _)| a.clone())
+        lookup_abbreviation(&self.graph.abbreviations, t).cloned()
     }
 }
 
 /// HS `D.showDot label $ dotSystemCompact graphOptions dotOptions system`
-/// (Batch.hs:256) — the batch `--output-dot` entry point.
+/// (Batch.hs:256).  `--output-dot` passes the trace's own label; the
+/// interactive graph routes reach it through [`super::system_to_dot_with`],
+/// which fixes the label at `"G"`.
 pub fn system_to_dot_labeled(sys: &System, opts: &GraphOptions, label: &str) -> String {
     let graph = system_to_graph(sys, opts);
     // `dotSystemCompact` (Dot.hs:506-512) keys the palette off the RAW
@@ -103,7 +106,12 @@ pub fn system_to_dot_labeled(sys: &System, opts: &GraphOptions, label: &str) -> 
 }
 
 /// Port of `dotGraphCompact` (Dot.hs:514-538).
-fn dot_graph_compact(
+///
+/// Visible to the parent module so its tests can render a hand-built
+/// [`Graph`] whose original and drawn systems deliberately disagree — a shape
+/// [`system_to_dot_labeled`] cannot produce, since it derives both from one
+/// `System`.
+pub(super) fn dot_graph_compact(
     g: &mut DotGraph,
     opts: &GraphOptions,
     color_map: &NodeColorMap,
@@ -173,7 +181,7 @@ fn set_default_attributes(g: &mut DotGraph) {
     g.edge_attributes(attrs(&[("fontsize", "8"), ("fontname", "Helvetica")]));
 }
 
-/// HS `setDefaultAttributesIfCluster` (Dot.hs:142-164).
+/// HS `setDefaultAttributesIfCluster` (Dot.hs:143-164).
 fn set_default_attributes_if_cluster(g: &mut DotGraph) {
     for (k, v) in [
         ("nodesep", "0.8"),
@@ -332,7 +340,7 @@ fn dot_node_compact(
         }
         // `missingNode shape label = D.node [("label", render label),("shape",shape)]`
         // (Dot.hs:283-285); both labels are `(<show v>, <i>)`
-        // (`prettyNodeConc`/`prettyNodePrem`, Constraints.hs:248-255).  Note
+        // (`prettyNodeConc`/`prettyNodePrem`, Constraints.hs:256-261).  Note
         // the caches: a missing node lands in `dsConcs`/`dsPrems`, NOT in
         // `dsNodes`.
         NodeType::Missing(MissingHint::Conc(ci)) => {
@@ -352,7 +360,7 @@ fn dot_node_compact(
     }
 }
 
-/// Port of `mkNode` (Dot.hs:295-314) — the compact-ellipse / full-record
+/// Port of `mkNode` (Dot.hs:295-315) — the compact-ellipse / full-record
 /// split, returning HS's `[(Maybe (Either PremIdx ConcIdx), D.NodeId)]`.
 fn mk_node(
     g: &mut DotGraph,
@@ -523,7 +531,7 @@ fn generate_legend(g: &mut DotGraph, st: &DotState, env: &Env<'_>) {
     if abbrevs.is_empty() {
         return;
     }
-    let html = hs_legend_html_label(abbrevs);
+    let html = legend_html_label(abbrevs);
     let n_legend = g.scope(|sub| {
         sub.attribute("rank", "sink");
         // `html_label` is `showAttr`'s one unquoted, unescaped attribute
@@ -540,15 +548,8 @@ fn generate_legend(g: &mut DotGraph, st: &DotState, env: &Env<'_>) {
     }
 }
 
-/// The `<TABLE …>` opening tag `abbrevLabel`'s `tableAttributes`
-/// (`[Border 1, CellBorder 0, CellSpacing 3, CellPadding 1]`, Dot.hs:462)
-/// print as.  Its WIDTH is also the continuation indent of the rows below
-/// (see [`hs_legend_html_label`]).
-const LEGEND_TABLE_OPEN: &str =
-    "<TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"3\" CELLPADDING=\"1\">";
-
-/// HS `htmlLabel $ abbrevLabel sortedAbbrevs labelColor` (Dot.hs:437-479) as
-/// graphviz's HTML-label printer renders it (`renderDot . unqtDot`,
+/// HS `htmlLabel $ abbrevLabel sortedAbbrevs labelColor` (Dot.hs:449 /
+/// 461-475) as graphviz's HTML-label printer renders it (`renderDot . unqtDot`,
 /// Text/Dot.hs:414-419), wrapped in the `<`…`>` that makes it a `html_label`.
 ///
 /// Three things the printer does that a naive concatenation does not:
@@ -560,10 +561,7 @@ const LEGEND_TABLE_OPEN: &str =
 ///     (`joinLinesWith`, Dot.hs:478-479), i.e. `<BR ALIGN="LEFT"/>`;
 ///   * text is escaped by [`escape_html_text`], which is not plain
 ///     entity-escaping.
-///
-/// [`super::legend_html_label`] is the interactive route's counterpart and
-/// renders a flatter dialect.
-fn hs_legend_html_label(abbrevs: &Abbreviations) -> String {
+fn legend_html_label(abbrevs: &Abbreviations) -> String {
     let row_sep = format!("\n{}", " ".repeat(LEGEND_TABLE_OPEN.chars().count()));
     let rows: Vec<String> = order_abbreviations_for_json(abbrevs)
         .into_iter()

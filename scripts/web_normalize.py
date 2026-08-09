@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """Semantic normalizers for the web-parity gate (RS interactive UI vs HS).
 
-The parity bar is *structural / semantic* equivalence, NOT byte-identity:
-we canonicalize away whitespace, attribute order, JSON key order, DOT
-serialization form, highlight `<span class="hl_*">` wrappers, `<br/>`/`<pre>`
-cosmetic markup, and the genuinely nondeterministic env fields (theory idx,
-timestamps, temp/cache-dir prefixes, absolute load paths).  What survives the
-canonicalization must match: element structure, visible text, link hrefs +
-text, form actions, embedded resource URLs, JSON values, and the DOT graph
-(nodes/edges/clusters compared by label, not by serialization bytes).
+The parity bar is *structural / semantic* equivalence for the markup routes,
+NOT byte-identity: we canonicalize away whitespace, attribute order, JSON key
+order, highlight `<span class="hl_*">` wrappers, `<br/>`/`<pre>` cosmetic
+markup, and the genuinely nondeterministic env fields (theory idx, timestamps,
+temp/cache-dir prefixes, absolute load paths).  What survives must match:
+element structure, visible text, link hrefs + text, form actions, embedded
+resource URLs and JSON values.
+
+The graph routes are held to byte-identity — the port emits `Text.Dot`'s bytes
+through the same `showDot` upstream uses — bar the env fields above and
+graphviz's own version stamp in a rendered SVG.  In particular `canon_dot`
+does NOT go through `canon_text`, whose line rstrip would hide a trailing-space
+divergence inside a DOT label.
 
 Used by web_diff.py.  Pure stdlib (html.parser, json, re).
 """
@@ -27,10 +32,10 @@ from html.parser import HTMLParser
 _IDX_RE = re.compile(r"/thy/trace/\d+/")
 # Same for diff theories, for completeness.
 _EQUIV_IDX_RE = re.compile(r"/thy/equiv/\d+/")
-# Wall-clock timestamps rendered on the theory-list / overview pages
-# (formatTime "%T" -> HH:MM:SS).  Also full date stamps if present.
-_TIME_RE = re.compile(r"\b\d{2}:\d{2}:\d{2}\b")
-_DATE_RE = re.compile(r"\b\d{1,2}/[A-Z][a-z]{2}/\d{4}(:\d{2}:\d{2}:\d{2})?( [+-]\d{4})?")
+# The only wall-clock stamp the crawled routes carry is the help page's
+# `Loaded at <%T> from <origin>` parenthetical, handled as one unit in
+# _VOLATILE below.  There is deliberately no blanket HH:MM:SS rule: it would
+# also rewrite times inside trace and constraint-system text, which is content.
 
 
 # Volatile build/version lines emitted in the `Generated from:` footer of the
@@ -52,8 +57,10 @@ _VOLATILE = [
     # The wall-clock time and the temp/cache-dir load path both differ between
     # the two backends (and run-to-run), so strip the whole `Loaded at …`
     # parenthetical to a placeholder on BOTH sides.  The load path never
-    # contains a `)`, so `[^)]*` stops at the closing paren.
-    (re.compile(r"Loaded at [^)]*"), "Loaded at #"),
+    # contains a `)`, so the match stops at the closing paren; `\n` is excluded
+    # too, so a side that somehow omits the paren erases the rest of one line
+    # instead of running on through the markup to whatever `)` comes next.
+    (re.compile(r"Loaded at [^)\n]*"), "Loaded at #"),
     # web_parity.sh stages each theory in a fresh `mktemp -d` workdir, and the
     # cached HS manifest generally comes from a DIFFERENT run (different
     # tmpdir) than the live RS crawl.  Absolute paths under it leak into the
@@ -290,200 +297,43 @@ def canon_json(body: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# DOT graph canonicalization (compare as a graph, not as serialization bytes)
+# Graph-route canonicalization
 # ---------------------------------------------------------------------------
 
-_DOT_STMT = re.compile(r"""\s*(.*?)\s*;""", re.S)
-
-
-def _parse_dot_attrs(s):
-    """Parse an `[a=b,c="d"]` attr list into a sorted dict-ish tuple."""
-    s = s.strip()
-    if not (s.startswith("[") and s.endswith("]")):
-        return ()
-    inner = s[1:-1]
-    attrs = {}
-    # split on commas not inside quotes
-    for m in re.finditer(r'([A-Za-z_]+)\s*=\s*("(?:[^"\\]|\\.)*"|[^,]*)', inner):
-        k = m.group(1)
-        v = m.group(2).strip()
-        if len(v) >= 2 and v[0] == '"' and v[-1] == '"':
-            v = v[1:-1]
-        v = norm_env(v)
-        # Canonicalize numeric attr values to a single float form — HS and RS
-        # serialize the same edge weight / size differently (`weight=10.0` vs
-        # `weight=10`), which is a serialization diff the graph comparator is
-        # meant to ignore.
-        if re.fullmatch(r"-?\d+(?:\.\d+)?", v):
-            v = repr(float(v))
-        attrs[k] = v
-    return tuple(sorted(attrs.items()))
-
-
-def _norm_record_label(lbl):
-    """Port/bracket-agnostic canonical form of a DOT node label.
-
-    HS and RS both emit graphviz RECORD labels for protocol-rule nodes —
-    `{ premises } | id : rule[acts] | { conclusions }` — but with DIFFERENT
-    field-port ids (HS a graph-global `<nK>` counter, RS local `<p0>`/`<c0>`)
-    and different record bracketing/serialization.  The parity bar explicitly
-    "ignores node-id scheme, quoting, and attribute order" and compares the
-    graph structurally, so we strip the record scaffolding down to the field
-    TEXT: drop `<portid>` prefixes and record braces, split into fields on
-    `|`, collapse whitespace (incl. HS's vertical multi-action `\\l` / `&nbsp;`
-    rendering, which RS joins horizontally), and drop empty fields.  A plain
-    (ellipse) label has no ports/braces/`|` → a single-field tuple.  Returns a
-    tuple of field strings so it doubles as a stable node key for resolving
-    edge endpoints.
-    """
-    if lbl is None:
-        return None
-    s = re.sub(r"<[A-Za-z0-9_]+>\s*", "", lbl)          # strip record port ids
-    s = s.replace("{", " ").replace("}", " ")            # drop record braces
-    s = s.replace("\\l", " ").replace("&nbsp;", " ").replace("\xa0", " ")
-    fields = [re.sub(r"\s+", " ", f).strip() for f in s.split("|")]
-    return tuple(f for f in fields if f)
+# graphviz stamps its own version and build date into an XML comment at the top
+# of every SVG it renders.  Both backends shell out to the SAME local binary, so
+# within one run the two stamps agree and this substitution is a no-op; it earns
+# its keep only when a cached HS manifest was crawled under a different
+# graphviz.  It does NOT make such a manifest comparable — a version change
+# generally moves the layout coordinates too — it just keeps the resulting DIFF
+# about the graph rather than about the stamp.  `[^\n]*` stops at the end of the
+# comment's first line, which is where graphviz breaks it.
+_SVG_GENERATOR = re.compile(r"Generated by graphviz version [^\n]*")
 
 
 def canon_dot(body: str) -> str:
-    """Canonicalize a DOT graph to a label-keyed structural form.
+    """Canonicalize a graph-route response.
 
-    HS uses counter node-ids (`nX`), RS uses semantic ids; we key nodes by
-    their `label` attribute (in the port/bracket-agnostic `_norm_record_label`
-    form) so the two are comparable.  Node/edge *default* attribute blocks
-    (`node[...]` / `edge[...]`) are merged into each node's / edge's effective
-    attrs before comparison, because the two backends split attrs between
-    per-node and default statements differently (e.g. HS sets `shape=record`
-    per-node via genRecord, RS as a `node[]` default) yet render identically.
-    We compare: graph-level kv (nodesep/ranksep/graph[]), the set of effective
-    node labels (normalized) + attrs, and the set of effective edges
-    (endpoints resolved to normalized labels) + attrs.
+    The port serialises through the same `Text.Dot` `showDot` upstream does
+    (see `constraint/system/dot.rs`), so the DOT is compared BYTE FOR BYTE —
+    node ids, record ports, attribute quoting and all.  Anything weaker was
+    hiding a real dialect divergence here for as long as the port had a
+    second serializer.
 
-    SECOND CANONICALISER: `dot_label_texts` in
-    `crates/tamarin-server/tests/routes_graph.rs` does this same "same graph,
-    different dialect" job for the dot-route integration tests (a label
-    sequence rather than a structural form).  A change to what either one sees
-    past wants the matching change in the other.
+    `/graph/*` answers the RENDERED SVG when graphviz is on PATH and falls
+    back to the DOT source when it is not, so the two shapes are told apart
+    by the body rather than by the route.
+
+    "Byte for byte" is meant literally, so this does NOT go through
+    `canon_text`: that rstrips every line and drops trailing blank ones, which
+    would make a trailing-space divergence inside a DOT label invisible — the
+    exact class of dialect difference this route exists to catch.  Only the
+    env-volatile tokens `norm_env` handles (and graphviz's version stamp) are
+    normalized; nothing else about the body is touched.
     """
-    body = norm_env(body)
-    # collect id -> label and node attrs, and edges by id
-    node_label = {}
-    node_attrs = {}
-    edges = []
-    node_defaults = {}   # merged into every node's effective attrs
-    edge_defaults = {}   # merged into every edge's effective attrs
-    graph_kv = {}        # graph-level scalar attrs (nodesep, ranksep, ...)
-    # crude statement scan (DOT here is machine-generated, line/`;`-delimited)
-    text = body
-    # normalize newlines to spaces inside the body except keep statement ';'
-    # iterate statements
-    stmts = []
-    cur = []
-    inq = False  # inside a double-quoted string?
-    for ch in text:
-        if ch == '"':
-            inq = not inq
-            cur.append(ch)
-        elif inq:
-            # Do NOT treat `;` (or braces) inside a quoted label as a
-            # statement break — HS record labels embed `&nbsp;` (which
-            # contains `;`) and `{...}` record braces, so a quote-blind
-            # splitter fragments the node statement mid-label and the node
-            # loses its `label` attr.
-            cur.append(ch)
-        elif ch == ";":
-            stmts.append("".join(cur).strip())
-            cur = []
-        else:
-            cur.append(ch)
-    if "".join(cur).strip():
-        stmts.append("".join(cur).strip())
-
-    # Endpoint id captures MUST exclude `:` so the trailing `(?::port)?` can
-    # strip the graphviz record port (`node:port`) — otherwise a greedy
-    # `[\w.\-:]+` swallows `n3:n1` whole and the endpoint never resolves to its
-    # node label.  Node ids themselves never contain `:`.
-    edge_re = re.compile(r'^\s*"?([\w\.\-]+)"?(?::[\w\.\-<>]+)?\s*->\s*"?([\w\.\-]+)"?(?::[\w\.\-<>]+)?\s*(\[.*\])?\s*$', re.S)
-    node_re = re.compile(r'^\s*"?([\w\.\-:]+)"?\s*(\[.*\])\s*$', re.S)
-    default_re = re.compile(r'^\s*(graph|node|edge)\s*(\[.*\])\s*$', re.S)
-    kv_re = re.compile(r'^\s*(\w+)\s*=\s*("?.*?"?)\s*$', re.S)
-
-    def label_of(attrs):
-        for k, v in attrs:
-            if k == "label":
-                return v
-        return None
-
-    for st in stmts:
-        st = st.strip()
-        if not st or st.startswith("//") or st.startswith("subgraph") or st in ("{", "}") or st.startswith("digraph"):
-            continue
-        m = default_re.match(st)
-        if m:
-            kind = m.group(1)
-            at = dict(_parse_dot_attrs(m.group(2)))
-            if kind == "node":
-                node_defaults.update(at)
-            elif kind == "edge":
-                edge_defaults.update(at)
-            else:  # graph[...]
-                graph_kv.update(at)
-            continue
-        m = edge_re.match(st)
-        if m:
-            edges.append((m.group(1), m.group(2), dict(_parse_dot_attrs(m.group(3) or ""))))
-            continue
-        m = node_re.match(st)
-        if m:
-            nid = m.group(1)
-            at = dict(_parse_dot_attrs(m.group(2)))
-            node_attrs[nid] = at
-            lbl = label_of(tuple(at.items()))
-            node_label[nid] = lbl if lbl is not None else nid
-            continue
-        m = kv_re.match(st)
-        if m:
-            graph_kv[m.group(1)] = norm_env(m.group(2).strip('"'))
-            continue
-
-    def key(nid):
-        # Node identity = its normalized (port/bracket-agnostic) label; falls
-        # back to the id for anything unlabelled.  Edge endpoints resolve
-        # through the same map so `node:port` references compare by label.
-        return _norm_record_label(node_label.get(nid, nid))
-
-    def eff_dict(defaults, own):
-        d = dict(defaults)
-        d.update(own)
-        return d
-
-    def eff(defaults, own):
-        d = eff_dict(defaults, own)
-        # The label is the node identity (compared via `key` in normalized
-        # form) — drop the RAW label from the attr set so record port-ids /
-        # bracketing don't resurface as a spurious attr diff.
-        d.pop("label", None)
-        return tuple(sorted(d.items()))
-
-    nodes_canon = sorted(
-        (key(nid), eff(node_defaults, own)) for nid, own in node_attrs.items()
-    )
-    # Drop `style=invis` edges: HS's `generateLegend` (Dot.hs:426-433) emits
-    # invisible sink→legend-anchor edges purely to POSITION the legend box;
-    # they render nothing and carry no semantic graph structure (the visible
-    # legend node itself compares as a normal node).  RS omits them.  Under the
-    # semantic/layout-agnostic parity bar these are ignored, not a divergence.
-    edges_canon = sorted(
-        (key(a), key(b), eff(edge_defaults, own))
-        for (a, b, own) in edges
-        if eff_dict(edge_defaults, own).get("style") != "invis"
-    )
-    out = {
-        "graph_kv": sorted(graph_kv.items()),
-        "nodes": nodes_canon,
-        "edges": edges_canon,
-    }
-    return json.dumps(out, sort_keys=True, ensure_ascii=False, indent=1, default=list)
+    if body.lstrip().startswith(("<?xml", "<svg")):
+        body = _SVG_GENERATOR.sub("Generated by graphviz version X", body)
+    return norm_env(body)
 
 
 # ---------------------------------------------------------------------------
