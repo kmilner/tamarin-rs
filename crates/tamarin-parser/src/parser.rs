@@ -3515,7 +3515,13 @@ impl<'a> Parser<'a> {
                 opening_pos,
                 *e.location(),
                 e.into_found(),
-                vec!["\"".to_string()],
+                vec![
+                    "\"".to_string(),
+                    "==>".to_string(),
+                    "<=>".to_string(),
+                    "&".to_string(),
+                    "|".to_string(),
+                ],
             )
         })?;
         Ok(f)
