@@ -8,4 +8,4 @@ csf26-ac/fast/minimal_multiset_analyzed.spthy             # AC multiset traces
 sapic/fast/feature-predicates/timepoints_analyzed.spthy   # predicate + timepoints
 sapic/fast/basic/channels1_analyzed.spthy                 # SAPIC channels
 features/macros/MacroInLemmasAndRestrictions_analyzed.spthy  # macro theory
-csf26-ac/fast/Yubikey_multiset_analyzed.spthy             # ledgered: replay-empty-json
+csf26-ac/fast/Yubikey_multiset_analyzed.spthy             # user-AC stored-proof replay

@@ -1,18 +1,24 @@
 # Documented pre-existing residuals for the parity sweeps (sweep_common.sh
 # apply_ledger). A DIFF/ERROR row whose file is listed here for its sweep is
-# reported LEDGERED; an entry none of whose rows diverged is flagged
-# LEDGER-STALE so it can be dropped. Columns (tab-separated):
-#   sweep	path relative to tamarin-prover/	class	note	[sub-unit]
+# reported LEDGERED. Columns (tab-separated):
+#   sweep	path relative to tamarin-prover/	class	note	[sub-unit]	[symptom]
 #
 # The optional 5th column narrows an entry to ONE sub-unit of the file — for
 # the module sweep, one of spthy/spthytyped/msr. Left empty (or absent) the
 # entry covers every row of the file, so a file ledgered for `msr` only still
 # reports a fresh `spthy` divergence as DIFF.
 #
-# The optional 6th column narrows to ONE SYMPTOM, matched against the row's
-# detail field (`stdout`, `stderr`, `json`, `dot`). Without it an entry excuses
-# whatever goes wrong with that file, so a documented stderr divergence would
-# also swallow a fresh json regression beside it.
+# The optional 6th column narrows to ONE SYMPTOM, matched against the first
+# word of the row's detail field (`stdout`, `stderr`, `json`, `dot`, `rc`,
+# `both-fail-stdout`, `timeout/kill`). Without it an entry excuses whatever
+# goes wrong with that file — a stderr-named class with no symptom column will
+# LEDGER a fresh stdout regression on the same file, so give every entry the
+# narrowest symptom its evidence supports.
+#
+# apply_ledger reports entries that have stopped excusing anything on stderr:
+# LEDGER-STALE (all its rows came back OK), LEDGER-UNMATCHED (it matched no row
+# at all — the file left the corpus, or a file-wide entry shadows it) and
+# LEDGER-DUP (two entries share a path+sub-unit key, so only the last is live).
 #
 # Classes:
 #   stderr-oracle-calls    HS derivation checks invoke the theory's oracle
@@ -20,15 +26,16 @@
 #                          stderr blocks; RS deriv checks never call oracles.
 #   capacity               RS aborts (rc 134, stack/OOM at the 16GiB guard) or
 #                          both sides exhaust the 600s retry cap.
-#   hs-timeout             HS cannot load the file inside the cap while RS
-#                          completes (HS-side capacity, rc hs=124).
-#   (replay-empty-json is RETIRED as a ledger class. Its 22 csf26-ac entries
-#    were attributed to the #874 numbering/eq-store class, but the cause was
-#    local: the replay matcher re-parsed rendered proof text with no AC
-#    signature and printed 0-arity symbols as `f()`, so the stored step failed
-#    its membership check and replay fell through to sorry. Fixed; all 22 came
-#    back byte-identical. Do not re-file a replay divergence under #874 without
-#    first checking that the goal text round-trips.)
+#   (No hs-timeout class exists. "HS blew the cap, RS finished" is a claim
+#    about the BOX, not the port, and it goes stale the moment the machine
+#    gets faster or the oracle's cache warms: the two U2F entries carried it
+#    while their actual divergence was stderr-simplifier-trace, and the class
+#    masked every other symptom on those files meanwhile. Classify by the
+#    divergence observed, and give the entry that symptom.)
+#   (No replay-empty-json class exists. A json export that replays to `sorry`
+#    is a LOCAL replay-matcher fault, not the #874 numbering/eq-store class:
+#    check that the stored goal text round-trips through the AC signature
+#    before filing one under #874.)
 #   sapic-export-echo      sapic/export corner files whose -m echo/rc diverged
 #                          before this campaign (PRE-binary evidence).
 #   stored-proof-echo      stored-proof echo divergence. Two distinct causes
@@ -62,10 +69,9 @@
 #                          through parse+render before comparing; that is a
 #                          deliberate corruption step, so it needs a decision
 #                          against the never-port-an-upstream-bug policy.
-#   (stderr-saturating-sources is RETIRED as a ledger class: sweep_common.sh's
-#    `nerr` filters those lines on both sides. The old doc read:)
-#   stderr-saturating-sources  HS prints "[Saturating Sources] ..." progress
-#                          lines on stderr that RS does not.
+#   (No stderr-saturating-sources class exists: sweep_common.sh's `nerr` drops
+#    "[Saturating Sources]" lines on both sides, so that divergence — HS prints
+#    them, RS mostly does not — never reaches a verdict here.)
 #   oracle-timeout         the HS oracle cannot produce a reference inside
 #                          the 600s serial retry cap (rc hs=124); the sweep
 #                          then skips the RS side, so the row has nothing to
@@ -122,89 +128,91 @@
 #                          width-wrapped as HS's HughesPJ layout wraps them.
 #
 # pe sweep
-pe	examples/features/heuristic/OracleRanking.spthy	stderr-oracle-calls	-
-pe	examples/thesis-LaraSchmid-evoting/chapter3_Alethea/aletheaD_sel_ShHh.spthy	stderr-oracle-calls	-
-pe	examples/csf23-subterms/FreshOrderingTest.spthy	capacity	PE explodes both sides: hs=124 rs=134 at 600s serial
-pe	examples/related_work/TPM_DKRS_CSF11/TPM_Exclusive_Secrets.spthy	capacity	hs=124 rs=134 at 600s serial
-pe	examples/features/auto-sources/tamarin-repo/related_work/TPM_DKRS_CSF11/TPM_Exclusive_Secrets.spthy	capacity	same file, auto-sources copy
-pe	examples/loops/Minimal_HashChain.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
-pe	examples/related_work/YubiSecure_KS_STM12/Yubikey.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Cronto_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Cronto_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Google2Step_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Google2Step_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_MA_NoTellExceptOK.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_MA_NoTellOK.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_VC.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/OTPoverSMS_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/OTPoverSMS_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Phoolproof_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Soundproof_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
+pe	examples/features/heuristic/OracleRanking.spthy	stderr-oracle-calls	-		stderr
+pe	examples/thesis-LaraSchmid-evoting/chapter3_Alethea/aletheaD_sel_ShHh.spthy	stderr-oracle-calls	-		stderr
+pe	examples/csf23-subterms/FreshOrderingTest.spthy	capacity	PE explodes both sides: hs=124 rs=134 at 600s serial		timeout/kill
+pe	examples/related_work/TPM_DKRS_CSF11/TPM_Exclusive_Secrets.spthy	capacity	hs=124 rs=134 at 600s serial		timeout/kill
+pe	examples/features/auto-sources/tamarin-repo/related_work/TPM_DKRS_CSF11/TPM_Exclusive_Secrets.spthy	capacity	same file, auto-sources copy		timeout/kill
+pe	examples/loops/Minimal_HashChain.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
+pe	examples/related_work/YubiSecure_KS_STM12/Yubikey.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Cronto_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Cronto_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Google2Step_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Google2Step_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_MA_NoTellExceptOK.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_MA_NoTellOK.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_VC.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/OTPoverSMS_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/OTPoverSMS_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Phoolproof_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Soundproof_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
 # Reached only once eligible() stopped excluding files on a rule-local `let`.
-pe	examples/csf17/counter-protocol.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
-pe	examples/sp14/STR.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
-pe	examples/sp14/STR_signed.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped
-pe	examples/sp14/group_joux.spthy	capacity	PE explodes both sides: rs=134 at the 16GiB guard, hs=124 at 600s (251 when the box is loaded)
-pe	examples/related_work/YubiSecure_KS_STM12/Yubikey_and_YubiHSM_multiset.spthy	stored-proof-echo	AC multiset args reorder in the echoed proof (tc2 vs otc2++z.1, tc1++z vs otc1++z++z.2); HS also marks a step "invalid proof step encountered" and annotates "/* unannotated */"
+pe	examples/csf17/counter-protocol.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
+pe	examples/sp14/STR.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
+pe	examples/sp14/STR_signed.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
+pe	examples/sp14/group_joux.spthy	capacity	PE explodes both sides: rs=134 at the 16GiB guard, hs=124 at 600s (251 when the box is loaded)		timeout/kill
+pe	examples/related_work/YubiSecure_KS_STM12/Yubikey_and_YubiHSM_multiset.spthy	stored-proof-echo	AC multiset args reorder in the echoed proof (tc2 vs otc2++z.1, tc1++z vs otc1++z++z.2); HS also marks a step "invalid proof step encountered" and annotates "/* unannotated */"		stdout
 #
 # module sweep (-m): all attributed pre-existing at a10cc1b with PRE-binary evidence
-module	examples/accountability/csf21-acc-unbounded/mixnets/basic/dmn-basic.spthy	stderr-oracle-calls	-
-module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-1.spthy	stderr-oracle-calls	-
-module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-2.spthy	stderr-oracle-calls	-
-module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-3.spthy	stderr-oracle-calls	-
-module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-4.spthy	stderr-oracle-calls	-
-module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-5.spthy	stderr-oracle-calls	-
-module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-1.spthy	stderr-oracle-calls	-
-module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-2.spthy	stderr-oracle-calls	-
-module	examples/features/heuristic/OracleRanking.spthy	stderr-oracle-calls	-
-module	examples/features/macros/MacroTestWithOracleRanking.spthy	stderr-oracle-calls	-
-module	examples/sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-5-fixed.spthy	capacity	deep process recursion, rs=134 at plain load
-module	examples/sapic/export/5G_AKA/5G_AKA.spthy	sapic-export-echo	all three modules
-module	examples/sapic/export/ExistingSapicModels/AKE.spthy	sapic-export-echo	-	msr
-module	examples/sapic/export/KEMTLS/kemtls-noaead.spthy	sapic-export-echo	-	msr
-module	examples/sapic/export/KEMTLS/kemtls.spthy	sapic-export-echo	-	msr
-module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_a1b1.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
-module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_a2b2.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
-module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_a3b3.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
-module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_a4b3.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
-module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_a2b2.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
-module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_a3b3.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
-module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_fairnessB.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
-module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_fullfairnessA.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
-module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_timelinessA.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
-module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_timelinessB.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does
-module	examples/thesis-LaraSchmid-evoting/chapter3_Alethea/aletheaD_sel_ShHh.spthy	stderr-open-chains	hs prints the warning 2x, rs 0x
-module	examples/sapic/manual-proofs/Yubikey/complete_proof.spthy	stored-proof-echo	AC multiset args reorder: tc1++z vs z++tc1
-module	examples/sapic/manual-proofs/Yubikey/manual_part.spthy	stored-proof-echo	AC multiset args reorder: tc1++z vs z++tc1
-module	examples/sapic/export/States/scytl-voting-system.spthy	hs-derivcheck-timeout	same stdout at --derivcheck-timeout=300
-module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-fakepcsbranch.spthy	hs-parse-rejects	hs stops at line 193 col 42, rs translates
+module	examples/accountability/csf21-acc-unbounded/mixnets/basic/dmn-basic.spthy	stderr-oracle-calls	-		stderr
+module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-1.spthy	stderr-oracle-calls	-		stderr
+module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-2.spthy	stderr-oracle-calls	-		stderr
+module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-3.spthy	stderr-oracle-calls	-		stderr
+module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-4.spthy	stderr-oracle-calls	-		stderr
+module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-5.spthy	stderr-oracle-calls	-		stderr
+module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-1.spthy	stderr-oracle-calls	-		stderr
+module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-2.spthy	stderr-oracle-calls	-		stderr
+module	examples/features/heuristic/OracleRanking.spthy	stderr-oracle-calls	-		stderr
+module	examples/features/macros/MacroTestWithOracleRanking.spthy	stderr-oracle-calls	-		stderr
+module	examples/sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-5-fixed.spthy	capacity	deep process recursion, rs=134 at plain load		timeout/kill
+module	examples/sapic/export/5G_AKA/5G_AKA.spthy	sapic-export-echo	all three modules		stdout
+module	examples/sapic/export/ExistingSapicModels/AKE.spthy	sapic-export-echo	-	msr	stdout
+module	examples/sapic/export/KEMTLS/kemtls-noaead.spthy	sapic-export-echo	-	msr	stdout
+module	examples/sapic/export/KEMTLS/kemtls.spthy	sapic-export-echo	-	msr	stdout
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_a1b1.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does		stderr
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_a2b2.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does		stderr
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_a3b3.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does		stderr
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_a4b3.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does		stderr
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_a2b2.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does		stderr
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_a3b3.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does		stderr
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_fairnessB.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does		stderr
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_fullfairnessA.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does		stderr
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_timelinessA.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does		stderr
+module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_timelinessB.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does		stderr
+module	examples/thesis-LaraSchmid-evoting/chapter3_Alethea/aletheaD_sel_ShHh.spthy	stderr-open-chains	hs prints the warning 2x, rs 0x		stderr
+module	examples/sapic/manual-proofs/Yubikey/complete_proof.spthy	stored-proof-echo	AC multiset args reorder: tc1++z vs z++tc1		stdout
+module	examples/sapic/manual-proofs/Yubikey/manual_part.spthy	stored-proof-echo	AC multiset args reorder: tc1++z vs z++tc1		stdout
+module	examples/sapic/export/States/scytl-voting-system.spthy	hs-derivcheck-timeout	same stdout at --derivcheck-timeout=300		stdout
+module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-fakepcsbranch.spthy	hs-parse-rejects	hs stops at line 193 col 42, rs translates	spthy	rc
+module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-fakepcsbranch.spthy	hs-parse-rejects	hs stops at line 193 col 42, rs translates	spthytyped	stderr
+module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-fakepcsbranch.spthy	hs-parse-rejects	hs stops at line 193 col 42, rs translates	msr	stderr
 #
 # json sweep
-json	case-studies-regression/accountability/csf21-acc-unbounded/previous/whodunit_analyzed.spthy	capacity	both sides hit the cap
-json	case-studies-regression/fast-tests/sapic/fast/feature-secret-channel/U2F_analyzed.spthy	hs-timeout	rs completes
-json	case-studies-regression/sapic/fast/feature-secret-channel/U2F_analyzed.spthy	hs-timeout	rs completes
-json	case-studies-regression/sapic/slow/encWrapDecUnwrap/encwrapdecunwrap_analyzed.spthy	capacity	rs=134
-json	case-studies-regression/sapic/slow/PKCS11/pkcs11-templates_analyzed.spthy	capacity	hs=124 rs=134
-module	examples/sapic/export/SSH/ssh-with-one-forwarding.spthy	sapic-eq-pattern	all three modules
-module	examples/sapic/export/SSH/ssh-without-forwarding.spthy	sapic-eq-pattern	all three modules
-module	examples/sapic/export/LAKE/lake-edhoc.spthy	sapic-skey-sort	-	msr
-module	examples/sapic/export/LAKE/lake-edhoc-DHmode-FS-KCI.spthy	sapic-skey-sort	-	msr
-module	examples/sapic/export/KEMTLS/kemtls-clientauth.spthy	derivcheck-missing	-	msr
-module	examples/sapic/slow/PKCS11/pkcs11-templates.spthy	pred-wrapping	all three modules
-module	examples/sapic/not-suitable-for-regression/issue-missing-unlock.spthy	sapic-wf-missing	lock over replication	spthy
-module	examples/sapic/not-suitable-for-regression/issue-missing-unlock.spthy	sapic-wf-missing	lock over replication	spthytyped
-module	examples/sapic/not-suitable-for-regression/issue-missing-unlock.spthy	sapic-wf-text	fatal error text differs	msr
-module	examples/sapic/not-working/fairexchange-asw/aswAB.spthy	sapic-wf-text	-	spthytyped
-module	examples/sapic/not-working/fairexchange-asw/aswAB.spthy	sapic-wf-text	-	msr
-module	examples/sapic/not-working/fairexchange-asw/aswAB-mod.spthy	sapic-wf-text	-	spthytyped
-module	examples/sapic/not-working/fairexchange-asw/aswAB-mod.spthy	sapic-wf-text	-	msr
-module	examples/sapic/not-working/fairexchange-asw/asw-mod-weak-locks.spthy	sapic-wf-text	-	spthytyped
-module	examples/sapic/not-working/fairexchange-asw/asw-mod-weak-locks.spthy	sapic-wf-text	-	msr
-module	examples/sapic/not-working/fairexchange-km/km.spthy	sapic-wf-text	-	spthytyped
-module	examples/sapic/not-working/fairexchange-km/km.spthy	sapic-wf-text	-	msr
-module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-unfairness-A.spthy	sapic-wf-text	-	spthytyped
-module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-unfairness-A.spthy	sapic-wf-missing	msr accepts outright rc 0 vs 1	msr
+json	case-studies-regression/accountability/csf21-acc-unbounded/previous/whodunit_analyzed.spthy	capacity	both sides hit the cap		timeout/kill
+json	case-studies-regression/fast-tests/sapic/fast/feature-secret-channel/U2F_analyzed.spthy	stderr-simplifier-trace	HS traces the simplifier from iteration 11; RS has no port of it		stderr
+json	case-studies-regression/sapic/fast/feature-secret-channel/U2F_analyzed.spthy	stderr-simplifier-trace	HS traces the simplifier from iteration 11; RS has no port of it		stderr
+json	case-studies-regression/sapic/slow/encWrapDecUnwrap/encwrapdecunwrap_analyzed.spthy	capacity	rs=134		timeout/kill
+json	case-studies-regression/sapic/slow/PKCS11/pkcs11-templates_analyzed.spthy	capacity	hs=124 rs=134		timeout/kill
+module	examples/sapic/export/SSH/ssh-with-one-forwarding.spthy	sapic-eq-pattern	all three modules		stdout
+module	examples/sapic/export/SSH/ssh-without-forwarding.spthy	sapic-eq-pattern	all three modules		stdout
+module	examples/sapic/export/LAKE/lake-edhoc.spthy	sapic-skey-sort	-	msr	stdout
+module	examples/sapic/export/LAKE/lake-edhoc-DHmode-FS-KCI.spthy	sapic-skey-sort	-	msr	stdout
+module	examples/sapic/export/KEMTLS/kemtls-clientauth.spthy	derivcheck-missing	-	msr	stdout
+module	examples/sapic/slow/PKCS11/pkcs11-templates.spthy	pred-wrapping	all three modules		stdout
+module	examples/sapic/not-suitable-for-regression/issue-missing-unlock.spthy	sapic-wf-missing	lock over replication	spthy	stdout
+module	examples/sapic/not-suitable-for-regression/issue-missing-unlock.spthy	sapic-wf-missing	lock over replication	spthytyped	stdout
+module	examples/sapic/not-suitable-for-regression/issue-missing-unlock.spthy	sapic-wf-text	fatal error text differs	msr	stderr
+module	examples/sapic/not-working/fairexchange-asw/aswAB.spthy	sapic-wf-text	-	spthytyped	stderr
+module	examples/sapic/not-working/fairexchange-asw/aswAB.spthy	sapic-wf-text	-	msr	stderr
+module	examples/sapic/not-working/fairexchange-asw/aswAB-mod.spthy	sapic-wf-text	-	spthytyped	stderr
+module	examples/sapic/not-working/fairexchange-asw/aswAB-mod.spthy	sapic-wf-text	-	msr	stderr
+module	examples/sapic/not-working/fairexchange-asw/asw-mod-weak-locks.spthy	sapic-wf-text	-	spthytyped	stderr
+module	examples/sapic/not-working/fairexchange-asw/asw-mod-weak-locks.spthy	sapic-wf-text	-	msr	stderr
+module	examples/sapic/not-working/fairexchange-km/km.spthy	sapic-wf-text	-	spthytyped	stderr
+module	examples/sapic/not-working/fairexchange-km/km.spthy	sapic-wf-text	-	msr	stderr
+module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-unfairness-A.spthy	sapic-wf-text	-	spthytyped	stderr
+module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-unfairness-A.spthy	sapic-wf-missing	msr accepts outright rc 0 vs 1	msr	rc
 #
 # json stdout/stderr axes: first compared 2026-08-09, so these pre-existing
 # divergences were invisible until then. Pre-branch binary reproduces each on

@@ -4,11 +4,14 @@
 #   norm         — blank the volatile banner lines (same set as corpus_file_diff.sh)
 #   nerr         — collapse the duplicated [Open Chains] stderr line
 #   io_diff      — first of stdout/stderr that differs after normalization
+#   row          — append one tab-separated row to $OUT
 #   infra_abort / nocompare_check — detect a row that compared NOTHING
 #   hs_run       — run the Haskell oracle through a content-keyed result cache
-#   family_list  — resolve a *_family.txt subset against a base directory
+#   list_lines / resolve_list — data lines of a path list, resolved against a
+#                  base directory (the corpora and the *_family.txt subsets)
+#   sweep_out    — resolve $OUT against a per-sweep default, create its directory
 #   sweep_export — export the helpers + environment the xargs children need
-#   sweep_retry  — serial re-run of the ERROR rows at a higher cap
+#   sweep_retry  — serial re-run of the ERROR rows at RETRY_TIMEOUT
 #   rs_stale_check — refuse to sweep with a release binary older than the sources
 #   sweep_banner / sweep_finish — denominator + fingerprints up front, ledger
 #                  application + summary + DONE sentinel at the end
@@ -24,13 +27,21 @@ HS_BIN=${HS_PATH:-$(find "$REPO/tamarin-prover-testing/.stack-work/install" -nam
 MAUDE=${MAUDE_PATH:-/home/linuxbrew/.linuxbrew/bin/maude}
 EXAMPLES=$REPO/tamarin-prover/examples
 CSR=$REPO/tamarin-prover/case-studies-regression
-RS_BIN=${RS_BIN:-$REPO/target/release/tamarin-rs}
+# RS_PATH is the spelling the other gates (corpus_file_diff.sh, pretty_gate.sh)
+# use, so it is honoured here too: a sweep that ignored it would quietly certify
+# target/release while the caller believed it had swapped the binary.
+RS_BIN=${RS_BIN:-${RS_PATH:-$REPO/target/release/tamarin-rs}}
 TIMEOUT=${TIMEOUT:-120}
+RETRY_TIMEOUT=${RETRY_TIMEOUT:-600}
 JOBS=${JOBS:-3}
 HS_CACHE=${HS_CACHE:-$REPO/scripts/.hs_sweep_cache}
 LEDGER=$REPO/scripts/sweep_expected.tsv
 
 grun() { ( echo 1000 > /proc/self/oom_score_adj; ulimit -v 16777216; timeout "$TIMEOUT" "$@" ); }
+
+# row <field...> — append one tab-separated row to $OUT. One write per row, so
+# the parallel children's appends interleave by line rather than mid-field.
+row() { local IFS=$'\t'; printf '%s\n' "$*" >> "$OUT"; }
 
 # Blank the volatile lines (same set as scripts/corpus_file_diff.sh).
 norm() { sed -e 's/^Git revision:.*/GITREV/' -e 's/^Compiled at:.*/COMPILED/' \
@@ -56,6 +67,12 @@ norm() { sed -e 's/^Git revision:.*/GITREV/' -e 's/^Compiled at:.*/COMPILED/' \
 # in, the class alone paints the corpus red and a genuinely new warning hides
 # in the noise. It is a real port gap, not an accepted divergence — closing it
 # retires this filter.
+#
+# What that costs, measured by injecting lines into the RS side: a stderr line
+# beginning "[Saturating Sources]" is invisible to every sweep whatever it says,
+# and so is any difference in how many times the [Open Chains] warning repeats
+# CONSECUTIVELY (the ledger's stderr-open-chains rows are the non-consecutive
+# count differences, which do still surface). Any other stderr byte is caught.
 nerr() {
   awk '!(/^\[Open Chains\] Too many chain constraints/ && $0 == prev) { print } { prev = $0 }' \
     | grep -v '^\[Saturating Sources\]'
@@ -84,7 +101,7 @@ io_diff() {
 # sweep_finish counts as a failure in the summary, the DONE sentinel and the
 # exit code.
 #
-# The two vacuity families the sweeps can hit, both detected by
+# The three vacuity families the sweeps can hit, all detected by
 # nocompare_check:
 #   infra-abort  the environment failed, not the theory — an unusable maude
 #                (ensureMaude's abort or its "executable not found / does not
@@ -94,8 +111,16 @@ io_diff() {
 #                loaded the theory has nothing to say about the other's output.
 #   no-analysis  both sides exited 0 having produced no artifact at all, so
 #                comparing the artifacts compared two absences.
-# A timeout/kill is the third way to compare nothing; the sweeps already fence
-# that off as ERROR (and its capacity/hs-timeout ledger classes) before any
+#   no-output    both sides failed with the SAME nonzero rc and printed nothing
+#                THAT THE VERDICT LOOKS AT. No product is written on a failure,
+#                so the streams are the whole verdict; two silent failures agree
+#                about nothing, and a matching rc alone is not evidence.
+#                Emptiness is judged through the same filters the comparison
+#                uses (see nonempty_compared): a run whose every byte is a line
+#                norm blanks or nerr drops has left the verdict nothing, even
+#                though the raw file is not empty.
+# A timeout/kill is the fourth way to compare nothing; the sweeps already fence
+# that off as ERROR (and its capacity/oracle-timeout ledger classes) before any
 # verdict is reached, so it never reaches this helper.
 # ---------------------------------------------------------------------------
 
@@ -112,22 +137,53 @@ infra_abort() {
 ^tamarin-prover: .*: (openFile|hGetContents): " "$err"
 }
 
-# nocompare_check <hs-rc> <rs-rc> <hs.err> <rs.err> [artifact...]
+# nonempty_compared <file>
+#   True when <file> still carries content IN THE FORM THE VERDICT COMPARES IT.
+#   io_diff pits the streams against each other through norm (and nerr for
+#   stderr), so raw emptiness is the wrong question for a stream: a stderr whose
+#   every line is "[Saturating Sources]" reaches io_diff empty, and two empty
+#   bodies match whatever the two sides actually printed.
+#   The distinction is delete vs blank. nerr DELETES its lines, leaving nothing
+#   behind, so a stream made only of them is no evidence. norm BLANKS its lines
+#   to placeholders (GITREV/COMPILED/ANALYZED/PTIME), which still pin that the
+#   line was printed and where — weak evidence, but not none — so such a stream
+#   counts as compared.
+#   Exported artifacts (json/dot) are compared byte-for-byte, so for them raw
+#   emptiness IS the right question.
+nonempty_compared() {
+  case $1 in
+    *.out) [ -n "$(norm < "$1" 2>/dev/null)" ] ;;
+    *.err) [ -n "$(norm < "$1" 2>/dev/null | nerr)" ] ;;
+    *)     [ -s "$1" ] ;;
+  esac
+}
+
+# nocompare_check <hs-rc> <rs-rc> <workdir> [product...]
 #   Echoes why the row's verdict would be vacuous and returns 0; returns 1 when
-#   the two sides really did produce something to compare. The artifacts are
-#   the files this sweep's OK rests on (stdout, exported json/dot).
+#   the two sides really did produce something to compare. <workdir> holds the
+#   run's hs.out/hs.err/rs.out/rs.err; the products are the documents this
+#   sweep's OK rests on when the run succeeds (stdout, exported json/dot).
 nocompare_check() {
-  local hrc=$1 rrc=$2 herr=$3 rerr=$4; shift 4
+  local hrc=$1 rrc=$2 wd=$3; shift 3
   local sides='' a
-  infra_abort "$herr" && sides=hs
-  infra_abort "$rerr" && sides="${sides:+$sides+}rs"
+  infra_abort "$wd/hs.err" && sides=hs
+  infra_abort "$wd/rs.err" && sides="${sides:+$sides+}rs"
   if [ -n "$sides" ]; then
     echo "infra-abort $sides: environment failed before the theory was analysed (rc hs=$hrc rs=$rrc)"
     return 0
   fi
   if [ "$hrc" -eq 0 ] && [ "$rrc" -eq 0 ] && [ $# -gt 0 ]; then
-    for a; do [ -s "$a" ] && return 1; done
+    for a; do nonempty_compared "$a" && return 1; done
     echo "no-analysis: rc 0 on both sides with every compared artifact empty"
+    return 0
+  fi
+  # Differing rcs ARE a comparison result (the sweeps report them as DIFF), so
+  # only a matching rc can be vacuous.
+  if [ "$hrc" -eq "$rrc" ]; then
+    for a in "$wd"/hs.out "$wd"/hs.err "$wd"/rs.out "$wd"/rs.err; do
+      nonempty_compared "$a" && return 1
+    done
+    echo "no-output: matching rc $hrc with nothing on either side that survives normalization"
     return 0
   fi
   return 1
@@ -210,44 +266,60 @@ hs_run() {
   return "$rc"
 }
 
-# family_list <family-file> <base-dir>
-#   The FAMILY=1 subset: strip comments/blank lines and resolve each entry
-#   against <base-dir>. An entry that no longer exists is fatal, not a warning:
-#   the family is one representative per divergence class, so a vanished entry
-#   silently shrinks the denominator and retires a class nobody checks again.
+# list_lines <file>
+#   A path list's data lines: `#` comment (whole-line or trailing) and blanks
+#   removed, trailing whitespace trimmed. The trim matters — an entry followed
+#   by an inline comment would otherwise keep the spaces that separated them,
+#   and nothing downstream that matches a path EXACTLY (resolve_list's -f test,
+#   pe_sweep's grep -vxF exclusion) would recognise it.
+list_lines() { sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^$/d' "$1"; }
+
+# resolve_list <list-file> <base-dir>
+#   Resolve every entry of a path list against <base-dir>. An entry that no
+#   longer exists is fatal, not a warning: a vanished entry silently shrinks the
+#   denominator, and nothing downstream can tell a corpus that got smaller from
+#   a corpus that came back clean. For the *_family.txt subsets it would also
+#   retire a divergence class nobody checks again.
 #   Callers run this inside a command substitution, so they must test its
-#   status (`LIST=$(list_files) || exit 2`).
-family_list() {
+#   status (`LIST=$(list_files) || exit 2`); for the same reason it has to be
+#   the last stage of whatever pipeline it sits in, or its exit is swallowed.
+resolve_list() {
   local list=$1 base=$2 rel f missing=0
   while read -r rel; do
     f="$base/$rel"
     if [ -f "$f" ]; then echo "$f"
-    else echo "ERROR: family entry missing: $f" >&2; missing=$((missing + 1)); fi
-  done < <(sed 's/#.*//;/^\s*$/d' "$list")
+    else echo "ERROR: list entry missing: $f" >&2; missing=$((missing + 1)); fi
+  done < <(list_lines "$list")
   if [ "$missing" -gt 0 ]; then
-    echo "ERROR: $missing entry/entries of $list no longer exist — fix the family list" >&2
+    echo "ERROR: $missing entry/entries of $list no longer exist — fix the list" >&2
     exit 2
   fi
 }
 
+# sweep_out <default-path> — resolve $OUT and make sure its directory exists.
+sweep_out() { OUT=${OUT:-$1}; mkdir -p "$(dirname "$OUT")"; }
+
 # sweep_export [extra function names...]
-#   Hand the helpers and settings to the `bash -c 'one ...'` children xargs
-#   spawns; a sweep with its own extra helper passes its name.
+#   Hand the helpers and settings to the `bash -uc 'one ...'` children xargs
+#   spawns; a sweep with its own extra helper passes its name. Anything a child
+#   needs must be listed here — under the children's -u a name that was missed
+#   aborts the child instead of expanding to empty, and the row it never wrote
+#   turns up in sweep_finish's row-count check.
 sweep_export() {
-  export -f one grun norm nerr io_diff infra_abort nocompare_check hs_run "$@"
+  export -f one row grun norm nerr io_diff infra_abort nonempty_compared nocompare_check hs_run "$@"
   export HS_BIN RS_BIN MAUDE OUT TIMEOUT HS_CACHE HS_FP
 }
 
-# sweep_retry <out.tsv> <status-col> <retry-cap>
+# sweep_retry <out.tsv> <status-col>
 #   Heavy files are load-sensitive, so the parallel pass's ERROR rows get one
-#   serial re-run at the higher cap; the retry rows REPLACE the originals. The
+#   serial re-run at RETRY_TIMEOUT; the retry rows REPLACE the originals. The
 #   oracle cache remembers a timeout together with its cap, so a genuinely
 #   hopeless file burns the oracle once ever.
 #   `one` is re-invoked with the row's key fields (everything left of the
 #   status column) plus a trailing `retry` detail tag — sweeps that take no tag
 #   ignore the extra argument.
 sweep_retry() {
-  local out=$1 col=$2 cap=$3 rows fields
+  local out=$1 col=$2 cap=$RETRY_TIMEOUT rows fields
   rows=$(awk -F'\t' -v col="$col" '$col == "ERROR"' "$out")
   [ -n "$rows" ] || return 0
   echo "== retrying $(grep -c . <<< "$rows") ERROR rows serially at TIMEOUT=$cap =="
@@ -290,41 +362,66 @@ sweep_banner() {
 
 # apply_ledger <out.tsv> <sweep-name> <status-col> [sub-unit-col]
 #   Rewrites DIFF/ERROR rows whose file has a ledger entry for this sweep to
-#   status LEDGERED (class appended); prints LEDGER-STALE for entries none of
-#   whose rows diverged — the entry should then be removed. NO-COMPARE is
-#   deliberately not ledgerable: a ledger entry documents a divergence that WAS
-#   observed, and a row that observed nothing cannot be one.
+#   status LEDGERED (class appended). NO-COMPARE is deliberately not ledgerable:
+#   a ledger entry documents a divergence that WAS observed, and a row that
+#   observed nothing cannot be one.
 #   The row key is the file path made relative to tamarin-prover/, matched
 #   EXACTLY against the ledger's path column. A ledger entry may narrow itself
 #   to one sub-unit (the module of a module-sweep row) via its 5th column; an
 #   entry without one covers every row of the file.
-#   A 6th column narrows further, to the SYMPTOM: the row's detail (its last
-#   field — `stderr`, `json`, `dot-labels`, …) must equal it. Without one an
-#   entry excuses whatever goes wrong with that file, so a documented stderr
-#   divergence would also swallow a brand-new json regression beside it.
-#   Staleness ignores that 6th column. An OK row carries the detail `-`, which
-#   matches no symptom, so gating the OK branch on it would make a
-#   symptom-narrowed entry UNREPORTABLE as stale — it would sit in the ledger
-#   forever, excusing a symptom the file had stopped producing. A file that
-#   comes back OK produced no symptom at all, so every entry naming it is stale.
+#   A 6th column narrows further, to the SYMPTOM: the FIRST WORD of the row's
+#   detail (`stderr`, `json`, `both-fail-stdout`, …) must equal it. The rest of
+#   the detail is per-row prose — rcs, the `retry` marker pe_sweep appends — so
+#   matching the whole field would make the column inert wherever a sweep
+#   annotates. Without a 6th column an entry excuses whatever goes wrong with
+#   that file, so a documented stderr divergence would also swallow a brand-new
+#   json regression beside it.
+#
+#   Three stderr reports keep the ledger from accumulating entries that excuse
+#   nothing. All three ignore the 6th column: an OK row carries the detail `-`,
+#   which matches no symptom, so gating them on it would make a
+#   symptom-narrowed entry unreportable — it would sit in the ledger forever,
+#   excusing a symptom the file had stopped producing.
+#     LEDGER-STALE      the entry's rows all came back OK, so it documents a
+#                       divergence that no longer happens.
+#     LEDGER-UNMATCHED  the entry matched no row AT ALL: its file has left this
+#                       sweep's corpus, or a file-wide entry for the same path
+#                       shadows it. Neither state can ever produce a STALE
+#                       report, so without this the entry is invisible forever.
+#                       Suppressed under FAMILY=1, where almost every entry is
+#                       out of scope by construction.
+#     LEDGER-DUP        two entries share a (path, sub-unit) key, so only the
+#                       later one is reachable.
 apply_ledger() {
-  local out=$1 sweep=$2 col=$3 unitcol=${4:-0}
+  local out=$1 sweep=$2 col=$3 unitcol=${4:-0} full=1
   [ -f "$LEDGER" ] || return 0
-  awk -F'\t' -v OFS='\t' -v sweep="$sweep" -v col="$col" -v unitcol="$unitcol" -v ledger="$LEDGER" '
+  [ "${FAMILY:-0}" = 1 ] && full=0
+  awk -F'\t' -v OFS='\t' -v sweep="$sweep" -v col="$col" -v unitcol="$unitcol" \
+      -v ledger="$LEDGER" -v prefix="$REPO/tamarin-prover/" -v full="$full" '
     BEGIN {
       while ((getline line < ledger) > 0) {
         if (line ~ /^#/ || line ~ /^[[:space:]]*$/) continue
         split(line, a, "\t")
-        if (a[1] == sweep) { cls[a[2] SUBSEP a[5]] = a[3]; det[a[2] SUBSEP a[5]] = a[6] }
+        if (a[1] != sweep) continue
+        k = a[2] SUBSEP a[5]
+        if (k in cls)
+          print "LEDGER-DUP: " sweep " " a[2] (a[5] == "" ? "" : " " a[5]) \
+                " is listed twice — only the last entry is reachable" > "/dev/stderr"
+        cls[k] = a[3]; det[k] = a[6]
       }
     }
     {
+      # Exact prefix strip, not a regex: a greedy /.*\/tamarin-prover\// would
+      # cut at the LAST such component, so a checkout under a directory of that
+      # name would key rows on a truncated path and match the wrong entry.
       rel = $1
-      sub(/^.*\/tamarin-prover\//, "", rel)
+      if (index(rel, prefix) == 1) rel = substr(rel, length(prefix) + 1)
       key = rel SUBSEP ""
       if (!(key in cls) && unitcol > 0) key = rel SUBSEP $unitcol
       if (key in cls) {
-        if (($col == "DIFF" || $col == "ERROR") && (det[key] == "" || det[key] == $NF)) {
+        seen[key] = 1
+        split($NF, d, " ")
+        if (($col == "DIFF" || $col == "ERROR") && (det[key] == "" || det[key] == d[1])) {
           $col = "LEDGERED"; $NF = $NF " [" cls[key] "]"; hit[key] = 1
         } else if ($col == "OK") ok[key] = 1
       }
@@ -335,6 +432,12 @@ apply_ledger() {
         if (k in hit) continue
         split(k, kk, SUBSEP)
         print "LEDGER-STALE: " sweep " " kk[1] (kk[2] == "" ? "" : " " kk[2]) " came back OK — drop its entry" > "/dev/stderr"
+      }
+      if (full) for (k in cls) {
+        if (k in seen) continue
+        split(k, kk, SUBSEP)
+        print "LEDGER-UNMATCHED: " sweep " " kk[1] (kk[2] == "" ? "" : " " kk[2]) \
+              " matched no row of this sweep — the entry can never be reported stale" > "/dev/stderr"
       }
     }
   ' "$out" > "$out.ledgered" && mv "$out.ledgered" "$out"
@@ -348,6 +451,9 @@ apply_ledger() {
 #   sweep gets to look green without having compared anything.
 sweep_finish() {
   local out=$1 sweep=$2 col=$3 unitcol=${4:-0} nc rows total bad='' bd
+  # The parallel children append in completion order, which varies with load;
+  # sorting makes two runs of the same corpus diffable against each other.
+  sort -o "$out" "$out"
   apply_ledger "$out" "$sweep" "$col" "$unitcol"
   echo "== summary =="
   cut -f"$col" "$out" | sort | uniq -c

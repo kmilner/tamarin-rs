@@ -3,8 +3,13 @@
 Every script compares the Rust port (`target/release/tamarin-rs`) against the
 patched Haskell oracle (`../tamarin-prover-testing/`, built by
 `./setup.sh testing`). Result TSVs land in `results/` (gitignored); the HS
-reference caches live in `.hs_file_cache/`, `.hs_pretty_cache/` and
-`.web_hs_cache/` (gitignored, content-keyed by sha256 of the theory file).
+reference caches live in `.hs_file_cache/`, `.hs_pretty_cache/`,
+`.hs_sweep_cache/` and `.web_hs_cache/` (all gitignored). They are not keyed
+alike: `.hs_sweep_cache/` keys on the theory sha PLUS the flag set, the oracle
+binary's fingerprint and the maude path, so rebuilding the oracle invalidates
+it by itself, while the other three key on the theory sha alone and must be
+cleared by hand after a submodule bump or an oracle rebuild
+(`bump_submodule.sh`'s checklist says so).
 Most scripts take `ALLOWLIST=` (file of corpus-relative paths) to run a
 subset, and `RS_PATH=`/`HS_PATH=` to point at other binaries.
 
@@ -21,8 +26,15 @@ subset, and `RS_PATH=`/`HS_PATH=` to point at other binaries.
   `theory … end` echo against the oracle. Run when touching parsing or
   printing.
 - **`web_parity.sh`** — interactive-mode gate: crawls both web servers per
-  theory and semantically diffs every pane/JSON/graph response. Run on server
-  changes (seed list by default; the full cached set is the milestone sweep).
+  theory and diffs the responses — pane/JSON semantically, graph routes
+  byte-for-byte. Run on server changes. `ALLOWLIST=` is REQUIRED (one
+  corpus-relative path per line; `ALLOWLIST=seed` is the built-in 2-file smoke
+  list, and the full cached set is the milestone sweep) — it used to fall back
+  to the seed list whenever it was unset or misspelt, which turned a
+  certification run into a 2-file one without saying anything. The exit status
+  reports VACUITY, not divergence: `SKIP_*` rows and files that produced no row
+  fail the run, while DIFF/MISSING rows are findings for the operator to triage
+  against the residual ledger and leave the status alone.
 - **`pane_byte_check.sh`** — byte-exact (not just semantic) check of the
   `main/message` + `main/rules` panes against the web cache. Run when byte
   fidelity of pane HTML matters.
@@ -40,11 +52,19 @@ subset, and `RS_PATH=`/`HS_PATH=` to point at other binaries.
   their cap), so re-sweeping after a Rust change costs only the Rust side;
   a stale `target/release` binary aborts the run (`ALLOW_STALE_BIN=1`
   overrides). Documented residuals live in `sweep_expected.tsv` and report
-  as LEDGERED — any bare DIFF/ERROR row is a regression, and a ledgered
-  file that comes back OK prints LEDGER-STALE so the entry gets dropped.
-  `FAMILY=1` restricts to the per-sweep `*_family.txt` subset (one
-  representative per divergence class, seconds on a warm cache) for
-  inner-loop iteration; the full corpora are the milestone runs.
+  as LEDGERED — any bare DIFF/ERROR row is a regression, and an entry that
+  has stopped excusing anything is called out on stderr (LEDGER-STALE /
+  LEDGER-UNMATCHED / LEDGER-DUP) so it gets dropped. An entry names the one
+  SYMPTOM it excuses (`stdout`, `stderr`, `rc`, `json`, `dot`, `timeout/kill`)
+  in its 6th column, so a file ledgered for a stderr divergence still reports a
+  fresh stdout regression beside it as DIFF. A row where neither side produced
+  anything to compare is NO-COMPARE, which fails the sweep rather than counting
+  as agreement — and "produced anything" is judged on what survives the
+  normalizers, so two runs whose only bytes are lines `nerr` drops do not count
+  as having agreed. `FAMILY=1` restricts to the per-sweep
+  `*_family.txt` subset (one representative per divergence class, seconds on
+  a warm cache) for inner-loop iteration; the full corpora are the milestone
+  runs.
 
 ## Web-gate internals (invoked by the gates, rarely by hand)
 
@@ -181,6 +201,15 @@ then upstream behaviour moving under them.
   shifts applied mechanically, moved declarations re-anchored by name,
   ambiguous cites reported for a human pass. Run automatically by
   `bump_submodule.sh`.
+- **`check_hs_cites.py`** — validates every `Foo.hs:N` cite in `crates/`
+  comments against the pinned submodule and exits nonzero on a finding:
+  MISSING / AMBIGUOUS (a bare basename that names two upstream files, so its
+  line number is uncheckable) / RANGE / BLANK / COMMENT / SEELINE (a
+  `see line N` outside the extent it annotates). Nothing else catches a cite
+  that has drifted — `remap_hs_cites.py` reports ambiguity rather than
+  failing on it — so this is the post-bump gate. `--crate NAME` and
+  `--skip CLASS` are repeatable; `--crate tamarin-prover` is currently the
+  only crate at zero findings.
 - **`header_identities.json`** — email → GitHub-username map used by the
   header generator.
 

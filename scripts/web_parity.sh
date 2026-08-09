@@ -13,13 +13,20 @@
 #                 two manifests semantically (web_normalize.py) → per-url rows.
 #
 # Env: FILE_TIMEOUT (per-file cap, 300s), READY_TIMEOUT (server-boot wait, 90s),
-#      HS_PORT (3021), RS_PORT (3022), CORPUS_ROOT (tamarin-prover/examples/), ALLOWLIST
-#      (one relpath/line; default = seed list below), RESULTS_TSV, MAX_NODES
+#      HS_PORT (3021), RS_PORT (3022), CORPUS_ROOT (tamarin-prover/examples/),
+#      ALLOWLIST (REQUIRED: one relpath/line, or the literal `seed` for the
+#      built-in 2-file smoke list), RESULTS_TSV, MAX_NODES
 #      (400), CACHE, DIFFDIR, HS_PATH, RS_PATH, MAUDE_PATH, DERIVCHECK_TIMEOUT
 #      (both servers, 30s), SERVER_MEM_KB (per-server address-space cap,
 #      24 GiB), TAM_RS_NO_AUTO_BUILD.
 # Output TSV (6 col): file  url  status  hs_http  rs_http  kind
 #   status ∈ MATCH | DIFF | MISSING_RS | MISSING_HS | SKIP_*
+#
+# Exit status reports VACUITY, not divergence. DIFF/MISSING_* rows are the
+# run's findings and are triaged against the residual ledger by hand, so they
+# leave the exit code alone; a file that produced no comparison at all (SKIP_*,
+# or no rows whatsoever) is a failure, because a crawl that never happened is
+# indistinguishable from a crawl that matched when all you read is the summary.
 set -u
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
@@ -89,6 +96,11 @@ fi
 [ -x "$RS_PATH" ] || { echo "no RS binary at $RS_PATH" >&2; exit 2; }
 
 # --- file list ---
+# ALLOWLIST is mandatory. It used to fall back to the seed list whenever it was
+# unset OR named a file that did not exist, so a typo in the path turned a
+# corpus-wide certification into a 2-file smoke test that still printed a
+# summary and DONE_WEB_PARITY — the run narrowed silently and read as a pass.
+# The seed list is still reachable, but only by asking for it.
 seed_list() {
     cat <<EOF
 Tutorial.spthy
@@ -96,9 +108,18 @@ csf26-ac/fast/counter.spthy
 EOF
 }
 filelist() {
-    if [ -n "${ALLOWLIST:-}" ] && [ -f "${ALLOWLIST:-}" ]; then cat "$ALLOWLIST"
-    else seed_list; fi
+    if [ "${ALLOWLIST:-}" = seed ]; then seed_list; return; fi
+    cat "$ALLOWLIST"
 }
+if [ -z "${ALLOWLIST:-}" ]; then
+    echo "ALLOWLIST is required: a file of corpus-relative theory paths, one per" >&2
+    echo "line, or ALLOWLIST=seed for the built-in 2-file smoke list." >&2
+    exit 2
+fi
+if [ "$ALLOWLIST" != seed ] && [ ! -r "$ALLOWLIST" ]; then
+    echo "ALLOWLIST '$ALLOWLIST' is not a readable file" >&2
+    exit 2
+fi
 
 # Boot a server, wait until it answers on / , run the crawl, then kill it
 # (whole process group, to reap maude children).  Args: bin port workdir out.
@@ -199,9 +220,15 @@ one_file() {
         rm -rf "$wd"
         printf '%s\t-\tSKIP_RS_FAIL\t-\t-\t-\n' "$rel"; return 0
     fi
-    # diff
+    # diff. Both crawls succeeded, so an empty or absent parity.tsv means the
+    # differ itself fell over — which used to emit no rows for the file at all,
+    # a file that silently left the run rather than a file that matched.
     python3 "$script_dir/web_diff.py" "$hs_manifest" "$rs_manifest" \
         "$wd/parity.tsv" "$DIFFDIR/$rel" >/dev/null 2>&1
+    if [ ! -s "$wd/parity.tsv" ]; then
+        rm -rf "$wd"
+        printf '%s\t-\tSKIP_DIFF_FAIL\t-\t-\t-\n' "$rel"; return 0
+    fi
     # prefix each row with the file
     awk -F'\t' -v r="$rel" '{print r"\t"$0}' "$wd/parity.tsv"
     rm -rf "$wd"
@@ -209,8 +236,12 @@ one_file() {
 
 echo "web_parity: HS=$HS_PATH" >&2
 echo "web_parity: RS=$RS_PATH  maude=$MAUDE_PATH" >&2
-: > "$RESULTS_TSV"
+mkdir -p "$(dirname "$RESULTS_TSV")"
+: > "$RESULTS_TSV" || { echo "cannot write RESULTS_TSV '$RESULTS_TSV'" >&2; exit 2; }
 N=$(filelist | grep -c .)
+# Zero files is the whole-run form of comparing nothing: no rows, an empty
+# summary, and a DONE line that looks exactly like a clean sweep.
+[ "$N" -gt 0 ] || { echo "ALLOWLIST '$ALLOWLIST' has no entries — nothing to crawl" >&2; exit 2; }
 i=0
 while IFS= read -r rel; do
     [ -n "$rel" ] || continue
@@ -221,4 +252,19 @@ done < <(filelist | grep .)
 echo "=== SUMMARY ===" >&2
 awk -F'\t' '{c[$3]++} END{for(k in c) printf "  %-14s %d\n", k, c[k]}' "$RESULTS_TSV" >&2
 echo "  files: $N   results: $RESULTS_TSV   diffs: $DIFFDIR" >&2
-echo "DONE_WEB_PARITY" >&2
+
+# Verdict — vacuity only (see the header note): a SKIP_* row is a file whose
+# panes were never compared, and a file that contributed no row at all left the
+# run without being noticed. DIFF/MISSING_* rows are findings, not vacuity, and
+# are triaged by hand against the residual ledger.
+skipped=$(awk -F'\t' '$3 ~ /^SKIP_/' "$RESULTS_TSV" | grep -c .)
+rowfiles=$(cut -f1 "$RESULTS_TSV" | sort -u | grep -c .)
+bad=''
+[ "$skipped" -gt 0 ] && bad="SKIPPED=$skipped"
+if [ "$rowfiles" -ne "$N" ]; then
+    bad="${bad:+$bad }NO-ROWS=$((N - rowfiles))/$N"
+    echo "  $rowfiles of $N files produced rows — the rest were never compared" >&2
+fi
+[ -n "$bad" ] && awk -F'\t' '$3 ~ /^SKIP_/' "$RESULTS_TSV" | head -20 >&2
+echo "DONE_WEB_PARITY verdict=${bad:-OK}" >&2
+[ -z "$bad" ]

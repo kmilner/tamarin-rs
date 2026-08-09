@@ -15,13 +15,11 @@
 # divergence class, for inner-loop iteration.
 set -u
 . "$(dirname "$0")/sweep_common.sh"
-OUT=${OUT:-$REPO/scripts/results/pe_sweep.tsv}
-RETRY_TIMEOUT=${RETRY_TIMEOUT:-600}
-mkdir -p "$(dirname "$OUT")"
+sweep_out "$REPO/scripts/results/pe_sweep.tsv"
 
 eligible() {
   if [ "${FAMILY:-0}" = 1 ]; then
-    family_list "$REPO/scripts/pe_family.txt" "$EXAMPLES"
+    resolve_list "$REPO/scripts/pe_family.txt" "$EXAMPLES"
     return
   fi
   # The files-need-flags exclusion is a whole-list filter (one grep) rather
@@ -29,42 +27,50 @@ eligible() {
   # A SAPIC theory is recognised by its `process:` / `process =` block, which
   # every one of them carries; a bare `let <ident> =` is NOT a marker, since
   # that is also how an MSR rule abbreviates a term (`let X = 'g'^~ex`).
-  local kept=0 dropped=0
+  local rel f kept=0 dropped=0 missing=0
   while read -r rel; do
     f="$EXAMPLES/$rel"
-    [ -f "$f" ] || continue
-    if grep -qE '^\s*(macros\s*:|process\s*:|process\s*=|options\s*:.*translation|accountability|case-test|caseTest|verdictfunction)' "$f"; then
+    # Fatal for the same reason resolve_list's is: dropping the entry would
+    # shrink the denominator with nothing left to notice it by.
+    if [ ! -f "$f" ]; then
+      echo "ERROR: corpus entry missing: $f" >&2; missing=$((missing + 1)); continue
+    fi
+    if grep -qE '^[[:space:]]*(macros[[:space:]]*:|process[[:space:]]*:|process[[:space:]]*=|options[[:space:]]*:.*translation|accountability|case-test|caseTest|verdictfunction)' "$f"; then
       dropped=$((dropped + 1))
       continue
     fi
     kept=$((kept + 1))
     echo "$f"
-  done < <(sed 's/#.*//;/^\s*$/d' "$REPO/scripts/parity_corpus_fast.txt" \
-             | grep -vxF -f <(sed 's/#.*//;/^\s*$/d' "$REPO/scripts/file_flags.tsv" | cut -f1))
+  done < <(list_lines "$REPO/scripts/parity_corpus_fast.txt" \
+             | grep -vxF -f <(list_lines "$REPO/scripts/file_flags.tsv" | cut -f1))
+  if [ "$missing" -gt 0 ]; then
+    echo "ERROR: $missing entry/entries of parity_corpus_fast.txt no longer exist — fix the corpus list" >&2
+    exit 2
+  fi
   # Report the shrinkage rather than letting it hide inside the denominator.
   echo "== pe_sweep eligibility: kept $kept, excluded $dropped ==" >&2
 }
 
 # one <file> [detail-tag] — appends one TSV row for the file at current TIMEOUT.
 one() {
-  f=$1; tag=${2:--}
-  d=$(mktemp -d)
+  local f=$1 tag=${2:--} d hrc rrc nc io
+  # No tmpdir means every redirection below would target /, so bail and let
+  # sweep_finish's row-count check report the row that never landed.
+  d=$(mktemp -d) || return
   hs_run "$d" "$f" "pe-summary-dct30" --derivcheck-timeout=30 --partial-evaluation=summary; hrc=$?
   # A broken environment is diagnosed before the cap is blamed for it: an
   # unusable maude both aborts and hangs, and "timeout" would be the wrong
   # story (and a ledgerable one).
-  if infra_abort "$d/hs.err"; then echo -e "$f\tNO-COMPARE\tinfra-abort hs (rs not run) hs=$hrc $tag" >> "$OUT"; rm -rf "$d"; return; fi
+  if infra_abort "$d/hs.err"; then row "$f" NO-COMPARE "infra-abort hs (rs not run) hs=$hrc $tag"; rm -rf "$d"; return; fi
   # An oracle timeout is cached at this cap, so it comes back instantly while
   # the RS side would burn the full cap producing nothing to compare against.
-  if [ $hrc -ge 124 ]; then echo -e "$f\tERROR\ttimeout/kill hs=$hrc rs=skipped $tag" >> "$OUT"; rm -rf "$d"; return; fi
+  if [ "$hrc" -ge 124 ]; then row "$f" ERROR "timeout/kill hs=$hrc rs=skipped $tag"; rm -rf "$d"; return; fi
   grun "$RS_BIN" --with-maude="$MAUDE" --derivcheck-timeout=30 --partial-evaluation=summary "$f" > "$d/rs.out" 2> "$d/rs.err"; rrc=$?
-  if [ $rrc -ge 124 ]; then echo -e "$f\tERROR\ttimeout/kill hs=$hrc rs=$rrc $tag" >> "$OUT"
-  elif nc=$(nocompare_check $hrc $rrc "$d/hs.err" "$d/rs.err" "$d/hs.out" "$d/rs.out"); then
-    echo -e "$f\tNO-COMPARE\t$nc $tag" >> "$OUT"
-  elif [ $hrc -ne $rrc ]; then echo -e "$f\tDIFF\trc hs=$hrc rs=$rrc $tag" >> "$OUT"
-  elif ! diff -q <(norm < "$d/hs.out") <(norm < "$d/rs.out") >/dev/null; then echo -e "$f\tDIFF\tstdout $tag" >> "$OUT"
-  elif ! diff -q <(norm < "$d/hs.err" | nerr) <(norm < "$d/rs.err" | nerr) >/dev/null; then echo -e "$f\tDIFF\tstderr $tag" >> "$OUT"
-  else echo -e "$f\tOK\t$tag" >> "$OUT"; fi
+  if [ "$rrc" -ge 124 ]; then row "$f" ERROR "timeout/kill hs=$hrc rs=$rrc $tag"
+  elif nc=$(nocompare_check "$hrc" "$rrc" "$d" "$d/hs.out" "$d/rs.out"); then row "$f" NO-COMPARE "$nc $tag"
+  elif [ "$hrc" -ne "$rrc" ]; then row "$f" DIFF "rc hs=$hrc rs=$rrc $tag"
+  elif ! io=$(io_diff "$d"); then row "$f" DIFF "$io $tag"
+  else row "$f" OK "$tag"; fi
   rm -rf "$d"
 }
 sweep_export
@@ -73,7 +79,9 @@ rs_stale_check
 LIST=$(eligible) || exit 2
 LIST=$(sort -u <<< "$LIST")
 : > "$OUT"
-sweep_banner pe_sweep "$(echo "$LIST" | grep -c .)"
-echo "$LIST" | xargs -r -P "$JOBS" -n 1 bash -c 'one "$0"'
-sweep_retry "$OUT" 2 "$RETRY_TIMEOUT"
+sweep_banner pe_sweep "$(grep -c . <<< "$LIST")"
+# -d '\n': one path per argument, with xargs' quote and backslash processing
+# off, so nothing about a path's spelling can split or reshape it.
+xargs -r -d '\n' -P "$JOBS" -n 1 bash -uc 'one "$0"' <<< "$LIST"
+sweep_retry "$OUT" 2
 sweep_finish "$OUT" pe 2
