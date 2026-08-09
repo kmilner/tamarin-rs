@@ -23,6 +23,13 @@
 //! Each rule record also carries HS's `fontcolor` (`colorUsesWhiteFont` of the
 //! palette colour, Dot.hs:236-379, see line 258/284-287) and `role` (Dot.hs:236-379, see line 259) attributes.
 //!
+//! This module serves the INTERACTIVE graph routes. The batch
+//! `--output-dot` writer is [`dot_showdot`], which reuses this module's
+//! label / colour / ordering helpers but serialises through
+//! [`tamarin_utils::dot`] so its bytes are `Text.Dot`'s.
+//!
+//! [`dot_showdot`]: self::showdot
+//!
 //! KNOWN DIVERGENCES:
 //!   * (serialization form only — normalised away by the parse-and-compare
 //!     gate) the cluster subgraph identifier uses the Rust `cluster_<n>` form
@@ -45,6 +52,12 @@
 //!     `{{..|..}|{..}|{..|..}}` bracketing. The gate ignores the node-id scheme
 //!     and record bracketing; the field CONTENT (facts, `id : name[acts]`) is
 //!     rendered identically.
+//!   * the abbreviation legend's HTML table ([`legend_html_label`]) is emitted
+//!     flat and one-line-per-abbreviation, where graphviz's HTML printer
+//!     `align`s the rows under the opening `<TABLE …>` tag, wraps a wide
+//!     expansion at 100 columns into `<BR ALIGN="LEFT"/>`-separated lines and
+//!     encodes all but the first space of a run as `&#32;`. The batch
+//!     serializer's `hs_legend_html_label` does all three.
 //!
 //! Reference:
 //!   - `lib/theory/src/Theory/Constraint/System/Dot.hs`
@@ -103,7 +116,7 @@ use tamarin_term::pretty::pretty_lnterm;
 // replaced 1:1 by `&nbsp;` and is re-joined with `unlines` — which appends a
 // TRAILING newline (→ a trailing `\l` after `showAttr`).  Single-line labels
 // pass through untouched.
-use tamarin_utils::dot::{escape_dot_graph_label, escape_record, fix_multi_line_label};
+use tamarin_utils::dot::{escape_record, fix_multi_line_label};
 
 use crate::constraint::system::graph::abbreviation::{
     apply_abbreviations_fact, order_abbreviations_for_json, Abbreviations,
@@ -153,24 +166,6 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
     dot_graph_compact(opts, &color_map, &graph)
 }
 
-/// HS `D.showDot label $ dotSystemCompact graphOptions dotOptions system`
-/// (Batch.hs:256) — the batch `--output-dot` entry point.
-///
-/// Same graph body as [`system_to_dot_with`], framed the way `showDot`
-/// (Text/Dot.hs:234-248) frames it: the digraph id is QUOTED and carries
-/// `label` (only `"` is escaped, to `\"`; backslashes pass through), and the
-/// element block is followed by `"\n}\n"`, i.e. a blank line before the closing
-/// brace.  The web routes keep [`system_to_dot_with`]'s unquoted `digraph G {`
-/// / brace-on-the-next-line framing.
-///
-/// The graph BODY is the RS DOT dialect, not HS `Text.Dot`'s — see the
-/// KNOWN DIVERGENCES block in this module's header.
-pub fn system_to_dot_labeled(sys: &System, opts: &GraphOptions, label: &str) -> String {
-    let graph = system_to_graph(sys, opts);
-    let color_map = build_node_color_map(&sys.nodes);
-    dot_graph_compact_labeled(opts, &color_map, &graph, label)
-}
-
 /// Port of `dotGraphCompact` (Dot.hs:514-538): emit a [`Graph`]'s repr as DOT
 /// under a precomputed [`NodeColorMap`].
 ///
@@ -186,24 +181,8 @@ fn dot_graph_compact(opts: &GraphOptions, color_map: &NodeColorMap, graph: &Grap
     )
 }
 
-/// [`dot_graph_compact`]'s body under HS `showDot`'s framing instead
-/// (Text/Dot.hs:236-248): a QUOTED digraph id carrying `label`, and the
-/// `"\n}\n"` tail that leaves a blank line before the closing brace.
-fn dot_graph_compact_labeled(
-    opts: &GraphOptions,
-    color_map: &NodeColorMap,
-    graph: &Graph<'_>,
-    label: &str,
-) -> String {
-    format!(
-        "digraph \"{}\" {{\n{}\n}}\n",
-        escape_dot_graph_label(label),
-        dot_graph_compact_body(opts, color_map, graph)
-    )
-}
-
-/// The graph body both framings wrap: the attribute preamble and the element
-/// block, with no `digraph` header and no closing brace.
+/// The graph body [`dot_graph_compact`] wraps: the attribute preamble and the
+/// element block, with no `digraph` header and no closing brace.
 fn dot_graph_compact_body(
     opts: &GraphOptions,
     color_map: &NodeColorMap,
@@ -879,43 +858,7 @@ impl DotBuilder {
     /// of the rendered abbreviation names, so that an abbreviation used
     /// inside another's expansion is printed first.
     fn legend(&mut self, abbrevs: &Abbreviations) {
-        // `topoSortAbbrevs (sortOn (Down . render . prettyLNTerm . fst) (M.toList
-        // abbrevs))` — [`order_abbreviations_for_json`] runs exactly that
-        // pipeline and additionally carries each entry's original term, which
-        // the legend rows do not use.
-        let ordered = order_abbreviations_for_json(abbrevs);
-        // Mirror Haskell `abbrevLabel`: tableAttributes =
-        //   [Border 1, CellBorder 0, CellSpacing 3, CellPadding 1].
-        let mut html = String::new();
-        html.push_str("<<TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"3\" CELLPADDING=\"1\">");
-        // Mirror Haskell `renderLine` (Dot.hs:441-450): each row is three
-        // `LabelCell`s with `cellAttributes = [Align HLeft, VAlign HTop]`.
-        // The NAME cell wraps its text in `<FONT COLOR="labelColor">`
-        // (`font txt = Text [Font [Color labelColor] txt]`), while the `=`
-        // and expansion cells are bare `Text`.  `labelColor = doAbbrevColor`
-        // (`defaultDotOptions = DotOptions CompactBoringNodes black`,
-        // Dot.hs:81-84, see line 82; the web route never overrides `_doAbbrevColor`), which
-        // renders as `#000000`.  The graphviz HTML-table printer emits the
-        // cells of a `Cells` row separated by a single space and each `<TR>`
-        // on its own line, so we join the three cells with `" "` and the rows
-        // with `"\n"`.
-        let rows: Vec<String> = ordered
-            .into_iter()
-            .map(|(_term, name, exp)| {
-                let name_cell = format!(
-                    "<TD ALIGN=\"LEFT\" VALIGN=\"TOP\"><FONT COLOR=\"#000000\">{}</FONT></TD>",
-                    dot_html_escape(&pretty_lnterm(name))
-                );
-                let eq_cell = "<TD ALIGN=\"LEFT\" VALIGN=\"TOP\">=</TD>".to_string();
-                let exp_cell = format!(
-                    "<TD ALIGN=\"LEFT\" VALIGN=\"TOP\">{}</TD>",
-                    dot_html_escape(&pretty_lnterm(exp))
-                );
-                format!("<TR>{}</TR>", [name_cell, eq_cell, exp_cell].join(" "))
-            })
-            .collect();
-        html.push_str(&rows.join("\n"));
-        html.push_str("</TABLE>>");
+        let html = legend_html_label(abbrevs);
         // HS `generateLegend` (Dot.hs:419-425) emits the legend inside a
         // `D.scope` carrying `rank="sink"` — i.e. `{ rank="sink"; <node>; }` —
         // then adds invisible sink→legend edges purely for layout (which we
@@ -931,6 +874,54 @@ impl DotBuilder {
         let _ = writeln!(self.buf, "  legend [shape=plain,label={}];", html);
         let _ = writeln!(self.buf, "  }}");
     }
+}
+
+/// HS `generateLegend`'s `htmlLabel $ abbrevLabel sortedAbbrevs labelColor`
+/// (Dot.hs:437-479) as the finished `html_label` attribute VALUE — the
+/// graphviz HTML-like table wrapped in the `<`…`>` that `D.htmlLabel`
+/// (Text/Dot.hs:414-419) adds.
+///
+/// This is the interactive route's flat dialect; see the module header's
+/// KNOWN DIVERGENCES and the batch serializer's `hs_legend_html_label`.
+fn legend_html_label(abbrevs: &Abbreviations) -> String {
+    // `topoSortAbbrevs (sortOn (Down . render . prettyLNTerm . fst) (M.toList
+    // abbrevs))` — [`order_abbreviations_for_json`] runs exactly that
+    // pipeline and additionally carries each entry's original term, which
+    // the legend rows do not use.
+    let ordered = order_abbreviations_for_json(abbrevs);
+    // Mirror Haskell `abbrevLabel`: tableAttributes =
+    //   [Border 1, CellBorder 0, CellSpacing 3, CellPadding 1].
+    let mut html = String::new();
+    html.push_str("<<TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"3\" CELLPADDING=\"1\">");
+    // Mirror Haskell `renderLine` (Dot.hs:441-450): each row is three
+    // `LabelCell`s with `cellAttributes = [Align HLeft, VAlign HTop]`.
+    // The NAME cell wraps its text in `<FONT COLOR="labelColor">`
+    // (`font txt = Text [Font [Color labelColor] txt]`), while the `=`
+    // and expansion cells are bare `Text`.  `labelColor = doAbbrevColor`
+    // (`defaultDotOptions = DotOptions CompactBoringNodes black`,
+    // Dot.hs:81-84, see line 82; neither route overrides `_doAbbrevColor`), which
+    // renders as `#000000`.  The graphviz HTML-table printer emits the
+    // cells of a `Cells` row separated by a single space and each `<TR>`
+    // on its own line, so we join the three cells with `" "` and the rows
+    // with `"\n"`.
+    let rows: Vec<String> = ordered
+        .into_iter()
+        .map(|(_term, name, exp)| {
+            let name_cell = format!(
+                "<TD ALIGN=\"LEFT\" VALIGN=\"TOP\"><FONT COLOR=\"#000000\">{}</FONT></TD>",
+                dot_html_escape(&pretty_lnterm(name))
+            );
+            let eq_cell = "<TD ALIGN=\"LEFT\" VALIGN=\"TOP\">=</TD>".to_string();
+            let exp_cell = format!(
+                "<TD ALIGN=\"LEFT\" VALIGN=\"TOP\">{}</TD>",
+                dot_html_escape(&pretty_lnterm(exp))
+            );
+            format!("<TR>{}</TR>", [name_cell, eq_cell, exp_cell].join(" "))
+        })
+        .collect();
+    html.push_str(&rows.join("\n"));
+    html.push_str("</TABLE>>");
+    html
 }
 
 /// HTML-escape a string for use in a Graphviz HTML-like label.
@@ -1251,6 +1242,35 @@ fn edge_style(
     src: &crate::constraint::constraints::NodeConc,
     tgt: &crate::constraint::constraints::NodePrem,
 ) -> String {
+    match classify_edge(orig_node_map, src, tgt) {
+        EdgeKind::Proto { persistent: true } => {
+            "style=\"bold\",weight=10,color=\"gray50\"".to_string()
+        }
+        EdgeKind::Proto { persistent: false } => "style=\"bold\",weight=10".to_string(),
+        EdgeKind::K => "color=\"orangered2\"".to_string(),
+        EdgeKind::Other => "color=\"gray30\"".to_string(),
+    }
+}
+
+/// Which arm of `dotEdge`'s `SystemEdge` guard chain (Dot.hs:390-397) an edge
+/// falls into.  The two serializers spell the resulting attributes
+/// differently, so only the CLASSIFICATION is shared.
+enum EdgeKind {
+    /// `check isProtoFact`; `persistent` is the nested `check isPersistentFact`
+    /// that adds `color=gray50`.
+    Proto { persistent: bool },
+    /// `check isKFact`.
+    K,
+    /// The fallthrough.
+    Other,
+}
+
+/// The guard chain of [`edge_style`], shared with the batch serializer.
+fn classify_edge(
+    orig_node_map: &OrigNodeRules<'_>,
+    src: &crate::constraint::constraints::NodeConc,
+    tgt: &crate::constraint::constraints::NodePrem,
+) -> EdgeKind {
     // Look up tag of the source-conclusion or target-premise.
     let conc_tag = lookup_conc_tag(orig_node_map, src);
     let prem_tag = lookup_prem_tag(orig_node_map, tgt);
@@ -1269,15 +1289,13 @@ fn edge_style(
     };
     let is_k = |t: Option<&FactTag>| -> bool { matches!(t, Some(FactTag::Ku) | Some(FactTag::Kd)) };
     if is_proto(conc_tag.as_ref()) || is_proto(prem_tag.as_ref()) {
-        let mut s = String::from("style=\"bold\",weight=10");
-        if is_persistent(conc_tag.as_ref()) || is_persistent(prem_tag.as_ref()) {
-            s.push_str(",color=\"gray50\"");
+        EdgeKind::Proto {
+            persistent: is_persistent(conc_tag.as_ref()) || is_persistent(prem_tag.as_ref()),
         }
-        s
     } else if is_k(conc_tag.as_ref()) || is_k(prem_tag.as_ref()) {
-        "color=\"orangered2\"".to_string()
+        EdgeKind::K
     } else {
-        "color=\"gray30\"".to_string()
+        EdgeKind::Other
     }
 }
 
@@ -1348,6 +1366,10 @@ fn escape_dot_label(s: &str) -> String {
     }
     out
 }
+
+#[path = "dot_showdot.rs"]
+mod showdot;
+pub use showdot::system_to_dot_labeled;
 
 #[cfg(test)]
 #[path = "dot_tests.rs"]

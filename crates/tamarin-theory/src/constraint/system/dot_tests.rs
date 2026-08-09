@@ -572,8 +572,14 @@ fn dot_abbreviations_and_legend_appear_only_when_abbreviate_is_set() {
 }
 
 // Build a simple proto rule node with the given premises/actions/concs.
+// `pub(super)` so `dot_showdot_tests.rs` shares it.
 #[cfg(test)]
-fn proto_node(name: &str, prems: Vec<LNFact>, acts: Vec<LNFact>, concs: Vec<LNFact>) -> RuleACInst {
+pub(super) fn proto_node(
+    name: &str,
+    prems: Vec<LNFact>,
+    acts: Vec<LNFact>,
+    concs: Vec<LNFact>,
+) -> RuleACInst {
     use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes};
     Rule::new(
         RuleInfo::Proto(ProtoRuleACInstInfo {
@@ -824,13 +830,10 @@ fn dot_explicit_rule_color_attribute_sets_fillcolor() {
 }
 
 #[test]
-fn labeled_framing_wraps_the_web_framing_body_verbatim() {
-    // Pins HS `showDot`'s framing (Text/Dot.hs:236-248) byte-for-byte against
-    // the web routes' `digraph G {` framing: the two renderings share the same
-    // element block and differ ONLY in the opening line (a QUOTED digraph id
-    // carrying the label, with `"` escaped to `\"` and backslashes passed
-    // through) and in the blank line `showDot`'s `"\n}\n"` leaves before the
-    // closing brace.
+fn web_framing_is_the_unquoted_digraph_g_header() {
+    // The interactive routes' container: an UNQUOTED `digraph G {` header and
+    // a closing brace with no blank line before it.  The batch `--output-dot`
+    // container is `showDot`'s and is pinned in `dot_showdot_tests.rs`.
     use crate::fact::{fresh_fact, out_fact};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
@@ -852,11 +855,9 @@ fn labeled_framing_wraps_the_web_framing_body_verbatim() {
         .and_then(|b| b.strip_suffix("}\n"))
         .unwrap_or_else(|| panic!("web framing changed: {}", plain));
     assert!(body.contains("nodesep"), "empty body under test: {}", plain);
-
-    let labeled = system_to_dot_labeled(&sys, &opts, "a \"b\" \\c");
-    assert_eq!(
-        labeled,
-        format!("digraph \"a \\\"b\\\" \\c\" {{\n{}\n}}\n", body)
+    assert!(
+        !body.ends_with("\n\n"),
+        "no blank line before `}}`: {plain}"
     );
 }
 

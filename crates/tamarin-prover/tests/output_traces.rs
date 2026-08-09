@@ -11,12 +11,8 @@
 //! (Batch.hs:198-199), `--precompute-only` (:202-208), `-m` (:211-221) and a
 //! run with no input files (`helpAndExit`, Batch.hs:90) create NO file at all.
 //!
-//! The expectations below are the pinned v1.13.0 oracle's bytes, with one
-//! documented exception: the dot graph BODIES are the port's DOT dialect (see
-//! the KNOWN DIVERGENCES block in `tamarin-theory`'s
-//! `constraint/system/dot.rs`), so
-//! only the labels and the `showDot` container framing are byte-asserted
-//! there.  The JSON is byte-asserted in full.
+//! The expectations below are the pinned v1.13.0 oracle's bytes.  Both
+//! documents are byte-asserted in full against a captured oracle fixture.
 //!
 //! MAUDE_PATH trap: [`maude_available`] probes ONLY `$MAUDE_PATH` and two
 //! hardcoded absolute paths — never `$PATH`.  On machines whose maude lives
@@ -213,54 +209,33 @@ fn solved_trace_json_matches_the_oracle_bytes() {
     );
 }
 
-/// The dot container: `showDot` framing (Text/Dot.hs:234-248) and the
-/// `traceOutputLabel` digraph id.  The graph BODY is the port's dialect and is
-/// deliberately NOT asserted here.
+/// Full-byte pin of `--prove=chain --output-dot` against the oracle capture:
+/// `showDot`'s framing (Text/Dot.hs:234-248), the `traceOutputLabel` digraph
+/// id, and the whole `Text.Dot` element block — counter node ids, record
+/// ports, quoted attribute values, attribute order and statement order.
 #[test]
-fn solved_trace_dot_carries_the_hs_label_and_framing() {
+fn solved_trace_dot_matches_the_oracle_bytes() {
     if !maude_available() {
         eprintln!("skipping: maude not on path");
         return;
     }
-    let c = Case::new("dot_framing");
+    let c = Case::new("dot_bytes");
     let f = fixture(SINGLE_RECV);
     assert_eq!(c.run(&["--prove=chain"], &[&f]), 0);
-    let dot = c.dot_text();
-    // `"digraph " ++ "\"" ++ escapedLabel ++ "\"" ++ " {\n"` — the id is
-    // quoted, and this fixture's single solved node produces exactly one graph.
-    let labels: Vec<&str> = dot.lines().filter(|l| l.starts_with("digraph ")).collect();
-    assert_eq!(labels.len(), 1, "one graph per solved node; got {labels:?}");
-    assert_eq!(labels[0], format!("digraph \"{SR_LABEL}\" {{"));
-    // `unlines elems ++ "\n}\n"`: a blank line before the closing brace and a
-    // single trailing newline.
-    assert!(
-        dot.ends_with("\n\n}\n"),
-        "showDot framing: blank line before the closing brace; tail was {:?}",
-        &dot[dot.len().saturating_sub(16)..],
+    let got = c.dot_text();
+    let want = std::fs::read_to_string(fixture("single_recv_traces.dot")).expect("oracle fixture");
+    assert_eq!(
+        got, want,
+        "--output-dot must be byte-identical to the oracle capture",
     );
-    assert_eq!(dot.matches("\n}\n").count(), 1, "exactly one graph");
     // The label ADVERTISES the `GraphOptions` the body was rendered with
     // (`…_SL2-AS0-CL0-A1-C1-NB_…`) but `trace_label_options` derives it from
-    // `GraphOptions::default()` independently of the value the writer passes,
-    // so the two can drift with nothing above catching it.  The framing
-    // assertions above cannot see it either: they hold for an EMPTY body.
-    // Pin the two consequences observable on this fixture — a populated body,
-    // and compression (the label's `C1`) having folded the `Fresh` node into
-    // its consumer, where an uncompressed render adds a `#vf : Fresh` ellipse
-    // and two more edges.
-    assert!(
-        dot.lines().any(|l| l.contains("[shape=record")),
-        "no rule nodes in the graph body:\n{dot}"
-    );
-    assert!(
-        dot.lines().any(|l| l.contains(" -> ")),
-        "no edges in the graph body:\n{dot}"
-    );
-    assert!(
-        !dot.contains(": Fresh"),
-        "the label claims C1, so compression must have folded the Fresh node \
-         away; the body was rendered with different options:\n{dot}"
-    );
+    // `GraphOptions::default()` independently of the value the writer passes.
+    // The fixture pins both halves at once, so state what it is pinning: the
+    // oracle's own label, and compression (the label's `C1`) having folded the
+    // `Fresh` node into its consumer.
+    assert!(want.starts_with(&format!("digraph \"{SR_LABEL}\" {{\n")));
+    assert!(!want.contains(": Fresh"));
 }
 
 /// HS `writeFile` truncates, and `processThy` runs once per input file
@@ -288,6 +263,44 @@ fn last_input_file_wins() {
     let dot = c.dot_text();
     assert!(dot.contains("digraph \"trace_SecondRecv_"));
     assert!(!dot.contains("digraph \"trace_SingleRecv_"));
+}
+
+/// `intercalate "\n" $ map serializeDot labelledSystems` (Batch.hs:265) with
+/// several solved nodes.  Each graph already ends `}\n`, so the separator
+/// leaves EXACTLY one blank line between the closing brace and the next
+/// `digraph`, and the file ends with a single `}\n`.
+#[test]
+fn several_solved_lemmas_are_joined_by_one_blank_line() {
+    if !maude_available() {
+        eprintln!("skipping: maude not on path");
+        return;
+    }
+    let c = Case::new("multi_graph");
+    let f = c.write(
+        "two_lemmas.spthy",
+        "theory TwoLemmas\nbegin\n\nrule Send:\n  \
+         [ Fr(~k) ] --[ S(~k) ]-> [ Out(~k) ]\n\nrule Recv:\n  \
+         [ In(x) ] --[ R(x) ]-> [ ]\n\nlemma sent:\n  exists-trace\n  \
+         \"Ex k #i. S(k) @ i\"\n\nlemma chain:\n  exists-trace\n  \
+         \"Ex k #i #j. S(k) @ i & R(k) @ j\"\n\nend\n",
+    );
+    assert_eq!(c.run(&["--prove"], &[&f]), 0);
+    let dot = c.dot_text();
+    assert_eq!(
+        dot.matches("digraph \"").count(),
+        2,
+        "one graph per solved node:\n{dot}"
+    );
+    assert_eq!(
+        dot.matches("}\n\ndigraph \"").count(),
+        1,
+        "graphs must be separated by exactly one blank line:\n{dot}"
+    );
+    assert!(
+        dot.ends_with("\n\n}\n"),
+        "tail: {:?}",
+        &dot[dot.len() - 8..]
+    );
 }
 
 // ---------------------------------------------------------------------

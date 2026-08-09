@@ -8,13 +8,13 @@
 //! is a `State` monad; in Rust we expose a `DotGraph` struct with mutating
 //! methods. `scope` and `cluster` take a closure for the nested graph.
 //!
-//! NOTE: the live DOT path —
-//! `tamarin-theory/src/constraint/system/dot.rs`, which backs
-//! both the interactive graph routes and `--output-dot` — emits its own
-//! dialect and only borrows this module's leaf helpers
-//! (`fix_multi_line_label`, [`escape_dot_graph_label`], [`escape_record`]).
-//! The builder API (`DotGraph`, records) has no consumer beyond this module's
-//! tests.
+//! NOTE: two DOT paths sit on top of this module. The batch `--output-dot`
+//! serializer (`tamarin-theory/src/constraint/system/dot_showdot.rs`) drives
+//! the full builder API and [`show_dot`], so its bytes are `Text.Dot`'s. The
+//! interactive graph routes
+//! (`tamarin-theory/src/constraint/system/dot.rs`) emit their own dialect and
+//! borrow only the leaf helpers (`fix_multi_line_label`,
+//! [`escape_dot_graph_label`], [`escape_record`]).
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum NodeId {
@@ -126,6 +126,24 @@ impl DotGraph {
         self.next_id = sub.next_id;
         self.elements
             .push(GraphElement::SubGraph(None, sub.elements));
+        r
+    }
+
+    /// `roleCluster`'s dot half (Dot.hs:178-188): a [`scope`] carrying a
+    /// CALLER-supplied cluster id — HS builds it with `createClusterNodeId`
+    /// ([`NodeId::cluster`]) rather than from the counter.  The `nextId` HS
+    /// runs first is a no-op on the numbering: the sub-state is re-seeded with
+    /// the pre-increment value, so the body starts at the counter the caller
+    /// was already on.
+    ///
+    /// [`scope`]: DotGraph::scope
+    pub fn scope_named<R, F: FnOnce(&mut DotGraph) -> R>(&mut self, cid: NodeId, body: F) -> R {
+        let mut sub = DotGraph::new();
+        sub.set_id(self.next_id);
+        let r = body(&mut sub);
+        self.next_id = sub.next_id;
+        self.elements
+            .push(GraphElement::SubGraph(Some(cid), sub.elements));
         r
     }
 

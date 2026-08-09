@@ -2,13 +2,14 @@
 # -m spthy/spthytyped/msr parity sweep: RS vs HS, translate-only (no proving).
 # Corpus: parity_corpus.txt + every examples/sapic/**/*.spthy (deduped).
 # A file where BOTH sides fail with the same rc + normalized stderr counts as
-# agreement. Documented residuals resolve to LEDGERED via
+# agreement — unless neither side got as far as analysing the theory, which is
+# NO-COMPARE (see sweep_common.sh). Documented residuals resolve to LEDGERED via
 # scripts/sweep_expected.tsv (per file, or per file+module). FAMILY=1 restricts
 # to scripts/module_family.txt.
 #
 # Stages: parallel pass at TIMEOUT, then a serial retry of ERROR rows at
 # RETRY_TIMEOUT (heavy files are load-sensitive).
-# Output: TSV rows  <file>\t<module>\t<OK|DIFF|ERROR|LEDGERED>\t<detail>
+# Output: TSV rows  <file>\t<module>\t<OK|DIFF|ERROR|LEDGERED|NO-COMPARE>\t<detail>
 set -u
 . "$(dirname "$0")/sweep_common.sh"
 OUT=${OUT:-$REPO/scripts/results/module_sweep.tsv}
@@ -28,11 +29,17 @@ one() {
   f=$1; m=$2
   d=$(mktemp -d)
   hs_run "$d" "$f" "module-$m-dct30" --derivcheck-timeout=30 -m=$m; hrc=$?
+  # A broken environment is diagnosed before the cap is blamed for it: an
+  # unusable maude both aborts and hangs, and "timeout" would be the wrong
+  # story (and a ledgerable one).
+  if infra_abort "$d/hs.err"; then echo -e "$f\t$m\tNO-COMPARE\tinfra-abort hs (rs not run) hs=$hrc" >> "$OUT"; rm -rf "$d"; return; fi
   # An oracle timeout is cached at this cap, so it comes back instantly while
   # the RS side would burn the full cap producing nothing to compare against.
   if [ $hrc -ge 124 ]; then echo -e "$f\t$m\tERROR\ttimeout/kill hs=$hrc rs=skipped" >> "$OUT"; rm -rf "$d"; return; fi
   grun "$RS_BIN" --with-maude="$MAUDE" --derivcheck-timeout=30 -m=$m "$f" > "$d/rs.out" 2> "$d/rs.err"; rrc=$?
   if [ $rrc -ge 124 ]; then echo -e "$f\t$m\tERROR\ttimeout/kill hs=$hrc rs=$rrc" >> "$OUT"
+  elif nc=$(nocompare_check $hrc $rrc "$d/hs.err" "$d/rs.err" "$d/hs.out" "$d/rs.out"); then
+    echo -e "$f\t$m\tNO-COMPARE\t$nc" >> "$OUT"
   elif [ $hrc -ne $rrc ]; then echo -e "$f\t$m\tDIFF\trc hs=$hrc rs=$rrc" >> "$OUT"
   elif ! diff -q <(norm < "$d/hs.out") <(norm < "$d/rs.out") >/dev/null; then echo -e "$f\t$m\tDIFF\tstdout" >> "$OUT"
   elif ! diff -q <(norm < "$d/hs.err" | nerr) <(norm < "$d/rs.err" | nerr) >/dev/null; then echo -e "$f\t$m\tDIFF\tstderr" >> "$OUT"
@@ -42,7 +49,8 @@ one() {
 sweep_export
 
 rs_stale_check
-LIST=$(list_files | sort -u)
+LIST=$(list_files) || exit 2
+LIST=$(sort -u <<< "$LIST")
 : > "$OUT"
 sweep_banner module_sweep "$(($(echo "$LIST" | grep -c .) * 3))"
 echo "$LIST" | grep . | while read -r f; do for m in spthy spthytyped msr; do echo "$f $m"; done; done \

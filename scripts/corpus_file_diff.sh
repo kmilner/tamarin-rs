@@ -3,6 +3,15 @@
 # file in one invocation — truest byte-identical metric, avoids per-lemma
 # source recompute).
 #
+# SCOPE — this gate compares STDOUT ONLY; both sides send stderr to /dev/null.
+# A MATCH here therefore says nothing about the progress/diagnostic stream, and
+# the flag sweeps (which do compare stderr, via sweep_common.sh's `io_diff`)
+# are what cover it. Measured exposure at theory-load time, 365 corpus files:
+# 6 diverge on stderr, all in classes the sweep ledger already documents —
+# stderr-saturating-sources (3), stderr-oracle-calls (2), stderr-open-chains
+# (1). The `--prove` stream is wider than the load-time one (oracle-call blocks
+# repeat per call) and has NOT been measured.
+#
 # Two strictly-sequential phases so HS and RS never contend:
 #   Phase 1 (HS): run HS on every allowlisted file, cache stripped stdout by
 #                 sha256(content) under .hs_file_cache/.  JOBS concurrent,
