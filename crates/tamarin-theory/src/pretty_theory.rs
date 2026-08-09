@@ -820,19 +820,7 @@ fn render_open_restriction(
     out.push_str(&keyword_("restriction").render());
     out.push(' ');
     out.push_str(&r.name);
-    if !r.attributes.is_empty() {
-        out.push_str(" [");
-        let attrs: Vec<&str> = r
-            .attributes
-            .iter()
-            .map(|a| match a {
-                p::RestrictionAttr::LeftRestriction => "left",
-                p::RestrictionAttr::RightRestriction => "right",
-            })
-            .collect();
-        out.push_str(&attrs.join(", "));
-        out.push(']');
-    }
+    render_restriction_attributes(&r.attributes, &mut out);
     out.push_str(":\n");
     out.push_str(&pf::formula_doublequoted_nested(&original, 2));
     if is_safety_formula(&original) {
@@ -3165,6 +3153,9 @@ fn render_parsed_restriction(
     } else {
         out.push_str(&r.name);
     }
+
+    render_restriction_attributes(&r.attributes, &mut out);
+
     out.push_str(":\n");
     // Top-level display: original formula (macro form) — `fromMaybe expandedFormula ogFormula`.
     // Since ogFormula = Just original, this always shows `r.formula` (macro form).
@@ -3188,6 +3179,24 @@ fn render_parsed_restriction(
     out.push_str("\n  */");
     out.push_str(&hl_close(Hl::Comment));
     out
+}
+
+/// Render the restriction attributes, i.e., `left` and/or `right`
+fn render_restriction_attributes(attrs: &[p::RestrictionAttr], out: &mut String) {
+    if attrs.is_empty() {
+        return;
+    }
+
+    out.push_str("[");
+    let attr_strs: Vec<&str> = attrs
+        .iter()
+        .map(|a| match a {
+            p::RestrictionAttr::LeftRestriction => "left",
+            p::RestrictionAttr::RightRestriction => "right",
+        })
+        .collect();
+    out.push_str(&attr_strs.join(", "));
+    out.push(']');
 }
 
 /// Render one predicate item, mirroring HS `prettyPredicate`
