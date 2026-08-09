@@ -176,7 +176,7 @@ fn no_match_returns_none() {
 ///
 /// HS reference: `ActionG i fa` carries the exact timepoint LVar `i`;
 /// HS dispatches `SolveGoal goal -> guard (goal `M.member` sGoals)`
-/// (ProofMethod.hs:348-459, see line 374) — the goal key is the full LVar, so the idx is
+/// (ProofMethod.hs:253-274, see line 258) — the goal key is the full LVar, so the idx is
 /// part of the match.  HS pretty-prints a timepoint as `#t2` when its
 /// idx is 0 and `#t2.7` when its idx is 7 (`Show LVar`, LTerm.hs:526-533),
 /// so a stored skeleton's `time_idx` always equals the LVar idx of the
@@ -432,7 +432,7 @@ fn match_split_goal_by_id() {
 ///
 /// HS reference: HS `disjSplitGoal` (Proof.hs:61) parses to
 /// `DisjG (Disj [Guarded])` and matches the runtime Goal::Disj by
-/// structural equality (ProofMethod.hs:348-459, see line 374).  The RS shape
+/// structural equality (ProofMethod.hs:253-274, see line 258).  The RS shape
 /// signature must uniquely pick the disjunction whose alt-count
 /// matches the skeleton.
 #[test]

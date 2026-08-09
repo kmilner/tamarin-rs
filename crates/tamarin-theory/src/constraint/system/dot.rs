@@ -106,7 +106,7 @@ use std::fmt::Write as _;
 use crate::constraint::constraints::LessAtom;
 use crate::constraint::system::System;
 use crate::fact::{FactTag, LNFact};
-use crate::pretty_hpj::{self, Doc, WEB_LINE_LENGTH, WEB_RIBBON};
+use crate::pretty_hpj::{self, Doc, DEFAULT_LINE_LENGTH, DEFAULT_RIBBON};
 use crate::rule::{prefix_if_reserved, rule_name_string, ProtoRuleName, RuleACInst, RuleInfo};
 use tamarin_term::lterm::{LNTerm, LVar};
 use tamarin_term::pretty::pretty_lnterm;
@@ -709,7 +709,7 @@ impl DotBuilder {
         let s = pretty_hpj::fsep(pretty_hpj::punctuate(Doc::text(","), fact_docs))
             .beside_sp(Doc::text("@"))
             .beside_sp(Doc::text(nid.to_string()))
-            .render_with(WEB_LINE_LENGTH, WEB_RIBBON);
+            .render_with(DEFAULT_LINE_LENGTH, DEFAULT_RIBBON);
         let color = if facts.iter().any(|f| matches!(f.tag, FactTag::Ku)) {
             "gray"
         } else {

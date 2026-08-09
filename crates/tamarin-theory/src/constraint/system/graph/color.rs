@@ -4,8 +4,8 @@
 
 //! Per-rule node colouring shared by the two graph renderers.
 //!
-//! Holds the port of HS `nodeColorMap` / `NodeColorMap` (Dot.hs:88,
-//! Dot.hs:190-218) — the size-dependent light-HSV palette keyed by a rule's
+//! Holds the port of HS `nodeColorMap` / `NodeColorMap` (Dot.hs:91,
+//! Dot.hs:193-221) — the size-dependent light-HSV palette keyed by a rule's
 //! `rInfo` — together with the less-edge `reasonColor` table and the
 //! `prettyLNFact` `Doc` both renderers label facts with.
 //! [`crate::constraint::system::dot`] (DOT output) and
@@ -53,7 +53,7 @@ pub(crate) type RInfo = RuleInfo<crate::rule::ProtoRuleACInstInfo, IntrRuleACInf
 
 /// Faithful port of HS `NodeColorMap` (Dot.hs:91) — the per-rule fill
 /// palette, keyed in HS by a rule's `rInfo`. Built by [`build_node_color_map`]
-/// (port of `nodeColorMap`, Dot.hs:190-218).
+/// (port of `nodeColorMap`, Dot.hs:193-221).
 ///
 /// `rInfo` is not `Hash`/`Ord` in the Rust port (`ProtoRuleACInstInfo` only
 /// derives `PartialEq`), and both renderers reach the palette from a node whose
@@ -69,7 +69,7 @@ pub(crate) struct NodeColorMap {
 }
 
 impl NodeColorMap {
-    /// HS `M.lookup rInfoVal colorMap` (Dot.hs:236-379, see line 255) for the
+    /// HS `M.lookup rInfoVal colorMap` (Dot.hs:258) for the
     /// node that `id` names: the colour of the LAST map entry sharing that
     /// node's `rInfo` (matching `M.fromList`'s last-wins), or `None` when the
     /// node contributed no entry (→ `"white"` in the DOT renderer, an omitted
@@ -140,22 +140,22 @@ fn group_idx(ru: &RuleACInst) -> usize {
     }
 }
 
-/// Faithful port of HS `nodeColorMap` (Dot.hs:190-218).
+/// Faithful port of HS `nodeColorMap` (Dot.hs:193-221).
 ///
 /// HS: `M.fromList [ (get rInfo ru, getColorForRule (ruleAttributes ru) gIdx
 /// mIdx) | (gIdx, grp) <- groups, (mIdx, ru) <- zip [0..] grp ]`, with the
 /// four `groups` filtered from `rules` by [`group_idx`] and coloured via
 /// `colors = lightColorGroups intruderHue (map (length . snd) groups)` and
-/// `intruderHue = 18 % 360` (Dot.hs:190-218, see line 208,217-218).
+/// `intruderHue = 18 % 360` (Dot.hs:211 / 220-221).
 ///
 /// `rules` here is `M.elems $ get sNodes se` (Dot.hs:506-512, see line 510) — the raw system's
 /// nodes in `M.Map` key order, materialised by [`nodes_in_map_order`].
 /// Each entry's colour follows `getColorForRule attrs gIdx mIdx = fromMaybe
-/// defaultColor (ruleColor attrs)` (Dot.hs:190-218, see line 212): a rule with an explicit
+/// defaultColor (ruleColor attrs)` (Dot.hs:215): a rule with an explicit
 /// `color:` attribute maps to THAT colour, otherwise to the palette default
-/// (`defaultColor = hsvToRGB (getColor (gIdx, mIdx))`, Dot.hs:190-218, see line 214).  This map
-/// value is what `dotNodeCompact` feeds to `colorUsesWhiteFont` (Dot.hs:236-379, see line 255,
-/// 258) to pick a node's font colour — so a SAPiC rule with a dark `color:`
+/// (`defaultColor = hsvToRGB (getColor (gIdx, mIdx))`, Dot.hs:217).  This map
+/// value is what `dotNodeCompact` feeds to `colorUsesWhiteFont` (Dot.hs:258 /
+/// 261) to pick a node's font colour — so a SAPiC rule with a dark `color:`
 /// attribute must map to that dark colour (→ white font), not to the light
 /// palette default.  (The FILL colour is resolved separately via
 /// `explicit_rule_color` at the call site, so carrying the explicit colour
@@ -184,7 +184,7 @@ pub(crate) fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorM
         .collect();
     let get_color = |gi: usize, mi: usize| -> Hsv {
         // `getColor idx = fromMaybe (HSV 0 1 1) (M.lookup idx colors)`
-        // (Dot.hs:190-218, see line 209) — unreachable for a valid (gIdx, mIdx).
+        // (Dot.hs:212) — unreachable for a valid (gIdx, mIdx).
         palette
             .get(&(gi, mi))
             .copied()
@@ -205,10 +205,11 @@ pub(crate) fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorM
         for (mi, pair) in grp.iter().enumerate() {
             let info = &pair.1.info;
             // `getColorForRule attrs gIdx mIdx = fromMaybe defaultColor
-            // (ruleColor attrs)` (Dot.hs:190-218, see line 212): explicit `color:` wins, else the
+            // (ruleColor attrs)` (Dot.hs:215): explicit `color:` wins, else the
             // palette default.  `ruleAttributes ru = praciAttributes` for a
-            // RuleACInst (Rule.hs:673-675, see line 674) — the same attributes `explicit_rule_color`
-            // reads, so a coloured rule maps to its own dark fill colour.
+            // RuleACInst (Rule.hs:687-688) — the same attributes
+            // `explicit_rule_color` reads, so a coloured rule maps to its own
+            // dark fill colour.
             let color = match info {
                 RuleInfo::Proto(p) => p
                     .attributes
@@ -268,7 +269,7 @@ mod tests {
     }
 
     /// Direct transcription of HS `M.lookup rInfoVal (nodeColorMap rules)`
-    /// (Dot.hs:190-218/255): rebuild the association list HS hands to
+    /// (Dot.hs:193-221 / 258): rebuild the association list HS hands to
     /// `M.fromList` and scan it in reverse for the last entry with an equal
     /// `rInfo` — the semantics [`build_node_color_map`] resolves per node.
     fn reference_lookup(

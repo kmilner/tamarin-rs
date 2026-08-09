@@ -1845,7 +1845,7 @@ fn collect_vars(t: &tamarin_term::lterm::LNTerm, out: &mut BTreeSet<LVar>) {
 // Term conversion: parser::Term → LNTerm
 // =============================================================================
 
-pub(crate) fn sort_of(s: &p::SortHint) -> LSort {
+fn sort_of(s: &p::SortHint) -> LSort {
     match s {
         p::SortHint::Fresh | p::SortHint::Suffix(p::SuffixSort::Fresh) => LSort::Fresh,
         p::SortHint::Pub | p::SortHint::Suffix(p::SuffixSort::Pub) => LSort::Pub,

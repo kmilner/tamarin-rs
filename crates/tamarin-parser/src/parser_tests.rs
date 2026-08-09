@@ -4,6 +4,57 @@
 
 use super::*;
 
+// ---- GHC call-site coordinates, read back out of the pinned source --------
+//
+// The three `*_SITE` constants below are pasted verbatim into `HasCallStack`
+// frames the port must emit byte-for-byte.  Every other test of those frames
+// compares the port against bytes captured FROM the port, so all of them agree
+// with a stale coordinate; only reading the pinned Haskell notices when a bump
+// moves an `error`.
+
+const MACRO_HS: &str =
+    include_str!("../../../tamarin-prover/lib/theory/src/Theory/Text/Parser/Macro.hs");
+const TERM_HS: &str =
+    include_str!("../../../tamarin-prover/lib/theory/src/Theory/Text/Parser/Term.hs");
+
+/// `LINE:COLUMN` of the `error` token on the first line of `hs` holding
+/// `needle`, as GHC's `HasCallStack` prints it: both 1-based, the column that
+/// of the token itself.
+fn error_site(hs: &str, needle: &str) -> String {
+    let (idx, line) = hs
+        .lines()
+        .enumerate()
+        .find(|(_, l)| l.contains(needle))
+        .unwrap_or_else(|| panic!("no line of the pinned source holds {needle:?}"));
+    let col = line
+        .match_indices("error")
+        .find(|(i, _)| {
+            !line[..*i]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '\'')
+        })
+        .map(|(i, _)| line[..i].chars().count() + 1)
+        .expect("no `error` token on that line");
+    format!("{}:{}", idx + 1, col)
+}
+
+#[test]
+fn ghc_call_sites_name_the_pinned_error_tokens() {
+    assert_eq!(
+        Parser::MACRO_RESERVED_NAME_SITE,
+        error_site(MACRO_HS, "is a reserved function name for builtins.")
+    );
+    assert_eq!(
+        Parser::MACRO_DUPLICATE_ARG_SITE,
+        error_site(MACRO_HS, "have two arguments with the same name.")
+    );
+    assert_eq!(
+        Parser::TERM_RESERVED_NAME_SITE,
+        error_site(TERM_HS, "is a reserved function name for builtins.")
+    );
+}
+
 // ---- parsec frame-rendering port (Text.Parsec.Error) ----
 
 fn pe(source: &str, line: u32, col: u32, messages: Vec<Message>) -> String {

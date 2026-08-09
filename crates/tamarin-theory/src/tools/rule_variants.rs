@@ -1048,10 +1048,11 @@ fn rename_precise_rule_with_variants(
     };
 
     // Phase 1: walk every free LVar in HS's `mapFrees (Rule ProtoRuleACInfo)`
-    // order. ProtoRuleACInfo (Rule.hs:485-495) walks name|attr|variants|breakers;
-    // name/attr/breakers are empty (RuleAttributes.hs:446-449, etc.), so
-    // effectively variants Disj first (KEYS-ONLY per SubstVFresh.hs:196-202).
-    // THEN prems, concs, acts, new_vars (Rule.hs:279-292).
+    // order. ProtoRuleACInfo (Theory/Model/Rule.hs:433-439) walks
+    // name|attr|variants|breakers; name/attr/breakers are empty
+    // (RuleAttributes, Theory/Model/Rule.hs:367-379), so effectively variants
+    // Disj first (KEYS-ONLY per SubstVFresh.hs:196-202).  THEN prems, concs,
+    // acts, new_vars (Theory/Model/Rule.hs:291-298).
     for s in &substs {
         for (k, _t) in s.to_list() {
             import(&k, &mut state, &mut map);

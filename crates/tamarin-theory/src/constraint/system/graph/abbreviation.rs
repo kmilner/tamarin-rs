@@ -22,7 +22,7 @@ use tamarin_term::pretty::{ac_op_symbol, pretty_lnterm};
 use tamarin_term::term::{is_pair, Term};
 use tamarin_term::vterm::Lit;
 
-use crate::pretty_hpj::{fcat, fsep, punctuate, Doc, WEB_LINE_LENGTH, WEB_RIBBON};
+use crate::pretty_hpj::{fcat, fsep, punctuate, Doc, DEFAULT_LINE_LENGTH, DEFAULT_RIBBON};
 
 use crate::fact::LNFact;
 use crate::rule::{IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, RuleACInst, RuleInfo};
@@ -374,10 +374,10 @@ fn sub_terms_no_pair(t: &LNTerm, out: &mut Vec<LNTerm>) {
 /// 5*101=505 loses to it), which is exactly the SIn index drift the web
 /// sweep flagged.  So measure through the same HughesPJ engine (the
 /// verified `pretty_hpj` port) at HS `render`'s default widths
-/// (`WEB_LINE_LENGTH`/`WEB_RIBBON` = 100/67).
+/// (`DEFAULT_LINE_LENGTH`/`DEFAULT_RIBBON` = 100/67).
 fn rendered_term_len(t: &LNTerm) -> usize {
     lnterm_doc(t)
-        .render_with(WEB_LINE_LENGTH, WEB_RIBBON)
+        .render_with(DEFAULT_LINE_LENGTH, DEFAULT_RIBBON)
         .chars()
         .count()
 }

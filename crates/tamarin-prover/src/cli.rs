@@ -262,9 +262,9 @@ pub struct Args {
     /// per-source saturate change-detection, per-item pretty-print).
     /// `None` = use default (`available_parallelism()` — full machine).
     /// `Some(1)` = single-threaded, byte-identical to sequential output.
-    /// Mirrors HS's `+RTS -N RTS_FLAG` in spirit — see
-    /// `lib/theory/src/Prover.hs:68-164, see line 102,195`, `Theory/Constraint/Solver/Sources.hs:355-384, see line 362`,
-    /// `lib/theory/src/TheoryObject.hs:732-768, see line 744,752`.
+    /// Mirrors HS's `+RTS -N RTS_FLAG` in spirit — see its `using parList` /
+    /// `parMap` sites: CloseRule.hs:81, Prover.hs:105,
+    /// Theory/Constraint/Solver/Sources.hs:362, TheoryObject.hs:759,767.
     pub processors: Option<usize>,
 
     /// `--maude-processes=M` — size of the pool of Maude subprocesses
@@ -516,7 +516,7 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                     // flag is behaviourally equal to absent — leave None.
                     // Routed: when set, this OVERRIDES the per-lemma / theory
                     // heuristic for every lemma (HS `selectHeuristic`:
-                    // `apDefaultHeuristic <|> pcHeuristic`, Proof.hs:705-716, see line 707).
+                    // `apDefaultHeuristic <|> pcHeuristic`, Theory/Proof.hs:705-716, see line 707).
                     if let Some(v) = val_inline {
                         args.heuristic = Some(v.to_string());
                     }
@@ -546,7 +546,7 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                 }
                 // Routed: `--oracle-only` sets quitOnEmpty on every oracle /
                 // tactic ranking in the selected heuristic (HS `setQuitOnEmpty`,
-                // Proof.hs:712-716).
+                // Theory/Proof.hs:712-716).
                 "oracle-only" => args.oracle_only = true,
                 "quiet" => args.quiet = true,
                 "verbose" => args.verbose = true,
@@ -621,9 +621,10 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                 // Interactive-mode flags are flagOpt (Interactive.hs:53-56),
                 // so they never consume a separate token — only `=VALUE`.  A
                 // bare flag records the empty-string default; HS then reads
-                // port leniently (Interactive.hs:134-139, falls back to
-                // defaultPort) and interface defaults to 127.0.0.1
-                // (Interactive.hs:68-166, see line 143), so an empty value behaves like absent.
+                // port leniently (`readPort` falls back to `defaultPort`,
+                // Interactive.hs:166-174, see line 174) and interface defaults
+                // to 127.0.0.1 (Interactive.hs:178), so an empty value behaves
+                // like absent.
                 "port" => {
                     if let Some(v) = val_inline {
                         if !v.is_empty() {
@@ -739,7 +740,7 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                     }
                     // An empty value behaves like an absent flag, as in the
                     // long form: HS reads the port leniently and falls back
-                    // to `defaultPort` (Interactive.hs:134-139), so `-p=`
+                    // to `defaultPort` (Interactive.hs:166-174, see line 174), so `-p=`
                     // must not be an argv rejection.
                     'p' => {
                         if let Some(v) = inline.filter(|v| !v.is_empty()) {
@@ -908,7 +909,7 @@ fn parse_positive_usize(
 
 /// Does the lemma name match the user's `--prove`/`--lemma` filter?
 ///
-/// Mirrors HS `lemmaSelector` (TheoryLoader.hs:378-389): the empty
+/// Mirrors HS `lemmaSelector` (TheoryLoader.hs:418-432): the empty
 /// filter `[]`, the single-empty filter `[""]`, and the double-empty
 /// filter `["",""]` all mean "all lemmas".  Otherwise we run
 /// `any lemmaMatches filter` where a pattern ending in `*` matches by

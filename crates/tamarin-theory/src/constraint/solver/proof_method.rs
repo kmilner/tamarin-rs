@@ -704,7 +704,7 @@ pub fn exec_proof_method(
             // goal at gsNr=0, shifting every subsequent gsNr in every
             // sibling branch and diverging from HS at the first insertGoal
             // call.)
-            // HS `process . induction` (ProofMethod.hs:348-459, see line 428, 521-525):
+            // HS `process . induction` (ProofMethod.hs:282-339, see line 297,305,328):
             // `runReduction (induction <* simplifySystem)` under the DisjT
             // monad.  `simplifySystem` CAN fan out at induction time — a
             // step-case formula that `reduceFormulas` decomposes into

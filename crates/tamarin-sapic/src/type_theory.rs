@@ -50,6 +50,11 @@ pub struct TypeTheoryResult {
     /// One `SapicFunSym` per entry of the final `funs` map, in HS's
     /// `Map.foldrWithKey`-append order = DESCENDING `UserDefinedSym` order.
     pub fun_items: Vec<SapicFunSym>,
+    /// The environment the whole theory was typed against.  No RS caller
+    /// reads it: its consumers are the ProVerif / DeepSec exporters
+    /// (`loadHeaders` folds over `events`, Export.hs:2743-2754), which are
+    /// unported — see `tamarin_export`'s module doc.  Returned so the
+    /// exporters land against a complete `typeTheoryEnv`.
     pub env: TypingEnvironment,
 }
 

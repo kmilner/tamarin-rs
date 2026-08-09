@@ -39,7 +39,7 @@ use tamarin_term::vterm::Lit;
 use crate::constraint::constraints::{NodeConc, NodeId, NodePrem, Reason};
 use crate::constraint::solver::tactic_show::show_lnterm;
 use crate::fact::{fact_tag_multiplicity, show_fact_tag, FactTag, LNFact, Multiplicity};
-use crate::pretty_hpj::{fsep, punctuate, Doc, WEB_LINE_LENGTH, WEB_RIBBON};
+use crate::pretty_hpj::{fsep, punctuate, Doc, DEFAULT_LINE_LENGTH, DEFAULT_RIBBON};
 use crate::rule::{
     is_coerce_rule_info, is_constr_rule_info, is_destr_rule_info, is_fresh_constr_rule_info,
     is_iequality_rule_info, is_irecv_rule_info, is_isend_rule_info, is_nat_constr_rule_info,
@@ -54,15 +54,10 @@ use crate::constraint::system::graph::options::GraphOptions;
 use crate::constraint::system::graph::render_system::RenderSystem;
 use crate::constraint::system::graph::repr::{Cluster, GEdge, GNode, MissingHint, NodeType};
 use crate::constraint::system::graph::{system_to_graph, Graph};
-
-/// `NodeId → &RuleACInst` index over the ORIGINAL system, built once per
-/// rendered graph.  HS's `resolveNodePremFact` / `resolveNodeConcFact`
-/// (System.hs:926-931) are `M.lookup`s into `sNodes`; this crate stores the
-/// nodes in a `Vec`, and every edge resolves up to two of them.
-type NodeRules<'a> = tamarin_utils::FastMap<&'a NodeId, &'a RuleACInst>;
+use crate::constraint::system::NodeRuleMap;
 
 /// HS `resolveNodePremFact` (System.hs:926-927) via Graph.hs:87-90.
-fn resolve_node_prem_fact<'a>(prem: &NodePrem, rules: &NodeRules<'a>) -> Option<&'a LNFact> {
+fn resolve_node_prem_fact<'a>(prem: &NodePrem, rules: &NodeRuleMap<'a>) -> Option<&'a LNFact> {
     rules
         .get(&prem.0)
         .copied()
@@ -70,7 +65,7 @@ fn resolve_node_prem_fact<'a>(prem: &NodePrem, rules: &NodeRules<'a>) -> Option<
 }
 
 /// HS `resolveNodeConcFact` (System.hs:930-931) via Graph.hs:93-96.
-fn resolve_node_conc_fact<'a>(conc: &NodeConc, rules: &NodeRules<'a>) -> Option<&'a LNFact> {
+fn resolve_node_conc_fact<'a>(conc: &NodeConc, rules: &NodeRuleMap<'a>) -> Option<&'a LNFact> {
     rules
         .get(&conc.0)
         .copied()
@@ -127,7 +122,7 @@ fn clean_string(s: &str) -> String {
 /// `ribbonsPerLine = 1.5` ⇒ ribbon `round (100/1.5) = 67`), so a wide fact
 /// wraps before `cleanString` flattens it back onto one line.
 fn pps(d: Doc) -> String {
-    clean_string(&d.render_with(WEB_LINE_LENGTH, WEB_RIBBON))
+    clean_string(&d.render_with(DEFAULT_LINE_LENGTH, DEFAULT_RIBBON))
 }
 
 /// Derived `Show` of `ACSym` (FunctionSymbols.hs:138-139).  The `ACfct`
@@ -242,7 +237,7 @@ impl EdgeClass {
     }
 }
 
-fn classify_edge(edge: &GEdge, rules: &NodeRules<'_>) -> EdgeClass {
+fn classify_edge(edge: &GEdge, rules: &NodeRuleMap<'_>) -> EdgeClass {
     match edge {
         GEdge::System(src, tgt) => {
             let prem = resolve_node_prem_fact(tgt, rules);
@@ -465,7 +460,7 @@ fn json_node(node: &GNode, color_map: &NodeColorMap) -> Value {
 
 /// Port of `graphEdgeToJSONGraphEdge` (JSON.hs:467-495).  Less-edges address
 /// their endpoints by bare node id; the other two kinds use record ports.
-fn json_edge(edge: &GEdge, rules: &NodeRules<'_>) -> Value {
+fn json_edge(edge: &GEdge, rules: &NodeRuleMap<'_>) -> Value {
     let class = classify_edge(edge, rules);
     let color = Value::String(class.color().to_string());
     let relation = Value::String(class.relation().to_string());
@@ -492,7 +487,7 @@ fn json_edge(edge: &GEdge, rules: &NodeRules<'_>) -> Value {
 }
 
 /// Port of `graphClusterToJSONGraphCluster` (JSON.hs:498-506).
-fn json_cluster(cluster: &Cluster, rules: &NodeRules<'_>, color_map: &NodeColorMap) -> Value {
+fn json_cluster(cluster: &Cluster, rules: &NodeRuleMap<'_>, color_map: &NodeColorMap) -> Value {
     object([
         (
             "jgcEdges",

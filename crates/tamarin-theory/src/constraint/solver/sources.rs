@@ -1581,16 +1581,17 @@ fn refine_one_source(
 /// which every CLI theory close passes as `True` — `closeTranslatedTheory`
 /// (TheoryLoader.hs:679, the batch/`--prove`/`--precompute-only`/web load),
 /// `closeTheory` (Prover.hs:51) and `applyPartialEvaluation`
-/// (Prover.hs:238-240).  Only the two auxiliary closes pass `False`: the NDC
+/// (Prover.hs:242).  Only the two auxiliary closes pass `False`: the NDC
 /// deduction check (CloseRule.hs:246,251) and the message-derivation check
 /// (MessageDerivationChecks.hs:42).  HS then emits nothing on theories whose
 /// proofs never force `crcRawSources`/`crcRefinedSources`, since `trace`
 /// fires at thunk-force time.
 ///
 /// The port's contexts are built in too many places to thread a value
-/// through each, so the gate is process-global: `run_batch` disarms it
-/// around the NDC and derivation-check stages and arms it for the close
-/// proper.
+/// through each, so the gate is process-global:
+/// `TheoryPipeline::check_translated_theory` disarms it for the NDC and
+/// derivation-check stages, and `close_translated_theory` arms it for the
+/// close proper.
 static SHOW_SATURATION_STEPS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -1756,7 +1757,7 @@ fn saturate_sources_with_simp_opt(
         for ((new_cases, per_changed, _), (src_goal, src_incomplete)) in
             per_source.into_iter().zip(src_meta)
         {
-            // HS `saturateSources` (Sources.hs:479-498) derives its
+            // HS `saturateSources` (Sources.hs:355-384) derives its
             // per-source change bit SOLELY from the solver's result:
             //   solver = do names <- solveAllSafeGoals …
             //               return (not $ null names, names)
@@ -1769,9 +1770,9 @@ fn saturate_sources_with_simp_opt(
             if per_changed {
                 changed = true;
             }
-            // HS-faithful `refineSource` (Sources.hs:131-133):
+            // HS-faithful `refineSource` (Sources.hs:113-120):
             //   refineSource ctxt proofStep th = (..., set cdCases newCases th)
-            // and `saturateSources` (Sources.hs:498):
+            // and `saturateSources` (Sources.hs:379):
             //   (changes, ths') = unzip $ map (refineSource ctxt solver) ths
             // ALWAYS returns one source per input — `set cdCases newCases th`
             // REPLACES the case list, even when it is EMPTY (every branch

@@ -6,7 +6,7 @@
 //!
 //! HS `macro` `fail`s on a name the signature already carries
 //! (Theory/Text/Parser/Macro.hs:43-44); batch mode's `handleError` `die`s on
-//! the resulting `ParserError` (Main/Mode/Batch.hs:234) — parsec frame on
+//! the resulting `ParserError` (Main/Mode/Batch.hs:235) — parsec frame on
 //! stderr, exit 1, no stdout.  The pinned oracle (Git revision ef3f0468)
 //! exits 1 on the conflicting theory below with stderr body
 //! `"…" (line 4, column 1):\nunexpected "e"\nexpecting "."\nConflicting name
@@ -15,7 +15,7 @@
 //! `crates/tamarin-parser/tests/macro_conflicts.rs` (`run` prints exactly
 //! `ParseError::with_source(<in_file>)`).
 //!
-//! The two GHC `error`s of Macro.hs:34-38 never become a `ParserError`: the
+//! The two GHC `error`s of Theory/Text/Parser/Macro.hs:34-38 never become a `ParserError`: the
 //! exception escapes to GHC's runtime, which prints `tamarin-prover: ` plus
 //! the message and the `HasCallStack` frame and exits 1.  Those go through the
 //! binary, since only a spawned process shows the stderr bytes.
@@ -31,8 +31,15 @@ use std::process::Command;
 use tamarin_prover::{parse_args, run};
 
 fn maude_available() -> bool {
+    // A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION,
+    // not a reason to skip: returning `false` there would report green
+    // vacuously on a CI whose image moved maude.
     if let Ok(p) = std::env::var("MAUDE_PATH") {
-        return std::path::Path::new(&p).exists();
+        assert!(
+            std::path::Path::new(&p).exists(),
+            "MAUDE_PATH={p} does not exist; unset it or point it at a real maude"
+        );
+        return true;
     }
     for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
         if std::path::Path::new(c).exists() {
@@ -131,8 +138,8 @@ fn theory_markers(name: &str) -> String {
     .collect()
 }
 
-/// A macro named after one of the nine `reservedBuiltins` (Term.hs:74-86)
-/// aborts with the GHC `error` of Macro.hs:34-35 — no parsec frame, no
+/// A macro named after one of the nine `reservedBuiltins` (Theory/Text/Parser/Term.hs:74-86)
+/// aborts with the GHC `error` of Theory/Text/Parser/Macro.hs:34-35 — no parsec frame, no
 /// `SourcePos` header, exit 1.
 #[test]
 fn reserved_macro_name_prints_ghc_error_and_exits_1() {
@@ -155,7 +162,7 @@ fn reserved_macro_name_prints_ghc_error_and_exits_1() {
 }
 
 /// Two arguments that are the same full `LVar` abort with the GHC `error` of
-/// Macro.hs:37-38; differing sorts keep them apart and the theory loads.
+/// Theory/Text/Parser/Macro.hs:37-38; differing sorts keep them apart and the theory loads.
 #[test]
 fn duplicate_macro_arguments_print_ghc_error_and_exit_1() {
     if !maude_available() {
@@ -181,7 +188,7 @@ fn duplicate_macro_arguments_print_ghc_error_and_exit_1() {
 }
 
 /// A macro named after a user function aborts the load with exit 1 (HS
-/// `die`, Batch.hs:234), while the same theory under a fresh macro name
+/// `die`, Batch.hs:235), while the same theory under a fresh macro name
 /// loads with exit 0.
 #[test]
 fn conflicting_macro_name_exits_1() {

@@ -61,7 +61,7 @@ pub(crate) const OPTIONS_MENU_ITEMS: &str =
 <li><a id=lvl3-toggle href=\"#\">Graph simplification L3</a></li>\
 </ul></li>";
 
-/// Byte-for-byte reproduction of `intdotLayout True` (`src/Web/Types.hs:795-825`)
+/// Byte-for-byte reproduction of `intdotLayout True` (`src/Web/Types.hs:795-824`)
 /// wrapping `popoutOptionsTpl True` (`src/Web/Types.hs:769-777`) and
 /// `optionsMenuItemTpl True` (`src/Web/Types.hs:749-763`).
 ///

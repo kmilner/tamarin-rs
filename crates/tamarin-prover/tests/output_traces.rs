@@ -299,8 +299,19 @@ fn several_solved_lemmas_are_joined_by_one_blank_line() {
     assert!(
         dot.ends_with("\n\n}\n"),
         "tail: {:?}",
-        &dot[dot.len() - 8..]
+        &dot[dot.len().saturating_sub(8)..]
     );
+    // Every assertion above holds over EMPTY graphs — a body rendered with
+    // the wrong `GraphOptions` satisfies all of them — so pin the bodies too:
+    // both graphs carry their rule record node, and `trace_graph_options`'
+    // compression (the label's `C1`) folded the `Fresh` node into its
+    // consumer.
+    assert_eq!(
+        dot.matches("#i : Send[S( ~k )]").count(),
+        2,
+        "each graph must carry the Send record node:\n{dot}"
+    );
+    assert!(!dot.contains(": Fresh"), "compression is on:\n{dot}");
 }
 
 // ---------------------------------------------------------------------

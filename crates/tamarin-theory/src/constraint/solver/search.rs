@@ -226,7 +226,7 @@ fn collect_solved_systems_owned(
 ///   peak RSS.
 /// * [`KeepSolved`](SysRetention::KeepSolved) — batch trace output
 ///   (`--output-dot` / `--output-json`), whose HS `outputTraces`
-///   (Batch.hs:262-288) reads exactly the
+///   (Batch.hs:252-288) reads exactly the
 ///   `ProofStep (Finished Solved) (Just sys)` nodes and no others.  Peak
 ///   RSS stays at the `--prove` baseline: a solved node is a leaf, and
 ///   `extract_solved_path` (HS `extractSolved`) keeps at most one per
@@ -279,11 +279,10 @@ pub fn set_sys_retention(policy: SysRetention) {
 /// (diagnostic).
 #[inline]
 fn sys_retention() -> SysRetention {
-    let stored = SysRetention::from_u8(SYS_RETENTION.load(std::sync::atomic::Ordering::Relaxed));
-    if stored != SysRetention::KeepAll && keep_sys_env() {
+    if keep_sys_env() {
         return SysRetention::KeepAll;
     }
-    stored
+    SysRetention::from_u8(SYS_RETENTION.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 #[inline]

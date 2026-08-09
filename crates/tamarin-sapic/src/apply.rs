@@ -36,7 +36,7 @@ use crate::typing::{collect_user_fun_typings, type_and_rename_process};
 /// still alpha-identical and detected as captured.
 ///
 /// `translateTheory` computes this report on the open theory before any
-/// translation step (TheoryLoader.hs:448-460, see line 455), so both the
+/// translation step (TheoryLoader.hs:487-499, see line 497), so both the
 /// translating path ([`apply_sapic`]) and the `-m spthy` / `-m spthytyped`
 /// paths that skip translation report exactly these warnings.
 ///
@@ -72,8 +72,9 @@ pub fn sapic_pre_report(
 /// Returns the SAPIC-process wellformedness report (HS `Sapic.checkWellformedness`,
 /// Warnings.hs:37-38), which the caller PREPENDS to the overall report — HS
 /// computes it in `translateTheory` on the OpenTheory *before* translation, so
-/// it sorts before every other check (`preReport ++ postReport`,
-/// TheoryLoader.hs:448-460, see line 455/631).  Empty for a well-formed (or non-SAPIC) theory.
+/// it sorts before every other check (TheoryLoader.hs:487-499, see line 497;
+/// `preReport ++ postReport` at :730-732).  Empty for a well-formed (or
+/// non-SAPIC) theory.
 pub fn apply_sapic(
     parsed: &mut p::Theory,
     elaborated: &mut Theory,

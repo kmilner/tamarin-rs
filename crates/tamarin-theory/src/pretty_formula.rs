@@ -1204,7 +1204,7 @@ fn pp_atom(a: &p::Atom, scope: &[Bind], out: &mut String) {
 fn pp_fact(fa: &p::Fact, scope: &[Bind], out: &mut String) {
     // HS `prettyFact` (Theory/Model/Fact.hs:539-544):
     //   `ppFact n t = nestShort' (n ++ "(") ")" . fsep . punctuate comma $ map ppTerm t`
-    // `nestShort'` (Utils/PrettyPrint/Class.hs:221-223) wraps as
+    // `nestShort'` (Text/PrettyPrint/Class.hs:221-223) wraps as
     // `sep [text "Name(", body, text ")"]`. When `body` is empty
     // (empty-arg fact), HS's HughesPJ `sep` collapses the empty middle
     // and emits `Name( )` with ONE inner space; non-empty `body` emits

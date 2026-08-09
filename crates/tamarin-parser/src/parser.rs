@@ -5494,12 +5494,17 @@ impl<'a> Parser<'a> {
         Err(self.err("expected term"))
     }
 
+    /// `LINE:COLUMN` of `naryOpApp`'s reserved-name `error` in
+    /// `src/Theory/Text/Parser/Term.hs` — see [`Self::MACRO_ERROR_PACKAGE`].
+    const TERM_RESERVED_NAME_SITE: &'static str = "92:9";
+
     /// The `error, called at <…>` location of `naryOpApp`'s reserved-name
-    /// rejection (Theory/Text/Parser/Term.hs:92:9) as the pinned oracle build
-    /// prints it — same package id as `macro`'s errors.
+    /// rejection as the pinned oracle build prints it — same package id as
+    /// `macro`'s errors.
     fn term_reserved_name_call_site() -> String {
         format!(
-            "src/Theory/Text/Parser/Term.hs:92:9 in {}:Theory.Text.Parser.Term",
+            "src/Theory/Text/Parser/Term.hs:{} in {}:Theory.Text.Parser.Term",
+            Self::TERM_RESERVED_NAME_SITE,
             Self::MACRO_ERROR_PACKAGE
         )
     }
@@ -5607,7 +5612,8 @@ impl<'a> Parser<'a> {
         if self.try_punct(":") {
             // Inside a SAPIC process every variable comes from HS `sapicvar =
             // lvarNoSuffix; option Nothing (colon *> typep)` (Token.hs:506-510).
-            // `lvarNoSuffix` (Token.hs:487-501) offers PREFIX sorts only, so a
+            // `lvarNoSuffix` (Token.hs:502-503) is `sortedLVarNoSuffix
+            // [minBound..]` (Token.hs:486-501), which offers PREFIX sorts only, so a
             // colon there always introduces a SAPIC TYPE — `x:nat` is the
             // msg-sorted `x` typed `"nat"`, not a nat-sorted variable — and
             // `typep`'s `Any` is the untyped placeholder (Token.hs:472-473).

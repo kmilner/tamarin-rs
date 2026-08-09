@@ -23,7 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::constraint::constraints::{LessAtom, NodeId};
 use crate::constraint::solver::context::ProofContext;
-use crate::constraint::system::System;
+use crate::constraint::system::{NodeRuleMap, System};
 
 /// Reasons why a `System` is contradictory. Variants match Haskell
 /// 1-to-1 so downstream pretty printers can reuse the names.
@@ -58,11 +58,6 @@ pub enum Contradiction {
     /// There is a node strictly after `last(...)`.
     NodeAfterLast(NodeId, NodeId),
 }
-
-/// Read-only `NodeId → rule` index (`System::node_rule_map`), built at most
-/// once per `contradictions` pass: the caller owns it in a `OnceCell` and
-/// each consumer forces it with `get_or_init`.
-type NodeRuleMap<'a> = tamarin_utils::FastMap<&'a NodeId, &'a crate::rule::RuleACInst>;
 
 /// Push a node id through the eq-store substitution, keeping it as-is when the
 /// substitution does not map it to another variable.  The rationale for

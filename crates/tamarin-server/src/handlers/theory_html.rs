@@ -256,8 +256,8 @@ fn lemma_index(
     // `nest 2 (sep [prettyTraceQuantifier tq, doubleQuotes (prettyLNFormula f)])`
     // — rendered under the active `HtmlDocGuard` (proof_state's), so operators
     // become `hl_operator` spans and the formula text is entity-escaped, while
-    // the line-wrapping still measures escaped fill-widths at WEB_LINE_LENGTH/
-    // WEB_RIBBON (the widths lib.rs installs) exactly as HS `renderHtmlDoc`.
+    // the line-wrapping still measures escaped fill-widths at DEFAULT_LINE_LENGTH/
+    // DEFAULT_RIBBON (the widths lib.rs installs) exactly as HS `renderHtmlDoc`.
     let formula_hdr = tamarin_theory::pretty_formula::lemma_header_line(tq, &canon);
     let n_url = url_path_escape(&l.name);
     use tamarin_theory::pretty_hpj as hpj;
@@ -492,7 +492,7 @@ fn pp_step(
     depth: usize,
     by_prefix: bool,
 ) {
-    use tamarin_theory::pretty_hpj::{self as hpj, Doc, WEB_LINE_LENGTH, WEB_RIBBON};
+    use tamarin_theory::pretty_hpj::{self as hpj, Doc, DEFAULT_LINE_LENGTH, DEFAULT_RIBBON};
     // Render `("by "? <> prettyProofMethod)` at `nest (2*depth)` under the
     // ACTIVE `HtmlDocGuard` (proof_state's), so the method carries its `hl_*`
     // spans and the wrap budget accounts for the `by ` offset exactly as HS.
@@ -504,7 +504,7 @@ fn pp_step(
             doc = Doc::text("by ").beside(doc);
         }
         doc.nest((2 * depth) as isize)
-            .render_with(WEB_LINE_LENGTH, WEB_RIBBON)
+            .render_with(DEFAULT_LINE_LENGTH, DEFAULT_RIBBON)
     };
     // Strip the first line's nest indent (and the sizing `by `) so the `<a>`
     // wraps only the method text; continuation lines keep their absolute

@@ -16,8 +16,6 @@
 //! The Haskell version uses `fclabels` lenses heavily; we replace those
 //! with public fields plus accessor methods.
 
-use std::collections::BTreeSet;
-
 use tamarin_term::function_symbols::{FunSym, NdcState};
 use tamarin_term::lterm::{HasFrees, LNTerm, LSort, LVar, Name};
 use tamarin_term::vterm::VTerm;
@@ -167,9 +165,11 @@ impl<I: Clone> HasFrees for Rule<I> {
 ///
 /// `info` is carried over untouched, which is what HS's `apply subst i` comes
 /// to for the info types this port instantiates: the `Apply` instances for
-/// `ProtoRuleEInfo` / `ProtoRuleACInstInfo` / `IntrRuleACInfo` are all the
-/// identity (Rule.hs:500-501, 517-518, 619-620).  So a refined `ProtoRuleE`
-/// keeps its original restriction frees unsubstituted.
+/// `ProtoRuleEInfo` and `IntrRuleACInfo` are literally `apply _ = id`
+/// (Rule.hs:500-501, 619-620), and `ProtoRuleACInstInfo`'s (Rule.hs:517-519)
+/// maps only its `ProtoRuleName`, whose own instance is `apply _ = id`
+/// (Rule.hs:467-468).  So a refined `ProtoRuleE` keeps its original
+/// restriction frees unsubstituted.
 pub(crate) fn apply_subst_rule<I: Clone>(
     sigma: &tamarin_term::subst::Subst<Name, LVar>,
     r: &Rule<I>,
@@ -791,13 +791,6 @@ const RESERVED_RULE_NAMES: [&str; 7] = [
     "pub",
     "iequality",
 ];
-
-/// `RESERVED_RULE_NAMES` as a set.  The name check every renderer wants is
-/// [`prefix_if_reserved`]; this accessor exposes the bare list, and the unit
-/// test pins its contents through it.
-pub fn reserved_rule_names() -> BTreeSet<&'static str> {
-    RESERVED_RULE_NAMES.into_iter().collect()
-}
 
 // =============================================================================
 // Maude-backed unification helpers — port of `unifyRuleACInstEqs`,

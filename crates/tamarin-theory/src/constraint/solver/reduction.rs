@@ -1190,11 +1190,12 @@ impl<'ctx> Reduction<'ctx> {
         //
         // Triggering case: Scott::key_secrecy.  Two source-cases'
         // saturated systems that HS dedupes (75→73 in
-        // `removeRedundantCases` at ProofMethod.hs:348-459, see line 455) survived
+        // `removeRedundantCases` at ProofMethod.hs:282-339, see line 303) survived
         // in RS, leaving 18 Reveal_ltk arms where HS shows 16.
         //
         // Source: HS `Theory.Constraint.Solver.Reduction.substLessAtoms`
-        //         + `Term.Substitution.SubstVFree.SubstVFree.hs:345`.
+        //         + `Term/Substitution/SubstVFree.hs:343-344`, whose
+        //         `apply subst = S.map (apply subst)` is what dedupes.
         let mut new_less: Vec<crate::constraint::constraints::LessAtom> =
             Vec::with_capacity(self.sys.less_atoms.len());
         // Dedup by `(smaller, larger)`: `LessAtom`'s `Eq` ignores `reason`
@@ -5921,35 +5922,13 @@ pub fn rule_case_name(rule: &crate::rule::RuleACInst) -> String {
 /// (see `intruder_rules.rs`), so `ConstrRule { name: b"_fst", .. }` yields
 /// `c` + `_fst` = `c_fst` and `prefixIfReserved` leaves it as-is.
 pub fn rule_trace_name(rule: &crate::rule::RuleACInst) -> String {
-    use crate::rule::{IntrRuleACInfo, ProtoRuleName, RuleInfo};
+    use crate::rule::{ProtoRuleName, RuleInfo};
     match &rule.info {
         RuleInfo::Proto(p) => match &p.name {
             ProtoRuleName::Fresh => "FreshRule".to_string(),
             ProtoRuleName::Stand(s) => s.to_string(),
         },
-        RuleInfo::Intr(i) => match i {
-            IntrRuleACInfo::ConstrRule { name, .. } => {
-                let s = String::from_utf8_lossy(name);
-                format!(
-                    "Constr{}",
-                    crate::rule::prefix_if_reserved(&format!("c{}", s))
-                )
-            }
-            IntrRuleACInfo::DestrRule { name, .. } => {
-                let s = String::from_utf8_lossy(name);
-                format!(
-                    "Destr{}",
-                    crate::rule::prefix_if_reserved(&format!("d{}", s))
-                )
-            }
-            IntrRuleACInfo::Coerce => "Coerce".to_string(),
-            IntrRuleACInfo::IRecv => "Recv".to_string(),
-            IntrRuleACInfo::ISend => "Send".to_string(),
-            IntrRuleACInfo::PubConstr => "PubConstr".to_string(),
-            IntrRuleACInfo::NatConstr => "NatConstr".to_string(),
-            IntrRuleACInfo::FreshConstr => "FreshConstr".to_string(),
-            IntrRuleACInfo::IEquality => "Equality".to_string(),
-        },
+        RuleInfo::Intr(i) => crate::rule::intr_rule_name_string(i),
     }
 }
 

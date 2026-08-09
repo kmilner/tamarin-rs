@@ -9,7 +9,7 @@
 //! (Theory/Text/Parser/Term.hs:151,158-163), so a declared 0-arity name in a
 //! term position is resolved against the signature AT PARSE TIME.  A process
 //! binder cannot shadow it: `new c` and `lookup t as c` take `sapicvar`
-//! (Sapic.hs:87,236) and do bind an `LVar` named `c`, but the `if` condition's
+//! (Theory/Text/Parser/Sapic.hs:87,236) and do bind an `LVar` named `c`, but the `if` condition's
 //! `c` — parsed through `standardFormula`'s `msetterm` — is the constant
 //! `fApp c []`.
 //!
@@ -28,8 +28,15 @@ use std::path::{Path, PathBuf};
 use tamarin_prover::{parse_args, run};
 
 fn maude_available() -> bool {
+    // A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION,
+    // not a reason to skip: returning `false` there would report green
+    // vacuously on a CI whose image moved maude.
     if let Ok(p) = std::env::var("MAUDE_PATH") {
-        return Path::new(&p).exists();
+        assert!(
+            Path::new(&p).exists(),
+            "MAUDE_PATH={p} does not exist; unset it or point it at a real maude"
+        );
+        return true;
     }
     for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
         if Path::new(c).exists() {

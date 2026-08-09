@@ -421,8 +421,10 @@ pub fn rename_unique(p: &PlainProcess) -> PlainProcess {
 /// `funs` is keyed by `UserDefinedSym`, so a user-defined AC symbol has a
 /// typing entry alongside the free ones.  `events` records, per event fact
 /// tag, the inferred argument types of its LAST typed occurrence (HS
-/// `Map.insert tag …`, Typing.hs:149 — later events overwrite earlier ones);
-/// the export backends read it to emit `event e(t1,…)` headers.
+/// `Map.insert tag …`, Typing.hs:149 — later events overwrite earlier ones).
+/// `events` has no RS reader: its consumer is `loadHeaders`'
+/// `event e(t1,…)` emission (Export.hs:2743-2754), part of the unported
+/// export backends — see `tamarin_export`'s module doc.
 pub struct TypingEnvironment {
     pub vars: BTreeMap<LVar, SapicType>,
     pub funs: BTreeMap<UserDefinedSym, (Vec<SapicType>, SapicType)>,
@@ -803,7 +805,7 @@ fn to_sapic_term(t: &tamarin_term::lterm::LNTerm) -> SapicTerm {
 /// terms to `Nothing` (HS `Map.insert x Nothing` — an OVERWRITE, so a
 /// previously learnt var type is reset).  Updates `env.funs` with whatever the
 /// typing learns; term results are discarded.
-pub fn type_terms_with_env(env: &mut TypingEnvironment, terms: &[SapicTerm]) -> Result<(), String> {
+fn type_terms_with_env(env: &mut TypingEnvironment, terms: &[SapicTerm]) -> Result<(), String> {
     // `freeVars = foldl (\acc x -> acc `List.union` frees x) [] (map toLNTerm
     // terms)` — the terms' variables stripped to bare `LVar`s.
     for t in terms {
@@ -840,7 +842,7 @@ fn type_rule(
 ///
 /// This is the environment `typeTheoryEnv` seeds before threading it through
 /// every process (Typing.hs:207).
-pub fn init_te_from_sig(
+pub(crate) fn init_te_from_sig(
     maude_sig: &tamarin_term::maude_sig::MaudeSig,
     user_fun_typings: &[UserFunTyping],
 ) -> Result<TypingEnvironment, String> {
@@ -899,7 +901,7 @@ pub fn init_te_from_sig(
 /// `renameUnique`, clear the per-process `vars` map (`modify' (\s -> s { vars
 /// = Map.empty})`), then `typeProcess` — against a SHARED environment whose
 /// `funs`/`events` accumulate across processes.
-pub fn type_and_rename_process_in(
+pub(crate) fn type_and_rename_process_in(
     env: &mut TypingEnvironment,
     p: &PlainProcess,
 ) -> Result<PlainProcess, String> {
@@ -923,7 +925,7 @@ pub fn type_and_rename_process(
 /// occurs anywhere in `p`, as the sorted deduplicated `Set` list.  Two
 /// occurrences of the same `LVar` under DIFFERENT `stype` tags are distinct
 /// set elements, exactly as in HS.
-pub fn vars_proc(p: &PlainProcess) -> Vec<SapicLVar> {
+pub(crate) fn vars_proc(p: &PlainProcess) -> Vec<SapicLVar> {
     let mut set = std::collections::BTreeSet::new();
     collect_proc_vars(p, &mut set);
     set.into_iter().collect()
@@ -931,11 +933,11 @@ pub fn vars_proc(p: &PlainProcess) -> Vec<SapicLVar> {
 
 /// Collect the user `functions:` typing declarations of a parsed theory (HS
 /// `theoryFunctionTypingInfos`; every parsed `FunctionDecl` becomes a
-/// `FunctionTypingInfo` item, Theory/Text/Parser.hs:254-257 `addFunctionTypingInfo`)
+/// `FunctionTypingInfo` item, Theory/Text/Parser.hs:259-262 `addFunctionTypingInfo`)
 /// as the `(name, arg_types, out_type)` triples [`init_te_from_sig`] overlays.
 /// Plain `f/2` declarations carry `Nothing` types (the `defaultFunctionType`),
 /// which the typing env already holds — so they are harmless overlays.
-pub fn collect_user_fun_typings(parsed: &tamarin_parser::ast::Theory) -> Vec<UserFunTyping> {
+pub(crate) fn collect_user_fun_typings(parsed: &tamarin_parser::ast::Theory) -> Vec<UserFunTyping> {
     let mut out = Vec::new();
     for item in &parsed.items {
         if let tamarin_parser::ast::TheoryItem::Functions(decls) = item {

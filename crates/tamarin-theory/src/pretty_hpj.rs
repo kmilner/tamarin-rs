@@ -64,14 +64,20 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 static DISPLAY_LINE_LENGTH: AtomicUsize = AtomicUsize::new(LINE_LENGTH);
 static DISPLAY_RIBBON: AtomicUsize = AtomicUsize::new(RIBBON);
 
-/// HS web display width: HughesPJ default `style` (100) with
-/// `round(100/1.5) = 67` ribbon.
-pub const WEB_LINE_LENGTH: usize = 100;
-pub const WEB_RIBBON: usize = 67;
+/// HughesPJ's own `style` default — `lineLength = 100`, ribbon
+/// `round(100/1.5) = 67`.
+///
+/// This is the width of every document HS renders WITHOUT threading
+/// `Main.Console`'s `lineWidth` through: the whole interactive web surface,
+/// and the dot / JSON graph serializers on both the web and the batch side.
+/// `LINE_LENGTH`/`RIBBON` above are the console width, which only the CLI's
+/// `renderDoc` installs.
+pub const DEFAULT_LINE_LENGTH: usize = 100;
+pub const DEFAULT_RIBBON: usize = 67;
 
 /// Override the bare-`render()` display width process-wide (see
 /// [`DISPLAY_LINE_LENGTH`]).  Called once by the interactive server with
-/// `(WEB_LINE_LENGTH, WEB_RIBBON)`.
+/// `(DEFAULT_LINE_LENGTH, DEFAULT_RIBBON)`.
 pub fn set_display_width(line_length: usize, ribbon: usize) {
     DISPLAY_LINE_LENGTH.store(line_length, Ordering::Relaxed);
     DISPLAY_RIBBON.store(ribbon, Ordering::Relaxed);

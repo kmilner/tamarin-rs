@@ -27,7 +27,7 @@ use std::process::{Command, ExitStatus, Stdio};
 
 #[cfg(test)]
 #[path = "probe_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 /// HS `commandLine` (Console.hs:94-95): `unwords $ prog : args`.
 fn command_line(prog: &str, args: &[&str]) -> String {

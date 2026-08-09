@@ -405,8 +405,8 @@ fn title_for(entry: &crate::state::TheoryEntry, path: &path_parse::TheoryPath) -
                             let _guard = tamarin_theory::pretty_hpj::HtmlEntityWidthGuard::enable();
                             tamarin_theory::pretty_theory::pretty_proof_method_doc(&n.method)
                                 .render_with(
-                                    tamarin_theory::pretty_hpj::WEB_LINE_LENGTH,
-                                    tamarin_theory::pretty_hpj::WEB_RIBBON,
+                                    tamarin_theory::pretty_hpj::DEFAULT_LINE_LENGTH,
+                                    tamarin_theory::pretty_hpj::DEFAULT_RIBBON,
                                 )
                         })
                     })
@@ -1434,7 +1434,7 @@ fn resolve_system_for_path(
 /// `GET /thy/trace/<idx>/intdot/*path` — the interactive graph shell page.
 ///
 /// HS `getInteractiveDotGraphR` (`src/Web/Handler.hs:903-911`) renders
-/// `intdotLayout True` (`src/Web/Types.hs:795-825`) around a
+/// `intdotLayout True` (`src/Web/Types.hs:795-824`) around a
 /// `<dot-graph-viz>` custom element whose `dotsrc` points at the JSON graph
 /// route; the bundled `intdot-graph.es.js` fetches that and draws the graph
 /// client-side.  It does NOT resolve the constraint system itself — the shell

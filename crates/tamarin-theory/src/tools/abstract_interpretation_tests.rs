@@ -17,16 +17,29 @@ use tamarin_term::lterm::pub_term;
 use tamarin_term::maude_sig::{hash_maude_sig, pair_maude_sig};
 use tamarin_term::term::f_app_no_eq;
 
+/// Absolute maude locations probed when `MAUDE_PATH` is unset — the same
+/// pair the rest of the workspace's maude-gated suites walk.
+const MAUDE_CANDIDATES: [&str; 2] = ["/usr/local/bin/maude", "/usr/bin/maude"];
+
+/// The maude the pins below run against: `$MAUDE_PATH` when set, else the
+/// first existing candidate.  A `MAUDE_PATH` naming a file that does not
+/// exist is a MISCONFIGURATION, not a reason to skip — returning `None`
+/// there would turn every maude-backed pin in this file green on a CI whose
+/// image moved maude.  Panic instead, so the run goes red.
 fn maude_path() -> Option<String> {
     if let Ok(p) = std::env::var("MAUDE_PATH") {
+        assert!(
+            std::path::Path::new(&p).exists(),
+            "MAUDE_PATH={p} does not exist; unset it to fall back to \
+             {MAUDE_CANDIDATES:?}, or point it at a real maude — skipping \
+             every maude-backed pin here would report green vacuously"
+        );
         return Some(p);
     }
-    for c in ["/usr/local/bin/maude", "maude"] {
-        if std::path::Path::new(c).exists() {
-            return Some(c.to_string());
-        }
-    }
-    None
+    MAUDE_CANDIDATES
+        .iter()
+        .find(|c| std::path::Path::new(c).exists())
+        .map(|c| (*c).to_string())
 }
 
 // =============================================================================
@@ -39,7 +52,7 @@ fn maude_path() -> Option<String> {
 fn numbered_prime_nest_indents_blank_separator() {
     let d = hpj::numbered_prime(vec![Doc::text("St( ~k )"), Doc::text("Out( z )")]).nest(2);
     assert_eq!(
-        d.render_with(hpj::WEB_LINE_LENGTH, hpj::WEB_RIBBON),
+        d.render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON),
         "  1. St( ~k )\n  \n  2. Out( z )"
     );
 }
@@ -48,7 +61,7 @@ fn numbered_prime_nest_indents_blank_separator() {
 #[test]
 fn numbered_prime_flush_right_pads_indices() {
     let docs: Vec<Doc> = (0..13).map(|_| Doc::text("x")).collect();
-    let out = hpj::numbered_prime(docs).render_with(hpj::WEB_LINE_LENGTH, hpj::WEB_RIBBON);
+    let out = hpj::numbered_prime(docs).render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON);
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[0], " 1. x");
     assert_eq!(lines[1], "");
@@ -68,7 +81,7 @@ fn numbered_empty_is_empty_doc() {
 fn above_blank_case_empty_guards() {
     let a = || Doc::text("a");
     let b = || Doc::text("b");
-    let r = |d: Doc| d.render_with(hpj::WEB_LINE_LENGTH, hpj::WEB_RIBBON);
+    let r = |d: Doc| d.render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON);
     assert_eq!(r(hpj::above_blank(a(), b())), "a\n\nb");
     assert_eq!(r(hpj::above_blank(a(), Doc::Empty)), "a");
     assert_eq!(r(hpj::above_blank(Doc::Empty, b())), "b");

@@ -150,14 +150,20 @@ fn print_extended_position() {
 }
 
 #[test]
-fn reserved_names_include_fresh() {
-    let r = reserved_rule_names();
-    // Matches Haskell reservedRuleNames (Rule.hs):
-    // ["Fresh", "irecv", "isend", "coerce", "fresh", "pub", "iequality"].
-    assert!(r.contains("Fresh"));
-    assert!(r.contains("coerce"));
-    assert!(r.contains("iequality"));
-    assert!(!r.contains("KU"));
+fn reserved_names_match_hs() {
+    // HS `reservedRuleNames` (Model/Rule.hs:1284-1285), in its own order.
+    assert_eq!(
+        RESERVED_RULE_NAMES,
+        [
+            "Fresh",
+            "irecv",
+            "isend",
+            "coerce",
+            "fresh",
+            "pub",
+            "iequality"
+        ]
+    );
 }
 
 fn maude_path() -> Option<String> {

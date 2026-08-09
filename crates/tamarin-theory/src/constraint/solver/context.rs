@@ -463,7 +463,7 @@ impl ProofContext {
         // `[Source] -> [Source]` computation with LOCAL `evalFresh (avoid
         // goalTerm)` scopes — it does NOT thread the per-proof `MonadFresh`
         // counter.  Each proof step independently resets fresh to `avoid sys`
-        // (ProofMethod.hs:348-459, see line 457 `runReduction (m <* simplifySystem) ctxt sys
+        // (ProofMethod.hs:282-339, see line 305 `runReduction (m <* simplifySystem) ctxt sys
         // (avoid sys)`), and source cases are re-freshened on apply.  RS's
         // saturation, by contrast, advances the shared `maude` counter while
         // computing cases; that advance is HS-invisible and its magnitude is
@@ -1255,7 +1255,7 @@ impl ProofContext {
 /// inside a theory can borrow them where they live: only `loop_breakers` is
 /// written, and a `Vec<OpenProtoRule>` copy would deep-clone every rule's
 /// `variant_substs` and `abstracted_rule` just to copy that one field back.
-pub fn annotate_loop_breakers(
+pub(crate) fn annotate_loop_breakers(
     rules: &mut [&mut OpenProtoRule],
     maude: &tamarin_term::maude_proc::MaudeHandle,
 ) {

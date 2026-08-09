@@ -31,8 +31,15 @@ use std::path::PathBuf;
 use tamarin_prover::{parse_args, run};
 
 fn maude_available() -> bool {
+    // A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION,
+    // not a reason to skip: returning `false` there would report green
+    // vacuously on a CI whose image moved maude.
     if let Ok(p) = std::env::var("MAUDE_PATH") {
-        return std::path::Path::new(&p).exists();
+        assert!(
+            std::path::Path::new(&p).exists(),
+            "MAUDE_PATH={p} does not exist; unset it or point it at a real maude"
+        );
+        return true;
     }
     for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
         if std::path::Path::new(c).exists() {

@@ -443,7 +443,7 @@ fn spthytyped_module_keeps_msr_pattern_match_markers() {
 }
 
 /// The `process="..."` rule attribute uses the OTHER rule printer —
-/// `prettyRuleAttribute`'s local `f l a r rest _` (Rule.hs:1324-1327) discards
+/// `prettyRuleAttribute`'s local `f l a r rest _` (Theory/Model/Rule.hs:1324-1327) discards
 /// the match-var set — so both embedded MSRs render their premise unmarked and
 /// the two attributes are byte-identical.  Pins that the `=`-marking fix is
 /// confined to the `prettySapic` path.

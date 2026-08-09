@@ -478,6 +478,25 @@ mod tests {
     use super::*;
     use crate::function_symbols::{exp_sym, pair_sym, AcSym, CSym, FunSym};
 
+    /// The pinned submodule's `lib/term/src/Term/Term/Raw.hs`, embedded at
+    /// build time.
+    const RAW_HS: &str = include_str!("../../../tamarin-prover/lib/term/src/Term/Term/Raw.hs");
+
+    /// [`FAPP_AC_EMPTY_SITE`] is pasted verbatim into a `HasCallStack` frame
+    /// the port must emit byte-for-byte, and the stderr tests for that frame
+    /// compare the port against bytes captured from the port — so they agree
+    /// with a stale coordinate.  Read it back out of the pinned source.
+    #[test]
+    fn fapp_ac_empty_site_is_the_pinned_call_site() {
+        let (idx, line) = RAW_HS
+            .lines()
+            .enumerate()
+            .find(|(_, l)| l.contains(FAPP_AC_EMPTY_MSG))
+            .expect("no `fAppAC` empty-list `error` in the pinned Raw.hs");
+        let col = line.find("error").expect("no `error` token") + 1;
+        assert_eq!(FAPP_AC_EMPTY_SITE, format!("{}:{}", idx + 1, col));
+    }
+
     fn nat(n: u64) -> Term<u64> {
         lit(n)
     }

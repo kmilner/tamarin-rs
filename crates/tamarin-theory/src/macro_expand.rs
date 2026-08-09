@@ -120,7 +120,7 @@ pub fn apply_macros_term(macros: &[p::Macro], term: &p::Term) -> p::Term {
 /// (Macro.hs:53-54).  At parser-AST level a call-site has no FunSym
 /// flags so we match by (name, arity) — equivalent for non-clashing
 /// macro names since `addMacroSym` rejects redefinitions and built-in
-/// fun-syms have known fixed arity (parser/Macro.hs:45-49 `case lookup
+/// fun-syms have known fixed arity (Term/Macro.hs:45-49 `case lookup
 /// op (stFunSyms ++ macroNames) -> fail`).
 fn find_matching_macro<'a>(
     name: &str,

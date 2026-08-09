@@ -5,11 +5,11 @@
 //! Port of `Theory.Module` — the `--output-module` / `-m` selector.
 //!
 //! HS `ModuleType` (Theory/Module.hs:16-25) derives `Enum`/`Bounded`, and
-//! `moduleList` (Batch.hs:82-84) renders `[minBound ..]` with `show` to build
+//! `moduleList` (Batch.hs:83-84) renders `[minBound ..]` with `show` to build
 //! the flag's placeholder `spthytyped|spthy|msr|proverifequiv|proverif|deepsec`
 //! — which `tamarin-prover`'s help text spells out literally rather than
 //! deriving.  The declaration order is load-bearing twice over: it fixes that
-//! placeholder and, per the upstream comment (Theory/Module.hs:17-19), keeps
+//! placeholder and, per the upstream comment (Theory/Module.hs:17-18), keeps
 //! no `show` value a prefix of a later one.
 
 /// HS `ModuleType` (Theory/Module.hs:16-25).
@@ -30,7 +30,7 @@ pub enum ModuleType {
 }
 
 impl ModuleType {
-    /// HS `[minBound ..] :: [ModuleType]` (Batch.hs:82).
+    /// HS `moduleConstructors = enumFrom minBound` (Batch.hs:83).
     pub const ALL: [ModuleType; 6] = [
         ModuleType::SpthyTyped,
         ModuleType::Spthy,
@@ -94,7 +94,7 @@ mod tests {
     #[test]
     fn no_show_value_is_a_prefix_of_a_later_one() {
         // The invariant the upstream declaration order documents
-        // (Theory/Module.hs:17-19).
+        // (Theory/Module.hs:17-18).
         for (i, a) in ModuleType::ALL.iter().enumerate() {
             for b in &ModuleType::ALL[i + 1..] {
                 assert!(

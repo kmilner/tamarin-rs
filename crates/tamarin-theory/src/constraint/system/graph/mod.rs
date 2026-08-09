@@ -28,20 +28,19 @@ pub mod render_system;
 pub mod repr;
 pub mod simplify;
 
-pub use render_system::RenderSystem;
-
-pub use abbreviation::{
-    apply_abbreviations_fact, compute_abbreviations, AbbreviationOptions, Abbreviations,
-};
+// The three names consumers reach for by the short `graph::` path; everything
+// else in the submodules is addressed through the submodule itself.
 pub use options::GraphOptions;
-pub use repr::{
-    add_cluster_by_role, add_intelligent_cluster_using_similar_names, Cluster, GEdge, GNode,
-    GraphRepr, MissingHint, NodeType,
-};
-pub use simplify::{compress_system, simplify_system, SimplificationLevel};
+pub use render_system::RenderSystem;
+pub use simplify::SimplificationLevel;
 
+use abbreviation::{compute_abbreviations, AbbreviationOptions, Abbreviations};
 // `Graph.hs` builds on `computeBasicGraphRepr` without exporting it.
-use repr::compute_basic_graph_repr;
+use repr::{
+    add_cluster_by_role, add_intelligent_cluster_using_similar_names, compute_basic_graph_repr,
+    GraphRepr,
+};
+use simplify::{compress_system, simplify_system};
 
 use crate::constraint::system::System;
 

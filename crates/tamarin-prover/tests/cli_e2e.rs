@@ -14,9 +14,21 @@ use std::path::PathBuf;
 
 use tamarin_prover::{parse_args, run};
 
+/// True when a maude binary exists where the run will look for it.
+///
+/// A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION,
+/// not a reason to skip: returning `false` there would turn every
+/// maude-backed pin in this file green on a CI whose image moved maude.
+/// Panic instead, so the run goes red.
 fn maude_available() -> bool {
     if let Ok(p) = std::env::var("MAUDE_PATH") {
-        return std::path::Path::new(&p).exists();
+        assert!(
+            std::path::Path::new(&p).exists(),
+            "MAUDE_PATH={p} does not exist; unset it to fall back to the \
+             absolute candidates, or point it at a real maude — skipping \
+             every maude-backed pin here would report green vacuously"
+        );
+        return true;
     }
     for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
         if std::path::Path::new(c).exists() {

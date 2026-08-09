@@ -76,7 +76,8 @@ pub fn splice_translated_wf_reports(
         let lhs_rhs = tamarin_parser::wf::fact_lhs_occur_no_rhs(&post_thy);
         insert_wf_before(wf_report, lhs_rhs, &WF_TOPIC_ORDER[WF_AFTER_FACT_LHS..]);
 
-        // HS `publicNamesReport` (Wellformedness.hs:463-484) also runs on the
+        // HS `publicNamesReport` (Wellformedness.hs:485-486, over the
+        // `publicNamesReport'` body at 463-483) also runs on the
         // TRANSLATED rules (`checkWellformedness` over the OpenTranslated
         // theory).  The parser-level `public_names_report` ran pre-translation
         // (no generated rules) and cannot see the source process a rule

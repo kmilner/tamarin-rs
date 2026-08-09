@@ -273,7 +273,7 @@ fn sapic_fact_to_doc_pat(
 /// instantiated with.  HS takes it as a parameter because its two callers
 /// disagree about the premise rendering.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum MsrPrinter {
+enum MsrPrinter {
     /// `Theory.Sapic.Print.rulePrinter` (Print.hs:34-46): re-applies
     /// `unextractMatchingVariables mv` to the PREMISES, so each match variable
     /// prints with a leading `=`; the actions and conclusions get `mempty`, so
@@ -287,7 +287,7 @@ pub enum MsrPrinter {
 }
 
 /// The embedded-MSR rule printer.  Both HS instantiations go through
-/// `prettyRuleRestrGen` (Rule.hs:1253-1273), which builds
+/// `prettyRuleRestrGen` (Model/Rule.hs:1366-1383), which builds
 /// `[ prems ] --[ acts (+ _restrict(..)) ]-> [ concls ]`; with no actions and
 /// no restrictions the arrow collapses to `-->`.  They differ only in the fact
 /// printer: [`MsrPrinter::Sapic`] marks the premises' match variables with `=`,
@@ -399,7 +399,7 @@ fn pretty_sapic_action(a: &SapicAction<SapicLVar>, printer: MsrPrinter) -> Strin
             format!("{}({})", s, body)
         }
         // HS `prettySapicAction' prettyRule' (MSR p a c r mv) = prettyRule' p a c r mv`
-        // (Process.hs:450-471, see line 470); `prettyRule'` is the caller-supplied
+        // (Process.hs:450-471, see line 468); `prettyRule'` is the caller-supplied
         // printer selected by `printer`.
         SapicAction::Msr {
             prems,
@@ -470,7 +470,7 @@ fn pretty_sapic_comb(c: &ProcessCombinator<SapicLVar>) -> String {
 
 /// `prettySapicTopLevel' prettyRule'` (Process.hs:514-524).  Only inspects the
 /// TOP node.
-pub fn pretty_sapic_top_level_with(p: &PlainProcess, printer: MsrPrinter) -> String {
+fn pretty_sapic_top_level_with(p: &PlainProcess, printer: MsrPrinter) -> String {
     match p {
         Process::Null(_) => "0".to_string(),
         Process::Comb(c, _, _, _) => pretty_sapic_comb(c),

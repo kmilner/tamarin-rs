@@ -125,9 +125,9 @@ const EXPECTED_STDOUT: &[&str] = &[
 ];
 
 /// The `text{*…*}` block of [`EXPECTED_STDOUT`]: `render ppAbsState`
-/// (Prover.hs:257-264) wrapped by `prettyFormalComment` (Pretty.hs:19-21).
+/// (Prover.hs:257-264) wrapped by `prettyFormalComment` (lib/theory/src/Pretty.hs:19-21).
 /// The blank lines around the numbered fact list are the two `$--$` joins
-/// (Class.hs:112-114); the one before `*}` is the `".\n\n"` ending the last
+/// (Text/PrettyPrint/Class.hs:112-114); the one before `*}` is the `".\n\n"` ending the last
 /// `text`.
 const EXPECTED_REPORT: &[&str] = &[
     "text{* the abstract state after partial evaluation contains 3 facts:",

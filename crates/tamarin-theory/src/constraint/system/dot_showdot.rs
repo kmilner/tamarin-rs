@@ -317,7 +317,7 @@ fn dot_node_compact(
             let lbl = pretty_hpj::fsep(pretty_hpj::punctuate(Doc::text(","), docs))
                 .beside_sp(Doc::text("@"))
                 .beside_sp(Doc::text(v.to_string()))
-                .render_with(WEB_LINE_LENGTH, WEB_RIBBON);
+                .render_with(DEFAULT_LINE_LENGTH, DEFAULT_RIBBON);
             let color = if facts.iter().any(|f| matches!(f.tag, FactTag::Ku)) {
                 "gray"
             } else {
@@ -591,7 +591,7 @@ fn hs_legend_html_label(abbrevs: &Abbreviations) -> String {
 /// printer at the default style, so a wide term WRAPS.
 fn render_lnterm(t: &LNTerm) -> String {
     crate::pretty_formula::term_doc(&crate::pretty_theory::lnterm_to_parser(t))
-        .render_with(WEB_LINE_LENGTH, WEB_RIBBON)
+        .render_with(DEFAULT_LINE_LENGTH, DEFAULT_RIBBON)
 }
 
 /// graphviz's HTML-text escape (`escapeValue`, Data.GraphViz.Attributes.HTML).

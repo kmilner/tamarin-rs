@@ -7,11 +7,11 @@
 //! Parse time: `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) rejects a
 //! second, DIFFERENT rule under an existing name via `addOpenProtoRule`
 //! (OpenTheory.hs:691-702); batch mode's `handleError` `die`s on the
-//! resulting `ParserError` (Main/Mode/Batch.hs:234) — parsec frame on stderr,
+//! resulting `ParserError` (Main/Mode/Batch.hs:235) — parsec frame on stderr,
 //! exit 1, no stdout.  An identical duplicate is accepted and appended again.
 //!
 //! Translate time: SAPIC's `translate` folds its generated rules through the
-//! same guard (`foldM liftedAddProtoRule`, Sapic.hs:74), so a user rule named
+//! same guard (`foldM liftedAddProtoRule`, lib/sapic/src/Sapic.hs:75), so a user rule named
 //! like a generated one (`rule Init` alongside a `process:`) aborts AFTER the
 //! `Theory translated` marker.  In HS the thrown `DuplicateItem` escapes to
 //! GHC's runtime: the pinned oracle (Git revision ef3f0468) prints exactly
@@ -26,8 +26,15 @@
 use std::process::Command;
 
 fn maude_available() -> bool {
+    // A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION,
+    // not a reason to skip: returning `false` there would report green
+    // vacuously on a CI whose image moved maude.
     if let Ok(p) = std::env::var("MAUDE_PATH") {
-        return std::path::Path::new(&p).exists();
+        assert!(
+            std::path::Path::new(&p).exists(),
+            "MAUDE_PATH={p} does not exist; unset it or point it at a real maude"
+        );
+        return true;
     }
     for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
         if std::path::Path::new(c).exists() {

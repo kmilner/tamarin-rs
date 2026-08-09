@@ -699,6 +699,11 @@ pub fn nodes_in_map_order(nodes: &[(NodeId, RuleACInst)]) -> Vec<&(NodeId, RuleA
     ordered
 }
 
+/// [`System::node_rule_map`]'s return: a read-only `NodeId → &RuleACInst`
+/// index into a system's nodes, standing in for HS's `M.lookup v sNodes`
+/// (System.hs:927/931) wherever a caller resolves more than one node.
+pub type NodeRuleMap<'a> = tamarin_utils::FastMap<&'a NodeId, &'a RuleACInst>;
+
 impl System {
     pub fn empty() -> Self {
         let s = Self::default();
@@ -1145,7 +1150,7 @@ impl System {
     }
 
     /// The rule instance at node `v`, if present. Port of HS `nodeRuleSafe`
-    /// (System.hs:913-914, see line 917): `M.lookup v sNodes`.
+    /// (System.hs:911-913): `M.lookup v sNodes`.
     pub fn node_rule_safe(&self, v: &NodeId) -> Option<&RuleACInst> {
         self.nodes.iter().find(|(id, _)| id == v).map(|(_, r)| r)
     }
@@ -1155,7 +1160,7 @@ impl System {
     /// keeps the FIRST rule for a given id, matching `find`'s /
     /// `node_rule_safe`'s first-match semantics; `nodes` is unique-keyed,
     /// so the map returns the identical rule the linear scan found.
-    pub fn node_rule_map(&self) -> tamarin_utils::FastMap<&NodeId, &RuleACInst> {
+    pub fn node_rule_map(&self) -> NodeRuleMap<'_> {
         let mut m = tamarin_utils::FastMap::default();
         for (n, r) in self.nodes.iter() {
             m.entry(n).or_insert(r);

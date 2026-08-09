@@ -171,13 +171,24 @@ fn detect_maude() -> String {
     "maude".into()
 }
 
-/// True when a Maude binary exists at `MAUDE_PATH` or one of
-/// [`MAUDE_CANDIDATES`].  Tests that boot a real `ProofContext` use this
-/// as a skip-guard.
+/// True when a Maude binary exists at one of [`MAUDE_CANDIDATES`].  Tests
+/// that boot a real `ProofContext` use this as a skip-guard.
+///
+/// A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION,
+/// not a reason to skip: returning `false` there would turn every
+/// maude-backed pin in this crate green on a CI whose image moved maude
+/// (`.github/workflows/ci.yml` sets `MAUDE_PATH=/opt/maude/maude`).  Panic
+/// instead, so the run goes red.
 #[allow(dead_code)]
 pub fn maude_available() -> bool {
     if let Ok(p) = std::env::var("MAUDE_PATH") {
-        return std::path::Path::new(&p).exists();
+        assert!(
+            std::path::Path::new(&p).exists(),
+            "MAUDE_PATH={p} does not exist; unset it to fall back to \
+             {MAUDE_CANDIDATES:?}, or point it at a real maude — skipping \
+             every maude-backed pin here would report green vacuously"
+        );
+        return true;
     }
     MAUDE_CANDIDATES
         .iter()

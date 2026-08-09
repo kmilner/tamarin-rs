@@ -143,8 +143,8 @@ pub fn init_process_globals() {
     // any rendering.  (Console-only `renderDoc` at 110 has no HTTP
     // analogue here.)
     tamarin_theory::pretty_hpj::set_display_width(
-        tamarin_theory::pretty_hpj::WEB_LINE_LENGTH,
-        tamarin_theory::pretty_hpj::WEB_RIBBON,
+        tamarin_theory::pretty_hpj::DEFAULT_LINE_LENGTH,
+        tamarin_theory::pretty_hpj::DEFAULT_RIBBON,
     );
 
     // Retain each proof node's constraint `System` after expansion.  The

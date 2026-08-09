@@ -146,6 +146,35 @@ fn format_lemma_summary_line(r: &LemmaResult) -> String {
     format!("{} ({}): {}", r.name, quantifier, body)
 }
 
+/// The verdict a whole-tree `ProofStatus` fold means for a lemma of the given
+/// quantifier.
+///
+/// `TraceFound` and `Complete` swap sense with the quantifier: a found trace
+/// VERIFIES an exists-trace lemma and FALSIFIES an all-traces one, and a
+/// complete proof does the reverse (HS `showProofStatus`,
+/// Theory/Proof.hs:1104-1112).
+///
+/// In batch `--prove` the fold is virtually never `Undetermined`/`Invalidated`
+/// — close-time replay annotates every node ⇒ `Incomplete`, and `Invalidated`
+/// only arises from interactive reuse-lemma edits — but both map faithfully so
+/// the label is correct if such a tree ever surfaces.
+fn lemma_verdict(
+    status: tamarin_theory::constraint::solver::search::ProofStatus,
+    exists_trace: bool,
+) -> LemmaVerdict {
+    use tamarin_theory::constraint::solver::search::ProofStatus;
+    match status {
+        ProofStatus::TraceFound if exists_trace => LemmaVerdict::Verified,
+        ProofStatus::TraceFound => LemmaVerdict::Falsified,
+        ProofStatus::Complete if exists_trace => LemmaVerdict::Falsified,
+        ProofStatus::Complete => LemmaVerdict::Verified,
+        ProofStatus::Unfinishable => LemmaVerdict::Unfinishable,
+        ProofStatus::Incomplete => LemmaVerdict::Analyzed,
+        ProofStatus::Undetermined => LemmaVerdict::Undetermined,
+        ProofStatus::Invalidated => LemmaVerdict::Invalidated,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LemmaResult {
     pub name: String,
@@ -193,8 +222,7 @@ pub fn run(args: &Args) -> Result<i32, RunError> {
         // trailing newline.
         let maude_path = maude_invocation_path(args);
         print!("{}", crate::cli::version_banner_text());
-        let (_, maude_version) =
-            crate::probe::ensure_maude(&maude_display_name(args, &maude_path), &maude_path);
+        let (_, maude_version) = ensure_maude(args, &maude_path);
         print!("{}", crate::cli::generated_from_text(&maude_version));
         return Ok(0);
     }
@@ -227,9 +255,7 @@ fn run_test(args: &Args) -> Result<i32, RunError> {
     // it are the only part of this section on stdout.  A maude that cannot be
     // started aborts the run inside the probe, so `success_maude` is `false`
     // only for a maude that ran but failed a check.
-    let maude_path = maude_invocation_path(args);
-    let (success_maude, _) =
-        crate::probe::ensure_maude(&maude_display_name(args, &maude_path), &maude_path);
+    let (success_maude, _) = ensure_maude(args, &maude_invocation_path(args));
     // Test.hs:49 — a bare `putStrLn ""` separates the two tool blocks.
     println!();
     // HS `ensureGraphVizDot` (Test.hs:50) reads `dotPath`
@@ -263,13 +289,21 @@ fn run_test(args: &Args) -> Result<i32, RunError> {
 /// HS-hardcoded `False` flag, and pretty-print each rule in HS's
 /// `rule (modulo AC) NAME:` shape.  The BP half is a known gap (see body).
 fn run_variants(args: &Args) -> Result<i32, RunError> {
-    let maude_path = args.maude_path.clone().unwrap_or_else(default_maude_path);
+    let maude_path = maude_invocation_path(args);
     // HS `Main.Mode.Intruder.run` runs `ensureMaude` BEFORE it starts either
     // handle (Intruder.hs:45), so the tool block — stderr only, the rule dump
     // alone goes to stdout — precedes any Maude spawn, and a maude that cannot
     // be started aborts here rather than in `MaudeHandle::start`.  The verdict
     // is discarded (`_ <- ensureMaude as`).
-    let _ = crate::probe::ensure_maude(&maude_display_name(args, &maude_path), &maude_path);
+    let _ = ensure_maude(args, &maude_path);
+    let start_maude = |sig| {
+        MaudeHandle::start(&maude_path, sig).map_err(|e| {
+            RunError(format!(
+                "failed to start maude at {:?}: {:?}",
+                maude_path, e
+            ))
+        })
+    };
     // HS `Main.Mode.Intruder.run` (Intruder.hs:44-53) starts TWO SEPARATE
     // Maude handles — one on `dhMaudeSig`, one on `bpMaudeSig` — and
     // generates `dhIntruderRules False` then `bpIntruderRules False`, then
@@ -278,13 +312,7 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
     // variant query and could perturb DH variant enumeration.  The DH
     // generator is hardcoded `False` in HS, not the --diff flag, so we pass
     // `false`.
-    let sig = tamarin_term::maude_sig::dh_maude_sig();
-    let maude = MaudeHandle::start(&maude_path, sig).map_err(|e| {
-        RunError(format!(
-            "failed to start maude at {:?}: {:?}",
-            maude_path, e
-        ))
-    })?;
+    let maude = start_maude(tamarin_term::maude_sig::dh_maude_sig())?;
     // HS `Main.Mode.Intruder.run` (Intruder.hs:48-53) generates BOTH the DH
     // and the bilinear-pairing variants and emits `dhS ++ bpS`:
     //   - DH: `dhIntruderRules False` (runtime, via Maude).  RS's runtime
@@ -299,20 +327,15 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
     //     `mk_bp_intruder_variants`); HS's `variants` command likewise
     //     generates BP at runtime, so the two stay byte-identical.
     let dh_rules = tamarin_theory::intruder_rules::dh_intruder_rules(false, &maude);
-    let bp_sig = tamarin_term::maude_sig::bp_maude_sig();
-    let bp_maude = MaudeHandle::start(&maude_path, bp_sig).map_err(|e| {
-        RunError(format!(
-            "failed to start maude at {:?}: {:?}",
-            maude_path, e
-        ))
-    })?;
+    let bp_maude = start_maude(tamarin_term::maude_sig::bp_maude_sig())?;
     let bp_rules = tamarin_theory::intruder_rules::bp_intruder_rules(false, &bp_maude);
-    // HS `putStrLn (dhS ++ bpS)` where each block is
-    // `renderDoc . prettyIntruderVariants` (Rule.hs:1343-1346): blank-line-separated
-    // `rule (modulo AC) NAME:` rules with HughesPJ body wrapping (`sep`/`fsep`
-    // at the standard width) and NO trailing newline — so the DH and BP blocks
-    // abut (the DH `d_inv` body directly precedes the BP `c_pmult` header with
-    // no separating newline).  `putStrLn` appends the single trailing newline.
+    // HS `putStrLn (dhS ++ bpS)` where each block is `renderDoc .
+    // prettyIntruderVariants` (Theory/Model/Rule.hs:1464-1466):
+    // blank-line-separated `rule (modulo AC) NAME:` rules with HughesPJ body
+    // wrapping (`sep`/`fsep` at the standard width) and NO trailing newline —
+    // so the DH and BP blocks abut (the DH `d_inv` body directly precedes the
+    // BP `c_pmult` header with no separating newline).  `putStrLn` appends the
+    // single trailing newline.
     let dh_s = tamarin_theory::pretty_formula::pretty_intruder_variants(&dh_rules);
     let bp_s = tamarin_theory::pretty_formula::pretty_intruder_variants(&bp_rules);
     print!("{}{}", dh_s, bp_s);
@@ -389,12 +412,8 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // Try to discover a sibling frontend/dist for the bundled UI assets.
     let frontend_dist = guess_frontend_dist(&data_dir);
 
-    let maude_path = args.maude_path.clone().unwrap_or_else(default_maude_path);
-    // Taken before `cfg` adopts the path; the banner below reads it back out
-    // of `cfg.maude_path`.
-    let maude_display = maude_display_name(args, &maude_path);
-
-    let mut cfg = tamarin_server::ServerConfig::new(bind_addr, data_dir, maude_path);
+    let mut cfg =
+        tamarin_server::ServerConfig::new(bind_addr, data_dir, maude_invocation_path(args));
     cfg.frontend_dist = frontend_dist;
     if let Some(b) = args.bound {
         cfg.max_steps = b as usize;
@@ -431,7 +450,7 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // The version data feeds HS's `__versionPrettyPrint__` argument, which
     // this port's web UI does not surface, so only the probe's stderr and its
     // abort-on-missing-maude matter here.
-    let _ = crate::probe::ensure_maude(&maude_display, &cfg.maude_path);
+    let _ = ensure_maude(args, &cfg.maude_path);
     // HS picks the graph-tool check by `(readOutputCommand as).ocFormat`
     // (Interactive.hs:106-108): `--with-json` selects `ensureGraphCommand`
     // (Environment.hs:104-115) and the `GraphViz tool:` block does not run at
@@ -524,10 +543,10 @@ fn guess_frontend_dist(data_dir: &std::path::Path) -> Option<std::path::PathBuf>
 }
 
 /// Resolve the effective cut strategy + auto-sources for one theory —
-/// HS `closeTheory`'s configuration-block routing (TheoryLoader.hs:640-666).
+/// HS `closeTheory`'s configuration-block routing (TheoryLoader.hs:740-765).
 ///
 /// The in-file `configuration: "…"` string accepts exactly two flags
-/// (`theoryConfFlags`, TheoryLoader.hs:656-659): `--stop-on-trace[=v]`
+/// (`theoryConfFlags`, TheoryLoader.hs:754-757): `--stop-on-trace[=v]`
 /// (`flagOpt "dfs"` — valueless means `dfs`) and `--auto-sources`
 /// (`flagNone`).  Precedence: the CLI `--stop-on-trace` wins when given
 /// (`configStopOnTrace` consults the block only when the CLI flag is
@@ -535,10 +554,10 @@ fn guess_frontend_dist(data_dir: &std::path::Path) -> Option<std::path::PathBuf>
 /// (non-flag) tokens land in cmdargs' positional catch-all
 /// (`flagArg (updateArg "") ""`) and are ignored; an unknown flag or
 /// stop-on-trace value aborts the run (cmdargs `processValue` /
-/// `error e` on `ArgumentError`, TheoryLoader.hs:618-665, see line 661).
+/// `error e` on `ArgumentError`, TheoryLoader.hs:749-765, see line 761).
 ///
 /// The strategy only steers prove-mode (`constructAutoProver` is used
-/// solely when `thyOpts.proveMode`, TheoryLoader.hs:569-615, see line 606); without
+/// solely when `thyOpts.proveMode`, TheoryLoader.hs:668-715, see line 706); without
 /// `--prove` the non-prove default `CutDFS` applies.
 fn effective_config(
     opts: &TheoryLoadOptions,
@@ -589,24 +608,28 @@ fn cli_cut(args: &Args) -> Option<tamarin_theory::constraint::solver::context::C
     args.stop_on_trace.as_ref().map(stop_on_trace_cut)
 }
 
-/// HS shows the maude tool's basename when the user didn't pass
-/// `--maude-path`, and the full path when they did (Console.hs:97-149, see line 150).  We
-/// can't re-introspect the flag downstream, so we key off `args.maude_path`
-/// being `None` (the default) vs `Some` (user-supplied).
+/// HS `ensureMaude` (Console.hs:151-185) on the binary this run invokes — the
+/// probe every mode but `--parse-only` runs first.
 ///
-/// `raw_path` is [`maude_invocation_path`]'s answer, taken as a parameter so a
-/// caller that already resolved it (resolving the default probes the
+/// The name HS reports is `maudePath as` (Console.hs:84-85, read back at :163):
+/// the `--with-maude` value, else the bare `"maude"` it lets `PATH` resolve.
+/// The port resolves that default to an absolute path of its own
+/// ([`default_maude_path`]) but still reports the basename HS would print, so
+/// only which of two identical binaries is spawned differs.
+///
+/// `maude_path` is [`maude_invocation_path`]'s answer, taken as a parameter so
+/// a caller that already resolved it (resolving the default probes the
 /// filesystem) does not pay for it twice.
-fn maude_display_name(args: &Args, raw_path: &str) -> String {
-    if args.maude_path.is_some() {
-        raw_path.to_string()
+fn ensure_maude(args: &Args, maude_path: &str) -> (bool, String) {
+    let reported: &str = if args.maude_path.is_some() {
+        maude_path
     } else {
-        std::path::Path::new(raw_path)
+        std::path::Path::new(maude_path)
             .file_name()
             .and_then(|s| s.to_str())
-            .unwrap_or(raw_path)
-            .to_string()
-    }
+            .unwrap_or(maude_path)
+    };
+    crate::probe::ensure_maude(reported, maude_path)
 }
 
 /// The maude binary this run invokes: the `--with-maude` path when given,
@@ -627,10 +650,18 @@ fn maude_invocation_path(args: &Args) -> String {
 fn batch_argument_error(message: &str) -> i32 {
     let g = tamarin_parser::GhcError {
         message: message.to_string(),
-        call_site: "src/Main/Mode/Batch.hs:163:33 in main:Main.Mode.Batch".to_string(),
+        call_site: format!(
+            "src/Main/Mode/Batch.hs:{BATCH_ARGUMENT_ERROR_SITE} in main:Main.Mode.Batch"
+        ),
     };
     ghc_exception(&g.display_exception())
 }
+
+/// `LINE:COLUMN` of the `error e` that the `ArgumentError` case of
+/// `thyLoadOptions` raises in `src/Main/Mode/Batch.hs`, as GHC's
+/// `HasCallStack` prints it.  Oracle data, checked against the pinned source
+/// by `batch_argument_error_site_is_the_pinned_call_site`.
+const BATCH_ARGUMENT_ERROR_SITE: &str = "163:33";
 
 /// Report an exception that escaped to GHC's runtime the way its top-level
 /// handler does: `tamarin-prover: <msg>` on stderr — no batch `error:`
@@ -680,7 +711,7 @@ fn report_decode_error(in_file: &str, e: &std::string::FromUtf8Error) -> i32 {
 }
 
 /// HS `mkOutPath`'s miss — `-o=` with no `-O` — `die`s with this exact line
-/// (Batch.hs:118-123) instead of falling back to stdout: the line on stderr,
+/// (Batch.hs:119-123) instead of falling back to stdout: the line on stderr,
 /// stdout empty, exit 1.  Returns that exit code for the caller to propagate.
 fn missing_output_path() -> i32 {
     eprintln!("Please specify a valid output file/directory");
@@ -731,7 +762,7 @@ fn write_io_exception(path: &str, op: &str, e: &std::io::Error) -> String {
     format!("{path}: {op}: {reason}")
 }
 
-/// HS `writeFileWithDirs` (Utils.hs:20-23): create the target's parent
+/// HS `writeFileWithDirs` (Main/Utils.hs:20-23): create the target's parent
 /// directories, then write `body` VERBATIM.  Neither step is guarded there,
 /// so a failure escapes as the [`write_io_exception`] text — returned here for
 /// the caller to report through [`ghc_exception`].
@@ -798,7 +829,7 @@ fn trace_graph_options() -> tamarin_theory::constraint::system::graph::GraphOpti
 
 /// HS `traceLabelOptions` (Batch.hs:305-317): the fixed middle segment of an
 /// `outputTraces` label.  Batch always feeds it `defaultGraphOptions`
-/// (Graph.hs:66-72) and `defaultDotOptions` (Dot.hs:84-87) — Batch.hs:254-255
+/// (Graph.hs:66-72) and `defaultDotOptions` (Theory/Constraint/System/Dot.hs:84-87) — Batch.hs:254-255
 /// hard-codes both, so no CLI flag (`--no-compress` included) can move it.
 /// Every input is a compile-time constant, so the segment is derived once and
 /// reused by every label the run emits.
@@ -828,7 +859,7 @@ fn trace_label_options() -> &'static str {
 /// and `jgLabel` (`--output-json`) of one serialised trace.
 ///
 /// There is NO separator between the lemma name and the proof path
-/// (Batch.hs:307-308 is `++ lemma._lName ++ intercalate "-" proofPath`).
+/// (Batch.hs:302-303 is `++ lemma._lName ++ intercalate "-" proofPath`).
 /// HS's single-case methods use the empty case name, so the path's first
 /// element is usually `""` and a real label reads `…_<lemma>-<case1>-<case2>`.
 fn trace_output_label(theory_name: &str, lemma_name: &str, path: &[String]) -> String {
@@ -841,7 +872,15 @@ fn trace_output_label(theory_name: &str, lemma_name: &str, path: &[String]) -> S
     )
 }
 
-/// HS `outputTraces`' two writers (Batch.hs:262-271), run once per input file
+/// Did the run ask for serialised traces?  Gates the three places
+/// `--output-dot` / `--output-json` cost anything: the solver's solved-`System`
+/// retention, the per-lemma collection in the prove loop, and
+/// [`write_output_traces`] itself.
+fn wants_trace_output(args: &Args) -> bool {
+    args.trace_dot.is_some() || args.trace_json.is_some()
+}
+
+/// HS `outputTraces`' two writers (Batch.hs:262-272), run once per input file
 /// inside `processThy`'s close-and-prove branch.  `writeFile`/`BL.writeFile`
 /// TRUNCATE, so with several input files the LAST file's traces survive.
 ///
@@ -892,12 +931,12 @@ enum TranslateModule {
     Msr,
 }
 
-/// HS `TheoryLoadOptions` (TheoryLoader.hs:229-283) — the batch pipeline's
+/// HS `TheoryLoadOptions` (TheoryLoader.hs:224-252) — the batch pipeline's
 /// argument record, built once per run by [`mk_theory_load_options`].
 ///
 /// Field order follows HS's record so the deferred raw-string validations
 /// fire in HS's sequence (`mkTheoryLoadOptions` is applicative over the
-/// fields, TheoryLoader.hs:340-400).  Only two fields are deferred-validated
+/// fields, TheoryLoader.hs:295-395).  Only two fields are deferred-validated
 /// like HS today — `partial_evaluation` (HS field 7) and `output_module`
 /// (HS field 13); the other raw-valued flags (`--stop-on-trace`, `--bound`,
 /// `--heuristic`, `-c`, `-s`, `-d`, `--replication-bound`) are rejected at
@@ -944,14 +983,14 @@ struct TheoryLoadOptions {
     /// HS `precomputeOnlyMode`.
     precompute_only_mode: bool,
     /// HS `derivationChecks` with its default already resolved
-    /// (`derivDefault = 5`, TheoryLoader.hs:394-396; 0 disables).
+    /// (`derivDefault = 5`, TheoryLoader.hs:391-393; 0 disables).
     derivation_checks: u32,
     /// HS `ndcCheck` — enabled by default, `--no-ndc` clears it
     /// (TheoryLoader.hs:365-366).
     ndc_check: bool,
 }
 
-/// Port of HS `mkTheoryLoadOptions` (TheoryLoader.hs:340-400): assemble the
+/// Port of HS `mkTheoryLoadOptions` (TheoryLoader.hs:295-395): assemble the
 /// record from the parsed argv, validating the still-raw values in HS's
 /// field order.  `Err` carries HS's `ArgumentError` message, reported by the
 /// caller via [`batch_argument_error`] (the GHC `error e` at Batch.hs:163:33).
@@ -1045,7 +1084,7 @@ struct ClosedOutcome {
 
 /// One input file's loading state, threaded through the HS-named loading
 /// stages.  The stage methods mirror HS's two pipelines
-/// (TheoryLoader.hs:715-781):
+/// (TheoryLoader.hs:718-781):
 ///
 ///   closeTheory             = translateTheory >=> removeTranslationItems
 ///                             >=> checkTranslatedTheory
@@ -1106,7 +1145,7 @@ impl TheoryPipeline<'_> {
         theory_marker(&self.theory_name, msg);
     }
 
-    /// `[Theory X] Theory closed` (TheoryLoader.hs:569-615, see line 596)
+    /// `[Theory X] Theory closed` (TheoryLoader.hs:668-715, see line 696)
     /// followed by `--partial-evaluation`'s `Debug.Trace` lines, which the
     /// oracle forces right after the marker
     /// (AbstractInterpretation.hs:109-119).  `pe_trace` is empty unless the
@@ -1128,9 +1167,9 @@ impl TheoryPipeline<'_> {
             .ok_or_else(|| RunError(format!("failed to start maude at {:?}", self.maude_path)))
     }
 
-    /// The CLI half of HS `constructAutoProver` (TheoryLoader.hs:702-706).
+    /// The CLI half of HS `constructAutoProver` (TheoryLoader.hs:802-810).
     /// When `--heuristic` is given it OVERRIDES the per-lemma / theory
-    /// heuristic for every lemma (HS `selectHeuristic`, Proof.hs:705-716, see
+    /// heuristic for every lemma (HS `selectHeuristic`, Theory/Proof.hs:705-716, see
     /// line 707).
     fn cli_heuristic(&self) -> tamarin_theory::prove::CliHeuristic {
         tamarin_theory::prove::CliHeuristic {
@@ -1161,7 +1200,7 @@ impl TheoryPipeline<'_> {
         )
     }
 
-    /// HS `translateTheory` (TheoryLoader.hs:487-503) plus the
+    /// HS `translateTheory` (TheoryLoader.hs:487-502) plus the
     /// `removeTranslationItems` / lemma-filter behaviour its
     /// `processOpenTheory` dispatch implies (TheoryLoader.hs:470-484): emit
     /// the `Theory translated` marker, run the per-module SAPIC typing /
@@ -1186,11 +1225,11 @@ impl TheoryPipeline<'_> {
     > {
         let translate_module = self.translate_module;
         // HS emits this marker at the top of `translateTheory`
-        // (TheoryLoader.hs:448-460, see line 454).
+        // (TheoryLoader.hs:487-502, see line 496).
         self.marker("Theory translated");
 
         // SAPIC `process:` translation (HS `typeTheory` → `translate`,
-        // TheoryLoader.hs:428-443, see line 430).  Runs ONLY for `is_sapic` theories (exactly one
+        // TheoryLoader.hs:468-485, see line 472).  Runs ONLY for `is_sapic` theories (exactly one
         // top-level `process:`); a no-op otherwise, so non-process theories are
         // byte-unchanged.  Injects the generated rules + `single_session`
         // restriction + `heuristic: p` into BOTH `parsed` (for rendering) and
@@ -1232,7 +1271,7 @@ impl TheoryPipeline<'_> {
                 Some(TranslateModule::SpthyTyped) | None => None,
             };
         {
-            // HS `Acc.checkWellformedness t` (translateTheory, TheoryLoader.hs:448-460, see line 455)
+            // HS `Acc.checkWellformedness t` (translateTheory, TheoryLoader.hs:487-502, see line 497)
             // runs on the PRE-translation theory `t` — the report is computed
             // from `thy`, not from the `transThy` that `Sapic.translate` /
             // `Acc.translate` produce.  So it must see the ORIGINAL rules /
@@ -1307,7 +1346,7 @@ impl TheoryPipeline<'_> {
                 }
             };
 
-            // Accountability translation (HS `Acc.translate`, TheoryLoader.hs:428-443, see line 430):
+            // Accountability translation (HS `Acc.translate`, TheoryLoader.hs:468-485, see line 472):
             // `Sapic.translate >=> Acc.translate`.  Expands each
             // `... accounts for` lemma into its verification-condition lemmas +
             // case-test predicates, injecting into BOTH `parsed` (rendering) and
@@ -1323,10 +1362,10 @@ impl TheoryPipeline<'_> {
                     tamarin_accountability::translate(&mut self.parsed, &mut self.elaborated)
                 {
                     // HS: the exceptions `Acc.translate` throws — `CaseTestsUndefined`
-                    // (Accountability.hs:42-49, see line 45) and the `UndefinedPredicate` /
+                    // (lib/accountability/src/Accountability.hs:42-49, see line 45) and the `UndefinedPredicate` /
                     // `DuplicateItem` parsing exceptions its `liftedAddLemma` /
-                    // `liftedAddPredicate` folds raise (Parser.hs:141-152,
-                    // Parser/Signature.hs:313-316) — escape to GHC's runtime, which
+                    // `liftedAddPredicate` folds raise (Theory/Text/Parser.hs:141-152,
+                    // Parser/Signature.hs:328-331) — escape to GHC's runtime, which
                     // writes `tamarin-prover: <show exception>` to stderr and exits
                     // 1 — no batch `error:` / `[Theory …]` wrapper (the maude banner
                     // + the `Theory loaded`/`Theory translated` markers already
@@ -1336,7 +1375,7 @@ impl TheoryPipeline<'_> {
             }
 
             // HS `preReport = Sapic.checkWellformedness t ++ Acc.checkWellformedness t`
-            // (TheoryLoader.hs:448-460, see line 455), PREPENDED to the rest of the report
+            // (TheoryLoader.hs:487-502, see line 497), PREPENDED to the rest of the report
             // (`preReport ++ postReport`): SAPIC-process warnings first, then the
             // accountability RP check (computed above, pre-translation), then
             // every other wellformedness entry.  The trailing `N wellformedness
@@ -1351,7 +1390,7 @@ impl TheoryPipeline<'_> {
 
         // `-m msr` keeps only the selected lemmas (`processOpenTheory`'s
         // `filterLemma (lemmaSelector thyOpts)` tail, TheoryLoader.hs:475-480
-        // + TheoryObject.hs:566-579): `LemmaItem`s not matching the
+        // + TheoryObject.hs:567-580): `LemmaItem`s not matching the
         // `--prove`/`--lemma` selector are dropped, everything else stays.
         // `lemma_matches` already implements `lemmaSelector`'s `[]` / `[""]`
         // / `["",""]` ⇒ keep-all rules, so this retain is a no-op without a
@@ -1384,7 +1423,6 @@ impl TheoryPipeline<'_> {
     /// [`Self::translate_module`] gates only the loop-breaker annotation —
     /// see the comment at that block.
     fn check_translated_theory(&mut self) {
-        let translate_mode = self.translate_module.is_some();
         // HS runs the full `checkWellformedness` on the TRANSLATED theory
         // (TheoryLoader.hs:553-565, `checkTranslatedTheory`), i.e. AFTER SAPIC
         // `translate` has injected the generated rules, whereas our
@@ -1557,15 +1595,9 @@ impl TheoryPipeline<'_> {
                     continue;
                 };
 
-                // Sub-check 1: "Rule has no variants" — mirrors HS
-                // `variantsCheck` (Wellformedness.hs:354-372, see line 362):
-                //   `guard (null recomputedVariants) $> ...`
-                // Calls `rule_has_no_variants_for_wf` which implements
-                // the full HS `variantsProtoRule` detection logic including
-                // `isFreshRedundant` filtering.
-                //
-                // Sub-check 2: "Variants mismatch" — not yet ported; no
-                // corpus files affected.
+                // Sub-check 1 (see the block above): HS `variantsCheck`'s
+                // `guard (null recomputedVariants) $> ...`
+                // (Wellformedness.hs:354-372, see line 362).
                 let precomputed_no_variants = if sig_has_reducible {
                     Some(opr.abstracted_rule.is_none() && opr.variant_substs.is_empty())
                 } else {
@@ -1610,7 +1642,7 @@ impl TheoryPipeline<'_> {
                 &after_variants_topics(),
             );
 
-            // HS closeProtoRule (Rule.hs:97-98): `ClosedProtoRule ruE <$>
+            // HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86, see line 84): `ClosedProtoRule ruE <$>
             // maybeToList (variantsProtoRule hnd ruE)` — a rule with NO
             // variants produces NO closed rule.  It is dropped from the
             // closed theory entirely: it participates in neither rendering
@@ -1641,6 +1673,7 @@ impl TheoryPipeline<'_> {
         // (`translateAndCheckTheory` skips `closeTranslatedTheory`,
         // TheoryLoader.hs:768-781) and the open renderer prints no
         // loop-breaker comments, so the pass is skipped there.
+        let translate_mode = self.translate_module.is_some();
         if let Some(m) = self.file_maude.as_ref().filter(|_| !translate_mode) {
             annotate_theory_loop_breakers(&mut self.elaborated, m);
         }
@@ -1706,7 +1739,7 @@ impl TheoryPipeline<'_> {
         }
     }
 
-    /// HS `closeTranslatedTheory` (TheoryLoader.hs:668-714) plus the parts of
+    /// HS `closeTranslatedTheory` (TheoryLoader.hs:668-715) plus the parts of
     /// `closeTheoryWithMaude` the port runs at close time: adopt the
     /// NDC-joined signature, apply `--partial-evaluation`
     /// (`applyPartialEvaluation`'s second close), apply `--auto-sources`, and
@@ -1715,12 +1748,13 @@ impl TheoryPipeline<'_> {
     /// `translateAndCheckTheory` has no `closeTranslatedTheory` call
     /// (TheoryLoader.hs:768-781) — so `--partial-evaluation` and
     /// `--auto-sources` are inert there even though the flags are still read.
-    fn close_translated_theory(&mut self, want_traces: bool) -> Result<ClosedOutcome, RunError> {
+    fn close_translated_theory(&mut self) -> Result<ClosedOutcome, RunError> {
         let in_file = self.in_file;
+        let want_traces = wants_trace_output(self.args);
 
         // The close proper: HS's `closeTranslatedTheory` (TheoryLoader.hs:679),
         // `Prover.closeTheory` (Prover.hs:51) and `applyPartialEvaluation`
-        // (Prover.hs:238-240) all pass `showSaturation = True`, so every
+        // (Prover.hs:238-242, see line 242) all pass `showSaturation = True`, so every
         // saturation from here on — auto-sources, the prover session, the
         // `--precompute-only` forcing that runs after the per-file loop —
         // traces.
@@ -1795,7 +1829,7 @@ impl TheoryPipeline<'_> {
             )
             .map_err(|e| RunError(format!("partial evaluation of {} failed: {}", in_file, e)))?;
 
-            // HS's second `closeTheoryWithMaude` (Prover.hs:263).  The refined
+            // HS's second `closeTheoryWithMaude` (Prover.hs:237-264, see line 240).  The refined
             // rules come back as fresh open rules with empty `variant_substs`
             // and `loop_breakers`, so both closing passes of the first close
             // are redone here: the variant pass (the re-emitted rules render
@@ -1821,7 +1855,7 @@ impl TheoryPipeline<'_> {
 
         // Decide which lemmas to prove.  Without --prove, HS still runs
         // the close-time `checkAndExtendProver` replay over every stored
-        // proof skeleton (`closeTheory`, Prover.hs:174-185) — a plain
+        // proof skeleton (`closeTheoryWithMaude`, CloseRule.hs:56-137, see line 71) — a plain
         // load VALIDATES embedded proofs and reports their real status.
         // We mirror that whenever the file carries a stored proof tree;
         // proofless files keep the cheap no-solver path below, whose
@@ -1839,14 +1873,14 @@ impl TheoryPipeline<'_> {
         // Mirrors HS's per-lemma proof body for embedding in the
         // pretty-printed theory output.  Filled by the prove loop below.
         let mut proved_lemmas: Vec<tamarin_theory::pretty_theory::ProvedLemma> = Vec::new();
-        // HS `systemsWithMetadata` (Batch.hs:290-299) for THIS file: the
+        // HS `systemsWithMetadata` (Batch.hs:274-280) for THIS file: the
         // labelled solved systems `outputTraces` serialises, in lemma
         // declaration order.  Empty unless `--output-dot`/`--output-json`
         // asked for them.
         let mut trace_systems: Vec<(String, System)> = Vec::new();
 
         // `--auto-sources` (HS `closeTheoryWithMaude` autosources branch,
-        // Prover.hs:170-251, see line 171): when the raw sources contain
+        // CloseRule.hs:56-137, see line 58): when the raw sources contain
         // partial deconstructions, annotate the rules with AUTO_* actions and
         // add the `AUTO_typing` sources lemma.  HS applies this on EVERY
         // theory close — the plain-load echo and the proving pipeline alike —
@@ -1869,7 +1903,7 @@ impl TheoryPipeline<'_> {
         if skips_prove_loop {
             results = skipped_results(&self.elaborated, lemma_filter);
             // HS emits the `Theory closed` marker after `closeTheory`
-            // finishes (TheoryLoader.hs:569-615, see line 596).  This site
+            // finishes (TheoryLoader.hs:668-715, see line 696).  This site
             // covers the no-prove / precompute-only paths, which skip the
             // prove loop; the prove branch below emits it before its loop
             // instead.
@@ -1904,7 +1938,7 @@ impl TheoryPipeline<'_> {
             let session = self.build_prover_session(maude.clone()).ok();
 
             // HS prints "[Theory X] Theory closed" right after `closeTheory`
-            // (TheoryLoader.hs:569-615, see line 596) and BEFORE the proof search, which it
+            // (TheoryLoader.hs:668-715, see line 696) and BEFORE the proof search, which it
             // forces lazily as `provedThy` is serialised — so the marker
             // appears in moments regardless of proving cost.  RS's
             // `ProverSession::build` is the `closeTheory` analog, so emit the
@@ -1930,11 +1964,12 @@ impl TheoryPipeline<'_> {
                     tamarin_theory::theory::TraceQuantifier::ExistsTrace,
                 );
                 // HS faithfulness: `closeTheory` runs
-                // `checkAndExtendProver` (Prover.hs:174-185) over ALL
+                // `checkAndExtendProver` (CloseRule.hs:56-137, see line 71) over ALL
                 // lemmas, re-attaching the constraint system to each
                 // stored skeleton step.  `--prove=X` then runs the
                 // auto-prover ONLY on lemmas matching the selector
-                // (Prover.hs:273-275); the rest keep their close-time
+                // (`proveTheory`, CloseRule.hs:142-163, see line 158); the
+                // rest keep their close-time
                 // replayed proof, reprinted verbatim with the stored
                 // status.  We mirror that: the target lemma(s) run the
                 // full skeleton-replay+auto-prove; non-target lemmas run
@@ -1971,7 +2006,7 @@ impl TheoryPipeline<'_> {
                         ndc_cache,
                     ),
                 };
-                // HS `systemsWithMetadata` (Batch.hs:290-299) reads the proof
+                // HS `systemsWithMetadata` (Batch.hs:274-280) reads the proof
                 // tree of every lemma, so the collection has to happen here —
                 // the tree is consumed for its solved `System`s once verdict
                 // and proof body are rendered.  Both arms above feed it: a
@@ -1992,40 +2027,10 @@ impl TheoryPipeline<'_> {
                         // `verified` not `analysis incomplete`).  For a
                         // fully-fresh proof the fold yields the same verdict
                         // as `root.status` did.
-                        use tamarin_theory::constraint::solver::search::ProofStatus;
-                        let is_exists = matches!(
-                            l.trace_quantifier,
-                            tamarin_theory::theory::TraceQuantifier::ExistsTrace,
+                        let v = lemma_verdict(
+                            tamarin_theory::constraint::solver::search::proof_status(&root),
+                            exists_trace,
                         );
-                        let v =
-                            match tamarin_theory::constraint::solver::search::proof_status(&root) {
-                                ProofStatus::TraceFound => {
-                                    if is_exists {
-                                        LemmaVerdict::Verified
-                                    } else {
-                                        LemmaVerdict::Falsified
-                                    }
-                                }
-                                ProofStatus::Complete => {
-                                    if is_exists {
-                                        LemmaVerdict::Falsified
-                                    } else {
-                                        LemmaVerdict::Verified
-                                    }
-                                }
-                                ProofStatus::Unfinishable => LemmaVerdict::Unfinishable,
-                                ProofStatus::Incomplete => LemmaVerdict::Analyzed,
-                                // HS `showProofStatus` (Proof.hs:1111-1112) renders
-                                // these as distinct strings, NOT "analysis
-                                // incomplete".  In batch `--prove` the root fold is
-                                // virtually never Undetermined/Invalidated (close-
-                                // time replay annotates every node ⇒ Incomplete;
-                                // Invalidated only arises from interactive reuse-
-                                // lemma edits), but map them faithfully so the label
-                                // is correct if such a tree ever surfaces.
-                                ProofStatus::Undetermined => LemmaVerdict::Undetermined,
-                                ProofStatus::Invalidated => LemmaVerdict::Invalidated,
-                            };
                         let body = tamarin_theory::pretty_theory::pretty_proof_body(&root);
                         if want_traces {
                             for (path, sys) in
@@ -2096,7 +2101,7 @@ impl TheoryPipeline<'_> {
                     .collect();
                 // Reassemble in DECLARATION order so output is identical to the
                 // sequential loop regardless of which worker finished first.
-                // That order is also HS `getLemmas thy`'s (Batch.hs:292), which
+                // That order is also HS `getLemmas thy`'s (Batch.hs:278), which
                 // is what `outputTraces` serialises the graphs in.
                 out.sort_by_key(|(i, _, _, _)| *i);
                 for (_, pl, lr, tr) in out {
@@ -2130,10 +2135,10 @@ impl TheoryPipeline<'_> {
 }
 
 fn run_batch(args: &Args) -> Result<i32, RunError> {
-    // HS-faithful internal parallelism via rayon.  Mirrors the four
-    // `using parList`/`parTraversable`/`parMap` sites HS uses (see
-    // `lib/theory/src/Prover.hs:68-164, see line 102,195`, `Theory/Constraint/Solver/Sources.hs`,
-    // `lib/theory/src/TheoryObject.hs:732-768, see line 744,752`).  Default: full machine
+    // HS-faithful internal parallelism via rayon.  Mirrors HS's `using
+    // parList` / `parMap` sites: CloseRule.hs:81, Prover.hs:105,
+    // Theory/Constraint/Solver/Sources.hs:362, TheoryObject.hs:759,767.
+    // Default: full machine
     // parallelism (`available_parallelism()`, uncapped — Maude IPC runs
     // through the contention-free `MaudePool`, so larger pools scale;
     // memory is budgeted via `--maude-processes`).
@@ -2151,10 +2156,10 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             "--diff (observational equivalence) is not yet ported to the Rust prover.".to_string(),
         ));
     }
-    // `--stop-on-trace` selects HS's `SolutionExtractor` (Theory/Proof.hs:693-694, see line 695,
-    // TheoryLoader.hs:355-362) and, when the CLI flag is absent, HS
+    // `--stop-on-trace` selects HS's `SolutionExtractor` (Theory/Proof.hs:693-694,
+    // TheoryLoader.hs:397-405) and, when the CLI flag is absent, HS
     // additionally consults the theory's in-file `configuration:` block
-    // (`configStopOnTrace`, TheoryLoader.hs:640-666) — a PER-THEORY value,
+    // (`configStopOnTrace`, TheoryLoader.hs:740-765) — a PER-THEORY value,
     // so the effective strategy is resolved inside the file loop by
     // `effective_config` once the theory is parsed.
 
@@ -2166,8 +2171,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     // `KeepAll`) is scoped to solved nodes, so a run without these flags
     // pays nothing and a run with them retains only the systems
     // `outputTraces` actually reads.
-    let want_traces = args.trace_dot.is_some() || args.trace_json.is_some();
-    if want_traces {
+    if wants_trace_output(args) {
         tamarin_theory::constraint::solver::search::set_sys_retention(
             tamarin_theory::constraint::solver::search::SysRetention::KeepSolved,
         );
@@ -2222,8 +2226,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     let maude_version: Option<String> = if args.parse_only {
         None
     } else {
-        let (_, version_data) =
-            crate::probe::ensure_maude(&maude_display_name(args, &maude_path), &maude_path);
+        let (_, version_data) = ensure_maude(args, &maude_path);
         // `getVersionIO` splices the version data — which ends in maude's own
         // newline — straight into the block; `BuildInfo` holds the line's
         // content instead, so drop it here.
@@ -2237,7 +2240,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         Ok(o) => o,
         Err(msg) => {
             // `processThy` forces the record only after `readFile inFile`
-            // (Batch.hs:167-169), so a FIRST input file that cannot be OPENED
+            // (Batch.hs:190-192), so a FIRST input file that cannot be OPENED
             // reports its own IOException and this rejection is never reached.
             // Only the open counts: `readFile` is lazy, so a file that opens
             // and then fails to decode raises `hGetContents` LATER, after the
@@ -2306,7 +2309,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             Err(e) => return report_open_file_error(in_file, &e),
         };
         // Thread the including file's directory so `#include "file"` resolves
-        // relative to it (HS `takeDirectory inFile0`, Parser.hs:323-343).
+        // relative to it (HS `takeDirectory inFile0`, Theory/Text/Parser.hs:323-343).
         let base_dir = std::path::Path::new(in_file)
             .parent()
             .map(|p| p.to_path_buf());
@@ -2325,7 +2328,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     return Ok(ghc_exception(&g.display_exception()));
                 }
                 // HS batch: `handleError e@(ParserError _) = die $ show e`
-                // (Main/Mode/Batch.hs:87-316, see line 234).  `die` writes `show e` — the raw
+                // (Batch.hs:189-317, see line 235).  `die` writes `show e` — the raw
                 // parsec frame, with `inFile` as the `SourcePos` name — to
                 // stderr and exits with code 1.  No `error:` prefix and no
                 // `parse error in …:` wrapper (neither of which HS emits).
@@ -2376,7 +2379,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // 443-460): parse, emit the marker above, pretty-print the OPEN
             // theory (`prettyOpenTheory`) — no wellformedness, no
             // configuration-block processing (that happens in `closeTheory`,
-            // TheoryLoader.hs:640-666), no Maude, no output files (`-o`/`-O`
+            // TheoryLoader.hs:740-765), no Maude, no output files (`-o`/`-O`
             // are ignored: the parseOnly branch never consults `writeOutput`),
             // no `summary of summaries`.
             //
@@ -2397,7 +2400,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // `convert_process_with_defs` mirrors HS's PARSER, which inlines
             // each `P(args)` call and wraps it in a `ProcessCall` marker
             // action (Theory/Text/Parser/Sapic.hs:293-312) — `prettySapic'`
-            // then prints just `P(args)` for the marker (Process.hs:496).
+            // then prints just `P(args)` for the marker (Theory/Sapic/Process.hs:496).
             let process_defs = tamarin_sapic::inline::collect_process_defs(&parsed);
             let conv = |proc: &tamarin_parser::ast::Process| {
                 tamarin_sapic::inline::convert_process_with_defs(proc, &process_defs)
@@ -2428,7 +2431,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
 
         // Effective cut strategy + auto-sources for THIS theory: CLI flags
         // merged with the in-file `configuration:` block per HS
-        // `closeTheory` (TheoryLoader.hs:640-666).
+        // `closeTheory` (TheoryLoader.hs:740-765).
         let (cut, auto_sources) = effective_config(&opts, &parsed)?;
 
         // Wellformedness checks — mirrors HS `checkWellformedness`
@@ -2612,7 +2615,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 results
             }
             None => {
-                let closed = st.close_translated_theory(want_traces)?;
+                let closed = st.close_translated_theory()?;
 
                 // HS-faithful: rc=0 regardless of verdict.  Falsified is a
                 // valid analysis outcome — the prover ran successfully and
@@ -2640,7 +2643,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     let wf_len = st.wf_report.len();
                     precompute_pending.push((session, st.parsed, wf_len));
                 } else {
-                    // HS `outputTraces` (Batch.hs:224-225) runs in `processThy`'s
+                    // HS `outputTraces` (Batch.hs:224-226) runs in `processThy`'s
                     // close-and-prove `else` — the ONLY branch that reaches it.
                     // `--parse-only` (Batch.hs:198-200), `--precompute-only`
                     // (:202-208) and `-m` (:210-220) all return first, so they leave
@@ -2650,7 +2653,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     // It precedes the theory render, matching HS's force order: the
                     // write is an `IO` action inside `processThy`, while the doc is
                     // rendered later in `Batch.hs`'s output phase.
-                    if want_traces {
+                    if wants_trace_output(args) {
                         if let Err(io) = write_output_traces(args, closed.trace_systems) {
                             return Ok(ghc_exception(&io));
                         }
@@ -2672,8 +2675,8 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                         st.auto_sources,
                     );
                     // HS normal mode: `writeOutput` is true whenever `-o`/`-O` was
-                    // given (Batch.hs:167), and a `mkOutPath` miss — `-o=` with no
-                    // `-O` — `die`s with this exact line (Batch.hs:118-123) instead
+                    // given (Batch.hs:168), and a `mkOutPath` miss — `-o=` with no
+                    // `-O` — `die`s with this exact line (Batch.hs:119-123) instead
                     // of falling back to stdout: markers printed, stdout empty, rc 1.
                     // (HS processes every file before dying; with several input
                     // files this port dies after the first, an accepted divergence —
@@ -2839,7 +2842,7 @@ fn default_maude_path() -> String {
 /// Emit `body` to `--output` / `-O` / stdout.
 ///
 /// The two sinks differ by one byte: HS writes `renderDoc d` VERBATIM to the
-/// file (`writeFileWithDirs`, Utils.hs:20-23) and `putStrLn`s it to stdout
+/// file (`writeFileWithDirs`, Main/Utils.hs:20-23) and `putStrLn`s it to stdout
 /// (Batch.hs:127-133), and `renderDoc` of a closed theory ends at `end` with
 /// no newline.  `body` carries the stdout form (one trailing newline), so the
 /// file write drops it — oracle-verified: a v1.13.0 `--output=FILE` run ends
@@ -2896,7 +2899,7 @@ fn print_overall_summary(file_results: &[FileResult], prove_mode: bool) {
     println!();
     for fr in file_results {
         println!("analyzed: {}", fr.in_file);
-        // HS `ppRep` (Batch.hs:146-148) has TWO `Pretty.text ""` between
+        // HS `ppRep` (Batch.hs:145-156, see line 148,149) has TWO `Pretty.text ""` between
         // `analyzed:` and the nested `output:`/`processing time:` block, but
         // HughesPJ collapses adjacent empty lines under `vcat`, so the rendered
         // output is a SINGLE blank line here.  Verified against the v1.13.0
@@ -2906,7 +2909,7 @@ fn print_overall_summary(file_results: &[FileResult], prove_mode: bool) {
         println!();
         if let Some(out) = &fr.out_file {
             // HS aligns `output:` and `processing time:` columns
-            // (`ppRep` in Main.Mode.Batch, src/Main/Mode/Batch.hs:87-316, see line 144).
+            // (`ppRep`, Batch.hs:145-156, see line 151,152).
             println!("  output:          {}", out);
         }
         println!("  processing time: {:.2}s", fr.elapsed_ms as f64 / 1000.0);
@@ -2919,7 +2922,7 @@ fn print_overall_summary(file_results: &[FileResult], prove_mode: bool) {
             if prove_mode {
                 println!("           The analysis results might be wrong!");
             }
-            // HS `summary = ppWf report $--$ prettyClosedSummary` (Batch.hs:228-229):
+            // HS `summary = ppWf report $--$ prettyClosedSummary` (Batch.hs:228-231, see line 229):
             // `$--$` (above with a blank-line gap) inserts the blank ONLY when
             // both operands are non-empty.  Under the enclosing `nest 2` a
             // blank `Pretty.text ""` renders as `"  "`.  So this separator
@@ -2945,6 +2948,20 @@ mod tests {
 
     fn parse(args: &[&str]) -> Args {
         parse_args(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("parse")
+    }
+
+    /// The pinned submodule's `src/Main/Mode/Batch.hs`, embedded at build time.
+    const BATCH_HS: &str = include_str!("../../../tamarin-prover/src/Main/Mode/Batch.hs");
+
+    /// The e2e stderr pins for this frame compare the port against bytes
+    /// captured from the port, so they agree with a stale coordinate.  This
+    /// reads the coordinate back out of the pinned source instead.
+    #[test]
+    fn batch_argument_error_site_is_the_pinned_call_site() {
+        assert_eq!(
+            BATCH_ARGUMENT_ERROR_SITE,
+            crate::probe::tests::error_site(BATCH_HS, "ArgumentError e)")
+        );
     }
 
     #[test]
@@ -3039,7 +3056,7 @@ mod tests {
         let o = mk_theory_load_options(&a).expect("valid values");
         assert_eq!(o.partial_evaluation, Some(crate::cli::PartialEval::Verbose),);
         assert_eq!(o.output_module, Some(ModuleType::Msr));
-        // HS `derivDefault = 5` (TheoryLoader.hs:394-396) is resolved into
+        // HS `derivDefault = 5` (TheoryLoader.hs:391-393) is resolved into
         // the record; `ndcCheck` defaults on.
         assert_eq!(o.derivation_checks, 5);
         assert!(o.ndc_check);
@@ -3157,7 +3174,7 @@ mod tests {
     // HS `traceLabelOptions` (Batch.hs:305-317) is a CONSTANT in batch mode:
     // `defaultGraphOptions` (SL2 / AS False / CL False / A True / C True,
     // Graph.hs:66-72) and `defaultDotOptions`' `CompactBoringNodes`
-    // (Dot.hs:84-87) are hard-coded at Batch.hs:254-255.  Pinned against the
+    // (Theory/Constraint/System/Dot.hs:84-87) are hard-coded at Batch.hs:254-255.  Pinned against the
     // v1.13.0 oracle's `digraph` lines.
     #[test]
     fn trace_label_options_is_the_batch_constant() {
@@ -3186,21 +3203,55 @@ mod tests {
         );
     }
 
-    // `intercalate "\n" $ map serializeDot labelledSystems` (Batch.hs:263):
-    // every graph already ends `}\n`, so the separator leaves exactly one
-    // blank line between graphs and the document ends `}\n`; an empty list is
-    // `intercalate "\n" [] == ""`, i.e. a 0-byte file.
+    // `intercalate "\n" $ map serializeDot labelledSystems` (Batch.hs:265)
+    // driven through [`write_output_traces`] itself, so the pin fails when the
+    // writer changes rather than when `Vec::join` does: every graph already
+    // ends `}\n`, so the separator leaves exactly one blank line between
+    // graphs and the document ends `}\n`.  An empty list is
+    // `intercalate "\n" [] == ""`, a 0-byte dot file, next to
+    // `sequentsToJSONPretty`'s `{"graphs": []}`.  Needs no Maude: an empty
+    // `System` renders its preamble and nothing else.
     #[test]
-    fn dot_graph_join_reproduces_hs_intercalate() {
-        let empty: Vec<String> = Vec::new();
-        assert_eq!(empty.join("\n"), "");
-        let two = [
-            "digraph \"a\" {\nx;\n\n}\n".to_string(),
-            "digraph \"b\" {\ny;\n\n}\n".to_string(),
-        ];
+    fn write_output_traces_joins_graphs_the_way_hs_intercalates() {
+        use tamarin_theory::constraint::system::System;
+        let dir = std::env::temp_dir().join("tamarin_rs_write_output_traces");
+        fs::create_dir_all(&dir).expect("mkdir");
+        let dot = dir.join("t.dot");
+        let json = dir.join("t.json");
+        let a = parse_args(&[
+            format!("--output-dot={}", dot.display()),
+            format!("--output-json={}", json.display()),
+            "x.spthy".to_string(),
+        ])
+        .expect("parse");
+
+        write_output_traces(&a, Vec::new()).expect("empty write");
+        assert_eq!(fs::read_to_string(&dot).expect("dot file"), "");
         assert_eq!(
-            two.join("\n"),
-            "digraph \"a\" {\nx;\n\n}\n\ndigraph \"b\" {\ny;\n\n}\n",
+            fs::read_to_string(&json).expect("json file"),
+            "{\n    \"graphs\": []\n}",
         );
+
+        write_output_traces(
+            &a,
+            vec![
+                ("a".to_string(), System::empty()),
+                ("b".to_string(), System::empty()),
+            ],
+        )
+        .expect("two-graph write");
+        let body = fs::read_to_string(&dot).expect("dot file");
+        assert!(body.starts_with("digraph \"a\" {\n"), "{body}");
+        assert_eq!(
+            body.matches("}\n\ndigraph \"b\" {\n").count(),
+            1,
+            "graphs must abut across exactly one blank line:\n{body}",
+        );
+        assert!(body.ends_with("\n\n}\n"), "{body}");
+        // Both labels reach the JSON document too — the writers share the
+        // labelled list.
+        let json_body = fs::read_to_string(&json).expect("json file");
+        assert!(json_body.contains("\"jgLabel\": \"a\","), "{json_body}");
+        assert!(json_body.contains("\"jgLabel\": \"b\","), "{json_body}");
     }
 }

@@ -640,7 +640,7 @@ fn render_open_item(
     // `msr`: `removeTranslationItems` maps every `TranslationItem _` to
     // `TranslationItem ()` (OpenTheory.hs:47-52) and
     // `prettyOpenTranslatedTheory` renders those as `emptyDoc`
-    // (OpenTheory.hs:891-898 with `emptyString`), so the whole
+    // (OpenTheory.hs:891-899 with `emptyString`), so the whole
     // `TranslationElement` set (Items/TheoryItem.hs:43-53) vanishes.
     if opts.drop_translation_items {
         if let Builtins(_)
@@ -2620,7 +2620,7 @@ fn render_rule(
     // block.  HS-faithful: matches `prettyClosedProtoRule`
     // (ClosedTheory.hs:332-363).
     //
-    // HS `isTrivialProtoVariantAC` (Rule.hs:761-764):
+    // HS `isTrivialProtoVariantAC` (Model/Rule.hs:790-793):
     //   variants == [emptySubstVFresh] && ps == ps' && cs == cs' && as == as' && nvs == nvs'
     //
     // i.e. trivial iff (a) the variant disjunction is just the identity
@@ -2644,7 +2644,7 @@ fn render_rule(
     // containing the expanded form.
     let trivial = {
         let no_residual_substs = elab_rule.variant_substs.iter().all(|s| s.is_empty());
-        // HS `isTrivialProtoVariantAC` (Rule.hs:761-764):
+        // HS `isTrivialProtoVariantAC` (Model/Rule.hs:790-793):
         //   variants == [emptySubstVFresh] && ps == ps' && as == as' && cs == cs' && nvs == nvs'
         //
         // In HS, `cprRuleE` (E-rule) and `cprRuleAC` (AC-rule) live in
@@ -2665,18 +2665,18 @@ fn render_rule(
         // macro expansion) contains macro calls, it differs from the
         // elaborated form and HS's `ps != ps'` would fire.  Detect this
         // by applying macros to the display facts and checking whether
-        // any term changed (HS `applyMacroInRule` / Rule.hs:98).
+        // any term changed (HS `applyMacroInRule`, lib/theory/src/Rule.hs:85).
         //
         // Crucially: do NOT compare rendered text across AST↔LN spaces —
         // AC ordering and nat-constant representation differ between the
         // parsed form and `lnfacts_to_parser(elab_rule.rule.*)`, producing
         // false negatives for plain rules like those in ParserTests.spthy.
-        // HS `isTrivialProtoVariantAC` (Rule.hs:762-764) compares the AC
+        // HS `isTrivialProtoVariantAC` (Model/Rule.hs:791-793) compares the AC
         // rule body against the E rule body (`ps==ps' && as==as' &&
         // cs==cs' && nvs==nvs'`).  `closeProtoRule` stores `cprRuleE`
         // (the ORIGINAL rule, WITH macro calls) untouched and computes
         // `cprRuleAC` from the macro-EXPANDED, variant-base rule
-        // (Rule.hs:96-98).  So a macro call makes `ps != ps'` and the
+        // (lib/theory/src/Rule.hs:82-86).  So a macro call makes `ps != ps'` and the
         // rule is NOT trivial — it must render the AC block showing the
         // expanded body.  Detect a macro in the display (E) body by
         // expanding it: if anything changes, the E (macro) form differs

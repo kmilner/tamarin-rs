@@ -9,6 +9,35 @@
 
 use super::*;
 
+/// The pinned submodule's `src/Main/Console.hs`, embedded at build time, so a
+/// submodule bump recompiles this module against the new source.
+const CONSOLE_HS: &str = include_str!("../../../tamarin-prover/src/Main/Console.hs");
+
+/// `LINE:COLUMN` of the `error` token on the first line of `hs` holding
+/// `needle`, as GHC's `HasCallStack` prints it: both 1-based, the column that
+/// of the token itself.
+///
+/// Matching `error` as a whole word keeps a constructor like `ArgumentError`
+/// from being read as the call.
+pub(crate) fn error_site(hs: &str, needle: &str) -> String {
+    let (idx, line) = hs
+        .lines()
+        .enumerate()
+        .find(|(_, l)| l.contains(needle))
+        .unwrap_or_else(|| panic!("no line of the pinned source holds {needle:?}"));
+    let col = line
+        .match_indices("error")
+        .find(|(i, _)| {
+            !line[..*i]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '\'')
+        })
+        .map(|(i, _)| line[..i].chars().count() + 1)
+        .expect("no `error` token on that line");
+    format!("{}:{}", idx + 1, col)
+}
+
 #[test]
 fn command_line_is_unwords_prog_then_args() {
     assert_eq!(command_line("dot", &["-V"]), "dot -V");
@@ -158,15 +187,29 @@ fn exception_report_drops_the_blank_line_for_maude() {
 
 /// The GHC `error` a failed maude spawn raises, as the oracle prints it under
 /// `tamarin-prover: ` (Console.hs:147).
+///
+/// Both halves are read back out of the pinned source rather than restated: a
+/// literal restated here would agree with a wrong constant, and the e2e stderr
+/// pins compare the port against bytes captured from the port, so they move
+/// with the constant instead of catching it.  This is what notices when a bump
+/// moves the `error` or reworks its message.
 #[test]
 fn maude_abort_is_the_console_hs_error() {
-    assert_eq!(
-        MAUDE_ABORT_MSG,
-        "Maude is not installed. Ensure Maude is available and on the path."
-    );
+    let raise = CONSOLE_HS
+        .lines()
+        .find(|l| l.trim_start().starts_with("error \"Maude is not installed"))
+        .expect("no maude-missing `error` in the pinned src/Main/Console.hs");
+    let message = raise
+        .trim_start()
+        .trim_start_matches("error ")
+        .trim_matches('"');
+    assert_eq!(MAUDE_ABORT_MSG, message);
     assert_eq!(
         MAUDE_ABORT_SITE,
-        "src/Main/Console.hs:147:9 in main:Main.Console"
+        format!(
+            "src/Main/Console.hs:{} in main:Main.Console",
+            error_site(CONSOLE_HS, "Maude is not installed")
+        )
     );
 }
 

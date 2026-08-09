@@ -30,7 +30,7 @@
 //! unique among the ORIGINAL rules, which is what refinement looks up by.
 //!
 //! Divergences from HS, all deliberate:
-//! * **Macro theories**: HS `closeProtoRule` (Rule.hs:96-98) keeps
+//! * **Macro theories**: HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86) keeps
 //!   `cprRuleE` macro-UNexpanded, so `getProtoRuleEs` (ClosedTheory.hs:87-89)
 //!   feeds partial evaluation the macro-form rules and unification runs on
 //!   the macro symbols.  RS elaborated rules are macro-expanded
@@ -127,7 +127,7 @@ fn abs_term(t: &LNTerm, st: &mut AbsState) -> LNTerm {
 /// dropped — `outFact` builds a default-annotation fact); any other fact
 /// keeps its tag and annotations with the terms abstracted left-to-right
 /// under one per-fact binding map / counter.
-pub(crate) fn abs_fact(fa: &LNFact) -> LNFact {
+fn abs_fact(fa: &LNFact) -> LNFact {
     match fa.tag {
         FactTag::Out => out_fact(var_term(LVar::new("z", LSort::Msg, 0))),
         _ => {
@@ -210,7 +210,7 @@ fn refine_rule(
 }
 
 /// HS `interpretAbstractly` (AbstractInterpretation.hs:44-83) fused with
-/// `partialEvaluation`'s `consumeEvaluation` (AbstractInterpretation.hs:100-118),
+/// `partialEvaluation`'s `consumeEvaluation` (AbstractInterpretation.hs:100-119),
 /// instantiated at their single upstream use (`S.Set LNFact` state,
 /// `S.insert . absFact` add, `unifyLNFactEqs` unification).
 ///
@@ -228,7 +228,7 @@ fn refine_rule(
 /// `restr_frees` carries each rule's `_restrict`-formula frees (see the
 /// module doc), which extend the per-rule `avoid` seed exactly as HS's
 /// info-folding `HasFrees` does.
-pub(crate) fn interpret_abstractly(
+fn interpret_abstractly(
     maude: &MaudeHandle,
     style: EvaluationStyle,
     rules: &[ProtoRuleE],
@@ -275,7 +275,7 @@ pub(crate) fn interpret_abstractly(
             return Ok((st, refined, trace));
         }
         // HS `withTrace` over the step from `st` to `st_next`
-        // (AbstractInterpretation.hs:109-118).
+        // (AbstractInterpretation.hs:109-119).
         let added = st_next.len() - st.len();
         match style {
             EvaluationStyle::Silent => {}
@@ -380,7 +380,7 @@ fn state_fact_doc(fa: &LNFact) -> Doc {
 /// = HughesPJ's DEFAULT style: lineLength 100, ribbon `round(100/1.5)` = 67
 /// — NOT the console width the theory body uses.
 fn render_default_style(d: Doc) -> String {
-    d.render_with(hpj::WEB_LINE_LENGTH, hpj::WEB_RIBBON)
+    d.render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON)
 }
 
 /// HS `partialEvaluation` (AbstractInterpretation.hs:90-119).  Returns
@@ -395,7 +395,7 @@ fn render_default_style(d: Doc) -> String {
 ///   `Silent`.  NOT printed here: HS's trace thunks fire during rendering,
 ///   after the `[Theory X] Theory closed` marker, so the caller must
 ///   `eprint!` the returned string at that point.
-pub(crate) fn partial_evaluation(
+fn partial_evaluation(
     maude: &MaudeHandle,
     style: EvaluationStyle,
     ru_es: &[ProtoRuleE],
@@ -461,10 +461,10 @@ fn proto_rule_cmp(a: &ProtoRuleE, b: &ProtoRuleE) -> std::cmp::Ordering {
         .then_with(|| a.new_vars.cmp(&b.new_vars))
 }
 
-/// The `text{* … *}` report body (HS `ppAbsState`, Prover.hs:255-262),
+/// The `text{* … *}` report body (HS `ppAbsState`, Prover.hs:257-264),
 /// byte-exact: leading space, `$--$`-joined header / `numbered'` fact list
 /// / footer, trailing `".\n\n"` from the footer's literal newlines.
-pub(crate) fn abs_state_report(st: &BTreeSet<LNFact>, n_refined: usize, n_orig: usize) -> String {
+fn abs_state_report(st: &BTreeSet<LNFact>, n_refined: usize, n_orig: usize) -> String {
     let header = Doc::text(format!(
         " the abstract state after partial evaluation contains {} facts:",
         st.len()

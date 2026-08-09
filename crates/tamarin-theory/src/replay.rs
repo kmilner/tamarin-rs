@@ -756,7 +756,7 @@ fn resolve_method(parsed: &ParsedMethod, sys: &System) -> Option<ProofMethod> {
 }
 
 /// Exact-match a stored-proof fact's argument terms against a runtime
-/// [`LNFact`]'s terms — HS's `M.member` semantics (ProofMethod.hs:348-459, see line 374
+/// [`LNFact`]'s terms — HS's `M.member` semantics (ProofMethod.hs:253-274, see line 258
 /// `guard (goal `M.member` L.get sGoals sys)`).
 ///
 /// HS parses the stored `solve(...)` goal into a full `Goal` carrying
@@ -838,23 +838,31 @@ fn parsed_term_of_arg(
     }
 }
 
+/// The OPEN goals of `sys`, in `sGoals` creation order — the search space
+/// every [`match_goal`] arm ranges over, mirroring HS's `M.member`/`M.toList`
+/// over `sGoals`.
+fn open_goals(sys: &System) -> impl Iterator<Item = &Goal> {
+    sys.goals
+        .iter()
+        .filter(|(_, st)| !st.solved)
+        .map(|(g, _)| g)
+}
+
 /// Find a [`Goal`] in `sys.goals` that matches the parsed [`GoalSpec`].
 ///
-/// The skeleton's `solve(...)` text identifies a goal by fact NAME and
-/// optionally a premise INDEX.  At replay time variable indices and
-/// substitutions may differ from the skeleton's static text, so we
-/// match structurally (fact name + arity + premise idx) rather than
-/// by deep term equality.
+/// HS looks the goal up by structural equality on the parsed `Goal` value
+/// itself (`Theory.Text.Parser.Proof.goal`, Proof.hs:39-72), whose LVar
+/// identities come from the parser's name table.  RS's skeleton parser keeps
+/// only surface text, so each arm rebuilds as much of that equality as its
+/// goal kind allows: the fact-bearing kinds re-parse the stored terms and
+/// compare them exactly ([`fact_terms_match_exact`]), the rest compare
+/// canonicalised rendered text or a stable id.
 ///
-/// HS does goal lookup via the parsed `Goal` directly (see
-/// `Theory.Text.Parser.Proof.goal` Proof.hs:39-72), but HS's parsed
-/// goal carries proper LVar identities populated by the parser's name
-/// table; our skeleton parser captures only surface text, hence the
-/// structural-match approach.
-///
-/// Returns `None` if no goal matches (or multiple ambiguous matches
-/// exist with no way to disambiguate); the caller falls back to the
-/// auto-prover.
+/// `None` means the stored step names a goal this system does not have.  For
+/// every kind handled here `exec_method_for` then gives up (its raw-solve
+/// fallback is reserved for [`GoalSpec::Raw`]), and the caller emits
+/// `sorry /* invalid proof step encountered */` over the verbatim stored
+/// subtree — HS `checkProof`'s `Nothing` branch (Proof.hs:455-468).
 fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
     match spec {
         GoalSpec::Action {
@@ -863,97 +871,42 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             time_idx,
             ..
         } => {
-            // Open Action goals whose fact name matches.  Skip KU
-            // (auto-handled) for non-KU goal specs — the skeleton's
-            // `solve(...)` always names protocol facts, never `KU(...)`.
+            // HS's parsed `ActionG i fa` matches by structural equality
+            // against a key of `sGoals` (ProofMethod.hs:253-274, see line
+            // 258, `goal `M.member` sGoals`), so the conjuncts below are one
+            // `M.member` test split into the three things RS can check:
             //
-            // HS-faithful: HS's parsed `ActionG i fa` carries the
-            // timepoint LVar `i` and matches by structural equality
-            // (HS ProofMethod.hs:348-459, see line 374 `goal `M.member` sGoals`).  RS's
-            // skeleton-text parser captures only the time-var ROOT
-            // name (e.g. `i` from `#i.3`) — LVar idxs in the skeleton
-            // and runtime differ because HS pretty-prints idxs after a
-            // freshen but our skeleton-parse drops them.  The
-            // (name, arity, persistent) tuple is only a PRE-FILTER here;
-            // the exact-term and exact-timepoint-LVar narrowing below
-            // decides which goal (if any) the stored step binds.
-            let want_name = &fact.name;
-            let want_arity = fact.args.len();
-            let want_persistent = fact.persistent;
-            // The skeleton may explicitly solve a `!KU( t ) @ #i` action
-            // goal (HS skeletons do — e.g. noise secrecy proofs).  Only
-            // exclude runtime `KU` goals when the spec does NOT name
-            // `KU`; otherwise a non-KU spec could spuriously bind a KU
-            // goal of matching arity.
-            let want_ku = want_name == "KU";
-            let shape_matches: Vec<&Goal> = sys
-                .goals
-                .iter()
-                .filter(|(_, st)| !st.solved)
-                .filter_map(|(g, _)| match g {
-                    Goal::Action(_, fa) => {
-                        if name_matches(&fa.tag, want_name)
-                            && fa.terms.len() == want_arity
-                            && tag_persistent(&fa.tag) == want_persistent
-                            && (want_ku || !matches!(fa.tag, FactTag::Ku))
-                        {
-                            Some(g)
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                })
-                .collect();
-            if shape_matches.is_empty() {
-                return None;
-            }
-            // Narrow to candidates whose TERMS are EXACTLY EQUAL to the
-            // stored goal (HS `M.member`, ProofMethod.hs:348-459, see line 374 — see
-            // `fact_terms_match_exact`).  When the stored goal's term is
-            // absent from the drifted system, HS returns `Nothing` and
-            // marks the step invalid (Proof.hs:455-468).  A name+arity
-            // match alone is NOT enough: a stale stored `!KU( ~r1 )` must
-            // not bind a present `!KU( h(...) )` of the same shape — that
-            // re-derives the wrong goal and cascades into a divergent
-            // subtree.
-            let by_struct: Vec<&Goal> = shape_matches
-                .iter()
-                .copied()
-                .filter(|g| match g {
-                    Goal::Action(_, fa) => fact_terms_match_exact(&fact.args, &fa.terms),
-                    _ => false,
-                })
-                .collect();
-            if by_struct.is_empty() {
-                // No system goal structurally matches the stored goal —
-                // it's a stale (invalidated) proof step.  Return None so
-                // the caller emits the HS-faithful
-                // `sorry /* invalid proof step encountered */` and keeps
-                // the stored subtree verbatim.
-                return None;
-            }
-            // HS `M.member` keys on the FULL timepoint LVar (name AND idx):
-            // `SolveGoal (ActionG i fa)` matches iff that exact `ActionG i
-            // fa` is a key of `sGoals` (ProofMethod.hs:348-459, see line 374,
-            // `goal `M.member` sGoals`).  A stored step whose timepoint idx
-            // has DRIFTED from the re-executed system's idx (e.g. stored
-            // `!KU(~e0)@#vk.17` but re-execution mints the goal at `#vk.18`
-            // after upstream case-numbering changed) is therefore a MISS in
-            // HS, which emits `sorry /* invalid proof step encountered */`
-            // and keeps the stored subtree verbatim (Proof.hs:447-467, see line 461).
-            // Matching by term + root-name alone (ignoring the idx) is too
-            // lenient — it re-binds the drifted goal and replays it as a
-            // live step, diverging from HS.  Require the exact LVar idx.
-            // sGoals is keyed by Goal, so the same (term, LVar) goal cannot
-            // appear twice; at most one candidate carries the exact LVar.
-            // If none does, HS's `M.member` misses ⇒ invalid step — return
-            // None and mirror it.
-            by_struct
-                .iter()
-                .copied()
+            // * (name, arity, persistent) — the fact SHAPE.  Skip KU goals
+            //   (auto-handled) unless the spec itself names `KU`: the
+            //   skeleton usually names protocol facts, but it may explicitly
+            //   solve a `!KU( t ) @ #i` (noise secrecy proofs do), and a
+            //   non-KU spec must not spuriously bind a KU goal of matching
+            //   arity.
+            // * `fact_terms_match_exact` — the TERMS.  Shape alone is not
+            //   enough: a stale stored `!KU( ~r1 )` must not bind a present
+            //   `!KU( h(...) )`, which would re-derive the wrong goal and
+            //   cascade into a divergent subtree.
+            // * the FULL timepoint LVar, name AND idx.  A stored step whose
+            //   idx has drifted from the re-executed system's (stored
+            //   `!KU(~e0)@#vk.17` vs a re-minted `#vk.18` after upstream
+            //   case-numbering changed) is a `M.member` miss in HS.  Root
+            //   name alone is too lenient — it re-binds the drifted goal and
+            //   replays it as a live step.
+            //
+            // `sGoals` is keyed by `Goal`, so at most one open goal can
+            // satisfy all three.
+            let want_ku = fact.name == "KU";
+            open_goals(sys)
                 .find(|g| match g {
-                    Goal::Action(i, _) => *i.name == **time_var && i.idx == *time_idx as u64,
+                    Goal::Action(i, fa) => {
+                        name_matches(&fa.tag, &fact.name)
+                            && fa.terms.len() == fact.args.len()
+                            && tag_persistent(&fa.tag) == fact.persistent
+                            && (want_ku || !matches!(fa.tag, FactTag::Ku))
+                            && fact_terms_match_exact(&fact.args, &fa.terms)
+                            && *i.name == **time_var
+                            && i.idx == *time_idx as u64
+                    }
                     _ => false,
                 })
                 .cloned()
@@ -965,64 +918,20 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             time_idx,
             ..
         } => {
-            // HS `PremiseG (i, v) fa` carries the node-LVar `i` and
-            // PremIdx `v`.  Disambiguate by name + arity + prem_idx
-            // first, then by time-var root if the (name, arity, idx)
-            // tuple matches multiple goals — same logic as Action.
-            let want_name = &fact.name;
-            let want_arity = fact.args.len();
-            let want_persistent = fact.persistent;
-            let shape_matches: Vec<&Goal> = sys
-                .goals
-                .iter()
-                .filter(|(_, st)| !st.solved)
-                .filter_map(|(g, _)| match g {
-                    Goal::Premise(np, fa) => {
-                        if name_matches(&fa.tag, want_name)
-                            && fa.terms.len() == want_arity
-                            && tag_persistent(&fa.tag) == want_persistent
-                            && (np.1).0 == *prem_idx
-                        {
-                            Some(g)
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                })
-                .collect();
-            if shape_matches.is_empty() {
-                return None;
-            }
-            // Narrow to candidates whose TERMS are EXACTLY EQUAL to the
-            // stored goal (HS `M.member`).  Same rationale as the Action
-            // branch: HS matches the parsed `PremiseG (i,v) fa` by
-            // structural equality; a stale stored premise goal that no
-            // longer exists in the drifted system must be rejected so the
-            // caller emits the invalid-step placeholder.
-            let by_struct: Vec<&Goal> = shape_matches
-                .iter()
-                .copied()
-                .filter(|g| match g {
-                    Goal::Premise(_, fa) => fact_terms_match_exact(&fact.args, &fa.terms),
-                    _ => false,
-                })
-                .collect();
-            if by_struct.is_empty() {
-                return None;
-            }
-            // HS `M.member` keys on the FULL node LVar (name AND idx) of the
-            // parsed `PremiseG (i, v) fa` (ProofMethod.hs:348-459, see line 374).  A stored
-            // premise step whose node idx has drifted from the re-executed
-            // system is a miss in HS ⇒ invalid step.  Require the exact LVar
-            // idx — same rationale as the Action branch above (matching by
-            // root-name alone re-binds a drifted goal and replays it live).
-            by_struct
-                .iter()
-                .copied()
+            // `PremiseG (i, v) fa` under the same one-`M.member`-test-split-
+            // in-three reading as the Action arm above (shape, then exact
+            // terms, then the FULL node LVar); the extra conjunct is the
+            // `PremIdx v`.
+            open_goals(sys)
                 .find(|g| match g {
-                    Goal::Premise((node, _), _) => {
-                        *node.name == **time_var && node.idx == *time_idx as u64
+                    Goal::Premise((node, prem), fa) => {
+                        name_matches(&fa.tag, &fact.name)
+                            && fa.terms.len() == fact.args.len()
+                            && tag_persistent(&fa.tag) == fact.persistent
+                            && prem.0 == *prem_idx
+                            && fact_terms_match_exact(&fact.args, &fa.terms)
+                            && *node.name == **time_var
+                            && node.idx == *time_idx as u64
                     }
                     _ => false,
                 })
@@ -1036,16 +945,12 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             // ProofMethod.hs:374: `guard (goal \`M.member\` sGoals)`).
             //
             // Our skeleton parser only captures each alt's structural
-            // SIGNATURE (top-level shape — see `DisjAlt`).  We pick
-            // the unique open `Goal::Disj(d)` whose `d.0` list has the
-            // same length AND the same per-alt signature as the
-            // skeleton's `alts`.  Empirically at every replay point in
-            // the lemma corpus, at most one open Disj matches that
-            // signature (the skeleton-text and runtime-Goal come from
-            // the same lemma formula).  See HS Proof.hs:61.
+            // SIGNATURE (top-level shape — see `DisjAlt`), so the first
+            // filter keeps every open `Goal::Disj(d)` whose `d.0` list has
+            // the same length AND the same per-alt signature as the
+            // skeleton's `alts`.  See HS Proof.hs:61.
             //
-            // HS-faithful disambiguation when multiple Disj goals
-            // share the same alt shape signature: the
+            // That signature is not always unique: the
             // insertImpliedFormulas pass at a single IH can produce
             // multiple alpha-distinct disjunctions (one per matching
             // action-tuple), all with the same 5-NonQuant shape.  HS
@@ -1062,14 +967,8 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             // picks (t1,t2), which propagates `last_atom = #t1`
             // instead of `last_atom = #t2`, triggering a false-positive
             // Cyclic contradiction downstream.
-            let shape_matches: Vec<&Goal> = sys
-                .goals
-                .iter()
-                .filter(|(_, st)| !st.solved)
-                .filter_map(|(g, _)| match g {
-                    Goal::Disj(d) if disj_alts_match(alts, &d.0) => Some(g),
-                    _ => None,
-                })
+            let shape_matches: Vec<&Goal> = open_goals(sys)
+                .filter(|g| matches!(g, Goal::Disj(d) if disj_alts_match(alts, &d.0)))
                 .collect();
             if shape_matches.is_empty() {
                 return None;
@@ -1152,85 +1051,54 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             // concrete LVar identities — same skeleton-vs-runtime LVar
             // suffix-idx mismatch as Action/Premise.  We match by var
             // ROOT name + conc/prem idx, ignoring suffix idxs.
-            let want_src = src_var;
-            let want_tgt = tgt_var;
-            let want_c = *conc_idx as usize;
-            let want_p = *prem_idx as usize;
-            let matches: Vec<&Goal> = sys
-                .goals
-                .iter()
-                .filter(|(_, st)| !st.solved)
-                .filter_map(|(g, _)| match g {
+            open_goals(sys)
+                .find(|g| match g {
                     Goal::Chain((src, c), (tgt, p)) => {
-                        if *src.name == **want_src
-                            && *tgt.name == **want_tgt
-                            && c.0 == want_c
-                            && p.0 == want_p
-                        {
-                            Some(g)
-                        } else {
-                            None
-                        }
+                        *src.name == **src_var
+                            && *tgt.name == **tgt_var
+                            && c.0 == *conc_idx as usize
+                            && p.0 == *prem_idx as usize
                     }
-                    _ => None,
+                    _ => false,
                 })
-                .collect();
-            matches.first().copied().cloned()
+                .cloned()
         }
         GoalSpec::Subterm { small_raw, big_raw } => {
             // HS `stSplitGoal` (Proof.hs:63-66) parses to
             // `SubtermG (small, big)` over LNTerm and dispatches via
-            // structural Map lookup in `sys.goals` (HS ProofMethod.hs:348-459, see line 374).
+            // structural Map lookup in `sys.goals` (HS ProofMethod.hs:253-274, see line 258).
             // We compare by canonical pretty-printed text — see HS
             // `prettyGoal (SubtermG (l,r))` at Constraints.hs:281-282
             // which prints `prettyLNTerm l ⊏ prettyLNTerm r`.  Pretty
             // representations are stable across the skeleton-vs-runtime
             // boundary for ground terms; for terms containing free
             // LVars the skeleton-text and runtime indices may diverge,
-            // so as a fallback we also accept a unique-arity match
-            // (when only ONE open Subterm exists).
+            // so as a fallback we accept the sole open Subterm goal when
+            // there is exactly one.
             use tamarin_term::pretty::pretty_lnterm;
             let want_small = canonicalise_term_text(small_raw);
             let want_big = canonicalise_term_text(big_raw);
-            let matches: Vec<&Goal> = sys
-                .goals
-                .iter()
-                .filter(|(_, st)| !st.solved)
-                .filter_map(|(g, _)| match g {
+            let by_text = open_goals(sys)
+                .find(|g| match g {
                     Goal::Subterm((l, r)) => {
-                        let l_s = canonicalise_term_text(&pretty_lnterm(l));
-                        let r_s = canonicalise_term_text(&pretty_lnterm(r));
-                        if l_s == want_small && r_s == want_big {
-                            Some(g)
-                        } else {
-                            None
-                        }
+                        canonicalise_term_text(&pretty_lnterm(l)) == want_small
+                            && canonicalise_term_text(&pretty_lnterm(r)) == want_big
                     }
-                    _ => None,
+                    _ => false,
                 })
-                .collect();
-            if let Some(g) = matches.first() {
-                return Some((*g).clone());
+                .cloned();
+            if by_text.is_some() {
+                return by_text;
             }
             // Fallback: if exactly one open Subterm goal exists, use
             // it (the skeleton text uniquely identifies it by being
             // the only Subterm in `sys.goals`).
-            let only_subterm: Vec<&Goal> = sys
-                .goals
-                .iter()
-                .filter(|(_, st)| !st.solved)
-                .filter_map(|(g, _)| {
-                    if matches!(g, Goal::Subterm(_)) {
-                        Some(g)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            if only_subterm.len() == 1 {
-                return Some(only_subterm[0].clone());
+            let mut subterms = open_goals(sys).filter(|g| matches!(g, Goal::Subterm(_)));
+            let first = subterms.next();
+            match subterms.next() {
+                None => first.cloned(),
+                Some(_) => None,
             }
-            None
         }
         GoalSpec::Split { split_id } => {
             // HS `eqSplitGoal` (Proof.hs:70-72) parses to
@@ -1239,17 +1107,9 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             // `EquationStore::add_disj`), so an exact id-match is
             // correct here — no variable-renaming concerns.
             let want = crate::constraint::constraints::SplitId(*split_id);
-            for (g, st) in sys.goals.iter() {
-                if st.solved {
-                    continue;
-                }
-                if let Goal::Split(id) = g {
-                    if *id == want {
-                        return Some(g.clone());
-                    }
-                }
-            }
-            None
+            open_goals(sys)
+                .find(|g| matches!(g, Goal::Split(id) if *id == want))
+                .cloned()
         }
         GoalSpec::Raw(_) => None,
     }
