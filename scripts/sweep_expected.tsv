@@ -22,12 +22,28 @@
 #                          both sides exhaust the 600s retry cap.
 #   hs-timeout             HS cannot load the file inside the cap while RS
 #                          completes (HS-side capacity, rc hs=124).
-#   replay-empty-json      csf26-ac stored-proof replay diverges to sorry
-#                          (#874 numbering/eq-store class) so --output-json
-#                          emits the empty 20-byte document vs HS's graphs.
+#   (replay-empty-json is RETIRED as a ledger class. Its 22 csf26-ac entries
+#    were attributed to the #874 numbering/eq-store class, but the cause was
+#    local: the replay matcher re-parsed rendered proof text with no AC
+#    signature and printed 0-arity symbols as `f()`, so the stored step failed
+#    its membership check and replay fell through to sorry. Fixed; all 22 came
+#    back byte-identical. Do not re-file a replay divergence under #874 without
+#    first checking that the goal text round-trips.)
 #   sapic-export-echo      sapic/export corner files whose -m echo/rc diverged
 #                          before this campaign (PRE-binary evidence).
-#   stored-proof-echo      pre-existing stored-proof echo divergence.
+#   stored-proof-echo      stored-proof echo divergence. Two distinct causes
+#                          remain. (a) pe/module Yubikey rows: AC multiset
+#                          arguments are echoed in a different order. (b) the
+#                          four json UM_three_pass rows are an UPSTREAM bug in
+#                          which the port is the more correct side — HS's
+#                          prettyTerm prints a user-AC application unparenthesised
+#                          under `^`, but its own parser binds AC tighter than
+#                          exponentiation, so HS misreads the proof text it just
+#                          wrote and emits "invalid proof step encountered"
+#                          against itself. RS round-trips faithfully and applies
+#                          the step. A bug-compatible RS was built and reverted:
+#                          it regressed `counter` and ake/dh/UM_three_pass and
+#                          needs sort-inference changes under the pretty gate.
 #   (stderr-saturating-sources is RETIRED as a ledger class: sweep_common.sh's
 #    `nerr` filters those lines on both sides. The old doc read:)
 #   stderr-saturating-sources  HS prints "[Saturating Sources] ..." progress
@@ -54,6 +70,18 @@
 #                          of that trace — the string appears nowhere in
 #                          crates/ — so it is a pre-existing gap, not a flag
 #                          effect: HS emits the identical count on a plain run.
+#                          BLOCKED, not merely unwritten: a prototype renderer
+#                          (~/tamarin-simplifier-trace-wip.patch) reproduces the
+#                          report BYTE-IDENTICALLY on encwrapdecunwrap-nolocks,
+#                          but the trace exposes solver-internal divergences the
+#                          proof output hides — RS's simplify loop continues on
+#                          `Reduction::changed` where HS uses `mconcat [c1..c11]`
+#                          (782 OTP iterations differ), enforce_edge_uniqueness
+#                          reports Changed far longer than HS (NSL: 429 vs 66
+#                          blocks), and the trace renders ~10x slower than the
+#                          run it instruments. Closing it means changing solver
+#                          iteration counts corpus-wide; each step needs its own
+#                          full-corpus gate.
 #   hs-parse-rejects       HS's parser rejects the file ("Invalid pattern")
 #                          where RS parses it — permissive divergence, so rc
 #                          and stderr differ in every module.
@@ -136,28 +164,6 @@ module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-fakepcsbranch.spthy
 #
 # json sweep
 json	case-studies-regression/accountability/csf21-acc-unbounded/previous/whodunit_analyzed.spthy	capacity	both sides hit the cap
-json	case-studies-regression/csf26-ac/fast/chaum_offline_anonymity_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/csf26-ac/fast/CRxor_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/csf26-ac/fast/alethea_votingphase_malS_abstain_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/csf26-ac/fast/Joux_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/csf26-ac/fast/Joux_EphkRev_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/csf26-ac/fast/KCL07_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/csf26-ac/fast/NSLPK3xor_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/csf26-ac/fast/DHKEA_NAXOS_C_eCK_PFS_partially_matching_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/csf26-ac/fast/DHKEA_NAXOS_C_eCK_PFS_keyreg_partially_matching_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/csf26-ac/fast/TAK1_eCK_like_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/csf26-ac/fast/Yubikey_multiset_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/fast-tests/csf26-ac/fast/chaum_offline_anonymity_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/fast-tests/csf26-ac/fast/CRxor_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/fast-tests/csf26-ac/fast/alethea_votingphase_malS_abstain_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/fast-tests/csf26-ac/fast/Joux_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/fast-tests/csf26-ac/fast/Joux_EphkRev_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/fast-tests/csf26-ac/fast/KCL07_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/fast-tests/csf26-ac/fast/NSLPK3xor_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/fast-tests/csf26-ac/fast/DHKEA_NAXOS_C_eCK_PFS_partially_matching_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/fast-tests/csf26-ac/fast/DHKEA_NAXOS_C_eCK_PFS_keyreg_partially_matching_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/fast-tests/csf26-ac/fast/TAK1_eCK_like_analyzed.spthy	replay-empty-json	-
-json	case-studies-regression/fast-tests/csf26-ac/fast/Yubikey_multiset_analyzed.spthy	replay-empty-json	-
 json	case-studies-regression/fast-tests/sapic/fast/feature-secret-channel/U2F_analyzed.spthy	hs-timeout	rs completes
 json	case-studies-regression/sapic/fast/feature-secret-channel/U2F_analyzed.spthy	hs-timeout	rs completes
 json	case-studies-regression/sapic/slow/encWrapDecUnwrap/encwrapdecunwrap_analyzed.spthy	capacity	rs=134
@@ -187,18 +193,11 @@ module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-unfairness-A.spthy	
 # a plain run (the Aug-6 build stubs --output-json, so it cannot be compared
 # through the flag path itself).
 json	case-studies-regression/accountability/csf21-acc-unbounded/previous/ct_analyzed.spthy	stderr-simplifier-trace	HS traces the simplifier from iteration 11; RS has no port of it		stderr
-json	case-studies-regression/ake/dh/UM_three_pass_analyzed.spthy	stored-proof-echo	stored-proof replay: HS marks a step "invalid proof step encountered" and AC multiset args render differently		stdout
-json	case-studies-regression/csf26-ac/fast/counter_analyzed.spthy	stored-proof-echo	stored-proof replay: HS marks a step "invalid proof step encountered" and AC multiset args render differently		stdout
 json	case-studies-regression/csf26-ac/fast/UM_three_pass_combined_fixed_analyzed.spthy	stored-proof-echo	stored-proof replay: HS marks a step "invalid proof step encountered" and AC multiset args render differently		stdout
 json	case-studies-regression/csf26-ac/fast/UM_three_pass_analyzed.spthy	stored-proof-echo	stored-proof replay: HS marks a step "invalid proof step encountered" and AC multiset args render differently		stdout
-json	case-studies-regression/csf26-ac/fast/TAK1_analyzed.spthy	stored-proof-echo	stored-proof replay: HS marks a step "invalid proof step encountered" and AC multiset args render differently		stdout
-json	case-studies-regression/fast-tests/csf26-ac/fast/counter_analyzed.spthy	stored-proof-echo	stored-proof replay: HS marks a step "invalid proof step encountered" and AC multiset args render differently		stdout
 json	case-studies-regression/fast-tests/csf26-ac/fast/UM_three_pass_combined_fixed_analyzed.spthy	stored-proof-echo	stored-proof replay: HS marks a step "invalid proof step encountered" and AC multiset args render differently		stdout
 json	case-studies-regression/fast-tests/csf26-ac/fast/UM_three_pass_analyzed.spthy	stored-proof-echo	stored-proof replay: HS marks a step "invalid proof step encountered" and AC multiset args render differently		stdout
-json	case-studies-regression/fast-tests/csf26-ac/fast/TAK1_analyzed.spthy	stored-proof-echo	stored-proof replay: HS marks a step "invalid proof step encountered" and AC multiset args render differently		stdout
-json	case-studies-regression/fast-tests/related_work/YubiSecure_KS_STM12/Yubikey_analyzed.spthy	stored-proof-echo	stored-proof replay: HS marks a step "invalid proof step encountered" and AC multiset args render differently		stdout
 json	case-studies-regression/fast-tests/sapic/fast/feature-locations/OTP_analyzed.spthy	stderr-simplifier-trace	HS traces the simplifier from iteration 11; RS has no port of it		stderr
-json	case-studies-regression/related_work/YubiSecure_KS_STM12/Yubikey_analyzed.spthy	stored-proof-echo	stored-proof replay: HS marks a step "invalid proof step encountered" and AC multiset args render differently		stdout
 json	case-studies-regression/sapic/fast/feature-locations/OTP_analyzed.spthy	stderr-simplifier-trace	HS traces the simplifier from iteration 11; RS has no port of it		stderr
 json	case-studies-regression/sapic/slow/encWrapDecUnwrap/encwrapdecunwrap-nolocks_analyzed.spthy	stderr-simplifier-trace	HS traces the simplifier from iteration 11; RS has no port of it		stderr
 json	case-studies-regression/sapic/slow/NSL/nsl-no_as-untagged_analyzed.spthy	stderr-simplifier-trace	HS traces the simplifier from iteration 11; RS has no port of it		stderr

@@ -4002,9 +4002,14 @@ fn raw_goal_to_doc(raw: &str) -> crate::pretty_hpj::Doc {
         },
         // `prettyGoal (SubtermG (l,r)) = prettyLNTerm l <-> "⊏" <-> prettyLNTerm r`.
         GoalSpec::Subterm { small_raw, big_raw } => {
+            // The theory's `[AC]` symbol names, so the re-parse reads a user
+            // AC symbol's infix spelling (`x add y`) — HS's `acterm` takes
+            // the same set from the signature in parser state
+            // (Theory/Text/Parser/Term.hs:165-174).
+            let ac_names = crate::elaborate::current_user_ac_names();
             match (
-                parse_term_str(small_raw.trim()),
-                parse_term_str(big_raw.trim()),
+                parse_term_str(small_raw.trim(), &ac_names),
+                parse_term_str(big_raw.trim(), &ac_names),
             ) {
                 (Ok(l), Ok(r)) => pf::term_doc(&l)
                     .beside_sp(crate::pretty_hpj::operator_("\u{228F}"))
@@ -4056,12 +4061,16 @@ fn raw_goal_to_doc(raw: &str) -> crate::pretty_hpj::Doc {
 fn reparse_fact_doc(fact: &tamarin_parser::ast::Fact) -> crate::pretty_hpj::Doc {
     use tamarin_parser::ast::{Fact, Term};
     use tamarin_parser::parser::parse_term_str;
+    // The theory's `[AC]` symbol names, so the re-parse reads a user AC
+    // symbol's infix spelling (`x add y`) — HS's `acterm` takes the same set
+    // from the signature in parser state (Theory/Text/Parser/Term.hs:165-174).
+    let ac_names = crate::elaborate::current_user_ac_names();
     let args: Vec<Term> = fact
         .args
         .iter()
         .map(|a| match a {
             // `build_fact` stored the raw arg text as a `Var` name; re-parse it.
-            Term::Var(v) => parse_term_str(v.name.trim()).unwrap_or_else(|_| a.clone()),
+            Term::Var(v) => parse_term_str(v.name.trim(), &ac_names).unwrap_or_else(|_| a.clone()),
             other => other.clone(),
         })
         .collect();

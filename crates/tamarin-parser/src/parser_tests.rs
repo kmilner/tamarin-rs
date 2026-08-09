@@ -886,14 +886,17 @@ fn type_p_only_capital_any_is_default() {
 // 1.13.0: `A(<>)` is a parse error; `A(<x>)` renders `A( x )`.
 #[test]
 fn empty_tuple_is_error_singleton_collapses() {
-    assert!(parse_term_str("<>").is_err(), "<> must be a parse error");
+    assert!(
+        parse_term_str("<>", &[]).is_err(),
+        "<> must be a parse error"
+    );
     // Singleton tuple collapses to the inner term.
-    match parse_term_str("<x>").unwrap() {
+    match parse_term_str("<x>", &[]).unwrap() {
         Term::Var(v) => assert_eq!(v.name, "x"),
         other => panic!("expected singleton to collapse to Var, got {:?}", other),
     }
     // Two-element tuple is a Pair.
-    match parse_term_str("<x, y>").unwrap() {
+    match parse_term_str("<x, y>", &[]).unwrap() {
         Term::Pair(items) => assert_eq!(items.len(), 2),
         other => panic!("expected Pair, got {:?}", other),
     }

@@ -5906,8 +5906,21 @@ pub fn parse_formula_str(s: &str) -> Result<Formula, ParseError> {
 /// the runtime goal terms.  All algebraic operators are enabled at parse
 /// time (see [`Parser::new`]); semantic gating is irrelevant here because
 /// we only need the operator/function shape.
-pub fn parse_term_str(s: &str) -> Result<Term, ParseError> {
+///
+/// `ac_fun_syms` are the theory's user-declared `[AC]` symbol names, which
+/// [`Parser::acterm`] needs to recognise their INFIX spelling (`x add y`
+/// for `functions: add/2 [AC]`).  HS reads the same set from the parser
+/// state's signature (`stACFunSyms`, Theory/Text/Parser/Term.hs:165-174),
+/// so a caller with no signature in hand passes an empty slice and gets the
+/// builtin-operator grammar only.
+pub fn parse_term_str(s: &str, ac_fun_syms: &[String]) -> Result<Term, ParseError> {
     let mut p = Parser::new(s, &[], false);
+    // `acterm` nests one `chainl1` level per symbol in this list, in list
+    // order — HS's is `S.toList (stACFunSyms sig)`, i.e. ascending by name,
+    // which the theory-parsing path reproduces by sorting on insert.
+    p.ac_fun_syms = ac_fun_syms.to_vec();
+    p.ac_fun_syms.sort();
+    p.ac_fun_syms.dedup();
     // Rendered term text carries applications of symbols this fresh parser
     // has no declarations for — accept them structurally instead of
     // resolving through `lookup_arity`.

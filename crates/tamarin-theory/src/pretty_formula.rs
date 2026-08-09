@@ -2541,6 +2541,11 @@ fn pp_gterm(t: &crate::guarded::GTerm, scope: &[Vec<Bind>], out: &mut String) {
         GTerm::App(name, args) if &**name == "pair" && args.len() == 2 => {
             pp_pair_gterm(t, scope, out)
         }
+        // A 0-arity symbol renders BARE, without an argument list: HS
+        // `FApp (NoEq (f, _)) [] -> text (BC.unpack f)` (Term/Term.hs:314)
+        // precedes the `ppFun` arm at line 315.  Mirrors `gterm_to_doc`'s
+        // `App` arm on the Doc path.
+        GTerm::App(name, args) if args.is_empty() => out.push_str(name),
         GTerm::App(name, args) => {
             out.push_str(name);
             out.push('(');

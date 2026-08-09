@@ -921,6 +921,16 @@ pub(crate) fn is_user_nullary_fun(name: &str) -> bool {
     USER_FUNS.with(|c| c.borrow().nullary.contains(name))
 }
 
+/// The user-declared `[AC]` symbol names of the current elaboration,
+/// ascending by name — HS's `S.toList (stACFunSyms sig)`
+/// (Term/Maude/Signature.hs:98).  Callers that re-parse rendered term text
+/// hand this to `parse_term_str` so `acterm`
+/// (Theory/Text/Parser/Term.hs:165-174) recognises the INFIX spelling of
+/// those symbols; without it `(z add h(y))` is a parse error.
+pub(crate) fn current_user_ac_names() -> Vec<String> {
+    USER_FUNS.with(|c| c.borrow().ac.keys().cloned().collect())
+}
+
 /// Join of the `[NDC]` and `[NDC-diff]` attributes (HS `function`'s `joinNDC`).
 fn ndc_state_of(ndc: bool, ndc_diff: bool) -> NdcState {
     let a = if ndc {

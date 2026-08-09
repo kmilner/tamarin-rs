@@ -789,8 +789,11 @@ fn fact_terms_match_exact(
     if parsed_args.len() != runtime_terms.len() {
         return false;
     }
+    // The theory's `[AC]` symbol names, read once for the whole fact: the
+    // re-parse needs them to read a user AC symbol's infix spelling.
+    let ac_names = crate::elaborate::current_user_ac_names();
     parsed_args.iter().zip(runtime_terms.iter()).all(|(p, r)| {
-        match parse_arg_to_lnterm(p) {
+        match parse_arg_to_lnterm(p, &ac_names) {
             // Canonical re-parse equals the runtime term exactly (M.member).
             Some(t) => &t == r,
             // Unparseable / unconvertible arg: we cannot establish exact
@@ -807,8 +810,11 @@ fn fact_terms_match_exact(
 /// `Term::Var` name shim; `term_to_lnterm` (elaborate.rs) is HS's
 /// `fact llit` term construction (it reads the live elaboration context for
 /// user function symbols, which is in scope during proof-search replay).
-fn parse_arg_to_lnterm(arg: &tamarin_parser::ast::Term) -> Option<tamarin_term::lterm::LNTerm> {
-    let ast = parsed_term_of_arg(arg)?;
+fn parse_arg_to_lnterm(
+    arg: &tamarin_parser::ast::Term,
+    ac_names: &[String],
+) -> Option<tamarin_term::lterm::LNTerm> {
+    let ast = parsed_term_of_arg(arg, ac_names)?;
     crate::elaborate::term_to_lnterm(&ast)
 }
 
@@ -816,10 +822,18 @@ fn parse_arg_to_lnterm(arg: &tamarin_parser::ast::Term) -> Option<tamarin_term::
 /// skeleton parser stores each arg as a `Term::Var` whose `name` holds
 /// the raw surface text (see `build_fact`); re-parse that text.  If the
 /// arg is already structured (future-proofing), return it directly.
-fn parsed_term_of_arg(arg: &tamarin_parser::ast::Term) -> Option<tamarin_parser::ast::Term> {
+///
+/// `ac_names` are the theory's user-declared `[AC]` symbols, which the
+/// re-parse needs to read their infix spelling (`(z add h(y))` for
+/// `functions: add/2 [AC]`) — HS's `acterm` takes the same set from the
+/// parser state's signature (Theory/Text/Parser/Term.hs:165-174).
+fn parsed_term_of_arg(
+    arg: &tamarin_parser::ast::Term,
+    ac_names: &[String],
+) -> Option<tamarin_parser::ast::Term> {
     use tamarin_parser::ast::Term as PTerm;
     match arg {
-        PTerm::Var(v) => tamarin_parser::parser::parse_term_str(&v.name).ok(),
+        PTerm::Var(v) => tamarin_parser::parser::parse_term_str(&v.name, ac_names).ok(),
         other => Some(other.clone()),
     }
 }
@@ -1057,65 +1071,72 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
                     _ => None,
                 })
                 .collect();
-            if shape_matches.len() == 1 {
-                return Some(shape_matches[0].clone());
+            if shape_matches.is_empty() {
+                return None;
             }
-            // Ambiguous shape — try alt-text tie-breaker.  Render each
-            // candidate disj's alts via `pretty_disj_alts` (a strict
-            // analogue of HS's `prettyGuarded`) and compare against
-            // skel `alt_texts`.  Pick the candidate whose rendered
-            // alts equal the skeleton's text alts after the same
-            // normalization the parser applied (whitespace + `#`
-            // stripped).
-            if !shape_matches.is_empty() {
-                let dbg = tamarin_utils::env_gate!("TAM_RS_DBG_MATCH_GOAL_DISJ");
-                if dbg {
-                    let path = crate::constraint::solver::trace::case_path_string();
-                    eprintln!(
-                        "[MATCH_GOAL_DISJ] path={} shape_matches={} skel.alt_texts={:?}",
-                        path,
-                        shape_matches.len(),
-                        alt_texts
-                    );
-                }
-                if !alt_texts.iter().all(|s| s.is_empty()) {
-                    let want: Vec<String> = alt_texts.clone();
-                    let mut text_matches: Vec<&Goal> = shape_matches
+            // Render each candidate disj's alts via `pretty_disj_alt` (a
+            // strict analogue of HS's `prettyGuarded`) and compare against
+            // skel `alt_texts`, both under the same normalization the parser
+            // applied (whitespace + `#` stripped).  Score each candidate by
+            // HOW MANY alts render exactly as stored and keep the best
+            // (ties → source order).
+            //
+            // Scoring rather than all-or-nothing because the stored text
+            // need not be in the runtime's normal form: HS re-parses each
+            // alt into a `Guarded` (Proof.hs:39-72, see line 61) and the
+            // parse normalizes — `gconj`'s `nub` collapses a repeated
+            // conjunct (Guarded.hs:415-423), so a stored
+            // `… ⇒ (∀ #l. C @ #l ⇒ ⊥) ∧ (∀ #l. C @ #l ⇒ ⊥)` matches a
+            // runtime alt printing the conjunct once (ake/dh/UM_three_pass,
+            // `case_2/…/R_Activate_case_1`).  An all-or-nothing test rejects
+            // that candidate and falls through to source order, binding a
+            // DIFFERENT open disj and diverging.
+            let dbg = tamarin_utils::env_gate!("TAM_RS_DBG_MATCH_GOAL_DISJ");
+            if dbg {
+                let path = crate::constraint::solver::trace::case_path_string();
+                eprintln!(
+                    "[MATCH_GOAL_DISJ] path={} shape_matches={} skel.alt_texts={:?}",
+                    path,
+                    shape_matches.len(),
+                    alt_texts
+                );
+            }
+            if !alt_texts.iter().all(|s| s.is_empty()) {
+                let mut best: Option<(usize, &Goal)> = None;
+                for g in shape_matches.iter().copied() {
+                    let Goal::Disj(d) = g else { continue };
+                    let runtime_texts: Vec<String> =
+                        d.0.iter()
+                            .map(|a| normalize_disj_alt_text_for_match(&pretty_disj_alt(a)))
+                            .collect();
+                    // `disj_alts_match` already equated the lengths.
+                    let score = runtime_texts
                         .iter()
-                        .copied()
-                        .filter(|g| {
-                            if let Goal::Disj(d) = g {
-                                let runtime_texts: Vec<String> = d
-                                    .0
-                                    .iter()
-                                    .map(|a| normalize_disj_alt_text_for_match(&pretty_disj_alt(a)))
-                                    .collect();
-                                if dbg {
-                                    eprintln!(
-                                        "[MATCH_GOAL_DISJ]   runtime_alts={:?} match={}",
-                                        runtime_texts,
-                                        runtime_texts == want
-                                    );
-                                }
-                                runtime_texts == want
-                            } else {
-                                false
-                            }
-                        })
-                        .collect();
-                    if text_matches.len() == 1 {
-                        return Some(text_matches.remove(0).clone());
+                        .zip(alt_texts.iter())
+                        .filter(|(r, w)| r == w)
+                        .count();
+                    if dbg {
+                        eprintln!(
+                            "[MATCH_GOAL_DISJ]   runtime_alts={:?} score={}/{}",
+                            runtime_texts,
+                            score,
+                            alt_texts.len()
+                        );
                     }
-                    if !text_matches.is_empty() {
-                        return Some(text_matches[0].clone());
+                    if !matches!(best, Some((b, _)) if score <= b) {
+                        best = Some((score, g));
                     }
                 }
-                // No text match (or no text info) — fall back to source
-                // order (creation order in `sGoals`).  Mirrors the
-                // Action/Premise ambiguity-resolution policy above.
-                return Some(shape_matches[0].clone());
+                if let Some((score, g)) = best {
+                    if score > 0 {
+                        return Some(g.clone());
+                    }
+                }
             }
-            None
+            // No alt rendered as stored (or no text info) — fall back to
+            // source order (creation order in `sGoals`).  Mirrors the
+            // Action/Premise ambiguity-resolution policy above.
+            Some(shape_matches[0].clone())
         }
         GoalSpec::Chain {
             src_var,
