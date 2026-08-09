@@ -111,16 +111,20 @@ fn main() {
         // comparison semantics as tests/wellformedness.rs: titles compare
         // modulo trailing space (some HS titles carry a source-literal
         // trailing space that comma-separated expected.txt cannot hold),
-        // and "Formula terms" (HS `checkTerms`) is excluded — it needs the
-        // elaborated MaudeSig, so it lives in `tamarin_theory::check_terms`
-        // post-elaboration rather than the parser-level `check_theory`;
-        // step 3 still verifies it against the tamarin binary.
+        // and the two checks that need the elaborated MaudeSig are excluded,
+        // because they live post-elaboration in `tamarin-theory` rather than
+        // in the parser-level `check_theory` — "Formula terms" (HS
+        // `checkTerms`, `tamarin_theory::check_terms`) and "Multiplication
+        // restriction of rules" (HS `multRestrictedReport`,
+        // `tamarin_theory::mult_restricted`).  Step 3 still verifies both
+        // against the tamarin binary.
         let rust_topics: BTreeSet<String> = wf::topics(&wf::check_theory(&thy))
             .into_iter()
             .map(|s| s.trim_end().to_string())
             .collect();
         let mut rust_expected = expected_topics.clone();
         rust_expected.remove("Formula terms");
+        rust_expected.remove("Multiplication restriction of rules");
         if rust_expected.is_subset(&rust_topics) {
             rust_wf_match += 1;
         } else {

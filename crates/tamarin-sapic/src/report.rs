@@ -265,7 +265,6 @@ fn subst(loc: &Option<SapicTerm>, t: &SapicTerm) -> SapicTerm {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tamarin_theory::sapic::ProcessParsedAnnotation;
 
     fn null() -> AnnProc {
         Process::Null(ProcessAnnotation::default())
@@ -320,8 +319,4 @@ mod tests {
             other => panic!("expected rep('c','loc'), got {other:?}"),
         }
     }
-
-    // Force the import (annotation type used in the AnnProc alias).
-    #[allow(dead_code)]
-    fn _force_annotation(_: ProcessParsedAnnotation) {}
 }

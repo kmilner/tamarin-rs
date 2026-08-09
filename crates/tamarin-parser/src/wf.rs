@@ -555,30 +555,13 @@ fn theory_lemmas(thy: &Theory) -> Vec<&Lemma> {
         .collect()
 }
 
-/// Iterate all facts in a rule (premises ∪ actions ∪ conclusions),
-/// each paired with which side it appeared on. Callers currently discard
-/// the side tag; it is retained for callers that need to distinguish sides.
-// Intentionally retained: faithful HS port; no caller reads the tag yet.
-#[allow(dead_code)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum FactSide {
-    Lhs,
-    Acts,
-    Rhs,
-}
-
-fn rule_facts(r: &Rule) -> Vec<(FactSide, &Fact)> {
-    let mut out = Vec::new();
-    for f in &r.premises {
-        out.push((FactSide::Lhs, f));
-    }
-    for f in &r.actions {
-        out.push((FactSide::Acts, f));
-    }
-    for f in &r.conclusions {
-        out.push((FactSide::Rhs, f));
-    }
-    out
+/// Every fact of a rule in HS `ruleFacts`' order — `concatMap (`get` ru)
+/// [rPrems, rActs, rConcs]` (Wellformedness.hs:585-587).
+fn rule_facts(r: &Rule) -> impl Iterator<Item = &Fact> {
+    r.premises
+        .iter()
+        .chain(r.actions.iter())
+        .chain(r.conclusions.iter())
 }
 
 /// Recursively collect every variable appearing in a term.
@@ -1415,7 +1398,7 @@ fn is_builtin_fact_name(name: &str) -> bool {
 pub fn reserved_report(thy: &Theory) -> WfReport {
     let mut out = Vec::new();
     for r in theory_rules(thy) {
-        for (_, f) in rule_facts(r) {
+        for f in rule_facts(r) {
             // Only protocol facts (non-builtin) trigger this check.
             if is_builtin_fact_name(&f.name) {
                 continue;
@@ -1528,7 +1511,7 @@ pub fn reserved_prefix_report(thy: &Theory) -> WfReport {
         return out;
     }
     for r in theory_rules(thy) {
-        for (_, f) in rule_facts(r) {
+        for f in rule_facts(r) {
             let lower = f.name.to_lowercase();
             if lower.starts_with("diffintr") || lower.starts_with("diffproto") {
                 out.push(WfError::new(
@@ -1652,7 +1635,7 @@ fn collect_fact_observations(thy: &Theory) -> Vec<FactObservation> {
     // rules and never introduce a new arity/cap clash, so we omit them.)
     let mut out = Vec::new();
     for r in theory_rules(thy) {
-        for (_, f) in rule_facts(r) {
+        for f in rule_facts(r) {
             // HS `theoryFacts` groups facts by `factTagName` with no builtin
             // filter; a user-written `K(..)` is a `ProtoFact "K"`
             // (`isKLogFact`/`isProtoFact`) whose tag-name is "K", so it MUST be

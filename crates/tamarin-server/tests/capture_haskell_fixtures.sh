@@ -19,10 +19,9 @@
 #
 # Re-run this whenever Haskell behaviour changes.  The Rust port tests in
 # `tests/routes_*.rs` compare against these captures several ways: byte
-# equality for the error pages and the JSON graph, label equality for the
-# dot graphs (the port's dot emitter writes the same graph in another
-# dialect), and JSON envelope key set for the route captures whose payload
-# is not yet byte-stable.
+# equality for the error pages, the JSON graph and the dot graphs (there is
+# one DOT serializer, `showDot`, on both sides), and JSON envelope key set for
+# the route captures whose payload is not yet byte-stable.
 
 set -euo pipefail
 
@@ -173,9 +172,9 @@ fetch not_found_huge_idx.html   "/thy/trace/99999999999999999999/overview/help"
 # ---------------- The dot routes' theory-path dispatch ----------------
 # `/graph` (`imgThyPath`) and `/interactive-graph-def` (`dotGraphString`) draw
 # source cases and proof nodes; every other theory path is their catch-all
-# `error`.  The dot captures are the graph itself, asserted by label in
-# `routes_graph.rs` (the port's dot emitter writes the same graph in a
-# different dialect).  Their out-of-range `cases/<i>/<j>` 500s are captured by
+# `error`.  The dot captures are the graph itself, asserted byte for byte in
+# `routes_graph.rs::interactive_graph_def_renders_source_cases`.  Their
+# out-of-range `cases/<i>/<j>` 500s are captured by
 # nothing on purpose — the port answers those with `notFound` (a deliberate
 # divergence, see `dot_routes_out_of_range_case_is_not_found`).
 fetch igd_cases_refined.dot     "/thy/trace/1/interactive-graph-def/cases/refined/1/1"

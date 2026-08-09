@@ -4,7 +4,7 @@
 
 //! The `System` sequent — the solver's working state.
 //!
-//! Port of `Theory.Constraint.System.System` (from the 1936-line
+//! Port of `Theory.Constraint.System.System` (from the 1939-line
 //! `Theory/Constraint/System.hs`). The fields are live solver state:
 //! the equation/subterm stores, source-kind/side annotations,
 //! conflation-soundness flags and the goal/node/edge collections are

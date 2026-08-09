@@ -1173,9 +1173,9 @@ impl<'ctx> Reduction<'ctx> {
         // 4. Less atoms.
         //
         // HS-faithful: HS's `substLessAtoms = substPart sLessAtoms`
-        // (Reduction.hs:721-740, see line 728) applies the eq-store subst to
+        // (Reduction.hs:598-607, see line 602) applies the eq-store subst to
         // `sLessAtoms :: Set LessAtom` via the `Apply s (S.Set a)`
-        // instance (`SubstVFree.hs:345-346`): `S.map (apply subst)`.
+        // instance (`SubstVFree.hs:343-344`): `S.map (apply subst)`.
         // `S.map` rebuilds the set from the post-subst image, which
         // INHERENTLY DEDUPES — two distinct pre-subst atoms whose
         // images collapse to the same `(smaller, larger, reason)`

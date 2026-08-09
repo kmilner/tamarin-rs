@@ -31,7 +31,7 @@
 //!   `shiftFreeIndices` are unported over `ProtoFormula`; `ppLemma`
 //!   (Export.hs:1466) and `flattenNestedQuantifiers` (Export.hs:1517-1535)
 //!   need them.
-//! - About 1900 of Export.hs's lines (Export.hs:1705-2605 and :2922-3300) are
+//! - About 1300 of Export.hs's lines (Export.hs:1705-2605 and :2922-3300) are
 //!   Export-specific `LNFormula → LNFormula` transforms and shape classifiers
 //!   with no analogue in the port.
 //! - The typed OPEN theory is not retained as theory items:

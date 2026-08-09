@@ -35,7 +35,7 @@ See [License](#license) if you are interested in future prospects for redistribu
 ## Summary
 
 - **Parity:** byte-identical `--prove` output with the Haskell prover on a
-  431-file corpus — every theory under `tamarin-prover/examples/` that uses only ported
+  432-file corpus — every theory under `tamarin-prover/examples/` that uses only ported
   features. Stored proofs replay and validate across provers in both
   directions, and the interactive web UI agrees page-for-page with the
   Haskell server except for a small documented cosmetic residue, tracked by
@@ -112,7 +112,7 @@ The batch gate (`scripts/corpus_file_diff.sh`, corpus in
 
 | Result | Files | Meaning |
 |--------|------:|---------|
-| MATCH | 431 | Rust output byte-identical to Haskell |
+| MATCH | 432 | Rust output byte-identical to Haskell |
 | DIFF  |   0 | — |
 | SKIP  |   0 | — |
 
@@ -291,8 +291,9 @@ refined sources are computed once and shared across lemmas.
   `--partial-evaluation=summary|verbose` (abstract-interpretation
   fixpoint, refined-rule re-emission, stderr step trace),
   `--output-json`/`--output-dot` (solved-trace export; JSON is
-  byte-exact aeson-pretty, dot labels/framing byte-exact over the
-  web renderer's body dialect), `-m/--output-module` for
+  byte-exact aeson-pretty, DOT is byte-exact whole-document — the
+  `showDot` serializer the interactive graph routes also serve),
+  `-m/--output-module` for
   `spthy`/`spthytyped`/`msr` (translate-only mode), and the
   `interactive`-mode `--with-dot`/`--with-json`/`--no-compress`;
   exit codes and summary lines mirror HS.

@@ -1230,7 +1230,7 @@ impl ProofContext {
         // assumptions are applied.
         // No post-saturate drop pass — Haskell doesn't have one.
         // Haskell relies on saturate-time `contradictoryIf` inside
-        // `solveAllSafeGoals` (Sources.hs:118-133) + runtime
+        // `solveAllSafeGoals` (Sources.hs:174-178, see line 178) + runtime
         // contradiction detection during proof search.
         ctx
     }

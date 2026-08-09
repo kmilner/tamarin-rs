@@ -298,10 +298,7 @@ pub struct Options {
     /// Consulted by the load paths that run the once-per-theory
     /// `close_rule::check_close_intr_rule` pass.
     pub deduction_chain_check: bool,
-    /// Auto-generated `default` heuristic used to discharge proofs when
-    /// no explicit heuristic is supplied.
-    pub default_heuristic: Option<String>,
-    /// Lemmas the user requested to prove via `--prove=NAME`.
+    /// HS `_lemmasToProve`: lemma names the user requested via `--prove=NAME`.
     pub lemmas_to_prove: Vec<String>,
 }
 
@@ -316,7 +313,6 @@ impl Default for Options {
             asynchronous_channels: false,
             compress_events: false,
             deduction_chain_check: true,
-            default_heuristic: None,
             lemmas_to_prove: Vec::new(),
         }
     }
