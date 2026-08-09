@@ -4988,28 +4988,29 @@ impl<'a> Parser<'a> {
             let save_p = self.save();
             self.lx.bump();
             self.skip_ws();
-            if let Ok(f) = self.iff() {
-                if self.try_punct(")") {
-                    return Ok(f);
-                } else {
-                    // No other atom can consume a leading `(`, so this is an unterminated parenthesised formula.
-                    let (found, found_at) = self.found_token();
-                    return Err(self.err_unterminated_delimiter(
-                        "(",
-                        save_p,
-                        found_at,
-                        found,
-                        vec![")".to_string()],
-                    ));
-                }
-            }
-            self.restore(save_p);
+            // No other atom can consume a leading `(`, so this is an unterminated parenthesised formula.
+            let f = self.iff()?;
+            self.require_punct(")").map_err(|_| {
+                let (found, found_at) = self.found_token();
+                self.err_unterminated_delimiter("(", save_p, found_at, found, vec![")".to_string()])
+            })?;
+            return Ok(f);
         }
         // Atom: try last(t), action f@t, equality, less, subterm, smaller, predicate
         if self.try_kw("last") {
+            let opening_at = self.lx.pos();
             self.require_punct("(")?;
             let t = self.term(false)?;
-            self.require_punct(")")?;
+            self.require_punct(")").map_err(|_| {
+                let (found, found_at) = self.found_token();
+                self.err_unterminated_delimiter(
+                    "(",
+                    opening_at,
+                    found_at,
+                    found,
+                    vec![")".to_string()],
+                )
+            })?;
             return Ok(Formula::Atom(Atom::Last(t)));
         }
         // Try fact@t (action atom)
