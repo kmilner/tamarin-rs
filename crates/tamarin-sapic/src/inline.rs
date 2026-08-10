@@ -41,7 +41,9 @@ use tamarin_theory::sapic::{
     PlainProcess, Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm,
 };
 
-use crate::convert::{convert_action, convert_combinator, convert_term, ConvertError};
+use crate::convert::{
+    action as convert_action, combinator as convert_combinator, term as convert_term, ConvertError,
+};
 
 /// A substitution mapping SAPIC parameter variables to argument terms.
 type SapicSubst = Subst<Name, SapicLVar>;

@@ -11,12 +11,11 @@
 //!   1. `translateTermsReport` (Report.hs:100-101): `reportMapTerms subst
 //!      Nothing` — propagate the per-process `@location` annotation down the
 //!      tree and, where a `Just loc` is in scope, rewrite every `report(t)`
-//!      term to `rep(subst loc t, loc)` (`subst`, Report.hs:91-98).  With the
-//!      initial location `Nothing` this is the identity until a `(p)@loc`
-//!      annotation supplies a `Just loc`.  In practice the location does not
-//!      reach the term-level annotation `reportMapTerms` reads, so `report`
-//!      survives verbatim in every corpus file — but the pass is ported
-//!      faithfully so a future `Just loc` propagation rewrites correctly.
+//!      term to `rep(subst loc t, loc)` (`subst`, Report.hs:91-98).  Nothing in
+//!      the port yet writes `ProcessParsedAnnotation::location`, so `opt_loc`
+//!      only ever yields `Nothing` and `subst` is the identity — `report`
+//!      survives verbatim.  The rewrite is ported in full so that a `(p)@loc`
+//!      annotation, once parsed into that field, needs no change here.
 //!
 //!   2. `reportInit` (Report.hs:28-41): prepend the fixed `ReportRule`
 //!         [ In( <x, loc> ) ] --[ <Report(x,loc) predicate restriction> ]->
@@ -230,28 +229,38 @@ fn map_fact_terms(
 }
 
 /// `subst` (Report.hs:91-98): rewrite `report(a)` to `rep(subst loc a, loc)`
-/// when a `Just loc` is in scope; recurse structurally otherwise.  With
-/// `Nothing` location it is the identity.
+/// when a `Just loc` is in scope.  With `Nothing` location it is the identity
+/// (`subst Nothing t = t`).
 fn subst(loc: &Option<SapicTerm>, t: &SapicTerm) -> SapicTerm {
-    let Some(loc) = loc else { return t.clone() };
+    match loc {
+        Some(loc) => subst_at(loc, t),
+        None => t.clone(),
+    }
+}
+
+/// The `subst (Just loc)` arm (Report.hs:93-98).
+fn subst_at(loc: &SapicTerm, t: &SapicTerm) -> SapicTerm {
+    use tamarin_term::function_symbols::FunSym;
     match t {
         // `Lit _ -> t`.
         VTerm::Lit(_) => t.clone(),
-        VTerm::App(sym, args) => {
-            use tamarin_term::function_symbols::FunSym;
-            // `FApp (NoEq sym) [a] | sym == reportSym = rep(subst loc a, loc)`.
-            if let FunSym::NoEq(s) = sym {
-                if s.name == b"report" && args.len() == 1 {
-                    let inner = subst(&Some(loc.clone()), &args[0]);
-                    return tamarin_term::term::f_app_no_eq(
-                        tamarin_term::builtin::rep_sym(),
-                        vec![inner, loc.clone()],
-                    );
-                }
+        // `FApp (NoEq sym) [a] -> if sym == reportSym then rep(subst loc a, loc)
+        //                        else t` — this UNARY-NoEq case shadows the
+        // generic `FApp k as` one below, so a unary NoEq application that is not
+        // `report` is returned UNCHANGED, arguments and all.
+        VTerm::App(FunSym::NoEq(s), args) if args.len() == 1 => {
+            if s.name == b"report" {
+                tamarin_term::term::f_app_no_eq(
+                    tamarin_term::builtin::rep_sym(),
+                    vec![subst_at(loc, &args[0]), loc.clone()],
+                )
+            } else {
+                t.clone()
             }
-            // `FApp k as -> FApp k (map (subst loc) as)`.
-            let new_args: Vec<SapicTerm> =
-                args.iter().map(|a| subst(&Some(loc.clone()), a)).collect();
+        }
+        // `FApp k as -> FApp k (map (subst loc) as)`.
+        VTerm::App(sym, args) => {
+            let new_args: Vec<SapicTerm> = args.iter().map(|a| subst_at(loc, a)).collect();
             match sym {
                 FunSym::Ac(o) => tamarin_term::term::f_app_ac(*o, new_args),
                 FunSym::C(o) => tamarin_term::term::f_app_c(*o, new_args),

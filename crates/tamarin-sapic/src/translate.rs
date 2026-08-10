@@ -3,19 +3,27 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of the top-level SAPIC `translate` orchestration
-//! (`lib/sapic/src/Sapic.hs:45-101`) and `gen` (Sapic.hs:112-153), restricted
-//! to the CORE LINEAR pipeline (no progress / reliable / report / states /
-//! locks / compression passes).
+//! (`lib/sapic/src/Sapic.hs:45-101`) and `gen` (Sapic.hs:112-153).
 //!
-//! For a single top-level process, `translate`:
-//!   1. annotates it (`toAnProcess` + `propagateNames`),
-//!   2. computes the initial `Init` rule via `baseInit`,
-//!   3. walks the process with `gen` (base translation per node),
-//!   4. converts every `AnnotatedRule` to a `ProtoRuleE` via `toRule`,
-//!   5. emits the always-on `single_session` restriction (`baseRestr`).
+//! For a single top-level process, [`translate`]:
+//!   1. annotates it — `toAnProcess`, `propagateNames`,
+//!      `annotateSecretChannels`, then the `_stateChannelOpt`-gated
+//!      `annotatePureStates` and `_transReport`-gated `translateTermsReport`,
+//!      then `translateLetDestr` and `annotateLocks`;
+//!   2. chains the initial rules `baseInit` → `progressInit` →
+//!      `reliableChannelInit` → `reportInit`, each gated on its option;
+//!   3. walks the process with `gen`, whose per-node translation is
+//!      `progressTrans . reliableChannelTrans . baseTrans` under the same
+//!      gates;
+//!   4. converts every `AnnotatedRule` to a `ProtoRuleE` via `toRule` and, with
+//!      progress on, runs `pathCompression` over the result;
+//!   5. builds the restrictions — `baseRestr` (set_in/set_notin, eq/not-eq,
+//!      `single_session`, `in_event`, the locking family) then `progressRestr`
+//!      and `reliableChannelRestr`.
 //!
-//! The caller (run.rs) injects the rules + restriction into the theory, sets
-//! `is_sapic`, and adds `heuristic: p` if the user didn't set one.
+//! The caller ([`crate::apply::apply_sapic`]) injects the rules + restrictions
+//! into both the parsed and the elaborated theory, and adds `heuristic: p` when
+//! the user set none.
 
 use std::collections::BTreeSet;
 
@@ -52,7 +60,7 @@ struct TransCtx {
     inv_pf: Option<Box<dyn Fn(&[i64]) -> Option<Pos>>>,
 }
 
-/// `propagateNames` (Facts.hs:301-313): push each node's process-names down to
+/// `propagateNames` (Facts.hs:327-341): push each node's process-names down to
 /// its children so every node carries the names of all its ancestors.
 pub fn propagate_names<A: GoodAnnotation + Clone>(
     p: Process<A, SapicLVar>,
@@ -112,7 +120,7 @@ fn process_at<'a>(
     }
 }
 
-/// `mapToAnnotatedRule` (Sapic.hs:145-147): tag each rule body with its index.
+/// `mapToAnnotatedRule` (Sapic.hs:149-150): tag each rule body with its index.
 fn map_to_annotated_rule(
     proc: &Process<ProcessAnnotation<LVar>, SapicLVar>,
     p: &ProcessPosition,
@@ -375,23 +383,17 @@ pub fn translate(
     st_rules: &std::collections::BTreeSet<tamarin_term::subterm_rule::CtxtStRule>,
     opts: TranslateOptions,
 ) -> Result<Translation, String> {
-    // annotate: toAnProcess + propagateNames + annotateSecretChannels +
-    //   translateLetDestr + annotateLocks (Sapic.hs:54-61).  The pure-state /
-    //   report passes are gated off by default (pure-state needs
-    //   `--translation-state-optimisation`).  `translateLetDestr` runs
-    //   AFTER annotateSecretChannels and BEFORE annotateLocks, eliminating
-    //   var-RHS `let`s and annotating destructor / kept `let`s.
+    // The annotation chain, innermost first (Sapic.hs:54-61): toAnProcess,
+    // propagateNames, annotateSecretChannels, annotatePureStates,
+    // translateTermsReport, translateLetDestr — then annotateLocks.
     let an_proc_pre: Process<ProcessAnnotation<LVar>, SapicLVar> =
         propagate_names(to_annotated::<LVar>(plain.clone()));
     // annotateSecretChannels (Sapic.hs:45-101, see line 58): attach `secret_channel` to every
-    // ChIn/ChOut whose channel is an always-secret fresh variable.  Runs AFTER
-    // propagateNames and BEFORE translateLetDestr.  (annotatePureStates is gated
-    // off by default — it needs `--translation-state-optimisation`.)
+    // ChIn/ChOut whose channel is an always-secret fresh variable.
     let an_proc_sec = crate::secret_channels::annotate_secret_channels(an_proc_pre);
     // `checkOps' (._stateChannelOpt) annotatePureStates` (Sapic.hs:45-101, see line 57): the
-    // pure-state / state-channel optimisation.  Runs AFTER annotateSecretChannels
-    // and BEFORE translateTermsReport / translateLetDestr.  Gated off by default
-    // (needs `options: translation-state-optimisation`).
+    // pure-state / state-channel optimisation, off unless the theory declares
+    // `options: translation-state-optimisation`.
     let an_proc_states = if opts.state_channel_opt {
         crate::states::annotate_pure_states(an_proc_sec)
     } else {
@@ -399,7 +401,7 @@ pub fn translate(
     };
     // `checkOps' (._transReport) translateTermsReport` (Sapic.hs:45-101, see line 56): rewrite
     // `report(t)` terms to `rep(t, loc)` under the in-scope `@location`
-    // annotation.  Runs AFTER annotatePureStates, BEFORE translateLetDestr.
+    // annotation.
     let an_proc_rep = if opts.trans_report {
         crate::report::translate_terms_report(an_proc_states)
     } else {
@@ -596,18 +598,15 @@ fn is_pos_neg_formula(f: &tamarin_parser::ast::Formula) -> (bool, bool) {
         Atom(a) => is_pos_neg_atom(a),
         Not(p) => swap(is_pos_neg_formula(p)),
         And(p, q) | Or(p, q) => and2(is_pos_neg_formula(p), is_pos_neg_formula(q)),
-        // `Conn Imp p q -> isPosNegFormula $ Not p .||. q`.
-        Implies(p, q) => {
-            let not_p = Not(Box::new((**p).clone()));
-            let disj = Or(Box::new(not_p), Box::new((**q).clone()));
-            is_pos_neg_formula(&disj)
-        }
-        // `Conn Iff p q -> isPosNegFormula $ p .==>. q .&&. q .==>. p`.
+        // `Conn Imp p q -> isPosNegFormula $ Not p .||. q`, i.e. the `Or` of the
+        // `Not` case — evaluated directly rather than by rebuilding the
+        // desugared formula.
+        Implies(p, q) => and2(swap(is_pos_neg_formula(p)), is_pos_neg_formula(q)),
+        // `Conn Iff p q -> isPosNegFormula $ p .==>. q .&&. q .==>. p` — the
+        // `And` of the two `Imp` cases above.
         Iff(p, q) => {
-            let pq = Implies(Box::new((**p).clone()), Box::new((**q).clone()));
-            let qp = Implies(Box::new((**q).clone()), Box::new((**p).clone()));
-            let conj = And(Box::new(pq), Box::new(qp));
-            is_pos_neg_formula(&conj)
+            let (fp, fq) = (is_pos_neg_formula(p), is_pos_neg_formula(q));
+            and2(and2(swap(fp), fq), and2(swap(fq), fp))
         }
         Forall(_, p) | Exists(_, p) => is_pos_neg_formula(p),
     }

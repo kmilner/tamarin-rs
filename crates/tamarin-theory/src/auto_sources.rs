@@ -414,10 +414,11 @@ pub fn add_auto_sources_lemma(
             .any(|(_, u, _)| matches!(u, Unify::Term(..)));
         let mut matches: Vec<(usize, Matched, ExtendedPosition)> = Vec::new();
         for (ri, u, pos) in &premise_term_u {
-            let rin_name = rules[*ri].name().to_string();
+            let rin_name = rules[*ri].name();
+            let already_done = || done.iter().any(|(n, p)| n == rin_name && p == pos);
             match u {
                 Unify::Term(protterm, vin) => {
-                    if done.contains(&(rin_name.clone(), pos.clone())) {
+                    if already_done() {
                         continue;
                     }
                     let mut outs: Vec<(usize, LNTerm)> = Vec::new();
@@ -447,7 +448,7 @@ pub fn add_auto_sources_lemma(
                     ));
                 }
                 Unify::Fact(fact) => {
-                    if done.contains(&(rin_name.clone(), pos.clone())) || has_subterm_case {
+                    if already_done() || has_subterm_case {
                         continue;
                     }
                     let mut outs: Vec<(usize, LNFact)> = Vec::new();
@@ -573,7 +574,8 @@ pub fn has_lemma_named(items: &[TheoryItem], name: &str) -> bool {
 }
 
 /// Add an AUTO action to an open proto rule's AC form. HS adds to
-/// `cprRuleAC` only (Rule.hs:1026-1032, see line 1031); for a trivial-variant rule (no
+/// `cprRuleAC` only (`addActionClosedProtoRule`, lib/theory/src/Rule.hs:97-99);
+/// for a trivial-variant rule (no
 /// abstracted form) that is the rule itself, which renders as
 /// `rule (modulo E)` and propagates to its instances.
 fn add_action_to_open_rule(o: &mut OpenProtoRule, action: LNFact) {

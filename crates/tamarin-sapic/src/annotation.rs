@@ -145,8 +145,9 @@ impl<V: Clone> GoodAnnotation for ProcessAnnotation<V> {
 /// `V` (typically `tamarin_term::lterm::LVar`).
 pub type AnnotatedProcess<V> = Process<ProcessAnnotation<V>, SapicLVar>;
 
-/// `toAnProcess`: lift a parsed process into a translation annotation by
-/// wrapping the parsed annotation in `ProcessAnnotation`.
+/// `toAnProcess` (Annotation.hs:135-139): lift a parsed process into a
+/// translation annotation by wrapping the parsed annotation in
+/// `ProcessAnnotation`.
 pub fn to_annotated<V: Clone>(
     p: Process<ProcessParsedAnnotation, SapicLVar>,
 ) -> Process<ProcessAnnotation<V>, SapicLVar> {
@@ -181,8 +182,9 @@ pub fn to_annotated<V: Clone>(
 }
 
 /// Drop the translation annotations and recover the parsed-stage form.
-// Intentionally retained: faithful HS port of `toProcess`; the symmetric
-// inverse of `to_annotated`, no non-test caller yet.
+// Intentionally retained: faithful port of HS `toProcess`
+// (Annotation.hs:141-144), the symmetric inverse of `to_annotated`; no
+// non-test caller yet.
 pub fn to_parsed<V>(
     p: Process<ProcessAnnotation<V>, SapicLVar>,
 ) -> Process<ProcessParsedAnnotation, SapicLVar> {

@@ -12,11 +12,11 @@
 //! `warnProcess p = map WFBoundTwice (capturedVariables p) <> toList (checkLocks p)`
 //! (Warnings.hs:17-21).  Each `WFerror` becomes a report pair
 //! `("Wellformedness-error in Process", show e)` (`toWfErrorReport`,
-//! Warnings.hs:23-26).
+//! Warnings.hs:24-27).
 //!
 //! Currently ported: the **bound-twice** check (`map WFBoundTwice
 //! (capturedVariables p)`).  `checkLocks` (the sibling lock-matching check) is
-//! NOT ported here — see the module-level note at [`warn_process`].
+//! NOT ported here — see the note on [`warn_process`].
 
 use tamarin_parser::wf::WfError;
 
@@ -25,7 +25,7 @@ use tamarin_theory::sapic::{GoodAnnotation, Process, SapicLVar};
 use crate::bindings::captured_variables;
 
 /// The fixed topic HS `toWfErrorReport` attaches to every SAPIC process error
-/// (Warnings.hs:24-27, see line 25).  Rendered verbatim (NOT underlined) by
+/// (Warnings.hs:24-27, see line 27).  Rendered verbatim (NOT underlined) by
 /// `prettyWfErrorReport` (Wellformedness.hs:118-125).
 pub const SAPIC_PROCESS_TOPIC: &str = "Wellformedness-error in Process";
 
@@ -51,7 +51,7 @@ pub fn warn_process<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<WfError
             // `show (WFBoundTwice v) = "Variable bound twice: " ++ show v ++ "."`
             // (Exceptions.hs:117-118).
             let body = format!("Variable bound twice: {}.", show_sapic_lvar(v));
-            // `toWfErrorReport` (Warnings.hs:23-26) pairs each error with the
+            // `toWfErrorReport` (Warnings.hs:24-27) pairs each error with the
             // topic; `prettyWfErrorReport` (Wellformedness.hs:118-125) renders
             // a topic GROUP as `text topic $-$ nest 2 (vcat (intersperse "")
             // bodies)` — the topic header ONCE, then each body 2-space-indented

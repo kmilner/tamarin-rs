@@ -49,11 +49,7 @@ fn dot_for_node_with_rule() {
 /// (Simplification.hs:125-152) leaves behind: the node is gone from the
 /// drawn system while an edge still names it, so `systemMissingNodes`
 /// (Graph.hs:116-122) draws it as a trapezium.
-fn hidden_endpoint_graph(
-    src_conc: LNFact,
-    tgt_prem: LNFact,
-    hidden: usize,
-) -> (System, System, GEdge) {
+fn hidden_endpoint_graph(src_conc: LNFact, tgt_prem: LNFact, hidden: usize) -> (System, System) {
     use crate::rule::{
         ConcIdx, IntrRuleACInfo, PremIdx, ProtoRuleACInstInfo, Rule, RuleAttributes, RuleInfo,
     };
@@ -78,13 +74,13 @@ fn hidden_endpoint_graph(
     let mut drawn = sys.clone();
     let gone = if hidden == 0 { n1 } else { n2 };
     drawn.nodes_mut().retain(|(id, _)| id != &gone);
-    (sys, drawn, GEdge::System(src, tgt))
+    (sys, drawn)
 }
 
 /// [`hidden_endpoint_graph`] rendered: the two-node graph with `hidden`'s
 /// endpoint dropped from the drawn system.
 fn dot_of_hidden(src_conc: LNFact, tgt_prem: LNFact, hidden: usize) -> String {
-    let (orig, drawn, _) = hidden_endpoint_graph(src_conc, tgt_prem, hidden);
+    let (orig, drawn) = hidden_endpoint_graph(src_conc, tgt_prem, hidden);
     dot_of(&orig, drawn)
 }
 
@@ -679,7 +675,6 @@ fn dot_abbreviations_and_legend_appear_only_when_abbreviate_is_set() {
 
 // Build a simple proto rule node with the given premises/actions/concs.
 // `pub(super)` so `dot_showdot_tests.rs` shares it.
-#[cfg(test)]
 pub(super) fn proto_node(
     name: &str,
     prems: Vec<LNFact>,

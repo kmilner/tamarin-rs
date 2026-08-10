@@ -210,7 +210,8 @@ fn macro_inside_ifdef_is_expanded() {
 #[test]
 fn case_test_formula_is_not_macro_expanded() {
     // HS keeps CaseTest as a `TranslationItem` and applies NO macros to
-    // it (Prover.hs:170-251, see line 204; Parser.hs:159-163, see line 163 `liftedAddCaseTest`). Probed
+    // it (CloseRule.hs:82-90, see line 90; Theory/Text/Parser.hs:159-163, see line 163
+    // `liftedAddCaseTest`). Probed
     // against the real HS prover (v1.13.0) on an equivalent theory: the
     // stored case-test formula prints `Blame( idm(a) )` UNEXPANDED, e.g.
     //   predicate: Blamed( a ) <=> ∃ #i. Blame( idm(a) ) @ #i
@@ -257,7 +258,8 @@ fn case_test_formula_is_not_macro_expanded() {
 
 #[test]
 fn acc_lemma_formula_is_not_macro_expanded() {
-    // AccLemma is also a `TranslationItem` (Prover.hs:170-251, see line 204; Parser.hs:153-157, see line 157
+    // AccLemma is also a `TranslationItem` (CloseRule.hs:82-90, see line 90;
+    // Theory/Text/Parser.hs:153-157, see line 157
     // `liftedAddAccLemma`) and is never macro-expanded. After
     // `expand_theory_macros` the acc-lemma formula must still contain the
     // macro call `App("idm", ...)`.

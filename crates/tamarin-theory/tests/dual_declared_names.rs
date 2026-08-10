@@ -12,7 +12,7 @@
 //! before every `ACfctUser` (constructor order of `UserDefinedSym`,
 //! Term/Term/FunctionSymbols.hs:146-147) — so the `NoEq` symbol wins those
 //! spellings.  The INFIX spelling bypasses `lookupArity` entirely: `acterm`
-//! (Term.hs:163-174) builds `fAppACfct` straight from `stACFunSyms`, so it
+//! (Term.hs:166-172) builds `fAppACfct` straight from `stACFunSyms`, so it
 //! stays the AC symbol.  `nullaryApp` (Term.hs:158-163) still resolves a bare
 //! nullary name to the `NoEq` constant.
 //!

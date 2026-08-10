@@ -12,11 +12,8 @@ fn n(name: &str) -> NodeId {
 
 #[test]
 fn empty_system_has_no_contradictions() {
-    let sig = crate::signature::SignaturePure::empty(false);
-    // Without a real Maude we shouldn't run contradictions(); but
-    // we can call cyclic directly.
+    // `contradictions()` needs a live Maude; `cyclic` does not.
     assert!(!cyclic(&[]));
-    let _ = sig;
 }
 
 #[test]

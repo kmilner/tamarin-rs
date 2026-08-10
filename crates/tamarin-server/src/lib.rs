@@ -79,10 +79,11 @@ pub struct ServerConfig {
     pub frontend_dist: Option<PathBuf>,
     /// Path to the Maude binary.
     pub maude_path: String,
-    /// Proof-search step budget threaded to `prove_lemma` for API
-    /// compatibility. Currently a no-op: the solver bounds search by
-    /// ID-DFS depth + wall-clock deadline (HS-faithful), so this value
-    /// is accepted but ignored.
+    /// Proof-search step budget the `autoprove` / `autoproveAll` routes
+    /// thread into `tamarin_theory::prove::prove_system_in_session` (a
+    /// non-zero `bound` in the URL overrides it).  A no-op in the solver:
+    /// `run_proof_search` bounds search by ID-DFS depth + wall-clock
+    /// deadline only (HS-faithful), so the value is accepted and ignored.
     pub max_steps: usize,
     /// `--derivcheck-timeout` for the dynamic message-derivation checks
     /// run at theory load (HS interactive default 5s; 0 disables).  Set
@@ -90,8 +91,8 @@ pub struct ServerConfig {
     pub derivcheck_timeout: u32,
     /// CLI `--stop-on-trace` (None = flag absent).  Merged with each
     /// theory's in-file `configuration:` block at `ProofState::new` time
-    /// per HS `closeTheory` precedence (TheoryLoader.hs:640-666): the CLI
-    /// value wins; the block is consulted only when this is `None`.
+    /// per HS `closeTheory`'s `configStopOnTrace` (TheoryLoader.hs:759-763):
+    /// the CLI value wins; the block is consulted only when this is `None`.
     pub stop_on_trace: Option<tamarin_theory::constraint::solver::context::CutStrategy>,
     /// CLI `--with-dot` — the GraphViz binary every graph render shells out
     /// to, the bare `"dot"` (resolved through `$PATH`) when the flag is
@@ -170,10 +171,10 @@ pub async fn serve(
     let store = TheoryStore::default();
 
     // Eager-load every command-line theory.  Per-theory stdout reporting
-    // mirrors HS `loadTheories` (Web/Dispatch.hs:157-198): a non-empty
+    // mirrors HS `loadTheories` (Web/Dispatch.hs:160-212): a non-empty
     // wellformedness report is echoed via `ppInteractive`
-    // (Dispatch.hs:200-209), and a load failure prints the dashed
-    // `reportFailure` block (Dispatch.hs:191-198) and skips the theory.
+    // (Dispatch.hs:203-212), and a load failure prints the dashed
+    // `reportFailure` block (Dispatch.hs:194-201) and skips the theory.
     for p in &theory_paths {
         match theory_io::load_from_path(p, &cfg.maude_path, cfg.derivcheck_timeout) {
             Ok(entry) => {
@@ -210,9 +211,9 @@ pub async fn serve(
 
     let app = router(state.clone());
     let listener = tokio::net::TcpListener::bind(cfg.bind_addr).await?;
-    // HS ready message (Interactive.hs:68-166, see line 104, printed after all theories
-    // load, Dispatch.hs:149-209, see line 160) — note the trailing space after "at" and the
-    // indented URL line.
+    // HS ready message (Interactive.hs:125), printed by `loadTheories` after
+    // every theory has loaded (Dispatch.hs:160-164, see line 163) — note the
+    // trailing space after "at" and the indented URL line.
     println!(
         "Finished loading theories ... server ready at \n\n    http://{}\n",
         cfg.bind_addr,

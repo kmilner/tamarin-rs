@@ -6,13 +6,11 @@
 //! `lib/term/src/Term/Builtin/`.
 //!
 //! Predefined function symbols, smart constructors, and rewrite-rule sets
-//! for the prover's built-in equational theories. Function symbols and
-//! signatures cover DH, BP, XOR, multiset, pair, encryption, signatures,
-//! hashing, and location reports; rewrite-rule sets are ported for DH, BP,
-//! XOR, multiset, pair, encryption, and signatures. The `Rules.hs`
-//! destructor / location sets are ported too: `location_report_rules`,
-//! `pair_dest_rules` (covering the `fstDestRule`/`sndDestRule` shapes),
-//! `sym_enc_dest_rules`, and `asym_enc_dest_rules`.
+//! for the prover's built-in equational theories: DH, BP, XOR, multiset,
+//! pair, encryption, signatures, hashing, and location reports — including
+//! the `dest-*` builtins' destructor-rooted rule variants
+//! (`pair_dest_rules`, `sym_enc_dest_rules`, `asym_enc_dest_rules`,
+//! `signature_dest_rules`).
 
 use std::collections::BTreeSet;
 
@@ -150,8 +148,7 @@ pub fn union<A: Ord + Clone>(a: Term<A>, b: Term<A>) -> Term<A> {
 pub fn xor<A: Ord + Clone>(a: Term<A>, b: Term<A>) -> Term<A> {
     f_app_ac(AcSym::Xor, vec![a, b])
 }
-/// Mirrors `Convenience.hs` `(++:)`; retained for AC-constructor family
-/// completeness, no caller yet.
+/// Mirrors `Convenience.hs` `(++:)`.
 pub fn nat_plus<A: Ord + Clone>(a: Term<A>, b: Term<A>) -> Term<A> {
     f_app_ac(AcSym::NatPlus, vec![a, b])
 }
@@ -326,12 +323,10 @@ pub fn mset_rules() -> BTreeSet<RRule<LNTerm>> {
 // Builtin subterm rules — direct port of `Term.Builtin.Rules`
 // =============================================================================
 //
-// These return `CtxtStRule` directly (with explicit RHS positions) so the
-// `MaudeSig.st_rules` field can carry them through to
-// `subtermIntruderRules` / `destructionRules`.  Without these,
-// `[ symmetric-encryption ]` etc. signatures have no rewrite rules,
-// so the intruder-rule generator can't emit decryption destructors —
-// crypto-protocol corpus lemmas trip up.
+// These return `CtxtStRule` directly (with explicit RHS positions), the shape
+// `MaudeSig.st_rules` carries through to `subtermIntruderRules` /
+// `destructionRules` — the generator that turns a `[ symmetric-encryption ]`
+// signature into its decryption destructors.
 
 /// `pairRules`: `fst(<x, y>) = x`, `snd(<x, y>) = y`.
 pub fn pair_rules() -> BTreeSet<crate::subterm_rule::CtxtStRule> {

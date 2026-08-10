@@ -109,7 +109,7 @@ fn freshen_witness_range(
 // HS enforces that every var in a VFresh subst's RANGE is fresh (to be
 // renamed at application time): Maude unifiers go through
 // `msubstToLSubstVFresh` which ERRORS on non-fresh range vars
-// (Maude/Types.hs:121-130), and `composeVFresh` lifts live vars entering a
+// (Maude/Types.hs:137-146, see line 143), and `composeVFresh` lifts live vars entering a
 // VFresh range via `extendWithRenaming (varsRange s2) s1_0`
 // (Substitution.hs:39-47).  Any RS site that stores a disjunction subst
 // whose range references a LIVE system var violates this invariant; when
@@ -188,6 +188,15 @@ fn aes_trace_set_false() -> bool {
 #[inline]
 fn aes_trace_set_false_full() -> bool {
     tamarin_utils::env_gate!("TAM_TRACE_SET_FALSE_FULL")
+}
+/// Backtrace-frame filter for the `set_false` traces: our own crates, minus
+/// the `set_false` frames themselves.
+#[inline]
+fn is_own_frame(line: &str) -> bool {
+    (line.contains("tamarin_theory")
+        || line.contains("tamarin-theory")
+        || line.contains("tamarin_term"))
+        && !line.contains("set_false")
 }
 
 // debug-only keyed registry; never reaches prover output;
@@ -376,13 +385,7 @@ impl EquationStore {
             let bt_s = format!("{bt}");
             let caller = bt_s
                 .lines()
-                .filter(|l| {
-                    l.contains("tamarin_theory")
-                        || l.contains("tamarin-theory")
-                        || l.contains("tamarin_term")
-                })
-                .filter(|l| !l.contains("set_false"))
-                .nth(0)
+                .find(|l| is_own_frame(l))
                 .unwrap_or("(no frame)")
                 .trim();
             eprintln!("[set_false] caller={}", caller);
@@ -393,13 +396,7 @@ impl EquationStore {
             let cpath = crate::constraint::solver::trace::case_path_string();
             let frames: Vec<&str> = bt_s
                 .lines()
-                .filter(|l| {
-                    l.contains("tamarin_theory")
-                        || l.contains("tamarin-theory")
-                        || l.contains("tamarin_term")
-                })
-                .filter(|l| !l.contains("set_false"))
-                .filter(|l| !l.contains("std::"))
+                .filter(|l| is_own_frame(l) && !l.contains("std::"))
                 .take(8)
                 .map(|s| s.trim())
                 .collect();
@@ -777,7 +774,7 @@ impl EquationStore {
         // result is the local subst directly — NO Maude call.  This is
         // critical for foo_eligibility-style cases: the local unifier
         // orients same-sort var-var with larger-idx-as-key
-        // (Unification.hs:235-243, see line 241), so stable pattern vars (small idx like
+        // (Unification.hs:273-281, see line 276), so stable pattern vars (small idx like
         // t.1, t.2) stay on the value side and are dropped by
         // `restrict stableVars` (Sources.hs:113-137, see line 118).
         let local_result = tamarin_term::unification::unify_lnterm_factored(applied.clone());
@@ -839,10 +836,10 @@ impl EquationStore {
         // the local subst at the end (mirrors `flattenUnif` =
         // `map (\`composeVFresh\` subst) substs`).
         //
-        // HS-faithful (EquationStore.hs:311-313 `addEqs`): the AC unifier
+        // HS-faithful (EquationStore.hs:241-270 `addEqs`): the AC unifier
         // is `unifyLNTermFactored eqs` with NO avoid — witness idxs are
         // numbered purely per-call at `avoid (M.elems bindings)`
-        // (Term/Maude/Types.hs:112-113) and the resulting `SubstVFresh`
+        // (Term/Maude/Types.hs:123-127) and the resulting `SubstVFresh`
         // witnesses are α-scoped per subst, so a system-wide floor is
         // neither passed nor needed.  (The single-unifier arm below still
         // re-bases its own witnesses via `freshen_witness_range`.)
@@ -1767,8 +1764,8 @@ impl EquationStore {
                 .zip(argss.iter())
                 .map(|(s, args)| {
                     let mut kept = without_key(s, &v);
-                    // HS-faithful `abstractTwo`/`newMappings` (EquationStore.hs:
-                    // 436-444): `newMappings []` ERRORS ("AC symbols must have
+                    // HS-faithful `newMappings` (EquationStore.hs:
+                    // 455-464): `newMappings []` ERRORS ("AC symbols must have
                     // arity >= 2"); silently bailing here would leave a
                     // malformed store (the factor `{v -> op(fv1,fv2)}` is
                     // composed into the free subst below regardless, while this
@@ -1971,7 +1968,7 @@ impl EquationStore {
             // `freshToFree emptySubstVFresh` is empty, and `foreachDisj`
             // UNCONDITIONALLY runs `applyEqStoreAt "foreachDisj:simpSingleton"`
             // with that empty msubst after replacing the disj
-            // (EquationStore.hs:823-830).  An empty asubst is NOT a no-op:
+            // (EquationStore.hs:563-580, see line 578).  An empty asubst is NOT a no-op:
             // applyEqStore re-runs `applyBound` on every remaining disj
             // subst, re-deriving (and RENUMBERING) their fresh witnesses
             // under the current avoid set (renameAvoiding + unify +
@@ -2057,7 +2054,7 @@ impl EquationStore {
         //
         // Crucially we DO NOT floor above the un-folded sibling disjs in
         // `self.conj`: HS's counter is NOT above those.  Their range vars are
-        // per-call-local unify witnesses (Term/Maude/Types.hs:112-113,
+        // per-call-local unify witnesses (Term/Maude/Types.hs:123-127,
         // `evalFreshAvoiding (M.elems bindings)`), seeded above the *query's*
         // vars — NOT drawn from the `runReduction` MonadFresh counter — so HS's
         // counter sits far below them (RYY em source: fold draws ~x.18 while
@@ -2066,7 +2063,7 @@ impl EquationStore {
         // `applyBound`'s `renameAvoiding (map snd slist) avoidSet` — which, on
         // the post-fold `applyEqStore` re-unify, renames every conj disj's
         // range away from `varsRange newsubst` (the fold's fresh vars)
-        // regardless of numeric overlap (EquationStore.hs:428-435).  RS mirrors
+        // regardless of numeric overlap (EquationStore.hs:281-291).  RS mirrors
         // that in `apply_eq_store`.  Flooring above the conj here instead makes
         // each fold ratchet the counter to the max sibling witness, and the
         // subsequent re-unify re-bases those siblings even higher — a positive
@@ -2335,9 +2332,7 @@ impl EquationStore {
                     if v.idx > new_subst_range_max {
                         new_subst_range_max = v.idx;
                     }
-                    if !new_subst_range_vars.contains(v) {
-                        new_subst_range_vars.insert(*v);
-                    }
+                    new_subst_range_vars.insert(*v);
                 });
             }
         }
@@ -2347,7 +2342,7 @@ impl EquationStore {
         // `evalFreshAvoiding (rename ...)` which seeds the supply at
         // `succ (max idx in avoidSet)` LOCALLY — bounded by the call's
         // own `avoid_max`, NOT the global session counter
-        // (`avoid`/`evalFreshAvoiding` at LTerm.hs:647-653,
+        // (`avoid` at LTerm.hs:680-681, `renameAvoiding` at LTerm.hs:696-697;
         // EquationStore.hs `applyEqStore`/`applyBound`).  Each variant's
         // witness allocation therefore starts from the same avoid
         // baseline, and the variants' witnesses can OVERLAP in idx
@@ -2419,7 +2414,7 @@ impl EquationStore {
                 // HS `applyBound` (EquationStore.hs `applyEqStore`):
                 //   ran = renameAvoiding (map snd slist) avoidSet
                 // where `renameAvoiding s t = evalFreshAvoiding (rename s) t`
-                // (LTerm.hs:663-664) and `rename` (LTerm.hs:607-614) is a
+                // (LTerm.hs:696-697) and `rename` (LTerm.hs:638-645) is a
                 // SINGLE uniform monotone shift over the WHOLE range list:
                 //   freshStart <- freshIdents (succ (maxVarIdx - minVarIdx))
                 //   mapFrees (Monotone $ incVar (freshStart - minVarIdx))
@@ -2499,14 +2494,14 @@ impl EquationStore {
                 // (`reserve_idxs`), and the post-unify `reduce` calls all
                 // draw witness idxs from a fresh local counter seeded at
                 // `succ avoid_max` (mirroring HS's `evalFreshAvoiding
-                // (range) avoidSet`, LTerm.hs:647-653).  The Maude process
+                // (range) avoidSet`, LTerm.hs:696-697).  The Maude process
                 // state is shared (Arc cloned), only the counter is
                 // per-call — so the global counter advances ONLY for
                 // non-applyBound allocations.
                 //
                 // HS-faithful seed: `avoid avoidSet = succ (max idx in
                 // avoidSet)` where avoidSet = `domVFresh s ∪ varsRange
-                // newsubst` (LTerm.hs:647-648 `avoid`; EquationStore.hs
+                // newsubst` (LTerm.hs:680-681 `avoid`; EquationStore.hs
                 // `renameAvoiding (range slist) (domVFresh s ∪ varsRange newsubst)`).
                 // HS does NOT include `max_idx` (the post-shift
                 // equation-system vars) in the seed — the shifted RHS
@@ -2556,7 +2551,7 @@ impl EquationStore {
                     );
                 }
                 let counter_before_maude = aes_maude.fresh_counter_peek();
-                // HS `applyBound` (EquationStore.hs:406-446, see line 434): `unifiers =
+                // HS `applyBound` (EquationStore.hs:281-291, see line 282): `unifiers =
                 // unifyLNTerm eqs` — NO avoid.  The RHS terms were already
                 // rebased above `avoidSet` by the uniform-shift rename above
                 // (HS `ran = renameAvoiding (range) avoidSet`), so the reply
@@ -2630,7 +2625,7 @@ impl EquationStore {
                     // introduce narrowing witnesses for cross-sort
                     // var-var unification.  E.g. for `Var(~k:Fresh) =
                     // Var(~mw:Msg)`, the local unifier returns
-                    // `~mw:Msg → Var(~k:Fresh)` (Unification.hs:235-243, see line 241
+                    // `~mw:Msg → Var(~k:Fresh)` (Unification.hs:273-281, see line 278
                     // orientation).  After restrict drops `~mw`, the
                     // `~k` narrowing info is lost AND `~k` (a system
                     // var in new_subst's range) ends up referenced
@@ -3023,7 +3018,7 @@ fn is_perm_subst(
     // `others_shared` also holds when neither `v1` nor `v2` is in the domain,
     // and the panics below then abort the prover — faithful, since HS's
     // `fromMaybe (error ...)` images are demanded under the same condition
-    // (EquationStore.hs:599-604).
+    // (EquationStore.hs:596-607).
     let others_shared = s1
         .iter()
         .all(|(x, t)| x == v1 || x == v2 || s2.image_of(x).is_some_and(|u| u == t));

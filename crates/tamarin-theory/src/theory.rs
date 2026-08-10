@@ -38,8 +38,8 @@ pub struct OpenProtoRule {
     /// represents the un-narrowed E-rule; when this disjunction is
     /// non-empty, `solve_rule_constraints` adds it as a SplitG goal
     /// in the eq-store so the variant choice is enumerated lazily
-    /// per Haskell's `solveRuleConstraints` (Reduction.hs:766-774).
-    /// Mirrors `RuleACConstrs = Disj LNSubstVFresh` (Rule.hs:925-934, see line 926).
+    /// per Haskell's `solveRuleConstraints` (Reduction.hs:789-797).
+    /// Mirrors `RuleACConstrs = Disj LNSubstVFresh` (Rule.hs:1009).
     pub variant_substs: Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
     /// The abstracted form of `rule` for the SplitG path (Haskell
     /// `variantsProtoRule` returns this in the `ProtoRuleAC`'s
@@ -530,10 +530,12 @@ mod tests {
     }
 
     #[test]
-    fn options_default_is_all_false() {
+    fn options_default_flags() {
         let o = Options::default();
         assert!(!o.trans_progress);
         assert!(!o.compress_events);
+        // `--no-ndc` opts out; the check is on by default.
+        assert!(o.deduction_chain_check);
         assert!(o.lemmas_to_prove.is_empty());
     }
 

@@ -335,14 +335,14 @@ mod tests {
     // =========================================================================
     // Haskell-faithfulness invariants for Connective and Quantifier order.
     //
-    // Formula.hs:104-108: `data Connective = And | Or | Imp | Iff`
-    //                     `data Quantifier = All | Ex`
+    // Theory/Model/Formula.hs:106-108: `data Connective = And | Or | Imp | Iff`
+    // Theory/Model/Formula.hs:110-112: `data Quantifier = All | Ex`
     //
     // These orders matter for any BTreeMap<Connective,_> iteration and for
     // Haskell-faithful structural comparison / round-tripping of formulas.
     // =========================================================================
 
-    /// `Connective` Ord — `And < Or < Imp < Iff` from Formula.hs:104-105.
+    /// `Connective` Ord — `And < Or < Imp < Iff` from Theory/Model/Formula.hs:107.
     #[test]
     fn connective_ord_matches_haskell_declaration() {
         assert!(Connective::And < Connective::Or);
@@ -350,7 +350,7 @@ mod tests {
         assert!(Connective::Imp < Connective::Iff);
     }
 
-    /// `Quantifier` Ord — `All < Ex` from Formula.hs:108-109.
+    /// `Quantifier` Ord — `All < Ex` from Theory/Model/Formula.hs:111.
     ///
     /// The All<Ex order is required for Haskell-faithful structural /
     /// BTreeMap comparisons and round-tripping of formulas, matching the
@@ -361,7 +361,7 @@ mod tests {
     fn quantifier_ord_matches_haskell_declaration() {
         assert!(
             Quantifier::All < Quantifier::Ex,
-            "All MUST sort before Ex (Formula.hs:108)"
+            "All MUST sort before Ex (Theory/Model/Formula.hs:111)"
         );
     }
 }

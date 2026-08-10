@@ -82,7 +82,7 @@ pub fn find_all_subterms(l: &LNTerm, r: &LNTerm) -> Option<Vec<Position>> {
     }
 }
 
-/// `subterms args [] 1` (SubtermRule.hs:57-63, called at :67): for each top-level arg
+/// `subterms args [] 1` (SubtermRule.hs:59-65, called at :69): for each top-level arg
 /// `t`, find the positions where `t` occurs as a subterm of a SIBLING
 /// arg, each prefixed with that sibling's top-level index.  HS visits the
 /// remaining siblings (`zip [i..] ts`) before the already-processed ones
@@ -165,7 +165,7 @@ pub fn rrule_to_ctxt_st_rule(rule: &RRule<LNTerm>) -> Option<CtxtStRule> {
         ));
     }
     let positions = find_all_subterms(&rule.lhs, &rule.rhs)?;
-    // HS (SubtermRule.hs:52-55) matches `case sbtms of []:_ -> Nothing; [] ->
+    // HS (SubtermRule.hs:54-57) matches `case sbtms of []:_ -> Nothing; [] ->
     // Nothing; pos -> Just`. The `[]:_` arm rejects ONLY when the empty
     // position is at the HEAD of the list; an empty position later in the
     // list does not reject. The `is_empty()` guard above covers HS's `[]` arm,
@@ -218,7 +218,7 @@ mod tests {
         assert!(!ctxt.rhs.positions.is_empty());
     }
 
-    /// HS `rRuleToCtxtStRule` (SubtermRule.hs:52-55) rejects via the `[]:_`
+    /// HS `rRuleToCtxtStRule` (SubtermRule.hs:54-57) rejects via the `[]:_`
     /// arm only when the empty position is at the HEAD of the position list.
     /// For `h(x) = f(x, h(x))`, `findAllSubterms` yields `[[0], []]`: the
     /// empty position is SECOND, so HS keeps the rule (`pos -> Just`).

@@ -24,7 +24,7 @@
 //! `prettyEqStore` (EquationStore.hs:650-670) — same `Contradictory` /
 //! `CONTRADICTORY` headers, numbered keyword sections and `∃`-quantified
 //! disjuncts — built on the `pretty_hpj` HughesPJ Doc engine.  The whole
-//! pane is ONE Doc (`vsep $ map combine_ …`, System.hs:1675-1686) rendered
+//! pane is ONE Doc (`vsep $ map combine_ …`, System.hs:1672-1685) rendered
 //! once, so every term/formula/goal wraps at the pane width under its
 //! real section nesting, exactly as HS.  Residual divergences documented
 //! on `pretty_subterm_store` / `pretty_eq_store` (derived term `Ord` for
@@ -41,7 +41,7 @@ use crate::pretty_formula::guarded_doc;
 use crate::pretty_hpj::{above_blank, fsep, numbered_prime, punctuate, Doc};
 
 /// Emit just the non-graph-part of the system, matching Haskell's
-/// `prettyNonGraphSystem` (System.hs:1675-1686):
+/// `prettyNonGraphSystem` (System.hs:1672-1685):
 /// `vsep $ map combine_ [("last", …), …]` — the entire pane is a single
 /// Doc rendered once at the web display width.
 pub fn pretty_non_graph_system(sys: &System) -> String {
@@ -84,7 +84,7 @@ fn vsep_docs(ds: Vec<Doc>) -> Doc {
     acc
 }
 
-// HS `prettyNTerm t` (LTerm.hs:893-894, see line 894 `prettyTerm (text . show)`) as a Doc,
+// HS `prettyNTerm t` (LTerm.hs:930-931, see line 931 `prettyTerm (text . show)`) as a Doc,
 // via the parser-AST projection — the same Doc path the proof printer and
 // web DOT renderer use, so fact/term wrapping is byte-faithful.
 fn lnterm_doc(t: &tamarin_term::lterm::LNTerm) -> Doc {
@@ -350,7 +350,7 @@ fn vcat_doc(ds: Vec<Doc>) -> Doc {
 // goals
 // ---------------------------------------------------------------------
 
-// Mirrors Haskell `prettyGoals` (System.hs:1735-1753):
+// Mirrors Haskell `prettyGoals` (System.hs:1734-1752):
 //   (goal, status) <- M.toList sGoals          -- Goal-Ord iteration
 //   guard (solved == gsSolved status)
 //   prettyGoal goal <-> lineComment_
@@ -390,7 +390,7 @@ fn pretty_goals(sys: &System, want_solved: bool) -> Doc {
         // (Pretty.hs:96-100).  The comment is PART of the goal's Doc, so its
         // width participates in the goal's own layout decisions (a goal near
         // the ribbon wraps because of its trailing comment, exactly as HS).
-        let comment = format!("nr: {}{}{}\"{}\"", st.nr, source_rule, loop_breaker, useful,);
+        let comment = format!("nr: {}{}{}\"{}\"", st.nr, source_rule, loop_breaker, useful);
         items.push(
             crate::pretty_theory::solve_goal_to_doc(g)
                 .beside_sp(crate::pretty_hpj::line_comment_(&comment)),
@@ -404,16 +404,15 @@ fn pretty_goals(sys: &System, want_solved: bool) -> Doc {
 // source kind
 // ---------------------------------------------------------------------
 
-fn pretty_source_kind(sk: Option<SourceKind>) -> String {
-    // Matches Haskell `instance Show SourceKind` (System.hs:346-348):
+fn pretty_source_kind(sk: Option<SourceKind>) -> &'static str {
+    // Matches Haskell `instance Show SourceKind` (System.hs:345-347):
     //   show RawSource     = "raw"
     //   show RefinedSource = "refined"
     // The Haskell field is non-optional; the `None` arm is a Rust-only
     // fallback for an unset source kind.
     match sk {
-        None => "raw".to_string(),
-        Some(SourceKind::RawSources) => "raw".to_string(),
-        Some(SourceKind::RefinedSources) => "refined".to_string(),
+        None | Some(SourceKind::RawSources) => "raw",
+        Some(SourceKind::RefinedSources) => "refined",
     }
 }
 
@@ -421,15 +420,21 @@ fn pretty_source_kind(sk: Option<SourceKind>) -> String {
 // LNFact / RuleACInst rendering
 // ---------------------------------------------------------------------
 
-/// Pretty-print an `LNFact` exactly as Haskell `prettyLNFact` /
-/// `prettyFact` (Fact.hs:537-552): `showFactTag tag` (with the persistent
-/// `!` prefix), the term list in parentheses (always emitted, even for
-/// zero-arity facts, matching `nestShort'`), and a trailing `[...]`
-/// annotation block. Used by the proof pretty-printer here and by the
-/// DOT renderer (`constraint::system::dot`).
+/// FLAT, single-line rendering of an `LNFact` — `showFactTag tag` (with the
+/// persistent `!` prefix), the term list in parentheses (always emitted, even
+/// for zero-arity facts), and a trailing `[...]` annotation block.
+///
+/// This is NOT the byte-faithful `prettyFact` (Fact.hs:567-574): that one is a
+/// `Doc` built with `nestShort'`, so it emits the inner-paren spaces
+/// (`!KU( ~ltk )`) and wraps at the display width.  Every rendering that
+/// reaches user-visible output goes through the `Doc` path instead
+/// (`pretty_formula::fact_doc` on the parser-AST projection, e.g.
+/// `graph::color::fact_doc_of` for DOT and `solve_goal_to_doc` for goals).
+/// The flat form here is for the env-gated debug dumps in
+/// `constraint::solver::context`, where one fact per line is the point.
 pub fn pretty_fact(fa: &LNFact) -> String {
     use crate::fact::{fact_tag_multiplicity, FactAnnotation, Multiplicity};
-    // Matches Haskell `showFactTag` (Fact.hs:519-523): the `!` prefix is
+    // Matches Haskell `showFactTag` (Fact.hs:549-553): the `!` prefix is
     // applied to any tag whose `factTagMultiplicity` is `Persistent`,
     // which includes KU/KD as well as persistent proto facts.
     let prefix = if fact_tag_multiplicity(&fa.tag) == Multiplicity::Persistent {
@@ -440,7 +445,7 @@ pub fn pretty_fact(fa: &LNFact) -> String {
     let name = fact_tag_name(&fa.tag);
     let args: Vec<String> = fa.terms.iter().map(pretty_lnterm).collect();
     let base = format!("{}{}({})", prefix, name, args.join(", "));
-    // Matches Haskell `ppAnn` (Fact.hs:543-545): when annotations are
+    // Matches Haskell `ppAnn` (Fact.hs:573-574): when annotations are
     // present, append `[a1, a2]` using `showFactAnnotation` for each.
     if fa.annotations.is_empty() {
         base

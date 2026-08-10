@@ -4,59 +4,29 @@
 
 //! End-to-end tests for the `tamarin-prover` CLI library.
 //!
-//! These tests stand up the whole pipeline — parser → elaborator →
-//! solver — through the `cli` / `run` entry points used by the
-//! binary. They skip themselves silently if a working `maude` binary
-//! cannot be located, since CI builds without Maude are still
-//! supposed to pass.
+//! These tests stand up the whole pipeline — parser → elaborator → solver —
+//! IN-PROCESS through the `parse_args` / `run` entry points the binary uses,
+//! except where only a spawned process can show the stream split or the exit
+//! code.  The maude-backed ones print a skip line and return when no maude
+//! sits where the run will look for it, since CI builds without Maude are
+//! still supposed to pass.
 
-use std::path::PathBuf;
+mod common;
 
+use common::{fixture, maude_arg, maude_available};
 use tamarin_prover::{parse_args, run};
-
-/// True when a maude binary exists where the run will look for it.
-///
-/// A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION,
-/// not a reason to skip: returning `false` there would turn every
-/// maude-backed pin in this file green on a CI whose image moved maude.
-/// Panic instead, so the run goes red.
-fn maude_available() -> bool {
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        assert!(
-            std::path::Path::new(&p).exists(),
-            "MAUDE_PATH={p} does not exist; unset it to fall back to the \
-             absolute candidates, or point it at a real maude — skipping \
-             every maude-backed pin here would report green vacuously"
-        );
-        return true;
-    }
-    for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
-        if std::path::Path::new(c).exists() {
-            return true;
-        }
-    }
-    false
-}
-
-/// `--with-maude=PATH` from the `MAUDE_PATH` env override, when set.
-/// Without the flag the prover probes bare `maude` on PATH (HS-faithful),
-/// which is absent on CI runners.
-fn maude_arg() -> Option<String> {
-    std::env::var("MAUDE_PATH")
-        .ok()
-        .map(|p| format!("--with-maude={p}"))
-}
-
-fn fixture(name: &str) -> PathBuf {
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.push("tests");
-    p.push("fixtures");
-    p.push(name);
-    p
-}
 
 fn args_from(args: &[&str]) -> tamarin_prover::Args {
     parse_args(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("parse")
+}
+
+/// Run the CLI in-process on `extra`, with `--with-maude` threaded from
+/// `MAUDE_PATH` ahead of it, and return the exit code.
+fn run_cli(extra: &[&str]) -> i32 {
+    let maude = maude_arg();
+    let mut argv: Vec<&str> = maude.as_deref().into_iter().collect();
+    argv.extend_from_slice(extra);
+    run(&args_from(&argv)).expect("run")
 }
 
 #[test]
@@ -76,17 +46,13 @@ fn prove_chain_writes_output_with_verified_summary() {
     // flag empty and treats FILE as a positional input (verified vs the HS
     // binary). So pass it inline via `--output=FILE`.
     let output_arg = format!("--output={}", out_path.to_str().unwrap());
-    let maude = maude_arg();
-    let mut argv: Vec<&str> = maude.as_deref().into_iter().collect();
-    argv.extend([
+    let code = run_cli(&[
         "--prove=chain",
         &output_arg,
         "--quiet",
         in_path.to_str().unwrap(),
     ]);
-    let args = args_from(&argv);
-    let code = run(&args).expect("run");
-    assert_eq!(code, 0, "expected exit code 0, got {}", code);
+    assert_eq!(code, 0, "expected exit code 0, got {code}");
 
     // The proven theory is written to the output file with the chain
     // lemma's proof inline.  HS-faithful: the `summary of summaries`
@@ -135,16 +101,12 @@ fn prove_lemma_filter_excludes_other_lemmas() {
     // flagOpt: attach the output value (`--output=FILE`); a space-separated
     // `-o FILE` would treat FILE as a positional input (HS Batch.hs:44-84, see line 76).
     let output_arg = format!("--output={}", out_path.to_str().unwrap());
-    let maude = maude_arg();
-    let mut argv: Vec<&str> = maude.as_deref().into_iter().collect();
-    argv.extend([
+    let code = run_cli(&[
         "--prove=nonexistent",
         &output_arg,
         "--quiet",
         in_path.to_str().unwrap(),
     ]);
-    let args = args_from(&argv);
-    let code = run(&args).expect("run");
     assert_eq!(code, 0);
     let body = std::fs::read_to_string(&out_path).expect("output written");
     // The filter excludes every lemma, so `chain` is left unproven in the
@@ -236,11 +198,7 @@ fn output_dir_writes_basename_underscore_analyzed() {
     // `-O` naming can only be exercised on the (maude-needing) close path.
     // No `--prove` either, so no lemma is actually proven — this stays fast.
     let output_arg = format!("--Output={}", out_dir.to_str().unwrap());
-    let maude = maude_arg();
-    let mut argv: Vec<&str> = maude.as_deref().into_iter().collect();
-    argv.extend([&output_arg as &str, in_path.to_str().unwrap()]);
-    let args = args_from(&argv);
-    let code = run(&args).expect("run");
+    let code = run_cli(&[&output_arg, in_path.to_str().unwrap()]);
     assert_eq!(code, 0);
     // Expected output: <out_dir>/single_recv_analyzed.spthy
     let expected = out_dir.join("single_recv_analyzed.spthy");
@@ -457,18 +415,14 @@ fn user_em_without_bp_builtin_is_a_plain_function() {
     let out_path = out_dir.join("em_no_bp_out.spthy");
 
     let output_arg = format!("--output={}", out_path.to_str().unwrap());
-    let maude = maude_arg();
-    let mut argv: Vec<&str> = maude.as_deref().into_iter().collect();
-    argv.extend([
+    let code = run_cli(&[
         "--prove",
         "--derivcheck-timeout=0",
         &output_arg,
         "--quiet",
         in_path.to_str().unwrap(),
     ]);
-    let args = args_from(&argv);
-    let code = run(&args).expect("run");
-    assert_eq!(code, 0, "expected exit code 0, got {}", code);
+    assert_eq!(code, 0, "expected exit code 0, got {code}");
 
     let body = std::fs::read_to_string(&out_path).expect("output written");
     assert!(

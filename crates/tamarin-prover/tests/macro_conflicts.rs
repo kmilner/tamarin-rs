@@ -26,40 +26,21 @@
 //! expectations below are its `--quiet` stderr minus the three banner lines,
 //! whose maude path and version are machine-local.
 
-use std::process::Command;
+mod common;
 
+use common::{maude_arg, maude_available, strip_maude_banner};
 use tamarin_prover::{parse_args, run};
 
-fn maude_available() -> bool {
-    // A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION,
-    // not a reason to skip: returning `false` there would report green
-    // vacuously on a CI whose image moved maude.
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        assert!(
-            std::path::Path::new(&p).exists(),
-            "MAUDE_PATH={p} does not exist; unset it or point it at a real maude"
-        );
-        return true;
-    }
-    for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
-        if std::path::Path::new(c).exists() {
-            return true;
-        }
-    }
-    false
-}
+/// The temp subdirectory this suite writes its theories to.
+const TMP_DIR: &str = "tamarin_prover_macro_conflicts";
 
-/// `--with-maude=PATH` from the `MAUDE_PATH` env override, when set.
-fn maude_arg() -> Option<String> {
-    std::env::var("MAUDE_PATH")
-        .ok()
-        .map(|p| format!("--with-maude={p}"))
-}
-
-fn run_theory(name: &str, src: &str) -> i32 {
-    let dir = std::env::temp_dir().join("tamarin_prover_macro_conflicts");
+/// Load `src` IN-PROCESS through `parse_args` + `run`, returning the exit
+/// code.  Used where only the code matters — the stderr bytes of the parsec
+/// `die` are pinned in `crates/tamarin-parser/tests/macro_conflicts.rs`.
+fn run_theory(stem: &str, src: &str) -> i32 {
+    let dir = std::env::temp_dir().join(TMP_DIR);
     std::fs::create_dir_all(&dir).expect("mkdir");
-    let path = dir.join(name);
+    let path = dir.join(format!("{stem}.spthy"));
     std::fs::write(&path, src).expect("write theory");
     let maude = maude_arg();
     let mut argv: Vec<&str> = maude.as_deref().into_iter().collect();
@@ -68,45 +49,15 @@ fn run_theory(name: &str, src: &str) -> i32 {
     run(&args).expect("run")
 }
 
-/// Drop the `maude tool: '<path>'` line and the ` checking …: OK.` lines that
-/// follow it (Console.hs:150-155).  The path comes from `--with-maude` and the
-/// version from the local maude, so only their presence is portable.
-fn strip_maude_banner(stderr: &str) -> String {
-    let rest = stderr
-        .split_inclusive('\n')
-        .skip_while(|l| l.starts_with("maude tool: '") || l.starts_with(" checking "))
-        .collect::<String>();
-    assert_ne!(
-        rest, stderr,
-        "expected a `maude tool:` banner on stderr; got:\n{stderr}"
-    );
-    rest
-}
-
 /// Run the built binary on `src` and return `(exit code, stderr minus the
 /// maude banner)`.
 ///
 /// `--quiet` suppresses nothing HS emits, so the remaining stderr is the
 /// oracle's: the `[Theory …]` markers for a theory that loads, or the failure
 /// text for one that does not.
-fn run_binary(name: &str, src: &str) -> (i32, String) {
-    let dir = std::env::temp_dir().join("tamarin_prover_macro_conflicts");
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    let path = dir.join(name);
-    std::fs::write(&path, src).expect("write theory");
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
-    if let Some(a) = maude_arg() {
-        cmd.arg(a);
-    }
-    let out = cmd
-        .arg("--quiet")
-        .arg(&path)
-        .output()
-        .expect("spawn tamarin-rs");
-    (
-        out.status.code().expect("exit code"),
-        strip_maude_banner(&String::from_utf8(out.stderr).expect("utf-8 stderr")),
-    )
+fn run_binary(stem: &str, src: &str) -> (i32, String) {
+    let (code, _, stderr) = common::run_raw(TMP_DIR, stem, src, &["--quiet"]);
+    (code, strip_maude_banner(&stderr))
 }
 
 /// The stderr GHC's top-level handler writes for a `macro` `error` raised at
@@ -148,7 +99,7 @@ fn reserved_macro_name_prints_ghc_error_and_exits_1() {
         return;
     }
     let (code, stderr) = run_binary(
-        "reserved.spthy",
+        "reserved",
         "theory MacroRB begin\nbuiltins: diffie-hellman\nmacros: exp(x) = x\nend\n",
     );
     assert_eq!(code, 1);
@@ -170,7 +121,7 @@ fn duplicate_macro_arguments_print_ghc_error_and_exit_1() {
         return;
     }
     let (code, stderr) = run_binary(
-        "dup_args.spthy",
+        "dup_args",
         "theory MacroDA begin\nmacros: m(x, x) = x\nend\n",
     );
     assert_eq!(code, 1);
@@ -180,7 +131,7 @@ fn duplicate_macro_arguments_print_ghc_error_and_exit_1() {
     );
 
     let (code, stderr) = run_binary(
-        "dup_args_ok.spthy",
+        "dup_args_ok",
         "theory MacroDA begin\nmacros: m(x, x:pub) = x\nend\n",
     );
     assert_eq!(code, 0, "stderr: {stderr}");
@@ -198,14 +149,14 @@ fn conflicting_macro_name_exits_1() {
     }
     assert_eq!(
         run_theory(
-            "conflict.spthy",
+            "conflict",
             "theory MacroCF begin\nfunctions: f/1\nmacros: f(x) = x\nend\n"
         ),
         1
     );
     assert_eq!(
         run_theory(
-            "control.spthy",
+            "control",
             "theory MacroCF begin\nfunctions: f/1\nmacros: m(x) = x\nend\n"
         ),
         0

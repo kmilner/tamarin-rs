@@ -549,9 +549,8 @@ fn solve_action_goal_existing_node_with_action_is_linear_named() {
     sys.add_goal(Goal::Action(i, fa.clone()));
     let mut r = Reduction::new(&ctx, sys);
     let out = r.solve_action_goal(&i, &fa);
-    // Post-Root-D: `LinearNamed(rule_case_name)`. The case name must
-    // be present (showRuleCaseName ru) for the proof tree to render
-    // `case <name>` correctly.  Accept any non-empty name string.
+    // The case name must be present (showRuleCaseName ru) for the proof
+    // tree to render `case <name>` correctly.  Accept any non-empty name.
     match &out {
         GoalCases::LinearNamed(name) => {
             assert!(!name.is_empty(), "rule case name must be non-empty")
@@ -1051,9 +1050,8 @@ fn insert_formula_negated_less_mark_false_does_not_push_solved() {
         !crate::guarded::stores_contains(&r.sys.solved_formulas, &g),
         "mark=false MUST NOT push the negated-Less universal into \
              solved_formulas — HS `markAsSolved` is `when mark $ ...` \
-             (Reduction.hs:491).  Pre-fix RS pushed unconditionally, \
-             bumping HS's sSolvedFormulas-count-3 to RS's count-4 on \
-             Yubikey slightly_weaker_invariant."
+             (Reduction.hs:491).  Pushing unconditionally inflates \
+             sSolvedFormulas (Yubikey slightly_weaker_invariant: 3 vs 4)."
     );
 }
 

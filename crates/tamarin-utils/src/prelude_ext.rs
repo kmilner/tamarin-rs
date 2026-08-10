@@ -152,22 +152,20 @@ pub fn split_by<T: Clone, F: FnMut(&T) -> bool>(xs: &[T], mut p: F) -> Vec<Vec<T
     }
     let mut out: Vec<Vec<T>> = Vec::new();
     let mut cur: Vec<T> = Vec::new();
-    let mut had_separator = false;
+    let mut ended_on_separator = false;
     for x in xs {
         if p(x) {
             out.push(std::mem::take(&mut cur));
-            had_separator = true;
+            ended_on_separator = true;
         } else {
             cur.push(x.clone());
-            had_separator = false;
+            ended_on_separator = false;
         }
     }
     // Matches Haskell `unfoldr split`: a chunk is emitted before every
-    // separator and once more for the final (non-separator-terminated)
-    // remainder. The final partial chunk `cur` is emitted unless the input
-    // ended on a separator AND `cur` is empty, i.e. `!had_separator ||
-    // !cur.is_empty()`.
-    if !had_separator || !cur.is_empty() {
+    // separator, plus one final chunk for the remainder — which a trailing
+    // separator has already flushed, so it is skipped there.
+    if !ended_on_separator {
         out.push(cur);
     }
     out
@@ -276,6 +274,7 @@ pub fn flush_left(n: usize, s: &str) -> String {
 
 fn flush_by(sep: &str, n: usize, s: &str, right: bool) -> String {
     let s_len = s.chars().count();
+    // An empty `sep` would make HS's `cycle sep` diverge; pad nothing instead.
     if s_len >= n || sep.is_empty() {
         return s.to_string();
     }

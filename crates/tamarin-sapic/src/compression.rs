@@ -113,21 +113,18 @@ fn get_produced_facts(rules: &[ERule]) -> BTreeSet<LNFact> {
     out
 }
 
-/// `mergeAttrs a a' = a <> a'` (Compression.hs:60-68, see line 67) — Semigroup on attributes.
+/// `mergeInfo` (Compression.hs:60-68): keep the FIRST rule's name (`mergeStand
+/// n _ = n`), merge attrs, concatenate restrictions.
+///
+/// `mergeAttrs a a' = a <> a'` (Compression.hs:60-68, see line 67):
 /// `RuleAttributes::merge` is right-precedence (`other.x.or(self.x)`), matching
-/// HS `a <> a'`; for two rules of the same source process the result is the same
-/// either way.
-fn merge_attrs(a: RuleAttributes, b: RuleAttributes) -> RuleAttributes {
-    a.merge(b)
-}
-
-/// `mergeInfo` (Compression.hs:60-68): keep the FIRST rule's name, merge attrs,
-/// concatenate restrictions.
+/// HS `a <> a'`; for two rules of the same source process the result is the
+/// same either way.
 fn merge_info(i1: &ProtoRuleEInfo, i2: &ProtoRuleEInfo) -> ProtoRuleEInfo {
-    let name = i1.name; // `mergeStand n _ = n`
-    let attributes = merge_attrs(i1.attributes.clone(), i2.attributes.clone());
+    let name = i1.name;
+    let attributes = i1.attributes.clone().merge(i2.attributes.clone());
     let mut restrictions = i1.restrictions.clone();
-    restrictions.extend(i2.restrictions.clone());
+    restrictions.extend_from_slice(&i2.restrictions);
     ProtoRuleEInfo {
         name,
         attributes,
@@ -189,7 +186,7 @@ fn merge(comp_events: bool, rule1: &ERule, rule2: &ERule, ruleset: &mut Vec<ERul
         let info = merge_info(&rule1.info, &rule2.info);
         let actions = list_union(&rule1.actions, &rule2.actions);
         let mut new_vars = rule1.new_vars.clone();
-        new_vars.extend(rule2.new_vars.clone());
+        new_vars.extend_from_slice(&rule2.new_vars);
         let merged = Rule {
             info,
             premises: newprem,
@@ -218,7 +215,7 @@ fn merge_rules(comp_events: bool, leftrules: &[ERule], rightrules: &[ERule]) -> 
         ruleset
     } else {
         let mut out = leftrules.to_vec();
-        out.extend(rightrules.to_vec());
+        out.extend_from_slice(rightrules);
         out
     }
 }

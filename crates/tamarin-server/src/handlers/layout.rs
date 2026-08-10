@@ -15,7 +15,7 @@ use axum::{http::StatusCode, response::Response};
 
 use super::html_with_status;
 
-/// Byte-faithful port of HS `defaultLayout'` (`src/Web/Types.hs:699-733`): the
+/// Byte-faithful port of HS `defaultLayout'` (`src/Web/Types.hs:699-736`): the
 /// `$newline never` frame Yesod's `defaultLayout` puts around a page's
 /// `setTitle` text and its widget markup.  The standalone graph shell is the
 /// one page with a frame of its own ([`intdot_shell_html`], HS `intdotLayout`).

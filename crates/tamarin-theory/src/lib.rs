@@ -16,7 +16,8 @@
 //!   [`constraint::solver::reduction`]
 //! - [`sapic`] ← `Theory.Sapic.{Position, Term, Annotation, Process, Pattern}`
 //! - [`intruder_rules`] / [`intruder_variants`] ←
-//!   `Theory.Tools.IntruderRules`
+//!   `Theory.Tools.IntruderRules`; [`close_rule`] ← `CloseRule.hs`'s
+//!   no-deconstruction-chain check
 //! - [`predicate`] / [`predicate_expand`] ← `Theory.Syntactic.Predicate`
 //!   (data + lookup + `expandFormula`)
 //! - [`constraint`] ← `Theory.Constraint.*` (the constraint solver,
@@ -25,9 +26,12 @@
 //! - [`tools`] ← `Theory.Tools.*` (equation store, subterm store,
 //!   abstract interpretation, loop breakers, rule-variants,
 //!   injective-fact instances)
-//! - [`check_terms`] ← well-formedness checks; [`deriv_check`] ←
-//!   message-derivation checks; [`translated_wf`] ← the
-//!   `checkTranslatedTheory` re-runs both drivers share
+//! - [`check_terms`] / [`formula_reports`] / [`mult_restricted`] /
+//!   [`wf_fill`] ← `Theory.Tools.Wellformedness` (`checkTerms`,
+//!   `formulaReports`, `multRestrictedReport`, and the report's paragraph
+//!   layout); [`deriv_check`] ← message-derivation checks;
+//!   [`translated_wf`] ← the `checkTranslatedTheory` re-runs both drivers
+//!   share
 //! - [`theory`] ← top-level `Theory` (open/closed theories);
 //!   [`elaborate`] ← theory elaboration/closing
 //! - [`tactic`] ← heuristic tactics; [`proof_skeleton`] / [`replay`] /

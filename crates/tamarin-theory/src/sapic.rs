@@ -205,7 +205,7 @@ pub enum SapicAction<V> {
         concs: Vec<SapicNFact<V>>,
         /// Embedded `_restrict(...)` formulas attached to the MSR's action row
         /// (`[l]--[a restricting φ]->[r]`).  HS stores these as
-        /// `SapicNFormula v` (Process.hs:88-88); the RS port carries the
+        /// `SapicNFormula v` (Process.hs:81); the RS port carries the
         /// un-expanded parser-AST [`tamarin_parser::ast::Formula`] directly,
         /// exactly as `ProcessCombinator::Cond` does — the base translation
         /// (`baseTransAction` MSR, Basetranslation.hs:200-203) keeps them as the

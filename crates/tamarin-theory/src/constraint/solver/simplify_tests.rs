@@ -154,13 +154,8 @@ fn simplify_disj_decomposes_into_goal() {
 /// satisfy `isInTrace` (in sNodes / isLast / unsolved Action atom).
 /// Direct port of HS Simplify.hs `partialAtomValuation`.
 ///
-/// The existence of a less-atom with `smaller == n` (or an edge with
-/// `src == n`) is NOT by itself sufficient to collapse `Last(n)` to
-/// Some(false): the successor must also satisfy `is_in_trace`,
-/// otherwise HS returns Nothing.
-///
-/// This test pins that behaviour: the less-atom alone must NOT
-/// collapse `Last(n)` to Some(false).
+/// This test pins that behaviour: a less-atom with `smaller == n`
+/// alone must NOT collapse `Last(n)` to `Some(false)`.
 #[test]
 fn partial_atom_valuation_last_returns_none_when_successor_not_in_trace() {
     let path = match maude_path() {
@@ -191,9 +186,6 @@ fn partial_atom_valuation_last_returns_none_when_successor_not_in_trace() {
     //   isLast sys n             = False (no last_atom)
     //   any isInTrace (nodesAfter n) = isInTrace m = False
     //   case sLastAtom of Nothing -> Nothing
-    // This test pins that a less-atom with `smaller == n` alone must
-    // NOT collapse `Last(n)` to `Some(false)` unless the successor
-    // also satisfies `is_in_trace`.
     let mut sys = System::empty();
     let n = mkvar_l("n", 0);
     let m = mkvar_l("m", 0);
@@ -217,10 +209,8 @@ fn partial_atom_valuation_last_returns_none_when_successor_not_in_trace() {
     assert_eq!(
         result, None,
         "HS-faithful: `Last n` with `n < m` but m not in trace must \
-             yield None (not Some(false)).  Pre-fix RS returned \
-             Some(false) here.  Mirrors HS \
-             Simplify.hs `any (isInTrace sys) (nodesAfter i)` \
-             guard."
+             yield None (not Some(false)).  Mirrors HS Simplify.hs's \
+             `any (isInTrace sys) (nodesAfter i)` guard."
     );
 }
 
@@ -408,8 +398,14 @@ fn match_atom_via_maude_pattern_with_pair_against_pair() {
     assert!(subst.contains_key(&("i", 0u64)));
 }
 
+/// `match_atom_via_maude` does NOT itself filter on arity — its caller
+/// does (`simplify.rs`'s `g_fact_subst.args.len() != fa_sys.terms.len()`
+/// guard just above the call).  With no subject args the pairwise
+/// equation list is empty, so the function short-circuits to the single
+/// time-only substitution and never reaches Maude.  Pinned so that a
+/// future rewrite cannot start silently binding unmatched pattern vars.
 #[test]
-fn match_atom_via_maude_rejects_wrong_arity() {
+fn match_atom_via_maude_zero_subject_args_binds_only_the_time() {
     let path = match maude_path() {
         Some(p) => p,
         None => return,
@@ -438,7 +434,7 @@ fn match_atom_via_maude_rejects_wrong_arity() {
     };
     let g_time = mk_var_p("i", 0, tamarin_parser::ast::SortHint::Node);
     let i_node = tamarin_term::lterm::LVar::new("n", tamarin_term::lterm::LSort::Node, 0);
-    let subst = match_atom_via_maude(
+    let substs = match_atom_via_maude(
         &h,
         &vars,
         &mk_pattern_vars(&vars),
@@ -447,13 +443,18 @@ fn match_atom_via_maude_rejects_wrong_arity() {
         &i_node,
         &[],
     );
-    // Different arity: empty subst (no fact args to match) but
-    // implementation handles via early return — match_eqs on
-    // empty list returns trivial unifier. We accept either way
-    // since there's nothing for Maude to constrain.
-    // However if the result is None then the caller correctly
-    // rejected the match — that's also valid.
-    let _ = subst; // accept any outcome on this corner
+    assert_eq!(substs.len(), 1, "empty equation list ⇒ one trivial matcher");
+    let subst = &substs[0];
+    match subst.get(&("i", 0u64)) {
+        Some(tamarin_parser::ast::Term::Var(v)) => {
+            assert_eq!((v.name.as_str(), v.idx), ("n", 0));
+        }
+        other => panic!("expected i → Var(n, 0), got {other:?}"),
+    }
+    assert!(
+        !subst.contains_key(&("k", 0u64)),
+        "the unmatched pattern arg must stay unbound"
+    );
 }
 
 #[test]

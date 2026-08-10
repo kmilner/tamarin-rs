@@ -451,7 +451,7 @@ fn collect_var_specs(t: &p::Term, out: &mut Vec<p::VarSpec>) {
 /// i.e. ¬∃ vars #t0 #t1. Generated_0(varD s) @ #t0 ∧ K(fact_term) @ #t1
 /// — with `aLemma`'s arguments NOT Msg→Fresh-retyped (only
 /// `lvarToLnterm`'s Nat→Fresh), and `kLogFact = protoFact Linear "K"`
-/// (Fact.hs:302-303).  Built over the parser-AST formula layer (the
+/// (Theory/Model/Fact.hs:302-303).  Built over the parser-AST formula layer (the
 /// `Guarded` leaf type) via `lnterm_to_parser` and converted by the same
 /// `formula_to_guarded` the load path applies to user lemmas.
 ///

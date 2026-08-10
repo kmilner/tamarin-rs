@@ -156,24 +156,6 @@ fn unify_pub_var_with_pk_msg_term_fails() {
 }
 
 #[test]
-fn reduce_pair_fst_snd() {
-    let path = match maude_path() {
-        Some(p) => p,
-        None => {
-            eprintln!("skipping: no maude");
-            return;
-        }
-    };
-    // pair_dest_maude_sig has fst/snd as destructors with rules.
-    let sig = crate::maude_sig::pair_maude_sig();
-    let h = MaudeHandle::start(&path, sig).expect("start");
-    // Reduce a simple variable — should be itself.
-    let x = LVar::new("x", LSort::Msg, 0);
-    let t: LNTerm = crate::term::Term::Lit(Lit::Var(x));
-    assert_eq!(h.reduce(&t).expect("reduce"), t);
-}
-
-#[test]
 fn pool_acquire_release_size() {
     let path = match maude_path() {
         Some(p) => p,
@@ -241,7 +223,6 @@ fn pool_sequential_reuse_stays_at_one_spawned() {
 
 #[test]
 fn pool_parallel_reduce_returns_correct_results() {
-    use std::sync::Arc;
     let path = match maude_path() {
         Some(p) => p,
         None => {
@@ -463,7 +444,7 @@ fn match_eqs_const_subject_mset_var_to_submultiset() {
 }
 
 // HS's `impliedFormulas` runs `skolemizeGuarded` over the WHOLE clause
-// (`System.hs:1111-1145, see line 1122`): every FREE (non-universal) LVar of the guard
+// (`System.hs:1110-1144, see line 1121`): every FREE (non-universal) LVar of the guard
 // pattern becomes a Maude *constant*; only universal-bound vars stay
 // bindable. `match_eqs_const_subject` over-matches such guards (treats
 // free vars as Maude variables); `match_eqs_skolemize_both` treats them

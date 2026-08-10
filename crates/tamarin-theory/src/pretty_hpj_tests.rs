@@ -109,16 +109,14 @@ fn punctuate_separates() {
 
 #[test]
 fn nested_binop_w_shrinks_with_depth() {
-    // Mirror the wireguard "5-deep And" case (pattern 2 from
-    // commit 681224a7 follow-up).  Build a deep `(A ∧ B)` sep
-    // where each level is `sep [opParens(left) <+> "∧", opParens(right)]`.
+    // Mirror the wireguard "5-deep And" case: a deep `(A ∧ B)` sep where each
+    // level is `sep [opParens(left) <+> "∧", opParens(right)]`.
     //
-    // With ribbon=73 measured from line start (sl=0 first line),
-    // after the outermost sep wraps to vertical, the inner sep
-    // gets `w` shrunk by `sl` (col where prior text started) and
-    // should wrap too.
+    // With the ribbon measured from the line start (sl=0 on the first line),
+    // once the outermost sep wraps to vertical the inner sep sees `w` shrunk
+    // by `sl` (the column where the prior text started) and must wrap too.
     let conn = |l: Doc, r: Doc| sep(vec![l.beside_sp(Doc::text("\u{2227}")), r]);
-    // Simpler test: sep deep nesting at width 40 should wrap.
+    // 36-char leaf, three bracket/operator levels on top: cannot fit at 50.
     let mut d = Doc::text("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"); // 36 chars
     for _ in 0..3 {
         d = conn(
@@ -335,10 +333,9 @@ fn dnp3_tuple_fill_keystatus_on_first_line() {
 
 #[test]
 fn fcat_close_bracket_separate_item() {
-    // Pattern 1: pair `<a, b, c>` modeled as fcat with `>` as a
-    // separate final item.  When the items pack to fit, then add
-    // `>` — if `>` would overflow at the boundary, fcat should
-    // break BEFORE the `>`.
+    // A pair `<a, b, c>` modeled as an `fcat` whose closing `>` is a separate
+    // final item: the closer must pack onto the last content line when it
+    // fits, and only move down when it would overflow.
     let items = vec![
         Doc::text("<"),
         Doc::text("aaa,"),
@@ -348,9 +345,8 @@ fn fcat_close_bracket_separate_item() {
         Doc::text(">"),
     ];
     let d = fcat(items);
-    // At width 12, items pack greedily.  "abc" pattern.
+    // At width 12 the items pack greedily: `<aaa,bbb,` fills the first line
+    // (adding `ccc,` would reach 13), and `>` still fits after `ccc,ddd`.
     let out = d.render_with(12, 12);
-    // Verify '<' is on first line, '>' is on its own line or
-    // attached to ddd.
-    assert!(out.starts_with('<'), "got: {out:?}");
+    assert_eq!(out, "<aaa,bbb,\nccc,ddd>");
 }

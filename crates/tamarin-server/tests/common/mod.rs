@@ -71,11 +71,15 @@ pub async fn start_server_with_theory(fixture_name: &str) -> TestServer {
     // /static won't care if it doesn't exist.
     let data_dir = resolve_data_dir(Some(workspace_root().join("tamarin-prover/data")));
 
+    // One probe, shared by the config and the eager load below, so the two
+    // cannot disagree about which binary they mean.
+    let maude_path = detect_maude();
+
     let cfg = ServerConfig {
         bind_addr: "127.0.0.1:0".parse().unwrap(),
         data_dir,
         frontend_dist: None,
-        maude_path: detect_maude(),
+        maude_path: maude_path.clone(),
         max_steps: 200,
         // Match ServerConfig::new's default (HS interactive default 5s).
         derivcheck_timeout: 5,
@@ -90,7 +94,7 @@ pub async fn start_server_with_theory(fixture_name: &str) -> TestServer {
     let store = TheoryStore::default();
     let entry = tamarin_server::theory_io::load_from_path(
         &theory_path,
-        &detect_maude(),
+        &maude_path,
         cfg.derivcheck_timeout,
     )
     .expect("fixture should parse + elaborate");
@@ -171,8 +175,9 @@ fn detect_maude() -> String {
     "maude".into()
 }
 
-/// True when a Maude binary exists at one of [`MAUDE_CANDIDATES`].  Tests
-/// that boot a real `ProofContext` use this as a skip-guard.
+/// True when a Maude binary is available: `MAUDE_PATH` when set, else one of
+/// [`MAUDE_CANDIDATES`].  Tests that boot a real `ProofContext` use this as a
+/// skip-guard.
 ///
 /// A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION,
 /// not a reason to skip: returning `false` there would turn every

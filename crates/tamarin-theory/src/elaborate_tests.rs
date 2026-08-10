@@ -336,7 +336,7 @@ fn builtin_matching_redeclaration_accepted() {
 }
 
 // `dest-pairing` is exempt from the builtins-arm FUNCTION check
-// (Signature.hs:124) — oracle probes tb / tc — and a destructor
+// (Theory/Text/Parser/Signature.hs:124) — oracle probes tb / tc — and a destructor
 // fst re-declaration matches its merged tuple, so the pre-check
 // passes too.
 #[test]
@@ -379,7 +379,8 @@ fn enable_flag_builtins_reserve_no_names() {
 }
 
 // Without `dest-pairing`, `fst`/`snd` are not builtin-reserved, so the
-// pre-check is silent and the name-only short-circuit (Signature.hs:217)
+// pre-check is silent and the name-only short-circuit
+// (Theory/Text/Parser/Signature.hs:217)
 // returns the existing symbol: the signature keeps the CONSTRUCTOR
 // variant — oracle probe t1.
 #[test]

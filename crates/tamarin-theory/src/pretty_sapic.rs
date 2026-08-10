@@ -37,10 +37,10 @@
 //!   - `prettySapicAction'` (Process.hs:450-469).
 //!   - `prettySapicTopLevel'` (Process.hs:514-524).
 //!
-//! Scope: the LINEAR subset (`New` / `Event` / `ChOut` / `ChIn` / `Null`).
-//! Everything that typing2 cannot reach renders defensively (or is left to
-//! later phases); the printers here are only used for SAPIC-generated output,
-//! so they never affect non-process theories.
+//! Scope: every `SapicAction` and `ProcessCombinator` variant, but only the
+//! TOP node of a process — `prettySapic'`'s recursive `$-$`/`nest` layout
+//! (Process.hs:485-512) is not ported here; `pretty_theory::open_process_doc`
+//! walks the tree and calls [`pretty_sapic_top_level`] per node.
 
 use tamarin_term::function_symbols::{diff_sym, exp_sym, nat_one_sym, pair_sym, EMAP_SYM_STRING};
 use tamarin_term::function_symbols::{AcSym, CSym, FunSym};

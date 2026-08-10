@@ -278,7 +278,7 @@ pub struct ParsedProofTree {
 }
 
 /// Parsed proof method.  Mirrors HS's `ProofMethod` enum (matched by
-/// `Theory.Text.Parser.Proof.proofMethod`, Proof.hs:76-85).  Plus
+/// `Theory.Text.Parser.Proof.proofMethod`, Text/Parser/Proof.hs:76-85).  Plus
 /// `Solved` for the `SOLVED` keyword leaf and `Other` for any token
 /// pattern intentionally left to the auto-prover fallback.
 #[derive(Debug, Clone, PartialEq)]
@@ -353,7 +353,7 @@ pub enum GoalSpec {
     /// HS parses each disjunct as a full `Guarded` value bearing
     /// concrete LVar identities, then matches by structural equality
     /// against the open `Goal::Disj(...)` in `sys.goals` (HS
-    /// ProofMethod.hs:254-274, see line 259 `SolveGoal goal -> guard (goal `M.member`
+    /// ProofMethod.hs:254-274, see line 258 `SolveGoal goal -> guard (goal `M.member`
     /// L.get sGoals sys)`).
     ///
     /// We can't reconstruct skeleton-text LVar indices reliably (they
@@ -373,7 +373,7 @@ pub enum GoalSpec {
     /// `chainGoal = ChainG <$> (try (nodeConc <* opChain)) <*> nodePrem`
     /// (Theory/Text/Parser/Proof.hs:39-72, see line 59).  `nodeConc`/`nodePrem` parse
     /// `(<nodevar>, <natural>)` and the operator is `~~>` (HS
-    /// `prettyGoal (ChainG c p)` Constraints.hs:269-270).
+    /// `prettyGoal (ChainG c p)` Constraints.hs:275-276).
     ///
     /// We capture the time-var names (e.g. `i`, `j` from `#i`/`#j`)
     /// and the conclusion / premise indices.  The replay matcher
@@ -395,7 +395,7 @@ pub enum GoalSpec {
     ///   b <- termp
     ///   return $ SubtermG (a, b)
     /// ```
-    /// and the pretty-printer at Constraints.hs:281-282 emits
+    /// and the pretty-printer at Constraints.hs:287-288 emits
     /// `<term> ⊏ <term>` (U+228F).
     ///
     /// We keep both sides as raw text trimmed of outer whitespace; the
@@ -409,7 +409,7 @@ pub enum GoalSpec {
     ///   symbol_ "splitEqs"
     ///   parens $ (SplitG . SplitId . fromIntegral) <$> natural
     /// ```
-    /// and the pretty-printer at Constraints.hs:279-280 emits
+    /// and the pretty-printer at Constraints.hs:285-286 emits
     /// `splitEqs(<i64>)`.  The matcher looks up `Goal::Split(SplitId(N))`
     /// by exact id — split ids are stable identifiers minted by the
     /// equation store, not subject to LVar-style renaming.

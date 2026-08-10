@@ -57,23 +57,18 @@ fn drop_entailed_ord_constraints(mut sys: RenderSystem) -> RenderSystem {
     // Build adjacency from `rawEdgeRel` = edges ++ unsolvedChains
     // (Simplification.hs:33-38, see line 37 / System.hs:1613-1616).
     let adj = build_raw_edge_adjacency(&sys);
-    let mut new_atoms: Vec<LessAtom> = Vec::with_capacity(sys.less_atoms.len());
-    for la in &sys.less_atoms {
-        // HS `entailed (LessAtom from to _) = to `S.member` reachableSet [from] edges`
-        // (Simplification.hs:33-38, see line 38).  `Dag.reachableSet [from]` ALWAYS contains the
-        // start node `from` itself (DAG/Simple.hs:72-78: `visit` inserts `x`
-        // before recursing), so a REFLEXIVE atom (`from == to`) is unconditionally
-        // entailed — hence dropped from the display graph.  `reachable` below is
-        // strict-path (returns false for `from == to`), so the reflexive case must
-        // be added explicitly to match HS; otherwise a `#t1 < #t1` born from a
-        // `#t1 < #t2` less-atom collapsed under a `t2 = t1` subst survives here and
-        // renders as a spurious dashed self-loop that HS never draws.
-        let entailed = la.smaller == la.larger || reachable(&adj, &la.smaller, &la.larger);
-        if !entailed {
-            new_atoms.push(la.clone());
-        }
-    }
-    sys.content_mut().less_atoms = new_atoms;
+    // HS `entailed (LessAtom from to _) = to `S.member` reachableSet [from] edges`
+    // (Simplification.hs:33-38, see line 38).  `Dag.reachableSet [from]` ALWAYS
+    // contains the start node `from` itself (DAG/Simple.hs:72-78: `visit` inserts
+    // `x` before recursing), so a REFLEXIVE atom (`from == to`) is unconditionally
+    // entailed — hence dropped from the display graph.  `reachable` below is
+    // strict-path (returns false for `from == to`), so the reflexive case must be
+    // added explicitly to match HS; otherwise a `#t1 < #t1` born from a
+    // `#t1 < #t2` less-atom collapsed under a `t2 = t1` subst survives here and
+    // renders as a spurious dashed self-loop that HS never draws.
+    sys.content_mut()
+        .less_atoms
+        .retain(|la| la.smaller != la.larger && !reachable(&adj, &la.smaller, &la.larger));
     sys
 }
 
@@ -148,18 +143,15 @@ fn try_hide_node_id(v: &NodeId, sys: RenderSystem) -> RenderSystem {
     if mentioned_in_formulas(v, &sys.formulas) {
         return sys;
     }
-    // Try hideRule first if v has a node entry, else hideAction.
-    if let Some((_, ru)) = sys.nodes.iter().find(|(id, _)| id == v).cloned() {
-        match try_hide_rule(v, ru, sys) {
-            Ok(updated) => updated,
-            Err(restored) => restored,
-        }
-    } else {
-        match try_hide_action(v, sys) {
-            Ok(updated) => updated,
-            Err(restored) => restored,
-        }
-    }
+    // Try hideRule first if v has a node entry, else hideAction.  Either way
+    // the `Err` arm carries the untouched system back, so both are kept.
+    let node_rule = sys.nodes.iter().find(|(id, _)| id == v).cloned();
+    let attempt = match node_rule {
+        Some((_, ru)) => try_hide_rule(v, ru, sys),
+        None => try_hide_action(v, sys),
+    };
+    let (Ok(out) | Err(out)) = attempt;
+    out
 }
 
 fn mentioned_in_unsolved_chains(v: &NodeId, sys: &System) -> bool {

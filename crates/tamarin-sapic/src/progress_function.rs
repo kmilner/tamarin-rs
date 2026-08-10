@@ -5,14 +5,15 @@
 //! Port of `Sapic.ProgressFunction` (`lib/sapic/src/Sapic/ProgressFunction.hs`).
 //!
 //! Computes, for each process position, the set of positions a local-progress
-//! translation must move to.  The two key outputs consumed by
-//! `progress_translation` are:
+//! translation must move to.  Three entry points are exported:
 //!   - `pf_from`   (HS `pfFrom`):  the domain of the progress function — the set
 //!     of "from" positions (positions that, once reached, must make progress).
 //!   - `pf`        (HS `pf`):      per from-position, the CNF set-of-sets of "to"
 //!     positions (`{{p1},{p2,p3}}` = go to p1 AND (p2 OR p3)).
-//!   - `pf_range`  (HS `pfRange`): the set of all "to" positions (the range), and
 //!   - `pf_inv`    (HS `pfInv`):   the inverse map (to → from).
+//!
+//! HS `pfRange` (the range on its own) has no RS consumer and is not ported;
+//! its helper `pfRange'` is [`pf_range_prime`], which `pf_inv` searches.
 //!
 //! Faithful to HS down to set iteration order: `S.Set ProcessPosition` is
 //! modelled as `BTreeSet<Vec<i64>>` (lexicographic position order = HS `Ord
@@ -123,28 +124,28 @@ fn next0_or_child(p: &AProc, pos: &[i64]) -> PosSet {
 ///
 /// `pfFrom process = from' process True`.
 pub fn pf_from(process: &AProc) -> Result<PosSet, String> {
-    fn from(process: &AProc, proc: &AProc, b: bool) -> Result<PosSet, String> {
+    fn from(proc: &AProc, b: bool) -> Result<PosSet, String> {
         if let Process::Null(_) = proc {
             return Ok(PosSet::new());
         }
-        // `conditionAction proc b = not (blocking proc) && b`
-        let condition = !blocking(proc) && b;
-        let mut res = if condition {
+        let blk = blocking(proc);
+        // `singletonOrEmpty (conditionAction proc b)`, where
+        // `conditionAction proc b = not (blocking proc) && b`.
+        let mut res = if !blk && b {
             [Vec::<i64>::new()].into_iter().collect::<PosSet>()
         } else {
             PosSet::new()
         };
-        let blk = blocking(proc);
         for pos in next(proc) {
             // `p' <- processAt proc pos; res <- from' p' (blocking proc)`
             let p_at = process_at(proc, &pos)
                 .ok_or_else(|| format!("pfFrom: invalid position {pos:?}"))?;
-            let sub = from(process, p_at, blk)?;
+            let sub = from(p_at, blk)?;
             res.extend(prefix_set(&pos, &sub));
         }
         Ok(res)
     }
-    from(process, process, true)
+    from(process, true)
 }
 
 /// `combine x y = { x_i ∪ y_i | x_i ∈ x, y_i ∈ y }` (ProgressFunction.hs:94-99).
@@ -224,12 +225,13 @@ fn pf_range_prime(proc: &AProc) -> Result<BTreeSet<(Pos, Pos)>, String> {
 /// — given a "to" position, the (first matching) "from" position.
 ///
 /// HS uses `L.find` over `S.toList set` (ascending `(to, from)` pair order), so
-/// the first `from` for a `to` in lexicographic pair order wins.
+/// the first `from` for a `to` in lexicographic pair order wins.  The pairs are
+/// ascending in `to` first, so keeping the FIRST `from` seen per `to` in a map
+/// is that same choice, answered by lookup instead of a scan per query.
 pub fn pf_inv(proc: &AProc) -> Result<impl Fn(&[i64]) -> Option<Pos>, String> {
-    let set = pf_range_prime(proc)?;
-    Ok(move |x: &[i64]| -> Option<Pos> {
-        set.iter()
-            .find(|(to, _)| to.as_slice() == x)
-            .map(|(_, from)| from.clone())
-    })
+    let mut inv: std::collections::BTreeMap<Pos, Pos> = std::collections::BTreeMap::new();
+    for (to, from) in pf_range_prime(proc)? {
+        inv.entry(to).or_insert(from);
+    }
+    Ok(move |x: &[i64]| -> Option<Pos> { inv.get(x).cloned() })
 }

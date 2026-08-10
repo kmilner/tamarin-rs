@@ -6,11 +6,11 @@
 //! abbreviation the JSON graph endpoint applies when the request carries the
 //! `abbrevInBackend` query parameter (`src/Web/Handler.hs:1440`).
 //!
-//! `abbrev n sys` picks every term of the constraint system's rule premises
-//! and conclusions whose `size` is at least `n` and replaces it with a short
+//! `abbrev n sys` picks every term of the constraint system's rule conclusions
+//! and premises whose `size` is at least `n` and replaces it with a short
 //! constant, returning the rewritten system plus the legend.  The web handler
-//! keeps only the system (`src/Web/Theory.hs:1330-1333`), so the legend is not
-//! materialised here.
+//! keeps only the system (`src/Web/Theory.hs:1331-1333`), so [`abbrev`] builds
+//! the legend but does not hand it back.
 //!
 //! The rewrite is display-only — it swaps abbreviation constants in for real
 //! terms and rebuilds facts without their cached fingerprints — so [`abbrev`]
@@ -51,7 +51,7 @@ fn get_terms(sys: &System) -> impl Iterator<Item = &LNTerm> {
     })
 }
 
-/// HS's `TermState` (Utils.hs:35): how many abbreviations each head symbol has
+/// HS's `TermState` (Utils.hs:36): how many abbreviations each head symbol has
 /// already produced.
 type TermState = FastMap<String, usize>;
 
@@ -76,7 +76,7 @@ fn shorten(t: &LNTerm, state: &mut TermState) -> LNTerm {
     lit(Lit::Con(Name::new(NameTag::Abbrev, name_id)))
 }
 
-/// The `Legend` (Utils.hs:31) `computeLegend` builds: a `Map LNTerm LNTerm`
+/// The `Legend` (Utils.hs:35) `computeLegend` builds: a `Map LNTerm LNTerm`
 /// assembled by `M.fromList . zip terms`, so when the same term is abbreviated
 /// more than once the LAST shortened form is the one that survives.
 type Legend = FastMap<LNTerm, LNTerm>;
@@ -92,7 +92,7 @@ fn compute_legend(n: usize, sys: &System) -> Legend {
     legend
 }
 
-/// Port of `updateSystem` (Utils.hs:92-106): rewrite the top-level terms of
+/// Port of `updateSystem` (Utils.hs:93-107): rewrite the top-level terms of
 /// every rule's premises and conclusions through the legend.  A rewritten fact
 /// is rebuilt from `(tag, annotations, terms)`, i.e. without its cached
 /// fingerprints — matching HS's `Fact tag a ts` and safe because the
@@ -112,7 +112,7 @@ fn update_system(legend: &Legend, sys: &mut System) {
     }
 }
 
-/// Port of `abbrev` (Utils.hs:109-116).
+/// Port of `abbrev` (Utils.hs:110-116).
 ///
 /// `abbreviate == false` is HS's `abbrev False _ sys = return (sys, M.empty)`,
 /// which hands the system back untouched.  Either way the result is sealed as

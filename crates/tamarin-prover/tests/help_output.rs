@@ -589,18 +589,9 @@ fn help_advertises_no_flag_the_parser_rejects() {
         let head = expected_head(pin);
         let mut flags = advertised_long_flags(&head, pin.desc_col);
         flags.extend(advertised_long_flags(pin.trailer, pin.trailer_col));
+        flags.extend(advertised_short_flags(&head, pin.desc_col));
+        flags.extend(advertised_short_flags(pin.trailer, pin.trailer_col));
         for f in flags {
-            if let Err(e) = parse_args(std::slice::from_ref(&f)) {
-                assert!(
-                    !e.to_string().starts_with("Unknown flag"),
-                    "{:?} advertises {f}, which the parser rejects: {e}",
-                    pin.argv
-                );
-            }
-        }
-        let mut shorts = advertised_short_flags(&head, pin.desc_col);
-        shorts.extend(advertised_short_flags(pin.trailer, pin.trailer_col));
-        for f in shorts {
             if let Err(e) = parse_args(std::slice::from_ref(&f)) {
                 assert!(
                     !e.to_string().starts_with("Unknown flag"),

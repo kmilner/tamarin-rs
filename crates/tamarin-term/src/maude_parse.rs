@@ -133,10 +133,9 @@ pub fn parse_reduce_reply(reply: &[u8]) -> Result<MTerm, ParseError> {
             String::from_utf8_lossy(&c.rest()[..c.rest().len().min(40)])
         )));
     }
-    // Sort: TOP -> Msg, otherwise parse_sort.
-    if c.eat_str(b"TOP") {
-        // ignore
-    } else {
+    // Sort: `TOP` or a named sort, either way discarded (HS
+    // `parseReduceReply` comments "we ignore the sort").
+    if !c.eat_str(b"TOP") {
         parse_sort(&mut c)?;
     }
     if !c.eat_str(b": ") {
@@ -174,8 +173,7 @@ pub fn parse_variants_reply(reply: &[u8]) -> Result<Vec<MSubst>, ParseError> {
         let _ = c.read_decimal();
         let _ = c.skip_eol();
         // Reprinted term (sort/TOP : term\n)
-        if c.eat_str(b"TOP") {
-        } else {
+        if !c.eat_str(b"TOP") {
             parse_sort(&mut c)?;
         }
         if !c.eat_str(b": ") {
@@ -195,7 +193,7 @@ pub fn parse_variants_reply(reply: &[u8]) -> Result<Vec<MSubst>, ParseError> {
         }
         variants.push(subst);
     }
-    // Haskell `parseVariantsReply` (Parser.hs:275-278):
+    // Haskell `parseVariantsReply` (Parser.hs:294-306, see lines 296-298):
     //   ... many1 parseVariant <* "No more variants." <* endOfLine
     //       <* "rewrites: " <* takeWhile1 isDigit <* endOfLine <* endOfInput
     // Require >=1 variant, then consume/validate the trailing footer and EOF.
@@ -231,21 +229,12 @@ fn parse_substitutions(c: &mut Cursor) -> Result<Vec<MSubst>, ParseError> {
         if c.is_eof() {
             break;
         }
-        // Each substitution starts with `Solution N`, `Unifier N`, or `Matcher N`.
-        let saved = c.pos;
-        let header_ok = c.eat_str(b"Solution ")
-            || {
-                c.pos = saved;
-                c.eat_str(b"Unifier ")
-            }
-            || {
-                c.pos = saved;
-                c.eat_str(b"Matcher ")
-            };
-        if !header_ok {
+        // Each substitution starts with `Solution N`, `Unifier N`, or
+        // `Matcher N`.  `eat_str` leaves the cursor untouched when it does
+        // not match, so the three alternatives can be tried in sequence.
+        if !(c.eat_str(b"Solution ") || c.eat_str(b"Unifier ") || c.eat_str(b"Matcher ")) {
             // No more substitution headers; stop reading.  `endOfInput`
             // is enforced after the loop.
-            c.pos = saved;
             break;
         }
         let _ = c.read_decimal();
@@ -256,18 +245,11 @@ fn parse_substitutions(c: &mut Cursor) -> Result<Vec<MSubst>, ParseError> {
             continue;
         }
         let mut entries = Vec::new();
-        loop {
-            // Stop when next line isn't an `xN:Sort --> ...` entry.
-            let saved2 = c.pos;
-            if c.eat_str(b"x") {
-                c.pos = saved2;
-                let entry = parse_entry(c)?;
-                entries.push(entry);
-            } else {
-                break;
-            }
+        // Stop when the next line isn't an `xN:Sort --> ...` entry.
+        while c.peek() == Some(b'x') {
+            entries.push(parse_entry(c)?);
         }
-        // HS `parseSubstitution` (Parser.hs:289-296, see line 293) uses `many1 parseEntry` for
+        // HS `parseSubstitution` (Parser.hs:309-316, see line 313) uses `many1 parseEntry` for
         // the non-`empty substitution` branch, requiring at least one entry.
         // (The `empty substitution` line is handled separately above.)
         if entries.is_empty() {
@@ -277,7 +259,7 @@ fn parse_substitutions(c: &mut Cursor) -> Result<Vec<MSubst>, ParseError> {
         }
         substs.push(entries);
     }
-    // Haskell `parseUnifyReply`/`parseMatchReply` (Parser.hs:258-270) wrap
+    // Haskell `parseUnifyReply`/`parseMatchReply` (Parser.hs:278-292) wrap
     // `many1 (parseSubstitution msig) <* endOfInput`: outside the explicit
     // no-unifier/no-match line at least one substitution is required and all
     // input must be consumed.
@@ -329,13 +311,10 @@ fn parse_sort(c: &mut Cursor) -> Result<LSort, ParseError> {
         Ok(LSort::Node)
     } else if c.eat_str(b"TamNat") {
         Ok(LSort::Nat)
-    } else if c.eat_str(b"Msg") {
-        Ok(LSort::Msg)
     } else if c.eat_str(b"M") {
-        // HS `parseSort` (Parser.hs:310-311) parses sort `Msg` as
-        // `string "M" *> string "sg"` (marked `FIXME: why?`); the explicit
-        // `Msg` branch above plus this `M`+`sg` branch reproduce it. Both
-        // accept exactly the byte sequence `Msg`.
+        // Transcribed as-is from HS `parseSort` (Parser.hs:325-331, see lines
+        // 330-331), which spells sort `Msg` as `string "M" *> string "sg"`
+        // (marked `FIXME: why?`).
         if c.eat_str(b"sg") {
             Ok(LSort::Msg)
         } else {
@@ -420,9 +399,10 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
     // the C-symbol equivalent) would do.  The compared bytes are exactly
     // what those helpers would have produced (`tam` + name), so the dispatch is
     // byte-identical; ordinary (non-`tam`) symbols short-circuit immediately.
-    if let Some(suffix) = ident.strip_prefix(FUN_SYM_PREFIX.as_bytes()) {
+    let tam_suffix = ident.strip_prefix(FUN_SYM_PREFIX.as_bytes());
+    if let Some(suffix) = tam_suffix {
         // Built-in AC operator?  Guard order follows HS `appIdent`
-        // (Parser.hs:373-386); the names are distinct, so only the pairing
+        // (Parser.hs:375-386); the names are distinct, so only the pairing
         // matters.
         for (op, name) in [
             (AcSym::Mult, MULT_SYM_STRING),
@@ -453,7 +433,7 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
             return crate::term::f_app_acfct(parse_fun_ac_sym(ident), args);
         }
         // C operator (em)?
-        // Mirror HS `fAppC EMap args` (Maude/Parser.hs:314-369, see line 355): sort the two
+        // Mirror HS `fAppC EMap args` (Parser.hs:383): `f_app_c` sorts the two
         // arguments so `em` is canonical regardless of Maude's output order.
         if suffix == EMAP_SYM_STRING {
             return crate::term::f_app_c(CSym::EMap, args);
@@ -470,7 +450,7 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
     // `cons`/`nil` should have been handled inside `list(...)`; if they
     // reach here they fall through to the no-eq handling below.
     // Free symbol — decode and lookup.
-    if ident.starts_with(FUN_SYM_PREFIX.as_bytes()) {
+    if tam_suffix.is_some() {
         let (name, p, c, ndc) = fun_sym_decode(ident);
         let name = replace_minus(&name);
         let arity = args.len();
@@ -530,7 +510,7 @@ fn is_ac_fct_ident(ident: &[u8]) -> bool {
         && matches!(rest[3], b'N' | b'U' | b'D' | b'B')
 }
 
-/// HS `parseFunACSym` (Parser.hs:365-367): decode the attributes out of the
+/// HS `parseFunACSym` (Parser.hs:366-368): decode the attributes out of the
 /// Maude identifier and undo the `_` -> `-` renaming applied when it was
 /// emitted (`replaceMinusFunAC`).
 fn parse_fun_ac_sym(ident: &[u8]) -> AcFctSym {
@@ -539,17 +519,24 @@ fn parse_fun_ac_sym(ident: &[u8]) -> AcFctSym {
 }
 
 fn flatten_cons(t: &MTerm) -> Vec<MTerm> {
-    if let Term::App(FunSym::NoEq(s), args) = t {
-        if s.name == b"cons" && args.len() == 2 {
-            let mut v = vec![args[0].clone()];
-            v.extend(flatten_cons(&args[1]));
-            return v;
+    // Walk the `cons` spine iteratively: the recursive shape would allocate
+    // (and re-copy) one `Vec` per list element.
+    let mut out = Vec::new();
+    let mut cur = t;
+    loop {
+        if let Term::App(FunSym::NoEq(s), args) = cur {
+            if s.name == b"cons" && args.len() == 2 {
+                out.push(args[0].clone());
+                cur = &args[1];
+                continue;
+            }
+            if s.name == b"nil" && args.is_empty() {
+                return out;
+            }
         }
-        if s.name == b"nil" && args.is_empty() {
-            return Vec::new();
-        }
+        out.push(cur.clone());
+        return out;
     }
-    vec![t.clone()]
 }
 
 #[cfg(test)]

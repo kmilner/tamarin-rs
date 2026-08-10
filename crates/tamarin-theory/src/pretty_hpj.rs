@@ -53,8 +53,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 ///   - the interactive web server renders every HTTP response at HS's
 ///     *web* width 100/67 — HughesPJ's default `style` used by `render`
 ///     (`getTheorySourceR` = `render . prettyClosedTheory`,
-///     `src/Web/Handler.hs:950-957, see line 956`) and by `renderHtmlDoc`
-///     (`Text/PrettyPrint/Html.hs:140-149, see line 151`).
+///     `src/Web/Handler.hs:1015-1022, see line 1021`) and by `renderHtmlDoc`
+///     (`Text/PrettyPrint/Html.hs:152-153`).
 ///
 /// Defaults to 110/73 so the CLI path is unchanged; the server calls
 /// [`set_display_width`] once at startup, before any rendering.  This is
@@ -88,13 +88,13 @@ thread_local! {
     /// as its HTML-entity-escaped column count instead of its visible column
     /// count.  This mirrors HS's web render path, which builds every document
     /// through the `HtmlDoc Doc` transformer: its `Document (HtmlDoc d)`
-    /// instance (`Text/PrettyPrint/Html.hs:105-107`) runs `escapeHtmlEntities`
+    /// instance (`Text/PrettyPrint/Html.hs:102-104`) runs `escapeHtmlEntities`
     /// on every `text`/`char` token BEFORE the HughesPJ fill measures it, so a
     /// `<`/`>` costs 4 columns (`&lt;`/`&gt;`) and a `'` costs 5 (`&#39;`) when
     /// deciding line breaks.  The interactive server escapes AFTER rendering
     /// (`html_escape`), so without matching this accounting its `fsep`/`fcat`
-    /// wraps a pair-tuple `<…>` at a different column than HS (task #17 family
-    /// D — a space appears/disappears before a tuple's closing `>`).
+    /// wraps a pair-tuple `<…>` at a different column than HS (a space
+    /// appears/disappears before a tuple's closing `>`).
     ///
     /// This is presentation-only: it never affects proof search or verdicts,
     /// and it is scoped (via [`HtmlEntityWidthGuard`]) to the web
@@ -104,7 +104,7 @@ thread_local! {
 }
 
 /// Column width of `s` after HTML-entity escaping, matching HS
-/// `escapeHtmlEntities` (`Text/PrettyPrint/Html.hs:130-138`) and the server's
+/// `escapeHtmlEntities` (`Text/PrettyPrint/Html.hs:140-149`) and the server's
 /// `html_escape`: `<`/`>` → `&lt;`/`&gt;` (4), `&` → `&amp;` (5), `'` →
 /// `&#39;` (5), `"` → `&quot;` (6); every other codepoint counts as 1 column.
 fn html_entity_col_width(s: &str) -> usize {
@@ -144,7 +144,7 @@ thread_local! {
     /// When enabled:
     ///   * [`Doc::text`]/[`Doc::char`] run `escapeHtmlEntities` on their content
     ///     BEFORE it enters the layout, exactly as the `Document (HtmlDoc d)`
-    ///     instance (`Html.hs:102-105`) — so the stored bytes are already escaped
+    ///     instance (`Html.hs:102-104`) — so the stored bytes are already escaped
     ///     and the HughesPJ fill measures each token at its escaped-entity width
     ///     (`<`/`>` = 4, `&`/`'` = 5, `"` = 6).  This is a superset of the
     ///     width-only [`HtmlEntityWidthGuard`].
@@ -176,7 +176,7 @@ impl HtmlDocGuard {
     /// drop).  For plain-text side channels rendered while an enclosing
     /// page render holds an `enable()` guard — e.g. the oracle/tactic
     /// goal strings, which HS produces with the plain `render $
-    /// prettyGoal` regardless of the surrounding widget (ProofMethod.hs:598-623, see line 607):
+    /// prettyGoal` regardless of the surrounding widget (ProofMethod.hs:597-623, see line 606):
     /// HTML spans/entities in oracle stdin break the oracle's regexes.
     pub fn disable() -> Self {
         HtmlDocGuard(HTML_MODE.with(|c| c.replace(false)))
@@ -455,7 +455,7 @@ impl Doc {
     /// `fullRender`/`easyDisplay`): every `Union` takes its SECOND
     /// (fully-laid-out) branch — the one guaranteed free of `NoDoc` —
     /// every `Nest` is dropped, and every `NilAbove` (line break) becomes
-    /// exactly ONE space.  Used by HS `Dot.hs:371-373`'s `oneLineRender`
+    /// exactly ONE space.  Used by HS `Dot.hs:371-376, see line 374`'s `oneLineRender`
     /// to measure each record field's used width for `renderBalanced`.
     pub fn one_line_render(&self) -> String {
         // Iterative for the same stack-depth reason as `lay_loop`.
@@ -846,8 +846,8 @@ fn above_nest(p: Doc, g: bool, k: isize, q: Doc) -> Doc {
         // Distributing eagerly into BOTH branches rebuilds `q` under every
         // Union alternative at construction time; for a union-rich doc (a
         // vcat of 18 ∃-substs over bilinear eCK terms, each a nest of
-        // sep/fsep unions) that is O(2^depth) — the task-#19 web OOM
-        // (8 GB, source-cases page, Chen_Kudla `Init_2`).  Mirror HS's
+        // sep/fsep unions) that is O(2^depth) — an 8 GB web OOM on the
+        // source-cases page (Chen_Kudla `Init_2`).  Mirror HS's
         // laziness exactly as `beside_inner`'s Union arm does: keep the
         // right branch a memoised thunk.
         Doc::Union(p1, p2) => {
@@ -942,7 +942,7 @@ pub fn fcat(ds: Vec<Doc>) -> Doc {
     fill(false, ds)
 }
 
-/// HS `ppTerms sepa n lead finish ts` (Term/Term.hs:288-290): an `fcat` of
+/// HS `ppTerms sepa n lead finish ts` (Term/Term.hs:319-321): an `fcat` of
 /// `text lead`, each element rendered and `nest(1)`'d (all but the last
 /// `sep`-suffixed), and `text finish`.  Shared by the pair (`<`/`, `/`>`)
 /// and AC-op (`(`/op/`)`) builders across the parser-AST, GTerm and SAPIC
@@ -970,7 +970,7 @@ pub fn fcat_bracketed<T>(
 }
 
 /// HS `ppFun f ts = text (f ++ "(") <> fsep (punctuate comma (map ppTerm ts))
-/// <> text ")"` (Term/Term.hs:295-296).  Shared by the parser-AST, GTerm and
+/// <> text ")"` (Term/Term.hs:326-327).  Shared by the parser-AST, GTerm and
 /// SAPIC function-application renderers — they differ only in the per-element
 /// `render` fn, so the common `text(name++"(") <> fsep(punctuate ',' …) <>
 /// text ")"` Doc shape lives here (HS `comma = char ','`).
@@ -1236,7 +1236,7 @@ fn get(w: isize, r: isize, d: Doc) -> Doc {
                 get(w, r, (*q).clone())
             }
         }
-        // CRITICAL (task #20 perf): a `LazyUnion` must NOT be `force()`d at
+        // CRITICAL (perf): a `LazyUnion` must NOT be `force()`d at
         // the match head — that RUNS the right-branch thunk (an
         // `aboveNest`/`fill` reconstruction over the remaining doc) even
         // when the flat branch fits, degenerating reduction to O(n²) on
@@ -1322,7 +1322,7 @@ fn fits(n: isize, d: &Doc) -> bool {
 
 /// HS `lay` — walk the reduced doc, accumulating output.
 ///
-/// ITERATIVE (task #20): the walk is a pure state machine — `lay` (at
+/// ITERATIVE: the walk is a pure state machine — `lay` (at
 /// line start, where `Nest` bumps the column and the first text emits the
 /// indent) vs `lay2` (mid-line, `Nest` inert) — so it is driven by a loop
 /// with a `line_start` flag instead of mutual recursion.  The recursive

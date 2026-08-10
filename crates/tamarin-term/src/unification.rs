@@ -90,7 +90,7 @@ pub fn unifiable_lnterms_no_ac(a: crate::lterm::LNTerm, b: crate::lterm::LNTerm)
 /// `unify_raw_factored` diverge.  With a `delayed` sink present (the
 /// factored path) HS does `tell [Equal l r]`, so we push the residual
 /// equation and succeed; without one (the no-AC path) HS's
-/// `unifyLTermFactoredNoAC` (Unification.hs:160-164) hits
+/// `unifyLTermFactoredNoAC` (Unification.hs:176-187) hits
 /// `error "No AC unification, but AC symbol found."`, surfaced as `NeedsAC`.
 fn delay_or_needs_ac<C: Clone>(
     delayed: Option<&mut Vec<Equal<LTerm<C>>>>,
@@ -110,13 +110,13 @@ fn delay_or_needs_ac<C: Clone>(
 }
 
 /// Shared body of `unify_raw` (no-AC) and `unify_raw_factored` (AC via a
-/// delayed writer).  Mirrors Haskell's `unifyRaw` (Unification.hs:230-280).
+/// delayed writer).  Mirrors Haskell's `unifyRaw` (Unification.hs:259-308).
 /// Every non-AC arm is identical between the two callers; the only
 /// behavioural fork is at the three AC/C/nat delay points, gated on
 /// whether `delayed` is `Some` (push the residual, cf. HS `tell`) or `None`
 /// (return `NeedsAC`).
 ///
-/// Var-var orientation is Haskell-faithful (Unification.hs:240-246):
+/// Var-var orientation is Haskell-faithful (Unification.hs:273-281):
 ///   same-sort   → if vl < vr then elim vr l else elim vl r  (LARGER-idx
 ///                 becomes KEY, smaller-idx the value)
 ///   vl ⊇ vr     → elim vl r   (broader becomes KEY)
@@ -147,7 +147,7 @@ where
             use std::cmp::Ordering;
             match sort_compare(vl.sort, vr.sort) {
                 Some(Ordering::Equal) => {
-                    // Haskell `unifyRaw` (Unification.hs:235-243, see line 241):
+                    // Haskell `unifyRaw` (Unification.hs:273-281, see line 276):
                     //   `if vl < vr then elim vr l else elim vl r`
                     // Larger-idx becomes KEY, smaller-idx becomes value.
                     let (key, val) = if vl < vr {
@@ -191,7 +191,7 @@ where
             }
             Ok(())
         }
-        // Special cases for builtin naturals (Unification.hs:251-256):
+        // Special cases for builtin naturals (Unification.hs:286-291):
         // a nullary NoEq vs a NatPlus sum unifies only when the nullary
         // symbol is `natOne`; otherwise no unifier.  When it is natOne,
         // Haskell `tell`s the equation for Maude (delay-or-NeedsAC).
@@ -215,12 +215,12 @@ where
                 Err(UnifyError::NoUnifier)
             }
         }
-        // Haskell `unifyRaw` (Unification.hs:265-270): the AC/C arms fire ONLY
+        // Haskell `unifyRaw` (Unification.hs:299-305): the AC/C arms fire ONLY
         // when BOTH sides are AC (resp. C) apps and the symbols (and, for C,
         // the arity) match — at which point HS does `tell [Equal l r]`.  A
         // symbol/arity mismatch fails the `guard` (→ `Nothing`, i.e. no
         // unifier), and any AC-vs-non-AC (or C-vs-non-C) pairing falls through
-        // to HS `_ -> mzero` (line 273); both map to `NoUnifier`.
+        // to HS `_ -> mzero` (line 308); both map to `NoUnifier`.
         (Term::App(FunSym::Ac(la), _), Term::App(FunSym::Ac(ra), _)) => {
             if la == ra {
                 delay_or_needs_ac(delayed.as_deref_mut(), &l, &r)
@@ -228,7 +228,7 @@ where
                 Err(UnifyError::NoUnifier)
             }
         }
-        // C arm (Unification.hs:268-270): both sides C, same symbol AND arity.
+        // C arm (Unification.hs:303-305): both sides C, same symbol AND arity.
         (Term::App(FunSym::C(ls), largs), Term::App(FunSym::C(rs), rargs)) => {
             if ls == rs && largs.len() == rargs.len() {
                 delay_or_needs_ac(delayed, &l, &r)
@@ -256,7 +256,7 @@ where
 
 /// Haskell-faithful factored unification: same as `unify_raw` but
 /// **pushes AC/C equations to a delayed list** instead of returning
-/// `NeedsAC`.  Mirrors Haskell's `unifyRaw` (Unification.hs:230-280)
+/// `NeedsAC`.  Mirrors Haskell's `unifyRaw` (Unification.hs:259-308)
 /// which uses `tell [Equal l r]` from a writer monad to delay AC.
 fn unify_raw_factored<C, F>(
     sort_of_const: &F,
@@ -272,7 +272,7 @@ where
     unify_raw_impl(sort_of_const, acc, Some(delayed), lhs, rhs)
 }
 
-/// `unifyLTermFactored` port (Unification.hs:107-120).  Returns the
+/// `unifyLTermFactored` port (Unification.hs:120-133).  Returns the
 /// non-AC substitution and the residual AC equations (already with
 /// the non-AC subst applied).  Callers ship the residuals to Maude.
 ///
@@ -385,7 +385,7 @@ where
 
 /// Outcome of the native matcher, mirroring HS `solveMatchLTerm`'s
 /// 3-way `case runState (runExceptT match)` split
-/// (`Term/Unification.hs:209-214`):
+/// (`Term/Unification.hs:232-237`):
 ///
 /// * `NoMatcher`   ⇒ `Left NoMatcher`  ⇒ HS returns `[]` *without* any
 ///   Maude round-trip.  (The pattern structurally cannot match the
@@ -402,14 +402,14 @@ where
 /// "no match" answer that HS never sends to Maude.  Conflating the two
 /// makes the Rust port issue a Maude `match` for every structurally
 /// failing match attempt, which is exactly the surplus `match in MSG`
-/// flood observed on LAK06/Scott (`matchToGoal`, `Sources.hs:355-384, see line 381,414`).
+/// flood observed on LAK06/Scott (`matchToGoal`, `Sources.hs:268-295, see line 279`).
 pub enum MatchOutcome<C> {
     NoMatcher,
     Matched(Subst<C, LVar>),
     NeedsAc,
 }
 
-/// HS-faithful `solveMatchLTerm` (`Term/Unification.hs:196-216`): run the
+/// HS-faithful `solveMatchLTerm` (`Term/Unification.hs:219-239`): run the
 /// native `matchRaw` matcher over all delayed pairs and report the 3-way
 /// outcome so the caller can decide whether a Maude AC fallback is
 /// actually warranted (only on `NeedsAc`).
@@ -417,7 +417,7 @@ pub enum MatchOutcome<C> {
 /// `matchRaw` raises `ACProblem` (here `NeedsAC`) the *instant* it sees an
 /// AC-/C-headed pair on BOTH sides; a variable pattern facing an
 /// AC-headed subject is bound natively (HS `matchRaw` checks the
-/// `(_, Lit (Var vp))` arm first, `Unification.hs:316-350, see line 317`) — so a `tamxor`
+/// `(_, Lit (Var vp))` arm first, `Unification.hs:336-360, see line 340`) — so a `tamxor`
 /// buried under a variable pattern never triggers a Maude call.
 pub fn solve_match_lterm<C, F>(sort_of_const: &F, problem: Match<LTerm<C>>) -> MatchOutcome<C>
 where
@@ -489,11 +489,11 @@ where
         },
         // HS `(FApp (AC _) _, FApp (AC _) _) -> throwError ACProblem` and
         // `(FApp (C _) _, FApp (C _) _) -> throwError ACProblem`
-        // (Unification.hs:333-334): the AC/C arm fires ONLY when BOTH the
+        // (Unification.hs:356-357): the AC/C arm fires ONLY when BOTH the
         // subject `t` AND the pattern `p` are AC-/C-headed.  An AC-/C-headed
         // PATTERN facing a variable / constant / NoEq / List / differently-
         // headed subject is NOT an AC problem — HS falls to the final
-        // `_ -> throwError NoMatcher` arm (Unification.hs:316-350, see line 337).  (An
+        // `_ -> throwError NoMatcher` arm (Unification.hs:336-360, see line 360).  (An
         // AC-/C-headed PATTERN alone is not enough — the subject must be
         // AC-/C-headed too, otherwise this would ship non-AC structural
         // mismatches to Maude.)
@@ -521,17 +521,16 @@ mod tests;
 // =============================================================================
 //
 // These tests pin subtle term-layer semantic choices whose violation is
-// easy to miss.  The cost of getting
-// any of these wrong is a silent divergence — the wrong unifier "works"
-// in the logical sense (produces equivalent equality classes) but the
-// SHAPE of the result differs, which downstream code can implicitly
-// depend on.
+// easy to miss.  The cost of getting any of these wrong is a silent
+// divergence — the wrong unifier "works" in the logical sense (produces
+// equivalent equality classes) but the SHAPE of the result differs, which
+// downstream code can implicitly depend on.
 //
 // If any of these tests fails, STOP and investigate before chasing a
 // downstream symptom — the root is here at the term layer.
 //
-// References to Haskell source are checked-in as of the May 2026 port
-// state; line numbers may drift but the contracts shouldn't.
+// Haskell line numbers cited below track the pinned submodule and are
+// remapped at each bump; the contracts they pin do not move.
 #[cfg(test)]
 #[path = "unification_haskell_invariants_tests.rs"]
 mod haskell_invariants_tests;

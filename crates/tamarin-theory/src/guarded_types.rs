@@ -130,7 +130,7 @@ pub enum GAtom {
 ///
 /// RS encodes tuples as n-ary `Pair([t1,..,tn])`, corresponding to HS's
 /// binary right-nested `<t1, <t2, .. <t_{n-1}, tn>>>`
-/// (`fAppPair (x,y) = fAppNoEq pairSym [x,y]`, Term.hs:140-141, see line 142).  Because HS
+/// (`fAppPair (x,y) = fAppNoEq pairSym [x,y]`, Term/Term.hs:161-163, see line 163).  Because HS
 /// pairs are binary, `<a,b,<c,d>>` and `<a,b,c,d>` are the SAME term; in
 /// RS's n-ary encoding those are the *distinct* trees
 /// `Pair([a,b,Pair([c,d])])` and `Pair([a,b,c,d])`.  Substituting a
@@ -163,8 +163,8 @@ pub fn term_to_gterm_free(t: &p::Term) -> GTerm {
     match t {
         // A bare identifier that names a user-declared 0-arity function is a
         // CONSTANT (nullary application), not a variable — mirror HS's
-        // `fAppNoEq sym []` and the nullary-fun branch of `term_to_lnterm`
-        // (elaborate.rs:1558).  Without
+        // `fAppNoEq sym []` and the nullary-fun branch of
+        // `elaborate::term_to_lnterm`'s `mk_var`.  Without
         // this, a declared `true/0`/`false/0` used inside a formula (e.g.
         // OIDC_Implicit's `Verified(...,true)` / `...,false)` restrictions,
         // conjoined into a lemma's proof obligation) is lifted to a FREE
@@ -678,7 +678,15 @@ pub fn collect_free_term(t: &GTerm, out: &mut Vec<p::VarSpec>) {
             collect_free_term(b, out);
         }
         GTerm::PatMatch(t) => collect_free_term(t, out),
-        _ => {}
+        // Literals carry no variable.  Matched exhaustively (no wildcard) so a
+        // new `GTerm` variant forces a decision here.
+        GTerm::PubLit(_)
+        | GTerm::FreshLit(_)
+        | GTerm::NatLit(_)
+        | GTerm::Number(_)
+        | GTerm::NumberOne
+        | GTerm::NatOne
+        | GTerm::DhNeutral => {}
     }
 }
 

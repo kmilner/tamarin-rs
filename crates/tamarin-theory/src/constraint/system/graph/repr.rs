@@ -105,14 +105,17 @@ pub fn group_nodes_by_role<'a>(nodes: &'a [GNode]) -> BTreeMap<String, Vec<&'a G
 }
 
 /// `extractBaseName name` returns `Just base` when `name = base_<digits>`.
-/// Mirror of `extractBaseName` (GraphRepr.hs:217-225).
+/// Mirror of `extractBaseName` (GraphRepr.hs:216-225).
 pub fn extract_base_name(name: &str) -> Option<String> {
     let parts: Vec<&str> = name.split('_').collect();
     if parts.len() < 2 {
         return None;
     }
+    // Haskell `all isDigit s` is True for the EMPTY string too (and `isDigit`
+    // is ASCII-only), so a trailing `_` — last part `""` — makes HS strip it:
+    // `extractBaseName "Foo_" = Just "Foo"`.
     let last = parts.last().unwrap();
-    if !last.is_empty() && last.chars().all(|c| c.is_ascii_digit()) {
+    if last.chars().all(|c| c.is_ascii_digit()) {
         Some(parts[..parts.len() - 1].join("_"))
     } else {
         None
@@ -261,7 +264,9 @@ fn add_cluster(
 ) {
     let nodes = std::mem::take(&mut repr.nodes);
     let nodes_by_group = group(&nodes);
-    let all_edges = repr.edges.clone();
+    // Taken, not cloned: nothing reads `repr.edges` again before the
+    // `remaining_edges` write-back below.
+    let all_edges = std::mem::take(&mut repr.edges);
     let mut sub_clusters: Vec<Cluster> = Vec::new();
     for (group_name, group_nodes) in &nodes_by_group {
         let group_node_ids: BTreeSet<NodeId> = group_nodes.iter().map(|n| n.id).collect();
@@ -569,6 +574,10 @@ mod tests {
         assert_eq!(extract_base_name("NoSuffix"), None);
         assert_eq!(extract_base_name("Name_NotNumber"), None);
         assert_eq!(extract_base_name(""), None);
+        // HS `all isDigit ""` is True, so a trailing `_` is stripped like a
+        // numeric suffix — `splitOn "_" "Foo_" = ["Foo",""]`, two parts.
+        assert_eq!(extract_base_name("Foo_"), Some("Foo".to_string()));
+        assert_eq!(extract_base_name("_"), Some(String::new()));
     }
 
     #[test]

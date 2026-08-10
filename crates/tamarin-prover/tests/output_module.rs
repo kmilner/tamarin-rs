@@ -627,7 +627,7 @@ fn output_file_gets_verbatim_doc_and_stdout_stays_empty() {
         eprintln!("skipping: maude not on path");
         return;
     }
-    let dir = std::env::temp_dir().join("tamarin_prover_output_module");
+    let dir = std::env::temp_dir().join(TMP_DIR);
     std::fs::create_dir_all(&dir).expect("mkdir");
     let out_file = dir.join("repl_out.spthy");
     let _ = std::fs::remove_file(&out_file);

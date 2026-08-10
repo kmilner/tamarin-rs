@@ -322,10 +322,8 @@ fn disable_parallel_expand() -> bool {
 /// HS-faithful: HS has NO per-lemma wall-clock deadline — its iterative
 /// deepening runs to completion.  So by DEFAULT we apply NO cutoff either
 /// (a far-future deadline that never fires); under the default `Dfs`
-/// strategy termination is still
-/// guaranteed by the ID-DFS depth cap (`MAX_DEPTH`), doubling from 4
-/// with only the far-out `usize::MAX/4` loop-termination guard (no
-/// fixed numeric cap), while `seqdfs` has no depth cut at all (like its
+/// strategy termination is still guaranteed by the ID-DFS depth cap
+/// (`MAX_DEPTH`), while `seqdfs` has no depth cut at all (like its
 /// HS counterpart — see `run_proof_search`).  A cutoff is
 /// applied ONLY when the caller explicitly opts in via the
 /// `TAM_PROVE_DEADLINE_MS` env var (e.g. corpus sweeps that want to bound
@@ -433,11 +431,9 @@ fn clear_deadline() {
 ///
 /// `max_steps` is accepted for API compatibility but is NOT used as a
 /// terminal cutoff: HS's `cutOnSolvedDFS` bounds the search purely by
-/// the ID-DFS depth `dMax` (`MAX_DEPTH`), doubling from 4 with only the
-/// far-out `usize::MAX/4` loop-termination guard (no fixed numeric cap),
-/// and the per-lemma
-/// wall-clock timeout (`deadline`).  See the `budget = usize::MAX`
-/// note in each strategy arm.
+/// the ID-DFS depth `dMax` (`MAX_DEPTH`, described below) and the
+/// per-lemma wall-clock timeout (`deadline`).  See the
+/// `budget = usize::MAX` note in each strategy arm.
 ///
 /// Returns the root proof node. The final status is the OR of children
 /// (Solved if all children solved, Contradictory if any contradictory,
@@ -851,10 +847,9 @@ fn re_expand_depth_limited(
     // re-expanded in place.  Match `expand`'s early-break-on-Solved —
     // except under `Bfs`, whose level walk (like HS `checkLevel`'s
     // `traverse`) forces every sibling regardless of solved ones.
-    let names: Vec<String> = node.children.keys().cloned().collect();
     let early_break = !matches!(ctx.cut, CutStrategy::Bfs);
     let mut found_solved = false;
-    for name in names {
+    for (name, child) in node.children.iter_mut() {
         if early_break && found_solved {
             break;
         }
@@ -864,27 +859,24 @@ fn re_expand_depth_limited(
         if std::time::Instant::now() >= *deadline {
             break;
         }
-        if let Some(child) = node.children.get_mut(&name) {
-            // Track proof-tree path so state-trace / lockstep
-            // emissions reflect the correct deep path during
-            // iterative-deepening re-expansion.  Without this push,
-            // state-traces from re-expanded subtrees report just
-            // the deepest pushed case (e.g. `/c_sdec`) instead of
-            // the full lemma-proof path (`/Setup_Key/.../c_sdec`).
-            // Mirrors the case_path push/pop in the serial branch of
-            // `expand_inner` (the `if push_path { case_path_push(..) }`
-            // around the recursive `expand` call further down this file).
-            let push_path = !name.is_empty();
-            if push_path {
-                crate::constraint::solver::trace::case_path_push(&name);
-            }
-            re_expand_depth_limited(ctx, child, budget, deadline, depth + 1);
-            if push_path {
-                crate::constraint::solver::trace::case_path_pop();
-            }
-            if matches!(child.status, NodeStatus::Solved) {
-                found_solved = true;
-            }
+        // Track proof-tree path so state-trace / lockstep emissions
+        // reflect the correct deep path during iterative-deepening
+        // re-expansion.  Without this push, state-traces from re-expanded
+        // subtrees report just the deepest pushed case (e.g. `/c_sdec`)
+        // instead of the full lemma-proof path (`/Setup_Key/.../c_sdec`).
+        // Mirrors the case_path push/pop in the serial branch of
+        // `expand_inner` (the `if push_path { case_path_push(..) }`
+        // around the recursive `expand` call further down this file).
+        let push_path = !name.is_empty();
+        if push_path {
+            crate::constraint::solver::trace::case_path_push(name);
+        }
+        re_expand_depth_limited(ctx, child, budget, deadline, depth + 1);
+        if push_path {
+            crate::constraint::solver::trace::case_path_pop();
+        }
+        if matches!(child.status, NodeStatus::Solved) {
+            found_solved = true;
         }
     }
     // Re-roll up the parent's status from current children — mirrors
@@ -1052,26 +1044,13 @@ fn expand_inner(
     // `is_finished(ctx, &node.sys)` is `None`, and nothing has touched
     // `node.sys` since — skip the guarded entry's redundant re-sweep.
     let candidates = candidate_methods_open(&node.sys, ctx, depth);
-    let (method, cases) = {
-        let mut pick: Option<(ProofMethod, Vec<(String, System)>)> = None;
-        for m in candidates {
-            let r = exec_proof_method(ctx, &m, &node.sys);
-            match r {
-                Some(cs) => {
-                    pick = Some((m, cs));
-                    break;
-                }
-                None => continue,
-            }
-        }
-        match pick {
-            Some(p) => p,
-            None => {
-                node.method = ProofMethod::Sorry(Some("no method".into()));
-                node.status = NodeStatus::Sorry;
-                return;
-            }
-        }
+    let Some((method, mut cases)) = candidates
+        .into_iter()
+        .find_map(|m| exec_proof_method(ctx, &m, &node.sys).map(|cs| (m, cs)))
+    else {
+        node.method = ProofMethod::Sorry(Some("no method".into()));
+        node.status = NodeStatus::Sorry;
+        return;
     };
     node.method = method;
     if cases.is_empty() {
@@ -1110,7 +1089,6 @@ fn expand_inner(
     // `cutOnSolvedDFS` then walk in map order (Proof.hs:855-877 —
     // `foldMap`, `M.map`).  Our `Vec` preserves creation order
     // (source-file rule order), so sort by name to match Haskell.
-    let mut cases = cases;
     cases.sort_by(|a, b| a.0.cmp(&b.0));
     // Haskell-faithful: no per-branch budget split.  Haskell's lazy
     // Disj-monad explores each branch using as many steps as needed —
@@ -1506,7 +1484,6 @@ pub fn candidate_methods(sys: &System, ctx: &ProofContext, depth: usize) -> Vec<
 /// the full contradiction sweep, and a second sweep here doubles its cost on
 /// every expanded node (measured +7% wall on CCITT_X509_3).
 fn candidate_methods_open(sys: &System, ctx: &ProofContext, depth: usize) -> Vec<ProofMethod> {
-    let mut out: Vec<ProofMethod> = Vec::new();
     // Haskell-faithful: build the FULL ranked goal list, not just the
     // first one (ProofMethod.hs:520-540).  Haskell's `proofMethods`
     // includes ALL open goals as SolveGoal candidates; `execMethods`
@@ -1529,7 +1506,8 @@ fn candidate_methods_open(sys: &System, ctx: &ProofContext, depth: usize) -> Vec
             ))]
         }
     };
-    // Construct: [Simplify, goal_1, goal_2, ..., goal_N].
+    // Construct: [Simplify, goal_1, goal_2, ..., goal_N] (+ Induction below).
+    let mut out: Vec<ProofMethod> = Vec::with_capacity(goals.len() + 2);
     out.push(ProofMethod::Simplify);
     for g in goals.into_iter() {
         out.push(ProofMethod::SolveGoal(g.goal));

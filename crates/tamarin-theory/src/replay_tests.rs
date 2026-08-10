@@ -77,8 +77,8 @@ fn sorry_leaf_runs_auto_prover() {
         method: ParsedMethod::Sorry,
         cases: Vec::new(),
     };
+    // Must terminate; the status is indeterminate on an empty system.
     let _ = replace_sorry_prove(&ctx, sys, &skel, 50);
-    // Just must terminate; status indeterminate on empty system.
 }
 
 /// A `by contradiction` leaf on a system with no contradictions
@@ -91,9 +91,8 @@ fn sorry_leaf_runs_auto_prover() {
 /// fabricate a Contradictory status.
 ///
 /// On an empty system (no goals, no contradictions) the auto-prover
-/// recognises the system as trivially Solved.  The key assertion
-/// is `status != Contradictory` — the original Sorry-emit was
-/// later replaced by the auto-prove fallback.
+/// recognises the system as trivially Solved; the load-bearing assertion
+/// is `status != Contradictory`.
 #[test]
 fn contradiction_leaf_without_contradiction_falls_back_to_auto() {
     let h = match maude() {
@@ -176,9 +175,9 @@ fn no_match_returns_none() {
 ///
 /// HS reference: `ActionG i fa` carries the exact timepoint LVar `i`;
 /// HS dispatches `SolveGoal goal -> guard (goal `M.member` sGoals)`
-/// (ProofMethod.hs:253-274, see line 258) — the goal key is the full LVar, so the idx is
+/// (ProofMethod.hs:252-273, see line 258) — the goal key is the full LVar, so the idx is
 /// part of the match.  HS pretty-prints a timepoint as `#t2` when its
-/// idx is 0 and `#t2.7` when its idx is 7 (`Show LVar`, LTerm.hs:526-533),
+/// idx is 0 and `#t2.7` when its idx is 7 (`Show LVar`, LTerm.hs:550-557),
 /// so a stored skeleton's `time_idx` always equals the LVar idx of the
 /// goal it was generated from — the matcher requires that exact idx.
 #[test]
@@ -320,9 +319,7 @@ fn match_premise_disambiguates_by_time_var_root() {
 /// different (src,tgt) pairs; the matcher picks by var+idx.
 #[test]
 fn match_chain_goal_by_var_and_idx() {
-    use crate::fact::{Fact, FactTag, Multiplicity};
     use crate::rule::{ConcIdx, PremIdx};
-    let _ = (Fact::<u32>::new, FactTag::Ku, Multiplicity::Linear); // keep imports alive
     let i = LVar::new("i", LSort::Node, 3);
     let j = LVar::new("j", LSort::Node, 5);
     let k = LVar::new("k", LSort::Node, 7);
@@ -432,7 +429,7 @@ fn match_split_goal_by_id() {
 ///
 /// HS reference: HS `disjSplitGoal` (Proof.hs:61) parses to
 /// `DisjG (Disj [Guarded])` and matches the runtime Goal::Disj by
-/// structural equality (ProofMethod.hs:253-274, see line 258).  The RS shape
+/// structural equality (ProofMethod.hs:252-273, see line 258).  The RS shape
 /// signature must uniquely pick the disjunction whose alt-count
 /// matches the skeleton.
 #[test]

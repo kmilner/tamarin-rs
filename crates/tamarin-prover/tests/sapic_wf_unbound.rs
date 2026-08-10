@@ -26,45 +26,9 @@
 //! `--derivcheck-timeout=0` so the dynamic `MessageDerivationChecks` pass —
 //! which would report the same variables under its own topic — stays off.
 
-use std::path::PathBuf;
+mod common;
 
-use tamarin_prover::{parse_args, run};
-
-fn maude_available() -> bool {
-    // A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION,
-    // not a reason to skip: returning `false` there would report green
-    // vacuously on a CI whose image moved maude.
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        assert!(
-            std::path::Path::new(&p).exists(),
-            "MAUDE_PATH={p} does not exist; unset it or point it at a real maude"
-        );
-        return true;
-    }
-    for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
-        if std::path::Path::new(c).exists() {
-            return true;
-        }
-    }
-    false
-}
-
-/// `--with-maude=PATH` from the `MAUDE_PATH` env override, when set.
-/// Without the flag the prover probes bare `maude` on PATH (HS-faithful),
-/// which is absent on CI runners.
-fn maude_arg() -> Option<String> {
-    std::env::var("MAUDE_PATH")
-        .ok()
-        .map(|p| format!("--with-maude={p}"))
-}
-
-fn fixture(name: &str) -> PathBuf {
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.push("tests");
-    p.push("fixtures");
-    p.push(name);
-    p
-}
+use common::{fixture, maude_available, run_binary};
 
 /// Load `<fixture>.spthy` through the batch pipeline and return the theory it
 /// writes out.
@@ -77,17 +41,14 @@ fn load(fixture_name: &str) -> String {
     // `-o`/`--output` is a cmdargs `flagOpt` whose value must be ATTACHED
     // (Batch.hs:44-84, see line 76).
     let output_arg = format!("--output={}", out_path.to_str().unwrap());
-    let maude = maude_arg();
-    let mut argv: Vec<&str> = maude.as_deref().into_iter().collect();
-    argv.extend([
-        "--quiet",
-        "--derivcheck-timeout=0",
-        &output_arg,
-        in_path.to_str().unwrap(),
-    ]);
-    let args = parse_args(&argv.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("parse");
-    let code = run(&args).expect("run");
-    assert_eq!(code, 0, "expected exit code 0, got {code}");
+    let (code, _, stderr) = run_binary(
+        &["--quiet", "--derivcheck-timeout=0", &output_arg],
+        &[&in_path],
+    );
+    assert_eq!(
+        code, 0,
+        "expected exit code 0, got {code}; stderr:\n{stderr}"
+    );
     std::fs::read_to_string(&out_path).expect("output written")
 }
 

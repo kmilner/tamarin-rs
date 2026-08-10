@@ -23,7 +23,10 @@
 //!                              (run.rs `effective_config`).  Without
 //!                              --prove every value parses and is ignored,
 //!                              as in HS.
-//!   --bound=N, -bN             proof-depth bound
+//!   --bound=N, -bN             proof-depth bound.  Routed only in interactive
+//!                              mode (`ServerConfig::max_steps`); the batch
+//!                              prove loop bounds by wall-clock deadline and
+//!                              discards it, where HS applies `boundProver`.
 //!   --saturation=N, -sN        bound on saturation iterations (default 5)
 //!   --heuristic=...            heuristic ranking sequence (overrides per-lemma)
 //!   --partial-evaluation=...   partial-evaluation mode (SUMMARY|VERBOSE)
@@ -108,9 +111,12 @@
 //!
 //!   --port=N, -pN              port to listen on (default 3001)
 //!   --interface=ADDR, -iADDR   interface to listen on (default 127.0.0.1)
-//!   --image-format=PNG|SVG     image format used for graphs (default SVG)
-//!   --debug                    show server debugging output
-//!   --no-logging               suppress web server logs
+//!   --image-format=PNG|SVG     image format used for graphs (parsed, not yet
+//!                              routed: the graph routes always render SVG)
+//!   --debug                    show server debugging output (parsed, not yet
+//!                              routed)
+//!   --no-logging               suppress web server logs (parsed, not yet
+//!                              routed)
 //!   --data-dir=DIR             override path to the bundled `data/` directory
 //!
 //! The Haskell CLI uses `cmdargs`'s `flagOpt` for almost every value
@@ -788,7 +794,7 @@ impl Args {
 
     /// Resolve `--maude-processes` (or its default).
     ///
-    /// Default = `max(1, effective_processors())` — a 1:1
+    /// Default = `effective_processors()` — a 1:1
     /// workers:maudes ratio.  Lemma-level parallelism (B1) plus the
     /// within-lemma fan-out both draw Maude handles from this pool
     /// concurrently, so a half-size pool would be exhausted, forcing the
@@ -810,7 +816,7 @@ impl Args {
         }
         match self.maude_processes {
             Some(n) => n.max(1),
-            None => procs.max(1),
+            None => procs,
         }
     }
 }

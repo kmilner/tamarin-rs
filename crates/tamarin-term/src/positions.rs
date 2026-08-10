@@ -163,60 +163,43 @@ pub fn deepest_prot_subterm<C: Ord + Clone, V: Ord + Clone>(
 /// `positions t`: every position in `t` (including the empty position at
 /// the root). AC nesting follows the right-leaning binary interpretation.
 pub fn positions<C, V>(t: &VTerm<C, V>) -> Vec<Position> {
-    fn go<C, V>(t: &VTerm<C, V>, out: &mut Vec<Position>, prefix: &mut Vec<i64>) {
-        out.push(prefix.clone());
-        if let Term::App(FunSym::Ac(_), args) = t {
-            let len = args.len();
-            for (i, a) in args.iter().enumerate() {
-                let saved = prefix.len();
-                prefix.extend_from_slice(&ac_position(i, len));
-                go(a, out, prefix);
-                prefix.truncate(saved);
-            }
-        } else if let Term::App(_, args) = t {
-            for (i, a) in args.iter().enumerate() {
-                prefix.push(i as i64);
-                go(a, out, prefix);
-                prefix.pop();
-            }
-        }
-    }
-    let mut out = Vec::new();
-    let mut prefix = Vec::new();
-    go(t, &mut out, &mut prefix);
-    out
+    collect_positions(t, false)
 }
 
 /// `positionsNonVar`: like `positions` but excludes positions where the
 /// subterm is a variable.
 pub fn positions_non_var<C, V>(t: &VTerm<C, V>) -> Vec<Position> {
-    fn go<C, V>(t: &VTerm<C, V>, out: &mut Vec<Position>, prefix: &mut Vec<i64>) {
+    collect_positions(t, true)
+}
+
+/// Pre-order walk emitting one position per node, skipping variable leaves
+/// when `skip_vars`.  AC nodes index their children through the right-leaning
+/// binary encoding ([`ac_position`]), every other node by argument index.
+fn collect_positions<C, V>(t: &VTerm<C, V>, skip_vars: bool) -> Vec<Position> {
+    fn go<C, V>(t: &VTerm<C, V>, skip_vars: bool, out: &mut Vec<Position>, prefix: &mut Vec<i64>) {
         match t {
-            Term::Lit(Lit::Var(_)) => {}
-            Term::Lit(Lit::Con(_)) => out.push(prefix.clone()),
-            Term::App(FunSym::Ac(_), args) => {
+            Term::Lit(Lit::Var(_)) if skip_vars => {}
+            Term::Lit(_) => out.push(prefix.clone()),
+            Term::App(sym, args) => {
                 out.push(prefix.clone());
+                let ac = matches!(sym, FunSym::Ac(_));
                 let len = args.len();
                 for (i, a) in args.iter().enumerate() {
                     let saved = prefix.len();
-                    prefix.extend_from_slice(&ac_position(i, len));
-                    go(a, out, prefix);
+                    if ac {
+                        prefix.extend_from_slice(&ac_position(i, len));
+                    } else {
+                        prefix.push(i as i64);
+                    }
+                    go(a, skip_vars, out, prefix);
                     prefix.truncate(saved);
-                }
-            }
-            Term::App(_, args) => {
-                out.push(prefix.clone());
-                for (i, a) in args.iter().enumerate() {
-                    prefix.push(i as i64);
-                    go(a, out, prefix);
-                    prefix.pop();
                 }
             }
         }
     }
     let mut out = Vec::new();
     let mut prefix = Vec::new();
-    go(t, &mut out, &mut prefix);
+    go(t, skip_vars, &mut out, &mut prefix);
     out
 }
 

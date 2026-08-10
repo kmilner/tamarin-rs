@@ -36,8 +36,8 @@ fn bp_variants_file_parses_to_75_rules() {
 
 /// The 5 constructor rules MUST be present with their HS-canonical
 /// underscore-prefixed names (`c_exp` → `ConstrRule "_exp"`, etc).
-/// HS reference: Theory/Tools/IntruderRules.hs:233-244 +
-/// Theory/Text/Parser/Rule.hs:155-169, see line 167 (`'c':cname → ConstrRule (BC.pack cname)`).
+/// HS reference: Theory/Tools/IntruderRules.hs:292-299 +
+/// Theory/Text/Parser/Rule.hs:163-172, see line 171 (`'c':cname → ConstrRule (BC.pack cname)`).
 #[test]
 fn dh_variants_contains_five_constructors_with_underscore_prefix() {
     let rules = mk_dh_intruder_variants(&dh_maude_sig());
@@ -223,8 +223,11 @@ fn parse_intruder_rules_handles_tiny_inline() {
     }
 }
 
-/// Rule names that don't start with `c` or `d` must be rejected
-/// (HS Rule.hs:169 — `fail "invalid intruder rule name ..."`).
+/// Rule names that don't start with `c` or `d` must be rejected.
+/// DELIBERATE DIVERGENCE: HS `intrInfo`'s `case name of` has only the
+/// `'c':cname` and `'d':dname` arms (Theory/Text/Parser/Rule.hs:170-172), so a
+/// third prefix is an incomplete-pattern crash there; we return a parse error
+/// instead.
 #[test]
 fn parse_intruder_rules_rejects_non_c_d_prefix() {
     let src = "rule (modulo AC) xfoo:\n   [ ] --> [ ]\n";
@@ -240,7 +243,8 @@ fn parse_intruder_rules_rejects_non_c_d_prefix() {
 /// Round-trip: every rule produced by `mk_dh_intruder_variants` has
 /// a name starting with `_` (the byte after the consumed `c`/`d`).
 /// Mirrors the same property checked for the runtime generator
-/// `dh_intruder_rules` in `dh_variants_all_names_have_underscore_prefix`.
+/// `dh_intruder_rules` in `intruder_rules_tests.rs`'s
+/// `dh_intruder_rules_all_names_have_underscore_prefix`.
 #[test]
 fn dh_variants_all_names_have_underscore_prefix() {
     let rules = mk_dh_intruder_variants(&dh_maude_sig());
@@ -324,10 +328,9 @@ fn bridge_runtime_generator_matches_cached_file_on_counts_and_names() {
         "runtime and cached DH constr name sets should match"
     );
 
-    // Destructor counts should be EQUAL or DIFFER (the cached file
-    // is authoritative — log a diff but don't fail).  Counts may
-    // legitimately differ if today's Maude produces a different
-    // variant enumeration order than the cached file's day.
+    // Rule counts are only logged, never asserted: the cached file is
+    // authoritative, and today's Maude may legitimately enumerate a
+    // different set of variants than the day the file was generated.
     if cached.len() != runtime.len() {
         eprintln!(
             "bridge test note: cached DH rule count = {}, runtime = {} \
@@ -342,10 +345,10 @@ fn bridge_runtime_generator_matches_cached_file_on_counts_and_names() {
 /// under `dh_maude_sig()`, the rule `[ ] --[ !KU( one ) ]-> [ !KU( one ) ]`
 /// must have ROOT = the 0-arity NoEq application `oneSym{}`, NOT a Msg-sort
 /// var `one` (which would unify with every KU goal, falsely closing 8+ DH
-/// corpus branches).  HS: Theory/Text/Parser/Term.hs:139-143 (`nullaryApp`
-/// against `funSyms maudeSig`) and
-/// lib/term/src/Term/Term/FunctionSymbols.hs:163-163
-/// (`oneSym = ("one",(0,Public,Constructor))`).
+/// corpus branches).  HS: Theory/Text/Parser/Term.hs:139-153, see line 151
+/// (`nullaryApp` against `funSyms maudeSig`) and
+/// lib/term/src/Term/Term/FunctionSymbols.hs:255-255
+/// (`oneSym = (oneSymString,(0,Public,Constructor,NotNDC))`).
 #[test]
 fn dh_one_and_dh_neutral_parse_as_constants() {
     use tamarin_term::function_symbols::{DH_NEUTRAL_SYM_STRING, ONE_SYM_STRING};

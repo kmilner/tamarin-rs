@@ -462,10 +462,7 @@ pub fn check_if_lemmas_in_theory(lemma_names: &[String], thy: &Theory) -> WfRepo
     // filter them (they trivially fail argFilter).
     let all_names: Vec<&str> = lemma_names.iter().map(|s| s.as_str()).collect();
 
-    let theory_lemma_names: Vec<&str> = theory_lemmas(thy)
-        .into_iter()
-        .map(|l| l.name.as_str())
-        .collect();
+    let theory_lemma_names: Vec<&str> = theory_lemmas(thy).map(|l| l.name.as_str()).collect();
 
     // HS `findNotProvedLemmas` (Wellformedness.hs:1140-1151, see line 1141) is a `foldl`
     // that PREPENDS mismatches.  HS's Arguments list is built with
@@ -533,26 +530,18 @@ fn arg_matches_any_lemma(arg: &str, theory_lemmas: &[&str]) -> bool {
 // Helpers — collecting facts and variables
 // =============================================================================
 
-fn theory_rules(thy: &Theory) -> Vec<&Rule> {
-    let mut out = Vec::new();
-    for it in &thy.items {
-        match it {
-            TheoryItem::Rule(r) => out.push(r),
-            TheoryItem::IntrRule(r) => out.push(r),
-            _ => {}
-        }
-    }
-    out
+fn theory_rules(thy: &Theory) -> impl Iterator<Item = &Rule> {
+    thy.items.iter().filter_map(|it| match it {
+        TheoryItem::Rule(r) | TheoryItem::IntrRule(r) => Some(r),
+        _ => None,
+    })
 }
 
-fn theory_lemmas(thy: &Theory) -> Vec<&Lemma> {
-    thy.items
-        .iter()
-        .filter_map(|it| match it {
-            TheoryItem::Lemma(l) => Some(l),
-            _ => None,
-        })
-        .collect()
+fn theory_lemmas(thy: &Theory) -> impl Iterator<Item = &Lemma> {
+    thy.items.iter().filter_map(|it| match it {
+        TheoryItem::Lemma(l) => Some(l),
+        _ => None,
+    })
 }
 
 /// Every fact of a rule in HS `ruleFacts`' order — `concatMap (`get` ru)
@@ -646,6 +635,23 @@ fn term_name_lits(t: &Term, out: &mut Vec<(NameKind, String)>) {
         Term::PatMatch(inner) => term_name_lits(inner, out),
         _ => {}
     }
+}
+
+/// Every name literal of a rule, in [`rule_facts`] order, over the
+/// LET-SUBSTITUTED facts.  Both name reports walk `universeBi ru`
+/// (`freshNamesReport'` Wellformedness.hs:447, `publicNamesReport'`
+/// Wellformedness.hs:475-478) over `thyProtoRules` (:456, :486), whose rules
+/// are already let-substituted — so a name occurring only inside a `let`
+/// value (`let m = ~'foo' in … Out(m)`) is inlined and surfaces here.
+fn rule_name_lits(r: &Rule) -> Vec<(NameKind, String)> {
+    let (prems, acts, concs) = rule_facts_with_lets(r);
+    let mut names = Vec::new();
+    for f in prems.iter().chain(&acts).chain(&concs) {
+        for t in &f.args {
+            term_name_lits(t, &mut names);
+        }
+    }
+    names
 }
 
 fn rule_terms(r: &Rule) -> impl Iterator<Item = &Term> {
@@ -1147,9 +1153,9 @@ fn cmp_wf_term(a: &Term, b: &Term, ac: &AcSyms) -> std::cmp::Ordering {
             flatten_ac(kb, b, &mut fb, ac);
             fa.sort_by(|x, y| cmp_wf_term(x, y, ac));
             fb.sort_by(|x, y| cmp_wf_term(x, y, ac));
-            return cmp_term_refs(&fa, &fb, ac);
+            return cmp_term_lists(&fa, &fb, ac);
         }
-        return cmp_term_slices(&hs_fapp_args(a, ac), &hs_fapp_args(b, ac), ac);
+        return cmp_term_lists(&hs_fapp_args(a, ac), &hs_fapp_args(b, ac), ac);
     }
     if sa != sb {
         return sa.cmp(&sb);
@@ -1304,23 +1310,17 @@ fn binop_rank(o: &BinOp) -> (u8, &str, usize) {
     }
 }
 
-/// Lexicographic comparison of two operand lists by `cmp_wf_term`, with the
+/// Lexicographic comparison of two operand lists by [`cmp_wf_term`], with the
 /// shorter list ordering first on a common prefix (matching Haskell's derived
-/// `Ord [a]`).
-fn cmp_term_slices(a: &[Term], b: &[Term], ac: &AcSyms) -> std::cmp::Ordering {
+/// `Ord [a]`).  Generic over the element type so the positional argument lists
+/// (`Term`) and the flattened AC chains (`&Term`) share one body.
+fn cmp_term_lists<T: std::borrow::Borrow<Term>>(
+    a: &[T],
+    b: &[T],
+    ac: &AcSyms,
+) -> std::cmp::Ordering {
     for (x, y) in a.iter().zip(b.iter()) {
-        let o = cmp_wf_term(x, y, ac);
-        if o != std::cmp::Ordering::Equal {
-            return o;
-        }
-    }
-    a.len().cmp(&b.len())
-}
-
-/// [`cmp_term_slices`] over borrowed operands (the flattened AC arg lists).
-fn cmp_term_refs(a: &[&Term], b: &[&Term], ac: &AcSyms) -> std::cmp::Ordering {
-    for (x, y) in a.iter().zip(b.iter()) {
-        let o = cmp_wf_term(x, y, ac);
+        let o = cmp_wf_term(x.borrow(), y.borrow(), ac);
         if o != std::cmp::Ordering::Equal {
             return o;
         }
@@ -1383,24 +1383,17 @@ fn is_nat_sort(s: &SortHint) -> bool {
 // Reserved fact names — Tamarin reserves 'fr', 'ku', 'kd', 'out', 'in'
 // =============================================================================
 
+/// HS `reservedFactName`'s list (Wellformedness.hs:621-623): a `ProtoFact`
+/// whose lowercased tag name is one of these is reserved.
 const RESERVED_FACT_NAMES: &[&str] = &["fr", "ku", "kd", "out", "in"];
-
-/// True if `name` is a built-in fact tag (case-insensitive). These are
-/// allowed when used in their semantic position (e.g. `Fr(~k)` in a
-/// premise) but not as user-defined protocol facts elsewhere.
-fn is_builtin_fact_name(name: &str) -> bool {
-    matches!(
-        name,
-        "Fr" | "In" | "Out" | "K" | "KU" | "KD" | "Ded" | "Term"
-    )
-}
 
 pub fn reserved_report(thy: &Theory) -> WfReport {
     let mut out = Vec::new();
     for r in theory_rules(thy) {
         for f in rule_facts(r) {
-            // Only protocol facts (non-builtin) trigger this check.
-            if is_builtin_fact_name(&f.name) {
+            // HS matches on the `ProtoFact _ name _` pattern, so the special
+            // fact tags never reach the name test.
+            if !is_proto_fact_name(&f.name) {
                 continue;
             }
             let lower = f.name.to_lowercase();
@@ -1415,9 +1408,9 @@ pub fn reserved_report(thy: &Theory) -> WfReport {
             }
         }
     }
-    // Lemma/restriction formula facts: skipped here because the parser
-    // AST keeps formulas in a less-structured form. This matches the
-    // bulk of Tamarin's reserved_report behaviour for rules.
+    // GAP: HS's `theoryFacts` also feeds this check the Action-atom facts of
+    // every lemma formula (Wellformedness.hs:602-605); only rule facts are
+    // scanned here.
     out
 }
 
@@ -1654,7 +1647,7 @@ fn collect_fact_observations(thy: &Theory) -> Vec<FactObservation> {
             });
         }
     }
-    out.extend(lemma_fact_observations(thy));
+    out.extend(lemma_fact_observations(thy, &ac));
     out
 }
 
@@ -1664,12 +1657,11 @@ fn collect_fact_observations(thy: &Theory) -> Vec<FactObservation> {
 /// i.e. every Action-atom fact in the lemma formula, rendered as the Haskell
 /// `show` of `Fact (VTerm Name (BVar LVar))` — `Fact {factTag = ProtoFact
 /// Linear "X" n, factAnnotations = fromList [], factTerms = [Bound i, ...]}`.
-fn lemma_fact_observations(thy: &Theory) -> Vec<FactObservation> {
-    let ac = user_ac_fun_names(thy);
+fn lemma_fact_observations(thy: &Theory, ac: &AcSyms) -> Vec<FactObservation> {
     let mut out = Vec::new();
     for l in theory_lemmas(thy) {
         let mut facts: Vec<(Fact, Vec<String>)> = Vec::new();
-        collect_formula_facts(&l.formula, &mut Vec::new(), &ac, &mut facts);
+        collect_formula_facts(&l.formula, &mut Vec::new(), ac, &mut facts);
         for (fa, dbterms) in facts {
             // HS show of the Fact: see `show_debruijn_fact`.
             let pp = show_debruijn_fact(&fa, &dbterms);
@@ -2059,40 +2051,42 @@ pub fn fact_lhs_occur_no_rhs(thy: &Theory) -> WfReport {
 
     // rhs = all proto conclusion facts in source order (regroup of getFacts
     // rConcs).  factInfo = (name, arity, persistent).
-    let mut rhs: Vec<(String, Fact)> = Vec::new();
+    let mut rhs: Vec<(&str, &Fact)> = Vec::new();
     for r in theory_rules(thy) {
         for f in &r.conclusions {
             if !is_proto_fact_name(&f.name) {
                 continue;
             }
-            rhs.push((r.name.clone(), f.clone()));
+            rhs.push((r.name.as_str(), f));
         }
     }
-    let rhs_info: BTreeSet<(String, usize, bool)> = rhs
+    let rhs_info: BTreeSet<(&str, usize, bool)> = rhs
         .iter()
-        .map(|(_, f)| (f.name.clone(), f.args.len(), f.persistent))
+        .map(|(_, f)| (f.name.as_str(), f.args.len(), f.persistent))
         .collect();
 
     // Detect orphan premises (proto LHS facts whose factInfo is in no RHS).
-    let mut orphan_pairs: Vec<(String, Fact, Option<(String, Fact)>)> = Vec::new();
+    #[allow(clippy::type_complexity)]
+    let mut orphan_pairs: Vec<(&str, &Fact, Option<(&str, &Fact)>)> = Vec::new();
     for r in theory_rules(thy) {
         for f in &r.premises {
             if !is_proto_fact_name(&f.name) {
                 continue;
             }
             // HS `removeSame`: drop if the full factInfo occurs in some RHS.
-            if rhs_info.contains(&(f.name.clone(), f.args.len(), f.persistent)) {
+            if rhs_info.contains(&(f.name.as_str(), f.args.len(), f.persistent)) {
                 continue;
             }
             // HS `minimalEdFact`: the RHS fact with minimum name edit distance
-            // (first in RHS order on ties); `isSimilar` keeps it only if <= 3.
+            // (`min_by_key` keeps the first on ties, matching RHS order);
+            // `isSimilar` keeps it only if <= 3.
             let suggestion = rhs
                 .iter()
-                .map(|(rn, rf)| (edit_distance(&f.name, &rf.name), rn, rf))
+                .map(|(rn, rf)| (edit_distance(&f.name, &rf.name), *rn, *rf))
                 .min_by_key(|(d, _, _)| *d)
                 .filter(|(d, _, _)| *d <= 3)
-                .map(|(_, rn, rf)| (rn.clone(), rf.clone()));
-            orphan_pairs.push((r.name.clone(), f.clone(), suggestion));
+                .map(|(_, rn, rf)| (rn, rf));
+            orphan_pairs.push((r.name.as_str(), f, suggestion));
         }
     }
 
@@ -2161,20 +2155,9 @@ pub fn fresh_names_report(thy: &Theory) -> WfReport {
     let topic = "Fresh public constants";
     let mut bodies: Vec<String> = Vec::new();
     for r in theory_rules(thy) {
-        // HS `freshNamesReport` runs `universeBi` over the let-substituted
-        // `ProtoRuleE` (Wellformedness.hs:455-456, see line 456), so a fresh name occurring
-        // only inside a `let` value (e.g. `let m = ~'foo' in ... Out(m)`) is
-        // inlined and surfaces here.  Mirror by walking the let-inlined facts.
-        let (prems, acts, concs) = rule_facts_with_lets(r);
-        let mut names = Vec::new();
-        for f in prems.iter().chain(&acts).chain(&concs) {
-            for t in &f.args {
-                term_name_lits(t, &mut names);
-            }
-        }
         // HS `show (Name FreshName n) = "~'" ++ n ++ "'"` for each fresh name,
         // joined by `punctuate comma` (`, `) under the `fsep`.
-        let fresh_lits: Vec<String> = names
+        let fresh_lits: Vec<String> = rule_name_lits(r)
             .iter()
             .filter_map(|(k, n)| {
                 if *k == NameKind::Fresh {
@@ -2213,17 +2196,7 @@ pub fn public_names_report(thy: &Theory) -> WfReport {
     // default `format_wf_block` path (header baked into the message).
     let mut pairs: Vec<(String, String)> = Vec::new(); // (ruleName, pubName)
     for r in theory_rules(thy) {
-        // HS `publicNamesReport` runs `universeBi` over the let-substituted
-        // `ProtoRuleE` (Wellformedness.hs:444-452, see line 447,456), so walk the let-inlined
-        // facts (a public name occurring only inside a `let` value surfaces).
-        let (prems, acts, concs) = rule_facts_with_lets(r);
-        let mut names = Vec::new();
-        for f in prems.iter().chain(&acts).chain(&concs) {
-            for t in &f.args {
-                term_name_lits(t, &mut names);
-            }
-        }
-        for (k, n) in names {
+        for (k, n) in rule_name_lits(r) {
             if k == NameKind::Pub {
                 pairs.push((r.name.clone(), n));
             }
@@ -2560,7 +2533,6 @@ pub fn lemma_attribute_report(thy: &Theory) -> WfReport {
     // block so the header appears exactly once even with several lemmas.
     let topic = "Lemma annotations";
     let bodies: Vec<String> = theory_lemmas(thy)
-        .into_iter()
         .filter(|l| {
             matches!(l.trace_quantifier, TraceQuantifier::ExistsTrace)
                 && l.attributes.iter().any(|a| matches!(a, LemmaAttr::Reuse))
@@ -2914,7 +2886,7 @@ pub fn variable_sort_clashes(thy: &Theory) -> WfReport {
         // Stable sort over the precomputed lowercase key — identical order to
         // re-lowercasing in the comparator.
         vars.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.idx.cmp(&b.1.idx)));
-        let mut clash_groups: Vec<Vec<VarSpec>> = Vec::new();
+        let mut clash_groups: Vec<Vec<&VarSpec>> = Vec::new();
         let mut i = 0;
         while i < vars.len() {
             let key = (vars[i].0.as_str(), vars[i].1.idx);
@@ -2923,7 +2895,7 @@ pub fn variable_sort_clashes(thy: &Theory) -> WfReport {
                 j += 1;
             }
             // sortednubOn id: sort by HS LVar Ord (idx, sort, name) then dedup.
-            let mut grp: Vec<VarSpec> = vars[i..j].iter().map(|(_, v)| v.clone()).collect();
+            let mut grp: Vec<&VarSpec> = vars[i..j].iter().map(|(_, v)| v).collect();
             grp.sort_by(|a, b| {
                 a.idx
                     .cmp(&b.idx)
@@ -2951,7 +2923,7 @@ pub fn variable_sort_clashes(thy: &Theory) -> WfReport {
             .iter()
             .enumerate()
             .map(|(k, grp)| {
-                let vs: Vec<String> = grp.iter().map(render_var).collect();
+                let vs: Vec<String> = grp.iter().copied().map(render_var).collect();
                 format!("    {:>w$}. {}", k + 1, vs.join(", "), w = w)
             })
             .collect();

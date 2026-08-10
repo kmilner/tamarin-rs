@@ -44,7 +44,7 @@ use crate::guarded_types::{BVar, GAtom, GFact, GTerm};
 // =============================================================================
 
 /// HS `show LVar` (LTerm.hs:526-533): `sortPrefix s ++ body`.
-pub(crate) fn show_varspec(v: &p::VarSpec) -> String {
+fn show_varspec(v: &p::VarSpec) -> String {
     let mut s = String::new();
     write_varspec(v, &mut s);
     s
@@ -79,7 +79,7 @@ fn write_varspec(v: &p::VarSpec, out: &mut String) {
 
 /// HS `Show (Term a)` applied to `VTerm Name (BVar LVar)`
 /// (Term/Raw.hs:227-237 + the derived `Show (BVar v)`).
-pub(crate) fn show_gterm(t: &GTerm) -> String {
+fn show_gterm(t: &GTerm) -> String {
     let mut s = String::new();
     write_gterm(t, &mut s);
     s
@@ -414,12 +414,11 @@ fn formula_action_fact(g: &Guarded) -> Option<&GFact> {
 ///
 /// The returned `VarSpec`s are `show`n by the callers to build PCRE
 /// alternations like `(~n|~s|...)`.
-pub(crate) fn check_formula(oracle_type: &str, f: &Guarded) -> Vec<p::VarSpec> {
+fn check_formula(oracle_type: &str, f: &Guarded) -> Vec<p::VarSpec> {
     // rev = any guard fact-tag name =~ "Reveal"
     let mut tag_names = Vec::new();
     guard_fact_tag_names(f, &mut tag_names);
-    let rev = tag_names.iter().any(|n| n.contains("Reveal"));
-    if !rev {
+    if !tag_names.iter().any(|n| n.contains("Reveal")) {
         return Vec::new();
     }
 

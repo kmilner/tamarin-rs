@@ -38,7 +38,7 @@ fn k_fact_categorisation() {
 }
 
 /// `lvarToLnterm` re-sorts NAT variables to FRESH ones — the surprising bit
-/// of the HS definition (Fact.hs:331-333), since only fresh-sorted variables
+/// of the HS definition (Theory/Model/Fact.hs:331-333), since only fresh-sorted variables
 /// can be bound by the `Fr`-premise `freesToFresh` builds around them.
 #[test]
 fn lvar_to_lnterm_resorts_nat_to_fresh() {
@@ -71,8 +71,8 @@ fn trivial_ku_fact_predicates() {
 // =========================================================================
 // Haskell-faithfulness invariants.
 //
-// Fact.hs:128:  `data Multiplicity = Persistent | Linear`
-// Fact.hs:132:  `data FactTag = ProtoFact ... | FreshFact | OutFact |
+// Theory/Model/Fact.hs:133:  `data Multiplicity = Persistent | Linear`
+// Theory/Model/Fact.hs:137:  `data FactTag = ProtoFact ... | FreshFact | OutFact |
 //                              InFact | KUFact | KDFact | DedFact |
 //                              TermFact`
 //
@@ -82,12 +82,12 @@ fn trivial_ku_fact_predicates() {
 // injective-fact code assumes.
 // =========================================================================
 
-/// Multiplicity: `Persistent < Linear` from Fact.hs:128-129.
+/// Multiplicity: `Persistent < Linear` from Theory/Model/Fact.hs:133-134.
 #[test]
 fn multiplicity_ord_matches_haskell_declaration() {
     assert!(
         Multiplicity::Persistent < Multiplicity::Linear,
-        "Persistent must sort before Linear (Fact.hs:128)"
+        "Persistent must sort before Linear (Theory/Model/Fact.hs:133)"
     );
 }
 
@@ -104,7 +104,7 @@ fn fact_tag_ord_proto_sorts_before_builtins() {
     let fresh = FactTag::Fresh;
     assert!(
         proto < fresh,
-        "Proto must sort before Fresh (Haskell decl order Fact.hs:132)"
+        "Proto must sort before Fresh (Haskell decl order Theory/Model/Fact.hs:137)"
     );
     assert!(fresh < FactTag::Out);
     assert!(FactTag::Out < FactTag::In);

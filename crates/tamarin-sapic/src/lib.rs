@@ -6,36 +6,32 @@
 //! transformation passes from `lib/sapic/src/Sapic/`.
 //!
 //! Modules ported:
-//! - [`bindings`] ← `Sapic.Bindings`
 //! - [`annotation`] ← `Sapic.Annotation`
-//! - [`secret_channels`] ← `Sapic.SecretChannels`
-//! - [`facts`] ← `Sapic.Facts`
-//! - [`typing`] / [`type_theory`] ← `Sapic.Typing`
-//! - [`locks`] ← `Sapic.Locks` (lock annotation; `checkLocks` not ported)
-//! - [`inline`] ← process-call inlining (HS does this in the parser,
-//!   `Theory.Text.Parser.Sapic.actionprocess`)
-//! - [`let_destructors`] ← `Sapic.LetDestructors` (`let`-elimination /
-//!   destructor-let annotation)
 //! - [`base_translation`] ← `Sapic.Basetranslation`
-//!   (linear + state + locks + `let` (FLet) + process-call marker)
-//! - [`translate`] / [`apply`] ← top-level `Sapic`
-//!
+//! - [`bindings`] ← `Sapic.Bindings`
+//! - [`compression`] ← `Sapic.Compression`
+//! - [`facts`] ← `Sapic.Facts`
+//! - [`let_destructors`] ← `Sapic.LetDestructors`
+//! - [`locks`] ← `Sapic.Locks` (lock annotation; `checkLocks` not ported)
+//! - [`progress_function`] ← `Sapic.ProgressFunction`
+//! - [`progress_translation`] ← `Sapic.ProgressTranslation`
+//! - [`reliable_channel`] ← `Sapic.ReliableChannelTranslation`
+//! - [`report`] ← `Sapic.Report`
+//! - [`secret_channels`] ← `Sapic.SecretChannels`
 //! - [`states`] ← `Sapic.States` (pure-state / state-channel optimisation,
 //!   gated on `options: translation-state-optimisation` / `_stateChannelOpt`)
-//!
+//! - [`translate`] / [`apply`] ← top-level `Sapic`
+//! - [`typing`] / [`type_theory`] ← `Sapic.Typing`
 //! - [`warnings`] ← `Sapic.Warnings` (SAPIC-process wellformedness report;
 //!   bound-twice / `WFBoundTwice` arm — `checkLocks` arm deferred)
 //!
-//! - [`report`] ← `Sapic.Report`
-//! - [`secret_channels`]/`base_translation` — secret/private channels
-//!   (`ChIn`/`ChOut` on a named/private channel)
+//! Two modules have no single HS counterpart, because the Rust parser builds
+//! its own surface AST where HS's builds the process directly:
+//! - [`convert`] ← parser AST → `PlainProcess`
+//! - [`inline`] ← process-call inlining (HS does this in the parser,
+//!   `Theory.Text.Parser.Sapic.actionprocess`)
 //!
 //! Not yet ported: `Sapic.Exceptions`.
-//!
-//! Also ported: [`progress_function`] ← `Sapic.ProgressFunction`,
-//! [`progress_translation`] ← `Sapic.ProgressTranslation`,
-//! [`reliable_channel`] ← `Sapic.ReliableChannelTranslation`,
-//! [`compression`] ← `Sapic.Compression`.
 
 pub mod annotation;
 pub mod apply;

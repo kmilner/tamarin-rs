@@ -66,15 +66,15 @@ const WF_LINE_LENGTH: usize = 100;
 /// `ribbonLen = round (100 / 1.5) = 67` for [`WF_LINE_LENGTH`].
 const WF_RIBBON: usize = 67;
 
-/// Port of HS `multRestrictedReport` (Wellformedness.hs:1108-1113):
+/// Port of HS `multRestrictedReport` (Wellformedness.hs:1110-1113):
 /// `multRestrictedReport' (irreducibleFunSyms …) (thyProtoRules thy)`.
 ///
 /// `elab` supplies the rules (HS `thyProtoRules`, i.e. macro-applied E-rules of
 /// the translated theory) and `sig` the irreducible-symbol classification.
 /// Each entry's attribute block comes from the rule it dumps: HS's
-/// `prettyRuleAttributes` (Rule.hs:1330-1334) reads
-/// `ruleAttributes ru = L.get (preAttributes . rInfo)` (Rule.hs:670-674) off
-/// the rule itself.
+/// `prettyRuleAttributes` (Theory/Model/Rule.hs:1330-1334) reads
+/// `ruleAttributes ru = L.get (preAttributes . rInfo)`
+/// (Theory/Model/Rule.hs:670-674) off the rule itself.
 pub fn mult_restricted_report(elab: &Theory, sig: &MaudeSig) -> Vec<WfError> {
     let irreducible = &sig.irreducible_fun_syms;
     let mut out = Vec::new();
@@ -113,9 +113,10 @@ pub fn mult_restricted_report(elab: &Theory, sig: &MaudeSig) -> Vec<WfError> {
 
 /// A rule's own `RuleAttributes` in the `Vec<p::RuleAttr>` shape
 /// [`crate::pretty_theory::rule_attributes_doc`] — the port's single
-/// implementation of HS `prettyRuleAttributes` (Rule.hs:1330-1334) — consumes.
+/// implementation of HS `prettyRuleAttributes` (Theory/Model/Rule.hs:1330-1334)
+/// — consumes.
 ///
-/// HS's `prettyRuleAttribute` (Rule.hs:1314-1327) renders the record's fields
+/// HS's `prettyRuleAttribute` (Theory/Model/Rule.hs:1314-1327) renders the record's fields
 /// as `catMaybes [color, process, no_derivcheck, issapicrule, role]`;
 /// `rule_attribute_parts` re-derives that order from the list, so the order
 /// here is not load-bearing.  An all-default record maps to the empty list,
@@ -137,10 +138,10 @@ pub(crate) fn surface_attrs(attr: &crate::rule::RuleAttributes) -> Vec<p::RuleAt
     }
     if let Some(proc) = &attr.process {
         // HS `ppProcess p = text "process=" <> text ("\"" ++
-        // prettySapicTopLevel' f p ++ "\"")` (Rule.hs:1324-1327).  Only the
-        // SAPIC translation fills this field — HS's attribute parser
-        // `parseAndIgnore`s a user-written `process=` (Parser/Rule.hs:68-93,
-        // see line 72), as does RS's.
+        // prettySapicTopLevel' f p ++ "\"")` (Theory/Model/Rule.hs:1324-1327).
+        // Only the SAPIC translation fills this field — HS's attribute parser
+        // `parseAndIgnore`s a user-written `process=`
+        // (Theory/Text/Parser/Rule.hs:69-95, see line 74), as does RS's.
         out.push(p::RuleAttr::Process(
             crate::pretty_sapic::pretty_sapic_top_level_attr(proc),
         ));

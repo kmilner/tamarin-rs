@@ -6,7 +6,7 @@
 //! (lib/theory/src/Theory/Proof.hs).
 //!
 //! HS's `--prove` flag wires `replaceSorryProver $ runAutoProver`
-//! (TheoryLoader.hs:569-615, see line 606) so the auto-prover runs **only at `by sorry`
+//! (TheoryLoader.hs:705-707, see line 706) so the auto-prover runs **only at `by sorry`
 //! leaves of the user-written skeleton**, not from scratch.  This
 //! preserves the case-decomposition structure the user wrote in the
 //! `.spthy` file even when the auto-prover would have picked a
@@ -41,11 +41,11 @@
 //! The full HS `--prove` flow runs in two passes that this one-pass
 //! walker folds together:
 //!   1. close-time `checkAndExtendProver (sorryProver Nothing)`
-//!      (`proveTheory (const True) checkProof`, Prover.hs:174-185) over
+//!      (`proveTheory (const True) checkProofM`, CloseRule.hs:57-71) over
 //!      ALL lemmas — it re-execs each stored step, keeping the verbatim
 //!      structure and turning any step that no longer applies into an
 //!      annotated `sorry /* invalid proof step encountered */`;
-//!   2. prove-time `replaceSorryProver $ runAutoProver` (TheoryLoader.hs:569-615, see line 606)
+//!   2. prove-time `replaceSorryProver $ runAutoProver` (TheoryLoader.hs:705-707, see line 706)
 //!      over the lemmas the `--prove` selector targets — it re-runs the
 //!      auto-prover at every annotated `sorry` leaf.
 //!
@@ -94,7 +94,7 @@ pub fn replace_sorry_prove(
 
 /// Replay a stored skeleton WITHOUT auto-proving its open/sorry leaves —
 /// the equivalent of HS's close-time `checkAndExtendProver (sorryProver
-/// Nothing)` (Prover.hs:170-251, see line 185, Proof.hs).  Each step's method and
+/// Nothing)` (CloseRule.hs:57-71, see line 71, Proof.hs).  Each step's method and
 /// children are taken verbatim from the skeleton; every fall-through that
 /// `checkProof` would turn into a `Sorry` with a `Nothing` system
 /// (Proof.hs) becomes an *unannotated* `ProofNode`
@@ -103,7 +103,8 @@ pub fn replace_sorry_prove(
 /// its summary status reflects the stored proof — NOT a fresh search.
 ///
 /// Used for lemmas the `--prove` selector does NOT target (HS keeps their
-/// close-time-replayed proof untouched, Prover.hs:273-275).
+/// close-time-replayed proof untouched — `proveLemma`'s `| otherwise = lem`,
+/// CloseRule.hs:157-159).
 pub fn check_and_extend(
     ctx: &ProofContext,
     initial: System,
@@ -287,9 +288,9 @@ fn replay_node(
     // step (`checkAndExecProofMethod`, Proof.hs:447-467, see line 456); if the system is no
     // longer contradictory the method returns `Nothing`, so checkProof
     // emits `sorryNode (Just "invalid proof step encountered") ...`
-    // (Proof.hs:459-461) carrying `Just sys`.  For a `--prove`-selected
+    // (Proof.hs:459-460) carrying `Just sys`.  For a `--prove`-selected
     // lemma `replaceSorryProver` then re-runs the auto-prover on that
-    // annotated sorry (Prover.hs:170-251, see line 185 → TheoryLoader.hs:569-615, see line 606), exactly the
+    // annotated sorry (CloseRule.hs:57-71, see line 71 → TheoryLoader.hs:705-707, see line 706), exactly the
     // `run_proof_search` fall-through below.
     if matches!(node.method, ParsedMethod::Contradiction) && node.cases.is_empty() {
         // HS replay (checkProof, Proof.hs) preserves the skeleton's STORED
@@ -319,9 +320,9 @@ fn replay_node(
     // reaches Solved naturally).  The fall-through is exactly HS's
     // pipeline: close-time `checkProof` marks the stale `Finished Solved`
     // an annotated `sorry /* invalid proof step encountered */`
-    // (Proof.hs:459-461), and for a `--prove`-selected lemma
-    // `replaceSorryProver` then reproves it (Prover.hs:170-251, see line 185 →
-    // TheoryLoader.hs:569-615, see line 606).  Skeleton's SOLVED is HS's claim; RS verifies
+    // (Proof.hs:459-460), and for a `--prove`-selected lemma
+    // `replaceSorryProver` then reproves it (CloseRule.hs:57-71, see line 71 →
+    // TheoryLoader.hs:705-707, see line 706).  Skeleton's SOLVED is HS's claim; RS verifies
     // via its own solver.
     if matches!(node.method, ParsedMethod::SolvedLeaf) && node.cases.is_empty() {
         return finished_leaf(
@@ -496,17 +497,13 @@ fn replay_node(
     // mapProofInfo (Nothing,) . prover d` (Proof.hs:447-467, see line 462) → an annotated
     // `sorry Nothing (Just se)`.  For a `--prove`-selected lemma
     // `replaceSorryProver` then auto-proves that annotated sorry
-    // (Prover.hs:170-251, see line 185 → TheoryLoader.hs:569-615, see line 606), matching the
+    // (CloseRule.hs:57-71, see line 71 → TheoryLoader.hs:705-707, see line 706), matching the
     // `run_proof_search` branch below.
     for (rt_name, rt_sys) in produced.into_iter() {
+        // A case the skeleton already consumed — including one an unnamed
+        // `""` skeleton block claimed, since the loop above re-keys such a
+        // child under the RUNTIME name.
         if children.contains_key(&rt_name) {
-            continue;
-        }
-        // Also skip if the skeleton consumed this case via "".
-        if node.cases.iter().any(|(s, _)| s.is_empty())
-            && children.len() == 1
-            && children.keys().next().map(|s| s.as_str()) == Some(rt_name.as_str())
-        {
             continue;
         }
         let push_path = !rt_name.is_empty();
@@ -942,7 +939,7 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             // `DisjG (Disj [GuardedFormula])` value via
             // `disjSplitGoal` (Theory/Text/Parser/Proof.hs:39-72, see line 61), then
             // dispatches `SolveGoal goal` against `sys.goals` (HS
-            // ProofMethod.hs:374: `guard (goal \`M.member\` sGoals)`).
+            // ProofMethod.hs:258: `guard (goal \`M.member\` sGoals)`).
             //
             // Our skeleton parser only captures each alt's structural
             // SIGNATURE (top-level shape — see `DisjAlt`), so the first
@@ -1068,7 +1065,7 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             // `SubtermG (small, big)` over LNTerm and dispatches via
             // structural Map lookup in `sys.goals` (HS ProofMethod.hs:253-274, see line 258).
             // We compare by canonical pretty-printed text — see HS
-            // `prettyGoal (SubtermG (l,r))` at Constraints.hs:281-282
+            // `prettyGoal (SubtermG (l,r))` at Constraints.hs:287-288
             // which prints `prettyLNTerm l ⊏ prettyLNTerm r`.  Pretty
             // representations are stable across the skeleton-vs-runtime
             // boundary for ground terms; for terms containing free
@@ -1197,7 +1194,7 @@ fn disj_alts_match(skel: &[DisjAlt], runtime: &[crate::guarded::Guarded]) -> boo
 /// Render a single Guarded alt to its HS-faithful `prettyGuarded`
 /// representation.  Used by `match_goal`'s GoalSpec::Disj branch to
 /// disambiguate among multiple shape-matching disjs via alt-text
-/// equality.  See HS `prettyGuarded` (Guarded.hs:822-864).
+/// equality.  See HS `prettyGuarded` (Guarded.hs:824-866).
 fn pretty_disj_alt(g: &crate::guarded::Guarded) -> String {
     crate::pretty_formula::pretty_guarded(g)
 }
@@ -1238,7 +1235,7 @@ fn disj_alt_shape_matches(skel: &DisjAlt, g: &crate::guarded::Guarded) -> bool {
         // idiom: the skeleton's text starts with `¬` (not `∀`), so
         // the parser classified it `NonQuant`; we accept it matching
         // a `GGuarded { qua: All, vars: [] }` here.  See
-        // Guarded.hs:856-857 for the negation rendering.
+        // Guarded.hs:858-859 for the negation rendering.
         (
             DisjAlt::NonQuant,
             Guarded::GGuarded {
@@ -1262,7 +1259,7 @@ fn name_matches(tag: &FactTag, want: &str) -> bool {
 }
 
 fn tag_persistent(tag: &FactTag) -> bool {
-    // `KU`/`KD` knowledge facts are persistent (Fact.hs:353-357;
+    // `KU`/`KD` knowledge facts are persistent (Fact.hs:383-388;
     // `factTagMultiplicity` → Persistent), and the skeleton pretty-prints
     // them with the `!` prefix (e.g. `solve( !KU( ~n ) @ #vk )`), so the
     // parsed spec's `persistent` flag is `true` and must match here.

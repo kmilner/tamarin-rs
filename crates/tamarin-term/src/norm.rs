@@ -102,7 +102,7 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
             // `FAppNoEq o ts | (NoEq o) \`S.member\` irreducible` and
             // `FAppACfct o ts | (AC (ACfct o)) \`S.member\` irreducible`.  The
             // builtin AC operators sit in `irreducible_fun_syms` as well, for
-            // OTHER consumers (Contradictions.hs:149-150 `maybeNonNormalTerms`
+            // OTHER consumers (Contradictions.hs:152-153 `maybeNonNormalTerms`
             // uses `S.member` on the FUN set to decide which subterms to NOT
             // include), but Norm.hs matches them through their own `viewTerm2`
             // constructors, so they must not take this arm: ungated,
@@ -251,29 +251,28 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
             if let FunSym::Ac(ac) = sym {
                 match ac {
                     AcSym::Mult => {
-                        // contains one / DH_neutral, nested mult, or invalidMult → reducible
-                        if args.iter().any(|a| is_nullary(a, ONE_SYM_STRING)) {
-                            return false;
-                        }
-                        if args.iter().any(|a| is_nullary(a, DH_NEUTRAL_SYM_STRING)) {
-                            return false;
-                        }
-                        if args.iter().any(crate::term::is_product) {
-                            return false;
-                        }
-                        if invalid_mult(args) {
+                        // HS: `FMult ts | fAppOne `elem` ts || fAppDHNeutral
+                        // `elem` ts || any isProduct ts || invalidMult ts`
+                        // (Norm.hs:84) — the three element tests fuse into one
+                        // pass, the disjunction is unchanged.
+                        let reducible_factor = |a: &LNTerm| {
+                            is_nullary(a, ONE_SYM_STRING)
+                                || is_nullary(a, DH_NEUTRAL_SYM_STRING)
+                                || crate::term::is_product(a)
+                        };
+                        if args.iter().any(reducible_factor) || invalid_mult(args) {
                             return false;
                         }
                         return args.iter().all(|a| go_nf(a, msig, maude));
                     }
                     AcSym::Xor => {
-                        if args.iter().any(|a| is_nullary(a, ZERO_SYM_STRING)) {
-                            return false;
-                        }
-                        if args.iter().any(is_xor) {
-                            return false;
-                        }
-                        if invalid_xor(args) {
+                        // HS: `FXor ts | fAppZero `elem` ts || any isXor ts ||
+                        // invalidXor ts` (Norm.hs:86).
+                        if args
+                            .iter()
+                            .any(|a| is_nullary(a, ZERO_SYM_STRING) || is_xor(a))
+                            || invalid_xor(args)
+                        {
                             return false;
                         }
                         return args.iter().all(|a| go_nf(a, msig, maude));
@@ -356,18 +355,10 @@ fn invalid_mult(ts: &[LNTerm]) -> bool {
 /// i.e. at least one element of `xs` is also in `ys`.  Mirrors Haskell
 /// `(\\)` (Data.List) on the underlying multisets.
 fn multiset_diff_changes(xs: &[&LNTerm], ys: &[&LNTerm]) -> bool {
-    let mut consumed: Vec<bool> = vec![false; ys.len()];
-    let mut removed_any = false;
-    for x in xs {
-        for (i, y) in ys.iter().enumerate() {
-            if !consumed[i] && **x == **y {
-                consumed[i] = true;
-                removed_any = true;
-                break;
-            }
-        }
-    }
-    removed_any
+    // `xs \\ ys` drops at most one `xs` element per matching `ys` element, so
+    // it differs from `xs` exactly when some element is shared — which
+    // occurrence gets consumed never changes that verdict.
+    xs.iter().any(|x| ys.iter().any(|y| **x == **y))
 }
 
 /// `invalidXor` — HS `Norm.hs:123-126`.  True iff `ts` contains
@@ -447,7 +438,7 @@ fn rule_applies_ac(
             // identity element is ever declared
             // (`maude_print.rs::op_ac`/`op_c` plus the user-AC `op` loop,
             // mirroring HS `theoryOpAC`/`theoryOpACUser`,
-            // Parser.hs:217-267).  Commutativity and associativity each
+            // Term/Maude/Parser.hs:217-267).  Commutativity and associativity each
             // carry the same symbol at the root of both sides, so the root
             // symbol is invariant across a term's axiom class, and no
             // instance of an `f`-rooted pattern is axiom-equal to a

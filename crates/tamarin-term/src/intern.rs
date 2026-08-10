@@ -31,10 +31,10 @@
 //! hit returns the identical canonical pointer with zero shared-memory
 //! traffic.
 //!
-//! Equality/ordering/hashing are unchanged vs the previous owned/`Arc`
-//! representations: `&[u8]`/`&str` deref to their contents, so `Ord`/`Eq`/
-//! `Hash` remain content-based (byte-/char-lexicographic) — byte-identical
-//! `--prove` output.
+//! Equality/ordering/hashing stay CONTENT-based, never pointer-based:
+//! `&[u8]`/`&str` deref to their contents, so `Ord`/`Eq`/`Hash` are
+//! byte-/char-lexicographic — which is what keeps `--prove` output
+//! byte-identical, since those orders reach container iteration order.
 
 use std::cell::RefCell;
 use std::sync::{OnceLock, RwLock};

@@ -92,7 +92,7 @@ pub fn hsv_to_rgb(c: Hsv) -> Rgb {
     }
 }
 
-/// Drop saturation, keeping hue and value (used to render greyscale variants).
+/// `hsvToGray`: drop saturation, keeping hue and value.
 pub fn hsv_to_gray(c: Hsv) -> Hsv {
     Hsv {
         h: c.h,

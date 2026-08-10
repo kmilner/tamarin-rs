@@ -9,7 +9,7 @@
 //!     (lib/theory/src/Theory/Constraint/System.hs:439-504)
 //!   - parser:     `Theory.Text.Parser.Tactics`
 //!     (lib/theory/src/Theory/Text/Parser/Tactics.hs:60-115)
-//!   - pretty:     `prettyTactic` (lib/theory/src/TheoryObject.hs:881-909)
+//!   - pretty:     `prettyTactic` (lib/theory/src/TheoryObject.hs:924-942)
 //!
 //! The Rust parser captures the raw tactic body verbatim; this module
 //! re-parses that body into the same structure HS keeps (presort char +
@@ -103,7 +103,7 @@ impl Tactic {
         }
     }
 
-    /// Render via the ported HS `prettyTactic` (TheoryObject.hs:881-909).
+    /// Render via the ported HS `prettyTactic` (TheoryObject.hs:924-942).
     pub fn render(&self) -> String {
         let mut out = String::new();
         // `tactic: <name>` $-$ `presort: <char>`
@@ -143,7 +143,7 @@ fn render_block(kw: &str, b: &PrioBlock) -> String {
     out
 }
 
-/// HS `prettify` (TheoryObject.hs:904-909): split on whitespace (`words`),
+/// HS `prettify` (TheoryObject.hs:947-952): split on whitespace (`words`),
 /// then concatenate tokens with operator tokens (`|`, `&`, `not`)
 /// rendered with their canonical spacing and all other tokens joined
 /// with no separator.

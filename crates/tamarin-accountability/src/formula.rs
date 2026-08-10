@@ -7,15 +7,15 @@
 //!
 //! Mirrors HS `Theory.Model.Formula`'s `ProtoFormula syn s c v` specialised to
 //! `SyntacticLNFormula = ProtoFormula SyntacticSugar (String, LSort) Name (BVar LVar)`
-//! (Formula.hs:114-127, 261).  Bound variables are De-Bruijn (`BVar::Bound`),
+//! (Formula.hs:115-127, 263).  Bound variables are De-Bruijn (`BVar::Bound`),
 //! free variables carry a full `LVar` (`BVar::Free`); the atom/term leaves reuse
 //! `tamarin_theory::guarded_types` (`GAtom`/`GFact`/`GTerm`), whose Free↔Bound
 //! substitution helpers implement HS's `quantify`/open/close discipline.
 //!
 //! The transforms are `frees`, `quantify`/`forAll`/`exists`, `rename`
-//! (Term/LTerm.hs:614-621), `shiftFreeIndices` (Formula.hs:457-462),
-//! `pullQuantifiers`/`mergeQuantifiers` (Generation.hs:273-306) and
-//! `simplifyFormula` (Formula.hs:377-409), plus the `p::Formula` ↔
+//! (Term/LTerm.hs:638-645), `shiftFreeIndices` (Formula.hs:458-465),
+//! `pullQuantifiers`/`mergeQuantifiers` (Generation.hs:267-300) and
+//! `simplifyFormula` (Formula.hs:379-412), plus the `p::Formula` ↔
 //! locally-nameless converters that let the generated lemmas reuse the parser-AST
 //! rendering and guarded-proving paths.
 
@@ -26,7 +26,7 @@ use tamarin_theory::guarded_types::{
     subst_free_atom_at_depth, BVar, GAtom, GBinding, GFact, GTerm,
 };
 
-// The connective/quantifier enums (HS Formula.hs:104,108) are shared with the
+// The connective/quantifier enums (HS Formula.hs:107,111) are shared with the
 // ProtoFormula data-type port in `tamarin_theory::formula`.
 pub(crate) use tamarin_theory::formula::{Connective as Conn, Quantifier as Quant};
 
@@ -58,7 +58,7 @@ impl Fm {
 
 // =============================================================================
 // LVar Ord + sort ranking (HS LVar Ord: compare idx <> sort <> name,
-// LTerm.hs:522-524; LSort order Pub<Fresh<Msg<Node<Nat, LTerm.hs:161-166).
+// LTerm.hs:546-548; LSort order Pub<Fresh<Msg<Node<Nat, LTerm.hs:165-169).
 // =============================================================================
 
 /// Rank a `SortHint` to mirror HS `LSort` Ord.  A bare (`Untagged`) message
@@ -113,16 +113,12 @@ pub(crate) fn msg_var(name: &str) -> p::VarSpec {
     }
 }
 
-fn free_term(v: p::VarSpec) -> GTerm {
+/// A term that is a single free logical variable (HS `varTerm $ Free v`).
+pub(crate) fn free_term(v: p::VarSpec) -> GTerm {
     GTerm::Var(BVar::Free(v))
 }
 
-/// A term that is a single free logical variable (HS `varTerm $ Free v`).
-pub(crate) fn free_var_term(v: p::VarSpec) -> GTerm {
-    free_term(v)
-}
-
-/// HS `LVar` `==`: equal name, sort AND index (LTerm.hs:517-518).  Sorts are
+/// HS `LVar` `==`: equal name, sort AND index (LTerm.hs:541-542).  Sorts are
 /// compared after normalising to their concrete base (a bare `Untagged`
 /// message variable is `LSortMsg`).
 pub(crate) fn lvar_eq(a: &p::VarSpec, b: &p::VarSpec) -> bool {
@@ -161,8 +157,7 @@ fn eq_vars(x: &p::VarSpec, y: &p::VarSpec) -> Fm {
 /// A singleton is the bare term; longer lists fold right into pairs (RS's
 /// `mk_gpair` canonicalises the right-nested form to a flat `Pair`).
 fn ntuple(vars: &[p::VarSpec]) -> GTerm {
-    let terms: Vec<GTerm> = vars.iter().cloned().map(free_term).collect();
-    let mut it = terms.into_iter().rev();
+    let mut it = vars.iter().rev().cloned().map(free_term);
     let mut acc = it.next().expect("ntuple: empty variable list");
     for t in it {
         acc = gt::mk_gpair(vec![t, acc]);
@@ -180,7 +175,7 @@ pub(crate) fn is_elem(v: &p::VarSpec, vars: &[p::VarSpec]) -> Fm {
     fold_r1(Conn::Or, vars.iter().map(|w| eq_vars(v, w)).collect())
 }
 
-/// HS `corruptSubsetFrees vars` (Generation.hs:71-74):
+/// HS `corruptSubsetFrees vars` (Generation.hs:65-68):
 /// `∀ a i. Corrupted(a)@i ⇒ isElem a vars`.
 pub(crate) fn corrupt_subset_frees(vars: &[p::VarSpec]) -> Fm {
     let body = proto_fact_formula("Corrupted", vec![msg_term("a")], temp_term("i"))
@@ -189,7 +184,7 @@ pub(crate) fn corrupt_subset_frees(vars: &[p::VarSpec]) -> Fm {
 }
 
 /// HS `strictSubsetOf lhs rhs = subset lhs rhs .&&. strict lhs rhs`
-/// (Generation.hs:81-86).
+/// (Generation.hs:75-80).
 pub(crate) fn strict_subset_of(lhs: &[p::VarSpec], rhs: &[p::VarSpec]) -> Fm {
     // subset xs ys = foldr1 (.&&.) (map (\x -> foldr1 (.||.) (map (eq x) ys)) xs)
     let subset = fold_r1(
@@ -221,13 +216,13 @@ pub(crate) fn fold_r1(op: Conn, mut fms: Vec<Fm>) -> Fm {
 }
 
 /// HS `foldl1 op` for a non-empty list; left-associative.
-pub(crate) fn fold_l1(op: Conn, mut fms: Vec<Fm>) -> Fm {
-    let mut it = fms.drain(..);
+pub(crate) fn fold_l1(op: Conn, fms: Vec<Fm>) -> Fm {
+    let mut it = fms.into_iter();
     let first = it.next().expect("fold_l1: empty list");
     it.fold(first, |acc, f| Fm::Conn(op, Box::new(acc), Box::new(f)))
 }
 
-/// HS `foldConn` (Generation.hs:111-116): a singleton is itself, otherwise
+/// HS `foldConn` (Generation.hs:105-110): a singleton is itself, otherwise
 /// `foldl1 op`.
 pub(crate) fn fold_conn(op: Conn, fms: Vec<Fm>) -> Fm {
     if fms.len() == 1 {
@@ -238,7 +233,7 @@ pub(crate) fn fold_conn(op: Conn, fms: Vec<Fm>) -> Fm {
 }
 
 // =============================================================================
-// frees (HS `frees = sortednub . freesList`, LTerm.hs:589-590)
+// frees (HS `frees = sortednub . freesList`, LTerm.hs:613-614)
 // =============================================================================
 
 pub(crate) fn frees(fm: &Fm) -> Vec<p::VarSpec> {
@@ -262,7 +257,7 @@ fn collect_frees(fm: &Fm, out: &mut Vec<p::VarSpec>) {
     }
 }
 
-/// Minimum and maximum free-var index (HS `boundsVarIdx`, LTerm.hs:650-651).
+/// Minimum and maximum free-var index (HS `boundsVarIdx`, LTerm.hs:674-675).
 fn free_bounds(fm: &Fm) -> Option<(u64, u64)> {
     let mut vs = Vec::new();
     collect_frees(fm, &mut vs);
@@ -277,11 +272,11 @@ fn free_bounds(fm: &Fm) -> Option<(u64, u64)> {
 }
 
 // =============================================================================
-// quantify / forAll / exists (Formula.hs:344-357)
+// quantify / forAll / exists (Formula.hs:346-360)
 // =============================================================================
 
 /// HS `quantify x = mapAtoms (\i a -> ... subst i ...)`: replace free
-/// occurrences of `x` with `Bound(depth)` (Formula.hs:344-349).
+/// occurrences of `x` with `Bound(depth)` (Formula.hs:346-352).
 fn quantify(x: &p::VarSpec, fm: Fm) -> Fm {
     quantify_at(x, fm, 0)
 }
@@ -304,20 +299,20 @@ fn qua_var(quant: Quant, x: &p::VarSpec, fm: Fm) -> Fm {
     Fm::Qua(quant, lvar_to_binding(x), Box::new(quantify(x, fm)))
 }
 
-/// HS `quantifyVars quan vars fm = foldr (hinted quan) fm vars` (Generation.hs:43-44):
+/// HS `quantifyVars quan vars fm = foldr (hinted quan) fm vars` (Generation.hs:37-38):
 /// `vars[0]` is the OUTERMOST binder, `vars[last]` the innermost.
 pub(crate) fn quantify_vars(quant: Quant, vars: &[p::VarSpec], fm: Fm) -> Fm {
     vars.iter().rev().fold(fm, |acc, v| qua_var(quant, v, acc))
 }
 
-/// HS `quantifyFrees quan fm = quantifyVars quan (frees fm) fm` (Generation.hs:47-48).
+/// HS `quantifyFrees quan fm = quantifyVars quan (frees fm) fm` (Generation.hs:41-42).
 pub(crate) fn quantify_frees(quant: Quant, fm: Fm) -> Fm {
     let vs = frees(&fm);
     quantify_vars(quant, &vs, fm)
 }
 
 // =============================================================================
-// rename (Term/LTerm.hs:614-621)
+// rename (Term/LTerm.hs:638-645)
 // =============================================================================
 
 /// HS `rename`: shift every free variable's index by
@@ -351,7 +346,7 @@ fn map_free_fm<F: FnMut(&p::VarSpec) -> p::VarSpec>(fm: &Fm, f: &mut F) -> Fm {
 }
 
 // =============================================================================
-// shiftFreeIndices (Formula.hs:457-462)
+// shiftFreeIndices (Formula.hs:458-465)
 // =============================================================================
 
 /// HS `shiftFreeIndices n`: at binder-depth `i`, bump every `Bound(j)` with
@@ -459,7 +454,7 @@ fn shift_bound_term(t: &GTerm, threshold: u32, n: u32) -> GTerm {
 }
 
 // =============================================================================
-// pullQuantifiers / mergeQuantifiers (Generation.hs:273-306)
+// pullQuantifiers / mergeQuantifiers (Generation.hs:267-300)
 // =============================================================================
 
 fn pull_l(qua: Quant, op: Conn, x: GBinding, p_: Fm, q: Fm, quans: &[Quant]) -> Fm {
@@ -505,7 +500,7 @@ pub(crate) fn pull_quantifiers(quans: &[Quant], fm: Fm) -> Fm {
     }
 }
 
-/// HS `mergeQuantifiers = mergeQuantifiers1 [All, Ex]` (Generation.hs:295-306).
+/// HS `mergeQuantifiers = mergeQuantifiers1 [All, Ex]` (Generation.hs:289-300).
 pub(crate) fn merge_quantifiers(fm: Fm) -> Fm {
     merge_quantifiers1(&[Quant::All, Quant::Ex], fm)
 }
@@ -539,7 +534,7 @@ fn merge_quantifiers1(quans: &[Quant], fm: Fm) -> Fm {
             ),
         ),
         // HS `Conn Iff p q -> pullQuantifiers quans $ (mq p .==>. mq q) .&&.
-        // (mq q .==>. mq p)` (Generation.hs:304-305): the biconditional
+        // (mq q .==>. mq p)` (Generation.hs:298-299): the biconditional
         // expands to the conjunction of both implications.
         Fm::Conn(Conn::Iff, p_, q) => {
             let mp = merge_quantifiers1(quans, *p_);
@@ -552,7 +547,7 @@ fn merge_quantifiers1(quans: &[Quant], fm: Fm) -> Fm {
 }
 
 // =============================================================================
-// simplifyFormula (Formula.hs:377-409)
+// simplifyFormula (Formula.hs:379-412)
 // =============================================================================
 
 pub(crate) fn simplify_formula(fm: Fm) -> Fm {
@@ -635,7 +630,7 @@ fn simplify_formula1(fm: Fm) -> Fm {
     }
 }
 
-/// HS `toIntermediate = simplifyFormula . mergeQuantifiers` (Generation.hs:270-271).
+/// HS `toIntermediate = simplifyFormula . mergeQuantifiers` (Generation.hs:264-265).
 pub(crate) fn to_intermediate(fm: Fm) -> Fm {
     simplify_formula(merge_quantifiers(fm))
 }
@@ -841,7 +836,7 @@ fn to_p(fm: &Fm, opened: &[p::VarSpec], counter: &mut u64) -> p::Formula {
     }
 }
 
-/// HS `formulaActionFacts` (Generation.hs:118-124): the `Fact`s appearing in
+/// HS `formulaActionFacts` (Generation.hs:112-118): the `Fact`s appearing in
 /// `Action` atoms of a formula.
 pub(crate) fn formula_action_facts(fm: &Fm) -> Vec<GFact> {
     let mut out = Vec::new();
@@ -956,7 +951,7 @@ mod tests {
     }
 
     /// `rename` shifts free-var indices and advances the counter by the
-    /// (max-min+1) span (HS Term/LTerm.hs:614-621).
+    /// (max-min+1) span (HS Term/LTerm.hs:638-645).
     #[test]
     fn rename_shifts_and_advances_counter() {
         let fm = Fm::Qua(
@@ -977,7 +972,7 @@ mod tests {
     }
 
     /// `simplifyFormula` collapses `⇒ ⊤` to `⊤` and quantifiers over `⊤`
-    /// to `⊤` — the acc_*_inj single-var case (Formula.hs:388-409).
+    /// to `⊤` — the acc_*_inj single-var case (Formula.hs:391-412, see line 404,411).
     #[test]
     fn simplify_true_implication_and_quantifier() {
         // ∀ x. (P => ⊤)  ->  ⊤
@@ -995,7 +990,7 @@ mod tests {
     }
 
     /// `simplifyFormula1` rewrites a reflexive equality `t = t` to `⊤`
-    /// (Formula.hs:377-409, see line 389) and leaves a non-reflexive one alone.
+    /// (Formula.hs:379-412, see line 392) and leaves a non-reflexive one alone.
     #[test]
     fn simplify_reflexive_equality() {
         let x = msg_var_idx("x", 0);
@@ -1013,7 +1008,7 @@ mod tests {
     }
 
     /// `pullQuantifiers` pulls a universal out of a conjunction and shifts the
-    /// OTHER conjunct's dangling bound indices up by one (Generation.hs:273-293, see line 280,291):
+    /// OTHER conjunct's dangling bound indices up by one (Generation.hs:267-287, see line 274,285):
     /// `(∀ j. A@j) ∧ B@Bound(0)` becomes `∀ j. (A@Bound(0) ∧ B@Bound(1))`.
     #[test]
     fn pull_quantifiers_shifts_dangling_bound() {

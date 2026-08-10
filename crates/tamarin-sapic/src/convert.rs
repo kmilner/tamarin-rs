@@ -294,34 +294,17 @@ pub(crate) fn fold_free_vars(formula: &p::Formula, f: &mut dyn FnMut(&p::VarSpec
     cf(&mut bound, f, formula);
 }
 
-fn term(t: &p::Term) -> Result<tamarin_theory::sapic::SapicTerm, ConvertError> {
+pub(crate) fn term(t: &p::Term) -> Result<tamarin_theory::sapic::SapicTerm, ConvertError> {
     term_to_sapic_term(t)
         .ok_or_else(|| ConvertError::new("could not convert SAPIC term (pattern term?)"))
-}
-
-/// Public alias of [`term`] for the inlining pass (process-call arguments).
-pub(crate) fn convert_term(t: &p::Term) -> Result<tamarin_theory::sapic::SapicTerm, ConvertError> {
-    term(t)
 }
 
 fn fact(f: &p::Fact) -> Result<tamarin_theory::sapic::SapicLNFact, ConvertError> {
     fact_to_sapic_fact(f).map_err(|e| ConvertError::new(e.message))
 }
 
-/// Public alias of [`action`] for the inlining pass.
-pub(crate) fn convert_action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, ConvertError> {
-    action(a)
-}
-
-/// Public alias of [`combinator`] for the inlining pass.
-pub(crate) fn convert_combinator(
-    c: &p::ProcessComb,
-) -> Result<ProcessCombinator<SapicLVar>, ConvertError> {
-    combinator(c)
-}
-
 /// Convert a parser action into a theory `SapicAction<SapicLVar>`.
-fn action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, ConvertError> {
+pub(crate) fn action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, ConvertError> {
     match a {
         p::SapicAction::New(v) => Ok(SapicAction::New(varspec_to_sapic(v))),
         p::SapicAction::Event(f) => Ok(SapicAction::Event(fact(f)?)),
@@ -417,7 +400,7 @@ fn fact_unpattern(
 /// (`Theory.Text.Parser.Sapic`): `Parallel`/`Ndc` are nullary; `if t1 = t2`
 /// becomes `CondEq t1 t2`; `if frml` becomes `Cond frml`; `lookup`/`let`
 /// become `Lookup`/`Let`.
-fn combinator(c: &p::ProcessComb) -> Result<ProcessCombinator<SapicLVar>, ConvertError> {
+pub(crate) fn combinator(c: &p::ProcessComb) -> Result<ProcessCombinator<SapicLVar>, ConvertError> {
     match c {
         p::ProcessComb::Parallel => Ok(ProcessCombinator::Parallel),
         p::ProcessComb::Ndc => Ok(ProcessCombinator::Ndc),

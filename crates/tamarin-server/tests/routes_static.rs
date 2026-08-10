@@ -5,9 +5,9 @@
 //! does the same via tower-http's `ServeDir`.  We verify a few
 //! known-existing files come back with correct Content-Type.
 //!
-//! If the workspace `data/` directory isn't present, these tests are
-//! skipped (they `print!` a message and return early — they still
-//! count as passing).
+//! If the workspace `data/` directory isn't present, the two asset tests
+//! skip: they log to stderr and return early, so they still report as
+//! passing.
 
 mod common;
 

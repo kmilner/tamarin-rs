@@ -59,8 +59,16 @@ fn add_disj_assigns_fresh_ids() {
 #[test]
 fn splits_sorted_by_size() {
     let mut s = EquationStore::empty();
-    let big = s.add_disj(vec![fresh_subst(), fresh_subst(), fresh_subst()]);
-    let small = s.add_disj(vec![fresh_subst()]);
+    // Distinct substs, or `add_disj`'s dedup would collapse `big` to one
+    // case and both disjunctions would tie on size.  `big` is added LAST,
+    // so it heads `conj`: the assertions below fail unless `splits` really
+    // reorders by size.
+    let small = s.add_disj(vec![fresh_subst_n(0)]);
+    let big = s.add_disj(vec![fresh_subst_n(1), fresh_subst_n(2), fresh_subst_n(3)]);
+    assert_eq!(
+        s.conj[0].split_id, big,
+        "conj is insertion-ordered, big first"
+    );
     let sorted = s.splits();
     assert_eq!(sorted[0], small);
     assert_eq!(sorted[1], big);
@@ -222,18 +230,23 @@ fn simp_idempotent_on_consistent_store() {
 
 #[test]
 fn simp_abstract_name_factors_common_constant() {
-    // Build a disjunction where every subst maps `x → 'foo'` (pub
-    // constant). simp_abstract_name should hoist that into the
-    // free substitution.
+    // Build a two-case disjunction where every subst maps `x → 'foo'` (pub
+    // constant) while disagreeing on `y`. simp_abstract_name should hoist
+    // the common `x` mapping into the free substitution and leave `y` alone.
+    // The cases must differ, or `add_disj`'s dedup would collapse them to
+    // one and the "common to every subst" condition would be vacuous.
     use tamarin_term::lterm::{Name, NameTag};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
+    let con = |n: &str| -> LNTerm { Term::Lit(Lit::Con(Name::new(NameTag::Pub, n.to_string()))) };
     let v = LVar::new("x", LSort::Msg, 0);
-    let foo: LNTerm = Term::Lit(Lit::Con(Name::new(NameTag::Pub, "foo".to_string())));
-    let s1 = LNSubstVFresh::from_list(vec![(v, foo.clone())]);
-    let s2 = LNSubstVFresh::from_list(vec![(v, foo.clone())]);
+    let y = LVar::new("y", LSort::Msg, 0);
+    let foo = con("foo");
+    let s1 = LNSubstVFresh::from_list(vec![(v, foo.clone()), (y, con("a"))]);
+    let s2 = LNSubstVFresh::from_list(vec![(v, foo.clone()), (y, con("b"))]);
     let mut store = EquationStore::empty();
-    let _ = store.add_disj(vec![s1, s2]);
+    let id = store.add_disj(vec![s1, s2]);
+    assert_eq!(store.split_size(id), Some(2), "both cases must survive");
     assert!(store.simp_abstract_name());
     // Free subst should now contain x → foo.
     let dom: Vec<&LVar> = store.subst.dom().collect();
@@ -357,13 +370,13 @@ fn add_eqs_two_vars_via_maude() {
 // =========================================================================
 // Haskell-faithfulness invariants for `add_eqs`.
 //
-// These tests pin orientation choices in the eq-store that we missed
-// for weeks.  See `unification::haskell_invariants_tests` for the rationale.
+// These tests pin the eq-store's orientation choices.  See
+// `tamarin_term::unification::haskell_invariants_tests` for the rationale.
 // =========================================================================
 
 /// `add_eqs` for AC-free, same-sort var-var input must orient the
 /// resulting subst with LARGER-idx as KEY (Haskell `unifyRaw`
-/// convention, Unification.hs:235-243, see line 241).
+/// convention, Unification.hs:273-281, see line 276).
 ///
 /// This is the most important orientation invariant for downstream
 /// `restrict stableVars`: stable pattern vars (small idx) must stay
@@ -412,8 +425,7 @@ fn add_eqs_ac_free_var_var_uses_haskell_orientation() {
         store.subst.image_of(&e10).is_some(),
         "add_eqs MUST orient same-sort var-var with larger-idx (e.10) \
                  as KEY.  If this fails, foo_eligibility::eligibility and \
-                 friends will silently diverge from Haskell.  See \
-                 project_rust_lvar_ord_idx_first_landed.md."
+                 friends will silently diverge from Haskell."
     );
     assert!(
         store.subst.image_of(&t1).is_none(),

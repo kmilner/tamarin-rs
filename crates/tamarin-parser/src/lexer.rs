@@ -238,7 +238,8 @@ impl<'a> Lexer<'a> {
     /// the reserved names `["in","let","rule","diff"]` (Token.hs:214-230, see line 225): a word equal
     /// to one of those is not a valid identifier, so we backtrack and return None.
     /// The `diff` term operator does NOT go through this — it is matched as a
-    /// keyword/symbol (HS `diffOp = symbol "diff" *> parens ...`, Term.hs:108-110).
+    /// keyword/symbol (HS `diffOp = symbol "diff" *> parens ...`,
+    /// Parser/Term.hs:123-125).
     pub fn identifier(&mut self) -> Option<String> {
         self.skip_ws();
         let save = self.pos;
@@ -556,7 +557,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// Strict export-body character stream, mirroring Haskell `bodyChar` in the
-    /// `export` parser (Signature.hs:282-287): each char is taken verbatim except
+    /// `export` parser (Parser/Signature.hs:297-302): each char is taken verbatim except
     /// `\`, which must be followed by `\` or `"` (the second char is returned and
     /// the backslash dropped); a bare `"` terminates the body and any other `\x`
     /// fails the whole parse. Used for `export <tag>: "..."` blocks.
@@ -744,8 +745,13 @@ impl<'a> Lexer<'a> {
             self.pos = save;
             return None;
         }
-        let id = self.identifier()?;
-        Some(format!("x-{}", id))
+        match self.identifier() {
+            Some(id) => Some(format!("x-{}", id)),
+            None => {
+                self.pos = save;
+                None
+            }
+        }
     }
 }
 

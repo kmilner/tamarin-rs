@@ -11,9 +11,10 @@
 //! The port instead runs `tamarin_parser::wf::check_theory` early, on the
 //! PRE-translation parser theory, because most checks need nothing else; the
 //! six checks collected here are the ones that must see the translated theory
-//! (and, for three of them, the elaborated `MaudeSig` the parser cannot
-//! reach), so each one's findings REPLACE the pre-translation entries of its
-//! topic and are spliced back at HS's check position.
+//! (and, for `formula_reports` and `mult_restricted_report`, the elaborated
+//! `MaudeSig` the parser cannot reach), so each one's findings REPLACE the
+//! pre-translation entries of its topic and are spliced back at HS's check
+//! position.
 //!
 //! Both drivers — the batch CLI (`run.rs`) and the web server's theory load
 //! (`theory_io.rs`) — run exactly this ordered sequence, so it lives here

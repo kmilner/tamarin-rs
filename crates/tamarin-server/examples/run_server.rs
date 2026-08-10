@@ -28,27 +28,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         )
         .init();
 
-    let data_dir = {
-        let p = PathBuf::from("data");
-        if p.is_dir() {
-            p
-        } else {
-            PathBuf::from("../data")
-        }
+    let first_dir = |candidates: [&str; 2]| {
+        candidates
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|p| p.is_dir())
     };
-    let frontend_dist = {
-        let p = PathBuf::from("frontend/dist");
-        if p.is_dir() {
-            Some(p)
-        } else {
-            let p2 = PathBuf::from("../frontend/dist");
-            if p2.is_dir() {
-                Some(p2)
-            } else {
-                None
-            }
-        }
-    };
+    let data_dir = first_dir(["data", "../data"]).unwrap_or_else(|| PathBuf::from("../data"));
+    let frontend_dist = first_dir(["frontend/dist", "../frontend/dist"]);
     let maude_path = [
         "/usr/local/bin/maude",
         "/opt/homebrew/bin/maude",

@@ -291,9 +291,10 @@ impl MaudeProcessInner {
             }
             buf.extend_from_slice(&tmp[..n]);
             if let Some(rel) = find_subseq(&buf[start..], PROMPT) {
-                let pos = start + rel;
-                let before = buf[..pos].to_vec();
-                return Ok(before);
+                // Drop the prompt and everything after it in place; `buf` is
+                // local, so truncating it beats copying the reply out.
+                buf.truncate(start + rel);
+                return Ok(buf);
             }
         }
     }
@@ -460,7 +461,7 @@ pub struct MaudeHandle {
     /// different sorts (e.g. `~mw:Pub:17` from one call and
     /// `~mw:Msg:17` from another).  Those collisions break our
     /// `(name, sort, idx)` LVar identity, leading to sort-conflated
-    /// saved source cases (see project_rust_tesla_sender0a_diagnosis).
+    /// saved source cases.
     ///
     /// Used by:
     /// - `msubst_to_lnsubst_with_avoid` for Maude witness allocation.
@@ -510,9 +511,9 @@ impl MaudeHandle {
         // clone share this single immutable signature.
         let sig = Arc::new(sig);
         // stderr: INHERIT, not pipe.  HS uses `runInteractiveCommand`
-        // (System.Process) at Process.hs:105-128, see line 109, which opens a PIPE for
+        // (System.Process) at Process.hs:103-126, see line 107, which opens a PIPE for
         // stderr too — the returned `herr` (captured into the `MP` record
-        // at Process.hs:105-128, see line 115) is a real stderr pipe handle.  HS simply
+        // at Process.hs:113) is a real stderr pipe handle.  HS simply
         // never reads/drains that pipe.  We deliberately INHERIT stderr
         // instead, because an undrained stderr pipe would deadlock us:
         // if we pipe stderr but never drain it,
@@ -651,7 +652,7 @@ impl MaudeHandle {
     }
 
     /// Like [`with_fresh_counter_from`] but takes the NEXT-draw value
-    /// directly (HS `FreshState` units).  HS `avoid sys` (LTerm.hs:656-657,
+    /// directly (HS `FreshState` units).  HS `avoid sys` (LTerm.hs:680-681,
     /// `maybe 0 (succ . snd) . boundsVarIdx`) is legitimately 0 for a
     /// system with NO free variables (e.g. a lemma's root system: closed
     /// formula, no nodes), which the `avoid_max + 1` form cannot express.
@@ -729,7 +730,7 @@ impl MaudeHandle {
             // symbols).  `nf_via_haskell` (norm.rs) ports HS `nf'`
             // (Norm.hs `nfViaHaskell`), which upstream asserts coincides
             // with `nfViaMaude t = (t ==) <$> norm t` (`_nfCompare'`,
-            // Norm.hs:141-148) — `true` means no rewrite rule of this
+            // Norm.hs:142-149) — `true` means no rewrite rule of this
             // signature fires anywhere in `t`, so Maude's `reduce` is the
             // identity on it.  Its st-rule arm uses the no-AC matcher,
             // complete only for Ac/C-free rule LHSes — hence the
@@ -795,12 +796,11 @@ impl MaudeHandle {
         Ok(result)
     }
 
-    /// Unify a list of equations modulo the theory. Returns one substitution
-    /// per Maude unifier.
-    /// Memoised `unifiable(...)`: returns just whether *any* unifier
-    /// exists.  Skips the subprocess round-trip on cache hits.  Safe
-    /// to cache because the result is a context-free boolean (no
-    /// witness LVars leak across calls).
+    /// Whether *any* unifier of `eqs` exists, modulo the theory.
+    ///
+    /// Memoised via `SharedMaudeCaches::unifiable`, so a repeat query skips
+    /// the subprocess round-trip.  Safe to cache because the result is a
+    /// context-free boolean (no witness LVars leak across calls).
     ///
     /// Fast path: when the signature has no AC operators (DH / XOR /
     /// multiset / nat) we can answer unifiability with the local
@@ -816,8 +816,7 @@ impl MaudeHandle {
             return Ok(true);
         }
         if self.is_ac_free() {
-            let eqs_owned: Vec<Equal<LNTerm>> = eqs.to_vec();
-            return Ok(crate::unification::unify_lnterm_no_ac(eqs_owned).is_ok());
+            return Ok(crate::unification::unify_lnterm_no_ac(eqs.to_vec()).is_ok());
         }
         let key: Vec<(LNTerm, LNTerm)> =
             eqs.iter().map(|e| (e.lhs.clone(), e.rhs.clone())).collect();
@@ -880,16 +879,16 @@ impl MaudeHandle {
     /// substitution per Maude unifier.
     ///
     /// Witness numbering is HS-faithful and COUNTER-NEUTRAL: HS's
-    /// `unifyViaMaude` (Term/Maude/Process.hs:250-256) numbers each reply's
+    /// `unifyViaMaude` (Term/Maude/Process.hs:205-217) numbers each reply's
     /// fresh witnesses in a pure per-call scope seeded at
     /// `avoid (M.elems bindings)` — the query's own exported vars — via
-    /// `evalFreshAvoiding` (Term/Maude/Types.hs:112-113), reading and
+    /// `evalFreshAvoiding` (Term/Maude/Types.hs:123-127), reading and
     /// writing NO global fresh state.  This method therefore takes NO
     /// `avoid` parameter (there is no HS analogue): the session counter is
     /// never touched by a unify call, and the returned `SubstVFresh`
     /// witnesses are α-scoped per subst.  Collision safety at the eq-store
     /// call sites comes structurally from HS `applyBound`'s
-    /// `renameAvoiding` pre-step (EquationStore.hs:428-435), mirrored in
+    /// `renameAvoiding` pre-step (EquationStore.hs:281-290, see lines 286-287), mirrored in
     /// `apply_eq_store`'s rhs uniform-shift rename — NOT from inflating the
     /// witness idxs.
     pub fn unify(
@@ -900,7 +899,7 @@ impl MaudeHandle {
             return Ok(vec![Vec::new()]);
         }
         // NOTE: no syntactic-equality fast path here.  HS's `unifyRaw`
-        // (Unification.hs:265-270) delays AC-headed and C-headed pairs
+        // (Unification.hs:300-305) delays AC-headed and C-headed pairs
         // to Maude UNCONDITIONALLY — even when lhs == rhs syntactically.
         // Maude's complete unifier set for a self-equal AC/C term is
         // NOT just the identity: e.g. `em(hp(a),hp(b)) =? em(hp(a),hp(b))`
@@ -912,19 +911,11 @@ impl MaudeHandle {
         // split_case_3 yields 4 unifier arms for em/Mult-headed source
         // cases (the surviving Resp_1_case_01/06/09/10 arms) while a
         // fast path yields only 2.  Self-equal NON-AC eq sets still avoid the
-        // Maude round-trip via the local `unify_lnterm_no_ac_with_counter`
-        // fast path below (HS-faithful: unifyRaw solves them locally).
-        // AC-free fast path: when the signature has no DH / XOR /
-        // multiset / nat / BP operators, free (Robinson) unification
-        // with Maude-shape sort narrowing (fresh `~mw` witness at
-        // the narrower sort, both inputs bound to it) answers every
-        // Maude unifiability query locally.  Verified
-        // empirically: Maude's reply to `x:Msg =? y:Pub` is exactly
-        // `{x → ~mw:Pub w, y → ~mw:Pub w}` and our unifier emits
-        // the same shape.  Skips the ~2.5 ms subprocess round-trip
-        // on every fact-eq unification.
-        // HS-faithful fast path for AC-free signatures.  Mirrors HS's
-        // `unifyLTermFactored` (Unification.hs:107-120):
+        // Maude round-trip via the local unifier below (HS-faithful:
+        // unifyRaw solves them locally).
+        //
+        // Local non-AC unifier first, ALWAYS — mirroring HS's
+        // `unifyLTermFactored` (Unification.hs:120-133):
         //
         // ```haskell
         // unifyLTermFactored sortOf eqs = reader $ \h ->
@@ -933,40 +924,34 @@ impl MaudeHandle {
         //     unif = sequence [ unifyRaw t p | Equal t p <- eqs ]
         //     solve _ (Just (m, [])) = (substFromMap m, [emptySubstVFresh])
         // ```
-        // Then `flattenUnif`:
-        // ```haskell
-        // flattenUnif (subst, substs) = map (`composeVFresh` subst) substs
-        // ```
-        // For the fast path: `flattenUnif (m, [emptyVFresh])
-        //                  = [emptyVFresh `composeVFresh` m]`
         //
-        // `composeVFresh` extends the empty VFresh with renamings for
-        // `varsRange m`, so range vars get RENAMED to fresh witnesses.
-        // This is the CRITICAL step: HS's output for `K → Var(V)`
-        // becomes TWO entries `[K → Var(~Vw), V → Var(~Vw)]`
-        // (narrowing-witness pattern), matching what Maude's full
-        // unify produces.
-        //
-        // Without this step, downstream `apply_eq_store`'s lifting
-        // gets confused: V appears only in range (not domain), and
-        // its lifted witness collides with K's renamed target,
-        // creating the SubstVFresh same-target collision that
-        // cascades into $R=$I (KAS_key_secrecy).
-        // HS-faithful: ALWAYS try the local non-AC unifier first.
-        // HS's `unifyLTermFactored` (Unification.hs:107-119) does this:
         //   1. Run `unifyRaw` locally (no Maude).
-        //   2. If success with no AC residuals → return result.
-        //   3. If success with AC residuals → call Maude on residuals only.
-        //   4. If failure → return empty (no Maude call).
-        // The fast path is intentionally NOT gated on `is_ac_free()`:
+        //   2. Success with no AC residual → return `[emptyVFresh
+        //      `composeVFresh` m]`, which is what `flattenUnif (m,
+        //      [emptySubstVFresh])` (Unification.hs:168-170) evaluates to.
+        //   3. Success with AC residuals → Maude on the residuals only
+        //      (the `unify_lnterm_factored` path further down).
+        //   4. Failure → return empty, WITHOUT calling Maude.
+        //
+        // Step 2's `composeVFresh` is load-bearing, not a formality: it
+        // extends the empty VFresh with renamings for `varsRange m`, so a
+        // `K → Var(V)` binding becomes the two entries
+        // `[K → Var(~Vw), V → Var(~Vw)]` Maude's own unify would produce.
+        // Skipping it leaves V in the range but not the domain, and
+        // `apply_eq_store`'s lifting then collides its witness with K's
+        // renamed target (a SubstVFresh same-target collision, observed as
+        // $R=$I on KAS_key_secrecy).
+        //
+        // Step 4 is also why this is NOT gated on `is_ac_free()`:
         // signatures WITH [variant] equations (e.g. StatVerif's
-        // convertpcs/checkpcs) must still try the local non-AC unifier
-        // first, otherwise every unification goes to Maude, which narrows
-        // via the [variant] equations and keeps variants HS would drop.
+        // convertpcs/checkpcs) must still try the local unifier first,
+        // otherwise every unification goes to Maude, which narrows via the
+        // [variant] equations and keeps variants HS would drop.
         {
-            let eqs_owned: Vec<Equal<LNTerm>> = eqs.to_vec();
-            let result =
-                crate::unification::unify_lnterm_no_ac_with_counter(eqs_owned, &self.fresh_counter);
+            let result = crate::unification::unify_lnterm_no_ac_with_counter(
+                eqs.to_vec(),
+                &self.fresh_counter,
+            );
             match result {
                 Ok(subst) => {
                     // HS-faithful flattenUnif: success, return [vfresh ∘ subst].
@@ -985,11 +970,11 @@ impl MaudeHandle {
                     //
                     // HS-faithful counter-neutrality: the global fresh
                     // counter is NOT raised here.  HS's `unifyViaMaude`
-                    // (Term/Maude/Process.hs:250-256) numbers each reply's
+                    // (Term/Maude/Process.hs:205-217) numbers each reply's
                     // witnesses in a PURE per-call scope via
                     // `runBackConversion (...) bindings =
                     //  evalBindT (...) bindings `evalFreshAvoiding` M.elems bindings`
-                    // (Term/Maude/Types.hs:112-113) — the fresh supply is
+                    // (Term/Maude/Types.hs:123-127) — the fresh supply is
                     // seeded from `avoid (M.elems bindings)` (the query's own
                     // exported vars) and NO global state is read or written.
                     // The reply conversion below therefore computes its
@@ -998,7 +983,7 @@ impl MaudeHandle {
                 }
             }
         }
-        // HS-faithful `unifyLTermFactored` (Unification.hs:107-120):
+        // HS-faithful `unifyLTermFactored` (Unification.hs:120-133):
         //
         //   unif = sequence [ unifyRaw t p | Equal t p <- eqs ]
         //   solve h (Just (m, leqs)) =
@@ -1009,7 +994,7 @@ impl MaudeHandle {
         // substitution `m` and the residual AC equations `leqs`, then send
         // ONLY the residuals (with `m` applied) to Maude.  Finally
         // `flattenUnif (subst, substs) = map (`composeVFresh` subst) substs`
-        // (Unification.hs:144-147) composes each Maude arm with `subst = m`.
+        // (Unification.hs:168-170) composes each Maude arm with `subst = m`.
         //
         // We therefore factor out the non-AC substitution `m` and send only
         // the AC residuals to Maude, so witness idxs are allocated against
@@ -1044,8 +1029,9 @@ impl MaudeHandle {
         let reply = inner.execute_memo(&cmd, |s| s.unify_count += 1)?;
         drop(inner);
         let msubsts = maude_parse::parse_unify_reply(&reply)?;
-        // HS `avoid (M.elems bindings)` (Term/Maude/Types.hs:94-106, see line 113 via
-        // LTerm.hs:656-657 `avoid = maybe 0 (succ . snd) . boundsVarIdx`):
+        // HS `avoid (M.elems bindings)` (`runBackConversion`,
+        // Term/Maude/Types.hs:123-127, via
+        // LTerm.hs:680-681 `avoid = maybe 0 (succ . snd) . boundsVarIdx`):
         // the witness fresh-supply floor is the max idx over ALL of the
         // query's own binding vars — i.e. the vars of `maude_eqs`, which
         // `lterm_to_mterm_global` has registered in `ctx`'s inverse map.
@@ -1062,8 +1048,8 @@ impl MaudeHandle {
             }
         }
         let mut out = Vec::with_capacity(msubsts.len());
-        // HS-faithful per-unifier conversion (Term/Maude/Process.hs:255-256
-        // + Term/Maude/Types.hs:127-138).  HS does:
+        // HS-faithful per-unifier conversion (Term/Maude/Process.hs:215-216
+        // + Term/Maude/Types.hs:137-157).  HS does:
         //   map (msubstToLSubstVFresh bindings) <$> parseUnifyReply ...
         // where each `msubstToLSubstVFresh bindings substMaude` calls
         //   runBackConversion (traverse translate substMaude) bindings
@@ -1105,17 +1091,15 @@ impl MaudeHandle {
                 input_max,
             )?);
         }
-        // HS-faithful `removeRenamings` (Maude/Types.hs:123-127, see line 130): HS's
+        // HS-faithful `removeRenamings` (Maude/Types.hs:137-157, see line 144): HS's
         // `msubstToLSubstVFresh bindings substMaude` ends with
         // `removeRenamings $ substFromListVFresh slist` — drops every
         // entry whose image is just a Var with no role elsewhere in
         // the substitution (`isRenamedVar` in SubstVFresh.hs:140-145).
-        // RS's `msubst_to_lnsubst_with_avoid` returns the raw slist
-        // without this filter, so trivial rename entries leak into the
-        // disjunction's substs.  At Scott's
-        // `/case_2/Init_2/Init_1/c_kdf/split_case_3` these renames
-        // become extra node-id bindings that drive `setNodes` collisions
-        // → 14 spurious `shape_mismatch` drops.
+        // RS's `msubst_to_lnsubst_with_avoid` returns the raw slist without
+        // that filter, so it is applied here: left in, the trivial rename
+        // entries reach the disjunction's substs as extra node-id bindings
+        // and drive spurious `setNodes` collisions.
         out = out
             .into_iter()
             .map(|arm| {
@@ -1124,26 +1108,17 @@ impl MaudeHandle {
                 vfresh.remove_renamings().to_list()
             })
             .collect();
-        // HS-faithful `flattenUnif (subst, substs) = map (composeVFresh _ subst) substs`
-        // (Unification.hs:145-146, see line 147).  For the AC path RS sends ONLY the AC residual
-        // equations to Maude and composes each arm with the non-AC factored
-        // substitution `factored_m`, mirroring HS
-        // flattenUnif's `(subst, substs)`.  `composeVFresh factored_m arm` also
-        // RENAMES the witnesses (the arm's range vars) via HS's
-        // `freshToFreeAvoidingFast` uniform shift seeded by
-        // `succ (max idx in (s2, s1_0=arm) domain)`, re-basing the
-        // Maude-allocated witness idxs to small idxs above just the relevant
-        // domain.  Without this composition step the witness numbering diverges.
-        //
-        // Factoring (send AC residuals only, compose with `factored_m` below) keeps
-        // witness idxs aligned with HS so alpha-equivalent substs sort identically
-        // and `perform_split` picks the same case order.
-        //
         // HS `flattenUnif (subst, substs) = map (`composeVFresh` subst) substs`
-        // (Unification.hs:145-146, see line 147) composes each Maude arm with `subst = m`, the
-        // non-AC factored substitution.  Because we factor and send only the
-        // AC residuals to Maude, `factored_m` carries the
-        // non-AC bindings and MUST be the second argument to composeVFresh.
+        // (Unification.hs:168-170) composes each Maude arm with `subst = m`, the
+        // non-AC factored substitution — so `factored_m` MUST be the second
+        // argument here.  The composition also RENAMES the arm's range vars
+        // (the Maude witnesses) via HS's `freshToFreeAvoidingFast` uniform
+        // shift seeded by `succ (max idx in (s2, s1_0=arm) domain)`, re-basing
+        // the Maude-allocated idxs above just the relevant domain.  That
+        // re-basing, together with sending only the AC residuals to Maude,
+        // is what keeps witness idxs aligned with HS, so alpha-equivalent
+        // substs sort identically and `perform_split` picks the same case
+        // order.
         let renamed: Vec<Vec<(crate::lterm::LVar, LNTerm)>> = out
             .into_iter()
             .map(|arm| {
@@ -1210,7 +1185,7 @@ impl MaudeHandle {
     /// `matchWith t p = DelayedMatches [(t, p)]` is `(subject, pattern)`
     /// (`Term/Rewriting/Definitions.hs:90-93`), and `matchViaMaude`
     /// turns each pair into `Equal subject pattern` via
-    /// `uncurry Equal <$> ms` (`Term/Maude/Process.hs:236-252, see line 246`). The
+    /// `uncurry Equal <$> ms` (`Term/Maude/Process.hs:234-250, see line 244`). The
     /// emitted Maude command is then `match PATTERN <=? SUBJECT`,
     /// i.e. `matchCmd`'s `ppTerms t2s <> " <=? " <> ppTerms t1s` where
     /// `(t1s, t2s) = unzip [(a, b) | Equal a b <- eqs]` so `t2s = b =
@@ -1300,7 +1275,7 @@ impl MaudeHandle {
     ///
     /// NOT wired into any production path; the only callers are this file's
     /// in-module tests.  Kept because it mirrors a real HS distinction:
-    /// HS's `matchAction`/`matchTerm` (Guarded.hs:803-815) delegate to Maude
+    /// HS's `matchAction`/`matchTerm` (Guarded.hs:805-817) delegate to Maude
     /// via `solveMatchLTerm`, with HS's `SkConst` encoding from
     /// `skolemizeGuarded` represented here as synthetic named constants.
     pub fn match_eqs_const_subject(
@@ -1341,11 +1316,11 @@ impl MaudeHandle {
         }
         // Maude's `match A <=? B` finds σ with `B == σ(A)`: A is the
         // PATTERN (whose vars get bound), B is the SUBJECT (treated as
-        // ground).  Callers pass `Equal { lhs = pattern, rhs = subject }`
-        // (see `match_atom_via_maude` in simplify.rs, which builds the
-        // guard-fact pattern as `lhs` and the system action term as
-        // `rhs`), and this routine already skolemizes the SUBJECT side
-        // (`eq.rhs`) into ground constants above.  So the command must be
+        // ground).  This routine's `Equal` convention is
+        // `{ lhs = pattern, rhs = subject }` (the opposite of `match_eqs`',
+        // and the same as `match_eqs_skolemize_both`'s), and it skolemizes
+        // the SUBJECT side (`eq.rhs`) into ground constants above.  So the
+        // command must be
         //   match  <pattern = t1s = lhs>  <=?  <subject = t2s = rhs>.
         //
         // Do NOT swap the two sides: placing the (ground, skolemized)
@@ -1356,12 +1331,8 @@ impl MaudeHandle {
         // against a system action with a 3-element multiset
         //   <'codes', code2 ++ x ++ <cp(..),cp(..)>>
         // needs `codeOther → code2 ++ x`, which Maude only does when
-        // `codeOther` sits on the PATTERN side.  A swap returns
-        // "No match", `insertImpliedFormulas` never derives gfalse for
-        // that case, and alethea `indivVerif` is FALSIFIED (false attack)
-        // where Haskell VERIFIES it.  HS sends `match pattern <=? subject`
-        // (Term/Maude.hs matchCmd).  Sibling `match_eqs_skolemize_both`
-        // uses the same order.
+        // `codeOther` sits on the PATTERN side.  HS sends
+        // `match pattern <=? subject` (`matchCmd`, Process.hs:227-229).
         let cmd = pp_match_cmd(&t1s, &t2s);
         let reply = inner.execute_memo(&cmd, |s| s.match_count += 1)?;
         drop(inner);
@@ -1388,8 +1359,8 @@ impl MaudeHandle {
     /// LVar in pattern and subject still match each other through
     /// their shared synthetic constant.
     ///
-    /// This mirrors HS's `matchTerm` (Guarded.hs:810-815) called from
-    /// `impliedFormulas` (System.hs:1111-1145, see line 1144): the universal is fully
+    /// This mirrors HS's `matchTerm` (Guarded.hs:812-817) called from
+    /// `impliedFormulas` (System.hs:1110-1144, see line 1143): the universal is fully
     /// `skolemizeGuarded`-ed before matching, so every FREE LVar
     /// (universal-non-bound vars, originating from the system context)
     /// becomes a `Con (SkConst x)`, while the universal-bound
@@ -1529,7 +1500,7 @@ impl MaudeHandle {
         let msubsts = maude_parse::parse_variants_reply(&reply)?;
         let mut out = Vec::with_capacity(msubsts.len());
         // HS-faithful: each variant's back-conversion uses a fresh ctx
-        // clone.  Mirrors HS `msubstToLSubstVFresh` (Maude/Types.hs:123-127, see line 130)
+        // clone.  Mirrors HS `msubstToLSubstVFresh` (Maude/Types.hs:137-157, see line 146)
         // where each call to `runBackConversion (...) bindings` runs
         // `evalBindT back bindings` with the same INITIAL bindings —
         // augmentations to the binding map are per-call.
@@ -1541,7 +1512,7 @@ impl MaudeHandle {
         // # and %) and the second lookup returns the first's LVar.
         //
         // HS-faithful: variant back-conversion uses hint "x" unconditionally
-        // (Maude/Types.hs:137-157, see line 138), NOT the perform_split-motivated
+        // (Maude/Types.hs:137-157, see line 152), NOT the perform_split-motivated
         // name-preserve path used by `unify`/`match`.  The variants flow
         // into `composeVFresh`+`pracVariants` rendering; using "x" here
         // matches both HS's printed `~k = ~x.5` form AND HS's variant
@@ -1549,7 +1520,7 @@ impl MaudeHandle {
         // <> name puts `~x.N` AFTER same-idx `~na.N`/`~nb.N`).
         for ms in &msubsts {
             let mut variant_ctx = ctx.clone();
-            out.push(msubst_to_lnsubst(ms, &mut variant_ctx)?);
+            out.push(msubst_to_lnsubst_unify(ms, &mut variant_ctx)?);
         }
         Ok(out)
     }
@@ -1636,7 +1607,7 @@ fn unskolemize_subst(
 ///
 /// The constant must round-trip through Maude with the SAME order-sorted
 /// behaviour HS gives a `SkConst`, whose sort is `lvarSort v`
-/// (Guarded.hs:805-808) — i.e. the variable's *own* sort, which may be
+/// (`sortOfSkol`, Guarded.hs:810) — i.e. the variable's *own* sort, which may be
 /// `Msg`.  Maude's `match A <=? B` requires the pattern's declared sort
 /// to be a supersort of the subject's, so encoding a `Msg`-sorted
 /// subject variable as `Pub` (a strict subsort of `Msg`) would let it
@@ -1653,32 +1624,25 @@ fn unskolemize_subst(
 /// Maude sort directly.
 fn skolem_name(counter: u64, lv: &crate::lterm::LVar) -> crate::lterm::Name {
     use crate::lterm::{LSort, Name, NameTag};
-    match lv.sort {
-        LSort::Msg => {
-            // Sentinel-prefixed id; the fields after the prefix follow the
-            // non-`Msg` branch's layout so distinct LVars stay distinct.
-            let id = format!(
-                "{}{}_{}_{}_{}",
-                crate::maude_types::SKOLEM_MSG_PREFIX,
-                counter,
-                lv.name,
-                lv.idx,
-                sort_tag(lv.sort)
-            );
-            Name::new(NameTag::Pub, id)
-        }
-        sort => {
-            let tag = match sort {
-                LSort::Pub => NameTag::Pub,
-                LSort::Fresh => NameTag::Fresh,
-                LSort::Nat => NameTag::Nat,
-                LSort::Node => NameTag::Node,
-                LSort::Msg => unreachable!(),
-            };
-            let id = format!("__sk{}_{}_{}_{}", counter, lv.name, lv.idx, sort_tag(sort));
-            Name::new(tag, id)
-        }
-    }
+    // Every sort shares the `<prefix><counter>_<name>_<idx>_<sortTag>` id
+    // layout, so distinct LVars stay distinct; only `Msg` swaps the prefix
+    // for the sentinel `sort_of_name` decodes back to `LSortMsg`.
+    let (tag, prefix) = match lv.sort {
+        LSort::Msg => (NameTag::Pub, crate::maude_types::SKOLEM_MSG_PREFIX),
+        LSort::Pub => (NameTag::Pub, "__sk"),
+        LSort::Fresh => (NameTag::Fresh, "__sk"),
+        LSort::Nat => (NameTag::Nat, "__sk"),
+        LSort::Node => (NameTag::Node, "__sk"),
+    };
+    let id = format!(
+        "{}{}_{}_{}_{}",
+        prefix,
+        counter,
+        lv.name,
+        lv.idx,
+        sort_tag(lv.sort)
+    );
+    Name::new(tag, id)
 }
 
 /// Walk an `LNTerm` and replace any `Lit::Con(name)` whose `name` is in
@@ -1764,13 +1728,12 @@ fn rewrite_skolem(
 /// triple cannot collide with any pre-existing system variable.
 /// Without this, `LVar`'s structural equality (name + sort + idx)
 /// could treat a witness as the same variable as an input or a
-/// previously-generated witness from another call, silently
-/// conflating distinct semantic variables (the root cause of bug
-/// #21 — variable-conflation in source-case grafting).
+/// witness generated by another call, silently conflating distinct
+/// semantic variables when source cases are grafted.
 ///
 /// **Domain order**: entries are converted in Maude's RAW returned
 /// order (`0..ms.len()`).  Current HS `msubstToLSubstVFresh`
-/// (Maude/Types.hs:127-138) does NO sort either — upstream `c9d456b8`
+/// (Maude/Types.hs:137-157) does NO sort either — upstream `c9d456b8`
 /// ("More general fix for substitution canonicalisation") REMOVED the old
 /// `sortBy (comparing (snd . fst))` from both the VFresh (unify/variants)
 /// and VFree (match) conversions, moving the split-disjunction
@@ -1803,7 +1766,7 @@ fn msubst_to_lnsubst_unify(
 /// `msubstToLSubstVFresh bindings` / `msubstToLSubstVFree bindings`, whose
 /// `runBackConversion (...) bindings =
 ///  evalBindT (...) bindings `evalFreshAvoiding` M.elems bindings`
-/// (Term/Maude/Types.hs:112-113) seeds the fresh supply at
+/// (Term/Maude/Types.hs:123-127) seeds the fresh supply at
 /// `avoid (M.elems bindings)` and reads/writes NO global fresh state.
 ///
 /// `avoid_max` is the caller's `avoid (M.elems bindings)` value (max idx
@@ -1819,7 +1782,7 @@ fn msubst_to_lnsubst_with_avoid(
 ) -> Result<Vec<(crate::lterm::LVar, LNTerm)>, MaudeError> {
     let mut out = Vec::with_capacity(ms.len());
     // HS `avoid (M.elems bindings) = maybe 0 (succ . snd) . boundsVarIdx`
-    // (LTerm.hs:656-657): the local fresh supply starts just above the max
+    // (LTerm.hs:680-681): the local fresh supply starts just above the max
     // idx among the query's own binding vars.  `avoid_max` already carries
     // that max (the caller scans ALL of `ctx`'s Var bindings, not just
     // `x`-named ones), so `avoid_max + 1` is the HS seed; the extra scan
@@ -1837,7 +1800,8 @@ fn msubst_to_lnsubst_with_avoid(
     };
     // HS-faithful: both the unify/variants path (`msubstToLSubstVFresh`)
     // and the match path (`msubstToLSubstVFree`) convert in Maude's raw
-    // returned order — neither sorts the domain (Maude/Types.hs:133-177;
+    // returned order — neither sorts the domain (Maude/Types.hs:137-157 and
+    // 163-177;
     // the unsorted order is deliberate upstream, so do not sort here).
     for ((sort, idx), mt) in ms {
         let lv = crate::maude_types::substitute_lookup_var(ctx, *sort, *idx).ok_or_else(|| {

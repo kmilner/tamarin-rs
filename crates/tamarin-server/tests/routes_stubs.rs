@@ -6,7 +6,7 @@
 //!
 //! This file mixes:
 //!   - Live route assertions (compared against Haskell fixtures)
-//!   - Genuine stubs that still return {alert} or 501
+//!   - Genuine stubs, which answer a 200 `{alert}` envelope
 //!
 //! Coverage matrix:
 //!   - GET  /thy/trace/<idx>/intdot/*path                 LIVE — HTML shell page
@@ -16,7 +16,7 @@
 //!   - GET  /thy/trace/<idx>/del/path/*path               LIVE — returns {redirect}
 //!   - GET  /thy/trace/<idx>/next/<section>/*path         LIVE — text/plain URL
 //!   - GET  /thy/trace/<idx>/prev/<section>/*path         LIVE — text/plain URL
-//!   - POST /thy/trace/<idx>/get_and_append/<name>        ({alert})
+//!   - POST /thy/trace/<idx>/get_and_append/<name>        LIVE — returns {alert}
 //!   - GET  /thy/trace/<idx>/autoproveAll/...             LIVE — returns {redirect}
 //!   - GET  /thy/trace/<idx>/verify/lemma/<x>             LIVE — returns {html,title}
 //!   - GET  /thy/trace/<idx>/verify/proof/<x>             LIVE — returns {redirect}
@@ -117,7 +117,7 @@ async fn test_edit_stub_returns_alert() {
 // ---------------------------------------------------------------------
 // /del/path/lemma/<name> — LIVE
 //
-// Haskell `getDeleteStepR` (`src/Web/Handler.hs:1587-1604`) uses
+// Haskell `getDeleteStepR` (`src/Web/Handler.hs:1681-1698`) uses
 // `modifyTheory` → allocates a new idx and returns
 // `{redirect: /thy/trace/<newIdx>/overview/lemma/<name>}`.
 // We mirror the SHAPE (new idx + same lemma path); Haskell's exact
@@ -238,7 +238,7 @@ async fn test_prev_main_lemma_matches_haskell() {
 async fn test_next_normal_help_to_message_matches_haskell() {
     // Haskell `next "normal" = nextThyPath` walks Help → Message.
     // Other section strings (like `main`) are no-ops per
-    // `next _ = const id` (`src/Web/Handler.hs:1452-1455`).  This
+    // `next _ = const id` (`src/Web/Handler.hs:1546-1549`).  This
     // test exercises the `normal` arm; the `main` no-op is covered
     // by `test_next_main_help_is_noop_matches_haskell`.
     let s = start_server_with_theory("issue193.spthy").await;

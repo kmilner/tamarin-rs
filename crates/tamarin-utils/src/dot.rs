@@ -38,8 +38,9 @@
 //!
 //! The combinators upstream exports that have no counterpart here are `runDot`,
 //! `modifyDotGenState`, `htmlLabel` (whose `("html_label", …)` pair `write_attr`
-//! special-cases directly) and the `'`/`_` result-shape variants of
-//! `hcat`/`vcat`/`record`/`mrecord`.
+//! special-cases directly), the `[String]` conveniences `hcat'`/`vcat'`
+//! (Text/Dot.hs:399-408) and the `'`/`_` result-shape variants of
+//! `record`/`mrecord`.
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum NodeId {
@@ -154,7 +155,9 @@ impl DotGraph {
         r
     }
 
-    /// `roleCluster`'s dot half (Dot.hs:178-188): a [`scope`] carrying a
+    /// `roleCluster`'s dot half (Theory/Constraint/System/Dot.hs:178-188 — the
+    /// theory-side module, not the `Text/Dot.hs` every other citation here
+    /// names): a [`scope`] carrying a
     /// CALLER-supplied cluster id — HS builds it with `createClusterNodeId`
     /// ([`NodeId::cluster`]) rather than from the counter.  The `nextId` HS
     /// runs first is a no-op on the numbering: the sub-state is re-seeded with

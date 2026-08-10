@@ -626,7 +626,7 @@ fn destruction_rules_pair_emits_exactly_two_destructors() {
 }
 
 // =========================================================================
-// `equal_rule_up_to_renaming` (Rule.hs:1065-1077).  Mirrors HS:
+// `equal_rule_up_to_renaming` (Theory/Model/Rule.hs:1157-1175).  Mirrors HS:
 //
 //   equalRuleUpToRenaming r1 r2 = reader $ \hnd ->
 //     case eqs of
@@ -696,7 +696,7 @@ fn equal_rule_up_to_renaming_alpha_equivalent_pair_rules() {
         "two rules differing only in their bound var's name+idx \
              must be equal-up-to-renaming.  HS: `unifyLNTerm` yields a \
              renaming `[x.0 ~> y.7]`, isRenaming on each rule's restricted \
-             var set holds.  See Rule.hs:1065-1077."
+             var set holds.  See Theory/Model/Rule.hs:1157-1175."
     );
     // Symmetric: r2 vs r1.
     assert!(
@@ -760,7 +760,7 @@ fn equal_rule_up_to_renaming_structurally_different_rules_diverge() {
 }
 
 // =========================================================================
-// `variants_intruder` (IntruderRules.hs:288-314).
+// `variants_intruder` (IntruderRules.hs:347-374).
 //
 // Pin: a `DestrRule subterm=False` rule whose argument terms have
 // Maude variants under the AC theory produces MORE than one variant.
@@ -798,7 +798,7 @@ fn variants_intruder_emits_at_least_the_identity_variant() {
         !variants.is_empty(),
         "variants_intruder must emit at least one rule (the identity \
              variant if no Maude variants exist).  HS \
-             `variantsIntruder` (IntruderRules.hs:288-314) wraps the \
+             `variantsIntruder` (IntruderRules.hs:347-374) wraps the \
              rule in a list-monad enumeration that includes the original \
              via the identity Maude variant."
     );
@@ -1089,8 +1089,8 @@ fn dh_intruder_rules_emits_five_constructors_and_some_destructors() {
     // and `_inv` destructors (`KD(x)->KD(inv(x))`, `[KD(x),KU(y)]->
     // [KD(x^y)]`) MUST be dropped — Maude returns them as `x0 --> #N`
     // fresh-witness renamings which HS's `removeRenamings`
-    // (Maude/Types.hs:123-127, see line 130) collapses to the empty subst, so the
-    // `ruvariant /= ru` guard (IntruderRules.hs:288-314, see line 297) discards them.
+    // (Maude/Types.hs:133-157, see line 144) collapses to the empty subst, so the
+    // `ruvariant /= ru` guard (IntruderRules.hs:354-360, see line 356) discards them.
     // A regression here (53 rules: +1 d_exp, +1 d_inv) means the
     // `remove_renamings` step in `variants_intruder` was lost.
     let (n_exp, n_inv) = destrs.iter().fold((0usize, 0usize), |(e, i), d| {

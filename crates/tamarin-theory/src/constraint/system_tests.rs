@@ -287,52 +287,49 @@ fn content_untracked_callers_are_enumerated() {
         if test_files.contains(path) {
             continue;
         }
-        {
-            let src = std::fs::read_to_string(path).expect("read source");
-            let mut cur_fn = String::from("<file-scope>");
-            for line in src.lines() {
-                let trimmed = line.trim_start();
-                // Stop at the file's `#[cfg(test)]` / `mod tests` boundary:
-                // unit tests legitimately exercise the accessor and must not
-                // count as production callers (inline test modules sit at
-                // file end).
-                if trimmed.starts_with("#[cfg(test)]") || trimmed.starts_with("mod tests") {
-                    break;
+        let src = std::fs::read_to_string(path).expect("read source");
+        let mut cur_fn = String::from("<file-scope>");
+        for line in src.lines() {
+            let trimmed = line.trim_start();
+            // Stop at the file's `#[cfg(test)]` / `mod tests` boundary:
+            // unit tests legitimately exercise the accessor and must not
+            // count as production callers (inline test modules sit at
+            // file end).
+            if trimmed.starts_with("#[cfg(test)]") || trimmed.starts_with("mod tests") {
+                break;
+            }
+            if let Some(rest) = trimmed
+                .strip_prefix("fn ")
+                .or_else(|| trimmed.strip_prefix("pub fn "))
+                .or_else(|| trimmed.strip_prefix("pub(crate) fn "))
+            {
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if !name.is_empty() {
+                    cur_fn = name;
                 }
-                if let Some(rest) = trimmed
-                    .strip_prefix("fn ")
-                    .or_else(|| trimmed.strip_prefix("pub fn "))
-                    .or_else(|| trimmed.strip_prefix("pub(crate) fn "))
-                {
-                    let name: String = rest
-                        .chars()
-                        .take_while(|c| c.is_alphanumeric() || *c == '_')
-                        .collect();
-                    if !name.is_empty() {
-                        cur_fn = name;
-                    }
-                }
-                if trimmed.starts_with("//") {
-                    continue;
-                }
-                if call_needles.iter().any(|n| line.contains(n))
-                    && !ALLOWED.contains(&cur_fn.as_str())
-                {
-                    offenders.push(format!("{} in fn {}", path.display(), cur_fn));
-                }
-                if forbid_needles.iter().any(|n| line.contains(n)) {
-                    forbidden.push(format!("{} in fn {}", path.display(), cur_fn));
-                }
-                // Escape check (content door only — the formula doors bump
-                // before handing out their `&mut Vec`, so escaping those is
-                // harmless): a call NOT followed by `.` hands the raw
-                // `&mut SystemContent` to a binding/argument, where a later
-                // formula write would evade the forbid needles above.
-                for (pos, _) in line.match_indices(&call_needles[0]) {
-                    let next = line[pos + call_needles[0].len()..].chars().next();
-                    if next != Some('.') && !ESCAPE_ALLOWED.contains(&cur_fn.as_str()) {
-                        escapes.push(format!("{} in fn {}", path.display(), cur_fn));
-                    }
+            }
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            if call_needles.iter().any(|n| line.contains(n)) && !ALLOWED.contains(&cur_fn.as_str())
+            {
+                offenders.push(format!("{} in fn {}", path.display(), cur_fn));
+            }
+            if forbid_needles.iter().any(|n| line.contains(n)) {
+                forbidden.push(format!("{} in fn {}", path.display(), cur_fn));
+            }
+            // Escape check (content door only — the formula doors bump
+            // before handing out their `&mut Vec`, so escaping those is
+            // harmless): a call NOT followed by `.` hands the raw
+            // `&mut SystemContent` to a binding/argument, where a later
+            // formula write would evade the forbid needles above.
+            for (pos, _) in line.match_indices(&call_needles[0]) {
+                let next = line[pos + call_needles[0].len()..].chars().next();
+                if next != Some('.') && !ESCAPE_ALLOWED.contains(&cur_fn.as_str()) {
+                    escapes.push(format!("{} in fn {}", path.display(), cur_fn));
                 }
             }
         }

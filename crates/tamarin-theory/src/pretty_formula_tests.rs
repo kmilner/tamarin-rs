@@ -97,7 +97,7 @@ fn forall_with_action() {
 
 #[test]
 fn long_quantifier_varlist_wraps() {
-    // HS `ppVars = fsep . map (text . show)` (Formula.hs:471-511, see line 508): a long
+    // HS `ppVars = fsep . map (text . show)` (Formula.hs:503-511, see line 511): a long
     // bound-var list wraps across lines, the continuation aligned after
     // the `∃ ` prefix (column 2, the `<>` nesting offset).  Build an
     // existential with enough vars to overflow the ribbon, body `⊥`.

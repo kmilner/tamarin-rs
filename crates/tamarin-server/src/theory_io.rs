@@ -28,11 +28,11 @@ impl std::fmt::Display for LoadError {
         match self {
             LoadError::Io(s) => write!(f, "IO error: {}", s),
             // `Parse` already holds the fully-rendered parsec frame (HS `show
-            // err` = `show (ParserError e) = show e`, TheoryLoader.hs:396-398, see line 397), so
+            // err` = `show (ParserError e) = show e`, TheoryLoader.hs:439), so
             // it is emitted verbatim — no `parse error:` prefix, which HS never
             // prints.  This is what lands inside the eager-load dashed block
-            // (Dispatch.hs:191-198 `show err`) and after the web upload's
-            // "Theory loading failed:\n" banner (Handler.hs:785-817, see line 803).
+            // (Dispatch.hs:194-201 `show err`) and after the web upload's
+            // "Theory loading failed:\n" banner (Handler.hs:809).
             LoadError::Parse(s) => write!(f, "{}", s),
             LoadError::Elaborate(s) => write!(f, "elaboration error: {}", s),
         }
@@ -109,7 +109,7 @@ pub fn load_from_source(
     // Inject the parsec `SourcePos` name (the path HS prints in the frame
     // header) from the origin: a local file's on-disk path, or the uploaded
     // filename — the same value HS passes as `inFile`/`filename` to
-    // `parseString` (Dispatch.hs:149-209, see line 167 `thLoad srcThy path`; Handler.hs:785-817, see line 800
+    // `parseString` (Dispatch.hs:170 `thLoad srcThy path`; Handler.hs:806
     // `loadAndCloseTheory srcContent filename`).  `LoadError::Parse` then holds
     // the byte-for-byte parsec frame.
     let source_name = origin.label();
@@ -124,7 +124,7 @@ pub fn load_from_source(
     let mut parser_theory = parse_theory(src, &[])
         .map_err(|e| LoadError::Parse(e.with_source(source_name).to_string()))?;
 
-    // HS `liftedAddProtoRule` (Theory/Text/Parser.hs:166-193) expands each
+    // HS `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) expands each
     // rule's `_restrict(φ)` into a fresh `Restr_<rule>_<i>` restriction
     // (inserted before the rule) and rewrites the rule's actions DURING
     // parsing.  RS captures `_restrict` into `Rule.embedded_restrictions`
@@ -137,7 +137,7 @@ pub fn load_from_source(
         .map_err(|e| LoadError::Parse(format!("_restrict expansion failed: {}", e.message)))?;
 
     // HS lifecycle markers, stderr via `traceM`: "Theory loaded" right
-    // after parsing (TheoryLoader.hs:401-424, see line 409; `liftedAddProtoRule` runs
+    // after parsing (TheoryLoader.hs:449-452, see line 451; `liftedAddProtoRule` runs
     // during parsing, so post-lift here is the same point).
     eprintln!("[Theory {}] Theory loaded", parser_theory.name);
 
@@ -161,7 +161,7 @@ pub fn load_from_source(
     // `run_batch` performs).
     wf_report.retain(|e| e.topic != "Message Derivation Checks");
 
-    // "Theory translated" at the START of translation (TheoryLoader.hs:448-460, see line 454
+    // "Theory translated" at the START of translation (TheoryLoader.hs:494-500, see line 496
     // prints before `processOpenTheory` runs); RS's `elaborate` is that
     // translation step.
     eprintln!("[Theory {}] Theory translated", parser_theory.name);
@@ -171,9 +171,10 @@ pub fn load_from_source(
     // becomes the loaded theory's `_deductionChainCheck`, which the NDC pass in
     // the maude block below reads back.  [`NDC_CHECK`] carries the flag here.
     typed.options.deduction_chain_check = ndc_check();
-    // Oracle path resolution base (HS Parser.hs:304 sets `inFile` at load;
-    // `heuristic: o "./oracle-…"` then resolves against the theory's own
-    // directory, `hs_take_directory`).  Local files carry their on-disk
+    // Oracle path resolution base: HS threads the parser's `inFile` into
+    // `defaultOracleNames` (Theory/Text/Parser.hs:250), so a
+    // `heuristic: o "./oracle-…"` resolves against the theory's own
+    // directory (`hs_take_directory`).  Local files carry their on-disk
     // path; uploads keep the bare filename (dir "." — as in HS, where an
     // uploaded theory has no on-disk home).
     typed.in_file = origin.label();
@@ -212,7 +213,7 @@ pub fn load_from_source(
     // `populate_rule_variants` call in the maude block below (it does: this
     // binding lives to the end of the function).
     let _sapic_funs_guard = tamarin_theory::elaborate::set_user_funs_for_theory(&parser_theory);
-    // HS `Acc.checkWellformedness t` (translateTheory, TheoryLoader.hs:448-460, see line 455)
+    // HS `Acc.checkWellformedness t` (translateTheory, TheoryLoader.hs:494-500, see line 497)
     // runs on the PRE-translation theory — before `apply_sapic` injects the
     // SAPIC-generated rules (mirrors run.rs's CLI-side placement).
     let acc_wf = tamarin_accountability::check_wellformedness(&parser_theory);
@@ -224,7 +225,8 @@ pub fn load_from_source(
         tamarin_sapic::apply::apply_sapic(&mut parser_theory, &mut typed, user_set_heuristic)
             .map_err(|e| LoadError::Elaborate(e.message))?;
     // Accountability translation (HS `Sapic.translate >=> Acc.translate`,
-    // TheoryLoader.hs:428-443, see line 430): expands each `… accounts for` lemma into its
+    // `processOpenTheory`, TheoryLoader.hs:470-484, see line 472): expands each
+    // `… accounts for` lemma into its
     // verification-condition lemmas + case-test predicates, injecting into
     // BOTH `parser_theory` (web renderers) and `typed` (lemma list, proof
     // state).  Without this the web UI has no pages for the VC sub-lemmas
@@ -297,8 +299,10 @@ pub fn load_from_source(
         // `checkVariableDeducability`, gated by `--derivcheck-timeout` (HS
         // interactive default 5s).  The budget comes from ServerConfig
         // (CLI flag on the interactive path, 5s default otherwise) —
-        // matching HS interactive, which honors the flag
-        // (Main/Mode/Interactive.hs:39-63, see line 62).  Needs the Maude handle; runs on
+        // matching HS interactive, whose flag set ends in `theoryLoadFlags`
+        // (Main/Mode/Interactive.hs:70), so the shared
+        // `--derivcheck-timeout` (TheoryLoader.hs:180-185, read at
+        // TheoryLoader.hs:391-393) applies.  Needs the Maude handle; runs on
         // the POST-translation parser theory (`parser_theory`, matching
         // run.rs's `&parsed` at that point).
         // HS brackets the check with stderr markers via `traceM`
@@ -326,7 +330,7 @@ pub fn load_from_source(
     // rendering of the same report; empty string when the report is empty.
     let errors_html = make_wf_errors_html(&wf_report);
 
-    // "Theory closed" at the end of `closeTheory` (TheoryLoader.hs:569-615, see line 596).
+    // "Theory closed" at the end of `closeTheory` (TheoryLoader.hs:696).
     eprintln!("[Theory {}] Theory closed", typed.name);
 
     Ok(TheoryEntry {

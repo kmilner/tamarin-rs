@@ -150,7 +150,7 @@ pub struct ProofContextShared {
     /// `pcTrueSubterm` — True iff every destructor rule has its
     /// RHS as a proper subterm of its LHS (`all isSubtermRule $
     /// filter isDestrRule $ intruder_rules`).  Mirrors Haskell's
-    /// `_pcTrueSubterm` (System.hs:749-767, see line 763) and gates the
+    /// `_pcTrueSubterm` (System.hs:746-766, see line 762) and gates the
     /// `has_impossible_chain` analysis: when True, only the chain-end
     /// root symbol is checked against the chain-start's possible
     /// decomposition root syms (a STRICTER test that fires more often);
@@ -234,8 +234,8 @@ pub struct ProofContext {
     /// trace-quantifier attribute (per-lemma, so owned).
     pub is_exists_trace: bool,
     /// The solved-leaf extraction strategy for this lemma's auto-prover,
-    /// mirroring HS `apCut` (Theory/Proof.hs:696-703, see line 702) threaded from
-    /// `--stop-on-trace` (TheoryLoader.hs:356-360).  `Dfs` is the default
+    /// mirroring HS `apCut` (Theory/Proof.hs:696-703, see line 700) threaded from
+    /// `--stop-on-trace` (TheoryLoader.hs:397-405).  `Dfs` is the default
     /// (`fromMaybe CutDFS`); consumed once per lemma by `run_proof_search`
     /// (search.rs).  Per-lemma / theory-global, so owned.
     pub cut: CutStrategy,
@@ -250,8 +250,8 @@ pub struct ProofContext {
     pub typing_assumptions: Vec<crate::guarded::Guarded>,
     /// The goal ranking list for this lemma, mirroring HS's
     /// `Heuristic ProofContext = Heuristic [GoalRanking ProofContext]`
-    /// (System.hs:522-523).  `None` ⇒ HS's `defaultHeuristic False`
-    /// (`defaultRankings False = [SmartRanking False]`, System.hs:526-528, see line 527).
+    /// (System.hs:521-522).  `None` ⇒ HS's `defaultHeuristic False`
+    /// (`defaultRankings False = [SmartRanking False]`, System.hs:525-527, see line 526).
     /// Resolved per-lemma in `prove_lemma`
     /// (per-lemma `[heuristic=..]` overrides the theory-level directive,
     /// matching `apDefaultHeuristic <|> pcHeuristic`).
@@ -264,7 +264,7 @@ pub struct ProofContext {
     pub lemma_name: String,
     /// Path to the theory file being proved.  Used to resolve the
     /// oracle script path as `takeDirectory theory_file </> oracle_rel_path`
-    /// (HS Parser.hs:304, System.hs:574-575).  Stored as the absolute
+    /// (HS Theory/Text/Parser.hs:309, System.hs:573-574).  Stored as the absolute
     /// path passed to `--prove`.  Per-lemma, so owned.
     pub theory_file: String,
     /// The read-only, immutable-after-build bundle
@@ -332,21 +332,21 @@ pub enum UseInduction {
 }
 
 /// How the auto-prover cuts the proof tree around solved leaves,
-/// mirroring HS `SolutionExtractor` (Theory/Proof.hs:693-694, see line 695) as selected
-/// by `runAutoProver` (Theory/Proof.hs:736-741).
+/// mirroring HS `SolutionExtractor` (Theory/Proof.hs:693-694) as selected
+/// by `runAutoProver` (Theory/Proof.hs:730-739).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CutStrategy {
-    /// HS `CutDFS` → `cutOnSolvedDFS` (Theory/Proof.hs:856-886): parallel
+    /// HS `CutDFS` → `cutOnSolvedDFS` (Theory/Proof.hs:845-884): parallel
     /// iterative-deepening DFS, doubling `dMax` from 4.  Selects the leftmost
     /// (preorder, CaseName order) solved leaf among those shallower than the
     /// first `dMax` (4, 8, 16, …) to admit any solved leaf — within that
     /// depth bucket a deeper-but-leftmost leaf beats a shallower one further
     /// right, so this is NOT globally-shallowest.  The default when
     /// `--stop-on-trace` is absent
-    /// (HS `constructAutoProver`: `fromMaybe CutDFS`, TheoryLoader.hs:699-706, see line 705).
+    /// (HS `constructAutoProver`: `fromMaybe CutDFS`, TheoryLoader.hs:802-810, see line 809).
     Dfs,
     /// HS `CutSingleThreadDFS` → `cutOnSolvedSingleThreadDFS`
-    /// (Theory/Proof.hs:795-816): single-thread depth-first with NO depth
+    /// (Theory/Proof.hs:788-814): single-thread depth-first with NO depth
     /// bound and NO iterative deepening.  `findSolved`'s `foldMap` over the
     /// children map descends the leftmost branch (CaseName order) to
     /// completion before its siblings and stops at the first solved leaf, so
@@ -354,7 +354,7 @@ pub enum CutStrategy {
     /// further right even when the shallower leaf sits inside `Dfs`'s first
     /// depth bucket (where `Dfs` would cut the deep branch off and pick it).
     SeqDfs,
-    /// HS `CutBFS` → `cutOnSolvedBFS` (Theory/Proof.hs:930-957): iterative
+    /// HS `CutBFS` → `cutOnSolvedBFS` (Theory/Proof.hs:927-955): iterative
     /// level-deepening over the DFS proof tree.  At each level `l` the tree
     /// is forced to depth `l` and walked in CaseName order with threaded
     /// state: a Solved leaf at exactly depth `l` flips TraceFound; a node
@@ -364,11 +364,11 @@ pub enum CutStrategy {
     /// of the printed proof; a level that completes with nothing pending
     /// returns the full tree unchanged.
     Bfs,
-    /// HS `CutNothing` → `id` (Theory/Proof.hs:730-750, see line 740): no cut at all — the
+    /// HS `CutNothing` → `id` (Theory/Proof.hs:730-739, see line 738): no cut at all — the
     /// full proof tree is built and printed; sibling exploration does not
     /// stop when a trace is found.
     Nothing,
-    /// HS `CutAfterSorry` → `cutAfterFirstSorry` (Theory/Proof.hs:989-999):
+    /// HS `CutAfterSorry` → `cutAfterFirstSorry` (Theory/Proof.hs:986-998):
     /// preorder walk in CaseName order; the first `Sorry` or Solved leaf
     /// aborts, and every node visited after the abort becomes a bare
     /// `sorry` leaf (children dropped, system annotation kept).  Under the
@@ -530,8 +530,10 @@ impl ProofContext {
         // changes), so `cdGoal` is the join key.
         for orig in &self.full_sources {
             let sat = refined.iter().find(|s| s.goal == orig.goal);
-            // HS-faithful: `saturateSources` (Sources.hs:498) keeps ONE
-            // source per input (`set cdCases newCases th`), so every
+            // HS-faithful: `saturateSources` maps `refineSource` over its
+            // input one-for-one (Sources.hs:379) and `refineSource` returns
+            // `set cdCases newCases th` (Sources.hs:113-120, see line 120),
+            // so it keeps ONE source per input and every
             // `orig.goal` has a match in `refined` — including sources whose
             // refine produced ZERO cases (the case list is just empty).  We
             // overwrite the cell with the refined cases (possibly empty),
@@ -651,8 +653,8 @@ impl ProofContext {
             intruder_rules.extend(crate::intruder_rules::multiset_intruder_rules());
         }
         // XOR intruder rules — port of HS `xorIntruderRules`
-        // (IntruderRules.hs:345-349) wired in `addMessageDeduction
-        // RuleVariants` (TheoryLoader.hs:773-791, see line 790).  Two destructor rules
+        // (IntruderRules.hs:404-413) wired in `addMessageDeduction
+        // RuleVariants` (TheoryLoader.hs:878-900, see line 894).  Two destructor rules
         // for XOR cancellation (KD(x⊕y) ∧ KU(y⊕z) → KD(x⊕z) and
         // KD(x⊕y) ∧ KU(y) → KD(x)), one constructor (KU(x⊕y) from
         // KU(x), KU(y)), plus the `zero` constructor.  Without
@@ -696,7 +698,7 @@ impl ProofContext {
         //   | otherwise     = thy
         // ```
         //
-        // HS's `mkDhIntruderVariants` (TheoryLoader.hs:766-769)
+        // HS's `mkDhIntruderVariants` (TheoryLoader.hs:860-867)
         // parses the PRE-COMPUTED `data/intruder_variants_dh.spthy`
         // (Template-Haskell `embedFile`), not the runtime
         // `dhIntruderRules` generator.  HS's `Main.Mode.Intruder.run`
@@ -707,7 +709,7 @@ impl ProofContext {
         // The cached-file parser (`mk_dh_intruder_variants` /
         // `mk_bp_intruder_variants` from `crate::intruder_variants`)
         // parses the PRE-COMPUTED `data/intruder_variants_dh.spthy`,
-        // matching HS's `mkDhIntruderVariants` (TheoryLoader.hs:766-769)
+        // matching HS's `mkDhIntruderVariants` (TheoryLoader.hs:860-867)
         // and making us mechanism-identical to HS.  The runtime
         // generator (`dh_intruder_rules`) is retained as the regenerator
         // (callable when one wants to refresh the cache from local
@@ -717,7 +719,7 @@ impl ProofContext {
         // Ordering matches HS exactly: DH BEFORE BP, both AFTER
         // subterm + special rules.  When BP is enabled HS adds DH
         // FIRST (the list `[mkDhIntruderVariants, mkBpIntruderVariants]`
-        // — TheoryLoader.hs:773-791, see line 777).
+        // — TheoryLoader.hs:878-900, see line 885).
         if sig.enable_bp {
             intruder_rules.extend(crate::intruder_variants::mk_dh_intruder_variants(sig));
             intruder_rules.extend(crate::intruder_variants::mk_bp_intruder_variants(sig));
@@ -843,10 +845,12 @@ impl ProofContext {
 
     /// Like [`new_with_restrictions_and_pool`] but also unions the FORCED
     /// injective fact tags into `injective_fact_insts` BEFORE source
-    /// precomputation — mirroring HS `closeRuleCache` (Rule.hs:147-157), where
-    /// `injFactInstances` (forced ∪ simple) seeds `ctxt0`, which then drives
-    /// `precomputeSources`.  Used for the SAPIC state-channel optimisation
-    /// (`setforcedInjectiveFacts {L_PureState, L_CellLocked}`, Sapic.hs:84).
+    /// precomputation — mirroring HS `closeRuleCache` (CloseRule.hs:402-427,
+    /// see line 419), where `injFactInstances` (forced ∪ simple) seeds
+    /// `ctxt0`, which then drives `precomputeSources`.  Used for the SAPIC
+    /// state-channel optimisation
+    /// (`setforcedInjectiveFacts {L_PureState, L_CellLocked}`,
+    /// lib/sapic/src/Sapic.hs:84).
     ///
     /// `intr_override`: the theory's once-per-load NDC-checked intruder
     /// cache (`close_rule::check_close_intr_rule`), injected so this
@@ -927,7 +931,7 @@ impl ProofContext {
                 &proto_rule_refs,
                 &sig.reducible_fun_syms_fast,
             );
-        // HS `closeRuleCache` (Rule.hs:147-150): union the FORCED injective
+        // HS `closeRuleCache` (CloseRule.hs:417-420): union the FORCED injective
         // fact tags BEFORE source precomputation reads `injective_fact_insts`.
         if !forced_injective_facts.is_empty() {
             injective_fact_insts =
@@ -955,10 +959,13 @@ impl ProofContext {
         // find the narrowed instance `msg → senc(pair(_, t), key)`
         // ⇒ `Out(t)`, leaving exists-trace lemmas that need this path
         // unprovable (e.g. T&D::Public_part_public).
-        // Pre-filter rules that can't have non-trivial variants: only
-        // rules containing a *reducible* (destructor) function symbol
-        // in some fact term could narrow. Skipping non-destructor
-        // rules avoids ~N Maude round-trips at theory-load time.
+        // `rule_has_reducible` (below) only SELECTS which path a rule
+        // takes in the loop at the end of this block — rules carrying a
+        // *reducible* (destructor) function symbol in some fact term go
+        // through `abstract_rule_and_variants`, the rest through
+        // `rename_precise_rule_if_changed` / `variant_substs_for_rule`.
+        // No rule is skipped; see the HS-faithfulness note on that loop
+        // for why skipping one would desynchronise `sNextGoalNr`.
         let reducible_syms: std::collections::BTreeSet<_> =
             sig.reducible_fun_syms.iter().copied().collect();
         let term_has_reducible = |t: &tamarin_term::lterm::LNTerm| -> bool {
@@ -980,7 +987,7 @@ impl ProofContext {
         // headed subterm in `prems ++ concs ++ acts ++ nvs` into a
         // fresh `z` var and computes the disjunction of
         // substitutions Maude returns from its variant narrowing
-        // (RuleVariants.hs:93-99).
+        // (RuleVariants.hs:92-98).
         //
         // A conclusions-only filter is insufficient: rules like
         // `--[ Equality(verify(sig, ...), true) ]->` (issue193,
@@ -1010,8 +1017,8 @@ impl ProofContext {
         // `ctx.rules` BEFORE source precomputation so that
         // `precompute_full_sources`/`precompute_sources` see the
         // variant-expanded rule set, matching HS (whose precompute runs
-        // over `cprRuleAC` = the variant-expanded AC rules; Rule.hs:95-99, see line 97,
-        // Rule.hs:121-176, see line 156).
+        // over `cprRuleAC` = the variant-expanded AC rules;
+        // Items/RuleItem.hs:56-59, see line 58).
         let mut computed_variant_substs: Vec<(
             usize,
             Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
@@ -1022,16 +1029,16 @@ impl ProofContext {
             Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
         )> = Vec::new();
         // SplitG variants is the Haskell-faithful path
-        // (`someRuleACInst` + `solveRuleConstraints` from Rule.hs:933 /
-        // Reduction.hs:766-774).  Always on.
+        // (`someRuleACInst` + `solveRuleConstraints` from
+        // Theory/Model/Rule.hs:1013-1028 / Reduction.hs:788-797).  Always on.
         //
-        // HS-faithful (RuleVariants.hs:75-129): `variantsProtoRule` runs
+        // HS-faithful (RuleVariants.hs:60-133): `variantsProtoRule` runs
         // UNCONDITIONALLY for every closed protocol rule.  For rules with no
         // reducible-headed sub-terms, the variant disjunction collapses to
         // `Disj [emptySubstVFresh]` (the `trueDisj` constant at
-        // RuleVariants.hs:61-134, see line 120); `someRuleACInst` (Rule.hs:940-955) then
+        // RuleVariants.hs:60-133, see line 119); `someRuleACInst` then
         // returns `Just (Disj [emptySubstVFresh])` for EVERY ProtoRule, so
-        // `solveRuleConstraints (Just trueDisj)` (Reduction.hs:766-773) still
+        // `solveRuleConstraints (Just trueDisj)` (Reduction.hs:788-797) still
         // calls `insertGoal (SplitG splitId) False` — bumping `sNextGoalNr`
         // by 1 at every `labelNodeId` call regardless of whether the rule has
         // any destructors.  Skipping the variant-substs computation for
@@ -1052,7 +1059,7 @@ impl ProofContext {
             // `abstrRule` port: it abstracts each reducible-headed sub-term to
             // a fresh `z_i`, queries Maude on the SMALL abstracted form, and
             // composes the variant substs back via `composeVFresh vsubst
-            // abstractionSubst`, mirroring RuleVariants.hs:75-91).  This is
+            // abstractionSubst`, mirroring RuleVariants.hs:66-90, see line 74).  This is
             // exactly what `populate_rule_variants` (run.rs) already ran during
             // theory elaboration, so when those fields are present we REUSE
             // them rather than re-querying Maude.
@@ -1073,8 +1080,8 @@ impl ProofContext {
             } else {
                 // Non-reducible rule: HS's `variantsProtoRule` still runs and
                 // collapses to the trivial disjunction `[emptySubstVFresh]`
-                // (`trueDisj`, RuleVariants.hs:61-134, see line 120), BUT it FIRST applies
-                // `renamePrecise` (RuleVariants.hs:61-134, see line 78) to the rule — re-indexing
+                // (`trueDisj`, RuleVariants.hs:60-133, see line 119), BUT it FIRST applies
+                // `renamePrecise` (RuleVariants.hs:60-133, see line 63) to the rule — re-indexing
                 // every variable to a PER-NAME fresh index.  This packs
                 // distinct-named rule variables (e.g. a SAPiC `lock` + `v`) onto
                 // the same low index (`lock.0` + `v.0`, not `lock.0` + `v.1`).
@@ -1110,7 +1117,7 @@ impl ProofContext {
         }
         // `pcTrueSubterm` — `all isSubtermRule $ filter isDestrRule $
         // intruder_rules`.  Mirrors `ClosedTheory.getProofContext`
-        // (`lib/theory/src/ClosedTheory.hs:97-138, see line 112`).  When the destructor
+        // (`lib/theory/src/ClosedTheory.hs:96-139, see line 112`).  When the destructor
         // set contains only subterm-rules (sdec / fst / snd / etc., as
         // opposed to constant-RHS rules like `isPair → true`), the
         // strict variant of `hasImpossibleChain` applies.
@@ -1170,7 +1177,7 @@ impl ProofContext {
         // Install rule variants BEFORE precompute, so
         // `precompute_full_sources`/`precompute_sources` see the
         // variant-expanded (abstracted) rule set, matching HS (whose
-        // precompute runs over `cprRuleAC`; Rule.hs:95-99, see line 97,156).
+        // precompute runs over `cprRuleAC`; Items/RuleItem.hs:56-59, see line 58).
         //
         // Install the variant substitutions in their disjunction form.
         // These are consumed by `solve_rule_constraints` at search time
@@ -1377,6 +1384,24 @@ pub(crate) fn annotate_loop_breakers(
         .iter()
         .map(|o| o.abstracted_rule.as_ref().unwrap_or(&o.rule))
         .collect();
+    // `instances` is a pure function of `(rule_idx, fact)`, so each rule's
+    // premise and conclusion instance lists are built once here rather than
+    // once per `(ru_from, ru_to, premise)` triple of the loop below.
+    let prem_insts_by_rule: Vec<Vec<Vec<crate::fact::LNFact>>> = ac_rules
+        .iter()
+        .enumerate()
+        .map(|(i, ru)| {
+            ru.enumerate_premises()
+                .map(|(_, fa)| instances(i, fa))
+                .collect()
+        })
+        .collect();
+    let conc_insts_by_rule: Vec<Vec<Vec<crate::fact::LNFact>>> = ac_rules
+        .iter()
+        .enumerate()
+        .map(|(i, ru)| ru.conclusions.iter().map(|fa| instances(i, fa)).collect())
+        .collect();
+
     let mut relation: Vec<((usize, PremIdx), (usize, PremIdx))> = Vec::new();
     for (i_from, _ru_from) in rules.iter().enumerate() {
         let ru_from_ac = ac_rules[i_from];
@@ -1384,13 +1409,14 @@ pub(crate) fn annotate_loop_breakers(
             let ru_to_ac = ac_rules[i_to];
             for (to_prem_idx, prem_fa) in ru_to_ac.enumerate_premises() {
                 // HS `dataflowRelAC` (LoopBreakers.hs:43-54) enumerates ALL
-                // premises (`enumPrems`, Rule.hs:246-247) with no tag filter;
+                // premises (`enumPrems`, Theory/Model/Rule.hs:258-259) with no tag filter;
                 // the only premise-level guard is `not (isNoSourcesFact …)`.
                 // Non-Proto premises are kept here too: the tag-equality
                 // (`c0.tag != prem_fa.tag`) + `unifiable_ln_facts` gates below
                 // already exclude any conclusion that cannot form an edge,
                 // exactly as HS's `unifiableLNFacts` does (it returns []
-                // whenever `factTag fa1 /= factTag fa2`, Fact.hs:442-446).
+                // whenever `factTag fa1 /= factTag fa2`,
+                // Theory/Model/Fact.hs:472-480, see line 474).
                 //
                 // Haskell `LoopBreakers.hs:30-58, see line 48`:
                 //   `guard $ not (isNoSourcesFact premFa0)`
@@ -1414,12 +1440,12 @@ pub(crate) fn annotate_loop_breakers(
                 // i.e. iterate the VARIANT INSTANCES of both the premise and
                 // each conclusion, rename the conclusion away from the
                 // premise's frees, and check Maude AC-unifiability.
-                let prem_insts = instances(i_to, prem_fa);
-                let conc_unifies = ru_from_ac.conclusions.iter().any(|c0| {
+                let prem_insts = &prem_insts_by_rule[i_to][to_prem_idx.0];
+                let conc_unifies = ru_from_ac.conclusions.iter().enumerate().any(|(ci, c0)| {
                     if c0.tag != prem_fa.tag {
                         return false;
                     }
-                    instances(i_from, c0).iter().any(|conc| {
+                    conc_insts_by_rule[i_from][ci].iter().any(|conc| {
                         prem_insts.iter().any(|prem| {
                             let mut fresh = tamarin_term::lterm::avoid(prem);
                             let conc_fresh = tamarin_term::lterm::rename(conc.clone(), &mut fresh);

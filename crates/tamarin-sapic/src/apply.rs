@@ -3,17 +3,18 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 //! Wiring: run the SAPIC translation and inject the generated rules +
-//! restriction + heuristic into BOTH the parsed theory (so the pretty-printer
-//! renders them via the existing rule/restriction path — P0f) and the
-//! elaborated theory (so the solver + AC-variant pre-computation see them).
+//! restrictions + heuristic into BOTH the parsed theory (so the pretty-printer
+//! renders them via the existing rule/restriction path) and the elaborated
+//! theory (so the solver + AC-variant pre-computation see them).
 //!
-//! Mirrors the tail of HS `translate` (Sapic.hs:69-90):
+//! Mirrors the tail of HS `translate` (Sapic.hs:69-85):
 //!   - `foldM liftedAddProtoRule th  (map (`OpenProtoRule` []) eProtoRule)`
 //!   - `foldM liftedAddRestriction th1 rest`
 //!   - `addHeuristic [SapicRanking]` unless the user set one
-//!   - `_thyIsSapic = True`
 //!
-//! Scope: the CORE LINEAR subset (see `translate`/`base_translation`).
+//! HS's final `_thyIsSapic = True` has no counterpart here: `Theory::is_sapic`
+//! is already set while elaborating the parsed theory (elaborate.rs), and this
+//! module reads it as the gate that decides whether to translate at all.
 
 use tamarin_parser::ast as p;
 use tamarin_parser::wf::WfError;
@@ -95,7 +96,7 @@ pub fn apply_sapic(
         return Ok(Vec::new());
     };
 
-    // P0e: typeTheory (renameUnique + type inference), using the elaborated
+    // `typeTheory` (renameUnique + type inference), using the elaborated
     // signature's MaudeSig (HS `initTEFromSig`).  The user `functions:` typing
     // declarations (`theoryFunctionTypingInfos`, e.g. `f(bitstring):bitstring`)
     // seed the function-typing environment so `typeWith` can back-propagate a
@@ -176,7 +177,7 @@ pub fn apply_sapic(
         parsed_rule.embedded_restrictions = restr_formulas.clone();
 
         // HS `foldM liftedAddProtoRule th (map (`OpenProtoRule` []) eProtoRule)`
-        // (Sapic.hs:74): each generated rule goes through the same
+        // (Sapic.hs:75): each generated rule goes through the same
         // `addOpenProtoRule` name guard as a parsed rule (OpenTheory.hs:
         // 691-702) — it fails when the name is already bound to a DIFFERENT
         // rule, so a user rule named like a generated one (e.g. `rule Init`

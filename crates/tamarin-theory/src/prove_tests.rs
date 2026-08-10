@@ -111,7 +111,6 @@ fn probe_two_rules_proof_shape() {
     let root = prove_lemma(&pt, "reachable", h, 200).expect("prove");
     eprintln!("=== two_rules.spthy `reachable` ===");
     print_tree(&root, 0);
-    let _ = root.status;
 }
 
 #[test]
@@ -129,7 +128,6 @@ fn probe_two_actions_proof_shape() {
     let root = prove_lemma(&pt, "both_actions", h, 200).expect("prove");
     eprintln!("=== two_actions.spthy `both_actions` ===");
     print_tree(&root, 0);
-    let _ = root.status;
 }
 
 #[test]
@@ -147,7 +145,6 @@ fn probe_falsifiable_proof_shape() {
     let root = prove_lemma(&pt, "never_both", h, 200).expect("prove");
     eprintln!("=== falsifiable.spthy `never_both` ===");
     print_tree(&root, 0);
-    let _ = root.status;
 }
 
 #[test]
@@ -165,7 +162,6 @@ fn probe_three_facts_proof_shape() {
     let root = prove_lemma(&pt, "all_three", h, 200).expect("prove");
     eprintln!("=== three_facts.spthy `all_three` ===");
     print_tree(&root, 0);
-    let _ = root.status;
 }
 
 #[test]
@@ -243,9 +239,9 @@ fn probe_cr_recentalive_with_hashing_sig() {
 
 #[test]
 fn probe_sig_minimal_with_hashing_sig() {
-    // Try the trivially-true tautology with the elaborated theory's
-    // MaudeSig (which adds h/1) instead of pair-only. If this hangs,
-    // the goal explosion is reproducible on a near-empty file.
+    // A trivially-true tautology proved against the elaborated theory's
+    // MaudeSig (which adds h/1) rather than the pair-only signature: the
+    // search must stay bounded even once the signature grows.
     let mp = match maude_path_local() {
         Some(p) => p,
         None => return,
@@ -309,7 +305,6 @@ fn probe_fresh_ordering_proof_shape() {
     let root = prove_lemma(&pt, "order", h, 200).expect("prove");
     eprintln!("=== fresh_ordering.spthy `order` ===");
     print_tree(&root, 0);
-    let _ = root.status;
 }
 
 #[test]
@@ -426,7 +421,6 @@ fn probe_safety_two_keys_proof_shape() {
     let root = prove_lemma(&pt, "fresh_distinct_times", h, 200).expect("prove");
     eprintln!("=== safety_two_keys.spthy `fresh_distinct_times` ===");
     print_tree(&root, 0);
-    let _ = root.status;
 }
 
 #[test]
@@ -444,7 +438,6 @@ fn probe_safety_unique_proof_shape() {
     let root = prove_lemma(&pt, "setup_unique", h, 200).expect("prove");
     eprintln!("=== safety_unique.spthy `setup_unique` ===");
     print_tree(&root, 0);
-    let _ = root.status;
 }
 
 /// Web-parity regression: under `SysRetention::KeepAll` (what the
@@ -501,14 +494,11 @@ end
     }
 }
 
-/// Drive the tiny_setup proof and inspect the proof-tree shape.
-/// We expect the search to:
-/// 1. Pick `Induction` (root).
-/// 2. In `non_empty_trace`, decompose Ex → Goal::Action(Setup(_))
-///    via simplify.
-/// 3. SolveGoal(Action) → instantiates the Setup rule, exploits
-///    its `Fr(~k)` premise, leaves no further goals.
-/// 4. Status reaches `Solved` (or `Contradictory` for some branches).
+/// Drive the tiny_setup proof and inspect the proof-tree shape: the root
+/// takes one of the three methods `rankProofMethods` can rank first here,
+/// the `Ex` decomposes into a `Goal::Action(Setup(_))`, solving it
+/// instantiates the `Setup` rule via its `Fr(~k)` premise, and the search
+/// reaches `Solved`.
 #[test]
 fn prove_lemma_tiny_setup_drives_through_action_goal() {
     let h = match maude() {

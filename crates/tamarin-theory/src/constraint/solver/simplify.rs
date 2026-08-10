@@ -977,40 +977,38 @@ fn partial_atom_valuation_with(
                     }
                 }
             }
-            for (id, rule) in sys.nodes.iter() {
-                if id != &n {
-                    continue;
-                }
-                if rule.actions.iter().any(|a| a == &lnfa) {
-                    return Some(true);
-                }
-                // False direction: if no rule action could possibly
-                // AC-unify with `fa`, then the action is False at `n`
-                // in every model.  The AC-unifiability test is what keeps
-                // that sound: e.g. a Reveal_ltk rule's
-                // `RevLtk(?key)` action does unify with a Skolemised
-                // lemma guard `RevLtk(?A_skolem)`, so we must NOT
-                // mark the universal vacuously satisfied here — we
-                // return None and let `insert_implied_formulas_pass`
-                // enumerate the assignment and propagate the body.
-                let mut all_non_unif = true;
-                for a in &rule.actions {
-                    match crate::rule::unifiable_ln_facts(maude, &lnfa, a) {
-                        Ok(true) => {
-                            all_non_unif = false;
-                            break;
-                        }
-                        Ok(false) => {}
-                        Err(_) => {
-                            all_non_unif = false;
-                            break;
-                        }
+            // `node_rule` holds the FIRST `sys.nodes` entry per id
+            // (`or_insert`), so this lookup picks the same rule a linear
+            // first-match scan of `sys.nodes` would.
+            let rule = node_rule.get(&n).copied()?;
+            if rule.actions.iter().any(|a| a == &lnfa) {
+                return Some(true);
+            }
+            // False direction: if no rule action could possibly
+            // AC-unify with `fa`, then the action is False at `n`
+            // in every model.  The AC-unifiability test is what keeps
+            // that sound: e.g. a Reveal_ltk rule's
+            // `RevLtk(?key)` action does unify with a Skolemised
+            // lemma guard `RevLtk(?A_skolem)`, so we must NOT
+            // mark the universal vacuously satisfied here — we
+            // return None and let `insert_implied_formulas_pass`
+            // enumerate the assignment and propagate the body.
+            let mut all_non_unif = true;
+            for a in &rule.actions {
+                match crate::rule::unifiable_ln_facts(maude, &lnfa, a) {
+                    Ok(true) => {
+                        all_non_unif = false;
+                        break;
+                    }
+                    Ok(false) => {}
+                    Err(_) => {
+                        all_non_unif = false;
+                        break;
                     }
                 }
-                if all_non_unif {
-                    return Some(false);
-                }
-                return None;
+            }
+            if all_non_unif {
+                return Some(false);
             }
             None
         }
@@ -1311,7 +1309,7 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
 
     // Group `sys_actions` indices by fact name, once per pass.  Without the
     // index, the Action-guard arm of `try_match_all_guards::rec` would scan
-    // EVERY sys_action per recursion step, paying a `fact_name` String
+    // EVERY sys_action per recursion step, paying a `fact_tag_name` String
     // allocation plus a compare for each — O(paths · |sys_actions|)
     // allocations.  The name-keyed index narrows each arm to exactly the
     // actions such a scan's name filter accepts, in the SAME order (indices
@@ -1323,7 +1321,7 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
         tamarin_utils::FastMap::default();
     for (ai, (_, fa)) in sys_actions.iter().enumerate() {
         actions_by_name
-            .entry(fact_name(&fa.tag))
+            .entry(crate::fact::fact_tag_name(&fa.tag))
             .or_default()
             .push(ai as u32);
     }
@@ -1649,18 +1647,16 @@ fn try_match_all_guards(
             // pass, exposing trivially-true implications to the dedup
             // logic — matching Haskell's separation of atom valuation
             // into its own pass.
-            let surviving_atoms: Vec<tamarin_parser::ast::Atom> =
-                other_guards.iter().map(|g| subst_atom(g, acc)).collect();
+            let surviving_gatoms: Vec<crate::guarded::GAtom> = other_guards
+                .iter()
+                .map(|g| crate::guarded::atom_to_gatom_free(&subst_atom(g, acc)))
+                .collect();
             let body_subst = subst_guarded(body, acc);
             // Mirror Haskell's `gall [] otherAtoms succedent` smart-
             // constructor (Guarded.hs:447-451):
             //   gall _ []   gf              = gf
             //   gall _ _    gf | gf == gtrue = gtrue
             //   gall ss atos gf             = GGuarded All ss atos gf
-            let surviving_gatoms: Vec<crate::guarded::GAtom> = surviving_atoms
-                .iter()
-                .map(crate::guarded::atom_to_gatom_free)
-                .collect();
             let implied = crate::guarded::gall(Vec::new(), surviving_gatoms, body_subst);
             // Maude unification mints fresh `~mw#N` witnesses on every
             // call, so structurally-identical derivations from the
@@ -2072,11 +2068,6 @@ fn combine_substs(
         }
     }
     Some(out)
-}
-
-/// Helper: extract the fact tag's name string.
-fn fact_name(tag: &crate::fact::FactTag) -> String {
-    crate::fact::fact_tag_name(tag)
 }
 
 /// True iff a parser-AST term mentions any `VarSpec` whose
@@ -2603,7 +2594,7 @@ fn enforce_fresh_node_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
     }
     let mut changed = ChangeIndicator::Unchanged;
     let mut hit_contra = false;
-    for (_rule, ids) in buckets {
+    for (_rule, mut ids) in buckets {
         if ids.len() < 2 {
             continue;
         }
@@ -2612,13 +2603,11 @@ fn enforce_fresh_node_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
         // `M.toList (get sNodes se)` (node-id-sorted) and is stably grouped
         // by the rule, so `mergers ((keep):remove)` keeps the LOWEST node-id
         // in each group and emits `Equal iKeep other`.  RS builds `buckets`
-        // by scanning `sys.nodes` in Vec (production) order, so `ids[0]` was
-        // whichever same-rule node happened to be created first, NOT the
-        // lowest id.  Sort each bucket's ids to node-id order so `keep` is
-        // the lowest, matching HS exactly.  (Distinct Fresh rules give
-        // disjoint node sets, so per-group merges don't interact — bucket
-        // order is immaterial; only the in-group keep-direction matters.)
-        let mut ids = ids;
+        // by scanning `sys.nodes` in Vec (production) order, so a bucket's
+        // ids arrive in creation order, not node-id order; sort each bucket
+        // so `keep` is the lowest, matching HS exactly.  (Distinct Fresh
+        // rules give disjoint node sets, so per-group merges don't interact
+        // — bucket order is immaterial; only the keep-direction matters.)
         ids.sort();
         let keep = ids[0];
         let eqs: Vec<_> = ids
@@ -3427,10 +3416,10 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
             .filter(|(_, r)| r.conclusions.len() == 1 && r.conclusions[0].is_linear())
             .map(|(id, _)| *id)
             .collect();
-    // edge_map: NodeConc → NodeId (only first edge per conc is needed since the
-    // source case has at most one outgoing edge per conc).  Built directly from
-    // the live edges; the resulting OWNED map decouples it from the later `red`
-    // mutation, so no `edges` snapshot clone is needed.
+    // edge_map: NodeConc → NodeId.  A source case has at most one outgoing
+    // edge per conclusion, so `collect` never has a duplicate key to resolve.
+    // Built directly from the live edges; the resulting OWNED map decouples it
+    // from the later `red` mutation, so no `edges` snapshot clone is needed.
     let edge_map: std::collections::BTreeMap<
         crate::constraint::constraints::NodeConc,
         crate::constraint::constraints::NodeId,
@@ -3894,7 +3883,9 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
     // Pre-collect the existing `gnotAtom (EqE s t)` inequalities from
     // formulas + solved_formulas so case (4) below can skip when we
     // already know s ≠ t.  Mirrors HS `inequalities` set
-    // (Simplify.hs).
+    // (Simplify.hs).  Only the `(s, t)` orientation is stored; every
+    // lookup below probes both orientations, so the set is a pure
+    // lookup table (never iterated) and its orientation is unobservable.
     let inequalities: std::collections::BTreeSet<(
         tamarin_term::lterm::LNTerm,
         tamarin_term::lterm::LNTerm,
@@ -3932,8 +3923,7 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
                         crate::elaborate::term_to_lnterm(&s),
                         crate::elaborate::term_to_lnterm(&t),
                     ) {
-                        set.insert((sl.clone(), tl.clone()));
-                        set.insert((tl, sl));
+                        set.insert((sl, tl));
                     }
                 }
             }
@@ -3945,16 +3935,19 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
     //   updatedFormulas == oldFormulas && null newLesses → Unchanged.
     // HS `oldFormulas = sFormulas ∪ sSolvedFormulas`.  `Guarded` is not
     // `Ord`, so we model the Set as a sorted-by-`cmp_guarded` deduped
-    // Vec for the `==` comparison below.
-    let formula_set = |red: &Reduction| -> Vec<crate::guarded::Guarded> {
-        let mut v: Vec<crate::guarded::Guarded> = red
+    // Vec for the `==` comparison below.  The elements are the stored
+    // `Arc`s: `Guarded` is `PartialEq` but not `Eq`, so `Arc`'s `==` and
+    // `dedup` compare pointees by value exactly as owned clones would —
+    // without deep-cloning every formula twice per pass.
+    let formula_set = |red: &Reduction| -> Vec<std::sync::Arc<crate::guarded::Guarded>> {
+        let mut v: Vec<std::sync::Arc<crate::guarded::Guarded>> = red
             .sys
             .formulas
             .iter()
             .chain(red.sys.solved_formulas.iter())
-            .map(|f| f.as_ref().clone())
+            .cloned()
             .collect();
-        v.sort_by(crate::guarded::cmp_guarded);
+        v.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
         v.dedup();
         v
     };
@@ -4145,7 +4138,7 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
                     // The node-id equality `i = j` is inserted as a
                     // deferred formula; `insertFormula`→`insertAtom`→
                     // `solveTermEqs SplitNow [Equal (varTerm i) (varTerm j)]`
-                    // (identical to HS `solveNodeIdEqs`, Reduction.hs:956)
+                    // (identical to HS `solveNodeIdEqs`, Reduction.hs:762-763)
                     // writes the `i := j` substitution into the eq-store,
                     // and the NEXT simplify iteration's `substSystem`
                     // performs the node merge + shape-mismatch contradiction.
@@ -5230,26 +5223,24 @@ fn nat_subterm_equalities(
             return Vec::new();
         }
         let one = nat_one_term();
-        let l_flat: Vec<LNTerm> = flattened_ac_terms(AcSym::NatPlus, a)
-            .into_iter()
-            .cloned()
-            .collect();
-        let r_flat: Vec<LNTerm> = flattened_ac_terms(AcSym::NatPlus, b)
-            .into_iter()
-            .cloned()
-            .collect();
+        // `flattened_ac_terms` borrows out of `a`/`b`, so the summands are
+        // inspected in place — no per-summand clone.
+        let l_flat: Vec<&LNTerm> = flattened_ac_terms(AcSym::NatPlus, a);
+        let r_flat: Vec<&LNTerm> = flattened_ac_terms(AcSym::NatPlus, b);
         let l_vars: Vec<LVar> = l_flat
             .iter()
+            .copied()
             .filter(|t| *t != &one)
             .filter_map(|t| get_var(t).copied())
             .collect();
         let r_vars: Vec<LVar> = r_flat
             .iter()
+            .copied()
             .filter(|t| *t != &one)
             .filter_map(|t| get_var(t).copied())
             .collect();
-        let l_ones = l_flat.iter().filter(|t| *t == &one).count() as i64;
-        let r_ones = r_flat.iter().filter(|t| *t == &one).count() as i64;
+        let l_ones = l_flat.iter().filter(|t| ***t == one).count() as i64;
+        let r_ones = r_flat.iter().filter(|t| ***t == one).count() as i64;
         let total_vars = l_vars.len() + r_vars.len();
         if total_vars == 1 {
             let d: i64 = 2 * (r_ones - l_ones - 1);
@@ -5272,15 +5263,14 @@ fn nat_subterm_equalities(
             for v in &r_vars {
                 froms.push((false, *v));
             }
-            // `tos = map (first not) (reverse froms)`
-            let mut tos: Vec<Vertex> = froms.iter().rev().map(|(s, v)| (!s, *v)).collect();
-            let mut out = Vec::with_capacity(2);
-            for _ in 0..2 {
-                let f = froms.remove(0);
-                let t = tos.remove(0);
-                out.push(((f, t), d));
-            }
-            out
+            // `tos = map (first not) (reverse froms)`; `froms` and `tos` both
+            // hold exactly the two vars, so zipping pairs them positionally.
+            let tos: Vec<Vertex> = froms.iter().rev().map(|(s, v)| (!s, *v)).collect();
+            froms
+                .into_iter()
+                .zip(tos)
+                .map(|(f, t)| ((f, t), d))
+                .collect()
         } else {
             Vec::new()
         }
@@ -5459,17 +5449,17 @@ fn nat_subterm_equalities(
                 stack.push(node);
                 on_stack[node] = true;
             }
-            let neighbours = succ.get(&node).cloned().unwrap_or_default();
+            // Borrowed, not cloned: `succ` outlives the whole walk and the
+            // only mutation below is to `work`/`lowlinks`/`stack`.
+            let neighbours: &[usize] = succ.get(&node).map(Vec::as_slice).unwrap_or(&[]);
             if pi < neighbours.len() {
                 let w = neighbours[pi];
-                let last = work.last_mut().unwrap();
-                last.1 += 1;
+                work.last_mut().unwrap().1 += 1;
                 if indices[w].is_none() {
                     work.push((w, 0));
                     continue;
                 } else if on_stack[w] {
-                    let new_low = lowlinks[node].min(indices[w].unwrap());
-                    lowlinks[node] = new_low;
+                    lowlinks[node] = lowlinks[node].min(indices[w].unwrap());
                 }
             } else {
                 if lowlinks[node] == indices[node].unwrap() {
@@ -5486,8 +5476,7 @@ fn nat_subterm_equalities(
                 }
                 work.pop();
                 if let Some(&(parent, _)) = work.last() {
-                    let new_low = lowlinks[parent].min(lowlinks[node]);
-                    lowlinks[parent] = new_low;
+                    lowlinks[parent] = lowlinks[parent].min(lowlinks[node]);
                 }
             }
         }

@@ -59,9 +59,7 @@ pub fn parse_proof_tree(raw: &str) -> Result<ParsedProofTree, ProofTreeParseErro
     let mut p = TreeParser {
         lx: Lexer::new(raw),
     };
-    p.lx.skip_ws();
     let tree = p.proof_skeleton()?;
-    p.lx.skip_ws();
     // Any trailing junk is tolerated — likely the outer `qed` from a
     // higher-level case block.  HS proofSkeleton consumes proper `qed`
     // inside interProof; anything left is fine for our purposes (caller's

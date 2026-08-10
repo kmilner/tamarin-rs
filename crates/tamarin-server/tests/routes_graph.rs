@@ -104,7 +104,8 @@ async fn interactive_graph_def_returns_dot() {
     let body = res.text().await.expect("text");
     // The route answers `D.showDot "G"`'s container verbatim (`dotGraphString`,
     // `src/Web/Theory.hs:2312-2318`): the QUOTED digraph id, and the blank line
-    // `"\n}\n"` leaves before the closing brace (`src/Text/Dot.hs:246-248`).
+    // `"\n}\n"` leaves before the closing brace
+    // (`lib/utils/src/Text/Dot.hs:246-248`).
     // The document between them is pinned byte for byte against the oracle by
     // `interactive_graph_def_renders_source_cases`.
     assert!(body.starts_with("digraph \"G\" {\n"), "header: {body:.40}");
@@ -270,7 +271,7 @@ async fn graph_json_unresolvable_proof_path_is_empty_body() {
 async fn graph_json_unhandled_path_is_internal_error() {
     // `graphJsonThyPath` handles only `TheorySource` / `TheoryProof`;
     // everything else hits `error "Unhandled theory path. This is a bug."`
-    // (`src/Web/Theory.hs:1316`), which Yesod renders as its 500 page — the
+    // (`src/Web/Theory.hs:1318`), which Yesod renders as its 500 page — the
     // `defaultLayout` frame around `<h1>Internal Server Error</h1>` and the
     // exception text, byte-for-byte the captured Haskell response.
     let s = start_server_with_theory("issue193.spthy").await;

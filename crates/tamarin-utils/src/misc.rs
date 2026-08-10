@@ -53,7 +53,7 @@ pub fn duplicate<A: Clone>(x: A) -> (A, A) {
 // -- List / set predicates ----------------------------------------------------
 
 /// `subsetOf xs ys`: whether every element of `xs` appears in `ys`.
-pub fn subset_of<T: Ord + Clone>(xs: &[T], ys: &[T]) -> bool {
+pub fn subset_of<T: Ord>(xs: &[T], ys: &[T]) -> bool {
     if xs.is_empty() {
         return true;
     }
@@ -121,27 +121,20 @@ where
 /// with `=` padding stripped (matching the Haskell `C8.init` after base64).
 pub fn string_sha256(s: &str) -> String {
     let digest = Sha256::digest(s.as_bytes());
-    let mut out = B64.encode(digest);
+    let mut out = B64.encode(digest).into_bytes();
     // Haskell does `C8.init` (drop the final byte *unconditionally*) and then
     // replaces `/`→`_`, `+`→`-`. The SHA-256 digest is always 32 bytes, so its
-    // standard base64 is always 44 chars ending in exactly one `=` (32 mod 3 ==
-    // 2 → one pad char). `out.pop()` removes the final *char* (Unicode scalar);
-    // since base64 output is ASCII, that final char is exactly one byte (`=`),
-    // so this matches Haskell's byte-based `C8.init`.
+    // standard base64 is always 44 bytes ending in exactly one `=` (32 mod 3 ==
+    // 2 → one pad char), and popping the last byte is exactly `C8.init`.
     out.pop();
-    // In-place ASCII byte substitution: `/`→`_`, `+`→`-`. Both are
-    // single-ASCII-for-single-ASCII and length-preserving, so UTF-8 validity is
-    // preserved and the resulting String is identical to the round-trip form.
-    // SAFETY: the base64 alphabet is pure ASCII and we only swap one ASCII byte
-    // for another, keeping the buffer valid UTF-8.
-    for b in unsafe { out.as_mut_vec() } {
+    for b in &mut out {
         match *b {
             b'/' => *b = b'_',
             b'+' => *b = b'-',
             _ => {}
         }
     }
-    out
+    String::from_utf8(out).expect("base64 alphabet and both substitutions are ASCII")
 }
 
 // -- Partitions ---------------------------------------------------------------
@@ -404,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn non_trivial_excludes_singleton_grouping() {
+    fn non_trivial_excludes_the_one_group_partition() {
         let xs = vec![1, 2, 3];
         let all = partitions(&xs);
         let nt = non_trivial_partitions(&xs);

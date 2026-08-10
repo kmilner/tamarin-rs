@@ -51,29 +51,34 @@ async fn intdot_js_or_data(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> Response {
-    if name.starts_with("intdot-") && name.ends_with(".es.js") {
-        if let Some(ref dist) = state.cfg.frontend_dist {
-            if let Some(resp) = try_file(&dist.join(&name), "application/javascript").await {
-                return resp;
-            }
-        }
-    }
-    // Fall through to data/js/<name>.
-    fallback_to_data(state, "js", &name).await
+    dist_or_data(state, "js", ".es.js", "application/javascript", name).await
 }
 
+/// `/static/css/<name>` — the [`intdot_js_or_data`] rule for `intdot-*.css`.
 async fn intdot_css_or_data(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> Response {
-    if name.starts_with("intdot-") && name.ends_with(".css") {
-        if let Some(ref dist) = state.cfg.frontend_dist {
-            if let Some(resp) = try_file(&dist.join(&name), "text/css").await {
+    dist_or_data(state, "css", ".css", "text/css", name).await
+}
+
+/// Serve `frontend/dist/<name>` for an `intdot-*<suffix>` asset, falling
+/// through to `data/<subdir>/<name>` for anything else (or a dist miss).
+async fn dist_or_data(
+    state: Arc<AppState>,
+    subdir: &str,
+    suffix: &str,
+    mime: &str,
+    name: String,
+) -> Response {
+    if name.starts_with("intdot-") && name.ends_with(suffix) {
+        if let Some(dist) = &state.cfg.frontend_dist {
+            if let Some(resp) = try_file(&dist.join(&name), mime).await {
                 return resp;
             }
         }
     }
-    fallback_to_data(state, "css", &name).await
+    fallback_to_data(state, subdir, &name).await
 }
 
 async fn fallback_to_data(state: Arc<AppState>, subdir: &str, name: &str) -> Response {
@@ -145,7 +150,7 @@ pub fn resolve_data_dir(explicit: Option<PathBuf>) -> PathBuf {
     }
     for c in ["data", "tamarin-prover/data", "../data", "../../data"] {
         let p = Path::new(c);
-        if p.exists() && p.is_dir() {
+        if p.is_dir() {
             if let Ok(abs) = std::fs::canonicalize(p) {
                 return abs;
             }

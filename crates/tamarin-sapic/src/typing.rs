@@ -36,13 +36,14 @@ use crate::bindings::{bindings_act, bindings_comb};
 /// and deduplicated).  We return the underlying `LVar`s used to seed the
 /// avoidance state for `renameUnique`.
 fn proc_lvars(p: &PlainProcess) -> Vec<LVar> {
-    let mut set = std::collections::BTreeSet::new();
-    collect_proc_vars(p, &mut set);
     // `avoidPreciseVars . map (\(SapicLVar lvar _) -> lvar)` — strip types.
-    set.into_iter().map(|sv| sv.var).collect()
+    vars_proc(p).into_iter().map(|sv| sv.var).collect()
 }
 
-fn collect_proc_vars(p: &PlainProcess, out: &mut std::collections::BTreeSet<SapicLVar>) {
+fn collect_proc_vars<A>(
+    p: &Process<A, SapicLVar>,
+    out: &mut std::collections::BTreeSet<SapicLVar>,
+) {
     match p {
         Process::Null(_) => {}
         Process::Action(a, _, body) => {
@@ -323,7 +324,7 @@ fn rename_comb(
     }
 }
 
-/// `renameUnique'` (Typing.hs:239-261).  `subst` is the *outstanding* renaming
+/// `renameUnique'` (Typing.hs:242-261).  `subst` is the *outstanding* renaming
 /// applied at this node (`apply initSubst p`); `fresh` mints fresh indices.
 /// For each binder we (1) mint a fresh copy of every bound variable, (2) record
 /// the inverse renaming in the node's `back_substitution` annotation, and
@@ -334,7 +335,7 @@ fn rename_unique_go(
     p: &PlainProcess,
 ) -> PlainProcess {
     // `let p' = apply initSubst p` — apply the outstanding renaming to the
-    // WHOLE subtree (HS Typing.hs:239-269, see line 243); the children inherit the rename, then
+    // WHOLE subtree (HS Typing.hs:242-261, see line 246); the children inherit the rename, then
     // are descended into with only the NEW fresh subst for this node's binders.
     let p_prime = rename_process_full(subst, p);
     match p_prime {
@@ -362,7 +363,7 @@ fn rename_unique_go(
 }
 
 /// `apply subst p` over an entire process subtree (terms + bound vars), used to
-/// mirror HS's `apply initSubst p` (Typing.hs:239-269, see line 243).  Annotations are untouched
+/// mirror HS's `apply initSubst p` (Typing.hs:242-261, see line 246).  Annotations are untouched
 /// here — `renameUnique_go` updates `back_substitution` per node afterwards.
 fn rename_process_full(subst: &BTreeMap<LVar, LVar>, p: &PlainProcess) -> PlainProcess {
     match p {
@@ -381,7 +382,7 @@ fn rename_process_full(subst: &BTreeMap<LVar, LVar>, p: &PlainProcess) -> PlainP
     }
 }
 
-/// `mkSubst` (Typing.hs:267-269): for each bound variable mint a fresh LVar
+/// `mkSubst` (Typing.hs:266-272): for each bound variable mint a fresh LVar
 /// copy (`freshLVar name sort`), returning the forward renaming `(v -> v')`
 /// and the inverse `(v' -> v)` as a `Subst Name LVar` for back-substitution.
 fn mk_subst(
@@ -400,7 +401,7 @@ fn mk_subst(
     (fwd, inv)
 }
 
-/// `renameUnique` (Typing.hs:232-237): seed the fresh-var supply so it avoids
+/// `renameUnique` (Typing.hs:232-240): seed the fresh-var supply so it avoids
 /// every variable already present, then run `renameUnique'` from the identity
 /// substitution.
 pub fn rename_unique(p: &PlainProcess) -> PlainProcess {
@@ -440,7 +441,7 @@ fn smaller_type(t1: &SapicType, t2: &SapicType) -> bool {
     }
 }
 
-/// `sqcap` (Typing.hs:46-51): more specific of two types, error if they clash.
+/// `sqcap` (Typing.hs:45-49): more specific of two types, error if they clash.
 fn sqcap(t1: &SapicType, t2: &SapicType) -> Result<SapicType, String> {
     if smaller_type(t1, t2) {
         Ok(t1.clone())
@@ -456,7 +457,7 @@ fn default_function_type(n: usize) -> (Vec<SapicType>, SapicType) {
     (vec![None; n], None)
 }
 
-/// True iff `fs` is a `viewTerm2`-SPECIAL NoEq symbol (Term/Raw.hs:183-196):
+/// True iff `fs` is a `viewTerm2`-SPECIAL NoEq symbol (Term/Raw.hs:191-204):
 /// `pair`, `exp`, `pmult`, `diff`, `inv`, `one`, `natOne`, `dhNeutral`.  HS's
 /// `viewTerm2` renders these as dedicated constructors (`FPair`/`FExp`/…) rather
 /// than `FAppNoEq`, so `typeWith` treats them via the polymorphic `viewTerm`
@@ -478,7 +479,7 @@ fn is_special_viewterm2_sym(fs: &NoEqSym) -> bool {
         || (n == DH_NEUTRAL_SYM_STRING && fs.arity == 0)
 }
 
-/// `typeWith` (Typing.hs:73-114).  Types term `t` against target `tt`,
+/// `typeWith` (Typing.hs:63-124).  Types term `t` against target `tt`,
 /// returning the typed term and its inferred type, updating `env`.
 fn type_with(
     env: &mut TypingEnvironment,
@@ -510,7 +511,7 @@ fn type_with(
                 // HS `typeWith` dispatches on `viewTerm2 t`: a NoEq application
                 // whose head is one of the SPECIAL symbols (`pair`, `exp`, `inv`,
                 // `pmult`, `diff`, `one`, `natOne`, `dhNeutral`) does NOT view as
-                // `FAppNoEq` (Term/Raw.hs:183-196) — it views as its own
+                // `FAppNoEq` (Term/Raw.hs:191-204) — it views as its own
                 // constructor (`FPair`, `FExp`, …).  None of those match the
                 // `FAppNoEq fs ts` case (Typing.hs:63-124, see line 83), so they fall through to
                 // the polymorphic `FApp fs ts <- viewTerm t` branch (Typing.hs:63-124, see line 102)
@@ -602,7 +603,7 @@ fn merge_fun_types(
     Ok((ins, out))
 }
 
-/// `typeProcess` (Typing.hs:135-167) via `traverseProcess` (Process.hs:221-234):
+/// `typeProcess` (Typing.hs:135-168) via `traverseProcess` (Process.hs:221-234):
 ///   1. `fAct`/`fComb` — insert this node's bound vars (PRE-order, on the way
 ///      down);
 ///   2. recurse into the subtree (`p''<- traverseProcess … p'`);
@@ -656,7 +657,7 @@ fn type_process(env: &mut TypingEnvironment, p: &PlainProcess) -> Result<PlainPr
     }
 }
 
-/// `insertVar` (Typing.hs:163-167).
+/// `insertVar` (Typing.hs:162-167).
 fn insert_var(env: &mut TypingEnvironment, v: &SapicLVar) -> Result<(), String> {
     if env.vars.contains_key(&v.var) {
         return Err(format!("variable bound twice: {:?}", v.var));
@@ -665,7 +666,7 @@ fn insert_var(env: &mut TypingEnvironment, v: &SapicLVar) -> Result<(), String> 
     Ok(())
 }
 
-/// `typeWithVar` (Typing.hs:159-161): a standalone bound variable is already
+/// `typeWithVar` (Typing.hs:158-160): a standalone bound variable is already
 /// correctly typed; if untyped, give it `defaultSapicType` (= `Nothing`).
 fn type_with_var(v: &SapicLVar) -> SapicLVar {
     match &v.stype {
@@ -731,7 +732,7 @@ fn type_action(
                 .iter()
                 .map(|f| type_event_fact(env, f))
                 .collect::<Result<_, _>>()?,
-            // `rest` formulas use `typeWithFact = return` (Typing.hs:135-168, see line 162) — left
+            // `rest` formulas use `typeWithFact = return` (Typing.hs:135-168, see line 161) — left
             // untyped, matching HS.
             rest: rest.clone(),
             match_vars: match_vars.iter().map(type_with_var).collect(),
@@ -766,7 +767,7 @@ fn type_comb(
     }
 }
 
-/// `typeWith' t = fst <$> typeWith t Nothing` (Typing.hs:135-168, see line 155).
+/// `typeWith' t = fst <$> typeWith t Nothing` (Typing.hs:135-168, see line 157).
 fn type_term(env: &mut TypingEnvironment, t: &SapicTerm) -> Result<SapicTerm, String> {
     let (t1, _) = type_with(env, t, &None)?;
     Ok(t1)
@@ -924,8 +925,9 @@ pub fn type_and_rename_process(
 /// `S.toList (varsProc p)` (Process.hs:361-362): every SAPIC variable that
 /// occurs anywhere in `p`, as the sorted deduplicated `Set` list.  Two
 /// occurrences of the same `LVar` under DIFFERENT `stype` tags are distinct
-/// set elements, exactly as in HS.
-pub(crate) fn vars_proc(p: &PlainProcess) -> Vec<SapicLVar> {
+/// set elements, exactly as in HS.  Generic in the annotation, as HS's
+/// `Foldable (Process ann)` is.
+pub(crate) fn vars_proc<A>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> {
     let mut set = std::collections::BTreeSet::new();
     collect_proc_vars(p, &mut set);
     set.into_iter().collect()

@@ -22,9 +22,9 @@
 //! `abstract_rule_and_variants`, which is the HS-faithful production
 //! path used by `run.rs` and the constraint solver's `context.rs`.
 //! `variants_proto_rule` is a lighter helper that runs steps 2-5
-//! directly on the rule's free variables (no abstraction); it is
-//! retained for the callers that already have terms in a form Maude
-//! can variant-narrow.
+//! directly on the rule's terms (no abstraction).  `variant_substs_for_rule`
+//! wraps it for `context.rs`'s non-reducible branch, where there is
+//! nothing to abstract.
 
 use tamarin_term::lterm::{LNTerm, LVar, Name};
 use tamarin_term::maude_proc::{MaudeError, MaudeHandle, MaudePool};
@@ -96,7 +96,7 @@ pub fn variants_proto_rule(
     let substs: Vec<LNSubstVFresh> = raw.into_iter().map(LNSubstVFresh::from_list).collect();
     // HS-faithful `simpDisjunction hnd (const (const False)) (Disj substs)`
     // (RuleVariants.hs:61-134, see line 82).  Routes through `simp1`'s full pipeline
-    // including `simpSingleton` (EquationStore.hs:383-388, see line 391, invoked at 361) — that pass
+    // including `simpSingleton` (EquationStore.hs:411-417, invoked from simp1 at 381) — that pass
     // folds a singleton-variant disj into the free subst, which is
     // what HS's `commonSubst` carries.  Without this, the SplitG
     // residual retains entries that HS bakes into the rule body via
@@ -186,31 +186,18 @@ fn make_proto_rule_ac(
     // subst to those (HS: `map (restrictVFresh (frees (prems, concs, acts, newvs))) freshSubsts0`).
     use tamarin_term::lterm::HasFrees;
     let mut frees_set: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
-    for f in &premises {
-        for t in f.terms.iter() {
-            t.for_each_free(&mut |v| {
-                frees_set.insert(*v);
-            });
-        }
-    }
-    for f in &conclusions {
-        for t in f.terms.iter() {
-            t.for_each_free(&mut |v| {
-                frees_set.insert(*v);
-            });
-        }
-    }
-    for f in &actions {
-        for t in f.terms.iter() {
-            t.for_each_free(&mut |v| {
-                frees_set.insert(*v);
-            });
-        }
-    }
-    for t in &new_vars {
-        t.for_each_free(&mut |v| {
+    {
+        let mut visit = |v: &LVar| {
             frees_set.insert(*v);
-        });
+        };
+        for f in premises.iter().chain(&conclusions).chain(&actions) {
+            for t in f.terms.iter() {
+                t.for_each_free(&mut visit);
+            }
+        }
+        for t in &new_vars {
+            t.for_each_free(&mut visit);
+        }
     }
     let frees_vec: Vec<LVar> = frees_set.into_iter().collect();
     let variants: Vec<LNSubstVFresh> = variants
@@ -353,33 +340,27 @@ pub fn abstract_rule_and_variants(
     // Avoid clashes with the rule's existing free vars.  HS:
     // `convertRule \`evalFreshTAvoiding\` ru` — Fresh counter starts at
     // (max idx of rule's free vars) + 1.
-    let avoid_max: u64 = {
-        let m = std::cell::Cell::new(0u64);
-        let visit = |v: &LVar| {
-            if v.idx > m.get() {
-                m.set(v.idx);
+    let mut avoid_max: u64 = 0;
+    {
+        let mut visit = |v: &LVar| {
+            if v.idx > avoid_max {
+                avoid_max = v.idx;
             }
         };
-        for f in &rule.premises {
-            f.terms
-                .iter()
-                .for_each(|t| t.for_each_free(&mut |v| visit(v)));
-        }
-        for f in &rule.actions {
-            f.terms
-                .iter()
-                .for_each(|t| t.for_each_free(&mut |v| visit(v)));
-        }
-        for f in &rule.conclusions {
-            f.terms
-                .iter()
-                .for_each(|t| t.for_each_free(&mut |v| visit(v)));
+        for f in rule
+            .premises
+            .iter()
+            .chain(&rule.actions)
+            .chain(&rule.conclusions)
+        {
+            for t in f.terms.iter() {
+                t.for_each_free(&mut visit);
+            }
         }
         for t in &rule.new_vars {
-            t.for_each_free(&mut |v| visit(v));
+            t.for_each_free(&mut visit);
         }
-        m.get()
-    };
+    }
     // HS-faithful: `convertRule \`evalFreshTAvoiding\` ru`
     // (RuleVariants.hs:61-134, see line 64) runs the variant computation in a Fresh monad
     // whose counter starts at `max(ru.idxs)+1` PER RULE.  Without this,
@@ -495,13 +476,12 @@ pub fn abstract_rule_and_variants(
     let mut visit = |v: &LVar| {
         leaf_set.insert(*v);
     };
-    for f in &rule.premises {
-        f.terms.iter().for_each(|t| t.for_each_free(&mut visit));
-    }
-    for f in &rule.actions {
-        f.terms.iter().for_each(|t| t.for_each_free(&mut visit));
-    }
-    for f in &rule.conclusions {
+    for f in rule
+        .premises
+        .iter()
+        .chain(&rule.actions)
+        .chain(&rule.conclusions)
+    {
         f.terms.iter().for_each(|t| t.for_each_free(&mut visit));
     }
     for t in &rule.new_vars {
@@ -605,10 +585,10 @@ pub fn abstract_rule_and_variants(
         return Ok(None);
     }
 
-    // HS-faithful `msubstToLSubstVFresh` (Maude/Types.hs:123-127, see line 130) returns
+    // HS-faithful `msubstToLSubstVFresh` (Maude/Types.hs:137-146, see line 144) returns
     // `removeRenamings $ substFromListVFresh slist` — i.e. EVERY raw Maude
     // variant has its pure-rename entries dropped as part of the
-    // back-conversion (Process.hs:270-282, see line 273 `map (msubstToLSubstVFresh bindings)
+    // back-conversion (Maude/Process.hs:271 `map (msubstToLSubstVFresh bindings)
     // <$> parseVariantsReply`).  So by the time HS's `variantSubsts`
     // (RuleVariants.hs:61-134, see line 72) reach BOTH `isFreshRedundant vsubst`
     // (RuleVariants.hs:61-134, see line 77) AND `composeVFresh vsubst abstractionSubst`
@@ -638,31 +618,23 @@ pub fn abstract_rule_and_variants(
     // and collapse at perform_split (split_case ordering bug).
     let abstr_frees: Vec<LVar> = {
         let mut s: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
-        for f in &abstracted_rule.premises {
-            for t in f.terms.iter() {
-                t.for_each_free(&mut |v| {
-                    s.insert(*v);
-                });
-            }
-        }
-        for f in &abstracted_rule.actions {
-            for t in f.terms.iter() {
-                t.for_each_free(&mut |v| {
-                    s.insert(*v);
-                });
-            }
-        }
-        for f in &abstracted_rule.conclusions {
-            for t in f.terms.iter() {
-                t.for_each_free(&mut |v| {
-                    s.insert(*v);
-                });
-            }
-        }
-        for t in &abstracted_rule.new_vars {
-            t.for_each_free(&mut |v| {
+        {
+            let mut visit = |v: &LVar| {
                 s.insert(*v);
-            });
+            };
+            for f in abstracted_rule
+                .premises
+                .iter()
+                .chain(&abstracted_rule.actions)
+                .chain(&abstracted_rule.conclusions)
+            {
+                for t in f.terms.iter() {
+                    t.for_each_free(&mut visit);
+                }
+            }
+            for t in &abstracted_rule.new_vars {
+                t.for_each_free(&mut visit);
+            }
         }
         s.into_iter().collect()
     };
@@ -759,7 +731,7 @@ pub fn abstract_rule_and_variants(
         .into_iter()
         .map(|pairs| {
             // `pairs` are already removeRenamings'd (applied once up front,
-            // mirroring HS's `msubstToLSubstVFresh`, Maude/Types.hs:123-127, see line 130).  HS's
+            // mirroring HS's `msubstToLSubstVFresh`, Maude/Types.hs:137-146, see line 144).  HS's
             // identity variant therefore arrives EMPTY here, so composeVFresh
             // operates on empty s1_0 and adds renamings for the abstraction
             // subst's range vars (the rule's leaves, all at idx 0 from parser)
@@ -815,7 +787,7 @@ pub fn abstract_rule_and_variants(
     // RESIDUAL disjuncts that differ between variants.
     // HS-faithful: variantsProtoRule (RuleVariants.hs:61-134, see line 82) calls
     // `simpDisjunction hnd ...` with a Maude handle, which routes through
-    // `simp1`'s FULL pipeline including `simpSingleton` (EquationStore.hs:383-388, see line 391, invoked at 361).
+    // `simp1`'s FULL pipeline including `simpSingleton` (EquationStore.hs:411-417, invoked from simp1 at 381).
     // That pass folds a single-variant disj into the free subst — so the
     // residual returned to `makeRule` is `Nothing` and the variant subst
     // content gets baked into the rule body via commonSubst.  RS's
@@ -954,17 +926,12 @@ fn rule_renames_under_precise(rule: &ProtoRuleE) -> bool {
     let mut vars: Vec<LVar> = Vec::new();
     {
         let mut collect = |v: &LVar| vars.push(*v);
-        for f in &rule.premises {
-            for t in f.terms.iter() {
-                t.for_each_free(&mut collect);
-            }
-        }
-        for f in &rule.conclusions {
-            for t in f.terms.iter() {
-                t.for_each_free(&mut collect);
-            }
-        }
-        for f in &rule.actions {
+        for f in rule
+            .premises
+            .iter()
+            .chain(&rule.conclusions)
+            .chain(&rule.actions)
+        {
             for t in f.terms.iter() {
                 t.for_each_free(&mut collect);
             }
@@ -999,7 +966,7 @@ fn rule_renames_under_precise(rule: &ProtoRuleE) -> bool {
 /// substs.  Mirrors HS `Precise.evalFresh (renamePrecise x) Precise.nothingUsed`
 /// applied to a `Rule ProtoRuleACInfo` (variants live INSIDE info).
 ///
-/// HS traversal order (Rule.hs:279-292 `HasFrees (Rule i)`; Rule.hs:485-495
+/// HS traversal order (Rule.hs:291-306 `HasFrees (Rule i)`; Rule.hs:503-515
 /// `HasFrees ProtoRuleACInfo`; SubstVFresh.hs:196-202 `HasFrees SubstVFresh`):
 ///
 ///   mapFrees (Rule i ps cs as nvs) =
@@ -1052,7 +1019,7 @@ fn rename_precise_rule_with_variants(
     // name|attr|variants|breakers; name/attr/breakers are empty
     // (RuleAttributes, Theory/Model/Rule.hs:367-379), so effectively variants
     // Disj first (KEYS-ONLY per SubstVFresh.hs:196-202).  THEN prems, concs,
-    // acts, new_vars (Theory/Model/Rule.hs:291-298).
+    // acts, new_vars (Theory/Model/Rule.hs:303-306).
     for s in &substs {
         for (k, _t) in s.to_list() {
             import(&k, &mut state, &mut map);
@@ -1061,17 +1028,12 @@ fn rename_precise_rule_with_variants(
             // and shifts per-name counters away from HS.
         }
     }
-    for f in &rule.premises {
-        for t in f.terms.iter() {
-            t.for_each_free(&mut |v| import(v, &mut state, &mut map));
-        }
-    }
-    for f in &rule.conclusions {
-        for t in f.terms.iter() {
-            t.for_each_free(&mut |v| import(v, &mut state, &mut map));
-        }
-    }
-    for f in &rule.actions {
+    for f in rule
+        .premises
+        .iter()
+        .chain(&rule.conclusions)
+        .chain(&rule.actions)
+    {
         for t in f.terms.iter() {
             t.for_each_free(&mut |v| import(v, &mut state, &mut map));
         }

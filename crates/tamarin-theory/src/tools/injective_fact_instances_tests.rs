@@ -238,8 +238,7 @@ fn cross_rule_create_consume_is_not_injective() {
              has St in both prems and concs → must NOT be marked injective. \
              Haskell `simpleInjectiveFactInstances` checks the per-rule \
              `tag elem rPrems ru` condition.  Otherwise spurious less-atoms \
-             break Artificial::Fin_unique case_2.  (Memory: \
-             project_rust_injective_fact_candidate_filter.md)"
+             break Artificial::Fin_unique case_2."
     );
 }
 
@@ -270,11 +269,10 @@ fn persistent_facts_are_not_injective() {
     );
 }
 
-/// Arity-0 facts (no args) cannot have monotonic behaviour and
-/// must be excluded.  Per Haskell `behaviourLen = max 0 (arity-1)`
-/// is 0; combined with the candidate filter check, arity-0 facts
-/// get filtered.  Our impl drops them via the candidate loop's
-/// `if conc.terms.is_empty()` guard (HS `guard (not (null (factTerms conc)))`).
+/// Arity-0 facts (no args) have no first term to be injective ON, so the
+/// candidate loop drops them via its `if conc.terms.is_empty()` guard —
+/// HS `guard (not (null (factTerms conc)))`
+/// (InjectiveFactInstances.hs:131).
 #[test]
 fn arity_zero_facts_are_not_injective() {
     use crate::fact::{Fact, FactTag, Multiplicity};
@@ -312,14 +310,12 @@ fn builtin_facts_are_not_injective() {
         vec![],
     );
     let inj = simple_injective_fact_instances(&[&r], &Default::default());
-    // Out should NOT appear (only Proto tags are candidates).
+    // The rule's only round-tripped tag is `Out`, and only Proto tags are
+    // candidates, so nothing survives.  Asserting emptiness (rather than
+    // "no Out in the result") keeps the pin from passing vacuously.
     assert!(
-        inj.iter()
-            .all(|(t, _)| matches!(t, FactTag::Proto(_, _, _))),
-        "Only Proto facts are injective candidates"
-    );
-    assert!(
-        !inj.iter().any(|(t, _)| matches!(t, FactTag::Out)),
-        "Out is never injective"
+        inj.is_empty(),
+        "only Proto facts are injective candidates; got {:?}",
+        inj.iter().map(|(t, _)| *t).collect::<Vec<_>>()
     );
 }

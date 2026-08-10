@@ -3,7 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of HS `liftedAddProtoRule` (Theory/Text/Parser.hs:166-193) +
-//! `fromRuleRestriction` / `rewrite` (Theory/Model/Restriction.hs:89-161).
+//! `fromRuleRestriction` / `rewrite` (Theory/Model/Restriction.hs:90-162).
 //!
 //! Expands the `_restrict(...)` embedded-restriction construct that the
 //! parser captures into `Rule.embedded_restrictions: Vec<Formula>`
@@ -35,7 +35,7 @@ use tamarin_parser::ast as p;
 
 use crate::predicate_expand::{expand_formula, ExpandError};
 
-/// HS `varNow = LVar "NOW" LSortNode 0` (Restriction.hs:86-87, see line 87).  The implicit
+/// HS `varNow = LVar "NOW" LSortNode 0` (Restriction.hs:87-88).  The implicit
 /// timepoint variable bound by the generated `∀ … #NOW.` restriction.
 fn var_now() -> p::VarSpec {
     p::VarSpec {
@@ -46,7 +46,7 @@ fn var_now() -> p::VarSpec {
     }
 }
 
-/// HS `restrPrefix = "Restr_"` (Restriction.hs:129-130, see line 130).
+/// HS `restrPrefix = "Restr_"` (Restriction.hs:130-131).
 const RESTR_PREFIX: &str = "Restr_";
 
 /// Run the `_restrict` lifting pass over a parsed theory in place.
@@ -60,7 +60,7 @@ const RESTR_PREFIX: &str = "Restr_";
 /// theory's `predicate:` declarations first (HS `liftedExpandFormula`).
 /// `let` bindings are applied to the rule body before lifting so the
 /// abstracted terms see their expansions (HS applies `let` at parse time,
-/// Rule.hs:131, before `liftedAddProtoRule`).
+/// Parser/Rule.hs:133, before `liftedAddProtoRule`).
 pub fn lift_rule_restrictions(thy: &mut p::Theory) -> Result<(), ExpandError> {
     // Collect predicate definitions once (declared before the rules).
     let predicates: Vec<p::Predicate> = thy
@@ -196,7 +196,7 @@ pub fn lift_one_rule(
         // keeps it inlined.  The RS parser leaves it as `Var{name, Untagged,
         // idx 0}`; resolve those to `App(name, [])` here (an argument-less
         // `FApp` has no free-variable-containing args, so `rewrite`'s
-        // abstraction clauses at Restriction.hs:98-111 never fire on it), so
+        // abstraction clauses at Restriction.hs:99-112 never fire on it), so
         // a constant like `NormalReq` stays in the restriction formula
         // instead of becoming a fresh fact argument.
         let expanded = resolve_nullary_constants(&expanded, nullary);
@@ -213,7 +213,7 @@ pub fn lift_one_rule(
     Ok((restrictions, rule))
 }
 
-/// HS `fromRuleRestriction rname f` (Restriction.hs:140-161): produce the
+/// HS `fromRuleRestriction rname f` (Restriction.hs:141-162): produce the
 /// generated restriction plus the action fact inserted into the rule.
 fn from_rule_restriction(rname: &str, f: &p::Formula) -> (p::Restriction, p::Fact) {
     // HS `rewrite f` returns `(rewritten formula, M.Map LVar Term)`.
@@ -298,7 +298,7 @@ fn resolve_nullary_term(t: &p::Term, nullary: &BTreeSet<String>) -> p::Term {
 }
 
 /// HS `mkFact = protoFactAnn Linear (restrPrefix ++ rname) S.empty`
-/// (Restriction.hs:140-161, see line 161): a linear fact named `Restr_<rname>`.
+/// (Restriction.hs:162): a linear fact named `Restr_<rname>`.
 fn mk_fact(rname: &str, args: Vec<p::Term>) -> p::Fact {
     p::Fact {
         persistent: false,
@@ -309,7 +309,7 @@ fn mk_fact(rname: &str, args: Vec<p::Term>) -> p::Fact {
 }
 
 // =============================================================================
-// rewrite (HS Restriction.hs:89-127)
+// rewrite (HS Restriction.hs:90-128)
 // =============================================================================
 
 /// A fresh-variable substitution: maps each minted fresh var (by key) to
@@ -318,7 +318,7 @@ fn mk_fact(rname: &str, args: Vec<p::Term>) -> p::Fact {
 type RewriteSubst = BTreeMap<(String, u64), p::Term>;
 
 /// HS `rewrite f = runState (evalFreshT (traverseFormulaAtom fAt' f) 0) M.empty`
-/// (Restriction.hs:91-127, see line 95): traverse every term of every atom, abstracting
+/// (Restriction.hs:92-128, see line 96): traverse every term of every atom, abstracting
 /// subterms that contain free variables into fresh vars.  Returns the
 /// rewritten formula and the `{fresh ↦ original}` map.
 fn rewrite(f: &p::Formula) -> (p::Formula, RewriteSubst) {
@@ -427,7 +427,7 @@ fn rewrite_atom(a: &p::Atom, bound: &[VarKey], st: &mut RewriteState) -> p::Atom
     }
 }
 
-/// HS `fAt` (Restriction.hs:98-111): the per-term abstraction.
+/// HS `fAt` (Restriction.hs:99-112): the per-term abstraction.
 ///   - `Var v`, v free            → substitute (fresh var)
 ///   - `Var _`, v bound           → keep
 ///   - `FApp _ as`, any free & no bound → substitute the WHOLE term
@@ -588,8 +588,8 @@ fn dedup_first(vs: Vec<p::VarSpec>) -> Vec<p::VarSpec> {
 }
 
 /// HS `LVar` Ord: `compare idx <> compare sort <> compare name`
-/// (LTerm.hs:522-524).  LSort order: Pub < Fresh < Msg < Node < Nat
-/// (LTerm.hs:161-166).
+/// (LTerm.hs:546-548).  LSort order: Pub < Fresh < Msg < Node < Nat
+/// (the derived `Ord`'s constructor order, LTerm.hs:165-170).
 fn cmp_lvar(a: &p::VarSpec, b: &p::VarSpec) -> std::cmp::Ordering {
     a.idx
         .cmp(&b.idx)

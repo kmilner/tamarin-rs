@@ -78,7 +78,7 @@ impl<I> Rule<I> {
     }
 
     /// Add an action fact, prepended, unless already present. Port of HS
-    /// `addAction` (Rule.hs:1035-1039): `if act elem acts then unchanged else
+    /// `addAction` (Rule.hs:1108-1112): `if act elem acts then unchanged else
     /// act:acts`.
     pub fn add_action(&mut self, act: LNFact) {
         if !self.actions.contains(&act) {
@@ -112,8 +112,8 @@ impl<I> Rule<I> {
 // `HasFrees`, so this impl cannot recurse into it. This is sound because every
 // caller operates on `RuleACInst`, whose info (ProtoRuleACInstInfo /
 // IntrRuleACInfo) carries no free LVars. Note that Haskell's `HasFrees (Rule i)`
-// (Rule.hs:280-292) DOES fold over `info` first, and ProtoRuleEInfo/ProtoRuleACInfo
-// info (Rule.hs:474-477, see line 476, 486-489) carry frees (restrictions / variant keys); callers
+// (Rule.hs:291-306) DOES fold over `info` first, and ProtoRuleEInfo/ProtoRuleACInfo
+// info (Rule.hs:491-498, 503-515) carry frees (restrictions / variant keys); callers
 // that need those (ProtoRuleE/AC) must walk variants/restrictions separately, as
 // rule_variants.rs::rename_precise_rule_with_variants does.
 // =============================================================================

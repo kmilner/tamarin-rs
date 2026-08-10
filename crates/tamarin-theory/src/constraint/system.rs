@@ -6,9 +6,9 @@
 //!
 //! Port of `Theory.Constraint.System.System` (from the 1939-line
 //! `Theory/Constraint/System.hs`). The fields are live solver state:
-//! the equation/subterm stores, source-kind/side annotations,
-//! conflation-soundness flags and the goal/node/edge collections are
-//! all read and mutated by the constraint solver during proof search.
+//! the equation/subterm stores, source-kind/side annotations, the
+//! already-grafted source list and the goal/node/edge/formula
+//! collections are all read and mutated by the solver during proof search.
 
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -154,16 +154,6 @@ impl PartialEq for SealedEqStore {
 // System
 // =============================================================================
 
-/// A constraint-solver sequent. The solver mutates this incrementally
-/// during proof search.
-///
-/// Storage choices: we use `Vec` for most collections rather than
-/// `BTreeSet`/`BTreeMap` because some underlying values
-/// (`Goal`/`Guarded`/`RuleACInst`) don't yet derive `Ord`/`Hash`
-/// (`Edge` already does). `nodes`/`goals` are `Arc<Vec<..>>` for
-/// copy-on-write sharing (see field docs). Lookup is currently
-/// linear; once the remaining derives land we can swap to ordered
-/// containers without changing the public surface.
 /// The value-carrying core of a [`System`]: the ten fields
 /// `subst_system_once` reads/writes.  Split out of `System` so that
 /// (a) `System: Deref<Target = SystemContent>` makes every field READ
@@ -349,6 +339,18 @@ fn canon_entries_eq(
             .all(|((_, ca, ha), (_, cb, hb))| *ha == *hb && ca.as_ref() == cb.as_ref())
 }
 
+/// A constraint-solver sequent. The solver mutates this incrementally
+/// during proof search.
+///
+/// Storage choices: the collections HS keeps in a `Data.Map`/`Data.Set` are
+/// `Vec`s here (`Goal`/`Guarded`/`RuleACInst` derive no `Ord`), so they hold
+/// INSERTION order and lookup is linear.  Swapping in an ordered container is
+/// not a free refactor — the stored order reaches the rendered output — so a
+/// site needing HS's key order materialises it at the `M.toList`/`S.toList`
+/// boundary instead (see [`nodes_in_map_order`]).  `nodes`, `goals`,
+/// `eq_store` and `subterm_store` are `Arc`-wrapped for copy-on-write sharing
+/// across proof-branch clones, and `formulas`/`solved_formulas`/`lemmas`
+/// per element (see the [`SystemContent`] field docs).
 #[derive(Debug, Default)]
 pub struct System {
     /// The value-carrying content fields (see [`SystemContent`]).
@@ -603,32 +605,25 @@ impl std::ops::Deref for System {
     }
 }
 
-/// Canonicalize a Goal for dedup-comparison in `add_goal_with_loop_flag`.
-/// For Disj goals, applies `normalize_bound_lvars` to the alternatives
-/// so alpha-equivalent Disjs (re-fired across simplify iterations with
-/// different freshen-shifted bound idxs) compare equal — mirroring HS's
-/// DeBruijn-bound structural equality on the Map key.
+/// The comparison key `add_goal_with_loop_flag` (and `reduction.rs`'s goal
+/// scans) dedup goals by — the seam where a Disj canonicalisation would go.
 ///
-/// Identity for non-Disj goals (their var idxs are semantically
-/// significant — same NodeId means same node etc.).
+/// It is the IDENTITY: `normalize_bound_lvars` (guarded.rs) is a pure
+/// `g.clone()` and `Disj::new` is a plain wrapper (no reorder/dedup), so a
+/// `Disj` arm would rebuild a goal that is `==` the original.  Under
+/// `Goal: PartialEq`, `canonical_goal_for_dedup(a) == canonical_goal_for_dedup(b)`
+/// is therefore exactly `a == b`.  It borrows rather than clones, so the
+/// goal-insertion hot path allocates nothing; every caller uses the result
+/// only for an `==` comparison — the ORIGINAL goal is what gets stored.
+///
+/// IF `normalize_bound_lvars` ever becomes non-identity: give `Disj` an owned
+/// arm here, i.e.
+///     let canon_alts = d.0.iter().map(crate::guarded::normalize_bound_lvars).collect();
+///     std::borrow::Cow::Owned(Goal::Disj(crate::constraint::constraints::Disj::new(canon_alts)))
+/// so alpha-equivalent Disjs re-fired with different freshen-shifted bound
+/// idxs collapse the way HS's DeBruijn-bound Map key does.
 pub fn canonical_goal_for_dedup(g: &Goal) -> std::borrow::Cow<'_, Goal> {
-    // Currently the IDENTITY: `normalize_bound_lvars` (guarded.rs) is a pure
-    // `g.clone()` and `Disj::new` is a plain wrapper (no reorder/dedup), so
-    // the `Disj` arm would rebuild a goal that is `==` the original.  Under
-    // `Goal: PartialEq`, `canonical_goal_for_dedup(a) == canonical_goal_for_dedup(b)`
-    // is therefore exactly `a == b`.  Borrow in every arm to avoid a full
-    // `Goal` clone on the goal-insertion hot path; every caller uses the
-    // result only for an `==` comparison — the ORIGINAL goal is what gets
-    // stored/pushed.
-    //
-    // IF `normalize_bound_lvars` ever becomes non-identity: switch the `Disj`
-    // arm back to owned canonicalisation, i.e.
-    //     let canon_alts = d.0.iter().map(crate::guarded::normalize_bound_lvars).collect();
-    //     std::borrow::Cow::Owned(Goal::Disj(crate::constraint::constraints::Disj::new(canon_alts)))
-    match g {
-        Goal::Disj(_) => std::borrow::Cow::Borrowed(g),
-        _ => std::borrow::Cow::Borrowed(g),
-    }
+    std::borrow::Cow::Borrowed(g)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Ord, PartialOrd, Hash)]
@@ -1191,6 +1186,11 @@ impl System {
     /// All `In`- and protocol-premise terms in the system, as
     /// `(node, premise, term-index, term)`. Port of HS `allPrems`
     /// (System.hs:894-899).
+    ///
+    /// ORDER: the node walk is `nodes` INSERTION order, where HS walks
+    /// `M.toList sNodes` (ascending `NodeId`).  A caller whose output depends
+    /// on the sequence must materialise the map order itself — see
+    /// [`nodes_in_map_order`].
     pub fn all_prems(
         &self,
     ) -> Vec<(
@@ -1214,6 +1214,10 @@ impl System {
 
     /// All unsolved destruction chains, as `(NodeConc, NodePrem)`. Port of HS
     /// `unsolvedChains` (System.hs:1601-1605).
+    ///
+    /// ORDER: `goals` INSERTION order, where HS walks `M.toList sGoals`
+    /// (ascending `Goal`).  A caller that needs the HS sequence sorts the
+    /// result — see `graph::repr::compute_basic_graph_repr`.
     pub fn unsolved_chains(
         &self,
     ) -> Vec<(
@@ -1234,7 +1238,8 @@ impl System {
     }
 
     /// All unsolved premise goals, as `(NodePrem, LNFact)`. Port of HS
-    /// `unsolvedPremises` (System.hs:1505-1509).
+    /// `unsolvedPremises` (System.hs:1505-1509).  Same insertion-order caveat
+    /// as [`unsolved_chains`](Self::unsolved_chains).
     pub fn unsolved_premises(
         &self,
     ) -> Vec<(
@@ -1465,8 +1470,9 @@ impl System {
         }
     }
 
-    /// Add an open goal, no-op if already present (compared by `Goal`
-    /// equality).
+    /// Add an open goal.  An equal goal already in the store is merged into
+    /// (its `looping` flag ORed, its `nr` kept) rather than duplicated — but
+    /// the insertion still advances `next_goal_nr`, as HS's does.
     pub fn add_goal(&mut self, g: Goal) {
         // HS has a single goal entry point: `insertGoal goal False`
         // (Reduction.hs:523-524). `add_goal` is exactly that — defer to
@@ -1485,25 +1491,11 @@ impl System {
     /// — so re-inserting a goal that was previously marked `solved` keeps
     /// it solved.
     ///
-    /// For Disj goals specifically, HS uses DeBruijn-bound vars so
-    /// alpha-equivalent Disjs are STRUCTURALLY IDENTICAL — the Map
-    /// key match triggers `combineGoalStatus` and the prior `solved=True`
-    /// is preserved.  Rust represents bound vars as `VarSpec` with
-    /// freshen-shifted idxs, so alpha-equivalent re-firings would
-    /// otherwise produce DISTINCT goal keys → new goals with
-    /// `solved=False` accumulate.
-    ///
-    /// Concrete trigger: NSLPK3 line-105.  The 4 typing-lemma Disjs
-    /// at parent path are re-fired across many proof-tree positions.
-    /// HS recognises them as the same goal each time (DeBruijn match)
-    /// and keeps the prior solved=True.  Rust loses track and ends up
-    /// with 1 spurious open Disj at `/.../I_2`, which smartRanking
-    /// then picks → line-105 `case case_1` (Disj) where HS picks
-    /// `case I_1` (next Action).
-    ///
-    /// Fix: for Disj goals, compare against existing goals via
-    /// alpha-canonicalised form (`normalize_bound_lvars`).  Mirrors
-    /// HS's DeBruijn-based structural equality.
+    /// The key match is `==` on [`canonical_goal_for_dedup`].  For Disj goals
+    /// that is HS's Map-key match: both sides bind quantified vars by DeBruijn
+    /// index (RS's `BVar::Bound`, guarded_types.rs), so a Disj re-fired across
+    /// proof positions is structurally identical to the stored one and merges
+    /// into it instead of accumulating a second, `solved=false` copy.
     pub fn add_goal_with_loop_flag(&mut self, g: Goal, looping: bool) {
         // HS `insertGoalStatus` (Reduction.hs:516-521) reads
         // `sNextGoalNr` then `succ`s it on EVERY call, including when
@@ -1523,28 +1515,14 @@ impl System {
                 );
             }
         }
-        // Single dedup scan: locate the existing slot (if any) once and
-        // derive `is_new` from it, instead of running the same O(n)
-        // `canonical_goal_for_dedup` comparison twice (once for the
-        // trace, once for the find) on the goal-insertion hot path.
-        //
-        // `canonical_goal_for_dedup` is identity for every non-Disj
-        // variant, so we only need to canonicalise an existing entry when
-        // it is itself a `Disj` (and only then can it match a `Disj`
-        // `canon_g`; under `Goal`'s derived `PartialEq` distinct variants
-        // never compare equal). For the common non-Disj case this compares
-        // `existing == &*canon_g` directly.  `canon_g` BORROWS `g`
-        // (`Cow::Borrowed`), so it is scoped to this block: its borrow ends
-        // before `g` is moved into the goal store below.
+        // One dedup scan feeds both the trace below and the merge/push
+        // decision.  `canon_g` BORROWS `g` (`Cow::Borrowed`), so the block
+        // scopes its borrow to end before `g` is moved into the goal store.
         let slot_idx = {
             let canon_g = canonical_goal_for_dedup(&g);
-            self.goals.iter().position(|(existing, _)| {
-                if matches!(existing, Goal::Disj(_)) {
-                    canonical_goal_for_dedup(existing) == canon_g
-                } else {
-                    *existing == *canon_g
-                }
-            })
+            self.goals
+                .iter()
+                .position(|(existing, _)| *canonical_goal_for_dedup(existing) == *canon_g)
         };
         if trace_goal_insert() {
             let kindstr = match &g {
@@ -1636,6 +1614,10 @@ impl System {
         // `InjectiveFacts`, driving the less-edge's graph colour. The reason
         // is metadata for rendering only (read solely by `Dot.hs`/graph
         // simplification); replace in place to preserve iteration order.
+        // The overwrite alone bumps no `content_stamp`: `subst_system_once`
+        // rewrites only `smaller`/`larger` and carries the reason through
+        // (reduction.rs), so a reason-only change cannot turn a proven-no-op
+        // skip into an observable one.
         if let Some(existing) = self.content.less_atoms.iter_mut().find(|x| **x == l) {
             *existing = l;
         } else {

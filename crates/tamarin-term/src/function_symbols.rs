@@ -41,8 +41,8 @@ pub enum AcState {
 /// (`IsNdcDiff`), both, or neither.
 ///
 /// Variant order mirrors the Haskell declaration
-/// `IsNDC | NotNDC | IsNDCDiff | IsNDCBoth` — the derived `Ord` participates
-/// in symbol ordering.
+/// `IsNDC | NotNDC | IsNDCDiff | IsNDCBoth` (FunctionSymbols.hs:125) — the
+/// derived `Ord` participates in symbol ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NdcState {
     IsNdc,
@@ -364,7 +364,7 @@ pub fn show_acfct_sym(sym: &AcFctSym) -> String {
 /// AC (associative-commutative) function symbols.
 ///
 /// Variant order mirrors the Haskell declaration
-/// `Union | Mult | Xor | NatPlus | ACfct ACfctSym`.
+/// `Union | Mult | Xor | NatPlus | ACfct ACfctSym` (FunctionSymbols.hs:138).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AcSym {
     Union,

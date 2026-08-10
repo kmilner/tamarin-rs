@@ -239,13 +239,12 @@ pub fn run(args: &Args) -> Result<i32, RunError> {
 /// (`Main.Mode.Test`).  HS runs:
 ///   1. Maude version check.
 ///   2. GraphViz `dot` version check.
-///   3. The Haskell unit-test suite (55 cases as of v1.13.0).
+///   3. `Term.tests`, the unification HUnit suite (Test.hs:88-89).
 ///
-/// We do (1) and (2) here.  Porting the unit test suite is a separate
-/// effort; until then we run the prover's own lib tests at build time
-/// instead (`cargo test`), so neither its `*** Testing the unification
-/// infrastructure ***` topic line nor its HUnit progress counter appears, and
-/// the summary says `All tool checks successful.` rather than claiming a test
+/// Only (1) and (2) are ported.  Without (3), neither its
+/// `*** Testing the unification infrastructure ***` topic line nor its HUnit
+/// progress counter appears, and the summary reads `All tool checks
+/// successful.` rather than HS's `All tests successful.`, which would claim a
 /// suite ran.  Returns rc=0 on Maude/dot reachable, rc=1 otherwise.
 fn run_test(args: &Args) -> Result<i32, RunError> {
     println!("Self-testing the tamarin-prover installation.\n");
@@ -270,7 +269,10 @@ fn run_test(args: &Args) -> Result<i32, RunError> {
     if success_maude && success_graphviz {
         println!("All tool checks successful.");
         println!("The tamarin-prover should work as intended.\n");
-        println!("           :-) happy proving (-:");
+        // Test.hs:100 is `putStrLn "\n           :-) happy proving (-:\n"`, so
+        // the smiley is followed by a blank line — the leading one is already
+        // supplied by the line above.
+        println!("           :-) happy proving (-:\n");
         Ok(0)
     } else {
         println!("\nWARNING: Some tests failed.");
@@ -1563,51 +1565,24 @@ impl TheoryPipeline<'_> {
         // Port of HS `ruleVariantsReport` / `variantsCheck`
         // (Wellformedness.hs:354-372, 375-394).
         //
-        // Sub-check 1: "Rule has no variants" — fires when
-        // `variantsProtoRule hnd ruE` returns `Nothing`, i.e., the rule
-        // has no variants at all (e.g., contradictory Fr(~x)/In(~x) premises
-        // that the fresh-uniqueness constraint makes impossible).
+        // Sub-check 1: "Rule has no variants" — HS's
+        // `guard (null recomputedVariants)`, which holds exactly when
+        // `variantsProtoRule hnd ruE` is `Nothing`, i.e. when the variant
+        // computation ends with an EMPTY substitution set because
+        // `isFreshRedundant` filtered every candidate.  The canonical case is
+        // a rule with both `Fr(~x)` and `In(~x)` among its premises: `~x`
+        // cannot be sent before it is generated, so even the identity
+        // substitution is fresh-redundant.  `abstract_rule_and_variants`
+        // returns `None` on the same input, leaving `abstracted_rule` `None`
+        // and `variant_substs` empty; `rule_has_no_variants_for_wf_with`
+        // reads that verdict, or runs the equivalent syntactic check when the
+        // rule has no reducible-headed sub-term (see `sig_has_reducible`).
         //
-        // HS detection: `guard (null recomputedVariants)` where
-        // `recomputedVariants = map (get cprRuleAC) $ concatMap
-        //   (unfoldRuleVariants . ClosedProtoRule ruE) $ maybeToList
-        //   (variantsProtoRule hnd ...)`.  Returns `[]` iff
-        // `variantsProtoRule` returns `Nothing` (no variants).
-        //
-        // Rust detection: `populate_rule_variants` leaves `variant_substs`
-        // EMPTY when `abstract_rule_and_variants` returns `None`.
-        // However, for rules with NO reducible fun syms, `populate_rule_variants`
-        // returns early (skips ALL rules) because the early-exit guard fires.
-        // In HS, `variantsProtoRule` still runs and returns `Just` (single
-        // trivial variant) for such rules — the `Nothing` case only arises
-        // when the variant computation produces an EMPTY substitution set
-        // (e.g., all substs are `isFreshRedundant`).
-        //
-        // A rule with `Fr(~x)` and `In(~x)` in its premises: In HS, the
-        // abstraction phase abstracts these to fresh variables, then
-        // `computeVariantsCached` returns the trivial identity substitution
-        // (no real AC to reduce), but `isFreshRedundant` filters it out
-        // (the fresh variable `~x` appears in `In` position, which is
-        // impossible → the identity subst IS fresh-redundant for ~x).
-        // Result: `substs = []` → `mzero` → `variantsProtoRule = Nothing`.
-        //
-        // In Rust: `abstract_rule_and_variants` returns `None` in this case
-        // (all variant substs were filtered). The rule's `variant_substs`
-        // stays empty, and `abstracted_rule` stays `None`.
-        //
-        // Detection criterion: `populate_rule_variants` only calls
-        // `abstract_rule_and_variants` for rules WHERE the signature has
-        // reducible funs. For signatures without reducible funs, the rule
-        // can NEVER get `Nothing` from `variantsProtoRule` because HS also
-        // wouldn't find contradictory-fresh issues (no destructors = only
-        // pair/fst/snd, and those theories don't mix Fr+In the "impossible"
-        // way in any corpus file).
-        //
-        // Sub-check 2: "Variants mismatch" — fires when `ruAC` (manually
-        // specified variants in the rule body) is non-empty and doesn't match
-        // the recomputed variants. Requires comparing parsed `rule.variants`
-        // vs `abstracted_rule + variant_substs`. Not yet ported (no corpus
-        // files affected).
+        // Sub-check 2: "Variants mismatch" — `ruAC` (a variants block written
+        // out in the rule body) present and disagreeing with the recomputed
+        // set.  NOT PORTED: it needs the parsed `rule.variants` compared
+        // against `abstracted_rule` + `variant_substs`; no corpus file writes
+        // such a block.
         if let Some(ref wf_maude) = self.file_maude {
             use tamarin_parser::wf::underline_topic;
             use tamarin_parser::wf::WfError as WfE;
@@ -2328,9 +2303,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     // one value serves every file's render.
     let build_info = tamarin_theory::pretty_theory::BuildInfo {
         tamarin_version: crate::cli::VERSION.to_string(),
-        maude_version: maude_version
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string()),
+        maude_version: maude_version.unwrap_or_else(|| "unknown".to_string()),
         git_revision: crate::cli::GIT_REV.to_string(),
         git_branch: crate::cli::GIT_BRANCH.to_string(),
         compiled_at: crate::cli::BUILD_TIMESTAMP.to_string(),

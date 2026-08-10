@@ -8,8 +8,7 @@
 //! 3. `tamarin-prover --parse-only` agrees the file is syntactically
 //!    well-formed (return code 0).
 //! 4. `tamarin-prover --prove` produces a non-error summary (the
-//!    fixtures are all small `exists-trace` lemmas tamarin can solve
-//!    in a few steps).
+//!    fixtures are all small lemmas tamarin can solve in a few steps).
 //! 5. The number of lemmas we elaborate equals what tamarin sees.
 //! 6. For each lemma, the guarded conversion succeeds.
 //!
@@ -86,6 +85,18 @@ fn oracle_binary() -> Option<PathBuf> {
 /// `PATH` — the same `MAUDE_PATH` override the rest of the suite uses.
 fn oracle_command() -> Option<Command> {
     let mut cmd = Command::new(oracle_binary()?);
+    if let Some(m) = maude_path() {
+        cmd.arg(format!("--with-maude={m}"));
+    }
+    Some(cmd)
+}
+
+/// [`oracle_command`] under `timeout <secs>s`, for the whole-corpus probes:
+/// they invoke the oracle once per file and a single non-terminating example
+/// would otherwise wedge the rayon pool.
+fn oracle_command_within(secs: u32) -> Option<Command> {
+    let mut cmd = Command::new("timeout");
+    cmd.arg(format!("{secs}s")).arg(oracle_binary()?);
     if let Some(m) = maude_path() {
         cmd.arg(format!("--with-maude={m}"));
     }
@@ -189,6 +200,7 @@ fn verdict_str(
 /// thread kills the subprocess after a hard cap; the blocked read then
 /// returns EOF and `prove_lemma` unwinds with an error.  Without this, even
 /// one hung lemma blocks the whole `par_iter().collect()`.
+#[must_use = "dropping the guard immediately joins the watchdog, disarming it"]
 struct WatchdogGuard {
     done: std::sync::Arc<std::sync::atomic::AtomicBool>,
     fired: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -196,23 +208,25 @@ struct WatchdogGuard {
 }
 
 impl WatchdogGuard {
-    /// Signal completion, join the watchdog thread, and report whether it
-    /// fired (killed the subprocess) before we finished.
-    fn finish(mut self) -> bool {
+    /// Signal completion and join the watchdog thread.
+    fn stop(&mut self) {
         self.done.store(true, std::sync::atomic::Ordering::Relaxed);
         if let Some(j) = self.join.take() {
             let _ = j.join();
         }
+    }
+
+    /// [`stop`](Self::stop), then report whether the watchdog fired (killed
+    /// the subprocess) before we finished.
+    fn finish(mut self) -> bool {
+        self.stop();
         self.fired.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
 impl Drop for WatchdogGuard {
     fn drop(&mut self) {
-        self.done.store(true, std::sync::atomic::Ordering::Relaxed);
-        if let Some(j) = self.join.take() {
-            let _ = j.join();
-        }
+        self.stop();
     }
 }
 
@@ -401,10 +415,10 @@ fn count_quantifiers(g: &Guarded) -> (usize, usize) {
 }
 
 /// Cross-check guarded formula structure: for each lemma in a fixture,
-/// count Ex/All in our `formula_to_guarded` output and compare with
-/// the count of `∃` / `∀` characters in tamarin's `--prove` output's
-/// guarded-formula block. Tamarin always emits exactly one quantifier
-/// glyph per quantified variable.
+/// count Ex/All in our `formula_to_guarded` output and compare with the
+/// `∃` / `∀` glyphs in tamarin's `--prove` output.  Tamarin emits one glyph
+/// per quantifier BLOCK while `count_quantifiers` counts bound variables, so
+/// the comparison below is presence-parity, not an equality.
 #[test]
 fn guarded_quantifier_count_matches_tamarin() {
     if !tamarin_available() {
@@ -430,11 +444,6 @@ fn guarded_quantifier_count_matches_tamarin() {
             Some(o) => o,
             None => continue,
         };
-        // Tamarin emits one ∃/∀ glyph per quantifier *block* (it
-        // groups consecutive vars under a single quantifier), whereas
-        // our `count_quantifiers` returns the total number of bound
-        // variables. So we use a presence-parity check rather than
-        // an exact comparison.
         let tam_has_ex = proved.contains('∃');
         let tam_has_all = proved.contains('∀');
         assert_eq!(
@@ -773,11 +782,8 @@ fn verdict_match_suite_all_solved_against_tamarin() {
 /// behaviors:
 ///   1. Tamarin emits "unguarded variable(s)" for non-doubly-guarded
 ///      formulas — our `formula_to_guarded` should too.
-///   2. Tamarin's signature output for a `pair`-only theory contains
-///      `pair/2`, `fst/1`, `snd/1` — our elaboration agrees.
-///   3. Tamarin's `--prove` summary line format is
-///      `<name> (exists-trace|all-traces): verified|falsified (...)`
-///      — our verdict should map to the same kind.
+///   2. Tamarin's signature output for a `pair`-only theory names the
+///      `pair` symbol — our elaboration agrees.
 #[test]
 fn haskell_behavior_pins() {
     if !tamarin_available() {
@@ -791,7 +797,8 @@ lemma bad: exists-trace "Ex k #i. (A(k) @ #i) | (A(k) @ #i)"
 end"#;
     let tmp = std::env::temp_dir().join("oracle_pin_bad_guarded.spthy");
     std::fs::write(&tmp, bad).unwrap();
-    let out = Command::new("tamarin-prover")
+    let out = oracle_command()
+        .expect("tamarin_available")
         .arg("--prove")
         .arg(&tmp)
         .output()
@@ -832,7 +839,8 @@ end"#;
     let pair_thy = "theory P begin\nrule R: [Fr(~k)] --[A(~k)]-> [Out(<~k, ~k>)]\nend";
     let ptmp = std::env::temp_dir().join("oracle_pin_pair.spthy");
     std::fs::write(&ptmp, pair_thy).unwrap();
-    let out = Command::new("tamarin-prover")
+    let out = oracle_command()
+        .expect("tamarin_available")
         .arg("--parse-only")
         .arg(&ptmp)
         .output()
@@ -846,16 +854,14 @@ end"#;
     let _ = std::fs::remove_file(&ptmp);
 }
 
-/// **Corpus verdict-match coverage probe**: walks `examples/loops/`
-/// (small, no-equation theories), runs `prove_lemma` and
-/// `tamarin-prover --prove` on every lemma, reports a verdict-match
-/// count to stderr. Doesn't fail unless 0/N match — used as a
-/// diagnostic to track progress over time.
+/// **Corpus verdict-match coverage probe**: walks the corpus directories
+/// listed below, runs `prove_lemma` and the pinned oracle's `--prove` on
+/// every lemma, reports a verdict-match count to stderr. Doesn't fail unless
+/// 0/N match — used as a diagnostic to track progress over time.
 ///
-/// Skips files that:
-///  - declare functions/equations our skeleton can't unify
-///  - use macros, predicates, or accountability constructs
-///  - take longer than 10s on tamarin's side
+/// Skips files that mention `diff(`, `predicates:` or `process:`, files whose
+/// `builtins:` name diffie-hellman / xor / bilinear-pairing, and any file the
+/// oracle does not finish within 10s.
 ///
 /// **Deprecated** as a primary metric — verdict-only matching masks
 /// reasoning bugs (right answer, wrong proof structure).  Use
@@ -949,14 +955,12 @@ fn corpus_verdict_match_coverage_probe() {
         .par_iter()
         .filter_map(|path| {
             let src = std::fs::read_to_string(path).ok()?;
-            // User-defined `equations:` declarations are wired through
-            // elaborate.rs → MaudeSig.st_rules → Maude module text.  The
-            // lastChainTerm filter + threaded closure cap (default 256)
-            // keep precompute under 200ms even with many destructors.
-            // Sources truncated by the cap are tagged `incomplete=true`;
-            // `is_finished` converts Solved→Unfinishable for any branch
-            // that consumed an incomplete source — preserving soundness
-            // (no wrong-VERIFIED).
+            // No `equations:` filter here: user-declared equations are wired
+            // through elaborate.rs → MaudeSig.st_rules → Maude module text.
+            // A destructor-chain explosion can truncate case enumeration; the
+            // source is then tagged `Source.incomplete`, which — as in HS
+            // `isFinished` — is diagnostic only and does NOT downgrade a
+            // Solved leaf (see `proof_method`'s `is_finished`).
             if src.contains("diff(") {
                 return None;
             }
@@ -980,9 +984,7 @@ fn corpus_verdict_match_coverage_probe() {
 
             let theory = tamarin_parser::parse_theory(&src, &[]).ok()?;
             // Run tamarin once per file with a timeout.
-            let tam_out = Command::new("timeout")
-                .arg("10s")
-                .arg("tamarin-prover")
+            let tam_out = oracle_command_within(10)?
                 .arg("--prove")
                 .arg(path)
                 .output()
@@ -1045,7 +1047,6 @@ fn corpus_verdict_match_coverage_probe() {
     // Phase 4: run prove_lemma per lemma in parallel.  Each lemma gets
     // its own MaudeHandle (independent subprocess); rayon manages
     // thread-pool sizing via num_cpus.
-    #[derive(Clone)]
     enum LemmaOutcome {
         Match,
         Diff(String),
@@ -1132,7 +1133,7 @@ fn corpus_verdict_match_coverage_probe() {
     let mut compared = 0usize;
     let mut matched = 0usize;
     let mut diffs: Vec<String> = Vec::new();
-    for o in &outcomes {
+    for o in outcomes {
         match o {
             LemmaOutcome::Match => {
                 compared += 1;
@@ -1140,7 +1141,7 @@ fn corpus_verdict_match_coverage_probe() {
             }
             LemmaOutcome::Diff(d) => {
                 compared += 1;
-                diffs.push(d.clone());
+                diffs.push(d);
             }
             LemmaOutcome::Incomparable => {}
         }
@@ -1177,7 +1178,8 @@ fn corpus_verdict_match_coverage_probe() {
 /// whole-corpus probe proves every example in-process, but ~99 corpus
 /// files declare an oracle heuristic, and the prover faithfully
 /// `std::process::exit(1)`s when an oracle script fails to exec (HS
-/// behaviour: oracle IO exception → die with empty stdout, search.rs:975).
+/// behaviour: oracle IO exception → die with empty stdout; the RS site is
+/// `search::rank_goals_or_abort`).
 /// A `process::exit` is uncatchable by the per-lemma `catch_unwind`, so a
 /// single oracle file aborts the whole test binary. Kept active as a
 /// deliberate `--ignored` probe, consistent with the sibling diagnostic
@@ -1259,9 +1261,7 @@ fn corpus_proof_skeleton_match_probe() {
 
             let theory = tamarin_parser::parse_theory(&src, &[]).ok()?;
             let out_path = format!("/tmp/proof_skel_corpus_{}_{}.spthy", pid, idx);
-            let tam_out = Command::new("timeout")
-                .arg("10s")
-                .arg("tamarin-prover")
+            let tam_out = oracle_command_within(10)?
                 .arg("--prove")
                 .arg(format!("--output={}", out_path))
                 .arg(path)
@@ -1330,7 +1330,6 @@ fn corpus_proof_skeleton_match_probe() {
         .collect();
 
     // Phase 4: per-lemma prove + diff in parallel.
-    #[derive(Clone)]
     enum Outcome {
         StructMatch,
         StructDiff {
@@ -1405,7 +1404,7 @@ fn corpus_proof_skeleton_match_probe() {
     let mut struct_diff: Vec<String> = Vec::new();
     let mut no_skel: Vec<String> = Vec::new();
     let mut incomparable = 0usize;
-    for o in &outcomes {
+    for o in outcomes {
         match o {
             Outcome::StructMatch => struct_match += 1,
             Outcome::StructDiff {
@@ -1419,7 +1418,7 @@ fn corpus_proof_skeleton_match_probe() {
                     file_lemma, line, ours, theirs
                 ));
             }
-            Outcome::NoHaskellSkeleton(s) => no_skel.push(s.clone()),
+            Outcome::NoHaskellSkeleton(s) => no_skel.push(s),
             Outcome::Incomparable => incomparable += 1,
         }
     }
@@ -1958,14 +1957,13 @@ fn probe_nslpk3_nonce_secrecy() {
     eprintln!("{}", rs_skel);
     // Also fetch HS's skeleton via tamarin-prover output, dump side-by-side
     // around the first divergence to make targeted fixes possible.
-    let tam_out = std::process::Command::new("timeout")
-        .arg("30s")
-        .arg("tamarin-prover")
-        .arg("--prove")
-        .arg("--output=/tmp/nslpk3_hs_full.spthy")
-        .arg(path)
-        .output()
-        .ok();
+    let tam_out = oracle_command_within(30).and_then(|mut c| {
+        c.arg("--prove")
+            .arg("--output=/tmp/nslpk3_hs_full.spthy")
+            .arg(path)
+            .output()
+            .ok()
+    });
     if tam_out.is_some() {
         if let Ok(hs_text) = std::fs::read_to_string("/tmp/nslpk3_hs_full.spthy") {
             if let Some(hs_skel) =
@@ -2592,7 +2590,8 @@ end
     // Write to a temp file so tamarin can read it.
     let tmp = std::env::temp_dir().join("oracle_bad_guarded.spthy");
     std::fs::write(&tmp, bad).unwrap();
-    let out = Command::new("tamarin-prover")
+    let out = oracle_command()
+        .expect("tamarin_available")
         .arg("--prove")
         .arg(&tmp)
         .output()

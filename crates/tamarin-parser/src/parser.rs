@@ -513,7 +513,7 @@ fn remove_comment_block(cs: &[char], mut i: usize) -> usize {
 // =============================================================================
 
 /// The `(arity, Privacy, Constructability, NDCstate)` options tuple HS carries
-/// per free function symbol (HS `NoEqSym`, Term/Term/FunctionSymbols.hs:243).
+/// per free function symbol (HS `NoEqSym`, Term/Term/FunctionSymbols.hs:132).
 ///
 /// [`FunOptions::show`] is the Haskell `show` of that 4-tuple, which
 /// `function`'s conflict diagnostic embeds verbatim
@@ -3972,14 +3972,14 @@ impl<'a> Parser<'a> {
                 None => break,
                 Some(']') if depth == 0 => break,
                 Some(',') if depth == 0 => break,
-                Some('[') | Some('(') | Some('{') => {
+                Some(c @ ('[' | '(' | '{')) => {
                     depth += 1;
-                    s.push(self.lx.peek().unwrap());
+                    s.push(c);
                     self.lx.bump();
                 }
-                Some(']') | Some(')') | Some('}') => {
+                Some(c @ (']' | ')' | '}')) => {
                     depth -= 1;
-                    s.push(self.lx.peek().unwrap());
+                    s.push(c);
                     self.lx.bump();
                 }
                 Some(c) => {
@@ -4150,7 +4150,7 @@ impl<'a> Parser<'a> {
         self.require_kw("export")?;
         let tag = self.ident()?;
         self.require_punct(":")?;
-        // Export bodies use the strict `bodyChar` grammar (Signature.hs:282-287),
+        // Export bodies use the strict `bodyChar` grammar (Parser/Signature.hs:297-302),
         // NOT the general string-literal escape decoding.
         let body = self
             .lx
@@ -5233,9 +5233,8 @@ impl<'a> Parser<'a> {
             self.restore(save);
         }
         // Sigil-prefixed variables: ~x, $x, #x, %x.
-        if matches!(self.lx.peek(), Some('~') | Some('$') | Some('#')) {
+        if let Some(c @ ('~' | '$' | '#')) = self.lx.peek() {
             // Could be a fresh-name literal `~'n'` or `%'n'` — handled below.
-            let c = self.lx.peek().unwrap();
             let mut probe = self.lx.clone();
             probe.bump();
             if c == '~' && probe.peek() == Some('\'') {
@@ -5528,7 +5527,7 @@ impl<'a> Parser<'a> {
     /// its argument (`fAppAC _ [a] = a`, Term/Term/Raw.hs:118-121), and
     /// `fAppAC _ []` is a GHC `error` the empty argument list only triggers
     /// once the theory pipeline forces the term — kept as an `App` node here
-    /// (see the divergence note in the task fixtures).
+    /// (`scripts/divergence_fixtures/ac_prefix_arities.spthy`).
     ///
     /// Every `Err` return is discarded by the caller's backtrack, mirroring
     /// the enclosing `try` — the messages never surface.
@@ -5723,11 +5722,12 @@ impl<'a> Parser<'a> {
     /// Parse a quantifier binder variable (`All`/`Ex` binder list), mirroring
     /// HS `quantification`'s `many1 (try varp <|> nodep)` with `varp = msgvar`,
     /// `nodep = nodevar` (Formula.hs:64-77, see line 75, Token.hs:440-447).  `msgvar` parses a
-    /// PREFIXLESS binder as `LSortMsg` (Token.hs:409-433, see line 426,441) — there is no
+    /// PREFIXLESS binder as `LSortMsg` (Token.hs:440-441 into 409-433, see line 426)
+    /// — there is no
     /// inference step for formula binders.  RS's generic `var_spec` tags a
     /// prefixless var as `Untagged` (a placeholder it resolves later for RULE
     /// terms), which has no HS equivalent and sorts LAST under `Ord LVar`
-    /// `(idx, sort, name)` (LTerm.hs:521-523).  That placeholder leaked into the
+    /// `(idx, sort, name)` (LTerm.hs:546-548).  That placeholder leaked into the
     /// guarded binding's `LSort`, flipping the display-time AC arg sort of an
     /// existential binder against a free Msg operand of equal idx (`dif++seq`
     /// → `seq++dif`), since `fAppAC`/`openGuarded` sort by that key

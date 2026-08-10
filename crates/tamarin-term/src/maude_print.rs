@@ -348,7 +348,7 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
     }
     if msig.enable_dh {
         op_eq(&mut out, "one", "-> Msg");
-        // HS `theoryOpEq "DH-neutral  : -> Msg"` (Parser.hs:162-251, see line 209) has TWO
+        // HS `theoryOpEq "DH-neutral  : -> Msg"` (Parser.hs:223) has TWO
         // spaces before the colon; the trailing space on the name reproduces
         // that so `format!("{} : {}")` yields `DH-neutral  : -> Msg`.
         op_eq(&mut out, "DH-neutral ", "-> Msg");
@@ -373,7 +373,7 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
     // in `NoEqSym`-`Ord` order.
     for sym in &msig.st_fun_syms {
         let args = "Msg ".repeat(sym.arity);
-        // Match HS `theoryFunSym` (Parser.hs:162-251, see line 247) byte-for-byte:
+        // Match HS `theoryFunSym` (Parser.hs:264-265) byte-for-byte:
         // `replaceUnderscore s <> " : " <> (concat $ replicate ar "Msg ") <> " -> Msg"`.
         // `args` already ends in a trailing space (or is empty), and the
         // literal " -> Msg" has a leading space, so there are two spaces
@@ -395,7 +395,7 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
     // AC for them.  `st_ac_fun_syms` is a `BTreeSet`, so iterating it directly
     // yields `AcFctSym`-`Ord` order (HS `S.toList $ stACFunSyms msig`).
     for sym in &msig.st_ac_fun_syms {
-        // Match HS `theoryACFunSym` (Parser.hs:246-267, see line 265) byte-for-byte:
+        // Match HS `theoryACFunSym` (Parser.hs:266-267) byte-for-byte:
         // `replaceUnderscore s <> " : " <> (concat $ replicate 2 "Msg ") <> "-> Msg"
         //  <> " [comm assoc]"`.  Unlike `theoryFunSym` above, the sort part has
         // no extra space before `->`, so the line reads
@@ -419,10 +419,9 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
 }
 
 /// Emit the `  op tam<attrs><name>` head shared by the user-defined free and
-/// AC declarations — HS `theoryOp` and `theoryOpACUser` (Parser.hs:246-267,
-/// see lines 257-260) are the same `"  op " <> funSymPrefix <> attrs <> fsort
-/// <> " ."` string.  The caller appends the `fsort` tail and the trailing
-/// ` .\n`.
+/// AC declarations — HS `theoryOp` and `theoryOpACUser` (Parser.hs:257-260)
+/// are the same `"  op " <> funSymPrefix <> attrs <> fsort <> " ."` string.
+/// The caller appends the `fsort` tail and the trailing ` .\n`.
 ///
 /// Written piecewise so the `replaceUnderscore` name bytes (`_` -> `-`; names
 /// are ASCII) go straight into `out` without a `format!` /
@@ -446,7 +445,7 @@ fn op_user_head(
 
 fn op_eq(out: &mut String, name: &str, sort: &str) {
     // HS `theoryOpEq = theoryOp (Just (Public,Constructor,NotAC,NotNDC))`
-    // (Parser.hs:246-267, see line 259).
+    // (Parser.hs:261).
     op(
         out,
         Privacy::Public,
@@ -504,7 +503,7 @@ mod tests {
 
     #[test]
     fn dh_neutral_op_has_two_spaces_before_colon() {
-        // HS `theoryOpEq "DH-neutral  : -> Msg"` (Parser.hs:162-251, see line 209) emits TWO
+        // HS `theoryOpEq "DH-neutral  : -> Msg"` (Parser.hs:223) emits TWO
         // spaces before the colon; the emitted module must match byte-for-byte.
         let s = pp_theory(&dh_maude_sig());
         assert!(s.contains("op tamXCFUDH-neutral  : -> Msg ."));

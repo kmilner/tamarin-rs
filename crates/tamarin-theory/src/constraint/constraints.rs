@@ -205,13 +205,13 @@ impl Goal {
 /// the payloads compare left to right.  Every payload comparison below
 /// delegates to an `Ord` that already mirrors its HS counterpart:
 ///
-/// - `LVar` — manual `Ord` = `(idx, sort, name)` (LTerm.hs:548-554).
+/// - `LVar` — manual `Ord` = `(idx, sort, name)` (LTerm.hs:546-548).
 /// - `LNFact` — manual `Ord` = tag then terms, annotations IGNORED, which is
 ///   HS's manual `instance Ord (Fact t)` (Fact.hs:173-174), not a derived
 ///   one; `FactTag`'s derived `Ord` matches HS's constructor and payload
 ///   order (Fact.hs:137-148), as does `Multiplicity`'s (Fact.hs:133-134).
 /// - `NodeConc` / `NodePrem` — `(LVar, ConcIdx/PremIdx)` tuples; the index
-///   newtypes derive `Ord` over their integer, as HS's do (Rule.hs:234-239).
+///   newtypes derive `Ord` over their integer, as HS's do (Rule.hs:233-238).
 /// - `SplitId` — newtype over an integer, derived both sides
 ///   (EquationStore.hs:88-89).
 /// - `LNTerm` — `Lit < App`, then symbol then arguments, mirroring the
@@ -349,7 +349,7 @@ mod tests {
         }
 
         // Same-constructor tie-break: `ActionG` compares its `LVar` first, and
-        // `Ord LVar` is idx-major (LTerm.hs:548-554), so `#i.1` precedes
+        // `Ord LVar` is idx-major (LTerm.hs:546-548), so `#i.1` precedes
         // `#a.2` despite sorting after it by name.
         let lo = Goal::Action(LVar::new("i", LSort::Node, 1), fa.clone());
         let hi = Goal::Action(LVar::new("a", LSort::Node, 2), fa.clone());

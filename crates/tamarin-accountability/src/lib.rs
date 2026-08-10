@@ -39,7 +39,7 @@ pub enum AccError {
     /// `(lemma name, missing case-test identifiers)`.
     CaseTestsUndefined(Vec<(String, Vec<String>)>),
     /// HS `UndefinedPredicate` (thrown by `liftedAddLemma`'s `expandLemma`,
-    /// Parser.hs:114-118, when a generated lemma's formula references an
+    /// Text/Parser.hs:116-118,145-147, when a generated lemma's formula references an
     /// undefined predicate).  Carries HS's `showFactTagArity` rendering,
     /// `name/arity`.
     UndefinedPredicate(String),
@@ -47,7 +47,7 @@ pub enum AccError {
     /// generated lemma's name collides with an existing lemma).
     DuplicateLemma(String),
     /// HS `DuplicateItem (PredicateItem _)` (thrown by `liftedAddPredicate`,
-    /// Parser/Signature.hs:313-316, when a case-test predicate's fact tag
+    /// Parser/Signature.hs:328-331, when a case-test predicate's fact tag
     /// collides with an existing predicate).  Carries the rendered fact.
     DuplicatePredicate(String),
 }
@@ -98,7 +98,7 @@ struct RawCaseTest {
 /// The theory's case tests (declaration order) and accountability lemmas.
 /// Each acc lemma is paired with the number of case tests declared BEFORE it:
 /// HS binds `_aCaseTests` when the lemma is parsed (`mapMaybe (flip
-/// lookupCaseTest thy)` over the items parsed so far, Parser.hs:271-273), so a
+/// lookupCaseTest thy)` over the items parsed so far, Text/Parser.hs:276-279), so a
 /// case test declared after the lemma is undefined for it.
 fn collect_acc_items(parsed: &p::Theory) -> (Vec<RawCaseTest>, Vec<(RawAccLemma, usize)>) {
     let mut case_tests: Vec<RawCaseTest> = Vec::new();
@@ -218,7 +218,7 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
     defined_preds.push(("Smaller".to_string(), 2, false));
 
     // Existing lemma names (HS `addLemma` guards on `lookupLemma`, which scans
-    // `LemmaItem`s only — TheoryObject.hs:455-458); grows as generated lemmas
+    // `LemmaItem`s only — TheoryObject.hs:461-465); grows as generated lemmas
     // are appended.
     let mut lemma_names: Vec<String> = parsed
         .items
@@ -339,7 +339,7 @@ fn render_fact(f: &p::Fact) -> String {
 }
 
 /// Append one generated lemma to both theories (HS `addLemma`, which appends at
-/// the end of the item list, TheoryObject.hs:455-458).  Rendering iterates the
+/// the end of the item list, TheoryObject.hs:461-465).  Rendering iterates the
 /// parser-AST theory; the prove loop iterates the elaborated theory.
 fn inject_lemma(
     parsed: &mut p::Theory,
@@ -424,7 +424,7 @@ fn formula_has_predicate_atom(f: &p::Formula) -> bool {
     }
 }
 
-/// HS `capitalize` (Predicate.hs:39-43, see line 41): upper-case the first character.
+/// HS `capitalize` (Predicate.hs:39-43, see line 42): upper-case the first character.
 fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
     match chars.next() {
@@ -434,10 +434,10 @@ fn capitalize(s: &str) -> String {
 }
 
 // =============================================================================
-// checkWellformedness / accRPReport (Generation.hs:331-353)
+// checkWellformedness / accRPReport (Generation.hs:324-346)
 // =============================================================================
 
-/// HS `Accountability.checkWellformedness` (Generation.hs:351-353): the RP-check
+/// HS `Accountability.checkWellformedness` (Generation.hs:345-346): the RP-check
 /// report, emitted only when the theory declares accountability lemmas.
 pub fn check_wellformedness(parsed: &p::Theory) -> Vec<WfError> {
     let has_acc_lemma = parsed
@@ -450,7 +450,7 @@ pub fn check_wellformedness(parsed: &p::Theory) -> Vec<WfError> {
     acc_rp_report(parsed)
 }
 
-/// HS `accRPReport` (Generation.hs:331-349): the topic + explanation for the
+/// HS `accRPReport` (Generation.hs:324-343): the topic + explanation for the
 /// RP (BR) syntactic criterion.  Empty when no warning fires.
 fn acc_rp_report(parsed: &p::Theory) -> Vec<WfError> {
     let rules = rp_check_rules(parsed);
@@ -488,7 +488,7 @@ fn acc_rp_report(parsed: &p::Theory) -> Vec<WfError> {
 
 const ACC_RP_TOPIC: &str = "Accountability (RP check)";
 
-/// HS `detailedExplanation` (Generation.hs:343-349), with the leading blank
+/// HS `detailedExplanation` (Generation.hs:337-343), with the leading blank
 /// line HS's `$--$` inserts between "Please verify …" and the "For each …"
 /// paragraph.  Right single quotation marks (U+2019) are copied verbatim.
 const DETAILED_EXPLANATION: &[&str] = &[
@@ -513,11 +513,11 @@ fn theory_has_restrictions(parsed: &p::Theory) -> bool {
 
 /// The rules HS's RP check scans, reconstructed from the parser AST: each
 /// rule's E-form plus its explicit AC variants (HS `rulesLNFacts` /
-/// `rulesActions` read `_oprRuleE` and `_oprRuleAC`, Generation.hs:135-152),
+/// `rulesActions` read `_oprRuleE` and `_oprRuleAC`, Generation.hs:128-146),
 /// with `let` blocks applied — HS substitutes lets into the rule at parse time
-/// (Parser/Rule.hs:115-117), while our parser keeps `Rule.let_block` unapplied
+/// (Parser/Rule.hs:131-133), while our parser keeps `Rule.let_block` unapplied
 /// until elaboration.  Macros stay UNexpanded: HS applies them only at theory
-/// close (`closeProtoRule`, Rule.hs:95-98), after this check has run.
+/// close (`closeProtoRule`, src/Rule.hs:82-86), after this check has run.
 fn rp_check_rules(parsed: &p::Theory) -> Vec<p::Rule> {
     let mut out = Vec::new();
     for i in &parsed.items {
@@ -532,7 +532,7 @@ fn rp_check_rules(parsed: &p::Theory) -> Vec<p::Rule> {
 }
 
 /// HS `rulesContainPubConst thy = any termContainsPubConst (rulesLNTerms thy)`
-/// (Generation.hs:327-328): any premise/action/conclusion term of any rule is
+/// (Generation.hs:320-322): any premise/action/conclusion term of any rule is
 /// or contains a public constant.
 fn rules_contain_pub_const(rules: &[p::Rule]) -> bool {
     rules.iter().any(|r| {
@@ -545,7 +545,7 @@ fn rules_contain_pub_const(rules: &[p::Rule]) -> bool {
     })
 }
 
-/// HS `termContainsPubConst` (Generation.hs:155-159): a public constant literal
+/// HS `termContainsPubConst` (Generation.hs:148-153): a public constant literal
 /// (`'x'`) anywhere in the term.
 fn term_contains_pub_const(t: &p::Term) -> bool {
     match t {
@@ -565,7 +565,7 @@ fn term_contains_pub_const(t: &p::Term) -> bool {
     }
 }
 
-/// HS `caseTestsInstantiatedByPubVars` (Generation.hs:321-324): for every
+/// HS `caseTestsInstantiatedByPubVars` (Generation.hs:314-318): for every
 /// case-test action fact and every rule action fact sharing its tag, each free
 /// variable of the case-test fact must line up with a public variable in the
 /// rule fact.
@@ -582,7 +582,7 @@ fn case_tests_instantiated_by_pub_vars(parsed: &p::Theory, rules: &[p::Rule]) ->
     true
 }
 
-/// HS `caseTestsFacts thy` (Generation.hs:127-128): the action facts of every
+/// HS `caseTestsFacts thy` (Generation.hs:120-122): the action facts of every
 /// case test's formula (with Free/Bound variable status resolved).
 fn case_tests_facts(parsed: &p::Theory) -> Vec<tamarin_theory::guarded_types::GFact> {
     let mut out = Vec::new();
@@ -594,7 +594,7 @@ fn case_tests_facts(parsed: &p::Theory) -> Vec<tamarin_theory::guarded_types::GF
     out
 }
 
-/// HS `rulesActions thy` (Generation.hs:149-152): every rule's action facts.
+/// HS `rulesActions thy` (Generation.hs:142-146): every rule's action facts.
 fn rules_actions(rules: &[p::Rule]) -> Vec<&p::Fact> {
     rules.iter().flat_map(|r| r.actions.iter()).collect()
 }
@@ -604,7 +604,7 @@ fn fact_tag_eq(cf: &tamarin_theory::guarded_types::GFact, rf: &p::Fact) -> bool 
     cf.name == rf.name && cf.args.len() == rf.args.len() && cf.persistent == rf.persistent
 }
 
-/// HS `freeVarsInstantiatedByPubVars` (Generation.hs:315-318): at each position
+/// HS `freeVarsInstantiatedByPubVars` (Generation.hs:308-312): at each position
 /// where the case-test fact holds a free variable, the rule fact must hold a
 /// public variable.
 fn free_vars_instantiated_by_pub_vars(
@@ -618,7 +618,7 @@ fn free_vars_instantiated_by_pub_vars(
         .all(|(_, r)| is_pub_var(r))
 }
 
-/// HS `termIsFreeVar` (Generation.hs:162-166): the term is a single Free
+/// HS `termIsFreeVar` (Generation.hs:155-160): the term is a single Free
 /// variable (a `Bound` variable or non-variable term is not).
 fn term_is_free_var(t: &tamarin_theory::guarded_types::GTerm) -> bool {
     matches!(
@@ -627,7 +627,7 @@ fn term_is_free_var(t: &tamarin_theory::guarded_types::GTerm) -> bool {
     )
 }
 
-/// HS `isPubVar` (Term/LTerm.hs:323-325, see line 324): a variable of sort `LSortPub` (`$x`).
+/// HS `isPubVar` (Term/LTerm.hs:328-331, see line 330): a variable of sort `LSortPub` (`$x`).
 fn is_pub_var(t: &p::Term) -> bool {
     matches!(t, p::Term::Var(v) if sort_rank(v.sort) == 0)
 }
