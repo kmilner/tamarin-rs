@@ -202,10 +202,13 @@ def main():
     sitemap = []
     seen = set()
     for L in lemmas:
-        _, _, ov = http_get(base, f"/thy/trace/{idx}/overview/proof/{L}")
-        # record the overview page itself too
-        manifest[norm_url_key(f"/thy/trace/{idx}/overview/proof/{L}")] = {
-            "kind": "html", "status": 200, "body": ov}
+        # Through record(), so the page lands in the manifest with the status
+        # and content-type the server actually answered.  Hand-writing the row
+        # with a hardcoded 200 made web_diff's HTTP comparison inert on exactly
+        # the pages that drive the rest of the crawl: one side could 500 here
+        # and, as long as its error page canonicalized like the other's, the row
+        # still read MATCH.
+        _, _, ov = record(f"/thy/trace/{idx}/overview/proof/{L}")
         for h in hrefs(ov):
             if "/main/" not in h:
                 continue
