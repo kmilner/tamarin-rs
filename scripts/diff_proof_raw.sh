@@ -23,9 +23,9 @@
 #                     stdout is cached/reused as <key>.full.gz, where key is
 #                     sha256(theory)__<lemma>__v<CACHE_VERSION>[__f<flags>]
 #                     __b<oracle-binary fingerprint>.  corpus_raw_diff.sh and
-#                     corpus_full_trace_diff.sh share the DIRECTORY but not the
-#                     key: they do not fingerprint the oracle, so entries are
-#                     not exchanged with them.
+#                     corpus_full_trace_diff.sh fingerprint the same way, so
+#                     their FLAGLESS entries are exchanged with this script's
+#                     (a flagged run salts __f and stays distinct).
 #   TAM_RS_NO_AUTO_BUILD=1  skip the cargo rebuild of the RS binary
 set -uo pipefail
 
@@ -40,19 +40,23 @@ QUIET="${QUIET:-}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
+# Shared gate plumbing (gate_common.sh): OOM prologue, strip_env_lines,
+# flags_for, the oracle fingerprint recipe.
+[ -r "$script_dir/gate_common.sh" ] || { echo "diff_proof_raw: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
+. "$script_dir/gate_common.sh"
+# OOM discipline: the provers below die alone at the cap, not the session.
+oom_prologue
 CACHE_VERSION="${CACHE_VERSION:-1}"
 
 # --- per-file canonical flags (see file_flags.tsv) ---
 # Some theories need flags beyond bare `--prove` (e.g. --diff, --auto-sources)
 # to run the way HS intends; bare runs time out / produce nothing. Look up the
-# file's canonical flags (relpath under examples/) and pass them to BOTH HS and
-# RS; salt the cache key so a flagged entry is distinct from the bare one.
+# file's canonical flags (gate_common's flags_for, relpath under examples/)
+# and pass them to BOTH HS and RS; salt the cache key so a flagged entry is
+# distinct from the bare one.
 FLAGS_MAP="${FLAGS_MAP:-$script_dir/file_flags.tsv}"
 file_rel="${file#"$repo_root"/tamarin-prover/examples/}"; file_rel="${file_rel#tamarin-prover/examples/}"
-EXTRA_FLAGS=""
-if [ -f "$FLAGS_MAP" ]; then
-    EXTRA_FLAGS="$(awk -F'\t' -v r="$file_rel" '!/^#/ && $1==r {print $2; exit}' "$FLAGS_MAP")"
-fi
+EXTRA_FLAGS="$(flags_for "$file_rel")"
 FLAGS_SALT=""
 [ -n "$EXTRA_FLAGS" ] && FLAGS_SALT="__f$(printf '%s' "$EXTRA_FLAGS" | sha256sum | cut -c1-12)"
 [ -n "$EXTRA_FLAGS" ] && echo "diff_proof_raw: $file_rel canonical flags: $EXTRA_FLAGS" >&2
@@ -94,11 +98,10 @@ if [ -z "$hs_path" ]; then
     echo "diff_proof_raw.sh: no HS tamarin-prover binary found" >&2
     exit 2
 fi
-# Oracle-binary fingerprint (sweep_common.sh:262's recipe), salted into the
+# Oracle-binary fingerprint (gate_common's hs_fingerprint), salted into the
 # cache key below: sha256(theory)+lemma cannot see the ORACLE changing, so a
 # rebuilt oracle would keep being answered out of the previous one's entries.
-HS_FP=$(stat -c '%s.%Y' "$hs_path")
-HS_FP_SALT=$(printf '%s' "$HS_FP" | sha256sum | cut -c1-12)
+hs_fingerprint "$hs_path"
 
 # `tamarin-prover` is the PACKAGE; its only bin target is `tamarin-rs`, so
 # --bin tamarin-prover selects nothing and cargo errors out.
@@ -118,9 +121,9 @@ fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-strip_env_lines() {
-    grep -v -e '^Git revision:' -e '^Compiled at:' -e '^[[:space:]]*processing time:' "$1"
-}
+# strip_env_lines (gate_common.sh): the triage policy — delete only the three
+# unreproducible lines, keep `analyzed:` visible (the cache hit below rewrites
+# its path to this invocation's).
 
 # --- HS (shared raw cache).
 key=""

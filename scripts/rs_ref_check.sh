@@ -61,9 +61,12 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# Shared gate plumbing (gate_common.sh): OOM prologue, strip_env, flags_for,
+# maude resolver, the oracle fingerprint recipe.
+[ -r "$(dirname "${BASH_SOURCE[0]}")/gate_common.sh" ] || { echo "rs_ref_check: missing $(dirname "${BASH_SOURCE[0]}")/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
+. "$(dirname "${BASH_SOURCE[0]}")/gate_common.sh"
 # OOM discipline (see rs_vs_rs_diff.sh): provers die alone, not the session.
-echo 1000 > /proc/self/oom_score_adj 2>/dev/null || true
-ulimit -v 25165824 2>/dev/null || true
+oom_prologue
 
 ROOT="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 CORPUS="${CORPUS:-$ROOT/tamarin-prover/examples}"
@@ -80,7 +83,11 @@ export CORPUS BIN FLAGS_MAP TIMEOUT DERIV EXTRA_FLAGS
 
 [ -x "$BIN" ] || { echo "rs_ref_check: no executable prover at '$BIN' (set BIN=)" >&2; exit 2; }
 [ -f "$ALLOWLIST" ] || { echo "rs_ref_check: ALLOWLIST '$ALLOWLIST' does not exist" >&2; exit 2; }
-command -v maude >/dev/null 2>&1 || { echo "rs_ref_check: 'maude' not on PATH — install it first" >&2; exit 2; }
+# One maude for the run (MAUDE_PATH > PATH > linuxbrew, hard fail otherwise);
+# its directory goes on PATH so BIN's by-name probe finds the same binary the
+# version handshake below inspects.
+MAUDE=$(resolve_maude) || exit 2
+maude_on_path "$MAUDE"
 if [ "$MODE" = generate ]; then
     # Checked BEFORE the sweep runs: refusing an unjustified re-baseline after
     # an hour of prover time would just teach the operator to keep the flag
@@ -102,32 +109,32 @@ if [ "$MODE" = generate ]; then
              "a failing gate run cannot justify a new baseline" >&2
         exit 2; }
     # The oracle binary is the specification the certifying run compared
-    # against; its fingerprint (the same size.mtime recipe sweep_common.sh keys
-    # its cache on) is what pins WHICH oracle that was.
+    # against; its fingerprint (gate_common's hs_fingerprint, the same
+    # size.mtime recipe the cached gates key on) is what pins WHICH oracle
+    # that was.
     HS_PATH="${HS_PATH:-$(find "$ROOT/tamarin-prover-testing/.stack-work/install" \
                                -name tamarin-prover -type f 2>/dev/null | head -1)}"
     [ -n "$HS_PATH" ] && [ -x "$HS_PATH" ] || {
         echo "rs_ref_check: no oracle binary to fingerprint (HS_PATH=${HS_PATH:-unset})" >&2
         exit 2; }
-    HS_FP=$(stat -c '%s.%Y' "$HS_PATH")
+    hs_fingerprint "$HS_PATH"
 fi
 if [ "$MODE" = check ]; then
     [ -n "$CERT" ] && { echo "rs_ref_check: --certified-by is only meaningful for generate" >&2; exit 2; }
     [ -f "$REF" ] || { echo "rs_ref_check: reference '$REF' missing — run generate first" >&2; exit 2; }
     ref_maude=$(awk -F': ' '/^# maude:/{print $2; exit}' "$REF")
-    cur_maude=$(maude --version)
+    cur_maude=$("$MAUDE" --version)
     if [ -n "$ref_maude" ] && [ "$ref_maude" != "$cur_maude" ]; then
         echo "rs_ref_check: maude version mismatch: reference was generated with $ref_maude, this machine has $cur_maude" >&2
         exit 2
     fi
 fi
 
-strip_env() {
-    grep -v -e '^Git revision:' -e '^Compiled at:' \
-            -e '^[[:space:]]*processing time:' -e '^[[:space:]]*analyzed:'
-}
-flags_for() { [ -f "$FLAGS_MAP" ] && awk -F'\t' -v r="$1" '!/^#/ && $1==r {print $2; exit}' "$FLAGS_MAP"; }
-ikey() {  # input key: theory sha + flags-hash suffix (matches wf_gate's ckey)
+# strip_env / flags_for come from gate_common.sh.  ikey is deliberately NOT
+# gate_common's ckey: the reference key must not carry the oracle fingerprint
+# (the header's `# oracle:` line records that separately), so it is the
+# fingerprint-free prefix of the same format.
+ikey() {  # input key: theory sha + flags-hash suffix
     local h fl; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
     if [ -n "$fl" ]; then printf '%s__f%s' "$h" "$(printf '%s' "$fl" | sha256sum | cut -c1-12)"
     else printf '%s' "$h"; fi
@@ -179,7 +186,7 @@ if [ "$MODE" = generate ]; then
         rm -f "$RUN"; exit 1
     fi
     { echo "# rs_ref_check reference — regenerate with: scripts/rs_ref_check.sh generate --certified-by <gate-results>"
-      echo "# maude: $(maude --version)"
+      echo "# maude: $("$MAUDE" --version)"
       echo "# oracle: $HS_FP"
       echo "# certified-by: $CERT ($CERT_VERDICT)"
       cat "$RUN"; } > "$REF"

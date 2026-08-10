@@ -12,9 +12,10 @@
 #   sweep_out    — resolve $OUT against a per-sweep default, create its directory
 #   sweep_export — export the helpers + environment the xargs children need
 #   sweep_retry  — serial re-run of the ERROR rows at RETRY_TIMEOUT
-#   rs_stale_check — refuse to sweep with a release binary older than the sources
 #   sweep_banner / sweep_finish — denominator + fingerprints up front, ledger
 #                  application + summary + DONE sentinel at the end
+# and, via gate_common.sh (sourced below): norm, the OOM prologue grun wraps,
+# rs_stale_check, the maude resolver and the oracle preflights.
 #
 # The oracle cache (HS_CACHE, default scripts/.hs_sweep_cache/, gitignored)
 # keys on sha256(theory) + the sweep-provided flag tag + the oracle binary
@@ -23,8 +24,10 @@
 # WITH their cap: a timeout at cap T satisfies any request with cap <= T
 # (it would time out again), while a finished run satisfies every cap.
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+[ -r "$(dirname "${BASH_SOURCE[0]}")/gate_common.sh" ] || { echo "sweep_common: missing $(dirname "${BASH_SOURCE[0]}")/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
+. "$(dirname "${BASH_SOURCE[0]}")/gate_common.sh"
 HS_BIN=${HS_PATH:-$(find "$REPO/tamarin-prover-testing/.stack-work/install" -name tamarin-prover -type f 2>/dev/null | head -1)}
-MAUDE=${MAUDE_PATH:-/home/linuxbrew/.linuxbrew/bin/maude}
+MAUDE=$(resolve_maude) || exit 2
 EXAMPLES=$REPO/tamarin-prover/examples
 CSR=$REPO/tamarin-prover/case-studies-regression
 # RS_PATH is the spelling the other gates (corpus_file_diff.sh, pretty_gate.sh)
@@ -39,15 +42,17 @@ HS_CACHE=${HS_CACHE:-$REPO/scripts/.hs_sweep_cache}
 # without editing the real one.
 LEDGER=${LEDGER:-$REPO/scripts/sweep_expected.tsv}
 
-grun() { ( echo 1000 > /proc/self/oom_score_adj; ulimit -v 16777216; timeout "$TIMEOUT" "$@" ); }
+# Per-run guard: gate_common's OOM prologue at the sweeps' 16 GiB cap, inside
+# a subshell so each prover invocation carries its own ceiling.
+grun() { ( oom_prologue 16777216; timeout "$TIMEOUT" "$@" ); }
 
 # row <field...> — append one tab-separated row to $OUT. One write per row, so
 # the parallel children's appends interleave by line rather than mid-field.
 row() { local IFS=$'\t'; printf '%s\n' "$*" >> "$OUT"; }
 
-# Blank the volatile lines (same set as scripts/corpus_file_diff.sh).
-norm() { sed -e 's/^Git revision:.*/GITREV/' -e 's/^Compiled at:.*/COMPILED/' \
-             -e 's/^[[:space:]]*analyzed:.*/ANALYZED/' -e 's/^[[:space:]]*processing time:.*/PTIME/'; }
+# norm (gate_common.sh): BLANK the volatile lines to placeholders — the same
+# four lines the gates' strip_env deletes, kept as position evidence here
+# because nonempty_compared distinguishes blanked from deleted.
 
 # Normalize the two known pre-existing stderr divergences (NEITHER is any
 # flag's — both reproduce on a plain `tamarin-prover <file>` run, and both are
@@ -234,37 +239,18 @@ sweep_preflight() {
     echo "ERROR: '$MAUDE --version' produced nothing — that is not a working maude" >&2
     exit 2
   fi
-  # The oracle IS the specification, so it has to be the build of the submodule
-  # pin. An oracle from another revision compares the port against a different
-  # upstream and reports the result as parity — the same policy
-  # divergence_fixtures/capture.sh enforces on its captures. Skipped when the
-  # gitlink cannot be read or the binary prints no `Git revision:` line at all,
-  # since neither absence is evidence of a mismatch; ALLOW_ORACLE_REV_MISMATCH=1
-  # for a deliberate cross-revision comparison.  A binary built outside a git
-  # checkout stamps the literal `UNKNOWN`, and that IS evidence: the oracle is
-  # built from the pinned worktree, so anything unstamped is a packaged release
-  # (the box carries a 1.12.0 one) rather than the specification.  `--version`
-  # prints the `Git revision:` line as
-  # part of `ensureMaudeAndGetVersion`'s block (Console.hs:333-338), so it needs
-  # `--with-maude=$MAUDE`: without it the probe resolves `maude` on PATH, dies
-  # before the line, and leaves `binrev` empty — the guard would then skip on
-  # exactly the boxes that keep maude off PATH, which is why MAUDE exists.
-  local pin binrev
-  pin=$(git -C "$REPO" rev-parse :tamarin-prover 2>/dev/null) || pin=
-  binrev=$(timeout 60 "$HS_BIN" --with-maude="$MAUDE" --version 2>/dev/null \
-           | sed -n 's/^Git revision: \([^,]*\),.*/\1/p')
-  if [ -n "$pin" ] && [ -n "$binrev" ] && [ "$pin" != "$binrev" ]; then
-    echo "ERROR: oracle '$HS_BIN' is revision $binrev but the submodule pin is $pin" \
-         "— it would certify the port against the wrong upstream" \
-         "(rebuild with ./setup.sh testing, or ALLOW_ORACLE_REV_MISMATCH=1)" >&2
-    [ "${ALLOW_ORACLE_REV_MISMATCH:-0}" = 1 ] || exit 2
-  fi
+  # gate_common's oracle_rev_check: the oracle must be the build of the
+  # submodule pin — the same policy divergence_fixtures/capture.sh enforces on
+  # its captures (rationale, skip conditions and the ALLOW_ORACLE_REV_MISMATCH
+  # escape hatch are documented at the definition).
+  oracle_rev_check "$HS_BIN" "$MAUDE" "$REPO"
 }
 sweep_preflight
 
-# Oracle-binary fingerprint, part of every cache key. Loop-invariant, so it is
-# taken once here rather than per cached lookup.
-HS_FP=$(stat -c '%s.%Y' "$HS_BIN")
+# Oracle-binary fingerprint (gate_common's hs_fingerprint), part of every
+# cache key. Loop-invariant, so it is taken once here rather than per cached
+# lookup.
+hs_fingerprint "$HS_BIN"
 
 # include_shas <theory> [depth]
 #   sha + name of every file the theory pulls in with `#include "..."`, depth
@@ -374,8 +360,8 @@ sweep_out() {
 #   aborts the child instead of expanding to empty, and the row it never wrote
 #   turns up in sweep_finish's row-count check.
 sweep_export() {
-  export -f one row grun norm nerr io_diff infra_abort nonempty_compared nocompare_check \
-            include_shas hs_run "$@"
+  export -f one row grun oom_prologue norm nerr io_diff infra_abort nonempty_compared \
+            nocompare_check include_shas hs_run "$@"
   export HS_BIN RS_BIN MAUDE OUT TIMEOUT HS_CACHE HS_FP
 }
 
@@ -401,37 +387,8 @@ sweep_retry() {
   done <<< "$rows"
 }
 
-# Refuse to sweep when target/release/tamarin-rs predates the sources — a stale
-# binary silently certifies the wrong code (ALLOW_STALE_BIN=1 overrides).
-#
-# A `crates/**/*.rs` glob is not the whole input set. The binary also bakes in
-# files from OUTSIDE crates/ via `include_str!` — `tamarin-prover/data/
-# intruder_variants_{dh,bp}.spthy` are compiled into `intruder_variants.rs`,
-# so a submodule bump that edits them changes the port's behaviour on every DH
-# theory while leaving every path the glob covers untouched. Cargo already
-# records the complete list next to the binary in its dep-info file, so read
-# that when it is there rather than re-deriving it. Paths under `.git/` are
-# excluded: build.rs watches HEAD/refs/packed-refs to bake the revision and
-# timestamp into `Git revision:` / `Compiled at:`, and every gate normalizes
-# those two lines away, so a commit is not a reason to rebuild.
-rs_stale_check() {
-  local newest dep p
-  newest=$(find "$REPO/crates" \( -name '*.rs' -o -name 'Cargo.toml' \) -newer "$RS_BIN" -print -quit 2>/dev/null)
-  # The workspace root manifests are inputs too: a dependency bump there
-  # rebuilds the binary but leaves every file under crates/ untouched.
-  [ -n "$newest" ] || newest=$(find "$REPO/Cargo.toml" "$REPO/Cargo.lock" -newer "$RS_BIN" -print -quit 2>/dev/null)
-  dep="$RS_BIN.d"
-  if [ -z "$newest" ] && [ -f "$dep" ]; then
-    while read -r p; do
-      case $p in '' | */.git/*) continue ;; esac
-      if [ -e "$p" ] && [ "$p" -nt "$RS_BIN" ]; then newest=$p; break; fi
-    done < <(head -1 "$dep" | cut -d: -f2- | tr ' ' '\n')
-  fi
-  if [ -n "$newest" ]; then
-    echo "ERROR: $RS_BIN is older than $newest — rebuild first (ALLOW_STALE_BIN=1 to override)" >&2
-    [ "${ALLOW_STALE_BIN:-0}" = 1 ] || exit 2
-  fi
-}
+# rs_stale_check comes from gate_common.sh; called bare by the sweeps, it
+# defaults to this file's $RS_BIN and $REPO.
 
 # sweep_banner <name> <total>
 #   Records the denominator for sweep_finish's row-count check. An empty

@@ -34,6 +34,12 @@ set -uo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
+# Shared gate plumbing (gate_common.sh): OOM prologue, strip_env_lines, the
+# oracle fingerprint recipe the cache key carries.
+[ -r "$script_dir/gate_common.sh" ] || { echo "corpus_raw_diff: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
+. "$script_dir/gate_common.sh"
+# OOM discipline: every prover child inherits the cap and dies alone.
+oom_prologue
 
 TIMEOUT="${TIMEOUT:-120}"
 RS_TIMEOUT="${RS_TIMEOUT:-30}"
@@ -99,11 +105,16 @@ if [ ! -x "$rs_path" ]; then
     exit 2
 fi
 
-# --- Cache key: identical scheme to corpus_full_trace_diff.sh.
+# --- Cache key: identical scheme to corpus_full_trace_diff.sh, carrying the
+# oracle-binary fingerprint (gate_common's hs_fingerprint) so a rebuilt oracle
+# is a MISS, not a stale hit — the same __b suffix diff_proof_raw.sh salts in
+# and scripts/migrate_hs_cache_fp.sh rekeyed the older entries onto, so the
+# three tools exchange flagless entries again.
+hs_fingerprint "$hs_path"
 hs_cache_key() {
     local f="$1" lemma="$2" h
     h=$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)
-    printf '%s__%s__v%s.canon' "$h" "$lemma" "$CACHE_VERSION"
+    printf '%s__%s__v%s__b%s.canon' "$h" "$lemma" "$CACHE_VERSION" "$HS_FP_SALT"
 }
 
 # --- Lemma enumeration (same comment-stripping awk as corpus_full_trace_diff.sh).
@@ -142,13 +153,12 @@ lemmas_of() {
         | sed -E 's/^lemma[[:space:]]+([A-Za-z0-9_]+).*/\1/'
 }
 
-# --- Strip the only lines that legitimately differ between the two binaries.
-strip_env_lines() {
-    grep -v -e '^Git revision:' -e '^Compiled at:' -e '^[[:space:]]*processing time:' "$1"
-}
+# --- strip_env_lines (gate_common.sh): delete the only lines that
+# legitimately differ between the two binaries, keeping `analyzed:` visible
+# (the cache hit rewrites its path to this invocation's).
 export -f hs_cache_key lemmas_of strip_env_lines
 export HS_PATH="$hs_path" RS_PATH="$rs_path" TIMEOUT RS_TIMEOUT EXTRA_ENV \
-       HS_CANON_CACHE CACHE_VERSION NO_HS_CACHE DERIVCHECK_TIMEOUT HS_RTS
+       HS_CANON_CACHE CACHE_VERSION NO_HS_CACHE DERIVCHECK_TIMEOUT HS_RTS HS_FP_SALT
 
 # --- Per-lemma worker. Emits ONE machine-parseable line:
 #       <file>\t<lemma>\t<status>\t<hs_lines>\t<rs_lines>\t<diff>\t<hs_ms>\t<rs_ms>

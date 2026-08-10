@@ -35,15 +35,16 @@
 # (a file whose bytes were never compared), and when fewer rows land than files
 # were listed.
 set -u
-# Heavy-subprocess guard, the same discipline wf_gate.sh / pretty_gate.sh use:
-# volunteer this tree as the kernel's first OOM victim instead of the desktop,
-# and cap address space.  `ulimit -v` is per-process and inherited, so every
-# HS/RS child gets its own 24 GiB ceiling (verified: GHC's RTS falls back to a
-# smaller reservation rather than failing to start under the cap).
-echo 1000 > /proc/self/oom_score_adj 2>/dev/null || true
-ulimit -v 25165824 2>/dev/null || true
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
+# Shared gate plumbing: OOM prologue, strip_env, flags_for/ckey, filelist,
+# maude resolver.
+[ -r "$script_dir/gate_common.sh" ] || { echo "corpus_file_diff: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
+. "$script_dir/gate_common.sh"
+# Heavy-subprocess guard, the same discipline wf_gate.sh / pretty_gate.sh use:
+# every HS/RS child inherits its own 24 GiB ceiling (verified: GHC's RTS falls
+# back to a smaller reservation rather than failing to start under the cap).
+oom_prologue
 
 FILE_TIMEOUT="${FILE_TIMEOUT:-300}"
 JOBS="${JOBS:-4}"
@@ -69,68 +70,46 @@ HS_PATH="${HS_PATH:-$(find_hs_bin "$repo_root")}" || { echo "no HS binary" >&2; 
 [ -x "$HS_PATH" ] || { echo "no HS binary at $HS_PATH" >&2; exit 2; }
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 [ -x "$RS_PATH" ] || { echo "no RS binary at $RS_PATH" >&2; exit 2; }
-# Oracle-binary fingerprint (same recipe as sweep_common.sh:262), folded into
-# every cache key below.  Without it the key is sha256(theory)+flags, which
-# cannot see the ORACLE changing: a rebuilt oracle keeps answering out of
-# entries the previous one produced, and the gate certifies the port against
-# an upstream that is no longer checked out.  Loop-invariant, so taken once.
-HS_FP=$(stat -c '%s.%Y' "$HS_PATH")
-HS_FP_SALT=$(printf '%s' "$HS_FP" | sha256sum | cut -c1-12)
+# Both provers resolve `maude` by NAME (RS probes /usr/local/bin and /usr/bin
+# first, then PATH; HS searches PATH) — and a maude-less environment turns
+# every Phase-1 oracle run into a sticky .nohs cache marker.  Resolve one
+# maude for the whole run and put its directory on PATH for the children.
+MAUDE=$(resolve_maude) || exit 2
+maude_on_path "$MAUDE"
+# Oracle-binary fingerprint (gate_common's hs_fingerprint), folded into every
+# cache key below.  Without it the key is sha256(theory)+flags, which cannot
+# see the ORACLE changing: a rebuilt oracle keeps answering out of entries the
+# previous one produced, and the gate certifies the port against an upstream
+# that is no longer checked out.  Loop-invariant, so taken once.
+hs_fingerprint "$HS_PATH"
 export HS_PATH RS_PATH FILE_TIMEOUT DERIVCHECK_TIMEOUT HS_RTS CACHE CORPUS_ROOT
 export HS_FP HS_FP_SALT
 
-# Strip the volatile header lines from a tamarin run (Git rev / Compiled at /
-# processing time / analyzed-path).  Stripping `analyzed:` on BOTH sides means
-# no cache path-rewrite is needed.
-strip_env() {
-    grep -v -e '^Git revision:' -e '^Compiled at:' \
-            -e '^[[:space:]]*processing time:' -e '^[[:space:]]*analyzed:'
-}
+# strip_env (gate_common.sh): DELETE the four volatile header lines.
+# Stripping `analyzed:` on BOTH sides means no cache path-rewrite is needed.
 export -f strip_env
 
 # --- per-file canonical flags (see file_flags.tsv) ---------------------------
-# flags_for echoes the extra HS/RS flags for a relpath (empty if none).
-# ckey salts the content-hash with a flags hash, so a flagged entry is a
-# DISTINCT cache key from the bare one, and then with the oracle-binary
-# fingerprint, so entries produced by a different oracle are a MISS rather
-# than a stale hit.  KEY FORMAT (shared with pretty_gate.sh / wf_gate.sh,
-# and with scripts/migrate_hs_cache_fp.sh which rekeys older entries):
-#   <sha256(theory)>[__f<12 hex of sha256(flags)>]__b<12 hex of sha256(HS_FP)>
+# flags_for / ckey come from gate_common.sh: ckey salts the content-hash with
+# a flags hash, so a flagged entry is a DISTINCT cache key from the bare one,
+# and then with the oracle-binary fingerprint, so entries produced by a
+# different oracle are a MISS rather than a stale hit.
 # Special token `@cd`: not a prover flag — run the prover from the file's
 # OWN directory with the bare filename (upstream's deforacle recipe,
 # Makefile:199-201: default-oracle lookup is cwd-relative). Stripped from
 # the flag list before invocation; still salts the cache key.
 FLAGS_MAP="${FLAGS_MAP:-$script_dir/file_flags.tsv}"
 export FLAGS_MAP
-flags_for() {
-    [ -f "$FLAGS_MAP" ] || return 0
-    awk -F'\t' -v r="$1" '!/^#/ && $1==r {print $2; exit}' "$FLAGS_MAP"
-}
-export -f flags_for
-ckey() {  # <relpath> <abs-file>
-    local h fl; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
-    if [ -n "$fl" ]; then
-        h="${h}__f$(printf '%s' "$fl" | sha256sum | cut -c1-12)"
-    fi
-    printf '%s__b%s' "$h" "$HS_FP_SALT"
-}
-export -f ckey
+export -f flags_for ckey
 
 # --- file list (allowlist) ---
-# Precedence: explicit ALLOWLIST env > committed canonical corpus
-# (scripts/parity_corpus.txt) > derive from PREV_TSV.
-# A set-but-unreadable ALLOWLIST is a typo, not a request for the default: it
-# used to fall through to the whole 432-file corpus, so the run silently
-# stopped being the one that was asked for.
-if [ -n "$ALLOWLIST" ] && [ ! -r "$ALLOWLIST" ]; then
-    echo "ALLOWLIST '$ALLOWLIST' is not a readable file" >&2; exit 2
-fi
-filelist() {
-    if [ -n "$ALLOWLIST" ]; then
-        cat "$ALLOWLIST"
-    elif [ -f "$script_dir/parity_corpus.txt" ]; then
-        cat "$script_dir/parity_corpus.txt"
-    elif [ -f "$PREV_TSV" ]; then
+# gate_common's filelist: explicit ALLOWLIST env > committed canonical corpus
+# (scripts/parity_corpus.txt) > this gate's fallback, which derives from
+# PREV_TSV or refuses.  allowlist_guard rejects a set-but-unreadable
+# ALLOWLIST (a typo, not a request for the default).
+allowlist_guard
+filelist_fallback() {
+    if [ -f "$PREV_TSV" ]; then
         cut -f1 "$PREV_TSV"
     else
         echo "no ALLOWLIST, no $script_dir/parity_corpus.txt, no $PREV_TSV to derive from" >&2; exit 2

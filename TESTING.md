@@ -34,9 +34,33 @@ target/release/tamarin-rs <any-theory> | grep '^Git revision:'
 sides differently, and getting it wrong is a silent vacuous pass rather than
 an error:
 
-- *Shell scripts* want them on `PATH`. `wf_gate.sh` and `pretty_gate.sh`
-  prepend linuxbrew themselves; the rest inherit your `PATH`. On hosts where
-  these come from linuxbrew they are often *not* on `PATH` by default:
+- *Shell scripts* resolve maude for themselves, through the one resolver in
+  `scripts/gate_common.sh`: `$MAUDE_PATH` when set → `maude` on your `PATH` →
+  `/home/linuxbrew/.linuxbrew/bin/maude` → hard fail naming all three steps. A
+  `MAUDE_PATH` that is set but is not an executable file is a hard fail too,
+  never a silent fall-through to something else. The gates
+  (`corpus_file_diff.sh`, `wf_gate.sh`, `pretty_gate.sh`), the three flag
+  sweeps, `rs_ref_check.sh`, `rs_vs_rs_diff.sh`, `web_parity.sh` and
+  `pane_byte_check.sh` all take that route, so an explicit `MAUDE_PATH`, or a
+  `maude` on your own `PATH`, wins over the linuxbrew install instead of being
+  overridden by it. Two deliberate exceptions: `capture_cli_refs.sh` walks the
+  Rust test harness's own ladder (its captures must use the maude
+  `cli_e2e.rs` will), and `migrate_hs_cache_fp.sh` tolerates a missing maude
+  so its revision probe reports `NOT CHECKED` rather than blocking a
+  rename-only migration.
+
+  The resolved binary's own directory is prepended to `PATH`, which is how the
+  children pick it up: the flag sweeps pass `--with-maude` outright, and
+  everything else lets each engine resolve by name — the oracle straight off
+  `PATH`, the port only after trying `/usr/local/bin/maude` and
+  `/usr/bin/maude`, so a host carrying either of those hands the port that one
+  whatever the script resolved (this box has neither).
+
+  Two things are plain `PATH` lookups: `dot`, which the web servers
+  invoke by name, and the per-lemma triage tools (`diff_proof_raw.sh`,
+  `corpus_raw_diff.sh`, `corpus_full_trace_diff.sh`, `triage_diff_vs_hs.sh`),
+  which run the provers on whatever they inherit. On hosts where these come
+  from linuxbrew and it is *not* on `PATH` by default:
 
   ```bash
   export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
@@ -69,16 +93,20 @@ an error:
 **Byte-identical raw `--prove` stdout**, after deleting four
 environment-volatile lines: `Git revision:`, `Compiled at:`,
 `processing time:` and `analyzed:` (the last carries the input path). That is
-the `strip_env` shared by `corpus_file_diff.sh`, `wf_gate.sh`,
-`pretty_gate.sh`, `rs_ref_check.sh`, `rs_vs_rs_diff.sh`,
-`triage_diff_vs_hs.sh` and `divergence_fixtures/_common.sh`; the sweeps blank
-the same four lines instead of deleting them.
+`strip_env`, defined once in `scripts/gate_common.sh` and sourced from there
+by `corpus_file_diff.sh`, `wf_gate.sh`, `pretty_gate.sh`, `rs_ref_check.sh`,
+`rs_vs_rs_diff.sh`, `capture_cli_refs.sh` and `triage_diff_vs_hs.sh`;
+`divergence_fixtures/_common.sh` keeps its own copy of the same four-line
+policy. The sweeps blank the same four lines instead of deleting them
+(`norm`, also in `gate_common.sh`: a blanked line still pins that the line was
+printed and where, which their no-compare check leans on).
 
 Two triage scripts are stricter than the gates they triage:
-`diff_proof_raw.sh` and `corpus_raw_diff.sh` keep `analyzed:`. Since both take
-a single file, the line is constant across their two sides and the difference
-does not bite in practice — but it is a real asymmetry, so a diff confined to
-that line is an artefact, not a finding.
+`diff_proof_raw.sh` and `corpus_raw_diff.sh` keep `analyzed:` — that is
+`strip_env_lines`, the third strip policy `gate_common.sh` carries. Since
+both take a single file, the line is constant across their two sides and the
+difference does not bite in practice — but it is a real asymmetry, so a diff
+confined to that line is an artefact, not a finding.
 
 Stderr is outside the criterion on the prove path: the batch gate sends both
 sides' stderr to `/dev/null`. Exit status is not — the oracle's rc is cached
@@ -277,9 +305,13 @@ Raw byte-for-byte diff of one lemma's `--prove` output; exit 0 = identical.
 `cargo build --release -p tamarin-prover`; pass `TAM_RS_NO_AUTO_BUILD=1` to
 diff a binary you built yourself.
 
-Its `.hs_canon_cache/` key carries the oracle fingerprint;
-`corpus_raw_diff.sh`'s and `corpus_full_trace_diff.sh`'s do not, so the three
-share a directory but not entries.
+All three `.hs_canon_cache/` users — `diff_proof_raw.sh`,
+`corpus_raw_diff.sh` and `corpus_full_trace_diff.sh` — key on the oracle
+fingerprint, so a rebuilt oracle is a MISS rather than a stale hit, and their
+flagless entries are exchanged (a `diff_proof_raw.sh` run under the file's
+canonical flags salts `__f` into the key and stays distinct). All three carry
+the gates' `oom_prologue` as well — as does `triage_diff_vs_hs.sh` — so a
+prover that outgrows the 24 GiB cap dies alone.
 
 ## Corpus gate (the batch parity metric)
 
@@ -311,20 +343,25 @@ Env knobs (full list in the script header): `ALLOWLIST` (one relative path
 per line; unset uses `scripts/parity_corpus.txt`, set-but-unreadable is
 `exit 2`), `RESULTS_TSV`, `JOBS` (4), `HS_N` (RTS cores per oracle, 4),
 `HS_MAXHEAP` (GHC `-M`, 11 g), `FILE_TIMEOUT` (300 s), `DERIVCHECK_TIMEOUT`
-(30 s), `CORPUS_ROOT`, `CACHE`, `HS_PATH`, `RS_PATH`, `FLAGS_MAP`.
+(30 s), `CORPUS_ROOT`, `CACHE`, `HS_PATH`, `RS_PATH`, `FLAGS_MAP`,
+`MAUDE_PATH`. It resolves one maude up front and exits 2 when nothing
+resolves: an oracle run without maude fails at load, and Phase 1 would write
+that as a sticky `.nohs` marker the next run would honour.
 
 **Budget for it.** `JOBS=4` is a memory bound, not a leftover: four
 concurrent oracles at `-N4 -M11g` plus four Rust provers is up to ~44 GB of
-GHC heap. It carries the same `oom_score_adj=1000` / `ulimit -v 24 GiB`
-prologue as the two fast gates (inherited by every child), so a runaway prover
-dies alone — but the ceiling is still yours to respect: on a constrained box
-lower `JOBS` rather than raising it.
+GHC heap. It carries the shared `oom_prologue` — `oom_score_adj=1000` plus a
+24 GiB `ulimit -v`, inherited by every child — as do the two fast gates and
+the triage tools that run provers, so a runaway prover dies alone. The ceiling
+is still yours to respect: on a constrained box lower `JOBS` rather than
+raising it.
 
 **Cache keys carry the oracle.** `.hs_file_cache/` and `.hs_pretty_cache/`
 entries are named
 `<sha256(theory)>[__f<12 hex sha256(flags)>]__b<12 hex sha256(HS_FP)>.<suffix>`,
-where `HS_FP` is `stat -c '%s.%Y'` of the oracle binary — `sweep_common.sh`'s
-recipe. A rebuilt oracle, whether a bump or a
+where `HS_FP` is `stat -c '%s.%Y'` of the oracle binary — `gate_common.sh`'s
+`hs_fingerprint`, the one definition every cached gate sources. A rebuilt
+oracle, whether a bump or a
 `patches/tamarin-prover-fixes.patch` edit re-applied by `./setup.sh testing`,
 is a clean MISS per entry rather than a silently stale hit. Nothing is archived
 and nothing is wiped: `bump_submodule.sh` deliberately leaves the caches in
@@ -341,14 +378,13 @@ adopting the old entries legitimate;
 `ALLOW_ORACLE_REV_MISMATCH=1` overrides, `DRY_RUN=1` reports without moving,
 and it prints per-cache migrated/already/other-oracle/collided/unrecognised/
 failed counts plus `DONE_MIGRATE_HS_CACHE_FP verdict=OK|FAILED`. It is
-idempotent. Do not run `triage_diff_vs_hs.sh` between the landing and the
-migration: it still writes un-fingerprinted keys.
+idempotent. Every tool that touches `.hs_file_cache/` computes the same
+fingerprinted key, `triage_diff_vs_hs.sh` included, so nothing writes entries
+the migration would have to chase.
 
-Two gaps remain. `corpus_raw_diff.sh` and `corpus_full_trace_diff.sh` key
-`.hs_canon_cache/` without the fingerprint, so those two keep serving
-pre-rebuild bytes; and every cache but `.hs_sweep_cache/` keys an
-`#include`ing theory on the includer alone, so an edit below
-`testParser/include/` leaves them serving the pre-edit oracle.
+One gap remains: every cache but `.hs_sweep_cache/` keys an `#include`ing
+theory on the includer alone, so an edit below `testParser/include/` leaves
+them serving the pre-edit oracle.
 
 ## Fast gates (run on every build)
 
@@ -390,8 +426,10 @@ to load under the oracle), `NO_HS_FILL`, `RESULTS_TSV`, `ALLOWLIST`,
 gate — lower values make the oracle's load-sensitive derivation checks time
 out under parallel fill, and the "Derivation checks timed out." block then
 sits in the shared load cache as a wrong reference until those entries are
-deleted). Both prepend linuxbrew to
-`PATH` themselves, so they use linuxbrew's maude whatever the operator set.
+deleted), and `MAUDE_PATH`. Both resolve one maude through `gate_common.sh`
+(`MAUDE_PATH` → `PATH` → linuxbrew → hard fail) and prepend *that* binary's
+directory to `PATH`, so the maude an operator points them at is the one the
+oracle and the port both run.
 
 ## Corner fixtures (no oracle, no proving)
 
@@ -487,7 +525,14 @@ Runs two Rust binaries (pre/post) over every example and diffs stripped
 stdout; agreement everywhere means the change is behaviorally inert and
 inherits the baseline's HS-faithfulness by transitivity.
 `scripts/triage_diff_vs_hs.sh` then 3-way-triages any DIFF files against
-fresh Haskell output (moved toward HS or away?).
+Haskell output (moved toward HS or away?). It reads and fills the batch gate's
+`.hs_file_cache/` at the same fingerprinted key, and runs all three binaries
+under the file's canonical `file_flags.tsv` flags — the same flags the sweep
+that flagged the file used — so the comparison is like-for-like and an entry
+it writes is one `corpus_file_diff.sh` will reuse. It needs the oracle binary
+present even on a warm cache (the fingerprint is part of the key) and exits 2
+without one. Env: `PRE`, `POST`, `HS`, `CACHE`, `FLAGS_MAP`, `FT` (300 s),
+`DERIV` (30 s), `CORPUS`.
 
 The transitivity argument needs *agreement everywhere*, and the script checks
 it: `DONE_RS_VS_RS verdict=<...>` folds in DIFF, `ERROR_*`,
@@ -497,7 +542,9 @@ allowlist, and the exit status carries it. `TIMEOUT_BOTH` is fatal too —
 inertness — and it is listed in the `=== needs attention ===` block.
 Practical consequence: a full-corpus `--prove` sweep at the default 180 s cap
 reports red until you raise `TIMEOUT` or narrow `ALLOWLIST`. An empty file
-list is `exit 2`.
+list is `exit 2`, and so is an environment with no resolvable maude — every
+run would fail fast on both sides and be scored `ERROR_BOTH`, which is a
+sweep that compared nothing.
 
 ## Web-parity gate (interactive mode)
 
@@ -632,6 +679,13 @@ The list is not exhaustive — grep the sources for `TAM_DBG_` / `TAM_RS_` /
 
 Per-script detail — env contracts, verdict semantics, cache layout — lives in
 `scripts/README.md`; this is the map.
+
+`scripts/gate_common.sh` is the shared core underneath them: the gates, the
+three flag sweeps (via `sweep_common.sh`) and the cache-touching triage tools
+source it for the OOM prologue, the three strip policies, `flags_for`/`ckey`,
+`hs_fingerprint`, the gate file list, the maude resolver and the
+stale-binary / oracle-revision preflights. A consumer that cannot read it
+exits 2 rather than running with a private fallback.
 
 **Gates**
 

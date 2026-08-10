@@ -43,6 +43,11 @@
 set -u
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
+# Shared gate plumbing (gate_common.sh): maude resolver, the oracle
+# fingerprint recipe.  (The OOM guards here live inside boot_crawl, per
+# server, with their own SERVER_MEM_KB cap.)
+[ -r "$script_dir/gate_common.sh" ] || { echo "web_parity: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
+. "$script_dir/gate_common.sh"
 
 FILE_TIMEOUT="${FILE_TIMEOUT:-300}"
 READY_TIMEOUT="${READY_TIMEOUT:-90}"
@@ -100,10 +105,13 @@ find_hs_bin() {
 }
 HS_PATH="${HS_PATH:-$(find_hs_bin)}" || { echo "no HS binary" >&2; exit 2; }
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
-MAUDE_PATH="${MAUDE_PATH:-$(command -v maude)}"
+# Both servers probe `maude` by name; resolve one (MAUDE_PATH > PATH >
+# linuxbrew, hard fail otherwise) and put its directory on PATH for them.
+MAUDE_PATH=$(resolve_maude) || exit 2
+maude_on_path "$MAUDE_PATH"
 
-# Oracle-binary fingerprint, the same size.mtime recipe the flag sweeps key
-# their caches on (sweep_common.sh).  The HS manifest cache is content-keyed on
+# Oracle-binary fingerprint, gate_common's hs_fingerprint (the same size.mtime
+# recipe the flag sweeps key their caches on).  The HS manifest cache is content-keyed on
 # sha256(theory) ALONE, which cannot see WHICH oracle produced the manifest: a
 # rebuilt HS binary keeps being answered out of manifests crawled by the
 # previous one, and the gate then certifies the port against a binary that no
@@ -114,7 +122,7 @@ MAUDE_PATH="${MAUDE_PATH:-$(command -v maude)}"
 # version below: a manifest from another oracle is re-crawled, not reused —
 # and pane_byte_check.sh checks the same sidecar, SKIPping what it cannot
 # re-crawl.
-HS_FP=$(stat -c '%s.%Y' "$HS_PATH") \
+hs_fingerprint "$HS_PATH" \
     || { echo "cannot fingerprint HS binary '$HS_PATH'" >&2; exit 2; }
 
 # Auto-build RS (opt out with TAM_RS_NO_AUTO_BUILD=1).

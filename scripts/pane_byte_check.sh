@@ -22,13 +22,16 @@
 # DIFF, any MISSING_* (a pane one side never produced), any SKIP_* (a file whose
 # bytes were never compared at all) and on any shortfall in the row count.
 set -u
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/.." && pwd)"
+# Shared gate plumbing (gate_common.sh): OOM prologue, maude resolver, the
+# oracle fingerprint recipe.
+[ -r "$script_dir/gate_common.sh" ] || { echo "pane_byte_check: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
+. "$script_dir/gate_common.sh"
 # OOM safeguards (per the campaign's oracle-script convention): make this driver
 # the first OOM victim and cap the address space so a runaway prover subprocess
 # cannot take the session down.
-echo 1000 > /proc/self/oom_score_adj 2>/dev/null || true
-ulimit -v 25165824 2>/dev/null || true
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "$script_dir/.." && pwd)"
+oom_prologue
 READY_TIMEOUT="${READY_TIMEOUT:-90}"
 FILE_TIMEOUT="${FILE_TIMEOUT:-300}"
 RS_PORT="${RS_PORT:-3044}"
@@ -38,7 +41,10 @@ RESULTS_TSV="${RESULTS_TSV:-/tmp/pane_byte.tsv}"
 DIFFDIR="${DIFFDIR:-/tmp/pane_byte_diffs}"
 MAX_NODES="${MAX_NODES:-400}"
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
-MAUDE_PATH="${MAUDE_PATH:-$(command -v maude)}"
+# The RS server probes `maude` by name; resolve one (MAUDE_PATH > PATH >
+# linuxbrew, hard fail otherwise) and put its directory on PATH for it.
+MAUDE_PATH=$(resolve_maude) || exit 2
+maude_on_path "$MAUDE_PATH"
 # Explicit only — a positional argument, or the ALLOWLIST env var. No default:
 # see the header. An unset one is a run whose scope nobody chose.
 ALLOWLIST="${1:-${ALLOWLIST:-}}"
@@ -63,7 +69,7 @@ HS_PATH="${HS_PATH:-$(find_hs_bin)}" || true
          "verified without it" >&2
     exit 2
 }
-HS_FP=$(stat -c '%s.%Y' "$HS_PATH")
+hs_fingerprint "$HS_PATH"
 if [ -z "$ALLOWLIST" ]; then
     echo "usage: $0 <file-list>   (or ALLOWLIST=<file-list> $0)" >&2
     echo "pane_byte_check: no file list given, and there is no default —" \

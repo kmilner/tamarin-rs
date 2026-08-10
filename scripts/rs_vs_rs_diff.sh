@@ -34,11 +34,14 @@
 # narrow ALLOWLIST until the set you claim is covered actually is.
 set -u
 
+# Shared gate plumbing (gate_common.sh): OOM prologue, strip_env, flags_for,
+# maude resolver.
+[ -r "$(dirname "${BASH_SOURCE[0]}")/gate_common.sh" ] || { echo "rs_vs_rs: missing $(dirname "${BASH_SOURCE[0]}")/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
+. "$(dirname "${BASH_SOURCE[0]}")/gate_common.sh"
 # OOM discipline: make the sweep (and the provers it spawns, which inherit
 # both settings) the kernel's preferred victim, and cap each prover's address
 # space — a runaway prover must die alone, not take the session with it.
-echo 1000 > /proc/self/oom_score_adj 2>/dev/null || true
-ulimit -v 25165824 2>/dev/null || true
+oom_prologue
 
 ROOT="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 CORPUS="${CORPUS:-$ROOT/tamarin-prover/examples}"
@@ -61,14 +64,13 @@ done
 if [ -n "$ALLOWLIST" ] && [ ! -f "$ALLOWLIST" ]; then
     echo "rs_vs_rs: ALLOWLIST '$ALLOWLIST' does not exist" >&2; exit 2
 fi
-command -v maude >/dev/null 2>&1 ||
-    echo "rs_vs_rs: WARNING: 'maude' not on PATH — every run will fail fast and be reported as ERROR_BOTH, not compared" >&2
+# A maude-less environment makes every run fail fast on both sides — reported
+# as ERROR_BOTH, never compared — so resolve one maude up front (hard fail
+# when nothing resolves) and put its directory on PATH for the two binaries.
+MAUDE=$(resolve_maude) || exit 2
+maude_on_path "$MAUDE"
 
-strip_env() {
-    grep -v -e '^Git revision:' -e '^Compiled at:' \
-            -e '^[[:space:]]*processing time:' -e '^[[:space:]]*analyzed:'
-}
-flags_for() { [ -f "$FLAGS_MAP" ] && awk -F'\t' -v r="$1" '!/^#/ && $1==r {print $2; exit}' "$FLAGS_MAP"; }
+# strip_env / flags_for come from gate_common.sh.
 export -f strip_env flags_for
 
 one() {

@@ -35,12 +35,18 @@
 #      RESULTS_TSV, ALLOWLIST, NO_HS_FILL (skip phase 0 if the cache is warm).
 # Output TSV (3 col): relpath  MATCH|DIFF|SKIP_*  diffcount
 set -u
-export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
-echo 1000 > /proc/self/oom_score_adj 2>/dev/null || true
-ulimit -v 25165824 2>/dev/null || true
-
-script_dir=$(cd "$(dirname "$0")" && pwd)
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root=$(dirname "$script_dir")
+# Shared gate plumbing: OOM prologue, strip_env, flags_for/ckey, filelist,
+# maude resolver.
+[ -r "$script_dir/gate_common.sh" ] || { echo "pretty_gate: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
+. "$script_dir/gate_common.sh"
+oom_prologue
+# Both provers resolve `maude` by NAME from PATH when no --with-maude is
+# passed; the resolver honours the operator's MAUDE_PATH/PATH before falling
+# back to this box's off-PATH linuxbrew install.
+MAUDE=$(resolve_maude) || exit 2
+maude_on_path "$MAUDE"
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 HS_CACHE="${HS_CACHE:-$script_dir/.hs_pretty_cache}"
 CORPUS_ROOT="${CORPUS_ROOT:-$repo_root/tamarin-prover/examples}"
@@ -81,17 +87,13 @@ export RS_PATH HS_PATH HS_CACHE CORPUS_ROOT FLAGS_MAP FILE_TIMEOUT DERIVCHECK_TI
 # This used to be a `Git revision:` stamp on the cache dir, which could never
 # fire: setup.sh git-APPLIES patches/ without committing, so every patched
 # build bakes in exactly the submodule pin and the stamp matched an oracle it
-# had never seen.  The binary's own size.mtime (sweep_common.sh:262's recipe)
+# had never seen.  The binary's own size.mtime (gate_common's hs_fingerprint)
 # changes whenever the oracle is rebuilt, patched or not; folded into the key
 # it turns a changed oracle into a MISS per entry instead of a dir-wide wipe.
-HS_FP=$(stat -c '%s.%Y' "$HS_PATH")
-HS_FP_SALT=$(printf '%s' "$HS_FP" | sha256sum | cut -c1-12)
+hs_fingerprint "$HS_PATH"
 export HS_FP HS_FP_SALT
 
-strip_env() {
-    grep -v -e '^Git revision:' -e '^Compiled at:' \
-            -e '^[[:space:]]*processing time:' -e '^[[:space:]]*analyzed:'
-}
+# strip_env (gate_common.sh): DELETE the four volatile header lines.
 # Isolate the pretty-printed theory echo: `theory … begin … end`, minus the
 # trailing wf report and Generated-from stamp, minus the post-`end` summary.
 extract_theory() {
@@ -115,16 +117,8 @@ extract_theory() {
         /^end$/                 { cap=0 }
     '
 }
-flags_for() { [ -f "$FLAGS_MAP" ] && awk -F'\t' -v r="$1" '!/^#/ && $1==r {print $2; exit}' "$FLAGS_MAP"; }
-# KEY FORMAT — identical to corpus_file_diff.sh's ckey and to what wf_gate.sh
-# reads out of THIS cache, and to what scripts/migrate_hs_cache_fp.sh rekeys
-# older entries to:
-#   <sha256(theory)>[__f<12 hex of sha256(flags)>]__b<12 hex of sha256(HS_FP)>
-ckey() {
-    local h fl; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
-    if [ -n "$fl" ]; then h="${h}__f$(printf '%s' "$fl" | sha256sum | cut -c1-12)"; fi
-    printf '%s__b%s' "$h" "$HS_FP_SALT"
-}
+# flags_for / ckey come from gate_common.sh — one key format for this gate,
+# wf_gate.sh (which reads THIS cache) and corpus_file_diff.sh.
 export -f strip_env extract_theory flags_for ckey
 
 # --- Phase 0: fill any MISSING no-prove HS reference (fast; warm-cache reused).
@@ -207,17 +201,11 @@ one() {
 }
 export -f one
 
-# A set-but-unreadable ALLOWLIST is a typo, not a request for the default: it
-# used to fall through to the whole 432-file corpus, so the run silently
-# stopped being the one that was asked for.
-if [ -n "${ALLOWLIST:-}" ] && [ ! -r "$ALLOWLIST" ]; then
-    echo "ALLOWLIST '$ALLOWLIST' is not a readable file" >&2; exit 2
-fi
-filelist() {
-    if [ -n "${ALLOWLIST:-}" ]; then cat "$ALLOWLIST"
-    elif [ -f "$script_dir/parity_corpus.txt" ]; then cat "$script_dir/parity_corpus.txt"
-    else (cd "$CORPUS_ROOT" && find . -name '*.spthy' | sed 's|^\./||'); fi
-}
+# gate_common's filelist: ALLOWLIST > parity_corpus.txt > this gate's
+# fallback, the whole corpus tree.  allowlist_guard rejects a
+# set-but-unreadable ALLOWLIST (a typo, not a request for the default).
+allowlist_guard
+filelist_fallback() { (cd "$CORPUS_ROOT" && find . -name '*.spthy' | sed 's|^\./||'); }
 
 N=$(filelist | grep -c .)
 # Zero files is the whole-run form of comparing nothing: no rows, MATCH=DIFF=0,

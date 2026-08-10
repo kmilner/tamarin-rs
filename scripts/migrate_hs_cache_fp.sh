@@ -7,7 +7,7 @@
 # previous one's entries, so a gate could report byte parity against an
 # upstream that was no longer checked out.  corpus_file_diff.sh, pretty_gate.sh,
 # wf_gate.sh and diff_proof_raw.sh now salt the key with the oracle binary's
-# fingerprint (`stat -c '%s.%Y'`, sweep_common.sh:262's recipe):
+# fingerprint (`stat -c '%s.%Y'`, gate_common.sh's hs_fingerprint):
 #
 #   .hs_file_cache / .hs_pretty_cache
 #       <sha256(theory)>[__f<12 hex flags>]__b<12 hex fingerprint>.<suffix>
@@ -34,6 +34,12 @@ set -u
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
+# gate_common.sh owns the fingerprint recipe this migration re-keys onto —
+# sourced so the two can never drift.  (The MAUDE default below is NOT the
+# shared resolver: the --version probe must tolerate a missing maude and
+# report NOT CHECKED rather than block the migration.)
+[ -r "$script_dir/gate_common.sh" ] || { echo "migrate_hs_cache_fp: missing $script_dir/gate_common.sh (owns the fingerprint recipe)" >&2; exit 2; }
+. "$script_dir/gate_common.sh"
 DRY_RUN="${DRY_RUN:-}"
 MAUDE="${MAUDE_PATH:-/home/linuxbrew/.linuxbrew/bin/maude}"
 
@@ -49,8 +55,7 @@ HS_PATH="${HS_PATH:-$(find_hs_bin "$repo_root")}" || true
     echo "migrate_hs_cache_fp: no HS oracle binary (set HS_PATH) — the new key IS its fingerprint, so there is nothing to migrate onto" >&2
     exit 2
 }
-HS_FP=$(stat -c '%s.%Y' "$HS_PATH")
-HS_FP_SALT=$(printf '%s' "$HS_FP" | sha256sum | cut -c1-12)
+hs_fingerprint "$HS_PATH"
 
 # The premise of this migration is that the CURRENT oracle produced the entries
 # being rekeyed.  If the binary is not the build of the submodule pin, that

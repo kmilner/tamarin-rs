@@ -25,21 +25,44 @@ Five, all gitignored, none keyed alike:
 | `.hs_file_cache/` | `corpus_file_diff.sh` | theory sha + flags hash + **oracle-binary fingerprint**; the oracle's exit status sits beside each entry as `.rc` |
 | `.hs_pretty_cache/` | `pretty_gate.sh` and `wf_gate.sh` (either fills `.load.gz`; `pretty_gate.sh` derives `.theory.gz` from it) | theory sha + flags hash + **oracle-binary fingerprint** |
 | `.web_hs_cache/` | `web_parity.sh` writes; `pane_byte_check.sh` reads | theory sha; the **oracle fingerprint** lives in a `.hs.fp` sidecar both scripts verify before reusing a manifest |
-| `.hs_canon_cache/` | `diff_proof_raw.sh` (fingerprinted key); `corpus_raw_diff.sh`, `corpus_full_trace_diff.sh` (unfingerprinted key — entries are not exchanged between the two key forms) | theory sha + lemma + cache version (+ **oracle-binary fingerprint** for `diff_proof_raw.sh`) |
-| `.hs_sweep_cache/` | the three flag sweeps | theory sha + every `#include`d file's sha + flags + **oracle-binary fingerprint** + maude path |
+| `.hs_canon_cache/` | `diff_proof_raw.sh`, `corpus_raw_diff.sh`, `corpus_full_trace_diff.sh` (one key form; flagless entries are exchanged, a `diff_proof_raw.sh` run with canonical flags salts `__f` and stays distinct) | theory sha + lemma + cache version + **oracle-binary fingerprint** |
+| `.hs_sweep_cache/` | the three flag sweeps | theory sha + every `#include`d file's sha + flags + **oracle-binary fingerprint** + the RESOLVED maude's path (so a sweep pointed at a different maude misses rather than reusing) |
 
 The oracle-binary fingerprint is `stat -c '%s.%Y'` of the HS binary
-(`sweep_common.sh`'s recipe), so a rebuilt oracle — bump or patch rebuild
-alike — turns every pre-rebuild entry into a clean MISS (or, for
-`.web_hs_cache/`, a re-crawl) instead of a silently stale hit; nothing is
-archived or wiped, and `bump_submodule.sh` deliberately leaves the caches
-alone. `scripts/migrate_hs_cache_fp.sh` is the one-time rename of
-pre-fingerprint entries onto the new keys. Two gaps remain: the
-`corpus_raw_diff.sh` / `corpus_full_trace_diff.sh` key form carries no
-fingerprint, so those triage tools keep serving pre-rebuild bytes; and every
-cache except `.hs_sweep_cache/` keys an `#include`ing theory on the includer
-alone, so an edit below `testParser/include/` leaves them serving the
-pre-edit oracle.
+(`gate_common.sh`'s `hs_fingerprint`, the one definition every cached gate
+sources), so a rebuilt oracle — bump or patch rebuild alike — turns every
+pre-rebuild entry into a clean MISS (or, for `.web_hs_cache/`, a re-crawl)
+instead of a silently stale hit; nothing is archived or wiped, and
+`bump_submodule.sh` deliberately leaves the caches alone.
+`scripts/migrate_hs_cache_fp.sh` is the one-time rename of pre-fingerprint
+entries onto the new keys. One gap remains: every cache except
+`.hs_sweep_cache/` keys an `#include`ing theory on the includer alone, so an
+edit below `testParser/include/` leaves them serving the pre-edit oracle.
+
+`gate_common.sh` owns the shared plumbing: the OOM prologue, the three
+environment-line strip policies (`strip_env` deletes all four volatile lines,
+`strip_env_lines` keeps `analyzed:` for the triage tools, `norm` blanks to
+placeholders for the sweeps), `flags_for`/`ckey`, `hs_fingerprint`,
+`allowlist_guard` + the gate `filelist`, `rs_stale_check`, `oracle_rev_check`,
+and the maude resolver — `MAUDE_PATH` if set (set-but-unusable is a hard fail,
+never a silent fall-through), else `maude` on `PATH`, else the linuxbrew
+install, else a hard fail naming all three steps; `maude_on_path` then
+prepends the RESOLVED binary's own directory, so an operator's maude wins over
+linuxbrew instead of being overridden by it. Every gate here sources it, the
+three flag sweeps through `sweep_common.sh`, and so do the cache-touching
+triage tools (`diff_proof_raw.sh`, `corpus_raw_diff.sh`,
+`corpus_full_trace_diff.sh`, `triage_diff_vs_hs.sh`) plus
+`capture_cli_refs.sh` and `migrate_hs_cache_fp.sh`; a consumer that cannot
+read it exits 2 rather than falling back to a private copy. The
+structural-diff tools (`diff_proof_tree.sh`, `corpus_diff_proof_trees.sh`,
+`diff_maude_io.sh`, `diff_aes_calls.sh`) and `divergence_fixtures/_common.sh`
+stand outside it and keep their own small setups.
+
+Two consumers deliberately do NOT use the shared maude resolver:
+`capture_cli_refs.sh` walks the RS test harness's ladder instead (its captures
+must use the maude `cli_e2e.rs` will), and `migrate_hs_cache_fp.sh` tolerates
+a missing maude so its revision probe reports NOT CHECKED rather than blocking
+a rename-only migration.
 
 ## Primary gates — run these before trusting a change
 
@@ -51,11 +74,14 @@ pre-edit oracle.
   stdout, and identical bytes under a different status are `RC_DIFF`, a failing
   row (`RC_UNKNOWN` counts entries predating that channel and is not a
   failure). It is the heaviest thing here — `JOBS=4` oracles at `-N4 -M11g`
-  plus four Rust provers, up to ~44 GB of GHC heap — and carries the same
-  `oom_score_adj=1000` / `ulimit -v` 24 GiB prologue as the other gates, which
-  every child inherits. What it lacks is a stale-binary or oracle-revision
-  preflight, so check what the two binaries are before you trust the number,
-  and lower `JOBS` on a constrained box rather than raising it.
+  plus four Rust provers, up to ~44 GB of GHC heap — and carries the shared
+  `oom_prologue` (`oom_score_adj=1000` plus a 24 GiB `ulimit -v`) like the
+  other gates, which every child inherits. It resolves one maude up front and
+  exits 2 when nothing resolves — an oracle that cannot load a theory produces
+  no bytes, and Phase 1 records that as a sticky `.nohs` marker. What it lacks is a
+  stale-binary or oracle-revision preflight, so check what the two binaries
+  are before you trust the number, and lower `JOBS` on a constrained box
+  rather than raising it.
   `ALLOWLIST` defaults to `scripts/parity_corpus.txt`, falling back to
   `$PREV_TSV`'s first column only when that file is missing too.
 - **`wf_gate.sh`** — fast (~45 s over the whole corpus on 24 cores)
@@ -131,7 +157,9 @@ pre-edit oracle.
   lost child) fails as `NOTRUN`; `generate` rewrites that reference from a
   trusted build of main — manual, needed only after a deliberate output
   change, a submodule bump, or a Maude version change (the pinned version is
-  recorded in the reference header and enforced), and it now REQUIRES
+  recorded in the reference header and enforced — both the `generate` header
+  line and the `check` handshake probe the RESOLVED maude, so the version
+  compared is the one this run's provers actually use), and it now REQUIRES
   `--certified-by <gate-results>`: a saved oracle-gate log whose last
   `verdict=` reads OK, whose path/verdict plus the oracle fingerprint are
   stamped into the reference header. The reference still comes from main's
@@ -214,6 +242,12 @@ pre-edit oracle.
   Both also strip a *narrower* set than the gates do — three volatile lines,
   keeping `analyzed:` — so a diff confined to that line is an artefact of the
   triage tool, not a finding.
+
+  Both carry the gates' OOM prologue (`oom_score_adj=1000` plus a 24 GiB
+  `ulimit -v`, inherited by every prover child), as do
+  `corpus_full_trace_diff.sh` and `triage_diff_vs_hs.sh`: a prover that
+  outgrows the cap dies alone — in the two corpus sweeps as a `SKIP_RS_ERR`
+  row — instead of taking the session with it.
 - **`compare_parity_tsv.py`** — diff two `corpus_raw_diff` TSVs to list
   regressions/improvements between two runs.
 - **`rs_vs_rs_diff.sh`** — sweep TWO Rust binaries (pre/post refactor, via
@@ -226,8 +260,20 @@ pre-edit oracle.
   "neither binary finished" is a statement about the cap, not evidence of
   inertness), `NOFILE`, `EMPTY_BOTH` — plus any allowlisted file that
   produced no row at all (checked as a set, so RESUME runs count correctly).
+  An environment with no resolvable maude is `exit 2` at startup, not a sweep
+  that scores every file `ERROR_BOTH`.
 - **`triage_diff_vs_hs.sh`** — 3-way follow-up for `rs_vs_rs_diff` DIFFs:
-  did the refactor move RS toward or away from HS?
+  did the refactor move RS toward or away from HS? It reads and fills the
+  batch gate's `.hs_file_cache/` at `gate_common.sh`'s fingerprinted `ckey`,
+  and runs all three binaries under the file's canonical `file_flags.tsv`
+  flags (`@cd` included) — the flags the sweep that flagged the file used — so
+  the three-way comparison is like-for-like and an entry it writes is one
+  `corpus_file_diff.sh` reuses. Its fill follows the batch gate's discipline:
+  rc beside the payload, nothing cached on a timeout, but no sticky
+  `.nohs`/`.timeout` markers (minting those is the gate's call). The oracle
+  binary is required even on a warm cache — its fingerprint is part of the key
+  — and missing is `exit 2`. Env: `PRE`, `POST`, `HS`, `CACHE`, `FLAGS_MAP`,
+  `FT` (300 s), `DERIV` (30 s), `CORPUS`, `ROOT`.
 - **`diff_maude_io.sh`** — side-by-side HS↔RS Maude command/response trace
   for one lemma (needs the trace-instrumented builds).
 - **`diff_aes_calls.sh`** — compare `apply_eq_store` call counts per labeled
@@ -261,12 +307,14 @@ pre-edit oracle.
   gate run, or those gates regenerate everything from scratch. It exits 2 unless the checked-out oracle
   is the submodule pin — that premise is what makes adopting the old entries
   legitimate — with `ALLOW_ORACLE_REV_MISMATCH=1` to override and `DRY_RUN=1`
-  to report without moving; `HS_PATH`, `MAUDE_PATH` and `CACHES` select what it
-  looks at. Per cache it prints migrated / already / other-oracle / collided /
-  unrecognised / failed counts, reports a leftover `.oracle_rev` stamp as safe
-  to delete, and ends in `DONE_MIGRATE_HS_CACHE_FP verdict=OK|FAILED` (exit 1
-  on a failed rename). Do not run `triage_diff_vs_hs.sh` before the migration:
-  it still writes un-fingerprinted keys.
+  to report without moving; `HS_PATH` and `CACHES` select what it looks at,
+  and `MAUDE_PATH` (default: the linuxbrew install) feeds the revision probe
+  alone — an unreachable maude prints `oracle revision: NOT CHECKED` instead
+  of blocking a rename-only migration. Per cache it prints migrated / already
+  / other-oracle / collided / unrecognised / failed counts, reports a leftover
+  `.oracle_rev` stamp as safe to delete, and ends in
+  `DONE_MIGRATE_HS_CACHE_FP verdict=OK|FAILED` (exit 1
+  on a failed rename).
 - **`capture_cli_refs.sh`** — captures the ORACLE's stdout for every row of
   `crates/tamarin-prover/tests/fixtures/cli_refs/cases.tsv`, which is the argv
   table `cli_e2e.rs`'s flag pins read as well — adding a pin is "add a row,
@@ -278,8 +326,9 @@ pre-edit oracle.
   counts), which the tests assert lists exactly the rows in `cases.tsv`, so a
   partial capture cannot pass as a complete one. Ends in
   `DONE_CAPTURE_CLI_REFS verdict=<...> captured=N/M`, nonzero on any row that
-  is missing, empty, or fails its `relation` column. Env: `HS_PATH`, `MAUDE`,
-  `FILE_TIMEOUT` (120 s), `ALLOW_ORACLE_REV_MISMATCH`.
+  is missing, empty, or fails its `relation` column. Env: `HS_PATH`, `MAUDE`
+  (its own harness-mirroring ladder, not the shared resolver — and not
+  `MAUDE_PATH`), `FILE_TIMEOUT` (120 s), `ALLOW_ORACLE_REV_MISMATCH`.
 - **`bench.sh`** — RS-vs-HS wall/RSS benchmark; emits the README's markdown
   tables.
 - **`../prove_and_reverify.sh`** (repo root) — prove with tamarin-rs, re-check

@@ -33,13 +33,17 @@
 #       the `relation` column of its case.  The DONE line repeats the verdict.
 set -u
 
-# OOM discipline: a prover that explodes dies alone, it does not take the
-# session with it.  Every subprocess below inherits these.
-echo 1000 > /proc/self/oom_score_adj 2>/dev/null || true
-ulimit -v 16777216 2>/dev/null || true
-
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
+# Shared gate plumbing (gate_common.sh): OOM prologue, strip_env, the oracle
+# fingerprint recipe.  (The maude ladder below is deliberately NOT the shared
+# resolver: it mirrors the RS test harness's own probe order, so captures use
+# the maude cli_e2e.rs will.)
+[ -r "$script_dir/gate_common.sh" ] || { echo "capture_cli_refs: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
+. "$script_dir/gate_common.sh"
+# OOM discipline: a prover that explodes dies alone, it does not take the
+# session with it.  Every subprocess below inherits these.
+oom_prologue 16777216
 FIXTURES="$repo_root/crates/tamarin-prover/tests/fixtures"
 REFS="$FIXTURES/cli_refs"
 CASES="$REFS/cases.tsv"
@@ -90,10 +94,10 @@ if [ -n "$pin" ] && [ -n "$binrev" ] && [ "$pin" != "$binrev" ]; then
     [ "${ALLOW_ORACLE_REV_MISMATCH:-0}" = 1 ] || exit 2
 fi
 
-# Oracle-binary fingerprint — the same recipe every cached gate keys on
-# (sweep_common.sh).  Recorded in the manifest so a reference captured by a
-# patched oracle is identifiable after the fact.
-HS_FP=$(stat -c '%s.%Y' "$HS_PATH")
+# Oracle-binary fingerprint — gate_common's hs_fingerprint, the same recipe
+# every cached gate keys on.  Recorded in the manifest so a reference captured
+# by a patched oracle is identifiable after the fact.
+hs_fingerprint "$HS_PATH"
 
 # --- row selection -----------------------------------------------------------
 want=("$@")
@@ -104,12 +108,9 @@ selected() {
     return 1
 }
 
-# Strip the lines that are machine- or run-local before COMPARING two captures
-# (the files themselves keep them; cli_e2e.rs normalizes both sides).
-strip_env() {
-    grep -v -e '^Git revision:' -e '^Compiled at:' \
-            -e '^[[:space:]]*processing time:' -e '^[[:space:]]*analyzed:'
-}
+# strip_env (gate_common.sh) drops the machine- or run-local lines before
+# COMPARING two captures (the files themselves keep them; cli_e2e.rs
+# normalizes both sides).
 
 mkdir -p "$REFS"
 tmp_manifest=$(mktemp)

@@ -21,12 +21,18 @@
 #      RESULTS_TSV, ALLOWLIST, NO_HS_FILL (skip PHASE 0 on a known-warm cache).
 # Output TSV (3 col): relpath  MATCH|DIFF|SKIP_*  diffcount
 set -u
-export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
-echo 1000 > /proc/self/oom_score_adj 2>/dev/null || true
-ulimit -v 25165824 2>/dev/null || true
-
-script_dir=$(cd "$(dirname "$0")" && pwd)
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root=$(dirname "$script_dir")
+# Shared gate plumbing: OOM prologue, strip_env, flags_for/ckey, filelist,
+# maude resolver.
+[ -r "$script_dir/gate_common.sh" ] || { echo "wf_gate: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
+. "$script_dir/gate_common.sh"
+oom_prologue
+# Both provers resolve `maude` by NAME from PATH when no --with-maude is
+# passed; the resolver honours the operator's MAUDE_PATH/PATH before falling
+# back to this box's off-PATH linuxbrew install.
+MAUDE=$(resolve_maude) || exit 2
+maude_on_path "$MAUDE"
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 HS_CACHE="${HS_CACHE:-$script_dir/.hs_pretty_cache}"
 CORPUS_ROOT="${CORPUS_ROOT:-$repo_root/tamarin-prover/examples}"
@@ -59,18 +65,14 @@ HS_PATH="${HS_PATH:-$(find_hs_bin "$repo_root")}" || true
     echo "wf_gate: no HS oracle binary (set HS_PATH) — the cache key carries the oracle's fingerprint, so entries cannot be looked up without it" >&2
     exit 2
 }
-# Oracle-binary fingerprint (sweep_common.sh:262's recipe), folded into every
+# Oracle-binary fingerprint (gate_common's hs_fingerprint), folded into every
 # cache key: a rebuilt oracle must MISS, not answer out of the previous one's
 # entries.  Loop-invariant, so taken once.
-HS_FP=$(stat -c '%s.%Y' "$HS_PATH")
-HS_FP_SALT=$(printf '%s' "$HS_FP" | sha256sum | cut -c1-12)
+hs_fingerprint "$HS_PATH"
 export RS_PATH HS_PATH HS_CACHE CORPUS_ROOT FLAGS_MAP FILE_TIMEOUT \
        HS_FILL_TIMEOUT DERIVCHECK_TIMEOUT HS_FP HS_FP_SALT
 
-strip_env() {
-    grep -v -e '^Git revision:' -e '^Compiled at:' \
-            -e '^[[:space:]]*processing time:' -e '^[[:space:]]*analyzed:'
-}
+# strip_env (gate_common.sh): DELETE the four volatile header lines.
 # Isolate the wf report: either the success line, or the WARNING block that
 # opens the leading theory comment (up to its closing `*/`).
 wf_block() {
@@ -81,15 +83,8 @@ wf_block() {
         f && /^\*\/$/ { f=0 }
     '
 }
-flags_for() { [ -f "$FLAGS_MAP" ] && awk -F'\t' -v r="$1" '!/^#/ && $1==r {print $2; exit}' "$FLAGS_MAP"; }
-# KEY FORMAT — identical to pretty_gate.sh's ckey (this gate READS the cache
-# pretty_gate.sh writes) and to corpus_file_diff.sh's:
-#   <sha256(theory)>[__f<12 hex of sha256(flags)>]__b<12 hex of sha256(HS_FP)>
-ckey() {
-    local h fl; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
-    if [ -n "$fl" ]; then h="${h}__f$(printf '%s' "$fl" | sha256sum | cut -c1-12)"; fi
-    printf '%s__b%s' "$h" "$HS_FP_SALT"
-}
+# flags_for / ckey come from gate_common.sh — one key format for this gate,
+# pretty_gate.sh (whose cache this gate READS) and corpus_file_diff.sh.
 export -f strip_env wf_block flags_for ckey
 
 # --- PHASE 0: fill any MISSING <key>.load.gz with one oracle LOAD.
@@ -152,17 +147,11 @@ one() {
 }
 export -f one
 
-# A set-but-unreadable ALLOWLIST is a typo, not a request for the default: it
-# used to fall through to the whole 432-file corpus, so the run silently
-# stopped being the one that was asked for.
-if [ -n "${ALLOWLIST:-}" ] && [ ! -r "$ALLOWLIST" ]; then
-    echo "ALLOWLIST '$ALLOWLIST' is not a readable file" >&2; exit 2
-fi
-filelist() {
-    if [ -n "${ALLOWLIST:-}" ]; then cat "$ALLOWLIST"
-    elif [ -f "$script_dir/parity_corpus.txt" ]; then cat "$script_dir/parity_corpus.txt"
-    else (cd "$CORPUS_ROOT" && find . -name '*.spthy' | sed 's|^\./||'); fi
-}
+# gate_common's filelist: ALLOWLIST > parity_corpus.txt > this gate's
+# fallback, the whole corpus tree.  allowlist_guard rejects a
+# set-but-unreadable ALLOWLIST (a typo, not a request for the default).
+allowlist_guard
+filelist_fallback() { (cd "$CORPUS_ROOT" && find . -name '*.spthy' | sed 's|^\./||'); }
 
 N=$(filelist | grep -c .)
 # Zero files is the whole-run form of comparing nothing: no rows, MATCH=DIFF=0,
