@@ -1,10 +1,13 @@
 # Wellformedness fixture corpus
 
 Each `.spthy` file in this directory is a minimal theory designed to
-trigger exactly one of Tamarin's wellformedness check categories. The
+target one of Tamarin's wellformedness check categories (a few
+unavoidably trip a second check as collateral). The
 companion `expected.txt` lists, for each fixture, the topic string(s)
-`tamarin-prover` emits when loading the theory (the underlined
-`WARNING:` topic headers).
+`tamarin-prover` must emit when loading the theory — the `=`-underlined
+headers inside its `WARNING: the following wellformedness checks
+failed!` block. Both harnesses treat that list as a subset check, so a
+fixture may legitimately emit more.
 
 This corpus exists because the upstream `tamarin-prover/examples/` tree
 contains hand-written, *passing* protocols — it does not exercise the
@@ -18,9 +21,10 @@ it:
 2. `cargo run -p tamarin-parser --example wellformedness_fixtures
    [-- <fixtures-dir>]` — the differential runner: every fixture must
    parse, the Rust checker must emit the expected topics, and (unless
-   `--no-tamarin` is passed) a `tamarin-prover` binary found on `PATH`
-   must emit them too, confirming the fixtures still shoot at the
-   right targets.
+   `--no-tamarin` is passed) a `tamarin-prover` binary must emit them
+   too, confirming the fixtures still shoot at the right targets. The
+   oracle binary is `$TAMARIN`, defaulting to `tamarin-prover` on
+   `PATH`.
 
 Both harnesses share two comparison rules:
 
@@ -28,43 +32,52 @@ Both harnesses share two comparison rules:
   a source-literal trailing space (e.g. `"Facts occur in the
   left-hand-side but not in any right-hand-side "`), which the
   comma-separated `expected.txt` cannot represent.
-- `Formula terms` is checked only against the tamarin binary, not the
-  Rust parser-level checker: the HS `checkTerms` pass needs the
-  elaborated `MaudeSig` for reducible-funsym classification, so its
-  port lives in `tamarin_theory::check_terms` and runs post-elaboration
-  (wired in `tamarin-prover`'s `run.rs`), covered by its own unit tests
-  and the corpus parity gates.
+- `Formula terms` and `Multiplication restriction of rules` are checked
+  only against the tamarin binary, not the Rust parser-level checker.
+  The HS `checkTerms` and `multRestrictedReport` passes both need the
+  elaborated `MaudeSig` (reducible-funsym classification, and
+  `abstractRule`'s irreducible symbols), so their ports live in
+  `tamarin_theory::check_terms` and `tamarin_theory::mult_restricted`
+  and run post-elaboration — spliced by
+  `tamarin_theory::translated_wf`, which both the CLI (`run.rs`) and
+  the web loader call. Each is covered by its own unit tests and by the
+  corpus parity gates.
 
-## Categories covered
+## Check categories
 
 The definitive topic strings live in the submodule at
 `tamarin-prover/lib/theory/src/Theory/Tools/Wellformedness.hs` (grep
 `underlineTopic`, plus the LHS-usage `topic` literal). Note the source
-carries quirks verbatim — both the `Inexistant`/`Inexistent` spellings
-and a leading-space `" Formula guardedness"` variant exist:
+carries quirks verbatim — the diff-theory checks spell two of them
+`Inexistant lemma actions` and `Restriction actions` where the
+plain-theory ones say `Inexistent …`, and the non-diff guardedness
+topic has a leading space, `" Formula guardedness"`. Categories no
+fixture pins yet are marked *(unpinned)*:
 
-- Check presence of the --prove/--lemma arguments in theory
+- Check presence of the --prove/--lemma arguments in theory *(unpinned)*
 - Reserved names
 - Reserved prefixes
 - Special facts
 - Fr facts must only use a fresh- or a msg-variable
-- Fact capitalization issues
+- Fact capitalization issues *(unpinned)*
 - Fact arity issues
 - Fact multiplicity issues
-- Fact usage
+- Fact usage *(unpinned)*
 - Facts occur in the left-hand-side but not in any right-hand-side
 - Fresh public constants
 - Public constants with mismatching capitalization
 - Variable with mismatching sorts or capitalization
-- Quantifier sorts
+- Quantifier sorts *(unpinned — `quantifier_wrong_sort` is pinned on
+  `Formula terms`)*
 - Unbound variables
 - Multiplication restriction of rules
-- Variants / Rule has no variants
+- Variants / Rule has no variants *(unpinned)*
 - Lemma annotations
-- Inexistant lemma actions
-- Inexistent restriction actions
-- Restriction actions
-- Formula guardedness
+- Inexistent lemma actions *(unpinned)*
+- Inexistent restriction actions *(unpinned)*
+- Inexistant lemma actions / Restriction actions, diff theories *(unpinned)*
+- Formula guardedness *(unpinned — `formula_unguarded` is pinned on
+  `Formula terms`)*
 - Formula terms
 - Nat Sorts
 - Subterm Convergence Warning

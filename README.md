@@ -2,13 +2,13 @@
 
 A Rust port of the [Tamarin Prover](https://tamarin-prover.github.io/) with the goal
 of reproducing the Haskell prover's output byte-for-byte. Typically
-4–32× faster than the most recent Tamarin release (up to 80×) on
+4–33× faster than the most recent Tamarin release (up to 80×) on
 4–45× less memory.
 
 ## Important notes
 
 Always verify generated proofs against regular tamarin-prover. All proofs generated
-by this prover  should be reverifiable against regular tamarin
+by this prover should be reverifiable against regular tamarin
 by simply running them on the command line (i.e. `tamarin-prover proof.spthy`).
 You should not directly trust the output of this given the extensive use of LLMs in
 translating code.
@@ -29,23 +29,24 @@ Once both fixes are merged and released all proofs should be identical; if you
 do find any that differ (even if they cross-verify) please report them in the
 github issues so they can be fixed!
 
-The licensing of this code is somewhat complicated, but the built binary is GPL 3.0. 
+The licensing of this code is somewhat complicated, but the built binary is GPL 3.0.
 See [License](#license) if you are interested in future prospects for redistribution.
 
 ## Summary
 
 - **Parity:** byte-identical `--prove` output with the Haskell prover on a
-  432-file corpus — every theory under `tamarin-prover/examples/` that uses only ported
-  features. Stored proofs replay and validate across provers in both
-  directions, and the interactive web UI agrees page-for-page with the
-  Haskell server except for a small documented cosmetic residue, tracked by
-  a ≈63,800-page sweep of the 75-theory residue ledger
-  (`scripts/results/websweep_ef3f0468_post_review_20260801.tsv`) — see
-  [Parity status](#parity-status).
+  432-file corpus — the feature-complete theories under
+  `tamarin-prover/examples/` plus one repo-local regression fixture. Stored
+  proofs replay and validate across provers in both directions, and the
+  interactive web UI agrees page-for-page with the Haskell server except for
+  a small documented cosmetic residue, enumerated theory-by-theory in
+  `scripts/websweep_residual.txt` (77 files) and re-checked by a ≈69,600-page
+  crawl sweep — see [Parity status](#parity-status).
 - **Performance:** 4.3–80× faster than the most recent Tamarin release
   (1.12.0) across 1–16 cores (median ≈16×), with peak memory 4.3–45×
   lower at one core — see [Performance](#performance).
-- **Not yet ported:** observational equivalence (`--diff`) — see
+- **Not yet ported:** observational equivalence (`--diff`) and the
+  ProVerif / DeepSec export modules — see
   [Not yet ported](#not-yet-ported).
 - **Testing process:** [TESTING.md](TESTING.md) documents the parity-gate
   ladder and divergence-debugging tools.
@@ -106,7 +107,8 @@ scripts discover that binary automatically; `HS_PATH=<binary>` overrides.
 ## Parity status
 
 The correctness criterion is byte-identical raw `--prove` output, ignoring
-the volatile header lines (Git revision, compile time, processing time).
+the volatile header lines (Git revision, compile time, processing time, and
+the `analyzed:` path).
 The batch gate (`scripts/corpus_file_diff.sh`, corpus in
 `scripts/parity_corpus.txt`) currently reports:
 
@@ -118,9 +120,10 @@ The batch gate (`scripts/corpus_file_diff.sh`, corpus in
 
 The corpus spans every feature-complete theory family under `tamarin-prover/examples/` —
 classic and AKE protocols, XOR / bilinear-pairing / multiset theories, the
-auto-sources suites, accountability case studies, and 77 SAPiC `process:`
-theories — each run under its canonical upstream invocation
-(`scripts/file_flags.tsv`). Theories outside the corpus need an unported
+auto-sources suites, accountability case studies, and 79 SAPiC `process:`
+theories — each run under its canonical upstream invocation: bare `--prove`,
+plus the extra flags `scripts/file_flags.tsv` records for the 31 theories
+whose upstream recipe needs them. Theories outside the corpus need an unported
 feature (`--diff`), hit a known auto-prover or SAPiC-rendering divergence
 tracked for porting, exceed the gate's per-file Haskell time budget under
 their canonical flags, or are the same files upstream's own regression
@@ -226,7 +229,7 @@ the scripts/bench.sh header).
 Memory is the maximum resident set of the prover process; Maude runs as a
 separate subprocess on both sides and is excluded. Across all theories and
 core counts the Rust port is 4.3–80× faster than the 1.12.0 release
-(median ≈16×); peak memory is 4.3–45× lower at one core and 5–20× lower
+(median ≈16×); peak memory is 4.3–45× lower at one core and 4.8–21× lower
 at sixteen. The smallest gains are on `Joux`, whose runtime is dominated
 by AC-heavy Maude queries both provers pay for equally.
 
@@ -254,14 +257,16 @@ refined sources are computed once and shared across lemmas.
 ## Implemented
 
 - **Parser:** full `.spthy` grammar — `macros:`, `predicates:`, `equations:`,
-  `restrictions:`, `tactics:`, `heuristic:`, `#define`/`#include`
-  preprocessing, multi-line comments, Unicode symbols.
+  `restrictions:`, `tactic:`, `heuristic:`, `#define`/`#include`
+  preprocessing, multi-line comments, Unicode symbols — plus the
+  wellformedness checks (`tamarin_parser::wf`).
 - **Elaborator:** rule signatures, lemma formulas → guarded form, macro and
   predicate expansion, restriction insertion, source-kind classification.
 - **Builtins:** `hashing`, `symmetric-encryption`, `asymmetric-encryption`,
-  `signing`, `revealing-signing`, `diffie-hellman`, `xor`,
-  `bilinear-pairing`, `multiset`, `natural-numbers`, `subterm`,
-  `locations-report`, plus custom functions and equations.
+  `signing`, `revealing-signing`, the four `dest-*` destructor builtins,
+  `diffie-hellman`, `xor`, `bilinear-pairing`, `multiset`,
+  `natural-numbers`, `locations-report`, `reliable-channel`, plus custom
+  functions and equations.
 - **Solver:** full constraint-system port — simplification, source
   refinement/saturation, chain extension, contradiction detection,
   induction, stored-proof replay with plain-load proof validation, and
@@ -271,8 +276,8 @@ refined sources are computed once and shared across lemmas.
 - **SAPiC `process:`** — the process-calculus frontend, byte-identical to HS
   `Sapic.translate`: core constructs, mutable state, locks, `let`
   bindings/destructors, secret/private channels, progress and
-  reliable-channel translations, `report()`, and the opt-in
-  `--translation-state-optimisation` pure-state path.
+  reliable-channel translations, `report()`, and the pure-state path the
+  in-file `options: translation-state-optimisation` opts into.
 - **Accountability** — `test` case tests and `accounts for` lemmas expand
   into the verification-condition lemmas (six per case test plus one
   `_verif_empty` per lemma) and case-test predicates, with the
@@ -281,22 +286,26 @@ refined sources are computed once and shared across lemmas.
 - **Heuristics:** smart (`s`/`S`), goal-number (`C`/`c`), injective
   (`i`/`I`), SAPiC (`p`/`P`), oracle (`o`/`O`), and `tactic:` rankings —
   per-file, per-lemma, or CLI-overridden (HS `selectHeuristic`).
-- **CLI:** `--prove`/`--lemma`, `--bound`, `--heuristic`, `--oraclename`,
+- **CLI:** `--prove`/`--lemma`, `--heuristic`, `--oraclename`,
   `--oracle-only`, `--processors`, `--maude-processes`,
   `--derivcheck-timeout`, `--stop-on-trace` (all five policies —
   `dfs`/`bfs`/`seqdfs`/`sorry`/`none` — including in-file
   `configuration:` blocks), `-D` defines, `--parse-only`,
-  `--precompute-only`, `-O/--output`, `--quiet`, `-v/--verbose`,
-  `--quit-on-warning`, `--saturation`, `--open-chains`,
+  `--precompute-only`, `-o/--output` and `-O/--Output`,
+  `--quit-on-warning`, `--saturation`, `--open-chains`, `--no-ndc`,
   `--partial-evaluation=summary|verbose` (abstract-interpretation
   fixpoint, refined-rule re-emission, stderr step trace),
   `--output-json`/`--output-dot` (solved-trace export; JSON is
   byte-exact aeson-pretty, DOT is byte-exact whole-document — the
   `showDot` serializer the interactive graph routes also serve),
   `-m/--output-module` for
-  `spthy`/`spthytyped`/`msr` (translate-only mode), and the
-  `interactive`-mode `--with-dot`/`--with-json`/`--no-compress`;
-  exit codes and summary lines mirror HS.
+  `spthy`/`spthytyped`/`msr` (translate-only mode), the `--with-maude`
+  path, and the `--with-dot`/`--with-json` renderers interactive mode
+  draws graphs with; exit codes and summary lines mirror HS.
+  `--bound`, `--quiet`, `-v/--verbose` and `--no-compress` are accepted
+  without changing batch output: `--bound` bounds interactive proof steps
+  only, `--quiet` and `--no-compress` are inert in HS too, and HS's
+  verbose stderr trace has no port yet.
 - **Subcommands:** `interactive` (HTTP server), `variants` (DH/BP
   intruder-rule variants dump), `test` (install self-check).
 
@@ -305,13 +314,16 @@ refined sources are computed once and shared across lemmas.
 - **`diff(...)` / `--diff`** — observational-equivalence mode.
 - Export modules: `-m proverif`/`proverifequiv`/`deepsec` and their
   satellite flags (`--replication-bound`, the `--proverif-no-*`
-  family) — the HS `Export.hs` backend. Note the pinned upstream
-  oracle itself crashes on all 21 of its own export examples (the
-  `dest-*` builtins bug), so there is currently no oracle output to
-  port against.
+  family) — the HS `Export.hs` backend. The pinned upstream oracle
+  crashes on all 21 of its own `examples/sapic/export/` theories (its
+  `builtins` table has no arm for the `dest-*` or `natural-numbers`
+  names), and `-m deepsec` emits nothing anywhere in the corpus, so the
+  reference output that does exist is thin — see the
+  `tamarin-export` crate docs for the measured breakdown.
 
-Theories using these features are tracked in `scripts/file_flags.tsv` and
-re-enter the gate automatically once the feature lands.
+Diff theories are recorded with their canonical `--diff` invocation in
+`scripts/file_flags.tsv`; they join `scripts/parity_corpus.txt` once the
+feature lands.
 
 ## Crate layout
 
@@ -319,13 +331,14 @@ The workspace crates under `crates/` (`tamarin-prover/` here is the binary
 crate, distinct from the `tamarin-prover/` submodule at the repository root):
 
 ```
-tamarin-utils/          fresh-ident state, small util types
+tamarin-utils/          fresh-name state, pretty-printer, DAG/dot helpers, small util types
 tamarin-term/           Term/LTerm/LNTerm, MaudeSig, Maude IPC, normalisation
-tamarin-parser/         .spthy AST + lexer + parser + #include resolver
+tamarin-parser/         .spthy AST + lexer + parser + #include resolver + wellformedness
 tamarin-theory/         elaborator, constraint system, solver, simplify, sources, replay
 tamarin-sapic/          SAPiC process: frontend — translation to multiset-rewrite rules
 tamarin-accountability/ accountability frontend — case tests → VC lemmas
-tamarin-export/         ProVerif / DeepSec / SPDL export (placeholder)
+tamarin-export/         ProVerif / DeepSec export — headers only so far, not yet wired
+                        into the binary
 tamarin-server/         interactive HTTP server (Axum)
 tamarin-prover/         the binary: CLI parser + run dispatch
 ```
@@ -344,14 +357,14 @@ The licensing situation of this code is somewhat complicated. Portions of the
 code are written based only on the observable output behaviour of tamarin-prover
 while other parts were written with access to Tamarin's GPL 3.0 code. To my understanding,
 this makes the resulting binary GPL 3.0 for the moment, as some of the contents are
-a 'translation' of GPL 3 code..
+a 'translation' of GPL 3 code.
 
 Relicensing tamarin-prover is made difficult because of a very long tail of
 contributors over many years, making it very difficult to get in touch with each
 and every one of them to relicense their contributions. An eventual goal is to
 relicense tamarin-rs fully under MIT if possible, which will require one or both of:
 
-- Permission of the largest contributors (or their instutitions, where the institution
+- Permission of the largest contributors (or their institutions, where the institution
   is the only party capable of relicensing).
 - Where getting permission is infeasible, replacing the associated contribution with a
   cleanroom implementation of the feature.
@@ -359,20 +372,19 @@ relicense tamarin-rs fully under MIT if possible, which will require one or both
 Cleanroom implementations have to be performed by an LLM with access only to the observable
 behaviour of tamarin-prover, not the source code. Unfortunately I (as a contributor to
 tamarin-prover) am, to my understanding, tainted and cannot participate in this process
-except to audit the output. Any work on thhis should be tracked along with full tool-call transcripts
-to prove there was no access to GPL 3.0 source. 
+except to audit the output. Any work on this should be tracked along with full tool-call transcripts
+to prove there was no access to GPL 3.0 source.
 The segments being reimplemented have to be sufficiently broad
 so as to not inherit any information about the GPL 3.0 source code beyond broad module interfaces
-etc). Early experiments with clean room implementation of the formatting code had limited success,
+etc. Early experiments with clean room implementation of the formatting code had limited success,
 so for now there is no active work on this.
 
 Ported files carry a short GPL 3.0 notice at the top; the upstream authors whose permission a
 given file awaits are computed on demand from its citations with
 `scripts/gen_license_headers.py --authors <file>` (range-blame at the pinned submodule commit).
+The same script regenerates the notices; `--check` verifies them.
 Currently no one has granted permission, because I haven't started asking yet. If you want to
 preempt this and give your permission please send me an email or file a github issue!
-
-You can regenerate the notices with scripts/gen_license_headers.py (`--check` verifies them).
 
 So, in summary:
 - All Rust code in this repository (`crates/`, `scripts/`, `tests/`) is
