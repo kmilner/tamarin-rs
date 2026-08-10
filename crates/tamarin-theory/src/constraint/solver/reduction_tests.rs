@@ -5,21 +5,78 @@
 use super::*;
 use tamarin_term::maude_sig::pair_maude_sig;
 
+/// Absolute maude locations probed when `MAUDE_PATH` is unset — the same
+/// pair the rest of the workspace's maude-gated suites walk.
+const MAUDE_CANDIDATES: [&str; 2] = ["/usr/local/bin/maude", "/usr/bin/maude"];
+
+/// Probed after [`MAUDE_CANDIDATES`] and `$PATH`: this workspace's benchmark
+/// toolchain installs maude under linuxbrew, which is not on a default `PATH`.
+const MAUDE_BREW: &str = "/home/linuxbrew/.linuxbrew/bin/maude";
+
+/// The first `maude` on `$PATH`, if any.
+fn maude_on_path() -> Option<String> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join("maude"))
+        .find(|c| c.is_file())
+        .map(|c| c.to_string_lossy().into_owned())
+}
+
+/// The maude the tests below run against: `$MAUDE_PATH` when set, else the
+/// first of [`MAUDE_CANDIDATES`], `$PATH`, [`MAUDE_BREW`] that exists.
+///
+/// A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION,
+/// not a reason to skip — returning `None` there would turn every
+/// maude-backed test in this file green on a CI whose image moved maude.
+/// Panic instead, so the run goes red.  Resolving nothing at all is the same
+/// failure with a wider blast radius, so it panics too: `TAM_ALLOW_NO_MAUDE=1`
+/// is the only way to get the old silent skip, and naming it is a deliberate
+/// statement that this run is not asserting anything about maude.
 fn maude_path() -> Option<String> {
     if let Ok(p) = std::env::var("MAUDE_PATH") {
+        assert!(
+            std::path::Path::new(&p).exists(),
+            "MAUDE_PATH={p} does not exist; unset it to fall back to \
+             {MAUDE_CANDIDATES:?}, or point it at a real maude — skipping \
+             every maude-backed test here would report green vacuously"
+        );
         return Some(p);
     }
-    for c in ["/usr/local/bin/maude", "maude"] {
-        if std::path::Path::new(c).exists() {
-            return Some(c.to_string());
-        }
+    if let Some(c) = MAUDE_CANDIDATES
+        .iter()
+        .find(|c| std::path::Path::new(c).exists())
+    {
+        return Some((*c).to_string());
     }
-    None
+    if let Some(p) = maude_on_path() {
+        return Some(p);
+    }
+    if std::path::Path::new(MAUDE_BREW).exists() {
+        return Some(MAUDE_BREW.to_string());
+    }
+    if std::env::var("TAM_ALLOW_NO_MAUDE").as_deref() == Ok("1") {
+        return None;
+    }
+    panic!(
+        "no maude found: probed $MAUDE_PATH, {MAUDE_CANDIDATES:?}, $PATH and \
+         {MAUDE_BREW}.  Every maude-backed test in this file would otherwise \
+         report green having run nothing.  Install maude, point MAUDE_PATH at \
+         it, or set TAM_ALLOW_NO_MAUDE=1 to accept the silent skip."
+    );
 }
 
 fn ctx() -> Option<ProofContext> {
     let path = maude_path()?;
-    let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).ok()?;
+    // A maude that resolved but will not start is the same misconfiguration
+    // as a dangling MAUDE_PATH: swallowing it with `.ok()?` would silently
+    // skip every maude-backed test in this file, so fail loudly instead.
+    let h =
+        tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap_or_else(|e| {
+            panic!(
+                "maude at {path} failed to start: {e:?} — every maude-backed \
+                 test here would otherwise skip silently"
+            )
+        });
     Some(ProofContext::new(h, Vec::new()))
 }
 
@@ -524,7 +581,7 @@ fn solve_subterm_self_is_contradictory() {
 /// `solve_action_goal` emits `GoalCases::LinearNamed(rule_case_name)`
 /// rather than bare `Linear` — mirrors HS `solveAction`'s `Just ru ->
 /// ... return ru` arm (Goals.hs) whose surrounding `showRuleCaseName
-/// <$>` (Goals.hs:218-261, see line 257) unconditionally emits the rule's case name.
+/// <$>` (Goals.hs:217-252, see line 223) unconditionally emits the rule's case name.
 #[test]
 fn solve_action_goal_existing_node_with_action_is_linear_named() {
     let ctx = match ctx() {
@@ -957,7 +1014,7 @@ fn while_changing_terminates() {
 //
 // Mirrors Haskell's `casName` (Reduction.hs) which uses 1-INDEXED
 // `case_<n>` for generic case labels.  Off-by-one here makes
-// `distinguish` (ProofMethod.hs:283-340, see line 308) disambiguate against the
+// `distinguish` (ProofMethod.hs:282-339, see line 334) disambiguate against the
 // wrong sibling suffix and the proof skeleton drifts.
 // =========================================================================
 
@@ -1020,7 +1077,7 @@ fn neg_less_node_universal(i_name: &str, j_name: &str) -> Guarded {
 }
 
 /// HS-faithful `markAsSolved = when mark $ modM sSolvedFormulas
-/// $ S.insert fm` (Reduction.hs:424-491, see line 491).  Children of a Conj/Ex body
+/// $ S.insert fm` (Reduction.hs:427-494, see line 494).  Children of a Conj/Ex body
 /// recurse via `insert' False`, so a negated-atom universal that
 /// arrives transitively MUST NOT push into `solved_formulas`.
 ///

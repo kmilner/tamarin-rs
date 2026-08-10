@@ -5,6 +5,53 @@
 use super::*;
 use crate::constraint::system::System;
 
+/// Absolute maude locations probed when `MAUDE_PATH` is unset.
+const MAUDE_CANDIDATES: [&str; 3] = [
+    "/usr/local/bin/maude",
+    "/usr/bin/maude",
+    "/home/linuxbrew/.linuxbrew/bin/maude",
+];
+
+/// The maude the maude-backed test below runs against.
+///
+/// Resolution order: `$MAUDE_PATH`, then [`MAUDE_CANDIDATES`], then a `$PATH`
+/// walk.  Resolving nothing is a MISCONFIGURATION, not a reason to skip: a
+/// silent `None` makes the maude-backed test here report green having
+/// dispatched nothing.  Panic instead, unless `TAM_ALLOW_NO_MAUDE=1`
+/// explicitly asks for the silent skip.
+fn maude_path() -> Option<String> {
+    if let Ok(p) = std::env::var("MAUDE_PATH") {
+        assert!(
+            std::path::Path::new(&p).exists(),
+            "MAUDE_PATH={p} does not exist; unset it to fall back to \
+             {MAUDE_CANDIDATES:?}, or point it at a real maude"
+        );
+        return Some(p);
+    }
+    if let Some(c) = MAUDE_CANDIDATES
+        .iter()
+        .find(|c| std::path::Path::new(c).exists())
+    {
+        return Some((*c).to_string());
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let cand = dir.join("maude");
+            if cand.exists() {
+                return Some(cand.to_string_lossy().into_owned());
+            }
+        }
+    }
+    assert_eq!(
+        std::env::var("TAM_ALLOW_NO_MAUDE").as_deref(),
+        Ok("1"),
+        "no maude found: set MAUDE_PATH, put maude on $PATH, or set \
+         TAM_ALLOW_NO_MAUDE=1 to skip the maude-backed test here — \
+         skipping silently would report green having run nothing"
+    );
+    None
+}
+
 #[test]
 fn empty_system_has_no_open_goals() {
     let sys = System::empty();
@@ -38,14 +85,7 @@ fn dispatch_solve_disj_goal_routes() {
     use crate::constraint::solver::reduction::{GoalCases, Reduction};
     use tamarin_term::maude_sig::pair_maude_sig;
 
-    let path = match std::env::var("MAUDE_PATH").ok().or_else(|| {
-        for c in ["/usr/local/bin/maude", "maude"] {
-            if std::path::Path::new(c).exists() {
-                return Some(c.to_string());
-            }
-        }
-        None
-    }) {
+    let path = match maude_path() {
         Some(p) => p,
         None => return,
     };

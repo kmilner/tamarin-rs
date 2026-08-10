@@ -16,6 +16,11 @@
 #
 # Output: writes each captured response into
 #   tests/fixtures/haskell-responses/
+# plus `oracle_rev`, the submodule revision they were captured from.  The
+# `haskell_captures_match_the_submodule_pin` test in tests/common/mod.rs goes
+# red when that stamp is not the current pin, so a submodule bump that forgets
+# to re-run this script fails the suite instead of silently pinning the port to
+# a stale oracle.
 #
 # Re-run this whenever Haskell behaviour changes.  The Rust port tests in
 # `tests/routes_*.rs` compare against these captures several ways: byte
@@ -213,6 +218,11 @@ wait_for_server BigTermProved
 fetch json_proof_abbrev.json    "/thy/trace/1/json/proof/done/_/Init/Init?abbrevInBackend=1"
 rm -rf "$BIGDIR"
 
-echo "done.  Captures live under: ${RES_DIR}"
+# Stamp the oracle these bytes came from, last: `set -e` aborts above on any
+# failed phase, so a half-written capture never claims a revision.  The stamp
+# has no trailing newline (the same shape scripts/divergence_fixtures/ uses).
+printf '%s' "$pin" > "${RES_DIR}/oracle_rev"
+
+echo "done.  Captures live under: ${RES_DIR} (oracle_rev: $pin)"
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true

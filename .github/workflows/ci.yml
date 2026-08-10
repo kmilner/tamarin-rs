@@ -56,6 +56,21 @@ jobs:
       - run: cargo test --profile ci --workspace
         env:
           MAUDE_PATH: /opt/maude/maude
+      # The corners no corpus theory reaches (~5s).  Only the port runs here:
+      # the oracle side is the committed capture under
+      # scripts/divergence_fixtures/expected/, so this needs the submodule
+      # (fixtures + the pin the check compares against) and maude — both
+      # already provisioned above — and no Haskell build.  The check refuses to
+      # run when expected/oracle_rev is not the current pin, so a submodule
+      # bump that lands without re-running capture.sh fails CI loudly.
+      - name: Divergence fixtures
+        run: |
+          # The port probes /usr/local/bin/maude and /usr/bin/maude, then lets
+          # $PATH resolve a bare `maude`; it does NOT read MAUDE_PATH.
+          export PATH="/opt/maude:$PATH"
+          cargo build --profile ci --bin tamarin-rs
+          # Absolute: check.sh runs the binary from the fixture directory.
+          RS_PATH="$PWD/target/ci/tamarin-rs" scripts/divergence_fixtures/check.sh
 
   rs-parity:
     runs-on: ubuntu-latest

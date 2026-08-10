@@ -14,6 +14,8 @@
 //!
 //! The harness skips silently when the pinned oracle has not been built
 //! (`./setup.sh testing`), so the test stays fast in environments without it.
+//! A missing *maude* is a different matter — see [`maude_path`]: it panics
+//! rather than skip, because skipping there greens the whole file.
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -36,16 +38,63 @@ fn corpus_root() -> PathBuf {
         })
 }
 
+/// Absolute maude locations probed before `PATH` is walked.
+const MAUDE_CANDIDATES: [&str; 2] = ["/usr/local/bin/maude", "/usr/bin/maude"];
+
+/// Last resort, after `PATH`: the linuxbrew prefix this project's maude lives
+/// under on the development box, which is deliberately not on `PATH`.
+const MAUDE_LINUXBREW: &str = "/home/linuxbrew/.linuxbrew/bin/maude";
+
+/// The maude every maude-gated case below runs against: `$MAUDE_PATH`, else
+/// the first existing [`MAUDE_CANDIDATES`] entry, else a `PATH` walk, else
+/// [`MAUDE_LINUXBREW`].
+///
+/// Resolving NOTHING is a misconfiguration, not a reason to skip: every
+/// maude-gated test in this file opens with `let mp = match maude_path() {
+/// Some(p) => p, None => return }`, so a `None` here reports the same green
+/// run with and without maude installed.  Panic instead — unless
+/// `TAM_ALLOW_NO_MAUDE=1` explicitly asks for the old silent skip (a box that
+/// genuinely has no maude and only wants the maude-free cases).  A
+/// `MAUDE_PATH` naming a file that does not exist is the same
+/// misconfiguration and panics too.
 fn maude_path() -> Option<String> {
     if let Ok(p) = std::env::var("MAUDE_PATH") {
+        assert!(
+            std::path::Path::new(&p).exists(),
+            "MAUDE_PATH={p} does not exist; unset it to fall back to \
+             {MAUDE_CANDIDATES:?} / PATH / {MAUDE_LINUXBREW}, or point it at a \
+             real maude — skipping every maude-gated case here would report \
+             green vacuously"
+        );
         return Some(p);
     }
-    for c in ["/usr/local/bin/maude", "maude"] {
-        if std::path::Path::new(c).exists() {
-            return Some(c.to_string());
-        }
+    if let Some(c) = MAUDE_CANDIDATES
+        .iter()
+        .find(|c| std::path::Path::new(c).exists())
+    {
+        return Some((*c).to_string());
     }
-    None
+    // `PATH` walk, kept dependency-free like every other copy of this probe.
+    if let Some(p) = std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|d| d.join("maude"))
+            .find(|p| p.is_file())
+    }) {
+        return Some(p.to_string_lossy().into_owned());
+    }
+    if std::path::Path::new(MAUDE_LINUXBREW).exists() {
+        return Some(MAUDE_LINUXBREW.to_string());
+    }
+    if std::env::var("TAM_ALLOW_NO_MAUDE").as_deref() == Ok("1") {
+        return None;
+    }
+    panic!(
+        "no maude found: MAUDE_PATH unset, none of {MAUDE_CANDIDATES:?} exist, \
+         nothing named `maude` on PATH, and no {MAUDE_LINUXBREW}. Every \
+         maude-gated case in this file would skip and the run would be green \
+         having proved nothing. Install maude, set MAUDE_PATH, or set \
+         TAM_ALLOW_NO_MAUDE=1 to accept the silent skip."
+    );
 }
 
 /// The pinned oracle, discovered the way every parity script discovers it:
@@ -101,6 +150,58 @@ fn oracle_command_within(secs: u32) -> Option<Command> {
         cmd.arg(format!("--with-maude={m}"));
     }
     Some(cmd)
+}
+
+/// A corpus probe's committed match floor: `Some(n)` asserts the probe still
+/// matches at least `n`, `None` means no run has recorded one yet.
+type ProbeFloor = Option<usize>;
+
+/// Floor for `corpus_verdict_match_coverage_probe`'s verdict-match count.
+///
+/// `None`: that `#[ignore]`d whole-corpus probe has not been run since it
+/// gained a floor, so there is no measured value to commit and inventing one
+/// would be worse than none.  The probe prints its observed count and fails
+/// with the exact line to paste here.
+const VERDICT_MATCH_FLOOR: ProbeFloor = None;
+
+/// Floor for `corpus_proof_skeleton_match_probe`'s structural-match count.
+/// `None` for the same reason as [`VERDICT_MATCH_FLOOR`].
+const STRUCTURAL_MATCH_FLOOR: ProbeFloor = None;
+
+/// Enforce a corpus probe's floor, after it has printed its diagnostics.
+///
+/// Two ways to fail: the probe compared nothing (every file filtered away, or
+/// the oracle/maude/corpus missing — a probe that matched nothing against
+/// nothing is not a passing probe), or it landed below the committed floor.
+/// An uncommitted floor fails too and names the value to commit: a probe that
+/// only whispers its score is a probe no regression can fail.
+fn enforce_probe_floor(
+    label: &str,
+    floor_const: &str,
+    floor: ProbeFloor,
+    observed: usize,
+    compared: usize,
+) {
+    assert!(
+        compared > 0,
+        "{label}: 0 comparable lemmas — the probe compared nothing. Check the \
+         oracle binary, maude, and the corpus root before reading anything \
+         into a green run."
+    );
+    match floor {
+        None => panic!(
+            "{label}: observed {observed}/{compared}, but {floor_const} is None — no \
+             run has committed a floor yet. Record this run by setting \
+             `const {floor_const}: ProbeFloor = Some({observed});` with a comment \
+             naming it, so the next regression fails instead of whispering."
+        ),
+        Some(f) => assert!(
+            observed >= f,
+            "{label}: {observed}/{compared} is below the committed floor {f} \
+             ({floor_const}) — a regression. If the drop is intended, lower the \
+             floor in the same commit that explains why."
+        ),
+    }
 }
 
 fn tamarin_available() -> bool {
@@ -379,11 +480,15 @@ fn corpus_sample_lemma_and_rule_counts_match() {
             mismatches.join("\n  ")
         );
     }
-    // Make sure we actually compared at least one file when the
-    // tamarin binary and corpus are available.
-    if compared == 0 {
-        eprintln!("warning: no corpus files matched (skipping)");
-    }
+    // A run that located none of the candidates compared nothing, and a green
+    // "0 mismatches out of 0 files" is exactly the vacuous pass this suite
+    // exists to avoid.
+    assert!(
+        compared > 0,
+        "none of {:?} were found under {} — the test compared nothing",
+        candidates,
+        corpus.display()
+    );
 }
 
 /// Count quantifiers in a guarded formula.
@@ -856,8 +961,9 @@ end"#;
 
 /// **Corpus verdict-match coverage probe**: walks the corpus directories
 /// listed below, runs `prove_lemma` and the pinned oracle's `--prove` on
-/// every lemma, reports a verdict-match count to stderr. Doesn't fail unless
-/// 0/N match — used as a diagnostic to track progress over time.
+/// every lemma, and reports a verdict-match count to stderr.  The count is
+/// then held to [`VERDICT_MATCH_FLOOR`], so a drop fails the probe instead of
+/// scrolling past in the log.
 ///
 /// Skips files that mention `diff(`, `predicates:` or `process:`, files whose
 /// `builtins:` name diffie-hellman / xor / bilinear-pairing, and any file the
@@ -1156,7 +1262,13 @@ fn corpus_verdict_match_coverage_probe() {
             eprintln!("  {}", d);
         }
     }
-    // We don't *require* a match rate — this is a diagnostic.
+    enforce_probe_floor(
+        "corpus verdict-match",
+        "VERDICT_MATCH_FLOOR",
+        VERDICT_MATCH_FLOOR,
+        matched,
+        compared,
+    );
 }
 
 /// **Corpus proof-skeleton match probe**: walks the same corpus dirs as
@@ -1168,7 +1280,8 @@ fn corpus_verdict_match_coverage_probe() {
 /// Reports `corpus structural-match: X/Y` where Y is the total number
 /// of lemmas where Haskell's proof skeleton is available — verdict
 /// divergences DO count against structural match (verdict-only matching
-/// masks reasoning bugs).
+/// masks reasoning bugs).  X is then held to [`STRUCTURAL_MATCH_FLOOR`], so a
+/// drop fails the probe instead of scrolling past in the log.
 ///
 /// This is the **primary metric** for the port's progress, per
 /// project directive: count only whether the proof matches the
@@ -1447,6 +1560,13 @@ fn corpus_proof_skeleton_match_probe() {
             eprintln!("  {}", d);
         }
     }
+    enforce_probe_floor(
+        "corpus structural-match",
+        "STRUCTURAL_MATCH_FLOOR",
+        STRUCTURAL_MATCH_FLOOR,
+        struct_match,
+        comparable,
+    );
 }
 
 /// Probe: TPM Exclusive_Secrets::left_reachable contradiction breakdown.

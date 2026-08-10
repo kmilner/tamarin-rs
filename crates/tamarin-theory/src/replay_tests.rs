@@ -9,16 +9,62 @@ use tamarin_term::lterm::{LSort, LVar};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::maude_sig::pair_maude_sig;
 
+/// A maude handle for the pins below, or `None` only when the run has
+/// explicitly opted out via `TAM_ALLOW_NO_MAUDE=1`.
+///
+/// Resolution order: `$MAUDE_PATH`, the two system prefixes, `$PATH`, then the
+/// linuxbrew prefix this workspace's benchmark toolchain installs into.
+/// Resolving nothing PANICS: a silent `None` turns every maude-backed pin in
+/// this file green having compared nothing, which is exactly the vacuous pass
+/// the gate roster exists to prevent.
 fn maude() -> Option<MaudeHandle> {
-    let path = std::env::var("MAUDE_PATH").ok().or_else(|| {
-        for c in ["/usr/local/bin/maude", "maude"] {
+    let path = match std::env::var("MAUDE_PATH") {
+        Ok(p) => {
+            assert!(
+                std::path::Path::new(&p).exists(),
+                "MAUDE_PATH={p} does not exist; unset it to fall back to \
+                 /usr/local/bin/maude, /usr/bin/maude, $PATH and \
+                 /home/linuxbrew/.linuxbrew/bin/maude, or point it at a real \
+                 maude — skipping every maude-backed pin here would report \
+                 green vacuously"
+            );
+            Some(p)
+        }
+        Err(_) => None,
+    }
+    .or_else(|| {
+        for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
             if std::path::Path::new(c).exists() {
                 return Some(c.to_string());
             }
         }
+        if let Some(dirs) = std::env::var_os("PATH") {
+            if let Some(c) = std::env::split_paths(&dirs)
+                .map(|d| d.join("maude"))
+                .find(|c| c.is_file())
+            {
+                return Some(c.to_string_lossy().into_owned());
+            }
+        }
+        let brew = "/home/linuxbrew/.linuxbrew/bin/maude";
+        if std::path::Path::new(brew).exists() {
+            return Some(brew.to_string());
+        }
+        assert!(
+            std::env::var("TAM_ALLOW_NO_MAUDE").as_deref() == Ok("1"),
+            "no maude found: probed $MAUDE_PATH, /usr/local/bin/maude, \
+             /usr/bin/maude, $PATH and /home/linuxbrew/.linuxbrew/bin/maude.  \
+             Install maude, point MAUDE_PATH at it, or set \
+             TAM_ALLOW_NO_MAUDE=1 to accept skipping these pins."
+        );
         None
     })?;
-    MaudeHandle::start(&path, pair_maude_sig()).ok()
+    // A maude that resolved but will not start is the same misconfiguration
+    // as a dangling MAUDE_PATH: swallowing it with `.ok()` would silently
+    // skip every pin in this file, so fail loudly instead.
+    Some(MaudeHandle::start(&path, pair_maude_sig()).unwrap_or_else(|e| {
+        panic!("maude at {path} failed to start: {e:?} — every maude-backed pin here would otherwise skip silently")
+    }))
 }
 
 /// `canonicalise_term_text` must normalise away the wrap-induced
@@ -427,7 +473,7 @@ fn match_split_goal_by_id() {
 /// Disj matcher — two open Disj goals of different alt counts; the
 /// matcher picks by alt-count + per-alt shape signature.
 ///
-/// HS reference: HS `disjSplitGoal` (Proof.hs:61) parses to
+/// HS reference: HS `disjSplitGoal` (Theory/Text/Parser/Proof.hs:61) parses to
 /// `DisjG (Disj [Guarded])` and matches the runtime Goal::Disj by
 /// structural equality (ProofMethod.hs:252-273, see line 258).  The RS shape
 /// signature must uniquely pick the disjunction whose alt-count
@@ -481,7 +527,7 @@ fn match_disj_goal_by_alt_count() {
 }
 
 /// HS check-and-extend, `mergeMapsWith` rightOnly branch
-/// (Proof.hs): a stored-skeleton case that the
+/// (Theory/Proof.hs:463): a stored-skeleton case that the
 /// re-executed method does NOT produce is mapped through
 /// `noSystemPrf` over the WHOLE subtree → every node `Nothing` →
 /// `/* unannotated */`.  `parsed_to_unannotated` must therefore set

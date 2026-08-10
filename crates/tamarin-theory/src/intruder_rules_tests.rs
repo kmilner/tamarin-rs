@@ -5,7 +5,7 @@
 use super::*;
 
 /// Pins every `show_fun_sym_name` arm to the display name HS
-/// `showFunSymName` (Term.hs:286-296) produces.  The arms read
+/// `showFunSymName` (Term/Term.hs:286-296) produces.  The arms read
 /// `tamarin_term::function_symbols`' `*SymString` constants, which are
 /// also what `maude_print` emits into the Maude module, so an edit to one
 /// of them moves intruder-rule names, `close_rule.rs` case names and
@@ -271,7 +271,7 @@ fn fingerprint_rejects_are_shape_clashes_only() {
     assert!(!fp(&pair_rule).may_be_subset(&fp(&no_conc)));
 
     // A one-argument AC application is `Opaque`: HS assumes such terms
-    // never occur (Term/Unification.hs:299), so it licenses no reject.
+    // never occur (Term/Unification.hs:299-301), so it licenses no reject.
     let ac_singleton = ku_rule_over_var("a", |a| unsafe_f_app(FunSym::Ac(AcSym::Mult), vec![a]));
     assert!(fp(&ac_singleton).may_be_duplicate(&fp(&var_rule)));
     assert!(fp(&ac_singleton).may_be_duplicate(&fp(&pair_rule)));
@@ -636,25 +636,83 @@ fn destruction_rules_pair_emits_exactly_two_destructors() {
 // Pin both ends of the predicate: a positive (two rules differing only
 // in variable names) and a negative (structurally different).
 // =========================================================================
-/// Locate the Maude binary (`MAUDE_PATH` env override, else the common
-/// install paths).  `None` skips the Maude-backed tests below.
+/// Absolute maude locations probed when `MAUDE_PATH` is unset — the same
+/// pair the rest of the workspace's maude-gated suites walk.
+const MAUDE_CANDIDATES: [&str; 2] = ["/usr/local/bin/maude", "/usr/bin/maude"];
+
+/// Probed after [`MAUDE_CANDIDATES`] and `$PATH`: this workspace's benchmark
+/// toolchain installs maude under linuxbrew, which is not on a default `PATH`.
+const MAUDE_BREW: &str = "/home/linuxbrew/.linuxbrew/bin/maude";
+
+/// The first `maude` on `$PATH`, if any.
+fn maude_on_path() -> Option<String> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join("maude"))
+        .find(|c| c.is_file())
+        .map(|c| c.to_string_lossy().into_owned())
+}
+
+/// Locate the Maude binary the pins below run against: `$MAUDE_PATH` when set,
+/// else the first of [`MAUDE_CANDIDATES`], `$PATH`, [`MAUDE_BREW`] that exists.
+///
+/// A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION, not
+/// a reason to skip — returning `None` there would turn every maude-backed pin
+/// in this file green on a CI whose image moved maude.  Panic instead, so the
+/// run goes red.  Resolving nothing at all is the same failure with a wider
+/// blast radius, so it panics too: `TAM_ALLOW_NO_MAUDE=1` is the only way to
+/// get the old silent skip, and naming it is a deliberate statement that this
+/// run is not asserting anything about maude.
 fn maude_bin_path() -> Option<String> {
-    std::env::var("MAUDE_PATH").ok().or_else(|| {
-        for c in ["/usr/local/bin/maude", "maude"] {
-            if std::path::Path::new(c).exists() {
-                return Some(c.to_string());
-            }
-        }
-        None
-    })
+    if let Ok(p) = std::env::var("MAUDE_PATH") {
+        assert!(
+            std::path::Path::new(&p).exists(),
+            "MAUDE_PATH={p} does not exist; unset it to fall back to \
+             {MAUDE_CANDIDATES:?}, or point it at a real maude — skipping \
+             every maude-backed pin here would report green vacuously"
+        );
+        return Some(p);
+    }
+    if let Some(c) = MAUDE_CANDIDATES
+        .iter()
+        .find(|c| std::path::Path::new(c).exists())
+    {
+        return Some((*c).to_string());
+    }
+    if let Some(p) = maude_on_path() {
+        return Some(p);
+    }
+    if std::path::Path::new(MAUDE_BREW).exists() {
+        return Some(MAUDE_BREW.to_string());
+    }
+    if std::env::var("TAM_ALLOW_NO_MAUDE").as_deref() == Ok("1") {
+        return None;
+    }
+    panic!(
+        "no maude found: probed $MAUDE_PATH, {MAUDE_CANDIDATES:?}, $PATH and \
+         {MAUDE_BREW}.  Every maude-backed pin in this file would otherwise \
+         report green having run nothing.  Install maude, point MAUDE_PATH at \
+         it, or set TAM_ALLOW_NO_MAUDE=1 to accept the silent skip."
+    );
 }
 
 fn maude_handle() -> Option<tamarin_term::maude_proc::MaudeHandle> {
-    tamarin_term::maude_proc::MaudeHandle::start(
-        &maude_bin_path()?,
-        tamarin_term::maude_sig::pair_maude_sig(),
+    let path = maude_bin_path()?;
+    // A maude that resolved but will not start is the same misconfiguration
+    // as a dangling MAUDE_PATH: swallowing it with `.ok()` would silently
+    // skip every pin in this file, so fail loudly instead.
+    Some(
+        tamarin_term::maude_proc::MaudeHandle::start(
+            &path,
+            tamarin_term::maude_sig::pair_maude_sig(),
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "maude at {path} failed to start: {e:?} — every maude-backed \
+                 pin here would otherwise skip silently"
+            )
+        }),
     )
-    .ok()
 }
 
 /// Build a rule `[ KU(a) ] --[ KU(pair(a, a)) ]-> [ KU(pair(a, a)) ]`
@@ -1332,7 +1390,7 @@ fn dh_intruder_rules_all_names_have_underscore_prefix() {
 
 /// `norm_rule` is the identity on a DH constructor rule whose
 /// terms are already in normal form (KU(x.0), KU(x.1), KU(exp(x.0, x.1))).
-/// Mirrors HS `normRule'` (IntruderRules.hs:317-321) — for already-normal
+/// Mirrors HS `normRule'` (IntruderRules.hs:376-380) — for already-normal
 /// terms, `norm'` returns the input.
 #[test]
 fn norm_rule_identity_on_already_normal_rule() {

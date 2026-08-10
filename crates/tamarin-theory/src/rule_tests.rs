@@ -95,7 +95,8 @@ fn intruder_predicates() {
 /// declaration order and, within a variant, the fields in declaration
 /// order.  Pin both against a reshuffle: the variant sequence
 /// `ConstrRule < DestrRule < Coerce`, and the `DestrRule` field order of
-/// HS `DestrRule BC.ByteString Int Bool Bool [FunSym]` (Rule.hs:541).
+/// HS `DestrRule BC.ByteString Int Bool Bool [FunSym]`
+/// (Theory/Model/Rule.hs:541).
 #[test]
 fn intr_rule_ac_info_ord_follows_declaration_order() {
     let sym = |n: &[u8]| {
@@ -166,15 +167,41 @@ fn reserved_names_match_hs() {
     );
 }
 
+/// The maude the pins below run against, or `None` only when the run has
+/// explicitly opted out via `TAM_ALLOW_NO_MAUDE=1`.
+///
+/// Resolution order: `$MAUDE_PATH`, the two system prefixes, `$PATH`, then the
+/// linuxbrew prefix this workspace's benchmark toolchain installs into.
+/// Resolving nothing PANICS: returning `None` would skip every maude-backed
+/// pin here and report green having compared nothing.
 fn maude_path() -> Option<String> {
     if let Ok(p) = std::env::var("MAUDE_PATH") {
         return Some(p);
     }
-    for c in ["/usr/local/bin/maude", "maude"] {
+    for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
         if std::path::Path::new(c).exists() {
             return Some(c.to_string());
         }
     }
+    if let Some(dirs) = std::env::var_os("PATH") {
+        if let Some(c) = std::env::split_paths(&dirs)
+            .map(|d| d.join("maude"))
+            .find(|c| c.is_file())
+        {
+            return Some(c.to_string_lossy().into_owned());
+        }
+    }
+    let brew = "/home/linuxbrew/.linuxbrew/bin/maude";
+    if std::path::Path::new(brew).exists() {
+        return Some(brew.to_string());
+    }
+    assert!(
+        std::env::var("TAM_ALLOW_NO_MAUDE").as_deref() == Ok("1"),
+        "no maude found: probed $MAUDE_PATH, /usr/local/bin/maude, \
+         /usr/bin/maude, $PATH and /home/linuxbrew/.linuxbrew/bin/maude.  \
+         Install maude, point MAUDE_PATH at it, or set TAM_ALLOW_NO_MAUDE=1 \
+         to accept skipping these pins."
+    );
     None
 }
 
