@@ -7,7 +7,8 @@
 //! `ProtoRestriction`/`Restriction` data type.
 //!
 //! The surface-formula → `LNFormula` rewrite-then-quantify machinery
-//! (`fromRuleRestriction` / `rewrite`, Restriction.hs:89-161) is ported in
+//! (`fromRuleRestriction` / `rewrite`, Theory/Model/Restriction.hs:90-162) is
+//! ported in
 //! [`crate::rule_restriction`]; this module models only the data type.
 
 use crate::formula::LNFormula;

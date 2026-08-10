@@ -175,7 +175,7 @@ impl SubtermStore {
 }
 
 /// `elemNotBelowReducible reducible inner outer` — port of Haskell's
-/// `Term.Term.elemNotBelowReducible` (`Term.hs:272-279`).  True iff
+/// `Term.Term.elemNotBelowReducible` (`Term/Term.hs:273-279`).  True iff
 /// `inner` occurs syntactically in `outer` and never below a
 /// reducible function symbol.
 ///

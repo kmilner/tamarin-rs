@@ -11,7 +11,7 @@ fn parse(src: &str) -> p::Theory {
 
 #[test]
 fn bare_nullary_macro_name_expands() {
-    // HS `nullaryApp` (Term.hs:143-148) parses a BARE arity-0 macro
+    // HS `nullaryApp` (Theory/Text/Parser/Term.hs:151,158-163) parses a BARE arity-0 macro
     // name as a 0-ary application, so `konst` and `konst()` are the
     // same call.  A sorted/indexed variable of the same name is NOT
     // a call.

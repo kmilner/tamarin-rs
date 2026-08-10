@@ -193,7 +193,7 @@ pub fn parse_variants_reply(reply: &[u8]) -> Result<Vec<MSubst>, ParseError> {
         }
         variants.push(subst);
     }
-    // Haskell `parseVariantsReply` (Parser.hs:294-306, see lines 296-298):
+    // Haskell `parseVariantsReply` (Maude/Parser.hs:294-306, see lines 296-298):
     //   ... many1 parseVariant <* "No more variants." <* endOfLine
     //       <* "rewrites: " <* takeWhile1 isDigit <* endOfLine <* endOfInput
     // Require >=1 variant, then consume/validate the trailing footer and EOF.
@@ -249,7 +249,8 @@ fn parse_substitutions(c: &mut Cursor) -> Result<Vec<MSubst>, ParseError> {
         while c.peek() == Some(b'x') {
             entries.push(parse_entry(c)?);
         }
-        // HS `parseSubstitution` (Parser.hs:309-316, see line 313) uses `many1 parseEntry` for
+        // HS `parseSubstitution` (Maude/Parser.hs:309-316, see line 313) uses
+        // `many1 parseEntry` for
         // the non-`empty substitution` branch, requiring at least one entry.
         // (The `empty substitution` line is handled separately above.)
         if entries.is_empty() {
@@ -259,7 +260,7 @@ fn parse_substitutions(c: &mut Cursor) -> Result<Vec<MSubst>, ParseError> {
         }
         substs.push(entries);
     }
-    // Haskell `parseUnifyReply`/`parseMatchReply` (Parser.hs:278-292) wrap
+    // Haskell `parseUnifyReply`/`parseMatchReply` (Maude/Parser.hs:278-292) wrap
     // `many1 (parseSubstitution msig) <* endOfInput`: outside the explicit
     // no-unifier/no-match line at least one substitution is required and all
     // input must be consumed.
@@ -312,7 +313,7 @@ fn parse_sort(c: &mut Cursor) -> Result<LSort, ParseError> {
     } else if c.eat_str(b"TamNat") {
         Ok(LSort::Nat)
     } else if c.eat_str(b"M") {
-        // Transcribed as-is from HS `parseSort` (Parser.hs:325-331, see lines
+        // Transcribed as-is from HS `parseSort` (Maude/Parser.hs:325-331, see lines
         // 330-331), which spells sort `Msg` as `string "M" *> string "sg"`
         // (marked `FIXME: why?`).
         if c.eat_str(b"sg") {
@@ -402,7 +403,7 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
     let tam_suffix = ident.strip_prefix(FUN_SYM_PREFIX.as_bytes());
     if let Some(suffix) = tam_suffix {
         // Built-in AC operator?  Guard order follows HS `appIdent`
-        // (Parser.hs:375-386); the names are distinct, so only the pairing
+        // (Maude/Parser.hs:375-386); the names are distinct, so only the pairing
         // matters.
         for (op, name) in [
             (AcSym::Mult, MULT_SYM_STRING),
@@ -415,14 +416,14 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
             }
         }
         // User-defined AC operator?  HS reaches this guard only from
-        // `parseFApp` (Parser.hs:372-386), i.e. after `(` has been consumed and
+        // `parseFApp` (Maude/Parser.hs:372-386), i.e. after `(` has been consumed and
         // `sepBy1` has yielded at least one argument; a bare identifier goes to
-        // `parseFAppConst` (Parser.hs:392), which never classifies as AC.  RS
+        // `parseFAppConst` (Maude/Parser.hs:392), which never classifies as AC.  RS
         // keeps that routing.
         //
         // Upstream classifies the identifier by containment —
         // `BC.isInfixOf "tamPDA" ident` and its three siblings
-        // (Parser.hs:379-382) — which also scans the user's own name, so an
+        // (Maude/Parser.hs:379-382) — which also scans the user's own name, so an
         // ordinary non-AC function whose NAME contains a marker (`functions:
         // tamXCAbar/1` -> `tamXCFUtamXCAbar`) is rebuilt as AC: at arity 1
         // `fAppAC _ [a] = a` deletes the application, at arity >= 2 it
@@ -433,7 +434,7 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
             return crate::term::f_app_acfct(parse_fun_ac_sym(ident), args);
         }
         // C operator (em)?
-        // Mirror HS `fAppC EMap args` (Parser.hs:383): `f_app_c` sorts the two
+        // Mirror HS `fAppC EMap args` (Maude/Parser.hs:383): `f_app_c` sorts the two
         // arguments so `em` is canonical regardless of Maude's output order.
         if suffix == EMAP_SYM_STRING {
             return crate::term::f_app_c(CSym::EMap, args);
@@ -461,7 +462,7 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
             constructability: c,
             ndc,
         };
-        // Haskell `parseFunSym` (Parser.hs:351-364) errors when the decoded
+        // Haskell `parseFunSym` (Maude/Parser.hs:351-364) errors when the decoded
         // symbol is not in `allowedfunSyms` (consSym, nilSym, natOneSym plus
         // `noEqFunSyms msig`).  This runs on the live Maude reply path, not
         // just round-trip tests.  We intentionally keep a lenient pass here:
@@ -474,7 +475,7 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
     // for forward compatibility; this matches Haskell only for certain
     // built-ins (like Maude's own `true`).  HS gives the specially-handled
     // idents (`list`, `cons`, `nil`) `(Public, Constructor, NotNDC)` too
-    // (`parseFunSym`, Parser.hs:351-364).
+    // (`parseFunSym`, Maude/Parser.hs:351-364).
     let sym = NoEqSym {
         name: crate::intern::intern_bytes(ident),
         arity: args.len(),
@@ -488,14 +489,14 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
 /// Is `ident` the Maude encoding of a user-defined AC symbol?
 ///
 /// The encoded layout is `funSymPrefix` (`tam`) + four attribute characters +
-/// the user's name (HS `ppMaudeACSym`/`ppMaudeNoEqSym`, Parser.hs:136-147):
+/// the user's name (HS `ppMaudeACSym`/`ppMaudeNoEqSym`, Maude/Parser.hs:136-147):
 /// privacy `P`/`X`, constructability `C`/`D`, AC state `A`/`F`, NDC state
 /// `N`/`U`/`D`/`B`.  Only `ppMaudeACSym` writes `A` in the third slot, so
 /// decoding that block is an exact test: `tamXCFUtamXCAbar` (the free symbol
 /// `tamXCAbar`) carries `F` and falls through to the free-symbol decode below.
 ///
 /// Upstream instead tests the whole identifier for containment of `tamPDA`,
-/// `tamPCA`, `tamXDA` or `tamXCA` (Parser.hs:379-382), which also scans the
+/// `tamPCA`, `tamXDA` or `tamXCA` (Maude/Parser.hs:379-382), which also scans the
 /// name; RS decodes and deliberately diverges there (see the `build_app` AC
 /// branch).
 fn is_ac_fct_ident(ident: &[u8]) -> bool {
@@ -510,7 +511,7 @@ fn is_ac_fct_ident(ident: &[u8]) -> bool {
         && matches!(rest[3], b'N' | b'U' | b'D' | b'B')
 }
 
-/// HS `parseFunACSym` (Parser.hs:366-368): decode the attributes out of the
+/// HS `parseFunACSym` (Maude/Parser.hs:366-368): decode the attributes out of the
 /// Maude identifier and undo the `_` -> `-` renaming applied when it was
 /// emitted (`replaceMinusFunAC`).
 fn parse_fun_ac_sym(ident: &[u8]) -> AcFctSym {
@@ -582,7 +583,7 @@ mod tests {
     }
 
     /// A bare identifier is a nullary free symbol: HS sends it through
-    /// `parseFAppConst` (Parser.hs:392), which never classifies as AC, so a
+    /// `parseFAppConst` (Maude/Parser.hs:392), which never classifies as AC, so a
     /// free symbol whose own name contains a marker (`functions: tamXCAfoo/0`
     /// encodes to `tamXCFUtamXCAfoo`) stays a `NoEq` constant.  RS keeps that
     /// routing.
@@ -603,7 +604,7 @@ mod tests {
     }
 
     /// The same identifier applied to arguments: upstream reaches `appIdent`'s
-    /// containment guards (Parser.hs:379-382), classifies it as AC, and
+    /// containment guards (Maude/Parser.hs:379-382), classifies it as AC, and
     /// `fAppAC _ [a] = a` (Raw.hs:121) deletes the application.  RS decodes
     /// the attribute block instead — the AC slot holds `F` — so the free
     /// symbol `tamXCAfoo/1` survives.  Deliberate divergence from that

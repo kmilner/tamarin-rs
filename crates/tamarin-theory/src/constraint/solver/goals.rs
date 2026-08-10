@@ -229,7 +229,7 @@ pub fn parse_heuristic_str_with_tactics(
             break;
         }
         // Tactic ranking `{name}` / `{.}` — HS `internalTacticRanking`
-        // (Signature.hs:298-303).  Resolve the name against the theory's
+        // (Parser/Signature.hs:313-318).  Resolve the name against the theory's
         // tactic list (HS `chosenTactic`).  `{.}` (or name "." ) → HS
         // `defaultTactic`.  quitOnEmpty is always False from parsing
         // (HS `("{.}", InternalTacticRanking False defaultTactic)`,
@@ -1331,7 +1331,9 @@ fn smart_ranking(
 ///   - solve-last goals are moved to the END via `sortDecisionTreeLast`
 ///     (not the `notSolveLast` partition trick).
 ///   - `isFreshKnowsGoal` is COMMENTED OUT in HS's sapic solveFirst lists
-///     (ProofMethod.hs:819,893) — so fresh-nonce KU goals are NOT
+///     (ProofMethod.hs:818-820,892-894 — the `-- , isFreshKnowsGoal . fst`
+///     line between the live `isPrivateKnowsGoal` and `isSplitGoalSmall`
+///     entries) — so fresh-nonce KU goals are NOT
 ///     prioritised (the key difference vs smartRanking, where it IS active).
 ///   - there is NO `moveNatToEnd` tail stage.
 ///
@@ -1361,7 +1363,9 @@ fn sapic_ranking(
             Box::new(is_standard_action_goal_but_not_insert),
             Box::new(is_not_auth_out),
             Box::new(is_private_knows_goal),
-            // isFreshKnowsGoal — COMMENTED OUT in HS (ProofMethod.hs:848-935, see line 893)
+            // isFreshKnowsGoal — COMMENTED OUT in HS's sapicPKCS11Ranking
+            // solveFirst list (ProofMethod.hs:848-935); the commented entry
+            // sits between the two live ones at ProofMethod.hs:892-894.
             Box::new(|a: &AnnotatedGoal| is_split_goal_small(a, sys)),
             Box::new(|a: &AnnotatedGoal| is_msg_one_case_goal(a, &one_case_syms)),
             Box::new(is_double_exp_goal),
@@ -1383,7 +1387,9 @@ fn sapic_ranking(
             Box::new(is_progress_disj),
             Box::new(is_not_auth_out),
             Box::new(is_private_knows_goal),
-            // isFreshKnowsGoal — COMMENTED OUT in HS (ProofMethod.hs:769-846, see line 819)
+            // isFreshKnowsGoal — COMMENTED OUT in HS's sapicRanking solveFirst
+            // list (ProofMethod.hs:769-846); the commented entry sits between
+            // the two live ones at ProofMethod.hs:818-820.
             Box::new(|a: &AnnotatedGoal| is_split_goal_small(a, sys)),
             Box::new(|a: &AnnotatedGoal| is_msg_one_case_goal(a, &one_case_syms)),
             Box::new(is_double_exp_goal),
@@ -1731,7 +1737,7 @@ fn is_private_knows_goal(a: &AnnotatedGoal) -> bool {
     //   isPrivateKnowsGoal goal = case msgPremise goal of
     //     Just t -> isPrivateFunction t
     //     _     -> False
-    // and `isPrivateFunction` (Term.hs:203-205) checks ONLY the TOP-LEVEL
+    // and `isPrivateFunction` (Term/Term.hs:224-226) checks ONLY the TOP-LEVEL
     // function symbol — it does NOT recurse into subterms:
     //   isPrivateFunction (viewTerm -> FApp (NoEq (_, (_,Private,_))) _) = True
     //   isPrivateFunction _                                            = False
@@ -1744,7 +1750,7 @@ fn is_private_knows_goal(a: &AnnotatedGoal) -> bool {
     // swaps in NAXOS_eCK_PFS_private (and the non-PFS variant
     // NAXOS_eCK_private).
     // Shared `isPrivateFunction` port (`crate::intruder_rules::is_private_function`,
-    // Term.hs:203-205): top-level function symbol is Private; no recursion.
+    // Term/Term.hs:224-226): top-level function symbol is Private; no recursion.
     msg_premise(&a.goal)
         .map(crate::intruder_rules::is_private_function)
         .unwrap_or(false)

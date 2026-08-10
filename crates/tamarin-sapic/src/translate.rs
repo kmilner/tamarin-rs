@@ -3,7 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of the top-level SAPIC `translate` orchestration
-//! (`lib/sapic/src/Sapic.hs:45-101`) and `gen` (Sapic.hs:112-153).
+//! (`lib/sapic/src/Sapic.hs:45-101`) and `gen` (sapic/src/Sapic.hs:112-153).
 //!
 //! For a single top-level process, [`translate`]:
 //!   1. annotates it — `toAnProcess`, `propagateNames`,
@@ -46,7 +46,7 @@ type PosSet = BTreeSet<Vec<i64>>;
 
 /// Per-translation context for the gated progress / reliable / async wrappers
 /// (HS `trans` = `progressTrans . reliableChannelTrans . baseTrans` in
-/// `Sapic.hs:98-100`).  The progress function domain / inverse are computed once
+/// `sapic/src/Sapic.hs:98-100`).  The progress function domain / inverse are computed once
 /// (HS recomputes `pfFrom`/`pfInv` per node; identical result, computed once
 /// here for speed).
 struct TransCtx {
@@ -120,7 +120,7 @@ fn process_at<'a>(
     }
 }
 
-/// `mapToAnnotatedRule` (Sapic.hs:149-150): tag each rule body with its index.
+/// `mapToAnnotatedRule` (sapic/src/Sapic.hs:149-150): tag each rule body with its index.
 fn map_to_annotated_rule(
     proc: &Process<ProcessAnnotation<LVar>, SapicLVar>,
     p: &ProcessPosition,
@@ -142,7 +142,7 @@ fn map_to_annotated_rule(
         .collect()
 }
 
-/// `gen` (Sapic.hs:112-153).  Handles `Null`, `Action` (incl. the `Rep`
+/// `gen` (sapic/src/Sapic.hs:112-153).  Handles `Null`, `Action` (incl. the `Rep`
 /// replication action), and the `Comb` combinators in scope — `Parallel`,
 /// `NDC` (with the `substStatePos` shared-position rewrite), and `CondEq`.
 /// `Cond`-with-a-formula / `Lookup` / `Let` are rejected in `base_trans_comb`.
@@ -168,7 +168,7 @@ fn gen(
             here.extend(rest);
             Ok(here)
         }
-        // NDC special case (Sapic.hs:123-127): the NDC node itself emits NO
+        // NDC special case (sapic/src/Sapic.hs:123-127): the NDC node itself emits NO
         // rule; its two children SHARE the parent's state position.  We
         // translate each child at `p++[1]` / `p++[2]` (so rule names carry the
         // correct position suffix), then rewrite the State premise of EVERY
@@ -185,7 +185,7 @@ fn gen(
             out.extend(subst_state_pos_rules(r, &pr, p));
             Ok(out)
         }
-        // General combinator (Sapic.hs:128-134): emit this node's own rules,
+        // General combinator (sapic/src/Sapic.hs:128-134): emit this node's own rules,
         // then recurse into the left child with `tildex'1` and (if present) the
         // right child with `tildex'2`.
         Process::Comb(c, ann, _, _) => {
@@ -207,7 +207,7 @@ fn gen(
 }
 
 /// `trans_action` = `progressTransAct (reliableChannelTransAct baseTransAction)`
-/// (Sapic.hs:98-100, applied per node).  Reliable wraps the base; progress wraps
+/// (sapic/src/Sapic.hs:98-100, applied per node).  Reliable wraps the base; progress wraps
 /// the result.
 fn trans_action(
     ctx: &TransCtx,
@@ -264,7 +264,8 @@ fn trans_comb(
     }
 }
 
-/// `substStatePos p_old p_new` over a list of generated rules (Sapic.hs:112-153, see line 124,
+/// `substStatePos p_old p_new` over a list of generated rules
+/// (sapic/src/Sapic.hs:112-153, see line 124,
 /// 140-144): rewrite the position of every NON-semistate `State` PREMISE fact
 /// from `p_old` to `p_new` (leaving the actual position `p_old==p++[i]` only in
 /// the rule NAME, which was already fixed during `gen`).
@@ -286,7 +287,7 @@ fn subst_state_pos_rules(
         .collect()
 }
 
-/// `substStatePos` on a single fact (Sapic.hs:142-144):
+/// `substStatePos` on a single fact (sapic/src/Sapic.hs:142-144):
 ///   State s p' vs | p' == p_old, not (isSemiState s) = State LState p_new vs
 ///   otherwise = fact
 fn subst_state_pos_fact(f: TransFact, p_old: &[i64], p_new: &[i64]) -> TransFact {
@@ -362,18 +363,21 @@ pub struct TranslateOptions {
     pub trans_reliable: bool,
     pub async_channels: bool,
     pub compress_events: bool,
-    /// `_transReport` (Sapic.hs:45-101, see line 56, 64): gates `translateTermsReport` (the
-    /// `report(t)`→`rep(t, loc)` term rewrite) and `reportInit` (the fixed
+    /// `_transReport` (sapic/src/Sapic.hs:45-101, see line 56, 64): gates
+    /// `translateTermsReport` (the `report(t)`→`rep(t, loc)` term rewrite)
+    /// and `reportInit` (the fixed
     /// `ReportRule`).  Set from the `locations-report` builtin.
     pub trans_report: bool,
     /// `_stateChannelOpt` (OpenTheory.hs:546-547, see line 547, default False): gates the
     /// pure-state / state-channel optimisation — `annotatePureStates`
-    /// (Sapic.hs:45-101, see line 57) and `setforcedInjectiveFacts {L_PureState, L_CellLocked}`
-    /// (Sapic.hs:45-101, see line 84).  Set from `options: translation-state-optimisation`.
+    /// (sapic/src/Sapic.hs:45-101, see line 57) and
+    /// `setforcedInjectiveFacts {L_PureState, L_CellLocked}`
+    /// (sapic/src/Sapic.hs:45-101, see line 84).  Set from
+    /// `options: translation-state-optimisation`.
     pub state_channel_opt: bool,
 }
 
-/// `translate` (Sapic.hs:45-101).  `needs_in_ev_res` is HS
+/// `translate` (sapic/src/Sapic.hs:45-101).  `needs_in_ev_res` is HS
 /// `needsInEvRes = any lemmaNeedsInEvRes (theoryLemmas th)`.  `opts` carries the
 /// `_transProgress` / `_transReliable` / `_asynchronousChannels` /
 /// `_compressEvents` gates.
@@ -383,15 +387,17 @@ pub fn translate(
     st_rules: &std::collections::BTreeSet<tamarin_term::subterm_rule::CtxtStRule>,
     opts: TranslateOptions,
 ) -> Result<Translation, String> {
-    // The annotation chain, innermost first (Sapic.hs:54-61): toAnProcess,
+    // The annotation chain, innermost first (sapic/src/Sapic.hs:55-61): toAnProcess,
     // propagateNames, annotateSecretChannels, annotatePureStates,
     // translateTermsReport, translateLetDestr — then annotateLocks.
     let an_proc_pre: Process<ProcessAnnotation<LVar>, SapicLVar> =
         propagate_names(to_annotated::<LVar>(plain.clone()));
-    // annotateSecretChannels (Sapic.hs:45-101, see line 58): attach `secret_channel` to every
-    // ChIn/ChOut whose channel is an always-secret fresh variable.
+    // annotateSecretChannels (sapic/src/Sapic.hs:45-101, see line 58): attach
+    // `secret_channel` to every ChIn/ChOut whose channel is an always-secret
+    // fresh variable.
     let an_proc_sec = crate::secret_channels::annotate_secret_channels(an_proc_pre);
-    // `checkOps' (._stateChannelOpt) annotatePureStates` (Sapic.hs:45-101, see line 57): the
+    // `checkOps' (._stateChannelOpt) annotatePureStates`
+    // (sapic/src/Sapic.hs:45-101, see line 57): the
     // pure-state / state-channel optimisation, off unless the theory declares
     // `options: translation-state-optimisation`.
     let an_proc_states = if opts.state_channel_opt {
@@ -399,7 +405,8 @@ pub fn translate(
     } else {
         an_proc_sec
     };
-    // `checkOps' (._transReport) translateTermsReport` (Sapic.hs:45-101, see line 56): rewrite
+    // `checkOps' (._transReport) translateTermsReport`
+    // (sapic/src/Sapic.hs:45-101, see line 56): rewrite
     // `report(t)` terms to `rep(t, loc)` under the in-scope `@location`
     // annotation.
     let an_proc_rep = if opts.trans_report {
@@ -557,17 +564,18 @@ pub fn translate(
 }
 
 // =============================================================================
-// needsInEvRes (Sapic.hs:45-101, see line 101, 156-181)
+// needsInEvRes (sapic/src/Sapic.hs:45-101, see line 101, 156-181)
 // =============================================================================
 
-/// `needsInEvRes = any lemmaNeedsInEvRes (theoryLemmas th)` (Sapic.hs:45-101, see line 101): does
+/// `needsInEvRes = any lemmaNeedsInEvRes (theoryLemmas th)`
+/// (sapic/src/Sapic.hs:45-101, see line 101): does
 /// any of the theory's lemmas fall in the fragment that requires the `in_event`
 /// restriction?  Each lemma is classified via `lemma_needs_in_ev_res`.
 pub fn needs_in_ev_res(lemmas: &[tamarin_parser::ast::Lemma]) -> bool {
     lemmas.iter().any(lemma_needs_in_ev_res)
 }
 
-/// `lemmaNeedsInEvRes` (Sapic.hs:175-181): classify a lemma by its trace
+/// `lemmaNeedsInEvRes` (sapic/src/Sapic.hs:175-181): classify a lemma by its trace
 /// quantifier and the (pos, neg) polarity of its formula.
 fn lemma_needs_in_ev_res(lem: &tamarin_parser::ast::Lemma) -> bool {
     use tamarin_parser::ast::TraceQuantifier as TQ;
@@ -581,7 +589,7 @@ fn lemma_needs_in_ev_res(lem: &tamarin_parser::ast::Lemma) -> bool {
     }
 }
 
-/// `isPosNegFormula` (Sapic.hs:156-169): determine whether a formula is in the
+/// `isPosNegFormula` (sapic/src/Sapic.hs:156-172): determine whether a formula is in the
 /// positive (L+) and/or negative (L-) fragment.  Returns `(isPos, isNeg)`.  The
 /// only special case is an `Action` atom on the `K` fact, which is `(True,
 /// False)` (a `K(..)@t` action is positive but not negative).
@@ -613,7 +621,8 @@ fn is_pos_neg_formula(f: &tamarin_parser::ast::Formula) -> (bool, bool) {
 }
 
 /// `isPosNegFormula (Ato (Action _ f))` dispatches on `isActualKFact (factTag
-/// f)` (Sapic.hs:156-172, see line 159, 167-169): a `K`-fact action is `(True, False)`; every
+/// f)` (sapic/src/Sapic.hs:156-172, see line 159, 167-169): a `K`-fact action
+/// is `(True, False)`; every
 /// other atom is `(True, True)`.
 fn is_pos_neg_atom(a: &tamarin_parser::ast::Atom) -> (bool, bool) {
     use tamarin_parser::ast::Atom;

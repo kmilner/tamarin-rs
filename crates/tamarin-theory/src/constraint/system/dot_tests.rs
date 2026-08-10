@@ -120,13 +120,13 @@ fn edge_attrs(dot: &str) -> String {
     line[open..].to_string()
 }
 
-/// `dotEdge`'s `check p` (Dot.hs:391-392) resolves an edge's endpoints with
+/// `dotEdge`'s `check p` (System/Dot.hs:391-392) resolves an edge's endpoints with
 /// the Graph-level `resolveNodePremFact`/`resolveNodeConcFact`
 /// (Graph.hs:87-96), which read `_gSystem` — the ORIGINAL system
 /// `systemToGraph` stores (Graph.hs:165) — while the nodes on screen come
 /// from the compressed/simplified copy.  So a conclusion whose node the
 /// compression hid still types the edge, even though that endpoint renders
-/// as a portless `MissingNode` trapezium (Dot.hs:277).
+/// as a portless `MissingNode` trapezium (System/Dot.hs:277).
 ///
 /// The two endpoints carry deliberately different fact tags: every edge a
 /// real system holds joins two copies of the SAME fact, so only an
@@ -165,7 +165,7 @@ fn classify_edge_resolves_hidden_source_conc_from_original_system() {
 }
 
 /// The premise half of the same rule: `check` tests the TARGET premise
-/// first (Dot.hs:391), also through the original system, so a hidden target
+/// first (System/Dot.hs:391), also through the original system, so a hidden target
 /// node types the edge even when the visible source conclusion (`Out`) is
 /// neither a proto nor a K fact and would yield `color="gray30"` on its own.
 #[test]
@@ -192,12 +192,13 @@ fn classify_edge_resolves_hidden_target_prem_from_original_system() {
 }
 
 /// [`classify_edge`]'s persistence test is HS `isPersistentFact`
-/// (Fact.hs:379-380), i.e. HS `factTagMultiplicity` (Fact.hs:383-388),
+/// (Theory/Model/Fact.hs:379-380), i.e. HS `factTagMultiplicity`
+/// (Theory/Model/Fact.hs:383-388),
 /// which maps `KUFact` and `KDFact` to `Persistent` alongside `ProtoFact
 /// Persistent _ _`.  An edge with a LINEAR proto fact at one end and a
 /// KU/KD fact at the other therefore takes the bold proto branch
-/// (Dot.hs:393-395) AND its `gray50` colour, because `check` tests BOTH
-/// endpoints for each predicate independently (Dot.hs:391-392).
+/// (System/Dot.hs:393-395) AND its `gray50` colour, because `check` tests BOTH
+/// endpoints for each predicate independently (System/Dot.hs:391-392).
 ///
 /// The mixed endpoint pair is not reachable from a solver-built system:
 /// HS `insertEdges` (Reduction.hs:281-284) unifies an edge's two facts with
@@ -243,7 +244,7 @@ fn classify_edge_treats_k_facts_as_persistent() {
 // Minimized web-parity repro (dot shape): the premise /
 // conclusion rows of OIDC_Implicit's `Browser_Redirects_To_URI` record
 // node must be laid out by HS `renderRow`/`renderBalanced`
-// (Dot.hs:360-382) — each field at width `max 30 (round (1.3 * 100 *
+// (System/Dot.hs:360-382) — each field at width `max 30 (round (1.3 * 100 *
 // oneLineLen/sumLens))`, ribbon `round (w/1.5)` — NOT at the page width.
 // Expected bytes extracted verbatim from the cached HS response for
 // `/thy/trace/…/interactive-graph-def/proof/Nonce_Sources/…` on
@@ -415,9 +416,9 @@ fn dot_emits_cluster_for_role() {
     sys.add_node(LVar::new("b", LSort::Node, 2), mk("InitB", Some("Bob")));
     let s = system_to_dot(&sys);
     // Each role yields a cluster subgraph whose id is HS
-    // `createClusterNodeId name` (Dot.hs:181, reached from `dotCluster` at
-    // Dot.hs:576) — the quoted `"cluster_<name>"` over the cluster's FULL
-    // name.  `extractBaseName` (Dot.hs:574) is used only to pick the colour.
+    // `createClusterNodeId name` (System/Dot.hs:181, reached from `dotCluster` at
+    // System/Dot.hs:576) — the quoted `"cluster_<name>"` over the cluster's FULL
+    // name.  `extractBaseName` (System/Dot.hs:574) is used only to pick the colour.
     assert!(
         s.contains("subgraph \"cluster_Alice_Session_1\" {"),
         "missing Alice cluster: {}",
@@ -428,7 +429,7 @@ fn dot_emits_cluster_for_role() {
         "missing Bob cluster: {}",
         s
     );
-    // `label` is the cluster's own attribute (Dot.hs:580), NOT the subgraph
+    // `label` is the cluster's own attribute (System/Dot.hs:579), NOT the subgraph
     // id: asking only whether the role name appears anywhere is answered by
     // the id asserted above, so a `dotCluster` emitting no label at all
     // would satisfy it.
@@ -450,7 +451,7 @@ fn dot_with_sl0_does_not_collapse_less() {
     // drops the redundant edge and SL0 keeps it.
     //
     // The three ordered nodes have to exist in `sNodes`: `dotLessEdge`
-    // resolves both endpoints through `dsNodes` (Dot.hs:411-412) and HS
+    // resolves both endpoints through `dsNodes` (System/Dot.hs:411-412) and HS
     // `error`s on a miss, so a less-atom over undrawn nodes is not a shape
     // upstream can render.
     use crate::constraint::constraints::LessAtom;
@@ -598,7 +599,7 @@ fn dot_abbreviations_and_legend_appear_only_when_abbreviate_is_set() {
     sys.add_node(LVar::new("b", LSort::Node, 2), mk("R2"));
     sys.add_node(LVar::new("c", LSort::Node, 3), mk("R3"));
     let s = system_to_dot(&sys);
-    // With `goAbbreviate` set, `renderLNFact` (Dot.hs:227-235) substitutes the
+    // With `goAbbreviate` set, `renderLNFact` (System/Dot.hs:227-235) substitutes the
     // generated name into the fact rows themselves, not just into the legend.
     assert!(s.contains("Out( SE1 )"), "facts not abbreviated: {}", s);
 
@@ -606,16 +607,16 @@ fn dot_abbreviations_and_legend_appear_only_when_abbreviate_is_set() {
     // things live here and nowhere else in the suite:
     //
     //  * the `D.scope` wrapper carrying `rank="sink"` around a single
-    //    `shape=plain` HTML-label node (Dot.hs:444-450);
+    //    `shape=plain` HTML-label node (System/Dot.hs:444-450);
     //  * graphviz's HTML printer `align`ing the rows under the opening
     //    `<TABLE …>` tag, so every row after the first is preceded by a
     //    newline and a run of spaces as wide as that tag (65);
     //  * the invisible edge from every graph sink to the legend node
-    //    (Dot.hs:451-458 over `getGraphSinks`, Graph.hs:168-172) — resolved
+    //    (System/Dot.hs:451-458 over `getGraphSinks`, Graph.hs:167-171) — resolved
     //    through `dsNodes`, i.e. each record's rule-label PORT, not its bare
     //    id.
     //
-    // The rows are `topoSortAbbrevs` order (Dot.hs:446, 484-491): the inner
+    // The rows are `topoSortAbbrevs` order (System/Dot.hs:446, 484-491): the inner
     // `senc(argument, payload)` and `session_key` before the `senc(SE2, SE3)`
     // whose expansion mentions them.
     let pad = " ".repeat(65);
@@ -646,8 +647,8 @@ fn dot_abbreviations_and_legend_appear_only_when_abbreviate_is_set() {
     assert_eq!(tail, expected_legend, "legend block:\n{s}");
 
     // `goAbbreviate` gates only the APPLICATION of the abbreviations
-    // (`renderLNFact`, Dot.hs:227-235, and `when abbreviate
-    // generateLegend`, Dot.hs:538) — `systemToGraph` computes them either
+    // (`renderLNFact`, System/Dot.hs:227-235, and `when abbreviate
+    // generateLegend`, System/Dot.hs:538) — `systemToGraph` computes them either
     // way.  With the flag clear, the same system renders every term
     // spelled out, carries no legend, and mentions no generated name.
     let opts = GraphOptions {
@@ -697,10 +698,11 @@ pub(super) fn proto_node(
 #[test]
 fn dot_persistent_fact_keeps_bang_prefix_and_zero_arity_parens() {
     // HS `prettyLNFact`: a persistent proto fact gets the `!` prefix
-    // (showFactTag, Fact.hs:549-553), and a zero-arity fact renders
+    // (showFactTag, Theory/Model/Fact.hs:549-553), and a zero-arity fact renders
     // `Name( )` — `nestShort'` = `sep [text (n++"("), text ")"]`, whose
-    // `sep` space-joins the two when they fit on one line (Class.hs:221-223 /
-    // Fact.hs:567-573, see line 572).
+    // `sep` space-joins the two when they fit on one line
+    // (Text/PrettyPrint/Class.hs:218,221-223 /
+    // Theory/Model/Fact.hs:567-573, see line 572).
     //
     // Authenticated against the repo's HS prover (v1.13.0) on a minimal
     // theory: `--prove` shows `[ Fr( ~k ) ] --> [ !Reg( ~k ), Started( ) ]`
@@ -735,7 +737,7 @@ fn record_header_node_id_uses_show_lvar_format() {
     // HS `prettyNodeId = text . show`: a node id renders `#i` when idx==0
     // and `#i.2` when idx==2 (`instance Show LVar`, LTerm.hs:550-557;
     // sortPrefix LSortNode = "#", LTerm.hs:194-199, see line 198). The rule-node header is
-    // `prettyNodeId v <-> colon <-> showDotRuleCaseName` (Dot.hs:338-341, see line 339).
+    // `prettyNodeId v <-> colon <-> showDotRuleCaseName` (System/Dot.hs:338-341, see line 339).
     use crate::fact::out_fact;
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
@@ -771,7 +773,7 @@ fn record_header_node_id_uses_show_lvar_format() {
 
 #[test]
 fn dot_drops_diff_annotation_action_fact() {
-    // HS `ruleLabelM.isNotDiffAnnotation` (Dot.hs:337,344, see line 344) drops the synthetic
+    // HS `ruleLabelM.isNotDiffAnnotation` (System/Dot.hs:337,344, see line 344) drops the synthetic
     // `Diff<getRuleNameDiff ru>` linear proto fact from the action row.
     // For a standard proto rule `R`, getRuleNameDiff = "ProtoR", so the
     // dropped fact is `ProtoFact Linear "DiffProtoR" 0`.
@@ -805,12 +807,12 @@ fn dot_drops_diff_annotation_action_fact() {
 
 #[test]
 fn dot_compact_intruder_node_is_plain_ellipse() {
-    // HS `mkNode` CompactBoringNodes (Dot.hs:297-307): an intruder rule
+    // HS `mkNode` CompactBoringNodes (System/Dot.hs:297-307): an intruder rule
     // collapses to a plain `mkSimpleNode` ellipse with NO fill/role attrs.
     // With an outgoing edge the label is `#id : name` (actions dropped);
-    // without one it is the full `#id : name[acts]` (Dot.hs:304-305).  Compact
+    // without one it is the full `#id : name[acts]` (System/Dot.hs:304-305).  Compact
     // endpoints also carry no record ports: every prem/act/conc key maps to
-    // the one bare id (Dot.hs:307).
+    // the one bare id (System/Dot.hs:307).
     use crate::constraint::constraints::Edge;
     use crate::fact::{in_fact, out_fact, proto_fact, Multiplicity};
     use crate::rule::{ConcIdx, IntrRuleACInfo, PremIdx, Rule};
@@ -891,8 +893,8 @@ fn dot_compact_intruder_node_is_plain_ellipse() {
 #[test]
 fn dot_explicit_rule_color_attribute_sets_fillcolor() {
     // HS `dotNodeCompact` prefers `ruleColor'` (the explicit `color:`
-    // attribute, Dot.hs:251-256) over the colormap, in the `fromMaybe …
-    // (ruleColor' <|> manualNodeColor)` at Dot.hs:259. The hex is
+    // attribute, System/Dot.hs:251-256) over the colormap, in the `fromMaybe …
+    // (ruleColor' <|> manualNodeColor)` at System/Dot.hs:259. The hex is
     // `rgbToHex` of the attribute's Rgb.
     use crate::fact::out_fact;
     use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes};
@@ -970,10 +972,10 @@ fn web_route_is_the_batch_serializer_at_label_g() {
 
 #[test]
 fn dot_no_cluster_preamble_sets_node_size_and_less_edge_color_first() {
-    // No-cluster preamble mirrors HS setDefaultAttributes (Dot.hs:133-138)
-    // — including `width=0.3,height=0.2` on the node defaults (Dot.hs:137).
+    // No-cluster preamble mirrors HS setDefaultAttributes (System/Dot.hs:133-138)
+    // — including `width=0.3,height=0.2` on the node defaults (System/Dot.hs:137).
     // The less edge emits `color` before `style` (HS dotLessEdge,
-    // Dot.hs:409-413, see line 413).
+    // System/Dot.hs:409-413, see line 413).
     use crate::constraint::constraints::LessAtom;
     use tamarin_term::lterm::{LSort, LVar};
     let mut sys = System::empty();
@@ -1009,8 +1011,8 @@ fn dot_no_cluster_preamble_sets_node_size_and_less_edge_color_first() {
 #[test]
 fn dot_cluster_preamble_uses_cluster_attributes() {
     // When clusters exist HS switches to setDefaultAttributesIfCluster
-    // (Dot.hs:143-164), and `dotCluster` (Dot.hs:572-587) opens each subgraph
-    // with nine attributes of its own (Dot.hs:578-586).  Both blocks are
+    // (System/Dot.hs:143-164), and `dotCluster` (System/Dot.hs:572-587) opens each subgraph
+    // with nine attributes of its own (System/Dot.hs:577-585).  Both blocks are
     // pinned byte-for-byte: a check on one or two attributes is blind to a
     // dropped `label`, a flipped `pack`, or a `roleColor` whose alpha or
     // channel scale moved.
@@ -1020,7 +1022,7 @@ fn dot_cluster_preamble_uses_cluster_attributes() {
     // `Process` and `Q`.  The preamble carries no theory-specific text, and
     // the two hexes below are that capture's own `cluster_P_Session_1` and
     // `cluster_Q_Session_1` colours — `roleColor` keys on the base name
-    // alone (Dot.hs:559-569), so the session index does not move them.
+    // alone (System/Dot.hs:559-569), so the session index does not move them.
     use crate::fact::out_fact;
     use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes};
     use tamarin_term::lterm::{LSort, LVar};
@@ -1076,7 +1078,7 @@ fn dot_cluster_preamble_uses_cluster_attributes() {
         "cluster preamble must be the oracle's, byte for byte:\n{s}"
     );
     // `dotCluster`'s own nine attributes, in HS's order, with `roleColor`
-    // (Dot.hs:559-569) resolved from the base name.
+    // (System/Dot.hs:559-569) resolved from the base name.
     let cluster_block = |name: &str, hex: &str| {
         format!(
             "subgraph \"cluster_{name}\" {{\n\
@@ -1101,7 +1103,7 @@ fn dot_cluster_preamble_uses_cluster_attributes() {
     );
 }
 
-// ---- palette-driven node attributes (HS `dotNodeCompact`, Dot.hs:239-293) --
+// ---- palette-driven node attributes (HS `dotNodeCompact`, System/Dot.hs:239-293) --
 // The `nodeColorMap` palette itself is exercised in `graph::color`.
 
 use crate::constraint::constraints::{NodeId, Reason};
@@ -1180,9 +1182,9 @@ fn dot_rule_node_uses_faithful_palette_fillcolor() {
         s
     );
     // HS record attrs: the light palette colour is bright, so a black font
-    // (`colorUsesWhiteFont`, Dot.hs:287-290, keyed off the `M.lookup rInfoVal
-    // colorMap` of Dot.hs:258 and spelled at Dot.hs:261); no `role` attribute
-    // -> "Undefined" (Dot.hs:246, emitted at Dot.hs:262).
+    // (`colorUsesWhiteFont`, System/Dot.hs:287-290, keyed off the `M.lookup rInfoVal
+    // colorMap` of System/Dot.hs:258 and spelled at System/Dot.hs:261); no `role` attribute
+    // -> "Undefined" (System/Dot.hs:246, emitted at System/Dot.hs:262).
     assert!(
         s.contains("fontcolor=\"black\""),
         "bright palette colour must use a black font: {}",
@@ -1210,8 +1212,8 @@ fn color_uses_white_font_matches_hs_luminance() {
 
 #[test]
 fn rule_node_emits_role_attribute() {
-    // HS `role = fromMaybe "Undefined" (getNodeRole node)` (Dot.hs:246),
-    // emitted as the record's fourth attribute (Dot.hs:262): a rule carrying a
+    // HS `role = fromMaybe "Undefined" (getNodeRole node)` (System/Dot.hs:246),
+    // emitted as the record's fourth attribute (System/Dot.hs:262): a rule carrying a
     // `role` attribute renders it verbatim.
     use crate::fact::out_fact;
     use tamarin_term::term::Term;

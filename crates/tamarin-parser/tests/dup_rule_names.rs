@@ -16,7 +16,7 @@
 //! Both rejections are `throwM` → `fail (show e)` (Token.hs:210-211) with
 //! `show (DuplicateItem …)` (Parser/Exceptions.hs:38-40): an ordinary parsec
 //! `fail` at the position after the rule, merging the trailing
-//! `option [] $ symbol "variants" …` label (Rule.hs:134).  Every expected
+//! `option [] $ symbol "variants" …` label (Parser/Rule.hs:134).  Every expected
 //! string below is the stderr the pinned Haskell oracle (Git revision
 //! ef3f0468) prints for the same theory, minus the three `maude tool:` banner
 //! lines; every accepted theory loads with exit 0 there.
@@ -127,7 +127,7 @@ fn corpus_shape_identical_duplicate_is_accepted() {
 
 /// Two `_restrict`-carrying rules with the same name die at the RESTRICTION
 /// guard, before the rule-equality comparison: `liftedAddProtoRule` adds the
-/// expanded `Restr_<rule>_<i>` restrictions first (Parser.hs:177-179), and
+/// expanded `Restr_<rule>_<i>` restrictions first (Text/Parser.hs:177-179), and
 /// `addRestriction` rejects on the existing NAME even though both rules (and
 /// both restrictions) are byte-identical.
 #[test]

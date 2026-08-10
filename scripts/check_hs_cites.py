@@ -27,6 +27,12 @@ Finding classes
              preference that picks the wrong sibling turns an unverifiable
              cite into a confidently wrong one.  The fix is to write enough
              of the path to disambiguate (`Theory/Model/Rule.hs:1464`).
+             HARD: alone among the classes, AMBIGUOUS cannot be `--skip`ped.
+             A bare basename is the defect that disarms every other class --
+             a cite whose file does not resolve is never range-checked,
+             blank-checked, comment-checked or symbol-checked -- so a run
+             that suppressed it could report zero findings while having
+             validated nothing about those cites at all.
   RANGE      the line number is past the end of the file (or below 1).
   BLANK      the cited line is empty.
   COMMENT    an ANCHOR line -- a bare `File.hs:N`, or a `see line N` target --
@@ -36,19 +42,47 @@ Finding classes
              checked this way: a declaration extent legitimately starts at its
              haddock.
   SEELINE    a `see line N` falls outside the `A-B` extent it annotates.
+  SYMBOL     the cite carries a `#name` anchor and `name` does not occur, as
+             a whole Haskell word, anywhere in the cited range.
+
+Symbol anchors
+--------------
+A cite may name the declaration it means, written after the line spec and
+before any `see line` tail:
+
+    Theory/Model/Rule.hs:1464-1502#getRuleName
+    Theory/Model/Rule.hs:1464-1502#getRuleName, see line 1470
+    Theory/Model/Rule.hs:1470#getRuleName
+
+The name is asserted to occur as a whole Haskell word somewhere in the cited
+range -- the union of the parts list, which for a single-line cite is that
+one line, so anchor a bare `Foo.hs:N` only at the declaration's own head (or
+let `extend_anchor_citations.py --anchor-symbols` widen it to the extent
+first).  A SYMBOL finding names the lines where the symbol does occur
+instead, which is what a drifted cite needs.  Anchors are optional, and
+nothing but this checker and `remap_hs_cites.py` reads them, so adding one is
+always safe; leaving one off only forgoes the check.  Recognised names are
+alphanumeric Haskell identifiers, `[A-Za-z_][A-Za-z0-9_']*` -- cite an
+operator declaration without an anchor.
+
+An anchor survives a bump: `remap_hs_cites.py` carries it through a rewrite,
+prefers it over the old declaration's name when re-anchoring, and refuses to
+rewrite a cite whose remapped range would no longer contain it.
 
 What this script does NOT check
 -------------------------------
 Read the summary line: it prints what it skipped, so a green run is not
 mistaken for more coverage than it has.
 
-  * **Whether a cite names the right declaration.**  This is the big one, and
-    it is the failure the classes above cannot see.  A cite whose target
-    merely drifted -- `Handler.hs:1422-1440` for a `getKillThreadR` that a
-    bump moved to 1517 -- lands on a line that exists and is neither blank nor
-    a comment, so every class passes.  Only a human, or a checker that knows
-    which identifier the comment claims, catches that.  Zero findings here
-    means "no cite is mechanically broken", never "every cite is correct".
+  * **Whether a cite WITHOUT an anchor names the right declaration.**  This is
+    the big one, and it is the failure the line-number classes cannot see.  A
+    cite whose target merely drifted -- `Handler.hs:1422-1440` for a
+    `getKillThreadR` that a bump moved to 1517 -- lands on a line that exists
+    and is neither blank nor a comment, so every one of those classes passes.
+    A `#getKillThreadR` anchor turns exactly that into a SYMBOL finding; the
+    summary line prints how many verified cites carry one, and the rest are
+    still only as good as the last human pass.  Zero findings here means "no
+    cite is mechanically broken", never "every cite is correct".
   * **Cites inside string literals.**  Deliberately not reported; see Scope.
   * **Anything outside `crates/**/*.rs`.**  `scripts/`, `tests/`, the `*.md`
     files and the `.spthy` fixtures under `scripts/divergence_fixtures/` all
@@ -88,6 +122,16 @@ module (`Theory.Tools.SubtermStore.hs`); both resolve.  Modules in
 `EXTERNAL_MODULES` are Haskell the port cites but the submodule does not
 vendor, so their line numbers cannot be checked here and are not findings.
 
+Exit status and verdict
+-----------------------
+The last stdout line is `DONE_CHECK_HS_CITES verdict=... checked=N
+suppressed=N`, and the exit status agrees with it: 0 only on `verdict=OK`, 1
+on findings (the verdict names the classes), 2 when the run could not check
+anything -- no Haskell tree, no `.rs` file matched `--crate`, `--skip` naming
+a hard class, or a filter that left ZERO cites verified.  That last one is
+the anti-vacuity rule: "0 findings" from a run that resolved no cites at all
+is a failure here, not a pass, so the gate cannot go green on nothing.
+
 Usage: scripts/check_hs_cites.py [--crate NAME]... [--skip CLASS]...
                                  [--submodule PATH] [--show-emitted]
 """
@@ -102,18 +146,22 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(SCRIPT_DIR)
 CRATES = os.path.join(REPO, "crates")
 
-# `<file>.hs:<parts>[, see line <n>[,<n>...]]` where parts is a comma-joined
-# list of `N` / `N-M` -- the shape `remap_hs_cites.py` writes.
+# `<file>.hs:<parts>[#<symbol>][, see line <n>[,<n>...]]` where parts is a
+# comma-joined list of `N` / `N-M` -- the shape `remap_hs_cites.py` writes.
 CITE = re.compile(
-    r"([A-Za-z][A-Za-z0-9_/.']*\.hs):"
-    r"(\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)"
-    r"((?:, see line \d+(?:,\d+)*)?)")
+    r"(?P<file>[A-Za-z][A-Za-z0-9_/.']*\.hs):"
+    r"(?P<parts>\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)"
+    r"(?:#(?P<sym>[A-Za-z_][A-Za-z0-9_']*))?"
+    r"(?P<see>(?:, see line \d+(?:,\d+)*)?)")
 # The same head followed by a second `:<digits>` is a GHC source coordinate
 # (`src/Main/Mode/Batch.hs:163:33`), not a line citation.
 EMITTED = re.compile(r"[A-Za-z][A-Za-z0-9_/.']*\.hs:\d+:\d+")
 SEE = re.compile(r"\d+")
 
-CLASSES = ("MISSING", "AMBIGUOUS", "RANGE", "BLANK", "COMMENT", "SEELINE")
+CLASSES = ("MISSING", "AMBIGUOUS", "RANGE", "BLANK", "COMMENT", "SEELINE",
+           "SYMBOL")
+# Classes `--skip` refuses to suppress: see AMBIGUOUS in the docstring.
+HARD_CLASSES = ("AMBIGUOUS",)
 
 # Haskell the port cites that lives outside the submodule, so its line numbers
 # are not the pin's to validate: `HughesPJ.hs` is GHC's `pretty` package, whose
@@ -293,6 +341,17 @@ def is_comment_only(text):
     return s.startswith("--") or s.startswith("{-") or s == "-}"
 
 
+def word_re(sym):
+    """`sym` as a whole Haskell word.
+
+    `\\b` is wrong here: a prime is a word character in Haskell and not in
+    `re`, so `\\bfoo\\b` matches inside `foo'` and would pass an anchor whose
+    declaration is gone and only its primed sibling remains.
+    """
+    return re.compile(r"(?<![A-Za-z0-9_'])" + re.escape(sym)
+                      + r"(?![A-Za-z0-9_'])")
+
+
 def parse_parts(spec):
     """`"61-63,84"` -> `[(61, 63), (84, 84)]`."""
     out = []
@@ -335,8 +394,9 @@ def check_file(oracle, rs, findings, advisories, stats):
     for a, b in comments:
         seg = src[a:b]
         for m in CITE.finditer(seg):
-            name, spec, see_tail = m.group(1), m.group(2), m.group(3)
-            cite = f"{name}:{spec}{see_tail}"
+            name, spec = m.group("file"), m.group("parts")
+            sym, see_tail = m.group("sym"), m.group("see")
+            cite = m.group(0)
             here = f"{rel}:{lineno_of(starts, a + m.start())}"
 
             # A column suffix makes this an emitted GHC coordinate, not a cite.
@@ -402,6 +462,21 @@ def check_file(oracle, rs, findings, advisories, stats):
                     findings.append(
                         (here, "COMMENT", cite,
                          f"{path}:{n} is a comment: {text.strip()[:60]}"))
+            if sym:
+                # The one check that sees a cite whose range stayed valid
+                # while the declaration it names moved out of it.
+                stats["anchored"] += 1
+                pat = word_re(sym)
+                span = (n for lo, hi in parts for n in range(lo, hi + 1))
+                if not any(pat.search(body[n - 1])
+                           for n in span if 1 <= n <= len(body)):
+                    at = [i for i, t in enumerate(body, 1) if pat.search(t)]
+                    where = ("; occurs at line " + ",".join(map(str, at[:3]))
+                             + ("+" if len(at) > 3 else "")
+                             if at else "; absent from the whole file")
+                    findings.append(
+                        (here, "SYMBOL", cite,
+                         f"`{sym}` is not in {path}:{spec}{where}"))
 
 
 def resolve_pin(sub):
@@ -424,12 +499,20 @@ def resolve_pin(sub):
     return True, head, None
 
 
+def done(verdict, code, checked=0, suppressed=0):
+    """Print the verdict line and hand back the exit status it names."""
+    print(f"DONE_CHECK_HS_CITES verdict={verdict} checked={checked} "
+          f"suppressed={suppressed}")
+    return code
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--crate", action="append", default=[],
                     help="restrict to this crate (repeatable)")
     ap.add_argument("--skip", action="append", default=[], choices=CLASSES,
-                    help="do not report this finding class (repeatable)")
+                    help="do not report this finding class (repeatable); "
+                         + ", ".join(HARD_CLASSES) + " cannot be skipped")
     ap.add_argument("--submodule", default=os.environ.get("TAMARIN_HS_SRC"),
                     help="path to the pinned Haskell tree "
                          "(default: <repo>/tamarin-prover, or $TAMARIN_HS_SRC)")
@@ -437,19 +520,28 @@ def main():
                     help="list the GHC coordinates that were skipped")
     args = ap.parse_args()
 
+    hard = [c for c in CLASSES if c in HARD_CLASSES and c in args.skip]
+    if hard:
+        # Suppressing these would leave the run reporting zero findings over
+        # cites it never resolved a file for, so refuse rather than obey.
+        print(f"--skip {' '.join(hard)}: cannot be suppressed; disambiguate "
+              "the cite instead (write enough of the path to name one file)",
+              file=sys.stderr)
+        return done("BAD-ARGS", 2)
+
     sub = args.submodule or os.path.join(REPO, "tamarin-prover")
     if not os.path.isdir(sub):
         print(f"no Haskell tree at {sub}", file=sys.stderr)
         print("a git worktree does not get the submodule; pass --submodule "
               "PATH or set TAMARIN_HS_SRC", file=sys.stderr)
-        return 2
+        return done("NO-HS-TREE", 2)
 
     use_git, head, note = resolve_pin(sub)
     oracle = Oracle(sub, use_git)
     if not oracle.tree:
         print(f"no .hs files under {sub}"
               + (" at HEAD" if use_git else ""), file=sys.stderr)
-        return 2
+        return done("NO-HS-TREE", 2)
 
     findings, advisories = [], []
     stats = collections.Counter()
@@ -465,9 +557,11 @@ def main():
         print("no .rs files matched"
               + (f" --crate {' '.join(sorted(args.crate))}" if args.crate else "")
               + f" under {CRATES}", file=sys.stderr)
-        return 2
+        return done("NO-RS-FILES", 2)
 
-    findings = [f for f in findings if f[1] not in set(args.skip)]
+    skipset = set(args.skip)
+    suppressed = collections.Counter(f[1] for f in findings if f[1] in skipset)
+    findings = [f for f in findings if f[1] not in skipset]
     for here, cls, cite, detail in findings:
         print(f"{here}\t{cls}\t{cite}\t{detail}")
 
@@ -482,17 +576,39 @@ def main():
 
     counts = collections.Counter(cls for _, cls, _, _ in findings)
     summary = ", ".join(f"{c}={counts[c]}" for c in CLASSES if counts[c])
-    print(f"{scanned} .rs files scanned; {stats['checked']} cites verified; "
+    checked, anchored = stats["checked"], stats["anchored"]
+    print(f"{scanned} .rs files scanned; {checked} cites verified "
+          f"({anchored} of them against a #symbol anchor); "
           f"{len(findings)} findings" + (f" ({summary})" if summary else ""),
           file=err)
+    if suppressed:
+        print("SUPPRESSED by --skip: "
+              + ", ".join(f"{c}={suppressed[c]}"
+                          for c in CLASSES if suppressed[c])
+              + " -- these are findings this run chose not to fail on",
+              file=err)
     skipped = [f"{stats['emitted']} GHC coordinates",
                f"{stats['in_string']} cites inside string literals",
                f"{stats['external']} external-module cites"]
     print("not checked: " + "; ".join(skipped)
           + f"; {len(advisories)} advisories"
-          + "; and whether any verified cite names the RIGHT declaration "
+          + f"; and whether the {checked - anchored} verified cites carrying "
+            "no #symbol anchor name the RIGHT declaration "
             "(see the module docstring)", file=err)
-    return 1 if findings else 0
+
+    total = sum(suppressed.values())
+    if not checked:
+        # Every other exit distinguishes "checked and clean" from "checked and
+        # broken"; this one is "resolved not one cite", which the class counts
+        # cannot express and a caller reading only the status would score as a
+        # pass.  A filter narrow enough to check nothing is an argument bug.
+        print("no cite resolved to a single pinned file, so nothing was "
+              "verified: this run gates on nothing", file=err)
+        return done("NO-CITES", 2, checked, total)
+    if findings:
+        return done(",".join(f"{c}={counts[c]}" for c in CLASSES if counts[c]),
+                    1, checked, total)
+    return done("OK", 0, checked, total)
 
 
 if __name__ == "__main__":

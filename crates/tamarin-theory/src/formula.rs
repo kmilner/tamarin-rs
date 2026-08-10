@@ -102,8 +102,8 @@ impl<S, H, C, V> ProtoFormula<S, H, C, V> {
 }
 
 // =============================================================================
-// Quantifier introduction (Formula.hs:347-360) + the whole-formula closures
-// `existFormula` / `forAllFormula` (Formula.hs:528-538)
+// Quantifier introduction (Theory/Model/Formula.hs:347-360) + the whole-formula closures
+// `existFormula` / `forAllFormula` (Theory/Model/Formula.hs:528-538)
 //
 // Intentionally retained: faithful, unit-tested mirror of the HS quantifier
 // machinery at those two anchors (`quantify`/`forAll`/`exists` and
@@ -117,8 +117,8 @@ impl<S, H, C, V> ProtoFormula<S, H, C, V> {
 type BLNTerm = VTerm<Name, BVar<LVar>>;
 
 /// HS `frees` on an `LNFormula`, i.e. its `HasFrees` instance
-/// (Formula.hs:321-326): `foldFrees f = foldMap (foldFrees f)`, where the
-/// `Foldable (ProtoFormula ...)` instance (Formula.hs:197-199) descends into the
+/// (Theory/Model/Formula.hs:321-326): `foldFrees f = foldMap (foldFrees f)`, where the
+/// `Foldable (ProtoFormula ...)` instance (Theory/Model/Formula.hs:197-199) descends into the
 /// atoms' terms and the `Foldable BVar` instance yields only `Free` variables —
 /// so bound De Bruijn indices contribute nothing and binder hints are ignored.
 /// Deduplicated and sorted, like [`tamarin_term::lterm::frees`].
@@ -183,7 +183,7 @@ fn map_atom_terms<T, U>(
 }
 
 /// The inner substitution of HS `quantify`, `mapLits (fmap (>>= subst i))`
-/// applied to one atom term (Formula.hs:349-352):
+/// applied to one atom term (Theory/Model/Formula.hs:349-352):
 /// replace the free occurrences of `x` by the De Bruijn index `i`, leaving
 /// every other literal — including already-bound indices — untouched.
 /// Applications are rebuilt with `f_app`, which re-normalises AC argument
@@ -201,12 +201,12 @@ fn subst_free_var(t: &BLNTerm, x: &LVar, i: u64) -> BLNTerm {
     }
 }
 
-/// HS `quantify x` (Formula.hs:347-352): turn the free variable `x` into a
+/// HS `quantify x` (Theory/Model/Formula.hs:347-352): turn the free variable `x` into a
 /// bound one, using the De Bruijn index of the binder that is about to be put
 /// in front of the formula.  The index counts the binders between the atom and
-/// that new binder, threaded by HS `mapAtoms` (Formula.hs:266-270) over
-/// `foldFormulaScope` (Formula.hs:158-173), whose `Qua` case recurses with
-/// `succ i` (Formula.hs:173).
+/// that new binder, threaded by HS `mapAtoms` (Theory/Model/Formula.hs:266-270) over
+/// `foldFormulaScope` (Theory/Model/Formula.hs:158-173), whose `Qua` case recurses with
+/// `succ i` (Theory/Model/Formula.hs:173).
 pub fn quantify(x: &LVar, fm: LNFormula) -> LNFormula {
     quantify_at(x, fm, 0)
 }
@@ -228,17 +228,17 @@ fn quantify_at(x: &LVar, fm: LNFormula, i: u64) -> LNFormula {
     }
 }
 
-/// HS `exists hint x` (Formula.hs:359-360): `Qua Ex hint . quantify x`.
+/// HS `exists hint x` (Theory/Model/Formula.hs:359-360): `Qua Ex hint . quantify x`.
 pub fn exists_var(hint: (String, LSort), x: &LVar, fm: LNFormula) -> LNFormula {
     ProtoFormula::exists(hint, quantify(x, fm))
 }
 
-/// HS `forAll hint x` (Formula.hs:355-356): `Qua All hint . quantify x`.
+/// HS `forAll hint x` (Theory/Model/Formula.hs:355-356): `Qua All hint . quantify x`.
 pub fn for_all_var(hint: (String, LSort), x: &LVar, fm: LNFormula) -> LNFormula {
     ProtoFormula::for_all(hint, quantify(x, fm))
 }
 
-/// HS `existFormula` (Formula.hs:532-534): exists-quantify every free variable
+/// HS `existFormula` (Theory/Model/Formula.hs:532-534): exists-quantify every free variable
 /// of the formula, each under its own name/sort hint.  `frees` is sorted, and
 /// the fold is a `foldl`, so the SMALLEST free variable ends up innermost.
 pub fn exist_formula(fm: LNFormula) -> LNFormula {
@@ -248,7 +248,7 @@ pub fn exist_formula(fm: LNFormula) -> LNFormula {
     })
 }
 
-/// HS `forAllFormula` (Formula.hs:536-538): as [`exist_formula`], with
+/// HS `forAllFormula` (Theory/Model/Formula.hs:536-538): as [`exist_formula`], with
 /// universal quantifiers.
 pub fn for_all_formula(fm: LNFormula) -> LNFormula {
     let vars = formula_frees(&fm);
@@ -257,10 +257,10 @@ pub fn for_all_formula(fm: LNFormula) -> LNFormula {
     })
 }
 
-// NOTE: Haskell `mapAtoms` (Formula.hs:266-270) is
+// NOTE: Haskell `mapAtoms` (Theory/Model/Formula.hs:266-270) is
 // `foldFormulaScope (\i a -> Ato $ f i a) ...`, i.e. its callback receives
 // the De Bruijn binder-depth `i` (threaded via `go (succ i)` at each `Qua`,
-// Formula.hs:173). The scope-aware machinery in the Rust port lives
+// Theory/Model/Formula.hs:173). The scope-aware machinery in the Rust port lives
 // elsewhere (depth-threaded rewrites in `guarded_types.rs`, macro
 // application in `macro_expand.rs::apply_macros_formula`), so no
 // depth-blind `mapAtoms` mirror is provided here.

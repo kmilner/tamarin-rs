@@ -248,7 +248,8 @@ pub fn apply_macros_formula(macros: &[p::Macro], f: &p::Formula) -> p::Formula {
 
 /// Apply macros to all items in a theory.  Mirrors HS's call-sites:
 ///   - rule prems/concs/acts (Theory/Model/Rule.hs:1115-1121 + ClosedTheory.hs:322-323)
-///   - lemma formula (Lemma.hs:83-88, called from Theory/Text/Parser.hs:97-105, see line 105)
+///   - lemma formula (lib/theory/src/Lemma.hs:83-88, called from
+///     Theory/Text/Parser.hs:97-105, see line 105)
 ///   - restriction formula (Theory/Model/Restriction.hs:164-166)
 ///   - embedded restriction in rule (treat as formula)
 ///   - rule let-block RHS (already inlined into the rule by

@@ -39,7 +39,8 @@ pub struct OpenProtoRule {
     /// non-empty, `solve_rule_constraints` adds it as a SplitG goal
     /// in the eq-store so the variant choice is enumerated lazily
     /// per Haskell's `solveRuleConstraints` (Reduction.hs:789-797).
-    /// Mirrors `RuleACConstrs = Disj LNSubstVFresh` (Rule.hs:1009).
+    /// Mirrors `RuleACConstrs = Disj LNSubstVFresh`
+    /// (Theory/Model/Rule.hs:1009).
     pub variant_substs: Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
     /// The abstracted form of `rule` for the SplitG path (Haskell
     /// `variantsProtoRule` returns this in the `ProtoRuleAC`'s

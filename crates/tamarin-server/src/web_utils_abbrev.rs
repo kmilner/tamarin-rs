@@ -17,7 +17,7 @@
 //! hands back a [`RenderSystem`], which cannot re-enter the prover.
 //!
 //! The short constant is `lit (Con (Name AbbrevName (NameId …)))`
-//! (Utils.hs:71-88), whose `NameId` is the head symbol's own name plus, from
+//! (Web/Utils.hs:71-88), whose `NameId` is the head symbol's own name plus, from
 //! the second abbreviation of that symbol on, an occurrence counter (`aenc`,
 //! `aenc1`, `aenc2`, …).  It renders as that bare id: `show (Name AbbrevName
 //! n) = show n` (LTerm.hs:240), and its sort is `LSortMsg` (LTerm.hs:266).
@@ -36,7 +36,7 @@ use tamarin_theory::constraint::system::System;
 /// `graphJsonThyPath` (`src/Web/Theory.hs:1331`).
 pub const MIN_ABBREV_SIZE: usize = 30;
 
-/// Port of `getTerms` (Utils.hs:40-41): every fact term of every rule's
+/// Port of `getTerms` (Web/Utils.hs:40-41): every fact term of every rule's
 /// conclusions followed by its premises.
 ///
 /// `get sNodes` is a `M.Map NodeId RuleACInst` (System.hs:383) and the outer
@@ -51,11 +51,11 @@ fn get_terms(sys: &System) -> impl Iterator<Item = &LNTerm> {
     })
 }
 
-/// HS's `TermState` (Utils.hs:36): how many abbreviations each head symbol has
+/// HS's `TermState` (Web/Utils.hs:36): how many abbreviations each head symbol has
 /// already produced.
 type TermState = FastMap<String, usize>;
 
-/// Port of `shorten` (Utils.hs:71-88): a `NoEq` function application becomes an
+/// Port of `shorten` (Web/Utils.hs:71-88): a `NoEq` function application becomes an
 /// `AbbrevName` constant named after its head symbol, everything else is
 /// returned unchanged.
 ///
@@ -76,12 +76,12 @@ fn shorten(t: &LNTerm, state: &mut TermState) -> LNTerm {
     lit(Lit::Con(Name::new(NameTag::Abbrev, name_id)))
 }
 
-/// The `Legend` (Utils.hs:35) `computeLegend` builds: a `Map LNTerm LNTerm`
+/// The `Legend` (Web/Utils.hs:35) `computeLegend` builds: a `Map LNTerm LNTerm`
 /// assembled by `M.fromList . zip terms`, so when the same term is abbreviated
 /// more than once the LAST shortened form is the one that survives.
 type Legend = FastMap<LNTerm, LNTerm>;
 
-/// Port of `computeLegend` (Utils.hs:61-65).
+/// Port of `computeLegend` (Web/Utils.hs:61-65).
 fn compute_legend(n: usize, sys: &System) -> Legend {
     let mut state = TermState::default();
     let mut legend = Legend::default();
@@ -92,7 +92,7 @@ fn compute_legend(n: usize, sys: &System) -> Legend {
     legend
 }
 
-/// Port of `updateSystem` (Utils.hs:93-107): rewrite the top-level terms of
+/// Port of `updateSystem` (Web/Utils.hs:93-107): rewrite the top-level terms of
 /// every rule's premises and conclusions through the legend.  A rewritten fact
 /// is rebuilt from `(tag, annotations, terms)`, i.e. without its cached
 /// fingerprints — matching HS's `Fact tag a ts` and safe because the
@@ -112,7 +112,7 @@ fn update_system(legend: &Legend, sys: &mut System) {
     }
 }
 
-/// Port of `abbrev` (Utils.hs:110-116).
+/// Port of `abbrev` (Web/Utils.hs:110-116).
 ///
 /// `abbreviate == false` is HS's `abbrev False _ sys = return (sys, M.empty)`,
 /// which hands the system back untouched.  Either way the result is sealed as

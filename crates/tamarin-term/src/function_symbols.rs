@@ -487,7 +487,7 @@ pub const UNION_SYM_STRING: &[u8] = b"union";
 pub const EMAP_SYM_STRING: &[u8] = b"em";
 pub const PMULT_SYM_STRING: &[u8] = b"pmult";
 /// Display name of [`FunSym::List`].  HS has no `listSymString`:
-/// `showFunSymName`'s `List` arm spells the literal (Term.hs:296).
+/// `showFunSymName`'s `List` arm spells the literal (Term/Term.hs:296).
 pub const LIST_SYM_STRING: &[u8] = b"List";
 
 // -- Predefined NoEq symbols --------------------------------------------------

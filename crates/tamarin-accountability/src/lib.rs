@@ -29,9 +29,10 @@ use tamarin_theory::theory::{self as t, Theory, TheoryItem};
 use crate::formula::{frees, from_p_formula, sort_rank, to_p_formula, Fm};
 use crate::generation::{generate_accountability_lemmas, AccData, CaseTestData};
 
-/// Accountability translation error: HS `AccException` (Accountability.hs:31-39)
-/// plus the `ParsingException`s HS `translate` can throw through
-/// `liftedAddLemma` / `liftedAddPredicate` (Parser/Exceptions.hs:28-44).
+/// Accountability translation error: HS `AccException`
+/// (lib/accountability/src/Accountability.hs:31-39) plus the
+/// `ParsingException`s HS `translate` can throw through `liftedAddLemma` /
+/// `liftedAddPredicate` (Parser/Exceptions.hs:28-44).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccError {
     /// HS `CaseTestsUndefined`: one or more case tests required by an
@@ -54,8 +55,9 @@ pub enum AccError {
 
 impl std::fmt::Display for AccError {
     /// Mirrors HS `show` of the corresponding exception
-    /// (Accountability.hs:36-38 / Parser/Exceptions.hs:33-44); the driver
-    /// prefixes `tamarin-prover: ` as GHC's top-level handler does.
+    /// (lib/accountability/src/Accountability.hs:36-38 /
+    /// Parser/Exceptions.hs:33-44); the driver prefixes `tamarin-prover: ` as
+    /// GHC's top-level handler does.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AccError::CaseTestsUndefined(el) => {
@@ -140,9 +142,10 @@ fn list_diff(xs: &[String], ys: &[String]) -> Vec<String> {
     result
 }
 
-/// HS `undefinedCaseTests` (Accountability.hs:53-58): the ident list `required`
-/// vs the resolved-case-test names `defined` (idents that name a defined case
-/// test, in order).  Returns the missing idents when the two lists differ.
+/// HS `undefinedCaseTests` (lib/accountability/src/Accountability.hs:53-58):
+/// the ident list `required` vs the resolved-case-test names `defined` (idents
+/// that name a defined case test, in order).  Returns the missing idents when
+/// the two lists differ.
 fn undefined_case_tests(acc: &RawAccLemma, defined_names: &[String]) -> Option<Vec<String>> {
     let required = &acc.case_test_idents;
     let defined: Vec<String> = required
@@ -162,9 +165,10 @@ fn undefined_case_tests(acc: &RawAccLemma, defined_names: &[String]) -> Option<V
 // =============================================================================
 
 /// Expand the accountability lemmas + case-test predicates into `parsed` and
-/// `elaborated` (HS `Accountability.translate`, Accountability.hs:42-49).  A
-/// no-op when the theory declares neither accountability lemmas nor case
-/// tests, so ordinary theories are byte-unchanged.  Case tests WITHOUT any
+/// `elaborated` (HS `Accountability.translate`,
+/// lib/accountability/src/Accountability.hs:42-49).  A no-op when the theory
+/// declares neither accountability lemmas nor case tests, so ordinary
+/// theories are byte-unchanged.  Case tests WITHOUT any
 /// acc lemma still get their predicates appended (HS `translate` runs its
 /// `caseTestToPredicate` fold unconditionally).
 pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), AccError> {

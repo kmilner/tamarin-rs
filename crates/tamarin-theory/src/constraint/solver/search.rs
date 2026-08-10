@@ -24,7 +24,7 @@
 //!
 //! Under the default `Dfs` strategy, termination is bounded by the
 //! ID-DFS depth alone (`MAX_DEPTH`,
-//! doubling from 4) — `cutOnSolvedDFS` (Proof.hs:854-884) has only
+//! doubling from 4) — `cutOnSolvedDFS` (Theory/Proof.hs:854-884) has only
 //! `dMax` and no step/node budget, doubling `dMax` from 4 with no
 //! upper bound.  HS terminates because it deepens over a finite proof
 //! tree (any TERMINATING lemma's tree is finite, so once `dMax`
@@ -57,7 +57,7 @@ pub struct ProofNode {
     /// Whether this step carries a valid constraint-system annotation
     /// (HS `psInfo step == Just sys`).  `false` mirrors HS's
     /// `Nothing`-annotated steps produced by `checkProof`
-    /// (Proof.hs:467-469) when a stored skeleton step could not be
+    /// (Theory/Proof.hs:447-467, see line 467) when a stored skeleton step could not be
     /// replayed; `prettyIncrementalProof` (ProofSkeleton.hs:80-84) then
     /// appends `/* unannotated */`.  Defaults to `true` for every
     /// freshly-searched / successfully-replayed node.
@@ -98,7 +98,7 @@ fn is_depth_limited(node: &ProofNode) -> bool {
         && matches!(node.status, NodeStatus::Sorry)
 }
 
-/// HS `ProofStatus` (Proof.hs:397-408) — the aggregate status of a WHOLE
+/// HS `ProofStatus` (Theory/Proof.hs:397-407) — the aggregate status of a WHOLE
 /// proof tree, used to decide the lemma verdict.  Unlike the per-node
 /// [`NodeStatus`], this folds over every step (HS `getProofStatus =
 /// foldMap proofStepStatus`) and therefore correctly ABSORBS verbatim
@@ -117,7 +117,7 @@ pub enum ProofStatus {
 }
 
 impl ProofStatus {
-    /// HS `ProofStatus` Semigroup (Proof.hs:409-423): precedence
+    /// HS `ProofStatus` Semigroup (Theory/Proof.hs:409-420): precedence
     /// `Invalidated > TraceFound > Incomplete > Unfinishable > Complete >
     /// Undetermined`.
     fn combine(self, other: ProofStatus) -> ProofStatus {
@@ -133,7 +133,7 @@ impl ProofStatus {
     }
 }
 
-/// HS `proofStepStatus` (Proof.hs:427-433): the status of ONE node.
+/// HS `proofStepStatus` (Theory/Proof.hs:427-433): the status of ONE node.
 /// A node with no system annotation (`annotated == false`, HS `Nothing`)
 /// is `Undetermined` REGARDLESS of its method; otherwise it is keyed on
 /// the node's own method (NOT its aggregated `NodeStatus`).
@@ -406,7 +406,7 @@ thread_local! {
     /// Set to true by `expand` whenever a node hits `MAX_DEPTH`.  The
     /// top-level loop reads this between iterations to decide whether
     /// to retry with doubled depth.  Mirrors Haskell's `MaybeNoSolution`
-    /// sentinel in `cutOnSolvedDFS` (Proof.hs:855-877).
+    /// sentinel in `cutOnSolvedDFS` (Theory/Proof.hs:855-877).
     static DEPTH_LIMIT_HIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -445,7 +445,7 @@ fn clear_deadline() {
 /// the default) runs the iterative-deepening DFS described below.
 ///
 /// **Iterative-deepening DFS** — port of Haskell's `cutOnSolvedDFS`
-/// (Proof.hs:854-884).  Starts at `max_depth=4` and doubles up with
+/// (Theory/Proof.hs:854-884).  Starts at `max_depth=4` and doubles up with
 /// only the far-out `usize::MAX/4` loop-termination guard (no fixed
 /// numeric cap).  At each iteration:
 ///   1. Expand the tree at the current `MAX_DEPTH`.  On the first
@@ -535,7 +535,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
             expand(ctx, &mut root, &mut budget, &deadline, 0);
         }
         CutStrategy::Nothing => {
-            // HS `CutNothing` → `id` (Proof.hs:730-750, see line 740): the full DFS proof
+            // HS `CutNothing` → `id` (Theory/Proof.hs:730-750, see line 738): the full DFS proof
             // tree with NO cut and NO stop-on-solved.  Like SeqDfs this is
             // one unbounded-depth serial pass (the serial sibling loop's
             // abort policy below never fires for `Nothing`), and like HS
@@ -547,7 +547,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
             expand(ctx, &mut root, &mut budget, &deadline, 0);
         }
         CutStrategy::AfterSorry => {
-            // HS `CutAfterSorry` → `cutAfterFirstSorry` (Proof.hs:989-999).
+            // HS `CutAfterSorry` → `cutAfterFirstSorry` (Theory/Proof.hs:987-997).
             // HS's `M.mapAccum go` never forces a lazy subtree past the
             // abort point; the eager mirror is the serial sibling loop's
             // AfterSorry policy (below): the first Solved-or-Sorry child in
@@ -560,7 +560,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
             expand(ctx, &mut root, &mut budget, &deadline, 0);
         }
         CutStrategy::Bfs => {
-            // HS `cutOnSolvedBFS` (Proof.hs:930-957): force the tree one
+            // HS `cutOnSolvedBFS` (Theory/Proof.hs:928-955): force the tree one
             // level deeper per round and walk it with `checkLevel`'s
             // threaded state.  `checkLevel 0`'s `M.null cs` guard FORCES
             // each level-`level` node's case map (so a zero-case solve
@@ -583,7 +583,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
                 } else {
                     re_expand_depth_limited(ctx, &mut root, &mut budget, &deadline, 0);
                 }
-                // HS's poor-man's logging (Proof.hs:928-955, see line 934,941) — `trace` to
+                // HS's poor-man's logging (Theory/Proof.hs:928-955, see line 934,941) — `trace` to
                 // stderr, unconditional.
                 eprintln!("searching for attacks at depth: {}", level);
                 let mut found = false;
@@ -613,7 +613,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
             }
         }
         CutStrategy::Dfs => {
-            // HS's `cutOnSolvedDFS` (Proof.hs:855-861) doubles `dMax` from 4
+            // HS's `cutOnSolvedDFS` (Theory/Proof.hs:855-861) doubles `dMax` from 4
             // with NO upper bound; we mirror that, keeping only a far-out cap
             // as a loop-termination guard for genuinely non-terminating
             // strategies.  No real Tamarin proof approaches this depth, so the
@@ -624,7 +624,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
             loop {
                 MAX_DEPTH.with(|m| m.set(current_max_depth));
                 DEPTH_LIMIT_HIT.with(|f| f.set(false));
-                // HS-faithful: `cutOnSolvedDFS` (Proof.hs:856-863) bounds the
+                // HS-faithful: `cutOnSolvedDFS` (Theory/Proof.hs:856-863) bounds the
                 // search by the ID-DFS depth `dMax` (our `MAX_DEPTH`) and the
                 // per-lemma wall-clock timeout ONLY — it has NO step/node
                 // budget.  A finite step budget would cut off exploration of
@@ -672,7 +672,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
     DEPTH_LIMIT_HIT.with(|f| f.set(false));
     clear_deadline();
     // HS-faithful: `cutOnSolvedDFS` / `cutOnSolvedSingleThreadDFS`
-    // (Proof.hs:854-884, 795-816) call `extractSolved path prf0` once a
+    // (Theory/Proof.hs:854-884, 795-816) call `extractSolved path prf0` once a
     // Solved leaf is found, pruning the proof tree to JUST the
     // solved-witness path.  All Contradictory siblings are removed.
     // Without this, Rust's proof_steps count includes failed branches HS
@@ -688,7 +688,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
     root
 }
 
-/// HS `cutOnSolvedBFS`'s `checkLevel` (Proof.hs:942-957) over the eager
+/// HS `cutOnSolvedBFS`'s `checkLevel` (Theory/Proof.hs:943-955) over the eager
 /// level-bounded tree: walk to depth `remaining` in CaseName order,
 /// threading `found` (HS TraceFound) and `incomplete` (HS
 /// IncompleteProof) exactly as HS's `State ProofStatus` does.  At depth 0:
@@ -758,7 +758,7 @@ fn bfs_check_level(
     })
 }
 
-/// HS-faithful `extractSolved` (Proof.hs:879-884, the non-diff
+/// HS-faithful `extractSolved` (Theory/Proof.hs:879-884, the non-diff
 /// `cutOnSolvedDFS` variant): walks the proof
 /// tree, finds the first Solved-leaf path from root, and prunes all
 /// non-path siblings.  Mutates `root` in place.
@@ -979,7 +979,7 @@ fn expand_inner(
     // steps are recorded, not just SolveGoal dispatch (proof_method.rs).
     // It has no Haskell counterpart and does not affect --prove output.
     crate::constraint::solver::trace::trace_state(&node.sys);
-    // ID-DFS depth limit (Haskell `cutOnSolvedDFS` Proof.hs:855-877).
+    // ID-DFS depth limit (Haskell `cutOnSolvedDFS` Theory/Proof.hs:855-877).
     //
     // Haskell's `findSolved` checks `d >= dMax` BEFORE checking the
     // node's method type:
@@ -1086,7 +1086,7 @@ fn expand_inner(
     // (ProofMethod.hs:302-308) builds a `Data.Map` keyed by case name
     // via `M.fromListWith` (ProofMethod.hs:283-340, see line 307), so
     // entries are alphabetically ordered.  `proveSystemDFS` /
-    // `cutOnSolvedDFS` then walk in map order (Proof.hs:855-877 —
+    // `cutOnSolvedDFS` then walk in map order (Theory/Proof.hs:855-877 —
     // `foldMap`, `M.map`).  Our `Vec` preserves creation order
     // (source-file rule order), so sort by name to match Haskell.
     cases.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1290,7 +1290,7 @@ fn expand_inner(
             if abort {
                 match ctx.cut {
                     CutStrategy::AfterSorry => {
-                        // HS `go True` (cutAfterFirstSorry, Proof.hs:993-996)
+                        // HS `go True` (cutAfterFirstSorry, Theory/Proof.hs:993-994)
                         // still forces the visited node's METHOD (not its
                         // children): a node whose method evaluates to
                         // `Finished _` is preserved after the abort —
@@ -1381,7 +1381,7 @@ fn expand_inner(
 /// When set (interactive mode), an oracle exec failure unwinds via
 /// `panic!` instead of exiting the process.  HS has the same split by
 /// construction: `oracleRanking`'s `readProcess` exception
-/// (ProofMethod.hs:598-623, see line 608) is uncaught in batch mode and
+/// (ProofMethod.hs:597-622, see line 607) is uncaught in batch mode and
 /// kills the invocation, but in the web server it surfaces inside a Warp
 /// request thread, so only the triggering request fails and the server
 /// keeps serving.  Batch (the default) keeps the byte-parity `exit(1)`.
@@ -1391,9 +1391,9 @@ pub static ORACLE_ERROR_UNWINDS: std::sync::atomic::AtomicBool =
 /// Run the goal ranker, centralising the two non-`Ok` outcomes shared
 /// by [`candidate_methods`] and [`candidate_methods_with_expl`]:
 ///   * `Err("__ORACLE_QUIT_ON_EMPTY__")` → `Err(())`, signalling the
-///     caller to emit a single `ApplySorry` candidate (HS ProofMethod.hs:598-623, see line 621).
+///     caller to emit a single `ApplySorry` candidate (HS ProofMethod.hs:597-622, see line 620).
 ///   * any other `Err` → oracle exec failure: mirror HS's uncaught IO
-///     exception (ProofMethod.hs:598-623, see line 608, inside
+///     exception (ProofMethod.hs:597-622, see line 607, inside
 ///     `oracleRanking` under `unsafePerformIO`, where `readProcess`
 ///     throws).  In batch mode that kills the invocation with EMPTY
 ///     stdout: print to stderr, flush stdout (so nothing leaks before
@@ -1496,7 +1496,7 @@ fn candidate_methods_open(sys: &System, ctx: &ProofContext, depth: usize) -> Vec
     // `useHeuristic`'s `rankings !! (depth `mod` n)`).
     // Oracle ranked nothing and quitOnEmpty is set: emit ApplySorry.
     // HS: `guard (quitOnEmpty && not (null inp) && null ranked) *> Just ApplySorry`
-    // (ProofMethod.hs:598-623, see line 621, inside `oracleRanking`) — stoppingMethod fires.
+    // (ProofMethod.hs:597-622, see line 620, inside `oracleRanking`) — stoppingMethod fires.
     // We represent this as an empty candidate list with a special Sorry.
     let goals = match rank_goals_or_abort(sys, ctx, depth) {
         Ok(gs) => gs,
@@ -1582,16 +1582,67 @@ mod tests {
     use super::*;
     use tamarin_term::maude_sig::pair_maude_sig;
 
+    /// Absolute maude locations probed when `MAUDE_PATH` is unset — the same
+    /// pair the rest of the workspace's maude-gated suites walk.
+    const MAUDE_CANDIDATES: [&str; 2] = ["/usr/local/bin/maude", "/usr/bin/maude"];
+
+    /// Probed after [`MAUDE_CANDIDATES`] and `$PATH`: this workspace's
+    /// benchmark toolchain installs maude under linuxbrew, which is not on a
+    /// default `PATH`.
+    const MAUDE_BREW: &str = "/home/linuxbrew/.linuxbrew/bin/maude";
+
+    /// The first `maude` on `$PATH`, if any.
+    fn maude_on_path() -> Option<String> {
+        let path = std::env::var_os("PATH")?;
+        std::env::split_paths(&path)
+            .map(|dir| dir.join("maude"))
+            .find(|c| c.is_file())
+            .map(|c| c.to_string_lossy().into_owned())
+    }
+
+    /// The maude the tests below run against: `$MAUDE_PATH` when set, else the
+    /// first of [`MAUDE_CANDIDATES`], `$PATH`, [`MAUDE_BREW`] that exists.
+    ///
+    /// A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION,
+    /// not a reason to skip — returning `None` there would turn every
+    /// maude-backed test in this module green on a CI whose image moved maude.
+    /// Panic instead, so the run goes red.  Resolving nothing at all is the
+    /// same failure with a wider blast radius, so it panics too:
+    /// `TAM_ALLOW_NO_MAUDE=1` is the only way to get the old silent skip, and
+    /// naming it is a deliberate statement that this run is not asserting
+    /// anything about maude.
     fn maude_path() -> Option<String> {
         if let Ok(p) = std::env::var("MAUDE_PATH") {
+            assert!(
+                std::path::Path::new(&p).exists(),
+                "MAUDE_PATH={p} does not exist; unset it to fall back to \
+                 {MAUDE_CANDIDATES:?}, or point it at a real maude — skipping \
+                 every maude-backed test here would report green vacuously"
+            );
             return Some(p);
         }
-        for c in ["/usr/local/bin/maude", "maude"] {
-            if std::path::Path::new(c).exists() {
-                return Some(c.to_string());
-            }
+        if let Some(c) = MAUDE_CANDIDATES
+            .iter()
+            .find(|c| std::path::Path::new(c).exists())
+        {
+            return Some((*c).to_string());
         }
-        None
+        if let Some(p) = maude_on_path() {
+            return Some(p);
+        }
+        if std::path::Path::new(MAUDE_BREW).exists() {
+            return Some(MAUDE_BREW.to_string());
+        }
+        if std::env::var("TAM_ALLOW_NO_MAUDE").as_deref() == Ok("1") {
+            return None;
+        }
+        panic!(
+            "no maude found: probed $MAUDE_PATH, {MAUDE_CANDIDATES:?}, $PATH \
+             and {MAUDE_BREW}.  Every maude-backed test in this module would \
+             otherwise report green having run nothing.  Install maude, point \
+             MAUDE_PATH at it, or set TAM_ALLOW_NO_MAUDE=1 to accept the \
+             silent skip."
+        );
     }
 
     fn ctx() -> Option<ProofContext> {

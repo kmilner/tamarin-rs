@@ -49,7 +49,7 @@ pub fn warn_process<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<WfError
         .iter()
         .map(|v| {
             // `show (WFBoundTwice v) = "Variable bound twice: " ++ show v ++ "."`
-            // (Exceptions.hs:117-118).
+            // (Sapic/Exceptions.hs:117-118).
             let body = format!("Variable bound twice: {}.", show_sapic_lvar(v));
             // `toWfErrorReport` (Warnings.hs:24-27) pairs each error with the
             // topic; `prettyWfErrorReport` (Wellformedness.hs:118-125) renders

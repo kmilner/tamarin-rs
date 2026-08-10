@@ -4,7 +4,7 @@
 
 //! Byte-pinned parity for the lowercase-fact-name rejection.
 //!
-//! HS `fact'` (Fact.hs:39-50, see line 46) raises `fail "facts must start
+//! HS `fact'` (Parser/Fact.hs:39-50, see line 46) raises `fail "facts must start
 //! with upper-case letters"` right after `identifier` consumed the name.  The
 //! identifier lexeme's pending empty error — `SysUnExpect` of the next char
 //! plus `alphaNum`'s `Expect "letter or digit"` — merges into the fail when

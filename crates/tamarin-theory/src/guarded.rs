@@ -597,8 +597,9 @@ fn sort_hint_tag(s: &p::SortHint) -> u8 {
 }
 
 /// HS Fact Ord (Theory/Model/Fact.hs:173-174): `compare tag tag' <> compare ts
-/// ts'`.  Annotations are explicitly IGNORED in `Ord (Fact t)` (Theory/Model/Fact.hs:169-174, see line 169
-/// comment "Ignore annotations in equality and ord testing").  Works on
+/// ts'`.  Annotations are explicitly IGNORED in `Ord (Fact t)`
+/// (Theory/Model/Fact.hs:169-174, whose line-169 comment reads "Ignore
+/// annotations in equality and ord testing").  Works on
 /// `GFact` (HS `Fact (VTerm c (BVar v))`).
 ///
 /// The HS `FactTag` Ord (Theory/Model/Fact.hs:136-148, derived) compares a `ProtoFact`

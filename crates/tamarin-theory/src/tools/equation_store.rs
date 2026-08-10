@@ -111,7 +111,7 @@ fn freshen_witness_range(
 // `msubstToLSubstVFresh` which ERRORS on non-fresh range vars
 // (Maude/Types.hs:137-146, see line 143), and `composeVFresh` lifts live vars entering a
 // VFresh range via `extendWithRenaming (varsRange s2) s1_0`
-// (Substitution.hs:39-47).  Any RS site that stores a disjunction subst
+// (Term/Substitution.hs:41-47).  Any RS site that stores a disjunction subst
 // whose range references a LIVE system var violates this invariant; when
 // `simpSingleton` later folds such a subst, `fresh_to_free_avoiding`
 // renames the live var and severs its linkage to the system.
@@ -879,8 +879,9 @@ impl EquationStore {
         // applyBound
         // rounds with the local subst and the Maude unifier SEPARATELY,
         // not one round with their composition; (b) SplitLater callers get
-        // a SplitG goal + a live singleton disj (HS Reduction.hs:616-618, see line 618
-        // `solveRuleEqs SplitLater`, addEqs/performSplit at 719-725);
+        // a SplitG goal + a live singleton disj (HS `solveRuleEqs SplitLater`,
+        // Reduction.hs:772-777, reached from Reduction.hs:630;
+        // addEqs/performSplit in `solveTermEqs` at Reduction.hs:738-752);
         // (c) addDisj bumps the next-split-id counter.
         // (Paired HS/RS traces on Scott::key_secrecy show applyBound never
         // SPLITS a disj subst on this corpus — out>1 occurs 0 times on
@@ -919,7 +920,7 @@ impl EquationStore {
             // `compose` accumulation collapses to a single `from_list` build.
             let maude_subst = LNSubst::from_list(raw);
             // Haskell-faithful: compose local_subst with Maude's result
-            // (Unification.hs:145-146, see line 147 `flattenUnif` =
+            // (Term/Unification.hs:168-170, see line 170 `flattenUnif` =
             // `map (\`composeVFresh\` subst) substs`).
             let subst = maude_subst.compose(&local_subst);
             log_fresh_bindings("maude_single", &subst);
@@ -2037,7 +2038,8 @@ impl EquationStore {
         // HS-faithful witness-freshening floor for the already-folded free
         // subst.  `simpSingleton` folds this disj via `freshToFree`, which in
         // HS draws its fresh range-var renames from the ambient `MonadFresh`
-        // counter (Substitution.hs:54-66 → importBinding → freshLVar).  That
+        // counter (Term/Substitution.hs:54-66 → importBinding → freshLVar).
+        // That
         // counter threads monotonically through `runReduction`, so it is
         // ALWAYS above every idx it has ALREADY DRAWN — i.e. above the range
         // vars of the free `eqsSubst`, which are all prior-fold outputs

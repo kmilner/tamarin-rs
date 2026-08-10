@@ -575,7 +575,8 @@ fn let_block_sequential_bindings() {
 
 #[test]
 fn let_block_forward_reference_stays_free() {
-    // HS bottom-up semantics (Parser/Let.hs:22,34): a binding whose
+    // HS bottom-up semantics (`letBlock`'s `toSubst = foldr1 compose .
+    // map (substFromList . return)`, Theory/Text/Parser/Let.hs:22-35): a binding whose
     // RHS references a LATER binding keeps that name as a free var —
     // by the time `a`'s application introduces `b` into the body,
     // `b`'s singleton substitution has already been applied.

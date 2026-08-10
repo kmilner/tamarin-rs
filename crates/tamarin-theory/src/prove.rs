@@ -237,19 +237,22 @@ pub fn config_block_options(
 /// `None` for any field means the flag was absent.  This whole struct is
 /// `None` on `ProverSession`/the prove entry points when `--heuristic` was
 /// not given, in which case the per-lemma / theory heuristic is used unchanged
-/// (HS `selectHeuristic`: `apDefaultHeuristic <|> pcHeuristic`, Proof.hs:705-716, see line 707).
+/// (HS `selectHeuristic`: `apDefaultHeuristic <|> pcHeuristic`,
+/// Theory/Proof.hs:705-716, see line 707).
 #[derive(Debug, Clone, Default)]
 pub struct CliHeuristic {
     /// `--heuristic` raw ranking string (e.g. `"O"`, `"s1Ss"`).  When
     /// `Some`, this OVERRIDES the per-lemma / theory `heuristic:` (HS
-    /// `apDefaultHeuristic prover <|> L.get pcHeuristic ctx`, Proof.hs:705-716, see line 707).
+    /// `apDefaultHeuristic prover <|> L.get pcHeuristic ctx`,
+    /// Theory/Proof.hs:705-716, see line 707).
     pub raw: Option<String>,
     /// `--oraclename` — sets the oracle relPath for EVERY oracle ranking in
     /// the CLI heuristic (HS `mapOracleRanking (maybeSetOracleRelPath
     /// oraclename)`, TheoryLoader.hs:337-344, see line 343).  `Just ""` parses to `None`.
     pub oracle_name: Option<String>,
     /// `--oracle-only` — sets `quitOnEmpty` on every oracle / tactic ranking
-    /// in the selected heuristic (HS `setQuitOnEmpty`, Proof.hs:712-716).
+    /// in the selected heuristic (HS `setQuitOnEmpty`,
+    /// Theory/Proof.hs:709-716).
     pub oracle_only: bool,
 }
 
@@ -268,7 +271,7 @@ pub struct CliHeuristic {
 ///      Nothing Nothing` (System.hs:546-547, see line 547) has workDir `Nothing` ⇒ `"."`, so
 ///      its oracle exec path is CWD-relative (`./<name>`), NOT theory-dir
 ///      relative (unlike the in-file heuristic).
-///   5. `setQuitOnEmpty` (Proof.hs:712-716) — `--oracle-only` sets
+///   5. `setQuitOnEmpty` (Theory/Proof.hs:709-716) — `--oracle-only` sets
 ///      `quitOnEmpty` on every oracle / tactic ranking.
 fn resolve_cli_heuristic(
     cli: &CliHeuristic,
@@ -317,14 +320,15 @@ fn resolve_cli_heuristic(
                 }
                 // Step 4: workDir = "." for the CLI heuristic (Oracle Nothing).
                 *oracle_path = resolve_oracle_path(oracle_path, None);
-                // Step 5: --oracle-only quitOnEmpty (Proof.hs:713-714).
+                // Step 5: --oracle-only quitOnEmpty (Theory/Proof.hs:713-714).
                 if cli.oracle_only {
                     *quit_on_empty = true;
                 }
             }
             // Step 5: --oracle-only also sets quitOnEmpty on tactic rankings
             // (HS `aux (InternalTacticRanking _ t) = InternalTacticRanking
-            // (quitOnEmptyOracle prover) t`, Proof.hs:705-716, see line 715).
+            // (quitOnEmptyOracle prover) t`, Theory/Proof.hs:705-716, see line
+            // 715).
             GoalRanking::Tactic { quit_on_empty, .. } if cli.oracle_only => {
                 *quit_on_empty = true;
             }
@@ -340,8 +344,10 @@ fn resolve_cli_heuristic(
 /// `[sources]`-lemma names folded into `typing_assumptions`.
 ///
 /// Why this is safe to share across lemmas (HS computes
-/// `_crcRefinedSources` ONCE per `ClosedRuleCache` and reuses it for
-/// every lemma; RuleItem.hs:64-69, CloseRule.hs:144-163):
+/// `_crcRefinedSources` ONCE per `ClosedRuleCache` — RuleItem.hs:64-69
+/// for the field, `closeRuleCache` at CloseRule.hs:402-404,427 for the
+/// single computation — and `proveTheory` reuses that one cache for
+/// every lemma, CloseRule.hs:148-163):
 ///   * The saturated+refined cases are a pure function of the (shared
 ///     template) raw sources + rules + restrictions + `typing_assumptions`.
 ///     Two lemmas with the same source-name key feed identical inputs, so
@@ -385,7 +391,8 @@ pub struct ProverSession {
     pub theory: crate::theory::Theory,
     /// CLI `--heuristic`/`--oraclename`/`--oracle-only` (HS `AutoProver`
     /// fields).  When `cli_heuristic.raw` is `Some`, it OVERRIDES the per-lemma
-    /// / theory heuristic for EVERY lemma (HS `selectHeuristic`, Proof.hs:705-716, see line 707).
+    /// / theory heuristic for EVERY lemma (HS `selectHeuristic`,
+    /// Theory/Proof.hs:705-716, see line 707).
     cli_heuristic: CliHeuristic,
     /// Solved-leaf extraction strategy (HS `apCut`, threaded from
     /// `--stop-on-trace`, TheoryLoader.hs:803-810, see line 809).  Theory-global (HS
@@ -434,7 +441,8 @@ pub struct ProverSession {
     source_cache: std::sync::Mutex<std::collections::HashMap<Vec<String>, CachedSources>>,
 }
 
-/// Per-lemma source kind, mirroring HS `lemmaSourceKind` (Lemma.hs:38-41):
+/// Per-lemma source kind, mirroring HS `lemmaSourceKind`
+/// (lib/theory/src/Lemma.hs:38-41):
 ///   lemmaSourceKind lem
 ///     | SourceLemma `elem` lAttributes lem = RawSource
 ///     | otherwise                          = RefinedSource
@@ -529,8 +537,8 @@ fn gather_reusable_lemmas(
 /// HS-faithful per-lemma RAW-vs-REFINED selection (ClosedTheory.hs:116-118
 /// `cases = case lemmaSourceKind l of RawSource -> crcRawSources;
 /// RefinedSource -> crcRefinedSources`).  `[sources]` lemmas (RawSource,
-/// Lemma.hs:38-41, see line 40) use the RAW precomputed sources — `refineWithSourceAsms` is
-/// NEVER applied to them — so they carry NO typing assumptions (an empty
+/// lib/theory/src/Lemma.hs:38-41, see line 40) use the RAW precomputed
+/// sources — `refineWithSourceAsms` is NEVER applied to them — so they carry NO typing assumptions (an empty
 /// list makes `ensure_saturated` skip the refine and use the raw cases
 /// verbatim).  All other lemmas (RefinedSource) use the refined sources
 /// (`refineWithSourceAsms parameters typAsms`, CloseRule.hs:427), so they fold in
@@ -589,7 +597,7 @@ pub struct PrecomputationStats {
 
 /// Resolve the goal-ranking heuristic for a lemma, mirroring HS
 /// `selectHeuristic prover ctx = apDefaultHeuristic prover <|> L.get
-/// pcHeuristic ctx` (Proof.hs:706-707): the CLI `--heuristic`
+/// pcHeuristic ctx` (Theory/Proof.hs:706-707): the CLI `--heuristic`
 /// (`apDefaultHeuristic`) OVERRIDES the per-lemma / theory heuristic when
 /// present.  Otherwise fall back to per-lemma `[heuristic=..]` > theory-level
 /// `heuristic:` > None (`getProofContext.specifiedHeuristic`,
@@ -713,7 +721,7 @@ impl ProverSession {
     }
 
     /// Build the shared per-file state, also setting `theory.in_file` for
-    /// oracle path resolution (HS Parser.hs).  Does the expensive
+    /// oracle path resolution (HS Theory/Text/Parser.hs).  Does the expensive
     /// once-per-file work: theory elaboration, restriction conversion, full
     /// `ProofContext` construction (which runs intruder rule generation,
     /// `close_intr_rule`, DH/BP cached variants, per-rule variant
@@ -721,7 +729,7 @@ impl ProverSession {
     /// `--heuristic`/`--oraclename`/`--oracle-only` (HS `AutoProver`): when
     /// `cli_heuristic.raw` is `Some`, every lemma's goal ranking is the CLI
     /// heuristic (HS `selectHeuristic`: `apDefaultHeuristic <|> pcHeuristic`,
-    /// Proof.hs).
+    /// Theory/Proof.hs).
     ///
     /// `ndc_cache`: the theory's once-per-load NDC-checked intruder cache
     /// (`close_rule::check_close_intr_rule`), injected into the template
@@ -762,8 +770,9 @@ impl ProverSession {
             restrictions.push(rg);
         }
         let rules: Vec<OpenProtoRule> = theory.rules().cloned().collect();
-        // HS `setforcedInjectiveFacts {L_PureState, L_CellLocked}` (Sapic.hs:84):
-        // when the state-channel optimisation is on, those two facts are forced
+        // HS `setforcedInjectiveFacts {L_PureState, L_CellLocked}`
+        // (lib/sapic/src/Sapic.hs:84): when the state-channel optimisation is
+        // on, those two facts are forced
         // injective for the WHOLE proof (`closeRuleCache`, CloseRule.hs:417-420).
         let forced_injective_facts: Vec<crate::fact::FactTag> = if theory.options.state_channel_opt
         {
@@ -921,8 +930,10 @@ impl ProverSession {
     /// the concurrent fan-out lemmas all take the cache-hit restore arm of
     /// [`Self::restore_or_saturate_sources`] rather than each recomputing the
     /// identical `saturate_sources_with_simp` pass.  HS computes
-    /// `_crcRefinedSources` ONCE per `ClosedRuleCache` and reuses it for every
-    /// lemma (RuleItem.hs:64-69, CloseRule.hs:144-163); without this pre-pass the
+    /// `_crcRefinedSources` ONCE per `ClosedRuleCache` (RuleItem.hs:64-69;
+    /// `closeRuleCache` at CloseRule.hs:402-404,427) and `proveTheory` reuses
+    /// that one cache for every lemma (CloseRule.hs:148-163); without this
+    /// pre-pass the
     /// rayon fan-out duplicates that compute per lemma, because at
     /// `processors >= 2` every worker misses — no sibling has finished writing
     /// the cache yet.
@@ -1040,7 +1051,7 @@ pub fn check_and_extend_lemma_in_session(
 /// `autoprove` primitive.
 ///
 /// HS `getProverR` → `applyProverAtPath` (`src/Web/Theory.hs:146-149`) →
-/// `focus proofPath (runAutoProver ap)` (`lib/theory/src/Theory/Proof.hs:604-612`)
+/// `focus proofPath (runAutoProver ap)` (`lib/theory/src/Theory/Proof.hs:601-610`)
 /// runs the prover from the subproof's system at the URL's proof path,
 /// under the per-lemma context `modifyLemmaProof` supplies
 /// (`getProofContext l thy`, ClosedTheory.hs — `pcSources` picked raw vs
@@ -1132,7 +1143,8 @@ fn prove_lemma_in_session_mode(
     let g = formula_to_guarded(&lemma.formula)
         .map_err(|e| ProveError::Guarded(guard_error_doc(&e, &lemma.formula)))?;
 
-    // Per-lemma source kind, mirroring HS `lemmaSourceKind` (Lemma.hs:38-41):
+    // Per-lemma source kind, mirroring HS `lemmaSourceKind`
+    // (lib/theory/src/Lemma.hs:38-41):
     // `[sources]`-tagged lemmas get RawSource, all others RefinedSource.
     // HS sets `pcSourceKind = lemmaSourceKind l` (ClosedTheory.hs:97-138, see line 102,116)
     // and `formulaToSystem` stamps it onto the initial system's
@@ -1194,10 +1206,10 @@ fn prove_lemma_in_session_mode(
     // `refineWithSourceAsms`, CloseRule.hs:426-427), forced ONLY when a proof
     // method reads `pcSources` (ProofMethod.hs:283-340, see line 316).  A non-target lemma
     // with NO stored skeleton replays HS's parsed `unproven () = sorry`
-    // (`unproven = sorry Nothing`, Proof.hs:255-256; used by the lemma
+    // (`unproven = sorry Nothing`, Theory/Proof.hs:255-256; used by the lemma
     // constructor at ProofSkeleton.hs:59-61, see line 61) via `checkAndExtendProver`'s
     // `sorry` walk
-    // (Proof.hs:624-630) — that single `Sorry` node consults no source,
+    // (Theory/Proof.hs:623-630) — that single `Sorry` node consults no source,
     // so HS never forces the (potentially very expensive) refined-source
     // thunk for it.  RS mirrors that here: such a lemma will hit the
     // `annotated_sorry_root` early return below WITHOUT touching
@@ -1263,7 +1275,7 @@ fn prove_lemma_in_session_mode(
     if !auto_prove {
         // Non-target lemma with no stored skeleton: HS keeps the parsed
         // `unproven ()` single-`sorry` proof (`unproven = sorry Nothing`,
-        // Proof.hs:255-256; used by the lemma constructor at
+        // Theory/Proof.hs:255-256; used by the lemma constructor at
         // ProofSkeleton.hs:59-61, see line 61) — an
         // annotated Sorry at the lemma's start system (the node carries
         // the start system, so it renders as plain `by sorry`).
@@ -1317,7 +1329,7 @@ pub fn prove_lemma(
 /// `--heuristic`/`--oraclename`/`--oracle-only` (HS `AutoProver`).  This is
 /// the per-lemma (non-session) fallback path; when `cli_heuristic.raw` is
 /// `Some` it OVERRIDES the per-lemma / theory heuristic (HS `selectHeuristic`,
-/// Proof.hs:705-716, see line 707).  `ndc_cache` is the theory's
+/// Theory/Proof.hs:705-716, see line 707).  `ndc_cache` is the theory's
 /// once-per-load NDC-checked intruder cache, injected into the context so
 /// the fallback path never re-runs the check; the borrowed handle lets a
 /// whole per-lemma loop share one cache allocation.
@@ -1378,7 +1390,8 @@ pub fn prove_lemma_with_pool_file_heuristic(
     let g = formula_to_guarded(&lemma.formula)
         .map_err(|e| ProveError::Guarded(guard_error_doc(&e, &lemma.formula)))?;
 
-    // Per-lemma source kind (HS `lemmaSourceKind`, Lemma.hs:38-41): RawSource
+    // Per-lemma source kind (HS `lemmaSourceKind`,
+    // lib/theory/src/Lemma.hs:38-41): RawSource
     // for `[sources]`-tagged lemmas, RefinedSource for all others.  Stamped
     // onto the initial system's `sSourceKind` (CloseRule.hs:167-188, see line 175).
     let lemma_source_kind = lemma_source_kind(lemma);
@@ -1449,7 +1462,8 @@ pub fn prove_lemma_with_pool_file_heuristic(
     };
     // Bridge the elaborated theory's rules into the proof context.
     let rules: Vec<OpenProtoRule> = theory.rules().cloned().collect();
-    // HS `setforcedInjectiveFacts {L_PureState, L_CellLocked}` (Sapic.hs:84):
+    // HS `setforcedInjectiveFacts {L_PureState, L_CellLocked}`
+    // (lib/sapic/src/Sapic.hs:84):
     // force those facts injective when the state-channel optimisation is on.
     let forced_injective_facts: Vec<crate::fact::FactTag> = if theory.options.state_channel_opt {
         crate::tools::injective_fact_instances::pure_state_forced_fact_tags()
@@ -1488,7 +1502,8 @@ pub fn prove_lemma_with_pool_file_heuristic(
     ctx.cut = cut;
 
     // Resolve the goal-ranking heuristic.  HS `selectHeuristic prover ctx =
-    // ... apDefaultHeuristic prover <|> L.get pcHeuristic ctx` (Proof.hs:705-716, see line 707):
+    // ... apDefaultHeuristic prover <|> L.get pcHeuristic ctx`
+    // (Theory/Proof.hs:705-716, see line 707):
     // the CLI `--heuristic` (apDefaultHeuristic) OVERRIDES the per-lemma /
     // theory heuristic when present.  Otherwise (`getProofContext.
     // specifiedHeuristic`, ClosedTheory.hs:123-131): per-lemma `[heuristic=..]`
@@ -1516,8 +1531,8 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // assumptions to filter out spurious decryption cases that would
     // otherwise surface as false counterexamples in our search.
     // HS-faithful per-lemma RAW-vs-REFINED selection (ClosedTheory.hs:116-118,
-    // Lemma.hs:38-41, see line 40): `[sources]` lemmas (RawSource) use the RAW precomputed
-    // sources — `refineWithSourceAsms` is NEVER applied to them — so they
+    // lib/theory/src/Lemma.hs:38-41, see line 40): `[sources]` lemmas
+    // (RawSource) use the RAW precomputed sources — `refineWithSourceAsms` is NEVER applied to them — so they
     // carry NO typing assumptions (empty list => `ensure_saturated` skips the
     // refine).  All other lemmas (RefinedSource) fold in every prior
     // `[sources]`-lemma assumption (HS `typAsms`, CloseRule.hs:117-119).
@@ -1575,7 +1590,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
         ctx.use_induction = crate::constraint::solver::context::UseInduction::UseInduction;
     }
 
-    // HS-faithful `replaceSorryProver` (Proof.hs:642-650):
+    // HS-faithful `replaceSorryProver` (Theory/Proof.hs:642-650):
     // when the lemma carries a parsed skeleton, walk that skeleton and
     // invoke the auto-prover only at `by sorry` leaves.  Otherwise (no
     // skeleton or parser couldn't structure it) fall through to the

@@ -32,7 +32,7 @@ use crate::bindings::{bindings_act, bindings_comb};
 // =============================================================================
 
 /// `varsProc`: every SAPIC variable that occurs anywhere in `p` (HS
-/// `varsProc = foldMap Data.Set.singleton`, Process.hs:361-362 — a Set, so sorted
+/// `varsProc = foldMap Data.Set.singleton`, Sapic/Process.hs:361-362 — a Set, so sorted
 /// and deduplicated).  We return the underlying `LVar`s used to seed the
 /// avoidance state for `renameUnique`.
 fn proc_lvars(p: &PlainProcess) -> Vec<LVar> {
@@ -194,7 +194,7 @@ fn cond_formula_free_lvars(f: &tamarin_parser::ast::Formula) -> Vec<LVar> {
 /// Rename the FREE variables of a parser-AST process formula (a `Cond`
 /// condition or an MSR's embedded `_restrict`) according to `subst`
 /// (`LVar → LVar`), mirroring the `ff = apply subst` argument HS threads into
-/// `mapTermsComb`/`mapTermsAction` (Process.hs:155,165).  Quantifier-bound vars
+/// `mapTermsComb`/`mapTermsAction` (Sapic/Process.hs:155,165).  Quantifier-bound vars
 /// are left untouched (they are not in the subst domain — process renaming only
 /// renames process-bound variables).
 fn rename_cond_formula(
@@ -287,7 +287,7 @@ fn rename_action(
             acts: acts.iter().map(|f| rename_fact(subst, f)).collect(),
             concs: concs.iter().map(|f| rename_fact(subst, f)).collect(),
             // HS `mapTermsAction f ff fv (MSR l a r rest mv) = MSR .. (fmap ff
-            // rest) ..` (Process.hs:155) maps the embedded restriction formulas
+            // rest) ..` (Sapic/Process.hs:155) maps the embedded restriction formulas
             // with the SAME substitution as the fact rows, so the formula's free
             // variables alpha-rename along with the rule body.
             rest: rest.iter().map(|f| rename_cond_formula(subst, f)).collect(),
@@ -318,7 +318,7 @@ fn rename_comb(
             ProcessCombinator::CondEq(rename_term(subst, a), rename_term(subst, b))
         }
         // HS `mapTermsComb (apply subst) ... (Cond fa) = Cond (apply subst fa)`
-        // (Process.hs:165): rename the formula's free variables.
+        // (Sapic/Process.hs:165): rename the formula's free variables.
         ProcessCombinator::Cond(f) => ProcessCombinator::Cond(rename_cond_formula(subst, f)),
         other => other.clone(),
     }
@@ -603,7 +603,8 @@ fn merge_fun_types(
     Ok((ins, out))
 }
 
-/// `typeProcess` (Typing.hs:135-168) via `traverseProcess` (Process.hs:221-234):
+/// `typeProcess` (Typing.hs:135-168) via `traverseProcess`
+/// (Sapic/Process.hs:221-234):
 ///   1. `fAct`/`fComb` — insert this node's bound vars (PRE-order, on the way
 ///      down);
 ///   2. recurse into the subtree (`p''<- traverseProcess … p'`);
@@ -675,7 +676,7 @@ fn type_with_var(v: &SapicLVar) -> SapicLVar {
     }
 }
 
-/// `traverseTermsAction` (Process.hs:242-265) specialised to the typing
+/// `traverseTermsAction` (Sapic/Process.hs:242-268) specialised to the typing
 /// handlers `typeWith'` (terms), `typeWithVar` (standalone vars).
 fn type_action(
     env: &mut TypingEnvironment,
@@ -683,7 +684,7 @@ fn type_action(
 ) -> Result<SapicAction<SapicLVar>, String> {
     match a {
         SapicAction::New(v) => Ok(SapicAction::New(type_with_var(v))),
-        // `Event <$> traverse ft fa` (Process.hs:257): the event fact's TERMS
+        // `Event <$> traverse ft fa` (Sapic/Process.hs:257): the event fact's TERMS
         // are typed via `ft = typeWith'` — NOT `typeWithFact` (which only
         // handles MSR's `rest` formulas).  This is what propagates `:lol` onto
         // the `Test( x.1 )` references.
@@ -922,7 +923,7 @@ pub fn type_and_rename_process(
     type_and_rename_process_in(&mut env, p)
 }
 
-/// `S.toList (varsProc p)` (Process.hs:361-362): every SAPIC variable that
+/// `S.toList (varsProc p)` (Sapic/Process.hs:361-362): every SAPIC variable that
 /// occurs anywhere in `p`, as the sorted deduplicated `Set` list.  Two
 /// occurrences of the same `LVar` under DIFFERENT `stype` tags are distinct
 /// set elements, exactly as in HS.  Generic in the annotation, as HS's

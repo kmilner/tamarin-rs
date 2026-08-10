@@ -70,7 +70,8 @@ fn identifier_stops_at_hyphen() {
 
 #[test]
 fn bare_inter_method_without_child_is_err() {
-    // HS `interProof` (Proof.hs:109-113) has no childless-leaf branch:
+    // HS `interProof` (Theory/Text/Parser/Proof.hs:109-113) has no
+    // childless-leaf branch:
     // a method must be followed by either a `case`-block (`next`/`qed`)
     // or a recursive `proofSkeleton`.  A bare `simplify` with nothing
     // after it is a parse error in the v1.13.0 prover ("unexpected ...,
@@ -212,7 +213,8 @@ fn raw_goalspec_fallback() {
 
 #[test]
 fn solve_chain_goal() {
-    // HS `chainGoal` (Proof.hs:39-72, see line 59) pretty-print:
+    // HS `chainGoal` (Theory/Text/Parser/Proof.hs:39-72, see line 59)
+    // pretty-print:
     // `(#i, 0) ~~> (#j, 2)`  (NodeConc ~~> NodePrem).
     let src = "solve( (#i, 0) ~~> (#j, 2) ) by sorry";
     let t = parse_proof_tree(src).expect("parse");
@@ -263,7 +265,7 @@ fn solve_chain_goal_with_freshen_suffix() {
 
 #[test]
 fn solve_subterm_goal() {
-    // HS `stSplitGoal` (Proof.hs:63-66) pretty-print:
+    // HS `stSplitGoal` (Theory/Text/Parser/Proof.hs:63-66) pretty-print:
     // `<term> ⊏ <term>` (U+228F).
     let src = "solve( foo(a, b) \u{228F} bar(c) ) by sorry";
     let t = parse_proof_tree(src).expect("parse");
@@ -278,7 +280,8 @@ fn solve_subterm_goal() {
 
 #[test]
 fn solve_split_goal() {
-    // HS `eqSplitGoal` (Proof.hs:70-72) pretty-print: `splitEqs(N)`.
+    // HS `eqSplitGoal` (Theory/Text/Parser/Proof.hs:70-72) pretty-print:
+    // `splitEqs(N)`.
     let src = "solve( splitEqs(42) ) by sorry";
     let t = parse_proof_tree(src).expect("parse");
     match &t.method {

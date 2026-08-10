@@ -205,7 +205,8 @@ pub enum SapicAction<V> {
         concs: Vec<SapicNFact<V>>,
         /// Embedded `_restrict(...)` formulas attached to the MSR's action row
         /// (`[l]--[a restricting φ]->[r]`).  HS stores these as
-        /// `SapicNFormula v` (Process.hs:81); the RS port carries the
+        /// `SapicNFormula v` (Theory/Sapic/Process.hs:81); the RS port carries
+        /// the
         /// un-expanded parser-AST [`tamarin_parser::ast::Formula`] directly,
         /// exactly as `ProcessCombinator::Cond` does — the base translation
         /// (`baseTransAction` MSR, Basetranslation.hs:200-203) keeps them as the
@@ -277,7 +278,7 @@ impl<Ann, V> Process<Ann, V> {
 
 /// `pfoldMap`: visit every node in the process tree calling `f`,
 /// concatenating outputs. Traversal order matches Haskell
-/// `pfoldMap` (Process.hs:285-296):
+/// `pfoldMap` (Theory/Sapic/Process.hs:285-296):
 /// - `Null`: just `f(self)`.
 /// - `Action`: self first, then the body (`f self <> pfoldMap body`).
 /// - `Comb`: in-order — left subtree, then self, then right subtree

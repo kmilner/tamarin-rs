@@ -126,7 +126,8 @@ fn frame_expecting_commas_or() {
 }
 
 /// A non-binary `[AC]` declaration is HS `function`'s `fail "conflicting
-/// arity : AC function must be binary"` (Signature.hs:220), raised at the
+/// arity : AC function must be binary"`
+/// (Theory/Text/Parser/Signature.hs:220), raised at the
 /// position `lexeme` left after the attribute list.  Byte-pinned to the
 /// pinned oracle (ef3f0468), which prints for the two theories below:
 ///
@@ -180,8 +181,9 @@ fn decl_probe_err(name: &str, body: &str) -> String {
 /// HS `function`'s check (1) (Theory/Text/Parser/Signature.hs:200-209): a
 /// name an enabled `builtins:` item reserved must be re-declared at exactly
 /// the builtin's `(arity, Privacy, Constructability, NDCstate)` tuple.  It
-/// runs BEFORE the conflicting-arities check (Signature.hs:212) and before
-/// the `[AC]` arity check (Signature.hs:220), so its message wins over both.
+/// runs BEFORE the conflicting-arities check
+/// (Theory/Text/Parser/Signature.hs:212) and before the `[AC]` arity check
+/// (Theory/Text/Parser/Signature.hs:220), so its message wins over both.
 /// Byte-pinned to the pinned oracle (ef3f0468).
 #[test]
 fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
@@ -206,7 +208,8 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
     );
     // `fst` has no exemption in check (1): `dest-pairing` reserves it at
     // the DESTRUCTOR shape, so re-declaring the constructor is an error
-    // even though check (2) would wave it through (Signature.hs:213).
+    // even though check (2) would wave it through
+    // (Theory/Text/Parser/Signature.hs:213).
     assert_eq!(
         decl_probe_err("E1", "builtins: dest-pairing\nfunctions: fst/1 [AC]"),
         "\"p.spthy\" (line 6, column 1):\nunexpected \"e\"\n\
@@ -230,7 +233,8 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
             "attribute {attr}"
         );
     }
-    // `conflictingBuiltins` (Signature.hs:203) scans the WHOLE table in
+    // `conflictingBuiltins` (Theory/Text/Parser/Signature.hs:203) scans the
+    // WHOLE table in
     // `builtinsNames` order, not just the builtins this theory enabled.
     assert_eq!(
         decl_probe_err("P6", "builtins: asymmetric-encryption\nfunctions: pk/2"),
@@ -261,7 +265,8 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
     );
 }
 
-/// `option [] $ list functionAttribute` (Signature.hs:186) leaves an
+/// `option [] $ list functionAttribute`
+/// (Theory/Text/Parser/Signature.hs:187) leaves an
 /// `Expect "\"[\""` behind when the declaration carries no attribute list,
 /// and parsec merges it into the `fail` that follows — so the same
 /// diagnostic gains or loses an `expecting "["` line with the brackets.
@@ -282,9 +287,11 @@ fn declaration_diagnostics_carry_the_attribute_bracket_expectation() {
     );
 }
 
-/// HS `function`'s check (2) (Signature.hs:212-216) is a parse error too,
+/// HS `function`'s check (2) (Theory/Text/Parser/Signature.hs:212-216) is a
+/// parse error too,
 /// not something a later stage reports.  The macro row it can also match
-/// registers as `(k, Private, Destructor, NotNDC)` (Macro.hs:46).
+/// registers as `(k, Private, Destructor, NotNDC)`
+/// (Theory/Text/Parser/Macro.hs:46).
 /// Byte-pinned to the pinned oracle.
 #[test]
 fn conflicting_arities_is_a_parse_error() {
@@ -322,7 +329,8 @@ fn conflicting_arities_is_a_parse_error() {
     );
 }
 
-/// HS `extendSig`'s own two checks (Signature.hs:107-119), raised at the
+/// HS `extendSig`'s own two checks
+/// (Theory/Text/Parser/Signature.hs:107-119), raised at the
 /// position the builtin's `symbol` lexeme reached.  Byte-pinned to the
 /// pinned oracle.
 #[test]
@@ -373,7 +381,8 @@ fn builtins_item_rejects_conflicting_functions_and_macros() {
              different arity or function options): [\"verify\"]. Please remove these \
              function definitions or use different names."
     );
-    // `dest-pairing` is exempt (Signature.hs:121): replacing the seeded
+    // `dest-pairing` is exempt (Theory/Text/Parser/Signature.hs:121):
+    // replacing the seeded
     // `fst`/`snd` constructors with the destructor variants is its job.
     assert!(parse_theory("theory OK begin\n\nbuiltins: dest-pairing\n\nend\n", &[]).is_ok());
 }
@@ -465,7 +474,7 @@ fn reserved_word_at_a_declaration_position() {
 
     // An enclosing `<?>` on a non-consuming failure keeps the `UnExpect`
     // and swaps the `Expect`s for its own label — HS `predicate … <?>
-    // "predicate declaration"` (Signature.hs:270-275):
+    // "predicate declaration"` (Theory/Text/Parser/Signature.hs:270-275):
     // ```text
     // "r8.spthy" (line 3, column 17):
     // unexpected reserved word "diff"
@@ -503,7 +512,8 @@ fn item_position_error_carries_the_previous_items_trailing_labels() {
             .with_source("pe.spthy")
             .to_string()
     };
-    // `protoRule`'s `option [] $ symbol "variants" *> …` (Rule.hs:134).
+    // `protoRule`'s `option [] $ symbol "variants" *> …`
+    // (Theory/Text/Parser/Rule.hs:134).
     assert_eq!(
         err("rule R: [ ] --[ ]-> [ ]"),
         format!("{base}\"variants\", {items}")
@@ -553,12 +563,14 @@ fn diff_probe_err(args: &str, flags: &[&str]) -> String {
         .to_string()
 }
 
-/// HS `diffOp` (Term.hs:123-135) parses `diff(...)` unconditionally and then
+/// HS `diffOp` (Theory/Text/Parser/Term.hs:123-135) parses `diff(...)`
+/// unconditionally and then
 /// `fail`s unless the signature's diff bit is on, so a `diff` term in a
 /// theory parsed without the flag is a parse error — not an ordinary user
 /// function.  Byte-pinned to the pinned oracle (ef3f0468) on the probes in
 /// this test; the three `fail`s fire in HS's order (arity, then equations,
-/// then flag), and `term`'s `<?> "term"` (Term.hs:138-163, see line 154)
+/// then flag), and `term`'s `<?> "term"`
+/// (Theory/Text/Parser/Term.hs:138-163, see line 154)
 /// supplies the `expecting term` line.
 #[test]
 fn diff_operator_without_the_diff_flag_is_a_parse_error() {
@@ -856,7 +868,8 @@ fn formula_string() {
     }
 }
 
-// HS `blatom` (Formula.hs:45-57) tries the term-relational atoms
+// HS `blatom` (Theory/Text/Parser/Formula.hs:45-57) tries the term-relational
+// atoms
 // (Subterm/Less/EqE) BEFORE the bare-fact `Pred` alternative, so an
 // uppercase function applied with a relational operator is an equality/
 // subterm atom, not a predicate. Verified against tamarin-prover 1.13.0:
@@ -954,7 +967,8 @@ fn empty_tuple_is_error_singleton_collapses() {
 }
 
 // HS `factAnnotation` SolveFirst is `opUnion = symbol_ "++" <|> symbol_ "+"`
-// (Fact.hs:31-36, see line 32, Token.hs:551-552), so `[++]` is accepted like `[+]`.
+// (Theory/Text/Parser/Fact.hs:31-36, see line 33, Token.hs:551-552), so `[++]`
+// is accepted like `[+]`.
 // Verified against tamarin-prover 1.13.0: `Foo(~k)[++]` parses and renders
 // as `[+]`.
 #[test]
@@ -979,7 +993,8 @@ fn fact_annotation_accepts_double_plus() {
 // Theory/Text/Parser.hs:230-393, see line 268) but is ALSO an ordinary message variable
 // name inside proof goals — e.g. `solve( Match( test, sid ) @ #i4 )` in
 // examples/ake/bilinear/Scott.spthy.  HS parses the proof skeleton
-// STRUCTURALLY (`solve <$> parens goal`, Proof.hs:76-85, see line 80), so a `test` inside
+// STRUCTURALLY (`solve <$> parens goal`, Theory/Text/Parser/Proof.hs:76-85,
+// see line 80), so a `test` inside
 // `solve( ... )` is a `parens`-nested term and can never begin a new
 // top-level item.  `read_until_next_top_level` reproduces that boundary
 // rule by only testing the top-level-keyword set at paren-depth 0; without
@@ -1164,7 +1179,8 @@ end"#;
 // (Theory/Text/Parser/Proof.hs:98-115, see line 115) structurally, so the identifier after
 // `case` is the case NAME and can be any top-level keyword — case names come
 // from rule / source-case names, and `test` is the CaseTest keyword
-// (Accountability.hs:25-27, see line 26).  A rule named `test` prints its solved case as
+// (Theory/Text/Parser/Accountability.hs:25-27, see line 26).  A rule named
+// `test` prints its solved case as
 // `case test` at paren-depth 0 (unlike Scott's `test` which was inside
 // `solve( ... )`), so the paren-depth guard alone does not suppress it —
 // the case-label suppression below is also needed.
@@ -1346,9 +1362,10 @@ fn equation_lhs(src: &str) -> Term {
     panic!("theory must contain an equation");
 }
 
-// HS `functionAttribute` (Signature.hs:164-171) accepts `AC`, `NDC-diff` and
-// `NDC`; `function` (Signature.hs:183-225) folds them into the symbol's AC and
-// NDC state.
+// HS `functionAttribute` (Theory/Text/Parser/Signature.hs:164-171) accepts
+// `AC`, `NDC-diff` and `NDC`; `function`
+// (Theory/Text/Parser/Signature.hs:183-225) folds them into the symbol's AC
+// and NDC state.
 #[test]
 fn function_attributes_ac_ndc() {
     let t = parse_theory("theory T begin functions: a/2 [AC] end", &[]).unwrap();
@@ -1376,12 +1393,14 @@ fn function_attributes_ac_ndc() {
     assert!(e.private && e.destructor && !e.ac && !e.ndc && !e.ndc_diff);
 }
 
-// HS `acterm` (Term.hs:165-174): a binary `[AC]` symbol is also an infix,
+// HS `acterm` (Theory/Text/Parser/Term.hs:165-172): a binary `[AC]` symbol is
+// also an infix,
 // left-associative operator — the notation `prettyTerm` emits for such
 // terms.  The AST records the infix spelling as `BinOp::AcFct`, distinct
 // from the prefix `App`, because a name that is also a `NoEq` symbol of
 // the signature resolves NoEq when written prefix (`lookupArity`,
-// Term.hs:62-72) but stays the AC symbol when written infix.
+// Theory/Text/Parser/Term.hs:62-72) but stays the AC symbol when written
+// infix.
 #[test]
 fn ac_symbol_parses_infix_left_associative() {
     let src = "theory T begin functions: add/2 [AC] equations: x add y = z end";

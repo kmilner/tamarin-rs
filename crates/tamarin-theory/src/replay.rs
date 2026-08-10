@@ -285,21 +285,24 @@ fn replay_node(
     // a contradiction can actually be derived; else fall through to the
     // auto-prover.  This is HS-faithful, not a divergence: at close time
     // `checkProof` re-execs the stored `Finished (Contradictory Nothing)`
-    // step (`checkAndExecProofMethod`, Proof.hs:447-467, see line 456); if the system is no
+    // step (`checkAndExecProofMethod`, Theory/Proof.hs:447-467, see line 456);
+    // if the system is no
     // longer contradictory the method returns `Nothing`, so checkProof
     // emits `sorryNode (Just "invalid proof step encountered") ...`
-    // (Proof.hs:459-460) carrying `Just sys`.  For a `--prove`-selected
+    // (Theory/Proof.hs:459-460) carrying `Just sys`.  For a `--prove`-selected
     // lemma `replaceSorryProver` then re-runs the auto-prover on that
     // annotated sorry (CloseRule.hs:57-71, see line 71 → TheoryLoader.hs:705-707, see line 706), exactly the
     // `run_proof_search` fall-through below.
     if matches!(node.method, ParsedMethod::Contradiction) && node.cases.is_empty() {
-        // HS replay (checkProof, Proof.hs) preserves the skeleton's STORED
-        // method verbatim — the parser builds `Finished (Contradictory
-        // Nothing)` for `by contradiction` (Proof.hs:81), so the reprinted
+        // HS replay (checkProof, Theory/Proof.hs) preserves the skeleton's
+        // STORED method verbatim — the parser builds `Finished (Contradictory
+        // Nothing)` for `by contradiction`
+        // (Theory/Text/Parser/Proof.hs:81), so the reprinted
         // method carries no reason (`prettyProofMethod` → plain `by
         // contradiction`).  Emit `Contradictory(None)`, NOT a freshly-
         // recomputed reason (which would print a spurious `/* from
-        // formulas */`).  On disagreement HS `checkProof` (Proof.hs) emits
+        // formulas */`).  On disagreement HS `checkProof` (Theory/Proof.hs)
+        // emits
         //   `sorryNode (Just "invalid proof step encountered") (M.singleton "" prf)`
         // where `prf` is the current leaf, `noSystemPrf`'d → unannotated.
         return finished_leaf(
@@ -314,13 +317,14 @@ fn replay_node(
         );
     }
 
-    // `SOLVED` leaf (HS Proof.hs:102-103).  If runtime is_finished
+    // `SOLVED` leaf (HS Theory/Text/Parser/Proof.hs:102-103).  If runtime
+    // is_finished
     // agrees, emit Finished(Solved); else fall through to the auto-prover
     // (whose run_proof_search may simplify/contract further until it
     // reaches Solved naturally).  The fall-through is exactly HS's
     // pipeline: close-time `checkProof` marks the stale `Finished Solved`
     // an annotated `sorry /* invalid proof step encountered */`
-    // (Proof.hs:459-460), and for a `--prove`-selected lemma
+    // (Theory/Proof.hs:459-460), and for a `--prove`-selected lemma
     // `replaceSorryProver` then reproves it (CloseRule.hs:57-71, see line 71 →
     // TheoryLoader.hs:705-707, see line 706).  Skeleton's SOLVED is HS's claim; RS verifies
     // via its own solver.
@@ -491,10 +495,12 @@ fn replay_node(
     // stale and a new case appeared), invoke the auto-prover on each.
     // This is HS-faithful: `checkProof`'s `mergeMapsWith` treats the
     // runtime-produced cases as the LEFT map and the stored skeleton's
-    // children as the RIGHT map (Proof.hs:447-467, see line 463 `mergeMapsWith
+    // children as the RIGHT map (Theory/Proof.hs:447-467, see line 463
+    // `mergeMapsWith
     // unhandledCase noSystemPrf (go (d+1)) cases cs`), so a runtime-only
     // case (present left, absent right) goes through `unhandledCase =
-    // mapProofInfo (Nothing,) . prover d` (Proof.hs:447-467, see line 462) → an annotated
+    // mapProofInfo (Nothing,) . prover d` (Theory/Proof.hs:447-467, see line
+    // 462) → an annotated
     // `sorry Nothing (Just se)`.  For a `--prove`-selected lemma
     // `replaceSorryProver` then auto-proves that annotated sorry
     // (CloseRule.hs:57-71, see line 71 → TheoryLoader.hs:705-707, see line 706), matching the
@@ -761,7 +767,7 @@ fn resolve_method(parsed: &ParsedMethod, sys: &System) -> Option<ProofMethod> {
 /// and looks it up by **structural equality** against `sys.goals`; when the
 /// goal is absent from the (drifted) current system `checkProof` returns
 /// `Nothing` and marks the step `sorry /* invalid proof step encountered */`,
-/// keeping the stored subtree verbatim (Proof.hs:455-468).
+/// keeping the stored subtree verbatim (Theory/Proof.hs:456-467).
 ///
 /// Our skeleton parser keeps each fact argument only as raw surface text
 /// (`build_fact` stuffs it into a `Term::Var` name).  We recover the
@@ -848,7 +854,8 @@ fn open_goals(sys: &System) -> impl Iterator<Item = &Goal> {
 /// Find a [`Goal`] in `sys.goals` that matches the parsed [`GoalSpec`].
 ///
 /// HS looks the goal up by structural equality on the parsed `Goal` value
-/// itself (`Theory.Text.Parser.Proof.goal`, Proof.hs:39-72), whose LVar
+/// itself (`Theory.Text.Parser.Proof.goal`,
+/// Theory/Text/Parser/Proof.hs:38-72), whose LVar
 /// identities come from the parser's name table.  RS's skeleton parser keeps
 /// only surface text, so each arm rebuilds as much of that equality as its
 /// goal kind allows: the fact-bearing kinds re-parse the stored terms and
@@ -859,7 +866,7 @@ fn open_goals(sys: &System) -> impl Iterator<Item = &Goal> {
 /// every kind handled here `exec_method_for` then gives up (its raw-solve
 /// fallback is reserved for [`GoalSpec::Raw`]), and the caller emits
 /// `sorry /* invalid proof step encountered */` over the verbatim stored
-/// subtree — HS `checkProof`'s `Nothing` branch (Proof.hs:455-468).
+/// subtree — HS `checkProof`'s `Nothing` branch (Theory/Proof.hs:456-467).
 fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
     match spec {
         GoalSpec::Action {
@@ -937,7 +944,8 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
         GoalSpec::Disj { alts, alt_texts } => {
             // HS-faithful: HS parses the `solve(...)` text into a
             // `DisjG (Disj [GuardedFormula])` value via
-            // `disjSplitGoal` (Theory/Text/Parser/Proof.hs:39-72, see line 61), then
+            // `disjSplitGoal` (Theory/Text/Parser/Proof.hs:38-72, see line 61),
+            // then
             // dispatches `SolveGoal goal` against `sys.goals` (HS
             // ProofMethod.hs:258: `guard (goal \`M.member\` sGoals)`).
             //
@@ -945,7 +953,7 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             // SIGNATURE (top-level shape — see `DisjAlt`), so the first
             // filter keeps every open `Goal::Disj(d)` whose `d.0` list has
             // the same length AND the same per-alt signature as the
-            // skeleton's `alts`.  See HS Proof.hs:61.
+            // skeleton's `alts`.  See HS Theory/Text/Parser/Proof.hs:61.
             //
             // That signature is not always unique: the
             // insertImpliedFormulas pass at a single IH can produce
@@ -979,7 +987,8 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             //
             // Scoring rather than all-or-nothing because the stored text
             // need not be in the runtime's normal form: HS re-parses each
-            // alt into a `Guarded` (Proof.hs:39-72, see line 61) and the
+            // alt into a `Guarded` (Theory/Text/Parser/Proof.hs:38-72, see
+            // line 61) and the
             // parse normalizes — `gconj`'s `nub` collapses a repeated
             // conjunct (Guarded.hs:415-423), so a stored
             // `… ⇒ (∀ #l. C @ #l ⇒ ⊥) ∧ (∀ #l. C @ #l ⇒ ⊥)` matches a
@@ -1041,9 +1050,10 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             prem_idx,
         } => {
             // HS dispatch: `solve( (#i, n) ~~> (#j, m) )` parses to
-            // `ChainG (i, ConcIdx n) (j, PremIdx m)` (Proof.hs:59) and
+            // `ChainG (i, ConcIdx n) (j, PremIdx m)`
+            // (Theory/Text/Parser/Proof.hs:59) and
             // matches by structural equality against an open
-            // `Goal::Chain(...)` in `sys.goals` (HS ProofMethod.hs:374:
+            // `Goal::Chain(...)` in `sys.goals` (HS ProofMethod.hs:258:
             // `goal `M.member` sGoals`).  HS's open chain-goal carries
             // concrete LVar identities — same skeleton-vs-runtime LVar
             // suffix-idx mismatch as Action/Premise.  We match by var
@@ -1061,7 +1071,7 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
                 .cloned()
         }
         GoalSpec::Subterm { small_raw, big_raw } => {
-            // HS `stSplitGoal` (Proof.hs:63-66) parses to
+            // HS `stSplitGoal` (Theory/Text/Parser/Proof.hs:63-66) parses to
             // `SubtermG (small, big)` over LNTerm and dispatches via
             // structural Map lookup in `sys.goals` (HS ProofMethod.hs:253-274, see line 258).
             // We compare by canonical pretty-printed text — see HS
@@ -1098,7 +1108,7 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             }
         }
         GoalSpec::Split { split_id } => {
-            // HS `eqSplitGoal` (Proof.hs:70-72) parses to
+            // HS `eqSplitGoal` (Theory/Text/Parser/Proof.hs:70-72) parses to
             // `SplitG (SplitId N)` and dispatches via structural Map
             // lookup in `sys.goals`.  Split ids are stable (minted by
             // `EquationStore::add_disj`), so an exact id-match is
@@ -1259,7 +1269,7 @@ fn name_matches(tag: &FactTag, want: &str) -> bool {
 }
 
 fn tag_persistent(tag: &FactTag) -> bool {
-    // `KU`/`KD` knowledge facts are persistent (Fact.hs:383-388;
+    // `KU`/`KD` knowledge facts are persistent (Theory/Model/Fact.hs:383-388;
     // `factTagMultiplicity` → Persistent), and the skeleton pretty-prints
     // them with the `!` prefix (e.g. `solve( !KU( ~n ) @ #vk )`), so the
     // parsed spec's `persistent` flag is `true` and must match here.

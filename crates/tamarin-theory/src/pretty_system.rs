@@ -72,10 +72,10 @@ pub fn pretty_non_graph_system(sys: &System) -> String {
 }
 
 // ---------------------------------------------------------------------
-// vsep (HS Pretty.hs:83-84)
+// vsep (HS Theory/Text/Pretty.hs:83-84)
 // ---------------------------------------------------------------------
 
-// HS `vsep = foldr ($--$) emptyDoc` (Pretty.hs:83-84) — RIGHT fold.
+// HS `vsep = foldr ($--$) emptyDoc` (Theory/Text/Pretty.hs:83-84) — RIGHT fold.
 fn vsep_docs(ds: Vec<Doc>) -> Doc {
     let mut acc = Doc::Empty;
     for d in ds.into_iter().rev() {
@@ -264,8 +264,9 @@ fn pp_disj(d: &crate::tools::equation_store::EqDisj) -> Doc {
 fn pp_subst_vfresh(subst: &crate::tools::equation_store::LNSubstVFresh) -> Doc {
     use crate::pretty_hpj::{hsep, operator_, sep};
     // hsep (opExists : map prettyLVar vars) <> opDot
-    // opExists = operator_ "∃ " (Pretty.hs:177-177) — trailing space, one operator
-    // token; opDot = operator_ "." (Pretty.hs:183-183). Both `operator_`, so they
+    // opExists = operator_ "∃ " (Theory/Text/Pretty.hs:177-177) — trailing space, one
+    // operator token; opDot = operator_ "." (Theory/Text/Pretty.hs:183-183). Both
+    // `operator_`, so they
     // carry `hl_operator` spans in HtmlDoc mode and are identity in plain mode.
     let mut quant_parts: Vec<Doc> = vec![operator_("\u{2203} ")]; // opExists "∃ "
     for v in subst.vars_range() {
@@ -274,7 +275,7 @@ fn pp_subst_vfresh(subst: &crate::tools::equation_store::LNSubstVFresh) -> Doc {
     let quant = hsep(quant_parts).beside(operator_(".")); // opDot
 
     // fsep $ intersperse opLAnd $ map ppEq (substToListVFresh subst)
-    // opLAnd = operator_ "∧" (Pretty.hs:179-179).
+    // opLAnd = operator_ "∧" (Theory/Text/Pretty.hs:179-179).
     let eqs: Vec<Doc> = subst
         .to_list()
         .into_iter()
@@ -387,7 +388,7 @@ fn pretty_goals(sys: &System, want_solved: bool) -> Doc {
         let useful = crate::constraint::solver::goals::goal_useful_annotation(g, st.looping, sys);
         // HS `prettyGoal goal <-> lineComment_ (...)` where `lineComment_ =
         // lineComment . text` and `lineComment d = comment $ text "//" <-> d`
-        // (Pretty.hs:96-100).  The comment is PART of the goal's Doc, so its
+        // (Theory/Text/Pretty.hs:96-100).  The comment is PART of the goal's Doc, so its
         // width participates in the goal's own layout decisions (a goal near
         // the ribbon wraps because of its trailing comment, exactly as HS).
         let comment = format!("nr: {}{}{}\"{}\"", st.nr, source_rule, loop_breaker, useful);
@@ -424,7 +425,7 @@ fn pretty_source_kind(sk: Option<SourceKind>) -> &'static str {
 /// persistent `!` prefix), the term list in parentheses (always emitted, even
 /// for zero-arity facts), and a trailing `[...]` annotation block.
 ///
-/// This is NOT the byte-faithful `prettyFact` (Fact.hs:567-574): that one is a
+/// This is NOT the byte-faithful `prettyFact` (Theory/Model/Fact.hs:567-574): that one is a
 /// `Doc` built with `nestShort'`, so it emits the inner-paren spaces
 /// (`!KU( ~ltk )`) and wraps at the display width.  Every rendering that
 /// reaches user-visible output goes through the `Doc` path instead
@@ -434,7 +435,7 @@ fn pretty_source_kind(sk: Option<SourceKind>) -> &'static str {
 /// `constraint::solver::context`, where one fact per line is the point.
 pub fn pretty_fact(fa: &LNFact) -> String {
     use crate::fact::{fact_tag_multiplicity, FactAnnotation, Multiplicity};
-    // Matches Haskell `showFactTag` (Fact.hs:549-553): the `!` prefix is
+    // Matches Haskell `showFactTag` (Theory/Model/Fact.hs:549-553): the `!` prefix is
     // applied to any tag whose `factTagMultiplicity` is `Persistent`,
     // which includes KU/KD as well as persistent proto facts.
     let prefix = if fact_tag_multiplicity(&fa.tag) == Multiplicity::Persistent {
@@ -445,7 +446,7 @@ pub fn pretty_fact(fa: &LNFact) -> String {
     let name = fact_tag_name(&fa.tag);
     let args: Vec<String> = fa.terms.iter().map(pretty_lnterm).collect();
     let base = format!("{}{}({})", prefix, name, args.join(", "));
-    // Matches Haskell `ppAnn` (Fact.hs:573-574): when annotations are
+    // Matches Haskell `ppAnn` (Theory/Model/Fact.hs:573-574): when annotations are
     // present, append `[a1, a2]` using `showFactAnnotation` for each.
     if fa.annotations.is_empty() {
         base
@@ -671,7 +672,7 @@ mod tests {
         // Build under the entity-width guard (HS HtmlDoc measures escaped
         // widths at `text` time; RS captures fill widths at Doc build).
         let _g = crate::pretty_hpj::HtmlEntityWidthGuard::enable();
-        // The `prettySubst` mapping line (SubstVFree.hs:342-348).
+        // The `prettySubst` mapping line (SubstVFree.hs:354-360).
         let line = crate::pretty_formula::term_doc(&term)
             .beside_sp(Doc::text(" <~ {"))
             .beside(fsep(punctuate(Doc::text(","), vec![Doc::text("t.1")])))

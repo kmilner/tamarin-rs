@@ -65,7 +65,7 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
     // Terminal-method handling: Sorry/Finished and SolveGoal/Simplify
     // /Induction with no children are leaves.  Haskell's prettyProof
     // emits `by <method>` as a single line for every leaf except
-    // `Finished Solved`, which prints bare (Proof.hs:1064-1066), so we
+    // `Finished Solved`, which prints bare (Theory/Proof.hs:1064-1066), so we
     // mirror that here — emit *just* the leaf line, skipping the separate
     // method-keyword line.
     if node.children.is_empty() {
@@ -142,7 +142,7 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
     // On exists-trace lemmas only the trace-found path survives: when a
     // node's status rolls up to Solved (TraceFound), siblings that closed
     // Contradictory are elided.  In Haskell this pruning is done *before*
-    // printing, by `cutOnSolved*` -> `extractSolved` (Proof.hs:879-882,
+    // printing, by `cutOnSolved*` -> `extractSolved` (Theory/Proof.hs:879-882,
     // 920-923), which rebuilds the tree keeping one label per level;
     // `prettyProof` itself prints whatever tree it is handed.
     //
@@ -424,10 +424,11 @@ fn normalize_haskell_line(raw: &str) -> Option<String> {
     }
     // UNFINISHABLE leaf (reducible operator in subterm).  Haskell's
     // `prettyProof` prepends `by ` to this non-Solved finished leaf
-    // (ppCases ps [] at Proof.hs:1054-1075, see line 1065) and `prettyProofMethod` emits
-    // `keyword_ "UNFINISHABLE" <-> lineComment_ "reducible operator in
-    // subterm"` (ProofMethod.hs:1174-1186, see line 1178).  Our `render` emits the same
-    // line, so preserve it verbatim instead of dropping it.
+    // (ppCases ps [] at Theory/Proof.hs:1054-1075, see line 1065) and
+    // `prettyProofMethod` emits `keyword_ "UNFINISHABLE" <-> lineComment_
+    // "reducible operator in subterm"` (ProofMethod.hs:1174-1186, see line
+    // 1178).  Our `render` emits the same line, so preserve it verbatim
+    // instead of dropping it.
     if t.starts_with("UNFINISHABLE") || t.starts_with("by UNFINISHABLE") {
         return Some(format!(
             "{}by UNFINISHABLE // reducible operator in subterm",

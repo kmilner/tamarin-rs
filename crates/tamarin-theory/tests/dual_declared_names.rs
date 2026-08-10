@@ -12,8 +12,9 @@
 //! before every `ACfctUser` (constructor order of `UserDefinedSym`,
 //! Term/Term/FunctionSymbols.hs:146-147) — so the `NoEq` symbol wins those
 //! spellings.  The INFIX spelling bypasses `lookupArity` entirely: `acterm`
-//! (Term.hs:166-172) builds `fAppACfct` straight from `stACFunSyms`, so it
-//! stays the AC symbol.  `nullaryApp` (Term.hs:158-163) still resolves a bare
+//! (Theory/Text/Parser/Term.hs:166-172) builds `fAppACfct` straight from
+//! `stACFunSyms`, so it stays the AC symbol.  `nullaryApp`
+//! (Theory/Text/Parser/Term.hs:158-163) still resolves a bare
 //! nullary name to the `NoEq` constant.
 //!
 //! Expected strings are the pinned oracle's bytes (Git revision ef3f0468)
@@ -137,7 +138,8 @@ fn algapp_stays_ac_without_a_noeq_collision() {
 }
 
 /// A bare nullary dual name resolves to the NoEq constant (`nullaryApp`,
-/// Term.hs:158-163).  Oracle bytes: probe `p_nullary_rule`.
+/// Theory/Text/Parser/Term.hs:158-163).  Oracle bytes: probe
+/// `p_nullary_rule`.
 #[test]
 fn a_bare_nullary_dual_name_stays_the_noeq_constant() {
     let src = "theory T begin\n\n\

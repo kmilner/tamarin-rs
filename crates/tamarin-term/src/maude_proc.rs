@@ -511,9 +511,9 @@ impl MaudeHandle {
         // clone share this single immutable signature.
         let sig = Arc::new(sig);
         // stderr: INHERIT, not pipe.  HS uses `runInteractiveCommand`
-        // (System.Process) at Process.hs:103-126, see line 107, which opens a PIPE for
+        // (System.Process) at Maude/Process.hs:103-126, see line 107, which opens a PIPE for
         // stderr too — the returned `herr` (captured into the `MP` record
-        // at Process.hs:113) is a real stderr pipe handle.  HS simply
+        // at Maude/Process.hs:113) is a real stderr pipe handle.  HS simply
         // never reads/drains that pipe.  We deliberately INHERIT stderr
         // instead, because an undrained stderr pipe would deadlock us:
         // if we pipe stderr but never drain it,
@@ -1190,7 +1190,7 @@ impl MaudeHandle {
     /// i.e. `matchCmd`'s `ppTerms t2s <> " <=? " <> ppTerms t1s` where
     /// `(t1s, t2s) = unzip [(a, b) | Equal a b <- eqs]` so `t2s = b =
     /// pattern` lands on Maude's LEFT (pattern slot) and `t1s = a =
-    /// subject` on the RIGHT (subject slot) — `Process.hs:227-229`.
+    /// subject` on the RIGHT (subject slot) — `Maude/Process.hs:227-229`.
     ///
     /// Maude's `match A <=? B` binds vars in **A (PATTERN, left)** and
     /// treats **B (SUBJECT, right)** as ground (empirically confirmed).
@@ -1240,7 +1240,7 @@ impl MaudeHandle {
             pats.push(lterm_to_mterm_global(&eq.rhs, &mut ctx));
         }
         // `match in MSG : list(pats) <=? list(subjs) .`
-        // Mirrors HS `matchCmd` (`Process.hs:227-229`): PATTERN on the
+        // Mirrors HS `matchCmd` (`Maude/Process.hs:227-229`): PATTERN on the
         // left (vars bind), SUBJECT on the right (ground).
         // `pp_mterm_list` emits `list( cons(t1, cons(t2, nil)) )` style,
         // formatting the borrowed slice directly without a `Vec`+`Arc`
@@ -1332,7 +1332,7 @@ impl MaudeHandle {
         //   <'codes', code2 ++ x ++ <cp(..),cp(..)>>
         // needs `codeOther → code2 ++ x`, which Maude only does when
         // `codeOther` sits on the PATTERN side.  HS sends
-        // `match pattern <=? subject` (`matchCmd`, Process.hs:227-229).
+        // `match pattern <=? subject` (`matchCmd`, Maude/Process.hs:227-229).
         let cmd = pp_match_cmd(&t1s, &t2s);
         let reply = inner.execute_memo(&cmd, |s| s.match_count += 1)?;
         drop(inner);

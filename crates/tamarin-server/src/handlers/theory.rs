@@ -412,9 +412,11 @@ fn title_for(entry: &crate::state::TheoryEntry, path: &path_parse::TheoryPath) -
                     })
                     .unwrap_or_else(|| "None".to_string());
                 // HS `methodName` = `renderHtmlDoc . prettyProofMethod` and
-                // `renderHtmlDoc` (`Text/PrettyPrint/Html.hs:140-149, see line 151`) escapes HTML
+                // `renderHtmlDoc` (`Text/PrettyPrint/Html.hs:151-153`) escapes HTML
                 // entities in every text token via the `Document (HtmlDoc d)`
-                // instance (`Html.hs:105-107`, `escapeHtmlEntities`), so a
+                // instance (`Text/PrettyPrint/Html.hs:102-105`, whose `char`,
+                // `text` and `zeroWidthText` route through
+                // `escapeHtmlEntities`, Html.hs:140-149), so a
                 // method that mentions a tuple renders `&lt;B, A, …&gt;` in the
                 // JSON `title`, not a raw `<…>` (which the semantic canonicalizer
                 // would otherwise parse as a bogus HTML element).  Mirror that

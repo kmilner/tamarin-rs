@@ -3,7 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 //! Byte-pinned parity for the formula-atom tail error — the frame HS's
-//! `blatom` alternation (Formula.hs:44-60) reports when no relational
+//! `blatom` alternation (Parser/Formula.hs:44-60) reports when no relational
 //! operator follows an atom's leading term.  Two regimes:
 //!
 //! * A `nodevar`-consumable head (bare or `#`-prefixed identifier): the

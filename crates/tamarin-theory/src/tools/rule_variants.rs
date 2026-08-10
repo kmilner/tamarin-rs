@@ -71,8 +71,8 @@ impl From<MaudeError> for VariantsError {
 ///   (commonSubst, Just freshSubsts) -> return $ makeRule abstrPsCsAs commonSubst freshSubsts
 /// ```
 ///
-/// where `trueDisj = [emptySubstVFresh]` (RuleVariants.hs:61-134, see line 120) and
-/// `makeRule` (RuleVariants.hs:111-118) applies `commonSubst` to the
+/// where `trueDisj = [emptySubstVFresh]` (RuleVariants.hs:61-133, see line
+/// 119) and `makeRule` (RuleVariants.hs:110-117) applies `commonSubst` to the
 /// rule body and restricts the residual fresh substs to the new
 /// frees.
 pub fn variants_proto_rule(
@@ -109,7 +109,7 @@ pub fn variants_proto_rule(
             |_, _| false,
             maude,
         );
-    // HS `trueDisj = [emptySubstVFresh]` (RuleVariants.hs:61-134, see line 120).
+    // HS `trueDisj = [emptySubstVFresh]` (RuleVariants.hs:61-133, see line 119).
     let fresh_substs = residual.unwrap_or_else(|| vec![LNSubstVFresh::empty()]);
     Ok(Some(make_proto_rule_ac(rule, &common_subst, fresh_substs)))
 }
@@ -139,7 +139,7 @@ fn pack_rule_terms(rule: &ProtoRuleE) -> Option<LNTerm> {
 /// Build a `ProtoRuleAC` from a `ProtoRuleE` plus the precomputed
 /// variants list.
 ///
-/// HS `makeRule` (RuleVariants.hs:111-118) applies `commonSubst` (the
+/// HS `makeRule` (RuleVariants.hs:110-117) applies `commonSubst` (the
 /// free part returned by `simpDisjunction`) to the rule body, then
 /// restricts each fresh subst to the rule's surviving frees:
 ///
@@ -246,7 +246,7 @@ pub fn variant_substs_for_rule(
     Ok(ac.info.variants)
 }
 
-/// Port of Haskell `abstrRule` (RuleVariants.hs:93-109): walks every
+/// Port of Haskell `abstrRule` (RuleVariants.hs:92-108): walks every
 /// fact-term in `rule` and replaces each reducible-headed sub-term
 /// with a fresh `LVar`.  Returns the abstracted rule plus the
 /// variant disjunction whose substs talk about the abstracted rule's
@@ -385,7 +385,8 @@ pub fn abstract_rule_and_variants(
     }
 
     // Memoization: original term → fresh LVar.  HS: `BindT` state over
-    // `M.Map LNTerm LVar` (Bind.hs:54-54,76; RuleVariants.hs:61-134, see line 93,106) ensures
+    // `M.Map LNTerm LVar` (Bind.hs:54-54,76; RuleVariants.hs:61-133, see line
+    // 92,105) ensures
     // each unique LNTerm gets ONE binding, reused on subsequent
     // encounters.  A `BTreeMap` mirrors HS's `M.Map` exactly: O(log n)
     // lookup AND an already term-`Ord`-sorted `M.toList` view (used below
@@ -453,9 +454,9 @@ pub fn abstract_rule_and_variants(
     // composeVFresh leaves the original rule's free vars unrenamed, which
     // makes Maude's variant-witness allocation collide across variants.
     //
-    // HS's `frees` (LTerm.hs:584-585) returns `sortednub . freesList` —
+    // HS's `frees` (LTerm.hs:613-614) returns `sortednub . freesList` —
     // a SORT+DEDUP list, ordered by `Ord LVar = idx <> sort <> name`
-    // (LTerm.hs:521-523).  Document-order iteration would assign fresh
+    // (LTerm.hs:546-548).  Document-order iteration would assign fresh
     // idxs based on which fact mentions a variable first, which decides
     // the FIRST KEY of every Maude variant subst and hence the variants'
     // post-`S.fromList` sort order in HS's `simpDisjunction`.
@@ -590,9 +591,11 @@ pub fn abstract_rule_and_variants(
     // variant has its pure-rename entries dropped as part of the
     // back-conversion (Maude/Process.hs:271 `map (msubstToLSubstVFresh bindings)
     // <$> parseVariantsReply`).  So by the time HS's `variantSubsts`
-    // (RuleVariants.hs:61-134, see line 72) reach BOTH `isFreshRedundant vsubst`
-    // (RuleVariants.hs:61-134, see line 77) AND `composeVFresh vsubst abstractionSubst`
-    // (RuleVariants.hs:61-134, see line 75), each `vsubst` is already removeRenamings'd.
+    // (RuleVariants.hs:61-133, see line 71) reach BOTH `isFreshRedundant vsubst`
+    // (RuleVariants.hs:61-133, see line 76) AND `composeVFresh vsubst
+    // abstractionSubst`
+    // (RuleVariants.hs:61-133, see line 74), each `vsubst` is already
+    // removeRenamings'd.
     //
     // RS's `MaudeHandle::variants` (maude_proc.rs) does NOT apply
     // `remove_renamings` (unlike `MaudeHandle::unify`, which does), so
@@ -756,7 +759,7 @@ pub fn abstract_rule_and_variants(
             // restrictVFresh (frees abstrPsCsAs)
             cleaned.restrict(&abstr_frees)
         })
-        // HS-faithful: `variantsProtoRule` (RuleVariants.hs:87-91) builds the
+        // HS-faithful: `variantsProtoRule` (RuleVariants.hs:72-76) builds the
         // composed `substs` list with NO post-composition renaming filter — the
         // only filter is `not $ isFreshRedundant vsubst` on the RAW Maude variant
         // (applied above as the H20 pass).  Each composed entry is
@@ -785,7 +788,7 @@ pub fn abstract_rule_and_variants(
     // After splitting, `commonSubst` carries `{z := m}` and the rule's
     // action becomes `Verify(m)` again; the SplitG only carries the
     // RESIDUAL disjuncts that differ between variants.
-    // HS-faithful: variantsProtoRule (RuleVariants.hs:61-134, see line 82) calls
+    // HS-faithful: variantsProtoRule (RuleVariants.hs:61-133, see line 81) calls
     // `simpDisjunction hnd ...` with a Maude handle, which routes through
     // `simp1`'s FULL pipeline including `simpSingleton` (EquationStore.hs:411-417, invoked from simp1 at 381).
     // That pass folds a single-variant disj into the free subst — so the
@@ -824,16 +827,17 @@ pub fn abstract_rule_and_variants(
     };
 
     // HS-faithful `variantsProtoRule` disjunction selection
-    // (RuleVariants.hs:88-91):
+    // (RuleVariants.hs:87-90):
     //   (commonSubst, Nothing)        -> makeRule abstrPsCsAs commonSubst trueDisj
     //   (commonSubst, Just freshSubsts) -> makeRule abstrPsCsAs commonSubst freshSubsts
-    // where `trueDisj = [emptySubstVFresh]` (RuleVariants.hs:61-134, see line 120).
+    // where `trueDisj = [emptySubstVFresh]` (RuleVariants.hs:61-133, see line
+    // 119).
     //
     // When `simpDisjunction` collapses the variant disjunction to a single
     // case (`residual == Nothing`), HS does NOT drop the variant disjunction
     // — it keeps `[emptySubstVFresh]`, the trivial-but-present SplitG.  That
     // disjunction is later added by `solveRuleConstraints`
-    // (Reduction.hs:967-979) via `addRuleVariants` → `addDisj`, which bumps
+    // (Reduction.hs:789-797) via `addRuleVariants` → `addDisj`, which bumps
     // `eqsNextSplitId` by 1 at EVERY `labelNodeId` for such a rule even though
     // `simp`'s `simpSingleton` immediately folds the singleton and
     // `removeSolvedSplitGoals` later deletes the orphaned SplitG (the
@@ -847,7 +851,7 @@ pub fn abstract_rule_and_variants(
     // Mirror HS exactly: `Nothing -> trueDisj`, `Just fs -> fs` (the
     // pre-simp `removeRenamings`/`isFreshRedundant` already ran on the
     // composed substs at the `composed_substs` build site, matching
-    // RuleVariants.hs:87-91; no additional post-simp renaming/range filter,
+    // RuleVariants.hs:72-76; no additional post-simp renaming/range filter,
     // which HS does not have).
     let final_substs: Vec<LNSubstVFresh> = match residual {
         // `simpDisjunction` returning `Just fs` with `fs` non-empty is HS's
@@ -966,7 +970,8 @@ fn rule_renames_under_precise(rule: &ProtoRuleE) -> bool {
 /// substs.  Mirrors HS `Precise.evalFresh (renamePrecise x) Precise.nothingUsed`
 /// applied to a `Rule ProtoRuleACInfo` (variants live INSIDE info).
 ///
-/// HS traversal order (Rule.hs:291-306 `HasFrees (Rule i)`; Rule.hs:503-515
+/// HS traversal order (Theory/Model/Rule.hs:291-306 `HasFrees (Rule i)`;
+/// Theory/Model/Rule.hs:503-515
 /// `HasFrees ProtoRuleACInfo`; SubstVFresh.hs:196-202 `HasFrees SubstVFresh`):
 ///
 ///   mapFrees (Rule i ps cs as nvs) =
@@ -1015,7 +1020,8 @@ fn rename_precise_rule_with_variants(
     };
 
     // Phase 1: walk every free LVar in HS's `mapFrees (Rule ProtoRuleACInfo)`
-    // order. ProtoRuleACInfo (Theory/Model/Rule.hs:433-439) walks
+    // order. `HasFrees ProtoRuleACInfo` (Theory/Model/Rule.hs:503-515) walks
+    // the fields in declaration order (Theory/Model/Rule.hs:433-439):
     // name|attr|variants|breakers; name/attr/breakers are empty
     // (RuleAttributes, Theory/Model/Rule.hs:367-379), so effectively variants
     // Disj first (KEYS-ONLY per SubstVFresh.hs:196-202).  THEN prems, concs,
@@ -1224,16 +1230,43 @@ mod tests {
     use crate::fact::{Fact, FactTag};
     use crate::rule::{ProtoRuleEInfo, ProtoRuleName, Rule, RuleAttributes};
 
+    /// The maude the pins below run against, or `None` only when the run has
+    /// explicitly opted out via `TAM_ALLOW_NO_MAUDE=1`.
+    ///
+    /// Resolution order: `$MAUDE_PATH`, the two system prefixes, `$PATH`, then
+    /// the linuxbrew prefix this workspace's benchmark toolchain installs
+    /// into.  Resolving nothing PANICS: returning `None` would skip every
+    /// maude-backed pin here and report green having compared nothing.
     fn maude_path() -> Option<String> {
         if let Ok(p) = std::env::var("MAUDE_PATH") {
             return Some(p);
         }
-        let candidates = ["/usr/local/bin/maude", "/usr/bin/maude", "maude"];
+        let candidates = ["/usr/local/bin/maude", "/usr/bin/maude"];
         for c in &candidates {
             if std::path::Path::new(c).exists() {
                 return Some((*c).to_string());
             }
         }
+        if let Some(dirs) = std::env::var_os("PATH") {
+            if let Some(c) = std::env::split_paths(&dirs)
+                .map(|d| d.join("maude"))
+                .find(|c| c.is_file())
+            {
+                return Some(c.to_string_lossy().into_owned());
+            }
+        }
+        let brew = "/home/linuxbrew/.linuxbrew/bin/maude";
+        if std::path::Path::new(brew).exists() {
+            return Some(brew.to_string());
+        }
+        assert!(
+            std::env::var("TAM_ALLOW_NO_MAUDE").as_deref() == Ok("1"),
+            "no maude found: probed $MAUDE_PATH, /usr/local/bin/maude, \
+             /usr/bin/maude, $PATH and \
+             /home/linuxbrew/.linuxbrew/bin/maude.  Install maude, point \
+             MAUDE_PATH at it, or set TAM_ALLOW_NO_MAUDE=1 to accept \
+             skipping these pins."
+        );
         None
     }
 

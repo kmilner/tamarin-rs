@@ -122,7 +122,7 @@ fn write_gterm(t: &GTerm, out: &mut String) {
         GTerm::Number(n) => out.push_str(&n.to_string()),
         // `fAppOne` = `NoEq oneSym` with `oneSymString = "one"` and
         // `fAppNatOne` = `NoEq natOneSym` with `natOneSymString = "tone"`
-        // (FunctionSymbols.hs:134-134,144). `show (FApp (NoEq (s,_)) [])` = `s`
+        // (FunctionSymbols.hs:226,236,255,267). `show (FApp (NoEq (s,_)) [])` = `s`
         // (Term/Raw.hs:227-237, see line 231), so the two nullary symbols show differently.
         GTerm::NumberOne => out.push_str("one"),
         GTerm::NatOne => out.push_str("tone"),
@@ -320,7 +320,7 @@ fn write_name(n: &Name, out: &mut String) {
 }
 
 // =============================================================================
-// `show FactTag` (derived Show, Fact.hs:132-143) — used by isFactName
+// `show FactTag` (derived Show, Theory/Model/Fact.hs:136-149) — used by isFactName
 // =============================================================================
 
 /// HS derived `show FactTag`.  For `ProtoFact m n a` this is
@@ -643,14 +643,14 @@ mod tests {
     #[test]
     fn show_gterm_nat_one_is_tone() {
         // fAppNatOne = FApp (NoEq natOneSym) [] with natOneSymString = "tone"
-        // (FunctionSymbols.hs:144-144) => `show fAppNatOne == "tone"`.
+        // (FunctionSymbols.hs:236,267) => `show fAppNatOne == "tone"`.
         assert_eq!(show_gterm(&GTerm::NatOne), "tone");
     }
 
     #[test]
     fn show_gterm_number_one_is_one() {
         // fAppOne = FApp (NoEq oneSym) [] with oneSymString = "one"
-        // (FunctionSymbols.hs:134-134) => `show fAppOne == "one"`.
+        // (FunctionSymbols.hs:226,255) => `show fAppOne == "one"`.
         assert_eq!(show_gterm(&GTerm::NumberOne), "one");
     }
 

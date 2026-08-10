@@ -33,3 +33,6 @@ scripts/.wf_*.js
 # Probe scratch files
 crates/tamarin-theory/examples/probe_*.rs
 !scripts/websweep_ledger.tsv
+
+# ripgrep-only ignore rules
+.rgignore

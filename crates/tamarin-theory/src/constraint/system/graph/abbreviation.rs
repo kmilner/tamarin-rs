@@ -244,7 +244,9 @@ fn dump_rule(buf: &mut String, ru: &RuleACInst) {
 }
 
 /// Emit the user-controlled name/role tokens that derived `Show` of a
-/// rule's `_rInfo` exposes (Rule.hs:206-214, 397-400, 517-519): the raw
+/// rule's `_rInfo` exposes (`RuleAttributes`, `ProtoRuleName`,
+/// `ProtoRuleACInstInfo` and `IntrRuleACInfo`, all `deriving Show` —
+/// Theory/Model/Rule.hs:367-379,413-416,444-449,539-553): the raw
 /// `StandRule "<name>"` string, the `role = Just "<role>"` string, and the
 /// intruder `ConstrRule`/`DestrRule "<name>"` byte string.
 fn dump_rule_info(buf: &mut String, info: &RuleInfo<ProtoRuleACInstInfo, IntrRuleACInfo>) {
@@ -379,7 +381,7 @@ fn rendered_term_len(t: &LNTerm) -> usize {
 }
 
 /// HS `prettyLNTerm` = `prettyTerm (text . show)` as a HughesPJ `Doc`
-/// (Term.hs:268-296), built directly on `LNTerm`.
+/// (Term/Term.hs:298-327), built directly on `LNTerm`.
 ///
 /// tamarin-theory has the same Doc under `pretty_formula::term_doc`, reached
 /// through the parser-AST projection `pretty_theory::lnterm_to_parser`; going
@@ -436,7 +438,7 @@ fn lnterm_doc(t: &LNTerm) -> Doc {
     }
 }
 
-/// HS `ppTerms sepa n lead finish ts` (Term.hs:288-290):
+/// HS `ppTerms sepa n lead finish ts` (Term/Term.hs:319-321):
 /// `fcat . (text lead :) . (++[text finish]) . map (nest n)
 ///       . punctuate (text sepa) . map ppTerm`.
 fn pp_terms(sepa: &str, n: isize, lead: &str, finish: &str, ts: Vec<&LNTerm>) -> Doc {
@@ -451,7 +453,7 @@ fn pp_terms(sepa: &str, n: isize, lead: &str, finish: &str, ts: Vec<&LNTerm>) ->
     fcat(all)
 }
 
-/// HS `ppFun f ts` (Term.hs:295-296):
+/// HS `ppFun f ts` (Term/Term.hs:326-327):
 /// `text (f++"(") <> fsep (punctuate comma (map ppTerm ts)) <> text ")"`.
 fn pp_fun(f: &str, ts: &[LNTerm]) -> Doc {
     let docs: Vec<Doc> = ts.iter().map(lnterm_doc).collect();
@@ -460,7 +462,7 @@ fn pp_fun(f: &str, ts: &[LNTerm]) -> Doc {
         .beside(Doc::text(")"))
 }
 
-/// HS `split` (Term.hs:292-293): flatten a right-nested pair spine.
+/// HS `split` (Term/Term.hs:323-324): flatten a right-nested pair spine.
 /// `viewTerm2 -> FPair` requires exactly two arguments AND full `NoEqSym`
 /// equality with `pairSym`.
 fn split_pair<'a>(t: &'a LNTerm, out: &mut Vec<&'a LNTerm>) {
@@ -601,7 +603,7 @@ pub fn compute_abbreviations(repr: &GraphRepr, opts: &AbbreviationOptions) -> Ab
 // Ordering for the legend / JSON export
 // ---------------------------------------------------------------------
 
-/// Mirror Haskell `topoSortAbbrevs` (Dot.hs:421-436 and Dot.hs:484-499).
+/// Mirror Haskell `topoSortAbbrevs` (System/Dot.hs:421-436 and System/Dot.hs:484-499).
 ///
 /// `entries` is the descending-name-sorted list of `(name, expansion)`.
 /// We build a graph with an edge `v -> u` whenever `entries[v].0` is a
@@ -656,7 +658,7 @@ fn topo_sort_abbrevs(entries: &[(&LNTerm, &LNTerm)]) -> Vec<usize> {
     postorder
 }
 
-/// Port of `orderAbbreviationsForJSON` (Dot.hs:417-436).
+/// Port of `orderAbbreviationsForJSON` (System/Dot.hs:417-436).
 ///
 /// `M.toList abbrevs` is the ascending-`LNTerm`-key iteration order of the
 /// [`Abbreviations`] `BTreeMap`; `sortOn (Down . render . prettyLNTerm . fst

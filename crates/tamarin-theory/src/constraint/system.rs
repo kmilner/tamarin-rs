@@ -633,10 +633,10 @@ pub struct GoalStatus {
     /// Whether the goal is already solved (kept for replay).
     pub solved: bool,
     /// Goal creation order (`_gsNr` in HS `GoalStatus`,
-    /// System.hs:370-380, see line 373).  Assigned from `System.next_goal_nr` at first
+    /// System.hs:369-380, see line 372).  Assigned from `System.next_goal_nr` at first
     /// insertion; on re-insertion of an existing goal HS keeps the
     /// `min` (so the original, smaller nr wins — see
-    /// `combineGoalStatus`).  `goalNrRanking` (ProofMethod.hs:593-594
+    /// `combineGoalStatus`).  `goalNrRanking` (ProofMethod.hs:592-593
     /// `sortOn (fst . snd)`) orders goals by this number, NOT by Vec
     /// position.  This is the canonical tie-break within a heuristic
     /// priority class.
@@ -1610,7 +1610,7 @@ impl System {
         // OVERWRITES the stored reason (last-wins). A first-occurrence-wins
         // dedup would keep the wrong reason — e.g. a GenKey→Alice ordering
         // added first by fresh-uniqueness (`Fresh`) then by injective-fact
-        // monotonicity (`InjectiveFacts`, Simplify.hs:761) must end up
+        // monotonicity (`InjectiveFacts`, Simplify.hs:589 in `simpInjectiveFactEqMon`) must end up
         // `InjectiveFacts`, driving the less-edge's graph colour. The reason
         // is metadata for rendering only (read solely by `Dot.hs`/graph
         // simplification); replace in place to preserve iteration order.

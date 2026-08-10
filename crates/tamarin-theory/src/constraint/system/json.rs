@@ -139,7 +139,7 @@ fn show_ac_sym(o: &AcSym) -> String {
 }
 
 /// `show` of an `LNTerm` literal: `instance Show (Lit c v)` (VTerm.hs:98-100)
-/// delegating to `instance Show LVar` (LTerm.hs:548-554) and `instance Show
+/// delegating to `instance Show LVar` (LTerm.hs:550-557) and `instance Show
 /// Name` (LTerm.hs:235-240), both of which are the `Display` impls in
 /// `tamarin_term::pretty`.
 ///
@@ -159,7 +159,7 @@ fn show_lit(l: &Lit<Name, LVar>) -> String {
 fn get_rule_type(ru: &RuleACInst) -> &'static str {
     match &ru.info {
         RuleInfo::Intr(i) => {
-            // HS `isDestrRule` (Rule.hs:694-698) also covers `IEqualityRule`.
+            // HS `isDestrRule` (Theory/Model/Rule.hs:694-698) also covers `IEqualityRule`.
             if is_destr_rule_info(i) || is_iequality_rule_info(i) {
                 "isDestrRule"
             } else if is_constr_rule_info(i)
@@ -302,7 +302,7 @@ fn json_term(t: &LNTerm, outermost: bool) -> Value {
 /// Port of `itemToJSONGraphNodeFact` (JSON.hs:305-319) at `pretty = True`.
 fn json_fact(id: String, f: &LNFact) -> Value {
     // `show (factTag f)` is the DERIVED Show of `FactTag`
-    // (Fact.hs:137-148); the `ProtoFact` constructor never reaches it
+    // (Theory/Model/Fact.hs:137-148); the `ProtoFact` constructor never reaches it
     // because `isProtoFact` short-circuits to the literal "ProtoFact".
     let tag = match f.tag {
         FactTag::Proto(_, _, _) => "ProtoFact",
@@ -434,7 +434,8 @@ fn json_node(node: &GNode, color_map: &NodeColorMap) -> Value {
         ]),
         NodeType::Missing(hint) => {
             // HS ignores the recorded conclusion/premise index and always
-            // emits `c0` / `p0` here (JSON.hs:385).
+            // emits `c0` / `p0` here (the two `MissingNode` branches,
+            // JSON.hs:384-428, and the `a.d. TODO` at line 385 that says so).
             let stub =
                 |port: char| Value::Array(vec![json_stub_fact(format!("{}:{}0", nid, port))]);
             let (ty, concs, prems) = match hint {

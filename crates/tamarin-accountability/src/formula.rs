@@ -7,15 +7,17 @@
 //!
 //! Mirrors HS `Theory.Model.Formula`'s `ProtoFormula syn s c v` specialised to
 //! `SyntacticLNFormula = ProtoFormula SyntacticSugar (String, LSort) Name (BVar LVar)`
-//! (Formula.hs:115-127, 263).  Bound variables are De-Bruijn (`BVar::Bound`),
-//! free variables carry a full `LVar` (`BVar::Free`); the atom/term leaves reuse
-//! `tamarin_theory::guarded_types` (`GAtom`/`GFact`/`GTerm`), whose Free↔Bound
-//! substitution helpers implement HS's `quantify`/open/close discipline.
+//! (Theory/Model/Formula.hs:115-127, 263).  Bound variables are De-Bruijn
+//! (`BVar::Bound`), free variables carry a full `LVar` (`BVar::Free`); the
+//! atom/term leaves reuse `tamarin_theory::guarded_types`
+//! (`GAtom`/`GFact`/`GTerm`), whose Free↔Bound substitution helpers implement
+//! HS's `quantify`/open/close discipline.
 //!
 //! The transforms are `frees`, `quantify`/`forAll`/`exists`, `rename`
-//! (Term/LTerm.hs:638-645), `shiftFreeIndices` (Formula.hs:458-465),
-//! `pullQuantifiers`/`mergeQuantifiers` (Generation.hs:267-300) and
-//! `simplifyFormula` (Formula.hs:379-412), plus the `p::Formula` ↔
+//! (Term/LTerm.hs:638-645), `shiftFreeIndices`
+//! (Theory/Model/Formula.hs:458-465), `pullQuantifiers`/`mergeQuantifiers`
+//! (Generation.hs:267-300) and `simplifyFormula`
+//! (Theory/Model/Formula.hs:379-412), plus the `p::Formula` ↔
 //! locally-nameless converters that let the generated lemmas reuse the parser-AST
 //! rendering and guarded-proving paths.
 
@@ -26,8 +28,8 @@ use tamarin_theory::guarded_types::{
     subst_free_atom_at_depth, BVar, GAtom, GBinding, GFact, GTerm,
 };
 
-// The connective/quantifier enums (HS Formula.hs:107,111) are shared with the
-// ProtoFormula data-type port in `tamarin_theory::formula`.
+// The connective/quantifier enums (HS Theory/Model/Formula.hs:107,111) are
+// shared with the ProtoFormula data-type port in `tamarin_theory::formula`.
 pub(crate) use tamarin_theory::formula::{Connective as Conn, Quantifier as Quant};
 
 /// A `SyntacticLNFormula` in locally-nameless form.
@@ -272,11 +274,11 @@ fn free_bounds(fm: &Fm) -> Option<(u64, u64)> {
 }
 
 // =============================================================================
-// quantify / forAll / exists (Formula.hs:346-360)
+// quantify / forAll / exists (Theory/Model/Formula.hs:346-360)
 // =============================================================================
 
 /// HS `quantify x = mapAtoms (\i a -> ... subst i ...)`: replace free
-/// occurrences of `x` with `Bound(depth)` (Formula.hs:346-352).
+/// occurrences of `x` with `Bound(depth)` (Theory/Model/Formula.hs:346-352).
 fn quantify(x: &p::VarSpec, fm: Fm) -> Fm {
     quantify_at(x, fm, 0)
 }
@@ -346,7 +348,7 @@ fn map_free_fm<F: FnMut(&p::VarSpec) -> p::VarSpec>(fm: &Fm, f: &mut F) -> Fm {
 }
 
 // =============================================================================
-// shiftFreeIndices (Formula.hs:458-465)
+// shiftFreeIndices (Theory/Model/Formula.hs:458-465)
 // =============================================================================
 
 /// HS `shiftFreeIndices n`: at binder-depth `i`, bump every `Bound(j)` with
@@ -547,7 +549,7 @@ fn merge_quantifiers1(quans: &[Quant], fm: Fm) -> Fm {
 }
 
 // =============================================================================
-// simplifyFormula (Formula.hs:379-412)
+// simplifyFormula (Theory/Model/Formula.hs:379-412)
 // =============================================================================
 
 pub(crate) fn simplify_formula(fm: Fm) -> Fm {
@@ -971,8 +973,9 @@ mod tests {
         assert_eq!(frees(&t2)[0].idx, 1); // shift 1 → x.1
     }
 
-    /// `simplifyFormula` collapses `⇒ ⊤` to `⊤` and quantifiers over `⊤`
-    /// to `⊤` — the acc_*_inj single-var case (Formula.hs:391-412, see line 404,411).
+    /// `simplifyFormula` collapses `⇒ ⊤` to `⊤` and quantifiers over `⊤` to
+    /// `⊤` — the acc_*_inj single-var case
+    /// (Theory/Model/Formula.hs:391-412, see line 404,411).
     #[test]
     fn simplify_true_implication_and_quantifier() {
         // ∀ x. (P => ⊤)  ->  ⊤
@@ -990,7 +993,8 @@ mod tests {
     }
 
     /// `simplifyFormula1` rewrites a reflexive equality `t = t` to `⊤`
-    /// (Formula.hs:379-412, see line 392) and leaves a non-reflexive one alone.
+    /// (Theory/Model/Formula.hs:379-412, see line 392) and leaves a
+    /// non-reflexive one alone.
     #[test]
     fn simplify_reflexive_equality() {
         let x = msg_var_idx("x", 0);

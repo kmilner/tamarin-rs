@@ -124,9 +124,9 @@ pub fn extract_base_name(name: &str) -> Option<String> {
 
 /// Return the rule's case-name (e.g. `Setup_1`) for proto-rules, else None.
 /// Mirror of `getRuleNameByNode` (GraphRepr.hs:208-214) which renders
-/// `showRuleCaseName` -> `prettyProtoRuleName` (Rule.hs:1164-1167):
+/// `showRuleCaseName` -> `prettyProtoRuleName` (Theory/Model/Rule.hs:1287-1290):
 /// `StandRule n -> prefixIfReserved n`, `FreshRule -> "Fresh"`.
-/// `prefixIfReserved` (Rule.hs:1154-1162) prepends `_` when the name is a
+/// `prefixIfReserved` (Theory/Model/Rule.hs:1277-1285) prepends `_` when the name is a
 /// reserved rule name or already starts with `_`.  This is plain
 /// `showRuleCaseName`, NOT the SAPiC-trimming `showDotRuleCaseName`.
 pub fn rule_name_by_node(n: &GNode) -> Option<String> {
@@ -404,7 +404,7 @@ pub(crate) fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     // HS `systemLastActionNode se = maybe [] (\nid -> [Node nid LastActionAtom])
     // (get Sys.sLastAtom se)` (Graph.hs:111-112) appends this UNCONDITIONALLY
     // whenever `sLastAtom` is set — it does NOT skip when the id coincides with
-    // a system/unsolved node.  `cacheState` (Dot.hs:108) re-runs each node's
+    // a system/unsolved node.  `cacheState` (System/Dot.hs:106-113) re-runs each node's
     // `dot` action and overwrites `dsNodes[v]`, so both the SystemNode record
     // AND the bare `#i` last-atom ellipse are emitted at the same id (the
     // ellipse ends up as `dsNodes[v]`, which drives less-edge resolution).  The

@@ -8,7 +8,8 @@
 //! `text info $-$ nest 2 (fsep $ punctuate comma cells)` — `unboundCheck`
 //! (Wellformedness.hs:497-498), `reservedFactNameRules'`
 //! (Wellformedness.hs:546) and `specialFactsUsage'` (Wellformedness.hs:563),
-//! whose cells are `prettyLNFact` (Fact.hs:567-572) or `prettyLVar`
+//! whose cells are `prettyLNFact` (Theory/Model/Fact.hs:567-574) or
+//! `prettyLVar`
 //! (`prettyVarList`, TheoryObject.hs:858-859) documents.  So a cell that
 //! overruns the ribbon does not merely get a line of its own: it breaks at its
 //! OWN `sep`/`fsep`/`fcat` points, dropping `prettyLNFact`'s closing `)` onto
@@ -74,7 +75,8 @@ pub fn fill_body(fill: &WfFill) -> String {
 }
 
 /// One [`WfDoc`] skeleton as the HughesPJ `Doc` HS's `prettyTerm` /
-/// `prettyFact` build for it (Term/Term.hs:298-327, Fact.hs:567-572).
+/// `prettyFact` build for it (Term/Term.hs:298-327,
+/// Theory/Model/Fact.hs:567-574).
 fn cell_doc(d: &WfDoc) -> Doc {
     match d {
         WfDoc::Text(s) => Doc::text(s),

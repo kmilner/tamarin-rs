@@ -382,7 +382,7 @@ fn nf_memoized(
 /// `maybe_not_nf_subterms`) — fails the NF check, the system has a
 /// non-normal term.  Constants are in NF; irreducible-headed apps recurse
 /// into their args.  This is the boolean OR of `maybeNonNormalTerms` ∘
-/// `maybeNotNfSubterms` over `nf'` (Norm.hs:130-131, see line 131), but without
+/// `maybeNotNfSubterms` (Norm.hs:165-171) over `nf'` (Norm.hs:132-134), but without
 /// building the `BTreeSet` of every candidate: the OR needs no ordered
 /// candidate list, and [`NfMemo`] carries the dedup.  The check runs
 /// through `nf_via_haskell_maude_with_sig` — HS's `nf'` runs in the
@@ -2551,7 +2551,7 @@ impl SubstNfChecker {
                 continue;
             }
             let restricted = vfresh_subst.restrict(tvars);
-            // HS `freshToFreeAvoidingFast subst tvars` (Substitution.hs:77-81):
+            // HS `freshToFreeAvoidingFast subst tvars` (Term/Substitution.hs:77-81):
             // a PURE uniform-shift rename of the range vars avoiding `tvars`
             // (`rename (map snd l) \`evalFreshAvoiding\` tvars`).  It consumes
             // NO fresh-counter state — the probe subst is local to this

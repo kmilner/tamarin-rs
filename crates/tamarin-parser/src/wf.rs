@@ -151,8 +151,8 @@ pub enum WfDoc {
         items: Vec<WfDoc>,
     },
     /// HS `ppFact n ts = nestShort' (n ++ "(") ")" (fsep (punctuate comma (map
-    /// ppTerm ts)))` (Fact.hs:572), i.e. `sep [text lead $$ nest (length lead +
-    /// 1) body, text ")"]` (Text/PrettyPrint/Class.hs:218-223).
+    /// ppTerm ts)))` (Theory/Model/Fact.hs:572), i.e. `sep [text lead $$ nest
+    /// (length lead + 1) body, text ")"]` (Text/PrettyPrint/Class.hs:218-223).
     Fact { lead: String, args: Vec<WfDoc> },
 }
 
@@ -333,7 +333,7 @@ const AFTER_UNBOUND_EXTRA_TOPICS: &[&str] = &[
 /// Anchor list for the SAPIC `unboundReport` re-splice (HS check index 2):
 /// every topic a LATER check emits.  `unboundReport` is the first entry of
 /// `checkWellformedness`'s list past `checkIfLemmasInTheory`
-/// (Wellformedness.hs:1270-1287), so the boundary set is every topic except
+/// (Wellformedness.hs:1270-1286), so the boundary set is every topic except
 /// its own and those of the checks ahead of it — the `preReport` topics (SAPIC
 /// process warnings, the accountability RP check) and the `--prove`/`--lemma`
 /// argument check.  Their absence is what keeps the re-spliced entries behind
@@ -355,7 +355,7 @@ pub fn after_unbound_topics() -> Vec<&'static str> {
 /// can be compared directly against `tamarin-prover`'s output.
 pub fn check_theory(thy: &Theory) -> WfReport {
     // Mirrors HS `Theory.Tools.Wellformedness.checkWellformedness`
-    // (Wellformedness.hs:1270-1287) and, for diff theories,
+    // (Wellformedness.hs:1270-1286) and, for diff theories,
     // `checkWellformednessDiff` (1248-1265), in HS check order: unbound,
     // freshNames, publicNames, ruleSorts (variable_sort_clashes),
     // factReports, [leftRightRule (diff only)], formulaReports,
@@ -765,7 +765,8 @@ fn fsep_comma_fill(items: &[String]) -> String {
     out
 }
 
-/// HS `prettyLNFact = prettyFact prettyNTerm` (Fact.hs:581-582): the fact's
+/// HS `prettyLNFact = prettyFact prettyNTerm` (Theory/Model/Fact.hs:581-582):
+/// the fact's
 /// `ppFact` skeleton `[!]Name(` … `)` over `prettyTerm`'d arguments.
 fn wf_fact_doc(fa: &Fact, ac: &AcSyms) -> WfDoc {
     let mut lead = String::new();
@@ -874,7 +875,7 @@ fn wf_term_doc(t: &Term, ac: &AcSyms) -> WfDoc {
         Number(n) => leaf(n.to_string()),
         // HS `prettyTerm` renders the nullary builtins via `text (BC.unpack f)`
         // except natOneSym ("%1"): oneSym → "one", dhNeutralSym → "DH_neutral"
-        // (FunctionSymbols.hs:255,257,267; Term.hs:312,314).
+        // (FunctionSymbols.hs:255,257,267; Term/Term.hs:312,314).
         NumberOne => leaf("one".to_string()),
         NatOne => leaf("%1".to_string()),
         DhNeutral => leaf("DH_neutral".to_string()),
@@ -894,9 +895,10 @@ fn wf_term_doc(t: &Term, ac: &AcSyms) -> WfDoc {
             )
         }
         // HS checks `s == natOneSym` BEFORE the generic nullary arm:
-        // `FApp (NoEq s) [] | s == natOneSym -> text "%1"` (Term.hs:312).
+        // `FApp (NoEq s) [] | s == natOneSym -> text "%1"` (Term/Term.hs:312).
         App(name, args) if args.is_empty() && name == "tone" => leaf("%1".to_string()),
-        // HS `FApp (NoEq (f,_)) [] -> text f` (Term.hs:314) — a nullary symbol
+        // HS `FApp (NoEq (f,_)) [] -> text f` (Term/Term.hs:314) — a nullary
+        // symbol
         // has no `ppFun` parentheses at all.
         App(name, args) if args.is_empty() => leaf(name.clone()),
         App(name, args) => WfDoc::Fun(
@@ -907,7 +909,7 @@ fn wf_term_doc(t: &Term, ac: &AcSyms) -> WfDoc {
         AlgApp(name, l, r) => {
             WfDoc::Fun(name.clone(), vec![wf_term_doc(l, ac), wf_term_doc(r, ac)])
         }
-        // HS `prettyTerm`'s diff arm (Term.hs:311) joins with `<>`, not the
+        // HS `prettyTerm`'s diff arm (Term/Term.hs:311) joins with `<>`, not the
         // breakable `fsep` `ppFun` uses.
         Diff(l, r) => WfDoc::Beside(vec![
             WfDoc::Text("diff(".to_string()),
@@ -1015,7 +1017,8 @@ fn subst_let_term(t: &Term, key: &Term, val: &Term) -> Term {
 /// symbol of the full signature therefore resolves to the `NoEq` symbol and
 /// is NOT in this set; only the remaining `[AC]` names build
 /// `FAPP (AC (ACfct …))` from the prefix spelling.  (The INFIX spelling is
-/// always the AC symbol — HS `acterm`, Term.hs:165-174 — which the AST
+/// always the AC symbol — HS `acterm`, Theory/Text/Parser/Term.hs:165-172 —
+/// which the AST
 /// records as [`BinOp::AcFct`], classified by shape, not via this set.)
 /// The parser AST has no signature, so the wellformedness printers
 /// reconstruct the set from the theory's own `functions:` and `builtins:`
@@ -1115,7 +1118,7 @@ fn flatten_ac<'a>(head: (u8, &str, usize), t: &'a Term, out: &mut Vec<&'a Term>,
 ///
 /// HS-faithful class order (Term/Term/Raw.hs:72-74, VTerm.hs:56-57):
 /// `LIT _ < FAPP _ _`, and within `LIT`, `Con < Var`, with constant Names
-/// ordered by NameTag (Fresh < Pub < Nat, LTerm.hs:215-216).  The nullary
+/// ordered by NameTag (Fresh < Pub < Nat, LTerm.hs:218-220).  The nullary
 /// builtins `1`/`%1`/`DH-neutral` are `fAppNoEq … []` so they live in the
 /// FAPP class.
 ///
@@ -1172,7 +1175,7 @@ fn cmp_wf_term(a: &Term, b: &Term, ac: &AcSyms) -> std::cmp::Ordering {
             let Var(v2) = b else {
                 unreachable!("term class matched Var")
             };
-            // HS Ord LVar = (idx, sort, name) (LTerm.hs:521-523).
+            // HS Ord LVar = (idx, sort, name) (LTerm.hs:545-548).
             v1.idx
                 .cmp(&v2.idx)
                 .then_with(|| sort_tag(&v1.sort).cmp(&sort_tag(&v2.sort)))
@@ -1209,7 +1212,7 @@ fn cmp_wf_term(a: &Term, b: &Term, ac: &AcSyms) -> std::cmp::Ordering {
 /// `(class, sub_tag)` for a parser term: class 0 is HS's `LIT`, class 1 its
 /// `FAPP` (`LIT _ < FAPP _ _`, Term/Term/Raw.hs:72-74).  The sub-tag orders
 /// the LIT class only — `Con < Var` (VTerm.hs:56-57) and, among constants, by
-/// `NameTag` (Fresh < Pub < Nat, LTerm.hs:215-216).  FAPP terms are ordered by
+/// `NameTag` (Fresh < Pub < Nat, LTerm.hs:218-220).  FAPP terms are ordered by
 /// [`wf_funsym_key`], so their sub-tag is never consulted.
 fn wf_term_class(t: &Term, ac: &AcSyms) -> (u8, u8) {
     use Term::*;
@@ -1328,7 +1331,7 @@ fn cmp_term_lists<T: std::borrow::Borrow<Term>>(
     a.len().cmp(&b.len())
 }
 
-/// HS LSort declaration order (Term/LTerm.hs:161-166):
+/// HS LSort declaration order (Term/LTerm.hs:165-170):
 /// Pub < Fresh < Msg < Node < Nat.
 fn sort_tag(s: &SortHint) -> u8 {
     use SortHint::*;
@@ -1420,7 +1423,8 @@ pub fn reserved_report(thy: &Theory) -> WfReport {
 
 // HS `reservedFactNameRules'` (Wellformedness.hs:530-541) flags facts whose
 // tag is `KUFact`/`KDFact` or which satisfy `isKLogFact` (a `ProtoFact "K"`,
-// Fact.hs:319-320).  `Ded(..)` parses to tag `DedFact` (Fact.hs:285-286), which
+// Theory/Model/Fact.hs:348-350).  `Ded(..)` parses to tag `DedFact`
+// (`dedLogFact`, Theory/Model/Fact.hs:305-308), which
 // is in NONE of those sets, so it must NOT appear here.
 const KLOG_NAMES: &[&str] = &["KU", "KD", "K"];
 
@@ -1651,7 +1655,7 @@ fn collect_fact_observations(thy: &Theory) -> Vec<FactObservation> {
     out
 }
 
-/// HS `theoryFacts`'s LemmaItem branch (Wellformedness.hs:605-607):
+/// HS `theoryFacts`'s LemmaItem branch (Wellformedness.hs:602-605):
 ///   `(,) ("Lemma " ++ quote (get lName l)) $ do
 ///        fa <- formulaFacts (get lFormula l); return (text (show fa), factInfo fa)`
 /// i.e. every Action-atom fact in the lemma formula, rendered as the Haskell
@@ -1719,7 +1723,8 @@ fn collect_formula_facts<'a>(
 /// `v` is free.
 ///
 /// HS binds a use to its binder by full `LVar` equality — name AND sort AND
-/// idx (`quantify x = … | v == x = Bound i`, Formula.hs:347-351;
+/// idx (`quantify x = … | v == x = Bound i`,
+/// Theory/Model/Formula.hs:347-351;
 /// `Eq LVar`, LTerm.hs:541-542).
 fn db_index(v: &VarSpec, binders: &[&VarSpec]) -> Option<usize> {
     binders.iter().enumerate().rev().find_map(|(pos, b)| {
@@ -1743,7 +1748,8 @@ fn db_term_class(t: &Term, binders: &[&VarSpec], ac: &AcSyms) -> (u8, u8) {
 ///
 /// The lemma-formula terms HS sorts are `VTerm Name (BVar LVar)`, not
 /// `LNTerm`: `quantify` rewrites a free variable to `Bound i` through
-/// `mapLits` (Formula.hs:288-291,347-351), which rebuilds every node with
+/// `mapLits` (Theory/Model/Formula.hs:288-291,347-351), which rebuilds every
+/// node with
 /// `fApp` and so re-sorts it, and the outermost binder's pass runs last over
 /// the fully-bound term.  So the operand order is the one `Bound _ < Free _`
 /// induces, NOT the `LVar` order [`cmp_wf_term`] uses.
@@ -1867,7 +1873,7 @@ fn show_debruijn_term(t: &Term, binders: &[&VarSpec], ac: &AcSyms) -> String {
     }
 }
 
-/// HS `show (Fact {...})` (derived Show, Fact.hs:153-158):
+/// HS `show (Fact {...})` (derived Show, Theory/Model/Fact.hs:157-163):
 /// `Fact {factTag = ProtoFact <Mult> "<name>" <arity>, factAnnotations =
 /// fromList [], factTerms = [<terms>]}`.
 fn show_debruijn_fact(fa: &Fact, dbterms: &[String]) -> String {
@@ -2015,8 +2021,9 @@ where
 /// `isProtoFact` for parser facts: every user fact (including the
 /// reserved-named `K`, which HS parses as `ProtoFact "K"`) EXCEPT the
 /// truly-special fact tags (`Fr`/`In`/`Out`/`KU`/`KD`/`Ded`/`Term`).
-/// Mirrors HS `isProtoFact` (Fact.hs:311-313) — note `K` is a ProtoFact
-/// (`isKLogFact = isProtoFact && name=="K"`, Fact.hs:322).
+/// Mirrors HS `isProtoFact` (Theory/Model/Fact.hs:338-341) — note `K` is a
+/// ProtoFact (`isKLogFact = isProtoFact && name=="K"`,
+/// Theory/Model/Fact.hs:348-350).
 fn is_proto_fact_name(name: &str) -> bool {
     !matches!(name, "Fr" | "In" | "Out" | "KU" | "KD" | "Ded" | "Term")
 }
@@ -2148,7 +2155,7 @@ pub fn fresh_names_report(thy: &Theory) -> WfReport {
     //         constants are not allowed:") : punctuate comma (map (show) names)
     // where `quote cs = '`' : cs ++ "'"` (Wellformedness.hs:164-165, see line 165) and the fresh
     // names render via `show (Name FreshName n) = "~'" ++ n ++ "'"`
-    // (LTerm.hs:231-235, see line 232).  Topic is "Fresh public constants"; the umbrella renderer
+    // (LTerm.hs:235-240, see line 236).  Topic is "Fresh public constants"; the umbrella renderer
     // emits the underlineTopic header once and 2-space-nests the bodies
     // (separated by a `  ` blank line) — we bake that whole block into a single
     // WfError so the default `format_wf_block` path reproduces the exact bytes.
@@ -2670,7 +2677,8 @@ pub fn subterm_convergence_report(thy: &Theory) -> WfReport {
     // HS guards the WHOLE check on `not (isUserMarkedConvergent thy)`
     // (Wellformedness.hs:1270-1286, see line 1285), where `isUserMarkedConvergent thy =
     // eqConvergent (sig thy)` (1211-1212).  The parser sets `eqConvergent =
-    // convergent` on EVERY `equations` block (Signature.hs:217-234, see line 227) — LAST-WRITE-
+    // convergent` on EVERY `equations` block
+    // (Theory/Text/Parser/Signature.hs:232-243, see line 242) — LAST-WRITE-
     // WINS, not "any block convergent".  Mirror by reading the `convergent`
     // flag of the LAST `equations` item; if it is set, suppress the entire
     // report.  (Probed: `[convergent]` block last => suppressed; `[convergent]`
@@ -2776,10 +2784,10 @@ fn pp_term_for_wf(t: &Term, ac: &AcSyms) -> String {
 }
 
 fn is_subterm_convergent(lhs: &Term, rhs: &Term, nullary_funs: &BTreeSet<String>) -> bool {
-    // HS `isSubtermConvergentCtxtRule` (SubtermRule.hs:107-114):
+    // HS `isSubtermConvergentCtxtRule` (SubtermRule.hs:108-112):
     //   | isConstant rhs = True
     //   | otherwise      = not (null (findSubterm lhs rhs))
-    // where `isConstant term = null (frees term)` (SubtermRule.hs:113-114) —
+    // where `isConstant term = null (frees term)` (SubtermRule.hs:114-116) —
     // i.e. ANY variable-free (ground) RHS is accepted, not just a fixed set
     // of reserved names (e.g. `f(x) = 'c'`, `f(x) = g('a','b')`, or a user
     // `c/0` constant), where `frees` collects only `LVar`s.
@@ -2821,7 +2829,7 @@ fn rhs_is_ground(t: &Term, nullary_funs: &BTreeSet<String>) -> bool {
 /// for the purposes of subterm-convergence and free-variable checks.
 ///
 /// These mirror the builtin nullary `NoEq` symbols HS resolves via
-/// `nullaryApp` against `funSyms maudeSig` (Parser/Term.hs:143-148):
+/// `nullaryApp` against `funSyms maudeSig` (Parser/Term.hs:158-163):
 /// `trueSym = ("true",..)` (Builtin/Signature.hs:43-44, see line 44), and
 /// `zeroSym`/`oneSym`/`dhNeutralSym` (FunctionSymbols.hs).  There is no
 /// builtin `True`, so a genuine variable literally named `True` must NOT
@@ -3067,7 +3075,7 @@ fn is_nat_one(t: &Term) -> bool {
 
 /// Faithful port of HS `notOnlyNat` (Wellformedness.hs:296-300): the inner
 /// recursion under `%+`.  Accepts `NatOne` and genuine nat-sorted *variables*
-/// (`isNatVar`, LTerm.hs:327-329); recurses through nested `%+`; flags
+/// (`isNatVar`, LTerm.hs:333-335); recurses through nested `%+`; flags
 /// everything else (including untagged/msg/pub vars and nat *literals* like
 /// `%'a'`, which are `Con` names, not vars — matching HS's `isNatVar`, which
 /// is true only for `Lit (Var v)` with `lvarSort v == LSortNat`).

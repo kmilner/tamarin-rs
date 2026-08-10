@@ -300,7 +300,7 @@ fn filled_entries_carry_their_cells_for_the_layout_engine() {
 }
 
 /// HS `ppFact n ts = nestShort' (n ++ "(") ")" (fsep …)`
-/// (Fact.hs:567-572) = `sep [text lead $$ nest n body, text ")"]`
+/// (Model/Fact.hs:567-572) = `sep [text lead $$ nest n body, text ")"]`
 /// (Text/PrettyPrint/Class.hs:218-223).  With NO arguments the `$$` has
 /// nothing to overlap onto the lead's line, so only the `sep` space
 /// survives — the oracle
@@ -516,7 +516,7 @@ fn wf_lemma_fact_show_form_nests_pairs_right() {
 ///
 /// The sort key is the POST-De-Bruijn `Ord`: `quantify`'s `mapLits`
 /// rebuilds every node with `fApp` after substituting `Bound i`
-/// (Formula.hs:288-291,347-351), so `Bound` precedes `Free` and `Bound i`
+/// (Model/Formula.hs:288-291,347-352), so `Bound` precedes `Free` and `Bound i`
 /// orders by `i` — the reverse of the source order of the binders.  Every
 /// expected string is byte-pinned to the pinned oracle (ef3f0468).
 #[test]

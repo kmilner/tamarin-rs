@@ -169,7 +169,7 @@ impl ProofState {
         let _user_funs_guard = tamarin_theory::elaborate::set_user_funs_from_collected(&user_funs);
         let mut typed =
             elaborate(parser_theory).map_err(|e| format!("elaborate: {}", e.message))?;
-        // Oracle-path base (HS Parser.hs:309): a `heuristic: o "./oracle-…"`
+        // Oracle-path base (HS Theory/Text/Parser.hs:309): a `heuristic: o "./oracle-…"`
         // resolves against the theory file's directory
         // (`hs_take_directory(in_file)` in prove.rs), both in the session
         // built below and in raw-solve replay rankings.
@@ -197,8 +197,8 @@ impl ProofState {
             .filter_map(|r| formula_to_guarded(&r.formula).ok())
             .collect();
         // --- Close-time skeleton replay (HS `checkAndExtendProver
-        // (sorryProver Nothing)`, Proof.hs:624-630 → `checkProof`,
-        // Proof.hs:447-467). ---------------------------------------------
+        // (sorryProver Nothing)`, Theory/Proof.hs:624-630 → `checkProof`,
+        // Theory/Proof.hs:447-467). ---------------------------------------
         // A theory that ships WITH in-file proof scripts must show the
         // CHECKED script on load, not a bare `by sorry`: HS re-executes
         // each stored method against the start system at theory-close
@@ -374,7 +374,7 @@ impl ProofState {
                 TraceQuantifier::ExistsTrace => tamarin_parser::ast::TraceQuantifier::ExistsTrace,
             };
             // HS `getProofContext` / `lemmaSourceKind` (ClosedTheory.hs:97-138, see line 116,
-            // Lemma.hs:38-41): a `sources` lemma is proved under RAW sources;
+            // lib/theory/src/Lemma.hs:38-41): a `sources` lemma is proved under RAW sources;
             // every other lemma under REFINED sources.  `mkSystem` builds the
             // initial system with `pcSourceKind ctxt` (CloseRule.hs:167-176,
             // see line 175), and
@@ -413,7 +413,7 @@ impl ProofState {
             sys.insert_lemmas(reuse);
             // Root method is the unproven `sorry` (no reason) until the
             // user (or autoprover) applies a method.  Mirrors HS
-            // `unproven = sorry Nothing` (Proof.hs:255-256), which
+            // `unproven = sorry Nothing` (Theory/Proof.hs:255-256), which
             // `prettyProofMethod` renders as a plain `sorry`.
             let root = ProofNode {
                 method: ProofMethod::Sorry(None),
@@ -1290,20 +1290,51 @@ fn goal_summary(g: &Goal) -> String {
 mod tests {
     use super::*;
 
+    /// Absolute maude locations probed when `MAUDE_PATH` is unset.
+    const MAUDE_CANDIDATES: [&str; 4] = [
+        "/usr/local/bin/maude",
+        "/opt/homebrew/bin/maude",
+        "/usr/bin/maude",
+        "/home/linuxbrew/.linuxbrew/bin/maude",
+    ];
+
+    /// The maude the maude-backed tests in this module run against.
+    ///
+    /// Resolution order: `$MAUDE_PATH`, then [`MAUDE_CANDIDATES`], then a
+    /// `$PATH` walk.  Resolving nothing is a MISCONFIGURATION, not a reason
+    /// to skip: a silent `None` makes every maude-backed test here report
+    /// green having built nothing.  Panic instead, unless
+    /// `TAM_ALLOW_NO_MAUDE=1` explicitly asks for the silent skip.
     fn maude_path() -> Option<String> {
         if let Ok(p) = std::env::var("MAUDE_PATH") {
+            assert!(
+                std::path::Path::new(&p).exists(),
+                "MAUDE_PATH={p} does not exist; unset it to fall back to \
+                 {MAUDE_CANDIDATES:?}, or point it at a real maude"
+            );
             return Some(p);
         }
-        for c in [
-            "/usr/local/bin/maude",
-            "/opt/homebrew/bin/maude",
-            "/usr/bin/maude",
-            "maude",
-        ] {
-            if std::path::Path::new(c).exists() {
-                return Some(c.to_string());
+        if let Some(c) = MAUDE_CANDIDATES
+            .iter()
+            .find(|c| std::path::Path::new(c).exists())
+        {
+            return Some((*c).to_string());
+        }
+        if let Some(path) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&path) {
+                let cand = dir.join("maude");
+                if cand.exists() {
+                    return Some(cand.to_string_lossy().into_owned());
+                }
             }
         }
+        assert_eq!(
+            std::env::var("TAM_ALLOW_NO_MAUDE").as_deref(),
+            Ok("1"),
+            "no maude found: set MAUDE_PATH, put maude on $PATH, or set \
+             TAM_ALLOW_NO_MAUDE=1 to skip the maude-backed tests here — \
+             skipping silently would report green having run nothing"
+        );
         None
     }
 
@@ -1395,7 +1426,7 @@ end
 
     #[test]
     fn sorry_method_label_has_no_initial_comment() {
-        // HS `unproven = sorry Nothing` (Proof.hs:255-256) renders via
+        // HS `unproven = sorry Nothing` (Theory/Proof.hs:255-256) renders via
         // `prettyProofMethod (Sorry Nothing)` (ProofMethod.hs:1179-1180)
         // as a plain `sorry` (no `/* ... */` reason).  Confirmed against
         // the repo HS prover: an unproven lemma prints `by sorry`.
@@ -1409,7 +1440,8 @@ end
     fn empty_disj_goal_summary_has_space() {
         use tamarin_theory::constraint::constraints::{Disj, Goal};
         // HS `prettyGoal (DisjG (Disj [])) = text "Disj" <-> operator_ "(⊥)"`
-        // (Constraints.hs:273-288, see line 281).  `<->` = HughesPJ `<+>` (Class.hs:172-187, see line 176),
+        // (Constraints.hs:273-288, see line 281).  `<->` = HughesPJ `<+>`
+        // (Text/PrettyPrint/Class.hs:172-187, see line 176),
         // which inserts a single space: `Disj (⊥)`.
         assert_eq!(goal_summary(&Goal::Disj(Disj(vec![]))), "Disj (\u{22A5})");
     }

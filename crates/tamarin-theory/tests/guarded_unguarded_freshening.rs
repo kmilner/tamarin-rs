@@ -7,7 +7,8 @@
 //! `formulaToGuarded` runs the whole conversion inside a `Precise.FreshT`
 //! seeded with `avoidPrecise fmOrig` (Guarded.hs:472-474).  Every quantifier
 //! prefix it opens draws its binders through `freshLVar`
-//! (Formula.hs:296-310), and `noUnguardedVars` (Guarded.hs:506-512) reports
+//! (Theory/Model/Formula.hs:296-309), and `noUnguardedVars`
+//! (Guarded.hs:506-512) reports
 //! the survivors under those FRESHENED names.  So the reported index depends
 //! on state threaded across the entire formula — the free variables that
 //! seeded it, and every binder of the same name opened earlier, whether
@@ -77,7 +78,8 @@ end
 }
 
 /// `avoidPrecise` seeds `name -> maxIdx+1` over the FREE variables
-/// (LTerm.hs:706-715): a free `x.3` puts the supply at 4 before conversion
+/// (LTerm.hs:706-709, 714-715): a free `x.3` puts the supply at 4 before
+/// conversion
 /// starts.
 #[test]
 fn free_variable_seeds_the_supply() {
@@ -113,7 +115,8 @@ end
 }
 
 /// Which occurrences a binder captures is decided at full `Eq LVar`
-/// (`quantify`, Formula.hs:347-351), so under `∀ x` the occurrence `x.1`
+/// (`quantify`, Theory/Model/Formula.hs:347-352), so under `∀ x` the
+/// occurrence `x.1`
 /// stays FREE and seeds the supply to 2 — the left conjunct then takes 2 and
 /// the failing prefix reports 3.
 #[test]

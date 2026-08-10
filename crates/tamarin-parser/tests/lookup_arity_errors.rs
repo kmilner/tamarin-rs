@@ -67,7 +67,7 @@ fn use_before_declaration_is_a_parse_error() {
 }
 
 /// A nullary symbol applied to arguments fails the arity check; the name is
-/// then claimed by `nullaryApp`'s `symbol` (Term.hs:158-163), which leaves NO
+/// then claimed by `nullaryApp`'s `symbol` (Parser/Term.hs:158-163), which leaves NO
 /// identifier hangovers — only the fact-argument labels remain.
 #[test]
 fn nullary_applied_with_args_has_no_identifier_hangover() {
@@ -130,7 +130,7 @@ fn whitespace_before_paren_drops_letter_or_digit() {
 }
 
 /// `em` is ALWAYS in `lookupArity`'s list at arity 2 (appended after the
-/// macro names, Term.hs:65); under bilinear-pairing a 3-argument use fails
+/// macro names, Parser/Term.hs:65); under bilinear-pairing a 3-argument use fails
 /// the arity check and the DH operator labels (`^`, `*` — BP forces
 /// `enableDH`) join the frame.
 #[test]
@@ -144,7 +144,7 @@ fn em_wrong_arity_under_bp_shows_dh_operator_labels() {
 
 /// A declared `[AC]` symbol adds its own infix-operator label between the
 /// variable hangovers and the fact-argument labels (`acterm`'s per-symbol
-/// `chainl1` level, Term.hs:165-172).
+/// `chainl1` level, Parser/Term.hs:165-172).
 #[test]
 fn user_ac_symbol_label_joins_the_frame() {
     let src =
@@ -156,7 +156,7 @@ fn user_ac_symbol_label_joins_the_frame() {
 }
 
 /// `builtins: xor` opens the `XOR`/`⊕` chain level; both spellings' labels
-/// appear (Term.hs:187-192, Token.hs:554-556).
+/// appear (Parser/Term.hs:187-192, Token.hs:554-556).
 #[test]
 fn xor_operator_labels_join_the_frame() {
     let src = "theory T\nbegin\n\nbuiltins: xor\n\nrule r:\n  [ ] --> [ Out(k('a')) ]\n\nend\n";
@@ -166,7 +166,7 @@ fn xor_operator_labels_join_the_frame() {
     );
 }
 
-/// `builtins: multiset` opens the `++`/`+` union level (Term.hs:195-200,
+/// `builtins: multiset` opens the `++`/`+` union level (Parser/Term.hs:195-200,
 /// Token.hs:550-552).
 #[test]
 fn multiset_operator_labels_join_the_frame() {
@@ -178,7 +178,7 @@ fn multiset_operator_labels_join_the_frame() {
     );
 }
 
-/// `builtins: natural-numbers` opens the `%+` level (Term.hs:203-208).
+/// `builtins: natural-numbers` opens the `%+` level (Parser/Term.hs:203-208).
 #[test]
 fn nat_operator_label_joins_the_frame() {
     let src = "theory T\nbegin\n\nbuiltins: natural-numbers\n\nrule r:\n  [ ] --> [ Out(k('a')) ]\n\nend\n";
@@ -210,7 +210,7 @@ fn grouping_parens_frame_has_no_comma() {
     );
 }
 
-/// `op{t1}t2` (`binaryAlgApp`, Term.hs:109-121) requires arity 2; a `g/3`
+/// `op{t1}t2` (`binaryAlgApp`, Parser/Term.hs:109-121) requires arity 2; a `g/3`
 /// head backtracks the same way and the frame sits at the `{`.
 #[test]
 fn algapp_arity_mismatch_backtracks() {
@@ -223,7 +223,7 @@ fn algapp_arity_mismatch_backtracks() {
 
 // ---------------------------------------------------------------------------
 // Formula contexts: `blatom`'s un-try'd node-equality alternative
-// (Formula.hs:57) consumes the atom's leading identifier as a `nodevar` and
+// (Parser/Formula.hs:56) consumes the atom's leading identifier as a `nodevar` and
 // its `opEqual` failure right after it is THE reported error.
 // ---------------------------------------------------------------------------
 
@@ -315,7 +315,7 @@ fn equation_arity_mismatch_frame() {
 }
 
 /// A reserved builtin name in an equation is a GHC `error`, not a parsec
-/// failure (Term.hs:90-92): the exception escapes every `try` and carries
+/// failure (Parser/Term.hs:90-92): the exception escapes every `try` and carries
 /// the `HasCallStack` frame of `naryOpApp`'s call site.
 #[test]
 fn equation_reserved_builtin_is_a_ghc_error() {

@@ -278,7 +278,7 @@ pub fn destruction_rules(
     out
 }
 
-/// `showFunSymName` (Term.hs:286-296) — the plain-name rendering used for
+/// `showFunSymName` (Term/Term.hs:286-296) — the plain-name rendering used for
 /// intruder rule names and case names: user symbols print their own name; the
 /// builtin AC/C operators print their `*SymString` names.  Note `Union`
 /// renders as HS's `munSymString` ("mun"), NOT `unionSymString` ("union") —
@@ -446,7 +446,7 @@ fn private_constructor_rules(
 /// `unifyRaw` (Term/Unification.hs:288-306) inspects them.  AC/C
 /// applications with fewer than two arguments are [`TermShape::Opaque`]:
 /// HS states "we assume here that terms of the form mult(t) never occur"
-/// (Term/Unification.hs:299), so their unification behaviour is unpinned
+/// (Term/Unification.hs:299-301), so their unification behaviour is unpinned
 /// and no reject may rest on them.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TermShape {
@@ -492,7 +492,7 @@ impl TermShape {
         }
     }
 
-    /// No substitution `σ` that `isRenamingPerRule` (Rule.hs:1163, 1188)
+    /// No substitution `σ` that `isRenamingPerRule` (Theory/Model/Rule.hs:1163,1188)
     /// accepts can equate two terms of these shapes, so an equation between
     /// them forces the enclosing check to `False`.
     ///
@@ -535,7 +535,7 @@ struct FactShape {
 impl FactShape {
     /// Some zipped term pair of the two facts cannot be equated.  The zip
     /// truncates, mirroring HS `matchFacts`' `zipWith Equal t1 t2`
-    /// (Rule.hs:1168-1169).
+    /// (Theory/Model/Rule.hs:1168-1169).
     fn clashes_with(&self, other: &FactShape) -> bool {
         self.terms
             .iter()
@@ -563,8 +563,8 @@ impl FactShape {
 /// Every reject is a necessary condition of the check it guards: a pair the
 /// fingerprints reject is one on which
 /// [`equal_duplicate_rule_up_to_renaming`] (HS `equalDuplicateRuleUpToRenaming`,
-/// Rule.hs:1178-1179) resp. [`equal_subset_rule_up_to_renaming`] (HS
-/// `equalSubsetRuleUpToRenaming`, Rule.hs:1182-1198) provably answers
+/// Theory/Model/Rule.hs:1178-1179) resp. [`equal_subset_rule_up_to_renaming`] (HS
+/// `equalSubsetRuleUpToRenaming`, Theory/Model/Rule.hs:1182-1198) provably answers
 /// `False`, so the survivor set and its order are exactly those of the
 /// unguarded loop.  The three shape facts the rejects rest on are:
 ///  1. HS `unifyRaw` (Term/Unification.hs:288-306) fails on a top-symbol
@@ -601,9 +601,9 @@ impl RuleFingerprint {
     /// Necessary condition for `equal_duplicate_rule_up_to_renaming(r1, r2)`,
     /// with `self` the fingerprint of `r1` and `other` that of `r2`.
     ///
-    /// `renameAvoiding` (Rule.hs:1179) only renames variables, so `r2`'s
+    /// `renameAvoiding` (Theory/Model/Rule.hs:1179) only renames variables, so `r2`'s
     /// fingerprint describes the renamed-apart rule too.  HS
-    /// `equalRuleUpToRenamingIgnoringNames` (Rule.hs:1157-1170) folds
+    /// `equalRuleUpToRenamingIgnoringNames` (Theory/Model/Rule.hs:1157-1169) folds
     /// `matchFacts` over `zip (pr1++co1++ac1) (pr2++co2++ac2)`, failing on a
     /// fact-tag mismatch and otherwise extending the equation set by
     /// `zipWith Equal t1 t2`; both zips truncate, and so do these.
@@ -616,7 +616,8 @@ impl RuleFingerprint {
 
     /// Necessary condition for `equal_subset_rule_up_to_renaming(r1, r2)`,
     /// with `self` the fingerprint of `r1` and `other` that of `r2`.  Two
-    /// parts, mirroring HS `equalSubsetRuleUpToRenaming` (Rule.hs:1182-1198):
+    /// parts, mirroring HS `equalSubsetRuleUpToRenaming`
+    /// (Theory/Model/Rule.hs:1182-1198):
     ///  * `unifyLNFactEqs [Equal (head co2) (head co1)]` is empty — HS's
     ///    `[] -> False` — unless both rules have a conclusion, their tags and
     ///    term counts agree and their zipped terms do not clash;
@@ -678,7 +679,7 @@ impl RuleFingerprint {
 /// [`special_intruder_rules`], is never routed through here.
 ///
 /// Stage 1's subsumption arm depends on it: HS `equalSubsetRuleUpToRenaming`
-/// forces `head co2` / `head co1` (Rule.hs:1184) and so `error`s on a
+/// forces `head co2` / `head co1` (Theory/Model/Rule.hs:1184) and so `error`s on a
 /// conclusion-free rule, whereas [`equal_subset_rule_up_to_renaming`] returns
 /// `false` there — which reads as "not subsumed" and silently keeps a rule HS
 /// would have refused to process.  The `debug_assert!` below makes that state
@@ -1080,7 +1081,7 @@ pub fn construction_rules(
 // rules therefore arrive at the rule cache fully processed.
 // =============================================================================
 
-/// `isPrivateFunction` (Term.hs:203-205): top-level function symbol is Private.
+/// `isPrivateFunction` (Term/Term.hs:224-226): top-level function symbol is Private.
 pub fn is_private_function(t: &LNTerm) -> bool {
     use tamarin_term::function_symbols::{NoEqSym, Privacy};
     use tamarin_term::term::Term;

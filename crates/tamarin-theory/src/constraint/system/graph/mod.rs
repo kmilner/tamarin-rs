@@ -50,14 +50,14 @@ pub struct Graph<'a> {
     /// HS `_gSystem`: the ORIGINAL, un-compressed/un-simplified system handed
     /// to [`system_to_graph`].  `resolveNodePremFact`/`resolveNodeConcFact`
     /// (Graph.hs:87-96) look facts up in it, so BOTH renderers type and colour
-    /// an edge from this system's rules — `dotEdge`'s `check` (Dot.hs:391-392)
+    /// an edge from this system's rules — `dotEdge`'s `check` (System/Dot.hs:391-392)
     /// and `getRelationType`/`colorEdge` (JSON.hs:434-435/452-453) — even for an
     /// endpoint the compression hid.
     pub system: &'a System,
     /// The compressed/simplified copy [`Graph::repr`] was computed from.  These
     /// nodes decide ONLY the record PORT an edge endpoint renders as, matching
     /// the `dsConcs`/`dsPrems` state HS fills while emitting the repr's nodes
-    /// (Dot.hs:264-268) and reads back in `dotGenEdge` (Dot.hs:403-406).
+    /// (System/Dot.hs:264-268) and reads back in `dotGenEdge` (System/Dot.hs:403-406).
     pub simplified: RenderSystem,
     /// HS `_gRepr`.
     pub repr: GraphRepr,
@@ -68,8 +68,8 @@ pub struct Graph<'a> {
 /// Port of `systemToGraph` (Graph.hs:153-165).
 ///
 /// Abbreviations are computed unconditionally: `goAbbreviate` gates only their
-/// APPLICATION — in the DOT renderer at `renderLNFact` (Dot.hs:228-236) and at
-/// `when abbreviate generateLegend` (Dot.hs:538), and not at all in the JSON
+/// APPLICATION — in the DOT renderer at `renderLNFact` (System/Dot.hs:228-236) and at
+/// `when abbreviate generateLegend` (System/Dot.hs:538), and not at all in the JSON
 /// export, which lists them verbatim while leaving node terms unabbreviated
 /// (the frontend performs the substitution).
 pub fn system_to_graph<'a>(sys: &'a System, options: &GraphOptions) -> Graph<'a> {

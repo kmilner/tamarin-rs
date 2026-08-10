@@ -6,7 +6,7 @@
 //!
 //! Port of the layout algorithm from
 //! `Text.PrettyPrint.HughesPJ` (pretty-1.1.3.6) — the non-annotated
-//! module used in production (HS `Class.hs:64-67, see line 67`/`:72`).
+//! module used in production (HS `Text/PrettyPrint/Class.hs:64-67, see line 67`/`:72`).
 //!
 //! The HS `Doc` is reduced to an RDoc with five constructors —
 //! `Empty`, `NilAbove`, `TextBeside`, `Nest`, `Union`, plus the
@@ -217,7 +217,7 @@ fn fill_width(s: &str) -> usize {
 // ============================================================================
 
 /// HS `Doc` from `pretty-1.1.3.6/Text/PrettyPrint/HughesPJ.hs` (the
-/// non-annotated module used in production, HS `Class.hs:64-67, see line 67`/`:72`)
+/// non-annotated module used in production, HS `Text/PrettyPrint/Class.hs:64-67, see line 67`/`:72`)
 /// — minus the `Above`/`Beside` lazy constructors (we eagerly reduce on
 /// build).
 #[derive(Clone)]
@@ -455,7 +455,7 @@ impl Doc {
     /// `fullRender`/`easyDisplay`): every `Union` takes its SECOND
     /// (fully-laid-out) branch — the one guaranteed free of `NoDoc` —
     /// every `Nest` is dropped, and every `NilAbove` (line break) becomes
-    /// exactly ONE space.  Used by HS `Dot.hs:371-376, see line 374`'s `oneLineRender`
+    /// exactly ONE space.  Used by HS `System/Dot.hs:371-376, see line 374`'s `oneLineRender`
     /// to measure each record field's used width for `renderBalanced`.
     pub fn one_line_render(&self) -> String {
         // Iterative for the same stack-depth reason as `lay_loop`.
@@ -612,7 +612,7 @@ pub fn op_parens(d: Doc) -> Doc {
     operator_("(").beside(d).beside(operator_(")"))
 }
 
-/// HS `parens p = char '(' <> p <> char ')'` (`Class.hs:149-149`) — PLAIN parens
+/// HS `parens p = char '(' <> p <> char ')'` (`Text/PrettyPrint/Class.hs:149-149`) — PLAIN parens
 /// (no highlight), used e.g. around `(modulo AC)`.
 pub fn parens(d: Doc) -> Doc {
     Doc::char('(').beside(d).beside(Doc::char(')'))
@@ -620,20 +620,21 @@ pub fn parens(d: Doc) -> Doc {
 
 // -- Comments (HS Theory.Text.Pretty.hs:96-112) -------------------------------
 
-/// HS `lineComment_ s = comment $ text "//" <-> text s` (`Pretty.hs:96-100`).
+/// HS `lineComment_ s = comment $ text "//" <-> text s`
+/// (`Theory/Text/Pretty.hs:96-100`).
 pub fn line_comment_(s: &str) -> Doc {
     comment(Doc::text("//").beside_sp(Doc::text(s)))
 }
 
 /// HS `multiComment_ ls = comment $ fsep [text "/*", vcat (map text ls),
-/// text "*/"]` (`Pretty.hs:105-106`).
+/// text "*/"]` (`Theory/Text/Pretty.hs:105-106`).
 pub fn multi_comment_(lines: &[&str]) -> Doc {
     let body = vcat(lines.iter().map(|l| Doc::text(*l)).collect());
     comment(fsep(vec![Doc::text("/*"), body, Doc::text("*/")]))
 }
 
 /// HS `closedComment_ s = comment $ fsep [text "/*", text s, text "*/"]`
-/// (`Pretty.hs:111-112`).
+/// (`Theory/Text/Pretty.hs:111-112`).
 pub fn closed_comment_(s: &str) -> Doc {
     comment(fsep(vec![Doc::text("/*"), Doc::text(s), Doc::text("*/")]))
 }
@@ -641,12 +642,13 @@ pub fn closed_comment_(s: &str) -> Doc {
 // -- Keyword composites (HS Theory.Text.Pretty.hs:148-159) --------------------
 
 /// HS `kwModulo what thy = keyword_ what <-> parens (keyword_ "modulo" <->
-/// text thy)` (`Pretty.hs:148-152`).
+/// text thy)` (`Theory/Text/Pretty.hs:148-152`).
 pub fn kw_modulo(what: &str, thy: &str) -> Doc {
     keyword_(what).beside_sp(parens(keyword_("modulo").beside_sp(Doc::text(thy))))
 }
 
-/// HS `kwRuleModulo = kwModulo "rule"` (`Pretty.hs:154-156, see line 156`).
+/// HS `kwRuleModulo = kwModulo "rule"`
+/// (`Theory/Text/Pretty.hs:154-156, see line 156`).
 pub fn kw_rule_modulo(thy: &str) -> Doc {
     kw_modulo("rule", thy)
 }
@@ -986,7 +988,8 @@ pub fn fun_app_doc<T>(name: &str, args: &[&T], render: impl Fn(&T) -> Doc) -> Do
 ///   nestShort (length lead + 1) (text lead) (text finish) body
 ///   = sep [ text lead $$ nest n body, text finish ]`
 /// where `$$` is HughesPJ `above` and `n = length lead + 1`
-/// (Class.hs:218-223).  Shared by the formula, fact and SAPIC renderers.
+/// (Text/PrettyPrint/Class.hs:218-223).  Shared by the formula, fact and
+/// SAPIC renderers.
 pub fn nest_short_doc(lead: &str, finish: &str, body: Doc) -> Doc {
     let n = lead.chars().count() as isize + 1;
     let above = Doc::text(lead).above(body.nest(n));
@@ -1412,9 +1415,9 @@ pub fn punctuate(sep: Doc, ds: Vec<Doc>) -> Vec<Doc> {
 // `numbered'`, `$--$`).
 // ============================================================================
 
-/// HS `$--$` (`Class.hs:112-114`): vertical concatenation with an empty
+/// HS `$--$` (`Text/PrettyPrint/Class.hs:112-114`): vertical concatenation with an empty
 /// line in between — `caseEmptyDoc`-guarded `d1 $-$ text "" $-$ d2`, where
-/// Class's `$-$` is HughesPJ `$+$` (`Class.hs:180`) = [`Doc::above_g`].
+/// Class's `$-$` is HughesPJ `$+$` (`Text/PrettyPrint/Class.hs:180`) = [`Doc::above_g`].
 /// The separator is [`Doc::text_hs`]`("")` so it survives as a blank line
 /// (indented under a surrounding `nest`).
 pub(crate) fn above_blank(d1: Doc, d2: Doc) -> Doc {
@@ -1427,7 +1430,7 @@ pub(crate) fn above_blank(d1: Doc, d2: Doc) -> Doc {
     d1.above_g(Doc::text_hs("")).above_g(d2)
 }
 
-/// HS `numbered` (`Class.hs:252-259`):
+/// HS `numbered` (`Text/PrettyPrint/Class.hs:252-259`):
 /// `foldr1 ($-$) $ intersperse vsep $ map pp $ zip [1..] ds` with
 /// `pp (i, d) = text (flushRight nWidth (show i)) <> d` and
 /// `nWidth = length (show (length ds))`.  `[]` yields the empty doc.
@@ -1460,7 +1463,7 @@ pub(crate) fn numbered(vsep: Doc, ds: Vec<Doc>) -> Doc {
     acc
 }
 
-/// HS `numbered'` (`Class.hs:263-264`):
+/// HS `numbered'` (`Text/PrettyPrint/Class.hs:263-264`):
 /// `numbered (text "") . map (text ". " <>)`.
 pub(crate) fn numbered_prime(ds: Vec<Doc>) -> Doc {
     numbered(

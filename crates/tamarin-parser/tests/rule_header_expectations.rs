@@ -4,10 +4,10 @@
 
 //! Byte-pinned parity for the `expecting …` set a rule header leaves behind.
 //!
-//! `protoRuleInfo` (Rule.hs:100-107) is
+//! `protoRuleInfo` (Parser/Rule.hs:100-107) is
 //! `symbol "rule" *> optional moduloE *> identifier *> ruleAttributesp *> colon`,
 //! and `ruleAttributesp = option mempty (fold <$> list ruleAttribute)`
-//! (Rule.hs:97-98).  When no `[…]` follows the name, `option` returns without
+//! (Parser/Rule.hs:97-98).  When no `[…]` follows the name, `option` returns without
 //! consuming, so parsec keeps its `Expect "\"[\""` and merges it into the
 //! colon's failure — the frame reads `expecting "[" or ":"`.  A present
 //! attribute list consumes, which discards that expectation and leaves
@@ -58,7 +58,7 @@ fn a_consumed_attribute_list_drops_the_bracket_expectation() {
 
 #[test]
 fn junk_after_the_colon_expects_let_or_the_premise_bracket() {
-    // `option emptySubst letBlock` precedes the premise list (Rule.hs:131):
+    // `option emptySubst letBlock` precedes the premise list (Parser/Rule.hs:131):
     // the failed non-consuming probe leaves `Expect "\"let\""` at the same
     // offset as the premise `[` failure, and parsec merges the two.
     assert_eq!(

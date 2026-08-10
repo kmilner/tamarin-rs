@@ -92,7 +92,7 @@ pub fn pretty_formula_wrapped(f: &p::Formula, indent: usize) -> String {
 }
 
 /// Render the lemma-header line, mirroring HS `prettyLemma`
-/// (Lemma.hs:119-122):
+/// (lib/theory/src/Lemma.hs:119-122):
 ///   `nest 2 $ sep [ prettyTraceQuantifier, doubleQuotes (prettyLNFormula f) ]`
 /// Built as ONE `Doc` through the HS-faithful engine so the `sep`
 /// (quant-keyword vs formula) flat-or-wrap decision, the formula's
@@ -105,7 +105,7 @@ pub fn lemma_header_line(quant: &str, f: &p::Formula) -> String {
     use crate::pretty_hpj::{self as hpj, Doc};
     let mut state = avoid_precise_formula(f);
     let formula_doc = formula_to_doc(f, &[], &mut state);
-    // `doubleQuotes d = "\"" <> d <> "\""` (Class.hs:148-148).
+    // `doubleQuotes d = "\"" <> d <> "\""` (Text/PrettyPrint/Class.hs:148-148).
     let dq = Doc::text("\"").beside(formula_doc).beside(Doc::text("\""));
     // `sep [quant, dq]` then `nest 2`.
     let line = hpj::sep(vec![Doc::text(quant), dq]).nest(2);
@@ -160,12 +160,12 @@ pub fn pretty_guarded(g: &Guarded) -> String {
 /// out with the same `get1` per-NilAbove `w`-shrinkage HughesPJ uses
 /// (HughesPJ.hs:1011).  `indent` is the column where the formula's first
 /// char will land (e.g. 1, right after the opening `"` of the lemma's
-/// `doubleQuotes` wrap, Lemma.hs:116-141, see line 138/141).
+/// `doubleQuotes` wrap, lib/theory/src/Lemma.hs:116-141, see line 138/141).
 ///
 /// NOTE: `render_at`'s `sl_initial` only shrinks the budget; it does NOT
 /// shift continuation lines by the leading prefix width.  In HS the
 /// `prettyGuarded` doc is the RIGHT operand of `doubleQuotes`'s `<>`
-/// (`"\"" <> prettyGuarded <> "\""`, Class.hs:148-148), and HughesPJ `beside`
+/// (`"\"" <> prettyGuarded <> "\""`, Text/PrettyPrint/Class.hs:148-148), and HughesPJ `beside`
 /// DOES shift the right doc's vertical layout by the leading `"`'s width
 /// (1 col).  Callers that place the formula after a 1-col prefix must use
 /// `pretty_guarded_doublequoted` (which models the `"` as a real Doc
@@ -180,7 +180,7 @@ fn pretty_guarded_wrapped(g: &Guarded, indent: usize) -> String {
     doc.render_at(hpj::LINE_LENGTH, hpj::RIBBON, indent)
 }
 
-/// HS `doubleQuotes (prettyGuarded gf)` (Lemma.hs:116-141, see line 138/141, Class.hs:148-148).
+/// HS `doubleQuotes (prettyGuarded gf)` (lib/theory/src/Lemma.hs:116-141, see line 138/141, Text/PrettyPrint/Class.hs:148-148).
 /// Builds `"\"" <> guarded_doc <> "\""` as a single Doc and renders it,
 /// so HughesPJ `beside`'s column-shift puts continuation lines at the
 /// formula's start column (1, right after the opening quote) — matching
@@ -216,7 +216,7 @@ pub fn disj_goal_to_doc(gfs: &[Guarded]) -> crate::pretty_hpj::Doc {
         .map(|g| {
             let mut state = avoid_precise_guarded(g);
             let inner = guarded_to_doc(g, &[], &mut state);
-            // `nest 1 (parens (prettyGuarded gf))` — `parens` (Class.hs:149-149)
+            // `nest 1 (parens (prettyGuarded gf))` — `parens` (Text/PrettyPrint/Class.hs:149-149)
             // is `char '(' <> d <> char ')'` (PLAIN).
             Doc::char('(').beside(inner).beside(Doc::char(')')).nest(1)
         })
@@ -279,7 +279,7 @@ pub fn step_line_with_unann(
         hpj::sep(vec![method_doc, unannotated_comment_doc()])
     };
     // HS `ppCases ps [] = prettyCase ps (kwBy <> text " ") <> prettyStep ps`
-    // (Proof.hs:1065-1066): the `by ` keyword is laid out BESIDE the WHOLE
+    // (Theory/Proof.hs:1065-1066): the `by ` keyword is laid out BESIDE the WHOLE
     // `sep [method, comment]`, NOT folded into the first `sep` element.  So
     // when `sep` breaks vertically the dropped `/* unannotated */` aligns at
     // the sep's start column = `base_indent + len(prefix)`; `beside` shifts
@@ -528,7 +528,7 @@ pub fn pretty_intruder_variants(rules: &[crate::rule::IntrRuleAC]) -> String {
 
 /// Insert `name -> max(existing, idx+1)` into a Precise state map — mirrors
 /// HS `avoidPreciseVars` `M'.insertWith max name (lvarIdx v + 1) m`
-/// (LTerm.hs:706-710).
+/// (LTerm.hs:706-709).
 fn avoid_precise_insert(state: &mut PreciseFreshState, name: &str, idx: u64) {
     let want = idx + 1;
     // `PreciseFreshState` exposes no direct "set"; emulate `insertWith max`
@@ -872,7 +872,7 @@ fn formula_to_doc(
     use p::Formula::*;
     match f {
         // HS `pp (TF True) = operator_ "⊤"` / `pp (TF False) = operator_ "⊥"`
-        // (Formula.hs:485-486) — `hl_operator` spans in HtmlDoc mode.
+        // (Theory/Model/Formula.hs:485-486) — `hl_operator` spans in HtmlDoc mode.
         True => hpj::operator_("\u{22A4}"),
         False => hpj::operator_("\u{22A5}"),
         Atom(a) => atom_to_doc(a, scope),
@@ -894,7 +894,7 @@ fn formula_to_doc(
             // HS `ppQuant qua <> ppVars vs <> operator_ "."` where
             // `ppVars = fsep . map (text . show)` (Theory/Model/Formula.hs:508,511) and
             // `opExists = operator_ "∃ "` / `opForall = operator_ "∀ "`
-            // (Pretty.hs:177-178) carry their own trailing space.  The
+            // (Theory/Text/Pretty.hs:177-178) carry their own trailing space.  The
             // `fsep` makes the bound-var list BREAKABLE, so a long var list
             // wraps across lines (continuation aligned after the `∃ ` prefix
             // via `<>`'s nesting offset) — matching HS byte-for-byte.
@@ -1240,7 +1240,7 @@ fn pp_fact(fa: &p::Fact, scope: &[Bind], out: &mut String) {
 // punctuate comma $ map ppTerm ts`, with `nestShort' lead finish =
 // nestShort (length lead + 1) (text lead) (text finish)` and
 // `nestShort n lead finish body = sep [lead $$ nest n body, finish]`
-// (Class.hs:218-223).  Building these as real `pretty_hpj::Doc` trees and
+// (Text/PrettyPrint/Class.hs:218-223).  Building these as real `pretty_hpj::Doc` trees and
 // letting the ported HughesPJ engine lay them out makes the fcat/fsep/sep
 // wrap decisions byte-identical to HS.
 // =============================================================================
@@ -1510,7 +1510,7 @@ fn fun_doc_two(name: &str, l: &p::Term, r: &p::Term, scope: &[Bind]) -> crate::p
 
 /// Pretty-print a fact as a `pretty_hpj::Doc`.  Faithful to HS `prettyFact`
 /// / `ppFact` (Theory/Model/Fact.hs:567-574) with `nestShort'`
-/// (Class.hs:218-223).
+/// (Text/PrettyPrint/Class.hs:218-223).
 pub fn fact_to_doc(fa: &p::Fact, scope: &[Bind]) -> crate::pretty_hpj::Doc {
     use crate::pretty_hpj::{self as hpj, Doc};
     let lead = {
@@ -2309,7 +2309,7 @@ fn guarded_to_doc(
                 .map(|x| gdoc_op_parens(guarded_to_doc(x, scope, state)))
                 .collect();
             let punct = hpj::punctuate(hpj::operator_(" \u{2228}"), ps); // " ∨"
-                                                                         // `parens` (Class.hs:149-149) is `char '(' <> d <> char ')'` — PLAIN.
+                                                                         // `parens` (Text/PrettyPrint/Class.hs:149-149) is `char '(' <> d <> char ')'` — PLAIN.
             Doc::char('(')
                 .beside(hpj::sep(punct))
                 .beside(Doc::char(')'))

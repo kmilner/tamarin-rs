@@ -290,7 +290,8 @@ fn collect_term_vars_keyed(t: &p::Term, out: &mut std::collections::BTreeSet<(St
 /// Mirrors HS `builtinPredicates` (Theory/Syntactic/Predicate.hs:58-74):
 /// `Smaller(x, y) <=> hinted exists z (Ato (EqE (bvt y) (fAppUnion (fvt x, fvt z))))`,
 /// i.e. `∃ z. y = x ++ z` with `lhs = x`, `rhs = y`.  The multiset operator
-/// `x (<) y` parses to `Smaller [x, y]` (HS `smallerp`, Formula.hs:30-38), so
+/// `x (<) y` parses to `Smaller [x, y]` (HS `smallerp`,
+/// Theory/Text/Parser/Formula.hs:30-38), so
 /// the same expansion applies with `lhs = x`, `rhs = y`.  `z`'s name is picked
 /// capture-avoidingly: a use-site argument may itself mention `z`, which the
 /// bound `z` would otherwise capture.

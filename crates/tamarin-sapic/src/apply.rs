@@ -7,7 +7,7 @@
 //! renders them via the existing rule/restriction path) and the elaborated
 //! theory (so the solver + AC-variant pre-computation see them).
 //!
-//! Mirrors the tail of HS `translate` (Sapic.hs:69-85):
+//! Mirrors the tail of HS `translate` (sapic/src/Sapic.hs:69-85):
 //!   - `foldM liftedAddProtoRule th  (map (`OpenProtoRule` []) eProtoRule)`
 //!   - `foldM liftedAddRestriction th1 rest`
 //!   - `addHeuristic [SapicRanking]` unless the user set one
@@ -109,7 +109,7 @@ pub fn apply_sapic(
         })?;
 
     // translate → rules + restrictions.  `needs_in_ev_res = any
-    // lemmaNeedsInEvRes (theoryLemmas th)` (Sapic.hs:45-101, see line 101): gates the
+    // lemmaNeedsInEvRes (theoryLemmas th)` (sapic/src/Sapic.hs:45-101, see line 101): gates the
     // `EventEmpty`/`ChannelIn` actions + the `in_event` restriction.  HS
     // `theoryLemmas` = the (non-diff, non-accountability) `Lemma` items.
     let lemmas: Vec<p::Lemma> = parsed
@@ -177,7 +177,7 @@ pub fn apply_sapic(
         parsed_rule.embedded_restrictions = restr_formulas.clone();
 
         // HS `foldM liftedAddProtoRule th (map (`OpenProtoRule` []) eProtoRule)`
-        // (Sapic.hs:75): each generated rule goes through the same
+        // (sapic/src/Sapic.hs:75): each generated rule goes through the same
         // `addOpenProtoRule` name guard as a parsed rule (OpenTheory.hs:
         // 691-702) — it fails when the name is already bound to a DIFFERENT
         // rule, so a user rule named like a generated one (e.g. `rule Init`
@@ -251,7 +251,8 @@ pub fn apply_sapic(
     }
 
     // `addHeuristic [SapicRanking]` unless a heuristic is already set
-    // (Sapic.hs:45-101, see line 82).  `SapicRanking` renders as `p`.  Add it to BOTH theories:
+    // (sapic/src/Sapic.hs:45-101, see line 82).  `SapicRanking` renders as `p`.
+    // Add it to BOTH theories:
     //   - `elaborated.heuristic` drives the rendered `heuristic: p` line; and
     //   - the `parsed` theory drives the PROVER's heuristic — `ProverSession`
     //     re-elaborates the parsed theory (`prove.rs:461`), so without the

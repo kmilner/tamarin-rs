@@ -302,7 +302,8 @@ pub fn sapic_public_names_report(thy: &Theory) -> Vec<tamarin_parser::wf::WfErro
         _ => None,
     }) {
         // HS `showRuleCaseName ru = prettyProtoRuleName (ruleName ru)`
-        // (Rule.hs:1225-1227) = `prefixIfReserved n` for a `StandRule n`.
+        // (Theory/Model/Rule.hs:1338-1340) = `prefixIfReserved n` for a
+        // `StandRule n`.
         let case_name = crate::rule::prefix_if_reserved(r.name());
         let mut names: Vec<String> = Vec::new();
         for f in r
@@ -504,9 +505,9 @@ pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
     // Apply macros at parser-AST level BEFORE predicate expansion.
     // Mirrors HS's parse-time application: lemmas are expanded by
     // `parseLemmaWithMacros` (Theory/Text/Parser.hs:97-105); rules by
-    // `closeProtoRule` (lib/theory/src/Rule.hs:96-98) before
+    // `closeProtoRule` (lib/theory/src/Rule.hs:82-86) before
     // variantsProtoRule runs; restrictions by `applyMacroInRestriction`
-    // (Theory/Model/Restriction.hs:163-165).  We apply at the parser-AST
+    // (Theory/Model/Restriction.hs:164-166).  We apply at the parser-AST
     // level so a single pass handles every term-bearing item before any
     // typed conversion (`term_to_lnterm` / `formula_to_guarded`) sees a
     // macro call.  Predicate-expand may itself substitute the inlined
@@ -1198,7 +1199,7 @@ fn elaborate_already_expanded(parser_thy: &p::Theory) -> Result<Theory, ElabErro
     // (= `[i | ProcessItem i <- ...]`, only top-level ProcessItems,
     // not ProcessDefItems), reaching the `True` assignment solely in
     // the single-process `[p]` branch; `[]` leaves the default False
-    // and `>=2` throws MoreThanOneProcess (Sapic.hs:48,85,87). Mirror
+    // and `>=2` throws MoreThanOneProcess (lib/sapic/src/Sapic.hs:48,85,87). Mirror
     // that: count only TopLevelProcess items, true iff exactly one.
     // Read downstream to gate SAPIC translation (run.rs, apply.rs).
     thy.is_sapic = parser_thy
@@ -1346,7 +1347,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                     // (Theory/Text/Parser/Macro.hs:39), which has no pattern-match (`=t`)
                     // production, so a body that converts to a `PatMatch`
                     // here would be a hard parse failure in HS — and
-                    // `addMacroSym` (Macro.hs:48) always runs for any parsed
+                    // `addMacroSym` (Theory/Text/Parser/Macro.hs:46) always runs for any parsed
                     // macro.  Returning an error therefore matches HS's
                     // parse-fail semantics: silently skipping would drop both
                     // the `LNMacro` push and the fun-sym registration.
@@ -1535,8 +1536,8 @@ pub fn elaborate_lemma_attr(a: &p::LemmaAttr) -> LemmaAttr {
 
 /// Fold a parsed rule's attribute list into `RuleAttributes`, mirroring HS
 /// `ruleAttributesp = option mempty (fold <$> list ruleAttribute)`
-/// (`Theory/Text/Parser/Rule.hs:95-96`) and the per-attribute `ruleAttribute`
-/// parser (`Rule.hs:68-93`):
+/// (`Theory/Text/Parser/Rule.hs:97-98`) and the per-attribute `ruleAttribute`
+/// parser (`Theory/Text/Parser/Rule.hs:70-95`):
 ///   * `color=`/`colour=`  → `ruleColor` (`hexToRGB`);
 ///   * `process=`          → IGNORED (`parseAndIgnore`; the RS parser already
 ///                           drops it, so `RuleAttr::Process` never reaches here
@@ -1547,7 +1548,7 @@ pub fn elaborate_lemma_attr(a: &p::LemmaAttr) -> LemmaAttr {
 ///   * `issapicrule`       → `isSAPiCRule = True`;
 ///   * `x-<ext>`           → ignored.
 ///
-/// `fold` combines via the `RuleAttributes` `Semigroup` (Rule.hs:370-384):
+/// `fold` combines via the `RuleAttributes` `Semigroup` (Theory/Model/Rule.hs:382-396):
 /// later duplicates win on the `Option` fields (`preferRight`), bools `||`.
 ///
 /// This restores the SAPIC display attributes (role / color / issapicrule) onto
@@ -1621,7 +1622,7 @@ fn rule_to_proto_rule_e(r: &p::Rule) -> Result<ProtoRuleE, ElabError> {
 /// then s1" (SubstVFree.hs).  `foldr1 compose [b1..bn]` is
 /// therefore equivalent to applying each binding as a SINGLETON
 /// substitution sequentially in REVERSE binding order ("bottom-up
-/// application semantics", Let.hs:22).  Consequences:
+/// application semantics", Theory/Text/Parser/Let.hs:22-24).  Consequences:
 ///   * backward references expand: binding i's RHS, once introduced
 ///     into the body at step i, is rewritten by the later-applied
 ///     steps j < i;
@@ -2243,7 +2244,7 @@ pub fn canonicalize_ac_in_atom(a: &p::Atom) -> p::Atom {
 ///
 /// HS-faithful: HS sorts AC arguments at parse time when building LNTerm via
 /// `fAppAC` (Term/Term/Raw.hs:118-129) over the *free* logical variables,
-/// using `Ord LVar` = (idx, sort, name) (LTerm.hs:522-524).  Our parser keeps
+/// using `Ord LVar` = (idx, sort, name) (LTerm.hs:545-548).  Our parser keeps
 /// `BinOp` trees in written order; this walk re-establishes the canonical AC
 /// order on the free-variable parser AST so the subsequent guarded conversion
 /// (Free→Bound abstraction) preserves exactly what HS would have produced.
@@ -2628,7 +2629,8 @@ pub fn term_to_lnterm(t: &p::Term) -> Option<tamarin_term::lterm::LNTerm> {
 // Parallel to `term_to_lnterm`, but the literal/variable case preserves the
 // SAPIC type annotation (`VarSpec.typ`) into `SapicLVar.stype`.  Mirrors HS's
 // SAPIC term parser (`Theory.Text.Parser.Sapic.sapicterm = msetterm False
-// ltypedlit`, Sapic.hs:56), which builds `Term (Lit Name SapicLVar)` keeping
+// ltypedlit`, Theory/Text/Parser/Sapic.hs:56-57), which builds
+// `Term (Lit Name SapicLVar)` keeping
 // the `name:type` annotation on each typed variable.  Reuses the SAME
 // function-symbol / arity-1-fold / em / pair logic as `term_to_lnterm` (via
 // `term_to_vterm`) so the resulting term universe matches the protocol-rule

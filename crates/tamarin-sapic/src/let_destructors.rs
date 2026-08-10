@@ -28,8 +28,9 @@
 //! `elsebranch` (LetDestructors.hs:74-76) is `False` iff the right branch is the
 //! null process, else `True`.
 //!
-//! Runs as part of `translate` (HS `Sapic.hs:45-101, see line 55`), AFTER `propagateNames` and
-//! BEFORE `annotateLocks`, over the already type-/rename-unique'd process.
+//! Runs as part of `translate` (HS `sapic/src/Sapic.hs:45-101, see line 55`),
+//! AFTER `propagateNames` and BEFORE `annotateLocks`, over the already
+//! type-/rename-unique'd process.
 
 use crate::base_translation::{subst_fact, subst_term};
 use tamarin_term::function_symbols::{Constructability, FunSym};
@@ -120,7 +121,8 @@ fn map_let(
     }
 
     // Case C (LetDestructors.hs:62-65): keep the Let, annotate `annElse
-    // elsebranch`.  HS `annElse b = mempty {elseBranch = b}` (Annotation.hs:131-132)
+    // elsebranch`.  HS `annElse b = mempty {elseBranch = b}`
+    // (sapic/src/Sapic/Annotation.hs:131-132)
     // builds a FRESH `mempty`-based annotation, REPLACING the existing one — so
     // every other field (incl. the propagated `processnames`) is dropped back to
     // its default.  The node's incoming annotation must NOT be carried over
@@ -165,7 +167,8 @@ fn case_destructor(
             let rightterms_pairs = to_pairs(rightterms);
             // `new_an = annDestructorEquation leftermssubst (toPairs rightterms) elsebranch`
             // — HS `annDestructorEquation v1 v2 b = mempty { destructorEquation =
-            // Just (v1, v2), elseBranch = b }` (Annotation.hs:128-129) builds a
+            // Just (v1, v2), elseBranch = b }`
+            // (sapic/src/Sapic/Annotation.hs:128-129) builds a
             // FRESH `mempty`-based annotation, REPLACING the existing one.  Every
             // other field (incl. the propagated `processnames`) is therefore reset
             // to default, so the node's incoming annotation is dropped (Case C
@@ -291,7 +294,7 @@ fn apply_subst_process(
     }
 }
 
-/// `applyMatchVars subst vs` (Process.hs:305-309): rewrite a set of match
+/// `applyMatchVars subst vs` (Sapic/Process.hs:304-309): rewrite a set of match
 /// variables under a substitution.  Each `v` is replaced by the variables of
 /// `subst(v)` if `v` is in the substitution's domain, else kept as-is.
 fn apply_match_vars(
@@ -333,7 +336,7 @@ fn subst_action(
         } => A::ChIn {
             chan: chan.map(|t| subst_term(subst, &t)),
             msg: subst_term(subst, &msg),
-            // HS `applyMatchVars subst vs` (Process.hs:305-309, 320): a match var
+            // HS `applyMatchVars subst vs` (Sapic/Process.hs:304-309, 320): a match var
             // `v` whose image under `subst` is a (compound) term is replaced by
             // ALL the variables of that image; an undefined `v` is kept.  So a
             // `let`-bound match var `=t` (where `t = <a,'test'>`) becomes the
@@ -382,7 +385,7 @@ fn subst_comb(
         ProcessCombinator::CondEq(a, b) => {
             ProcessCombinator::CondEq(subst_term(subst, &a), subst_term(subst, &b))
         }
-        // HS `apply subst (Cond fa) = Cond (apply subst fa)` (Process.hs:165):
+        // HS `apply subst (Cond fa) = Cond (apply subst fa)` (Sapic/Process.hs:165):
         // a Case-B `let`-elimination (`let z = t in P`) must rewrite the free
         // variable `z` inside any downstream conditional's formula too — `z` is
         // a value bound by the `let`, not a process binder, so the `Cond`
@@ -400,7 +403,7 @@ fn subst_comb(
 }
 
 /// Substitute a `let`-bound variable into a `Cond` parser-AST formula
-/// (HS `apply subst fa`, Process.hs:165).  For each FREE `Var(v)` whose
+/// (HS `apply subst fa`, Sapic/Process.hs:165).  For each FREE `Var(v)` whose
 /// `SapicLVar` key (typed or untyped) is in `subst`'s domain, replace it with
 /// the parser-AST lowering of the image term; non-domain / quantifier-bound vars
 /// are kept unchanged.

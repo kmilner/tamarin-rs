@@ -78,7 +78,8 @@ impl<I> Rule<I> {
     }
 
     /// Add an action fact, prepended, unless already present. Port of HS
-    /// `addAction` (Rule.hs:1108-1112): `if act elem acts then unchanged else
+    /// `addAction` (Theory/Model/Rule.hs:1108-1112): `if act elem acts then
+    /// unchanged else
     /// act:acts`.
     pub fn add_action(&mut self, act: LNFact) {
         if !self.actions.contains(&act) {
@@ -112,8 +113,10 @@ impl<I> Rule<I> {
 // `HasFrees`, so this impl cannot recurse into it. This is sound because every
 // caller operates on `RuleACInst`, whose info (ProtoRuleACInstInfo /
 // IntrRuleACInfo) carries no free LVars. Note that Haskell's `HasFrees (Rule i)`
-// (Rule.hs:291-306) DOES fold over `info` first, and ProtoRuleEInfo/ProtoRuleACInfo
-// info (Rule.hs:491-498, 503-515) carry frees (restrictions / variant keys); callers
+// (Theory/Model/Rule.hs:291-306) DOES fold over `info` first, and
+// ProtoRuleEInfo/ProtoRuleACInfo
+// info (Theory/Model/Rule.hs:491-498, 503-515) carry frees (restrictions /
+// variant keys); callers
 // that need those (ProtoRuleE/AC) must walk variants/restrictions separately, as
 // rule_variants.rs::rename_precise_rule_with_variants does.
 // =============================================================================
@@ -160,15 +163,18 @@ impl<I: Clone> HasFrees for Rule<I> {
     }
 }
 
-/// HS `instance Apply LNSubst i => Apply LNSubst (Rule i)` (Rule.hs:308-310):
+/// HS `instance Apply LNSubst i => Apply LNSubst (Rule i)`
+/// (Theory/Model/Rule.hs:308-310):
 /// a free substitution applied to every fact and new-var term of a rule.
 ///
 /// `info` is carried over untouched, which is what HS's `apply subst i` comes
 /// to for the info types this port instantiates: the `Apply` instances for
 /// `ProtoRuleEInfo` and `IntrRuleACInfo` are literally `apply _ = id`
-/// (Rule.hs:500-501, 619-620), and `ProtoRuleACInstInfo`'s (Rule.hs:517-519)
+/// (Theory/Model/Rule.hs:500-501, 619-620), and `ProtoRuleACInstInfo`'s
+/// (Theory/Model/Rule.hs:517-519)
 /// maps only its `ProtoRuleName`, whose own instance is `apply _ = id`
-/// (Rule.hs:467-468).  So a refined `ProtoRuleE` keeps its original
+/// (Theory/Model/Rule.hs:467-468).  So a refined `ProtoRuleE` keeps its
+/// original
 /// restriction frees unsubstituted.
 pub(crate) fn apply_subst_rule<I: Clone>(
     sigma: &tamarin_term::subst::Subst<Name, LVar>,
@@ -338,13 +344,15 @@ pub struct ProtoRuleACInstInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IntrRuleACInfo {
-    /// HS `ConstrRule BC.ByteString FunSym` (Rule.hs:540); `fun` is the
+    /// HS `ConstrRule BC.ByteString FunSym` (Theory/Model/Rule.hs:540); `fun`
+    /// is the
     /// symbol this construction rule builds.
     ConstrRule {
         name: Vec<u8>,
         fun: FunSym,
     },
-    /// HS `DestrRule BC.ByteString Int Bool Bool [FunSym]` (Rule.hs:541).
+    /// HS `DestrRule BC.ByteString Int Bool Bool [FunSym]`
+    /// (Theory/Model/Rule.hs:541).
     /// `remaining_applications` of `0` means unbounded; `-1` means not yet
     /// determined. `funs` lists the function symbols this rule's application
     /// corresponds to (head first).
@@ -594,12 +602,13 @@ pub fn get_conc_fact(rule: &IntrRuleAC) -> &LNFact {
     }
 }
 
-/// `replaceMatchingRule` (Rule.hs:873-878): replace a deconstruction rule by
+/// `replaceMatchingRule` (Theory/Model/Rule.hs:873-878): replace a
+/// deconstruction rule by
 /// the version from `d` with the same name, premises, and conclusions (copying
 /// its chain limit); other rules are returned unchanged.
 ///
 /// Intentionally retained: faithful mirror of HS `replaceMatchingRule`
-/// (Rule.hs:873-878); no caller yet.
+/// (Theory/Model/Rule.hs:873-878); no caller yet.
 pub fn replace_matching_rule(d: &[IntrRuleAC], rule: IntrRuleAC) -> IntrRuleAC {
     if !matches!(rule.info, IntrRuleACInfo::DestrRule { .. }) {
         return rule;

@@ -17,8 +17,10 @@
 //!
 //! A structural subtlety this module must reproduce: HS rules carry their
 //! `_restrict` formulas in `preRestriction` (ProtoRuleEInfo) forever, and
-//! `HasFrees (Rule i)` folds over them (info FIRST, Rule.hs:291-298) while
-//! `Apply ProtoRuleEInfo` is the identity (Rule.hs:500-501).  So a refined
+//! `HasFrees (Rule i)` folds over them (info FIRST,
+//! Theory/Model/Rule.hs:291-298) while
+//! `Apply ProtoRuleEInfo` is the identity (Theory/Model/Rule.hs:500-501).
+//! So a refined
 //! rule keeps its ORIGINAL restriction frees unsubstituted, and they floor
 //! the final `rename`'s index shift (a fully-substituted body keeps its
 //! refined indices — the oracle renders `In( x.2 )` for
@@ -200,7 +202,8 @@ fn refine_rule(
     }
     // Seed: `evalFreshT (avoid ru)` — the counter starts above the rule's
     // maximum free variable index.  HS's `avoid` folds the rule info too
-    // (`HasFrees (Rule i)`, Rule.hs:291-298), so the `_restrict` formulas'
+    // (`HasFrees (Rule i)`, Theory/Model/Rule.hs:291-298), so the `_restrict`
+    // formulas'
     // frees participate in the bound; `extra_frees` carries them.
     let body_bound = avoid(ru).fresh_idents(0);
     let info_bound = extra_frees.iter().map(|v| v.idx + 1).max().unwrap_or(0);
@@ -260,8 +263,9 @@ fn interpret_abstractly(
         }
         // Only CONCLUSIONS feed the state (HS `get rConcs`).  `S.insert`
         // REPLACES an existing equal element, and `Eq`/`Ord LNFact` compare
-        // tag + terms only (Fact.hs:170-174) while `prettyLNFact` still
-        // prints the annotations (Fact.hs:567-574) — so the LAST insertion
+        // tag + terms only (Theory/Model/Fact.hs:170-174) while `prettyLNFact`
+        // still prints the annotations (Theory/Model/Fact.hs:567-574) — so the
+        // LAST insertion
         // of a tag/terms-equal fact decides which annotations the report
         // shows.  `BTreeSet::replace` is that semantics; `insert` would keep
         // the first.
@@ -316,7 +320,8 @@ fn info_frees<'a>(restr_frees: &'a BTreeMap<String, Vec<LVar>>, r: &ProtoRuleE) 
 
 /// Canonicalise every free variable of `r` to `LVar "" <sort> <seq-idx>`
 /// in `mapFrees` traversal order.  HS traverses the rule INFO first
-/// (Rule.hs:291-298), binding the unsubstituted `_restrict`-formula frees
+/// (Theory/Model/Rule.hs:291-298), binding the unsubstituted
+/// `_restrict`-formula frees
 /// before the body (premises, conclusions, actions, new_vars) — so a body
 /// variable identical to a restriction free reuses its canon slot, and
 /// body-only variables start numbering after them.  `extra` carries those
@@ -376,7 +381,8 @@ fn state_fact_doc(fa: &LNFact) -> Doc {
     pf::fact_doc(&crate::elaborate::canonicalize_ac_in_pfact(&pfact))
 }
 
-/// HS renders the trace/report docs with the plain `render` (Class.hs:77-78)
+/// HS renders the trace/report docs with the plain `render`
+/// (Text/PrettyPrint/Class.hs:77-78)
 /// = HughesPJ's DEFAULT style: lineLength 100, ribbon `round(100/1.5)` = 67
 /// — NOT the console width the theory body uses.
 fn render_default_style(d: Doc) -> String {
@@ -406,7 +412,8 @@ fn partial_evaluation(
     // index shift making the minimum free var index 0.  The minimum is
     // taken over the body frees AND the rule's unsubstituted
     // `_restrict`-formula frees (HS `boundsVarIdx` folds the rule info,
-    // Rule.hs:291-298), which HS's `mapFrees` shifts along with the body —
+    // Theory/Model/Rule.hs:291-298), which HS's `mapFrees` shifts along with
+    // the body —
     // the shifted info frees then seed the dedup's canonicalisation.
     let renamed: Vec<(ProtoRuleE, Vec<LVar>)> = final_rules
         .into_iter()

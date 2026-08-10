@@ -58,7 +58,7 @@ fn digraph_id_escapes_only_double_quotes() {
     assert!(got.starts_with("digraph \"a \\\"b\\\" \\c\" {\n"), "{got}");
 }
 
-/// `dotLessEdge` resolves both endpoints through `dsNodes` (Dot.hs:409-413),
+/// `dotLessEdge` resolves both endpoints through `dsNodes` (System/Dot.hs:409-413),
 /// which for a RECORD node is the rule-label field's PORTED id — not the bare
 /// node id — and emits `color` before `style`.
 #[test]

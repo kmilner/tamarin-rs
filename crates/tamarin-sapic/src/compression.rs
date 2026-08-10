@@ -6,7 +6,8 @@
 //!
 //! Path compression: merge adjacent "silent" SAPIC rules (rules that do not
 //! perform observable actions) along the state-fact flow, starting from the
-//! initial `State_( )` fact.  Gated on `_transProgress` in HS (`Sapic.hs:45-101, see line 72`).
+//! initial `State_( )` fact.  Gated on `_transProgress` in HS
+//! (`sapic/src/Sapic.hs:45-101, see line 72`).
 //!
 //! Operates on the final `Rule<ProtoRuleEInfo>` list (post-`toRule`).  HS uses
 //! `S.Set (Rule ProtoRuleEInfo)` in `mergeRules` and `S.Set (Fact LNTerm)` for

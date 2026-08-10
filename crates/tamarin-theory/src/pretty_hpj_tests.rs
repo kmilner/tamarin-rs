@@ -263,7 +263,7 @@ fn pkcs11_eleven_tuple_close_bracket_glue() {
         parts.push(Doc::text(">"));
         fcat(parts)
     };
-    // HS structure (SubstVFresh.hs:227-229 + Class.hs:252-264):
+    // HS structure (SubstVFresh.hs:223-229 + Text/PrettyPrint/Class.hs:252-264):
     //   numbered' = numbered (text "") . map (text ". " <>)
     //   each item = text(flushRight w i) <> (text ". " <> vcat[prettyEq..])
     //   prettyEq (a,b) = text a $$ nest 6 (text "=" <-> term)

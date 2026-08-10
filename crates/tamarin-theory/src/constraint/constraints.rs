@@ -207,11 +207,13 @@ impl Goal {
 ///
 /// - `LVar` — manual `Ord` = `(idx, sort, name)` (LTerm.hs:546-548).
 /// - `LNFact` — manual `Ord` = tag then terms, annotations IGNORED, which is
-///   HS's manual `instance Ord (Fact t)` (Fact.hs:173-174), not a derived
+///   HS's manual `instance Ord (Fact t)` (Model/Fact.hs:173-174), not a derived
 ///   one; `FactTag`'s derived `Ord` matches HS's constructor and payload
-///   order (Fact.hs:137-148), as does `Multiplicity`'s (Fact.hs:133-134).
+///   order (Model/Fact.hs:137-148), as does `Multiplicity`'s
+///   (Model/Fact.hs:133-134).
 /// - `NodeConc` / `NodePrem` — `(LVar, ConcIdx/PremIdx)` tuples; the index
-///   newtypes derive `Ord` over their integer, as HS's do (Rule.hs:233-238).
+///   newtypes derive `Ord` over their integer, as HS's do
+///   (Model/Rule.hs:233-238).
 /// - `SplitId` — newtype over an integer, derived both sides
 ///   (EquationStore.hs:88-89).
 /// - `LNTerm` — `Lit < App`, then symbol then arguments, mirroring the
@@ -355,7 +357,7 @@ mod tests {
         let hi = Goal::Action(LVar::new("a", LSort::Node, 2), fa.clone());
         assert_eq!(cmp_goal(&lo, &hi), Ordering::Less);
         // Equal node ids fall through to the fact, which orders by tag then
-        // terms with annotations ignored (Fact.hs:173-174).
+        // terms with annotations ignored (Model/Fact.hs:173-174).
         let fresh = LNFact::new(FactTag::Fresh, vec![t.clone()]);
         let a_out = Goal::Action(node("i"), fa);
         let a_fresh = Goal::Action(node("i"), fresh);

@@ -14,7 +14,8 @@
 //! 183-225, see lines 220-225).
 //!
 //! Which orders load is decided by `function`'s conflict check
-//! (Signature.hs:212-216), which looks the name up in `stFunSyms` ONLY:
+//! (Theory/Text/Parser/Signature.hs:212-216), which looks the name up in
+//! `stFunSyms` ONLY:
 //!
 //! | declaration order              | options      | result                     |
 //! |--------------------------------|--------------|----------------------------|
@@ -27,7 +28,7 @@
 //! and the two symbols must be resolved independently: the prefix and
 //! `op{a}b` spellings take the `NoEq` one (`lookupArity`'s NoEq-first list
 //! lookup, Theory/Text/Parser/Term.hs:62-72), the infix spelling takes the AC
-//! one (`acterm`, Term.hs:166-172).
+//! one (`acterm`, Theory/Text/Parser/Term.hs:166-172).
 //!
 //! The observable is the Maude operator name: `funSymEncodeAttr`
 //! (Term/Maude/Parser.hs:76-88) folds privacy / constructability / AC-ness /

@@ -325,7 +325,8 @@ pub fn symbol(s: &str) -> Doc {
 }
 
 /// `numbered vsep ds`: prefix each `d` with a right-flushed index, then join the
-/// items with `vsep` interspersed between them (Class.hs:252-259):
+/// items with `vsep` interspersed between them
+/// (Text/PrettyPrint/Class.hs:252-259):
 ///   `foldr1 ($-$) $ intersperse vsep $ map pp $ zip [1..] ds`.
 /// `vsep` is a standalone document placed on its own "line" via `$-$`, not glued
 /// horizontally onto the items — so `numbered (text "")` yields blank separator
