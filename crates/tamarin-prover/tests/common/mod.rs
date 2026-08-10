@@ -6,12 +6,15 @@
 //! binary on a theory, and normalize the machine-local lines out of its
 //! output so the remaining bytes can be pinned against the oracle.
 //!
-//! MAUDE_PATH trap: [`maude_available`] probes ONLY `$MAUDE_PATH` and the two
-//! hardcoded absolute paths in [`MAUDE_CANDIDATES`] — never `$PATH`.  On
-//! machines whose maude lives elsewhere (e.g.
-//! /home/linuxbrew/.linuxbrew/bin/maude) a bare `cargo test` SKIPS every
-//! maude-backed pin and reports green; run with
-//! `MAUDE_PATH=/path/to/maude cargo test -p tamarin-prover`.
+//! MAUDE RESOLUTION: [`maude_path`] probes `$MAUDE_PATH`, then the two
+//! hardcoded absolute paths in [`MAUDE_CANDIDATES`], then `$PATH`, then
+//! [`LINUXBREW_MAUDE`].  When NONE of those resolves, [`maude_available`]
+//! PANICS instead of returning `false`: a probe that silently skipped made
+//! `cargo test` green identically with and without Maude, so every
+//! maude-backed pin in these suites certified nothing on a machine whose
+//! maude sits outside `/usr` (e.g. /home/linuxbrew/.linuxbrew/bin/maude —
+//! which is this workspace's own install).  `TAM_ALLOW_NO_MAUDE=1` restores
+//! the silent skip for a machine that genuinely has no Maude.
 //! [`strip_maude_banner`] is the positive control: it panics when a run that
 //! should have started maude produced no banner.
 
@@ -21,19 +24,45 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Absolute maude locations probed when `MAUDE_PATH` is unset — the same two
-/// the binary's own `default_maude_path` walks, so the harness and the
-/// process under test always agree on which maude ran.
+/// Absolute maude locations probed first when `MAUDE_PATH` is unset — the two
+/// the binary's own `default_maude_path` (run.rs) walks before it falls back
+/// to a bare `maude`.
 pub const MAUDE_CANDIDATES: [&str; 2] = ["/usr/local/bin/maude", "/usr/bin/maude"];
 
-/// The maude the binary will invoke: `$MAUDE_PATH` when set, else the first
-/// existing candidate.
+/// Last resort in [`maude_path`]: this workspace's own maude, which the
+/// benchmark toolchain installs through linuxbrew and which is NOT on `$PATH`
+/// unless the shell exported it.
+pub const LINUXBREW_MAUDE: &str = "/home/linuxbrew/.linuxbrew/bin/maude";
+
+/// Env escape hatch: `TAM_ALLOW_NO_MAUDE=1` turns an unresolvable maude back
+/// into a silent skip, for a machine that genuinely has none.
+pub const ALLOW_NO_MAUDE_ENV: &str = "TAM_ALLOW_NO_MAUDE";
+
+/// First `$PATH` entry holding a file named `maude` — the same lookup the
+/// binary's bare-`maude` fallback leaves to the OS, done here so the harness
+/// can name the resolved path back to it.
+fn maude_on_path() -> Option<String> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|d| d.join("maude"))
+        .find(|c| c.is_file())
+        .and_then(|c| c.to_str().map(str::to_string))
+}
+
+/// The maude these suites hand the binary: `$MAUDE_PATH` when set, else the
+/// first existing [`MAUDE_CANDIDATES`] entry, else `$PATH`, else
+/// [`LINUXBREW_MAUDE`].
 ///
 /// A `MAUDE_PATH` that names a file which does not exist is a
 /// MISCONFIGURATION, not a reason to skip: silently returning `None` there
 /// would turn every maude-backed pin in these suites green on a CI whose
 /// image moved maude (`.github/workflows/ci.yml` sets
 /// `MAUDE_PATH=/opt/maude/maude`).  Panic instead, so the run goes red.
+///
+/// `None` means "nothing resolved anywhere"; [`maude_available`] — not this
+/// function — decides whether that is a skip or a failure, so the callers
+/// that only need an argv (like [`maude_arg`]) stay usable in a run that has
+/// no maude and no maude-backed pins.
 pub fn maude_path() -> Option<String> {
     if let Ok(p) = std::env::var("MAUDE_PATH") {
         assert!(
@@ -44,23 +73,48 @@ pub fn maude_path() -> Option<String> {
         );
         return Some(p);
     }
-    MAUDE_CANDIDATES
-        .iter()
-        .find(|c| Path::new(c).exists())
-        .map(|c| c.to_string())
+    if let Some(c) = MAUDE_CANDIDATES.iter().find(|c| Path::new(c).exists()) {
+        return Some((*c).to_string());
+    }
+    if let Some(c) = maude_on_path() {
+        return Some(c);
+    }
+    Path::new(LINUXBREW_MAUDE)
+        .exists()
+        .then(|| LINUXBREW_MAUDE.to_string())
 }
 
-/// True when a maude binary exists where the run will look for it.  Every
-/// maude-backed pin uses this as a skip-guard.
+/// True when a maude binary was resolved.  Every maude-backed pin uses this as
+/// its guard.
+///
+/// A machine where NOTHING resolves fails here rather than skipping: the old
+/// probe walked only `/usr/local/bin` and `/usr/bin`, so on this workspace's
+/// own box (maude in linuxbrew) a bare `cargo test` skipped every
+/// maude-backed pin in every suite and still reported green — the runs with
+/// and without maude were indistinguishable.  Set `TAM_ALLOW_NO_MAUDE=1` to
+/// opt back into the skip.
 pub fn maude_available() -> bool {
-    maude_path().is_some()
+    if maude_path().is_some() {
+        return true;
+    }
+    assert!(
+        std::env::var(ALLOW_NO_MAUDE_ENV).as_deref() == Ok("1"),
+        "no maude found: $MAUDE_PATH unset, none of {MAUDE_CANDIDATES:?} \
+         exists, no `maude` on $PATH, and no {LINUXBREW_MAUDE}. Install maude \
+         or point MAUDE_PATH at one; skipping every maude-backed pin here \
+         would report green vacuously. Set {ALLOW_NO_MAUDE_ENV}=1 to skip \
+         them deliberately."
+    );
+    false
 }
 
-/// `--with-maude=PATH` from the `MAUDE_PATH` env override, when set.
+/// `--with-maude=PATH` naming the maude [`maude_path`] resolved, so the
+/// harness and the process under test always agree on which binary ran: the
+/// port's own `default_maude_path` (run.rs) walks only [`MAUDE_CANDIDATES`]
+/// and then a bare `maude`, which finds neither a `$PATH`-only install that
+/// the test process inherited nor [`LINUXBREW_MAUDE`].
 pub fn maude_arg() -> Option<String> {
-    std::env::var("MAUDE_PATH")
-        .ok()
-        .map(|p| format!("--with-maude={p}"))
+    maude_path().map(|p| format!("--with-maude={p}"))
 }
 
 /// `<maude> --version` of the same binary the run hands the prover.
@@ -130,8 +184,8 @@ pub fn joined(lines: &[&str]) -> String {
 }
 
 /// Run the built binary on `inputs` with `extra` flags, returning
-/// `(exit code, raw stdout, raw stderr)`.  `--with-maude` is threaded from
-/// `MAUDE_PATH` when set and precedes every other argument.
+/// `(exit code, raw stdout, raw stderr)`.  [`maude_arg`]'s `--with-maude`
+/// precedes every other argument when a maude resolved.
 pub fn run_binary(extra: &[&str], inputs: &[&Path]) -> (i32, String, String) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
     if let Some(a) = maude_arg() {
