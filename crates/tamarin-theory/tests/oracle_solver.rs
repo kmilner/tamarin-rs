@@ -152,56 +152,186 @@ fn oracle_command_within(secs: u32) -> Option<Command> {
     Some(cmd)
 }
 
-/// A corpus probe's committed match floor: `Some(n)` asserts the probe still
-/// matches at least `n`, `None` means no run has recorded one yet.
-type ProbeFloor = Option<usize>;
-
-/// Floor for `corpus_verdict_match_coverage_probe`'s verdict-match count.
+/// A corpus probe's committed mismatch ledger: `Some` lists the exact
+/// `<corpus-relative-path>::<lemma>` identities expected to mismatch (the
+/// analogue of scripts/sweep_expected.tsv), `None` means no run has
+/// enumerated one yet.  The path is corpus-relative, not a bare file name:
+/// the corpus mirrors some files (`features/auto-sources/tamarin-repo/…`
+/// duplicates `related_work/…`), and a name-keyed identity would collide
+/// across the mirror — one copy's divergence resolving would be masked by
+/// the other's persisting.
 ///
-/// `None`: that `#[ignore]`d whole-corpus probe has not been run since it
-/// gained a floor, so there is no measured value to commit and inventing one
-/// would be worse than none.  The probe prints its observed count and fails
-/// with the exact line to paste here.
-const VERDICT_MATCH_FLOOR: ProbeFloor = None;
+/// Counts proved untrustworthy here: the eligible set breathes with the
+/// per-file oracle timeout under machine load — a quiet run admits marginal
+/// files that carry disproportionate mismatches — so a count floor flakes in
+/// both directions while the mismatch *identities* stay put.
+type ProbeLedger = Option<&'static [&'static str]>;
 
-/// Floor for `corpus_proof_skeleton_match_probe`'s structural-match count.
-/// `None` for the same reason as [`VERDICT_MATCH_FLOOR`].
-const STRUCTURAL_MATCH_FLOOR: ProbeFloor = None;
-
-/// Enforce a corpus probe's floor, after it has printed its diagnostics.
+/// Expected verdict mismatches for `corpus_verdict_match_coverage_probe`.
 ///
-/// Two ways to fail: the probe compared nothing (every file filtered away, or
-/// the oracle/maude/corpus missing — a probe that matched nothing against
-/// nothing is not a passing probe), or it landed below the committed floor.
-/// An uncommitted floor fails too and names the value to commit: a probe that
-/// only whispers its score is a probe no regression can fail.
-fn enforce_probe_floor(
+/// Enumerated 2026-08-10 (60s oracle timeout, release, guarded serial run;
+/// identity-stable across two enumerations at different machine load —
+/// 138/142 and 150/154 matched, same four identities both times).
+const VERDICT_MISMATCH_LEDGER: ProbeLedger = Some(&[
+    "loops/JCS12_Typing_Example.spthy::Client_session_key_secrecy_raw",
+    "loops/JCS12_Typing_Example.spthy::typing_assertion",
+    "post17/foo_eligibility.spthy::eligibility",
+    "post17/foo_eligibility.spthy::types",
+]);
+
+/// Minimum lemmas the verdict probe must actually compare.  Guards the
+/// source-text exclusions (oracle-ranked, `diff(`, sapic, DH/XOR/BP) and the
+/// eligible-set breathing: a run that compares fewer has collapsed its
+/// coverage (oracle missing, corpus moved, timeout too tight for the load)
+/// and proves nothing no matter how clean its mismatch list looks.
+const VERDICT_MIN_COMPARED: usize = 120;
+
+/// Expected structural mismatches for `corpus_proof_skeleton_match_probe`.
+///
+/// Enumerated 2026-08-10 (60s oracle timeout, release; identity-stable across
+/// two enumerations — 815/837 and 819/841 matched, same 22-identity multiset
+/// both times, corpus mirror copies listed individually).
+const STRUCTURAL_MISMATCH_LEDGER: ProbeLedger = Some(&[
+    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::EligVerif",
+    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::TimelyP",
+    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::Uniqueness",
+    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::VoterC",
+    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::ballotsFromVoters",
+    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::indivVerif",
+    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::secretSskD",
+    "asiaccs20-POIDC/OIDC_Implicit.spthy::Intent_Consent_and_Correct_Browser",
+    "asiaccs20-POIDC/proofs/PROOF_OIDC_Implicit.spthy::executable",
+    "csf26-ac/fast/Yubikey_multiset.spthy::Login_invalidates_smaller_counters",
+    "csf26-ac/multiset-UD/YubiSecure_KS_STM12/Yubikey_multiset.spthy::Login_invalidates_smaller_counters",
+    "features/auto-sources/tamarin-repo/asiaccs20-POIDC/OIDC_Implicit.spthy::Intent_Consent_and_Correct_Browser",
+    "features/auto-sources/tamarin-repo/loops/JCS12_Typing_Example.spthy::Client_session_key_secrecy_raw",
+    "features/auto-sources/tamarin-repo/loops/JCS12_Typing_Example.spthy::typing_assertion",
+    "features/auto-sources/tamarin-repo/thesis-SvenHammann-POIDC/OIDC_Implicit.spthy::User_Authentication",
+    "loops/JCS12_Typing_Example.spthy::Client_session_key_secrecy_raw",
+    "loops/JCS12_Typing_Example.spthy::typing_assertion",
+    "post17/foo_eligibility.spthy::eligibility",
+    "post17/foo_eligibility.spthy::exec",
+    "post17/foo_eligibility.spthy::types",
+    "thesis-SvenHammann-POIDC/OIDC_Implicit.spthy::User_Authentication",
+    "thesis-SvenHammann-POIDC/proofs/PROOF_OIDC_Implicit.spthy::executable",
+]);
+
+/// Minimum lemmas the skeleton probe must hold a comparison for (a
+/// no-Haskell-skeleton lemma counts: the oracle produced a proof we could
+/// look for, which is coverage even when the diff itself is impossible).
+const STRUCTURAL_MIN_COMPARED: usize = 540;
+
+/// Enforce a corpus probe's mismatch ledger, after diagnostics are printed.
+///
+/// Four ways to fail: coverage collapsed below `min_compared`; the ledger is
+/// still `None` (a probe that only whispers its mismatches is a probe no
+/// regression can fail — the panic prints the paste-ready ledger); a mismatch
+/// appeared that the ledger does not name (a regression); or a ledgered
+/// identity was compared and came out clean (a stale ledger — remove the
+/// entry in a commit that explains the fix).  Ledgered identities that were
+/// not compared this run (per-file oracle timeout under load) are printed
+/// but sorted into neither failure class: absence of a comparison is not
+/// evidence in either direction.
+#[allow(clippy::too_many_arguments)]
+fn enforce_probe_ledger(
     label: &str,
-    floor_const: &str,
-    floor: ProbeFloor,
-    observed: usize,
-    compared: usize,
+    ledger_const: &str,
+    min_const: &str,
+    ledger: ProbeLedger,
+    min_compared: usize,
+    compared_ids: &[String],
+    coverage: usize,
+    mismatches: &[(String, String)],
 ) {
+    use tamarin_utils::FastSet;
     assert!(
-        compared > 0,
-        "{label}: 0 comparable lemmas — the probe compared nothing. Check the \
-         oracle binary, maude, and the corpus root before reading anything \
-         into a green run."
+        coverage >= min_compared,
+        "{label}: only {coverage} comparisons (need {min_const}={min_compared}) — \
+         coverage collapsed. Check the oracle binary, maude, the corpus root \
+         and machine load before reading anything into this run."
     );
-    match floor {
+    let mut mm_ids: Vec<&str> = mismatches.iter().map(|(id, _)| id.as_str()).collect();
+    mm_ids.sort_unstable();
+    let led = match ledger {
         None => panic!(
-            "{label}: observed {observed}/{compared}, but {floor_const} is None — no \
-             run has committed a floor yet. Record this run by setting \
-             `const {floor_const}: ProbeFloor = Some({observed});` with a comment \
-             naming it, so the next regression fails instead of whispering."
+            "{label}: {} mismatches over {coverage} comparisons, but {ledger_const} \
+             is None — no run has committed the expected set yet. Record this run:\n\
+             const {ledger_const}: ProbeLedger = Some(&[\n{}]);",
+            mismatches.len(),
+            mm_ids
+                .iter()
+                .map(|i| format!("    {i:?},\n"))
+                .collect::<String>(),
         ),
-        Some(f) => assert!(
-            observed >= f,
-            "{label}: {observed}/{compared} is below the committed floor {f} \
-             ({floor_const}) — a regression. If the drop is intended, lower the \
-             floor in the same commit that explains why."
-        ),
+        Some(l) => l,
+    };
+    let led_set: FastSet<&str> = led.iter().copied().collect();
+    let mm_set: FastSet<&str> = mm_ids.iter().copied().collect();
+    let cmp_set: FastSet<&str> = compared_ids.iter().map(|s| s.as_str()).collect();
+    let mut unexpected: Vec<&(String, String)> = mismatches
+        .iter()
+        .filter(|(id, _)| !led_set.contains(id.as_str()))
+        .collect();
+    unexpected.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut resolved: Vec<&str> = led
+        .iter()
+        .copied()
+        .filter(|e| cmp_set.contains(e) && !mm_set.contains(e))
+        .collect();
+    resolved.sort_unstable();
+    let mut uncompared: Vec<&str> = led
+        .iter()
+        .copied()
+        .filter(|e| !cmp_set.contains(e))
+        .collect();
+    uncompared.sort_unstable();
+    if !uncompared.is_empty() {
+        eprintln!(
+            "{label}: {} ledgered mismatch(es) not compared this run (per-file \
+             oracle timeout under load?): {uncompared:?}",
+            uncompared.len(),
+        );
     }
+    assert!(
+        unexpected.is_empty() && resolved.is_empty(),
+        "{label}: ledger violated.\n\
+         unexpected mismatches (regressions): {unexpected:#?}\n\
+         ledgered but compared clean (stale {ledger_const} entries — remove in \
+         a commit that explains the fix): {resolved:?}",
+    );
+}
+
+/// True if `src` declares an oracle-ranked heuristic — theory-level
+/// (`heuristic: o "./script"`, `heuristic: osopo`) or lemma-attribute
+/// (`[heuristic=soioo]`).  Braced values (`heuristic={tactic_name}`)
+/// reference named tactics, never external scripts, and don't count.
+///
+/// Oracle-ranked proving execs the oracle script relative to the invoker's
+/// CWD and `std::process::exit(1)`s when it is missing (HS: IO exception →
+/// dies with empty stdout; RS: `search::rank_goals_or_abort`) — one such
+/// file aborts the whole probe binary, uncatchably, so both corpus probes
+/// skip them up front.  Matches inside comments that merely quote a
+/// `--heuristic=O` command line over-exclude a few files; the
+/// `*_MIN_COMPARED` guards keep the exclusion honest.
+fn mentions_oracle_ranking(src: &str) -> bool {
+    for (i, _) in src.match_indices("heuristic") {
+        let rest = src[i + "heuristic".len()..].trim_start();
+        let Some(rest) = rest.strip_prefix([':', '=']) else {
+            continue;
+        };
+        let val = rest.trim_start();
+        if val.starts_with('{') {
+            continue; // named-tactic reference, no external script
+        }
+        if val
+            .chars()
+            .take_while(|c| c.is_ascii_alphabetic())
+            .any(|c| c == 'o' || c == 'O')
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn tamarin_available() -> bool {
@@ -961,13 +1091,14 @@ end"#;
 
 /// **Corpus verdict-match coverage probe**: walks the corpus directories
 /// listed below, runs `prove_lemma` and the pinned oracle's `--prove` on
-/// every lemma, and reports a verdict-match count to stderr.  The count is
-/// then held to [`VERDICT_MATCH_FLOOR`], so a drop fails the probe instead of
-/// scrolling past in the log.
+/// every lemma, and holds the mismatches to [`VERDICT_MISMATCH_LEDGER`] —
+/// an unexpected mismatch or a silently-resolved ledger entry fails the
+/// probe instead of scrolling past in the log.
 ///
 /// Skips files that mention `diff(`, `predicates:` or `process:`, files whose
-/// `builtins:` name diffie-hellman / xor / bilinear-pairing, and any file the
-/// oracle does not finish within 10s.
+/// `builtins:` name diffie-hellman / xor / bilinear-pairing, oracle-ranked
+/// files (see [`mentions_oracle_ranking`]), and any file the oracle does not
+/// finish within 60s.
 ///
 /// **Deprecated** as a primary metric — verdict-only matching masks
 /// reasoning bugs (right answer, wrong proof structure).  Use
@@ -1070,6 +1201,10 @@ fn corpus_verdict_match_coverage_probe() {
             if src.contains("diff(") {
                 return None;
             }
+            // Oracle-ranked files would process::exit the probe binary.
+            if mentions_oracle_ranking(&src) {
+                return None;
+            }
             // Macros are supported via parser-AST macro expansion
             // (tamarin_theory::macro_expand).  Predicates still need their
             // own port (RS predicate_expand handles formulas but elaborate
@@ -1089,8 +1224,10 @@ fn corpus_verdict_match_coverage_probe() {
             }
 
             let theory = tamarin_parser::parse_theory(&src, &[]).ok()?;
-            // Run tamarin once per file with a timeout.
-            let tam_out = oracle_command_within(10)?
+            // Run tamarin once per file with a timeout.  60s, not 10: at 10s
+            // the eligible set breathed with machine load, and the ledger
+            // pins identities from a maximally-complete enumeration.
+            let tam_out = oracle_command_within(60)?
                 .arg("--prove")
                 .arg(path)
                 .output()
@@ -1154,8 +1291,8 @@ fn corpus_verdict_match_coverage_probe() {
     // its own MaudeHandle (independent subprocess); rayon manages
     // thread-pool sizing via num_cpus.
     enum LemmaOutcome {
-        Match,
-        Diff(String),
+        Match(String),
+        Diff(String, String),
         Incomparable,
     }
     let dbg_incomp = std::env::var("TAM_DBG_INCOMPARABLE").is_ok();
@@ -1221,53 +1358,65 @@ fn corpus_verdict_match_coverage_probe() {
                     return LemmaOutcome::Incomparable;
                 }
             };
+            let rel = w
+                .path
+                .strip_prefix(&corpus_root)
+                .unwrap_or(w.path.as_path())
+                .to_string_lossy();
+            let id = format!("{}::{}", rel, w.lemma_name);
             if our_verdict == w.tamarin_verdict {
-                LemmaOutcome::Match
+                LemmaOutcome::Match(id)
             } else {
-                LemmaOutcome::Diff(format!(
-                    "{}::{} — ours={}, tamarin={}",
-                    w.path.file_name().unwrap().to_string_lossy(),
-                    w.lemma_name,
-                    our_verdict,
-                    w.tamarin_verdict
-                ))
+                let detail = format!(
+                    "{} — ours={}, tamarin={}",
+                    id, our_verdict, w.tamarin_verdict
+                );
+                LemmaOutcome::Diff(id, detail)
             }
         })
         .collect();
 
     // Aggregate.
-    let mut compared = 0usize;
+    let mut compared_ids: Vec<String> = Vec::new();
     let mut matched = 0usize;
-    let mut diffs: Vec<String> = Vec::new();
+    let mut mismatches: Vec<(String, String)> = Vec::new();
     for o in outcomes {
         match o {
-            LemmaOutcome::Match => {
-                compared += 1;
+            LemmaOutcome::Match(id) => {
+                compared_ids.push(id);
                 matched += 1;
             }
-            LemmaOutcome::Diff(d) => {
-                compared += 1;
-                diffs.push(d);
+            LemmaOutcome::Diff(id, detail) => {
+                compared_ids.push(id.clone());
+                mismatches.push((id, detail));
             }
             LemmaOutcome::Incomparable => {}
         }
     }
 
-    eprintln!("corpus verdict-match: {}/{} matched", matched, compared);
-    if !diffs.is_empty() {
+    eprintln!(
+        "corpus verdict-match: {}/{} matched",
+        matched,
+        compared_ids.len()
+    );
+    if !mismatches.is_empty() {
         eprintln!("mismatches:");
         // Sort for deterministic output order under parallel scheduling.
-        diffs.sort();
-        for d in &diffs {
+        mismatches.sort();
+        for (_, d) in &mismatches {
             eprintln!("  {}", d);
         }
     }
-    enforce_probe_floor(
+    let coverage = compared_ids.len();
+    enforce_probe_ledger(
         "corpus verdict-match",
-        "VERDICT_MATCH_FLOOR",
-        VERDICT_MATCH_FLOOR,
-        matched,
-        compared,
+        "VERDICT_MISMATCH_LEDGER",
+        "VERDICT_MIN_COMPARED",
+        VERDICT_MISMATCH_LEDGER,
+        VERDICT_MIN_COMPARED,
+        &compared_ids,
+        coverage,
+        &mismatches,
     );
 }
 
@@ -1280,25 +1429,22 @@ fn corpus_verdict_match_coverage_probe() {
 /// Reports `corpus structural-match: X/Y` where Y is the total number
 /// of lemmas where Haskell's proof skeleton is available — verdict
 /// divergences DO count against structural match (verdict-only matching
-/// masks reasoning bugs).  X is then held to [`STRUCTURAL_MATCH_FLOOR`], so a
-/// drop fails the probe instead of scrolling past in the log.
+/// masks reasoning bugs).  The divergence identities are then held to
+/// [`STRUCTURAL_MISMATCH_LEDGER`], so an unexpected divergence or a
+/// silently-resolved ledger entry fails the probe instead of scrolling
+/// past in the log.
 ///
 /// This is the **primary metric** for the port's progress, per
 /// project directive: count only whether the proof matches the
 /// Haskell skeleton directly.
 ///
 /// `#[ignore]`d (run with `cargo test -- --ignored`): this heavyweight
-/// whole-corpus probe proves every example in-process, but ~99 corpus
-/// files declare an oracle heuristic, and the prover faithfully
-/// `std::process::exit(1)`s when an oracle script fails to exec (HS
-/// behaviour: oracle IO exception → die with empty stdout; the RS site is
-/// `search::rank_goals_or_abort`).
-/// A `process::exit` is uncatchable by the per-lemma `catch_unwind`, so a
-/// single oracle file aborts the whole test binary. Kept active as a
-/// deliberate `--ignored` probe, consistent with the sibling diagnostic
-/// probes above (run against a corpus with oracle scripts on PATH/CWD).
+/// whole-corpus probe proves every example in-process — an hour-plus of
+/// wall clock.  Oracle-ranked files are skipped up front (see
+/// [`mentions_oracle_ranking`]: a missing oracle script is an uncatchable
+/// `process::exit(1)` that would abort the whole test binary).
 #[test]
-#[ignore = "heavyweight whole-corpus probe; oracle files trigger process::exit. Run with --ignored"]
+#[ignore = "heavyweight whole-corpus probe (hour-plus). Run with --ignored"]
 fn corpus_proof_skeleton_match_probe() {
     use rayon::prelude::*;
     use tamarin_theory::proof_skeleton::{extract_from_haskell, first_divergence, render};
@@ -1358,6 +1504,10 @@ fn corpus_proof_skeleton_match_probe() {
             if src.contains("diff(") {
                 return None;
             }
+            // Oracle-ranked files would process::exit the probe binary.
+            if mentions_oracle_ranking(&src) {
+                return None;
+            }
             // Macros are supported via parser-AST macro expansion
             // (tamarin_theory::macro_expand).
             if src.contains("predicates:") {
@@ -1374,7 +1524,10 @@ fn corpus_proof_skeleton_match_probe() {
 
             let theory = tamarin_parser::parse_theory(&src, &[]).ok()?;
             let out_path = format!("/tmp/proof_skel_corpus_{}_{}.spthy", pid, idx);
-            let tam_out = oracle_command_within(10)?
+            // 60s, not 10: at 10s the eligible set breathed with machine
+            // load, and the ledger pins identities from a
+            // maximally-complete enumeration.
+            let tam_out = oracle_command_within(60)?
                 .arg("--prove")
                 .arg(format!("--output={}", out_path))
                 .arg(path)
@@ -1444,9 +1597,13 @@ fn corpus_proof_skeleton_match_probe() {
 
     // Phase 4: per-lemma prove + diff in parallel.
     enum Outcome {
-        StructMatch,
+        StructMatch(String),
         StructDiff {
-            file_lemma: String,
+            // `id` stays the bare `file::lemma` (the ledger key); the
+            // verdict annotation rides separately in `note` so a verdict
+            // flip can't mint a second identity for the same divergence.
+            id: String,
+            note: String,
             line: usize,
             ours: String,
             theirs: String,
@@ -1482,8 +1639,12 @@ fn corpus_proof_skeleton_match_probe() {
                 Some(v) => v,
                 None => return Outcome::Incomparable,
             };
-            let fname = w.path.file_name().unwrap().to_string_lossy().into_owned();
-            let file_lemma = format!("{}::{}", fname, w.lemma_name);
+            let rel = w
+                .path
+                .strip_prefix(&corpus_root)
+                .unwrap_or(w.path.as_path())
+                .to_string_lossy();
+            let file_lemma = format!("{}::{}", rel, w.lemma_name);
             // **Structural match is the only metric** (per project directive).
             // Always diff proof skeletons, regardless of verdict — a verdict
             // match on a structurally-divergent proof means we're getting the
@@ -1502,9 +1663,10 @@ fn corpus_proof_skeleton_match_probe() {
                 String::new()
             };
             match first_divergence(&ours, &theirs) {
-                None => Outcome::StructMatch,
+                None => Outcome::StructMatch(file_lemma),
                 Some((line, ol, tl)) => Outcome::StructDiff {
-                    file_lemma: format!("{}{}", file_lemma, verdict_note),
+                    id: file_lemma,
+                    note: verdict_note,
                     line,
                     ours: ol,
                     theirs: tl,
@@ -1514,42 +1676,49 @@ fn corpus_proof_skeleton_match_probe() {
         .collect();
 
     let mut struct_match = 0usize;
-    let mut struct_diff: Vec<String> = Vec::new();
+    let mut compared_ids: Vec<String> = Vec::new();
+    let mut mismatches: Vec<(String, String)> = Vec::new();
     let mut no_skel: Vec<String> = Vec::new();
     let mut incomparable = 0usize;
     for o in outcomes {
         match o {
-            Outcome::StructMatch => struct_match += 1,
+            Outcome::StructMatch(id) => {
+                struct_match += 1;
+                compared_ids.push(id);
+            }
             Outcome::StructDiff {
-                file_lemma,
+                id,
+                note,
                 line,
                 ours,
                 theirs,
             } => {
-                struct_diff.push(format!(
-                    "{} — diverge line {}: ours={:?} theirs={:?}",
-                    file_lemma, line, ours, theirs
-                ));
+                let detail = format!(
+                    "{}{} — diverge line {}: ours={:?} theirs={:?}",
+                    id, note, line, ours, theirs
+                );
+                compared_ids.push(id.clone());
+                mismatches.push((id, detail));
             }
             Outcome::NoHaskellSkeleton(s) => no_skel.push(s),
             Outcome::Incomparable => incomparable += 1,
         }
     }
-    let comparable = struct_match + struct_diff.len() + no_skel.len();
+    let coverage = struct_match + mismatches.len() + no_skel.len();
     eprintln!(
         "corpus structural-match: {}/{} ({} struct-divergent, \
               {} no-haskell-skel, {} incomparable)",
         struct_match,
-        comparable,
-        struct_diff.len(),
+        coverage,
+        mismatches.len(),
         no_skel.len(),
         incomparable
     );
 
-    if !struct_diff.is_empty() {
+    if !mismatches.is_empty() {
         eprintln!("structural divergences:");
-        struct_diff.sort();
-        for d in &struct_diff {
+        mismatches.sort();
+        for (_, d) in &mismatches {
             eprintln!("  {}", d);
         }
     }
@@ -1560,12 +1729,15 @@ fn corpus_proof_skeleton_match_probe() {
             eprintln!("  {}", d);
         }
     }
-    enforce_probe_floor(
+    enforce_probe_ledger(
         "corpus structural-match",
-        "STRUCTURAL_MATCH_FLOOR",
-        STRUCTURAL_MATCH_FLOOR,
-        struct_match,
-        comparable,
+        "STRUCTURAL_MISMATCH_LEDGER",
+        "STRUCTURAL_MIN_COMPARED",
+        STRUCTURAL_MISMATCH_LEDGER,
+        STRUCTURAL_MIN_COMPARED,
+        &compared_ids,
+        coverage,
+        &mismatches,
     );
 }
 
