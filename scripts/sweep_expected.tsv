@@ -1,6 +1,8 @@
 # Documented pre-existing residuals for the parity sweeps (sweep_common.sh
-# apply_ledger). A DIFF/ERROR row whose file is listed here for its sweep is
-# reported LEDGERED. Columns (tab-separated):
+# apply_ledger). A DIFF/ERROR row whose file is listed here for its sweep gets a
+# terminal status: LEDGERED when a divergence was observed, UNCOMPARED when the
+# row's symptom is `timeout/kill` and therefore nothing was compared (see
+# "TIMEOUT/KILL ENTRIES CERTIFY NOTHING" below). Columns (tab-separated):
 #   sweep	path relative to tamarin-prover/	class	note	[sub-unit]	[symptom]
 #
 # The optional 5th column narrows an entry to ONE sub-unit of the file — for
@@ -25,13 +27,30 @@
 #                          heuristic and emit ">>>> START ... Oracle call"
 #                          stderr blocks; RS deriv checks never call oracles.
 #   capacity               RS aborts (rc 134, stack/OOM at the 16GiB guard) or
-#                          both sides exhaust the 600s retry cap.
-#   (No hs-timeout class exists. "HS blew the cap, RS finished" is a claim
-#    about the BOX, not the port, and it goes stale the moment the machine
-#    gets faster or the oracle's cache warms: the two U2F entries carried it
-#    while their actual divergence was stderr-simplifier-trace, and the class
-#    masked every other symptom on those files meanwhile. Classify by the
-#    divergence observed, and give the entry that symptom.)
+#                          both sides exhaust the 600s retry cap. A
+#                          timeout/kill class — see below: reports UNCOMPARED,
+#                          never agreement.
+#
+#   TIMEOUT/KILL ENTRIES CERTIFY NOTHING. Two classes here — `capacity` and
+#   `oracle-timeout` — carry the symptom `timeout/kill`, which means a side was
+#   killed at the cap and the row compared NOTHING. apply_ledger terminates such
+#   a row as UNCOMPARED rather than LEDGERED, and sweep_finish prints it as its
+#   own UNCOMPARED=n figure beside the verdict on the DONE line: visible on
+#   every run, never folded into the clean count, and deliberately not fatal
+#   (the cap is a property of the box). An UNDOCUMENTED timeout/kill row stays
+#   ERROR and FAILS the sweep, so writing one down here is what makes it quiet —
+#   and all it buys is "we know this row is uncovered", not "this row passed".
+#
+#   Which is why such an entry must name the CAP and nothing else. "HS blew the
+#   cap, RS finished" is a claim about the BOX, not the port, and it goes stale
+#   the moment the machine gets faster or the oracle's cache warms: the two U2F
+#   entries carried a timeout class while their actual divergence was
+#   stderr-simplifier-trace, and it masked every other symptom on those files
+#   meanwhile. If you OBSERVED a divergence, classify by the divergence and give
+#   the entry that symptom (`hs-derivcheck-timeout` is the cap CAUSING an
+#   observed stdout divergence, so its symptom is `stdout` and it reports
+#   LEDGERED); reach for capacity/oracle-timeout only when the run produced no
+#   comparison to classify.
 #   (No replay-empty-json class exists. A json export that replays to `sorry`
 #    is a LOCAL replay-matcher fault, not the #874 numbering/eq-store class:
 #    check that the stored goal text round-trips through the AC signature
@@ -76,7 +95,11 @@
 #   oracle-timeout         the HS oracle cannot produce a reference inside
 #                          the 600s serial retry cap (rc hs=124); the sweep
 #                          then skips the RS side, so the row has nothing to
-#                          compare against.
+#                          compare against — the port is not executed at all.
+#                          A timeout/kill class: reports UNCOMPARED. Note that
+#                          LEDGER-STALE can never retire one of these, since a
+#                          cached timeout never comes back OK; they leave the
+#                          ledger only when someone re-measures them.
 #   stderr-open-chains     the derivation-check "[Open Chains] Too many chain
 #                          constraints" warning is emitted a different NUMBER
 #                          of times by the two sides (beyond the consecutive
@@ -134,24 +157,24 @@ pe	examples/thesis-LaraSchmid-evoting/chapter3_Alethea/aletheaD_sel_ShHh.spthy	s
 pe	examples/csf23-subterms/FreshOrderingTest.spthy	capacity	PE explodes both sides: hs=124 rs=134 at 600s serial		timeout/kill
 pe	examples/related_work/TPM_DKRS_CSF11/TPM_Exclusive_Secrets.spthy	capacity	hs=124 rs=134 at 600s serial		timeout/kill
 pe	examples/features/auto-sources/tamarin-repo/related_work/TPM_DKRS_CSF11/TPM_Exclusive_Secrets.spthy	capacity	same file, auto-sources copy		timeout/kill
-pe	examples/loops/Minimal_HashChain.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
-pe	examples/related_work/YubiSecure_KS_STM12/Yubikey.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Cronto_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Cronto_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Google2Step_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Google2Step_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_MA_NoTellExceptOK.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_MA_NoTellOK.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_VC.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/OTPoverSMS_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/OTPoverSMS_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Phoolproof_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
-pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Soundproof_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
+pe	examples/loops/Minimal_HashChain.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs=124 (600s timeout, guarded serial run 2026-08-10)		timeout/kill
+pe	examples/related_work/YubiSecure_KS_STM12/Yubikey.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs=124 (600s timeout, guarded serial run 2026-08-10)		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Cronto_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs=134 (16GiB-cap abort, guarded serial run 2026-08-10)		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Cronto_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs=134 (16GiB-cap abort, guarded serial run 2026-08-10)		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Google2Step_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs=124 (600s timeout, guarded serial run 2026-08-10)		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Google2Step_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs=124 (600s timeout, guarded serial run 2026-08-10)		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs=134 (16GiB-cap abort, guarded serial run 2026-08-10)		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_MA_NoTellExceptOK.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs=134 (16GiB-cap abort, guarded serial run 2026-08-10)		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_MA_NoTellOK.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs=134 (16GiB-cap abort, guarded serial run 2026-08-10)		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_VC.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs=124 (600s timeout, guarded serial run 2026-08-10)		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/OTPoverSMS_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs=134 (16GiB-cap abort, guarded serial run 2026-08-10)		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/OTPoverSMS_MA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs=134 (16GiB-cap abort, guarded serial run 2026-08-10)		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Phoolproof_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs=134 (16GiB-cap abort, guarded serial run 2026-08-10)		timeout/kill
+pe	examples/thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Soundproof_EA.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs=124 (600s timeout, guarded serial run 2026-08-10)		timeout/kill
 # Reached only once eligible() stopped excluding files on a rule-local `let`.
-pe	examples/csf17/counter-protocol.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
-pe	examples/sp14/STR.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
-pe	examples/sp14/STR_signed.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs side skipped		timeout/kill
+pe	examples/csf17/counter-protocol.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs=124 (600s timeout, guarded serial run 2026-08-10)		timeout/kill
+pe	examples/sp14/STR.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs=124 (600s timeout, guarded serial run 2026-08-10)		timeout/kill
+pe	examples/sp14/STR_signed.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs=124 (600s timeout, guarded serial run 2026-08-10)		timeout/kill
 pe	examples/sp14/group_joux.spthy	capacity	PE explodes both sides: rs=134 at the 16GiB guard, hs=124 at 600s (251 when the box is loaded)		timeout/kill
 pe	examples/related_work/YubiSecure_KS_STM12/Yubikey_and_YubiHSM_multiset.spthy	stored-proof-echo	AC multiset args reorder in the echoed proof (tc2 vs otc2++z.1, tc1++z vs otc1++z++z.2); HS also marks a step "invalid proof step encountered" and annotates "/* unannotated */"		stdout
 #

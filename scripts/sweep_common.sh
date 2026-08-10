@@ -124,9 +124,14 @@ io_diff() {
 #                uses (see nonempty_compared): a run whose every byte is a line
 #                norm blanks or nerr drops has left the verdict nothing, even
 #                though the raw file is not empty.
-# A timeout/kill is the fourth way to compare nothing; the sweeps already fence
-# that off as ERROR (and its capacity/oracle-timeout ledger classes) before any
-# verdict is reached, so it never reaches this helper.
+# A timeout/kill is the fourth way to compare nothing, and the only one that is
+# ledgerable. The sweeps fence it off as ERROR before this helper is reached, so
+# an UNDOCUMENTED one fails the sweep exactly like any other ERROR. A DOCUMENTED
+# one (the capacity/oracle-timeout ledger classes) does NOT become LEDGERED:
+# apply_ledger gives it the terminal status UNCOMPARED, which sweep_finish
+# reports as its own UNCOMPARED=n figure on the DONE line. Non-fatal, because
+# the cap is a property of the box rather than of the port; never folded into
+# the clean count, because nothing was compared.
 # ---------------------------------------------------------------------------
 
 # infra_abort <stderr-file>
@@ -443,8 +448,20 @@ sweep_banner() {
 }
 
 # apply_ledger <out.tsv> <sweep-name> <status-col> [sub-unit-col]
-#   Rewrites DIFF/ERROR rows whose file has a ledger entry for this sweep to
-#   status LEDGERED (class appended). NO-COMPARE is deliberately not ledgerable:
+#   Rewrites DIFF/ERROR rows whose file has a ledger entry for this sweep to a
+#   terminal status, with the class appended to the detail. WHICH terminal
+#   status depends on whether the row compared anything at all:
+#     LEDGERED    a divergence was observed and is documented. Counted clean.
+#     UNCOMPARED  the row compared NOTHING: a side was killed at the cap
+#                 (status ERROR, or a detail whose first word is
+#                 `timeout/kill`), so there is no observation for the entry to
+#                 excuse — only a cost to record. sweep_finish reports these as
+#                 their own UNCOMPARED=n figure instead of hiding them in the
+#                 clean count, and they are deliberately not fatal: the cap is a
+#                 property of the box. An UNDOCUMENTED one stays ERROR and fails
+#                 the sweep, so the only way a timeout goes quiet is by being
+#                 written down in the ledger.
+#   NO-COMPARE is deliberately not ledgerable at all:
 #   a ledger entry documents a divergence that WAS observed, and a row that
 #   observed nothing cannot be one.
 #   The row key is the file path made relative to tamarin-prover/, matched
@@ -510,7 +527,12 @@ apply_ledger() {
         seen[key] = 1
         split($NF, d, " ")
         if (($col == "DIFF" || $col == "ERROR") && (det[key] == "" || det[key] == d[1])) {
-          $col = "LEDGERED"; $NF = $NF " [" cls[key] "]"; hit[key] = 1
+          # A killed run produced nothing to disagree with, so "documented"
+          # cannot mean "agrees" here: the row terminates as UNCOMPARED, which
+          # sweep_finish counts apart from the clean rows. hit[] is still set —
+          # the entry IS excusing this row, so it must not be reported STALE.
+          $col = ($col == "ERROR" || d[1] == "timeout/kill") ? "UNCOMPARED" : "LEDGERED"
+          $NF = $NF " [" cls[key] "]"; hit[key] = 1
         } else if ($col == "OK") ok[key] = 1
       }
       print
@@ -540,8 +562,14 @@ apply_ledger() {
 #   died before appending, an xargs that never ran, a retry that dropped its
 #   row). Both are silent in a plain status histogram, which is exactly how a
 #   sweep gets to look green without having compared anything.
+#
+#   The DONE line carries UNCOMPARED=n beside the verdict, always — the rows
+#   apply_ledger terminated as UNCOMPARED are documented timeouts/kills, so they
+#   do not fail the run, but they are not agreement either and a reader must not
+#   have to go looking for them. verdict=OK UNCOMPARED=25 means "the rows it
+#   compared agree, and 25 rows were never compared".
 sweep_finish() {
-  local out=$1 sweep=$2 col=$3 unitcol=${4:-0} nc rows total bad='' bd
+  local out=$1 sweep=$2 col=$3 unitcol=${4:-0} nc unc rows total bad='' bd
   # The parallel children append in completion order, which varies with load;
   # sorting makes two runs of the same corpus diffable against each other.
   sort -o "$out" "$out"
@@ -550,6 +578,8 @@ sweep_finish() {
   cut -f"$col" "$out" | sort | uniq -c
   awk -F'\t' -v col="$col" '$col == "DIFF" || $col == "ERROR"' "$out" | head -40
   nc=$(awk -F'\t' -v col="$col" '$col == "NO-COMPARE"' "$out" | grep -c .)
+  # Counted AFTER apply_ledger, which is what mints the status.
+  unc=$(awk -F'\t' -v col="$col" '$col == "UNCOMPARED"' "$out" | grep -c .)
   # An ABSENT out.tsv makes grep print nothing at all, and an empty `rows`
   # turns the row-count test below into a shell error that leaves the flag
   # unset — the one state (no file, so no comparison whatsoever) that most
@@ -565,6 +595,10 @@ sweep_finish() {
     echo "== $nc row(s) compared NOTHING — these are failures, not agreement =="
     awk -F'\t' -v col="$col" '$col == "NO-COMPARE"' "$out" | head -40
   fi
+  if [ "$unc" -gt 0 ]; then
+    echo "== $unc row(s) UNCOMPARED — a documented timeout/kill reached no verdict on them =="
+    awk -F'\t' -v col="$col" '$col == "UNCOMPARED"' "$out" | head -40
+  fi
   if [ "$rows" -ne "$total" ]; then
     bad="${bad:+$bad }ROW-COUNT=$rows/$total"
     echo "== $rows rows for $total items — the missing ones were never compared =="
@@ -573,6 +607,6 @@ sweep_finish() {
     bad="${bad:+$bad }LEDGER=$LEDGER_REPORTS"
     echo "== $LEDGER_REPORTS ledger entry/entries excuse nothing (see LEDGER-* on stderr) — drop them =="
   fi
-  echo "== DONE $sweep $(date -u +%FT%TZ) verdict=${bad:-OK} =="
+  echo "== DONE $sweep $(date -u +%FT%TZ) verdict=${bad:-OK} UNCOMPARED=$unc =="
   [ -z "$bad" ]
 }

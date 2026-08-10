@@ -22,6 +22,16 @@
 #                  which includes known-infeasible monsters)
 #      FLAGS_MAP, CORPUS, JOBS, TIMEOUT, DERIV, OUT,
 #      RESUME      path to a prior TSV: files already present are skipped
+#
+# Exit status carries the verdict, which the DONE line repeats: nonzero on any
+# DIFF and on every row that compared NOTHING — ERROR_ONE/ERROR_BOTH (a prover
+# died; identical failure banners are not agreement), TIMEOUT_ONE/TIMEOUT_BOTH
+# (a side was killed at the cap, so no output was produced to compare),
+# EMPTY_BOTH, NOFILE — plus any allowlisted file that produced no row at all.
+# TIMEOUT_BOTH being fatal is deliberate: at the default 180s cap a full-corpus
+# --prove sweep WILL hit it, and "both binaries ran out of time" is a statement
+# about the cap, not evidence that the refactor is inert. Raise TIMEOUT or
+# narrow ALLOWLIST until the set you claim is covered actually is.
 set -u
 
 # OOM discipline: make the sweep (and the provers it spawns, which inherit
@@ -97,12 +107,18 @@ else
     : > "$OUT"
 fi
 if [ -n "$ALLOWLIST" ]; then
-    mapfile -t ALL < <(sort -u "$ALLOWLIST")
+    # Comments and blanks dropped: they are not files, and now that NOFILE is
+    # fatal they would fail the run rather than be quietly reported.
+    mapfile -t ALL < <(grep -v '^[[:space:]]*#' "$ALLOWLIST" | grep . | sort -u)
     echo "rs_vs_rs: ALLOWLIST=$ALLOWLIST (${#ALL[@]} files)"
 else
     mapfile -t ALL < <(find . -name '*.spthy' | sed 's|^\./||' | sort)
     echo "rs_vs_rs: no ALLOWLIST — sweeping ALL ${#ALL[@]} corpus files (includes known-infeasible ones)"
 fi
+# Zero files is the whole-run form of comparing nothing: no rows, an empty
+# histogram, and a verdict that reads exactly like an inert refactor.
+[ "${#ALL[@]}" -gt 0 ] || {
+    echo "rs_vs_rs: the file list resolved to 0 entries — nothing to compare" >&2; exit 2; }
 FILES=()
 for f in "${ALL[@]}"; do [ -n "${DONE[$f]:-}" ] || FILES+=("$f"); done
 TOTAL=${#FILES[@]}
@@ -122,7 +138,36 @@ echo "=== SUMMARY ==="
 awk -F'\t' '{c[$2]++} END{for(k in c) printf "  %-14s %d\n", k, c[k]}' "$OUT"
 echo "=== DIFFs (behavioral changes from the refactor) ==="
 awk -F'\t' '$2=="DIFF"{print "  "$3"\t"$1}' "$OUT" | sort -rn
-echo "=== needs attention (env problems or one-sided failures) ==="
-awk -F'\t' '$2=="ERROR_BOTH"||$2=="ERROR_ONE"||$2=="TIMEOUT_ONE"||$2=="NOFILE"||$2=="EMPTY_BOTH"{print "  "$2"\t"$1}' "$OUT"
+echo "=== needs attention (rows that compared nothing) ==="
+awk -F'\t' '$2 ~ /^(ERROR_|TIMEOUT_)/ || $2=="NOFILE" || $2=="EMPTY_BOTH" {print "  "$2"\t"$1}' "$OUT"
 echo "  results: $OUT"
-echo "DONE_RS_VS_RS"
+
+# Verdict — the histogram above is the whole story only if someone reads it.
+# SAME is the only status that says the two binaries were shown to agree:
+# everything else is either a behavioral change (DIFF) or a row where at least
+# one side produced no output to compare (a prover that died, one killed at the
+# cap, both silent). A file that produced no row at all is invisible in the
+# histogram, so coverage is checked as a set: every allowlisted file must have a
+# row. That is the RESUME-correct form of "rows == the number of files" — under
+# RESUME the file carries rows from the earlier run too, so counting rows
+# against this run's TOTAL would fail every resumed sweep.
+diffs=$(awk -F'\t' '$2=="DIFF"' "$OUT" | grep -c .)
+errs=$(awk -F'\t' '$2 ~ /^ERROR_/' "$OUT" | grep -c .)
+touts=$(awk -F'\t' '$2 ~ /^TIMEOUT_/' "$OUT" | grep -c .)
+nofile=$(awk -F'\t' '$2=="NOFILE"' "$OUT" | grep -c .)
+empty=$(awk -F'\t' '$2=="EMPTY_BOTH"' "$OUT" | grep -c .)
+# First-file detection is by FILENAME, not NR==FNR: an EMPTY OUT (a fresh run
+# whose every child died before writing) makes NR==FNR true throughout the
+# file list too, which would swallow every path into seen[] and count zero
+# missing rows — a verdict of OK over no rows at all.
+norow=$(awk -F'\t' -v out="$OUT" 'FILENAME==out{seen[$1]=1;next} !($1 in seen)' \
+            "$OUT" <(printf '%s\n' "${ALL[@]}") | grep -c .)
+bad=''
+[ "$diffs" = 0 ] || bad="DIFF=$diffs"
+[ "$errs" = 0 ] || bad="${bad:+$bad }ERROR=$errs"
+[ "$touts" = 0 ] || bad="${bad:+$bad }TIMEOUT=$touts"
+[ "$nofile" = 0 ] || bad="${bad:+$bad }NOFILE=$nofile"
+[ "$empty" = 0 ] || bad="${bad:+$bad }EMPTY_BOTH=$empty"
+[ "$norow" = 0 ] || bad="${bad:+$bad }ROW-COUNT=$(( ${#ALL[@]} - norow ))/${#ALL[@]}"
+echo "DONE_RS_VS_RS verdict=${bad:-OK}"
+[ -z "$bad" ]

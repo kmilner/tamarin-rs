@@ -5,10 +5,22 @@
 # PRE side frozen into a file: a PR runner only builds and runs its own
 # binary, so the job fits a slow GitHub runner.
 #
-#   scripts/rs_ref_check.sh generate   # run BIN, WRITE the reference (manual,
+#   scripts/rs_ref_check.sh generate --certified-by <gate-results>
+#                                      # run BIN, WRITE the reference (manual,
 #                                      # on a trusted build of main)
 #   scripts/rs_ref_check.sh check      # run BIN, DIFF against the reference;
 #                                      # nonzero exit on any mismatch (CI)
+#
+# The reference is a BASELINE: every later `check` measures against it, so
+# rewriting it turns whatever this binary does today into the definition of
+# correct. Nothing in this script compares against the Haskell prover, so on its
+# own `generate` would launder a regression into the baseline. Hence
+# --certified-by <gate-results>: the saved output of an ORACLE gate run (a
+# corpus_file_diff.sh / wf_gate.sh / *_sweep.sh log, or anything else carrying a
+# `verdict=` line) whose verdict reads OK. Its path, its verdict and the
+# fingerprint of the oracle binary on this machine are stamped into the
+# reference header beside `# maude:`, so the committed baseline carries the
+# evidence that an oracle run justified it.
 #
 # Reference rows: relpath \t input_key \t output_sha256 \t lines
 #   input_key = sha256 of the theory file (+ flags-hash suffix when
@@ -24,12 +36,30 @@
 # Env: BIN (default target/release/tamarin-rs), REF (default
 #      scripts/ci_ref_fast.tsv), ALLOWLIST (default
 #      scripts/parity_corpus_fast.txt), FLAGS_MAP, CORPUS, TIMEOUT (120),
-#      DERIV (30), JOBS, EXTRA_FLAGS
+#      DERIV (30), JOBS, EXTRA_FLAGS, HS_PATH (the oracle binary whose
+#      fingerprint `generate` stamps; found under tamarin-prover-testing/ if
+#      unset)
 set -u
 LC_ALL=C
 
+usage() {
+    echo "usage: $0 generate --certified-by <gate-results>" >&2
+    echo "       $0 check" >&2
+}
 MODE="${1:-}"
-case "$MODE" in generate|check) ;; *) echo "usage: $0 generate|check" >&2; exit 2;; esac
+case "$MODE" in generate|check) shift ;; *) usage; exit 2;; esac
+CERT=''
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --certified-by)
+            [ $# -ge 2 ] || { echo "rs_ref_check: --certified-by needs a path" >&2; exit 2; }
+            CERT="$2"; shift 2 ;;
+        --certified-by=*) CERT="${1#*=}"; shift ;;
+        # An argument this script does not understand is a request it is not
+        # honouring; ignoring it would run something other than what was asked.
+        *) echo "rs_ref_check: unknown argument '$1'" >&2; usage; exit 2 ;;
+    esac
+done
 
 # OOM discipline (see rs_vs_rs_diff.sh): provers die alone, not the session.
 echo 1000 > /proc/self/oom_score_adj 2>/dev/null || true
@@ -51,7 +81,38 @@ export CORPUS BIN FLAGS_MAP TIMEOUT DERIV EXTRA_FLAGS
 [ -x "$BIN" ] || { echo "rs_ref_check: no executable prover at '$BIN' (set BIN=)" >&2; exit 2; }
 [ -f "$ALLOWLIST" ] || { echo "rs_ref_check: ALLOWLIST '$ALLOWLIST' does not exist" >&2; exit 2; }
 command -v maude >/dev/null 2>&1 || { echo "rs_ref_check: 'maude' not on PATH — install it first" >&2; exit 2; }
+if [ "$MODE" = generate ]; then
+    # Checked BEFORE the sweep runs: refusing an unjustified re-baseline after
+    # an hour of prover time would just teach the operator to keep the flag
+    # handy rather than to have the evidence.
+    [ -n "$CERT" ] || {
+        echo "rs_ref_check: generate requires --certified-by <gate-results> — the saved" \
+             "output of an oracle gate run (verdict=OK) that justifies this baseline." \
+             "Without it this script only certifies the binary against itself." >&2
+        exit 2; }
+    [ -f "$CERT" ] || { echo "rs_ref_check: --certified-by '$CERT' does not exist" >&2; exit 2; }
+    # Last verdict line wins: a saved log may hold several (a phase banner, a
+    # retry), and the one that concludes the run is the one that certifies it.
+    CERT_VERDICT=$(grep -oE 'verdict=[^ ]+' "$CERT" | tail -1)
+    [ -n "$CERT_VERDICT" ] || {
+        echo "rs_ref_check: '$CERT' carries no 'verdict=' line — that is not a gate result" >&2
+        exit 2; }
+    [ "$CERT_VERDICT" = verdict=OK ] || {
+        echo "rs_ref_check: '$CERT' reads $CERT_VERDICT, not verdict=OK —" \
+             "a failing gate run cannot justify a new baseline" >&2
+        exit 2; }
+    # The oracle binary is the specification the certifying run compared
+    # against; its fingerprint (the same size.mtime recipe sweep_common.sh keys
+    # its cache on) is what pins WHICH oracle that was.
+    HS_PATH="${HS_PATH:-$(find "$ROOT/tamarin-prover-testing/.stack-work/install" \
+                               -name tamarin-prover -type f 2>/dev/null | head -1)}"
+    [ -n "$HS_PATH" ] && [ -x "$HS_PATH" ] || {
+        echo "rs_ref_check: no oracle binary to fingerprint (HS_PATH=${HS_PATH:-unset})" >&2
+        exit 2; }
+    HS_FP=$(stat -c '%s.%Y' "$HS_PATH")
+fi
 if [ "$MODE" = check ]; then
+    [ -n "$CERT" ] && { echo "rs_ref_check: --certified-by is only meaningful for generate" >&2; exit 2; }
     [ -f "$REF" ] || { echo "rs_ref_check: reference '$REF' missing — run generate first" >&2; exit 2; }
     ref_maude=$(awk -F': ' '/^# maude:/{print $2; exit}' "$REF")
     cur_maude=$(maude --version)
@@ -91,7 +152,13 @@ one() {
 }
 export -f one
 
-mapfile -t FILES < <(grep -v '^#' "$ALLOWLIST" | sort -u)
+mapfile -t FILES < <(grep -v '^[[:space:]]*#' "$ALLOWLIST" | grep . | sort -u)
+# Zero files is the whole-run form of comparing nothing: `check` would report
+# 0/0 match and exit clean, and `generate` would write an empty reference that
+# every later check then passes against.
+[ "${#FILES[@]}" -gt 0 ] || {
+    echo "rs_ref_check: ALLOWLIST '$ALLOWLIST' resolved to 0 entries — nothing to compare" >&2
+    exit 2; }
 echo "rs_ref_check: $MODE — ${#FILES[@]} files, JOBS=$JOBS, TIMEOUT=${TIMEOUT}s, BIN=$BIN"
 RUN=$(mktemp)
 printf '%s\n' "${FILES[@]}" | xargs -P "$JOBS" -I{} bash -c 'one "$@"' _ {} | sort > "$RUN"
@@ -103,8 +170,18 @@ if [ "$MODE" = generate ]; then
         grep -E $'\t(TIMEOUT|ERROR=[0-9]+|NOFILE)\t' "$RUN" >&2
         rm -f "$RUN"; exit 1
     fi
-    { echo "# rs_ref_check reference — regenerate with: scripts/rs_ref_check.sh generate"
+    # A row that never landed (an OOM-killed xargs child) is invisible in the
+    # scan above, and a reference short of a file is a file CI stops covering.
+    runrows=$(grep -c . "$RUN" 2>/dev/null) || runrows=0
+    if [ "$runrows" -ne "${#FILES[@]}" ]; then
+        echo "rs_ref_check: refusing to write a short reference — $runrows rows for ${#FILES[@]} files;" \
+             "the missing ones would silently leave CI's coverage" >&2
+        rm -f "$RUN"; exit 1
+    fi
+    { echo "# rs_ref_check reference — regenerate with: scripts/rs_ref_check.sh generate --certified-by <gate-results>"
       echo "# maude: $(maude --version)"
+      echo "# oracle: $HS_FP"
+      echo "# certified-by: $CERT ($CERT_VERDICT)"
       cat "$RUN"; } > "$REF"
     echo "rs_ref_check: wrote $(grep -vc '^#' "$REF") rows to $REF"
 else
@@ -127,8 +204,32 @@ else
         fi
     done < "$RUN"
     total=$(wc -l < "$RUN")
-    echo "rs_ref_check: $((total-bad))/$total match"
-    [ "$bad" = 0 ] || { rm -f "$RUN"; echo "rs_ref_check: FAIL — $bad file(s) diverge from the committed main reference" >&2; exit 1; }
+    echo "rs_ref_check: $((total-bad))/$total run rows match"
+    # Reverse pass. The loop above walks the RUN and asks the reference about
+    # each row, so it can only ever see what ran: drop a file from the allowlist
+    # (or lose its row to a killed child) and its baseline sits in the reference
+    # unconsulted while the gate reports 100% on the smaller set. The reference
+    # is the coverage contract, so every row of it must have been executed.
+    notrun=0
+    while IFS= read -r m; do
+        [ -n "$m" ] || continue
+        echo "  NOTRUN         $m (in the reference, not in this run — the allowlist shrank, or its row was lost)"
+        notrun=$((notrun+1))
+    done < <(awk -F'\t' -v run="$RUN" \
+        'FILENAME==run{ran[$1]=1;next} /^[[:space:]]*#/||NF==0{next} !($1 in ran){print $1}' \
+        "$RUN" "$REF")
+    # First-file detection is by FILENAME, not NR==FNR: an EMPTY run file makes
+    # NR==FNR true throughout the reference too, which would swallow every row
+    # into ran[] and report nothing — on exactly the run (all children lost)
+    # this pass exists to catch.
+    bad=$((bad+notrun))
+    [ "$bad" = 0 ] || { rm -f "$RUN"; echo "rs_ref_check: FAIL — $bad file(s) diverge from or are missing against the committed main reference" >&2; exit 1; }
 fi
 rm -f "$RUN"
+# No `verdict=` token here, deliberately. --certified-by accepts any log with a
+# verdict line, and this gate compares the binary against a baseline the same
+# binary lineage produced — a verdict= here would let one rs_ref_check run
+# certify the next one's re-baseline, which is the circle the flag exists to
+# break. The exit status is the verdict: every failure path above exits nonzero
+# before reaching this line.
 echo "DONE_RS_REF_CHECK"
