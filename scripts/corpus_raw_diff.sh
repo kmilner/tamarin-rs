@@ -84,10 +84,12 @@ if [ -z "$hs_path" ]; then
 fi
 
 # --- Build + locate the RS binary (the real prover, not the dump_proof example).
+# `tamarin-prover` is the PACKAGE; its only bin target is `tamarin-rs`, so
+# --bin tamarin-prover selects nothing and cargo errors out.
 if [ -z "${TAM_RS_NO_AUTO_BUILD:-}" ]; then
-    if ! cargo build --release --bin tamarin-prover \
+    if ! cargo build --release -p tamarin-prover \
             --manifest-path "$repo_root/Cargo.toml" >&2; then
-        echo "corpus_raw_diff.sh: cargo build --bin tamarin-prover failed" >&2
+        echo "corpus_raw_diff.sh: cargo build -p tamarin-prover failed" >&2
         exit 2
     fi
 fi

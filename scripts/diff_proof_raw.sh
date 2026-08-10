@@ -18,10 +18,14 @@
 #                     RS cap defaults to 30s for sweep speed) it lets RS run
 #                     the full window by default.
 #   QUIET=1           print only the summary line, not the diff body
-#   NO_HS_CACHE=1     ignore the shared raw HS cache
+#   NO_HS_CACHE=1     ignore the raw HS cache
 #   HS_CANON_CACHE    cache dir (default <script_dir>/.hs_canon_cache); HS raw
-#                     stdout is cached/reused as <key>.full.gz, shared with
-#                     corpus_raw_diff.sh and corpus_full_trace_diff.sh
+#                     stdout is cached/reused as <key>.full.gz, where key is
+#                     sha256(theory)__<lemma>__v<CACHE_VERSION>[__f<flags>]
+#                     __b<oracle-binary fingerprint>.  corpus_raw_diff.sh and
+#                     corpus_full_trace_diff.sh share the DIRECTORY but not the
+#                     key: they do not fingerprint the oracle, so entries are
+#                     not exchanged with them.
 #   TAM_RS_NO_AUTO_BUILD=1  skip the cargo rebuild of the RS binary
 set -uo pipefail
 
@@ -90,11 +94,18 @@ if [ -z "$hs_path" ]; then
     echo "diff_proof_raw.sh: no HS tamarin-prover binary found" >&2
     exit 2
 fi
+# Oracle-binary fingerprint (sweep_common.sh:262's recipe), salted into the
+# cache key below: sha256(theory)+lemma cannot see the ORACLE changing, so a
+# rebuilt oracle would keep being answered out of the previous one's entries.
+HS_FP=$(stat -c '%s.%Y' "$hs_path")
+HS_FP_SALT=$(printf '%s' "$HS_FP" | sha256sum | cut -c1-12)
 
+# `tamarin-prover` is the PACKAGE; its only bin target is `tamarin-rs`, so
+# --bin tamarin-prover selects nothing and cargo errors out.
 if [ -z "${TAM_RS_NO_AUTO_BUILD:-}" ]; then
-    if ! cargo build --release --bin tamarin-prover \
+    if ! cargo build --release -p tamarin-prover \
             --manifest-path "$repo_root/Cargo.toml" >&2; then
-        echo "diff_proof_raw.sh: cargo build --bin tamarin-prover failed" >&2
+        echo "diff_proof_raw.sh: cargo build -p tamarin-prover failed" >&2
         exit 2
     fi
 fi
@@ -115,7 +126,7 @@ strip_env_lines() {
 key=""
 if [ -z "$NO_HS_CACHE" ]; then
     h=$(sha256sum "$file" 2>/dev/null | cut -d' ' -f1)
-    key="$HS_CANON_CACHE/${h}__${lemma}__v${CACHE_VERSION}${FLAGS_SALT}"
+    key="$HS_CANON_CACHE/${h}__${lemma}__v${CACHE_VERSION}${FLAGS_SALT}__b${HS_FP_SALT}"
 fi
 if [ -n "$key" ] && [ -f "$key.full.gz" ]; then
     # The cache is keyed by file CONTENT, but HS echoes the input path verbatim

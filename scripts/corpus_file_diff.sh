@@ -14,21 +14,34 @@
 #
 # Two strictly-sequential phases so HS and RS never contend:
 #   Phase 1 (HS): run HS on every allowlisted file, cache stripped stdout by
-#                 sha256(content) under .hs_file_cache/.  JOBS concurrent,
-#                 -N$HS_N cores each.  Timeout → .timeout marker; empty/no
-#                 output (diff theory / include fragment / error) → .nohs.
-#   Phase 2 (RS): run RS on every file, diff against the cached HS output.
+#                 ckey (theory sha + flags + ORACLE-BINARY FINGERPRINT) under
+#                 .hs_file_cache/.  JOBS concurrent, -N$HS_N cores each.
+#                 Timeout → .timeout marker; empty/no output (diff theory /
+#                 include fragment / error) → .nohs; the oracle's exit status
+#                 is recorded beside the entry as .rc.
+#   Phase 2 (RS): run RS on every file, diff against the cached HS output and
+#                 compare RS's exit status against the recorded .rc.
 #
 # Env: FILE_TIMEOUT (per-file cap both sides, default 300s), JOBS (4),
 #      HS_N (RTS cores/HS, 4), HS_MAXHEAP (GHC -M g, 11), DERIVCHECK_TIMEOUT
 #      (30), CORPUS_ROOT, RESULTS_TSV, ALLOWLIST (file with one rel-path per
-#      line; default = derive from $PREV_TSV column 1).
+#      line; default = scripts/parity_corpus.txt, and only when that is missing
+#      too, $PREV_TSV column 1).
 # Output TSV (5 col, tab-sep): relpath  status  HS_lines  RS_lines  diffcount
-#   status ∈ MATCH | DIFF | SKIP_HS_TIMEOUT | SKIP_NO_HS | SKIP_RS_TIMEOUT
+#   status ∈ MATCH | DIFF | RC_DIFF | SKIP_HS_TIMEOUT | SKIP_NO_HS
+#          | SKIP_RS_TIMEOUT
 # Exit status carries the verdict, which the DONE line repeats: nonzero on any
-# DIFF, on any SKIP_* (a file whose bytes were never compared), and when fewer
-# rows land than files were listed.
+# DIFF, on any RC_DIFF (identical stdout, different exit status), on any SKIP_*
+# (a file whose bytes were never compared), and when fewer rows land than files
+# were listed.
 set -u
+# Heavy-subprocess guard, the same discipline wf_gate.sh / pretty_gate.sh use:
+# volunteer this tree as the kernel's first OOM victim instead of the desktop,
+# and cap address space.  `ulimit -v` is per-process and inherited, so every
+# HS/RS child gets its own 24 GiB ceiling (verified: GHC's RTS falls back to a
+# smaller reservation rather than failing to start under the cap).
+echo 1000 > /proc/self/oom_score_adj 2>/dev/null || true
+ulimit -v 25165824 2>/dev/null || true
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 
@@ -53,9 +66,18 @@ find_hs_bin() {
     done; return 1
 }
 HS_PATH="${HS_PATH:-$(find_hs_bin "$repo_root")}" || { echo "no HS binary" >&2; exit 2; }
+[ -x "$HS_PATH" ] || { echo "no HS binary at $HS_PATH" >&2; exit 2; }
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 [ -x "$RS_PATH" ] || { echo "no RS binary at $RS_PATH" >&2; exit 2; }
+# Oracle-binary fingerprint (same recipe as sweep_common.sh:262), folded into
+# every cache key below.  Without it the key is sha256(theory)+flags, which
+# cannot see the ORACLE changing: a rebuilt oracle keeps answering out of
+# entries the previous one produced, and the gate certifies the port against
+# an upstream that is no longer checked out.  Loop-invariant, so taken once.
+HS_FP=$(stat -c '%s.%Y' "$HS_PATH")
+HS_FP_SALT=$(printf '%s' "$HS_FP" | sha256sum | cut -c1-12)
 export HS_PATH RS_PATH FILE_TIMEOUT DERIVCHECK_TIMEOUT HS_RTS CACHE CORPUS_ROOT
+export HS_FP HS_FP_SALT
 
 # Strip the volatile header lines from a tamarin run (Git rev / Compiled at /
 # processing time / analyzed-path).  Stripping `analyzed:` on BOTH sides means
@@ -69,8 +91,11 @@ export -f strip_env
 # --- per-file canonical flags (see file_flags.tsv) ---------------------------
 # flags_for echoes the extra HS/RS flags for a relpath (empty if none).
 # ckey salts the content-hash with a flags hash, so a flagged entry is a
-# DISTINCT cache key from the bare one; flagless files keep the plain
-# content-hash key → existing bare cache is untouched.
+# DISTINCT cache key from the bare one, and then with the oracle-binary
+# fingerprint, so entries produced by a different oracle are a MISS rather
+# than a stale hit.  KEY FORMAT (shared with pretty_gate.sh / wf_gate.sh,
+# and with scripts/migrate_hs_cache_fp.sh which rekeys older entries):
+#   <sha256(theory)>[__f<12 hex of sha256(flags)>]__b<12 hex of sha256(HS_FP)>
 # Special token `@cd`: not a prover flag — run the prover from the file's
 # OWN directory with the bare filename (upstream's deforacle recipe,
 # Makefile:199-201: default-oracle lookup is cwd-relative). Stripped from
@@ -85,10 +110,9 @@ export -f flags_for
 ckey() {  # <relpath> <abs-file>
     local h fl; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
     if [ -n "$fl" ]; then
-        printf '%s__f%s' "$h" "$(printf '%s' "$fl" | sha256sum | cut -c1-12)"
-    else
-        printf '%s' "$h"
+        h="${h}__f$(printf '%s' "$fl" | sha256sum | cut -c1-12)"
     fi
+    printf '%s__b%s' "$h" "$HS_FP_SALT"
 }
 export -f ckey
 
@@ -140,6 +164,10 @@ hs_one() {
             $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove "$farg" ) >"$tmp" 2>/dev/null
     rc=$?
     out=$(strip_env < "$tmp"); rm -f "$tmp"
+    # Record the oracle's exit status beside the entry, BEFORE the payload, so
+    # `.full.gz exists` implies `.rc exists` for everything this run fills.
+    # Phase 2 compares RS's status against it (RC_DIFF).
+    printf '%s' "$rc" > "$CACHE/$key.rc"
     if [ "$rc" = "124" ]; then
         touch "$CACHE/$key.timeout"; echo "  HS TIMEOUT  $rel" >&2
     elif [ -z "$out" ]; then
@@ -174,8 +202,19 @@ rs_one() {
     hsn=$(printf '%s\n' "$hs" | wc -l)
     rsn=$(printf '%s\n' "$rs" | wc -l)
     d=$(diff <(printf '%s\n' "$hs") <(printf '%s\n' "$rs") | grep -c '^[<>]')
-    if [ "$d" = "0" ]; then printf '%s\tMATCH\t%s\t%s\t0\n' "$rel" "$hsn" "$rsn"
-    else printf '%s\tDIFF\t%s\t%s\t%s\n' "$rel" "$hsn" "$rsn" "$d"; fi
+    if [ "$d" != "0" ]; then printf '%s\tDIFF\t%s\t%s\t%s\n' "$rel" "$hsn" "$rsn" "$d"; return 0; fi
+    # Byte-identical stdout still leaves the EXIT STATUS uncompared, and a
+    # caller that scripts either binary sees that status, not the bytes.
+    # Entries filled before the .rc channel existed have no file: those count
+    # as RC_UNKNOWN in the summary rather than failing, and they acquire an
+    # .rc the next time the entry is (re)filled — e.g. after a bump, when the
+    # fingerprinted key changes and Phase 1 runs the oracle again.
+    local hsrc
+    if [ -f "$CACHE/$key.rc" ] && hsrc=$(cat "$CACHE/$key.rc") && [ "$hsrc" != "$rc" ]; then
+        echo "  RC DIFF     $rel  (HS exit $hsrc, RS exit $rc)" >&2
+        printf '%s\tRC_DIFF\t%s\t%s\t0\n' "$rel" "$hsn" "$rsn"; return 0
+    fi
+    printf '%s\tMATCH\t%s\t%s\t0\n' "$rel" "$hsn" "$rsn"
 }
 export -f rs_one
 
@@ -192,16 +231,30 @@ filelist | grep . | xargs -P "$JOBS" -I{} bash -c 'rs_one "$@"' _ {} >> "$RESULT
 sort -o "$RESULTS_TSV" "$RESULTS_TSV"
 echo "=== SUMMARY ==="
 awk -F'\t' '{c[$2]++} END{for(k in c) printf "  %-18s %d\n", k, c[k]}' "$RESULTS_TSV"
+# Of the files whose bytes WERE compared, how many had no recorded oracle exit
+# status to compare against.  Not a failure: it is what a cache filled before
+# the .rc channel existed looks like, and each such entry backfills the first
+# time Phase 1 refills it.  Reported so the number cannot quietly be 432.
+rc_unknown=0
+while IFS=$'\t' read -r rel st _; do
+    case "$st" in MATCH|DIFF|RC_DIFF) ;; *) continue;; esac
+    [ -f "$CORPUS_ROOT/$rel" ] || continue
+    [ -f "$CACHE/$(ckey "$rel" "$CORPUS_ROOT/$rel").rc" ] || rc_unknown=$((rc_unknown+1))
+done < "$RESULTS_TSV"
+printf '  %-18s %d\n' "RC_UNKNOWN" "$rc_unknown"
 echo "  results: $RESULTS_TSV"
 # Verdict — the histogram above is the whole story only if someone reads it.
 # A SKIP_* row is a file whose bytes were never compared (no HS reference, or
-# either side out of time), and a file that produced no row at all left the run
-# unnoticed; both are indistinguishable from MATCH in an exit status of 0.
+# either side out of time), an RC_DIFF row matched on bytes but not on exit
+# status, and a file that produced no row at all left the run unnoticed; all
+# three are indistinguishable from MATCH in an exit status of 0.
 diffs=$(awk -F'\t' '$2=="DIFF"' "$RESULTS_TSV" | grep -c .)
+rcdiffs=$(awk -F'\t' '$2=="RC_DIFF"' "$RESULTS_TSV" | grep -c .)
 skips=$(awk -F'\t' '$2 ~ /^SKIP/' "$RESULTS_TSV" | grep -c .)
 rows=$(grep -c . "$RESULTS_TSV")
 bad=''
 [ "$diffs" = 0 ] || bad="DIFF=$diffs"
+[ "$rcdiffs" = 0 ] || bad="${bad:+$bad }RC_DIFF=$rcdiffs"
 [ "$skips" = 0 ] || bad="${bad:+$bad }SKIPPED=$skips"
 [ "$rows" = "$N" ] || bad="${bad:+$bad }ROW-COUNT=$rows/$N"
 echo "DONE_CORPUS_FILE_DIFF verdict=${bad:-OK}"
