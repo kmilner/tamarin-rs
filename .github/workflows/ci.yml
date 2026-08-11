@@ -50,10 +50,15 @@ jobs:
       # Without it they skip SILENTLY — their fallback probes check hardcoded
       # paths (/usr/local/bin, CWD), never $PATH — and the suite reports the
       # skipped tests as passes.
+      # PATH too: the port itself resolves a bare `maude` the way HS does
+      # (/usr/local/bin, /usr/bin, then $PATH) and does NOT read MAUDE_PATH,
+      # so tests that drive the real CLI paths — `--version`'s ensureMaude
+      # probe in run::tests::version_returns_zero — need maude reachable
+      # by name.
       # profile ci = release opt without fat-LTO links / serial codegen (see
       # Cargo.toml) — the release profile re-runs whole-graph LTO at every
       # test-binary link, which dwarfs everything else this job does.
-      - run: cargo test --profile ci --workspace
+      - run: export PATH="/opt/maude:$PATH" && cargo test --profile ci --workspace
         env:
           MAUDE_PATH: /opt/maude/maude
       # The corners no corpus theory reaches (~5s).  Only the port runs here:
