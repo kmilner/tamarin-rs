@@ -748,8 +748,8 @@ fn function_decl_typing_info(d: &p::FunctionDecl) -> crate::theory::SapicFunSym 
     };
     crate::theory::SapicFunSym {
         sym,
-        arg_types: d.arg_types.clone(),
-        out_type: d.out_type.clone(),
+        arg_types: d.arg_types.into(),
+        out_type: d.out_type.into(),
     }
 }
 

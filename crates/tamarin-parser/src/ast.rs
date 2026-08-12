@@ -27,7 +27,7 @@
 
 use std::{borrow::Borrow, ops::Deref};
 
-use crate::parser::Location;
+use crate::parser::{Location, Source};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Theory {
@@ -63,12 +63,12 @@ pub enum TheoryItem {
     EquivLemma(Process, Process),
     DiffEquivLemma(Process),
     Export {
-        tag: String,
-        body: String,
+        tag: SpannedStr,
+        body: SpannedStr,
     },
     FormalComment {
-        header: String,
-        body: String,
+        header: SpannedStr,
+        body: SpannedStr,
     },
     // `#ifdef` never yields an item: the parser evaluates the flag formula
     // and splices the live branch's items into the surrounding stream
@@ -79,31 +79,50 @@ pub enum TheoryItem {
 }
 
 #[derive(Debug, Clone)]
-/// A string with a source location.
+/// A string with a source.
 pub struct SpannedStr {
     pub content: String,
-    pub location: Location,
+    pub source: Source,
 }
 
 impl SpannedStr {
-    /// Create a new identifier with the given name and location.
-    pub fn new(name: impl Into<String>, location: Location) -> Self {
+    /// Create a new identifier with the given name and source.
+    pub fn new(name: impl Into<String>, source: Source) -> Self {
         Self {
             content: name.into(),
-            location,
+            source,
         }
     }
 
-    /// Create a synthetic identifier with the given name and a dummy location.
-    pub fn synthetic(name: impl Into<String>) -> Self {
+    /// Create an identifier with a source code location.
+    pub fn with_location(name: impl Into<String>, loc: Location) -> Self {
         Self {
             content: name.into(),
-            location: Location {
-                line: 0,
-                col: 0,
-                start: 0,
-                end: 0,
-            },
+            source: Source::Location(loc),
+        }
+    }
+
+    /// Create an indirect identifier with the given name and source.
+    pub fn indirect(name: impl Into<String>, source: Source) -> Self {
+        Self {
+            content: name.into(),
+            source: Source::Indirect(Box::new(source)),
+        }
+    }
+
+    /// Create an in-built identifier with the given name.
+    pub fn inbuilt(name: impl Into<String>) -> Self {
+        Self {
+            content: name.into(),
+            source: Source::Inbuilt,
+        }
+    }
+
+    /// Create an identifier with CLI as source
+    pub fn cli(name: impl Into<String>) -> Self {
+        Self {
+            content: name.into(),
+            source: Source::Cli,
         }
     }
 }
@@ -114,11 +133,17 @@ impl std::hash::Hash for SpannedStr {
     }
 }
 
-impl From<SpannedStr> for String {
-    fn from(id: SpannedStr) -> Self {
-        id.content
-    }
-}
+// impl From<String> for SpannedStr {
+//     fn from(value: String) -> Self {
+//         Self::synthetic(value)
+//     }
+// }
+
+// impl From<&str> for SpannedStr {
+//     fn from(value: &str) -> Self {
+//         Self::synthetic(value)
+//     }
+// }
 
 impl<S> PartialEq<S> for SpannedStr
 where
@@ -278,9 +303,9 @@ impl Rule {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuleAttr {
-    Color(String),
+    Color(SpannedStr),
     NoDerivCheck,
-    Role(String),
+    Role(SpannedStr),
     IsSapicRule,
     /// `process="..."` — the rendered `prettySapicTopLevel'` of a
     /// SAPIC-generated rule's subprocess.  HS's rule-attribute PARSER ignores
@@ -288,8 +313,8 @@ pub enum RuleAttr {
     /// variant is never produced by the parser; it is synthesised only by the
     /// SAPIC translation when it injects generated rules into the parsed theory
     /// (so the pretty-printer renders the `process="..."` attribute).
-    Process(String),
-    External(String, Option<String>),
+    Process(SpannedStr),
+    External(SpannedStr, Option<SpannedStr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -332,7 +357,7 @@ pub struct AccLemma {
     pub name: SpannedStr,
     pub attributes: Vec<LemmaAttr>,
     pub formula: Formula,
-    pub case_test_idents: Vec<String>,
+    pub case_test_idents: Vec<SpannedStr>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -353,12 +378,12 @@ pub enum LemmaAttr {
     Reuse,
     DiffReuse,
     UseInduction,
-    HideLemma(String),
-    Heuristic(String),
-    Output(Vec<String>),
+    HideLemma(SpannedStr),
+    Heuristic(SpannedStr),
+    Output(Vec<SpannedStr>),
     Left,
     Right,
-    Hint(String),
+    Hint(SpannedStr),
 }
 
 /// Structured skeleton parse — mirrors HS's
@@ -374,7 +399,7 @@ pub enum LemmaAttr {
 pub struct ProofSkeleton {
     /// Raw source text of the proof skeleton (used for diagnostics/logging and
     /// propagated into theory.rs's `ProofSkeleton` during elaboration).
-    pub raw: String,
+    pub raw: SpannedStr,
     /// Structured parse of `raw`.  `None` only if `try_proof_skeleton`
     /// failed to interpret the token stream (we always set this for
     /// well-formed proofs).
@@ -588,7 +613,7 @@ pub struct Tactic {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProcessDef {
-    pub name: String,
+    pub name: SpannedStr,
     pub vars: Option<Vec<VarSpec>>,
     pub body: Process,
 }
@@ -608,7 +633,7 @@ pub enum Process {
     Replication(Box<Process>),
     /// Process called by name (with optional argument list).
     Call {
-        name: String,
+        name: SpannedStr,
         args: Vec<Term>,
     },
     /// (...) @ term — annotation

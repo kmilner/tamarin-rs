@@ -795,8 +795,11 @@ fn type_p_only_capital_any_is_default() {
             _ => None,
         })
         .expect("function f");
-    assert_eq!(decl.arg_types, vec![Some("any".to_string())]);
-    assert_eq!(decl.out_type, Some("bitstring".to_string()));
+    assert_eq!(decl.arg_types.len(), 1);
+    assert!(decl.arg_types[0].is_some());
+    assert_eq!(*decl.arg_types[0].as_ref().unwrap(), "any");
+    assert!(decl.out_type.is_some());
+    assert_eq!(*decl.out_type.as_ref().unwrap(), "bitstring");
 
     // `functions: g(Any):bitstring` — capital Any is the default (None).
     let t = parse_theory("theory T begin functions: g(Any):bitstring end", &[]).unwrap();
