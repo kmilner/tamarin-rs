@@ -4104,9 +4104,12 @@ impl<'a> Parser<'a> {
     /// `letter`/`"{*"` labels merge behind (bare `rule` at EOF, `rule!x`).
     /// Callers outside the top-level item alternation (variants sub-rules)
     /// pass `usize::MAX`: no formalComment alternative exists there.
-    fn rule_name_ident(&mut self, kw_end_offset: usize) -> Result<String, ParseError> {
+    fn rule_name_ident(&mut self, kw_end_offset: usize) -> Result<Identifier, ParseError> {
+        let start = self.lx.pos();
         if let Some(id) = self.lx.identifier() {
-            return Ok(id);
+            let location = Location::location_of(&Some(&id), start);
+            let ident = Identifier::new(id, location);
+            return Ok(ident);
         }
         if let Some(e) = self.err_reserved_word() {
             return Err(e);

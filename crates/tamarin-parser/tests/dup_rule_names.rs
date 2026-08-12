@@ -54,7 +54,7 @@ fn rule_names(src: &str) -> Vec<String> {
         .items
         .iter()
         .filter_map(|i| match i {
-            TheoryItem::Rule(r) => Some(r.name.clone()),
+            TheoryItem::Rule(r) => Some(r.name.clone().into()),
             _ => None,
         })
         .collect()

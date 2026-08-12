@@ -1120,7 +1120,7 @@ pub fn web_proto_rules(parsed: &p::Theory, elaborated: &Theory) -> Vec<String> {
         .items
         .iter()
         .filter_map(|item| match item {
-            p::TheoryItem::Rule(r) if elaborated.rules().any(|er| er.name() == r.name) => Some(
+            p::TheoryItem::Rule(r) if elaborated.rules().any(|er| er.name() == r.name()) => Some(
                 render_rule(r, elaborated, &macros, &arity1, manual_variants, false),
             ),
             _ => None,
@@ -1829,7 +1829,7 @@ fn render_parsed_item(
             // variants yields NO closed rule, so it is absent from the
             // closed theory and never rendered.  Such rules are removed
             // from the elaborated theory in run.rs; mirror the absence here.
-            if elab.rules().any(|er| er.name() == r.name) {
+            if elab.rules().any(|er| er.name() == r.name()) {
                 Some(render_rule(
                     r,
                     elab,
@@ -1989,7 +1989,7 @@ fn contains_manual_rule_variants(
 ) -> bool {
     parsed.items.iter().any(|item| {
         if let p::TheoryItem::Rule(r) = item {
-            let elab_rule = elaborated.rules().find(|er| er.name() == r.name);
+            let elab_rule = elaborated.rules().find(|er| er.name() == r.name());
             rule_open_ac_nonempty(r, elab_rule, auto_sources)
         } else {
             false
@@ -2186,7 +2186,7 @@ fn render_rule_e_block(
     parsed_rule: &p::Rule,
     arity1: &std::collections::HashSet<String>,
 ) -> (String, Vec<p::Fact>, Vec<p::Fact>, Vec<p::Fact>) {
-    let name = &parsed_rule.name;
+    let name = parsed_rule.name();
     let mut out = String::new();
     // HS rule-header line (`prettyNamedRule`, Model/Rule.hs:1280-1292, see line 1285):
     //   `prefix <-> prettyRuleName ru <> prettyRuleAttributes ru <> colon`
@@ -2197,7 +2197,7 @@ fn render_rule_e_block(
     {
         use crate::pretty_hpj::Doc;
         let header = crate::pretty_hpj::kw_rule_modulo("E")
-            .beside_sp(Doc::text(name.clone()))
+            .beside_sp(Doc::text(name))
             .beside(rule_attributes_doc(&parsed_rule.attributes))
             .beside(Doc::text(":"));
         out.push_str(&header.render());
@@ -2245,7 +2245,7 @@ fn render_rule(
     manual_variants: bool,
     auto_sources: bool,
 ) -> String {
-    let name = &parsed_rule.name;
+    let name = parsed_rule.name();
     let (mut out, premises, actions, conclusions) = render_rule_e_block(parsed_rule, arity1);
 
     // Look up the elaborated rule by name to decide between

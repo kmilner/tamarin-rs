@@ -2079,7 +2079,7 @@ pub fn fact_lhs_occur_no_rhs(thy: &Theory) -> WfReport {
             if !is_proto_fact_name(&f.name) {
                 continue;
             }
-            rhs.push((r.name.clone(), f.clone()));
+            rhs.push((r.name.clone().into(), f.clone()));
         }
     }
     let rhs_info: BTreeSet<(String, usize, bool)> = rhs
@@ -2106,7 +2106,7 @@ pub fn fact_lhs_occur_no_rhs(thy: &Theory) -> WfReport {
                 .min_by_key(|(d, _, _)| *d)
                 .filter(|(d, _, _)| *d <= 3)
                 .map(|(_, rn, rf)| (rn.clone(), rf.clone()));
-            orphan_pairs.push((r.name.clone(), f.clone(), suggestion));
+            orphan_pairs.push((r.name.clone().into(), f.clone(), suggestion));
         }
     }
 
@@ -2239,7 +2239,7 @@ pub fn public_names_report(thy: &Theory) -> WfReport {
         }
         for (k, n) in names {
             if k == NameKind::Pub {
-                pairs.push((r.name.clone(), n));
+                pairs.push((r.name.clone().into(), n));
             }
         }
     }
@@ -2523,7 +2523,7 @@ pub fn message_derivation_report(thy: &Theory) -> WfReport {
         }
         // HS shows the LVar (sort prefix included): MessageDerivationChecks.hs:122-138, see line 138
         let names: Vec<String> = unbound.iter().map(render_var).collect();
-        per_rule.push((r.name.clone(), names));
+        per_rule.push((r.name.clone().into(), names));
     }
     if per_rule.is_empty() {
         return Vec::new();

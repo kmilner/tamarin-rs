@@ -234,7 +234,7 @@ pub fn check_message_derivation(
             );
         }
         if !undecidable.is_empty() {
-            per_rule.push((rule.name.clone(), undecidable));
+            per_rule.push((rule.name.clone().into(), undecidable));
         }
     }
     if dbg_timing {
@@ -637,7 +637,7 @@ fn synthesise_probe_theory(
         })
         .collect();
     let probe_rule = p::Rule {
-        name: format!("Probe_{}", idx),
+        name: p::Identifier::new(format!("Probe_{}", idx), rule.name.location),
         modulo: None,
         attributes: Vec::new(),
         let_block: Vec::new(),

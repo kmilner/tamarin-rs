@@ -25,6 +25,10 @@
 // Top-level theory
 // =============================================================================
 
+use std::ops::Deref;
+
+use crate::parser::Location;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Theory {
     pub is_diff: bool,
@@ -72,6 +76,101 @@ pub enum TheoryItem {
     // so `items` is always the flat post-preprocessor stream.
     Define(String),
     Include(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct Identifier {
+    pub name: String,
+    pub location: Location,
+}
+
+impl Identifier {
+    /// Create a new identifier with the given name and location.
+    pub fn new(name: impl Into<String>, location: Location) -> Self {
+        Self {
+            name: name.into(),
+            location,
+        }
+    }
+
+    /// Create a synthetic identifier with the given name and a dummy location.
+    pub fn synthetic(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            location: Location {
+                line: 0,
+                col: 0,
+                start: 0,
+                end: 0,
+            },
+        }
+    }
+}
+
+impl From<Identifier> for String {
+    fn from(id: Identifier) -> Self {
+        id.name
+    }
+}
+
+impl PartialEq for Identifier {
+    fn eq(&self, other: &Self) -> bool {
+        let Identifier { name: a, .. } = self;
+        let Identifier { name: b, .. } = other;
+        a == b
+    }
+}
+
+impl<S> PartialEq<S> for Identifier
+where
+    S: AsRef<str>,
+{
+    fn eq(&self, other: &S) -> bool {
+        let Identifier { name: a, .. } = self;
+        a == other.as_ref()
+    }
+}
+
+impl Eq for Identifier {}
+
+impl PartialOrd for Identifier {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        let Identifier { name: a, .. } = self;
+        let Identifier { name: b, .. } = other;
+        a.partial_cmp(b)
+    }
+}
+
+impl<S> PartialOrd<S> for Identifier
+where
+    S: AsRef<str>,
+{
+    fn partial_cmp(&self, other: &S) -> Option<std::cmp::Ordering> {
+        let Identifier { name: a, .. } = self;
+        a.as_str().partial_cmp(other.as_ref())
+    }
+}
+
+impl Ord for Identifier {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let Identifier { name: a, .. } = self;
+        let Identifier { name: b, .. } = other;
+        a.cmp(b)
+    }
+}
+
+impl Deref for Identifier {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.name
+    }
+}
+
+impl std::fmt::Display for Identifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
 }
 
 // =============================================================================
@@ -140,7 +239,7 @@ pub enum RestrictionAttr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Rule {
-    pub name: String,
+    pub name: Identifier,
     pub modulo: Option<String>, // E or AC
     pub attributes: Vec<RuleAttr>,
     pub let_block: Vec<LetBinding>,
@@ -150,6 +249,12 @@ pub struct Rule {
     pub embedded_restrictions: Vec<Formula>,
     pub variants: Vec<Rule>,
     pub left_right: Option<(Box<Rule>, Box<Rule>)>,
+}
+
+impl Rule {
+    pub fn name(&self) -> &str {
+        &self.name.name
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

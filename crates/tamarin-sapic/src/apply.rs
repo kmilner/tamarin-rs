@@ -18,8 +18,8 @@
 //!
 //! Scope: the CORE LINEAR subset (see `translate`/`base_translation`).
 
-use tamarin_parser::ast as p;
 use tamarin_parser::wf::WfError;
+use tamarin_parser::{ast as p, Identifier};
 
 use tamarin_theory::elaborate::ElabError;
 use tamarin_theory::pretty_sapic::pretty_sapic_top_level;
@@ -318,7 +318,7 @@ fn synth_parsed_rule(rule: &ProtoRuleE) -> p::Rule {
     };
     let attrs = synth_attrs(&rule.info.attributes);
     p::Rule {
-        name,
+        name: Identifier::synthetic(name),
         modulo: None,
         attributes: attrs,
         let_block: Vec::new(),
