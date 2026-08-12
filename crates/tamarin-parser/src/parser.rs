@@ -1289,7 +1289,7 @@ pub struct Parser<'a> {
     // parsed flag-name set; membership only, never iterated into output;
     // std kept (byte-inert) — iteration order never reaches output.
     #[allow(clippy::disallowed_types)]
-    flags: HashSet<String>,
+    flags: HashSet<SpannedStr>,
     /// Whether we're parsing a diff theory. Set only from the `Parser::new`
     /// argument supplied by the caller and echoed into `Theory::is_diff`;
     /// `theory()` does not derive it from `flags` or a `#define diff` preamble.
@@ -1477,7 +1477,7 @@ impl<'a> Parser<'a> {
         #[allow(clippy::disallowed_types)]
         let mut flags_set = HashSet::new();
         for f in flags {
-            flags_set.insert((*f).to_string());
+            flags_set.insert(SpannedStr::synthetic(*f));
         }
         // Always enable parse-time recognition of the operators. The parser is
         // syntactic — semantic gating against builtin enablement happens at
@@ -1814,7 +1814,7 @@ impl<'a> Parser<'a> {
         false
     }
 
-    fn ident(&mut self) -> Result<String, ParseError> {
+    fn ident(&mut self) -> Result<SpannedStr, ParseError> {
         if let Some(id) = self.lx.identifier() {
             return Ok(id);
         }
@@ -1859,7 +1859,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn string_literal(&mut self) -> Result<String, ParseError> {
+    fn string_literal(&mut self) -> Result<SpannedStr, ParseError> {
         self.lx
             .string_literal()
             .ok_or_else(|| self.expected_string_literal_err(vec!["string literal"]))
@@ -2263,8 +2263,8 @@ impl<'a> Parser<'a> {
         // HS `filePathParser`: resolve relative to the including file's dir when
         // we know it (`Just s -> s </> path`), else verbatim (`Nothing`).
         let resolved: PathBuf = match &self.base_dir {
-            Some(dir) => dir.join(&raw_path),
-            None => PathBuf::from(&raw_path),
+            Some(dir) => dir.join(raw_path.content),
+            None => PathBuf::from(raw_path.content),
         };
 
         let content = std::fs::read_to_string(&resolved).map_err(|e| ParseError::IoError {
@@ -2394,7 +2394,7 @@ impl<'a> Parser<'a> {
     /// `<kw>: ident-with-hyphens (, ident-with-hyphens)*` (no trailing comma).
     /// Shared by the `builtins` and `options` declarations, which are identical
     /// modulo the keyword and the wrapping `TheoryItem` variant.
-    fn comma_sep_hyphen_idents(&mut self, kw: &str) -> Result<Vec<String>, ParseError> {
+    fn comma_sep_hyphen_idents(&mut self, kw: &str) -> Result<Vec<SpannedStr>, ParseError> {
         self.require_kw(kw)?;
         self.require_punct(":")?;
         let mut names = Vec::new();
@@ -2542,7 +2542,7 @@ impl<'a> Parser<'a> {
     /// Identifier that may contain hyphens (e.g. `asymmetric-encryption`,
     /// `diffie-hellman`, `dest-pairing`). Hyphens are concatenated into the
     /// returned name with no whitespace allowed across the boundary.
-    fn hyphen_identifier(&mut self) -> Result<String, ParseError> {
+    fn hyphen_identifier(&mut self) -> Result<SpannedStr, ParseError> {
         let mut s = self.ident()?;
         loop {
             // Look for `-<ident>` immediately after with no whitespace.
@@ -2555,9 +2555,9 @@ impl<'a> Parser<'a> {
             match probe.peek() {
                 Some(c) if c.is_alphabetic() => {
                     self.lx.bump(); // consume `-`
-                    s.push('-');
+                    s.content.push('-');
                     let id = self.ident()?;
-                    s.push_str(&id);
+                    s.content.push_str(&id);
                 }
                 _ => break,
             }
@@ -2609,7 +2609,7 @@ impl<'a> Parser<'a> {
     /// Read raw text until we see an identifier at a word boundary that is
     /// one of the recognised top-level keywords, or a `#`-prefixed
     /// preprocessor directive. Used for tactics, proof skeletons, etc.
-    fn read_until_next_top_level(&mut self) -> String {
+    fn read_until_next_top_level(&mut self) -> SpannedStr {
         // NOTE: the top-level `let X = ...` process definition (dispatched by
         // `theory_item`) is deliberately OMITTED here. `let` is overloaded —
         // it also begins `let`-bindings inside rules/processes — and a bare
@@ -2642,6 +2642,7 @@ impl<'a> Parser<'a> {
             "diffEquivLemma",
             "export",
         ];
+        let start = self.lx.pos();
         let mut s = String::new();
         // Track whether the previous character was an identifier char. If so,
         // we are in the middle of a word and should not match keywords here.
@@ -2788,7 +2789,8 @@ impl<'a> Parser<'a> {
                 None => break,
             }
         }
-        s
+        let loc = Location::location_of(&Some(&s), start);
+        SpannedStr::new(s, loc)
     }
 
     // -------------------- functions / equations / macros / predicates --------------------
@@ -2888,7 +2890,7 @@ impl<'a> Parser<'a> {
     fn function_type(
         &mut self,
         name_end: usize,
-    ) -> Result<(Vec<Option<String>>, Option<String>), ParseError> {
+    ) -> Result<(Vec<Option<SpannedStr>>, Option<SpannedStr>), ParseError> {
         if self.try_punct("/") {
             // HS `T.natural`, whose `<?> "natural"` is the only label here —
             // `symbol "/"` consumed, so the name's hangover is gone.
@@ -2931,8 +2933,8 @@ impl<'a> Parser<'a> {
     ///   identifier and consumed nothing since;
     /// * the element failed (at the start, or right after a `,`) → `typep`'s
     ///   two leading labels, `"Any"` and `identifier`.
-    fn function_arg_types(&mut self) -> Result<Vec<Option<String>>, ParseError> {
-        let mut args: Vec<Option<String>> = Vec::new();
+    fn function_arg_types(&mut self) -> Result<Vec<Option<SpannedStr>>, ParseError> {
+        let mut args: Vec<Option<SpannedStr>> = Vec::new();
         // Labels of the parser that ended the list, and the offset of a live
         // identifier hangover (`None` once anything consumed past it).
         let mut hangover: Option<usize>;
@@ -2985,7 +2987,7 @@ impl<'a> Parser<'a> {
     /// identifier` (Token.hs:472-473) consumes on failure, so the caller's
     /// `<|> return []` can recover.  `Any` matches through `symbol`, i.e.
     /// `string` rather than `identifier`, and so leaves no hangover.
-    fn type_p_element(&mut self) -> Option<(Option<String>, Option<usize>)> {
+    fn type_p_element(&mut self) -> Option<(Option<SpannedStr>, Option<usize>)> {
         self.skip_ws();
         let start = self.lx.pos().offset;
         let id = self.lx.identifier()?;
@@ -3048,11 +3050,11 @@ impl<'a> Parser<'a> {
         // reserved must be re-declared at EXACTLY the builtin's options tuple.
         // It runs BEFORE the general conflict check, has no `fst`/`snd`
         // exemption, and consults `stFunSyms` only — never the macro names.
-        if self.reserved_builtin_names.contains(&name) {
+        if self.reserved_builtin_names.contains(&name.content) {
             let builtin = self
                 .fun_syms
                 .iter()
-                .find(|(n, _)| *n == name)
+                .find(|(n, _)| name == n)
                 .map(|(_, o)| *o);
             if let Some(b) = builtin.filter(|b| *b != requested) {
                 // `conflictingBuiltins` (Signature.hs:203) scans the WHOLE
@@ -3177,7 +3179,7 @@ impl<'a> Parser<'a> {
     }
 
     /// SAPIC type: `<defaultSapicTypeS>` = `Any` placeholder, or an identifier.
-    fn type_p(&mut self) -> Result<Option<String>, ParseError> {
+    fn type_p(&mut self) -> Result<Option<SpannedStr>, ParseError> {
         // HS `typep` (Token.hs:472-473): `(try (symbol defaultSapicTypeS) *>
         // return Nothing) <|> Just <$> identifier`, where `defaultSapicTypeS =
         // "Any"` (Theory/Sapic/Term.hs:94-95, see line 95). Only the literal `Any`
@@ -4104,11 +4106,11 @@ impl<'a> Parser<'a> {
     /// `letter`/`"{*"` labels merge behind (bare `rule` at EOF, `rule!x`).
     /// Callers outside the top-level item alternation (variants sub-rules)
     /// pass `usize::MAX`: no formalComment alternative exists there.
-    fn rule_name_ident(&mut self, kw_end_offset: usize) -> Result<Identifier, ParseError> {
+    fn rule_name_ident(&mut self, kw_end_offset: usize) -> Result<SpannedStr, ParseError> {
         let start = self.lx.pos();
         if let Some(id) = self.lx.identifier() {
             let location = Location::location_of(&Some(&id), start);
-            let ident = Identifier::new(id, location);
+            let ident = SpannedStr::new(id, location);
             return Ok(ident);
         }
         if let Some(e) = self.err_reserved_word() {
