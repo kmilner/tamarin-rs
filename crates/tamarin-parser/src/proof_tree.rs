@@ -781,7 +781,7 @@ impl<'a> GoalParser<'a> {
 /// argument terms — that's used only for diagnostics today.  The
 /// arity (number of commas at top level) is the load-bearing field for
 /// goal matching (matches the count of terms in the runtime LNFact).
-fn build_fact(persistent: bool, name: String, args_text: &str) -> Fact {
+fn build_fact(persistent: bool, name: crate::SpannedStr, args_text: &str) -> Fact {
     use crate::ast::Term;
     let trimmed = args_text.trim();
     let args: Vec<Term> = if trimmed.is_empty() {
@@ -809,7 +809,7 @@ fn build_fact(persistent: bool, name: String, args_text: &str) -> Fact {
 
 /// Split a string at top-level commas — ignores commas inside any kind
 /// of bracket (`()`, `<>`, `[]`, `{}`).
-fn split_top_level_commas(s: &str) -> Vec<String> {
+fn split_top_level_commas(s: &str) -> Vec<SpannedStr> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut depth: i32 = 0;
