@@ -919,9 +919,9 @@ pub fn try_gterm_to_term(t: &GTerm) -> Option<p::Term> {
     Some(match t {
         GTerm::Var(BVar::Free(v)) => p::Term::Var(v.clone()),
         GTerm::Var(BVar::Bound(_)) => return None,
-        GTerm::PubLit(s) => p::Term::PubLit(s.clone()),
-        GTerm::FreshLit(s) => p::Term::FreshLit(s.clone()),
-        GTerm::NatLit(s) => p::Term::NatLit(s.clone()),
+        GTerm::PubLit(s) => p::Term::PubLit(p::SpannedStr::without_location(s)),
+        GTerm::FreshLit(s) => p::Term::FreshLit(p::SpannedStr::without_location(s)),
+        GTerm::NatLit(s) => p::Term::NatLit(p::SpannedStr::without_location(s)),
         GTerm::Number(n) => p::Term::Number(*n),
         GTerm::NumberOne => p::Term::NumberOne,
         GTerm::NatOne => p::Term::NatOne,
@@ -931,10 +931,10 @@ pub fn try_gterm_to_term(t: &GTerm) -> Option<p::Term> {
             for a in args.iter() {
                 acc.push(try_gterm_to_term(a)?);
             }
-            p::Term::App(n.to_string(), acc)
+            p::Term::App(p::SpannedStr::without_location(&**n), acc)
         }
         GTerm::AlgApp(n, a, b) => p::Term::AlgApp(
-            n.to_string(),
+            p::SpannedStr::without_location(&**n),
             Box::new(try_gterm_to_term(a)?),
             Box::new(try_gterm_to_term(b)?),
         ),
@@ -966,7 +966,7 @@ pub fn try_gfact_to_fact(f: &GFact) -> Option<p::Fact> {
     }
     Some(p::Fact {
         persistent: f.persistent,
-        name: f.name.clone(),
+        name: p::SpannedStr::without_location(&*f.name),
         args,
         annotations: f.annotations.clone(),
     })
@@ -1245,7 +1245,7 @@ pub fn is_safety_formula(g: &Guarded) -> bool {
 pub fn free_vars(g: &Guarded) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for_each_free_var_in_guarded(g, &mut |v| {
-        out.insert(v.name.clone());
+        out.insert(v.name.content.clone());
     });
     out
 }
@@ -1892,9 +1892,9 @@ fn unguarded_error(positions: &[usize], freshened: &[p::VarSpec]) -> GuardError 
         let body = if v.name.is_empty() {
             v.idx.to_string()
         } else if v.idx == 0 {
-            v.name.clone()
+            v.name.content.clone()
         } else {
-            format!("{}.{}", v.name, v.idx)
+            format!("{}.{}", v.name.content, v.idx)
         };
         format!("'{}{}'", prefix, body)
     };

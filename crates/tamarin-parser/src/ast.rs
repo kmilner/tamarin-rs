@@ -92,6 +92,13 @@ impl SpannedStr {
         }
     }
 
+    pub fn without_location(name: impl Into<String>) -> Self {
+        Self {
+            content: name.into(),
+            source: Source::None,
+        }
+    }
+
     /// Create an identifier with a source code location.
     pub fn with_location(name: impl Into<String>, loc: Location) -> Self {
         Self {
@@ -104,7 +111,7 @@ impl SpannedStr {
     pub fn indirect(name: impl Into<String>, source: Source) -> Self {
         Self {
             content: name.into(),
-            source: Source::Indirect(std::rc::Rc::new(source)),
+            source: Source::Indirect(std::sync::Arc::new(source)),
         }
     }
 
@@ -135,17 +142,23 @@ impl std::hash::Hash for SpannedStr {
     }
 }
 
-// impl From<String> for SpannedStr {
-//     fn from(value: String) -> Self {
-//         Self::synthetic(value)
-//     }
-// }
+impl From<SpannedStr> for String {
+    fn from(value: SpannedStr) -> Self {
+        value.content
+    }
+}
 
-// impl From<&str> for SpannedStr {
-//     fn from(value: &str) -> Self {
-//         Self::synthetic(value)
-//     }
-// }
+impl From<String> for SpannedStr {
+    fn from(value: String) -> Self {
+        Self::without_location(value)
+    }
+}
+
+impl From<&str> for SpannedStr {
+    fn from(value: &str) -> Self {
+        Self::without_location(value)
+    }
+}
 
 impl<S> PartialEq<S> for SpannedStr
 where

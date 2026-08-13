@@ -748,8 +748,12 @@ fn function_decl_typing_info(d: &p::FunctionDecl) -> crate::theory::SapicFunSym 
     };
     crate::theory::SapicFunSym {
         sym,
-        arg_types: d.arg_types.into(),
-        out_type: d.out_type.into(),
+        arg_types: d
+            .arg_types
+            .into_iter()
+            .map(|x| x.map(|s| s.into()))
+            .collect(),
+        out_type: d.out_type.map(|x| x.into()),
     }
 }
 
@@ -2718,7 +2722,7 @@ pub fn lnfact_to_parser(fa: &crate::fact::LNFact) -> p::Fact {
     };
     p::Fact {
         persistent,
-        name: p::SpannedStr::synthetic(name),
+        name: name.into(),
         args: fa.terms.iter().map(lnterm_to_parser).collect(),
         // HS `prettyFact` appends `ppAnn an` to every fact (Fact.hs:567-574),
         // so the annotations must survive the projection.  `fa.annotations`
@@ -2764,7 +2768,7 @@ pub fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                 LSort::Msg => p::SortHint::Msg,
             };
             p::Term::Var(p::VarSpec {
-                name: v.name.to_string(),
+                name: v.name.into(),
                 idx: v.idx,
                 sort,
                 typ: None,
@@ -2773,16 +2777,16 @@ pub fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
         Term::Lit(Lit::Con(n)) => {
             use tamarin_term::lterm::NameTag;
             match n.tag {
-                NameTag::Pub => p::Term::PubLit(n.id.0.to_string()),
-                NameTag::Fresh => p::Term::FreshLit(n.id.0.to_string()),
-                NameTag::Nat => p::Term::NatLit(n.id.0.to_string()),
-                NameTag::Node => p::Term::PubLit(n.id.0.to_string()),
+                NameTag::Pub => p::Term::PubLit(n.id.0.into()),
+                NameTag::Fresh => p::Term::FreshLit(n.id.0.into()),
+                NameTag::Nat => p::Term::NatLit(n.id.0.into()),
+                NameTag::Node => p::Term::PubLit(n.id.0.into()),
                 // `prettyTerm`'s literal case is `text . show`, and `show
                 // (Name AbbrevName n) = show n` (LTerm.hs:240) is the bare id;
                 // a nullary `App` is the parser-AST term `pp_term` renders
                 // that way.  Reached from `prettyLNFact` on the facts
                 // `Web.Utils.abbrev` rewrote.
-                NameTag::Abbrev => p::Term::App(n.id.0.to_string(), Vec::new()),
+                NameTag::Abbrev => p::Term::App(n.id.0.into(), Vec::new()),
             }
         }
         Term::App(FunSym::NoEq(sym), args) => {
@@ -2822,18 +2826,17 @@ pub fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                 }
                 return p::Term::Pair(items);
             }
-            p::Term::App(name, args.iter().map(lnterm_to_parser).collect())
+            p::Term::App(name.into(), args.iter().map(lnterm_to_parser).collect())
         }
         // HS `FApp (C EMap) ts -> ppFun emapSymString ts` (Term/Term.hs:316).
-        Term::App(FunSym::C(_), args) => p::Term::App(
-            "em".to_string(),
-            args.iter().map(lnterm_to_parser).collect(),
-        ),
+        Term::App(FunSym::C(_), args) => {
+            p::Term::App("em".into(), args.iter().map(lnterm_to_parser).collect())
+        }
         // HS `prettyTerm` (Term/Term.hs:304): `FApp (AC (ACfct (f,_))) [] ->
         // text (BC.unpack f)` — a nullary user-AC symbol is the bare name,
         // which `term_to_doc` renders for a nullary `App`.
         Term::App(FunSym::Ac(AcSym::AcFct(s)), args) if args.is_empty() => {
-            p::Term::App(String::from_utf8_lossy(s.name).into_owned(), vec![])
+            p::Term::App(String::from_utf8_lossy(s.name).to_string().into(), vec![])
         }
         Term::App(FunSym::Ac(ac), args) => {
             // Render AC as left-assoc binops to preserve display.
@@ -2856,10 +2859,9 @@ pub fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
             })
         }
         // HS `FApp List ts -> ppFun "LIST" ts` (Term/Term.hs:317).
-        Term::App(FunSym::List, args) => p::Term::App(
-            "LIST".to_string(),
-            args.iter().map(lnterm_to_parser).collect(),
-        ),
+        Term::App(FunSym::List, args) => {
+            p::Term::App("LIST".into(), args.iter().map(lnterm_to_parser).collect())
+        }
     }
 }
 
@@ -4000,7 +4002,7 @@ mod oracle_goal_tests {
 
         let tp = |n: &str| {
             GTerm::Var(BVar::Free(VarSpec {
-                name: n.to_string(),
+                name: n.into(),
                 idx: 0,
                 sort: SortHint::Node,
                 typ: None,

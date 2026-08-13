@@ -46,7 +46,7 @@ use crate::predicate_expand::{expand_formula, ExpandError};
 /// timepoint variable bound by the generated `∀ … #NOW.` restriction.
 fn var_now() -> p::VarSpec {
     p::VarSpec {
-        name: "NOW".to_string(),
+        name: "NOW".into(),
         idx: 0,
         sort: p::SortHint::Node,
         typ: None,
@@ -152,8 +152,9 @@ pub fn lift_one_rule(
         // instead of becoming a fresh fact argument.
         let expanded = resolve_nullary_constants(&expanded, nullary);
         // HS `fromRuleRestriction (rname ++ "_" ++ show i) f`.
-        let sub_name = format!("{}_{}", rname, idx);
-        let (restr, action) = from_rule_restriction(&sub_name, &expanded);
+        let sub_name =
+            p::SpannedStr::indirect(format!("{}_{}", rname, idx), rule.name.source.clone());
+        let (restr, action) = from_rule_restriction(sub_name, &expanded);
         restrictions.push(restr);
         new_actions.push(action);
     }
@@ -166,7 +167,7 @@ pub fn lift_one_rule(
 
 /// HS `fromRuleRestriction rname f` (Restriction.hs:140-161): produce the
 /// generated restriction plus the action fact inserted into the rule.
-fn from_rule_restriction(rname: &str, f: &p::Formula) -> (p::Restriction, p::Fact) {
+fn from_rule_restriction(rname: p::SpannedStr, f: &p::Formula) -> (p::Restriction, p::Fact) {
     // HS `rewrite f` returns `(rewritten formula, M.Map LVar Term)`.
     let (rewr_f, subst) = rewrite(f);
 
@@ -185,7 +186,7 @@ fn from_rule_restriction(rname: &str, f: &p::Formula) -> (p::Restriction, p::Fac
         .cloned()
         .map(p::Term::Var)
         .collect();
-    let restr_fact = mk_fact(rname, bvar_terms);
+    let restr_fact = mk_fact(&rname, bvar_terms);
     // f'' = (Restr_<rname>(...) @ #NOW) ⇒ f'
     let now_term = p::Term::Var(var_now());
     let antecedent = p::Formula::Atom(p::Atom::Action(restr_fact, now_term));
@@ -199,7 +200,7 @@ fn from_rule_restriction(rname: &str, f: &p::Formula) -> (p::Restriction, p::Fac
         p::Formula::Forall(quant_vars, Box::new(f2))
     };
     let restriction = p::Restriction {
-        name: format!("{}{}", RESTR_PREFIX, rname),
+        name: p::SpannedStr::indirect(format!("{}{}", RESTR_PREFIX, rname), rname.source.clone()),
         formula: restr_formula,
         attributes: Vec::new(),
     };
@@ -217,7 +218,7 @@ fn from_rule_restriction(rname: &str, f: &p::Formula) -> (p::Restriction, p::Fac
             None => p::Term::Var(v),
         })
         .collect();
-    let action = mk_fact(rname, action_args);
+    let action = mk_fact(&rname, action_args);
 
     (restriction, action)
 }
@@ -240,7 +241,7 @@ fn resolve_nullary_term(t: &p::Term, nullary: &BTreeSet<String>) -> p::Term {
         p::Term::Var(v)
             if matches!(v.sort, p::SortHint::Untagged)
                 && v.idx == 0
-                && nullary.contains(&v.name) =>
+                && nullary.contains(&v.name.content) =>
         {
             p::Term::App(v.name.clone(), Vec::new())
         }
@@ -250,10 +251,11 @@ fn resolve_nullary_term(t: &p::Term, nullary: &BTreeSet<String>) -> p::Term {
 
 /// HS `mkFact = protoFactAnn Linear (restrPrefix ++ rname) S.empty`
 /// (Restriction.hs:140-161, see line 161): a linear fact named `Restr_<rname>`.
-fn mk_fact(rname: &str, args: Vec<p::Term>) -> p::Fact {
+fn mk_fact(rname: &p::SpannedStr, args: Vec<p::Term>) -> p::Fact {
+    let name = p::SpannedStr::indirect(format!("{}{}", RESTR_PREFIX, rname), rname.source.clone());
     p::Fact {
         persistent: false,
-        name: format!("{}{}", RESTR_PREFIX, rname),
+        name,
         args,
         annotations: Vec::new(),
     }
@@ -295,12 +297,13 @@ impl RewriteState {
         let idx = self.counter;
         self.counter += 1;
         let v = p::VarSpec {
-            name: "x".to_string(),
+            name: "x".into(),
             idx,
             sort: p::SortHint::Msg,
             typ: None,
         };
-        self.subst.insert((v.name.clone(), v.idx), t.clone());
+        self.subst
+            .insert((v.name.content.clone(), v.idx), t.clone());
         p::Term::Var(v)
     }
 }
@@ -431,7 +434,7 @@ fn rewrite_term(t: &p::Term, bound: &[VarKey], st: &mut RewriteState) -> p::Term
 type VarKey = (String, u64);
 
 fn var_full_key(v: &p::VarSpec) -> VarKey {
-    (v.name.clone(), v.idx)
+    (v.name.content.clone(), v.idx)
 }
 
 /// HS `isFree (Bound _) = False; isFree (Free v) = v /= varNow`.
@@ -530,7 +533,7 @@ fn dedup_first(vs: Vec<p::VarSpec>) -> Vec<p::VarSpec> {
     let mut seen: std::collections::BTreeSet<(String, u64, u8)> = std::collections::BTreeSet::new();
     let mut out = Vec::with_capacity(vs.len());
     for v in vs {
-        let key = (v.name.clone(), v.idx, sort_rank(v.sort));
+        let key = (v.name.content.clone(), v.idx, sort_rank(v.sort));
         if seen.insert(key) {
             out.push(v);
         }
@@ -651,7 +654,7 @@ mod tests {
         let ps = preds("True(x) <=> (x = true())");
         let phi = parse_formula_str("True(eq(x, x))").unwrap();
         let expanded = expand_formula(&phi, &ps).unwrap();
-        let (restr, action) = from_rule_restriction("A_1", &expanded);
+        let (restr, action) = from_rule_restriction("A_1".into(), &expanded);
         // Restriction name.
         assert_eq!(restr.name, "Restr_A_1");
         // Action fact name + ORIGINAL args.
@@ -660,7 +663,7 @@ mod tests {
         // The single abstracted arg is the ORIGINAL eq(x,x).
         match &action.args[0] {
             p::Term::App(n, args) => {
-                assert_eq!(n, "eq");
+                assert_eq!(n.content, "eq");
                 assert_eq!(args.len(), 2);
             }
             other => panic!("expected eq(x,x), got {:?}", other),

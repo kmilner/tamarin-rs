@@ -109,7 +109,10 @@ fn cmp_term_orders_pairs_by_their_nested_spine() {
 fn cmp_term_ties_the_prefix_pair_spelling_with_the_bracket_spelling() {
     use crate::guarded_types::term_to_gterm_free;
     use std::cmp::Ordering::{Equal, Less};
-    let prefix = term_to_gterm_free(&p::Term::App("pair".into(), vec![var("a", 0), var("z", 0)]));
+    let prefix = term_to_gterm_free(&p::Term::App(
+        p::SpannedStr::without_location("pair"),
+        vec![var("a", 0), var("z", 0)],
+    ));
     let bracket = term_to_gterm_free(&p::Term::Pair(vec![var("a", 0), var("z", 0)]));
     assert_eq!(cmp_term(&prefix, &bracket), Equal);
     let long = term_to_gterm_free(&p::Term::Pair(vec![var("a", 0), var("b", 0), var("c", 0)]));

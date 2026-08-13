@@ -46,7 +46,10 @@ pub enum Source {
     Location(Location),
     /// The AST nodes location is indirectly derived from another source, e.g. a macro expansion
     /// or a rule that is derived from another rule.
-    Indirect(std::rc::Rc<Source>),
+    Indirect(std::sync::Arc<Source>),
+    /// The AST node is not associated with any source code location
+    /// Used when converting back from other representations, e.g. Maude, where source code locations are not available
+    None,
 }
 
 impl Source {
