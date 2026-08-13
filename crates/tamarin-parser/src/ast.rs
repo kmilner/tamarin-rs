@@ -123,10 +123,6 @@ impl SpannedStr {
             source: Source::Cli,
         }
     }
-
-    pub fn as_str(&self) -> &str {
-        &self.content
-    }
 }
 
 impl std::hash::Hash for SpannedStr {
@@ -457,7 +453,7 @@ pub enum ParsedMethod {
     /// capture the raw inner text plus a best-effort parsed `GoalSpec`.
     /// The String is the raw text inside `solve( ... )`, preserved for
     /// HS-faithful unannotated subtree display (see `replay.rs`).
-    SolveGoal(GoalSpec, SpannedStr),
+    SolveGoal(GoalSpec, String),
     /// `SOLVED` (HS: `Finished Solved`).
     SolvedLeaf,
     /// `UNFINISHABLE` (HS: `Finished Unfinishable`).
@@ -466,7 +462,7 @@ pub enum ParsedMethod {
     Invalidated,
     /// Any proof-method token not matched by a structural variant;
     /// intentionally replayed via the auto-prover.
-    Other(SpannedStr),
+    Other(String),
 }
 
 /// Best-effort parse of the formula inside `solve( ... )`.
@@ -490,7 +486,7 @@ pub enum GoalSpec {
         fact: Fact,
         /// Timepoint variable ROOT name (sigil/idx stripped), e.g. `vk`
         /// from `#vk.6`.
-        time_var: SpannedStr,
+        time_var: String,
         /// Timepoint variable index (the `N` in `#vk.N`; `0` when absent).
         /// HS's `ActionG i fa` carries the full LVar incl. idx, so this is
         /// needed to re-render the goal head faithfully (`#vk.6`, not `#vk`)
@@ -503,7 +499,7 @@ pub enum GoalSpec {
         fact: Fact,
         prem_idx: usize,
         /// Node variable ROOT name (sigil/idx stripped).
-        time_var: SpannedStr,
+        time_var: String,
         /// Node variable index (the `N` in `#i.N`; `0` when absent).
         time_idx: u32,
     },
@@ -528,7 +524,7 @@ pub enum GoalSpec {
     /// signature is a sufficient discriminator.
     Disj {
         alts: Vec<DisjAlt>,
-        alt_texts: Vec<SpannedStr>,
+        alt_texts: Vec<String>,
     },
     /// `(#i, n) ~~> (#j, m)` — chain-split goal.  Mirrors HS
     /// `chainGoal = ChainG <$> (try (nodeConc <* opChain)) <*> nodePrem`
@@ -543,9 +539,9 @@ pub enum GoalSpec {
     /// differ from runtime LVar indices — same pattern as Action /
     /// Premise).
     Chain {
-        src_var: SpannedStr,
+        src_var: String,
         conc_idx: u32,
-        tgt_var: SpannedStr,
+        tgt_var: String,
         prem_idx: u32,
     },
     /// `<small> ⊏ <big>` — subterm-split goal.  Mirrors HS
@@ -562,10 +558,7 @@ pub enum GoalSpec {
     /// We keep both sides as raw text trimmed of outer whitespace; the
     /// matcher compares against open `Goal::Subterm((l, r))` by canonical
     /// pretty-printed text equality.
-    Subterm {
-        small_raw: SpannedStr,
-        big_raw: SpannedStr,
-    },
+    Subterm { small_raw: String, big_raw: String },
     /// `splitEqs(N)` — equation-split goal.  Mirrors HS `eqSplitGoal`
     /// (Theory/Text/Parser/Proof.hs:70-72):
     /// ```haskell
@@ -581,7 +574,7 @@ pub enum GoalSpec {
     /// Anything we didn't structurally recognise.  Kept as raw text so
     /// the walker can choose to either (a) fall back to auto-prover or
     /// (b) be extended later to handle it.
-    Raw(SpannedStr),
+    Raw(String),
 }
 
 /// Structural signature of one alt inside a `solve( a ∥ b ∥ … )` text.

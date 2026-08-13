@@ -27,7 +27,7 @@ use tamarin_parser::{parse_theory, ParseError};
 #[track_caller]
 fn assert_lowercase_fact(src: &str, name: &str, line: u32, col: u32) {
     let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
-    let at = *e.location().location().expect("expected a location");
+    let at = *e.location();
     let ParseError::FactNameMustStartWithUppercase { name: got, .. } = &e else {
         panic!("expected the lowercase-fact rejection, got {e:?}");
     };

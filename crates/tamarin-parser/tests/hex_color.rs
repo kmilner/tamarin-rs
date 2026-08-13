@@ -33,7 +33,7 @@ fn color_theory(value: &str) -> String {
 #[track_caller]
 fn assert_bad_rgb(value: &str, code: &str, line: u32, col: u32) {
     let e = parse_theory(&color_theory(value), &[]).expect_err("must fail to parse");
-    let at = *e.location().location().expect("expected a location");
+    let at = *e.location();
     let ParseError::Custom { message, .. } = &e else {
         panic!("expected the `hexToRGB` rejection, got {e:?}");
     };
@@ -53,7 +53,7 @@ fn assert_lex_expected(value: &str, line: u32, col: u32, found: &str, expected: 
         matches!(&e, ParseError::Expected { .. }),
         "expected the `Expected` variant, got {e:?}"
     );
-    let at = *e.location().location().expect("expected a location");
+    let at = e.location();
     assert_eq!((at.line, at.col), (line, col), "position of {e:?}");
     let got = e.found().unwrap_or("");
     assert!(
@@ -79,7 +79,7 @@ fn accepted_code(value: &str) -> String {
         })
         .expect("one rule");
     match &rule.attributes[..] {
-        [RuleAttr::Color(c)] => c.content.clone(),
+        [RuleAttr::Color(c)] => c.clone(),
         other => panic!("expected a single Color attribute, got {other:?}"),
     }
 }

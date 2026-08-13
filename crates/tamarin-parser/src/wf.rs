@@ -464,7 +464,7 @@ pub fn check_if_lemmas_in_theory(lemma_names: &[String], thy: &Theory) -> WfRepo
 
     let theory_lemma_names: Vec<&str> = theory_lemmas(thy)
         .into_iter()
-        .map(|l| l.name.content.as_str())
+        .map(|l| l.name.as_str())
         .collect();
 
     // HS `findNotProvedLemmas` (Wellformedness.hs:1140-1151, see line 1141) is a `foldl`
@@ -636,8 +636,8 @@ enum NameKind {
 
 fn term_name_lits(t: &Term, out: &mut Vec<(NameKind, String)>) {
     match t {
-        Term::PubLit(s) => out.push((NameKind::Pub, s.content.clone())),
-        Term::FreshLit(s) => out.push((NameKind::Fresh, s.content.clone())),
+        Term::PubLit(s) => out.push((NameKind::Pub, s.clone())),
+        Term::FreshLit(s) => out.push((NameKind::Fresh, s.clone())),
         Term::App(_, args) => {
             for a in args {
                 term_name_lits(a, out);
@@ -817,7 +817,7 @@ fn pair_split<'a>(t: &'a Term, out: &mut Vec<&'a Term>) {
                 pair_split(last, out);
             }
         }
-        Term::App(name, args) if name.content == "pair" && args.len() == 2 => {
+        Term::App(name, args) if name == "pair" && args.len() == 2 => {
             out.push(&args[0]);
             pair_split(&args[1], out);
         }
@@ -890,32 +890,31 @@ fn wf_term_doc(t: &Term, ac: &AcSyms) -> WfDoc {
         NatOne => leaf("%1".to_string()),
         DhNeutral => leaf("DH_neutral".to_string()),
         Pair(_) => wf_pair_doc(t, ac),
-        App(name, args) if name.content == "pair" && args.len() == 2 => wf_pair_doc(t, ac),
+        App(name, args) if name == "pair" && args.len() == 2 => wf_pair_doc(t, ac),
         // `em` is HS's sole `C` symbol (`CSym = EMap`,
         // FunctionSymbols.hs:142-143), and `fAppC nacsym as = FAPP (C nacsym)
         // (sort as)` (Term/Term/Raw.hs:132-134, see line 134) sorts its
         // arguments at construction, so `prettyTerm` never sees the written
         // order.
-        App(name, args) if name.content == "em" && args.len() == 2 => {
+        App(name, args) if name == "em" && args.len() == 2 => {
             let mut sorted: Vec<&Term> = args.iter().collect();
             sorted.sort_by(|a, b| cmp_wf_term(a, b, ac));
             WfDoc::Fun(
-                name.content.clone(),
+                name.clone(),
                 sorted.iter().map(|a| wf_term_doc(a, ac)).collect(),
             )
         }
         // HS `FApp (NoEq (f,_)) [] -> text f` (Term.hs:314) — a nullary symbol
         // has no `ppFun` parentheses at all.
-        App(name, args) if args.is_empty() => leaf(name.content.clone()),
+        App(name, args) if args.is_empty() => leaf(name.clone()),
         App(name, args) => WfDoc::Fun(
-            name.content.clone(),
+            name.clone(),
             args.iter().map(|a| wf_term_doc(a, ac)).collect(),
         ),
         // HS canonicalises `aenc{m}pk` as `aenc(m, pk)`.
-        AlgApp(name, l, r) => WfDoc::Fun(
-            name.content.clone(),
-            vec![wf_term_doc(l, ac), wf_term_doc(r, ac)],
-        ),
+        AlgApp(name, l, r) => {
+            WfDoc::Fun(name.clone(), vec![wf_term_doc(l, ac), wf_term_doc(r, ac)])
+        }
         // HS `prettyTerm`'s diff arm (Term.hs:311) joins with `<>`, not the
         // breakable `fsep` `ppFun` uses.
         Diff(l, r) => WfDoc::Beside(vec![
@@ -1046,9 +1045,9 @@ fn user_ac_fun_names(thy: &Theory) -> AcSyms {
             TheoryItem::Functions(decls) => {
                 for d in decls {
                     if d.ac {
-                        ac.insert(d.name.content.clone());
+                        ac.insert(d.name.clone());
                     } else {
-                        noeq.insert(d.name.content.as_str());
+                        noeq.insert(d.name.as_str());
                     }
                 }
             }
@@ -1074,9 +1073,7 @@ fn user_ac_fun_names(thy: &Theory) -> AcSyms {
 /// replaced them by their argument.
 fn ac_app_name<'a>(t: &'a Term, ac: &AcSyms) -> Option<&'a str> {
     match t {
-        Term::App(n, args) if args.len() >= 2 && ac.contains(n.content.as_str()) => {
-            Some(n.content.as_str())
-        }
+        Term::App(n, args) if args.len() >= 2 && ac.contains(n.as_str()) => Some(n.as_str()),
         _ => None,
     }
 }
@@ -1087,7 +1084,7 @@ fn ac_app_name<'a>(t: &'a Term, ac: &AcSyms) -> Option<&'a str> {
 fn ac_collapse<'a>(t: &'a Term, ac: &AcSyms) -> &'a Term {
     let mut t = t;
     while let Term::App(n, args) = t {
-        if args.len() == 1 && ac.contains(n.content.as_str()) {
+        if args.len() == 1 && ac.contains(n.as_str()) {
             t = &args[0];
         } else {
             break;
@@ -1267,9 +1264,9 @@ fn wf_funsym_key<'a>(t: &'a Term, ac: &AcSyms) -> (u8, &'a str, usize) {
         NumberOne => (0, "one", 0),
         NatOne => (0, "tone", 0),
         DhNeutral => (0, "DH_neutral", 0),
-        App(n, args) if n.content == "em" && args.len() == 2 => (2, "", 0),
-        App(n, args) => (0, n.content.as_str(), args.len()),
-        AlgApp(n, _, _) => (0, n.content.as_str(), 2),
+        App(n, args) if n == "em" && args.len() == 2 => (2, "", 0),
+        App(n, args) => (0, n.as_str(), args.len()),
+        AlgApp(n, _, _) => (0, n.as_str(), 2),
         BinOp(o, _, _) => binop_rank(o),
         // `=t` is SAPIC pattern-match syntax with no HS term counterpart.
         PatMatch(_) => (255, "", 0),
@@ -1457,18 +1454,18 @@ pub fn reserved_fact_name_rules(thy: &Theory) -> WfReport {
         let (prems, acts, concs) = rule_facts_with_lets(r);
         let bad_lhs: Vec<&Fact> = prems
             .iter()
-            .filter(|f| KLOG_NAMES.contains(&f.name.content.as_str()))
+            .filter(|f| KLOG_NAMES.contains(&f.name.as_str()))
             .collect();
         let bad_acts: Vec<&Fact> = acts
             .iter()
             .filter(|f| {
-                KLOG_NAMES.contains(&f.name.content.as_str())
-                    || matches!(f.name.content.as_str(), "In" | "Out" | "Fr")
+                KLOG_NAMES.contains(&f.name.as_str())
+                    || matches!(f.name.as_str(), "In" | "Out" | "Fr")
             })
             .collect();
         let bad_rhs: Vec<&Fact> = concs
             .iter()
-            .filter(|f| KLOG_NAMES.contains(&f.name.content.as_str()))
+            .filter(|f| KLOG_NAMES.contains(&f.name.as_str()))
             .collect();
         for (msg, fs) in [
             ("on left-hand-side", bad_lhs),
@@ -1664,7 +1661,7 @@ fn collect_fact_observations(thy: &Theory) -> Vec<FactObservation> {
             }
             out.push(FactObservation {
                 origin: format!("Rule `{}'", r.name),
-                name: f.name.content.clone(),
+                name: f.name.clone(),
                 arity: f.args.len(),
                 persistent: f.persistent,
                 pp: pp_wf_fact(f, &ac),
@@ -1692,7 +1689,7 @@ fn lemma_fact_observations(thy: &Theory) -> Vec<FactObservation> {
             let pp = show_debruijn_fact(&fa, &dbterms);
             out.push(FactObservation {
                 origin: format!("Lemma `{}'", l.name),
-                name: fa.name.content.clone(),
+                name: fa.name.clone(),
                 arity: fa.args.len(),
                 persistent: fa.persistent,
                 pp,
@@ -1851,7 +1848,7 @@ fn show_debruijn_head<'a>(t: &'a Term, ac: &AcSyms) -> &'a str {
         Term::BinOp(B::Union, _, _) => "Union",
         Term::BinOp(B::Xor, _, _) => "Xor",
         Term::BinOp(B::NatPlus, _, _) => "NatPlus",
-        Term::App(n, args) if n.content == "em" && args.len() == 2 => "em",
+        Term::App(n, args) if n == "em" && args.len() == 2 => "em",
         _ => wf_funsym_key(t, ac).1,
     }
 }
@@ -2082,12 +2079,12 @@ pub fn fact_lhs_occur_no_rhs(thy: &Theory) -> WfReport {
             if !is_proto_fact_name(&f.name) {
                 continue;
             }
-            rhs.push((r.name.content.clone().into(), f.clone()));
+            rhs.push((r.name.clone().into(), f.clone()));
         }
     }
     let rhs_info: BTreeSet<(String, usize, bool)> = rhs
         .iter()
-        .map(|(_, f)| (f.name.content.clone(), f.args.len(), f.persistent))
+        .map(|(_, f)| (f.name.clone(), f.args.len(), f.persistent))
         .collect();
 
     // Detect orphan premises (proto LHS facts whose factInfo is in no RHS).
@@ -2098,7 +2095,7 @@ pub fn fact_lhs_occur_no_rhs(thy: &Theory) -> WfReport {
                 continue;
             }
             // HS `removeSame`: drop if the full factInfo occurs in some RHS.
-            if rhs_info.contains(&(f.name.content.clone(), f.args.len(), f.persistent)) {
+            if rhs_info.contains(&(f.name.clone(), f.args.len(), f.persistent)) {
                 continue;
             }
             // HS `minimalEdFact`: the RHS fact with minimum name edit distance
@@ -2109,7 +2106,7 @@ pub fn fact_lhs_occur_no_rhs(thy: &Theory) -> WfReport {
                 .min_by_key(|(d, _, _)| *d)
                 .filter(|(d, _, _)| *d <= 3)
                 .map(|(_, rn, rf)| (rn.clone(), rf.clone()));
-            orphan_pairs.push((r.name.content.clone().into(), f.clone(), suggestion));
+            orphan_pairs.push((r.name.clone().into(), f.clone(), suggestion));
         }
     }
 
@@ -2242,7 +2239,7 @@ pub fn public_names_report(thy: &Theory) -> WfReport {
         }
         for (k, n) in names {
             if k == NameKind::Pub {
-                pairs.push((r.name.content.clone().into(), n));
+                pairs.push((r.name.clone().into(), n));
             }
         }
     }
@@ -2347,7 +2344,7 @@ fn collect_nullary_fun_names(thy: &Theory) -> BTreeSet<String> {
         if let TheoryItem::Functions(decls) = it {
             for d in decls {
                 if d.arg_types.is_empty() {
-                    out.insert(d.name.content.clone());
+                    out.insert(d.name.clone());
                 }
             }
         }
@@ -2407,7 +2404,7 @@ fn collect_rule_unbound_vars(r: &Rule, nullary_funs: &BTreeSet<String>) -> Vec<V
     let mut bound: BTreeSet<(String, u8, u64)> = BTreeSet::new();
     for f in &prems {
         for v in fact_vars(f) {
-            bound.insert((v.name.content.clone(), sort_tag(&v.sort), v.idx));
+            bound.insert((v.name.clone(), sort_tag(&v.sort), v.idx));
         }
     }
     let mut unbound: Vec<VarSpec> = Vec::new();
@@ -2427,7 +2424,7 @@ fn collect_rule_unbound_vars(r: &Rule, nullary_funs: &BTreeSet<String>) -> Vec<V
             if lookup_binder.is_some_and(|b| b == render_var(&v)) {
                 continue;
             }
-            if nullary_funs.contains(&v.name.content) {
+            if nullary_funs.contains(&v.name) {
                 continue;
             }
             // Builtin nullary constants (e.g. XOR's `zero`, DH's
@@ -2442,7 +2439,7 @@ fn collect_rule_unbound_vars(r: &Rule, nullary_funs: &BTreeSet<String>) -> Vec<V
             if is_known_nullary_constant_name(&v.name) {
                 continue;
             }
-            let key = (v.name.content.clone(), sort_tag(&v.sort), v.idx);
+            let key = (v.name.clone(), sort_tag(&v.sort), v.idx);
             if bound.contains(&key) {
                 continue;
             }
@@ -2526,7 +2523,7 @@ pub fn message_derivation_report(thy: &Theory) -> WfReport {
         }
         // HS shows the LVar (sort prefix included): MessageDerivationChecks.hs:122-138, see line 138
         let names: Vec<String> = unbound.iter().map(render_var).collect();
-        per_rule.push((r.name.content.clone().into(), names));
+        per_rule.push((r.name.clone().into(), names));
     }
     if per_rule.is_empty() {
         return Vec::new();
@@ -2849,8 +2846,7 @@ fn rhs_is_ground(t: &Term, nullary_funs: &BTreeSet<String>) -> bool {
             // variable-free; everything else (and any sigil-tagged var) is a
             // genuine free variable.
             matches!(v.sort, SortHint::Untagged)
-                && (is_known_nullary_constant_name(&v.name)
-                    || nullary_funs.contains(&v.name.content))
+                && (is_known_nullary_constant_name(&v.name) || nullary_funs.contains(&v.name))
         }
         App(_, args) | Pair(args) => args.iter().all(|a| rhs_is_ground(a, nullary_funs)),
         AlgApp(_, a, b) | Diff(a, b) | BinOp(_, a, b) => {

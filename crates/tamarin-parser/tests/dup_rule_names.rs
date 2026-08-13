@@ -40,7 +40,7 @@ fn check<T>(res: Result<T, ParseError>) -> (String, u32, u32) {
         Ok(_) => panic!("the probes below must all fail to parse"),
         Err(e) => e,
     };
-    let at = *e.location().location().expect("expected a location");
+    let at = *e.location();
     let ParseError::Custom { message, .. } = e else {
         panic!("expected a `fail`-style error, got {e:?}");
     };
@@ -54,7 +54,7 @@ fn rule_names(src: &str) -> Vec<String> {
         .items
         .iter()
         .filter_map(|i| match i {
-            TheoryItem::Rule(r) => Some(r.name.content.clone().into()),
+            TheoryItem::Rule(r) => Some(r.name.clone().into()),
             _ => None,
         })
         .collect()

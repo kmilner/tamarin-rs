@@ -29,7 +29,7 @@ fn diff_rule_probe(indent: &str) -> String {
 #[track_caller]
 fn assert_diff_error_at(src: &str, line: u32, col: u32) {
     let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
-    let at = *e.location().location().expect("expected a location");
+    let at = *e.location();
     let ParseError::Custom { message, .. } = &e else {
         panic!("expected the diff-flag rejection, got {e:?}");
     };

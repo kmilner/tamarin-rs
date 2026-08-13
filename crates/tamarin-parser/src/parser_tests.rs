@@ -8,10 +8,7 @@ use super::*;
 /// the one `lexeme` left behind.
 fn custom_err(src: &str, flags: &[&str]) -> (u32, u32, String) {
     match parse_theory(src, flags).unwrap_err() {
-        ParseError::Custom { message, at } => {
-            let loc = at.location().expect("expected a location");
-            (loc.line, loc.col, message)
-        }
+        ParseError::Custom { message, at } => (at.line, at.col, message),
         other => panic!("unexpected variant: {other:?}"),
     }
 }
@@ -397,11 +394,8 @@ fn reserved_word_at_a_declaration_position() {
         } => {
             assert_eq!(found.as_deref(), Some("diff(x)"));
             assert_eq!(expected, vec!["predicate declaration".to_string()]);
-            assert!(matches!(at, Source::Location(_)));
-            if let Source::Location(loc) = at {
-                assert_eq!(loc.line, 3);
-                assert_eq!(loc.col, 13);
-            }
+            assert_eq!(at.line, 3);
+            assert_eq!(at.col, 13);
         }
         other => panic!("unexpected variant: {other:?}"),
     }
@@ -434,11 +428,8 @@ fn unterminated_theory_reports_the_missing_end_keyword() {
             } => {
                 assert_eq!(found, None, "body: {body:?}");
                 assert_eq!(expected, vec!["end".to_string()], "body: {body:?}");
-                assert!(matches!(at, Source::Location(_)));
-                if let Source::Location(loc) = at {
-                    assert_eq!(loc.line, line, "body: {body:?}");
-                    assert_eq!(loc.col, 1, "body: {body:?}");
-                }
+                assert_eq!(at.line, line, "body: {body:?}");
+                assert_eq!(at.col, 1, "body: {body:?}");
             }
             other => panic!("unexpected variant: {other:?}"),
         }
@@ -541,11 +532,8 @@ fn bare_diff_token_is_a_parse_error() {
         } => {
             assert_eq!(found.as_deref(), Some(")"));
             assert_eq!(expected, vec!["term".to_string()]);
-            assert!(matches!(at, Source::Location(_)));
-            if let Source::Location(loc) = at {
-                assert_eq!(loc.line, 5);
-                assert_eq!(loc.col, 30);
-            }
+            assert_eq!(at.line, 5);
+            assert_eq!(at.col, 30);
         }
         other => panic!("unexpected variant: {other:?}"),
     }
@@ -563,11 +551,8 @@ fn bare_diff_token_is_a_parse_error() {
         } => {
             assert_eq!(found.as_deref(), Some("{~a}~b"));
             assert_eq!(expected, vec!["term".to_string()]);
-            assert!(matches!(at, Source::Location(_)));
-            if let Source::Location(loc) = at {
-                assert_eq!(loc.line, 5);
-                assert_eq!(loc.col, 37);
-            }
+            assert_eq!(at.line, 5);
+            assert_eq!(at.col, 37);
         }
         other => panic!("unexpected variant: {other:?}"),
     }
@@ -615,13 +600,10 @@ fn theory_keyword_error() {
         } => {
             assert_eq!(found.as_deref(), Some("theary"));
             assert_eq!(expected, vec!["theory".to_string()]);
-            assert!(matches!(at, Source::Location(_)));
-            if let Source::Location(loc) = at {
-                assert_eq!(loc.line, 1);
-                assert_eq!(loc.col, 1);
-                assert_eq!(loc.start, 0);
-                assert_eq!(loc.end, 6);
-            }
+            assert_eq!(at.line, 1);
+            assert_eq!(at.col, 1);
+            assert_eq!(at.start, 0);
+            assert_eq!(at.end, 6);
         }
         other => panic!("unexpected variant: {other:?}"),
     }
@@ -636,11 +618,8 @@ fn garbage_at_item_position_suggests_the_nearest_theory_items() {
     match &e {
         ParseError::ExpectedTheoryItem { found, at, .. } => {
             assert_eq!(found.as_deref(), Some("rul"));
-            assert!(matches!(at, Source::Location(_)));
-            if let Source::Location(loc) = at {
-                assert_eq!(loc.line, 3);
-                assert_eq!(loc.col, 1);
-            }
+            assert_eq!(at.line, 3);
+            assert_eq!(at.col, 1);
         }
         other => panic!("unexpected variant: {other:?}"),
     }
@@ -662,11 +641,8 @@ fn formula_trailing_garbage_uses_structured_variant() {
         } => {
             assert_eq!(found.as_deref(), Some("junk"));
             assert_eq!(expected, vec!["end of input".to_string()]);
-            assert!(matches!(at, Source::Location(_)));
-            if let Source::Location(loc) = at {
-                assert_eq!(loc.line, 1);
-                assert_eq!(loc.col, 7);
-            }
+            assert_eq!(at.line, 1);
+            assert_eq!(at.col, 7);
         }
         other => panic!("unexpected variant: {other:?}"),
     }

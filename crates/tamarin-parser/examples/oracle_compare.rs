@@ -163,7 +163,7 @@ fn parse_tamarin_output(s: &str) -> Option<Counts> {
 
 fn count_ours(t: &ast::Theory) -> Counts {
     let mut c = Counts {
-        name: t.name.content.clone(),
+        name: t.name.clone(),
         ..Default::default()
     };
     for it in &t.items {

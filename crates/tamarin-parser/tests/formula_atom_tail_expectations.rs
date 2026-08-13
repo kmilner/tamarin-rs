@@ -32,7 +32,7 @@ fn assert_expected(src: &str, line: u32, col: u32, found: &str, expected: &[&str
         matches!(&e, ParseError::Expected { .. }),
         "expected the `Expected` variant, got {e:?}"
     );
-    let at = e.location().location().expect("expected a location");
+    let at = e.location();
     assert_eq!((at.line, at.col), (line, col), "position of {e:?}");
     let got = e.found().unwrap_or("");
     assert!(

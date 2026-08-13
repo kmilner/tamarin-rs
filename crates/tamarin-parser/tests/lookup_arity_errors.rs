@@ -36,7 +36,7 @@ fn assert_expected(src: &str, line: u32, col: u32, found: &str, expected: &[&str
         matches!(&e, ParseError::Expected { .. }),
         "expected the `Expected` variant, got {e:?}"
     );
-    let at = *e.location().location().expect("expected a location");
+    let at = e.location();
     assert_eq!((at.line, at.col), (line, col), "position of {e:?}");
     let got = e.found().unwrap_or("");
     assert!(
@@ -360,8 +360,6 @@ fn formula_undeclared_uppercase_relop_becomes_pred_then_close_error() {
     else {
         panic!("expected an unterminated-delimiter error, got {e:?}");
     };
-    let opening_at = *opening_at.location().expect("expected a location");
-    let found_at = *found_at.location().expect("expected a location");
     assert_eq!(opening, "\"");
     assert_eq!((opening_at.line, opening_at.col), (8, 3));
     assert_eq!(found.as_deref(), Some("="));
@@ -431,7 +429,7 @@ fn macro_body_application_frame_is_the_item_position_error() {
         matches!(&e, ParseError::ExpectedTheoryItem { .. }),
         "expected a theory-item error, got {e:?}"
     );
-    let at = *e.location().location().expect("expected a location");
+    let at = e.location();
     assert_eq!((at.line, at.col), (4, 17));
     assert!(e.found().is_some_and(|f| f.starts_with('(')));
     assert_eq!(
