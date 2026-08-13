@@ -36,6 +36,13 @@ use crate::ast::*;
 use crate::lexer::{is_ident_char, is_reserved_name, Lexer, Pos};
 use crate::proof_tree::parse_proof_tree;
 
+pub const DUMMY_LOCATION: Location = Location {
+    line: u32::MAX,
+    col: u32::MAX,
+    start: usize::MAX,
+    end: usize::MAX,
+};
+
 #[derive(Debug, Clone, Copy)]
 pub struct Location {
     pub line: u32,
@@ -84,6 +91,11 @@ pub enum ParseError {
         found: Option<String>,
         expected: Vec<String>,
         at: Location,
+    },
+    DuplicateRule {
+        name: String,
+        first_at: Location,
+        second_at: Location,
     },
     ExpectedTheoryItem {
         found: Option<String>,
@@ -282,6 +294,7 @@ impl ParseError {
             | ParseError::Custom { .. }
             | ParseError::Abort { .. } => {}
             ParseError::IoError { .. } => {}
+            ParseError::DuplicateRule { .. } => {}
         }
     }
 
@@ -317,6 +330,7 @@ impl ParseError {
             | ParseError::Custom { at, .. }
             | ParseError::Abort { at, .. }
             | ParseError::UnterminatedDelimiter { found_at: at, .. } => at,
+            ParseError::DuplicateRule { second_at, .. } => second_at,
         }
     }
 
@@ -351,6 +365,7 @@ impl ParseError {
             ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::IoError { .. }
             | ParseError::Custom { .. }
+            | ParseError::DuplicateRule { .. }
             | ParseError::Abort { .. } => None,
         }
     }
@@ -386,6 +401,7 @@ impl ParseError {
             ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::IoError { .. }
             | ParseError::Custom { .. }
+            | ParseError::DuplicateRule { .. }
             | ParseError::Abort { .. } => None,
         }
     }
@@ -421,7 +437,8 @@ impl ParseError {
             | ParseError::UnexpectedTrailingInput { .. }
             | ParseError::Custom { .. }
             | ParseError::Abort { .. }
-            | ParseError::IoError { .. } => None,
+            | ParseError::IoError { .. }
+            | ParseError::DuplicateRule { .. } => None,
         }
         .map(|expected| match self {
             ParseError::ExpectedTheoryItem { found, .. } => {
@@ -480,6 +497,7 @@ impl ParseError {
             ParseError::Expected { .. } => "Unexpected input",
             ParseError::Custom { .. } => "Parse error",
             ParseError::Abort { .. } => "Invalid input",
+            ParseError::DuplicateRule { .. } => "Duplicate protocol rule",
         }
     }
 
@@ -506,6 +524,24 @@ impl ParseError {
                     ParseErrorLabel {
                         at: *opening_at,
                         message: format!("opening `{opening}` starts here"),
+                        is_primary: false,
+                    },
+                ]
+            }
+            ParseError::DuplicateRule {
+                name,
+                first_at,
+                second_at,
+            } => {
+                vec![
+                    ParseErrorLabel {
+                        at: *second_at,
+                        message: format!("duplicate rule name `{name}`"),
+                        is_primary: true,
+                    },
+                    ParseErrorLabel {
+                        at: *first_at,
+                        message: format!("first occurrence of rule name `{name}`"),
                         is_primary: false,
                     },
                 ]
@@ -662,6 +698,9 @@ impl ParseError {
             }
             ParseError::Custom { message, .. } | ParseError::Abort { message, .. } => {
                 vec![message.clone()]
+            }
+            ParseError::DuplicateRule { .. } => {
+                vec!["Protocol rule names must be unique".into()]
             }
         }
     }
@@ -1783,7 +1822,7 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         let save = self.save();
         if self.lx.eat_str(p) {
-            self.skip_ws();
+            // self.skip_ws();
             true
         } else {
             self.restore(save);
@@ -3634,7 +3673,12 @@ impl<'a> Parser<'a> {
                 // rewrites reserved names / leading `_` — both unreachable
                 // here (`protoRule` rejects reserved rule names and
                 // identifiers cannot start with `_`), so the name is verbatim.
-                return Err(self.item_fail(format!("duplicate rule: {}", r.name)));
+                let e = ParseError::DuplicateRule {
+                    name: r.name.clone(),
+                    first_at: first.location,
+                    second_at: r.location,
+                };
+                return Err(e);
             }
         } else {
             self.seen_rules.push(r.clone());
@@ -3724,6 +3768,8 @@ impl<'a> Parser<'a> {
         // Actions / restrictions either `--[..]->` or `-->`
         let (actions, embedded_restrictions) = self.parse_actions_and_restrictions()?;
         let conclusions = self.fact_list()?;
+        // We are not including variants and left/right variants in the location
+        let end = self.lx.pos();
         // Optional variants
         let variants = if self.try_kw("variants") {
             let mut vs = Vec::new();
@@ -3757,8 +3803,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let end = self.lx.pos();
-        let location = Some(Location::from_positions(start, end));
+        let location = Location::from_positions(start, end);
         Ok(Rule {
             name,
             modulo,
@@ -3795,7 +3840,7 @@ impl<'a> Parser<'a> {
         let (actions, embedded_restrictions) = self.parse_actions_and_restrictions()?;
         let conclusions = self.fact_list()?;
         let end = self.lx.pos();
-        let location = Some(Location::from_positions(start, end));
+        let location = Location::from_positions(start, end);
         Ok(Rule {
             name,
             modulo,
@@ -3920,7 +3965,7 @@ impl<'a> Parser<'a> {
             if let Some(k) = kind {
                 attrs.push(RuleAttr {
                     kind: k,
-                    location: Some(Location::from_positions(start, end)),
+                    location: Location::from_positions(start, end),
                 });
             }
             if !self.try_punct(",") {

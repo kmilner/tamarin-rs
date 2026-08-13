@@ -19,6 +19,7 @@
 //! Scope: the CORE LINEAR subset (see `translate`/`base_translation`).
 
 use tamarin_parser::ast as p;
+use tamarin_parser::parser::DUMMY_LOCATION;
 use tamarin_parser::wf::WfError;
 
 use tamarin_theory::elaborate::ElabError;
@@ -328,7 +329,7 @@ fn synth_parsed_rule(rule: &ProtoRuleE) -> p::Rule {
         embedded_restrictions: Vec::new(),
         variants: Vec::new(),
         left_right: None,
-        location: None,
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -361,7 +362,7 @@ fn synth_attrs(attr: &tamarin_theory::rule::RuleAttributes) -> Vec<p::RuleAttr> 
     out.into_iter()
         .map(|k| p::RuleAttr {
             kind: k,
-            location: None,
+            location: DUMMY_LOCATION,
         })
         .collect()
 }

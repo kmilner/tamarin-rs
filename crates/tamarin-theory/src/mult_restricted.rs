@@ -46,8 +46,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tamarin_parser::ast as p;
 use tamarin_parser::wf::WfError;
+use tamarin_parser::{ast as p, DUMMY_LOCATION};
 use tamarin_term::function_symbols::{AcSym, FunSym};
 use tamarin_term::lterm::{sort_of_lnterm, HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::maude_sig::MaudeSig;
@@ -160,7 +160,7 @@ fn surface_attrs(attr: &crate::rule::RuleAttributes) -> Vec<p::RuleAttr> {
     out.into_iter()
         .map(|kind| p::RuleAttr {
             kind,
-            location: None,
+            location: DUMMY_LOCATION,
         })
         .collect()
 }

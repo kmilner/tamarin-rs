@@ -1,5 +1,5 @@
 use super::*;
-use crate::parse_theory;
+use crate::{parse_theory, parser::DUMMY_LOCATION};
 
 fn parse(src: &str) -> Theory {
     parse_theory(src, &["diff"]).expect("parse")
@@ -768,7 +768,7 @@ fn lookup_binder_is_not_unbound() {
         if let TheoryItem::Rule(r) = it {
             r.attributes.push(RuleAttr {
                 kind: RuleAttrKind::Process("lookup m.1 as v.1".into()),
-                location: None,
+                location: DUMMY_LOCATION,
             });
         }
     }
@@ -790,7 +790,7 @@ fn lookup_binder_is_not_unbound() {
         if let TheoryItem::Rule(r) = it {
             r.attributes.push(RuleAttr {
                 kind: RuleAttrKind::Process("lookup m.1 as v.1".into()),
-                location: None,
+                location: DUMMY_LOCATION,
             });
         }
     }

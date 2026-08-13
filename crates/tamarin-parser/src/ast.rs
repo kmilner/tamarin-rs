@@ -152,7 +152,7 @@ pub struct Rule {
     pub embedded_restrictions: Vec<Formula>,
     pub variants: Vec<Rule>,
     pub left_right: Option<(Box<Rule>, Box<Rule>)>,
-    pub location: Option<Location>,
+    pub location: Location,
 }
 
 impl PartialEq for Rule {
@@ -201,7 +201,7 @@ impl PartialEq for Rule {
 #[derive(Debug, Clone)]
 pub struct RuleAttr {
     pub kind: RuleAttrKind,
-    pub location: Option<Location>,
+    pub location: Location,
 }
 
 impl PartialEq for RuleAttr {
