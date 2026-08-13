@@ -66,7 +66,7 @@ fn both_declaration_orders_are_accepted() {
 fn a_noeq_first_arity_mismatch_conflicts() {
     let e = parse_theory("theory T begin\n\nfunctions: f/3, f/2 [AC]\n\nend\n", &[])
         .expect_err("the NoEq-first order conflicts");
-    let at = *e.location();
+    let at = *e.location().location().expect("expected a location");
     let ParseError::Custom { message, .. } = e else {
         panic!("expected a `fail`-style error, got {e:?}");
     };
@@ -107,7 +107,7 @@ fn infix_and_prefix_spellings_parse_to_distinct_nodes() {
         other => panic!("expected the infix spelling as BinOp::AcFct, got {other:?}"),
     }
     match &rule.actions[1].args[0] {
-        Term::App(name, args) if name == "f" && args.len() == 2 => {}
+        Term::App(name, args) if *name == "f" && args.len() == 2 => {}
         other => panic!("expected the prefix spelling as App, got {other:?}"),
     }
 }

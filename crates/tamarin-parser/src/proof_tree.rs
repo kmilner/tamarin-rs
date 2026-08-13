@@ -36,7 +36,9 @@
 //! the replay walker can fall back to the auto-prover.
 
 use crate::ast::{DisjAlt, Fact, GoalSpec, ParsedMethod, ParsedProofTree};
-use crate::lexer::{is_ident_char, Lexer};
+use crate::lexer::{is_ident_char, Lexer, Pos};
+use crate::parser::{Location, Source};
+use crate::SpannedStr;
 
 #[derive(Debug, Clone)]
 pub struct ProofTreeParseError {
@@ -76,9 +78,10 @@ pub fn parse_proof_tree(raw: &str) -> Result<ParsedProofTree, ProofTreeParseErro
 }
 
 /// Read raw text between an already-consumed `(` and its matching `)`,
-/// accounting for nested parens.  Returns the inner text (excluding the final
+/// accounting for nested parens. Returns the inner text (excluding the final
 /// `)`, which is consumed), or `None` on EOF before the closing paren.
-fn read_balanced_paren(lx: &mut Lexer<'_>) -> Option<String> {
+fn read_balanced_paren(lx: &mut Lexer<'_>) -> Option<crate::SpannedStr> {
+    let start = lx.pos();
     let mut s = String::new();
     let mut depth: i32 = 1;
     while depth > 0 {
@@ -104,7 +107,11 @@ fn read_balanced_paren(lx: &mut Lexer<'_>) -> Option<String> {
             }
         }
     }
-    Some(s)
+    let end = lx.pos();
+    Some(crate::SpannedStr {
+        content: s,
+        source: crate::parser::Source::Location(Location::from_positions(start, end)),
+    })
 }
 
 struct TreeParser<'a> {
@@ -218,7 +225,15 @@ impl<'a> TreeParser<'a> {
             self.require_punct("(")?;
             let inner = self.read_balanced_paren()?;
             // `read_balanced_paren` consumed the matching `)`.
-            let spec = parse_goal_spec(&inner);
+            let base_pos = match &inner.source {
+                Source::Location(loc) => Pos {
+                    offset: loc.start,
+                    line: loc.line,
+                    col: loc.col,
+                },
+                _ => Pos::ZERO,
+            };
+            let spec = parse_goal_spec_at(&inner, base_pos);
             return Ok(ParsedMethod::SolveGoal(spec, inner));
         }
         // Unrecognised token — capture the next identifier-like word
@@ -232,11 +247,13 @@ impl<'a> TreeParser<'a> {
             word.push(c);
             self.lx.bump();
         }
+        let end = self.lx.pos();
+        let loc = Location::from_positions(save, end);
         if word.is_empty() {
             self.lx.set_pos(save);
             return Err(self.err("expected proof method"));
         }
-        Ok(ParsedMethod::Other(word))
+        Ok(ParsedMethod::Other(SpannedStr::with_location(word, loc)))
     }
 
     // -------- helpers --------
@@ -297,7 +314,7 @@ impl<'a> TreeParser<'a> {
     /// Read raw text between an already-consumed `(` and its matching
     /// `)`, accounting for nested parens.  Returns the inner text
     /// (excluding the final `)` which is consumed).
-    fn read_balanced_paren(&mut self) -> Result<String, ProofTreeParseError> {
+    fn read_balanced_paren(&mut self) -> Result<SpannedStr, ProofTreeParseError> {
         read_balanced_paren(&mut self.lx).ok_or_else(|| self.err("unterminated `(` in solve(...)"))
     }
 }
@@ -324,26 +341,39 @@ impl<'a> TreeParser<'a> {
 /// lands in `GoalSpec::Raw` and the walker falls back to the
 /// auto-prover.
 pub fn parse_goal_spec(raw: &str) -> GoalSpec {
+    parse_goal_spec_at(raw, Pos::ZERO)
+}
+
+/// Same as [`parse_goal_spec`], but `base_pos` is the source position of
+/// `raw`'s (untrimmed) first char, used to give `GoalSpec::Raw` a real
+/// `Source::Location` that accounts for the whitespace `trim()` strips.
+pub fn parse_goal_spec_at(raw: &str, base_pos: Pos) -> GoalSpec {
     let trimmed = raw.trim();
+    let leading_ws = raw.len() - raw.trim_start().len();
+    let trimmed_start = advance_pos(base_pos, &raw[..leading_ws]);
     let mut p = GoalParser {
         lx: Lexer::new(trimmed),
     };
     if let Some(spec) = p.try_action_or_premise() {
         return spec;
     }
-    if let Some(spec) = try_disj_split(trimmed) {
+    if let Some(spec) = try_disj_split(trimmed, trimmed_start) {
         return spec;
     }
-    if let Some(spec) = try_chain_split(trimmed) {
+    if let Some(spec) = try_chain_split(trimmed, trimmed_start) {
         return spec;
     }
     if let Some(spec) = try_eq_split(trimmed) {
         return spec;
     }
-    if let Some(spec) = try_subterm_split(trimmed) {
+    if let Some(spec) = try_subterm_split(trimmed, trimmed_start) {
         return spec;
     }
-    GoalSpec::Raw(trimmed.to_string())
+    let trimmed_end = advance_pos(trimmed_start, trimmed);
+    GoalSpec::Raw(SpannedStr {
+        content: trimmed.to_string(),
+        source: Source::Location(Location::from_positions(trimmed_start, trimmed_end)),
+    })
 }
 
 /// Try to split the goal-spec text on top-level `∥` (HS U+2225, the
@@ -356,8 +386,8 @@ pub fn parse_goal_spec(raw: &str) -> GoalSpec {
 /// disjunct as a full `Guarded` value — we capture only the shape so
 /// we can match against an existing `Goal::Disj` in `sys.goals` at
 /// replay time without rebuilding LVar identities.
-fn try_disj_split(text: &str) -> Option<GoalSpec> {
-    let parts = split_top_level_disj(text);
+fn try_disj_split(text: &str, base_pos: Pos) -> Option<GoalSpec> {
+    let parts = split_top_level_disj(text, base_pos);
     if parts.len() < 2 {
         // HS `disjSplitGoal` uses `sepBy1`, so a lone `guardedFormula`
         // (no `∥`) would parse as a single-disjunct `DisjG (Disj [gf])`.
@@ -370,7 +400,10 @@ fn try_disj_split(text: &str) -> Option<GoalSpec> {
         // which replays via the auto-prover.
         return None;
     }
-    let alts: Vec<DisjAlt> = parts.iter().map(|p| classify_disj_alt(p)).collect();
+    let alts: Vec<DisjAlt> = parts
+        .iter()
+        .map(|p| classify_disj_alt(&p.content))
+        .collect();
     // HS-faithful disambiguation: when multiple Disj goals in
     // sys.goals share the same alt shape signature (e.g. binding-A
     // and binding-B instantiations of the same IH-body 5-alt disj),
@@ -385,11 +418,14 @@ fn try_disj_split(text: &str) -> Option<GoalSpec> {
     // `last(#t2)`) and binding-B's (alt[0] = `last(#t1)`) match the
     // 5-alt NonQuant shape; without alt-text matching, match_goal
     // picks the wrong one and the proof diverges.
-    let alt_texts: Vec<String> = parts
+    let alt_texts: Vec<SpannedStr> = parts
         .iter()
         .map(|p| {
-            let s = strip_outer_parens(p.trim()).trim().to_string();
-            normalize_disj_alt_text(&s)
+            let trimmed = trim_spanned(&strip_outer_parens_spanned(p));
+            SpannedStr {
+                content: normalize_disj_alt_text(&trimmed.content),
+                source: trimmed.source,
+            }
         })
         .collect();
     Some(GoalSpec::Disj { alts, alt_texts })
@@ -411,11 +447,15 @@ fn normalize_disj_alt_text(s: &str) -> String {
 }
 
 /// Split `s` at top-level `∥` characters (U+2225).  Ignores any `∥`
-/// that lives inside a `()/[]/<>/{}` bracket pair.
-fn split_top_level_disj(s: &str) -> Vec<String> {
+/// that lives inside a `()/[]/<>/{}` bracket pair.  Each returned
+/// segment is trimmed of whitespace and spanned relative to `base_pos`
+/// (the source position of `s`'s first char).
+fn split_top_level_disj(s: &str, base_pos: Pos) -> Vec<SpannedStr> {
     const SEP: char = '\u{2225}';
     let mut out = Vec::new();
     let mut cur = String::new();
+    let mut seg_start = base_pos;
+    let mut pos = base_pos;
     let mut depth: i32 = 0;
     for c in s.chars() {
         match c {
@@ -432,12 +472,17 @@ fn split_top_level_disj(s: &str) -> Vec<String> {
             // never appears inside `<…>`.  Tracking them would break on
             // `#t1 < #t2` which is a TIMEPOINT-LESS atom, not a tuple.
             _ if c == SEP && depth == 0 => {
-                out.push(std::mem::take(&mut cur));
+                out.push(make_segment(&cur, seg_start));
+                cur.clear();
+                pos = bump_pos(pos, c);
+                seg_start = pos;
+                continue;
             }
             _ => cur.push(c),
         }
+        pos = bump_pos(pos, c);
     }
-    out.push(cur);
+    out.push(make_segment(&cur, seg_start));
     out
 }
 
@@ -492,6 +537,65 @@ fn strip_outer_parens(s: &str) -> &str {
     s
 }
 
+/// Same as [`strip_outer_parens`], but adjusts `seg`'s `Location` to match
+/// the stripped content (both delimiters are single ASCII bytes, so the
+/// span shrinks by exactly one char on each side).
+fn strip_outer_parens_spanned(seg: &SpannedStr) -> SpannedStr {
+    let loc = match &seg.source {
+        Source::Location(l) => *l,
+        _ => return seg.clone(),
+    };
+    let stripped = strip_outer_parens(&seg.content);
+    if stripped.len() == seg.content.len() {
+        return seg.clone();
+    }
+    let start = advance_pos(
+        Pos {
+            offset: loc.start,
+            line: loc.line,
+            col: loc.col,
+        },
+        "(",
+    );
+    SpannedStr {
+        content: stripped.to_string(),
+        source: Source::Location(Location {
+            line: start.line,
+            col: start.col,
+            start: start.offset,
+            end: loc.end - 1,
+        }),
+    }
+}
+
+/// Trim whitespace from `seg`'s content, adjusting its `Location` to match.
+fn trim_spanned(seg: &SpannedStr) -> SpannedStr {
+    let loc = match &seg.source {
+        Source::Location(l) => *l,
+        _ => {
+            return SpannedStr {
+                content: seg.content.trim().to_string(),
+                source: seg.source.clone(),
+            }
+        }
+    };
+    let leading_ws = seg.content.len() - seg.content.trim_start().len();
+    let start = advance_pos(
+        Pos {
+            offset: loc.start,
+            line: loc.line,
+            col: loc.col,
+        },
+        &seg.content[..leading_ws],
+    );
+    let trimmed = seg.content.trim();
+    let end = advance_pos(start, trimmed);
+    SpannedStr {
+        content: trimmed.to_string(),
+        source: Source::Location(Location::from_positions(start, end)),
+    }
+}
+
 /// Count the number of identifier-like variable names appearing after
 /// a `∀` / `∃` and before the next `.`.  HS's quantifier list is
 /// `\\forall x1 x2 … xN.` — we count whitespace-separated tokens that
@@ -544,17 +648,18 @@ fn count_quant_vars(after_qua: &str) -> usize {
 /// We extract the time-var ROOT name (stripping any trailing `.N`
 /// freshen-suffix that HS's pretty-printer can emit) and the natural
 /// idx for each side.  The matcher disambiguates by these.
-fn try_chain_split(text: &str) -> Option<GoalSpec> {
+fn try_chain_split(text: &str, base_pos: Pos) -> Option<GoalSpec> {
     // Find the top-level `~~>` separator.  HS prints exactly `~~>`
     // (operator_ "~~>" inside fsep) so a plain substring search suffices
     // — we only need to ensure we're at depth 0 of `()/[]/{}` to skip
     // any `~~>` that hypothetically appeared inside a tuple (none do in
     // practice but we are defensive).
     let arrow_pos = find_top_level_substr(text, "~~>")?;
-    let lhs = text[..arrow_pos].trim();
-    let rhs = text[arrow_pos + 3..].trim();
-    let (src_var, conc_idx) = parse_node_idx_pair(lhs)?;
-    let (tgt_var, prem_idx) = parse_node_idx_pair(rhs)?;
+    let lhs_raw = &text[..arrow_pos];
+    let rhs_raw = &text[arrow_pos + 3..];
+    let rhs_pos = advance_pos(base_pos, &text[..arrow_pos + 3]);
+    let (src_var, conc_idx) = parse_node_idx_pair(lhs_raw, base_pos)?;
+    let (tgt_var, prem_idx) = parse_node_idx_pair(rhs_raw, rhs_pos)?;
     Some(GoalSpec::Chain {
         src_var,
         conc_idx,
@@ -572,12 +677,13 @@ fn try_chain_split(text: &str) -> Option<GoalSpec> {
 /// We split on the FIRST top-level `⊏` and trim both sides.  The text
 /// is kept raw — the matcher canonicalises against the runtime
 /// `Goal::Subterm((l, r))` pretty-print at match time.
-fn try_subterm_split(text: &str) -> Option<GoalSpec> {
+fn try_subterm_split(text: &str, base_pos: Pos) -> Option<GoalSpec> {
     const SUBTERM_OP: char = '\u{228F}';
     let pos = find_top_level_char(text, SUBTERM_OP)?;
-    let small_raw = text[..pos].trim().to_string();
-    let big_raw = text[pos + SUBTERM_OP.len_utf8()..].trim().to_string();
-    if small_raw.is_empty() || big_raw.is_empty() {
+    let small_raw = make_segment(&text[..pos], base_pos);
+    let big_start = advance_pos(base_pos, &text[..pos + SUBTERM_OP.len_utf8()]);
+    let big_raw = make_segment(&text[pos + SUBTERM_OP.len_utf8()..], big_start);
+    if small_raw.content.is_empty() || big_raw.content.is_empty() {
         return None;
     }
     Some(GoalSpec::Subterm { small_raw, big_raw })
@@ -652,17 +758,34 @@ fn find_top_level_char(s: &str, needle: char) -> Option<usize> {
 
 /// Parse a `(#name[.idx], N)` (or `(name[.idx], N)`) pair as used by
 /// HS `nodeConc / nodePrem` (Proof.hs:33-36).  Returns the time-var
-/// ROOT name (stripping any `.idx` freshen suffix) plus the natural N.
-fn parse_node_idx_pair(s: &str) -> Option<(String, u32)> {
+/// ROOT name (stripping any `.idx` freshen suffix) plus the natural N,
+/// with the name spanned relative to `base_pos` (the source position of
+/// `s`'s, i.e. the untrimmed slice's, first char).
+fn parse_node_idx_pair(s: &str, base_pos: Pos) -> Option<(SpannedStr, u32)> {
+    let leading_ws = s.len() - s.trim_start().len();
+    let paren_pos = advance_pos(base_pos, &s[..leading_ws]);
     let trimmed = s.trim();
-    let inside = trimmed.strip_prefix('(')?.strip_suffix(')')?.trim();
+    let inside_raw = trimmed.strip_prefix('(')?.strip_suffix(')')?;
+    let after_open_pos = advance_pos(paren_pos, "(");
+    let inside_leading_ws = inside_raw.len() - inside_raw.trim_start().len();
+    let inside_start = advance_pos(after_open_pos, &inside_raw[..inside_leading_ws]);
+    let inside = inside_raw.trim();
     // Split into name-side / number-side on the first top-level `,`.
     let comma = inside.find(',')?;
-    let name_part = inside[..comma].trim();
+    let name_part_raw = &inside[..comma];
     let num_part = inside[comma + 1..].trim();
+    let name_part = name_part_raw.trim();
+    let name_leading_ws = name_part_raw.len() - name_part_raw.trim_start().len();
+    let name_part_pos = advance_pos(inside_start, &name_part_raw[..name_leading_ws]);
     // Strip optional `#` prefix; capture identifier-like characters up
     // to (but not including) any `.` (freshen suffix) or whitespace.
-    let name_no_hash = name_part.strip_prefix('#').unwrap_or(name_part).trim();
+    let (name_no_hash_raw, name_no_hash_pos) = match name_part.strip_prefix('#') {
+        Some(rest) => (rest, advance_pos(name_part_pos, "#")),
+        None => (name_part, name_part_pos),
+    };
+    let hash_ws_len = name_no_hash_raw.len() - name_no_hash_raw.trim_start().len();
+    let name_no_hash_start = advance_pos(name_no_hash_pos, &name_no_hash_raw[..hash_ws_len]);
+    let name_no_hash = name_no_hash_raw.trim();
     let mut end = name_no_hash.len();
     for (i, c) in name_no_hash.char_indices() {
         if c == '.' || c.is_whitespace() {
@@ -673,12 +796,19 @@ fn parse_node_idx_pair(s: &str) -> Option<(String, u32)> {
             return None;
         }
     }
-    let var_name = name_no_hash[..end].to_string();
+    let var_name = &name_no_hash[..end];
     if var_name.is_empty() {
         return None;
     }
+    let var_name_end = advance_pos(name_no_hash_start, var_name);
     let idx: u32 = num_part.parse().ok()?;
-    Some((var_name, idx))
+    Some((
+        SpannedStr {
+            content: var_name.to_string(),
+            source: Source::Location(Location::from_positions(name_no_hash_start, var_name_end)),
+        },
+        idx,
+    ))
 }
 
 struct GoalParser<'a> {
@@ -772,7 +902,7 @@ impl<'a> GoalParser<'a> {
         None
     }
 
-    fn read_balanced_paren(&mut self) -> Option<String> {
+    fn read_balanced_paren(&mut self) -> Option<SpannedStr> {
         read_balanced_paren(&mut self.lx)
     }
 }
@@ -781,17 +911,34 @@ impl<'a> GoalParser<'a> {
 /// argument terms — that's used only for diagnostics today.  The
 /// arity (number of commas at top level) is the load-bearing field for
 /// goal matching (matches the count of terms in the runtime LNFact).
-fn build_fact(persistent: bool, name: crate::SpannedStr, args_text: &str) -> Fact {
+fn build_fact(persistent: bool, name: crate::SpannedStr, args_text: &SpannedStr) -> Fact {
     use crate::ast::Term;
     let trimmed = args_text.trim();
     let args: Vec<Term> = if trimmed.is_empty() {
         Vec::new()
     } else {
-        split_top_level_commas(trimmed)
+        // `args_text.content` is the raw (untrimmed) `solve(...)` arg
+        // text; walk the location past whatever leading whitespace
+        // `trim()` stripped so each argument's span lines up with source.
+        let base_pos = match &args_text.source {
+            Source::Location(loc) => {
+                let leading_ws = args_text.content.len() - args_text.content.trim_start().len();
+                advance_pos(
+                    Pos {
+                        offset: loc.start,
+                        line: loc.line,
+                        col: loc.col,
+                    },
+                    &args_text.content[..leading_ws],
+                )
+            }
+            _ => Pos::ZERO,
+        };
+        split_top_level_commas(trimmed, base_pos)
             .into_iter()
-            .map(|s| {
+            .map(|name| {
                 Term::Var(crate::ast::VarSpec {
-                    name: s.trim().to_string(),
+                    name,
                     idx: 0,
                     sort: crate::ast::SortHint::Untagged,
                     typ: None,
@@ -807,11 +954,49 @@ fn build_fact(persistent: bool, name: crate::SpannedStr, args_text: &str) -> Fac
     }
 }
 
-/// Split a string at top-level commas — ignores commas inside any kind
-/// of bracket (`()`, `<>`, `[]`, `{}`).
-fn split_top_level_commas(s: &str) -> Vec<SpannedStr> {
+/// Advance `pos` by one char, replicating `Lexer::bump`'s line/col
+/// accounting (tabs advance to the next 8-column stop, `\n` resets to
+/// column 1) so spans built here agree with lexer-derived spans.
+fn bump_pos(mut pos: Pos, c: char) -> Pos {
+    pos.offset += c.len_utf8();
+    match c {
+        '\n' => {
+            pos.line += 1;
+            pos.col = 1;
+        }
+        '\t' => pos.col += 8 - ((pos.col - 1) % 8),
+        _ => pos.col += 1,
+    }
+    pos
+}
+
+/// Advance `pos` past every char of `s` (see [`bump_pos`]).
+fn advance_pos(pos: Pos, s: &str) -> Pos {
+    s.chars().fold(pos, bump_pos)
+}
+
+/// Build the trimmed, spanned segment for one raw (untrimmed) comma
+/// slice, given the source position of the slice's first char.
+fn make_segment(raw: &str, start_pos: Pos) -> SpannedStr {
+    let leading_ws = raw.len() - raw.trim_start().len();
+    let trimmed_start = advance_pos(start_pos, &raw[..leading_ws]);
+    let trimmed = raw.trim();
+    let trimmed_end = advance_pos(trimmed_start, trimmed);
+    SpannedStr {
+        content: trimmed.to_string(),
+        source: Source::Location(Location::from_positions(trimmed_start, trimmed_end)),
+    }
+}
+
+/// Split `s` at top-level commas — ignores commas inside any kind of
+/// bracket (`()`, `<>`, `[]`, `{}`) — returning each segment trimmed of
+/// surrounding whitespace, spanned relative to `base_pos` (the source
+/// position of `s`'s first char).
+fn split_top_level_commas(s: &str, base_pos: Pos) -> Vec<SpannedStr> {
     let mut out = Vec::new();
     let mut cur = String::new();
+    let mut seg_start = base_pos;
+    let mut pos = base_pos;
     let mut depth: i32 = 0;
     for c in s.chars() {
         match c {
@@ -824,13 +1009,18 @@ fn split_top_level_commas(s: &str) -> Vec<SpannedStr> {
                 cur.push(c);
             }
             ',' if depth == 0 => {
-                out.push(std::mem::take(&mut cur));
+                out.push(make_segment(&cur, seg_start));
+                cur.clear();
+                pos = bump_pos(pos, c);
+                seg_start = pos;
+                continue;
             }
             _ => cur.push(c),
         }
+        pos = bump_pos(pos, c);
     }
     if !cur.is_empty() {
-        out.push(cur);
+        out.push(make_segment(&cur, seg_start));
     }
     out
 }

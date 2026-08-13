@@ -181,9 +181,9 @@ pub fn term_to_gterm_free(t: &p::Term) -> GTerm {
             GTerm::App(v.name.as_str().into(), Vec::<GTerm>::new().into())
         }
         p::Term::Var(v) => GTerm::Var(BVar::Free(v.clone())),
-        p::Term::PubLit(s) => GTerm::PubLit(s.clone()),
-        p::Term::FreshLit(s) => GTerm::FreshLit(s.clone()),
-        p::Term::NatLit(s) => GTerm::NatLit(s.clone()),
+        p::Term::PubLit(s) => GTerm::PubLit(s.content.clone()),
+        p::Term::FreshLit(s) => GTerm::FreshLit(s.content.clone()),
+        p::Term::NatLit(s) => GTerm::NatLit(s.content.clone()),
         p::Term::Number(n) => GTerm::Number(*n),
         p::Term::NumberOne => GTerm::NumberOne,
         p::Term::NatOne => GTerm::NatOne,
@@ -210,7 +210,7 @@ pub fn term_to_gterm_free(t: &p::Term) -> GTerm {
 pub fn fact_to_gfact_free(f: &p::Fact) -> GFact {
     GFact {
         persistent: f.persistent,
-        name: f.name.clone(),
+        name: f.name.content.clone(),
         args: f.args.iter().map(term_to_gterm_free).collect(),
         annotations: f.annotations.clone(),
     }
@@ -246,9 +246,9 @@ pub fn gterm_to_term(g: &GTerm) -> p::Term {
         GTerm::Var(BVar::Bound(n)) => {
             panic!("gterm_to_term: left-over bound variable Bound({})", n)
         }
-        GTerm::PubLit(s) => p::Term::PubLit(s.clone()),
-        GTerm::FreshLit(s) => p::Term::FreshLit(s.clone()),
-        GTerm::NatLit(s) => p::Term::NatLit(s.clone()),
+        GTerm::PubLit(s) => p::Term::PubLit(s.content.clone()),
+        GTerm::FreshLit(s) => p::Term::FreshLit(s.content.clone()),
+        GTerm::NatLit(s) => p::Term::NatLit(s.content.clone()),
         GTerm::Number(n) => p::Term::Number(*n),
         GTerm::NumberOne => p::Term::NumberOne,
         GTerm::NatOne => p::Term::NatOne,

@@ -35,7 +35,7 @@ use tamarin_parser::{parse_theory, ParseError};
 #[track_caller]
 fn custom(src: &str) -> (String, u32, u32) {
     let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
-    let at = *e.location();
+    let at = *e.location().location().expect("expected a location");
     let ParseError::Custom { message, .. } = e else {
         panic!("expected a `fail`-style error, got {e:?}");
     };

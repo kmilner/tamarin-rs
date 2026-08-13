@@ -29,7 +29,7 @@ fn assert_expected(src: &str, line: u32, col: u32, found: Option<&str>, expected
         matches!(&e, ParseError::Expected { .. }),
         "expected the `Expected` variant, got {e:?}"
     );
-    let at = e.location();
+    let at = *e.location().location().expect("expected a location");
     assert_eq!((at.line, at.col), (line, col), "position of {e:?}");
     match found {
         None => assert_eq!(e.found(), None, "should be an end-of-input error"),
@@ -107,7 +107,7 @@ fn junk_after_the_colon_expects_let_or_the_premise_bracket() {
         matches!(&e, ParseError::ExpectedPunctuation { .. }),
         "expected a punctuation error, got {e:?}"
     );
-    let at = e.location();
+    let at = *e.location().location().expect("expected a location");
     assert_eq!((at.line, at.col), (2, 9));
     assert_eq!(e.found(), Some("garbage"));
     assert_eq!(e.expected().unwrap_or_default(), ["[", "\"let\""]);

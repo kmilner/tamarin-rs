@@ -22,7 +22,7 @@ use tamarin_parser::{parse_theory, ParseError, TheoryItem};
 #[track_caller]
 fn assert_custom(src: &str, message: &str, line: u32, col: u32) {
     let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
-    let at = *e.location();
+    let at = *e.location().location().expect("expected a location");
     let ParseError::Custom { message: got, .. } = &e else {
         panic!("expected a `fail`-style error, got {e:?}");
     };
@@ -61,7 +61,7 @@ fn assert_decl_expected(decl: &str, line: u32, col: u32, found: &str, expected: 
         matches!(&e, ParseError::Expected { .. }),
         "expected the `Expected` variant, got {e:?}"
     );
-    let at = e.location();
+    let at = *e.location().location().expect("expected a location");
     assert_eq!((at.line, at.col), (line, col), "position of {e:?}");
     let got = e.found().unwrap_or("");
     assert!(
@@ -312,7 +312,7 @@ fn theory_end_ignores_trailing_content_but_needs_a_word_boundary() {
             matches!(&e, ParseError::ExpectedTheoryItem { .. }),
             "expected a theory-item error for {tail:?}, got {e:?}"
         );
-        let at = e.location();
+        let at = *e.location().location().expect("expected a location");
         assert_eq!((at.line, at.col), (7, 1), "position for {tail:?}");
         assert_eq!(e.found(), Some(word));
         assert_eq!(e.expected().unwrap_or_default(), expected, "for {tail:?}");

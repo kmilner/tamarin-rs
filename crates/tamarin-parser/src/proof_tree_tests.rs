@@ -96,7 +96,7 @@ fn solve_action_goal() {
         ) => {
             assert_eq!(fact.name, "Foo");
             assert_eq!(fact.args.len(), 1);
-            assert_eq!(time_var, "i");
+            assert_eq!(*time_var, "i");
             assert_eq!(*time_idx, 0);
         }
         other => panic!("expected Action solve goal, got {:?}", other),
@@ -120,7 +120,7 @@ fn solve_action_goal_captures_timepoint_idx() {
             },
             _,
         ) => {
-            assert_eq!(time_var, "vk");
+            assert_eq!(*time_var, "vk");
             assert_eq!(*time_idx, 6);
         }
         other => panic!("expected Action solve goal, got {:?}", other),
@@ -144,7 +144,7 @@ fn solve_premise_goal_subscript() {
         ) => {
             assert_eq!(fact.name, "Server");
             assert_eq!(*prem_idx, 0);
-            assert_eq!(time_var, "t1");
+            assert_eq!(*time_var, "t1");
             assert_eq!(*time_idx, 0);
         }
         other => panic!("expected Premise solve goal, got {:?}", other),
@@ -222,9 +222,9 @@ fn solve_chain_goal() {
             },
             _,
         ) => {
-            assert_eq!(src_var, "i");
+            assert_eq!(*src_var, "i");
             assert_eq!(*conc_idx, 0);
-            assert_eq!(tgt_var, "j");
+            assert_eq!(*tgt_var, "j");
             assert_eq!(*prem_idx, 2);
         }
         other => panic!("expected Chain goal-spec, got {:?}", other),
@@ -248,9 +248,9 @@ fn solve_chain_goal_with_freshen_suffix() {
             _,
         ) => {
             // Freshen suffix stripped from the var ROOT.
-            assert_eq!(src_var, "i");
+            assert_eq!(*src_var, "i");
             assert_eq!(*conc_idx, 1);
-            assert_eq!(tgt_var, "j");
+            assert_eq!(*tgt_var, "j");
             assert_eq!(*prem_idx, 0);
         }
         other => panic!("expected Chain goal-spec, got {:?}", other),
@@ -265,8 +265,8 @@ fn solve_subterm_goal() {
     let t = parse_proof_tree(src).expect("parse");
     match &t.method {
         ParsedMethod::SolveGoal(GoalSpec::Subterm { small_raw, big_raw }, _) => {
-            assert_eq!(small_raw, "foo(a, b)");
-            assert_eq!(big_raw, "bar(c)");
+            assert_eq!(*small_raw, "foo(a, b)");
+            assert_eq!(*big_raw, "bar(c)");
         }
         other => panic!("expected Subterm goal-spec, got {:?}", other),
     }

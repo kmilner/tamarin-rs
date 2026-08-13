@@ -767,7 +767,8 @@ fn lookup_binder_is_not_unbound() {
     for it in t.items.iter_mut() {
         if let TheoryItem::Rule(r) = it {
             r.attributes
-                .push(RuleAttr::Process("lookup m.1 as v.1".into()));
+                // Use inbuilt for testing here
+                .push(RuleAttr::Process(SpannedStr::inbuilt("lookup m.1 as v.1")));
         }
     }
     assert!(
@@ -787,7 +788,7 @@ fn lookup_binder_is_not_unbound() {
     for it in t2.items.iter_mut() {
         if let TheoryItem::Rule(r) = it {
             r.attributes
-                .push(RuleAttr::Process("lookup m.1 as v.1".into()));
+                .push(RuleAttr::Process(SpannedStr::inbuilt("lookup m.1 as v.1")));
         }
     }
     let rep = unbound_report(&t2);

@@ -49,6 +49,16 @@ pub enum Source {
     Indirect(std::rc::Rc<Source>),
 }
 
+impl Source {
+    pub fn location(&self) -> Option<&Location> {
+        match self {
+            Source::Location(loc) => Some(loc),
+            Source::Indirect(src) => src.location(),
+            _ => None,
+        }
+    }
+}
+
 impl<L: Into<Location>> From<L> for Source {
     fn from(pos: L) -> Self {
         Source::Location(pos.into())
