@@ -44,15 +44,9 @@ pub enum Source {
     Inbuilt,
     /// A location in source code
     Location(Location),
-    /// The AST nodes location is indirectly derived from another source, e.g. a macro expansion
+    /// The AST node is indirectly derived from another AST node, e.g. a macro expansion
     /// or a rule that is derived from another rule.
-    Indirect(std::rc::Rc<Source>),
-}
-
-impl<L: Into<Location>> From<L> for Source {
-    fn from(pos: L) -> Self {
-        Source::Location(pos.into())
-    }
+    Indirect(Box<Source>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -75,15 +69,6 @@ impl Location {
             end: pos.offset + word.as_ref().map_or(0, |s| s.as_ref().len()),
         }
     }
-
-    pub fn from_positions(start: Pos, end: Pos) -> Location {
-        Location {
-            line: start.line,
-            col: start.col,
-            start: start.offset,
-            end: end.offset,
-        }
-    }
 }
 
 impl From<Pos> for Location {
@@ -100,123 +85,103 @@ impl From<Pos> for Location {
 #[derive(Debug, Clone)]
 pub enum ParseError {
     UnexpectedKeyword {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
-        at: Source,
     },
     ExpectedTheoryItem {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
-        at: Source,
     },
     ExpectedPunctuation {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
         at: Source,
     },
     ExpectedStringLiteral {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
-        at: Source,
     },
     ExpectedIdentifier {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
-        at: Source,
     },
     ExpectedNaturalNumber {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
-        at: Source,
     },
     UnknownPreprocessorDirective {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
-        at: Source,
     },
     ExpectedPreprocessorDirective {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
-        at: Source,
     },
     ExpectedHexColor {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
-        at: Source,
     },
     ExpectedQuotedString {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
-        at: Source,
     },
     UnterminatedDelimiter {
-        opening: String,
-        opening_at: Source,
-        found: Option<String>,
-        found_at: Source,
+        opening: SpannedStr,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
     },
     UnknownAttribute {
-        attribute: String,
-        at: Source,
+        attribute: SpannedStr,
         context: String,
     },
     ExpectedExportBodyString {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
         at: Source,
     },
     ExpectedProcess {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
         at: Source,
     },
     FactNameMustStartWithUppercase {
-        name: String,
-        at: Source,
+        name: SpannedStr,
     },
     FreshFactCannotBePersistent {
         at: Source,
     },
     FactArityMismatch {
-        name: String,
+        name: SpannedStr,
         arity: usize,
         at: Source,
     },
     ExpectedFormulaAtom {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
-        at: Source,
     },
     BadFreshLiteral {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
-        at: Source,
     },
     BadNatLiteral {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
-        at: Source,
     },
     BadPublicLiteral {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
-        at: Source,
     },
     ExpectedTerm {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
-        at: Source,
     },
     ExpectedVariable {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
-        at: Source,
     },
     UnexpectedTrailingInput {
         context: String,
-        found: String,
-        at: Source,
+        found: SpannedStr,
     },
     IoError {
         path: String,
@@ -224,21 +189,18 @@ pub enum ParseError {
         at: Source,
     },
     TrailingGarbageInFormulaString {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
-        at: Source,
     },
     TrailingGarbageInTermString {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
-        at: Source,
     },
     /// Bridge for parser sites not yet converted to a dedicated variant: an
     /// expected-set failure at a location.
     Expected {
-        found: Option<String>,
+        found: Option<SpannedStr>,
         expected: Vec<String>,
-        at: Source,
     },
     /// Bridge for parser sites not yet converted to a dedicated variant: a
     /// preformatted message at a location.
@@ -257,7 +219,7 @@ pub enum ParseError {
 
 #[derive(Debug, Clone)]
 pub struct ParseErrorLabel {
-    pub at: Source,
+    pub at: Location,
     pub message: String,
     pub is_primary: bool,
 }
@@ -306,6 +268,7 @@ impl ParseError {
 
     pub fn location(&self) -> &Source {
         match self {
+            ParseError::FactNameMustStartWithUppercase { name, .. } => &name.source,
             ParseError::UnexpectedKeyword { at, .. }
             | ParseError::ExpectedTheoryItem { at, .. }
             | ParseError::ExpectedPunctuation { at, .. }
@@ -318,7 +281,6 @@ impl ParseError {
             | ParseError::ExpectedQuotedString { at, .. }
             | ParseError::ExpectedExportBodyString { at, .. }
             | ParseError::ExpectedProcess { at, .. }
-            | ParseError::FactNameMustStartWithUppercase { at, .. }
             | ParseError::FreshFactCannotBePersistent { at }
             | ParseError::FactArityMismatch { at, .. }
             | ParseError::ExpectedFormulaAtom { at, .. }
@@ -339,7 +301,7 @@ impl ParseError {
         }
     }
 
-    fn into_found(self) -> Option<String> {
+    fn into_found(self) -> Option<SpannedStr> {
         match self {
             ParseError::UnexpectedKeyword { found, .. }
             | ParseError::ExpectedTheoryItem { found, .. }
@@ -364,8 +326,8 @@ impl ParseError {
             | ParseError::Expected { found, .. }
             | ParseError::UnterminatedDelimiter { found, .. } => found,
             ParseError::UnknownAttribute { attribute, .. } => Some(attribute),
-            ParseError::FactNameMustStartWithUppercase { name, .. }
-            | ParseError::FactArityMismatch { name, .. }
+            ParseError::FactNameMustStartWithUppercase { name, .. } => Some(name.content),
+            ParseError::FactArityMismatch { name, .. }
             | ParseError::UnexpectedTrailingInput { found: name, .. } => Some(name),
             ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::IoError { .. }
@@ -400,8 +362,8 @@ impl ParseError {
             | ParseError::UnterminatedDelimiter { found, .. } => found.as_deref(),
             ParseError::UnknownAttribute { attribute, .. } => Some(attribute.as_str()),
             ParseError::FactNameMustStartWithUppercase { name, .. }
-            | ParseError::FactArityMismatch { name, .. } => Some(name.as_str()),
-            ParseError::UnexpectedTrailingInput { found, .. } => Some(found.as_str()),
+            | ParseError::FactArityMismatch { name, .. } => Some(name),
+            ParseError::UnexpectedTrailingInput { found, .. } => Some(found),
             ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::IoError { .. }
             | ParseError::Custom { .. }
@@ -512,9 +474,9 @@ impl ParseError {
                 expected,
             } => {
                 let primary_at = if found.is_some() {
-                    found_at.clone()
+                    *found_at
                 } else {
-                    opening_at.clone()
+                    *opening_at
                 };
                 vec![
                     ParseErrorLabel {
@@ -523,7 +485,7 @@ impl ParseError {
                         is_primary: true,
                     },
                     ParseErrorLabel {
-                        at: opening_at.clone(),
+                        at: *opening_at,
                         message: format!("opening `{opening}` starts here"),
                         is_primary: false,
                     },
@@ -531,13 +493,13 @@ impl ParseError {
             }
             ParseError::Custom { message, at } | ParseError::Abort { message, at } => {
                 vec![ParseErrorLabel {
-                    at: at.clone(),
+                    at: *at,
                     message: message.clone(),
                     is_primary: true,
                 }]
             }
             _ => vec![ParseErrorLabel {
-                at: self.location().clone(),
+                at: *self.location(),
                 message: self.description().to_string(),
                 is_primary: true,
             }],
@@ -627,17 +589,22 @@ impl ParseError {
             }
             ParseError::UnterminatedDelimiter {
                 opening,
-                opening_at: _,
+                opening_at,
                 found,
-                found_at: _,
+                found_at,
                 expected,
             } => {
                 let mut notes = vec![format!(
-                    "delimiter `{opening}` needs closing {}",
+                    "delimiter `{opening}` was opened at line {}, column {} and needs closing {}",
+                    opening_at.line,
+                    opening_at.col,
                     format_expected_list(expected)
                 )];
                 if let Some(found) = found {
-                    notes.push(format!("encountered `{found}` before a closing delimiter",));
+                    notes.push(format!(
+                        "encountered `{found}` at line {}, column {} before a closing delimiter",
+                        found_at.line, found_at.col
+                    ));
                 }
                 notes
             }
@@ -1552,7 +1519,7 @@ impl<'a> Parser<'a> {
     fn err(&self, msg: impl Into<String>) -> ParseError {
         ParseError::Custom {
             message: msg.into(),
-            at: Source::Location(Location::from(self.lx.pos())),
+            at: Location::from(self.lx.pos()),
         }
     }
 
@@ -1582,7 +1549,7 @@ impl<'a> Parser<'a> {
     fn err_ghc(&self, message: String, _call_site: String) -> ParseError {
         ParseError::Abort {
             message,
-            at: Source::Location(Location::from(self.lx.pos())),
+            at: Location::from(self.lx.pos()),
         }
     }
 
@@ -1593,12 +1560,13 @@ impl<'a> Parser<'a> {
     fn err_unterminated_delimiter(
         &self,
         opening: impl Into<String>,
-        opening_at: Source,
-        found_at: Source,
+        opening_at: Pos,
+        found_at: Location,
         found: Option<String>,
         expected: Vec<String>,
     ) -> ParseError {
         let opening = opening.into();
+        let opening_at = Location::location_of(&Some(&opening), opening_at);
         ParseError::UnterminatedDelimiter {
             opening,
             opening_at,
@@ -1730,7 +1698,6 @@ impl<'a> Parser<'a> {
     fn save(&self) -> Pos {
         self.lx.pos()
     }
-
     fn restore(&mut self, p: Pos) {
         self.lx.set_pos(p);
     }
@@ -1771,9 +1738,10 @@ impl<'a> Parser<'a> {
         if self.try_kw(kw) {
             Ok(())
         } else {
-            let (found, at) = self.found_token();
+            let found = self.lx.peek_until_ws();
+            let at = Location::location_of(&found, self.lx.pos());
             Err(ParseError::UnexpectedKeyword {
-                found,
+                found: found.map(|s| s.to_string()),
                 expected: vec![kw.to_string()],
                 at,
             })
@@ -1870,13 +1838,14 @@ impl<'a> Parser<'a> {
             word.push(c);
             self.lx.bump();
         }
+        let pos = self.lx.pos();
         self.restore(save);
         if !is_reserved_name(&word) {
             return None;
         }
         Some(ParseError::Custom {
             message: format!("`{word}` is a reserved word and cannot be used as an identifier"),
-            at: Source::Location(Location::location_of(&Some(&word), save)),
+            at: Location::from(pos),
         })
     }
 
@@ -1886,17 +1855,17 @@ impl<'a> Parser<'a> {
             .ok_or_else(|| self.expected_string_literal_err(vec!["string literal"]))
     }
 
-    fn found_token(&mut self) -> (Option<String>, Source) {
+    fn found_token(&mut self) -> (Option<String>, Location) {
         self.found_token_until(|c| c.is_whitespace())
     }
 
-    fn found_token_until(&mut self, f: impl FnMut(char) -> bool) -> (Option<String>, Source) {
+    fn found_token_until(&mut self, f: impl FnMut(char) -> bool) -> (Option<String>, Location) {
         let saved_pos = self.lx.pos();
         self.lx.skip_ws();
         let found_pos = self.lx.pos();
         let tok = self.lx.peek_until(f).map(|s| s.to_string());
         self.lx.set_pos(saved_pos);
-        let loc = Source::Location(Location::location_of(&tok.as_ref(), found_pos));
+        let loc = Location::location_of(&tok.as_ref(), found_pos);
         (tok, loc)
     }
 
@@ -1965,7 +1934,7 @@ impl<'a> Parser<'a> {
         &mut self,
         expected: I,
         found: Option<String>,
-        at: Source,
+        at: Location,
     ) -> ParseError
     where
         I: IntoIterator<Item = S>,
@@ -2872,8 +2841,6 @@ impl<'a> Parser<'a> {
                 // and operator labels, a fact's `"["` annotation attempt) —
                 // the frame of Fact.hs:47's `parens (commaSep pterm)` and
                 // every other `commaSep`-then-close context.
-                let opening_at =
-                    Source::Location(Location::location_of(&Some(&opening), opening_at));
                 let (found, found_at) = self.found_token();
                 let e = self.err_unterminated_delimiter(
                     opening,
@@ -3407,7 +3374,7 @@ impl<'a> Parser<'a> {
     fn has_duplicate_macro_arg(args: &[VarSpec]) -> bool {
         let mut seen: Vec<(&str, u64, SuffixSort)> = Vec::with_capacity(args.len());
         for a in args {
-            let key = (a.name.content.as_str(), a.idx, Self::macro_arg_sort(a));
+            let key = (a.name.as_str(), a.idx, Self::macro_arg_sort(a));
             if seen.contains(&key) {
                 return true;
             }
@@ -3487,7 +3454,7 @@ impl<'a> Parser<'a> {
         self.require_kw(kw)?;
         let name = self.ident()?;
         let mut attributes = Vec::new();
-        let opening_at: Source = self.lx.pos().into();
+        let opening_at = self.lx.pos();
         if self.try_punct("[") {
             loop {
                 self.skip_ws();
@@ -3542,14 +3509,14 @@ impl<'a> Parser<'a> {
     /// re-parsing it.
     fn double_quoted_formula(&mut self) -> Result<Formula, ParseError> {
         self.lx.skip_ws();
-        let opening_pos: Source = self.lx.pos().into();
+        let opening_pos = self.lx.pos();
         self.require_punct("\"")?;
         let f = self.formula()?;
         self.require_punct("\"").map_err(|e| {
             self.err_unterminated_delimiter(
                 "\"",
                 opening_pos,
-                e.location().clone(),
+                *e.location(),
                 e.into_found(),
                 vec![
                     "\"".to_string(),
@@ -3872,7 +3839,7 @@ impl<'a> Parser<'a> {
 
     fn rule_attributes(&mut self) -> Result<Vec<RuleAttr>, ParseError> {
         let mut attrs = Vec::new();
-        let opening_at: Source = self.lx.pos().into();
+        let opening_at = self.lx.pos();
         if !self.try_punct("[") {
             return Ok(attrs);
         }
@@ -4170,10 +4137,8 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         let probe_offset = self.lx.pos().offset;
         self.fact_list().map_err(|mut e| {
-            if let Source::Location(loc) = e.location() {
-                if loc.start == probe_offset {
-                    e.add_expected("\"let\"".to_string());
-                }
+            if e.location().start == probe_offset {
+                e.add_expected("\"let\"".to_string());
             }
             e
         })
@@ -4191,7 +4156,7 @@ impl<'a> Parser<'a> {
     fn fact_or_restr(&mut self) -> Result<FactOrRestr, ParseError> {
         // `_restrict(formula)` or fact.
         if self.try_kw("_restrict") {
-            let opening_at: Source = self.lx.pos().into();
+            let opening_at = self.lx.pos();
             self.require_punct("(")?;
             let phi = self.formula()?;
             self.require_punct(")").map_err(|_| {
@@ -4249,7 +4214,7 @@ impl<'a> Parser<'a> {
                 return Err(ParseError::UnexpectedKeyword {
                     found: Some(other.into()),
                     expected: vec!["all-traces".into(), "exists-trace".into()],
-                    at: Source::Location(Location::location_of(&Some(other), trace_q_pos)),
+                    at: Location::location_of(&Some(other), trace_q_pos),
                 });
             }
         };
@@ -4867,14 +4832,12 @@ impl<'a> Parser<'a> {
 
     fn fact(&mut self) -> Result<Fact, ParseError> {
         self.skip_ws();
-        let fact_start_pos = self.lx.pos();
         let persistent = self.try_punct("!");
+        let name_pos = self.lx.pos();
         let name = self.ident()?;
         if !name.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
-            return Err(ParseError::FactNameMustStartWithUppercase {
-                name: name.content,
-                at: name.source,
-            });
+            let at = Location::location_of(&Some(&name), name_pos);
+            return Err(ParseError::FactNameMustStartWithUppercase { name, at });
         }
         let opening = ("(", self.lx.pos());
         self.require_punct("(")?;
@@ -4914,8 +4877,6 @@ impl<'a> Parser<'a> {
             }
             self.require_punct("]")?;
         }
-        let fact_end_pos = self.lx.pos();
-        let fact_loc = Location::from_positions(fact_start_pos, fact_end_pos);
         // HS-faithful parse-time canonicalisation, mirroring
         // `Theory.Text.Parser.Fact.mkProtoFact` (Fact.hs:56-63) combined with
         // `factTagMultiplicity` (Model/Fact.hs:354-360) and `factTagName`
@@ -4935,34 +4896,33 @@ impl<'a> Parser<'a> {
         // mirror that by returning `Err` from `fact()`.
         let upper = name.to_ascii_uppercase();
         // (canonical name, persistent, keep-annotations)
-        let canonical: Option<(SpannedStr, bool, bool)> = match upper.as_str() {
-            "OUT" => Some((SpannedStr::inbuilt("Out"), false, false)),
-            "IN" => Some((SpannedStr::inbuilt("In"), false, true)),
-            "KU" => Some((SpannedStr::inbuilt("KU"), true, false)),
-            "KD" => Some((SpannedStr::inbuilt("KD"), true, false)),
-            "DED" => Some((SpannedStr::inbuilt("Ded"), false, false)),
-            "FR" => Some((SpannedStr::inbuilt("Fr"), false, false)),
+        let canonical: Option<(&str, bool, bool)> = match upper.as_str() {
+            "OUT" => Some(("Out", false, false)),
+            "IN" => Some(("In", false, true)),
+            "KU" => Some(("KU", true, false)),
+            "KD" => Some(("KD", true, false)),
+            "DED" => Some(("Ded", false, false)),
+            "FR" => Some(("Fr", false, false)),
             _ => None,
         };
         if let Some((cname, cpersistent, keep_ann)) = canonical {
             // `!Fr(...)` is a parse error (Fact.hs:39-63, see line 45).
             if upper == "FR" && persistent {
-                return Err(ParseError::FreshFactCannotBePersistent {
-                    at: Source::Location(fact_loc),
-                });
+                let at = Location::location_of(&Some(&name), name_pos);
+                return Err(ParseError::FreshFactCannotBePersistent { at });
             }
             // `singleTerm`: special facts have arity one (Fact.hs:52-54).
             if args.len() != 1 {
-                let at = Source::Location(fact_loc);
+                let at = Location::location_of(&Some(&name), name_pos);
                 return Err(ParseError::FactArityMismatch {
-                    name: name.content,
+                    name,
                     arity: args.len(),
                     at,
                 });
             }
             return Ok(Fact {
                 persistent: cpersistent,
-                name: cname,
+                name: cname.to_string(),
                 args,
                 annotations: if keep_ann { annotations } else { Vec::new() },
             });
@@ -5061,21 +5021,15 @@ impl<'a> Parser<'a> {
         // Parenthesised formula — backtrack to term-relational on failure,
         // since e.g. `(a+z) = b` should parse as a relational equality atom
         // whose LHS happens to be a parenthesised term.
-        let opening_at: Source = self.lx.pos().into();
         if self.lx.peek() == Some('(') {
+            let save_p = self.save();
             self.lx.bump();
             self.skip_ws();
             // No other atom can consume a leading `(`, so this is an unterminated parenthesised formula.
             let f = self.iff()?;
             self.require_punct(")").map_err(|_| {
                 let (found, found_at) = self.found_token();
-                self.err_unterminated_delimiter(
-                    "(",
-                    opening_at,
-                    found_at,
-                    found,
-                    vec![")".to_string()],
-                )
+                self.err_unterminated_delimiter("(", save_p, found_at, found, vec![")".to_string()])
             })?;
             return Ok(f);
         }
@@ -5088,7 +5042,7 @@ impl<'a> Parser<'a> {
                 let (found, found_at) = self.found_token();
                 self.err_unterminated_delimiter(
                     "(",
-                    opening_at.into(),
+                    opening_at,
                     found_at,
                     found,
                     vec![")".to_string()],
@@ -5139,7 +5093,7 @@ impl<'a> Parser<'a> {
             // predicate atom.  We mirror that exactly.
             let fact = Fact {
                 persistent: false,
-                name: SpannedStr::inbuilt("Smaller"),
+                name: "Smaller".to_string(),
                 args: vec![lhs, rhs],
                 annotations: Vec::new(),
             };
@@ -5487,7 +5441,7 @@ impl<'a> Parser<'a> {
         let mut best: Option<(usize, u8, u8, u8)> = None;
         let mut arity = 0usize;
         for (n, o) in &self.fun_syms {
-            if n.content == op {
+            if n == op {
                 let k = o.ord_key();
                 if best.is_none_or(|b| k < b) {
                     best = Some(k);
@@ -5508,10 +5462,10 @@ impl<'a> Parser<'a> {
         if best.is_some() {
             return Some(ArityRes::NoEq { arity });
         }
-        if self.ac_fun_syms.iter().any(|n| n.content == op) {
+        if self.ac_fun_syms.iter().any(|n| n == op) {
             return Some(ArityRes::Ac);
         }
-        if let Some((_, o)) = self.macro_syms.iter().find(|(n, _)| n.content == op) {
+        if let Some((_, o)) = self.macro_syms.iter().find(|(n, _)| n == op) {
             return Some(ArityRes::NoEq { arity: o.arity });
         }
         if op == "em" {
@@ -5531,7 +5485,7 @@ impl<'a> Parser<'a> {
         self.fun_syms
             .iter()
             .chain(self.macro_syms.iter())
-            .any(|(n, o)| n.content == name && o.arity == 0)
+            .any(|(n, o)| n == name && o.arity == 0)
             || self
                 .enabled_theory_noeq_syms()
                 .any(|s| s.name == name && s.arity == 0)
@@ -5570,7 +5524,7 @@ impl<'a> Parser<'a> {
             }
         }
         // Parens for grouping
-        let opening_at = self.save().into();
+        let opening_at = self.save();
         if self.try_punct("(") {
             let t = self.msetterm(eqn)?;
             // `(` … `)` is grouping only: Tamarin spells pairs `<a, b>`, so a
@@ -5596,7 +5550,7 @@ impl<'a> Parser<'a> {
         // `<=>` iff operators only appear at formula level — at term level a
         // bare `<` always opens a tuple. We do refuse `<-` (process arrow).
         if self.lx.peek() == Some('<') {
-            let opening_at = self.save().into();
+            let opening_at = self.save();
             let r = self.lx.rest();
             if !r.starts_with("<-") {
                 self.lx.bump(); // consume '<'
@@ -5801,7 +5755,7 @@ impl<'a> Parser<'a> {
         // application f{a}b, sort-suffixed var x:msg, or a bare variable /
         // nullary function.
         let save_id = self.save();
-        if let Some(ref id) = self.lx.identifier() {
+        if let Some(id) = self.lx.identifier() {
             // HS `naryOpApp`/`binaryAlgApp` reject a reserved builtin name in
             // an `equations:` context with a GHC `error` (Term.hs:90-92,
             // 111-113) right after the identifier — BEFORE looking at what
@@ -5809,7 +5763,7 @@ impl<'a> Parser<'a> {
             // exception escapes every enclosing `try`; only `naryOpApp`'s
             // call site (Term.hs:92:9) can surface, since `application` tries
             // it first for every identifier.
-            if eqn && Self::RESERVED_BUILTINS.contains(&id.content.as_str()) {
+            if eqn && Self::RESERVED_BUILTINS.contains(&id.as_str()) {
                 return Err(self.err_ghc(
                     format!("`\"{id}\"` is a reserved function name for builtins."),
                     Self::term_reserved_name_call_site(),
@@ -5817,7 +5771,7 @@ impl<'a> Parser<'a> {
             }
             self.last_ident_end = Some(self.ident_end_from(save_id, &id));
             self.skip_ws();
-            let opening_at = self.save().into();
+            let opening_at = self.save();
             if self.lx.peek() == Some('(') {
                 // Look one token ahead inside `(`: if it's `<)` (the multiset
                 // less-than operator at process level), this isn't a
@@ -5834,7 +5788,7 @@ impl<'a> Parser<'a> {
                 if is_lessmset {
                     let idx = self.try_dot_index();
                     let v = VarSpec {
-                        name: id.clone(),
+                        name: id,
                         idx,
                         sort: SortHint::Untagged,
                         typ: None,
@@ -5858,7 +5812,7 @@ impl<'a> Parser<'a> {
                         // TODO: Surface the error here instead of restoring in the `Err(_)` case.
                         // TODO: Since we have already parsed a `(`, we know that parsing will fail.
                         // return self.prefix_app_args(&id, res, eqn);
-                        match self.prefix_app_args(id.clone(), res, eqn) {
+                        match self.prefix_app_args(&id, res, eqn) {
                             Ok(t) => return Ok(t),
                             Err(e) if matches!(e, ParseError::Abort { .. }) => return Err(e),
                             Err(_) => self.restore(save_app),
@@ -5889,10 +5843,10 @@ impl<'a> Parser<'a> {
                             )
                         })?;
                     }
-                    return Ok(Term::App(id.clone(), ts));
+                    return Ok(Term::App(id, ts));
                 }
             } else {
-                let opening_at = self.save().into();
+                let opening_at = self.save();
                 if self.lx.peek() == Some('{') {
                     if self.resolve_prefix_apps {
                         // HS `binaryAlgApp` (Term.hs:109-121): same lookup, arity
@@ -5902,7 +5856,7 @@ impl<'a> Parser<'a> {
                             // TODO: Surface the error here instead of restoring in the `Err(_)` case.
                             // TODO: Since we have already parsed a `{`, we know that parsing will fail.
                             // return self.binary_alg_app(&id, res, eqn);
-                            match self.binary_alg_app(id.clone(), res, eqn) {
+                            match self.binary_alg_app(&id, res, eqn) {
                                 Ok(t) => return Ok(t),
                                 Err(e) if matches!(e, ParseError::Abort { .. }) => return Err(e),
                                 Err(_) => self.restore(save_app),
@@ -5923,7 +5877,7 @@ impl<'a> Parser<'a> {
                             )
                         })?;
                         let arg2 = self.atom_term(eqn)?;
-                        return Ok(Term::AlgApp(id.clone(), Box::new(arg1), Box::new(arg2)));
+                        return Ok(Term::AlgApp(id, Box::new(arg1), Box::new(arg2)));
                     }
                 }
             }
@@ -5938,7 +5892,7 @@ impl<'a> Parser<'a> {
             self.last_ident_end = Some(self.ident_end_from(save_id, &id));
             let idx = self.try_dot_index();
             let v = VarSpec {
-                name: id.clone(),
+                name: id,
                 idx,
                 sort: SortHint::Untagged,
                 typ: None,
@@ -5989,14 +5943,9 @@ impl<'a> Parser<'a> {
     ///
     /// Every `Err` return is discarded by the caller's backtrack, mirroring
     /// the enclosing `try` — the messages never surface.
-    fn prefix_app_args(
-        &mut self,
-        id: SpannedStr,
-        res: ArityRes,
-        eqn: bool,
-    ) -> Result<Term, ParseError> {
+    fn prefix_app_args(&mut self, id: &str, res: ArityRes, eqn: bool) -> Result<Term, ParseError> {
         // the '(' the caller peeked
-        let (opening, opening_at) = ("(", self.save());
+        let opening = ("(", self.save());
         self.lx.bump();
         self.skip_ws();
         match res {
@@ -6005,31 +5954,31 @@ impl<'a> Parser<'a> {
                 self.require_punct(")").map_err(|_| {
                     let (found, found_at) = self.found_token();
                     self.err_unterminated_delimiter(
-                        opening,
-                        opening_at.into(),
+                        "(",
+                        opening.1,
                         found_at,
                         found,
                         vec![")".into()],
                     )
                 })?;
-                Ok(Term::App(id, vec![arg]))
+                Ok(Term::App(id.to_string(), vec![arg]))
             }
             ArityRes::NoEq { arity } => {
-                let ts = self.sep_end_by(")", (opening, opening_at), |p| p.msetterm(eqn))?;
+                let ts = self.sep_end_by(")", opening, |p| p.msetterm(eqn))?;
                 if ts.len() != arity {
                     return Err(self.err(format!(
                         "operator `{id}' has arity {arity}, but here it is used with arity {}",
                         ts.len()
                     )));
                 }
-                Ok(Term::App(id, ts))
+                Ok(Term::App(id.to_string(), ts))
             }
             ArityRes::Ac => {
-                let ts = self.sep_end_by(")", (opening, opening_at), |p| p.msetterm(eqn))?;
-                let sym = intern_ac_name(&id);
+                let ts = self.sep_end_by(")", opening, |p| p.msetterm(eqn))?;
+                let sym = intern_ac_name(id);
                 let mut it = ts.into_iter();
                 match (it.next(), it.next()) {
-                    (None, _) => Ok(Term::App(id, Vec::new())),
+                    (None, _) => Ok(Term::App(id.to_string(), Vec::new())),
                     (Some(a), None) => {
                         // The collapsed term IS the argument, but the atom's
                         // last lexeme is this application's `)` — no variable
@@ -6056,14 +6005,9 @@ impl<'a> Parser<'a> {
     /// otherwise — discarded by the caller's backtrack), and builds
     /// `fAppNoEq`/`fAppAC` by the head's AC state.  There is no `em` special
     /// case here (`naryOpApp`'s Term.hs:103 is prefix-only).
-    fn binary_alg_app(
-        &mut self,
-        id: SpannedStr,
-        res: ArityRes,
-        eqn: bool,
-    ) -> Result<Term, ParseError> {
+    fn binary_alg_app(&mut self, id: &str, res: ArityRes, eqn: bool) -> Result<Term, ParseError> {
         // the '{' the caller peeked
-        let opening_at = self.save().into();
+        let opening_at = self.save();
         self.lx.bump();
         self.skip_ws();
         let arg1 = self.tuple_contents(eqn)?;
@@ -6074,11 +6018,13 @@ impl<'a> Parser<'a> {
         let arg2 = self.atom_term(eqn)?;
         match res {
             ArityRes::Ac => Ok(Term::BinOp(
-                BinOp::AcFct(intern_ac_name(&id)),
+                BinOp::AcFct(intern_ac_name(id)),
                 Box::new(arg1),
                 Box::new(arg2),
             )),
-            ArityRes::NoEq { arity: 2 } => Ok(Term::AlgApp(id, Box::new(arg1), Box::new(arg2))),
+            ArityRes::NoEq { arity: 2 } => {
+                Ok(Term::AlgApp(id.to_string(), Box::new(arg1), Box::new(arg2)))
+            }
             ArityRes::NoEq { .. } => {
                 Err(self
                     .err("only operators of arity 2 can be written using the `op{t1}t2' notation"))

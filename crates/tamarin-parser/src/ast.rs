@@ -25,6 +25,8 @@
 // Top-level theory
 // =============================================================================
 
+use std::{borrow::Borrow, ops::Deref};
+
 use crate::parser::{Location, Source};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -104,7 +106,7 @@ impl SpannedStr {
     pub fn indirect(name: impl Into<String>, source: Source) -> Self {
         Self {
             content: name.into(),
-            source: Source::Indirect(std::rc::Rc::new(source)),
+            source: Source::Indirect(Box::new(source)),
         }
     }
 
@@ -183,7 +185,7 @@ impl Ord for SpannedStr {
     }
 }
 
-impl std::ops::Deref for SpannedStr {
+impl Deref for SpannedStr {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
@@ -197,13 +199,13 @@ impl AsRef<str> for SpannedStr {
     }
 }
 
-impl std::borrow::Borrow<str> for SpannedStr {
+impl Borrow<str> for SpannedStr {
     fn borrow(&self) -> &str {
         &self.content
     }
 }
 
-impl std::borrow::Borrow<String> for SpannedStr {
+impl Borrow<String> for SpannedStr {
     fn borrow(&self) -> &String {
         &self.content
     }
@@ -742,17 +744,17 @@ pub enum Atom {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Term {
     Var(VarSpec),
-    PubLit(SpannedStr),   // 'foo'
-    FreshLit(SpannedStr), // ~'n'
-    NatLit(SpannedStr),   // %'n'
-    Number(u64),          // bare integer literal (e.g. for %+)
-    NumberOne,            // 1
-    NatOne,               // 1:nat / %1
+    PubLit(String),   // 'foo'
+    FreshLit(String), // ~'n'
+    NatLit(String),   // %'n'
+    Number(u64),      // bare integer literal (e.g. for %+)
+    NumberOne,        // 1
+    NatOne,           // 1:nat / %1
     DhNeutral,
     /// Function or operator application by name.
-    App(SpannedStr, Vec<Term>),
+    App(String, Vec<Term>),
     /// `op{arg1}arg2` algebraic syntax.
-    AlgApp(SpannedStr, Box<Term>, Box<Term>),
+    AlgApp(String, Box<Term>, Box<Term>),
     /// Pair / tuple `<a, b, c>` (right-associative).
     Pair(Vec<Term>),
     /// `diff(a, b)`
@@ -804,10 +806,10 @@ impl BinOp {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VarSpec {
-    pub name: SpannedStr,
+    pub name: String,
     pub idx: u64,
     pub sort: SortHint,
-    pub typ: Option<SpannedStr>, // SAPIC type annotation
+    pub typ: Option<String>, // SAPIC type annotation
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -839,7 +841,7 @@ pub enum SuffixSort {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FlagFormula {
-    Atom(SpannedStr),
+    Atom(String),
     Not(Box<FlagFormula>),
     And(Box<FlagFormula>, Box<FlagFormula>),
     Or(Box<FlagFormula>, Box<FlagFormula>),

@@ -590,7 +590,7 @@ impl<'a> Lexer<'a> {
     /// `\`, which must be followed by `\` or `"` (the second char is returned and
     /// the backslash dropped); a bare `"` terminates the body and any other `\x`
     /// fails the whole parse. Used for `export <tag>: "..."` blocks.
-    pub fn export_body(&mut self) -> Option<SpannedStr> {
+    pub fn export_body(&mut self) -> Option<String> {
         self.skip_ws();
         let save = self.pos;
         if !self.eat('"') {
@@ -606,9 +606,8 @@ impl<'a> Lexer<'a> {
                 }
                 Some('"') => {
                     self.bump();
-                    let loc = Location::location_of(&Some(&s), save);
                     self.skip_ws();
-                    return Some(SpannedStr::with_location(s, loc));
+                    return Some(s);
                 }
                 Some('\\') => {
                     self.bump();
