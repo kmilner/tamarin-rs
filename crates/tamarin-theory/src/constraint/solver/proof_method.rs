@@ -973,6 +973,7 @@ mod tests {
                 annotations: Vec::new(),
                 name: "Setup".into(),
                 args: vec![mkvar("k", SortHint::Msg)],
+                location: tamarin_parser::DUMMY_LOCATION,
             },
             mkvar("i", SortHint::Node),
         );

@@ -1,6 +1,7 @@
 use super::*;
 use crate::constraint::solver::context::ProofContext;
 use crate::constraint::system::System;
+use tamarin_parser::DUMMY_LOCATION;
 use tamarin_term::maude_sig::pair_maude_sig;
 
 fn maude_path() -> Option<String> {
@@ -60,6 +61,7 @@ fn simplify_decomposes_top_level_conj() {
             name: "P".to_string(),
             args: vec![],
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         },
         mkvar_idx("i", 0),
     )));
@@ -69,6 +71,7 @@ fn simplify_decomposes_top_level_conj() {
             name: "Q".to_string(),
             args: vec![],
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         },
         mkvar_idx("j", 0),
     )));
@@ -296,6 +299,7 @@ fn match_atom_via_maude_simple_var_to_var() {
         annotations: Vec::new(),
         name: "Setup".into(),
         args: vec![mk_var_p("k", 0, tamarin_parser::ast::SortHint::Msg)],
+        location: DUMMY_LOCATION,
     };
     let g_time = mk_var_p("i", 0, tamarin_parser::ast::SortHint::Node);
     let i_node = tamarin_term::lterm::LVar::new("n", tamarin_term::lterm::LSort::Node, 7);
@@ -365,6 +369,7 @@ fn match_atom_via_maude_pattern_with_pair_against_pair() {
             mk_var_p("a", 0, tamarin_parser::ast::SortHint::Msg),
             mk_var_p("b", 0, tamarin_parser::ast::SortHint::Msg),
         ])],
+        location: DUMMY_LOCATION,
     };
     let g_time = mk_var_p("i", 0, tamarin_parser::ast::SortHint::Node);
     let i_node = tamarin_term::lterm::LVar::new("n", tamarin_term::lterm::LSort::Node, 1);
@@ -431,6 +436,7 @@ fn match_atom_via_maude_rejects_wrong_arity() {
         annotations: Vec::new(),
         name: "F".into(),
         args: vec![mk_var_p("k", 0, tamarin_parser::ast::SortHint::Msg)],
+        location: DUMMY_LOCATION,
     };
     let g_time = mk_var_p("i", 0, tamarin_parser::ast::SortHint::Node);
     let i_node = tamarin_term::lterm::LVar::new("n", tamarin_term::lterm::LSort::Node, 0);
@@ -466,6 +472,7 @@ fn match_atom_via_maude_rejects_non_var_time() {
         annotations: Vec::new(),
         name: "F".into(),
         args: vec![],
+        location: DUMMY_LOCATION,
     };
     let g_time = tamarin_parser::ast::Term::PubLit("notavar".into());
     let i_node = tamarin_term::lterm::LVar::new("n", tamarin_term::lterm::LSort::Node, 0);

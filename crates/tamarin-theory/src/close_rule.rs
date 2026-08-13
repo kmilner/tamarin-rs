@@ -50,7 +50,7 @@
 //! pipeline of the same theories is kept under `cfg(test)` as the
 //! differential reference for the structural builders (see the tests).
 
-use tamarin_parser::ast as p;
+use tamarin_parser::{ast as p, DUMMY_LOCATION};
 use tamarin_term::function_symbols::{FunSym, NdcState, Privacy};
 use tamarin_term::lterm::{HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::maude_proc::MaudeHandle;
@@ -353,13 +353,14 @@ fn ndc_node_var(name: &str) -> p::VarSpec {
 
 /// `FACT() @ #tv` — HS `factAnd`/`factAndD` (CloseRule.hs:273,277): a
 /// nullary Linear proto fact at a Node-sorted timepoint.
-fn nullary_action_at(fact_name: &str, tv: &p::VarSpec) -> p::Formula {
+fn nullary_action_at(fact_name: &'static str, tv: &p::VarSpec) -> p::Formula {
     p::Formula::Atom(p::Atom::Action(
         p::Fact {
             persistent: false,
             name: fact_name.to_string(),
             args: Vec::new(),
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         },
         p::Term::Var(tv.clone()),
     ))
@@ -508,6 +509,7 @@ fn deduction_lemma_guarded(s: &[LNFact], fact_term: &LNTerm) -> Guarded {
             name: "Generated_0".to_string(),
             args: gen_args,
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         },
         p::Term::Var(t0.clone()),
     ));
@@ -517,6 +519,7 @@ fn deduction_lemma_guarded(s: &[LNFact], fact_term: &LNTerm) -> Guarded {
             name: "K".to_string(),
             args: vec![k_arg],
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         },
         p::Term::Var(t1.clone()),
     ));

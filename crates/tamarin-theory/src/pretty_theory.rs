@@ -87,7 +87,7 @@
 
 use crate::pretty_formula as pf;
 use crate::theory::Theory;
-use tamarin_parser::ast as p;
+use tamarin_parser::{ast as p, DUMMY_LOCATION};
 
 /// Build info passed in from the prover binary so the Generated-from
 /// block reflects compile-time facts.
@@ -2723,6 +2723,7 @@ pub fn lnfact_to_parser(fa: &crate::fact::LNFact) -> p::Fact {
         FactTag::Term => ("Term".to_string(), false),
     };
     p::Fact {
+        location: DUMMY_LOCATION,
         persistent,
         name,
         args: fa.terms.iter().map(lnterm_to_parser).collect(),
@@ -3686,6 +3687,7 @@ fn reparse_fact_doc(fact: &tamarin_parser::ast::Fact) -> crate::pretty_hpj::Doc 
         name: fact.name.clone(),
         args,
         annotations: fact.annotations.clone(),
+        location: fact.location,
     };
     pf::fact_doc(&reparsed)
 }

@@ -37,6 +37,7 @@
 
 use crate::ast::{DisjAlt, Fact, GoalSpec, ParsedMethod, ParsedProofTree};
 use crate::lexer::{is_ident_char, Lexer};
+use crate::Location;
 
 #[derive(Debug, Clone)]
 pub struct ProofTreeParseError {
@@ -692,6 +693,7 @@ impl<'a> GoalParser<'a> {
         let save = self.lx.pos();
         // Optional `!` prefix for persistent facts.
         self.lx.skip_ws();
+        let fact_start = self.lx.pos();
         let persistent = self.lx.eat_str("!");
         self.lx.skip_ws();
         // Fact name: starts with uppercase.
@@ -710,6 +712,8 @@ impl<'a> GoalParser<'a> {
         // and wraps each arg as `crate::ast::Term::Var` so the Fact struct
         // is well-formed.
         let args_text = self.read_balanced_paren()?;
+        let fact_end = self.lx.pos();
+        let fact_location = Location::from_positions(fact_end, fact_start);
         // After the `)`, expect `@` (action) or `▶<digit>` (premise).
         self.lx.skip_ws();
         if self.lx.eat_str("@") {
@@ -732,7 +736,7 @@ impl<'a> GoalParser<'a> {
                 0
             };
             return Some(GoalSpec::Action {
-                fact: build_fact(persistent, name, &args_text),
+                fact: build_fact(persistent, name, &args_text, fact_location),
                 time_var: tvar,
                 time_idx: tidx,
             });
@@ -762,7 +766,7 @@ impl<'a> GoalParser<'a> {
                 0
             };
             return Some(GoalSpec::Premise {
-                fact: build_fact(persistent, name, &args_text),
+                fact: build_fact(persistent, name, &args_text, fact_location),
                 prem_idx: idx_val as usize,
                 time_var: tvar,
                 time_idx: tidx,
@@ -781,7 +785,7 @@ impl<'a> GoalParser<'a> {
 /// argument terms — that's used only for diagnostics today.  The
 /// arity (number of commas at top level) is the load-bearing field for
 /// goal matching (matches the count of terms in the runtime LNFact).
-fn build_fact(persistent: bool, name: String, args_text: &str) -> Fact {
+fn build_fact(persistent: bool, name: String, args_text: &str, location: Location) -> Fact {
     use crate::ast::Term;
     let trimmed = args_text.trim();
     let args: Vec<Term> = if trimmed.is_empty() {
@@ -804,6 +808,7 @@ fn build_fact(persistent: bool, name: String, args_text: &str) -> Fact {
         name,
         args,
         annotations: Vec::new(),
+        location,
     }
 }
 

@@ -502,6 +502,7 @@ fn expand_atom(
                 name: fact.name.clone(),
                 args: fact.args.iter().map(|a| subst_term(a, subst)).collect(),
                 annotations: fact.annotations.clone(),
+                location: fact.location,
             };
             Ok(p::Formula::Atom(p::Atom::Action(
                 new_fact,

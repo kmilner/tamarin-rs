@@ -1,5 +1,6 @@
 use super::*;
 use crate::fact::Fact;
+use tamarin_parser::DUMMY_LOCATION;
 use tamarin_term::vterm::var_term;
 
 /// KCL07's signature (examples/csf26-ac/fast/KCL07.spthy) plus a Seed
@@ -182,6 +183,7 @@ fn lemma_guarded_is_invariant_to_hs_ltrue_conjunct() {
             name: "Generated_0".to_string(),
             args: vec![p::Term::Var(v.clone())],
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         },
         p::Term::Var(x.clone()),
     ));
@@ -191,6 +193,7 @@ fn lemma_guarded_is_invariant_to_hs_ltrue_conjunct() {
             name: "K".to_string(),
             args: vec![p::Term::Var(v.clone())],
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         },
         p::Term::Var(y.clone()),
     ));

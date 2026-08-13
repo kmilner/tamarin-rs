@@ -153,6 +153,7 @@ pub fn lift_one_rule(
         let expanded = resolve_nullary_constants(&expanded, nullary);
         // HS `fromRuleRestriction (rname ++ "_" ++ show i) f`.
         let sub_name = format!("{}_{}", rname, idx);
+        // TODO: Give restriction/formula its own span and thread this through here?
         let (restr, action) = from_rule_restriction(&sub_name, &expanded);
         restrictions.push(restr);
         new_actions.push(action);
@@ -166,7 +167,7 @@ pub fn lift_one_rule(
 
 /// HS `fromRuleRestriction rname f` (Restriction.hs:140-161): produce the
 /// generated restriction plus the action fact inserted into the rule.
-fn from_rule_restriction(rname: &str, f: &p::Formula) -> (p::Restriction, p::Fact) {
+fn from_rule_restriction(r: &p::Restriction, f: &p::Formula) -> (p::Restriction, p::Fact) {
     // HS `rewrite f` returns `(rewritten formula, M.Map LVar Term)`.
     let (rewr_f, subst) = rewrite(f);
 
@@ -185,7 +186,7 @@ fn from_rule_restriction(rname: &str, f: &p::Formula) -> (p::Restriction, p::Fac
         .cloned()
         .map(p::Term::Var)
         .collect();
-    let restr_fact = mk_fact(rname, bvar_terms);
+    let restr_fact = mk_fact(&r.name, bvar_terms);
     // f'' = (Restr_<rname>(...) @ #NOW) ⇒ f'
     let now_term = p::Term::Var(var_now());
     let antecedent = p::Formula::Atom(p::Atom::Action(restr_fact, now_term));
@@ -199,7 +200,7 @@ fn from_rule_restriction(rname: &str, f: &p::Formula) -> (p::Restriction, p::Fac
         p::Formula::Forall(quant_vars, Box::new(f2))
     };
     let restriction = p::Restriction {
-        name: format!("{}{}", RESTR_PREFIX, rname),
+        name: format!("{}{}", RESTR_PREFIX, r.name),
         formula: restr_formula,
         attributes: Vec::new(),
     };
@@ -217,7 +218,7 @@ fn from_rule_restriction(rname: &str, f: &p::Formula) -> (p::Restriction, p::Fac
             None => p::Term::Var(v),
         })
         .collect();
-    let action = mk_fact(rname, action_args);
+    let action = mk_fact(&r.name, action_args);
 
     (restriction, action)
 }
@@ -256,6 +257,7 @@ fn mk_fact(rname: &str, args: Vec<p::Term>) -> p::Fact {
         name: format!("{}{}", RESTR_PREFIX, rname),
         args,
         annotations: Vec::new(),
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -360,6 +362,7 @@ fn rewrite_atom(a: &p::Atom, bound: &[VarKey], st: &mut RewriteState) -> p::Atom
                 name: fa.name.clone(),
                 args: fa.args.iter().map(|x| rewrite_term(x, bound, st)).collect(),
                 annotations: fa.annotations.clone(),
+                location: fa.location,
             };
             Action(fa2, rewrite_term(t, bound, st))
         }
@@ -372,6 +375,7 @@ fn rewrite_atom(a: &p::Atom, bound: &[VarKey], st: &mut RewriteState) -> p::Atom
                 name: fa.name.clone(),
                 args: fa.args.iter().map(|x| rewrite_term(x, bound, st)).collect(),
                 annotations: fa.annotations.clone(),
+                location: fa.location,
             };
             Pred(fa2)
         }

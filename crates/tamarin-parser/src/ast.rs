@@ -609,12 +609,38 @@ pub enum Condition {
 // Facts
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Fact {
     pub persistent: bool,
     pub name: String,
     pub args: Vec<Term>,
     pub annotations: Vec<FactAnnotation>,
+    pub location: Location,
+}
+
+impl PartialEq for Fact {
+    fn eq(&self, other: &Self) -> bool {
+        // Compilation error once we add new fields
+        let Fact {
+            persistent: _,
+            name: _,
+            args: _,
+            annotations: _,
+            location: _,
+        } = self;
+        let Fact {
+            persistent: _,
+            name: _,
+            args: _,
+            annotations: _,
+            location: _,
+        } = other;
+        // Everything but the location
+        self.persistent == other.persistent
+            && self.name == other.name
+            && self.args == other.args
+            && self.annotations == other.annotations
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Hash)]

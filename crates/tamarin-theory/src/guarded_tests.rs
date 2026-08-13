@@ -432,6 +432,7 @@ fn varsubst_shadowing_blocks_inner_binder() {
         annotations: Vec::new(),
         name: "Action".into(),
         args: vec![t],
+        location: DUMMY_LOCATION,
     };
     // Build via close_guarded so that `k` becomes Bound(0) in the body.
     let g = close_guarded(

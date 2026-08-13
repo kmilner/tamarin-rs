@@ -190,6 +190,7 @@ pub(crate) fn map_fact_terms(f: &p::Fact, g: &dyn Fn(&p::Term) -> p::Term) -> p:
         name: f.name.clone(),
         args: f.args.iter().map(g).collect(),
         annotations: f.annotations.clone(),
+        location: f.location,
     }
 }
 

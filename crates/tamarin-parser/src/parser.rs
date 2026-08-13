@@ -3654,6 +3654,7 @@ impl<'a> Parser<'a> {
             // `restrPrefix = "Restr_"` (Model/Restriction.hs:129-149).
             let rstr_name = format!("Restr_{}_{}", r.name, i);
             if self.seen_restriction_names.contains(&rstr_name) {
+                // TODO: Better error once we have locations for the rules inlined restrictions/actions
                 return Err(self.item_fail(format!("duplicate restriction: {rstr_name}")));
             }
         }
@@ -4893,6 +4894,7 @@ impl<'a> Parser<'a> {
 
     fn fact(&mut self) -> Result<Fact, ParseError> {
         self.skip_ws();
+        let start = self.lx.pos();
         let persistent = self.try_punct("!");
         let name_pos = self.lx.pos();
         let name = self.ident()?;
@@ -4938,6 +4940,8 @@ impl<'a> Parser<'a> {
             }
             self.require_punct("]")?;
         }
+        let end = self.lx.pos();
+        let location = Location::from_positions(start, end);
         // HS-faithful parse-time canonicalisation, mirroring
         // `Theory.Text.Parser.Fact.mkProtoFact` (Fact.hs:56-63) combined with
         // `factTagMultiplicity` (Model/Fact.hs:354-360) and `factTagName`
@@ -4986,6 +4990,7 @@ impl<'a> Parser<'a> {
                 name: cname.to_string(),
                 args,
                 annotations: if keep_ann { annotations } else { Vec::new() },
+                location,
             });
         }
         Ok(Fact {
@@ -4993,6 +4998,7 @@ impl<'a> Parser<'a> {
             name,
             args,
             annotations,
+            location,
         })
     }
 
@@ -5132,6 +5138,7 @@ impl<'a> Parser<'a> {
         }
         self.restore(save_f);
         // Try term-level atom: t = t / t < t / t << t / t (<) t
+        let start = self.save();
         let lhs = self.term(false)?;
         if self.try_punct("=") {
             let rhs = self.term(false)?;
@@ -5143,6 +5150,7 @@ impl<'a> Parser<'a> {
         }
         if self.try_punct("(<)") {
             let rhs = self.term(false)?;
+            let end = self.save();
             // HS `smallerp` (Theory/Text/Parser/Formula.hs:30-38): the multiset
             // comparison operator `a (<) b` desugars DIRECTLY into the built-in
             // `Smaller` predicate fact at PARSE time —
@@ -5157,6 +5165,7 @@ impl<'a> Parser<'a> {
                 name: "Smaller".to_string(),
                 args: vec![lhs, rhs],
                 annotations: Vec::new(),
+                location: Location::from_positions(start, end),
             };
             return Ok(Formula::Atom(Atom::Pred(fact)));
         }

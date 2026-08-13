@@ -277,6 +277,7 @@ pub fn gfact_to_fact(g: &GFact) -> p::Fact {
         name: g.name.clone(),
         args: g.args.iter().map(gterm_to_term).collect(),
         annotations: g.annotations.clone(),
+        location: tamarin_parser::DUMMY_LOCATION,
     }
 }
 
@@ -820,6 +821,7 @@ mod tests {
                 name: "P".to_string(),
                 args: vec![p::Term::Var(x.clone())],
                 annotations: vec![],
+                location: tamarin_parser::DUMMY_LOCATION,
             },
             p::Term::Var(vs_node("t", 0)),
         ));
@@ -948,6 +950,7 @@ mod tests {
                 name: "P".to_string(),
                 args: vec![p::Term::Var(x.clone())],
                 annotations: vec![],
+                location: tamarin_parser::DUMMY_LOCATION,
             },
             p::Term::Var(vs_node("t", 0)),
         ));
@@ -957,6 +960,7 @@ mod tests {
                 name: "P".to_string(),
                 args: vec![p::Term::Var(y.clone())],
                 annotations: vec![],
+                location: tamarin_parser::DUMMY_LOCATION,
             },
             p::Term::Var(vs_node("t", 0)),
         ));

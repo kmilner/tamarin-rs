@@ -2680,6 +2680,7 @@ fn project_rule(r: &Rule, left: bool) -> Rule {
             name: f.name.clone(),
             args: f.args.iter().map(|a| proj_term(a, left)).collect(),
             annotations: f.annotations.clone(),
+            location: f.location,
         }
     }
     Rule {

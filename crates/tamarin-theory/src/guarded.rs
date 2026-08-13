@@ -35,7 +35,7 @@
 use std::collections::BTreeSet;
 
 use crate::guarded_types::cow_pair_arc;
-use tamarin_parser::ast as p;
+use tamarin_parser::{ast as p, DUMMY_LOCATION};
 use tamarin_utils::cow::{cow_map_arc, cow_map_vec, cow_pair};
 
 pub use crate::guarded_types::{
@@ -969,6 +969,7 @@ pub fn try_gfact_to_fact(f: &GFact) -> Option<p::Fact> {
         name: f.name.clone(),
         args,
         annotations: f.annotations.clone(),
+        location: DUMMY_LOCATION,
     })
 }
 

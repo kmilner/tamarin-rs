@@ -27,7 +27,7 @@ use crate::constraint::system::System;
 use crate::fact::{proto_or_in_fact_view, proto_or_out_fact_view, FactTag, LNFact, Multiplicity};
 use crate::rule::{print_fact_position, print_position, rule_name_string, ExtendedPosition};
 use crate::theory::{OpenProtoRule, TheoryItem};
-use tamarin_parser::ast as p;
+use tamarin_parser::{ast as p, DUMMY_LOCATION};
 use tamarin_term::lterm::{rename_avoiding, LNTerm};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::positions::{at_pos, deepest_prot_subterm, find_pos};
@@ -58,6 +58,7 @@ fn input_fact_term(name: &str, terms: Vec<p::Term>, v: p::Term) -> p::Fact {
         name: name.to_string(),
         args,
         annotations: Vec::new(),
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -68,6 +69,7 @@ fn output_fact_term(name: &str, terms: Vec<p::Term>) -> p::Fact {
         name: name.to_string(),
         args: terms,
         annotations: Vec::new(),
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -104,6 +106,7 @@ fn or_ku() -> p::Formula {
         name: "KU".to_string(),
         args: vec![var_term("x", MSG)],
         annotations: Vec::new(),
+        location: DUMMY_LOCATION,
     };
     exists(
         vec![var("j", NODE)],
@@ -168,6 +171,7 @@ fn input_fact_fact_ast(name: &str, ms: &[p::VarSpec]) -> p::Fact {
         name: name.to_string(),
         args: ms.iter().map(|v| p::Term::Var(v.clone())).collect(),
         annotations: Vec::new(),
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -207,6 +211,7 @@ fn fact_input_form_with_outputs(
         name: out_name.to_string(),
         args: out_ms,
         annotations: Vec::new(),
+        location: DUMMY_LOCATION,
     };
     let to_facts = exists(
         vec![var("j", NODE)],

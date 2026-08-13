@@ -822,6 +822,7 @@ fn insert_atom_action_creates_action_goal() {
             annotations: Vec::new(),
             name: "Setup".into(),
             args: vec![mkvar("k", SortHint::Msg)],
+            location: tamarin_parser::DUMMY_LOCATION,
         },
         mkvar("i", SortHint::Node),
     );

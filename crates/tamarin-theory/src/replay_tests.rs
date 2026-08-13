@@ -1,6 +1,7 @@
 use super::*;
 use crate::constraint::system::System;
 use tamarin_parser::ast::{Fact as PFact, ParsedMethod, ParsedProofTree};
+use tamarin_parser::DUMMY_LOCATION;
 use tamarin_term::lterm::{LSort, LVar};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::maude_sig::pair_maude_sig;
@@ -134,6 +135,7 @@ fn match_action_goal_by_name_arity() {
             name: "Setup".into(),
             args: Vec::new(),
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         },
         time_var: "t".into(),
         time_idx: 0,
@@ -158,6 +160,7 @@ fn no_match_returns_none() {
             name: "WrongName".into(),
             args: Vec::new(),
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         },
         time_var: "t".into(),
         time_idx: 0,
@@ -220,6 +223,7 @@ fn match_action_disambiguates_by_time_var_root() {
                 },
             )],
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         },
         time_var: "t2".into(),
         time_idx: 7,
@@ -246,6 +250,7 @@ fn match_action_disambiguates_by_time_var_root() {
                 },
             )],
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         },
         time_var: "t1".into(),
         time_idx: 5,
@@ -270,6 +275,7 @@ fn match_action_disambiguates_by_time_var_root() {
                 },
             )],
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         },
         time_var: "t2".into(),
         time_idx: 9,
@@ -300,6 +306,7 @@ fn match_premise_disambiguates_by_time_var_root() {
             name: "Inp".into(),
             args: Vec::new(),
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         },
         prem_idx: 0,
         time_var: "v".into(),

@@ -1,3 +1,5 @@
+use tamarin_parser::DUMMY_LOCATION;
+
 use super::*;
 
 fn v(name: &str, sort: p::SortHint) -> p::VarSpec {
@@ -71,6 +73,7 @@ fn forall_with_action() {
         name: "F".into(),
         args: vec![p::Term::Var(v("ni", p::SortHint::Untagged))],
         annotations: vec![],
+        location: DUMMY_LOCATION,
     };
     let body = p::Formula::Implies(
         Box::new(p::Formula::Atom(p::Atom::Action(
@@ -171,6 +174,7 @@ fn user_ac_symbol_renders_infix() {
         name: "F".to_string(),
         args: vec![ast],
         annotations: Vec::new(),
+        location: DUMMY_LOCATION,
     };
     assert_eq!(fact_to_doc(&fa, &[]).render(), "F( (x add y) )");
 }
@@ -438,6 +442,7 @@ fn fact_annotations_render_in_ord_order() {
             p::FactAnnotation::SolveFirst,
             p::FactAnnotation::NoSources, // duplicate: deduped like S.fromList
         ],
+        location: DUMMY_LOCATION,
     };
     assert_eq!(fact_to_doc(&fa, &[]).render(), "F( a )[+, no_precomp]");
 }

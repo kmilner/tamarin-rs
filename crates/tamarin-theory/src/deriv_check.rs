@@ -60,8 +60,8 @@
 //! `Main.TheoryLoader.hs`).
 
 use std::time::Duration;
-use tamarin_parser::ast as p;
 use tamarin_parser::wf::WfError;
+use tamarin_parser::{ast as p, DUMMY_LOCATION};
 use tamarin_term::maude_proc::MaudeHandle;
 
 use crate::constraint::solver::context::IntrRuleCache;
@@ -609,6 +609,7 @@ fn synthesise_probe_theory(
             name: "Fr".into(),
             args: vec![p::Term::Var(v.clone())],
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         })
         .collect();
     // HS `generateAction vars idx = protoFact Persistent ("Generated_" ++
@@ -621,6 +622,7 @@ fn synthesise_probe_theory(
         name: format!("Generated_{}", idx),
         args: probe_vars.iter().map(|v| p::Term::Var(v.clone())).collect(),
         annotations: Vec::new(),
+        location: DUMMY_LOCATION,
     };
     // premisesToOut = map (outFact . natToFreshVars) . concatMap factTerms:
     // Out each premise term, with free-var occurrences renamed to their
@@ -634,6 +636,7 @@ fn synthesise_probe_theory(
             name: "Out".into(),
             args: vec![rename_term_to_probe(&t, &rename)],
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         })
         .collect();
     let probe_rule = p::Rule {
@@ -687,6 +690,7 @@ fn synthesise_probe_theory(
             name: "KU".into(),
             args: vec![p::Term::Var(v_renamed)],
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         };
         let ku_at = action_atom(ku_fact, p::Term::Var(t1.clone()));
         let conj = p::Formula::And(Box::new(gen_at), Box::new(ku_at));

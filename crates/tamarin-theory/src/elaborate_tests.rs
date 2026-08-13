@@ -276,6 +276,7 @@ fn canonicalize_ac_in_pterm_sees_the_installed_ac_set_at_every_depth() {
         name: "F".into(),
         args: vec![wrapped],
         annotations: Vec::new(),
+        location: tamarin_parser::DUMMY_LOCATION,
     };
     assert_eq!(
         canonicalize_ac_in_pfact(&fact).args,

@@ -560,6 +560,7 @@ mod tests {
                 name: "Eq".into(),
                 args,
                 annotations: Vec::new(),
+                location: tamarin_parser::DUMMY_LOCATION,
             }));
             let proc: PlainProcess = Process::Comb(
                 ProcessCombinator::Cond(f),
