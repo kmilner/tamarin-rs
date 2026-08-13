@@ -246,19 +246,18 @@ pub fn gterm_to_term(g: &GTerm) -> p::Term {
         GTerm::Var(BVar::Bound(n)) => {
             panic!("gterm_to_term: left-over bound variable Bound({})", n)
         }
-        GTerm::PubLit(s) => p::Term::PubLit(p::SpannedStr::without_location(s)),
-        GTerm::FreshLit(s) => p::Term::FreshLit(p::SpannedStr::without_location(s)),
-        GTerm::NatLit(s) => p::Term::NatLit(p::SpannedStr::without_location(s)),
+        GTerm::PubLit(s) => p::Term::PubLit(s.content.clone()),
+        GTerm::FreshLit(s) => p::Term::FreshLit(s.content.clone()),
+        GTerm::NatLit(s) => p::Term::NatLit(s.content.clone()),
         GTerm::Number(n) => p::Term::Number(*n),
         GTerm::NumberOne => p::Term::NumberOne,
         GTerm::NatOne => p::Term::NatOne,
         GTerm::DhNeutral => p::Term::DhNeutral,
-        GTerm::App(n, args) => p::Term::App(
-            p::SpannedStr::without_location(&**n),
-            args.iter().map(gterm_to_term).collect(),
-        ),
+        GTerm::App(n, args) => {
+            p::Term::App(n.to_string(), args.iter().map(gterm_to_term).collect())
+        }
         GTerm::AlgApp(n, a, b) => p::Term::AlgApp(
-            p::SpannedStr::without_location(&**n),
+            n.to_string(),
             Box::new(gterm_to_term(a)),
             Box::new(gterm_to_term(b)),
         ),
@@ -275,7 +274,7 @@ pub fn gterm_to_term(g: &GTerm) -> p::Term {
 pub fn gfact_to_fact(g: &GFact) -> p::Fact {
     p::Fact {
         persistent: g.persistent,
-        name: p::SpannedStr::without_location(&g.name),
+        name: g.name.clone(),
         args: g.args.iter().map(gterm_to_term).collect(),
         annotations: g.annotations.clone(),
     }
@@ -656,7 +655,7 @@ pub fn open_subst(xs: &[p::VarSpec]) -> Vec<(u32, p::VarSpec)> {
 /// Project a binder's metadata. HS `vs' = map (lvarName &&& lvarSort) vs`.
 pub fn lvar_to_binding(v: &p::VarSpec) -> GBinding {
     GBinding {
-        name: v.name.content.clone(),
+        name: v.name.clone(),
         sort: v.sort,
     }
 }
@@ -768,7 +767,7 @@ mod tests {
 
     fn vs(name: &str, idx: u64) -> p::VarSpec {
         p::VarSpec {
-            name: p::SpannedStr::without_location(name),
+            name: name.to_string(),
             idx,
             sort: p::SortHint::Msg,
             typ: None,
@@ -777,7 +776,7 @@ mod tests {
 
     fn vs_node(name: &str, idx: u64) -> p::VarSpec {
         p::VarSpec {
-            name: p::SpannedStr::without_location(name),
+            name: name.to_string(),
             idx,
             sort: p::SortHint::Node,
             typ: None,
@@ -787,7 +786,7 @@ mod tests {
     #[test]
     fn term_round_trip_no_bound() {
         let t = p::Term::App(
-            p::SpannedStr::without_location("f"),
+            "f".to_string(),
             vec![p::Term::Var(vs("x", 0)), p::Term::Var(vs("y", 1))],
         );
         let g = term_to_gterm_free(&t);
@@ -818,7 +817,7 @@ mod tests {
         let p_atom = atom_to_gatom_free(&p::Atom::Action(
             p::Fact {
                 persistent: false,
-                name: p::SpannedStr::without_location("P"),
+                name: "P".to_string(),
                 args: vec![p::Term::Var(x.clone())],
                 annotations: vec![],
             },
@@ -946,7 +945,7 @@ mod tests {
         let body_x = atom_to_gatom_free(&p::Atom::Action(
             p::Fact {
                 persistent: false,
-                name: p::SpannedStr::without_location("P"),
+                name: "P".to_string(),
                 args: vec![p::Term::Var(x.clone())],
                 annotations: vec![],
             },
@@ -955,7 +954,7 @@ mod tests {
         let body_y = atom_to_gatom_free(&p::Atom::Action(
             p::Fact {
                 persistent: false,
-                name: p::SpannedStr::without_location("P"),
+                name: "P".to_string(),
                 args: vec![p::Term::Var(y.clone())],
                 annotations: vec![],
             },

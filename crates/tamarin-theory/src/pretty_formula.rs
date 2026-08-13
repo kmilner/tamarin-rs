@@ -601,7 +601,7 @@ fn collect_free_vars_formula(
         Forall(vs, body) | Exists(vs, body) => {
             let saved_len = bound.len();
             for v in vs {
-                bound.push(v.name.content.clone());
+                bound.push(v.name.clone());
             }
             collect_free_vars_formula(body, bound, state);
             bound.truncate(saved_len);
@@ -791,15 +791,15 @@ fn allocate_formula_binders_refs(
     for v in vs {
         let idx = state.fresh_ident(&v.name);
         let display = if idx == 0 {
-            v.name.content.clone()
+            v.name.clone()
         } else {
-            format!("{}.{}", v.name.content, idx)
+            format!("{}.{}", v.name, idx)
         };
         // 4th element = source_idx (predicate-fix `Bind`): carry the parsed
         // var's idx so `lookup_display` can resolve body-var occurrences by
         // full identity (name, idx, sort) — distinguishing fresh `x` vs `x.1`
         // in `_restrict`/predicate rendering.
-        out.push((v.name.content.clone(), v.sort, display, v.idx));
+        out.push((v.name.clone(), v.sort, display, v.idx));
     }
     out
 }
@@ -1345,7 +1345,7 @@ pub fn term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
         // `App` case precedes the generic `App` arm below, which would
         // otherwise print `pair(a, b)` through `ppFun`.
         Pair(_) => pair_doc(&flatten_pair_terms(t), scope),
-        App(name, args) if *name == "pair" && args.len() == 2 => {
+        App(name, args) if name == "pair" && args.len() == 2 => {
             pair_doc(&flatten_pair_terms(t), scope)
         }
         App(name, args) => {
@@ -1356,7 +1356,7 @@ pub fn term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
                 // (0,Public,Constructor))`; the parser AST keeps only the
                 // name, so match on nullary "tone" (runtime nat-one reaches
                 // here as `App("tone", [])` via `lnterm_to_parser`).
-                if *name == "tone" {
+                if name == "tone" {
                     Doc::text("%1")
                 } else {
                     // HS `FApp (NoEq (f,_)) [] -> text f` (Term/Term.hs:298-327, see line 314).
@@ -1458,7 +1458,7 @@ fn pair_split_terms<'a>(t: &'a p::Term, out: &mut Vec<&'a p::Term>) {
                 pair_split_terms(last, out);
             }
         }
-        p::Term::App(n, args) if *n == "pair" && args.len() == 2 => {
+        p::Term::App(n, args) if n == "pair" && args.len() == 2 => {
             out.push(&args[0]);
             pair_split_terms(&args[1], out);
         }
@@ -1836,13 +1836,13 @@ fn pp_term(t: &p::Term, scope: &[Bind], out: &mut String) {
         // `App` case precedes the generic `App` arm below, which would
         // otherwise print `pair(a, b)` through `ppFun`.
         Pair(_) => pp_pair_term(t, scope, out),
-        App(name, args) if *name == "pair" && args.len() == 2 => pp_pair_term(t, scope, out),
+        App(name, args) if name == "pair" && args.len() == 2 => pp_pair_term(t, scope, out),
         App(name, args) => {
             // Nullary nat-one first, as in HS: `FApp (NoEq s) [] | s ==
             // natOneSym -> text "%1"` (Term/Term.hs:298-327, see line 312) — the runtime
             // constant reaches here as `App("tone", [])` via
             // `lnterm_to_parser` (see the `term_to_doc` twin arm).
-            if *name == "tone" && args.is_empty() {
+            if name == "tone" && args.is_empty() {
                 out.push_str("%1");
                 return;
             }
@@ -1996,7 +1996,7 @@ fn bound_to_varspec(n: u32, scope: &[Vec<Bind>]) -> Option<p::VarSpec> {
         0
     };
     Some(p::VarSpec {
-        name: p::SpannedStr::without_location(src_name),
+        name: src_name.clone(),
         idx,
         sort: *sort,
         typ: None,

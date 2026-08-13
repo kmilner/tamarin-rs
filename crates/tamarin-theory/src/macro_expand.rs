@@ -68,7 +68,7 @@ pub fn apply_macros_term(macros: &[p::Macro], term: &p::Term) -> p::Term {
                 // Build the param→arg substitution (by name).
                 let mut subst: BTreeMap<String, p::Term> = BTreeMap::new();
                 for (param, value) in m.args.iter().zip(processed_args.iter()) {
-                    subst.insert(param.name.content.clone(), value.clone());
+                    subst.insert(param.name.clone(), value.clone());
                 }
                 let expanded = subst_term_by_name(&m.body, &subst);
                 // Re-expand the EXPANDED body to handle nested macros.
@@ -150,7 +150,7 @@ fn find_matching_macro<'a>(
 /// replacement semantics.
 pub(crate) fn subst_term_by_name(t: &p::Term, subst: &BTreeMap<String, p::Term>) -> p::Term {
     match t {
-        p::Term::Var(v) => match subst.get(&v.name.content) {
+        p::Term::Var(v) => match subst.get(&v.name) {
             Some(replacement) => replacement.clone(),
             None => t.clone(),
         },
