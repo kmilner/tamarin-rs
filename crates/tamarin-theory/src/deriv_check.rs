@@ -513,7 +513,7 @@ fn synthesise_probe_theory(
 ) -> p::Theory {
     let mut probe = p::Theory {
         is_diff: false,
-        name: p::SpannedStr::synthetic(format!("Probe_{}", idx)),
+        name: format!("Probe_{}", idx),
         configuration: None,
         items: Vec::new(),
     };
@@ -618,7 +618,7 @@ fn synthesise_probe_theory(
     // this same `action`, so they stay mutually consistent.  Match HS exactly.
     let action = p::Fact {
         persistent: true,
-        name: p::SpannedStr::synthetic(format!("Generated_{}", idx)),
+        name: format!("Generated_{}", idx),
         args: probe_vars.iter().map(|v| p::Term::Var(v.clone())).collect(),
         annotations: Vec::new(),
     };
@@ -637,7 +637,7 @@ fn synthesise_probe_theory(
         })
         .collect();
     let probe_rule = p::Rule {
-        name: p::SpannedStr::new(format!("Probe_{}", idx), rule.name.location),
+        name: p::Identifier::new(format!("Probe_{}", idx), rule.name.location),
         modulo: None,
         attributes: Vec::new(),
         let_block: Vec::new(),

@@ -14,8 +14,6 @@
 //! comments `name{* ... *}`, hex colour codes, multi-character symbol
 //! choices like `++` vs `+`).
 
-use crate::{parser::Location, SpannedStr};
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pos {
     pub offset: usize,
@@ -264,7 +262,7 @@ impl<'a> Lexer<'a> {
     /// to one of those is not a valid identifier, so we backtrack and return None.
     /// The `diff` term operator does NOT go through this — it is matched as a
     /// keyword/symbol (HS `diffOp = symbol "diff" *> parens ...`, Term.hs:108-110).
-    pub fn identifier(&mut self) -> Option<SpannedStr> {
+    pub fn identifier(&mut self) -> Option<String> {
         self.skip_ws();
         let save = self.pos;
         let mut s = String::new();
@@ -291,13 +289,11 @@ impl<'a> Lexer<'a> {
             return None;
         }
         self.skip_ws();
-        let loc = Location::location_of(&Some(&s), save);
-        let s = SpannedStr::new(s, loc);
         Some(s)
     }
 
     /// Peek an identifier without consuming.
-    pub fn peek_identifier(&mut self) -> Option<SpannedStr> {
+    pub fn peek_identifier(&mut self) -> Option<String> {
         let save = self.pos;
         let id = self.identifier();
         self.pos = save;
@@ -380,7 +376,7 @@ impl<'a> Lexer<'a> {
     ///
     /// Note: export bodies use a *different*, stricter character grammar — see
     /// [`Lexer::export_body`].
-    pub fn string_literal(&mut self) -> Option<SpannedStr> {
+    pub fn string_literal(&mut self) -> Option<String> {
         self.skip_ws();
         let save = self.pos;
         if !self.eat('"') {
@@ -396,9 +392,8 @@ impl<'a> Lexer<'a> {
                 }
                 Some('"') => {
                     self.bump();
-                    let loc = Location::location_of(&Some(&s), save);
                     self.skip_ws();
-                    return Some(SpannedStr::new(s, loc));
+                    return Some(s);
                 }
                 Some('\\') => {
                     self.bump();

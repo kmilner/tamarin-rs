@@ -25,21 +25,21 @@
 // Top-level theory
 // =============================================================================
 
-use std::{borrow::Borrow, ops::Deref};
+use std::ops::Deref;
 
 use crate::parser::Location;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Theory {
     pub is_diff: bool,
-    pub name: SpannedStr,
-    pub configuration: Option<SpannedStr>,
+    pub name: String,
+    pub configuration: Option<String>,
     pub items: Vec<TheoryItem>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TheoryItem {
-    Builtins(Vec<SpannedStr>),
+    Builtins(Vec<String>),
     Functions(Vec<FunctionDecl>),
     Equations {
         convergent: bool,
@@ -47,7 +47,7 @@ pub enum TheoryItem {
     },
     Macros(Vec<Macro>),
     Predicates(Vec<Predicate>),
-    Options(Vec<SpannedStr>),
+    Options(Vec<String>),
     Heuristic(String),
     Tactic(Tactic),
     Restriction(Restriction),
@@ -74,22 +74,21 @@ pub enum TheoryItem {
     // and splices the live branch's items into the surrounding stream
     // (parser.rs `expand_ifdef`), matching HS's parse-time preprocessing —
     // so `items` is always the flat post-preprocessor stream.
-    Define(SpannedStr),
-    Include(SpannedStr),
+    Define(String),
+    Include(String),
 }
 
 #[derive(Debug, Clone)]
-/// A string with a source location.
-pub struct SpannedStr {
-    pub content: String,
+pub struct Identifier {
+    pub name: String,
     pub location: Location,
 }
 
-impl SpannedStr {
+impl Identifier {
     /// Create a new identifier with the given name and location.
     pub fn new(name: impl Into<String>, location: Location) -> Self {
         Self {
-            content: name.into(),
+            name: name.into(),
             location,
         }
     }
@@ -97,7 +96,7 @@ impl SpannedStr {
     /// Create a synthetic identifier with the given name and a dummy location.
     pub fn synthetic(name: impl Into<String>) -> Self {
         Self {
-            content: name.into(),
+            name: name.into(),
             location: Location {
                 line: 0,
                 col: 0,
@@ -108,87 +107,69 @@ impl SpannedStr {
     }
 }
 
-impl std::hash::Hash for SpannedStr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.content.hash(state);
+impl From<Identifier> for String {
+    fn from(id: Identifier) -> Self {
+        id.name
     }
 }
 
-impl From<SpannedStr> for String {
-    fn from(id: SpannedStr) -> Self {
-        id.content
+impl PartialEq for Identifier {
+    fn eq(&self, other: &Self) -> bool {
+        let Identifier { name: a, .. } = self;
+        let Identifier { name: b, .. } = other;
+        a == b
     }
 }
 
-impl<S> PartialEq<S> for SpannedStr
+impl<S> PartialEq<S> for Identifier
 where
     S: AsRef<str>,
 {
     fn eq(&self, other: &S) -> bool {
-        self.content == other.as_ref()
+        let Identifier { name: a, .. } = self;
+        a == other.as_ref()
     }
 }
 
-impl Eq for SpannedStr {}
+impl Eq for Identifier {}
 
-impl PartialEq<SpannedStr> for String {
-    fn eq(&self, other: &SpannedStr) -> bool {
-        self == &other.content
+impl PartialOrd for Identifier {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        let Identifier { name: a, .. } = self;
+        let Identifier { name: b, .. } = other;
+        a.partial_cmp(b)
     }
 }
 
-impl PartialEq<SpannedStr> for &str {
-    fn eq(&self, other: &SpannedStr) -> bool {
-        self == &other.content
-    }
-}
-
-impl<S> PartialOrd<S> for SpannedStr
+impl<S> PartialOrd<S> for Identifier
 where
     S: AsRef<str>,
 {
     fn partial_cmp(&self, other: &S) -> Option<std::cmp::Ordering> {
-        self.content.as_str().partial_cmp(other.as_ref())
+        let Identifier { name: a, .. } = self;
+        a.as_str().partial_cmp(other.as_ref())
     }
 }
 
-impl Ord for SpannedStr {
+impl Ord for Identifier {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let SpannedStr { content: a, .. } = self;
-        let SpannedStr { content: b, .. } = other;
+        let Identifier { name: a, .. } = self;
+        let Identifier { name: b, .. } = other;
         a.cmp(b)
     }
 }
 
-impl Deref for SpannedStr {
+impl Deref for Identifier {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
-        &self.content
+        &self.name
     }
 }
 
-impl AsRef<str> for SpannedStr {
-    fn as_ref(&self) -> &str {
-        &self.content
-    }
-}
-
-impl Borrow<str> for SpannedStr {
-    fn borrow(&self) -> &str {
-        &self.content
-    }
-}
-
-impl Borrow<String> for SpannedStr {
-    fn borrow(&self) -> &String {
-        &self.content
-    }
-}
-
-impl std::fmt::Display for SpannedStr {
+impl std::fmt::Display for Identifier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.content)
+        write!(f, "{}", self.name)
     }
 }
 
@@ -198,9 +179,9 @@ impl std::fmt::Display for SpannedStr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionDecl {
-    pub name: SpannedStr,
-    pub arg_types: Vec<Option<SpannedStr>>,
-    pub out_type: Option<SpannedStr>,
+    pub name: String,
+    pub arg_types: Vec<Option<String>>,
+    pub out_type: Option<String>,
     pub private: bool,
     pub destructor: bool,
     /// `[AC]`: the symbol is a user-defined associative-commutative operator
@@ -228,7 +209,7 @@ pub struct Equation {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Macro {
-    pub name: SpannedStr,
+    pub name: String,
     pub args: Vec<VarSpec>,
     pub body: Term,
 }
@@ -241,7 +222,7 @@ pub struct Predicate {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Restriction {
-    pub name: SpannedStr,
+    pub name: String,
     pub formula: Formula,
     pub attributes: Vec<RestrictionAttr>,
 }
@@ -258,8 +239,8 @@ pub enum RestrictionAttr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Rule {
-    pub name: SpannedStr,
-    pub modulo: Option<SpannedStr>, // E or AC
+    pub name: Identifier,
+    pub modulo: Option<String>, // E or AC
     pub attributes: Vec<RuleAttr>,
     pub let_block: Vec<LetBinding>,
     pub premises: Vec<Fact>,
@@ -272,7 +253,7 @@ pub struct Rule {
 
 impl Rule {
     pub fn name(&self) -> &str {
-        &self.name.content
+        &self.name.name
     }
 }
 
@@ -304,8 +285,8 @@ pub struct LetBinding {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lemma {
-    pub name: SpannedStr,
-    pub modulo: Option<SpannedStr>,
+    pub name: String,
+    pub modulo: Option<String>,
     pub attributes: Vec<LemmaAttr>,
     pub trace_quantifier: TraceQuantifier,
     pub formula: Formula,
@@ -322,14 +303,14 @@ pub struct Lemma {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiffLemma {
-    pub name: SpannedStr,
+    pub name: String,
     pub attributes: Vec<LemmaAttr>,
     pub proof: Option<ProofSkeleton>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccLemma {
-    pub name: SpannedStr,
+    pub name: String,
     pub attributes: Vec<LemmaAttr>,
     pub formula: Formula,
     pub case_test_idents: Vec<String>,
@@ -337,7 +318,7 @@ pub struct AccLemma {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CaseTest {
-    pub name: SpannedStr,
+    pub name: String,
     pub formula: Formula,
 }
 
@@ -578,8 +559,8 @@ pub enum DisjAlt {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tactic {
-    pub name: SpannedStr,
-    pub raw: SpannedStr,
+    pub name: String,
+    pub raw: String,
 }
 
 // =============================================================================
@@ -668,7 +649,7 @@ pub enum Condition {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Fact {
     pub persistent: bool,
-    pub name: SpannedStr,
+    pub name: String,
     pub args: Vec<Term>,
     pub annotations: Vec<FactAnnotation>,
 }

@@ -2718,7 +2718,7 @@ pub fn lnfact_to_parser(fa: &crate::fact::LNFact) -> p::Fact {
     };
     p::Fact {
         persistent,
-        name: p::SpannedStr::synthetic(name),
+        name,
         args: fa.terms.iter().map(lnterm_to_parser).collect(),
         // HS `prettyFact` appends `ppAnn an` to every fact (Fact.hs:567-574),
         // so the annotations must survive the projection.  `fa.annotations`
