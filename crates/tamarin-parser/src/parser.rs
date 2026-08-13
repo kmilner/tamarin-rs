@@ -36,19 +36,6 @@ use crate::ast::*;
 use crate::lexer::{is_ident_char, is_reserved_name, Lexer, Pos};
 use crate::proof_tree::parse_proof_tree;
 
-#[derive(Debug, Clone)]
-pub enum Source {
-    /// The source of the AST node is a CLI option
-    Cli,
-    /// The AST node is in-built
-    Inbuilt,
-    /// A location in source code
-    Location(Location),
-    /// The AST node is indirectly derived from another AST node, e.g. a macro expansion
-    /// or a rule that is derived from another rule.
-    Indirect(Box<Source>),
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct Location {
     pub line: u32,
@@ -85,135 +72,158 @@ impl From<Pos> for Location {
 #[derive(Debug, Clone)]
 pub enum ParseError {
     UnexpectedKeyword {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
+        at: Location,
     },
     ExpectedTheoryItem {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
+        at: Location,
     },
     ExpectedPunctuation {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
-        at: Source,
+        at: Location,
     },
     ExpectedStringLiteral {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
+        at: Location,
     },
     ExpectedIdentifier {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
+        at: Location,
     },
     ExpectedNaturalNumber {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
+        at: Location,
     },
     UnknownPreprocessorDirective {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
+        at: Location,
     },
     ExpectedPreprocessorDirective {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
+        at: Location,
     },
     ExpectedHexColor {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
+        at: Location,
     },
     ExpectedQuotedString {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
+        at: Location,
     },
     UnterminatedDelimiter {
-        opening: SpannedStr,
-        found: Option<SpannedStr>,
+        opening: String,
+        opening_at: Location,
+        found: Option<String>,
+        found_at: Location,
         expected: Vec<String>,
     },
     UnknownAttribute {
-        attribute: SpannedStr,
+        attribute: String,
+        at: Location,
         context: String,
     },
     ExpectedExportBodyString {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
-        at: Source,
+        at: Location,
     },
     ExpectedProcess {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
-        at: Source,
+        at: Location,
     },
     FactNameMustStartWithUppercase {
-        name: SpannedStr,
+        name: String,
+        at: Location,
     },
     FreshFactCannotBePersistent {
-        at: Source,
+        at: Location,
     },
     FactArityMismatch {
-        name: SpannedStr,
+        name: String,
         arity: usize,
-        at: Source,
+        at: Location,
     },
     ExpectedFormulaAtom {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
+        at: Location,
     },
     BadFreshLiteral {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
+        at: Location,
     },
     BadNatLiteral {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
+        at: Location,
     },
     BadPublicLiteral {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
+        at: Location,
     },
     ExpectedTerm {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
+        at: Location,
     },
     ExpectedVariable {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
+        at: Location,
     },
     UnexpectedTrailingInput {
         context: String,
-        found: SpannedStr,
+        found: String,
+        at: Location,
     },
     IoError {
         path: String,
         message: String,
-        at: Source,
+        at: Location,
     },
     TrailingGarbageInFormulaString {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
+        at: Location,
     },
     TrailingGarbageInTermString {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
+        at: Location,
     },
     /// Bridge for parser sites not yet converted to a dedicated variant: an
     /// expected-set failure at a location.
     Expected {
-        found: Option<SpannedStr>,
+        found: Option<String>,
         expected: Vec<String>,
+        at: Location,
     },
     /// Bridge for parser sites not yet converted to a dedicated variant: a
     /// preformatted message at a location.
     Custom {
         message: String,
-        at: Source,
+        at: Location,
     },
     /// Bridge for the rejections HS raises as GHC `error`s inside parser
     /// actions (`macro`'s and `equations`' rejections): not a backtrackable
     /// parse failure — term-level backtracking propagates it verbatim.
     Abort {
         message: String,
-        at: Source,
+        at: Location,
     },
 }
 
@@ -266,9 +276,8 @@ impl ParseError {
         }
     }
 
-    pub fn location(&self) -> &Source {
+    pub fn location(&self) -> &Location {
         match self {
-            ParseError::FactNameMustStartWithUppercase { name, .. } => &name.source,
             ParseError::UnexpectedKeyword { at, .. }
             | ParseError::ExpectedTheoryItem { at, .. }
             | ParseError::ExpectedPunctuation { at, .. }
@@ -281,6 +290,7 @@ impl ParseError {
             | ParseError::ExpectedQuotedString { at, .. }
             | ParseError::ExpectedExportBodyString { at, .. }
             | ParseError::ExpectedProcess { at, .. }
+            | ParseError::FactNameMustStartWithUppercase { at, .. }
             | ParseError::FreshFactCannotBePersistent { at }
             | ParseError::FactArityMismatch { at, .. }
             | ParseError::ExpectedFormulaAtom { at, .. }
@@ -301,7 +311,7 @@ impl ParseError {
         }
     }
 
-    fn into_found(self) -> Option<SpannedStr> {
+    fn into_found(self) -> Option<String> {
         match self {
             ParseError::UnexpectedKeyword { found, .. }
             | ParseError::ExpectedTheoryItem { found, .. }
@@ -326,8 +336,8 @@ impl ParseError {
             | ParseError::Expected { found, .. }
             | ParseError::UnterminatedDelimiter { found, .. } => found,
             ParseError::UnknownAttribute { attribute, .. } => Some(attribute),
-            ParseError::FactNameMustStartWithUppercase { name, .. } => Some(name.content),
-            ParseError::FactArityMismatch { name, .. }
+            ParseError::FactNameMustStartWithUppercase { name, .. }
+            | ParseError::FactArityMismatch { name, .. }
             | ParseError::UnexpectedTrailingInput { found: name, .. } => Some(name),
             ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::IoError { .. }
@@ -362,8 +372,8 @@ impl ParseError {
             | ParseError::UnterminatedDelimiter { found, .. } => found.as_deref(),
             ParseError::UnknownAttribute { attribute, .. } => Some(attribute.as_str()),
             ParseError::FactNameMustStartWithUppercase { name, .. }
-            | ParseError::FactArityMismatch { name, .. } => Some(name),
-            ParseError::UnexpectedTrailingInput { found, .. } => Some(found),
+            | ParseError::FactArityMismatch { name, .. } => Some(name.as_str()),
+            ParseError::UnexpectedTrailingInput { found, .. } => Some(found.as_str()),
             ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::IoError { .. }
             | ParseError::Custom { .. }
@@ -1323,7 +1333,7 @@ pub struct Parser<'a> {
     /// consumes — `ACfctSym`'s `Ord` compares the name first, so set order is
     /// name order.  The order is load-bearing: the LAST symbol in the list binds
     /// tightest.
-    ac_fun_syms: Vec<SpannedStr>,
+    ac_fun_syms: Vec<String>,
     /// The free function symbols known at this point of the parse, the
     /// parse-time slice of HS's `stFunSyms . sig <$> getState` that
     /// `function`'s conflict check reads (Signature.hs:212).
@@ -1341,13 +1351,13 @@ pub struct Parser<'a> {
     /// FIRST match, and one name can carry two entries (e.g. `builtins:
     /// symmetric-encryption, dest-symmetric-encryption` leaves both the
     /// constructor and the destructor `sdec`).
-    fun_syms: Vec<(SpannedStr, FunOptions)>,
+    fun_syms: Vec<(String, FunOptions)>,
     /// The macro names known at this point of the parse (HS `macroNames`),
     /// each registered as `(k, Private, Destructor, NotNDC)`
     /// (Theory/Text/Parser/Macro.hs:46).  Searched after [`Parser::fun_syms`],
     /// matching HS's `lookup f (S.toList (stFunSyms sign) ++ S.toList
     /// (macroNames sign))` (Signature.hs:212).
-    macro_syms: Vec<(SpannedStr, FunOptions)>,
+    macro_syms: Vec<(String, FunOptions)>,
     /// HS `reservedBuiltinNames` (Theory/Text/Parser/Token.hs parser state):
     /// the names of the `stFunSyms` of every builtin a `builtins:` item has
     /// enabled so far, appended by `extendSig` (Signature.hs:132-134).
@@ -1457,7 +1467,7 @@ pub struct Parser<'a> {
     /// name set `addRestriction` (TheoryObject.hs:453-456) guards against when
     /// `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) inserts a rule's
     /// expanded restrictions — checked BEFORE the rule-name guard itself.
-    seen_restriction_names: Vec<SpannedStr>,
+    seen_restriction_names: Vec<String>,
 }
 
 impl<'a> Parser<'a> {
@@ -1467,7 +1477,7 @@ impl<'a> Parser<'a> {
         #[allow(clippy::disallowed_types)]
         let mut flags_set = HashSet::new();
         for f in flags {
-            flags_set.insert(SpannedStr::cli(*f));
+            flags_set.insert(SpannedStr::synthetic(*f));
         }
         // Always enable parse-time recognition of the operators. The parser is
         // syntactic — semantic gating against builtin enablement happens at
@@ -1485,9 +1495,9 @@ impl<'a> Parser<'a> {
             base_dir: None,
             ac_fun_syms: Vec::new(),
             fun_syms: vec![
-                (SpannedStr::inbuilt("fst"), FunOptions::plain(1)),
-                (SpannedStr::inbuilt("pair"), FunOptions::plain(2)),
-                (SpannedStr::inbuilt("snd"), FunOptions::plain(1)),
+                ("fst".to_string(), FunOptions::plain(1)),
+                ("pair".to_string(), FunOptions::plain(2)),
+                ("snd".to_string(), FunOptions::plain(1)),
             ],
             macro_syms: Vec::new(),
             reserved_builtin_names: Vec::new(),
@@ -2009,7 +2019,7 @@ impl<'a> Parser<'a> {
                 // peek directive name
                 let mut probe = self.lx.clone();
                 let buf = probe.ascii_alpha_run();
-                let directive = buf;
+                let directive = buf.as_str();
                 if directive == "endif" || directive == "else" {
                     self.restore(save);
                     break;
@@ -2148,7 +2158,7 @@ impl<'a> Parser<'a> {
         // Read directive name.
         let pos_before_ascii = self.lx.pos();
         let name = self.lx.ascii_alpha_run();
-        match name.content.as_str() {
+        match name.as_str() {
             "define" => {
                 self.skip_ws();
                 let id = self.ident()?;
@@ -2358,7 +2368,7 @@ impl<'a> Parser<'a> {
             if self.lx.peek() == Some('#') {
                 self.lx.bump();
                 let name = self.lx.ascii_alpha_run();
-                match name.content.as_str() {
+                match name.as_str() {
                     "ifdef" => {
                         depth += 1;
                     }
@@ -2460,7 +2470,7 @@ impl<'a> Parser<'a> {
                 for s in syms {
                     let want = FunOptions::of(s);
                     for (n, o) in &self.fun_syms {
-                        if n.content == s.name && *o != want {
+                        if n == s.name && *o != want {
                             clashes.push(s.name);
                         }
                     }
@@ -2481,7 +2491,7 @@ impl<'a> Parser<'a> {
             let mut macro_clashes: Vec<&str> = Vec::new();
             for s in syms {
                 let want = FunOptions::of(s);
-                if let Some((_, o)) = self.macro_syms.iter().find(|(n, _)| n.content == s.name) {
+                if let Some((_, o)) = self.macro_syms.iter().find(|(n, _)| n == s.name) {
                     if *o != want {
                         macro_clashes.push(s.name);
                     }
@@ -2508,9 +2518,9 @@ impl<'a> Parser<'a> {
                     ..FunOptions::of(s)
                 };
                 self.fun_syms
-                    .retain(|(n, o)| !(n.content == s.name && *o == evicted));
+                    .retain(|(n, o)| !(n == s.name && *o == evicted));
             }
-            self.insert_fun_sym(SpannedStr::inbuilt(s.name), FunOptions::of(s));
+            self.insert_fun_sym(s.name, FunOptions::of(s));
         }
         Ok(())
     }
@@ -2518,14 +2528,14 @@ impl<'a> Parser<'a> {
     /// Insert into [`Parser::fun_syms`] keeping it the ordered set HS's
     /// `S.insert` maintains: ascending by name (raw bytes), then by
     /// [`FunOptions::ord_key`], with equal elements collapsing.
-    fn insert_fun_sym(&mut self, name: SpannedStr, opts: FunOptions) {
-        let key = (name.content.as_bytes(), opts.ord_key());
+    fn insert_fun_sym(&mut self, name: &str, opts: FunOptions) {
+        let key = (name.as_bytes(), opts.ord_key());
         match self
             .fun_syms
-            .binary_search_by(|(n, o)| (n.content.as_bytes(), o.ord_key()).cmp(&key))
+            .binary_search_by(|(n, o)| (n.as_bytes(), o.ord_key()).cmp(&key))
         {
             Ok(_) => {}
-            Err(idx) => self.fun_syms.insert(idx, (name, opts)),
+            Err(idx) => self.fun_syms.insert(idx, (name.to_string(), opts)),
         }
     }
 
@@ -2728,7 +2738,7 @@ impl<'a> Parser<'a> {
                             probe.bump();
                             let name = probe.ascii_alpha_run();
                             if matches!(
-                                name.content.as_str(),
+                                name.as_str(),
                                 "ifdef" | "endif" | "else" | "define" | "include"
                             ) {
                                 break;
@@ -2780,7 +2790,7 @@ impl<'a> Parser<'a> {
             }
         }
         let loc = Location::location_of(&Some(&s), start);
-        SpannedStr::with_location(s, loc)
+        SpannedStr::new(s, loc)
     }
 
     // -------------------- functions / equations / macros / predicates --------------------
@@ -2863,7 +2873,7 @@ impl<'a> Parser<'a> {
         self.fun_syms
             .iter()
             .chain(self.macro_syms.iter())
-            .find(|(n, _)| n.content == name)
+            .find(|(n, _)| n == name)
             .map(|(_, o)| *o)
     }
 
@@ -3123,7 +3133,7 @@ impl<'a> Parser<'a> {
         } else {
             // HS's `NotAC` branch instead files the symbol under `stFunSyms`
             // (`addFunSym (NoEqUser ...)`, Signature.hs:224), a set insert.
-            self.insert_fun_sym(name.clone(), requested);
+            self.insert_fun_sym(&name, requested);
         }
         Ok((
             FunctionDecl {
@@ -3247,7 +3257,7 @@ impl<'a> Parser<'a> {
             // failure in the macro — including a malformed argument list, and
             // the name conflict below that an enabled owning theory would
             // otherwise raise.  Independent of which builtins are enabled.
-            if Self::RESERVED_BUILTINS.contains(&name.content.as_str()) {
+            if Self::RESERVED_BUILTINS.contains(&name.as_str()) {
                 return Err(self.macro_reserved_name_error(&name));
             }
             let opening = ("(", self.lx.pos());
@@ -3390,9 +3400,9 @@ impl<'a> Parser<'a> {
     /// reaches this check — the reserved-name `error` at Macro.hs:34-35 fires
     /// first).
     fn macro_name_conflicts(&self, name: &str) -> bool {
-        self.fun_syms.iter().any(|(n, _)| n.content == name)
-            || self.ac_fun_syms.iter().any(|n| n.content == name)
-            || self.macro_syms.iter().any(|(n, _)| n.content == name)
+        self.fun_syms.iter().any(|(n, _)| n == name)
+            || self.ac_fun_syms.iter().any(|n| n == name)
+            || self.macro_syms.iter().any(|(n, _)| n == name)
             || self.enabled_theory_noeq_syms().any(|s| s.name == name)
     }
 
@@ -3597,12 +3607,7 @@ impl<'a> Parser<'a> {
             // HS `fromRuleRestriction (rname ++ "_" ++ show i)` with
             // `restrPrefix = "Restr_"` (Model/Restriction.hs:129-149).
             let rstr_name = format!("Restr_{}_{}", r.name, i);
-            if self
-                .seen_restriction_names
-                .iter()
-                .any(|n| n.content == rstr_name)
-            {
-                // TODO: Better error once everything has its source
+            if self.seen_restriction_names.contains(&rstr_name) {
                 return Err(self.item_fail(format!("duplicate restriction: {rstr_name}")));
             }
         }
@@ -3622,17 +3627,14 @@ impl<'a> Parser<'a> {
                 // rewrites reserved names / leading `_` — both unreachable
                 // here (`protoRule` rejects reserved rule names and
                 // identifiers cannot start with `_`), so the name is verbatim.
-                // TODO: Better error once everything has its source
                 return Err(self.item_fail(format!("duplicate rule: {}", r.name)));
             }
         } else {
             self.seen_rules.push(r.clone());
         }
         for i in 1..=r.embedded_restrictions.len() {
-            self.seen_restriction_names.push(SpannedStr::indirect(
-                format!("Restr_{}_{}", r.name, i),
-                r.name.source.clone(),
-            ));
+            self.seen_restriction_names
+                .push(format!("Restr_{}_{}", r.name, i));
         }
         Ok(())
     }
@@ -3794,7 +3796,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn try_modulo(&mut self) -> Option<SpannedStr> {
+    fn try_modulo(&mut self) -> Option<String> {
         let save = self.save();
         if !self.try_punct("(") {
             return None;
@@ -3938,9 +3940,8 @@ impl<'a> Parser<'a> {
     /// skipped after the opening quote or the `#`, so `' #FF'` / `'# FF'` are
     /// rejected here though HS's `symbol`-based parser accepts them — real
     /// colour attributes are always tight (e.g. `'#111111'`).
-    fn color_attr_value(&mut self) -> Result<SpannedStr, ParseError> {
+    fn color_attr_value(&mut self) -> Result<String, ParseError> {
         self.skip_ws();
-        let opening_at = self.lx.pos();
         let quoted = self.lx.eat_str("'");
         let hash = self.lx.eat_str("#");
         let mut code = String::new();
@@ -3966,24 +3967,20 @@ impl<'a> Parser<'a> {
             } else {
                 &["\"'\"", "\"#\"", "hexadecimal digit"]
             };
-            // TODO: Better error once everything has its source
             return Err(self.err_expect(expects));
         }
         if quoted && !self.lx.eat_str("'") {
             // Closing `'` fails where `many1 hexDigit` stopped.
-            // TODO: Better error once everything has its source
             return Err(self.err_expect(&["hexadecimal digit", "\"'\""]));
         }
         self.skip_ws();
         if code.len() != 6 {
-            // TODO: Better error once everything has its source
             return Err(self.err_fail(format!("Color code \"{code}\" could not be parsed to RGB")));
         }
-        let loc = Location::location_of(&Some(&code), opening_at);
-        Ok(SpannedStr::with_location(code, loc))
+        Ok(code)
     }
 
-    fn string_literal_or_squoted(&mut self) -> Result<SpannedStr, ParseError> {
+    fn string_literal_or_squoted(&mut self) -> Result<String, ParseError> {
         self.skip_ws();
         if let Some(s) = self.lx.string_literal() {
             return Ok(s);
@@ -4000,7 +3997,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Read an identifier or a balanced parenthesised token (for `process=...`).
-    fn read_balanced_token(&mut self) -> Result<SpannedStr, ParseError> {
+    fn read_balanced_token(&mut self) -> Result<String, ParseError> {
         self.skip_ws();
         // HS `parseAndIgnore = betweenMatching (\(l,r) -> manyCharsExcept [l,r] ...)`
         // (Rule.hs:68-93, see line 85). `betweenMatching` (Token.hs:305-316) tries each pair in
@@ -4019,7 +4016,7 @@ impl<'a> Parser<'a> {
         if let Some(c) = self.lx.peek() {
             for (l, r) in pairs.iter() {
                 if c == *l {
-                    let opening_at = self.lx.pos();
+                    let opening_at = self.lx.pos().into();
                     self.lx.bump();
                     let mut s = String::new();
                     loop {
@@ -4030,7 +4027,7 @@ impl<'a> Parser<'a> {
                                     found,
                                     expected: vec![r.to_string()],
                                     opening: l.to_string(),
-                                    opening_at: opening_at.into(),
+                                    opening_at,
                                     found_at,
                                 });
                             }
@@ -4044,7 +4041,7 @@ impl<'a> Parser<'a> {
                                         found,
                                         expected: vec![r.to_string()],
                                         opening: l.to_string(),
-                                        opening_at: opening_at.into(),
+                                        opening_at,
                                         found_at,
                                     });
                                 }
@@ -4058,8 +4055,7 @@ impl<'a> Parser<'a> {
                         }
                     }
                     self.skip_ws();
-                    let loc = Location::location_of(&Some(&s), opening_at);
-                    return Ok(SpannedStr::with_location(s, loc));
+                    return Ok(s);
                 }
             }
         }
@@ -4111,8 +4107,11 @@ impl<'a> Parser<'a> {
     /// Callers outside the top-level item alternation (variants sub-rules)
     /// pass `usize::MAX`: no formalComment alternative exists there.
     fn rule_name_ident(&mut self, kw_end_offset: usize) -> Result<SpannedStr, ParseError> {
+        let start = self.lx.pos();
         if let Some(id) = self.lx.identifier() {
-            return Ok(id);
+            let location = Location::location_of(&Some(&id), start);
+            let ident = SpannedStr::new(id, location);
+            return Ok(ident);
         }
         if let Some(e) = self.err_reserved_word() {
             return Err(e);
@@ -4240,7 +4239,7 @@ impl<'a> Parser<'a> {
 
     fn try_acc_lemma_body(
         &mut self,
-        name: &SpannedStr,
+        name: &str,
         attrs: &[LemmaAttr],
     ) -> Result<Option<AccLemma>, ParseError> {
         // Pattern: `<id1, id2, ...> (accounts|account) for "phi"`
@@ -4278,7 +4277,7 @@ impl<'a> Parser<'a> {
         self.require_kw("for")?;
         let formula = self.double_quoted_formula()?;
         Ok(Some(AccLemma {
-            name: name.clone(),
+            name: name.to_string(),
             attributes: attrs.to_vec(),
             formula,
             case_test_idents: idents,
@@ -4365,10 +4364,9 @@ impl<'a> Parser<'a> {
         Ok(attrs)
     }
 
-    fn read_until_attribute_end(&mut self) -> SpannedStr {
+    fn read_until_attribute_end(&mut self) -> String {
         let mut s = String::new();
         let mut depth = 0i32;
-        let start = self.lx.pos();
         loop {
             match self.lx.peek() {
                 None => break,
@@ -4390,10 +4388,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        SpannedStr::with_location(
-            s.trim().to_string(),
-            Location::location_of(&Some(&s), start),
-        )
+        s.trim().to_string()
     }
 
     fn try_proof_skeleton(&mut self) -> Result<Option<ProofSkeleton>, ParseError> {

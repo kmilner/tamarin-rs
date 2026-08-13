@@ -148,9 +148,8 @@ impl<'a> Lexer<'a> {
     /// (empty when the next char is not ASCII-alphabetic). Does NOT skip
     /// leading whitespace — used to read `#directive` names and formal-comment
     /// headers, where the run starts exactly at the cursor.
-    pub fn ascii_alpha_run(&mut self) -> SpannedStr {
+    pub fn ascii_alpha_run(&mut self) -> String {
         let mut s = String::new();
-        let start = self.pos;
         while let Some(c) = self.peek() {
             if c.is_ascii_alphabetic() {
                 s.push(c);
@@ -159,8 +158,7 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
-        let loc = Location::location_of(&Some(&s), start);
-        SpannedStr::with_location(s, loc)
+        s
     }
 
     // ---------- Whitespace and comments ----------
@@ -294,7 +292,7 @@ impl<'a> Lexer<'a> {
         }
         self.skip_ws();
         let loc = Location::location_of(&Some(&s), save);
-        let s = SpannedStr::with_location(s, loc);
+        let s = SpannedStr::new(s, loc);
         Some(s)
     }
 
@@ -400,7 +398,7 @@ impl<'a> Lexer<'a> {
                     self.bump();
                     let loc = Location::location_of(&Some(&s), save);
                     self.skip_ws();
-                    return Some(SpannedStr::with_location(s, loc));
+                    return Some(SpannedStr::new(s, loc));
                 }
                 Some('\\') => {
                     self.bump();
@@ -634,7 +632,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// Single-quoted string literal — not allowing single-quote or newline inside.
-    pub fn single_quoted(&mut self) -> Option<SpannedStr> {
+    pub fn single_quoted(&mut self) -> Option<String> {
         self.skip_ws();
         let save = self.pos;
         if !self.eat('\'') {
@@ -669,12 +667,11 @@ impl<'a> Lexer<'a> {
             return None;
         }
         self.skip_ws();
-        let loc = Location::location_of(&Some(&s), save);
-        Some(SpannedStr::with_location(s, loc))
+        Some(s)
     }
 
     /// Formal comment: `<header>{* body *}` (header is one or more letters).
-    pub fn formal_comment(&mut self) -> Option<(SpannedStr, SpannedStr)> {
+    pub fn formal_comment(&mut self) -> Option<(String, String)> {
         self.skip_ws();
         let save = self.pos;
         let header = self.ascii_alpha_run();
@@ -687,7 +684,6 @@ impl<'a> Lexer<'a> {
             return None;
         }
         let mut body = String::new();
-        let start = self.pos;
         loop {
             match self.peek() {
                 None => {
@@ -697,9 +693,8 @@ impl<'a> Lexer<'a> {
                 Some('*') if self.rest().starts_with("*}") => {
                     self.bump();
                     self.bump();
-                    let loc = Location::location_of(&Some(&body), start);
                     self.skip_ws();
-                    return Some((header, SpannedStr::with_location(body, loc)));
+                    return Some((header, body));
                 }
                 // Haskell `bodyChar` (Token.hs:382-387): `'*' -> mzero`. A lone `*`
                 // that is not the start of the `*}` closer makes `bodyChar` fail, so
@@ -770,7 +765,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// External identifier: `x-<ident>`.
-    pub fn ext_identifier(&mut self) -> Option<SpannedStr> {
+    pub fn ext_identifier(&mut self) -> Option<String> {
         self.skip_ws();
         let save = self.pos;
         if !self.eat_str("x-") {
@@ -778,9 +773,7 @@ impl<'a> Lexer<'a> {
             return None;
         }
         let id = self.identifier()?;
-        let s = format!("x-{}", id);
-        let loc = Location::location_of(&Some(&s), save);
-        Some(SpannedStr::with_location(s, loc))
+        Some(format!("x-{}", id))
     }
 }
 

@@ -637,7 +637,7 @@ fn synthesise_probe_theory(
         })
         .collect();
     let probe_rule = p::Rule {
-        name: p::SpannedStr::new(format!("Probe_{}", idx), rule.name.source),
+        name: p::SpannedStr::new(format!("Probe_{}", idx), rule.name.location),
         modulo: None,
         attributes: Vec::new(),
         let_block: Vec::new(),
