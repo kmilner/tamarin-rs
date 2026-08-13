@@ -1573,18 +1573,18 @@ pub fn elaborate_lemma_attr(a: &p::LemmaAttr) -> LemmaAttr {
 fn rule_attributes_from_parser(attrs: &[p::RuleAttr]) -> RuleAttributes {
     let mut out = RuleAttributes::empty();
     for a in attrs {
-        match a {
-            p::RuleAttr::Color(hex) => {
+        match &a.kind {
+            p::RuleAttrKind::Color(hex) => {
                 if let Some(rgb) = tamarin_utils::color::hex_to_rgb(hex) {
                     out.color = Some(rgb);
                 }
             }
-            p::RuleAttr::NoDerivCheck => out.ignore_deriv_checks = true,
-            p::RuleAttr::Role(s) => out.role = Some(s.clone()),
-            p::RuleAttr::IsSapicRule => out.is_sapic_rule = true,
+            p::RuleAttrKind::NoDerivCheck => out.ignore_deriv_checks = true,
+            p::RuleAttrKind::Role(s) => out.role = Some(s.clone()),
+            p::RuleAttrKind::IsSapicRule => out.is_sapic_rule = true,
             // `process=` (dropped by the parser) and external attributes carry
             // no `RuleAttributes` field — HS `parseAndIgnore` / `parseExternal`.
-            p::RuleAttr::Process(_) | p::RuleAttr::External(_, _) => {}
+            p::RuleAttrKind::Process(_) | p::RuleAttrKind::External(_, _) => {}
         }
     }
     out

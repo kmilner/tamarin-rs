@@ -22,7 +22,7 @@
 //! `color=#<code>`.
 
 use tamarin_parser::ast::{RuleAttr, TheoryItem};
-use tamarin_parser::{parse_theory, ParseError};
+use tamarin_parser::{parse_theory, ParseError, RuleAttrKind};
 
 fn color_theory(value: &str) -> String {
     format!("theory T begin\n\nrule R1[color={value}]: [ ] --> [ ]\n\nend\n")
@@ -79,7 +79,10 @@ fn accepted_code(value: &str) -> String {
         })
         .expect("one rule");
     match &rule.attributes[..] {
-        [RuleAttr::Color(c)] => c.clone(),
+        [RuleAttr {
+            kind: RuleAttrKind::Color(c),
+            ..
+        }] => c.clone(),
         other => panic!("expected a single Color attribute, got {other:?}"),
     }
 }

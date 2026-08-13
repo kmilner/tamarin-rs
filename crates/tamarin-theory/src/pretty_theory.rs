@@ -1120,7 +1120,7 @@ pub fn web_proto_rules(parsed: &p::Theory, elaborated: &Theory) -> Vec<String> {
         .items
         .iter()
         .filter_map(|item| match item {
-            p::TheoryItem::Rule(r) if elaborated.rules().any(|er| er.name() == r.name()) => Some(
+            p::TheoryItem::Rule(r) if elaborated.rules().any(|er| er.name() == r.name) => Some(
                 render_rule(r, elaborated, &macros, &arity1, manual_variants, false),
             ),
             _ => None,
@@ -1829,7 +1829,7 @@ fn render_parsed_item(
             // variants yields NO closed rule, so it is absent from the
             // closed theory and never rendered.  Such rules are removed
             // from the elaborated theory in run.rs; mirror the absence here.
-            if elab.rules().any(|er| er.name() == r.name()) {
+            if elab.rules().any(|er| er.name() == r.name) {
                 Some(render_rule(
                     r,
                     elab,
@@ -1989,7 +1989,7 @@ fn contains_manual_rule_variants(
 ) -> bool {
     parsed.items.iter().any(|item| {
         if let p::TheoryItem::Rule(r) = item {
-            let elab_rule = elaborated.rules().find(|er| er.name() == r.name());
+            let elab_rule = elaborated.rules().find(|er| er.name() == r.name);
             rule_open_ac_nonempty(r, elab_rule, auto_sources)
         } else {
             false
@@ -2116,8 +2116,8 @@ fn rule_attribute_parts(attrs: &[p::RuleAttr]) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
     // color= : HS `text "color=" <> text (rgbToHex c)`; `rgbToHex` is
     // `'#':` + lowercase 2-digit-per-channel hex (Data/Color.hs:140-147, see line 141).
-    if let Some(hex) = attrs.iter().rev().find_map(|a| match a {
-        p::RuleAttr::Color(c) => Some(c),
+    if let Some(hex) = attrs.iter().rev().find_map(|a| match &a.kind {
+        p::RuleAttrKind::Color(c) => Some(c),
         _ => None,
     }) {
         parts.push(format!(
@@ -2129,20 +2129,26 @@ fn rule_attribute_parts(attrs: &[p::RuleAttr]) -> Vec<String> {
     // (Model/Rule.hs:1201-1215, see line 1210).  Rendered between color= and no_derivcheck.  Only
     // SAPIC-translation-generated rules carry it (the parser ignores a
     // user-written `process=`); the LAST occurrence wins (Maybe field).
-    if let Some(s) = attrs.iter().rev().find_map(|a| match a {
-        p::RuleAttr::Process(s) => Some(s),
+    if let Some(s) = attrs.iter().rev().find_map(|a| match &a.kind {
+        p::RuleAttrKind::Process(s) => Some(s),
         _ => None,
     }) {
         parts.push(format!("process=\"{}\"", s));
     }
-    if attrs.iter().any(|a| matches!(a, p::RuleAttr::NoDerivCheck)) {
+    if attrs
+        .iter()
+        .any(|a| matches!(a.kind, p::RuleAttrKind::NoDerivCheck))
+    {
         parts.push("no_derivcheck".to_string());
     }
-    if attrs.iter().any(|a| matches!(a, p::RuleAttr::IsSapicRule)) {
+    if attrs
+        .iter()
+        .any(|a| matches!(a.kind, p::RuleAttrKind::IsSapicRule))
+    {
         parts.push("issapicrule".to_string());
     }
-    if let Some(r) = attrs.iter().rev().find_map(|a| match a {
-        p::RuleAttr::Role(r) => Some(r),
+    if let Some(r) = attrs.iter().rev().find_map(|a| match &a.kind {
+        p::RuleAttrKind::Role(r) => Some(r),
         _ => None,
     }) {
         parts.push(format!("role='{}'", r));
@@ -2186,7 +2192,7 @@ fn render_rule_e_block(
     parsed_rule: &p::Rule,
     arity1: &std::collections::HashSet<String>,
 ) -> (String, Vec<p::Fact>, Vec<p::Fact>, Vec<p::Fact>) {
-    let name = parsed_rule.name();
+    let name = &parsed_rule.name;
     let mut out = String::new();
     // HS rule-header line (`prettyNamedRule`, Model/Rule.hs:1280-1292, see line 1285):
     //   `prefix <-> prettyRuleName ru <> prettyRuleAttributes ru <> colon`
@@ -2245,7 +2251,7 @@ fn render_rule(
     manual_variants: bool,
     auto_sources: bool,
 ) -> String {
-    let name = parsed_rule.name();
+    let name = &parsed_rule.name;
     let (mut out, premises, actions, conclusions) = render_rule_e_block(parsed_rule, arity1);
 
     // Look up the elaborated rule by name to decide between
@@ -2397,7 +2403,7 @@ fn render_rule(
     } else if let Some(r) = elab_rule {
         out.push_str("\n\n");
         out.push_str(&outer_loop_breaker);
-        out.push_str(&render_ac_variants_block(name, r, &parsed_rule.attributes));
+        out.push_str(&render_ac_variants_block(&name, r, &parsed_rule.attributes));
     }
     out
 }

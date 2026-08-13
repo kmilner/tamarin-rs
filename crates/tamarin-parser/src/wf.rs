@@ -2367,7 +2367,10 @@ fn collect_nullary_fun_names(thy: &Theory) -> BTreeSet<String> {
 /// so [`RuleAttr::Process`] exists only on SAPIC-generated rules.
 fn lookup_binder_render(r: &Rule) -> Option<&str> {
     r.attributes.iter().find_map(|a| match a {
-        RuleAttr::Process(p) => p
+        RuleAttr {
+            kind: RuleAttrKind::Process(p),
+            location: _,
+        } => p
             .strip_prefix("lookup ")
             .and_then(|rest| rest.rsplit_once(" as "))
             .map(|(_, v)| v),
@@ -2511,10 +2514,15 @@ pub fn message_derivation_report(thy: &Theory) -> WfReport {
     let nullary_funs = collect_nullary_fun_names(thy);
     let mut per_rule: Vec<(String, Vec<String>)> = Vec::new();
     for r in theory_rules(thy) {
-        if r.attributes
-            .iter()
-            .any(|a| matches!(a, crate::ast::RuleAttr::NoDerivCheck))
-        {
+        if r.attributes.iter().any(|a| {
+            matches!(
+                a,
+                crate::ast::RuleAttr {
+                    kind: crate::ast::RuleAttrKind::NoDerivCheck,
+                    location: _
+                }
+            )
+        }) {
             continue;
         }
         let unbound = collect_rule_unbound_vars(r, &nullary_funs);
@@ -2685,6 +2693,7 @@ fn project_rule(r: &Rule, left: bool) -> Rule {
         embedded_restrictions: r.embedded_restrictions.clone(),
         variants: vec![],
         left_right: None,
+        location: r.location,
     }
 }
 

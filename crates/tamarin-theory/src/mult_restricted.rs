@@ -128,11 +128,11 @@ pub fn mult_restricted_report(elab: &Theory, sig: &MaudeSig) -> Vec<WfError> {
 /// which `rule_attributes_doc` renders as HS's `ruleAttributes ru == mempty ⇒
 /// emptyDoc` branch.
 fn surface_attrs(attr: &crate::rule::RuleAttributes) -> Vec<p::RuleAttr> {
-    let mut out = Vec::new();
+    let mut out: Vec<p::RuleAttrKind> = Vec::new();
     if let Some(c) = &attr.color {
         // HS `text "color=" <> text (rgbToHex c)`; `rule_attribute_parts`
         // re-attaches the `#` that `rgbToHex` (Data/Color.hs:140-147) prefixes.
-        out.push(p::RuleAttr::Color(
+        out.push(p::RuleAttrKind::Color(
             tamarin_utils::color::rgb_to_hex(*c)
                 .trim_start_matches('#')
                 .to_string(),
@@ -144,20 +144,25 @@ fn surface_attrs(attr: &crate::rule::RuleAttributes) -> Vec<p::RuleAttr> {
         // SAPIC translation fills this field — HS's attribute parser
         // `parseAndIgnore`s a user-written `process=` (Parser/Rule.hs:68-93,
         // see line 72), as does RS's.
-        out.push(p::RuleAttr::Process(
+        out.push(p::RuleAttrKind::Process(
             crate::pretty_sapic::pretty_sapic_top_level(proc),
         ));
     }
     if attr.ignore_deriv_checks {
-        out.push(p::RuleAttr::NoDerivCheck);
+        out.push(p::RuleAttrKind::NoDerivCheck);
     }
     if attr.is_sapic_rule {
-        out.push(p::RuleAttr::IsSapicRule);
+        out.push(p::RuleAttrKind::IsSapicRule);
     }
     if let Some(r) = &attr.role {
-        out.push(p::RuleAttr::Role(r.clone()));
+        out.push(p::RuleAttrKind::Role(r.clone()));
     }
-    out
+    out.into_iter()
+        .map(|kind| p::RuleAttr {
+            kind,
+            location: None,
+        })
+        .collect()
 }
 
 // =============================================================================

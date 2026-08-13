@@ -18,8 +18,8 @@
 //!
 //! Scope: the CORE LINEAR subset (see `translate`/`base_translation`).
 
+use tamarin_parser::ast as p;
 use tamarin_parser::wf::WfError;
-use tamarin_parser::{ast as p, Identifier};
 
 use tamarin_theory::elaborate::ElabError;
 use tamarin_theory::pretty_sapic::pretty_sapic_top_level;
@@ -318,7 +318,7 @@ fn synth_parsed_rule(rule: &ProtoRuleE) -> p::Rule {
     };
     let attrs = synth_attrs(&rule.info.attributes);
     p::Rule {
-        name: Identifier::synthetic(name),
+        name,
         modulo: None,
         attributes: attrs,
         let_block: Vec::new(),
@@ -328,6 +328,7 @@ fn synth_parsed_rule(rule: &ProtoRuleE) -> p::Rule {
         embedded_restrictions: Vec::new(),
         variants: Vec::new(),
         left_right: None,
+        location: None,
     }
 }
 
@@ -336,24 +337,31 @@ fn synth_parsed_rule(rule: &ProtoRuleE) -> p::Rule {
 /// pretty-printer's `rule_attribute_parts` re-orders to the canonical render
 /// order, so list order here is not load-bearing — but we keep it tidy.
 fn synth_attrs(attr: &tamarin_theory::rule::RuleAttributes) -> Vec<p::RuleAttr> {
-    let mut out = Vec::new();
+    let mut out: Vec<p::RuleAttrKind> = Vec::new();
     if let Some(c) = &attr.color {
         // `color=#rrggbb` — pretty_theory lowercases + strips the leading `#`,
         // so pass the hex without the `#` here.
         let hex = tamarin_utils::color::rgb_to_hex(*c);
-        out.push(p::RuleAttr::Color(hex.trim_start_matches('#').to_string()));
+        out.push(p::RuleAttrKind::Color(
+            hex.trim_start_matches('#').to_string(),
+        ));
     }
     if let Some(proc) = &attr.process {
-        out.push(p::RuleAttr::Process(pretty_sapic_top_level(proc)));
+        out.push(p::RuleAttrKind::Process(pretty_sapic_top_level(proc)));
     }
     if attr.ignore_deriv_checks {
-        out.push(p::RuleAttr::NoDerivCheck);
+        out.push(p::RuleAttrKind::NoDerivCheck);
     }
     if attr.is_sapic_rule {
-        out.push(p::RuleAttr::IsSapicRule);
+        out.push(p::RuleAttrKind::IsSapicRule);
     }
     if let Some(r) = &attr.role {
-        out.push(p::RuleAttr::Role(r.clone()));
+        out.push(p::RuleAttrKind::Role(r.clone()));
     }
-    out
+    out.into_iter()
+        .map(|k| p::RuleAttr {
+            kind: k,
+            location: None,
+        })
+        .collect()
 }

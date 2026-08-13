@@ -56,6 +56,15 @@ impl Location {
             end: pos.offset + word.as_ref().map_or(0, |s| s.as_ref().len()),
         }
     }
+
+    pub fn from_positions(start: Pos, end: Pos) -> Location {
+        Location {
+            line: start.line,
+            col: start.col,
+            start: start.offset,
+            end: end.offset,
+        }
+    }
 }
 
 impl From<Pos> for Location {
@@ -3698,6 +3707,7 @@ impl<'a> Parser<'a> {
 
     fn parse_rule(&mut self) -> Result<Rule, ParseError> {
         self.skip_ws();
+        let start = self.lx.pos();
         let kw_end = self.lx.pos().offset + "rule".len();
         self.require_kw("rule")?;
         let modulo = self.try_modulo();
@@ -3747,6 +3757,8 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        let end = self.lx.pos();
+        let location = Some(Location::from_positions(start, end));
         Ok(Rule {
             name,
             modulo,
@@ -3758,10 +3770,12 @@ impl<'a> Parser<'a> {
             embedded_restrictions,
             variants,
             left_right,
+            location,
         })
     }
 
     fn parse_rule_ac(&mut self) -> Result<Rule, ParseError> {
+        let start = self.lx.pos();
         self.require_kw("rule")?;
         // HS `protoRuleACInfo`/`intrRule` (Rule.hs:137-138/157) sequence a
         // non-optional `moduloAC` here (`symbol "rule" *> moduloAC *> ...`).
@@ -3780,6 +3794,8 @@ impl<'a> Parser<'a> {
         };
         let (actions, embedded_restrictions) = self.parse_actions_and_restrictions()?;
         let conclusions = self.fact_list()?;
+        let end = self.lx.pos();
+        let location = Some(Location::from_positions(start, end));
         Ok(Rule {
             name,
             modulo,
@@ -3791,6 +3807,7 @@ impl<'a> Parser<'a> {
             embedded_restrictions,
             variants: vec![],
             left_right: None,
+            location,
         })
     }
 
@@ -3850,11 +3867,12 @@ impl<'a> Parser<'a> {
         }
         loop {
             self.skip_ws();
+            let start = self.save();
             // colour=, color=
-            if self.try_kw("colour") || self.try_kw("color") {
+            let kind: Option<RuleAttrKind> = if self.try_kw("colour") || self.try_kw("color") {
                 self.require_punct("=")?;
                 let c = self.color_attr_value()?;
-                attrs.push(RuleAttr::Color(c));
+                Some(RuleAttrKind::Color(c))
             } else if self.try_kw("process") {
                 // HS `ruleAttribute` (Parser/Rule.hs:68-93, see line 72) `parseAndIgnore`s
                 // `process=`: the value is parsed and DISCARDED, leaving
@@ -3864,14 +3882,15 @@ impl<'a> Parser<'a> {
                 // parser).  Mirror that: read and drop the value, push nothing.
                 self.require_punct("=")?;
                 let _ = self.read_balanced_token()?;
+                None
             } else if self.try_kw("no_derivcheck") {
-                attrs.push(RuleAttr::NoDerivCheck);
+                Some(RuleAttrKind::NoDerivCheck)
             } else if self.try_kw("role") {
                 self.require_punct("=")?;
                 let s = self.string_literal_or_squoted()?;
-                attrs.push(RuleAttr::Role(s));
+                Some(RuleAttrKind::Role(s))
             } else if self.try_kw("issapicrule") {
-                attrs.push(RuleAttr::IsSapicRule);
+                Some(RuleAttrKind::IsSapicRule)
             } else {
                 // External attribute: x-<id> [= raw]
                 if let Some(ext) = self.lx.ext_identifier() {
@@ -3880,7 +3899,7 @@ impl<'a> Parser<'a> {
                     } else {
                         None
                     };
-                    attrs.push(RuleAttr::External(ext, val));
+                    Some(RuleAttrKind::External(ext, val))
                 } else {
                     if self.peek_punct(":") || self.peek_punct("]") {
                         // Peek a ":" so that `rule name[:` fails with an unterminated
@@ -3896,6 +3915,13 @@ impl<'a> Parser<'a> {
                         context: "rule".into(),
                     });
                 }
+            };
+            let end = self.lx.pos();
+            if let Some(k) = kind {
+                attrs.push(RuleAttr {
+                    kind: k,
+                    location: Some(Location::from_positions(start, end)),
+                });
             }
             if !self.try_punct(",") {
                 break;
@@ -4104,12 +4130,9 @@ impl<'a> Parser<'a> {
     /// `letter`/`"{*"` labels merge behind (bare `rule` at EOF, `rule!x`).
     /// Callers outside the top-level item alternation (variants sub-rules)
     /// pass `usize::MAX`: no formalComment alternative exists there.
-    fn rule_name_ident(&mut self, kw_end_offset: usize) -> Result<Identifier, ParseError> {
-        let start = self.lx.pos();
+    fn rule_name_ident(&mut self, kw_end_offset: usize) -> Result<String, ParseError> {
         if let Some(id) = self.lx.identifier() {
-            let location = Location::location_of(&Some(&id), start);
-            let ident = Identifier::new(id, location);
-            return Ok(ident);
+            return Ok(id);
         }
         if let Some(e) = self.err_reserved_word() {
             return Err(e);

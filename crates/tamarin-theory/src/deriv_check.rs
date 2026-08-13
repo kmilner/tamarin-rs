@@ -135,7 +135,7 @@ pub fn check_message_derivation(
         if raw_rule
             .attributes
             .iter()
-            .any(|a| matches!(a, p::RuleAttr::NoDerivCheck))
+            .any(|a| matches!(a.kind, p::RuleAttrKind::NoDerivCheck))
         {
             continue;
         }
@@ -637,7 +637,7 @@ fn synthesise_probe_theory(
         })
         .collect();
     let probe_rule = p::Rule {
-        name: p::Identifier::new(format!("Probe_{}", idx), rule.name.location),
+        name: format!("Probe_{}", idx),
         modulo: None,
         attributes: Vec::new(),
         let_block: Vec::new(),
@@ -647,6 +647,7 @@ fn synthesise_probe_theory(
         embedded_restrictions: Vec::new(),
         variants: Vec::new(),
         left_right: None,
+        location: rule.location,
     };
     probe.items.push(p::TheoryItem::Rule(probe_rule));
 

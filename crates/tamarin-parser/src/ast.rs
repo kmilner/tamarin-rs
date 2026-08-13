@@ -25,8 +25,6 @@
 // Top-level theory
 // =============================================================================
 
-use std::ops::Deref;
-
 use crate::parser::Location;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -76,101 +74,6 @@ pub enum TheoryItem {
     // so `items` is always the flat post-preprocessor stream.
     Define(String),
     Include(String),
-}
-
-#[derive(Debug, Clone)]
-pub struct Identifier {
-    pub name: String,
-    pub location: Location,
-}
-
-impl Identifier {
-    /// Create a new identifier with the given name and location.
-    pub fn new(name: impl Into<String>, location: Location) -> Self {
-        Self {
-            name: name.into(),
-            location,
-        }
-    }
-
-    /// Create a synthetic identifier with the given name and a dummy location.
-    pub fn synthetic(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            location: Location {
-                line: 0,
-                col: 0,
-                start: 0,
-                end: 0,
-            },
-        }
-    }
-}
-
-impl From<Identifier> for String {
-    fn from(id: Identifier) -> Self {
-        id.name
-    }
-}
-
-impl PartialEq for Identifier {
-    fn eq(&self, other: &Self) -> bool {
-        let Identifier { name: a, .. } = self;
-        let Identifier { name: b, .. } = other;
-        a == b
-    }
-}
-
-impl<S> PartialEq<S> for Identifier
-where
-    S: AsRef<str>,
-{
-    fn eq(&self, other: &S) -> bool {
-        let Identifier { name: a, .. } = self;
-        a == other.as_ref()
-    }
-}
-
-impl Eq for Identifier {}
-
-impl PartialOrd for Identifier {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        let Identifier { name: a, .. } = self;
-        let Identifier { name: b, .. } = other;
-        a.partial_cmp(b)
-    }
-}
-
-impl<S> PartialOrd<S> for Identifier
-where
-    S: AsRef<str>,
-{
-    fn partial_cmp(&self, other: &S) -> Option<std::cmp::Ordering> {
-        let Identifier { name: a, .. } = self;
-        a.as_str().partial_cmp(other.as_ref())
-    }
-}
-
-impl Ord for Identifier {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let Identifier { name: a, .. } = self;
-        let Identifier { name: b, .. } = other;
-        a.cmp(b)
-    }
-}
-
-impl Deref for Identifier {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        &self.name
-    }
-}
-
-impl std::fmt::Display for Identifier {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name)
-    }
 }
 
 // =============================================================================
@@ -237,9 +140,9 @@ pub enum RestrictionAttr {
 // Rules
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Rule {
-    pub name: Identifier,
+    pub name: String,
     pub modulo: Option<String>, // E or AC
     pub attributes: Vec<RuleAttr>,
     pub let_block: Vec<LetBinding>,
@@ -249,16 +152,76 @@ pub struct Rule {
     pub embedded_restrictions: Vec<Formula>,
     pub variants: Vec<Rule>,
     pub left_right: Option<(Box<Rule>, Box<Rule>)>,
+    pub location: Option<Location>,
 }
 
-impl Rule {
-    pub fn name(&self) -> &str {
-        &self.name.name
+impl PartialEq for Rule {
+    fn eq(&self, other: &Self) -> bool {
+        // Compilation error once we add new fields
+        let Rule {
+            name: _,
+            modulo: _,
+            attributes: _,
+            let_block: _,
+            premises: _,
+            actions: _,
+            conclusions: _,
+            embedded_restrictions: _,
+            variants: _,
+            left_right: _,
+            location: _,
+        } = self;
+        let Rule {
+            name: _,
+            modulo: _,
+            attributes: _,
+            let_block: _,
+            premises: _,
+            actions: _,
+            conclusions: _,
+            embedded_restrictions: _,
+            variants: _,
+            left_right: _,
+            location: _,
+        } = other;
+        // Everything but the location
+        self.name == other.name
+            && self.modulo == other.modulo
+            && self.attributes == other.attributes
+            && self.let_block == other.let_block
+            && self.premises == other.premises
+            && self.actions == other.actions
+            && self.conclusions == other.conclusions
+            && self.embedded_restrictions == other.embedded_restrictions
+            && self.variants == other.variants
+            && self.left_right == other.left_right
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RuleAttr {
+    pub kind: RuleAttrKind,
+    pub location: Option<Location>,
+}
+
+impl PartialEq for RuleAttr {
+    fn eq(&self, other: &Self) -> bool {
+        // Compilation error once we add new fields
+        let RuleAttr {
+            kind: _,
+            location: _,
+        } = self;
+        let RuleAttr {
+            kind: _,
+            location: _,
+        } = other;
+        // Everything but the location
+        self.kind == other.kind
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum RuleAttr {
+pub enum RuleAttrKind {
     Color(String),
     NoDerivCheck,
     Role(String),
