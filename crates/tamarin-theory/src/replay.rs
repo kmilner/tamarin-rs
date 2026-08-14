@@ -81,15 +81,19 @@ use crate::fact::{fact_tag_name, FactTag, Multiplicity};
 /// `runProver (replaceSorryProver (runAutoProver autoProver)) ctxt 0
 ///  initial sysOnTree` (Proof.hs).
 ///
-/// `max_steps` is plumbed through to `run_proof_search` for the
-/// fall-through auto-prover invocations.
+/// `proof_bound` (`--bound=N`; `usize::MAX` = unbounded) is plumbed
+/// through to `run_proof_search` for the fall-through auto-prover
+/// invocations.  HS applies `boundProofDepth` inside `runAutoProver`
+/// (Theory/Proof.hs:753-760), i.e. per sorry-replacement — so each
+/// fall-through search here counts depth from its own subtree root,
+/// exactly as HS does.
 pub fn replace_sorry_prove(
     ctx: &ProofContext,
     initial: System,
     skeleton: &ParsedProofTree,
-    max_steps: usize,
+    proof_bound: usize,
 ) -> ProofNode {
-    replay_node(ctx, initial, skeleton, max_steps, true)
+    replay_node(ctx, initial, skeleton, proof_bound, true)
 }
 
 /// Replay a stored skeleton WITHOUT auto-proving its open/sorry leaves —
@@ -109,9 +113,9 @@ pub fn check_and_extend(
     ctx: &ProofContext,
     initial: System,
     skeleton: &ParsedProofTree,
-    max_steps: usize,
+    proof_bound: usize,
 ) -> ProofNode {
-    replay_node(ctx, initial, skeleton, max_steps, false)
+    replay_node(ctx, initial, skeleton, proof_bound, false)
 }
 
 /// Build an annotated `Sorry` leaf seeded with `sys`.  HS `checkProof`
@@ -237,7 +241,7 @@ fn finished_leaf(
     method: MethodResult,
     status: NodeStatus,
     auto_prove: bool,
-    max_steps: usize,
+    proof_bound: usize,
 ) -> ProofNode {
     match is_finished(ctx, &sys) {
         Some(ref r) if matches_expected(r) => ProofNode {
@@ -251,7 +255,7 @@ fn finished_leaf(
             if !auto_prove {
                 invalid_step_node(node, sys)
             } else {
-                run_proof_search(ctx, sys, max_steps)
+                run_proof_search(ctx, sys, proof_bound)
             }
         }
     }
@@ -264,7 +268,7 @@ fn replay_node(
     ctx: &ProofContext,
     sys: System,
     node: &ParsedProofTree,
-    max_steps: usize,
+    proof_bound: usize,
     auto_prove: bool,
 ) -> ProofNode {
     // ---- Leaf cases first (HS `replace prf@(... Sorry ...)`). ----
@@ -278,7 +282,7 @@ fn replay_node(
         if !auto_prove {
             return annotated_sorry(None, sys);
         }
-        return run_proof_search(ctx, sys, max_steps);
+        return run_proof_search(ctx, sys, proof_bound);
     }
 
     // `by contradiction` leaf → emit a Finished(Contradictory) node if
@@ -313,7 +317,7 @@ fn replay_node(
             MethodResult::Contradictory(None),
             NodeStatus::Contradictory,
             auto_prove,
-            max_steps,
+            proof_bound,
         );
     }
 
@@ -337,7 +341,7 @@ fn replay_node(
             MethodResult::Solved,
             NodeStatus::Solved,
             auto_prove,
-            max_steps,
+            proof_bound,
         );
     }
 
@@ -352,7 +356,7 @@ fn replay_node(
             MethodResult::Unfinishable,
             NodeStatus::Unfinishable,
             auto_prove,
-            max_steps,
+            proof_bound,
         );
     }
 
@@ -378,7 +382,7 @@ fn replay_node(
             if !auto_prove {
                 return invalid_step_node(node, sys);
             }
-            return run_proof_search(ctx, sys, max_steps);
+            return run_proof_search(ctx, sys, proof_bound);
         }
     };
 
@@ -474,7 +478,7 @@ fn replay_node(
                 continue;
             }
         };
-        let child_node = replay_node(ctx, child_sys, sub_tree, max_steps, auto_prove);
+        let child_node = replay_node(ctx, child_sys, sub_tree, proof_bound, auto_prove);
         match child_node.status {
             NodeStatus::Solved => any_solved = true,
             NodeStatus::Contradictory => any_contra = true,
@@ -517,7 +521,7 @@ fn replay_node(
             crate::constraint::solver::trace::case_path_push(&rt_name);
         }
         let auto = if auto_prove {
-            run_proof_search(ctx, rt_sys, max_steps)
+            run_proof_search(ctx, rt_sys, proof_bound)
         } else {
             // HS check-and-extend, `mergeMapsWith` leftOnly branch
             // (Proof.hs): a case PRODUCED by re-executing the method

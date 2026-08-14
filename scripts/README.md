@@ -208,8 +208,8 @@ a rename-only migration.
   `UNCOMPARED=0` on a run with none. It is deliberately NOT fatal — `verdict=`
   keeps its old meaning, so `grep -oE 'verdict=[^ ]+'` still works on these
   logs — and it puts "the files it compared agree" on the DONE line rather than
-  leaving it to be inferred from the ledger. Today's ledger yields 25 such
-  rows (pe 21, json 3, module 1). On the 17 `pe oracle-timeout` ones the port
+  leaving it to be inferred from the ledger. Today's ledger yields 23 such
+  rows (pe 19, json 3, module 1). On the 15 `pe oracle-timeout` ones the port
   is never executed at all — the sweeps return on `hs>=124` before invoking
   `$RS_BIN` — and since `hs_run` caches a timeout together with its cap and
   serves it whenever the new cap is no larger, both the parallel pass and the
@@ -458,9 +458,10 @@ then upstream behaviour moving under them.
   line number is uncheckable) / RANGE / BLANK / COMMENT / SEELINE (a
   `see line N` outside the extent it annotates). Nothing else catches a cite
   that has drifted — `remap_hs_cites.py` reports ambiguity rather than
-  failing on it — so this is the post-bump gate. `--crate NAME` and
-  `--skip CLASS` are repeatable; `--crate tamarin-prover` and `--crate
-  tamarin-export` are currently the only crates at zero findings.
+  failing on it — so this is the post-bump gate, run automatically by
+  `bump_submodule.sh` at the end of a bump (findings land in the cite-remap
+  report). `--crate NAME` and `--skip CLASS` are repeatable; the whole tree
+  is currently at zero findings.
 - **`header_identities.json`** — email → GitHub-username map used by the
   header generator.
 

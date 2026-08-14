@@ -10,55 +10,10 @@ use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::maude_sig::pair_maude_sig;
 
 /// A maude handle for the pins below, or `None` only when the run has
-/// explicitly opted out via `TAM_ALLOW_NO_MAUDE=1`.
-///
-/// Resolution order: `$MAUDE_PATH`, the two system prefixes, `$PATH`, then the
-/// linuxbrew prefix this workspace's benchmark toolchain installs into.
-/// Resolving nothing PANICS: a silent `None` turns every maude-backed pin in
-/// this file green having compared nothing, which is exactly the vacuous pass
-/// the gate roster exists to prevent.
+/// explicitly opted out via `TAM_ALLOW_NO_MAUDE=1` — resolution and the
+/// loud-failure policy live in [`crate::test_maude::maude_path`].
 fn maude() -> Option<MaudeHandle> {
-    let path = match std::env::var("MAUDE_PATH") {
-        Ok(p) => {
-            assert!(
-                std::path::Path::new(&p).exists(),
-                "MAUDE_PATH={p} does not exist; unset it to fall back to \
-                 /usr/local/bin/maude, /usr/bin/maude, $PATH and \
-                 /home/linuxbrew/.linuxbrew/bin/maude, or point it at a real \
-                 maude — skipping every maude-backed pin here would report \
-                 green vacuously"
-            );
-            Some(p)
-        }
-        Err(_) => None,
-    }
-    .or_else(|| {
-        for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
-            if std::path::Path::new(c).exists() {
-                return Some(c.to_string());
-            }
-        }
-        if let Some(dirs) = std::env::var_os("PATH") {
-            if let Some(c) = std::env::split_paths(&dirs)
-                .map(|d| d.join("maude"))
-                .find(|c| c.is_file())
-            {
-                return Some(c.to_string_lossy().into_owned());
-            }
-        }
-        let brew = "/home/linuxbrew/.linuxbrew/bin/maude";
-        if std::path::Path::new(brew).exists() {
-            return Some(brew.to_string());
-        }
-        assert!(
-            std::env::var("TAM_ALLOW_NO_MAUDE").as_deref() == Ok("1"),
-            "no maude found: probed $MAUDE_PATH, /usr/local/bin/maude, \
-             /usr/bin/maude, $PATH and /home/linuxbrew/.linuxbrew/bin/maude.  \
-             Install maude, point MAUDE_PATH at it, or set \
-             TAM_ALLOW_NO_MAUDE=1 to accept skipping these pins."
-        );
-        None
-    })?;
+    let path = crate::test_maude::maude_path()?;
     // A maude that resolved but will not start is the same misconfiguration
     // as a dangling MAUDE_PATH: swallowing it with `.ok()` would silently
     // skip every pin in this file, so fail loudly instead.

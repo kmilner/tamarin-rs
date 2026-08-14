@@ -24,7 +24,9 @@
 # files at compile time), and remaps the Haskell line cites in crates/
 # comments onto the new pin
 # (scripts/remap_hs_cites.py, whose report — rewrites, UNRESOLVED cites and the
-# wrapped-cite lint — is teed to scripts/results/cite_remap_<newpin>.txt).
+# wrapped-cite lint — is teed to scripts/results/cite_remap_<newpin>.txt),
+# then validates every cite against the new pin (scripts/check_hs_cites.py,
+# findings appended to the same report).
 # It never commits: run the batch and web gates first (it prints the checklist).
 set -eu
 
@@ -131,6 +133,16 @@ finalize() {
         echo "NOTE: $(printf '%s\n' "$wrapped" | wc -l) wrapped cite(s) listed at the end of $remap_report"
     fi
 
+    # The mechanical cite gate (see check_hs_cites.py's docstring): the remap
+    # above reports-not-fails on UNRESOLVED cites, so without this a bump can
+    # leave cites pointing at blank lines or vanished files with nothing red
+    # anywhere.  Findings go into the same report the checklist reviews.
+    if (cd "$root" && python3 scripts/check_hs_cites.py) >> "$root/$remap_report" 2>&1; then
+        echo "cite gate: check_hs_cites.py OK"
+    else
+        echo "WARNING: check_hs_cites.py found stale cites — see $remap_report; fix before committing" >&2
+    fi
+
     if [ "${SKIP_BUILD:-0}" != 1 ]; then
         "$root/setup.sh" testing
         ( cd "$root" && cargo build --release )
@@ -150,8 +162,9 @@ staged (NOT committed): tamarin-prover gitlink + patches/$(basename "$patch")
 unstaged: any HS-cite remaps under crates/ (review with git diff, commit with the bump)
 Verify before committing:
   1. $remap_report — the applied cite rewrites, the UNRESOLVED list (fix those
-     by hand) and the wrapped cites the remapper cannot join; re-run the lint after:
-     grep -rnE '\.hs:[0-9]+([,-][0-9]+)*,[[:space:]]*\$' crates --include='*.rs'
+     by hand), the wrapped cites the remapper cannot join, and the
+     check_hs_cites.py findings; after fixing, re-run until green:
+     python3 scripts/check_hs_cites.py
   2. RESULTS_TSV=scripts/results/fullgate_bump.tsv scripts/corpus_file_diff.sh   # full batch gate, cold cache
      - heavy files (BP_IBS_2/3, alethea_votingphase_malS_abstain) need FILE_TIMEOUT>=600 cold
      - retries short-circuit on cached markers: find scripts/.hs_file_cache -name '*.timeout' -delete first

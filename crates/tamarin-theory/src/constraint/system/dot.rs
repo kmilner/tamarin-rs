@@ -402,8 +402,9 @@ fn color_uses_white_font(color: Option<tamarin_utils::color::Rgb>) -> bool {
 }
 
 /// Which arm of `dotEdge`'s `SystemEdge` guard chain (System/Dot.hs:390-397) an edge
-/// falls into.  The two serializers spell the resulting attributes
-/// differently, so only the CLASSIFICATION is shared.
+/// falls into.  The classification is decided here; its sole consumer,
+/// `dot_showdot`, spells the resulting attributes (`json.rs` carries its own
+/// `EdgeClass` for the JSON edge palette).
 enum EdgeKind {
     /// `check isProtoFact`; `persistent` is the nested `check isPersistentFact`
     /// that adds `color=gray50`.

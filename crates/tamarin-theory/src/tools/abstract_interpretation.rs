@@ -524,7 +524,21 @@ pub fn apply_partial_evaluation(
     style: EvaluationStyle,
     restr_frees: &BTreeMap<String, Vec<LVar>>,
 ) -> Result<String, MaudeError> {
-    let mut ru_es: Vec<ProtoRuleE> = elaborated.rules().map(|o| o.rule.clone()).collect();
+    // HS `getProtoRuleEs` (ClosedTheory.hs:87-89) extracts `cprRuleE` — the
+    // E-half that `addActionClosedProtoRule` never annotates
+    // (lib/theory/src/Rule.hs:95-99) and that `unfoldRuleVariants` duplicates
+    // verbatim across variants (lib/theory/src/Rule.hs:63-79, see line 76) —
+    // so when the `--auto-sources` close preceded this call the refinement
+    // input carries NO AUTO_* actions, and the Set round-trip below
+    // collapses the per-variant duplicates ("we remove duplicates if they
+    // exist due to variant unfolding", ClosedTheory.hs:87-89, see line 89).
+    // Feeding the annotated `rule` half instead lets the baked AUTO actions
+    // reach the second close, whose refined-source trigger they then
+    // wrongly satisfy.
+    let mut ru_es: Vec<ProtoRuleE> = elaborated
+        .rules()
+        .map(|o| o.rule_e.as_deref().unwrap_or(&o.rule).clone())
+        .collect();
     if ru_es.is_empty() {
         // No closed rule item: HS's `replaceProtoRules` never fires and
         // the trivial evaluation produces no trace.

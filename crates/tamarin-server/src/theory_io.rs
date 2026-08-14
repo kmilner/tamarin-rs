@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use tamarin_parser::parse_theory;
+use tamarin_parser::parse_theory_with_base;
 use tamarin_parser::wf::WfError;
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_theory::elaborate::elaborate;
@@ -75,6 +75,27 @@ pub fn ndc_check() -> bool {
     NDC_CHECK.load(Ordering::Relaxed)
 }
 
+/// The parser flags every web load parses with — HS `toParserFlags
+/// thyOpts` (TheoryLoader.hs:285-291) inside the same captured
+/// `loadTheory thyLoadOptions` closure as [`NDC_CHECK`] above, so the
+/// interactive CLI's `-D/--defines` (and `--quit-on-warning` element)
+/// reach `#ifdef` evaluation on startup loads, uploads, and reloads
+/// alike.  Empty until `run_interactive` sets it; library/test embedders
+/// that never call [`set_parser_flags`] parse flag-free, as before.
+static PARSER_FLAGS: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
+/// Set the parser flags [`load_from_source`] passes to `parse_theory`
+/// (the port of HS `toParserFlags`, minus the `["diff" | diffMode]`
+/// element — see `run_interactive`'s call site).
+pub fn set_parser_flags(flags: Vec<String>) {
+    *PARSER_FLAGS.write().expect("PARSER_FLAGS poisoned") = flags;
+}
+
+/// The parser flags [`load_from_source`] applies to each loaded theory.
+pub fn parser_flags() -> Vec<String> {
+    PARSER_FLAGS.read().expect("PARSER_FLAGS poisoned").clone()
+}
+
 /// Read the file, parse it, elaborate it, and return a [`TheoryEntry`].
 ///
 /// `entry.idx` is left as `0`; [`TheoryStore::insert`] assigns the
@@ -121,7 +142,21 @@ pub fn load_from_source(
     // through the normal parse-error surface — `Display for ParseError` renders
     // a GHC `error` as its bare message, without the parsec frame the position
     // would fake or the `HasCallStack` block that only the CLI reproduces.
-    let mut parser_theory = parse_theory(src, &[])
+    // Parser flags (`-D` defines + the `quit-on-warning` element) from the
+    // interactive CLI, via [`PARSER_FLAGS`]; `#include` paths resolve
+    // against the theory file's own directory — HS threads `Just inFile`
+    // into the `theory` parser (`loadTheory`, TheoryLoader.hs:449-458) and
+    // `include` resolves against `takeDirectory <$> inFile0`
+    // (Theory/Text/Parser.hs:306-343).  An upload has no on-disk home
+    // (HS's bare filename gives `takeDirectory = "."`), so it resolves
+    // CWD-relative, the no-base default.
+    let flags_owned = parser_flags();
+    let flags: Vec<&str> = flags_owned.iter().map(String::as_str).collect();
+    let base_dir = match &origin {
+        TheoryOrigin::Local(p) => p.parent().map(|d| d.to_path_buf()),
+        _ => None,
+    };
+    let mut parser_theory = parse_theory_with_base(src, &flags, base_dir)
         .map_err(|e| LoadError::Parse(e.with_source(source_name).to_string()))?;
 
     // HS `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) expands each
@@ -151,15 +186,11 @@ pub fn load_from_source(
     // `<div class="wf-warning">` header banner in help/overview (`errors_html`).
     //
     // Static checks run on the PRE-translation parsed theory (HS runs
-    // `check_theory` BEFORE the SAPIC `translate` pass; `run_batch` uses the
-    // same order).  HS `thyProtoRules` applies `applyMacroInRule` to every
-    // rule before the checks, so clone + macro-expand first.
-    let parsed_for_wf = tamarin_theory::macro_expand::macro_expanded_clone(&parser_theory);
-    let mut wf_report = tamarin_parser::wf::check_theory(&parsed_for_wf);
-    // Strip the STATIC "Message Derivation Checks" entry — the dynamic,
-    // Maude-backed check in the maude block below replaces it (the same swap
-    // `run_batch` performs).
-    wf_report.retain(|e| e.topic != "Message Derivation Checks");
+    // `check_theory` BEFORE the SAPIC `translate` pass; `run_batch` opens
+    // with the same shared pass — macro-expanded clone, `check_theory`,
+    // static "Message Derivation Checks" entry dropped for the dynamic
+    // check in the maude block below).
+    let mut wf_report = tamarin_theory::translated_wf::pre_translation_wf_report(&parser_theory);
 
     // "Theory translated" at the START of translation (TheoryLoader.hs:494-500, see line 496
     // prints before `processOpenTheory` runs); RS's `elaborate` is that
@@ -180,12 +211,9 @@ pub fn load_from_source(
     typed.in_file = origin.label();
     let maude_sig = typed.signature.maude_sig.clone();
 
-    // Subterm-convergence check on the signature's subterm-rule set (the same
-    // retain/re-add swap `run_batch` performs): replace `check_theory`'s
-    // AST-level placeholder with the signature-driven, width-wrapped version
-    // now that the MaudeSig exists.
-    wf_report.retain(|e| e.topic != "Subterm Convergence Warning");
-    wf_report.extend(tamarin_theory::pretty_theory::subterm_convergence_report_wf(&maude_sig));
+    // Subterm-convergence check on the signature's subterm-rule set (the
+    // same swap `run_batch` performs, shared in `translated_wf`).
+    tamarin_theory::translated_wf::swap_subterm_convergence_report(&mut wf_report, &maude_sig);
 
     // SAPIC `process:` translation — mirror `run_batch`'s CLI-side pass so
     // the web load path renders SAPIC theories exactly like `--prove`.  Runs
@@ -236,12 +264,9 @@ pub fn load_from_source(
         .map_err(|e| LoadError::Elaborate(e.to_string()))?;
     // `preReport` order (as in `run_batch`): SAPIC warnings, then the
     // accountability RP check, then the rest.
-    if !sapic_wf.is_empty() || !acc_wf.is_empty() {
-        let mut new_report = sapic_wf;
-        new_report.extend(acc_wf);
-        new_report.extend(std::mem::take(&mut wf_report));
-        wf_report = new_report;
-    }
+    let mut pre_report = sapic_wf;
+    pre_report.extend(acc_wf);
+    tamarin_theory::translated_wf::prepend_wf_report(&mut wf_report, pre_report);
 
     // HS re-runs the full `checkWellformedness` on the TRANSLATED theory
     // (`checkTranslatedTheory`), i.e. after `apply_sapic` / `Acc::translate`
@@ -396,4 +421,56 @@ fn make_wf_errors_html(report: &[WfError]) -> String {
          WARNING: the following wellformedness checks failed!<br /><br />\n\
          {rendered}\n</div>",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The interactive `TheoryLoadOptions` plumbing added for HS parity:
+    /// `-D` defines reach `#ifdef` evaluation via [`set_parser_flags`]
+    /// (HS `toParserFlags`, TheoryLoader.hs:285-291), and a local file's
+    /// `#include` resolves against ITS OWN directory
+    /// (`takeDirectory <$> inFile`, Theory/Text/Parser.hs:306-343).  One
+    /// test on purpose: `PARSER_FLAGS` is process-global, so the
+    /// set/observe/reset sequence must not interleave with itself.
+    /// `maude_path` is a nonexistent binary so the best-effort Maude block
+    /// is skipped and the test stays hermetic.
+    #[test]
+    fn parser_flags_and_include_base_dir_reach_the_web_load() {
+        let rule_count = |entry: &TheoryEntry| {
+            entry
+                .parser_theory
+                .items
+                .iter()
+                .filter(|i| matches!(i, tamarin_parser::ast::TheoryItem::Rule(_)))
+                .count()
+        };
+        let src = "theory T begin\n#ifdef FOO\nrule R: [ ] --> [ ]\n#endif\nend";
+        let load = |src: &str, origin: TheoryOrigin| {
+            load_from_source(src, origin, "/nonexistent/maude-for-test", 0)
+                .expect("tiny theory loads")
+        };
+
+        // Flag absent: the #ifdef block is dropped.
+        let entry = load(src, TheoryOrigin::Upload("t.spthy".into()));
+        assert_eq!(rule_count(&entry), 0);
+        // Flag set: the block parses, exactly as batch `-D=FOO`.
+        set_parser_flags(vec!["FOO".to_string()]);
+        let entry = load(src, TheoryOrigin::Upload("t.spthy".into()));
+        set_parser_flags(Vec::new());
+        assert_eq!(rule_count(&entry), 1);
+
+        // #include next to the theory file resolves against that file's
+        // directory (a Local origin), not the process CWD.
+        let dir = std::env::temp_dir().join(format!("tamarin-rs-theory-io-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(dir.join("inc.spthy"), "rule Inc: [ ] --> [ ]\n").expect("write include");
+        let main = dir.join("main.spthy");
+        std::fs::write(&main, "theory M begin\n#include \"inc.spthy\"\nend").expect("write main");
+        let entry = load_from_path(&main, "/nonexistent/maude-for-test", 0)
+            .expect("include resolves against the theory's dir");
+        assert_eq!(rule_count(&entry), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

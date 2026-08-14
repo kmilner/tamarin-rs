@@ -31,6 +31,7 @@
 basic_plain	cli_flags_basic.spthy	-	--derivcheck-timeout=300 --prove
 basic_lemma_reach	cli_flags_basic.spthy	!=basic_plain	--derivcheck-timeout=300 --prove --lemma=reach
 basic_bound_10	cli_flags_basic.spthy	=basic_plain	--derivcheck-timeout=300 --prove -b=10
+basic_bound_1	cli_flags_basic.spthy	!=basic_plain	--derivcheck-timeout=300 --prove -b=1
 # ---- --heuristic / --saturation / --open-chains -----------------------------
 chan_plain	cli_flags_chan.spthy	-	--derivcheck-timeout=300 --prove
 chan_heuristic_i	cli_flags_chan.spthy	!=chan_plain	--derivcheck-timeout=300 --prove --heuristic=i

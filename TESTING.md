@@ -473,8 +473,8 @@ compared, it does not turn a timeout into agreement. Those rows are listed
 under their own `== n row(s) UNCOMPARED ==` block and counted on the DONE
 sentinel, `== DONE <sweep> <ts> verdict=<...> UNCOMPARED=<n> ==` — the field
 is always present, and deliberately does not fail the verdict. On today's
-ledger that is 25 rows (pe 21, json 3, module 1). Read `verdict=OK
-UNCOMPARED=21` as "the rows it compared agree, and 21 were not compared".
+ledger that is 23 rows (pe 19, json 3, module 1). Read `verdict=OK
+UNCOMPARED=19` as "the rows it compared agree, and 19 were not compared".
 An *undocumented* timeout is still a plain ERROR and still fails.
 
 ## CI reference gate

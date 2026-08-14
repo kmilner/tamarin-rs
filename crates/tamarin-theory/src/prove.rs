@@ -174,19 +174,114 @@ pub fn prepend_theory_dir_to_oracle_paths(
     }
 }
 
-/// Parse a theory's in-file `configuration:` block — HS `closeTheory`'s
-/// `theoryConfFlags` (TheoryLoader.hs:749-757).  Exactly two flags are
-/// accepted: `--stop-on-trace[=v]` (`flagOpt "dfs"` — valueless means
-/// `dfs`; value matched case-insensitively per HS `stopOnTrace`,
-/// TheoryLoader.hs:397-405) and `--auto-sources` (`flagNone`).  Bare
-/// (non-flag) tokens land in cmdargs' positional catch-all
-/// (`flagArg (updateArg "") ""`) and are ignored; an unknown flag or
-/// stop-on-trace value is an error (cmdargs `processValue` / HS
-/// `error e` on `ArgumentError`, TheoryLoader.hs:759-762, see line 761).
+/// A theory's in-file `configuration:` block as cmdargs RECORDS it — HS
+/// `closeTheory`'s `argsConfigString` (TheoryLoader.hs:748-757) runs
+/// `processValue` over a two-flag mode: `--stop-on-trace[=v]`
+/// (`flagOpt "dfs"` — valueless records `dfs`, and no separate token is
+/// ever consumed) and `--auto-sources` (`flagNone`).  Bare tokens land in
+/// the positional catch-all (`flagArg (updateArg "") ""`) and are ignored.
 ///
-/// Returns `(stop_on_trace, auto_sources)`; callers merge with the CLI
-/// per HS precedence — CLI `--stop-on-trace` wins when given
-/// (`configStopOnTrace`), `--auto-sources` is OR-combined
+/// Rejections are RECORDED here, not raised: HS processes the block
+/// lazily, so a cmdargs-level rejection fires only where the processed
+/// record is first forced (the close pipeline — never under `-m` or
+/// `--parse-only`), and an unreadable `--stop-on-trace` VALUE later still,
+/// only where the prover reads it.  Batch callers sequence those deaths
+/// themselves; [`config_block_options`] validates eagerly for the server.
+#[derive(Debug, Clone, Default)]
+pub struct ConfigBlock {
+    /// The first cmdargs-level rejection, message exactly as HS emits it:
+    /// `Unknown flag: --x`, `Unhandled argument to flag, none expected:
+    /// --auto-sources=x`, `Ambiguous flag '--', could be any of: …`.
+    pub flag_error: Option<String>,
+    /// The recorded `--stop-on-trace` value, RAW — validation is the
+    /// reader's (HS `stopOnTrace`, TheoryLoader.hs:397-405, via
+    /// [`parse_stop_on_trace`]).
+    pub stop_on_trace: Option<String>,
+    /// `--auto-sources` was given.
+    pub auto_sources: bool,
+}
+
+/// Parse a `configuration:` block with cmdargs' own matching, all
+/// oracle-verified: a long flag resolves by exact name, else by
+/// unambiguous prefix over the two declared names (`--stop`, even `--s`;
+/// `--=x` is ambiguous over both, listed in declaration order); an inline
+/// value on the `flagNone` rejects with the whole token; a short flag is
+/// unknown by its FIRST cluster char (`-abc` → `Unknown flag: -a`).
+pub fn parse_config_block(cfg: &str) -> ConfigBlock {
+    // Declaration order (TheoryLoader.hs:754-757) — ambiguity lists it.
+    const NAMES: [&str; 2] = ["stop-on-trace", "auto-sources"];
+    let mut out = ConfigBlock::default();
+    for tok in cfg.split_whitespace() {
+        if out.flag_error.is_some() {
+            break;
+        }
+        if tok == "--" {
+            // End of flags: the rest is positional, hence ignored.
+            break;
+        }
+        if let Some(rest) = tok.strip_prefix("--") {
+            let (key, val) = match rest.find('=') {
+                Some(i) => (&rest[..i], Some(&rest[(i + 1)..])),
+                None => (rest, None),
+            };
+            let hits: Vec<&str> = NAMES
+                .iter()
+                .copied()
+                .filter(|n| n.starts_with(key))
+                .collect();
+            match hits.as_slice() {
+                [] => out.flag_error = Some(format!("Unknown flag: --{key}")),
+                ["stop-on-trace"] => {
+                    out.stop_on_trace = Some(val.unwrap_or("dfs").to_string());
+                }
+                ["auto-sources"] => match val {
+                    Some(_) => {
+                        out.flag_error =
+                            Some(format!("Unhandled argument to flag, none expected: {tok}"));
+                    }
+                    None => out.auto_sources = true,
+                },
+                _ => {
+                    out.flag_error = Some(format!(
+                        "Ambiguous flag '--{key}', could be any of: {}",
+                        hits.join(" ")
+                    ));
+                }
+            }
+        } else if let Some(rest) = tok.strip_prefix('-') {
+            // No short flags are declared; a bare `-` is positional.
+            if let Some(c) = rest.chars().next() {
+                out.flag_error = Some(format!("Unknown flag: -{c}"));
+            }
+        }
+        // Bare token: cmdargs positional catch-all — ignored.
+    }
+    out
+}
+
+/// HS `stopOnTrace` (TheoryLoader.hs:397-405): the value is matched
+/// LOWERCASED, and an unknown one is `ArgumentError ("unknown
+/// stop-on-trace method: " ++ unknown)` — raised as `error e`
+/// (TheoryLoader.hs:761) only where the prover forces the field.
+pub fn parse_stop_on_trace(
+    raw: &str,
+) -> Result<crate::constraint::solver::context::CutStrategy, String> {
+    use crate::constraint::solver::context::CutStrategy;
+    match raw.to_ascii_lowercase().as_str() {
+        "dfs" => Ok(CutStrategy::Dfs),
+        "bfs" => Ok(CutStrategy::Bfs),
+        "seqdfs" => Ok(CutStrategy::SeqDfs),
+        "sorry" => Ok(CutStrategy::AfterSorry),
+        "none" => Ok(CutStrategy::Nothing),
+        other => Err(format!("unknown stop-on-trace method: {}", other)),
+    }
+}
+
+/// [`parse_config_block`] + eager validation of both deferred errors —
+/// for callers with no lazy forcing points to honor (the web server's
+/// per-theory load).  Returns `(stop_on_trace, auto_sources)`; callers
+/// merge with the CLI per HS precedence — CLI `--stop-on-trace` wins when
+/// given (`configStopOnTrace`), `--auto-sources` is OR-combined
 /// (`configAutoSources`).
 pub fn config_block_options(
     cfg: &str,
@@ -197,34 +292,15 @@ pub fn config_block_options(
     ),
     String,
 > {
-    use crate::constraint::solver::context::CutStrategy;
-    let mut stop_on_trace: Option<CutStrategy> = None;
-    let mut auto_sources = false;
-    for tok in cfg.split_whitespace() {
-        if tok == "--auto-sources" {
-            auto_sources = true;
-        } else if let Some(rest) = tok.strip_prefix("--stop-on-trace") {
-            let value = if let Some(v) = rest.strip_prefix('=') {
-                v
-            } else if rest.is_empty() {
-                "dfs"
-            } else {
-                return Err(format!("configuration block: unknown flag: {}", tok));
-            };
-            stop_on_trace = Some(match value.to_ascii_lowercase().as_str() {
-                "dfs" => CutStrategy::Dfs,
-                "bfs" => CutStrategy::Bfs,
-                "seqdfs" => CutStrategy::SeqDfs,
-                "sorry" => CutStrategy::AfterSorry,
-                "none" => CutStrategy::Nothing,
-                other => return Err(format!("unknown stop-on-trace method: {}", other)),
-            });
-        } else if tok.starts_with("--") {
-            return Err(format!("configuration block: unknown flag: {}", tok));
-        }
-        // Bare token: cmdargs positional catch-all — ignored.
+    let block = parse_config_block(cfg);
+    if let Some(e) = block.flag_error {
+        return Err(e);
     }
-    Ok((stop_on_trace, auto_sources))
+    let cut = match block.stop_on_trace.as_deref() {
+        Some(raw) => Some(parse_stop_on_trace(raw)?),
+        None => None,
+    };
+    Ok((cut, block.auto_sources))
 }
 
 /// The CLI-supplied heuristic / oracle flags, carried verbatim from the
@@ -1024,9 +1100,9 @@ impl ProverSession {
 pub fn prove_lemma_in_session(
     session: &ProverSession,
     lemma_name: &str,
-    max_steps: usize,
+    proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
-    prove_lemma_in_session_mode(session, lemma_name, max_steps, true)
+    prove_lemma_in_session_mode(session, lemma_name, proof_bound, true)
 }
 
 /// Replay a non-target lemma's stored skeleton WITHOUT auto-proving its
@@ -1041,9 +1117,9 @@ pub fn prove_lemma_in_session(
 pub fn check_and_extend_lemma_in_session(
     session: &ProverSession,
     lemma_name: &str,
-    max_steps: usize,
+    proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
-    prove_lemma_in_session_mode(session, lemma_name, max_steps, false)
+    prove_lemma_in_session_mode(session, lemma_name, proof_bound, false)
 }
 
 /// Run the from-scratch autoprover on an ARBITRARY start system under
@@ -1070,7 +1146,7 @@ pub fn prove_system_in_session(
     session: &ProverSession,
     lemma_name: &str,
     sys: crate::constraint::system::System,
-    max_steps: usize,
+    proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
     // Thread-locals for user-fn-symbol resolution — the web autoprove
     // runs on a blocking-pool thread whose locals start empty.  Same
@@ -1105,13 +1181,13 @@ pub fn prove_system_in_session(
     if force_induction {
         ctx.use_induction = crate::constraint::solver::context::UseInduction::UseInduction;
     }
-    Ok(run_proof_search(&ctx, sys, max_steps))
+    Ok(run_proof_search(&ctx, sys, proof_bound))
 }
 
 fn prove_lemma_in_session_mode(
     session: &ProverSession,
     lemma_name: &str,
-    max_steps: usize,
+    proof_bound: usize,
     auto_prove: bool,
 ) -> Result<ProofNode, ProveError> {
     let trace = tamarin_utils::env_gate!("TAM_DBG_PHASE");
@@ -1264,12 +1340,20 @@ fn prove_lemma_in_session_mode(
     if let Some(tree) = lemma.proof.tree.clone() {
         if auto_prove {
             return Ok(crate::replay::replace_sorry_prove(
-                &ctx, sys, &tree, max_steps,
+                &ctx,
+                sys,
+                &tree,
+                proof_bound,
             ));
         } else {
             // Non-target lemma: HS close-time check-and-extend
             // replay, no auto-proving of open leaves.
-            return Ok(crate::replay::check_and_extend(&ctx, sys, &tree, max_steps));
+            return Ok(crate::replay::check_and_extend(
+                &ctx,
+                sys,
+                &tree,
+                proof_bound,
+            ));
         }
     }
     if !auto_prove {
@@ -1286,7 +1370,7 @@ fn prove_lemma_in_session_mode(
     } else {
         None
     };
-    let r = run_proof_search(&ctx, sys, max_steps);
+    let r = run_proof_search(&ctx, sys, proof_bound);
     if trace {
         eprintln!(
             "[phase] (session) run_proof_search dt={:.3}s total={:.3}s",
@@ -1299,21 +1383,23 @@ fn prove_lemma_in_session_mode(
 
 /// Drive a proof attempt for one lemma in a parsed theory.
 ///
-/// `max_steps` bounds the proof-tree depth so the call always
-/// terminates. Pass a generous value (e.g. 100+) for non-trivial
-/// proofs.
+/// `proof_bound` is `--bound=N`'s proof-depth bound (HS `apBound`,
+/// applied as `boundProofDepth` in `runAutoProver`,
+/// Theory/Proof.hs:336-344, 753-760): nodes at that depth become
+/// `sorry /* bound N hit */` leaves.  Pass `usize::MAX` for unbounded
+/// (HS `Nothing`, the default).
 pub fn prove_lemma(
     parser_theory: &p::Theory,
     lemma_name: &str,
     maude: tamarin_term::maude_proc::MaudeHandle,
-    max_steps: usize,
+    proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
     prove_lemma_with_pool_file_heuristic(
         parser_theory,
         lemma_name,
         maude,
         None,
-        max_steps,
+        proof_bound,
         "",
         &CliHeuristic::default(),
         crate::constraint::solver::context::CutStrategy::Dfs,
@@ -1338,7 +1424,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
     lemma_name: &str,
     maude: tamarin_term::maude_proc::MaudeHandle,
     pool: Option<std::sync::Arc<tamarin_term::maude_proc::MaudePool>>,
-    max_steps: usize,
+    proof_bound: usize,
     in_file: &str,
     cli_heuristic: &CliHeuristic,
     cut: crate::constraint::solver::context::CutStrategy,
@@ -1604,7 +1690,10 @@ pub fn prove_lemma_with_pool_file_heuristic(
             );
         }
         return Ok(crate::replay::replace_sorry_prove(
-            &ctx, sys, &tree, max_steps,
+            &ctx,
+            sys,
+            &tree,
+            proof_bound,
         ));
     } else if tamarin_utils::env_gate!("TAM_DBG_REPLAY") {
         eprintln!(
@@ -1613,7 +1702,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
             lemma.proof.raw.len()
         );
     }
-    let r = run_proof_search(&ctx, sys, max_steps);
+    let r = run_proof_search(&ctx, sys, proof_bound);
     if trace {
         eprintln!(
             "[phase] run_proof_search done dt={:.3}s total={:.3}s",

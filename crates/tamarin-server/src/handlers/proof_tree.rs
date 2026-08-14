@@ -260,10 +260,11 @@ impl ProofState {
                 if lemma.proof.tree.is_none() {
                     continue;
                 }
-                // `max_steps` mirrors the CLI (`budget =
-                // usize::MAX`, run.rs); in check-and-extend mode
-                // it is only consumed by `run_proof_search`
-                // fall-throughs, which never fire.
+                // Unbounded (`usize::MAX`) like the CLI's non-target
+                // replay: check-and-extend is HS's `sorryProver` pass,
+                // which carries no AutoProver and hence no `--bound`;
+                // the `run_proof_search` fall-throughs that would
+                // consume a bound never fire in this mode anyway.
                 match tamarin_theory::prove::check_and_extend_lemma_in_session(
                     session,
                     &lemma.name,

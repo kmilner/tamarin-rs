@@ -39,6 +39,10 @@ fn corpus_root() -> PathBuf {
 }
 
 /// Absolute maude locations probed before `PATH` is walked.
+///
+/// This probe mirrors the crate-shared `src/test_maude.rs` one (an
+/// integration test cannot see a `#[cfg(test)]` module of the library it
+/// links) — keep the two in sync.
 const MAUDE_CANDIDATES: [&str; 2] = ["/usr/local/bin/maude", "/usr/bin/maude"];
 
 /// Last resort, after `PATH`: the linuxbrew prefix this project's maude lives

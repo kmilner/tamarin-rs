@@ -609,12 +609,14 @@ pub async fn autoprove(
         }
     };
 
-    // Use the configured bound, or the URL-provided one when non-zero.
-    let max_steps = if bound > 0 {
-        bound
-    } else {
-        state.cfg.max_steps
-    };
+    // Proof-depth bound: HS `getAutoProverR`'s `adapt` REPLACES the
+    // theory autoprover's `apBound` with the URL's value —
+    // `bound > 0 = Just bound`, `otherwise = Nothing`
+    // (Web/Handler.hs:1235-1249) — so the CLI `--bound` never reaches
+    // these routes and 0 means unbounded, not "fall back to a default".
+    // The solver applies it as `boundProofDepth` (Theory/Proof.hs:336-344):
+    // nodes at that depth become `sorry /* bound N hit */` leaves.
+    let proof_bound = if bound > 0 { bound } else { usize::MAX };
     // HS `getProverR` → `applyProverAtPath` (`src/Web/Theory.hs:146-149`)
     // → `focus proofPath prover` (`lib/theory/src/Theory/Proof.hs:602-612`):
     // navigate to the URL's proof path, take THAT subproof's root system
@@ -684,7 +686,7 @@ pub async fn autoprove(
             &session,
             &lemma_owned,
             sys_at_path,
-            max_steps,
+            proof_bound,
         )
         .map_err(|e| format!("prove failed: {}", e))?;
         let status = subtree.status.clone();
@@ -856,11 +858,9 @@ pub async fn autoprove_all(
         .map(|l| l.name.clone())
         .collect();
     let last_lemma = lemma_names.last().cloned();
-    let max_steps = if bound > 0 {
-        bound
-    } else {
-        state.cfg.max_steps
-    };
+    // URL-only proof-depth bound, exactly as `autoprove` above (HS
+    // `getAutoProverAllR`'s identical `actualBound`, Web/Handler.hs:1265-1276).
+    let proof_bound = if bound > 0 { bound } else { usize::MAX };
 
     // Materialise the SOURCE idx's proof state, then fork it at a fresh
     // idx (HS `modifyTheory`; forking preserves prior proof trees — see
@@ -897,7 +897,8 @@ pub async fn autoprove_all(
             let Some(sys) = ps_for_search.get_system_at(lname, &[]) else {
                 continue;
             };
-            match tamarin_theory::prove::prove_system_in_session(&session, lname, sys, max_steps) {
+            match tamarin_theory::prove::prove_system_in_session(&session, lname, sys, proof_bound)
+            {
                 Ok(subtree) => {
                     let _ = ps_for_search.graft_at_path(lname, &[], subtree);
                 }
@@ -1569,8 +1570,9 @@ pub async fn graph(
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
     // Held for the whole handler: the theory's user-fn sets stay installed
-    // until it drops (see [`LoadedTheory`]).
-    let Some(_theory) = load_theory(&state, idx) else {
+    // until it drops (see [`LoadedTheory`]); the `OutJSON` branch also reads
+    // the theory name its `jsonLabel` carries.
+    let Some(theory) = load_theory(&state, idx) else {
         return not_found();
     };
     let Some(path) = parse_path(&raw_path) else {
@@ -1578,16 +1580,36 @@ pub async fn graph(
     };
     // HS `getTheoryGraphR` (`src/Web/Handler.hs:1418-1432`) answers
     // `imgThyPath`'s `Nothing` with a generic `notFound`; there is no
-    // placeholder SVG.  The label `imgThyPath` also carries is for its JSON
-    // output format, which this route never asks for.
-    let sys = match thy_path_system(&state, idx, &path, GRAPH_UNHANDLED_SITE) {
-        Ok(resolved) => match resolved.into_system() {
-            Some(s) => s,
-            None => return not_found(),
-        },
+    // placeholder SVG.  The label `imgThyPath` carries is for its `OutJSON`
+    // branch, taken below only when `--with-json` was given.
+    let resolved = match thy_path_system(&state, idx, &path, GRAPH_UNHANDLED_SITE) {
+        Ok(r) => r,
         Err(message) => return internal_server_error(&message),
     };
     let opts = graph_options_from_map(&query);
+    // `--with-json` switches this route to HS's `OutJSON` render branch
+    // (`imgThyPath` picks `toJSON jsonLabel system`, Web/Theory.hs:1404-1412,
+    // and `renderGraphCode` runs `jsonToImg`, Web/Theory.hs:1484-1491): the
+    // system is serialised with the SAME serialiser and label the `/json/`
+    // route uses — but never abbreviated, `imgThyPath` has no abbrev call —
+    // written to a file, and `<json-cmd> <img> <json>` is spawned to produce
+    // the image.  There is no `fdp` retry on this branch (`_ -> return
+    // False`), and a failure is `Nothing` → HS's generic `notFound`.
+    if let Some(json_cmd) = state.cfg.json_path.clone() {
+        let label = resolved.json_label(&theory.name);
+        let Some(sys) = resolved.into_system() else {
+            return not_found();
+        };
+        let rsys = tamarin_theory::constraint::system::graph::RenderSystem::from_prover(sys);
+        let json = tamarin_theory::constraint::system::json::sequents_to_json_pretty(
+            &opts,
+            &[(label, &rsys)],
+        );
+        return render_img_via_json_cmd(&json_cmd, &json);
+    }
+    let Some(sys) = resolved.into_system() else {
+        return not_found();
+    };
     // Try to render with dot; fall back to DOT-as-text when
     // unavailable.
     match crate::handlers::dot::render_svg_or_dot_with(&sys, &opts, &state.cfg.dot_path) {
@@ -1712,6 +1734,85 @@ pub async fn graph_json(
             )
         }
     }
+}
+
+/// HS `jsonToImg` (Web/Theory.hs:1484-1491): write the JSON graph to a
+/// file, spawn `<json-cmd> <img> <json>` with empty stdin, and serve the
+/// produced image.  A nonzero exit is HS's stdout report —
+/// `jsonToImg: <cmd> failed with code <i> for file <json>:\n<err>` — then
+/// the `WARNING: failed to convert` stderr trace (`renderGraphCode`,
+/// Web/Theory.hs:1480-1481) and the route's `notFound`.
+///
+/// HS names both files under its cache dir by a hash of the content; this
+/// port renders per-request under the system temp dir with a
+/// process-unique name.  The image is served as SVG, matching the `dot`
+/// branch's assumption (`--image-format` is parsed but not yet routed).
+fn render_img_via_json_cmd(json_cmd: &str, json: &str) -> Response {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join("tamarin-rs-graphs");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return internal_server_error(&format!("could not create {}: {e}", dir.display()));
+    }
+    let stem = format!(
+        "graph-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    );
+    let json_path = dir.join(format!("{stem}.json"));
+    let img_path = dir.join(format!("{stem}.json.svg"));
+    let write = std::fs::File::create(&json_path).and_then(|mut f| f.write_all(json.as_bytes()));
+    if let Err(e) = write {
+        return internal_server_error(&format!("could not write {}: {e}", json_path.display()));
+    }
+    let out = std::process::Command::new(json_cmd)
+        .arg(&img_path)
+        .arg(&json_path)
+        .stdin(std::process::Stdio::null())
+        .output();
+    let rendered = match out {
+        Ok(o) if o.status.success() => true,
+        Ok(o) => {
+            let code = o.status.code().unwrap_or(-1);
+            println!(
+                "jsonToImg: {json_cmd} failed with code {code} for file {}:\n{}",
+                json_path.display(),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            false
+        }
+        // HS `readProcessWithExitCode` on a missing binary throws into the
+        // request thread; answer the same `notFound` after the warning.
+        Err(e) => {
+            println!(
+                "jsonToImg: {json_cmd} failed for file {}:\n{e}",
+                json_path.display()
+            );
+            false
+        }
+    };
+    let response = if rendered {
+        match std::fs::read(&img_path) {
+            Ok(bytes) => {
+                let mut headers = HeaderMap::new();
+                headers.insert(
+                    header::CONTENT_TYPE,
+                    header::HeaderValue::from_static("image/svg+xml"),
+                );
+                Some((StatusCode::OK, headers, bytes).into_response())
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    let _ = std::fs::remove_file(&json_path);
+    let _ = std::fs::remove_file(&img_path);
+    response.unwrap_or_else(|| {
+        eprintln!("WARNING: failed to convert:\n  '{}'", json_path.display());
+        not_found()
+    })
 }
 
 /// `200 OK` with HS's literal `.json` content type (see [`graph_json`]).

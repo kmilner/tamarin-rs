@@ -102,4 +102,7 @@ fn html_text_escape_encodes_all_but_the_first_space_of_a_run() {
     assert_eq!(escape_html_text("a b"), "a b");
     assert_eq!(escape_html_text("    >,"), " &#32;&#32;&#32;&gt;,");
     assert_eq!(escape_html_text("<a & b>"), "&lt;a &amp; b&gt;");
+    // escapeValue leaves '"' literal (escapeHtml True deletes it from the
+    // escape map); only escapeAttribute would emit &quot;.
+    assert_eq!(escape_html_text("'we\"ird'"), "'we\"ird'");
 }

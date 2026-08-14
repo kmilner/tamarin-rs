@@ -16,11 +16,11 @@
 //! issue331-warn-for-capture.spthy`, with only the build-local lines of the
 //! `Generated from:` block normalized.
 //!
-//! MAUDE_PATH trap: [`maude_available`] probes ONLY `$MAUDE_PATH` and two
-//! hardcoded absolute paths — never `$PATH`.  On machines whose maude lives
-//! elsewhere (e.g. /home/linuxbrew/.linuxbrew/bin/maude) a bare `cargo test`
-//! SKIPS every test here and reports green; run with
-//! `MAUDE_PATH=/path/to/maude cargo test -p tamarin-prover`.
+//! Maude: [`maude_available`] resolves through the common harness ladder —
+//! `$MAUDE_PATH` (asserted to exist), the system prefixes, a `$PATH` walk,
+//! then linuxbrew — and PANICS when nothing resolves, so a bare `cargo test`
+//! cannot skip the tests here silently; `TAM_ALLOW_NO_MAUDE=1` is the only
+//! opt-in to the skip.
 //! [`strip_maude_banner`] is the positive control: it panics when a run that
 //! should have started maude produced no banner.
 

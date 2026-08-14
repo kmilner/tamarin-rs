@@ -438,3 +438,69 @@ fn dot_output_for_a_simple_system() {
         )
     );
 }
+
+/// `--with-json` switches `/graph` to HS's `OutJSON` branch: the system's
+/// JSON graph is written to a file and `<json-cmd> <img> <json>` renders
+/// the image (`jsonToImg`, Web/Theory.hs:1484-1491).  A stub renderer
+/// stands in for the tool: it checks it was handed a non-empty JSON file
+/// and writes a recognisable SVG.  A failing renderer is HS's
+/// `imgGenerated False` → the generic Not Found page.
+#[tokio::test]
+async fn graph_renders_via_json_cmd_when_with_json_is_set() {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = std::env::temp_dir().join(format!("tam-json-stub-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("mkdir stub dir");
+    let ok_stub = dir.join("json-ok.sh");
+    {
+        let mut f = std::fs::File::create(&ok_stub).expect("create stub");
+        // $1 = img path, $2 = json path — the HS argument order.
+        writeln!(f, "#!/bin/sh\n[ -s \"$2\" ] || exit 3\ngrep -q graphs \"$2\" || exit 4\nprintf '<svg><!--json-stub--></svg>' > \"$1\"").unwrap();
+    }
+    std::fs::set_permissions(&ok_stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let fail_stub = dir.join("json-fail.sh");
+    {
+        let mut f = std::fs::File::create(&fail_stub).expect("create stub");
+        writeln!(f, "#!/bin/sh\nexit 7").unwrap();
+    }
+    std::fs::set_permissions(&fail_stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let stub = ok_stub.to_string_lossy().to_string();
+    let s = start_server_with_theory_and("issue193.spthy", |cfg| {
+        cfg.json_path = Some(stub);
+    })
+    .await;
+    let res = s
+        .client
+        .get(s.url("/thy/trace/1/graph/proof/debug"))
+        .send()
+        .await
+        .expect("send");
+    assert_eq!(res.status(), 200);
+    assert_eq!(
+        res.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("image/svg+xml")
+    );
+    let body = res.text().await.expect("text");
+    assert_eq!(body, "<svg><!--json-stub--></svg>");
+
+    // The failing renderer: HS reports on stdout/stderr and the route
+    // answers the generic Not Found page.
+    let stub = fail_stub.to_string_lossy().to_string();
+    let s = start_server_with_theory_and("issue193.spthy", |cfg| {
+        cfg.json_path = Some(stub);
+    })
+    .await;
+    let res = s
+        .client
+        .get(s.url("/thy/trace/1/graph/proof/debug"))
+        .send()
+        .await
+        .expect("send");
+    assert_eq!(res.status(), 404);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

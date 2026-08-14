@@ -467,8 +467,6 @@ fn user_em_without_bp_builtin_is_a_plain_function() {
 // (tamarin-theory `constraint/solver/goals.rs`) does not emit at all.  Where a
 // flag's only observable IS on stderr, the test asserts the PORT's own marker
 // line and says so in place.
-//
-// The `--bound` row is the one deliberate soft spot, documented at its test.
 
 /// What every hard failure in this block tells the reader to do.  Never
 /// "skip": a skipped pin certifies nothing.
@@ -666,19 +664,13 @@ fn lemma_flag_selects_which_lemmas_are_proven() {
     run_pinned_case("basic_lemma_reach");
 }
 
-/// `-b/--bound=N` above the proof depth.
+/// `-b/--bound=N` above the proof depth is inert: the `=basic_plain` relation
+/// records that the oracle treated `-b=10` as a no-op on this fixture (its
+/// proofs are 3 steps deep), and the port has to match that non-effect too.
+/// The BINDING half — the bound actually truncating a proof — is pinned
+/// separately in `bound_flag_at_a_binding_depth_truncates_the_proof`.
 ///
-/// SOFT SPOT, on the record: the port does not honour a BINDING `--bound` in
-/// batch mode — `run_batch` passes `usize::MAX` as the step budget and says so
-/// (`crates/tamarin-prover/src/run.rs`, "which the Rust solver does not yet
-/// honor"), while HS wraps the prover in `boundProver` and cuts the proof at
-/// depth N.  Pinning a binding bound would therefore be red forever, so this
-/// pins the value that is inert on this fixture (its proofs are 3 steps deep)
-/// and the `=basic_plain` relation states exactly that: the reference records
-/// what `-b=10` does, and asserts the oracle treated it as a no-op here.  A
-/// binding bound is NOT covered by any test.
-///
-/// HAPPY PATH ONLY, also on purpose.  The `-b`/`-s`/`-c`/`-d` family's ERROR
+/// HAPPY PATH ONLY, on purpose.  The `-b`/`-s`/`-c`/`-d` family's ERROR
 /// path is a known deliberate divergence — the port rejects an empty value at
 /// parse time (`bound: expected integer, got ""`) where the oracle defers to
 /// its own `invalid bound given`, which
@@ -689,6 +681,22 @@ fn lemma_flag_selects_which_lemmas_are_proven() {
 fn bound_flag_above_the_proof_depth_is_inert() {
     assert_ref_relation("basic_bound_10");
     run_pinned_case("basic_bound_10");
+}
+
+/// `-b/--bound=N` at a BINDING depth.  HS wraps the auto-prover in
+/// `boundProver` (`runAutoProver`, Theory/Proof.hs:753-760), whose
+/// `boundProofDepth` (Theory/Proof.hs:336-344) replaces every proof node at
+/// depth N with `sorry /* bound N hit */` — even a node that would have been
+/// Solved, since the `0 < n` guard fires before the node is inspected.  On
+/// this fixture `-b=1` cuts both lemmas to `simplify` + bound-sorries and the
+/// summary flips to `analysis incomplete`, which is what the `!=basic_plain`
+/// relation proves the flag did to the oracle's own run.  The port's cut
+/// lives in `expand_inner` (tamarin-theory `constraint/solver/search.rs`),
+/// before the ID-DFS depth limit and the `is_finished` check.
+#[test]
+fn bound_flag_at_a_binding_depth_truncates_the_proof() {
+    assert_ref_relation("basic_bound_1");
+    run_pinned_case("basic_bound_1");
 }
 
 /// `--heuristic=i` (`InjRanking False`, `goalRankingIdentifiers`,

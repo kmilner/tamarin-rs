@@ -53,6 +53,17 @@ pub fn fixture_path(name: &str) -> PathBuf {
 /// until the returned [`TestServer`] is dropped (`oneshot` cancels the
 /// listener, then the task exits).
 pub async fn start_server_with_theory(fixture_name: &str) -> TestServer {
+    start_server_with_theory_and(fixture_name, |_| {}).await
+}
+
+/// [`start_server_with_theory`] with a config hook: `mutate` runs on the
+/// harness defaults before the server stands up (e.g. set `json_path` to a
+/// stub renderer for the `--with-json` graph route).
+#[allow(dead_code)]
+pub async fn start_server_with_theory_and(
+    fixture_name: &str,
+    mutate: impl FnOnce(&mut ServerConfig),
+) -> TestServer {
     // The same process-wide setup `serve` applies.  Without it the harness
     // runs with the `--prove` CLI defaults: searched proof nodes drop their
     // `System` (so every post-autoprove graph renders empty) and bare
@@ -75,12 +86,11 @@ pub async fn start_server_with_theory(fixture_name: &str) -> TestServer {
     // cannot disagree about which binary they mean.
     let maude_path = detect_maude();
 
-    let cfg = ServerConfig {
+    let mut cfg = ServerConfig {
         bind_addr: "127.0.0.1:0".parse().unwrap(),
         data_dir,
         frontend_dist: None,
         maude_path: maude_path.clone(),
-        max_steps: 200,
         // Match ServerConfig::new's default (HS interactive default 5s).
         derivcheck_timeout: 5,
         stop_on_trace: None,
@@ -89,6 +99,7 @@ pub async fn start_server_with_theory(fixture_name: &str) -> TestServer {
         dot_path: "dot".to_string(),
         json_path: None,
     };
+    mutate(&mut cfg);
 
     // Load theory before starting server.
     let store = TheoryStore::default();

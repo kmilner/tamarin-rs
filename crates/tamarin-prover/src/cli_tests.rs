@@ -116,7 +116,7 @@ fn output_file_and_dir() {
 
 #[test]
 fn output_dir_alias_is_unknown_flag() {
-    // HS registers only `--Output`/`-O` (Batch.hs:44-84, see line 77); there is no
+    // HS registers only `--Output`/`-O` (Batch.hs:44-84, see line 78); there is no
     // `--output-dir` alias.  Verified on the HS binary:
     // `tamarin-prover --output-dir=foo t.spthy` -> `Unknown flag: --output-dir`.
     assert!(parse_args(&["--output-dir=foo".to_string()]).is_err());
@@ -451,16 +451,24 @@ fn output_dot_and_json_without_a_value_are_a_cmdargs_rejection() {
 }
 
 #[test]
-fn short_port_empty_value_falls_back_to_the_default() {
-    // `-p=` records `""`, and HS reads the port leniently — `readMaybe ""`
-    // misses and `defaultPort` stands (Interactive.hs:134-139).  So it must
-    // NOT be an argv rejection: oracle-verified, `interactive -p=` reaches
-    // the `no working directory specified` help path, exit 1.
-    for argv in [vec!["interactive", "-p="], vec!["interactive", "--port="]] {
-        let a = parse(&argv);
-        assert_eq!(a.port, None, "{argv:?}");
+fn port_values_are_recorded_raw_and_never_rejected() {
+    // cmdargs records whatever `--port`/`-p` carries — `flagOpt ""`, so the
+    // bare flag and `=` record `""` — and HS defers ALL reading to startup
+    // (`readPort`, Interactive.hs:168-174: `reads @Int`, stdout notice on a
+    // miss, default 3001).  So no value is an argv rejection, unreadable
+    // ones included: oracle-verified, `interactive --port=abc wd` starts up
+    // after `Unable to read port from argument `abc'. Using default.`
+    for (argv, want) in [
+        (vec!["interactive", "-p="], ""),
+        (vec!["interactive", "--port="], ""),
+        (vec!["interactive", "--port"], ""),
+        (vec!["interactive", "-p3002"], "3002"),
+        (vec!["interactive", "-pabc"], "abc"),
+        (vec!["interactive", "--port=3.5"], "3.5"),
+    ] {
+        assert_eq!(parse(&argv).port.as_deref(), Some(want), "{argv:?}");
     }
-    assert_eq!(parse(&["interactive", "-p3002"]).port, Some(3002));
+    assert_eq!(parse(&["interactive", "."]).port, None);
 }
 
 #[test]
@@ -507,6 +515,230 @@ fn unknown_long_flag_is_err() {
 fn unknown_short_flag_is_err() {
     match parse_args(&["-Z".to_string()]) {
         Err(e @ CliError::CmdArgsReject(_)) => assert_eq!(e.to_string(), "Unknown flag: -Z"),
+        other => panic!("expected CmdArgsReject, got {other:?}"),
+    }
+}
+
+#[test]
+fn flag_none_rejects_an_explicit_inline_value() {
+    // cmdargs `flagNone`: `=VALUE` on a no-argument flag is `Unhandled
+    // argument to flag, none expected: <token>` — the WHOLE token for a long
+    // flag (`--quiet=` keeps its trailing `=`), just `-v` for a short one.
+    // Oracle-verified byte-for-byte for every pair below.
+    for (argv, want) in [
+        (
+            vec!["--diff=x"],
+            "Unhandled argument to flag, none expected: --diff=x",
+        ),
+        (
+            vec!["--quiet="],
+            "Unhandled argument to flag, none expected: --quiet=",
+        ),
+        (
+            vec!["--parse-only=1"],
+            "Unhandled argument to flag, none expected: --parse-only=1",
+        ),
+        (
+            vec!["--verbose=y"],
+            "Unhandled argument to flag, none expected: --verbose=y",
+        ),
+        (
+            vec!["-v=x"],
+            "Unhandled argument to flag, none expected: -v",
+        ),
+        (vec!["-v="], "Unhandled argument to flag, none expected: -v"),
+        (
+            vec!["-?=x"],
+            "Unhandled argument to flag, none expected: -?",
+        ),
+        // In a cluster the `=` rejects the boolean short it follows.
+        (
+            vec!["-vV="],
+            "Unhandled argument to flag, none expected: -V",
+        ),
+    ] {
+        let owned: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
+        match parse_args(&owned) {
+            Err(e @ CliError::CmdArgsReject(_)) => assert_eq!(e.to_string(), want, "{argv:?}"),
+            other => panic!("{argv:?}: expected CmdArgsReject, got {other:?}"),
+        }
+    }
+
+    // A non-`=` char after a boolean short is NOT a value: cmdargs keeps
+    // walking the cluster.  Oracle-verified: `-vV` runs both flags, `-vx` is
+    // `Unknown flag: -x`.
+    let a = parse(&["-vV"]);
+    assert!(a.verbose && a.show_version);
+    match parse_args(&["-vx".to_string()]) {
+        Err(e @ CliError::CmdArgsReject(_)) => assert_eq!(e.to_string(), "Unknown flag: -x"),
+        other => panic!("expected CmdArgsReject, got {other:?}"),
+    }
+}
+
+#[test]
+fn long_flag_prefixes_resolve_when_unambiguous() {
+    // cmdargs long-flag matching: an unambiguous prefix of a declared name
+    // is that flag.  Oracle-verified: each spelling below drives the HS
+    // binary to the same state as its full spelling.
+    assert_eq!(parse(&["--bou=5", "t.spthy"]).bound, Some(5));
+    assert!(parse(&["--hel"]).show_help);
+    assert!(parse(&["--vers"]).show_version);
+    assert!(parse(&["--precomp", "t.spthy"]).precompute_only);
+    assert!(parse(&["--parse-o", "t.spthy"]).parse_only);
+    assert_eq!(
+        parse(&["--with-d=x", "t.spthy"]).dot_path.as_deref(),
+        Some("x")
+    );
+    assert_eq!(
+        parse(&["--oraclen=zz", "t.spthy"]).oracle_name.as_deref(),
+        Some("zz")
+    );
+    // Interactive declares fewer flags, so prefixes resolve differently
+    // there: `--po` reaches `port`, and `--v` is `verbose` alone (batch
+    // `--v` is ambiguous with `version`, which interactive does not
+    // declare).
+    assert_eq!(
+        parse(&["interactive", "--po=3005", "x"]).port.as_deref(),
+        Some("3005")
+    );
+    let a = parse(&["interactive", "--v", "x"]);
+    assert!(a.verbose && !a.show_version);
+}
+
+#[test]
+fn ambiguous_long_flag_prefixes_are_rejected_with_the_candidate_list() {
+    // Two or more prefix hits reject the command line, listing the mode's
+    // candidates in DECLARATION ORDER.  Every string oracle-verified
+    // byte-for-byte, including the degenerate `--=x` whose empty key
+    // prefixes the mode's entire table.
+    for (argv, want) in [
+        (
+            vec!["--o", "x.spthy"],
+            "Ambiguous flag '--o', could be any of: oraclename oracle-only open-chains output \
+             output-module output-json output-dot",
+        ),
+        (
+            vec!["--p", "x.spthy"],
+            "Ambiguous flag '--p', could be any of: prove partial-evaluation \
+             proverif-no-reuse-lemmas proverif-no-source-lemmas proverif-no-restrictions \
+             proverif-no-multiset proverif-no-precise parse-only precompute-only",
+        ),
+        (
+            vec!["--q", "x.spthy"],
+            "Ambiguous flag '--q', could be any of: quit-on-warning quiet",
+        ),
+        (
+            vec!["--he", "x.spthy"],
+            "Ambiguous flag '--he', could be any of: heuristic help",
+        ),
+        (
+            vec!["--v", "x.spthy"],
+            "Ambiguous flag '--v', could be any of: verbose version",
+        ),
+        (
+            vec!["--output-", "x.spthy"],
+            "Ambiguous flag '--output-', could be any of: output-module output-json output-dot",
+        ),
+        (
+            vec!["--=x", "x.spthy"],
+            "Ambiguous flag '--', could be any of: prove lemma stop-on-trace bound heuristic \
+             partial-evaluation defines diff quit-on-warning auto-sources oraclename oracle-only \
+             quiet verbose open-chains saturation derivcheck-timeout proverif-no-reuse-lemmas \
+             proverif-no-source-lemmas proverif-no-restrictions proverif-no-multiset \
+             proverif-no-precise replication-bound no-ndc no-compress parse-only precompute-only \
+             output Output output-module output-json output-dot with-dot with-json with-maude \
+             help version",
+        ),
+        (
+            vec!["interactive", "--i=lo", "."],
+            "Ambiguous flag '--i', could be any of: interface image-format",
+        ),
+        (
+            vec!["interactive", "--p=3005", "."],
+            "Ambiguous flag '--p', could be any of: port prove partial-evaluation \
+             proverif-no-reuse-lemmas proverif-no-source-lemmas proverif-no-restrictions \
+             proverif-no-multiset proverif-no-precise",
+        ),
+        (
+            vec!["interactive", "--o", "."],
+            "Ambiguous flag '--o', could be any of: oraclename oracle-only open-chains",
+        ),
+        (
+            vec!["variants", "--=x"],
+            "Ambiguous flag '--', could be any of: Output help",
+        ),
+        (
+            vec!["test", "--=x"],
+            "Ambiguous flag '--', could be any of: with-dot with-json with-maude help",
+        ),
+    ] {
+        let owned: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
+        match parse_args(&owned) {
+            Err(e @ CliError::CmdArgsReject(_)) => assert_eq!(e.to_string(), want, "{argv:?}"),
+            other => panic!("{argv:?}: expected CmdArgsReject, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn prefix_matching_excludes_short_aliases_extras_and_cross_mode_names() {
+    // Single-char names never long-match (`--V` is unknown even though `-V`
+    // is version); this port's RS-only flags and cross-mode names are
+    // exact-only, so their prefixes stay unknown exactly as the oracle
+    // answers.  All oracle-verified.
+    for (argv, want) in [
+        (vec!["--V", "x.spthy"], "Unknown flag: --V"),
+        (vec!["--i", "x.spthy"], "Unknown flag: --i"),
+        (vec!["--po", "x.spthy"], "Unknown flag: --po"),
+        (vec!["--proc", "x.spthy"], "Unknown flag: --proc"),
+        (vec!["--no-r", "x.spthy"], "Unknown flag: --no-r"),
+    ] {
+        let owned: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
+        match parse_args(&owned) {
+            Err(e @ CliError::CmdArgsReject(_)) => assert_eq!(e.to_string(), want, "{argv:?}"),
+            other => panic!("{argv:?}: expected CmdArgsReject, got {other:?}"),
+        }
+    }
+    // Full spellings from the other mode's table still exact-match — the
+    // documented flat-parser looseness is unchanged by prefix matching.
+    assert!(parse(&["--debug", "x.spthy"]).debug);
+}
+
+#[test]
+fn errors_downstream_of_a_prefix_echo_the_users_spelling() {
+    // `--output-j` resolves to the flagReq `output-json`, and the
+    // missing-argument rejection echoes the SPELLED prefix, not the resolved
+    // name.  Oracle-verified: `Flag requires argument: --output-j`.
+    match parse_args(&["--prove".to_string(), "--output-j".to_string()]) {
+        Err(e @ CliError::CmdArgsReject(_)) => {
+            assert_eq!(e.to_string(), "Flag requires argument: --output-j");
+        }
+        other => panic!("expected CmdArgsReject, got {other:?}"),
+    }
+}
+
+#[test]
+fn mode_names_prefix_match_like_flags() {
+    // cmdargs matches the first token against mode names with the same
+    // exact-then-unambiguous-prefix rule.  Oracle-verified: `inter`, `i`,
+    // `te`, `t`, `va` all route; `interactivee` stays a batch file; the
+    // empty token prefixes all three modes and is rejected.
+    assert_eq!(parse(&["inter", "."]).subcommand, Subcommand::Interactive);
+    assert_eq!(parse(&["i", "."]).subcommand, Subcommand::Interactive);
+    assert_eq!(parse(&["te"]).subcommand, Subcommand::Test);
+    assert_eq!(parse(&["t"]).subcommand, Subcommand::Test);
+    assert_eq!(parse(&["va"]).subcommand, Subcommand::Variants);
+    let a = parse(&["interactivee"]);
+    assert_eq!(a.subcommand, Subcommand::Batch);
+    assert_eq!(a.in_files, vec!["interactivee".to_string()]);
+    // This port's own `test-prover` alias is exact-only.
+    assert_eq!(parse(&["test-prover"]).subcommand, Subcommand::Test);
+    assert_eq!(parse(&["test-pro"]).subcommand, Subcommand::Batch);
+    match parse_args(&["".to_string()]) {
+        Err(e @ CliError::CmdArgsReject(_)) => assert_eq!(
+            e.to_string(),
+            "Ambiguous mode '', could be any of: interactive variants test"
+        ),
         other => panic!("expected CmdArgsReject, got {other:?}"),
     }
 }

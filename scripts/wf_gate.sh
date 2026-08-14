@@ -118,8 +118,10 @@ hs_fill_one() {
     # is a reference both gates would diff against forever.  Cache nothing and
     # leave no marker — the file reports SKIP (a failing verdict) and is
     # retried, instead of reporting a DIFF against a truncated oracle.
-    if [ "$rc" = 124 ]; then
-        echo "  HS TIMEOUT  $rel (${HS_FILL_TIMEOUT}s) — nothing cached" >&2; return 0
+    # 124 is timeout(1)'s SIGTERM; >=128 is any other signal death (the OOM
+    # killer's 137, an abort's 134), which truncates stdout the same way.
+    if [ "$rc" = 124 ] || [ "$rc" -ge 128 ]; then
+        echo "  HS KILLED   $rel (rc=$rc, cap ${HS_FILL_TIMEOUT}s) — nothing cached" >&2; return 0
     fi
     if [ -z "$load" ]; then
         touch "$HS_CACHE/$key.nohs"; echo "  HS EMPTY!   $rel${fl:+  (flags: $fl)}" >&2; return 0

@@ -23,6 +23,12 @@ jobs:
           submodules: true
       - run: rustup update stable --no-self-update && rustup default stable
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Every HS line cite in crates/ comments must resolve against the pinned
+      # submodule (scripts/check_hs_cites.py — MISSING/AMBIGUOUS/RANGE/BLANK/
+      # COMMENT/SEELINE).  Ordinary PRs edit cites too, not just bumps, and
+      # nothing else fails on a drifted one.  Needs only the submodule; ~seconds.
+      - name: HS cite check
+        run: python3 scripts/check_hs_cites.py
 
   test:
     runs-on: ubuntu-latest
@@ -103,6 +109,7 @@ jobs:
       # of main's outputs (scripts/ci_ref_fast.tsv over
       # scripts/parity_corpus_fast.txt).  On DIFF: reproduce locally with
       # scripts/rs_vs_rs_diff.sh.  After a DELIBERATE output change or a
-      # submodule bump, regenerate the reference on a trusted build of main:
-      #   scripts/rs_ref_check.sh generate
+      # submodule bump, regenerate the reference on a trusted build of main
+      # (generate refuses to run without a certifying oracle gate result):
+      #   scripts/rs_ref_check.sh generate --certified-by <gate-results>
       - run: scripts/rs_ref_check.sh check

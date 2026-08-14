@@ -82,6 +82,8 @@ pub mod sapic;
 pub mod signature;
 pub mod state_trace;
 pub mod tactic;
+#[cfg(test)]
+pub(crate) mod test_maude;
 pub mod theory;
 pub mod tools;
 pub mod translated_wf;

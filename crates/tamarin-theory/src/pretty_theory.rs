@@ -1246,7 +1246,7 @@ pub fn web_pretty_source_header(
 
 /// Collect the theory's macro declarations in source order (mirrors HS
 /// `applyMacroInRestriction` / `parseLemmaWithMacros`).
-fn collect_macros(parsed: &p::Theory) -> Vec<p::Macro> {
+pub(crate) fn collect_macros(parsed: &p::Theory) -> Vec<p::Macro> {
     parsed
         .items
         .iter()
@@ -2126,6 +2126,12 @@ fn sep_block_with_lead(
 ///   refined-rule list in the same order, so same-name groups align
 ///   positionally.  A pass that drops refined rules from only ONE of the
 ///   two lists would break this alignment — drop from both, or not at all.
+/// * After the auto-sources unfold (`auto_sources::unfold_rule_variants`) a
+///   single-variant slot is regenerated 1:1 under its `___VARIANT_1` name
+///   on both sides, while a MULTI-variant slot keeps the original parsed
+///   rule (variant bodies parked in its `variants` field) against several
+///   elaborated `___VARIANT_<i>` rules — that slot pairs with its first
+///   variant via the fallback below.
 fn pair_elaborated_rules<'a>(
     items: &[p::TheoryItem],
     elab: &'a Theory,
@@ -2147,6 +2153,24 @@ fn pair_elaborated_rules<'a>(
                     .get(r.name.as_str())
                     .and_then(|group| group.get(occ))
                     .copied()
+                    .or_else(|| {
+                        // Merged-display slot of a multi-variant auto-sources
+                        // unfold (`unfold_rule_variants` parked the variant
+                        // bodies in `r.variants` and no elaborated rule keeps
+                        // the original name): anchor the slot to its k-th
+                        // `___VARIANT_1` rule — every variant of one unfold
+                        // carries the same loop breakers, so one anchor
+                        // suffices for `render_unfolded_variants_block`.
+                        if r.variants.is_empty() {
+                            return None;
+                        }
+                        let vname = format!("{}___VARIANT_1", r.name);
+                        by_name
+                            .get(vname.as_str())
+                            .and_then(|group| group.get(occ))
+                            .copied()
+                            .filter(|er| er.unfolded_variant)
+                    })
             }
             _ => None,
         })
@@ -2186,7 +2210,19 @@ fn render_parsed_item(
             // from the elaborated theory in run.rs; mirror the absence here.
             // The lookup is positional (`(name, occurrence)`) because
             // partial evaluation makes rule names non-unique.
-            elab_rule.map(|er| render_rule(r, er, macros, arity1, manual_variants, auto_sources))
+            elab_rule.map(|er| {
+                // Merged display of a multi-variant auto-sources unfold: the
+                // paired rule is the slot's FIRST `___VARIANT_<i>` rule (see
+                // `pair_elaborated_rules`), and the variant bodies live in
+                // `r.variants` — HS's `prettyProtoRuleE ruE` + ` variants`
+                // block (`prettyOpenProtoRuleAsClosedRule`'s merged branch,
+                // OpenTheory.hs:845-851).
+                if er.unfolded_variant && !r.variants.is_empty() {
+                    render_unfolded_variants_block(r, er, arity1)
+                } else {
+                    render_rule(r, er, macros, arity1, manual_variants, auto_sources)
+                }
+            })
         }
         IntrRule(_) => None,
         Lemma(l) => Some(render_parsed_lemma(
@@ -2283,6 +2319,10 @@ fn arity1_noeq_names(elab: &Theory) -> std::collections::HashSet<String> {
 ///   * Manual variants: a parsed `variants (modulo AC)` block on the input
 ///     rule produces `OpenProtoRule ruE (non-empty)` directly — always
 ///     counts, with or without `--auto-sources`.
+///   * Unfolded VARIANT rules (`unfoldRuleVariants`, lib/theory/src/Rule.hs:63-79,
+///     applied by the `--auto-sources` close): the AC name gains the
+///     `___VARIANT_<i>` suffix while `cprRuleE` keeps the original, so
+///     `equalUpToTerms` is False on the name alone → non-empty `ruleAC`.
 ///   * `--auto-sources`: `closeTheoryWithMaude` adds the synthetic
 ///     `AUTO_IN_*`/`AUTO_OUT_*` action facts to `cprRuleAC` ONLY (NOT
 ///     `cprRuleE` — `addActionClosedProtoRule`, lib/theory/src/Rule.hs:97-99), so an
@@ -2302,6 +2342,15 @@ fn rule_open_ac_nonempty(
 ) -> bool {
     // Manual `variants (modulo AC)` block on the input rule.
     if !parsed_rule.variants.is_empty() {
+        return true;
+    }
+    // An unfolded VARIANT rule (auto-sources `unfoldRuleVariants`,
+    // lib/theory/src/Rule.hs:63-79): its AC name (`<orig>___VARIANT_<i>`)
+    // differs from its E name, so `equalUpToTerms`
+    // (Theory/Model/Rule.hs:960-968) is False on the name alone and
+    // `openProtoRule` yields the non-empty branch — with or without an
+    // AUTO action.
+    if elab_rule.is_some_and(|r| r.unfolded_variant) {
         return true;
     }
     if !auto_sources {
@@ -2573,18 +2622,37 @@ fn render_rule_e_block(
         out.push_str(&header.render());
         out.push('\n');
     }
-    // Desugar `let x = t in ...` bindings before rendering — HS does
-    // this via `applyMacroInProtoRule`/`expandRuleLetBlock` so the
-    // emitted rule contains no bound names from the `let` block.
-    // Mirrors `apply_let_block` (`elaborate.rs`).  HS site:
-    // `lib/theory/src/TheoryObject.hs::prettyTheory` → `prettyRule` chain
-    // which operates on the post-`applyMacroInProtoRule` rule.
+    let (premises, actions, conclusions) = display_fact_rows(parsed_rule, arity1);
+    out.push_str(&render_rule_body(&premises, &actions, &conclusions));
+    (out, premises, actions, conclusions)
+}
+
+/// A parsed rule's display fact rows `(premises, actions, conclusions)` —
+/// the form every closed-rule comparison and render works on.  Shared by
+/// `render_rule_e_block` and the `--auto-sources` variant unfold's
+/// triviality test (`auto_sources::unfold_rule_variants`), so the two agree
+/// byte-for-byte on what the rule displays as.
+///
+/// Desugars `let x = t in ...` bindings first — HS does this via
+/// `applyMacroInProtoRule`/`expandRuleLetBlock` so the emitted rule contains
+/// no bound names from the `let` block.  Mirrors `apply_let_block`
+/// (`elaborate.rs`).  HS site: `lib/theory/src/TheoryObject.hs::prettyTheory`
+/// → `prettyRule` chain which operates on the post-`applyMacroInProtoRule`
+/// rule.
+///
+/// Then re-folds arity-1 comma lists: an arity-1 function applied as
+/// `f(a,b,c)` is folded by `naryOpApp`'s `k == 1` branch into `f(<a,b,c>)`
+/// (Theory/Text/Parser/Term.hs:94-96).  RS's term parser keeps the surplus
+/// args, so re-fold here before rendering.  See `rewrite_arity1_term`.
+/// `arity1` is computed once by the caller and threaded in.
+// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
+// std kept (byte-inert) — iteration order never reaches output.
+#[allow(clippy::disallowed_types)]
+pub(crate) fn display_fact_rows(
+    parsed_rule: &p::Rule,
+    arity1: &std::collections::HashSet<String>,
+) -> (Vec<p::Fact>, Vec<p::Fact>, Vec<p::Fact>) {
     let desugared = crate::elaborate::apply_let_block(parsed_rule);
-    // HS-faithful: an arity-1 function applied with a comma list, `f(a,b,c)`,
-    // is folded by `naryOpApp`'s `k == 1` branch into `f(<a,b,c>)`
-    // (Theory/Text/Parser/Term.hs:94-96).  RS's term parser keeps the surplus
-    // args, so re-fold here before rendering.  See `rewrite_arity1_term`.
-    // `arity1` is computed once by the caller and threaded in.
     let premises: Vec<p::Fact> = desugared
         .premises
         .iter()
@@ -2600,8 +2668,7 @@ fn render_rule_e_block(
         .iter()
         .map(|f| rewrite_arity1_fact(f, arity1))
         .collect();
-    out.push_str(&render_rule_body(&premises, &actions, &conclusions));
-    (out, premises, actions, conclusions)
+    (premises, actions, conclusions)
 }
 
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
@@ -2622,103 +2689,9 @@ fn render_rule(
     // by the caller's positional pairing (`pair_elaborated_rules`) — it decides
     // between "trivial AC variant" and the full `/* rule (modulo AC) ... */`
     // block.  HS-faithful: matches `prettyClosedProtoRule`
-    // (ClosedTheory.hs:332-363).
-    //
-    // HS `isTrivialProtoVariantAC` (Model/Rule.hs:790-793):
-    //   variants == [emptySubstVFresh] && ps == ps' && cs == cs' && as == as' && nvs == nvs'
-    //
-    // i.e. trivial iff (a) the variant disjunction is just the identity
-    // AND (b) the AC-normalised rule body equals the E-rule body
-    // structurally.  Even when there are NO non-trivial substitutions
-    // to enumerate, the AC normalisation may have rewritten terms
-    // (e.g. `'g'^~ltkB^~ltkA` → `'g'^(~ltkA*~ltkB)` under DH), in which
-    // case HS prints the AC body as a comment block rather than the
-    // trivial-variant annotation.
-    //
-    // MACRO CASE (ClosedTheory.hs:332-366, see line 334 + Model/Rule.hs:790-793): When the theory
-    // uses macros, HS's `cprRuleE` keeps the MACRO form of the rule while
-    // `cprRuleAC` has the EXPANDED form (closeProtoRule runs
-    // `applyMacroInRule` before `variantsProtoRule` but stores the original
-    // `ruE` untouched — lib/theory/src/Rule.hs:82-86, see line 85).
-    // `isTrivialProtoVariantAC` then
-    // returns `False` because `ps != ps'` (macro term ≠ expanded term).
-    // RS's `opr.rule` stores the EXPANDED form (post-`expand_theory_macros`)
-    // so we must additionally check whether the DISPLAY form (parsed_rule,
-    // which still has macro calls) matches the elaborated body.  If they
-    // differ, even a rule with no AC variants must show the AC comment block
-    // containing the expanded form.
-    let trivial = {
-        let no_residual_substs = elab_rule.variant_substs.iter().all(|s| s.is_empty());
-        // HS `isTrivialProtoVariantAC` (Model/Rule.hs:790-793):
-        //   variants == [emptySubstVFresh] && ps == ps' && as == as' && cs == cs' && nvs == nvs'
-        //
-        // In HS, `cprRuleE` (E-rule) and `cprRuleAC` (AC-rule) live in
-        // the SAME term universe — AC smart-constructors normalise at
-        // construction time everywhere, so the only difference between
-        // them arises from (a) genuine non-trivial AC variants or (b)
-        // macro expansion changing terms.
-        //
-        // In RS: `abstracted_rule = Some(ac)` iff Maude found a
-        // non-trivial abstraction (reducible sub-terms, yielding a
-        // different AC form) — compare the E-rule against the abstracted
-        // AC form via `same_rule_body`.
-        // `abstracted_rule = None` means `abstract_rule_and_variants`
-        // returned `Ok(None)` (common_subst empty AND no residual
-        // substs) — i.e., the AC form IS the E form.  The only remaining
-        // source of divergence is macro expansion: if the display body
-        // (`premises`/`actions`/`conclusions`, from `parsed_rule` before
-        // macro expansion) contains macro calls, it differs from the
-        // elaborated form and HS's `ps != ps'` would fire.  Detect this
-        // by applying macros to the display facts and checking whether
-        // any term changed (HS `applyMacroInRule`, lib/theory/src/Rule.hs:85).
-        //
-        // Crucially: do NOT compare rendered text across AST↔LN spaces —
-        // AC ordering and nat-constant representation differ between the
-        // parsed form and `lnfacts_to_parser(elab_rule.rule.*)`, producing
-        // false negatives for plain rules like those in ParserTests.spthy.
-        // HS `isTrivialProtoVariantAC` (Model/Rule.hs:791-793) compares the AC
-        // rule body against the E rule body (`ps==ps' && as==as' &&
-        // cs==cs' && nvs==nvs'`).  `closeProtoRule` stores `cprRuleE`
-        // (the ORIGINAL rule, WITH macro calls) untouched and computes
-        // `cprRuleAC` from the macro-EXPANDED, variant-base rule
-        // (lib/theory/src/Rule.hs:82-86).  So a macro call makes `ps != ps'` and the
-        // rule is NOT trivial — it must render the AC block showing the
-        // expanded body.  Detect a macro in the display (E) body by
-        // expanding it: if anything changes, the E (macro) form differs
-        // from the AC (expanded) form.  This holds REGARDLESS of whether
-        // Maude abstracted the rule, so it MUST gate BOTH branches below:
-        // a rule that is both macro-using AND abstracted (e.g. a `^`/DH
-        // rule whose body is a macro call) is NOT trivial
-        // (regression/trace/issue777: `pk(x)='g'^x`, `Out(pk(~x))`).
-        // Fast path: with no macro definitions, `apply_macros_fact` is an
-        // identity rebuild (no macro can match), so the comparison below is
-        // always `true`.  Skip the three deep-clone passes entirely.
-        let no_macro_in_display = macros.is_empty() || {
-            let mp: Vec<p::Fact> = premises
-                .iter()
-                .map(|f| crate::macro_expand::apply_macros_fact(macros, f))
-                .collect();
-            let ma: Vec<p::Fact> = actions
-                .iter()
-                .map(|f| crate::macro_expand::apply_macros_fact(macros, f))
-                .collect();
-            let mc: Vec<p::Fact> = conclusions
-                .iter()
-                .map(|f| crate::macro_expand::apply_macros_fact(macros, f))
-                .collect();
-            mp == premises && ma == actions && mc == conclusions
-        };
-        let ac_body_matches = match &elab_rule.abstracted_rule {
-            // No Maude abstraction: AC form == E form structurally, so
-            // trivial iff no macro changes the display body.
-            None => no_macro_in_display,
-            // Maude abstracted the rule: the AC (abstracted) body must
-            // match the elaborated body AND no macro may differ between
-            // the display (E) and expanded (AC) forms.
-            Some(ac) => same_rule_body(&elab_rule.rule, ac) && no_macro_in_display,
-        };
-        no_residual_substs && ac_body_matches
-    };
+    // (ClosedTheory.hs:332-363); the test itself is the shared
+    // `is_trivial_proto_variant_ac` (also the auto-sources unfold's gate).
+    let trivial = is_trivial_proto_variant_ac(&premises, &actions, &conclusions, elab_rule, macros);
 
     // HS `prettyClosedProtoRule` (ClosedTheory.hs:337-339, 352-354) emits
     // `prettyLoopBreakers` at `nest 2` BEFORE the trailing
@@ -2768,6 +2741,63 @@ fn render_rule(
     out
 }
 
+/// The merged display of a multi-variant auto-sources unfold — HS
+/// `prettyOpenProtoRuleAsClosedRule (OpenProtoRule ruE variants)`
+/// (OpenTheory.hs:845-851):
+///   `prettyProtoRuleE ruE $-$ nest 1 (kwVariants $-$ nest 1 (ppList
+///   prettyProtoRuleAC variants))`
+/// — the E rule at its usual columns, a ` variants` keyword line (nest 1),
+/// then each variant as `prettyProtoRuleAC` at nest 2 (header at col 2,
+/// body bracket at col 5, its `ProtoRuleACInfo` at col 4), separated by a
+/// `,` line at col 2.  For an unfolded variant the info prints only the
+/// carried loop breakers — the disjunction is `[emptySubstVFresh]`, which
+/// `ppVariants` elides (Theory/Model/Rule.hs:1407-1413, see line 1412) —
+/// and every variant of one unfold carries the SAME breakers, so the
+/// slot's single elaborated anchor (`er`, its first variant — see
+/// `pair_elaborated_rules`) supplies them for all.
+// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
+// std kept (byte-inert) — iteration order never reaches output.
+#[allow(clippy::disallowed_types)]
+fn render_unfolded_variants_block(
+    parsed_rule: &p::Rule,
+    er: &crate::theory::OpenProtoRule,
+    arity1: &std::collections::HashSet<String>,
+) -> String {
+    use crate::elaborate::canonicalize_ac_in_pfact;
+    use crate::pretty_hpj::Doc;
+    let (mut out, _, _, _) = render_rule_e_block(parsed_rule, arity1);
+    out.push('\n');
+    out.push(' ');
+    out.push_str(&crate::pretty_hpj::keyword_("variants").render());
+    for (i, v) in parsed_rule.variants.iter().enumerate() {
+        out.push('\n');
+        if i > 0 {
+            out.push_str("  ,\n");
+        }
+        let header = crate::pretty_hpj::kw_rule_modulo("AC")
+            .beside_sp(Doc::text(v.name.clone()))
+            .beside(rule_attributes_doc(&v.attributes))
+            .beside(Doc::text(":"))
+            .nest(2);
+        out.push_str(&header.render());
+        out.push('\n');
+        // The variant bodies were regenerated from LN facts
+        // (`proto_rule_to_parsed`), so canonicalise AC argument order at
+        // render time exactly as the modulo-AC comment block does.
+        let prems: Vec<p::Fact> = v.premises.iter().map(canonicalize_ac_in_pfact).collect();
+        let acts: Vec<p::Fact> = v.actions.iter().map(canonicalize_ac_in_pfact).collect();
+        let concs: Vec<p::Fact> = v.conclusions.iter().map(canonicalize_ac_in_pfact).collect();
+        let body = render_rule_body_at(&prems, &acts, &concs, 5);
+        out.push_str(body.trim_end_matches('\n'));
+        let breakers = render_loop_breakers_line(&er.loop_breakers, 4);
+        if !breakers.is_empty() {
+            out.push('\n');
+            out.push_str(breakers.trim_end_matches('\n'));
+        }
+    }
+    out
+}
+
 /// Render HS's `prettyLoopBreakers` (Theory/Model/Rule.hs:1418-1424):
 ///
 /// ```haskell
@@ -2796,6 +2826,105 @@ fn render_loop_breakers_line(breakers: &[crate::rule::PremIdx], indent: usize) -
         " ".repeat(indent),
         crate::pretty_hpj::line_comment_(&body).render()
     )
+}
+
+/// HS `isTrivialProtoVariantAC ruAC ruE` (Model/Rule.hs:790-793):
+///   variants == [emptySubstVFresh] && ps == ps' && cs == cs' && as == as' && nvs == nvs'
+///
+/// i.e. trivial iff (a) the variant disjunction is just the identity
+/// AND (b) the AC-normalised rule body equals the E-rule body
+/// structurally.  Even when there are NO non-trivial substitutions
+/// to enumerate, the AC normalisation may have rewritten terms
+/// (e.g. `'g'^~ltkB^~ltkA` → `'g'^(~ltkA*~ltkB)` under DH), in which
+/// case HS prints the AC body as a comment block rather than the
+/// trivial-variant annotation.
+///
+/// Evaluated here on RS's split representation: `elab_rule` carries the
+/// variant machinery, and `display_*` are the parsed rule's display fact
+/// rows ([`display_fact_rows`]) standing in for HS's `cprRuleE` half.
+/// Shared by `render_rule` (trivial comment vs `rule (modulo AC)` block,
+/// `prettyClosedProtoRule`, ClosedTheory.hs:332-363) and the
+/// `--auto-sources` variant unfold's gate
+/// (`auto_sources::unfold_rule_variants`, HS lib/theory/src/Rule.hs:63-79)
+/// so the two can never disagree on triviality.
+///
+/// MACRO CASE (ClosedTheory.hs:332-366, see line 334 + Model/Rule.hs:790-793): When the theory
+/// uses macros, HS's `cprRuleE` keeps the MACRO form of the rule while
+/// `cprRuleAC` has the EXPANDED form (closeProtoRule runs
+/// `applyMacroInRule` before `variantsProtoRule` but stores the original
+/// `ruE` untouched — lib/theory/src/Rule.hs:82-86, see line 85).
+/// `isTrivialProtoVariantAC` then
+/// returns `False` because `ps != ps'` (macro term ≠ expanded term).
+/// RS's `opr.rule` stores the EXPANDED form (post-`expand_theory_macros`)
+/// so we must additionally check whether the DISPLAY form (parsed_rule,
+/// which still has macro calls) matches the elaborated body.  If they
+/// differ, even a rule with no AC variants must show the AC comment block
+/// containing the expanded form.
+pub(crate) fn is_trivial_proto_variant_ac(
+    display_premises: &[p::Fact],
+    display_actions: &[p::Fact],
+    display_conclusions: &[p::Fact],
+    elab_rule: &crate::theory::OpenProtoRule,
+    macros: &[p::Macro],
+) -> bool {
+    let no_residual_substs = elab_rule.variant_substs.iter().all(|s| s.is_empty());
+    // In HS, `cprRuleE` (E-rule) and `cprRuleAC` (AC-rule) live in
+    // the SAME term universe — AC smart-constructors normalise at
+    // construction time everywhere, so the only difference between
+    // them arises from (a) genuine non-trivial AC variants or (b)
+    // macro expansion changing terms.
+    //
+    // In RS: `abstracted_rule = Some(ac)` iff Maude found a
+    // non-trivial abstraction (reducible sub-terms, yielding a
+    // different AC form) — compare the E-rule against the abstracted
+    // AC form via `same_rule_body`.
+    // `abstracted_rule = None` means `abstract_rule_and_variants`
+    // returned `Ok(None)` (common_subst empty AND no residual
+    // substs) — i.e., the AC form IS the E form.  The only remaining
+    // source of divergence is macro expansion: if the display body
+    // contains macro calls, it differs from the
+    // elaborated form and HS's `ps != ps'` would fire.  Detect this
+    // by applying macros to the display facts and checking whether
+    // any term changed (HS `applyMacroInRule`, lib/theory/src/Rule.hs:85).
+    //
+    // Crucially: do NOT compare rendered text across AST↔LN spaces —
+    // AC ordering and nat-constant representation differ between the
+    // parsed form and `lnfacts_to_parser(elab_rule.rule.*)`, producing
+    // false negatives for plain rules like those in ParserTests.spthy.
+    //
+    // The macro check holds REGARDLESS of whether
+    // Maude abstracted the rule, so it MUST gate BOTH branches below:
+    // a rule that is both macro-using AND abstracted (e.g. a `^`/DH
+    // rule whose body is a macro call) is NOT trivial
+    // (regression/trace/issue777: `pk(x)='g'^x`, `Out(pk(~x))`).
+    // Fast path: with no macro definitions, `apply_macros_fact` is an
+    // identity rebuild (no macro can match), so the comparison below is
+    // always `true`.  Skip the three deep-clone passes entirely.
+    let no_macro_in_display = macros.is_empty() || {
+        let mp: Vec<p::Fact> = display_premises
+            .iter()
+            .map(|f| crate::macro_expand::apply_macros_fact(macros, f))
+            .collect();
+        let ma: Vec<p::Fact> = display_actions
+            .iter()
+            .map(|f| crate::macro_expand::apply_macros_fact(macros, f))
+            .collect();
+        let mc: Vec<p::Fact> = display_conclusions
+            .iter()
+            .map(|f| crate::macro_expand::apply_macros_fact(macros, f))
+            .collect();
+        mp == display_premises && ma == display_actions && mc == display_conclusions
+    };
+    let ac_body_matches = match &elab_rule.abstracted_rule {
+        // No Maude abstraction: AC form == E form structurally, so
+        // trivial iff no macro changes the display body.
+        None => no_macro_in_display,
+        // Maude abstracted the rule: the AC (abstracted) body must
+        // match the elaborated body AND no macro may differ between
+        // the display (E) and expanded (AC) forms.
+        Some(ac) => same_rule_body(&elab_rule.rule, ac) && no_macro_in_display,
+    };
+    no_residual_substs && ac_body_matches
 }
 
 /// Compare the `(premises, conclusions, actions, new_vars)` of two

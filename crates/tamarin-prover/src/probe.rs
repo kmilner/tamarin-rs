@@ -124,7 +124,8 @@ fn hs_exit_code(status: &ExitStatus) -> i32 {
 /// `ignoreSigPipe`d upstream, so a child that exits without draining its input
 /// (`dot -V`) is not an error here either.  HS drains the output pipes
 /// concurrently with the stdin write; this port writes first and drains
-/// after, which is equivalent for the empty `inp` both callers pass.
+/// after, which is equivalent while `inp` stays far below the pipe buffer —
+/// the callers pass `""` or `"quit\n"`.
 fn read_process_with_exit_code(
     prog: &str,
     args: &[&str],

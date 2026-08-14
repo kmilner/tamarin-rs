@@ -75,7 +75,8 @@ pub enum NodeStatus {
     Contradictory,
     /// At least one branch reached `Unfinishable`.
     Unfinishable,
-    /// Exceeded the `max_steps` budget.
+    /// Gave up on at least one branch (`sorry`): depth limit, deadline,
+    /// `--bound` cut, or no applicable method.
     Sorry,
 }
 
@@ -408,6 +409,18 @@ thread_local! {
     /// to retry with doubled depth.  Mirrors Haskell's `MaybeNoSolution`
     /// sentinel in `cutOnSolvedDFS` (Theory/Proof.hs:855-877).
     static DEPTH_LIMIT_HIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+
+    /// `--bound=N` proof-depth bound — HS `boundProofDepth`
+    /// (Theory/Proof.hs:336-344), applied by `runAutoProver`'s
+    /// `maybe id boundProver (apBound p)` (Theory/Proof.hs:753-760): every
+    /// node at depth `N` from the search root is replaced by a
+    /// `sorry /* bound N hit */` leaf.  `usize::MAX` = no bound (HS
+    /// `apBound = Nothing`, the default).  Unlike `MAX_DEPTH` this is
+    /// fixed for the whole search, not an ID-DFS iteration variable, and
+    /// a bound-sorry is FINAL — it never sets `DEPTH_LIMIT_HIT` and is
+    /// never re-expanded, so the deepening loops terminate once the
+    /// whole frontier is bound-cut.
+    static PROOF_BOUND: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
 }
 
 /// True iff the current search is past its wall-clock deadline.
@@ -429,11 +442,13 @@ fn clear_deadline() {
 /// Run an iterative-deepening search.  Heuristic: try `Simplify`
 /// once, then pick the first ranked open goal each round.
 ///
-/// `max_steps` is accepted for API compatibility but is NOT used as a
-/// terminal cutoff: HS's `cutOnSolvedDFS` bounds the search purely by
-/// the ID-DFS depth `dMax` (`MAX_DEPTH`, described below) and the
-/// per-lemma wall-clock timeout (`deadline`).  See the
-/// `budget = usize::MAX` note in each strategy arm.
+/// `proof_bound` is `--bound=N`'s proof-depth bound (HS `apBound`,
+/// applied as `boundProofDepth` — see [`PROOF_BOUND`]); pass
+/// `usize::MAX` for unbounded (HS `Nothing`, the default).  It is NOT a
+/// step budget: HS's `cutOnSolvedDFS` bounds the search purely by
+/// the ID-DFS depth `dMax` (`MAX_DEPTH`, described below), the
+/// per-lemma wall-clock timeout (`deadline`), and this proof-depth
+/// bound.  See the `budget = usize::MAX` note in each strategy arm.
 ///
 /// Returns the root proof node. The final status is the OR of children
 /// (Solved if all children solved, Contradictory if any contradictory,
@@ -471,9 +486,10 @@ fn clear_deadline() {
 /// when the longer path is alphabetically earlier — critical for
 /// NSPK3/roles `injective_agree` where Haskell renders `case c_aenc`
 /// (shorter) over `case I_2` (alphabetically earlier but deeper).
-pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -> ProofNode {
+pub fn run_proof_search(ctx: &ProofContext, initial: System, proof_bound: usize) -> ProofNode {
     let deadline = proof_deadline();
     set_deadline(deadline);
+    PROOF_BOUND.with(|b| b.set(proof_bound));
     // Optional hard-watchdog: opt-in via TAM_PROVE_DEADLINE_HARD_KILL=1.
     // Spawns a detached thread that sleeps `deadline + grace_ms` and
     // then calls `std::process::exit(124)`.  Catches cases where the
@@ -503,10 +519,6 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
             })
             .ok();
     }
-    // `max_steps` is accepted for call-site signature compatibility but is
-    // not used as a cutoff (see the `budget = usize::MAX` note in each arm):
-    // HS's cut strategies bound the search by proof depth / wall-clock only.
-    let _ = max_steps;
     let mut root = ProofNode {
         method: ProofMethod::Sorry(Some("initial".into())),
         sys: initial,
@@ -633,8 +645,9 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
                 // witness is reachable but sits beneath a broad fan-out of
                 // contradiction branches — turning a Solved exists-trace into
                 // Sorry (the loop-breaker count is HS-faithful, so source
-                // cases are wide).  So the caller's `max_steps` is ignored
-                // and we run unbudgeted as HS does: `MAX_DEPTH` doubles
+                // cases are wide).  So we run unbudgeted as HS does
+                // (`proof_bound` cuts by DEPTH, in `expand_inner`, not by
+                // step count): `MAX_DEPTH` doubles
                 // unbounded (mirroring HS's `dMax`), with only the far-out
                 // `cap` (`usize::MAX / 4`) as a loop-termination guard, and
                 // `deadline` catching wall-clock runaway.
@@ -670,6 +683,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
     }
     MAX_DEPTH.with(|m| m.set(usize::MAX));
     DEPTH_LIMIT_HIT.with(|f| f.set(false));
+    PROOF_BOUND.with(|b| b.set(usize::MAX));
     clear_deadline();
     // HS-faithful: `cutOnSolvedDFS` / `cutOnSolvedSingleThreadDFS`
     // (Theory/Proof.hs:854-884, 795-816) call `extractSolved path prf0` once a
@@ -979,6 +993,20 @@ fn expand_inner(
     // steps are recorded, not just SolveGoal dispatch (proof_method.rs).
     // It has no Haskell counterpart and does not affect --prove output.
     crate::constraint::solver::trace::trace_state(&node.sys);
+    // `--bound=N` (HS `boundProofDepth`, Theory/Proof.hs:336-344): `go n`'s
+    // `0 < n` guard fires before the node is even inspected, so ANY node at
+    // depth `bound` — a would-be Solved leaf included — becomes
+    // `sorry (Just $ "bound " ++ show bound ++ " hit")`.  Hence this check
+    // sits before `is_finished`, and before the ID-DFS depth limit because
+    // a bound-sorry is FINAL: it must not set `DEPTH_LIMIT_HIT` (it is not
+    // a re-expandable "depth limit" thunk), or the deepening loop would
+    // keep doubling `MAX_DEPTH` against a frontier that can never move.
+    let proof_bound = PROOF_BOUND.with(|b| b.get());
+    if depth >= proof_bound {
+        node.method = ProofMethod::Sorry(Some(format!("bound {proof_bound} hit")));
+        node.status = NodeStatus::Sorry;
+        return;
+    }
     // ID-DFS depth limit (Haskell `cutOnSolvedDFS` Theory/Proof.hs:855-877).
     //
     // Haskell's `findSolved` checks `d >= dMax` BEFORE checking the
@@ -1116,12 +1144,12 @@ fn expand_inner(
     // where the early-break matters for speed.
     // Bounded by rayon's global pool sized via `--processors=N`.
     //
-    // Thread-locals propagated to workers: MAX_DEPTH (read-only),
-    // DEPTH_LIMIT_HIT (each worker sets its local, aggregated OR after
-    // the parallel pass), and the user-fun sets (snapshot installed per
-    // worker — see `disable_parallel_expand`).  case_path is best-effort
-    // under parallel: each worker seeds its stack from the parent's
-    // snapshot at entry.
+    // Thread-locals propagated to workers: MAX_DEPTH and PROOF_BOUND
+    // (read-only), DEPTH_LIMIT_HIT (each worker sets its local, aggregated
+    // OR after the parallel pass), and the user-fun sets (snapshot
+    // installed per worker — see `disable_parallel_expand`).  case_path is
+    // best-effort under parallel: each worker seeds its stack from the
+    // parent's snapshot at entry.
     let n_cases = cases.len();
     let serial_only = disable_parallel_expand();
     // Gate parallel mode on all-traces lemmas only.  Exists-trace
@@ -1155,7 +1183,11 @@ fn expand_inner(
         use rayon::prelude::*;
         // Snapshot data needed by each worker.  MAX_DEPTH is a per-
         // search ID-DFS limit — read once here, restored at each worker.
+        // PROOF_BOUND likewise: a stolen worker thread's own cell is
+        // usize::MAX (or stale), and a child expanded there without the
+        // re-seed would sail past the `--bound` cut.
         let mp_snapshot = MAX_DEPTH.with(|m| m.get());
+        let bound_snapshot = PROOF_BOUND.with(|b| b.get());
         // Snapshot the proof-tree case_path so each worker can seed its
         // own thread-local stack and produce coherent trace output.
         let path_snapshot: Vec<String> = crate::constraint::solver::trace::case_path_snapshot();
@@ -1184,6 +1216,7 @@ fn expand_inner(
                 // case path) sees the correct values regardless of which
                 // worker thread we land on.
                 MAX_DEPTH.with(|m| m.set(mp_snapshot));
+                PROOF_BOUND.with(|b| b.set(bound_snapshot));
                 DEPTH_LIMIT_HIT.with(|f| f.set(false));
                 DEADLINE.with(|d| d.set(Some(deadline_snapshot)));
                 crate::constraint::solver::trace::case_path_set(&path_snapshot);
@@ -1265,6 +1298,7 @@ fn expand_inner(
         // lemma-level parallelism, so the search sees its own MAX_DEPTH /
         // DEADLINE / case_path after the fan-out.
         MAX_DEPTH.with(|m| m.set(mp_snapshot));
+        PROOF_BOUND.with(|b| b.set(bound_snapshot));
         DEADLINE.with(|d| d.set(Some(deadline_snapshot)));
         crate::constraint::solver::trace::case_path_set(&path_snapshot);
         for (name, child, _hit) in results {
@@ -1582,68 +1616,7 @@ mod tests {
     use super::*;
     use tamarin_term::maude_sig::pair_maude_sig;
 
-    /// Absolute maude locations probed when `MAUDE_PATH` is unset — the same
-    /// pair the rest of the workspace's maude-gated suites walk.
-    const MAUDE_CANDIDATES: [&str; 2] = ["/usr/local/bin/maude", "/usr/bin/maude"];
-
-    /// Probed after [`MAUDE_CANDIDATES`] and `$PATH`: this workspace's
-    /// benchmark toolchain installs maude under linuxbrew, which is not on a
-    /// default `PATH`.
-    const MAUDE_BREW: &str = "/home/linuxbrew/.linuxbrew/bin/maude";
-
-    /// The first `maude` on `$PATH`, if any.
-    fn maude_on_path() -> Option<String> {
-        let path = std::env::var_os("PATH")?;
-        std::env::split_paths(&path)
-            .map(|dir| dir.join("maude"))
-            .find(|c| c.is_file())
-            .map(|c| c.to_string_lossy().into_owned())
-    }
-
-    /// The maude the tests below run against: `$MAUDE_PATH` when set, else the
-    /// first of [`MAUDE_CANDIDATES`], `$PATH`, [`MAUDE_BREW`] that exists.
-    ///
-    /// A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION,
-    /// not a reason to skip — returning `None` there would turn every
-    /// maude-backed test in this module green on a CI whose image moved maude.
-    /// Panic instead, so the run goes red.  Resolving nothing at all is the
-    /// same failure with a wider blast radius, so it panics too:
-    /// `TAM_ALLOW_NO_MAUDE=1` is the only way to get the old silent skip, and
-    /// naming it is a deliberate statement that this run is not asserting
-    /// anything about maude.
-    fn maude_path() -> Option<String> {
-        if let Ok(p) = std::env::var("MAUDE_PATH") {
-            assert!(
-                std::path::Path::new(&p).exists(),
-                "MAUDE_PATH={p} does not exist; unset it to fall back to \
-                 {MAUDE_CANDIDATES:?}, or point it at a real maude — skipping \
-                 every maude-backed test here would report green vacuously"
-            );
-            return Some(p);
-        }
-        if let Some(c) = MAUDE_CANDIDATES
-            .iter()
-            .find(|c| std::path::Path::new(c).exists())
-        {
-            return Some((*c).to_string());
-        }
-        if let Some(p) = maude_on_path() {
-            return Some(p);
-        }
-        if std::path::Path::new(MAUDE_BREW).exists() {
-            return Some(MAUDE_BREW.to_string());
-        }
-        if std::env::var("TAM_ALLOW_NO_MAUDE").as_deref() == Ok("1") {
-            return None;
-        }
-        panic!(
-            "no maude found: probed $MAUDE_PATH, {MAUDE_CANDIDATES:?}, $PATH \
-             and {MAUDE_BREW}.  Every maude-backed test in this module would \
-             otherwise report green having run nothing.  Install maude, point \
-             MAUDE_PATH at it, or set TAM_ALLOW_NO_MAUDE=1 to accept the \
-             silent skip."
-        );
-    }
+    use crate::test_maude::maude_path;
 
     fn ctx() -> Option<ProofContext> {
         let path = maude_path()?;

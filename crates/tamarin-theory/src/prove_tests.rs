@@ -661,3 +661,72 @@ fn presaturate_disabled_is_noop() {
         "the disabled pre-pass seeds no cache entries"
     );
 }
+
+/// `parse_config_block` records what cmdargs records, rejection strings
+/// byte-pinned against the oracle (`configuration: "<cfg>"` under
+/// `--prove`, stderr after `tamarin-prover: `).
+#[test]
+fn config_block_matches_cmdargs_semantics() {
+    use crate::constraint::solver::context::CutStrategy;
+
+    // Prefix matching resolves like the CLI's: `--stop`, even `--s`.
+    for cfg in ["--stop-on-trace=bfs", "--stop=bfs", "--s=bfs"] {
+        let b = parse_config_block(cfg);
+        assert_eq!(b.flag_error, None, "{cfg}");
+        assert_eq!(b.stop_on_trace.as_deref(), Some("bfs"), "{cfg}");
+    }
+    // flagOpt: bare records "dfs"; no separate token is consumed.
+    let b = parse_config_block("--stop-on-trace bfs");
+    assert_eq!(b.stop_on_trace.as_deref(), Some("dfs"));
+    // The VALUE is recorded raw — validation is the reader's, later.
+    let b = parse_config_block("--stop-on-trace=XYZ --auto-sources");
+    assert_eq!(b.flag_error, None);
+    assert_eq!(b.stop_on_trace.as_deref(), Some("XYZ"));
+    assert!(b.auto_sources);
+    // Positionals are swallowed by the catch-all.
+    let b = parse_config_block("positional --auto-sources");
+    assert_eq!(b.flag_error, None);
+    assert!(b.auto_sources);
+
+    // cmdargs-level rejections, byte-for-byte.
+    for (cfg, want) in [
+        ("--nonsense", "Unknown flag: --nonsense"),
+        (
+            "--auto-sources=x",
+            "Unhandled argument to flag, none expected: --auto-sources=x",
+        ),
+        ("-a", "Unknown flag: -a"),
+        ("-abc", "Unknown flag: -a"),
+        (
+            "--=x",
+            "Ambiguous flag '--', could be any of: stop-on-trace auto-sources",
+        ),
+    ] {
+        assert_eq!(
+            parse_config_block(cfg).flag_error.as_deref(),
+            Some(want),
+            "{cfg}"
+        );
+    }
+
+    // The deferred value reader — HS `stopOnTrace`, lowercasing first.
+    assert_eq!(parse_stop_on_trace("BFS"), Ok(CutStrategy::Bfs));
+    assert_eq!(
+        parse_stop_on_trace("XYZ"),
+        Err("unknown stop-on-trace method: xyz".to_string())
+    );
+
+    // The server's eager wrapper surfaces both kinds of error.
+    assert_eq!(
+        config_block_options("--nonsense"),
+        Err("Unknown flag: --nonsense".to_string())
+    );
+    assert_eq!(
+        config_block_options("--stop-on-trace=XYZ"),
+        Err("unknown stop-on-trace method: xyz".to_string())
+    );
+    assert_eq!(
+        config_block_options("--stop-on-trace=seqdfs --auto-sources"),
+        Ok((Some(CutStrategy::SeqDfs), true))
+    );
+}

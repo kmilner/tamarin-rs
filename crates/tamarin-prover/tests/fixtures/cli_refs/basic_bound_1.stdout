@@ -24,10 +24,7 @@ guarded formula characterizing all satisfying traces:
 "∃ k x #i. (Use( k, x ) @ #i)"
 */
 simplify
-solve( St( ~k ) ▶₀ #i )
-  case Gen
-  SOLVED // trace found
-qed
+by sorry /* bound 1 hit */
 
 lemma leaks:
   all-traces "∀ k #i. (Gen( k ) @ #i) ⇒ (¬(∃ #j. K( k ) @ #j))"
@@ -36,10 +33,7 @@ guarded formula characterizing all counter-examples:
 "∃ k #i. (Gen( k ) @ #i) ∧ ∃ #j. (K( k ) @ #j)"
 */
 simplify
-solve( !KU( ~k ) @ #vk )
-  case Gen
-  SOLVED // trace found
-qed
+by sorry /* bound 1 hit */
 
 /* All wellformedness checks were successful. */
 
@@ -60,7 +54,7 @@ analyzed: /home/kamilner/tamarin-rs-2/crates/tamarin-prover/tests/fixtures/cli_f
 
   processing time: 0.10s
   
-  reach (exists-trace): verified (3 steps)
-  leaks (all-traces): falsified - found trace (3 steps)
+  reach (exists-trace): analysis incomplete (2 steps)
+  leaks (all-traces): analysis incomplete (2 steps)
 
 ==============================================================================

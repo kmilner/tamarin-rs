@@ -62,6 +62,26 @@ pub struct OpenProtoRule {
     /// populated by `ProofContext::new`'s `annotate_loop_breakers`
     /// pass.
     pub loop_breakers: Vec<crate::rule::PremIdx>,
+    /// This rule is a product of the `--auto-sources` variant unfold
+    /// (`unfoldRuleVariants`, lib/theory/src/Rule.hs:63-79): `rule` holds one
+    /// AC variant named `<orig>___VARIANT_<i>` while HS's `cprRuleE` half
+    /// keeps the ORIGINAL rule, so the two names differ and
+    /// `equalUpToTerms` (Theory/Model/Rule.hs:960-968) is False on the name
+    /// alone — `openProtoRule` (lib/theory/src/Rule.hs:52-59) then always
+    /// yields its non-empty `[ruAC]` branch for such a rule.  The renderer
+    /// reads this flag where it mirrors that branch choice
+    /// (`pretty_theory::rule_open_ac_nonempty`).
+    pub unfolded_variant: bool,
+    /// HS's `cprRuleE` half, kept only when the `--auto-sources` close made
+    /// `rule` diverge from it: `addActionClosedProtoRule` adds AUTO actions
+    /// to `cprRuleAC` only (lib/theory/src/Rule.hs:95-99) and
+    /// `unfoldRuleVariants` carries the ORIGINAL rule as every variant's
+    /// `cprRuleE` (lib/theory/src/Rule.hs:63-79, see line 76).  Consumers of
+    /// HS's `getProtoRuleEs` (`S.toList . S.fromList . map oprRuleE`,
+    /// ClosedTheory.hs:87-89) — partial evaluation — must read this half:
+    /// it carries no AUTO actions, and the Set round-trip collapses the
+    /// per-variant duplicates.  `None` whenever `rule` still IS the E-half.
+    pub rule_e: Option<Box<ProtoRuleE>>,
 }
 
 impl OpenProtoRule {
@@ -71,6 +91,8 @@ impl OpenProtoRule {
             variant_substs: Vec::new(),
             abstracted_rule: None,
             loop_breakers: Vec::new(),
+            unfolded_variant: false,
+            rule_e: None,
         }
     }
 

@@ -79,12 +79,6 @@ pub struct ServerConfig {
     pub frontend_dist: Option<PathBuf>,
     /// Path to the Maude binary.
     pub maude_path: String,
-    /// Proof-search step budget the `autoprove` / `autoproveAll` routes
-    /// thread into `tamarin_theory::prove::prove_system_in_session` (a
-    /// non-zero `bound` in the URL overrides it).  A no-op in the solver:
-    /// `run_proof_search` bounds search by ID-DFS depth + wall-clock
-    /// deadline only (HS-faithful), so the value is accepted and ignored.
-    pub max_steps: usize,
     /// `--derivcheck-timeout` for the dynamic message-derivation checks
     /// run at theory load (HS interactive default 5s; 0 disables).  Set
     /// from the CLI flag by `interactive` setup.
@@ -100,11 +94,12 @@ pub struct ServerConfig {
     /// (Environment.hs:41-45), whose string `dotToImg` invokes verbatim
     /// (Web/Theory.hs:1494-1497).
     pub dot_path: String,
-    /// CLI `--with-json` (`None` = flag absent).  HS `readOutputCommand`
-    /// (Environment.hs:41-45) lets its presence override `--with-dot` and
-    /// switches the interactive graph route to `<cmd> <img> <json>`
-    /// (Web/Theory.hs:1484-1491).  Rendering here still goes through
-    /// [`ServerConfig::dot_path`]; only the startup banner honours the flag.
+    /// CLI `--with-json` — when given, HS `readOutputCommand` switches to
+    /// `OutJSON` (Environment.hs:41-45, overriding `--with-dot`) and the
+    /// graph route renders through `jsonToImg`: the system's JSON graph is
+    /// written to a file and `<json-cmd> <img> <json>` produces the image
+    /// (`imgThyPath` → `renderGraphCode`, Web/Theory.hs:1404-1412, 1484-1491).
+    /// `None` = flag absent, the `dot` pipeline above.
     pub json_path: Option<String>,
 }
 
@@ -115,7 +110,6 @@ impl ServerConfig {
             data_dir,
             frontend_dist: None,
             maude_path,
-            max_steps: 500,
             derivcheck_timeout: 5,
             stop_on_trace: None,
             dot_path: "dot".to_string(),

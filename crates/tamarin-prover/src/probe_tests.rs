@@ -213,6 +213,31 @@ fn maude_abort_is_the_console_hs_error() {
     );
 }
 
+/// HS `supportedVersions` (Console.hs:176), read back out of the pinned
+/// source for the same reason as the abort pin above: every other test of the
+/// version check restates the list (or iterates the constant), so a submodule
+/// bump that edits the upstream list — 3.5 and 3.5.1 are recent additions —
+/// would otherwise leave the port rejecting a maude the oracle accepts with
+/// every test green.
+#[test]
+fn supported_versions_are_the_console_hs_list() {
+    let line = CONSOLE_HS
+        .lines()
+        .find(|l| l.trim_start().starts_with("supportedVersions ="))
+        .expect("no supportedVersions binding in the pinned src/Main/Console.hs");
+    let versions: Vec<&str> = line
+        .split_once('[')
+        .expect("no list literal on the supportedVersions line")
+        .1
+        .trim_end()
+        .strip_suffix(']')
+        .expect("supportedVersions list does not close on its own line")
+        .split(',')
+        .map(|s| s.trim().trim_matches('"'))
+        .collect();
+    assert_eq!(&SUPPORTED_MAUDE_VERSIONS[..], &versions[..]);
+}
+
 /// Oracle (`--with-maude=/bin/echo`): `errMsg` is `unlines`, so it opens with
 /// `WARNING:` and a blank line and closes with the version list — the trailing
 /// newline is what leaves a blank line before `Detailed results`.  The

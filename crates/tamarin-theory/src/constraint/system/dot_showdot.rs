@@ -594,9 +594,12 @@ fn render_lnterm(t: &LNTerm) -> String {
 
 /// graphviz's HTML-text escape (`escapeValue`, Data.GraphViz.Attributes.HTML).
 ///
-/// Beyond the four entity substitutions, a RUN of spaces keeps its first space
-/// literal and encodes the rest as `&#32;` — the numeric entity, because a
-/// plain space run would be collapsed by the HTML-like label parser.  Every
+/// Three entity substitutions, not four: `escapeValue = escapeHtml True`
+/// deletes `'"'` from the escape map, so quotes in text content stay literal —
+/// only `escapeAttribute` (used for tag attributes, which we never emit with
+/// user data) encodes `&quot;`.  Beyond those, a RUN of spaces keeps its first
+/// space literal and encodes the rest as `&#32;` — the numeric entity, because
+/// a plain space run would be collapsed by the HTML-like label parser.  Every
 /// single space (the common case) is therefore untouched.
 fn escape_html_text(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -616,7 +619,6 @@ fn escape_html_text(s: &str) -> String {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
             _ => out.push(c),
         }
     }

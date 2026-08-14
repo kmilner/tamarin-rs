@@ -51,7 +51,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         data_dir,
         frontend_dist,
         maude_path,
-        max_steps: 500,
         derivcheck_timeout: 5,
         stop_on_trace: None,
         dot_path: "dot".to_string(),

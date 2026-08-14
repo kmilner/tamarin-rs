@@ -610,11 +610,16 @@ fn is_pos_neg_formula(f: &tamarin_parser::ast::Formula) -> (bool, bool) {
         // `Not` case — evaluated directly rather than by rebuilding the
         // desugared formula.
         Implies(p, q) => and2(swap(is_pos_neg_formula(p)), is_pos_neg_formula(q)),
-        // `Conn Iff p q -> isPosNegFormula $ p .==>. q .&&. q .==>. p` — the
-        // `And` of the two `Imp` cases above.
+        // `Conn Iff p q -> isPosNegFormula $ p .==>. q .&&. q .==>. p` — NOT
+        // the `And` of the two `Imp` cases: `.&&.` is infixl 3 and `.==>.` is
+        // infixr 1 (Theory/Model/Formula.hs:233-235), so the expression parses
+        // as `p .==>. ((q .&&. q) .==>. p)`, whose polarity is
+        // `and2(swap(fp), and2(swap(fq), fp))`.  The two differ whenever `fq`
+        // is asymmetric (a `K(..)@t` atom in `q`): HS keeps the second
+        // component `p1 && q1 && p2`, the symmetric reading zeroes it.
         Iff(p, q) => {
             let (fp, fq) = (is_pos_neg_formula(p), is_pos_neg_formula(q));
-            and2(and2(swap(fp), fq), and2(swap(fq), fp))
+            and2(swap(fp), and2(swap(fq), fp))
         }
         Forall(_, p) | Exists(_, p) => is_pos_neg_formula(p),
     }
@@ -693,5 +698,47 @@ mod tests {
             tr.rules[0].0.info.name,
             tamarin_theory::rule::ProtoRuleName::Stand("Init")
         );
+    }
+
+    fn action_atom(name: &str) -> p::Formula {
+        p::Formula::Atom(p::Atom::Action(
+            p::Fact {
+                persistent: false,
+                name: name.into(),
+                args: vec![],
+                annotations: vec![],
+            },
+            p::Term::Var(p::VarSpec {
+                name: "i".into(),
+                idx: 0,
+                sort: p::SortHint::Node,
+                typ: None,
+            }),
+        ))
+    }
+
+    /// `Conn Iff p q -> isPosNegFormula $ p .==>. q .&&. q .==>. p`
+    /// (sapic/src/Sapic.hs:165) parses as `p .==>. ((q .&&. q) .==>. p)` (`.&&.` infixl 3
+    /// binds tighter than `.==>.` infixr 1, Theory/Model/Formula.hs:233-235),
+    /// so with `p` symmetric and `q` a `K` atom the polarity is `(F, T)` — the
+    /// negative component survives.  The symmetric `(p ==> q) && (q ==> p)`
+    /// reading yields `(F, F)` and wrongly makes an all-traces lemma need the
+    /// `in_event` restriction.
+    #[test]
+    fn iff_polarity_follows_hs_fixity_parse() {
+        let iff = p::Formula::Iff(Box::new(action_atom("A")), Box::new(action_atom("K")));
+        assert_eq!(is_pos_neg_formula(&iff), (false, true));
+
+        let lem = p::Lemma {
+            name: "weird".into(),
+            modulo: None,
+            attributes: vec![],
+            trace_quantifier: p::TraceQuantifier::AllTraces,
+            formula: iff,
+            proof: None,
+            plaintext: String::new(),
+        };
+        // HS: (AllTraces, (_, True)) -> False — no in_event restriction.
+        assert!(!lemma_needs_in_ev_res(&lem));
     }
 }

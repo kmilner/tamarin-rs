@@ -23,10 +23,13 @@
 //!                              (run.rs `effective_config`).  Without
 //!                              --prove every value parses and is ignored,
 //!                              as in HS.
-//!   --bound=N, -bN             proof-depth bound.  Routed only in interactive
-//!                              mode (`ServerConfig::max_steps`); the batch
-//!                              prove loop bounds by wall-clock deadline and
-//!                              discards it, where HS applies `boundProver`.
+//!   --bound=N, -bN             proof-depth bound (HS `apBound`, applied as
+//!                              `boundProofDepth` — nodes at depth N become
+//!                              `sorry /* bound N hit */`).  Batch: applied to
+//!                              `--prove`-target lemmas only.  Interactive:
+//!                              accepted but dead, as in HS — every autoprove
+//!                              route replaces `apBound` with the URL's bound
+//!                              (Web/Handler.hs:1235-1249).
 //!   --saturation=N, -sN        bound on saturation iterations (default 5)
 //!   --heuristic=...            heuristic ranking sequence (overrides per-lemma)
 //!   --partial-evaluation=...   partial-evaluation mode (SUMMARY|VERBOSE)
@@ -90,15 +93,15 @@
 //!                              `readOutputCommand` (Environment.hs:41-45),
 //!                              and Batch.hs calls neither.
 //!   --with-json=PATH           path to JSON renderer.  Its presence overrides
-//!                              --with-dot (Environment.hs:41-45) and replaces
+//!                              --with-dot (Environment.hs:41-45), replaces
 //!                              interactive mode's GraphViz banner with the
 //!                              `Graph rendering command:` / `which` probe
-//!                              (Environment.hs:104-115).  Divergence: graph
-//!                              rendering still goes through `dot -Tsvg`,
-//!                              where HS runs `<cmd> <img> <json>`
-//!                              (Web/Theory.hs:1484-1491).  Inert in batch
-//!                              mode, as in HS (`readOutputCommand` is only
-//!                              called from Interactive.hs:106,138).
+//!                              (Environment.hs:104-115), and switches the
+//!                              graph route to HS's `jsonToImg` spawn,
+//!                              `<cmd> <img> <json>` (Web/Theory.hs:
+//!                              1484-1491).  Inert in batch mode, as in HS
+//!                              (`readOutputCommand` is only called from
+//!                              Interactive.hs:106,138).
 //!   -h|-?|--help               print help and exit
 //!   -V|--version               print version and exit
 //!
@@ -109,7 +112,8 @@
 //!
 //! `interactive` subcommand flags (mirrors `Main/Mode/Interactive.hs`):
 //!
-//!   --port=N, -pN              port to listen on (default 3001)
+//!   --port=N, -pN              port to listen on (recorded raw; read
+//!                              leniently at startup, default 3001)
 //!   --interface=ADDR, -iADDR   interface to listen on (default 127.0.0.1)
 //!   --image-format=PNG|SVG     image format used for graphs (parsed, not yet
 //!                              routed: the graph routes always render SVG)
@@ -297,7 +301,12 @@ pub struct Args {
     pub json_path: Option<String>,
 
     // Interactive-mode flags (mirror src/Main/Mode/Interactive.hs).
-    pub port: Option<u16>,
+    /// The RAW `--port` argument as cmdargs records it (`flagOpt ""`, so a
+    /// bare `--port` records `""`).  Never parsed at argv time: HS reads it
+    /// leniently at interactive startup (`readPort`, Interactive.hs:168-174)
+    /// — `reads @Int` acceptance, a stdout notice on a miss, default 3001 —
+    /// which `run_interactive`'s `read_port` mirrors.
+    pub port: Option<String>,
     pub interface: Option<String>,
     pub image_format: Option<ImageFormat>,
     pub debug: bool,
@@ -442,24 +451,36 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
 
     let mut args = Args::default();
 
-    // Subcommand detection: if the first non-option token is a known
-    // subcommand name, route to it. Otherwise stay in batch mode.
+    // Subcommand detection: cmdargs matches the FIRST token against its
+    // mode names the way it matches long flags — exact name, else
+    // unambiguous prefix.  Oracle-verified: `inter`, `te`, even `i` and `v`
+    // route to their modes; `interactivee` falls through to batch as a file
+    // name; and the empty token (a prefix of all three) is rejected as
+    // `Ambiguous mode '', could be any of: interactive variants test`.
+    // `test-prover` is this port's own exact alias, kept out of the prefix
+    // candidates so `t`/`te` keep resolving the way the oracle resolves
+    // them.
+    const MODES: &[(&str, Subcommand)] = &[
+        ("interactive", Subcommand::Interactive),
+        ("variants", Subcommand::Variants),
+        ("test", Subcommand::Test),
+    ];
     let mut i = 0;
     if let Some(first) = raw.first() {
-        match first.as_str() {
-            "interactive" => {
-                args.subcommand = Subcommand::Interactive;
+        if first == "test-prover" {
+            args.subcommand = Subcommand::Test;
+            i = 1;
+        } else {
+            let mut hits = MODES.iter().filter(|(n, _)| n.starts_with(first.as_str()));
+            if let Some((_, mode)) = hits.next() {
+                if hits.next().is_some() {
+                    return Err(CliError::CmdArgsReject(format!(
+                        "Ambiguous mode '{first}', could be any of: interactive variants test"
+                    )));
+                }
+                args.subcommand = *mode;
                 i = 1;
             }
-            "variants" => {
-                args.subcommand = Subcommand::Variants;
-                i = 1;
-            }
-            "test" | "test-prover" => {
-                args.subcommand = Subcommand::Test;
-                i = 1;
-            }
-            _ => {}
         }
     }
 
@@ -478,12 +499,24 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
             break;
         }
 
-        // Long flag.
+        // Long flag.  cmdargs matches an exact declared name first, else an
+        // unambiguous prefix of the mode's declared names
+        // ([`resolve_long_flag`]); the arms below then dispatch on the
+        // resolved name.  Errors that echo the flag keep the user's
+        // SPELLING: `--prove --output-j` dies as `Flag requires argument:
+        // --output-j`, not `--output-json` (oracle-verified).
         if let Some(rest) = a.strip_prefix("--") {
-            let (key, val_inline) = split_eq(rest);
+            let (spelled, val_inline) = split_eq(rest);
+            let key = resolve_long_flag(args.subcommand, spelled)?;
             match key {
-                "help" => args.show_help = true,
-                "version" => args.show_version = true,
+                "help" => {
+                    flag_none(val_inline, a)?;
+                    args.show_help = true;
+                }
+                "version" => {
+                    flag_none(val_inline, a)?;
+                    args.show_version = true;
+                }
                 "prove" => {
                     args.prove_mode = true;
                     if let Some(v) = val_inline {
@@ -539,10 +572,22 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                     // string default (a no-op #define), matching HS.
                     args.defines.push(flag_opt(val_inline, ""));
                 }
-                "diff" => args.diff = true,
-                "quit-on-warning" => args.quit_on_warning = true,
-                "no-ndc" => args.no_ndc = true,
-                "auto-sources" => args.auto_sources = true,
+                "diff" => {
+                    flag_none(val_inline, a)?;
+                    args.diff = true;
+                }
+                "quit-on-warning" => {
+                    flag_none(val_inline, a)?;
+                    args.quit_on_warning = true;
+                }
+                "no-ndc" => {
+                    flag_none(val_inline, a)?;
+                    args.no_ndc = true;
+                }
+                "auto-sources" => {
+                    flag_none(val_inline, a)?;
+                    args.auto_sources = true;
+                }
                 "oraclename" => {
                     // Routed: sets the oracle relPath on every oracle ranking
                     // in the `--heuristic` chain (HS `mapOracleRanking
@@ -553,9 +598,18 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                 // Routed: `--oracle-only` sets quitOnEmpty on every oracle /
                 // tactic ranking in the selected heuristic (HS `setQuitOnEmpty`,
                 // Theory/Proof.hs:712-716).
-                "oracle-only" => args.oracle_only = true,
-                "quiet" => args.quiet = true,
-                "verbose" => args.verbose = true,
+                "oracle-only" => {
+                    flag_none(val_inline, a)?;
+                    args.oracle_only = true;
+                }
+                "quiet" => {
+                    flag_none(val_inline, a)?;
+                    args.quiet = true;
+                }
+                "verbose" => {
+                    flag_none(val_inline, a)?;
+                    args.verbose = true;
+                }
                 "open-chains" => {
                     let v = flag_opt(val_inline, "10");
                     args.open_chains = Some(parse_int(&v, "open-chains")?);
@@ -568,15 +622,30 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                     let v = flag_opt(val_inline, "5");
                     args.derivcheck_timeout = Some(parse_int(&v, "derivcheck-timeout")?);
                 }
-                "proverif-no-reuse-lemmas" => args.proverif_no_reuse_lemmas = true,
-                "proverif-no-restrictions" => args.proverif_no_restrictions = true,
+                "proverif-no-reuse-lemmas" => {
+                    flag_none(val_inline, a)?;
+                    args.proverif_no_reuse_lemmas = true;
+                }
+                "proverif-no-restrictions" => {
+                    flag_none(val_inline, a)?;
+                    args.proverif_no_restrictions = true;
+                }
                 "replication-bound" => {
                     let v = flag_opt(val_inline, "3");
                     args.replication_bound = Some(parse_int(&v, "replication-bound")?);
                 }
-                "no-compress" => args.no_compress = true,
-                "parse-only" => args.parse_only = true,
-                "precompute-only" => args.precompute_only = true,
+                "no-compress" => {
+                    flag_none(val_inline, a)?;
+                    args.no_compress = true;
+                }
+                "parse-only" => {
+                    flag_none(val_inline, a)?;
+                    args.parse_only = true;
+                }
+                "precompute-only" => {
+                    flag_none(val_inline, a)?;
+                    args.precompute_only = true;
+                }
                 "processors" => {
                     args.processors =
                         Some(parse_positive_usize(&mut i, raw, val_inline, "processors")?);
@@ -608,10 +677,10 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                 // output-json / output-dot are flagReq (Batch.hs:80-81): they
                 // REQUIRE a value and DO consume a separate next token.
                 "output-json" | "oj" => {
-                    args.trace_json = Some(take_req_val(&mut i, raw, val_inline, key)?);
+                    args.trace_json = Some(take_req_val(&mut i, raw, val_inline, spelled)?);
                 }
                 "output-dot" | "od" => {
-                    args.trace_dot = Some(take_req_val(&mut i, raw, val_inline, key)?);
+                    args.trace_dot = Some(take_req_val(&mut i, raw, val_inline, spelled)?);
                 }
                 // toolFlags are flagOpt (Environment.hs:31-33): defaults
                 // maude/dot/json; bare flag records the default, no token.
@@ -626,17 +695,14 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                 }
                 // Interactive-mode flags are flagOpt (Interactive.hs:53-56),
                 // so they never consume a separate token — only `=VALUE`.  A
-                // bare flag records the empty-string default; HS then reads
-                // port leniently (`readPort` falls back to `defaultPort`,
-                // Interactive.hs:166-174, see line 174) and interface defaults
-                // to 127.0.0.1 (Interactive.hs:178), so an empty value behaves
-                // like absent.
+                // bare flag records the empty-string default.  The port value
+                // is recorded RAW, unreadable strings included: HS never
+                // rejects it at argv time — `readPort` (Interactive.hs:168-174)
+                // reads it leniently at startup, prints a stdout notice on a
+                // miss and falls back to `defaultPort`.  Interface defaults to
+                // 127.0.0.1 (Interactive.hs:178).
                 "port" => {
-                    if let Some(v) = val_inline {
-                        if !v.is_empty() {
-                            args.port = Some(parse_int(v, "port")?);
-                        }
-                    }
+                    args.port = Some(flag_opt(val_inline, ""));
                 }
                 "interface" => {
                     args.interface = Some(flag_opt(val_inline, ""));
@@ -648,14 +714,25 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                         }
                     }
                 }
-                "debug" => args.debug = true,
-                "no-logging" => args.no_logging = true,
+                "debug" => {
+                    flag_none(val_inline, a)?;
+                    args.debug = true;
+                }
+                "no-logging" => {
+                    flag_none(val_inline, a)?;
+                    args.no_logging = true;
+                }
                 "data-dir" => {
                     let v = take_val(&mut i, raw, val_inline, "data-dir")?;
                     args.data_dir = Some(v);
                 }
-                other => {
-                    return Err(CliError::unknown_flag(&format!("--{other}")));
+                _ => {
+                    // Includes names [`resolve_long_flag`] resolves but no
+                    // arm accepts (`load-json`, `proverif-no-multiset`, …):
+                    // the oracle flags this port deliberately does not
+                    // implement stay `Unknown flag`, reported under the
+                    // user's spelling.
+                    return Err(CliError::unknown_flag(&format!("--{spelled}")));
                 }
             }
             i += 1;
@@ -704,15 +781,23 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                     // deliberate port-only convenience: the oracle answers
                     // `Unknown flag: -h`, and this port keeps accepting it and
                     // advertises it in the RS-only group of `--help`.
+                    // A boolean short rejects only an EXPLICIT `=` (echoing
+                    // just `-v`, not the value: `-v=x` → `Unhandled argument
+                    // to flag, none expected: -v`); any other trailing char
+                    // stays in the cluster walk (`-vV` runs both, `-vx` →
+                    // `Unknown flag: -x`).
                     'h' | '?' => {
+                        flag_none(after.strip_prefix('='), &format!("-{key}"))?;
                         args.show_help = true;
                         continue;
                     }
                     'V' => {
+                        flag_none(after.strip_prefix('='), &format!("-{key}"))?;
                         args.show_version = true;
                         continue;
                     }
                     'v' => {
+                        flag_none(after.strip_prefix('='), &format!("-{key}"))?;
                         args.verbose = true;
                         continue;
                     }
@@ -744,14 +829,12 @@ pub fn parse_args(raw: &[String]) -> Result<Args, CliError> {
                     'm' => {
                         args.output_module = Some(flag_opt(inline, "spthy"));
                     }
-                    // An empty value behaves like an absent flag, as in the
-                    // long form: HS reads the port leniently and falls back
-                    // to `defaultPort` (Interactive.hs:166-174, see line 174), so `-p=`
-                    // must not be an argv rejection.
+                    // Recorded raw, like the long form: HS never rejects a
+                    // port value at argv time — `readPort`
+                    // (Interactive.hs:168-174) reads it leniently at startup —
+                    // so `-p=` and `-pabc` must not be argv rejections.
                     'p' => {
-                        if let Some(v) = inline.filter(|v| !v.is_empty()) {
-                            args.port = Some(parse_int(v, "port")?);
-                        }
+                        args.port = Some(flag_opt(inline, ""));
                     }
                     'i' => {
                         args.interface = Some(flag_opt(inline, ""));
@@ -828,6 +911,154 @@ fn split_eq(s: &str) -> (&str, Option<&str>) {
     }
 }
 
+/// The long-flag names each oracle mode declares, in DECLARATION ORDER —
+/// exactly the list the pinned binary prints for a maximally ambiguous
+/// prefix (`tamarin-prover [MODE] --=x` makes cmdargs dump the mode's whole
+/// table), captured live.  Order is load-bearing: ambiguity rejections list
+/// their candidates in it.
+///
+/// Only a flag's FIRST name appears here (and in the oracle's lists) —
+/// multi-char aliases (`oj`, `od`) exact-match without being listed, and
+/// single-char names never long-match at all (`--o` is ambiguous, never the
+/// `-o` alias; `--V` is `Unknown flag`).  Names the port deliberately does
+/// not implement (`load-json`, `proverif-no-{source-lemmas,multiset,precise}`)
+/// still belong here so ambiguity lists stay byte-identical to the oracle's;
+/// a prefix that uniquely resolves to one of them just falls through to the
+/// dispatch's `Unknown flag` arm.
+const BATCH_LONG_FLAGS: &[&str] = &[
+    "prove",
+    "lemma",
+    "stop-on-trace",
+    "bound",
+    "heuristic",
+    "partial-evaluation",
+    "defines",
+    "diff",
+    "quit-on-warning",
+    "auto-sources",
+    "oraclename",
+    "oracle-only",
+    "quiet",
+    "verbose",
+    "open-chains",
+    "saturation",
+    "derivcheck-timeout",
+    "proverif-no-reuse-lemmas",
+    "proverif-no-source-lemmas",
+    "proverif-no-restrictions",
+    "proverif-no-multiset",
+    "proverif-no-precise",
+    "replication-bound",
+    "no-ndc",
+    "no-compress",
+    "parse-only",
+    "precompute-only",
+    "output",
+    "Output",
+    "output-module",
+    "output-json",
+    "output-dot",
+    "with-dot",
+    "with-json",
+    "with-maude",
+    "help",
+    "version",
+];
+
+/// See [`BATCH_LONG_FLAGS`].  Note what the oracle's interactive mode does
+/// NOT declare: `version`, `no-compress`, and the whole output family — so
+/// `interactive --v` resolves to `verbose` where batch `--v` is ambiguous.
+const INTERACTIVE_LONG_FLAGS: &[&str] = &[
+    "port",
+    "interface",
+    "image-format",
+    "load-json",
+    "debug",
+    "no-logging",
+    "prove",
+    "lemma",
+    "stop-on-trace",
+    "bound",
+    "heuristic",
+    "partial-evaluation",
+    "defines",
+    "diff",
+    "quit-on-warning",
+    "auto-sources",
+    "oraclename",
+    "oracle-only",
+    "quiet",
+    "verbose",
+    "open-chains",
+    "saturation",
+    "derivcheck-timeout",
+    "proverif-no-reuse-lemmas",
+    "proverif-no-source-lemmas",
+    "proverif-no-restrictions",
+    "proverif-no-multiset",
+    "proverif-no-precise",
+    "replication-bound",
+    "no-ndc",
+    "with-dot",
+    "with-json",
+    "with-maude",
+    "help",
+];
+
+/// See [`BATCH_LONG_FLAGS`].
+const VARIANTS_LONG_FLAGS: &[&str] = &["Output", "help"];
+
+/// See [`BATCH_LONG_FLAGS`].
+const TEST_LONG_FLAGS: &[&str] = &["with-dot", "with-json", "with-maude", "help"];
+
+/// Resolve a long flag the way cmdargs does: an exact declared name wins,
+/// else an unambiguous prefix of the mode's declared names resolves to that
+/// name, else the spelling is returned unchanged for the dispatch to reject
+/// as `Unknown flag`.  Two or more prefix hits reject the command line with
+/// the oracle's `Ambiguous flag '--X', could be any of: …` (candidates in
+/// declaration order; `--=x` lists the mode's entire table because the empty
+/// key prefixes every name — oracle-verified byte-for-byte).
+///
+/// Exact matching spans BOTH modes' tables plus the exact-only names — this
+/// port runs one flat parser, so a full spelling from another mode's help is
+/// accepted anywhere (documented in the RS-only help trailer).  Prefix
+/// CANDIDATES stay per-mode: the port's own extras and cross-mode names must
+/// be spelled out in full, keeping every prefix outcome — resolution,
+/// `Unknown flag`, ambiguity list — byte-identical to the oracle's for its
+/// own grammar (`--proc` and batch `--po` stay unknown, `--p` under
+/// `interactive` lists the oracle's eight candidates, not `processors`).
+fn resolve_long_flag(mode: Subcommand, spelled: &str) -> Result<&str, CliError> {
+    // The port's RS-only long flags and the oracle's non-first names, all
+    // exact-only.  `test-prover` is a mode name, not a flag, so it is not
+    // here.
+    const EXACT_ONLY: &[&str] = &["processors", "maude-processes", "data-dir", "oj", "od"];
+    if EXACT_ONLY.contains(&spelled)
+        || BATCH_LONG_FLAGS.contains(&spelled)
+        || INTERACTIVE_LONG_FLAGS.contains(&spelled)
+    {
+        return Ok(spelled);
+    }
+    let table = match mode {
+        Subcommand::Batch => BATCH_LONG_FLAGS,
+        Subcommand::Interactive => INTERACTIVE_LONG_FLAGS,
+        Subcommand::Variants => VARIANTS_LONG_FLAGS,
+        Subcommand::Test => TEST_LONG_FLAGS,
+    };
+    let hits: Vec<&'static str> = table
+        .iter()
+        .copied()
+        .filter(|n| n.starts_with(spelled))
+        .collect();
+    match hits.as_slice() {
+        [] => Ok(spelled),
+        [name] => Ok(name),
+        _ => Err(CliError::CmdArgsReject(format!(
+            "Ambiguous flag '--{spelled}', could be any of: {}",
+            hits.join(" ")
+        ))),
+    }
+}
+
 /// Resolve a `cmdargs` `flagOpt` value: the inline `=VALUE` if present,
 /// otherwise the flag's documented default string (recorded when the bare
 /// flag is given).  A `flagOpt` flag NEVER consumes a separate following
@@ -838,6 +1069,24 @@ fn split_eq(s: &str) -> (&str, Option<&str>) {
 /// file (`5: openFile: does not exist`), while bare `--bound` uses default 5.
 fn flag_opt(inline: Option<&str>, default: &str) -> String {
     inline.unwrap_or(default).to_string()
+}
+
+/// Enforce a `cmdargs` `flagNone` flag: an explicit inline `=VALUE` is
+/// rejected, echoing the WHOLE token the user typed (`--diff=x`, and for a
+/// short flag just `-v` — see the cluster loop).  Verified against the
+/// installed HS binary: `--diff=x` → stderr
+/// `Unhandled argument to flag, none expected: --diff=x`, rc 1; `--quiet=`
+/// keeps its trailing `=`.  A non-`=` character after a short boolean flag is
+/// NOT a value — cmdargs keeps walking the cluster (`-vx` → `Unknown flag:
+/// -x`, `-vV` runs) — so only the long arms and an explicit `=` in the
+/// cluster route here.
+fn flag_none(inline: Option<&str>, token: &str) -> Result<(), CliError> {
+    match inline {
+        Some(_) => Err(CliError::CmdArgsReject(format!(
+            "Unhandled argument to flag, none expected: {token}"
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// Take a `cmdargs` `flagReq` value: the inline `=VALUE` when present, else

@@ -21,6 +21,11 @@
 //! once.  The batch path additionally splices a seventh, Maude-dependent
 //! "Rule variants" block afterwards; that stays at its call site.
 //!
+//! The same two drivers also share this module's report-ASSEMBLY steps —
+//! [`pre_translation_wf_report`], [`swap_subterm_convergence_report`], and
+//! [`prepend_wf_report`] — so the retain/replace/prepend invariants each
+//! step encodes cannot drift between the pipelines.
+//!
 //! The `post_thy` every parser-level check reads is the translated theory with
 //! macros expanded, mirroring HS `thyProtoRules` / `applyMacroInFormula`.
 
@@ -34,6 +39,48 @@ use tamarin_term::maude_sig::MaudeSig;
 
 use crate::theory::Theory;
 
+/// The PRE-translation static wellformedness pass both drivers open with:
+/// clone `parsed` with macros expanded — HS `thyProtoRules`
+/// (Wellformedness.hs:133-134) applies `applyMacroInRule` to every rule
+/// before the checks — run `check_theory` on the clone, and drop the
+/// static "Message Derivation Checks" entry, which the dynamic,
+/// Maude-backed check each driver runs later replaces.
+pub fn pre_translation_wf_report(parsed: &p::Theory) -> Vec<WfError> {
+    let parsed_for_wf = crate::macro_expand::macro_expanded_clone(parsed);
+    let mut report = tamarin_parser::wf::check_theory(&parsed_for_wf);
+    report.retain(|e| e.topic != "Message Derivation Checks");
+    report
+}
+
+/// Replace `check_theory`'s AST-level "Subterm Convergence Warning"
+/// placeholder with the signature-driven version, once elaboration has
+/// produced the `MaudeSig`.  HS `checkEquationsSubtermConvergence`
+/// (Wellformedness.hs:1222-1232) works on `thyEquations = S.toList
+/// (stRules sig)` — the SIGNATURE's subterm-rule Set, not the parser-AST
+/// `equations:` blocks — so the entry carries `Ord CtxtStRule` Set order
+/// and `prettyCtxtStRule`'s width-wrap, neither of which the parser-level
+/// placeholder can reproduce.
+pub fn swap_subterm_convergence_report(wf_report: &mut Vec<WfError>, maude_sig: &MaudeSig) {
+    wf_report.retain(|e| e.topic != "Subterm Convergence Warning");
+    wf_report.extend(crate::pretty_theory::subterm_convergence_report_wf(
+        maude_sig,
+    ));
+}
+
+/// Prepend `pre` to `wf_report` — HS's `preReport ++ postReport` splice
+/// (TheoryLoader.hs:487-502, see line 497).  Used for the translation
+/// stage's `Sapic.checkWellformedness ++ Acc.checkWellformedness` block
+/// and for batch's `checkIfLemmasInTheory` result (FIRST in HS's
+/// `checkWellformedness` list, Wellformedness.hs:1272).  No-op when `pre`
+/// is empty.
+pub fn prepend_wf_report(wf_report: &mut Vec<WfError>, mut pre: Vec<WfError>) {
+    if pre.is_empty() {
+        return;
+    }
+    pre.extend(std::mem::take(wf_report));
+    *wf_report = pre;
+}
+
 /// Re-run the translated-theory wellformedness checks over `parsed` /
 /// `elaborated` and splice their findings into `wf_report`, in HS's check
 /// order.
@@ -42,8 +89,8 @@ use crate::theory::Theory;
 /// caller before translation — the reducible/irreducible funsym
 /// classification HS's `checkTerms` and `multRestrictedReport` read.
 ///
-/// For a non-SAPIC theory the three SAPIC-gated checks are skipped and the
-/// remaining three are no-ops relative to the pre-translation run (the pre-
+/// For a non-SAPIC theory the four SAPIC-gated checks are skipped and the
+/// remaining two are no-ops relative to the pre-translation run (the pre-
 /// and post-translation rule sets are equal).
 pub fn splice_translated_wf_reports(
     parsed: &p::Theory,

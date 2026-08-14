@@ -122,7 +122,7 @@ The corpus spans every feature-complete theory family under `tamarin-prover/exam
 classic and AKE protocols, XOR / bilinear-pairing / multiset theories, the
 auto-sources suites, accountability case studies, and 79 SAPiC `process:`
 theories — each run under its canonical upstream invocation: bare `--prove`,
-plus the extra flags `scripts/file_flags.tsv` records for the 31 theories
+plus the extra flags `scripts/file_flags.tsv` records for the 40 theories
 whose upstream recipe needs them. Theories outside the corpus need an unported
 feature (`--diff`), hit a known auto-prover or SAPiC-rendering divergence
 tracked for porting, exceed the gate's per-file Haskell time budget under
@@ -302,10 +302,13 @@ refined sources are computed once and shared across lemmas.
   `spthy`/`spthytyped`/`msr` (translate-only mode), the `--with-maude`
   path, and the `--with-dot`/`--with-json` renderers interactive mode
   draws graphs with; exit codes and summary lines mirror HS.
-  `--bound`, `--quiet`, `-v/--verbose` and `--no-compress` are accepted
-  without changing batch output: `--bound` bounds interactive proof steps
-  only, `--quiet` and `--no-compress` are inert in HS too, and HS's
-  verbose stderr trace has no port yet.
+  `--quiet`, `-v/--verbose` and `--no-compress` are accepted
+  without changing batch output: `--quiet` and `--no-compress` are inert
+  in HS too, and HS's verbose stderr trace has no port yet.  `--bound=N`
+  truncates batch `--prove` search at proof depth N with
+  `sorry /* bound N hit */` leaves (HS `boundProofDepth`); in interactive
+  mode it is accepted but dead, as in HS (the web routes carry their own
+  per-request bound).
 - **Subcommands:** `interactive` (HTTP server), `variants` (DH/BP
   intruder-rule variants dump), `test` (install self-check).
 

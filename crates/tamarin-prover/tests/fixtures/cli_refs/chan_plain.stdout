@@ -86,7 +86,7 @@ end
 ==============================================================================
 summary of summaries:
 
-analyzed: /home/kamilner/tamarin-rs/crates/tamarin-prover/tests/fixtures/cli_flags_chan.spthy
+analyzed: /home/kamilner/tamarin-rs-2/crates/tamarin-prover/tests/fixtures/cli_flags_chan.spthy
 
   processing time: 0.14s
   

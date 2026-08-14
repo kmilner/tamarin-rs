@@ -119,12 +119,14 @@ trap 'rm -f "$tmp_manifest"' EXIT
 rows=0; captured=0; bad=''
 declare -A CAPTURED_NAME=()
 declare -A RELATION=()
+declare -A ROW_NAME=()
 
 echo "capture_cli_refs: oracle=$HS_PATH fp=$HS_FP maude=$MAUDE timeout=${FILE_TIMEOUT}s (serial)"
 
 while IFS=$'\t' read -r name theory relation args; do
     case "$name" in ''|\#*) continue;; esac
     rows=$((rows + 1))
+    ROW_NAME["$name"]=1
     selected "$name" || continue
     if [ ! -f "$FIXTURES/$theory" ]; then
         echo "  MISSING-THEORY $name ($theory)"; bad="${bad:+$bad }MISSING-THEORY=$name"; continue
@@ -153,6 +155,19 @@ while IFS=$'\t' read -r name theory relation args; do
     captured=$((captured + 1))
     echo "  OK             $name ($(stat -c '%s' "$out") bytes)"
 done < "$CASES"
+
+# A requested name that matches no row would otherwise vanish in selected()'s
+# filter and the run would report verdict=OK having captured nothing — the
+# exact vacuous success the exit contract ("every requested row was captured")
+# rules out.
+if [ ${#want[@]} -ne 0 ]; then
+    for w in "${want[@]}"; do
+        if [ -z "${ROW_NAME[$w]:-}" ]; then
+            echo "  UNKNOWN-ROW    $w (no cases.tsv row has this name)"
+            bad="${bad:+$bad }UNKNOWN-ROW=$w"
+        fi
+    done
+fi
 
 # --- relation check ----------------------------------------------------------
 # cases.tsv declares how each row's bytes must relate to another row's.  A `!=`
