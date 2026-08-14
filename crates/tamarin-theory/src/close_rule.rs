@@ -525,10 +525,10 @@ fn deduction_lemma_guarded(s: &[LNFact], fact_term: &LNTerm) -> Guarded {
     ));
     binders.push(t0);
     binders.push(t1);
-    let ast = p::Formula::Not(Box::new(p::Formula::Exists(
-        binders,
-        Box::new(p::Formula::And(Box::new(gen_at), Box::new(k_at))),
-    )));
+    let ast = p::Formula::not(
+        p::Formula::exists(binders, p::Formula::and(gen_at, k_at), DUMMY_LOCATION),
+        DUMMY_LOCATION,
+    );
     // Every binder occurs in one of the two Action guard atoms by
     // construction, so the conversion cannot fail on guardedness.
     crate::guarded::formula_to_guarded(&ast).unwrap_or_else(|e| {

@@ -5023,11 +5023,7 @@ impl<'a> Parser<'a> {
         let lhs = self.implies()?;
         if self.try_punct("<=>") || self.try_punct("⇔") {
             let rhs = self.implies()?;
-            let f = Formula {
-                location: Location::from_locations(lhs.location, rhs.location),
-                kind: FormulaKind::Iff(Box::new(lhs), Box::new(rhs)),
-            };
-            Ok(f)
+            Ok(Formula::iff(lhs, rhs))
         } else {
             Ok(lhs)
         }
@@ -5037,10 +5033,7 @@ impl<'a> Parser<'a> {
         let lhs = self.disjuncts()?;
         if self.try_punct("==>") || self.try_punct("⇒") {
             let rhs = self.implies()?;
-            Ok(Formula {
-                location: Location::from_locations(lhs.location, rhs.location),
-                kind: FormulaKind::Implies(Box::new(lhs), Box::new(rhs)),
-            })
+            Ok(Formula::implies(lhs, rhs))
         } else {
             Ok(lhs)
         }
@@ -5052,10 +5045,7 @@ impl<'a> Parser<'a> {
             // `|` is also process parallel — but inside formulas it's OR.
             if self.try_punct("|") || self.try_punct("∨") {
                 let rhs = self.conjuncts()?;
-                lhs = Formula {
-                    location: Location::from_locations(lhs.location, rhs.location),
-                    kind: FormulaKind::Or(Box::new(lhs), Box::new(rhs)),
-                };
+                lhs = Formula::or(lhs, rhs);
             } else {
                 break;
             }
@@ -5068,10 +5058,7 @@ impl<'a> Parser<'a> {
         loop {
             if self.try_punct("&") || self.try_punct("∧") {
                 let rhs = self.negation()?;
-                lhs = Formula {
-                    location: Location::from_locations(lhs.location, rhs.location),
-                    kind: FormulaKind::And(Box::new(lhs), Box::new(rhs)),
-                };
+                lhs = Formula::and(lhs, rhs);
             } else {
                 break;
             }
@@ -5080,25 +5067,21 @@ impl<'a> Parser<'a> {
     }
 
     fn negation(&mut self) -> Result<Formula, ParseError> {
+        let start = self.save().into();
         if self.try_kw("not") || self.try_punct("¬") {
             let f = self.fatom()?;
-            Ok(Formula {
-                location: f.location,
-                kind: FormulaKind::Not(Box::new(f)),
-            })
+            Ok(Formula::not(f, start))
         } else {
             self.fatom()
         }
     }
 
     fn fatom(&mut self) -> Result<Formula, ParseError> {
+        self.skip_ws();
         let start = self.save();
         let kind = self.fatom_kind()?;
         let end = self.save();
-        Ok(Formula {
-            location: Location::from_positions(start, end),
-            kind,
-        })
+        Ok(Formula::new(kind, Location::from_positions(start, end)))
     }
 
     fn fatom_kind(&mut self) -> Result<FormulaKind, ParseError> {

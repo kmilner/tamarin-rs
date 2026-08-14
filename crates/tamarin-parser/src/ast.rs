@@ -662,6 +662,62 @@ pub struct Formula {
     pub location: Location,
 }
 
+impl Formula {
+    pub fn new(kind: FormulaKind, location: Location) -> Self {
+        Self { kind, location }
+    }
+
+    pub fn and(self, other: Formula) -> Self {
+        let new_loc = Location::from_locations(self.location, other.location);
+        Formula::new(FormulaKind::And(Box::new(self), Box::new(other)), new_loc)
+    }
+
+    pub fn or(self, other: Formula) -> Self {
+        let new_loc = Location::from_locations(self.location, other.location);
+        Formula::new(FormulaKind::Or(Box::new(self), Box::new(other)), new_loc)
+    }
+
+    pub fn implies(self, other: Formula) -> Self {
+        let new_loc = Location::from_locations(self.location, other.location);
+        Formula::new(
+            FormulaKind::Implies(Box::new(self), Box::new(other)),
+            new_loc,
+        )
+    }
+
+    pub fn iff(self, other: Formula) -> Self {
+        let new_loc = Location::from_locations(self.location, other.location);
+        Formula::new(FormulaKind::Iff(Box::new(self), Box::new(other)), new_loc)
+    }
+
+    pub fn not(inner: Formula, start: Location) -> Self {
+        let new_loc = Location::from_locations(start, inner.location);
+        Formula::new(FormulaKind::Not(Box::new(inner)), new_loc)
+    }
+
+    pub fn forall(vars: Vec<VarSpec>, body: Formula, start: Location) -> Self {
+        let new_loc = Location::from_locations(start, body.location);
+        Formula::new(FormulaKind::Forall(vars, Box::new(body)), new_loc)
+    }
+
+    pub fn exists(vars: Vec<VarSpec>, body: Formula, start: Location) -> Self {
+        let new_loc = Location::from_locations(start, body.location);
+        Formula::new(FormulaKind::Exists(vars, Box::new(body)), new_loc)
+    }
+
+    pub fn atom(atom: Atom, location: Location) -> Self {
+        Formula::new(FormulaKind::Atom(atom), location)
+    }
+
+    pub fn r#false(location: Location) -> Self {
+        Formula::new(FormulaKind::False, location)
+    }
+
+    pub fn r#true(location: Location) -> Self {
+        Formula::new(FormulaKind::True, location)
+    }
+}
+
 impl Deref for Formula {
     type Target = FormulaKind;
 

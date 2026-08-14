@@ -662,7 +662,7 @@ fn synthesise_probe_theory(
     // not "are these simultaneous".  The intruder-knowledge predicate
     // is `KU` (HS's `lntermToKUFact = kuFact`), not `K`.
     let action_atom = |action: p::Fact, t: p::Term| -> p::Formula {
-        p::Formula::Atom(p::Atom::Action(action, t))
+        p::Formula::atom(p::Atom::Action(action, t), DUMMY_LOCATION)
     };
     for (k, _v) in free_vars.iter().enumerate() {
         // Lemma named by free-var INDEX (not name) so same-named vars don't
@@ -693,12 +693,12 @@ fn synthesise_probe_theory(
             location: DUMMY_LOCATION,
         };
         let ku_at = action_atom(ku_fact, p::Term::Var(t1.clone()));
-        let conj = p::Formula::And(Box::new(gen_at), Box::new(ku_at));
+        let conj = p::Formula::and(gen_at, ku_at);
         // Ex t0 t1 vars... . <conj>
         let mut all_quant = probe_vars.clone();
         all_quant.push(t0);
         all_quant.push(t1);
-        let body = p::Formula::Exists(all_quant, Box::new(conj));
+        let body = p::Formula::exists(all_quant, conj, DUMMY_LOCATION);
         probe.items.push(p::TheoryItem::Lemma(p::Lemma {
             name: lemma_name,
             modulo: None,

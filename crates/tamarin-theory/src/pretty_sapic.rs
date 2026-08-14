@@ -451,6 +451,7 @@ pub fn pretty_sapic_top_level(p: &PlainProcess) -> String {
 mod tests {
     use super::*;
     use crate::sapic::ProcessParsedAnnotation;
+    use tamarin_parser::DUMMY_LOCATION;
     use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::f_app_no_eq;
@@ -555,13 +556,16 @@ mod tests {
             idx: 1,
         });
         let eq_cond = |args: Vec<p::Term>| {
-            let f = p::Formula::Atom(p::Atom::Pred(p::Fact {
-                persistent: false,
-                name: "Eq".into(),
-                args,
-                annotations: Vec::new(),
+            let f = p::Formula {
+                kind: p::FormulaKind::Atom(p::Atom::Pred(p::Fact {
+                    persistent: false,
+                    name: "Eq".into(),
+                    args,
+                    annotations: Vec::new(),
+                    location: tamarin_parser::DUMMY_LOCATION,
+                })),
                 location: tamarin_parser::DUMMY_LOCATION,
-            }));
+            };
             let proc: PlainProcess = Process::Comb(
                 ProcessCombinator::Cond(f),
                 ProcessParsedAnnotation::empty(),
@@ -634,7 +638,10 @@ mod tests {
             idx: 1,
         });
         let add_k_a = p::Term::App("add".into(), vec![k.clone(), p::Term::PubLit("a".into())]);
-        let restr = p::Formula::Atom(p::Atom::Eq(add_k_a, k.clone()));
+        let restr = p::Formula {
+            kind: p::FormulaKind::Atom(p::Atom::Eq(add_k_a, k.clone())),
+            location: DUMMY_LOCATION,
+        };
         let ev = crate::fact::Fact::new(
             crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "Ev", 1),
             vec![tamarin_term::term::f_app_ac(

@@ -589,8 +589,8 @@ fn collect_free_vars_formula(
     bound: &mut Vec<String>,
     state: &mut PreciseFreshState,
 ) {
-    use p::Formula::*;
-    match f {
+    use p::FormulaKind::*;
+    match &f.kind {
         True | False => {}
         Atom(a) => collect_free_vars_atom(a, bound, state),
         Not(p_) => collect_free_vars_formula(p_, bound, state),
@@ -730,8 +730,8 @@ fn allocate_guarded_binders(
 /// `state` threads the HS `Precise.Fresh` state across `scopeFreshness`
 /// boundaries (Formula.hs:496-502 — every `Qua` saves/restores state).
 fn pp_formula(f: &p::Formula, scope: &[Bind], state: &mut PreciseFreshState, out: &mut String) {
-    use p::Formula::*;
-    match f {
+    use p::FormulaKind::*;
+    match &f.kind {
         True => out.push('\u{22A4}'),  // ⊤
         False => out.push('\u{22A5}'), // ⊥
         Atom(a) => pp_atom(a, scope, out),
@@ -763,12 +763,12 @@ fn open_formula_prefix<'a>(
     let mut collected: Vec<&p::VarSpec> = vs.iter().collect();
     let mut cur = body;
     loop {
-        match cur {
-            p::Formula::Forall(vs2, body2) if is_forall => {
+        match &cur.kind {
+            p::FormulaKind::Forall(vs2, body2) if is_forall => {
                 collected.extend(vs2.iter());
                 cur = body2.as_ref();
             }
-            p::Formula::Exists(vs2, body2) if !is_forall => {
+            p::FormulaKind::Exists(vs2, body2) if !is_forall => {
                 collected.extend(vs2.iter());
                 cur = body2.as_ref();
             }
@@ -898,8 +898,8 @@ fn formula_to_doc(
     state: &mut PreciseFreshState,
 ) -> crate::pretty_hpj::Doc {
     use crate::pretty_hpj as hpj;
-    use p::Formula::*;
-    match f {
+    use p::FormulaKind::*;
+    match &f.kind {
         // HS `pp (TF True) = operator_ "⊤"` / `pp (TF False) = operator_ "⊥"`
         // (Formula.hs:485-486) — `hl_operator` spans in HtmlDoc mode.
         True => hpj::operator_("\u{22A4}"),
@@ -927,7 +927,7 @@ fn formula_to_doc(
             // `fsep` makes the bound-var list BREAKABLE, so a long var list
             // wraps across lines (continuation aligned after the `∃ ` prefix
             // via `<>`'s nesting offset) — matching HS byte-for-byte.
-            let is_forall = matches!(f, Forall(_, _));
+            let is_forall = matches!(&f.kind, Forall(_, _));
             let sym = if is_forall { "\u{2200} " } else { "\u{2203} " };
             state.scope_freshness(|state| {
                 // HS `openFormulaPrefix` (Formula.hs:471-511, see line 498) collapses

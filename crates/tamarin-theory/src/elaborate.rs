@@ -458,10 +458,10 @@ fn collect_process_pub_names(p: &crate::sapic::PlainProcess, out: &mut Vec<Strin
 /// parser-AST formula, in traversal order.  Serves `collect_process_pub_names`
 /// for the `Cond` combinator, whose condition never leaves the parser AST.
 fn collect_parser_formula_pub_names(f: &p::Formula, out: &mut Vec<String>) {
-    use tamarin_parser::ast::{Atom, Formula};
-    match f {
-        Formula::False | Formula::True => {}
-        Formula::Atom(a) => match a {
+    use tamarin_parser::ast::{Atom, FormulaKind::*};
+    match &f.kind {
+        False | True => {}
+        Atom(a) => match a {
             Atom::Eq(x, y) | Atom::Less(x, y) | Atom::LessMset(x, y) | Atom::Subterm(x, y) => {
                 collect_parser_term_pub_names(x, out);
                 collect_parser_term_pub_names(y, out);
@@ -479,12 +479,12 @@ fn collect_parser_formula_pub_names(f: &p::Formula, out: &mut Vec<String>) {
                 }
             }
         },
-        Formula::Not(x) => collect_parser_formula_pub_names(x, out),
-        Formula::And(x, y) | Formula::Or(x, y) | Formula::Implies(x, y) | Formula::Iff(x, y) => {
+        Not(x) => collect_parser_formula_pub_names(x, out),
+        And(x, y) | Or(x, y) | Implies(x, y) | Iff(x, y) => {
             collect_parser_formula_pub_names(x, out);
             collect_parser_formula_pub_names(y, out);
         }
-        Formula::Forall(_, x) | Formula::Exists(_, x) => {
+        Forall(_, x) | Exists(_, x) => {
             collect_parser_formula_pub_names(x, out);
         }
     }
@@ -1712,8 +1712,8 @@ fn subst_fact_in_place(f: &mut p::Fact, key: &p::Term, val: &p::Term) {
 }
 
 fn subst_formula_in_place(phi: &mut p::Formula, key: &p::Term, val: &p::Term) {
-    use p::Formula::*;
-    match phi {
+    use p::FormulaKind::*;
+    match &mut phi.kind {
         False | True => {}
         Atom(a) => subst_atom_in_place(a, key, val),
         Not(p) => subst_formula_in_place(p, key, val),

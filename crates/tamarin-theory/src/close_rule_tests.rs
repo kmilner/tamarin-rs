@@ -1,6 +1,6 @@
 use super::*;
 use crate::fact::Fact;
-use tamarin_parser::DUMMY_LOCATION;
+use tamarin_parser::{Formula, DUMMY_LOCATION};
 use tamarin_term::vterm::var_term;
 
 /// KCL07's signature (examples/csf26-ac/fast/KCL07.spthy) plus a Seed
@@ -177,44 +177,62 @@ fn lemma_guarded_is_invariant_to_hs_ltrue_conjunct() {
         sort: p::SortHint::Untagged,
         typ: None,
     };
-    let gen_at = p::Formula::Atom(p::Atom::Action(
-        p::Fact {
-            persistent: false,
-            name: "Generated_0".to_string(),
-            args: vec![p::Term::Var(v.clone())],
-            annotations: Vec::new(),
-            location: DUMMY_LOCATION,
-        },
-        p::Term::Var(x.clone()),
-    ));
-    let k_at = p::Formula::Atom(p::Atom::Action(
-        p::Fact {
-            persistent: false,
-            name: "K".to_string(),
-            args: vec![p::Term::Var(v.clone())],
-            annotations: Vec::new(),
-            location: DUMMY_LOCATION,
-        },
-        p::Term::Var(y.clone()),
-    ));
+    let gen_at = Formula {
+        kind: p::FormulaKind::Atom(p::Atom::Action(
+            p::Fact {
+                persistent: false,
+                name: "Generated_0".to_string(),
+                args: vec![p::Term::Var(v.clone())],
+                annotations: Vec::new(),
+                location: DUMMY_LOCATION,
+            },
+            p::Term::Var(x.clone()),
+        )),
+        location: DUMMY_LOCATION,
+    };
+    let k_at = Formula {
+        kind: p::FormulaKind::Atom(p::Atom::Action(
+            p::Fact {
+                persistent: false,
+                name: "K".to_string(),
+                args: vec![p::Term::Var(v.clone())],
+                annotations: Vec::new(),
+                location: DUMMY_LOCATION,
+            },
+            p::Term::Var(y.clone()),
+        )),
+        location: DUMMY_LOCATION,
+    };
     let binders = vec![v, x, y];
-    let ours = p::Formula::Not(Box::new(p::Formula::Exists(
-        binders.clone(),
-        Box::new(p::Formula::And(
-            Box::new(gen_at.clone()),
-            Box::new(k_at.clone()),
-        )),
-    )));
-    let hs_shaped = p::Formula::Not(Box::new(p::Formula::Exists(
-        binders,
-        Box::new(p::Formula::And(
-            Box::new(p::Formula::And(
-                Box::new(p::Formula::True),
-                Box::new(gen_at),
-            )),
-            Box::new(k_at),
-        )),
-    )));
+    let ours = Formula {
+        kind: p::FormulaKind::Not(Box::new(Formula {
+            kind: p::FormulaKind::Exists(
+                binders.clone(),
+                Box::new(Formula {
+                    kind: p::FormulaKind::And(Box::new(gen_at.clone()), Box::new(k_at.clone())),
+                    location: DUMMY_LOCATION,
+                }),
+            ),
+            location: DUMMY_LOCATION,
+        })),
+        location: DUMMY_LOCATION,
+    };
+    let hs_shaped = Formula::not(
+        Formula::exists(
+            binders,
+            Formula::r#true(DUMMY_LOCATION)
+                .and(Formula {
+                    kind: gen_at.kind.clone(),
+                    location: DUMMY_LOCATION,
+                })
+                .and(Formula {
+                    kind: k_at.kind.clone(),
+                    location: DUMMY_LOCATION,
+                }),
+            DUMMY_LOCATION,
+        ),
+        DUMMY_LOCATION,
+    );
     assert_eq!(
         crate::guarded::formula_to_guarded(&ours).expect("ours converts"),
         crate::guarded::formula_to_guarded(&hs_shaped).expect("HS shape converts"),

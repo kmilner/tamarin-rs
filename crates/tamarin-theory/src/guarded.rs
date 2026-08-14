@@ -1162,18 +1162,18 @@ pub fn formula_to_guarded(f: &p::Formula) -> Result<Guarded, GuardError> {
 /// `#x` is a DIFFERENT variable, stays free, and seeds the supply.
 fn avoid_precise_formula(f: &p::Formula) -> tamarin_utils::fresh::PreciseFreshState {
     fn walk_formula(f: &p::Formula, bound: &mut Vec<VarKey>, out: &mut Vec<VarKey>) {
-        match f {
-            p::Formula::True | p::Formula::False => {}
-            p::Formula::Atom(a) => walk_atom(a, bound, out),
-            p::Formula::Not(g) => walk_formula(g, bound, out),
-            p::Formula::And(l, r)
-            | p::Formula::Or(l, r)
-            | p::Formula::Implies(l, r)
-            | p::Formula::Iff(l, r) => {
+        match &f.kind {
+            p::FormulaKind::True | p::FormulaKind::False => {}
+            p::FormulaKind::Atom(a) => walk_atom(a, bound, out),
+            p::FormulaKind::Not(g) => walk_formula(g, bound, out),
+            p::FormulaKind::And(l, r)
+            | p::FormulaKind::Or(l, r)
+            | p::FormulaKind::Implies(l, r)
+            | p::FormulaKind::Iff(l, r) => {
                 walk_formula(l, bound, out);
                 walk_formula(r, bound, out);
             }
-            p::Formula::Forall(vs, body) | p::Formula::Exists(vs, body) => {
+            p::FormulaKind::Forall(vs, body) | p::FormulaKind::Exists(vs, body) => {
                 let saved = bound.len();
                 bound.extend(vs.iter().map(|v| var_key(&v.name, v.idx, v.sort)));
                 walk_formula(body, bound, out);
@@ -1562,10 +1562,10 @@ fn convert(
     f: &p::Formula,
     fresh: &mut tamarin_utils::fresh::PreciseFreshState,
 ) -> Result<Guarded, GuardError> {
-    match f {
-        p::Formula::True => Ok(gtf(!polarity)),
-        p::Formula::False => Ok(gtf(polarity)),
-        p::Formula::Atom(a) => {
+    match &f.kind {
+        p::FormulaKind::True => Ok(gtf(!polarity)),
+        p::FormulaKind::False => Ok(gtf(polarity)),
+        p::FormulaKind::Atom(a) => {
             let ga = atom_to_gatom_free(a);
             if polarity {
                 Ok(gnot_atom(&ga))
@@ -1573,8 +1573,8 @@ fn convert(
                 Ok(Guarded::Atom(ga))
             }
         }
-        p::Formula::Not(g) => convert(!polarity, g, fresh),
-        p::Formula::And(a, b) => {
+        p::FormulaKind::Not(g) => convert(!polarity, g, fresh),
+        p::FormulaKind::And(a, b) => {
             let sub = vec![convert(polarity, a, fresh)?, convert(polarity, b, fresh)?];
             if polarity {
                 Ok(gdisj(sub))
@@ -1582,7 +1582,7 @@ fn convert(
                 Ok(gconj(sub))
             }
         }
-        p::Formula::Or(a, b) => {
+        p::FormulaKind::Or(a, b) => {
             let sub = vec![convert(polarity, a, fresh)?, convert(polarity, b, fresh)?];
             if polarity {
                 Ok(gconj(sub))
@@ -1590,7 +1590,7 @@ fn convert(
                 Ok(gdisj(sub))
             }
         }
-        p::Formula::Implies(a, b) => {
+        p::FormulaKind::Implies(a, b) => {
             // p ⇒ q  is  ¬p ∨ q
             let nag = convert(!polarity, a, fresh)?;
             let cag = convert(polarity, b, fresh)?;
@@ -1600,10 +1600,10 @@ fn convert(
                 Ok(gdisj(vec![nag, cag]))
             }
         }
-        p::Formula::Iff(a, b) => {
+        p::FormulaKind::Iff(a, b) => {
             // p ↔ q  is  (p ⇒ q) ∧ (q ⇒ p)
-            let lhs = p::Formula::Implies(a.clone(), b.clone());
-            let rhs = p::Formula::Implies(b.clone(), a.clone());
+            let lhs = p::Formula::implies(*a.clone(), *b.clone());
+            let rhs = p::Formula::implies(*b.clone(), *a.clone());
             let sub = vec![
                 convert(polarity, &lhs, fresh)?,
                 convert(polarity, &rhs, fresh)?,
@@ -1619,7 +1619,7 @@ fn convert(
         // We "open" consecutive same-quantifier prefixes (mirroring
         // Haskell's `openFormulaPrefix`) so that `Ex x. Ex y. body`
         // is treated as a single `Ex [x, y]. body` for guard checking.
-        p::Formula::Forall(_, _) | p::Formula::Exists(_, _) => {
+        p::FormulaKind::Forall(_, _) | p::FormulaKind::Exists(_, _) => {
             let (xs, body) = open_quantifier_prefix(f);
             // HS `openFormulaPrefix` draws each binder through `freshLVar n s`
             // (Theory/Model/Formula.hs:296-309, LTerm.hs:301-302) BEFORE
@@ -1636,7 +1636,7 @@ fn convert(
                     ..v.clone()
                 })
                 .collect();
-            let same_qua = matches!(f, p::Formula::Forall(_, _));
+            let same_qua = matches!(f.kind, p::FormulaKind::Forall(_, _));
             let result = if same_qua {
                 let out_qua = if polarity { Quant::Ex } else { Quant::All };
                 convert_all(&xs, &freshened, body, polarity, out_qua, fresh)
@@ -1666,18 +1666,18 @@ fn convert(
 fn open_quantifier_prefix(f: &p::Formula) -> (Vec<p::VarSpec>, &p::Formula) {
     let mut vars = Vec::new();
     let mut cur = f;
-    let kind = match f {
-        p::Formula::Forall(_, _) => 0,
-        p::Formula::Exists(_, _) => 1,
+    let kind = match f.kind {
+        p::FormulaKind::Forall(_, _) => 0,
+        p::FormulaKind::Exists(_, _) => 1,
         _ => return (vars, f),
     };
     loop {
-        match cur {
-            p::Formula::Forall(xs, body) if kind == 0 => {
+        match &cur.kind {
+            p::FormulaKind::Forall(xs, body) if kind == 0 => {
                 vars.extend(xs.iter().cloned());
                 cur = body;
             }
-            p::Formula::Exists(xs, body) if kind == 1 => {
+            p::FormulaKind::Exists(xs, body) if kind == 1 => {
                 vars.extend(xs.iter().cloned());
                 cur = body;
             }
@@ -1727,7 +1727,7 @@ fn convert_all(
     out_qua: Quant,
     fresh: &mut tamarin_utils::fresh::PreciseFreshState,
 ) -> Result<Guarded, GuardError> {
-    if let p::Formula::Implies(ante, succ) = body {
+    if let p::FormulaKind::Implies(ante, succ) = &body.kind {
         let (atoms, ante_others) = split_conj_actions_eqs(ante);
         let unguarded = remaining_unguarded(xs, &atoms);
         if !unguarded.is_empty() {
@@ -1790,16 +1790,18 @@ pub fn close_guarded(
 /// `(guard_atoms, other_subformulas)`.
 fn split_conj_actions_eqs(f: &p::Formula) -> (Vec<p::Atom>, Vec<p::Formula>) {
     fn rec(f: &p::Formula, atoms: &mut Vec<p::Atom>, others: &mut Vec<p::Formula>) {
-        match f {
-            p::Formula::And(a, b) => {
+        match &f.kind {
+            p::FormulaKind::And(a, b) => {
                 rec(a, atoms, others);
                 rec(b, atoms, others);
             }
-            p::Formula::Atom(p::Atom::Action(fact, t)) => {
+            p::FormulaKind::Atom(p::Atom::Action(fact, t)) => {
                 atoms.push(p::Atom::Action(fact.clone(), t.clone()))
             }
-            p::Formula::Atom(p::Atom::Eq(a, b)) => atoms.push(p::Atom::Eq(a.clone(), b.clone())),
-            other => others.push(other.clone()),
+            p::FormulaKind::Atom(p::Atom::Eq(a, b)) => {
+                atoms.push(p::Atom::Eq(a.clone(), b.clone()))
+            }
+            _other => others.push(f.clone()),
         }
     }
     let mut atoms = Vec::new();
