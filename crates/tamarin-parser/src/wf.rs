@@ -1709,8 +1709,8 @@ fn collect_formula_facts<'a>(
     ac: &AcSyms,
     out: &mut Vec<(Fact, Vec<String>)>,
 ) {
-    match f {
-        Formula::Atom(Atom::Action(fa, _)) => {
+    match &f.kind {
+        FormulaKind::Atom(Atom::Action(fa, _)) => {
             let terms = fa
                 .args
                 .iter()
@@ -1718,13 +1718,16 @@ fn collect_formula_facts<'a>(
                 .collect();
             out.push((fa.clone(), terms));
         }
-        Formula::Atom(_) | Formula::True | Formula::False => {}
-        Formula::Not(a) => collect_formula_facts(a, binders, ac, out),
-        Formula::And(a, b) | Formula::Or(a, b) | Formula::Implies(a, b) | Formula::Iff(a, b) => {
+        FormulaKind::Atom(_) | FormulaKind::True | FormulaKind::False => {}
+        FormulaKind::Not(a) => collect_formula_facts(a, binders, ac, out),
+        FormulaKind::And(a, b)
+        | FormulaKind::Or(a, b)
+        | FormulaKind::Implies(a, b)
+        | FormulaKind::Iff(a, b) => {
             collect_formula_facts(a, binders, ac, out);
             collect_formula_facts(b, binders, ac, out);
         }
-        Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
+        FormulaKind::Forall(vars, body) | FormulaKind::Exists(vars, body) => {
             let n = vars.len();
             for v in vars {
                 binders.push(v);

@@ -38,7 +38,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tamarin_parser::ast as p;
+use tamarin_parser::{ast as p, DUMMY_LOCATION};
 
 use crate::predicate_expand::{expand_formula, ExpandError};
 
@@ -141,6 +141,7 @@ pub fn lift_one_rule(
         let idx = i + 1;
         // HS `liftedExpandFormula thy` — expand predicate atoms.
         let expanded = expand_formula(&phi, predicates)?;
+        let loc = phi.location;
         // HS resolves a bare `<name>` token to a 0-arity `FApp (NoEq …) []`
         // during PARSING (`nullaryApp`), so by the time `rewrite` runs the
         // constant is a function application, not a variable — and `rewrite`
@@ -154,7 +155,7 @@ pub fn lift_one_rule(
         // HS `fromRuleRestriction (rname ++ "_" ++ show i) f`.
         let sub_name = format!("{}_{}", rname, idx);
         // TODO: Give restriction/formula its own span and thread this through here?
-        let (restr, action) = from_rule_restriction(&sub_name, &expanded);
+        let (restr, action) = from_rule_restriction(&sub_name, loc, &expanded);
         restrictions.push(restr);
         new_actions.push(action);
     }
@@ -167,7 +168,7 @@ pub fn lift_one_rule(
 
 /// HS `fromRuleRestriction rname f` (Restriction.hs:140-161): produce the
 /// generated restriction plus the action fact inserted into the rule.
-fn from_rule_restriction(r: &p::Restriction, f: &p::Formula) -> (p::Restriction, p::Fact) {
+fn from_rule_restriction(r: &str, loc: Location, f: &p::Formula) -> (p::Restriction, p::Fact) {
     // HS `rewrite f` returns `(rewritten formula, M.Map LVar Term)`.
     let (rewr_f, subst) = rewrite(f);
 
@@ -186,7 +187,7 @@ fn from_rule_restriction(r: &p::Restriction, f: &p::Formula) -> (p::Restriction,
         .cloned()
         .map(p::Term::Var)
         .collect();
-    let restr_fact = mk_fact(&r.name, bvar_terms);
+    let restr_fact = mk_fact(r, bvar_terms);
     // f'' = (Restr_<rname>(...) @ #NOW) ⇒ f'
     let now_term = p::Term::Var(var_now());
     let antecedent = p::Formula::Atom(p::Atom::Action(restr_fact, now_term));
@@ -200,7 +201,7 @@ fn from_rule_restriction(r: &p::Restriction, f: &p::Formula) -> (p::Restriction,
         p::Formula::Forall(quant_vars, Box::new(f2))
     };
     let restriction = p::Restriction {
-        name: format!("{}{}", RESTR_PREFIX, r.name),
+        name: format!("{}{}", RESTR_PREFIX, r),
         formula: restr_formula,
         attributes: Vec::new(),
     };
@@ -218,7 +219,7 @@ fn from_rule_restriction(r: &p::Restriction, f: &p::Formula) -> (p::Restriction,
             None => p::Term::Var(v),
         })
         .collect();
-    let action = mk_fact(&r.name, action_args);
+    let action = mk_fact(&r, action_args);
 
     (restriction, action)
 }
@@ -311,9 +312,9 @@ impl RewriteState {
 /// terms.  `bound` carries the variables (full identity) bound by enclosing
 /// quantifiers.
 fn rewrite_formula(f: &p::Formula, bound: &[VarKey], st: &mut RewriteState) -> p::Formula {
-    use p::Formula::*;
-    match f {
-        True | False => f.clone(),
+    use p::FormulaKind::*;
+    let new_kind: p::FormulaKind = match &f.kind {
+        k @ (True | False) => k.clone(),
         Atom(a) => Atom(rewrite_atom(a, bound, st)),
         Not(g) => Not(Box::new(rewrite_formula(g, bound, st))),
         And(a, b) => And(
@@ -346,6 +347,11 @@ fn rewrite_formula(f: &p::Formula, bound: &[VarKey], st: &mut RewriteState) -> p
             }
             Exists(vs.clone(), Box::new(rewrite_formula(body, &b2, st)))
         }
+    };
+
+    p::Formula {
+        kind: new_kind,
+        location: f.location,
     }
 }
 
@@ -567,8 +573,8 @@ fn sort_rank(s: p::SortHint) -> u8 {
 }
 
 fn collect_frees_formula(f: &p::Formula, bound: &mut Vec<VarKey>, out: &mut Vec<p::VarSpec>) {
-    use p::Formula::*;
-    match f {
+    use p::FormulaKind::*;
+    match &f.kind {
         True | False => {}
         Atom(a) => collect_frees_atom(a, bound, out),
         Not(g) => collect_frees_formula(g, bound, out),
@@ -655,7 +661,7 @@ mod tests {
         let ps = preds("True(x) <=> (x = true())");
         let phi = parse_formula_str("True(eq(x, x))").unwrap();
         let expanded = expand_formula(&phi, &ps).unwrap();
-        let (restr, action) = from_rule_restriction("A_1", &expanded);
+        let (restr, action) = from_rule_restriction("A_1", DUMMY_LOCATION, &expanded);
         // Restriction name.
         assert_eq!(restr.name, "Restr_A_1");
         // Action fact name + ORIGINAL args.

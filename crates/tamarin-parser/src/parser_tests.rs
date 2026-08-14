@@ -729,8 +729,8 @@ fn term_application() {
 #[test]
 fn formula_string() {
     let f = parse_formula_str("All x. P(x) ==> Q(x)").unwrap();
-    match f {
-        Formula::Forall(_, _) => {}
+    match &f.kind {
+        FormulaKind::Forall(_, _) => {}
         _ => panic!("expected Forall"),
     }
 }
@@ -744,8 +744,8 @@ fn formula_string() {
 fn fatom_fact_lhs_of_relop_is_term_atom() {
     // Equality: `Foo(x) = Foo(y)` must be Atom::Eq(App,App), not Pred.
     let f = parse_formula_str("Foo(x) = Foo(y)").unwrap();
-    match f {
-        Formula::Atom(Atom::Eq(Term::App(l, _), Term::App(r, _))) => {
+    match f.kind {
+        FormulaKind::Atom(Atom::Eq(Term::App(l, _), Term::App(r, _))) => {
             assert_eq!(l, "Foo");
             assert_eq!(r, "Foo");
         }
@@ -753,8 +753,8 @@ fn fatom_fact_lhs_of_relop_is_term_atom() {
     }
     // Subterm: `A(x) << B(y)` must be Atom::Subterm, not Pred.
     let f = parse_formula_str("A(x) << B(y)").unwrap();
-    match f {
-        Formula::Atom(Atom::Subterm(Term::App(l, _), Term::App(r, _))) => {
+    match f.kind {
+        FormulaKind::Atom(Atom::Subterm(Term::App(l, _), Term::App(r, _))) => {
             assert_eq!(l, "A");
             assert_eq!(r, "B");
         }
@@ -762,18 +762,18 @@ fn fatom_fact_lhs_of_relop_is_term_atom() {
     }
     // A genuine predicate atom (no following relational op) stays Pred.
     let f = parse_formula_str("P(x) & Q(y)").unwrap();
-    match f {
-        Formula::And(a, _) => match *a {
-            Formula::Atom(Atom::Pred(ref fa)) => assert_eq!(fa.name, "P"),
+    match f.kind {
+        FormulaKind::And(a, _) => match a.kind {
+            FormulaKind::Atom(Atom::Pred(ref fa)) => assert_eq!(fa.name, "P"),
             ref other => panic!("expected Pred, got {:?}", other),
         },
         other => panic!("expected And, got {:?}", other),
     }
     // Implication after a predicate must NOT be misread as `=` (==> guard).
     let f = parse_formula_str("P(x) ==> Q(y)").unwrap();
-    match f {
-        Formula::Implies(a, _) => match *a {
-            Formula::Atom(Atom::Pred(ref fa)) => assert_eq!(fa.name, "P"),
+    match f.kind {
+        FormulaKind::Implies(a, _) => match a.kind {
+            FormulaKind::Atom(Atom::Pred(ref fa)) => assert_eq!(fa.name, "P"),
             ref other => panic!("expected Pred LHS of ==>, got {:?}", other),
         },
         other => panic!("expected Implies, got {:?}", other),

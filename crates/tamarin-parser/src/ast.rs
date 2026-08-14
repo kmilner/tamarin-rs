@@ -25,6 +25,8 @@
 // Top-level theory
 // =============================================================================
 
+use std::ops::Deref;
+
 use crate::parser::Location;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -654,8 +656,38 @@ pub enum FactAnnotation {
 // Formulas
 // =============================================================================
 
+#[derive(Debug, Clone)]
+pub struct Formula {
+    pub kind: FormulaKind,
+    pub location: Location,
+}
+
+impl Deref for Formula {
+    type Target = FormulaKind;
+
+    fn deref(&self) -> &Self::Target {
+        &self.kind
+    }
+}
+
+impl PartialEq for Formula {
+    fn eq(&self, other: &Self) -> bool {
+        // Compilation error once we add new fields
+        let Formula {
+            kind: _,
+            location: _,
+        } = self;
+        let Formula {
+            kind: _,
+            location: _,
+        } = other;
+        // Everything but the location
+        self.kind == other.kind
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
-pub enum Formula {
+pub enum FormulaKind {
     False,
     True,
     Atom(Atom),

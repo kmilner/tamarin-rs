@@ -52,11 +52,11 @@ pub struct Location {
 }
 
 impl Location {
-    pub fn location_of<S>(word: &Option<S>, pos: Pos) -> Location
+    pub fn location_of<S>(word: &Option<S>, pos: Pos) -> Self
     where
         S: AsRef<str>,
     {
-        Location {
+        Self {
             line: pos.line,
             col: pos.col,
             start: pos.offset,
@@ -64,19 +64,28 @@ impl Location {
         }
     }
 
-    pub fn from_positions(start: Pos, end: Pos) -> Location {
-        Location {
+    pub fn from_positions(start: Pos, end: Pos) -> Self {
+        Self {
             line: start.line,
             col: start.col,
             start: start.offset,
             end: end.offset,
         }
     }
+
+    pub fn from_locations(start: Self, end: Self) -> Self {
+        Self {
+            line: start.line,
+            col: start.col,
+            start: start.start,
+            end: end.end,
+        }
+    }
 }
 
 impl From<Pos> for Location {
     fn from(pos: Pos) -> Self {
-        Location {
+        Self {
             line: pos.line,
             col: pos.col,
             start: pos.offset - 1,
@@ -5014,7 +5023,11 @@ impl<'a> Parser<'a> {
         let lhs = self.implies()?;
         if self.try_punct("<=>") || self.try_punct("⇔") {
             let rhs = self.implies()?;
-            Ok(Formula::Iff(Box::new(lhs), Box::new(rhs)))
+            let f = Formula {
+                location: Location::from_locations(lhs.location, rhs.location),
+                kind: FormulaKind::Iff(Box::new(lhs), Box::new(rhs)),
+            };
+            Ok(f)
         } else {
             Ok(lhs)
         }
@@ -5024,7 +5037,10 @@ impl<'a> Parser<'a> {
         let lhs = self.disjuncts()?;
         if self.try_punct("==>") || self.try_punct("⇒") {
             let rhs = self.implies()?;
-            Ok(Formula::Implies(Box::new(lhs), Box::new(rhs)))
+            Ok(Formula {
+                location: Location::from_locations(lhs.location, rhs.location),
+                kind: FormulaKind::Implies(Box::new(lhs), Box::new(rhs)),
+            })
         } else {
             Ok(lhs)
         }
@@ -5036,7 +5052,10 @@ impl<'a> Parser<'a> {
             // `|` is also process parallel — but inside formulas it's OR.
             if self.try_punct("|") || self.try_punct("∨") {
                 let rhs = self.conjuncts()?;
-                lhs = Formula::Or(Box::new(lhs), Box::new(rhs));
+                lhs = Formula {
+                    location: Location::from_locations(lhs.location, rhs.location),
+                    kind: FormulaKind::Or(Box::new(lhs), Box::new(rhs)),
+                };
             } else {
                 break;
             }
@@ -5049,7 +5068,10 @@ impl<'a> Parser<'a> {
         loop {
             if self.try_punct("&") || self.try_punct("∧") {
                 let rhs = self.negation()?;
-                lhs = Formula::And(Box::new(lhs), Box::new(rhs));
+                lhs = Formula {
+                    location: Location::from_locations(lhs.location, rhs.location),
+                    kind: FormulaKind::And(Box::new(lhs), Box::new(rhs)),
+                };
             } else {
                 break;
             }
@@ -5060,30 +5082,43 @@ impl<'a> Parser<'a> {
     fn negation(&mut self) -> Result<Formula, ParseError> {
         if self.try_kw("not") || self.try_punct("¬") {
             let f = self.fatom()?;
-            Ok(Formula::Not(Box::new(f)))
+            Ok(Formula {
+                location: f.location,
+                kind: FormulaKind::Not(Box::new(f)),
+            })
         } else {
             self.fatom()
         }
     }
 
     fn fatom(&mut self) -> Result<Formula, ParseError> {
+        let start = self.save();
+        let kind = self.fatom_kind()?;
+        let end = self.save();
+        Ok(Formula {
+            location: Location::from_positions(start, end),
+            kind,
+        })
+    }
+
+    fn fatom_kind(&mut self) -> Result<FormulaKind, ParseError> {
         self.skip_ws();
         if self.try_kw("F") || self.try_punct("⊥") {
-            return Ok(Formula::False);
+            return Ok(FormulaKind::False);
         }
         if self.try_kw("T") || self.try_punct("⊤") {
-            return Ok(Formula::True);
+            return Ok(FormulaKind::True);
         }
         // Quantifiers: All / ∀ / Ex / ∃
         if self.try_kw("All") || self.try_punct("∀") {
             let vs = self.quantifier_binders()?;
             let f = self.iff()?;
-            return Ok(Formula::Forall(vs, Box::new(f)));
+            return Ok(FormulaKind::Forall(vs, Box::new(f)));
         }
         if self.try_kw("Ex") || self.try_punct("∃") {
             let vs = self.quantifier_binders()?;
             let f = self.iff()?;
-            return Ok(Formula::Exists(vs, Box::new(f)));
+            return Ok(FormulaKind::Exists(vs, Box::new(f)));
         }
         // Parenthesised formula — backtrack to term-relational on failure,
         // since e.g. `(a+z) = b` should parse as a relational equality atom
@@ -5098,7 +5133,7 @@ impl<'a> Parser<'a> {
                 let (found, found_at) = self.found_token();
                 self.err_unterminated_delimiter("(", save_p, found_at, found, vec![")".to_string()])
             })?;
-            return Ok(f);
+            return Ok(f.kind);
         }
         // Atom: try last(t), action f@t, equality, less, subterm, smaller, predicate
         if self.try_kw("last") {
@@ -5115,14 +5150,14 @@ impl<'a> Parser<'a> {
                     vec![")".to_string()],
                 )
             })?;
-            return Ok(Formula::Atom(Atom::Last(t)));
+            return Ok(FormulaKind::Atom(Atom::Last(t)));
         }
         // Try fact@t (action atom)
         let save_f = self.save();
         if let Ok(f) = self.fact() {
             if self.try_punct("@") {
                 let t = self.term(false)?;
-                return Ok(Formula::Atom(Atom::Action(f, t)));
+                return Ok(FormulaKind::Atom(Atom::Action(f, t)));
             }
             // HS `blatom` (Formula.hs:45-57) tries the term-relational atoms
             // (Subterm/Less/smallerp/EqE, alts 3-6, all `try`-guarded) BEFORE
@@ -5133,7 +5168,7 @@ impl<'a> Parser<'a> {
             // already treats as a term relation.
             if !self.peek_atom_relop() {
                 // Predicate atom (no @, no following relational operator)
-                return Ok(Formula::Atom(Atom::Pred(f)));
+                return Ok(FormulaKind::Atom(Atom::Pred(f)));
             }
         }
         self.restore(save_f);
@@ -5142,11 +5177,11 @@ impl<'a> Parser<'a> {
         let lhs = self.term(false)?;
         if self.try_punct("=") {
             let rhs = self.term(false)?;
-            return Ok(Formula::Atom(Atom::Eq(lhs, rhs)));
+            return Ok(FormulaKind::Atom(Atom::Eq(lhs, rhs)));
         }
         if self.try_punct("<<") || self.try_punct("⊏") {
             let rhs = self.term(false)?;
-            return Ok(Formula::Atom(Atom::Subterm(lhs, rhs)));
+            return Ok(FormulaKind::Atom(Atom::Subterm(lhs, rhs)));
         }
         if self.try_punct("(<)") {
             let rhs = self.term(false)?;
@@ -5167,7 +5202,7 @@ impl<'a> Parser<'a> {
                 annotations: Vec::new(),
                 location: Location::from_positions(start, end),
             };
-            return Ok(Formula::Atom(Atom::Pred(fact)));
+            return Ok(FormulaKind::Atom(Atom::Pred(fact)));
         }
         if self.try_punct("<") {
             // HS `blatom` (Formula.hs:44-60, see line 49) restricts both operands of `<` to
@@ -5177,7 +5212,7 @@ impl<'a> Parser<'a> {
             // restriction is deferred to elaboration. Valid theories (which use
             // timepoint vars with `<`) parse identically.
             let rhs = self.term(false)?;
-            return Ok(Formula::Atom(Atom::Less(lhs, rhs)));
+            return Ok(FormulaKind::Atom(Atom::Less(lhs, rhs)));
         }
         // No relational operator follows the term.  HS `blatom`'s remaining
         // alternatives (Formula.hs:45-57): the `Pred` fact (alt 7 — reachable
@@ -5189,7 +5224,7 @@ impl<'a> Parser<'a> {
         let after_lhs = self.save();
         self.restore(save_f);
         if let Ok(f) = self.fact() {
-            return Ok(Formula::Atom(Atom::Pred(f)));
+            return Ok(FormulaKind::Atom(Atom::Pred(f)));
         }
         self.restore(save_f);
         Err(self.formula_atom_tail_error(save_f, after_lhs))
