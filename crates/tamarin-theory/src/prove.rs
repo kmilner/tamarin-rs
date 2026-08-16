@@ -181,12 +181,12 @@ pub fn prepend_theory_dir_to_oracle_paths(
 /// ever consumed) and `--auto-sources` (`flagNone`).  Bare tokens land in
 /// the positional catch-all (`flagArg (updateArg "") ""`) and are ignored.
 ///
-/// Rejections are RECORDED here, not raised: HS processes the block
-/// lazily, so a cmdargs-level rejection fires only where the processed
-/// record is first forced (the close pipeline — never under `-m` or
-/// `--parse-only`), and an unreadable `--stop-on-trace` VALUE later still,
-/// only where the prover reads it.  Batch callers sequence those deaths
-/// themselves; [`config_block_options`] validates eagerly for the server.
+/// Rejections are RECORDED here, not raised.  (In HS the block is
+/// processed lazily and its errors surface at scattered forcing points;
+/// the port's callers validate the record eagerly instead — the batch
+/// loader checks `flag_error` in its close pipeline and reads the value
+/// through `effective_cut`, and [`config_block_options`] wraps the same
+/// checks for the server's per-theory load.)
 #[derive(Debug, Clone, Default)]
 pub struct ConfigBlock {
     /// The first cmdargs-level rejection, message exactly as HS emits it:
@@ -277,11 +277,12 @@ pub fn parse_stop_on_trace(
     }
 }
 
-/// [`parse_config_block`] + eager validation of both deferred errors —
-/// for callers with no lazy forcing points to honor (the web server's
-/// per-theory load).  Returns `(stop_on_trace, auto_sources)`; callers
-/// merge with the CLI per HS precedence — CLI `--stop-on-trace` wins when
-/// given (`configStopOnTrace`), `--auto-sources` is OR-combined
+/// [`parse_config_block`] + eager validation of both recorded errors —
+/// used by the web server's per-theory load (the batch loader performs
+/// the same eager checks inline in run.rs).  Returns
+/// `(stop_on_trace, auto_sources)`; callers merge with the CLI per HS
+/// precedence — CLI `--stop-on-trace` wins when given
+/// (`configStopOnTrace`), `--auto-sources` is OR-combined
 /// (`configAutoSources`).
 pub fn config_block_options(
     cfg: &str,
@@ -317,7 +318,7 @@ pub fn config_block_options(
 /// Theory/Proof.hs:705-716, see line 707).
 #[derive(Debug, Clone, Default)]
 pub struct CliHeuristic {
-    /// `--heuristic` raw ranking string (e.g. `"O"`, `"s1Ss"`).  When
+    /// `--heuristic` raw ranking string (e.g. `"O"`, `"iSs"`).  When
     /// `Some`, this OVERRIDES the per-lemma / theory `heuristic:` (HS
     /// `apDefaultHeuristic prover <|> L.get pcHeuristic ctx`,
     /// Theory/Proof.hs:705-716, see line 707).
@@ -412,6 +413,60 @@ fn resolve_cli_heuristic(
         }
     }
     Some(rankings)
+}
+
+/// Validate the CLI `--heuristic` string against the set HS actually
+/// accepts (`filterHeuristic`, System.hs:679-683): identifier characters
+/// from `goalRankingIdentifiers` plus `{tactic}` groups whose name is
+/// declared by the theory (`chosenTactic`, ProofMethod.hs:493-502; names
+/// match verbatim, no trim).  The shared parser
+/// (`parse_heuristic_str_with_tactics`) is deliberately lenient — unknown
+/// input falls back to the smart ranking, which is right for in-file
+/// `heuristic:` headers and the web routes but on the CLI would prove the
+/// theory under a heuristic the user never asked for and report a verdict
+/// HS refuses to produce.  So the batch prove loop rejects first.  The
+/// wording (and the rejection's timing relative to HS's lazy forcing) is
+/// ours, per the canonical-clap policy: invalid usage needs a loud error,
+/// not the oracle's bytes.
+pub fn validate_cli_heuristic(
+    cli: &CliHeuristic,
+    tactics: &[crate::tactic::Tactic],
+) -> Result<(), String> {
+    let Some(raw) = cli.raw.as_deref() else {
+        return Ok(());
+    };
+    let chars: Vec<char> = raw.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '{' {
+            let Some(len) = chars[i + 1..].iter().position(|&x| x == '}') else {
+                return Err(format!("--heuristic: unterminated '{{' in {raw:?}"));
+            };
+            let name: String = chars[i + 1..i + 1 + len].iter().collect();
+            if !tactics.iter().any(|t| t.name == name) {
+                let declared = if tactics.is_empty() {
+                    "the theory declares no tactics".to_string()
+                } else {
+                    let names: Vec<&str> = tactics.iter().map(|t| t.name.as_str()).collect();
+                    format!("declared: {}", names.join(", "))
+                };
+                return Err(format!(
+                    "--heuristic: tactic {name:?} is not declared in the theory ({declared})"
+                ));
+            }
+            i += len + 2;
+            continue;
+        }
+        let c = chars[i];
+        if !matches!(c, 's' | 'S' | 'o' | 'O' | 'p' | 'P' | 'c' | 'C' | 'i' | 'I') {
+            return Err(format!(
+                "--heuristic: unknown goal ranking {c:?} \
+                 (valid: s S i I c C o O p P, or a declared '{{tactic}}')"
+            ));
+        }
+        i += 1;
+    }
+    Ok(())
 }
 
 /// One theory-level cache entry of refined source cases — the result of
@@ -1385,7 +1440,8 @@ fn prove_lemma_in_session_mode(
 ///
 /// `proof_bound` is `--bound=N`'s proof-depth bound (HS `apBound`,
 /// applied as `boundProofDepth` in `runAutoProver`,
-/// Theory/Proof.hs:336-344, 753-760): nodes at that depth become
+/// Theory/Proof.hs:336-344 via Theory/Proof.hs:730-750#runAutoProver):
+/// nodes at that depth become
 /// `sorry /* bound N hit */` leaves.  Pass `usize::MAX` for unbounded
 /// (HS `Nothing`, the default).
 pub fn prove_lemma(

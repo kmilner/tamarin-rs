@@ -22,8 +22,8 @@ Five, all gitignored, none keyed alike:
 
 | Cache | Fed by / read by | Key |
 |---|---|---|
-| `.hs_file_cache/` | `corpus_file_diff.sh` | theory sha + flags hash + **oracle-binary fingerprint**; the oracle's exit status sits beside each entry as `.rc` |
-| `.hs_pretty_cache/` | `pretty_gate.sh` and `wf_gate.sh` (either fills `.load.gz`; `pretty_gate.sh` derives `.theory.gz` from it) | theory sha + flags hash + **oracle-binary fingerprint** |
+| `.hs_file_cache/` | `corpus_file_diff.sh` | theory sha + every `#include`d file's sha + flags hash + **oracle-binary fingerprint**; the oracle's exit status sits beside each entry as `.rc` |
+| `.hs_pretty_cache/` | `pretty_gate.sh` and `wf_gate.sh` (either fills `.load.gz`; `pretty_gate.sh` derives `.theory.gz` from it) | theory sha + every `#include`d file's sha + flags hash + **oracle-binary fingerprint** |
 | `.web_hs_cache/` | `web_parity.sh` writes; `pane_byte_check.sh` reads | theory sha; the **oracle fingerprint** lives in a `.hs.fp` sidecar both scripts verify before reusing a manifest |
 | `.hs_canon_cache/` | `diff_proof_raw.sh`, `corpus_raw_diff.sh`, `corpus_full_trace_diff.sh` (one key form; flagless entries are exchanged, a `diff_proof_raw.sh` run with canonical flags salts `__f` and stays distinct) | theory sha + lemma + cache version + **oracle-binary fingerprint** |
 | `.hs_sweep_cache/` | the three flag sweeps | theory sha + every `#include`d file's sha + flags + **oracle-binary fingerprint** + the RESOLVED maude's path (so a sweep pointed at a different maude misses rather than reusing) |
@@ -35,14 +35,16 @@ pre-rebuild entry into a clean MISS (or, for `.web_hs_cache/`, a re-crawl)
 instead of a silently stale hit; nothing is archived or wiped, and
 `bump_submodule.sh` deliberately leaves the caches alone.
 `scripts/migrate_hs_cache_fp.sh` is the one-time rename of pre-fingerprint
-entries onto the new keys. One gap remains: every cache except
-`.hs_sweep_cache/` keys an `#include`ing theory on the includer alone, so an
-edit below `testParser/include/` leaves them serving the pre-edit oracle.
+entries onto the new keys. One gap remains: `.hs_canon_cache/` and
+`.web_hs_cache/` still key an `#include`ing theory on the includer alone, so
+an edit below `testParser/include/` leaves those two serving the pre-edit
+oracle; the gate caches, the sweep cache and `rs_ref_check.sh`'s reference
+keys digest the included files (`gate_common.sh`'s `include_shas`).
 
 `gate_common.sh` owns the shared plumbing: the OOM prologue, the three
 environment-line strip policies (`strip_env` deletes all four volatile lines,
 `strip_env_lines` keeps `analyzed:` for the triage tools, `norm` blanks to
-placeholders for the sweeps), `flags_for`/`ckey`, `hs_fingerprint`,
+placeholders for the sweeps), `flags_for`/`include_shas`/`ckey`, `hs_fingerprint`,
 `allowlist_guard` + the gate `filelist`, `rs_stale_check`, `oracle_rev_check`,
 and the maude resolver — `MAUDE_PATH` if set (set-but-unusable is a hard fail,
 never a silent fall-through), else `maude` on `PATH`, else the linuxbrew
@@ -106,7 +108,8 @@ a rename-only migration.
   the outcome does not depend on which gate ran first.
 
   All three carry their verdict in the exit status and repeat it on the last
-  line (`verdict=`): nonzero on a DIFF, on any `SKIP_*` row (a file whose
+  line (`verdict=`, with a trailing `files=<n>` — the count actually
+  compared, which `rs_ref_check.sh generate` reads): nonzero on a DIFF, on any `SKIP_*` row (a file whose
   bytes were never compared, which a DIFF count of 0 cannot distinguish from
   a match), on `RC_DIFF` (`corpus_file_diff.sh` only: identical stdout,
   different exit status), and on `ROW-COUNT=rows/N` — all three count their
@@ -161,8 +164,14 @@ a rename-only migration.
   line and the `check` handshake probe the RESOLVED maude, so the version
   compared is the one this run's provers actually use), and it now REQUIRES
   `--certified-by <gate-results>`: a saved oracle-gate log whose last
-  `verdict=` reads OK, whose path/verdict plus the oracle fingerprint are
-  stamped into the reference header. The reference still comes from main's
+  `verdict=` line reads OK, carries a known comparing-gate sentinel
+  (`wf_gate:`, `pretty_gate:`, `DONE_CORPUS_FILE_DIFF`, or a sweep `== DONE`
+  line — `migrate_hs_cache_fp.sh`'s rename log and `rs_vs_rs_diff.sh`'s
+  RS-vs-RS log are refused by name), and carries `files=<n>` covering at
+  least every file being baselined (so a `FAMILY=1`/scoped-`ALLOWLIST` OK
+  cannot certify the unscoped corpus); its path/verdict plus the oracle
+  fingerprint — revision-checked against the submodule pin via
+  `oracle_rev_check` — are stamped into the reference header. The reference still comes from main's
   own binary, so `check` is an RS-vs-RS self-consistency check, not an
   oracle comparison — and since it is the only parity gate CI runs besides
   the `divergence_fixtures` step, **no CI job can catch a general divergence
@@ -204,11 +213,13 @@ a rename-only migration.
   buys documentation, not agreement. `sweep_finish` lists up to 40 of them
   under `== n row(s) UNCOMPARED — a documented timeout/kill reached no verdict
   on them ==` and puts the count on the sentinel:
-  `== DONE <sweep> <ts> verdict=<...> UNCOMPARED=<n> ==`, always present,
-  `UNCOMPARED=0` on a run with none. It is deliberately NOT fatal — `verdict=`
-  keeps its old meaning, so `grep -oE 'verdict=[^ ]+'` still works on these
-  logs — and it puts "the files it compared agree" on the DONE line rather than
-  leaving it to be inferred from the ledger. Today's ledger yields 23 such
+  `== DONE <sweep> <ts> verdict=<...> UNCOMPARED=<n> files=<n> ==`, always
+  present, `UNCOMPARED=0` on a run with none (`files=` is the distinct
+  compared-file count `rs_ref_check.sh generate` reads to reject scoped
+  logs). It is deliberately NOT fatal — `verdict=` keeps its old meaning, so
+  `grep -oE 'verdict=[^ ]+'` still works on these logs — and it puts "the
+  files it compared agree" on the DONE line rather than leaving it to be
+  inferred from the ledger. Today's ledger yields 23 such
   rows (pe 19, json 3, module 1). On the 15 `pe oracle-timeout` ones the port
   is never executed at all — the sweeps return on `hs>=124` before invoking
   `$RS_BIN` — and since `hs_run` caches a timeout together with its cap and
@@ -475,9 +486,11 @@ then upstream behaviour moving under them.
   theories contain `#ifdef`; the four `-D` rows put the DEFINED branch of
   `testParser/define.spthy` and three `thesis-LaraSchmid-evoting` theories in
   front of every gate that reads this file — and take their bare branch out of
-  reach in exchange. The other 28 still prove one branch only. `-D` is a
-  cmdargs `flagOpt`, so the value must be ATTACHED (`-D=A`, never `-D A`, which
-  reads as a positional input file).
+  reach in exchange. The other 28 still prove one branch only. The value must
+  be ATTACHED (`-D=A`, never `-D A`): `-D` is a cmdargs `flagOpt` in the
+  Haskell binary, which reads a detached value as a positional input file,
+  and the Rust port's clap front end deliberately mirrors that (a detached
+  token stays positional there too).
 - **`parity_corpus.txt`** — the canonical 432-file gate corpus: the
   submodule's examples plus one repo-local fixture
   (`../../crates/tamarin-theory/tests/fixtures/nat_sort_regression.spthy`,

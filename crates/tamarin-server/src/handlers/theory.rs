@@ -511,17 +511,16 @@ fn render_theory_source(entry: &crate::state::TheoryEntry) -> String {
     if body.ends_with('\n') {
         body.pop();
     }
-    // OPEN DIVERGENCE, width: `render` is HughesPJ's DEFAULT style, 100/67
-    // (Text/PrettyPrint/Class.hs:77-78), where batch `renderDoc` pins
-    // `lineLength = 110` -> ribbon 73 (Console.hs:243, 398-399).
-    // `pretty_closed_theory` renders at 110/73 for its stdout caller and takes
-    // no width, so these routes serve the wider layout: a group that fits 73
-    // but not 67 stays on one line here and wraps upstream.  Visible on
-    // `regression/trace/issue193.spthy`, whose captured oracle body is
-    // `tests/fixtures/haskell-responses/source.txt`; the web gate's allowlist
-    // holds no theory that crosses the boundary, so all 186 of its text rows
-    // match.  Closing it means threading a width through the shared renderer,
-    // whose acceptance test is the 432-file batch gate.
+    // Width: `render` here is HughesPJ's DEFAULT style, 100/67
+    // (Text/PrettyPrint/Class.hs:77-78).  `pretty_closed_theory` takes no
+    // width because it renders at the process-global display width, which
+    // `init_process_globals` pins to `DEFAULT_LINE_LENGTH`/`DEFAULT_RIBBON`
+    // = 100/67 before any render — so these routes already match HS's
+    // `render . prettyClosedTheory` (byte-verified against the captured
+    // oracle body for `issue193.spthy`,
+    // `tests/fixtures/haskell-responses/source.txt`).  The batch BINARY is
+    // the one that differs: its `renderDoc` pins 110/73 (Console.hs:243,
+    // 398-399) via its own width install.
     body
 }
 
@@ -1085,7 +1084,7 @@ pub async fn download(
     // `name` is a client-supplied, percent-DECODED path segment, so it can hold
     // bytes no header value may carry (a newline, say).  Such a name simply
     // gets no disposition header rather than panicking the worker; every name
-    // a header can represent is spliced exactly as before.
+    // a header can represent is spliced verbatim into the disposition.
     if let Ok(disposition) = format!("attachment; filename=\"{name}\"").parse() {
         headers.insert(header::CONTENT_DISPOSITION, disposition);
     }

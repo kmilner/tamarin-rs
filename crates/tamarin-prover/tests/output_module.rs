@@ -6,9 +6,9 @@
 //! (Batch.hs:101-113): per-module stdout (`prettyOpenTheoryByModule`,
 //! TheoryLoader.hs:783-801, plus `withVersionAndReport`'s two trailing
 //! comments), the six-marker stderr with NO `Theory closed`, the deferred
-//! `-o`/`-O` write path, the `--quit-on-warning` abort shape, and the GHC
-//! death for an unknown module value (`ArgumentError` forced at
-//! Batch.hs:163:33).
+//! `-o`/`-O` write path, the `--quit-on-warning` abort shape, and the clap
+//! parse error for an unknown module value (rc 2, stderr, no maude probe,
+//! no file IO).
 //!
 //! Every expectation below is verbatim oracle bytes from the pinned v1.13.0
 //! binary (Git revision ef3f0468) on `examples/sapic/fast/basic/
@@ -523,63 +523,46 @@ fn translate_only_stderr_has_no_theory_closed_marker() {
     }
 }
 
-/// `-m=bogus` (and `-m=` via the long form): `ArgumentError "output mode not
-/// supported."` forced out of `mkTheoryLoadOptions` at Batch.hs:163:33 —
-/// AFTER the banner, BEFORE any `[Theory …]` marker, stdout empty, rc 1.
+/// `-m=bogus` (and the empty `--output-module=`) are clap parse errors:
+/// rc 2, stderr, no maude probe, no file IO.  (HS deferred this rejection
+/// into the file loop; canonical clap validates the value up front.)
 #[test]
-fn unsupported_module_dies_with_hs_bytes() {
-    if !maude_available() {
-        eprintln!("skipping: maude not on path");
-        return;
-    }
+fn unsupported_module_is_a_parse_error() {
     for flag in ["-m=bogus", "--output-module="] {
         let (code, stdout, stderr) = run_raw("bogus", REPLICATION, &[flag]);
-        assert_eq!(code, 1, "{flag}");
+        assert_eq!(code, 2, "{flag}");
         assert!(
             stdout.is_empty(),
             "{flag}: stdout must be empty: {stdout:?}"
         );
         assert!(
-            !stderr.contains("panicked at"),
-            "{flag}: GHC-style death, not a Rust panic:\n{stderr}"
+            !stderr.contains("maude tool:"),
+            "{flag}: a parse error must precede the maude probe:\n{stderr}"
         );
-        let rest = strip_maude_banner(&stderr);
-        assert_eq!(
-            rest,
-            "tamarin-prover: output mode not supported.\n\
-             CallStack (from HasCallStack):\n\
-             \x20\x20error, called at src/Main/Mode/Batch.hs:163:33 in main:Main.Mode.Batch\n",
-            "{flag}"
+        assert!(
+            stderr.contains("--output-module"),
+            "{flag}: the error names the flag:\n{stderr}"
         );
     }
 }
 
-/// `--partial-evaluation=bogus` shares the Batch.hs:163:33 death
-/// (`ArgumentError "partial-evaluation: unknown option"`,
-/// TheoryLoader.hs:354-358), also after the banner.
+/// `--partial-evaluation=bogus` is likewise a clap parse error.
 #[test]
-fn partial_evaluation_unknown_option_dies_with_hs_bytes() {
-    if !maude_available() {
-        eprintln!("skipping: maude not on path");
-        return;
-    }
+fn partial_evaluation_unknown_option_is_a_parse_error() {
     let (code, stdout, stderr) = run_raw("pe_bogus", REPLICATION, &["--partial-evaluation=bogus"]);
-    assert_eq!(code, 1);
+    assert_eq!(code, 2);
     assert!(stdout.is_empty(), "stdout must be empty: {stdout:?}");
-    let rest = strip_maude_banner(&stderr);
-    assert_eq!(
-        rest,
-        "tamarin-prover: partial-evaluation: unknown option\n\
-         CallStack (from HasCallStack):\n\
-         \x20\x20error, called at src/Main/Mode/Batch.hs:163:33 in main:Main.Mode.Batch\n"
+    assert!(
+        stderr.contains("--partial-evaluation"),
+        "the error names the flag:\n{stderr}"
     );
 }
 
-/// The three export modules are valid values whose backends are unported:
-/// they must NOT die with `output mode not supported.` but with the port's
-/// own not-yet-ported error.
+/// The three export modules are valid `-m` values whose backends are
+/// unported: they parse cleanly and fail at run time with the port's
+/// `--output-module=… not yet ported` error (rc 1).
 #[test]
-fn proverif_module_still_errors_as_unported() {
+fn proverif_module_errors_as_unported() {
     if !maude_available() {
         eprintln!("skipping: maude not on path");
         return;
@@ -590,10 +573,6 @@ fn proverif_module_still_errors_as_unported() {
         assert!(
             stderr.contains(&format!("--output-module={m}")) && stderr.contains("not yet ported"),
             "{m}: expected the not-ported error, got:\n{stderr}"
-        );
-        assert!(
-            !stderr.contains("output mode not supported."),
-            "{m} is a VALID module value; it must not hit the GHC death:\n{stderr}"
         );
     }
 }

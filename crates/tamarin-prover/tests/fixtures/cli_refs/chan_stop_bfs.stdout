@@ -42,11 +42,14 @@ guarded formula characterizing all counter-examples:
   (Sent( A, m ) @ #i) ∧ (K( m ) @ #j) ∧ ∀ #r. (Rev( A ) @ #r) ⇒ ⊥"
 */
 simplify
-solve( !KU( ~m ) @ #vk )
-  case Send
-  solve( !KU( ~k ) @ #vk.1 )
-    case Reveal
-    by contradiction /* from formulas */
+solve( !Key( $A, ~k ) ▶₀ #i )
+  case Register
+  solve( !KU( ~m ) @ #vk )
+    case Send
+    solve( !KU( ~k ) @ #vk.1 )
+      case Reveal
+      by contradiction /* from formulas */
+    qed
   qed
 qed
 
@@ -57,11 +60,17 @@ guarded formula characterizing all satisfying traces:
 "∃ A m #i #j. (Sent( A, m ) @ #i) ∧ (Recv( A, m ) @ #j)"
 */
 simplify
-solve( !KU( senc(~m, k.1) ) @ #vk )
-  case Send
-  solve( !Key( $A, ~k ) ▶₀ #j )
+solve( !Key( $A, ~k ) ▶₀ #i )
+  case Register
+  solve( !Key( $A, k.1 ) ▶₀ #j )
     case Register
-    SOLVED // trace found
+    solve( !KU( senc(~m, ~k.1) ) @ #vk )
+      case Send
+      SOLVED // trace found
+    next
+      case c_senc
+      by sorry /* ignored (attack exists) */
+    qed
   qed
 qed
 
@@ -84,7 +93,7 @@ analyzed: /home/kamilner/tamarin-rs-2/crates/tamarin-prover/tests/fixtures/cli_f
 
   processing time: 0.14s
   
-  secrecy (all-traces): verified (4 steps)
-  exec (exists-trace): verified (4 steps)
+  secrecy (all-traces): verified (5 steps)
+  exec (exists-trace): verified (6 steps)
 
 ==============================================================================

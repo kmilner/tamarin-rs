@@ -119,7 +119,7 @@ extract_theory() {
 }
 # flags_for / ckey come from gate_common.sh — one key format for this gate,
 # wf_gate.sh (which reads THIS cache) and corpus_file_diff.sh.
-export -f strip_env extract_theory flags_for ckey
+export -f strip_env extract_theory flags_for include_shas ckey
 
 # --- Phase 0: fill any MISSING no-prove HS reference (fast; warm-cache reused).
 # TWO artifacts per key, from ONE oracle run:
@@ -232,5 +232,9 @@ bad=''
 [ "$diff" = 0 ] || bad="DIFF=$diff"
 [ "$skip" = 0 ] || bad="${bad:+$bad }SKIPPED=$skip/$total (never compared; unfilled HS cache $HS_CACHE)"
 [ "$total" = "$N" ] || bad="${bad:+$bad }ROW-COUNT=$total/$N"
-echo "pretty_gate: verdict=${bad:-OK}"
+# files= is the count actually COMPARED (MATCH+DIFF; SKIPs compared nothing).
+# rs_ref_check.sh generate reads it to refuse a scoped (ALLOWLIST) log as
+# evidence for a wider re-baseline. Trailing and additive, so `grep verdict=`
+# consumers are unchanged.
+echo "pretty_gate: verdict=${bad:-OK} files=$((m + diff))"
 [ -z "$bad" ]

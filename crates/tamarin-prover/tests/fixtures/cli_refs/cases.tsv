@@ -32,12 +32,37 @@ basic_plain	cli_flags_basic.spthy	-	--derivcheck-timeout=300 --prove
 basic_lemma_reach	cli_flags_basic.spthy	!=basic_plain	--derivcheck-timeout=300 --prove --lemma=reach
 basic_bound_10	cli_flags_basic.spthy	=basic_plain	--derivcheck-timeout=300 --prove -b=10
 basic_bound_1	cli_flags_basic.spthy	!=basic_plain	--derivcheck-timeout=300 --prove -b=1
+# ---- --precompute-only (the prettyPrecomputation stats document; with --prove
+# it appends ppWf's second warning line, run.rs's 9-space variant) ------------
+basic_precompute	cli_flags_basic.spthy	!=basic_lemma_reach	--derivcheck-timeout=300 --precompute-only --prove --lemma=reach
+# ---- --bound reaching the PARALLEL sibling expansion.  cli_flags_tutorial is
+# a byte-copy of the submodule's examples/Tutorial.spthy: its proofs fan out
+# (>= 2 cases under Dfs), so `-b=6` cuts inside rayon workers — the pin that
+# fails if `PROOF_BOUND` is not re-seeded per worker (search.rs) -------------
+tutorial_plain	cli_flags_tutorial.spthy	-	--derivcheck-timeout=300 --prove
+tutorial_bound_6	cli_flags_tutorial.spthy	!=tutorial_plain	--derivcheck-timeout=300 --prove -b=6
+# ---- --stop-on-trace (exists-trace search: dfs cuts, none explores; bfs and
+# sorry are the two other non-default strategies that reach the solver) -------
+chan_stop_none	cli_flags_chan.spthy	!=chan_plain	--derivcheck-timeout=300 --prove --stop-on-trace=none
+chan_stop_bfs	cli_flags_chan.spthy	!=chan_plain	--derivcheck-timeout=300 --prove --stop-on-trace=bfs
+chan_stop_sorry	cli_flags_chan.spthy	!=chan_plain	--derivcheck-timeout=300 --prove --stop-on-trace=sorry
+# ---- -D/--defines (theory: an #ifdef FOO rule + lemma) ----------------------
+ifdef_plain	cli_flags_ifdef.spthy	-	--derivcheck-timeout=300 --parse-only
+ifdef_defined	cli_flags_ifdef.spthy	!=ifdef_plain	--derivcheck-timeout=300 --parse-only -D=FOO
 # ---- --heuristic / --saturation / --open-chains -----------------------------
 chan_plain	cli_flags_chan.spthy	-	--derivcheck-timeout=300 --prove
 chan_heuristic_i	cli_flags_chan.spthy	!=chan_plain	--derivcheck-timeout=300 --prove --heuristic=i
+# cli_flags_chan_heur is the chan fixture plus an in-file `heuristic: i`
+# header; the CLI flag must override it (cli.rs's load-bearing bare-flag
+# semantic, HS `apDefaultHeuristic <|> pcHeuristic`)
+chan_heur_plain	cli_flags_chan_heur.spthy	-	--derivcheck-timeout=300 --prove
+chan_heur_override	cli_flags_chan_heur.spthy	!=chan_heur_plain	--derivcheck-timeout=300 --prove --heuristic=s
 chan_saturation_1	cli_flags_chan.spthy	=chan_plain	--derivcheck-timeout=300 --prove --saturation=1
 chan_open_chains_0	cli_flags_chan.spthy	!=chan_plain	--derivcheck-timeout=300 --prove --open-chains=0
 # ---- --oraclename / --oracle-only -------------------------------------------
 chan_oracle_pick_last	cli_flags_chan.spthy	!=chan_plain	--derivcheck-timeout=300 --prove --heuristic=o --oraclename={FIXTURES}/cli_oracle_pick_last.sh
-chan_oracle_rank_none	cli_flags_chan.spthy	-	--derivcheck-timeout=300 --prove --heuristic=o --oraclename={FIXTURES}/cli_oracle_rank_none.sh
+# `=chan_plain` on the record: a rank-nothing oracle degenerates to goal-number
+# order, which coincides with the default ranking on this fixture — the spawn
+# proof is chan_oracle_pick_last, the flag proof is chan_oracle_only.
+chan_oracle_rank_none	cli_flags_chan.spthy	=chan_plain	--derivcheck-timeout=300 --prove --heuristic=o --oraclename={FIXTURES}/cli_oracle_rank_none.sh
 chan_oracle_only	cli_flags_chan.spthy	!=chan_oracle_rank_none	--derivcheck-timeout=300 --prove --heuristic=o --oraclename={FIXTURES}/cli_oracle_rank_none.sh --oracle-only

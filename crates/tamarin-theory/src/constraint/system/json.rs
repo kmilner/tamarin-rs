@@ -590,17 +590,64 @@ pub fn sequents_to_json_pretty(
     graph_options: &GraphOptions,
     systems: &[(String, &RenderSystem)],
 ) -> String {
-    let graphs: Vec<Value> = systems
-        .iter()
-        .map(|(label, system)| {
-            let graph = system_to_graph(system, graph_options);
-            let color_map = build_node_color_map(&system.nodes);
-            json_graph(label, &graph, &color_map)
-        })
-        .collect();
-    let root = object([("graphs", Value::Array(graphs))]);
-    // `removePseudoUnicode $ encodePretty graphJSON`.
-    to_pretty_string(&root)
+    let mut out = Vec::new();
+    write_sequents_json_pretty(
+        graph_options,
+        systems.iter().map(|(l, s)| (l.as_str(), *s)),
+        &mut out,
+    )
+    .expect("Vec<u8> writes are infallible");
+    // The writer emits only `escape_into`-escaped strings and ASCII frame
+    // bytes, so the document is valid UTF-8 by construction.
+    String::from_utf8(out).expect("the JSON writer emits UTF-8")
+}
+
+/// [`sequents_to_json_pretty`] streamed into a writer, one graph at a time —
+/// the batch `--output-json` path (HS `BL.writeFile`, Batch.hs:270-272),
+/// where holding every graph's `Value` tree plus the finished document would
+/// scale peak RSS with total output size instead of the largest graph.
+///
+/// Byte-identical to rendering the whole document at once: the frame bytes
+/// around each graph contain no `\`, so a `removePseudoUnicode` needle
+/// (see [`remove_pseudo_unicode`]) can never straddle a chunk boundary, and
+/// applying the rewrite per graph chunk equals applying it to the whole
+/// document.
+pub fn write_sequents_json_pretty<L, R, W>(
+    graph_options: &GraphOptions,
+    systems: impl IntoIterator<Item = (L, R)>,
+    w: &mut W,
+) -> std::io::Result<()>
+where
+    L: AsRef<str>,
+    R: std::borrow::Borrow<RenderSystem>,
+    W: std::io::Write,
+{
+    // The frame `write_value` gives `object([("graphs", Value::Array(…))])`:
+    // root object at level 0, the array's elements at level 2.
+    w.write_all(b"{\n    \"graphs\": [")?;
+    let mut first = true;
+    for (label, system) in systems {
+        let system = system.borrow();
+        let graph = system_to_graph(system, graph_options);
+        let color_map = build_node_color_map(&system.nodes);
+        let val = json_graph(label.as_ref(), &graph, &color_map);
+        let mut chunk = String::new();
+        if !first {
+            chunk.push(',');
+        }
+        chunk.push('\n');
+        chunk.push_str(INDENT);
+        chunk.push_str(INDENT);
+        write_value(&mut chunk, &val, 2);
+        w.write_all(remove_pseudo_unicode(chunk).as_bytes())?;
+        first = false;
+    }
+    if first {
+        // `write_compound` collapses an empty array to `[]`.
+        w.write_all(b"]\n}")
+    } else {
+        w.write_all(b"\n    ]\n}")
+    }
 }
 
 /// aeson-pretty's indentation unit at `defConfig` (`confIndent = Spaces 4`).
@@ -717,27 +764,24 @@ fn write_compound<T>(
     out.push(close);
 }
 
-/// `removePseudoUnicode $ encodePretty v` (JSON.hs:228-239).
-///
-/// `encodePretty` is aeson-pretty at `defConfig` and `removePseudoUnicode` is
-/// two literal byte-substring rewrites over the WHOLE document, applied in the
+/// HS `removePseudoUnicode` (JSON.hs:228-239), applied to `encodePretty`'s
+/// (aeson-pretty at `defConfig`) output:
+/// two literal byte-substring rewrites over the chunk, applied in the
 /// order the HS composition gives them: `\u003c` → `<` first, then
 /// `\u003e` → `>`.  Neither is string-aware, so a source string holding the
 /// six characters `\u003c` is escaped to `\\u003c` and then rewritten to the
 /// invalid-JSON `\<` — reproduced here rather than avoided.  Since the
 /// encoder itself never emits a `\u003c` / `\u003e` escape, that mangling is
 /// the pass's only observable effect.  Each rewrite is therefore guarded by a
-/// scan for its needle, which keeps the usual whole-document copy off the path.
-fn to_pretty_string(v: &Value) -> String {
-    let mut out = String::new();
-    write_value(&mut out, v, 0);
-    if out.contains("\\u003c") {
-        out = out.replace("\\u003c", "<");
+/// scan for its needle, which keeps the usual whole-chunk copy off the path.
+fn remove_pseudo_unicode(mut s: String) -> String {
+    if s.contains("\\u003c") {
+        s = s.replace("\\u003c", "<");
     }
-    if out.contains("\\u003e") {
-        out = out.replace("\\u003e", ">");
+    if s.contains("\\u003e") {
+        s = s.replace("\\u003e", ">");
     }
-    out
+    s
 }
 
 #[cfg(test)]

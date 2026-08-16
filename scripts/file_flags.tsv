@@ -20,8 +20,9 @@
 #                        RS can't match → kept out of parity_corpus.txt.
 #   --auto-sources       routed (RS generates the sources lemma); the spore /
 #                        AUTO_SOURCES_CASE_STUDIES rows below are corpus MATCHes.
-#   --stop-on-trace=...  dfs (default) and seqdfs are routed in prove-mode;
-#                        bfs/sorry/none error as unported.
+#   --stop-on-trace=...  all five values (dfs/seqdfs/bfs/sorry/none) are
+#                        routed in prove-mode; the non-default ones are
+#                        oracle-pinned by the chan_stop_* cli_refs rows.
 #   in-file `heuristic: o "..."` oracles need NO entry here — RS routes the
 #                        in-file heuristic + has oracle_ranking, so those files
 #                        already work bare.
@@ -94,9 +95,10 @@ accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-f
 # gate took the SAME branch in all 32 — the taken-branch code, the `#else`
 # arms, the transitive `#define` and the flag CONJUNCTION were never once
 # compared against the oracle.  These rows define flags for four of them so the
-# other branch is what the gates prove.  `-D` is a cmdargs `flagOpt`
-# (TheoryLoader.hs:132-137), so the value must be ATTACHED: `-D=A`, never
-# `-D A` (which would be read as a positional input file).
+# other branch is what the gates prove.  The value must be ATTACHED (`-D=A`,
+# never `-D A`): the same argv feeds the HASKELL binary too, whose cmdargs
+# `flagOpt` (TheoryLoader.hs:132-137) reads a detached value as a positional
+# input file.
 #
 # Coverage each row buys, and why these four:
 #   define.spthy   purpose-built parser fixture.  `-D=A -D=B -D=C` takes the

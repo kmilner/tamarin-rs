@@ -309,6 +309,8 @@ refined sources are computed once and shared across lemmas.
   `sorry /* bound N hit */` leaves (HS `boundProofDepth`); in interactive
   mode it is accepted but dead, as in HS (the web routes carry their own
   per-request bound).
+  The front end itself does not produce identical output to tamarin-prover,
+  although flag names and value semantics should match.
 - **Subcommands:** `interactive` (HTTP server), `variants` (DH/BP
   intruder-rule variants dump), `test` (install self-check).
 

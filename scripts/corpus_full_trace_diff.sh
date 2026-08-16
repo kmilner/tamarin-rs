@@ -225,7 +225,9 @@ worker() {
         hs_ms=$(( $(date +%s%3N) - hs_t0 ))
         slice_canon "$lemma" "$tmp/hs.out" "$tmp/hs.canon"
         if [ -n "$key" ]; then
-            if [ "$hs_rc" -eq 124 ]; then
+            # >=128 is a signal death (OOM's 137), which truncates stdout the
+            # same way the timeout does: marker, never the partial payload.
+            if [ "$hs_rc" -eq 124 ] || [ "$hs_rc" -ge 128 ]; then
                 : > "$key_timeout" 2>/dev/null || true
             else
                 gzip -c "$tmp/hs.out" > "${key%.canon}.full.gz" 2>/dev/null || true
@@ -238,10 +240,11 @@ worker() {
         fi
     fi
 
-    # HS timed out (cached marker or live run): skip the RS run entirely —
-    # the lemma is SKIP_TIMEOUT either way, and HS-timeout lemmas are exactly
-    # where RS's unbounded search OOMs the machine (17-43 GB RSS observed).
-    if [ "$hs_rc" -eq 124 ]; then
+    # HS timed out or was signal-killed (cached marker or live run): skip the
+    # RS run entirely — the lemma is SKIP_TIMEOUT either way, and HS-timeout
+    # lemmas are exactly where RS's unbounded search OOMs the machine
+    # (17-43 GB RSS observed).
+    if [ "$hs_rc" -eq 124 ] || [ "$hs_rc" -ge 128 ]; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$f" "$lemma" "SKIP_TIMEOUT" "0" "0" "-" "$hs_ms" "-"
         return 0
     fi
@@ -256,7 +259,8 @@ worker() {
     hs_lines=$(grep -c . "$hs_canon"); hs_lines=${hs_lines// /}
     rs_lines=$(grep -c . "$tmp/rs.canon"); rs_lines=${rs_lines// /}
 
-    if [ "$hs_rc" -eq 124 ] || [ "$rs_rc" -eq 124 ]; then
+    if [ "$hs_rc" -eq 124 ] || [ "$hs_rc" -ge 128 ] \
+       || [ "$rs_rc" -eq 124 ] || [ "$rs_rc" -ge 128 ]; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$f" "$lemma" "SKIP_TIMEOUT" "$hs_lines" "$rs_lines" "-" "$hs_ms" "$rs_ms"
         return 0
     fi

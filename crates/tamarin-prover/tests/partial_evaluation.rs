@@ -289,25 +289,20 @@ fn parse_only_skips_pe() {
     assert!(send < recv, "expected source order:\n{stdout}");
 }
 
-/// An unrecognised value is `ArgumentError "partial-evaluation: unknown
-/// option"` (TheoryLoader.hs:354-358), forced by `error e` at
-/// Batch.hs:163:33 — after the maude banner, before any `[Theory …]` marker,
-/// with the GHC `CallStack` frame and no help block.  Exit 1, stdout empty.
+/// An unrecognised value is a clap parse error: rc 2 on stderr, before the
+/// maude probe or any file IO.  (HS deferred the rejection into the file
+/// loop; canonical clap validates the value up front.)
 #[test]
-fn unknown_style_dies_with_argument_error() {
-    if !maude_available() {
-        eprintln!("skipping: maude not on path");
-        return;
-    }
+fn unknown_style_is_a_parse_error() {
     let (code, stdout, stderr) = run_binary("pe_bogus", &["--partial-evaluation=banana"]);
-    assert_eq!(code, 1, "stderr: {stderr}");
+    assert_eq!(code, 2, "stderr: {stderr}");
     assert_eq!(stdout, "");
-    assert_eq!(
-        strip_maude_banner(&stderr),
-        joined(&[
-            "tamarin-prover: partial-evaluation: unknown option",
-            "CallStack (from HasCallStack):",
-            "  error, called at src/Main/Mode/Batch.hs:163:33 in main:Main.Mode.Batch",
-        ])
+    assert!(
+        stderr.contains("--partial-evaluation"),
+        "the error names the flag:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("maude tool:"),
+        "a parse error must precede the maude probe:\n{stderr}"
     );
 }

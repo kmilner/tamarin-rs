@@ -2,8 +2,10 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! Embed git revision + build timestamp into the compiled binary so
-//! `tamarin-prover --version` can mirror HS's `Generated from:` block.
+//! Embed git revision + build timestamp into the compiled binary for
+//! `--version`'s provenance lines (cli.rs `LONG_VERSION`) and the
+//! `Generated from:` footer of emitted theories (pretty_theory.rs
+//! `render_generated_from`).
 //! Mirrors HS's compile-time TH (Console.hs `gitVersion`/`compileTime`): the
 //! `$(gitHash)`/`$(gitDirty)`/`$(gitBranch)` splices from `Development.GitRev`
 //! plus `runIO Data.Time.getCurrentTime`.
@@ -39,10 +41,10 @@ fn main() {
     // `git status --porcelain` is non-empty — i.e. it also flags untracked
     // files (unlike `git diff-index --quiet HEAD --`). Mirror that: any
     // non-empty porcelain output means dirty. Injecting the suffix into `rev`
-    // here feeds both consumers of TAMARIN_GIT_REV — cli.rs
-    // `generated_from_text` (`--version`) and pretty_theory.rs
-    // `render_generated_from` (the `--prove` Generated-from footer) — so both
-    // `Git revision:` lines match HS.
+    // here feeds both consumers of TAMARIN_GIT_REV — cli.rs `LONG_VERSION`
+    // (`--version`) and pretty_theory.rs `render_generated_from` (the
+    // `--prove` Generated-from footer) — so the footer's `Git revision:`
+    // line matches HS.
     let dirty = Command::new("git")
         .args(["status", "--porcelain"])
         .output()

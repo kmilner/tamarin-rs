@@ -84,7 +84,7 @@ use crate::fact::{fact_tag_name, FactTag, Multiplicity};
 /// `proof_bound` (`--bound=N`; `usize::MAX` = unbounded) is plumbed
 /// through to `run_proof_search` for the fall-through auto-prover
 /// invocations.  HS applies `boundProofDepth` inside `runAutoProver`
-/// (Theory/Proof.hs:753-760), i.e. per sorry-replacement — so each
+/// (Theory/Proof.hs:730-750#runAutoProver), i.e. per sorry-replacement — so each
 /// fall-through search here counts depth from its own subtree root,
 /// exactly as HS does.
 pub fn replace_sorry_prove(

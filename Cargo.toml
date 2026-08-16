@@ -29,11 +29,12 @@ tamarin-export = { path = "crates/tamarin-export", version = "1.13.0" }
 tamarin-parser = { path = "crates/tamarin-parser", version = "1.13.0" }
 tamarin-server = { path = "crates/tamarin-server", version = "1.13.0" }
 
-sha2 = "0.10"
+sha2 = "0.11"
 base64 = "0.22"
 indexmap = "2"
 proptest = "1"
 rayon = "1"
+clap = { version = "4.5", features = ["derive"] }
 rustc-hash = "2"
 
 # Workspace-wide lint policy.  These clippy lints are `allow`ed

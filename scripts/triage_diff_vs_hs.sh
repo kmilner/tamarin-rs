@@ -55,7 +55,10 @@ for rel in "$@"; do
       timeout "$FT" "$HS" +RTS -N4 -M11g -RTS $fl --derivcheck-timeout="$DERIV" --prove "$farg" ) >"$tmp" 2>/dev/null
     rc=$?
     hs=$(strip_env < "$tmp"); rm -f "$tmp"
-    if [ "$rc" = 124 ]; then
+    # 124 is timeout(1)'s status; >=128 is any other signal death (the OOM
+    # killer's 137), which truncates stdout the same way — neither may be
+    # cached, and neither can be triaged against.
+    if [ "$rc" = 124 ] || [ "$rc" -ge 128 ]; then
       hs=""
     elif [ -n "$hs" ]; then
       [ -n "$fl" ] && printf '%s' "$fl" > "$CACHE/$key.flags"

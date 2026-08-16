@@ -246,8 +246,9 @@ impl Default for IntegerParameters {
 /// `TheoryLoadOptions` into every `closeRuleCache`; the port's contexts are
 /// built in too many places to thread a value through each, so the CLI layer
 /// stores the overrides process-globally and [`IntegerParameters::current`]
-/// folds them over the defaults).  `-1` = unset; the CLI parser rejects
-/// negative values, so every real override is `>= 0`.
+/// folds them over the defaults).  `-1` = unset; the CLI parser range-checks
+/// the flags to `0..=i64::MAX` (cli.rs), so every real override is `>= 0`
+/// and the `try_from` below cannot fail.
 static CLI_OPEN_CHAINS_LIMIT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
 static CLI_SATURATION_LIMIT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
 
@@ -257,10 +258,12 @@ static CLI_SATURATION_LIMIT: std::sync::atomic::AtomicI64 = std::sync::atomic::A
 pub fn set_cli_solver_limits(open_chains: Option<u64>, saturation: Option<u64>) {
     use std::sync::atomic::Ordering;
     if let Some(c) = open_chains {
-        CLI_OPEN_CHAINS_LIMIT.store(c as i64, Ordering::Relaxed);
+        let c = i64::try_from(c).expect("clap range-checks -c/--open-chains to 0..=i64::MAX");
+        CLI_OPEN_CHAINS_LIMIT.store(c, Ordering::Relaxed);
     }
     if let Some(s) = saturation {
-        CLI_SATURATION_LIMIT.store(s as i64, Ordering::Relaxed);
+        let s = i64::try_from(s).expect("clap range-checks -s/--saturation to 0..=i64::MAX");
+        CLI_SATURATION_LIMIT.store(s, Ordering::Relaxed);
     }
 }
 

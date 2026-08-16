@@ -81,7 +81,7 @@ pub fn ndc_check() -> bool {
 /// interactive CLI's `-D/--defines` (and `--quit-on-warning` element)
 /// reach `#ifdef` evaluation on startup loads, uploads, and reloads
 /// alike.  Empty until `run_interactive` sets it; library/test embedders
-/// that never call [`set_parser_flags`] parse flag-free, as before.
+/// that never call [`set_parser_flags`] parse flag-free.
 static PARSER_FLAGS: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
 
 /// Set the parser flags [`load_from_source`] passes to `parse_theory`

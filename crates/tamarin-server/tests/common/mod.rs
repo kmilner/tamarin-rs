@@ -232,8 +232,8 @@ fn detect_maude() -> String {
 ///
 /// With no maude anywhere this PANICS instead of answering `false`: a silent
 /// skip makes `cargo test` green identically with and without maude, which is
-/// how a maude-backed pin rots unnoticed.  Set `TAM_ALLOW_NO_MAUDE=1` to keep
-/// the old skip when that is genuinely what you want.
+/// how a maude-backed pin rots unnoticed.  Set `TAM_ALLOW_NO_MAUDE=1` to
+/// skip them deliberately.
 #[allow(dead_code)]
 pub fn maude_available() -> bool {
     if resolve_maude().is_some() {

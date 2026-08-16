@@ -208,14 +208,13 @@ fn output_dir_writes_basename_underscore_analyzed() {
 }
 
 #[test]
-fn no_input_files_exits_one_without_an_error_value() {
-    // HS `batchMode`'s run ends in `helpAndExit thisMode (Just "no input files
-    // given")` (Batch.hs:90), which `putStrLn`s the header + help to STDOUT and
-    // `exitFailure`s — never an error value, so `run` returns `Ok(1)`.  The
-    // stream split and the exact bytes are pinned in
-    // `tests/help_output.rs::no_input_files_reprints_the_help_after_an_error_line_on_stdout`.
+fn no_input_files_is_a_plain_error() {
+    // A flags-only argv reaches `run_batch`, which reports the missing
+    // inputs as an ordinary `RunError` (rc 1 via main's error path).  HS
+    // reprinted the whole help here; canonical clap does not.
     let args = args_from(&["--prove"]);
-    assert_eq!(run(&args).expect("help-and-exit is not an error"), 1);
+    let e = run(&args).unwrap_err();
+    assert!(e.to_string().contains("no input files given"), "{e}");
 }
 
 #[test]
@@ -300,64 +299,50 @@ fn non_utf8_input_prints_the_hgetcontents_iox_shape() {
 }
 
 #[test]
-fn a_deferred_argument_error_yields_to_the_first_file_s_open_failure() {
-    // `mkTheoryLoadOptions`' `ArgumentError` is an `error` thunk forced inside
-    // `processThy`, AFTER `readFile inFile` (Batch.hs:167-169), so a first input
-    // file that cannot be OPENED reports its own IOException and the rejection is
-    // never reached.  Only the OPEN gets there first: `readFile` is lazy, so a
-    // file that opens and merely fails to DECODE raises `hGetContents` later and
-    // the rejection still wins.  Oracle-pinned on all three shapes under
-    // `--parse-only`, which keeps Maude (and its banner) out of the run.
-    let dir = std::env::temp_dir().join("tamarin_rs_deferred_argument_error");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    let readable = dir.join("readable.spthy");
-    std::fs::write(&readable, "theory A\nbegin\nend\n").expect("write fixture");
-    let non_utf8 = dir.join("non_utf8.spthy");
-    std::fs::write(&non_utf8, b"theory A\nbegin\n\x80\nend\n").expect("write fixture");
-    let missing = dir.join("no_such_file.spthy");
-
-    let rejection = "tamarin-prover: output mode not supported.\n\
-                     CallStack (from HasCallStack):\n  \
-                     error, called at src/Main/Mode/Batch.hs:163:33 in main:Main.Mode.Batch\n"
-        .to_string();
-    for (file, want) in [
-        (&readable, rejection.clone()),
-        (&non_utf8, rejection.clone()),
-        (
-            &missing,
-            format!(
-                "tamarin-prover: {}: openFile: does not exist (No such file or directory)\n",
-                missing.display()
-            ),
-        ),
-    ] {
-        let path = file.to_str().expect("utf-8 path");
-        let out = std::process::Command::new(env!("CARGO_BIN_EXE_tamarin-rs"))
-            .args(["--parse-only", "--output-module=bogus", path])
-            .output()
-            .expect("run tamarin-rs");
-        assert_eq!(out.status.code(), Some(1), "{path}");
-        assert!(out.stdout.is_empty(), "{path}");
-        assert_eq!(String::from_utf8_lossy(&out.stderr), want, "{path}");
-    }
+fn an_unknown_output_module_is_a_parse_error_before_any_file_io() {
+    // Canonical clap validates `-m`'s value up front (HS deferred the
+    // rejection into the file loop): rc 2 on stderr, and the input file —
+    // even a missing one — is never touched.
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_tamarin-rs"))
+        .args([
+            "--parse-only",
+            "--output-module=bogus",
+            "/nonexistent/no_such_file.spthy",
+        ])
+        .output()
+        .expect("run tamarin-rs");
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert!(text.contains("bogus"), "{text}");
+    assert!(!text.contains("openFile"), "{text}");
 }
 
 #[test]
 fn closed_stdout_pipe_exits_quietly() {
-    // A reader that leaves early (`tamarin-prover --help | head -0`) makes
-    // Rust's `println!` PANIC — rc 101 plus a backtrace note on stderr.  GHC
-    // treats the same EPIPE as a non-event: `flushStdHandles` swallows it and
-    // `runMainIO` still exits 0 with an empty stderr.  Oracle-verified on
-    // `--help` and on a full batch run.
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_tamarin-rs"))
-        .arg("--help")
-        .stdout(std::process::Stdio::piped())
+    // A reader that leaves early (`tamarin-prover --parse-only x.spthy |
+    // head -0`) makes Rust's `println!` PANIC — rc 101 plus a backtrace note
+    // on stderr.  GHC treats the same EPIPE as a non-event: `flushStdHandles`
+    // swallows it and `runMainIO` still exits 0 with an empty stderr.  The
+    // argv must route stdout through the port's own `println!` —
+    // `--help`/`--version` are printed by clap, which swallows the write
+    // error itself, so they cannot exercise `is_stdout_broken_pipe`.
+    //
+    // Deterministic EPIPE: stdout is the write half of a socketpair whose
+    // peer is closed BEFORE the spawn, so the child's very first stdout
+    // write fails — no race against a pipe buffer.  Deleting the panic-hook
+    // guard in main.rs makes this rc 101 with a panic report.
+    let (theirs, ours) = std::os::unix::net::UnixStream::pair().expect("socketpair");
+    drop(ours); // no reader: every child write to stdout now EPIPEs
+    let in_path = fixture("single_recv.spthy");
+    let child = std::process::Command::new(env!("CARGO_BIN_EXE_tamarin-rs"))
+        .args(["--parse-only", in_path.to_str().unwrap()])
+        .stdout(std::process::Stdio::from(std::os::fd::OwnedFd::from(
+            theirs,
+        )))
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("spawn tamarin-rs");
-    // Close the read end before the child can drain its buffer.
-    drop(child.stdout.take().expect("piped stdout"));
     let out = child.wait_with_output().expect("wait");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -365,7 +350,12 @@ fn closed_stdout_pipe_exits_quietly() {
         "a closed stdout must not surface as a Rust panic; got:\n{err}"
     );
     assert_eq!(out.status.code(), Some(0), "stderr was:\n{err}");
-    assert_eq!(err, "");
+    // `--parse-only` still emits its `[Theory X] Theory loaded` marker on
+    // stderr before stdout is first touched; only panic noise is forbidden.
+    assert!(
+        err.contains("Theory loaded"),
+        "expected the pre-write stderr marker, got:\n{err}"
+    );
 }
 
 #[test]
@@ -390,6 +380,68 @@ fn diff_flag_is_rejected_with_clear_message() {
 fn invalid_int_value_for_bound_returns_parse_error() {
     let r = parse_args(&["--bound=not-a-number".to_string()]);
     assert!(r.is_err(), "expected parse error for non-int --bound");
+}
+
+/// The documented loud delta for glued short values: `-b10` (HS: bound 10)
+/// is rejected at rc 2 — never silently parsed as a bound and never eaten
+/// as anything else.  Pinned end-to-end because a clap misconfiguration
+/// could flip this to a silent divergence.
+#[test]
+fn glued_short_value_is_rejected_not_reinterpreted() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_tamarin-rs"))
+        .args(["-b10", "x.spthy"])
+        .output()
+        .expect("run tamarin-rs");
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+}
+
+/// The documented eager `configuration:`-block error: a malformed block is
+/// a plain rc-1 run error in the close pipeline (`error: configuration
+/// block: …`), and translate mode (`-m`) ignores the block entirely — HS's
+/// `translateAndCheckTheory` never processes it, so a `-m` run on the same
+/// theory exits 0 with the full translated output (oracle-verified).
+#[test]
+fn malformed_configuration_block_errors_only_in_close_modes() {
+    if !maude_available() {
+        eprintln!("skipping: maude not on path");
+        return;
+    }
+    let dir = std::env::temp_dir().join("tamarin_rs_config_block_e2e");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let thy = dir.join("cfg.spthy");
+    std::fs::write(
+        &thy,
+        "theory Cfg\nconfiguration: \"--bogus\"\nbegin\n\nrule Init:\n  [ Fr(~x) ] --> [ Out(~x) ]\n\nend\n",
+    )
+    .expect("write theory");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_tamarin-rs"))
+        .args(maude_arg())
+        .arg(&thy)
+        .output()
+        .expect("run tamarin-rs");
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("configuration block:"),
+        "expected the eager block error, got:\n{stderr}"
+    );
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_tamarin-rs"))
+        .args(maude_arg())
+        .args(["-m=spthy"])
+        .arg(&thy)
+        .output()
+        .expect("run tamarin-rs");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "translate mode must ignore the block; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !out.stdout.is_empty(),
+        "translate mode must emit the theory"
+    );
 }
 
 /// A user `functions: em/2` WITHOUT the bilinear-pairing builtin is an
@@ -445,9 +497,9 @@ fn user_em_without_bp_builtin_is_a_plain_function() {
 // ===========================================================================
 //
 // `--heuristic`, `--saturation`, `--open-chains`, `--oraclename`,
-// `--oracle-only`, `--bound` and `--lemma` reached no assertion beyond the
-// `--help` byte pin and `Args` parsing: nothing checked that any of them ever
-// arrived at the run.  Each test below drives the built binary with one row of
+// `--oracle-only`, `--bound` and `--lemma` have no end-to-end coverage
+// beyond `Args` parsing: without this block, nothing would check that any
+// of them ever arrived at the run.  Each test drives the built binary with one row of
 // `tests/fixtures/cli_refs/cases.tsv` and byte-compares its stdout against the
 // HASKELL oracle's, captured into `tests/fixtures/cli_refs/<row>.stdout` by
 // `scripts/capture_cli_refs.sh`.  That file is the ONLY place the argv lives,
@@ -671,12 +723,11 @@ fn lemma_flag_selects_which_lemmas_are_proven() {
 /// separately in `bound_flag_at_a_binding_depth_truncates_the_proof`.
 ///
 /// HAPPY PATH ONLY, on purpose.  The `-b`/`-s`/`-c`/`-d` family's ERROR
-/// path is a known deliberate divergence — the port rejects an empty value at
-/// parse time (`bound: expected integer, got ""`) where the oracle defers to
-/// its own `invalid bound given`, which
-/// `cli_tests.rs::short_flag_trailing_equals_is_an_explicit_empty_value`
-/// records.  An oracle pin over that argv could not be satisfied, so it is
-/// deliberately absent here rather than captured and worked around.
+/// path is a known deliberate divergence — the port (clap) rejects an
+/// empty or malformed value at parse time where the oracle defers to its
+/// own `invalid bound given`.  An oracle pin over that argv could not be
+/// satisfied, so it is deliberately absent here rather than captured and
+/// worked around.
 #[test]
 fn bound_flag_above_the_proof_depth_is_inert() {
     assert_ref_relation("basic_bound_10");
@@ -684,7 +735,7 @@ fn bound_flag_above_the_proof_depth_is_inert() {
 }
 
 /// `-b/--bound=N` at a BINDING depth.  HS wraps the auto-prover in
-/// `boundProver` (`runAutoProver`, Theory/Proof.hs:753-760), whose
+/// `boundProver` (`runAutoProver`, Theory/Proof.hs:730-750#runAutoProver), whose
 /// `boundProofDepth` (Theory/Proof.hs:336-344) replaces every proof node at
 /// depth N with `sorry /* bound N hit */` — even a node that would have been
 /// Solved, since the `0 < n` guard fires before the node is inspected.  On
@@ -708,6 +759,117 @@ fn bound_flag_at_a_binding_depth_truncates_the_proof() {
 fn heuristic_flag_switches_the_goal_ranking() {
     assert_ref_relation("chan_heuristic_i");
     run_pinned_case("chan_heuristic_i");
+}
+
+/// `--stop-on-trace=none` (HS `SolutionExtractor` `CutNothing`) keeps the
+/// exists-trace search exploring past the first found trace, so the printed
+/// proof differs from the default dfs cut — the `!=chan_plain` relation is
+/// what proves the value arrived at the solver rather than being dropped
+/// between `Args` and the search.
+#[test]
+fn stop_on_trace_none_reaches_the_solver() {
+    assert_ref_relation("chan_stop_none");
+    run_pinned_case("chan_stop_none");
+}
+
+/// `--stop-on-trace=bfs` and `=sorry` — the remaining two non-default
+/// strategies.  Each produces a proof distinct from both the dfs default
+/// and `none` on this fixture, so their `!=chan_plain` relations prove
+/// `stop_on_trace_cut`'s per-arm routing (run.rs) end-to-end; the `Args`
+/// enum pin alone cannot catch an arm remapped to `CutStrategy::Nothing`.
+#[test]
+fn stop_on_trace_bfs_and_sorry_reach_the_solver() {
+    assert_ref_relation("chan_stop_bfs");
+    run_pinned_case("chan_stop_bfs");
+    assert_ref_relation("chan_stop_sorry");
+    run_pinned_case("chan_stop_sorry");
+}
+
+/// `--precompute-only --prove` — the `prettyPrecomputation` stats document
+/// plus `ppWf`'s second warning line (`         The analysis results might
+/// be wrong!`, the 9-space proveMode variant in run.rs, distinct from the
+/// 11-space summary-block one that basic_lemma_reach pins).  This is the
+/// only byte pin over the precompute document.
+#[test]
+fn precompute_only_with_prove_pins_the_stats_document() {
+    assert_ref_relation("basic_precompute");
+    run_pinned_case("basic_precompute");
+}
+
+/// `-b/--bound=N` cutting inside PARALLEL sibling expansion.  Tutorial's
+/// proofs fan out (`n_cases >= 2` under Dfs), so with default
+/// `--processors` the `-b=6` cut fires inside rayon workers — the pin that
+/// fails if `PROOF_BOUND` is not re-seeded per worker like `MAX_DEPTH`
+/// (search.rs; basic_bound_1 cannot reach that branch: its cut fires at
+/// depth 1, before any case list exists).
+#[test]
+fn bound_flag_cuts_parallel_sibling_expansion() {
+    assert_ref_relation("tutorial_bound_6");
+    run_pinned_case("tutorial_plain");
+    run_pinned_case("tutorial_bound_6");
+}
+
+/// CLI `--heuristic` OVERRIDING a theory's own `heuristic:` header (HS
+/// `apDefaultHeuristic prover <|> L.get pcHeuristic ctx`,
+/// Theory/Proof.hs:706-707) — the load-bearing semantic cli.rs's module doc
+/// calls out for the bare flag.  The fixture's header says `i`; the
+/// `!=chan_heur_plain` relation proves `--heuristic=s` displaced it in the
+/// oracle's own run, and the port has to match both sides.
+#[test]
+fn cli_heuristic_overrides_the_theory_header() {
+    assert_ref_relation("chan_heur_override");
+    run_pinned_case("chan_heur_plain");
+    run_pinned_case("chan_heur_override");
+}
+
+/// A `--heuristic` value HS would refuse (unknown ranking char, undeclared
+/// tactic, unterminated `{`) is a loud rc-1 rejection with nothing on
+/// stdout — never a silent prove under the smart fallback with a verdict HS
+/// would not produce (`prove::validate_cli_heuristic`).  The WORDING is the
+/// port's own (canonical-clap policy: invalid usage needs an error, not the
+/// oracle's bytes); what is oracle-matched is the acceptance set, and that
+/// a valid value with no matching `--prove` target still exits 0.
+#[test]
+fn malformed_heuristic_is_rejected_not_silently_defaulted() {
+    if !maude_available() {
+        eprintln!("skipping: maude not on path");
+        return;
+    }
+    let theory = fixture("cli_flags_basic.spthy");
+    for (flag, needle) in [
+        ("--heuristic=x", "unknown goal ranking"),
+        ("--heuristic={nosuch}", "not declared in the theory"),
+        ("--heuristic={unterminated", "unterminated '{'"),
+    ] {
+        let (code, stdout, stderr) =
+            run_binary(&["--derivcheck-timeout=300", "--prove", flag], &[&theory]);
+        assert_eq!(code, 1, "{flag}: stderr was\n{stderr}");
+        assert!(stdout.is_empty(), "{flag}: stdout must be empty:\n{stdout}");
+        assert!(stderr.contains(needle), "{flag}: stderr:\n{stderr}");
+    }
+    // A bogus value no target lemma ever consumes stays inert (HS exits 0
+    // here too — its heuristic is only forced by a `--prove` target).
+    let (code, stdout, _stderr) = run_binary(
+        &["--derivcheck-timeout=300", "--prove=zzz", "--heuristic=x"],
+        &[&theory],
+    );
+    assert_eq!(code, 0, "--prove=zzz --heuristic=x must not die");
+    assert!(
+        stdout.contains("theory CliFlagsBasic"),
+        "the unconsumed run still prints the theory"
+    );
+}
+
+/// `-D=FOO` reaches the pseudo-preprocessor: the `#ifdef FOO` region's rule
+/// and lemma appear in the echoed theory iff the define arrived
+/// (`Theory.Text.Parser` `#ifdef` handling; flags from `toParserFlags`).
+/// The `!=ifdef_plain` relation proves the flag changed the oracle's own
+/// run, and both refs pin the port to each branch.
+#[test]
+fn defines_flag_reaches_the_preprocessor() {
+    assert_ref_relation("ifdef_defined");
+    run_pinned_case("ifdef_plain");
+    run_pinned_case("ifdef_defined");
 }
 
 /// `-s/--saturation=N` caps the source-saturation loop
@@ -778,9 +940,12 @@ fn oraclename_flag_routes_ranking_through_the_named_script() {
 /// `--oracle-only` is `quitOnEmpty`: when the oracle names none of a non-empty
 /// goal list, `oracleRanking` returns `Just ApplySorry` and the search stops
 /// (ProofMethod.hs:604-620) instead of falling through to the unranked goals.
-/// Both halves are pinned — same theory, same rank-nothing oracle, one with
-/// the flag and one without — and `!=chan_oracle_rank_none` is what proves the
-/// flag, not the oracle, made the difference.
+/// The `!=chan_oracle_rank_none` relation is what proves the flag, not the
+/// oracle, made the difference.  The control row itself is `=chan_plain`: a
+/// rank-nothing oracle degenerates to goal-number order, which on this
+/// fixture happens to coincide with the default smart ranking, so the
+/// control run is indistinguishable from an oracle-free one — the proof
+/// that the script is spawned at all is `chan_oracle_pick_last`.
 #[test]
 fn oracle_only_flag_stops_the_search_when_the_oracle_ranks_nothing() {
     assert_ref_relation("chan_oracle_only");
@@ -869,5 +1034,36 @@ fn cli_ref_cases_files_and_manifest_are_in_sync() {
     assert_eq!(
         listed, names,
         "CAPTURED.tsv does not list the same rows as cases.tsv.\n{RECAPTURE_HINT}"
+    );
+
+    // The refs must come from THIS tree's pinned oracle: compare the
+    // manifest's `# hs_rev` against the submodule gitlink, the same
+    // stamp-vs-pin contract scripts/divergence_fixtures/check.sh enforces
+    // in CI.  Without this, a submodule bump leaves every row green while
+    // certifying the port against the previous upstream
+    // (capture_cli_refs.sh guards only the CAPTURE side).
+    let captured_rev = body
+        .lines()
+        .find_map(|l| l.strip_prefix("# hs_rev\t"))
+        .expect("CAPTURED.tsv has no `# hs_rev` header line")
+        .split_whitespace()
+        .next()
+        .expect("empty `# hs_rev` value")
+        .to_string();
+    let gitlink = std::process::Command::new("git")
+        .args(["rev-parse", ":tamarin-prover"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("git rev-parse :tamarin-prover");
+    assert!(
+        gitlink.status.success(),
+        "git rev-parse :tamarin-prover failed"
+    );
+    let gitlink = String::from_utf8_lossy(&gitlink.stdout).trim().to_string();
+    assert_eq!(
+        captured_rev, gitlink,
+        "cli_refs were captured from oracle rev {captured_rev}, but the \
+         submodule pin is {gitlink} — stale references certify nothing.\n\
+         {RECAPTURE_HINT}"
     );
 }

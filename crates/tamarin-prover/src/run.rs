@@ -178,7 +178,6 @@ fn lemma_verdict(
 pub struct LemmaResult {
     pub name: String,
     pub verdict: LemmaVerdict,
-    pub elapsed_ms: u128,
     /// Proof-tree node count — matches HS's "(N steps)" in
     /// `--prove` output (`foldProof proofStepSummary`, ClosedTheory.hs:463-491, see line 484,491,
     /// summing one per ProofStep via `foldProof`, Theory/Proof.hs:358-362).
@@ -201,31 +200,10 @@ pub struct FileResult {
 
 /// Top-level dispatch. Reports any error as a `RunError` and returns
 /// the exit code the binary should use (0 for success).
+///
+/// `--help` and `--version` never reach this point — clap answers them
+/// inside `parse_args`' error path.
 pub fn run(args: &Args) -> Result<i32, RunError> {
-    if args.show_help {
-        // HS installs one `TamarinMode` per command and `defaultMain` dispatches
-        // on the mode BEFORE the mode's own `run` sees `--help`
-        // (Console.hs:333-338, 362-372), so each command prints its own help
-        // text.  `--help` is answered here, after `parse_args` has fixed the
-        // subcommand, for the same reason.
-        println!("{}", crate::cli::help_text(args.subcommand));
-        return Ok(0);
-    }
-    if args.show_version {
-        // HS (Console.hs:335-337) interleaves the two streams: `putStrLn
-        // versionStr` (stdout), then `ensureMaudeAndGetVersion` — whose
-        // `ensureMaude` writes the maude self-check block to stderr and, when
-        // maude cannot be started, aborts before the second `putStrLn` — then
-        // the `Generated from:` block `getVersionIO` built from the version
-        // data the probe returned (stdout).  Both halves carry their own
-        // trailing newline.
-        let maude_path = maude_invocation_path(args);
-        print!("{}", crate::cli::version_banner_text());
-        let (_, maude_version) = ensure_maude(args, &maude_path);
-        print!("{}", crate::cli::generated_from_text(&maude_version));
-        return Ok(0);
-    }
-
     match args.subcommand {
         Subcommand::Batch => run_batch(args),
         Subcommand::Interactive => run_interactive(args),
@@ -366,84 +344,7 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
 }
 
 /// Default port matches Haskell `Web.Settings.defaultPort` (3001).
-const DEFAULT_INTERACTIVE_PORT: i64 = 3001;
-
-/// HS `readPort` (Interactive.hs:168-174): the recorded `--port` argument is
-/// read with `reads @Int`, and a flag that was GIVEN but does not read —
-/// bare `--port` records `""` — falls back to `defaultPort` after a stdout
-/// notice.  Returns the port to use plus the raw argument to name in that
-/// notice, `None` when no notice is due.
-fn read_port(arg: Option<&str>) -> (i64, Option<&str>) {
-    match arg {
-        None => (DEFAULT_INTERACTIVE_PORT, None),
-        Some(raw) => match reads_int(raw) {
-            Some(p) => (p, None),
-            None => (DEFAULT_INTERACTIVE_PORT, Some(raw)),
-        },
-    }
-}
-
-/// Haskell `reads @Int` acceptance, oracle-verified case by case: leading
-/// whitespace and parentheses are skipped (`" 30"`, `"(30)"` → 30), `0x`/`0o`
-/// radix prefixes read (`"0x1F"` → 31), a leading `-` negates (`"-1"` → -1,
-/// later truncated to a `Word16` by the socket bind exactly as HS's
-/// `fromIntegral`), and anything after the first complete lexeme is ignored
-/// (`"30x"` → 30).  But the LEXEME must be an integer: `"3.5"` lexes as one
-/// floating-point token, which `Read Int` rejects, so `"3.5"` is a notice +
-/// default, NOT 3.  A `+` sign, an unclosed paren, or a non-digit start all
-/// fail the same way.
-fn reads_int(s: &str) -> Option<i64> {
-    let mut rest = s.trim_start();
-    let mut depth = 0usize;
-    while let Some(r) = rest.strip_prefix('(') {
-        depth += 1;
-        rest = r.trim_start();
-    }
-    let neg = if let Some(r) = rest.strip_prefix('-') {
-        // `lex` tokenizes the sign separately, so `"- 3"` reads as -3.
-        rest = r.trim_start();
-        true
-    } else {
-        false
-    };
-    let bytes = rest.as_bytes();
-    let (radix, digits_at) = match bytes {
-        [b'0', b'x' | b'X', c, ..] if c.is_ascii_hexdigit() => (16, 2),
-        [b'0', b'o' | b'O', c @ b'0'..=b'7', ..] => {
-            let _ = c;
-            (8, 2)
-        }
-        _ => (10, 0),
-    };
-    let digits: String = rest[digits_at..]
-        .chars()
-        .take_while(|c| c.is_digit(radix))
-        .collect();
-    if digits.is_empty() {
-        return None;
-    }
-    rest = &rest[digits_at + digits.len()..];
-    if radix == 10 {
-        // A fraction or exponent extends the LEXEME into a floating-point
-        // token `Read Int` rejects ("3.5", "3e2" — verified on the oracle).
-        let mut chars = rest.chars();
-        match (chars.next(), chars.next()) {
-            (Some('.'), Some(c)) if c.is_ascii_digit() => return None,
-            (Some('e' | 'E'), Some(c)) if c.is_ascii_digit() || c == '+' || c == '-' => {
-                return None;
-            }
-            _ => {}
-        }
-    }
-    // HS `Int` wraps modulo 2^64 for absurd literals; saturating here only
-    // diverges on values no bind could serve anyway.
-    let mag = i64::from_str_radix(&digits, radix).unwrap_or(i64::MAX);
-    for _ in 0..depth {
-        rest = rest.trim_start();
-        rest = rest.strip_prefix(')')?;
-    }
-    Some(if neg { -mag } else { mag })
-}
+const DEFAULT_INTERACTIVE_PORT: u16 = 3001;
 
 /// Run the interactive web UI. Mirrors `Main.Mode.Interactive.run`:
 /// builds a [`tamarin_server::ServerConfig`] from the CLI flags, eagerly
@@ -453,43 +354,21 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     if args.in_files.is_empty() {
-        // HS `Interactive.run` dispatches on the WORKDIR argument first:
-        // without one it is `helpAndExit thisMode (Just "no working directory
-        // specified")` (Interactive.hs:76-80) — `error: <msg>` header plus the
-        // mode's help on STDOUT, exit 1, before any tool check runs (stderr
-        // stays empty; no maude banner).  The HS `--load-json` escape hatch
-        // does not apply: this port has no arm for that flag.
-        println!(
-            "error: no working directory specified\n\n{}",
-            crate::cli::help_text(Subcommand::Interactive)
-        );
-        return Ok(1);
+        return Err(RunError(
+            "no working directory specified — pass a directory of .spthy \
+             files or one or more .spthy paths"
+                .to_string(),
+        ));
     }
-
-    // HS validates the workdir NEXT, still before any tool probe runs
-    // (Interactive.hs:143-145): a path that does not exist is `helpAndExit`
-    // with `directory '<path>' does not exist.` — same stdout shape as
-    // above, exit 1, stderr empty (no maude banner).  Oracle-verified.
-    // This port also accepts explicit `.spthy` paths, so each positional
-    // gets the same existence test.
+    // Validate the workdir/theories before any tool probe runs (a typo'd
+    // path should fail fast, not after the maude banner).
     for f in &args.in_files {
         if !std::path::Path::new(f).exists() {
-            println!(
-                "error: directory '{}' does not exist.\n\n{}",
-                f,
-                crate::cli::help_text(Subcommand::Interactive)
-            );
-            return Ok(1);
+            return Err(RunError(format!("directory '{}' does not exist", f)));
         }
     }
 
-    init_rayon_pool(args);
-    // `-c/--open-chains` and `-s/--saturation` apply to interactive-mode
-    // theory loads too (HS shares `TheoryLoadOptions` across modes).
-    tamarin_theory::constraint::solver::sources::set_cli_solver_limits(
-        args.open_chains,
-        args.saturation,
-    );
+    init_process_globals(args);
 
     // Oracle exec failures must not kill the server: HS confines the
     // `readProcess` exception to the Warp request thread, so only the
@@ -497,11 +376,9 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     tamarin_theory::constraint::solver::search::ORACLE_ERROR_UNWINDS
         .store(true, std::sync::atomic::Ordering::Relaxed);
 
-    // Haskell defaults: 3001 on 127.0.0.1.  `port` keeps HS's full `Int`
-    // range for the banner (`show port` — "-1" and "99999" print as read);
-    // the socket truncates to `Word16` exactly as HS's `fromIntegral` does
-    // (oracle-verified: `--port=99999` binds 34463).
-    let (port, port_notice) = read_port(args.port.as_deref());
+    // Haskell defaults: 3001 on 127.0.0.1.  clap has already parsed
+    // `--port` as a `u16` (an unreadable value is a usage error).
+    let port = args.port.unwrap_or(DEFAULT_INTERACTIVE_PORT);
 
     // `--interface` accepts a literal IP address. Haskell's `*4` / `*` /
     // `*6` magic strings bind to all interfaces; mirror those.
@@ -520,7 +397,7 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
             ))
         })?,
     };
-    let bind_addr = SocketAddr::new(ip, port as u16);
+    let bind_addr = SocketAddr::new(ip, port);
 
     // Resolve data dir. Without an explicit flag, look for `data/`
     // alongside the working directory or its ancestors — the same
@@ -540,7 +417,7 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // Web/Handler.hs:1235-1249) — so the CLI value is dead in this mode.
     // `-d/--derivcheck-timeout` — same default expression as the batch
     // path's derivation-check block (default 5).
-    cfg.derivcheck_timeout = args.derivcheck_timeout.unwrap_or(5) as u32;
+    cfg.derivcheck_timeout = args.derivcheck_timeout.unwrap_or(5);
     // CLI `--stop-on-trace` — merged with each theory's `configuration:`
     // block at load time (`ProofState::new`), HS `closeTheory` precedence.
     cfg.stop_on_trace = cli_cut(args);
@@ -610,12 +487,6 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
         }
         files => files.join(", "),
     };
-    // HS `readPort` prints its notice here — after the tool probes, before
-    // the banner, on STDOUT (`putStrLn`, Interactive.hs:170-173).  The
-    // backtick-quote pair is HS's, byte-for-byte.
-    if let Some(raw) = port_notice {
-        println!("Unable to read port from argument `{raw}'. Using default.");
-    }
     // The banner's URL is HS `serverUrl` (Interactive.hs:187-190): the
     // INTERFACE string with the `*`/`*4`/`*6` wildcards displayed as
     // 127.0.0.1 — not the bind address, whose host would render as 0.0.0.0
@@ -690,64 +561,31 @@ fn guess_frontend_dist(data_dir: &std::path::Path) -> Option<std::path::PathBuf>
     None
 }
 
-/// Resolve one theory's effective cut strategy from the CLI and its
-/// `configuration:` block — HS `closeTheory`'s `configStopOnTrace`
-/// (TheoryLoader.hs:759-762): the CLI `--stop-on-trace` wins when given
-/// (the block's value is then not even validated — oracle-verified), else
-/// the block's raw value is read per HS `stopOnTrace`.  An unreadable
-/// block value does NOT error here: HS raises it lazily, only where the
-/// prover forces the field, so the message is carried for
-/// `close_translated_theory`'s prove branch to fire after `Theory closed`
-/// (and only when a lemma is actually selected — a non-matching
-/// `--prove=X` exits 0 on the same theory, oracle-verified).  Without
-/// `--prove` the field is never forced and the non-prove default `CutDFS`
-/// stands (`constructAutoProver` is used solely when `thyOpts.proveMode`,
-/// TheoryLoader.hs:668-715, see line 706).
+/// The effective per-theory cut strategy: the CLI `--stop-on-trace` wins;
+/// with the flag absent the theory's `configuration:` block is consulted
+/// (HS `configStopOnTrace` precedence, TheoryLoader.hs:759-763).  An
+/// unreadable block value is an error — reported immediately and plainly,
+/// not with HS's deferred `error` choreography.
 fn effective_cut(
     opts: &TheoryLoadOptions,
     block: &tamarin_theory::prove::ConfigBlock,
-) -> (
-    tamarin_theory::constraint::solver::context::CutStrategy,
-    Option<String>,
-) {
+) -> Result<tamarin_theory::constraint::solver::context::CutStrategy, RunError> {
     use tamarin_theory::constraint::solver::context::CutStrategy;
     if !opts.prove_mode {
-        return (CutStrategy::Dfs, None);
+        return Ok(CutStrategy::Dfs);
     }
     match &opts.stop_on_trace {
-        Some(s) => (stop_on_trace_cut(s), None),
+        Some(s) => Ok(stop_on_trace_cut(s)),
         None => match block.stop_on_trace.as_deref() {
-            Some(raw) => match tamarin_theory::prove::parse_stop_on_trace(raw) {
-                Ok(cut) => (cut, None),
-                Err(e) => (CutStrategy::Dfs, Some(e)),
-            },
-            None => (CutStrategy::Dfs, None),
+            Some(raw) => tamarin_theory::prove::parse_stop_on_trace(raw)
+                .map_err(|e| RunError(format!("configuration block: {}", e))),
+            None => Ok(CutStrategy::Dfs),
         },
     }
 }
 
-/// `LINE:COLUMN` of the `error e` that `configStopOnTrace` raises on an
-/// unreadable configuration-block `--stop-on-trace` value
-/// (TheoryLoader.hs:761).  Oracle data, checked against the pinned source
-/// by `config_stop_on_trace_error_site_is_the_pinned_call_site`.
-const CONFIG_STOP_ON_TRACE_ERROR_SITE: &str = "761:64";
-
-/// Report the configuration block's unreadable `--stop-on-trace` value the
-/// way the GHC runtime does: `tamarin-prover: unknown stop-on-trace
-/// method: <v>` plus the one-frame `HasCallStack` block on stderr, nothing
-/// on stdout, exit 1.
-fn config_value_exception(msg: &str) -> i32 {
-    let g = tamarin_parser::GhcError {
-        message: msg.to_string(),
-        call_site: format!(
-            "src/Main/TheoryLoader.hs:{CONFIG_STOP_ON_TRACE_ERROR_SITE} in main:Main.TheoryLoader"
-        ),
-    };
-    ghc_exception(&g.display_exception())
-}
-
 /// Map a CLI `--stop-on-trace` value to its `CutStrategy`.  Shared by
-/// `effective_config` (batch prove-mode) and `cli_cut` (interactive), so the
+/// `effective_cut` (batch prove-mode) and `cli_cut` (interactive), so the
 /// two cannot drift.
 fn stop_on_trace_cut(
     s: &crate::cli::StopOnTrace,
@@ -801,29 +639,6 @@ fn maude_invocation_path(args: &Args) -> String {
     args.maude_path.clone().unwrap_or_else(default_maude_path)
 }
 
-/// Report an `ArgumentError` forced out of `mkTheoryLoadOptions` the way the
-/// GHC runtime does: `thyLoadOptions = case mkTheoryLoadOptions as of Left
-/// (ArgumentError e) -> error e` (Batch.hs:162-164) raises `error` at
-/// Batch.hs:163:33, and the top-level handler prints `tamarin-prover: <msg>`
-/// plus the one-frame `HasCallStack` block on stderr — nothing on stdout,
-/// exit 1.  The record is forced lazily inside the file loop, so the report
-/// lands AFTER the maude banner and BEFORE any `[Theory …]` marker.
-fn batch_argument_error(message: &str) -> i32 {
-    let g = tamarin_parser::GhcError {
-        message: message.to_string(),
-        call_site: format!(
-            "src/Main/Mode/Batch.hs:{BATCH_ARGUMENT_ERROR_SITE} in main:Main.Mode.Batch"
-        ),
-    };
-    ghc_exception(&g.display_exception())
-}
-
-/// `LINE:COLUMN` of the `error e` that the `ArgumentError` case of
-/// `thyLoadOptions` raises in `src/Main/Mode/Batch.hs`, as GHC's
-/// `HasCallStack` prints it.  Oracle data, checked against the pinned source
-/// by `batch_argument_error_site_is_the_pinned_call_site`.
-const BATCH_ARGUMENT_ERROR_SITE: &str = "163:33";
-
 /// Report an exception that escaped to GHC's runtime the way its top-level
 /// handler does: `tamarin-prover: <msg>` on stderr — no batch `error:`
 /// prefix, no `[Theory …]` wrapper, nothing on stdout — and exit 1.  Returns
@@ -846,14 +661,14 @@ fn ghc_exception(msg: &str) -> i32 {
 /// other reason is the shared errno rendering — [`io_exception_reason`].
 /// EISDIR is matched numerically because `ErrorKind::IsADirectory` needs Rust
 /// 1.83 and the workspace MSRV is 1.78.
-fn report_open_file_error(in_file: &str, e: &std::io::Error) -> Result<i32, RunError> {
+fn report_open_file_error(in_file: &str, e: &std::io::Error) -> i32 {
     let reason = if e.raw_os_error() == Some(21) {
         "inappropriate type (is a directory)".to_string()
     } else {
         io_exception_reason(e)
     };
     eprintln!("tamarin-prover: {in_file}: openFile: {reason}");
-    Ok(1)
+    1
 }
 
 /// Report a non-UTF-8 input the way GHC's runtime does.
@@ -1057,36 +872,51 @@ fn wants_trace_output(args: &Args) -> bool {
 ///
 /// `traces` is the labelled `(label, system)` list in HS's order: lemma
 /// declaration order, then `proofSystems`' case-name walk.
+/// Both writers stream graph-by-graph so peak RSS tracks the largest single
+/// graph, not the total output (HS's DOT side is a lazily-consumed
+/// `writeFile`; its JSON side materialises the document, which the port
+/// need not reproduce — the bytes are identical either way).
 fn write_output_traces(args: &Args, traces: Vec<(String, System)>) -> Result<(), String> {
+    use std::io::Write;
     use tamarin_theory::constraint::system::graph::RenderSystem;
     let opts = trace_graph_options();
     if let Some(p) = &args.trace_dot {
         // `intercalate "\n" $ map serializeDot labelledSystems`.  Each graph
         // already ends `}\n`, so the separator yields one blank line between
         // graphs; an empty list is `intercalate "\n" [] == ""`, a 0-byte file.
-        let graphs: Vec<String> = traces
-            .iter()
-            .map(|(label, sys)| {
-                tamarin_theory::constraint::system::dot::system_to_dot_labeled(sys, &opts, label)
-            })
-            .collect();
         // `writeFile` — an unguarded text write, so a failure escapes as
         // GHC's `withFile` IOException.
-        fs::write(p, graphs.join("\n")).map_err(|e| write_io_exception(p, "withFile", &e))?;
+        let io = |e: &std::io::Error| write_io_exception(p, "withFile", e);
+        let mut w = std::io::BufWriter::new(fs::File::create(p).map_err(|e| io(&e))?);
+        for (i, (label, sys)) in traces.iter().enumerate() {
+            let graph =
+                tamarin_theory::constraint::system::dot::system_to_dot_labeled(sys, &opts, label);
+            if i > 0 {
+                w.write_all(b"\n").map_err(|e| io(&e))?;
+            }
+            w.write_all(graph.as_bytes()).map_err(|e| io(&e))?;
+        }
+        w.flush().map_err(|e| io(&e))?;
     }
     if let Some(p) = &args.trace_json {
         // `sequentsToJSONPretty graphOptions labelledSystems` — one document
         // for all graphs; an empty list is `{"graphs": []}`.  Batch does NOT
         // pre-abbreviate the systems (that is the web proof route only), so
-        // the systems cross the clone-for-render boundary as they are.
-        let (labels, systems): (Vec<String>, Vec<System>) = traces.into_iter().unzip();
-        let rendered: Vec<RenderSystem> =
-            systems.into_iter().map(RenderSystem::from_prover).collect();
-        let pairs: Vec<(String, &RenderSystem)> = labels.into_iter().zip(rendered.iter()).collect();
-        let body = tamarin_theory::constraint::system::json::sequents_to_json_pretty(&opts, &pairs);
+        // the systems cross the clone-for-render boundary as they are; each
+        // is converted and dropped per graph inside the streaming writer.
         // `BL.writeFile` — the lazy-ByteString writer, whose IOException
         // names `withBinaryFile` instead.
-        fs::write(p, body).map_err(|e| write_io_exception(p, "withBinaryFile", &e))?;
+        let io = |e: &std::io::Error| write_io_exception(p, "withBinaryFile", e);
+        let mut w = std::io::BufWriter::new(fs::File::create(p).map_err(|e| io(&e))?);
+        tamarin_theory::constraint::system::json::write_sequents_json_pretty(
+            &opts,
+            traces
+                .into_iter()
+                .map(|(label, sys)| (label, RenderSystem::from_prover(sys))),
+            &mut w,
+        )
+        .map_err(|e| io(&e))?;
+        w.flush().map_err(|e| io(&e))?;
     }
     Ok(())
 }
@@ -1105,21 +935,15 @@ enum TranslateModule {
 /// HS `TheoryLoadOptions` (TheoryLoader.hs:224-252) — the batch pipeline's
 /// argument record, built once per run by [`mk_theory_load_options`].
 ///
-/// Field order follows HS's record so the deferred raw-string validations
-/// fire in HS's sequence (`mkTheoryLoadOptions` is applicative over the
-/// fields, TheoryLoader.hs:295-395).  Only two fields are deferred-validated
-/// like HS today — `partial_evaluation` (HS field 7) and `output_module`
-/// (HS field 13); the other raw-valued flags (`--stop-on-trace`, `--bound`,
-/// `--heuristic`, `-c`, `-s`, `-d`, `--replication-bound`) are rejected at
-/// argv-parse time by `parse_args`, a documented pre-existing divergence
-/// (HS accepts the token and dies later at Batch.hs:163:33).  HS fields with
-/// no consumer between this record's construction and the end of the batch
-/// run stay on [`Args`] until they migrate: `proofBound` (the solver ignores
-/// `--bound`), `verboseMode`, `maudePath` (the banner needs the raw
-/// user-supplied/None distinction), `diffMode`, `defines` aside — consumed
-/// below — `openChain`/`saturation` (read before the maude banner, which
-/// must precede this record's error report), and the ProVerif/DeepSec
-/// export knobs (backends unported).
+/// Field order follows HS's record (`mkTheoryLoadOptions`,
+/// TheoryLoader.hs:295-395).  All flag validation happens at clap
+/// parse time; HS fields with no consumer between this record's
+/// construction and the end of the batch run stay on [`Args`]:
+/// `proofBound` (`--bound`, read directly by the prove loop),
+/// `verboseMode`, `maudePath` (the banner needs the raw
+/// user-supplied/None distinction), `diffMode`, `openChain`/`saturation`
+/// (read before the maude banner), and the ProVerif/DeepSec export knobs
+/// (backends unported).
 #[derive(Debug, Clone)]
 struct TheoryLoadOptions {
     /// HS `proveMode`.
@@ -1127,7 +951,7 @@ struct TheoryLoadOptions {
     /// HS `lemmaNames` (`--prove` ++ `--lemma`).
     lemma_names: Vec<String>,
     /// HS `stopOnTrace` (clap-validated; per-theory merge in
-    /// [`effective_config`]).
+    /// [`effective_cut`]).
     stop_on_trace: Option<crate::cli::StopOnTrace>,
     /// HS folds `--heuristic`/`--oraclename` into one `Heuristic` value here
     /// (TheoryLoader.hs:337-351); the port keeps both raw and defers the
@@ -1136,18 +960,16 @@ struct TheoryLoadOptions {
     oracle_name: Option<String>,
     /// HS `oracleOnly`.
     oracle_only: bool,
-    /// HS `partialEvaluation` (TheoryLoader.hs:354-358) — the first
-    /// deferred-validated field.
+    /// HS `partialEvaluation` (TheoryLoader.hs:354-358).
     partial_evaluation: Option<crate::cli::PartialEval>,
     /// HS `defines` (forwarded to the parser as `-D` flags).
     defines: Vec<String>,
     /// HS `quitOnWarning`.
     quit_on_warning: bool,
-    /// HS `autoSources` (CLI value only; per-theory merge in
-    /// [`effective_config`]).
+    /// HS `autoSources` (CLI value only; OR-combined with the theory's
+    /// `configuration:` block in the file loop).
     auto_sources: bool,
-    /// HS `outputModule` (TheoryLoader.hs:373-377) — the second
-    /// deferred-validated field.
+    /// HS `outputModule` (TheoryLoader.hs:373-377).
     output_module: Option<ModuleType>,
     /// HS `parseOnlyMode`.
     parse_only_mode: bool,
@@ -1162,37 +984,21 @@ struct TheoryLoadOptions {
 }
 
 /// Port of HS `mkTheoryLoadOptions` (TheoryLoader.hs:295-395): assemble the
-/// record from the parsed argv, validating the still-raw values in HS's
-/// field order.  `Err` carries HS's `ArgumentError` message, reported by the
-/// caller via [`batch_argument_error`] (the GHC `error e` at Batch.hs:163:33).
-fn mk_theory_load_options(args: &Args) -> Result<TheoryLoadOptions, String> {
-    // `--heuristic` (HS field 5, TheoryLoader.hs:339-347): cmdargs records the
-    // empty string for `--heuristic=`, and the `Just [] -> throwError` arm
-    // rejects it.  Field 5 precedes both deferred checks below, so it wins
-    // when several values are bad.  Only an explicit `--heuristic=` trips
-    // this: a bare `--heuristic` records the flag's default `"s"` (see
-    // `parse_args`), which passes.
+/// record from the parsed argv.  clap has already validated the enum-valued
+/// flags (`--stop-on-trace`, `--partial-evaluation`, `--output-module`), so
+/// only `--heuristic=` (an explicit empty ranking) can still fail here.
+fn mk_theory_load_options(args: &Args) -> Result<TheoryLoadOptions, RunError> {
+    // A bare `--heuristic` records the default `s` in `parse_args`; only an
+    // explicit `--heuristic=` reaches this with an empty ranking list.
     if args.heuristic.as_deref() == Some("") {
-        return Err("heuristic: at least one ranking must be given".to_string());
+        return Err(RunError(
+            "--heuristic: at least one ranking must be given".to_string(),
+        ));
     }
-    // `--partial-evaluation` (HS field 7, TheoryLoader.hs:354-358).  Its
-    // unknown-option rejection precedes `--output-module`'s in the record,
-    // so it fires first when both values are bad.
-    let partial_evaluation: Option<crate::cli::PartialEval> = match &args.partial_evaluation {
-        Some(Err(())) => return Err("partial-evaluation: unknown option".to_string()),
-        Some(Ok(pe)) => Some(pe.clone()),
-        None => None,
-    };
-    // `--output-module` (HS field 13): exact match against the six `show`
-    // strings (TheoryLoader.hs:373-377) — anything else, the empty string
-    // included, is `ArgumentError "output mode not supported."`.
-    let output_module: Option<ModuleType> = match &args.output_module {
-        None => None,
-        Some(s) => match ModuleType::from_show(s) {
-            Some(m) => Some(m),
-            None => return Err("output mode not supported.".to_string()),
-        },
-    };
+    let output_module = args.output_module.as_deref().map(|s| {
+        ModuleType::from_show(s)
+            .expect("clap's --output-module value_parser matches ModuleType's show strings")
+    });
     Ok(TheoryLoadOptions {
         prove_mode: args.prove_mode,
         lemma_names: args.lemma_names.clone(),
@@ -1200,14 +1006,14 @@ fn mk_theory_load_options(args: &Args) -> Result<TheoryLoadOptions, String> {
         heuristic: args.heuristic.clone(),
         oracle_name: args.oracle_name.clone(),
         oracle_only: args.oracle_only,
-        partial_evaluation,
+        partial_evaluation: args.partial_evaluation.clone(),
         defines: args.defines.clone(),
         quit_on_warning: args.quit_on_warning,
         auto_sources: args.auto_sources,
         output_module,
         parse_only_mode: args.parse_only,
         precompute_only_mode: args.precompute_only,
-        derivation_checks: args.derivcheck_timeout.unwrap_or(5) as u32,
+        derivation_checks: args.derivcheck_timeout.unwrap_or(5),
         ndc_check: !args.no_ndc,
     })
 }
@@ -1238,7 +1044,6 @@ fn skipped_results(
             } else {
                 LemmaVerdict::Filtered
             },
-            elapsed_ms: 0,
             // HS counts the default `Sorry` placeholder proof
             // as 1 step (one `LNode (ProofStep Sorry ...)` —
             // see `foldProof proofStepSummary`, ClosedTheory.hs:463-491, see line 484,491).
@@ -1260,22 +1065,6 @@ struct ClosedOutcome {
     results: Vec<LemmaResult>,
     proved_lemmas: Vec<tamarin_theory::pretty_theory::ProvedLemma>,
     trace_systems: Vec<(String, System)>,
-}
-
-/// How [`TheoryPipeline::close_translated_theory`] aborts a file: a
-/// deliberate process exit whose streams are already written (the
-/// configuration-block deaths, in GHC's exception shape), or a real
-/// [`RunError`].  The file loop propagates `Exit` as the process exit code
-/// — one file's death kills the whole run, as HS's exception does.
-enum CloseAbort {
-    Exit(i32),
-    Fail(RunError),
-}
-
-impl From<RunError> for CloseAbort {
-    fn from(e: RunError) -> Self {
-        CloseAbort::Fail(e)
-    }
 }
 
 /// One input file's loading state, threaded through the HS-named loading
@@ -1317,17 +1106,6 @@ struct TheoryPipeline<'a> {
     /// `configAutoSources`).
     cut: tamarin_theory::constraint::solver::context::CutStrategy,
     auto_sources: bool,
-    /// The `configuration:` block's cmdargs-level rejection, DEFERRED to
-    /// HS's forcing points: HS processes the block lazily, so `Unknown
-    /// flag: --x` fires inside the derivation checks when they run
-    /// ([`Self::check_translated_theory`]), else right after `Theory
-    /// closed` — and never in `-m` translate mode or `--parse-only`, which
-    /// exit 0 on the same theory.  All oracle-verified.
-    config_flag_error: Option<String>,
-    /// The block's unreadable `--stop-on-trace` value's message, fired by
-    /// the prove branch after `Theory closed` when a lemma is selected
-    /// ([`effective_cut`]).
-    config_value_error: Option<String>,
     /// The `_restrict` formulas' free variables per rule, captured before
     /// `lift_rule_restrictions` cleared them; partial evaluation's
     /// rename/dedup reads them (see `restriction_frees_by_rule`).
@@ -1604,7 +1382,7 @@ impl TheoryPipeline<'_> {
         // `checkTranslatedTheory` does.  The `[output=[msr]]` lemma
         // attribute (`lemmaSelectorByModule`) is deliberately NOT honoured
         // here — HS consults it only in `closeTranslatedTheory`
-        // (TheoryLoader.hs:706-707), which translate mode never reaches.
+        // (TheoryLoader.hs:702-703), which translate mode never reaches.
         if translate_module == Some(TranslateModule::Msr) {
             let lemma_names: &[String] = &self.opts.lemma_names;
             self.parsed.items.retain(|i| match i {
@@ -1626,10 +1404,8 @@ impl TheoryPipeline<'_> {
     /// this stage's `sign'` while `translateAndCheckTheory` discards it.
     ///
     /// [`Self::translate_module`] gates only the loop-breaker annotation —
-    /// see the comment at that block — and the configuration-block
-    /// rejection, which returns `Some(exit_code)` for the file loop to
-    /// propagate (the process dies, as HS's exception kills the whole run).
-    fn check_translated_theory(&mut self) -> Option<i32> {
+    /// see the comment at that block.
+    fn check_translated_theory(&mut self) {
         // HS runs the full `checkWellformedness` on the TRANSLATED theory
         // (TheoryLoader.hs:553-565, `checkTranslatedTheory`), i.e. AFTER SAPIC
         // `translate` has injected the generated rules, whereas our
@@ -1906,28 +1682,6 @@ impl TheoryPipeline<'_> {
             // HS emits these markers around the per-variable derivability
             // check (TheoryLoader.hs:578-594, see line 581, :594).
             self.marker("Derivation checks started");
-            // In the CLOSE pipeline, laziness forces the configuration
-            // block's processed record inside the derivation checks: the
-            // oracle prints `started`, dies `tamarin-prover: Unknown flag:
-            // --x`, and never prints `ended`.  The per-rule deducibility
-            // probes are what force it (`closeTheoryWithMaude sig t sources
-            // False`, MessageDerivationChecks.hs:42, reads the autoSources
-            // field), so a theory with NO protocol rules sails through both
-            // markers and dies after `Theory closed` instead — as does
-            // `-d=0` (the close paths fire it there).  Translate mode never
-            // forces it at all (`-m` exits 0 on the same theory).  All
-            // oracle-verified, the no-rules case included.
-            if self.translate_module.is_none()
-                && self
-                    .parsed
-                    .items
-                    .iter()
-                    .any(|i| matches!(i, tamarin_parser::ast::TheoryItem::Rule(_)))
-            {
-                if let Some(code) = self.config_flag_exception() {
-                    return Some(code);
-                }
-            }
             if let Some(m) = self.file_maude.as_ref() {
                 let extra = tamarin_theory::deriv_check::check_message_derivation(
                     &self.parsed,
@@ -1939,16 +1693,6 @@ impl TheoryPipeline<'_> {
             }
             self.marker("Derivation checks ended");
         }
-        None
-    }
-
-    /// The configuration block's deferred cmdargs rejection, reported in
-    /// GHC's exception shape (`errorWithoutStackTrace` — no `CallStack`
-    /// block, unlike [`config_value_exception`]).  `Some` is the exit code.
-    fn config_flag_exception(&self) -> Option<i32> {
-        self.config_flag_error
-            .as_ref()
-            .map(|msg| ghc_exception(msg))
     }
 
     /// HS `closeTranslatedTheory` (TheoryLoader.hs:668-715) plus the parts of
@@ -1960,7 +1704,7 @@ impl TheoryPipeline<'_> {
     /// `translateAndCheckTheory` has no `closeTranslatedTheory` call
     /// (TheoryLoader.hs:768-781) — so `--partial-evaluation` and
     /// `--auto-sources` are inert there even though the flags are still read.
-    fn close_translated_theory(&mut self) -> Result<ClosedOutcome, CloseAbort> {
+    fn close_translated_theory(&mut self) -> Result<ClosedOutcome, RunError> {
         let in_file = self.in_file;
         let want_traces = wants_trace_output(self.args);
 
@@ -2145,12 +1889,6 @@ impl TheoryPipeline<'_> {
             // prove loop; the prove branch below emits it before its loop
             // instead.
             self.closed_marker(&pe_trace);
-            // With the derivation checks off (`-d=0`), HS's laziness first
-            // forces the configuration block's processed record HERE: the
-            // marker prints, then the rejection (oracle-verified).
-            if let Some(code) = self.config_flag_exception() {
-                return Err(CloseAbort::Exit(code));
-            }
         } else {
             // Reuse the per-file maude handle.  The `maude tool: ...`
             // banner is printed once at the top of the batch run, matching HS.
@@ -2159,7 +1897,8 @@ impl TheoryPipeline<'_> {
             // Per-lemma proof loop.
             //
             // `--bound=N` → HS `apBound = Just N`, which `runAutoProver`
-            // applies as `boundProofDepth` (Theory/Proof.hs:336-344, 753-760):
+            // (Theory/Proof.hs:730-750#runAutoProver) applies as
+            // `boundProofDepth` (Theory/Proof.hs:336-344#boundProofDepth):
             // every proof node at depth N becomes a `sorry /* bound N hit */`
             // leaf.  The bound lives in the AutoProver, so it reaches ONLY
             // lemmas the auto-prover runs on — the `--prove`-selected
@@ -2189,26 +1928,6 @@ impl TheoryPipeline<'_> {
             // marker here (before the prove loop) to match HS's observable
             // stderr order.
             self.closed_marker(&pe_trace);
-            // The configuration block's deferred deaths, in HS's forcing
-            // order: the cmdargs-level rejection first (`-d=0` moves its
-            // force here, after `Theory closed`), then the unreadable
-            // `--stop-on-trace` VALUE — which the prover forces only when
-            // it applies to a SELECTED lemma, so a non-matching `--prove=X`
-            // proceeds (oracle-verified rc 0, full output).  Both die
-            // before any lemma work or stdout.
-            if let Some(code) = self.config_flag_exception() {
-                return Err(CloseAbort::Exit(code));
-            }
-            if let Some(msg) = self.config_value_error.as_deref() {
-                if prove_anything
-                    && self
-                        .elaborated
-                        .lemmas()
-                        .any(|l| lemma_matches(lemma_filter, &l.name))
-                {
-                    return Err(CloseAbort::Exit(config_value_exception(msg)));
-                }
-            }
 
             let parsed = &self.parsed;
             let elaborated = &self.elaborated;
@@ -2245,10 +1964,26 @@ impl TheoryPipeline<'_> {
                 // so stored skeletons replay (check_and_extend) but no
                 // open leaf is auto-proved.
                 let is_target = prove_anything && lemma_matches(lemma_filter, &lemma_name);
+                // A `--heuristic` value HS would refuse must not silently
+                // prove under the smart fallback and print a verdict (see
+                // `validate_cli_heuristic`).  Gated on is_target because the
+                // string only matters when a target lemma consumes it —
+                // replays and `--prove=<no match>` runs are unaffected, as
+                // in HS.  The wording and rc are ours (plain error, exit 1),
+                // not the oracle's GHC shapes: invalid-usage output is
+                // outside the parity contract.
+                if is_target {
+                    if let Err(msg) = tamarin_theory::prove::validate_cli_heuristic(
+                        &cli_heuristic,
+                        &elaborated.tactic,
+                    ) {
+                        eprintln!("error: {msg}");
+                        std::process::exit(1);
+                    }
+                }
                 // HS does NOT print a per-lemma "proving lemma X ..."
                 // marker; the only progress lines are the `[Theory X]
                 // ...` set above.  Stay quiet here for HS-faithful stderr.
-                let lt = Instant::now();
                 let outcome = match (session.as_ref(), is_target) {
                     (Some(s), true) => {
                         tamarin_theory::prove::prove_lemma_in_session(s, &lemma_name, target_bound)
@@ -2328,7 +2063,6 @@ impl TheoryPipeline<'_> {
                 let lr = LemmaResult {
                     name: lemma_name,
                     verdict,
-                    elapsed_ms: lt.elapsed().as_millis(),
                     proof_steps,
                     exists_trace,
                 };
@@ -2406,7 +2140,6 @@ impl TheoryPipeline<'_> {
                         results.push(LemmaResult {
                             name: l.name.clone(),
                             verdict: LemmaVerdict::Filtered,
-                            elapsed_ms: 0,
                             // The sorry placeholder counts as 1 step (see
                             // `skipped_results`).
                             proof_steps: 1,
@@ -2429,22 +2162,7 @@ impl TheoryPipeline<'_> {
 }
 
 fn run_batch(args: &Args) -> Result<i32, RunError> {
-    // HS-faithful internal parallelism via rayon.  Mirrors HS's `using
-    // parList` / `parMap` sites: CloseRule.hs:81, Prover.hs:105,
-    // Theory/Constraint/Solver/Sources.hs:362, TheoryObject.hs:759,767.
-    // Default: full machine
-    // parallelism (`available_parallelism()`, uncapped — Maude IPC runs
-    // through the contention-free `MaudePool`, so larger pools scale;
-    // memory is budgeted via `--maude-processes`).
-    // `--processors=1` falls back to a 1-thread pool, guaranteeing
-    // byte-identical output to a fully sequential run.
-    init_rayon_pool(args);
-    // `-c/--open-chains` and `-s/--saturation` (HS `TheoryLoadOptions`
-    // openChainsLimit/saturationLimit, threaded into every close).
-    tamarin_theory::constraint::solver::sources::set_cli_solver_limits(
-        args.open_chains,
-        args.saturation,
-    );
+    init_process_globals(args);
     if args.diff {
         return Err(RunError(
             "--diff (observational equivalence) is not yet ported to the Rust prover.".to_string(),
@@ -2455,7 +2173,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     // additionally consults the theory's in-file `configuration:` block
     // (`configStopOnTrace`, TheoryLoader.hs:740-765) — a PER-THEORY value,
     // so the effective strategy is resolved inside the file loop by
-    // `effective_config` once the theory is parsed.
+    // `effective_cut` once the theory is parsed.
 
     // `--output-json` / `--output-dot`: HS `outputTraces` (Batch.hs:249-317)
     // serialises the constraint system of every `Finished Solved` proof node.
@@ -2471,17 +2189,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         );
     }
     if args.in_files.is_empty() {
-        // HS `batchMode`'s run: `null inFiles = helpAndExit thisMode (Just "no
-        // input files given")` (Batch.hs:90).  `helpAndExit`
-        // (Console.hs:341-359) `putStrLn`s the `error: <msg>` header and the
-        // mode's help — STDOUT, not stderr — and then `exitFailure`.  Not an
-        // error value: HS never routes this through its error channel, and
-        // returning one here would send the block to stderr.
-        println!(
-            "error: no input files given\n\n{}",
-            crate::cli::help_text(Subcommand::Batch)
-        );
-        return Ok(1);
+        return Err(RunError("no input files given".to_string()));
     }
     let mut overall_status = 0i32;
     let mut file_results: Vec<FileResult> = Vec::new();
@@ -2527,24 +2235,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         Some(version_data.trim_end().to_string())
     };
 
-    // The deferred `mkTheoryLoadOptions` argument checks (HS forces the
-    // record lazily inside the file loop, so the `error e` report lands
-    // AFTER the maude banner — see `batch_argument_error`).
-    let opts: TheoryLoadOptions = match mk_theory_load_options(args) {
-        Ok(o) => o,
-        Err(msg) => {
-            // `processThy` forces the record only after `readFile inFile`
-            // (Batch.hs:190-192), so a FIRST input file that cannot be OPENED
-            // reports its own IOException and this rejection is never reached.
-            // Only the open counts: `readFile` is lazy, so a file that opens
-            // and then fails to decode raises `hGetContents` LATER, after the
-            // rejection — which is why the bytes are read but never decoded.
-            match args.in_files.first().map(fs::read) {
-                Some(Err(e)) => return report_open_file_error(&args.in_files[0], &e),
-                _ => return Ok(batch_argument_error(&msg)),
-            }
-        }
-    };
+    let opts: TheoryLoadOptions = mk_theory_load_options(args)?;
 
     // HS `toParserFlags` (TheoryLoader.hs:285-291): `["diff" | diffMode] ++
     // defines ++ ["quit-on-warning" | quitOnWarning]`.  Structural parity
@@ -2610,7 +2301,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 Ok(s) => s,
                 Err(e) => return Ok(report_decode_error(in_file, &e)),
             },
-            Err(e) => return report_open_file_error(in_file, &e),
+            Err(e) => return Ok(report_open_file_error(in_file, &e)),
         };
         // Thread the including file's directory so `#include "file"` resolves
         // relative to it (HS `takeDirectory inFile0`, Theory/Text/Parser.hs:323-343).
@@ -2734,20 +2425,34 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         }
 
         // The in-file `configuration:` block, processed as HS `closeTheory`
-        // does (TheoryLoader.hs:740-765) — and, like HS, LAZILY: rejections
-        // are recorded now (`parse_config_block`) and fired only at the
-        // pipeline points where HS's laziness forces the processed record
-        // (see the `config_flag_error` / `config_value_error` field docs).
-        // `--auto-sources` is OR-combined (`configAutoSources`,
-        // TheoryLoader.hs:764-765); the cut strategy follows
-        // `configStopOnTrace` precedence ([`effective_cut`]).
-        let config_block = parsed
-            .configuration
-            .as_deref()
-            .map(tamarin_theory::prove::parse_config_block)
-            .unwrap_or_default();
+        // does (TheoryLoader.hs:740-765): `--auto-sources` is OR-combined
+        // (`configAutoSources`, TheoryLoader.hs:764-765); the cut strategy
+        // follows `configStopOnTrace` precedence ([`effective_cut`]).  A
+        // malformed block is a plain error up front (HS defers it through
+        // laziness; we don't replicate that choreography — with one
+        // boundary kept: only the CLOSE pipeline consumes the block.
+        // Translate mode (`-m`) runs HS `translateAndCheckTheory`, which
+        // never processes the block at all, so a `-m` run must succeed on
+        // a theory whose block would kill a close run (oracle-verified
+        // rc 0 with full output).  An unreadable `--stop-on-trace` VALUE
+        // is validated whenever `--prove` was given, which is eager-er
+        // than HS's laziness in one corner: HS exits 0 when no selected
+        // lemma ever forces the value (e.g. a non-matching `--prove=X`);
+        // the port reports the bad block anyway.
+        let config_block = if translate_module.is_none() {
+            parsed
+                .configuration
+                .as_deref()
+                .map(tamarin_theory::prove::parse_config_block)
+                .unwrap_or_default()
+        } else {
+            tamarin_theory::prove::ConfigBlock::default()
+        };
+        if let Some(msg) = &config_block.flag_error {
+            return Err(RunError(format!("configuration block: {}", msg)));
+        }
         let auto_sources = opts.auto_sources || config_block.auto_sources;
-        let (cut, config_value_error) = effective_cut(&opts, &config_block);
+        let cut = effective_cut(&opts, &config_block)?;
 
         // Wellformedness checks — mirrors HS `checkWellformedness`
         // (`Theory.Tools.Wellformedness:1270`).  Runs on every file that
@@ -2831,8 +2536,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             file_maude_pool: None,
             ndc_cache: None,
             ndc_funs: Vec::new(),
-            config_flag_error: config_block.flag_error,
-            config_value_error,
         };
 
         let (print_opts, _sapic_funs_guard) = match st.translate_theory() {
@@ -2840,9 +2543,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             Err(code) => return Ok(code),
         };
 
-        if let Some(code) = st.check_translated_theory() {
-            return Ok(code);
-        }
+        st.check_translated_theory();
 
         // `--quit-on-warning` (HS `withVersionAndReport`, TheoryLoader.hs:
         // 643-660, see line 656): a non-empty report throws `WarningError`
@@ -2917,11 +2618,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 results
             }
             None => {
-                let closed = match st.close_translated_theory() {
-                    Ok(c) => c,
-                    Err(CloseAbort::Exit(code)) => return Ok(code),
-                    Err(CloseAbort::Fail(e)) => return Err(e),
-                };
+                let closed = st.close_translated_theory()?;
 
                 // HS-faithful: rc=0 regardless of verdict.  Falsified is a
                 // valid analysis outcome — the prover ran successfully and
@@ -3117,13 +2814,25 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     Ok(overall_status)
 }
 
-/// Install rayon's global worker pool to the size requested via
-/// `--processors=N` (or a sensible default).
-///
+/// Once-per-process globals every mode installs before theory work: the
+/// rayon worker pool and the `-c/--open-chains` / `-s/--saturation` limits
+/// (HS `TheoryLoadOptions` openChainsLimit/saturationLimit, threaded into
+/// every close; one helper for both modes because HS shares one
+/// `TheoryLoadOptions` across them).
+fn init_process_globals(args: &Args) {
+    init_rayon_pool(args);
+    tamarin_theory::constraint::solver::sources::set_cli_solver_limits(
+        args.open_chains,
+        args.saturation,
+    );
+}
+
 /// HS-equivalent: GHC's `+RTS -N RTS_FLAG` sets the worker capacity for
-/// the `par*`/`Strategies` sites HS uses.  We mirror that surface via a
-/// CLI flag.  Idempotent across files in a batch — `build_global`
-/// silently errors on the second call, which is what we want.
+/// the `par*`/`Strategies` sites HS uses (`using parList` / `parMap`:
+/// CloseRule.hs:81, Prover.hs:105, Theory/Constraint/Solver/Sources.hs:362,
+/// TheoryObject.hs:759,767).  We mirror that surface via a CLI flag.
+/// Idempotent across files in a batch — `build_global` silently errors on
+/// the second call, which is what we want.
 ///
 /// Default: `available_parallelism()` (full machine).  `MaudePool`
 /// (`--maude-processes=M`) removes the Maude IPC mutex contention that
@@ -3262,35 +2971,9 @@ mod tests {
         parse_args(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("parse")
     }
 
-    /// The pinned submodule's `src/Main/Mode/Batch.hs`, embedded at build time.
-    const BATCH_HS: &str = include_str!("../../../tamarin-prover/src/Main/Mode/Batch.hs");
-
-    /// The e2e stderr pins for this frame compare the port against bytes
-    /// captured from the port, so they agree with a stale coordinate.  This
-    /// reads the coordinate back out of the pinned source instead.
-    #[test]
-    fn batch_argument_error_site_is_the_pinned_call_site() {
-        assert_eq!(
-            BATCH_ARGUMENT_ERROR_SITE,
-            crate::probe::tests::error_site(BATCH_HS, "ArgumentError e)")
-        );
-    }
-
-    #[test]
-    fn config_stop_on_trace_error_site_is_the_pinned_call_site() {
-        const THEORY_LOADER_HS: &str =
-            include_str!("../../../tamarin-prover/src/Main/TheoryLoader.hs");
-        assert_eq!(
-            CONFIG_STOP_ON_TRACE_ERROR_SITE,
-            crate::probe::tests::error_site(THEORY_LOADER_HS, "stopOnTrace srcThyConfigBlockArgs")
-        );
-    }
-
     #[test]
     fn out_path_for_uses_file_when_set() {
-        // `-o`/`--output` is cmdargs flagOpt: only the inline (`=`/attached)
-        // form sets the value; a space-separated token stays positional.
-        let a = parse(&["-o/tmp/foo.spthy", "in.spthy"]);
+        let a = parse(&["-o=/tmp/foo.spthy", "in.spthy"]);
         assert_eq!(
             out_path_for(&a, "in.spthy").as_deref(),
             Some("/tmp/foo.spthy"),
@@ -3299,7 +2982,7 @@ mod tests {
 
     #[test]
     fn out_path_for_uses_dir_with_basename_when_set() {
-        let a = parse(&["-O/tmp/outdir", "examples/foo.spthy"]);
+        let a = parse(&["-O=/tmp/outdir", "examples/foo.spthy"]);
         let got = out_path_for(&a, "examples/foo.spthy");
         assert_eq!(got.as_deref(), Some("/tmp/outdir/foo_analyzed.spthy"));
     }
@@ -3308,6 +2991,27 @@ mod tests {
     fn out_path_for_none_means_stdout() {
         let a = parse(&["in.spthy"]);
         assert_eq!(out_path_for(&a, "in.spthy"), None);
+    }
+
+    // The `--stop-on-trace` method table exists three times — the clap
+    // `ValueEnum` (cli.rs), `stop_on_trace_cut` here, and the
+    // `configuration:`-block reader `parse_stop_on_trace` (tamarin-theory
+    // prove.rs) — where HS has one (`stopOnTrace`, TheoryLoader.hs:397-405)
+    // serving both argv and the block.  This pin is the coupling: every
+    // name the CLI accepts must map to the same `CutStrategy` the block
+    // reader gives it, so an arm edited in one table cannot drift silently.
+    #[test]
+    fn stop_on_trace_cut_agrees_with_the_config_block_reader() {
+        for name in ["dfs", "bfs", "seqdfs", "sorry", "none"] {
+            let a = parse(&[&format!("--stop-on-trace={name}"), "x.spthy"]);
+            let cli = stop_on_trace_cut(a.stop_on_trace.as_ref().expect("parsed"));
+            let block = tamarin_theory::prove::parse_stop_on_trace(name)
+                .unwrap_or_else(|e| panic!("block reader rejects {name}: {e}"));
+            assert_eq!(
+                cli, block,
+                "CLI and configuration-block tables drifted on {name}"
+            );
+        }
     }
 
     // `createDirectoryIfMissing True` blames the level whose `mkdir` raised,
@@ -3354,41 +3058,17 @@ mod tests {
         let _ = fs::remove_dir_all(std::env::temp_dir().join("tamarin_rs_create_dirs_pin_d"));
     }
 
-    // HS `mkTheoryLoadOptions` is applicative over the record fields, so the
-    // deferred raw-string validations fire in FIELD order: `partialEvaluation`
-    // (TheoryLoader.hs:354-358) precedes `outputModule` (:373-377).  When both
-    // raw values are bad, the PE `ArgumentError` wins.
+    // An explicit `--heuristic=` names zero rankings and is the one value
+    // clap can't reject for us; a bare `--heuristic` records the default
+    // `s` and is fine.
     #[test]
-    fn mk_theory_load_options_rejects_partial_evaluation_before_output_module() {
-        let a = parse(&["--partial-evaluation=bogus", "-m=bogus", "x.spthy"]);
-        assert_eq!(
-            mk_theory_load_options(&a).unwrap_err(),
-            "partial-evaluation: unknown option",
+    fn mk_theory_load_options_rejects_empty_heuristic() {
+        let a = parse(&["--heuristic=", "x.spthy"]);
+        let e = mk_theory_load_options(&a).unwrap_err();
+        assert!(
+            e.to_string().contains("at least one ranking must be given"),
+            "{e}",
         );
-        let a = parse(&["-m=bogus", "x.spthy"]);
-        assert_eq!(
-            mk_theory_load_options(&a).unwrap_err(),
-            "output mode not supported.",
-        );
-    }
-
-    // `heuristic` is field 5, ahead of both — `--heuristic=` beats a bad
-    // `--partial-evaluation` and a bad `-m`.  A bare `--heuristic` records the
-    // flag's default and is accepted.
-    #[test]
-    fn mk_theory_load_options_rejects_empty_heuristic_before_the_other_two() {
-        for argv in [
-            vec!["--heuristic=", "x.spthy"],
-            vec!["--heuristic=", "--partial-evaluation=bogus", "x.spthy"],
-            vec!["--heuristic=", "-m=bogus", "x.spthy"],
-        ] {
-            let a = parse(&argv);
-            assert_eq!(
-                mk_theory_load_options(&a).unwrap_err(),
-                "heuristic: at least one ranking must be given",
-                "{argv:?}",
-            );
-        }
         let a = parse(&["--heuristic", "x.spthy"]);
         assert!(mk_theory_load_options(&a).is_ok());
     }
@@ -3416,7 +3096,7 @@ mod tests {
     }
 
     #[test]
-    fn mk_theory_load_options_accepts_valid_deferred_values() {
+    fn mk_theory_load_options_accepts_valid_values() {
         let a = parse(&["--partial-evaluation=Verbose", "-m=msr", "x.spthy"]);
         let o = mk_theory_load_options(&a).expect("valid values");
         assert_eq!(o.partial_evaluation, Some(crate::cli::PartialEval::Verbose),);
@@ -3445,101 +3125,28 @@ mod tests {
     }
 
     #[test]
-    fn reads_int_mirrors_haskell_reads_acceptance() {
-        // Every pair oracle-verified via `interactive --port=X wd`: the
-        // banner names the read value, or the miss notice fires and 3001
-        // stands.
-        for (raw, want) in [
-            ("30", Some(30)),
-            ("30x", Some(30)),
-            (" 30", Some(30)),
-            ("0x1F", Some(31)),
-            ("(30)", Some(30)),
-            ("-1", Some(-1)),
-            ("- 3", Some(-3)),
-            ("99999", Some(99999)),
-            ("", None),
-            ("abc", None),
-            ("3.5", None),
-            ("3.5x", None),
-            ("3e2", None),
-            ("+3", None),
-            ("(30", None),
-        ] {
-            assert_eq!(reads_int(raw), want, "{raw:?}");
-        }
-        // read_port: a GIVEN flag that does not read is a notice + default;
-        // an absent flag is the silent default.
-        assert_eq!(read_port(None), (3001, None));
-        assert_eq!(read_port(Some("3.5")), (3001, Some("3.5")));
-        assert_eq!(read_port(Some("")), (3001, Some("")));
-        assert_eq!(read_port(Some("30x")), (30, None));
-    }
-
-    #[test]
-    fn interactive_subcmd_is_routed() {
-        // We can't actually invoke `run` on the interactive subcommand
-        // in a unit test (it would bind a TCP socket and block), so we
-        // just check that the parser routes to it and accepts the
-        // expected interactive flags.
-        let a = parse(&[
-            "interactive",
-            "--port=3001",
-            "--interface=127.0.0.1",
-            "--image-format=PNG",
-            "--debug",
-            "--no-logging",
-            "--data-dir=/tmp/data",
-        ]);
-        assert_eq!(a.subcommand, crate::cli::Subcommand::Interactive);
-        assert_eq!(a.port.as_deref(), Some("3001"));
-        assert_eq!(a.interface.as_deref(), Some("127.0.0.1"));
-        assert!(matches!(a.image_format, Some(crate::cli::ImageFormat::Png)));
-        assert!(a.debug);
-        assert!(a.no_logging);
-        assert_eq!(a.data_dir.as_deref(), Some("/tmp/data"));
-    }
-
-    #[test]
     fn interactive_invalid_interface_errors() {
         // Asking to bind to garbage should produce a clear error
         // without ever opening a socket.  A WORKDIR must be present: without
-        // one the mode help-and-exits before looking at `--interface`
-        // (Interactive.hs:76-80), returning `Ok(1)` rather than an error.
+        // one the mode errors out before looking at `--interface`.
         let a = parse(&["interactive", "--interface=not-an-ip", "/tmp"]);
         let r = run(&a);
         assert!(r.is_err(), "expected interface parse error");
     }
 
     #[test]
-    fn no_input_files_is_help_and_exit_not_an_error() {
-        // HS `helpAndExit` (Console.hs:341-359) prints to STDOUT and
-        // `exitFailure`s; it never builds an error value, so neither does this.
-        // The bytes and streams are pinned end-to-end in
-        // `tests/help_output.rs::no_input_files_reprints_the_help_after_an_error_line_on_stdout`.
-        let a = parse(&[]);
-        assert_eq!(run(&a).expect("help-and-exit is not an error"), 1);
-    }
-
-    #[test]
-    fn help_returns_zero() {
-        let a = parse(&["--help"]);
-        let r = run(&a).expect("help");
-        assert_eq!(r, 0);
-    }
-
-    #[test]
-    fn version_returns_zero() {
-        let a = parse(&["--version"]);
-        let r = run(&a).expect("version");
-        assert_eq!(r, 0);
+    fn no_input_files_is_an_error() {
+        // clap's `arg_required_else_help` catches a fully-bare argv, but a
+        // flags-only argv reaches `run_batch`, which reports it plainly.
+        let a = parse(&["--quiet"]);
+        let e = run(&a).unwrap_err();
+        assert!(e.to_string().contains("no input files given"), "{e}");
     }
 
     fn mk_result(verdict: LemmaVerdict, exists_trace: bool, steps: usize) -> LemmaResult {
         LemmaResult {
             name: "L".to_string(),
             verdict,
-            elapsed_ms: 0,
             proof_steps: steps,
             exists_trace,
         }

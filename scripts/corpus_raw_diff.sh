@@ -191,7 +191,9 @@ worker() {
         hs_rc=$?
         hs_ms=$(( $(date +%s%3N) - hs_t0 ))
         if [ -n "$key" ]; then
-            if [ "$hs_rc" -eq 124 ]; then
+            # >=128 is a signal death (OOM's 137), which truncates stdout the
+            # same way the timeout does: marker, never the partial payload.
+            if [ "$hs_rc" -eq 124 ] || [ "$hs_rc" -ge 128 ]; then
                 : > "$key_timeout" 2>/dev/null || true
             elif [ -s "$hs_out" ]; then
                 # Never cache EMPTY HS output: empty means HS failed to start
@@ -203,11 +205,11 @@ worker() {
         fi
     fi
 
-    # HS timed out (cached marker or live run): the comparison is void, so do
-    # NOT run RS at all. The lemmas where HS times out are exactly the
-    # jcs18-class monsters where RS's 300s of unbounded search OOMs the
-    # machine (observed 17-43 GB RSS per worker, 2026-06-10).
-    if [ "$hs_rc" -eq 124 ]; then
+    # HS timed out or was signal-killed (cached marker or live run): the
+    # comparison is void, so do NOT run RS at all. The lemmas where HS times
+    # out are exactly the jcs18-class monsters where RS's 300s of unbounded
+    # search OOMs the machine (observed 17-43 GB RSS per worker, 2026-06-10).
+    if [ "$hs_rc" -eq 124 ] || [ "$hs_rc" -ge 128 ]; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$f" "$lemma" "SKIP_TIMEOUT" "0" "0" "-" "$hs_ms" "-"
         return 0
     fi
@@ -224,7 +226,8 @@ worker() {
     hs_lines=$(grep -c . "$tmp/hs.cmp"); hs_lines=${hs_lines// /}
     rs_lines=$(grep -c . "$tmp/rs.cmp"); rs_lines=${rs_lines// /}
 
-    if [ "$hs_rc" -eq 124 ] || [ "$rs_rc" -eq 124 ]; then
+    if [ "$hs_rc" -eq 124 ] || [ "$hs_rc" -ge 128 ] \
+       || [ "$rs_rc" -eq 124 ] || [ "$rs_rc" -ge 128 ]; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$f" "$lemma" "SKIP_TIMEOUT" "$hs_lines" "$rs_lines" "-" "$hs_ms" "$rs_ms"
         return 0
     fi

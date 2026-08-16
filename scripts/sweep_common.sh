@@ -7,6 +7,9 @@
 #   row          — append one tab-separated row to $OUT
 #   infra_abort / nocompare_check — detect a row that compared NOTHING
 #   hs_run       — run the Haskell oracle through a content-keyed result cache
+#   sweep_one    — the standard per-item body: oracle vs port on one flag set
+#                  (pe_sweep/module_sweep; json_sweep's artifact comparisons
+#                  keep their own body)
 #   list_lines / resolve_list — data lines of a path list, resolved against a
 #                  base directory (the corpora and the *_family.txt subsets)
 #   sweep_out    — resolve $OUT against a per-sweep default, create its directory
@@ -14,8 +17,11 @@
 #   sweep_retry  — serial re-run of the ERROR rows at RETRY_TIMEOUT
 #   sweep_banner / sweep_finish — denominator + fingerprints up front, ledger
 #                  application + summary + DONE sentinel at the end
+#   sweep_drive  — the whole driver tail: stale check, list, banner, parallel
+#                  pass, retry, verdict
 # and, via gate_common.sh (sourced below): norm, the OOM prologue grun wraps,
-# rs_stale_check, the maude resolver and the oracle preflights.
+# include_shas (folded into hs_run's cache key below), rs_stale_check, the
+# maude resolver and the oracle preflights.
 #
 # The oracle cache (HS_CACHE, default scripts/.hs_sweep_cache/, gitignored)
 # keys on sha256(theory) + the sweep-provided flag tag + the oracle binary
@@ -252,28 +258,9 @@ sweep_preflight
 # lookup.
 hs_fingerprint "$HS_BIN"
 
-# include_shas <theory> [depth]
-#   sha + name of every file the theory pulls in with `#include "..."`, depth
-#   first and transitively, resolved against the INCLUDING file's directory
-#   (the spelling upstream uses: examples/testParser/include/include1.spthy,
-#   which parity_corpus.txt carries, reaches include_2.spthy and
-#   include/include3.spthy that way). Those files are oracle inputs, so a
-#   theory sha alone cannot key its output: edit an included file and the
-#   cached entry keeps answering for the old one.
-#   Prints NOTHING for a theory with no includes, which is every corpus file
-#   but three — so the digest fed to the key is byte-identical there and the
-#   existing cache stays valid.
-include_shas() {
-  local f=$1 depth=${2:-0} dir inc
-  [ "$depth" -ge 8 ] && return 0
-  dir=$(dirname "$f")
-  while IFS= read -r inc; do
-    [ -n "$inc" ] && [ -f "$dir/$inc" ] || continue
-    printf '%s %s\n' "$(sha256sum "$dir/$inc" | cut -d' ' -f1)" "$inc"
-    include_shas "$dir/$inc" $((depth + 1))
-  done < <(grep -oE '#include[[:space:]]*"[^"]+"' "$f" 2>/dev/null \
-           | sed 's/.*"\(.*\)"/\1/')
-}
+# include_shas comes from gate_common.sh (it is part of ckey and of
+# rs_ref_check.sh's ikey there too); hs_run folds it into its digest below,
+# and it prints nothing for an include-free theory, keeping those keys stable.
 
 # hs_run <workdir> <theory> <tag> <flag...>
 #   Executes  grun $HS_BIN --with-maude=$MAUDE <flag...> <theory>
@@ -309,6 +296,43 @@ hs_run() {
     && echo "$TIMEOUT" > "$tmp/cap" && echo "$rc" > "$tmp/rc" \
     && mkdir -p "$(dirname "$dir")" && rm -rf "$dir" && mv "$tmp" "$dir"
   return "$rc"
+}
+
+# sweep_one <file> <unit> <tag> <cache-tag> <flag...>
+#   The per-item body pe_sweep.sh and module_sweep.sh carried as byte-identical
+#   private copies: oracle via hs_run, port via grun, verdict via
+#   nocompare_check / rc / io_diff. The varying tokens are parameters:
+#     <unit>       optional extra result column between the file and the status
+#                  ('' for none; module_sweep passes the -m module)
+#     <tag>        optional detail suffix appended to every row ('' for none;
+#                  pe_sweep passes '-' or sweep_retry's 'retry' marker — an OK
+#                  row's whole detail is the tag, or '-' when there is none)
+#     <cache-tag>  hs_run's flag-semantics tag
+#     <flag...>    the flags both sides run under
+#   json_sweep.sh's body stays its own: its verdict rests on exported
+#   json/dot artifacts and a both-fail stream comparison, not this shape.
+sweep_one() {
+  local f=$1 unit=$2 tag=$3 ctag=$4; shift 4
+  local d hrc rrc nc io
+  local -a k=("$f"); [ -n "$unit" ] && k+=("$unit")
+  # No tmpdir means every redirection below would target /, so bail and let
+  # sweep_finish's row-count check report the row that never landed.
+  d=$(mktemp -d) || return
+  hs_run "$d" "$f" "$ctag" "$@"; hrc=$?
+  # A broken environment is diagnosed before the cap is blamed for it: an
+  # unusable maude both aborts and hangs, and "timeout" would be the wrong
+  # story (and a ledgerable one).
+  if infra_abort "$d/hs.err"; then row "${k[@]}" NO-COMPARE "infra-abort hs (rs not run) hs=$hrc${tag:+ $tag}"; rm -rf "$d"; return; fi
+  # An oracle timeout is cached at this cap, so it comes back instantly while
+  # the RS side would burn the full cap producing nothing to compare against.
+  if [ "$hrc" -ge 124 ]; then row "${k[@]}" ERROR "timeout/kill hs=$hrc rs=skipped${tag:+ $tag}"; rm -rf "$d"; return; fi
+  grun "$RS_BIN" --with-maude="$MAUDE" "$@" "$f" > "$d/rs.out" 2> "$d/rs.err"; rrc=$?
+  if [ "$rrc" -ge 124 ]; then row "${k[@]}" ERROR "timeout/kill hs=$hrc rs=$rrc${tag:+ $tag}"
+  elif nc=$(nocompare_check "$hrc" "$rrc" "$d" "$d/hs.out" "$d/rs.out"); then row "${k[@]}" NO-COMPARE "$nc${tag:+ $tag}"
+  elif [ "$hrc" -ne "$rrc" ]; then row "${k[@]}" DIFF "rc hs=$hrc rs=$rrc${tag:+ $tag}"
+  elif ! io=$(io_diff "$d"); then row "${k[@]}" DIFF "$io${tag:+ $tag}"
+  else row "${k[@]}" OK "${tag:--}"; fi
+  rm -rf "$d"
 }
 
 # list_lines <file>
@@ -361,7 +385,7 @@ sweep_out() {
 #   turns up in sweep_finish's row-count check.
 sweep_export() {
   export -f one row grun oom_prologue norm nerr io_diff infra_abort nonempty_compared \
-            nocompare_check include_shas hs_run "$@"
+            nocompare_check include_shas hs_run sweep_one "$@"
   export HS_BIN RS_BIN MAUDE OUT TIMEOUT HS_CACHE HS_FP
 }
 
@@ -564,6 +588,45 @@ sweep_finish() {
     bad="${bad:+$bad }LEDGER=$LEDGER_REPORTS"
     echo "== $LEDGER_REPORTS ledger entry/entries excuse nothing (see LEDGER-* on stderr) — drop them =="
   fi
-  echo "== DONE $sweep $(date -u +%FT%TZ) verdict=${bad:-OK} UNCOMPARED=$unc =="
+  # files= counts the distinct FILES that actually reached a verdict (OK, DIFF
+  # or LEDGERED — ERROR/NO-COMPARE/UNCOMPARED rows compared nothing).
+  # rs_ref_check.sh generate reads it to refuse a scoped run (FAMILY=1, a
+  # narrowed list) as evidence for a wider re-baseline. Trailing and additive,
+  # so `grep -oE 'verdict=[^ ]+'` consumers are unchanged.
+  local nf
+  nf=$(awk -F'\t' -v col="$col" '$col=="OK"||$col=="DIFF"||$col=="LEDGERED"{print $1}' "$out" | sort -u | grep -c .)
+  echo "== DONE $sweep $(date -u +%FT%TZ) verdict=${bad:-OK} UNCOMPARED=$unc files=$nf =="
   [ -z "$bad" ]
+}
+
+# sweep_drive <sweep> <status-col> [unit-col [unit...]]
+#   The driver tail the three sweeps carried as triplicated copies: stale-RS
+#   check, the sweep's own list_files resolved and deduped, banner, parallel
+#   pass, serial retry of the ERROR rows, ledger + verdict. The caller must
+#   have defined list_files and one (and run sweep_export). With units given,
+#   every file expands to one (file, unit) job per unit and `one` receives
+#   both fields (module_sweep's modules; <unit-col> is then the ledger's
+#   sub-unit column); without, one job per file.
+#   xargs -d '\n': one field per argument, with quote and backslash processing
+#   off, so nothing about a path's spelling can split or reshape it.
+sweep_drive() {
+  local sweep=$1 col=$2 unitcol=${3:-0} LIST n f u
+  shift 2; [ $# -gt 0 ] && shift
+  local -a units=("$@")
+  rs_stale_check
+  LIST=$(list_files) || exit 2
+  LIST=$(sort -u <<< "$LIST")
+  : > "$OUT"
+  n=$(grep -c . <<< "$LIST")
+  if [ "${#units[@]}" -gt 0 ]; then
+    sweep_banner "${sweep}_sweep" "$(( n * ${#units[@]} ))"
+    while IFS= read -r f; do
+      for u in "${units[@]}"; do printf '%s\n%s\n' "$f" "$u"; done
+    done <<< "$LIST" | xargs -r -d '\n' -P "$JOBS" -n 2 bash -uc 'one "$0" "$1"'
+  else
+    sweep_banner "${sweep}_sweep" "$n"
+    xargs -r -d '\n' -P "$JOBS" -n 1 bash -uc 'one "$0"' <<< "$LIST"
+  fi
+  sweep_retry "$OUT" "$col"
+  sweep_finish "$OUT" "$sweep" "$col" "$unitcol"
 }

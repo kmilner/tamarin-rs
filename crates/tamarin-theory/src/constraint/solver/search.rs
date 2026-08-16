@@ -228,10 +228,14 @@ fn collect_solved_systems_owned(
 /// * [`KeepSolved`](SysRetention::KeepSolved) — batch trace output
 ///   (`--output-dot` / `--output-json`), whose HS `outputTraces`
 ///   (Batch.hs:252-288) reads exactly the
-///   `ProofStep (Finished Solved) (Just sys)` nodes and no others.  Peak
-///   RSS stays at the `--prove` baseline: a solved node is a leaf, and
-///   `extract_solved_path` (HS `extractSolved`) keeps at most one per
-///   lemma.
+///   `ProofStep (Finished Solved) (Just sys)` nodes and no others.  The
+///   retained systems are HS `outputTraces`' selector set, held for the
+///   whole file (moved into `trace_systems`, freed after
+///   `write_output_traces`), so peak RSS grows with the file's total
+///   solved systems.  `extract_solved_path` (HS `extractSolved`) bounds
+///   that to one per lemma ONLY on the freshly-searched `Dfs`/`SeqDfs`
+///   path — a replayed stored proof or a non-DFS `--stop-on-trace` keeps
+///   every solved node's system.
 /// * [`KeepAll`](SysRetention::KeepAll) — the interactive web server,
 ///   which renders the annotated constraint system + applicable proof
 ///   methods at every proof path (HS keeps a `Just System` on every
@@ -411,8 +415,8 @@ thread_local! {
     static DEPTH_LIMIT_HIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 
     /// `--bound=N` proof-depth bound — HS `boundProofDepth`
-    /// (Theory/Proof.hs:336-344), applied by `runAutoProver`'s
-    /// `maybe id boundProver (apBound p)` (Theory/Proof.hs:753-760): every
+    /// (Theory/Proof.hs:336-344#boundProofDepth), applied by `runAutoProver`'s
+    /// `maybe id boundProver (apBound p)` (Theory/Proof.hs:730-750#runAutoProver): every
     /// node at depth `N` from the search root is replaced by a
     /// `sorry /* bound N hit */` leaf.  `usize::MAX` = no bound (HS
     /// `apBound = Nothing`, the default).  Unlike `MAX_DEPTH` this is

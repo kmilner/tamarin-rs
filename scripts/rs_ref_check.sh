@@ -15,12 +15,16 @@
 # rewriting it turns whatever this binary does today into the definition of
 # correct. Nothing in this script compares against the Haskell prover, so on its
 # own `generate` would launder a regression into the baseline. Hence
-# --certified-by <gate-results>: the saved output of an ORACLE gate run (a
-# corpus_file_diff.sh / wf_gate.sh / *_sweep.sh log, or anything else carrying a
-# `verdict=` line) whose verdict reads OK. Its path, its verdict and the
-# fingerprint of the oracle binary on this machine are stamped into the
-# reference header beside `# maude:`, so the committed baseline carries the
-# evidence that an oracle run justified it.
+# --certified-by <gate-results>: the saved output of an ORACLE gate run whose
+# final verdict line reads OK AND is one of the known comparing-gate sentinels
+# (wf_gate.sh, pretty_gate.sh, corpus_file_diff.sh, or a sweep's `== DONE`
+# line) AND carries files=N covering at least every file being baselined — an
+# arbitrary `verdict=OK` (migrate_hs_cache_fp.sh's rename log, an RS-vs-RS
+# sweep) or a run scoped to a subset proves nothing about this corpus. Its
+# path, its verdict and the fingerprint of the oracle binary on this machine
+# (revision-checked against the submodule pin) are stamped into the reference
+# header beside `# maude:`, so the committed baseline carries the evidence
+# that an oracle run justified it.
 #
 # Reference rows: relpath \t input_key \t output_sha256 \t lines
 #   input_key = sha256 of the theory file (+ flags-hash suffix when
@@ -40,7 +44,10 @@
 #      fingerprint `generate` stamps; found under tamarin-prover-testing/ if
 #      unset)
 set -u
-LC_ALL=C
+# Exported: a bare assignment reaches none of the children, so `sort` collated
+# the committed reference in the operator's locale and every regenerate on a
+# differently-configured box re-ordered the whole ledger.
+export LC_ALL=C
 
 usage() {
     echo "usage: $0 generate --certified-by <gate-results>" >&2
@@ -100,13 +107,41 @@ if [ "$MODE" = generate ]; then
     [ -f "$CERT" ] || { echo "rs_ref_check: --certified-by '$CERT' does not exist" >&2; exit 2; }
     # Last verdict line wins: a saved log may hold several (a phase banner, a
     # retry), and the one that concludes the run is the one that certifies it.
-    CERT_VERDICT=$(grep -oE 'verdict=[^ ]+' "$CERT" | tail -1)
-    [ -n "$CERT_VERDICT" ] || {
+    CERT_LINE=$(grep 'verdict=' "$CERT" | tail -1)
+    [ -n "$CERT_LINE" ] || {
         echo "rs_ref_check: '$CERT' carries no 'verdict=' line — that is not a gate result" >&2
         exit 2; }
+    # A bare verdict=OK is not evidence of a COMPARISON: the line must be one
+    # of the sentinels only the oracle-comparing gates emit.
+    case "$CERT_LINE" in
+        *DONE_MIGRATE_HS_CACHE_FP*)
+            echo "rs_ref_check: '$CERT' is a migrate_hs_cache_fp.sh log — that script only" \
+                 "RENAMES cache entries and never runs the oracle, so its verdict=OK" \
+                 "certifies no comparison; point --certified-by at a comparing gate's log" >&2
+            exit 2 ;;
+        'wf_gate: verdict='* | 'pretty_gate: verdict='* \
+        | 'DONE_CORPUS_FILE_DIFF verdict='* | '== DONE '*' verdict='*) ;;
+        *)
+            echo "rs_ref_check: '$CERT' does not end in a known comparing-gate sentinel" \
+                 "(wf_gate:/pretty_gate:/DONE_CORPUS_FILE_DIFF/'== DONE <sweep>');" \
+                 "its last verdict line is: $CERT_LINE" >&2
+            exit 2 ;;
+    esac
+    CERT_VERDICT=$(grep -oE 'verdict=[^ ]+' <<< "$CERT_LINE" | head -1)
     [ "$CERT_VERDICT" = verdict=OK ] || {
         echo "rs_ref_check: '$CERT' reads $CERT_VERDICT, not verdict=OK —" \
              "a failing gate run cannot justify a new baseline" >&2
+        exit 2; }
+    # files=N (emitted by every comparing gate beside the verdict) is how many
+    # files that run ACTUALLY compared; it is checked against the allowlist
+    # size below, so an OK from a scoped run (FAMILY=1, a narrowed ALLOWLIST)
+    # cannot certify the unscoped baseline.
+    CERT_FILES=$(grep -oE 'files=[0-9]+' <<< "$CERT_LINE" | tail -1)
+    CERT_FILES=${CERT_FILES#files=}
+    [ -n "$CERT_FILES" ] || {
+        echo "rs_ref_check: '$CERT' carries no files=N beside its verdict — the gates" \
+             "stamp the compared-file count there now; re-run the gate to produce a" \
+             "log that says how much of the corpus its OK covers" >&2
         exit 2; }
     # The oracle binary is the specification the certifying run compared
     # against; its fingerprint (gate_common's hs_fingerprint, the same
@@ -118,6 +153,12 @@ if [ "$MODE" = generate ]; then
         echo "rs_ref_check: no oracle binary to fingerprint (HS_PATH=${HS_PATH:-unset})" >&2
         exit 2; }
     hs_fingerprint "$HS_PATH"
+    # The fingerprint records WHICH binary; gate_common's oracle_rev_check pins
+    # that it is the build of the submodule pin before `# oracle:` is stamped —
+    # otherwise the header could bless a baseline with the fingerprint of an
+    # oracle from another upstream (ALLOW_ORACLE_REV_MISMATCH=1 to override,
+    # same policy as sweep_common.sh's preflight).
+    oracle_rev_check "$HS_PATH" "$MAUDE" "$ROOT"
 fi
 if [ "$MODE" = check ]; then
     [ -n "$CERT" ] && { echo "rs_ref_check: --certified-by is only meaningful for generate" >&2; exit 2; }
@@ -130,16 +171,21 @@ if [ "$MODE" = check ]; then
     fi
 fi
 
-# strip_env / flags_for come from gate_common.sh.  ikey is deliberately NOT
-# gate_common's ckey: the reference key must not carry the oracle fingerprint
-# (the header's `# oracle:` line records that separately), so it is the
-# fingerprint-free prefix of the same format.
-ikey() {  # input key: theory sha + flags-hash suffix
-    local h fl; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
+# strip_env / flags_for / include_shas come from gate_common.sh.  ikey is
+# deliberately NOT gate_common's ckey: the reference key must not carry the
+# oracle fingerprint (the header's `# oracle:` line records that separately),
+# so it is the fingerprint-free prefix of the same format. The `__i` include
+# digest IS carried: an edit to an `#include`d fragment changes the oracle's
+# input, and without it check would blame the port (DIFF) instead of the
+# input (INPUT_CHANGED).
+ikey() {  # input key: theory sha + include-shas suffix + flags-hash suffix
+    local h fl inc; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
+    inc=$(include_shas "$2")
+    if [ -n "$inc" ]; then h="${h}__i$(printf '%s' "$inc" | sha256sum | cut -c1-12)"; fi
     if [ -n "$fl" ]; then printf '%s__f%s' "$h" "$(printf '%s' "$fl" | sha256sum | cut -c1-12)"
     else printf '%s' "$h"; fi
 }
-export -f strip_env flags_for ikey
+export -f strip_env flags_for include_shas ikey
 
 # one <rel> → "rel \t ikey \t sha|TIMEOUT|ERROR=n \t lines"
 one() {
@@ -166,6 +212,16 @@ mapfile -t FILES < <(grep -v '^[[:space:]]*#' "$ALLOWLIST" | grep . | sort -u)
 [ "${#FILES[@]}" -gt 0 ] || {
     echo "rs_ref_check: ALLOWLIST '$ALLOWLIST' resolved to 0 entries — nothing to compare" >&2
     exit 2; }
+# The scoping check: the certifying run must have compared at least as many
+# files as this generate is about to baseline. Checked BEFORE the prover
+# burns an hour, like the flag itself.
+if [ "$MODE" = generate ] && [ "$CERT_FILES" -lt "${#FILES[@]}" ]; then
+    echo "rs_ref_check: '$CERT' compared only $CERT_FILES file(s) but this generate" \
+         "would baseline ${#FILES[@]} — $(( ${#FILES[@]} - CERT_FILES )) of them carry no" \
+         "oracle evidence (a FAMILY=1 / narrowed-ALLOWLIST log cannot certify the" \
+         "unscoped baseline; re-run the gate over the full corpus)" >&2
+    exit 2
+fi
 echo "rs_ref_check: $MODE — ${#FILES[@]} files, JOBS=$JOBS, TIMEOUT=${TIMEOUT}s, BIN=$BIN"
 RUN=$(mktemp)
 printf '%s\n' "${FILES[@]}" | xargs -P "$JOBS" -I{} bash -c 'one "$@"' _ {} | sort > "$RUN"

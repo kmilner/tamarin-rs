@@ -1,4 +1,4 @@
-theory CliFlagsChan
+theory CliFlagsChanHeur
 
 begin
 
@@ -9,6 +9,8 @@ equations:
     fst(<x.1, x.2>) = x.1,
     sdec(senc(x.1, x.2), x.2) = x.1,
     snd(<x.1, x.2>) = x.2
+
+heuristic: i
 
 rule (modulo E) Register:
    [ Fr( ~k ) ] --[ Reg( $A, ~k ) ]-> [ !Key( $A, ~k ) ]
@@ -57,11 +59,14 @@ guarded formula characterizing all satisfying traces:
 "∃ A m #i #j. (Sent( A, m ) @ #i) ∧ (Recv( A, m ) @ #j)"
 */
 simplify
-solve( !KU( senc(~m, k.1) ) @ #vk )
-  case Send
-  solve( !Key( $A, ~k ) ▶₀ #j )
+solve( !Key( $A, ~k ) ▶₀ #i )
+  case Register
+  solve( !Key( $A, k.1 ) ▶₀ #j )
     case Register
-    SOLVED // trace found
+    solve( !KU( senc(~m, ~k.1) ) @ #vk )
+      case Send
+      SOLVED // trace found
+    qed
   qed
 qed
 
@@ -80,11 +85,11 @@ end
 ==============================================================================
 summary of summaries:
 
-analyzed: /home/kamilner/tamarin-rs-2/crates/tamarin-prover/tests/fixtures/cli_flags_chan.spthy
+analyzed: /home/kamilner/tamarin-rs-2/crates/tamarin-prover/tests/fixtures/cli_flags_chan_heur.spthy
 
-  processing time: 0.14s
+  processing time: 0.13s
   
   secrecy (all-traces): verified (4 steps)
-  exec (exists-trace): verified (4 steps)
+  exec (exists-trace): verified (5 steps)
 
 ==============================================================================

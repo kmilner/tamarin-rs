@@ -286,9 +286,8 @@ fn check_maude_install(err: &str) -> Result<String, String> {
 
 /// HS `ensureMaude` (Console.hs:151-185) — the maude probe every mode but
 /// `--parse-only` runs first: `test` (Test.hs:46), `variants` (Intruder.hs:45),
-/// `interactive` and batch through `ensureMaudeAndGetVersion`
-/// (Interactive.hs:103, Batch.hs:97/102/115), and `--version`
-/// (Console.hs:336).
+/// and `interactive`/batch through `ensureMaudeAndGetVersion`
+/// (Interactive.hs:103, Batch.hs:97/102/115).
 ///
 /// Two [`test_process`] calls with `maudeTest = True`: `maude --version` must
 /// report a supported version, and `maude` fed `quit\n` must run the

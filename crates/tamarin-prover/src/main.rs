@@ -21,16 +21,15 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use std::io::Write;
 use std::process::ExitCode;
 
-use tamarin_prover::cli::{CliError, Subcommand};
-
 /// Does this panic payload come from a `print!`/`println!` whose write to a
 /// closed stdout failed?
 ///
 /// `std::io::stdio` panics with exactly this message rather than returning the
-/// error, so a reader that leaves early (`tamarin-prover --help | head -0`)
-/// would turn a normal run into a Rust panic report and rc 101.  GHC treats
-/// the same `EPIPE` as a non-event: `flushStdHandles` swallows it and
-/// `runMainIO` still exits 0 with an empty stderr.
+/// error, so a reader that leaves early (`tamarin-prover --parse-only x.spthy
+/// | head -0`) would turn a normal run into a Rust panic report and rc 101.
+/// GHC treats the same `EPIPE` as a non-event: `flushStdHandles` swallows it
+/// and `runMainIO` still exits 0 with an empty stderr.  (`--help`/`--version`
+/// never reach this: clap prints them itself and swallows write errors.)
 fn is_stdout_broken_pipe(payload: &(dyn std::any::Any + Send)) -> bool {
     let msg = payload
         .downcast_ref::<String>()
@@ -77,27 +76,16 @@ fn install_hs_error_panic_hook() {
 fn main() -> ExitCode {
     install_hs_error_panic_hook();
     let raw: Vec<String> = std::env::args().skip(1).collect();
-    let args = match tamarin_prover::parse_args(&raw) {
-        Ok(a) => a,
-        Err(CliError::CmdArgsReject(m)) => {
-            // cmdargs rejects the command line before `defaultMain` dispatches
-            // (Console.hs:362-372): the bare message goes to stderr, nothing to
-            // stdout, no help block, rc 1.
-            eprintln!("{m}");
-            return ExitCode::from(1);
-        }
-        Err(e) => {
-            // HS-faithful: rc=1 for usage errors (CmdArgs's default).
-            eprintln!("error: {}\n", e);
-            eprintln!("{}", tamarin_prover::cli::help_text(Subcommand::Batch));
-            return ExitCode::from(1);
-        }
-    };
+    // clap renders its own usage errors (stderr, exit 2) and handles
+    // `--help`/`--version` (stdout, exit 0) inside `exit()`.
+    let args = tamarin_prover::parse_args(&raw).unwrap_or_else(|e| e.exit());
     match tamarin_prover::run(&args) {
         Ok(0) => ExitCode::SUCCESS,
         Ok(n) => ExitCode::from(n.try_into().unwrap_or(1)),
         Err(e) => {
-            // HS-faithful: rc=1 for runtime errors.
+            // rc=1 for runtime errors (matching the oracle, whose run
+            // failures also exit 1 — this is output the run-parity
+            // differentials do compare).
             eprintln!("error: {}", e);
             ExitCode::from(1)
         }

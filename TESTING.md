@@ -176,8 +176,13 @@ that compared nothing prints, and the verdict is what separates the two.
 
 ```
 wf_gate: MATCH=432 DIFF=0 SKIP=0 of 432  ->  .../scripts/results/wf_gate_results.tsv
-wf_gate: verdict=OK
+wf_gate: verdict=OK files=432
 ```
+
+The trailing `files=<n>` on every comparing gate's verdict line is the number
+of files that run *actually compared* (skipped/uncompared rows excluded);
+`rs_ref_check.sh generate` reads it to refuse a scoped log as evidence for a
+wider re-baseline.
 
 What each verdict folds in differs, so do not generalise:
 
@@ -201,9 +206,10 @@ zero entries. `corpus_file_diff.sh` additionally prints `RC_UNKNOWN=n` — cache
 entries filled before the `.rc` channel existed, which is *not* a failure;
 they backfill on the next fill.
 
-The three flag sweeps carry one non-fatal field beside the verdict:
-`== DONE <sweep> <ts> verdict=OK UNCOMPARED=25 ==`. See "Flag-parity sweeps"
-below for what those rows are.
+The three flag sweeps carry two non-fatal fields beside the verdict:
+`== DONE <sweep> <ts> verdict=OK UNCOMPARED=<n> files=<n> ==`. See
+"Flag-parity sweeps" below for what UNCOMPARED rows are; `files=` is the
+compared-file count described above.
 
 ## Rust test suite
 
@@ -320,9 +326,9 @@ cargo build --release
 RESULTS_TSV=/tmp/gate.tsv scripts/corpus_file_diff.sh    # ALLOWLIST defaults to the 432-file corpus
 ```
 
-Ends in `DONE_CORPUS_FILE_DIFF verdict=OK` and exits 0, or names what is
-wrong (`DIFF=n`, `RC_DIFF=n`, `SKIPPED=n`, `ROW-COUNT=n/432`) and exits
-nonzero. There is nothing to tally by hand: the script prints its own
+Ends in `DONE_CORPUS_FILE_DIFF verdict=OK files=<n>` and exits 0, or names
+what is wrong (`DIFF=n`, `RC_DIFF=n`, `SKIPPED=n`, `ROW-COUNT=n/432`) and
+exits nonzero. There is nothing to tally by hand: the script prints its own
 `=== SUMMARY ===` histogram, and the verdict additionally covers the failure
 modes a histogram cannot show you — files whose bytes were never compared,
 files that produced no row at all, and files whose bytes matched under a
@@ -358,8 +364,10 @@ raising it.
 
 **Cache keys carry the oracle.** `.hs_file_cache/` and `.hs_pretty_cache/`
 entries are named
-`<sha256(theory)>[__f<12 hex sha256(flags)>]__b<12 hex sha256(HS_FP)>.<suffix>`,
-where `HS_FP` is `stat -c '%s.%Y'` of the oracle binary — `gate_common.sh`'s
+`<sha256(theory)>[__i<12 hex sha256(include shas)>][__f<12 hex sha256(flags)>]__b<12 hex sha256(HS_FP)>.<suffix>`
+— the `__i` component (present only on `#include`-carrying theories) digests
+every included file, transitively — where `HS_FP` is `stat -c '%s.%Y'` of the
+oracle binary — `gate_common.sh`'s
 `hs_fingerprint`, the one definition every cached gate sources. A rebuilt
 oracle, whether a bump or a
 `patches/tamarin-prover-fixes.patch` edit re-applied by `./setup.sh testing`,
@@ -382,9 +390,12 @@ idempotent. Every tool that touches `.hs_file_cache/` computes the same
 fingerprinted key, `triage_diff_vs_hs.sh` included, so nothing writes entries
 the migration would have to chase.
 
-One gap remains: every cache but `.hs_sweep_cache/` keys an `#include`ing
-theory on the includer alone, so an edit below `testParser/include/` leaves
-them serving the pre-edit oracle.
+One gap remains: `.hs_canon_cache/` and `.web_hs_cache/` still key an
+`#include`ing theory on the includer alone, so an edit below
+`testParser/include/` leaves those two serving the pre-edit oracle. The gate
+caches above, the sweeps' `.hs_sweep_cache/` and `rs_ref_check.sh`'s
+reference keys all digest the included files (`gate_common.sh`'s
+`include_shas`).
 
 ## Fast gates (run on every build)
 
@@ -471,9 +482,10 @@ or whose ledger entry names the `timeout/kill` symptom, terminates as
 `UNCOMPARED` rather than `LEDGERED`: the ledger documents *why* nothing was
 compared, it does not turn a timeout into agreement. Those rows are listed
 under their own `== n row(s) UNCOMPARED ==` block and counted on the DONE
-sentinel, `== DONE <sweep> <ts> verdict=<...> UNCOMPARED=<n> ==` — the field
-is always present, and deliberately does not fail the verdict. On today's
-ledger that is 23 rows (pe 19, json 3, module 1). Read `verdict=OK
+sentinel, `== DONE <sweep> <ts> verdict=<...> UNCOMPARED=<n> files=<n> ==` —
+both fields are always present, and neither fails the verdict (`files=` is
+the distinct compared-file count `rs_ref_check.sh generate` reads). On
+today's ledger that is 23 rows (pe 19, json 3, module 1). Read `verdict=OK
 UNCOMPARED=19` as "the rows it compared agree, and 19 were not compared".
 An *undocumented* timeout is still a plain ERROR and still fails.
 
@@ -500,18 +512,23 @@ scripts/corpus_file_diff.sh 2>&1 | tee /tmp/fullgate.log
 scripts/rs_ref_check.sh generate --certified-by /tmp/fullgate.log
 ```
 
-**`--certified-by` is required.** The named file is a saved oracle-gate log —
-`corpus_file_diff.sh`, `wf_gate.sh`, a sweep — whose last `verdict=` line reads
-exactly `verdict=OK`; its path, that verdict and `HS_PATH`'s fingerprint are
-stamped into the reference header beside `# maude:`. Without it, `generate`
-would launder whatever this binary does today into the baseline.
-`rs_ref_check.sh`'s own `DONE_RS_REF_CHECK` line carries no `verdict=` token,
-so it cannot certify itself — but the check is textual, so any log with an OK
-verdict satisfies the flag, `rs_vs_rs_diff.sh`'s included. Point it at an
-oracle gate: an RS-vs-RS log proves nothing about Haskell. `generate` also
-refuses to write a reference with fewer rows than files, rejects unknown
-arguments, and aborts on an `ALLOWLIST` resolving to zero entries (as does
-`check`).
+**`--certified-by` is required, and it must be a comparing gate's log.** The
+named file's last `verdict=` line must read exactly `verdict=OK` AND carry a
+known comparing-gate sentinel — `wf_gate:`, `pretty_gate:`,
+`DONE_CORPUS_FILE_DIFF`, or a sweep's `== DONE` line; anything else is
+refused, `rs_vs_rs_diff.sh`'s `DONE_RS_VS_RS` (proves nothing about Haskell)
+and `migrate_hs_cache_fp.sh`'s rename log (never runs the oracle) by name —
+AND carry `files=<n>` covering at least every file being baselined, so an OK
+from a `FAMILY=1`/narrowed-`ALLOWLIST` run cannot certify the unscoped
+corpus. The log's path, its verdict and `HS_PATH`'s fingerprint — revision-
+checked against the submodule pin (`gate_common.sh`'s `oracle_rev_check`,
+`ALLOW_ORACLE_REV_MISMATCH=1` to override) — are stamped into the reference
+header beside `# maude:`. Without all that, `generate` would launder whatever
+this binary does today into the baseline. `rs_ref_check.sh`'s own
+`DONE_RS_REF_CHECK` line carries no `verdict=` token, so it cannot certify
+itself. `generate` also refuses to write a reference with fewer rows than
+files, rejects unknown arguments, and aborts on an `ALLOWLIST` resolving to
+zero entries (as does `check`).
 
 ## Refactor inertness (RS-vs-RS)
 

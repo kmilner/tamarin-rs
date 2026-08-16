@@ -3,9 +3,9 @@
 #   . "$(dirname "${BASH_SOURCE[0]}")/gate_common.sh"
 # Owns the helpers the gate/sweep/triage scripts used to carry as private
 # copies (which drifted): the OOM prologue, the three environment-line
-# strip policies, flags_for, the oracle fingerprint recipe + the gate cache
-# key, the gate file list, the maude resolver, the stale-RS-binary check and
-# the oracle-rev-vs-pin preflight. Policy DIFFERENCES between the old copies
+# strip policies, flags_for, the oracle fingerprint recipe, the `#include`
+# digest + the gate cache key, the gate file list, the maude resolver, the
+# stale-RS-binary check and the oracle-rev-vs-pin preflight. Policy DIFFERENCES between the old copies
 # are deliberate and stay separate named functions here (the three strip
 # policies); only drifted duplicates were unified.
 #
@@ -74,14 +74,41 @@ hs_fingerprint() {
     HS_FP=$(stat -c '%s.%Y' "$1") || return 1
     HS_FP_SALT=$(printf '%s' "$HS_FP" | sha256sum | cut -c1-12)
 }
+# include_shas <theory> [depth]
+#   sha + name of every file the theory pulls in with `#include "..."`, depth
+#   first and transitively, resolved against the INCLUDING file's directory
+#   (the spelling upstream uses: examples/testParser/include/include1.spthy,
+#   which parity_corpus.txt carries, reaches include_2.spthy and
+#   include/include3.spthy that way). Those files are oracle inputs, so a
+#   theory sha alone cannot key its output: edit an included file and a cached
+#   entry keeps answering for the old one, and a reference row reads DIFF
+#   instead of INPUT_CHANGED. Prints NOTHING for a theory with no includes —
+#   every corpus file but three — so include-free keys (ckey below, hs_run's
+#   digest in sweep_common.sh, rs_ref_check.sh's ikey) are byte-identical to
+#   the pre-include ones and the existing entries/rows stay valid.
+include_shas() {
+    local f=$1 depth=${2:-0} dir inc
+    [ "$depth" -ge 8 ] && return 0
+    dir=$(dirname "$f")
+    while IFS= read -r inc; do
+        [ -n "$inc" ] && [ -f "$dir/$inc" ] || continue
+        printf '%s %s\n' "$(sha256sum "$dir/$inc" | cut -d' ' -f1)" "$inc"
+        include_shas "$dir/$inc" $((depth + 1))
+    done < <(grep -oE '#include[[:space:]]*"[^"]+"' "$f" 2>/dev/null \
+             | sed 's/.*"\(.*\)"/\1/')
+}
 # ckey <relpath> <abs-file> — the gate cache key. Uses $HS_FP_SALT (set by
-#   hs_fingerprint) and flags_for, so a flagged entry and an entry produced by
-#   a different oracle are both a MISS, never a stale hit. KEY FORMAT (shared
-#   by corpus_file_diff.sh, wf_gate.sh, pretty_gate.sh, triage_diff_vs_hs.sh,
+#   hs_fingerprint), include_shas and flags_for, so an entry whose included
+#   fragments changed, a flagged entry and an entry produced by a different
+#   oracle are all a MISS, never a stale hit. KEY FORMAT (shared by
+#   corpus_file_diff.sh, wf_gate.sh, pretty_gate.sh, triage_diff_vs_hs.sh,
 #   and scripts/migrate_hs_cache_fp.sh which rekeyed older entries onto it):
-#     <sha256(theory)>[__f<12 hex of sha256(flags)>]__b<12 hex of sha256(HS_FP)>
+#     <sha256(theory)>[__i<12 hex of sha256(include shas)>]
+#                     [__f<12 hex of sha256(flags)>]__b<12 hex of sha256(HS_FP)>
 ckey() {
-    local h fl; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
+    local h fl inc; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
+    inc=$(include_shas "$2")
+    if [ -n "$inc" ]; then h="${h}__i$(printf '%s' "$inc" | sha256sum | cut -c1-12)"; fi
     if [ -n "$fl" ]; then h="${h}__f$(printf '%s' "$fl" | sha256sum | cut -c1-12)"; fi
     printf '%s__b%s' "$h" "$HS_FP_SALT"
 }

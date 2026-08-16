@@ -110,7 +110,7 @@ impl Case {
 // Negative cases: the branches that return before `outputTraces`
 // ---------------------------------------------------------------------
 
-/// `null inFiles = helpAndExit …` (Batch.hs:90) fires before `processThy`.
+/// The "no input files given" error fires before any theory processing.
 #[test]
 fn no_input_files_writes_no_trace_files() {
     let c = Case::new("no_input_files");

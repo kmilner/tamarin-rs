@@ -100,7 +100,7 @@ export -f strip_env
 # the flag list before invocation; still salts the cache key.
 FLAGS_MAP="${FLAGS_MAP:-$script_dir/file_flags.tsv}"
 export FLAGS_MAP
-export -f flags_for ckey
+export -f flags_for include_shas ckey
 
 # --- file list (allowlist) ---
 # gate_common's filelist: explicit ALLOWLIST env > committed canonical corpus
@@ -143,6 +143,17 @@ hs_one() {
             $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove "$farg" ) >"$tmp" 2>/dev/null
     rc=$?
     out=$(strip_env < "$tmp"); rm -f "$tmp"
+    # A signal death (the OOM killer's 137, an abort's 134) truncates stdout
+    # the same way a timeout does, but caching it — payload OR marker — would
+    # diff every later run against a truncated oracle, or skip the file
+    # forever. Cache NOTHING, so the next run retries; until then Phase 2
+    # reports SKIP_NO_HS, a failing verdict. (124, timeout(1)'s own status,
+    # keeps its sticky .timeout marker below — same guard wf_gate.sh and
+    # pretty_gate.sh apply to their load fills.)
+    if [ "$rc" -ge 128 ]; then
+        echo "  HS KILLED   $rel (rc=$rc, cap ${FILE_TIMEOUT}s) — nothing cached" >&2
+        return 0
+    fi
     # Record the oracle's exit status beside the entry, BEFORE the payload, so
     # `.full.gz exists` implies `.rc exists` for everything this run fills.
     # Phase 2 compares RS's status against it (RC_DIFF).
@@ -236,5 +247,9 @@ bad=''
 [ "$rcdiffs" = 0 ] || bad="${bad:+$bad }RC_DIFF=$rcdiffs"
 [ "$skips" = 0 ] || bad="${bad:+$bad }SKIPPED=$skips"
 [ "$rows" = "$N" ] || bad="${bad:+$bad }ROW-COUNT=$rows/$N"
-echo "DONE_CORPUS_FILE_DIFF verdict=${bad:-OK}"
+# files= is the count whose bytes were actually COMPARED (MATCH/DIFF/RC_DIFF;
+# SKIP_* rows compared nothing). rs_ref_check.sh generate reads it to refuse a
+# scoped (ALLOWLIST) log as evidence for a wider re-baseline. Trailing and
+# additive, so `grep verdict=` consumers are unchanged.
+echo "DONE_CORPUS_FILE_DIFF verdict=${bad:-OK} files=$((rows - skips))"
 [ -z "$bad" ]

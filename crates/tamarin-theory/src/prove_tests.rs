@@ -669,7 +669,7 @@ fn presaturate_disabled_is_noop() {
 fn config_block_matches_cmdargs_semantics() {
     use crate::constraint::solver::context::CutStrategy;
 
-    // Prefix matching resolves like the CLI's: `--stop`, even `--s`.
+    // Prefix matching resolves like HS cmdargs': `--stop`, even `--s`.
     for cfg in ["--stop-on-trace=bfs", "--stop=bfs", "--s=bfs"] {
         let b = parse_config_block(cfg);
         assert_eq!(b.flag_error, None, "{cfg}");
@@ -729,4 +729,48 @@ fn config_block_matches_cmdargs_semantics() {
         config_block_options("--stop-on-trace=seqdfs --auto-sources"),
         Ok((Some(CutStrategy::SeqDfs), true))
     );
+}
+
+/// `validate_cli_heuristic` — the ACCEPTANCE SET is what matches HS
+/// (`filterHeuristic`: identifier chars + declared `{tactic}` groups,
+/// names verbatim); the rejection wording is the port's own.
+#[test]
+fn validate_cli_heuristic_accepts_and_rejects_like_filter_heuristic() {
+    let cli = |raw: &str| CliHeuristic {
+        raw: Some(raw.to_string()),
+        ..CliHeuristic::default()
+    };
+    let t = |name: &str| crate::tactic::Tactic::parse(name, "");
+    // Every identifier char, compact runs included; a declared tactic.
+    assert_eq!(validate_cli_heuristic(&cli("sSoOpPcCiI"), &[]), Ok(()));
+    assert_eq!(
+        validate_cli_heuristic(&cli("s{mytac}i"), &[t("mytac")]),
+        Ok(())
+    );
+    // No raw string = nothing to validate.
+    assert_eq!(
+        validate_cli_heuristic(&CliHeuristic::default(), &[]),
+        Ok(())
+    );
+    // HS rejects whitespace, digits and quotes as unknown rankings —
+    // matching the acceptance set is what keeps a typo from silently
+    // proving under the smart fallback.
+    for bad in ["s x", "s1Ss", "o \"p\""] {
+        let e = validate_cli_heuristic(&cli(bad), &[]).unwrap_err();
+        assert!(e.contains("unknown goal ranking"), "{bad}: {e}");
+    }
+    // Tactic names resolve VERBATIM (no trim): `{ mytac }` is undeclared,
+    // as in HS `chosenTactic`.
+    let e = validate_cli_heuristic(&cli("{ mytac }"), &[t("mytac")]).unwrap_err();
+    assert!(e.contains("\" mytac \""), "{e}");
+    let e = validate_cli_heuristic(&cli("{zz}"), &[t("t1"), t("t2")]).unwrap_err();
+    assert!(e.contains("not declared in the theory"), "{e}");
+    assert!(e.contains("t1, t2"), "{e}");
+    // `{.}` on the CLI is a tactic named "." — NOT the in-file parser's
+    // defaultTactic shortcut — so it errors unless a tactic "." exists
+    // (HS refuses it too).
+    assert!(validate_cli_heuristic(&cli("{.}"), &[]).is_err());
+    // Unterminated brace.
+    let e = validate_cli_heuristic(&cli("{oops"), &[]).unwrap_err();
+    assert!(e.contains("unterminated '{'"), "{e}");
 }

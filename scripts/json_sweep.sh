@@ -61,14 +61,4 @@ one() {
   rm -rf "$d"
 }
 sweep_export
-
-rs_stale_check
-LIST=$(list_files) || exit 2
-LIST=$(sort -u <<< "$LIST")
-: > "$OUT"
-sweep_banner json_sweep "$(grep -c . <<< "$LIST")"
-# -d '\n': one path per argument, with xargs' quote and backslash processing
-# off, so nothing about a path's spelling can split or reshape it.
-xargs -r -d '\n' -P "$JOBS" -n 1 bash -uc 'one "$0"' <<< "$LIST"
-sweep_retry "$OUT" 2
-sweep_finish "$OUT" json 2
+sweep_drive json 2

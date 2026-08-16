@@ -88,7 +88,7 @@ summary of summaries:
 
 analyzed: /home/kamilner/tamarin-rs-2/crates/tamarin-prover/tests/fixtures/cli_flags_chan.spthy
 
-  processing time: 0.15s
+  processing time: 0.14s
   
   secrecy (all-traces): verified (5 steps)
   exec (exists-trace): verified (5 steps)

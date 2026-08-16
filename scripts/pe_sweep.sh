@@ -17,7 +17,7 @@ set -u
 . "$(dirname "$0")/sweep_common.sh"
 sweep_out "$REPO/scripts/results/pe_sweep.tsv"
 
-eligible() {
+list_files() {
   if [ "${FAMILY:-0}" = 1 ]; then
     resolve_list "$REPO/scripts/pe_family.txt" "$EXAMPLES"
     return
@@ -51,37 +51,11 @@ eligible() {
   echo "== pe_sweep eligibility: kept $kept, excluded $dropped ==" >&2
 }
 
-# one <file> [detail-tag] — appends one TSV row for the file at current TIMEOUT.
+# one <file> [detail-tag] — appends one TSV row for the file at current TIMEOUT
+# (sweep_common's sweep_one: no unit column, the tag defaulting to '-').
 one() {
-  local f=$1 tag=${2:--} d hrc rrc nc io
-  # No tmpdir means every redirection below would target /, so bail and let
-  # sweep_finish's row-count check report the row that never landed.
-  d=$(mktemp -d) || return
-  hs_run "$d" "$f" "pe-summary-dct30" --derivcheck-timeout=30 --partial-evaluation=summary; hrc=$?
-  # A broken environment is diagnosed before the cap is blamed for it: an
-  # unusable maude both aborts and hangs, and "timeout" would be the wrong
-  # story (and a ledgerable one).
-  if infra_abort "$d/hs.err"; then row "$f" NO-COMPARE "infra-abort hs (rs not run) hs=$hrc $tag"; rm -rf "$d"; return; fi
-  # An oracle timeout is cached at this cap, so it comes back instantly while
-  # the RS side would burn the full cap producing nothing to compare against.
-  if [ "$hrc" -ge 124 ]; then row "$f" ERROR "timeout/kill hs=$hrc rs=skipped $tag"; rm -rf "$d"; return; fi
-  grun "$RS_BIN" --with-maude="$MAUDE" --derivcheck-timeout=30 --partial-evaluation=summary "$f" > "$d/rs.out" 2> "$d/rs.err"; rrc=$?
-  if [ "$rrc" -ge 124 ]; then row "$f" ERROR "timeout/kill hs=$hrc rs=$rrc $tag"
-  elif nc=$(nocompare_check "$hrc" "$rrc" "$d" "$d/hs.out" "$d/rs.out"); then row "$f" NO-COMPARE "$nc $tag"
-  elif [ "$hrc" -ne "$rrc" ]; then row "$f" DIFF "rc hs=$hrc rs=$rrc $tag"
-  elif ! io=$(io_diff "$d"); then row "$f" DIFF "$io $tag"
-  else row "$f" OK "$tag"; fi
-  rm -rf "$d"
+  sweep_one "$1" '' "${2:--}" pe-summary-dct30 \
+    --derivcheck-timeout=30 --partial-evaluation=summary
 }
 sweep_export
-
-rs_stale_check
-LIST=$(eligible) || exit 2
-LIST=$(sort -u <<< "$LIST")
-: > "$OUT"
-sweep_banner pe_sweep "$(grep -c . <<< "$LIST")"
-# -d '\n': one path per argument, with xargs' quote and backslash processing
-# off, so nothing about a path's spelling can split or reshape it.
-xargs -r -d '\n' -P "$JOBS" -n 1 bash -uc 'one "$0"' <<< "$LIST"
-sweep_retry "$OUT" 2
-sweep_finish "$OUT" pe 2
+sweep_drive pe 2

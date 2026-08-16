@@ -87,12 +87,10 @@ pub fn maude_path() -> Option<String> {
 /// True when a maude binary was resolved.  Every maude-backed pin uses this as
 /// its guard.
 ///
-/// A machine where NOTHING resolves fails here rather than skipping: the old
-/// probe walked only `/usr/local/bin` and `/usr/bin`, so on this workspace's
-/// own box (maude in linuxbrew) a bare `cargo test` skipped every
-/// maude-backed pin in every suite and still reported green — the runs with
-/// and without maude were indistinguishable.  Set `TAM_ALLOW_NO_MAUDE=1` to
-/// opt back into the skip.
+/// A machine where NOTHING resolves fails here rather than skipping: a
+/// silent skip makes `cargo test` green identically with and without
+/// maude, so every maude-backed pin certifies nothing.  Set
+/// `TAM_ALLOW_NO_MAUDE=1` to skip them deliberately.
 pub fn maude_available() -> bool {
     if maude_path().is_some() {
         return true;

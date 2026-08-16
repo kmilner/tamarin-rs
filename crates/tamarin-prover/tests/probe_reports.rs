@@ -214,33 +214,36 @@ fn missing_maude_aborts_a_batch_run() {
     );
 }
 
-/// Oracle (`--version --with-maude=/nonexistent/maude`): `putStrLn versionStr`
-/// has already run, so the banner stands on stdout — but the abort happens
-/// inside `ensureMaudeAndGetVersion`, so the `Generated from:` block that
-/// would follow it never appears.
+/// `variants` runs the same probe (Intruder.hs:45) and dies the same way,
+/// before any variant computation output.
 #[test]
-fn missing_maude_aborts_version_before_the_generated_from_block() {
+fn missing_maude_aborts_the_variants_command() {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
     let out = cmd
-        .args(["--version", "--with-maude=/nonexistent/maude"])
+        .args(["variants", "--with-maude=/nonexistent/maude"])
         .output()
         .expect("spawn tamarin-rs");
     assert_eq!(out.status.code(), Some(1));
-    let stdout = String::from_utf8(out.stdout).expect("utf-8 stdout");
-    assert!(
-        stdout.starts_with("tamarin-prover "),
-        "expected the version banner, got:\n{stdout}"
+    assert_eq!(
+        String::from_utf8(out.stderr).expect("utf-8 stderr"),
+        MISSING_MAUDE_STDERR
     );
-    assert!(
-        stdout.ends_with(
-            "'https://github.com/tamarin-prover/tamarin-prover/blob/master/LICENSE'.\n\n"
-        ),
-        "stdout must stop after the license paragraph, got:\n{stdout}"
-    );
-    assert!(
-        !stdout.contains("Generated from:"),
-        "the aborted run must not print the version block, got:\n{stdout}"
-    );
+}
+
+/// `interactive` probes through `ensureMaudeAndGetVersion`
+/// (Interactive.hs:103) and dies before binding any socket — no port
+/// juggling needed to test it.
+#[test]
+fn missing_maude_aborts_interactive_before_binding() {
+    let dir = std::env::temp_dir().join("tamarin_rs_probe_reports_nomaude_wd");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
+    let out = cmd
+        .args(["interactive", "--with-maude=/nonexistent/maude"])
+        .arg(&dir)
+        .output()
+        .expect("spawn tamarin-rs");
+    assert_eq!(out.status.code(), Some(1));
     assert_eq!(
         String::from_utf8(out.stderr).expect("utf-8 stderr"),
         MISSING_MAUDE_STDERR

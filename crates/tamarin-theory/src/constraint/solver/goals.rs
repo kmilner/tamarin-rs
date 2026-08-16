@@ -91,7 +91,9 @@ impl GoalRanking {
     /// Parse a single heuristic character into a `GoalRanking`,
     /// mirroring HS's `goalRankingIdentifiers` (System.hs:584-597).
     /// Oracle variants use `oracle_path` for the resolved path.
-    /// Unhandled identifiers fall back to the default `Smart(false)`.
+    /// Unhandled identifiers fall back to the default `Smart(false)`
+    /// (lenient for in-file/web callers; the batch CLI path rejects
+    /// them first — see `prove::validate_cli_heuristic`).
     pub fn from_char_with_oracle(c: char, oracle_path: &str) -> GoalRanking {
         match c {
             's' => GoalRanking::Smart(false),
@@ -198,8 +200,10 @@ pub fn parse_heuristic_str(s: &str, theory_file: &str) -> Vec<GoalRanking> {
 /// against the theory's tactic list (HS `chosenTactic`,
 /// ProofMethod.hs:493-495).  A `{.}` (no name) resolves to HS `defaultTactic`
 /// (`Tactic "default" (SmartRanking False) [] []`, System.hs:533-534).  An
-/// unknown `{name}` falls back to `Smart(false)` (HS would `error`; we
-/// stay robust so non-tactic output is unaffected).
+/// unknown `{name}` falls back to `Smart(false)` — lenient on purpose for
+/// the in-file `heuristic:` header and the web routes; the batch CLI path
+/// rejects invalid strings first (`prove::validate_cli_heuristic`), so this
+/// fallback is unreachable there.
 pub fn parse_heuristic_str_with_tactics(
     s: &str,
     theory_file: &str,

@@ -31,39 +31,11 @@ list_files() {
   resolve_list "$REPO/scripts/parity_corpus.txt" "$EXAMPLES"
 }
 
+# one <file> <module> — appends one TSV row (sweep_common's sweep_one: the
+# module is the unit column, no detail tag; sweep_retry's extra 'retry'
+# argument is deliberately ignored, as before).
 one() {
-  local f=$1 m=$2 d hrc rrc nc io
-  # No tmpdir means every redirection below would target /, so bail and let
-  # sweep_finish's row-count check report the row that never landed.
-  d=$(mktemp -d) || return
-  hs_run "$d" "$f" "module-$m-dct30" --derivcheck-timeout=30 -m="$m"; hrc=$?
-  # A broken environment is diagnosed before the cap is blamed for it: an
-  # unusable maude both aborts and hangs, and "timeout" would be the wrong
-  # story (and a ledgerable one).
-  if infra_abort "$d/hs.err"; then row "$f" "$m" NO-COMPARE "infra-abort hs (rs not run) hs=$hrc"; rm -rf "$d"; return; fi
-  # An oracle timeout is cached at this cap, so it comes back instantly while
-  # the RS side would burn the full cap producing nothing to compare against.
-  if [ "$hrc" -ge 124 ]; then row "$f" "$m" ERROR "timeout/kill hs=$hrc rs=skipped"; rm -rf "$d"; return; fi
-  grun "$RS_BIN" --with-maude="$MAUDE" --derivcheck-timeout=30 -m="$m" "$f" > "$d/rs.out" 2> "$d/rs.err"; rrc=$?
-  if [ "$rrc" -ge 124 ]; then row "$f" "$m" ERROR "timeout/kill hs=$hrc rs=$rrc"
-  elif nc=$(nocompare_check "$hrc" "$rrc" "$d" "$d/hs.out" "$d/rs.out"); then row "$f" "$m" NO-COMPARE "$nc"
-  elif [ "$hrc" -ne "$rrc" ]; then row "$f" "$m" DIFF "rc hs=$hrc rs=$rrc"
-  elif ! io=$(io_diff "$d"); then row "$f" "$m" DIFF "$io"
-  else row "$f" "$m" OK -; fi
-  rm -rf "$d"
+  sweep_one "$1" "$2" '' "module-$2-dct30" --derivcheck-timeout=30 -m="$2"
 }
 sweep_export
-
-rs_stale_check
-LIST=$(list_files) || exit 2
-LIST=$(sort -u <<< "$LIST")
-: > "$OUT"
-sweep_banner module_sweep "$(( $(grep -c . <<< "$LIST") * ${#MODULES[@]} ))"
-# -d '\n': one field per argument, with xargs' quote and backslash processing
-# off, so nothing about a path's spelling can split or reshape it. Each job
-# takes a (file, module) pair, hence two lines in and -n 2.
-while IFS= read -r f; do
-  for m in "${MODULES[@]}"; do printf '%s\n%s\n' "$f" "$m"; done
-done <<< "$LIST" | xargs -r -d '\n' -P "$JOBS" -n 2 bash -uc 'one "$0" "$1"'
-sweep_retry "$OUT" 3
-sweep_finish "$OUT" module 3 2
+sweep_drive module 3 2 "${MODULES[@]}"

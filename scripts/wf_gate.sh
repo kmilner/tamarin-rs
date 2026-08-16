@@ -85,7 +85,7 @@ wf_block() {
 }
 # flags_for / ckey come from gate_common.sh — one key format for this gate,
 # pretty_gate.sh (whose cache this gate READS) and corpus_file_diff.sh.
-export -f strip_env wf_block flags_for ckey
+export -f strip_env wf_block flags_for include_shas ckey
 
 # --- PHASE 0: fill any MISSING <key>.load.gz with one oracle LOAD.
 # Same artifact and same key pretty_gate.sh PHASE 0 writes, so whichever gate
@@ -178,5 +178,9 @@ bad=''
 [ "$diff" = 0 ] || bad="DIFF=$diff"
 [ "$skip" = 0 ] || bad="${bad:+$bad }SKIPPED=$skip (never compared; PHASE 0 left $HS_CACHE unfilled — check for .nohs markers)"
 [ "$total" = "$N" ] || bad="${bad:+$bad }ROW-COUNT=$total/$N"
-echo "wf_gate: verdict=${bad:-OK}"
+# files= is the count actually COMPARED (MATCH+DIFF; SKIPs compared nothing).
+# rs_ref_check.sh generate reads it to refuse a scoped (ALLOWLIST) log as
+# evidence for a wider re-baseline. Trailing and additive, so `grep verdict=`
+# consumers are unchanged.
+echo "wf_gate: verdict=${bad:-OK} files=$((m + diff))"
 [ -z "$bad" ]

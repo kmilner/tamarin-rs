@@ -144,8 +144,10 @@ else
     # shellcheck disable=SC2086  # $EXTRA_FLAGS must word-split into flags
     timeout "$TIMEOUT" "$hs_path" +RTS $HS_RTS -RTS $EXTRA_FLAGS --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove="$lemma" "$file" 2>/dev/null > "$tmp/hs.out"
     hs_rc=$?
-    if [ "$hs_rc" -eq 124 ]; then
-        echo "$lemma: HS TIMEOUT (${TIMEOUT}s)"
+    # >=128 is a signal death (OOM's 137), which truncates stdout the same way
+    # the timeout does — bail before the cache write below can keep it.
+    if [ "$hs_rc" -eq 124 ] || [ "$hs_rc" -ge 128 ]; then
+        echo "$lemma: HS TIMEOUT/KILLED (rc=$hs_rc, cap ${TIMEOUT}s)"
         exit 1
     fi
     # Never cache empty HS output (startup failures poison the cache).
