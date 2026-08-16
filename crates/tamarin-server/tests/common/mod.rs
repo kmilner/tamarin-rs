@@ -385,6 +385,14 @@ pub fn assert_page_matches_capture(body: &str, capture: &str, fixture: &str) {
 /// The `Generated from:` block's build-specific lines: the oracle's values are
 /// its own Maude, git revision and build timestamp, which no test run can
 /// reproduce.  The prefixes themselves are still compared.
+///
+/// The port emits these three values EMPTY on the live routes
+/// (`handlers::theory::render_theory_source` builds a `BuildInfo` with empty
+/// `maude_version` / `git_revision` / `git_branch` / `compiled_at`) — a
+/// recorded divergence awaiting a production fix, which this blanking masks,
+/// so a green pin here is not parity on these lines.  When the fix lands,
+/// tighten these prefixes to compare the values the batch binary already
+/// fills in.
 const VERSION_BANNER_PREFIXES: [&str; 3] = ["Maude version", "Git revision:", "Compiled at:"];
 
 fn blank_version_banner(s: &str) -> String {

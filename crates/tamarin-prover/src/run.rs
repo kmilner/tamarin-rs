@@ -3309,5 +3309,6 @@ mod tests {
         let json_body = fs::read_to_string(&json).expect("json file");
         assert!(json_body.contains("\"jgLabel\": \"a\","), "{json_body}");
         assert!(json_body.contains("\"jgLabel\": \"b\","), "{json_body}");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -35,27 +35,8 @@ stamped="$(cat "$expected/oracle_rev")"
 fail=0
 report() { printf '  %-24s %-6s %-8s %s\n' "$1" "$2" "$3" "$4"; }
 
-# Only what the manifest names is ever loaded or compared, so a `.spthy` no row
-# mentions and a capture left behind by a retired row would both sit here green
-# forever.  Census the directory against the manifest in both directions first.
-declare -A claimed=([oracle_rev]=1)
-claim_one() {
-    local name="$1" slices="$2" mode="$3" sl
-    case "$mode" in
-        match|diverge) ;;
-        *) die "$manifest gives $name the unknown mode '$mode'" ;;
-    esac
-    claimed["$name.spthy"]=1
-    for sl in $(slices_of "$slices"); do
-        claimed["$name.$sl.hs.txt"]=1
-        if [ "$mode" = diverge ]; then claimed["$name.$sl.rs.txt"]=1; fi
-    done
-}
-for_each_fixture claim_one
-for f in "$fixdir"/*.spthy "$expected"/*; do
-    [ -n "${claimed[$(basename "$f")]:-}" ] \
-        || die "$(basename "$f") is claimed by no row of $manifest — add a row or delete the file"
-done
+# The directory and the manifest must agree before anything is loaded.
+census_fixture_dir
 
 # Extra assertions for a `diverge` fixture: the SHAPE of the divergence, not
 # just its existence, so an unrelated change to either side cannot leave the
@@ -81,7 +62,9 @@ divergence_shape() {
 # `check_slice <name> <slice> <mode> < raw` — compare one block of one load.
 # A reference is required to be NON-EMPTY (`-s`, not `-f`): an empty one matches
 # an engine that printed nothing at all, which is the one way this comparison
-# can pass while asserting nothing.  capture.sh refuses to write one.
+# can pass while asserting nothing.  capture.sh writes each reference by
+# redirection and unlinks it again when the slice comes out empty, so a 0-byte
+# file here is a capture that was killed in between.
 check_slice() {
     local name="$1" sl="$2" mode="$3" hs="$expected/$1.$2.hs.txt" ref got
     if [ ! -s "$hs" ]; then

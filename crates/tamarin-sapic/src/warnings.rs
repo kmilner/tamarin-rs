@@ -74,7 +74,7 @@ pub fn check_wellformedness<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec
 
 /// `show (SapicLVar v stype)` (Theory/Sapic/Term.hs:108-110):
 /// `show v ++ maybe "" (":" ++)` — the HS-faithful `Show LVar`
-/// (LTerm.hs:526-533) with the optional `:type` suffix.
+/// (Term/LTerm.hs:550-557#show) with the optional `:type` suffix.
 fn show_sapic_lvar(v: &SapicLVar) -> String {
     let base = show_lvar(&v.var);
     match &v.stype {
@@ -83,7 +83,8 @@ fn show_sapic_lvar(v: &SapicLVar) -> String {
     }
 }
 
-/// `show (LVar v s i)` (Term/LTerm.hs:526-533):
+/// `show (LVar v s i)` (Term/LTerm.hs:550-557#show, prefix table
+/// Term/LTerm.hs:193-199#sortPrefix):
 /// `sortPrefix s ++ body`, where `body = show i` if the name is empty,
 /// `v` if `i == 0`, else `v ++ "." ++ show i`.
 fn show_lvar(v: &tamarin_term::lterm::LVar) -> String {
@@ -144,8 +145,9 @@ mod tests {
     }
 
     /// Every branch of HS `Show (SapicLVar)` / `Show LVar`
-    /// (Theory/Sapic/Term.hs:108-110, Term/LTerm.hs:526-533), since the result
-    /// is spliced verbatim into the `Variable bound twice: …` report body.
+    /// (Theory/Sapic/Term.hs:108-110, Term/LTerm.hs:550-557#show, prefix table
+    /// Term/LTerm.hs:193-199#sortPrefix), since the result is spliced verbatim
+    /// into the `Variable bound twice: …` report body.
     #[test]
     fn show_sapic_lvar_matches_hs_show() {
         let show = |name: &str, sort, idx, ty: Option<&str>| {

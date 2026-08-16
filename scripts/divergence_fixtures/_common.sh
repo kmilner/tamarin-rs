@@ -89,6 +89,34 @@ for_each_fixture() {
     done < "$manifest"
 }
 
+# `census_fixture_dir` — cross-check the fixture directory against the manifest
+# in both directions.  Only what the manifest names is ever loaded, captured or
+# compared, so a `.spthy` no row mentions and a capture left behind by a retired
+# row would both sit here green forever.
+census_fixture_dir() {
+    local f
+    declare -A claimed=([oracle_rev]=1)
+    claim_one() {
+        local name="$1" slices="$2" mode="$3" sl
+        case "$mode" in
+            match|diverge) ;;
+            *) die "$manifest gives $name the unknown mode '$mode'" ;;
+        esac
+        claimed["$name.spthy"]=1
+        for sl in $(slices_of "$slices"); do
+            claimed["$name.$sl.hs.txt"]=1
+            if [ "$mode" = diverge ]; then claimed["$name.$sl.rs.txt"]=1; fi
+        done
+    }
+    for_each_fixture claim_one
+    for f in "$fixdir"/*.spthy "$expected"/*; do
+        # A first-ever capture finds expected/ empty, leaving that glob unexpanded.
+        [ -e "$f" ] || continue
+        [ -n "${claimed[$(basename "$f")]:-}" ] \
+            || die "$(basename "$f") is claimed by no row of $manifest — add a row or delete the file"
+    done
+}
+
 # `load <binary> <name> <flags> [rts…]` — load a fixture and print the stdout
 # the slices are cut from.  Returns the engine's exit status.
 load() {

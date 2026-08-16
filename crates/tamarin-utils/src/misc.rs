@@ -510,6 +510,15 @@ mod tests {
         }
 
         #[test]
+        fn prop_edit_distance_triangle(
+            s in "[a-z]{0,6}",
+            t in "[a-z]{0,6}",
+            u in "[a-z]{0,6}"
+        ) {
+            prop_assert!(edit_distance(&s, &u) <= edit_distance(&s, &t) + edit_distance(&t, &u));
+        }
+
+        #[test]
         fn prop_edit_distance_bounded_by_length(
             s in "[a-z]{0,10}",
             t in "[a-z]{0,10}"

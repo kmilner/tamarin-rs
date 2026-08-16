@@ -207,7 +207,7 @@ fn duplicate_across_include_is_rejected() {
                #include \"frag.spthy\"\n\n\
                rule R1[color=00ff00]: [ ] --> [ ]\n\n\
                end\n";
-    let e = tamarin_parser::parse_theory_with_base(src, &[], Some(dir))
+    let e = tamarin_parser::parse_theory_with_base(src, &[], Some(dir.clone()))
         .unwrap_err()
         .with_source("dup.spthy")
         .to_string();
@@ -218,4 +218,5 @@ fn duplicate_across_include_is_rejected() {
          expecting \"variants\"\n\
          duplicate rule: R1"
     );
+    let _ = std::fs::remove_dir_all(&dir);
 }

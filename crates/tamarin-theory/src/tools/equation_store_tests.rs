@@ -401,6 +401,11 @@ fn add_eqs_ac_free_var_var_does_not_introduce_witness() {
     let _ = store
         .add_eqs(&h, &[tamarin_term::rewriting::Equal { lhs: tx, rhs: ty }])
         .expect("add_eqs");
+    assert!(
+        !store.subst.is_empty(),
+        "same-sort var-var unification must bind one of the two vars — \
+         an empty subst makes the witness scan below vacuous"
+    );
 
     // Unifying two free Msg vars must yield a simple orientation
     // between x and y (HS-faithful var-var orient gives `{y → x}`),

@@ -318,7 +318,11 @@ mod tests {
         );
         assert_eq!(at_pos(&t, &[1, 0]), Some(b.clone()));
         assert_eq!(at_pos(&t, &[1, 1]), Some(c));
-        // Argument-index addressing is invalid on an AC node.
+        // DIVERGENCE (port-captured, not oracle-derived): RS's AC arm ends in a
+        // catch-all `_ => None`; HS `atPosMay` has no such arm and falls through
+        // to the generic `FApp _ as (i:ps)` equation (Positions.hs:55-58), so the
+        // oracle answers `Just c` here. Unreachable in practice: `positions` never
+        // emits a bare index >= 2 for an AC node.
         assert_eq!(at_pos(&t, &[2]), None);
         // Replacement descends the same encoding, and the rebuilt tail
         // re-flattens into its parent through the AC smart constructor.

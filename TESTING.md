@@ -218,7 +218,7 @@ MAUDE_PATH="$(command -v maude)" cargo test --profile ci --workspace
 MAUDE_PATH="$(command -v maude)" cargo test -p tamarin-theory --test oracle_solver
 ```
 
-~1580 tests, 10 `#[ignore]`d. `--profile ci` is what CI uses and what to
+~1550 tests, 1 `#[ignore]`d. `--profile ci` is what CI uses and what to
 prefer locally: it is release optimisation without fat LTO, which the release
 profile would re-run at every one of the ~44 test-binary links. Each profile
 also gets its own target tree, so alternating between plain `cargo test`
@@ -227,7 +227,7 @@ also gets its own target tree, so alternating between plain `cargo test`
 
 `MAUDE_PATH` is not optional at the 15 sites that still probe only two `/usr`
 paths; see Prerequisites. Without it, `cargo test -p tamarin-prover --test
-output_module` reports the same `15 passed` in 0.02 s that a real run takes
+output_module` reports the same `14 passed` in 0.02 s that a real run takes
 0.43 s to produce. At the 13 widened sites an unresolvable maude is now a
 panic naming `TAM_ALLOW_NO_MAUDE=1`, so those cannot report a vacuous green.
 
@@ -259,24 +259,30 @@ verdict=<...> captured=N/M`. Env: `HS_PATH`, `MAUDE`, `FILE_TIMEOUT` (120 s),
 `ALLOW_ORACLE_REV_MISMATCH`. Those tests hard-fail rather than skip while the
 captures are missing.
 
-`oracle_solver` also carries heavyweight corpus probes behind `#[ignore]`:
+`oracle_solver` also carries one heavyweight corpus probe behind `#[ignore]`:
 
 ```bash
 cargo test --test oracle_solver corpus_proof_skeleton_match_probe --release -- --ignored --nocapture
 ```
 
-- `corpus_verdict_match_coverage_probe` — verdict agreement sweep.
-- `corpus_proof_skeleton_match_probe` — canonicalised proof-tree comparison
-  per lemma. Historically the primary metric; superseded by the byte gate
-  below, which subsumes it.
+`corpus_proof_skeleton_match_probe` compares the port's proof tree against
+the oracle's, canonicalised, per lemma over the whole `examples/` tree.
+Historically the primary metric; superseded by the byte gate below, which
+subsumes it.
 
-**Both probes assert.** Each prints its match rate and divergence list and
-then calls `enforce_probe_floor`, which fails on zero comparable lemmas and
-below a committed floor. Both floors (`VERDICT_MATCH_FLOOR`,
-`STRUCTURAL_MATCH_FLOOR`) are still `None`, so a successful run *fails* while
-printing the exact `const … = Some(N);` line to commit — measure once, paste
-the value, and the probe becomes a ratchet. `--nocapture` is part of the
-command line because that line goes to stderr.
+**It asserts.** It prints its match rate and divergence list and then calls
+`enforce_probe_ledger`, which fails four ways: coverage below
+`STRUCTURAL_MIN_COMPARED` (540 comparisons); a `STRUCTURAL_MISMATCH_LEDGER`
+still `None`, the panic printing the paste-ready `const … = Some(&[…]);` to
+commit; a mismatch the ledger does not name (a regression); or a ledgered
+identity that was compared and came out clean (a stale entry, to remove in a
+commit that explains the fix). Ledgered identities the run never compared —
+a per-file oracle timeout under load — are printed and count towards neither
+failure. The ledger holds mismatch *identities*
+(`<corpus-relative-path>::<lemma>`) rather than a count: the eligible set
+breathes with machine load, so a count ratchet flakes in both directions
+while the identities stay put. `--nocapture` is part of the command line
+because those lines go to stderr.
 
 ## Wellformedness fixtures (oracle-differential)
 
@@ -296,8 +302,11 @@ empty roster, a `.spthy` no `expected.txt` line mentions, a line with no
 topics, a `#!` line naming an unlisted fixture, an oracle that fails to
 launch, or a fixture emptied by the two post-elaboration removals without an
 `EMPTY_RUST_EXPECTATION_ALLOWLIST` entry *and* negative pins.
-`crates/tamarin-parser/tests/wellformedness.rs` reads the same file and skips
-every `#` line, so the negative pins are the example runner's alone.
+`crates/tamarin-parser/tests/wellformedness.rs` reads the same file offline and
+enforces the same pins: both harnesses hold the `#!` topics against
+`wf::check_theory` and fail a fixture the two post-elaboration removals leave
+with neither a parser-level expectation nor a negative pin. The oracle side of
+the comparison is the example runner's alone.
 
 ## Single-lemma parity
 

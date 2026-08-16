@@ -72,11 +72,15 @@ pub(crate) fn maude_path() -> Option<String> {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    /// The only two files in this crate allowed to read `$MAUDE_PATH`: the
-    /// shared probe above, and the hand-mirror an integration test needs
-    /// (it links the library, so it cannot see this `#[cfg(test)]` module).
-    /// Crate-relative, `/`-separated.
-    const ALLOWED: [&str; 2] = ["src/test_maude.rs", "tests/oracle_solver.rs"];
+    /// The only three files in this crate allowed to read `$MAUDE_PATH`: the
+    /// shared probe above, the hand-mirror an integration test needs (it
+    /// links the library, so it cannot see this `#[cfg(test)]` module), and
+    /// the examples' loader.  Crate-relative, `/`-separated.
+    const ALLOWED: [&str; 3] = [
+        "src/test_maude.rs",
+        "tests/oracle_solver.rs",
+        "examples/common/mod.rs",
+    ];
 
     /// Every `.rs` file under `root`, recursively.  `std::fs` only — a
     /// discipline scan should not pull a walker dependency into the crate.
@@ -103,19 +107,26 @@ mod tests {
     ///
     /// Two positive controls keep the scan itself from greening while
     /// asserting nothing: it checks that it reached each allowlisted file,
-    /// and that the needle still matches inside each.
+    /// and that a needle still matches inside each.
     #[test]
-    fn maude_path_reads_are_confined_to_the_two_probes() {
+    fn maude_path_reads_are_confined_to_the_allowlisted_probes() {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         // Built by concatenation so this test's own source is not itself a
         // match — the hit counted for `src/test_maude.rs` below then comes
         // from the real probe above, which is what the control asserts.
-        let needle = ["var(", "\"", "MAUDE_PATH", "\""].concat();
-        // `examples/` is deliberately NOT scanned: examples compile per-PR
-        // but are only ever RUN by milestone tooling, so a probe there
-        // cannot turn a per-PR run vacuously green.
+        // Both `var` and `var_os` spellings, so a rewrite of a probe into the
+        // `OsString` API does not walk out of the allowlist.
+        let needles = [
+            ["var(", "\"", "MAUDE_PATH", "\""].concat(),
+            ["var_os(", "\"", "MAUDE_PATH", "\""].concat(),
+        ];
+        // `examples/` is scanned, but its loader is allowlisted: it panics
+        // (`MaudeHandle::start(...).expect`) rather than skipping, so a
+        // dangling `MAUDE_PATH` there goes red instead of reporting green
+        // having run nothing.
         let mut files = rs_files(&manifest.join("src"));
         files.extend(rs_files(&manifest.join("tests")));
+        files.extend(rs_files(&manifest.join("examples")));
 
         let mut offenders: Vec<String> = Vec::new();
         // Per allowlisted file: how many times the walk reached it, and how
@@ -126,10 +137,8 @@ mod tests {
             let rel = path
                 .strip_prefix(manifest)
                 .expect("scanned file lies under the crate root");
-            let count = std::fs::read_to_string(path)
-                .expect("read source")
-                .matches(&needle)
-                .count();
+            let text = std::fs::read_to_string(path).expect("read source");
+            let count: usize = needles.iter().map(|n| text.matches(n).count()).sum();
             match ALLOWED.iter().position(|a| rel == Path::new(a)) {
                 Some(i) => {
                     reached[i] += 1;
@@ -144,15 +153,16 @@ mod tests {
             assert_eq!(
                 reached[i], 1,
                 "the scan reached {allowed} {} time(s): it walks \
-                 <crate>/src and <crate>/tests, and a scan that never opens \
-                 the files it is meant to police forbids nothing",
+                 <crate>/src, <crate>/tests and <crate>/examples, and a scan \
+                 that never opens the files it is meant to police forbids \
+                 nothing",
                 reached[i]
             );
             assert!(
                 hits[i] > 0,
                 "no `$MAUDE_PATH` read left in {allowed}: either the probe \
-                 moved (point this scan at its new home) or the needle no \
-                 longer matches the code it is meant to find"
+                 moved (point this scan at its new home) or the needles no \
+                 longer match the code they are meant to find"
             );
         }
 

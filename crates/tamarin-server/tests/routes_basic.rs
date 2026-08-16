@@ -9,10 +9,12 @@
 //! `reqwest` and check the status, the `Content-Type` and the body.
 //!
 //! The body criterion is byte equality against the captured Haskell responses
-//! under `tests/fixtures/haskell-responses/`, blanking only what no capture
-//! run can share with a test run: the theory's load stamp (its load time and
-//! origin path) on the pages that print it, and the `Generated from:` banner's
-//! build values on the `prettyClosedTheory` routes.
+//! under `tests/fixtures/haskell-responses/`, blanking the theory's load stamp
+//! (its load time and origin path) on the pages that print it, which no
+//! capture run can share with a test run, and the `Generated from:` banner's
+//! build values on the `prettyClosedTheory` routes, which the port emits empty
+//! — see `common::VERSION_BANNER_PREFIXES` for the divergence that blanking
+//! masks.
 //!
 //! Coverage matrix (LIVE routes):
 //!   - GET  /

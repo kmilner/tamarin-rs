@@ -1125,10 +1125,12 @@ fn verdict_match_suite_all_solved_against_tamarin() {
 /// Reports `corpus structural-match: X/Y` where Y is the total number
 /// of lemmas where Haskell's proof skeleton is available — verdict
 /// divergences DO count against structural match (verdict-only matching
-/// masks reasoning bugs).  The divergence identities are then held to
-/// [`STRUCTURAL_MISMATCH_LEDGER`], so an unexpected divergence or a
-/// silently-resolved ledger entry fails the probe instead of scrolling
-/// past in the log.
+/// masks reasoning bugs) — except on a lemma where the oracle's output
+/// carries no extractable proof, which is reported in the
+/// `no-haskell-skeleton` list rather than ledgered.  The divergence
+/// identities are then held to [`STRUCTURAL_MISMATCH_LEDGER`], so an
+/// unexpected divergence or a silently-resolved ledger entry fails the
+/// probe instead of scrolling past in the log.
 ///
 /// This is the **primary metric** for the port's progress, per
 /// project directive: count only whether the proof matches the
