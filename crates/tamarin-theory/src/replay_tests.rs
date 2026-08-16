@@ -525,6 +525,94 @@ fn match_disj_goal_by_alt_count() {
     assert_eq!(match_goal(&spec2, &sys).expect("should match"), two);
 }
 
+/// `normalize_disj_alt_text_for_match` is the hand-mirror of the skeleton
+/// parser's `normalize_disj_alt_text` (tamarin-parser proof_tree.rs): strip
+/// every whitespace character and every `#`.  The two copies are private to
+/// their own crates and the dependency runs parser → theory only, so they
+/// cannot be compared directly; this pin plus tamarin-parser's
+/// `proof_tree_tests::solve_disj_two_alts` / `solve_disj_five_alts` (which
+/// pin the stored `alt_texts` the parser emits) are together the drift guard
+/// for the Yubikey `slightly_weaker_invariant` replay path — the inputs below
+/// are those pins' alt texts with the outer parens the parser drops already
+/// gone, and the expected outputs are exactly the strings those pins assert
+/// the parser stores.
+#[test]
+fn normalize_disj_alt_text_for_match_strips_whitespace_and_hash() {
+    assert_eq!(normalize_disj_alt_text_for_match(" last(#t1) "), "last(t1)");
+    assert_eq!(normalize_disj_alt_text_for_match("#t1 < #t2"), "t1<t2");
+    // A nested alt keeps its inner parens; wrap-induced newlines and indent
+    // strip like any other whitespace.
+    assert_eq!(
+        normalize_disj_alt_text_for_match("(#t1 < #t2)\n   \u{2227} (last(#t3))"),
+        "(t1<t2)\u{2227}(last(t3))"
+    );
+}
+
+/// Disj matcher — two open Disj goals sharing an alt count AND a per-alt
+/// shape signature, so the shape filter keeps both and source order alone
+/// would bind the first.  `match_goal` renders each candidate's alts via
+/// `pretty_disj_alt` under `normalize_disj_alt_text_for_match` and scores
+/// them against the skeleton's stored `alt_texts`; the best score wins over
+/// source order.
+///
+/// HS reference: HS keeps the parsed `Guarded`'s concrete LVar identities and
+/// matches structurally (ProofMethod.hs:252-273, see line 258), so it never
+/// needs the tie-break; RS's shape signature is coarser and recovers the
+/// distinction from the stored text.  This is the Yubikey
+/// `slightly_weaker_invariant` situation, where two IH-body disjs share the
+/// NonQuant×5 shape and differ only in their alt texts.
+#[test]
+fn match_disj_goal_prefers_alt_text_score_over_source_order() {
+    use crate::constraint::constraints::Disj;
+    use crate::guarded::{BVar, GAtom, GTerm, Guarded};
+    let mk_vs = |n: &str| tamarin_parser::ast::VarSpec {
+        name: n.into(),
+        idx: 0,
+        sort: tamarin_parser::ast::SortHint::Node,
+        typ: None,
+    };
+    let last = |n: &str| Guarded::Atom(GAtom::Last(GTerm::Var(BVar::Free(mk_vs(n)))));
+    // Same alt count, same NonQuant×2 signature — only the var names differ.
+    let first = Goal::Disj(Disj::new(vec![last("a"), last("b")]));
+    let second = Goal::Disj(Disj::new(vec![last("c"), last("d")]));
+    let mut sys = System::empty();
+    sys.goals_mut().push((first.clone(), Default::default()));
+    sys.goals_mut().push((second.clone(), Default::default()));
+
+    // The texts a skeleton would have stored for a given candidate.
+    let stored_texts = |g: &Goal| -> Vec<String> {
+        let Goal::Disj(d) = g else {
+            panic!("expected a Disj goal");
+        };
+        d.0.iter()
+            .map(|a| normalize_disj_alt_text_for_match(&pretty_disj_alt(a)))
+            .collect()
+    };
+    let want = stored_texts(&second);
+    // Preconditions: the texts must be non-empty (an all-empty `alt_texts`
+    // skips the scoring branch entirely) and must distinguish the two
+    // candidates (otherwise both score alike and source order decides).
+    assert!(
+        want.iter().all(|s| !s.is_empty()),
+        "rendered alt texts must be non-empty, got {want:?}"
+    );
+    assert_ne!(
+        want,
+        stored_texts(&first),
+        "the two candidates must render differently"
+    );
+
+    let spec = GoalSpec::Disj {
+        alts: vec![DisjAlt::NonQuant, DisjAlt::NonQuant],
+        alt_texts: want,
+    };
+    assert_eq!(
+        match_goal(&spec, &sys).expect("should match"),
+        second,
+        "alt-text score must beat source order"
+    );
+}
+
 /// HS check-and-extend, `mergeMapsWith` rightOnly branch
 /// (Theory/Proof.hs:463): a stored-skeleton case that the
 /// re-executed method does NOT produce is mapped through

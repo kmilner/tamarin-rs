@@ -67,3 +67,106 @@ pub(crate) fn maude_path() -> Option<String> {
          TAM_ALLOW_NO_MAUDE=1 to accept the silent skip."
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    /// The only two files in this crate allowed to read `$MAUDE_PATH`: the
+    /// shared probe above, and the hand-mirror an integration test needs
+    /// (it links the library, so it cannot see this `#[cfg(test)]` module).
+    /// Crate-relative, `/`-separated.
+    const ALLOWED: [&str; 2] = ["src/test_maude.rs", "tests/oracle_solver.rs"];
+
+    /// Every `.rs` file under `root`, recursively.  `std::fs` only — a
+    /// discipline scan should not pull a walker dependency into the crate.
+    fn rs_files(root: &Path) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("read source dir") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                    files.push(path);
+                }
+            }
+        }
+        files
+    }
+
+    /// Reading `$MAUDE_PATH` anywhere but [`ALLOWED`] is forbidden: a local
+    /// copy of the probe drifts silently, and a copy that reads a dangling
+    /// `MAUDE_PATH` as "skip" reports green on a box where nothing
+    /// maude-backed ran.
+    ///
+    /// Two positive controls keep the scan itself from greening while
+    /// asserting nothing: it checks that it reached each allowlisted file,
+    /// and that the needle still matches inside each.
+    #[test]
+    fn maude_path_reads_are_confined_to_the_two_probes() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        // Built by concatenation so this test's own source is not itself a
+        // match — the hit counted for `src/test_maude.rs` below then comes
+        // from the real probe above, which is what the control asserts.
+        let needle = ["var(", "\"", "MAUDE_PATH", "\""].concat();
+        // `examples/` is deliberately NOT scanned: examples compile per-PR
+        // but are only ever RUN by milestone tooling, so a probe there
+        // cannot turn a per-PR run vacuously green.
+        let mut files = rs_files(&manifest.join("src"));
+        files.extend(rs_files(&manifest.join("tests")));
+
+        let mut offenders: Vec<String> = Vec::new();
+        // Per allowlisted file: how many times the walk reached it, and how
+        // many needle matches it holds.
+        let mut reached = [0usize; ALLOWED.len()];
+        let mut hits = [0usize; ALLOWED.len()];
+        for path in &files {
+            let rel = path
+                .strip_prefix(manifest)
+                .expect("scanned file lies under the crate root");
+            let count = std::fs::read_to_string(path)
+                .expect("read source")
+                .matches(&needle)
+                .count();
+            match ALLOWED.iter().position(|a| rel == Path::new(a)) {
+                Some(i) => {
+                    reached[i] += 1;
+                    hits[i] += count;
+                }
+                None if count > 0 => offenders.push(rel.display().to_string()),
+                None => {}
+            }
+        }
+
+        for (i, allowed) in ALLOWED.iter().enumerate() {
+            assert_eq!(
+                reached[i], 1,
+                "the scan reached {allowed} {} time(s): it walks \
+                 <crate>/src and <crate>/tests, and a scan that never opens \
+                 the files it is meant to police forbids nothing",
+                reached[i]
+            );
+            assert!(
+                hits[i] > 0,
+                "no `$MAUDE_PATH` read left in {allowed}: either the probe \
+                 moved (point this scan at its new home) or the needle no \
+                 longer matches the code it is meant to find"
+            );
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these files read `$MAUDE_PATH` directly: {}.  New copies of the \
+             probe drift — the audit behind this scan found several that \
+             accepted a set-but-dangling MAUDE_PATH and silently skipped, so \
+             every maude-backed test they gated reported green having run \
+             nothing.  Call `crate::test_maude::maude_path` instead, or, from \
+             an integration test (which cannot see a `#[cfg(test)]` module of \
+             the library it links), use the documented hand-mirror in \
+             `tests/oracle_solver.rs`.",
+            offenders.join(", ")
+        );
+    }
+}

@@ -54,6 +54,32 @@ binrev="$(timeout 60 "$HS_PATH" --version "${hs_rts[@]}" 2>/dev/null \
 
 mkdir -p "$expected"
 
+# Only what the manifest names is ever captured, so a `.spthy` no row mentions
+# would never be visited and a capture left behind by a retired row would keep
+# its stale bytes.  Census the directory against the manifest in both
+# directions before the oracle runs.  Same block as check.sh's census — keep
+# the two in step.
+declare -A claimed=([oracle_rev]=1)
+claim_one() {
+    local name="$1" slices="$2" mode="$3" sl
+    case "$mode" in
+        match|diverge) ;;
+        *) die "$manifest gives $name the unknown mode '$mode'" ;;
+    esac
+    claimed["$name.spthy"]=1
+    for sl in $(slices_of "$slices"); do
+        claimed["$name.$sl.hs.txt"]=1
+        if [ "$mode" = diverge ]; then claimed["$name.$sl.rs.txt"]=1; fi
+    done
+}
+for_each_fixture claim_one
+for f in "$fixdir"/*.spthy "$expected"/*; do
+    # A first-ever capture finds expected/ empty, leaving that glob unexpanded.
+    [ -e "$f" ] || continue
+    [ -n "${claimed[$(basename "$f")]:-}" ] \
+        || die "$(basename "$f") is claimed by no row of $manifest — add a row or delete the file"
+done
+
 # `cut_slices <raw-file> <name> <slices> <side>` — write one expected file per
 # slice.  An empty slice means the fixture stopped producing the block it
 # exists to pin, which must not be committed as a reference.

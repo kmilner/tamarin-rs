@@ -832,3 +832,86 @@ fn subterm_convergence_last_write_wins() {
         "regular block last => flag false => warning fires"
     );
 }
+
+/// HS's source-literal topic string, trailing space included
+/// (Wellformedness.hs:221#topic).
+const LHS_NO_RHS_TOPIC: &str = "Facts occur in the left-hand-side but not in any right-hand-side ";
+
+/// `underlineTopic LHS_NO_RHS_TOPIC` plus the `$-$` blank line that opens the
+/// body: the 65-character title (its trailing space counts) over a 65-`=`
+/// rule.
+const LHS_NO_RHS_HEADER: &str =
+    "Facts occur in the left-hand-side but not in any right-hand-side \n\
+     =================================================================\n\n";
+
+/// The suggestion arm of `fact_lhs_occur_no_rhs` is the only consumer of the
+/// live `edit_distance`, and it picks the RHS fact with the SMALLEST name
+/// distance, not the first one: `Sesion` is 1 edit from `Session` and 2 from
+/// the earlier-listed `Section`, so `Session` is suggested.  A broken cost
+/// term in `edit_distance` flips the winner to `Section` here.
+///
+/// Body bytes follow HS `showRuleAndFact`/`showFactInfo`
+/// (Wellformedness.hs:239-251#showRuleAndFact) and were probed against the
+/// pinned oracle (ef3f0468).
+#[test]
+fn fact_lhs_no_rhs_suggests_the_smallest_edit_distance_not_the_first() {
+    let t = parse(
+        r#"theory T begin
+            rule A: [ Sesion(x) ] --[ ]-> [ ]
+            rule B: [ ] --[ ]-> [ Section(x) ]
+            rule C: [ ] --[ ]-> [ Session(x) ]
+        end"#,
+    );
+    assert_eq!(
+        only(&fact_lhs_occur_no_rhs(&t), LHS_NO_RHS_TOPIC),
+        format!(
+            "{LHS_NO_RHS_HEADER}  1. in rule \"A\":  factName `Sesion' arity: 1 \
+             multiplicity: Linear. Perhaps you want to use the fact in rule \"C\":  \
+             factName `Session' arity: 1 multiplicity: Linear\n"
+        )
+    );
+}
+
+/// HS `isSimilar` keeps the nearest RHS name only at distance `<= 3`
+/// (Wellformedness.hs:192-196#isSimilar).  `Abc` is 4 edits from the sole RHS
+/// name `Abcdefg`, so the line carries no "Perhaps you want to use" suffix.
+/// Body probed against the pinned oracle (ef3f0468).
+#[test]
+fn fact_lhs_no_rhs_drops_the_suggestion_past_distance_three() {
+    let t = parse(
+        r#"theory T begin
+            rule A: [ Abc(x) ] --[ ]-> [ ]
+            rule B: [ ] --[ ]-> [ Abcdefg(x) ]
+        end"#,
+    );
+    assert_eq!(
+        only(&fact_lhs_occur_no_rhs(&t), LHS_NO_RHS_TOPIC),
+        format!(
+            "{LHS_NO_RHS_HEADER}  1. in rule \"A\":  factName `Abc' arity: 1 \
+             multiplicity: Linear\n"
+        )
+    );
+}
+
+/// Both RHS names are 1 edit from `Aaa`, so the tie goes to the FIRST in RHS
+/// source order — HS `minimalEdFact` takes `listToMaybe . sortOn snd`
+/// (Wellformedness.hs:200-201#minimalEdFact), whose stability the port's
+/// `min_by_key` mirrors.  Body probed against the pinned oracle (ef3f0468).
+#[test]
+fn fact_lhs_no_rhs_breaks_distance_ties_by_rhs_source_order() {
+    let t = parse(
+        r#"theory T begin
+            rule A: [ Aaa(x) ] --[ ]-> [ ]
+            rule B: [ ] --[ ]-> [ Aax(x) ]
+            rule C: [ ] --[ ]-> [ Aay(x) ]
+        end"#,
+    );
+    assert_eq!(
+        only(&fact_lhs_occur_no_rhs(&t), LHS_NO_RHS_TOPIC),
+        format!(
+            "{LHS_NO_RHS_HEADER}  1. in rule \"A\":  factName `Aaa' arity: 1 \
+             multiplicity: Linear. Perhaps you want to use the fact in rule \"B\":  \
+             factName `Aax' arity: 1 multiplicity: Linear\n"
+        )
+    );
+}

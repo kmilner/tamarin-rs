@@ -38,6 +38,29 @@ fn solved_goal_filtered() {
     assert!(open_goals(&sys).is_empty());
 }
 
+/// `is_open_in_sys` closes the empty disjunction while it is still
+/// UNSOLVED — HS `DisjG (Disj []) -> False` (Goals.hs:89), because the
+/// contradictions pass, not goal solving, disposes of it.  The `solved`
+/// flag stays false here, so the default `_ -> not solved` arm would
+/// report this goal open; only the empty-Disj arm keeps it out of
+/// `open_goals`.  The one-item Disj control pins that the arm is
+/// specific to the EMPTY disjunction and not a blanket Disj filter.
+#[test]
+fn empty_disj_goal_is_never_open() {
+    use crate::constraint::constraints::Disj;
+    use crate::guarded::{gtrue, Guarded};
+
+    let mut sys = System::empty();
+    sys.add_goal(Goal::Disj(Disj::<Guarded>::new(Vec::new())));
+    assert!(!sys.goals[0].1.solved);
+    assert!(open_goals(&sys).is_empty());
+
+    let mut sys = System::empty();
+    sys.add_goal(Goal::Disj(Disj::new(vec![gtrue()])));
+    assert!(!sys.goals[0].1.solved);
+    assert_eq!(open_goals(&sys).len(), 1);
+}
+
 /// `dispatch_solve_goal` marks the goal solved BEFORE delegating, mirroring
 /// HS `solveGoal` (Goals.hs:201-213) — the solver it delegates to may rewrite
 /// the goal's terms via `solveFactEqs`/`substSystem`, and a post-solve mark

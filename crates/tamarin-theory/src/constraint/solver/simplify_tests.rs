@@ -949,3 +949,86 @@ fn ku_action_uniqueness_unchanged_when_terms_differ() {
         "different terms must not trigger a merge"
     );
 }
+
+/// `x = 'z'` as one `Guarded`, parameterised by the sort hint on `x`.
+fn eq_pub_lit_with_hint(sort: tamarin_parser::ast::SortHint) -> crate::guarded::Guarded {
+    use crate::guarded::{BVar, GAtom, GTerm, Guarded};
+    Guarded::Atom(GAtom::Eq(
+        GTerm::Var(BVar::Free(tamarin_parser::ast::VarSpec {
+            name: "x".to_string(),
+            idx: 0,
+            sort,
+            typ: None,
+        })),
+        GTerm::PubLit("z".to_string()),
+    ))
+}
+
+/// `dedupe_formulas_pass` compares on the `normalize_sort_hints` canonical
+/// form, not on raw `Guarded` equality: `x:Msg = 'z'` and `x:Untagged = 'z'`
+/// are ONE formula, and the survivor is the first-seen `Arc`.
+#[test]
+fn dedupe_formulas_collapses_sort_hint_variants_keeping_the_first() {
+    let ctx = match ctx() {
+        Some(c) => c,
+        None => return,
+    };
+    use crate::guarded::normalize_sort_hints;
+    use tamarin_parser::ast::SortHint;
+    let f1 = eq_pub_lit_with_hint(SortHint::Msg);
+    let f2 = eq_pub_lit_with_hint(SortHint::Untagged);
+    // Both halves of the premise, pinned so a constructor drift that made the
+    // pair raw-equal (dedupe trivially fires) or canon-unequal (dedupe never
+    // fires) fails here rather than silently emptying the test below.
+    assert_ne!(f1, f2, "the pair must be distinct under raw `Guarded` `Eq`");
+    assert_eq!(
+        normalize_sort_hints(&f1),
+        normalize_sort_hints(&f2),
+        "`Untagged` is exactly what `normalize_sort_hints` erases to `Msg`"
+    );
+
+    let mut sys = System::empty();
+    sys.formulas_mut().push(std::sync::Arc::new(f1.clone()));
+    sys.formulas_mut().push(std::sync::Arc::new(f2.clone()));
+    let mut r = Reduction::new(&ctx, sys);
+    assert_eq!(dedupe_formulas_pass(&mut r), ChangeIndicator::Changed);
+    assert_eq!(r.sys.formulas.len(), 1, "the canon-equal pair collapses");
+    assert_eq!(
+        *r.sys.formulas[0], f1,
+        "the FIRST occurrence is kept, not the later canon-equal one"
+    );
+}
+
+/// The other side of the canonicalisation: hints that survive
+/// `normalize_sort_hints` keep the formulas apart, so nothing is dropped.
+#[test]
+fn dedupe_formulas_keeps_formulas_whose_canons_differ() {
+    let ctx = match ctx() {
+        Some(c) => c,
+        None => return,
+    };
+    use crate::guarded::normalize_sort_hints;
+    use tamarin_parser::ast::SortHint;
+    let f1 = eq_pub_lit_with_hint(SortHint::Msg);
+    let f2 = eq_pub_lit_with_hint(SortHint::Fresh);
+    assert_ne!(
+        normalize_sort_hints(&f1),
+        normalize_sort_hints(&f2),
+        "`Fresh` is NOT erased — the canons must stay distinct"
+    );
+
+    let mut sys = System::empty();
+    sys.formulas_mut().push(std::sync::Arc::new(f1.clone()));
+    sys.formulas_mut().push(std::sync::Arc::new(f2.clone()));
+    let mut r = Reduction::new(&ctx, sys);
+    assert_eq!(dedupe_formulas_pass(&mut r), ChangeIndicator::Unchanged);
+    assert_eq!(
+        r.sys
+            .formulas
+            .iter()
+            .map(|f| (**f).clone())
+            .collect::<Vec<_>>(),
+        vec![f1, f2],
+        "both formulas are retained, in order"
+    );
+}

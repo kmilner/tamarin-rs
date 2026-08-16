@@ -428,6 +428,29 @@ mod tests {
         assert_eq!(pretty_lnterm(&t), "g^x");
     }
 
+    /// `diff(a, b)` keeps its prefix spelling, with a space after the comma
+    /// (module doc above; HS `prettyTerm`'s own `s == diffSym` case).  The
+    /// dedicated arm's guard is full-`NoEqSym` equality, so a public `diff/2`
+    /// is a different symbol and falls through to the generic `NoEq` arm —
+    /// which spells a 2-ary application the same way.  Both assertions
+    /// therefore pin the one spelling, not a fork between the two arms.
+    #[test]
+    fn pretty_diff_renders_prefix_with_spaced_args() {
+        let x = var("x", LSort::Msg);
+        let y = var("y", LSort::Msg);
+        let t = f_app_no_eq(diff_sym(), vec![x.clone(), y.clone()]);
+        assert_eq!(pretty_lnterm(&t), "diff(x, y)");
+        let public_diff = NoEqSym::new(
+            b"diff".to_vec(),
+            2,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
+        assert_ne!(public_diff, diff_sym());
+        let generic = f_app_no_eq(public_diff, vec![x, y]);
+        assert_eq!(pretty_lnterm(&generic), "diff(x, y)");
+    }
+
     #[test]
     fn pretty_inv_normal_function() {
         let g = var("g", LSort::Msg);
@@ -589,6 +612,21 @@ mod tests {
             (NameTag::Abbrev, "kAB"),
         ] {
             assert_eq!(format!("{}", Name::new(tag, "kAB")), expected, "{tag:?}");
+        }
+    }
+
+    /// `Display for LSort` carries HS `sortSuffix`'s spelling, not the derived
+    /// `Show LSort` constructor names, for every sort.
+    #[test]
+    fn lsort_display_matches_sort_suffix() {
+        for s in [
+            LSort::Pub,
+            LSort::Fresh,
+            LSort::Msg,
+            LSort::Node,
+            LSort::Nat,
+        ] {
+            assert_eq!(s.to_string(), crate::lterm::sort_suffix(s));
         }
     }
 

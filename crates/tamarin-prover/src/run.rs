@@ -3169,10 +3169,13 @@ mod tests {
     #[test]
     fn no_input_files_is_an_error() {
         // clap's `arg_required_else_help` catches a fully-bare argv, but a
-        // flags-only argv reaches `run_batch`, which reports it plainly.
+        // flags-only argv reaches `run_batch`, which reports it plainly.  The
+        // message is asserted WHOLE, and that equality is the pin: HS
+        // reprinted the entire help here, canonical clap does not, so a help
+        // document printed around the phrase would slip past a `contains`.
         let a = parse(&["--quiet"]);
         let e = run(&a).unwrap_err();
-        assert!(e.to_string().contains("no input files given"), "{e}");
+        assert_eq!(e.to_string(), "no input files given");
     }
 
     fn mk_result(verdict: LemmaVerdict, exists_trace: bool, steps: usize) -> LemmaResult {

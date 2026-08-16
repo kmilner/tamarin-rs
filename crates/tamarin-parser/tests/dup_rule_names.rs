@@ -193,7 +193,10 @@ fn second_rule_with_restrict_is_a_duplicate_rule() {
 /// including file, at the token after its rule.
 #[test]
 fn duplicate_across_include_is_rejected() {
-    let dir = std::env::temp_dir().join("tamarin_parser_dup_rule_names");
+    let dir = std::env::temp_dir().join(format!(
+        "tamarin_parser_dup_rule_names_{}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).expect("mkdir");
     std::fs::write(
         dir.join("frag.spthy"),

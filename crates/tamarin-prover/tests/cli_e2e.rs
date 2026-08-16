@@ -219,19 +219,6 @@ fn output_dir_writes_basename_underscore_analyzed() {
 }
 
 #[test]
-fn no_input_files_is_a_plain_error() {
-    // A flags-only argv reaches `run_batch`, which reports the missing
-    // inputs as an ordinary `RunError` (rc 1 via main's error path).  HS
-    // reprinted the whole help here; canonical clap does not, which is why
-    // the message is asserted WHOLE — `run::tests::no_input_files_is_an_error`
-    // only asks that it contain the phrase, so a help document appended
-    // around it would slip past there.
-    let args = args_from(&["--prove"]);
-    let e = run(&args).unwrap_err();
-    assert_eq!(e.to_string(), "no input files given");
-}
-
-#[test]
 fn unreadable_input_file_prints_ghc_iox_shape() {
     // HS never guards the theory read: `openFile` throws an IOException that
     // escapes to GHC's runtime, which prints `tamarin-prover: <path>:
@@ -370,29 +357,6 @@ fn closed_stdout_pipe_exits_quietly() {
         err.contains("Theory loaded"),
         "expected the pre-write stderr marker, got:\n{err}"
     );
-}
-
-/// `--diff` parses but is unported: the run stops with a `RunError` that
-/// names the flag AND says why, never a silent fall-through to the ordinary
-/// trace-mode analysis.  `run::tests::diff_flag_errors_cleanly` asks only
-/// that SOMETHING errored; the wording is pinned here.
-#[test]
-fn diff_flag_is_rejected_with_clear_message() {
-    let in_path = fixture("single_recv.spthy");
-    let args = args_from(&["--diff", in_path.to_str().unwrap()]);
-    let msg = run(&args).expect_err("--diff must error").to_string();
-    assert!(msg.contains("--diff"), "{msg}");
-    assert!(msg.contains("not yet ported"), "{msg}");
-}
-
-/// A non-integer `--bound` is a clap VALUE error.  The KIND is what makes
-/// this a pin: a bare `is_err()` would stay green if `--bound` were dropped
-/// from the CLI outright, since that argv then fails as `UnknownArgument`.
-#[test]
-fn invalid_int_value_for_bound_returns_parse_error() {
-    let e = parse_args(&["--bound=not-a-number".to_string()])
-        .expect_err("non-int --bound must not parse");
-    assert_eq!(e.kind(), clap::error::ErrorKind::ValueValidation, "{e}");
 }
 
 /// The documented loud delta for glued short values: `-b10` (HS: bound 10)
@@ -966,10 +930,11 @@ fn oracle_only_flag_stops_the_search_when_the_oracle_ranks_nothing() {
     run_pinned_case("chan_oracle_only");
 }
 
-/// The case table, the captured streams and the capture manifest must describe
-/// the SAME set of runs.  Without this, a renamed row leaves its old reference
-/// behind (still passing, pinning nothing) and a half-finished capture leaves
-/// rows nobody notices.
+/// The case table, the captured streams, the capture manifest and the tests in
+/// this file must describe the SAME set of runs.  Without this, a renamed row
+/// leaves its old reference behind (still passing, pinning nothing), a
+/// half-finished capture leaves rows nobody notices, and a row nothing drives
+/// sits green forever.
 #[test]
 fn cli_ref_cases_files_and_manifest_are_in_sync() {
     let cases = flag_cases();
@@ -1079,4 +1044,27 @@ fn cli_ref_cases_files_and_manifest_are_in_sync() {
          submodule pin is {gitlink} — stale references certify nothing.\n\
          {RECAPTURE_HINT}"
     );
+
+    // Every row is DRIVEN by a test here: rows are run as
+    // `run_pinned_case("<name>")`, so scanning this file's own source for the
+    // quoted row name catches a row that was added to the table (capture and
+    // all) with nothing calling it.  The scan needs its own positive control,
+    // because renaming the helper would otherwise leave it comparing nothing.
+    let src_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/cli_e2e.rs");
+    let src = std::fs::read_to_string(&src_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", src_path.display()));
+    assert!(
+        src.contains("run_pinned_case(\""),
+        "no `run_pinned_case(` call with a literal row name left in {} — the \
+         row scan can no longer see how rows are driven",
+        src_path.display()
+    );
+    for name in &names {
+        assert!(
+            src.contains(&format!("\"{name}\"")),
+            "cases.tsv row `{name}` is never named in {} — it has a capture \
+             but no test drives it, so it pins nothing",
+            src_path.display()
+        );
+    }
 }

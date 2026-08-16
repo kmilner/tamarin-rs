@@ -109,6 +109,50 @@ fn non_graphviz_dot_reports_the_detailed_results_block() {
     );
 }
 
+/// Oracle (`test --with-dot=/bin/false`): the tool starts but exits 1, so the
+/// exit code is consulted before `check` ever runs and the reason is the
+/// `failed with exit code 1` line followed by `ensureGraphVizDot`'s `errMsg1`
+/// (Environment.hs:88-95) — the only route by which that WARNING block reaches
+/// a transcript.  `unlines` already terminated it, so a blank line separates it
+/// from the `Detailed results` dump.  `ensureGraphVizDot` returns `Nothing`, so
+/// the PNG probe is skipped and no blank line follows.
+///
+/// The WARNING bytes are deliberately duplicated here: the source constant is
+/// private to `probe`, so this transcript pin restates it the same way
+/// `probe_tests.rs` restates its source-derived pins.
+#[test]
+fn bad_exit_dot_reports_the_exit_code_reason_line() {
+    if !common::maude_available() {
+        eprintln!("skipping: maude not where the run will look for it");
+        return;
+    }
+    if !Path::new("/bin/false").exists() {
+        eprintln!("skipping: no /bin/false to stand in for a dot that exits non-zero");
+        return;
+    }
+    let (rc, stdout, stderr) = run_test_command(&["--with-dot=/bin/false"]);
+    assert_eq!(rc, 1);
+    assert_eq!(stdout, FAILED_RUN_STDOUT);
+    assert_eq!(
+        common::strip_maude_banner(&stderr),
+        "GraphViz tool: '/bin/false'\n\
+         \x20checking version: failed with exit code 1\n\
+         \n\
+         WARNING:\n\
+         \n\
+         \x20The dot tool seems not to be provided by Graphviz.\n\
+         \x20Graph generation might not work.\n\
+         \x20Please download an official version from:\n\
+         \x20        http://www.graphviz.org/\n\
+         \n\
+         Detailed results from testing '/bin/false'\n\
+         \x20command: /bin/false -V\n\
+         \x20stdin:   \n\
+         \x20stdout:  \n\
+         \x20stderr:  \n"
+    );
+}
+
 /// The success path: `dot -V`'s banner is lowercased, loses its trailing
 /// newline to `init` and gains `. OK.`; the PNG probe then reports a bare
 /// `OK.`.  Only the version line's tool-and-version text is machine-local, so
