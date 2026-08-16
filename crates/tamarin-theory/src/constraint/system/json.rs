@@ -1140,6 +1140,21 @@ mod tests {
                 "{name} must carry its node {node}:\n{out}"
             );
         }
+        // Cluster ORDER, which the `contains` checks above cannot see: HS
+        // builds the clusters from `Map.toList nodesByGroup`
+        // (GraphRepr.hs:123) over the `Map String [Node]` that
+        // `groupNodesByRole` (:139-144) accumulates, and Data.Map lists its
+        // keys ascending — so the roles reach the wire sorted by name.
+        let p = out
+            .find("\"jgcName\": \"P_Session_1\"")
+            .expect("P_Session_1 cluster");
+        let q = out
+            .find("\"jgcName\": \"Q_Session_1\"")
+            .expect("Q_Session_1 cluster");
+        assert!(
+            p < q,
+            "clusters must reach the wire in ascending role order:\n{out}"
+        );
     }
 
     // No traces at all: the empty array stays inline (aeson-pretty does not
