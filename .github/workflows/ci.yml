@@ -29,6 +29,13 @@ jobs:
       # nothing else fails on a drifted one.  Needs only the submodule; ~seconds.
       - name: HS cite check
         run: python3 scripts/check_hs_cites.py
+      # Any file carrying a resolvable HS citation must carry the constant
+      # licence notice; the script's --check exits 1 on a stale one.  Same
+      # trigger as the cite check above — an ordinary PR that adds a citation
+      # to a previously uncited file makes that file stale, and nothing else
+      # notices.  Needs only the submodule (it resolves the citations).
+      - name: Licence header check
+        run: python3 scripts/gen_license_headers.py --check
 
   test:
     runs-on: ubuntu-latest

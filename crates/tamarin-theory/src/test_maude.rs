@@ -99,16 +99,14 @@ mod tests {
     ///   library's own `#[cfg(test)]` module.
     /// - `crates/tamarin-prover/tests/common/mod.rs` — the CLI e2e harness
     ///   (its loud half is `maude_available`).
-    /// - `crates/tamarin-term/src/{maude_proc_tests,norm_tests}.rs` — the
-    ///   bottom crate's own `#[cfg(test)]` probes; both are in
-    ///   [`SKIPS_SILENTLY`].
-    const ALLOWED: [&str; 9] = [
+    /// - `crates/tamarin-term/src/test_maude.rs` — the bottom crate's own
+    ///   shared probe, this file's twin; it is in [`SKIPS_SILENTLY`].
+    const ALLOWED: [&str; 8] = [
         "crates/tamarin-prover/tests/common/mod.rs",
         "crates/tamarin-server/src/handlers/proof_tree.rs",
         "crates/tamarin-server/tests/common/mod.rs",
         "crates/tamarin-server/tests/theory_io_ndc.rs",
-        "crates/tamarin-term/src/maude_proc_tests.rs",
-        "crates/tamarin-term/src/norm_tests.rs",
+        "crates/tamarin-term/src/test_maude.rs",
         "crates/tamarin-theory/examples/common/mod.rs",
         "crates/tamarin-theory/src/test_maude.rs",
         "crates/tamarin-theory/tests/oracle_solver.rs",
@@ -138,16 +136,13 @@ mod tests {
     ///   unset) to `MaudeHandle::start(..).expect(..)`, so a dangling or
     ///   missing maude aborts the example rather than reporting a green run.
     ///   It has no opt-out because it has nothing to opt out of.
-    /// - the two `crates/tamarin-term/src/*_tests.rs` probes DO silently skip
-    ///   when nothing resolves, and `norm_tests.rs`'s ladder is the
-    ///   narrowest in the workspace (`/usr/local/bin/maude` and a relative
-    ///   `maude`, no `$PATH` walk and no linuxbrew prefix), so on a box whose
-    ///   maude lives anywhere else its two pins report green having reduced
-    ///   nothing.  Listing them here freezes the debt: a tenth copy cannot
-    ///   join them without editing this array.
-    const SKIPS_SILENTLY: [&str; 3] = [
-        "crates/tamarin-term/src/maude_proc_tests.rs",
-        "crates/tamarin-term/src/norm_tests.rs",
+    /// - `crates/tamarin-term/src/test_maude.rs` asserts on a set-but-dangling
+    ///   `MAUDE_PATH` like the loud probes, but still returns `None` — a
+    ///   silent skip — when its ladder resolves nothing.  Listing it here
+    ///   freezes the debt: a ninth copy cannot join without editing this
+    ///   array.
+    const SKIPS_SILENTLY: [&str; 2] = [
+        "crates/tamarin-term/src/test_maude.rs",
         "crates/tamarin-theory/examples/common/mod.rs",
     ];
 

@@ -7,18 +7,7 @@ use crate::lterm::{LNTerm, LSort, LVar};
 use crate::maude_sig::pair_maude_sig;
 use crate::vterm::Lit;
 
-fn maude_path() -> Option<String> {
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        return Some(p);
-    }
-    let candidates = ["/usr/local/bin/maude", "maude"];
-    for c in &candidates {
-        if std::path::Path::new(c).exists() {
-            return Some((*c).to_string());
-        }
-    }
-    None
-}
+use crate::test_maude::maude_path;
 
 #[test]
 fn norm_var_skips_maude() {

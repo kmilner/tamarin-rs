@@ -7,40 +7,7 @@ use crate::lterm::{LSort, LVar};
 use crate::maude_sig::pair_maude_sig;
 use crate::vterm::Lit;
 
-/// The maude these tests run against, or `None` when the machine has none:
-/// `$MAUDE_PATH`, else a common absolute install, else a `maude` on `$PATH`.
-///
-/// A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION,
-/// not a reason to skip — answering `None` there would turn every
-/// maude-backed pin in this file green on a CI whose image moved maude
-/// (`.github/workflows/ci.yml` sets `MAUDE_PATH`).  Panic instead, so the
-/// run goes red.  Same convention as `tamarin-server/tests/common`.
-fn maude_path() -> Option<String> {
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        assert!(
-            std::path::Path::new(&p).exists(),
-            "MAUDE_PATH={p} does not exist; unset it to fall back to the \
-             probe, or point it at a real maude — skipping every \
-             maude-backed pin here would report green vacuously"
-        );
-        return Some(p);
-    }
-    for c in [
-        "/usr/local/bin/maude",
-        "/usr/bin/maude",
-        "/home/linuxbrew/.linuxbrew/bin/maude",
-    ] {
-        if std::path::Path::new(c).exists() {
-            return Some(c.to_string());
-        }
-    }
-    std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .map(|d| d.join("maude"))
-            .find(|c| c.is_file())
-            .map(|c| c.display().to_string())
-    })
-}
+use crate::test_maude::maude_path;
 
 /// `fst(pair(a, b))` over [`pair_maude_sig`] — a term the pairing signature
 /// genuinely rewrites, so `reduce` cannot answer it from either of its
