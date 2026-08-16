@@ -193,7 +193,7 @@ pub struct Args {
 /// accepted before or after a subcommand name.
 #[derive(Debug, Clone, ClapArgs)]
 struct LoadOpts {
-    /// Prove the selected lemmas (default: all lemmas; `=NAME` exact,
+    /// Prove the selected lemmas (without a value: all lemmas; `=NAME` exact,
     /// `=PREFIX*` by prefix; repeatable)
     #[arg(long, global = true, num_args = 0..=1, require_equals = true,
           default_missing_value = "", value_name = "LEMMA")]
@@ -212,18 +212,18 @@ struct LoadOpts {
     stop_on_trace: Option<StopOnTrace>,
 
     /// Bound the proof-search depth at N; nodes at that depth become
-    /// `sorry /* bound N hit */` (default: 5)
+    /// `sorry /* bound N hit */` (without a value: 5; absent: no bound)
     #[arg(short = 'b', long, global = true, num_args = 0..=1, require_equals = true,
           default_missing_value = "5", value_name = "N")]
     bound: Option<u32>,
 
     /// Goal-ranking sequence; overrides the theory's own heuristic
-    /// (default: `s`, the smart ranking)
+    /// (without a value: `s`, the smart ranking)
     #[arg(long, global = true, num_args = 0..=1, require_equals = true,
           default_missing_value = "s", value_name = "RANKING")]
     heuristic: Option<String>,
 
-    /// Apply partial evaluation before proving (default: summary)
+    /// Apply partial evaluation before proving (without a value: summary)
     #[arg(long = "partial-evaluation", global = true, value_enum, ignore_case = true,
           num_args = 0..=1, require_equals = true, default_missing_value = "summary",
           value_name = "STYLE")]
@@ -326,7 +326,7 @@ struct ToolOpts {
     dot_path: Option<String>,
 
     /// Render interactive graphs via `<PATH> <img> <json>` instead of dot
-    /// (default: `json`)
+    /// (without a value: `json`)
     #[arg(long = "with-json", global = true, num_args = 0..=1, require_equals = true,
           default_missing_value = "json", value_name = "PATH")]
     json_path: Option<String>,
@@ -359,18 +359,19 @@ struct BatchOpts {
     #[arg(long = "precompute-only")]
     precompute_only: bool,
 
-    /// Write the resulting theory to FILE (default: derive the name from
-    /// the input file)
+    /// Write the resulting theory to FILE (without a value: the name `-O`
+    /// derives, so `-O` is then required; absent: stdout)
     #[arg(short = 'o', long = "output", num_args = 0..=1, require_equals = true,
           default_missing_value = "", value_name = "FILE")]
     output_file: Option<String>,
 
-    /// Write resulting theories into DIR (default: the current directory)
+    /// Write resulting theories into DIR (without a value: the current
+    /// directory; absent: stdout)
     #[arg(short = 'O', long = "Output", num_args = 0..=1, require_equals = true,
           default_missing_value = "", value_name = "DIR")]
     output_dir: Option<String>,
 
-    /// Translate-only output module (default: spthy)
+    /// Translate-only output module (without a value: spthy)
     #[arg(short = 'm', long = "output-module", num_args = 0..=1, require_equals = true,
           default_missing_value = "spthy",
           value_parser = ["spthy", "spthytyped", "msr", "proverifequiv",
