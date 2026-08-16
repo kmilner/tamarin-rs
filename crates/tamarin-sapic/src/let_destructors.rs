@@ -28,8 +28,9 @@
 //! `elsebranch` (LetDestructors.hs:74-76) is `False` iff the right branch is the
 //! null process, else `True`.
 //!
-//! Runs as part of `translate` (HS `Sapic.hs:45-101, see line 54`), AFTER `propagateNames` and
-//! BEFORE `annotateLocks`, over the already type-/rename-unique'd process.
+//! Runs as part of `translate` (HS `sapic/src/Sapic.hs:45-101, see line 55`),
+//! AFTER `propagateNames` and BEFORE `annotateLocks`, over the already
+//! type-/rename-unique'd process.
 
 use crate::base_translation::{subst_fact, subst_term};
 use tamarin_term::function_symbols::{Constructability, FunSym};
@@ -61,17 +62,19 @@ fn map_proc(
             let body1 = map_proc(rules, *body);
             Process::Action(ac, ann, Box::new(body1))
         }
-        // `ProcessComb c@(Let t1 t2 mv) _ pl pr` (LetDestructors.hs:33-66).
+        // `ProcessComb c@(Let t1 t2 mv) _ pl pr` (LetDestructors.hs:33-66) —
+        // HS discards the node's annotation here (the `_`), and so do we; see
+        // `map_let` for why re-using it would over-propagate process names.
         Process::Comb(
             ProcessCombinator::Let {
                 left,
                 right,
                 match_vars,
             },
-            ann,
+            _ann,
             pl,
             pr,
-        ) => map_let(rules, left, right, match_vars, ann, *pl, *pr),
+        ) => map_let(rules, left, right, match_vars, *pl, *pr),
         // `ProcessComb c ann pl pr` (LetDestructors.hs:82-85): non-Let comb.
         Process::Comb(c, ann, pl, pr) => {
             let pl1 = map_proc(rules, *pl);
@@ -81,13 +84,11 @@ fn map_proc(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn map_let(
     rules: &std::collections::BTreeSet<CtxtStRule>,
     left: SapicTerm,
     right: SapicTerm,
     match_vars: std::collections::BTreeSet<SapicLVar>,
-    ann: ProcessAnnotation<LVar>,
     pl: AnnotatedProcess<LVar>,
     pr: AnnotatedProcess<LVar>,
 ) -> AnnotatedProcess<LVar> {
@@ -104,9 +105,7 @@ fn map_let(
     if let VTerm::Lit(Lit::Var(_)) = &left {
         if let VTerm::App(FunSym::NoEq(funsym), rightterms) = &t2_ln {
             if funsym.constructability == Constructability::Destructor {
-                return case_destructor(
-                    rules, &t1_ln, *funsym, rightterms, ann, pl, pr, elsebranch,
-                );
+                return case_destructor(rules, &t1_ln, *funsym, rightterms, pl, pr, elsebranch);
             }
         }
     }
@@ -122,13 +121,13 @@ fn map_let(
     }
 
     // Case C (LetDestructors.hs:62-65): keep the Let, annotate `annElse
-    // elsebranch`.  HS `annElse b = mempty {elseBranch = b}` (Annotation.hs:131-132)
+    // elsebranch`.  HS `annElse b = mempty {elseBranch = b}`
+    // (sapic/src/Sapic/Annotation.hs:131-132)
     // builds a FRESH `mempty`-based annotation, REPLACING the existing one — so
     // every other field (incl. the propagated `processnames`) is dropped back to
-    // its default.  `ann` (which carries the propagated process names) must NOT be
-    // reused here, else the role/color would over-propagate the enclosing
+    // its default.  The node's incoming annotation must NOT be carried over
+    // here, else the role/color would over-propagate the enclosing
     // sub-process name onto these let rules.
-    let _ = ann;
     let ann2 = ProcessAnnotation::with_else_branch(elsebranch);
     let pl1 = map_proc(rules, pl);
     let pr1 = map_proc(rules, pr);
@@ -145,13 +144,11 @@ fn map_let(
 }
 
 /// Case A — destructor let (LetDestructors.hs:35-58).
-#[allow(clippy::too_many_arguments)]
 fn case_destructor(
     rules: &std::collections::BTreeSet<CtxtStRule>,
     t1_ln: &LNTerm,
     funsym: tamarin_term::function_symbols::NoEqSym,
     rightterms: &[LNTerm],
-    ann: ProcessAnnotation<LVar>,
     pl: AnnotatedProcess<LVar>,
     pr: AnnotatedProcess<LVar>,
     elsebranch: bool,
@@ -170,11 +167,12 @@ fn case_destructor(
             let rightterms_pairs = to_pairs(rightterms);
             // `new_an = annDestructorEquation leftermssubst (toPairs rightterms) elsebranch`
             // — HS `annDestructorEquation v1 v2 b = mempty { destructorEquation =
-            // Just (v1, v2), elseBranch = b }` (Annotation.hs:128-129) builds a
+            // Just (v1, v2), elseBranch = b }`
+            // (sapic/src/Sapic/Annotation.hs:128-129) builds a
             // FRESH `mempty`-based annotation, REPLACING the existing one.  Every
             // other field (incl. the propagated `processnames`) is therefore reset
-            // to default — so `ann` must NOT be reused (see Case C above).
-            let _ = ann;
+            // to default, so the node's incoming annotation is dropped (Case C
+            // above explains what re-using it would break).
             let new_an = ProcessAnnotation::with_destructor_equation(
                 leftterms_subst,
                 rightterms_pairs,
@@ -296,7 +294,7 @@ fn apply_subst_process(
     }
 }
 
-/// `applyMatchVars subst vs` (Process.hs:305-309): rewrite a set of match
+/// `applyMatchVars subst vs` (Sapic/Process.hs:304-309): rewrite a set of match
 /// variables under a substitution.  Each `v` is replaced by the variables of
 /// `subst(v)` if `v` is in the substitution's domain, else kept as-is.
 fn apply_match_vars(
@@ -338,7 +336,7 @@ fn subst_action(
         } => A::ChIn {
             chan: chan.map(|t| subst_term(subst, &t)),
             msg: subst_term(subst, &msg),
-            // HS `applyMatchVars subst vs` (Process.hs:305-309, 320): a match var
+            // HS `applyMatchVars subst vs` (Sapic/Process.hs:304-309, 320): a match var
             // `v` whose image under `subst` is a (compound) term is replaced by
             // ALL the variables of that image; an undefined `v` is kept.  So a
             // `let`-bound match var `=t` (where `t = <a,'test'>`) becomes the
@@ -387,7 +385,7 @@ fn subst_comb(
         ProcessCombinator::CondEq(a, b) => {
             ProcessCombinator::CondEq(subst_term(subst, &a), subst_term(subst, &b))
         }
-        // HS `apply subst (Cond fa) = Cond (apply subst fa)` (Process.hs:165):
+        // HS `apply subst (Cond fa) = Cond (apply subst fa)` (Sapic/Process.hs:165):
         // a Case-B `let`-elimination (`let z = t in P`) must rewrite the free
         // variable `z` inside any downstream conditional's formula too — `z` is
         // a value bound by the `let`, not a process binder, so the `Cond`
@@ -405,7 +403,7 @@ fn subst_comb(
 }
 
 /// Substitute a `let`-bound variable into a `Cond` parser-AST formula
-/// (HS `apply subst fa`, Process.hs:165).  For each FREE `Var(v)` whose
+/// (HS `apply subst fa`, Sapic/Process.hs:165).  For each FREE `Var(v)` whose
 /// `SapicLVar` key (typed or untyped) is in `subst`'s domain, replace it with
 /// the parser-AST lowering of the image term; non-domain / quantifier-bound vars
 /// are kept unchanged.
@@ -451,7 +449,7 @@ fn ln_to_sapic(t: &LNTerm) -> SapicTerm {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{BTreeSet, BTreeSet as Set};
+    use std::collections::BTreeSet;
     use tamarin_term::lterm::{LSort, NameTag};
     use tamarin_term::vterm::var_term;
     use tamarin_theory::sapic::{ProcessParsedAnnotation, SapicAction};
@@ -493,7 +491,7 @@ mod tests {
             Box::new(body),
             Box::new(Process::Null(ann())),
         );
-        let rules: Set<CtxtStRule> = Set::new();
+        let rules: BTreeSet<CtxtStRule> = BTreeSet::new();
         let out = translate_let_destr(&rules, lett);
         // The Let must be gone; the top node is the substituted `out('t')`.
         match out {
@@ -524,7 +522,7 @@ mod tests {
             Box::new(Process::Null(ann())),
             Box::new(Process::Null(ann())),
         );
-        let rules: Set<CtxtStRule> = Set::new();
+        let rules: BTreeSet<CtxtStRule> = BTreeSet::new();
         let out = translate_let_destr(&rules, lett);
         match out {
             Process::Comb(ProcessCombinator::Let { .. }, a2, _, _) => {

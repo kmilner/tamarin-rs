@@ -175,7 +175,7 @@ impl SubtermStore {
 }
 
 /// `elemNotBelowReducible reducible inner outer` — port of Haskell's
-/// `Term.Term.elemNotBelowReducible` (`Term.hs:248`).  True iff
+/// `Term.Term.elemNotBelowReducible` (`Term/Term.hs:273-279`).  True iff
 /// `inner` occurs syntactically in `outer` and never below a
 /// reducible function symbol.
 ///
@@ -293,11 +293,12 @@ fn find_loop(
     parents.insert(x.clone());
     // Successors: edges (e, e') in the dag such that `x.1` (the big
     // side of x's subterm) appears in `e` not below a reducible head.
-    let next: Vec<&(LNTerm, LNTerm)> = dag
+    // `dag` is immutable for the whole walk, so filtering lazily visits the
+    // same edges in the same order as HS's `next` list snapshot.
+    for n in dag
         .iter()
         .filter(|e| elem_not_below_reducible(reducible, &x.1, &e.0))
-        .collect();
-    for n in next {
+    {
         find_loop(reducible, dag, n, parents, visited)?;
     }
     parents.remove(x);

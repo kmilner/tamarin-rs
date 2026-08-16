@@ -57,7 +57,7 @@ fn match_fails_on_different_arity() {
 }
 
 // -------------------------------------------------------------------
-// HS `unifyRaw` AC/C arms (Unification.hs:265-273): the AC arm fires
+// HS `unifyRaw` AC/C arms (Unification.hs:299-308): the AC arm fires
 // only when BOTH sides are AC apps with the SAME symbol; otherwise the
 // pair falls through to `_ -> mzero` (no unifier).  These pin that the AC
 // arm delays/NeedsAC only for same-symbol AC apps on both sides.
@@ -138,7 +138,7 @@ fn no_ac_same_ac_symbol_is_needs_ac() {
 
 // -------------------------------------------------------------------
 // `solve_match_lterm` 3-way outcome (HS `solveMatchLTerm`,
-// Unification.hs:200-216).  These pin the exact distinction that
+// Unification.hs:219-239).  These pin the exact distinction that
 // eliminates the LAK06 (28 879→0) / NAXOS / CRxor surplus Maude
 // `match`es: an AC-/C-headed subterm only forces a Maude fallback
 // when it appears AC-vs-AC; under a variable pattern, or facing a

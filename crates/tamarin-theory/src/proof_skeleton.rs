@@ -64,9 +64,10 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
     let pad = "  ".repeat(indent);
     // Terminal-method handling: Sorry/Finished and SolveGoal/Simplify
     // /Induction with no children are leaves.  Haskell's prettyProof
-    // emits `by <method>` as a single line for leaves whose method is
-    // not Finished (Proof.hs:1064-1066), so we mirror that here — emit
-    // *just* the leaf line, skipping the separate method-keyword line.
+    // emits `by <method>` as a single line for every leaf except
+    // `Finished Solved`, which prints bare (Theory/Proof.hs:1064-1066), so we
+    // mirror that here — emit *just* the leaf line, skipping the separate
+    // method-keyword line.
     if node.children.is_empty() {
         match &node.method {
             ProofMethod::Finished(MethodResult::Contradictory(c)) => {
@@ -76,7 +77,7 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
                 out.push_str(" */\n");
             }
             ProofMethod::Finished(MethodResult::Solved) => {
-                // Mirror HS `prettyProofMethod` (ProofMethod.hs:1174-1187, see line 1177):
+                // Mirror HS `prettyProofMethod` (ProofMethod.hs:1174-1186, see line 1176):
                 //   `keyword_ "SOLVED" <-> lineComment_ "trace found"`.
                 out.push_str(&pad);
                 out.push_str("SOLVED // trace found\n");
@@ -141,7 +142,7 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
     // On exists-trace lemmas only the trace-found path survives: when a
     // node's status rolls up to Solved (TraceFound), siblings that closed
     // Contradictory are elided.  In Haskell this pruning is done *before*
-    // printing, by `cutOnSolved*` -> `extractSolved` (Proof.hs:879-882,
+    // printing, by `cutOnSolved*` -> `extractSolved` (Theory/Proof.hs:879-882,
     // 920-923), which rebuilds the tree keeping one label per level;
     // `prettyProof` itself prints whatever tree it is handed.
     //
@@ -149,7 +150,7 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
     // We keep only the FIRST Solved child and drop other
     // Contradictory/Sorry siblings.  All-traces proofs (status =
     // Contradictory) keep every branch.
-    let children_to_render: Vec<(String, &ProofNode)> = if node.status == NodeStatus::Solved {
+    let children_to_render: Vec<(&str, &ProofNode)> = if node.status == NodeStatus::Solved {
         // Find the first Solved child; render only that one.
         match node
             .children
@@ -157,18 +158,18 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
             .find(|(_, c)| c.status == NodeStatus::Solved)
         {
             Some((name, child)) => {
-                // Haskell's `extractSolved` (`Theory/Proof.hs:921-923`)
+                // Haskell's `extractSolved` (`Theory/Proof.hs:880-882`)
                 // keeps the survivor's label verbatim — including any
                 // `_case_N` dedup suffix appended by `uniqueListBy`
-                // (ProofMethod.hs:91-103, applied at :308) when the goal
+                // (ProofMethod.hs:90-102, applied at :307) when the goal
                 // originally had multiple cases sharing a rule name.
                 // Pass the name through unchanged.
-                vec![(name.clone(), child)]
+                vec![(name.as_str(), child)]
             }
-            None => node.children.iter().map(|(n, c)| (n.clone(), c)).collect(),
+            None => node.children.iter().map(|(n, c)| (n.as_str(), c)).collect(),
         }
     } else {
-        node.children.iter().map(|(n, c)| (n.clone(), c)).collect()
+        node.children.iter().map(|(n, c)| (n.as_str(), c)).collect()
     };
     // After elision, a singleton empty-key child is still Linear.
     if children_to_render.len() == 1 && children_to_render[0].0.is_empty() {
@@ -219,7 +220,7 @@ fn contradiction_label(
 ) -> String {
     use crate::constraint::solver::contradictions::Contradiction as K;
     // Strings are abbreviated mirrors of Haskell `prettyContradiction`
-    // (Contradictions.hs:437-455, see line 438+); see the case there for each variant.
+    // (Contradictions.hs:487-506); see the case there for each variant.
     // A few variants drop Haskell's interpolated detail (e.g. Haskell's
     // `"node " ++ show j ++ " after last node " ++ show i` becomes
     // `"node after last"`, `"non-injective facts " ++ show cex` becomes
@@ -387,9 +388,9 @@ fn normalize_haskell_line(raw: &str) -> Option<String> {
     if t.is_empty() {
         return None;
     }
-    // Drop block-comment fragments.  `by contradiction /* ... */` is
-    // fine — it doesn't start with `/*` or `*`, and isn't exactly `*/`.
-    if t.starts_with("/*") || t.starts_with("*") || t == "*/" {
+    // Drop block-comment fragments (`/* …`, `* …`, `*/`).  `by
+    // contradiction /* ... */` is fine — it starts with neither `/*` nor `*`.
+    if t.starts_with("/*") || t.starts_with('*') {
         return None;
     }
     // Tokenize.
@@ -402,12 +403,8 @@ fn normalize_haskell_line(raw: &str) -> Option<String> {
     if t == "simplify" {
         return Some(format!("{}simplify", pad));
     }
-    if let Some(rest) = t.strip_prefix("solve(") {
-        // Drop the goal payload — keep just `solve`.
-        let _ = rest;
-        return Some(format!("{}solve", pad));
-    }
-    if t.starts_with("solve ") {
+    // Drop the goal payload — keep just `solve`.
+    if t.starts_with("solve(") || t.starts_with("solve ") {
         return Some(format!("{}solve", pad));
     }
     if let Some(rest) = t.strip_prefix("case ") {
@@ -427,19 +424,20 @@ fn normalize_haskell_line(raw: &str) -> Option<String> {
     }
     // UNFINISHABLE leaf (reducible operator in subterm).  Haskell's
     // `prettyProof` prepends `by ` to this non-Solved finished leaf
-    // (ppCases ps [] at Proof.hs:1054-1075, see line 1065) and `prettyProofMethod` emits
-    // `keyword_ "UNFINISHABLE" <-> lineComment_ "reducible operator in
-    // subterm"` (ProofMethod.hs:1174-1187, see line 1179).  Our `render` emits the same
-    // line, so preserve it verbatim instead of dropping it.
+    // (ppCases ps [] at Theory/Proof.hs:1054-1075, see line 1065) and
+    // `prettyProofMethod` emits `keyword_ "UNFINISHABLE" <-> lineComment_
+    // "reducible operator in subterm"` (ProofMethod.hs:1174-1186, see line
+    // 1178).  Our `render` emits the same line, so preserve it verbatim
+    // instead of dropping it.
     if t.starts_with("UNFINISHABLE") || t.starts_with("by UNFINISHABLE") {
         return Some(format!(
             "{}by UNFINISHABLE // reducible operator in subterm",
             pad
         ));
     }
-    if t == "SOLVED" || t.starts_with("SOLVED") || t == "by SOLVED" {
+    if t.starts_with("SOLVED") || t == "by SOLVED" {
         // HS pretty-prints `keyword_ "SOLVED" <-> lineComment_ "trace found"`
-        // (ProofMethod.hs:1174-1187, see line 1177), so the raw line is `SOLVED // trace found`.
+        // (ProofMethod.hs:1174-1186, see line 1176), so the raw line is `SOLVED // trace found`.
         // Our `render` emits the same suffix; preserve it here so the diff
         // matches verbatim instead of treating the cosmetic comment as a
         // divergence.

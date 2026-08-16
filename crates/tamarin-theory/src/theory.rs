@@ -38,8 +38,9 @@ pub struct OpenProtoRule {
     /// represents the un-narrowed E-rule; when this disjunction is
     /// non-empty, `solve_rule_constraints` adds it as a SplitG goal
     /// in the eq-store so the variant choice is enumerated lazily
-    /// per Haskell's `solveRuleConstraints` (Reduction.hs:766-774).
-    /// Mirrors `RuleACConstrs = Disj LNSubstVFresh` (Rule.hs:925-934, see line 926).
+    /// per Haskell's `solveRuleConstraints` (Reduction.hs:789-797).
+    /// Mirrors `RuleACConstrs = Disj LNSubstVFresh`
+    /// (Theory/Model/Rule.hs:1009).
     pub variant_substs: Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
     /// The abstracted form of `rule` for the SplitG path (Haskell
     /// `variantsProtoRule` returns this in the `ProtoRuleAC`'s
@@ -61,6 +62,26 @@ pub struct OpenProtoRule {
     /// populated by `ProofContext::new`'s `annotate_loop_breakers`
     /// pass.
     pub loop_breakers: Vec<crate::rule::PremIdx>,
+    /// This rule is a product of the `--auto-sources` variant unfold
+    /// (`unfoldRuleVariants`, lib/theory/src/Rule.hs:63-79): `rule` holds one
+    /// AC variant named `<orig>___VARIANT_<i>` while HS's `cprRuleE` half
+    /// keeps the ORIGINAL rule, so the two names differ and
+    /// `equalUpToTerms` (Theory/Model/Rule.hs:960-968) is False on the name
+    /// alone — `openProtoRule` (lib/theory/src/Rule.hs:52-59) then always
+    /// yields its non-empty `[ruAC]` branch for such a rule.  The renderer
+    /// reads this flag where it mirrors that branch choice
+    /// (`pretty_theory::rule_open_ac_nonempty`).
+    pub unfolded_variant: bool,
+    /// HS's `cprRuleE` half, kept only when the `--auto-sources` close made
+    /// `rule` diverge from it: `addActionClosedProtoRule` adds AUTO actions
+    /// to `cprRuleAC` only (lib/theory/src/Rule.hs:95-99) and
+    /// `unfoldRuleVariants` carries the ORIGINAL rule as every variant's
+    /// `cprRuleE` (lib/theory/src/Rule.hs:63-79, see line 76).  Consumers of
+    /// HS's `getProtoRuleEs` (`S.toList . S.fromList . map oprRuleE`,
+    /// ClosedTheory.hs:87-89) — partial evaluation — must read this half:
+    /// it carries no AUTO actions, and the Set round-trip collapses the
+    /// per-variant duplicates.  `None` whenever `rule` still IS the E-half.
+    pub rule_e: Option<Box<ProtoRuleE>>,
 }
 
 impl OpenProtoRule {
@@ -70,6 +91,8 @@ impl OpenProtoRule {
             variant_substs: Vec::new(),
             abstracted_rule: None,
             loop_breakers: Vec::new(),
+            unfolded_variant: false,
+            rule_e: None,
         }
     }
 
@@ -298,10 +321,7 @@ pub struct Options {
     /// Consulted by the load paths that run the once-per-theory
     /// `close_rule::check_close_intr_rule` pass.
     pub deduction_chain_check: bool,
-    /// Auto-generated `default` heuristic used to discharge proofs when
-    /// no explicit heuristic is supplied.
-    pub default_heuristic: Option<String>,
-    /// Lemmas the user requested to prove via `--prove=NAME`.
+    /// HS `_lemmasToProve`: lemma names the user requested via `--prove=NAME`.
     pub lemmas_to_prove: Vec<String>,
 }
 
@@ -316,7 +336,6 @@ impl Default for Options {
             asynchronous_channels: false,
             compress_events: false,
             deduction_chain_check: true,
-            default_heuristic: None,
             lemmas_to_prove: Vec::new(),
         }
     }
@@ -534,10 +553,12 @@ mod tests {
     }
 
     #[test]
-    fn options_default_is_all_false() {
+    fn options_default_flags() {
         let o = Options::default();
         assert!(!o.trans_progress);
         assert!(!o.compress_events);
+        // `--no-ndc` opts out; the check is on by default.
+        assert!(o.deduction_chain_check);
         assert!(o.lemmas_to_prove.is_empty());
     }
 

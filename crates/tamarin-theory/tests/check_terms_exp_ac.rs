@@ -6,7 +6,7 @@
 //! symbol shares its NAME with a reducible builtin.
 //!
 //! HS's `allowed` guard is on the whole `FunSym`:
-//! ``FApp o args | o `S.member` irreducible`` (Wellformedness.hs:982).  A NoEq
+//! ``FApp o args | o `S.member` irreducible`` (Wellformedness.hs:984).  A NoEq
 //! head and an AC head are different `FunSym` constructors, so an irreducible
 //! `AC (ACfct (name, _))` never makes a NoEq application of the same `name`
 //! allowed.

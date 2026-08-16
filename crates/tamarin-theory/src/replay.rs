@@ -6,7 +6,7 @@
 //! (lib/theory/src/Theory/Proof.hs).
 //!
 //! HS's `--prove` flag wires `replaceSorryProver $ runAutoProver`
-//! (TheoryLoader.hs:569-615, see line 606) so the auto-prover runs **only at `by sorry`
+//! (TheoryLoader.hs:705-707, see line 706) so the auto-prover runs **only at `by sorry`
 //! leaves of the user-written skeleton**, not from scratch.  This
 //! preserves the case-decomposition structure the user wrote in the
 //! `.spthy` file even when the auto-prover would have picked a
@@ -41,11 +41,11 @@
 //! The full HS `--prove` flow runs in two passes that this one-pass
 //! walker folds together:
 //!   1. close-time `checkAndExtendProver (sorryProver Nothing)`
-//!      (`proveTheory (const True) checkProof`, Prover.hs:174-185) over
+//!      (`proveTheory (const True) checkProofM`, CloseRule.hs:57-71) over
 //!      ALL lemmas — it re-execs each stored step, keeping the verbatim
 //!      structure and turning any step that no longer applies into an
 //!      annotated `sorry /* invalid proof step encountered */`;
-//!   2. prove-time `replaceSorryProver $ runAutoProver` (TheoryLoader.hs:569-615, see line 606)
+//!   2. prove-time `replaceSorryProver $ runAutoProver` (TheoryLoader.hs:705-707, see line 706)
 //!      over the lemmas the `--prove` selector targets — it re-runs the
 //!      auto-prover at every annotated `sorry` leaf.
 //!
@@ -81,20 +81,24 @@ use crate::fact::{fact_tag_name, FactTag, Multiplicity};
 /// `runProver (replaceSorryProver (runAutoProver autoProver)) ctxt 0
 ///  initial sysOnTree` (Proof.hs).
 ///
-/// `max_steps` is plumbed through to `run_proof_search` for the
-/// fall-through auto-prover invocations.
+/// `proof_bound` (`--bound=N`; `usize::MAX` = unbounded) is plumbed
+/// through to `run_proof_search` for the fall-through auto-prover
+/// invocations.  HS applies `boundProofDepth` inside `runAutoProver`
+/// (Theory/Proof.hs:730-750#runAutoProver), i.e. per sorry-replacement — so each
+/// fall-through search here counts depth from its own subtree root,
+/// exactly as HS does.
 pub fn replace_sorry_prove(
     ctx: &ProofContext,
     initial: System,
     skeleton: &ParsedProofTree,
-    max_steps: usize,
+    proof_bound: usize,
 ) -> ProofNode {
-    replay_node(ctx, initial, skeleton, max_steps, true)
+    replay_node(ctx, initial, skeleton, proof_bound, true)
 }
 
 /// Replay a stored skeleton WITHOUT auto-proving its open/sorry leaves —
 /// the equivalent of HS's close-time `checkAndExtendProver (sorryProver
-/// Nothing)` (Prover.hs:170-251, see line 185, Proof.hs).  Each step's method and
+/// Nothing)` (CloseRule.hs:57-71, see line 71, Proof.hs).  Each step's method and
 /// children are taken verbatim from the skeleton; every fall-through that
 /// `checkProof` would turn into a `Sorry` with a `Nothing` system
 /// (Proof.hs) becomes an *unannotated* `ProofNode`
@@ -103,14 +107,15 @@ pub fn replace_sorry_prove(
 /// its summary status reflects the stored proof — NOT a fresh search.
 ///
 /// Used for lemmas the `--prove` selector does NOT target (HS keeps their
-/// close-time-replayed proof untouched, Prover.hs:273-275).
+/// close-time-replayed proof untouched — `proveLemma`'s `| otherwise = lem`,
+/// CloseRule.hs:157-159).
 pub fn check_and_extend(
     ctx: &ProofContext,
     initial: System,
     skeleton: &ParsedProofTree,
-    max_steps: usize,
+    proof_bound: usize,
 ) -> ProofNode {
-    replay_node(ctx, initial, skeleton, max_steps, false)
+    replay_node(ctx, initial, skeleton, proof_bound, false)
 }
 
 /// Build an annotated `Sorry` leaf seeded with `sys`.  HS `checkProof`
@@ -236,7 +241,7 @@ fn finished_leaf(
     method: MethodResult,
     status: NodeStatus,
     auto_prove: bool,
-    max_steps: usize,
+    proof_bound: usize,
 ) -> ProofNode {
     match is_finished(ctx, &sys) {
         Some(ref r) if matches_expected(r) => ProofNode {
@@ -250,7 +255,7 @@ fn finished_leaf(
             if !auto_prove {
                 invalid_step_node(node, sys)
             } else {
-                run_proof_search(ctx, sys, max_steps)
+                run_proof_search(ctx, sys, proof_bound)
             }
         }
     }
@@ -263,7 +268,7 @@ fn replay_node(
     ctx: &ProofContext,
     sys: System,
     node: &ParsedProofTree,
-    max_steps: usize,
+    proof_bound: usize,
     auto_prove: bool,
 ) -> ProofNode {
     // ---- Leaf cases first (HS `replace prf@(... Sorry ...)`). ----
@@ -277,28 +282,31 @@ fn replay_node(
         if !auto_prove {
             return annotated_sorry(None, sys);
         }
-        return run_proof_search(ctx, sys, max_steps);
+        return run_proof_search(ctx, sys, proof_bound);
     }
 
     // `by contradiction` leaf → emit a Finished(Contradictory) node if
     // a contradiction can actually be derived; else fall through to the
     // auto-prover.  This is HS-faithful, not a divergence: at close time
     // `checkProof` re-execs the stored `Finished (Contradictory Nothing)`
-    // step (`checkAndExecProofMethod`, Proof.hs:447-467, see line 456); if the system is no
+    // step (`checkAndExecProofMethod`, Theory/Proof.hs:447-467, see line 456);
+    // if the system is no
     // longer contradictory the method returns `Nothing`, so checkProof
     // emits `sorryNode (Just "invalid proof step encountered") ...`
-    // (Proof.hs:459-461) carrying `Just sys`.  For a `--prove`-selected
+    // (Theory/Proof.hs:459-460) carrying `Just sys`.  For a `--prove`-selected
     // lemma `replaceSorryProver` then re-runs the auto-prover on that
-    // annotated sorry (Prover.hs:170-251, see line 185 → TheoryLoader.hs:569-615, see line 606), exactly the
+    // annotated sorry (CloseRule.hs:57-71, see line 71 → TheoryLoader.hs:705-707, see line 706), exactly the
     // `run_proof_search` fall-through below.
     if matches!(node.method, ParsedMethod::Contradiction) && node.cases.is_empty() {
-        // HS replay (checkProof, Proof.hs) preserves the skeleton's STORED
-        // method verbatim — the parser builds `Finished (Contradictory
-        // Nothing)` for `by contradiction` (Proof.hs:81), so the reprinted
+        // HS replay (checkProof, Theory/Proof.hs) preserves the skeleton's
+        // STORED method verbatim — the parser builds `Finished (Contradictory
+        // Nothing)` for `by contradiction`
+        // (Theory/Text/Parser/Proof.hs:81), so the reprinted
         // method carries no reason (`prettyProofMethod` → plain `by
         // contradiction`).  Emit `Contradictory(None)`, NOT a freshly-
         // recomputed reason (which would print a spurious `/* from
-        // formulas */`).  On disagreement HS `checkProof` (Proof.hs) emits
+        // formulas */`).  On disagreement HS `checkProof` (Theory/Proof.hs)
+        // emits
         //   `sorryNode (Just "invalid proof step encountered") (M.singleton "" prf)`
         // where `prf` is the current leaf, `noSystemPrf`'d → unannotated.
         return finished_leaf(
@@ -309,19 +317,20 @@ fn replay_node(
             MethodResult::Contradictory(None),
             NodeStatus::Contradictory,
             auto_prove,
-            max_steps,
+            proof_bound,
         );
     }
 
-    // `SOLVED` leaf (HS Proof.hs:102-103).  If runtime is_finished
+    // `SOLVED` leaf (HS Theory/Text/Parser/Proof.hs:102-103).  If runtime
+    // is_finished
     // agrees, emit Finished(Solved); else fall through to the auto-prover
     // (whose run_proof_search may simplify/contract further until it
     // reaches Solved naturally).  The fall-through is exactly HS's
     // pipeline: close-time `checkProof` marks the stale `Finished Solved`
     // an annotated `sorry /* invalid proof step encountered */`
-    // (Proof.hs:459-461), and for a `--prove`-selected lemma
-    // `replaceSorryProver` then reproves it (Prover.hs:170-251, see line 185 →
-    // TheoryLoader.hs:569-615, see line 606).  Skeleton's SOLVED is HS's claim; RS verifies
+    // (Theory/Proof.hs:459-460), and for a `--prove`-selected lemma
+    // `replaceSorryProver` then reproves it (CloseRule.hs:57-71, see line 71 →
+    // TheoryLoader.hs:705-707, see line 706).  Skeleton's SOLVED is HS's claim; RS verifies
     // via its own solver.
     if matches!(node.method, ParsedMethod::SolvedLeaf) && node.cases.is_empty() {
         return finished_leaf(
@@ -332,7 +341,7 @@ fn replay_node(
             MethodResult::Solved,
             NodeStatus::Solved,
             auto_prove,
-            max_steps,
+            proof_bound,
         );
     }
 
@@ -347,7 +356,7 @@ fn replay_node(
             MethodResult::Unfinishable,
             NodeStatus::Unfinishable,
             auto_prove,
-            max_steps,
+            proof_bound,
         );
     }
 
@@ -373,7 +382,7 @@ fn replay_node(
             if !auto_prove {
                 return invalid_step_node(node, sys);
             }
-            return run_proof_search(ctx, sys, max_steps);
+            return run_proof_search(ctx, sys, proof_bound);
         }
     };
 
@@ -469,7 +478,7 @@ fn replay_node(
                 continue;
             }
         };
-        let child_node = replay_node(ctx, child_sys, sub_tree, max_steps, auto_prove);
+        let child_node = replay_node(ctx, child_sys, sub_tree, proof_bound, auto_prove);
         match child_node.status {
             NodeStatus::Solved => any_solved = true,
             NodeStatus::Contradictory => any_contra = true,
@@ -490,23 +499,21 @@ fn replay_node(
     // stale and a new case appeared), invoke the auto-prover on each.
     // This is HS-faithful: `checkProof`'s `mergeMapsWith` treats the
     // runtime-produced cases as the LEFT map and the stored skeleton's
-    // children as the RIGHT map (Proof.hs:447-467, see line 463 `mergeMapsWith
+    // children as the RIGHT map (Theory/Proof.hs:447-467, see line 463
+    // `mergeMapsWith
     // unhandledCase noSystemPrf (go (d+1)) cases cs`), so a runtime-only
     // case (present left, absent right) goes through `unhandledCase =
-    // mapProofInfo (Nothing,) . prover d` (Proof.hs:447-467, see line 462) → an annotated
+    // mapProofInfo (Nothing,) . prover d` (Theory/Proof.hs:447-467, see line
+    // 462) → an annotated
     // `sorry Nothing (Just se)`.  For a `--prove`-selected lemma
     // `replaceSorryProver` then auto-proves that annotated sorry
-    // (Prover.hs:170-251, see line 185 → TheoryLoader.hs:569-615, see line 606), matching the
+    // (CloseRule.hs:57-71, see line 71 → TheoryLoader.hs:705-707, see line 706), matching the
     // `run_proof_search` branch below.
     for (rt_name, rt_sys) in produced.into_iter() {
+        // A case the skeleton already consumed — including one an unnamed
+        // `""` skeleton block claimed, since the loop above re-keys such a
+        // child under the RUNTIME name.
         if children.contains_key(&rt_name) {
-            continue;
-        }
-        // Also skip if the skeleton consumed this case via "".
-        if node.cases.iter().any(|(s, _)| s.is_empty())
-            && children.len() == 1
-            && children.keys().next().map(|s| s.as_str()) == Some(rt_name.as_str())
-        {
             continue;
         }
         let push_path = !rt_name.is_empty();
@@ -514,7 +521,7 @@ fn replay_node(
             crate::constraint::solver::trace::case_path_push(&rt_name);
         }
         let auto = if auto_prove {
-            run_proof_search(ctx, rt_sys, max_steps)
+            run_proof_search(ctx, rt_sys, proof_bound)
         } else {
             // HS check-and-extend, `mergeMapsWith` leftOnly branch
             // (Proof.hs): a case PRODUCED by re-executing the method
@@ -756,7 +763,7 @@ fn resolve_method(parsed: &ParsedMethod, sys: &System) -> Option<ProofMethod> {
 }
 
 /// Exact-match a stored-proof fact's argument terms against a runtime
-/// [`LNFact`]'s terms — HS's `M.member` semantics (ProofMethod.hs:348-459, see line 374
+/// [`LNFact`]'s terms — HS's `M.member` semantics (ProofMethod.hs:253-274, see line 258
 /// `guard (goal `M.member` L.get sGoals sys)`).
 ///
 /// HS parses the stored `solve(...)` goal into a full `Goal` carrying
@@ -764,7 +771,7 @@ fn resolve_method(parsed: &ParsedMethod, sys: &System) -> Option<ProofMethod> {
 /// and looks it up by **structural equality** against `sys.goals`; when the
 /// goal is absent from the (drifted) current system `checkProof` returns
 /// `Nothing` and marks the step `sorry /* invalid proof step encountered */`,
-/// keeping the stored subtree verbatim (Proof.hs:455-468).
+/// keeping the stored subtree verbatim (Theory/Proof.hs:456-467).
 ///
 /// Our skeleton parser keeps each fact argument only as raw surface text
 /// (`build_fact` stuffs it into a `Term::Var` name).  We recover the
@@ -789,8 +796,11 @@ fn fact_terms_match_exact(
     if parsed_args.len() != runtime_terms.len() {
         return false;
     }
+    // The theory's `[AC]` symbol names, read once for the whole fact: the
+    // re-parse needs them to read a user AC symbol's infix spelling.
+    let ac_names = crate::elaborate::current_user_ac_names();
     parsed_args.iter().zip(runtime_terms.iter()).all(|(p, r)| {
-        match parse_arg_to_lnterm(p) {
+        match parse_arg_to_lnterm(p, &ac_names) {
             // Canonical re-parse equals the runtime term exactly (M.member).
             Some(t) => &t == r,
             // Unparseable / unconvertible arg: we cannot establish exact
@@ -807,8 +817,11 @@ fn fact_terms_match_exact(
 /// `Term::Var` name shim; `term_to_lnterm` (elaborate.rs) is HS's
 /// `fact llit` term construction (it reads the live elaboration context for
 /// user function symbols, which is in scope during proof-search replay).
-fn parse_arg_to_lnterm(arg: &tamarin_parser::ast::Term) -> Option<tamarin_term::lterm::LNTerm> {
-    let ast = parsed_term_of_arg(arg)?;
+fn parse_arg_to_lnterm(
+    arg: &tamarin_parser::ast::Term,
+    ac_names: &[String],
+) -> Option<tamarin_term::lterm::LNTerm> {
+    let ast = parsed_term_of_arg(arg, ac_names)?;
     crate::elaborate::term_to_lnterm(&ast)
 }
 
@@ -816,31 +829,48 @@ fn parse_arg_to_lnterm(arg: &tamarin_parser::ast::Term) -> Option<tamarin_term::
 /// skeleton parser stores each arg as a `Term::Var` whose `name` holds
 /// the raw surface text (see `build_fact`); re-parse that text.  If the
 /// arg is already structured (future-proofing), return it directly.
-fn parsed_term_of_arg(arg: &tamarin_parser::ast::Term) -> Option<tamarin_parser::ast::Term> {
+///
+/// `ac_names` are the theory's user-declared `[AC]` symbols, which the
+/// re-parse needs to read their infix spelling (`(z add h(y))` for
+/// `functions: add/2 [AC]`) — HS's `acterm` takes the same set from the
+/// parser state's signature (Theory/Text/Parser/Term.hs:165-174).
+fn parsed_term_of_arg(
+    arg: &tamarin_parser::ast::Term,
+    ac_names: &[String],
+) -> Option<tamarin_parser::ast::Term> {
     use tamarin_parser::ast::Term as PTerm;
     match arg {
-        PTerm::Var(v) => tamarin_parser::parser::parse_term_str(&v.name).ok(),
+        PTerm::Var(v) => tamarin_parser::parser::parse_term_str(&v.name, ac_names).ok(),
         other => Some(other.clone()),
     }
 }
 
+/// The OPEN goals of `sys`, in `sGoals` creation order — the search space
+/// every [`match_goal`] arm ranges over, mirroring HS's `M.member`/`M.toList`
+/// over `sGoals`.
+fn open_goals(sys: &System) -> impl Iterator<Item = &Goal> {
+    sys.goals
+        .iter()
+        .filter(|(_, st)| !st.solved)
+        .map(|(g, _)| g)
+}
+
 /// Find a [`Goal`] in `sys.goals` that matches the parsed [`GoalSpec`].
 ///
-/// The skeleton's `solve(...)` text identifies a goal by fact NAME and
-/// optionally a premise INDEX.  At replay time variable indices and
-/// substitutions may differ from the skeleton's static text, so we
-/// match structurally (fact name + arity + premise idx) rather than
-/// by deep term equality.
+/// HS looks the goal up by structural equality on the parsed `Goal` value
+/// itself (`Theory.Text.Parser.Proof.goal`,
+/// Theory/Text/Parser/Proof.hs:38-72), whose LVar
+/// identities come from the parser's name table.  RS's skeleton parser keeps
+/// only surface text, so each arm rebuilds as much of that equality as its
+/// goal kind allows: the fact-bearing kinds re-parse the stored terms and
+/// compare them exactly ([`fact_terms_match_exact`]), the rest compare
+/// canonicalised rendered text or a stable id.
 ///
-/// HS does goal lookup via the parsed `Goal` directly (see
-/// `Theory.Text.Parser.Proof.goal` Proof.hs:39-72), but HS's parsed
-/// goal carries proper LVar identities populated by the parser's name
-/// table; our skeleton parser captures only surface text, hence the
-/// structural-match approach.
-///
-/// Returns `None` if no goal matches (or multiple ambiguous matches
-/// exist with no way to disambiguate); the caller falls back to the
-/// auto-prover.
+/// `None` means the stored step names a goal this system does not have.  For
+/// every kind handled here `exec_method_for` then gives up (its raw-solve
+/// fallback is reserved for [`GoalSpec::Raw`]), and the caller emits
+/// `sorry /* invalid proof step encountered */` over the verbatim stored
+/// subtree — HS `checkProof`'s `Nothing` branch (Theory/Proof.hs:456-467).
 fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
     match spec {
         GoalSpec::Action {
@@ -849,97 +879,42 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             time_idx,
             ..
         } => {
-            // Open Action goals whose fact name matches.  Skip KU
-            // (auto-handled) for non-KU goal specs — the skeleton's
-            // `solve(...)` always names protocol facts, never `KU(...)`.
+            // HS's parsed `ActionG i fa` matches by structural equality
+            // against a key of `sGoals` (ProofMethod.hs:253-274, see line
+            // 258, `goal `M.member` sGoals`), so the conjuncts below are one
+            // `M.member` test split into the three things RS can check:
             //
-            // HS-faithful: HS's parsed `ActionG i fa` carries the
-            // timepoint LVar `i` and matches by structural equality
-            // (HS ProofMethod.hs:348-459, see line 374 `goal `M.member` sGoals`).  RS's
-            // skeleton-text parser captures only the time-var ROOT
-            // name (e.g. `i` from `#i.3`) — LVar idxs in the skeleton
-            // and runtime differ because HS pretty-prints idxs after a
-            // freshen but our skeleton-parse drops them.  The
-            // (name, arity, persistent) tuple is only a PRE-FILTER here;
-            // the exact-term and exact-timepoint-LVar narrowing below
-            // decides which goal (if any) the stored step binds.
-            let want_name = &fact.name;
-            let want_arity = fact.args.len();
-            let want_persistent = fact.persistent;
-            // The skeleton may explicitly solve a `!KU( t ) @ #i` action
-            // goal (HS skeletons do — e.g. noise secrecy proofs).  Only
-            // exclude runtime `KU` goals when the spec does NOT name
-            // `KU`; otherwise a non-KU spec could spuriously bind a KU
-            // goal of matching arity.
-            let want_ku = want_name == "KU";
-            let shape_matches: Vec<&Goal> = sys
-                .goals
-                .iter()
-                .filter(|(_, st)| !st.solved)
-                .filter_map(|(g, _)| match g {
-                    Goal::Action(_, fa) => {
-                        if name_matches(&fa.tag, want_name)
-                            && fa.terms.len() == want_arity
-                            && tag_persistent(&fa.tag) == want_persistent
-                            && (want_ku || !matches!(fa.tag, FactTag::Ku))
-                        {
-                            Some(g)
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                })
-                .collect();
-            if shape_matches.is_empty() {
-                return None;
-            }
-            // Narrow to candidates whose TERMS are EXACTLY EQUAL to the
-            // stored goal (HS `M.member`, ProofMethod.hs:348-459, see line 374 — see
-            // `fact_terms_match_exact`).  When the stored goal's term is
-            // absent from the drifted system, HS returns `Nothing` and
-            // marks the step invalid (Proof.hs:455-468).  A name+arity
-            // match alone is NOT enough: a stale stored `!KU( ~r1 )` must
-            // not bind a present `!KU( h(...) )` of the same shape — that
-            // re-derives the wrong goal and cascades into a divergent
-            // subtree.
-            let by_struct: Vec<&Goal> = shape_matches
-                .iter()
-                .copied()
-                .filter(|g| match g {
-                    Goal::Action(_, fa) => fact_terms_match_exact(&fact.args, &fa.terms),
-                    _ => false,
-                })
-                .collect();
-            if by_struct.is_empty() {
-                // No system goal structurally matches the stored goal —
-                // it's a stale (invalidated) proof step.  Return None so
-                // the caller emits the HS-faithful
-                // `sorry /* invalid proof step encountered */` and keeps
-                // the stored subtree verbatim.
-                return None;
-            }
-            // HS `M.member` keys on the FULL timepoint LVar (name AND idx):
-            // `SolveGoal (ActionG i fa)` matches iff that exact `ActionG i
-            // fa` is a key of `sGoals` (ProofMethod.hs:348-459, see line 374,
-            // `goal `M.member` sGoals`).  A stored step whose timepoint idx
-            // has DRIFTED from the re-executed system's idx (e.g. stored
-            // `!KU(~e0)@#vk.17` but re-execution mints the goal at `#vk.18`
-            // after upstream case-numbering changed) is therefore a MISS in
-            // HS, which emits `sorry /* invalid proof step encountered */`
-            // and keeps the stored subtree verbatim (Proof.hs:447-467, see line 461).
-            // Matching by term + root-name alone (ignoring the idx) is too
-            // lenient — it re-binds the drifted goal and replays it as a
-            // live step, diverging from HS.  Require the exact LVar idx.
-            // sGoals is keyed by Goal, so the same (term, LVar) goal cannot
-            // appear twice; at most one candidate carries the exact LVar.
-            // If none does, HS's `M.member` misses ⇒ invalid step — return
-            // None and mirror it.
-            by_struct
-                .iter()
-                .copied()
+            // * (name, arity, persistent) — the fact SHAPE.  Skip KU goals
+            //   (auto-handled) unless the spec itself names `KU`: the
+            //   skeleton usually names protocol facts, but it may explicitly
+            //   solve a `!KU( t ) @ #i` (noise secrecy proofs do), and a
+            //   non-KU spec must not spuriously bind a KU goal of matching
+            //   arity.
+            // * `fact_terms_match_exact` — the TERMS.  Shape alone is not
+            //   enough: a stale stored `!KU( ~r1 )` must not bind a present
+            //   `!KU( h(...) )`, which would re-derive the wrong goal and
+            //   cascade into a divergent subtree.
+            // * the FULL timepoint LVar, name AND idx.  A stored step whose
+            //   idx has drifted from the re-executed system's (stored
+            //   `!KU(~e0)@#vk.17` vs a re-minted `#vk.18` after upstream
+            //   case-numbering changed) is a `M.member` miss in HS.  Root
+            //   name alone is too lenient — it re-binds the drifted goal and
+            //   replays it as a live step.
+            //
+            // `sGoals` is keyed by `Goal`, so at most one open goal can
+            // satisfy all three.
+            let want_ku = fact.name == "KU";
+            open_goals(sys)
                 .find(|g| match g {
-                    Goal::Action(i, _) => *i.name == **time_var && i.idx == *time_idx as u64,
+                    Goal::Action(i, fa) => {
+                        name_matches(&fa.tag, &fact.name)
+                            && fa.terms.len() == fact.args.len()
+                            && tag_persistent(&fa.tag) == fact.persistent
+                            && (want_ku || !matches!(fa.tag, FactTag::Ku))
+                            && fact_terms_match_exact(&fact.args, &fa.terms)
+                            && *i.name == **time_var
+                            && i.idx == *time_idx as u64
+                    }
                     _ => false,
                 })
                 .cloned()
@@ -951,64 +926,20 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             time_idx,
             ..
         } => {
-            // HS `PremiseG (i, v) fa` carries the node-LVar `i` and
-            // PremIdx `v`.  Disambiguate by name + arity + prem_idx
-            // first, then by time-var root if the (name, arity, idx)
-            // tuple matches multiple goals — same logic as Action.
-            let want_name = &fact.name;
-            let want_arity = fact.args.len();
-            let want_persistent = fact.persistent;
-            let shape_matches: Vec<&Goal> = sys
-                .goals
-                .iter()
-                .filter(|(_, st)| !st.solved)
-                .filter_map(|(g, _)| match g {
-                    Goal::Premise(np, fa) => {
-                        if name_matches(&fa.tag, want_name)
-                            && fa.terms.len() == want_arity
-                            && tag_persistent(&fa.tag) == want_persistent
-                            && (np.1).0 == *prem_idx
-                        {
-                            Some(g)
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                })
-                .collect();
-            if shape_matches.is_empty() {
-                return None;
-            }
-            // Narrow to candidates whose TERMS are EXACTLY EQUAL to the
-            // stored goal (HS `M.member`).  Same rationale as the Action
-            // branch: HS matches the parsed `PremiseG (i,v) fa` by
-            // structural equality; a stale stored premise goal that no
-            // longer exists in the drifted system must be rejected so the
-            // caller emits the invalid-step placeholder.
-            let by_struct: Vec<&Goal> = shape_matches
-                .iter()
-                .copied()
-                .filter(|g| match g {
-                    Goal::Premise(_, fa) => fact_terms_match_exact(&fact.args, &fa.terms),
-                    _ => false,
-                })
-                .collect();
-            if by_struct.is_empty() {
-                return None;
-            }
-            // HS `M.member` keys on the FULL node LVar (name AND idx) of the
-            // parsed `PremiseG (i, v) fa` (ProofMethod.hs:348-459, see line 374).  A stored
-            // premise step whose node idx has drifted from the re-executed
-            // system is a miss in HS ⇒ invalid step.  Require the exact LVar
-            // idx — same rationale as the Action branch above (matching by
-            // root-name alone re-binds a drifted goal and replays it live).
-            by_struct
-                .iter()
-                .copied()
+            // `PremiseG (i, v) fa` under the same one-`M.member`-test-split-
+            // in-three reading as the Action arm above (shape, then exact
+            // terms, then the FULL node LVar); the extra conjunct is the
+            // `PremIdx v`.
+            open_goals(sys)
                 .find(|g| match g {
-                    Goal::Premise((node, _), _) => {
-                        *node.name == **time_var && node.idx == *time_idx as u64
+                    Goal::Premise((node, prem), fa) => {
+                        name_matches(&fa.tag, &fact.name)
+                            && fa.terms.len() == fact.args.len()
+                            && tag_persistent(&fa.tag) == fact.persistent
+                            && prem.0 == *prem_idx
+                            && fact_terms_match_exact(&fact.args, &fa.terms)
+                            && *node.name == **time_var
+                            && node.idx == *time_idx as u64
                     }
                     _ => false,
                 })
@@ -1017,21 +948,18 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
         GoalSpec::Disj { alts, alt_texts } => {
             // HS-faithful: HS parses the `solve(...)` text into a
             // `DisjG (Disj [GuardedFormula])` value via
-            // `disjSplitGoal` (Theory/Text/Parser/Proof.hs:39-72, see line 61), then
+            // `disjSplitGoal` (Theory/Text/Parser/Proof.hs:38-72, see line 61),
+            // then
             // dispatches `SolveGoal goal` against `sys.goals` (HS
-            // ProofMethod.hs:374: `guard (goal \`M.member\` sGoals)`).
+            // ProofMethod.hs:258: `guard (goal \`M.member\` sGoals)`).
             //
             // Our skeleton parser only captures each alt's structural
-            // SIGNATURE (top-level shape — see `DisjAlt`).  We pick
-            // the unique open `Goal::Disj(d)` whose `d.0` list has the
-            // same length AND the same per-alt signature as the
-            // skeleton's `alts`.  Empirically at every replay point in
-            // the lemma corpus, at most one open Disj matches that
-            // signature (the skeleton-text and runtime-Goal come from
-            // the same lemma formula).  See HS Proof.hs:61.
+            // SIGNATURE (top-level shape — see `DisjAlt`), so the first
+            // filter keeps every open `Goal::Disj(d)` whose `d.0` list has
+            // the same length AND the same per-alt signature as the
+            // skeleton's `alts`.  See HS Theory/Text/Parser/Proof.hs:61.
             //
-            // HS-faithful disambiguation when multiple Disj goals
-            // share the same alt shape signature: the
+            // That signature is not always unique: the
             // insertImpliedFormulas pass at a single IH can produce
             // multiple alpha-distinct disjunctions (one per matching
             // action-tuple), all with the same 5-NonQuant shape.  HS
@@ -1048,74 +976,76 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             // picks (t1,t2), which propagates `last_atom = #t1`
             // instead of `last_atom = #t2`, triggering a false-positive
             // Cyclic contradiction downstream.
-            let shape_matches: Vec<&Goal> = sys
-                .goals
-                .iter()
-                .filter(|(_, st)| !st.solved)
-                .filter_map(|(g, _)| match g {
-                    Goal::Disj(d) if disj_alts_match(alts, &d.0) => Some(g),
-                    _ => None,
-                })
+            let shape_matches: Vec<&Goal> = open_goals(sys)
+                .filter(|g| matches!(g, Goal::Disj(d) if disj_alts_match(alts, &d.0)))
                 .collect();
-            if shape_matches.len() == 1 {
-                return Some(shape_matches[0].clone());
+            if shape_matches.is_empty() {
+                return None;
             }
-            // Ambiguous shape — try alt-text tie-breaker.  Render each
-            // candidate disj's alts via `pretty_disj_alts` (a strict
-            // analogue of HS's `prettyGuarded`) and compare against
-            // skel `alt_texts`.  Pick the candidate whose rendered
-            // alts equal the skeleton's text alts after the same
-            // normalization the parser applied (whitespace + `#`
-            // stripped).
-            if !shape_matches.is_empty() {
-                let dbg = tamarin_utils::env_gate!("TAM_RS_DBG_MATCH_GOAL_DISJ");
-                if dbg {
-                    let path = crate::constraint::solver::trace::case_path_string();
-                    eprintln!(
-                        "[MATCH_GOAL_DISJ] path={} shape_matches={} skel.alt_texts={:?}",
-                        path,
-                        shape_matches.len(),
-                        alt_texts
-                    );
-                }
-                if !alt_texts.iter().all(|s| s.is_empty()) {
-                    let want: Vec<String> = alt_texts.clone();
-                    let mut text_matches: Vec<&Goal> = shape_matches
+            // Render each candidate disj's alts via `pretty_disj_alt` (a
+            // strict analogue of HS's `prettyGuarded`) and compare against
+            // skel `alt_texts`, both under the same normalization the parser
+            // applied (whitespace + `#` stripped).  Score each candidate by
+            // HOW MANY alts render exactly as stored and keep the best
+            // (ties → source order).
+            //
+            // Scoring rather than all-or-nothing because the stored text
+            // need not be in the runtime's normal form: HS re-parses each
+            // alt into a `Guarded` (Theory/Text/Parser/Proof.hs:38-72, see
+            // line 61) and the
+            // parse normalizes — `gconj`'s `nub` collapses a repeated
+            // conjunct (Guarded.hs:415-423), so a stored
+            // `… ⇒ (∀ #l. C @ #l ⇒ ⊥) ∧ (∀ #l. C @ #l ⇒ ⊥)` matches a
+            // runtime alt printing the conjunct once (ake/dh/UM_three_pass,
+            // `case_2/…/R_Activate_case_1`).  An all-or-nothing test rejects
+            // that candidate and falls through to source order, binding a
+            // DIFFERENT open disj and diverging.
+            let dbg = tamarin_utils::env_gate!("TAM_RS_DBG_MATCH_GOAL_DISJ");
+            if dbg {
+                let path = crate::constraint::solver::trace::case_path_string();
+                eprintln!(
+                    "[MATCH_GOAL_DISJ] path={} shape_matches={} skel.alt_texts={:?}",
+                    path,
+                    shape_matches.len(),
+                    alt_texts
+                );
+            }
+            if !alt_texts.iter().all(|s| s.is_empty()) {
+                let mut best: Option<(usize, &Goal)> = None;
+                for g in shape_matches.iter().copied() {
+                    let Goal::Disj(d) = g else { continue };
+                    let runtime_texts: Vec<String> =
+                        d.0.iter()
+                            .map(|a| normalize_disj_alt_text_for_match(&pretty_disj_alt(a)))
+                            .collect();
+                    // `disj_alts_match` already equated the lengths.
+                    let score = runtime_texts
                         .iter()
-                        .copied()
-                        .filter(|g| {
-                            if let Goal::Disj(d) = g {
-                                let runtime_texts: Vec<String> = d
-                                    .0
-                                    .iter()
-                                    .map(|a| normalize_disj_alt_text_for_match(&pretty_disj_alt(a)))
-                                    .collect();
-                                if dbg {
-                                    eprintln!(
-                                        "[MATCH_GOAL_DISJ]   runtime_alts={:?} match={}",
-                                        runtime_texts,
-                                        runtime_texts == want
-                                    );
-                                }
-                                runtime_texts == want
-                            } else {
-                                false
-                            }
-                        })
-                        .collect();
-                    if text_matches.len() == 1 {
-                        return Some(text_matches.remove(0).clone());
+                        .zip(alt_texts.iter())
+                        .filter(|(r, w)| r == w)
+                        .count();
+                    if dbg {
+                        eprintln!(
+                            "[MATCH_GOAL_DISJ]   runtime_alts={:?} score={}/{}",
+                            runtime_texts,
+                            score,
+                            alt_texts.len()
+                        );
                     }
-                    if !text_matches.is_empty() {
-                        return Some(text_matches[0].clone());
+                    if !matches!(best, Some((b, _)) if score <= b) {
+                        best = Some((score, g));
                     }
                 }
-                // No text match (or no text info) — fall back to source
-                // order (creation order in `sGoals`).  Mirrors the
-                // Action/Premise ambiguity-resolution policy above.
-                return Some(shape_matches[0].clone());
+                if let Some((score, g)) = best {
+                    if score > 0 {
+                        return Some(g.clone());
+                    }
+                }
             }
-            None
+            // No alt rendered as stored (or no text info) — fall back to
+            // source order (creation order in `sGoals`).  Mirrors the
+            // Action/Premise ambiguity-resolution policy above.
+            Some(shape_matches[0].clone())
         }
         GoalSpec::Chain {
             src_var,
@@ -1124,111 +1054,73 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             prem_idx,
         } => {
             // HS dispatch: `solve( (#i, n) ~~> (#j, m) )` parses to
-            // `ChainG (i, ConcIdx n) (j, PremIdx m)` (Proof.hs:59) and
+            // `ChainG (i, ConcIdx n) (j, PremIdx m)`
+            // (Theory/Text/Parser/Proof.hs:59) and
             // matches by structural equality against an open
-            // `Goal::Chain(...)` in `sys.goals` (HS ProofMethod.hs:374:
+            // `Goal::Chain(...)` in `sys.goals` (HS ProofMethod.hs:258:
             // `goal `M.member` sGoals`).  HS's open chain-goal carries
             // concrete LVar identities — same skeleton-vs-runtime LVar
             // suffix-idx mismatch as Action/Premise.  We match by var
             // ROOT name + conc/prem idx, ignoring suffix idxs.
-            let want_src = src_var;
-            let want_tgt = tgt_var;
-            let want_c = *conc_idx as usize;
-            let want_p = *prem_idx as usize;
-            let matches: Vec<&Goal> = sys
-                .goals
-                .iter()
-                .filter(|(_, st)| !st.solved)
-                .filter_map(|(g, _)| match g {
+            open_goals(sys)
+                .find(|g| match g {
                     Goal::Chain((src, c), (tgt, p)) => {
-                        if *src.name == **want_src
-                            && *tgt.name == **want_tgt
-                            && c.0 == want_c
-                            && p.0 == want_p
-                        {
-                            Some(g)
-                        } else {
-                            None
-                        }
+                        *src.name == **src_var
+                            && *tgt.name == **tgt_var
+                            && c.0 == *conc_idx as usize
+                            && p.0 == *prem_idx as usize
                     }
-                    _ => None,
+                    _ => false,
                 })
-                .collect();
-            matches.first().copied().cloned()
+                .cloned()
         }
         GoalSpec::Subterm { small_raw, big_raw } => {
-            // HS `stSplitGoal` (Proof.hs:63-66) parses to
+            // HS `stSplitGoal` (Theory/Text/Parser/Proof.hs:63-66) parses to
             // `SubtermG (small, big)` over LNTerm and dispatches via
-            // structural Map lookup in `sys.goals` (HS ProofMethod.hs:348-459, see line 374).
+            // structural Map lookup in `sys.goals` (HS ProofMethod.hs:253-274, see line 258).
             // We compare by canonical pretty-printed text — see HS
-            // `prettyGoal (SubtermG (l,r))` at Constraints.hs:281-282
+            // `prettyGoal (SubtermG (l,r))` at Constraints.hs:287-288
             // which prints `prettyLNTerm l ⊏ prettyLNTerm r`.  Pretty
             // representations are stable across the skeleton-vs-runtime
             // boundary for ground terms; for terms containing free
             // LVars the skeleton-text and runtime indices may diverge,
-            // so as a fallback we also accept a unique-arity match
-            // (when only ONE open Subterm exists).
+            // so as a fallback we accept the sole open Subterm goal when
+            // there is exactly one.
             use tamarin_term::pretty::pretty_lnterm;
             let want_small = canonicalise_term_text(small_raw);
             let want_big = canonicalise_term_text(big_raw);
-            let matches: Vec<&Goal> = sys
-                .goals
-                .iter()
-                .filter(|(_, st)| !st.solved)
-                .filter_map(|(g, _)| match g {
+            let by_text = open_goals(sys)
+                .find(|g| match g {
                     Goal::Subterm((l, r)) => {
-                        let l_s = canonicalise_term_text(&pretty_lnterm(l));
-                        let r_s = canonicalise_term_text(&pretty_lnterm(r));
-                        if l_s == want_small && r_s == want_big {
-                            Some(g)
-                        } else {
-                            None
-                        }
+                        canonicalise_term_text(&pretty_lnterm(l)) == want_small
+                            && canonicalise_term_text(&pretty_lnterm(r)) == want_big
                     }
-                    _ => None,
+                    _ => false,
                 })
-                .collect();
-            if let Some(g) = matches.first() {
-                return Some((*g).clone());
+                .cloned();
+            if by_text.is_some() {
+                return by_text;
             }
             // Fallback: if exactly one open Subterm goal exists, use
             // it (the skeleton text uniquely identifies it by being
             // the only Subterm in `sys.goals`).
-            let only_subterm: Vec<&Goal> = sys
-                .goals
-                .iter()
-                .filter(|(_, st)| !st.solved)
-                .filter_map(|(g, _)| {
-                    if matches!(g, Goal::Subterm(_)) {
-                        Some(g)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            if only_subterm.len() == 1 {
-                return Some(only_subterm[0].clone());
+            let mut subterms = open_goals(sys).filter(|g| matches!(g, Goal::Subterm(_)));
+            let first = subterms.next();
+            match subterms.next() {
+                None => first.cloned(),
+                Some(_) => None,
             }
-            None
         }
         GoalSpec::Split { split_id } => {
-            // HS `eqSplitGoal` (Proof.hs:70-72) parses to
+            // HS `eqSplitGoal` (Theory/Text/Parser/Proof.hs:70-72) parses to
             // `SplitG (SplitId N)` and dispatches via structural Map
             // lookup in `sys.goals`.  Split ids are stable (minted by
             // `EquationStore::add_disj`), so an exact id-match is
             // correct here — no variable-renaming concerns.
             let want = crate::constraint::constraints::SplitId(*split_id);
-            for (g, st) in sys.goals.iter() {
-                if st.solved {
-                    continue;
-                }
-                if let Goal::Split(id) = g {
-                    if *id == want {
-                        return Some(g.clone());
-                    }
-                }
-            }
-            None
+            open_goals(sys)
+                .find(|g| matches!(g, Goal::Split(id) if *id == want))
+                .cloned()
         }
         GoalSpec::Raw(_) => None,
     }
@@ -1316,7 +1208,7 @@ fn disj_alts_match(skel: &[DisjAlt], runtime: &[crate::guarded::Guarded]) -> boo
 /// Render a single Guarded alt to its HS-faithful `prettyGuarded`
 /// representation.  Used by `match_goal`'s GoalSpec::Disj branch to
 /// disambiguate among multiple shape-matching disjs via alt-text
-/// equality.  See HS `prettyGuarded` (Guarded.hs:822-864).
+/// equality.  See HS `prettyGuarded` (Guarded.hs:824-866).
 fn pretty_disj_alt(g: &crate::guarded::Guarded) -> String {
     crate::pretty_formula::pretty_guarded(g)
 }
@@ -1357,7 +1249,7 @@ fn disj_alt_shape_matches(skel: &DisjAlt, g: &crate::guarded::Guarded) -> bool {
         // idiom: the skeleton's text starts with `¬` (not `∀`), so
         // the parser classified it `NonQuant`; we accept it matching
         // a `GGuarded { qua: All, vars: [] }` here.  See
-        // Guarded.hs:856-857 for the negation rendering.
+        // Guarded.hs:858-859 for the negation rendering.
         (
             DisjAlt::NonQuant,
             Guarded::GGuarded {
@@ -1381,7 +1273,7 @@ fn name_matches(tag: &FactTag, want: &str) -> bool {
 }
 
 fn tag_persistent(tag: &FactTag) -> bool {
-    // `KU`/`KD` knowledge facts are persistent (Fact.hs:353-357;
+    // `KU`/`KD` knowledge facts are persistent (Theory/Model/Fact.hs:383-388;
     // `factTagMultiplicity` → Persistent), and the skeleton pretty-prints
     // them with the `!` prefix (e.g. `solve( !KU( ~n ) @ #vk )`), so the
     // parsed spec's `persistent` flag is `true` and must match here.

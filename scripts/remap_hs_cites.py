@@ -4,11 +4,13 @@
     scripts/remap_hs_cites.py --old <pin> --new <pin> [--apply] [file.rs ...]
 
 Comments across crates/ cite upstream Haskell locations as `Foo.hs:12`,
-`Foo.hs:150-183`, `Foo.hs:61-63,84,92` or `Foo.hs:150-183, see line 162`.
-The numbers are relative to the pinned submodule, so a bump silently
-invalidates any cite into a Haskell file the bump rewrote.  This tool maps
-every cite through the `git diff <old> <new>` line mapping of its Haskell
-file:
+`Foo.hs:150-183`, `Foo.hs:61-63,84,92`, `Foo.hs:150-183, see line 162` or,
+with a symbol anchor, `Foo.hs:150-183#declName`.  The grammar is
+`check_hs_cites.CITE`, imported rather than restated: this tool writes what
+that gate reads.  The numbers are relative to the pinned submodule, so a bump
+silently invalidates any cite into a Haskell file the bump rewrote.  This
+tool maps every cite through the `git diff <old> <new>` line mapping of its
+Haskell file:
 
   * parts that fall outside every changed hunk get the pure line shift;
   * parts that land inside a changed hunk are re-anchored semantically: the
@@ -19,21 +21,42 @@ file:
   * anything ambiguous is left untouched and reported as UNRESOLVED for a
     human pass.
 
+Which file a cite names is resolved by path suffix and then by the dotted
+module spelling, the same two ways `check_hs_cites.py` resolves it, and a
+basename matching two upstream files is UNRESOLVED rather than guessed at by
+crate preference — remapping through the wrong sibling's diff produces
+numbers that look maintained and name nothing, and the gate rejects a cite
+that vague anyway.  Cites into `check_hs_cites.EXTERNAL_MODULES` (Haskell the
+submodule does not vendor) and `Foo.hs:LINE:COL` GHC coordinates (emitted
+output, not citations) are skipped and counted, never rewritten.
+
+A `#declName` anchor is carried through the rewrite and does three things: it
+names the declaration to re-anchor onto directly, it makes a cite that was
+ALREADY stale at the old pin refuse to remap (reported, so the gate still
+sees it), and it makes a rewrite whose new range no longer contains the name
+refuse likewise.  Without one, a cite that both pins consider in-range but
+that now spans the wrong declaration is remapped silently — that is the
+failure the anchor exists for.
+
 A cite whose parts list WRAPS onto the following comment line is joined first
 and remapped as one list, then written back at the same split (see
 `continuation`); the shape recognised is deliberately narrow, and
 bump_submodule.sh lints for the wrapped cites it declines to join.
 
 Dry run by default (prints every planned rewrite); `--apply` edits in
-place.  Only comment lines are touched — a cite is processed only when it
-sits after `//` (or `#` in scripts) on its line.  Exit status is 0 unless
-arguments are bad: unresolved cites are a report, not a failure, so the
-bump flow never aborts on them.
+place.  Only comment text is touched, and for `.rs` files "comment" means
+what `check_hs_cites.lex_spans` lexes as one, not "after the first `//`": the
+expected-output fixtures quote Tamarin's own `//` lines, several of them
+around an upstream cite, and a rewrite inside such a literal would change
+bytes the corpus comparison pins.  Other file types keep the plain `#`/`//`
+scan.  Exit status is 0 unless arguments are bad: unresolved cites are a
+report, not a failure, so the bump flow never aborts on them.
 
 Invoked automatically by scripts/bump_submodule.sh with the old and new
 pins after the gitlink moves.
 """
 import argparse
+import collections
 import importlib.util
 import os
 import re
@@ -45,19 +68,22 @@ REPO = os.path.dirname(SCRIPT_DIR)
 SUB = os.path.join(REPO, "tamarin-prover")
 CRATES = os.path.join(REPO, "crates")
 
-_spec = importlib.util.spec_from_file_location(
-    "extend_anchor_citations", os.path.join(SCRIPT_DIR, "extend_anchor_citations.py"))
-_eac = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_eac)
-decl_groups, trim_extent, resolve = _eac.decl_groups, _eac.trim_extent, _eac.resolve
+def _load(name):
+    spec = importlib.util.spec_from_file_location(
+        name, os.path.join(SCRIPT_DIR, name + ".py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
-# `<file>.hs:<parts>[, see line <n>[,<n>...]]` where parts is a comma-joined
-# list of `N` / `N-M`.  A following `, Other.hs:...` cite never matches the
-# parts tail (it does not start with a digit).
-CITE = re.compile(
-    r"([A-Za-z][A-Za-z0-9_/.']*\.hs):"
-    r"(\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)"
-    r"((?:, see line \d+(?:,\d+)*)?)")
+
+_eac = _load("extend_anchor_citations")
+decl_groups, trim_extent = _eac.decl_groups, _eac.trim_extent
+# The gate's own lexer, cite grammar and external-module list: what this tool
+# rewrites and what check_hs_cites.py validates have to be the same language,
+# or a bump hands the gate cites it never taught it to read.
+_chk = _load("check_hs_cites")
+CITE, EMITTED = _chk.CITE, _chk.EMITTED
+EXTERNAL_MODULES, word_re = _chk.EXTERNAL_MODULES, _chk.word_re
 
 # Wrapped-cite pieces: a line ending in `Foo.hs:61-63,` carries the rest of its
 # parts list on the next comment line (`// 84,92) reads …`).
@@ -129,6 +155,43 @@ def group_at(groups, line):
     return None
 
 
+def resolve_cite(name, tree):
+    """`(path, None)` or `(None, reason)` -- never a guess.
+
+    Path suffix first, then the dotted-module spelling (`Theory.Tools.X.hs`),
+    exactly as `check_hs_cites.Oracle.candidates` resolves them: a cite the
+    gate can validate has to be a cite this tool can move, or the next bump
+    leaves it behind pointing at old line numbers.
+
+    A basename matching two upstream files is REPORTED rather than resolved by
+    crate preference.  Preferring a sibling here would rewrite the cite using
+    the wrong file's diff -- numbers that look freshly maintained and name
+    nothing -- and the gate now rejects such a cite outright, so the only
+    correct move is to leave it and say so.
+    """
+    c = name.lstrip("./")
+    hits = [h for h in tree if h == c or h.endswith("/" + c)]
+    if not hits:
+        stem, _, ext = c.rpartition(".")
+        dotted = stem.replace(".", "/") + "." + ext
+        hits = [h for h in tree if h == dotted or h.endswith("/" + dotted)]
+    if len(hits) == 1:
+        return hits[0], None
+    if not hits:
+        return None, "no such file at the old pin"
+    return None, "ambiguous basename: matches " + ", ".join(sorted(hits))
+
+
+def in_span(lines, parts, sym):
+    """Does `sym` occur as a whole Haskell word inside the cited parts?"""
+    pat = word_re(sym)
+    for a, b in parts:
+        for n in range(a, (a if b is None else b) + 1):
+            if 1 <= n <= len(lines) and pat.search(lines[n - 1]):
+                return True
+    return False
+
+
 def find_text(lines, text, lo, hi):
     """1-based unique position of stripped `text` within lines[lo-1:hi]."""
     hits = [i for i in range(lo, hi + 1)
@@ -184,13 +247,32 @@ class Remapper:
         lo, hi = prefer_lo or 1, prefer_hi or len(nl)
         return find_text(nl, text, lo, hi)
 
-    def remap_cite(self, path, parts, sees):
-        """-> (new_parts, new_sees) or (None, reason)."""
+    def remap_cite(self, path, parts, sees, sym=None):
+        """-> (new_parts, new_sees) or (None, reason).
+
+        A `#sym` anchor is both a precondition and a postcondition: the cite
+        has to still name `sym` at the old pin (otherwise it was already wrong
+        and remapping only launders it), and the rewritten range has to name
+        it at the new pin.  Neither is repaired here -- the cite is left alone
+        and reported, so check_hs_cites.py's SYMBOL class still sees it.
+        """
         lm = self.linemap(path)
         old_groups = decl_groups(self.old_lines(path) or [])
+        if sym and not in_span(self.old_lines(path) or [], parts, sym):
+            return None, f"`{sym}` is not in the OLD range: cite was already stale"
 
         def target_decl():
-            """New-pin extent of the declaration the whole cite anchors into."""
+            """New-pin extent of the declaration the whole cite anchors into.
+
+            The anchor names it outright when the cite carries one, which
+            survives a rename of the neighbouring declaration and a
+            signature/equation regrouping that changes `decl_groups`' idea of
+            the old name.
+            """
+            if sym:
+                ng = self.new_group_by_name(path, sym)
+                if ng:
+                    return ng
             anchor = sees[0] if sees else parts[0][0]
             g = group_at(old_groups, anchor)
             return self.new_group_by_name(path, g[2]) if g else None
@@ -233,6 +315,9 @@ class Remapper:
             if ns is None:
                 return None, f"see-line {s} lost in rewrite"
             new_sees.append(ns)
+        if sym and not in_span(self.new_lines(path) or [], new_parts, sym):
+            return None, (f"`{sym}` is not in the remapped range "
+                          f"{fmt_parts(new_parts)}")
         return (new_parts, new_sees), None
 
 
@@ -241,16 +326,43 @@ def comment_pos(line, fname):
     return min((line.find(m) for m in markers if m in line), default=-1)
 
 
-def comment_open(line, fname):
+def comment_starts(src, fname):
+    """Per line, the column its comment text starts at, or -1 for none.
+
+    For `.rs` this comes from the whole-file lexer `check_hs_cites.py` gates
+    with, so a `//` inside a string literal does not open a comment.  That is
+    not hypothetical here: Tamarin's own output format uses `//`, about a
+    hundred expected-output fixtures quote it verbatim, and several of those
+    literals also quote an upstream cite.  `--apply` runs unreviewed from
+    `bump_submodule.sh`, so a cite "remapped" inside one would silently change
+    bytes the corpus comparison pins.  Other file types keep the plain
+    `#`/`//` scan.
+    """
+    lines = src.split("\n")
+    if not fname.endswith(".rs"):
+        return [comment_pos(l, fname) for l in lines]
+    cols = [-1] * len(lines)
+    spans, _strings = _chk.lex_spans(src)
+    starts = _chk.line_index(src)
+    for a, b in spans:
+        first = _chk.lineno_of(starts, a)
+        last = _chk.lineno_of(starts, max(a, b - 1))
+        for ln in range(first, min(last, len(cols)) + 1):
+            col = a - starts[ln - 1] if ln == first else 0
+            if cols[ln - 1] < 0 or col < cols[ln - 1]:
+                cols[ln - 1] = col
+    return cols
+
+
+def comment_open(line, cpos):
     """`(marker, offset just past it)` for the line's comment, or None."""
-    cpos = comment_pos(line, fname)
     if cpos < 0:
         return None
     m = COMMENT_OPEN.match(line, cpos)
     return (m.group(0), m.end()) if m else None
 
 
-def continuation(lines, i, fname):
+def continuation(lines, i, cols):
     """The parts fragment on line i+1 that continues the cite ending line i.
 
     -> `(start, end, parts)` as offsets into line i+1, or None.  Joining is
@@ -260,7 +372,8 @@ def continuation(lines, i, fname):
     below`) fails the terminator test and is left alone."""
     if i + 1 >= len(lines):
         return None
-    here, nxt = comment_open(lines[i], fname), comment_open(lines[i + 1], fname)
+    here, nxt = comment_open(lines[i], cols[i]), comment_open(lines[i + 1],
+                                                              cols[i + 1])
     if not here or not nxt or here[0] != nxt[0]:
         return None
     body = lines[i + 1]
@@ -293,16 +406,16 @@ def main():
 
     rm = Remapper(args.old, args.new)
     rewrites, unresolved, checked = [], [], 0
+    skipped = collections.Counter()
 
     for rs in rs_files(args.files):
         with open(rs) as f:
             src = f.read()
-        crate = os.path.relpath(rs, CRATES).split(os.sep)[0]
-        hint = {m for m in re.findall(r"[A-Za-z0-9_/.']+\.hs", src) if "/" in m}
         lines = src.split("\n")
+        cols = comment_starts(src, rs)
         changed_any = False
         for i, line in enumerate(lines):
-            cpos = comment_pos(line, rs)
+            cpos = cols[i]
             if cpos < 0:
                 continue
             edits, cont_edit = [], None
@@ -310,23 +423,39 @@ def main():
                 if m.start() < cpos:
                     continue
                 checked += 1
-                path = resolve(m.group(1), crate, rm.old_tree, hint)
-                if path is None or path not in rm.changed:
+                # `Foo.hs:163:33` is a GHC HasCallStack coordinate the port
+                # reproduces byte for byte; a comment quoting one documents
+                # emitted output, so its numbers move with the oracle's own
+                # bytes, never with this diff.
+                if EMITTED.match(line, m.start()):
+                    skipped["emitted"] += 1
+                    continue
+                name = m.group("file")
+                if os.path.basename(name) in EXTERNAL_MODULES:
+                    skipped["external"] += 1
+                    continue
+                path, why = resolve_cite(name, rm.old_tree)
+                if path is None:
+                    unresolved.append((rs, i + 1, m.group(0), why))
+                    continue
+                if path not in rm.changed:
+                    skipped["unchanged"] += 1
                     continue
                 if path not in rm.new_tree:
                     unresolved.append((rs, i + 1, m.group(0), "file gone at new pin"))
                     continue
-                parts = parse_parts(m.group(2))
-                sees = [int(x) for x in re.findall(r"\d+", m.group(3))]
+                parts = parse_parts(m.group("parts"))
+                sym = m.group("sym")
+                sees = [int(x) for x in re.findall(r"\d+", m.group("see"))]
                 # Only a cite ending the line can wrap, and a `see line` tail
                 # would have to be re-emitted mid-list, so both are excluded.
                 cont = None
                 if not sees and WRAP_TAIL.match(line, m.end()):
-                    cont = continuation(lines, i, rs)
+                    cont = continuation(lines, i, cols)
                 head_n = len(parts)
                 if cont:
                     parts = parts + cont[2]
-                res, why = rm.remap_cite(path, parts, sees)
+                res, why = rm.remap_cite(path, parts, sees, sym)
                 if res is None:
                     unresolved.append((rs, i + 1, m.group(0), why))
                     continue
@@ -334,13 +463,15 @@ def main():
                 if new_parts == parts and new_sees == sees:
                     continue
                 see_txt = ", see line " + ",".join(map(str, new_sees)) if new_sees else ""
-                repl = f"{m.group(1)}:{fmt_parts(new_parts[:head_n])}{see_txt}"
+                sym_txt = f"#{sym}" if sym else ""
+                repl = (f"{name}:{fmt_parts(new_parts[:head_n])}"
+                        f"{sym_txt}{see_txt}")
                 edits.append((m.start(), m.end(), repl, m.group(0)))
                 if cont:
                     tail = fmt_parts(new_parts[head_n:])
                     cont_edit = (cont[0], cont[1], tail,
-                                 f"{m.group(1)}:...,{fmt_parts(cont[2])}",
-                                 f"{m.group(1)}:...,{tail}")
+                                 f"{name}:...,{fmt_parts(cont[2])}",
+                                 f"{name}:...,{tail}")
             for start, end, repl, old_txt in reversed(edits):
                 rewrites.append((rs, i + 1, old_txt, repl))
                 lines[i] = lines[i][:start] + repl + lines[i][end:]
@@ -363,6 +494,10 @@ def main():
     mode = "applied" if args.apply else "planned (dry run; use --apply)"
     print(f"\nremap_hs_cites: {checked} cites checked, {len(rewrites)} rewrites {mode}, "
           f"{len(unresolved)} unresolved", file=sys.stderr)
+    print(f"not remapped: {skipped['unchanged']} in files the bump did not "
+          f"touch; {skipped['emitted']} GHC coordinates; "
+          f"{skipped['external']} external-module cites "
+          f"({', '.join(sorted(EXTERNAL_MODULES))})", file=sys.stderr)
 
 
 if __name__ == "__main__":

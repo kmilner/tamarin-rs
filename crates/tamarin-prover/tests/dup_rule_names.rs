@@ -7,11 +7,11 @@
 //! Parse time: `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) rejects a
 //! second, DIFFERENT rule under an existing name via `addOpenProtoRule`
 //! (OpenTheory.hs:691-702); batch mode's `handleError` `die`s on the
-//! resulting `ParserError` (Main/Mode/Batch.hs:234) — parsec frame on stderr,
+//! resulting `ParserError` (Main/Mode/Batch.hs:235) — parsec frame on stderr,
 //! exit 1, no stdout.  An identical duplicate is accepted and appended again.
 //!
 //! Translate time: SAPIC's `translate` folds its generated rules through the
-//! same guard (`foldM liftedAddProtoRule`, Sapic.hs:74), so a user rule named
+//! same guard (`foldM liftedAddProtoRule`, lib/sapic/src/Sapic.hs:75), so a user rule named
 //! like a generated one (`rule Init` alongside a `process:`) aborts AFTER the
 //! `Theory translated` marker.  In HS the thrown `DuplicateItem` escapes to
 //! GHC's runtime: the pinned oracle (Git revision ef3f0468) prints exactly
@@ -23,61 +23,18 @@
 //! stderr minus the three banner lines, whose maude path and version are
 //! machine-local.
 
-use std::process::Command;
+mod common;
 
-fn maude_available() -> bool {
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        return std::path::Path::new(&p).exists();
-    }
-    for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
-        if std::path::Path::new(c).exists() {
-            return true;
-        }
-    }
-    false
-}
+use common::{maude_available, strip_maude_banner};
 
-/// `--with-maude=PATH` from the `MAUDE_PATH` env override, when set.
-fn maude_arg() -> Option<String> {
-    std::env::var("MAUDE_PATH")
-        .ok()
-        .map(|p| format!("--with-maude={p}"))
-}
+/// The temp subdirectory this suite writes its theories to.
+const TMP_DIR: &str = "tamarin_prover_dup_rule_names";
 
-/// Drop the `maude tool: '<path>'` line and the ` checking …: OK.` lines that
-/// follow it (Console.hs:150-155).
-fn strip_maude_banner(stderr: &str) -> String {
-    let rest = stderr
-        .split_inclusive('\n')
-        .skip_while(|l| l.starts_with("maude tool: '") || l.starts_with(" checking "))
-        .collect::<String>();
-    assert_ne!(
-        rest, stderr,
-        "expected a `maude tool:` banner on stderr; got:\n{stderr}"
-    );
-    rest
-}
-
-/// Run the built binary on `src` and return `(exit code, stderr minus the
-/// maude banner)`.
-fn run_binary(name: &str, src: &str) -> (i32, String) {
-    let dir = std::env::temp_dir().join("tamarin_prover_dup_rule_names");
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    let path = dir.join(name);
-    std::fs::write(&path, src).expect("write theory");
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
-    if let Some(a) = maude_arg() {
-        cmd.arg(a);
-    }
-    let out = cmd
-        .arg("--quiet")
-        .arg(&path)
-        .output()
-        .expect("spawn tamarin-rs");
-    (
-        out.status.code().expect("exit code"),
-        strip_maude_banner(&String::from_utf8(out.stderr).expect("utf-8 stderr")),
-    )
+/// Run the built binary on `src` under `--quiet` and return `(exit code,
+/// stdout, stderr minus the maude banner)`.
+fn run_binary(stem: &str, src: &str) -> (i32, String, String) {
+    let (code, stdout, stderr) = common::run_raw(TMP_DIR, stem, src, &["--quiet"]);
+    (code, stdout, strip_maude_banner(&stderr))
 }
 
 /// Two different rules under one name: the parsec frame `die` prints — the
@@ -88,8 +45,8 @@ fn duplicate_rule_prints_the_parsec_frame_and_exits_1() {
         eprintln!("skipping: maude not on path");
         return;
     }
-    let (code, stderr) = run_binary(
-        "dup.spthy",
+    let (code, _, stderr) = run_binary(
+        "dup",
         "theory T begin\n\n\
          rule R1: [ ] --> [ Out('a') ]\n\
          rule R1: [ ] --> [ Out('b') ]\n\n\
@@ -114,25 +71,11 @@ fn identical_duplicate_loads_and_renders_twice() {
         eprintln!("skipping: maude not on path");
         return;
     }
-    let dir = std::env::temp_dir().join("tamarin_prover_dup_rule_names");
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    let path = dir.join("ident.spthy");
-    std::fs::write(
-        &path,
+    let (code, stdout, _) = run_binary(
+        "ident",
         "theory T begin\n\nrule R1: [ ] --> [ ]\nrule R1: [ ] --> [ ]\n\nend\n",
-    )
-    .expect("write theory");
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
-    if let Some(a) = maude_arg() {
-        cmd.arg(a);
-    }
-    let out = cmd
-        .arg("--quiet")
-        .arg(&path)
-        .output()
-        .expect("spawn tamarin-rs");
-    assert_eq!(out.status.code(), Some(0));
-    let stdout = String::from_utf8(out.stdout).expect("utf-8 stdout");
+    );
+    assert_eq!(code, 0);
     assert_eq!(
         stdout
             .matches("rule (modulo E) R1:\n   [ ] --> [ ]")
@@ -154,8 +97,8 @@ fn sapic_generated_name_clash_aborts_translation() {
         eprintln!("skipping: maude not on path");
         return;
     }
-    let (code, stderr) = run_binary(
-        "sapic_clash.spthy",
+    let (code, _, stderr) = run_binary(
+        "sapic_clash",
         "theory T begin\n\n\
          rule Init: [ ] --> [ Out('a') ]\n\n\
          process:\nnew x; out(x)\n\n\

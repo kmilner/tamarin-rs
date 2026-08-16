@@ -5,7 +5,7 @@
 //! Pre-computed intruder-variant rule loaders.
 //!
 //! HS-faithful port of `Main.TheoryLoader.mkDhIntruderVariants` and
-//! `mkBpIntruderVariants` (src/Main/TheoryLoader.hs:745-768):
+//! `mkBpIntruderVariants` (src/Main/TheoryLoader.hs:853-876):
 //!
 //! ```haskell
 //! dhIntruderVariantsFile :: FilePath
@@ -50,25 +50,25 @@ use crate::fact::LNFact;
 use crate::intruder_rules::show_fun_sym_name;
 use crate::rule::{IntrRuleAC, IntrRuleACInfo, Rule};
 
-/// HS `dhIntruderVariantsFile` (TheoryLoader.hs:745-746, see line 746).
+/// HS `dhIntruderVariantsFile` (TheoryLoader.hs:853-854, see line 854).
 pub const DH_INTRUDER_VARIANTS_FILE: &str = "data/intruder_variants_dh.spthy";
 
-/// HS `bpIntruderVariantsFile` (TheoryLoader.hs:749-750, see line 750).
+/// HS `bpIntruderVariantsFile` (TheoryLoader.hs:857-858, see line 858).
 pub const BP_INTRUDER_VARIANTS_FILE: &str = "data/intruder_variants_bp.spthy";
 
 /// The DH intruder-variants spthy source, embedded at compile time
 /// (HS uses `$(embedFile "data/intruder_variants_dh.spthy")` —
-/// TheoryLoader.hs:753-759, see line 759).
+/// TheoryLoader.hs:861-867, see line 867).
 pub const DH_INTRUDER_VARIANTS_SPTHY: &str =
     include_str!("../../../tamarin-prover/data/intruder_variants_dh.spthy");
 
 /// The BP intruder-variants spthy source, embedded at compile time
 /// (HS uses `$(embedFile "data/intruder_variants_bp.spthy")` —
-/// TheoryLoader.hs:762-768, see line 768).
+/// TheoryLoader.hs:870-876, see line 876).
 pub const BP_INTRUDER_VARIANTS_SPTHY: &str =
     include_str!("../../../tamarin-prover/data/intruder_variants_bp.spthy");
 
-/// HS `mkDhIntruderVariants` (TheoryLoader.hs:753-759).
+/// HS `mkDhIntruderVariants` (TheoryLoader.hs:861-867).
 ///
 /// ```haskell
 /// mkDhIntruderVariants :: MaudeSig -> [IntrRuleAC]
@@ -90,7 +90,7 @@ pub fn mk_dh_intruder_variants(msig: &MaudeSig) -> Vec<IntrRuleAC> {
         })
 }
 
-/// HS `mkBpIntruderVariants` (TheoryLoader.hs:762-768).
+/// HS `mkBpIntruderVariants` (TheoryLoader.hs:870-876).
 pub fn mk_bp_intruder_variants(msig: &MaudeSig) -> Vec<IntrRuleAC> {
     parse_intruder_rules(msig, BP_INTRUDER_VARIANTS_FILE, BP_INTRUDER_VARIANTS_SPTHY)
         .unwrap_or_else(|e| {
@@ -102,7 +102,7 @@ pub fn mk_bp_intruder_variants(msig: &MaudeSig) -> Vec<IntrRuleAC> {
 }
 
 /// Error from `parse_intruder_rules`.  Includes the source file label
-/// (HS `ctxtDesc` — Theory/Text/Parser/Rule.hs:200-204, see line 202) for human-readable
+/// (HS `ctxtDesc` — Theory/Text/Parser/Rule.hs:224-228, see line 226) for human-readable
 /// diagnostics.
 #[derive(Debug, Clone)]
 pub struct IntrRuleParseError {
@@ -118,7 +118,7 @@ impl std::fmt::Display for IntrRuleParseError {
 
 impl std::error::Error for IntrRuleParseError {}
 
-/// HS `parseIntruderRules` (Theory/Text/Parser/Rule.hs:200-204):
+/// HS `parseIntruderRules` (Theory/Text/Parser/Rule.hs:224-228):
 ///
 /// ```haskell
 /// parseIntruderRules
@@ -129,7 +129,7 @@ impl std::error::Error for IntrRuleParseError {}
 /// ```
 ///
 /// The `setState (mkStateSig msig)` step is critical: HS's term parser
-/// (Theory/Text/Parser/Term.hs:139-143) dispatches bare identifiers via
+/// (Theory/Text/Parser/Term.hs:139-153, see line 151) dispatches bare identifiers via
 /// `nullaryApp` against `funSyms maudeSig` to distinguish 0-arity NoEq
 /// applications (e.g. `one`, `DH_neutral` for `dhFunSig`) from free
 /// variables.  Without it, the cached DH file's
@@ -398,15 +398,14 @@ fn ast_rule_to_intr_rule_ac(known_funs: &KnownFuns, r: &p::Rule) -> Result<IntrR
     // but not premises.  The intruder-rule `.spthy` files don't have
     // any (all RHS vars are LHS vars), but compute it faithfully for
     // robustness.  HS reference: Theory.Model.Fact.newVariables
-    // (lib/theory/src/Theory/Model/Fact.hs:484-494, see line 494).
+    // (lib/theory/src/Theory/Model/Fact.hs:524-529, see line 527).
     let new_vars = compute_new_vars(&prems, &concs);
 
     Ok(Rule::new(info, prems, concs, acts).with_new_vars(new_vars))
 }
 
-/// Mirrors HS `newVariables` (`lib/theory/src/Theory/Model/Fact.hs:484-494, see line 494`):
-/// the set of variables in `conclusions` that are not in `premises`,
-/// returned in deterministic order.
+/// Mirrors HS `newVariables` (`lib/theory/src/Theory/Model/Fact.hs:524-529, see line 527`):
+/// `S.difference concvars premvars`, returned in `S.toList` (sorted) order.
 fn compute_new_vars(prems: &[LNFact], concs: &[LNFact]) -> Vec<tamarin_term::lterm::LNTerm> {
     use std::collections::BTreeSet;
     use tamarin_term::lterm::LVar;
@@ -427,26 +426,20 @@ fn compute_new_vars(prems: &[LNFact], concs: &[LNFact]) -> Vec<tamarin_term::lte
         }
     }
 
-    let mut prem_vars: BTreeSet<LVar> = BTreeSet::new();
-    for f in prems {
-        for t in f.terms.iter() {
-            collect(t, &mut prem_vars);
-        }
-    }
-    let mut new_set: BTreeSet<LVar> = BTreeSet::new();
-    for f in concs {
-        for t in f.terms.iter() {
-            let mut here = BTreeSet::new();
-            collect(t, &mut here);
-            for v in here {
-                if !prem_vars.contains(&v) {
-                    new_set.insert(v);
-                }
+    let collect_all = |fs: &[LNFact]| -> BTreeSet<LVar> {
+        let mut vars = BTreeSet::new();
+        for f in fs {
+            for t in f.terms.iter() {
+                collect(t, &mut vars);
             }
         }
-    }
-    new_set
+        vars
+    };
+
+    let prem_vars = collect_all(prems);
+    collect_all(concs)
         .into_iter()
+        .filter(|v| !prem_vars.contains(v))
         .map(|v| Term::Lit(Lit::Var(v)))
         .collect()
 }

@@ -3,11 +3,12 @@
 # across the WHOLE corpus, print a per-lemma diff-line count, and a summary.
 #
 # Cached, parallelised HS pipeline (same output format / classification):
-#   #1  HS canon CACHE keyed by (file-content-sha256, lemma, CACHE_VERSION).
-#       HS is canonical and its proof depends only on the .spthy file, so its
-#       canon tree is stable across RS-fix iterations -> on repeat runs HS is
-#       essentially free.  (Env-gated `-2` lib instrumentation does NOT change
-#       the env-off proof, so the cache stays valid across HS rebuilds.)
+#   #1  HS canon CACHE keyed by (file-content-sha256, lemma, CACHE_VERSION,
+#       oracle-binary fingerprint).  HS is canonical and its proof depends
+#       only on the .spthy file, so its canon tree is stable across RS-fix
+#       iterations -> on repeat runs HS is essentially free.  (The fingerprint
+#       in the key means any HS rebuild — instrumentation included — refills
+#       its entries rather than answering out of the old binary's.)
 #   #2  JOBS defaults to nproc.
 # RS stays per-lemma (it must be re-run every iteration; per-lemma keeps good
 # load balance and the big-lemma proving dominates its parse cost anyway).
@@ -39,6 +40,12 @@ set -uo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
+# Shared gate plumbing (gate_common.sh): OOM prologue and the oracle
+# fingerprint recipe the cache key carries.
+[ -r "$script_dir/gate_common.sh" ] || { echo "corpus_full_trace_diff: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
+. "$script_dir/gate_common.sh"
+# OOM discipline: every prover child inherits the cap and dies alone.
+oom_prologue
 canon="$script_dir/canon_proof_tree.py"
 
 TIMEOUT="${TIMEOUT:-120}"
@@ -93,12 +100,16 @@ if [ ! -x "$rs_path" ]; then
     exit 2
 fi
 
-# --- HS canon cache key: sha256(file content) + lemma + CACHE_VERSION.
-#     Stable across instrumentation rebuilds (proof depends only on file+logic).
+# --- HS canon cache key: sha256(file content) + lemma + CACHE_VERSION +
+#     the oracle-binary fingerprint (gate_common's hs_fingerprint), so a
+#     rebuilt oracle is a MISS rather than a stale hit — the same __b suffix
+#     diff_proof_raw.sh / corpus_raw_diff.sh use and migrate_hs_cache_fp.sh
+#     rekeyed the older entries onto.
+hs_fingerprint "$hs_path"
 hs_cache_key() {
     local f="$1" lemma="$2" h
     h=$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)
-    printf '%s__%s__v%s.canon' "$h" "$lemma" "$CACHE_VERSION"
+    printf '%s__%s__v%s__b%s.canon' "$h" "$lemma" "$CACHE_VERSION" "$HS_FP_SALT"
 }
 
 # --- Robust lemma-name list for a file (handles "lemma Foo:", "lemma Foo [..]:",
@@ -151,7 +162,7 @@ slice_canon() {
 }
 export -f hs_cache_key lemmas_of slice_canon
 export HS_PATH="$hs_path" RS_PATH="$rs_path" CANON="$canon" TIMEOUT EXTRA_ENV \
-       HS_CANON_CACHE CACHE_VERSION NO_HS_CACHE
+       HS_CANON_CACHE CACHE_VERSION NO_HS_CACHE HS_FP_SALT
 
 # --- Per-lemma worker. Emits ONE machine-parseable line on stdout:
 #       <file>\t<lemma>\t<status>\t<hs_lines>\t<rs_lines>\t<diff>\t<hs_ms>\t<rs_ms>
@@ -214,7 +225,9 @@ worker() {
         hs_ms=$(( $(date +%s%3N) - hs_t0 ))
         slice_canon "$lemma" "$tmp/hs.out" "$tmp/hs.canon"
         if [ -n "$key" ]; then
-            if [ "$hs_rc" -eq 124 ]; then
+            # >=128 is a signal death (OOM's 137), which truncates stdout the
+            # same way the timeout does: marker, never the partial payload.
+            if [ "$hs_rc" -eq 124 ] || [ "$hs_rc" -ge 128 ]; then
                 : > "$key_timeout" 2>/dev/null || true
             else
                 gzip -c "$tmp/hs.out" > "${key%.canon}.full.gz" 2>/dev/null || true
@@ -227,10 +240,11 @@ worker() {
         fi
     fi
 
-    # HS timed out (cached marker or live run): skip the RS run entirely —
-    # the lemma is SKIP_TIMEOUT either way, and HS-timeout lemmas are exactly
-    # where RS's unbounded search OOMs the machine (17-43 GB RSS observed).
-    if [ "$hs_rc" -eq 124 ]; then
+    # HS timed out or was signal-killed (cached marker or live run): skip the
+    # RS run entirely — the lemma is SKIP_TIMEOUT either way, and HS-timeout
+    # lemmas are exactly where RS's unbounded search OOMs the machine
+    # (17-43 GB RSS observed).
+    if [ "$hs_rc" -eq 124 ] || [ "$hs_rc" -ge 128 ]; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$f" "$lemma" "SKIP_TIMEOUT" "0" "0" "-" "$hs_ms" "-"
         return 0
     fi
@@ -245,7 +259,8 @@ worker() {
     hs_lines=$(grep -c . "$hs_canon"); hs_lines=${hs_lines// /}
     rs_lines=$(grep -c . "$tmp/rs.canon"); rs_lines=${rs_lines// /}
 
-    if [ "$hs_rc" -eq 124 ] || [ "$rs_rc" -eq 124 ]; then
+    if [ "$hs_rc" -eq 124 ] || [ "$hs_rc" -ge 128 ] \
+       || [ "$rs_rc" -eq 124 ] || [ "$rs_rc" -ge 128 ]; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$f" "$lemma" "SKIP_TIMEOUT" "$hs_lines" "$rs_lines" "-" "$hs_ms" "$rs_ms"
         return 0
     fi

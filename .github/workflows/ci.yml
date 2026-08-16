@@ -23,6 +23,12 @@ jobs:
           submodules: true
       - run: rustup update stable --no-self-update && rustup default stable
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Every HS line cite in crates/ comments must resolve against the pinned
+      # submodule (scripts/check_hs_cites.py — MISSING/AMBIGUOUS/RANGE/BLANK/
+      # COMMENT/SEELINE).  Ordinary PRs edit cites too, not just bumps, and
+      # nothing else fails on a drifted one.  Needs only the submodule; ~seconds.
+      - name: HS cite check
+        run: python3 scripts/check_hs_cites.py
 
   test:
     runs-on: ubuntu-latest
@@ -50,12 +56,32 @@ jobs:
       # Without it they skip SILENTLY — their fallback probes check hardcoded
       # paths (/usr/local/bin, CWD), never $PATH — and the suite reports the
       # skipped tests as passes.
+      # PATH too: the port itself resolves a bare `maude` the way HS does
+      # (/usr/local/bin, /usr/bin, then $PATH) and does NOT read MAUDE_PATH,
+      # so tests that drive the real CLI paths — `--version`'s ensureMaude
+      # probe in run::tests::version_returns_zero — need maude reachable
+      # by name.
       # profile ci = release opt without fat-LTO links / serial codegen (see
       # Cargo.toml) — the release profile re-runs whole-graph LTO at every
       # test-binary link, which dwarfs everything else this job does.
-      - run: cargo test --profile ci --workspace
+      - run: export PATH="/opt/maude:$PATH" && cargo test --profile ci --workspace
         env:
           MAUDE_PATH: /opt/maude/maude
+      # The corners no corpus theory reaches (~5s).  Only the port runs here:
+      # the oracle side is the committed capture under
+      # scripts/divergence_fixtures/expected/, so this needs the submodule
+      # (fixtures + the pin the check compares against) and maude — both
+      # already provisioned above — and no Haskell build.  The check refuses to
+      # run when expected/oracle_rev is not the current pin, so a submodule
+      # bump that lands without re-running capture.sh fails CI loudly.
+      - name: Divergence fixtures
+        run: |
+          # The port probes /usr/local/bin/maude and /usr/bin/maude, then lets
+          # $PATH resolve a bare `maude`; it does NOT read MAUDE_PATH.
+          export PATH="/opt/maude:$PATH"
+          cargo build --profile ci --bin tamarin-rs
+          # Absolute: check.sh runs the binary from the fixture directory.
+          RS_PATH="$PWD/target/ci/tamarin-rs" scripts/divergence_fixtures/check.sh
 
   rs-parity:
     runs-on: ubuntu-latest
@@ -83,6 +109,7 @@ jobs:
       # of main's outputs (scripts/ci_ref_fast.tsv over
       # scripts/parity_corpus_fast.txt).  On DIFF: reproduce locally with
       # scripts/rs_vs_rs_diff.sh.  After a DELIBERATE output change or a
-      # submodule bump, regenerate the reference on a trusted build of main:
-      #   scripts/rs_ref_check.sh generate
+      # submodule bump, regenerate the reference on a trusted build of main
+      # (generate refuses to run without a certifying oracle gate result):
+      #   scripts/rs_ref_check.sh generate --certified-by <gate-results>
       - run: scripts/rs_ref_check.sh check

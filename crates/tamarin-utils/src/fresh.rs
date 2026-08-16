@@ -77,7 +77,7 @@ impl PreciseFreshState {
         }
     }
 
-    /// Port of HS `avoidPreciseVars` (Term/LTerm.hs:681-684):
+    /// Port of HS `avoidPreciseVars` (Term/LTerm.hs:706-709):
     /// `foldl' (\m (name, idx) -> insertWith max name (idx+1) m) empty`.
     /// Seeds the per-name counters so the next `fresh_ident name` yields an
     /// index strictly greater than every avoided `(name, idx)`.  Used by

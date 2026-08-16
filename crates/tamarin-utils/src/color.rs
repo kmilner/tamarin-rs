@@ -92,7 +92,7 @@ pub fn hsv_to_rgb(c: Hsv) -> Rgb {
     }
 }
 
-/// Drop saturation, keeping hue and value (used to render greyscale variants).
+/// `hsvToGray`: drop saturation, keeping hue and value.
 pub fn hsv_to_gray(c: Hsv) -> Hsv {
     Hsv {
         h: c.h,
@@ -144,10 +144,11 @@ pub fn hsv_to_hex(c: Hsv) -> String {
 //
 // Faithful `Color.hs` port. `light_color_groups` — with its helpers
 // `light_color_group_style`, `gen_color_groups` and `ColorParams` — is live in
-// `tamarin-server`'s dot renderer, which colours rule groups through this
-// palette; `hex_to_rgb` is live in `tamarin-theory::elaborate`; and
+// `tamarin-theory`'s `constraint::system::graph::color`, the `nodeColorMap`
+// palette both graph renderers colour rule groups through; `hex_to_rgb` is
+// live in `tamarin-theory::elaborate`; and
 // `rgb_to_hsv`/`hsv_to_rgb`/`rgb_to_hex`/`Rgb`/`Hsv` above are live in
-// `tamarin-sapic`/`tamarin-server`. The remaining `Color.hs` helpers
+// `tamarin-sapic` and `tamarin-theory`. The remaining `Color.hs` helpers
 // (`color_groups`/`color_group_style`, `hsv_to_hex`, `hsv_to_gray`,
 // `rgb_to_gray`) have no caller and are retained for completeness of the port.
 

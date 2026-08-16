@@ -336,7 +336,7 @@ fn builtin_matching_redeclaration_accepted() {
 }
 
 // `dest-pairing` is exempt from the builtins-arm FUNCTION check
-// (Signature.hs:124) — oracle probes tb / tc — and a destructor
+// (Theory/Text/Parser/Signature.hs:124) — oracle probes tb / tc — and a destructor
 // fst re-declaration matches its merged tuple, so the pre-check
 // passes too.
 #[test]
@@ -379,7 +379,8 @@ fn enable_flag_builtins_reserve_no_names() {
 }
 
 // Without `dest-pairing`, `fst`/`snd` are not builtin-reserved, so the
-// pre-check is silent and the name-only short-circuit (Signature.hs:217)
+// pre-check is silent and the name-only short-circuit
+// (Theory/Text/Parser/Signature.hs:217)
 // returns the existing symbol: the signature keeps the CONSTRUCTOR
 // variant — oracle probe t1.
 #[test]
@@ -574,7 +575,8 @@ fn let_block_sequential_bindings() {
 
 #[test]
 fn let_block_forward_reference_stays_free() {
-    // HS bottom-up semantics (Parser/Let.hs:22,34): a binding whose
+    // HS bottom-up semantics (`letBlock`'s `toSubst = foldr1 compose .
+    // map (substFromList . return)`, Theory/Text/Parser/Let.hs:22-35): a binding whose
     // RHS references a LATER binding keeps that name as a free var —
     // by the time `a`'s application introduces `b` into the body,
     // `b`'s singleton substitution has already been applied.

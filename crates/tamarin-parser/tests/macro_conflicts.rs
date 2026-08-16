@@ -50,8 +50,8 @@ fn macro_theory(decl: &str) -> String {
     format!("theory MacroT begin\nmacros: {decl}\nend\n")
 }
 
-/// Each of the nine `reservedBuiltins` (Term.hs:74-86) aborts the parse with
-/// the `error` of Macro.hs:34-35 — `show` on the `ByteString` name puts a
+/// Each of the nine `reservedBuiltins` (Parser/Term.hs:74-85) aborts the parse with
+/// the `error` of Parser/Macro.hs:34-35 — `show` on the `ByteString` name puts a
 /// second pair of quotes inside the backticks.
 #[test]
 fn reserved_builtin_macro_name_raises_ghc_error() {
@@ -71,9 +71,9 @@ fn reserved_builtin_macro_name_raises_ghc_error() {
 
 /// The reserved-name `error` fires right after the identifier, so it beats
 /// everything the rest of the macro could raise: a malformed argument list, a
-/// missing body, the duplicate-argument `error` of Macro.hs:37-38, and the
+/// missing body, the duplicate-argument `error` of Parser/Macro.hs:37-38, and the
 /// name conflict the owning builtin's own symbol would otherwise produce
-/// (Macro.hs:43-44).  It does not depend on any builtin being enabled.
+/// (Parser/Macro.hs:43-44).  It does not depend on any builtin being enabled.
 #[test]
 fn reserved_name_error_precedes_every_later_macro_failure() {
     let expected = format!(
@@ -93,7 +93,7 @@ fn reserved_name_error_precedes_every_later_macro_failure() {
 }
 
 /// Two arguments that are the same full `LVar` abort with the `error` of
-/// Macro.hs:37-38.  The check sits between the argument list and the `=`, so
+/// Parser/Macro.hs:37-38.  The check sits between the argument list and the `=`, so
 /// it fires without a body, and a prefixless binder is `LSortMsg`
 /// (Token.hs:424-433) — `m(x, x:msg)` is a duplicate.
 #[test]
@@ -182,7 +182,7 @@ fn macro_conflicts_with_user_function() {
 }
 
 /// A macro named after an EARLIER macro conflicts: each parsed macro is
-/// registered under `macroNames` before the next one parses (Macro.hs:46).
+/// registered under `macroNames` before the next one parses (Parser/Macro.hs:46).
 #[test]
 fn macro_conflicts_with_earlier_macro() {
     assert_eq!(
@@ -228,7 +228,7 @@ fn macro_conflicts_with_seeded_pair_symbol() {
 /// `builtins: diffie-hellman` folds `dhFunSig`'s `NoEq` symbols (among them
 /// `DH_neutral`) into `funSyms` (Term/Maude/Signature.hs:110-116), so the
 /// name conflicts — and the enabled `expterm`/`multterm` levels leave their
-/// `^`/`*` labels in the error (Term.hs:176-185).
+/// `^`/`*` labels in the error (Parser/Term.hs:175-184).
 #[test]
 fn macro_conflicts_with_dh_theory_symbol() {
     assert_eq!(
@@ -263,7 +263,7 @@ fn macro_conflicts_under_bilinear_pairing() {
 
 /// `natural-numbers` contributes `natOneSym` — whose name is `tone`
 /// (Term/Term/FunctionSymbols.hs:236) — and `natterm`'s `%+` label
-/// (Term.hs:203-208).
+/// (Parser/Term.hs:203-208).
 #[test]
 fn macro_conflicts_with_nat_theory_symbol() {
     assert_eq!(
@@ -279,7 +279,7 @@ fn macro_conflicts_with_nat_theory_symbol() {
 }
 
 /// A user `[AC]` symbol conflicts (`acUserFunSyms` via `ACfctUser`,
-/// Term/Maude/Signature.hs:158-164); its `chainl1` level (Term.hs:165-174)
+/// Term/Maude/Signature.hs:158-164); its `chainl1` level (Parser/Term.hs:165-172)
 /// leaves the symbol's own label.
 #[test]
 fn macro_conflicts_with_user_ac_symbol() {
@@ -295,7 +295,7 @@ fn macro_conflicts_with_user_ac_symbol() {
 
 /// Two `[AC]` symbols label the error in REVERSE `stACFunSyms` order: the
 /// innermost `chainl1` level (the LAST symbol of `S.toList`) fails first
-/// (`parseACSym`, Term.hs:171-173).
+/// (`parseACSym`, Parser/Term.hs:171-172).
 #[test]
 fn ac_operator_labels_come_innermost_first() {
     assert_eq!(
@@ -338,7 +338,7 @@ fn xor_leaves_both_xor_labels() {
 
 /// All theory levels enabled at once pin the full innermost-first label
 /// order of the `msetterm → natterm → xorterm → multterm → expterm` nesting
-/// (Term.hs:176-208).
+/// (Parser/Term.hs:175-208).
 #[test]
 fn all_operator_levels_order() {
     assert_eq!(
@@ -355,9 +355,9 @@ fn all_operator_levels_order() {
 }
 
 /// A body whose last lexeme is not a variable's identifier leaves no `.`
-/// label: an application's `)` (Term.hs:94), a sort-suffixed variable
+/// label: an application's `)` (Parser/Term.hs:94), a sort-suffixed variable
 /// (Token.hs:413-418), a public-name literal, a nullary symbol matched by
-/// `nullaryApp`'s `symbol` (Term.hs:158-163), an explicit `.1` index, and a
+/// `nullaryApp`'s `symbol` (Parser/Term.hs:158-163), an explicit `.1` index, and a
 /// grouping `(x)`.
 #[test]
 fn no_dot_label_when_body_ends_in_non_identifier_lexeme() {
@@ -402,7 +402,7 @@ fn no_dot_label_when_body_ends_in_non_identifier_lexeme() {
 }
 
 /// Bodies whose last lexeme IS a variable's identifier keep the `.` label:
-/// a `$`-prefixed variable, `binaryAlgApp`'s trailing `arg2` (Term.hs:109-121),
+/// a `$`-prefixed variable, `binaryAlgApp`'s trailing `arg2` (Parser/Term.hs:109-121),
 /// and a variable separated from the next token by a comment (the label sits
 /// at the post-whitespace position either way).
 #[test]
@@ -434,7 +434,7 @@ fn dot_label_when_body_ends_in_variable_identifier() {
 
 /// Non-conflicting macros still parse (oracle loads all of these, exit 0):
 /// a fresh name, and the arguments HS's `nub` over full `LVar`s
-/// (name+sort+index, Macro.hs:37) keeps apart by sort or index.
+/// (name+sort+index, Parser/Macro.hs:37) keeps apart by sort or index.
 #[test]
 fn non_conflicting_macros_parse() {
     for src in [

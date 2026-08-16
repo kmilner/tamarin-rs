@@ -206,7 +206,7 @@ fn attribute_block_renders_in_hs_field_order_and_wraps_with_the_header() {
 /// the attribute lives only in the rule's `RuleAttributes` (HS `ruleProcess`,
 /// rendered by `ppProcess`, Model/Rule.hs:1324-1327), since HS's attribute
 /// parser `parseAndIgnore`s a user-written `process=`
-/// (Text/Parser/Rule.hs:68-93, see line 72) and RS's drops it likewise.  The
+/// (Text/Parser/Rule.hs:69-95, see line 74) and RS's drops it likewise.  The
 /// SAPIC translation is what fills the field, on the rules it generates.
 ///
 /// Oracle bytes (pinned build, Git revision ef3f0468) for the theory

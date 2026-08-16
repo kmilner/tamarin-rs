@@ -12,17 +12,15 @@
 //! exactly the bytes below (probes p22/p47 of the lookup-arity matrix),
 //! after its machine-local `maude tool:` banner.
 
-use std::process::Command;
+mod common;
 
-/// `--with-maude=PATH` from the `MAUDE_PATH` env override, when set.
-fn maude_arg() -> Option<String> {
-    std::env::var("MAUDE_PATH")
-        .ok()
-        .map(|p| format!("--with-maude={p}"))
-}
-
-/// Drop the `maude tool: '<path>'` line and the ` checking …: OK.` lines
-/// that follow it — their path and version are machine-local.
+/// Drop the `maude tool: '<path>'` line and the ` checking …: OK.` lines that
+/// follow it — their path and version are machine-local.
+///
+/// Unlike [`common::strip_maude_banner`] this does NOT assert the banner was
+/// there: these two runs are not guarded on maude being available, and the
+/// stderr below is asserted in FULL, so a bannerless run still compares the
+/// whole stream rather than passing vacuously.
 fn strip_maude_banner(stderr: &str) -> String {
     stderr
         .split_inclusive('\n')
@@ -32,21 +30,9 @@ fn strip_maude_banner(stderr: &str) -> String {
 
 /// Run the built binary on `src`; return `(exit code, stderr minus banner,
 /// stdout length)`.
-fn run_binary(name: &str, src: &str) -> (i32, String, usize) {
-    let dir = std::env::temp_dir().join("tamarin_prover_eqn_reserved");
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    let path = dir.join(name);
-    std::fs::write(&path, src).expect("write theory");
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
-    if let Some(a) = maude_arg() {
-        cmd.arg(a);
-    }
-    let out = cmd.arg(&path).output().expect("spawn tamarin-rs");
-    (
-        out.status.code().expect("exit code"),
-        strip_maude_banner(&String::from_utf8(out.stderr).expect("utf-8 stderr")),
-        out.stdout.len(),
-    )
+fn run_binary(stem: &str, src: &str) -> (i32, String, usize) {
+    let (code, stdout, stderr) = common::run_raw("tamarin_prover_eqn_reserved", stem, src, &[]);
+    (code, strip_maude_banner(&stderr), stdout.len())
 }
 
 /// The GHC top-level handler's stderr for the Term.hs:92:9 `error`.
@@ -63,7 +49,7 @@ fn ghc_stderr(name: &str) -> String {
 #[test]
 fn applied_reserved_name_in_equations_dies_with_callstack() {
     let (code, stderr, stdout_len) = run_binary(
-        "p22_eqn_reserved.spthy",
+        "p22_eqn_reserved",
         "theory T\nbegin\n\nequations: exp(x, y) = x\n\nend\n",
     );
     assert_eq!(code, 1);
@@ -76,7 +62,7 @@ fn applied_reserved_name_in_equations_dies_with_callstack() {
 #[test]
 fn bare_reserved_name_in_equations_dies_with_callstack() {
     let (code, stderr, stdout_len) = run_binary(
-        "p47_eqn_bare_reserved.spthy",
+        "p47_eqn_bare_reserved",
         "theory T\nbegin\n\nfunctions: f/1\n\nequations: f(x) = mun\n\nend\n",
     );
     assert_eq!(code, 1);

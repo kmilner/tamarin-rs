@@ -21,11 +21,12 @@
 # verified against the pristine new pin, and installed. The script then stages
 # the new gitlink and patch, resets + re-patches + rebuilds the testing oracle
 # via ./setup.sh testing, rebuilds the Rust binary (it embeds submodule data
-# files at compile time), archives the gate caches (their entries key on
-# oracle output, so a new oracle silently invalidates them), and remaps the
-# Haskell line cites in crates/ comments onto the new pin
+# files at compile time), and remaps the Haskell line cites in crates/
+# comments onto the new pin
 # (scripts/remap_hs_cites.py, whose report — rewrites, UNRESOLVED cites and the
-# wrapped-cite lint — is teed to scripts/results/cite_remap_<newpin>.txt).
+# wrapped-cite lint — is teed to scripts/results/cite_remap_<newpin>.txt),
+# then validates every cite against the new pin (scripts/check_hs_cites.py,
+# findings appended to the same report).
 # It never commits: run the batch and web gates first (it prints the checklist).
 set -eu
 
@@ -95,17 +96,13 @@ finalize() {
         git -C "$testdir" clean -fdq
     fi
 
-    # Gate caches key on oracle/theory-file content only — after an oracle
-    # change they are silently stale, so archive them rather than trusting
-    # any freshness heuristic.
-    for c in .hs_file_cache .web_hs_cache .hs_pretty_cache; do
-        d="$root/scripts/$c"
-        [ -d "$d" ] || continue
-        dest="$d.pre-bump-$oldshort"
-        [ -e "$dest" ] && dest="$dest.$(date +%Y%m%d%H%M%S)"
-        mv "$d" "$dest"
-        echo "archived scripts/$c -> scripts/$(basename "$dest")"
-    done
+    # The gate caches (scripts/.hs_file_cache, .web_hs_cache, .hs_pretty_cache)
+    # are deliberately left alone: every entry carries a fingerprint of the
+    # oracle binary (in the cache KEY for the file/pretty caches, in the
+    # .hs.fp sidecar web_parity.sh and pane_byte_check.sh verify for the web
+    # cache), and `./setup.sh testing` below rebuilds the oracle, so every
+    # pre-bump entry reads as a clean MISS rather than a silently stale hit.
+    # Archiving them here would only hide that mechanism failing.
 
     # Comments across crates/ cite upstream Haskell line numbers relative to
     # the pin; remap them through the bump's diff (pure shifts applied
@@ -136,6 +133,16 @@ finalize() {
         echo "NOTE: $(printf '%s\n' "$wrapped" | wc -l) wrapped cite(s) listed at the end of $remap_report"
     fi
 
+    # The mechanical cite gate (see check_hs_cites.py's docstring): the remap
+    # above reports-not-fails on UNRESOLVED cites, so without this a bump can
+    # leave cites pointing at blank lines or vanished files with nothing red
+    # anywhere.  Findings go into the same report the checklist reviews.
+    if (cd "$root" && python3 scripts/check_hs_cites.py) >> "$root/$remap_report" 2>&1; then
+        echo "cite gate: check_hs_cites.py OK"
+    else
+        echo "WARNING: check_hs_cites.py found stale cites — see $remap_report; fix before committing" >&2
+    fi
+
     if [ "${SKIP_BUILD:-0}" != 1 ]; then
         "$root/setup.sh" testing
         ( cd "$root" && cargo build --release )
@@ -155,8 +162,9 @@ staged (NOT committed): tamarin-prover gitlink + patches/$(basename "$patch")
 unstaged: any HS-cite remaps under crates/ (review with git diff, commit with the bump)
 Verify before committing:
   1. $remap_report — the applied cite rewrites, the UNRESOLVED list (fix those
-     by hand) and the wrapped cites the remapper cannot join; re-run the lint after:
-     grep -rnE '\.hs:[0-9]+([,-][0-9]+)*,[[:space:]]*\$' crates --include='*.rs'
+     by hand), the wrapped cites the remapper cannot join, and the
+     check_hs_cites.py findings; after fixing, re-run until green:
+     python3 scripts/check_hs_cites.py
   2. RESULTS_TSV=scripts/results/fullgate_bump.tsv scripts/corpus_file_diff.sh   # full batch gate, cold cache
      - heavy files (BP_IBS_2/3, alethea_votingphase_malS_abstain) need FILE_TIMEOUT>=600 cold
      - retries short-circuit on cached markers: find scripts/.hs_file_cache -name '*.timeout' -delete first
@@ -167,7 +175,13 @@ Verify before committing:
      - a changed .hs.txt is upstream behaviour moving under a fixture; check.sh
        goes red if the port drifts OR if the recorded upstream-bug divergence
        (the documented AC-marker collapse) disappears or changes shape
-  5. git commit -m "chore: bump tamarin-prover submodule to $newshort"
+  5. crates/tamarin-server/tests/capture_haskell_fixtures.sh
+     - the interactive server's HTTP captures; put the REBUILT testing oracle's
+       bin dir first on PATH (the script refuses any other revision) and review
+       git diff crates/tamarin-server/tests/fixtures/haskell-responses/
+     - it re-stamps that directory's oracle_rev; skip this step and
+       cargo test -p tamarin-server goes red on the stamp-vs-pin mismatch
+  6. git commit -m "chore: bump tamarin-prover submodule to $newshort"
 EOF
 }
 

@@ -12,13 +12,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::render_system::RenderSystem;
-use tamarin_term::lterm::{sort_of_lnterm, LNTerm, LSort};
-use tamarin_theory::constraint::constraints::{Edge, Goal, LessAtom, NodeId, Reason};
-use tamarin_theory::constraint::system::System;
-use tamarin_theory::fact::FactTag;
-use tamarin_theory::rule::{
+use crate::constraint::constraints::{Edge, Goal, LessAtom, NodeId, Reason};
+use crate::constraint::system::System;
+use crate::fact::FactTag;
+use crate::rule::{
     is_coerce_rule_info, is_irecv_rule_info, is_isend_rule_info, RuleACInst, RuleInfo,
 };
+use tamarin_term::lterm::{sort_of_lnterm, LNTerm, LSort};
 
 // ---------------------------------------------------------------------
 // Compression (compressSystem)
@@ -57,23 +57,18 @@ fn drop_entailed_ord_constraints(mut sys: RenderSystem) -> RenderSystem {
     // Build adjacency from `rawEdgeRel` = edges ++ unsolvedChains
     // (Simplification.hs:33-38, see line 37 / System.hs:1613-1616).
     let adj = build_raw_edge_adjacency(&sys);
-    let mut new_atoms: Vec<LessAtom> = Vec::with_capacity(sys.less_atoms.len());
-    for la in &sys.less_atoms {
-        // HS `entailed (LessAtom from to _) = to `S.member` reachableSet [from] edges`
-        // (Simplification.hs:33-38, see line 38).  `Dag.reachableSet [from]` ALWAYS contains the
-        // start node `from` itself (DAG/Simple.hs:72-78: `visit` inserts `x`
-        // before recursing), so a REFLEXIVE atom (`from == to`) is unconditionally
-        // entailed — hence dropped from the display graph.  `reachable` below is
-        // strict-path (returns false for `from == to`), so the reflexive case must
-        // be added explicitly to match HS; otherwise a `#t1 < #t1` born from a
-        // `#t1 < #t2` less-atom collapsed under a `t2 = t1` subst survives here and
-        // renders as a spurious dashed self-loop that HS never draws.
-        let entailed = la.smaller == la.larger || reachable(&adj, &la.smaller, &la.larger);
-        if !entailed {
-            new_atoms.push(la.clone());
-        }
-    }
-    sys.content_mut().less_atoms = new_atoms;
+    // HS `entailed (LessAtom from to _) = to `S.member` reachableSet [from] edges`
+    // (Simplification.hs:33-38, see line 38).  `Dag.reachableSet [from]` ALWAYS
+    // contains the start node `from` itself (DAG/Simple.hs:72-78: `visit` inserts
+    // `x` before recursing), so a REFLEXIVE atom (`from == to`) is unconditionally
+    // entailed — hence dropped from the display graph.  `reachable` below is
+    // strict-path (returns false for `from == to`), so the reflexive case must be
+    // added explicitly to match HS; otherwise a `#t1 < #t1` born from a
+    // `#t1 < #t2` less-atom collapsed under a `t2 = t1` subst survives here and
+    // renders as a spurious dashed self-loop that HS never draws.
+    sys.content_mut()
+        .less_atoms
+        .retain(|la| la.smaller != la.larger && !reachable(&adj, &la.smaller, &la.larger));
     sys
 }
 
@@ -148,18 +143,15 @@ fn try_hide_node_id(v: &NodeId, sys: RenderSystem) -> RenderSystem {
     if mentioned_in_formulas(v, &sys.formulas) {
         return sys;
     }
-    // Try hideRule first if v has a node entry, else hideAction.
-    if let Some((_, ru)) = sys.nodes.iter().find(|(id, _)| id == v).cloned() {
-        match try_hide_rule(v, ru, sys) {
-            Ok(updated) => updated,
-            Err(restored) => restored,
-        }
-    } else {
-        match try_hide_action(v, sys) {
-            Ok(updated) => updated,
-            Err(restored) => restored,
-        }
-    }
+    // Try hideRule first if v has a node entry, else hideAction.  Either way
+    // the `Err` arm carries the untouched system back, so both are kept.
+    let node_rule = sys.nodes.iter().find(|(id, _)| id == v).cloned();
+    let attempt = match node_rule {
+        Some((_, ru)) => try_hide_rule(v, ru, sys),
+        None => try_hide_action(v, sys),
+    };
+    let (Ok(out) | Err(out)) = attempt;
+    out
 }
 
 fn mentioned_in_unsolved_chains(v: &NodeId, sys: &System) -> bool {
@@ -175,15 +167,12 @@ fn mentioned_in_unsolved_chains(v: &NodeId, sys: &System) -> bool {
     })
 }
 
-fn mentioned_in_formulas(
-    v: &NodeId,
-    formulas: &[std::sync::Arc<tamarin_theory::guarded::Guarded>],
-) -> bool {
+fn mentioned_in_formulas(v: &NodeId, formulas: &[std::sync::Arc<crate::guarded::Guarded>]) -> bool {
     formulas.iter().any(|g| guarded_mentions_node(v, g))
 }
 
-fn guarded_mentions_node(v: &NodeId, g: &tamarin_theory::guarded::Guarded) -> bool {
-    use tamarin_theory::guarded::Guarded;
+fn guarded_mentions_node(v: &NodeId, g: &crate::guarded::Guarded) -> bool {
+    use crate::guarded::Guarded;
     match g {
         Guarded::Conj(items) | Guarded::Disj(items) => {
             items.iter().any(|x| guarded_mentions_node(v, x))
@@ -198,8 +187,8 @@ fn guarded_mentions_node(v: &NodeId, g: &tamarin_theory::guarded::Guarded) -> bo
     }
 }
 
-fn atom_mentions_node(v: &NodeId, at: &tamarin_theory::guarded_types::GAtom) -> bool {
-    use tamarin_theory::guarded_types::{BVar, GAtom, GTerm};
+fn atom_mentions_node(v: &NodeId, at: &crate::guarded_types::GAtom) -> bool {
+    use crate::guarded_types::{BVar, GAtom, GTerm};
     let mentions_term = |t: &GTerm| -> bool {
         if let GTerm::Var(BVar::Free(spec)) = t {
             // HS `notOccursIn proj = not $ getAny $ foldFrees (Any . (v ==))
@@ -230,7 +219,7 @@ fn atom_mentions_node(v: &NodeId, at: &tamarin_theory::guarded_types::GAtom) -> 
 
 fn try_hide_action(v: &NodeId, sys: RenderSystem) -> Result<RenderSystem, RenderSystem> {
     // Collect KU action atoms at v.
-    let ku_actions: Vec<(NodeId, tamarin_theory::fact::LNFact)> = sys
+    let ku_actions: Vec<(NodeId, crate::fact::LNFact)> = sys
         .goals
         .iter()
         .filter_map(|(g, st)| {
@@ -433,7 +422,7 @@ fn rule_eligible(ru: &RuleACInst) -> bool {
         }
         RuleInfo::Proto(p) => {
             // isFreshRule treats only the Fresh proto-rule as fresh.
-            p.name == tamarin_theory::rule::ProtoRuleName::Fresh
+            p.name == crate::rule::ProtoRuleName::Fresh
         }
     };
     is_special || (ru.actions.is_empty() && ru.premises.len() <= 1 && ru.conclusions.len() <= 1)
@@ -469,7 +458,10 @@ pub fn simplify_system(level: SimplificationLevel, sys: RenderSystem) -> RenderS
 ///
 /// `total_red = True`  -> retain only `(x,y) ∈ transRed sLess`
 /// `total_red = False` -> retain `(x,y) ∈ transRed sLess` OR reason ∈ {Formula, Adversary}
-pub fn transitive_reduction(sys: RenderSystem, total_red: bool) -> RenderSystem {
+///
+/// Module-private, as in HS: `Simplification.hs` exports only
+/// `simplifySystem` and `compressSystem`.
+fn transitive_reduction(sys: RenderSystem, total_red: bool) -> RenderSystem {
     // Haskell: `oldLesses = rawLessRel sys`, used for BOTH `Dag.cyclic`
     // and `Dag.transRed` (Simplification.hs:61-74).  `rawLessRel se =
     // getLessRel sLessAtoms ++ rawEdgeRel se` (System.hs:1621-1622), and
@@ -510,15 +502,15 @@ pub fn transitive_reduction(sys: RenderSystem, total_red: bool) -> RenderSystem 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    use tamarin_theory::constraint::system::System;
-    use tamarin_theory::fact::{fresh_fact, in_fact, out_fact};
-    use tamarin_theory::rule::{
+    use crate::constraint::system::System;
+    use crate::fact::{fresh_fact, in_fact, out_fact};
+    use crate::rule::{
         ConcIdx, IntrRuleACInfo, PremIdx, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes,
         RuleInfo,
     };
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::term::Term;
+    use tamarin_term::vterm::Lit;
 
     fn nid(name: &str, idx: u64) -> NodeId {
         LVar::new(name, LSort::Node, idx)

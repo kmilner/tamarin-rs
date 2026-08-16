@@ -12,7 +12,7 @@
 //! each closest enclosing-scope `unlock` (and `insert`/`lookup`) that shares the
 //! lock's term.
 //!
-//! The pass runs LAST in the annotation pipeline (Sapic.hs:55-61), after
+//! The pass runs LAST in the annotation pipeline (sapic/src/Sapic.hs:55-61), after
 //! `propagateNames` / `annotateSecretChannels` / `annotatePureStates`.
 //!
 //! NOTE on the fresh counter: HS `annotateLocks` runs in the *Fast* `FreshT`

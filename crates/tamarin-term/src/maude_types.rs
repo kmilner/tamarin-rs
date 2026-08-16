@@ -93,7 +93,7 @@ impl ConvCtx {
 /// however, *does* support a `Msg`-sorted constant directly: the emitted
 /// theory declares `op c : Nat -> Msg` and `MaudeConst(i, LSort::Msg)`
 /// prints as `c(i)`.  So to faithfully mirror HS's
-/// `sortOfSkol (SkConst v) = lvarSort v` (Guarded.hs:805-808) — where a
+/// `sortOfSkol (SkConst v) = lvarSort v` (Guarded.hs:809-810) — where a
 /// skolemized free variable keeps its *own* sort, which may be `Msg` —
 /// we carry a `Msg`-sorted skolem as a `NameTag::Pub` `Name` whose id
 /// begins with this sentinel, and recognise it here so that
@@ -133,7 +133,7 @@ pub fn lterm_to_mterm_global(t: &LNTerm, ctx: &mut ConvCtx) -> MTerm {
             let new_args: Vec<MTerm> = args.iter().map(|a| lterm_to_mterm_global(a, ctx)).collect();
             // Smart constructor so AC args are flattened+sorted and C/EMap
             // args sorted by MaudeLit order, matching HS `lTermToMTerm`
-            // (Term/Maude/Types.hs:57-73, see line 72) `go (FApp o as) = fApp o <$> ...`,
+            // (Term/Maude/Types.hs:74-85, see line 82) `go (FApp o as) = fApp o <$> ...`,
             // where `fApp (AC s) = fAppAC` (flatten+sort) and
             // `fApp (C s) = fAppC` (sort) per Raw.hs:111-131.  The raw
             // `Term::App` constructor would instead leave AC/em args in the
@@ -194,11 +194,11 @@ pub fn mterm_to_lnterm(
             //
             // Known Rust-side compensation, NOT yet traced to its upstream
             // encoding cause.  This diverges from HS `mTermToLNTerm`'s
-            // `importLit` (Term/Maude/Types.hs:74-93, see line 89), whose `lookupBinding`
+            // `importLit` (Term/Maude/Types.hs:94-106, see line 103), whose `lookupBinding`
             // (Bind.hs:115-117, see line 117) is strict in the full `MaudeLit` sort
             // (data MaudeLit = MaudeVar Integer LSort, deriving Ord —
-            // Types.hs:42-45): on a sort-miss HS would mint a FRESH `LVar`
-            // at the widened sort (importBinding, Bind.hs:134-141), never
+            // Term/Maude/Types.hs:42-45): on a sort-miss HS would mint a FRESH `LVar`
+            // at the widened sort (importBinding, Bind.hs:134-140), never
             // recovering the original.  Given identical Maude output the
             // strict lookup should always hit (the forward encoder
             // import_lit and the sort parser are byte-equivalent to HS), so
@@ -233,7 +233,7 @@ pub fn mterm_to_lnterm(
             // Application via the smart constructors so AC/C normalisation
             // is preserved.  Mirrors HS `mTermToLNTerm`'s
             //   `go (FApp o as) = fApp o <$> mapM (go . viewTerm) as`
-            // (Term/Maude/Types.hs:74-93, see line 88): `fApp` dispatches to `fAppAC`
+            // (Term/Maude/Types.hs:94-106, see line 102): `fApp` dispatches to `fAppAC`
             // (flatten+sort) for AC symbols AND `fAppC` (sort) for C
             // symbols (`em`/EMap).  Crucially the sort happens AFTER the
             // child args have been back-converted from `MaudeVar`s to the
@@ -268,7 +268,7 @@ pub fn substitute_lookup_var(ctx: &ConvCtx, sort: LSort, idx: u64) -> Option<LVa
     // The sort-tolerant fallback in `lookup_canonical_var_lit` is a known
     // Rust-side compensation, NOT yet traced to its upstream cause.  It
     // diverges from HS `msubstToLSubstVFresh`/`VFree`'s `lookupVar s i =
-    // lookupBinding (MaudeVar i s)` (Types.hs:139-143, 159-163), which is
+    // lookupBinding (MaudeVar i s)` (Term/Maude/Types.hs:153-157, 173-177), which is
     // strict in the full `MaudeLit` sort and `error`s on a miss — there is no
     // any-sort fallback.  Kept to preserve current corpus parity until the
     // upstream cause is traced; do not change the fallback without a full
@@ -366,7 +366,7 @@ mod tests {
 
     /// Pins the load-bearing sort-tolerant DOMAIN fallback in
     /// `substitute_lookup_var`.  HS `lookupVar s i = lookupBinding
-    /// (MaudeVar i s)` (Term/Maude/Types.hs:139-143) is strict and would
+    /// (MaudeVar i s)` (Term/Maude/Types.hs:153-157) is strict and would
     /// `error` on a sort-miss; the Rust fallback instead recovers the
     /// original LVar by (idx, ANY sort).  This test locks the CURRENT Rust
     /// behavior so any change to that fallback is caught and re-validated
@@ -390,7 +390,7 @@ mod tests {
 
     /// Pins the load-bearing sort-tolerant RANGE fallback used by
     /// `mterm_to_lnterm` via `lookup_canonical_var_lit`.  HS `importLit`
-    /// (Term/Maude/Types.hs:74-93, see line 89) is strict on the full sort and on a miss
+    /// (Term/Maude/Types.hs:94-106, see line 103) is strict on the full sort and on a miss
     /// mints a FRESH `LVar` at the widened sort; the Rust fallback instead
     /// recovers the original LVar identity.  Locks current Rust behavior.
     #[test]

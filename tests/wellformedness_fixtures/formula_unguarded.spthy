@@ -1,5 +1,8 @@
-// Fixture: triggers `Formula guardedness`.
-// A negated existential without a guard is not in the guarded fragment.
+// Fixture: triggers `Formula terms` — despite the file's name, NOT
+// ` Formula guardedness`.  The lemma's `#i` is free (no quantifier binds it),
+// which HS `checkTerms` reports as a term of the wrong form.  The formula
+// itself is guarded: the pinned oracle converts it without complaint, and
+// `expected.txt` pins ` Formula guardedness` as a negative here.
 theory Unguarded
 begin
 

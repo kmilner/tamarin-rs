@@ -14,7 +14,8 @@
 //! 183-225, see lines 220-225).
 //!
 //! Which orders load is decided by `function`'s conflict check
-//! (Signature.hs:212-216), which looks the name up in `stFunSyms` ONLY:
+//! (Theory/Text/Parser/Signature.hs:212-216), which looks the name up in
+//! `stFunSyms` ONLY:
 //!
 //! | declaration order              | options      | result                     |
 //! |--------------------------------|--------------|----------------------------|
@@ -27,7 +28,7 @@
 //! and the two symbols must be resolved independently: the prefix and
 //! `op{a}b` spellings take the `NoEq` one (`lookupArity`'s NoEq-first list
 //! lookup, Theory/Text/Parser/Term.hs:62-72), the infix spelling takes the AC
-//! one (`acterm`, Term.hs:163-168).
+//! one (`acterm`, Theory/Text/Parser/Term.hs:166-172).
 //!
 //! The observable is the Maude operator name: `funSymEncodeAttr`
 //! (Term/Maude/Parser.hs:76-88) folds privacy / constructability / AC-ness /
@@ -50,7 +51,7 @@ use tamarin_theory::pretty_theory::{web_proto_rules, web_signature_block};
 
 /// The Maude operator name the head of `t` serialises to — `tam`, the
 /// `funSymEncodeAttr` attribute block, then the symbol name (HS
-/// `ppMaudeNoEqSym` / `ppMaudeACSym`, Term/Maude/Parser.hs:110-124).
+/// `ppMaudeACSym` / `ppMaudeNoEqSym`, Term/Maude/Parser.hs:136-147).
 fn head_maude_op(t: &LNTerm) -> String {
     match t {
         Term::App(FunSym::NoEq(s), _) => format!(

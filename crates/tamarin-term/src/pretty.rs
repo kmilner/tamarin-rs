@@ -27,6 +27,7 @@
 //! - `impl Display for LNTerm` (technically on `Term<Lit<Name, LVar>>`).
 
 use std::fmt;
+use std::fmt::Write as _;
 use std::sync::{OnceLock, RwLock};
 
 use tamarin_utils::FastMap;
@@ -94,7 +95,7 @@ fn pp_term_lnterm(t: &Term<Lit<Name, LVar>>, out: &mut String) {
         }
         // Haskell `prettyTerm` matches full `NoEqSym` equality (incl.
         // privacy/constructability), e.g. `s == expSym` — not just the
-        // name+arity (Term.hs:310-313).
+        // name+arity (Term/Term.hs:310-313).
         Term::App(FunSym::NoEq(sym), ts) if ts.len() == 2 && *sym == exp_sym() => {
             pp_term_lnterm(&ts[0], out);
             out.push('^');
@@ -161,7 +162,7 @@ fn pp_term_lnterm(t: &Term<Lit<Name, LVar>>, out: &mut String) {
     }
 }
 
-/// HS `split` (Term.hs:323-324): `split (viewTerm2 -> FPair t1 t2) = t1 :
+/// HS `split` (Term/Term.hs:323-324): `split (viewTerm2 -> FPair t1 t2) = t1 :
 /// split t2; split t = [t]`.  ONLY the RIGHT spine of a pair is flattened —
 /// `pair(t1, t2)` yields `t1` then recurses into `t2`.  A LEFT-nested pair
 /// such as `pair(pair(a,b), c)` therefore renders as `<<a, b>, c>` (the left
@@ -184,17 +185,17 @@ fn pp_lit_lnterm(l: &Lit<Name, LVar>, out: &mut String) {
     }
 }
 
-/// Mirror of Haskell `instance Show LVar` (LTerm.hs:525-532).
+/// Mirror of Haskell `instance Show LVar` (LTerm.hs:550-557).
 pub fn pp_lvar(v: &LVar, out: &mut String) {
     out.push_str(sort_prefix(v.sort));
     if v.name.is_empty() {
-        out.push_str(&v.idx.to_string());
+        let _ = write!(out, "{}", v.idx);
     } else if v.idx == 0 {
         out.push_str(v.name);
     } else {
         out.push_str(v.name);
         out.push('.');
-        out.push_str(&v.idx.to_string());
+        let _ = write!(out, "{}", v.idx);
     }
 }
 
@@ -218,7 +219,7 @@ pub fn pp_name(n: &Name, out: &mut String) {
 }
 
 pub fn ac_op_symbol(op: AcSym) -> &'static str {
-    // Haskell `prettyTerm`'s AC arms (Term.hs:304-309).
+    // Haskell `prettyTerm`'s AC arms (Term/Term.hs:304-309).
     //   Mult => "*"; Xor => "⊕"; Union => "++"; NatPlus => "%+"
     // We use the unicode char for Xor since the rest of the UI
     // already passes UTF-8 around and the JS frontend renders it.
@@ -262,7 +263,7 @@ fn ac_fct_op_symbol_interned(name: &'static [u8]) -> &'static str {
 }
 
 /// The infix separator of a user-defined AC symbol: Haskell
-/// `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts` (Term.hs:305) surrounds
+/// `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts` (Term/Term.hs:305) surrounds
 /// the symbol name by spaces, so the spaces are part of the separator (unlike
 /// the builtin ops).  Interned so it can be handed out as `&'static str` like
 /// the fixed ones; the pool is bounded by the theory's user-defined AC names.
@@ -468,7 +469,7 @@ mod tests {
         let b = var("b", LSort::Msg);
         let t = f_app_ac(AcSym::AcFct(f), vec![a, b]);
         assert_eq!(pretty_lnterm(&t), "(a f b)");
-        // HS `FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)` (Term.hs:304):
+        // HS `FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)` (Term/Term.hs:304):
         // the bare name, no parens.  `f_app_ac` rejects an empty argument list
         // (HS `fAppAC` errors likewise), so the arm is reachable only by direct
         // construction.
@@ -514,7 +515,7 @@ mod tests {
     /// Bytes from the oracle on a theory declaring `f/2 [AC]`, `op/2 [AC]`,
     /// `opq/2 [AC]` and a rule emitting `f(~a,~b)`, `op(~a,~b)`, `opq(~a,~b)`;
     /// it renders them `(~a f ~b)`, `(~a op ~b)`, `(~a opq ~b)` (HS
-    /// `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts`, Term.hs:305).
+    /// `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts`, Term/Term.hs:305).
     #[test]
     fn ac_fct_separator_shared_across_threads() {
         use crate::function_symbols::{AcFctSym, AcSym, NdcState};

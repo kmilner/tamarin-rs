@@ -4,37 +4,40 @@
 
 //! Per-rule node colouring shared by the two graph renderers.
 //!
-//! Holds the port of HS `nodeColorMap` / `NodeColorMap` (Dot.hs:88,
-//! Dot.hs:190-218) — the size-dependent light-HSV palette keyed by a rule's
+//! Holds the port of HS `nodeColorMap` / `NodeColorMap` (System/Dot.hs:91,
+//! System/Dot.hs:193-221) — the size-dependent light-HSV palette keyed by a rule's
 //! `rInfo` — together with the less-edge `reasonColor` table and the
-//! `prettyLNFact` `Doc` both renderers label facts with.  `handlers::dot`
-//! (DOT output) and [`crate::graph::json`] (JSON output) are both consumers,
-//! so this module sits under `graph/` rather than inside either renderer.
+//! `prettyLNFact` `Doc` both renderers label facts with.
+//! [`crate::constraint::system::dot`] (DOT output) and
+//! [`crate::constraint::system::json`] (JSON output) are both consumers, so
+//! this module sits under `graph/` rather than inside either renderer.
 
 use std::collections::BTreeMap;
 
-use tamarin_theory::constraint::constraints::{NodeId, Reason};
-use tamarin_theory::constraint::system::nodes_in_map_order;
-use tamarin_theory::fact::LNFact;
-use tamarin_theory::pretty_hpj::Doc;
-use tamarin_theory::rule::{IntrRuleACInfo, ProtoRuleName, RuleACInst, RuleInfo};
+use crate::constraint::constraints::{NodeId, Reason};
+use crate::constraint::system::nodes_in_map_order;
+use crate::fact::LNFact;
+use crate::pretty_hpj::Doc;
+use crate::rule::{IntrRuleACInfo, ProtoRuleName, RuleACInst, RuleInfo};
 
 /// The `Doc` of an `LNFact` exactly as Haskell `prettyLNFact`
-/// (Fact.hs:581-582), the printer `renderLNFact` (Dot.hs:227-233) feeds
+/// (Theory/Model/Fact.hs:581-582), the printer `renderLNFact`
+/// (System/Dot.hs:227-236) feeds
 /// after abbreviation replacement.  `prettyLNFact` builds the
 /// argument list with `nestShort' (n++"(") ")" . fsep . punctuate comma`
-/// (`prettyFact`'s `ppFact`, Fact.hs:567-574, see line 572), which — unlike a bare `name(a, b)` — emits the
+/// (`prettyFact`'s `ppFact`, Theory/Model/Fact.hs:567-574, see line 572), which —
+/// unlike a bare `name(a, b)` — emits the
 /// HughesPJ INNER-PAREN SPACES `!KU( ~ltk )` when the fact fits on one line.
 /// We therefore reuse the *same* faithful `Doc` path the proof pretty-
 /// printer uses for goals (`solve_goal_to_doc` → `pretty_formula::fact_doc`
 /// on the parser-AST projection), NOT `pretty_system::pretty_fact` (which
 /// omits those spaces).
 pub(crate) fn fact_doc_of(fa: &LNFact) -> Doc {
-    tamarin_theory::pretty_formula::fact_doc(&tamarin_theory::pretty_theory::lnfact_to_parser(fa))
+    crate::pretty_formula::fact_doc(&crate::pretty_theory::lnfact_to_parser(fa))
 }
 
 /// HS `toColor` — the per-`Reason` less-edge colour, spelled identically in
-/// the DOT renderer (`dotLessAtom.toColor`, Dot.hs:624-630) and in the JSON
+/// the DOT renderer (`dotLessAtom.toColor`, System/Dot.hs:624-630) and in the JSON
 /// serialiser (`colorEdge`'s `LessEdge` arm, JSON.hs:444-455, see line 455).
 pub(crate) fn reason_color(r: Reason) -> &'static str {
     match r {
@@ -46,13 +49,13 @@ pub(crate) fn reason_color(r: Reason) -> &'static str {
     }
 }
 
-/// Key of HS `NodeColorMap` (Dot.hs:91): a rule's `rInfo`
+/// Key of HS `NodeColorMap` (System/Dot.hs:91): a rule's `rInfo`
 /// (`RuleInfo ProtoRuleACInstInfo IntrRuleACInfo`).
-pub(crate) type RInfo = RuleInfo<tamarin_theory::rule::ProtoRuleACInstInfo, IntrRuleACInfo>;
+pub(crate) type RInfo = RuleInfo<crate::rule::ProtoRuleACInstInfo, IntrRuleACInfo>;
 
-/// Faithful port of HS `NodeColorMap` (Dot.hs:91) — the per-rule fill
+/// Faithful port of HS `NodeColorMap` (System/Dot.hs:91) — the per-rule fill
 /// palette, keyed in HS by a rule's `rInfo`. Built by [`build_node_color_map`]
-/// (port of `nodeColorMap`, Dot.hs:190-218).
+/// (port of `nodeColorMap`, System/Dot.hs:193-221).
 ///
 /// `rInfo` is not `Hash`/`Ord` in the Rust port (`ProtoRuleACInstInfo` only
 /// derives `PartialEq`), and both renderers reach the palette from a node whose
@@ -68,7 +71,7 @@ pub(crate) struct NodeColorMap {
 }
 
 impl NodeColorMap {
-    /// HS `M.lookup rInfoVal colorMap` (Dot.hs:236-379, see line 255) for the
+    /// HS `M.lookup rInfoVal colorMap` (System/Dot.hs:258) for the
     /// node that `id` names: the colour of the LAST map entry sharing that
     /// node's `rInfo` (matching `M.fromList`'s last-wins), or `None` when the
     /// node contributed no entry (→ `"white"` in the DOT renderer, an omitted
@@ -97,14 +100,14 @@ fn class_key(info: &RInfo) -> ClassKey<'_> {
     }
 }
 
-/// HS `nodeColorMap.groupIdx` (Dot.hs:196-200): partition a rule into one of
+/// HS `nodeColorMap.groupIdx` (System/Dot.hs:199-203): partition a rule into one of
 /// four colour groups. Guard order matters and mirrors HS exactly:
 ///   * `isDestrRule` (DestrRule or IEqualityRule)               → 0
 ///   * `isConstrRule` (Constr/Fresh/Pub/Nat constr or Coerce)   → 2
 ///   * `isFreshRule` (proto `Fresh`) or `isISendRule`           → 3
 ///   * otherwise (protocol rules, IRecv, …)                     → 1
 fn group_idx(ru: &RuleACInst) -> usize {
-    use tamarin_theory::rule::{
+    use crate::rule::{
         is_coerce_rule_info, is_constr_rule_info, is_destr_rule_info, is_fresh_constr_rule_info,
         is_iequality_rule_info, is_isend_rule_info, is_nat_constr_rule_info,
         is_pub_constr_rule_info,
@@ -139,22 +142,22 @@ fn group_idx(ru: &RuleACInst) -> usize {
     }
 }
 
-/// Faithful port of HS `nodeColorMap` (Dot.hs:190-218).
+/// Faithful port of HS `nodeColorMap` (System/Dot.hs:193-221).
 ///
 /// HS: `M.fromList [ (get rInfo ru, getColorForRule (ruleAttributes ru) gIdx
 /// mIdx) | (gIdx, grp) <- groups, (mIdx, ru) <- zip [0..] grp ]`, with the
 /// four `groups` filtered from `rules` by [`group_idx`] and coloured via
 /// `colors = lightColorGroups intruderHue (map (length . snd) groups)` and
-/// `intruderHue = 18 % 360` (Dot.hs:190-218, see line 208,217-218).
+/// `intruderHue = 18 % 360` (System/Dot.hs:211,220-221).
 ///
-/// `rules` here is `M.elems $ get sNodes se` (Dot.hs:506-512, see line 510) — the raw system's
+/// `rules` here is `M.elems $ get sNodes se` (System/Dot.hs:506-512, see line 510) — the raw system's
 /// nodes in `M.Map` key order, materialised by [`nodes_in_map_order`].
 /// Each entry's colour follows `getColorForRule attrs gIdx mIdx = fromMaybe
-/// defaultColor (ruleColor attrs)` (Dot.hs:190-218, see line 212): a rule with an explicit
+/// defaultColor (ruleColor attrs)` (System/Dot.hs:215): a rule with an explicit
 /// `color:` attribute maps to THAT colour, otherwise to the palette default
-/// (`defaultColor = hsvToRGB (getColor (gIdx, mIdx))`, Dot.hs:190-218, see line 214).  This map
-/// value is what `dotNodeCompact` feeds to `colorUsesWhiteFont` (Dot.hs:236-379, see line 255,
-/// 258) to pick a node's font colour — so a SAPiC rule with a dark `color:`
+/// (`defaultColor = hsvToRGB (getColor (gIdx, mIdx))`, System/Dot.hs:217).  This map
+/// value is what `dotNodeCompact` feeds to `colorUsesWhiteFont`
+/// (System/Dot.hs:258,261) to pick a node's font colour — so a SAPiC rule with a dark `color:`
 /// attribute must map to that dark colour (→ white font), not to the light
 /// palette default.  (The FILL colour is resolved separately via
 /// `explicit_rule_color` at the call site, so carrying the explicit colour
@@ -183,7 +186,7 @@ pub(crate) fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorM
         .collect();
     let get_color = |gi: usize, mi: usize| -> Hsv {
         // `getColor idx = fromMaybe (HSV 0 1 1) (M.lookup idx colors)`
-        // (Dot.hs:190-218, see line 209) — unreachable for a valid (gIdx, mIdx).
+        // (System/Dot.hs:212) — unreachable for a valid (gIdx, mIdx).
         palette
             .get(&(gi, mi))
             .copied()
@@ -204,10 +207,11 @@ pub(crate) fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorM
         for (mi, pair) in grp.iter().enumerate() {
             let info = &pair.1.info;
             // `getColorForRule attrs gIdx mIdx = fromMaybe defaultColor
-            // (ruleColor attrs)` (Dot.hs:190-218, see line 212): explicit `color:` wins, else the
+            // (ruleColor attrs)` (System/Dot.hs:215): explicit `color:` wins, else the
             // palette default.  `ruleAttributes ru = praciAttributes` for a
-            // RuleACInst (Rule.hs:673-675, see line 674) — the same attributes `explicit_rule_color`
-            // reads, so a coloured rule maps to its own dark fill colour.
+            // RuleACInst (Theory/Model/Rule.hs:686-688) — the same attributes
+            // `explicit_rule_color` reads, so a coloured rule maps to its own
+            // dark fill colour.
             let color = match info {
                 RuleInfo::Proto(p) => p
                     .attributes
@@ -243,11 +247,11 @@ pub(crate) fn build_node_color_map(nodes: &[(NodeId, RuleACInst)]) -> NodeColorM
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_theory::rule::{
+    use crate::rule::{
         IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName as PRN, Rule as TRule, RuleAttributes,
         RuleInfo as TRuleInfo,
     };
+    use tamarin_term::lterm::{LSort, LVar};
 
     /// A bare intruder-rule node (no facts) with the given `IntrRuleACInfo`.
     fn intr_node(info: IntrRuleACInfo) -> RuleACInst {
@@ -267,7 +271,7 @@ mod tests {
     }
 
     /// Direct transcription of HS `M.lookup rInfoVal (nodeColorMap rules)`
-    /// (Dot.hs:190-218/255): rebuild the association list HS hands to
+    /// (System/Dot.hs:193-221,258): rebuild the association list HS hands to
     /// `M.fromList` and scan it in reverse for the last entry with an equal
     /// `rInfo` — the semantics [`build_node_color_map`] resolves per node.
     fn reference_lookup(
@@ -310,7 +314,7 @@ mod tests {
 
     #[test]
     fn group_idx_partition_matches_hs() {
-        // HS groupIdx (Dot.hs:196-200).
+        // HS groupIdx (System/Dot.hs:199-203).
         assert_eq!(group_idx(&intr_node(destr(b"x"))), 0); // isDestrRule
         assert_eq!(group_idx(&intr_node(IntrRuleACInfo::IEquality)), 0);
         assert_eq!(

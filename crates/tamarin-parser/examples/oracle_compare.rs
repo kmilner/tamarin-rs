@@ -19,7 +19,7 @@ use tamarin_parser::{ast, parse_theory};
 mod common;
 use common::{collect_spthy, corpus_root};
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 struct Counts {
     name: String,
     rules: usize,
@@ -88,7 +88,7 @@ fn main() {
         if structural_equal(&tamarin, &our) {
             equal += 1;
         } else if diff_examples.len() < 10 {
-            diff_examples.push((path.clone(), tamarin.clone(), our));
+            diff_examples.push((path.clone(), tamarin, our));
         }
     }
 
@@ -147,7 +147,7 @@ fn parse_tamarin_output(s: &str) -> Option<Counts> {
                 let n = rest.split_whitespace().next().unwrap_or("");
                 name = Some(n.to_string());
             }
-        } else if line.starts_with("rule ") || line.starts_with("rule (") {
+        } else if line.starts_with("rule ") {
             c.rules += 1;
         } else if line.starts_with("lemma ") {
             c.lemmas += 1;

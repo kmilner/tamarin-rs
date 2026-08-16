@@ -23,7 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::constraint::constraints::{LessAtom, NodeId};
 use crate::constraint::solver::context::ProofContext;
-use crate::constraint::system::System;
+use crate::constraint::system::{NodeRuleMap, System};
 
 /// Reasons why a `System` is contradictory. Variants match Haskell
 /// 1-to-1 so downstream pretty printers can reuse the names.
@@ -58,11 +58,6 @@ pub enum Contradiction {
     /// There is a node strictly after `last(...)`.
     NodeAfterLast(NodeId, NodeId),
 }
-
-/// Read-only `NodeId → rule` index (`System::node_rule_map`), built at most
-/// once per `contradictions` pass: the caller owns it in a `OnceCell` and
-/// each consumer forces it with `get_or_init`.
-type NodeRuleMap<'a> = tamarin_utils::FastMap<&'a NodeId, &'a crate::rule::RuleACInst>;
 
 /// Push a node id through the eq-store substitution, keeping it as-is when the
 /// substitution does not map it to another variable.  The rationale for
@@ -185,14 +180,15 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     // this one does not), so it is built separately.
     let ab_adj = sys.build_always_before_adj();
 
-    // Shared node-id → rule index for the three map-consuming checks
-    // below (`has_forbidden_constr_chain`, `has_incompatible_edge_facts`,
+    // Shared node-id → rule index for the map-consuming checks below
+    // (`has_impossible_chain`, `has_forbidden_constr_chain`,
+    // `has_forbidden_chain`, `has_incompatible_edge_facts`,
     // `non_injective_fact_instances`).  `sys` is held immutable for the
     // whole body and `nodes` has no interior mutability, so one build
-    // serves all three.  `OnceCell` rather than an eager build: each
-    // consumer forces it only after its own early-outs (no AC-constructor
-    // node, no edges, no injective fact tags respectively), so a pass
-    // whose consumers all bail never builds it.
+    // serves all of them.  `OnceCell` rather than an eager build: each
+    // consumer forces it only after its own early-outs (no unsolved chain
+    // goal, no AC-constructor node, no edges, no injective fact tags), so
+    // a pass whose consumers all bail never builds it.
     let node_rules: std::cell::OnceCell<NodeRuleMap<'_>> = std::cell::OnceCell::new();
 
     // 2. SubtermCyclic — `isContradictory subtermStore`.
@@ -211,7 +207,7 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
         out.push(Contradiction::ForbiddenKD);
     }
     // 5. ImpossibleChain.
-    if has_impossible_chain(_ctxt, sys) {
+    if has_impossible_chain(_ctxt, sys, &node_rules) {
         out.push(Contradiction::ImpossibleChain);
     }
     // 6. ForbiddenExp (Contradictions.hs `hasForbiddenExp`).  Drops Exp-down rule
@@ -228,7 +224,7 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
         out.push(Contradiction::ForbiddenBP);
     }
     // 8. ForbiddenChain.
-    if has_forbidden_chain(sys, &ab_adj) {
+    if has_forbidden_chain(sys, &ab_adj, &node_rules) {
         out.push(Contradiction::ForbiddenChain);
     }
     // 8b. ForbiddenACConstrChain — AC-constructor chain check
@@ -386,7 +382,7 @@ fn nf_memoized(
 /// `maybe_not_nf_subterms`) — fails the NF check, the system has a
 /// non-normal term.  Constants are in NF; irreducible-headed apps recurse
 /// into their args.  This is the boolean OR of `maybeNonNormalTerms` ∘
-/// `maybeNotNfSubterms` over `nf'` (Norm.hs:130-131, see line 131), but without
+/// `maybeNotNfSubterms` (Norm.hs:165-171) over `nf'` (Norm.hs:132-134), but without
 /// building the `BTreeSet` of every candidate: the OR needs no ordered
 /// candidate list, and [`NfMemo`] carries the dedup.  The check runs
 /// through `nf_via_haskell_maude_with_sig` — HS's `nf'` runs in the
@@ -476,7 +472,11 @@ fn has_subterm_cycle_contra(ctx: &ProofContext, sys: &System) -> bool {
 /// The DH/BP-specific cases (FExp/FPMult/FEMap) are handled via
 /// `dh_view` and the `viewTerm2` special-cases in `possible_end_syms`
 /// / `possible_root_syms` (Contradictions.hs).
-fn has_impossible_chain(ctx: &ProofContext, sys: &System) -> bool {
+fn has_impossible_chain<'a>(
+    ctx: &ProofContext,
+    sys: &'a System,
+    node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
+) -> bool {
     use crate::constraint::constraints::Goal;
     use crate::fact::FactTag;
     let dbg = tamarin_utils::env_gate!("TAM_RS_DBG_IMPOSSIBLE_CHAIN");
@@ -486,9 +486,14 @@ fn has_impossible_chain(ctx: &ProofContext, sys: &System) -> bool {
             continue;
         }
         let Goal::Chain(c, p) = g else { continue };
-        let c_rule = sys.nodes.iter().find(|(id, _)| id == &c.0).map(|(_, r)| r);
-        let p_rule = sys.nodes.iter().find(|(id, _)| id == &p.0).map(|(_, r)| r);
-        let (Some(c_rule), Some(p_rule)) = (c_rule, p_rule) else {
+        // First unsolved chain goal forces the shared map; both lookups
+        // take the FIRST rule stored for an id, exactly as the
+        // `nodes.iter().find` scans they replace did.
+        let node_rule_map = node_rules.get_or_init(|| sys.node_rule_map());
+        let (Some(c_rule), Some(p_rule)) = (
+            node_rule_map.get(&c.0).copied(),
+            node_rule_map.get(&p.0).copied(),
+        ) else {
             continue;
         };
         let conc_fact = match c_rule.conclusions.get(c.1 .0) {
@@ -1068,7 +1073,11 @@ fn ac_constr_chain_fixpoint(extracted: &[AcConstrPair]) -> bool {
 // equivalence-class value set; membership/union only, never iterated into output;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
-fn has_forbidden_chain(sys: &System, ab_adj: &crate::constraint::system::PrebuiltAdj) -> bool {
+fn has_forbidden_chain<'a>(
+    sys: &'a System,
+    ab_adj: &crate::constraint::system::PrebuiltAdj,
+    node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
+) -> bool {
     use crate::constraint::constraints::Goal;
     use crate::fact::FactTag;
     use tamarin_term::lterm::is_msg_var;
@@ -1152,10 +1161,14 @@ fn has_forbidden_chain(sys: &System, ab_adj: &crate::constraint::system::Prebuil
             continue;
         }
         let Goal::Chain(c, p) = g else { continue };
-        // Look up the chain-conc fact.
-        let c_rule = sys.nodes.iter().find(|(id, _)| id == &c.0).map(|(_, r)| r);
-        let p_rule = sys.nodes.iter().find(|(id, _)| id == &p.0).map(|(_, r)| r);
-        let (Some(c_rule), Some(p_rule)) = (c_rule, p_rule) else {
+        // Look up the chain-conc and chain-prem rules.  The shared map
+        // keeps the FIRST rule stored for an id, exactly as the
+        // `nodes.iter().find` scans it replaces did.
+        let node_rule_map = node_rules.get_or_init(|| sys.node_rule_map());
+        let (Some(c_rule), Some(p_rule)) = (
+            node_rule_map.get(&c.0).copied(),
+            node_rule_map.get(&p.0).copied(),
+        ) else {
             continue;
         };
         let conc_fact = match c_rule.conclusions.get(c.1 .0) {
@@ -1550,10 +1563,11 @@ fn is_forbidden_d_pmult<I>(
     if dt1 != KDir::Dn {
         return false;
     }
-    let _p = match bp_view_pmult(p1_term) {
-        Some((_s, p)) => p,
-        None => return false,
-    };
+    // Only p1's SHAPE matters here; HS matches `(DnK, FPMult _ _)` and
+    // binds neither component.
+    if bp_view_pmult(p1_term).is_none() {
+        return false;
+    }
     // p2 = KU(b)
     let (dt2, b) = match k_fact_view(p2) {
         Some(x) => x,
@@ -2537,7 +2551,7 @@ impl SubstNfChecker {
                 continue;
             }
             let restricted = vfresh_subst.restrict(tvars);
-            // HS `freshToFreeAvoidingFast subst tvars` (Substitution.hs:77-81):
+            // HS `freshToFreeAvoidingFast subst tvars` (Term/Substitution.hs:77-81):
             // a PURE uniform-shift rename of the range vars avoiding `tvars`
             // (`rename (map snd l) \`evalFreshAvoiding\` tvars`).  It consumes
             // NO fresh-counter state — the probe subst is local to this

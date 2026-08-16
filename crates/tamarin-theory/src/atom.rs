@@ -73,7 +73,6 @@ impl<T> Atom<T> {
     }
     /// Retained for parity with Haskell's exported `isSyntacticSugar`; no Rust
     /// call site currently uses it.
-    #[allow(dead_code)]
     pub fn is_syntactic_sugar(&self) -> bool {
         matches!(self, ProtoAtom::Syntactic(_))
     }

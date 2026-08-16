@@ -18,10 +18,12 @@
 //! This module is NOT used on the `--prove`/web-UI render path. The faithful,
 //! width-accurate HughesPJ port that the prover and web UI actually call lives
 //! in `tamarin-theory::pretty_hpj` (full HughesPJ with `render_with`). The only
-//! in-crate consumer of this module is `pretty_html`, which uses just `Doc`,
-//! `keyword`, `cat_with` and `render_with`. Since `pretty_html` itself has no
-//! live consumer, this module currently has no live caller; it is retained as
-//! the `Class.hs` port for the future HTML rendering path.
+//! in-crate consumer of this module is `pretty_html`, and only through its
+//! `Doc`-taking half (`render_html_doc`), which has no live caller — the one
+//! live `pretty_html` export, `escape_html_entities`, is a plain string
+//! function that never touches `Doc`. So nothing outside this crate reaches
+//! this module; it is retained as the `Class.hs` port for the future HTML
+//! rendering path.
 //!
 //! Highlight styling (`Comment`/`Keyword`/`Operator`) is carried as an enum
 //! tag on a `Doc` node; the plain-text renderer ignores it. The HTML renderer
@@ -186,10 +188,10 @@ impl Doc {
 
     /// `nest n d`: indent every line of `d` after the first by `n` spaces.
     pub fn nest(self, n: usize) -> Doc {
-        // Reached only when `self` is non-empty, so the result is non-empty.
         if self.is_empty() || n == 0 {
             self
         } else {
+            // Non-empty child, so the result is non-empty.
             Doc {
                 node: Node::Nest(n, Box::new(self.node)),
                 empty: false,
@@ -323,7 +325,8 @@ pub fn symbol(s: &str) -> Doc {
 }
 
 /// `numbered vsep ds`: prefix each `d` with a right-flushed index, then join the
-/// items with `vsep` interspersed between them (Class.hs:252-259):
+/// items with `vsep` interspersed between them
+/// (Text/PrettyPrint/Class.hs:252-259):
 ///   `foldr1 ($-$) $ intersperse vsep $ map pp $ zip [1..] ds`.
 /// `vsep` is a standalone document placed on its own "line" via `$-$`, not glued
 /// horizontally onto the items — so `numbered (text "")` yields blank separator

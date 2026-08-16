@@ -22,12 +22,10 @@ use tamarin_term::pretty::{ac_op_symbol, pretty_lnterm};
 use tamarin_term::term::{is_pair, Term};
 use tamarin_term::vterm::Lit;
 
-use tamarin_theory::pretty_hpj::{fcat, fsep, punctuate, Doc, WEB_LINE_LENGTH, WEB_RIBBON};
+use crate::pretty_hpj::{fcat, fsep, punctuate, Doc, DEFAULT_LINE_LENGTH, DEFAULT_RIBBON};
 
-use tamarin_theory::fact::LNFact;
-use tamarin_theory::rule::{
-    IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, RuleACInst, RuleInfo,
-};
+use crate::fact::LNFact;
+use crate::rule::{IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, RuleACInst, RuleInfo};
 
 use super::repr::{GraphRepr, NodeType};
 
@@ -71,10 +69,6 @@ impl Default for AbbreviationOptions {
 pub type Abbreviations = BTreeMap<LNTerm, (LNTerm, LNTerm)>;
 
 /// Lookup the abbreviation for a single term.  Mirror of `lookupAbbreviation`.
-///
-/// Retained for HS API parity (the live caller in `dot.rs` does the lookup
-/// inline); no cross-crate caller yet.
-#[allow(dead_code)] // HS API parity; exercised by tests, no production caller (dot.rs inlines the lookup)
 pub(crate) fn lookup_abbreviation<'a>(
     abbrevs: &'a Abbreviations,
     t: &LNTerm,
@@ -250,7 +244,9 @@ fn dump_rule(buf: &mut String, ru: &RuleACInst) {
 }
 
 /// Emit the user-controlled name/role tokens that derived `Show` of a
-/// rule's `_rInfo` exposes (Rule.hs:206-214, 397-400, 517-519): the raw
+/// rule's `_rInfo` exposes (`RuleAttributes`, `ProtoRuleName`,
+/// `ProtoRuleACInstInfo` and `IntrRuleACInfo`, all `deriving Show` —
+/// Theory/Model/Rule.hs:367-379,413-416,444-449,539-553): the raw
 /// `StandRule "<name>"` string, the `role = Just "<role>"` string, and the
 /// intruder `ConstrRule`/`DestrRule "<name>"` byte string.
 fn dump_rule_info(buf: &mut String, info: &RuleInfo<ProtoRuleACInstInfo, IntrRuleACInfo>) {
@@ -285,7 +281,7 @@ fn dump_rule_info(buf: &mut String, info: &RuleInfo<ProtoRuleACInstInfo, IntrRul
 
 fn dump_fact(buf: &mut String, fa: &LNFact) {
     use std::fmt::Write as _;
-    let _ = write!(buf, "{}", tamarin_theory::fact::fact_tag_name(&fa.tag));
+    let _ = write!(buf, "{}", crate::fact::fact_tag_name(&fa.tag));
     for t in fa.terms.iter() {
         let _ = write!(buf, "{} ", pretty_lnterm(t));
     }
@@ -376,16 +372,16 @@ fn sub_terms_no_pair(t: &LNTerm, out: &mut Vec<LNTerm>) {
 /// 5*101=505 loses to it), which is exactly the SIn index drift the web
 /// sweep flagged.  So measure through the same HughesPJ engine (the
 /// verified `pretty_hpj` port) at HS `render`'s default widths
-/// (`WEB_LINE_LENGTH`/`WEB_RIBBON` = 100/67).
+/// (`DEFAULT_LINE_LENGTH`/`DEFAULT_RIBBON` = 100/67).
 fn rendered_term_len(t: &LNTerm) -> usize {
     lnterm_doc(t)
-        .render_with(WEB_LINE_LENGTH, WEB_RIBBON)
+        .render_with(DEFAULT_LINE_LENGTH, DEFAULT_RIBBON)
         .chars()
         .count()
 }
 
 /// HS `prettyLNTerm` = `prettyTerm (text . show)` as a HughesPJ `Doc`
-/// (Term.hs:268-296), built directly on `LNTerm`.
+/// (Term/Term.hs:298-327), built directly on `LNTerm`.
 ///
 /// tamarin-theory has the same Doc under `pretty_formula::term_doc`, reached
 /// through the parser-AST projection `pretty_theory::lnterm_to_parser`; going
@@ -442,7 +438,7 @@ fn lnterm_doc(t: &LNTerm) -> Doc {
     }
 }
 
-/// HS `ppTerms sepa n lead finish ts` (Term.hs:288-290):
+/// HS `ppTerms sepa n lead finish ts` (Term/Term.hs:319-321):
 /// `fcat . (text lead :) . (++[text finish]) . map (nest n)
 ///       . punctuate (text sepa) . map ppTerm`.
 fn pp_terms(sepa: &str, n: isize, lead: &str, finish: &str, ts: Vec<&LNTerm>) -> Doc {
@@ -457,7 +453,7 @@ fn pp_terms(sepa: &str, n: isize, lead: &str, finish: &str, ts: Vec<&LNTerm>) ->
     fcat(all)
 }
 
-/// HS `ppFun f ts` (Term.hs:295-296):
+/// HS `ppFun f ts` (Term/Term.hs:326-327):
 /// `text (f++"(") <> fsep (punctuate comma (map ppTerm ts)) <> text ")"`.
 fn pp_fun(f: &str, ts: &[LNTerm]) -> Doc {
     let docs: Vec<Doc> = ts.iter().map(lnterm_doc).collect();
@@ -466,7 +462,7 @@ fn pp_fun(f: &str, ts: &[LNTerm]) -> Doc {
         .beside(Doc::text(")"))
 }
 
-/// HS `split` (Term.hs:292-293): flatten a right-nested pair spine.
+/// HS `split` (Term/Term.hs:323-324): flatten a right-nested pair spine.
 /// `viewTerm2 -> FPair` requires exactly two arguments AND full `NoEqSym`
 /// equality with `pairSym`.
 fn split_pair<'a>(t: &'a LNTerm, out: &mut Vec<&'a LNTerm>) {
@@ -607,7 +603,7 @@ pub fn compute_abbreviations(repr: &GraphRepr, opts: &AbbreviationOptions) -> Ab
 // Ordering for the legend / JSON export
 // ---------------------------------------------------------------------
 
-/// Mirror Haskell `topoSortAbbrevs` (Dot.hs:421-436 and Dot.hs:484-499).
+/// Mirror Haskell `topoSortAbbrevs` (System/Dot.hs:421-436 and System/Dot.hs:484-499).
 ///
 /// `entries` is the descending-name-sorted list of `(name, expansion)`.
 /// We build a graph with an edge `v -> u` whenever `entries[v].0` is a
@@ -662,7 +658,7 @@ fn topo_sort_abbrevs(entries: &[(&LNTerm, &LNTerm)]) -> Vec<usize> {
     postorder
 }
 
-/// Port of `orderAbbreviationsForJSON` (Dot.hs:417-436).
+/// Port of `orderAbbreviationsForJSON` (System/Dot.hs:417-436).
 ///
 /// `M.toList abbrevs` is the ascending-`LNTerm`-key iteration order of the
 /// [`Abbreviations`] `BTreeMap`; `sortOn (Down . render . prettyLNTerm . fst
@@ -808,8 +804,8 @@ mod tests {
     #[test]
     fn rule_name_blocks_aliasing_abbreviation() {
         use super::super::repr::{GNode, NodeType};
-        use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
-        use tamarin_theory::rule::{ProtoRuleACInstInfo, Rule, RuleAttributes};
+        use crate::fact::{Fact, FactTag, Multiplicity};
+        use crate::rule::{ProtoRuleACInstInfo, Rule, RuleAttributes};
 
         // A senc(...) term long enough to clear the weight>=10 threshold and
         // appearing in two facts so its occurrence count exceeds 1.

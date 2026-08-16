@@ -66,14 +66,14 @@ pub const FUN_SYM_PREFIX: &str = "tam";
 /// Number of attribute characters between the `tam` prefix and the user-given
 /// name: `fun_sym_encode_attr` emits exactly this many, `fun_sym_decode`
 /// splits at the same width, and `maude_parse::is_ac_fct_ident` classifies on
-/// it (HS `funSymDecode`'s `BC.splitAt 4`, Parser.hs:92-105).
+/// it (HS `funSymDecode`'s `BC.splitAt 4`, Maude/Parser.hs:92-105).
 pub(crate) const ATTR_BLOCK_LEN: usize = 4;
 
 /// Encode privacy / constructability / AC-ness / NDC state into the
 /// `ATTR_BLOCK_LEN`-char prefix that follows `tam` for each user-defined
 /// symbol.
 ///
-/// HS `funSymEncodeAttr` (Parser.hs:76-88) concatenates one char per
+/// HS `funSymEncodeAttr` (Maude/Parser.hs:76-88) concatenates one char per
 /// attribute: `Private`->`P` / `Public`->`X`, `Constructor`->`C` /
 /// `Destructor`->`D`, `IsAC`->`A` / `NotAC`->`F`, and `IsNDC`->`N` /
 /// `NotNDC`->`U` / `IsNDCDiff`->`D` / `IsNDCBoth`->`B`.  All 32
@@ -130,7 +130,7 @@ pub fn fun_sym_encode_attr(
 /// `(name, p, c, ndc)`.  `prefix == "tam"` plus the attribute chars
 /// (see [`fun_sym_encode_attr`]) followed by the user-given name.
 ///
-/// HS `funSymDecode` (Parser.hs:92-105) reads the privacy from char 0, the
+/// HS `funSymDecode` (Maude/Parser.hs:92-105) reads the privacy from char 0, the
 /// constructability from char 1 and the NDC state from char 3 — char 2 (the
 /// AC state) is not decoded, because the caller already knows from the
 /// identifier's shape which of `fAppNoEq`/`fAppACfct` it is building.
@@ -348,7 +348,7 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
     }
     if msig.enable_dh {
         op_eq(&mut out, "one", "-> Msg");
-        // HS `theoryOpEq "DH-neutral  : -> Msg"` (Parser.hs:162-251, see line 209) has TWO
+        // HS `theoryOpEq "DH-neutral  : -> Msg"` (Maude/Parser.hs:223) has TWO
         // spaces before the colon; the trailing space on the name reproduces
         // that so `format!("{} : {}")` yields `DH-neutral  : -> Msg`.
         op_eq(&mut out, "DH-neutral ", "-> Msg");
@@ -373,7 +373,7 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
     // in `NoEqSym`-`Ord` order.
     for sym in &msig.st_fun_syms {
         let args = "Msg ".repeat(sym.arity);
-        // Match HS `theoryFunSym` (Parser.hs:162-251, see line 247) byte-for-byte:
+        // Match HS `theoryFunSym` (Maude/Parser.hs:264-265) byte-for-byte:
         // `replaceUnderscore s <> " : " <> (concat $ replicate ar "Msg ") <> " -> Msg"`.
         // `args` already ends in a trailing space (or is empty), and the
         // literal " -> Msg" has a leading space, so there are two spaces
@@ -395,7 +395,7 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
     // AC for them.  `st_ac_fun_syms` is a `BTreeSet`, so iterating it directly
     // yields `AcFctSym`-`Ord` order (HS `S.toList $ stACFunSyms msig`).
     for sym in &msig.st_ac_fun_syms {
-        // Match HS `theoryACFunSym` (Parser.hs:246-267, see line 265) byte-for-byte:
+        // Match HS `theoryACFunSym` (Maude/Parser.hs:266-267) byte-for-byte:
         // `replaceUnderscore s <> " : " <> (concat $ replicate 2 "Msg ") <> "-> Msg"
         //  <> " [comm assoc]"`.  Unlike `theoryFunSym` above, the sort part has
         // no extra space before `->`, so the line reads
@@ -419,10 +419,9 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
 }
 
 /// Emit the `  op tam<attrs><name>` head shared by the user-defined free and
-/// AC declarations — HS `theoryOp` and `theoryOpACUser` (Parser.hs:246-267,
-/// see lines 257-260) are the same `"  op " <> funSymPrefix <> attrs <> fsort
-/// <> " ."` string.  The caller appends the `fsort` tail and the trailing
-/// ` .\n`.
+/// AC declarations — HS `theoryOp` and `theoryOpACUser` (Maude/Parser.hs:257-260)
+/// are the same `"  op " <> funSymPrefix <> attrs <> fsort <> " ."` string.
+/// The caller appends the `fsort` tail and the trailing ` .\n`.
 ///
 /// Written piecewise so the `replaceUnderscore` name bytes (`_` -> `-`; names
 /// are ASCII) go straight into `out` without a `format!` /
@@ -446,7 +445,7 @@ fn op_user_head(
 
 fn op_eq(out: &mut String, name: &str, sort: &str) {
     // HS `theoryOpEq = theoryOp (Just (Public,Constructor,NotAC,NotNDC))`
-    // (Parser.hs:246-267, see line 259).
+    // (Maude/Parser.hs:261).
     op(
         out,
         Privacy::Public,
@@ -504,7 +503,7 @@ mod tests {
 
     #[test]
     fn dh_neutral_op_has_two_spaces_before_colon() {
-        // HS `theoryOpEq "DH-neutral  : -> Msg"` (Parser.hs:162-251, see line 209) emits TWO
+        // HS `theoryOpEq "DH-neutral  : -> Msg"` (Maude/Parser.hs:223) emits TWO
         // spaces before the colon; the emitted module must match byte-for-byte.
         let s = pp_theory(&dh_maude_sig());
         assert!(s.contains("op tamXCFUDH-neutral  : -> Msg ."));
@@ -527,7 +526,7 @@ mod tests {
     }
 
     /// The attribute prefix is 4 chars: privacy, constructability, AC state,
-    /// NDC state (HS `funSymEncodeAttr`, Parser.hs:76-88).
+    /// NDC state (HS `funSymEncodeAttr`, Maude/Parser.hs:76-88).
     #[test]
     fn encode_attr_is_four_chars() {
         assert_eq!(
@@ -560,7 +559,7 @@ mod tests {
     /// only surfaces when Maude echoes a symbol back carrying the wrong
     /// privacy / constructability / NDC flags.  The AC slot is not part of
     /// the decoded triple — HS `funSymDecode` reads chars 0/1/3 only
-    /// (Parser.hs:92-105), because the caller already knows from the
+    /// (Maude/Parser.hs:92-105), because the caller already knows from the
     /// identifier's shape which symbol kind it is rebuilding.
     #[test]
     fn every_attribute_quadruple_round_trips_through_decode() {

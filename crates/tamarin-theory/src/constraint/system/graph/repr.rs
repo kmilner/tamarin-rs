@@ -10,9 +10,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tamarin_theory::constraint::constraints::{LessAtom, NodeConc, NodeId, NodePrem};
-use tamarin_theory::fact::LNFact;
-use tamarin_theory::rule::{ConcIdx, PremIdx, ProtoRuleName, RuleACInst, RuleInfo};
+use crate::constraint::constraints::{LessAtom, NodeConc, NodeId, NodePrem};
+use crate::fact::LNFact;
+use crate::rule::{ConcIdx, PremIdx, ProtoRuleName, RuleACInst, RuleInfo};
 
 /// Mirrors Haskell `NodeType` from `GraphRepr.hs:58-63`.
 #[derive(Debug, Clone, PartialEq)]
@@ -105,14 +105,17 @@ pub fn group_nodes_by_role<'a>(nodes: &'a [GNode]) -> BTreeMap<String, Vec<&'a G
 }
 
 /// `extractBaseName name` returns `Just base` when `name = base_<digits>`.
-/// Mirror of `extractBaseName` (GraphRepr.hs:217-225).
+/// Mirror of `extractBaseName` (GraphRepr.hs:216-225).
 pub fn extract_base_name(name: &str) -> Option<String> {
     let parts: Vec<&str> = name.split('_').collect();
     if parts.len() < 2 {
         return None;
     }
+    // Haskell `all isDigit s` is True for the EMPTY string too (and `isDigit`
+    // is ASCII-only), so a trailing `_` — last part `""` — makes HS strip it:
+    // `extractBaseName "Foo_" = Just "Foo"`.
     let last = parts.last().unwrap();
-    if !last.is_empty() && last.chars().all(|c| c.is_ascii_digit()) {
+    if last.chars().all(|c| c.is_ascii_digit()) {
         Some(parts[..parts.len() - 1].join("_"))
     } else {
         None
@@ -121,23 +124,16 @@ pub fn extract_base_name(name: &str) -> Option<String> {
 
 /// Return the rule's case-name (e.g. `Setup_1`) for proto-rules, else None.
 /// Mirror of `getRuleNameByNode` (GraphRepr.hs:208-214) which renders
-/// `showRuleCaseName` -> `prettyProtoRuleName` (Rule.hs:1164-1167):
+/// `showRuleCaseName` -> `prettyProtoRuleName` (Theory/Model/Rule.hs:1287-1290):
 /// `StandRule n -> prefixIfReserved n`, `FreshRule -> "Fresh"`.
-/// `prefixIfReserved` (Rule.hs:1154-1162) prepends `_` when the name is a
+/// `prefixIfReserved` (Theory/Model/Rule.hs:1277-1285) prepends `_` when the name is a
 /// reserved rule name or already starts with `_`.  This is plain
 /// `showRuleCaseName`, NOT the SAPiC-trimming `showDotRuleCaseName`.
 pub fn rule_name_by_node(n: &GNode) -> Option<String> {
     if let NodeType::System(ru) = &n.ty {
         if let RuleInfo::Proto(p) = &ru.info {
             return Some(match &p.name {
-                ProtoRuleName::Stand(s) => {
-                    let reserved = tamarin_theory::rule::reserved_rule_names();
-                    if reserved.contains(s) || s.starts_with('_') {
-                        format!("_{s}")
-                    } else {
-                        s.to_string()
-                    }
-                }
+                ProtoRuleName::Stand(s) => crate::rule::prefix_if_reserved(s),
                 ProtoRuleName::Fresh => "Fresh".to_string(),
             });
         }
@@ -146,7 +142,8 @@ pub fn rule_name_by_node(n: &GNode) -> Option<String> {
 }
 
 /// Mirror of `groupBySimilarName` — group nodes by their rule's base name.
-pub fn group_by_similar_name<'a>(nodes: &'a [GNode]) -> BTreeMap<String, Vec<&'a GNode>> {
+/// Module-private, as in `GraphRepr.hs`.
+fn group_by_similar_name<'a>(nodes: &'a [GNode]) -> BTreeMap<String, Vec<&'a GNode>> {
     let mut out: BTreeMap<String, Vec<&'a GNode>> = BTreeMap::new();
     for n in nodes {
         if let Some(rn) = rule_name_by_node(n) {
@@ -159,8 +156,9 @@ pub fn group_by_similar_name<'a>(nodes: &'a [GNode]) -> BTreeMap<String, Vec<&'a
 }
 
 /// Filter edges keeping only those whose endpoints are both in `node_ids`.
-/// Mirror of `filterEdgesForCluster`.
-pub fn filter_edges_for_cluster(node_ids: &BTreeSet<NodeId>, edges: &[GEdge]) -> Vec<GEdge> {
+/// Mirror of `filterEdgesForCluster`, which `GraphRepr.hs` keeps
+/// module-private.
+fn filter_edges_for_cluster(node_ids: &BTreeSet<NodeId>, edges: &[GEdge]) -> Vec<GEdge> {
     edges
         .iter()
         .filter(|e| match e {
@@ -174,11 +172,9 @@ pub fn filter_edges_for_cluster(node_ids: &BTreeSet<NodeId>, edges: &[GEdge]) ->
 }
 
 /// Group `nodes` into weakly-connected components under the projection
-/// from `edges`.  Mirror of `findConnectedComponents`.
-pub fn find_connected_components<'a>(
-    nodes: &'a [&'a GNode],
-    edges: &[GEdge],
-) -> Vec<Vec<&'a GNode>> {
+/// from `edges`.  Mirror of `findConnectedComponents`, which `GraphRepr.hs`
+/// keeps module-private.
+fn find_connected_components<'a>(nodes: &'a [&'a GNode], edges: &[GEdge]) -> Vec<Vec<&'a GNode>> {
     // Build undirected adjacency.  Mirror of `expandCluster`, which walks
     // ONLY `SystemEdge`s for connectivity — `LessEdge`/`UnsolvedChain`
     // edges are not matched and so never join two nodes into one component.
@@ -259,14 +255,18 @@ fn edge_key(e: &GEdge) -> EdgeKey {
 ///
 /// `group` receives the nodes moved out of `repr` (grouping them in place would
 /// alias `repr.nodes`); their un-clustered remainder is put back at the end.
-pub fn add_cluster(
+/// Module-private, as in `GraphRepr.hs`: the two `addClusterBy*` wrappers are
+/// the exported entry points.
+fn add_cluster(
     repr: &mut GraphRepr,
     group: impl for<'a> Fn(&'a [GNode]) -> BTreeMap<String, Vec<&'a GNode>>,
     name_suffix: &str,
 ) {
     let nodes = std::mem::take(&mut repr.nodes);
     let nodes_by_group = group(&nodes);
-    let all_edges = repr.edges.clone();
+    // Taken, not cloned: nothing reads `repr.edges` again before the
+    // `remaining_edges` write-back below.
+    let all_edges = std::mem::take(&mut repr.edges);
     let mut sub_clusters: Vec<Cluster> = Vec::new();
     for (group_name, group_nodes) in &nodes_by_group {
         let group_node_ids: BTreeSet<NodeId> = group_nodes.iter().map(|n| n.id).collect();
@@ -339,8 +339,8 @@ pub fn add_intelligent_cluster_using_similar_names(repr: &mut GraphRepr) {
 // Building a basic repr from a System
 // ---------------------------------------------------------------------
 
-use tamarin_theory::constraint::constraints::{cmp_goal, Goal};
-use tamarin_theory::constraint::system::System;
+use crate::constraint::constraints::{cmp_goal, Goal};
+use crate::constraint::system::System;
 
 /// Port of `computeBasicGraphRepr` from `Graph.hs:140-150`.
 /// Collects from a `System`:
@@ -348,7 +348,10 @@ use tamarin_theory::constraint::system::System;
 ///   - unsolved-action atoms (KU goals etc.),
 ///   - the optional last-atom node,
 ///   - missing nodes referenced by edges.
-pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
+///
+/// Crate-internal: `Graph.hs` keeps `computeBasicGraphRepr` out of its export
+/// list, exposing only `systemToGraph`.
+pub(crate) fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     let mut nodes: Vec<GNode> = Vec::new();
     // 1. System rule instances.
     // HS `systemNodes se = map systemNode (M.toList $ get Sys.sNodes se)`
@@ -401,7 +404,7 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     // HS `systemLastActionNode se = maybe [] (\nid -> [Node nid LastActionAtom])
     // (get Sys.sLastAtom se)` (Graph.hs:111-112) appends this UNCONDITIONALLY
     // whenever `sLastAtom` is set — it does NOT skip when the id coincides with
-    // a system/unsolved node.  `cacheState` (Dot.hs:108) re-runs each node's
+    // a system/unsolved node.  `cacheState` (System/Dot.hs:106-113) re-runs each node's
     // `dot` action and overwrites `dsNodes[v]`, so both the SystemNode record
     // AND the bare `#i` last-atom ellipse are emitted at the same id (the
     // ellipse ends up as `dsNodes[v]`, which drives less-edge resolution).  The
@@ -470,8 +473,8 @@ pub fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes};
     use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_theory::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes};
 
     fn proto_rule(name: &str, role: Option<&str>) -> RuleACInst {
         let attrs = RuleAttributes {
@@ -502,7 +505,7 @@ mod tests {
     // edges must land at their sorted position rather than at the end.
     #[test]
     fn basic_repr_materialises_edge_and_less_set_order() {
-        use tamarin_theory::constraint::constraints::{Edge, Reason};
+        use crate::constraint::constraints::{Edge, Reason};
         let mut sys = System::default();
         // Pushed in a deliberately unsorted order, as compression leaves them.
         for (s, si, t, ti) in [
@@ -571,6 +574,10 @@ mod tests {
         assert_eq!(extract_base_name("NoSuffix"), None);
         assert_eq!(extract_base_name("Name_NotNumber"), None);
         assert_eq!(extract_base_name(""), None);
+        // HS `all isDigit ""` is True, so a trailing `_` is stripped like a
+        // numeric suffix — `splitOn "_" "Foo_" = ["Foo",""]`, two parts.
+        assert_eq!(extract_base_name("Foo_"), Some("Foo".to_string()));
+        assert_eq!(extract_base_name("_"), Some(String::new()));
     }
 
     #[test]

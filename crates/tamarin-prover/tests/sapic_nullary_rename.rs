@@ -9,7 +9,7 @@
 //! (Theory/Text/Parser/Term.hs:151,158-163), so a declared 0-arity name in a
 //! term position is resolved against the signature AT PARSE TIME.  A process
 //! binder cannot shadow it: `new c` and `lookup t as c` take `sapicvar`
-//! (Sapic.hs:87,236) and do bind an `LVar` named `c`, but the `if` condition's
+//! (Theory/Text/Parser/Sapic.hs:87,236) and do bind an `LVar` named `c`, but the `if` condition's
 //! `c` — parsed through `standardFormula`'s `msetterm` — is the constant
 //! `fApp c []`.
 //!
@@ -23,54 +23,33 @@
 //! The expected bytes below are the pinned oracle's (Git revision ef3f0468)
 //! output for the two theories inlined here, run with `--derivcheck-timeout=0`.
 
-use std::path::{Path, PathBuf};
+mod common;
 
-use tamarin_prover::{parse_args, run};
+use common::maude_available;
 
-fn maude_available() -> bool {
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        return Path::new(&p).exists();
-    }
-    for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
-        if Path::new(c).exists() {
-            return true;
-        }
-    }
-    false
-}
-
-/// `--with-maude=PATH` from the `MAUDE_PATH` env override, when set.
-/// Without the flag the prover probes bare `maude` on PATH (HS-faithful),
-/// which is absent on CI runners.
-fn maude_arg() -> Option<String> {
-    std::env::var("MAUDE_PATH")
-        .ok()
-        .map(|p| format!("--with-maude={p}"))
-}
+/// The temp subdirectory this suite writes its theories to.
+const TMP_DIR: &str = "tamarin_prover_sapic_nullary_rename";
 
 /// Write `src` to a private temp file, load it with `--derivcheck-timeout=0`
 /// and return the echoed theory.
 fn load_theory(stem: &str, src: &str) -> String {
-    let dir: PathBuf = std::env::temp_dir().join("tamarin_prover_sapic_nullary_rename");
-    std::fs::create_dir_all(&dir).expect("mkdir out_dir");
-    let in_path = dir.join(format!("{stem}.spthy"));
-    let out_path = dir.join(format!("{stem}_out.spthy"));
-    std::fs::write(&in_path, src).expect("write theory");
+    let out_path = std::env::temp_dir()
+        .join(TMP_DIR)
+        .join(format!("{stem}_out.spthy"));
 
     // `-o`/`--output` is a cmdargs `flagOpt` whose value must be ATTACHED
     // (Batch.hs:44-84, see line 76).
     let output_arg = format!("--output={}", out_path.to_str().unwrap());
-    let maude = maude_arg();
-    let mut argv: Vec<&str> = maude.as_deref().into_iter().collect();
-    argv.extend([
-        "--quiet",
-        "--derivcheck-timeout=0",
-        &output_arg,
-        in_path.to_str().unwrap(),
-    ]);
-    let args = parse_args(&argv.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("parse");
-    let code = run(&args).expect("run");
-    assert_eq!(code, 0, "expected exit code 0, got {code}");
+    let (code, _, stderr) = common::run_raw(
+        TMP_DIR,
+        stem,
+        src,
+        &["--quiet", "--derivcheck-timeout=0", &output_arg],
+    );
+    assert_eq!(
+        code, 0,
+        "expected exit code 0, got {code}; stderr:\n{stderr}"
+    );
     std::fs::read_to_string(&out_path).expect("output written")
 }
 

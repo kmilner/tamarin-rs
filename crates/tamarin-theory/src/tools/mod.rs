@@ -10,7 +10,7 @@ pub mod injective_fact_instances;
 pub mod rule_variants;
 pub mod subterm_store;
 
-pub use abstract_interpretation::EvaluationStyle;
+pub use abstract_interpretation::{apply_partial_evaluation, EvaluationStyle};
 pub use equation_store::EquationStore;
 pub use rule_variants::variants_proto_rule;
 pub use subterm_store::SubtermStore;

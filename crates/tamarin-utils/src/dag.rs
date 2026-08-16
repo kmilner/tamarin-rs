@@ -9,7 +9,8 @@
 //! `dfs_loop_breakers` is the live loop-breaker selector used by the
 //! constraint-solver context (`useAutoLoopBreakersAC`). `cyclic` and
 //! `trans_red` back the display-graph compression pass
-//! (`tamarin-server`'s `graph::simplify::transitive_reduction`); `trans_red`
+//! (`tamarin-theory`'s
+//! `constraint::system::graph::simplify::transitive_reduction`); `trans_red`
 //! in turn drives `toposort` (and thus `inverse`) and `reachable_set`. The
 //! remaining operations (`restrict`, `image`) are a faithful port of the
 //! rest of `Data.DAG.Simple` retained for completeness and have no live

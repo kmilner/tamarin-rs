@@ -1,0 +1,108 @@
+theory CliFlagsChan
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, sdec/2, senc/2, snd/1
+equations:
+    fst(<x.1, x.2>) = x.1,
+    sdec(senc(x.1, x.2), x.2) = x.1,
+    snd(<x.1, x.2>) = x.2
+
+rule (modulo E) Register:
+   [ Fr( ~k ) ] --[ Reg( $A, ~k ) ]-> [ !Key( $A, ~k ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Send:
+   [ !Key( $A, ~k ), Fr( ~m ) ]
+  --[ Sent( $A, ~m ) ]->
+   [ Out( senc(~m, ~k) ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Recv:
+   [ !Key( $A, k ), In( senc(m, k) ) ] --[ Recv( $A, m ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Reveal:
+   [ !Key( $A, ~k ) ] --[ Rev( $A ) ]-> [ Out( ~k ) ]
+
+  /* has exactly the trivial AC variant */
+
+lemma secrecy:
+  all-traces
+  "∀ A m #i #j.
+    ((Sent( A, m ) @ #i) ∧ (K( m ) @ #j)) ⇒ (∃ #r. Rev( A ) @ #r)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ A m #i #j.
+  (Sent( A, m ) @ #i) ∧ (K( m ) @ #j) ∧ ∀ #r. (Rev( A ) @ #r) ⇒ ⊥"
+*/
+simplify
+solve( !Key( $A, ~k ) ▶₀ #i )
+  case Register
+  solve( !KU( ~m ) @ #vk )
+    case Send
+    solve( !KU( ~k ) @ #vk.1 )
+      case Reveal
+      by contradiction /* from formulas */
+    qed
+  qed
+qed
+
+lemma exec:
+  exists-trace "∃ A m #i #j. (Sent( A, m ) @ #i) ∧ (Recv( A, m ) @ #j)"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ A m #i #j. (Sent( A, m ) @ #i) ∧ (Recv( A, m ) @ #j)"
+*/
+simplify
+solve( !Key( $A, ~k ) ▶₀ #i )
+  case Register
+  solve( !Key( $A, k.1 ) ▶₀ #j )
+    case Register
+    solve( !KU( senc(~m, ~k.1) ) @ #vk )
+      case Send
+      SOLVED // trace found
+    next
+      case c_senc
+      solve( !KU( ~m ) @ #vk.1 )
+        case Send
+        solve( !KU( ~k.1 ) @ #vk.2 )
+          case Reveal
+          solve( !KU( ~k ) @ #vk.3 )
+            case Reveal
+            SOLVED // trace found
+          qed
+        qed
+      qed
+    qed
+  qed
+qed
+
+/* All wellformedness checks were successful. */
+
+/*
+Generated from:
+Tamarin version 1.13.0
+Maude version 3.5.1
+Git revision: ef3f0468f6f12b81f43289aa64f5d1b9e53eaf59, branch: HEAD
+Compiled at: 2026-07-31 12:54:17.256348115 UTC
+*/
+
+end
+
+==============================================================================
+summary of summaries:
+
+analyzed: /home/kamilner/tamarin-rs-2/crates/tamarin-prover/tests/fixtures/cli_flags_chan.spthy
+
+  processing time: 0.15s
+  
+  secrecy (all-traces): verified (5 steps)
+  exec (exists-trace): verified (9 steps)
+
+==============================================================================

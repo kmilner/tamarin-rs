@@ -18,10 +18,14 @@
 #                     RS cap defaults to 30s for sweep speed) it lets RS run
 #                     the full window by default.
 #   QUIET=1           print only the summary line, not the diff body
-#   NO_HS_CACHE=1     ignore the shared raw HS cache
+#   NO_HS_CACHE=1     ignore the raw HS cache
 #   HS_CANON_CACHE    cache dir (default <script_dir>/.hs_canon_cache); HS raw
-#                     stdout is cached/reused as <key>.full.gz, shared with
-#                     corpus_raw_diff.sh and corpus_full_trace_diff.sh
+#                     stdout is cached/reused as <key>.full.gz, where key is
+#                     sha256(theory)__<lemma>__v<CACHE_VERSION>[__f<flags>]
+#                     __b<oracle-binary fingerprint>.  corpus_raw_diff.sh and
+#                     corpus_full_trace_diff.sh fingerprint the same way, so
+#                     their FLAGLESS entries are exchanged with this script's
+#                     (a flagged run salts __f and stays distinct).
 #   TAM_RS_NO_AUTO_BUILD=1  skip the cargo rebuild of the RS binary
 set -uo pipefail
 
@@ -36,19 +40,23 @@ QUIET="${QUIET:-}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
+# Shared gate plumbing (gate_common.sh): OOM prologue, strip_env_lines,
+# flags_for, the oracle fingerprint recipe.
+[ -r "$script_dir/gate_common.sh" ] || { echo "diff_proof_raw: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
+. "$script_dir/gate_common.sh"
+# OOM discipline: the provers below die alone at the cap, not the session.
+oom_prologue
 CACHE_VERSION="${CACHE_VERSION:-1}"
 
 # --- per-file canonical flags (see file_flags.tsv) ---
 # Some theories need flags beyond bare `--prove` (e.g. --diff, --auto-sources)
 # to run the way HS intends; bare runs time out / produce nothing. Look up the
-# file's canonical flags (relpath under examples/) and pass them to BOTH HS and
-# RS; salt the cache key so a flagged entry is distinct from the bare one.
+# file's canonical flags (gate_common's flags_for, relpath under examples/)
+# and pass them to BOTH HS and RS; salt the cache key so a flagged entry is
+# distinct from the bare one.
 FLAGS_MAP="${FLAGS_MAP:-$script_dir/file_flags.tsv}"
 file_rel="${file#"$repo_root"/tamarin-prover/examples/}"; file_rel="${file_rel#tamarin-prover/examples/}"
-EXTRA_FLAGS=""
-if [ -f "$FLAGS_MAP" ]; then
-    EXTRA_FLAGS="$(awk -F'\t' -v r="$file_rel" '!/^#/ && $1==r {print $2; exit}' "$FLAGS_MAP")"
-fi
+EXTRA_FLAGS="$(flags_for "$file_rel")"
 FLAGS_SALT=""
 [ -n "$EXTRA_FLAGS" ] && FLAGS_SALT="__f$(printf '%s' "$EXTRA_FLAGS" | sha256sum | cut -c1-12)"
 [ -n "$EXTRA_FLAGS" ] && echo "diff_proof_raw: $file_rel canonical flags: $EXTRA_FLAGS" >&2
@@ -90,11 +98,17 @@ if [ -z "$hs_path" ]; then
     echo "diff_proof_raw.sh: no HS tamarin-prover binary found" >&2
     exit 2
 fi
+# Oracle-binary fingerprint (gate_common's hs_fingerprint), salted into the
+# cache key below: sha256(theory)+lemma cannot see the ORACLE changing, so a
+# rebuilt oracle would keep being answered out of the previous one's entries.
+hs_fingerprint "$hs_path"
 
+# `tamarin-prover` is the PACKAGE; its only bin target is `tamarin-rs`, so
+# --bin tamarin-prover selects nothing and cargo errors out.
 if [ -z "${TAM_RS_NO_AUTO_BUILD:-}" ]; then
-    if ! cargo build --release --bin tamarin-prover \
+    if ! cargo build --release -p tamarin-prover \
             --manifest-path "$repo_root/Cargo.toml" >&2; then
-        echo "diff_proof_raw.sh: cargo build --bin tamarin-prover failed" >&2
+        echo "diff_proof_raw.sh: cargo build -p tamarin-prover failed" >&2
         exit 2
     fi
 fi
@@ -107,15 +121,15 @@ fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-strip_env_lines() {
-    grep -v -e '^Git revision:' -e '^Compiled at:' -e '^[[:space:]]*processing time:' "$1"
-}
+# strip_env_lines (gate_common.sh): the triage policy — delete only the three
+# unreproducible lines, keep `analyzed:` visible (the cache hit below rewrites
+# its path to this invocation's).
 
 # --- HS (shared raw cache).
 key=""
 if [ -z "$NO_HS_CACHE" ]; then
     h=$(sha256sum "$file" 2>/dev/null | cut -d' ' -f1)
-    key="$HS_CANON_CACHE/${h}__${lemma}__v${CACHE_VERSION}${FLAGS_SALT}"
+    key="$HS_CANON_CACHE/${h}__${lemma}__v${CACHE_VERSION}${FLAGS_SALT}__b${HS_FP_SALT}"
 fi
 if [ -n "$key" ] && [ -f "$key.full.gz" ]; then
     # The cache is keyed by file CONTENT, but HS echoes the input path verbatim
@@ -130,8 +144,10 @@ else
     # shellcheck disable=SC2086  # $EXTRA_FLAGS must word-split into flags
     timeout "$TIMEOUT" "$hs_path" +RTS $HS_RTS -RTS $EXTRA_FLAGS --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove="$lemma" "$file" 2>/dev/null > "$tmp/hs.out"
     hs_rc=$?
-    if [ "$hs_rc" -eq 124 ]; then
-        echo "$lemma: HS TIMEOUT (${TIMEOUT}s)"
+    # >=128 is a signal death (OOM's 137), which truncates stdout the same way
+    # the timeout does — bail before the cache write below can keep it.
+    if [ "$hs_rc" -eq 124 ] || [ "$hs_rc" -ge 128 ]; then
+        echo "$lemma: HS TIMEOUT/KILLED (rc=$hs_rc, cap ${TIMEOUT}s)"
         exit 1
     fi
     # Never cache empty HS output (startup failures poison the cache).

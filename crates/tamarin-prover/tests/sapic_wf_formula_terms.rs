@@ -15,38 +15,9 @@
 //! The expected bytes below are the pinned oracle's (Git revision ef3f0468)
 //! output for `tests/fixtures/sapic_else_branch_exp.spthy`.
 
-use std::path::PathBuf;
+mod common;
 
-use tamarin_prover::{parse_args, run};
-
-fn maude_available() -> bool {
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        return std::path::Path::new(&p).exists();
-    }
-    for c in ["/usr/local/bin/maude", "/usr/bin/maude"] {
-        if std::path::Path::new(c).exists() {
-            return true;
-        }
-    }
-    false
-}
-
-/// `--with-maude=PATH` from the `MAUDE_PATH` env override, when set.
-/// Without the flag the prover probes bare `maude` on PATH (HS-faithful),
-/// which is absent on CI runners.
-fn maude_arg() -> Option<String> {
-    std::env::var("MAUDE_PATH")
-        .ok()
-        .map(|p| format!("--with-maude={p}"))
-}
-
-fn fixture(name: &str) -> PathBuf {
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.push("tests");
-    p.push("fixtures");
-    p.push(name);
-    p
-}
+use common::{fixture, maude_available, run_binary};
 
 /// The oracle's wf block for the fixture, as a line list so the blank-ish
 /// separator line (two spaces, HS `$--$`) survives verbatim.
@@ -83,12 +54,11 @@ fn sapic_else_branch_restriction_reports_formula_terms() {
     // `-o`/`--output` is a cmdargs `flagOpt` whose value must be ATTACHED
     // (Batch.hs:44-84, see line 76).
     let output_arg = format!("--output={}", out_path.to_str().unwrap());
-    let maude = maude_arg();
-    let mut argv: Vec<&str> = maude.as_deref().into_iter().collect();
-    argv.extend(["--quiet", &output_arg, in_path.to_str().unwrap()]);
-    let args = parse_args(&argv.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("parse");
-    let code = run(&args).expect("run");
-    assert_eq!(code, 0, "expected exit code 0, got {}", code);
+    let (code, _, stderr) = run_binary(&["--quiet", &output_arg], &[&in_path]);
+    assert_eq!(
+        code, 0,
+        "expected exit code 0, got {code}; stderr:\n{stderr}"
+    );
 
     let body = std::fs::read_to_string(&out_path).expect("output written");
     let expected = EXPECTED_WF_BLOCK.join("\n");

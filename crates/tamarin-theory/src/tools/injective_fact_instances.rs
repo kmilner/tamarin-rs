@@ -30,7 +30,7 @@
 //! list over the right-flattened pair-leaves of that position
 //! (`getPairTerms` / `getShape` / `shapeTerm` / `trimmedPairTerms`).  This
 //! mirrors `Theory.Tools.InjectiveFactInstances.simpleInjectiveFactInstances`
-//! (InjectiveFactInstances.hs:100-229).
+//! (InjectiveFactInstances.hs:100-228).
 
 use crate::fact::FactTag;
 use crate::rule::ProtoRuleE;
@@ -496,7 +496,8 @@ pub fn simple_injective_fact_instances(
 
 /// HS `pureStateFactTag` / `pureStateLockFactTag` (Facts.hs:272-276): the two
 /// fact tags `setforcedInjectiveFacts` forces injective when the state-channel
-/// optimisation is on (Sapic.hs:84).  Both are `L_PureState/2` / `L_CellLocked/2`,
+/// optimisation is on (lib/sapic/src/Sapic.hs:84).  Both are `L_PureState/2` /
+/// `L_CellLocked/2`,
 /// linear, arity 2.
 pub fn pure_state_forced_fact_tags() -> Vec<FactTag> {
     use crate::fact::Multiplicity;
@@ -508,7 +509,7 @@ pub fn pure_state_forced_fact_tags() -> Vec<FactTag> {
 
 /// Union the forced-injective fact tags into a computed
 /// `simple_injective_fact_instances` result, mirroring HS `closeRuleCache`
-/// (Rule.hs:147-150):
+/// (CloseRule.hs:417-420):
 ///
 /// ```haskell
 /// forcedInjFacts' = S.map (\x -> (x, replicate (factTagArity x) [Unspecified])) forcedInjFacts

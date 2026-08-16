@@ -10,7 +10,7 @@
 
 use tamarin_term::lterm::{LNTerm, LVar};
 use tamarin_term::vterm::{Lit, VTerm};
-use tamarin_utils::color::{hsv_to_rgb, rgb_to_hex, rgb_to_hsv, Hsv, Rgb};
+use tamarin_utils::color::{hsv_to_rgb, rgb_to_hsv, Hsv, Rgb};
 
 use tamarin_theory::fact::{fresh_fact, in_fact, out_fact, proto_fact, LNFact, Multiplicity};
 use tamarin_theory::pretty_sapic::pretty_sapic_top_level;
@@ -22,7 +22,7 @@ use tamarin_theory::sapic::{
 use crate::annotation::ProcessAnnotation;
 
 // =============================================================================
-// StateKind / TransFact / TransAction (Facts.hs:90-127, 53-77)
+// StateKind (Facts.hs:93-94) / TransFact (96-109) / TransAction (55-81)
 // =============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,11 +34,11 @@ pub enum StateKind {
 }
 
 impl StateKind {
-    /// `isSemiState` (Facts.hs:147-151).
+    /// `isSemiState` (Facts.hs:148-152).
     pub fn is_semi_state(self) -> bool {
         matches!(self, StateKind::LSemiState | StateKind::PSemiState)
     }
-    /// `multiplicity` (Facts.hs:153-157).
+    /// `multiplicity` (Facts.hs:166-170).
     pub fn multiplicity(self) -> Multiplicity {
         match self {
             StateKind::LState | StateKind::LSemiState => Multiplicity::Linear,
@@ -47,7 +47,7 @@ impl StateKind {
     }
 }
 
-/// `TransFact` (Facts.hs:96-108) — premise/conclusion facts.  Every
+/// `TransFact` (Facts.hs:96-109) — premise/conclusion facts.  Every
 /// constructor is wired through `factToFact`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransFact {
@@ -82,7 +82,7 @@ pub enum TransFact {
     MessageIDReceiver(ProcessPosition),
 }
 
-/// `TransAction` (Facts.hs:43-77) — action facts.  Every constructor is wired
+/// `TransAction` (Facts.hs:55-81) — action facts.  Every constructor is wired
 /// through `actionToFact`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransAction {
@@ -132,7 +132,7 @@ pub enum TransAction {
     Receive(ProcessPosition, LNTerm),
 }
 
-/// `SpecialPosition` (Facts.hs:110-112).
+/// `SpecialPosition` (Facts.hs:111-113).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpecialPosition {
     InitPosition,
@@ -159,10 +159,10 @@ fn sorted_unique(mut vs: Vec<LVar>) -> Vec<LVar> {
 }
 
 // =============================================================================
-// factToFact / actionToFact (Facts.hs:213-271)
+// actionToFact (Facts.hs:213-234) / factToFact (253-270)
 // =============================================================================
 
-/// `factToFact` (Facts.hs:253-271).
+/// `factToFact` (Facts.hs:253-270).
 pub fn fact_to_fact(f: &TransFact) -> LNFact {
     match f {
         TransFact::Fr(v) => fresh_fact(VTerm::Lit(Lit::Var(*v))),
@@ -360,7 +360,7 @@ pub fn var_mid(p: &ProcessPosition) -> LVar {
     )
 }
 
-/// `isState` (Facts.hs `isState`).
+/// `isState` (Facts.hs:158-160).
 // Intentionally retained: faithful HS port; no caller yet (the predicate is
 // inlined as `matches!(.., TransFact::State(..))` at the merge-with-state site).
 #[allow(dead_code)]
@@ -431,10 +431,10 @@ fn proto_fact_mult(mult: Multiplicity, name: &str, terms: Vec<LNTerm>) -> LNFact
 }
 
 // =============================================================================
-// crc32 / colorForProcessName (Facts.hs:327-374)
+// crc32 / colorForProcessName (Facts.hs:343-374)
 // =============================================================================
 
-/// `crc32` (Facts.hs:327-331).
+/// `crc32` (Facts.hs:343-347).
 fn crc32(s: &str) -> u32 {
     fn inner(c: u32) -> u32 {
         (c >> 1) ^ (0xedb8_8329u32 & 0u32.wrapping_sub(c & 1))
@@ -451,7 +451,7 @@ fn crc32(s: &str) -> u32 {
     acc
 }
 
-/// `colorHash` (Facts.hs:347-351): per-channel byte of the CRC, scaled to [0,1].
+/// `colorHash` (Facts.hs:356-360): per-channel byte of the CRC, scaled to [0,1].
 fn color_hash(s: &str) -> Rgb {
     let h = crc32(s);
     let nth = |n: u32| -> f64 { (((h >> (8 * n)) & 0xff) as f64) / 255.0 };
@@ -466,7 +466,7 @@ fn interpolate(a: Hsv, b: Hsv, t: f64) -> Hsv {
     )
 }
 
-/// `colorForProcessName` (Facts.hs:360-374).
+/// `colorForProcessName` (Facts.hs:368-374).
 pub fn color_for_process_name(names: &[String]) -> Rgb {
     if names.is_empty() {
         // HS `RGB 255 255 255` — `rgbToHex` clamps `floor(256*255)` to 255 →
@@ -484,19 +484,11 @@ pub fn color_for_process_name(names: &[String]) -> Rgb {
     hsv_to_rgb(normalized)
 }
 
-/// The rendered `color=` hex value for a process-name list.
-// Test convenience only (no production caller; `to_rule` uses
-// `color_for_process_name` directly and the rule printer renders the hex).
-#[allow(dead_code)]
-pub(crate) fn color_hex_for_process_name(names: &[String]) -> String {
-    rgb_to_hex(color_for_process_name(names))
-}
-
 // =============================================================================
-// AnnotatedRule + toRule (Facts.hs:114-127, 376-403)
+// AnnotatedRule + toRule (Facts.hs:116-125, 376-404)
 // =============================================================================
 
-/// `AnnotatedRule` (Facts.hs:114-127).  `process` is the subprocess this rule
+/// `AnnotatedRule` (Facts.hs:116-125).  `process` is the subprocess this rule
 /// was generated for (used for naming / color / `process=` attribute).
 #[derive(Debug, Clone)]
 pub struct AnnotatedRule<Ann> {
@@ -514,7 +506,7 @@ pub struct AnnotatedRule<Ann> {
     pub index: usize,
 }
 
-/// `prettyEitherPositionOrSpecial` (Facts.hs:319-322).
+/// `prettyEitherPositionOrSpecial` (Facts.hs:316-319).
 fn pretty_position_or_special(pos: &RulePosition) -> String {
     match pos {
         RulePosition::Pos(p) => pretty_position(p),
@@ -523,10 +515,10 @@ fn pretty_position_or_special(pos: &RulePosition) -> String {
     }
 }
 
-/// `getTopLevelName` (Facts.hs:295-298) — the process-name list from the
+/// `getTopLevelName` (Facts.hs:321-324) — the process-name list from the
 /// (already-name-propagated) annotation of the subprocess.
-fn get_top_level_name<Ann: GoodAnnotation>(p: &Process<Ann, SapicLVar>) -> Vec<String> {
-    p.annotation().parsed().process_names.clone()
+fn get_top_level_name<Ann: GoodAnnotation>(p: &Process<Ann, SapicLVar>) -> &[String] {
+    &p.annotation().parsed().process_names
 }
 
 /// `roleFromProcessNameList` (Facts.hs:399-400).
@@ -560,40 +552,47 @@ fn to_plain<Ann: GoodAnnotation + Clone>(p: &Process<Ann, SapicLVar>) -> PlainPr
     }
 }
 
-/// The HS-faithful rule name (Facts.hs:380-388).
+/// The HS-faithful rule name (Facts.hs:381-388).
 pub fn rule_name<Ann: GoodAnnotation + Clone>(r: &AnnotatedRule<Ann>) -> String {
     match &r.process_name {
         Some(s) => s.clone(),
-        None => {
-            let plain = to_plain(&r.process);
-            let base = pretty_sapic_top_level(&plain);
-            let stripped = strip_non_alphabetic(&base);
-            let un_null = if stripped.is_empty() {
-                "p".to_string()
-            } else {
-                stripped
-            };
-            format!(
-                "{}_{}_{}",
-                un_null,
-                r.index,
-                pretty_position_or_special(&r.position)
-            )
-        }
+        None => generated_rule_name(&to_plain(&r.process), r.index, &r.position),
     }
 }
 
-/// `toRule` (Facts.hs:376-403): build the final `ProtoRuleE` with HS-exact
+/// The `Nothing` arm of `toRule`'s `name` (Facts.hs:383-388):
+/// `unNull (stripNonAlphanumerical (prettySapicTopLevel process)) ++ "_" ++
+/// show index ++ "_" ++ prettyEitherPositionOrSpecial position`.
+///
+/// Takes the already-erased process so [`to_rule`] can share one `to_plain`
+/// with the `process=` attribute it also builds from it.
+fn generated_rule_name(plain: &PlainProcess, index: usize, position: &RulePosition) -> String {
+    let stripped = strip_non_alphabetic(&pretty_sapic_top_level(plain));
+    // `unNull s = if null s then "p" else s`
+    let un_null = if stripped.is_empty() { "p" } else { &stripped };
+    format!("{un_null}_{index}_{}", pretty_position_or_special(position))
+}
+
+/// `toRule` (Facts.hs:376-404): build the final `ProtoRuleE` with HS-exact
 /// `name`, `color`, `process`, `role`, `issapicrule` attributes.
 ///
-/// `ignoreDerivChecks = isLookup process` (Facts.hs:404-405): the lookup rules
+/// `ignoreDerivChecks = isLookup process` (Facts.hs:403-404): the lookup rules
 /// carry the `no_derivcheck` attribute so the message-derivation check skips
 /// them (the bound lookup variable is unconstrained at that point).
 pub fn to_rule(r: &AnnotatedRule<ProcessAnnotation<LVar>>) -> ProtoRuleE {
-    let name = rule_name(r);
+    // Both the generated name and the `process=` attribute read the erased
+    // process, so erase once.
+    let plain = to_plain(&r.process);
+    let name = match &r.process_name {
+        Some(s) => s.clone(),
+        None => generated_rule_name(&plain, r.index, &r.position),
+    };
+    // HS reaches this list twice, as `getTopLevelName process` (for the colour)
+    // and as `getProcessNames $ processGetAnnotation process` (for the role);
+    // `getTopLevelName` IS that second expression, so one binding serves both.
     let names = get_top_level_name(&r.process);
     // HS `isLookup (ProcessComb (Lookup _ _) _ _ _) = True; isLookup _ = False`
-    // (Facts.hs:404-405) — the LITERAL process node this rule was generated for.
+    // (Facts.hs:403-404) — the LITERAL process node this rule was generated for.
     let is_lookup_proc = matches!(
         &r.process,
         Process::Comb(
@@ -604,13 +603,11 @@ pub fn to_rule(r: &AnnotatedRule<ProcessAnnotation<LVar>>) -> ProtoRuleE {
         )
     );
     let attr = RuleAttributes {
-        color: Some(color_for_process_name(&names)),
-        process: Some(to_plain(&r.process)),
+        color: Some(color_for_process_name(names)),
+        process: Some(plain),
         ignore_deriv_checks: is_lookup_proc,
         is_sapic_rule: true,
-        role: Some(role_from_process_name_list(
-            &r.process.annotation().parsed().process_names,
-        )),
+        role: Some(role_from_process_name_list(names)),
     };
     let info = ProtoRuleEInfo {
         name: ProtoRuleName::Stand(tamarin_term::intern::intern_str(&name)),
@@ -668,6 +665,12 @@ pub fn compute_new_vars(prems: &[LNFact], concs: &[LNFact], acts: &[LNFact]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The rendered `color=` hex value for a process-name list — what the rule
+    /// printer emits for `RuleAttributes::color`.
+    fn color_hex_for_process_name(names: &[String]) -> String {
+        tamarin_utils::color::rgb_to_hex(color_for_process_name(names))
+    }
 
     #[test]
     fn crc32_known_values() {

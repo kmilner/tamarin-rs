@@ -5,9 +5,9 @@
 //! Declaration-side parity for DUAL-DECLARED names — one name that is both a
 //! `NoEq` funsym and a user-declared `[AC]` symbol.
 //!
-//! HS `function`'s conflict check (Signature.hs:212-217) looks the name up in
-//! `stFunSyms` only, and an `[AC]` declaration registers under `stACFunSyms`
-//! (`addFunSym (ACfctUser …)`, Signature.hs:221), so the two declarations
+//! HS `function`'s conflict check (Parser/Signature.hs:212-217) looks the name
+//! up in `stFunSyms` only, and an `[AC]` declaration registers under
+//! `stACFunSyms` (`addFunSym (ACfctUser …)`, Parser/Signature.hs:221), so the two declarations
 //! never collide directly: `f/2 [AC], f/2` and `f/2, f/2 [AC]` are BOTH
 //! accepted (the compared options tuple `(k,priv,destr,ndc)` carries no AC
 //! flag).  Only a NoEq declaration whose tuple DIFFERS from the `[AC]`
@@ -58,7 +58,7 @@ fn both_declaration_orders_are_accepted() {
 
 /// The NoEq-first order at a different arity DOES conflict: the `[AC]`
 /// declaration's requested tuple is compared against the `stFunSyms` entry
-/// (Signature.hs:212-215).  Oracle bytes: probe `p_orderconf`.
+/// (Parser/Signature.hs:212-215).  Oracle bytes: probe `p_orderconf`.
 #[test]
 fn a_noeq_first_arity_mismatch_conflicts() {
     let err = parse_theory("theory T begin\n\nfunctions: f/3, f/2 [AC]\n\nend\n", &[])
@@ -76,8 +76,8 @@ fn a_noeq_first_arity_mismatch_conflicts() {
 
 /// The AST keeps the two spellings of a dual name apart: prefix is a plain
 /// `App` (which the readers resolve NoEq-first, HS `lookupArity`,
-/// Term.hs:62-72), infix is `BinOp::AcFct` (always the AC symbol, HS
-/// `acterm`, Term.hs:163-174).  The oracle renders the two differently in one
+/// Parser/Term.hs:62-71), infix is `BinOp::AcFct` (always the AC symbol, HS
+/// `acterm`, Parser/Term.hs:165-172).  The oracle renders the two differently in one
 /// rule — `A( ('a' f 'b') ), B( f('a', 'b') )` (probe `p_infix`) — which is
 /// only representable with distinct nodes.
 #[test]

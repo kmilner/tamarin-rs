@@ -1,5 +1,6 @@
-//! Solver-component oracle: cross-check our Rust pipeline against
-//! `tamarin-prover 1.12.0` on small fixture `.spthy` files.
+//! Solver-component oracle: cross-check our Rust pipeline against the PINNED
+//! `tamarin-prover` — the `tamarin-prover-testing` build of the submodule
+//! revision, or `HS_PATH` — on small fixture `.spthy` files.
 //!
 //! For each fixture we verify:
 //! 1. The Rust parser/elaborator accepts the file.
@@ -7,13 +8,14 @@
 //! 3. `tamarin-prover --parse-only` agrees the file is syntactically
 //!    well-formed (return code 0).
 //! 4. `tamarin-prover --prove` produces a non-error summary (the
-//!    fixtures are all small `exists-trace` lemmas tamarin can solve
-//!    in a few steps).
+//!    fixtures are all small lemmas tamarin can solve in a few steps).
 //! 5. The number of lemmas we elaborate equals what tamarin sees.
 //! 6. For each lemma, the guarded conversion succeeds.
 //!
-//! The harness skips silently when `tamarin-prover` isn't on `PATH`,
-//! so the test stays fast in environments without the binary.
+//! The harness skips silently when the pinned oracle has not been built
+//! (`./setup.sh testing`), so the test stays fast in environments without it.
+//! A missing *maude* is a different matter — see [`maude_path`]: it panics
+//! rather than skip, because skipping there greens the whole file.
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -36,28 +38,318 @@ fn corpus_root() -> PathBuf {
         })
 }
 
+/// Absolute maude locations probed before `PATH` is walked.
+///
+/// This probe mirrors the crate-shared `src/test_maude.rs` one (an
+/// integration test cannot see a `#[cfg(test)]` module of the library it
+/// links) — keep the two in sync.
+const MAUDE_CANDIDATES: [&str; 2] = ["/usr/local/bin/maude", "/usr/bin/maude"];
+
+/// Last resort, after `PATH`: the linuxbrew prefix this project's maude lives
+/// under on the development box, which is deliberately not on `PATH`.
+const MAUDE_LINUXBREW: &str = "/home/linuxbrew/.linuxbrew/bin/maude";
+
+/// The maude every maude-gated case below runs against: `$MAUDE_PATH`, else
+/// the first existing [`MAUDE_CANDIDATES`] entry, else a `PATH` walk, else
+/// [`MAUDE_LINUXBREW`].
+///
+/// Resolving NOTHING is a misconfiguration, not a reason to skip: every
+/// maude-gated test in this file opens with `let mp = match maude_path() {
+/// Some(p) => p, None => return }`, so a `None` here reports the same green
+/// run with and without maude installed.  Panic instead — unless
+/// `TAM_ALLOW_NO_MAUDE=1` explicitly asks for the old silent skip (a box that
+/// genuinely has no maude and only wants the maude-free cases).  A
+/// `MAUDE_PATH` naming a file that does not exist is the same
+/// misconfiguration and panics too.
 fn maude_path() -> Option<String> {
     if let Ok(p) = std::env::var("MAUDE_PATH") {
+        assert!(
+            std::path::Path::new(&p).exists(),
+            "MAUDE_PATH={p} does not exist; unset it to fall back to \
+             {MAUDE_CANDIDATES:?} / PATH / {MAUDE_LINUXBREW}, or point it at a \
+             real maude — skipping every maude-gated case here would report \
+             green vacuously"
+        );
         return Some(p);
     }
-    for c in ["/usr/local/bin/maude", "maude"] {
-        if std::path::Path::new(c).exists() {
-            return Some(c.to_string());
+    if let Some(c) = MAUDE_CANDIDATES
+        .iter()
+        .find(|c| std::path::Path::new(c).exists())
+    {
+        return Some((*c).to_string());
+    }
+    // `PATH` walk, kept dependency-free like every other copy of this probe.
+    if let Some(p) = std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|d| d.join("maude"))
+            .find(|p| p.is_file())
+    }) {
+        return Some(p.to_string_lossy().into_owned());
+    }
+    if std::path::Path::new(MAUDE_LINUXBREW).exists() {
+        return Some(MAUDE_LINUXBREW.to_string());
+    }
+    if std::env::var("TAM_ALLOW_NO_MAUDE").as_deref() == Ok("1") {
+        return None;
+    }
+    panic!(
+        "no maude found: MAUDE_PATH unset, none of {MAUDE_CANDIDATES:?} exist, \
+         nothing named `maude` on PATH, and no {MAUDE_LINUXBREW}. Every \
+         maude-gated case in this file would skip and the run would be green \
+         having proved nothing. Install maude, set MAUDE_PATH, or set \
+         TAM_ALLOW_NO_MAUDE=1 to accept the silent skip."
+    );
+}
+
+/// The pinned oracle, discovered the way every parity script discovers it:
+/// `HS_PATH` when set, else the `tamarin-prover-testing` stack-work build.
+///
+/// A bare `tamarin-prover` on `PATH` is deliberately NOT accepted.  It is
+/// whatever the machine happens to have installed — on this box a packaged
+/// release 1.12.0, a different upstream release from the submodule pin — and
+/// a differential test that compares against the wrong release is comparing
+/// against the wrong specification.
+fn oracle_binary() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("HS_PATH") {
+        let p = PathBuf::from(p);
+        return p.is_file().then_some(p);
+    }
+    // .stack-work/install/<arch>/<pkg-hash>/<ghc-version>/bin/tamarin-prover
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tamarin-prover-testing/.stack-work/install");
+    let mut level = vec![root];
+    for _ in 0..3 {
+        let mut next = Vec::new();
+        for dir in level {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            next.extend(entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()));
+        }
+        level = next;
+    }
+    level
+        .into_iter()
+        .map(|d| d.join("bin/tamarin-prover"))
+        .find(|p| p.is_file())
+}
+
+/// The oracle needs maude, and the box that runs these tests keeps it outside
+/// `PATH` — the same `MAUDE_PATH` override the rest of the suite uses.
+fn oracle_command() -> Option<Command> {
+    let mut cmd = Command::new(oracle_binary()?);
+    if let Some(m) = maude_path() {
+        cmd.arg(format!("--with-maude={m}"));
+    }
+    Some(cmd)
+}
+
+/// [`oracle_command`] under `timeout <secs>s`, for the whole-corpus probes:
+/// they invoke the oracle once per file and a single non-terminating example
+/// would otherwise wedge the rayon pool.
+fn oracle_command_within(secs: u32) -> Option<Command> {
+    let mut cmd = Command::new("timeout");
+    cmd.arg(format!("{secs}s")).arg(oracle_binary()?);
+    if let Some(m) = maude_path() {
+        cmd.arg(format!("--with-maude={m}"));
+    }
+    Some(cmd)
+}
+
+/// A corpus probe's committed mismatch ledger: `Some` lists the exact
+/// `<corpus-relative-path>::<lemma>` identities expected to mismatch (the
+/// analogue of scripts/sweep_expected.tsv), `None` means no run has
+/// enumerated one yet.  The path is corpus-relative, not a bare file name:
+/// the corpus mirrors some files (`features/auto-sources/tamarin-repo/…`
+/// duplicates `related_work/…`), and a name-keyed identity would collide
+/// across the mirror — one copy's divergence resolving would be masked by
+/// the other's persisting.
+///
+/// Counts proved untrustworthy here: the eligible set breathes with the
+/// per-file oracle timeout under machine load — a quiet run admits marginal
+/// files that carry disproportionate mismatches — so a count floor flakes in
+/// both directions while the mismatch *identities* stay put.
+type ProbeLedger = Option<&'static [&'static str]>;
+
+/// Expected verdict mismatches for `corpus_verdict_match_coverage_probe`.
+///
+/// Enumerated 2026-08-10 (60s oracle timeout, release, guarded serial run;
+/// identity-stable across two enumerations at different machine load —
+/// 138/142 and 150/154 matched, same four identities both times).
+const VERDICT_MISMATCH_LEDGER: ProbeLedger = Some(&[
+    "loops/JCS12_Typing_Example.spthy::Client_session_key_secrecy_raw",
+    "loops/JCS12_Typing_Example.spthy::typing_assertion",
+    "post17/foo_eligibility.spthy::eligibility",
+    "post17/foo_eligibility.spthy::types",
+]);
+
+/// Minimum lemmas the verdict probe must actually compare.  Guards the
+/// source-text exclusions (oracle-ranked, `diff(`, sapic, DH/XOR/BP) and the
+/// eligible-set breathing: a run that compares fewer has collapsed its
+/// coverage (oracle missing, corpus moved, timeout too tight for the load)
+/// and proves nothing no matter how clean its mismatch list looks.
+const VERDICT_MIN_COMPARED: usize = 120;
+
+/// Expected structural mismatches for `corpus_proof_skeleton_match_probe`.
+///
+/// Enumerated 2026-08-10 (60s oracle timeout, release; identity-stable across
+/// two enumerations — 815/837 and 819/841 matched, same 22-identity multiset
+/// both times, corpus mirror copies listed individually).
+const STRUCTURAL_MISMATCH_LEDGER: ProbeLedger = Some(&[
+    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::EligVerif",
+    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::TimelyP",
+    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::Uniqueness",
+    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::VoterC",
+    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::ballotsFromVoters",
+    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::indivVerif",
+    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::secretSskD",
+    "asiaccs20-POIDC/OIDC_Implicit.spthy::Intent_Consent_and_Correct_Browser",
+    "asiaccs20-POIDC/proofs/PROOF_OIDC_Implicit.spthy::executable",
+    "csf26-ac/fast/Yubikey_multiset.spthy::Login_invalidates_smaller_counters",
+    "csf26-ac/multiset-UD/YubiSecure_KS_STM12/Yubikey_multiset.spthy::Login_invalidates_smaller_counters",
+    "features/auto-sources/tamarin-repo/asiaccs20-POIDC/OIDC_Implicit.spthy::Intent_Consent_and_Correct_Browser",
+    "features/auto-sources/tamarin-repo/loops/JCS12_Typing_Example.spthy::Client_session_key_secrecy_raw",
+    "features/auto-sources/tamarin-repo/loops/JCS12_Typing_Example.spthy::typing_assertion",
+    "features/auto-sources/tamarin-repo/thesis-SvenHammann-POIDC/OIDC_Implicit.spthy::User_Authentication",
+    "loops/JCS12_Typing_Example.spthy::Client_session_key_secrecy_raw",
+    "loops/JCS12_Typing_Example.spthy::typing_assertion",
+    "post17/foo_eligibility.spthy::eligibility",
+    "post17/foo_eligibility.spthy::exec",
+    "post17/foo_eligibility.spthy::types",
+    "thesis-SvenHammann-POIDC/OIDC_Implicit.spthy::User_Authentication",
+    "thesis-SvenHammann-POIDC/proofs/PROOF_OIDC_Implicit.spthy::executable",
+]);
+
+/// Minimum lemmas the skeleton probe must hold a comparison for (a
+/// no-Haskell-skeleton lemma counts: the oracle produced a proof we could
+/// look for, which is coverage even when the diff itself is impossible).
+const STRUCTURAL_MIN_COMPARED: usize = 540;
+
+/// Enforce a corpus probe's mismatch ledger, after diagnostics are printed.
+///
+/// Four ways to fail: coverage collapsed below `min_compared`; the ledger is
+/// still `None` (a probe that only whispers its mismatches is a probe no
+/// regression can fail — the panic prints the paste-ready ledger); a mismatch
+/// appeared that the ledger does not name (a regression); or a ledgered
+/// identity was compared and came out clean (a stale ledger — remove the
+/// entry in a commit that explains the fix).  Ledgered identities that were
+/// not compared this run (per-file oracle timeout under load) are printed
+/// but sorted into neither failure class: absence of a comparison is not
+/// evidence in either direction.
+#[allow(clippy::too_many_arguments)]
+fn enforce_probe_ledger(
+    label: &str,
+    ledger_const: &str,
+    min_const: &str,
+    ledger: ProbeLedger,
+    min_compared: usize,
+    compared_ids: &[String],
+    coverage: usize,
+    mismatches: &[(String, String)],
+) {
+    use tamarin_utils::FastSet;
+    assert!(
+        coverage >= min_compared,
+        "{label}: only {coverage} comparisons (need {min_const}={min_compared}) — \
+         coverage collapsed. Check the oracle binary, maude, the corpus root \
+         and machine load before reading anything into this run."
+    );
+    let mut mm_ids: Vec<&str> = mismatches.iter().map(|(id, _)| id.as_str()).collect();
+    mm_ids.sort_unstable();
+    let led = match ledger {
+        None => panic!(
+            "{label}: {} mismatches over {coverage} comparisons, but {ledger_const} \
+             is None — no run has committed the expected set yet. Record this run:\n\
+             const {ledger_const}: ProbeLedger = Some(&[\n{}]);",
+            mismatches.len(),
+            mm_ids
+                .iter()
+                .map(|i| format!("    {i:?},\n"))
+                .collect::<String>(),
+        ),
+        Some(l) => l,
+    };
+    let led_set: FastSet<&str> = led.iter().copied().collect();
+    let mm_set: FastSet<&str> = mm_ids.iter().copied().collect();
+    let cmp_set: FastSet<&str> = compared_ids.iter().map(|s| s.as_str()).collect();
+    let mut unexpected: Vec<&(String, String)> = mismatches
+        .iter()
+        .filter(|(id, _)| !led_set.contains(id.as_str()))
+        .collect();
+    unexpected.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut resolved: Vec<&str> = led
+        .iter()
+        .copied()
+        .filter(|e| cmp_set.contains(e) && !mm_set.contains(e))
+        .collect();
+    resolved.sort_unstable();
+    let mut uncompared: Vec<&str> = led
+        .iter()
+        .copied()
+        .filter(|e| !cmp_set.contains(e))
+        .collect();
+    uncompared.sort_unstable();
+    if !uncompared.is_empty() {
+        eprintln!(
+            "{label}: {} ledgered mismatch(es) not compared this run (per-file \
+             oracle timeout under load?): {uncompared:?}",
+            uncompared.len(),
+        );
+    }
+    assert!(
+        unexpected.is_empty() && resolved.is_empty(),
+        "{label}: ledger violated.\n\
+         unexpected mismatches (regressions): {unexpected:#?}\n\
+         ledgered but compared clean (stale {ledger_const} entries — remove in \
+         a commit that explains the fix): {resolved:?}",
+    );
+}
+
+/// True if `src` declares an oracle-ranked heuristic — theory-level
+/// (`heuristic: o "./script"`, `heuristic: osopo`) or lemma-attribute
+/// (`[heuristic=soioo]`).  Braced values (`heuristic={tactic_name}`)
+/// reference named tactics, never external scripts, and don't count.
+///
+/// Oracle-ranked proving execs the oracle script relative to the invoker's
+/// CWD and `std::process::exit(1)`s when it is missing (HS: IO exception →
+/// dies with empty stdout; RS: `search::rank_goals_or_abort`) — one such
+/// file aborts the whole probe binary, uncatchably, so both corpus probes
+/// skip them up front.  Matches inside comments that merely quote a
+/// `--heuristic=O` command line over-exclude a few files; the
+/// `*_MIN_COMPARED` guards keep the exclusion honest.
+fn mentions_oracle_ranking(src: &str) -> bool {
+    for (i, _) in src.match_indices("heuristic") {
+        let rest = src[i + "heuristic".len()..].trim_start();
+        let Some(rest) = rest.strip_prefix([':', '=']) else {
+            continue;
+        };
+        let val = rest.trim_start();
+        if val.starts_with('{') {
+            continue; // named-tactic reference, no external script
+        }
+        if val
+            .chars()
+            .take_while(|c| c.is_ascii_alphabetic())
+            .any(|c| c == 'o' || c == 'O')
+        {
+            return true;
         }
     }
-    None
+    false
 }
 
 fn tamarin_available() -> bool {
-    Command::new("tamarin-prover")
-        .arg("--help")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    oracle_binary().is_some_and(|p| {
+        Command::new(p)
+            .arg("--help")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
 }
 
 fn run_tamarin_parse_only(path: &Path) -> Option<String> {
-    let out = Command::new("tamarin-prover")
+    let out = oracle_command()?
         .arg("--parse-only")
         .arg(path)
         .output()
@@ -69,11 +361,7 @@ fn run_tamarin_parse_only(path: &Path) -> Option<String> {
 }
 
 fn run_tamarin_prove(path: &Path) -> Option<String> {
-    let out = Command::new("tamarin-prover")
-        .arg("--prove")
-        .arg(path)
-        .output()
-        .ok()?;
+    let out = oracle_command()?.arg("--prove").arg(path).output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -147,6 +435,7 @@ fn verdict_str(
 /// thread kills the subprocess after a hard cap; the blocked read then
 /// returns EOF and `prove_lemma` unwinds with an error.  Without this, even
 /// one hung lemma blocks the whole `par_iter().collect()`.
+#[must_use = "dropping the guard immediately joins the watchdog, disarming it"]
 struct WatchdogGuard {
     done: std::sync::Arc<std::sync::atomic::AtomicBool>,
     fired: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -154,23 +443,25 @@ struct WatchdogGuard {
 }
 
 impl WatchdogGuard {
-    /// Signal completion, join the watchdog thread, and report whether it
-    /// fired (killed the subprocess) before we finished.
-    fn finish(mut self) -> bool {
+    /// Signal completion and join the watchdog thread.
+    fn stop(&mut self) {
         self.done.store(true, std::sync::atomic::Ordering::Relaxed);
         if let Some(j) = self.join.take() {
             let _ = j.join();
         }
+    }
+
+    /// [`stop`](Self::stop), then report whether the watchdog fired (killed
+    /// the subprocess) before we finished.
+    fn finish(mut self) -> bool {
+        self.stop();
         self.fired.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
 impl Drop for WatchdogGuard {
     fn drop(&mut self) {
-        self.done.store(true, std::sync::atomic::Ordering::Relaxed);
-        if let Some(j) = self.join.take() {
-            let _ = j.join();
-        }
+        self.stop();
     }
 }
 
@@ -323,11 +614,15 @@ fn corpus_sample_lemma_and_rule_counts_match() {
             mismatches.join("\n  ")
         );
     }
-    // Make sure we actually compared at least one file when the
-    // tamarin binary and corpus are available.
-    if compared == 0 {
-        eprintln!("warning: no corpus files matched (skipping)");
-    }
+    // A run that located none of the candidates compared nothing, and a green
+    // "0 mismatches out of 0 files" is exactly the vacuous pass this suite
+    // exists to avoid.
+    assert!(
+        compared > 0,
+        "none of {:?} were found under {} — the test compared nothing",
+        candidates,
+        corpus.display()
+    );
 }
 
 /// Count quantifiers in a guarded formula.
@@ -359,10 +654,10 @@ fn count_quantifiers(g: &Guarded) -> (usize, usize) {
 }
 
 /// Cross-check guarded formula structure: for each lemma in a fixture,
-/// count Ex/All in our `formula_to_guarded` output and compare with
-/// the count of `∃` / `∀` characters in tamarin's `--prove` output's
-/// guarded-formula block. Tamarin always emits exactly one quantifier
-/// glyph per quantified variable.
+/// count Ex/All in our `formula_to_guarded` output and compare with the
+/// `∃` / `∀` glyphs in tamarin's `--prove` output.  Tamarin emits one glyph
+/// per quantifier BLOCK while `count_quantifiers` counts bound variables, so
+/// the comparison below is presence-parity, not an equality.
 #[test]
 fn guarded_quantifier_count_matches_tamarin() {
     if !tamarin_available() {
@@ -388,11 +683,6 @@ fn guarded_quantifier_count_matches_tamarin() {
             Some(o) => o,
             None => continue,
         };
-        // Tamarin emits one ∃/∀ glyph per quantifier *block* (it
-        // groups consecutive vars under a single quantifier), whereas
-        // our `count_quantifiers` returns the total number of bound
-        // variables. So we use a presence-parity check rather than
-        // an exact comparison.
         let tam_has_ex = proved.contains('∃');
         let tam_has_all = proved.contains('∀');
         assert_eq!(
@@ -731,11 +1021,8 @@ fn verdict_match_suite_all_solved_against_tamarin() {
 /// behaviors:
 ///   1. Tamarin emits "unguarded variable(s)" for non-doubly-guarded
 ///      formulas — our `formula_to_guarded` should too.
-///   2. Tamarin's signature output for a `pair`-only theory contains
-///      `pair/2`, `fst/1`, `snd/1` — our elaboration agrees.
-///   3. Tamarin's `--prove` summary line format is
-///      `<name> (exists-trace|all-traces): verified|falsified (...)`
-///      — our verdict should map to the same kind.
+///   2. Tamarin's signature output for a `pair`-only theory names the
+///      `pair` symbol — our elaboration agrees.
 #[test]
 fn haskell_behavior_pins() {
     if !tamarin_available() {
@@ -749,7 +1036,8 @@ lemma bad: exists-trace "Ex k #i. (A(k) @ #i) | (A(k) @ #i)"
 end"#;
     let tmp = std::env::temp_dir().join("oracle_pin_bad_guarded.spthy");
     std::fs::write(&tmp, bad).unwrap();
-    let out = Command::new("tamarin-prover")
+    let out = oracle_command()
+        .expect("tamarin_available")
         .arg("--prove")
         .arg(&tmp)
         .output()
@@ -790,7 +1078,8 @@ end"#;
     let pair_thy = "theory P begin\nrule R: [Fr(~k)] --[A(~k)]-> [Out(<~k, ~k>)]\nend";
     let ptmp = std::env::temp_dir().join("oracle_pin_pair.spthy");
     std::fs::write(&ptmp, pair_thy).unwrap();
-    let out = Command::new("tamarin-prover")
+    let out = oracle_command()
+        .expect("tamarin_available")
         .arg("--parse-only")
         .arg(&ptmp)
         .output()
@@ -804,16 +1093,16 @@ end"#;
     let _ = std::fs::remove_file(&ptmp);
 }
 
-/// **Corpus verdict-match coverage probe**: walks `examples/loops/`
-/// (small, no-equation theories), runs `prove_lemma` and
-/// `tamarin-prover --prove` on every lemma, reports a verdict-match
-/// count to stderr. Doesn't fail unless 0/N match — used as a
-/// diagnostic to track progress over time.
+/// **Corpus verdict-match coverage probe**: walks the corpus directories
+/// listed below, runs `prove_lemma` and the pinned oracle's `--prove` on
+/// every lemma, and holds the mismatches to [`VERDICT_MISMATCH_LEDGER`] —
+/// an unexpected mismatch or a silently-resolved ledger entry fails the
+/// probe instead of scrolling past in the log.
 ///
-/// Skips files that:
-///  - declare functions/equations our skeleton can't unify
-///  - use macros, predicates, or accountability constructs
-///  - take longer than 10s on tamarin's side
+/// Skips files that mention `diff(`, `predicates:` or `process:`, files whose
+/// `builtins:` name diffie-hellman / xor / bilinear-pairing, oracle-ranked
+/// files (see [`mentions_oracle_ranking`]), and any file the oracle does not
+/// finish within 60s.
 ///
 /// **Deprecated** as a primary metric — verdict-only matching masks
 /// reasoning bugs (right answer, wrong proof structure).  Use
@@ -907,15 +1196,17 @@ fn corpus_verdict_match_coverage_probe() {
         .par_iter()
         .filter_map(|path| {
             let src = std::fs::read_to_string(path).ok()?;
-            // User-defined `equations:` declarations are wired through
-            // elaborate.rs → MaudeSig.st_rules → Maude module text.  The
-            // lastChainTerm filter + threaded closure cap (default 256)
-            // keep precompute under 200ms even with many destructors.
-            // Sources truncated by the cap are tagged `incomplete=true`;
-            // `is_finished` converts Solved→Unfinishable for any branch
-            // that consumed an incomplete source — preserving soundness
-            // (no wrong-VERIFIED).
+            // No `equations:` filter here: user-declared equations are wired
+            // through elaborate.rs → MaudeSig.st_rules → Maude module text.
+            // A destructor-chain explosion can truncate case enumeration; the
+            // source is then tagged `Source.incomplete`, which — as in HS
+            // `isFinished` — is diagnostic only and does NOT downgrade a
+            // Solved leaf (see `proof_method`'s `is_finished`).
             if src.contains("diff(") {
+                return None;
+            }
+            // Oracle-ranked files would process::exit the probe binary.
+            if mentions_oracle_ranking(&src) {
                 return None;
             }
             // Macros are supported via parser-AST macro expansion
@@ -937,10 +1228,10 @@ fn corpus_verdict_match_coverage_probe() {
             }
 
             let theory = tamarin_parser::parse_theory(&src, &[]).ok()?;
-            // Run tamarin once per file with a timeout.
-            let tam_out = Command::new("timeout")
-                .arg("10s")
-                .arg("tamarin-prover")
+            // Run tamarin once per file with a timeout.  60s, not 10: at 10s
+            // the eligible set breathed with machine load, and the ledger
+            // pins identities from a maximally-complete enumeration.
+            let tam_out = oracle_command_within(60)?
                 .arg("--prove")
                 .arg(path)
                 .output()
@@ -1003,10 +1294,9 @@ fn corpus_verdict_match_coverage_probe() {
     // Phase 4: run prove_lemma per lemma in parallel.  Each lemma gets
     // its own MaudeHandle (independent subprocess); rayon manages
     // thread-pool sizing via num_cpus.
-    #[derive(Clone)]
     enum LemmaOutcome {
-        Match,
-        Diff(String),
+        Match(String),
+        Diff(String, String),
         Incomparable,
     }
     let dbg_incomp = std::env::var("TAM_DBG_INCOMPARABLE").is_ok();
@@ -1072,48 +1362,66 @@ fn corpus_verdict_match_coverage_probe() {
                     return LemmaOutcome::Incomparable;
                 }
             };
+            let rel = w
+                .path
+                .strip_prefix(&corpus_root)
+                .unwrap_or(w.path.as_path())
+                .to_string_lossy();
+            let id = format!("{}::{}", rel, w.lemma_name);
             if our_verdict == w.tamarin_verdict {
-                LemmaOutcome::Match
+                LemmaOutcome::Match(id)
             } else {
-                LemmaOutcome::Diff(format!(
-                    "{}::{} — ours={}, tamarin={}",
-                    w.path.file_name().unwrap().to_string_lossy(),
-                    w.lemma_name,
-                    our_verdict,
-                    w.tamarin_verdict
-                ))
+                let detail = format!(
+                    "{} — ours={}, tamarin={}",
+                    id, our_verdict, w.tamarin_verdict
+                );
+                LemmaOutcome::Diff(id, detail)
             }
         })
         .collect();
 
     // Aggregate.
-    let mut compared = 0usize;
+    let mut compared_ids: Vec<String> = Vec::new();
     let mut matched = 0usize;
-    let mut diffs: Vec<String> = Vec::new();
-    for o in &outcomes {
+    let mut mismatches: Vec<(String, String)> = Vec::new();
+    for o in outcomes {
         match o {
-            LemmaOutcome::Match => {
-                compared += 1;
+            LemmaOutcome::Match(id) => {
+                compared_ids.push(id);
                 matched += 1;
             }
-            LemmaOutcome::Diff(d) => {
-                compared += 1;
-                diffs.push(d.clone());
+            LemmaOutcome::Diff(id, detail) => {
+                compared_ids.push(id.clone());
+                mismatches.push((id, detail));
             }
             LemmaOutcome::Incomparable => {}
         }
     }
 
-    eprintln!("corpus verdict-match: {}/{} matched", matched, compared);
-    if !diffs.is_empty() {
+    eprintln!(
+        "corpus verdict-match: {}/{} matched",
+        matched,
+        compared_ids.len()
+    );
+    if !mismatches.is_empty() {
         eprintln!("mismatches:");
         // Sort for deterministic output order under parallel scheduling.
-        diffs.sort();
-        for d in &diffs {
+        mismatches.sort();
+        for (_, d) in &mismatches {
             eprintln!("  {}", d);
         }
     }
-    // We don't *require* a match rate — this is a diagnostic.
+    let coverage = compared_ids.len();
+    enforce_probe_ledger(
+        "corpus verdict-match",
+        "VERDICT_MISMATCH_LEDGER",
+        "VERDICT_MIN_COMPARED",
+        VERDICT_MISMATCH_LEDGER,
+        VERDICT_MIN_COMPARED,
+        &compared_ids,
+        coverage,
+        &mismatches,
+    );
 }
 
 /// **Corpus proof-skeleton match probe**: walks the same corpus dirs as
@@ -1125,23 +1433,22 @@ fn corpus_verdict_match_coverage_probe() {
 /// Reports `corpus structural-match: X/Y` where Y is the total number
 /// of lemmas where Haskell's proof skeleton is available — verdict
 /// divergences DO count against structural match (verdict-only matching
-/// masks reasoning bugs).
+/// masks reasoning bugs).  The divergence identities are then held to
+/// [`STRUCTURAL_MISMATCH_LEDGER`], so an unexpected divergence or a
+/// silently-resolved ledger entry fails the probe instead of scrolling
+/// past in the log.
 ///
 /// This is the **primary metric** for the port's progress, per
 /// project directive: count only whether the proof matches the
 /// Haskell skeleton directly.
 ///
 /// `#[ignore]`d (run with `cargo test -- --ignored`): this heavyweight
-/// whole-corpus probe proves every example in-process, but ~99 corpus
-/// files declare an oracle heuristic, and the prover faithfully
-/// `std::process::exit(1)`s when an oracle script fails to exec (HS
-/// behaviour: oracle IO exception → die with empty stdout, search.rs:975).
-/// A `process::exit` is uncatchable by the per-lemma `catch_unwind`, so a
-/// single oracle file aborts the whole test binary. Kept active as a
-/// deliberate `--ignored` probe, consistent with the sibling diagnostic
-/// probes above (run against a corpus with oracle scripts on PATH/CWD).
+/// whole-corpus probe proves every example in-process — an hour-plus of
+/// wall clock.  Oracle-ranked files are skipped up front (see
+/// [`mentions_oracle_ranking`]: a missing oracle script is an uncatchable
+/// `process::exit(1)` that would abort the whole test binary).
 #[test]
-#[ignore = "heavyweight whole-corpus probe; oracle files trigger process::exit. Run with --ignored"]
+#[ignore = "heavyweight whole-corpus probe (hour-plus). Run with --ignored"]
 fn corpus_proof_skeleton_match_probe() {
     use rayon::prelude::*;
     use tamarin_theory::proof_skeleton::{extract_from_haskell, first_divergence, render};
@@ -1201,6 +1508,10 @@ fn corpus_proof_skeleton_match_probe() {
             if src.contains("diff(") {
                 return None;
             }
+            // Oracle-ranked files would process::exit the probe binary.
+            if mentions_oracle_ranking(&src) {
+                return None;
+            }
             // Macros are supported via parser-AST macro expansion
             // (tamarin_theory::macro_expand).
             if src.contains("predicates:") {
@@ -1217,9 +1528,10 @@ fn corpus_proof_skeleton_match_probe() {
 
             let theory = tamarin_parser::parse_theory(&src, &[]).ok()?;
             let out_path = format!("/tmp/proof_skel_corpus_{}_{}.spthy", pid, idx);
-            let tam_out = Command::new("timeout")
-                .arg("10s")
-                .arg("tamarin-prover")
+            // 60s, not 10: at 10s the eligible set breathed with machine
+            // load, and the ledger pins identities from a
+            // maximally-complete enumeration.
+            let tam_out = oracle_command_within(60)?
                 .arg("--prove")
                 .arg(format!("--output={}", out_path))
                 .arg(path)
@@ -1288,11 +1600,14 @@ fn corpus_proof_skeleton_match_probe() {
         .collect();
 
     // Phase 4: per-lemma prove + diff in parallel.
-    #[derive(Clone)]
     enum Outcome {
-        StructMatch,
+        StructMatch(String),
         StructDiff {
-            file_lemma: String,
+            // `id` stays the bare `file::lemma` (the ledger key); the
+            // verdict annotation rides separately in `note` so a verdict
+            // flip can't mint a second identity for the same divergence.
+            id: String,
+            note: String,
             line: usize,
             ours: String,
             theirs: String,
@@ -1328,8 +1643,12 @@ fn corpus_proof_skeleton_match_probe() {
                 Some(v) => v,
                 None => return Outcome::Incomparable,
             };
-            let fname = w.path.file_name().unwrap().to_string_lossy().into_owned();
-            let file_lemma = format!("{}::{}", fname, w.lemma_name);
+            let rel = w
+                .path
+                .strip_prefix(&corpus_root)
+                .unwrap_or(w.path.as_path())
+                .to_string_lossy();
+            let file_lemma = format!("{}::{}", rel, w.lemma_name);
             // **Structural match is the only metric** (per project directive).
             // Always diff proof skeletons, regardless of verdict — a verdict
             // match on a structurally-divergent proof means we're getting the
@@ -1348,9 +1667,10 @@ fn corpus_proof_skeleton_match_probe() {
                 String::new()
             };
             match first_divergence(&ours, &theirs) {
-                None => Outcome::StructMatch,
+                None => Outcome::StructMatch(file_lemma),
                 Some((line, ol, tl)) => Outcome::StructDiff {
-                    file_lemma: format!("{}{}", file_lemma, verdict_note),
+                    id: file_lemma,
+                    note: verdict_note,
                     line,
                     ours: ol,
                     theirs: tl,
@@ -1360,42 +1680,49 @@ fn corpus_proof_skeleton_match_probe() {
         .collect();
 
     let mut struct_match = 0usize;
-    let mut struct_diff: Vec<String> = Vec::new();
+    let mut compared_ids: Vec<String> = Vec::new();
+    let mut mismatches: Vec<(String, String)> = Vec::new();
     let mut no_skel: Vec<String> = Vec::new();
     let mut incomparable = 0usize;
-    for o in &outcomes {
+    for o in outcomes {
         match o {
-            Outcome::StructMatch => struct_match += 1,
+            Outcome::StructMatch(id) => {
+                struct_match += 1;
+                compared_ids.push(id);
+            }
             Outcome::StructDiff {
-                file_lemma,
+                id,
+                note,
                 line,
                 ours,
                 theirs,
             } => {
-                struct_diff.push(format!(
-                    "{} — diverge line {}: ours={:?} theirs={:?}",
-                    file_lemma, line, ours, theirs
-                ));
+                let detail = format!(
+                    "{}{} — diverge line {}: ours={:?} theirs={:?}",
+                    id, note, line, ours, theirs
+                );
+                compared_ids.push(id.clone());
+                mismatches.push((id, detail));
             }
-            Outcome::NoHaskellSkeleton(s) => no_skel.push(s.clone()),
+            Outcome::NoHaskellSkeleton(s) => no_skel.push(s),
             Outcome::Incomparable => incomparable += 1,
         }
     }
-    let comparable = struct_match + struct_diff.len() + no_skel.len();
+    let coverage = struct_match + mismatches.len() + no_skel.len();
     eprintln!(
         "corpus structural-match: {}/{} ({} struct-divergent, \
               {} no-haskell-skel, {} incomparable)",
         struct_match,
-        comparable,
-        struct_diff.len(),
+        coverage,
+        mismatches.len(),
         no_skel.len(),
         incomparable
     );
 
-    if !struct_diff.is_empty() {
+    if !mismatches.is_empty() {
         eprintln!("structural divergences:");
-        struct_diff.sort();
-        for d in &struct_diff {
+        mismatches.sort();
+        for (_, d) in &mismatches {
             eprintln!("  {}", d);
         }
     }
@@ -1406,6 +1733,16 @@ fn corpus_proof_skeleton_match_probe() {
             eprintln!("  {}", d);
         }
     }
+    enforce_probe_ledger(
+        "corpus structural-match",
+        "STRUCTURAL_MISMATCH_LEDGER",
+        "STRUCTURAL_MIN_COMPARED",
+        STRUCTURAL_MISMATCH_LEDGER,
+        STRUCTURAL_MIN_COMPARED,
+        &compared_ids,
+        coverage,
+        &mismatches,
+    );
 }
 
 /// Probe: TPM Exclusive_Secrets::left_reachable contradiction breakdown.
@@ -1916,14 +2253,13 @@ fn probe_nslpk3_nonce_secrecy() {
     eprintln!("{}", rs_skel);
     // Also fetch HS's skeleton via tamarin-prover output, dump side-by-side
     // around the first divergence to make targeted fixes possible.
-    let tam_out = std::process::Command::new("timeout")
-        .arg("30s")
-        .arg("tamarin-prover")
-        .arg("--prove")
-        .arg("--output=/tmp/nslpk3_hs_full.spthy")
-        .arg(path)
-        .output()
-        .ok();
+    let tam_out = oracle_command_within(30).and_then(|mut c| {
+        c.arg("--prove")
+            .arg("--output=/tmp/nslpk3_hs_full.spthy")
+            .arg(path)
+            .output()
+            .ok()
+    });
     if tam_out.is_some() {
         if let Ok(hs_text) = std::fs::read_to_string("/tmp/nslpk3_hs_full.spthy") {
             if let Some(hs_skel) =
@@ -2550,7 +2886,8 @@ end
     // Write to a temp file so tamarin can read it.
     let tmp = std::env::temp_dir().join("oracle_bad_guarded.spthy");
     std::fs::write(&tmp, bad).unwrap();
-    let out = Command::new("tamarin-prover")
+    let out = oracle_command()
+        .expect("tamarin_available")
         .arg("--prove")
         .arg(&tmp)
         .output()
@@ -2666,8 +3003,10 @@ fn fixture_nat_sort_reuse_lemma_derives_implied_fact() {
         "tamarin should verify CanForgeAndPost; got line:\n{}",
         line
     );
+    // `solve(` only wraps explicit proof-tree steps, so this doesn't
+    // depend on argument pretty-printing or timepoint variable naming.
     assert!(
-        proved.contains("HonestSignatureKey( pk(~sk_sign_trustee1) ) @ #k"),
+        proved.contains("solve( HonestSignatureKey("),
         "tamarin's own proof must solve HonestSignatureKey explicitly"
     );
 }

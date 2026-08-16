@@ -1,0 +1,36 @@
+// Purpose-built fixture for the `--heuristic` / `--saturation` /
+// `--open-chains` / `--oraclename` / `--oracle-only` CLI pins in
+// tests/cli_e2e.rs.
+//
+// `Recv`'s `In(senc(m, k))` premise is what earns its keep: the sdec
+// deconstruction of an unknown ciphertext leaves OPEN CHAINS, so the source
+// precomputation both saturates (`[Saturating Sources] Step 1 …`) and hits the
+// `-c/--open-chains` cap, and the `secrecy` proof has several competing goals
+// — enough that `--heuristic=i` and the default `s` reach different proofs.
+// Both lemmas still close in single-digit steps, so the whole run is ~0.15s.
+theory CliFlagsChan
+begin
+
+builtins: symmetric-encryption
+
+rule Register:
+  [ Fr(~k) ] --[ Reg($A, ~k) ]-> [ !Key($A, ~k) ]
+
+rule Send:
+  [ !Key($A, ~k), Fr(~m) ] --[ Sent($A, ~m) ]-> [ Out(senc(~m, ~k)) ]
+
+rule Recv:
+  [ !Key($A, k), In(senc(m, k)) ] --[ Recv($A, m) ]-> [ ]
+
+rule Reveal:
+  [ !Key($A, ~k) ] --[ Rev($A) ]-> [ Out(~k) ]
+
+lemma secrecy:
+  all-traces
+  "All A m #i #j. Sent(A, m) @ i & K(m) @ j ==> Ex #r. Rev(A) @ r"
+
+lemma exec:
+  exists-trace
+  "Ex A m #i #j. Sent(A, m) @ i & Recv(A, m) @ j"
+
+end

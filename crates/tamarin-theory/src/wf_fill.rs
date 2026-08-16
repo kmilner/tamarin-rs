@@ -8,7 +8,8 @@
 //! `text info $-$ nest 2 (fsep $ punctuate comma cells)` — `unboundCheck`
 //! (Wellformedness.hs:497-498), `reservedFactNameRules'`
 //! (Wellformedness.hs:546) and `specialFactsUsage'` (Wellformedness.hs:563),
-//! whose cells are `prettyLNFact` (Fact.hs:567-572) or `prettyLVar`
+//! whose cells are `prettyLNFact` (Theory/Model/Fact.hs:567-574) or
+//! `prettyLVar`
 //! (`prettyVarList`, TheoryObject.hs:858-859) documents.  So a cell that
 //! overruns the ribbon does not merely get a line of its own: it breaks at its
 //! OWN `sep`/`fsep`/`fcat` points, dropping `prettyLNFact`'s closing `)` onto
@@ -51,20 +52,31 @@ pub fn fill_body(fill: &WfFill) -> String {
     // on the web routes too — which render this under an active
     // `HtmlDocGuard`.
     let _plain = hpj::HtmlDocGuard::disable();
-    let cells: Vec<Doc> = fill.cells.iter().map(cell_doc).collect();
-    // HS `fsep $ punctuate comma cells` with `comma = char ','` (Text/PrettyPrint/Class.hs:121).
-    let list = hpj::fsep(hpj::punctuate(Doc::char(','), cells));
-    // `above_g` is HughesPJ's `$+$`, which HS's `$-$` maps to
-    // (Text/PrettyPrint/Class.hs:180); `info` is a single `text` (its `<->` join cannot break),
-    // so it keeps its trailing spaces on the line above the fill.
-    Doc::text(&fill.info)
-        .above_g(list.nest(2))
-        .nest(2)
-        .render_with(WF_LINE_LENGTH, WF_RIBBON)
+    match fill {
+        WfFill::Paragraph { info, cells } => {
+            let cells: Vec<Doc> = cells.iter().map(cell_doc).collect();
+            // HS `fsep $ punctuate comma cells` with `comma = char ','`
+            // (Text/PrettyPrint/Class.hs:121).
+            let list = hpj::fsep(hpj::punctuate(Doc::char(','), cells));
+            // `above_g` is HughesPJ's `$+$`, which HS's `$-$` maps to
+            // (Text/PrettyPrint/Class.hs:180); `info` is a single `text` (its
+            // `<->` join cannot break), so it keeps its trailing spaces on the
+            // line above the fill.
+            Doc::text(info)
+                .above_g(list.nest(2))
+                .nest(2)
+                .render_with(WF_LINE_LENGTH, WF_RIBBON)
+        }
+        // HS `natSortErrors` (Wellformedness.hs:315-316) builds the body with
+        // `<>` alone; the only break points are the ones the two `prettyLNTerm`
+        // documents carry inside them.
+        WfFill::Beside(doc) => cell_doc(doc).nest(2).render_with(WF_LINE_LENGTH, WF_RIBBON),
+    }
 }
 
 /// One [`WfDoc`] skeleton as the HughesPJ `Doc` HS's `prettyTerm` /
-/// `prettyFact` build for it (Term/Term.hs:298-327, Fact.hs:567-572).
+/// `prettyFact` build for it (Term/Term.hs:298-327,
+/// Theory/Model/Fact.hs:567-574).
 fn cell_doc(d: &WfDoc) -> Doc {
     match d {
         WfDoc::Text(s) => Doc::text(s),

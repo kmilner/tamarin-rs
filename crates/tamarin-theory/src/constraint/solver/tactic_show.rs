@@ -44,7 +44,7 @@ use crate::guarded_types::{BVar, GAtom, GFact, GTerm};
 // =============================================================================
 
 /// HS `show LVar` (LTerm.hs:526-533): `sortPrefix s ++ body`.
-pub(crate) fn show_varspec(v: &p::VarSpec) -> String {
+fn show_varspec(v: &p::VarSpec) -> String {
     let mut s = String::new();
     write_varspec(v, &mut s);
     s
@@ -79,7 +79,7 @@ fn write_varspec(v: &p::VarSpec, out: &mut String) {
 
 /// HS `Show (Term a)` applied to `VTerm Name (BVar LVar)`
 /// (Term/Raw.hs:227-237 + the derived `Show (BVar v)`).
-pub(crate) fn show_gterm(t: &GTerm) -> String {
+fn show_gterm(t: &GTerm) -> String {
     let mut s = String::new();
     write_gterm(t, &mut s);
     s
@@ -122,7 +122,7 @@ fn write_gterm(t: &GTerm, out: &mut String) {
         GTerm::Number(n) => out.push_str(&n.to_string()),
         // `fAppOne` = `NoEq oneSym` with `oneSymString = "one"` and
         // `fAppNatOne` = `NoEq natOneSym` with `natOneSymString = "tone"`
-        // (FunctionSymbols.hs:134-134,144). `show (FApp (NoEq (s,_)) [])` = `s`
+        // (FunctionSymbols.hs:226,236,255,267). `show (FApp (NoEq (s,_)) [])` = `s`
         // (Term/Raw.hs:227-237, see line 231), so the two nullary symbols show differently.
         GTerm::NumberOne => out.push_str("one"),
         GTerm::NatOne => out.push_str("tone"),
@@ -320,7 +320,7 @@ fn write_name(n: &Name, out: &mut String) {
 }
 
 // =============================================================================
-// `show FactTag` (derived Show, Fact.hs:132-143) — used by isFactName
+// `show FactTag` (derived Show, Theory/Model/Fact.hs:136-149) — used by isFactName
 // =============================================================================
 
 /// HS derived `show FactTag`.  For `ProtoFact m n a` this is
@@ -414,12 +414,11 @@ fn formula_action_fact(g: &Guarded) -> Option<&GFact> {
 ///
 /// The returned `VarSpec`s are `show`n by the callers to build PCRE
 /// alternations like `(~n|~s|...)`.
-pub(crate) fn check_formula(oracle_type: &str, f: &Guarded) -> Vec<p::VarSpec> {
+fn check_formula(oracle_type: &str, f: &Guarded) -> Vec<p::VarSpec> {
     // rev = any guard fact-tag name =~ "Reveal"
     let mut tag_names = Vec::new();
     guard_fact_tag_names(f, &mut tag_names);
-    let rev = tag_names.iter().any(|n| n.contains("Reveal"));
-    if !rev {
+    if !tag_names.iter().any(|n| n.contains("Reveal")) {
         return Vec::new();
     }
 
@@ -644,14 +643,14 @@ mod tests {
     #[test]
     fn show_gterm_nat_one_is_tone() {
         // fAppNatOne = FApp (NoEq natOneSym) [] with natOneSymString = "tone"
-        // (FunctionSymbols.hs:144-144) => `show fAppNatOne == "tone"`.
+        // (FunctionSymbols.hs:236,267) => `show fAppNatOne == "tone"`.
         assert_eq!(show_gterm(&GTerm::NatOne), "tone");
     }
 
     #[test]
     fn show_gterm_number_one_is_one() {
         // fAppOne = FApp (NoEq oneSym) [] with oneSymString = "one"
-        // (FunctionSymbols.hs:134-134) => `show fAppOne == "one"`.
+        // (FunctionSymbols.hs:226,255) => `show fAppOne == "one"`.
         assert_eq!(show_gterm(&GTerm::NumberOne), "one");
     }
 

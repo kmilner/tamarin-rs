@@ -5,8 +5,16 @@
 //! Port of `Sapic.Basetranslation` (`lib/sapic/src/Sapic/Basetranslation.hs`):
 //!   - `baseInit`       (Basetranslation.hs:312-318)
 //!   - `baseTransNull`  (Basetranslation.hs:81-82)
-//!   - `baseTransAction` New (103) / Event (197) / plain ChOut (155) / null-chan
-//!   - `baseRestr`      (449-485) — the always-on `single_session` restriction.
+//!   - `baseTransAction` (94-214) — every `SapicAction` arm
+//!   - `baseTransComb`   (226-306) — every `ProcessCombinator` arm
+//!   - the hardcoded restrictions `baseRestr` (449-485) selects from:
+//!     `single_session` and `predicate_eq`/`predicate_not_eq` are built
+//!     directly as parser-AST restrictions, while `set_in`/`set_notin`,
+//!     `in_event` and `locking_<idx>` go through `parse_formula_str` on HS's
+//!     verbatim restriction text (as HS's own `toEx`/`parseRestriction` does).
+//!
+//! `baseRestr`'s selection logic itself lives in `translate`, which owns the
+//! process-shape predicates (`contains isLookup` etc.) it dispatches on.
 
 use std::collections::BTreeSet;
 
@@ -1203,8 +1211,13 @@ fn rename_lock_pos_atoms(f: &mut tamarin_parser::ast::Formula, idx: u64) {
     walk(f, idx);
 }
 
-/// `resLockingPure` (Basetranslation.hs:388-402): the two `locking1`/`locking2`
-/// restrictions used only in the pure-state case (state-channel optimisation).
+/// `resLockingPure` (Basetranslation.hs:388-402): the `locking1`/`locking2`
+/// restriction pair for the pure-state (state-channel-optimisation) case.
+///
+/// Upstream EXPORTS this but never calls it — `baseRestr` builds only the
+/// per-lock `resLocking` restrictions — so nothing reaches it here either.
+/// Kept as a faithful port so wiring it stays a one-line change if upstream
+/// ever does.
 pub fn res_locking_pure() -> Vec<tamarin_parser::ast::Restriction> {
     let locking1 = "All p l x #t1 pp lp #t2 #t3 . Lock(p,l,x)@t1 &  Lock(pp,lp,x)@t2\n\
                      & Unlock(p,l,x)@t3 & not(#t1=#t2)\n\

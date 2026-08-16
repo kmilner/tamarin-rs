@@ -108,7 +108,7 @@ fn implicit_sig_includes_pair_and_inv() {
 // Maude-bridge command order and term canonicalization.
 // =========================================================================
 
-/// FunctionSymbols.hs:
+/// FunctionSymbols.hs:138:
 ///     data ACSym = Union | Mult | Xor | NatPlus | ACfct ACfctSym
 #[test]
 fn ac_sym_ord_matches_haskell_declaration() {
@@ -435,7 +435,7 @@ fn no_eq_sym_ord_follows_the_haskell_tuple_field_chain() {
     );
 }
 
-/// FunctionSymbols.hs:
+/// FunctionSymbols.hs:125:
 ///     data NDCstate = IsNDC | NotNDC | IsNDCDiff | IsNDCBoth
 #[test]
 fn ndc_state_ord_matches_haskell_declaration() {

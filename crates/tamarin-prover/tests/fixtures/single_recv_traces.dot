@@ -1,0 +1,16 @@
+digraph "trace_SingleRecv_SL2-AS0-CL0-A1-C1-NB_chain-Send" {
+nodesep="0.3";
+ranksep="0.3";
+node[fontsize="8",fontname="Helvetica",width="0.3",height="0.2"];
+edge[fontsize="8",fontname="Helvetica"];
+n3[shape="record",label="{{<n0> Fr( ~k )}|{<n1> #i : Send[S( ~k )]}|{<n2> Out( ~k )}}",fillcolor="#d5d897",style="filled",fontcolor="black",role="Undefined"];
+n6[shape="record",label="{{<n4> In( ~k )}|{<n5> #j : Recv[R( ~k )]}}",fillcolor="#c3da98",style="filled",fontcolor="black",role="Undefined"];
+n7[label="#vk : coerce[!KU( ~k )]",shape="ellipse"];
+n8[label="#vl : irecv",shape="ellipse"];
+n9[label="#vf.1 : isend",shape="ellipse"];
+n3:n2 -> n8[color="gray30"];
+n8 -> n7[color="orangered2"];
+n9 -> n6:n4[color="gray30"];
+n7 -> n9[color="red",style="dashed"];
+
+}

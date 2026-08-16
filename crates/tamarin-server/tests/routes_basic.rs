@@ -177,7 +177,7 @@ async fn test_robots_txt() {
 async fn test_kill_without_path_returns_400() {
     // Haskell: `/kill` without `?path=...` returns 400 with HTML body
     // "Invalid Arguments / No path to kill specified!".
-    // See `getKillThreadR` in `src/Web/Handler.hs:1422-1440`.
+    // See `getKillThreadR` in `src/Web/Handler.hs:1517-1525`.
     let s = start_server_with_theory("issue193.spthy").await;
     let res = s
         .client
@@ -466,7 +466,7 @@ async fn test_main_message_envelope() {
     let haskell_keys = haskell_capture_keys("main_message.json");
     assert_eq!(rust_keys, haskell_keys);
 
-    // HS `messageSnippet` (Web/Theory.hs:920-931): Signature +
+    // HS `messageSnippet` (Web/Theory.hs:926-937): Signature +
     // Construction/Deconstruction rule sections (NOT restrictions — those
     // live on the rules page).
     let html = v.get("html").and_then(|t| t.as_str()).unwrap_or("");
@@ -502,7 +502,7 @@ async fn test_main_lemma_envelope() {
         title
     );
     // HS `htmlThyPath` renders `TheoryLemma _ -> text "this is a mistake"`
-    // (Web/Theory.hs:1005-1144, see line 1068) — a deliberate upstream quirk; the bare
+    // (Web/Theory.hs:1011-1152, see line 1074) — a deliberate upstream quirk; the bare
     // `main/lemma/<name>` path is never used by the frontend (it always
     // links to `main/proof/<name>`).  We match the oracle verbatim; the
     // HS capture is `{"html":"this is a mistake<br/>\n",...}`.
@@ -520,7 +520,7 @@ async fn test_main_lemma_envelope() {
 #[tokio::test]
 async fn test_main_with_missing_idx_returns_404_html() {
     // Haskell `withTheory` returns 404 HTML for an unknown idx
-    // (see `src/Web/Handler.hs:660-666`).  We mirror that exactly —
+    // (see `src/Web/Handler.hs:662-672`).  We mirror that exactly —
     // the frontend's loading-dialog dismiss / global error handler
     // distinguishes 404 from a JSON envelope.
     let s = start_server_with_theory("issue193.spthy").await;
@@ -723,7 +723,7 @@ async fn test_download_for_local_theory_returns_source_file() {
     assert_eq!(res.status(), 200);
 
     // Haskell uses `application/octet-stream` (see
-    // `getDownloadTheoryR` in `src/Web/Handler.hs:1669-1672` — it
+    // `getDownloadTheoryR` in `src/Web/Handler.hs:1763-1766` — it
     // returns `(typeOctet, source)`).  We mirror that exactly so the
     // frontend's "Save As" UX is bit-for-bit identical.
     let ct = content_type(&res);
@@ -812,7 +812,7 @@ async fn test_reload_returns_redirect_json_same_idx() {
     assert_eq!(rust_keys, haskell_keys);
     let redir = v.get("redirect").and_then(|t| t.as_str()).unwrap_or("");
     // Haskell `postReloadTheoryR` uses `replaceTheory` at the SAME idx
-    // (see `src/Web/Handler.hs:437-447`).  Match exactly — preserves
+    // (see `src/Web/Handler.hs:443-460`).  Match exactly — preserves
     // URLs bookmarked by the user.
     assert!(
         redir.starts_with("/thy/trace/1/overview/help"),

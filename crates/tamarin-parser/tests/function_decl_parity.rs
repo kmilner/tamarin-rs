@@ -26,8 +26,8 @@ fn decl_theory(decl: &str) -> String {
     format!("theory T begin\n\nfunctions: {decl}\n\nend\n")
 }
 
-/// HS `function` reaches the `IsAC` arity `fail` (Signature.hs:220) only
-/// through the `_` case of the conflict check at Signature.hs:212-217, so a
+/// HS `function` reaches the `IsAC` arity `fail` (Parser/Signature.hs:220) only
+/// through the `_` case of the conflict check at Parser/Signature.hs:212-217, so a
 /// name already in the signature reports THAT diagnostic instead.
 #[test]
 fn redeclaration_conflict_outranks_the_ac_arity_check() {
@@ -111,7 +111,7 @@ fn redeclaration_conflict_outranks_the_ac_arity_check() {
          for this function."
     );
 
-    // Macros register as `(k, Private, Destructor, NotNDC)` (Macro.hs:46) and
+    // Macros register as `(k, Private, Destructor, NotNDC)` (Parser/Macro.hs:46) and
     // are searched after the free symbols.
     assert_eq!(
         err(
@@ -141,15 +141,21 @@ fn redeclaration_conflict_outranks_the_ac_arity_check() {
     assert!(parse_theory("theory C begin\n\nfunctions: f/2 [AC], f/2\n\nend\n", &[]).is_ok());
 }
 
-/// Signature.hs:213 exempts a `fst`/`snd` re-declaration at the pair
-/// projections' own shape, and :217 then returns the EXISTING symbol — so the
-/// arity check never runs and `[AC]` is dropped.  The oracle accepts
-/// `fst/1 [AC]` and `snd/1 [AC]` at exit 0 and prints the full theory.
+/// Parser/Signature.hs:213 exempts a `fst`/`snd` re-declaration at the pair
+/// projections' own shape, and :217 then returns the EXISTING symbol
+/// `NoEqUser (f, kp')` — so the arity check never runs, `[AC]` is dropped, and
+/// the whole requested option tuple gives way to the builtin pair projection's
+/// `(1, Public, Constructor, NotNDC)`.  The oracle accepts `fst/1 [AC]` and
+/// `snd/1 [AC]` at exit 0 and prints the full theory.
 #[test]
 fn pair_projection_redeclaration_short_circuits_the_ac_check() {
     for src in [
         "theory D1 begin\n\nfunctions: fst/1 [AC]\n\nend\n",
         "theory D2 begin\n\nfunctions: snd/1 [AC]\n\nend\n",
+        // Every other attribute is discarded the same way; the open theory's
+        // `function:` typing line therefore shows none of them.
+        "theory D1 begin\n\nfunctions: fst/1 [destructor, NDC, NDC-diff]\n\nend\n",
+        "theory D2 begin\n\nfunctions: snd/1 [destructor, NDC, NDC-diff]\n\nend\n",
     ] {
         let thy = parse_theory(src, &[]).expect("pair projection re-declaration is accepted");
         let Some(TheoryItem::Functions(decls)) = thy
@@ -159,7 +165,14 @@ fn pair_projection_redeclaration_short_circuits_the_ac_check() {
         else {
             panic!("no functions item in {src}");
         };
-        assert!(!decls[0].ac, "the `[AC]` attribute is dropped");
+        assert!(!decls[0].ac, "the `[AC]` attribute is dropped: {src}");
+        assert!(!decls[0].private, "privacy comes from `kp'`: {src}");
+        assert!(
+            !decls[0].destructor,
+            "constructability comes from `kp'`: {src}"
+        );
+        assert!(!decls[0].ndc, "the NDC state comes from `kp'`: {src}");
+        assert!(!decls[0].ndc_diff, "the NDC state comes from `kp'`: {src}");
     }
 
     // The exemption tests name, arity AND privacy, so these still conflict.
@@ -185,7 +198,7 @@ fn pair_projection_redeclaration_short_circuits_the_ac_check() {
     );
 }
 
-/// The expectation sets HS `functionType` (Signature.hs:150-161) merges at the
+/// The expectation sets HS `functionType` (Parser/Signature.hs:151-162) merges at the
 /// position where its sub-parsers stop.
 #[test]
 fn function_type_expectation_sets() {
@@ -264,7 +277,7 @@ fn function_type_expectation_sets() {
 /// so whatever follows is left unconsumed and discarded.
 ///
 /// DELIBERATE DIVERGENCE on `endd`/`endx`/`endrule …`.  HS's `symbol_ "end"`
-/// (Parser.hs:246-248) is `try (T.symbol spthy "end")` (Token.hs:272-273), a
+/// (Text/Parser.hs:243,245) is `try (T.symbol spthy "end")` (Token.hs:272-273), a
 /// plain `string` with no word boundary, so it PREFIX-matches the identifier
 /// and the remainder becomes ignored trailing input: the pinned oracle accepts
 /// `… endrule R2: [ ] --[ ]-> [ ]` at exit 0 and silently drops the rule.  This

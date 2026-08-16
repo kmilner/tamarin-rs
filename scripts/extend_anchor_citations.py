@@ -12,7 +12,21 @@ paths etc. are left alone).  Anchors that land in the module header/import
 region, or in files that cannot be resolved uniquely, are left unchanged
 and reported.
 
-Usage: anchor_extend.py [--apply] [--exclude-crate NAME]...
+`--anchor-symbols` additionally writes the declaration's own name into the
+cite as `Foo.hs:150-183#name, see line 162`, the symbol anchor
+`check_hs_cites.py` asserts against the range and `remap_hs_cites.py` carries
+across a bump; see the former's docstring for the syntax.  It is opt-in
+because it changes what the cite claims, from "these lines" to "these lines,
+and they are `name`" -- a stronger claim, and the one that survives a bump
+with its meaning intact.  Only plain identifiers are emitted: a `data`/
+`class`/`instance` head or an operator declaration gets no anchor rather than
+an unverifiable one.
+
+A cite that ALREADY carries a `#symbol` is not an anchor to extend and is
+left exactly as written; rewriting one would push its symbol past the
+`see line` tail, where nothing parses it as an anchor any more.
+
+Usage: anchor_extend.py [--apply] [--anchor-symbols] [--exclude-crate NAME]...
 Default is a dry run printing every planned rewrite.
 """
 import argparse
@@ -27,7 +41,12 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SUB = os.path.join(REPO, "tamarin-prover")
 CRATES = os.path.join(REPO, "crates")
 
-ANCHOR = re.compile(r"([A-Za-z][A-Za-z0-9_/.]*\.hs):(\d+)(?![-\d:])")
+# `#` joins the lookahead so an already-anchored `Foo.hs:162#name` is left
+# alone: extending it would strand the symbol after the `see line` tail.
+ANCHOR = re.compile(r"([A-Za-z][A-Za-z0-9_/.]*\.hs):(\d+)(?![-\d:#])")
+# What `decl_name` returns for a value binding, as opposed to the whole head
+# line it returns for `data`/`class`/`instance` or a `(<$>)` operator.
+PLAIN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_']*\Z")
 KEYWORDS = ("data ", "type ", "newtype ", "class ", "instance ", "foreign ",
             "deriving ", "infixl", "infixr", "infix ")
 HEADERISH = ("module ", "import ", "{-# LANGUAGE", "{-# OPTIONS")
@@ -117,6 +136,9 @@ def resolve(cite, crate, tree, local_hint):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--anchor-symbols", action="store_true",
+                    help="also write the declaration's name as a #symbol "
+                         "anchor (see the module docstring)")
     ap.add_argument("--exclude-crate", action="append", default=[])
     args = ap.parse_args()
 
@@ -192,9 +214,13 @@ def main():
                         return m.group(0)
                     s, e = trim_extent(file_lines[path], s, e)
                     stats["anchor_rewritten"] += 1
+                    tag = ""
+                    if args.anchor_symbols and PLAIN_NAME.match(name):
+                        stats["anchor_symbol_written"] += 1
+                        tag = f"#{name}"
                     if n == s:
-                        return f"{cite}:{s}-{e}"
-                    return f"{cite}:{s}-{e}, see line {n}"
+                        return f"{cite}:{s}-{e}{tag}"
+                    return f"{cite}:{s}-{e}{tag}, see line {n}"
 
                 new_line = ANCHOR.sub(sub, line)
                 if new_line != line:

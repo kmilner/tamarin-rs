@@ -272,13 +272,12 @@ fn filled_entries_carry_their_cells_for_the_layout_engine() {
         .iter()
         .find(|e| e.topic == "Special facts")
         .expect("Special facts entry");
-    let fill = entry.fill.as_ref().expect("fact list carries its cells");
+    let Some(WfFill::Paragraph { info, cells }) = entry.fill.as_ref() else {
+        panic!("fact list carries its cells");
+    };
+    assert_eq!(info, "rule `R' uses disallowed facts on left-hand-side:");
     assert_eq!(
-        fill.info,
-        "rule `R' uses disallowed facts on left-hand-side:"
-    );
-    assert_eq!(
-        fill.cells,
+        *cells,
         vec![
             WfDoc::Fact {
                 lead: "Out(".to_string(),
@@ -301,7 +300,7 @@ fn filled_entries_carry_their_cells_for_the_layout_engine() {
 }
 
 /// HS `ppFact n ts = nestShort' (n ++ "(") ")" (fsep …)`
-/// (Fact.hs:567-572) = `sep [text lead $$ nest n body, text ")"]`
+/// (Model/Fact.hs:567-572) = `sep [text lead $$ nest n body, text ")"]`
 /// (Text/PrettyPrint/Class.hs:218-223).  With NO arguments the `$$` has
 /// nothing to overlap onto the lead's line, so only the `sep` space
 /// survives — the oracle
@@ -472,9 +471,8 @@ fn wf_pair_headed_terms_render_in_angle_form_in_every_check() {
             rule Test: [ In( x %+ pair(a,b) ) ] --[ ]-> [] end",
     );
     assert_eq!(
-        only(&check_theory(&t), "Nat Sorts"),
-        "Nat Sorts\n=========\n\n  \
-             x in term (x%+<a, b>) must be of sort nat\n  \n  \
+        group_bodies(&check_theory(&t), "Nat Sorts"),
+        "  x in term (x%+<a, b>) must be of sort nat\n  \n  \
              <a, b> in term (x%+<a, b>) must be of sort nat"
     );
     // Oracle: `    ff(x, y) = <x, y>`.
@@ -518,7 +516,7 @@ fn wf_lemma_fact_show_form_nests_pairs_right() {
 ///
 /// The sort key is the POST-De-Bruijn `Ord`: `quantify`'s `mapLits`
 /// rebuilds every node with `fApp` after substituting `Bound i`
-/// (Formula.hs:288-291,347-351), so `Bound` precedes `Free` and `Bound i`
+/// (Model/Formula.hs:288-291,347-352), so `Bound` precedes `Free` and `Bound i`
 /// orders by `i` — the reverse of the source order of the binders.  Every
 /// expected string is byte-pinned to the pinned oracle (ef3f0468).
 #[test]
@@ -587,10 +585,7 @@ fn nat_sorts_renders_ac_terms_canonically() {
                  functions: add/2 [AC], zz/1 \
                  rule R: [ In(<a,b,c>) ] --> [ Out( {src} ) ] end"
         ));
-        only(&check_theory(&t), "Nat Sorts")
-            .strip_prefix("Nat Sorts\n=========\n\n")
-            .expect("Nat Sorts body")
-            .to_string()
+        group_bodies(&check_theory(&t), "Nat Sorts")
     };
     assert_eq!(
         bodies("(a*b)*c %+ %1"),
@@ -655,6 +650,20 @@ fn fresh_fact_argument_renders_the_whole_fact_like_prettylnfact() {
     assert_eq!(body("zz(x.1)"), "Fr( zz(x.1) )");
 }
 
+/// The bodies of every `topic` entry joined the way `prettyWfErrorReport`
+/// joins a topic group (`intersperse (text "")` under one header,
+/// Wellformedness.hs:118-125).  For the topics that emit ONE `WfError` per
+/// finding, so `report.len()` keeps HS's `N wellformedness check failed` count.
+fn group_bodies(report: &WfReport, topic: &str) -> String {
+    let hits: Vec<&str> = report
+        .iter()
+        .filter(|e| e.topic == topic)
+        .map(|e| e.message.as_str())
+        .collect();
+    assert!(!hits.is_empty(), "no {topic:?} entry in {report:?}");
+    hits.join("\n  \n")
+}
+
 /// Return the single `WfError` whose topic matches `topic`.
 fn only(report: &WfReport, topic: &str) -> String {
     let hits: Vec<&WfError> = report.iter().filter(|e| e.topic == topic).collect();
@@ -681,11 +690,11 @@ fn nat_sorts_message_format() {
         "theory T begin builtins: natural-numbers \
             rule R: [ Fr(~x) ] --[ ]-> [ Out(%a %+ ~x) ] end",
     );
-    let msg = only(&check_theory(&t), "Nat Sorts");
-    // Header + 2-space-nested single body.
+    // One `WfError` per (t, err), body 2-space-nested, header supplied by
+    // `prettyWfErrorReport`'s topic group.
     assert_eq!(
-        msg,
-        "Nat Sorts\n=========\n\n  ~x in term (~x%+%a) must be of sort nat"
+        group_bodies(&check_theory(&t), "Nat Sorts"),
+        "  ~x in term (~x%+%a) must be of sort nat"
     );
 }
 
@@ -796,9 +805,12 @@ fn lookup_binder_is_not_unbound() {
     }
     let rep = unbound_report(&t2);
     assert_eq!(rep.len(), 1);
+    let Some(WfFill::Paragraph { cells, .. }) = rep[0].fill.as_ref() else {
+        panic!("unbound entry carries its cells: {rep:?}");
+    };
     assert_eq!(
-        rep[0].fill.as_ref().map(|f| f.cells.clone()),
-        Some(vec![WfDoc::Text("w.2".to_string())]),
+        *cells,
+        vec![WfDoc::Text("w.2".to_string())],
         "only the non-binder variable is reported: {rep:?}"
     );
 }

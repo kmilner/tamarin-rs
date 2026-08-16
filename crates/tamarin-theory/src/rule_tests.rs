@@ -95,7 +95,8 @@ fn intruder_predicates() {
 /// declaration order and, within a variant, the fields in declaration
 /// order.  Pin both against a reshuffle: the variant sequence
 /// `ConstrRule < DestrRule < Coerce`, and the `DestrRule` field order of
-/// HS `DestrRule BC.ByteString Int Bool Bool [FunSym]` (Rule.hs:541).
+/// HS `DestrRule BC.ByteString Int Bool Bool [FunSym]`
+/// (Theory/Model/Rule.hs:541).
 #[test]
 fn intr_rule_ac_info_ord_follows_declaration_order() {
     let sym = |n: &[u8]| {
@@ -150,27 +151,23 @@ fn print_extended_position() {
 }
 
 #[test]
-fn reserved_names_include_fresh() {
-    let r = reserved_rule_names();
-    // Matches Haskell reservedRuleNames (Rule.hs):
-    // ["Fresh", "irecv", "isend", "coerce", "fresh", "pub", "iequality"].
-    assert!(r.contains("Fresh"));
-    assert!(r.contains("coerce"));
-    assert!(r.contains("iequality"));
-    assert!(!r.contains("KU"));
+fn reserved_names_match_hs() {
+    // HS `reservedRuleNames` (Model/Rule.hs:1284-1285), in its own order.
+    assert_eq!(
+        RESERVED_RULE_NAMES,
+        [
+            "Fresh",
+            "irecv",
+            "isend",
+            "coerce",
+            "fresh",
+            "pub",
+            "iequality"
+        ]
+    );
 }
 
-fn maude_path() -> Option<String> {
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        return Some(p);
-    }
-    for c in ["/usr/local/bin/maude", "maude"] {
-        if std::path::Path::new(c).exists() {
-            return Some(c.to_string());
-        }
-    }
-    None
-}
+use crate::test_maude::maude_path;
 
 #[test]
 fn unify_ln_fact_eqs_tag_mismatch_no_unifiers() {

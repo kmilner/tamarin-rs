@@ -174,7 +174,7 @@ fn parse_segs(segs: &[String]) -> Option<TheoryPath> {
         "add" => rest.first().map(|n| TheoryPath::Add(n.clone())),
         "delete" => rest.first().map(|n| TheoryPath::Delete(n.clone())),
         "proof" => {
-            // Mirror Haskell `parseProof` (`src/Web/Types.hs:417-456, see line 443`):
+            // Mirror Haskell `parseProof` (`src/Web/Types.hs:424-463, see line 450`):
             //   parseProof (y:ys) = Just (TheoryProof y ys)
             // i.e. the sub-path is taken AS-IS (after `unprefixUnderscore`
             // each segment).  We do NOT pop trailing empty segments:
@@ -188,7 +188,7 @@ fn parse_segs(segs: &[String]) -> Option<TheoryPath> {
             Some(TheoryPath::Proof { lemma, sub })
         }
         "method" => {
-            // Mirror Haskell `parseMethod` (`src/Web/Types.hs:417-456, see line 446`):
+            // Mirror Haskell `parseMethod` (`src/Web/Types.hs:424-463, see line 453`):
             //   parseMethod (y:z:zs) = safeRead z >>= Just . TheoryMethod y zs
             // i.e. the sub-path is taken AS-IS (after `unprefixUnderscore`
             // each segment) — including a single empty trailing

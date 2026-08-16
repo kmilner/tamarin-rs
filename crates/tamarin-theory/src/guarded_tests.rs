@@ -790,13 +790,14 @@ fn simplify_universal_with_quantifier_left_intact() {
 // Haskell-faithfulness invariants for guarded-formula smart ctors.
 //
 // `gconj` / `gdisj` mirror Haskell's smart constructors in
-// `Theory.Constraint.System.Guarded` (Guarded.hs:415-423, see line 418, :432).  They
+// `Theory.Constraint.System.Guarded` (gconj: Guarded.hs:415-423; gdisj:
+// Guarded.hs:426-437).  They
 // SHORT-CIRCUIT on `gtrue`/`gfalse` and dedupe via `nub`.
 // =========================================================================
 
 /// `gtrue` is represented as `Conj []` and `gfalse` as `Disj []`.
 /// This is a Haskell convention (`gtf False = GDisj (Disj [])`,
-/// `gtf True = GConj (Conj [])`, Guarded.hs:395-398).  Many
+/// `gtf True = GConj (Conj [])`, Guarded.hs:397-400).  Many
 /// short-circuit checks rely on it (e.g. `x == gfalse()` in
 /// `gconj`).  If we accidentally encode them differently, every
 /// short-circuit silently breaks.
@@ -816,7 +817,7 @@ fn gtrue_is_empty_conj_and_gfalse_is_empty_disj() {
 /// `gtrue` items.
 #[test]
 fn gconj_of_only_gtrue_items_is_gtrue() {
-    // Guarded.hs:418: `gconj` should collapse all-true conjunctions.
+    // Guarded.hs:422: `gconj`'s `flatten` should collapse all-true conjunctions.
     // Rust impl flattens `Conj` items (gtrue is Conj([])), so all
     // gtrue items dissolve into empty.  Result: `Conj([])` = gtrue.
     let g = gconj(vec![gtrue(), gtrue(), gtrue()]);
@@ -869,7 +870,7 @@ fn gdisj_short_circuits_on_gtrue() {
 }
 
 /// `gconj` deduplicates syntactically-equal items.  Mirrors
-/// Haskell's `nub gfs` (Guarded.hs:415-423, see line 418).  Dedup is ORDER-PRESERVING
+/// Haskell's `nub gfs` (Guarded.hs:415-423, see line 420).  Dedup is ORDER-PRESERVING
 /// (Haskell `Data.List.nub` keeps first occurrence).
 #[test]
 fn gconj_dedupes_syntactic_duplicates() {
@@ -950,7 +951,7 @@ fn gconj_flattens_nested_conj_one_level() {
 
 /// `gdisj` recursively flattens ARBITRARILY deeply nested `Disj`s.
 /// Mirrors HS `gdisj`'s `flatten (GDisj disj) = concatMap flatten $
-/// getDisj disj` (Guarded.hs:423-435), which unwraps every level, not
+/// getDisj disj` (Guarded.hs:426-437, see line 436), which unwraps every level, not
 /// just one — a 5-way `∨` parsed as a binary-Or chain must flatten to a
 /// single 5-alt Disj goal.
 #[test]
@@ -987,7 +988,7 @@ fn gdisj_deeply_nested_disj_flattens_to_5_alts() {
 }
 
 /// Symmetric: `gconj` recursively flattens deeply nested `Conj`s.
-/// Mirrors HS Guarded.hs:413-421 `flatten (GConj conj) = concatMap
+/// Mirrors HS Guarded.hs:415-423, see line 422 `flatten (GConj conj) = concatMap
 /// flatten $ getConj conj`.
 #[test]
 fn gconj_deeply_nested_conj_flattens() {

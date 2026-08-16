@@ -42,8 +42,8 @@ pub struct ProcessAnnotation<V> {
     /// Variable identifying the state cell associated with this op.
     pub state_channel: Option<AnVar<V>>,
     /// Term marking the binding of a state-channel.  HS `isStateChannel ::
-    /// Maybe SapicTerm` (Annotation.hs:48-60, see line 59): the cell identifier this fresh
-    /// `new StateChannel:channel` was introduced for.
+    /// Maybe SapicTerm` (sapic/src/Sapic/Annotation.hs:48-60, see line 59): the
+    /// cell identifier this fresh `new StateChannel:channel` was introduced for.
     pub is_state_channel: Option<SapicTerm>,
 }
 
@@ -101,12 +101,12 @@ impl<V: Clone> ProcessAnnotation<V> {
     }
 
     /// Combine two annotations, matching Haskell's
-    /// `Semigroup (ProcessAnnotation v)` (Annotation.hs:76-86).
+    /// `Semigroup (ProcessAnnotation v)` (sapic/src/Sapic/Annotation.hs:76-86).
     ///
     /// The `AnVar` fields (`lock`, `unlock`, `secret_channel`,
     /// `state_channel`) are combined via `Maybe`'s `<>`, whose inner `AnVar`
-    /// `<>` is right-biased (`(<>) _ b = b`, Annotation.hs:43-44), so when
-    /// both are `Some` the *right* value wins (`other.X.or(self.X)`).
+    /// `<>` is right-biased (`(<>) _ b = b`, sapic/src/Sapic/Annotation.hs:43-44),
+    /// so when both are `Some` the *right* value wins (`other.X.or(self.X)`).
     /// `destructor_equation`/`is_state_channel` use Haskell `mayMerge`
     /// (left-biased on `Just`/`Just`), so they keep the *left* value
     /// (`self.X.or(other.X)`). `pure_state` is OR'ed; `else_branch` is taken
@@ -145,8 +145,9 @@ impl<V: Clone> GoodAnnotation for ProcessAnnotation<V> {
 /// `V` (typically `tamarin_term::lterm::LVar`).
 pub type AnnotatedProcess<V> = Process<ProcessAnnotation<V>, SapicLVar>;
 
-/// `toAnProcess`: lift a parsed process into a translation annotation by
-/// wrapping the parsed annotation in `ProcessAnnotation`.
+/// `toAnProcess` (sapic/src/Sapic/Annotation.hs:135-139): lift a parsed process into a
+/// translation annotation by wrapping the parsed annotation in
+/// `ProcessAnnotation`.
 pub fn to_annotated<V: Clone>(
     p: Process<ProcessParsedAnnotation, SapicLVar>,
 ) -> Process<ProcessAnnotation<V>, SapicLVar> {
@@ -181,8 +182,9 @@ pub fn to_annotated<V: Clone>(
 }
 
 /// Drop the translation annotations and recover the parsed-stage form.
-// Intentionally retained: faithful HS port of `toProcess`; the symmetric
-// inverse of `to_annotated`, no non-test caller yet.
+// Intentionally retained: faithful port of HS `toProcess`
+// (sapic/src/Sapic/Annotation.hs:141-144), the symmetric inverse of
+// `to_annotated`; no non-test caller yet.
 pub fn to_parsed<V>(
     p: Process<ProcessAnnotation<V>, SapicLVar>,
 ) -> Process<ProcessParsedAnnotation, SapicLVar> {

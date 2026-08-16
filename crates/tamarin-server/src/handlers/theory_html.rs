@@ -46,7 +46,7 @@ pub fn overview_page(entry: &TheoryEntry, path: &TheoryPath) -> String {
 }
 
 fn header(entry: &TheoryEntry) -> String {
-    // Byte-faithful port of HS `headerTpl` (Web/Hamlet.hs:166-198): the
+    // Byte-faithful port of HS `headerTpl` (Web/Hamlet.hs:166-191): the
     // Reload-file and Append-modified-lemmas `<li>`s are gated on
     // `isLocalOrigin origin`.  Attributes are rendered exactly as hamlet
     // writes them: `@{RootR}` URL interpolations are unquoted (`href=/`,
@@ -92,9 +92,9 @@ fn header(entry: &TheoryEntry) -> String {
 }
 
 /// Left-pane proof-state tree.  Faithful port of Haskell's `theoryIndex`
-/// (`src/Web/Theory.hs:369-416`) → `lemmaIndex` (`src/Web/Theory.hs:296-329`)
-/// → `proofIndex` (`src/Web/Theory.hs:223-257`) → `prettyProofWith`
-/// (`Theory/Proof.hs:1078-1096`).  The frame is
+/// (`src/Web/Theory.hs:377-422`) → `lemmaIndex` (`src/Web/Theory.hs:302-335`)
+/// → `proofIndex` (`src/Web/Theory.hs:229-266`) → `prettyProofWith`
+/// (`Theory/Proof.hs:1054-1075`).  The frame is
 ///
 /// ```text
 /// theory <help-link>Name</help-link> begin
@@ -116,7 +116,7 @@ fn proof_state(entry: &TheoryEntry) -> String {
     // + `renderHtmlDoc`: every keyword is an `hl_keyword` span, every formula
     // operator an `hl_operator` span, text is entity-escaped and the result is
     // postprocessed once (leading spaces → `&nbsp;`, each line → `<br/>`).
-    // Build the `foldr1 ($-$)` element list (Web/Theory.hs:372-392) as a
+    // Build the `foldr1 ($-$)` element list (Web/Theory.hs:378-398) as a
     // `\n`-separated string under the guard, then postprocess.
     let _html = HtmlDocGuard::enable();
     let kw = |s: &str| hpj::keyword_(s).render();
@@ -216,7 +216,7 @@ fn cases_info(n_cases: usize, n_chains: usize) -> String {
     format!("({} cases, {})", n_cases, chain_info)
 }
 
-/// HS `lemmaIndex` (`src/Web/Theory.hs:296-329`): the lemma header
+/// HS `lemmaIndex` (`src/Web/Theory.hs:302-335`): the lemma header
 /// (`lemma Name [attrs]: <tq> "<formula>"`), the `edit lemma`/`delete lemma`
 /// links, the `proofIndex` tree, then a trailing `add lemma`.  The header +
 /// edit/delete are wrapped by HS in `markStatus (root color)` — a `hl_*` span
@@ -233,7 +233,7 @@ fn lemma_index(
     };
     let attrs = render_attrs(&l.attributes, &entry.typed_theory.in_file);
     // HS renders the quantifier + formula as `nest 2 (sep [tq, doubleQuotes
-    // (prettyLNFormula f)])` (Web/Theory.hs:301-306) through the
+    // (prettyLNFormula f)])` (Web/Theory.hs:309-313) through the
     // HtmlDoc/HughesPJ engine: (1) AC argument lists (`++`/`*`/xor) are
     // stored AC-canonically (fAppAC flatten+sort, Term/Raw.hs:117-129);
     // (2) layout runs at the web width 100/67 (renderHtmlDoc,
@@ -256,12 +256,12 @@ fn lemma_index(
     // `nest 2 (sep [prettyTraceQuantifier tq, doubleQuotes (prettyLNFormula f)])`
     // — rendered under the active `HtmlDocGuard` (proof_state's), so operators
     // become `hl_operator` spans and the formula text is entity-escaped, while
-    // the line-wrapping still measures escaped fill-widths at WEB_LINE_LENGTH/
-    // WEB_RIBBON (the widths lib.rs installs) exactly as HS `renderHtmlDoc`.
+    // the line-wrapping still measures escaped fill-widths at DEFAULT_LINE_LENGTH/
+    // DEFAULT_RIBBON (the widths lib.rs installs) exactly as HS `renderHtmlDoc`.
     let formula_hdr = tamarin_theory::pretty_formula::lemma_header_line(tq, &canon);
     let n_url = url_path_escape(&l.name);
     use tamarin_theory::pretty_hpj as hpj;
-    // HS `lemmaIndex` (Web/Theory.hs:301-321), a single Doc joined by `$-$`
+    // HS `lemmaIndex` (Web/Theory.hs:308-320), a single Doc joined by `$-$`
     // (newline).  For a freshly-loaded (Unmarked) lemma `markStatus` is the
     // identity, so no wrapping colour span:
     //   kwLemma <-> prettyLemmaName l <> colon           -- "lemma NAME:"
@@ -340,7 +340,7 @@ enum StepColor {
     Yellow,
 }
 
-/// HS `annotateLemmaProof.interpret` (`src/Web/Theory.hs:2183-2192`): map the
+/// HS `annotateLemmaProof.interpret` (`src/Web/Theory.hs:2277-2285`): map the
 /// aggregate subtree [`ProofStatus`] + trace quantifier to a highlight colour.
 fn interpret_color(tq: TraceQuantifier, status: ProofStatus) -> StepColor {
     use ProofStatus::*;
@@ -358,7 +358,7 @@ fn interpret_color(tq: TraceQuantifier, status: ProofStatus) -> StepColor {
     }
 }
 
-/// HS `markStatus (fst psInfo)` (`src/Web/Theory.hs:2170-2175`): the span
+/// HS `markStatus (fst psInfo)` (`src/Web/Theory.hs:2241-2246`): the span
 /// `prettyCase` wraps each structural keyword (`by`/`next`/`qed`/`case <name>`)
 /// in, keyed on the node's `(Maybe System, ProofStepColor)`:
 ///   (Nothing, _)       -> hl_superfluous   (unannotated / replayed verbatim)
@@ -379,7 +379,7 @@ fn mark_wrap(cx: &PpCtx, node: &ProofNode) -> (&'static str, &'static str) {
     }
 }
 
-/// HS `prettyProofWith.ppPrf` / `ppCases` (`Theory/Proof.hs:1080-1096`):
+/// HS `prettyProofWith.ppPrf` / `ppCases` (`Theory/Proof.hs:1062-1071`):
 /// dispatch on the node's children shape.  `depth` counts the named-case
 /// `nest 2` levels the subtree sits under (HS `ppCase`), which shifts the
 /// method text's wrap budget — see `pp_step`.
@@ -434,7 +434,7 @@ fn pp_prf(out: &mut String, cx: &PpCtx, path: &[String], node: &ProofNode, depth
     }
 }
 
-/// HS `prettyProofWith.ppCase` (`Theory/Proof.hs:1094-1096`):
+/// HS `prettyProofWith.ppCase` (`Theory/Proof.hs:1073-1075`):
 /// `nest 2 $ (prettyCase (root prf) (kwCase <-> name)) $-$ ppPrf prf`.  The
 /// `case <name>` keyword is wrapped by HS in `markStatus`, a `hl_*` span the
 /// normalizer unwraps, so we emit it plain.  Each named case adds one
@@ -468,12 +468,12 @@ fn pp_case(
     pp_prf(out, cx, &child_path, child, depth + 1);
 }
 
-/// HS `proofIndex.ppStep` (`src/Web/Theory.hs:232-257`): a coloured
+/// HS `proofIndex.ppStep` (`src/Web/Theory.hs:241-266`): a coloured
 /// `proof-step` link carrying the pretty method, plus (unless the method is
 /// `Sorry`) an empty `remove-step` link at the same path.  An unannotated
 /// step (HS `psInfo == Nothing`) renders as a plain `hl_superfluous` span
 /// instead of the proof-step link — but the `remove-step` link is appended
-/// OUTSIDE that case split (`<>`, Web/Theory.hs:242-244), so it is emitted
+/// OUTSIDE that case split (`<>`, Web/Theory.hs:248-250), so it is emitted
 /// for unannotated non-`Sorry` steps too.
 ///
 /// The method text is `prettyProofMethod` laid out INSIDE the tree Doc
@@ -492,7 +492,7 @@ fn pp_step(
     depth: usize,
     by_prefix: bool,
 ) {
-    use tamarin_theory::pretty_hpj::{self as hpj, Doc, WEB_LINE_LENGTH, WEB_RIBBON};
+    use tamarin_theory::pretty_hpj::{self as hpj, Doc, DEFAULT_LINE_LENGTH, DEFAULT_RIBBON};
     // Render `("by "? <> prettyProofMethod)` at `nest (2*depth)` under the
     // ACTIVE `HtmlDocGuard` (proof_state's), so the method carries its `hl_*`
     // spans and the wrap budget accounts for the `by ` offset exactly as HS.
@@ -504,7 +504,7 @@ fn pp_step(
             doc = Doc::text("by ").beside(doc);
         }
         doc.nest((2 * depth) as isize)
-            .render_with(WEB_LINE_LENGTH, WEB_RIBBON)
+            .render_with(DEFAULT_LINE_LENGTH, DEFAULT_RIBBON)
     };
     // Strip the first line's nest indent (and the sizing `by `) so the `<a>`
     // wraps only the method text; continuation lines keep their absolute
@@ -516,7 +516,7 @@ fn pp_step(
     }
     // Leading indent for this line (HS `nest 2` per named case).  The `by `
     // prefix is HS `prettyCase ps (kwBy <> text " ")` = `markStatus ps` wrapping
-    // `keyword_ "by"` PLUS its trailing space (Theory/Proof.hs:1080-1101, see line 1084).
+    // `keyword_ "by"` PLUS its trailing space (Theory/Proof.hs:1062-1075, see line 1065).
     let ind = "  ".repeat(depth);
     out.push_str(&ind);
     if by_prefix {
@@ -531,44 +531,34 @@ fn pp_step(
     );
     if !node.annotated {
         // `superfluousStep = withTag "span" [("class","hl_superfluous")] ppMethod`.
-        // HS appends `removeStep` regardless of the annotation branch
-        // (Web/Theory.hs:242-244) — only a `Sorry` method skips it.  Seen on
-        // noise secrecy_4_passiveINpsk1_proof.spthy: the kept-verbatim
+        // Seen on noise secrecy_4_passiveINpsk1_proof.spthy: the kept-verbatim
         // (unannotated) subtrees under drifted nested split_case steps carry
         // one empty remove-step anchor per node in HS's /overview/help.
-        out.push_str(&format!("<span class=\"hl_superfluous\">{}</span>", label));
-        if !matches!(node.method, ProofMethod::Sorry(_)) {
-            out.push_str(&format!(
-                "<a class=\"internal-link remove-step\" href=\"{url}\"></a>",
-                url = url
-            ));
-        }
-        return;
-    }
-    let color = interpret_color(cx.tq, proof_status(node));
-    let cls = match color {
-        StepColor::Unmarked => "sorry-step",
-        StepColor::Green => "hl_good",
-        StepColor::Red => "hl_bad",
-        StepColor::Yellow => "hl_medium",
-    };
-    out.push_str(&format!(
-        "<a class=\"internal-link proof-step {cls}\" href=\"{url}\">{label}</a>",
-        cls = cls,
-        url = url,
-        label = label
-    ));
-    // `invalidatedStep`: an `Invalidated` step also gets a `verify it` link.
-    if color == StepColor::Yellow && matches!(node.method, ProofMethod::Invalidated) {
+        out.push_str(&format!("<span class=\"hl_superfluous\">{label}</span>"));
+    } else {
+        let color = interpret_color(cx.tq, proof_status(node));
+        let cls = match color {
+            StepColor::Unmarked => "sorry-step",
+            StepColor::Green => "hl_good",
+            StepColor::Red => "hl_bad",
+            StepColor::Yellow => "hl_medium",
+        };
         out.push_str(&format!(
-            " <a class=\"internal-link hl_medium\" href=\"/thy/trace/{idx}/verify/proof/{lemma}\">verify it</a>",
-            idx = cx.idx, lemma = url_path_escape(cx.lemma)));
+            "<a class=\"internal-link proof-step {cls}\" href=\"{url}\">{label}</a>"
+        ));
+        // `invalidatedStep`: an `Invalidated` step also gets a `verify it` link.
+        if color == StepColor::Yellow && matches!(node.method, ProofMethod::Invalidated) {
+            out.push_str(&format!(
+                " <a class=\"internal-link hl_medium\" href=\"/thy/trace/{idx}/verify/proof/{lemma}\">verify it</a>",
+                idx = cx.idx, lemma = url_path_escape(cx.lemma)));
+        }
     }
-    // `<> case psMethod step of Sorry _ -> emptyDoc; _ -> removeStep`.
+    // `<> case psMethod step of Sorry _ -> emptyDoc; _ -> removeStep`, appended
+    // OUTSIDE the annotation case split (Web/Theory.hs:248-250), so an
+    // unannotated non-`Sorry` step gets one too.
     if !matches!(node.method, ProofMethod::Sorry(_)) {
         out.push_str(&format!(
-            "<a class=\"internal-link remove-step\" href=\"{url}\"></a>",
-            url = url
+            "<a class=\"internal-link remove-step\" href=\"{url}\"></a>"
         ));
     }
 }
@@ -615,7 +605,7 @@ pub fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> String {
         TheoryPath::Rules => rules_html(entry),
         TheoryPath::Message => message_html(entry),
         TheoryPath::Tactic => {
-            // HS `tacticSnippet` (Web/Theory.hs:934-940) =
+            // HS `tacticSnippet` (Web/Theory.hs:940-946) =
             //   ppSection "Tactic(s)" (prettyTactic <$> _thyTactic)
             // ppSection h s = withTag "h2" [] (text h) $$ withTag "p"
             //   [("class","monospace rules")] (vcat (intersperse (text "") s))
@@ -639,23 +629,23 @@ pub fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> String {
             ))])
         }
         // HS renders `text "this is a mistake"` for the bare lemma path
-        // (`htmlThyPath` `TheoryLemma _`, Web/Theory.hs:1005-1144, see line 1068) — the UI never
+        // (`htmlThyPath` `TheoryLemma _`, Web/Theory.hs:1011-1150, see line 1074) — the UI never
         // navigates here (it uses the proof path); mirror it verbatim.
         TheoryPath::Lemma(_) => "this is a mistake".into(),
         TheoryPath::Proof { lemma, sub } => proof_html(entry, lemma, sub),
         TheoryPath::Method { lemma, sub, .. } => proof_html(entry, lemma, sub),
         TheoryPath::Source { kind, .. } => sources_html(entry, kind),
         // HS `htmlThyPath` arms `TheoryEdit`/`TheoryAdd`/`TheoryDelete`
-        // (`src/Web/Theory.hs:1025-1133`).
+        // (`src/Web/Theory.hs:1031-1139`).
         TheoryPath::Edit(name) => edit_lemma_html(entry, name),
         TheoryPath::Add(name) => add_lemma_html(name),
         TheoryPath::Delete(name) => delete_lemma_html(name),
     }
 }
 
-/// HS `htmlThyPath (TheoryEdit name)` (`src/Web/Theory.hs:1025-1065`).  The
+/// HS `htmlThyPath (TheoryEdit name)` (`src/Web/Theory.hs:1031-1072`).  The
 /// textarea holds the lemma's `_lPlaintext` (HS `getLemmaPlaintext`,
-/// `src/Web/Handler.hs:178-187`); a missing lemma falls back to the same
+/// `src/Web/Handler.hs:184-193`); a missing lemma falls back to the same
 /// "Enter your new Lemma" default as Add.  `rows = 2 + (#newlines in plaintext)`
 /// (HS `textHeight`).
 fn edit_lemma_html(entry: &TheoryEntry, name: &str) -> String {
@@ -693,7 +683,7 @@ fn edit_lemma_html(entry: &TheoryEntry, name: &str) -> String {
     )
 }
 
-/// HS `htmlThyPath (TheoryAdd name)` (`src/Web/Theory.hs:1103-1133`).  The
+/// HS `htmlThyPath (TheoryAdd name)` (`src/Web/Theory.hs:1109-1139`).  The
 /// textarea is always the literal "Enter your new Lemma" (HS passes
 /// `lname = Nothing` for Add, so `getLemmaPlaintext` returns the default).
 fn add_lemma_html(name: &str) -> String {
@@ -719,7 +709,7 @@ fn add_lemma_html(name: &str) -> String {
     )
 }
 
-/// HS `htmlThyPath (TheoryDelete name)` (`src/Web/Theory.hs:1070-1101`).
+/// HS `htmlThyPath (TheoryDelete name)` (`src/Web/Theory.hs:1076-1107`).
 fn delete_lemma_html(name: &str) -> String {
     let esc_name = html_escape(name);
     format!(
@@ -753,7 +743,7 @@ const NOSCRIPT_WARNING: &str =
 const WRAP_TEXT_STYLE: &str =
     "<style>.wrap-text li {white-space: normal;\nword-wrap: break-word;}</style>";
 
-/// HS `helpHtml` (`src/Web/Theory.hs:1187-1285`): the static Quick-introduction
+/// HS `helpHtml` (`src/Web/Theory.hs:1193-1291`): the static Quick-introduction
 /// and keyboard-shortcut help page, prefixed by the `Theory: NAME (Loaded at TIME
 /// from ORIGIN) ERRORS` env line.  The env line's `(Loaded at ...)` parenthetical
 /// is stripped by the parity normalizer (`norm_env`) on both sides, so its
@@ -768,7 +758,7 @@ fn help_html(entry: &TheoryEntry) -> String {
         crate::state::TheoryOrigin::Interactive => "Interactive".to_string(),
     };
     let time = entry.loaded_at.format("%H:%M:%S").to_string();
-    // HS `helpHtml` (Web/Theory.hs:1187-1285) is a `$newline never` Hamlet
+    // HS `helpHtml` (Web/Theory.hs:1193-1291) is a `$newline never` Hamlet
     // template returned directly as `Html` (NOT through `renderHtmlDoc`), so it
     // emits a single line with no `<br/>`.  The env line carries the theory
     // name + load time/origin + wellformedness banner; the rest is a fixed
@@ -794,7 +784,7 @@ const HELP_STATIC: &str = r#"<div id="help"><h3>Quick introduction</h3><noscript
 /// If a live [`ProofState`] is already built, use the actual tree;
 /// otherwise fall back to the lemma's static info plus a build hint.
 pub fn proof_html(entry: &TheoryEntry, lemma: &str, sub: &[String]) -> String {
-    // HS `htmlThyPath` for `TheoryProof l p` (Web/Theory.hs:1019-1023):
+    // HS `htmlThyPath` for `TheoryProof l p` (Web/Theory.hs:1025-1029):
     //   pp $ fromMaybe (text "No such lemma or proof path.") $ do
     //     lemma <- lookupLemma l thy
     //     subProofSnippet ... l p (getProofContext lemma thy)
@@ -840,7 +830,7 @@ pub fn proof_html(entry: &TheoryEntry, lemma: &str, sub: &[String]) -> String {
 
 use tamarin_theory::rule::{IntrRuleAC, IntrRuleACInfo};
 
-/// HS `isConstrRule` for the message-page classification (Model/Rule.hs:684-691):
+/// HS `isConstrRule` for the message-page classification (Model/Rule.hs:707-714):
 /// `_crConstruct` = ConstrRule | FreshConstr | PubConstr | NatConstr | Coerce.
 fn is_constr_intr(info: &IntrRuleACInfo) -> bool {
     matches!(
@@ -853,7 +843,7 @@ fn is_constr_intr(info: &IntrRuleACInfo) -> bool {
     )
 }
 
-/// HS `isDestrRule` (Model/Rule.hs:671-675): `_crDestruct` = DestrRule | IEquality.
+/// HS `isDestrRule` (Model/Rule.hs:694-698): `_crDestruct` = DestrRule | IEquality.
 fn is_destr_intr(info: &IntrRuleACInfo) -> bool {
     matches!(
         info,
@@ -862,7 +852,7 @@ fn is_destr_intr(info: &IntrRuleACInfo) -> bool {
 }
 
 /// HS `ppSection header s = withTag "h2" [] (text header) $$ withTag "p"
-/// [("class","monospace rules")] body` (Web/Theory.hs:928-931), rendered
+/// [("class","monospace rules")] body` (Web/Theory.hs:934-937), rendered
 /// through the `HtmlDoc` transformer.  Returns the pane fragment BEFORE
 /// `postprocessHtmlDoc` (the caller `vcat`-joins fragments with `\n` and
 /// postprocesses once): `<h2>HEADER</h2>` on its own line (from `$$`), then the
@@ -879,7 +869,7 @@ fn section_fragment(header: &str, class: &str, body: &str) -> String {
     )
 }
 
-/// HS `ppWithHeader` (Web/Theory.hs:912-917): like [`section_fragment`] but the
+/// HS `ppWithHeader` (Web/Theory.hs:918-923): like [`section_fragment`] but the
 /// whole section is `emptyDoc` (omitted from the `vcat`) when `body` is empty
 /// (`caseEmptyDoc emptyDoc … body`).
 fn with_header_fragment(header: &str, class: &str, body: &str) -> Option<String> {
@@ -900,11 +890,11 @@ fn assemble_pane(fragments: Vec<Option<String>>) -> String {
     tamarin_theory::pretty_hpj::postprocess_html(&pieces.join("\n"))
 }
 
-/// HS `messageSnippet` (Web/Theory.hs:920-931): Signature +
+/// HS `messageSnippet` (Web/Theory.hs:926-937): Signature +
 /// Construction/Deconstruction rule sections.
 fn message_html(entry: &TheoryEntry) -> String {
     // HS renders `messageSnippet` through the `HtmlDoc Doc` transformer (same
-    // `pp = renderHtmlDoc` dispatch as `rulesSnippet`, Web/Theory.hs:1014-1015):
+    // `pp = renderHtmlDoc` dispatch as `rulesSnippet`, Web/Theory.hs:1147-1150):
     // every `text`/`char` is entity-escaped + measured escaped, keywords/
     // operators become `hl_*` spans, and the whole doc is postprocessed
     // (`<br/>`/`&nbsp;`).  Enable HtmlDoc mode for the pane build.
@@ -950,7 +940,7 @@ fn message_html(entry: &TheoryEntry) -> String {
     ])
 }
 
-/// HS `showInjFact` (Web/Theory.hs:906-910): `showFactTag tag ++ "(" ++
+/// HS `showInjFact` (Web/Theory.hs:912-916): `showFactTag tag ++ "(" ++
 /// intercalate "," ("id":positions) ++ ")"`.
 fn show_inj_fact(
     tag: &tamarin_theory::fact::FactTag,
@@ -974,10 +964,10 @@ fn show_inj_fact(
     format!("{}({})", head, parts.join(","))
 }
 
-/// HS `rulesSnippet` (Web/Theory.hs:887-917).
+/// HS `rulesSnippet` (Web/Theory.hs:893-923).
 fn rules_html(entry: &TheoryEntry) -> String {
     // HS renders `rulesSnippet` through the `HtmlDoc Doc` transformer
-    // (`HtmlDocument d => ClosedTheory -> d`, Web/Theory.hs:887-917, laid out by
+    // (`HtmlDocument d => ClosedTheory -> d`, Web/Theory.hs:893-923, laid out by
     // `renderHtmlDoc`): every `text`/`char` is entity-escaped + measured
     // escaped, keywords/operators/comments become `hl_*` spans, and the whole
     // doc is postprocessed.  The batch `--prove` theory printer calls the SAME
@@ -1006,7 +996,7 @@ fn rules_html(entry: &TheoryEntry) -> String {
         // `extraACRules` = `_crProtocol` not already in `theoryRules` (ISend,
         // IRecv).  HS `prettyIntruderRuleAC r = prettyRuleAC r $--$ nest 2
         // (multiComment_ ["has exactly the trivial AC variant"]) $--$ text ""`
-        // (Web/Theory.hs:887-917, see line 911): body, blank line, indent-2 comment, blank line,
+        // (Web/Theory.hs:893-923, see line 917): body, blank line, indent-2 comment, blank line,
         // trailing empty line.  Rendered as a string that is `vcat`-joined
         // (`\n`) with the other rules below.
         let comment = multi_comment_(&["has exactly the trivial AC variant"]).render();
@@ -1027,7 +1017,7 @@ fn rules_html(entry: &TheoryEntry) -> String {
     let mut msr_parts = extra_ac;
     msr_parts.extend(proto_rules);
     let msr_body = msr_parts.join("\n");
-    // `vsep $ map prettyRestriction` (Web/Theory.hs:887-917, see line 895) = `foldr ($--$)` =
+    // `vsep $ map prettyRestriction` (Web/Theory.hs:893-923, see line 901) = `foldr ($--$)` =
     // blank line between restrictions.
     let restr_body =
         tamarin_theory::pretty_theory::web_restrictions(&entry.parser_theory, &entry.typed_theory)
@@ -1056,13 +1046,14 @@ fn rules_html(entry: &TheoryEntry) -> String {
     ])
 }
 
-/// HS `reqCasesSnippet` + `htmlSource` (Web/Theory.hs:820-879): the raw/refined
+/// HS `reqCasesSnippet` (Web/Theory.hs:883-885) + `htmlSource`
+/// (Web/Theory.hs:826-851): the raw/refined
 /// source-case listing.  The `src_idx`/`case_idx` URL fields are ignored (HS
 /// `TheorySource kind _ _` renders the whole `getSource kind thy` list); they
 /// only address the per-case interactive graph.
 fn sources_html(entry: &TheoryEntry, kind: &SourceKind) -> String {
     // HS renders `reqCasesSnippet = vcat (htmlSource <$> …)` through the
-    // `HtmlDoc Doc` transformer + `renderHtmlDoc` (Web/Theory.hs:1005-1144, see line 1016): the
+    // `HtmlDoc Doc` transformer + `renderHtmlDoc` (Web/Theory.hs:1011-1150, see line 1023): the
     // goal headers, per-case sequents (`pretty_non_graph_system`) and all
     // structural tags are entity-escaped + span-marked and postprocessed once.
     let _html = tamarin_theory::pretty_hpj::HtmlDocGuard::enable();
@@ -1219,7 +1210,7 @@ fn nth_case_system(
     sources.get(src_nth)?.case_system_at(case_nth)
 }
 
-/// HS `casesInfo kind` (Web/Theory.hs:399-406): `(nCases, chainInfo)` where
+/// HS `casesInfo kind` (Web/Theory.hs:405-412): `(nCases, chainInfo)` where
 /// `nCases = length (getSource kind thy)` and `nChains = sum $ map (sum .
 /// unsolvedChainConstraints)`.  Rendered as `(N cases, deconstructions
 /// complete)` or `(N cases, K partial deconstructions left)`.
@@ -1236,7 +1227,7 @@ fn source_case_counts(entry: &TheoryEntry, want_refined: bool) -> (usize, usize)
     (n_cases, n_chains)
 }
 
-/// HS `htmlSource` (Web/Theory.hs:820-845) for a single [`Source`] — returns
+/// HS `htmlSource` (Web/Theory.hs:826-851) for a single [`Source`] — returns
 /// the pre-`postprocessHtmlDoc` fragment (the caller `vcat`-joins with `\n`
 /// then postprocesses once).  Must be called under an [`HtmlDocGuard`] so the
 /// goal + sequent render escaped + span-marked.

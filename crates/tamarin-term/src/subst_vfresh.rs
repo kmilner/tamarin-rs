@@ -146,7 +146,7 @@ fn rename_term_drop_hint<C: Ord + Clone>(
                 .collect();
             // Route through the AC/C-sorting smart constructor, matching
             // HS `mapFrees f@(Arbitrary _) (FApp o l) = fApp o <$> ...`
-            // (LTerm.hs:733-734).  Renaming assigns fresh idxs by first
+            // (LTerm.hs:790).  Renaming assigns fresh idxs by first
             // appearance, so an AC/C arg list sorted under the OLD vars
             // can become unsorted under the new ones; `fApp` re-sorts.
             crate::term::f_app(*sym, new_args)
@@ -257,7 +257,7 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
     /// `varsRangeVFresh self` (HS: `renameFreshAvoiding s2 (varsRangeVFresh s)`).
     /// The shift = freshStart - min(idx of vs_new); applied to each var in
     /// vs_new uniformly, preserving relative ordering — mirrors HS's
-    /// `rename` semantics (LTerm.hs:607-614).
+    /// `rename` semantics (LTerm.hs:638-645).
     pub fn extend_with_renaming(&self, vs: &[LVar]) -> Self {
         // Domain probes go straight to the map (`image_of` = `BTreeMap::get`)
         // and the first-appearance dedup uses a hash `seen` set: both are
@@ -323,7 +323,7 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
     /// uniformly via HS's `rename` shift (freshStart - minVar), where
     /// `freshStart` = `succ . maxIdx . avoid` and `minVar`/`maxVar` are
     /// across the bundled range terms.  Mirrors
-    /// `Term.Substitution.freshToFreeAvoidingFast` (Substitution.hs:77-92).
+    /// `Term.Substitution.freshToFreeAvoidingFast` (Term/Substitution.hs:77-81).
     ///
     /// Differs from `fresh_to_free_avoiding` (preserve-set form): this one
     /// uses HS's UNIFORM SHIFT (preserving relative ordering of range-var
@@ -376,9 +376,9 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
     /// obtained from `alloc_idxs` (a MonadFresh substitute — typically
     /// wrapping `MaudeHandle::reserve_idxs`).  Implements the
     /// `freshToFree`/`freshToFreeAvoiding` algorithm
-    /// (Substitution.hs:54-72): sort by image size + per-binding name
+    /// (Term/Substitution.hs:54-72): sort by image size + per-binding name
     /// hints + `importBinding` caching.  (The uniform-shift
-    /// `freshToFreeAvoidingFast` at Substitution.hs:77-81 is instead
+    /// `freshToFreeAvoidingFast` at Term/Substitution.hs:77-81 is instead
     /// implemented by `fresh_to_free_uniform_shift`.)
     ///
     /// The reduction layer composes the result into the eq-store's
@@ -395,7 +395,7 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
     /// `freshToFreeAvoiding`: convert VFresh → free subst.
     ///
     /// Mirrors Haskell `freshToFreeAvoiding s t = freshToFree s
-    /// \`evalFreshAvoiding\` t` (Substitution.hs:71-72, built on
+    /// \`evalFreshAvoiding\` t` (Term/Substitution.hs:71-72, built on
     /// `freshToFree` at 54-66): sorts entries by image size and applies
     /// the per-binding name-hint rule.  It renames every range var
     /// unconditionally (HS has no "preserve" concept — `evalFreshAvoiding`
@@ -407,9 +407,9 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
     ) -> crate::subst::Subst<C, LVar> {
         use crate::subst::Subst;
         // HS has NO preserve concept in ANY freshToFree* variant:
-        //   - `freshToFree` (Substitution.hs:54-66) imports EVERY range
+        //   - `freshToFree` (Term/Substitution.hs:54-66) imports EVERY range
         //     var to a brand-new fresh var via `importBinding`;
-        //   - `freshToFreeAvoiding` (:69-71) is just
+        //   - `freshToFreeAvoiding` (:71-72) is just
         //     `freshToFree s \`evalFreshAvoiding\` t` — `evalFreshAvoiding`
         //     only SEEDS the fresh counter above t's max idx, it never
         //     skips a variable;
@@ -417,10 +417,10 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
         //     via `rename ... \`evalFreshAvoiding\` t` — same.
         // We therefore rename every range var unconditionally.  HS maintains
         // the invariant that VFresh ranges are pure-fresh (composeVFresh's
-        // `extendWithRenaming`, Substitution.hs:40-47), so keeping a range
+        // `extendWithRenaming`, Term/Substitution.hs:41-47), so keeping a range
         // var's identity would be unsound: it could fuse a Maude witness with
         // an unrelated live system var that happens to share (name, sort, idx).
-        // HS-faithful port (Substitution.hs:54-66):
+        // HS-faithful port (Term/Substitution.hs:54-66):
         //
         //   freshToFree subst = (`evalBindT` noBindings) $ do
         //       let slist = sortOn (size . snd) $ substToListVFresh subst
@@ -497,7 +497,7 @@ fn shifted_idx(idx: u64, shift: i128) -> u64 {
 /// isn't yet in the rename map, allocate a fresh idx for it and
 /// record the binding.  `outer_is_singleton_var` + `lv` together
 /// implement HS's `namehint v = if (Lit (Var _) == t) then lvarName lv
-/// else lvarName v` rule (Substitution.hs:64-66).
+/// else lvarName v` rule (Term/Substitution.hs:64-66).
 fn rename_lvars_with_hint<C: Ord + Clone, F: FnMut(u64) -> u64>(
     t: &VTerm<C, LVar>,
     rename: &mut BTreeMap<LVar, LVar>,
@@ -548,7 +548,7 @@ fn rename_lvars_with_hint<C: Ord + Clone, F: FnMut(u64) -> u64>(
 }
 
 /// `freeToFreshRaw`: re-tag a free `Subst`'s entries as a `SubstVFresh`.
-/// Mirrors HS `Term.Substitution.freeToFreshRaw` (Substitution.hs:84-85):
+/// Mirrors HS `Term.Substitution.freeToFreshRaw` (Term/Substitution.hs:84-85):
 /// considers all variables in the range as fresh.  No structural change —
 /// just a type-level reinterpretation, so the owned map moves across
 /// wholesale (`SubstVFresh::from_list` does no trivial-drop; a
@@ -557,7 +557,7 @@ pub fn free_to_fresh_raw<C: Ord + Clone>(s: crate::subst::Subst<C, LVar>) -> LSu
     LSubstVFresh { map: s.into_map() }
 }
 
-/// `composeVFresh s1_0 s2` (Substitution.hs:41-47).  Dispatches to a
+/// `composeVFresh s1_0 s2` (Term/Substitution.hs:41-47).  Dispatches to a
 /// closed-form fast path for the dominant `s1_0 = ∅` shape and otherwise runs
 /// the full 4-stage pipeline in [`compose_vfresh_general`].
 ///
@@ -574,10 +574,10 @@ where
 {
     if s1_0.is_empty() {
         let fast = compose_vfresh_empty_s1(s2);
-        // Differential guard during bring-up: the fast path must be VALUE-
-        // identical to the general composition (witness idxs feed
-        // `Ord LNSubstVFresh` and split-case ordering).  Only compiled in
-        // debug builds; the full 402-file byte gate is the release check.
+        // Differential guard: the fast path must be VALUE-identical to the
+        // general composition (witness idxs feed `Ord LNSubstVFresh` and
+        // split-case ordering).  Only compiled in debug builds; the
+        // full-corpus byte gate is the release check.
         #[cfg(debug_assertions)]
         {
             let slow = compose_vfresh_general(s1_0, s2);
@@ -595,7 +595,7 @@ where
 ///
 /// For an empty `s1_0` the general pipeline's four intermediate structures
 /// collapse to a single uniform, order-preserving range-var rename.  Deriving
-/// it from the code (Substitution.hs:41-47):
+/// it from the code (Term/Substitution.hs:41-47):
 ///
 ///  * `extendWithRenaming (varsRange s2) ∅` renames every distinct range var
 ///    `w` of `s2` down by `vs_min = min idx of varsRange s2` (its avoid set is
@@ -712,7 +712,7 @@ fn distinct_range_vars<'a, C: 'a>(range: impl Iterator<Item = &'a VTerm<C, LVar>
 
 /// `composeVFresh s1 s2`: composes the fresh substitution `s1` with the
 /// free substitution `s2`.  Mirrors HS `Term.Substitution.composeVFresh`
-/// (Substitution.hs:41-47):
+/// (Term/Substitution.hs:41-47):
 ///
 /// ```haskell
 /// composeVFresh s1_0 s2 =
@@ -747,7 +747,7 @@ where
     let vs_in_range_s2: Vec<LVar> = distinct_range_vars(s2.range());
     let extended = s1_0.extend_with_renaming(&vs_in_range_s2);
     // Avoid set for freshToFreeAvoidingFast: `evalFreshAvoiding (s2, s1_0)`
-    // (Substitution.hs:41-47, see line 47) = `frees (s2, s1_0)` = `frees s2 <> frees s1_0`.
+    // (Term/Substitution.hs:41-47, see line 47) = `frees (s2, s1_0)` = `frees s2 <> frees s1_0`.
     //
     // `frees s2` (s2 :: free LNSubst) walks BOTH domain and range.
     // `frees s1_0` (s1_0 :: LNSubstVFresh) uses `foldFrees (SubstVFresh n
@@ -854,7 +854,7 @@ mod tests {
     #[test]
     fn fresh_to_free_renames_every_range_var() {
         // HS has no "preserve" concept: every range var is renamed
-        // unconditionally (Substitution.hs:54-72) — the result must NOT
+        // unconditionally (Term/Substitution.hs:54-72) — the result must NOT
         // keep its identity.
         let s: LSubstVFresh<C> = SubstVFresh::from_list(vec![(lv("x", 0), var_term(lv("y", 5)))]);
         // Allocator hands out a fixed, clearly-distinct fresh idx.

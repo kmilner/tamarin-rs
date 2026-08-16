@@ -7,21 +7,21 @@
 //! threading.
 //!
 //! Each accountability lemma expands to one lemma per condition family, in the
-//! order `casesLemmas` fixes (Generation.hs:249-261): all `suff`, then
+//! order `casesLemmas` fixes (Generation.hs:243-255): all `suff`, then
 //! `verif_empty`, then all `verif_nonempty`, `min`, `uniq`, `inj`, `single`.
 //! A single fresh counter starting at 0 (HS `evalFreshT (casesLemmas ..) 0`,
-//! Generation.hs:263-264, see line 264) is threaded through the families that call `rename`
+//! Generation.hs:257-258) is threaded through the families that call `rename`
 //! (`suff`, `min`, `single`), in exactly that visitation order.
 
 use tamarin_parser::ast as p;
 
 use crate::formula::{
-    corrupt_subset_frees, fold_conn, fold_l1, fold_r1, free_var_term, frees, lvar_eq,
+    corrupt_subset_frees, fold_conn, fold_l1, fold_r1, free_term, frees, lvar_eq,
     proto_fact_formula, quantify_frees, quantify_vars, rename, strict_subset_of, temp_var,
     to_intermediate, vars_eq, Conn, Fm, Quant,
 };
 
-/// A resolved case test (HS `CaseTest`, Items/CaseTestItem.hs:20-24).
+/// A resolved case test (HS `CaseTest`, Items/CaseTestItem.hs:25-29).
 pub(crate) struct CaseTestData {
     pub(crate) name: String,
     pub(crate) formula: Fm,
@@ -45,7 +45,7 @@ pub(crate) struct GenLemma {
     pub(crate) formula: Fm,
 }
 
-/// HS `toLemma accLemma quantifier suffix formula` (Generation.hs:26-33): wraps
+/// HS `toLemma accLemma quantifier suffix formula` (Generation.hs:25-32): wraps
 /// the generated formula with its name and trace quantifier.  The accountability
 /// lemma's attributes (HS `_aAttributes`) are copied onto each generated lemma
 /// by the injection step in `lib.rs`.
@@ -57,7 +57,7 @@ fn to_lemma(quantifier: p::TraceQuantifier, name: String, formula: Fm) -> GenLem
     }
 }
 
-/// HS `caseTestFormulasExcept` (Generation.hs:107-109): the formulas of all
+/// HS `caseTestFormulasExcept` (Generation.hs:101-103): the formulas of all
 /// case tests except `ct`, in order.
 fn case_test_formulas_except(acc: &AccData, ct: &CaseTestData) -> Vec<Fm> {
     acc.case_tests
@@ -67,7 +67,7 @@ fn case_test_formulas_except(acc: &AccData, ct: &CaseTestData) -> Vec<Fm> {
         .collect()
 }
 
-/// HS `andIf p a b = if p then a .&&. b else a` (Generation.hs:97-98).  `b` is
+/// HS `andIf p a b = if p then a .&&. b else a` (Generation.hs:91-92).  `b` is
 /// evaluated lazily (HS is non-strict): the `noOther` conjunct is a `foldr1`
 /// that is undefined on the empty case-test-formula list, so it must not be
 /// forced when `p_` is false.
@@ -79,7 +79,7 @@ fn and_if(p_: bool, a: Fm, b: impl FnOnce() -> Fm) -> Fm {
     }
 }
 
-/// HS `singleMatch t` (Generation.hs:101-105):
+/// HS `singleMatch t` (Generation.hs:95-99):
 /// `rename t; rename t; t1 .&&. ∀ frees(t2). (t2 ⇒ varsEq (frees t2) (frees t1))`.
 fn single_match(t: &Fm, counter: &mut u64) -> Fm {
     let t1 = rename(t, counter);
@@ -91,7 +91,7 @@ fn single_match(t: &Fm, counter: &mut u64) -> Fm {
 }
 
 /// HS `noOther fms = foldr1 (.&&.) (map (Not . quantifyFrees exists) fms)`
-/// (Generation.hs:94-95).
+/// (Generation.hs:88-89).
 fn no_other(taus: &[Fm]) -> Fm {
     fold_r1(
         Conn::And,
@@ -101,7 +101,7 @@ fn no_other(taus: &[Fm]) -> Fm {
     )
 }
 
-/// HS `freesSubsetCorrupt vars` (Generation.hs:65-69):
+/// HS `freesSubsetCorrupt vars` (Generation.hs:59-63):
 /// `foldl1 (.&&.) [ ∃ i. Corrupted(var)@i | var <- vars ]`.
 fn frees_subset_corrupt(vars: &[p::VarSpec]) -> Fm {
     fold_l1(
@@ -113,8 +113,8 @@ fn frees_subset_corrupt(vars: &[p::VarSpec]) -> Fm {
                     &[temp_var("i")],
                     proto_fact_formula(
                         "Corrupted",
-                        vec![free_var_term(v.clone())],
-                        free_var_term(temp_var("i")),
+                        vec![free_term(v.clone())],
+                        free_term(temp_var("i")),
                     ),
                 )
             })
@@ -122,17 +122,15 @@ fn frees_subset_corrupt(vars: &[p::VarSpec]) -> Fm {
     )
 }
 
-/// HS `sufficiency` (Generation.hs:172-182).
+/// HS `sufficiency` (Generation.hs:166-176).
 fn sufficiency(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> GenLemma {
     let name = format!("{}_{}_suff", acc.name, ct.name);
     let taus = case_test_formulas_except(acc, ct);
     let t1 = single_match(&ct.formula, counter);
     let f1 = frees(&t1);
-    let inner = t1
-        .clone()
-        .and(and_if(!taus.is_empty(), corrupt_subset_frees(&f1), || {
-            no_other(&taus)
-        }));
+    let inner = t1.and(and_if(!taus.is_empty(), corrupt_subset_frees(&f1), || {
+        no_other(&taus)
+    }));
     let formula = quantify_frees(Quant::Ex, inner);
     to_lemma(
         p::TraceQuantifier::ExistsTrace,
@@ -141,7 +139,7 @@ fn sufficiency(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> GenLemma 
     )
 }
 
-/// HS `verifiabilityEmpty` (Generation.hs:184-191).  NOTE: the only family
+/// HS `verifiabilityEmpty` (Generation.hs:178-185).  NOTE: the only family
 /// that does NOT apply `toIntermediate` — the formula is returned raw.
 fn verifiability_empty(acc: &AccData) -> GenLemma {
     let name = format!("{}_verif_empty", acc.name);
@@ -158,7 +156,7 @@ fn verifiability_empty(acc: &AccData) -> GenLemma {
     to_lemma(p::TraceQuantifier::AllTraces, name, formula)
 }
 
-/// HS `verifiabilityNonEmpty` (Generation.hs:193-200).
+/// HS `verifiabilityNonEmpty` (Generation.hs:187-194).
 fn verifiability_nonempty(acc: &AccData, ct: &CaseTestData) -> GenLemma {
     let name = format!("{}_{}_verif_nonempty", acc.name, ct.name);
     let tau = ct.formula.clone();
@@ -171,7 +169,7 @@ fn verifiability_nonempty(acc: &AccData, ct: &CaseTestData) -> GenLemma {
     )
 }
 
-/// HS `minimality` (Generation.hs:202-214).
+/// HS `minimality` (Generation.hs:196-208).
 fn minimality(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> GenLemma {
     let name = format!("{}_{}_min", acc.name, ct.name);
     let taus: Vec<Fm> = acc.case_tests.iter().map(|c| c.formula.clone()).collect();
@@ -193,7 +191,7 @@ fn minimality(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> GenLemma {
     )
 }
 
-/// HS `uniqueness` (Generation.hs:216-222).
+/// HS `uniqueness` (Generation.hs:210-216).
 fn uniqueness(acc: &AccData, ct: &CaseTestData) -> GenLemma {
     let name = format!("{}_{}_uniq", acc.name, ct.name);
     let tau = ct.formula.clone();
@@ -206,7 +204,7 @@ fn uniqueness(acc: &AccData, ct: &CaseTestData) -> GenLemma {
     )
 }
 
-/// HS `injective` (Generation.hs:225-231):
+/// HS `injective` (Generation.hs:219-225):
 /// `∀ frees(tau). tau ⇒ foldl (.&&.) ⊤ [ ¬(x = y) | x, y <- frees tau, x ≠ y ]`.
 fn injective(acc: &AccData, ct: &CaseTestData) -> GenLemma {
     let name = format!("{}_{}_inj", acc.name, ct.name);
@@ -229,7 +227,7 @@ fn injective(acc: &AccData, ct: &CaseTestData) -> GenLemma {
     )
 }
 
-/// HS `singlematched` (Generation.hs:233-243).
+/// HS `singlematched` (Generation.hs:227-237).
 fn singlematched(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> GenLemma {
     let name = format!("{}_{}_single", acc.name, ct.name);
     let taus = case_test_formulas_except(acc, ct);
@@ -243,7 +241,7 @@ fn singlematched(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> GenLemm
     )
 }
 
-/// HS `casesLemmas` (Generation.hs:249-261): builds the seven families in the
+/// HS `casesLemmas` (Generation.hs:243-255): builds the seven families in the
 /// fixed order, threading `counter` through the `rename`-using families
 /// (`suff`, `min`, `single`) in visitation order.
 fn cases_lemmas(acc: &AccData, counter: &mut u64) -> Vec<GenLemma> {
@@ -271,7 +269,7 @@ fn cases_lemmas(acc: &AccData, counter: &mut u64) -> Vec<GenLemma> {
 }
 
 /// HS `generateAccountabilityLemmas accLemma = evalFreshT (casesLemmas accLemma) 0`
-/// (Generation.hs:263-264): the fresh counter resets to 0 per accountability
+/// (Generation.hs:257-258): the fresh counter resets to 0 per accountability
 /// lemma.
 pub(crate) fn generate_accountability_lemmas(acc: &AccData) -> Vec<GenLemma> {
     let mut counter: u64 = 0;

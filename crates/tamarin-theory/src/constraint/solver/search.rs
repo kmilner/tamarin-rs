@@ -24,7 +24,7 @@
 //!
 //! Under the default `Dfs` strategy, termination is bounded by the
 //! ID-DFS depth alone (`MAX_DEPTH`,
-//! doubling from 4) — `cutOnSolvedDFS` (Proof.hs:854-884) has only
+//! doubling from 4) — `cutOnSolvedDFS` (Theory/Proof.hs:854-884) has only
 //! `dMax` and no step/node budget, doubling `dMax` from 4 with no
 //! upper bound.  HS terminates because it deepens over a finite proof
 //! tree (any TERMINATING lemma's tree is finite, so once `dMax`
@@ -57,7 +57,7 @@ pub struct ProofNode {
     /// Whether this step carries a valid constraint-system annotation
     /// (HS `psInfo step == Just sys`).  `false` mirrors HS's
     /// `Nothing`-annotated steps produced by `checkProof`
-    /// (Proof.hs:467-469) when a stored skeleton step could not be
+    /// (Theory/Proof.hs:447-467, see line 467) when a stored skeleton step could not be
     /// replayed; `prettyIncrementalProof` (ProofSkeleton.hs:80-84) then
     /// appends `/* unannotated */`.  Defaults to `true` for every
     /// freshly-searched / successfully-replayed node.
@@ -75,7 +75,8 @@ pub enum NodeStatus {
     Contradictory,
     /// At least one branch reached `Unfinishable`.
     Unfinishable,
-    /// Exceeded the `max_steps` budget.
+    /// Gave up on at least one branch (`sorry`): depth limit, deadline,
+    /// `--bound` cut, or no applicable method.
     Sorry,
 }
 
@@ -98,7 +99,7 @@ fn is_depth_limited(node: &ProofNode) -> bool {
         && matches!(node.status, NodeStatus::Sorry)
 }
 
-/// HS `ProofStatus` (Proof.hs:397-408) — the aggregate status of a WHOLE
+/// HS `ProofStatus` (Theory/Proof.hs:397-407) — the aggregate status of a WHOLE
 /// proof tree, used to decide the lemma verdict.  Unlike the per-node
 /// [`NodeStatus`], this folds over every step (HS `getProofStatus =
 /// foldMap proofStepStatus`) and therefore correctly ABSORBS verbatim
@@ -117,7 +118,7 @@ pub enum ProofStatus {
 }
 
 impl ProofStatus {
-    /// HS `ProofStatus` Semigroup (Proof.hs:409-423): precedence
+    /// HS `ProofStatus` Semigroup (Theory/Proof.hs:409-420): precedence
     /// `Invalidated > TraceFound > Incomplete > Unfinishable > Complete >
     /// Undetermined`.
     fn combine(self, other: ProofStatus) -> ProofStatus {
@@ -133,7 +134,7 @@ impl ProofStatus {
     }
 }
 
-/// HS `proofStepStatus` (Proof.hs:427-433): the status of ONE node.
+/// HS `proofStepStatus` (Theory/Proof.hs:427-433): the status of ONE node.
 /// A node with no system annotation (`annotated == false`, HS `Nothing`)
 /// is `Undetermined` REGARDLESS of its method; otherwise it is keyed on
 /// the node's own method (NOT its aggregated `NodeStatus`).
@@ -160,38 +161,146 @@ pub fn proof_status(node: &ProofNode) -> ProofStatus {
     s
 }
 
+/// HS `proofSystems` (Batch.hs:284-288): every solved constraint system
+/// in the tree, paired with its proof path (the case names from the
+/// root, outermost first).
+///
+/// ```text
+/// proofSystems (LNode (ProofStep (Finished Solved) (Just rootSystem)) _) = [([], rootSystem)]
+/// proofSystems (LNode (ProofStep _ _) children) =
+///   [(l : ls, system) | (l, subProof) <- M.toList children
+///                     , (ls, system) <- proofSystems subProof ]
+/// ```
+///
+/// The first equation matches REGARDLESS of children (`_`) and does not
+/// recurse into them.  `Just rootSystem` is RS `annotated == true`: a
+/// `Finished(Solved)` step whose annotation was lost (HS `Nothing`,
+/// printed `/* unannotated */`) falls through to the second equation and
+/// is recursed into like any other node.  `M.toList` is ascending
+/// `CaseName` order == `BTreeMap<String>` iteration order.
+///
+/// The systems only survive a `--prove` run when the process-wide
+/// [`SysRetention`] was raised to at least
+/// [`KeepSolved`](SysRetention::KeepSolved) beforehand; on the stored-proof
+/// replay path (`replay::check_and_extend_lemma_in_session`) they are
+/// always live.
+///
+/// The tree is taken BY VALUE: the only caller reaches here once the proof
+/// body has been rendered, so the solved `System`s are moved out rather
+/// than cloned.
+pub fn into_solved_systems(node: ProofNode) -> Vec<(Vec<String>, System)> {
+    let mut out = Vec::new();
+    let mut path = Vec::new();
+    collect_solved_systems_owned(node, &mut path, &mut out);
+    out
+}
+
+fn collect_solved_systems_owned(
+    node: ProofNode,
+    path: &mut Vec<String>,
+    out: &mut Vec<(Vec<String>, System)>,
+) {
+    if matches!(node.method, ProofMethod::Finished(MethodResult::Solved)) && node.annotated {
+        out.push((path.clone(), node.sys));
+        return;
+    }
+    for (case, child) in node.children {
+        path.push(case);
+        collect_solved_systems_owned(child, path, out);
+        path.pop();
+    }
+}
+
 // --- Cached kill-switch / debug env flags -------------------------------
 // `expand`/`expand_inner` run once per proof-tree node (thousands of
 // times per lemma); these env vars are constant for the process, so cache
-// each behind a `OnceLock<bool>` (mirroring `trace::flag()`).  Semantics
-// preserved exactly: `TAM_RS_KEEP_SYS` is `var_os`-presence, so cache it
-// as the affirmative `keep_sys()` and negate at the call site.
+// each behind a `OnceLock<bool>` (mirroring `trace::flag()`).
+// `TAM_RS_KEEP_SYS` is `var_os`-presence, cached as the affirmative
+// `keep_sys_env()`.
 
-/// Programmatic override for [`keep_sys`], set by the interactive web
-/// server at startup.  `--prove` drops each node's `System` after
-/// expansion to keep peak RSS low (the text proof never reprints a
-/// per-node system).  The interactive server, in contrast, renders the
-/// annotated constraint system + applicable proof methods at every proof
-/// path (HS keeps a `Just System` on every `IncrementalProof` node), so
-/// it must retain them.  Call `set_keep_sys(true)` before any
-/// `run_proof_search`.  Default `false` → CLI behaviour unchanged.
-static KEEP_SYS_OVERRIDE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// How much of a proof tree keeps its per-node constraint `System` once
+/// [`expand`] has returned — a process-wide switch, since the three front
+/// ends want three different answers:
+///
+/// * [`DropAll`](SysRetention::DropAll) — `--prove`, which never reprints
+///   a per-node system in its text proof and so trades them for a low
+///   peak RSS.
+/// * [`KeepSolved`](SysRetention::KeepSolved) — batch trace output
+///   (`--output-dot` / `--output-json`), whose HS `outputTraces`
+///   (Batch.hs:252-288) reads exactly the
+///   `ProofStep (Finished Solved) (Just sys)` nodes and no others.  The
+///   retained systems are HS `outputTraces`' selector set, held for the
+///   whole file (moved into `trace_systems`, freed after
+///   `write_output_traces`), so peak RSS grows with the file's total
+///   solved systems.  `extract_solved_path` (HS `extractSolved`) bounds
+///   that to one per lemma ONLY on the freshly-searched `Dfs`/`SeqDfs`
+///   path — a replayed stored proof or a non-DFS `--stop-on-trace` keeps
+///   every solved node's system.
+/// * [`KeepAll`](SysRetention::KeepAll) — the interactive web server,
+///   which renders the annotated constraint system + applicable proof
+///   methods at every proof path (HS keeps a `Just System` on every
+///   `IncrementalProof` node).
+///
+/// A `Sorry: depth limit` frontier stub keeps its system under every
+/// policy: the next ID-DFS iteration re-expands it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SysRetention {
+    /// Drop every expanded node's `System`.
+    DropAll = 0,
+    /// Retain the `System` of `Finished(Solved)` nodes only.
+    KeepSolved = 1,
+    /// Retain every node's `System`.
+    KeepAll = 2,
+}
 
-/// Enable/disable per-node `System` retention across the whole process.
-pub fn set_keep_sys(retain: bool) {
-    KEEP_SYS_OVERRIDE.store(retain, std::sync::atomic::Ordering::Relaxed);
+impl SysRetention {
+    /// Inverse of the `#[repr(u8)]` discriminant, for [`SYS_RETENTION`].
+    #[inline]
+    fn from_u8(v: u8) -> SysRetention {
+        match v {
+            0 => SysRetention::DropAll,
+            1 => SysRetention::KeepSolved,
+            _ => SysRetention::KeepAll,
+        }
+    }
+}
+
+/// The process-wide [`SysRetention`], held as its discriminant.  Default
+/// [`SysRetention::DropAll`] → CLI behaviour unchanged; the interactive
+/// server (at startup) and the batch trace writers (before the first
+/// lemma) raise it via [`set_sys_retention`].
+static SYS_RETENTION: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(SysRetention::DropAll as u8);
+
+/// Set the process-wide `System` retention policy.  Call before any
+/// `run_proof_search`.
+pub fn set_sys_retention(policy: SysRetention) {
+    SYS_RETENTION.store(policy as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The policy in force: [`SYS_RETENTION`], raised to
+/// [`SysRetention::KeepAll`] by the `TAM_RS_KEEP_SYS` env presence
+/// (diagnostic).
+#[inline]
+fn sys_retention() -> SysRetention {
+    if keep_sys_env() {
+        return SysRetention::KeepAll;
+    }
+    SysRetention::from_u8(SYS_RETENTION.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 #[inline]
-fn keep_sys() -> bool {
-    // Programmatic override (interactive server) OR the `TAM_RS_KEEP_SYS`
-    // env presence (diagnostic).  Either forces retention.
-    if KEEP_SYS_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
-        return true;
-    }
+fn keep_sys_env() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("TAM_RS_KEEP_SYS").is_some())
 }
+
+/// Serialises the tests that write [`SYS_RETENTION`] against each other:
+/// the slot is process-wide, and a policy stored mid-search changes what
+/// a concurrently running proof retains.
+#[cfg(test)]
+pub(crate) static SYS_RETENTION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Per-child parallel expansion is ON by default;
 /// `TAM_RS_DISABLE_PARALLEL_EXPAND=1` forces serial sibling expansion
@@ -218,10 +327,8 @@ fn disable_parallel_expand() -> bool {
 /// HS-faithful: HS has NO per-lemma wall-clock deadline — its iterative
 /// deepening runs to completion.  So by DEFAULT we apply NO cutoff either
 /// (a far-future deadline that never fires); under the default `Dfs`
-/// strategy termination is still
-/// guaranteed by the ID-DFS depth cap (`MAX_DEPTH`), doubling from 4
-/// with only the far-out `usize::MAX/4` loop-termination guard (no
-/// fixed numeric cap), while `seqdfs` has no depth cut at all (like its
+/// strategy termination is still guaranteed by the ID-DFS depth cap
+/// (`MAX_DEPTH`), while `seqdfs` has no depth cut at all (like its
 /// HS counterpart — see `run_proof_search`).  A cutoff is
 /// applied ONLY when the caller explicitly opts in via the
 /// `TAM_PROVE_DEADLINE_MS` env var (e.g. corpus sweeps that want to bound
@@ -304,8 +411,20 @@ thread_local! {
     /// Set to true by `expand` whenever a node hits `MAX_DEPTH`.  The
     /// top-level loop reads this between iterations to decide whether
     /// to retry with doubled depth.  Mirrors Haskell's `MaybeNoSolution`
-    /// sentinel in `cutOnSolvedDFS` (Proof.hs:855-877).
+    /// sentinel in `cutOnSolvedDFS` (Theory/Proof.hs:855-877).
     static DEPTH_LIMIT_HIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+
+    /// `--bound=N` proof-depth bound — HS `boundProofDepth`
+    /// (Theory/Proof.hs:336-344#boundProofDepth), applied by `runAutoProver`'s
+    /// `maybe id boundProver (apBound p)` (Theory/Proof.hs:730-750#runAutoProver): every
+    /// node at depth `N` from the search root is replaced by a
+    /// `sorry /* bound N hit */` leaf.  `usize::MAX` = no bound (HS
+    /// `apBound = Nothing`, the default).  Unlike `MAX_DEPTH` this is
+    /// fixed for the whole search, not an ID-DFS iteration variable, and
+    /// a bound-sorry is FINAL — it never sets `DEPTH_LIMIT_HIT` and is
+    /// never re-expanded, so the deepening loops terminate once the
+    /// whole frontier is bound-cut.
+    static PROOF_BOUND: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
 }
 
 /// True iff the current search is past its wall-clock deadline.
@@ -327,13 +446,13 @@ fn clear_deadline() {
 /// Run an iterative-deepening search.  Heuristic: try `Simplify`
 /// once, then pick the first ranked open goal each round.
 ///
-/// `max_steps` is accepted for API compatibility but is NOT used as a
-/// terminal cutoff: HS's `cutOnSolvedDFS` bounds the search purely by
-/// the ID-DFS depth `dMax` (`MAX_DEPTH`), doubling from 4 with only the
-/// far-out `usize::MAX/4` loop-termination guard (no fixed numeric cap),
-/// and the per-lemma
-/// wall-clock timeout (`deadline`).  See the `budget = usize::MAX`
-/// note in each strategy arm.
+/// `proof_bound` is `--bound=N`'s proof-depth bound (HS `apBound`,
+/// applied as `boundProofDepth` — see [`PROOF_BOUND`]); pass
+/// `usize::MAX` for unbounded (HS `Nothing`, the default).  It is NOT a
+/// step budget: HS's `cutOnSolvedDFS` bounds the search purely by
+/// the ID-DFS depth `dMax` (`MAX_DEPTH`, described below), the
+/// per-lemma wall-clock timeout (`deadline`), and this proof-depth
+/// bound.  See the `budget = usize::MAX` note in each strategy arm.
 ///
 /// Returns the root proof node. The final status is the OR of children
 /// (Solved if all children solved, Contradictory if any contradictory,
@@ -345,7 +464,7 @@ fn clear_deadline() {
 /// the default) runs the iterative-deepening DFS described below.
 ///
 /// **Iterative-deepening DFS** — port of Haskell's `cutOnSolvedDFS`
-/// (Proof.hs:854-884).  Starts at `max_depth=4` and doubles up with
+/// (Theory/Proof.hs:854-884).  Starts at `max_depth=4` and doubles up with
 /// only the far-out `usize::MAX/4` loop-termination guard (no fixed
 /// numeric cap).  At each iteration:
 ///   1. Expand the tree at the current `MAX_DEPTH`.  On the first
@@ -371,9 +490,10 @@ fn clear_deadline() {
 /// when the longer path is alphabetically earlier — critical for
 /// NSPK3/roles `injective_agree` where Haskell renders `case c_aenc`
 /// (shorter) over `case I_2` (alphabetically earlier but deeper).
-pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -> ProofNode {
+pub fn run_proof_search(ctx: &ProofContext, initial: System, proof_bound: usize) -> ProofNode {
     let deadline = proof_deadline();
     set_deadline(deadline);
+    PROOF_BOUND.with(|b| b.set(proof_bound));
     // Optional hard-watchdog: opt-in via TAM_PROVE_DEADLINE_HARD_KILL=1.
     // Spawns a detached thread that sleeps `deadline + grace_ms` and
     // then calls `std::process::exit(124)`.  Catches cases where the
@@ -403,10 +523,6 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
             })
             .ok();
     }
-    // `max_steps` is accepted for call-site signature compatibility but is
-    // not used as a cutoff (see the `budget = usize::MAX` note in each arm):
-    // HS's cut strategies bound the search by proof depth / wall-clock only.
-    let _ = max_steps;
     let mut root = ProofNode {
         method: ProofMethod::Sorry(Some("initial".into())),
         sys: initial,
@@ -435,7 +551,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
             expand(ctx, &mut root, &mut budget, &deadline, 0);
         }
         CutStrategy::Nothing => {
-            // HS `CutNothing` → `id` (Proof.hs:730-750, see line 740): the full DFS proof
+            // HS `CutNothing` → `id` (Theory/Proof.hs:730-750, see line 738): the full DFS proof
             // tree with NO cut and NO stop-on-solved.  Like SeqDfs this is
             // one unbounded-depth serial pass (the serial sibling loop's
             // abort policy below never fires for `Nothing`), and like HS
@@ -447,7 +563,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
             expand(ctx, &mut root, &mut budget, &deadline, 0);
         }
         CutStrategy::AfterSorry => {
-            // HS `CutAfterSorry` → `cutAfterFirstSorry` (Proof.hs:989-999).
+            // HS `CutAfterSorry` → `cutAfterFirstSorry` (Theory/Proof.hs:987-997).
             // HS's `M.mapAccum go` never forces a lazy subtree past the
             // abort point; the eager mirror is the serial sibling loop's
             // AfterSorry policy (below): the first Solved-or-Sorry child in
@@ -460,7 +576,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
             expand(ctx, &mut root, &mut budget, &deadline, 0);
         }
         CutStrategy::Bfs => {
-            // HS `cutOnSolvedBFS` (Proof.hs:930-957): force the tree one
+            // HS `cutOnSolvedBFS` (Theory/Proof.hs:928-955): force the tree one
             // level deeper per round and walk it with `checkLevel`'s
             // threaded state.  `checkLevel 0`'s `M.null cs` guard FORCES
             // each level-`level` node's case map (so a zero-case solve
@@ -483,7 +599,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
                 } else {
                     re_expand_depth_limited(ctx, &mut root, &mut budget, &deadline, 0);
                 }
-                // HS's poor-man's logging (Proof.hs:928-955, see line 934,941) — `trace` to
+                // HS's poor-man's logging (Theory/Proof.hs:928-955, see line 934,941) — `trace` to
                 // stderr, unconditional.
                 eprintln!("searching for attacks at depth: {}", level);
                 let mut found = false;
@@ -513,7 +629,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
             }
         }
         CutStrategy::Dfs => {
-            // HS's `cutOnSolvedDFS` (Proof.hs:855-861) doubles `dMax` from 4
+            // HS's `cutOnSolvedDFS` (Theory/Proof.hs:855-861) doubles `dMax` from 4
             // with NO upper bound; we mirror that, keeping only a far-out cap
             // as a loop-termination guard for genuinely non-terminating
             // strategies.  No real Tamarin proof approaches this depth, so the
@@ -524,7 +640,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
             loop {
                 MAX_DEPTH.with(|m| m.set(current_max_depth));
                 DEPTH_LIMIT_HIT.with(|f| f.set(false));
-                // HS-faithful: `cutOnSolvedDFS` (Proof.hs:856-863) bounds the
+                // HS-faithful: `cutOnSolvedDFS` (Theory/Proof.hs:856-863) bounds the
                 // search by the ID-DFS depth `dMax` (our `MAX_DEPTH`) and the
                 // per-lemma wall-clock timeout ONLY — it has NO step/node
                 // budget.  A finite step budget would cut off exploration of
@@ -533,8 +649,9 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
                 // witness is reachable but sits beneath a broad fan-out of
                 // contradiction branches — turning a Solved exists-trace into
                 // Sorry (the loop-breaker count is HS-faithful, so source
-                // cases are wide).  So the caller's `max_steps` is ignored
-                // and we run unbudgeted as HS does: `MAX_DEPTH` doubles
+                // cases are wide).  So we run unbudgeted as HS does
+                // (`proof_bound` cuts by DEPTH, in `expand_inner`, not by
+                // step count): `MAX_DEPTH` doubles
                 // unbounded (mirroring HS's `dMax`), with only the far-out
                 // `cap` (`usize::MAX / 4`) as a loop-termination guard, and
                 // `deadline` catching wall-clock runaway.
@@ -570,9 +687,10 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
     }
     MAX_DEPTH.with(|m| m.set(usize::MAX));
     DEPTH_LIMIT_HIT.with(|f| f.set(false));
+    PROOF_BOUND.with(|b| b.set(usize::MAX));
     clear_deadline();
     // HS-faithful: `cutOnSolvedDFS` / `cutOnSolvedSingleThreadDFS`
-    // (Proof.hs:854-884, 795-816) call `extractSolved path prf0` once a
+    // (Theory/Proof.hs:854-884, 795-816) call `extractSolved path prf0` once a
     // Solved leaf is found, pruning the proof tree to JUST the
     // solved-witness path.  All Contradictory siblings are removed.
     // Without this, Rust's proof_steps count includes failed branches HS
@@ -588,7 +706,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, max_steps: usize) -
     root
 }
 
-/// HS `cutOnSolvedBFS`'s `checkLevel` (Proof.hs:942-957) over the eager
+/// HS `cutOnSolvedBFS`'s `checkLevel` (Theory/Proof.hs:943-955) over the eager
 /// level-bounded tree: walk to depth `remaining` in CaseName order,
 /// threading `found` (HS TraceFound) and `incomplete` (HS
 /// IncompleteProof) exactly as HS's `State ProofStatus` does.  At depth 0:
@@ -658,7 +776,7 @@ fn bfs_check_level(
     })
 }
 
-/// HS-faithful `extractSolved` (Proof.hs:879-884, the non-diff
+/// HS-faithful `extractSolved` (Theory/Proof.hs:879-884, the non-diff
 /// `cutOnSolvedDFS` variant): walks the proof
 /// tree, finds the first Solved-leaf path from root, and prunes all
 /// non-path siblings.  Mutates `root` in place.
@@ -747,10 +865,9 @@ fn re_expand_depth_limited(
     // re-expanded in place.  Match `expand`'s early-break-on-Solved —
     // except under `Bfs`, whose level walk (like HS `checkLevel`'s
     // `traverse`) forces every sibling regardless of solved ones.
-    let names: Vec<String> = node.children.keys().cloned().collect();
     let early_break = !matches!(ctx.cut, CutStrategy::Bfs);
     let mut found_solved = false;
-    for name in names {
+    for (name, child) in node.children.iter_mut() {
         if early_break && found_solved {
             break;
         }
@@ -760,27 +877,24 @@ fn re_expand_depth_limited(
         if std::time::Instant::now() >= *deadline {
             break;
         }
-        if let Some(child) = node.children.get_mut(&name) {
-            // Track proof-tree path so state-trace / lockstep
-            // emissions reflect the correct deep path during
-            // iterative-deepening re-expansion.  Without this push,
-            // state-traces from re-expanded subtrees report just
-            // the deepest pushed case (e.g. `/c_sdec`) instead of
-            // the full lemma-proof path (`/Setup_Key/.../c_sdec`).
-            // Mirrors the case_path push/pop in the serial branch of
-            // `expand_inner` (the `if push_path { case_path_push(..) }`
-            // around the recursive `expand` call further down this file).
-            let push_path = !name.is_empty();
-            if push_path {
-                crate::constraint::solver::trace::case_path_push(&name);
-            }
-            re_expand_depth_limited(ctx, child, budget, deadline, depth + 1);
-            if push_path {
-                crate::constraint::solver::trace::case_path_pop();
-            }
-            if matches!(child.status, NodeStatus::Solved) {
-                found_solved = true;
-            }
+        // Track proof-tree path so state-trace / lockstep emissions
+        // reflect the correct deep path during iterative-deepening
+        // re-expansion.  Without this push, state-traces from re-expanded
+        // subtrees report just the deepest pushed case (e.g. `/c_sdec`)
+        // instead of the full lemma-proof path (`/Setup_Key/.../c_sdec`).
+        // Mirrors the case_path push/pop in the serial branch of
+        // `expand_inner` (the `if push_path { case_path_push(..) }`
+        // around the recursive `expand` call further down this file).
+        let push_path = !name.is_empty();
+        if push_path {
+            crate::constraint::solver::trace::case_path_push(name);
+        }
+        re_expand_depth_limited(ctx, child, budget, deadline, depth + 1);
+        if push_path {
+            crate::constraint::solver::trace::case_path_pop();
+        }
+        if matches!(child.status, NodeStatus::Solved) {
+            found_solved = true;
         }
     }
     // Re-roll up the parent's status from current children — mirrors
@@ -835,15 +949,38 @@ fn expand(
     // After expansion, `sys` is no longer read EXCEPT on
     // `Sorry: depth limit` leaves, which `re_expand_depth_limited`
     // (defined below in this file) re-runs `expand` on during the next
-    // ID-DFS iteration — those need their sys.  Everything else
-    // (resolved leaves, interior nodes, terminal Sorrys) can drop.
+    // ID-DFS iteration — those need their sys — and on `Finished(Solved)`
+    // leaves when batch trace output asked for them via
+    // `SysRetention::KeepSolved`.  Everything else (other resolved leaves,
+    // interior nodes, terminal Sorrys) can drop.  See
+    // `drop_sys_after_expand`.
     // Profile: csf17::injectivity 1010-step proof tree holds ~200 MB
     // peak; this drain reduces peak RSS to ~14 MB (~ same as small
     // lemmas — most of HS's residue is the closed branches we can
     // now free).
-    let keep_for_redoexpand = is_depth_limited(node);
-    if !keep_for_redoexpand && !keep_sys() {
+    if drop_sys_after_expand(node, sys_retention()) {
         node.sys = crate::constraint::system::System::default();
+    }
+}
+
+/// The [`expand`] drop decision, as a pure predicate over the node and
+/// the [`SysRetention`] policy.  `sys` survives when the node is a
+/// `Sorry: depth limit` frontier stub (re-expanded next ID-DFS
+/// iteration), when every node is retained, or when solved-node
+/// retention is on and this node is `Finished(Solved)` — HS
+/// `outputTraces`' selector (Batch.hs:285).  Keyed on `method`, not on
+/// the aggregate [`NodeStatus`], which rolls up from children and would
+/// retain interior nodes too.
+fn drop_sys_after_expand(node: &ProofNode, retention: SysRetention) -> bool {
+    if is_depth_limited(node) {
+        return false;
+    }
+    match retention {
+        SysRetention::DropAll => true,
+        SysRetention::KeepSolved => {
+            !matches!(node.method, ProofMethod::Finished(MethodResult::Solved))
+        }
+        SysRetention::KeepAll => false,
     }
 }
 
@@ -860,7 +997,21 @@ fn expand_inner(
     // steps are recorded, not just SolveGoal dispatch (proof_method.rs).
     // It has no Haskell counterpart and does not affect --prove output.
     crate::constraint::solver::trace::trace_state(&node.sys);
-    // ID-DFS depth limit (Haskell `cutOnSolvedDFS` Proof.hs:855-877).
+    // `--bound=N` (HS `boundProofDepth`, Theory/Proof.hs:336-344): `go n`'s
+    // `0 < n` guard fires before the node is even inspected, so ANY node at
+    // depth `bound` — a would-be Solved leaf included — becomes
+    // `sorry (Just $ "bound " ++ show bound ++ " hit")`.  Hence this check
+    // sits before `is_finished`, and before the ID-DFS depth limit because
+    // a bound-sorry is FINAL: it must not set `DEPTH_LIMIT_HIT` (it is not
+    // a re-expandable "depth limit" thunk), or the deepening loop would
+    // keep doubling `MAX_DEPTH` against a frontier that can never move.
+    let proof_bound = PROOF_BOUND.with(|b| b.get());
+    if depth >= proof_bound {
+        node.method = ProofMethod::Sorry(Some(format!("bound {proof_bound} hit")));
+        node.status = NodeStatus::Sorry;
+        return;
+    }
+    // ID-DFS depth limit (Haskell `cutOnSolvedDFS` Theory/Proof.hs:855-877).
     //
     // Haskell's `findSolved` checks `d >= dMax` BEFORE checking the
     // node's method type:
@@ -925,26 +1076,13 @@ fn expand_inner(
     // `is_finished(ctx, &node.sys)` is `None`, and nothing has touched
     // `node.sys` since — skip the guarded entry's redundant re-sweep.
     let candidates = candidate_methods_open(&node.sys, ctx, depth);
-    let (method, cases) = {
-        let mut pick: Option<(ProofMethod, Vec<(String, System)>)> = None;
-        for m in candidates {
-            let r = exec_proof_method(ctx, &m, &node.sys);
-            match r {
-                Some(cs) => {
-                    pick = Some((m, cs));
-                    break;
-                }
-                None => continue,
-            }
-        }
-        match pick {
-            Some(p) => p,
-            None => {
-                node.method = ProofMethod::Sorry(Some("no method".into()));
-                node.status = NodeStatus::Sorry;
-                return;
-            }
-        }
+    let Some((method, mut cases)) = candidates
+        .into_iter()
+        .find_map(|m| exec_proof_method(ctx, &m, &node.sys).map(|cs| (m, cs)))
+    else {
+        node.method = ProofMethod::Sorry(Some("no method".into()));
+        node.status = NodeStatus::Sorry;
+        return;
     };
     node.method = method;
     if cases.is_empty() {
@@ -980,10 +1118,9 @@ fn expand_inner(
     // (ProofMethod.hs:302-308) builds a `Data.Map` keyed by case name
     // via `M.fromListWith` (ProofMethod.hs:283-340, see line 307), so
     // entries are alphabetically ordered.  `proveSystemDFS` /
-    // `cutOnSolvedDFS` then walk in map order (Proof.hs:855-877 —
+    // `cutOnSolvedDFS` then walk in map order (Theory/Proof.hs:855-877 —
     // `foldMap`, `M.map`).  Our `Vec` preserves creation order
     // (source-file rule order), so sort by name to match Haskell.
-    let mut cases = cases;
     cases.sort_by(|a, b| a.0.cmp(&b.0));
     // Haskell-faithful: no per-branch budget split.  Haskell's lazy
     // Disj-monad explores each branch using as many steps as needed —
@@ -1011,12 +1148,12 @@ fn expand_inner(
     // where the early-break matters for speed.
     // Bounded by rayon's global pool sized via `--processors=N`.
     //
-    // Thread-locals propagated to workers: MAX_DEPTH (read-only),
-    // DEPTH_LIMIT_HIT (each worker sets its local, aggregated OR after
-    // the parallel pass), and the user-fun sets (snapshot installed per
-    // worker — see `disable_parallel_expand`).  case_path is best-effort
-    // under parallel: each worker seeds its stack from the parent's
-    // snapshot at entry.
+    // Thread-locals propagated to workers: MAX_DEPTH and PROOF_BOUND
+    // (read-only), DEPTH_LIMIT_HIT (each worker sets its local, aggregated
+    // OR after the parallel pass), and the user-fun sets (snapshot
+    // installed per worker — see `disable_parallel_expand`).  case_path is
+    // best-effort under parallel: each worker seeds its stack from the
+    // parent's snapshot at entry.
     let n_cases = cases.len();
     let serial_only = disable_parallel_expand();
     // Gate parallel mode on all-traces lemmas only.  Exists-trace
@@ -1050,7 +1187,11 @@ fn expand_inner(
         use rayon::prelude::*;
         // Snapshot data needed by each worker.  MAX_DEPTH is a per-
         // search ID-DFS limit — read once here, restored at each worker.
+        // PROOF_BOUND likewise: a stolen worker thread's own cell is
+        // usize::MAX (or stale), and a child expanded there without the
+        // re-seed would sail past the `--bound` cut.
         let mp_snapshot = MAX_DEPTH.with(|m| m.get());
+        let bound_snapshot = PROOF_BOUND.with(|b| b.get());
         // Snapshot the proof-tree case_path so each worker can seed its
         // own thread-local stack and produce coherent trace output.
         let path_snapshot: Vec<String> = crate::constraint::solver::trace::case_path_snapshot();
@@ -1079,6 +1220,7 @@ fn expand_inner(
                 // case path) sees the correct values regardless of which
                 // worker thread we land on.
                 MAX_DEPTH.with(|m| m.set(mp_snapshot));
+                PROOF_BOUND.with(|b| b.set(bound_snapshot));
                 DEPTH_LIMIT_HIT.with(|f| f.set(false));
                 DEADLINE.with(|d| d.set(Some(deadline_snapshot)));
                 crate::constraint::solver::trace::case_path_set(&path_snapshot);
@@ -1160,6 +1302,7 @@ fn expand_inner(
         // lemma-level parallelism, so the search sees its own MAX_DEPTH /
         // DEADLINE / case_path after the fan-out.
         MAX_DEPTH.with(|m| m.set(mp_snapshot));
+        PROOF_BOUND.with(|b| b.set(bound_snapshot));
         DEADLINE.with(|d| d.set(Some(deadline_snapshot)));
         crate::constraint::solver::trace::case_path_set(&path_snapshot);
         for (name, child, _hit) in results {
@@ -1185,7 +1328,7 @@ fn expand_inner(
             if abort {
                 match ctx.cut {
                     CutStrategy::AfterSorry => {
-                        // HS `go True` (cutAfterFirstSorry, Proof.hs:993-996)
+                        // HS `go True` (cutAfterFirstSorry, Theory/Proof.hs:993-994)
                         // still forces the visited node's METHOD (not its
                         // children): a node whose method evaluates to
                         // `Finished _` is preserved after the abort —
@@ -1276,7 +1419,7 @@ fn expand_inner(
 /// When set (interactive mode), an oracle exec failure unwinds via
 /// `panic!` instead of exiting the process.  HS has the same split by
 /// construction: `oracleRanking`'s `readProcess` exception
-/// (ProofMethod.hs:598-623, see line 608) is uncaught in batch mode and
+/// (ProofMethod.hs:597-622, see line 607) is uncaught in batch mode and
 /// kills the invocation, but in the web server it surfaces inside a Warp
 /// request thread, so only the triggering request fails and the server
 /// keeps serving.  Batch (the default) keeps the byte-parity `exit(1)`.
@@ -1286,9 +1429,9 @@ pub static ORACLE_ERROR_UNWINDS: std::sync::atomic::AtomicBool =
 /// Run the goal ranker, centralising the two non-`Ok` outcomes shared
 /// by [`candidate_methods`] and [`candidate_methods_with_expl`]:
 ///   * `Err("__ORACLE_QUIT_ON_EMPTY__")` → `Err(())`, signalling the
-///     caller to emit a single `ApplySorry` candidate (HS ProofMethod.hs:598-623, see line 621).
+///     caller to emit a single `ApplySorry` candidate (HS ProofMethod.hs:597-622, see line 620).
 ///   * any other `Err` → oracle exec failure: mirror HS's uncaught IO
-///     exception (ProofMethod.hs:598-623, see line 608, inside
+///     exception (ProofMethod.hs:597-622, see line 607, inside
 ///     `oracleRanking` under `unsafePerformIO`, where `readProcess`
 ///     throws).  In batch mode that kills the invocation with EMPTY
 ///     stdout: print to stderr, flush stdout (so nothing leaks before
@@ -1379,7 +1522,6 @@ pub fn candidate_methods(sys: &System, ctx: &ProofContext, depth: usize) -> Vec<
 /// the full contradiction sweep, and a second sweep here doubles its cost on
 /// every expanded node (measured +7% wall on CCITT_X509_3).
 fn candidate_methods_open(sys: &System, ctx: &ProofContext, depth: usize) -> Vec<ProofMethod> {
-    let mut out: Vec<ProofMethod> = Vec::new();
     // Haskell-faithful: build the FULL ranked goal list, not just the
     // first one (ProofMethod.hs:520-540).  Haskell's `proofMethods`
     // includes ALL open goals as SolveGoal candidates; `execMethods`
@@ -1392,7 +1534,7 @@ fn candidate_methods_open(sys: &System, ctx: &ProofContext, depth: usize) -> Vec
     // `useHeuristic`'s `rankings !! (depth `mod` n)`).
     // Oracle ranked nothing and quitOnEmpty is set: emit ApplySorry.
     // HS: `guard (quitOnEmpty && not (null inp) && null ranked) *> Just ApplySorry`
-    // (ProofMethod.hs:598-623, see line 621, inside `oracleRanking`) — stoppingMethod fires.
+    // (ProofMethod.hs:597-622, see line 620, inside `oracleRanking`) — stoppingMethod fires.
     // We represent this as an empty candidate list with a special Sorry.
     let goals = match rank_goals_or_abort(sys, ctx, depth) {
         Ok(gs) => gs,
@@ -1402,7 +1544,8 @@ fn candidate_methods_open(sys: &System, ctx: &ProofContext, depth: usize) -> Vec
             ))]
         }
     };
-    // Construct: [Simplify, goal_1, goal_2, ..., goal_N].
+    // Construct: [Simplify, goal_1, goal_2, ..., goal_N] (+ Induction below).
+    let mut out: Vec<ProofMethod> = Vec::with_capacity(goals.len() + 2);
     out.push(ProofMethod::Simplify);
     for g in goals.into_iter() {
         out.push(ProofMethod::SolveGoal(g.goal));
@@ -1477,17 +1620,7 @@ mod tests {
     use super::*;
     use tamarin_term::maude_sig::pair_maude_sig;
 
-    fn maude_path() -> Option<String> {
-        if let Ok(p) = std::env::var("MAUDE_PATH") {
-            return Some(p);
-        }
-        for c in ["/usr/local/bin/maude", "maude"] {
-            if std::path::Path::new(c).exists() {
-                return Some(c.to_string());
-            }
-        }
-        None
-    }
+    use crate::test_maude::maude_path;
 
     fn ctx() -> Option<ProofContext> {
         let path = maude_path()?;
@@ -1638,5 +1771,251 @@ mod tests {
             root.status,
             NodeStatus::Contradictory | NodeStatus::Sorry | NodeStatus::Solved
         ));
+    }
+
+    // --- `solved_systems` (HS `proofSystems`) + solved-sys retention ----
+    //
+    // Maude-free: these drive hand-built proof trees and the pure
+    // `drop_sys_after_expand` predicate, so they run unconditionally.
+
+    /// A `System` tagged with `id` recoverable by [`sys_tag`], so a walk
+    /// result can be matched to the node it came from.
+    fn tagged_sys(id: usize) -> System {
+        let mut sys = System::empty();
+        for _ in 0..id {
+            sys.solved_formulas_mut()
+                .push(std::sync::Arc::new(crate::guarded::gtrue()));
+        }
+        sys
+    }
+
+    fn sys_tag(sys: &System) -> usize {
+        sys.solved_formulas.len()
+    }
+
+    fn node(
+        method: ProofMethod,
+        id: usize,
+        children: Vec<(&str, ProofNode)>,
+        annotated: bool,
+    ) -> ProofNode {
+        ProofNode {
+            method,
+            sys: tagged_sys(id),
+            children: children
+                .into_iter()
+                .map(|(n, c)| (n.to_string(), c))
+                .collect(),
+            status: NodeStatus::Solved,
+            annotated,
+        }
+    }
+
+    fn solved(id: usize) -> ProofNode {
+        node(
+            ProofMethod::Finished(MethodResult::Solved),
+            id,
+            Vec::new(),
+            true,
+        )
+    }
+
+    fn walk(root: ProofNode) -> Vec<(Vec<String>, usize)> {
+        into_solved_systems(root)
+            .into_iter()
+            .map(|(p, s)| (p, sys_tag(&s)))
+            .collect()
+    }
+
+    #[test]
+    fn solved_systems_root_leaf_yields_empty_path() {
+        assert_eq!(walk(solved(3)), vec![(Vec::<String>::new(), 3)]);
+    }
+
+    #[test]
+    fn solved_systems_walks_children_in_btreemap_order() {
+        // Insertion order deliberately reversed w.r.t. the expected
+        // output: `M.toList` / `BTreeMap` iterate ascending by key.
+        let root = node(
+            ProofMethod::Simplify,
+            9,
+            vec![
+                (
+                    "case_2",
+                    node(ProofMethod::Induction, 8, vec![("z", solved(2))], true),
+                ),
+                (
+                    "case_1",
+                    node(
+                        ProofMethod::Induction,
+                        7,
+                        vec![("b", solved(4)), ("a", solved(1))],
+                        true,
+                    ),
+                ),
+                (
+                    "",
+                    node(ProofMethod::Simplify, 6, vec![("k", solved(5))], true),
+                ),
+            ],
+            true,
+        );
+        assert_eq!(
+            walk(root),
+            vec![
+                (vec![String::new(), "k".to_string()], 5),
+                (vec!["case_1".to_string(), "a".to_string()], 1),
+                (vec!["case_1".to_string(), "b".to_string()], 4),
+                (vec!["case_2".to_string(), "z".to_string()], 2),
+            ]
+        );
+    }
+
+    #[test]
+    fn solved_systems_skips_unannotated_solved_node() {
+        // HS's first equation needs `Just sys`; an unannotated
+        // (`Nothing`) solved step falls through to the recursive
+        // equation, so its own system is dropped but its children are
+        // still walked.
+        let unannotated = node(
+            ProofMethod::Finished(MethodResult::Solved),
+            5,
+            vec![("c", solved(6))],
+            false,
+        );
+        let root = node(ProofMethod::Simplify, 9, vec![("a", unannotated)], true);
+        assert_eq!(
+            walk(root),
+            vec![(vec!["a".to_string(), "c".to_string()], 6)]
+        );
+        // A childless unannotated solved node contributes nothing.
+        let bare = node(
+            ProofMethod::Finished(MethodResult::Solved),
+            5,
+            Vec::new(),
+            false,
+        );
+        assert!(walk(bare).is_empty());
+    }
+
+    #[test]
+    fn solved_systems_does_not_recurse_into_solved_node() {
+        // Batch.hs:285 matches `_` children and returns immediately: the
+        // solved node's own system is the only result, its solved
+        // descendants are invisible.
+        let root = node(
+            ProofMethod::Finished(MethodResult::Solved),
+            1,
+            vec![("a", solved(2)), ("b", solved(3))],
+            true,
+        );
+        assert_eq!(walk(root), vec![(Vec::<String>::new(), 1)]);
+    }
+
+    #[test]
+    fn solved_systems_other_finished_kinds_are_not_collected() {
+        let root = node(
+            ProofMethod::Simplify,
+            9,
+            vec![
+                (
+                    "a",
+                    node(
+                        ProofMethod::Finished(MethodResult::Unfinishable),
+                        1,
+                        Vec::new(),
+                        true,
+                    ),
+                ),
+                ("b", node(ProofMethod::Sorry(None), 2, Vec::new(), true)),
+                ("c", node(ProofMethod::Invalidated, 3, Vec::new(), true)),
+            ],
+            true,
+        );
+        assert!(walk(root).is_empty());
+    }
+
+    #[test]
+    fn drop_sys_after_expand_retains_only_solved_when_switch_on() {
+        let solved_leaf = solved(1);
+        let simplify = node(ProofMethod::Simplify, 1, Vec::new(), true);
+        let contradictory = node(
+            ProofMethod::Finished(MethodResult::Contradictory(None)),
+            1,
+            Vec::new(),
+            true,
+        );
+        // `DropAll`: everything but a depth-limit stub is dropped.
+        for n in [&solved_leaf, &simplify, &contradictory] {
+            assert!(drop_sys_after_expand(n, SysRetention::DropAll));
+        }
+        // `KeepSolved`: the solved node keeps its system, ONLY it.
+        assert!(!drop_sys_after_expand(
+            &solved_leaf,
+            SysRetention::KeepSolved
+        ));
+        assert!(drop_sys_after_expand(&simplify, SysRetention::KeepSolved));
+        assert!(drop_sys_after_expand(
+            &contradictory,
+            SysRetention::KeepSolved
+        ));
+        // An unannotated solved node still counts here — `expand` never
+        // produces one, and `into_solved_systems` filters it out anyway.
+        let unannotated = node(
+            ProofMethod::Finished(MethodResult::Solved),
+            1,
+            Vec::new(),
+            false,
+        );
+        assert!(!drop_sys_after_expand(
+            &unannotated,
+            SysRetention::KeepSolved
+        ));
+        // `KeepAll` (interactive server) retains everything.
+        assert!(!drop_sys_after_expand(&simplify, SysRetention::KeepAll));
+    }
+
+    #[test]
+    fn drop_sys_after_expand_keeps_depth_limited_frontier() {
+        let mut stub = node(
+            ProofMethod::Sorry(Some("depth limit".into())),
+            1,
+            Vec::new(),
+            true,
+        );
+        stub.status = NodeStatus::Sorry;
+        assert!(!drop_sys_after_expand(&stub, SysRetention::DropAll));
+        // A terminal (non-frontier) sorry is still dropped.
+        let terminal = node(
+            ProofMethod::Sorry(Some("budget exhausted".into())),
+            1,
+            Vec::new(),
+            true,
+        );
+        assert!(drop_sys_after_expand(&terminal, SysRetention::DropAll));
+    }
+
+    #[test]
+    fn sys_retention_switch_round_trips() {
+        // `TAM_RS_KEEP_SYS` pins every reading to `KeepAll`, which is not
+        // what this asserts.
+        if keep_sys_env() {
+            return;
+        }
+        // Process-global: hold the lock the other writer takes, and
+        // restore the policy a concurrently running proof search expects.
+        let _guard = SYS_RETENTION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let before = sys_retention();
+        for policy in [
+            SysRetention::KeepAll,
+            SysRetention::KeepSolved,
+            SysRetention::DropAll,
+        ] {
+            set_sys_retention(policy);
+            assert_eq!(sys_retention(), policy);
+        }
+        set_sys_retention(before);
     }
 }

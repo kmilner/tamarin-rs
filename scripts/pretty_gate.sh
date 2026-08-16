@@ -17,6 +17,11 @@
 # We reuse corpus_file_diff.sh's ckey / flags / strip_env machinery verbatim so
 # per-file canonical flags and the @cd recipe stay identical to the other gates.
 #
+# PHASE 0 also stores the whole stripped load-time stdout as <key>.load.gz.
+# That is wf_gate.sh's reference: the wellformedness report is load-time output
+# too, so one oracle load per file feeds both gates, and wf_gate no longer has
+# to wait for corpus_file_diff.sh's 30-60 min `--prove` batch after a bump.
+#
 # Extraction (extract_theory): keep `^theory ` … `^end$`; DROP the trailing
 # formal-comment blocks tamarin appends inside that span — the wellformedness
 # report (`/* All wellformedness checks were successful. */` OR the multi-line
@@ -30,12 +35,18 @@
 #      RESULTS_TSV, ALLOWLIST, NO_HS_FILL (skip phase 0 if the cache is warm).
 # Output TSV (3 col): relpath  MATCH|DIFF|SKIP_*  diffcount
 set -u
-export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
-echo 1000 > /proc/self/oom_score_adj 2>/dev/null || true
-ulimit -v 25165824 2>/dev/null || true
-
-script_dir=$(cd "$(dirname "$0")" && pwd)
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root=$(dirname "$script_dir")
+# Shared gate plumbing: OOM prologue, strip_env, flags_for/ckey, filelist,
+# maude resolver.
+[ -r "$script_dir/gate_common.sh" ] || { echo "pretty_gate: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
+. "$script_dir/gate_common.sh"
+oom_prologue
+# Both provers resolve `maude` by NAME from PATH when no --with-maude is
+# passed; the resolver honours the operator's MAUDE_PATH/PATH before falling
+# back to this box's off-PATH linuxbrew install.
+MAUDE=$(resolve_maude) || exit 2
+maude_on_path "$MAUDE"
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 HS_CACHE="${HS_CACHE:-$script_dir/.hs_pretty_cache}"
 CORPUS_ROOT="${CORPUS_ROOT:-$repo_root/tamarin-prover/examples}"
@@ -43,10 +54,10 @@ FLAGS_MAP="${FLAGS_MAP:-$script_dir/file_flags.tsv}"
 JOBS="${JOBS:-4}"
 # Generous by design: the csf26-ac AC-variant precomputation makes the HS
 # oracle's plain load take ~170s on three files (chaum_offline_anonymity,
-# KCL07, NSLPK3xor), and a tighter cap turns those into permanent .nohs
-# markers on every cold cache fill.
+# KCL07, NSLPK3xor).  A tighter cap caches nothing for them, so they SKIP (a
+# failing verdict) and every later cold fill pays the same 170s again.
 FILE_TIMEOUT="${FILE_TIMEOUT:-420}"
-DERIVCHECK_TIMEOUT="${DERIVCHECK_TIMEOUT:-10}"
+DERIVCHECK_TIMEOUT="${DERIVCHECK_TIMEOUT:-30}"  # 30 matches corpus_file_diff; lower values make HS's load-sensitive derivation checks time out under parallel fill, poisoning the shared load cache
 RESULTS_TSV="${RESULTS_TSV:-$script_dir/results/pretty_gate_results.tsv}"
 mkdir -p "$(dirname "$RESULTS_TSV")"
 NO_HS_FILL="${NO_HS_FILL:-}"
@@ -62,36 +73,27 @@ find_hs_bin() {
 HS_PATH="${HS_PATH:-$(find_hs_bin "$repo_root")}" || true
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 [ -x "$RS_PATH" ] || { echo "no RS binary at $RS_PATH" >&2; exit 2; }
+# The oracle binary is required even under NO_HS_FILL: its fingerprint is part
+# of the cache key, so without it no entry can be ADDRESSED, let alone filled.
+[ -x "${HS_PATH:-/nonexistent}" ] || {
+    echo "pretty_gate: no HS oracle binary (set HS_PATH) — the cache key carries the oracle's fingerprint, so entries cannot be looked up without it" >&2
+    exit 2
+}
 export RS_PATH HS_PATH HS_CACHE CORPUS_ROOT FLAGS_MAP FILE_TIMEOUT DERIVCHECK_TIMEOUT
 
-# Oracle-rev handshake (same idea as web_parity.sh's PLAN_VERSION check): the
-# cache key is sha256(theory)+flags, which cannot see an ORACLE change — a
-# bump that alters pretty output leaves stale entries under unchanged keys,
-# surfacing as false DIFFs rather than cache misses.  Stamp the oracle's git
-# revision into the cache dir and wipe the cache when it changes.  Wiping is
-# only safe when phase 0 can refill: under NO_HS_FILL a wipe would leave every
-# file SKIP_NO_HS, so a stamp mismatch is a hard error there instead.
-if [ -x "${HS_PATH:-}" ]; then
-    oracle_rev=$("$HS_PATH" --version 2>/dev/null \
-        | awk '/^Git revision:/{gsub(",","",$3); print $3; exit}')
-    stamp="$HS_CACHE/.oracle_rev"
-    if [ -n "$oracle_rev" ]; then
-        if [ -f "$stamp" ] && [ "$(cat "$stamp")" != "$oracle_rev" ]; then
-            if [ -n "$NO_HS_FILL" ]; then
-                echo "pretty_gate: oracle changed ($(cat "$stamp") -> $oracle_rev) and NO_HS_FILL=1 — refusing to wipe a cache nothing would refill; rerun without NO_HS_FILL, or point HS_PATH at the stamped oracle" >&2
-                exit 2
-            fi
-            echo "pretty_gate: oracle changed ($(cat "$stamp") -> $oracle_rev) — wiping stale cache" >&2
-            rm -rf "$HS_CACHE"; mkdir -p "$HS_CACHE"
-        fi
-        printf '%s' "$oracle_rev" > "$stamp"
-    fi
-fi
+# Oracle handshake.  The cache key is sha256(theory)+flags, which cannot see an
+# ORACLE change — a bump that alters pretty output would leave stale entries
+# under unchanged keys, surfacing as false DIFFs rather than cache misses.
+# This used to be a `Git revision:` stamp on the cache dir, which could never
+# fire: setup.sh git-APPLIES patches/ without committing, so every patched
+# build bakes in exactly the submodule pin and the stamp matched an oracle it
+# had never seen.  The binary's own size.mtime (gate_common's hs_fingerprint)
+# changes whenever the oracle is rebuilt, patched or not; folded into the key
+# it turns a changed oracle into a MISS per entry instead of a dir-wide wipe.
+hs_fingerprint "$HS_PATH"
+export HS_FP HS_FP_SALT
 
-strip_env() {
-    grep -v -e '^Git revision:' -e '^Compiled at:' \
-            -e '^[[:space:]]*processing time:' -e '^[[:space:]]*analyzed:'
-}
+# strip_env (gate_common.sh): DELETE the four volatile header lines.
 # Isolate the pretty-printed theory echo: `theory … begin … end`, minus the
 # trailing wf report and Generated-from stamp, minus the post-`end` summary.
 extract_theory() {
@@ -115,30 +117,67 @@ extract_theory() {
         /^end$/                 { cap=0 }
     '
 }
-flags_for() { [ -f "$FLAGS_MAP" ] && awk -F'\t' -v r="$1" '!/^#/ && $1==r {print $2; exit}' "$FLAGS_MAP"; }
-ckey() {
-    local h fl; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
-    if [ -n "$fl" ]; then printf '%s__f%s' "$h" "$(printf '%s' "$fl" | sha256sum | cut -c1-12)"
-    else printf '%s' "$h"; fi
-}
-export -f strip_env extract_theory flags_for ckey
+# flags_for / ckey come from gate_common.sh — one key format for this gate,
+# wf_gate.sh (which reads THIS cache) and corpus_file_diff.sh.
+export -f strip_env extract_theory flags_for include_shas ckey
 
 # --- Phase 0: fill any MISSING no-prove HS reference (fast; warm-cache reused).
+# TWO artifacts per key, from ONE oracle run:
+#   <key>.theory.gz — the extracted theory echo, this gate's reference;
+#   <key>.load.gz   — the WHOLE stripped load-time stdout, which wf_gate.sh
+#                     slices its warning block out of.  wf_gate used to take
+#                     that slice from corpus_file_diff.sh's `--prove` cache, so
+#                     after a bump it had nothing to compare until the 30-60
+#                     min batch gate had run; the load pass produces the same
+#                     wf report in ~1s/file.
+# So the skip test needs BOTH: a cache holding only .theory.gz (everything
+# filled before .load.gz existed) must still be completed, and completing it
+# here is what stops wf_gate re-running the same 432 oracle loads itself.
+# The reverse hole is closed without the oracle at all: .theory.gz is a pure
+# function of .load.gz, so a cache wf_gate filled first is completed by
+# extracting, not by re-loading.
 hs_fill_one() {
     local rel="$1" f="$CORPUS_ROOT/$1" key fl
     [ -f "$f" ] || return 0
     key=$(ckey "$rel" "$f"); fl=$(flags_for "$rel")
-    [ -f "$HS_CACHE/$key.theory.gz" ] && return 0
     [ -f "$HS_CACHE/$key.nohs" ] && return 0
+    # `--diff` theories are not on the RS-matchable path; skip filling them.
+    # Ahead of the derive step below, so a .load.gz wf_gate left here cannot
+    # promote a diff theory into this gate's comparison set.
+    case " $fl " in *" --diff "*) touch "$HS_CACHE/$key.nohs"; return 0;; esac
+    [ -f "$HS_CACHE/$key.theory.gz" ] && [ -f "$HS_CACHE/$key.load.gz" ] && return 0
+    local out
+    if [ -f "$HS_CACHE/$key.load.gz" ]; then
+        out=$(zcat "$HS_CACHE/$key.load.gz" | extract_theory)
+        if [ -z "$out" ]; then touch "$HS_CACHE/$key.nohs"
+        else printf '%s' "$out" | gzip > "$HS_CACHE/$key.theory.gz"; fi
+        return 0
+    fi
     local rundir="" farg="$f"
     if [[ " $fl " == *" @cd "* || "$fl" == "@cd" ]]; then fl=${fl//@cd/}; rundir=$(dirname "$f"); farg=$(basename "$f"); fi
-    # `--diff` theories are not on the RS-matchable path; skip filling them.
-    case " $fl " in *" --diff "*) touch "$HS_CACHE/$key.nohs"; return 0;; esac
-    local tmp out; tmp=$(mktemp)
+    local tmp load rc; tmp=$(mktemp)
     # shellcheck disable=SC2086
     ( [ -n "$rundir" ] && cd "$rundir"
       timeout "$FILE_TIMEOUT" "$HS_PATH" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" "$farg" ) >"$tmp" 2>/dev/null
-    out=$(strip_env < "$tmp" | extract_theory); rm -f "$tmp"
+    rc=$?
+    load=$(strip_env < "$tmp"); rm -f "$tmp"
+    # A killed load leaves PARTIAL stdout, which is worse than none: cached, it
+    # is a reference both gates would diff against forever.  Cache nothing and
+    # leave no marker — the file reports SKIP (a failing verdict) and is
+    # retried, instead of reporting a DIFF against a truncated oracle.
+    # 124 is timeout(1)'s SIGTERM; >=128 is any other signal death (the OOM
+    # killer's 137, an abort's 134), which truncates stdout the same way.
+    if [ "$rc" = 124 ] || [ "$rc" -ge 128 ]; then
+        echo "  HS KILLED   $rel (rc=$rc, cap ${FILE_TIMEOUT}s) — nothing cached" >&2; return 0
+    fi
+    # `.nohs` is a STICKY marker for both gates: no output at all (timeout,
+    # missing maude, parse abort) records it and neither gate re-runs the
+    # oracle at this key.  An environment that was broken during a fill
+    # therefore shows up as SKIP rows in both gates — never as MATCH — and is
+    # cleared with `find <cache> -name '*.nohs' -delete`.
+    if [ -z "$load" ]; then touch "$HS_CACHE/$key.nohs"; return 0; fi
+    printf '%s' "$load" | gzip > "$HS_CACHE/$key.load.gz"
+    out=$(printf '%s\n' "$load" | extract_theory)
     if [ -z "$out" ]; then touch "$HS_CACHE/$key.nohs"
     else printf '%s' "$out" | gzip > "$HS_CACHE/$key.theory.gz"; fi
 }
@@ -164,27 +203,38 @@ one() {
 }
 export -f one
 
-filelist() {
-    if [ -n "${ALLOWLIST:-}" ] && [ -f "$ALLOWLIST" ]; then cat "$ALLOWLIST"
-    elif [ -f "$script_dir/parity_corpus.txt" ]; then cat "$script_dir/parity_corpus.txt"
-    else (cd "$CORPUS_ROOT" && find . -name '*.spthy' | sed 's|^\./||'); fi
-}
+# gate_common's filelist: ALLOWLIST > parity_corpus.txt > this gate's
+# fallback, the whole corpus tree.  allowlist_guard rejects a
+# set-but-unreadable ALLOWLIST (a typo, not a request for the default).
+allowlist_guard
+filelist_fallback() { (cd "$CORPUS_ROOT" && find . -name '*.spthy' | sed 's|^\./||'); }
 
+N=$(filelist | grep -c .)
+# Zero files is the whole-run form of comparing nothing: no rows, MATCH=DIFF=0,
+# and a verdict line that reads exactly like a clean gate.
+[ "$N" -gt 0 ] || { echo "the file list resolved to 0 entries — nothing to compare" >&2; exit 2; }
 if [ -z "$NO_HS_FILL" ]; then
-    [ -x "${HS_PATH:-/nonexistent}" ] || { echo "no HS binary (set HS_PATH or NO_HS_FILL=1)" >&2; exit 2; }
     echo "=== PHASE 0: fill missing no-prove HS theory cache ($HS_CACHE) ==="
     filelist | grep . | xargs -P"$JOBS" -I{} bash -c 'hs_fill_one "$@"' _ {}
 fi
-echo "=== PHASE 1: RS no-prove + diff ==="
+echo "=== PHASE 1: RS no-prove + diff ($N files) ==="
 filelist | grep . | xargs -P"$JOBS" -I{} bash -c 'one "$@"' _ {} | sort > "$RESULTS_TSV"
 m=$(awk -F'\t' '$2=="MATCH"' "$RESULTS_TSV" | wc -l)
 diff=$(awk -F'\t' '$2=="DIFF"' "$RESULTS_TSV" | wc -l)
 skip=$(awk -F'\t' '$2 ~ /^SKIP/' "$RESULTS_TSV" | wc -l)
 total=$(grep -c . "$RESULTS_TSV")
-echo "pretty_gate: MATCH=$m DIFF=$diff SKIP=$skip  ->  $RESULTS_TSV"
-# An all-SKIP run compares nothing, so DIFF=0 says nothing about parity.
-if [ "$total" = 0 ] || [ "$skip" = "$total" ]; then
-    echo "pretty_gate: nothing compared ($skip SKIP of $total files) — empty or unfilled HS cache ($HS_CACHE)" >&2
-    exit 1
-fi
-[ "$diff" = 0 ]
+echo "pretty_gate: MATCH=$m DIFF=$diff SKIP=$skip of $N  ->  $RESULTS_TSV"
+# Every SKIP is a file that was not compared, so DIFF=0 covers only the rest of
+# the list; at skip == total it covers nothing at all.  And a file that
+# produced no row whatsoever is not even in `total`, so the run has to be
+# measured against the DENOMINATOR it was asked for, not against itself.
+bad=''
+[ "$diff" = 0 ] || bad="DIFF=$diff"
+[ "$skip" = 0 ] || bad="${bad:+$bad }SKIPPED=$skip/$total (never compared; unfilled HS cache $HS_CACHE)"
+[ "$total" = "$N" ] || bad="${bad:+$bad }ROW-COUNT=$total/$N"
+# files= is the count actually COMPARED (MATCH+DIFF; SKIPs compared nothing).
+# rs_ref_check.sh generate reads it to refuse a scoped (ALLOWLIST) log as
+# evidence for a wider re-baseline. Trailing and additive, so `grep verdict=`
+# consumers are unchanged.
+echo "pretty_gate: verdict=${bad:-OK} files=$((m + diff))"
+[ -z "$bad" ]

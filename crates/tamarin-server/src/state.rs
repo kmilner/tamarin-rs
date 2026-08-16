@@ -9,8 +9,9 @@
 //! `/thy/trace/<idx>/main/...`.
 //!
 //! We keep both the parser AST and the elaborated typed theory.  The
-//! parser AST is needed by `prove_lemma`; the elaborated theory is
-//! used for accessor helpers (lemma list, restriction count, …).
+//! parser AST is what [`ProofState::new`] re-elaborates to build the live
+//! prover session; the elaborated theory is used for accessor helpers
+//! (lemma list, restriction count, …).
 //!
 //! Concurrency: `parking_lot::Mutex` — interactive single-user UI, no
 //! need for an async lock.  Only the autoprover (`autoprove` /
@@ -37,8 +38,8 @@ pub struct TheoryEntry {
     pub idx: usize,
     /// Theory name from the `.spthy` source.
     pub name: String,
-    /// Parser AST — kept verbatim so `prove_lemma` has the same shape
-    /// it was elaborated from.
+    /// Parser AST — kept verbatim so the lazily built [`ProofState`] can
+    /// re-elaborate exactly the shape the CLI prover would.
     pub parser_theory: Arc<p::Theory>,
     /// Elaborated, typed theory — used for accessor helpers.  Wrapped
     /// in `Arc` so we can clone the entry cheaply.

@@ -54,7 +54,7 @@ pub enum ProofMethod {
     /// Display-only: `solve( <raw_inner> )`.  Used for HS-faithful
     /// unannotated subtree display (replay.rs `parsed_to_unannotated`)
     /// where we have the original skeleton text but no live Goal object.
-    /// HS `noSystemPrf` (Proof.hs:447-467, see line 467) clears the per-node system info
+    /// HS `noSystemPrf` (Theory/Proof.hs:447-467, see line 467) clears the per-node system info
     /// (`mapProofInfo (\i -> (Just i, Nothing))`); the ProofMethod itself
     /// is preserved by the proof-tree node, not by `noSystemPrf`.  RS uses
     /// raw inner text as the closest equivalent.
@@ -102,7 +102,7 @@ pub fn is_finished(ctx: &ProofContext, sys: &System) -> Option<Result> {
 }
 
 /// Direct port of Haskell `finishedSubterms`
-/// (`Theory.Tools.SubtermStore:130`):
+/// (`Theory/Tools/SubtermStore.hs:130-136`):
 ///   hasReducibleOperatorsOnTop reducible sst =
 ///     all (topIsNotReducible . snd) allSubterms
 ///     where allSubterms = posSubterms ∪ negSubterms ∪ solvedSubterms
@@ -119,7 +119,7 @@ pub fn finished_subterms(ctx: &ProofContext, sys: &System) -> bool {
     let top_is_not_reducible = |t: &tamarin_term::lterm::LNTerm| -> bool {
         match t {
             // HS `topIsNotReducible (FApp f _) = f \`S.notMember\` reducible`
-            // (SubtermStore.hs:134-135).  `reducible_fun_syms` is a
+            // (SubtermStore.hs:134-136).  `reducible_fun_syms` is a
             // `FunSig = BTreeSet<FunSym>`, so `contains` does the exact
             // structural `FunSym` equality test in O(log n).
             Term::App(f, _) => !msig.reducible_fun_syms.contains(f),
@@ -149,17 +149,17 @@ pub fn finished_subterms(ctx: &ProofContext, sys: &System) -> bool {
 /// `mapMaybe execProofMethod` forces when building the web UI's
 /// "Applicable Proof Methods" list, WITHOUT the `SolveGoal` fan-out.
 ///
-/// HS (`ProofMethod.hs:751-756`) forces each `execProofMethod` result
+/// HS (`ProofMethod.hs:531-534`) forces each `execProofMethod` result
 /// only to WHNF (`Just`/`Nothing`); the `SolveGoal` arm is
-/// `… (return tracedCases)` (`ProofMethod.hs:429-447`) — ALWAYS `Just`,
+/// `return $ process $ solve goal` (`ProofMethod.hs:298`) — ALWAYS `Just`,
 /// with the whole case fan-out an unforced thunk the node page never
-/// demands (`Web/Theory.hs:593-597` binds the cases to `_`; the
-/// "N sub-case(s)" count comes from the persisted tree, `:599`).  Only
-/// `Simplify` (bounded simplify + single-case guard, `:419-427`) and
-/// `Induction` (structural `ginduct` guard, `:428`) can drop a method at
+/// demands (`Web/Theory.hs:599` binds the cases to `_`; the
+/// "N sub-case(s)" count comes from the persisted tree, `:542`).  Only
+/// `Simplify` (bounded simplify + single-case guard, `:288-296`) and
+/// `Induction` (structural `ginduct` guard, `:297`) can drop a method at
 /// render, and those ARE forced — keep the full exec for them.  The
 /// fan-out is paid only when a method is APPLIED (`oneStepProver`'s
-/// `M.map` forces the spine, `Proof.hs:584-587`) — RS's `apply_at_path`,
+/// `M.map` forces the spine, `Theory/Proof.hs:582-585`) — RS's `apply_at_path`,
 /// unchanged.
 ///
 /// Eagerly exec'ing every candidate here made rendering one bilinear
@@ -183,8 +183,8 @@ pub fn is_applicable_for_display(ctx: &ProofContext, method: &ProofMethod, sys: 
     }
 }
 
-/// HS `uniqueListBy (comparing fst) id distinguish` (ProofMethod.hs:462-463, see line 465,
-/// 527-532): singleton case names stay bare; each duplicate group of
+/// HS `uniqueListBy (comparing fst) id distinguish` (ProofMethod.hs:90-102,
+/// called at :307): singleton case names stay bare; each duplicate group of
 /// size `n` is rewritten to `<name>_case_<i>` with the running index `i`
 /// (1,2,3…) zero-padded to the width of `show n`.  Input order is
 /// preserved.  Shared by the `SolveGoal` and `Induction` arms of
@@ -315,7 +315,7 @@ pub fn exec_proof_method(
     // HS-faithful per-step Maude counter reset (ProofMethod.hs):
     //   `runReduction (m <* simplifySystem) ctxt sys (avoid sys)`
     // The FreshT counter starts at `avoid sys` for EVERY proof step
-    // (`avoid = maybe 0 (succ . snd) . boundsVarIdx`, LTerm.hs:656-657 —
+    // (`avoid = maybe 0 (succ . snd) . boundsVarIdx`, LTerm.hs:680-681 —
     // 0 for a frees-less system such as a lemma's ROOT step, else
     // max idx + 1; `avoid_fresh_state` mirrors that exactly).
     // Without this, Rust's Maude counter advances monotonically across all
@@ -364,7 +364,7 @@ pub fn exec_proof_method(
         ProofMethod::Sorry(_) | ProofMethod::Finished(_) => Some(Vec::new()),
         ProofMethod::Invalidated | ProofMethod::RawSolve(_) => None,
         ProofMethod::Simplify => {
-            // HS-faithful: `simplifySystem` (Simplify.hs:65-67) emits
+            // HS-faithful: `simplifySystem` (Simplify.hs:56-57) emits
             // its `traceExecM "simplifySystem"` ONCE per call; its
             // internal `go`-loop runs CR-rules to a fixpoint without
             // re-tracing.  We mirror that by tracing here (the logical
@@ -452,12 +452,13 @@ pub fn exec_proof_method(
             let cleaned: Vec<System> = remove_redundant_cases_ctx(ctx, |s: &System| s, cleaned);
             // Empty case-map: `simplifySystem` mzero'd every branch (the
             // restriction / formula set is contradictory).  HS's `Simplify`
-            // arm (ProofMethod.hs:421-427) inspects `M.toList cases`; the
+            // arm (ProofMethod.hs:288-296) inspects `M.toList cases`; the
             // empty list matches the `_ -> return cases` branch, so it
             // returns `Just M.empty` — Simplify SUCCEEDS with zero cases.
-            // `proveSystemDFS` (Proof.hs:1034-1044, see line 1043) then takes Simplify as the
-            // head method and builds a childless node, which `prettyProof`
-            // (Proof.hs:1080-1101, see line 1084) renders as a `by simplify` leaf closing the
+            // `proveSystemDFS` (Theory/Proof.hs:1017-1028, see line 1025) then
+            // takes Simplify as the head method and builds a childless node,
+            // which `prettyProof` (Theory/Proof.hs:1062-1071, see line 1065)
+            // renders as a `by simplify` leaf closing the
             // (exists-trace) proof.  Returning `None` here instead would
             // drop Simplify from the ranked list and let `Induction` win —
             // the divergence this arm must avoid.
@@ -502,7 +503,7 @@ pub fn exec_proof_method(
             crate::constraint::solver::trace::trace_pick(g);
             let mut r = Reduction::new(ctx, sys.clone());
             let outcome = crate::constraint::solver::goals::dispatch_solve_goal(&mut r, g);
-            // HS FreshT-threading (task #16): per-case branch counters for
+            // HS FreshT-threading: per-case branch counters for
             // the post-solve simplify continuation.  Single-case adoptions
             // already reset `r.maude`; multi-case outcomes recorded their
             // per-branch counters in `last_case_counters`.
@@ -541,38 +542,27 @@ pub fn exec_proof_method(
             };
             // Filter cases the same way Haskell's `runReduction` does:
             // when a CR-rule called `contradictoryIf` during simplify
-            // (e.g. solveFactEqs / solveRuleEqs / solveSubstEqs hitting
-            // an incompatible unification, or Maude returning the empty
-            // unifier set on a sort/tag mismatch), the Disj entry for
-            // that case becomes `mzero` and disappears.  In our port
-            // these failures surface as `Contradiction::IncompatibleEqs`
-            // (eq_store.is_false / sort-conflation / edge-tag mismatch).
-            // We mirror Haskell by pruning only those cases.
+            // (solveFactEqs / solveRuleEqs / solveSubstEqs hitting an
+            // incompatible unification, or Maude returning the empty
+            // unifier set on a sort/tag mismatch), the Disj entry for that
+            // case becomes `mzero` and disappears.  `eq_store.is_false()`
+            // is the direct proxy for that `mzero`, and the ONLY signal
+            // pruned on here.
             //
             // Cases with *other* contradictions (FormulasFalse, Cyclic,
-            // NodeAfterLast, …) survive `runReduction` in Haskell and
-            // are picked up by the next iteration's contradictions
-            // check as explicit `Finished(Contradictory(_))` leaves.
-            // Do *not* filter those here, or the proof tree loses
-            // siblings whose contradiction reason Haskell renders.
-            // Filter cases where the eq_store has been marked false.
-            // This is the most-direct Haskell-faithful proxy for `mzero`
-            // from `contradictoryIf` during simplify (the eq-store flips
-            // to false when solveSubstEqs/solveTermEqs/solveFactEqs hit
-            // an incompatible unification, or when Maude returns the
-            // empty unifier set).  Other `Contradiction`-list signals
-            // (sort-conflation, edge-fact-tag mismatch, Cyclic, …) are
-            // post-simplify detections in our port — Haskell either
-            // catches them earlier (before the case is even built) or
-            // leaves them as explicit `Finished(Contradictory(_))`
-            // leaves.  Mirror the latter shape by *not* filtering them.
+            // NodeAfterLast, sort-conflation, edge-fact-tag mismatch, …)
+            // survive `runReduction` in Haskell and are picked up by the
+            // next iteration's contradictions check as explicit
+            // `Finished(Contradictory(_))` leaves.  Do *not* filter those
+            // here, or the proof tree loses siblings whose contradiction
+            // reason Haskell renders.
             let keep = |sys: &System, name: &str| -> bool {
                 let r = !sys.eq_store.is_false();
                 let op = if r { "case_keep" } else { "case_drop" };
                 crate::state_trace::emit_case(op, name, Some(g), sys);
                 r
             };
-            // HS-faithful: `processLabeled` (ProofMethod.hs:453-465) treats
+            // HS-faithful: `process` (ProofMethod.hs:301-307) treats
             // EVERY `solveGoal` result UNIFORMLY — the solve yields ONE
             // `CaseName`, then `runReduction (m <* simplifySystem)` fans the
             // DisjT continuation out into N branches that ALL carry that same
@@ -660,20 +650,11 @@ pub fn exec_proof_method(
                         out
                     })
                     .collect();
-                // HS `process` (ProofMethod.hs) dedups cases
-                // ONLY via `removeRedundantCases ctxt [] snd` — gated
-                // on BP/MSet, comparing systems up-to-new-vars
-                // (Sources.hs).  There is no unconditional
-                // exact-(name,system) dedup: any surviving same-named
-                // cases are renamed by `uniqueListBy ... distinguish`
-                // (ProofMethod.hs) to `name_case_1`/`name_case_2`,
-                // never dropped.  Variant enumeration is threaded
-                // through SplitG by `reduction::rule_insts_with_constrs`,
-                // so each distinct variant arrives as its own
-                // RuleACInst case here.  Empty stable_vars (HS passes
-                // `[]`); the helper is a no-op outside BP/MSet.
-                // HS `uniqueListBy ... distinguish` — rename duplicate
-                // case names to `name_case_N`.
+                // No unconditional exact-(name, system) dedup: same-named
+                // survivors are renamed, never dropped.  Variant
+                // enumeration is threaded through SplitG by
+                // `reduction::rule_insts_with_constrs`, so each distinct
+                // variant arrives as its own RuleACInst case here.
                 Some(process_cases(ctx, kept_raw))
             }
         }
@@ -704,7 +685,7 @@ pub fn exec_proof_method(
             // goal at gsNr=0, shifting every subsequent gsNr in every
             // sibling branch and diverging from HS at the first insertGoal
             // call.)
-            // HS `process . induction` (ProofMethod.hs:348-459, see line 428, 521-525):
+            // HS `process . induction` (ProofMethod.hs:284-339, see line 297,305,328):
             // `runReduction (induction <* simplifySystem)` under the DisjT
             // monad.  `simplifySystem` CAN fan out at induction time — a
             // step-case formula that `reduceFormulas` decomposes into
@@ -751,7 +732,7 @@ pub fn exec_proof_method(
             // HS `process` tail: `removeRedundantCases ctxt [] snd`
             // (BP/MSet-gated structural dedup, before naming) followed by
             // `uniqueListBy (comparing fst) id distinguish`
-            // (ProofMethod.hs:462-463, see line 465, 527-532): singleton names stay bare;
+            // (ProofMethod.hs:90-102, called at :307): singleton names stay bare;
             // duplicate groups get `<name>_case_<i>`.  (The empty-name
             // branch of `distinguish` is unreachable here — both
             // induction case names are non-empty.)

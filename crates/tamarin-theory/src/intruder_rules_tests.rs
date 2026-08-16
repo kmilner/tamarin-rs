@@ -5,7 +5,7 @@
 use super::*;
 
 /// Pins every `show_fun_sym_name` arm to the display name HS
-/// `showFunSymName` (Term.hs:286-296) produces.  The arms read
+/// `showFunSymName` (Term/Term.hs:286-296) produces.  The arms read
 /// `tamarin_term::function_symbols`' `*SymString` constants, which are
 /// also what `maude_print` emits into the Maude module, so an edit to one
 /// of them moves intruder-rule names, `close_rule.rs` case names and
@@ -271,7 +271,7 @@ fn fingerprint_rejects_are_shape_clashes_only() {
     assert!(!fp(&pair_rule).may_be_subset(&fp(&no_conc)));
 
     // A one-argument AC application is `Opaque`: HS assumes such terms
-    // never occur (Term/Unification.hs:299), so it licenses no reject.
+    // never occur (Term/Unification.hs:299-301), so it licenses no reject.
     let ac_singleton = ku_rule_over_var("a", |a| unsafe_f_app(FunSym::Ac(AcSym::Mult), vec![a]));
     assert!(fp(&ac_singleton).may_be_duplicate(&fp(&var_rule)));
     assert!(fp(&ac_singleton).may_be_duplicate(&fp(&pair_rule)));
@@ -492,7 +492,7 @@ fn destruction_rules_pair_emits_fst_snd_destructors() {
 #[test]
 fn subterm_constructor_rules_emits_only_constructors() {
     let sig = tamarin_term::maude_sig::sym_enc_maude_sig();
-    let maude = match maude_bin_path()
+    let maude = match maude_path()
         .and_then(|p| tamarin_term::maude_proc::MaudeHandle::start(&p, sig.clone()).ok())
     {
         Some(m) => m,
@@ -626,7 +626,7 @@ fn destruction_rules_pair_emits_exactly_two_destructors() {
 }
 
 // =========================================================================
-// `equal_rule_up_to_renaming` (Rule.hs:1065-1077).  Mirrors HS:
+// `equal_rule_up_to_renaming` (Theory/Model/Rule.hs:1157-1175).  Mirrors HS:
 //
 //   equalRuleUpToRenaming r1 r2 = reader $ \hnd ->
 //     case eqs of
@@ -636,25 +636,25 @@ fn destruction_rules_pair_emits_exactly_two_destructors() {
 // Pin both ends of the predicate: a positive (two rules differing only
 // in variable names) and a negative (structurally different).
 // =========================================================================
-/// Locate the Maude binary (`MAUDE_PATH` env override, else the common
-/// install paths).  `None` skips the Maude-backed tests below.
-fn maude_bin_path() -> Option<String> {
-    std::env::var("MAUDE_PATH").ok().or_else(|| {
-        for c in ["/usr/local/bin/maude", "maude"] {
-            if std::path::Path::new(c).exists() {
-                return Some(c.to_string());
-            }
-        }
-        None
-    })
-}
+use crate::test_maude::maude_path;
 
 fn maude_handle() -> Option<tamarin_term::maude_proc::MaudeHandle> {
-    tamarin_term::maude_proc::MaudeHandle::start(
-        &maude_bin_path()?,
-        tamarin_term::maude_sig::pair_maude_sig(),
+    let path = maude_path()?;
+    // A maude that resolved but will not start is the same misconfiguration
+    // as a dangling MAUDE_PATH: swallowing it with `.ok()` would silently
+    // skip every pin in this file, so fail loudly instead.
+    Some(
+        tamarin_term::maude_proc::MaudeHandle::start(
+            &path,
+            tamarin_term::maude_sig::pair_maude_sig(),
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "maude at {path} failed to start: {e:?} — every maude-backed \
+                 pin here would otherwise skip silently"
+            )
+        }),
     )
-    .ok()
 }
 
 /// Build a rule `[ KU(a) ] --[ KU(pair(a, a)) ]-> [ KU(pair(a, a)) ]`
@@ -696,7 +696,7 @@ fn equal_rule_up_to_renaming_alpha_equivalent_pair_rules() {
         "two rules differing only in their bound var's name+idx \
              must be equal-up-to-renaming.  HS: `unifyLNTerm` yields a \
              renaming `[x.0 ~> y.7]`, isRenaming on each rule's restricted \
-             var set holds.  See Rule.hs:1065-1077."
+             var set holds.  See Theory/Model/Rule.hs:1157-1175."
     );
     // Symmetric: r2 vs r1.
     assert!(
@@ -760,7 +760,7 @@ fn equal_rule_up_to_renaming_structurally_different_rules_diverge() {
 }
 
 // =========================================================================
-// `variants_intruder` (IntruderRules.hs:288-314).
+// `variants_intruder` (IntruderRules.hs:347-374).
 //
 // Pin: a `DestrRule subterm=False` rule whose argument terms have
 // Maude variants under the AC theory produces MORE than one variant.
@@ -798,7 +798,7 @@ fn variants_intruder_emits_at_least_the_identity_variant() {
         !variants.is_empty(),
         "variants_intruder must emit at least one rule (the identity \
              variant if no Maude variants exist).  HS \
-             `variantsIntruder` (IntruderRules.hs:288-314) wraps the \
+             `variantsIntruder` (IntruderRules.hs:347-374) wraps the \
              rule in a list-monad enumeration that includes the original \
              via the identity Maude variant."
     );
@@ -945,7 +945,7 @@ fn destruction_rules_returns_empty_for_closed_rhs_in_non_diff_mode() {
 
 fn dh_maude_handle() -> Option<tamarin_term::maude_proc::MaudeHandle> {
     tamarin_term::maude_proc::MaudeHandle::start(
-        &maude_bin_path()?,
+        &maude_path()?,
         tamarin_term::maude_sig::dh_maude_sig(),
     )
     .ok()
@@ -953,7 +953,7 @@ fn dh_maude_handle() -> Option<tamarin_term::maude_proc::MaudeHandle> {
 
 fn bp_maude_handle() -> Option<tamarin_term::maude_proc::MaudeHandle> {
     tamarin_term::maude_proc::MaudeHandle::start(
-        &maude_bin_path()?,
+        &maude_path()?,
         tamarin_term::maude_sig::bp_maude_sig(),
     )
     .ok()
@@ -1089,8 +1089,8 @@ fn dh_intruder_rules_emits_five_constructors_and_some_destructors() {
     // and `_inv` destructors (`KD(x)->KD(inv(x))`, `[KD(x),KU(y)]->
     // [KD(x^y)]`) MUST be dropped — Maude returns them as `x0 --> #N`
     // fresh-witness renamings which HS's `removeRenamings`
-    // (Maude/Types.hs:123-127, see line 130) collapses to the empty subst, so the
-    // `ruvariant /= ru` guard (IntruderRules.hs:288-314, see line 297) discards them.
+    // (Maude/Types.hs:133-157, see line 144) collapses to the empty subst, so the
+    // `ruvariant /= ru` guard (IntruderRules.hs:354-360, see line 356) discards them.
     // A regression here (53 rules: +1 d_exp, +1 d_inv) means the
     // `remove_renamings` step in `variants_intruder` was lost.
     let (n_exp, n_inv) = destrs.iter().fold((0usize, 0usize), |(e, i), d| {
@@ -1332,7 +1332,7 @@ fn dh_intruder_rules_all_names_have_underscore_prefix() {
 
 /// `norm_rule` is the identity on a DH constructor rule whose
 /// terms are already in normal form (KU(x.0), KU(x.1), KU(exp(x.0, x.1))).
-/// Mirrors HS `normRule'` (IntruderRules.hs:317-321) — for already-normal
+/// Mirrors HS `normRule'` (IntruderRules.hs:376-380) — for already-normal
 /// terms, `norm'` returns the input.
 #[test]
 fn norm_rule_identity_on_already_normal_rule() {

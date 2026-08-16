@@ -16,7 +16,8 @@
 //!   [`constraint::solver::reduction`]
 //! - [`sapic`] ← `Theory.Sapic.{Position, Term, Annotation, Process, Pattern}`
 //! - [`intruder_rules`] / [`intruder_variants`] ←
-//!   `Theory.Tools.IntruderRules`
+//!   `Theory.Tools.IntruderRules`; [`close_rule`] ← `CloseRule.hs`'s
+//!   no-deconstruction-chain check
 //! - [`predicate`] / [`predicate_expand`] ← `Theory.Syntactic.Predicate`
 //!   (data + lookup + `expandFormula`)
 //! - [`constraint`] ← `Theory.Constraint.*` (the constraint solver,
@@ -25,8 +26,12 @@
 //! - [`tools`] ← `Theory.Tools.*` (equation store, subterm store,
 //!   abstract interpretation, loop breakers, rule-variants,
 //!   injective-fact instances)
-//! - [`check_terms`] ← well-formedness checks; [`deriv_check`] ←
-//!   message-derivation checks
+//! - [`check_terms`] / [`formula_reports`] / [`mult_restricted`] /
+//!   [`wf_fill`] ← `Theory.Tools.Wellformedness` (`checkTerms`,
+//!   `formulaReports`, `multRestrictedReport`, and the report's paragraph
+//!   layout); [`deriv_check`] ← message-derivation checks;
+//!   [`translated_wf`] ← the `checkTranslatedTheory` re-runs both drivers
+//!   share
 //! - [`theory`] ← top-level `Theory` (open/closed theories);
 //!   [`elaborate`] ← theory elaboration/closing
 //! - [`tactic`] ← heuristic tactics; [`proof_skeleton`] / [`replay`] /
@@ -35,6 +40,7 @@
 //!   [`pretty_hpj`] ← theory / system / formula pretty-printing;
 //!   [`pretty_sapic`] ← `Theory.Sapic.{Term,Process}` pretty-printing
 //! - [`auto_sources`] ← `OpenTheory` `addAutoSourcesLemma` (`--auto-sources`)
+//! - [`module`] ← `Theory.Module` (the `--output-module` selector)
 //! - [`state_trace`] ← solver state tracing
 //!
 //! The `.spthy` parser lives in the sibling `tamarin-parser` crate.
@@ -57,6 +63,7 @@ pub mod guarded_types;
 pub mod intruder_rules;
 pub mod intruder_variants;
 pub mod macro_expand;
+pub mod module;
 pub mod mult_restricted;
 pub mod predicate;
 pub mod predicate_expand;
@@ -75,6 +82,9 @@ pub mod sapic;
 pub mod signature;
 pub mod state_trace;
 pub mod tactic;
+#[cfg(test)]
+pub(crate) mod test_maude;
 pub mod theory;
 pub mod tools;
+pub mod translated_wf;
 pub mod wf_fill;

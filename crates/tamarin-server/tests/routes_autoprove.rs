@@ -5,12 +5,12 @@
 //! Integration tests that exercise the prover-driving endpoints: the
 //! autoprove routes and `main/method`'s single-step apply.
 //!
-//! These tests run the actual Rust solver via `prove_lemma` and so
+//! These tests drive the real Rust solver through the handlers, so they
 //! need a working `maude` binary: `MAUDE_PATH` if set, else a common
-//! location probed by `start_server_with_theory`, else `maude` on PATH.  They are tagged with the small
-//! `issue193.spthy` fixture because it has only one trivial
-//! exists-trace lemma (`debug`) that the solver dispatches in well
-//! under a second.
+//! location probed by `start_server_with_theory`, else `maude` on PATH.
+//! Most use the small `issue193.spthy` fixture, whose single trivial
+//! exists-trace lemma (`debug`) the solver dispatches in well under a
+//! second.
 
 mod common;
 
@@ -56,13 +56,11 @@ async fn test_autoprove_returns_redirect_envelope() {
 
     let redir = v.get("redirect").and_then(|t| t.as_str()).unwrap_or("");
 
-    // SHAPE assertions (not byte equality — Haskell's
-    // `nextSmartThyPath` produces e.g.
-    // `/thy/trace/2/overview/proof/debug/_/ONE/ONE` for issue193
-    // because the solver's tree has a `ONE` case after autoprove.
-    // Our Rust solver returns only a status, so we land at the root
-    // (`/_`), but both share the same prefix and the same
-    // "NEW idx" semantics.  The frontend dispatcher works on both.
+    // SHAPE assertions, not byte equality: both sides walk
+    // `nextSmartThyPath` over the freshly autoproved tree (the port's
+    // `next_thy_path_inner`), so the tail of the URL depends on the shape
+    // that search produced.  What is pinned here is the prefix and the
+    // "NEW idx" semantics, which the frontend dispatcher relies on.
     assert!(
         redir.starts_with("/thy/trace/"),
         "redirect should start at /thy/trace/...; got {:?}",
@@ -188,7 +186,7 @@ async fn test_method_out_of_range_index_alerts_match_haskell() {
 #[tokio::test]
 async fn test_autoprove_with_missing_idx_returns_404_html() {
     // Match Haskell: bad theory idx returns 404 HTML (see
-    // `withTheory` / `notFound` in `src/Web/Handler.hs:660-666`).
+    // `withTheory` / `notFound` in `src/Web/Handler.hs:662-672`).
     let s = start_server_with_theory("issue193.spthy").await;
     let url = s.url("/thy/trace/99/autoprove/idfs/0/False/proof/debug");
     let res = s.client.get(&url).send().await.expect("send");
@@ -227,7 +225,7 @@ async fn test_autoprove_on_unknown_lemma_returns_alert() {
 // Web-parity regression: after autoprove, `main/proof/<lemma>` must render
 // the "Applicable Proof Methods" + sequent snippet from the grown tree's
 // retained per-node systems — not an empty "Constraint System is Solved".
-// Guards the `set_keep_sys(true)` that `tamarin_server::init_process_globals`
+// Guards the `SysRetention::KeepAll` that `tamarin_server::init_process_globals`
 // applies for every server, the harness's included.
 #[tokio::test]
 async fn test_autoprove_proof_view_retains_systems() {

@@ -30,20 +30,17 @@ pub enum DiffType {
 /// because [`Term::App`] expects AC-normalised argument lists.
 ///
 /// Children of [`Term::App`] are held in an `Arc<[_]>` so that cloning a
-/// `Term` is O(1) (one atomic refcount bump on `Arc<[_]>`) instead of a
-/// recursive deep clone.  This mirrors GHC's structural sharing of term
-/// subtrees: a `Term` in Haskell is a pointer-sized value that is shared
-/// across many sites by reference, never deep-copied.  Profiling shows
-/// that with the prior `Vec<Term<A>>` children, ~50% of solver CPU was
-/// spent in `Term::clone` / `mi_malloc` / `mi_free` on the hot path
-/// `subst_system_once → Goal::clone → Fact::clone → Vec::clone →
-/// Term::clone`.  The `Arc<[_]>` form makes that O(1).
+/// `Term` is O(1) (one atomic refcount bump) instead of a recursive deep
+/// clone.  This mirrors GHC's structural sharing of term subtrees: a
+/// `Term` in Haskell is a pointer-sized value shared across many sites by
+/// reference, never deep-copied.  It keeps the solver's hottest allocation
+/// path (`subst_system_once → Goal::clone → Fact::clone → Term::clone`)
+/// off the allocator.
 ///
-/// Reading (`args.iter()`, `args.len()`, `args[i]`, `&args[..]`) is
-/// unchanged because `Arc<[_]>` derefs to `[_]`.  Construction sites
-/// convert via `vec.into()` (or `Arc::from(vec)`); destructure-and-
-/// consume patterns use `args.iter().cloned()` (each child clone is
-/// itself O(1)).
+/// Reading (`args.iter()`, `args.len()`, `args[i]`, `&args[..]`) works
+/// because `Arc<[_]>` derefs to `[_]`.  Construction sites convert via
+/// `vec.into()` (or `Arc::from(vec)`); destructure-and-consume patterns
+/// use `args.iter().cloned()` (each child clone is itself O(1)).
 #[derive(Debug, Clone)]
 pub enum Term<A> {
     Lit(A),
@@ -57,9 +54,10 @@ pub enum Term<A> {
 // deep recursive walk.  The std `Ord for Arc` does NOT short-circuit on pointer
 // identity (only `PartialEq` does), which is why `cmp`/`partial_cmp` are
 // hand-written here.  Correctness: `Arc::ptr_eq ⇒ true` means the same
-// allocation ⇒ identical contents, so the result equals the previous derived,
+// allocation ⇒ identical contents, so the answer equals the purely
 // content-based one; on a pointer mismatch we fall back to the full structural
-// comparison.  Variant order (Lit < App) and field order are preserved exactly.
+// comparison.  Variant order (Lit < App) and field order match the derived
+// impls exactly.
 impl<A: PartialEq> PartialEq for Term<A> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
@@ -210,12 +208,17 @@ const FAPP_AC_EMPTY_MSG: &str = "Term.fAppAC: empty argument list";
 ///
 /// GHC has no `Result` to return here: `error` throws, and with nothing
 /// catching it the runtime prints `tamarin-prover: ` ++ `displayException`
-/// (message + `HasCallStack` frame) on stderr and exits 1.  `f_app_ac`'s
-/// callers reach into every layer of the port and cannot carry a `Result`
-/// either, so the port raises a panic whose payload carries exactly the text
-/// GHC would print; the binary's panic hook recognises it via
-/// [`hs_error_text`] and reproduces the stream and exit code.
-fn hs_error(message: &str, call_site: String) -> ! {
+/// (message + `HasCallStack` frame) on stderr and exits 1.  The `error`s this
+/// stands in for sit below the port's error-returning layers, in code whose
+/// callers cannot carry a `Result` (`Term.fAppAC`, Raw.hs:120;
+/// `Main.Console.testProcess`' maude abort, Console.hs:147), so the port
+/// raises a panic whose payload carries exactly the text GHC would print; the
+/// binary's panic hook recognises it via [`hs_error_text`] and reproduces the
+/// stream and exit code.
+///
+/// `call_site` is the frame's `src/<path>:<line>:<column> in <package>:<module>`
+/// text, hardcoded from the oracle build at each raise site.
+pub fn hs_error(message: &str, call_site: String) -> ! {
     panic!("{HS_ERROR_MARKER}{message}\nCallStack (from HasCallStack):\n  error, called at {call_site}");
 }
 
@@ -327,17 +330,18 @@ pub fn count_proper_subterms<A: PartialEq>(needle: &Term<A>, haystack: &Term<A>)
 
 // =============================================================================
 // "Protected" subterms (auto-sources).
-// NB (HS Term.hs:229-230, see line 235): anything but a pair or an AC symbol is "protected".
+// NB (HS Term/Term.hs:254-255): anything but a pair or an AC symbol is "protected".
 // =============================================================================
 
 /// `True` iff the term's top symbol is an AC operator. Port of HS `isAC`
-/// (Term.hs:208-210).
+/// (Term/Term.hs:229-231).
 pub fn is_ac<A>(t: &Term<A>) -> bool {
     matches!(t, Term::App(FunSym::Ac(_), _))
 }
 
-/// `True` iff the term is a pair `<_,_>`. Port of HS `isPair` (Term.hs:164-166,
-/// `viewTerm2 -> FPair _ _`): top symbol is the binary `pair` constructor.
+/// `True` iff the term is a pair `<_,_>`. Port of HS `isPair`
+/// (Term/Term.hs:185-187, `viewTerm2 -> FPair _ _`): top symbol is the binary
+/// `pair` constructor.
 pub fn is_pair<A>(t: &Term<A>) -> bool {
     match t {
         Term::App(FunSym::NoEq(s), args) => {
@@ -348,15 +352,15 @@ pub fn is_pair<A>(t: &Term<A>) -> bool {
 }
 
 /// `True` iff the term is a DH product `_*_`. Port of HS `isProduct`
-/// (Term.hs:179-181, `viewTerm2 -> FMult _`): top symbol is the AC
+/// (Term/Term.hs:200-202, `viewTerm2 -> FMult _`): top symbol is the AC
 /// multiplication operator.
 pub fn is_product<A>(t: &Term<A>) -> bool {
     matches!(t, Term::App(FunSym::Ac(AcSym::Mult), _))
 }
 
 /// `True` iff the term is a well-formed inverse `inv(_)`. Port of HS `isInverse`
-/// (Term.hs:174-176, `viewTerm2 -> FInv _`): the unary `inv` operator applied to one
-/// argument.
+/// (Term/Term.hs:195-197, `viewTerm2 -> FInv _`): the unary `inv` operator
+/// applied to one argument.
 pub fn is_inverse<A>(t: &Term<A>) -> bool {
     match t {
         Term::App(FunSym::NoEq(s), args) => {
@@ -368,7 +372,7 @@ pub fn is_inverse<A>(t: &Term<A>) -> bool {
 
 /// All "protected" subterms of `t`: subterms whose top symbol is a function
 /// that is neither a pair nor an AC operator. Port of HS `allProtSubterms`
-/// (Term.hs:239-251) — pre-order, descending through pairs/AC operators.
+/// (Term/Term.hs:260-265) — pre-order, descending through pairs/AC operators.
 pub fn all_prot_subterms<A: Clone>(t: &Term<A>) -> Vec<Term<A>> {
     match t {
         Term::App(_, args) if is_pair(t) || is_ac(t) => {
@@ -424,7 +428,7 @@ pub trait TermSize {
     fn size(&self) -> usize;
 }
 
-// Port of `instance Sized a => Sized (Term a)` (Term/Term/Raw.hs:231-235, see line 235).
+// Port of `instance Sized a => Sized (Term a)` (Term/Term/Raw.hs:247-248).
 impl<A: TermSize> TermSize for Term<A> {
     fn size(&self) -> usize {
         match self {
@@ -472,6 +476,25 @@ impl TermSize for &str {
 mod tests {
     use super::*;
     use crate::function_symbols::{exp_sym, pair_sym, AcSym, CSym, FunSym};
+
+    /// The pinned submodule's `lib/term/src/Term/Term/Raw.hs`, embedded at
+    /// build time.
+    const RAW_HS: &str = include_str!("../../../tamarin-prover/lib/term/src/Term/Term/Raw.hs");
+
+    /// [`FAPP_AC_EMPTY_SITE`] is pasted verbatim into a `HasCallStack` frame
+    /// the port must emit byte-for-byte, and the stderr tests for that frame
+    /// compare the port against bytes captured from the port — so they agree
+    /// with a stale coordinate.  Read it back out of the pinned source.
+    #[test]
+    fn fapp_ac_empty_site_is_the_pinned_call_site() {
+        let (idx, line) = RAW_HS
+            .lines()
+            .enumerate()
+            .find(|(_, l)| l.contains(FAPP_AC_EMPTY_MSG))
+            .expect("no `fAppAC` empty-list `error` in the pinned Raw.hs");
+        let col = line.find("error").expect("no `error` token") + 1;
+        assert_eq!(FAPP_AC_EMPTY_SITE, format!("{}:{}", idx + 1, col));
+    }
 
     fn nat(n: u64) -> Term<u64> {
         lit(n)

@@ -27,7 +27,7 @@ use crate::rewriting::RRule;
 use crate::subterm_rule::CtxtStRule;
 use crate::term::Term;
 
-/// HS `stRules :: S.Set CtxtStRule` (Signature.hs:99), paired with the
+/// HS `stRules :: S.Set CtxtStRule` (Term/Maude/Signature.hs:99), paired with the
 /// `maude_proc::term_ac_c_free` verdict of each rule's LHS.
 ///
 /// `norm::go_nf` needs that verdict per rule — at every `App` node of every
@@ -326,7 +326,7 @@ impl MaudeSig {
     /// AC symbols to `st_ac_fun_syms`.
     ///
     /// HS `addFunSym funsym msig = msig <> mempty {stFunSyms = [funsym]}`
-    /// (Term/Maude/Signature.hs:152-154) — the `<>` routes through
+    /// (Term/Maude/Signature.hs:170-173) — the `<>` routes through
     /// `unionExceptPairSym`, so adding the `fst`/`snd` DESTRUCTOR variant
     /// removes the built-in CONSTRUCTOR variant (and vice versa).  A plain
     /// `insert` would leave BOTH `fst/1` and `fst/1[destructor]` in the set,
@@ -341,10 +341,10 @@ impl MaudeSig {
                 self.st_ac_fun_syms.insert(f);
             }
         }
-        // HS `<>` (Signature.hs:120-141) rebuilds via `maudeSig (mempty {...})`,
-        // and `mempty` has `eqConvergent=False` (line 145), which `maudeSig`
-        // preserves (line 105).  So routing through the monoid RESETS
-        // eqConvergent to false; mirror that here.
+        // HS `<>` (Term/Maude/Signature.hs:128-150) rebuilds via
+        // `maudeSig (mempty {...})`, and `mempty` has `eqConvergent=False`
+        // (line 153), which `maudeSig` preserves (line 112).  So routing through
+        // the monoid RESETS eqConvergent to false; mirror that here.
         self.eq_convergent = false;
         self.refresh()
     }
@@ -352,7 +352,7 @@ impl MaudeSig {
     /// Join `ndc_state` onto the NDC state of every symbol in the subterm
     /// signature whose NAME matches `fun_sym`'s.
     ///
-    /// HS `joinNDCinSig` (Signature.hs:233-247) matches by name only, because
+    /// HS `joinNDCinSig` (Term/Maude/Signature.hs:233-247) matches by name only, because
     /// the NDC state of the symbol handed in may differ from the one recorded
     /// in the signature (e.g. for symbols read out of the metadata of
     /// diff-mode intruder rules).  `fun_sym`s that carry no name (the built-in
@@ -394,7 +394,7 @@ impl MaudeSig {
     }
 
     /// The `functions:` list of HS `prettyMaudeSigExcept`
-    /// (Signature.hs:249-295): the subterm signature's free symbols rendered
+    /// (Term/Maude/Signature.hs:252-295): the subterm signature's free symbols rendered
     /// as `name/arity[attrs]`, followed by the user-defined AC symbols as
     /// `name/2[attrs]`, both skipping the entries listed in `excl`.
     ///
@@ -445,9 +445,9 @@ impl MaudeSig {
     /// Add a macro symbol.
     ///
     /// HS `addMacroSym funsym msig = msig <> mempty {macroNames=...}`
-    /// (Signature.hs:157-159) routes through the monoid `<>`, which rebuilds
-    /// from `mempty` (eqConvergent=False, line 145; preserved by `maudeSig`,
-    /// line 105) and so RESETS eqConvergent to false — match that.
+    /// (Term/Maude/Signature.hs:176-178) routes through the monoid `<>`, which
+    /// rebuilds from `mempty` (eqConvergent=False, line 153; preserved by
+    /// `maudeSig`, line 112) and so RESETS eqConvergent to false — match that.
     pub fn add_macro_sym(mut self, sym: NoEqSym) -> Self {
         self.macro_names.insert(sym);
         self.eq_convergent = false;
@@ -457,11 +457,12 @@ impl MaudeSig {
     /// Add a context subterm rule.
     pub fn add_ctxt_st_rule(mut self, rule: CtxtStRule) -> Self {
         // HS-faithful pair mutual-exclusion (`unionExceptPairRules`,
-        // Term/Maude/Signature.hs:135-141): the fst/snd CONSTRUCTOR and
+        // Term/Maude/Signature.hs:144): the fst/snd CONSTRUCTOR and
         // DESTRUCTOR rule variants are mutually exclusive.  HS `addCtxtStRule`
-        // (Signature.hs:162-164) is `msig <> mempty {stRules=[str]}`, so each
-        // user `equations:` rule goes through the monoid `<>`, which applies
-        // `unionExceptPairRules` (Signature.hs:120-141, see line 130, 135-141) — it is NOT a plain
+        // (Term/Maude/Signature.hs:181-183) is `msig <> mempty {stRules=[str]}`,
+        // so each user `equations:` rule goes through the monoid `<>`, which
+        // applies `unionExceptPairRules` (Term/Maude/Signature.hs:128-150, see
+        // line 139) — it is NOT a plain
         // set insert.  So an exported theory that declares `fst/1[destructor]` +
         // the pairing equation must keep only the declared destructor rule, not
         // BOTH the base constructor rule AND the user destructor rule (which
@@ -490,7 +491,7 @@ impl MaudeSig {
             enable_xor: self.enable_xor || other.enable_xor,
             enable_diff: self.enable_diff || other.enable_diff,
             st_fun_syms: union_except_pair_sym(&self.st_fun_syms, &other.st_fun_syms),
-            // HS `<>` unions `stACFunSyms` plainly (Signature.hs:127-141): the
+            // HS `<>` unions `stACFunSyms` plainly (Term/Maude/Signature.hs:138): the
             // `fst`/`snd` constructor-vs-destructor exception applies to the
             // free symbols only.
             st_ac_fun_syms: self
@@ -515,7 +516,7 @@ impl MaudeSig {
     }
 }
 
-/// HS `attrsNDC` (Signature.hs:290): the NDC attributes a symbol prints, in
+/// HS `attrsNDC` (Term/Maude/Signature.hs:289): the NDC attributes a symbol prints, in
 /// trace-then-diff order (a symbol with `IsNdcBoth` prints both).
 fn ndc_attrs(ndc: NdcState) -> &'static [&'static str] {
     match ndc {
@@ -526,7 +527,7 @@ fn ndc_attrs(ndc: NdcState) -> &'static [&'static str] {
     }
 }
 
-/// HS `showAttrs` (Signature.hs:292-293): nothing at all for an empty
+/// HS `showAttrs` (Term/Maude/Signature.hs:291-292): nothing at all for an empty
 /// attribute list, otherwise ` [a1,a2,…]` — note the LEADING space.
 fn show_attrs(attrs: &[&str]) -> String {
     if attrs.is_empty() {
@@ -536,7 +537,8 @@ fn show_attrs(attrs: &[&str]) -> String {
     }
 }
 
-/// HS `unionExceptPairSym` (Term/Maude/Signature.hs:134-141):
+/// HS `unionExceptPairSym` (Term/Maude/Signature.hs:143, with the
+/// `removeIfNecessary` helpers at 146-150):
 ///
 ///   unionExceptPairSym st1 st2 =
 ///       removeIfNecessary (removeIfNecessary st1 st2 fstSym fstDestSym)
@@ -582,7 +584,8 @@ fn union_except_pair_sym(a: &BTreeSet<NoEqSym>, b: &BTreeSet<NoEqSym>) -> BTreeS
     remove_if_necessary(&after_fst, b, &snd_sym(), &snd_dest_sym())
 }
 
-/// HS `unionExceptPairRules` (Term/Maude/Signature.hs:135-141):
+/// HS `unionExceptPairRules` (Term/Maude/Signature.hs:144, with the
+/// `removeIfNecessary` helpers at 146-150):
 ///
 ///   unionExceptPairRules st1 st2 =
 ///       removeIfNecessary (removeIfNecessary st1 st2 fstDestRule fstRule)
@@ -742,7 +745,7 @@ pub fn pair_maude_sig() -> MaudeSig {
     .refresh()
 }
 
-/// `pairDestMaudeSig` (Signature.hs:202-202): the `dest-pairing` variant —
+/// `pairDestMaudeSig` (Term/Maude/Signature.hs:221): the `dest-pairing` variant —
 /// fst/snd are DESTRUCTORS (`pair_fun_dest_sig`) with the destructor
 /// rewrite rules (`pair_dest_rules`), rather than constructors.
 pub fn pair_dest_maude_sig() -> MaudeSig {

@@ -70,10 +70,10 @@ pub fn expand_theory_formulas(thy: &mut p::Theory) -> Result<(), ExpandError> {
             }
             // CaseTest / AccLemma are NOT predicate-expanded: HS adds them
             // verbatim via `liftedAddCaseTest` / `liftedAddAccLemma`
-            // (Theory/Text/Parser.hs:152-163), which call `addCaseTest` /
+            // (Theory/Text/Parser.hs:153-163), which call `addCaseTest` /
             // `addAccLemma` directly with NO `expandFormula` / `expandLemma`.
             // Only `liftedAddLemma` (→ `expandLemma`) and the restriction path
-            // (→ `expandRestriction`) expand (TheoryObject.hs:430-446). The
+            // (→ `expandRestriction`) expand (TheoryObject.hs:434-450). The
             // case-test / acc-lemma formulas stay `SyntacticLNFormula` with
             // their `Pred` sugar intact; the accountability translation
             // (`caseTestToPredicate`, Items/CaseTestItem.hs:33-37) consumes
@@ -166,15 +166,15 @@ fn strip_shadowed<'a>(subst: &'a Subst, vs: &[p::VarSpec]) -> std::borrow::Cow<'
 /// keyed by the WHOLE LVar — so a message var `a` (`LSortMsg`) and a
 /// timepoint binder `#a` (`LSortNode`) are DISTINCT variables that cannot
 /// capture each other.  At print time HS likewise opens binders with
-/// `freshLVar n s` (Formula.hs:271-283, see line 276) over a `FreshState` seeded by
-/// `avoidPrecise = avoidPreciseVars . frees` (LTerm.hs:681-690); the bound
+/// `freshLVar n s` (Theory/Model/Formula.hs:272-284, see line 279) over a `FreshState`
+/// seeded by `avoidPrecise = avoidPreciseVars . frees` (LTerm.hs:714-715); the bound
 /// `#a` is not free and the free `a` was abstracted to `x` before
 /// printing, so HS renders `#a` (idx 0).  Do NOT key capture by name
 /// alone: that makes RS treat a substituted `a` as colliding with `#a`
 /// and rename it `#a1`, a divergence from HS (`binding.spthy`).
 ///
 /// Residual print-name gap (rare): HS keeps the original binder hint name
-/// (De-Bruijn shift only, Predicate.hs:94-106) and re-renames bound vars
+/// (De-Bruijn shift only, Predicate.hs:96-105) and re-renames bound vars
 /// fresh at print time, yielding e.g. `z.1` when a free `z` (SAME sort) is
 /// in scope.  Our name-based rename mints a NEW base (`z`→`z1`), so the
 /// printed binder reads `z1` rather than `z.1` in that one same-sort
@@ -261,22 +261,28 @@ fn sort_key(s: p::SortHint) -> SortKey {
     }
 }
 
-/// Collect `(name, sort)` keys of every variable in a term.
-fn collect_term_vars_keyed(t: &p::Term, out: &mut std::collections::BTreeSet<(String, SortKey)>) {
+/// Visit every variable occurrence of a term; the two collectors below differ
+/// only in the key they record.
+fn for_each_term_var(t: &p::Term, f: &mut dyn FnMut(&p::VarSpec)) {
     match t {
-        p::Term::Var(v) => {
-            out.insert((v.name.clone(), sort_key(v.sort)));
-        }
+        p::Term::Var(v) => f(v),
         p::Term::App(_, args) | p::Term::Pair(args) => {
-            args.iter().for_each(|a| collect_term_vars_keyed(a, out))
+            args.iter().for_each(|a| for_each_term_var(a, f))
         }
         p::Term::AlgApp(_, a, b) | p::Term::Diff(a, b) | p::Term::BinOp(_, a, b) => {
-            collect_term_vars_keyed(a, out);
-            collect_term_vars_keyed(b, out);
+            for_each_term_var(a, f);
+            for_each_term_var(b, f);
         }
-        p::Term::PatMatch(inner) => collect_term_vars_keyed(inner, out),
+        p::Term::PatMatch(inner) => for_each_term_var(inner, f),
         _ => {}
     }
+}
+
+/// Collect `(name, sort)` keys of every variable in a term.
+fn collect_term_vars_keyed(t: &p::Term, out: &mut std::collections::BTreeSet<(String, SortKey)>) {
+    for_each_term_var(t, &mut |v| {
+        out.insert((v.name.clone(), sort_key(v.sort)));
+    });
 }
 
 /// Build the builtin `Smaller`/multiset-`(<)` expansion `∃ z. rhs = lhs ++ z`.
@@ -284,7 +290,8 @@ fn collect_term_vars_keyed(t: &p::Term, out: &mut std::collections::BTreeSet<(St
 /// Mirrors HS `builtinPredicates` (Theory/Syntactic/Predicate.hs:58-74):
 /// `Smaller(x, y) <=> hinted exists z (Ato (EqE (bvt y) (fAppUnion (fvt x, fvt z))))`,
 /// i.e. `∃ z. y = x ++ z` with `lhs = x`, `rhs = y`.  The multiset operator
-/// `x (<) y` parses to `Smaller [x, y]` (HS `smallerp`, Formula.hs:30-38), so
+/// `x (<) y` parses to `Smaller [x, y]` (HS `smallerp`,
+/// Theory/Text/Parser/Formula.hs:30-38), so
 /// the same expansion applies with `lhs = x`, `rhs = y`.  `z`'s name is picked
 /// capture-avoidingly: a use-site argument may itself mention `z`, which the
 /// bound `z` would otherwise capture.
@@ -336,21 +343,11 @@ fn fresh_name(base: &str, avoid: &std::collections::BTreeSet<String>) -> String 
     }
 }
 
+/// Collect the NAME of every variable in a term.  See [`for_each_term_var`].
 fn collect_term_vars(t: &p::Term, out: &mut std::collections::BTreeSet<String>) {
-    match t {
-        p::Term::Var(v) => {
-            out.insert(v.name.clone());
-        }
-        p::Term::App(_, args) | p::Term::Pair(args) => {
-            args.iter().for_each(|a| collect_term_vars(a, out))
-        }
-        p::Term::AlgApp(_, a, b) | p::Term::Diff(a, b) | p::Term::BinOp(_, a, b) => {
-            collect_term_vars(a, out);
-            collect_term_vars(b, out);
-        }
-        p::Term::PatMatch(inner) => collect_term_vars(inner, out),
-        _ => {}
-    }
+    for_each_term_var(t, &mut |v| {
+        out.insert(v.name.clone());
+    });
 }
 
 fn collect_atom_vars(a: &p::Atom, out: &mut std::collections::BTreeSet<String>) {
@@ -437,7 +434,7 @@ fn expand_atom(
                 None => {
                     // No user predicate matched.  HS appends the single
                     // builtin predicate `Smaller` whose fact tag is
-                    // `ProtoFact Linear "Smaller" 2` (Predicate.hs:50-67),
+                    // `ProtoFact Linear "Smaller" 2` (Predicate.hs:50-56),
                     // so it matches a use-site only when it is LINEAR (not
                     // persistent), named exactly `Smaller`, and arity 2.
                     if !fact.persistent && fact.name == "Smaller" && sub_args.len() == 2 {
@@ -447,7 +444,7 @@ fn expand_atom(
                     // HS `show (UndefinedPredicate facttag)`
                     // (Theory/Text/Parser/Exceptions.hs:33-34) =
                     //   "undefined predicate " ++ showFactTagArity facttag
-                    // and `showFactTagArity` (Theory/Model/Fact.hs:519-527) =
+                    // and `showFactTagArity` (Theory/Model/Fact.hs:556-557) =
                     //   (if persistent then "!" else "") ++ name ++ "/" ++ arity.
                     Err(ExpandError {
                         message: format!(
@@ -561,7 +558,7 @@ mod tests {
         let res = expand_formula(&f, &preds);
         // `UndefinedPred(x)` parses as a `Pred` atom; with no matching
         // predicate, expansion reports `UndefinedPredicate`.  HS renders it
-        // (Theory/Text/Parser/Exceptions.hs:33-34 + Fact.hs:519-527) as
+        // (Theory/Text/Parser/Exceptions.hs:33-34 + Theory/Model/Fact.hs:556-557) as
         // `undefined predicate <name>/<arity>` (leading `!` if persistent).
         // Probed against the v1.13.0 prover: `... ==> P(x)` reports
         // `undefined predicate P/1`.
@@ -586,7 +583,7 @@ mod tests {
     #[test]
     fn case_test_and_acc_lemma_keep_pred_atoms() {
         // HS adds case-tests / acc-lemmas verbatim (liftedAddCaseTest /
-        // liftedAddAccLemma, Theory/Text/Parser.hs:152-163) with NO
+        // liftedAddAccLemma, Theory/Text/Parser.hs:153-163) with NO
         // predicate expansion — their `Pred` sugar stays intact for the
         // accountability translation.  `expand_theory_formulas` must NOT
         // expand them; a regular lemma over the same predicate IS expanded.

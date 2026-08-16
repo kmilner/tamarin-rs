@@ -1,0 +1,23 @@
+// Purpose-built fixture for the `--lemma` / `--bound` CLI pins in
+// tests/cli_e2e.rs.  Two lemmas with DIFFERENT outcomes (one verified, one
+// falsified) so a selector that silently fails to filter is visible in the
+// summary block, and a proof shallow enough (3 steps each) that the whole
+// run costs well under a second.
+theory CliFlagsBasic
+begin
+
+rule Gen:
+  [ Fr(~k) ] --[ Gen(~k) ]-> [ St(~k), Out(~k) ]
+
+rule Use:
+  [ St(~k), In(x) ] --[ Use(~k, x) ]-> [ ]
+
+lemma reach:
+  exists-trace
+  "Ex k x #i. Use(k, x) @ #i"
+
+lemma leaks:
+  all-traces
+  "All k #i. Gen(k) @ #i ==> not (Ex #j. K(k) @ #j)"
+
+end

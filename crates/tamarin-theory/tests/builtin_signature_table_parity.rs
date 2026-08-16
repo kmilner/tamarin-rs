@@ -49,7 +49,8 @@ fn builtin_sig(name: &str) -> Option<MaudeSig> {
     })
 }
 
-/// The `builtinsNames` rows that carry a signature (Signature.hs:78-86), in the
+/// The `builtinsNames` rows that carry a signature
+/// (Theory/Text/Parser/Signature.hs:78-86), in the
 /// order that list is walked.
 const BUILTINS_WITH_SIGNATURE: [&str; 15] = [
     "locations-report",
@@ -102,7 +103,8 @@ fn parser_builtin_table_matches_the_maude_signatures() {
 /// The other direction: no builtin with a `MaudeSig` may be missing from the
 /// parser's table, or `function`'s builtin pre-check would silently not fire
 /// for the names it reserves.  `reliable-channel` is the one `builtinsNames`
-/// row without a signature (Signature.hs:84) and is absent from both sides.
+/// row without a signature (Theory/Text/Parser/Signature.hs:84) and is absent
+/// from both sides.
 #[test]
 fn every_builtin_with_a_signature_is_in_the_parser_table() {
     for name in BUILTINS_WITH_SIGNATURE {
@@ -117,9 +119,11 @@ fn every_builtin_with_a_signature_is_in_the_parser_table() {
     );
 }
 
-/// `builtinReservedNames` (Signature.hs:174-181) is built by walking
+/// `builtinReservedNames` (Theory/Text/Parser/Signature.hs:174-181) is built
+/// by walking
 /// `builtinsNames` in order, and `function`'s `conflictingBuiltins`
-/// (Signature.hs:203) renders that walk's result — so the parser table's ROW
+/// (Theory/Text/Parser/Signature.hs:203) renders that walk's result — so the
+/// parser table's ROW
 /// order is load-bearing for the error text, not just its contents.
 #[test]
 fn parser_builtin_table_is_in_builtins_names_order() {

@@ -153,7 +153,7 @@ pub fn sort_of_name(n: &Name) -> LSort {
 /// and index match.
 ///
 /// **Ord semantics**: idx FIRST, then sort, then name — mirrors Haskell's
-/// `instance Ord LVar` in `lib/term/src/Term/LTerm.hs:521-523`:
+/// `instance Ord LVar` in `lib/term/src/Term/LTerm.hs:546-548`:
 ///
 /// ```haskell
 /// instance Ord LVar where
@@ -163,7 +163,7 @@ pub fn sort_of_name(n: &Name) -> LSort {
 ///
 /// where `x1=name, x2=sort, x3=idx` (comment: *"An ord instance that prefers
 /// the 'lvarIdx' over the 'lvarName'."*).  This matters because Haskell's
-/// `unifyRaw` (Unification.hs:235-243, see line 241) orients same-sort var-var bindings such
+/// `unifyRaw` (Unification.hs:275-276) orients same-sort var-var bindings such
 /// that the larger-Ord (=larger-idx) becomes the KEY:
 ///
 /// ```haskell
@@ -171,7 +171,7 @@ pub fn sort_of_name(n: &Name) -> LSort {
 /// ```
 ///
 /// Combined with `refineSource`'s post-saturate
-/// `restrict stableVars sSubst` (Sources.hs:118-124), this ensures stable
+/// `restrict stableVars sSubst` (Sources.hs:119-126, see line 123), this ensures stable
 /// pattern vars (small idx like t.1, t.2) are NEVER keys, so all
 /// stable-keyed bindings drop and pattern vars stay unbound for runtime
 /// `applySource` to bind cleanly.
@@ -397,22 +397,17 @@ pub(crate) fn fresh_to_const(t: LNTerm) -> LNTerm {
 /// index, and name. Panics if `v.sort` is `LSort::Msg`, mirroring the
 /// Haskell `error "Invalid sort Msg"`.
 pub fn variable_to_const(v: &LVar) -> LNTerm {
-    let tag = match v.sort {
-        LSort::Fresh => NameTag::Fresh,
-        LSort::Pub => NameTag::Pub,
-        LSort::Node => NameTag::Node,
-        LSort::Nat => NameTag::Nat,
+    // `sort_show` mirrors Haskell `show vsort` (derived `Show LSort`), which
+    // yields "LSortPub"/"LSortFresh"/"LSortNode"/"LSortNat" — NOT the bare
+    // Rust Debug names ("Pub"/"Fresh"/...).  See LTerm.hs:436-438
+    // (`variableToConst`/`toConstName`) and the `data LSort` declaration at
+    // LTerm.hs:165-170.
+    let (tag, sort_show) = match v.sort {
+        LSort::Fresh => (NameTag::Fresh, "LSortFresh"),
+        LSort::Pub => (NameTag::Pub, "LSortPub"),
+        LSort::Node => (NameTag::Node, "LSortNode"),
+        LSort::Nat => (NameTag::Nat, "LSortNat"),
         LSort::Msg => panic!("variable_to_const: invalid sort Msg"),
-    };
-    // Mirror Haskell `show vsort` (derived `Show LSort`), which yields
-    // "LSortPub"/"LSortFresh"/"LSortNode"/"LSortNat" — NOT the bare Rust
-    // Debug names ("Pub"/"Fresh"/...). See LTerm.hs:411-413 / 161-166.
-    let sort_show = match v.sort {
-        LSort::Pub => "LSortPub",
-        LSort::Fresh => "LSortFresh",
-        LSort::Msg => "LSortMsg",
-        LSort::Node => "LSortNode",
-        LSort::Nat => "LSortNat",
     };
     let id = format!("constVar_{}_{}_{}", sort_show, v.idx, v.name);
     const_term(Name::new(tag, id))
@@ -479,13 +474,14 @@ pub(crate) fn free_term(t: LNTerm) -> BLTerm {
 // =============================================================================
 
 /// A type that contains free `LVar`s. The Haskell typeclass takes a
-/// `MonotoneFunction` (LTerm.hs:550-551) distinguishing AC-position-preserving
+/// `MonotoneFunction` (LTerm.hs:574-575) distinguishing AC-position-preserving
 /// updates (`Monotone`, used by `rename`/`renameIgnoring`/`renameAvoiding*`
 /// index shifts) from arbitrary ones (`Arbitrary`, used by `someInst`,
 /// `applyVTerm` substitution, `fmap`). The two differ only at AC sub-terms:
 /// `Arbitrary` re-sorts the AC argument list (`fApp` -> `fAppAC`), while
 /// `Monotone` preserves the relative argument order (`unsafefApp`) because a
-/// monotone shift cannot change the AC-normal form ordering (LTerm.hs:733-735).
+/// monotone shift cannot change the AC-normal form ordering
+/// (`instance HasFrees (Term l)`'s `mapFrees`, LTerm.hs:788-791).
 pub trait HasFrees {
     /// Visit every free `LVar` exactly once in deterministic order.
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar));
@@ -511,7 +507,7 @@ pub trait HasFrees {
     /// `Monotone` map: preserves AC argument order.  Use ONLY where HS uses
     /// `rename`/`renameIgnoring`/`renameAvoiding*`/`someRuleACInst*` — i.e.
     /// pure index shifts whose monotonicity guarantees the AC-normal form
-    /// does not change (LTerm.hs:545-550).
+    /// does not change (LTerm.hs:569-575).
     fn map_free_monotone(self, f: &mut dyn FnMut(LVar) -> LVar) -> Self
     where
         Self: Sized,
@@ -780,11 +776,8 @@ pub fn rename_ignoring<T: HasFrees>(
             // non-monotone in general; transcribing HS verbatim (rather than
             // "fixing" it to an `Arbitrary` map) is what preserves AC arg
             // order — and byte parity — with the Haskell prover.
-            //
-            // `rename` reaches this with an empty `vars` on the proof-search
-            // hot path, where the length test skips the `contains` walk.
             t.map_free_monotone(&mut |v| {
-                if !vars.is_empty() && vars.contains(&v) {
+                if vars.contains(&v) {
                     v
                 } else {
                     LVar {
@@ -841,31 +834,6 @@ mod tests {
     use super::*;
     use crate::function_symbols::pair_sym;
     use crate::term::f_app_no_eq;
-
-    #[test]
-    fn sort_partial_order() {
-        assert_eq!(sort_compare(LSort::Fresh, LSort::Msg), Some(Ordering::Less));
-        assert_eq!(
-            sort_compare(LSort::Msg, LSort::Pub),
-            Some(Ordering::Greater)
-        );
-        assert_eq!(
-            sort_compare(LSort::Fresh, LSort::Fresh),
-            Some(Ordering::Equal)
-        );
-        // Fresh and Pub are incomparable.
-        assert_eq!(sort_compare(LSort::Fresh, LSort::Pub), None);
-        // Node is incomparable to everything else.
-        assert_eq!(sort_compare(LSort::Node, LSort::Msg), None);
-    }
-
-    #[test]
-    fn sort_prefixes() {
-        assert_eq!(sort_prefix(LSort::Fresh), "~");
-        assert_eq!(sort_prefix(LSort::Pub), "$");
-        assert_eq!(sort_prefix(LSort::Msg), "");
-        assert_eq!(sort_suffix(LSort::Nat), "nat");
-    }
 
     #[test]
     fn name_sort_mapping() {
@@ -950,7 +918,7 @@ mod tests {
     // counterpart by checked file:line below.**
     // =========================================================================
 
-    /// LTerm.hs:161-166:
+    /// LTerm.hs:165-170:
     ///     data LSort = LSortPub | LSortFresh | LSortMsg | LSortNode | LSortNat
     ///                deriving( Eq, Ord, ... )
     #[test]
@@ -964,7 +932,7 @@ mod tests {
         assert!(LSort::Pub < LSort::Nat);
     }
 
-    /// LTerm.hs:218:
+    /// LTerm.hs:219:
     ///     data NameTag = FreshName | PubName | NodeName | NatName | AbbrevName
     #[test]
     fn name_tag_ord_matches_haskell_declaration() {
@@ -974,7 +942,7 @@ mod tests {
         assert!(NameTag::Nat < NameTag::Abbrev);
     }
 
-    /// Haskell `sortCompare` (LTerm.hs:177-187) is a PARTIAL ORDER, NOT
+    /// Haskell `sortCompare` (LTerm.hs:181-191) is a PARTIAL ORDER, NOT
     /// the same as `Ord LSort`.  Specifically:
     ///   - Msg is greater than every other comparable sort
     ///   - Node is incomparable to ALL other sorts (returns Nothing)
@@ -987,7 +955,13 @@ mod tests {
     /// handling.
     #[test]
     fn sort_compare_is_partial_not_total() {
-        // Comparable: Msg dominates.
+        // Reflexive.
+        assert_eq!(
+            sort_compare(LSort::Fresh, LSort::Fresh),
+            Some(Ordering::Equal)
+        );
+        // Comparable: Msg dominates, in both directions.
+        assert_eq!(sort_compare(LSort::Fresh, LSort::Msg), Some(Ordering::Less));
         assert_eq!(
             sort_compare(LSort::Msg, LSort::Pub),
             Some(Ordering::Greater)

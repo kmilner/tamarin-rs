@@ -203,7 +203,7 @@ pub(crate) fn map_free_terms(
 /// (Theory/Text/Parser/Term.hs:151,158-163), so a declared 0-arity name in a
 /// term position resolves against the signature at parse time and BEATS any
 /// process binder of the same name — `new c` / `lookup t as c` bind an `LVar`
-/// named `c` (both take `sapicvar`, Sapic.hs:87,236), yet every later `c` in a
+/// named `c` (both take `sapicvar`, Parser/Sapic.hs:87,236), yet every later `c` in a
 /// term or `Cond` formula is the constant `fApp c []`.  Such an `FApp` leaf
 /// contributes nothing to `freesList` and is outside the domain of any
 /// `Subst Name LVar`, so HS neither counts nor rewrites it.
@@ -294,34 +294,17 @@ pub(crate) fn fold_free_vars(formula: &p::Formula, f: &mut dyn FnMut(&p::VarSpec
     cf(&mut bound, f, formula);
 }
 
-fn term(t: &p::Term) -> Result<tamarin_theory::sapic::SapicTerm, ConvertError> {
+pub(crate) fn term(t: &p::Term) -> Result<tamarin_theory::sapic::SapicTerm, ConvertError> {
     term_to_sapic_term(t)
         .ok_or_else(|| ConvertError::new("could not convert SAPIC term (pattern term?)"))
-}
-
-/// Public alias of [`term`] for the inlining pass (process-call arguments).
-pub(crate) fn convert_term(t: &p::Term) -> Result<tamarin_theory::sapic::SapicTerm, ConvertError> {
-    term(t)
 }
 
 fn fact(f: &p::Fact) -> Result<tamarin_theory::sapic::SapicLNFact, ConvertError> {
     fact_to_sapic_fact(f).map_err(|e| ConvertError::new(e.message))
 }
 
-/// Public alias of [`action`] for the inlining pass.
-pub(crate) fn convert_action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, ConvertError> {
-    action(a)
-}
-
-/// Public alias of [`combinator`] for the inlining pass.
-pub(crate) fn convert_combinator(
-    c: &p::ProcessComb,
-) -> Result<ProcessCombinator<SapicLVar>, ConvertError> {
-    combinator(c)
-}
-
 /// Convert a parser action into a theory `SapicAction<SapicLVar>`.
-fn action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, ConvertError> {
+pub(crate) fn action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, ConvertError> {
     match a {
         p::SapicAction::New(v) => Ok(SapicAction::New(varspec_to_sapic(v))),
         p::SapicAction::Event(f) => Ok(SapicAction::Event(fact(f)?)),
@@ -344,12 +327,12 @@ fn action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, ConvertError> {
             })
         }
         // Mutable state: `insert t1 v` / `delete t`.  These map to the
-        // theory `SapicAction::{Insert,Delete}` (Process.hs:72-73), translated by
+        // theory `SapicAction::{Insert,Delete}` (Sapic/Process.hs:72-73), translated by
         // `baseTransAction` Insert/Delete (Basetranslation.hs:177-184).
         p::SapicAction::Insert(t1, t2) => Ok(SapicAction::Insert(term(t1)?, term(t2)?)),
         p::SapicAction::Delete(t) => Ok(SapicAction::Delete(term(t)?)),
         // Locks: `lock t` / `unlock t` → theory `SapicAction::{Lock,Unlock}`
-        // (Process.hs:74-75), annotated by `Sapic.Locks.annotateLocks` and
+        // (Sapic/Process.hs:74-75), annotated by `Sapic.Locks.annotateLocks` and
         // translated by `baseTransAction` Lock/Unlock (Basetranslation.hs:185-194).
         p::SapicAction::Lock(t) => Ok(SapicAction::Lock(term(t)?)),
         p::SapicAction::Unlock(t) => Ok(SapicAction::Unlock(term(t)?)),
@@ -417,7 +400,7 @@ fn fact_unpattern(
 /// (`Theory.Text.Parser.Sapic`): `Parallel`/`Ndc` are nullary; `if t1 = t2`
 /// becomes `CondEq t1 t2`; `if frml` becomes `Cond frml`; `lookup`/`let`
 /// become `Lookup`/`Let`.
-fn combinator(c: &p::ProcessComb) -> Result<ProcessCombinator<SapicLVar>, ConvertError> {
+pub(crate) fn combinator(c: &p::ProcessComb) -> Result<ProcessCombinator<SapicLVar>, ConvertError> {
     match c {
         p::ProcessComb::Parallel => Ok(ProcessCombinator::Parallel),
         p::ProcessComb::Ndc => Ok(ProcessCombinator::Ndc),
@@ -431,13 +414,13 @@ fn combinator(c: &p::ProcessComb) -> Result<ProcessCombinator<SapicLVar>, Conver
         // `_restrict` (HS `liftedExpandFormula`), so we keep it un-expanded here.
         p::ProcessComb::Cond(p::Condition::Formula(f)) => Ok(ProcessCombinator::Cond(f.clone())),
         // `lookup t as v in .. else ..`.  HS `Lookup (SapicNTerm v) v`
-        // (Process.hs:95).
+        // (Sapic/Process.hs:95).
         p::ProcessComb::Lookup(t, v) => {
             Ok(ProcessCombinator::Lookup(term(t)?, varspec_to_sapic(v)))
         }
         // `let pat = value in P [else Q]`.  HS
         // `ProcessComb (Let (unpattern t1) t2 (extractMatchingVariables t1))`
-        // (Sapic.hs:268-269).  The parser-AST pattern `pat` may contain
+        // (Parser/Sapic.hs:268-269).  The parser-AST pattern `pat` may contain
         // `=t` (`PatMatch`) match markers; we split them out into `match_vars`
         // and `unpattern` the rest into the `left` term.
         p::ProcessComb::Let { pat, value } => {

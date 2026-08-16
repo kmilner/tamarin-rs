@@ -45,12 +45,7 @@ fn load_fixtures() -> Vec<Fixture> {
         };
         let mut parts = lhs.split_whitespace();
         let name = parts.next().expect("fixture name");
-        let mut is_diff = false;
-        for f in parts {
-            if f == "--diff" {
-                is_diff = true;
-            }
-        }
+        let is_diff = parts.any(|f| f == "--diff");
         let expected_topics: BTreeSet<String> = rhs
             .split(',')
             .map(|s| s.trim().to_string())

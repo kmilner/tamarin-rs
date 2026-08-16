@@ -111,7 +111,6 @@ fn probe_two_rules_proof_shape() {
     let root = prove_lemma(&pt, "reachable", h, 200).expect("prove");
     eprintln!("=== two_rules.spthy `reachable` ===");
     print_tree(&root, 0);
-    let _ = root.status;
 }
 
 #[test]
@@ -129,7 +128,6 @@ fn probe_two_actions_proof_shape() {
     let root = prove_lemma(&pt, "both_actions", h, 200).expect("prove");
     eprintln!("=== two_actions.spthy `both_actions` ===");
     print_tree(&root, 0);
-    let _ = root.status;
 }
 
 #[test]
@@ -147,7 +145,6 @@ fn probe_falsifiable_proof_shape() {
     let root = prove_lemma(&pt, "never_both", h, 200).expect("prove");
     eprintln!("=== falsifiable.spthy `never_both` ===");
     print_tree(&root, 0);
-    let _ = root.status;
 }
 
 #[test]
@@ -165,7 +162,6 @@ fn probe_three_facts_proof_shape() {
     let root = prove_lemma(&pt, "all_three", h, 200).expect("prove");
     eprintln!("=== three_facts.spthy `all_three` ===");
     print_tree(&root, 0);
-    let _ = root.status;
 }
 
 #[test]
@@ -243,9 +239,9 @@ fn probe_cr_recentalive_with_hashing_sig() {
 
 #[test]
 fn probe_sig_minimal_with_hashing_sig() {
-    // Try the trivially-true tautology with the elaborated theory's
-    // MaudeSig (which adds h/1) instead of pair-only. If this hangs,
-    // the goal explosion is reproducible on a near-empty file.
+    // A trivially-true tautology proved against the elaborated theory's
+    // MaudeSig (which adds h/1) rather than the pair-only signature: the
+    // search must stay bounded even once the signature grows.
     let mp = match maude_path_local() {
         Some(p) => p,
         None => return,
@@ -309,7 +305,6 @@ fn probe_fresh_ordering_proof_shape() {
     let root = prove_lemma(&pt, "order", h, 200).expect("prove");
     eprintln!("=== fresh_ordering.spthy `order` ===");
     print_tree(&root, 0);
-    let _ = root.status;
 }
 
 #[test]
@@ -426,7 +421,6 @@ fn probe_safety_two_keys_proof_shape() {
     let root = prove_lemma(&pt, "fresh_distinct_times", h, 200).expect("prove");
     eprintln!("=== safety_two_keys.spthy `fresh_distinct_times` ===");
     print_tree(&root, 0);
-    let _ = root.status;
 }
 
 #[test]
@@ -444,10 +438,9 @@ fn probe_safety_unique_proof_shape() {
     let root = prove_lemma(&pt, "setup_unique", h, 200).expect("prove");
     eprintln!("=== safety_unique.spthy `setup_unique` ===");
     print_tree(&root, 0);
-    let _ = root.status;
 }
 
-/// Web-parity regression: with `set_keep_sys(true)` (what the
+/// Web-parity regression: under `SysRetention::KeepAll` (what the
 /// interactive server sets at startup), `run_proof_search` must
 /// RETAIN each proof node's constraint `System` instead of dropping
 /// it to `System::default()` (the `--prove` RSS optimisation in
@@ -470,7 +463,14 @@ lemma always_A:
   "All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j"
 end
 "#;
-    crate::constraint::solver::search::set_keep_sys(true);
+    // The policy is process-wide; hold the lock its other writer takes so
+    // no concurrent test stores a lower one mid-search.
+    let _guard = crate::constraint::solver::search::SYS_RETENTION_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    crate::constraint::solver::search::set_sys_retention(
+        crate::constraint::solver::search::SysRetention::KeepAll,
+    );
     let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
     let root = prove_lemma(&pt, "always_A", h, 200).expect("prove");
     // Root = the initial constraint system (the negated goal formula),
@@ -494,14 +494,11 @@ end
     }
 }
 
-/// Drive the tiny_setup proof and inspect the proof-tree shape.
-/// We expect the search to:
-/// 1. Pick `Induction` (root).
-/// 2. In `non_empty_trace`, decompose Ex → Goal::Action(Setup(_))
-///    via simplify.
-/// 3. SolveGoal(Action) → instantiates the Setup rule, exploits
-///    its `Fr(~k)` premise, leaves no further goals.
-/// 4. Status reaches `Solved` (or `Contradictory` for some branches).
+/// Drive the tiny_setup proof and inspect the proof-tree shape: the root
+/// takes one of the three methods `rankProofMethods` can rank first here,
+/// the `Ex` decomposes into a `Goal::Action(Setup(_))`, solving it
+/// instantiates the `Setup` rule via its `Fr(~k)` premise, and the search
+/// reaches `Solved`.
 #[test]
 fn prove_lemma_tiny_setup_drives_through_action_goal() {
     let h = match maude() {
@@ -663,4 +660,117 @@ fn presaturate_disabled_is_noop() {
         session.source_cache.lock().unwrap().is_empty(),
         "the disabled pre-pass seeds no cache entries"
     );
+}
+
+/// `parse_config_block` records what cmdargs records, rejection strings
+/// byte-pinned against the oracle (`configuration: "<cfg>"` under
+/// `--prove`, stderr after `tamarin-prover: `).
+#[test]
+fn config_block_matches_cmdargs_semantics() {
+    use crate::constraint::solver::context::CutStrategy;
+
+    // Prefix matching resolves like HS cmdargs': `--stop`, even `--s`.
+    for cfg in ["--stop-on-trace=bfs", "--stop=bfs", "--s=bfs"] {
+        let b = parse_config_block(cfg);
+        assert_eq!(b.flag_error, None, "{cfg}");
+        assert_eq!(b.stop_on_trace.as_deref(), Some("bfs"), "{cfg}");
+    }
+    // flagOpt: bare records "dfs"; no separate token is consumed.
+    let b = parse_config_block("--stop-on-trace bfs");
+    assert_eq!(b.stop_on_trace.as_deref(), Some("dfs"));
+    // The VALUE is recorded raw — validation is the reader's, later.
+    let b = parse_config_block("--stop-on-trace=XYZ --auto-sources");
+    assert_eq!(b.flag_error, None);
+    assert_eq!(b.stop_on_trace.as_deref(), Some("XYZ"));
+    assert!(b.auto_sources);
+    // Positionals are swallowed by the catch-all.
+    let b = parse_config_block("positional --auto-sources");
+    assert_eq!(b.flag_error, None);
+    assert!(b.auto_sources);
+
+    // cmdargs-level rejections, byte-for-byte.
+    for (cfg, want) in [
+        ("--nonsense", "Unknown flag: --nonsense"),
+        (
+            "--auto-sources=x",
+            "Unhandled argument to flag, none expected: --auto-sources=x",
+        ),
+        ("-a", "Unknown flag: -a"),
+        ("-abc", "Unknown flag: -a"),
+        (
+            "--=x",
+            "Ambiguous flag '--', could be any of: stop-on-trace auto-sources",
+        ),
+    ] {
+        assert_eq!(
+            parse_config_block(cfg).flag_error.as_deref(),
+            Some(want),
+            "{cfg}"
+        );
+    }
+
+    // The deferred value reader — HS `stopOnTrace`, lowercasing first.
+    assert_eq!(parse_stop_on_trace("BFS"), Ok(CutStrategy::Bfs));
+    assert_eq!(
+        parse_stop_on_trace("XYZ"),
+        Err("unknown stop-on-trace method: xyz".to_string())
+    );
+
+    // The server's eager wrapper surfaces both kinds of error.
+    assert_eq!(
+        config_block_options("--nonsense"),
+        Err("Unknown flag: --nonsense".to_string())
+    );
+    assert_eq!(
+        config_block_options("--stop-on-trace=XYZ"),
+        Err("unknown stop-on-trace method: xyz".to_string())
+    );
+    assert_eq!(
+        config_block_options("--stop-on-trace=seqdfs --auto-sources"),
+        Ok((Some(CutStrategy::SeqDfs), true))
+    );
+}
+
+/// `validate_cli_heuristic` — the ACCEPTANCE SET is what matches HS
+/// (`filterHeuristic`: identifier chars + declared `{tactic}` groups,
+/// names verbatim); the rejection wording is the port's own.
+#[test]
+fn validate_cli_heuristic_accepts_and_rejects_like_filter_heuristic() {
+    let cli = |raw: &str| CliHeuristic {
+        raw: Some(raw.to_string()),
+        ..CliHeuristic::default()
+    };
+    let t = |name: &str| crate::tactic::Tactic::parse(name, "");
+    // Every identifier char, compact runs included; a declared tactic.
+    assert_eq!(validate_cli_heuristic(&cli("sSoOpPcCiI"), &[]), Ok(()));
+    assert_eq!(
+        validate_cli_heuristic(&cli("s{mytac}i"), &[t("mytac")]),
+        Ok(())
+    );
+    // No raw string = nothing to validate.
+    assert_eq!(
+        validate_cli_heuristic(&CliHeuristic::default(), &[]),
+        Ok(())
+    );
+    // HS rejects whitespace, digits and quotes as unknown rankings —
+    // matching the acceptance set is what keeps a typo from silently
+    // proving under the smart fallback.
+    for bad in ["s x", "s1Ss", "o \"p\""] {
+        let e = validate_cli_heuristic(&cli(bad), &[]).unwrap_err();
+        assert!(e.contains("unknown goal ranking"), "{bad}: {e}");
+    }
+    // Tactic names resolve VERBATIM (no trim): `{ mytac }` is undeclared,
+    // as in HS `chosenTactic`.
+    let e = validate_cli_heuristic(&cli("{ mytac }"), &[t("mytac")]).unwrap_err();
+    assert!(e.contains("\" mytac \""), "{e}");
+    let e = validate_cli_heuristic(&cli("{zz}"), &[t("t1"), t("t2")]).unwrap_err();
+    assert!(e.contains("not declared in the theory"), "{e}");
+    assert!(e.contains("t1, t2"), "{e}");
+    // `{.}` on the CLI is a tactic named "." — NOT the in-file parser's
+    // defaultTactic shortcut — so it errors unless a tactic "." exists
+    // (HS refuses it too).
+    assert!(validate_cli_heuristic(&cli("{.}"), &[]).is_err());
+    // Unterminated brace.
+    let e = validate_cli_heuristic(&cli("{oops"), &[]).unwrap_err();
+    assert!(e.contains("unterminated '{'"), "{e}");
 }

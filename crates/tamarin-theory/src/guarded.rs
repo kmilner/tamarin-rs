@@ -114,7 +114,7 @@ pub fn cmp_guarded(a: &Guarded, b: &Guarded) -> std::cmp::Ordering {
             };
             cmp_quant(q1, q2)
                 // HS-faithful: in `LNGuarded = Guarded (String,LSort) Name
-                // LVar` (Guarded.hs:272-277, see line 279,389), the `s` parameter — used
+                // LVar` (Guarded.hs:391), the `s` parameter — used
                 // for GGuarded's binding list — is the TUPLE
                 // `(String, LSort)`, NOT `LVar`.  Our `GBinding` carries
                 // exactly those two fields, so bindings sort by
@@ -252,10 +252,10 @@ pub fn cmp_term(a: &GTerm, b: &GTerm) -> std::cmp::Ordering {
     }
     // FApp class (ca == cb == 1): HS `Ord (Term a)` compares `FAPP fsym ts`
     // by `compare fsym` THEN `compare ts` (derived Ord on
-    // `Term a = LIT a | FAPP FunSym [Term a]`, Term/Raw.hs:72-74, see line 74).  The
+    // `Term a = LIT a | FAPP FunSym [Term a]`, Term/Term/Raw.hs:71-75, see line 74).  The
     // `FunSym` Ord is `NoEq < AC < C < List`, and within `NoEq` it is
-    // `Ord NoEqSym = (name, (arity, privacy, constructability))`
-    // (FunctionSymbols.hs:113-117, see line 117) — i.e. compared by NAME first.
+    // `Ord NoEqSym = (name, (arity, privacy, constructability, ndc))`
+    // (FunctionSymbols.hs:131-132) — i.e. compared by NAME first.
     //
     // RS special-cases several HS `FAPP (NoEq sym)` terms into dedicated
     // `GTerm` variants (`Pair`=pair, `BinOp Exp`=exp, `Diff`=diff,
@@ -270,7 +270,7 @@ pub fn cmp_term(a: &GTerm, b: &GTerm) -> std::cmp::Ordering {
     //
     // Faithful: compare two FApp-class terms by their HS `FunSym` key
     // (`funsym_key`), then by the argument list (flattened+sorted for AC,
-    // matching `fAppAC`'s `sort (...)`, Term/Raw.hs:118-131, see line 122).
+    // matching `fAppAC`'s `sort (...)`, Term/Term/Raw.hs:118-129, see line 123).
     if ca == 1 {
         // Borrowed FunSym key (no per-comparison allocation): compare
         // (outer, name-bytes, arity) in HS order without materialising a
@@ -294,9 +294,9 @@ pub fn cmp_term(a: &GTerm, b: &GTerm) -> std::cmp::Ordering {
                 let mut args_b = Vec::new();
                 flatten_ac_binop(o1, a, &mut args_a);
                 flatten_ac_binop(o2, b, &mut args_b);
-                args_a.sort_by(cmp_term);
-                args_b.sort_by(cmp_term);
-                return cmp_slice(&args_a, &args_b, cmp_term);
+                args_a.sort_by(|x, y| cmp_term(x, y));
+                args_b.sort_by(|x, y| cmp_term(x, y));
+                return cmp_slice(&args_a, &args_b, |x, y| cmp_term(x, y));
             }
         }
         return cmp_fapp_args(a, b);
@@ -491,7 +491,7 @@ pub fn cmp_bvar(a: &BVar, b: &BVar) -> std::cmp::Ordering {
 /// `LIT`, `Lit c v = Con c | Var v` derives `Con < Var` (VTerm.hs:56-57).
 /// Therefore ALL constant literals (Pub/Fresh/Nat names) sort BEFORE any
 /// variable.  Among constants, `Ord Name` compares the `NameTag` first
-/// (`FreshName | PubName | NodeName | NatName`, LTerm.hs:215-216) so the literal
+/// (`FreshName | PubName | NodeName | NatName`, LTerm.hs:219-220) so the literal
 /// order is Fresh < Pub < Nat, then by name string.  Variables come last in
 /// the `LIT` class.
 ///
@@ -536,22 +536,23 @@ fn is_ac_binop(o: &p::BinOp) -> bool {
     matches!(o, Mult | Union | Xor | NatPlus | AcFct(_))
 }
 
-/// Flatten an AC-BinOp chain into a flat arg list.  E.g.
-/// `BinOp(Union, BinOp(Union, a, b), c)` flattens to `[a, b, c]`.
+/// Flatten an AC-BinOp chain into a flat operand list, BORROWING the operands.
+/// E.g. `BinOp(Union, BinOp(Union, a, b), c)` flattens to `[&a, &b, &c]`.
 /// Non-matching outer terms are pushed verbatim (no recursion into
-/// nested non-Union/non-same-op subtrees).
-fn flatten_ac_binop(op: &p::BinOp, t: &GTerm, out: &mut Vec<GTerm>) {
+/// nested non-Union/non-same-op subtrees).  Borrowing keeps the hot
+/// `cmp_term` AC branch allocation-free per operand.
+fn flatten_ac_binop<'a>(op: &p::BinOp, t: &'a GTerm, out: &mut Vec<&'a GTerm>) {
     match t {
         GTerm::BinOp(inner_op, l, r) if inner_op == op => {
             flatten_ac_binop(op, l, out);
             flatten_ac_binop(op, r, out);
         }
-        _ => out.push(t.clone()),
+        _ => out.push(t),
     }
 }
 
 /// HS-faithful Ord for free `LVar`: `(idx, sort, name)` lexicographic
-/// (Term/LTerm.hs:521-523).  Rust's `p::VarSpec` has the same fields
+/// (Term/LTerm.hs:545-548).  Rust's `p::VarSpec` has the same fields
 /// in a different declaration order — we compare in HS's order.
 /// Used for VarSpecs that appear as FREE vars inside terms.
 pub fn cmp_varspec(a: &p::VarSpec, b: &p::VarSpec) -> std::cmp::Ordering {
@@ -562,7 +563,7 @@ pub fn cmp_varspec(a: &p::VarSpec, b: &p::VarSpec) -> std::cmp::Ordering {
 }
 
 /// HS-faithful Ord for GGuarded *binding* entries.  In LNGuarded, the
-/// binding type is `(String, LSort)` — Guarded.hs:272-277, see line 279,389.  So bindings
+/// binding type is `(String, LSort)` — Guarded.hs:391.  So bindings
 /// sort by `(name, sort)` lex.  Our `GBinding` carries only those
 /// two fields.
 pub fn cmp_binding(a: &GBinding, b: &GBinding) -> std::cmp::Ordering {
@@ -571,7 +572,7 @@ pub fn cmp_binding(a: &GBinding, b: &GBinding) -> std::cmp::Ordering {
         .then_with(|| cmp_sort_hint(&a.sort, &b.sort))
 }
 
-/// HS LSort declaration order (Term/LTerm.hs:161-166):
+/// HS LSort declaration order (Term/LTerm.hs:165-170):
 ///   LSortPub < LSortFresh < LSortMsg < LSortNode < LSortNat.
 fn cmp_sort_hint(a: &p::SortHint, b: &p::SortHint) -> std::cmp::Ordering {
     sort_hint_tag(a).cmp(&sort_hint_tag(b))
@@ -595,12 +596,13 @@ fn sort_hint_tag(s: &p::SortHint) -> u8 {
     }
 }
 
-/// HS Fact Ord (Theory/Model/Fact.hs:168-169): `compare tag tag' <> compare ts
-/// ts'`.  Annotations are explicitly IGNORED in `Ord (Fact t)` (Fact.hs:153-158, see line 163
-/// comment "Ignore annotations in equality and ord testing").  Works on
+/// HS Fact Ord (Theory/Model/Fact.hs:173-174): `compare tag tag' <> compare ts
+/// ts'`.  Annotations are explicitly IGNORED in `Ord (Fact t)`
+/// (Theory/Model/Fact.hs:169-174, whose line-169 comment reads "Ignore
+/// annotations in equality and ord testing").  Works on
 /// `GFact` (HS `Fact (VTerm c (BVar v))`).
 ///
-/// The HS `FactTag` Ord (Fact.hs:132-143, derived) compares a `ProtoFact`
+/// The HS `FactTag` Ord (Theory/Model/Fact.hs:136-148, derived) compares a `ProtoFact`
 /// by `(Multiplicity, String, Int)` where `Multiplicity = Persistent |
 /// Linear` orders `Persistent < Linear`, and `Int` is the arity.  Rust's
 /// `bool` Ord gives `false < true`, so to reproduce `Persistent < Linear`
@@ -609,7 +611,7 @@ fn sort_hint_tag(s: &p::SortHint) -> u8 {
 /// `FactTag` key and is therefore compared BEFORE the term list, exactly
 /// as `compare tag tag'` precedes `compare ts ts'`.
 ///
-/// SPECIAL-TAG SEGREGATION: HS `FactTag` (Fact.hs:132-143, derived Ord) is
+/// SPECIAL-TAG SEGREGATION: HS `FactTag` (Theory/Model/Fact.hs:136-148, derived Ord) is
 /// `ProtoFact Multiplicity String Int | FreshFact | OutFact | InFact |
 /// KUFact | KDFact | DedFact | TermFact`.  With a derived `Ord` the
 /// *constructor index* dominates, so EVERY `ProtoFact` sorts before EVERY
@@ -627,7 +629,7 @@ fn sort_hint_tag(s: &p::SortHint) -> u8 {
 /// proto-fact `K`) are `ProtoFact`s.
 fn fact_tag_class(f: &GFact) -> u8 {
     // ProtoFact == 0 so it sorts before all special tags, matching the
-    // derived constructor order. Special tags follow Fact.hs:134-143.
+    // derived constructor order. Special tags follow Theory/Model/Fact.hs:139-147.
     match f.name.as_str() {
         "Fr" => 1,   // FreshFact
         "Out" => 2,  // OutFact
@@ -872,9 +874,9 @@ pub fn simplify_guarded_with(
                 .collect();
             let body_s = simplify_guarded_with(body, valuation);
             // HS-faithful: `simp` builds the universal via `gall [] (...) (simp
-            // gf)` (Guarded.hs:665-698, see line 687).  `gall` collapses to the body when the
+            // gf)` (Guarded.hs:665-698, see line 689).  `gall` collapses to the body when the
             // kept guards are empty AND collapses the whole universal to
-            // `gtrue` when the simplified body is `gtrue` (Guarded.hs:449-453, see line 450),
+            // `gtrue` when the simplified body is `gtrue` (Guarded.hs:449-453, see line 452),
             // regardless of whether guards remain.  Building `GGuarded`
             // directly would leave a non-canonical `GGuarded{All,[],kept,
             // gtrue}` where Haskell produces `gtrue`.
@@ -967,7 +969,7 @@ pub fn try_gfact_to_fact(f: &GFact) -> Option<p::Fact> {
 /// both close — Haskell collapses this to `gfalse` directly.
 pub fn gdisj(items: Vec<Guarded>) -> Guarded {
     // Recursively flatten nested `Disj`s. HS-faithful: mirrors Haskell
-    // `gdisj` (Guarded.hs:423-435) whose helper
+    // `gdisj` (Guarded.hs:426-437) whose helper
     // `flatten (GDisj disj) = concatMap flatten $ getDisj disj`
     // recursively unwraps every level. Must flatten EVERY level (not just
     // one): a 5-way `∨` parsed as a binary `Or` chain
@@ -1001,8 +1003,8 @@ pub fn gdisj(items: Vec<Guarded>) -> Guarded {
         }
     }
     // HS-faithful: the `[gf] -> gf` singleton unwrap matches the FLATTENED,
-    // non-nubbed list (Guarded.hs:415-423, see line 425); `nub` is applied only in the
-    // otherwise branch (`GDisj $ Disj $ nub gfs`, Guarded.hs:426-437, see line 432).  So a
+    // non-nubbed list (Guarded.hs:426-437, see line 428); `nub` is applied only in the
+    // otherwise branch (`GDisj $ Disj $ nub gfs`, Guarded.hs:426-437, see line 434).  So a
     // flattened list like `[a,a]` is not a singleton and yields
     // `Disj (nub [a,a]) = Disj [a]`, NOT bare `a`.  (Note: this `out`
     // already has `gfalse` items dropped — see flatten above — so the
@@ -1010,7 +1012,7 @@ pub fn gdisj(items: Vec<Guarded>) -> Guarded {
     if out.len() == 1 {
         return out.into_iter().next().unwrap();
     }
-    // Mirror Haskell `gdisj`'s `nub gfs` (Guarded.hs:426-437, see line 432).
+    // Mirror Haskell `gdisj`'s `nub gfs` (Guarded.hs:426-437, see line 434).
     let mut deduped: Vec<Guarded> = Vec::with_capacity(out.len());
     for x in out {
         if !deduped.contains(&x) {
@@ -1112,12 +1114,12 @@ fn err(msg: impl Into<String>) -> GuardError {
 pub fn formula_to_guarded(f: &p::Formula) -> Result<Guarded, GuardError> {
     // HS-faithful: HS represents formula terms as LNTerm, where every AC head
     // (`Mult`/`Union`/`Xor`/`NatPlus`) is stored as a flat, `fAppAC`-sorted
-    // argument list (Term/Term/Raw.hs:118-122).  The sort happens at PARSE
+    // argument list (Term/Term/Raw.hs:118-129).  The sort happens at PARSE
     // time over the FREE logical variables, ordered by `Ord LVar` =
-    // (idx, sort, name) (LTerm.hs:522-524) — for freshly-parsed lemma vars
+    // (idx, sort, name) (LTerm.hs:545-548) — for freshly-parsed lemma vars
     // (all idx 0) this is name-alphabetical, e.g. `x + z` stays `x++z` and
     // `y + z` stays `y++z`.  `formulaToGuarded` then abstracts Free→Bound via
-    // a structural `fmap` (Guarded.hs:289-308) that preserves the AC arg
+    // a structural `fmap` (Guarded.hs:303-318) that preserves the AC arg
     // positions.  Our parser stores formula terms as nested `BinOp(op, l, r)`
     // trees in source order and never sorts them, so we canonicalise the AC
     // chains over the FREE-variable parser AST FIRST (mirroring HS's
@@ -1854,15 +1856,15 @@ fn remaining_unguarded(xs: &[p::VarSpec], atoms: &[p::Atom]) -> Vec<usize> {
         .collect()
 }
 
-/// Render HS `noUnguardedVars` (Guarded.hs:506-512) for the survivors at
+/// Render HS `noUnguardedVars` (Guarded.hs:507-514) for the survivors at
 /// `positions` of the quantifier prefix.  The names come from `freshened` —
 /// the prefix as `openFormulaPrefix` renamed it — so a binder shadowing an
 /// already-opened one is reported as `x.1`, not `x`.
 fn unguarded_error(positions: &[usize], freshened: &[p::VarSpec]) -> GuardError {
-    // HS: `map (quotes . text . show) unguarded` (Guarded.hs:507-509) over
+    // HS: `map (quotes . text . show) unguarded` (Guarded.hs:507-514, see line 511) over
     // `[LVar]`.  Each LVar is rendered by the EXPLICIT `instance Show LVar`
-    // (LTerm.hs:525-531): `show (LVar v s i) = sortPrefix s ++ body`, where
-    // `sortPrefix` (LTerm.hs:190-195) is "" (Msg) / "~" (Fresh) / "$" (Pub)
+    // (LTerm.hs:550-557): `show (LVar v s i) = sortPrefix s ++ body`, where
+    // `sortPrefix` (LTerm.hs:193-199) is "" (Msg) / "~" (Fresh) / "$" (Pub)
     // / "#" (Node) / "%" (Nat), and `body` is `v` when `i == 0` else
     // `v ++ "." ++ show i`.  `quotes` then single-quotes the result, so the
     // rendered output is e.g. `'#i'` or `'x.5'` — NOT a bare `'name'`.
@@ -1899,7 +1901,7 @@ fn unguarded_error(positions: &[usize], freshened: &[p::VarSpec]) -> GuardError 
 // =============================================================================
 
 /// `gnotAtom` — port of Haskell `Theory.Constraint.System.Guarded.gnotAtom`
-/// (lib/theory/src/Theory/Constraint/System/Guarded.hs:408-410):
+/// (lib/theory/src/Theory/Constraint/System/Guarded.hs:410-412):
 ///
 /// ```text
 /// gnotAtom a = GGuarded All [] [a] gfalse
@@ -1915,8 +1917,8 @@ fn unguarded_error(positions: &[usize], freshened: &[p::VarSpec]) -> GuardError 
 /// `toInductionHypothesis`, which DOES decompose Less for induction): the
 /// disjunction form is semantically wrong for term-sort EqE since Less is
 /// undefined between Msg/Fresh/Pub terms, and the Ex form is semantically
-/// False rather than ¬Action.  See `Guarded.hs:408-410` vs
-/// `Guarded.hs:614-616`.
+/// False rather than ¬Action.  See `Guarded.hs:410-412` vs
+/// `Guarded.hs:618`.
 fn gnot_atom(a: &GAtom) -> Guarded {
     Guarded::GGuarded {
         qua: Quant::All,
@@ -2186,8 +2188,8 @@ fn cac_rec_term_cow(t: &GTerm, cmp: GCmp) -> Option<GTerm> {
         | GTerm::DhNeutral => None,
         // `em(a, b)` is the sole COMMUTATIVE (C) function symbol (EMap,
         // bilinear pairing).  HS stores every C application in sorted-arg
-        // form: `fAppC nacsym as = FAPP (C nacsym) (sort as)` (Raw.hs:132-133;
-        // `fAppEMap (x,y) = fAppC EMap [x,y]`, Term.hs:143-147, see line 146).  So in HS
+        // form: `fAppC nacsym as = FAPP (C nacsym) (sort as)` (Term/Term/Raw.hs:133-134;
+        // `fAppEMap (x,y) = fAppC EMap [x,y]`, Term/Term.hs:166-167, see line 167).  So in HS
         // `em('P', x)` and `em(x, 'P')` are byte-identical, and the
         // structural `S.member sSolvedFormulas` guard in `insertImpliedFormulas`
         // always matches a re-derived instance against the solved one.
@@ -2238,13 +2240,13 @@ fn cac_rec_term_cow(t: &GTerm, cmp: GCmp) -> Option<GTerm> {
                 let mut flat = Vec::new();
                 flatten_ac_binop(op, &l2, &mut flat);
                 flatten_ac_binop(op, &r2, &mut flat);
-                flat.sort_by(&cmp);
+                flat.sort_by(|x, y| cmp(x, y));
                 // Right-fold to a binary chain.  At least 2 args.
                 let mut iter = flat.into_iter().rev();
                 let last = iter.next().expect("AC BinOp always flattens to >=2 args");
-                let mut acc = last;
+                let mut acc = last.clone();
                 for prev in iter {
-                    acc = GTerm::BinOp(*op, ga(prev), ga(acc));
+                    acc = GTerm::BinOp(*op, ga(prev.clone()), ga(acc));
                 }
                 // Reuse the input only if the canonical chain is byte-identical
                 // (children unchanged AND already sorted+right-leaning).
@@ -2707,7 +2709,7 @@ pub fn max_var_idx(g: &Guarded) -> u64 {
 
 /// Minimum idx over all `BVar::Free` leaves of a guarded formula, or
 /// `None` when the formula has no free variables.  The min-side twin of
-/// [`max_var_idx`] — needed by HS `boundsVarIdx` mirrors (LTerm.hs:650-651
+/// [`max_var_idx`] — needed by HS `boundsVarIdx` mirrors (LTerm.hs:674-675
 /// folds frees with `minMaxSingleton`), e.g. the `matchToGoal`
 /// whole-source `rename` rebase in `sources.rs`.
 pub fn min_var_idx(g: &Guarded) -> Option<u64> {
@@ -2775,7 +2777,7 @@ pub fn satisfied_by_empty_trace(g: &Guarded) -> Result<bool, String> {
             Ok(any)
         }
         Guarded::Conj(xs) => {
-            // HS `liftM and . sequence . getConj` (Guarded.hs:589-591):
+            // HS `liftM and . sequence . getConj` (Guarded.hs:588-594, see line 593):
             // `sequence` forces ALL conjuncts (failing if any is `Left`)
             // BEFORE reducing with `and`.  So we must evaluate every
             // conjunct and propagate any error rather than short-circuiting
@@ -2797,13 +2799,13 @@ pub fn satisfied_by_empty_trace(g: &Guarded) -> Result<bool, String> {
 pub fn contains_action(g: &Guarded) -> bool {
     match g {
         // Haskell `containsAction = foldGuarded (const True) ...`
-        // (Guarded.hs:634-635): the bare-atom handler is `const True`, so
+        // (Guarded.hs:636-637): the bare-atom handler is `const True`, so
         // EVERY atom (Action/Eq/Less/Last/Subterm/Pred) yields True — not
         // only Action atoms.
         Guarded::Atom(_) => true,
         Guarded::Disj(xs) | Guarded::Conj(xs) => xs.iter().any(contains_action),
         Guarded::GGuarded { guards, body, .. } => {
-            // Haskell `Guarded.hs:634-635`: `\_ _ as body -> not (null as) || body`.
+            // Haskell `Guarded.hs:636-637`: `\_ _ as body -> not (null as) || body`.
             !guards.is_empty() || contains_action(body)
         }
     }
@@ -2837,7 +2839,7 @@ pub fn to_induction_hypothesis(g: &Guarded) -> Result<Guarded, String> {
             // Mirrors Haskell's
             //   lastAtos = [ Last (varTerm (Bound j))
             //              | (j, (_, LSortNode)) <- zip [0..] (reverse ss) ]
-            // Haskell `reverse ss` (Guarded.hs:601-622, see line 613) — node-sorted binders
+            // Haskell `reverse ss` (Guarded.hs:613-616, see line 615) — node-sorted binders
             // emitted in REVERSE quantifier order.  For `∀ k #i #j`, ss
             // reversed = [#j, #i, k] → lastAtos = [Last(#j), Last(#i)].
             // Without `.rev()`, our disj order is [#i, #j] (matches HS
@@ -2926,7 +2928,7 @@ pub fn ginduct(g: &Guarded) -> Result<(Guarded, Guarded), String> {
 /// `freshen_system_keep_with_shift` (sources.rs) to shift free-var
 /// idxs in stored formulas / solved_formulas / lemmas alongside the
 /// rest of the system, mirroring Haskell's uniform `mapFrees`
-/// (System.hs:1863-1876) which traverses ALL 13 system fields.
+/// (Theory/Constraint/System.hs:1863-1877) which traverses ALL 13 system fields.
 pub fn map_lvars_in_guarded<F>(g: &Guarded, mut f: F) -> Guarded
 where
     F: FnMut(&p::VarSpec) -> p::VarSpec,
