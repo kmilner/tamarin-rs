@@ -328,4 +328,45 @@ mod tests {
             other => panic!("expected rep('c','loc'), got {other:?}"),
         }
     }
+
+    /// HS's `FApp (NoEq sym) [a]` arm (Report.hs:93-97) SHADOWS the generic
+    /// `FApp k as` recursion, so a unary non-`report` NoEq application is
+    /// returned whole — its argument is never descended into, even when it
+    /// contains a `report`.  Any other arity still recurses.  Making the unary
+    /// arm recurse "for consistency" silently rewrites terms HS leaves alone.
+    #[test]
+    fn subst_unary_noeq_arm_shadows_the_generic_recursion() {
+        use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
+        use tamarin_term::term::f_app_no_eq;
+
+        let sym = |n: &[u8], k| {
+            NoEqSym::new(
+                n.to_vec(),
+                k,
+                Privacy::Public,
+                Constructability::Constructor,
+            )
+        };
+        let loc: SapicTerm = tamarin_term::lterm::pub_term("loc");
+        let c: SapicTerm = tamarin_term::lterm::pub_term("c");
+        let report_c = f_app_no_eq(tamarin_term::builtin::report_sym(), vec![c.clone()]);
+
+        // Unary `h(report('c'))` — untouched, `report` and all.
+        let unary = f_app_no_eq(sym(b"h", 1), vec![report_c.clone()]);
+        assert_eq!(subst(&Some(loc.clone()), &unary), unary);
+
+        // Binary `g(report('c'), 'c')` — the generic arm rewrites the nested
+        // `report`, which is what makes the unary case above discriminating.
+        let binary = f_app_no_eq(sym(b"g", 2), vec![report_c, c.clone()]);
+        let rewritten = subst(&Some(loc.clone()), &binary);
+        assert_ne!(rewritten, binary);
+        let VTerm::App(_, args) = &rewritten else {
+            panic!("expected g(..) to survive as an application");
+        };
+        assert_eq!(
+            args[0],
+            f_app_no_eq(tamarin_term::builtin::rep_sym(), vec![c.clone(), loc])
+        );
+        assert_eq!(args[1], c);
+    }
 }

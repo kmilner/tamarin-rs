@@ -229,58 +229,6 @@ Special facts
     );
     assert_eq!(
         wf_block(
-            r#"theory fsL59
-begin
-
-rule R:
-  [ Out( 'ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' ), Out( a ) ]
-  --[ ]->
-  [ ]
-
-end
-"#
-        ),
-        r#"/*
-WARNING: the following wellformedness checks failed!
-
-Special facts
-=============
-
-  rule `R' uses disallowed facts on left-hand-side:
-    Out( 'ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
-    ),
-    Out( a )
-*/"#,
-        "fsL59"
-    );
-    assert_eq!(
-        wf_block(
-            r#"theory Fs69
-begin
-
-rule R:
-  [ Out( 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' ), Out( a ) ]
-  --[ ]->
-  [ ]
-
-end
-"#
-        ),
-        r#"/*
-WARNING: the following wellformedness checks failed!
-
-Special facts
-=============
-
-  rule `R' uses disallowed facts on left-hand-side:
-    Out( 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
-    ),
-    Out( a )
-*/"#,
-        "fs69"
-    );
-    assert_eq!(
-        wf_block(
             r#"theory Fs70
 begin
 

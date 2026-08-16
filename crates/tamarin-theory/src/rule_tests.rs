@@ -6,48 +6,96 @@ use super::*;
 use crate::fact::{fresh_fact, in_fact, out_fact};
 use tamarin_term::builtin::msg_var;
 
+/// `Rule::new` files each argument into its OWN field.  The lists have
+/// distinct lengths and contents so a premises/conclusions swap cannot hide
+/// behind matching shapes, and `ProtoRuleEInfo::standard` interns the name
+/// verbatim into `Stand` with empty attributes/restrictions.
 #[test]
 fn build_simple_proto_rule_e() {
     let r: ProtoRuleE = Rule::new(
         ProtoRuleEInfo::standard("Send"),
-        vec![fresh_fact(msg_var("k", 0))],
+        vec![fresh_fact(msg_var("k", 0)), in_fact(msg_var("m", 0))],
         vec![out_fact(msg_var("k", 0))],
         vec![],
     );
-    assert_eq!(r.premises.len(), 1);
-    assert_eq!(r.conclusions.len(), 1);
-    assert!(matches!(r.info.name, ProtoRuleName::Stand(_)));
+    assert_eq!(
+        r.premises,
+        vec![fresh_fact(msg_var("k", 0)), in_fact(msg_var("m", 0))]
+    );
+    assert_eq!(r.conclusions, vec![out_fact(msg_var("k", 0))]);
+    assert!(r.actions.is_empty());
+    assert!(r.new_vars.is_empty());
+    assert_eq!(r.info.name, ProtoRuleName::Stand("Send"));
+    assert_eq!(r.info.attributes, RuleAttributes::empty());
+    assert!(r.info.restrictions.is_empty());
 }
 
+/// `lookup_premise`/`lookup_conclusion` index their own list — asymmetric
+/// lengths plus identity checks catch a lookup reading the wrong list — and
+/// return `None` one past the end.
 #[test]
 fn rule_indices_lookup() {
     let r: ProtoRuleE = Rule::new(
         ProtoRuleEInfo::standard("Echo"),
-        vec![in_fact(msg_var("m", 0))],
+        vec![in_fact(msg_var("m", 0)), in_fact(msg_var("n", 0))],
         vec![out_fact(msg_var("m", 0))],
         vec![],
     );
-    assert!(r.lookup_premise(PremIdx(0)).is_some());
-    assert!(r.lookup_premise(PremIdx(1)).is_none());
-    assert!(r.lookup_conclusion(ConcIdx(0)).is_some());
+    assert_eq!(
+        r.lookup_premise(PremIdx(0)),
+        Some(&in_fact(msg_var("m", 0)))
+    );
+    assert_eq!(
+        r.lookup_premise(PremIdx(1)),
+        Some(&in_fact(msg_var("n", 0)))
+    );
+    assert_eq!(r.lookup_premise(PremIdx(2)), None);
+    assert_eq!(
+        r.lookup_conclusion(ConcIdx(0)),
+        Some(&out_fact(msg_var("m", 0)))
+    );
+    assert_eq!(r.lookup_conclusion(ConcIdx(1)), None);
 }
 
+/// The enumerators pair each fact with its own 0-based index, in list order,
+/// and read the premise/conclusion list matching their name.
 #[test]
 fn enumerate_yields_indices() {
     let r: ProtoRuleE = Rule::new(
         ProtoRuleEInfo::standard("X"),
         vec![in_fact(msg_var("a", 0)), in_fact(msg_var("b", 0))],
-        vec![],
+        vec![out_fact(msg_var("c", 0))],
         vec![],
     );
-    let prems: Vec<PremIdx> = r.enumerate_premises().map(|(i, _)| i).collect();
-    assert_eq!(prems, vec![PremIdx(0), PremIdx(1)]);
+    let prems: Vec<(PremIdx, LNFact)> = r
+        .enumerate_premises()
+        .map(|(i, f)| (i, f.clone()))
+        .collect();
+    assert_eq!(
+        prems,
+        vec![
+            (PremIdx(0), in_fact(msg_var("a", 0))),
+            (PremIdx(1), in_fact(msg_var("b", 0))),
+        ]
+    );
+    let concs: Vec<(ConcIdx, LNFact)> = r
+        .enumerate_conclusions()
+        .map(|(i, f)| (i, f.clone()))
+        .collect();
+    assert_eq!(concs, vec![(ConcIdx(0), out_fact(msg_var("c", 0)))]);
 }
 
+/// `RuleAttributes::merge` — the combiner SAPIC rule compression applies
+/// (`tamarin_sapic::compression`).  `Option` fields take the right when it is
+/// `Some` but KEEP the left when it is `None`; `bool` fields are `||`, so a
+/// `true` on either side survives.
 #[test]
-fn rule_attributes_merge_prefers_right() {
+fn rule_attributes_merge_prefers_right_but_keeps_left() {
+    use tamarin_utils::color::Rgb;
     let a = RuleAttributes {
+        color: Some(Rgb::new(1.0, 0.0, 0.0)),
         role: Some("alice".into()),
+        ignore_deriv_checks: true,
         ..Default::default()
     };
     let b = RuleAttributes {
@@ -55,9 +103,23 @@ fn rule_attributes_merge_prefers_right() {
         is_sapic_rule: true,
         ..Default::default()
     };
-    let merged = a.merge(b);
+    let merged = a.merge(b.clone());
+    // Right wins where it is `Some` …
     assert_eq!(merged.role, Some("bob".into()));
+    // … the left survives where the right is `None` …
+    assert_eq!(merged.color, Some(Rgb::new(1.0, 0.0, 0.0)));
+    // … and both bools are ORed, not overwritten by the right.
     assert!(merged.is_sapic_rule);
+    assert!(merged.ignore_deriv_checks);
+    // An all-empty right is the identity: every left field survives.  A
+    // `merge` that simply took the right would wipe them.
+    let kept = b.clone().merge(RuleAttributes::empty());
+    assert_eq!(kept.role, Some("bob".into()));
+    assert!(kept.is_sapic_rule);
+    // An all-empty left leaves the right intact.
+    let kept = RuleAttributes::empty().merge(b);
+    assert_eq!(kept.role, Some("bob".into()));
+    assert!(kept.is_sapic_rule);
 }
 
 #[test]
@@ -66,6 +128,20 @@ fn rule_info_conversion_round_trip() {
     let lifted: RuleAC = rule_ac_intr_to_rule_ac(intr.clone());
     let back = rule_ac_to_intr_rule_ac(lifted).unwrap();
     assert_eq!(back, intr);
+    // The down-conversion is a filter, not a cast: a protocol rule has no
+    // intruder info and comes back `None`.
+    let proto: RuleAC = Rule::new(
+        RuleInfo::Proto(ProtoRuleACInfo {
+            name: ProtoRuleName::Stand("P"),
+            attributes: RuleAttributes::empty(),
+            variants: Vec::new(),
+            loop_breakers: Vec::new(),
+        }),
+        vec![],
+        vec![],
+        vec![],
+    );
+    assert!(rule_ac_to_intr_rule_ac(proto).is_none());
 }
 
 #[test]
@@ -88,7 +164,14 @@ fn intruder_predicates() {
         funs: vec![f]
     }));
     assert!(is_coerce_rule_info(&IntrRuleACInfo::Coerce));
+    // Each predicate is exclusive to its own variant: an over-broad
+    // `matches!` arm (or a predicate degenerating to `true`) shows up here.
     assert!(!is_constr_rule_info(&IntrRuleACInfo::Coerce));
+    assert!(!is_destr_rule_info(&IntrRuleACInfo::Coerce));
+    assert!(!is_coerce_rule_info(&IntrRuleACInfo::ConstrRule {
+        name: b"f".to_vec(),
+        fun: f
+    }));
 }
 
 /// `IntrRuleACInfo`'s derived `Ord`/`Hash` walk the variants in
@@ -182,6 +265,29 @@ fn unify_ln_fact_eqs_tag_mismatch_no_unifiers() {
     assert!(res.is_empty());
 }
 
+/// Facts that constrain nothing (equal 0-ary tags) short-circuit to the ONE
+/// trivial unifier — not to "no unifiers", which would make every
+/// nullary-fact premise unsolvable.
+#[test]
+fn unify_ln_fact_eqs_nullary_facts_yield_one_trivial_unifier() {
+    let path = match maude_path() {
+        Some(p) => p,
+        None => return,
+    };
+    let h = MaudeHandle::start(&path, tamarin_term::maude_sig::pair_maude_sig()).unwrap();
+    let f = crate::fact::proto_fact(crate::fact::Multiplicity::Linear, "P", vec![]);
+    let res = unify_ln_fact_eqs(
+        &h,
+        &[Equal {
+            lhs: f.clone(),
+            rhs: f,
+        }],
+    )
+    .unwrap();
+    assert_eq!(res.len(), 1);
+    assert!(res[0].is_empty());
+}
+
 #[test]
 fn unify_ln_fact_eqs_two_vars() {
     let path = match maude_path() {
@@ -255,22 +361,41 @@ fn unifiable_rule_ac_insts_different_info_no() {
     assert!(!unifiable_rule_ac_insts(&h, &r1, &r2).unwrap());
 }
 
-#[test]
-fn has_frees_for_rule_visits_premise_and_conclusion_vars() {
-    use tamarin_term::lterm::{HasFrees, LSort};
-    let r: ProtoRuleE = Rule::new(
+/// A rule carrying one distinguishable variable in each of its four
+/// variable-bearing lists.  Both `HasFrees` directions are asserted against
+/// it, so dropping any single list from either walk is visible.
+fn rule_with_a_var_in_every_list(base: u64) -> ProtoRuleE {
+    Rule::new(
         ProtoRuleEInfo::standard("X"),
-        vec![in_fact(msg_var("a", 0))],
-        vec![out_fact(msg_var("b", 1))],
-        vec![],
-    );
+        vec![in_fact(msg_var("a", base))],
+        vec![out_fact(msg_var("b", base + 1))],
+        vec![fresh_fact(msg_var("c", base + 2))],
+    )
+    .with_new_vars(vec![msg_var("d", base + 3)])
+}
+
+/// `HasFrees::for_each_free` folds premises, then conclusions, then actions,
+/// then `new_vars`.  The exact sequence is pinned, not just membership:
+/// dropping a list shrinks every rename's variable set, and reordering the
+/// folds shifts the fresh indices `bounds_max`-style seeds hand out.
+#[test]
+fn has_frees_for_rule_visits_every_list_in_order() {
+    use tamarin_term::lterm::{HasFrees, LSort};
+    let r = rule_with_a_var_in_every_list(0);
     let mut seen: Vec<(String, u64)> = Vec::new();
     r.for_each_free(&mut |v| {
         assert_eq!(v.sort, LSort::Msg);
         seen.push((v.name.to_string(), v.idx));
     });
-    assert!(seen.contains(&("a".into(), 0)));
-    assert!(seen.contains(&("b".into(), 1)));
+    assert_eq!(
+        seen,
+        vec![
+            ("a".into(), 0),
+            ("b".into(), 1),
+            ("c".into(), 2),
+            ("d".into(), 3),
+        ]
+    );
 }
 
 #[test]
@@ -350,15 +475,13 @@ fn get_remaining_rule_applications_works() {
     assert_eq!(get_remaining_rule_applications(&no_budget), 0);
 }
 
+/// `HasFrees::map_free_with` rebuilds all four lists.  Every index must come
+/// back shifted: a list the rebuild forgot to map keeps its original index
+/// and shows up as an unshifted entry here.
 #[test]
 fn rename_rule_shifts_indices() {
     use tamarin_term::lterm::{HasFrees, LSort};
-    let r: ProtoRuleE = Rule::new(
-        ProtoRuleEInfo::standard("X"),
-        vec![in_fact(msg_var("a", 5))],
-        vec![out_fact(msg_var("b", 7))],
-        vec![],
-    );
+    let r = rule_with_a_var_in_every_list(5);
     // Shift by +10.
     let renamed = r.map_free(&mut |v| LVar {
         idx: v.idx + 10,
@@ -369,6 +492,5 @@ fn rename_rule_shifts_indices() {
         assert_eq!(v.sort, LSort::Msg);
         idxs.push(v.idx);
     });
-    assert!(idxs.contains(&15));
-    assert!(idxs.contains(&17));
+    assert_eq!(idxs, vec![15, 16, 17, 18]);
 }

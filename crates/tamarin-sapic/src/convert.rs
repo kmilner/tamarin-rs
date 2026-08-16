@@ -596,8 +596,32 @@ mod tests {
             body: Box::new(evt),
         };
         let conv = convert_process(&top).unwrap();
-        // Outermost is New.
-        assert!(matches!(conv, Process::Action(SapicAction::New(_), _, _)));
+        // The whole spine converts: `New` carrying the SAPIC type, then the
+        // event fact, then the out with the nested `f(f(x))` payload.
+        let Process::Action(SapicAction::New(v), _, body) = conv else {
+            panic!("expected New at the top");
+        };
+        assert_eq!(v.var.name, "x");
+        assert_eq!(v.stype.as_deref(), Some("lol"));
+        let Process::Action(SapicAction::Event(fact), _, body) = *body else {
+            panic!("expected Event under the New");
+        };
+        assert_eq!(tamarin_theory::fact::fact_tag_name(&fact.tag), "Test");
+        assert_eq!(fact.terms.len(), 1);
+        let Process::Action(SapicAction::ChOut { chan, msg }, _, body) = *body else {
+            panic!("expected ChOut under the Event");
+        };
+        assert!(chan.is_none(), "`out(t)` has no explicit channel");
+        // `f(f(x))` — two nested applications over the bound variable.
+        use tamarin_term::vterm::{Lit, VTerm};
+        let VTerm::App(_, outer) = &msg else {
+            panic!("expected f(f(x)), got {msg:?}");
+        };
+        let VTerm::App(_, inner) = &outer[0] else {
+            panic!("expected the inner f(x)");
+        };
+        assert!(matches!(inner[0], VTerm::Lit(Lit::Var(_))));
+        assert!(matches!(*body, Process::Null(_)));
     }
 
     fn event(name: &str) -> p::Process {
@@ -612,35 +636,48 @@ mod tests {
         }
     }
 
+    /// The event name a converted `event N` child carries, for asserting that
+    /// a combinator kept its two children in the source order.
+    fn child_event_name(p: &PlainProcess) -> String {
+        let Process::Action(SapicAction::Event(f), _, _) = p else {
+            panic!("expected an event child, got {p:?}");
+        };
+        tamarin_theory::fact::fact_tag_name(&f.tag)
+    }
+
     #[test]
     fn convert_parallel_and_ndc() {
-        let par = p::Process::Comb {
-            comb: p::ProcessComb::Parallel,
-            left: Box::new(event("A")),
-            right: Box::new(event("B")),
-        };
-        assert!(matches!(
-            convert_process(&par).unwrap(),
-            Process::Comb(ProcessCombinator::Parallel, _, _, _)
-        ));
-        let ndc = p::Process::Comb {
-            comb: p::ProcessComb::Ndc,
-            left: Box::new(event("A")),
-            right: Box::new(event("B")),
-        };
-        assert!(matches!(
-            convert_process(&ndc).unwrap(),
-            Process::Comb(ProcessCombinator::Ndc, _, _, _)
-        ));
+        for (comb, want) in [
+            (p::ProcessComb::Parallel, ProcessCombinator::Parallel),
+            (p::ProcessComb::Ndc, ProcessCombinator::Ndc),
+        ] {
+            let src = p::Process::Comb {
+                comb,
+                left: Box::new(event("A")),
+                right: Box::new(event("B")),
+            };
+            let Process::Comb(got, _, l, r) = convert_process(&src).unwrap() else {
+                panic!("expected a combinator for {want:?}");
+            };
+            assert_eq!(got, want);
+            // Children convert, and the left/right order is preserved.
+            assert_eq!(child_event_name(&l), "A");
+            assert_eq!(child_event_name(&r), "B");
+        }
     }
 
     #[test]
     fn convert_replication_becomes_rep_action() {
         let rep = p::Process::Replication(Box::new(event("A")));
-        assert!(matches!(
-            convert_process(&rep).unwrap(),
-            Process::Action(SapicAction::Rep, _, _)
-        ));
+        // `!P` is `Rep` with the replicated body as its ONLY child — the body
+        // must survive, not be replaced by the usual `0`.
+        let Process::Action(SapicAction::Rep, _, body) = convert_process(&rep).unwrap() else {
+            panic!("expected a Rep action");
+        };
+        let Process::Action(SapicAction::Event(f), _, _) = *body else {
+            panic!("expected the replicated event as Rep's child");
+        };
+        assert_eq!(tamarin_theory::fact::fact_tag_name(&f.tag), "A");
     }
 
     #[test]
@@ -651,50 +688,78 @@ mod tests {
             sort: p::SortHint::Untagged,
             typ: None,
         });
+        let b = p::Term::PubLit("b".into());
         let cond = p::Process::Comb {
-            comb: p::ProcessComb::Cond(p::Condition::Eq(a.clone(), a)),
+            comb: p::ProcessComb::Cond(p::Condition::Eq(a.clone(), b.clone())),
             left: Box::new(event("E")),
             right: Box::new(p::Process::Null),
         };
-        assert!(matches!(
-            convert_process(&cond).unwrap(),
-            Process::Comb(ProcessCombinator::CondEq(_, _), _, _, _)
-        ));
+        let Process::Comb(ProcessCombinator::CondEq(l, r), _, then, els) =
+            convert_process(&cond).unwrap()
+        else {
+            panic!("expected a CondEq combinator");
+        };
+        // Both sides of `t1 = t2` convert, in order, and the then/else arms
+        // stay on their own sides.
+        assert_eq!(l, term(&a).unwrap());
+        assert_eq!(r, term(&b).unwrap());
+        assert_eq!(child_event_name(&then), "E");
+        assert!(matches!(*els, Process::Null(_)));
     }
 
     #[test]
     fn convert_cond_formula() {
-        // `if <formula> then E else 0` converts to ProcessCombinator::Cond.
+        // `if <formula> then E else 0` converts to ProcessCombinator::Cond,
+        // carrying the parser-AST formula VERBATIM (predicate atoms stay
+        // un-expanded until `lift_rule_restrictions`).
+        let frml = p::Formula::Atom(p::Atom::Pred(p::Fact {
+            persistent: false,
+            name: "P".into(),
+            args: vec![p::Term::PubLit("c".into())],
+            annotations: vec![],
+        }));
         let cond = p::Process::Comb {
-            comb: p::ProcessComb::Cond(p::Condition::Formula(p::Formula::True)),
+            comb: p::ProcessComb::Cond(p::Condition::Formula(frml.clone())),
             left: Box::new(event("E")),
             right: Box::new(p::Process::Null),
         };
-        assert!(matches!(
-            convert_process(&cond).unwrap(),
-            Process::Comb(ProcessCombinator::Cond(_), _, _, _)
-        ));
+        let Process::Comb(ProcessCombinator::Cond(got), _, then, _) =
+            convert_process(&cond).unwrap()
+        else {
+            panic!("expected a Cond combinator");
+        };
+        assert_eq!(got, frml);
+        assert_eq!(child_event_name(&then), "E");
     }
 
     #[test]
     fn convert_lookup() {
+        let cell = p::Term::PubLit("x".into());
         let lookup = p::Process::Comb {
             comb: p::ProcessComb::Lookup(
-                p::Term::PubLit("x".into()),
+                cell.clone(),
                 p::VarSpec {
                     name: "v".into(),
                     idx: 0,
                     sort: p::SortHint::Untagged,
-                    typ: None,
+                    typ: Some("cellty".into()),
                 },
             ),
             left: Box::new(event("E")),
             right: Box::new(p::Process::Null),
         };
-        assert!(matches!(
-            convert_process(&lookup).unwrap(),
-            Process::Comb(ProcessCombinator::Lookup(_, _), _, _, _)
-        ));
+        let Process::Comb(ProcessCombinator::Lookup(t, v), _, found, notfound) =
+            convert_process(&lookup).unwrap()
+        else {
+            panic!("expected a Lookup combinator");
+        };
+        assert_eq!(t, term(&cell).unwrap());
+        // `lookup t as v` binds `v` — with its SAPIC type, untagged ⇒ msg sort.
+        assert_eq!(v.var.name, "v");
+        assert_eq!(v.var.sort, LSort::Msg);
+        assert_eq!(v.stype.as_deref(), Some("cellty"));
+        assert_eq!(child_event_name(&found), "E");
+        assert!(matches!(*notfound, Process::Null(_)));
     }
 
     // `map_free_terms` and `fold_free_vars` must agree on which leaves are
@@ -796,10 +861,17 @@ mod tests {
                 body: Box::new(p::Process::Null),
             }),
         };
+        let key = term(&p::Term::PubLit("k".into())).unwrap();
         let conv = convert_process(&ins).unwrap();
-        assert!(matches!(
-            conv,
-            Process::Action(SapicAction::Insert(_, _), _, _)
-        ));
+        let Process::Action(SapicAction::Insert(k, v), _, body) = conv else {
+            panic!("expected Insert at the top");
+        };
+        assert_eq!(k, key);
+        assert_eq!(v, term(&p::Term::PubLit("v".into())).unwrap());
+        // The `delete` under it converts too — and keeps its key term.
+        let Process::Action(SapicAction::Delete(dk), _, _) = *body else {
+            panic!("expected Delete under the Insert");
+        };
+        assert_eq!(dk, key);
     }
 }

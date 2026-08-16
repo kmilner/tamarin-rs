@@ -145,6 +145,58 @@ fn installed_bundle_resolves_every_attribute_in_term_to_lnterm() {
     }
 }
 
+/// The arity-1 fold's HARDCODED builtin name list in `term_to_vterm` is
+/// deliberate (a signature-driven fold regresses the corpus), so it is only
+/// as good as its membership: every name on it must fold surplus
+/// comma-separated arguments into one right-associative pair, mirroring HS
+/// `naryOpApp`'s `k == 1` branch (Theory/Text/Parser/Term.hs:94-96), and a
+/// genuinely multi-arg builtin must not.  `h` alone is exercised by the
+/// corpus; the rest (`inv`/`pk` and the revealing-signing /
+/// locations-report symbols) are reachable only from theories the fast
+/// corpus does not carry.
+#[test]
+fn hardcoded_unary_builtins_fold_surplus_arguments() {
+    use tamarin_term::function_symbols::FunSym;
+
+    let a = parser_var("a", 0, p::SortHint::Msg);
+    let b = parser_var("b", 0, p::SortHint::Msg);
+    let a_b_pair =
+        tamarin_term::builtin::pair(term_to_lnterm(&a).unwrap(), term_to_lnterm(&b).unwrap());
+    for name in [
+        "h",
+        "fst",
+        "snd",
+        "inv",
+        "pk",
+        "getMessage",
+        "get_rep",
+        "report",
+    ] {
+        let t = p::Term::App(name.into(), vec![a.clone(), b.clone()]);
+        match term_to_lnterm(&t).unwrap() {
+            Term::App(FunSym::NoEq(sym), args) => {
+                assert_eq!(String::from_utf8_lossy(sym.name), name);
+                assert_eq!(sym.arity, 1, "{name}: the symbol stays arity-1");
+                assert_eq!(
+                    args.to_vec(),
+                    vec![a_b_pair.clone()],
+                    "{name}: surplus args fold"
+                );
+            }
+            other => panic!("{name}: expected a NoEq application, got {other:?}"),
+        }
+    }
+    // `senc` is genuinely 2-ary and must be left alone.
+    let senc = p::Term::App("senc".into(), vec![a, b]);
+    match term_to_lnterm(&senc).unwrap() {
+        Term::App(FunSym::NoEq(sym), args) => {
+            assert_eq!(sym.arity, 2, "senc is not a unary builtin");
+            assert_eq!(args.len(), 2);
+        }
+        other => panic!("expected a NoEq application, got {other:?}"),
+    }
+}
+
 /// `diff(a, b)` (reachable with the `diff` flag set) lowers to the
 /// PRIVATE `diffSym`, not a public symbol that merely shares the name.
 ///
@@ -287,11 +339,25 @@ fn canonicalize_ac_in_pterm_sees_the_installed_ac_set_at_every_depth() {
     );
 }
 
+// A theory with no declarations still carries HS's `minimalMaudeSig`
+// (`emptySignaturePure`, Theory/Model/Signature.hs) — `pair`/`fst`/`snd` are
+// always in scope, which is what makes `<a, b>` parse and the pair intruder
+// rules exist in every theory.
 #[test]
 fn elaborate_empty_theory() {
     let p = parse_theory("theory T begin end", &[]).unwrap();
     let t = elaborate(&p).unwrap();
     assert_eq!(t.name, "T");
+    assert!(t.items.is_empty());
+    let mut funs: Vec<String> = t
+        .signature
+        .maude_sig
+        .st_fun_syms
+        .iter()
+        .map(|s| String::from_utf8_lossy(s.name).to_string())
+        .collect();
+    funs.sort();
+    assert_eq!(funs, vec!["fst", "pair", "snd"]);
 }
 
 #[test]
@@ -437,78 +503,99 @@ fn parser_var(name: &str, idx: u64, sort: p::SortHint) -> p::Term {
     })
 }
 
+// `lnterm_to_term` inverts `term_to_lnterm` on every surface shape the
+// display path round-trips (`pretty_theory` reads a parser AST back out of
+// elaborated terms).  A round trip on its own is satisfied by two matching
+// bugs — a sort mangled one way and unmangled the other — so each case also
+// pins the LNTerm the FORWARD direction produced.
 #[test]
-fn lnterm_to_term_round_trip_var_msg() {
-    let v = parser_var("x", 7, p::SortHint::Msg);
-    let lt = term_to_lnterm(&v).unwrap();
-    let back = lnterm_to_term(&lt);
-    assert_eq!(back, v);
-}
+fn lnterm_to_term_inverts_term_to_lnterm() {
+    use tamarin_term::function_symbols::NoEqSym;
+    use tamarin_term::lterm::{LNTerm, Name, NameTag};
+    use tamarin_term::term::f_app_no_eq;
+    use tamarin_term::vterm::{var_term, Lit};
 
-#[test]
-fn lnterm_to_term_round_trip_var_fresh() {
-    let v = parser_var("k", 3, p::SortHint::Fresh);
-    let lt = term_to_lnterm(&v).unwrap();
-    assert_eq!(lnterm_to_term(&lt), v);
-}
+    let msg = |n: &str| var_term(LVar::new(n, LSort::Msg, 0));
+    let noeq = |n: &str, arity: usize| {
+        NoEqSym::new(
+            n.as_bytes().to_vec(),
+            arity,
+            Privacy::Public,
+            Constructability::Constructor,
+        )
+    };
+    let con = |tag, s: &str| LNTerm::Lit(Lit::Con(Name::new(tag, s.to_string())));
+    let pair2 = |a: LNTerm, b: LNTerm| tamarin_term::builtin::pair(a, b);
 
-#[test]
-fn lnterm_to_term_round_trip_var_node() {
-    let v = parser_var("i", 0, p::SortHint::Node);
-    let lt = term_to_lnterm(&v).unwrap();
-    assert_eq!(lnterm_to_term(&lt), v);
-}
-
-#[test]
-fn lnterm_to_term_round_trip_pub_lit() {
-    let pl = p::Term::PubLit("Alice".into());
-    let lt = term_to_lnterm(&pl).unwrap();
-    assert_eq!(lnterm_to_term(&lt), pl);
-}
-
-#[test]
-fn lnterm_to_term_round_trip_fresh_lit() {
-    let fl = p::Term::FreshLit("n42".into());
-    let lt = term_to_lnterm(&fl).unwrap();
-    assert_eq!(lnterm_to_term(&lt), fl);
-}
-
-#[test]
-fn lnterm_to_term_round_trip_pair() {
-    // <a, b> → pair(a, b) → back to Pair([a, b]).
-    let pair = p::Term::Pair(vec![
-        parser_var("a", 0, p::SortHint::Msg),
-        parser_var("b", 0, p::SortHint::Msg),
-    ]);
-    let lt = term_to_lnterm(&pair).unwrap();
-    let back = lnterm_to_term(&lt);
-    assert_eq!(back, pair);
-}
-
-#[test]
-fn lnterm_to_term_round_trip_triple() {
-    // <a, b, c> → pair(a, pair(b, c)) → back to Pair([a, b, c]).
-    let triple = p::Term::Pair(vec![
-        parser_var("a", 0, p::SortHint::Msg),
-        parser_var("b", 0, p::SortHint::Msg),
-        parser_var("c", 0, p::SortHint::Msg),
-    ]);
-    let lt = term_to_lnterm(&triple).unwrap();
-    let back = lnterm_to_term(&lt);
-    assert_eq!(back, triple);
-}
-
-#[test]
-fn lnterm_to_term_round_trip_nested_app() {
-    // f(g(x), y) → ... → f(g(x), y).
-    let inner = p::Term::App("g".into(), vec![parser_var("x", 0, p::SortHint::Msg)]);
-    let outer = p::Term::App(
-        "f".into(),
-        vec![inner.clone(), parser_var("y", 0, p::SortHint::Msg)],
-    );
-    let lt = term_to_lnterm(&outer).unwrap();
-    let back = lnterm_to_term(&lt);
-    assert_eq!(back, outer);
+    let cases: Vec<(&str, p::Term, LNTerm)> = vec![
+        (
+            "msg var carries LSortMsg and its index",
+            parser_var("x", 7, p::SortHint::Msg),
+            var_term(LVar::new("x", LSort::Msg, 7)),
+        ),
+        (
+            "`~k.3` is LSortFresh, not Msg",
+            parser_var("k", 3, p::SortHint::Fresh),
+            var_term(LVar::new("k", LSort::Fresh, 3)),
+        ),
+        (
+            "`#i` is LSortNode",
+            parser_var("i", 0, p::SortHint::Node),
+            var_term(LVar::new("i", LSort::Node, 0)),
+        ),
+        (
+            "`'Alice'` is a Pub-tagged Name constant, not a variable",
+            p::Term::PubLit("Alice".into()),
+            con(NameTag::Pub, "Alice"),
+        ),
+        (
+            "`~'n42'` is a Fresh-tagged Name constant",
+            p::Term::FreshLit("n42".into()),
+            con(NameTag::Fresh, "n42"),
+        ),
+        (
+            "<a, b> is one `pair` application",
+            p::Term::Pair(vec![
+                parser_var("a", 0, p::SortHint::Msg),
+                parser_var("b", 0, p::SortHint::Msg),
+            ]),
+            pair2(msg("a"), msg("b")),
+        ),
+        (
+            "<a, b, c> nests RIGHT: pair(a, pair(b, c)), and unnests flat",
+            p::Term::Pair(vec![
+                parser_var("a", 0, p::SortHint::Msg),
+                parser_var("b", 0, p::SortHint::Msg),
+                parser_var("c", 0, p::SortHint::Msg),
+            ]),
+            pair2(msg("a"), pair2(msg("b"), msg("c"))),
+        ),
+        (
+            "f(g(x), y): the nested application survives both directions",
+            p::Term::App(
+                "f".into(),
+                vec![
+                    p::Term::App("g".into(), vec![parser_var("x", 0, p::SortHint::Msg)]),
+                    parser_var("y", 0, p::SortHint::Msg),
+                ],
+            ),
+            f_app_no_eq(
+                noeq("f", 2),
+                vec![
+                    f_app_no_eq(noeq("g", 1), vec![msg("x")]),
+                    var_term(LVar::new("y", LSort::Msg, 0)),
+                ],
+            ),
+        ),
+    ];
+    for (label, surface, lnterm) in cases {
+        assert_eq!(
+            term_to_lnterm(&surface).unwrap(),
+            lnterm,
+            "{label}: term_to_lnterm"
+        );
+        assert_eq!(lnterm_to_term(&lnterm), surface, "{label}: lnterm_to_term");
+    }
 }
 
 // =========================================================================
@@ -631,9 +718,12 @@ fn let_block_substitutes_in_actions_and_conclusions() {
     }
 }
 
+// `elaborate` must run the desugaring ITSELF (`rule_to_proto_rule_e`), not
+// merely leave `apply_let_block` available to other callers: the elaborated
+// rule's action and conclusion carry `~k`, and the local name `r` — which
+// elaborates perfectly happily as a free Msg-variable — is gone.
 #[test]
 fn let_block_end_to_end_elaborates() {
-    // The desugared rule should elaborate cleanly through `elaborate`.
     let src = r#"theory T begin
             rule R: let r = ~k in [Fr(~k)] --[Use(r)]-> [Out(r)]
             lemma trivial: "All k #i. Use(k) @ i ==> Use(k) @ i"
@@ -642,4 +732,7 @@ fn let_block_end_to_end_elaborates() {
     let t = elaborate(&p).unwrap();
     let rules: Vec<_> = t.rules().collect();
     assert_eq!(rules.len(), 1);
+    let k = tamarin_term::vterm::var_term(LVar::new("k", LSort::Fresh, 0));
+    assert_eq!(rules[0].rule.actions[0].terms.to_vec(), vec![k.clone()]);
+    assert_eq!(rules[0].rule.conclusions[0].terms.to_vec(), vec![k]);
 }

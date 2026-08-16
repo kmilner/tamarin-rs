@@ -74,10 +74,15 @@ fn each_mode_renders_its_own_help() {
 #[test]
 fn version_is_stdout_rc_zero() {
     // `-V` prints the short form; `--version` adds the build provenance.
+    // The two ABSENCE assertions are the pin: wiring clap's `version` to
+    // `LONG_VERSION` makes `-V` print the provenance too, and every other
+    // assertion here still holds.
     let out = run(&["-V"]);
     assert_eq!(out.status.code(), Some(0));
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains(env!("CARGO_PKG_VERSION")), "{text}");
+    assert!(!text.contains("git revision"), "{text}");
+    assert!(!text.contains("compiled at"), "{text}");
 
     let out = run(&["--version"]);
     assert_eq!(out.status.code(), Some(0));

@@ -554,11 +554,29 @@ mod tests {
     }
 
     #[test]
-    fn fixed_width_text_pads_advertised_width() {
+    fn fixed_width_text_splits_at_the_advertised_width() {
         // 3 chars rendered, width-3 advertised: text only.
         assert_eq!(fixed_width_text(3, "abc").render(), "abc");
-        // 5 chars rendered but width-3 advertised: split into width-3 head plus zero-width tail.
+        assert_eq!(
+            format!("{:?}", fixed_width_text(3, "abc").node),
+            "Text(\"abc\")"
+        );
+        // 5 chars rendered but width-3 advertised: split into a width-3 head
+        // plus a zero-width tail.  This module's layout is line-based, so
+        // `ZeroWidth` and `Text` RENDER identically — the split is only visible
+        // in the node tree, and asserting on `render` alone would pass for a
+        // `fixed_width_text` that never splits at all.
         assert_eq!(fixed_width_text(3, "abcde").render(), "abcde");
+        assert_eq!(
+            format!("{:?}", fixed_width_text(3, "abcde").node),
+            "Cat(Text(\"abc\"), ZeroWidth(\"de\"))"
+        );
+        // `symbol` is `fixed_width_text 1`: everything past column 1 is
+        // zero-width.
+        assert_eq!(
+            format!("{:?}", symbol("\u{2225}\u{2225}").node),
+            "Cat(Text(\"\u{2225}\"), ZeroWidth(\"\u{2225}\"))"
+        );
     }
 
     #[test]

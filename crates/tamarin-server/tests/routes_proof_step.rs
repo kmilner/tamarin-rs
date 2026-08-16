@@ -1,11 +1,16 @@
 //! Integration tests for the live proof-tree mutation route.
 //!
+//! `/thy/trace/<idx>/proof-step/<lemma>/<path…>/<method>` has no upstream
+//! counterpart (the HS UI applies methods through `/main/method/…`); it
+//! applies one proof method in place and answers a `{html,title}` envelope
+//! carrying the re-rendered sub-proof snippet plus the whole proof tree.
+//!
 //! Coverage:
-//!   - `/proof-step/<lemma>/simplify` applies a Simplify method at
-//!     the root and returns a `{html,title}` envelope.
-//!   - After one cycle, the proof state is updated in-memory: a
-//!     second hit returns a tree showing the previous Simplify (not
-//!     just the initial state again).
+//!   - the envelope and the applied method in the rendered tree;
+//!   - the mutation is kept: `/main/proof/<lemma>` grows the sub-case the step
+//!     produced (this is the only place the in-memory `ProofState` is checked
+//!     to survive a request);
+//!   - an unknown lemma is an `{alert}`, not a panic.
 
 mod common;
 
@@ -30,13 +35,20 @@ async fn proof_step_simplify_returns_html_envelope() {
         .expect("send");
     assert_eq!(res.status(), 200);
     let v: serde_json::Value = res.json().await.expect("decode");
-    let keys = json_top_keys(&v);
-    // Either {html,title} (success) or {alert} (failure) — either
-    // form is acceptable; we just need a well-formed envelope.
+    assert_eq!(
+        json_top_keys(&v),
+        ["html", "title"].iter().map(|k| k.to_string()).collect(),
+        "a step that applies must be {{html,title}}, never the {{alert}} arm",
+    );
+    assert_eq!(v["title"], serde_json::json!("Proof of debug"));
+    let html = v["html"].as_str().expect("html");
+    // The tree appended below the snippet must show the method that was just
+    // applied at the root, over the `sorry` child the step opened.
     assert!(
-        keys.contains("html") || keys.contains("alert"),
-        "unexpected keys: {:?}",
-        keys,
+        html.contains("<h2>Proof of <code>debug</code></h2>")
+            && html.contains("<span class=\"proof-method\">simplify</span>")
+            && html.contains("<span class=\"proof-method\">sorry</span>"),
+        "the rendered tree must carry the applied simplify and its open child; got: {html}",
     );
 }
 
@@ -47,7 +59,26 @@ async fn proof_step_then_view_shows_applied_method() {
         return;
     }
     let s = start_server_with_theory("issue193.spthy").await;
-    // Apply simplify; we expect a successful envelope.
+    let proof_view = || async {
+        let v: serde_json::Value = s
+            .client
+            .get(s.url("/thy/trace/1/main/proof/debug"))
+            .send()
+            .await
+            .expect("send")
+            .json()
+            .await
+            .expect("decode");
+        v["html"].as_str().expect("html").to_string()
+    };
+
+    // The untouched root has no children.
+    let before = proof_view().await;
+    assert!(
+        before.contains("<h3>0 sub-case(s)</h3>"),
+        "the unstepped root must render no sub-cases; got: {before}",
+    );
+
     let r1 = s
         .client
         .get(s.url("/thy/trace/1/proof-step/debug/simplify"))
@@ -55,32 +86,16 @@ async fn proof_step_then_view_shows_applied_method() {
         .await
         .expect("send 1");
     assert_eq!(r1.status(), 200);
-    let v1: serde_json::Value = r1.json().await.expect("decode 1");
-    if v1.get("alert").is_some() {
-        // The method didn't apply (Sorry no-op or similar) — that's a
-        // valid outcome; just confirm we didn't crash.
-        eprintln!("simplify alert: {:?}", v1.get("alert"));
-        return;
-    }
-    assert!(v1.get("html").is_some());
-    // Now fetch the proof view of the same lemma and confirm the
-    // ProofState is being remembered.
-    let r2 = s
-        .client
-        .get(s.url("/thy/trace/1/main/proof/debug"))
-        .send()
-        .await
-        .expect("send 2");
-    assert_eq!(r2.status(), 200);
-    let v2: serde_json::Value = r2.json().await.expect("decode 2");
-    let html = v2.get("html").and_then(|h| h.as_str()).unwrap_or("");
-    // After the first proof-step, the lemma view should reflect a
-    // non-initial state.  We look for the structural indicator that
-    // a proof-tree is being rendered (the `proof-node` CSS class).
+
+    // Same URL, same theory index: the applied step must be in the store, not
+    // just in the step response.  Simplify opens exactly one case, named "".
+    let after = proof_view().await;
     assert!(
-        html.contains("proof-node") || html.contains("proof-method"),
-        "expected proof-tree shape, got: {}",
-        &html[..html.len().min(400)],
+        after.contains("<h3>1 sub-case(s)</h3>")
+            && after.contains(
+                "<h4>Case </h4><br/>\n<static-graph graphSrc=\"/thy/trace/1/intdot/proof/debug/_\">"
+            ),
+        "the proof view must show the sub-case the step opened; got: {after}",
     );
 }
 
@@ -99,9 +114,9 @@ async fn proof_step_unknown_lemma_returns_alert() {
         .expect("send");
     assert_eq!(res.status(), 200);
     let v: serde_json::Value = res.json().await.expect("decode");
-    assert!(
-        v.get("alert").is_some(),
-        "expected alert for unknown lemma, got: {:?}",
-        v,
+    assert_eq!(json_top_keys(&v), one_key_set("alert"));
+    assert_eq!(
+        v["alert"],
+        serde_json::json!("no system at path [] in lemma NONEXISTENT"),
     );
 }

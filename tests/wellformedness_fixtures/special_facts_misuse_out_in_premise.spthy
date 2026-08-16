@@ -1,4 +1,4 @@
-// Fixture: triggers `Fact usage`.
+// Fixture: triggers `Special facts`.
 // `Out` (adversary output) is a conclusion-only fact; it must not
 // appear in the LHS of a rule.
 theory SpecialFactsOut

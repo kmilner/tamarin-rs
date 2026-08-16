@@ -806,22 +806,21 @@ mod tests {
     use super::*;
     use tamarin_term::maude_sig::pair_maude_sig;
 
-    fn maude_path() -> Option<String> {
-        if let Ok(p) = std::env::var("MAUDE_PATH") {
-            return Some(p);
-        }
-        let candidates = ["/usr/local/bin/maude", "maude"];
-        for c in &candidates {
-            if std::path::Path::new(c).exists() {
-                return Some((*c).to_string());
-            }
-        }
-        None
-    }
+    use crate::test_maude::maude_path;
 
+    /// `None` only when [`maude_path`] resolved nothing (the documented
+    /// `TAM_ALLOW_NO_MAUDE` skip).  A maude that resolved but will not start
+    /// is the same misconfiguration as a dangling `MAUDE_PATH`: swallowing it
+    /// with `.ok()?` would silently skip every maude-backed test in this file.
     fn ctx() -> Option<ProofContext> {
         let path = maude_path()?;
-        let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).ok()?;
+        let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig())
+            .unwrap_or_else(|e| {
+                panic!(
+                    "maude at {path} failed to start: {e:?} — every maude-backed \
+                     test here would otherwise skip silently"
+                )
+            });
         Some(ProofContext::new(h, Vec::new()))
     }
 

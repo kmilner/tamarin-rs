@@ -818,19 +818,16 @@ mod tests {
     }
 
     #[test]
-    fn empty_substitution() {
-        let s: LSubstVFresh<C> = SubstVFresh::empty();
-        assert!(s.is_empty());
-        assert_eq!(s.len(), 0);
-    }
-
-    #[test]
     fn restrict_filters_keys() {
         let s: LSubstVFresh<C> = SubstVFresh::from_list(vec![
             (lv("x", 0), var_term(lv("y", 0))),
             (lv("x", 1), var_term(lv("z", 0))),
         ]);
         let r = s.restrict(&[lv("x", 0)]);
+        // The KEPT key is the listed one, with its image intact — a count
+        // alone is equally happy with the complementary filter.
+        assert_eq!(r.image_of(&lv("x", 0)), Some(&var_term(lv("y", 0))));
+        assert_eq!(r.image_of(&lv("x", 1)), None);
         assert_eq!(r.len(), 1);
     }
 
@@ -841,14 +838,28 @@ mod tests {
         let s: LSubstVFresh<C> = SubstVFresh::from_list(vec![(lv("x", 0), var_term(lv("y", 0)))]);
         assert!(s.is_renamed_var(&lv("x", 0)));
         assert!(s.is_renaming());
+        assert!(s.remove_renamings().is_empty());
 
         // After adding a second entry that mentions `y`, `x ~> y` is no
-        // longer a clean rename.
+        // longer a clean rename.  `is_renaming` reaches the same verdict
+        // through its own single-pass duplicate-target check, so it needs
+        // its own negative case.
         let s2: LSubstVFresh<C> = SubstVFresh::from_list(vec![
             (lv("x", 0), var_term(lv("y", 0))),
             (lv("z", 0), var_term(lv("y", 0))),
         ]);
         assert!(!s2.is_renamed_var(&lv("x", 0)));
+        assert!(!s2.is_renaming(), "duplicate target var is not a renaming");
+
+        // A sort-changing binding is not a rename either, however unique
+        // its target.
+        let s3: LSubstVFresh<C> = SubstVFresh::from_list(vec![(
+            lv("x", 0),
+            var_term(LVar::new("k", LSort::Fresh, 0)),
+        )]);
+        assert!(!s3.is_renamed_var(&lv("x", 0)));
+        assert!(!s3.is_renaming(), "Msg ~> Fresh widens the sort");
+        assert_eq!(s3.remove_renamings().len(), 1);
     }
 
     #[test]

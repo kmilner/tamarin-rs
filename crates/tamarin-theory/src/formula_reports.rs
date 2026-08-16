@@ -235,14 +235,19 @@ mod tests {
                     .find(|l| l.starts_with("  Lemma") || l.starts_with("  Restriction"))
                     .expect("body names its item");
                 (
-                    if e.topic == "Formula terms" { "T" } else { "Q" },
+                    e.topic.as_str(),
                     item.split_whitespace().nth(1).expect("item name"),
                 )
             })
             .collect();
         assert_eq!(
             got,
-            vec![("T", "`lB'"), ("Q", "`lD'"), ("T", "`rA'"), ("Q", "`rC'")]
+            vec![
+                ("Formula terms", "`lB'"),
+                (QUANTIFIER_TOPIC, "`lD'"),
+                ("Formula terms", "`rA'"),
+                (QUANTIFIER_TOPIC, "`rC'"),
+            ]
         );
     }
 

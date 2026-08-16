@@ -677,13 +677,43 @@ mod tests {
         // CRC32 (HS's non-standard 0xedb88329 variant of the reflected CRC32
         // polynomial, matching `crc32` above) of "" is 0xFFFFFFFF before
         // final-xor; HS does NOT apply the final xor, so for the empty string
-        // `crc32 "" == 0xffffffff`.
+        // `crc32 "" == 0xffffffff`.  The empty string never enters the digest
+        // loop, so the non-empty cases below are the ones that pin the
+        // polynomial, the per-`Char` `ord` feed and the 8 bit-steps.
         assert_eq!(crc32(""), 0xffff_ffff);
+        // PORT-CAPTURED words (no external reference exists for upstream's
+        // 0xedb88329 mistyping of the reflected CRC-32 polynomial).  What
+        // corroborates them is `color_hex_matches_oracle_rule_attribute`,
+        // whose expectations ARE oracle bytes and which consumes bytes 0/1/2
+        // of exactly these words.
+        assert_eq!(crc32("A"), 0xe02a_16e8);
+        assert_eq!(crc32("B"), 0xc728_5741);
     }
 
+    /// `color=` is a rendered rule attribute, so `colorForProcessName` is a
+    /// byte-parity surface.  Oracle bytes (pinned build, Git revision
+    /// ef3f0468) for `let B = out('t')  let A = B  process: A`:
+    ///   `rule (modulo E) A_0_[color=#ffffff, …]`     — no enclosing def
+    ///   `rule (modulo E) B_0_1[color=#804046, …]`    — processnames ["A"]
+    ///   `rule (modulo E) outt_0_11[color=#628040, …]` — processnames ["A","B"]
+    /// (`propagate_names` prefixes ancestors before a node's own names, so the
+    /// innermost rule sees the outer def FIRST).  The one- and two-name cases
+    /// pin the whole chain: `crc32` → `colorHash` → `rgbToHsv` →
+    /// `interpolate` (two names only) → `normalize` → `hsvToRgb` → `rgbToHex`.
     #[test]
-    fn empty_names_is_white() {
+    fn color_hex_matches_oracle_rule_attribute() {
         assert_eq!(color_hex_for_process_name(&[]), "#ffffff");
+        assert_eq!(color_hex_for_process_name(&["A".to_string()]), "#804046");
+        assert_eq!(
+            color_hex_for_process_name(&["A".to_string(), "B".to_string()]),
+            "#628040"
+        );
+        // The interpolation is ordered: swapping the two names is a different
+        // colour, so the list is not treated as a set.
+        assert_ne!(
+            color_hex_for_process_name(&["B".to_string(), "A".to_string()]),
+            "#628040"
+        );
     }
 
     #[test]

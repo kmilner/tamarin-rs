@@ -1339,12 +1339,9 @@ mod tests {
         None
     }
 
-    #[test]
-    fn build_state_for_trivial_theory() {
-        let mp = match maude_path() {
-            Some(p) => p,
-            None => return,
-        };
+    /// The one-rule, one-exists-trace-lemma theory the two `ProofState` tests
+    /// below drive, closed against `mp`.
+    fn trivial_proof_state(mp: &str) -> ProofState {
         let src = r#"
 theory T begin
 rule Setup: [Fr(~k)] --[Setup(~k)]-> [Out(~k)]
@@ -1353,7 +1350,16 @@ lemma trivial: exists-trace
 end
 "#;
         let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
-        let state = ProofState::new(&pt, &mp, None, "", None).expect("build state");
+        ProofState::new(&pt, mp, None, "", None).expect("build state")
+    }
+
+    #[test]
+    fn build_state_for_trivial_theory() {
+        let mp = match maude_path() {
+            Some(p) => p,
+            None => return,
+        };
+        let state = trivial_proof_state(&mp);
         // Should have one lemma initialised.
         let root = state.get_root("trivial").expect("trivial root");
         assert!(matches!(root.method, ProofMethod::Sorry(_)));
@@ -1366,15 +1372,7 @@ end
             Some(p) => p,
             None => return,
         };
-        let src = r#"
-theory T begin
-rule Setup: [Fr(~k)] --[Setup(~k)]-> [Out(~k)]
-lemma trivial: exists-trace
-  "Ex k #i. Setup(k) @ #i"
-end
-"#;
-        let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
-        let state = ProofState::new(&pt, &mp, None, "", None).expect("build state");
+        let state = trivial_proof_state(&mp);
         // Apply simplify at the root.
         let path: Vec<String> = Vec::new();
         let r = state.apply_at_path("trivial", &path, ProofMethod::Simplify);
@@ -1407,8 +1405,13 @@ end
         assert!(parse_method(&["bogus".into()], &sys).is_none());
     }
 
+    /// The whole document [`render_proof_tree_html`] emits for an open,
+    /// childless root: the `<h2>` header, the method line with its status
+    /// badge, and — because the node is `Sorry`/`Open` — the two goal-free
+    /// action links, each addressing this node's own (empty) proof path.
+    /// A system with unsolved goals adds `[solve N: …]` links here.
     #[test]
-    fn render_smoke_test() {
+    fn render_proof_tree_html_for_an_open_root() {
         let root = ProofNode {
             method: ProofMethod::Sorry(None),
             sys: tamarin_theory::constraint::system::System::empty(),
@@ -1416,9 +1419,21 @@ end
             status: NodeStatus::Open,
             annotated: true,
         };
-        let html = render_proof_tree_html(1, "L", &root);
-        assert!(html.contains("Proof of"));
-        assert!(html.contains("L"));
+        assert_eq!(
+            render_proof_tree_html(1, "L", &root),
+            concat!(
+                "<h2>Proof of <code>L</code></h2>\n",
+                "<div class=\"proof-node\">",
+                "<span class=\"proof-method\">sorry</span> ",
+                "<span class=\"proof-status\" style=\"color:#136a8a\">\u{25cb} open</span>",
+                " <span class=\"proof-actions\">",
+                "<a class=\"ajax-action proof-step\" \
+                 href=\"/thy/trace/1/proof-step/L/simplify\">[simplify]</a> ",
+                "<a class=\"ajax-action proof-step\" \
+                 href=\"/thy/trace/1/proof-step/L/induction\">[induction]</a> ",
+                "</span></div>",
+            )
+        );
     }
 
     // --- HS-parity pretty-printing regression tests --------------------

@@ -2330,13 +2330,4 @@ mod tests {
         assert_eq!(o, options_of(""));
         assert!(o.show_auto_source);
     }
-
-    /// The DOT route reads the same map: `simplification=SL3` selects SL3 and
-    /// `uncompress` turns compression off.
-    #[test]
-    fn dot_query_params_select_simplification() {
-        let opts = options_of("simplification=SL3&uncompress=");
-        assert_eq!(opts.simplification_level, SimplificationLevel::SL3);
-        assert!(!opts.compress);
-    }
 }

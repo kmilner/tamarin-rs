@@ -215,7 +215,8 @@ fn missing_maude_aborts_a_batch_run() {
 }
 
 /// `variants` runs the same probe (Intruder.hs:45) and dies the same way,
-/// before any variant computation output.
+/// before any variant computation output — the oracle's stdout is EMPTY here,
+/// so an aborted run that had already printed a variant table would differ.
 #[test]
 fn missing_maude_aborts_the_variants_command() {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
@@ -224,6 +225,7 @@ fn missing_maude_aborts_the_variants_command() {
         .output()
         .expect("spawn tamarin-rs");
     assert_eq!(out.status.code(), Some(1));
+    assert_eq!(String::from_utf8(out.stdout).expect("utf-8 stdout"), "");
     assert_eq!(
         String::from_utf8(out.stderr).expect("utf-8 stderr"),
         MISSING_MAUDE_STDERR
@@ -232,7 +234,9 @@ fn missing_maude_aborts_the_variants_command() {
 
 /// `interactive` probes through `ensureMaudeAndGetVersion`
 /// (Interactive.hs:103) and dies before binding any socket — no port
-/// juggling needed to test it.
+/// juggling needed to test it.  The oracle's stdout is EMPTY, which is the
+/// half that shows the abort came FIRST: the `Finished loading theories …
+/// server ready at` line (Interactive.hs:125) is a stdout `println!`.
 #[test]
 fn missing_maude_aborts_interactive_before_binding() {
     let dir = std::env::temp_dir().join("tamarin_rs_probe_reports_nomaude_wd");
@@ -244,6 +248,7 @@ fn missing_maude_aborts_interactive_before_binding() {
         .output()
         .expect("spawn tamarin-rs");
     assert_eq!(out.status.code(), Some(1));
+    assert_eq!(String::from_utf8(out.stdout).expect("utf-8 stdout"), "");
     assert_eq!(
         String::from_utf8(out.stderr).expect("utf-8 stderr"),
         MISSING_MAUDE_STDERR

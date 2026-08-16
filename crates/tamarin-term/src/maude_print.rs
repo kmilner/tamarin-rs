@@ -507,28 +507,91 @@ mod tests {
         // spaces before the colon; the emitted module must match byte-for-byte.
         let s = pp_theory(&dh_maude_sig());
         assert!(s.contains("op tamXCFUDH-neutral  : -> Msg ."));
-        // Guard against accidentally emitting only a single space.
-        assert!(!s.contains("op tamXCFUDH-neutral : -> Msg ."));
     }
 
+    /// The whole module the port ships to Maude for the pairing signature,
+    /// byte for byte.  Every line is HS `ppTheory`'s (Maude/Parser.hs:176-253):
+    /// the fixed preamble, the `enable_nat`-gated sort/subsort/`op t` lines
+    /// left out, `op nil  : -> TOP .`'s two spaces, the `stFunSyms` block in
+    /// `BTreeSet` order with `theoryFunSym`'s trailing `"Msg "` meeting the
+    /// leading space of `" -> Msg"`, then `theoryRule` per rewrite rule with
+    /// both sides numbered from ONE shared conversion context (`x0`/`x1`
+    /// recur across the rule's two sides, and restart per rule).
     #[test]
-    fn theory_for_pair_is_well_formed() {
-        let s = pp_theory(&pair_maude_sig());
-        assert!(s.starts_with("fmod MSG is\n"));
-        assert!(s.contains("op f : Nat -> Fresh ."));
-        assert!(s.ends_with("endfm\n"));
+    fn theory_for_pair_is_the_pinned_module() {
+        assert_eq!(
+            pp_theory(&pair_maude_sig()),
+            "fmod MSG is\n\
+             \x20 protecting NAT .\n\
+             \x20 sort Pub Fresh Msg Node TOP .\n\
+             \x20 subsort Pub < Msg .\n\
+             \x20 subsort Fresh < Msg .\n\
+             \x20 subsort Msg < TOP .\n\
+             \x20 subsort Node < TOP .\n\
+             \x20 op f : Nat -> Fresh .\n\
+             \x20 op p : Nat -> Pub .\n\
+             \x20 op c : Nat -> Msg .\n\
+             \x20 op n : Nat -> Node .\n\
+             \x20 op list : TOP -> TOP .\n\
+             \x20 op cons : TOP TOP -> TOP .\n\
+             \x20 op nil  : -> TOP .\n\
+             \x20 op tamXCFUfst : Msg  -> Msg .\n\
+             \x20 op tamXCFUpair : Msg Msg  -> Msg .\n\
+             \x20 op tamXCFUsnd : Msg  -> Msg .\n\
+             \x20 eq tamXCFUfst(tamXCFUpair(x0:Msg,x1:Msg)) = x0:Msg [variant] .\n\
+             \x20 eq tamXCFUsnd(tamXCFUpair(x0:Msg,x1:Msg)) = x1:Msg [variant] .\n\
+             endfm\n"
+        );
     }
 
+    /// `enable_nat` adds the `TamNat` sort to the `sort` line, a `subsort`
+    /// and an `op t` constant, and the `tone`/`tplus` operators — the four
+    /// `enableNat` guards of HS `ppTheory` (Maude/Parser.hs:181-186, 190-193,
+    /// 204-207, 240-244).
+    #[test]
+    fn nat_theory_adds_the_tamnat_lines() {
+        let s = pp_theory(&crate::maude_sig::nat_maude_sig());
+        assert!(s.contains("  sort Pub Fresh Msg Node TamNat TOP .\n"));
+        assert!(s.contains("  subsort Fresh < Msg .\n  subsort TamNat < Msg .\n"));
+        assert!(s.contains("  op n : Nat -> Node .\n  op t : Nat -> TamNat .\n"));
+        assert!(s.contains("  op tamXCFUtone : -> TamNat .\n"));
+        assert!(s.contains("  op tamtplus : TamNat TamNat -> TamNat [comm assoc] .\n"));
+        // Without it, none of those lines appear.
+        let plain = pp_theory(&pair_maude_sig());
+        assert!(!plain.contains("TamNat"));
+    }
+
+    /// The four builtin AC operators' Maude names.  Each must equal the name
+    /// `pp_theory` declares the operator with (`op_ac`'s own literal), or a
+    /// query would be headed by an operator the module never declared;
+    /// `maude_parse::build_app` matches replies against the same constants.
     #[test]
     fn ac_sym_names() {
         assert_eq!(pp_maude_ac_sym(AcSym::Mult), b"tammult".to_vec());
         assert_eq!(pp_maude_ac_sym(AcSym::Xor), b"tamxor".to_vec());
+        assert_eq!(pp_maude_ac_sym(AcSym::Union), b"tammun".to_vec());
+        assert_eq!(pp_maude_ac_sym(AcSym::NatPlus), b"tamtplus".to_vec());
+        for (op, sig) in [
+            (AcSym::Mult, dh_maude_sig()),
+            (AcSym::Xor, crate::maude_sig::xor_maude_sig()),
+            (AcSym::Union, crate::maude_sig::mset_maude_sig()),
+            (AcSym::NatPlus, crate::maude_sig::nat_maude_sig()),
+        ] {
+            let decl = format!(
+                "  op {} : ",
+                String::from_utf8(pp_maude_ac_sym(op)).unwrap()
+            );
+            assert!(pp_theory(&sig).contains(&decl), "no `{decl}` declaration");
+        }
     }
 
-    /// The attribute prefix is 4 chars: privacy, constructability, AC state,
-    /// NDC state (HS `funSymEncodeAttr`, Maude/Parser.hs:76-88).
+    /// The absolute letters of the attribute block (HS `funSymEncodeAttr`,
+    /// Maude/Parser.hs:76-88) — what actually goes on the wire.
+    /// `every_attribute_quadruple_round_trips_through_decode` pins encode
+    /// only against its own decode, so a letter renamed on BOTH sides
+    /// survives it; these two spellings anchor the alphabet.
     #[test]
-    fn encode_attr_is_four_chars() {
+    fn encode_attr_spells_the_haskell_letters() {
         assert_eq!(
             fun_sym_encode_attr(
                 Privacy::Public,

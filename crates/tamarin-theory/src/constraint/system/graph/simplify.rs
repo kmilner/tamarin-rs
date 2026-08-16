@@ -519,18 +519,25 @@ mod tests {
     #[test]
     fn simplify_sl0_is_identity() {
         let mut sys = System::empty();
+        // The redundant `a < c` is exactly what SL2/SL3 drop, so SL0 keeping
+        // it is the whole claim — and each atom is compared WHOLE, reason tag
+        // included: the tag picks the rendered edge colour, so a pass that
+        // rewrote reasons while keeping the count would be an identity only
+        // by length.
         sys.content_mut()
             .less_atoms
             .push(LessAtom::new(nid("a", 0), nid("b", 0), Reason::Fresh));
         sys.content_mut()
             .less_atoms
             .push(LessAtom::new(nid("a", 0), nid("c", 0), Reason::Fresh));
-        sys.content_mut()
-            .less_atoms
-            .push(LessAtom::new(nid("b", 0), nid("c", 0), Reason::Fresh));
+        sys.content_mut().less_atoms.push(LessAtom::new(
+            nid("b", 0),
+            nid("c", 0),
+            Reason::Adversary,
+        ));
         let orig = sys.clone();
         let out = simplify_system(SimplificationLevel::SL0, RenderSystem::from_prover(sys));
-        assert_eq!(orig.less_atoms.len(), out.less_atoms.len());
+        assert_eq!(orig.less_atoms.as_slice(), out.less_atoms.as_slice());
     }
 
     #[test]
@@ -581,67 +588,67 @@ mod tests {
         assert_eq!(out3.less_atoms.len(), 2, "SL3 drops Formula edges too");
     }
 
-    #[test]
-    fn compress_hides_simple_proto_node() {
-        // i:1 (Out) -> i:2 (transfer with one in/one out) -> i:3 (In).
-        // After compression, the middle node should be hidden and i:1 -> i:3.
-        let mut sys = System::empty();
+    /// `#i.1 Source -> #i.2 <middle> -> #i.3 Sink`, compressed.  Both ends
+    /// carry an action, so `eligibleRule` rejects them and only the middle
+    /// node is ever a hiding candidate.  The edges matter as much as the
+    /// rules: `tryHideRule` bails unless the in/out edge counts EQUAL the
+    /// premise/conclusion counts (Simplification.hs:125-152), so an isolated
+    /// node survives whatever its rule looks like.
+    fn compressed_chain(middle: RuleACInst) -> (RenderSystem, [NodeId; 3]) {
         let kvar: LNTerm = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-        // Three rule instances.
-        let r1 = Rule::new(
-            RuleInfo::Proto(ProtoRuleACInstInfo {
-                name: ProtoRuleName::Stand("Source"),
-                attributes: RuleAttributes::empty(),
-                loop_breakers: Vec::new(),
-            }),
-            vec![fresh_fact(kvar.clone())],
-            vec![out_fact(kvar.clone())],
-            Vec::new(),
-        );
-        let r2 = Rule::new(
-            // A trivial proto-rule with one premise + one conclusion +
-            // no actions -- eligible for compression.
+        let end = |name: &'static str, prems: Vec<crate::fact::LNFact>| {
+            Rule::new(
+                RuleInfo::Proto(ProtoRuleACInstInfo {
+                    name: ProtoRuleName::Stand(name),
+                    attributes: RuleAttributes::empty(),
+                    loop_breakers: Vec::new(),
+                }),
+                prems,
+                vec![out_fact(kvar.clone())],
+                vec![out_fact(kvar.clone())],
+            )
+        };
+        let ids = [nid("i", 1), nid("i", 2), nid("i", 3)];
+        let mut sys = System::empty();
+        sys.add_node(ids[0], end("Source", vec![fresh_fact(kvar.clone())]));
+        sys.add_node(ids[1], middle);
+        sys.add_node(ids[2], end("Sink", vec![in_fact(kvar.clone())]));
+        sys.content_mut().edges.push(Edge {
+            src: (ids[0], ConcIdx(0)),
+            tgt: (ids[1], PremIdx(0)),
+        });
+        sys.content_mut().edges.push(Edge {
+            src: (ids[1], ConcIdx(0)),
+            tgt: (ids[2], PremIdx(0)),
+        });
+        (compress_system(RenderSystem::from_prover(sys)), ids)
+    }
+
+    /// A one-premise/one-conclusion/no-action proto rule named `Transfer`,
+    /// plus `acts` — the middle of [`compressed_chain`].
+    fn transfer_rule(acts: Vec<crate::fact::LNFact>) -> RuleACInst {
+        let kvar: LNTerm = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
+        Rule::new(
             RuleInfo::Proto(ProtoRuleACInstInfo {
                 name: ProtoRuleName::Stand("Transfer"),
                 attributes: RuleAttributes::empty(),
                 loop_breakers: Vec::new(),
             }),
             vec![in_fact(kvar.clone())],
-            vec![out_fact(kvar.clone())],
-            Vec::new(),
-        );
-        // Sink with an action — guaranteed not hidden by compress.
-        let r3 = Rule::new(
-            RuleInfo::Proto(ProtoRuleACInstInfo {
-                name: ProtoRuleName::Stand("Sink"),
-                attributes: RuleAttributes::empty(),
-                loop_breakers: Vec::new(),
-            }),
-            vec![in_fact(kvar.clone())],
-            Vec::new(),
-            vec![in_fact(kvar.clone())], // an action -> not eligible
-        );
-        let n1 = nid("i", 1);
-        let n2 = nid("i", 2);
-        let n3 = nid("i", 3);
-        sys.add_node(n1, r1);
-        sys.add_node(n2, r2);
-        sys.add_node(n3, r3);
-        sys.content_mut().edges.push(Edge {
-            src: (n1, ConcIdx(0)),
-            tgt: (n2, PremIdx(0)),
-        });
-        sys.content_mut().edges.push(Edge {
-            src: (n2, ConcIdx(0)),
-            tgt: (n3, PremIdx(0)),
-        });
-        let out = compress_system(RenderSystem::from_prover(sys));
+            vec![out_fact(kvar)],
+            acts,
+        )
+    }
+
+    #[test]
+    fn compress_hides_simple_proto_node() {
+        let (out, [n1, n2, n3]) = compressed_chain(transfer_rule(Vec::new()));
         assert!(
             out.nodes.iter().all(|(id, _)| id != &n2),
             "Transfer node should have been hidden: {:?}",
             out.nodes.iter().map(|(id, _)| id).collect::<Vec<_>>()
         );
-        // A direct edge i:1 -> i:3 should exist now.
+        // The two edges it sat on are replaced by the bridging i:1 -> i:3.
         assert!(
             out.edges.iter().any(|e| e.src.0 == n1 && e.tgt.0 == n3),
             "Expected i:1 -> i:3 edge in: {:?}",
@@ -654,73 +661,31 @@ mod tests {
 
     #[test]
     fn compress_preserves_node_with_actions() {
-        let mut sys = System::empty();
+        // The SAME chain as `compress_hides_simple_proto_node`, whose middle
+        // node differs only by carrying an action: `eligibleRule`'s
+        // `null (get rActs ru)` is the single bit under test, so the node's
+        // survival cannot be explained by the edge-count bail-out.
         let kvar: LNTerm = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-        let r1 = Rule::new(
-            RuleInfo::Proto(ProtoRuleACInstInfo {
-                name: ProtoRuleName::Stand("WithAction"),
-                attributes: RuleAttributes::empty(),
-                loop_breakers: Vec::new(),
-            }),
-            vec![in_fact(kvar.clone())],
-            vec![out_fact(kvar.clone())],
-            vec![out_fact(kvar.clone())], // has an action
+        let (out, [_, n2, _]) = compressed_chain(transfer_rule(vec![out_fact(kvar)]));
+        assert!(
+            out.nodes.iter().any(|(id, _)| id == &n2),
+            "an action must keep the node: {:?}",
+            out.nodes.iter().map(|(id, _)| id).collect::<Vec<_>>()
         );
-        let n1 = nid("i", 1);
-        sys.add_node(n1, r1);
-        let out = compress_system(RenderSystem::from_prover(sys));
-        assert!(out.nodes.iter().any(|(id, _)| id == &n1));
     }
 
     #[test]
     fn compress_hides_coerce_node() {
-        // A coerce rule -- eligible.
-        let mut sys = System::empty();
+        // A coerce rule is eligible through the `isCoerceRule` disjunct, so it
+        // is hidden despite its own action row being irrelevant.
         let kvar: LNTerm = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-        // Source with an action — guaranteed not hidden, so the
-        // coerce node (i:2) sees the i:1 -> i:2 edge intact at the
-        // time it's considered.
-        let r1 = Rule::new(
-            RuleInfo::Proto(ProtoRuleACInstInfo {
-                name: ProtoRuleName::Stand("Source"),
-                attributes: RuleAttributes::empty(),
-                loop_breakers: Vec::new(),
-            }),
-            Vec::new(),
-            vec![out_fact(kvar.clone())],
-            vec![out_fact(kvar.clone())], // action -> not eligible
-        );
-        let r2 = Rule::new(
+        let coerce = Rule::new(
             RuleInfo::Intr(IntrRuleACInfo::Coerce),
             vec![in_fact(kvar.clone())],
-            vec![out_fact(kvar.clone())],
+            vec![out_fact(kvar)],
             Vec::new(),
         );
-        let r3 = Rule::new(
-            RuleInfo::Proto(ProtoRuleACInstInfo {
-                name: ProtoRuleName::Stand("Sink"),
-                attributes: RuleAttributes::empty(),
-                loop_breakers: Vec::new(),
-            }),
-            vec![in_fact(kvar.clone())],
-            Vec::new(),
-            vec![out_fact(kvar.clone())], // action -> not eligible
-        );
-        let n1 = nid("i", 1);
-        let n2 = nid("i", 2);
-        let n3 = nid("i", 3);
-        sys.add_node(n1, r1);
-        sys.add_node(n2, r2);
-        sys.add_node(n3, r3);
-        sys.content_mut().edges.push(Edge {
-            src: (n1, ConcIdx(0)),
-            tgt: (n2, PremIdx(0)),
-        });
-        sys.content_mut().edges.push(Edge {
-            src: (n2, ConcIdx(0)),
-            tgt: (n3, PremIdx(0)),
-        });
-        let out = compress_system(RenderSystem::from_prover(sys));
+        let (out, [_, n2, _]) = compressed_chain(coerce);
         assert!(
             out.nodes.iter().all(|(id, _)| id != &n2),
             "Coerce node should have been hidden"

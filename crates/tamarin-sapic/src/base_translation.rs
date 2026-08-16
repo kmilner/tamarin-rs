@@ -1332,12 +1332,19 @@ mod tests {
 
     #[test]
     fn condeq_unbound_var_errors() {
-        // tildex empty → a, b unbound → WFUnbound error.
+        // tildex empty → a, b unbound → WFUnbound error naming BOTH, so the
+        // failure is the unbound-variable check and not some other rejection.
         let an = ProcessAnnotation::<LVar>::empty();
         let p: Vec<i64> = vec![];
         let tx = BTreeSet::new();
         let c = ProcessCombinator::CondEq(svar("a"), svar("b"));
-        assert!(base_trans_comb(&c, &an, &p, &tx).is_err());
+        let err = base_trans_comb(&c, &an, &p, &tx).unwrap_err();
+        assert!(err.contains('a') && err.contains('b'), "got {err}");
+        // Binding both makes the same combinator translate.
+        let mut tx2 = BTreeSet::new();
+        tx2.insert(lv("a", 0));
+        tx2.insert(lv("b", 0));
+        assert!(base_trans_comb(&c, &an, &p, &tx2).is_ok());
     }
 
     /// A bare token naming a declared 0-arity function symbol is a CONSTANT in

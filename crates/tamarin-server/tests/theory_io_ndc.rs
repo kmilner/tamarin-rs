@@ -24,28 +24,61 @@
 //! functions: fst/1, pair/2, snd/1, zeroo/0, xorr/2 [AC,NDC]
 //! ```
 //!
-//! Maude-backed: skipped when no Maude binary is available.
+//! Maude-backed: skipped only when `TAM_ALLOW_NO_MAUDE=1` says so.
 
 use std::path::PathBuf;
 
 use tamarin_server::theory_io;
 use tamarin_server::TheoryEntry;
 
-/// Locate the Maude binary (`MAUDE_PATH` env override, else the common
-/// install paths).  `None` skips the Maude-backed test below.
+/// Absolute Maude locations probed when `MAUDE_PATH` is unset.
+const MAUDE_CANDIDATES: [&str; 4] = [
+    "/home/linuxbrew/.linuxbrew/bin/maude",
+    "/usr/local/bin/maude",
+    "/usr/bin/maude",
+    "/opt/homebrew/bin/maude",
+];
+
+/// The Maude this pin runs against: `$MAUDE_PATH`, else a [`MAUDE_CANDIDATES`]
+/// entry, else a `maude` on `$PATH`.
+///
+/// A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION, not
+/// a reason to skip — answering `None` there would turn this pin green on a CI
+/// whose image moved maude.  Finding no maude at all panics too, unless
+/// `TAM_ALLOW_NO_MAUDE=1` asks for the skip deliberately: the NDC verdicts
+/// below are exactly what a maude-less load cannot produce.
 fn maude_bin_path() -> Option<String> {
-    std::env::var("MAUDE_PATH").ok().or_else(|| {
-        for c in [
-            "/home/linuxbrew/.linuxbrew/bin/maude",
-            "/usr/local/bin/maude",
-            "/usr/bin/maude",
-        ] {
-            if std::path::Path::new(c).exists() {
-                return Some(c.to_string());
-            }
-        }
-        None
-    })
+    if let Ok(p) = std::env::var("MAUDE_PATH") {
+        assert!(
+            std::path::Path::new(&p).exists(),
+            "MAUDE_PATH={p} does not exist; unset it to fall back to \
+             {MAUDE_CANDIDATES:?}, or point it at a real maude"
+        );
+        return Some(p);
+    }
+    if let Some(c) = MAUDE_CANDIDATES
+        .iter()
+        .find(|c| std::path::Path::new(c).exists())
+    {
+        return Some((*c).to_string());
+    }
+    let on_path = std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|d| d.join("maude"))
+            .find(|c| c.is_file())
+            .map(|c| c.display().to_string())
+    });
+    if on_path.is_some() {
+        return on_path;
+    }
+    assert_eq!(
+        std::env::var("TAM_ALLOW_NO_MAUDE").as_deref(),
+        Ok("1"),
+        "no maude found: set MAUDE_PATH, put maude on $PATH, or set \
+         TAM_ALLOW_NO_MAUDE=1 to skip this pin deliberately — skipping \
+         silently would report green having checked no NDC verdict at all"
+    );
+    None
 }
 
 fn fixture() -> PathBuf {
@@ -87,7 +120,6 @@ fn ndc_tagged_cache_rules(entry: &TheoryEntry) -> usize {
 #[test]
 fn ndc_check_flag_gates_the_web_load_ndc_pass() {
     let Some(maude) = maude_bin_path() else {
-        eprintln!("no maude binary found; skipping");
         return;
     };
     // The process-wide setup `serve` applies, so the signature renders at the

@@ -464,10 +464,10 @@ fn constructability_ord_matches_haskell_declaration() {
 /// FunctionSymbols.hs:150-153:
 ///     data FunSym = NoEq NoEqSym | AC ACSym | C CSym | List
 ///
-/// `NoEq` comes FIRST.  This ordering matters because BTreeSet<FunSym>
-/// signatures iterate in this order when constructing Maude bridge
-/// commands.  If `List` or `C` came before `NoEq`, Maude would see
-/// declarations in an inconsistent order vs Haskell.
+/// `NoEq` comes FIRST.  This ordering matters because `BTreeSet<FunSym>`
+/// signatures iterate in it when constructing Maude bridge commands.  If
+/// `List` or `C` came before `NoEq`, Maude would see declarations in an
+/// inconsistent order vs Haskell.
 #[test]
 fn fun_sym_ord_matches_haskell_declaration() {
     let no_eq = FunSym::NoEq(pair_sym());
@@ -478,30 +478,4 @@ fn fun_sym_ord_matches_haskell_declaration() {
     assert!(ac < c, "AC < C");
     assert!(c < list, "C < List");
     assert!(no_eq < list, "transitive: NoEq < List");
-}
-
-/// Sanity-check: BTreeSet<FunSym> iterates in declaration order.
-/// This is the contract the Maude bridge relies on for
-/// deterministic signature emission.
-#[test]
-fn fun_sym_btreeset_iterates_in_declaration_order() {
-    let mut s: std::collections::BTreeSet<FunSym> = Default::default();
-    s.insert(FunSym::List);
-    s.insert(FunSym::C(CSym::EMap));
-    s.insert(FunSym::Ac(AcSym::Union));
-    s.insert(FunSym::NoEq(pair_sym()));
-    let kinds: Vec<&str> = s
-        .iter()
-        .map(|f| match f {
-            FunSym::NoEq(_) => "NoEq",
-            FunSym::Ac(_) => "AC",
-            FunSym::C(_) => "C",
-            FunSym::List => "List",
-        })
-        .collect();
-    assert_eq!(
-        kinds,
-        vec!["NoEq", "AC", "C", "List"],
-        "BTreeSet<FunSym> must iterate in Haskell decl order"
-    );
 }

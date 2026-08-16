@@ -395,29 +395,29 @@ mod tests {
         assert_eq!(pretty_lnterm(&outer), "<<a, b>, c>");
     }
 
+    /// The four builtin AC operators render as HS `ppTerms <op> 1 "(" ")"`
+    /// (Term/Term.hs:304-309): one pair of parentheses around the whole
+    /// application and the operator BETWEEN operands only — no spaces, no
+    /// leading or trailing separator.  Arguments come out AC-sorted
+    /// (`a` before `b`) whichever order they were handed in.
     #[test]
-    fn pretty_xor_infix() {
+    fn pretty_builtin_ac_ops_render_infix() {
+        use crate::function_symbols::AcSym;
         let a = var("a", LSort::Msg);
         let b = var("b", LSort::Msg);
-        let t = f_app_ac(crate::function_symbols::AcSym::Xor, vec![a, b]);
-        // AC-normalised order: alphabetic — a, b
-        let rendered = pretty_lnterm(&t);
-        assert!(
-            rendered.starts_with('(') && rendered.ends_with(')'),
-            "got {}",
-            rendered
-        );
-        assert!(rendered.contains("\u{2295}"));
-    }
-
-    #[test]
-    fn pretty_mult_infix() {
-        let a = var("a", LSort::Msg);
-        let b = var("b", LSort::Msg);
-        let t = f_app_ac(crate::function_symbols::AcSym::Mult, vec![a, b]);
-        let rendered = pretty_lnterm(&t);
-        assert!(rendered.starts_with('(') && rendered.ends_with(')'));
-        assert!(rendered.contains('*'));
+        for (op, expected) in [
+            (AcSym::Mult, "(a*b)"),
+            (AcSym::Xor, "(a\u{2295}b)"),
+            (AcSym::Union, "(a++b)"),
+            (AcSym::NatPlus, "(a%+b)"),
+        ] {
+            let t = f_app_ac(op, vec![b.clone(), a.clone()]);
+            assert_eq!(pretty_lnterm(&t), expected, "{op:?}");
+        }
+        // Three operands: the separator resolves twice, never at the edges.
+        let c = var("c", LSort::Msg);
+        let t = f_app_ac(AcSym::Mult, vec![c, b, a]);
+        assert_eq!(pretty_lnterm(&t), "(a*b*c)");
     }
 
     #[test]
@@ -575,12 +575,21 @@ mod tests {
         assert_eq!(format!("{}", v2), "$foo.4");
     }
 
+    /// One sigil per `NameTag`, from HS `instance Show Name`
+    /// (LTerm.hs:235-240): four quoted forms with their own prefix character
+    /// (`Pub`'s being empty), and `Abbrev`, which prints the bare id with
+    /// neither sigil nor quotes.
     #[test]
     fn display_for_name() {
-        let n = Name::new(NameTag::Fresh, "kAB");
-        assert_eq!(format!("{}", n), "~'kAB'");
-        let n2 = Name::new(NameTag::Pub, "alice");
-        assert_eq!(format!("{}", n2), "'alice'");
+        for (tag, expected) in [
+            (NameTag::Fresh, "~'kAB'"),
+            (NameTag::Pub, "'kAB'"),
+            (NameTag::Node, "#'kAB'"),
+            (NameTag::Nat, "%'kAB'"),
+            (NameTag::Abbrev, "kAB"),
+        ] {
+            assert_eq!(format!("{}", Name::new(tag, "kAB")), expected, "{tag:?}");
+        }
     }
 
     #[test]

@@ -26,7 +26,9 @@
 //
 // No corpus theory declares a nullary function symbol inside a SAPIC process.
 //
-// Compared slice: the whole `theory … end` echo (see check.sh).
+// Compared slices: the whole `theory … end` echo (see check.sh), and the wf
+// report block, which pins the run clean — the wf pass walks the generated
+// restrictions, so the nullary head reaches its checks as well.
 
 theory SapicNullaryCond
 begin

@@ -312,7 +312,6 @@ pub fn lookup_canonical_var_lit(ctx: &ConvCtx, sort: LSort, idx: u64) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vterm::var_term;
 
     #[test]
     fn skolem_msg_constant_sorts_as_msg() {
@@ -336,32 +335,34 @@ mod tests {
             id: NameId::new("k"),
         };
         assert_eq!(sort_of_name(&fresh), LSort::Fresh);
-        // And the emitted Maude constant uses the `c` (Msg) symbol.
+        // And the emitted Maude constant uses the `c` (Msg) symbol, not the
+        // `p` (Pub) one the carrier tag would give.
         let t: LNTerm = Term::Lit(Lit::Con(msg_skol));
         let mut ctx = ConvCtx::new();
         let mt = lterm_to_mterm_global(&t, &mut ctx);
         let wire = String::from_utf8(crate::maude_print::pp_mterm(&mt)).unwrap();
-        assert!(
-            wire.starts_with("c("),
-            "expected Msg constant `c(..)`, got {wire}"
-        );
+        assert_eq!(wire, "c(0)");
+        let real: LNTerm = Term::Lit(Lit::Con(real_pub));
+        let mt = lterm_to_mterm_global(&real, &mut ctx);
+        let wire = String::from_utf8(crate::maude_print::pp_mterm(&mt)).unwrap();
+        assert_eq!(wire, "p(1)");
     }
 
+    /// A variable survives the `LNTerm -> MTerm -> LNTerm` round trip with
+    /// its identity intact: the forward pass registers the inverse binding
+    /// that the backward pass reads, so no fresh `name_hint` variable is
+    /// minted (`next` is untouched).
     #[test]
     fn round_trip_var() {
         let v = LVar::new("x", LSort::Msg, 0);
-        let t: LNTerm = var_term(v);
-        let _ = t;
-        // Direct construction with the lit literal so we don't need to
-        // construct an LNTerm from an LVar via var_term (which expects
-        // a variable type matching the LNTerm var type).
-        let lit_v = Lit::Var(v);
-        let t2: LNTerm = Term::Lit(lit_v.clone());
+        let t: LNTerm = Term::Lit(Lit::Var(v));
         let mut ctx = ConvCtx::new();
-        let mt = lterm_to_mterm_global(&t2, &mut ctx);
+        let mt = lterm_to_mterm_global(&t, &mut ctx);
+        assert_eq!(mt, Term::Lit(MaudeLit::MaudeVar(0, LSort::Msg)));
         let mut next = 0;
-        let back = mterm_to_lnterm(&mt, &mut ctx, "x", &mut next);
-        assert_eq!(t2, back);
+        let back = mterm_to_lnterm(&mt, &mut ctx, "z", &mut next);
+        assert_eq!(t, back);
+        assert_eq!(next, 0, "the binding was reused, not re-minted");
     }
 
     /// Pins the load-bearing sort-tolerant DOMAIN fallback in
@@ -437,17 +438,15 @@ mod tests {
         let mut next = 100;
         let back = mterm_to_lnterm(&mt, &mut ctx, "x", &mut next);
 
-        // Expected: em(x.9, x.10) — args sorted idx-first.
-        let expected: LNTerm = crate::term::f_app_c(
-            CSym::EMap,
-            vec![Term::Lit(Lit::Var(x9)), Term::Lit(Lit::Var(x10))],
+        // Expected: em(x.9, x.10) — args sorted idx-first.  Built with the
+        // raw constructor, NOT `f_app_c`, so the expectation cannot inherit
+        // the very sort under test.
+        assert_eq!(
+            back,
+            crate::term::unsafe_f_app(
+                FunSym::C(CSym::EMap),
+                vec![Term::Lit(Lit::Var(x9)), Term::Lit(Lit::Var(x10))],
+            )
         );
-        assert_eq!(back, expected);
-        // And concretely: first arg is x.9, not x.10.
-        if let Term::App(_, args) = &back {
-            assert_eq!(args[0], Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 9))));
-        } else {
-            panic!("expected an App");
-        }
     }
 }

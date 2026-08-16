@@ -1142,12 +1142,13 @@ mod tests {
         }
     }
 
-    // No traces at all: the empty array stays inline and the document is the
-    // same 20 bytes `--output-json` writes for a theory with nothing solved.
+    // No traces at all: the empty array stays inline (aeson-pretty does not
+    // break an empty list over three lines) and the document ends without a
+    // trailing newline — the same 20 bytes `--output-json` writes for a theory
+    // with nothing solved.
     #[test]
     fn empty_graph_list_is_twenty_bytes() {
         let out = sequents_to_json_pretty(&GraphOptions::default(), &[]);
         assert_eq!(out, "{\n    \"graphs\": []\n}");
-        assert_eq!(out.len(), 20);
     }
 }

@@ -130,23 +130,23 @@ fn gnot_false_is_true() {
     assert_eq!(gnot(&gfalse()), gtrue());
 }
 
-#[test]
-fn gnot_disj_becomes_conj() {
-    let f1 = gtrue();
-    let f2 = gfalse();
-    let d = Guarded::Disj(vec![f1.clone(), f2.clone()].into());
-    let n = gnot(&d);
-    // ¬(T ∨ ⊥) = ¬T ∧ ¬⊥ = ⊥ ∧ T. After gconj, this collapses to ⊥
-    // because gconj short-circuits on a gfalse.
-    assert_eq!(n, gfalse());
-}
-
+/// De Morgan: `gnot (gconj [a, b]) = gdisj [gnot a, gnot b]` — the dual of
+/// [`gnot_distributes_over_disj`].  Asserted on atoms rather than on the
+/// propositional constants: `¬(T ∧ T)` collapses to `⊥` under BOTH `gdisj`
+/// and `gconj`, so constants cannot tell the two smart constructors apart.
 #[test]
 fn gnot_conj_becomes_disj() {
-    let f1 = gtrue();
-    let d = Guarded::Conj(vec![f1.clone(), f1].into());
-    // ¬(T ∧ T) = ¬T ∨ ¬T = ⊥ ∨ ⊥ — gdisj filters out gfalse → gfalse.
-    assert_eq!(gnot(&d), gfalse());
+    let a = g("Last(#i)").unwrap();
+    let b = g("Last(#j)").unwrap();
+    let neg = gnot(&Guarded::Conj(vec![a.clone(), b.clone()].into()));
+    match &neg {
+        Guarded::Disj(items) => {
+            assert_eq!(items.len(), 2, "¬(a ∧ b) must keep both disjuncts");
+            assert_eq!(items[0], gnot(&a));
+            assert_eq!(items[1], gnot(&b));
+        }
+        other => panic!("expected Disj([¬a, ¬b]), got {:?}", other),
+    }
 }
 
 #[test]
@@ -156,47 +156,41 @@ fn ginduct_rejects_action_free_formula() {
     assert!(ginduct(&gfalse()).is_err());
 }
 
+/// HS `satisfiedByEmptyTrace` decides a `GGuarded` on its QUANTIFIER
+/// (Guarded.hs:588-594): a guarded `∀` is vacuously satisfied by the empty
+/// trace, a guarded `∃` is not, and a bare atom outside every quantifier is
+/// an error (the formula is not doubly guarded).  All three arms are pinned
+/// here — the `∀` case alone cannot tell the real test apart from a
+/// constant `Ok(true)`.
 #[test]
 fn satisfied_by_empty_trace_handles_quants() {
-    // ∀ x. T : empty trace satisfies (no x exists ⇒ trivially).
-    let p = parse_formula_str("All x #i. P(x)@#i ==> Q(x)@#i").ok();
-    if let Some(f) = p {
-        if let Ok(g) = formula_to_guarded(&f) {
-            let v = satisfied_by_empty_trace(&g).unwrap();
-            // ∀ over an empty trace is vacuously satisfied.
-            assert!(v);
-        }
-    }
+    let all = g("All x #i. P(x)@#i ==> Q(x)@#i").expect("guarded");
+    assert!(satisfied_by_empty_trace(&all).unwrap(), "∀ holds vacuously");
+    let ex = g("Ex x #i. P(x)@#i").expect("guarded");
+    assert!(!satisfied_by_empty_trace(&ex).unwrap(), "∃ needs an action");
+    let atom = g("Last(#i)").expect("guarded");
+    assert!(
+        satisfied_by_empty_trace(&atom).is_err(),
+        "a quantifier-free atom is not doubly guarded"
+    );
 }
 
 #[test]
 fn ginduct_existential_action_succeeds() {
     // Ex k #i. P(k) @ #i — closed, contains an action atom, not last-bearing.
-    let p = parse_formula_str("Ex k #i. P(k)@#i").expect("parse");
-    let g = formula_to_guarded(&p).expect("guarded");
-    let (base, step) = ginduct(&g).expect("ginduct");
+    let gf = g("Ex k #i. P(k)@#i").expect("guarded");
+    let (base, step) = ginduct(&gf).expect("ginduct");
     // Empty-trace satisfaction: ∃ over empty trace is vacuously false.
     assert_eq!(base, gfalse());
     // Step case is `gconj [g, IH]` — typically wraps both.
     match &step {
         Guarded::Conj(items) => {
             assert!(
-                items.iter().any(|x| x == &g),
+                items.iter().any(|x| x == &gf),
                 "step case should contain the original formula"
             );
         }
         other => panic!("expected Conj, got {:?}", other),
-    }
-}
-
-#[test]
-fn gnot_double_is_identity_on_atoms() {
-    // Smart constructors normalise away T/⊥ in larger formulas, so
-    // double-negation isn't structurally identity in general — but
-    // it is on the propositional constants themselves.
-    for f in &[gtrue(), gfalse()] {
-        let nn = gnot(&gnot(f));
-        assert_eq!(&nn, f);
     }
 }
 
@@ -320,15 +314,31 @@ fn timepoint_guard_matches_sigilless_occurrence() {
     }
 }
 
+/// A top-level implication does NOT become a disjunction: the antecedent's
+/// action atom becomes the universal's GUARD and the consequent becomes its
+/// body, so `All k #i. Setup(k)@#i ==> (Ex j #t. Setup(j)@#t)` nests one
+/// guarded quantifier inside the other.
 #[test]
 fn implication_distributes() {
-    // (a ⇒ b) when both atoms guard their bound vars
     let r = g("All k #i. Setup(k) @ #i ==> (Ex j #t. Setup(j) @ #t)").unwrap();
-    // expect a GGuarded(All, [k, #i], [Setup(k) @ i], body)
-    // where body is gconj([gnot Setup(k) @ i  ?, GGuarded(Ex ...)])
-    // — we only assert the top-level shape here.
-    match r {
-        Guarded::GGuarded { qua, .. } => assert_eq!(qua, Quant::All),
+    match &r {
+        Guarded::GGuarded {
+            qua,
+            vars,
+            guards,
+            body,
+        } => {
+            assert_eq!(*qua, Quant::All);
+            assert_eq!(vars.len(), 2, "binders k and #i");
+            assert_eq!(guards.len(), 1, "the antecedent is the guard");
+            match &**body {
+                Guarded::GGuarded { qua, vars, .. } => {
+                    assert_eq!(*qua, Quant::Ex);
+                    assert_eq!(vars.len(), 2, "binders j and #t");
+                }
+                other => panic!("expected the consequent as the body, got {:?}", other),
+            }
+        }
         x => panic!("got {:?}", x),
     }
 }
@@ -347,14 +357,6 @@ fn var(name: &str, idx: u64) -> p::Term {
 }
 fn pubconst(s: &str) -> p::Term {
     p::Term::PubLit(s.into())
-}
-
-#[test]
-fn varsubst_var_to_var_remap() {
-    let mut s = VarSubst::default();
-    s.insert(("x", 0), var("y", 5));
-    let result = subst_term(&var("x", 0), &s);
-    assert_eq!(result, var("y", 5));
 }
 
 #[test]
@@ -377,17 +379,10 @@ fn varsubst_descends_into_app_args() {
     assert_eq!(result, expected);
 }
 
-#[test]
-fn varsubst_unmapped_var_unchanged() {
-    let s = VarSubst::default(); // empty
-    let t = var("k", 0);
-    assert_eq!(subst_term(&t, &s), t);
-}
-
+/// The substitution is keyed by `(name, idx)`: a same-named variable at a
+/// different index is a DIFFERENT variable and passes through untouched.
 #[test]
 fn varsubst_idx_aware() {
-    // Two vars with same name but different idx — only the
-    // matching one is replaced.
     let mut s = VarSubst::default();
     s.insert(("x", 5), var("y", 0));
     // x with idx 5 → y, x with idx 6 unchanged.
@@ -411,9 +406,8 @@ fn varsubst_pair_descent() {
 /// `i` Free, breaking `is_closed` / `ginduct`.
 #[test]
 fn injectivity_check_ginduct_succeeds() {
-    let f = parse_formula_str("not (Ex id #i #j #k. Initiated(id) @ i & Removed(id) @ j & Copied(id) @ k & #i < #j & #j < #k)").expect("parse");
-    let g = formula_to_guarded(&f).expect("guarded");
-    let g_neg = gnot(&g);
+    let gf = g("not (Ex id #i #j #k. Initiated(id) @ i & Removed(id) @ j & Copied(id) @ k & #i < #j & #j < #k)").expect("guarded");
+    let g_neg = gnot(&gf);
     assert!(free_vars(&g_neg).is_empty(), "gnot should be closed");
     assert!(ginduct(&g_neg).is_ok(), "ginduct should succeed");
 }
@@ -465,32 +459,51 @@ fn varsubst_shadowing_blocks_inner_binder() {
     }
 }
 
+/// `ginduct` on an `All`-quantified formula: the base case is the
+/// empty-trace verdict (vacuously true here) and the step case is
+/// `gconj [gf, toInductionHypothesis gf]` — the original formula FIRST,
+/// then the IH, whose outer quantifier is the `Ex` dual.
 #[test]
-fn gnot_existential_becomes_forall() {
-    // ¬ (Ex k #i. Setup(k)@i) should be All k #i. (Setup(k)@i ⇒ ⊥).
-    let parsed = parse_formula_str("Ex k #i. Setup(k) @ #i").unwrap();
-    let g = formula_to_guarded(&parsed).unwrap();
-    let neg = gnot(&g);
-    match &neg {
-        Guarded::GGuarded { qua, .. } => assert_eq!(*qua, Quant::All),
-        other => panic!("expected GGuarded(All, ...), got {:?}", other),
+fn ginduct_extracts_two_cases() {
+    let gf = g("All k #i. Setup(k) @ #i ==> Ex #j. Setup(k) @ #j & #j < #i").unwrap();
+    let (base, step) = ginduct(&gf).expect("ginduct should succeed");
+    assert_eq!(base, gtrue(), "the empty trace satisfies the outer ∀");
+    match &step {
+        Guarded::Conj(items) => {
+            assert_eq!(items.len(), 2, "step case is `gconj [gf, IH]`");
+            assert_eq!(items[0], gf, "the original formula comes first");
+            assert!(
+                matches!(&items[1], Guarded::GGuarded { qua: Quant::Ex, .. }),
+                "the IH flips the outer quantifier: {:?}",
+                items[1]
+            );
+        }
+        other => panic!("expected Conj of 2 items, got {:?}", other),
     }
 }
 
-#[test]
-fn ginduct_extracts_two_cases() {
-    let parsed =
-        parse_formula_str("All k #i. Setup(k) @ #i ==> Ex #j. Setup(k) @ #j & #j < #i").unwrap();
-    let g = formula_to_guarded(&parsed).unwrap();
-    // Closed + has action atoms → ginduct should succeed.
-    let (base, step) = ginduct(&g).expect("ginduct should succeed");
-    // Step case is gconj([orig, IH]).
-    // gconj may flatten if a sub-Conj appears; otherwise accept any shape —
-    // the contract is just that ginduct returned.
-    if let Guarded::Conj(items) = step {
-        assert_eq!(items.len(), 2);
+/// Every `Last(Bound n)` index reachable in a guarded formula, in traversal
+/// order (a quantifier's guards before its body), i.e. the order
+/// `to_induction_hypothesis` emits its `lastAtos` in.
+fn last_bound_indices(g: &Guarded) -> Vec<u32> {
+    fn go(g: &Guarded, out: &mut Vec<u32>) {
+        match g {
+            Guarded::Atom(GAtom::Last(GTerm::Var(BVar::Bound(n)))) => out.push(*n),
+            Guarded::Atom(_) => {}
+            Guarded::Disj(xs) | Guarded::Conj(xs) => xs.iter().for_each(|x| go(x, out)),
+            Guarded::GGuarded { guards, body, .. } => {
+                for a in guards.iter() {
+                    if let GAtom::Last(GTerm::Var(BVar::Bound(n))) = a {
+                        out.push(*n);
+                    }
+                }
+                go(body, out);
+            }
+        }
     }
-    let _ = base;
+    let mut out = Vec::new();
+    go(g, &mut out);
+    out
 }
 
 /// Pin Haskell parity for `lastAtos`: the IH for an `All`-guarded
@@ -502,39 +515,24 @@ fn ginduct_extracts_two_cases() {
 ///     where lastAtos = [Last (Bound j) | (j,(_,LSortNode)) ← ...]
 #[test]
 fn induction_hypothesis_emits_last_atoms_for_node_sorted_binders() {
-    // `All #i. Setup(k) @ #i ⇒ ⊥`  is doubly guarded with one
+    // `All #i. Setup('k') @ #i ⇒ …` is doubly guarded with one
     // node-sorted binder.  The IH must contain `Last(#i)` (in
     // *negated* form, since the outer quantifier flips All→Ex and
     // we conjoin `¬Last(v)` per node binder).
-    let parsed = parse_formula_str("All #i. Setup('k') @ #i ==> G('x') @ #i").unwrap();
-    let g = formula_to_guarded(&parsed).unwrap();
+    let g = g("All #i. Setup('k') @ #i ==> G('x') @ #i").unwrap();
     let ih = to_induction_hypothesis(&g).expect("should produce IH");
 
-    // Outer must flip All → Ex, keep guards, and the body should be
-    // a Conj that mentions `Last(#i)` somewhere.
+    // Outer must flip All → Ex, keep its binder, and the body must
+    // mention the innermost binder's `Last` — DeBruijn `Last(Bound 0)`.
     match &ih {
         Guarded::GGuarded {
             qua, vars, body, ..
         } => {
             assert_eq!(*qua, Quant::Ex);
             assert_eq!(vars.len(), 1);
-            // Walk the body looking for a Last atom at the innermost
-            // binder.  In DeBruijn form, that's `Last(Bound(0))`.
-            fn walks_to_last_bound0(g: &Guarded) -> bool {
-                match g {
-                    Guarded::Atom(GAtom::Last(GTerm::Var(BVar::Bound(0)))) => true,
-                    Guarded::Atom(_) => false,
-                    Guarded::Disj(xs) | Guarded::Conj(xs) => xs.iter().any(walks_to_last_bound0),
-                    Guarded::GGuarded { guards, body, .. } => {
-                        guards
-                            .iter()
-                            .any(|a| matches!(a, GAtom::Last(GTerm::Var(BVar::Bound(0)))))
-                            || walks_to_last_bound0(body)
-                    }
-                }
-            }
-            assert!(
-                walks_to_last_bound0(body),
+            assert_eq!(
+                last_bound_indices(body),
+                vec![0],
                 "IH body should mention Last(Bound 0) for the node binder; got {:?}",
                 body
             );
@@ -543,37 +541,22 @@ fn induction_hypothesis_emits_last_atoms_for_node_sorted_binders() {
     }
 }
 
-/// IH must NOT introduce a Last-atom for non-node-sorted binders.
-/// Matches Haskell's filter `(_, LSortNode) ← ...`.
+/// `lastAtos = [Last (Bound j) | (j, (_, LSortNode)) <- zip [0..] (reverse ss)]`
+/// (Guarded.hs:613-616) has TWO discriminating parts, both pinned here by the
+/// exact index list: the `LSortNode` filter (a `Msg`-sorted binder
+/// contributes nothing) and the `reverse` (indices are counted from the
+/// INNERMOST binder outwards, so dropping the `reverse` would shift the pair
+/// to `[1, 2]` and invert the `last`-disjunction's case labels).
 #[test]
 fn induction_hypothesis_skips_non_node_binders() {
-    // `All k. K(k) ⇒ ⊥`: the bound variable `k` is `Msg`-sorted
-    // (no `#` prefix, no `:node` suffix) — no Last-atom should be
-    // emitted.  The body collapses to `gconj([] ++ [IH body])` =
-    // just the IH body.
-    let parsed = parse_formula_str("All k. K(k) ==> G('x') @ #i").unwrap();
-    let g = match formula_to_guarded(&parsed) {
-        Ok(x) => x,
-        Err(_) => return, // formula may be ill-guarded — that's fine
-    };
-    let ih = match to_induction_hypothesis(&g) {
-        Ok(x) => x,
-        Err(_) => return,
-    };
-    // Walk: should find no `Last(_)` atom anywhere, since `k` is Msg-sorted.
-    fn has_any_last(g: &Guarded) -> bool {
-        match g {
-            Guarded::Atom(GAtom::Last(_)) => true,
-            Guarded::Atom(_) => false,
-            Guarded::Disj(xs) | Guarded::Conj(xs) => xs.iter().any(has_any_last),
-            Guarded::GGuarded { guards, body, .. } => {
-                guards.iter().any(|a| matches!(a, GAtom::Last(_))) || has_any_last(body)
-            }
-        }
-    }
-    assert!(
-        !has_any_last(&ih),
-        "IH should not emit Last for non-node binders; got {:?}",
+    // Binders `[k:msg, #i, #j]`; reversed that is `[#j, #i, k]`, so the two
+    // node binders take indices 0 and 1 and the message binder takes none.
+    let g = g("All k #i #j. (Setup(k) @ #i & Setup(k) @ #j) ==> F").unwrap();
+    let ih = to_induction_hypothesis(&g).expect("should produce IH");
+    assert_eq!(
+        last_bound_indices(&ih),
+        vec![0, 1],
+        "one Last per node binder, innermost first; got {:?}",
         ih
     );
 }
@@ -592,16 +575,12 @@ fn induction_hypothesis_skips_non_node_binders() {
 //   simp (GGuarded ...) = fm  -- delay past binders
 // =========================================================================
 
+fn mk_eq(a: &str, b: &str) -> p::Atom {
+    p::Atom::Eq(var(a, 0), var(b, 0))
+}
+
 fn mk_atom_eq(a: &str, b: &str) -> Guarded {
-    let mkv = |n: &str| {
-        p::Term::Var(p::VarSpec {
-            name: n.into(),
-            idx: 0,
-            sort: p::SortHint::Msg,
-            typ: None,
-        })
-    };
-    Guarded::Atom(atom_to_gatom_free(&p::Atom::Eq(mkv(a), mkv(b))))
+    Guarded::Atom(atom_to_gatom_free(&mk_eq(a, b)))
 }
 
 #[test]
@@ -629,103 +608,49 @@ fn simplify_atom_unknown_left_intact() {
 fn simplify_disj_drops_false_branches() {
     // a ∨ b — if b evaluates False and a is unknown, result = a.
     let a = mk_atom_eq("p", "q");
-    let b = mk_atom_eq("r", "s");
-    let g = Guarded::Disj(vec![a.clone(), b.clone()].into());
-    let val = move |atom: &p::Atom| match atom {
-        p::Atom::Eq(x, _) => match x {
-            p::Term::Var(v) if v.name == "r" => Some(false),
-            _ => None,
-        },
-        _ => None,
-    };
+    let b = mk_eq("r", "s");
+    let g = Guarded::Disj(vec![a.clone(), Guarded::Atom(atom_to_gatom_free(&b))].into());
+    let val = move |atom: &p::Atom| if atom == &b { Some(false) } else { None };
     assert_eq!(simplify_guarded_with(&g, &val), a);
 }
 
 #[test]
 fn simplify_conj_short_circuits_on_false() {
     // a ∧ b — if b evaluates False, conj should be gfalse.
-    let a = mk_atom_eq("p", "q");
-    let b = mk_atom_eq("r", "s");
-    let g = Guarded::Conj(vec![a, b].into());
-    let val = |atom: &p::Atom| match atom {
-        p::Atom::Eq(x, _) => match x {
-            p::Term::Var(v) if v.name == "r" => Some(false),
-            _ => None,
-        },
-        _ => None,
-    };
+    let b = mk_eq("r", "s");
+    let g = Guarded::Conj(vec![mk_atom_eq("p", "q"), Guarded::Atom(atom_to_gatom_free(&b))].into());
+    let val = move |atom: &p::Atom| if atom == &b { Some(false) } else { None };
     assert_eq!(simplify_guarded_with(&g, &val), gfalse());
+}
+
+/// A binder-free universal with the given guards over the body `p = q`.
+fn mk_universal(vars: Vec<GBinding>, guards: &[p::Atom]) -> Guarded {
+    Guarded::GGuarded {
+        qua: Quant::All,
+        vars: vars.into(),
+        guards: guards.iter().map(atom_to_gatom_free).collect(),
+        body: std::sync::Arc::new(mk_atom_eq("p", "q")),
+    }
 }
 
 #[test]
 fn simplify_universal_with_one_false_guard_is_gtrue() {
     // (All vars[]. [a, b]. body) with a=False → gtrue (vacuous).
-    let mkv = |n: &str| {
-        p::Term::Var(p::VarSpec {
-            name: n.into(),
-            idx: 0,
-            sort: p::SortHint::Msg,
-            typ: None,
-        })
-    };
-    let a = p::Atom::Eq(mkv("a"), mkv("b"));
-    let b = p::Atom::Eq(mkv("c"), mkv("d"));
-    let body = mk_atom_eq("p", "q");
-    let g = Guarded::GGuarded {
-        qua: Quant::All,
-        vars: Vec::new().into(),
-        guards: vec![atom_to_gatom_free(&a), atom_to_gatom_free(&b)].into(),
-        body: std::sync::Arc::new(body),
-    };
-    let val = move |atom: &p::Atom| {
-        if atom == &a {
-            Some(false)
-        } else {
-            None
-        }
-    };
+    let a = mk_eq("a", "b");
+    let g = mk_universal(Vec::new(), &[a.clone(), mk_eq("c", "d")]);
+    let val = move |atom: &p::Atom| if atom == &a { Some(false) } else { None };
     assert_eq!(simplify_guarded_with(&g, &val), gtrue());
 }
 
 #[test]
 fn simplify_universal_drops_true_guards_keeps_unknown() {
-    let mkv = |n: &str| {
-        p::Term::Var(p::VarSpec {
-            name: n.into(),
-            idx: 0,
-            sort: p::SortHint::Msg,
-            typ: None,
-        })
-    };
-    let a = p::Atom::Eq(mkv("a"), mkv("b"));
-    let b = p::Atom::Eq(mkv("c"), mkv("d"));
-    let body = mk_atom_eq("p", "q");
-    let g = Guarded::GGuarded {
-        qua: Quant::All,
-        vars: Vec::new().into(),
-        guards: vec![atom_to_gatom_free(&a), atom_to_gatom_free(&b)].into(),
-        body: std::sync::Arc::new(body.clone()),
-    };
-    let a_clone = a.clone();
-    let b_clone = b.clone();
-    // The `b_clone` arm is kept conceptually distinct from the default to
-    // mirror the test valuation (a → drop, b → keep, others → unknown).
-    #[allow(clippy::if_same_then_else)]
-    let val = move |atom: &p::Atom| {
-        if atom == &a_clone {
-            Some(true)
-        }
-        // drop
-        else if atom == &b_clone {
-            None
-        }
-        // keep
-        else {
-            None
-        }
-    };
-    let simp = simplify_guarded_with(&g, &val);
-    match simp {
+    let a = mk_eq("a", "b");
+    let b = mk_eq("c", "d");
+    let g = mk_universal(Vec::new(), &[a.clone(), b.clone()]);
+    // `a` is decided True (dropped); every other atom — `b` and the body's
+    // — is unknown, so it survives verbatim.
+    let val = move |atom: &p::Atom| if atom == &a { Some(true) } else { None };
+    match simplify_guarded_with(&g, &val) {
         Guarded::GGuarded { vars, guards, .. } => {
             assert!(vars.is_empty());
             assert_eq!(guards, vec![atom_to_gatom_free(&b)].into());
@@ -734,54 +659,28 @@ fn simplify_universal_drops_true_guards_keeps_unknown() {
     }
 }
 
+/// With every guard True the universal collapses to `gall [] [] body` = the
+/// simplified BODY (HS `gall _ [] gf = gf`, Guarded.hs:449-453).  The body's
+/// own atom is left unknown here: were it also decided True, `gall`'s
+/// `gf == gtrue` arm would return `gtrue` whether or not the True guards had
+/// been dropped, and the test could not tell the two apart.
 #[test]
 fn simplify_universal_with_all_true_guards_returns_body() {
-    let mkv = |n: &str| {
-        p::Term::Var(p::VarSpec {
-            name: n.into(),
-            idx: 0,
-            sort: p::SortHint::Msg,
-            typ: None,
-        })
-    };
-    let a = p::Atom::Eq(mkv("a"), mkv("b"));
-    let body = mk_atom_eq("p", "q");
-    let g = Guarded::GGuarded {
-        qua: Quant::All,
-        vars: Vec::new().into(),
-        guards: vec![atom_to_gatom_free(&a)].into(),
-        body: std::sync::Arc::new(body.clone()),
-    };
-    let val = |_atom: &p::Atom| Some(true);
-    // Both guard and body atoms evaluate to True under this
-    // valuation, so universal vacuous-then-body collapses to gtrue.
-    assert_eq!(simplify_guarded_with(&g, &val), gtrue());
+    let a = mk_eq("a", "b");
+    let g = mk_universal(Vec::new(), std::slice::from_ref(&a));
+    let val = move |atom: &p::Atom| if atom == &a { Some(true) } else { None };
+    assert_eq!(simplify_guarded_with(&g, &val), mk_atom_eq("p", "q"));
 }
 
 #[test]
 fn simplify_universal_with_quantifier_left_intact() {
     // GGuarded with bound vars is left alone — Haskell delays
     // simplification past the binder.
-    let mkv = |n: &str| {
-        p::Term::Var(p::VarSpec {
-            name: n.into(),
-            idx: 0,
-            sort: p::SortHint::Msg,
-            typ: None,
-        })
-    };
-    let a = p::Atom::Eq(mkv("a"), mkv("b"));
-    let body = mk_atom_eq("p", "q");
     let bound_var = GBinding {
         name: "x".into(),
         sort: p::SortHint::Msg,
     };
-    let g = Guarded::GGuarded {
-        qua: Quant::All,
-        vars: vec![bound_var].into(),
-        guards: vec![atom_to_gatom_free(&a)].into(),
-        body: std::sync::Arc::new(body),
-    };
+    let g = mk_universal(vec![bound_var], &[mk_eq("a", "b")]);
     let val = |_atom: &p::Atom| Some(true);
     assert_eq!(simplify_guarded_with(&g, &val), g);
 }

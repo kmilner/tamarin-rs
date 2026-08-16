@@ -27,26 +27,45 @@ pub enum ProVerifHeader {
 mod tests {
     use super::*;
 
+    /// The whole point of the derived `Ord` is the DECLARATION order of the
+    /// six constructors: `attribHeaders` and the `S.toList` that feeds the
+    /// emitted header block sort by it, so reordering the enum silently
+    /// reorders ProVerif output.  Sorting a shuffled one-of-each set is what
+    /// pins that order — the discriminant sequence, not just one pair.
     #[test]
-    fn ordering_groups_by_variant() {
+    fn ordering_follows_upstream_declaration_order() {
         let mut hs = [
+            ProVerifHeader::Eq("e".into(), "q".into(), "u".into(), "p".into()),
+            ProVerifHeader::Table("t".into(), "ty".into()),
             ProVerifHeader::Sym("k".into(), "n".into(), "t".into(), vec![]),
+            ProVerifHeader::HEvent("ev".into(), "ty".into()),
             ProVerifHeader::Type("nat".into()),
-            ProVerifHeader::Type("bitstring".into()),
+            ProVerifHeader::Fun("k".into(), "f".into(), 2, "t".into(), vec![]),
         ];
         hs.sort();
-        // Type variants come before Sym in derived Ord.
-        assert!(matches!(hs[0], ProVerifHeader::Type(_)));
-        assert!(matches!(hs[1], ProVerifHeader::Type(_)));
-        assert!(matches!(hs[2], ProVerifHeader::Sym(_, _, _, _)));
-    }
-
-    #[test]
-    fn equality_compares_all_fields() {
-        let a = ProVerifHeader::Fun("k".into(), "f".into(), 2, "t".into(), vec!["a".into()]);
-        let b = ProVerifHeader::Fun("k".into(), "f".into(), 2, "t".into(), vec!["a".into()]);
-        let c = ProVerifHeader::Fun("k".into(), "f".into(), 3, "t".into(), vec!["a".into()]);
-        assert_eq!(a, b);
-        assert_ne!(a, c);
+        let variants: Vec<&str> = hs
+            .iter()
+            .map(|h| match h {
+                ProVerifHeader::Type(_) => "Type",
+                ProVerifHeader::Sym(..) => "Sym",
+                ProVerifHeader::Fun(..) => "Fun",
+                ProVerifHeader::HEvent(..) => "HEvent",
+                ProVerifHeader::Table(..) => "Table",
+                ProVerifHeader::Eq(..) => "Eq",
+            })
+            .collect();
+        assert_eq!(
+            variants,
+            ["Type", "Sym", "Fun", "HEvent", "Table", "Eq"],
+            "ProVerifHeader.hs:4-11 declaration order"
+        );
+        // Within a variant the fields break the tie left-to-right, so `Fun`'s
+        // arity (field 3) outranks its type string (field 4).
+        let mut funs = [
+            ProVerifHeader::Fun("k".into(), "f".into(), 2, "zz".into(), vec![]),
+            ProVerifHeader::Fun("k".into(), "f".into(), 1, "aa".into(), vec![]),
+        ];
+        funs.sort();
+        assert!(matches!(funs[0], ProVerifHeader::Fun(_, _, 1, _, _)));
     }
 }

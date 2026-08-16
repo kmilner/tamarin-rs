@@ -100,19 +100,14 @@ fn parser_builtin_table_matches_the_maude_signatures() {
     }
 }
 
-/// The other direction: no builtin with a `MaudeSig` may be missing from the
-/// parser's table, or `function`'s builtin pre-check would silently not fire
-/// for the names it reserves.  `reliable-channel` is the one `builtinsNames`
-/// row without a signature (Theory/Text/Parser/Signature.hs:84) and is absent
-/// from both sides.
+/// `reliable-channel` is the one `builtinsNames` row without a signature
+/// (Theory/Text/Parser/Signature.hs:84), so it must reserve nothing: giving it
+/// a row would make `function`'s builtin pre-check fire on names HS leaves
+/// free.  The other direction — no builtin WITH a signature missing from the
+/// table — is [`parser_builtin_table_is_in_builtins_names_order`], whose
+/// whole-list equality already covers membership.
 #[test]
-fn every_builtin_with_a_signature_is_in_the_parser_table() {
-    for name in BUILTINS_WITH_SIGNATURE {
-        assert!(
-            builtin_st_fun_syms(name).is_some(),
-            "builtin `{name}` is missing from the parser's table"
-        );
-    }
+fn reliable_channel_reserves_no_symbols() {
     assert!(
         builtin_st_fun_syms("reliable-channel").is_none(),
         "`reliable-channel` maps to Nothing in HS and must reserve nothing"

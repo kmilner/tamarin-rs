@@ -104,25 +104,30 @@ fn duplicate_fires_before_a_later_parse_error() {
 /// `maybe True (ru ==) …` guard and is appended AGAIN — both copies are
 /// items (and both render).  The corpus relies on this (e.g.
 /// examples/asiaccs20-POIDC/OIDC_CodeFlow_with_ClientSecret.spthy carries
-/// two identical `Get_pk` rules); the oracle loads this theory with exit 0
-/// and prints `rule (modulo E) R1` twice.
+/// two identical `Get_pk` rules, the second case's shape); the oracle loads
+/// both theories with exit 0 and prints their `rule (modulo E) …` echo twice.
 #[test]
-fn identical_duplicate_is_accepted_and_appended_twice() {
-    let src = "theory T begin\n\n\
-               rule R1: [ ] --> [ ]\n\
-               rule R1: [ ] --> [ ]\n\n\
-               end\n";
-    assert_eq!(rule_names(src), ["R1", "R1"]);
-}
-
-/// The corpus shape: two identical rules with a premise and conclusion.
-#[test]
-fn corpus_shape_identical_duplicate_is_accepted() {
-    let src = "theory T begin\n\n\
-               rule Get_pk:\n    [ !Pk(A, pubkey) ]\n  -->\n    [ Out(pubkey) ]\n\n\
-               rule Get_pk:\n    [ !Pk(A, pubkey) ]\n  -->\n    [ Out(pubkey) ]\n\n\
-               end\n";
-    assert_eq!(rule_names(src), ["Get_pk", "Get_pk"]);
+fn identical_duplicates_are_accepted_and_appended_twice() {
+    for (case, name, src) in [
+        (
+            "empty rule",
+            "R1",
+            "theory T begin\n\n\
+             rule R1: [ ] --> [ ]\n\
+             rule R1: [ ] --> [ ]\n\n\
+             end\n",
+        ),
+        (
+            "corpus shape",
+            "Get_pk",
+            "theory T begin\n\n\
+             rule Get_pk:\n    [ !Pk(A, pubkey) ]\n  -->\n    [ Out(pubkey) ]\n\n\
+             rule Get_pk:\n    [ !Pk(A, pubkey) ]\n  -->\n    [ Out(pubkey) ]\n\n\
+             end\n",
+        ),
+    ] {
+        assert_eq!(rule_names(src), [name, name], "case {case}");
+    }
 }
 
 /// Two `_restrict`-carrying rules with the same name die at the RESTRICTION

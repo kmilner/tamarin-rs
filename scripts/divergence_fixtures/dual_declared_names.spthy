@@ -3,9 +3,10 @@
 // the prefix and `op{a}b` spellings through `lookupArity`'s NoEq-first list
 // lookup (Theory/Text/Parser/Term.hs:62-72; NoEqUser sorts before ACfctUser,
 // Term/Term/FunctionSymbols.hs:146-147), while the infix spelling stays the
-// AC symbol (`acterm`, Term.hs:163-174) and a bare nullary name the NoEq
-// constant (`nullaryApp`, Term.hs:158-163).  No corpus theory declares such
-// a collision.
+// AC symbol (`acterm`, Theory/Text/Parser/Term.hs:166-172) and a bare
+// nullary name the NoEq constant (`nullaryApp`,
+// Theory/Text/Parser/Term.hs:158-163).  No corpus theory declares such a
+// collision.
 //
 // Compared slices: the wf report block AND the `theory … end` echo — the
 // echo pins prefix NoEq rendering (`f('a', 'b')`, unflattened/unsorted)

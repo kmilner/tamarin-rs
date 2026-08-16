@@ -541,14 +541,20 @@ mod tests {
             .collect()
     }
 
+    /// The use-site atom is replaced by the predicate's BODY, with the
+    /// declared parameter mapped to the use-site argument.  Bytes pinned to
+    /// the oracle (Git revision ef3f0468), which renders this lemma as
+    /// `∀ x. ∃ #i. A( x ) @ #i`.
     #[test]
     fn expand_simple_predicate() {
-        // P(x) <=> A(x) @ #i  (note: x is bound in the use-site, #i not).
         let preds = pred("P(x) <=> Ex #i. A(x) @ #i");
         let f = parse_formula_str("All x. P(x)").unwrap();
         let expanded = expand_formula(&f, &preds).unwrap();
-        // Should NO LONGER contain a Pred atom.
         assert!(!has_pred_atom(&expanded), "got {:?}", expanded);
+        assert_eq!(
+            crate::pretty_formula::pretty_formula(&expanded),
+            "\u{2200} x. \u{2203} #i. A( x ) @ #i"
+        );
     }
 
     #[test]
@@ -618,10 +624,10 @@ mod tests {
                 }
                 p::TheoryItem::Lemma(l) => {
                     saw_reg = true;
-                    assert!(
-                        !has_pred_atom(&l.formula),
-                        "regular lemma must be expanded: {:?}",
-                        l.formula
+                    assert_eq!(
+                        crate::pretty_formula::pretty_formula(&l.formula),
+                        "\u{2200} x. \u{2203} #i. A( x ) @ #i",
+                        "regular lemma must carry the predicate's body"
                     );
                 }
                 _ => {}
@@ -647,6 +653,14 @@ mod tests {
             "variable capture: a quantifier still binds `z`: {:?}",
             expanded
         );
+        // The use-site `z` survives as `Act`'s FIRST argument and the renamed
+        // binder fills the second.  The rename mints a new base name (`z1`);
+        // the oracle (Git revision ef3f0468) keeps the base and allocates a
+        // fresh index instead, printing `∃ z.1 #i. Act( z, z.1 ) @ #i`.
+        assert_eq!(
+            crate::pretty_formula::pretty_formula(&expanded),
+            "\u{2203} z1 #i. Act( z, z1 ) @ #i"
+        );
     }
 
     #[test]
@@ -671,15 +685,21 @@ mod tests {
         assert!(!printed.contains("(<)"), "still emits (<): {}", printed);
     }
 
+    /// A use-site that itself mentions `z` must not be captured by the
+    /// builtin's bound `z`: the binder is renamed and the use-site `z` stays
+    /// the union's first operand.  The rename mints a new base name (`z1`);
+    /// the oracle (Git revision ef3f0468) renders the same lemma with a fresh
+    /// INDEX on the original base, `∃ z.1. y = (z++z.1)`.
     #[test]
     fn expand_lessmset_capture_avoids_z() {
-        // Use-site that mentions `z` must not be captured by the bound `z`.
         let preds: Vec<p::Predicate> = Vec::new();
         let f = parse_formula_str("z (<) y").unwrap();
         let expanded = expand_formula(&f, &preds).unwrap();
-        // The bound var is renamed away from `z` (HS would pick a fresh name);
-        // the use-site `z` survives in the union term.
         assert!(!has_lessmset_atom(&expanded), "got {:?}", expanded);
+        assert_eq!(
+            crate::pretty_formula::pretty_formula(&expanded),
+            "\u{2203} z1. y = (z++z1)"
+        );
     }
 
     fn has_lessmset_atom(f: &p::Formula) -> bool {

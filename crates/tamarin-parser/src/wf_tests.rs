@@ -9,6 +9,11 @@ fn parse(src: &str) -> Theory {
     parse_theory(src, &["diff"]).expect("parse")
 }
 
+/// A conclusion-only fresh variable is unbound.  The sibling checks that
+/// pin the unbound BODY reach it through action facts
+/// (`wf_entry_fills_comma_lists_at_the_report_ribbon`) or a premise-bound
+/// rule (`lookup_binder_is_not_unbound`); this is the conclusion-side
+/// fresh-variable branch.
 #[test]
 fn unbound_var_detected() {
     let t = parse("theory T begin rule R: [] --[ ]-> [ Out(~k) ] end");
@@ -16,6 +21,9 @@ fn unbound_var_detected() {
     assert!(topics(&r).contains("Unbound variables"), "report: {:?}", r);
 }
 
+/// The arity table is fed from rule CONCLUSIONS too — the tests that pin
+/// the arity body clash on premises (`nullary_fact_keeps_only_the_sep_space`)
+/// or on an action/lemma-fact pair (`wf_lemma_fact_show_form_nests_pairs_right`).
 #[test]
 fn fact_arity_clash_detected() {
     let t = parse(
@@ -28,13 +36,9 @@ fn fact_arity_clash_detected() {
     assert!(topics(&r).contains("Fact arity issues"));
 }
 
-#[test]
-fn special_facts_misuse_detected() {
-    let t = parse("theory T begin rule R: [Out(x)] --[ ]-> [] end");
-    let r = check_theory(&t);
-    assert!(topics(&r).contains("Special facts"));
-}
-
+/// `KU` in a CONCLUSION is a reserved name — the sibling that pins the
+/// reserved-name body (`wf_entry_fills_comma_lists_at_the_report_ribbon`)
+/// reaches the check through action facts ("on the middle").
 #[test]
 fn reserved_name_detected() {
     let t = parse(
@@ -480,12 +484,8 @@ fn wf_pair_headed_terms_render_in_angle_form_in_every_check() {
         "theory T begin functions: ff/2 equations: ff(x,y) = pair(x,y) \
             rule Test: [ ] --[ ]-> [] end",
     );
-    assert!(
-        only(&check_theory(&t), "Subterm Convergence Warning")
-            .contains("\n    ff(x, y) = <x, y>\n"),
-        "report: {:?}",
-        check_theory(&t)
-    );
+    let msg = only(&check_theory(&t), "Subterm Convergence Warning");
+    assert!(msg.contains("\n    ff(x, y) = <x, y>\n"), "report: {msg:?}");
 }
 
 /// The De Bruijn `show` form HS prints for a LEMMA fact is the derived
@@ -679,11 +679,13 @@ fn only(report: &WfReport, topic: &str) -> String {
 
 /// Probed against tamarin-prover ef3f0468 on `Out(%a %+ ~x)`:
 ///   `~x in term (~x%+%a) must be of sort nat`
-/// i.e. the offending operand is the fresh var `~x` (NOT the nat-sorted
-/// `%a`), the message has NO rule name, and `t` is the WHOLE fact-arg
-/// term.  The `%+` operands print in `Ord LVar` order (`~x` is
-/// `LSortFresh`, `%a` is `LSortNat`, LTerm.hs:165-170) rather than the
-/// source order, because HS's `fAppAC` sorts them at construction.
+/// i.e. the ONLY offending operand is the fresh var `~x` — the nat-sorted
+/// `%a` is accepted, matching HS `notOnlyNat`/`isNatVar`, which accepts
+/// `NatOne` and nat-sorted *variables*.  The message has NO rule name, and
+/// `t` is the WHOLE fact-arg term.  The `%+` operands print in `Ord LVar`
+/// order (`~x` is `LSortFresh`, `%a` is `LSortNat`, LTerm.hs:165-170)
+/// rather than the source order, because HS's `fAppAC` sorts them at
+/// construction.
 #[test]
 fn nat_sorts_message_format() {
     let t = parse(
@@ -698,35 +700,19 @@ fn nat_sorts_message_format() {
     );
 }
 
-/// `%a` (nat-sorted var) is ACCEPTED; only `~x` (fresh) is flagged —
-/// matching HS `notOnlyNat`/`isNatVar` (which accepts only NatOne and
-/// nat-sorted *variables*).
-#[test]
-fn nat_sorts_accepts_nat_var_flags_fresh() {
-    let t = parse(
-        "theory T begin builtins: natural-numbers \
-            rule R: [ Fr(~x) ] --[ ]-> [ Out(%a %+ ~x) ] end",
-    );
-    let msg = only(&check_theory(&t), "Nat Sorts");
-    assert!(msg.contains("~x in term"), "should flag ~x: {}", msg);
-    assert!(!msg.contains("%a in term"), "should NOT flag %a: {}", msg);
-}
-
-/// A nat *literal* `%'a'` (a `Con` name, not a var) IS flagged, matching
-/// HS `isNatVar` (true only for `Lit (Var ..)` with LSortNat).  Probed:
-///   `%'a' in term (%'a'%+%y) must be of sort nat`
+/// A nat *literal* `%'a'` (a `Con` name, not a var) IS flagged while the
+/// nat var `%y` beside it is not, matching HS `isNatVar` (true only for
+/// `Lit (Var ..)` with LSortNat).  The single body is byte-pinned to the
+/// pinned oracle (ef3f0468).
 #[test]
 fn nat_sorts_flags_nat_literal() {
     let t = parse(
         "theory T begin builtins: natural-numbers \
             rule R: [ Fr(~x) ] --[ ]-> [ Out(%'a' %+ %y) ] end",
     );
-    let msg = only(&check_theory(&t), "Nat Sorts");
-    assert!(msg.contains("%'a' in term"), "should flag %'a': {}", msg);
-    assert!(
-        !msg.contains("%y in term"),
-        "should NOT flag nat var %y: {}",
-        msg
+    assert_eq!(
+        group_bodies(&check_theory(&t), "Nat Sorts"),
+        "  %'a' in term (%'a'%+%y) must be of sort nat"
     );
 }
 

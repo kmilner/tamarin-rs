@@ -5,16 +5,14 @@
 //! Integration tests for the LIVE routes that don't run the solver.
 //!
 //! These tests start a real `axum` server on an ephemeral port with
-//! `tests/fixtures/issue193.spthy` pre-loaded, then make HTTP
-//! requests via `reqwest` and check:
-//!   - HTTP status code
-//!   - Content-Type
-//!   - JSON envelope key set (for `/main/*` routes)
+//! `tests/fixtures/issue193.spthy` pre-loaded, then make HTTP requests via
+//! `reqwest` and check the status, the `Content-Type` and the body.
 //!
-//! Comparison with Haskell is done against captured responses under
-//! `tests/fixtures/haskell-responses/`.  The criterion is byte equality
-//! for the error pages, and "same JSON envelope shape" or "same HTML
-//! structural markers" for the payload routes.
+//! The body criterion is byte equality against the captured Haskell responses
+//! under `tests/fixtures/haskell-responses/`, blanking only what no capture
+//! run can share with a test run: the theory's load stamp (its load time and
+//! origin path) on the pages that print it, and the `Generated from:` banner's
+//! build values on the `prettyClosedTheory` routes.
 //!
 //! Coverage matrix (LIVE routes):
 //!   - GET  /
@@ -28,9 +26,8 @@
 //!       [test_kill_with_path_returns_canceled_request]
 //!   - GET  /thy/trace/1/overview/help
 //!       [test_overview_help_html_structure]
-//!       [test_overview_help_panes_are_direct_body_children]
 //!   - GET  /thy/trace/1/main/help
-//!       [test_main_help_envelope_matches_haskell_keys]
+//!       [test_main_help_envelope_matches_haskell]
 //!   - GET  /thy/trace/1/main/rules
 //!       [test_main_rules_envelope]
 //!   - GET  /thy/trace/1/main/message
@@ -86,24 +83,11 @@ async fn test_get_index_returns_html_with_theory_listed() {
     );
     let body = res.text().await.expect("read body");
 
-    // Structural markers that should appear, matching Haskell's
-    // root template (Web.Hamlet.rootTpl):
-    //   - The fixture theory's name must appear (it's loaded).
-    //   - A link to the overview must appear.
-    //   - The upload form must appear.
-    assert!(
-        body.contains("RevealingSignatures"),
-        "index should list the loaded theory by name; got body:\n{}",
-        body
-    );
-    assert!(
-        body.contains("/thy/trace/1/overview/help"),
-        "index should link to overview/help",
-    );
-    assert!(
-        body.contains("uploadedTheory"),
-        "index should contain the upload form (name=uploadedTheory)",
-    );
+    // The whole page — `rootTpl` + `introTpl` + the one-row `theoriesTpl`
+    // table inside `defaultLayout` (Web/Hamlet.hs) — byte for byte against the
+    // oracle's, bar the load time and the origin path (the two fields the
+    // capture run cannot share with this one).
+    assert_page_matches_capture(&body, "index.html", "issue193.spthy");
 }
 
 // ---------------------------------------------------------------------
@@ -151,22 +135,9 @@ async fn test_robots_txt() {
     assert!(ct.starts_with("text/plain"), "got CT={}", ct);
     let body = res.text().await.expect("read body");
 
-    // Haskell capture is exactly "User-agent: *\n".  We match that
-    // exactly here.
-    assert!(
-        body.starts_with("User-agent:"),
-        "robots.txt should start with User-agent:, got {:?}",
-        body
-    );
-
-    // Haskell-shape comparison — byte-loose, content-equal modulo
-    // trailing whitespace.
-    let captured = haskell_capture("robots.txt");
-    assert_eq!(
-        body.trim_end(),
-        captured.trim_end(),
-        "Rust robots.txt body must match Haskell"
-    );
+    // The oracle's body verbatim — `User-agent: *` with no trailing newline
+    // (`getRobotsR`, src/Web/Handler.hs).
+    assert_eq!(body, haskell_capture("robots.txt"));
 }
 
 // ---------------------------------------------------------------------
@@ -190,14 +161,24 @@ async fn test_kill_without_path_returns_400() {
         400,
         "/kill without ?path= must be 400 (matches Haskell invalidArgs)",
     );
+    assert_eq!(content_type(&res), "text/html; charset=utf-8");
     let body = res.text().await.expect("read");
-    // Haskell's HTML body includes the "No path to kill specified!"
-    // text — we match that key string.
+    // The widget `invalidArgs` renders, taken from the oracle's own page so a
+    // re-capture that changes it takes this assertion with it.  The port emits
+    // that widget WITHOUT the surrounding `defaultLayout` frame the capture
+    // carries, which is why this is a line-wise check and not byte equality.
+    let widget = "<h1>Invalid Arguments</h1>\n<ul><li>No path to kill specified!</li>\n</ul>";
+    let captured = haskell_capture("kill.txt");
     assert!(
-        body.contains("No path to kill specified!"),
-        "400 body must include the Haskell error text; got {}",
-        body,
+        captured.contains(widget),
+        "the capture must still carry the widget this route is pinned to; got {captured}",
     );
+    for line in widget.lines() {
+        assert!(
+            body.contains(line),
+            "400 body must carry the oracle's {line:?}; got {body}",
+        );
+    }
 }
 
 #[tokio::test]
@@ -211,9 +192,12 @@ async fn test_kill_with_path_returns_canceled_request() {
         .await
         .expect("send /kill with path");
     assert_eq!(res.status(), 200);
-    let body = res.text().await.expect("read");
-    // Match Haskell's body verbatim.
-    assert_eq!(body, "Canceled request!");
+    assert!(content_type(&res).starts_with("text/plain"));
+    // The oracle's body verbatim.
+    assert_eq!(
+        res.text().await.expect("read"),
+        haskell_capture("kill_path.txt")
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -234,162 +218,18 @@ async fn test_overview_help_html_structure() {
     assert!(ct.starts_with("text/html"), "got CT={}", ct);
     let body = res.text().await.expect("read body");
 
-    // Structural markers shared with Haskell overview_help.html:
-    //   - "RevealingSignatures" appears (theory name)
-    //   - "Proof scripts" appears (left pane heading)
-    //   - "Visualization display" appears (right pane heading)
-    //   - "Autoprove" appears (context menu item)
-    //   - References to /static/css/* and /static/js/*
-    for needle in [
-        "RevealingSignatures",
-        "Proof scripts",
-        "Visualization display",
-        "Autoprove",
-        "/static/css/",
-        "/static/js/",
-    ] {
-        assert!(
-            body.contains(needle),
-            "overview page missing structural marker {:?}; body=\n{}",
-            needle,
-            body
-        );
-    }
-}
-
-/// The jQuery-layout JS (`data/js/jquery-layout.js`) calls
-/// `$('body').layout(...)` and resolves panes with
-/// `$Container.children(".ui-layout-center")`, i.e. they MUST be direct
-/// children of `<body>` — wrapping them in any extra `<div>` triggers
-/// the runtime `errCenterPaneMissing` alert ("UI Layout Initialization
-/// Error — The center-pane element does not exist") and the page never
-/// renders.  Haskell's `overviewTpl` emits the four panes at the top
-/// level of `defaultLayout`'s widget so they land directly under
-/// `<body>` (see `tests/fixtures/haskell-responses/overview_help.html`).
-///
-/// This test guards the framed overview page (and every page produced
-/// by `theory_html::overview_page`) against re-introducing a wrapper.
-#[tokio::test]
-async fn test_overview_help_panes_are_direct_body_children() {
-    let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/overview/help"))
-        .send()
-        .await
-        .expect("send overview");
-    assert_eq!(res.status(), 200);
-    let body = res.text().await.expect("read body");
-
-    // The four panes MUST appear.
-    for needle in [
-        "ui-layout-north",
-        "ui-layout-west",
-        "ui-layout-east",
-        "ui-layout-center",
-    ] {
-        assert!(
-            body.contains(needle),
-            "overview page is missing {} (jQuery-layout would alert errCenterPaneMissing); body=\n{}",
-            needle,
-            body
-        );
-    }
-
-    // And they must be DIRECT children of <body>.  We extract the
-    // body's first-level structure and confirm each pane's opening tag
-    // appears as a top-level sibling, not nested inside any wrapper
-    // div that itself sits under <body>.
-    let body_open = body.find("<body>").expect("body open tag");
-    let body_close = body.find("</body>").expect("body close tag");
-    let body_inner = &body[body_open + "<body>".len()..body_close];
-
-    // Reject the legacy wrapper that jQuery-layout chokes on.
-    assert!(
-        !body_inner.contains("ui-layout-container"),
-        "ui-layout-container wrapper around the panes triggers \
-         errCenterPaneMissing in jquery-layout.js (it does \
-         $Container.children(...) on <body>); body=\n{}",
-        body_inner
-    );
-
-    // Top-level depth tracker: count tag depth as we walk, and
-    // confirm each pane opens at depth 0 (i.e., as a direct child of
-    // <body>).  This is a coarse but correct check for the HTML we
-    // emit (no comments / CDATA / script-with-tags-in-strings inside
-    // <body>).
-    fn pane_appears_at_top_level(inner: &str, class: &str) -> bool {
-        let needle = format!("<div class=\"{}\"", class);
-        // Walk the inner body looking for the pane opening at depth 0.
-        let mut depth: i32 = 0;
-        let bytes = inner.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == b'<' {
-                // Check this position against the needle BEFORE we
-                // bump depth for this tag.
-                if depth == 0 && inner[i..].starts_with(&needle) {
-                    return true;
-                }
-                // Is this a closing tag?
-                if i + 1 < bytes.len() && bytes[i + 1] == b'/' {
-                    depth -= 1;
-                    i += 2;
-                } else {
-                    // Opening tag.  Need to look at the rest of the
-                    // tag to determine if it's a self-closing void
-                    // element — for our limited template, `<br>`,
-                    // `<img>`, `<input>`, `<meta>`, `<link>`, `<hr>`
-                    // are the only voids that appear; bumping depth
-                    // and then ignoring close-tag missing is benign
-                    // because we only need top-level pane positions
-                    // and those are followed by close tags.
-                    // For correctness, we DO recognise self-closing
-                    // tags via "/>".  Otherwise: increment depth.
-                    // Skip to end of tag.
-                    let end = inner[i..].find('>').unwrap_or(0);
-                    let tag = &inner[i..i + end];
-                    // A trailing `/` is only a self-close marker when it is a
-                    // standalone token (` />` / `"/>` / `'/>`).  Hamlet emits
-                    // unquoted URL attributes like `<a href=/>` (RootR), whose
-                    // trailing `/` is part of the value `/` — NOT a self-close.
-                    let is_self_close =
-                        tag.ends_with('/') && tag[..tag.len() - 1].ends_with([' ', '"', '\'']);
-                    let starts = i + 1;
-                    let name_end = tag[1..]
-                        .find([' ', '>', '/'])
-                        .map(|x| x + 1)
-                        .unwrap_or(tag.len());
-                    let name = &inner[starts..starts + (name_end - 1)];
-                    let is_void = matches!(
-                        name.to_ascii_lowercase().as_str(),
-                        "br" | "img" | "input" | "meta" | "link" | "hr"
-                    );
-                    if !is_self_close && !is_void {
-                        depth += 1;
-                    }
-                    i += end + 1;
-                }
-            } else {
-                i += 1;
-            }
-        }
-        false
-    }
-    for class in [
-        "ui-layout-north",
-        "ui-layout-west",
-        "ui-layout-east",
-        "ui-layout-center",
-    ] {
-        assert!(
-            pane_appears_at_top_level(body_inner, class),
-            ".{} must be a direct child of <body> (jquery-layout \
-             requires this — see test rationale).  body inner:\n{}",
-            class,
-            body_inner,
-        );
-    }
+    // The whole framed page — `overviewTpl`'s four panes, the proof-script
+    // pane's rendered theory and the help snippet in the centre pane — byte
+    // for byte against the oracle's, bar the load time and the origin path.
+    //
+    // That includes where the panes SIT: `data/js/jquery-layout.js` resolves
+    // them with `$Container.children(".ui-layout-center")` over `<body>`, so
+    // wrapping them in an extra `<div>` (the `ui-layout-container` the index
+    // page uses, say) triggers the runtime `errCenterPaneMissing` alert and
+    // the page never renders.  HS's `overviewTpl` emits the four panes at the
+    // top level of `defaultLayout`'s widget; any wrapper the port grew would
+    // show up here as a diff.
+    assert_page_matches_capture(&body, "overview_help.html", "issue193.spthy");
 }
 
 // ---------------------------------------------------------------------
@@ -397,7 +237,7 @@ async fn test_overview_help_panes_are_direct_body_children() {
 // ---------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_main_help_envelope_matches_haskell_keys() {
+async fn test_main_help_envelope_matches_haskell() {
     let s = start_server_with_theory("issue193.spthy").await;
     let res = s
         .client
@@ -413,21 +253,13 @@ async fn test_main_help_envelope_matches_haskell_keys() {
         ct
     );
 
-    let v: serde_json::Value = res.json().await.expect("decode json");
-    let rust_keys = json_top_keys(&v);
-    let haskell_keys = haskell_capture_keys("main_help.json");
-
-    assert_eq!(
-        rust_keys, haskell_keys,
-        "main/help JSON keys diverge: rust={:?}, haskell={:?}",
-        rust_keys, haskell_keys
+    // The whole `JsonHtml` envelope — the theory header line and the help
+    // widget — against the oracle's, bar the load stamp in the header.
+    assert_page_matches_capture(
+        &res.text().await.expect("text"),
+        "main_help.json",
+        "issue193.spthy",
     );
-
-    // The envelope must have both keys per Haskell's JsonHtml.
-    let title = v.get("title").and_then(|t| t.as_str()).unwrap_or("");
-    let html = v.get("html").and_then(|t| t.as_str()).unwrap_or("");
-    assert!(!title.is_empty(), "title must be non-empty");
-    assert!(!html.is_empty(), "html must be non-empty");
 }
 
 #[tokio::test]
@@ -440,15 +272,12 @@ async fn test_main_rules_envelope() {
         .await
         .expect("send main/rules");
     assert_eq!(res.status(), 200);
-    let v: serde_json::Value = res.json().await.expect("decode json");
-    let rust_keys = json_top_keys(&v);
-    let haskell_keys = haskell_capture_keys("main_rules.json");
-    assert_eq!(rust_keys, haskell_keys);
-
-    // The Rust rules view names the rules.  issue193 has ONE and TWO.
-    let html = v.get("html").and_then(|t| t.as_str()).unwrap_or("");
-    assert!(html.contains("ONE"), "rules html should mention rule ONE");
-    assert!(html.contains("TWO"), "rules html should mention rule TWO");
+    // The rules view carries no load stamp, so the whole envelope — every rule
+    // of the theory, `htmlThyPath`-rendered — is the oracle's byte for byte.
+    assert_eq!(
+        res.text().await.expect("text"),
+        haskell_capture("main_rules.json")
+    );
 }
 
 #[tokio::test]
@@ -461,21 +290,12 @@ async fn test_main_message_envelope() {
         .await
         .expect("send main/message");
     assert_eq!(res.status(), 200);
-    let v: serde_json::Value = res.json().await.expect("decode json");
-    let rust_keys = json_top_keys(&v);
-    let haskell_keys = haskell_capture_keys("main_message.json");
-    assert_eq!(rust_keys, haskell_keys);
-
-    // HS `messageSnippet` (Web/Theory.hs:926-937): Signature +
-    // Construction/Deconstruction rule sections (NOT restrictions — those
-    // live on the rules page).
-    let html = v.get("html").and_then(|t| t.as_str()).unwrap_or("");
-    assert!(
-        html.contains("Signature")
-            && html.contains("Construction Rules")
-            && html.contains("Deconstruction Rules"),
-        "message html should have Signature + Construction/Deconstruction sections; html={}",
-        html
+    // HS `messageSnippet` (Web/Theory.hs:926-937): the Signature and the
+    // Construction/Deconstruction rule sections (NOT restrictions — those live
+    // on the rules page).  No load stamp, so the envelope is pinned whole.
+    assert_eq!(
+        res.text().await.expect("text"),
+        haskell_capture("main_message.json")
     );
 }
 
@@ -489,27 +309,19 @@ async fn test_main_lemma_envelope() {
         .await
         .expect("send main/lemma");
     assert_eq!(res.status(), 200);
-    let v: serde_json::Value = res.json().await.expect("decode");
-    let rust_keys = json_top_keys(&v);
-    let haskell_keys = haskell_capture_keys("main_lemma.json");
-    assert_eq!(rust_keys, haskell_keys);
-
-    let title = v.get("title").and_then(|t| t.as_str()).unwrap_or("");
-    let html = v.get("html").and_then(|t| t.as_str()).unwrap_or("");
-    assert!(
-        title.contains("debug"),
-        "title should mention the lemma name; got {:?}",
-        title
-    );
+    let body = res.text().await.expect("text");
     // HS `htmlThyPath` renders `TheoryLemma _ -> text "this is a mistake"`
     // (Web/Theory.hs:1011-1152, see line 1074) — a deliberate upstream quirk; the bare
-    // `main/lemma/<name>` path is never used by the frontend (it always
-    // links to `main/proof/<name>`).  We match the oracle verbatim; the
-    // HS capture is `{"html":"this is a mistake<br/>\n",...}`.
-    assert!(
-        html.contains("this is a mistake"),
-        "html must match HS's `this is a mistake` quirk; got {}",
-        html
+    // `main/lemma/<name>` path is never used by the frontend (it always links
+    // to `main/proof/<name>`).
+    //
+    // The oracle's envelope verbatim EXCEPT the `<br/>` + newline its
+    // `renderHtmlDoc` appends to the line (`postprocessHtmlDoc`,
+    // Text/PrettyPrint/Html.hs:157-162), which the port does not emit here.
+    // Pinned that way so the day it does, this goes red instead of drifting.
+    assert_eq!(
+        body,
+        haskell_capture("main_lemma.json").replace("<br/>\\n", "")
     );
 }
 
@@ -685,16 +497,10 @@ async fn test_source_returns_plain_text() {
     assert_eq!(res.status(), 200);
     let ct = content_type(&res);
     assert!(ct.starts_with("text/plain"), "got CT={}", ct);
-    let body = res.text().await.expect("read");
-    // The source route renders the full `prettyClosedTheory` (see
-    // theory.rs `render_theory_source`).  This test keeps a loose
-    // structural check — the theory name must appear — since exact
-    // byte parity with Haskell is covered by the web-parity gate.
-    assert!(
-        body.contains("RevealingSignatures"),
-        "source should contain the theory name; got {}",
-        body,
-    );
+    // The route renders the full `prettyClosedTheory` (`getTheorySourceR`,
+    // src/Web/Handler.hs:1015-1022) — pinned against the oracle's, bar the
+    // `Generated from:` banner's build-specific values.
+    assert_theory_source_matches_capture(&res.text().await.expect("read"), "source.txt");
 }
 
 #[tokio::test]
@@ -709,6 +515,10 @@ async fn test_message_deduction_returns_plain_text() {
     assert_eq!(res.status(), 200);
     let ct = content_type(&res);
     assert!(ct.starts_with("text/plain"), "got CT={}", ct);
+    // `getTheoryMessageDeductionR` (src/Web/Handler.hs:1050-1055) renders the
+    // same `prettyClosedTheory` `/source` does — the oracle's two captures are
+    // byte-identical — so the route is pinned against its own.
+    assert_theory_source_matches_capture(&res.text().await.expect("read"), "message.json");
 }
 
 #[tokio::test]
@@ -744,13 +554,10 @@ async fn test_download_for_local_theory_returns_source_file() {
         cd,
     );
 
-    let body = res.text().await.expect("read");
-    // Body must be the .spthy source we loaded.
-    assert!(
-        body.contains("theory RevealingSignatures"),
-        "download body should contain the original .spthy source; got {}",
-        &body[..body.len().min(200)]
-    );
+    // `getDownloadTheoryR` hands back `getTheorySourceR`'s body under the
+    // octet content type (src/Web/Handler.hs:1763-1766), so the payload is
+    // pinned against the oracle's the same way `/source` is.
+    assert_theory_source_matches_capture(&res.text().await.expect("read"), "download.txt");
 }
 
 #[tokio::test]

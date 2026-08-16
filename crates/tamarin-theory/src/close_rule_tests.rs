@@ -268,26 +268,18 @@ fn structural_lemma_closes_dotted_and_cross_sort_binders() {
     assert!(rule.rule.new_vars.is_empty(), "HS newRules passes []");
 }
 
-/// Locate the Maude binary (`MAUDE_PATH` env override, else the common
-/// install paths).  `None` skips the Maude-backed test below.
-fn maude_bin_path() -> Option<String> {
-    std::env::var("MAUDE_PATH").ok().or_else(|| {
-        for c in ["/usr/local/bin/maude", "maude"] {
-            if std::path::Path::new(c).exists() {
-                return Some(c.to_string());
-            }
-        }
-        None
-    })
-}
-
 /// End-to-end verdict pin through the structural path: on the KCL07
 /// signature the ef3f0468 oracle reports `Function xorr has the NDC
 /// property.` on stderr, so `check_close_intr_rule` must tag `xorr`
 /// and NDC-mark every xorr destructor rule in the returned cache.
 #[test]
 fn check_close_intr_rule_tags_xorr_on_kcl07_signature() {
-    let Some(mp) = maude_bin_path() else { return };
+    // Resolution and the dangling-`MAUDE_PATH` / no-maude-at-all policy live
+    // in [`crate::test_maude::maude_path`]; a private copy here drifted from
+    // it once already.
+    let Some(mp) = crate::test_maude::maude_path() else {
+        return;
+    };
     let (_guard, sig, _probe) = xorr_parent();
     let maude = tamarin_term::maude_proc::MaudeHandle::start(&mp, sig)
         .expect("maude starts on the KCL07 signature");

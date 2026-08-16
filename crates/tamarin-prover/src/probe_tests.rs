@@ -188,11 +188,11 @@ fn exception_report_drops_the_blank_line_for_maude() {
 /// The GHC `error` a failed maude spawn raises, as the oracle prints it under
 /// `tamarin-prover: ` (Console.hs:147).
 ///
-/// Both halves are read back out of the pinned source rather than restated: a
-/// literal restated here would agree with a wrong constant, and the e2e stderr
-/// pins compare the port against bytes captured from the port, so they move
-/// with the constant instead of catching it.  This is what notices when a bump
-/// moves the `error` or reworks its message.
+/// Both halves are read back out of the pinned source rather than restated.
+/// Every other pin of this abort — here and the e2e stderr blocks in
+/// `tests/probe_reports.rs` — fixes what the port EMITS, so a submodule bump
+/// that moves the `error` or rewords its message leaves them all green while
+/// the port prints stale coordinates.  This is the pin that notices.
 #[test]
 fn maude_abort_is_the_console_hs_error() {
     let raise = CONSOLE_HS
@@ -385,7 +385,9 @@ fn default_messages_are_byte_exact() {
 }
 
 /// HS reads `ExitFailure code` off `waitForProcess`; a clean non-zero exit is
-/// reported as-is.
+/// reported as-is, and a signalled child is `ExitFailure (-signum)` — the
+/// NEGATED number, which is what lands in the `failed with exit code …`
+/// reason line for a maude the kernel killed.
 #[test]
 fn hs_exit_code_reads_the_child_status() {
     let (status, out, err) = read_process_with_exit_code("/bin/sh", &["-c", "exit 3"], "")
@@ -393,6 +395,11 @@ fn hs_exit_code_reads_the_child_status() {
     assert_eq!(hs_exit_code(&status), 3);
     assert_eq!(out, "");
     assert_eq!(err, "");
+
+    let (status, _, _) = read_process_with_exit_code("/bin/sh", &["-c", "kill -TERM $$"], "")
+        .expect("/bin/sh should be startable");
+    assert_eq!(status.code(), None, "the shell must die of the signal");
+    assert_eq!(hs_exit_code(&status), -15);
 }
 
 /// Stdin is delivered, both streams are captured, and a child that never

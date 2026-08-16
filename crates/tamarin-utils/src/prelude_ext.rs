@@ -462,6 +462,16 @@ mod tests {
     }
 
     #[test]
+    fn keep_first_masks_against_every_earlier_pick() {
+        // "b is a multiple of a" is asymmetric, so masking is directional, and
+        // the masks outlive the pick that set them: 4 is dropped by the 2
+        // picked three positions earlier and 9 by the 3, in both cases across
+        // an intervening pick that does not mask them.
+        let xs = vec![2, 3, 5, 4, 9];
+        assert_eq!(keep_first(&xs, |a, b| b % a == 0), vec![2, 3, 5]);
+    }
+
+    #[test]
     fn pairs() {
         assert_eq!(swap((1, 'a')), ('a', 1));
         assert_eq!(sort_pair((3, 1)), (1, 3));
@@ -474,6 +484,16 @@ mod tests {
         assert_eq!(flush_left(5, "ab"), "ab   ");
         assert_eq!(flush_right_by("0", 4, "12"), "0012");
         assert_eq!(flush_right(2, "abcd"), "abcd"); // no truncation
+                                                    // A multi-character separator is cycled, and only as far as the
+                                                    // padding needs — HS `take (n - length s) (cycle sep)`.
+        assert_eq!(flush_right_by("ab", 5, "x"), "ababx");
+        assert_eq!(flush_left_by("ab", 5, "x"), "xabab");
+        // Width counts characters, not bytes: "é" is one column, two bytes.
+        assert_eq!(flush_right(3, "é"), "  é");
+        assert_eq!(flush_right_by("é", 3, "x"), "ééx");
+        // HS `cycle ""` diverges; the port pads nothing rather than hanging.
+        assert_eq!(flush_right_by("", 5, "ab"), "ab");
+        assert_eq!(flush_left_by("", 5, "ab"), "ab");
     }
 
     #[test]

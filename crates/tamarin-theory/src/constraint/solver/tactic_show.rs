@@ -549,9 +549,32 @@ mod tests {
         }
     }
 
+    /// `show LVar` = `sortPrefix s ++ body`: one prefix per sort (Msg and
+    /// Untagged get none), and the `.idx` suffix only for a non-zero index.
     #[test]
-    fn show_varspec_fresh() {
+    fn show_varspec_covers_every_sort_prefix_and_the_index_suffix() {
+        let sorted = |sort, name: &str, idx| {
+            show_varspec(&p::VarSpec {
+                name: name.into(),
+                idx,
+                sort,
+                typ: None,
+            })
+        };
         assert_eq!(show_varspec(&fresh("s")), "~s");
+        assert_eq!(sorted(p::SortHint::Pub, "a", 0), "$a");
+        assert_eq!(sorted(p::SortHint::Node, "i", 0), "#i");
+        assert_eq!(sorted(p::SortHint::Nat, "n", 0), "%n");
+        assert_eq!(sorted(p::SortHint::Msg, "m", 0), "m");
+        assert_eq!(sorted(p::SortHint::Untagged, "m", 0), "m");
+        // Suffix-spelled sorts (`s:fresh`) share the prefixes.
+        assert_eq!(
+            sorted(p::SortHint::Suffix(p::SuffixSort::Fresh), "s", 0),
+            "~s"
+        );
+        // Non-zero index appends `.idx`; an unnamed var shows the index alone.
+        assert_eq!(sorted(p::SortHint::Fresh, "s", 3), "~s.3");
+        assert_eq!(sorted(p::SortHint::Msg, "", 7), "7");
     }
 
     #[test]
@@ -565,6 +588,8 @@ mod tests {
         assert_eq!(show_gterm(&t), "exp('g',Free ~s)");
     }
 
+    /// Derived `Show [a]`: bracketed, comma-separated with NO space, and `[]`
+    /// when empty.
     #[test]
     fn show_term_list_matches_exp_g() {
         let t = GTerm::BinOp(
@@ -572,14 +597,37 @@ mod tests {
             std::sync::Arc::new(GTerm::PubLit("g".into())),
             std::sync::Arc::new(GTerm::Var(BVar::Free(fresh("s")))),
         );
-        let shown = show_term_list(std::slice::from_ref(&t));
-        assert_eq!(shown, "[exp('g',Free ~s)]");
+        assert_eq!(
+            show_term_list(std::slice::from_ref(&t)),
+            "[exp('g',Free ~s)]"
+        );
+        assert_eq!(
+            show_term_list(&[t.clone(), GTerm::NatOne]),
+            "[exp('g',Free ~s),tone]"
+        );
+        assert_eq!(show_term_list(&[]), "[]");
     }
 
+    /// Every arm of the derived `Show FactTag` — the string `isFactName`
+    /// compares against and `jgnFactName` emits, so a mis-spelled constructor
+    /// silently breaks both tactic matching and `--output-json`.
     #[test]
-    fn show_fact_tag_proto() {
-        let t = FactTag::Proto(Multiplicity::Linear, "Foo", 2);
-        assert_eq!(show_fact_tag(&t), "ProtoFact Linear \"Foo\" 2");
+    fn show_fact_tag_covers_every_derived_show_arm() {
+        assert_eq!(
+            show_fact_tag(&FactTag::Proto(Multiplicity::Linear, "Foo", 2)),
+            "ProtoFact Linear \"Foo\" 2"
+        );
+        assert_eq!(
+            show_fact_tag(&FactTag::Proto(Multiplicity::Persistent, "Foo", 0)),
+            "ProtoFact Persistent \"Foo\" 0"
+        );
+        assert_eq!(show_fact_tag(&FactTag::Fresh), "FreshFact");
+        assert_eq!(show_fact_tag(&FactTag::Out), "OutFact");
+        assert_eq!(show_fact_tag(&FactTag::In), "InFact");
+        assert_eq!(show_fact_tag(&FactTag::Ku), "KUFact");
+        assert_eq!(show_fact_tag(&FactTag::Kd), "KDFact");
+        assert_eq!(show_fact_tag(&FactTag::Ded), "DedFact");
+        assert_eq!(show_fact_tag(&FactTag::Term), "TermFact");
     }
 
     /// Every applied-symbol arm of `Show (Term a)` (Term/Raw.hs:227-237):

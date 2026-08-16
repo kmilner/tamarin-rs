@@ -16,7 +16,9 @@
 // (reducible symbols are disallowed there), which is its own divergence and
 // would drown this one.
 //
-// Compared slice: the whole `theory … end` echo (see check.sh).
+// Compared slices: the whole `theory … end` echo (see check.sh), and the wf
+// report block, which pins the run clean — the wf pass walks the TRANSLATED
+// theory, so a lowering that misplaces a term surfaces there too.
 
 theory SapicLowering
 begin

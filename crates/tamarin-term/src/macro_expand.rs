@@ -133,9 +133,14 @@ mod tests {
         );
         let fsym = macro_to_fun_sym(&m);
         if let FunSym::NoEq(s) = fsym {
+            assert_eq!(s.name, b"id".as_slice());
             assert_eq!(s.arity, 1);
             assert_eq!(s.privacy, Privacy::Private);
             assert_eq!(s.constructability, Constructability::Destructor);
+            // HS `NoEq (op, (length args, Private, Destructor, NotNDC))` —
+            // `find_matching_macro` rejects on any of the four, so the NDC
+            // state is as load-bearing as the rest.
+            assert_eq!(s.ndc, NdcState::NotNdc);
         } else {
             panic!();
         }
@@ -157,5 +162,64 @@ mod tests {
 
         let expanded = apply_macros(std::slice::from_ref(&m), invoke);
         assert_eq!(expanded, pair(msg_var("b", 0), msg_var("a", 0)));
+    }
+
+    /// `applyMacros` expands macro applications sitting in ARGUMENT position
+    /// before substituting, and re-runs on the substituted body, so a macro
+    /// whose body invokes another macro is expanded through.  Neither of the
+    /// two recursions shows up when the body and the arguments are
+    /// macro-free.
+    #[test]
+    fn apply_macros_expands_arguments_and_nested_bodies() {
+        let x = crate::lterm::LVar::new("x", crate::lterm::LSort::Msg, 0);
+        let y = crate::lterm::LVar::new("y", crate::lterm::LSort::Msg, 0);
+        // `dup(x) = <x, x>`
+        let dup: Macro<crate::lterm::Name, crate::lterm::LVar> = Macro::new(
+            b"dup".to_vec(),
+            vec![x],
+            pair(var_term(x), var_term(x)) as LNTerm,
+        );
+        let dup_sym = macro_to_fun_sym(&dup).into_no_eq();
+        // `swap(x, y) = <y, dup(x)>` — the body itself calls a macro.
+        let swap: Macro<crate::lterm::Name, crate::lterm::LVar> = Macro::new(
+            b"swap".to_vec(),
+            vec![x, y],
+            pair(
+                var_term(y),
+                crate::term::f_app_no_eq(dup_sym, vec![var_term(x)]),
+            ) as LNTerm,
+        );
+        let swap_sym = macro_to_fun_sym(&swap).into_no_eq();
+        let a = msg_var("a", 0);
+        let b = msg_var("b", 0);
+
+        // `swap(dup(a), b)`: the argument macro expands first, then the body,
+        // then the body's own `dup` call.
+        let invoke: LNTerm = crate::term::f_app_no_eq(
+            swap_sym,
+            vec![
+                crate::term::f_app_no_eq(dup_sym, vec![a.clone()]),
+                b.clone(),
+            ],
+        );
+        let macros = [dup, swap];
+        let aa = pair(a.clone(), a);
+        assert_eq!(
+            apply_macros(&macros, invoke),
+            pair(b.clone(), pair(aa.clone(), aa))
+        );
+
+        // A symbol that only shares the NAME is not a macro application: HS
+        // compares the whole `macroToFunSym`, arity included.
+        let wrong_arity: LNTerm = crate::term::f_app_no_eq(
+            crate::function_symbols::NoEqSym::new(
+                b"dup".to_vec(),
+                2,
+                Privacy::Private,
+                Constructability::Destructor,
+            ),
+            vec![b.clone(), b],
+        );
+        assert_eq!(apply_macros(&macros, wrong_arity.clone()), wrong_arity);
     }
 }

@@ -459,27 +459,92 @@ mod tests {
         assert_eq!(pretty_position(&vec![1, 2, 1]), "121");
     }
 
+    /// `untyped` is HS `SapicLVar v Nothing` — the type tag is ABSENT, not
+    /// the default type's spelling.  The distinction is observable:
+    /// `pretty_function_typing_info` prints `defaultSapicTypeS` ("Any") for
+    /// a `None`, and the SAPIC typing pass treats a `Some` as a user
+    /// declaration it must respect.  `to_lvar` drops whichever tag is
+    /// present and hands back the `LVar` untouched.
     #[test]
-    fn sapic_lvar_round_trip() {
+    fn sapic_lvar_untyped_has_no_type_tag_and_to_lvar_drops_it() {
         let v = LVar::new("x", LSort::Msg, 0);
         let sv = SapicLVar::untyped(v);
+        assert_eq!(sv.stype, None);
+        assert_eq!(sv.stype, default_sapic_type());
         assert_eq!(sv.to_lvar(), v);
+        // A tagged variable keeps its tag but still yields the bare `LVar`.
+        let typed = SapicLVar::new(v, default_sapic_node_type());
+        assert_eq!(typed.stype, Some("node".to_string()));
+        assert_eq!(typed.to_lvar(), v);
+        assert_ne!(typed, sv, "the type tag is part of the variable's identity");
     }
 
+    /// `<>` on the annotation is field-wise but NOT uniformly: names
+    /// CONCATENATE left-to-right, the location is RIGHT-biased (an inner
+    /// `at`-location overrides an outer one, and only a `None` on the right
+    /// preserves the left's), and the back-substitutions COMPOSE.
     #[test]
-    fn parsed_annotation_append() {
-        let mut a = ProcessParsedAnnotation::empty();
-        a.process_names.push("A".into());
-        let mut b = ProcessParsedAnnotation::empty();
-        b.process_names.push("B".into());
-        let merged = a.append(b);
+    fn parsed_annotation_append_concats_names_and_right_biases_location() {
+        let loc = |n: &str| {
+            tamarin_term::vterm::var_term(SapicLVar::untyped(LVar::new(n, LSort::Msg, 0)))
+        };
+        let ann = |name: &str, location: Option<SapicTerm>, sub: Subst<Name, LVar>| {
+            ProcessParsedAnnotation {
+                process_names: vec![name.to_string()],
+                location,
+                back_substitution: sub,
+            }
+        };
+        let sub = |from: &str, to: &str| {
+            Subst::from_list([(
+                LVar::new(from, LSort::Msg, 0),
+                tamarin_term::vterm::var_term(LVar::new(to, LSort::Msg, 0)),
+            )])
+        };
+
+        let merged = ann("A", Some(loc("l1")), sub("y", "z")).append(ann(
+            "B",
+            Some(loc("l2")),
+            sub("x", "y"),
+        ));
         assert_eq!(merged.process_names, vec!["A", "B"]);
+        assert_eq!(merged.location, Some(loc("l2")), "location is right-biased");
+        // `compose` (`self . other`), not a union: the LEFT `y ~> z` rewrites
+        // the right's range, so `x ~> y` becomes `x ~> z`.  A union would
+        // leave `x ~> y`.
+        assert_eq!(
+            merged
+                .back_substitution
+                .image_of(&LVar::new("x", LSort::Msg, 0)),
+            Some(&tamarin_term::vterm::var_term(LVar::new(
+                "z",
+                LSort::Msg,
+                0
+            )))
+        );
+
+        // A `None` on the right keeps the left's location; a `Some` on the
+        // right wins even when the left has none.
+        assert_eq!(
+            ann("A", Some(loc("l1")), Subst::empty())
+                .append(ann("B", None, Subst::empty()))
+                .location,
+            Some(loc("l1"))
+        );
+        assert_eq!(
+            ann("A", None, Subst::empty())
+                .append(ann("B", Some(loc("l2")), Subst::empty()))
+                .location,
+            Some(loc("l2"))
+        );
+        assert_eq!(ProcessParsedAnnotation::empty(), ann_empty());
     }
 
-    #[test]
-    fn build_a_simple_null_process() {
-        let p: PlainProcess = Process::null(ProcessParsedAnnotation::empty());
-        assert!(matches!(p, Process::Null(_)));
+    /// `empty()` and `Default` must stay the same value — `GoodAnnotation::
+    /// default_annotation` routes through `Default`, `Process::null` sites
+    /// through `empty()`.
+    fn ann_empty() -> ProcessParsedAnnotation {
+        <ProcessParsedAnnotation as GoodAnnotation>::default_annotation()
     }
 
     fn null_proc() -> PlainProcess {

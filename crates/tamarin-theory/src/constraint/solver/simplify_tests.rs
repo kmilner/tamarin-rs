@@ -9,27 +9,163 @@ use tamarin_term::maude_sig::pair_maude_sig;
 
 use crate::test_maude::maude_path;
 
+/// A maude speaking the pair signature, or `None` when this run accepts the
+/// no-maude skip ([`maude_path`] panics on a set-but-dangling `MAUDE_PATH`).
+/// A resolved maude that will not START is the same misconfiguration, so
+/// that case panics rather than skipping every test in this file.
+fn maude() -> Option<tamarin_term::maude_proc::MaudeHandle> {
+    maude_with_sig(pair_maude_sig())
+}
+
+fn maude_with_sig(
+    sig: tamarin_term::maude_sig::MaudeSig,
+) -> Option<tamarin_term::maude_proc::MaudeHandle> {
+    let path = maude_path()?;
+    Some(
+        tamarin_term::maude_proc::MaudeHandle::start(&path, sig).unwrap_or_else(|e| {
+            panic!(
+                "maude at {path} failed to start: {e:?} — every maude-backed \
+                 test here would otherwise skip silently"
+            )
+        }),
+    )
+}
+
+fn ctx() -> Option<ProofContext> {
+    Some(ProofContext::new(maude()?, Vec::new()))
+}
+
 #[test]
 fn simplify_empty_is_no_op() {
-    let path = match maude_path() {
-        Some(p) => p,
+    let ctx = match ctx() {
+        Some(c) => c,
         None => return,
     };
-    let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    let ctx = ProofContext::new(h, Vec::new());
     let mut r = Reduction::new(&ctx, System::empty());
+    let before = r.sys.clone();
     simplify_system(&mut r);
-    assert_eq!(r.sys.goals.len(), 0);
+    // Every CR-rule pass runs over an empty system; none of them may
+    // synthesise a constraint out of nothing (`assert!(goals.is_empty())`
+    // alone would miss a pass that invented a node, edge or formula).
+    assert!(
+        r.sys == before,
+        "simplify on an empty system must invent nothing, got {:?}",
+        r.sys
+    );
+}
+
+/// CR-rule *N6* `exploitUniqueMsgOrder` (Simplify.hs:166-169) inserts
+/// `i_kd < i_ku` for every message that is both a KD conclusion and a KU
+/// action.  HS's `F.mapM_ insertLess … M.intersectionWith` is
+/// UNCONDITIONAL, so a single node that both concludes `KD(m)` and carries
+/// a `KU(m)` action gets a REFLEXIVE `i < i` — and that self-edge is what
+/// makes the order relation cyclic, so the contradiction check kills the
+/// case.  An `i_kd != i_ku` guard here reads as a harmless
+/// redundant-self-ordering cleanup but keeps a spurious source case for
+/// every wf-invalid rule that uses the reserved KU/KD facts
+/// (regression/trace/issue515.spthy).
+#[test]
+fn exploit_unique_msg_order_inserts_the_reflexive_self_edge() {
+    let ctx = match ctx() {
+        Some(c) => c,
+        None => return,
+    };
+    use crate::constraint::solver::contradictions::cyclic;
+    use tamarin_term::builtin::msg_var;
+    let info = || {
+        crate::rule::RuleInfo::Proto(crate::rule::ProtoRuleACInstInfo {
+            name: crate::rule::ProtoRuleName::Stand("R"),
+            attributes: crate::rule::RuleAttributes::empty(),
+            loop_breakers: Vec::new(),
+        })
+    };
+    let m = msg_var("m", 0);
+    let node = |id: u64| tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, id);
+    let pairs = |r: &Reduction<'_>| -> Vec<(u64, u64)> {
+        r.sys
+            .less_atoms
+            .iter()
+            .map(|la| (la.smaller.idx, la.larger.idx))
+            .collect()
+    };
+
+    // One node, both roles: HS orders it before ITSELF.
+    let mut sys = System::empty();
+    sys.add_node(
+        node(1),
+        crate::rule::Rule::new(
+            info(),
+            vec![],
+            vec![crate::fact::kd_fact(m.clone())],
+            vec![crate::fact::ku_fact(m.clone())],
+        ),
+    );
+    let mut r = Reduction::new(&ctx, sys);
+    exploit_unique_msg_order(&mut r);
+    assert_eq!(pairs(&r), vec![(1, 1)], "the self-edge must be inserted");
+    assert!(
+        cyclic(&r.sys.less_atoms),
+        "the self-edge is only useful because it makes rawLessRel cyclic"
+    );
+    assert_eq!(
+        r.sys.less_atoms[0].reason,
+        crate::constraint::constraints::Reason::NormalForm
+    );
+
+    // Two nodes: the ordinary KD-before-KU edge, oriented KD → KU.
+    let mut sys = System::empty();
+    sys.add_node(
+        node(1),
+        crate::rule::Rule::new(
+            info(),
+            vec![],
+            vec![crate::fact::kd_fact(m.clone())],
+            vec![],
+        ),
+    );
+    sys.add_node(
+        node(2),
+        crate::rule::Rule::new(
+            info(),
+            vec![],
+            vec![],
+            vec![crate::fact::ku_fact(m.clone())],
+        ),
+    );
+    let mut r = Reduction::new(&ctx, sys);
+    exploit_unique_msg_order(&mut r);
+    assert_eq!(pairs(&r), vec![(1, 2)], "KD node orders before KU node");
+
+    // A KD conclusion with no matching KU action orders nothing: the pass
+    // intersects the two term maps, it does not order every node pair.
+    let mut sys = System::empty();
+    sys.add_node(
+        node(1),
+        crate::rule::Rule::new(info(), vec![], vec![crate::fact::kd_fact(m)], vec![]),
+    );
+    sys.add_node(
+        node(2),
+        crate::rule::Rule::new(
+            info(),
+            vec![],
+            vec![],
+            vec![crate::fact::ku_fact(msg_var("other", 0))],
+        ),
+    );
+    let mut r = Reduction::new(&ctx, sys);
+    exploit_unique_msg_order(&mut r);
+    assert!(
+        pairs(&r).is_empty(),
+        "different messages must not be ordered"
+    );
 }
 
 #[test]
 fn simplify_decomposes_top_level_conj() {
-    let path = match maude_path() {
-        Some(p) => p,
+    let ctx = match ctx() {
+        Some(c) => c,
         None => return,
     };
-    let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    let ctx = ProofContext::new(h, Vec::new());
     let mut sys = System::empty();
     // Conj([Atom1, Atom2]) — Atom1/Atom2 are reducible-formula leaves
     // when wrapped in Conj of size 2 since the Conj itself is
@@ -99,12 +235,10 @@ fn simplify_decomposes_top_level_conj() {
 
 #[test]
 fn simplify_disj_decomposes_into_goal() {
-    let path = match maude_path() {
-        Some(p) => p,
+    let ctx = match ctx() {
+        Some(c) => c,
         None => return,
     };
-    let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    let ctx = ProofContext::new(h, Vec::new());
     let mut sys = System::empty();
     use tamarin_parser::ast::{Atom, SortHint, Term, VarSpec};
     let mkvar = |n: &str| {
@@ -148,11 +282,10 @@ fn simplify_disj_decomposes_into_goal() {
 /// alone must NOT collapse `Last(n)` to `Some(false)`.
 #[test]
 fn partial_atom_valuation_last_returns_none_when_successor_not_in_trace() {
-    let path = match maude_path() {
-        Some(p) => p,
+    let h = match maude() {
+        Some(h) => h,
         None => return,
     };
-    let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     use tamarin_parser::ast::{Atom, SortHint, Term, VarSpec};
     let mkvar = |n: &str, idx: u64| {
         Term::Var(VarSpec {
@@ -187,31 +320,53 @@ fn partial_atom_valuation_last_returns_none_when_successor_not_in_trace() {
             m,
             crate::constraint::constraints::Reason::Formula,
         ));
-    let ab_adj = sys.build_always_before_adj();
-    let node_rule_map = sys.node_rule_map();
-    let result = partial_atom_valuation_with(
-        &sys,
-        &h,
-        &ab_adj,
-        &node_rule_map,
-        &Atom::Last(mkvar("n", 0)),
-    );
+    let last_n = |sys: &crate::constraint::system::System| {
+        let ab_adj = sys.build_always_before_adj();
+        let node_rule_map = sys.node_rule_map();
+        partial_atom_valuation_with(sys, &h, &ab_adj, &node_rule_map, &Atom::Last(mkvar("n", 0)))
+    };
     assert_eq!(
-        result, None,
+        last_n(&sys),
+        None,
         "HS-faithful: `Last n` with `n < m` but m not in trace must \
              yield None (not Some(false)).  Mirrors HS Simplify.hs's \
              `any (isInTrace sys) (nodesAfter i)` guard."
+    );
+
+    // Positive controls — without them a `partialAtomValuation` that
+    // answered `None` for EVERY `Last` atom would pass the assertion above.
+    //
+    // (1) Put `m` in the trace via an unsolved Action goal (`isInTrace`'s
+    //     `unsolvedActionAtoms` clause).  Now `n` has an in-trace successor,
+    //     so `Last n` is false in every model.
+    sys.add_goal(crate::constraint::constraints::Goal::Action(
+        m,
+        crate::fact::LNFact::new(
+            crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "P", 0),
+            vec![],
+        ),
+    ));
+    assert_eq!(
+        last_n(&sys),
+        Some(false),
+        "an in-trace successor of `n` refutes `Last n`"
+    );
+
+    // (2) `isLast sys n` is checked FIRST and wins outright.
+    sys.set_last_atom(Some(n));
+    assert_eq!(
+        last_n(&sys),
+        Some(true),
+        "`isLast` is the first guard and outranks the successor check"
     );
 }
 
 #[test]
 fn simplify_marks_subterm_self_contradiction() {
-    let path = match maude_path() {
-        Some(p) => p,
+    let ctx = match ctx() {
+        Some(c) => c,
         None => return,
     };
-    let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    let ctx = ProofContext::new(h, Vec::new());
     let mut sys = System::empty();
     // Add `x ⊏ x` — contradiction.
     let v = tamarin_term::lterm::LVar::new("x", tamarin_term::lterm::LSort::Msg, 0);
@@ -253,13 +408,28 @@ fn mk_var_l(name: &str, idx: u64, sort: tamarin_term::lterm::LSort) -> tamarin_t
     ))
 }
 
+/// The `(name, idx) → subject term` bindings the caller reads back off a
+/// match; ordered so a whole-substitution assertion is stable.
+fn subst_pairs(s: &crate::guarded::VarSubst) -> Vec<(String, u64, String)> {
+    let mut out: Vec<(String, u64, String)> = s
+        .iter()
+        .map(|(k, v)| match v {
+            tamarin_parser::ast::Term::Var(v) => {
+                (k.0.to_string(), k.1, format!("{}.{}", v.name, v.idx))
+            }
+            other => (k.0.to_string(), k.1, format!("{other:?}")),
+        })
+        .collect();
+    out.sort();
+    out
+}
+
 #[test]
 fn match_atom_via_maude_simple_var_to_var() {
-    let path = match maude_path() {
-        Some(p) => p,
+    let h = match maude() {
+        Some(h) => h,
         None => return,
     };
-    let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     // Pattern: All k #i. Setup(k)@i — guard: Action(Setup(k), #i).
     let vars = vec![
         tamarin_parser::ast::VarSpec {
@@ -293,33 +463,28 @@ fn match_atom_via_maude_simple_var_to_var() {
         &i_node,
         &[sys_arg],
     );
-    assert!(!substs.is_empty(), "should match");
-    let subst = substs.into_iter().next().unwrap();
-    // The time mapping is direct (we set it ourselves before
-    // calling Maude). Should always be present.
-    let i_map = subst.get(&("i", 0u64)).cloned();
-    match i_map {
-        Some(tamarin_parser::ast::Term::Var(v)) => {
-            assert_eq!(v.name, "n");
-            assert_eq!(v.idx, 7);
-        }
-        other => panic!("expected i → Var(n, 7), got {:?}", other),
-    }
-    // The k mapping comes from Maude. Whether Maude reports it
-    // depends on its match output convention — for var-to-var
-    // matches, Maude may return identity bindings or renamings.
-    // Our implementation only records vars we can map structurally.
-    // We accept either presence or absence of `k` in the subst —
-    // the contract is that the match exists (subst is Some).
+    // One matcher binding BOTH pattern vars: the time directly (the
+    // matcher sets it before calling Maude) and the fact argument
+    // structurally (`solveMatchLTerm`'s pure phase, before Maude is
+    // consulted at all).  Asserting only "a match exists" would accept a
+    // matcher that dropped `k`, and the caller substitutes the guarded
+    // body with exactly these bindings.
+    assert_eq!(substs.len(), 1);
+    assert_eq!(
+        subst_pairs(&substs[0]),
+        vec![
+            ("i".to_string(), 0, "n.7".to_string()),
+            ("k".to_string(), 0, "alpha.3".to_string()),
+        ]
+    );
 }
 
 #[test]
 fn match_atom_via_maude_pattern_with_pair_against_pair() {
-    let path = match maude_path() {
-        Some(p) => p,
+    let h = match maude() {
+        Some(h) => h,
         None => return,
     };
-    let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     // Pattern: All a b #i. Action(<a, b>) @ i.
     let vars = vec![
         tamarin_parser::ast::VarSpec {
@@ -377,15 +542,20 @@ fn match_atom_via_maude_pattern_with_pair_against_pair() {
         &i_node,
         &[sys_pair],
     );
-    // Match exists.
-    assert!(
-        !substs.is_empty(),
-        "pair pattern should match against pair subject"
+    // The matcher descends INTO the pair, binding each component var to
+    // the corresponding subject component — `a` and `b` must land on
+    // distinct subject terms, in position order.  A matcher that bound the
+    // whole pair to `a`, or bound the components the wrong way round, would
+    // still "match".
+    assert_eq!(substs.len(), 1);
+    assert_eq!(
+        subst_pairs(&substs[0]),
+        vec![
+            ("a".to_string(), 0, "x.5".to_string()),
+            ("b".to_string(), 0, "y.6".to_string()),
+            ("i".to_string(), 0, "n.1".to_string()),
+        ]
     );
-    let subst = substs.into_iter().next().unwrap();
-    // The time variable mapping is recorded by our matcher
-    // directly (independent of Maude's output).
-    assert!(subst.contains_key(&("i", 0u64)));
 }
 
 /// `match_atom_via_maude` does NOT itself filter on arity — its caller
@@ -396,11 +566,10 @@ fn match_atom_via_maude_pattern_with_pair_against_pair() {
 /// future rewrite cannot start silently binding unmatched pattern vars.
 #[test]
 fn match_atom_via_maude_zero_subject_args_binds_only_the_time() {
-    let path = match maude_path() {
-        Some(p) => p,
+    let h = match maude() {
+        Some(h) => h,
         None => return,
     };
-    let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     // Pattern wants 1 arg; system has 0.
     let vars = vec![
         tamarin_parser::ast::VarSpec {
@@ -449,11 +618,10 @@ fn match_atom_via_maude_zero_subject_args_binds_only_the_time() {
 
 #[test]
 fn match_atom_via_maude_rejects_non_var_time() {
-    let path = match maude_path() {
-        Some(p) => p,
+    let h = match maude() {
+        Some(h) => h,
         None => return,
     };
-    let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     // Time is a literal — pattern matcher should reject.
     let vars: Vec<tamarin_parser::ast::VarSpec> = Vec::new();
     let g_fact = tamarin_parser::ast::Fact {
@@ -486,12 +654,10 @@ fn match_atom_via_maude_rejects_non_var_time() {
 
 #[test]
 fn ku_action_uniqueness_merges_two_nodes_with_same_term() {
-    let path = match maude_path() {
-        Some(p) => p,
+    let ctx = match ctx() {
+        Some(c) => c,
         None => return,
     };
-    let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    let ctx = ProofContext::new(h, Vec::new());
     let mut sys = System::empty();
     // Two protocol-rule instances at distinct node ids, both
     // emitting `KU(~k)` as an action.
@@ -547,13 +713,11 @@ fn simp_split_neg_ac_recurse_emits_ac_formula() {
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::{f_app_ac, Term};
     use tamarin_term::vterm::Lit;
-    let path = match maude_path() {
-        Some(p) => p,
+    // Multiset signature so `++` (AC Union) is a non-reducible AC head.
+    let h = match maude_with_sig(tamarin_term::maude_sig::mset_maude_sig()) {
+        Some(h) => h,
         None => return,
     };
-    // Multiset signature so `++` (AC Union) is a non-reducible AC head.
-    let sig = tamarin_term::maude_sig::mset_maude_sig();
-    let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).unwrap();
     let ctx = ProofContext::new(h, Vec::new());
 
     let mk_var = |name: &str| -> tamarin_term::lterm::LNTerm {
@@ -601,12 +765,10 @@ fn simp_split_neg_ac_recurse_emits_ac_formula() {
 /// emit a term equation merging `k_1 = k_2`.
 #[test]
 fn simp_injective_eq_mon_emits_constant_eq() {
-    let path = match maude_path() {
-        Some(p) => p,
+    let mut ctx = match ctx() {
+        Some(c) => c,
         None => return,
     };
-    let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    let mut ctx = ProofContext::new(h, Vec::new());
     // Wire S as injective with one Constant behaviour position.
     let s_tag = crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "S", 2);
     ctx.injective_fact_insts = vec![(
@@ -676,12 +838,10 @@ fn simp_injective_eq_mon_emits_constant_eq() {
 /// argument position.
 #[test]
 fn simp_injective_eq_mon_pairs_tuple_leaves() {
-    let path = match maude_path() {
-        Some(p) => p,
+    let mut ctx = match ctx() {
+        Some(c) => c,
         None => return,
     };
-    let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    let mut ctx = ProofContext::new(h, Vec::new());
     use crate::tools::injective_fact_instances::MonotonicBehaviour::{Constant, Unstable};
     let s_tag = crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "S", 2);
     ctx.injective_fact_insts = vec![(s_tag, vec![vec![Unstable, Constant]])];
@@ -750,12 +910,10 @@ fn simp_injective_eq_mon_pairs_tuple_leaves() {
 
 #[test]
 fn ku_action_uniqueness_unchanged_when_terms_differ() {
-    let path = match maude_path() {
-        Some(p) => p,
+    let ctx = match ctx() {
+        Some(c) => c,
         None => return,
     };
-    let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    let ctx = ProofContext::new(h, Vec::new());
     let mut sys = System::empty();
     let mk_ku = |name: &str, idx: u64| {
         let v = tamarin_term::lterm::LVar::new(name, tamarin_term::lterm::LSort::Fresh, idx);

@@ -10,8 +10,14 @@ use crate::lterm::LNTerm;
 fn unify_two_distinct_variables() {
     let x: LNTerm = msg_var("x", 0);
     let y: LNTerm = msg_var("y", 0);
-    let s = unify_lnterm_no_ac(vec![Equal::new(x, y)]).unwrap();
-    assert!(!s.is_empty());
+    let s = unify_lnterm_no_ac(vec![Equal::new(x.clone(), y)]).unwrap();
+    // HS `unifyRaw` orients same-sort var-var by `Ord LVar` (Unification.hs:276):
+    // idx and sort tie here, so the later NAME is eliminated and becomes the
+    // KEY.  A non-empty check alone accepts either orientation.
+    assert_eq!(
+        s.to_list(),
+        vec![(crate::lterm::LVar::new("y", LSort::Msg, 0), x)]
+    );
 }
 
 #[test]
@@ -43,9 +49,17 @@ fn match_pattern_variable_against_constant_term() {
     // Match: term=pair(a,b), pattern=pair(x,y).
     let t: LNTerm = pair(msg_var("a", 0), msg_var("b", 0));
     let p: LNTerm = pair(msg_var("x", 0), msg_var("y", 0));
-    let problem = Match::match_with(t.clone(), p);
+    let problem = Match::match_with(t, p);
     let s = solve_match_lterm_no_ac(&|n| crate::lterm::sort_of_name(n), problem).unwrap();
-    assert_eq!(s.len(), 2);
+    // Each PATTERN variable is the key, bound to the subject at its own
+    // argument position — a bare count is blind to a swap.
+    assert_eq!(
+        s.to_list(),
+        vec![
+            (crate::lterm::LVar::new("x", LSort::Msg, 0), msg_var("a", 0)),
+            (crate::lterm::LVar::new("y", LSort::Msg, 0), msg_var("b", 0)),
+        ]
+    );
 }
 
 #[test]

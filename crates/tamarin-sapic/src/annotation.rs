@@ -228,12 +228,33 @@ mod tests {
         assert_eq!(c.lock.map(|AnVar(v)| v), Some(v2));
     }
 
+    /// `toAnProcess` / `toProcess` must CARRY the parsed annotation, not
+    /// re-default it, at every node kind.  Each node here holds a distinct,
+    /// non-default `ProcessParsedAnnotation`, so a lift that dropped
+    /// `parsing_ann` (or a `to_parsed` that read the wrong node's) shows up as
+    /// an inequality rather than defaulting to a match.
     #[test]
     fn round_trip_to_annotated_and_back() {
-        let parsed: Process<ProcessParsedAnnotation, SapicLVar> =
-            Process::Null(ProcessParsedAnnotation::default());
+        let named = |n: &str| ProcessParsedAnnotation {
+            process_names: vec![n.to_string()],
+            location: Some(tamarin_term::lterm::pub_term(n)),
+            ..Default::default()
+        };
+        let parsed: Process<ProcessParsedAnnotation, SapicLVar> = Process::Comb(
+            tamarin_theory::sapic::ProcessCombinator::Parallel,
+            named("comb"),
+            Box::new(Process::Action(
+                tamarin_theory::sapic::SapicAction::Rep,
+                named("act"),
+                Box::new(Process::Null(named("left"))),
+            )),
+            Box::new(Process::Null(named("right"))),
+        );
         let annotated: Process<ProcessAnnotation<V>, SapicLVar> = to_annotated(parsed.clone());
-        let back = to_parsed(annotated);
-        assert_eq!(parsed, back);
+        // The lift wraps rather than replaces: the parsed part is reachable
+        // unchanged at the root, and the translation fields start at default.
+        assert_eq!(annotated.annotation().parsing_ann, named("comb"));
+        assert!(annotated.annotation().lock.is_none());
+        assert_eq!(to_parsed(annotated), parsed);
     }
 }

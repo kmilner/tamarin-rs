@@ -495,9 +495,12 @@ prio:\n\
         assert_eq!(t.prios.len(), 1);
         assert_eq!(t.prios[0].ranking, "id");
         let r = t.render();
-        assert!(
-            r.contains("regex\".*!K.\\(\\(.*~r0\\.1.*\" | regex\".*!K.\\(\\(.*~r0.*\" | regex\".*!K.\\(~r.*\""),
-            "got: {r}"
+        assert_eq!(
+            r,
+            "tactic: helping\npresort: s\nprio: {id}\n  \
+             regex\".*!K.\\(\\(.*~r0\\.1.*\" | \
+             regex\".*!K.\\(\\(.*~r0.*\" | \
+             regex\".*!K.\\(~r.*\""
         );
     }
 

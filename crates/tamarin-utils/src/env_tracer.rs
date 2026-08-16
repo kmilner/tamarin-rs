@@ -45,20 +45,39 @@ pub fn etrace_ln(key: &str, label: &str, s: &str) {
 mod tests {
     use super::*;
 
-    // We don't test should_trace directly because env vars are process-wide
-    // and parallel tests would race. The function is exercised in practice.
+    // `DEBUG_TRACE` is process-wide, so every assertion that depends on it
+    // lives in this single test rather than racing across parallel ones.
     #[test]
-    fn empty_env_disables_trace() {
-        // SAFETY: temporarily unset for this single test thread; restore after.
+    fn trace_keys_are_whole_comma_separated_fields() {
+        // SAFETY: temporarily overwritten for this single test thread; the
+        // previous value is restored before returning.
         let prev = env::var(TRACE_SETTINGS).ok();
         unsafe {
             env::remove_var(TRACE_SETTINGS);
         }
-        assert!(!should_trace("anything"));
-        if let Some(v) = prev {
-            unsafe {
-                env::set_var(TRACE_SETTINGS, v);
-            }
+        assert!(!should_trace("anything"), "unset must disable tracing");
+
+        unsafe {
+            env::set_var(TRACE_SETTINGS, "foo,bar");
+        }
+        assert!(should_trace("foo"));
+        assert!(should_trace("bar"));
+        // HS `elem key (splitOn "," setting)` compares whole fields: neither a
+        // prefix of a field nor the raw setting itself is a match.
+        assert!(!should_trace("fo"));
+        assert!(!should_trace("foo,bar"));
+        assert!(!should_trace(""));
+
+        // A single unseparated key is one field, not a substring search.
+        unsafe {
+            env::set_var(TRACE_SETTINGS, "foobar");
+        }
+        assert!(should_trace("foobar"));
+        assert!(!should_trace("foo"));
+
+        match prev {
+            Some(v) => unsafe { env::set_var(TRACE_SETTINGS, v) },
+            None => unsafe { env::remove_var(TRACE_SETTINGS) },
         }
     }
 }

@@ -22,16 +22,6 @@ fn ctx() -> Option<ProofContext> {
     Some(ProofContext::new(h, Vec::new()))
 }
 
-#[test]
-fn reduction_starts_unchanged() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
-    let r = Reduction::new(&ctx, System::empty());
-    assert_eq!(r.changed, ChangeIndicator::Unchanged);
-}
-
 /// `ku_vars` must read the two variables `removePermutations` permutes
 /// off the AC constructor rules' own `KU(x)`, `KU(y)` premises — and
 /// answer `OtherRule` for every other premise shape, including the
@@ -99,11 +89,28 @@ fn insert_goal_marks_changed() {
         None => return,
     };
     let mut r = Reduction::new(&ctx, System::empty());
+    // A fresh `Reduction` starts `Unchanged`; without that precondition the
+    // post-insert assertion below would hold whatever `insert_goal` does, and
+    // `while_changing` (which resets and re-reads this flag every iteration)
+    // would spin forever on its first step.
+    assert_eq!(r.changed, ChangeIndicator::Unchanged);
     let v = tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Msg, 0);
     let f = crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]);
-    r.insert_goal(Goal::Action(v, f));
+    let g = Goal::Action(v, f);
+    r.insert_goal(g.clone());
     assert_eq!(r.changed, ChangeIndicator::Changed);
     assert_eq!(r.sys.goals.len(), 1);
+    assert_eq!(r.sys.goals[0].0, g, "the goal is stored verbatim");
+    assert!(!r.sys.goals[0].1.solved, "a fresh goal is open");
+    // Re-inserting the same goal is a no-op: HS `insertGoal` is
+    // `M.insertWith combineGoalStatus` keyed by the goal, so the second
+    // insert merges into the first slot and raises NO change signal.  A
+    // regressed dedup would append a second, `solved=false` copy and the
+    // `while_changing` fixpoints above it would never converge.
+    r.changed = ChangeIndicator::Unchanged;
+    r.insert_goal(g);
+    assert_eq!(r.sys.goals.len(), 1, "duplicate goal must not be re-added");
+    assert_eq!(r.changed, ChangeIndicator::Unchanged);
 }
 
 #[test]
@@ -175,6 +182,34 @@ fn solve_term_eqs_unifies_two_vars() {
 // less atom, last atom, and goal. The Rust port should preserve
 // these invariants on completion.
 
+/// `i_2 =? j_3` binds the HIGHER-idx var: the eq-store maps `j ↦ i`.
+/// Every `subst_system` test below therefore has to put the node id it
+/// wants rewritten on the `j` side — a constraint mentioning only `i`
+/// sits on the representative and is a no-op the pass cannot fail.
+fn eqstore_binds_j_to_i(
+    r: &mut Reduction<'_>,
+    i: tamarin_term::lterm::LVar,
+    j: tamarin_term::lterm::LVar,
+) {
+    use tamarin_term::vterm::Lit;
+    r.solve_term_eqs(
+        SplitStrategy::SplitNow,
+        &[tamarin_term::rewriting::Equal {
+            lhs: tamarin_term::term::Term::Lit(Lit::Var(i)),
+            rhs: tamarin_term::term::Term::Lit(Lit::Var(j)),
+        }],
+    )
+    .expect("solve");
+    assert_eq!(
+        tamarin_term::subst::apply_vterm(
+            &r.sys.eq_store.subst,
+            tamarin_term::term::Term::Lit(Lit::Var(j)),
+        ),
+        tamarin_term::term::Term::Lit(Lit::Var(i)),
+        "precondition: the unifier keeps the lower-idx id, so j ↦ i"
+    );
+}
+
 #[test]
 fn subst_system_rewrites_edge_node_ids_through_eqstore() {
     let ctx = match ctx() {
@@ -182,47 +217,45 @@ fn subst_system_rewrites_edge_node_ids_through_eqstore() {
         None => return,
     };
     let mut r = Reduction::new(&ctx, System::empty());
-    // Force `i_2 = j_3` into the eq-store, then add an edge whose
-    // src is `i_2` and confirm that subst_system rewrites it.
     use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::vterm::Lit;
     let i = LVar::new("i", LSort::Node, 2);
     let j = LVar::new("j", LSort::Node, 3);
-    let ti = tamarin_term::term::Term::Lit(Lit::Var(i));
-    let tj = tamarin_term::term::Term::Lit(Lit::Var(j));
-    // Add an edge i -> some target. (Source-only is enough — we
-    // just want to verify the substitution propagates.)
-    let tgt = LVar::new("t", LSort::Node, 99);
+    let t = LVar::new("t", LSort::Node, 99);
+    // One edge with `j` as its SOURCE and one with `j` as its TARGET, so
+    // both endpoint rewrites are observed; `t` is outside the eq-store
+    // domain and must survive untouched.
     r.sys.invalidate_max_var_idx_cache();
     r.sys
         .content_mut()
         .edges
         .push(crate::constraint::constraints::Edge {
-            src: (i, crate::rule::ConcIdx(0)),
-            tgt: (tgt, crate::rule::PremIdx(0)),
+            src: (j, crate::rule::ConcIdx(0)),
+            tgt: (t, crate::rule::PremIdx(0)),
         });
-    // Inject the equality into the eq-store directly.
-    r.solve_term_eqs(
-        SplitStrategy::SplitNow,
-        &[tamarin_term::rewriting::Equal { lhs: ti, rhs: tj }],
-    )
-    .expect("solve");
+    r.sys
+        .content_mut()
+        .edges
+        .push(crate::constraint::constraints::Edge {
+            src: (t, crate::rule::ConcIdx(0)),
+            tgt: (j, crate::rule::PremIdx(0)),
+        });
+    eqstore_binds_j_to_i(&mut r, i, j);
     r.subst_system();
-    // After subst_system, the edge's source node id must be
-    // mapped to whatever the canonical representative of i and j
-    // is (the eq-store unifier picks one).
-    let canonical = {
-        let id_term = tamarin_term::term::Term::Lit(Lit::Var(i));
-        let mapped = tamarin_term::subst::apply_vterm(&r.sys.eq_store.subst, id_term);
-        if let tamarin_term::term::Term::Lit(Lit::Var(v)) = mapped {
-            v
-        } else {
-            i
-        }
-    };
+    // `substEdges` rewrites both endpoints; the post-pass sort is by
+    // source first and `Ord LVar` is idx-major, so `i.2` precedes `t.99`.
     assert_eq!(
-        r.sys.edges[0].src.0, canonical,
-        "edge src should be the canonical node id after subst_system"
+        r.sys.edges,
+        vec![
+            crate::constraint::constraints::Edge {
+                src: (i, crate::rule::ConcIdx(0)),
+                tgt: (t, crate::rule::PremIdx(0)),
+            },
+            crate::constraint::constraints::Edge {
+                src: (t, crate::rule::ConcIdx(0)),
+                tgt: (i, crate::rule::PremIdx(0)),
+            },
+        ],
+        "substEdges must map both endpoints through the eq-store"
     );
 }
 
@@ -234,39 +267,45 @@ fn subst_system_rewrites_less_atom_node_ids() {
     };
     let mut r = Reduction::new(&ctx, System::empty());
     use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::vterm::Lit;
     let i = LVar::new("i", LSort::Node, 2);
     let j = LVar::new("j", LSort::Node, 3);
-    let target = LVar::new("t", LSort::Node, 9);
+    let t = LVar::new("t", LSort::Node, 9);
+    // `j` appears once as the smaller and once as the larger endpoint, so
+    // both `substLessAtoms` rewrites are observed.
     r.sys.invalidate_max_var_idx_cache();
-    r.sys
-        .content_mut()
-        .less_atoms
-        .push(crate::constraint::constraints::LessAtom::new(
-            i,
-            target,
+    for la in [
+        crate::constraint::constraints::LessAtom::new(
+            j,
+            t,
             crate::constraint::constraints::Reason::Formula,
-        ));
-    let ti = tamarin_term::term::Term::Lit(Lit::Var(i));
-    let tj = tamarin_term::term::Term::Lit(Lit::Var(j));
-    r.solve_term_eqs(
-        SplitStrategy::SplitNow,
-        &[tamarin_term::rewriting::Equal { lhs: ti, rhs: tj }],
-    )
-    .expect("solve");
+        ),
+        crate::constraint::constraints::LessAtom::new(
+            t,
+            j,
+            crate::constraint::constraints::Reason::Formula,
+        ),
+    ] {
+        r.sys.content_mut().less_atoms.push(la);
+    }
+    eqstore_binds_j_to_i(&mut r, i, j);
     r.subst_system();
-    // The less atom's `smaller` should still resolve to the same
-    // canonical id reachable from i via the eq-store.
-    let canonical = {
-        let id_term = tamarin_term::term::Term::Lit(Lit::Var(i));
-        let mapped = tamarin_term::subst::apply_vterm(&r.sys.eq_store.subst, id_term);
-        if let tamarin_term::term::Term::Lit(Lit::Var(v)) = mapped {
-            v
-        } else {
-            i
-        }
-    };
-    assert_eq!(r.sys.less_atoms[0].smaller, canonical);
+    assert_eq!(
+        r.sys
+            .less_atoms
+            .iter()
+            .map(|la| (la.smaller, la.larger))
+            .collect::<Vec<_>>(),
+        vec![(i, t), (t, i)],
+        "substLessAtoms must map both endpoints, keeping insertion order"
+    );
+    // `LessAtom`'s `Eq` ignores the reason, but the reason is what the
+    // pretty-printer attributes the ordering to — the rewrite must carry
+    // it through rather than resetting it.
+    assert!(r
+        .sys
+        .less_atoms
+        .iter()
+        .all(|la| la.reason == crate::constraint::constraints::Reason::Formula));
 }
 
 #[test]
@@ -275,15 +314,50 @@ fn subst_system_idempotent_on_empty_substitution() {
         Some(c) => c,
         None => return,
     };
-    let mut r = Reduction::new(&ctx, System::empty());
-    // No equations injected — the eq-store substitution is empty.
+    // A POPULATED system with an EMPTY eq-store: the early return in
+    // `subst_system_once` must leave every component bit-identical — the
+    // pass reorders nodes (`M.toList` mirror), sorts+dedups edges and
+    // dedups less-atoms, so a mis-gated early return is observable as a
+    // reorder here even though no id changes.
+    use tamarin_term::lterm::{LSort, LVar};
+    let mut sys = System::empty();
+    let hi = LVar::new("i", LSort::Node, 7);
+    let lo = LVar::new("i", LSort::Node, 1);
+    let info = || {
+        crate::rule::RuleInfo::Proto(crate::rule::ProtoRuleACInstInfo {
+            name: crate::rule::ProtoRuleName::Stand("R"),
+            attributes: crate::rule::RuleAttributes::empty(),
+            loop_breakers: Vec::new(),
+        })
+    };
+    // Insertion order is descending by id: only a pass that actually runs
+    // would sort these.
+    sys.add_node(hi, crate::rule::Rule::new(info(), vec![], vec![], vec![]));
+    sys.add_node(lo, crate::rule::Rule::new(info(), vec![], vec![], vec![]));
+    sys.add_edge(crate::constraint::constraints::Edge {
+        src: (hi, crate::rule::ConcIdx(0)),
+        tgt: (lo, crate::rule::PremIdx(0)),
+    });
+    sys.add_less(crate::constraint::constraints::LessAtom::new(
+        lo,
+        hi,
+        crate::constraint::constraints::Reason::Formula,
+    ));
+    let mut r = Reduction::new(&ctx, sys);
+    let before = r.sys.clone();
     let before_changed = r.changed;
+    assert!(
+        r.sys.eq_store.subst.is_empty(),
+        "precondition: nothing to substitute"
+    );
     r.subst_system();
-    // No-op: nothing to rewrite.
-    assert_eq!(r.changed, before_changed);
-    assert!(r.sys.nodes.is_empty());
-    assert!(r.sys.edges.is_empty());
-    assert!(r.sys.less_atoms.is_empty());
+    assert_eq!(r.changed, before_changed, "a no-op pass raises no signal");
+    assert_eq!(
+        r.sys.nodes.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+        vec![hi, lo],
+        "node order must survive an empty-substitution pass"
+    );
+    assert!(r.sys == before, "an empty substitution rewrites nothing");
 }
 
 #[test]
@@ -548,14 +622,15 @@ fn solve_action_goal_existing_node_with_action_is_linear_named() {
     sys.add_goal(Goal::Action(i, fa.clone()));
     let mut r = Reduction::new(&ctx, sys);
     let out = r.solve_action_goal(&i, &fa);
-    // The case name must be present (showRuleCaseName ru) for the proof
-    // tree to render `case <name>` correctly.  Accept any non-empty name.
-    match &out {
-        GoalCases::LinearNamed(name) => {
-            assert!(!name.is_empty(), "rule case name must be non-empty")
-        }
-        other => panic!("expected GoalCases::LinearNamed, got {:?}", other),
-    }
+    // The case name is `showRuleCaseName ru` — for the `ISend` intruder
+    // rule that is the lowercased rule name `isend`, and it is what the
+    // proof tree renders after `case `.  Pin the bytes: a name that is
+    // merely non-empty would let any renaming through.
+    assert!(
+        matches!(&out, GoalCases::LinearNamed(n) if n == "isend"),
+        "expected LinearNamed(\"isend\"), got {:?}",
+        out
+    );
     assert!(r
         .sys
         .goals
@@ -635,12 +710,20 @@ fn solve_premise_goal_no_user_rules_uses_intruder() {
     let fa = crate::fact::in_fact(tx);
     let p = (i, crate::rule::PremIdx(0));
     let out = r.solve_premise_goal(&p, &fa);
-    // ISend supplier can satisfy the In(x) premise → LinearNamed.
+    // The only supplier of `In(x)` in an empty context is the `ISend`
+    // intruder rule, whose `showRuleCaseName` is `isend`; the node and the
+    // edge into the premise are applied in place.
     assert!(
-        matches!(out, GoalCases::LinearNamed(_)),
-        "expected LinearNamed, got {:?}",
+        matches!(&out, GoalCases::LinearNamed(n) if n == "isend"),
+        "expected LinearNamed(\"isend\"), got {:?}",
         out
     );
+    assert!(r.sys.nodes.iter().any(|(_, ru)| matches!(
+        ru.info,
+        crate::rule::RuleInfo::Intr(crate::rule::IntrRuleACInfo::ISend)
+    )));
+    assert_eq!(r.sys.edges.len(), 1);
+    assert_eq!(r.sys.edges[0].tgt, p);
 }
 
 #[test]
@@ -787,14 +870,18 @@ fn solve_chain_goal_compatible_facts_inserts_edge() {
     sys.add_goal(Goal::Chain(c, p));
     let mut r = Reduction::new(&ctx, sys);
     let out = r.solve_chain_goal(&c, &p);
-    // Compatible facts → LinearNamed (rule-named) with edge added
-    // and chain goal marked solved in-place.
+    // Compatible facts → one case, named by `chain_direct_case_name` off
+    // the KD conclusion's message (HS `showLitName`: `Var_<sort>_<name>`
+    // for an idx-0 var), with the edge added and the goal marked solved in
+    // place.
     assert!(
-        matches!(out, GoalCases::LinearNamed(_)),
-        "expected LinearNamed, got {:?}",
+        matches!(&out, GoalCases::LinearNamed(n) if n == "Var_msg_x"),
+        "expected LinearNamed(\"Var_msg_x\"), got {:?}",
         out
     );
     assert_eq!(r.sys.edges.len(), 1);
+    assert_eq!(r.sys.edges[0].src, c);
+    assert_eq!(r.sys.edges[0].tgt, p);
     assert!(r
         .sys
         .goals
@@ -855,6 +942,13 @@ fn insert_atom_less_creates_less_atom() {
     let ok = r.insert_atom(&less);
     assert!(ok);
     assert_eq!(r.sys.less_atoms.len(), 1);
+    // Endpoint ORDER is the whole content of a `Less` atom, and the reason
+    // tag is what the pretty-printer attributes the ordering to; a swapped
+    // pair or a defaulted reason would otherwise pass.
+    let la = &r.sys.less_atoms[0];
+    let node = |n: &str| tamarin_term::lterm::LVar::new(n, tamarin_term::lterm::LSort::Node, 0);
+    assert_eq!((la.smaller, la.larger), (node("i"), node("j")));
+    assert_eq!(la.reason, crate::constraint::constraints::Reason::Formula);
 }
 
 #[test]
@@ -873,7 +967,15 @@ fn insert_atom_last_sets_last_atom() {
     });
     let last = Atom::Last(v);
     assert!(r.insert_atom(&last));
-    assert!(r.sys.last_atom.is_some());
+    assert_eq!(
+        r.sys.last_atom,
+        Some(tamarin_term::lterm::LVar::new(
+            "i",
+            tamarin_term::lterm::LSort::Node,
+            0
+        )),
+        "`insertLast` stores the atom's own node id, not just some id"
+    );
 }
 
 #[test]
@@ -928,8 +1030,14 @@ fn solve_action_with_fresh_premise_adds_fresh_supplier() {
     assert_eq!(r.sys.edges.len(), 1, "expected 1 edge");
 }
 
+/// `while_changing` re-runs its step until a run leaves `self.changed`
+/// `Unchanged` — it resets that flag per iteration and DISCARDS the step's
+/// return value (HS threads the indicator through the monad; RS reads it off
+/// the `Reduction`).  The step below always REPORTS `Unchanged` while
+/// mutating for its first two calls, so a loop that believed the return
+/// value would stop after one iteration.
 #[test]
-fn while_changing_terminates() {
+fn while_changing_loops_on_the_reduction_flag_not_the_step_result() {
     let ctx = match ctx() {
         Some(c) => c,
         None => return,
@@ -943,12 +1051,20 @@ fn while_changing_terminates() {
                 tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Msg, count as u64);
             let f = crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]);
             red.insert_goal(Goal::Action(v, f));
-            ChangeIndicator::Changed
-        } else {
-            ChangeIndicator::Unchanged
         }
+        ChangeIndicator::Unchanged
     });
-    assert!(count >= 3);
+    assert_eq!(
+        count, 3,
+        "two mutating steps then one quiet step: the loop must run exactly \
+         three times and stop at the first quiet one"
+    );
+    assert_eq!(r.sys.goals.len(), 2);
+    assert_eq!(
+        r.changed,
+        ChangeIndicator::Unchanged,
+        "the loop exits with the flag the final quiet step left"
+    );
 }
 
 // =========================================================================
@@ -975,23 +1091,6 @@ fn default_case_name_is_one_indexed() {
         default_case_name(99),
         "case_100",
         "three-digit suffix renders without padding"
-    );
-}
-
-/// `default_case_name(i) != default_case_name(j)` for i != j —
-/// pairwise distinct.  This guards against accidentally returning
-/// "case_1" for every i (e.g. a hardcoded constant slipped in).
-#[test]
-fn default_case_name_is_injective() {
-    let n = 25usize;
-    let names: Vec<String> = (0..n).map(default_case_name).collect();
-    let unique: std::collections::BTreeSet<&String> = names.iter().collect();
-    assert_eq!(
-        unique.len(),
-        n,
-        "default_case_name must produce {} distinct names; got {}",
-        n,
-        unique.len()
     );
 }
 
@@ -1052,6 +1151,32 @@ fn insert_formula_negated_less_mark_false_does_not_push_solved() {
              (Reduction.hs:491).  Pushing unconditionally inflates \
              sSolvedFormulas (Yubikey slightly_weaker_invariant: 3 vs 4)."
     );
+    // …and the arm really RAN: it decomposes into `#i = #j ∨ #j < #i`,
+    // which lands as a two-alternative `Goal::Disj`.  Without this the
+    // negative assertion above would also pass if the CR-rule never fired.
+    assert_disj_decomposition(&r);
+}
+
+/// The `∀[].[Less #i #j].⊥` CR-rule's shared post-condition: a
+/// two-alternative `Goal::Disj` (`#i = #j ∨ #j < #i`) and a raised change
+/// signal, both independent of the `mark` flag.
+fn assert_disj_decomposition(r: &Reduction<'_>) {
+    assert_eq!(r.changed, ChangeIndicator::Changed);
+    let disjs: Vec<usize> = r
+        .sys
+        .goals
+        .iter()
+        .filter_map(|(g, _)| match g {
+            Goal::Disj(d) => Some(d.0.len()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        disjs,
+        vec![2],
+        "the negated-Less universal decomposes into exactly one \
+         two-alternative disjunction goal (`#i = #j ∨ #j < #i`)"
+    );
 }
 
 #[test]
@@ -1070,4 +1195,7 @@ fn insert_formula_negated_less_mark_true_pushes_solved() {
              negated-Less universal into solved_formulas — \
              HS `markAsSolved` fires (Reduction.hs:491)."
     );
+    // `mark` gates ONLY the solved_formulas push: the decomposition is
+    // identical on both paths.
+    assert_disj_decomposition(&r);
 }

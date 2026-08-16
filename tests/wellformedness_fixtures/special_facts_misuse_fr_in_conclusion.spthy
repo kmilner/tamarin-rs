@@ -1,4 +1,4 @@
-// Fixture: triggers `Special facts` / `Fact usage`.
+// Fixture: triggers `Special facts` and, as collateral, `Unbound variables`.
 // `Fr` may only appear in the LHS of a rule (premises). Putting it in
 // the RHS (conclusions) violates protocol condition 3.
 theory SpecialFactsFr

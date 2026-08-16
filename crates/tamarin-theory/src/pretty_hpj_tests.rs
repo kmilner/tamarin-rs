@@ -48,10 +48,10 @@ fn nest_indents_continuation() {
     let d = Doc::text("a").above(Doc::text("b").nest(2));
     assert_eq!(d.render(), "a b");
     // Forcing a newline requires `$+$` (above_g=true) or `sep` of
-    // multi-line content.
+    // multi-line content.  Neither item fits the width, so the vertical
+    // alternative wins and `b` lands back at column 0.
     let d = sep(vec![Doc::text("aaaaaa"), Doc::text("bbbbbb")]);
-    let out = d.render_with(5, 5);
-    assert!(out.contains('\n'), "got: {out}");
+    assert_eq!(d.render_with(5, 5), "aaaaaa\nbbbbbb");
 }
 
 #[test]
@@ -62,22 +62,22 @@ fn sep_fits_horizontal() {
 
 #[test]
 fn sep_breaks_when_too_wide() {
-    // Force the sep to wrap by exceeding ribbon width.
+    // The flat alternative is 81 columns, so the sep takes its vertical
+    // alternative; `nest 0` must stay a no-op on the wrapped line's column.
     let long = "x".repeat(40);
     let d = sep(vec![Doc::text(&long), Doc::text(&long)]).nest(0);
-    let out = d.render_with(50, 50);
-    assert!(out.contains('\n'), "expected wrap: {out}");
+    assert_eq!(d.render_with(50, 50), format!("{long}\n{long}"));
 }
 
 #[test]
 fn fsep_packs_greedy() {
+    // `fsep` fills: it keeps taking items while the NEXT one still fits, so at
+    // width 20 the first line stops after `w6` (adding `w7` would reach 23) —
+    // unlike `sep`, which would go all-vertical the moment the flat form
+    // overran.
     let words: Vec<Doc> = (0..10).map(|i| Doc::text(format!("w{}", i))).collect();
     let d = fsep(words);
-    let out = d.render_with(20, 20);
-    assert!(out.contains('\n'));
-    // First line should hold several words.
-    let first_line = out.split('\n').next().unwrap();
-    assert!(first_line.starts_with("w0 w1"), "got: {out}");
+    assert_eq!(d.render_with(20, 20), "w0 w1 w2 w3 w4 w5 w6\nw7 w8 w9");
 }
 
 #[test]
@@ -124,9 +124,14 @@ fn nested_binop_w_shrinks_with_depth() {
             Doc::text("y"),
         );
     }
-    let out = d.render_with(50, 50);
-    // Verify SOMETHING wrapped (we'd be at >50 cols otherwise).
-    assert!(out.contains('\n'));
+    // Byte-identical to `Text.PrettyPrint.HughesPJ` (pretty-1.1.3.6) at
+    // lineLength 50 / ribbon 50.  Each level's right operand drops one column
+    // further left as `w` shrinks: `y` at column 1, then at column 0.
+    assert_eq!(
+        d.render_with(50, 50),
+        "[[[xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] \u{2227} y] \u{2227}\n \
+         y] \u{2227}\ny"
+    );
 }
 
 #[test]
@@ -183,6 +188,9 @@ fn wireguard_aead_fsep_breaks_before_e() {
     //
     // We approximate the inner h(<pair>) as a long opaque text
     // and verify the fsep breaks before "'e',".
+    //
+    // Expected bytes verified against `Text.PrettyPrint.HughesPJ`
+    // (pretty-1.1.3.6) at lineLength 110 / ribbon 73.
     let arg1 = Doc::text("h(<h(<h(<h(<ci2, pekR, '1'>), z, '1'>), z.1, '1'>), ~psk, '3'>)");
     let arg2 = Doc::text("'e'");
     let arg3 = Doc::text(
@@ -195,13 +203,20 @@ fn wireguard_aead_fsep_breaks_before_e() {
     // Layout at col 10 (after leading "          ").
     let lead = Doc::text("          ");
     let d = lead.beside(full);
+    // The `text "aead("` BESIDE sets the fsep's indentation to column 15, so
+    // each wrapped argument lands there — `'e',` on its own line, the third
+    // argument on the next, and the closing `)` glued to it.
+    let ind = " ".repeat(15);
+    let expected = [
+        "          aead(h(<h(<h(<h(<ci2, pekR, '1'>), z, '1'>), z.1, '1'>), ~psk, '3'>),".to_string(),
+        format!("{ind}'e',"),
+        format!(
+            "{ind}h(<h(<hi1, pekR>), h(<h(<h(<h(<ci2, pekR, '1'>), z, '1'>), z.1, '1'>), ~psk, '2'>)>))"
+        ),
+    ]
+    .join("\n");
     let out = d.render();
-    // Verify there's a break before "'e',".
-    let lines: Vec<&str> = out.split('\n').collect();
-    assert!(lines.len() >= 3, "expected at least 3 lines, got: {out}");
-    // Find the line that starts with the 'e' (after leading whitespace).
-    let has_e_alone = lines.iter().any(|l| l.trim_start().starts_with("'e'"));
-    assert!(has_e_alone, "expected 'e' on its own line; got:\n{out}");
+    assert_eq!(out, expected, "got:\n{out}");
 }
 
 #[test]
@@ -323,12 +338,22 @@ fn dnp3_tuple_fill_keystatus_on_first_line() {
     let solve = Doc::text("solve(")
         .beside_sp(goal)
         .beside_sp(Doc::text(")"));
+    // Byte-identical to `Text.PrettyPrint.HughesPJ` (pretty-1.1.3.6) at
+    // lineLength 110 / ribbon 73.  Note the TRAILING SPACE closing the first
+    // line: the `", "` glued onto `keystatus` is what overran, so the fill
+    // breaks after it and the space survives into the output.
+    let expected = [
+        format!(
+            "{}solve( !KU( senc(<~CDSK_j_USR_O, MDSK_j_USR_O, KSQ.1, $USR, keystatus, ",
+            " ".repeat(16)
+        ),
+        format!("{}CD_j>,", " ".repeat(34)),
+        format!("{}~UK_i_USR_O)", " ".repeat(33)),
+        format!("{}) @ #vk.11 )", " ".repeat(23)),
+    ]
+    .join("\n");
     let out = solve.nest(16).render();
-    let first = out.split('\n').next().unwrap();
-    assert!(
-        first.trim_end().ends_with("keystatus,"),
-        "expected `keystatus,` on the first tuple line; got:\n{out}",
-    );
+    assert_eq!(out, expected, "got:\n{out}");
 }
 
 #[test]

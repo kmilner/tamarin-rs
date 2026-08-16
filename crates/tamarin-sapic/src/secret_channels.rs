@@ -155,29 +155,65 @@ mod tests {
         assert!(!out.contains(&c.var));
     }
 
+    /// The join takes the INTERSECTION of the two branches' surviving
+    /// candidates, and each branch is actually descended into.  Asserting the
+    /// exact surviving set (rather than emptiness) is what separates the
+    /// intersection from a union, from either branch alone, and from a join
+    /// that ignores its children and hands the incoming candidates straight
+    /// back — every one of those returns a set the equality below rejects.
     #[test]
     fn parallel_intersects_candidates() {
-        // (new a; 0) | (new b; 0) — neither side knows the other's
-        // candidates, so the intersection at the join is empty.
+        let c = slv("c", LSort::Fresh);
+        let e = slv("e", LSort::Fresh);
+        let d = slv("d", LSort::Fresh);
+        // `out(d, c)` — sending `c` disqualifies it on whichever side it sits.
+        let out_c = |body: AnnotatedProc| -> AnnotatedProc {
+            Process::Action(
+                SapicAction::ChOut {
+                    chan: Some(var_term(d.clone())),
+                    msg: var_term(c.clone()),
+                },
+                ProcessAnnotation::empty(),
+                Box::new(body),
+            )
+        };
+        // `new c; new e; (<l> | <r>)`.
+        let with_branches = |l: AnnotatedProc, r: AnnotatedProc| -> AnnotatedProc {
+            Process::Action(
+                SapicAction::New(c.clone()),
+                ProcessAnnotation::empty(),
+                Box::new(Process::Action(
+                    SapicAction::New(e.clone()),
+                    ProcessAnnotation::empty(),
+                    Box::new(Process::Comb(
+                        ProcessCombinator::Parallel,
+                        ProcessAnnotation::empty(),
+                        Box::new(l),
+                        Box::new(r),
+                    )),
+                )),
+            )
+        };
+        let only_e: BTreeSet<LVar> = [e.var].into_iter().collect();
+        // Disqualified on the left branch only...
+        assert_eq!(
+            get_secret_channels(&with_branches(out_c(null()), null()), BTreeSet::new()),
+            only_e
+        );
+        // ...and on the right branch only.
+        assert_eq!(
+            get_secret_channels(&with_branches(null(), out_c(null())), BTreeSet::new()),
+            only_e
+        );
+        // A binder under one branch does not escape the join.
         let a = slv("a", LSort::Fresh);
-        let b = slv("b", LSort::Fresh);
-        let left: AnnotatedProc = Process::Action(
-            SapicAction::New(a),
+        let new_a: AnnotatedProc = Process::Action(
+            SapicAction::New(a.clone()),
             ProcessAnnotation::empty(),
             Box::new(null()),
         );
-        let right: AnnotatedProc = Process::Action(
-            SapicAction::New(b),
-            ProcessAnnotation::empty(),
-            Box::new(null()),
-        );
-        let p: AnnotatedProc = Process::Comb(
-            ProcessCombinator::Parallel,
-            ProcessAnnotation::empty(),
-            Box::new(left),
-            Box::new(right),
-        );
-        let out = get_secret_channels(&p, BTreeSet::new());
-        assert!(out.is_empty());
+        let joined = get_secret_channels(&with_branches(new_a, null()), BTreeSet::new());
+        assert!(!joined.contains(&a.var));
+        assert!(joined.contains(&c.var) && joined.contains(&e.var));
     }
 }

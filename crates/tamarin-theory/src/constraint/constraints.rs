@@ -311,10 +311,13 @@ mod tests {
             LessAtom::new(node("i"), node("j"), Reason::Fresh),
             LessAtom::new(node("j"), node("k"), Reason::Formula),
         ];
-        let rel = get_less_rel(&atoms);
-        assert_eq!(rel.len(), 2);
-        assert_eq!(rel[0].0, node("i"));
-        assert_eq!(rel[1].1, node("k"));
+        // Whole projection: pair ORDER within an atom is the direction of
+        // the ordering edge, and atom order is the relation's iteration
+        // order — checking only two endpoints leaves both unpinned.
+        assert_eq!(
+            get_less_rel(&atoms),
+            vec![(node("i"), node("j")), (node("j"), node("k"))]
+        );
     }
 
     // HS's derived `Ord Goal` ranks by constructor first, in declaration
@@ -379,12 +382,63 @@ mod tests {
         );
     }
 
+    /// Each `is_*` predicate matches its OWN variant and nothing else — the
+    /// failure mode is a copy-pasted `matches!` arm naming the neighbouring
+    /// variant, which is exactly the bug HS ships in `isSubtermGoal`
+    /// (a copy of `isDisjGoal`, see the note on [`Goal::is_subterm`]).
     #[test]
     fn goal_kind_predicates() {
-        let v = LVar::new("k", LSort::Msg, 0);
-        let f = crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]);
-        let g = Goal::Action(v, f);
-        assert!(g.is_action());
-        assert!(!g.is_premise());
+        use crate::fact::{FactTag, LNFact};
+        use crate::guarded::gtrue;
+        use crate::rule::{ConcIdx, PremIdx};
+        use crate::tools::equation_store::SplitId;
+        use tamarin_term::term::lit;
+        use tamarin_term::vterm::Lit;
+
+        let i = node("i");
+        let t = lit(Lit::Var(LVar::new("x", LSort::Msg, 0)));
+        let out = LNFact::new(FactTag::Out, vec![t.clone()]);
+        // Column order: action, premise, chain, split, disj, subterm.
+        let cases = [
+            ("Action", Goal::Action(i, out.clone()), [1, 0, 0, 0, 0, 0]),
+            (
+                "Chain",
+                Goal::Chain((i, ConcIdx(0)), (i, PremIdx(0))),
+                [0, 0, 1, 0, 0, 0],
+            ),
+            (
+                "Premise",
+                Goal::Premise((i, PremIdx(0)), out.clone()),
+                [0, 1, 0, 0, 0, 0],
+            ),
+            ("Split", Goal::Split(SplitId(0)), [0, 0, 0, 1, 0, 0]),
+            (
+                "Disj",
+                Goal::Disj(Disj::new(vec![gtrue()])),
+                [0, 0, 0, 0, 1, 0],
+            ),
+            (
+                "Subterm",
+                Goal::Subterm((t.clone(), t.clone())),
+                [0, 0, 0, 0, 0, 1],
+            ),
+        ];
+        for (name, g, want) in &cases {
+            let got = [
+                g.is_action(),
+                g.is_premise(),
+                g.is_chain(),
+                g.is_split(),
+                g.is_disj(),
+                g.is_subterm(),
+            ];
+            assert_eq!(got, want.map(|b| b == 1), "{name}");
+        }
+        // `is_standard_action` is the one predicate carrying more than a
+        // variant match: `KU(_)` action goals are the solver's
+        // special-cased intruder-knowledge goals and are NOT standard.
+        assert!(Goal::Action(i, out).is_standard_action());
+        assert!(!Goal::Action(i, LNFact::new(FactTag::Ku, vec![t])).is_standard_action());
+        assert!(!Goal::Split(SplitId(0)).is_standard_action());
     }
 }

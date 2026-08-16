@@ -202,19 +202,33 @@ fn output_dir_writes_basename_underscore_analyzed() {
     let output_arg = format!("--Output={}", out_dir.to_str().unwrap());
     let code = run_cli(&[&output_arg, in_path.to_str().unwrap()]);
     assert_eq!(code, 0);
-    // Expected output: <out_dir>/single_recv_analyzed.spthy
+    // Expected output: <out_dir>/single_recv_analyzed.spthy, holding the
+    // theory itself — an empty `create()` also satisfies `exists()`.  `-O`
+    // shares `-o`'s `writeFileWithDirs` writer (Batch.hs:127), so the doc is
+    // verbatim: it opens on `theory SingleRecv` and ends on the bytes `end`
+    // with no trailing newline.
     let expected = out_dir.join("single_recv_analyzed.spthy");
-    assert!(expected.exists(), "expected output file at {:?}", expected);
+    let body = std::fs::read_to_string(&expected)
+        .unwrap_or_else(|e| panic!("expected output file at {expected:?}: {e}"));
+    assert!(body.starts_with("theory SingleRecv\n"), "{body}");
+    assert!(
+        body.ends_with("\nend"),
+        "-O file must end with `end`, no trailing newline; got tail: {:?}",
+        &body[body.len().saturating_sub(8)..]
+    );
 }
 
 #[test]
 fn no_input_files_is_a_plain_error() {
     // A flags-only argv reaches `run_batch`, which reports the missing
     // inputs as an ordinary `RunError` (rc 1 via main's error path).  HS
-    // reprinted the whole help here; canonical clap does not.
+    // reprinted the whole help here; canonical clap does not, which is why
+    // the message is asserted WHOLE — `run::tests::no_input_files_is_an_error`
+    // only asks that it contain the phrase, so a help document appended
+    // around it would slip past there.
     let args = args_from(&["--prove"]);
     let e = run(&args).unwrap_err();
-    assert!(e.to_string().contains("no input files given"), "{e}");
+    assert_eq!(e.to_string(), "no input files given");
 }
 
 #[test]
@@ -358,28 +372,27 @@ fn closed_stdout_pipe_exits_quietly() {
     );
 }
 
+/// `--diff` parses but is unported: the run stops with a `RunError` that
+/// names the flag AND says why, never a silent fall-through to the ordinary
+/// trace-mode analysis.  `run::tests::diff_flag_errors_cleanly` asks only
+/// that SOMETHING errored; the wording is pinned here.
 #[test]
 fn diff_flag_is_rejected_with_clear_message() {
     let in_path = fixture("single_recv.spthy");
     let args = args_from(&["--diff", in_path.to_str().unwrap()]);
-    let r = run(&args);
-    match r {
-        Err(e) => {
-            let msg = format!("{}", e);
-            assert!(
-                msg.contains("--diff") || msg.contains("diff"),
-                "error should mention --diff: {}",
-                msg
-            );
-        }
-        Ok(_) => panic!("expected --diff to error"),
-    }
+    let msg = run(&args).expect_err("--diff must error").to_string();
+    assert!(msg.contains("--diff"), "{msg}");
+    assert!(msg.contains("not yet ported"), "{msg}");
 }
 
+/// A non-integer `--bound` is a clap VALUE error.  The KIND is what makes
+/// this a pin: a bare `is_err()` would stay green if `--bound` were dropped
+/// from the CLI outright, since that argv then fails as `UnknownArgument`.
 #[test]
 fn invalid_int_value_for_bound_returns_parse_error() {
-    let r = parse_args(&["--bound=not-a-number".to_string()]);
-    assert!(r.is_err(), "expected parse error for non-int --bound");
+    let e = parse_args(&["--bound=not-a-number".to_string()])
+        .expect_err("non-int --bound must not parse");
+    assert_eq!(e.kind(), clap::error::ErrorKind::ValueValidation, "{e}");
 }
 
 /// The documented loud delta for glued short values: `-b10` (HS: bound 10)

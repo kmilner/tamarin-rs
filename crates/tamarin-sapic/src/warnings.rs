@@ -143,23 +143,47 @@ mod tests {
         assert!(check_wellformedness(&p).is_empty());
     }
 
+    /// Every branch of HS `Show (SapicLVar)` / `Show LVar`
+    /// (Theory/Sapic/Term.hs:108-110, Term/LTerm.hs:526-533), since the result
+    /// is spliced verbatim into the `Variable bound twice: …` report body.
     #[test]
-    fn single_binder_is_fine() {
-        // `new x` — no capture.
-        let p = new_action(msg_var("x"), null());
-        assert!(check_wellformedness(&p).is_empty());
-    }
-
-    #[test]
-    fn fresh_sorted_var_shows_with_tilde() {
-        // A fresh-sorted SapicLVar prints with the `~` prefix (HS Show LVar).
-        let v = SapicLVar::untyped(LVar::new("k", LSort::Fresh, 0));
-        assert_eq!(show_sapic_lvar(&v), "~k");
-    }
-
-    #[test]
-    fn typed_var_shows_with_type_suffix() {
-        let v = SapicLVar::new(LVar::new("m", LSort::Msg, 0), Some("bitstring".into()));
-        assert_eq!(show_sapic_lvar(&v), "m:bitstring");
+    fn show_sapic_lvar_matches_hs_show() {
+        let show = |name: &str, sort, idx, ty: Option<&str>| {
+            show_sapic_lvar(&SapicLVar::new(
+                LVar::new(name, sort, idx),
+                ty.map(str::to_string),
+            ))
+        };
+        for (label, got, want) in [
+            (
+                "msg sort has no prefix",
+                show("x", LSort::Msg, 0, None),
+                "x",
+            ),
+            ("fresh prefix", show("k", LSort::Fresh, 0, None), "~k"),
+            ("pub prefix", show("a", LSort::Pub, 0, None), "$a"),
+            ("node prefix", show("i", LSort::Node, 0, None), "#i"),
+            ("nat prefix", show("n", LSort::Nat, 0, None), "%n"),
+            // `i /= 0` appends `.i`; an EMPTY name renders the index alone.
+            ("nonzero index", show("x", LSort::Msg, 2, None), "x.2"),
+            ("indexed fresh", show("k", LSort::Fresh, 1, None), "~k.1"),
+            (
+                "empty name is the index",
+                show("", LSort::Msg, 7, None),
+                "7",
+            ),
+            (
+                "type suffix",
+                show("m", LSort::Msg, 0, Some("bitstring")),
+                "m:bitstring",
+            ),
+            (
+                "prefix, index and type together",
+                show("m", LSort::Fresh, 3, Some("lol")),
+                "~m.3:lol",
+            ),
+        ] {
+            assert_eq!(got, want, "{label}");
+        }
     }
 }

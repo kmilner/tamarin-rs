@@ -63,23 +63,61 @@ fn canonicalise_strips_wrap_spaces_inside_brackets() {
     );
 }
 
-/// A Sorry-only skeleton on an empty system should be a degenerate
-/// replay → equivalent to running the auto-prover directly.
+/// An otherwise-empty system carrying one solved formula: goal-free and
+/// contradiction-free, but PAST the initial state, so `is_finished` runs and
+/// the auto-prover closes it as Solved.  `System::empty()` itself is still in
+/// the initial state and only ever yields `Sorry`, which would make every
+/// "the auto-prover ran" assertion below hold vacuously.
+fn past_initial_system() -> System {
+    let mut sys = System::empty();
+    sys.solved_formulas_mut()
+        .push(std::sync::Arc::new(crate::guarded::gtrue()));
+    sys
+}
+
+/// The `by sorry` leaf is where the two replay entry points diverge, and the
+/// divergence is the whole point of having both:
+/// `replace_sorry_prove` (HS `replaceSorryProver $ runAutoProver`, the
+/// `--prove`-target path) must hand the leaf's system to the auto-prover, so
+/// its result is exactly `run_proof_search`'s; `check_and_extend` (HS
+/// `checkAndExtendProver (sorryProver Nothing)`, the non-target path) must
+/// NOT prove and must leave an ANNOTATED `Sorry` behind — an annotated one,
+/// so the lemma reprints as plain `by sorry` with no `/* unannotated */`.
+///
+/// [`past_initial_system`] is the degenerate case the auto-prover closes as
+/// Solved, which is what keeps the equality below from holding vacuously
+/// between two `Sorry`s.
 #[test]
-fn sorry_leaf_runs_auto_prover() {
+fn sorry_leaf_runs_auto_prover_only_for_prove_targets() {
     let h = match maude() {
         Some(m) => m,
         None => return,
     };
     let ctx = ProofContext::new(h, Vec::new());
-    let sys = System::empty();
     // Skeleton = `by sorry`.
     let skel = ParsedProofTree {
         method: ParsedMethod::Sorry,
         cases: Vec::new(),
     };
-    // Must terminate; the status is indeterminate on an empty system.
-    let _ = replace_sorry_prove(&ctx, sys, &skel, 50);
+    let replayed = replace_sorry_prove(&ctx, past_initial_system(), &skel, 50);
+    let direct = run_proof_search(&ctx, past_initial_system(), 50);
+    assert_eq!(replayed.status, direct.status);
+    assert_eq!(replayed.method, direct.method);
+    assert_eq!(
+        replayed.status,
+        NodeStatus::Solved,
+        "the auto-prover closes this system, so the equality above is not a \
+         Sorry-equals-Sorry tautology"
+    );
+
+    let kept = check_and_extend(&ctx, past_initial_system(), &skel, 50);
+    assert_eq!(
+        kept.status,
+        NodeStatus::Sorry,
+        "a non-target lemma's stored sorry must survive unproved"
+    );
+    assert!(matches!(kept.method, ProofMethod::Sorry(None)));
+    assert!(kept.annotated, "a stored sorry leaf stays annotated");
 }
 
 /// A `by contradiction` leaf on a system with no contradictions
@@ -91,9 +129,9 @@ fn sorry_leaf_runs_auto_prover() {
 /// (or emits Sorry honestly).  Crucially, the walker must NOT
 /// fabricate a Contradictory status.
 ///
-/// On an empty system (no goals, no contradictions) the auto-prover
-/// recognises the system as trivially Solved; the load-bearing assertion
-/// is `status != Contradictory`.
+/// On a goal-free, contradiction-free system the auto-prover recognises the
+/// system as trivially Solved; the load-bearing assertion is
+/// `status != Contradictory`.
 #[test]
 fn contradiction_leaf_without_contradiction_falls_back_to_auto() {
     let h = match maude() {
@@ -101,10 +139,7 @@ fn contradiction_leaf_without_contradiction_falls_back_to_auto() {
         None => return,
     };
     let ctx = ProofContext::new(h, Vec::new());
-    let mut sys = System::empty();
-    // Force out of initial state so is_finished can run.
-    sys.solved_formulas_mut()
-        .push(std::sync::Arc::new(crate::guarded::gtrue()));
+    let sys = past_initial_system();
     let skel = ParsedProofTree {
         method: ParsedMethod::Contradiction,
         cases: Vec::new(),
@@ -143,7 +178,7 @@ fn match_action_goal_by_name_arity() {
         time_idx: 0,
     };
     let matched = match_goal(&spec, &sys).expect("should match");
-    assert!(matches!(matched, Goal::Action(_, _)));
+    assert_eq!(matched, goal);
 }
 
 /// match_goal returns None when no goal matches the fact name.
@@ -358,28 +393,37 @@ fn match_chain_goal_by_var_and_idx() {
 
 /// Subterm matcher — open Subterm goals are matched by canonical
 /// pretty-printed-text equality on both sides.
+///
+/// TWO open Subterm goals, so the unique-Subterm fallback below is
+/// disabled: only the text comparison can pick a side, and a spec whose
+/// text matches neither must miss rather than guess.
 #[test]
 fn match_subterm_goal_by_pretty_text() {
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    // small = x:msg, big = y:msg (two distinct vars).
-    let small = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 0)));
-    let big = Term::Lit(Lit::Var(LVar::new("y", LSort::Msg, 0)));
-    let goal = Goal::Subterm((small.clone(), big.clone()));
+    let v = |n: &str| -> tamarin_term::lterm::LNTerm {
+        Term::Lit(Lit::Var(LVar::new(n, LSort::Msg, 0)))
+    };
+    let g1 = Goal::Subterm((v("x"), v("y")));
+    let g2 = Goal::Subterm((v("a"), v("b")));
     let mut sys = System::empty();
-    sys.goals_mut().push((goal.clone(), Default::default()));
+    sys.goals_mut().push((g1.clone(), Default::default()));
+    sys.goals_mut().push((g2.clone(), Default::default()));
     // Skeleton-parsed small_raw / big_raw must canonicalise to the
     // same text as `pretty_lnterm(small)` / `pretty_lnterm(big)`.
     use tamarin_term::pretty::pretty_lnterm;
-    let small_s = pretty_lnterm(&small);
-    let big_s = pretty_lnterm(&big);
-    let spec = GoalSpec::Subterm {
-        small_raw: small_s,
-        big_raw: big_s,
+    let spec = |small: &str, big: &str| GoalSpec::Subterm {
+        small_raw: pretty_lnterm(&v(small)),
+        big_raw: pretty_lnterm(&v(big)),
     };
-    let matched = match_goal(&spec, &sys).expect("should match");
-    assert_eq!(matched, goal);
+    assert_eq!(match_goal(&spec("x", "y"), &sys).expect("should match"), g1);
+    assert_eq!(match_goal(&spec("a", "b"), &sys).expect("should match"), g2);
+    // BOTH sides must agree: the halves of two different goals never
+    // combine into a match.
+    assert!(match_goal(&spec("x", "b"), &sys).is_none());
+    // No text match and no unique fallback (two Subterm goals) → miss.
+    assert!(match_goal(&spec("p", "q"), &sys).is_none());
 }
 
 /// Subterm matcher fallback — when skeleton text differs from

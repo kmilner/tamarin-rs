@@ -91,34 +91,6 @@ fn lvar_ord_btreemap_iteration_is_idx_first() {
 // -------------------------------------------------------------------
 
 #[test]
-fn factored_unify_orients_var_var_with_larger_idx_as_key() {
-    // Set up the exact pattern from foo_eligibility's saturate:
-    // unify `t.1 = e.10` (both Msg, t.1 is "stable pattern var",
-    // e.10 is "rule-internal").  Haskell convention: e.10 becomes
-    // KEY, t.1 stays as value.
-    let stable = msg_var("t", 1);
-    let rule_internal = msg_var("e", 10);
-    let (subst, residuals) =
-        unify_lnterm_factored(vec![Equal::new(stable.clone(), rule_internal.clone())])
-            .expect("non-AC same-sort vars must unify");
-    assert!(residuals.is_empty(), "no AC stuff, no residuals");
-    // Larger-idx (e.10) is the key.
-    let e_10 = *as_var(&rule_internal);
-    let t_1 = *as_var(&stable);
-    assert!(
-        subst.image_of(&e_10).is_some(),
-        "Haskell convention: larger-idx (e.10) must be a KEY"
-    );
-    assert!(
-        subst.image_of(&t_1).is_none(),
-        "Haskell convention: smaller-idx (t.1, stable) must NOT be a key — \
-                 otherwise `restrict stableVars` would keep it and downstream \
-                 applySource would see a baked-in binding instead of an \
-                 unbound stable var"
-    );
-}
-
-#[test]
 fn factored_unify_same_sort_order_independent_of_input_order() {
     // The orientation depends on Ord LVar, not the order of LHS/RHS
     // in the equation.  Swap and confirm same result.
@@ -395,11 +367,15 @@ fn old_and_factored_unify_agree_on_same_sort_var_var_orientation() {
     // Both paths follow Haskell `unifyRaw` (Unification.hs:273-281, see line 276):
     //   `if vl < vr then elim vr l else elim vl r`
     // i.e. LARGER-idx becomes KEY, smaller-idx becomes value.
+    // The exact pattern from foo_eligibility's saturate: `t.1` is a stable
+    // pattern var, `e.10` is rule-internal.
     let small = msg_var("t", 1); // small idx, "stable"
     let large = msg_var("e", 10); // large idx
 
     let old = unify_lnterm_no_ac(vec![Equal::new(small.clone(), large.clone())]).unwrap();
-    let (new_, _) = unify_lnterm_factored(vec![Equal::new(small.clone(), large.clone())]).unwrap();
+    let (new_, residuals) =
+        unify_lnterm_factored(vec![Equal::new(small.clone(), large.clone())]).unwrap();
+    assert!(residuals.is_empty(), "no AC stuff, no residuals");
 
     let small_v = *as_var(&small);
     let large_v = *as_var(&large);
@@ -414,7 +390,13 @@ fn old_and_factored_unify_agree_on_same_sort_var_var_orientation() {
         new_.image_of(&large_v).is_some(),
         "`unify_raw_factored`: larger-idx (e.10) is the key"
     );
-    assert!(new_.image_of(&small_v).is_none());
+    assert!(
+        new_.image_of(&small_v).is_none(),
+        "smaller-idx (t.1, stable) must NOT be a key — otherwise \
+                    `restrict stableVars` would keep it and downstream \
+                    applySource would see a baked-in binding instead of an \
+                    unbound stable var"
+    );
 
     assert_eq!(
         old, new_,

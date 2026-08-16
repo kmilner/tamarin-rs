@@ -87,12 +87,13 @@ fn forall_with_action() {
         vec![v("ni", p::SortHint::Untagged), v("i", p::SortHint::Node)],
         Box::new(body),
     );
-    let s = pretty_formula(&f);
-    assert!(s.contains("\u{2200}"));
-    // HS-faithful: `Name( args )` with internal spaces.
-    assert!(s.contains("F( ni )"));
-    assert!(s.contains("@ #i"));
-    assert!(s.contains("\u{21D2}"));
+    // HS-faithful: `Name( args )` with internal spaces, and `ppImp`
+    // parenthesises BOTH sides of the `⇒`.  Bytes pinned to the oracle
+    // (Git revision ef3f0468).
+    assert_eq!(
+        pretty_formula(&f),
+        "\u{2200} ni #i. (F( ni ) @ #i) \u{21D2} (\u{22A5})"
+    );
 }
 
 #[test]
@@ -199,6 +200,10 @@ fn user_ac_symbol_nullary_renders_bare_name() {
     assert_eq!(term_to_doc(&ast, &[]).render(), "add");
 }
 
+/// HS `prettyTerm` renders an AC operand list with the operator between the
+/// arguments and the whole application in parentheses (Term/Term.hs:305-309),
+/// so `a XOR b` is `(a⊕b)` — no spaces, outer parens kept.  Bytes pinned to
+/// the oracle (Git revision ef3f0468).
 #[test]
 fn binop_xor() {
     let t = p::Term::BinOp(
@@ -206,8 +211,7 @@ fn binop_xor() {
         Box::new(p::Term::Var(v("a", p::SortHint::Untagged))),
         Box::new(p::Term::Var(v("b", p::SortHint::Untagged))),
     );
-    let s = pretty_term(&t);
-    assert!(s.contains("\u{2295}"));
+    assert_eq!(pretty_term(&t), "(a\u{2295}b)");
 }
 
 #[test]
@@ -223,9 +227,9 @@ fn guarded_negation_shortcut() {
         .into(),
         body: std::sync::Arc::new(Guarded::Disj(vec![].into())),
     };
-    let s = pretty_guarded(&g);
-    assert!(s.starts_with("\u{00AC}"));
-    assert!(s.contains("#i < #j"));
+    // Bytes pinned to the oracle (Git revision ef3f0468): the binder-free
+    // `∀`-over-⊥ prints as the negated guard alone, never as an `⇒ ⊥`.
+    assert_eq!(pretty_guarded(&g), "\u{00AC}(#i < #j)");
 }
 
 /// Build the parser Term `<'1', g1> ++ <'2', g2> ++ <'3', g3>` where the

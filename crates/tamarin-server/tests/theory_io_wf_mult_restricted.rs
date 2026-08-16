@@ -20,29 +20,18 @@
 //!
 //! The expected bytes are the pinned oracle's (Git revision ef3f0468) wf block
 //! for `tests/fixtures/mult_restricted_pair.spthy`.
-//!
-//! Maude-backed: skipped when no Maude binary is available.
 
 use std::path::PathBuf;
 
 use tamarin_server::theory_io;
 
-/// Locate the Maude binary (`MAUDE_PATH` env override, else the common
-/// install paths).  `None` skips the Maude-backed test below.
-fn maude_bin_path() -> Option<String> {
-    std::env::var("MAUDE_PATH").ok().or_else(|| {
-        for c in [
-            "/home/linuxbrew/.linuxbrew/bin/maude",
-            "/usr/local/bin/maude",
-            "/usr/bin/maude",
-        ] {
-            if std::path::Path::new(c).exists() {
-                return Some(c.to_string());
-            }
-        }
-        None
-    })
-}
+/// A path that cannot spawn: the report pinned below comes from the STATIC
+/// wellformedness pass, which the load runs before it needs a Maude handle, so
+/// the best-effort Maude block is skipped and the test is hermetic.  (Verified
+/// by running this pin under a real Maude: same bytes.)  Nothing here is
+/// skipped for want of a binary — a skip would report green having compared
+/// nothing.
+const NO_MAUDE: &str = "/nonexistent/maude-for-test";
 
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -79,16 +68,12 @@ const EXPECTED_WF_BLOCK: &[&str] = &[
 
 #[test]
 fn web_load_reports_multiplication_restriction_unescaped_in_the_banner() {
-    let Some(maude) = maude_bin_path() else {
-        eprintln!("no maude binary found; skipping");
-        return;
-    };
     // The process-wide setup `serve` applies, so every renderer runs at the
     // web width the HTTP responses use.
     tamarin_server::init_process_globals();
     // `derivcheck_timeout = 0` skips the dynamic derivation checks, matching
     // the `--derivcheck-timeout=0` oracle probe.
-    let entry = theory_io::load_from_path(&fixture(), &maude, 0).expect("fixture loads");
+    let entry = theory_io::load_from_path(&fixture(), NO_MAUDE, 0).expect("fixture loads");
 
     assert!(
         entry

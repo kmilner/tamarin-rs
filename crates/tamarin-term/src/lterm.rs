@@ -841,6 +841,9 @@ mod tests {
         assert_eq!(sort_of_name(&Name::new(NameTag::Pub, "p")), LSort::Pub);
         assert_eq!(sort_of_name(&Name::new(NameTag::Node, "n")), LSort::Node);
         assert_eq!(sort_of_name(&Name::new(NameTag::Nat, "n")), LSort::Nat);
+        // The web abbreviation tag has no sort of its own and falls back to
+        // Msg (LTerm.hs:266) — the one tag whose sort is not its namesake.
+        assert_eq!(sort_of_name(&Name::new(NameTag::Abbrev, "a")), LSort::Msg);
     }
 
     #[test]
@@ -864,33 +867,52 @@ mod tests {
     fn flattened_ac_extracts_terms() {
         use crate::function_symbols::AcSym;
         use crate::term::f_app_ac;
-        let inner: LNTerm = f_app_ac(AcSym::Mult, vec![pub_term("a"), pub_term("b")]);
-        let outer: LNTerm = f_app_ac(AcSym::Mult, vec![inner, pub_term("c")]);
-        let flat = flattened_ac_terms(AcSym::Mult, &outer);
-        assert_eq!(flat.len(), 3);
+        let a: LNTerm = pub_term("a");
+        let b: LNTerm = pub_term("b");
+        let c: LNTerm = pub_term("c");
+        let inner: LNTerm = f_app_ac(AcSym::Mult, vec![a.clone(), b.clone()]);
+        let outer: LNTerm = f_app_ac(AcSym::Mult, vec![inner, c.clone()]);
+        // Children in the (AC-sorted) order they sit in, not merely three of
+        // them: callers index this list positionally.
+        assert_eq!(flattened_ac_terms(AcSym::Mult, &outer), vec![&a, &b, &c]);
+        // A different AC operator does not flatten: the whole term comes back
+        // as the single child.
+        assert_eq!(flattened_ac_terms(AcSym::Xor, &outer), vec![&outer]);
     }
 
     #[test]
     fn fresh_to_const_replaces_only_fresh_vars() {
         let v_fresh: LNTerm = var_term(LVar::new("k", LSort::Fresh, 0));
         let v_pub: LNTerm = var_term(LVar::new("p", LSort::Pub, 0));
-        let t: LNTerm = f_app_no_eq(pair_sym(), vec![v_fresh.clone(), v_pub.clone()]);
+        let t: LNTerm = f_app_no_eq(pair_sym(), vec![v_fresh, v_pub.clone()]);
         let r = fresh_to_const(t);
         if let Term::App(_, ts) = &r {
-            // First arg should now be a Con.
-            assert!(matches!(ts[0], Term::Lit(Lit::Con(_))));
-            // Second arg (pub variable) should still be a Var.
-            assert!(matches!(ts[1], Term::Lit(Lit::Var(_))));
+            // The fresh variable becomes the constant `variableToConst`
+            // builds, whose id spells the sort as Haskell's `show LSort` does
+            // (LTerm.hs:436-438) — `LSortFresh`, not the bare `Fresh`.
+            assert_eq!(
+                ts[0],
+                const_term(Name::new(NameTag::Fresh, "constVar_LSortFresh_0_k"))
+            );
+            // The pub variable is left alone.
+            assert_eq!(ts[1], v_pub);
         } else {
             panic!();
         }
+        // Same spelling rule for the other sorts, with the index between sort
+        // and name.
+        assert_eq!(
+            variable_to_const(&LVar::new("A", LSort::Pub, 7)),
+            const_term(Name::new(NameTag::Pub, "constVar_LSortPub_7_A"))
+        );
     }
 
     #[test]
     fn nat_to_fresh_vars_swaps_sort() {
         let t: LNTerm = var_term(LVar::new("n", LSort::Nat, 3));
         let r = nat_to_fresh_vars(t);
-        assert_eq!(get_var(&r).unwrap().sort, LSort::Fresh);
+        // Only the sort moves: the name hint and index are carried over.
+        assert_eq!(get_var(&r), Some(&LVar::new("n", LSort::Fresh, 3)));
     }
 
     #[test]

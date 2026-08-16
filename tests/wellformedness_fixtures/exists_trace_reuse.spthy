@@ -1,6 +1,6 @@
 // Fixture: triggers `Lemma annotations`.
-// Same as `lemma_attribute_conflict.spthy` but kept under a clearer
-// name that matches the actual check (reuse on exists-trace).
+// A `[reuse]` annotation on an `exists-trace` lemma: reuse only makes
+// sense for all-traces lemmas.
 theory ExistsTraceReuse
 begin
 

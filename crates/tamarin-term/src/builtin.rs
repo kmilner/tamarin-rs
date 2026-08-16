@@ -558,36 +558,208 @@ mod tests {
     use super::*;
     use crate::function_symbols::FunSym;
 
-    #[test]
-    fn dh_rule_count_matches_haskell() {
-        // Haskell's S.fromList of 13 unique rules.
-        assert_eq!(dh_rules().len(), 13);
+    /// Render a rule set the way its equations reach Maude: one `lhs = rhs`
+    /// line per rule, in `BTreeSet` (= HS `Set`) iteration order, which is the
+    /// order `MaudeSig::rrules` hands them to the module builder.
+    fn rendered(rules: &BTreeSet<RRule<LNTerm>>) -> Vec<String> {
+        rules
+            .iter()
+            .map(|r| {
+                format!(
+                    "{} = {}",
+                    crate::pretty::pretty_lnterm(&r.lhs),
+                    crate::pretty::pretty_lnterm(&r.rhs)
+                )
+            })
+            .collect()
     }
 
+    /// `dhRules` (Rules.hs:47-61): Lankford's DH presentation, 13 rules.  A
+    /// count alone leaves every symbol, argument and nesting free — one
+    /// mistyped `inv`/`*` still gives 13 rules and a silently different
+    /// equational theory.  Each line below is the corresponding HS rule with
+    /// its AC arguments in canonical (`fAppAC`-sorted, flattened) order.
     #[test]
-    fn xor_rule_count() {
-        assert_eq!(xor_rules().len(), 3);
+    fn dh_rules_match_haskell() {
+        assert_eq!(
+            rendered(&dh_rules()),
+            [
+                "x.1^one = x.1",
+                "DH_neutral^x.1 = DH_neutral",
+                "x.1^x.2^x.3 = x.1^(x.2*x.3)",
+                "inv(inv(x.1)) = x.1",
+                "inv(one) = one",
+                "inv((x.2*inv(x.1))) = (x.1*inv(x.2))",
+                "(x.1*x.2*inv(x.1)) = x.2",
+                "(x.1*inv(x.1)) = one",
+                "(x.1*one) = x.1",
+                "(x.2*x.3*inv((x.1*x.2))) = (x.3*inv(x.1))",
+                "(x.2*inv((x.1*x.2))) = inv(x.1)",
+                "(x.3*inv(x.1)*inv(x.2)) = (x.3*inv((x.1*x.2)))",
+                "(inv(x.1)*inv(x.2)) = inv((x.1*x.2))",
+            ]
+        );
     }
 
+    /// `xorRules` (Rules.hs:91-95).  `x.1⊕x.1⊕x.2 = x.2` is the flattened
+    /// three-argument form of HS's `x1 +: x1 +: x2`: `fAppAC` flattens the
+    /// nested `+:` at construction, and `x1 +: x1` keeps both copies.
     #[test]
-    fn bp_rule_count() {
-        assert_eq!(bp_rules().len(), 3);
+    fn xor_rules_match_haskell() {
+        assert_eq!(
+            rendered(&xor_rules()),
+            [
+                "(x.1⊕x.1) = zero",
+                "(x.1⊕x.1⊕x.2) = x.2",
+                "(x.1⊕zero) = x.1",
+            ]
+        );
     }
 
+    /// `bpRules` (Rules.hs:71-78): the bilinear-pairing extension of DH.
     #[test]
-    fn convenience_constructors_compose() {
-        let m: LNTerm = mult(msg_var("x", 0), msg_var("y", 0));
-        if let Term::App(FunSym::Ac(AcSym::Mult), ts) = m {
-            assert_eq!(ts.len(), 2);
-        } else {
-            panic!();
+    fn bp_rules_match_haskell() {
+        assert_eq!(
+            rendered(&bp_rules()),
+            [
+                "pmult(x.3, pmult(x.2, x.1)) = pmult((x.2*x.3), x.1)",
+                "pmult(one, x.1) = x.1",
+                "em(x.1, pmult(x.2, x.3)) = em(x.1, x.3)^x.2",
+            ]
+        );
+    }
+
+    /// `msetRules` (Rules.hs:87) is empty: multisets are pure AC, with no
+    /// rewrite rules of their own.
+    #[test]
+    fn mset_rules_are_empty() {
+        assert!(mset_rules().is_empty());
+    }
+
+    /// Each AC convenience wrapper (Convenience.hs `(*:)`/`(+:)`/`(++:)`)
+    /// carries its OWN symbol and routes through the `f_app_ac` smart
+    /// constructor, so a nested application of the same operator flattens and
+    /// the arguments come back in canonical order.
+    #[test]
+    fn convenience_ac_constructors_carry_their_symbol_and_normalise() {
+        let a = msg_var("a", 0);
+        let b = msg_var("b", 0);
+        let c = msg_var("c", 0);
+        let cases: [(LNTerm, AcSym); 4] = [
+            (mult(mult(b.clone(), a.clone()), c.clone()), AcSym::Mult),
+            (union(union(b.clone(), a.clone()), c.clone()), AcSym::Union),
+            (xor(xor(b.clone(), a.clone()), c.clone()), AcSym::Xor),
+            (
+                nat_plus(nat_plus(b.clone(), a.clone()), c.clone()),
+                AcSym::NatPlus,
+            ),
+        ];
+        for (t, want) in cases {
+            match t {
+                Term::App(FunSym::Ac(sym), ts) => {
+                    assert_eq!(sym, want);
+                    assert_eq!(
+                        &ts[..],
+                        &[a.clone(), b.clone(), c.clone()][..],
+                        "{want:?} arguments must be flattened and sorted"
+                    );
+                }
+                other => panic!("expected an AC application, got {other:?}"),
+            }
         }
     }
 
+    /// The builtin signatures are the `NoEqSym` tuples of
+    /// `Term.Builtin.Signature` (Term/Builtin/Signature.hs:19-44), grouped at
+    /// Term/Builtin/Signature.hs:61-97.  Each symbol's arity, privacy and
+    /// constructability reaches output (the `functions:` block) and decides
+    /// which intruder rules are generated, so pin all three per symbol —
+    /// membership alone lets a `Public`/`Constructor` flip through, and the
+    /// `dest-*` sigs differ from their plain siblings in nothing else.
     #[test]
-    fn signatures_have_right_arities() {
-        assert!(asym_enc_fun_sig().contains(&aenc_sym()));
-        assert!(asym_enc_fun_sig().contains(&pk_sym()));
-        assert_eq!(verify_sym().arity, 3);
+    fn signatures_match_haskell() {
+        fn rendered(sig: &NoEqFunSig) -> Vec<String> {
+            sig.iter()
+                .map(|s| {
+                    format!(
+                        "{}/{} {} {}",
+                        String::from_utf8_lossy(s.name),
+                        s.arity,
+                        match s.privacy {
+                            Privacy::Public => "public",
+                            Privacy::Private => "private",
+                        },
+                        match s.constructability {
+                            Constructability::Constructor => "ctor",
+                            Constructability::Destructor => "dest",
+                        },
+                    )
+                })
+                .collect()
+        }
+        assert_eq!(
+            rendered(&sym_enc_fun_sig()),
+            ["sdec/2 public ctor", "senc/2 public ctor"]
+        );
+        assert_eq!(
+            rendered(&asym_enc_fun_sig()),
+            [
+                "adec/2 public ctor",
+                "aenc/2 public ctor",
+                "pk/1 public ctor"
+            ]
+        );
+        assert_eq!(
+            rendered(&signature_fun_sig()),
+            [
+                "pk/1 public ctor",
+                "sign/2 public ctor",
+                "true/0 public ctor",
+                "verify/3 public ctor",
+            ]
+        );
+        assert_eq!(
+            rendered(&reveal_signature_fun_sig()),
+            [
+                "getMessage/1 public ctor",
+                "pk/1 public ctor",
+                "revealSign/2 public ctor",
+                "revealVerify/3 public ctor",
+                "true/0 public ctor",
+            ]
+        );
+        assert_eq!(
+            rendered(&location_report_fun_sig()),
+            [
+                "check_rep/2 public dest",
+                "get_rep/1 public dest",
+                "rep/2 private ctor",
+                "report/1 public ctor",
+            ]
+        );
+        assert_eq!(rendered(&hash_fun_sig()), ["h/1 public ctor"]);
+        // The `dest-*` variants differ from the plain ones ONLY in the
+        // constructability of the reducing symbol.
+        assert_eq!(
+            rendered(&sym_enc_fun_dest_sig()),
+            ["sdec/2 public dest", "senc/2 public ctor"]
+        );
+        assert_eq!(
+            rendered(&asym_enc_fun_dest_sig()),
+            [
+                "adec/2 public dest",
+                "aenc/2 public ctor",
+                "pk/1 public ctor"
+            ]
+        );
+        assert_eq!(
+            rendered(&signature_fun_dest_sig()),
+            [
+                "pk/1 public ctor",
+                "sign/2 public ctor",
+                "true/0 public ctor",
+                "verify/3 public dest",
+            ]
+        );
     }
 }

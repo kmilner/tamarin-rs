@@ -277,22 +277,37 @@ mod tests {
         ProtoFormula::lfalse()
     }
 
+    /// Each builder tags the node with ITS OWN connective / quantifier — the
+    /// four `Conn` builders are otherwise identical, and so are the two
+    /// `Qua` ones, so a copy-paste slip between them is invisible in the
+    /// shape alone.
     #[test]
-    fn build_a_simple_formula() {
-        // ∀ x:msg. true ∧ ¬false
-        let body: LNFormula = lftrue().and(lffalse().not());
-        let f: LNFormula = ProtoFormula::for_all(("x".into(), LSort::Msg), body);
-        if let ProtoFormula::Qua(q, _, _) = f {
-            assert_eq!(q, Quantifier::All);
-        } else {
-            panic!();
+    fn builders_tag_their_own_connective_and_quantifier() {
+        let hint = || ("x".to_string(), LSort::Msg);
+        let cases: [(LNFormula, Connective); 4] = [
+            (lftrue().and(lffalse()), Connective::And),
+            (lftrue().or(lffalse()), Connective::Or),
+            (lftrue().implies(lffalse()), Connective::Imp),
+            (lftrue().iff(lffalse()), Connective::Iff),
+        ];
+        for (f, want) in cases {
+            match f {
+                ProtoFormula::Conn(c, l, r) => {
+                    assert_eq!(c, want);
+                    assert_eq!(
+                        (*l, *r),
+                        (lftrue(), lffalse()),
+                        "operand order for {want:?}"
+                    );
+                }
+                other => panic!("expected Conn({want:?}), got {other:?}"),
+            }
         }
-    }
-
-    #[test]
-    fn implies_constructs_imp() {
-        let f: LNFormula = lftrue().implies(lffalse());
-        assert!(matches!(f, ProtoFormula::Conn(Connective::Imp, _, _)));
+        assert!(matches!(lftrue().not(), ProtoFormula::Not(b) if *b == lftrue()));
+        let all: LNFormula = ProtoFormula::for_all(hint(), lftrue());
+        assert!(matches!(all, ProtoFormula::Qua(Quantifier::All, h, _) if h == hint()));
+        let ex: LNFormula = ProtoFormula::exists(hint(), lftrue());
+        assert!(matches!(ex, ProtoFormula::Qua(Quantifier::Ex, h, _) if h == hint()));
     }
 
     /// `existFormula` quantifies every free variable, and `quantify` turns its

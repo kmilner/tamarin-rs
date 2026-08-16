@@ -808,14 +808,35 @@ mod tests {
 
     #[test]
     fn double_quoted_with_escape() {
+        // The leading run is a lexeme boundary: `string_literal` skips it before
+        // looking for the opening quote.
         let mut l = Lexer::new(r#" "abc \"x\" def" "#);
         assert_eq!(l.string_literal().as_deref(), Some(r#"abc "x" def"#));
+
+        // Running out of input before the closing quote fails the literal and
+        // backtracks — `"abc` must not be read as the string `abc`.
+        let mut l = Lexer::new("\"abc");
+        assert_eq!(l.string_literal(), None);
+        assert_eq!(l.pos(), Pos::ZERO, "cursor moved on failure");
     }
 
     #[test]
     fn single_quoted_basic() {
+        // The leading run is a lexeme boundary: `single_quoted` skips it before
+        // looking for the opening quote.
         let mut l = Lexer::new(" 'foo'  ");
         assert_eq!(l.single_quoted().as_deref(), Some("foo"));
+
+        // `singleQuotedString = singleQuoted $ many1 (noneOf "'\n")`
+        // (Token.hs:452-453): `many1` needs one body char, so `''` fails, and a
+        // newline or EOF before the closing quote leaves the literal unclosed.
+        // Every failure backtracks: parsec's `try`-wrapped lexeme must leave the
+        // cursor for the enclosing alternative.
+        for src in ["''", "'unterminated", "'no\nclose'"] {
+            let mut l = Lexer::new(src);
+            assert_eq!(l.single_quoted(), None, "must reject {src:?}");
+            assert_eq!(l.pos(), Pos::ZERO, "cursor moved on failure: {src:?}");
+        }
     }
 
     #[test]
@@ -879,6 +900,15 @@ mod tests {
         //   `export foo: "a\nb"` => "unexpected n, expecting \"\\\\\" or \"\\\"\"".
         let mut l = Lexer::new("\"a\\nb\"");
         assert_eq!(l.export_body(), None);
+        assert_eq!(l.pos(), Pos::ZERO, "cursor moved on failure");
+
+        // `many bodyChar` never finds the closing `"` when the input runs out,
+        // and an escaped final quote does not close the body either.
+        for src in ["\"abc", "\"abc\\\""] {
+            let mut l = Lexer::new(src);
+            assert_eq!(l.export_body(), None, "must reject {src:?}");
+            assert_eq!(l.pos(), Pos::ZERO, "cursor moved on failure: {src:?}");
+        }
     }
 
     // --- formal_comment: rejects a body-internal lone `*` ---

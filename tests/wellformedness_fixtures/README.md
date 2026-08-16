@@ -16,8 +16,11 @@ it:
 
 1. `cargo test -p tamarin-parser --test wellformedness` — offline
    check that the Rust port (`tamarin_parser::wf::check_theory`) emits
-   every expected topic for every fixture. Runs in the normal test
-   suite; no tamarin binary needed.
+   every expected topic for every fixture and none of its `#!`
+   negatives. Runs in the normal test suite; no tamarin binary needed.
+   It also fails on a `.spthy` no `expected.txt` line mentions, a `#!`
+   line for an unlisted fixture, and a fixture left comparing nothing
+   once the post-elaboration topics below are dropped.
 2. `cargo run -p tamarin-parser --example wellformedness_fixtures
    [-- <fixtures-dir>]` — the differential runner: every fixture must
    parse, the Rust checker must emit the expected topics, and (unless
@@ -33,7 +36,9 @@ Both harnesses share two comparison rules:
   left-hand-side but not in any right-hand-side "`), which the
   comma-separated `expected.txt` cannot represent.
 - `Formula terms` and `Multiplication restriction of rules` are checked
-  only against the tamarin binary, not the Rust parser-level checker.
+  only against the tamarin binary, not the Rust parser-level checker,
+  so a fixture pinning nothing else rests on its `#!` negatives on the
+  Rust side.
   The HS `checkTerms` and `multRestrictedReport` passes both need the
   elaborated `MaudeSig` (reducible-funsym classification, and
   `abstractRule`'s irreducible symbols), so their ports live in

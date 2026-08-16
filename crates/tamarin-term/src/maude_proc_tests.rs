@@ -7,20 +7,74 @@ use crate::lterm::{LSort, LVar};
 use crate::maude_sig::pair_maude_sig;
 use crate::vterm::Lit;
 
+/// The maude these tests run against, or `None` when the machine has none:
+/// `$MAUDE_PATH`, else a common absolute install, else a `maude` on `$PATH`.
+///
+/// A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION,
+/// not a reason to skip — answering `None` there would turn every
+/// maude-backed pin in this file green on a CI whose image moved maude
+/// (`.github/workflows/ci.yml` sets `MAUDE_PATH`).  Panic instead, so the
+/// run goes red.  Same convention as `tamarin-server/tests/common`.
 fn maude_path() -> Option<String> {
-    // Honour an env override; otherwise look for `maude` on PATH.
     if let Ok(p) = std::env::var("MAUDE_PATH") {
+        assert!(
+            std::path::Path::new(&p).exists(),
+            "MAUDE_PATH={p} does not exist; unset it to fall back to the \
+             probe, or point it at a real maude — skipping every \
+             maude-backed pin here would report green vacuously"
+        );
         return Some(p);
     }
-    let candidates = ["/usr/local/bin/maude", "/usr/bin/maude", "maude"];
-    for c in &candidates {
+    for c in [
+        "/usr/local/bin/maude",
+        "/usr/bin/maude",
+        "/home/linuxbrew/.linuxbrew/bin/maude",
+    ] {
         if std::path::Path::new(c).exists() {
-            return Some((*c).to_string());
+            return Some(c.to_string());
         }
     }
-    None
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|d| d.join("maude"))
+            .find(|c| c.is_file())
+            .map(|c| c.display().to_string())
+    })
 }
 
+/// `fst(pair(a, b))` over [`pair_maude_sig`] — a term the pairing signature
+/// genuinely rewrites, so `reduce` cannot answer it from either of its
+/// no-IPC fast paths and the round-trip through the subprocess really runs.
+fn reducible_fst_pair(a: &str, b: &str) -> LNTerm {
+    use crate::function_symbols::{Constructability, FunSym, NoEqSym, Privacy};
+    let mk = |n: &str| -> LNTerm {
+        crate::term::Term::Lit(Lit::Con(crate::lterm::Name::new(
+            crate::lterm::NameTag::Pub,
+            n,
+        )))
+    };
+    let pair = NoEqSym::new(
+        b"pair".to_vec(),
+        2,
+        Privacy::Public,
+        Constructability::Constructor,
+    );
+    let fst = NoEqSym::new(
+        b"fst".to_vec(),
+        1,
+        Privacy::Public,
+        Constructability::Constructor,
+    );
+    let inner = crate::term::Term::App(FunSym::NoEq(pair), vec![mk(a), mk(b)].into());
+    crate::term::Term::App(FunSym::NoEq(fst), vec![inner].into())
+}
+
+/// The whole bridge on one query: `pp_theory` produces a module Maude
+/// accepts, `pp_mterm` a `reduce` command it understands, and the reply
+/// parses back into the LNTerm the `fst`/`pair` rewrite rule yields.
+/// `norm_count` witnesses that the subprocess was actually consulted —
+/// a term `reduce` can answer from a fast path (a bare variable, say)
+/// would assert `t == t` having spoken to nothing.
 #[test]
 fn spawn_and_reduce_pair() {
     let path = match maude_path() {
@@ -31,12 +85,13 @@ fn spawn_and_reduce_pair() {
         }
     };
     let h = MaudeHandle::start(&path, pair_maude_sig()).expect("start");
-    // Reduce a public-name constant — should normalise to itself.
-    let v = LVar::new("x", LSort::Msg, 0);
-    let t: LNTerm = crate::term::Term::Lit(Lit::Var(v));
-    let r = h.reduce(&t).expect("reduce");
-    // Round-trip should give back `x`.
-    assert_eq!(t, r);
+    let r = h.reduce(&reducible_fst_pair("a", "b")).expect("reduce");
+    let a: LNTerm = crate::term::Term::Lit(Lit::Con(crate::lterm::Name::new(
+        crate::lterm::NameTag::Pub,
+        "a",
+    )));
+    assert_eq!(r, a, "fst(pair('a','b')) reduces to 'a'");
+    assert_eq!(h.stats().norm_count, 1, "the reduce really went to Maude");
 }
 
 #[test]
@@ -54,8 +109,22 @@ fn unify_two_vars() {
     let tx: LNTerm = crate::term::Term::Lit(Lit::Var(x));
     let ty: LNTerm = crate::term::Term::Lit(Lit::Var(y));
     let unifiers = h.unify(&[Equal { lhs: tx, rhs: ty }]).expect("unify");
-    // Two free variables of the same sort have a single mgu (a renaming).
-    assert!(!unifiers.is_empty());
+    // Two free variables of the same sort have exactly one mgu, and it is a
+    // renaming: BOTH are mapped onto one Maude-introduced Msg variable
+    // (named from `unify`'s hint), not one onto the other.
+    assert_eq!(unifiers.len(), 1);
+    let mut bound: Vec<(&str, u64, LNTerm)> = unifiers[0]
+        .iter()
+        .map(|(v, t)| (v.name, v.idx, t.clone()))
+        .collect();
+    bound.sort_by_key(|(n, i, _)| (*n, *i));
+    let witness = bound[0].2.clone();
+    assert_eq!(bound, vec![("x", 0, witness.clone()), ("y", 0, witness)]);
+    let crate::term::Term::Lit(Lit::Var(w)) = &bound[0].2 else {
+        panic!("expected a variable witness, got {:?}", bound[0].2);
+    };
+    assert_eq!(w.sort, LSort::Msg);
+    assert!(w.idx > 0, "the witness is fresh, not one of the inputs");
 }
 
 #[test]
@@ -89,9 +158,22 @@ fn unify_xor_terms_ac() {
         ],
     );
     let res = h.unify(&[Equal { lhs, rhs }]).expect("unify xor");
-    // AC unification of XOR is non-trivial — Maude returns multiple
-    // unifiers. We just assert we got at least one.
-    assert!(!res.is_empty(), "expected at least one AC unifier");
+    // Maude 3.5.1 (the version CI pins — see `.github/workflows/ci.yml`)
+    // enumerates a COMPLETE set of 7 unifiers here.  Pinning the count, not
+    // just non-emptiness, catches a reply parser that drops or duplicates
+    // solutions and a conversion context whose variable numbering changes
+    // the enumeration (the port's Maude-side variable names are
+    // encounter-ordered, and Maude's AC search is sensitive to them).
+    assert_eq!(res.len(), 7, "unifiers: {res:#?}");
+    for u in &res {
+        let mut names: Vec<(&str, u64)> = u.iter().map(|(v, _)| (v.name, v.idx)).collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![("a", 0), ("b", 0), ("x", 0), ("y", 0)],
+            "every unifier binds all four input variables"
+        );
+    }
 }
 
 /// Verifies our Maude bridge correctly narrows sorts.
@@ -110,18 +192,21 @@ fn unify_narrows_msg_var_to_pub() {
     let ty: LNTerm = crate::term::Term::Lit(Lit::Var(y_pub));
     let unifiers = h.unify(&[Equal { lhs: tx, rhs: ty }]).expect("unify");
     assert_eq!(unifiers.len(), 1);
-    // Both vars should be bound to a fresh variable of sort Pub.
-    for (v, t) in &unifiers[0] {
-        if let crate::term::Term::Lit(Lit::Var(lv)) = t {
-            assert_eq!(
-                lv.sort,
-                LSort::Pub,
-                "expected narrowing to Pub, got {:?} → {:?}",
-                v,
-                lv
-            );
-        }
-    }
+    // BOTH variables are bound, and each to a variable of the NARROWER sort
+    // (`Pub`) — including `x`, which was declared `Msg`.  Asserted over the
+    // whole substitution rather than inside a shape guard, so a binding that
+    // came back as something other than a variable fails instead of being
+    // skipped, and an empty substitution cannot pass vacuously.
+    assert_eq!(unifiers[0].len(), 2);
+    let mut got: Vec<(&str, LSort)> = unifiers[0]
+        .iter()
+        .map(|(v, t)| match t {
+            crate::term::Term::Lit(Lit::Var(lv)) => (v.name, lv.sort),
+            other => panic!("{}.{} bound to a non-variable {other}", v.name, v.idx),
+        })
+        .collect();
+    got.sort();
+    assert_eq!(got, vec![("x", LSort::Pub), ("y", LSort::Pub)]);
 }
 
 /// Verifies our bridge correctly rejects sort-incompatible unifications:
@@ -155,6 +240,11 @@ fn unify_pub_var_with_pk_msg_term_fails() {
     assert!(us.is_empty(), "expected no unifier for Pub ↔ pk(Fresh)");
 }
 
+/// Holding several guards at once is what makes the pool spawn its lazy
+/// members: `new` starts one eagerly, and each acquire that finds `free`
+/// empty spawns another until the target is reached.  Releasing them all
+/// returns them, so a second round of the same size reuses those members
+/// and spawns nothing further.
 #[test]
 fn pool_acquire_release_size() {
     let path = match maude_path() {
@@ -172,19 +262,32 @@ fn pool_acquire_release_size() {
     )
     .expect("pool");
     assert_eq!(pool.size(), 3);
-    // Acquire all three, then release them; second round should
-    // still succeed (handles must have been returned).
+    assert_eq!(pool.spawned(), 1, "new() spawns exactly one member eagerly");
     {
         let _a = pool.acquire();
         let _b = pool.acquire();
         let _c = pool.acquire();
+        assert_eq!(pool.spawned(), 3, "three concurrent guards, three members");
     }
-    let a = pool.acquire();
-    let b = pool.acquire();
-    let c = pool.acquire();
-    drop(a);
-    drop(b);
-    drop(c);
+    // Second round: the three released members are reused, and each is a
+    // live subprocess that still answers a query.
+    let guards = [pool.acquire(), pool.acquire(), pool.acquire()];
+    assert_eq!(
+        pool.spawned(),
+        3,
+        "released members were returned, not lost"
+    );
+    for g in &guards {
+        assert_eq!(
+            g.reduce(&reducible_fst_pair("a", "b")).expect("reduce"),
+            crate::term::Term::Lit(Lit::Con(crate::lterm::Name::new(
+                crate::lterm::NameTag::Pub,
+                "a",
+            )))
+        );
+    }
+    drop(guards);
+    assert_eq!(pool.size(), 3, "size() still reports the target");
 }
 
 /// Sequential acquire/release never grows the pool past its eager first
@@ -221,6 +324,12 @@ fn pool_sequential_reuse_stays_at_one_spawned() {
     assert_eq!(pool.size(), 4, "size() still reports the target");
 }
 
+/// Six threads sharing a two-member pool each get their OWN answer back:
+/// the per-query terms differ, so a handle that leaked another thread's
+/// reply (interleaved writes on one subprocess, or a guard handed out
+/// twice) returns the wrong constant rather than merely racing.  Each
+/// query is a real round-trip — `fst(pair(..))` rewrites, so `reduce`
+/// cannot answer it locally.
 #[test]
 fn pool_parallel_reduce_returns_correct_results() {
     let path = match maude_path() {
@@ -235,26 +344,28 @@ fn pool_parallel_reduce_returns_correct_results() {
             &path,
             pair_maude_sig(),
             2,
+            // A private cache per query set: a SHARED reduce cache would let
+            // one thread's answer satisfy another's query without IPC.
             Arc::new(SharedMaudeCaches::default()),
         )
         .expect("pool"),
     );
+    let names: Vec<String> = (0..6).map(|i| format!("a{i}")).collect();
     let mut handles = Vec::new();
-    for i in 0u64..6 {
+    for name in names.clone() {
         let pool = pool.clone();
         handles.push(std::thread::spawn(move || {
             let h = pool.acquire();
-            let x = LVar::new("x", LSort::Msg, i);
-            let t: LNTerm = crate::term::Term::Lit(Lit::Var(x));
-            h.reduce(&t).expect("reduce")
+            h.reduce(&reducible_fst_pair(&name, "b")).expect("reduce")
         }));
     }
-    for (i, h) in handles.into_iter().enumerate() {
+    for (name, h) in names.iter().zip(handles) {
         let r = h.join().expect("thread");
-        // round-trip: x:Msg.i reduces to itself
-        let x = LVar::new("x", LSort::Msg, i as u64);
-        let expected: LNTerm = crate::term::Term::Lit(Lit::Var(x));
-        assert_eq!(r, expected);
+        let expected: LNTerm = crate::term::Term::Lit(Lit::Con(crate::lterm::Name::new(
+            crate::lterm::NameTag::Pub,
+            name.as_str(),
+        )));
+        assert_eq!(r, expected, "fst(pair('{name}','b'))");
     }
 }
 
@@ -431,16 +542,18 @@ fn match_eqs_const_subject_mset_var_to_submultiset() {
             &pattern_vars,
         )
         .expect("match");
-    eprintln!("[REPRO] match result count = {}", res.len());
-    for m in &res {
-        for (lv, lt) in m {
-            eprintln!("[REPRO]   {}#{} -> {:?}", lv.name, lv.idx, lt);
-        }
-    }
-    assert!(
-        !res.is_empty(),
-        "expected codeOther to AC-match a 2-element sub-multiset"
-    );
+    // The one matcher binds the sole pattern variable to the REST of the
+    // subject multiset — `code2 ++ x`, the two elements the pattern's
+    // ground `<a,b>` did not consume.  Asserting the binding, not just
+    // non-emptiness: a matcher that bound `codeOther` to a single element
+    // (no sub-multiset) would also be "not empty".
+    assert_eq!(res.len(), 1, "matchers: {res:#?}");
+    let binding: Vec<(&str, u64, LNTerm)> = res[0]
+        .iter()
+        .map(|(v, t)| (v.name, v.idx, t.clone()))
+        .collect();
+    let rest = crate::term::f_app_ac(AcSym::Union, vec![mk(code2), mk(xv)]);
+    assert_eq!(binding, vec![("codeOther", 89, rest)]);
 }
 
 // HS's `impliedFormulas` runs `skolemizeGuarded` over the WHOLE clause
@@ -505,10 +618,6 @@ fn impl_guard_match_skolemizes_pattern_free_vars() {
     // const_subject OVER-MATCHES: the pattern's free `ekI`,`ekR` are
     // Maude variables binding to x,tid.
     let over = h.match_eqs_const_subject(&eqs, &pattern_vars).expect("m1");
-    eprintln!(
-        "[REPRO] const_subject matches = {} (over-match expected: >=1)",
-        over.len()
-    );
     assert!(
         !over.is_empty(),
         "sanity: const_subject is expected to OVER-match here (the bug)"
@@ -516,10 +625,6 @@ fn impl_guard_match_skolemizes_pattern_free_vars() {
     // skolemize_both: ekI,ekR,x,tid are distinct constants, so neither
     // equation can be satisfied → NO match, matching HS.
     let fixed = h.match_eqs_skolemize_both(&eqs, &pattern_vars).expect("m2");
-    eprintln!(
-        "[REPRO] skolemize_both matches = {} (HS-faithful: 0)",
-        fixed.len()
-    );
     assert!(
         fixed.is_empty(),
         "skolemize_both must NOT over-match: pattern-side free system \

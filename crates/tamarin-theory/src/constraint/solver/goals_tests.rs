@@ -7,19 +7,19 @@ use crate::constraint::system::System;
 use crate::test_maude::maude_path;
 
 #[test]
-fn empty_system_has_no_open_goals() {
-    let sys = System::empty();
-    assert!(open_goals(&sys).is_empty());
-}
-
-#[test]
 fn single_goal_returned() {
     let mut sys = System::empty();
+    assert!(
+        open_goals(&sys).is_empty(),
+        "precondition: nothing is open before a goal is added"
+    );
     let v = tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Msg, 0);
     let f = crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]);
-    sys.add_goal(Goal::Action(v, f));
+    let g = Goal::Action(v, f);
+    sys.add_goal(g.clone());
     let goals = open_goals(&sys);
     assert_eq!(goals.len(), 1);
+    assert_eq!(goals[0].goal, g, "the goal is carried through verbatim");
     assert_eq!(goals[0].usefulness, Usefulness::Useful);
 }
 
@@ -29,12 +29,21 @@ fn solved_goal_filtered() {
     let v = tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Msg, 0);
     let f = crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]);
     sys.add_goal(Goal::Action(v, f));
+    assert_eq!(
+        open_goals(&sys).len(),
+        1,
+        "precondition: open before solving"
+    );
     sys.goals_mut()[0].1.solved = true;
     assert!(open_goals(&sys).is_empty());
 }
 
+/// `dispatch_solve_goal` marks the goal solved BEFORE delegating, mirroring
+/// HS `solveGoal` (Goals.hs:201-213) — the solver it delegates to may rewrite
+/// the goal's terms via `solveFactEqs`/`substSystem`, and a post-solve mark
+/// would then miss the (now substituted) key and leave the goal open.
 #[test]
-fn dispatch_solve_disj_goal_routes() {
+fn dispatch_solve_goal_marks_solved_then_routes() {
     use crate::constraint::solver::context::ProofContext;
     use crate::constraint::solver::reduction::{GoalCases, Reduction};
     use tamarin_term::maude_sig::pair_maude_sig;
@@ -45,12 +54,19 @@ fn dispatch_solve_disj_goal_routes() {
     };
     let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     let ctx = ProofContext::new(h, Vec::new());
-    let mut r = Reduction::new(&ctx, System::empty());
-    // Empty disjunction → contradictory.
+    let mut sys = System::empty();
+    // Empty disjunction: nothing can satisfy it, so the Disj solver this
+    // must route to answers `Contradictory`.
     let d = crate::constraint::constraints::Disj::<crate::guarded::Guarded>::new(Vec::new());
     let g = Goal::Disj(d);
+    sys.add_goal(g.clone());
+    let mut r = Reduction::new(&ctx, sys);
     let out = dispatch_solve_goal(&mut r, &g);
     assert!(matches!(out, GoalCases::Contradictory));
+    assert!(
+        r.sys.goals.iter().any(|(gg, st)| gg == &g && st.solved),
+        "the goal must be marked solved even on the contradictory route"
+    );
 }
 
 // =========================================================================
@@ -117,6 +133,14 @@ fn goal_cmp_tag_order_matches_haskell_declaration() {
     let order = [&action, &chain, &premise, &split, &disj, &sub];
     let names = ["Action", "Chain", "Premise", "Split", "Disj", "Subterm"];
     for i in 0..order.len() {
+        // Every variant compares Equal with itself: the tag short-circuit
+        // must fall through to a payload comparison that agrees.
+        assert_eq!(
+            goal_cmp(order[i], order[i]),
+            Ordering::Equal,
+            "{} must compare Equal with itself",
+            names[i]
+        );
         for j in (i + 1)..order.len() {
             assert_eq!(
                 goal_cmp(order[i], order[j]),
@@ -137,24 +161,6 @@ fn goal_cmp_tag_order_matches_haskell_declaration() {
             );
         }
     }
-}
-
-/// Pin tag-equality (every variant ordered with itself returns Equal).
-/// Within-variant comparison is structural and depends on inner-field
-/// ordering; here we just check the tag-equality short-circuit.
-#[test]
-fn goal_cmp_reflexive() {
-    use crate::constraint::constraints::SplitId;
-    use std::cmp::Ordering;
-    use tamarin_term::lterm::{LSort, LVar};
-
-    let action: Goal = Goal::Action(
-        LVar::new("k", LSort::Msg, 0),
-        crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]),
-    );
-    let split: Goal = Goal::Split(SplitId(7));
-    assert_eq!(goal_cmp(&action, &action), Ordering::Equal);
-    assert_eq!(goal_cmp(&split, &split), Ordering::Equal);
 }
 
 /// Pin that `Goal`'s variant declaration order in Rust matches Haskell's
@@ -422,15 +428,13 @@ fn useful_goal_nr_uses_derived_usefulness_ord() {
     };
     // LoopBreaker with the LARGER nr, ProbablyConstructible with the
     // smaller nr.  HS Usefulness Ord (LoopBreaker < ProbablyConstructible)
-    // must dominate the nr tiebreak.
+    // must dominate the nr tiebreak.  Drive the SHARED production sorter
+    // (`sort_useful_goal_nr`, the `UsefulGoalNr` ranking arm and the tactic
+    // presort), not a re-spelling of it here.
     let lb = mk(5, Usefulness::LoopBreaker);
     let pc = mk(1, Usefulness::ProbablyConstructible);
     let mut ags = [pc.clone(), lb.clone()];
-    ags.sort_by(|a, b| {
-        a.usefulness
-            .cmp(&b.usefulness)
-            .then_with(|| a.seq.cmp(&b.seq))
-    });
+    sort_useful_goal_nr(&mut ags);
     // LoopBreaker (seq 5) ranks first despite the larger nr: HS
     // `Usefulness` Ord (LoopBreaker < ProbablyConstructible) dominates the
     // nr tiebreak, even though `tag_usefulness` collapses the two (below).
@@ -439,6 +443,10 @@ fn useful_goal_nr_uses_derived_usefulness_ord() {
         "LoopBreaker must rank before ProbablyConstructible"
     );
     assert_eq!(ags[1].seq, 1);
+    // Equal usefulness still breaks ties by creation nr, ascending.
+    let mut same = [mk(9, Usefulness::Useful), mk(2, Usefulness::Useful)];
+    sort_useful_goal_nr(&mut same);
+    assert_eq!([same[0].seq, same[1].seq], [2, 9]);
     // And tag_usefulness genuinely WOULD collapse these two — proving the
     // distinction matters.
     assert_eq!(

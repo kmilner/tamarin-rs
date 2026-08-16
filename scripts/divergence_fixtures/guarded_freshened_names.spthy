@@ -10,8 +10,9 @@
 // those freshened names (line 511).  The pretty printer has its own supply:
 // `prettyLNFormula` (Theory/Model/Formula.hs:518-520) seeds `avoidPrecise`
 // afresh, and `prettyLFormula` opens every prefix under `scopeFreshness`
-// (Formula.hs:503-505), which RESTORES the supply on the way out.  One binder
-// can therefore print differently in the report and in the echo:
+// (Theory/Model/Formula.hs:503-505), which RESTORES the supply on the way
+// out.  One binder can therefore print differently in the report and in the
+// echo:
 //
 //   - `Shadow`'s inner `x` is shadowed by the enclosing one, so both supplies
 //     have consumed `x` before it is drawn: the echoed lemma reads
