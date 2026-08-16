@@ -13,14 +13,27 @@
 
 use std::env;
 
+/// HS `traceSettings` (EnvTracer.hs:22-23#traceSettings).
 const TRACE_SETTINGS: &str = "DEBUG_TRACE";
+
+/// HS `shouldTrace`'s body once the lookup is done (EnvTracer.hs:30-32):
+/// `Nothing` is `False`, and `Just setting` is whole-field membership of
+/// `traceKey` in `splitOn "," setting`.  `setting` is what `lookupEnv`
+/// answered.
+///
+/// Split out from [`should_trace`] so a test can drive the parse from a
+/// literal: `DEBUG_TRACE` is process-wide, and a test that wrote it would
+/// make every other env-reading test in this crate's test binary flaky.
+fn should_trace_setting(setting: Option<&str>, key: &str) -> bool {
+    match setting {
+        Some(s) => s.split(',').any(|k| k == key),
+        None => false,
+    }
+}
 
 /// Whether `key` should be traced according to the current environment.
 pub fn should_trace(key: &str) -> bool {
-    match env::var(TRACE_SETTINGS) {
-        Ok(setting) => setting.split(',').any(|k| k == key),
-        Err(_) => false,
-    }
+    should_trace_setting(env::var(TRACE_SETTINGS).ok().as_deref(), key)
 }
 
 /// Output a section header to stderr if `key` is enabled.
@@ -45,39 +58,46 @@ pub fn etrace_ln(key: &str, label: &str, s: &str) {
 mod tests {
     use super::*;
 
-    // `DEBUG_TRACE` is process-wide, so every assertion that depends on it
-    // lives in this single test rather than racing across parallel ones.
+    /// The variable [`should_trace`] looks up: HS `traceSettings`
+    /// (EnvTracer.hs:22-23#traceSettings).  Renaming it would silently
+    /// disable every `DEBUG_TRACE=...` invocation upstream documents.
+    #[test]
+    fn trace_settings_names_the_hs_environment_variable() {
+        assert_eq!(TRACE_SETTINGS, "DEBUG_TRACE");
+    }
+
+    /// HS `shouldTrace` (EnvTracer.hs:26-32#shouldTrace).  Every expectation
+    /// below was run through `split-0.2.5` under the pinned GHC 9.6.7:
+    /// `splitOn "," "" == [""]` and `splitOn "," "a,,b" == ["a","","b"]`, so
+    /// an empty field is a real field and the empty key matches it.
+    ///
+    /// Driven through [`should_trace_setting`] rather than `env::set_var`:
+    /// `DEBUG_TRACE` is process-wide, so mutating it here would race any
+    /// other env-reading test this binary grows.
     #[test]
     fn trace_keys_are_whole_comma_separated_fields() {
-        // SAFETY: temporarily overwritten for this single test thread; the
-        // previous value is restored before returning.
-        let prev = env::var(TRACE_SETTINGS).ok();
-        unsafe {
-            env::remove_var(TRACE_SETTINGS);
-        }
-        assert!(!should_trace("anything"), "unset must disable tracing");
+        // `Nothing -> False`: no setting disables every key.
+        assert!(!should_trace_setting(None, "anything"));
+        assert!(!should_trace_setting(None, ""));
 
-        unsafe {
-            env::set_var(TRACE_SETTINGS, "foo,bar");
-        }
-        assert!(should_trace("foo"));
-        assert!(should_trace("bar"));
-        // HS `elem key (splitOn "," setting)` compares whole fields: neither a
-        // prefix of a field nor the raw setting itself is a match.
-        assert!(!should_trace("fo"));
-        assert!(!should_trace("foo,bar"));
-        assert!(!should_trace(""));
+        // `Just setting`: membership of the key in `splitOn "," setting`.
+        assert!(should_trace_setting(Some("foo,bar"), "foo"));
+        assert!(should_trace_setting(Some("foo,bar"), "bar"));
+        // Whole fields: neither a prefix of a field nor the raw setting
+        // itself is a match.
+        assert!(!should_trace_setting(Some("foo,bar"), "fo"));
+        assert!(!should_trace_setting(Some("foo,bar"), "foo,bar"));
+        assert!(!should_trace_setting(Some("foo,bar"), ""));
 
         // A single unseparated key is one field, not a substring search.
-        unsafe {
-            env::set_var(TRACE_SETTINGS, "foobar");
-        }
-        assert!(should_trace("foobar"));
-        assert!(!should_trace("foo"));
+        assert!(should_trace_setting(Some("foobar"), "foobar"));
+        assert!(!should_trace_setting(Some("foobar"), "foo"));
 
-        match prev {
-            Some(v) => unsafe { env::set_var(TRACE_SETTINGS, v) },
-            None => unsafe { env::remove_var(TRACE_SETTINGS) },
-        }
+        // `splitOn` never answers an empty list, and it keeps empty fields:
+        // `DEBUG_TRACE=` and `DEBUG_TRACE=a,,b` both enable the empty key.
+        assert!(should_trace_setting(Some(""), ""));
+        assert!(!should_trace_setting(Some(""), "foo"));
+        assert!(should_trace_setting(Some("a,,b"), ""));
+        assert!(should_trace_setting(Some("a,,b"), "b"));
     }
 }

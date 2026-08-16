@@ -19,7 +19,7 @@
 # cache makes warm iterations effectively free anyway.
 #
 # Corpus enumeration mirrors EXACTLY the cargo test
-#   corpus_proof_skeleton_match_probe  (oracle_solver.rs ~L828).
+#   corpus_proof_skeleton_match_probe  (oracle_solver.rs ~L1146).
 #
 # Usage:
 #   corpus_full_trace_diff.sh                 # full sweep

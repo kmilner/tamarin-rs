@@ -911,14 +911,52 @@ mod tests {
         }
     }
 
-    // --- formal_comment: rejects a body-internal lone `*` ---
+    // --- formal_comment: every way the body can fail once `{*` is in ---
 
     #[test]
-    fn formal_comment_rejects_internal_lone_star() {
-        // HS `bodyChar` does `'*' -> mzero`; `text{* a*b *}` is a parse error.
-        // Confirmed against v1.13.0: "unexpected b, expecting \"*}\"".
-        let mut l = Lexer::new("text{* a*b *}");
-        assert_eq!(l.formal_comment(), None);
+    fn formal_comment_rejects_every_failing_body() {
+        // `many bodyChar <* string "*}"` (Token.hs:379) with `bodyChar`
+        // (Token.hs:382-387) can fail in exactly three ways once the opening
+        // `{*` is consumed.  Each is a rejection upstream too, captured from
+        // the pinned oracle on `theory T\nbegin\n\nnote{* ... \n\nend\n`:
+        //
+        //   `note{* a*b *}`       `'*' -> mzero` stops `many bodyChar` and the
+        //                         required `string "*}"` fails at the `*`:
+        //                         (line 4, column 9)
+        //                         unexpected "b" / expecting "*}"
+        //   `note{* a\qb *}`      the `'\\'` branch accepts only `\` or `*`:
+        //                         (line 4, column 10)
+        //                         unexpected "q" / expecting "\\" or "*"
+        //   `note{* unterminated` `anyChar` fails at EOF, so `string "*}"` does:
+        //                         (line 5, column 1)
+        //                         unexpected end of input / expecting "*}"
+        //
+        // PORT-CAPTURED, the `Pos::ZERO` half: HS's `try` covers only
+        // `many1 letter <* string "{*"` (Token.hs:378), so a body failure is a
+        // CONSUMED parsec failure the enclosing item alternation cannot
+        // backtrack past -- which is why every oracle frame above points into
+        // the body.  This lexer instead rewinds to the start of the header, so
+        // `Parser::theory_item` falls through to its keyword alternatives and
+        // reports at the item position: all three inputs give
+        // `unexpected "{"` / `expecting letter or "{*"` (probed at this tip).
+        // The assertions below pin that rewind as the port's current
+        // behaviour; closing the divergence must update them deliberately.
+        for src in ["note{* a*b *}", r"note{* a\qb *}", "note{* unterminated"] {
+            let mut l = Lexer::new(src);
+            assert_eq!(l.formal_comment(), None, "must reject {src:?}");
+            assert_eq!(l.pos(), Pos::ZERO, "cursor moved on failure: {src:?}");
+        }
+
+        // The accepting counterpart: `\*` and `\\` are the two escapes
+        // `bodyChar` does take, and the body keeps the escaped character
+        // alone.  The oracle loads that theory and reprints the item as
+        // `note{* a*b\c *}` (`prettyFormalComment` re-wraps the stored body
+        // verbatim between `{*` and `*}`).
+        let mut ok = Lexer::new(r"note{* a\*b\\c *}");
+        assert_eq!(
+            ok.formal_comment(),
+            Some(("note".to_string(), r" a*b\c ".to_string()))
+        );
     }
 
     // --- single_quoted: strips leading whitespace (lexeme open quote) ---

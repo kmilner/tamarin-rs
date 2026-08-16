@@ -874,4 +874,235 @@ mod tests {
         };
         assert_eq!(dk, key);
     }
+
+    // -- pattern (`=t`) splitting -------------------------------------------
+    //
+    // HS tags pattern variables at the LEAF: `ltypedpatternlit = vlit
+    // sapicpatternvar` (Parser/Sapic.hs:52-53) and `sapicpatternvar` is an
+    // optional `=` in front of a single `sapicvar` (Token.hs:512-519), so a
+    // pattern term is a `SapicNTerm PatternSapicLVar` whose every variable
+    // carries a `PatternBind`/`PatternMatch` tag.  `unpattern = fmap (fmap
+    // unpatternVar)` drops the tags (Pattern.hs:54-60) and
+    // `extractMatchingVariables pt = S.fromList $ foldMap (foldMap
+    // isPatternMatch) pt` (Pattern.hs:92-96) collects the matched ones —
+    // a foldMap over the whole term, so depth does not matter and the result
+    // is a SET.
+
+    /// `x` / `x:ty` as a parser-AST variable leaf (untagged ⇒ msg sort).
+    fn pvar(name: &str, typ: Option<&str>) -> p::Term {
+        p::Term::Var(p::VarSpec {
+            name: name.into(),
+            idx: 0,
+            sort: p::SortHint::Untagged,
+            typ: typ.map(Into::into),
+        })
+    }
+
+    /// The `SapicLVar` that [`pvar`] elaborates to — `sapicvar` keeps the
+    /// `:type` annotation (Token.hs:506-510), and `PatternSapicLVar` wraps a
+    /// whole `SapicLVar` (Pattern.hs:42-44), so the type is part of the
+    /// `extractMatchingVariables` set element.
+    fn svar(name: &str, typ: Option<&str>) -> SapicLVar {
+        SapicLVar::new(LVar::new(name, LSort::Msg, 0), typ.map(Into::into))
+    }
+
+    fn pfact(name: &str, args: Vec<p::Term>) -> p::Fact {
+        p::Fact {
+            persistent: false,
+            name: name.into(),
+            args,
+            annotations: vec![],
+        }
+    }
+
+    /// The `=t` marker.
+    fn pat_match(t: p::Term) -> p::Term {
+        p::Term::PatMatch(Box::new(t))
+    }
+
+    #[test]
+    fn msr_unpatterns_every_row_but_takes_match_vars_from_the_premises_only() {
+        // HS (Parser/Sapic.hs:155-161):
+        //   (l,a,r,phi) <- try $ genericRule sapicpatternvar (PatternBind <$> sapicnodevar)
+        //   let matchVars =  foldMap (foldMap extractMatchingVariables) l
+        //   let f = fmap (fmap unpattern)
+        //   ... then return (MSR (f l) (f a) (f r) (g phi) matchVars, mempty)
+        // The `matchVars` fold runs over `l` ALONE; `f` (unpattern) is applied
+        // to all three rows.
+        let deep = |leaf: p::Term| {
+            p::Term::App("h".into(), vec![p::Term::Pair(vec![leaf, pvar("y", None)])])
+        };
+        let prems = vec![pfact("In", vec![deep(pat_match(pvar("x", None)))])];
+        // A `=` in the action/conclusion rows is not something HS ever hands to
+        // this code — `validMSR`'s `(_,[]) <- freesPatternFactList a` and
+        // `(_,[]) <- freesPatternFactList r` guards (Pattern.hs:79-89) fail the
+        // parse first, and the pinned oracle rejects the source outright.  The
+        // half pinned here is the HS one: whatever those rows contain, they
+        // feed NOTHING into `matchVars`.
+        let acts = vec![pfact("Ev", vec![pat_match(pvar("z", None))])];
+        let concs = vec![pfact("Out", vec![pat_match(pvar("w", None))])];
+        let msr = p::Process::Action {
+            action: p::SapicAction::Msr {
+                prems,
+                acts,
+                concs,
+                restrictions: vec![],
+            },
+            body: Box::new(p::Process::Null),
+        };
+        let Process::Action(
+            SapicAction::Msr {
+                prems,
+                acts,
+                concs,
+                rest,
+                match_vars,
+            },
+            _,
+            _,
+        ) = convert_process(&msr).unwrap()
+        else {
+            panic!("expected an Msr action");
+        };
+        // Premises only: `z` and `w` are absent even though they carry `=`.
+        assert_eq!(match_vars, BTreeSet::from([svar("x", None)]));
+        // Every row was unpattern-ed.  A surviving `PatMatch` would make
+        // `term_to_sapic_term` answer `None` and the conversion fail, so
+        // comparing against the marker-free terms pins both the strip and the
+        // rows it reaches.
+        assert_eq!(
+            prems[0].terms.to_vec(),
+            vec![term(&deep(pvar("x", None))).unwrap()],
+            "the premise keeps its shape with the `=` marker removed"
+        );
+        assert_eq!(
+            acts[0].terms.to_vec(),
+            vec![term(&pvar("z", None)).unwrap()]
+        );
+        assert_eq!(
+            concs[0].terms.to_vec(),
+            vec![term(&pvar("w", None)).unwrap()]
+        );
+        assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn let_and_chin_patterns_split_matched_leaves_out_of_the_bound_term() {
+        // HS `let`: `ProcessComb (Let (unpattern t1) t2
+        // (extractMatchingVariables t1)) mempty p' q` (Parser/Sapic.hs:268-269)
+        // and `in(c,pt)`: `ChIn maybeChannel (unpattern pt)
+        // (extractMatchingVariables pt)` (Parser/Sapic.hs:113-114) — the same
+        // pair of Pattern.hs functions on both sides.
+        //
+        // `extractMatchingVariables` returns an `S.Set SapicLVar`, so the two
+        // `=x:ty` leaves below collapse to ONE element and that element carries
+        // the `:ty` annotation; `y` is bound, not matched, so it stays out.
+        let marked = p::Term::Pair(vec![
+            pat_match(pvar("x", Some("ty"))),
+            p::Term::Pair(vec![pvar("y", None), pat_match(pvar("x", Some("ty")))]),
+        ]);
+        let plain = p::Term::Pair(vec![
+            pvar("x", Some("ty")),
+            p::Term::Pair(vec![pvar("y", None), pvar("x", Some("ty"))]),
+        ]);
+        let want_vars = BTreeSet::from([svar("x", Some("ty"))]);
+
+        let lt = p::Process::Comb {
+            comb: p::ProcessComb::Let {
+                pat: marked.clone(),
+                value: p::Term::PubLit("v".into()),
+            },
+            left: Box::new(event("E")),
+            right: Box::new(p::Process::Null),
+        };
+        let Process::Comb(
+            ProcessCombinator::Let {
+                left,
+                right,
+                match_vars,
+            },
+            _,
+            _,
+            _,
+        ) = convert_process(&lt).unwrap()
+        else {
+            panic!("expected a Let combinator");
+        };
+        assert_eq!(left, term(&plain).unwrap(), "`unpattern t1`");
+        assert_eq!(match_vars, want_vars, "`extractMatchingVariables t1`");
+        // The right-hand side is `sapicterm`, not a pattern — untouched.
+        assert_eq!(right, term(&p::Term::PubLit("v".into())).unwrap());
+
+        let chin = p::Process::Action {
+            action: p::SapicAction::ChIn {
+                chan: Some(p::Term::PubLit("c".into())),
+                msg: marked,
+            },
+            body: Box::new(p::Process::Null),
+        };
+        let Process::Action(
+            SapicAction::ChIn {
+                chan,
+                msg,
+                match_vars,
+            },
+            _,
+            _,
+        ) = convert_process(&chin).unwrap()
+        else {
+            panic!("expected a ChIn action");
+        };
+        assert_eq!(chan, Some(term(&p::Term::PubLit("c".into())).unwrap()));
+        assert_eq!(msg, term(&plain).unwrap(), "`unpattern pt`");
+        assert_eq!(match_vars, want_vars, "`extractMatchingVariables pt`");
+    }
+
+    #[test]
+    fn pat_match_over_a_compound_term_matches_every_variable_underneath() {
+        // PORT-CAPTURED, not oracle-derived: HS's `=` is a per-LEAF marker
+        // (`sapicpatternvar`, Token.hs:512-519), so a `=` in front of anything
+        // that is not a bare variable is a PARSE ERROR upstream.  Verified
+        // against the pinned oracle (ef3f0468) on minimal `--parse-only`
+        // theories, whose line/column numbers those captures carry:
+        //   in(c, =h(x))  ->  (line 7, column 11):
+        //                     unexpected "("
+        //                     expecting letter or digit, ".", ":" or ")"
+        //   in(c, =<x, y>) -> (line 7, column 10):
+        //                     unexpected "<"
+        //                     expecting "$", "~", identifier, "#" or "%"
+        //   let =h(x) = y  -> (line 8, column 9):
+        //                     unexpected "("
+        //                     expecting letter or digit, ".", ":" or "="
+        // The RS parser accepts all three (`atom_term_inner`'s `=` prefix wraps
+        // a whole atom), so `collect_pattern_vars`' non-`Var` arms are live
+        // port-only surface with no HS counterpart to derive from.  This pins
+        // the port's answer — every variable under the matched subterm counts —
+        // so the behaviour cannot drift unobserved while the parser divergence
+        // stands.
+        let pat = p::Term::Pair(vec![
+            pat_match(p::Term::App(
+                "h".into(),
+                vec![p::Term::Pair(vec![pvar("a", None), pvar("b", None)])],
+            )),
+            pvar("c", None),
+        ]);
+        let (left, match_vars) = convert_let_pattern(&pat).unwrap();
+        assert_eq!(
+            match_vars,
+            BTreeSet::from([svar("a", None), svar("b", None)]),
+            "both variables under `=h(<a, b>)` are matched; the sibling `c` is not"
+        );
+        // The marker itself is still stripped, leaving the inner term in place.
+        assert_eq!(
+            left,
+            term(&p::Term::Pair(vec![
+                p::Term::App(
+                    "h".into(),
+                    vec![p::Term::Pair(vec![pvar("a", None), pvar("b", None)])],
+                ),
+                pvar("c", None),
+            ]))
+            .unwrap()
+        );
+    }
 }

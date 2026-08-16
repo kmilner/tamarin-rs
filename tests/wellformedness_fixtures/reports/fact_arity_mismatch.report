@@ -1,0 +1,20 @@
+# source: oracle ef3f0468, plain load
+/*
+WARNING: the following wellformedness checks failed!
+
+Fact arity issues
+=================
+
+Same fact is used with different arities, i.e., Fact('A','B') is different from Fact('A'). 
+Check the arguments of your facts.
+  
+
+  Fact `foo':
+
+    1. Rule `R1', arity 1
+         Foo( ~x )
+    
+    2. Rule `R2', arity 2
+         Foo( ~x, ~y )
+  
+*/

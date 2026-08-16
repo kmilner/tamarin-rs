@@ -12,7 +12,12 @@
 //! The comparison refuses to pass while comparing nothing: a `.spthy` no
 //! `expected.txt` line mentions, a `#!` line for a fixture no positive line
 //! lists, and a fixture left with neither a parser-level expected topic nor a
-//! forbidden one are each a failure.
+//! forbidden one are each a failure.  What this harness still cannot see is a
+//! fixture whose CONTENT was gutted while its `#!` negatives stayed
+//! satisfiable — an empty theory emits no topic, so it trips no negative.
+//! `tamarin-theory`'s `tests/wellformedness_fixture_reports.rs` covers that
+//! from the crate where the post-elaboration checks live, by pinning each
+//! fixture's whole rendered report against the oracle's bytes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;

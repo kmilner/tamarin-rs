@@ -499,7 +499,7 @@ fn emit_rrule(out: &mut String, rule: &RRule<crate::lterm::LNTerm>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::maude_sig::{dh_maude_sig, pair_maude_sig};
+    use crate::maude_sig::{bp_maude_sig, dh_maude_sig, pair_maude_sig};
 
     #[test]
     fn dh_neutral_op_has_two_spaces_before_colon() {
@@ -540,6 +540,125 @@ mod tests {
              \x20 op tamXCFUsnd : Msg  -> Msg .\n\
              \x20 eq tamXCFUfst(tamXCFUpair(x0:Msg,x1:Msg)) = x0:Msg [variant] .\n\
              \x20 eq tamXCFUsnd(tamXCFUpair(x0:Msg,x1:Msg)) = x1:Msg [variant] .\n\
+             endfm\n"
+        );
+    }
+
+    /// The DH module the port ships to Maude, byte for byte, as captured from
+    /// the pinned oracle: `DEBUG_MAUDE=1 tamarin-prover dh.spthy` tees the
+    /// module Maude is fed to `/tmp/maude.input` (Maude/Process.hs:116-126),
+    /// and `dh.spthy` declares `builtins: diffie-hellman` only, so its
+    /// signature is HS `dhMaudeSig <> pairMaudeSig` (Maude/Signature.hs:201) --
+    /// what the merge below builds.
+    ///
+    /// This pins what a rule COUNT cannot: the five DH `op` lines in HS source
+    /// order (Maude/Parser.hs:222-226), `mult` among them carrying
+    /// `[comm assoc]` and NO attribute letters (`theoryOpAC = theoryOp
+    /// Nothing`, Maude/Parser.hs:262) where the other four carry `XCFU`; and
+    /// all 15 rewrite rules -- the 13 of `dhRules` (Builtin/Rules.hs:47-61)
+    /// plus the two pairing rules -- in `Set`-sorted order, each rendered by
+    /// `ppMaude` with AC arguments flattened into a single `tammult(..)`
+    /// application and both sides numbered from ONE per-rule conversion
+    /// context.  Reordering, retyping or renaming any single DH rule moves or
+    /// rewrites a line here.
+    #[test]
+    fn theory_for_dh_is_the_oracle_module() {
+        assert_eq!(
+            pp_theory(&dh_maude_sig().merge(pair_maude_sig())),
+            "fmod MSG is\n\
+             \x20 protecting NAT .\n\
+             \x20 sort Pub Fresh Msg Node TOP .\n\
+             \x20 subsort Pub < Msg .\n\
+             \x20 subsort Fresh < Msg .\n\
+             \x20 subsort Msg < TOP .\n\
+             \x20 subsort Node < TOP .\n\
+             \x20 op f : Nat -> Fresh .\n\
+             \x20 op p : Nat -> Pub .\n\
+             \x20 op c : Nat -> Msg .\n\
+             \x20 op n : Nat -> Node .\n\
+             \x20 op list : TOP -> TOP .\n\
+             \x20 op cons : TOP TOP -> TOP .\n\
+             \x20 op nil  : -> TOP .\n\
+             \x20 op tamXCFUone : -> Msg .\n\
+             \x20 op tamXCFUDH-neutral  : -> Msg .\n\
+             \x20 op tamXCFUexp : Msg Msg -> Msg .\n\
+             \x20 op tammult : Msg Msg -> Msg [comm assoc] .\n\
+             \x20 op tamXCFUinv : Msg -> Msg .\n\
+             \x20 op tamXCFUfst : Msg  -> Msg .\n\
+             \x20 op tamXCFUpair : Msg Msg  -> Msg .\n\
+             \x20 op tamXCFUsnd : Msg  -> Msg .\n\
+             \x20 eq tamXCFUexp(x0:Msg,tamXCFUone) = x0:Msg [variant] .\n\
+             \x20 eq tamXCFUexp(tamXCFUDH-neutral,x0:Msg) = tamXCFUDH-neutral [variant] .\n\
+             \x20 eq tamXCFUexp(tamXCFUexp(x0:Msg,x1:Msg),x2:Msg) = tamXCFUexp(x0:Msg,tammult(x1:Msg,x2:Msg)) [variant] .\n\
+             \x20 eq tamXCFUfst(tamXCFUpair(x0:Msg,x1:Msg)) = x0:Msg [variant] .\n\
+             \x20 eq tamXCFUinv(tamXCFUinv(x0:Msg)) = x0:Msg [variant] .\n\
+             \x20 eq tamXCFUinv(tamXCFUone) = tamXCFUone [variant] .\n\
+             \x20 eq tamXCFUinv(tammult(x0:Msg,tamXCFUinv(x1:Msg))) = tammult(x1:Msg,tamXCFUinv(x0:Msg)) [variant] .\n\
+             \x20 eq tamXCFUsnd(tamXCFUpair(x0:Msg,x1:Msg)) = x1:Msg [variant] .\n\
+             \x20 eq tammult(x0:Msg,x1:Msg,tamXCFUinv(x0:Msg)) = x1:Msg [variant] .\n\
+             \x20 eq tammult(x0:Msg,tamXCFUinv(x0:Msg)) = tamXCFUone [variant] .\n\
+             \x20 eq tammult(x0:Msg,tamXCFUone) = x0:Msg [variant] .\n\
+             \x20 eq tammult(x0:Msg,x1:Msg,tamXCFUinv(tammult(x0:Msg,x2:Msg))) = tammult(x1:Msg,tamXCFUinv(x2:Msg)) [variant] .\n\
+             \x20 eq tammult(x0:Msg,tamXCFUinv(tammult(x0:Msg,x1:Msg))) = tamXCFUinv(x1:Msg) [variant] .\n\
+             \x20 eq tammult(x0:Msg,tamXCFUinv(x1:Msg),tamXCFUinv(x2:Msg)) = tammult(x0:Msg,tamXCFUinv(tammult(x1:Msg,x2:Msg))) [variant] .\n\
+             \x20 eq tammult(tamXCFUinv(x0:Msg),tamXCFUinv(x1:Msg)) = tamXCFUinv(tammult(x0:Msg,x1:Msg)) [variant] .\n\
+             endfm\n"
+        );
+    }
+
+    /// The same oracle capture for a `builtins: bilinear-pairing` theory: HS
+    /// `bpMaudeSig <> pairMaudeSig`.  `maudeSig` forces `enableDH` on whenever
+    /// `enableBP` is set (Maude/Signature.hs:112), so this is the DH module
+    /// plus the two BP `op` lines -- `pmult` a plain `theoryOpEq`, `em` a
+    /// `theoryOpC` carrying `[comm]` and no attribute letters
+    /// (Maude/Parser.hs:231-232) -- and the three `bpRules`
+    /// (Builtin/Rules.hs:71-78) sorted in among the DH ones.
+    #[test]
+    fn theory_for_bp_is_the_oracle_module() {
+        assert_eq!(
+            pp_theory(&bp_maude_sig().merge(pair_maude_sig())),
+            "fmod MSG is\n\
+             \x20 protecting NAT .\n\
+             \x20 sort Pub Fresh Msg Node TOP .\n\
+             \x20 subsort Pub < Msg .\n\
+             \x20 subsort Fresh < Msg .\n\
+             \x20 subsort Msg < TOP .\n\
+             \x20 subsort Node < TOP .\n\
+             \x20 op f : Nat -> Fresh .\n\
+             \x20 op p : Nat -> Pub .\n\
+             \x20 op c : Nat -> Msg .\n\
+             \x20 op n : Nat -> Node .\n\
+             \x20 op list : TOP -> TOP .\n\
+             \x20 op cons : TOP TOP -> TOP .\n\
+             \x20 op nil  : -> TOP .\n\
+             \x20 op tamXCFUone : -> Msg .\n\
+             \x20 op tamXCFUDH-neutral  : -> Msg .\n\
+             \x20 op tamXCFUexp : Msg Msg -> Msg .\n\
+             \x20 op tammult : Msg Msg -> Msg [comm assoc] .\n\
+             \x20 op tamXCFUinv : Msg -> Msg .\n\
+             \x20 op tamXCFUpmult : Msg Msg -> Msg .\n\
+             \x20 op tamem : Msg Msg -> Msg [comm] .\n\
+             \x20 op tamXCFUfst : Msg  -> Msg .\n\
+             \x20 op tamXCFUpair : Msg Msg  -> Msg .\n\
+             \x20 op tamXCFUsnd : Msg  -> Msg .\n\
+             \x20 eq tamXCFUexp(x0:Msg,tamXCFUone) = x0:Msg [variant] .\n\
+             \x20 eq tamXCFUexp(tamXCFUDH-neutral,x0:Msg) = tamXCFUDH-neutral [variant] .\n\
+             \x20 eq tamXCFUexp(tamXCFUexp(x0:Msg,x1:Msg),x2:Msg) = tamXCFUexp(x0:Msg,tammult(x1:Msg,x2:Msg)) [variant] .\n\
+             \x20 eq tamXCFUfst(tamXCFUpair(x0:Msg,x1:Msg)) = x0:Msg [variant] .\n\
+             \x20 eq tamXCFUinv(tamXCFUinv(x0:Msg)) = x0:Msg [variant] .\n\
+             \x20 eq tamXCFUinv(tamXCFUone) = tamXCFUone [variant] .\n\
+             \x20 eq tamXCFUinv(tammult(x0:Msg,tamXCFUinv(x1:Msg))) = tammult(x1:Msg,tamXCFUinv(x0:Msg)) [variant] .\n\
+             \x20 eq tamXCFUpmult(x0:Msg,tamXCFUpmult(x1:Msg,x2:Msg)) = tamXCFUpmult(tammult(x0:Msg,x1:Msg),x2:Msg) [variant] .\n\
+             \x20 eq tamXCFUpmult(tamXCFUone,x0:Msg) = x0:Msg [variant] .\n\
+             \x20 eq tamXCFUsnd(tamXCFUpair(x0:Msg,x1:Msg)) = x1:Msg [variant] .\n\
+             \x20 eq tammult(x0:Msg,x1:Msg,tamXCFUinv(x0:Msg)) = x1:Msg [variant] .\n\
+             \x20 eq tammult(x0:Msg,tamXCFUinv(x0:Msg)) = tamXCFUone [variant] .\n\
+             \x20 eq tammult(x0:Msg,tamXCFUone) = x0:Msg [variant] .\n\
+             \x20 eq tammult(x0:Msg,x1:Msg,tamXCFUinv(tammult(x0:Msg,x2:Msg))) = tammult(x1:Msg,tamXCFUinv(x2:Msg)) [variant] .\n\
+             \x20 eq tammult(x0:Msg,tamXCFUinv(tammult(x0:Msg,x1:Msg))) = tamXCFUinv(x1:Msg) [variant] .\n\
+             \x20 eq tammult(x0:Msg,tamXCFUinv(x1:Msg),tamXCFUinv(x2:Msg)) = tammult(x0:Msg,tamXCFUinv(tammult(x1:Msg,x2:Msg))) [variant] .\n\
+             \x20 eq tammult(tamXCFUinv(x0:Msg),tamXCFUinv(x1:Msg)) = tamXCFUinv(tammult(x0:Msg,x1:Msg)) [variant] .\n\
+             \x20 eq tamem(x0:Msg,tamXCFUpmult(x1:Msg,x2:Msg)) = tamXCFUexp(tamem(x0:Msg,x2:Msg),x1:Msg) [variant] .\n\
              endfm\n"
         );
     }

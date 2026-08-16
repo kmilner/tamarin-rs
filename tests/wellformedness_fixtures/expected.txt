@@ -58,7 +58,10 @@ unbound_variables                  : Unbound variables
 # (`Formula terms` / `Multiplication restriction of rules`), which the
 # parser-level checker cannot emit. Without these negatives their Rust-side
 # comparison would assert nothing beyond "the file parses"; both harnesses
-# fail such a fixture rather than pass it silently.
+# fail such a fixture rather than pass it silently. What holds those three
+# .spthy files to their actual content is `reports/<fixture>.report` —
+# `cargo test -p tamarin-theory --test wellformedness_fixture_reports`, which
+# reaches the post-elaboration checks and pins the whole rendered block.
 #! formula_unguarded          : Formula guardedness, Unbound variables
 #! multiplication_in_rule_lhs : Formula terms, Unbound variables
 #! quantifier_wrong_sort      : Quantifier sorts, Unbound variables

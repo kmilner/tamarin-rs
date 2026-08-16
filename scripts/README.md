@@ -340,6 +340,47 @@ a rename-only migration.
   is missing, empty, or fails its `relation` column. Env: `HS_PATH`, `MAUDE`
   (its own harness-mirroring ladder, not the shared resolver — and not
   `MAUDE_PATH`), `FILE_TIMEOUT` (120 s), `ALLOW_ORACLE_REV_MISMATCH`.
+- **`hpj_oracle.sh`** — the SECOND oracle in this repo, and the only one that
+  is not the tamarin-prover binary. `crates/tamarin-theory/src/pretty_hpj.rs`
+  ports GHC's `pretty` package, and GHC 9.6.7 ships exactly the version it
+  targets — `pretty-1.1.3.6` — so an HPJ layout expectation can be DERIVED
+  from the real engine in one compile instead of hunted for in the corpus or
+  (worse) captured from the port. That is what makes a `contains('\n')`
+  assertion in an HPJ test indefensible: the exact bytes cost seconds.
+
+  Deriving one, end to end:
+
+  ```
+  scripts/hpj_oracle.sh --self-test            # 1. trust the toolchain
+  scripts/hpj_oracle.sh -w 12 -r 12 \
+    'fcat [text "<", text "aaa,", text "bbb,", text "ccc,", text "ddd", text ">"]'
+  # RUST  "<aaa,bbb,\nccc,ddd>"                # 2. paste into the assert_eq!
+  ```
+
+  `-w`/`-r` are lineLength and ribbon WIDTH — the same two numbers
+  `Doc::render_with(w, r)` takes — defaulting to the CLI's 110/73 so a bare
+  `Doc::render()` needs no flags; the server path is `-w 100 -r 67` and
+  `one_line_render()` is `--one-line`. `render_at` has no equivalent:
+  it calls pretty's unexported `get1`. The output carries the rendered text
+  twice, once Rust-escaped on the `RUST` line (non-ASCII stays UTF-8, unlike
+  Haskell's `show`) and once raw between markers, because this engine leaves
+  trailing spaces before some breaks and they are load-bearing.
+
+  Two guards, both worth knowing before you trust an answer. The resolved
+  compiler's `pretty` must be 1.1.3.6 or the script refuses
+  (`HPJ_ALLOW_ANY_PRETTY=1` overrides and stamps the output NOT-an-oracle):
+  another release lays out differently, and a wrong answer here enters the
+  tree as a pin. And `--self-test` re-derives six expectations the port
+  already asserts — a check on the toolchain, not new coverage, but if it
+  disagrees then either the script is not driving the right library or the
+  port has regressed, and nothing derived in that session is worth
+  committing. One of the six carries a ribbon narrower than its line length,
+  because with the other five (all `w == r`) a deliberate 4x error in the
+  generated `ribbonsPerLine` went undetected. `HPJ_GHC=<path>` picks the compiler
+  (set-but-unusable is a hard fail, never a fall-through to a different one);
+  `--file Main.hs` runs a whole Haskell program verbatim, which is how a
+  session deriving a dozen related cases with shared bindings should be
+  written.
 - **`bench.sh`** — RS-vs-HS wall/RSS benchmark; emits the README's markdown
   tables.
 - **`../prove_and_reverify.sh`** (repo root) — prove with tamarin-rs, re-check
@@ -463,16 +504,36 @@ then upstream behaviour moving under them.
   shifts applied mechanically, moved declarations re-anchored by name,
   ambiguous cites reported for a human pass. Run automatically by
   `bump_submodule.sh`.
-- **`check_hs_cites.py`** — validates every `Foo.hs:N` cite in `crates/`
-  comments against the pinned submodule and exits nonzero on a finding:
-  MISSING / AMBIGUOUS (a bare basename that names two upstream files, so its
-  line number is uncheckable) / RANGE / BLANK / COMMENT / SEELINE (a
+- **`check_hs_cites.py`** — validates every `Foo.hs:N` cite in `crates/**/*.rs`
+  comments **and in every hand-written `*.spthy`** (under `crates/`, under
+  `divergence_fixtures/`, and under `../tests/wellformedness_fixtures/`;
+  the submodule's own corpus is out of scope) against the pinned submodule,
+  exiting nonzero on a finding: MISSING / AMBIGUOUS (a bare basename that
+  names two upstream files, so its line number is uncheckable) / RANGE /
+  BLANK / COMMENT / SEELINE (a
   `see line N` outside the extent it annotates). Nothing else catches a cite
   that has drifted — `remap_hs_cites.py` reports ambiguity rather than
   failing on it — so this is the post-bump gate, run automatically by
   `bump_submodule.sh` at the end of a bump (findings land in the cite-remap
   report). `--crate NAME` and `--skip CLASS` are repeatable; the whole tree
   is currently at zero findings.
+
+  The `.spthy` half matters because a divergence fixture's header is a
+  paragraph-long argument about upstream behaviour, cited line by line, and it
+  is the one place a reader checks a divergence claim. The fixtures are lexed
+  by a second lexer (`lex_spans_spthy`) rather than the Rust one: their
+  comment forms are the same (`//`, nested `/* */`, per `spthyStyle` in
+  `Theory/Text/Parser/Token.hs`), but a theory's `'psk'` is a single-quoted
+  STRING, and Rust's `'`-as-lifetime handling walks into one — enough for a
+  cite inside a public name to be misread as commentary and reported.
+
+  One asymmetry to know at bump time: `remap_hs_cites.py` walks
+  `crates/**/*.rs` only, so it does not shift the fixtures' cites. Name them
+  on its command line to remap the `//` ones
+  (`remap_hs_cites.py --old … --new … scripts/divergence_fixtures/*.spthy`);
+  cites inside a fixture's `/* */` header are outside that tool's plain
+  `//`/`#` scan and stay hand-fixed. Either way the checker turns a drifted
+  fixture cite into a finding instead of letting it rot silently.
 - **`header_identities.json`** — email → GitHub-username map used by the
   header generator.
 

@@ -25,6 +25,14 @@
 //! ```
 //!
 //! Maude-backed: skipped only when `TAM_ALLOW_NO_MAUDE=1` says so.
+//!
+//! Cost: the flag-on load is ~8.3s under `--profile ci` (the profile
+//! `.github/workflows/ci.yml` runs) and ~56s under a plain debug build, so a
+//! debug stopwatch overstates the CI price sevenfold.  Either way it is ~90%
+//! of this crate's test time: `apply_ndc_check` runs a deduction proof per
+//! chainable rule pair.  The flag-off load is 40ms, so the cost is the pass
+//! itself, not the fixture's size — shrinking it means re-capturing both
+//! oracle verdicts above against a different theory.
 
 use std::path::PathBuf;
 
