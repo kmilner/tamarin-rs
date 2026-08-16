@@ -141,7 +141,6 @@ pub fn lift_one_rule(
         let idx = i + 1;
         // HS `liftedExpandFormula thy` — expand predicate atoms.
         let expanded = expand_formula(&phi, predicates)?;
-        let loc = phi.location;
         // HS resolves a bare `<name>` token to a 0-arity `FApp (NoEq …) []`
         // during PARSING (`nullaryApp`), so by the time `rewrite` runs the
         // constant is a function application, not a variable — and `rewrite`
@@ -155,7 +154,7 @@ pub fn lift_one_rule(
         // HS `fromRuleRestriction (rname ++ "_" ++ show i) f`.
         let sub_name = format!("{}_{}", rname, idx);
         // TODO: Give restriction/formula its own span and thread this through here?
-        let (restr, action) = from_rule_restriction(&sub_name, loc, &expanded);
+        let (restr, action) = from_rule_restriction(&sub_name, &expanded);
         restrictions.push(restr);
         new_actions.push(action);
     }
@@ -168,7 +167,7 @@ pub fn lift_one_rule(
 
 /// HS `fromRuleRestriction rname f` (Restriction.hs:140-161): produce the
 /// generated restriction plus the action fact inserted into the rule.
-fn from_rule_restriction(r: &str, loc: Location, f: &p::Formula) -> (p::Restriction, p::Fact) {
+fn from_rule_restriction(r: &str, f: &p::Formula) -> (p::Restriction, p::Fact) {
     // HS `rewrite f` returns `(rewritten formula, M.Map LVar Term)`.
     let (rewr_f, subst) = rewrite(f);
 
@@ -190,15 +189,16 @@ fn from_rule_restriction(r: &str, loc: Location, f: &p::Formula) -> (p::Restrict
     let restr_fact = mk_fact(r, bvar_terms);
     // f'' = (Restr_<rname>(...) @ #NOW) ⇒ f'
     let now_term = p::Term::Var(var_now());
-    let antecedent = p::Formula::Atom(p::Atom::Action(restr_fact, now_term));
-    let f2 = p::Formula::Implies(Box::new(antecedent), Box::new(rewr_f.clone()));
+    let antecedent = p::Formula::atom(p::Atom::Action(restr_fact, now_term), f.location);
+    let f2 = p::Formula::implies(antecedent, rewr_f.clone());
     // foldr forAll f'' (frees f''): bind ALL free vars of f'' (sorted,
     // dedup), outermost-first matching HS `foldr`.
     let quant_vars = frees_sorted(&f2);
     let restr_formula = if quant_vars.is_empty() {
         f2
     } else {
-        p::Formula::Forall(quant_vars, Box::new(f2))
+        let location = f2.location;
+        p::Formula::forall(quant_vars, f2, location)
     };
     let restriction = p::Restriction {
         name: format!("{}{}", RESTR_PREFIX, r),
@@ -661,7 +661,7 @@ mod tests {
         let ps = preds("True(x) <=> (x = true())");
         let phi = parse_formula_str("True(eq(x, x))").unwrap();
         let expanded = expand_formula(&phi, &ps).unwrap();
-        let (restr, action) = from_rule_restriction("A_1", DUMMY_LOCATION, &expanded);
+        let (restr, action) = from_rule_restriction("A_1", &expanded);
         // Restriction name.
         assert_eq!(restr.name, "Restr_A_1");
         // Action fact name + ORIGINAL args.
@@ -676,15 +676,15 @@ mod tests {
             other => panic!("expected eq(x,x), got {:?}", other),
         }
         // Restriction formula: ∀ x #NOW. (Restr_A_1(x) @ #NOW) ⇒ (x = true)
-        match &restr.formula {
-            p::Formula::Forall(vs, body) => {
+        match &restr.formula.kind {
+            p::FormulaKind::Forall(vs, body) => {
                 // Two binders: the abstracted x (Msg) and #NOW (Node), in
                 // sorted order x then NOW.
                 assert_eq!(vs.len(), 2);
                 assert_eq!(vs[0].name, "x");
                 assert_eq!(vs[1].name, "NOW");
                 // Body is an implication.
-                assert!(matches!(**body, p::Formula::Implies(_, _)));
+                assert!(matches!(body.kind, p::FormulaKind::Implies(_, _)));
             }
             other => panic!("expected forall, got {:?}", other),
         }

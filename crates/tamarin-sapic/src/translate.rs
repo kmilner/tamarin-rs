@@ -23,6 +23,7 @@
 
 use std::collections::BTreeSet;
 
+use tamarin_parser::DUMMY_LOCATION;
 use tamarin_term::lterm::LVar;
 
 use tamarin_theory::rule::ProtoRuleE;
@@ -588,14 +589,15 @@ fn lemma_needs_in_ev_res(lem: &tamarin_parser::ast::Lemma) -> bool {
 /// only special case is an `Action` atom on the `K` fact, which is `(True,
 /// False)` (a `K(..)@t` action is positive but not negative).
 fn is_pos_neg_formula(f: &tamarin_parser::ast::Formula) -> (bool, bool) {
-    use tamarin_parser::ast::Formula::*;
+    use tamarin_parser::ast::Formula;
+    use tamarin_parser::ast::FormulaKind::*;
     fn and2(a: (bool, bool), b: (bool, bool)) -> (bool, bool) {
         (a.0 && b.0, a.1 && b.1)
     }
     fn swap(a: (bool, bool)) -> (bool, bool) {
         (a.1, a.0)
     }
-    match f {
+    match &f.kind {
         True | False => (true, true),
         Atom(a) => is_pos_neg_atom(a),
         Not(p) => swap(is_pos_neg_formula(p)),
@@ -603,14 +605,34 @@ fn is_pos_neg_formula(f: &tamarin_parser::ast::Formula) -> (bool, bool) {
         // `Conn Imp p q -> isPosNegFormula $ Not p .||. q`.
         Implies(p, q) => {
             let not_p = Not(Box::new((**p).clone()));
+            let not_p = Formula {
+                kind: not_p,
+                location: DUMMY_LOCATION,
+            };
             let disj = Or(Box::new(not_p), Box::new((**q).clone()));
-            is_pos_neg_formula(&disj)
+            let tmp = Formula {
+                kind: disj,
+                location: f.location.clone(),
+            };
+            is_pos_neg_formula(&tmp)
         }
         // `Conn Iff p q -> isPosNegFormula $ p .==>. q .&&. q .==>. p`.
         Iff(p, q) => {
             let pq = Implies(Box::new((**p).clone()), Box::new((**q).clone()));
+            let pq = Formula {
+                kind: pq,
+                location: DUMMY_LOCATION,
+            };
             let qp = Implies(Box::new((**q).clone()), Box::new((**p).clone()));
+            let qp = Formula {
+                kind: qp,
+                location: DUMMY_LOCATION,
+            };
             let conj = And(Box::new(pq), Box::new(qp));
+            let conj = Formula {
+                kind: conj,
+                location: f.location.clone(),
+            };
             is_pos_neg_formula(&conj)
         }
         Forall(_, p) | Exists(_, p) => is_pos_neg_formula(p),
@@ -633,7 +655,7 @@ mod tests {
     use super::*;
     use crate::convert::convert_process;
     use crate::typing::type_and_rename_process;
-    use tamarin_parser::ast as p;
+    use tamarin_parser::{ast as p, DUMMY_LOCATION};
 
     fn typing2_process() -> p::Process {
         let xspec = p::VarSpec {
@@ -660,6 +682,7 @@ mod tests {
                     name: "Test".into(),
                     args: vec![xref],
                     annotations: vec![],
+                    location: DUMMY_LOCATION,
                 }),
                 body: Box::new(p::Process::Action {
                     action: p::SapicAction::ChOut {

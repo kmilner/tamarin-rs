@@ -886,7 +886,10 @@ mod tests {
                 idx: 0,
             })
         };
-        let restr = p::Formula::Atom(p::Atom::Eq(k(), p::Term::PubLit("b".into())));
+        let restr = p::Formula::atom(
+            p::Atom::Eq(k(), p::Term::PubLit("b".into())),
+            DUMMY_LOCATION,
+        );
         let ev = tamarin_theory::fact::Fact::new(
             tamarin_theory::fact::FactTag::Proto(
                 tamarin_theory::fact::Multiplicity::Linear,
@@ -926,7 +929,7 @@ mod tests {
             "Ev's argument must be k.1"
         );
         // ...and so did the embedded restriction.
-        let p::Formula::Atom(p::Atom::Eq(lhs, _)) = &rest[0] else {
+        let p::FormulaKind::Atom(p::Atom::Eq(lhs, _)) = &rest[0].kind else {
             panic!("expected an equality restriction");
         };
         let p::Term::Var(v) = lhs else {

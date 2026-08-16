@@ -278,8 +278,8 @@ pub(crate) fn fold_free_vars(formula: &p::Formula, f: &mut dyn FnMut(&p::VarSpec
         f: &mut dyn FnMut(&p::VarSpec, &[String]),
         formula: &p::Formula,
     ) {
-        use p::Formula::*;
-        match formula {
+        use p::FormulaKind::*;
+        match &formula.kind {
             True | False => {}
             Atom(a) => ca(bound, f, a),
             Not(g) => cf(bound, f, g),
@@ -578,6 +578,8 @@ pub fn convert_process(proc: &p::Process) -> Result<PlainProcess, ConvertError> 
 
 #[cfg(test)]
 mod tests {
+    use tamarin_parser::DUMMY_LOCATION;
+
     use super::*;
 
     #[test]
@@ -612,6 +614,7 @@ mod tests {
                 name: "Test".into(),
                 args: vec![xref],
                 annotations: vec![],
+                location: DUMMY_LOCATION,
             }),
             body: Box::new(inner),
         };
@@ -631,6 +634,7 @@ mod tests {
                 name: name.into(),
                 args: vec![],
                 annotations: vec![],
+                location: DUMMY_LOCATION,
             }),
             body: Box::new(p::Process::Null),
         }
@@ -690,7 +694,7 @@ mod tests {
     fn convert_cond_formula() {
         // `if <formula> then E else 0` converts to ProcessCombinator::Cond.
         let cond = p::Process::Comb {
-            comb: p::ProcessComb::Cond(p::Condition::Formula(p::Formula::True)),
+            comb: p::ProcessComb::Cond(p::Condition::Formula(p::Formula::r#true(DUMMY_LOCATION))),
             left: Box::new(event("E")),
             right: Box::new(p::Process::Null),
         };
@@ -738,12 +742,16 @@ mod tests {
             })
         };
         // `Eq(c, k)` — `c` is declared 0-arity below, `k` is an ordinary var.
-        let f = p::Formula::Atom(p::Atom::Pred(p::Fact {
-            persistent: false,
-            name: "Eq".into(),
-            args: vec![leaf("c"), leaf("k")],
-            annotations: Vec::new(),
-        }));
+        let f = p::Formula::atom(
+            p::Atom::Pred(p::Fact {
+                persistent: false,
+                name: "Eq".into(),
+                args: vec![leaf("c"), leaf("k")],
+                annotations: Vec::new(),
+                location: DUMMY_LOCATION,
+            }),
+            DUMMY_LOCATION,
+        );
         let renamed = |f: &p::Formula| {
             map_free_terms(f, &mut |v, _bound| {
                 Some(p::Term::Var(p::VarSpec {

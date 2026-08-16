@@ -675,7 +675,7 @@ pub fn base_trans_comb(
                 ));
             }
             // then-arm carries `[f]`; else-arm carries `[Not f]`.
-            let not_f = tamarin_parser::ast::Formula::Not(Box::new(f.clone()));
+            let not_f = tamarin_parser::ast::Formula::not(f.clone(), f.location);
             let body_then: RuleBody = (
                 vec![def_state(tildex)],
                 vec![],
@@ -1191,8 +1191,8 @@ fn rename_lock_pos_atoms(f: &mut tamarin_parser::ast::Formula, idx: u64) {
         }
     }
     fn walk(f: &mut p::Formula, idx: u64) {
-        use p::Formula::*;
-        match f {
+        use p::FormulaKind::*;
+        match &mut f.kind {
             True | False => {}
             Atom(a) => walk_atom(a, idx),
             Not(g) => walk(g, idx),
@@ -1224,6 +1224,7 @@ pub fn res_locking_pure() -> Vec<tamarin_parser::ast::Restriction> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tamarin_parser::DUMMY_LOCATION;
     use tamarin_term::lterm::LSort;
     use tamarin_theory::sapic::ProcessCombinator;
 
@@ -1352,12 +1353,16 @@ mod tests {
             })
         };
         // `Eq(nil, k)` — the predicate atom the surface `if Eq(nil, k)` parses to.
-        let f = p::Formula::Atom(p::Atom::Pred(p::Fact {
-            persistent: false,
-            name: "Eq".into(),
-            args: vec![leaf("nil"), leaf("k")],
-            annotations: Vec::new(),
-        }));
+        let f = p::Formula::atom(
+            p::Atom::Pred(p::Fact {
+                persistent: false,
+                name: "Eq".into(),
+                args: vec![leaf("nil"), leaf("k")],
+                annotations: Vec::new(),
+                location: DUMMY_LOCATION,
+            }),
+            DUMMY_LOCATION,
+        );
         let c = ProcessCombinator::Cond(f);
         let an = ProcessAnnotation::<LVar>::empty();
         let pos: Vec<i64> = vec![];
