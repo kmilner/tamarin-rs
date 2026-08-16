@@ -468,7 +468,18 @@ fn dot_with_cluster_passes_graphviz_lint() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn();
+    // A machine with no runnable Graphviz fails here rather than skipping:
+    // this is the only test that feeds our DOT to a real `dot`, so a silent
+    // skip greens `cargo test` identically with and without it.  Mirrors the
+    // integration suites' `TAM_ALLOW_NO_DOT` escape hatch
+    // (crates/tamarin-prover/tests/common/mod.rs).
     let Ok(mut child) = child else {
+        assert!(
+            std::env::var("TAM_ALLOW_NO_DOT").as_deref() == Ok("1"),
+            "no runnable `dot` on $PATH: this lint would skip and report green \
+             vacuously. Install graphviz, or set TAM_ALLOW_NO_DOT=1 to skip it \
+             deliberately."
+        );
         return;
     };
     if let Some(mut sin) = child.stdin.take() {

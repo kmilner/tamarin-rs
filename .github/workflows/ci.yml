@@ -45,6 +45,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install lld
         run: command -v ld.lld >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq lld)
+      # Graphviz: two tests drive a real `dot` — probe_reports.rs's success-path
+      # self-test (the `test` mode's GraphViz block) and dot_tests.rs's lint of
+      # our own DOT.  Both now PANIC rather than skip when `dot` cannot run
+      # (TAM_ALLOW_NO_DOT=1 opts out), so this step is what keeps them from
+      # failing the job — and a runner image that stops shipping graphviz is
+      # then loud instead of quietly dropping both pins.
+      - name: Install Graphviz
+        run: command -v dot >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq graphviz)
       # Same pinned Maude as the rs-parity job (see the comment there).
       - name: Install Maude 3.5.1
         run: |

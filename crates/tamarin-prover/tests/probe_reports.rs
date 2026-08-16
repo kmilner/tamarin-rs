@@ -163,8 +163,7 @@ fn working_dot_reports_version_and_png_ok() {
         eprintln!("skipping: maude not where the run will look for it");
         return;
     }
-    if Command::new("dot").arg("-V").output().is_err() {
-        eprintln!("skipping: no dot on PATH");
+    if !common::dot_available() {
         return;
     }
     let (rc, _stdout, stderr) = run_test_command(&[]);

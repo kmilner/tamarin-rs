@@ -38,6 +38,31 @@ pub const LINUXBREW_MAUDE: &str = "/home/linuxbrew/.linuxbrew/bin/maude";
 /// into a silent skip, for a machine that genuinely has none.
 pub const ALLOW_NO_MAUDE_ENV: &str = "TAM_ALLOW_NO_MAUDE";
 
+/// Env escape hatch: `TAM_ALLOW_NO_DOT=1` turns an unrunnable `dot` back into
+/// a silent skip, for a machine that genuinely has no Graphviz.
+pub const ALLOW_NO_DOT_ENV: &str = "TAM_ALLOW_NO_DOT";
+
+/// Whether the `dot` the port resolves — a bare `dot` left to `$PATH`, which
+/// is what `--with-dot`'s default records — can actually be run.
+///
+/// A machine where it cannot fails here rather than skipping, for the same
+/// reason [`maude_available`] does: the dot-backed pins are the only tests
+/// that drive a real Graphviz, so a silent skip makes `cargo test` green
+/// identically with and without it.  Set `TAM_ALLOW_NO_DOT=1` to skip them
+/// deliberately.
+pub fn dot_available() -> bool {
+    if Command::new("dot").arg("-V").output().is_ok() {
+        return true;
+    }
+    assert!(
+        std::env::var(ALLOW_NO_DOT_ENV).as_deref() == Ok("1"),
+        "no runnable `dot` on $PATH: the Graphviz-backed pins here would skip \
+         and report green vacuously. Install graphviz, or set \
+         {ALLOW_NO_DOT_ENV}=1 to skip them deliberately."
+    );
+    false
+}
+
 /// First `$PATH` entry holding a file named `maude` — the same lookup the
 /// binary's bare-`maude` fallback leaves to the OS, done here so the harness
 /// can name the resolved path back to it.
