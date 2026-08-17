@@ -538,10 +538,13 @@ mod tests {
         let a = g.node(vec![("label".into(), "A".into())]);
         let b = g.node(vec![("label".into(), "B".into())]);
         g.edge(a.clone(), b.clone(), vec![("color".into(), "red".into())]);
-        let s = show_dot("ex", &g);
-        assert!(s.contains("n0[label=\"A\"];"));
-        assert!(s.contains("n1[label=\"B\"];"));
-        assert!(s.contains("n0 -> n1[color=\"red\"];"));
+        // `unlines (map showGraphElement elems)` ends every element with a
+        // newline. The trailing `"\n}\n"` therefore still puts a blank line
+        // before the closing brace. The ids run in allocation order from 0.
+        assert_eq!(
+            show_dot("ex", &g),
+            "digraph \"ex\" {\nn0[label=\"A\"];\nn1[label=\"B\"];\nn0 -> n1[color=\"red\"];\n\n}\n"
+        );
     }
 
     #[test]
@@ -552,16 +555,63 @@ mod tests {
         g.user_node(a.clone(), vec![]);
         g.user_node(b.clone(), vec![]);
         g.edge(a, b, vec![]);
-        let s = show_dot("u", &g);
-        assert!(s.contains("u7;"));
-        assert!(s.contains("u_3;"));
-        assert!(s.contains("u7 -> u_3;"));
+        // `instance Show NodeId` (Text/Dot.hs:86-90) prints `u<i>`. For a
+        // negative id it prints `u_<-i>`. An empty attribute list emits no
+        // brackets (`showAttrs []`).
+        assert_eq!(
+            show_dot("u", &g),
+            "digraph \"u\" {\nu7;\nu_3;\nu7 -> u_3;\n\n}\n"
+        );
     }
 
     #[test]
     fn quoting_label_with_quotes() {
-        let s = show_dot("with \"quotes\"", &DotGraph::new());
-        assert!(s.starts_with("digraph \"with \\\"quotes\\\"\" {"));
+        // `escapedLabel` (Text/Dot.hs:241) escapes `"` and nothing else. The
+        // backslash below therefore stays unescaped. The `quoteDotId` path
+        // escapes it.
+        let s = show_dot("with \"quotes\" and a \\ backslash", &DotGraph::new());
+        assert_eq!(
+            s,
+            "digraph \"with \\\"quotes\\\" and a \\ backslash\" {\n\n}\n"
+        );
+    }
+
+    #[test]
+    fn attribute_values_escape_newline_and_quote_except_html_label() {
+        // `showAttr` (Text/Dot.hs:346-352) turns `\n` into `\l` and `"` into
+        // `\"`. It copies everything else unchanged. `html_label` skips all of
+        // that quoting. It emits `label=<...>` with no quotes, so graphviz
+        // reads the value as HTML-like.
+        let mut g = DotGraph::new();
+        g.user_node(
+            NodeId::from_user(1),
+            vec![
+                ("label".into(), "line1\nline2".into()),
+                ("tooltip".into(), "say \"hi\"".into()),
+            ],
+        );
+        g.user_node(
+            NodeId::from_user(2),
+            vec![("html_label".into(), "<<b>x</b>>".into())],
+        );
+        assert_eq!(
+            show_dot("a", &g),
+            "digraph \"a\" {\nu1[label=\"line1\\lline2\",tooltip=\"say \\\"hi\\\"\"];\n\
+             u2[label=<<b>x</b>>];\n\n}\n"
+        );
+    }
+
+    #[test]
+    fn cluster_node_id_is_quoted_and_backslash_escaped() {
+        // `createClusterNodeId` (Text/Dot.hs:138-146) wraps `cluster_<name>`
+        // in `quoteDotId`. `quoteDotId` escapes both `"` and `\`. That escape
+        // set is wider than the set of `escapedLabel`. The quotes are part of
+        // the id, so they reach the `subgraph <id> {` header unchanged.
+        assert_eq!(NodeId::cluster("Bob").to_dot_string(), "\"cluster_Bob\"");
+        assert_eq!(
+            NodeId::cluster("a\"b\\c").to_dot_string(),
+            "\"cluster_a\\\"b\\\\c\""
+        );
     }
 
     #[test]
@@ -570,8 +620,10 @@ mod tests {
         g.scope(|sub| {
             sub.node(vec![]);
         });
-        let s = show_dot("g", &g);
-        assert!(s.contains("{\nn0;"));
+        // `SubGraph Nothing` renders a `{ … }` block with no name. The
+        // sub-graph inherits the id counter, so the body node is `n0`. It does
+        // not get the id of a new graph.
+        assert_eq!(show_dot("g", &g), "digraph \"g\" {\n{\nn0;\n\n}\n\n}\n");
     }
 
     #[test]
@@ -580,9 +632,14 @@ mod tests {
         let (cid, _) = g.cluster(|sub| {
             sub.node(vec![]);
         });
-        let s = show_dot("g", &g);
-        assert!(s.contains("subgraph cluster_0 {"));
-        let _ = cid;
+        // `cluster` (Text/Dot.hs:208-216) uses the current counter value for
+        // the cluster id. It then starts the body at `succ uq`. The body node
+        // is therefore `n1`, and never `n0`.
+        assert_eq!(cid.to_dot_string(), "cluster_0");
+        assert_eq!(
+            show_dot("g", &g),
+            "digraph \"g\" {\nsubgraph cluster_0 {\nn1;\n\n}\n\n}\n"
+        );
     }
 
     #[test]
@@ -595,14 +652,59 @@ mod tests {
     #[test]
     fn record_node_emits_label_with_ports() {
         let mut g = DotGraph::new();
-        let rec: Record<&'static str> =
-            hcat_records(vec![field("a"), port_field("p1", "b"), field("c")]);
+        let rec: Record<&'static str> = hcat_records(vec![
+            field("a"),
+            port_field("p1", "b"),
+            // The `escape` function of `renderRecord` (Text/Dot.hs:273-280)
+            // puts a backslash in front of the record metacharacters. No other
+            // code escapes them, so the attribute layer leaves them alone.
+            field("c<|>{}"),
+        ]);
         let (nid, ports) = record(&mut g, &rec, vec![]);
-        // One port and a node id; label should contain the angle-port marker.
+        // The port field takes id 0, so the record node itself gets `n1`. The
+        // edge target of the port is the `<node>:<port>` pair.
+        assert_eq!(nid.to_dot_string(), "n1");
         assert_eq!(ports.len(), 1);
-        let s = show_dot("r", &g);
-        assert!(s.contains("shape=\"record\""));
-        assert!(s.contains("<n"));
-        let _ = nid;
+        assert_eq!(ports[0].0, "p1");
+        assert_eq!(ports[0].1.to_dot_string(), "n1:n0");
+        // The top-level `HCat` is `horiz`. This gives the two nested braces.
+        assert_eq!(
+            show_dot("r", &g),
+            "digraph \"r\" {\n\
+             n1[shape=\"record\",label=\"{{a|<n0> b|c\\<\\|\\>\\{\\}}}\"];\n\n}\n"
+        );
+    }
+
+    #[test]
+    fn vcat_record_flips_the_brace_nesting() {
+        // `render horiz (VCat rs)` recurses with `horiz = False`. A `VCat` of
+        // `HCat`s is therefore `{ {a|b} | {c} }`. That shape is the inverse of
+        // the shape above, which has the `HCat` on the outside. `mkNode` builds
+        // this nesting for a rule box.
+        let mut g = DotGraph::new();
+        let rec: Record<&'static str> = vcat_records(vec![
+            hcat_records(vec![field("a"), field("b")]),
+            hcat_records(vec![field("c")]),
+        ]);
+        // `mrecord` is `genRecord "Mrecord"`. Only the shape differs.
+        mrecord(&mut g, &rec, vec![("color".into(), "blue".into())]);
+        assert_eq!(
+            show_dot("r", &g),
+            "digraph \"r\" {\n\
+             n0[shape=\"Mrecord\",label=\"{{a|b}|{c}}\",color=\"blue\"];\n\n}\n"
+        );
+    }
+
+    #[test]
+    fn same_wraps_nodes_in_a_rank_scope() {
+        // `same = share [("rank","same")]` (Text/Dot.hs:195-204) emits a
+        // `Scope` with no name. The scope holds the attribute. One node per id
+        // follows the attribute, and those nodes carry no brackets.
+        let mut g = DotGraph::new();
+        g.same(vec![NodeId::from_user(1), NodeId::from_user(2)]);
+        assert_eq!(
+            show_dot("g", &g),
+            "digraph \"g\" {\n{\nrank=\"same\";\nu1;\nu2;\n\n}\n\n}\n"
+        );
     }
 }

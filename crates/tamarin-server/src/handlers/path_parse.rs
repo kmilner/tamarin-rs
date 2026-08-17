@@ -367,14 +367,39 @@ mod tests {
             matches!(p, TheoryPath::Method { lemma, idx, sub } if lemma == "Alice" && idx == 3 && sub == vec!["0"])
         );
     }
+    /// [`TheoryPath::render`] runs every segment through
+    /// [`prefix_with_underscore`].  An empty case name therefore appears in
+    /// the URL as `_`.  A case name that starts with `_` gets one more `_`.
+    /// The [`unprefix_underscore`] call in [`decode_segments`] removes that
+    /// prefix again.  A rendered path therefore parses back to the path it
+    /// came from.
     #[test]
-    fn render_roundtrip() {
+    fn render_prefixes_underscores_and_round_trips() {
         let p = TheoryPath::Proof {
             lemma: "X".into(),
-            sub: vec![],
+            sub: vec![String::new(), "_a".into()],
         };
-        let segs = p.render();
-        assert_eq!(segs, vec!["proof", "X"]);
+        assert_eq!(p.render(), vec!["proof", "X", "_", "__a"]);
+        for p in [
+            TheoryPath::Help,
+            TheoryPath::Lemma("_L".into()),
+            TheoryPath::Proof {
+                lemma: "X".into(),
+                sub: vec![],
+            },
+            TheoryPath::Proof {
+                lemma: "X".into(),
+                sub: vec![String::new(), "_a".into()],
+            },
+            TheoryPath::Method {
+                lemma: "X".into(),
+                idx: 3,
+                sub: vec![String::new()],
+            },
+        ] {
+            let url = p.render().join("/");
+            assert_eq!(parse(&url), Some(p.clone()), "{p:?} rendered as {url}");
+        }
     }
     /// `parseCases`'s `safeRead` reads `Int`, so the case indices are signed:
     /// `cases/raw/-1/1` parses (and then names no case in the handler, exactly

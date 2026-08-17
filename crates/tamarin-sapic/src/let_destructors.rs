@@ -493,16 +493,13 @@ mod tests {
         );
         let rules: BTreeSet<CtxtStRule> = BTreeSet::new();
         let out = translate_let_destr(&rules, lett);
-        // The Let must be gone; the top node is the substituted `out('t')`.
-        match out {
-            Process::Action(SapicAction::ChOut { msg, .. }, _, _) => {
-                assert!(
-                    matches!(msg, VTerm::Lit(Lit::Con(_))),
-                    "h must be replaced by 't'"
-                );
-            }
-            other => panic!("expected Let to be eliminated to ChOut, got {other:?}"),
-        }
+        // The Let must be gone.  The top node is the substituted `out('t')`.
+        // That is the RHS term itself, not just some constant.
+        let Process::Action(SapicAction::ChOut { msg, .. }, _, body) = out else {
+            panic!("expected Let to be eliminated to ChOut");
+        };
+        assert_eq!(msg, pub_name("t"), "h must be replaced by 't'");
+        assert!(matches!(*body, Process::Null(_)));
     }
 
     #[test]

@@ -130,10 +130,7 @@ fn pair_argument_is_flattened_to_the_right() {
     let init: ProtoRuleE = Rule::new(
         ProtoRuleEInfo::standard("Init"),
         vec![fresh_fact(msg_var("id", 0))],
-        vec![Fact::new(
-            s_tag,
-            vec![msg_var("id", 0), pair(msg_var("a", 0), msg_var("b", 0))],
-        )],
+        vec![prem_fact.clone()],
         vec![],
     );
     let copy: ProtoRuleE = Rule::new(

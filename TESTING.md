@@ -218,7 +218,9 @@ MAUDE_PATH="$(command -v maude)" cargo test --profile ci --workspace
 MAUDE_PATH="$(command -v maude)" cargo test -p tamarin-theory --test oracle_solver
 ```
 
-~1580 tests, 10 `#[ignore]`d. `--profile ci` is what CI uses and what to
+The workspace holds 1566 tests. One of them carries the `#[ignore]`
+attribute, so an ordinary run reports 1565 passed. CI uses `--profile ci`,
+and it is the profile to
 prefer locally: it is release optimisation without fat LTO, which the release
 profile would re-run at every one of the ~44 test-binary links. Each profile
 also gets its own target tree, so alternating between plain `cargo test`
@@ -227,7 +229,7 @@ also gets its own target tree, so alternating between plain `cargo test`
 
 `MAUDE_PATH` is not optional at the 15 sites that still probe only two `/usr`
 paths; see Prerequisites. Without it, `cargo test -p tamarin-prover --test
-output_module` reports the same `15 passed` in 0.02 s that a real run takes
+output_module` prints `14 passed` in 0.02 s, the same count a real run needs
 0.43 s to produce. At the 13 widened sites an unresolvable maude is now a
 panic naming `TAM_ALLOW_NO_MAUDE=1`, so those cannot report a vacuous green.
 
@@ -259,24 +261,39 @@ verdict=<...> captured=N/M`. Env: `HS_PATH`, `MAUDE`, `FILE_TIMEOUT` (120 s),
 `ALLOW_ORACLE_REV_MISMATCH`. Those tests hard-fail rather than skip while the
 captures are missing.
 
-`oracle_solver` also carries heavyweight corpus probes behind `#[ignore]`:
+`oracle_solver` also holds one expensive corpus probe. The `#[ignore]`
+attribute keeps this probe out of a normal test run. Run it with this command:
 
 ```bash
 cargo test --test oracle_solver corpus_proof_skeleton_match_probe --release -- --ignored --nocapture
 ```
 
-- `corpus_verdict_match_coverage_probe` — verdict agreement sweep.
-- `corpus_proof_skeleton_match_probe` — canonicalised proof-tree comparison
-  per lemma. Historically the primary metric; superseded by the byte gate
-  below, which subsumes it.
+`corpus_proof_skeleton_match_probe` compares the port's proof tree against
+the oracle's proof tree. It compares the two trees in a canonical form. It
+makes one comparison per lemma, over the whole `examples/` tree. This probe
+is not the correctness criterion. That criterion is byte-identical `--prove`
+stdout, and the corpus gate below checks it. That gate is stricter than this
+probe on the files it covers, because a proof is part of the stdout it
+compares. Its file list is narrower: it names 431 of the 1042 `.spthy` files
+under `examples/`, so this probe reaches files the gate never opens.
 
-**Both probes assert.** Each prints its match rate and divergence list and
-then calls `enforce_probe_floor`, which fails on zero comparable lemmas and
-below a committed floor. Both floors (`VERDICT_MATCH_FLOOR`,
-`STRUCTURAL_MATCH_FLOOR`) are still `None`, so a successful run *fails* while
-printing the exact `const … = Some(N);` line to commit — measure once, paste
-the value, and the probe becomes a ratchet. `--nocapture` is part of the
-command line because that line goes to stderr.
+**The probe asserts.** It prints its match rate and its list of divergences.
+It then calls `enforce_probe_ledger`. That function fails the test in four
+ways. The first way is coverage below `STRUCTURAL_MIN_COMPARED`, which is 540
+comparisons. The second way is a `STRUCTURAL_MISMATCH_LEDGER` that is still
+`None`. The panic message then prints the paste-ready
+`const … = Some(&[…]);` for you to commit. The third way is a mismatch that
+the list does not name, which is a regression. The fourth way is a listed
+identity that the run compared and found clean. That entry is stale, and you
+remove it in a commit that explains the fix. The run does not always compare
+every identity in the list. The usual cause is a per-file oracle timeout
+under machine load. The probe prints those identities, and they count towards
+neither failure. The list holds mismatch identities in the form
+`<corpus-relative-path>::<lemma>`. It does not hold a count. The set of
+eligible lemmas changes with machine load. A count limit therefore gives
+false results in both directions. The mismatch identities stay the same.
+The probe prints all of these lines to stderr, so the command line includes
+`--nocapture`.
 
 ## Wellformedness fixtures (oracle-differential)
 
@@ -296,8 +313,12 @@ empty roster, a `.spthy` no `expected.txt` line mentions, a line with no
 topics, a `#!` line naming an unlisted fixture, an oracle that fails to
 launch, or a fixture emptied by the two post-elaboration removals without an
 `EMPTY_RUST_EXPECTATION_ALLOWLIST` entry *and* negative pins.
-`crates/tamarin-parser/tests/wellformedness.rs` reads the same file and skips
-every `#` line, so the negative pins are the example runner's alone.
+`crates/tamarin-parser/tests/wellformedness.rs` reads the same file offline,
+and it enforces the same pins. Both harnesses check the `#!` topics against
+`wf::check_theory`. Both remove the two post-elaboration topics from the
+positive expectations. Both then fail a fixture that keeps neither a
+parser-level expectation nor a negative pin. Only the example runner compares
+against the oracle.
 
 ## Single-lemma parity
 

@@ -109,6 +109,51 @@ fn non_graphviz_dot_reports_the_detailed_results_block() {
     );
 }
 
+/// Oracle command: `test --with-dot=/bin/false`.  The tool starts but exits 1.
+/// The code consults the exit code before `check` runs at all.  The reason is
+/// therefore the `failed with exit code 1` line, followed by
+/// `ensureGraphVizDot`'s `errMsg1` (Environment.hs:88-95).  This is the only
+/// route by which that WARNING block reaches a transcript.  `unlines` has
+/// already terminated the block, so a blank line separates it from the
+/// `Detailed results` dump.  `ensureGraphVizDot` returns `Nothing`.  The code
+/// therefore skips the PNG probe, and no blank line follows.
+///
+/// This test repeats the WARNING bytes on purpose.  The source constant is
+/// private to `probe`.  This transcript pin restates the constant, in the same
+/// way that `probe_tests.rs` restates its source-derived pins.
+#[test]
+fn bad_exit_dot_reports_the_exit_code_reason_line() {
+    if !common::maude_available() {
+        eprintln!("skipping: maude not where the run will look for it");
+        return;
+    }
+    if !Path::new("/bin/false").exists() {
+        eprintln!("skipping: no /bin/false to stand in for a dot that exits non-zero");
+        return;
+    }
+    let (rc, stdout, stderr) = run_test_command(&["--with-dot=/bin/false"]);
+    assert_eq!(rc, 1);
+    assert_eq!(stdout, FAILED_RUN_STDOUT);
+    assert_eq!(
+        common::strip_maude_banner(&stderr),
+        "GraphViz tool: '/bin/false'\n\
+         \x20checking version: failed with exit code 1\n\
+         \n\
+         WARNING:\n\
+         \n\
+         \x20The dot tool seems not to be provided by Graphviz.\n\
+         \x20Graph generation might not work.\n\
+         \x20Please download an official version from:\n\
+         \x20        http://www.graphviz.org/\n\
+         \n\
+         Detailed results from testing '/bin/false'\n\
+         \x20command: /bin/false -V\n\
+         \x20stdin:   \n\
+         \x20stdout:  \n\
+         \x20stderr:  \n"
+    );
+}
+
 /// The success path: `dot -V`'s banner is lowercased, loses its trailing
 /// newline to `init` and gains `. OK.`; the PNG probe then reports a bare
 /// `OK.`.  Only the version line's tool-and-version text is machine-local, so
@@ -119,8 +164,7 @@ fn working_dot_reports_version_and_png_ok() {
         eprintln!("skipping: maude not where the run will look for it");
         return;
     }
-    if Command::new("dot").arg("-V").output().is_err() {
-        eprintln!("skipping: no dot on PATH");
+    if !common::dot_available() {
         return;
     }
     let (rc, _stdout, stderr) = run_test_command(&[]);
@@ -215,7 +259,9 @@ fn missing_maude_aborts_a_batch_run() {
 }
 
 /// `variants` runs the same probe (Intruder.hs:45) and dies the same way,
-/// before any variant computation output.
+/// before it writes any variant computation output.  The oracle's stdout is
+/// empty here.  A run that aborts after it prints a variant table has a
+/// different stdout.
 #[test]
 fn missing_maude_aborts_the_variants_command() {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
@@ -224,6 +270,7 @@ fn missing_maude_aborts_the_variants_command() {
         .output()
         .expect("spawn tamarin-rs");
     assert_eq!(out.status.code(), Some(1));
+    assert_eq!(String::from_utf8(out.stdout).expect("utf-8 stdout"), "");
     assert_eq!(
         String::from_utf8(out.stderr).expect("utf-8 stderr"),
         MISSING_MAUDE_STDERR
@@ -232,7 +279,9 @@ fn missing_maude_aborts_the_variants_command() {
 
 /// `interactive` probes through `ensureMaudeAndGetVersion`
 /// (Interactive.hs:103) and dies before binding any socket — no port
-/// juggling needed to test it.
+/// allocation is needed.  The oracle's stdout is empty.  That is the half
+/// that shows the abort comes first.  The `Finished loading theories …
+/// server ready at` line (Interactive.hs:125) is a stdout `println!`.
 #[test]
 fn missing_maude_aborts_interactive_before_binding() {
     let dir = std::env::temp_dir().join("tamarin_rs_probe_reports_nomaude_wd");
@@ -244,6 +293,7 @@ fn missing_maude_aborts_interactive_before_binding() {
         .output()
         .expect("spawn tamarin-rs");
     assert_eq!(out.status.code(), Some(1));
+    assert_eq!(String::from_utf8(out.stdout).expect("utf-8 stdout"), "");
     assert_eq!(
         String::from_utf8(out.stderr).expect("utf-8 stderr"),
         MISSING_MAUDE_STDERR

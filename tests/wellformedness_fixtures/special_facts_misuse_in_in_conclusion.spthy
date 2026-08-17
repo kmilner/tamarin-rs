@@ -1,4 +1,4 @@
-// Fixture: triggers `Fact usage`.
+// Fixture: triggers `Special facts`.
 // `In` (adversary input) is a premise-only fact; it must not appear
 // on the RHS of a rule.
 theory SpecialFactsIn

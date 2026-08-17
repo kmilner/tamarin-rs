@@ -153,6 +153,11 @@ mod tests {
             ],
         );
         assert_eq!(vars_vterm(&t), vec!["x", "y"]);
+        // The in-order sibling keeps the traversal order, and it also keeps
+        // the duplicates.  `freesSapicTerm` and the SAPIC binder walks depend
+        // on first-appearance order.  The function must therefore not use
+        // set semantics.
+        assert_eq!(vars_vterm_in_order(&t), vec!["y", "x", "y"]);
     }
 
     #[test]
@@ -160,6 +165,7 @@ mod tests {
         let t: VTerm<C, V> = f_app_no_eq(pair_sym(), vec![var_term("x"), const_term(0)]);
         assert!(occurs_vterm(&"x", &t));
         assert!(!occurs_vterm(&"z", &t));
+        assert!(!is_ground_vterm(&t), "one variable anywhere ⇒ not ground");
     }
 
     #[test]
@@ -172,5 +178,6 @@ mod tests {
             ],
         );
         assert_eq!(consts_vterm(&t), vec![1, 2]);
+        assert!(is_ground_vterm(&t), "constants only ⇒ ground");
     }
 }

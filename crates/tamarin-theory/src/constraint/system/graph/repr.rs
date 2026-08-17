@@ -601,19 +601,33 @@ mod tests {
             ty: NodeType::System(proto_rule("Setup", None)),
         });
         add_cluster_by_role(&mut repr);
-        // 2 Alice nodes with no connecting edge => 2 separate
-        // Alice clusters; 1 Bob => 1 Bob cluster; the roleless node
-        // stays at the top level.
-        assert_eq!(repr.clusters.len(), 3);
-        let cluster_names: Vec<&str> = repr.clusters.iter().map(|c| c.name.as_str()).collect();
-        let alice_count = cluster_names
+        // The 2 Alice nodes have no edge between them, so they give 2
+        // separate Alice clusters.  The 1 Bob node gives 1 Bob cluster.  The
+        // names are `<role>_Session_<i+1>` over the `M.toList` order of the
+        // role grouping, so all of Alice's names come before Bob's.  The
+        // session index counts the output of `findConnectedComponents`.  HS
+        // builds that output by prepending (`go remainingNodes
+        // (component : components)`, GraphRepr.hs:186-191).  The component
+        // discovered last, `#i.3`, is therefore `_Session_1`.  Both the name
+        // and the position are written to the output.  The name appears as
+        // the DOT subgraph id and as the JSON `jgcName`.  The position
+        // appears as the cluster emission order.
+        let clustered: Vec<(&str, Vec<NodeId>)> = repr
+            .clusters
             .iter()
-            .filter(|n| n.starts_with("Alice"))
-            .count();
-        assert_eq!(alice_count, 2);
-        assert!(cluster_names.iter().any(|n| n.starts_with("Bob")));
-        // The roleless node stays in repr.nodes.
-        assert_eq!(repr.nodes.len(), 1);
+            .map(|c| (c.name.as_str(), c.nodes.iter().map(|n| n.id).collect()))
+            .collect();
+        assert_eq!(
+            clustered,
+            vec![
+                ("Alice_Session_1", vec![nid("i", 3)]),
+                ("Alice_Session_2", vec![nid("i", 1)]),
+                ("Bob_Session_1", vec![nid("i", 2)]),
+            ]
+        );
+        // The node with no role stays at the top level.  No other node does.
+        let top: Vec<NodeId> = repr.nodes.iter().map(|n| n.id).collect();
+        assert_eq!(top, vec![nid("i", 4)]);
     }
 
     #[test]

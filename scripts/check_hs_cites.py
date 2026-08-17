@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Validate the Haskell oracle citations in Rust comments against the pin.
+"""Validate the Haskell oracle citations in port comments against the pin.
 
-Comments across `crates/` cite upstream Haskell locations as `Foo.hs:12`,
-`Foo.hs:150-183`, `Foo.hs:61-63,84,92` or `Foo.hs:150-183, see line 162`.  The
-numbers are line numbers in the `tamarin-prover/` submodule at its pinned
-commit, so they are only as good as the last bump.
+Comments across `crates/` and the `.spthy` fixtures cite upstream Haskell
+locations as `Foo.hs:12`, `Foo.hs:150-183`, `Foo.hs:61-63,84,92` or
+`Foo.hs:150-183, see line 162`.  The numbers are line numbers in the
+`tamarin-prover/` submodule at its pinned commit, so they are only as good as
+the last bump.
 
 Nothing else fails on a stale one.  `extend_anchor_citations.py` leaves an
 anchor it cannot resolve unchanged and reports it; `remap_hs_cites.py` maps
@@ -84,9 +85,15 @@ mistaken for more coverage than it has.
     still only as good as the last human pass.  Zero findings here means "no
     cite is mechanically broken", never "every cite is correct".
   * **Cites inside string literals.**  Deliberately not reported; see Scope.
-  * **Anything outside `crates/**/*.rs`.**  `scripts/`, `tests/`, the `*.md`
-    files and the `.spthy` fixtures under `scripts/divergence_fixtures/` all
-    carry cites that nothing validates.
+  * **Anything outside the two file sets under Scope.**  The `scripts/`
+    themselves, `TESTING.md` and the other `*.md` files all carry cites that
+    nothing validates.
+  * **Cites the bump's REMAPPER does not rewrite.**  `remap_hs_cites.py`
+    walks `crates/**/*.rs` only; a `.spthy` reached by this checker is
+    remapped only when the operator names it on the command line, and even
+    then its `/* */` comments are outside that tool's plain `//`/`#` scan.  So
+    a bump turns a drifted fixture cite into a FINDING here rather than into a
+    silent rewrite there -- loud, but hand-fixed.
   * **A parts list that WRAPS onto the following comment line** (see
     `remap_hs_cites.py`'s `continuation`) has its tail skipped, which
     under-reports rather than misreports.
@@ -97,6 +104,19 @@ mistaken for more coverage than it has.
 
 Scope
 -----
+Two file sets, because both carry cites that a bump can rot:
+
+  * `crates/**/*.rs` -- the port itself.
+  * every hand-written `.spthy`: under `crates/`, and in the two fixture
+    directories `FIXTURE_DIRS` names (`scripts/divergence_fixtures/` and
+    `tests/wellformedness_fixtures/`).  A divergence fixture's whole header
+    is an argument about upstream behaviour, cited line by line, so it is
+    the densest cite text in the repo outside the port; nothing but this
+    walk checks it.  `--crate` means "this crate's sources", so it selects
+    the `.spthy` under that crate and drops the two fixture directories,
+    which belong to no crate.  The `tamarin-prover/` corpus is out of scope
+    throughout: those theories are upstream's own, not cites of upstream.
+
 Comment text only, found by lexing each file: line comments, block comments
 and their doc forms.  A `//` inside a string literal does NOT open a comment.
 That matters here -- this repo has about a hundred of them, because Tamarin's
@@ -127,7 +147,7 @@ Exit status and verdict
 The last stdout line is `DONE_CHECK_HS_CITES verdict=... checked=N
 suppressed=N`, and the exit status agrees with it: 0 only on `verdict=OK`, 1
 on findings (the verdict names the classes), 2 when the run could not check
-anything -- no Haskell tree, no `.rs` file matched `--crate`, `--skip` naming
+anything -- no Haskell tree, no source file matched `--crate`, `--skip` naming
 a hard class, or a filter that left ZERO cites verified.  That last one is
 the anti-vacuity rule: "0 findings" from a run that resolved no cites at all
 is a failure here, not a pass, so the gate cannot go green on nothing.
@@ -145,6 +165,12 @@ import sys
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(SCRIPT_DIR)
 CRATES = os.path.join(REPO, "crates")
+# The two `.spthy` homes outside `crates/`.  This list names them, because a
+# whole-repo walk would descend into the `tamarin-prover/` submodule.  The
+# thousands of corpus theories there are upstream's own files, not cites of
+# upstream.
+FIXTURE_DIRS = (os.path.join(SCRIPT_DIR, "divergence_fixtures"),
+                os.path.join(REPO, "tests", "wellformedness_fixtures"))
 
 # `<file>.hs:<parts>[#<symbol>][, see line <n>[,<n>...]]` where parts is a
 # comma-joined list of `N` / `N-M` -- the shape `remap_hs_cites.py` writes.
@@ -242,6 +268,78 @@ def lex_spans(src):
             continue
         i += 1
     return comments, strings
+
+
+def lex_spans_spthy(src):
+    """`lex_spans` for a `.spthy` theory: (comment_spans, string_spans).
+
+    The comment forms are Rust's -- `//` to end of line and NESTED `/* */` --
+    because Tamarin's own token style says so: `spthyStyle` in
+    `Theory/Text/Parser/Token.hs` sets `commentLine = "//"`,
+    `commentStart = "/*"`, `commentEnd = "*/"` and `nestedComments = True`.
+
+    The LITERAL forms are not Rust's, which is the whole reason this is a
+    second lexer rather than a reuse of `lex_spans`.  A theory's `'psk'` is a
+    single-quoted string (`singleQuotedString = singleQuoted $ many1 (noneOf
+    "'\\n")`), not a char literal, so Rust's `'`-handling -- which treats an
+    unmatched quote as a lifetime -- would walk into one and could carry the
+    scan past a `//` that a fixture's public name happened to contain.
+    Matching Parsec, a single-quoted run takes no escapes and cannot cross a
+    newline, so a lone `'` is one character and never opens a run-on literal;
+    `"..."` is `stringLiteral`, which does take backslash escapes.
+    """
+    comments, strings = [], []
+    i, n = 0, len(src)
+    while i < n:
+        c = src[i]
+        if c == "/" and i + 1 < n and src[i + 1] == "/":
+            j = src.find("\n", i)
+            j = n if j == -1 else j
+            comments.append((i, j))
+            i = j
+            continue
+        if c == "/" and i + 1 < n and src[i + 1] == "*":
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if src.startswith("/*", j):
+                    depth += 1
+                    j += 2
+                elif src.startswith("*/", j):
+                    depth -= 1
+                    j += 2
+                else:
+                    j += 1
+            comments.append((i, j))
+            i = j
+            continue
+        if c == '"':
+            j = i + 1
+            while j < n:
+                if src[j] == "\\":
+                    j += 2
+                    continue
+                if src[j] == '"':
+                    break
+                j += 1
+            strings.append((i, min(j + 1, n)))
+            i = j + 1
+            continue
+        if c == "'":
+            j = i + 1
+            while j < n and src[j] not in "'\n":
+                j += 1
+            if j < n and src[j] == "'":
+                strings.append((i, j + 1))
+                i = j + 1
+            else:
+                i += 1
+            continue
+        i += 1
+    return comments, strings
+
+
+# One lexer per scanned file type.  `source_files` yields no other type.
+LEXERS = {".rs": lex_spans, ".spthy": lex_spans_spthy}
 
 
 def line_index(src):
@@ -361,24 +459,41 @@ def parse_parts(spec):
     return out
 
 
-def rust_files(crates_filter):
+def source_files(crates_filter):
+    """Every file this checker lexes, in a stable order.
+
+    `crates/**/*.rs` and `crates/**/*.spthy` are the crate-owned half and take
+    the `--crate` filter.  The `FIXTURE_DIRS` theories are the other half:
+    a divergence fixture's header is an argument about upstream behaviour,
+    written in `Foo.hs:N` cites, and they belong to no crate -- so a `--crate`
+    run, which means "this crate's sources", leaves them out rather than
+    quietly widening its own filter.
+    """
     for dirpath, dirs, files in os.walk(CRATES):
         dirs[:] = [d for d in dirs if d != "target"]
         for fname in sorted(files):
-            if not fname.endswith(".rs"):
+            if os.path.splitext(fname)[1] not in LEXERS:
                 continue
-            rs = os.path.join(dirpath, fname)
-            crate = os.path.relpath(rs, CRATES).split(os.sep)[0]
+            src = os.path.join(dirpath, fname)
+            crate = os.path.relpath(src, CRATES).split(os.sep)[0]
             if crates_filter and crate not in crates_filter:
                 continue
-            yield crate, rs
+            yield src
+    if crates_filter:
+        return
+    for d in FIXTURE_DIRS:
+        if not os.path.isdir(d):
+            continue
+        for fname in sorted(os.listdir(d)):
+            if fname.endswith(".spthy"):
+                yield os.path.join(d, fname)
 
 
-def check_file(oracle, rs, findings, advisories, stats):
-    rel = os.path.relpath(rs, REPO)
-    with open(rs, encoding="utf-8", errors="replace") as fh:
+def check_file(oracle, path, findings, advisories, stats):
+    rel = os.path.relpath(path, REPO)
+    with open(path, encoding="utf-8", errors="replace") as fh:
         src = fh.read()
-    comments, strings = lex_spans(src)
+    comments, strings = LEXERS[os.path.splitext(path)[1]](src)
     starts = line_index(src)
     literal_text = "\n".join(src[a:b] for a, b in strings)
 
@@ -546,18 +661,20 @@ def main():
     findings, advisories = [], []
     stats = collections.Counter()
     stats["show_emitted"] = int(args.show_emitted)
-    scanned = 0
-    for _crate, rs in rust_files(set(args.crate)):
-        scanned += 1
-        check_file(oracle, rs, findings, advisories, stats)
+    scanned = collections.Counter()
+    for src in source_files(set(args.crate)):
+        scanned[os.path.splitext(src)[1]] += 1
+        check_file(oracle, src, findings, advisories, stats)
 
-    if not scanned:
+    if not sum(scanned.values()):
         # "0 findings over 0 files" is the same exit status as a clean run, so
         # a misspelt --crate would gate a bump on nothing at all.
-        print("no .rs files matched"
+        print("no source file matched"
               + (f" --crate {' '.join(sorted(args.crate))}" if args.crate else "")
-              + f" under {CRATES}", file=sys.stderr)
-        return done("NO-RS-FILES", 2)
+              + f" under {CRATES}"
+              + ("" if args.crate else " or " + ", ".join(FIXTURE_DIRS)),
+              file=sys.stderr)
+        return done("NO-SOURCES", 2)
 
     skipset = set(args.skip)
     suppressed = collections.Counter(f[1] for f in findings if f[1] in skipset)
@@ -577,7 +694,9 @@ def main():
     counts = collections.Counter(cls for _, cls, _, _ in findings)
     summary = ", ".join(f"{c}={counts[c]}" for c in CLASSES if counts[c])
     checked, anchored = stats["checked"], stats["anchored"]
-    print(f"{scanned} .rs files scanned; {checked} cites verified "
+    where = ", ".join(f"{scanned[e]} {e}" for e in sorted(LEXERS)
+                      if scanned[e])
+    print(f"{where} files scanned; {checked} cites verified "
           f"({anchored} of them against a #symbol anchor); "
           f"{len(findings)} findings" + (f" ({summary})" if summary else ""),
           file=err)

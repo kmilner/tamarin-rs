@@ -309,26 +309,216 @@ fn find_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tamarin_term::function_symbols::{pair_sym, NoEqSym};
     use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
+    use tamarin_term::term::{f_app_no_eq, Term};
     use tamarin_term::vterm::Lit;
 
     fn var(name: &str) -> LNTerm {
         Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)))
     }
 
+    /// `h(t)` is the stand-in reducible head.  `h` is reducible only when
+    /// [`reducible`] below puts it in the set.
+    fn h(t: LNTerm) -> LNTerm {
+        f_app_no_eq(hash_sym(), vec![t])
+    }
+
+    fn hash_sym() -> NoEqSym {
+        tamarin_term::builtin::hash_sym()
+    }
+
+    /// `<a, b>` is always irreducible, so it never stops the walk.
+    fn pair(a: LNTerm, b: LNTerm) -> LNTerm {
+        tamarin_term::term::f_app(FunSym::NoEq(pair_sym()), vec![a, b])
+    }
+
+    /// The reducible set that contains `h` alone.
+    fn reducible_h() -> FastSet<FunSym> {
+        [FunSym::NoEq(hash_sym())].into_iter().collect()
+    }
+
+    /// A store starts consistent and empty.  `add` records the constraint as
+    /// not propagated.  The propagation pass selects constraints by that
+    /// flag.  An `add` that marks them propagated therefore discards every
+    /// new `t1 ⊏ t2` without a message.
     #[test]
-    fn empty_store_is_consistent() {
+    fn add_records_an_unpropagated_constraint() {
         let s = SubtermStore::empty();
         assert!(!s.is_false());
         assert!(s.subterms.is_empty());
-    }
 
-    #[test]
-    fn add_records_constraint() {
-        let mut s = SubtermStore::empty();
+        let mut s = s;
         s.add(var("x"), var("y"));
         assert_eq!(s.subterms.len(), 1);
+        assert_eq!(s.subterms[0].small, var("x"));
+        assert_eq!(s.subterms[0].big, var("y"));
         assert!(!s.subterms[0].propagated);
+    }
+
+    /// `elemNotBelowReducible` (Term/Term.hs:273-279) counts an occurrence in
+    /// `outer` only along a path that never crosses a reducible head.  The
+    /// `inner == outer` base case applies before the function looks at the
+    /// head.
+    #[test]
+    fn elem_not_below_reducible_stops_at_a_reducible_head() {
+        let none: FastSet<FunSym> = FastSet::default();
+        let x = var("x");
+        let y = var("y");
+        // The first assertion is the identity case.  The second is an
+        // occurrence under an irreducible head.
+        assert!(elem_not_below_reducible(&none, &x, &x));
+        assert!(elem_not_below_reducible(
+            &none,
+            &x,
+            &pair(x.clone(), y.clone())
+        ));
+        // This term does not occur at all.
+        assert!(!elem_not_below_reducible(&none, &x, &y));
+        // A Lit `outer` that is not `inner` has no arguments to recurse into.
+        assert!(!elem_not_below_reducible(&reducible_h(), &x, &y));
+        // The term is the same, but now the head is reducible.  A rewrite can
+        // make the occurrence disappear, so the occurrence does not count.
+        assert!(elem_not_below_reducible(&none, &x, &h(x.clone())));
+        assert!(!elem_not_below_reducible(&reducible_h(), &x, &h(x.clone())));
+        // The block applies to one position, not to the complete term.  `x`
+        // under `h` does not count.  `y` beside it still counts.
+        let mixed = pair(h(x.clone()), y.clone());
+        assert!(!elem_not_below_reducible(&reducible_h(), &x, &mixed));
+        assert!(elem_not_below_reducible(&reducible_h(), &y, &mixed));
+        // The identity base case applies even when the head is reducible.
+        assert!(elem_not_below_reducible(
+            &reducible_h(),
+            &h(x.clone()),
+            &h(x)
+        ));
+    }
+
+    /// `hasSubtermCycle` (SubtermStore.hs:223-244) is the contradiction test
+    /// for the CR-rule S_chain.  An edge `(t, x)` reaches `(t', x')` when `x`
+    /// occurs in `t'` and not below a reducible head.  One edge pair can
+    /// therefore be a cycle or not, according to the reducible set.
+    #[test]
+    fn has_subterm_cycle_follows_only_irreducible_occurrences() {
+        let none: FastSet<FunSym> = FastSet::default();
+        let store = |edges: &[(LNTerm, LNTerm)]| {
+            let mut s = SubtermStore::empty();
+            for (small, big) in edges {
+                s.add(small.clone(), big.clone());
+            }
+            s
+        };
+        let (a, b, c) = (var("a"), var("b"), var("c"));
+
+        // There are no constraints, so there is nothing to cycle through.
+        assert!(!has_subterm_cycle(&none, &SubtermStore::empty()));
+        // Here a ⊏ b and b ⊏ a.  Each edge's big side is the other edge's
+        // small side.
+        assert!(has_subterm_cycle(
+            &none,
+            &store(&[(a.clone(), b.clone()), (b.clone(), a.clone())])
+        ));
+        // Disjoint edges never reach each other.
+        assert!(!has_subterm_cycle(
+            &none,
+            &store(&[(a.clone(), b.clone()), (c.clone(), var("d"))])
+        ));
+        // This is the same two-edge shape.  The back edge's small side wraps
+        // `b` under `h`.  The shape is a cycle while `h` rewrites nothing.
+        // It is not a cycle when `h` is reducible, because a rewrite can
+        // remove the occurrence.
+        let via_h = store(&[(a.clone(), b.clone()), (h(b), a)]);
+        assert!(has_subterm_cycle(&none, &via_h));
+        assert!(!has_subterm_cycle(&reducible_h(), &via_h));
+    }
+
+    /// [`SortedPairSet`] takes the place of HS's `S.Set (LNTerm, LNTerm)`.
+    /// The `neg_subterms \ old_neg_subterms` change detection calls
+    /// `binary_search` on it.  The sorted-unique invariant must therefore
+    /// hold for every insertion order.  `insert` must also report whether the
+    /// pair is new.  That boolean is `add_neg`'s "this negative subterm is
+    /// new" answer.
+    #[test]
+    fn sorted_pair_set_keeps_the_hs_set_invariant() {
+        let (a, b, c) = (var("a"), var("b"), var("c"));
+        let mut s = SortedPairSet::default();
+        // The test inserts the pairs in descending order.  The set must come
+        // out in ascending order.
+        assert!(s.insert((c.clone(), a.clone())));
+        assert!(s.insert((b.clone(), a.clone())));
+        assert!(s.insert((a.clone(), b.clone())));
+        assert!(!s.insert((b.clone(), a.clone())), "duplicates are no-ops");
+        assert_eq!(s.len(), 3);
+        assert!(s.windows(2).all(|w| w[0] < w[1]), "sorted: {:?}", &*s);
+        // This is the lookup that `add_neg` and the change detection perform.
+        assert!(s.binary_search(&(b.clone(), a.clone())).is_ok());
+        // `rebuild_from` builds the same set from the opposite order.
+        assert_eq!(
+            SortedPairSet::rebuild_from(vec![
+                (a.clone(), b.clone()),
+                (b.clone(), a.clone()),
+                (c.clone(), a.clone()),
+                (a.clone(), b.clone()),
+            ]),
+            s
+        );
+        // A removal at a position found by the search leaves the rest sorted.
+        let pos = s.binary_search(&(b.clone(), a.clone())).unwrap();
+        assert_eq!(s.remove_at(pos), (b, a.clone()));
+        assert_eq!(s.len(), 2);
+        assert!(s.windows(2).all(|w| w[0] < w[1]));
+        assert!(s.binary_search(&(c, a)).is_ok());
+    }
+
+    /// `conjoinSubtermStores` (SubtermStore.hs:108-110) unions all five HS
+    /// fields.  These are the positive, solved, negative and old-negative
+    /// sets, plus an OR on the contradiction flag.  A merge of two branches
+    /// loses constraints without a message if the code drops any one of them.
+    #[test]
+    fn conjoin_unions_every_hs_field() {
+        let (a, b, c) = (var("a"), var("b"), var("c"));
+        let solved = |small: LNTerm, big: LNTerm| SubtermConstraint {
+            small,
+            big,
+            propagated: true,
+        };
+
+        let mut left = SubtermStore::empty();
+        left.add(a.clone(), b.clone());
+        left.solved_subterms.push(solved(a.clone(), c.clone()));
+        left.add_neg(a.clone(), b.clone());
+        left.old_neg_subterms.insert((a.clone(), b.clone()));
+
+        let mut right = SubtermStore::empty();
+        // The right store has one positive constraint that the left store also
+        // has, and one new one.  The union must not duplicate the shared one.
+        right.add(a.clone(), b.clone());
+        right.add(b.clone(), c.clone());
+        right.solved_subterms.push(solved(b.clone(), c.clone()));
+        right.add_neg(c.clone(), a.clone());
+        right.old_neg_subterms.insert((c.clone(), a.clone()));
+        right.contradictory = true;
+
+        left.conjoin(&right);
+        assert_eq!(
+            left.subterms
+                .iter()
+                .map(|s| (s.small.clone(), s.big.clone()))
+                .collect::<Vec<_>>(),
+            vec![(a.clone(), b.clone()), (b.clone(), c.clone())],
+            "positive subterms union WITHOUT duplicating the shared one"
+        );
+        assert_eq!(
+            left.solved_subterms,
+            vec![solved(a.clone(), c.clone()), solved(b.clone(), c.clone())]
+        );
+        assert!(left.is_false(), "isContradictory is an OR");
+        // Both set-valued fields union, and both stay sorted.
+        for set in [&left.neg_subterms, &left.old_neg_subterms] {
+            assert_eq!(set.len(), 2);
+            assert!(set.windows(2).all(|w| w[0] < w[1]), "sorted: {:?}", &**set);
+            assert!(set.binary_search(&(a.clone(), b.clone())).is_ok());
+            assert!(set.binary_search(&(c.clone(), a.clone())).is_ok());
+        }
     }
 }

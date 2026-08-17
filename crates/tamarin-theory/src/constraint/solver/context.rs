@@ -1519,13 +1519,18 @@ mod tests {
 
     /// Cloning a handle must hand out the SAME rule list, not a copy —
     /// this is what makes the per-probe / per-deduction / per-lemma
-    /// contexts cheap.
+    /// contexts inexpensive.  A field that becomes an owned `Vec` breaks the
+    /// pointer identity.  A `Clone` that copies deeply breaks it too.  A
+    /// `Deref` that exposes anything but the complete list breaks the length.
     #[test]
     fn intr_rule_cache_clone_shares_one_allocation() {
-        let cache = IntrRuleCache::from(sample_rules());
+        let rules = sample_rules();
+        let n = rules.len();
+        let cache = IntrRuleCache::from(rules);
         let shared = cache.clone();
         assert_eq!(cache.as_ptr(), shared.as_ptr());
-        assert_eq!(&*cache, &*shared);
+        assert_eq!(cache.len(), n);
+        assert_eq!(shared.len(), n);
     }
 
     /// `From<Arc<Vec<_>>>` adopts the caller's allocation — this is what
@@ -1534,9 +1539,8 @@ mod tests {
     #[test]
     fn intr_rule_cache_from_arc_adopts_the_same_allocation() {
         let shared = std::sync::Arc::new(sample_rules());
-        let ptr = shared.as_ptr();
         let cache = IntrRuleCache::from(shared.clone());
-        assert_eq!(cache.as_ptr(), ptr);
+        assert_eq!(cache.as_ptr(), shared.as_ptr());
         assert_eq!(&*cache, shared.as_slice());
     }
 }

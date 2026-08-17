@@ -1,0 +1,25 @@
+# source: oracle ef3f0468, plain load
+/*
+WARNING: the following wellformedness checks failed!
+
+Fact multiplicity issues
+========================
+
+Same fact is used with different multiplicities, i.e., !Fact() (Persistent fact) exists along with Fact() (Linear) in your rules. 
+Check the multiplicity (persistence) of your facts.
+  
+
+  Fact `bar':
+
+    1. Rule `R1', multiplicity (persistence) Linear
+         Bar( ~x )
+    
+    2. Rule `R2', multiplicity (persistence) Persistent
+         !Bar( ~y )
+  
+
+Facts occur in the left-hand-side but not in any right-hand-side 
+=================================================================
+
+  1. in rule "R2":  factName `Bar' arity: 1 multiplicity: Persistent. Perhaps you want to use the fact in rule "R1":  factName `Bar' arity: 1 multiplicity: Linear
+*/

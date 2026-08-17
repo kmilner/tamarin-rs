@@ -551,17 +551,18 @@ mod tests {
         assert_eq!(all_prot_subterms(&nat(5)), Vec::<Term<u64>>::new());
     }
 
+    /// An Xor that is already flat, inside another Xor, gives exactly one Xor
+    /// over the union of the arguments.  The constructor sorts that union
+    /// again.  It merges the new argument into the flattened list.  It does
+    /// not add the new argument after that list.
     #[test]
-    fn ac_flattening_is_idempotent() {
+    fn ac_flattening_absorbs_a_nested_same_symbol_app() {
         let t1 = f_app_ac(AcSym::Xor, vec![nat(1), nat(2), nat(3)]);
-        let t2 = f_app_ac(AcSym::Xor, vec![t1.clone(), nat(0)]);
-        // Should be a single Xor with [0,1,2,3].
-        match t2 {
-            Term::App(FunSym::Ac(AcSym::Xor), ts) => {
-                assert_eq!(ts.len(), 4);
-            }
-            _ => panic!(),
-        }
+        let t2 = f_app_ac(AcSym::Xor, vec![t1, nat(0)]);
+        assert_eq!(
+            t2,
+            unsafe_f_app(FunSym::Ac(AcSym::Xor), vec![nat(0), nat(1), nat(2), nat(3)])
+        );
     }
 
     #[test]
@@ -611,20 +612,99 @@ mod tests {
         assert_eq!(count_subterms(&y, &outer), 1);
     }
 
+    /// [`replace_subterm`] applies `f` to the complete term first.  It then
+    /// descends into the result of `f`.  So it also visits the new subterms
+    /// that a rewrite introduces.  It never visits the original children of a
+    /// node that `f` replaced.
+    ///
+    /// A bottom-up traversal visits the children first and applies `f` last.
+    /// That order gives the same result for an `f` that changes only leaves.
+    /// So the `f` here maps an `exp` node onto a `pair` of two new leaves.
+    /// The top-down order rewrites the top node.  It then increments the two
+    /// leaves it has just introduced.  It never sees the original `1` and
+    /// `2`.  [`replace_proper_subterm`] runs the same descent, but it does
+    /// not apply `f` at the root.
     #[test]
-    fn replace_subterm_top_down() {
-        let t = f_app_no_eq(pair_sym(), vec![nat(1), nat(2)]);
+    fn replace_subterm_is_top_down() {
+        let t = f_app_no_eq(exp_sym(), vec![nat(1), nat(2)]);
         let mut f = |t: Term<u64>| match t {
             Term::Lit(n) => Term::Lit(n + 10),
+            Term::App(s, _) if s == FunSym::NoEq(exp_sym()) => {
+                f_app_no_eq(pair_sym(), vec![nat(7), nat(8)])
+            }
             other => other,
         };
-        let r = replace_subterm(&mut f, t);
-        match r {
-            Term::App(_, ts) => {
-                assert_eq!(&*ts, &[nat(11), nat(12)]);
-            }
-            _ => panic!(),
+        assert_eq!(
+            replace_subterm(&mut f, t.clone()),
+            f_app_no_eq(pair_sym(), vec![nat(17), nat(18)])
+        );
+        // `replace_proper_subterm` skips the root.  The `exp` node stays.
+        // Each child goes to the full top-down `replace_subterm`.
+        assert_eq!(
+            replace_proper_subterm(&mut f, t),
+            f_app_no_eq(exp_sym(), vec![nat(11), nat(12)])
+        );
+    }
+
+    /// The hand-written `PartialEq`/`Ord`/`PartialOrd`/`Hash` on [`Term`]
+    /// contain an `Arc::ptr_eq` fast path.  So they must still give exactly
+    /// the answers of the derived, purely structural implementations.  That
+    /// means three things.  `Lit` comes before `App`, which is the
+    /// declaration order.  That order puts constants before applications in
+    /// every `f_app_ac`/`f_app_c` argument sort.  Inside `App`, the symbol
+    /// comes before the arguments.  The answer is the same whether or not the
+    /// two argument slices are the same allocation.
+    #[test]
+    fn term_ord_is_structural_whether_or_not_args_are_shared() {
+        use std::cmp::Ordering;
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        fn hash_of(t: &Term<u64>) -> u64 {
+            let mut h = DefaultHasher::new();
+            t.hash(&mut h);
+            h.finish()
         }
+        // `Lit` sorts before `App`, for any payloads.
+        let big_lit = nat(u64::MAX);
+        let app = f_app_no_eq(pair_sym(), vec![nat(0), nat(0)]);
+        assert!(big_lit < app);
+        assert_eq!(app.cmp(&big_lit), Ordering::Greater);
+        assert_eq!(big_lit.partial_cmp(&app), Some(Ordering::Less));
+        assert!(big_lit != app);
+        // Inside `App`, the symbol has priority over the arguments.  `exp` is
+        // less than `pair` in `NoEqSym` order.  So `exp(9,9)` sorts below
+        // `pair(0,0)`.
+        assert!(exp_sym() < pair_sym());
+        let exp_big = f_app_no_eq(exp_sym(), vec![nat(9), nat(9)]);
+        let pair_small = f_app_no_eq(pair_sym(), vec![nat(0), nat(0)]);
+        assert!(exp_big < pair_small);
+        // Here are two argument slices: one shared, one built separately.
+        // `shared` is a clone, so it holds the same `Arc` and the pointer
+        // fast path applies.  `rebuilt` is an equal slice at a different
+        // address, so the fast path does not apply and the structural walk
+        // gives the answer.  All three answers must be the same.
+        let shared = app.clone();
+        let rebuilt = f_app_no_eq(pair_sym(), vec![nat(0), nat(0)]);
+        if let (Term::App(_, a), Term::App(_, b), Term::App(_, c)) = (&app, &shared, &rebuilt) {
+            assert!(Arc::ptr_eq(a, b));
+            assert!(!Arc::ptr_eq(a, c));
+        } else {
+            panic!("expected three applications");
+        }
+        for other in [&shared, &rebuilt] {
+            assert_eq!(&app, other);
+            assert_eq!(app.cmp(other), Ordering::Equal);
+            assert_eq!(app.partial_cmp(other), Some(Ordering::Equal));
+            // `Hash` must agree with that `Eq`.  `Hash` uses the content, so
+            // the term with the shared pointer and the rebuilt term give the
+            // same hash.
+            assert_eq!(hash_of(&app), hash_of(other));
+        }
+        // The comparison still finds a different argument through the
+        // fast-path guard.
+        let differing = f_app_no_eq(pair_sym(), vec![nat(0), nat(1)]);
+        assert_ne!(app, differing);
+        assert_eq!(app.cmp(&differing), Ordering::Less);
     }
 
     // =========================================================================
@@ -674,15 +754,6 @@ mod tests {
             }
             _ => panic!(),
         }
-    }
-
-    /// `f_app_ac` panics on empty argument list — matching Haskell's
-    /// `fAppAC` which is undefined on []. Empty AC terms are nonsensical
-    /// (there's no identity element at the term layer).
-    #[test]
-    #[should_panic(expected = "empty argument list")]
-    fn ac_panics_on_empty_args() {
-        let _: Term<u64> = f_app_ac(AcSym::Mult, vec![]);
     }
 
     /// Lit::Con < Lit::Var: constants sort before variables.

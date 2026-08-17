@@ -245,8 +245,14 @@ mod tests {
         assert_eq!(ia.unlock.expect("insert annotated as unlock").0.idx, 0);
     }
 
+    /// `WFRep` and `WFPar` are different tags upstream (`prettyWFLockTag`,
+    /// Sapic/Exceptions.hs:32-34). They select different wording in the
+    /// `ProcessNotWellformed` error that upstream throws. The two arms must
+    /// therefore not collapse into one error. A lock whose scope stays open is
+    /// the only way to reach either tag. The public entry point must refuse
+    /// the process in both cases.
     #[test]
-    fn parallel_below_lock_errors() {
+    fn parallel_and_replication_below_lock_error_distinctly() {
         // lock 's'; ( 0 | 0 )  — WFPar
         let par = Process::Comb(
             ProcessCombinator::Parallel,
@@ -254,8 +260,18 @@ mod tests {
             Box::new(null()),
             Box::new(null()),
         );
-        let p = lock(pub_const("s"), par);
-        assert!(annotate_locks(p).is_err());
+        // lock 's'; ! 0  — WFRep
+        let rep = Process::Action(
+            SapicAction::Rep,
+            ProcessAnnotation::empty(),
+            Box::new(null()),
+        );
+        for (body, want) in [(par, LockWfError::Par), (rep, LockWfError::Rep)] {
+            let p = lock(pub_const("s"), body);
+            let mut fresh = FastFreshState::nothing_used();
+            assert_eq!(annotate_locks_go(&mut fresh, p.clone()).unwrap_err(), want);
+            assert!(annotate_locks(p).is_err());
+        }
     }
 
     #[test]

@@ -799,6 +799,50 @@ mod tests {
         assert_eq!(t, gterm_to_term(&g));
     }
 
+    /// This is [`mk_gpair`]'s canonical invariant.  `mk_gpair` splices a
+    /// trailing `Pair`, and it repeats the splice as often as needed.  The
+    /// reason is that RS's n-ary `Pair` stands for HS's right-nested binary
+    /// `fAppPair`.  In HS, `<a, <b, c>>` and `<a, b, c>` are one term.  Two
+    /// spellings of that term here would defeat the structural `==` that
+    /// `insertFormula` and `canonical_goal_for_dedup` rely on.  A `Pair` in a
+    /// non-tail position is a genuinely different term (`pair(pair(a,b),c)`).
+    /// It must survive untouched.
+    #[test]
+    fn mk_gpair_splices_only_a_trailing_pair() {
+        let lit = |s: &str| GTerm::PubLit(s.to_string());
+        let flat = GTerm::Pair(vec![lit("a"), lit("b"), lit("c")].into());
+        assert_eq!(
+            mk_gpair(vec![lit("a"), GTerm::Pair(vec![lit("b"), lit("c")].into())]),
+            flat,
+            "a trailing pair is spliced into the tail"
+        );
+        assert_eq!(
+            mk_gpair(vec![
+                lit("a"),
+                GTerm::Pair(vec![lit("b"), GTerm::Pair(vec![lit("c")].into())].into()),
+            ]),
+            flat,
+            "splicing repeats while the new tail is itself a pair"
+        );
+        let head_nested =
+            GTerm::Pair(vec![GTerm::Pair(vec![lit("a"), lit("b")].into()), lit("c")].into());
+        assert_eq!(
+            mk_gpair(vec![GTerm::Pair(vec![lit("a"), lit("b")].into()), lit("c")]),
+            head_nested,
+            "a pair in a non-tail position is a different term"
+        );
+        // `term_to_gterm_free` routes every parser `Pair` through `mk_gpair`.
+        // The two source spellings therefore lift to the same `GTerm`.
+        let p_lit = |s: &str| p::Term::PubLit(s.to_string());
+        assert_eq!(
+            term_to_gterm_free(&p::Term::Pair(vec![
+                p_lit("a"),
+                p::Term::Pair(vec![p_lit("b"), p_lit("c")]),
+            ])),
+            flat
+        );
+    }
+
     #[test]
     fn atom_round_trip_no_bound() {
         let a = p::Atom::Eq(p::Term::Var(vs("x", 0)), p::Term::Var(vs("y", 1)));
@@ -853,14 +897,10 @@ mod tests {
 
     #[test]
     fn close_subst_innermost_is_bound_zero() {
-        let vs = vec![
-            super::tests::vs("a", 0),
-            super::tests::vs("b", 1),
-            super::tests::vs("c", 2),
-        ];
+        let binders = vec![vs("a", 0), vs("b", 1), vs("c", 2)];
         // outer→inner: a, b, c
         // HS `zip (reverse vs) [0..]` ⇒ [(c, 0), (b, 1), (a, 2)]
-        let s = close_subst(&vs);
+        let s = close_subst(&binders);
         assert_eq!(s.len(), 3);
         assert_eq!(s[0].0.name, "c");
         assert_eq!(s[0].1, 0);
@@ -872,13 +912,9 @@ mod tests {
 
     #[test]
     fn open_subst_bound_zero_is_innermost() {
-        let xs = vec![
-            super::tests::vs("a", 0),
-            super::tests::vs("b", 1),
-            super::tests::vs("c", 2),
-        ];
+        let binders = vec![vs("a", 0), vs("b", 1), vs("c", 2)];
         // HS `zip [0..] (reverse xs)` ⇒ [(0, c), (1, b), (2, a)]
-        let s = open_subst(&xs);
+        let s = open_subst(&binders);
         assert_eq!(s.len(), 3);
         assert_eq!(s[0].0, 0);
         assert_eq!(s[0].1.name, "c");

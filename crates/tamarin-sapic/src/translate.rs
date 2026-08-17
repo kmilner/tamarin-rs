@@ -682,7 +682,7 @@ mod tests {
     }
 
     #[test]
-    fn translate_typing2_produces_five_rules() {
+    fn translate_typing2_rule_names_and_restriction() {
         let plain = convert_process(&typing2_process()).unwrap();
         // No function-typing needed for the rule-count check; type over an
         // empty signature (defaults all funs).
@@ -690,14 +690,33 @@ mod tests {
         let typed = type_and_rename_process(&sig, &[], &plain).unwrap();
         let st_rules = std::collections::BTreeSet::new();
         let tr = translate(&typed, false, &st_rules, TranslateOptions::default()).unwrap();
-        // Init + new + event + out + null = 5 rules.
-        assert_eq!(tr.rules.len(), 5);
-        assert_eq!(tr.restrictions.len(), 1);
-        // First rule is "Init".
+        // The rules are Init, new, event, out and null, in that order.  They
+        // use the `<label>_<index>_<position>` naming that HS derives from
+        // the pretty-printed head of each node (Facts.hs `toRule`).  The test
+        // compares the names, not the count.  So it catches a rule emitted
+        // for the wrong node.  It also catches a position suffix that comes
+        // from a wrong walk, and a changed emission order.
+        let names: Vec<String> = tr
+            .rules
+            .iter()
+            .map(|r| match &r.0.info.name {
+                tamarin_theory::rule::ProtoRuleName::Stand(n) => n.to_string(),
+                other => panic!("expected a standard rule name, got {other:?}"),
+            })
+            .collect();
         assert_eq!(
-            tr.rules[0].0.info.name,
-            tamarin_theory::rule::ProtoRuleName::Stand("Init")
+            names,
+            [
+                "Init",
+                "newxlol_0_",
+                "eventTestxlol_0_1",
+                "outffxlol_0_11",
+                "p_0_111"
+            ]
         );
+        // Every SAPIC theory also gets the `single_session` restriction.
+        assert_eq!(tr.restrictions.len(), 1);
+        assert_eq!(tr.restrictions[0].name, "single_session");
     }
 
     fn action_atom(name: &str) -> p::Formula {

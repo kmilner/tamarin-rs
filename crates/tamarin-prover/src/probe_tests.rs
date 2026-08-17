@@ -188,11 +188,13 @@ fn exception_report_drops_the_blank_line_for_maude() {
 /// The GHC `error` a failed maude spawn raises, as the oracle prints it under
 /// `tamarin-prover: ` (Console.hs:147).
 ///
-/// Both halves are read back out of the pinned source rather than restated: a
-/// literal restated here would agree with a wrong constant, and the e2e stderr
-/// pins compare the port against bytes captured from the port, so they move
-/// with the constant instead of catching it.  This is what notices when a bump
-/// moves the `error` or reworks its message.
+/// The test reads both halves back out of the pinned source.  It does not
+/// restate them.  Every other check of this abort compares what the port
+/// emits.  Those checks are the other ones in this file and the e2e stderr
+/// blocks in `tests/probe_reports.rs`.  A submodule bump that moves the
+/// `error`, or that rewords its message, therefore leaves all of them passing
+/// while the port prints stale coordinates.  This test is the one that
+/// detects such a bump.
 #[test]
 fn maude_abort_is_the_console_hs_error() {
     let raise = CONSOLE_HS
@@ -385,7 +387,9 @@ fn default_messages_are_byte_exact() {
 }
 
 /// HS reads `ExitFailure code` off `waitForProcess`; a clean non-zero exit is
-/// reported as-is.
+/// reported without a change.  A signalled child gives the negated number,
+/// `ExitFailure (-signum)`.  That number appears in the
+/// `failed with exit code …` reason line for a maude that the kernel killed.
 #[test]
 fn hs_exit_code_reads_the_child_status() {
     let (status, out, err) = read_process_with_exit_code("/bin/sh", &["-c", "exit 3"], "")
@@ -393,6 +397,11 @@ fn hs_exit_code_reads_the_child_status() {
     assert_eq!(hs_exit_code(&status), 3);
     assert_eq!(out, "");
     assert_eq!(err, "");
+
+    let (status, _, _) = read_process_with_exit_code("/bin/sh", &["-c", "kill -TERM $$"], "")
+        .expect("/bin/sh should be startable");
+    assert_eq!(status.code(), None, "the shell must die of the signal");
+    assert_eq!(hs_exit_code(&status), -15);
 }
 
 /// Stdin is delivered, both streams are captured, and a child that never

@@ -721,18 +721,46 @@ mod tests {
             other => panic!("expected eq(x,x), got {:?}", other),
         }
         // Restriction formula: ∀ x #NOW. (Restr_A_1(x) @ #NOW) ⇒ (x = true)
-        match &restr.formula {
-            p::Formula::Forall(vs, body) => {
-                // Two binders: the abstracted x (Msg) and #NOW (Node), in
-                // sorted order x then NOW.
-                assert_eq!(vs.len(), 2);
-                assert_eq!(vs[0].name, "x");
-                assert_eq!(vs[1].name, "NOW");
-                // Body is an implication.
-                assert!(matches!(**body, p::Formula::Implies(_, _)));
-            }
-            other => panic!("expected forall, got {:?}", other),
-        }
+        let p::Formula::Forall(vs, body) = &restr.formula else {
+            panic!("expected forall, got {:?}", restr.formula);
+        };
+        // The formula has two binders.  They are the abstracted x (Msg) and
+        // #NOW (Node), in the sorted order x then NOW.
+        assert_eq!(vs.len(), 2);
+        assert_eq!((vs[0].name.as_str(), vs[0].sort), ("x", p::SortHint::Msg));
+        assert_eq!(
+            (vs[1].name.as_str(), vs[1].sort),
+            ("NOW", p::SortHint::Node)
+        );
+        // HS `f'' = (Action #NOW fact) ==> f'`.  The generated action is the
+        // antecedent, and the rewritten body is the consequent.  A swap of the
+        // two keeps the formula an `Implies`, but it inverts the meaning of
+        // the restriction.
+        let p::Formula::Implies(ante, conseq) = &**body else {
+            panic!("expected implication, got {:?}", body);
+        };
+        assert_eq!(
+            **ante,
+            p::Formula::Atom(p::Atom::Action(
+                p::Fact {
+                    persistent: false,
+                    name: "Restr_A_1".to_string(),
+                    args: vec![p::Term::Var(vs[0].clone())],
+                    annotations: Vec::new(),
+                },
+                p::Term::Var(vs[1].clone()),
+            ))
+        );
+        // The consequent is the body of the predicate.  The complete `eq(x,x)`
+        // subterm becomes the fresh `x`.  The nullary constant `true` stays
+        // inline as a 0-ary application.  The code never abstracts it.
+        assert_eq!(
+            **conseq,
+            p::Formula::Atom(p::Atom::Eq(
+                p::Term::Var(vs[0].clone()),
+                p::Term::App("true".to_string(), Vec::new()),
+            ))
+        );
     }
 
     #[test]
@@ -754,17 +782,26 @@ mod tests {
             matches!(i,
             p::TheoryItem::Rule(r) if r.name == "A")
         });
-        assert!(restr_pos.is_some(), "restriction not generated");
-        assert!(rule_pos.is_some(), "rule missing");
+        let restr_pos = restr_pos.expect("restriction not generated");
+        let rule_pos = rule_pos.expect("rule missing");
+        // HS adds the generated restrictions to the accumulated theory, and it
+        // adds the rule after them.  The restriction is therefore immediately
+        // before the rule.
+        assert_eq!(restr_pos + 1, rule_pos, "restriction must precede rule");
+        // The pass rewrites the rule action and clears the embedded
+        // restrictions.
+        let p::TheoryItem::Rule(r) = &thy.items[rule_pos] else {
+            panic!("item at {rule_pos} is not the rule");
+        };
+        assert!(r.embedded_restrictions.is_empty());
+        assert_eq!(r.actions.len(), 1);
+        assert_eq!(r.actions[0].name, "Restr_A_1");
+        // The action carries the original term, without abstraction.
+        assert_eq!(r.actions[0].args.len(), 1);
         assert!(
-            restr_pos.unwrap() < rule_pos.unwrap(),
-            "restriction must precede rule"
+            matches!(&r.actions[0].args[0], p::Term::App(n, args) if n == "eq" && args.len() == 2),
+            "action arg must be the original eq(x,x), got {:?}",
+            r.actions[0].args[0]
         );
-        // Rule action rewritten, embedded restrictions cleared.
-        if let p::TheoryItem::Rule(r) = &thy.items[rule_pos.unwrap()] {
-            assert!(r.embedded_restrictions.is_empty());
-            assert_eq!(r.actions.len(), 1);
-            assert_eq!(r.actions[0].name, "Restr_A_1");
-        }
     }
 }

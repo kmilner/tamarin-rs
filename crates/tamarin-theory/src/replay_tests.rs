@@ -63,23 +63,65 @@ fn canonicalise_strips_wrap_spaces_inside_brackets() {
     );
 }
 
-/// A Sorry-only skeleton on an empty system should be a degenerate
-/// replay → equivalent to running the auto-prover directly.
+/// An otherwise-empty system that carries one solved formula.  The system
+/// has no goals and no contradictions.  It is also past the initial state,
+/// so `is_finished` runs and the auto-prover closes the system as Solved.
+/// `System::empty()` on its own is still in the initial state.  It only ever
+/// yields `Sorry`.  With that system, every assertion below that the
+/// auto-prover ran would hold vacuously.
+fn past_initial_system() -> System {
+    let mut sys = System::empty();
+    sys.solved_formulas_mut()
+        .push(std::sync::Arc::new(crate::guarded::gtrue()));
+    sys
+}
+
+/// The `by sorry` leaf is where the two replay entry points differ.  That
+/// difference is the reason both entry points exist.
+///
+/// `replace_sorry_prove` (HS `replaceSorryProver $ runAutoProver`, the
+/// `--prove`-target path) must hand the leaf's system to the auto-prover.
+/// Its result is then exactly the result of `run_proof_search`.
+///
+/// `check_and_extend` (HS `checkAndExtendProver (sorryProver Nothing)`, the
+/// non-target path) must not prove.  It must leave an annotated `Sorry`
+/// behind.  The `Sorry` must be annotated, so the lemma reprints as plain
+/// `by sorry` with no `/* unannotated */`.
+///
+/// [`past_initial_system`] is the degenerate case that the auto-prover
+/// closes as Solved.  That is what keeps the equality below from holding
+/// vacuously between two `Sorry`s.
 #[test]
-fn sorry_leaf_runs_auto_prover() {
+fn sorry_leaf_runs_auto_prover_only_for_prove_targets() {
     let h = match maude() {
         Some(m) => m,
         None => return,
     };
     let ctx = ProofContext::new(h, Vec::new());
-    let sys = System::empty();
     // Skeleton = `by sorry`.
     let skel = ParsedProofTree {
         method: ParsedMethod::Sorry,
         cases: Vec::new(),
     };
-    // Must terminate; the status is indeterminate on an empty system.
-    let _ = replace_sorry_prove(&ctx, sys, &skel, 50);
+    let replayed = replace_sorry_prove(&ctx, past_initial_system(), &skel, 50);
+    let direct = run_proof_search(&ctx, past_initial_system(), 50);
+    assert_eq!(replayed.status, direct.status);
+    assert_eq!(replayed.method, direct.method);
+    assert_eq!(
+        replayed.status,
+        NodeStatus::Solved,
+        "the auto-prover closes this system, so the equality above is not a \
+         Sorry-equals-Sorry tautology"
+    );
+
+    let kept = check_and_extend(&ctx, past_initial_system(), &skel, 50);
+    assert_eq!(
+        kept.status,
+        NodeStatus::Sorry,
+        "a non-target lemma's stored sorry must survive unproved"
+    );
+    assert!(matches!(kept.method, ProofMethod::Sorry(None)));
+    assert!(kept.annotated, "a stored sorry leaf stays annotated");
 }
 
 /// A `by contradiction` leaf on a system with no contradictions
@@ -91,9 +133,9 @@ fn sorry_leaf_runs_auto_prover() {
 /// (or emits Sorry honestly).  Crucially, the walker must NOT
 /// fabricate a Contradictory status.
 ///
-/// On an empty system (no goals, no contradictions) the auto-prover
-/// recognises the system as trivially Solved; the load-bearing assertion
-/// is `status != Contradictory`.
+/// On a system with no goals and no contradictions, the auto-prover
+/// recognises the system as trivially Solved.  The assertion that matters
+/// here is `status != Contradictory`.
 #[test]
 fn contradiction_leaf_without_contradiction_falls_back_to_auto() {
     let h = match maude() {
@@ -101,10 +143,7 @@ fn contradiction_leaf_without_contradiction_falls_back_to_auto() {
         None => return,
     };
     let ctx = ProofContext::new(h, Vec::new());
-    let mut sys = System::empty();
-    // Force out of initial state so is_finished can run.
-    sys.solved_formulas_mut()
-        .push(std::sync::Arc::new(crate::guarded::gtrue()));
+    let sys = past_initial_system();
     let skel = ParsedProofTree {
         method: ParsedMethod::Contradiction,
         cases: Vec::new(),
@@ -143,7 +182,7 @@ fn match_action_goal_by_name_arity() {
         time_idx: 0,
     };
     let matched = match_goal(&spec, &sys).expect("should match");
-    assert!(matches!(matched, Goal::Action(_, _)));
+    assert_eq!(matched, goal);
 }
 
 /// match_goal returns None when no goal matches the fact name.
@@ -358,28 +397,39 @@ fn match_chain_goal_by_var_and_idx() {
 
 /// Subterm matcher — open Subterm goals are matched by canonical
 /// pretty-printed-text equality on both sides.
+///
+/// The system holds two open Subterm goals.  This turns off the
+/// unique-Subterm fallback that appears below.  Only the text comparison can
+/// pick a side.  A spec whose text matches neither goal must return no
+/// match.  It must not guess.
 #[test]
 fn match_subterm_goal_by_pretty_text() {
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    // small = x:msg, big = y:msg (two distinct vars).
-    let small = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 0)));
-    let big = Term::Lit(Lit::Var(LVar::new("y", LSort::Msg, 0)));
-    let goal = Goal::Subterm((small.clone(), big.clone()));
+    let v = |n: &str| -> tamarin_term::lterm::LNTerm {
+        Term::Lit(Lit::Var(LVar::new(n, LSort::Msg, 0)))
+    };
+    let g1 = Goal::Subterm((v("x"), v("y")));
+    let g2 = Goal::Subterm((v("a"), v("b")));
     let mut sys = System::empty();
-    sys.goals_mut().push((goal.clone(), Default::default()));
+    sys.goals_mut().push((g1.clone(), Default::default()));
+    sys.goals_mut().push((g2.clone(), Default::default()));
     // Skeleton-parsed small_raw / big_raw must canonicalise to the
     // same text as `pretty_lnterm(small)` / `pretty_lnterm(big)`.
     use tamarin_term::pretty::pretty_lnterm;
-    let small_s = pretty_lnterm(&small);
-    let big_s = pretty_lnterm(&big);
-    let spec = GoalSpec::Subterm {
-        small_raw: small_s,
-        big_raw: big_s,
+    let spec = |small: &str, big: &str| GoalSpec::Subterm {
+        small_raw: pretty_lnterm(&v(small)),
+        big_raw: pretty_lnterm(&v(big)),
     };
-    let matched = match_goal(&spec, &sys).expect("should match");
-    assert_eq!(matched, goal);
+    assert_eq!(match_goal(&spec("x", "y"), &sys).expect("should match"), g1);
+    assert_eq!(match_goal(&spec("a", "b"), &sys).expect("should match"), g2);
+    // Both sides must agree.  The halves of two different goals never
+    // combine into a match.
+    assert!(match_goal(&spec("x", "b"), &sys).is_none());
+    // No text matches here.  The unique fallback is off, because there are
+    // two Subterm goals.  `match_goal` therefore returns no match.
+    assert!(match_goal(&spec("p", "q"), &sys).is_none());
 }
 
 /// Subterm matcher fallback — when skeleton text differs from
@@ -479,6 +529,99 @@ fn match_disj_goal_by_alt_count() {
         alt_texts: vec![String::new(), String::new()],
     };
     assert_eq!(match_goal(&spec2, &sys).expect("should match"), two);
+}
+
+/// `normalize_disj_alt_text_for_match` is a hand-written mirror of the
+/// skeleton parser's `normalize_disj_alt_text` (tamarin-parser
+/// proof_tree.rs).  Both functions strip every whitespace character and
+/// every `#`.
+///
+/// The two copies are private to their own crates, and the dependency runs
+/// from parser to theory only.  A test cannot compare them directly.  This
+/// test and tamarin-parser's `proof_tree_tests::solve_disj_two_alts` /
+/// `solve_disj_five_alts` together guard against drift on the Yubikey
+/// `slightly_weaker_invariant` replay path.  Those two parser tests check
+/// the `alt_texts` that the parser emits and stores.  The inputs below are
+/// the alt texts of those two tests, with the outer parens that the parser
+/// drops already removed.  The expected outputs below are exactly the
+/// strings that those two tests assert the parser stores.
+#[test]
+fn normalize_disj_alt_text_for_match_strips_whitespace_and_hash() {
+    assert_eq!(normalize_disj_alt_text_for_match(" last(#t1) "), "last(t1)");
+    assert_eq!(normalize_disj_alt_text_for_match("#t1 < #t2"), "t1<t2");
+    // A nested alt keeps its inner parens.  The newlines and the indent that
+    // come from line wrapping strip like any other whitespace.
+    assert_eq!(
+        normalize_disj_alt_text_for_match("(#t1 < #t2)\n   \u{2227} (last(#t3))"),
+        "(t1<t2)\u{2227}(last(t3))"
+    );
+}
+
+/// Disj matcher.  The system holds two open Disj goals.  They share an alt
+/// count and a per-alt shape signature.  The shape filter therefore keeps
+/// both of them, and source order alone would bind the first.  `match_goal`
+/// renders each candidate's alts with `pretty_disj_alt` under
+/// `normalize_disj_alt_text_for_match`.  It scores them against the
+/// skeleton's stored `alt_texts`.  The best score wins over source order.
+///
+/// HS reference: HS keeps the parsed `Guarded`'s concrete LVar identities and
+/// matches structurally (ProofMethod.hs:252-273, see line 258).  HS therefore
+/// never needs the tie-break.  RS's shape signature is coarser, and it
+/// recovers the distinction from the stored text.  This is the Yubikey
+/// `slightly_weaker_invariant` situation.  There, two IH-body disjs share the
+/// NonQuant×5 shape and differ only in their alt texts.
+#[test]
+fn match_disj_goal_prefers_alt_text_score_over_source_order() {
+    use crate::constraint::constraints::Disj;
+    use crate::guarded::{BVar, GAtom, GTerm, Guarded};
+    let mk_vs = |n: &str| tamarin_parser::ast::VarSpec {
+        name: n.into(),
+        idx: 0,
+        sort: tamarin_parser::ast::SortHint::Node,
+        typ: None,
+    };
+    let last = |n: &str| Guarded::Atom(GAtom::Last(GTerm::Var(BVar::Free(mk_vs(n)))));
+    // The two goals have the same alt count and the same NonQuant×2
+    // signature.  Only the variable names differ.
+    let first = Goal::Disj(Disj::new(vec![last("a"), last("b")]));
+    let second = Goal::Disj(Disj::new(vec![last("c"), last("d")]));
+    let mut sys = System::empty();
+    sys.goals_mut().push((first.clone(), Default::default()));
+    sys.goals_mut().push((second.clone(), Default::default()));
+
+    // The texts that a skeleton stores for a given candidate.
+    let stored_texts = |g: &Goal| -> Vec<String> {
+        let Goal::Disj(d) = g else {
+            panic!("expected a Disj goal");
+        };
+        d.0.iter()
+            .map(|a| normalize_disj_alt_text_for_match(&pretty_disj_alt(a)))
+            .collect()
+    };
+    let want = stored_texts(&second);
+    // Preconditions for this test.  The texts must not be empty.  An
+    // `alt_texts` that is empty everywhere skips the scoring branch
+    // completely.  The texts must also tell the two candidates apart.  If
+    // they do not, both candidates score alike and source order decides.
+    assert!(
+        want.iter().all(|s| !s.is_empty()),
+        "rendered alt texts must be non-empty, got {want:?}"
+    );
+    assert_ne!(
+        want,
+        stored_texts(&first),
+        "the two candidates must render differently"
+    );
+
+    let spec = GoalSpec::Disj {
+        alts: vec![DisjAlt::NonQuant, DisjAlt::NonQuant],
+        alt_texts: want,
+    };
+    assert_eq!(
+        match_goal(&spec, &sys).expect("should match"),
+        second,
+        "alt-text score must beat source order"
+    );
 }
 
 /// HS check-and-extend, `mergeMapsWith` rightOnly branch

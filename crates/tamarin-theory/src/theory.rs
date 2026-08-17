@@ -542,14 +542,112 @@ impl<R, R2, P, P2> DiffTheory<R, R2, P, P2> {
 mod tests {
     use super::*;
 
+    /// A theory over simple stand-in type parameters.  The accessors are
+    /// generic over `R`/`P`/`S`.  The item payloads therefore do not have to
+    /// be real rules or proofs.
+    type TestTheory = Theory<i32, (), char>;
+
+    fn lemma(name: &str) -> Lemma<()> {
+        Lemma {
+            name: name.to_string(),
+            modulo: None,
+            attributes: Vec::new(),
+            trace_quantifier: TraceQuantifier::AllTraces,
+            formula: tamarin_parser::ast::Formula::True,
+            proof: (),
+            plaintext: String::new(),
+        }
+    }
+
+    fn restriction(name: &str) -> OpenRestriction {
+        OpenRestriction::new(name, tamarin_parser::ast::Formula::True)
+    }
+
+    fn lnmacro(name: &str) -> LNMacro {
+        LNMacro {
+            name: name.to_string(),
+            args: Vec::new(),
+            body: tamarin_term::vterm::var_term(LVar::new("x", tamarin_term::lterm::LSort::Msg, 0)),
+        }
+    }
+
+    /// Every accessor is a `filter_map` over one `TheoryItem` arm.  A
+    /// copy-pasted arm makes one accessor return another accessor's items,
+    /// and nothing reports the mistake.  The `items` vector below holds one
+    /// item of each kind and keeps their order.  Each accessor must therefore
+    /// return exactly its own items.  `macros()` must also flatten its item's
+    /// list and not count the item.
     #[test]
-    fn empty_theory_has_no_items() {
-        let s = SignaturePure::empty(false);
-        let t: Theory = Theory::new("Foo", s);
+    fn accessors_select_only_their_own_item_kind() {
+        let mut t: TestTheory = Theory::new("Foo", SignaturePure::empty(false));
         assert_eq!(t.name, "Foo");
         assert_eq!(t.items.len(), 0);
         assert_eq!(t.rules().count(), 0);
-        assert_eq!(t.lemmas().count(), 0);
+
+        t.add_item(TheoryItem::Rule(7))
+            .add_item(TheoryItem::Lemma(lemma("L")))
+            .add_item(TheoryItem::Restriction(restriction("R")))
+            .add_item(TheoryItem::Macros(vec![lnmacro("m1"), lnmacro("m2")]))
+            .add_item(TheoryItem::Translation('t'));
+
+        assert_eq!(t.rules().copied().collect::<Vec<_>>(), vec![7]);
+        assert_eq!(
+            t.lemmas().map(|l| l.name.as_str()).collect::<Vec<_>>(),
+            vec!["L"]
+        );
+        assert_eq!(
+            t.restrictions()
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["R"]
+        );
+        assert_eq!(t.predicates().count(), 0);
+        assert_eq!(
+            t.macros().map(|m| m.name.as_str()).collect::<Vec<_>>(),
+            vec!["m1", "m2"],
+            "`macros()` flattens the item's macro list"
+        );
+        assert_eq!(t.lookup_lemma("L").map(|l| l.name.as_str()), Some("L"));
+        assert_eq!(t.lookup_lemma("R"), None, "a restriction is not a lemma");
+        assert_eq!(
+            t.lookup_restriction("R").map(|r| r.name.as_str()),
+            Some("R")
+        );
+        assert_eq!(t.lookup_restriction("L"), None);
+    }
+
+    /// HS `addLemma` and `addRestriction` (TheoryObject.hs:453-465) refuse a
+    /// name that is already present, and they report the refusal.  `addRules`
+    /// has no such check.  It always appends.
+    #[test]
+    fn add_lemma_and_add_restriction_refuse_a_duplicate_name() {
+        let mut t: TestTheory = Theory::new("Foo", SignaturePure::empty(false));
+        assert!(t.add_lemma(lemma("L")));
+        assert!(!t.add_lemma(lemma("L")), "second `L` must be refused");
+        assert!(t.add_lemma(lemma("L2")));
+        assert!(t.add_restriction(restriction("R")));
+        assert!(!t.add_restriction(restriction("R")));
+
+        // `add_lemmas` and `add_restrictions` fold the singular form.  They
+        // skip the entries whose names clash.  They add the new entries in
+        // order.
+        t.add_lemmas([lemma("L"), lemma("L3")]);
+        t.add_restrictions([restriction("R"), restriction("R2")]);
+        assert_eq!(
+            t.lemmas().map(|l| l.name.as_str()).collect::<Vec<_>>(),
+            vec!["L", "L2", "L3"]
+        );
+        assert_eq!(
+            t.restrictions()
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["R", "R2"]
+        );
+
+        // `add_rules` removes no duplicates.  It adds both copies after the
+        // items that are already present.
+        t.add_rules([7, 7]);
+        assert_eq!(t.rules().copied().collect::<Vec<_>>(), vec![7, 7]);
     }
 
     #[test]
@@ -562,9 +660,14 @@ mod tests {
         assert!(o.lemmas_to_prove.is_empty());
     }
 
+    /// An unproven lemma carries no proof text and no parsed tree.  The
+    /// pretty-printer reads `raw`.  The web and JSON paths read `tree`.  A
+    /// placeholder in either field makes the code print a proof that the
+    /// prover never found.
     #[test]
     fn proof_skeleton_unproven_is_empty() {
         let p = ProofSkeleton::unproven();
         assert!(p.raw.is_empty());
+        assert!(p.tree.is_none());
     }
 }

@@ -2104,10 +2104,11 @@ fn intr_mk_empty(_: LNFact) -> Vec<LNFact> {
 /// In production the Rust port likewise takes the cached-file path
 /// (see `constraint::solver::context::ProofContext::new_with_restrictions`,
 /// the `intruder_variants::mk_dh_intruder_variants` call); this
-/// function is retained as the regenerator and is exercised by the
-/// bridge test
-/// `intruder_variants::tests::bridge_runtime_generator_matches_cached_file_on_counts_and_names`,
-/// which flags drift between today's Maude and the cached file.
+/// function stays here as the regenerator.  The test
+/// `intruder_rules::tests::dh_intruder_rules_emits_five_constructors_and_some_destructors`
+/// exercises it.  The asserts `rules.len() == 51`, `n_exp == 45` and
+/// `n_inv == 1` in that test report any drift between today's Maude and the
+/// cached file.
 pub fn dh_intruder_rules(
     diff: bool,
     maude: &tamarin_term::maude_proc::MaudeHandle,

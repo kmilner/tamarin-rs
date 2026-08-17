@@ -85,23 +85,64 @@ mod tests {
     use tamarin_term::builtin::msg_var;
     use tamarin_term::lterm::LNTerm;
 
-    #[test]
-    fn atom_predicates() {
-        let a: Atom<LNTerm> = ProtoAtom::Less(msg_var("x", 0), msg_var("y", 0));
-        assert!(a.is_less());
-        assert!(!a.is_eq());
-
-        let b: Atom<LNTerm> = ProtoAtom::Action(msg_var("t", 0), fresh_fact(msg_var("k", 0)));
-        assert!(b.is_action());
+    fn x() -> LNTerm {
+        msg_var("x", 0)
+    }
+    fn y() -> LNTerm {
+        msg_var("y", 0)
     }
 
+    /// Every predicate matches exactly its own variant.  The test asserts the
+    /// full variant × predicate diagonal.  This catches a predicate that is
+    /// wired to the wrong constructor.  It also catches a predicate that
+    /// degenerates to a constant.
+    #[test]
+    fn atom_predicates() {
+        let atoms: Vec<Atom<LNTerm>> = vec![
+            ProtoAtom::Action(x(), fresh_fact(y())),
+            ProtoAtom::EqE(x(), y()),
+            ProtoAtom::Subterm(x(), y()),
+            ProtoAtom::Less(x(), y()),
+            ProtoAtom::Last(x()),
+            ProtoAtom::Syntactic(Unit2),
+        ];
+        for (i, a) in atoms.iter().enumerate() {
+            let row = [
+                a.is_action(),
+                a.is_eq(),
+                a.is_subterm(),
+                a.is_less(),
+                a.is_last(),
+                a.is_syntactic_sugar(),
+            ];
+            for (j, hit) in row.iter().enumerate() {
+                assert_eq!(*hit, i == j, "predicate {j} on {a:?}");
+            }
+        }
+    }
+
+    /// `to_atom` replaces the sugar payload with the field-less `Unit2`.  It
+    /// carries every other variant across unchanged.  This includes the
+    /// constructor of the variant.  A check that uses `matches!` on one
+    /// variant cannot see that constructor.
     #[test]
     fn to_atom_strips_sugar() {
-        let s: SyntacticAtom<LNTerm> = ProtoAtom::Syntactic(SyntacticSugar::Pred(Fact::fresh(
-            FactTag::Term,
-            vec![msg_var("x", 0)],
-        )));
-        let a = to_atom(s);
-        assert!(matches!(a, ProtoAtom::Syntactic(Unit2)));
+        let s: SyntacticAtom<LNTerm> =
+            ProtoAtom::Syntactic(SyntacticSugar::Pred(Fact::fresh(FactTag::Term, vec![x()])));
+        assert_eq!(to_atom(s), ProtoAtom::Syntactic(Unit2));
+
+        let cases: Vec<(SyntacticAtom<LNTerm>, Atom<LNTerm>)> = vec![
+            (
+                ProtoAtom::Action(x(), fresh_fact(y())),
+                ProtoAtom::Action(x(), fresh_fact(y())),
+            ),
+            (ProtoAtom::EqE(x(), y()), ProtoAtom::EqE(x(), y())),
+            (ProtoAtom::Subterm(x(), y()), ProtoAtom::Subterm(x(), y())),
+            (ProtoAtom::Less(x(), y()), ProtoAtom::Less(x(), y())),
+            (ProtoAtom::Last(x()), ProtoAtom::Last(x())),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(to_atom(input), expected);
+        }
     }
 }

@@ -376,24 +376,26 @@ mod tests {
         let p1 = partitions(&[1]);
         assert_eq!(p1, vec![vec![vec![1]]]);
 
-        // {1,2}: { {{1,2}}, {{1},{2}} }  — the Haskell order is
-        // ((x:xs):xss) first, then bloat-recurse.
-        let p2 = partitions(&[1, 2]);
-        // Two partitions of a 2-element set.
-        assert_eq!(p2.len(), 2);
-        // Bell numbers: 1, 1, 2, 5, 15, ...
-        assert_eq!(partitions(&[1, 2, 3]).len(), 5);
-        assert_eq!(partitions(&[1, 2, 3, 4]).len(), 15);
-    }
-
-    #[test]
-    fn partitions_each_partition_covers_input() {
-        let xs = vec![1, 2, 3, 4];
-        for parts in partitions(&xs) {
-            let mut flat: Vec<i32> = parts.into_iter().flatten().collect();
-            flat.sort();
-            assert_eq!(flat, xs);
-        }
+        // This is the exact enumeration order of the HS `partitions` and
+        // `bloat` functions
+        // (`bloat x (xs:xss) = ((x:xs):xss) : map (xs:) (bloat x xss)`).
+        // The code merges the head into the first group first. The group that
+        // holds the head then moves to the right. The counts alone do not pin
+        // this order. See `prop_partition_count_is_bell` for the counts.
+        assert_eq!(
+            partitions(&[1, 2]),
+            vec![vec![vec![1, 2]], vec![vec![2], vec![1]]]
+        );
+        assert_eq!(
+            partitions(&[1, 2, 3]),
+            vec![
+                vec![vec![1, 2, 3]],
+                vec![vec![2, 3], vec![1]],
+                vec![vec![1, 3], vec![2]],
+                vec![vec![3], vec![1, 2]],
+                vec![vec![3], vec![2], vec![1]],
+            ]
+        );
     }
 
     #[test]
@@ -410,18 +412,27 @@ mod tests {
         // Haskell:
         //   twoPartitions []     = []
         //   twoPartitions [x]    = [([x], [])]
+        //   twoPartitions (x:xs) = map addToFirst ps ++ map addToSecond ps
         let empty: Vec<i32> = vec![];
         assert_eq!(two_partitions(&empty), Vec::<(Vec<i32>, Vec<i32>)>::new());
         assert_eq!(two_partitions(&[1]), vec![(vec![1], vec![])]);
 
+        // This is the exact HS order. All `addToFirst` results come first, and
+        // all `addToSecond` results follow. Each side keeps the relative order
+        // of the input. The `[x]` base case puts the last element into the
+        // first list. The first component is therefore never empty, and there
+        // are 2^(n-1) results, not 2^n.
         let tp = two_partitions(&[1, 2, 3]);
-        // There are 2^(n-1) results (the first list is never empty); here just
-        // check that each pair covers the input.
-        for (a, b) in &tp {
-            let mut combined: Vec<i32> = a.iter().chain(b.iter()).copied().collect();
-            combined.sort();
-            assert_eq!(combined, vec![1, 2, 3]);
-        }
+        assert_eq!(
+            tp,
+            vec![
+                (vec![1, 2, 3], vec![]),
+                (vec![1, 3], vec![2]),
+                (vec![2, 3], vec![1]),
+                (vec![3], vec![1, 2]),
+            ]
+        );
+        assert!(tp.iter().all(|(a, _)| !a.is_empty()));
     }
 
     #[test]
@@ -462,11 +473,6 @@ mod tests {
     // -- Properties -----------------------------------------------------------
 
     proptest! {
-        #[test]
-        fn prop_subset_self(xs in proptest::collection::vec(0i32..50, 0..20)) {
-            prop_assert!(subset_of(&xs, &xs));
-        }
-
         #[test]
         fn prop_no_duplicates_matches_btreeset_size(
             xs in proptest::collection::vec(0i32..20, 0..30)

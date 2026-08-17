@@ -46,18 +46,22 @@ unbound_variables                  : Unbound variables
 # checks, so they can only catch a MISSING report; these catch a FALSE
 # POSITIVE.
 #
-# They ride inside a `#`-prefixed directive on purpose: the parser-only
-# harness `crates/tamarin-parser/tests/wellformedness.rs` reads this same file
-# and treats every non-`#` line as positive expectations, so an inline
-# `!topic` would fail there. Only the differential runner
-# (`cargo run -p tamarin-parser --example wellformedness_fixtures`) enforces
-# them.
+# They ride inside a `#`-prefixed directive on purpose: both harnesses read
+# this same file and treat every non-`#` line as positive expectations, so an
+# inline `!topic` would fail there. Both enforce them — the parser-only test
+# `crates/tamarin-parser/tests/wellformedness.rs` against `wf::check_theory`,
+# the differential runner
+# (`cargo run -p tamarin-parser --example wellformedness_fixtures`) against
+# `wf::check_theory` and the oracle.
 #
 # The three fixtures below each pin only a post-elaboration topic
 # (`Formula terms` / `Multiplication restriction of rules`), which the
 # parser-level checker cannot emit. Without these negatives their Rust-side
-# comparison would assert nothing beyond "the file parses"; the runner's
-# EMPTY_RUST_EXPECTATION_ALLOWLIST is what keeps that visible.
+# comparison would assert nothing beyond "the file parses"; both harnesses
+# fail such a fixture rather than pass it silently. What holds those three
+# .spthy files to their actual content is `reports/<fixture>.report` —
+# `cargo test -p tamarin-theory --test wellformedness_fixture_reports`, which
+# reaches the post-elaboration checks and pins the whole rendered block.
 #! formula_unguarded          : Formula guardedness, Unbound variables
 #! multiplication_in_rule_lhs : Formula terms, Unbound variables
 #! quantifier_wrong_sort      : Quantifier sorts, Unbound variables

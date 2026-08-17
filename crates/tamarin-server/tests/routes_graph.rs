@@ -7,7 +7,8 @@
 //! Coverage:
 //!   - DOT output via the in-process `system_to_dot` against a
 //!     simple known-shape proof system.
-//!   - `/intdot` returns the HTML shell whose `dotsrc` points at `/json`.
+//!   - `/intdot` returns the oracle's HTML shell byte for byte.  Its
+//!     `dotsrc` points at `/json` under the requested theory path.
 //!   - `/interactive-graph-def` draws proof nodes and source cases, the
 //!     latter byte-for-byte against the oracle's own document (the route
 //!     serialises through `showDot`, exactly as upstream's does); for it and
@@ -32,6 +33,24 @@ async fn intdot_returns_html_shell() {
     // the `.graph-page` container with the floating Options bar.  It is NOT
     // the graph data itself.
     let s = start_server_with_theory("issue193.spthy").await;
+    // `intdotLayout` does not depend on the system, because the handler only
+    // does `withTheory`.  It therefore answers the shell for any theory path,
+    // and a lemma path is one of them.  The oracle capture comes from a lemma
+    // path.  The test compares the response byte for byte.
+    let res = s
+        .client
+        .get(s.url("/thy/trace/1/intdot/lemma/debug"))
+        .send()
+        .await
+        .expect("send");
+    assert_eq!(res.status(), 200);
+    assert_eq!(
+        res.text().await.expect("text"),
+        haskell_capture("intdot.html")
+    );
+
+    // The shell's `dotsrc` is the same theory path, rendered again against the
+    // json route.  An empty proof-tree case name therefore comes back as `_`.
     let res = s
         .client
         .get(s.url("/thy/trace/1/intdot/proof/debug/_"))
@@ -41,19 +60,9 @@ async fn intdot_returns_html_shell() {
     assert_eq!(res.status(), 200);
     let body = res.text().await.expect("text");
     assert!(
-        body.contains("<dot-graph-viz"),
-        "intdot must be the HTML shell with a <dot-graph-viz>, got: {}",
-        &body[..body.len().min(200)]
-    );
-    assert!(
         body.contains("dotsrc=\"/thy/trace/1/json/proof/debug/_\""),
         "the shell's dotsrc must point at the json route; got: {}",
         &body[..body.len().min(300)]
-    );
-    assert!(
-        body.contains("<div class=\"graph-page\">") && body.contains("id=\"popout-options\""),
-        "the shell must carry the .graph-page wrapper and the options bar; got: {}",
-        &body[..body.len().min(600)]
     );
 }
 

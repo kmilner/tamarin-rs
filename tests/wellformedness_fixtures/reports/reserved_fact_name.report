@@ -1,0 +1,10 @@
+# source: oracle ef3f0468, plain load
+/*
+WARNING: the following wellformedness checks failed!
+
+Reserved names
+==============
+
+  Rule `Bad' contains facts with reserved names on the right-hand-side:
+    !KU( ~k )
+*/

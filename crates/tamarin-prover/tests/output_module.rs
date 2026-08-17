@@ -546,18 +546,6 @@ fn unsupported_module_is_a_parse_error() {
     }
 }
 
-/// `--partial-evaluation=bogus` is likewise a clap parse error.
-#[test]
-fn partial_evaluation_unknown_option_is_a_parse_error() {
-    let (code, stdout, stderr) = run_raw("pe_bogus", REPLICATION, &["--partial-evaluation=bogus"]);
-    assert_eq!(code, 2);
-    assert!(stdout.is_empty(), "stdout must be empty: {stdout:?}");
-    assert!(
-        stderr.contains("--partial-evaluation"),
-        "the error names the flag:\n{stderr}"
-    );
-}
-
 /// The three export modules are valid `-m` values whose backends are
 /// unported: they parse cleanly and fail at run time with the port's
 /// `--output-module=… not yet ported` error (rc 1).

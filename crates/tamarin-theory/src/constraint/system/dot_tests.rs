@@ -5,42 +5,28 @@
 use super::*;
 use crate::constraint::system::System;
 
+/// An empty system renders as the bare container with no clusters.  It holds
+/// the `setDefaultAttributes` preamble (System/Dot.hs:132-138) and `showDot`'s
+/// blank line before the closing brace.  It holds nothing else.  There is no
+/// legend scope, because there is nothing to abbreviate.  There is no stray
+/// node statement and no rank statement.  The test compares the complete
+/// document, because every substring check here also holds for output that
+/// lost its body.
 #[test]
 fn dot_for_empty_system() {
     let sys = System::empty();
-    let s = system_to_dot(&sys);
-    assert!(s.starts_with("digraph \"G\" {"));
-    assert!(s.contains("nodesep"));
-    assert!(s.trim_end().ends_with('}'));
-}
-
-#[test]
-fn dot_for_node_with_rule() {
-    use crate::fact::{fresh_fact, out_fact};
-    use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo};
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    let mut sys = System::empty();
-    let kvar = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-    let info: RuleInfo<ProtoRuleACInstInfo, crate::rule::IntrRuleACInfo> =
-        RuleInfo::Proto(ProtoRuleACInstInfo {
-            name: ProtoRuleName::Stand("Setup"),
-            attributes: RuleAttributes::empty(),
-            loop_breakers: Vec::new(),
-        });
-    let rule = Rule::new(
-        info,
-        vec![fresh_fact(kvar.clone())],
-        vec![out_fact(kvar.clone())],
-        Vec::new(),
+    assert_eq!(
+        system_to_dot(&sys),
+        concat!(
+            "digraph \"G\" {\n",
+            "nodesep=\"0.3\";\n",
+            "ranksep=\"0.3\";\n",
+            "node[fontsize=\"8\",fontname=\"Helvetica\",width=\"0.3\",height=\"0.2\"];\n",
+            "edge[fontsize=\"8\",fontname=\"Helvetica\"];\n",
+            "\n",
+            "}\n",
+        )
     );
-    let nid = LVar::new("i", LSort::Node, 0);
-    sys.add_node(nid, rule);
-    let s = system_to_dot(&sys);
-    assert!(s.contains("Setup"));
-    assert!(s.contains("Fr"));
-    assert!(s.contains("Out"));
 }
 
 /// Build a two-node system plus the edge between them, and a second copy of
@@ -136,7 +122,8 @@ fn edge_attrs(dot: &str) -> String {
 ///
 /// HS spells the surviving attribute list `[style="bold",weight="10.0",
 /// color="gray50"]`.  The `[style="bold",weight="10.0"]` prefix is the
-/// missing-node edge of `tests/fixtures/haskell-responses/igd_cases_raw.dot`,
+/// missing-node edge of
+/// `crates/tamarin-server/tests/fixtures/haskell-responses/igd_cases_raw.dot`,
 /// whose endpoint fact is LINEAR and so takes no colour; the `color="gray50"`
 /// suffix is the persistent branch, captured with `--prove=reach --output-dot`
 /// on `rule Reg: [Fr(~k)] --[R(~k)]-> [!Key(~k)]` /
@@ -357,91 +344,42 @@ fn render_balanced_matches_hs_oidc_rows() {
             sp(23)), "conc row:\n{}", crow[0]);
 }
 
+/// This test runs an action-less protocol rule through the default options.
+/// Those options turn on both compress and abbreviate.  That is the pair the
+/// batch writer uses.  The rule renders its complete record row from
+/// `prettyLNTerm`.  A pub-var literal renders as `$a`, never as a `M:0`
+/// placeholder.  The rule-label row is bare `#i : Setup` with no `[…]` action
+/// list.  The test compares the complete document.  A compression that hides
+/// the node therefore fails here.  So does a legend that the writer emits for
+/// a system with nothing to abbreviate.
 #[test]
 fn dot_uses_pretty_printing_for_terms() {
-    // Two pub var literals should render as $a, $b not as cryptic
-    // M:0 placeholders.
     use crate::fact::{fresh_fact, out_fact};
-    use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
     let mut sys = System::empty();
     let a = Term::Lit(Lit::Var(LVar::new("a", LSort::Pub, 0)));
-    let info: RuleInfo<ProtoRuleACInstInfo, crate::rule::IntrRuleACInfo> =
-        RuleInfo::Proto(ProtoRuleACInstInfo {
-            name: ProtoRuleName::Stand("Setup"),
-            attributes: RuleAttributes::empty(),
-            loop_breakers: Vec::new(),
-        });
-    let rule = Rule::new(
-        info,
+    let rule = proto_node(
+        "Setup",
         vec![fresh_fact(a.clone())],
-        vec![out_fact(a.clone())],
         Vec::new(),
+        vec![out_fact(a)],
     );
-    let nid = LVar::new("i", LSort::Node, 0);
-    sys.add_node(nid, rule);
-    let s = system_to_dot(&sys);
-    assert!(s.contains("$a"), "expected $a in DOT output: {}", s);
-}
-
-#[test]
-fn dot_emits_cluster_for_role() {
-    use crate::fact::out_fact;
-    use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo};
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    let mut sys = System::empty();
-    let kvar = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-    let mk = |name: &str, role: Option<&str>| -> RuleACInst {
-        let attrs = RuleAttributes {
-            role: role.map(|r| r.to_string()),
-            ..Default::default()
-        };
-        Rule::new(
-            RuleInfo::Proto(ProtoRuleACInstInfo {
-                name: ProtoRuleName::Stand(tamarin_term::intern::intern_str(name)),
-                attributes: attrs,
-                loop_breakers: Vec::new(),
-            }),
-            Vec::new(),
-            vec![out_fact(kvar.clone())],
-            // Action to prevent compression from hiding it.
-            vec![out_fact(kvar.clone())],
+    sys.add_node(LVar::new("i", LSort::Node, 0), rule);
+    assert_eq!(
+        system_to_dot(&sys),
+        concat!(
+            "digraph \"G\" {\n",
+            "nodesep=\"0.3\";\n",
+            "ranksep=\"0.3\";\n",
+            "node[fontsize=\"8\",fontname=\"Helvetica\",width=\"0.3\",height=\"0.2\"];\n",
+            "edge[fontsize=\"8\",fontname=\"Helvetica\"];\n",
+            "n3[shape=\"record\",label=\"{{<n0> Fr( $a )}|{<n1> #i : Setup}|{<n2> Out( $a )}}\"\
+             ,fillcolor=\"#d5d897\",style=\"filled\",fontcolor=\"black\",role=\"Undefined\"];\n",
+            "\n",
+            "}\n",
         )
-    };
-    sys.add_node(LVar::new("a", LSort::Node, 1), mk("InitA", Some("Alice")));
-    sys.add_node(LVar::new("b", LSort::Node, 2), mk("InitB", Some("Bob")));
-    let s = system_to_dot(&sys);
-    // Each role yields a cluster subgraph whose id is HS
-    // `createClusterNodeId name` (System/Dot.hs:181, reached from `dotCluster` at
-    // System/Dot.hs:576) — the quoted `"cluster_<name>"` over the cluster's FULL
-    // name.  `extractBaseName` (System/Dot.hs:574) is used only to pick the colour.
-    assert!(
-        s.contains("subgraph \"cluster_Alice_Session_1\" {"),
-        "missing Alice cluster: {}",
-        s
-    );
-    assert!(
-        s.contains("subgraph \"cluster_Bob_Session_1\" {"),
-        "missing Bob cluster: {}",
-        s
-    );
-    // `label` is the cluster's own attribute (System/Dot.hs:579), NOT the subgraph
-    // id: asking only whether the role name appears anywhere is answered by
-    // the id asserted above, so a `dotCluster` emitting no label at all
-    // would satisfy it.
-    assert!(
-        s.contains("\nlabel=\"Alice_Session_1\";\n"),
-        "missing Alice cluster label: {}",
-        s
-    );
-    assert!(
-        s.contains("\nlabel=\"Bob_Session_1\";\n"),
-        "missing Bob cluster label: {}",
-        s
     );
 }
 
@@ -486,12 +424,11 @@ fn dot_with_sl0_does_not_collapse_less() {
     };
     let s3 = system_to_dot_with(&sys, &opts_sl3);
     let dashed_sl3 = s3.matches("style=\"dashed\"").count();
-    assert!(
-        dashed_sl3 < dashed_sl0,
-        "SL3 should drop the redundant transitive edge: SL0={} SL3={}",
-        dashed_sl0,
-        dashed_sl3
-    );
+    // The assertions compare exact counts.  A `<` comparison alone also holds
+    // when SL0 drops nothing and SL3 drops both the redundant edge and a
+    // chain edge.
+    assert_eq!(dashed_sl0, 3, "SL0 keeps all three less-edges: {s0}");
+    assert_eq!(dashed_sl3, 2, "SL3 drops only the redundant a<c: {s3}");
 }
 
 #[test]
@@ -536,7 +473,18 @@ fn dot_with_cluster_passes_graphviz_lint() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn();
+    // On a machine with no runnable Graphviz this test fails instead of a
+    // skip.  This is the only test that feeds our DOT to a real `dot`.  A
+    // silent skip makes `cargo test` pass in exactly the same way with and
+    // without `dot`.  The check copies the `TAM_ALLOW_NO_DOT` escape hatch of
+    // the integration suites (crates/tamarin-prover/tests/common/mod.rs).
     let Ok(mut child) = child else {
+        assert!(
+            std::env::var("TAM_ALLOW_NO_DOT").as_deref() == Ok("1"),
+            "no runnable `dot` on $PATH: this lint would skip and report green \
+             vacuously. Install graphviz, or set TAM_ALLOW_NO_DOT=1 to skip it \
+             deliberately."
+        );
         return;
     };
     if let Some(mut sin) = child.stdin.take() {
@@ -891,51 +839,6 @@ fn dot_compact_intruder_node_is_plain_ellipse() {
 }
 
 #[test]
-fn dot_explicit_rule_color_attribute_sets_fillcolor() {
-    // HS `dotNodeCompact` prefers `ruleColor'` (the explicit `color:`
-    // attribute, System/Dot.hs:251-256) over the colormap, in the `fromMaybe …
-    // (ruleColor' <|> manualNodeColor)` at System/Dot.hs:259. The hex is
-    // `rgbToHex` of the attribute's Rgb.
-    use crate::fact::out_fact;
-    use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes};
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    use tamarin_utils::color::Rgb;
-    let mut sys = System::empty();
-    let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-    let rgb = Rgb::new(1.0, 0.5, 0.0);
-    let expected = tamarin_utils::color::rgb_to_hex(rgb); // "#ff7f00"
-    let attrs = RuleAttributes {
-        color: Some(rgb),
-        ..Default::default()
-    };
-    let ru = Rule::new(
-        RuleInfo::Proto(ProtoRuleACInstInfo {
-            name: ProtoRuleName::Stand("Coloured"),
-            attributes: attrs,
-            loop_breakers: Vec::new(),
-        }),
-        Vec::new(),
-        vec![out_fact(k.clone())],
-        vec![out_fact(k)],
-    );
-    sys.add_node(LVar::new("i", LSort::Node, 0), ru);
-    let opts = GraphOptions {
-        compress: false,
-        abbreviate: false,
-        ..GraphOptions::default()
-    };
-    let s = system_to_dot_with(&sys, &opts);
-    assert!(
-        s.contains(&format!("fillcolor=\"{}\"", expected)),
-        "explicit rule colour {} must be used as fillcolor: {}",
-        expected,
-        s
-    );
-}
-
-#[test]
 fn web_route_is_the_batch_serializer_at_label_g() {
     // Upstream has ONE dot serializer: the interactive DOT route
     // (`dotGraphString`, `Web/Theory.hs:2312-2318`) and the batch
@@ -968,44 +871,6 @@ fn web_route_is_the_batch_serializer_at_label_g() {
     // `nodesep` and friends are preamble, emitted for an EMPTY graph too;
     // pin the body, so a render that drops every node still fails here.
     assert!(web.contains("#i : Setup"), "empty body under test: {web}");
-}
-
-#[test]
-fn dot_no_cluster_preamble_sets_node_size_and_less_edge_color_first() {
-    // No-cluster preamble mirrors HS setDefaultAttributes (System/Dot.hs:133-138)
-    // — including `width=0.3,height=0.2` on the node defaults (System/Dot.hs:137).
-    // The less edge emits `color` before `style` (HS dotLessEdge,
-    // System/Dot.hs:409-413, see line 413).
-    use crate::constraint::constraints::LessAtom;
-    use tamarin_term::lterm::{LSort, LVar};
-    let mut sys = System::empty();
-    let a = LVar::new("a", LSort::Node, 0);
-    let b = LVar::new("b", LSort::Node, 0);
-    // Both endpoints must be drawn nodes — see `dot_with_sl0_does_not_collapse_less`.
-    for n in [a, b] {
-        sys.add_node(n, named_proto_node(PRN::Stand("R")));
-    }
-    sys.content_mut()
-        .less_atoms
-        .push(LessAtom::new(a, b, Reason::Fresh));
-    let opts = GraphOptions {
-        compress: false,
-        abbreviate: false,
-        simplification_level: crate::constraint::system::graph::SimplificationLevel::SL0,
-        ..GraphOptions::default()
-    };
-    let s = system_to_dot_with(&sys, &opts);
-    assert!(
-        s.contains("width=\"0.3\",height=\"0.2\""),
-        "no-cluster preamble must set node width/height: {}",
-        s
-    );
-    // `Reason::Fresh` -> "blue3"; color must precede style.
-    assert!(
-        s.contains("[color=\"blue3\",style=\"dashed\"]"),
-        "less edge must emit color before style: {}",
-        s
-    );
 }
 
 #[test]

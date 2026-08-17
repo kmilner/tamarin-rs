@@ -10,29 +10,27 @@ fn n(name: &str) -> NodeId {
     LVar::new(name, LSort::Node, 0)
 }
 
+/// `cyclic` is the `Cyclic` contradiction check over the raw less-relation.
+/// It reports a cycle only when the ordering edges close one.  The reflexive
+/// case matters here.  `exploitUniqueMsgOrder` inserts `i < i` for a node that
+/// both concludes `KD(m)` and carries `KU(m)`.  That self-edge is the only
+/// thing that rules out such a case (see
+/// `simplify_tests::exploit_unique_msg_order_inserts_the_reflexive_self_edge`).
 #[test]
-fn empty_system_has_no_contradictions() {
-    // `contradictions()` needs a live Maude; `cyclic` does not.
-    assert!(!cyclic(&[]));
-}
-
-#[test]
-fn cycle_detected() {
-    let l = vec![
-        LessAtom::new(n("a"), n("b"), Reason::Fresh),
-        LessAtom::new(n("b"), n("c"), Reason::Fresh),
-        LessAtom::new(n("c"), n("a"), Reason::Fresh),
-    ];
-    assert!(cyclic(&l));
-}
-
-#[test]
-fn no_cycle_detected() {
-    let l = vec![
-        LessAtom::new(n("a"), n("b"), Reason::Fresh),
-        LessAtom::new(n("b"), n("c"), Reason::Fresh),
-    ];
-    assert!(!cyclic(&l));
+fn cyclic_sees_closed_orderings_only() {
+    let ab = LessAtom::new(n("a"), n("b"), Reason::Fresh);
+    let bc = LessAtom::new(n("b"), n("c"), Reason::Fresh);
+    let ca = LessAtom::new(n("c"), n("a"), Reason::Fresh);
+    let aa = LessAtom::new(n("a"), n("a"), Reason::NormalForm);
+    for (label, atoms, want) in [
+        ("no atoms", vec![], false),
+        ("chain a<b<c", vec![ab.clone(), bc.clone()], false),
+        ("closed a<b<c<a", vec![ab.clone(), bc, ca], true),
+        ("reflexive a<a", vec![aa], true),
+        ("single edge", vec![ab], false),
+    ] {
+        assert_eq!(cyclic(&atoms), want, "{label}");
+    }
 }
 
 /// `nonInjectiveFactInstances` direct port: feed in a system with
@@ -106,18 +104,7 @@ fn non_injective_fact_witness_emitted() {
     sys.add_less(LessAtom::new(j, k, Reason::Adversary));
 
     // Build the proof context that knows `Inj` is injective.
-    fn maude_path() -> Option<String> {
-        if let Ok(p) = std::env::var("MAUDE_PATH") {
-            return Some(p);
-        }
-        for c in ["/usr/local/bin/maude", "maude"] {
-            if std::path::Path::new(c).exists() {
-                return Some(c.to_string());
-            }
-        }
-        None
-    }
-    let mp = match maude_path() {
+    let mp = match crate::test_maude::maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -130,9 +117,14 @@ fn non_injective_fact_witness_emitted() {
         .iter()
         .filter(|c| matches!(c, Contradiction::NonInjectiveFactInstance(_, _, _)))
         .collect();
-    assert!(
-        !injs.is_empty(),
-        "expected at least one NonInjectiveFactInstance contradiction; got {:?}",
+    // The result is exactly the (i, j, k) witness triple, in HS's argument
+    // order.  The renderer prints these three ids.  A witness in a different
+    // order, or a duplicated witness, therefore changes the printed bytes.  A
+    // check for "at least one" witness would let that through.
+    assert_eq!(
+        injs,
+        vec![&Contradiction::NonInjectiveFactInstance(i, j, k)],
+        "expected exactly the (Init, Copy, Stop) witness; got {:?}",
         cs
     );
 }
@@ -217,7 +209,7 @@ fn nf_memo_agrees_with_unmemoized_verdicts() {
     use tamarin_term::rewriting::RRule;
     use tamarin_term::term::f_app_acfct;
 
-    let Ok(mp) = std::env::var("MAUDE_PATH") else {
+    let Some(mp) = crate::test_maude::maude_path() else {
         return;
     };
 

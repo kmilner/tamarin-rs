@@ -32,7 +32,12 @@ fn err(value: &str) -> String {
 
 /// The stored `Color` attribute of the accepted theory with `color=<value>`.
 fn accepted_code(value: &str) -> String {
-    let thy = parse_theory(&color_theory(value), &[]).expect("theory should parse");
+    stored_code(&color_theory(value))
+}
+
+/// The single `Color` attribute of `src`'s single rule.
+fn stored_code(src: &str) -> String {
+    let thy = parse_theory(src, &[]).expect("theory should parse");
     let rule = thy
         .items
         .iter()
@@ -59,6 +64,23 @@ fn six_digit_codes_are_accepted() {
     assert_eq!(accepted_code("'ff00ff'"), "ff00ff");
     assert_eq!(accepted_code("'#ff00ff'"), "ff00ff");
     assert_eq!(accepted_code("FF00FF"), "FF00FF");
+}
+
+/// `ruleAttribute` offers the British spelling first (Parser/Rule.hs:72-73),
+/// and it stores the same attribute.  The oracle loads
+/// `rule R1[colour=ff00ff]` at exit 0.  It renders that attribute as
+/// `color=#ff00ff`.  That is the spelling the corpus uses
+/// (examples/eurosp19-eccDAA/ISOIEC_20008_2013_2_ECC_DAA.fixed.spthy).
+#[test]
+fn the_british_spelling_stores_the_same_attribute() {
+    assert_eq!(
+        stored_code("theory T begin\n\nrule R1[colour=ff00ff]: [ ] --> [ ]\n\nend\n"),
+        "ff00ff"
+    );
+    assert_eq!(
+        stored_code("theory T begin\n\nrule R1[colour='#ff00ff']: [ ] --> [ ]\n\nend\n"),
+        "ff00ff"
+    );
 }
 
 /// Three digits lex fine but fail `hexToRGB`: the `fail` sits after the code
@@ -154,6 +176,18 @@ fn empty_quotes_expect_hash_or_digit() {
         "\"hex.spthy\" (line 3, column 16):\n\
          unexpected \"'\"\n\
          expecting \"#\" or hexadecimal digit"
+    );
+}
+
+/// Inside quotes and after a `#`, both prefix alternatives are spent.  Only
+/// the digit label remains, at the closing quote.
+#[test]
+fn quoted_hash_without_digits_expects_a_digit() {
+    assert_eq!(
+        err("'#'"),
+        "\"hex.spthy\" (line 3, column 17):\n\
+         unexpected \"'\"\n\
+         expecting hexadecimal digit"
     );
 }
 

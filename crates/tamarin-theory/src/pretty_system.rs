@@ -481,24 +481,39 @@ mod tests {
     use super::*;
     use crate::constraint::system::System;
 
+    /// This is the all-empty shape, which no corpus proof reaches.  Every
+    /// section body is `emptyDoc`.  The definition
+    /// `combine_ (header, d) = fsep [keyword_ header <> colon,
+    /// nest 2 d]` (System.hs:1671-1685) therefore collapses to the bare
+    /// header.  The `vsep` between the nine items leaves a blank line after
+    /// every item except the last one.  `last` is the only body with content
+    /// (`maybe (text "none")`).  `allowed cases` is `show sSourceKind`.  The
+    /// two sub-headers of `prettyEqStore` survive at the extra `nest 2`.
     #[test]
     fn empty_system_renders_each_section() {
         let s = System::default();
-        let out = pretty_non_graph_system(&s);
-        for h in &[
-            "last:",
-            "formulas:",
-            "subterms:",
-            "equations:",
-            "lemmas:",
-            "allowed cases:",
-            "solved formulas:",
-            "unsolved constraints:",
-            "solved constraints:",
-        ] {
-            assert!(out.contains(h), "missing header {} in:\n{}", h, out);
-        }
-        assert!(out.contains("none"));
+        assert_eq!(
+            pretty_non_graph_system(&s),
+            "last: none\n\
+             \n\
+             formulas:\n\
+             \n\
+             subterms:\n\
+             \n\
+             equations:\n  \
+             subst:\n  \
+             conj:\n\
+             \n\
+             lemmas:\n\
+             \n\
+             allowed cases: raw\n\
+             \n\
+             solved formulas:\n\
+             \n\
+             unsolved constraints:\n\
+             \n\
+             solved constraints:"
+        );
     }
 
     #[test]
@@ -528,15 +543,20 @@ mod tests {
         };
         let mut sys = System::empty();
         *sys.subterm_store_mut() = st;
-        let out = pretty_subterm_store(&sys).render();
-        // Contradictory header + all three numbered keyword sections.
-        assert!(out.contains("Contradictory: yes"), "got:\n{out}");
-        assert!(out.contains("Negative Subterms:"), "got:\n{out}");
-        assert!(out.contains("Subterms:"), "got:\n{out}");
-        assert!(out.contains("Solved Subterms:"), "got:\n{out}");
-        // numbered' uses "1. " prefixes and the ⊏ operator.
-        assert!(out.contains("1. "), "got:\n{out}");
-        assert!(out.contains('\u{228F}'), "got:\n{out}");
+        // The assertion covers the Contradictory header, the three numbered
+        // keyword sections in HS's order, the `<n>. ` prefixes of `numbered'`
+        // and the `⊏` operator.  The gap before `⊏` is two spaces, not one.
+        // HS defines `ppSt (a,b) = prettyNTerm a $$
+        // nest 3 (opSubterm <+> prettyNTerm b)` (SubtermStore.hs:580-581).
+        // The `nilAboveNest` of `$$` inlines the continuation at `3 - width a`
+        // columns when the small term is a single character.
+        assert_eq!(
+            pretty_subterm_store(&sys).render(),
+            "Contradictory: yes\n\
+             Negative Subterms: 1. p  \u{228F} q\n\
+             Subterms: 1. x  \u{228F} y\n\
+             Solved Subterms: 1. a  \u{228F} b"
+        );
     }
 
     #[test]
@@ -551,12 +571,16 @@ mod tests {
         });
         let mut sys = System::empty();
         sys.set_eq_store(std::sync::Arc::new(eq));
-        let out = pretty_eq_store(&sys).render();
-        assert!(out.contains("CONTRADICTORY"), "got:\n{out}");
-        assert!(out.contains("subst:"), "got:\n{out}");
-        assert!(out.contains("conj:"), "got:\n{out}");
-        // The disjunction index is rendered with a trailing dot.
-        assert!(out.contains("0."), "got:\n{out}");
+        // `prettyEqStore` (EquationStore.hs:650-662) prefixes `CONTRADICTORY`
+        // only when `eqsIsFalse` holds.  It then prints the two sub-sections
+        // that `combine` builds.  The disjunction renders as
+        // `text (show (unSplitId idx) ++ ".")` beside `numbered' []`.  HS
+        // `numbered _ [] = emptyDoc` (Text/PrettyPrint/Class.hs:252-253)
+        // removes the empty case list.  Only the bare `0.` remains.
+        assert_eq!(
+            pretty_eq_store(&sys).render(),
+            "CONTRADICTORY\nsubst:\nconj: 0."
+        );
     }
 
     // `pp_disj` numbers a disjunction's cases in the order a split of it

@@ -5,6 +5,10 @@
  * and a later NoEq declaration of the same name therefore resolves AC
  * (r1 — rendered infix), while a use AFTER both resolves NoEq
  * (r2 — rendered prefix).
+ *
+ * Compared slices: the whole `theory … end` echo, which carries both
+ * renderings and the doubled `functions:` signature line, and the wf report
+ * block, which pins the run clean (see check.sh).
  */
 theory PositionalAcPrefix
 begin

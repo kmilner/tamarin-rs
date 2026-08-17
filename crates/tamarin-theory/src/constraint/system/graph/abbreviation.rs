@@ -747,12 +747,14 @@ mod tests {
             }
         };
         let out = apply_abbreviations_term(&map as &dyn Fn(&LNTerm) -> Option<LNTerm>, &outer);
-        // Top-level senc stays; inner senc replaced.
-        if let Term::App(_, args) = &out {
-            assert_eq!(&args[0], &abbrev);
-        } else {
-            panic!("expected App");
-        }
+        // The top-level senc stays, and so does its second argument, which
+        // the map does not cover.  Only the inner senc changes.  A check of
+        // `args[0]` alone would accept a rebuild that lost or duplicated the
+        // other arguments.
+        assert_eq!(
+            out,
+            f_app_no_eq(senc_sym(), vec![abbrev, var("k", LSort::Msg)])
+        );
     }
 
     #[test]

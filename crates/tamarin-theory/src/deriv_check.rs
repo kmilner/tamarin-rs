@@ -858,25 +858,29 @@ mod tests {
     use super::*;
     use tamarin_parser::parse_theory;
 
-    /// Resolve a maude binary: `$MAUDE_PATH`, then a portable candidate list
-    /// (bare `maude` resolves via `PATH`). Returns `None` only if the list is
-    /// exhausted, so the Maude-backed tests no-op rather than fail when maude
-    /// is unavailable.
-    fn maude_bin() -> Option<String> {
-        if let Ok(p) = std::env::var("MAUDE_PATH") {
-            return Some(p);
-        }
-        for c in ["/usr/local/bin/maude", "/usr/bin/maude", "maude"] {
-            if c == "maude" || std::path::Path::new(c).exists() {
-                return Some(c.to_string());
-            }
-        }
-        None
+    use crate::test_maude::maude_path;
+
+    /// A pair-signature handle.  The result is `None` only when
+    /// [`maude_path`] resolves nothing.  That case is the documented
+    /// `TAM_ALLOW_NO_MAUDE` skip.  A maude that resolves but does not start
+    /// is the same misconfiguration as a `MAUDE_PATH` that points at nothing.
+    /// So this function panics.  It does not silently skip every maude-backed
+    /// test in this file.
+    fn maude() -> Option<MaudeHandle> {
+        Some(start_maude(
+            &maude_path()?,
+            tamarin_term::maude_sig::pair_maude_sig(),
+        ))
     }
 
-    fn maude() -> Option<MaudeHandle> {
-        let p = maude_bin()?;
-        MaudeHandle::start(&p, tamarin_term::maude_sig::pair_maude_sig()).ok()
+    /// See [`maude`] for why a failed start is a panic, not a skip.
+    fn start_maude(path: &str, sig: tamarin_term::maude_sig::MaudeSig) -> MaudeHandle {
+        MaudeHandle::start(path, sig).unwrap_or_else(|e| {
+            panic!(
+                "maude at {path} failed to start: {e:?} — every maude-backed \
+                 test here would otherwise skip silently"
+            )
+        })
     }
 
     #[test]
@@ -931,16 +935,15 @@ mod tests {
     /// Start a Maude handle whose signature is elaborated from `src` (so the
     /// theory's own `functions:`/`equations:` symbols — including a private
     /// destructor — are present), exactly as the real driver does via
-    /// `elaborated.signature.maude_sig` (run.rs).  Returns `None` if Maude
-    /// is unavailable.
+    /// `elaborated.signature.maude_sig` (run.rs).  The function skips on the
+    /// same terms as [`maude`].
     fn maude_for(src: &str) -> Option<(p::Theory, MaudeHandle)> {
-        let p = maude_bin()?;
+        let p = maude_path()?;
         let thy = parse_theory(src, &[]).expect("parse");
         // `elaborate` installs the per-theory user-funs guards internally.
         let elaborated = crate::elaborate::elaborate(&thy).expect("elaborate");
         let sig = elaborated.signature.maude_sig.clone();
-        let handle = MaudeHandle::start(&p, sig).ok()?;
-        Some((thy, handle))
+        Some((thy, start_maude(&p, sig)))
     }
 
     // The privacy of a function symbol is load-bearing for the deriv-check

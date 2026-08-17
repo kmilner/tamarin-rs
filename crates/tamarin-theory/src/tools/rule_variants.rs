@@ -1241,32 +1241,33 @@ mod tests {
         Rule::new(info, Vec::new(), Vec::new(), Vec::new())
     }
 
+    /// A term-free rule never reaches Maude at all.  `pack_rule_terms`
+    /// returns `None`.  The code then wraps the rule with HS's
+    /// `trueDisj = [emptySubstVFresh]` (RuleVariants.hs:119).  The body of
+    /// the rule must come through untouched.  `makeRule` applies an empty
+    /// `commonSubst`.
     #[test]
     fn variants_of_rule_with_no_terms_is_identity() {
-        let path = match maude_path() {
-            Some(p) => p,
-            None => {
-                eprintln!("skipping: no maude");
-                return;
-            }
-        };
+        let Some(path) = maude_path() else { return };
         let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
         let rule = empty_rule("R");
         let ac = variants_proto_rule(&h, &rule).expect("variants").unwrap();
-        // No terms → identity variant.
-        assert_eq!(ac.info.variants.len(), 1);
-        assert!(ac.info.variants[0].is_empty());
+        assert_eq!(ac.info.variants, vec![LNSubstVFresh::empty()]);
+        assert_eq!(ac.premises, rule.premises);
+        assert_eq!(ac.actions, rule.actions);
+        assert_eq!(ac.conclusions, rule.conclusions);
     }
 
+    /// `[Fr(~k)] --> [Out(~k)]` under the pair-only signature has no
+    /// reducible operator.  Maude's single variant is therefore the identity.
+    /// `simp_disjunction_with_maude` folds that variant into `commonSubst`.
+    /// What is left is exactly HS's `trueDisj`, and not a residual
+    /// disjunction.  A residual here is the NAXOS_eCK_private
+    /// Init_1-vs-Ltk_reveal shape.  In that shape, entries that HS bakes into
+    /// the rule body instead survive as a `SplitG` goal.
     #[test]
     fn variants_of_simple_rule_via_maude() {
-        let path = match maude_path() {
-            Some(p) => p,
-            None => {
-                eprintln!("skipping: no maude");
-                return;
-            }
-        };
+        let Some(path) = maude_path() else { return };
         let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
         // Rule: [Fr(~k)] --> [Out(~k)]
         let k = LVar::new("k", LSort::Fresh, 0);
@@ -1278,13 +1279,11 @@ mod tests {
             attributes: RuleAttributes::empty(),
             restrictions: Vec::new(),
         };
-        let rule = Rule::new(info, vec![prem], vec![conc], Vec::new());
+        let rule = Rule::new(info, vec![prem.clone()], vec![conc.clone()], Vec::new());
         let ac = variants_proto_rule(&h, &rule).expect("variants").unwrap();
-        // For a rule with no reducible operators, Maude returns one
-        // trivial variant (the identity).
-        assert!(
-            !ac.info.variants.is_empty(),
-            "expected at least one variant, got none"
-        );
+        assert_eq!(ac.info.variants, vec![LNSubstVFresh::empty()]);
+        // `commonSubst` is empty too, so `~k` survives verbatim in the body.
+        assert_eq!(ac.premises, vec![prem]);
+        assert_eq!(ac.conclusions, vec![conc]);
     }
 }

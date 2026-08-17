@@ -86,3 +86,9 @@ strip = false
 inherits = "release"
 lto = false
 codegen-units = 16
+# This is on, unlike in the release profile that this profile inherits.  The
+# CI test job is the only place where the workspace's `debug_assert!`s run at
+# all, because the documented local gate is `--release`.  Those assertions
+# include differential guards such as `compose_vfresh`'s empty-s1 fast path
+# check.  A measurement shows no cost.  The suite is unchanged at 1553 passing.
+debug-assertions = true

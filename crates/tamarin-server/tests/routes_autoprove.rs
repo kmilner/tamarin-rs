@@ -28,57 +28,59 @@ use common::*;
 //   - anything else → 404 HTML (Haskell's behaviour)
 // See `parse_bool_path_piece` in `src/handlers/theory.rs`.
 
+/// The three autoprove routes.  The test replays the capture script's own
+/// sequence (`tests/capture_haskell_fixtures.sh`) on the same fixture.  That
+/// sequence is: autoprove theory 1, then autoprove the proved snapshot that
+/// the first call allocated, then autoproveAll on theory 1 again.  Each
+/// response is the oracle's body, byte for byte.  The comparison includes the
+/// allocated index, because `modifyTheory` assigns the next free index on
+/// both sides.  It also includes the proof path, which both sides reach when
+/// they walk `nextSmartThyPath` over the freshly autoproved tree.
+///
+/// The middle call autoproves a theory that is already proved.  It still
+/// answers a redirect to a fresh index, and never an alert.  Upstream runs the
+/// prover again over a tree that has nothing left to do.
 #[tokio::test]
-async fn test_autoprove_returns_redirect_envelope() {
+async fn test_autoprove_redirect_bodies_match_haskell() {
     let s = start_server_with_theory("issue193.spthy").await;
 
-    // The `debug` lemma is exists-trace + trivial; Rust autoprove
-    // should redirect to the proof view on success.
-    let url = s.url("/thy/trace/1/autoprove/idfs/0/False/proof/debug");
-    let res = s.client.get(&url).send().await.expect("send autoprove");
+    // The `debug` lemma is exists-trace and trivial.
+    let res = s
+        .client
+        .get(s.url("/thy/trace/1/autoprove/idfs/0/False/proof/debug"))
+        .send()
+        .await
+        .expect("send autoprove");
     assert_eq!(res.status(), 200, "autoprove should return 200");
-
     let ct = content_type(&res);
     assert!(
         ct.starts_with("application/json"),
         "autoprove must reply JSON, got {}",
         ct
     );
-
-    let v: serde_json::Value = res.json().await.expect("decode json");
-    let rust_keys = json_top_keys(&v);
-    let haskell_keys = haskell_capture_keys("autoprove.json");
     assert_eq!(
-        rust_keys, haskell_keys,
-        "autoprove envelope keys must match Haskell; rust={:?}, haskell={:?}",
-        rust_keys, haskell_keys
+        res.text().await.expect("text"),
+        haskell_capture("autoprove.json"),
     );
 
-    let redir = v.get("redirect").and_then(|t| t.as_str()).unwrap_or("");
-
-    // SHAPE assertions, not byte equality: both sides walk
-    // `nextSmartThyPath` over the freshly autoproved tree (the port's
-    // `next_thy_path_inner`), so the tail of the URL depends on the shape
-    // that search produced.  What is pinned here is the prefix and the
-    // "NEW idx" semantics, which the frontend dispatcher relies on.
-    assert!(
-        redir.starts_with("/thy/trace/"),
-        "redirect should start at /thy/trace/...; got {:?}",
-        redir
-    );
-    assert!(
-        redir.contains("/overview/proof/debug"),
-        "redirect should point at the new-idx proof view for lemma `debug`; got {:?}",
-        redir
-    );
-    // Most importantly: Haskell's behaviour is to allocate a NEW idx
-    // for the post-autoprove snapshot — the URL must NOT reuse idx 1
-    // (the pre-autoprove theory).  Same property holds in our port.
-    assert!(
-        !redir.starts_with("/thy/trace/1/"),
-        "autoprove should allocate a fresh idx (not reuse 1); got {:?}",
-        redir
-    );
+    for (url, capture) in [
+        (
+            "/thy/trace/2/autoprove/idfs/0/False/proof/debug",
+            "autoprove_on_proven.json",
+        ),
+        (
+            "/thy/trace/1/autoproveAll/idfs/0/proof/debug",
+            "autoprove_all.json",
+        ),
+    ] {
+        let res = s.client.get(s.url(url)).send().await.expect("send");
+        assert_eq!(res.status(), 200, "{url}");
+        assert_eq!(
+            res.text().await.expect("text"),
+            haskell_capture(capture),
+            "{url}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -114,22 +116,11 @@ async fn test_autoprove_on_bad_path_returns_alert() {
         .await
         .expect("send autoprove-rules");
     assert_eq!(res.status(), 200);
-    let v: serde_json::Value = res.json().await.expect("decode");
+    // This is the oracle's body, byte for byte.  The alert allocates no
+    // theory, so its bytes do not depend on the capture session's history.
     assert_eq!(
-        json_top_keys(&v),
-        one_key_set("alert"),
-        "autoprove on non-lemma path should be {{alert}}"
-    );
-
-    // The captured Haskell alert is exactly
-    // "Can't run the autoprover () on the given theory path!" — we
-    // emit the same string for byte-equal comparison.
-    let captured = haskell_capture("autoprove_on_rules.json");
-    let captured_v: serde_json::Value = serde_json::from_str(&captured).expect("parse captured");
-    assert_eq!(
-        v.get("alert").and_then(|x| x.as_str()),
-        captured_v.get("alert").and_then(|x| x.as_str()),
-        "alert text must match Haskell verbatim",
+        res.text().await.expect("text"),
+        haskell_capture("autoprove_on_rules.json"),
     );
 }
 
@@ -209,17 +200,12 @@ async fn test_autoprove_on_unknown_lemma_returns_alert() {
     let url = s.url("/thy/trace/1/autoprove/idfs/0/False/proof/notALemma");
     let res = s.client.get(&url).send().await.expect("send");
     assert_eq!(res.status(), 200);
-    let v: serde_json::Value = res.json().await.expect("decode");
+    // These bytes come from a probe against the oracle.  No capture holds
+    // them, because the capture script never asks for a lemma that does not
+    // exist.  This test therefore pins the bytes here.
     assert_eq!(
-        json_top_keys(&v),
-        one_key_set("alert"),
-        "unknown-lemma autoprove must be {{alert}}"
-    );
-    let alert = v.get("alert").and_then(|x| x.as_str()).unwrap_or("");
-    assert!(
-        alert.contains("Sorry") && alert.contains("autoprover"),
-        "alert text should match the Haskell shape; got {:?}",
-        alert
+        res.text().await.expect("text"),
+        "{\"alert\":\"Sorry, but the autoprover () failed!\"}",
     );
 }
 // Web-parity regression: after autoprove, `main/proof/<lemma>` must render

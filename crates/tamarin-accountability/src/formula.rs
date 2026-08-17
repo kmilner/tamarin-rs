@@ -947,9 +947,29 @@ mod tests {
         assert_eq!(fv.len(), 1);
         assert_eq!(fv[0].name, "x");
         assert_eq!(fv[0].sort, p::SortHint::Msg);
-        // Round-trip: the temporal binder stays #i, body action A(x)@#i.
+        // The round trip keeps the name and the node sort of the temporal
+        // binder.  The De-Bruijn `Bound(0)` in the body resolves back to that
+        // same `#i`.  The only difference from `src` is the resolved sort of
+        // the free `x`.  So the test compares the complete formula, not only
+        // its outermost constructor.  That comparison catches a binder that
+        // is renamed to a generated name.  It also catches a dropped body,
+        // and an index that resolves wrongly.
         let back = to_p_formula(&fm);
-        assert!(matches!(back, p::Formula::Exists(_, _)));
+        assert_eq!(
+            back,
+            p::Formula::Exists(
+                vec![node("i", 0)],
+                Box::new(p::Formula::Atom(p::Atom::Action(
+                    p::Fact {
+                        persistent: false,
+                        name: "A".into(),
+                        args: vec![p::Term::Var(msg_var_idx("x", 0))],
+                        annotations: vec![],
+                    },
+                    p::Term::Var(node("i", 0)),
+                ))),
+            )
+        );
     }
 
     /// `rename` shifts free-var indices and advances the counter by the
@@ -1060,7 +1080,18 @@ mod tests {
         let concl = Fm::Tf(false);
         let f = guard.implies(concl);
         let merged = merge_quantifiers(f);
-        // The merge leaves a universal binder over #i at the top.
-        assert!(matches!(merged, Fm::Qua(Quant::All, _, _)));
+        // The merge leaves a universal binder over #i at the top.  That
+        // binder carries the original binder name and sort.  The body of the
+        // guard becomes the antecedent of the implication, and it still
+        // refers to `Bound(0)`.
+        let Fm::Qua(Quant::All, b, body) = merged else {
+            panic!("expected a universal at the top");
+        };
+        assert_eq!(b.name, "i");
+        assert_eq!(b.sort, p::SortHint::Node);
+        assert_eq!(
+            *body,
+            proto_fact_formula("P", vec![], GTerm::Var(BVar::Bound(0))).implies(Fm::Tf(false))
+        );
     }
 }

@@ -35,9 +35,14 @@ stamped="$(cat "$expected/oracle_rev")"
 fail=0
 report() { printf '  %-24s %-6s %-8s %s\n' "$1" "$2" "$3" "$4"; }
 
+# The directory and the manifest must agree before anything is loaded.
+census_fixture_dir
+
 # Extra assertions for a `diverge` fixture: the SHAPE of the divergence, not
 # just its existence, so an unrelated change to either side cannot leave the
-# fixture green by accident.
+# fixture in a passing state for the wrong reason.  A `diverge` row with no arm
+# here asserts nothing more than "the two files differ".  The fallthrough is
+# therefore a failure.
 divergence_shape() {
     case "$1.$2" in
     ac_marker_collapse.theory)
@@ -50,14 +55,20 @@ divergence_shape() {
         grep -qF "Out( (y++tamXCAbar(a)) )" "$expected/$1.$2.rs.txt" \
             || { echo "    port side no longer keeps tamXCAbar(a) — expected \`Out( (y++tamXCAbar(a)) )\`" >&2; return 1; }
         ;;
+    *)  echo "    no documented shape for the $1.$2 divergence — add an arm here" >&2; return 1 ;;
     esac
     return 0
 }
 
 # `check_slice <name> <slice> <mode> < raw` — compare one block of one load.
+# A reference must be non-empty (`-s`, not `-f`).  An empty reference matches
+# an engine that printed nothing at all.  That is the one way this comparison
+# can pass while it asserts nothing.  capture.sh writes each reference by
+# redirection, and it unlinks the file again when the slice comes out empty.
+# A 0-byte file here is therefore a capture that was killed in between.
 check_slice() {
     local name="$1" sl="$2" mode="$3" hs="$expected/$1.$2.hs.txt" ref got
-    if [ ! -f "$hs" ]; then
+    if [ ! -s "$hs" ]; then
         report "$name" "$sl" FAIL "no captured oracle bytes — run capture.sh"; fail=1; return 0
     fi
     got="$(mktemp)"; slice "$sl" > "$got"
@@ -65,7 +76,7 @@ check_slice() {
     ref="$hs"
     if [ "$mode" = diverge ]; then
         ref="$expected/$name.$sl.rs.txt"
-        if [ ! -f "$ref" ]; then
+        if [ ! -s "$ref" ]; then
             rm -f "$got"
             report "$name" "$sl" FAIL "no recorded port bytes — run capture.sh --record-rs"; fail=1; return 0
         fi

@@ -48,10 +48,18 @@ mod tests {
     use super::*;
     use crate::formula::ProtoFormula;
 
+    /// `ProtoRestriction::new` is the sole constructor, and elaboration
+    /// (`elaborate.rs`) uses it.  It stores the name and the formula without
+    /// change, and it records no original surface formula.  `original_formula`
+    /// gates the arity-1 rewrite in `elaborate.rs`.  A constructor that filled
+    /// that field in advance would rewrite the body twice, and it would report
+    /// no error.
     #[test]
     fn build_restriction() {
         let f: LNFormula = ProtoFormula::ltrue();
-        let r = Restriction::new("MyR", f);
+        let r = Restriction::new("MyR", f.clone());
         assert_eq!(r.name, "MyR");
+        assert_eq!(r.formula, f);
+        assert_eq!(r.original_formula, None);
     }
 }

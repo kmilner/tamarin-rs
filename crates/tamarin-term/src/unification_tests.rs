@@ -10,8 +10,16 @@ use crate::lterm::LNTerm;
 fn unify_two_distinct_variables() {
     let x: LNTerm = msg_var("x", 0);
     let y: LNTerm = msg_var("y", 0);
-    let s = unify_lnterm_no_ac(vec![Equal::new(x, y)]).unwrap();
-    assert!(!s.is_empty());
+    let s = unify_lnterm_no_ac(vec![Equal::new(x.clone(), y)]).unwrap();
+    // HS `unifyRaw` orients a var-var pair of the same sort by `Ord LVar`
+    // (Unification.hs:276).  The index and the sort are equal here, so the
+    // comparison falls to the name.  `unifyRaw` therefore eliminates the later
+    // name, and that name becomes the key.  A check that the substitution is
+    // not empty accepts either orientation.
+    assert_eq!(
+        s.to_list(),
+        vec![(crate::lterm::LVar::new("y", LSort::Msg, 0), x)]
+    );
 }
 
 #[test]
@@ -43,9 +51,18 @@ fn match_pattern_variable_against_constant_term() {
     // Match: term=pair(a,b), pattern=pair(x,y).
     let t: LNTerm = pair(msg_var("a", 0), msg_var("b", 0));
     let p: LNTerm = pair(msg_var("x", 0), msg_var("y", 0));
-    let problem = Match::match_with(t.clone(), p);
+    let problem = Match::match_with(t, p);
     let s = solve_match_lterm_no_ac(&|n| crate::lterm::sort_of_name(n), problem).unwrap();
-    assert_eq!(s.len(), 2);
+    // Each pattern variable is the key.  Each key maps to the subject term at
+    // its own argument position.  A count of the bindings alone does not see a
+    // swap of the two.
+    assert_eq!(
+        s.to_list(),
+        vec![
+            (crate::lterm::LVar::new("x", LSort::Msg, 0), msg_var("a", 0)),
+            (crate::lterm::LVar::new("y", LSort::Msg, 0), msg_var("b", 0)),
+        ]
+    );
 }
 
 #[test]

@@ -10,6 +10,11 @@
  *                  arity check passes — the nullary application `f`;
  *   - g('e','f',)  arity != 1: `commaSep` is `sepEndBy`, so a trailing
  *                  comma is accepted.
+ *
+ * Compared slices: the whole `theory … end` echo, where each fold is visible
+ * in the rule's conclusion, and the wf report block, which pins the run
+ * clean — a fold that mints the wrong arity trips a check instead
+ * (see check.sh).
  */
 theory NaryappArityFolds
 begin

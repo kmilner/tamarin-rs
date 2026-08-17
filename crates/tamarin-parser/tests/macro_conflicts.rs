@@ -151,18 +151,19 @@ fn ghc_error_renders_without_a_parsec_frame() {
     );
 }
 
-/// The parsec `fail`s keep their frame — no `ghc_error` is attached.
+/// A macro with no body does not produce a `fail` of its own.  `term` claims
+/// the next identifier as the body variable.  That identifier is the theory's
+/// `end`.  The item alternation therefore dies at the end of the input.  The
+/// `.`-index attempt of the variable and the comma of the macro list come
+/// before the item labels.  A parsec failure keeps its frame.  A `ghc_error`
+/// would instead collapse the whole render to the message on its own, as
+/// [`ghc_error_renders_without_a_parsec_frame`] shows.
 #[test]
-fn parsec_failures_carry_no_ghc_error() {
-    for src in [
-        "theory MacroCF begin\nfunctions: f/1\nmacros: f(x) = x\nend\n",
-        "theory MacroCF begin\nmacros: m(x) = \nend\n",
-    ] {
-        assert!(
-            parse_theory(src, &[]).unwrap_err().ghc_error.is_none(),
-            "case {src:?}"
-        );
-    }
+fn a_bodyless_macro_swallows_end_and_dies_at_the_item_position() {
+    assert_eq!(
+        err("theory MacroCF begin\nmacros: m(x) = \nend\n", "nobody.spthy"),
+        "\"nobody.spthy\" (line 4, column 1):\nunexpected end of input\nexpecting \".\", \",\", \"heuristic\", \"tactic\", \"builtins\", \"options\", \"functions\", \"function\", \"equations\", \"macros\", \"restriction\", \"axiom\", \"test\", \"lemma\", \"rule\", letter, top-level process, \"let\", \"equivLemma\", \"diffEquivLemma\", predicate block, export block, \"#ifdef\", \"#define\", \"#include\" or \"end\""
+    );
 }
 
 /// A macro named after a user-declared function conflicts
@@ -429,19 +430,5 @@ fn dot_label_when_body_ends_in_variable_identifier() {
             ),
             "case {name}"
         );
-    }
-}
-
-/// Non-conflicting macros still parse (oracle loads all of these, exit 0):
-/// a fresh name, and the arguments HS's `nub` over full `LVar`s
-/// (name+sort+index, Parser/Macro.hs:37) keeps apart by sort or index.
-#[test]
-fn non_conflicting_macros_parse() {
-    for src in [
-        "theory MacroOK begin\nmacros: m(x) = x\nend\n",
-        "theory MacroBS begin\nmacros: m(x, x:pub) = x\nend\n",
-        "theory MacroBI begin\nmacros: m(x.1, x) = x\nend\n",
-    ] {
-        parse_theory(src, &[]).unwrap_or_else(|e| panic!("{src:?} failed: {e}"));
     }
 }

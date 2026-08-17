@@ -682,6 +682,69 @@ mod tests {
         assert!(!is_ac_fct_ident(b"XCAUop"));
     }
 
+    /// A real `get variants in MSG : tamXCFUfst(x1:Msg)` reply from Maude
+    /// 3.5.1 over the pairing theory.  The fixture keeps the framing that the
+    /// handle receives.  `set show timing off` is in force, so `rewrites: N`
+    /// carries no timing tail.
+    ///
+    /// The parser has to walk past several parts of this reply.  There are the
+    /// two per-variant headers.  There is the `rewrites:` line.  There is the
+    /// reprinted term, which the parser parses and then discards.  There is
+    /// the blank line that ends each binding block.  Last there is the
+    /// `No more variants.` + `rewrites:` footer of HS `parseVariantsReply`
+    /// (Maude/Parser.hs:294-306).  Only the bindings survive.
+    #[test]
+    fn parse_two_variant_reply() {
+        let vs = parse_variants_reply(
+            b"\nVariant 1\nrewrites: 0\nMsg: tamXCFUfst(#1:Msg)\n\
+              x1:Msg --> #1:Msg\n\
+              \nVariant 2\nrewrites: 1\nMsg: %1:Msg\n\
+              x1:Msg --> tamXCFUpair(%1:Msg, %2:Msg)\n\
+              \nNo more variants.\nrewrites: 1\n",
+        )
+        .unwrap();
+        let pair = |a, b| {
+            Term::App(
+                FunSym::NoEq(NoEqSym {
+                    name: crate::intern::intern_bytes(b"pair"),
+                    arity: 2,
+                    privacy: Privacy::Public,
+                    constructability: Constructability::Constructor,
+                    ndc: NdcState::NotNdc,
+                }),
+                vec![a, b].into(),
+            )
+        };
+        assert_eq!(
+            vs,
+            vec![
+                vec![(
+                    (LSort::Msg, 1),
+                    Term::Lit(MaudeLit::FreshVar(1, LSort::Msg))
+                )],
+                vec![(
+                    (LSort::Msg, 1),
+                    pair(
+                        Term::Lit(MaudeLit::FreshVar(1, LSort::Msg)),
+                        Term::Lit(MaudeLit::FreshVar(2, LSort::Msg)),
+                    )
+                )],
+            ]
+        );
+    }
+
+    /// The `many1` and `endOfInput` guards of `parse_variants_reply`.  A reply
+    /// with no `Variant` block at all is an error.  A reply with a truncated
+    /// footer is an error too.  Neither one gives an empty variant list.
+    #[test]
+    fn parse_variants_reply_requires_a_variant_and_a_footer() {
+        assert!(parse_variants_reply(b"\nNo more variants.\nrewrites: 0\n").is_err());
+        assert!(parse_variants_reply(
+            b"\nVariant 1\nrewrites: 0\nMsg: #1:Msg\nx1:Msg --> #1:Msg\n\nNo more variants.\n"
+        )
+        .is_err());
+    }
+
     #[test]
     fn parse_simple_reduce_reply() {
         let r = parse_reduce_reply(b"result Pub: p(1)\n").unwrap();

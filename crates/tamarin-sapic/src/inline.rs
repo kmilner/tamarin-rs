@@ -419,10 +419,18 @@ mod tests {
                 assert_eq!(args.len(), 1);
                 // The wrapped body must carry processnames = ["P"].
                 assert_eq!(body.annotation().process_names, vec!["P".to_string()]);
-                // The body's out() arg must be the substituted 't', NOT x.
+                // The out() argument in the body must be the substituted 't',
+                // and not x.  It must also be the same term that the call site
+                // passed.  A substitution that drops the argument, or that
+                // binds the wrong formal parameter, therefore cannot pass this
+                // check with some other constant.
                 match *body {
                     Process::Action(SapicAction::ChOut { msg, .. }, _, _) => {
-                        assert!(matches!(msg, VTerm::Lit(Lit::Con(_))));
+                        assert_eq!(msg, args[0]);
+                        assert_eq!(
+                            msg,
+                            crate::convert::term(&pub_lit("t")).expect("'t' converts")
+                        );
                     }
                     other => panic!("expected ChOut body, got {other:?}"),
                 }

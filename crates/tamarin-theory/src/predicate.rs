@@ -98,11 +98,21 @@ mod tests {
         assert!(matches!(p.fact.tag, FactTag::Proto(_, n, _) if n == "Smaller"));
     }
 
+    /// HS `smallerFact` builds `protoFact Linear "Smaller" [t1, t2]`
+    /// (Predicate.hs:50-56).  This is the tag that `lookup_predicate` matches
+    /// on.  It is also the operand order that the `∃ z. t2 = t1 ++ z`
+    /// expansion depends on.
     #[test]
-    fn smaller_fact_arity() {
-        let f: Fact<LVar> =
-            smaller_fact(LVar::new("x", LSort::Msg, 0), LVar::new("y", LSort::Msg, 0));
-        assert_eq!(f.arity(), 2);
+    fn smaller_fact_tag_and_operand_order() {
+        let x = LVar::new("x", LSort::Msg, 0);
+        let y = LVar::new("y", LSort::Msg, 0);
+        let f: Fact<LVar> = smaller_fact(x, y);
+        assert_eq!(
+            f.tag,
+            FactTag::Proto(Multiplicity::Linear, "Smaller", 2),
+            "linear, named `Smaller`, arity 2"
+        );
+        assert_eq!(f.terms.to_vec(), vec![x, y], "operands keep source order");
     }
 
     #[test]

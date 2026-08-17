@@ -1,4 +1,4 @@
-// Fixture (run with --diff): triggers `Left rule` / `Right rule`.
+// Fixture (run with --diff): triggers `Left rule`.
 // The explicit `left` rule has an extra premise compared to what
 // would be derived from projecting the parent diff rule.
 theory DiffLR

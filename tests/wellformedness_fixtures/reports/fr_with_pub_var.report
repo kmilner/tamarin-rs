@@ -1,0 +1,9 @@
+# source: oracle ef3f0468, plain load
+/*
+WARNING: the following wellformedness checks failed!
+
+Fr facts must only use a fresh- or a msg-variable
+=================================================
+
+  rule `Bad' fact: Fr( $A )
+*/

@@ -193,7 +193,7 @@ pub struct Args {
 /// accepted before or after a subcommand name.
 #[derive(Debug, Clone, ClapArgs)]
 struct LoadOpts {
-    /// Prove the selected lemmas (bare `--prove`: all lemmas; `=NAME` exact,
+    /// Prove the selected lemmas (without a value: all lemmas; `=NAME` exact,
     /// `=PREFIX*` by prefix; repeatable)
     #[arg(long, global = true, num_args = 0..=1, require_equals = true,
           default_missing_value = "", value_name = "LEMMA")]
@@ -205,25 +205,25 @@ struct LoadOpts {
           default_missing_value = "", value_name = "LEMMA")]
     lemma: Vec<String>,
 
-    /// Cut the search when a trace is found (bare flag: dfs)
+    /// Cut the search when a trace is found (default: dfs)
     #[arg(long = "stop-on-trace", global = true, value_enum, ignore_case = true,
           num_args = 0..=1, require_equals = true, default_missing_value = "dfs",
           value_name = "METHOD")]
     stop_on_trace: Option<StopOnTrace>,
 
     /// Bound the proof-search depth at N; nodes at that depth become
-    /// `sorry /* bound N hit */` (bare flag: 5)
+    /// `sorry /* bound N hit */` (without a value: 5; absent: no bound)
     #[arg(short = 'b', long, global = true, num_args = 0..=1, require_equals = true,
           default_missing_value = "5", value_name = "N")]
     bound: Option<u32>,
 
     /// Goal-ranking sequence; overrides the theory's own heuristic
-    /// (bare flag: `s`, the smart ranking)
+    /// (without a value: `s`, the smart ranking)
     #[arg(long, global = true, num_args = 0..=1, require_equals = true,
           default_missing_value = "s", value_name = "RANKING")]
     heuristic: Option<String>,
 
-    /// Apply partial evaluation before proving (bare flag: summary)
+    /// Apply partial evaluation before proving (without a value: summary)
     #[arg(long = "partial-evaluation", global = true, value_enum, ignore_case = true,
           num_args = 0..=1, require_equals = true, default_missing_value = "summary",
           value_name = "STYLE")]
@@ -251,8 +251,8 @@ struct LoadOpts {
     #[arg(long = "auto-sources", global = true)]
     auto_sources: bool,
 
-    /// Oracle script for `--heuristic=o` rankings (bare flag: the default
-    /// oracle name resolution)
+    /// Oracle script for `--heuristic=o` rankings (default: derived from the
+    /// theory filename)
     #[arg(long = "oraclename", global = true, num_args = 0..=1, require_equals = true,
           default_missing_value = "", value_name = "FILE")]
     oracle_name: Option<String>,
@@ -270,7 +270,7 @@ struct LoadOpts {
     verbose: bool,
 
     /// Cap on open chain constraints during source precomputation
-    /// (bare flag: 10)
+    /// (default: 10)
     // The `..=i64::MAX` range keeps every accepted value exactly what the
     // solver's i64 limit stores — no value can silently truncate (HS wraps
     // via `read @Int` and honours negatives; out-of-range is rc 2 here,
@@ -280,14 +280,14 @@ struct LoadOpts {
           value_parser = clap::value_parser!(u64).range(..=i64::MAX as u64))]
     open_chains: Option<u64>,
 
-    /// Cap on source-saturation iterations (bare flag: 5)
+    /// Cap on source-saturation iterations (default: 5)
     #[arg(short = 's', long, global = true, num_args = 0..=1, require_equals = true,
           default_missing_value = "5", value_name = "N",
           value_parser = clap::value_parser!(u64).range(..=i64::MAX as u64))]
     saturation: Option<u64>,
 
     /// Per-variable message-derivation-check timeout in seconds; 0 disables
-    /// (bare flag: 5)
+    /// (default: 5)
     // Typed `u32` because 0 is the disable sentinel downstream
     // (`TheoryLoadOptions::derivation_checks`): a wider type narrowed later
     // could truncate 2^32 onto the sentinel and silently skip the checks.
@@ -305,7 +305,7 @@ struct LoadOpts {
     proverif_no_restrictions: bool,
 
     /// Accepted for compatibility (DeepSec export is not ported;
-    /// bare flag: 3)
+    /// default: 3)
     #[arg(long = "replication-bound", global = true, num_args = 0..=1,
           require_equals = true, default_missing_value = "3", value_name = "N")]
     replication_bound: Option<u32>,
@@ -315,18 +315,18 @@ struct LoadOpts {
 /// loader flags (every mode probes maude, interactive also renders graphs).
 #[derive(Debug, Clone, ClapArgs)]
 struct ToolOpts {
-    /// Path to the maude binary (bare flag: `maude` on $PATH)
+    /// Path to the maude binary (default: `maude` on $PATH)
     #[arg(long = "with-maude", global = true, num_args = 0..=1, require_equals = true,
           default_missing_value = "maude", value_name = "PATH")]
     maude_path: Option<String>,
 
-    /// GraphViz binary for interactive graph rendering (bare flag: `dot`)
+    /// GraphViz binary for interactive graph rendering (default: `dot`)
     #[arg(long = "with-dot", global = true, num_args = 0..=1, require_equals = true,
           default_missing_value = "dot", value_name = "PATH")]
     dot_path: Option<String>,
 
     /// Render interactive graphs via `<PATH> <img> <json>` instead of dot
-    /// (bare flag: `json`)
+    /// (without a value: `json`)
     #[arg(long = "with-json", global = true, num_args = 0..=1, require_equals = true,
           default_missing_value = "json", value_name = "PATH")]
     json_path: Option<String>,
@@ -359,18 +359,19 @@ struct BatchOpts {
     #[arg(long = "precompute-only")]
     precompute_only: bool,
 
-    /// Write the resulting theory to FILE (bare -o: derive the name from
-    /// the input file)
+    /// Write the resulting theory to FILE (without a value: the name `-O`
+    /// derives, so `-O` is then required; absent: stdout)
     #[arg(short = 'o', long = "output", num_args = 0..=1, require_equals = true,
           default_missing_value = "", value_name = "FILE")]
     output_file: Option<String>,
 
-    /// Write resulting theories into DIR (bare -O: the current directory)
+    /// Write resulting theories into DIR (without a value: the current
+    /// directory; absent: stdout)
     #[arg(short = 'O', long = "Output", num_args = 0..=1, require_equals = true,
           default_missing_value = "", value_name = "DIR")]
     output_dir: Option<String>,
 
-    /// Translate-only output module (bare -m: spthy)
+    /// Translate-only output module (without a value: spthy)
     #[arg(short = 'm', long = "output-module", num_args = 0..=1, require_equals = true,
           default_missing_value = "spthy",
           value_parser = ["spthy", "spthytyped", "msr", "proverifequiv",
@@ -390,7 +391,7 @@ struct BatchOpts {
 /// `interactive`-only web flags.
 #[derive(Debug, Clone, ClapArgs)]
 struct InteractiveOpts {
-    /// Port to listen on (bare flag or absent: 3001)
+    /// Port to listen on (default: 3001)
     #[arg(short = 'p', long, num_args = 0..=1, require_equals = true,
           default_missing_value = "3001", value_name = "PORT")]
     port: Option<u16>,

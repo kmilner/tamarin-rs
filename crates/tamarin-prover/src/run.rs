@@ -2971,6 +2971,15 @@ mod tests {
         parse_args(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("parse")
     }
 
+    /// A scratch path under the system temp dir.  The name of the path holds
+    /// the pid of the test binary.  The filesystem tests below assert on the
+    /// errnos that the files they seed raise.  Two concurrent runs of this
+    /// binary must therefore not share those files.  A second worktree or a
+    /// second `cargo test` is such a run.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("tamarin_rs_{}_{}", name, std::process::id()))
+    }
+
     #[test]
     fn out_path_for_uses_file_when_set() {
         let a = parse(&["-o=/tmp/foo.spthy", "in.spthy"]);
@@ -2991,6 +3000,22 @@ mod tests {
     fn out_path_for_none_means_stdout() {
         let a = parse(&["in.spthy"]);
         assert_eq!(out_path_for(&a, "in.spthy"), None);
+        // `-o` with no value records the empty sentinel.  There is no `-O` to
+        // derive a name from, so this is the miss case of HS `mkOutPath`.
+        // `None` here makes the caller `die` with
+        // `Please specify a valid output file/directory` (Batch.hs:119-123).
+        // The caller does not fall back to stdout.
+        let a = parse(&["-o", "in.spthy"]);
+        assert_eq!(a.output_file.as_deref(), Some(""));
+        assert_eq!(out_path_for(&a, "in.spthy"), None);
+        // `-O` with no value is the other empty sentinel.  It does resolve.
+        // HS joins the name with `""` through `</>`, and that leaves a
+        // cwd-relative name.
+        let a = parse(&["-O", "examples/foo.spthy"]);
+        assert_eq!(
+            out_path_for(&a, "examples/foo.spthy").as_deref(),
+            Some("foo_analyzed.spthy"),
+        );
     }
 
     // The `--stop-on-trace` method table exists three times — the clap
@@ -3032,7 +3057,7 @@ mod tests {
 
         // ENOTDIR is not ENOENT, so the walk stops where it hit — one level
         // BELOW the regular file, not at the file itself.
-        let file = std::env::temp_dir().join("tamarin_rs_create_dirs_pin");
+        let file = scratch("create_dirs_pin");
         fs::write(&file, "").expect("seed a regular file");
         let (dir, e) = create_dirs(&file.join("sub")).expect_err("a file is not a directory");
         assert_eq!(dir, file.join("sub"));
@@ -3052,10 +3077,10 @@ mod tests {
         let _ = fs::remove_file(&file);
 
         // An existing directory is a no-op, however deep.
-        let deep = std::env::temp_dir().join("tamarin_rs_create_dirs_pin_d/a/b");
-        create_dirs(&deep).expect("mkdir -p");
-        create_dirs(&deep).expect("second pass is a no-op");
-        let _ = fs::remove_dir_all(std::env::temp_dir().join("tamarin_rs_create_dirs_pin_d"));
+        let root = scratch("create_dirs_pin_d");
+        create_dirs(&root.join("a/b")).expect("mkdir -p");
+        create_dirs(&root.join("a/b")).expect("second pass is a no-op");
+        let _ = fs::remove_dir_all(&root);
     }
 
     // An explicit `--heuristic=` names zero rankings and is the one value
@@ -3093,6 +3118,14 @@ mod tests {
                 "errno {errno}",
             );
         }
+        // An errno outside the table has no `IOErrorType` to name.  The
+        // message from Rust therefore stands complete.  It keeps the
+        // ` (os error N)` suffix, which a mapped reason strips.  The
+        // `ends_with` check makes the equality meaningful.  It shows that the
+        // suffix is present and can be dropped.
+        let unmapped = std::io::Error::from_raw_os_error(42);
+        assert!(unmapped.to_string().ends_with(" (os error 42)"));
+        assert_eq!(io_exception_reason(&unmapped), unmapped.to_string());
     }
 
     #[test]
@@ -3113,34 +3146,41 @@ mod tests {
         assert_eq!(o.partial_evaluation, None);
     }
 
+    // `run_batch` refuses `--diff` at its top.  It does so before the maude
+    // probe and before it opens the input.  The input named here does not
+    // exist.  A rejection placed below either of those steps would therefore
+    // report the missing input instead.  Below the probe it would report it
+    // only as an `Ok(rc)` from `report_open_file_error`.
     #[test]
     fn diff_flag_errors_cleanly() {
-        let a = parse(&["--diff", "in.spthy"]);
-        let r = run(&a);
-        assert!(
-            matches!(r, Err(RunError(_))),
-            "diff should error, got {:?}",
-            r
-        );
+        let a = parse(&["--diff", "/nonexistent/in.spthy"]);
+        let RunError(msg) = run(&a).expect_err("--diff must not run");
+        assert!(msg.contains("--diff"), "{msg}");
+        assert!(msg.contains("not yet ported"), "{msg}");
     }
 
     #[test]
     fn interactive_invalid_interface_errors() {
-        // Asking to bind to garbage should produce a clear error
+        // A request to bind to garbage is an error that names the flag, made
         // without ever opening a socket.  A WORKDIR must be present: without
-        // one the mode errors out before looking at `--interface`.
+        // one the mode errors out before it looks at `--interface`.  That is
+        // why this test asserts the message, not only that an error occurs.
         let a = parse(&["interactive", "--interface=not-an-ip", "/tmp"]);
-        let r = run(&a);
-        assert!(r.is_err(), "expected interface parse error");
+        let RunError(msg) = run(&a).expect_err("expected interface parse error");
+        assert!(msg.contains("--interface=\"not-an-ip\""), "{msg}");
+        assert!(msg.contains("--interface=\"*4\""), "{msg}");
     }
 
     #[test]
     fn no_input_files_is_an_error() {
         // clap's `arg_required_else_help` catches a fully-bare argv, but a
-        // flags-only argv reaches `run_batch`, which reports it plainly.
+        // flags-only argv reaches `run_batch`, which reports it plainly.  The
+        // test asserts the complete message.  That equality is the pin.  HS
+        // reprints the entire help here, and canonical clap does not.  A help
+        // document printed around the phrase would pass a `contains` check.
         let a = parse(&["--quiet"]);
         let e = run(&a).unwrap_err();
-        assert!(e.to_string().contains("no input files given"), "{e}");
+        assert_eq!(e.to_string(), "no input files given");
     }
 
     fn mk_result(verdict: LemmaVerdict, exists_trace: bool, steps: usize) -> LemmaResult {
@@ -3155,9 +3195,11 @@ mod tests {
     // Pins the per-lemma summary strings to HS `showProofStatus`
     // (Theory/Proof.hs:1105-1112) + the `(N steps)` suffix
     // (ClosedTheory.hs:487-489).  Undetermined/Invalidated render distinct
-    // strings, not "analysis incomplete".
+    // strings, not "analysis incomplete".  The wording for a falsified lemma
+    // depends on the quantifier.  That branch is the one branch of this
+    // function whose two arms are a plausible copy-paste of each other.
     #[test]
-    fn lemma_summary_distinguishes_undetermined_and_invalidated() {
+    fn lemma_summary_line_per_proof_status() {
         // showProofStatus _ UndeterminedProof = "analysis undetermined"
         assert_eq!(
             format_lemma_summary_line(&mk_result(LemmaVerdict::Undetermined, false, 7)),
@@ -3172,6 +3214,21 @@ mod tests {
         assert_eq!(
             format_lemma_summary_line(&mk_result(LemmaVerdict::Analyzed, false, 5)),
             "L (all-traces): analysis incomplete (5 steps)",
+        );
+        // showProofStatus ExistsNoTrace (TraceFound) = "falsified - found trace"
+        assert_eq!(
+            format_lemma_summary_line(&mk_result(LemmaVerdict::Falsified, false, 9)),
+            "L (all-traces): falsified - found trace (9 steps)",
+        );
+        // showProofStatus ExistsSomeTrace (CompleteProof) = "falsified - no
+        // trace found".  The summary uses the `exists-trace` quantifier label.
+        assert_eq!(
+            format_lemma_summary_line(&mk_result(LemmaVerdict::Falsified, true, 9)),
+            "L (exists-trace): falsified - no trace found (9 steps)",
+        );
+        assert_eq!(
+            format_lemma_summary_line(&mk_result(LemmaVerdict::Verified, true, 2)),
+            "L (exists-trace): verified (2 steps)",
         );
     }
 
@@ -3218,7 +3275,7 @@ mod tests {
     #[test]
     fn write_output_traces_joins_graphs_the_way_hs_intercalates() {
         use tamarin_theory::constraint::system::System;
-        let dir = std::env::temp_dir().join("tamarin_rs_write_output_traces");
+        let dir = scratch("write_output_traces");
         fs::create_dir_all(&dir).expect("mkdir");
         let dot = dir.join("t.dot");
         let json = dir.join("t.json");
@@ -3257,5 +3314,6 @@ mod tests {
         let json_body = fs::read_to_string(&json).expect("json file");
         assert!(json_body.contains("\"jgLabel\": \"a\","), "{json_body}");
         assert!(json_body.contains("\"jgLabel\": \"b\","), "{json_body}");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

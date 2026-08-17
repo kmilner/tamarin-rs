@@ -2,14 +2,6 @@ use super::*;
 use crate::fact::LNFact;
 use tamarin_term::lterm::{LSort, LVar};
 
-#[test]
-fn empty_system_is_default() {
-    let s = System::empty();
-    assert!(s.nodes.is_empty());
-    assert!(s.edges.is_empty());
-    assert!(s.goals.is_empty());
-}
-
 // ===== HS `M.Map` / `Data.Set` order helpers =====
 
 fn node_id(name: &str, idx: u64) -> NodeId {
@@ -237,6 +229,11 @@ fn content_untracked_callers_are_enumerated() {
     let mut offenders: Vec<String> = Vec::new();
     let mut forbidden: Vec<String> = Vec::new();
     let mut escapes: Vec<String> = Vec::new();
+    // These counters record how many times each door needle and the escape
+    // shape matched.  A scan that matches nothing asserts nothing.  So the
+    // code below checks that these counts are not zero.
+    let mut seen = [0usize; 3];
+    let mut escaping = 0usize;
     let mut files: Vec<std::path::PathBuf> = Vec::new();
     let mut stack = vec![std::path::PathBuf::from(src_root)];
     while let Some(dir) = stack.pop() {
@@ -314,9 +311,13 @@ fn content_untracked_callers_are_enumerated() {
             if trimmed.starts_with("//") {
                 continue;
             }
-            if call_needles.iter().any(|n| line.contains(n)) && !ALLOWED.contains(&cur_fn.as_str())
-            {
-                offenders.push(format!("{} in fn {}", path.display(), cur_fn));
+            for (i, needle) in call_needles.iter().enumerate() {
+                if line.contains(needle) {
+                    seen[i] += 1;
+                    if !ALLOWED.contains(&cur_fn.as_str()) {
+                        offenders.push(format!("{} in fn {}", path.display(), cur_fn));
+                    }
+                }
             }
             if forbid_needles.iter().any(|n| line.contains(n)) {
                 forbidden.push(format!("{} in fn {}", path.display(), cur_fn));
@@ -328,8 +329,11 @@ fn content_untracked_callers_are_enumerated() {
             // formula write would evade the forbid needles above.
             for (pos, _) in line.match_indices(&call_needles[0]) {
                 let next = line[pos + call_needles[0].len()..].chars().next();
-                if next != Some('.') && !ESCAPE_ALLOWED.contains(&cur_fn.as_str()) {
-                    escapes.push(format!("{} in fn {}", path.display(), cur_fn));
+                if next != Some('.') {
+                    escaping += 1;
+                    if !ESCAPE_ALLOWED.contains(&cur_fn.as_str()) {
+                        escapes.push(format!("{} in fn {}", path.display(), cur_fn));
+                    }
                 }
             }
         }
@@ -350,6 +354,23 @@ fn content_untracked_callers_are_enumerated() {
         "the untracked content door's &mut SystemContent escapes without a \
              field projection — audit that no formula store is written through \
              it, then add the fn to ESCAPE_ALLOWED: {escapes:?}"
+    );
+    // A scan that matches nothing also satisfies the three assertions above.
+    // A renamed accessor gives that result.  So does a `src` walk that
+    // reaches no file in the crate.  The checks below therefore assert that
+    // every needle still matches something.  A rename must then update the
+    // needles, and it cannot silence this discipline.
+    assert!(
+        seen.iter().all(|hits| *hits > 0),
+        "a door needle matched no call at all — the accessor was renamed or \
+             the scan reached no production file, which silences this test: \
+             {call_needles:?} hits {seen:?}"
+    );
+    assert!(
+        escaping > 0,
+        "no content-door call hands out an unprojected &mut SystemContent any \
+             more, so the escape scan proves nothing — drop ESCAPE_ALLOWED and \
+             this check together with the last escaping caller"
     );
 }
 
@@ -730,25 +751,53 @@ fn formula_to_system_all_traces_negates() {
 
 #[test]
 fn formula_to_system_partitions_safety_restrictions() {
-    use tamarin_parser::ast::TraceQuantifier;
-    let f = crate::guarded::gtrue();
-    // gtrue is safety (no Ex, no free vars).
-    // gfalse is also safety (Disj([])) — no Ex, no free vars.
-    let restrictions = vec![crate::guarded::gtrue(), crate::guarded::gfalse()];
+    use tamarin_parser::ast::{Atom, SortHint, Term, TraceQuantifier, VarSpec};
+    let mkvar = |n: &str| {
+        Term::Var(VarSpec {
+            name: n.to_string(),
+            idx: 0,
+            sort: SortHint::Node,
+            typ: None,
+        })
+    };
+    // `Last(i)` has a free variable, so `is_safety_formula` rejects it.  It
+    // is the non-safety arm of the partition.  It is also the one shape that
+    // tells the two arms apart.  `formulas` holds exactly one entry in both
+    // cases, the complete conjunction, so its length says nothing.
+    let goal =
+        crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(mkvar("j"))));
+    let unsafe_r =
+        crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(mkvar("i"))));
+    // gtrue is a safety formula: it has no Ex and no free variables.  gfalse
+    // (`Disj []`) is a safety formula too.
+    let restrictions = vec![
+        crate::guarded::gtrue(),
+        crate::guarded::gfalse(),
+        unsafe_r.clone(),
+    ];
     let sys = formula_to_system(
         restrictions,
         SourceKind::RawSources,
         TraceQuantifier::ExistsTrace,
         false,
-        &f,
+        &goal,
     );
-    // All restrictions are safety → all go into lemmas.
+    // The code conjoins the non-safety restriction onto the goal formula.
+    // The goal is ExistsTrace, so the code does not negate it.
     assert_eq!(sys.formulas.len(), 1);
-    // gtrue is `Conj []` which `insert_lemma` flattens to nothing
-    // (no items inside the empty conjunction). gfalse stays.
-    // Lemmas should contain at least the gfalse non-conj entry.
+    assert_eq!(
+        *sys.formulas[0],
+        crate::guarded::Guarded::Conj(vec![goal, unsafe_r.clone()].into())
+    );
+    // Only the safety restrictions become known-true lemmas.  gtrue is
+    // `Conj []`, and `insert_lemma` flattens it to nothing, because the empty
+    // conjunction holds no items.  gfalse stays.
     assert!(crate::guarded::stores_contains(
         &sys.lemmas,
         &crate::guarded::gfalse()
     ));
+    assert!(
+        !crate::guarded::stores_contains(&sys.lemmas, &unsafe_r),
+        "a non-safety restriction must not be asserted as a lemma"
+    );
 }

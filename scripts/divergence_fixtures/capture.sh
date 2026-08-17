@@ -54,15 +54,21 @@ binrev="$(timeout 60 "$HS_PATH" --version "${hs_rts[@]}" 2>/dev/null \
 
 mkdir -p "$expected"
 
+# The directory and the manifest must agree before the oracle runs.
+census_fixture_dir
+
 # `cut_slices <raw-file> <name> <slices> <side>` — write one expected file per
 # slice.  An empty slice means the fixture stopped producing the block it
-# exists to pin, which must not be committed as a reference.
+# exists to pin.  Such a file must not go into the repository as a reference.
+# The redirection has already created the file at that point, so the script
+# unlinks the file before it calls die.
 cut_slices() {
     local raw="$1" name="$2" slices="$3" side="$4" sl dest
     for sl in $(slices_of "$slices"); do
         dest="$expected/$name.$sl.$side.txt"
         slice "$sl" < "$raw" > "$dest"
-        [ -s "$dest" ] || die "$side side produced an EMPTY $sl slice for $name.spthy"
+        [ -s "$dest" ] \
+            || { rm -f "$dest"; die "$side side produced an EMPTY $sl slice for $name.spthy"; }
         printf '  %-24s %-6s %-2s %s lines\n' "$name" "$sl" "$side" "$(wc -l < "$dest")"
     done
 }

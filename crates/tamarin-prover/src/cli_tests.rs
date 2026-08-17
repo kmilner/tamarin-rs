@@ -98,11 +98,21 @@ fn batch_output_flags_before_a_subcommand_conflict() {
     // Top-level batch flags are also rejected BEFORE a subcommand word —
     // clap would otherwise parse them and silently drop them (no
     // subcommand reads them), and a parsed flag must never be discarded.
-    for argv in [
-        &["-o=x", "interactive", "."][..],
-        &["-O=x", "variants"][..],
-        &["--parse-only", "test"][..],
-        &["--output-json=t.json", "interactive", "."][..],
+    // There is one row here per entry of the offending-flag table in
+    // `parse_args`.  If an entry is absent from that table, clap drops the
+    // flag on that row silently, and the row here catches it.
+    for (argv, named) in [
+        (&["-o=x", "interactive", "."][..], "-o/--output"),
+        (&["-O=x", "variants"][..], "-O/--Output"),
+        (&["-m=msr", "test"][..], "-m/--output-module"),
+        (&["--parse-only", "test"][..], "--parse-only"),
+        (&["--precompute-only", "variants"][..], "--precompute-only"),
+        (&["--no-compress", "interactive", "."][..], "--no-compress"),
+        (
+            &["--output-json=t.json", "interactive", "."][..],
+            "--output-json",
+        ),
+        (&["--output-dot=t.dot", "variants"][..], "--output-dot"),
     ] {
         let e = parse_err(argv);
         assert_eq!(
@@ -110,6 +120,9 @@ fn batch_output_flags_before_a_subcommand_conflict() {
             clap::error::ErrorKind::ArgumentConflict,
             "{argv:?}"
         );
+        // The message names the flag that conflicted.  The second column of
+        // the table is all that the user can act on.
+        assert!(e.to_string().contains(named), "{argv:?}: {e}");
     }
     // The `variants` subcommand's OWN `-O` is fine — it is read.
     assert_eq!(
@@ -285,6 +298,10 @@ fn oversized_numeric_values_are_rejected_loudly() {
         ["-c=9223372036854775808", "x.spthy"],
         ["-s=9223372036854775808", "x.spthy"],
         ["-c=-1", "x.spthy"],
+        ["-b=4294967296", "x.spthy"],
+        ["-b=-1", "x.spthy"],
+        // A value that is not a number at all takes the same rejection path.
+        ["-b=not-a-number", "x.spthy"],
     ] {
         let e = parse_err(&argv);
         assert_eq!(
@@ -298,6 +315,7 @@ fn oversized_numeric_values_are_rejected_loudly() {
         parse(&["-d=4294967295", "x.spthy"]).derivcheck_timeout,
         Some(u32::MAX)
     );
+    assert_eq!(parse(&["-b=4294967295", "x.spthy"]).bound, Some(u32::MAX));
     assert_eq!(
         parse(&["-c=9223372036854775807", "x.spthy"]).open_chains,
         Some(i64::MAX as u64)
@@ -515,34 +533,44 @@ fn trace_output_flags() {
 // Boolean flags
 // =========================================================================
 
-#[test]
-fn quiet_and_verbose_flags() {
-    let a = parse(&["--quiet", "-v", "x.spthy"]);
-    assert!(a.quiet);
-    assert!(a.verbose);
-}
+/// Every boolean flag that the top-level command takes.  Each flag comes
+/// with the [`Args`] field that [`parse_args`] must set from it.
+const BOOL_FLAGS: [(&str, fn(&Args) -> bool); 12] = [
+    ("--diff", |a| a.diff),
+    ("--quit-on-warning", |a| a.quit_on_warning),
+    ("--no-ndc", |a| a.no_ndc),
+    ("--auto-sources", |a| a.auto_sources),
+    ("--oracle-only", |a| a.oracle_only),
+    ("--quiet", |a| a.quiet),
+    ("--verbose", |a| a.verbose),
+    ("--proverif-no-reuse-lemmas", |a| a.proverif_no_reuse_lemmas),
+    ("--proverif-no-restrictions", |a| a.proverif_no_restrictions),
+    ("--no-compress", |a| a.no_compress),
+    ("--parse-only", |a| a.parse_only),
+    ("--precompute-only", |a| a.precompute_only),
+];
 
 #[test]
-fn diff_flag_parsed() {
-    assert!(parse(&["--diff", "x.spthy"]).diff);
-}
-
-#[test]
-fn quit_on_warning_parsed() {
-    assert!(parse(&["--quit-on-warning", "x.spthy"]).quit_on_warning);
-}
-
-#[test]
-fn parse_only_and_precompute_only() {
-    assert!(parse(&["--parse-only", "x.spthy"]).parse_only);
-    assert!(parse(&["--precompute-only", "x.spthy"]).precompute_only);
-    assert!(parse(&["--no-compress", "x.spthy"]).no_compress);
-}
-
-#[test]
-fn auto_sources_and_no_ndc_parsed() {
-    assert!(parse(&["--auto-sources", "x.spthy"]).auto_sources);
-    assert!(parse(&["--no-ndc", "x.spthy"]).no_ndc);
+fn each_boolean_flag_sets_its_own_field_and_no_other() {
+    // The loop checks the complete row for each flag.  That is what catches
+    // a cross-wired field in the flattening from the clap tree to [`Args`].
+    // A swap of `quiet: cli.load.verbose` and `verbose: cli.load.quiet`
+    // still satisfies any test that passes both flags at once and asserts
+    // that both fields are true.
+    for (set, _) in BOOL_FLAGS {
+        let a = parse(&[set, "x.spthy"]);
+        for (other, read) in BOOL_FLAGS {
+            assert_eq!(read(&a), set == other, "argv `{set}`, field of `{other}`");
+        }
+    }
+    // An argv with none of these flags leaves every field false.  So the
+    // loop above reads the flags, not the defaults.
+    let a = parse(&["x.spthy"]);
+    for (name, read) in BOOL_FLAGS {
+        assert!(!read(&a), "`{name}` set without the flag");
+    }
+    // `-v` is the one short spelling in the set.
+    assert!(parse(&["-v", "x.spthy"]).verbose);
 }
 
 // =========================================================================

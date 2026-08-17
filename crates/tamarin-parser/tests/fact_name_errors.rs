@@ -31,76 +31,51 @@ fn err(src: &str) -> String {
         .to_string()
 }
 
-/// A lowercase fact in a rule premise: the fail sits at the char right after
-/// the name (the `(`), with the identifier's pending label merged in.
+/// Every rule position routes through the one `fact'`.  The error therefore
+/// reports at the character right after the name, that is the `(`.  The
+/// pending label of the identifier merges into that error.  This holds
+/// wherever the fact stands, and whether or not the fact is persistent,
+/// because the `!` parses before the name.
 #[test]
-fn lowercase_fact_in_premise() {
-    assert_eq!(
-        err("theory T begin\n\nrule R: [ foo(x) ] --> [ ]\n\nend\n"),
-        "\"fact.spthy\" (line 3, column 14):\n\
-         unexpected \"(\"\n\
-         expecting letter or digit\n\
-         facts must start with upper-case letters"
-    );
-}
-
-/// The same in a conclusion.
-#[test]
-fn lowercase_fact_in_conclusion() {
-    assert_eq!(
-        err("theory T begin\n\nrule R: [ ] --> [ foo('a') ]\n\nend\n"),
-        "\"fact.spthy\" (line 3, column 22):\n\
-         unexpected \"(\"\n\
-         expecting letter or digit\n\
-         facts must start with upper-case letters"
-    );
-}
-
-/// The same in an action.
-#[test]
-fn lowercase_fact_in_action() {
-    assert_eq!(
-        err("theory T begin\n\nrule R: [ ] --[ foo('a') ]-> [ ]\n\nend\n"),
-        "\"fact.spthy\" (line 3, column 20):\n\
-         unexpected \"(\"\n\
-         expecting letter or digit\n\
-         facts must start with upper-case letters"
-    );
-}
-
-/// A persistent lowercase fact behaves the same (the `!` parses first).
-#[test]
-fn lowercase_persistent_fact() {
-    assert_eq!(
-        err("theory T begin\n\nrule R: [ !foo(x) ] --> [ ]\n\nend\n"),
-        "\"fact.spthy\" (line 3, column 15):\n\
-         unexpected \"(\"\n\
-         expecting letter or digit\n\
-         facts must start with upper-case letters"
-    );
+fn a_lowercase_fact_fails_at_the_paren_in_every_rule_position() {
+    for (case, src, col) in [
+        ("premise", "rule R: [ foo(x) ] --> [ ]", 14),
+        ("conclusion", "rule R: [ ] --> [ foo('a') ]", 22),
+        ("action", "rule R: [ ] --[ foo('a') ]-> [ ]", 20),
+        ("persistent premise", "rule R: [ !foo(x) ] --> [ ]", 15),
+    ] {
+        assert_eq!(
+            err(&format!("theory T begin\n\n{src}\n\nend\n")),
+            format!(
+                "\"fact.spthy\" (line 3, column {col}):\n\
+                 unexpected \"(\"\n\
+                 expecting letter or digit\n\
+                 facts must start with upper-case letters"
+            ),
+            "case {case}"
+        );
+    }
 }
 
 /// Whitespace between the name and the next token discards the pending
-/// `letter or digit` label — the fail reports at the token after the space.
+/// `letter or digit` label.  The error then reports at the token after the
+/// space, whatever that token is.
 #[test]
-fn whitespace_after_name_drops_the_letter_label() {
-    assert_eq!(
-        err("theory T begin\n\nrule R: [ foo (x) ] --> [ ]\n\nend\n"),
-        "\"fact.spthy\" (line 3, column 15):\n\
-         unexpected \"(\"\n\
-         facts must start with upper-case letters"
-    );
-}
-
-/// A bare lowercase name before `]` likewise.
-#[test]
-fn bare_lowercase_name_before_bracket() {
-    assert_eq!(
-        err("theory T begin\n\nrule R: [ foo ] --> [ ]\n\nend\n"),
-        "\"fact.spthy\" (line 3, column 15):\n\
-         unexpected \"]\"\n\
-         facts must start with upper-case letters"
-    );
+fn whitespace_after_the_name_drops_the_letter_label() {
+    for (case, src, unexpected) in [
+        ("argument list", "rule R: [ foo (x) ] --> [ ]", "\"(\""),
+        ("bare name", "rule R: [ foo ] --> [ ]", "\"]\""),
+    ] {
+        assert_eq!(
+            err(&format!("theory T begin\n\n{src}\n\nend\n")),
+            format!(
+                "\"fact.spthy\" (line 3, column 15):\n\
+                 unexpected {unexpected}\n\
+                 facts must start with upper-case letters"
+            ),
+            "case {case}"
+        );
+    }
 }
 
 /// The ordering case that exposed the divergence: a rule whose conclusion

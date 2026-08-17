@@ -4513,11 +4513,9 @@ mod oracle_goal_tests {
         assert_eq!(
             display,
             "!KeyStore0( ~keyaaaaaaaaaaaaaaaaaaaa, ~msgbbbbbbbbbbbbbbbbbbbb ) \u{25B6}\u{2080} #l",
-            "display width must keep the fact inline (space before `)`)",
-        );
-        assert_ne!(
-            collapsed, display,
-            "oracle and display widths must differ here"
+            "display width must keep the fact inline (space before `)`); the two \
+             expectations differ by exactly that byte, which is what makes this \
+             pair discriminating",
         );
     }
 
@@ -4557,11 +4555,8 @@ mod oracle_goal_tests {
         // HS `nest 1` leading space + `"  ∥"` separator (two spaces + ∥).
         assert_eq!(
             collapsed, " (#a < #b)  \u{2225} (#b < #a)",
-            "oracle disjunction goal must keep HS's leading `nest 1` space",
-        );
-        assert!(
-            collapsed.starts_with(' '),
-            "regression: oracle disj goal lost its leading space (render_at/lay2 bug)",
+            "oracle disjunction goal must keep HS's leading `nest 1` space; \
+             losing it is the render_at/lay2 regression",
         );
     }
 }
@@ -4646,6 +4641,20 @@ mod manual_rule_variants_tests {
             contains_manual_rule_variants(&parsed, &elaborated, true),
             positional(&parsed, &elaborated, true),
         );
+        // The gate is an OR over the rules.  The mixed theory above still
+        // fires if the discriminant loses one of the two prefixes.  Each
+        // prefix therefore gets a single-rule theory of its own.
+        for auto in [auto_out, "AUTO_IN_TERM_1_0_0__Recv"] {
+            let (parsed, elaborated) = theories(&["R"], vec![elab_rule("R", &[auto])]);
+            assert!(
+                contains_manual_rule_variants(&parsed, &elaborated, true),
+                "{auto} alone must open the gate",
+            );
+            assert!(
+                !contains_manual_rule_variants(&parsed, &elaborated, false),
+                "{auto} must be invisible without --auto-sources",
+            );
+        }
     }
 
     /// A theory whose duplicated rules carry no `AUTO_*` action leaves the

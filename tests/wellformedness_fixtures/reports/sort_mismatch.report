@@ -1,0 +1,14 @@
+# source: oracle ef3f0468, plain load
+/*
+WARNING: the following wellformedness checks failed!
+
+Variable with mismatching sorts or capitalization
+=================================================
+
+Possible reasons:
+1. Identifiers are case sensitive, i.e.,'x' and 'X' are considered to be different.
+2. The same holds for sorts:, i.e., '$x', 'x', and '~x' are considered to be different.
+
+  rule `Bad': 
+    1. $x, ~x
+*/

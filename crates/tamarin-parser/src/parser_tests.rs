@@ -812,9 +812,15 @@ fn simple_rule() {
     match &t.items[0] {
         TheoryItem::Rule(r) => {
             assert_eq!(r.name, "R");
-            assert_eq!(r.premises.len(), 1);
-            assert_eq!(r.actions.len(), 1);
-            assert_eq!(r.conclusions.len(), 1);
+            // Each of the three lists holds exactly one fact.  So only the
+            // names separate the premise, action and conclusion slots.  The
+            // test compares the names, not the lengths.
+            fn names(fs: &[Fact]) -> Vec<&str> {
+                fs.iter().map(|f| f.name.as_str()).collect()
+            }
+            assert_eq!(names(&r.premises), ["Fr"]);
+            assert_eq!(names(&r.actions), ["Foo"]);
+            assert_eq!(names(&r.conclusions), ["Out"]);
         }
         x => panic!("expected rule, got {:?}", x),
     }
@@ -829,7 +835,16 @@ fn lemma_with_quantifier() {
         "#;
     let t = parse_theory(s, &[]).unwrap();
     match &t.items[0] {
-        TheoryItem::Lemma(_) => {}
+        TheoryItem::Lemma(l) => {
+            assert_eq!(l.name, "secret");
+            // The parser gives the quoted body to the formula parser.  It
+            // does not keep the body as text.  The two binders `x` and `#i`
+            // and the `All` head must reach the AST.
+            match &l.formula {
+                Formula::Forall(vs, _) => assert_eq!(vs.len(), 2),
+                other => panic!("expected Forall, got {:?}", other),
+            }
+        }
         x => panic!("expected lemma, got {:?}", x),
     }
 }
@@ -839,6 +854,9 @@ fn comment_handling() {
     let s = "/* outer */ theory T // line\n begin /* x /* y */ z */ end";
     let t = parse_theory(s, &[]).unwrap();
     assert_eq!(t.name, "T");
+    // `/* */` and `//` are whitespace, not theory items.  Only the
+    // `name{* … *}` formal comment becomes a theory item.
+    assert!(t.items.is_empty(), "unexpected items: {:?}", t.items);
 }
 
 #[test]
@@ -847,15 +865,17 @@ fn term_application() {
     // head through `lookup_arity` and an undeclared `h` would backtrack
     // to a variable (oracle probes p05/p25 — unknown operators are parse
     // errors upstream).
-    let mut p = Parser::new("h(<a, b>, ~k)", &[], false);
-    p.resolve_prefix_apps = false;
-    let t = p.term(false).unwrap();
-    match t {
+    match parse_term_str("h(<a, b>, ~k)", &[]).unwrap() {
         Term::App(name, args) => {
             assert_eq!(name, "h");
-            assert_eq!(args.len(), 2);
+            // The nested tuple is one argument, not two.
+            assert!(
+                matches!(args.as_slice(), [Term::Pair(p), Term::Var(_)] if p.len() == 2),
+                "unexpected argument shape: {:?}",
+                args
+            );
         }
-        _ => panic!("expected App"),
+        other => panic!("expected App, got {:?}", other),
     }
 }
 
@@ -966,25 +986,67 @@ fn empty_tuple_is_error_singleton_collapses() {
     }
 }
 
-// HS `factAnnotation` SolveFirst is `opUnion = symbol_ "++" <|> symbol_ "+"`
-// (Theory/Text/Parser/Fact.hs:31-36, see line 33, Token.hs:551-552), so `[++]`
-// is accepted like `[+]`.
+// HS `factAnnotation` (Theory/Text/Parser/Fact.hs:31-36, see line 33) maps
+// `opUnion` to SolveFirst, `opMinus` to SolveLast and `no_precomp` to
+// NoSources.  HS also defines `opUnion = symbol_ "++" <|> symbol_ "+"`
+// (Token.hs:551-552).  So the parser accepts `[++]` like `[+]`.
 // Verified against tamarin-prover 1.13.0: `Foo(~k)[++]` parses and renders
 // as `[+]`.
 #[test]
 fn fact_annotation_accepts_double_plus() {
-    let s = "theory T begin rule R: [ Fr(~k) ] --[ Foo(~k)[++] ]-> [ Out(~k) ] end";
-    let t = parse_theory(s, &[]).unwrap();
-    let rule = t
-        .items
+    use FactAnnotation::*;
+    for (written, expected) in [
+        ("[++]", vec![SolveFirst]),
+        ("[+]", vec![SolveFirst]),
+        ("[-]", vec![SolveLast]),
+        ("[no_precomp]", vec![NoSources]),
+        // `list` is comma-separated.  The annotations keep the source order.
+        ("[-,++,no_precomp]", vec![SolveLast, SolveFirst, NoSources]),
+        ("[]", vec![]),
+        ("", vec![]),
+    ] {
+        let s =
+            format!("theory T begin rule R: [ Fr(~k) ] --[ Foo(~k){written} ]-> [ Out(~k) ] end");
+        let t = parse_theory(&s, &[]).unwrap_or_else(|e| panic!("{written}: {e}"));
+        let rule = t
+            .items
+            .iter()
+            .find_map(|it| match it {
+                TheoryItem::Rule(r) => Some(r),
+                _ => None,
+            })
+            .expect("rule R");
+        assert_eq!(
+            rule.actions[0].annotations, expected,
+            "annotation {written}"
+        );
+    }
+}
+
+// ---- `read_until_next_top_level`: where a raw capture ends ----------------
+
+/// The raw text that `read_until_next_top_level` captured for the proof
+/// skeleton of the theory.  This function also asserts that the theory holds
+/// exactly one lemma.  A capture that stops early leaves the rest of the
+/// text, and the parser then reads that rest as more theory items.  So the
+/// lemma count is part of every check below.
+fn lemma_proof_raw(thy: &Theory) -> &str {
+    let mut lemmas = thy.items.iter().filter_map(|it| match it {
+        TheoryItem::Lemma(l) => Some(l),
+        _ => None,
+    });
+    let l = lemmas.next().expect("a lemma");
+    assert!(lemmas.next().is_none(), "expected exactly one lemma");
+    &l.proof.as_ref().expect("lemma has a proof skeleton").raw
+}
+
+/// Reports whether the parser split a top-level `test` CaseTest item out of
+/// the theory.  That is the symptom of a capture that stopped at a `test`
+/// token inside a proof body.
+fn has_casetest(thy: &Theory) -> bool {
+    thy.items
         .iter()
-        .find_map(|it| match it {
-            TheoryItem::Rule(r) => Some(r),
-            _ => None,
-        })
-        .expect("rule R");
-    let act = &rule.actions[0];
-    assert_eq!(act.annotations, vec![FactAnnotation::SolveFirst]);
+        .any(|it| matches!(it, TheoryItem::CaseTest(_)))
 }
 
 // Regression: `test` is a genuine top-level theory-item keyword (HS
@@ -1012,32 +1074,16 @@ fn proof_skeleton_not_truncated_by_keyword_fact_arg() {
   qed
 end"#;
     let t = parse_theory(s, &[]).expect("keyword-named goal arg must parse");
-    let lemmas: Vec<_> = t
-        .items
-        .iter()
-        .filter(|it| matches!(it, TheoryItem::Lemma(_)))
-        .collect();
-    assert_eq!(lemmas.len(), 1, "expected exactly one lemma");
     assert!(
-        !t.items
-            .iter()
-            .any(|it| matches!(it, TheoryItem::CaseTest(_))),
-        "no CaseTest may be split out of the proof body"
+        !has_casetest(&t),
+        "no CaseTest may be split out of the body"
     );
-    let proof = match &lemmas[0] {
-        TheoryItem::Lemma(l) => l.proof.as_ref().expect("lemma has a proof skeleton"),
-        _ => unreachable!(),
-    };
+    let raw = lemma_proof_raw(&t);
     assert!(
-        proof.raw.contains("Match( test, sid )"),
-        "proof raw truncated at/before `test`: {:?}",
-        proof.raw
+        raw.contains("Match( test, sid )"),
+        "proof raw truncated at/before `test`: {raw:?}"
     );
-    assert!(
-        proof.raw.contains("qed"),
-        "proof raw missing `qed`: {:?}",
-        proof.raw
-    );
+    assert!(raw.contains("qed"), "proof raw missing `qed`: {raw:?}");
 }
 
 // The paren-depth guard must cover the full spread of message-argument
@@ -1057,27 +1103,13 @@ fn proof_skeleton_captures_mixed_sorted_indexed_and_keyword_args() {
   qed
 end"#;
     let t = parse_theory(s, &[]).expect("mixed-arg goal must parse");
-    let proof = match t
-        .items
-        .iter()
-        .find(|it| matches!(it, TheoryItem::Lemma(_)))
-        .expect("lemma")
-    {
-        TheoryItem::Lemma(l) => l.proof.as_ref().expect("proof skeleton"),
-        _ => unreachable!(),
-    };
+    assert!(!has_casetest(&t));
+    let raw = lemma_proof_raw(&t);
     assert!(
-        proof
-            .raw
-            .contains("Foo( ~k, $A, %n, k.1, test, rule, function )"),
-        "mixed-arg goal truncated: {:?}",
-        proof.raw
+        raw.contains("Foo( ~k, $A, %n, k.1, test, rule, function )"),
+        "mixed-arg goal truncated: {raw:?}"
     );
-    assert!(proof.raw.contains("qed"), "missing qed: {:?}", proof.raw);
-    assert!(!t
-        .items
-        .iter()
-        .any(|it| matches!(it, TheoryItem::CaseTest(_))));
+    assert!(raw.contains("qed"), "missing qed: {raw:?}");
 }
 
 // Dual check: the depth-0 boundary must still fire.  A genuine top-level
@@ -1098,19 +1130,10 @@ fn real_casetest_after_proof_still_recognized() {
     "Ex #i. Bar() @ #i"
 end"#;
     let t = parse_theory(s, &[]).expect("proof followed by CaseTest must parse");
-    let proof = match t
-        .items
-        .iter()
-        .find(|it| matches!(it, TheoryItem::Lemma(_)))
-        .expect("lemma")
-    {
-        TheoryItem::Lemma(l) => l.proof.as_ref().expect("proof skeleton"),
-        _ => unreachable!(),
-    };
+    let raw = lemma_proof_raw(&t);
     assert!(
-        proof.raw.contains("Foo( test, sid )") && proof.raw.contains("qed"),
-        "proof body truncated: {:?}",
-        proof.raw
+        raw.contains("Foo( test, sid )") && raw.contains("qed"),
+        "proof body truncated: {raw:?}"
     );
     let ct = t
         .items
@@ -1198,29 +1221,17 @@ end"#;
     let t = parse_theory(s, &[]).expect("`case test` must not truncate the proof");
     // The bare `test` case label must NOT be split off as a CaseTest item.
     assert!(
-        !t.items
-            .iter()
-            .any(|it| matches!(it, TheoryItem::CaseTest(_))),
+        !has_casetest(&t),
         "case label `test` must not become a top-level CaseTest"
     );
-    let proof = match t
-        .items
-        .iter()
-        .find(|it| matches!(it, TheoryItem::Lemma(_)))
-        .expect("lemma")
-    {
-        TheoryItem::Lemma(l) => l.proof.as_ref().expect("proof skeleton"),
-        _ => unreachable!(),
-    };
+    let raw = lemma_proof_raw(&t);
     assert!(
-        proof.raw.contains("case test"),
-        "proof raw truncated at/before `case test`: {:?}",
-        proof.raw
+        raw.contains("case test"),
+        "proof raw truncated at/before `case test`: {raw:?}"
     );
     assert!(
-        proof.raw.contains("SOLVED") && proof.raw.contains("qed"),
-        "proof raw missing SOLVED/qed: {:?}",
-        proof.raw
+        raw.contains("SOLVED") && raw.contains("qed"),
+        "proof raw missing SOLVED/qed: {raw:?}"
     );
 }
 
@@ -1246,14 +1257,8 @@ fn multiple_case_labels_named_after_keywords_do_not_truncate() {
   qed
 end"#;
     let t = parse_theory(s, &[]).expect("keyword-named case labels must not truncate");
-    // Exactly one lemma, no stray Rule/Functions items split out of the body.
-    assert_eq!(
-        t.items
-            .iter()
-            .filter(|it| matches!(it, TheoryItem::Lemma(_)))
-            .count(),
-        1
-    );
+    // The parser splits no Rule or Functions items out of the body.
+    // `lemma_proof_raw` checks the lemma count.
     assert!(
         !t.items.iter().any(|it| matches!(it, TheoryItem::Rule(_))),
         "a `case rule` label must not be split into a top-level rule"
@@ -1264,27 +1269,11 @@ end"#;
             .any(|it| matches!(it, TheoryItem::Functions(_))),
         "a `case function` label must not be split into a top-level functions decl"
     );
-    let proof = match t
-        .items
-        .iter()
-        .find(|it| matches!(it, TheoryItem::Lemma(_)))
-        .expect("lemma")
-    {
-        TheoryItem::Lemma(l) => l.proof.as_ref().expect("proof skeleton"),
-        _ => unreachable!(),
-    };
+    let raw = lemma_proof_raw(&t);
     for label in ["case rule", "case lemma", "case function"] {
-        assert!(
-            proof.raw.contains(label),
-            "proof raw missing {label:?}: {:?}",
-            proof.raw
-        );
+        assert!(raw.contains(label), "proof raw missing {label:?}: {raw:?}");
     }
-    assert!(
-        proof.raw.contains("qed"),
-        "proof raw missing qed: {:?}",
-        proof.raw
-    );
+    assert!(raw.contains("qed"), "proof raw missing qed: {raw:?}");
 }
 
 // Dual check: the depth-0 boundary must still fire for a REAL top-level
@@ -1307,24 +1296,14 @@ fn keyword_after_proof_still_terminates_capture() {
     [ A(x) ] --[ Done(x) ]-> [ ]
 end"#;
     let t = parse_theory(s, &[]).expect("proof followed by a real rule must parse");
-    let proof = match t
-        .items
-        .iter()
-        .find(|it| matches!(it, TheoryItem::Lemma(_)))
-        .expect("lemma")
-    {
-        TheoryItem::Lemma(l) => l.proof.as_ref().expect("proof skeleton"),
-        _ => unreachable!(),
-    };
+    let raw = lemma_proof_raw(&t);
     assert!(
-        proof.raw.contains("case test") && proof.raw.contains("qed"),
-        "proof body truncated: {:?}",
-        proof.raw
+        raw.contains("case test") && raw.contains("qed"),
+        "proof body truncated: {raw:?}"
     );
     assert!(
-        !proof.raw.contains("rule two"),
-        "the following rule leaked into the proof capture: {:?}",
-        proof.raw
+        !raw.contains("rule two"),
+        "the following rule leaked into the proof capture: {raw:?}"
     );
     let rule = t
         .items

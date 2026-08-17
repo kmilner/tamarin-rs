@@ -4,23 +4,19 @@
 
 use super::*;
 
+/// The three childless leaf forms that a printed proof can end in.  Each form
+/// maps to its own [`ParsedMethod`].  No form carries a case block.
 #[test]
-fn leaf_by_sorry() {
-    let t = parse_proof_tree("by sorry").expect("parse");
-    assert_eq!(t.method, ParsedMethod::Sorry);
-    assert!(t.cases.is_empty());
-}
-
-#[test]
-fn leaf_by_contradiction() {
-    let t = parse_proof_tree("by contradiction").expect("parse");
-    assert_eq!(t.method, ParsedMethod::Contradiction);
-}
-
-#[test]
-fn solved_leaf() {
-    let t = parse_proof_tree("SOLVED").expect("parse");
-    assert_eq!(t.method, ParsedMethod::SolvedLeaf);
+fn leaf_forms() {
+    for (src, method) in [
+        ("by sorry", ParsedMethod::Sorry),
+        ("by contradiction", ParsedMethod::Contradiction),
+        ("SOLVED", ParsedMethod::SolvedLeaf),
+    ] {
+        let t = parse_proof_tree(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+        assert_eq!(t.method, method, "{src}");
+        assert!(t.cases.is_empty(), "{src} must be childless: {:?}", t.cases);
+    }
 }
 
 #[test]
@@ -281,40 +277,37 @@ fn solve_subterm_goal() {
 #[test]
 fn solve_split_goal() {
     // HS `eqSplitGoal` (Theory/Text/Parser/Proof.hs:70-72) pretty-print:
-    // `splitEqs(N)`.
-    let src = "solve( splitEqs(42) ) by sorry";
-    let t = parse_proof_tree(src).expect("parse");
-    match &t.method {
-        ParsedMethod::SolveGoal(GoalSpec::Split { split_id }, _) => {
-            assert_eq!(*split_id, 42);
+    // `splitEqs(N)`.  The test includes the boundary id 0, which is the first
+    // id that EquationStore creates.
+    for id in [42i64, 0] {
+        let src = format!("solve( splitEqs({id}) ) by sorry");
+        let t = parse_proof_tree(&src).expect("parse");
+        match &t.method {
+            ParsedMethod::SolveGoal(GoalSpec::Split { split_id }, _) => {
+                assert_eq!(*split_id, id, "{src}");
+            }
+            other => panic!("expected Split goal-spec for {src}, got {:?}", other),
         }
-        other => panic!("expected Split goal-spec, got {:?}", other),
     }
 }
 
-#[test]
-fn solve_split_goal_zero() {
-    // Boundary: split id 0 (the first id minted by EquationStore).
-    let src = "solve( splitEqs(0) ) by sorry";
-    let t = parse_proof_tree(src).expect("parse");
-    match &t.method {
-        ParsedMethod::SolveGoal(GoalSpec::Split { split_id }, _) => {
-            assert_eq!(*split_id, 0);
-        }
-        other => panic!("expected Split goal-spec, got {:?}", other),
-    }
-}
-
+/// `solve( (last(#t1)) ∥ (#t1 < #t2) )` has two non-quant alts.  The captured
+/// `alt_texts` are the tie-breaker that `tamarin_theory::replay::match_goal`
+/// uses when several `sys.goals` disjs have the same alt shape.  The parser
+/// must therefore emit them under the normalisation that the runtime side
+/// applies again in `normalize_disj_alt_text_for_match`.  That normalisation
+/// drops the outer parentheses.  It then removes every whitespace character
+/// and every `#` character.
 #[test]
 fn solve_disj_two_alts() {
-    // `solve( (last(#t1))  ∥ (#t1 < #t2) )` — two non-quant alts.
     let src = "solve( (last(#t1)) \u{2225} (#t1 < #t2) ) by sorry";
     let t = parse_proof_tree(src).expect("parse");
     match &t.method {
-        ParsedMethod::SolveGoal(GoalSpec::Disj { alts, alt_texts: _ }, _) => {
+        ParsedMethod::SolveGoal(GoalSpec::Disj { alts, alt_texts }, _) => {
             assert_eq!(alts.len(), 2);
             assert!(matches!(alts[0], DisjAlt::NonQuant));
             assert!(matches!(alts[1], DisjAlt::NonQuant));
+            assert_eq!(*alt_texts, vec!["last(t1)", "t1<t2"]);
         }
         other => panic!("expected Disj goal-spec, got {:?}", other),
     }
@@ -338,19 +331,33 @@ fn solve_disj_quantified_alts() {
     }
 }
 
+/// The inner solve of Yubikey `slightly_weaker_invariant` has 5 non-quant
+/// alts.  The binding-A and binding-B instantiations of this goal have the
+/// same 5-alt NonQuant shape.  Only `alt_texts` tells them apart.  Here
+/// alt[0] is `last(t2)`, and the other disj has `last(t1)`.  A nested alt
+/// keeps its inner parentheses.
 #[test]
 fn solve_disj_five_alts() {
-    // Yubikey slightly_weaker_invariant inner solve — 5 non-quant alts.
     let src = "solve( (last(#t2)) \u{2225} (last(#t1)) \u{2225} \
                           ((#t1 < #t2) \u{2227} (last(#t3))) \u{2225} \
                           (#t2 < #t1) \u{2225} (#t1 = #t2) ) by sorry";
     let t = parse_proof_tree(src).expect("parse");
     match &t.method {
-        ParsedMethod::SolveGoal(GoalSpec::Disj { alts, alt_texts: _ }, _) => {
+        ParsedMethod::SolveGoal(GoalSpec::Disj { alts, alt_texts }, _) => {
             assert_eq!(alts.len(), 5);
             for a in alts.iter() {
                 assert!(matches!(a, DisjAlt::NonQuant));
             }
+            assert_eq!(
+                *alt_texts,
+                vec![
+                    "last(t2)",
+                    "last(t1)",
+                    "(t1<t2)\u{2227}(last(t3))",
+                    "t2<t1",
+                    "t1=t2",
+                ]
+            );
         }
         other => panic!("expected Disj goal-spec, got {:?}", other),
     }
