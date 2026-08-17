@@ -218,8 +218,9 @@ MAUDE_PATH="$(command -v maude)" cargo test --profile ci --workspace
 MAUDE_PATH="$(command -v maude)" cargo test -p tamarin-theory --test oracle_solver
 ```
 
-The workspace holds about 1550 tests. One of them carries the
-`#[ignore]` attribute. CI uses `--profile ci`, and it is the profile to
+The workspace holds 1566 tests. One of them carries the `#[ignore]`
+attribute, so an ordinary run reports 1565 passed. CI uses `--profile ci`,
+and it is the profile to
 prefer locally: it is release optimisation without fat LTO, which the release
 profile would re-run at every one of the ~44 test-binary links. Each profile
 also gets its own target tree, so alternating between plain `cargo test`
@@ -270,8 +271,11 @@ cargo test --test oracle_solver corpus_proof_skeleton_match_probe --release -- -
 `corpus_proof_skeleton_match_probe` compares the port's proof tree against
 the oracle's proof tree. It compares the two trees in a canonical form. It
 makes one comparison per lemma, over the whole `examples/` tree. This probe
-is not the primary metric. The byte gate below is the primary metric, and it
-covers everything this probe compares.
+is not the correctness criterion. That criterion is byte-identical `--prove`
+stdout, and the corpus gate below checks it. That gate is stricter than this
+probe on the files it covers, because a proof is part of the stdout it
+compares. Its file list is narrower: it names 431 of the 1042 `.spthy` files
+under `examples/`, so this probe reaches files the gate never opens.
 
 **The probe asserts.** It prints its match rate and its list of divergences.
 It then calls `enforce_probe_ledger`. That function fails the test in four

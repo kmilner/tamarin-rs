@@ -1130,24 +1130,33 @@ fn verdict_match_suite_all_solved_against_tamarin() {
 
 /// **Corpus proof-skeleton match probe**.  The probe walks the whole
 /// `examples/` tree.  It invokes `tamarin-prover --prove --output=<tmp>` once
-/// per file, which gives us the rendered proof tree from Haskell.  For every
-/// lemma whose verdict matches, it then diffs our `render`ed `ProofNode`
-/// against tamarin's skeleton with `first_divergence`.
+/// per file, which gives us the rendered proof tree from Haskell.  The probe
+/// then proves each lemma itself and diffs our `render`ed `ProofNode` against
+/// tamarin's skeleton with `first_divergence`.  It diffs the two skeletons
+/// even when the two verdicts agree, because a verdict match on a
+/// structurally divergent proof is the right answer for the wrong reason.
 ///
-/// The probe reports `corpus structural-match: X/Y`.  Y is the total number
-/// of lemmas where Haskell's proof skeleton is available.  A verdict
-/// divergence does count against the structural match, because a match on
-/// the verdict alone hides reasoning bugs.  There is one exception: a lemma
-/// whose oracle output carries no proof the probe can extract.  The probe
-/// reports such a lemma in the `no-haskell-skeleton` list and keeps it out of
-/// the ledger.  The probe then holds the divergence identities to
-/// [`STRUCTURAL_MISMATCH_LEDGER`].  An unexpected divergence fails the probe.
-/// So does a ledger entry that the probe compares without finding a
-/// divergence.  The probe does not merely print either one in the log.
+/// The probe reports `corpus structural-match: X/Y`.  X counts the lemmas
+/// whose skeletons match.  Y counts every lemma the probe reached: the
+/// matches, the structural divergences, and the lemmas whose oracle output
+/// carries no proof the probe can extract.  Y leaves out a lemma the probe
+/// could not prove or could not name a verdict for; it reports those as
+/// `incomparable`.  A lemma with no extractable skeleton goes to the
+/// `no-haskell-skeleton` list, so it never becomes a ledger entry.  Only a
+/// structural difference makes a lemma a mismatch.  When such a lemma also
+/// disagrees on the verdict, its record carries a
+/// `[verdict: ours=… theirs=…]` note.  The probe holds the divergence
+/// identities to [`STRUCTURAL_MISMATCH_LEDGER`].  An unexpected divergence
+/// fails the probe.  So does a ledger entry that the probe compares without
+/// finding a divergence.  The probe does not merely print either one in the
+/// log.
 ///
-/// This is the **primary metric** for the port's progress, per the project
-/// directive: count only whether the proof matches the Haskell skeleton
-/// directly.
+/// This probe is not the correctness criterion.  That criterion is
+/// byte-identical `--prove` stdout, and `scripts/corpus_file_diff.sh` checks
+/// it over the 432-row corpus.  That gate is stricter than this probe on the
+/// files it covers, because a proof is part of the stdout it compares.  Its
+/// file list is narrower: it names 431 of the 1042 `.spthy` files under
+/// `examples/`, so this probe reaches files the gate never opens.
 ///
 /// The test carries `#[ignore]`.  Run it with `cargo test -- --ignored`.
 /// This heavyweight whole-corpus probe proves every example in-process, which
@@ -1357,10 +1366,10 @@ fn corpus_proof_skeleton_match_probe() {
                 .unwrap_or(w.path.as_path())
                 .to_string_lossy();
             let file_lemma = format!("{}::{}", rel, w.lemma_name);
-            // **Structural match is the only metric** (per project directive).
-            // Always diff proof skeletons, regardless of verdict — a verdict
-            // match on a structurally-divergent proof means we're getting the
-            // right answer for the wrong reasons, which is misleading.
+            // This probe's metric is the structural match, not the verdict.
+            // So it diffs the skeletons even when the two verdicts agree.  A
+            // verdict match on a structurally divergent proof means we get
+            // the right answer for the wrong reasons, which is misleading.
             let theirs = match extract_from_haskell(w.proof_text, &w.lemma_name) {
                 Some(s) => s,
                 None => return Outcome::NoHaskellSkeleton(file_lemma),
