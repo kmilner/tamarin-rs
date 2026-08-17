@@ -97,6 +97,10 @@ impl From<Pos> for Location {
 
 #[derive(Debug, Clone)]
 pub enum ParseError {
+    MalformedHexColor {
+        msg: String,
+        at: Location,
+    },
     UnexpectedKeyword {
         found: Option<String>,
         expected: Vec<String>,
@@ -322,6 +326,7 @@ impl ParseError {
             | ParseError::IoError { .. }
             | ParseError::DuplicateRule { .. }
             | ParseError::WrongArityforACFunctionDeclaration { .. }
+            | ParseError::MalformedHexColor { .. }
             | ParseError::DuplicateRestriction { .. } => {}
         }
     }
@@ -357,6 +362,7 @@ impl ParseError {
             | ParseError::Expected { at, .. }
             | ParseError::Custom { at, .. }
             | ParseError::Abort { at, .. }
+            | ParseError::MalformedHexColor { at, .. }
             | ParseError::WrongArityforACFunctionDeclaration { at, .. }
             | ParseError::UnterminatedDelimiter { found_at: at, .. } => at,
             ParseError::DuplicateRule { second_at, .. } => second_at,
@@ -396,6 +402,7 @@ impl ParseError {
             ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::IoError { .. }
             | ParseError::Custom { .. }
+            | ParseError::MalformedHexColor { .. }
             | ParseError::DuplicateRule { .. }
             | ParseError::DuplicateRestriction { .. }
             | ParseError::WrongArityforACFunctionDeclaration { .. }
@@ -438,6 +445,7 @@ impl ParseError {
             | ParseError::DuplicateRule { .. }
             | ParseError::DuplicateRestriction { .. }
             | ParseError::WrongArityforACFunctionDeclaration { .. }
+            | ParseError::MalformedHexColor { .. }
             | ParseError::ConflictingFunctionDeclarations { .. }
             | ParseError::Abort { .. } => None,
         }
@@ -476,6 +484,7 @@ impl ParseError {
             | ParseError::Abort { .. }
             | ParseError::IoError { .. }
             | ParseError::DuplicateRule { .. }
+            | ParseError::MalformedHexColor { .. }
             | ParseError::WrongArityforACFunctionDeclaration { .. }
             | ParseError::ConflictingFunctionDeclarations { .. }
             | ParseError::DuplicateRestriction { .. } => None,
@@ -545,6 +554,7 @@ impl ParseError {
             ParseError::WrongArityforACFunctionDeclaration { .. } => {
                 "Non-binary AC function declaration"
             }
+            ParseError::MalformedHexColor { .. } => "Malformed hex color",
         }
     }
 
@@ -632,6 +642,14 @@ impl ParseError {
                         is_primary: false,
                     });
                 }
+                lbls
+            }
+            ParseError::MalformedHexColor { msg, at } => {
+                let lbls = vec![ParseErrorLabel {
+                    at: *at,
+                    message: format!("malformed hex color: {msg}"),
+                    is_primary: true,
+                }];
                 lbls
             }
             ParseError::Custom { message, at } | ParseError::Abort { message, at } => {
@@ -798,6 +816,9 @@ impl ParseError {
             }
             ParseError::WrongArityforACFunctionDeclaration { .. } => {
                 vec!["AC function declarations must be binary".into()]
+            }
+            ParseError::MalformedHexColor { .. } => {
+                vec!["Hex color literals must be in the format `#RRGGBB`".into()]
             }
         }
     }
@@ -4125,6 +4146,7 @@ impl<'a> Parser<'a> {
     /// colour attributes are always tight (e.g. `'#111111'`).
     fn color_attr_value(&mut self) -> Result<String, ParseError> {
         self.skip_ws();
+        let start = self.lx.pos();
         let quoted = self.lx.eat_str("'");
         let hash = self.lx.eat_str("#");
         let mut code = String::new();
@@ -4153,12 +4175,25 @@ impl<'a> Parser<'a> {
             return Err(self.err_expect(expects));
         }
         if quoted && !self.lx.eat_str("'") {
+            let (found, found_at) = self.found_token_until(|c| c.is_whitespace() || c == '\'');
             // Closing `'` fails where `many1 hexDigit` stopped.
-            return Err(self.err_expect(&["hexadecimal digit", "\"'\""]));
+            let e = self.err_unterminated_delimiter(
+                "'",
+                start.into(),
+                found_at,
+                found,
+                vec!["'".into(), "hexadecimal digit".into()],
+            );
+            return Err(e);
         }
+        let end = self.lx.pos();
+        let location = Location::from_positions(start, end);
         self.skip_ws();
         if code.len() != 6 {
-            return Err(self.err_fail(format!("Color code \"{code}\" could not be parsed to RGB")));
+            return Err(ParseError::MalformedHexColor {
+                msg: format!("`{code}` could not be parsed to RGB"),
+                at: location,
+            });
         }
         Ok(code)
     }
