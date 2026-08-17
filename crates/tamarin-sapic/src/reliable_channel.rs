@@ -16,7 +16,7 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_parser::ast as p;
+use tamarin_parser::{ast as p, DUMMY_LOCATION};
 use tamarin_term::lterm::{LVar, NameTag};
 use tamarin_term::vterm::{Lit, VTerm};
 use tamarin_theory::sapic::{
@@ -208,32 +208,44 @@ fn res_reliable() -> p::Restriction {
         sort: p::SortHint::Untagged,
         typ: None,
     };
-    let send = p::Formula::Atom(p::Atom::Action(
-        p::Fact {
-            persistent: false,
-            name: "Send".into(),
-            args: vec![p::Term::Var(mvar("x")), p::Term::Var(mvar("y"))],
-            annotations: vec![],
-        },
-        p::Term::Var(tvar("i", 0)),
-    ));
-    let recv = p::Formula::Atom(p::Atom::Action(
-        p::Fact {
-            persistent: false,
-            name: "Receive".into(),
-            args: vec![p::Term::Var(mvar("x")), p::Term::Var(mvar("y"))],
-            annotations: vec![],
-        },
-        p::Term::Var(tvar("j", 0)),
-    ));
-    let less = p::Formula::Atom(p::Atom::Less(
-        p::Term::Var(tvar("i", 0)),
-        p::Term::Var(tvar("j", 0)),
-    ));
-    let conj = p::Formula::And(Box::new(recv), Box::new(less));
-    let exists = p::Formula::Exists(vec![tvar("j", 0)], Box::new(conj));
-    let body = p::Formula::Implies(Box::new(send), Box::new(exists));
-    let formula = p::Formula::Forall(vec![tvar("i", 0), mvar("x"), mvar("y")], Box::new(body));
+    let send = p::Formula::atom(
+        p::Atom::Action(
+            p::Fact {
+                persistent: false,
+                name: "Send".into(),
+                args: vec![p::Term::Var(mvar("x")), p::Term::Var(mvar("y"))],
+                annotations: vec![],
+                location: DUMMY_LOCATION,
+            },
+            p::Term::Var(tvar("i", 0)),
+        ),
+        DUMMY_LOCATION,
+    );
+    let recv = p::Formula::atom(
+        p::Atom::Action(
+            p::Fact {
+                persistent: false,
+                name: "Receive".into(),
+                args: vec![p::Term::Var(mvar("x")), p::Term::Var(mvar("y"))],
+                annotations: vec![],
+                location: DUMMY_LOCATION,
+            },
+            p::Term::Var(tvar("j", 0)),
+        ),
+        DUMMY_LOCATION,
+    );
+    let less = p::Formula::atom(
+        p::Atom::Less(p::Term::Var(tvar("i", 0)), p::Term::Var(tvar("j", 0))),
+        DUMMY_LOCATION,
+    );
+    let conj = p::Formula::and(recv, less);
+    let exists = p::Formula::exists(vec![tvar("j", 0)], conj, DUMMY_LOCATION);
+    let body = p::Formula::implies(send, exists);
+    let formula = p::Formula::forall(
+        vec![tvar("i", 0), mvar("x"), mvar("y")],
+        body,
+        DUMMY_LOCATION,
+    );
     p::Restriction {
         name: "reliable".to_string(),
         formula,

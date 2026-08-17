@@ -88,7 +88,7 @@ impl From<Pos> for Location {
         Self {
             line: pos.line,
             col: pos.col,
-            start: pos.offset - 1,
+            start: pos.offset.saturating_sub(1),
             end: pos.offset,
         }
     }

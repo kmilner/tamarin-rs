@@ -888,7 +888,7 @@ mod tests {
         };
         let restr = p::Formula::atom(
             p::Atom::Eq(k(), p::Term::PubLit("b".into())),
-            DUMMY_LOCATION,
+            tamarin_parser::DUMMY_LOCATION,
         );
         let ev = tamarin_theory::fact::Fact::new(
             tamarin_theory::fact::FactTag::Proto(

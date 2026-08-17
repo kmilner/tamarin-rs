@@ -154,6 +154,7 @@ pub(crate) fn map_free_terms(
                     name: fa.name.clone(),
                     args: fa.args.iter().map(|x| rt(bound, f, x)).collect(),
                     annotations: fa.annotations.clone(),
+                    location: fa.location,
                 },
                 rt(bound, f, t),
             ),
@@ -163,6 +164,7 @@ pub(crate) fn map_free_terms(
                 name: fa.name.clone(),
                 args: fa.args.iter().map(|x| rt(bound, f, x)).collect(),
                 annotations: fa.annotations.clone(),
+                location: fa.location,
             }),
         }
     }
@@ -171,8 +173,8 @@ pub(crate) fn map_free_terms(
         f: &mut dyn FnMut(&p::VarSpec, &[String]) -> Option<p::Term>,
         formula: &p::Formula,
     ) -> p::Formula {
-        use p::Formula::*;
-        match formula {
+        use p::FormulaKind::*;
+        let kind = match &formula.kind {
             True => True,
             False => False,
             Atom(a) => Atom(ra(bound, f, a)),
@@ -199,7 +201,8 @@ pub(crate) fn map_free_terms(
                 bound.truncate(saved);
                 r
             }
-        }
+        };
+        p::Formula::new(kind, formula.location)
     }
     let mut bound = Vec::new();
     rf(&mut bound, f, formula)
@@ -784,12 +787,16 @@ mod tests {
                         typ: None,
                     })
                 };
-                p::Formula::Atom(p::Atom::Pred(p::Fact {
-                    persistent: false,
-                    name: "Eq".into(),
-                    args: vec![g("c"), g("k")],
-                    annotations: Vec::new(),
-                }))
+                p::Formula::atom(
+                    p::Atom::Pred(p::Fact {
+                        persistent: false,
+                        name: "Eq".into(),
+                        args: vec![g("c"), g("k")],
+                        annotations: Vec::new(),
+                        location: DUMMY_LOCATION,
+                    }),
+                    DUMMY_LOCATION,
+                )
             });
         }
 
@@ -799,20 +806,24 @@ mod tests {
         assert_eq!(seen(&f), vec!["k".to_string()]);
         assert_eq!(
             renamed(&f),
-            p::Formula::Atom(p::Atom::Pred(p::Fact {
-                persistent: false,
-                name: "Eq".into(),
-                args: vec![
-                    leaf("c"),
-                    p::Term::Var(p::VarSpec {
-                        name: "k".into(),
-                        idx: 1,
-                        sort: p::SortHint::Untagged,
-                        typ: None,
-                    })
-                ],
-                annotations: Vec::new(),
-            }))
+            p::Formula::atom(
+                p::Atom::Pred(p::Fact {
+                    persistent: false,
+                    name: "Eq".into(),
+                    args: vec![
+                        leaf("c"),
+                        p::Term::Var(p::VarSpec {
+                            name: "k".into(),
+                            idx: 1,
+                            sort: p::SortHint::Untagged,
+                            typ: None,
+                        })
+                    ],
+                    annotations: Vec::new(),
+                    location: DUMMY_LOCATION,
+                }),
+                DUMMY_LOCATION
+            )
         );
     }
 
