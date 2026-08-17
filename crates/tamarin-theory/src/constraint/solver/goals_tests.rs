@@ -453,7 +453,7 @@ fn useful_goal_nr_uses_derived_usefulness_ord() {
     };
     // LoopBreaker with the LARGER nr, ProbablyConstructible with the
     // smaller nr.  HS Usefulness Ord (LoopBreaker < ProbablyConstructible)
-    // must dominate the nr tiebreak.  The test drives the shared production
+    // must dominate the nr tiebreak.  The test calls the shared production
     // sorter `sort_useful_goal_nr`.  The `UsefulGoalNr` ranking arm and the
     // tactic presort use that same sorter.  The test does not repeat the
     // sort logic here.

@@ -49,7 +49,7 @@ pub const ALLOW_NO_DOT_ENV: &str = "TAM_ALLOW_NO_DOT";
 ///
 /// On a machine where `dot` cannot run, this function panics instead of
 /// skipping.  [`maude_available`] panics for the same reason.  The tests that
-/// use `dot` are the only ones that drive a real Graphviz.  A silent skip
+/// use `dot` are the only ones that run a real Graphviz.  A silent skip
 /// would therefore make `cargo test` pass in the same way with Graphviz and
 /// without it.  Set `TAM_ALLOW_NO_DOT=1` to skip those tests deliberately.
 pub fn dot_available() -> bool {

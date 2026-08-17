@@ -30,6 +30,11 @@ fn parse_err(src: &str) -> ParseError {
     parse_theory(src, &[]).expect_err("the oracle rejects this source")
 }
 
+/// The rejected source's rendered parsec frame, named `eq.spthy`.
+fn frame(src: &str) -> String {
+    parse_err(src).with_source("eq.spthy").to_string()
+}
+
 /// The `SapicAction` chain of the theory's single top-level process,
 /// flattened in source order.
 fn process_actions(src: &str) -> Vec<p::SapicAction> {
@@ -135,12 +140,12 @@ fn embedded_msr_facts_and_restrict_formulas_take_patterns() {
 
 #[test]
 fn let_binding_pattern_side_takes_a_pattern_variable() {
-    let acts_src = "theory T begin\nprocess:\n  in('c', y); let =y = y in out('c', y)\nend\n";
-    let thy = parse_theory(acts_src, &[]).expect("the oracle accepts this source");
-    // Reaching the theory at all is the assertion that matters here: the
-    // pattern side accepted `=y`.  (The binding lands in a ProcessComb::Let
-    // under combinators, not in the action chain.)
-    drop(thy);
+    // Parsing at all is the assertion: the pattern side accepted `=y`.
+    parse_theory(
+        "theory T begin\nprocess:\n  in('c', y); let =y = y in out('c', y)\nend\n",
+        &[],
+    )
+    .expect("the oracle accepts this source");
 }
 
 // ---------------------------------------------------------------------------
@@ -153,20 +158,14 @@ fn eq_on_a_tuple_or_literal_pins_the_oracle_frame() {
     // (`sortedLVarNoSuffix`, Token.hs:486-499); anything else fails with the
     // alternation's five labels.  Both frames below are byte-identical to the
     // pinned oracle's.
-    let err = parse_err("theory T begin\nprocess:\n  in('c', =<x, y>); out('c', 'k')\nend\n")
-        .with_source("eq.spthy")
-        .to_string();
     assert_eq!(
-        err,
+        frame("theory T begin\nprocess:\n  in('c', =<x, y>); out('c', 'k')\nend\n"),
         "\"eq.spthy\" (line 3, column 12):\n\
          unexpected \"<\"\n\
          expecting \"$\", \"~\", identifier, \"#\" or \"%\""
     );
-    let err = parse_err("theory T begin\nprocess:\n  in('c', ='d'); out('c', 'k')\nend\n")
-        .with_source("eq.spthy")
-        .to_string();
     assert_eq!(
-        err,
+        frame("theory T begin\nprocess:\n  in('c', ='d'); out('c', 'k')\nend\n"),
         "\"eq.spthy\" (line 3, column 12):\n\
          unexpected \"'\"\n\
          expecting \"$\", \"~\", identifier, \"#\" or \"%\""

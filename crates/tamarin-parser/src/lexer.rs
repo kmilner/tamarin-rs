@@ -8,8 +8,8 @@
 //! "skip whitespace, then peek/consume" operations rather than a separate
 //! token stream. This matches Parsec's style and is convenient for
 //! context-sensitive lexing (e.g. natural-number subscripts, formal
-//! comments `name{* ... *}`, hex colour codes, multi-character symbol
-//! choices like `++` vs `+`).
+//! comments `name{* ... *}`, multi-character symbol choices like `++`
+//! vs `+`).
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pos {

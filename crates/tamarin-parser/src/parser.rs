@@ -348,6 +348,12 @@ const TOP_LEVEL_ITEM_EXPECTS: &[&str] = &[
 /// `identifier`'s `<?> "identifier"` (parsec's `Text.Parsec.Token.ident`).
 const TYPEP_EXPECTS: &[&str] = &["\"Any\"", "identifier"];
 
+/// The labels HS `sortedLVarNoSuffix [minBound..]` (Token.hs:486-499) offers
+/// when no variable alternative matches: the five sort-prefix parsers in
+/// LSort order — `$` (pub), `~` (fresh), a bare `identifier` (msg), `#`
+/// (node), `%` (nat).
+const SORTED_LVAR_NO_SUFFIX_EXPECTS: &[&str] = &["\"$\"", "\"~\"", "identifier", "\"#\"", "\"%\""];
+
 // =============================================================================
 // Parser entry points
 // =============================================================================
@@ -4320,6 +4326,16 @@ impl<'a> Parser<'a> {
         r
     }
 
+    /// One process-`let` binding — HS `definition = sapicpatternterm <*
+    /// equalSign <*> sapicterm` (Let.hs:23-26): only the pattern side takes
+    /// `=v` patterns.
+    fn let_definition(&mut self) -> Result<(Term, Term), ParseError> {
+        let pat = self.with_patterns(|p| p.term(false))?;
+        self.require_punct("=")?;
+        let val = self.term(false)?;
+        Ok((pat, val))
+    }
+
     /// A SAPIC process.  Every variable inside is HS `sapicvar`, so a trailing
     /// `:` names a type rather than a sort — see [`Parser::sapic_var_types`].
     fn process(&mut self) -> Result<Process, ParseError> {
@@ -4418,15 +4434,8 @@ impl<'a> Parser<'a> {
             // by attempting another `(pat = val)` binding and restoring on
             // failure.
             let mut bindings: Vec<(Term, Term)> = Vec::new();
-            // First binding is required.  Only the pattern side takes `=v`
-            // patterns (HS `definition = sapicpatternterm <* equalSign <*>
-            // sapicterm`, Let.hs:23-26).
-            {
-                let pat = self.with_patterns(|p| p.term(false))?;
-                self.require_punct("=")?;
-                let val = self.term(false)?;
-                bindings.push((pat, val));
-            }
+            // First binding is required.
+            bindings.push(self.let_definition()?);
             loop {
                 let _ = self.try_punct(",");
                 self.skip_ws();
@@ -4436,13 +4445,7 @@ impl<'a> Parser<'a> {
                 // Try to parse one more binding; backtrack if it doesn't parse
                 // (matching `many1`'s greedy-with-backtrack behaviour).
                 let probe = self.save();
-                let next = (|| -> Result<(Term, Term), ParseError> {
-                    let pat = self.with_patterns(|p| p.term(false))?;
-                    self.require_punct("=")?;
-                    let val = self.term(false)?;
-                    Ok((pat, val))
-                })();
-                match next {
+                match self.let_definition() {
                     Ok(b) => bindings.push(b),
                     Err(_) => {
                         self.restore(probe);
@@ -4557,25 +4560,25 @@ impl<'a> Parser<'a> {
             return Ok(Some(SapicAction::Event(f)));
         }
         // Embedded MSR: `[..] --[..]-> [..]`.  HS parses it via `genericRule
-        // sapicpatternvar …` (Parser/Sapic.hs:155), so every fact row AND the
-        // `_restrict` formulas take `=v` pattern literals.
+        // sapicpatternvar …` (Parser/Sapic.hs:155), so the whole rule — every
+        // fact row and the `_restrict` formulas — is ONE pattern-literal
+        // region, shared with the plain-rule arrow alternation.
         if self.lx.peek() == Some('[') {
-            let prems = self.with_patterns(|p| p.fact_list())?;
-            let (acts, restrs) = if self.try_punct("-->") {
-                (vec![], vec![])
-            } else if self.try_punct("--[") {
-                self.with_patterns(|p| p.parse_action_restr_list())?
-            } else {
-                self.restore(save);
-                return Ok(None);
-            };
-            let concs = self.with_patterns(|p| p.fact_list())?;
-            return Ok(Some(SapicAction::Msr {
-                prems,
-                acts,
-                concs,
-                restrictions: restrs,
-            }));
+            return self.with_patterns(|p| {
+                let prems = p.fact_list()?;
+                if !p.peek_punct("-->") && !p.peek_punct("--[") {
+                    p.restore(save);
+                    return Ok(None);
+                }
+                let (acts, restrs) = p.parse_actions_and_restrictions()?;
+                let concs = p.fact_list()?;
+                Ok(Some(SapicAction::Msr {
+                    prems,
+                    acts,
+                    concs,
+                    restrictions: restrs,
+                }))
+            });
         }
         self.restore(save);
         Ok(None)
@@ -5680,9 +5683,9 @@ impl<'a> Parser<'a> {
     /// (Token.hs:506-519): a sorted variable with an optional `.idx` index and
     /// `:type` annotation, never an application, literal, or compound term.
     ///
-    /// On a non-variable the failure carries the five sort-prefix labels of
-    /// `sortedLVarNoSuffix`'s alternation (Token.hs:486-499) in LSort order,
-    /// as the pinned oracle prints for `in(c, =<x, y>)`:
+    /// On a non-variable the failure carries
+    /// [`SORTED_LVAR_NO_SUFFIX_EXPECTS`], as the pinned oracle prints for
+    /// `in(c, =<x, y>)`:
     /// `unexpected "<" / expecting "$", "~", identifier, "#" or "%"`.
     fn pattern_var_atom(&mut self) -> Result<Term, ParseError> {
         if let Some(v) = self.try_var_spec()? {
@@ -5690,7 +5693,7 @@ impl<'a> Parser<'a> {
             self.note_var_dot_hangover(&v);
             return Ok(Term::Var(v));
         }
-        Err(self.err_expect(&["\"$\"", "\"~\"", "identifier", "\"#\"", "\"%\""]))
+        Err(self.err_expect(SORTED_LVAR_NO_SUFFIX_EXPECTS))
     }
 
     /// `LINE:COLUMN` of `naryOpApp`'s reserved-name `error` in

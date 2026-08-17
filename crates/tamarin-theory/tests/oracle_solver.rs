@@ -12,7 +12,7 @@
 //!    small lemmas, and tamarin settles each one in a few steps.
 //! 4. The `unguarded variable(s)` rejection.  Both sides must produce it.
 //!
-//! The rest of the file drives the reduction and search machinery directly on
+//! The rest of the file runs the reduction and search machinery directly on
 //! the same fixtures.  Those cases do not use the oracle.
 //!
 //! The harness skips silently when the pinned oracle has not been built
@@ -489,7 +489,7 @@ fn spawn_kill_watchdog(
 
 /// A rule-free [`ProofContext`](tamarin_theory::constraint::solver::context::ProofContext)
 /// over a fresh maude subprocess.  The subprocess carries the `pair`
-/// signature.  The reduction and search unit cases below drive this context.
+/// signature.  The reduction and search unit cases below use this context.
 /// They test the constraint-system machinery, not rule instantiation.
 ///
 /// The result is `None` only when maude does not resolve.  [`maude_path`]

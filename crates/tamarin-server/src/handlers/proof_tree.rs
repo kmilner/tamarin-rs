@@ -1339,7 +1339,7 @@ mod tests {
         None
     }
 
-    /// The theory that the two `ProofState` tests below drive.  It has one
+    /// The theory that the two `ProofState` tests below use.  It has one
     /// rule and one exists-trace lemma.  The function closes it against `mp`.
     fn trivial_proof_state(mp: &str) -> ProofState {
         let src = r#"

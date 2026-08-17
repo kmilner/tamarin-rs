@@ -192,7 +192,7 @@ report d = do
   hSetEncoding stdout utf8
   let s = renderStyle theStyle d
   putStrLn ("RUST\t\"" ++ rustEsc s ++ "\"")
-  -- Raw, between markers, because trailing spaces are load-bearing in this
+  -- Raw, between markers, because trailing spaces are significant in this
   -- engine (an `fsep` can leave one before its break) and invisible otherwise.
   putStrLn "--- raw ---"
   putStr s
@@ -230,7 +230,7 @@ trap cleanup EXIT
 # --- self-test ---------------------------------------------------------------
 # Every case is one of the port's own committed assertions, derived again
 # here.  The cases check the toolchain, not the layout.  If a case disagrees,
-# then one of two things is true.  Either this script does not drive the
+# then one of two things is true.  Either this script does not run the
 # pretty that the port reproduces, or the port has regressed.  Until you
 # answer that question, do not commit anything derived in the session.  Run
 # the self-test before you derive a pin that you intend to keep.

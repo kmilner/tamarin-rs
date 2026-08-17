@@ -146,7 +146,7 @@ fn installed_bundle_resolves_every_attribute_in_term_to_lnterm() {
 }
 
 /// The arity-1 fold in `term_to_vterm` uses a hardcoded list of builtin
-/// names.  The list is deliberate, because a signature-driven fold regresses
+/// names.  The list is deliberate, because a fold that takes the list from the signature regresses
 /// the corpus.  The fold is therefore only as good as the membership of the
 /// list.  Every name on the list must fold surplus comma-separated arguments
 /// into one right-associative pair.  This mirrors the `k == 1` branch of HS
