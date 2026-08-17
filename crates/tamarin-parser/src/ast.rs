@@ -82,7 +82,7 @@ pub enum TheoryItem {
 // Functions / equations / macros / predicates / restrictions
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct FunctionDecl {
     pub name: String,
     pub arg_types: Vec<Option<String>>,
@@ -104,6 +104,43 @@ pub struct FunctionDecl {
     /// Theory/Text/Parser/Signature.hs:183-225): neither = `NotNDC`, `ndc`
     /// alone = `IsNDC`, `ndc_diff` alone = `IsNDCDiff`, both = `IsNDCBoth`.
     pub ndc_diff: bool,
+    pub location: Location,
+}
+
+impl PartialEq for FunctionDecl {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            name: _,
+            arg_types: _,
+            out_type: _,
+            private: _,
+            destructor: _,
+            ac: _,
+            ndc: _,
+            ndc_diff: _,
+            location: _,
+        } = self;
+        let Self {
+            name: _,
+            arg_types: _,
+            out_type: _,
+            private: _,
+            destructor: _,
+            ac: _,
+            ndc: _,
+            ndc_diff: _,
+            location: _,
+        } = other;
+        // Everything but location
+        self.name == other.name
+            && self.arg_types == other.arg_types
+            && self.out_type == other.out_type
+            && self.private == other.private
+            && self.destructor == other.destructor
+            && self.ac == other.ac
+            && self.ndc == other.ndc
+            && self.ndc_diff == other.ndc_diff
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -35,6 +35,7 @@ use std::path::PathBuf;
 use crate::ast::*;
 use crate::lexer::{is_ident_char, is_reserved_name, Lexer, Pos};
 use crate::proof_tree::parse_proof_tree;
+use crate::ParseError::ConflictingFunctionDeclarations;
 
 pub const DUMMY_LOCATION: Location = Location {
     line: u32::MAX,
@@ -110,6 +111,16 @@ pub enum ParseError {
         name: String,
         first_at: Location,
         second_at: Location,
+    },
+    ConflictingFunctionDeclarations {
+        name: String,
+        first_at: Option<Location>,
+        second_at: Location,
+    },
+    WrongArityforACFunctionDeclaration {
+        name: String,
+        found_arity: usize,
+        at: Location,
     },
     ExpectedTheoryItem {
         found: Option<String>,
@@ -306,9 +317,12 @@ impl ParseError {
             | ParseError::UnexpectedTrailingInput { .. }
             | ParseError::UnknownAttribute { .. }
             | ParseError::Custom { .. }
-            | ParseError::Abort { .. } => {}
-            ParseError::IoError { .. } => {}
-            ParseError::DuplicateRule { .. } | ParseError::DuplicateRestriction { .. } => {}
+            | ParseError::ConflictingFunctionDeclarations { .. }
+            | ParseError::Abort { .. }
+            | ParseError::IoError { .. }
+            | ParseError::DuplicateRule { .. }
+            | ParseError::WrongArityforACFunctionDeclaration { .. }
+            | ParseError::DuplicateRestriction { .. } => {}
         }
     }
 
@@ -343,9 +357,11 @@ impl ParseError {
             | ParseError::Expected { at, .. }
             | ParseError::Custom { at, .. }
             | ParseError::Abort { at, .. }
+            | ParseError::WrongArityforACFunctionDeclaration { at, .. }
             | ParseError::UnterminatedDelimiter { found_at: at, .. } => at,
             ParseError::DuplicateRule { second_at, .. } => second_at,
             ParseError::DuplicateRestriction { second_at, .. } => second_at,
+            ParseError::ConflictingFunctionDeclarations { second_at, .. } => second_at,
         }
     }
 
@@ -382,6 +398,8 @@ impl ParseError {
             | ParseError::Custom { .. }
             | ParseError::DuplicateRule { .. }
             | ParseError::DuplicateRestriction { .. }
+            | ParseError::WrongArityforACFunctionDeclaration { .. }
+            | ParseError::ConflictingFunctionDeclarations { .. }
             | ParseError::Abort { .. } => None,
         }
     }
@@ -419,6 +437,8 @@ impl ParseError {
             | ParseError::Custom { .. }
             | ParseError::DuplicateRule { .. }
             | ParseError::DuplicateRestriction { .. }
+            | ParseError::WrongArityforACFunctionDeclaration { .. }
+            | ParseError::ConflictingFunctionDeclarations { .. }
             | ParseError::Abort { .. } => None,
         }
     }
@@ -456,6 +476,8 @@ impl ParseError {
             | ParseError::Abort { .. }
             | ParseError::IoError { .. }
             | ParseError::DuplicateRule { .. }
+            | ParseError::WrongArityforACFunctionDeclaration { .. }
+            | ParseError::ConflictingFunctionDeclarations { .. }
             | ParseError::DuplicateRestriction { .. } => None,
         }
         .map(|expected| match self {
@@ -517,6 +539,12 @@ impl ParseError {
             ParseError::Abort { .. } => "Invalid input",
             ParseError::DuplicateRule { .. } => "Duplicate protocol rule",
             ParseError::DuplicateRestriction { .. } => "Duplicate restriction",
+            ParseError::ConflictingFunctionDeclarations { .. } => {
+                "Conflicting function declarations"
+            }
+            ParseError::WrongArityforACFunctionDeclaration { .. } => {
+                "Non-binary AC function declaration"
+            }
         }
     }
 
@@ -582,6 +610,29 @@ impl ParseError {
                         is_primary: false,
                     },
                 ]
+            }
+            ConflictingFunctionDeclarations {
+                name,
+                first_at,
+                second_at,
+            } => {
+                let msg = format!(
+                    "conflicting function declaration for{}function `{name}`",
+                    if first_at.is_none() { " builtin " } else { " " }
+                );
+                let mut lbls = vec![ParseErrorLabel {
+                    at: *second_at,
+                    message: msg,
+                    is_primary: true,
+                }];
+                if let Some(first_at) = first_at {
+                    lbls.push(ParseErrorLabel {
+                        at: *first_at,
+                        message: format!("first occurrence of function declaration for `{name}`"),
+                        is_primary: false,
+                    });
+                }
+                lbls
             }
             ParseError::Custom { message, at } | ParseError::Abort { message, at } => {
                 vec![ParseErrorLabel {
@@ -741,6 +792,12 @@ impl ParseError {
             }
             ParseError::DuplicateRestriction { .. } => {
                 vec!["Restriction names must be unique".into()]
+            }
+            ParseError::ConflictingFunctionDeclarations { .. } => {
+                vec!["Function declarations must be consistent".into()]
+            }
+            ParseError::WrongArityforACFunctionDeclaration { .. } => {
+                vec!["AC function declarations must be binary".into()]
             }
         }
     }
@@ -1038,7 +1095,7 @@ fn remove_comment_block(cs: &[char], mut i: usize) -> usize {
 /// [`FunOptions::show`] is the Haskell `show` of that 4-tuple, which
 /// `function`'s conflict diagnostic embeds verbatim
 /// (Theory/Text/Parser/Signature.hs:214-216).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 struct FunOptions {
     arity: usize,
     private: bool,
@@ -1047,19 +1104,49 @@ struct FunOptions {
     ndc: bool,
     /// `[NDC-diff]` was requested for this symbol.
     ndc_diff: bool,
+    /// The optional location of the symbol's declaration, for diagnostics.
+    /// [`Option::None`] if the symbol is builtin and has no source location.
+    location: Option<Location>,
+}
+
+impl PartialEq for FunOptions {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            arity,
+            private,
+            destructor,
+            ndc,
+            ndc_diff,
+            location: _,
+        } = self;
+        let Self {
+            arity: other_arity,
+            private: other_private,
+            destructor: other_destructor,
+            ndc: other_ndc,
+            ndc_diff: other_ndc_diff,
+            location: _,
+        } = other;
+        arity == other_arity
+            && private == other_private
+            && destructor == other_destructor
+            && ndc == other_ndc
+            && ndc_diff == other_ndc_diff
+    }
 }
 
 impl FunOptions {
     /// A public constructor of the given arity with no NDC property — the
     /// shape of every symbol in HS's `pairFunSig`
     /// (Term/Term/FunctionSymbols.hs:299-300).
-    fn plain(arity: usize) -> Self {
+    fn plain(arity: usize, location: Option<Location>) -> Self {
         FunOptions {
             arity,
             private: false,
             destructor: false,
             ndc: false,
             ndc_diff: false,
+            location,
         }
     }
 
@@ -1074,6 +1161,7 @@ impl FunOptions {
             destructor: sym.destructor,
             ndc: false,
             ndc_diff: false,
+            location: None,
         }
     }
 
@@ -1093,32 +1181,6 @@ impl FunOptions {
                 (false, true) => 2,
                 (true, true) => 3,
             },
-        )
-    }
-
-    /// Haskell `show (k, priv, destr, ndc)`: a parenthesised tuple with no
-    /// spaces after the commas, each component shown by its derived `Show`
-    /// instance (`Public`/`Private`, `Constructor`/`Destructor`, and the four
-    /// `NDCstate` constructors of Term/Term/FunctionSymbols.hs:125).
-    ///
-    /// The NDC component is HS's `joinNDC` of the two requested flags
-    /// (Term/Term/FunctionSymbols.hs:181-186).
-    fn show(&self) -> String {
-        format!(
-            "({},{},{},{})",
-            self.arity,
-            if self.private { "Private" } else { "Public" },
-            if self.destructor {
-                "Destructor"
-            } else {
-                "Constructor"
-            },
-            match (self.ndc, self.ndc_diff) {
-                (false, false) => "NotNDC",
-                (true, false) => "IsNDC",
-                (false, true) => "IsNDCDiff",
-                (true, true) => "IsNDCBoth",
-            }
         )
     }
 }
@@ -1583,9 +1645,9 @@ impl<'a> Parser<'a> {
             base_dir: None,
             ac_fun_syms: Vec::new(),
             fun_syms: vec![
-                ("fst".to_string(), FunOptions::plain(1)),
-                ("pair".to_string(), FunOptions::plain(2)),
-                ("snd".to_string(), FunOptions::plain(1)),
+                ("fst".to_string(), FunOptions::plain(1, None)),
+                ("pair".to_string(), FunOptions::plain(2, None)),
+                ("snd".to_string(), FunOptions::plain(1, None)),
             ],
             macro_syms: Vec::new(),
             reserved_builtin_names: Vec::new(),
@@ -3093,7 +3155,8 @@ impl<'a> Parser<'a> {
     /// `option [] $ list functionAttribute` leaves behind into them.
     fn function_decl(&mut self) -> Result<(FunctionDecl, bool), ParseError> {
         self.skip_ws();
-        let name_start = self.lx.pos().offset;
+        let start = self.lx.pos();
+        let name_start = start.offset;
         let name = self.ident()?;
         let name_end = name_start + name.len();
         let (arg_types, out_type) = self.function_type(name_end)?;
@@ -3114,6 +3177,8 @@ impl<'a> Parser<'a> {
             }
             self.require_punct("]")?;
         }
+        let end = self.lx.pos();
+        let location = Location::from_positions(start, end);
         // HS `function` (Signature.hs:183-225) folds the attribute list into one
         // value per property, each defaulting to the "absent" case.
         let private = atts.contains(&FctAttr::Private);
@@ -3127,11 +3192,11 @@ impl<'a> Parser<'a> {
             destructor,
             ndc,
             ndc_diff,
+            location: Some(location),
         };
         // Every diagnosis below is a bare `fail` after the attribute list's
         // lexeme, i.e. [`Self::err_fail`] at the post-whitespace position.
         let _ = had_attrs;
-        let fail = |p: &mut Self, msg: String| p.err_fail(msg);
         // Check (1), Signature.hs:200-209: a name an enabled `builtins:` item
         // reserved must be re-declared at EXACTLY the builtin's options tuple.
         // It runs BEFORE the general conflict check, has no `fst`/`snd`
@@ -3142,24 +3207,20 @@ impl<'a> Parser<'a> {
                 .iter()
                 .find(|(n, _)| *n == name)
                 .map(|(_, o)| *o);
-            if let Some(b) = builtin.filter(|b| *b != requested) {
+            if let Some(_b) = builtin.filter(|b| *b != requested) {
                 // `conflictingBuiltins` (Signature.hs:203) scans the WHOLE
                 // static table, not just the builtins this theory enabled.
-                let conflicting: Vec<&str> = BUILTIN_ST_FUN_SYMS
-                    .iter()
-                    .filter(|(_, syms)| syms.iter().any(|s| s.name == name))
-                    .map(|(b, _)| *b)
-                    .collect();
-                return Err(fail(
-                    self,
-                    format!(
-                        "`{}` conflicts with builtin(s) {} (builtin: {}, requested: {})",
-                        name,
-                        show_string_list(&conflicting),
-                        b.show(),
-                        requested.show()
-                    ),
-                ));
+                // TODO: If we had the location where the builtin was declared, we could report it here.
+                // let conflicting: Vec<&str> = BUILTIN_ST_FUN_SYMS
+                //     .iter()
+                //     .filter(|(_, syms)| syms.iter().any(|s| s.name == name))
+                //     .map(|(b, _)| *b)
+                //     .collect();
+                return Err(ParseError::ConflictingFunctionDeclarations {
+                    name: name.clone(),
+                    first_at: None,
+                    second_at: location,
+                });
             }
         }
         // Check (2), Signature.hs:212-217: the general conflict against the
@@ -3169,16 +3230,11 @@ impl<'a> Parser<'a> {
             // projections' own shape, tested by name, arity and privacy only.
             let pair_proj = (name == "fst" || name == "snd") && requested.arity == 1 && !private;
             if prev != requested && !pair_proj {
-                return Err(fail(
-                    self,
-                    format!(
-                        "conflicting arities/options {} and {} for `{}`. Please choose a \
-                         different name for this function.",
-                        prev.show(),
-                        requested.show(),
-                        name
-                    ),
-                ));
+                return Err(ParseError::ConflictingFunctionDeclarations {
+                    name: name.clone(),
+                    first_at: prev.location,
+                    second_at: location,
+                });
             }
             if name == "fst" || name == "snd" {
                 // Signature.hs:217 returns the EXISTING symbol as a
@@ -3194,6 +3250,7 @@ impl<'a> Parser<'a> {
                         ac: false,
                         ndc,
                         ndc_diff,
+                        location,
                     },
                     had_attrs,
                 ));
@@ -3204,10 +3261,11 @@ impl<'a> Parser<'a> {
             // in the `_` case of the conflict check, so check (2) above wins for
             // a name already in the signature.
             if requested.arity != 2 {
-                return Err(fail(
-                    self,
-                    "conflicting arity : AC function must be binary".to_string(),
-                ));
+                return Err(ParseError::WrongArityforACFunctionDeclaration {
+                    name,
+                    found_arity: requested.arity,
+                    at: location,
+                });
             }
             // A binary `[AC]` symbol also becomes an infix operator for the terms
             // that follow, mirroring HS's `modifyStateSig $ addFunSym (ACfctUser
@@ -3231,6 +3289,7 @@ impl<'a> Parser<'a> {
                 ac,
                 ndc,
                 ndc_diff,
+                location,
             },
             had_attrs,
         ))
@@ -3336,6 +3395,8 @@ impl<'a> Parser<'a> {
         self.require_punct(":")?;
         let mut ms = Vec::new();
         loop {
+            self.skip_ws();
+            let start = self.lx.pos();
             let name = self.ident()?;
             // HS `when (BC.unpack op `elem` reservedBuiltins) $ error …`
             // (Macro.hs:34-35): a GHC `error`, raised right after the
@@ -3360,6 +3421,8 @@ impl<'a> Parser<'a> {
             }
             self.require_punct("=")?;
             let body = self.term(false)?;
+            let end = self.lx.pos();
+            let location = Location::from_positions(start, end);
             // HS `macro` rejects a name the signature already carries
             // (Macro.hs:43-44): `op elem map extractName (S.toList
             // (userDefinedFunSyms sign) ++ map NoEqUser (S.toList (macroNames
@@ -3383,6 +3446,7 @@ impl<'a> Parser<'a> {
                     destructor: true,
                     ndc: false,
                     ndc_diff: false,
+                    location: Some(location),
                 },
             ));
             ms.push(Macro { name, args, body });
