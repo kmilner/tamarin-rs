@@ -1,0 +1,31 @@
+// A `=v` match pattern in an embedded MSR's premise AND in its `_restrict`
+// formula — the two places HS strips the marker on DIFFERENT paths.
+//
+// HS parses the embedded rule with pattern literals (`genericRule
+// sapicpatternvar`, Theory/Text/Parser/Sapic.hs:155) and then splits the
+// result (Parser/Sapic.hs:156-160): the fact rows go through `unpattern` and the
+// premises contribute the match-var set, while the `_restrict` formulas go
+// through `g = fmap (fmap unpatternVar)` — markers stripped, NO match-vars
+// collected.  Skipping the `g` leaves a marker inside the minted `Restr_…`
+// restriction's terms, which kills elaboration ("could not elaborate term in
+// fact `Restr_…`") on a theory the oracle loads fine — the port did exactly
+// that until the `formula_unpattern` call in tamarin-sapic's `convert`.
+//
+// What the echo pins:
+//   - the `process=` rule attribute reprints the step with BOTH patterns
+//     already stripped: `St( x.1 )` and `_restrict(x.1 = x.1)`;
+//   - the premise pattern's match-var keeps `x.1` unified with the bound `x`
+//     in the translated rule's `St`/`Ev`/`Out` facts;
+//   - the `_restrict` formula is minted as restriction
+//     `Restr_StxEvxrestrictxxOutx_0_1_1` over plain (marker-free) variables.
+//
+// `in('c', x)` binds `x` first: a premise match `=x` with no prior binding is
+// instead a wellformedness failure on both engines.  No corpus theory puts a
+// `=v` inside `_restrict`, so only this fixture reaches the formula path.
+
+theory SapicMsrPatternRestrict begin
+
+process:
+  in('c', x); [ St(=x) ] --[ Ev(x), _restrict( =x = x ) ]-> [ Out(x) ]
+
+end

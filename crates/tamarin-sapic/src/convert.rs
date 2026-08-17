@@ -342,8 +342,9 @@ pub(crate) fn action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, Conve
         //   let f = fmap (fmap unpattern); g = fmap (fmap unpatternVar)
         //   if validMSR S.empty (l,a,r) then MSR (f l) (f a) (f r) (g phi) matchVars
         // i.e. match-vars come from the PREMISES only; every fact row is
-        // `unpattern`ed (the `=v` markers stripped) and the embedded restriction
-        // formulas carry through (parser-AST, like `Cond`).
+        // `unpattern`ed (the `=v` markers stripped), and the embedded
+        // restriction formulas get `unpatternVar` — their `=v` markers are
+        // stripped too, without contributing match-vars.
         p::SapicAction::Msr {
             prems,
             acts,
@@ -369,7 +370,7 @@ pub(crate) fn action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, Conve
                 prems: prems_c,
                 acts: acts_c,
                 concs: concs_c,
-                rest: restrictions.clone(),
+                rest: restrictions.iter().map(formula_unpattern).collect(),
                 match_vars,
             })
         }
@@ -392,6 +393,62 @@ fn fact_unpattern(
         .collect();
     let f2 = p::Fact { args, ..f.clone() };
     fact(&f2)
+}
+
+/// HS `g = fmap (fmap unpatternVar)` over an embedded restriction formula
+/// (Parser/Sapic.hs:158): strip every `=v` (`PatMatch`) marker from the
+/// formula's terms.  No match-vars are collected — HS takes `matchVars` from
+/// the premises only.
+fn formula_unpattern(f: &p::Formula) -> p::Formula {
+    fn term(t: &p::Term) -> p::Term {
+        let mut sink = BTreeSet::new();
+        strip_pat_match(t, &mut sink)
+    }
+    fn fact(f: &p::Fact) -> p::Fact {
+        p::Fact {
+            args: f.args.iter().map(term).collect(),
+            ..f.clone()
+        }
+    }
+    fn atom(a: &p::Atom) -> p::Atom {
+        match a {
+            p::Atom::Eq(t1, t2) => p::Atom::Eq(term(t1), term(t2)),
+            p::Atom::Less(t1, t2) => p::Atom::Less(term(t1), term(t2)),
+            p::Atom::LessMset(t1, t2) => p::Atom::LessMset(term(t1), term(t2)),
+            p::Atom::Subterm(t1, t2) => p::Atom::Subterm(term(t1), term(t2)),
+            p::Atom::Action(f, t) => p::Atom::Action(fact(f), term(t)),
+            p::Atom::Last(t) => p::Atom::Last(term(t)),
+            p::Atom::Pred(f) => p::Atom::Pred(fact(f)),
+        }
+    }
+    match f {
+        p::Formula::False => p::Formula::False,
+        p::Formula::True => p::Formula::True,
+        p::Formula::Atom(a) => p::Formula::Atom(atom(a)),
+        p::Formula::Not(g) => p::Formula::Not(Box::new(formula_unpattern(g))),
+        p::Formula::And(a, b) => p::Formula::And(
+            Box::new(formula_unpattern(a)),
+            Box::new(formula_unpattern(b)),
+        ),
+        p::Formula::Or(a, b) => p::Formula::Or(
+            Box::new(formula_unpattern(a)),
+            Box::new(formula_unpattern(b)),
+        ),
+        p::Formula::Implies(a, b) => p::Formula::Implies(
+            Box::new(formula_unpattern(a)),
+            Box::new(formula_unpattern(b)),
+        ),
+        p::Formula::Iff(a, b) => p::Formula::Iff(
+            Box::new(formula_unpattern(a)),
+            Box::new(formula_unpattern(b)),
+        ),
+        p::Formula::Forall(vs, body) => {
+            p::Formula::Forall(vs.clone(), Box::new(formula_unpattern(body)))
+        }
+        p::Formula::Exists(vs, body) => {
+            p::Formula::Exists(vs.clone(), Box::new(formula_unpattern(body)))
+        }
+    }
 }
 
 /// Convert a parser combinator into a theory `ProcessCombinator<SapicLVar>`.
@@ -993,6 +1050,68 @@ mod tests {
     }
 
     #[test]
+    fn msr_restrict_formulas_lose_their_markers_and_add_no_match_vars() {
+        // HS applies `g = fmap (fmap unpatternVar)` to the embedded
+        // restriction formulas (Parser/Sapic.hs:158-160): every `=` marker
+        // goes away, and `matchVars` still folds over the premises only.
+        // Skipping the `g` leaves a `PatMatch` inside the minted `Restr_…`
+        // fact's terms and kills elaboration — the end-to-end pin is
+        // `scripts/divergence_fixtures/sapic_msr_pattern_restrict`.
+        let ispec = p::VarSpec {
+            name: "i".into(),
+            idx: 0,
+            sort: p::SortHint::Node,
+            typ: None,
+        };
+        // `=x = x` at the top and a marker nested under a quantifier inside
+        // an action fact's argument, so the strip provably recurses.
+        let marked = vec![
+            p::Formula::Atom(p::Atom::Eq(pat_match(pvar("x", None)), pvar("x", None))),
+            p::Formula::Forall(
+                vec![ispec.clone()],
+                Box::new(p::Formula::Atom(p::Atom::Action(
+                    pfact("Ev", vec![pat_match(pvar("x", None))]),
+                    p::Term::Var(ispec.clone()),
+                ))),
+            ),
+        ];
+        let plain = vec![
+            p::Formula::Atom(p::Atom::Eq(pvar("x", None), pvar("x", None))),
+            p::Formula::Forall(
+                vec![ispec.clone()],
+                Box::new(p::Formula::Atom(p::Atom::Action(
+                    pfact("Ev", vec![pvar("x", None)]),
+                    p::Term::Var(ispec),
+                ))),
+            ),
+        ];
+        let msr = p::Process::Action {
+            action: p::SapicAction::Msr {
+                prems: vec![pfact("In", vec![pvar("x", None)])],
+                acts: vec![],
+                concs: vec![pfact("Out", vec![pvar("x", None)])],
+                restrictions: marked,
+            },
+            body: Box::new(p::Process::Null),
+        };
+        let Process::Action(
+            SapicAction::Msr {
+                rest, match_vars, ..
+            },
+            _,
+            _,
+        ) = convert_process(&msr).unwrap()
+        else {
+            panic!("expected an Msr action");
+        };
+        assert_eq!(rest, plain, "both formulas come out marker-free");
+        assert!(
+            match_vars.is_empty(),
+            "a `=` inside `_restrict` contributes no match-var"
+        );
+    }
+
+    #[test]
     fn let_and_chin_patterns_split_matched_leaves_out_of_the_bound_term() {
         // HS builds `let` as `ProcessComb (Let (unpattern t1) t2
         // (extractMatchingVariables t1)) mempty p' q` (Parser/Sapic.hs:268-269).
@@ -1067,29 +1186,15 @@ mod tests {
 
     #[test]
     fn pat_match_over_a_compound_term_matches_every_variable_underneath() {
-        // The expected value in this test comes from the port, not from the
-        // oracle. The `=` of HS is a marker on a single leaf
-        // (`sapicpatternvar`, Token.hs:512-519). A `=` in front of anything
-        // that is not a bare variable is therefore a parse error upstream.
-        // The pinned oracle (ef3f0468) confirms this on minimal `--parse-only`
-        // theories. The captures below carry the line and column numbers of
-        // those theories:
-        //   in(c, =h(x))  ->  (line 7, column 11):
-        //                     unexpected "("
-        //                     expecting letter or digit, ".", ":" or ")"
-        //   in(c, =<x, y>) -> (line 7, column 10):
-        //                     unexpected "<"
-        //                     expecting "$", "~", identifier, "#" or "%"
-        //   let =h(x) = y  -> (line 8, column 9):
-        //                     unexpected "("
-        //                     expecting letter or digit, ".", ":" or "="
-        // The RS parser accepts all three of them, because the `=` prefix in
-        // `atom_term_inner` wraps a complete atom. The non-`Var` arms of
-        // `collect_pattern_vars` are therefore live surface that only the port
-        // has. There is no HS counterpart to derive them from. This test pins
-        // the answer of the port: every variable under the matched subterm
-        // counts. The behaviour then cannot drift without notice while the
-        // parser divergence stands.
+        // The `=` of HS is a marker on a single leaf (`sapicpatternvar`,
+        // Token.hs:512-519), and the RS parser now rejects `=` on anything
+        // else too (`pattern_var_atom`; byte-pinned against the oracle in
+        // tamarin-parser's `tests/eq_patterns.rs`).  A `PatMatch` over a
+        // compound term is therefore only constructible programmatically.
+        // `strip_pat_match`/`collect_pattern_vars` stay total over that shape
+        // anyway — per-leaf recursion, matching HS's fmap-over-leaves — and
+        // this test pins the totality: every variable under the matched
+        // subterm counts.
         let pat = p::Term::Pair(vec![
             pat_match(p::Term::App(
                 "h".into(),

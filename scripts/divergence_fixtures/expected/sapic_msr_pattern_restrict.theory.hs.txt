@@ -1,0 +1,102 @@
+theory SapicMsrPatternRestrict
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+heuristic: p
+
+rule (modulo E) Init[color=#ffffff, process="in('c',x.1);", issapicrule,
+                     role='Process']:
+   [ ] --[ Init( ) ]-> [ State_( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) incx_0_[color=#ffffff, process="in('c',x.1);",
+                        issapicrule, role='Process']:
+   [ State_( ), Message( 'c', x ) ] --> [ Let_1( x ), Ack( 'c', x ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) incx_1_[color=#ffffff, process="in('c',x.1);",
+                        issapicrule, role='Process']:
+   [ Let_1( x.1 ) ] --> [ State_1( x.1 ) ]
+
+  /*
+  rule (modulo AC) incx_1_[color=#ffffff, process="in('c',x.1);",
+                           issapicrule, role='Process']:
+     [ Let_1( x ) ] --> [ State_1( x ) ]
+  */
+
+rule (modulo E) incx_2_[color=#ffffff, process="in('c',x.1);",
+                        issapicrule, role='Process']:
+   [ State_( ), In( <'c', x> ) ] --> [ Let_1( x ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) incx_3_[color=#ffffff, process="in('c',x.1);",
+                        issapicrule, role='Process']:
+   [ Let_1( x.1 ) ] --> [ State_1( x.1 ) ]
+
+  /*
+  rule (modulo AC) incx_3_[color=#ffffff, process="in('c',x.1);",
+                           issapicrule, role='Process']:
+     [ Let_1( x ) ] --> [ State_1( x ) ]
+  */
+
+restriction Restr_StxEvxrestrictxxOutx_0_1_1:
+  "∀ x #NOW x.1.
+    (Restr_StxEvxrestrictxxOutx_0_1_1( x, x.1 ) @ #NOW) ⇒ (x = x.1)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #NOW x.1.
+    (Restr_StxEvxrestrictxxOutx_0_1_1( x, x.1 ) @ #NOW) ⇒ (x = x.1)"
+  */
+
+rule (modulo E) StxEvxrestrictxxOutx_0_1[color=#ffffff,
+                                         process=" [ St( x.1 ) ]
+--[ Ev( x.1 ), _restrict(x.1 = x.1) ]->
+ [ Out( x.1 ) ];",
+                                         issapicrule, role='Process']:
+   [ State_1( x.1 ), St( x.1 ) ]
+  --[ Ev( x.1 ), Restr_StxEvxrestrictxxOutx_0_1_1( x.1, x.1 ) ]->
+   [ State_11( x.1 ), Out( x.1 ) ]
+
+  /*
+  rule (modulo AC) StxEvxrestrictxxOutx_0_1[color=#ffffff,
+                                            process=" [ St( x.1 ) ]
+--[ Ev( x.1 ), _restrict(x.1 = x.1) ]->
+ [ Out( x.1 ) ];",
+                                            issapicrule, role='Process']:
+     [ State_1( x ), St( x ) ]
+    --[ Ev( x ), Restr_StxEvxrestrictxxOutx_0_1_1( x, x ) ]->
+     [ State_11( x ), Out( x ) ]
+  */
+
+rule (modulo E) p_0_11[color=#ffffff, process="0", issapicrule,
+                       role='Process']:
+   [ State_11( x.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_11[color=#ffffff, process="0", issapicrule,
+                          role='Process']:
+     [ State_11( x ) ] --> [ ]
+  */
+
+restriction single_session:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  */
+
+
+
+end

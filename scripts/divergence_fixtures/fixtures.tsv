@@ -32,3 +32,4 @@ dual_declared_equations	wf,theory	match	--derivcheck-timeout=0
 naryapp_arity_folds	wf,theory	match	--derivcheck-timeout=0
 ac_prefix_arities	wf,theory	match	--derivcheck-timeout=0
 positional_ac_prefix	wf,theory	match	--derivcheck-timeout=0
+sapic_msr_pattern_restrict	wf,theory	match	--derivcheck-timeout=0
