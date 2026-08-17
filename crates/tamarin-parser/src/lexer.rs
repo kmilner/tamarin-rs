@@ -704,39 +704,6 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Hex colour code (optionally prefixed with `#`, optionally single-quoted).
-    ///
-    /// Unlike the Haskell `symbol`-based parser (Token.hs:404-406), this does not
-    /// skip whitespace after the opening quote or after `#`, so `' #FF'` / `'# FF'`
-    /// are rejected here though Haskell accepts them. Real colour attributes are
-    /// always tight (e.g. `'#111111'`), so this whitespace divergence has no
-    /// practical effect.
-    pub fn hex_color(&mut self) -> Option<String> {
-        self.skip_ws();
-        let save = self.pos;
-        let quoted = self.eat('\'');
-        let _ = self.eat('#');
-        let mut s = String::new();
-        while let Some(c) = self.peek() {
-            if c.is_ascii_hexdigit() {
-                s.push(c);
-                self.bump();
-            } else {
-                break;
-            }
-        }
-        if quoted && !self.eat('\'') {
-            self.pos = save;
-            return None;
-        }
-        if s.is_empty() {
-            self.pos = save;
-            return None;
-        }
-        self.skip_ws();
-        Some(s)
-    }
-
     /// External identifier: `x-<ident>`.
     pub fn ext_identifier(&mut self) -> Option<String> {
         self.skip_ws();
