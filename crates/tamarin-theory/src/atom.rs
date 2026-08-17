@@ -92,9 +92,10 @@ mod tests {
         msg_var("y", 0)
     }
 
-    /// Every predicate matches exactly its own variant.  Asserting the full
-    /// variant × predicate diagonal catches both a predicate wired to the
-    /// wrong constructor and one degenerating to a constant.
+    /// Every predicate matches exactly its own variant.  The test asserts the
+    /// full variant × predicate diagonal.  This catches a predicate that is
+    /// wired to the wrong constructor.  It also catches a predicate that
+    /// degenerates to a constant.
     #[test]
     fn atom_predicates() {
         let atoms: Vec<Atom<LNTerm>> = vec![
@@ -120,9 +121,10 @@ mod tests {
         }
     }
 
-    /// `to_atom` replaces the sugar payload with the field-less `Unit2` and
-    /// carries every other variant across UNCHANGED — including its
-    /// constructor, which a `matches!`-on-one-variant check cannot see.
+    /// `to_atom` replaces the sugar payload with the field-less `Unit2`.  It
+    /// carries every other variant across unchanged.  This includes the
+    /// constructor of the variant.  A check that uses `matches!` on one
+    /// variant cannot see that constructor.
     #[test]
     fn to_atom_strips_sugar() {
         let s: SyntacticAtom<LNTerm> =

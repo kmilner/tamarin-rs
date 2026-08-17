@@ -28,22 +28,23 @@ use common::*;
 //   - anything else → 404 HTML (Haskell's behaviour)
 // See `parse_bool_path_piece` in `src/handlers/theory.rs`.
 
-/// The three autoprove routes, replaying the capture script's own sequence on
-/// the same fixture (`tests/capture_haskell_fixtures.sh`): autoprove theory 1,
-/// autoprove the proved snapshot it allocated, then autoproveAll on theory 1
-/// again.  Each response is the oracle's body byte for byte — including the
-/// allocated index, because `modifyTheory` hands out the next free one on both
-/// sides, and the proof path, which both sides reach by walking
-/// `nextSmartThyPath` over the freshly autoproved tree.
+/// The three autoprove routes.  The test replays the capture script's own
+/// sequence (`tests/capture_haskell_fixtures.sh`) on the same fixture.  That
+/// sequence is: autoprove theory 1, then autoprove the proved snapshot that
+/// the first call allocated, then autoproveAll on theory 1 again.  Each
+/// response is the oracle's body, byte for byte.  The comparison includes the
+/// allocated index, because `modifyTheory` assigns the next free index on
+/// both sides.  It also includes the proof path, which both sides reach when
+/// they walk `nextSmartThyPath` over the freshly autoproved tree.
 ///
-/// Autoproving an ALREADY PROVED theory is the middle call: it still answers a
-/// redirect to a fresh index (upstream re-runs the prover over a tree with
-/// nothing left to do), never an alert.
+/// The middle call autoproves a theory that is already proved.  It still
+/// answers a redirect to a fresh index, and never an alert.  Upstream runs the
+/// prover again over a tree that has nothing left to do.
 #[tokio::test]
 async fn test_autoprove_redirect_bodies_match_haskell() {
     let s = start_server_with_theory("issue193.spthy").await;
 
-    // The `debug` lemma is exists-trace + trivial.
+    // The `debug` lemma is exists-trace and trivial.
     let res = s
         .client
         .get(s.url("/thy/trace/1/autoprove/idfs/0/False/proof/debug"))
@@ -115,8 +116,8 @@ async fn test_autoprove_on_bad_path_returns_alert() {
         .await
         .expect("send autoprove-rules");
     assert_eq!(res.status(), 200);
-    // The oracle's body verbatim — the alert allocates no theory, so its bytes
-    // do not depend on the capture session's history.
+    // This is the oracle's body, byte for byte.  The alert allocates no
+    // theory, so its bytes do not depend on the capture session's history.
     assert_eq!(
         res.text().await.expect("text"),
         haskell_capture("autoprove_on_rules.json"),
@@ -199,8 +200,9 @@ async fn test_autoprove_on_unknown_lemma_returns_alert() {
     let url = s.url("/thy/trace/1/autoprove/idfs/0/False/proof/notALemma");
     let res = s.client.get(&url).send().await.expect("send");
     assert_eq!(res.status(), 200);
-    // Probed against the oracle; captured by nothing (the capture script never
-    // asks for a lemma that does not exist), so these bytes are pinned here.
+    // These bytes come from a probe against the oracle.  No capture holds
+    // them, because the capture script never asks for a lemma that does not
+    // exist.  This test therefore pins the bytes here.
     assert_eq!(
         res.text().await.expect("text"),
         "{\"alert\":\"Sorry, but the autoprover () failed!\"}",

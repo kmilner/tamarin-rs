@@ -376,11 +376,12 @@ mod tests {
         let p1 = partitions(&[1]);
         assert_eq!(p1, vec![vec![vec![1]]]);
 
-        // Exact enumeration order of HS `partitions`/`bloat`
-        // (`bloat x (xs:xss) = ((x:xs):xss) : map (xs:) (bloat x xss)`): the
-        // head is merged into the first group first, and the group carrying
-        // the head then walks rightwards. Counts alone (see
-        // `prop_partition_count_is_bell`) do not pin this.
+        // This is the exact enumeration order of the HS `partitions` and
+        // `bloat` functions
+        // (`bloat x (xs:xss) = ((x:xs):xss) : map (xs:) (bloat x xss)`).
+        // The code merges the head into the first group first. The group that
+        // holds the head then moves to the right. The counts alone do not pin
+        // this order. See `prop_partition_count_is_bell` for the counts.
         assert_eq!(
             partitions(&[1, 2]),
             vec![vec![vec![1, 2]], vec![vec![2], vec![1]]]
@@ -416,10 +417,11 @@ mod tests {
         assert_eq!(two_partitions(&empty), Vec::<(Vec<i32>, Vec<i32>)>::new());
         assert_eq!(two_partitions(&[1]), vec![(vec![1], vec![])]);
 
-        // Exact HS order: all `addToFirst` results, then all `addToSecond`,
-        // each side keeping the input's relative order. The `[x]` base case
-        // forces the last element into the first list, so the first component
-        // is never empty and there are 2^(n-1) — not 2^n — results.
+        // This is the exact HS order. All `addToFirst` results come first, and
+        // all `addToSecond` results follow. Each side keeps the relative order
+        // of the input. The `[x]` base case puts the last element into the
+        // first list. The first component is therefore never empty, and there
+        // are 2^(n-1) results, not 2^n.
         let tp = two_partitions(&[1, 2, 3]);
         assert_eq!(
             tp,

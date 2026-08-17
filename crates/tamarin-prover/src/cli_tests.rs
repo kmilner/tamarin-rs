@@ -98,8 +98,9 @@ fn batch_output_flags_before_a_subcommand_conflict() {
     // Top-level batch flags are also rejected BEFORE a subcommand word —
     // clap would otherwise parse them and silently drop them (no
     // subcommand reads them), and a parsed flag must never be discarded.
-    // One row per entry of `parse_args`' offending-flag table: a row missing
-    // from it restores exactly that silent drop for its flag.
+    // There is one row here per entry of the offending-flag table in
+    // `parse_args`.  If an entry is absent from that table, clap drops the
+    // flag on that row silently, and the row here catches it.
     for (argv, named) in [
         (&["-o=x", "interactive", "."][..], "-o/--output"),
         (&["-O=x", "variants"][..], "-O/--Output"),
@@ -119,8 +120,8 @@ fn batch_output_flags_before_a_subcommand_conflict() {
             clap::error::ErrorKind::ArgumentConflict,
             "{argv:?}"
         );
-        // The message names the flag that conflicted: the table's second
-        // column is the whole of what the user gets to act on.
+        // The message names the flag that conflicted.  The second column of
+        // the table is all that the user can act on.
         assert!(e.to_string().contains(named), "{argv:?}: {e}");
     }
     // The `variants` subcommand's OWN `-O` is fine — it is read.
@@ -299,7 +300,7 @@ fn oversized_numeric_values_are_rejected_loudly() {
         ["-c=-1", "x.spthy"],
         ["-b=4294967296", "x.spthy"],
         ["-b=-1", "x.spthy"],
-        // A value that is not a number at all takes the same loud path.
+        // A value that is not a number at all takes the same rejection path.
         ["-b=not-a-number", "x.spthy"],
     ] {
         let e = parse_err(&argv);
@@ -532,8 +533,8 @@ fn trace_output_flags() {
 // Boolean flags
 // =========================================================================
 
-/// Every boolean flag the top-level command takes, with the [`Args`] field
-/// [`parse_args`] must set from it.
+/// Every boolean flag that the top-level command takes.  Each flag comes
+/// with the [`Args`] field that [`parse_args`] must set from it.
 const BOOL_FLAGS: [(&str, fn(&Args) -> bool); 12] = [
     ("--diff", |a| a.diff),
     ("--quit-on-warning", |a| a.quit_on_warning),
@@ -551,23 +552,24 @@ const BOOL_FLAGS: [(&str, fn(&Args) -> bool); 12] = [
 
 #[test]
 fn each_boolean_flag_sets_its_own_field_and_no_other() {
-    // Checking the WHOLE row per flag is what catches a cross-wired field in
-    // the clap-tree → [`Args`] flattening: a `quiet: cli.load.verbose` /
-    // `verbose: cli.load.quiet` swap satisfies any test that passes both
-    // flags at once and asserts both fields true.
+    // The loop checks the complete row for each flag.  That is what catches
+    // a cross-wired field in the flattening from the clap tree to [`Args`].
+    // A swap of `quiet: cli.load.verbose` and `verbose: cli.load.quiet`
+    // still satisfies any test that passes both flags at once and asserts
+    // that both fields are true.
     for (set, _) in BOOL_FLAGS {
         let a = parse(&[set, "x.spthy"]);
         for (other, read) in BOOL_FLAGS {
             assert_eq!(read(&a), set == other, "argv `{set}`, field of `{other}`");
         }
     }
-    // An argv with none of them leaves every field false, so the loop above
-    // is reading flags rather than defaults.
+    // An argv with none of these flags leaves every field false.  So the
+    // loop above reads the flags, not the defaults.
     let a = parse(&["x.spthy"]);
     for (name, read) in BOOL_FLAGS {
         assert!(!read(&a), "`{name}` set without the flag");
     }
-    // The one short spelling in the set.
+    // `-v` is the one short spelling in the set.
     assert!(parse(&["-v", "x.spthy"]).verbose);
 }
 

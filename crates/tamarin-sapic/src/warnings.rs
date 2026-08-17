@@ -144,10 +144,10 @@ mod tests {
         assert!(check_wellformedness(&p).is_empty());
     }
 
-    /// Every branch of HS `Show (SapicLVar)` / `Show LVar`
+    /// The test covers every branch of HS `Show (SapicLVar)` and `Show LVar`
     /// (Theory/Sapic/Term.hs:108-110, Term/LTerm.hs:550-557#show, prefix table
-    /// Term/LTerm.hs:193-199#sortPrefix), since the result is spliced verbatim
-    /// into the `Variable bound twice: …` report body.
+    /// Term/LTerm.hs:193-199#sortPrefix).  The port splices the result without
+    /// change into the body of the `Variable bound twice: …` report.
     #[test]
     fn show_sapic_lvar_matches_hs_show() {
         let show = |name: &str, sort, idx, ty: Option<&str>| {
@@ -166,7 +166,8 @@ mod tests {
             ("pub prefix", show("a", LSort::Pub, 0, None), "$a"),
             ("node prefix", show("i", LSort::Node, 0, None), "#i"),
             ("nat prefix", show("n", LSort::Nat, 0, None), "%n"),
-            // `i /= 0` appends `.i`; an EMPTY name renders the index alone.
+            // `i /= 0` appends `.i`.  A name that is empty renders the index
+            // alone.
             ("nonzero index", show("x", LSort::Msg, 2, None), "x.2"),
             ("indexed fresh", show("k", LSort::Fresh, 1, None), "~k.1"),
             (

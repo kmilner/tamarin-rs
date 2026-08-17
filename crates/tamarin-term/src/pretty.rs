@@ -396,10 +396,11 @@ mod tests {
     }
 
     /// The four builtin AC operators render as HS `ppTerms <op> 1 "(" ")"`
-    /// (Term/Term.hs:304-309): one pair of parentheses around the whole
-    /// application and the operator BETWEEN operands only — no spaces, no
-    /// leading or trailing separator.  Arguments come out AC-sorted
-    /// (`a` before `b`) whichever order they were handed in.
+    /// (Term/Term.hs:304-309).  This gives one pair of parentheses around the
+    /// complete application.  The operator appears between the operands only.
+    /// There are no spaces, and no separator at the start or at the end.  The
+    /// arguments come out in AC-sorted order (`a` before `b`), whatever order
+    /// the caller passes them in.
     #[test]
     fn pretty_builtin_ac_ops_render_infix() {
         use crate::function_symbols::AcSym;
@@ -414,7 +415,8 @@ mod tests {
             let t = f_app_ac(op, vec![b.clone(), a.clone()]);
             assert_eq!(pretty_lnterm(&t), expected, "{op:?}");
         }
-        // Three operands: the separator resolves twice, never at the edges.
+        // With three operands the separator appears twice, and never at the
+        // edges.
         let c = var("c", LSort::Msg);
         let t = f_app_ac(AcSym::Mult, vec![c, b, a]);
         assert_eq!(pretty_lnterm(&t), "(a*b*c)");
@@ -428,12 +430,13 @@ mod tests {
         assert_eq!(pretty_lnterm(&t), "g^x");
     }
 
-    /// `diff(a, b)` keeps its prefix spelling, with a space after the comma
-    /// (module doc above; HS `prettyTerm`'s own `s == diffSym` case).  The
-    /// dedicated arm's guard is full-`NoEqSym` equality, so a public `diff/2`
-    /// is a different symbol and falls through to the generic `NoEq` arm —
-    /// which spells a 2-ary application the same way.  Both assertions
-    /// therefore pin the one spelling, not a fork between the two arms.
+    /// `diff(a, b)` keeps its prefix spelling, with a space after the comma.
+    /// See the module doc above, and HS `prettyTerm`'s own `s == diffSym`
+    /// case.  The guard on the dedicated arm compares the complete `NoEqSym`,
+    /// so a public `diff/2` is a different symbol.  That symbol falls through
+    /// to the generic `NoEq` arm, which spells a 2-ary application the same
+    /// way.  Both assertions therefore check the one spelling.  They do not
+    /// check a difference between the two arms.
     #[test]
     fn pretty_diff_renders_prefix_with_spaced_args() {
         let x = var("x", LSort::Msg);
@@ -599,9 +602,9 @@ mod tests {
     }
 
     /// One sigil per `NameTag`, from HS `instance Show Name`
-    /// (LTerm.hs:235-240): four quoted forms with their own prefix character
-    /// (`Pub`'s being empty), and `Abbrev`, which prints the bare id with
-    /// neither sigil nor quotes.
+    /// (LTerm.hs:235-240).  Four of the tags print a quoted form with their
+    /// own prefix character, and the prefix of `Pub` is empty.  `Abbrev`
+    /// prints the bare id with no sigil and no quotes.
     #[test]
     fn display_for_name() {
         for (tag, expected) in [
@@ -615,8 +618,9 @@ mod tests {
         }
     }
 
-    /// `Display for LSort` carries HS `sortSuffix`'s spelling, not the derived
-    /// `Show LSort` constructor names, for every sort.
+    /// `Display for LSort` carries the spelling of HS `sortSuffix` for every
+    /// sort.  It does not carry the constructor names of the derived
+    /// `Show LSort`.
     #[test]
     fn lsort_display_matches_sort_suffix() {
         for s in [

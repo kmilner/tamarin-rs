@@ -335,8 +335,8 @@ mod tests {
             id: NameId::new("k"),
         };
         assert_eq!(sort_of_name(&fresh), LSort::Fresh);
-        // And the emitted Maude constant uses the `c` (Msg) symbol, not the
-        // `p` (Pub) one the carrier tag would give.
+        // The emitted Maude constant also uses the `c` (Msg) symbol.  It does
+        // not use the `p` (Pub) symbol that the carrier tag would give.
         let t: LNTerm = Term::Lit(Lit::Con(msg_skol));
         let mut ctx = ConvCtx::new();
         let mt = lterm_to_mterm_global(&t, &mut ctx);
@@ -348,10 +348,10 @@ mod tests {
         assert_eq!(wire, "p(1)");
     }
 
-    /// A variable survives the `LNTerm -> MTerm -> LNTerm` round trip with
-    /// its identity intact: the forward pass registers the inverse binding
-    /// that the backward pass reads, so no fresh `name_hint` variable is
-    /// minted (`next` is untouched).
+    /// A variable survives the `LNTerm -> MTerm -> LNTerm` round trip and
+    /// keeps its identity.  The forward pass registers the inverse binding,
+    /// and the backward pass reads that binding.  The code therefore mints no
+    /// new `name_hint` variable, and it leaves `next` unchanged.
     #[test]
     fn round_trip_var() {
         let v = LVar::new("x", LSort::Msg, 0);
@@ -438,9 +438,10 @@ mod tests {
         let mut next = 100;
         let back = mterm_to_lnterm(&mt, &mut ctx, "x", &mut next);
 
-        // Expected: em(x.9, x.10) — args sorted idx-first.  Built with the
-        // raw constructor, NOT `f_app_c`, so the expectation cannot inherit
-        // the very sort under test.
+        // Expected: em(x.9, x.10), with the arguments sorted by index first.
+        // The expectation uses the raw constructor and not `f_app_c`.  It
+        // therefore cannot inherit the same argument sorting that this test
+        // checks.
         assert_eq!(
             back,
             crate::term::unsafe_f_app(

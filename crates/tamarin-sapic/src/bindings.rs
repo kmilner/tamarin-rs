@@ -172,12 +172,13 @@ mod tests {
     #[test]
     fn channel_in_nub_dedups_first_occurrence() {
         // `pair(y, pair(x, y))` -> freesSapicTerm = [y, x, y]; nub -> [y, x].
-        // Both halves of HS `nub (freesSapicTerm t)` are pinned by this one
-        // expectation: dropping the `nub` leaves the trailing duplicate, and
-        // deduplicating through a sorted set yields `[x, y]` instead of the
-        // first-occurrence `[y, x]`.  freesSapicTerm = foldMap (:[])
-        // (Theory/Sapic/Term.hs:131-132), nub keeps first-occurrence order
-        // (Sapic/Bindings.hs:21-26, see line 24).
+        // This one expectation checks both halves of HS
+        // `nub (freesSapicTerm t)`.  Without the `nub` the result keeps the
+        // trailing duplicate.  With a sorted set for the deduplication the
+        // result is `[x, y]` instead of `[y, x]`, which is the order of
+        // first occurrence.  freesSapicTerm = foldMap (:[])
+        // (Theory/Sapic/Term.hs:131-132), nub keeps the order of first
+        // occurrence (Sapic/Bindings.hs:21-26, see line 24).
         use tamarin_term::builtin::pair;
         let x = slv("x");
         let y = slv("y");
@@ -193,17 +194,18 @@ mod tests {
         assert_eq!(bindings_act(&act), vec![y, x]);
     }
 
-    /// `accBindings = pfoldMap bindings` inherits `pfoldMap`'s visit order
-    /// (Sapic/Process.hs:285-296): a `ProcessComb` is IN-ORDER
-    /// (`pfoldMap f pl <> f node <> pfoldMap f pr`) while a `ProcessAction` is
-    /// self-first.  The sequence is what `capturedVariablesAt` intersects
-    /// against, and `Null` must contribute nothing to it.
+    /// `accBindings = pfoldMap bindings` takes its visit order from
+    /// `pfoldMap` (Sapic/Process.hs:285-296).  A `ProcessComb` visits in
+    /// order (`pfoldMap f pl <> f node <> pfoldMap f pr`).  A
+    /// `ProcessAction` visits itself first.  `capturedVariablesAt`
+    /// intersects against this sequence, and `Null` must add nothing to it.
     #[test]
     fn acc_bindings_follows_pfold_map_order() {
         let ann = ProcessParsedAnnotation::empty;
         let new = |v: SapicLVar, body| Process::Action(SapicAction::New(v), ann(), Box::new(body));
         let null = || Process::null(ann());
-        // `new a; (new b; 0) lookup-else (new c; 0)`, the lookup binding `d`.
+        // The process is `new a; (new b; 0) lookup-else (new c; 0)`.  The
+        // lookup binds `d`.
         let p: Process<ProcessParsedAnnotation, SapicLVar> = new(
             slv("a"),
             Process::Comb(
@@ -217,8 +219,9 @@ mod tests {
             .iter()
             .map(|v| v.var.name.to_string())
             .collect();
-        // `a` (action, self-first), then the LEFT subtree, then the combinator
-        // itself, then the RIGHT subtree — not `a, d, b, c`.
+        // `a` comes first, because an action visits itself first.  Then come
+        // the left subtree, the combinator itself, and the right subtree.
+        // The order is not `a, d, b, c`.
         assert_eq!(names, ["a", "b", "d", "c"]);
         // A `Null` node binds nothing on either entry point.
         assert!(bindings(&null()).is_empty());

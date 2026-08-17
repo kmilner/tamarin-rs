@@ -38,13 +38,14 @@ fn solved_goal_filtered() {
     assert!(open_goals(&sys).is_empty());
 }
 
-/// `is_open_in_sys` closes the empty disjunction while it is still
-/// UNSOLVED — HS `DisjG (Disj []) -> False` (Goals.hs:89), because the
-/// contradictions pass, not goal solving, disposes of it.  The `solved`
-/// flag stays false here, so the default `_ -> not solved` arm would
-/// report this goal open; only the empty-Disj arm keeps it out of
-/// `open_goals`.  The one-item Disj control pins that the arm is
-/// specific to the EMPTY disjunction and not a blanket Disj filter.
+/// `is_open_in_sys` treats the empty disjunction as closed while it is still
+/// unsolved.  This mirrors HS `DisjG (Disj []) -> False` (Goals.hs:89).  The
+/// contradictions pass disposes of the empty disjunction, not goal solving.
+/// The `solved` flag stays false here, so the default arm `_ -> not solved`
+/// would report this goal open.  Only the empty-Disj arm keeps it out of
+/// `open_goals`.  The control case with a one-item Disj shows that the arm
+/// is specific to the empty disjunction.  The arm is not a filter for every
+/// Disj.
 #[test]
 fn empty_disj_goal_is_never_open() {
     use crate::constraint::constraints::Disj;
@@ -61,10 +62,11 @@ fn empty_disj_goal_is_never_open() {
     assert_eq!(open_goals(&sys).len(), 1);
 }
 
-/// `dispatch_solve_goal` marks the goal solved BEFORE delegating, mirroring
-/// HS `solveGoal` (Goals.hs:201-213) — the solver it delegates to may rewrite
-/// the goal's terms via `solveFactEqs`/`substSystem`, and a post-solve mark
-/// would then miss the (now substituted) key and leave the goal open.
+/// `dispatch_solve_goal` marks the goal solved before it delegates.  This
+/// mirrors HS `solveGoal` (Goals.hs:201-213).  The solver that it delegates
+/// to can rewrite the terms of the goal through `solveFactEqs` or
+/// `substSystem`.  A mark after the solve would then miss the substituted
+/// key and leave the goal open.
 #[test]
 fn dispatch_solve_goal_marks_solved_then_routes() {
     use crate::constraint::solver::context::ProofContext;
@@ -78,8 +80,8 @@ fn dispatch_solve_goal_marks_solved_then_routes() {
     let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     let ctx = ProofContext::new(h, Vec::new());
     let mut sys = System::empty();
-    // Empty disjunction: nothing can satisfy it, so the Disj solver this
-    // must route to answers `Contradictory`.
+    // Nothing can satisfy an empty disjunction.  The Disj solver that this
+    // call must route to therefore answers `Contradictory`.
     let d = crate::constraint::constraints::Disj::<crate::guarded::Guarded>::new(Vec::new());
     let g = Goal::Disj(d);
     sys.add_goal(g.clone());
@@ -156,8 +158,8 @@ fn goal_cmp_tag_order_matches_haskell_declaration() {
     let order = [&action, &chain, &premise, &split, &disj, &sub];
     let names = ["Action", "Chain", "Premise", "Split", "Disj", "Subterm"];
     for i in 0..order.len() {
-        // Every variant compares Equal with itself: the tag short-circuit
-        // must fall through to a payload comparison that agrees.
+        // Every variant compares Equal with itself.  The short-circuit on
+        // the tag must fall through to a payload comparison that agrees.
         assert_eq!(
             goal_cmp(order[i], order[i]),
             Ordering::Equal,
@@ -451,9 +453,10 @@ fn useful_goal_nr_uses_derived_usefulness_ord() {
     };
     // LoopBreaker with the LARGER nr, ProbablyConstructible with the
     // smaller nr.  HS Usefulness Ord (LoopBreaker < ProbablyConstructible)
-    // must dominate the nr tiebreak.  Drive the SHARED production sorter
-    // (`sort_useful_goal_nr`, the `UsefulGoalNr` ranking arm and the tactic
-    // presort), not a re-spelling of it here.
+    // must dominate the nr tiebreak.  The test drives the shared production
+    // sorter `sort_useful_goal_nr`.  The `UsefulGoalNr` ranking arm and the
+    // tactic presort use that same sorter.  The test does not repeat the
+    // sort logic here.
     let lb = mk(5, Usefulness::LoopBreaker);
     let pc = mk(1, Usefulness::ProbablyConstructible);
     let mut ags = [pc.clone(), lb.clone()];
@@ -466,7 +469,8 @@ fn useful_goal_nr_uses_derived_usefulness_ord() {
         "LoopBreaker must rank before ProbablyConstructible"
     );
     assert_eq!(ags[1].seq, 1);
-    // Equal usefulness still breaks ties by creation nr, ascending.
+    // With equal usefulness, the sorter still breaks ties by creation nr, in
+    // ascending order.
     let mut same = [mk(9, Usefulness::Useful), mk(2, Usefulness::Useful)];
     sort_useful_goal_nr(&mut same);
     assert_eq!([same[0].seq, same[1].seq], [2, 9]);

@@ -1,16 +1,17 @@
 //! Integration tests for the live proof-tree mutation route.
 //!
 //! `/thy/trace/<idx>/proof-step/<lemma>/<path…>/<method>` has no upstream
-//! counterpart (the HS UI applies methods through `/main/method/…`); it
-//! applies one proof method in place and answers a `{html,title}` envelope
-//! carrying the re-rendered sub-proof snippet plus the whole proof tree.
+//! counterpart.  The HS UI applies methods through `/main/method/…`.  This
+//! route applies one proof method in place.  It answers with a `{html,title}`
+//! envelope.  The envelope holds the sub-proof snippet, which the server
+//! renders again, and the complete proof tree.
 //!
 //! Coverage:
 //!   - the envelope and the applied method in the rendered tree;
-//!   - the mutation is kept: `/main/proof/<lemma>` grows the sub-case the step
-//!     produced (this is the only place the in-memory `ProofState` is checked
-//!     to survive a request);
-//!   - an unknown lemma is an `{alert}`, not a panic.
+//!   - the route keeps the change: `/main/proof/<lemma>` then shows the
+//!     sub-case that the step produced.  This is the only place that checks
+//!     that the in-memory `ProofState` survives a request;
+//!   - an unknown lemma gives an `{alert}`, not a panic.
 
 mod common;
 
@@ -42,8 +43,9 @@ async fn proof_step_simplify_returns_html_envelope() {
     );
     assert_eq!(v["title"], serde_json::json!("Proof of debug"));
     let html = v["html"].as_str().expect("html");
-    // The tree appended below the snippet must show the method that was just
-    // applied at the root, over the `sorry` child the step opened.
+    // The tree below the snippet must show the method that the step applied
+    // at the root.  It must also show the `sorry` child that the step opened
+    // under that method.
     assert!(
         html.contains("<h2>Proof of <code>debug</code></h2>")
             && html.contains("<span class=\"proof-method\">simplify</span>")
@@ -87,8 +89,9 @@ async fn proof_step_then_view_shows_applied_method() {
         .expect("send 1");
     assert_eq!(r1.status(), 200);
 
-    // Same URL, same theory index: the applied step must be in the store, not
-    // just in the step response.  Simplify opens exactly one case, named "".
+    // This is the same URL and the same theory index.  The applied step must
+    // be in the store, not only in the step response.  Simplify opens exactly
+    // one case, and the name of that case is "".
     let after = proof_view().await;
     assert!(
         after.contains("<h3>1 sub-case(s)</h3>")

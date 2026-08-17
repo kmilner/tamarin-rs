@@ -66,11 +66,11 @@ fn six_digit_codes_are_accepted() {
     assert_eq!(accepted_code("FF00FF"), "FF00FF");
 }
 
-/// `ruleAttribute` offers the British spelling FIRST (Parser/Rule.hs:72-73),
-/// and it stores the same attribute — the oracle loads
-/// `rule R1[colour=ff00ff]` at exit 0 and renders it as `color=#ff00ff`, the
-/// spelling the corpus uses (examples/eurosp19-eccDAA/
-/// ISOIEC_20008_2013_2_ECC_DAA.fixed.spthy).
+/// `ruleAttribute` offers the British spelling first (Parser/Rule.hs:72-73),
+/// and it stores the same attribute.  The oracle loads
+/// `rule R1[colour=ff00ff]` at exit 0.  It renders that attribute as
+/// `color=#ff00ff`.  That is the spelling the corpus uses
+/// (examples/eurosp19-eccDAA/ISOIEC_20008_2013_2_ECC_DAA.fixed.spthy).
 #[test]
 fn the_british_spelling_stores_the_same_attribute() {
     assert_eq!(
@@ -179,8 +179,8 @@ fn empty_quotes_expect_hash_or_digit() {
     );
 }
 
-/// Inside quotes AFTER a `#` both prefix alternatives are spent — only the
-/// digit label remains, at the closing quote.
+/// Inside quotes and after a `#`, both prefix alternatives are spent.  Only
+/// the digit label remains, at the closing quote.
 #[test]
 fn quoted_hash_without_digits_expects_a_digit() {
     assert_eq!(

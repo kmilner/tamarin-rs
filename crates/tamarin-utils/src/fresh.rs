@@ -155,9 +155,10 @@ mod tests {
 
     #[test]
     fn fast_seeded_starts_at_the_seed() {
-        // HS `evalFresh action seed`: the seed IS the first identifier handed
-        // out, not the one before it — `Sapic.States` passes the next free
-        // `StateChannel` index and expects to get exactly that index back.
+        // In HS `evalFresh action seed`, the seed is the first identifier that
+        // the state gives out.  It is not the identifier before that one.
+        // `Sapic.States` passes the next free `StateChannel` index, and it
+        // expects to get exactly that index back.
         let mut s = FastFreshState::seeded(7);
         assert_eq!(s.fresh_ident(), 7);
         assert_eq!(s.fresh_idents(2), 8);
@@ -185,10 +186,11 @@ mod tests {
 
     #[test]
     fn avoid_precise_seeds_past_every_avoided_index() {
-        // HS `avoidPreciseVars`: `insertWith max name (idx+1)`. The seed is the
-        // largest avoided index PLUS ONE — `max`, not last-wins, so a smaller
-        // index arriving later must not lower the counter and let
-        // `Sapic.Typing.renameUnique` re-issue a name that already exists.
+        // HS `avoidPreciseVars` does `insertWith max name (idx+1)`.  The seed
+        // is the largest avoided index plus one.  The combine function is
+        // `max`, so a later entry does not simply win.  A smaller index that
+        // arrives later must not lower the counter.  If it did, then
+        // `Sapic.Typing.renameUnique` could issue a name that already exists.
         let mut s = PreciseFreshState::avoid_precise([
             ("x".to_string(), 3),
             ("x".to_string(), 1),
@@ -197,7 +199,7 @@ mod tests {
         assert_eq!(s.fresh_ident("x"), 4);
         assert_eq!(s.fresh_ident("x"), 5);
         assert_eq!(s.fresh_ident("y"), 1);
-        // A name nobody avoided still starts at 0.
+        // A name that nobody avoids still starts at 0.
         assert_eq!(s.fresh_ident("z"), 0);
     }
 

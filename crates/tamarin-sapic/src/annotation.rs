@@ -228,11 +228,12 @@ mod tests {
         assert_eq!(c.lock.map(|AnVar(v)| v), Some(v2));
     }
 
-    /// `toAnProcess` / `toProcess` must CARRY the parsed annotation, not
-    /// re-default it, at every node kind.  Each node here holds a distinct,
-    /// non-default `ProcessParsedAnnotation`, so a lift that dropped
-    /// `parsing_ann` (or a `to_parsed` that read the wrong node's) shows up as
-    /// an inequality rather than defaulting to a match.
+    /// `toAnProcess` / `toProcess` must carry the parsed annotation at every
+    /// node kind.  They must not set it back to the default.  Each node here
+    /// holds a distinct `ProcessParsedAnnotation` that is not the default
+    /// value.  A lift that dropped `parsing_ann` therefore shows up as an
+    /// inequality.  A `to_parsed` that read the annotation of the wrong node
+    /// shows up the same way.  Neither one can default to a match.
     #[test]
     fn round_trip_to_annotated_and_back() {
         let named = |n: &str| ProcessParsedAnnotation {
@@ -251,8 +252,9 @@ mod tests {
             Box::new(Process::Null(named("right"))),
         );
         let annotated: Process<ProcessAnnotation<V>, SapicLVar> = to_annotated(parsed.clone());
-        // The lift wraps rather than replaces: the parsed part is reachable
-        // unchanged at the root, and the translation fields start at default.
+        // The lift wraps the parsed annotation, and does not replace it.  The
+        // parsed part is reachable unchanged at the root.  The translation
+        // fields start at their default values.
         assert_eq!(annotated.annotation().parsing_ann, named("comb"));
         assert!(annotated.annotation().lock.is_none());
         assert_eq!(to_parsed(annotated), parsed);

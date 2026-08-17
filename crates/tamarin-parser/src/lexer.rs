@@ -808,13 +808,14 @@ mod tests {
 
     #[test]
     fn double_quoted_with_escape() {
-        // The leading run is a lexeme boundary: `string_literal` skips it before
-        // looking for the opening quote.
+        // The leading whitespace is a lexeme boundary.  `string_literal` skips
+        // that whitespace before it looks for the opening quote.
         let mut l = Lexer::new(r#" "abc \"x\" def" "#);
         assert_eq!(l.string_literal().as_deref(), Some(r#"abc "x" def"#));
 
-        // Running out of input before the closing quote fails the literal and
-        // backtracks — `"abc` must not be read as the string `abc`.
+        // The literal fails and the lexer backtracks when the input ends
+        // before the closing quote.  The lexer must not read `"abc` as the
+        // string `abc`.
         let mut l = Lexer::new("\"abc");
         assert_eq!(l.string_literal(), None);
         assert_eq!(l.pos(), Pos::ZERO, "cursor moved on failure");
@@ -822,16 +823,17 @@ mod tests {
 
     #[test]
     fn single_quoted_basic() {
-        // The leading run is a lexeme boundary: `single_quoted` skips it before
-        // looking for the opening quote.
+        // The leading whitespace is a lexeme boundary.  `single_quoted` skips
+        // that whitespace before it looks for the opening quote.
         let mut l = Lexer::new(" 'foo'  ");
         assert_eq!(l.single_quoted().as_deref(), Some("foo"));
 
         // `singleQuotedString = singleQuoted $ many1 (noneOf "'\n")`
-        // (Token.hs:452-453): `many1` needs one body char, so `''` fails, and a
-        // newline or EOF before the closing quote leaves the literal unclosed.
-        // Every failure backtracks: parsec's `try`-wrapped lexeme must leave the
-        // cursor for the enclosing alternative.
+        // (Token.hs:452-453).  `many1` needs one body character, so `''`
+        // fails.  A newline or the end of the input before the closing quote
+        // leaves the literal unclosed.  Every failure backtracks.  Parsec
+        // wraps the lexeme in `try`, so the lexeme must leave the cursor for
+        // the enclosing alternative.
         for src in ["''", "'unterminated", "'no\nclose'"] {
             let mut l = Lexer::new(src);
             assert_eq!(l.single_quoted(), None, "must reject {src:?}");
@@ -902,8 +904,8 @@ mod tests {
         assert_eq!(l.export_body(), None);
         assert_eq!(l.pos(), Pos::ZERO, "cursor moved on failure");
 
-        // `many bodyChar` never finds the closing `"` when the input runs out,
-        // and an escaped final quote does not close the body either.
+        // `many bodyChar` never finds the closing `"` when the input ends.
+        // An escaped final quote also does not close the body.
         for src in ["\"abc", "\"abc\\\""] {
             let mut l = Lexer::new(src);
             assert_eq!(l.export_body(), None, "must reject {src:?}");
@@ -911,47 +913,52 @@ mod tests {
         }
     }
 
-    // --- formal_comment: every way the body can fail once `{*` is in ---
+    // --- formal_comment: every way the body can fail after `{*` ---
 
     #[test]
     fn formal_comment_rejects_every_failing_body() {
-        // `many bodyChar <* string "*}"` (Token.hs:379) with `bodyChar`
-        // (Token.hs:382-387) can fail in exactly three ways once the opening
-        // `{*` is consumed.  Each is a rejection upstream too, captured from
-        // the pinned oracle on `theory T\nbegin\n\nnote{* ... \n\nend\n`:
+        // `many bodyChar <* string "*}"` (Token.hs:379) uses `bodyChar`
+        // (Token.hs:382-387).  After the lexer reads the opening `{*`, the
+        // body can fail in exactly three ways.  Upstream rejects each of the
+        // three inputs as well.  The messages below come from the pinned
+        // oracle on `theory T\nbegin\n\nnote{* ... \n\nend\n`:
         //
-        //   `note{* a*b *}`       `'*' -> mzero` stops `many bodyChar` and the
-        //                         required `string "*}"` fails at the `*`:
+        //   `note{* a*b *}`       `'*' -> mzero` stops `many bodyChar`.  The
+        //                         required `string "*}"` then fails at the
+        //                         `*`:
         //                         (line 4, column 9)
         //                         unexpected "b" / expecting "*}"
         //   `note{* a\qb *}`      the `'\\'` branch accepts only `\` or `*`:
         //                         (line 4, column 10)
         //                         unexpected "q" / expecting "\\" or "*"
-        //   `note{* unterminated` `anyChar` fails at EOF, so `string "*}"` does:
+        //   `note{* unterminated` `anyChar` fails at the end of the input, so
+        //                         `string "*}"` fails too:
         //                         (line 5, column 1)
         //                         unexpected end of input / expecting "*}"
         //
-        // PORT-CAPTURED, the `Pos::ZERO` half: HS's `try` covers only
-        // `many1 letter <* string "{*"` (Token.hs:378), so a body failure is a
-        // CONSUMED parsec failure the enclosing item alternation cannot
-        // backtrack past -- which is why every oracle frame above points into
-        // the body.  This lexer instead rewinds to the start of the header, so
-        // `Parser::theory_item` falls through to its keyword alternatives and
-        // reports at the item position: all three inputs give
-        // `unexpected "{"` / `expecting letter or "{*"` (probed at this tip).
-        // The assertions below pin that rewind as the port's current
-        // behaviour; closing the divergence must update them deliberately.
+        // A probe of this port, not the oracle, gives the `Pos::ZERO` half.
+        // HS wraps only `many1 letter <* string "{*"` in `try`
+        // (Token.hs:378).  A body failure is therefore a parsec failure that
+        // has consumed input.  The enclosing item alternation cannot backtrack
+        // past such a failure.  For that reason every oracle frame above
+        // points into the body.  This lexer rewinds to the start of the header
+        // instead.  `Parser::theory_item` then falls through to its keyword
+        // alternatives and reports at the item position.  All three inputs
+        // give `unexpected "{"` / `expecting letter or "{*"` (probed at this
+        // tip).  The assertions below record that rewind as the port's current
+        // behaviour.  Work that closes the divergence must update them
+        // deliberately.
         for src in ["note{* a*b *}", r"note{* a\qb *}", "note{* unterminated"] {
             let mut l = Lexer::new(src);
             assert_eq!(l.formal_comment(), None, "must reject {src:?}");
             assert_eq!(l.pos(), Pos::ZERO, "cursor moved on failure: {src:?}");
         }
 
-        // The accepting counterpart: `\*` and `\\` are the two escapes
-        // `bodyChar` does take, and the body keeps the escaped character
-        // alone.  The oracle loads that theory and reprints the item as
-        // `note{* a*b\c *}` (`prettyFormalComment` re-wraps the stored body
-        // verbatim between `{*` and `*}`).
+        // The case the lexer accepts.  `\*` and `\\` are the two escapes that
+        // `bodyChar` takes.  The body keeps the escaped character and drops
+        // the backslash.  The oracle loads that theory and prints the item
+        // again as `note{* a*b\c *}`.  `prettyFormalComment` puts the stored
+        // body between `{*` and `*}` without any change.
         let mut ok = Lexer::new(r"note{* a\*b\\c *}");
         assert_eq!(
             ok.formal_comment(),

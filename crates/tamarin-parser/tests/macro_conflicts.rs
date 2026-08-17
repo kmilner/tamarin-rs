@@ -151,12 +151,13 @@ fn ghc_error_renders_without_a_parsec_frame() {
     );
 }
 
-/// A macro with no body is not a `fail` of its own: `term` claims the next
-/// identifier — the theory's `end` — as the body variable, so the item
-/// alternation dies at end of input, with the variable's `.`-index attempt
-/// and the macro list's comma in front of the item labels.  A parsec failure
-/// keeps its frame (a `ghc_error` would collapse the whole render to the bare
-/// message, as [`ghc_error_renders_without_a_parsec_frame`] shows).
+/// A macro with no body does not produce a `fail` of its own.  `term` claims
+/// the next identifier as the body variable.  That identifier is the theory's
+/// `end`.  The item alternation therefore dies at the end of the input.  The
+/// `.`-index attempt of the variable and the comma of the macro list come
+/// before the item labels.  A parsec failure keeps its frame.  A `ghc_error`
+/// would instead collapse the whole render to the message on its own, as
+/// [`ghc_error_renders_without_a_parsec_frame`] shows.
 #[test]
 fn a_bodyless_macro_swallows_end_and_dies_at_the_item_position() {
     assert_eq!(

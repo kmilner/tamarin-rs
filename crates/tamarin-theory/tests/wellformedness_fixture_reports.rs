@@ -1,37 +1,42 @@
-//! Byte-pins the WELLFORMEDNESS REPORT each `tests/wellformedness_fixtures/`
-//! theory produces, against the pinned oracle's own `/* WARNING … */` block.
+//! This harness compares the complete wellformedness report of each
+//! `tests/wellformedness_fixtures/` theory, byte for byte.  The reference is
+//! the pinned oracle's own `/* WARNING … */` block.
 //!
-//! The two parser-side harnesses (`tamarin-parser`'s `tests/wellformedness.rs`
-//! and its `examples/wellformedness_fixtures.rs` differential runner) can only
-//! reach `tamarin_parser::wf::check_theory`, so they compare TOPIC NAMES and
-//! must drop the two topics that exist only after elaboration
-//! (`Formula terms`, `Multiplication restriction of rules`).  Three fixtures —
-//! `formula_unguarded`, `multiplication_in_rule_lhs`, `quantifier_wrong_sort` —
-//! pin nothing else, so on the parser side they survive being replaced by an
-//! empty `theory X begin end`.  This harness closes that hole from the crate
-//! where the post-elaboration checks live, and while it is here it holds every
-//! other fixture to its full report bytes rather than to a topic subset.
+//! There are two parser-side harnesses: `tamarin-parser`'s
+//! `tests/wellformedness.rs` and its `examples/wellformedness_fixtures.rs`
+//! differential runner.  Both can only reach
+//! `tamarin_parser::wf::check_theory`.  They therefore compare topic names,
+//! and they must drop the two topics that exist only after elaboration
+//! (`Formula terms`, `Multiplication restriction of rules`).  Three fixtures
+//! pin nothing else: `formula_unguarded`, `multiplication_in_rule_lhs` and
+//! `quantifier_wrong_sort`.  If you replace one of those three with an empty
+//! `theory X begin end`, the parser-side harnesses still pass.  This harness
+//! closes that hole from the crate that holds the post-elaboration checks.  It
+//! also compares the full report bytes of every other fixture, rather than a
+//! subset of the topics.
 //!
-//! The pipeline below is the four `tamarin_theory::translated_wf` entry points
-//! in the order both production drivers call them — `run.rs`'s batch loop and
-//! `tamarin_server::theory_io`'s web load — so this is a third caller of that
-//! shared module rather than a hand-copy of either driver.  Two production
-//! stages are deliberately absent, and [`render_report`] asserts the first
-//! cannot apply:
+//! The pipeline below calls the four `tamarin_theory::translated_wf` entry
+//! points in the order that both production drivers call them.  Those drivers
+//! are `run.rs`'s batch loop and `tamarin_server::theory_io`'s web load.  This
+//! harness is therefore a third caller of that shared module, not a hand-copy
+//! of either driver.  Two production stages are deliberately absent, and
+//! [`render_report`] asserts that the first one cannot apply:
 //!
-//! * the SAPIC / accountability translation `run.rs` runs between the
+//! * the SAPIC / accountability translation that `run.rs` runs between the
 //!   `swap_subterm_convergence_report` and `splice_translated_wf_reports`
-//!   calls — no fixture declares a process, which the render asserts; and
+//!   calls.  No fixture declares a process, and the render asserts this.
 //! * the Maude-backed `Message Derivation Checks` and `Rule variants` blocks
-//!   the batch driver splices afterwards.  Four expectation files therefore
-//!   carry an `# omits:` line naming the derivation-check section the oracle
-//!   prints and this pipeline does not — the same asymmetry `expected.txt`
-//!   documents for the topic-level harnesses.
+//!   that the batch driver splices afterwards.  Four expectation files
+//!   therefore carry an `# omits:` line.  That line names the derivation-check
+//!   section that the oracle prints and this pipeline does not.
+//!   `expected.txt` documents the same asymmetry for the topic-level
+//!   harnesses.
 //!
-//! Expected bytes live one file per fixture in
-//! `tests/wellformedness_fixtures/reports/<fixture>.report`, each opening with
-//! `#` provenance lines that [`expectation_body`] strips and
-//! [`every_report_declares_an_oracle_provenance`] holds to naming the oracle.
+//! The expected bytes live in one file per fixture, at
+//! `tests/wellformedness_fixtures/reports/<fixture>.report`.  Each file opens
+//! with `#` provenance lines.  [`expectation_body`] strips those lines, and
+//! [`every_report_declares_an_oracle_provenance`] requires them to name the
+//! oracle.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -42,16 +47,17 @@ use tamarin_theory::pretty_theory::format_wf_block;
 
 /// Fixtures with no `.report` expectation, each with the reason it has none.
 ///
-/// Both diff-theory checks these three trip render a deliberately
-/// best-effort body: `wf::left_right_rule_report` (wf.rs:2562-2574) and
-/// `wf::reserved_prefix_report` (wf.rs:1489-1505) each carry a comment saying
-/// the faithful HS body needs `prettyProtoRuleE` / HughesPJ `wrappedText`,
-/// which the parser crate cannot reach, and that no corpus input exercises
-/// the path.  Their bytes are consequently NOT the oracle's, so a pin here
-/// would fix a divergence in place instead of pinning upstream.  Each keeps a
-/// parser-reachable topic in `expected.txt` (`Left rule`, `Right rule`,
-/// `Reserved prefixes`), so gutting one of these three still reddens the
-/// parser-side harness.
+/// These three fixtures trip two diff-theory checks, and both checks render a
+/// deliberately best-effort body.  `wf::left_right_rule_report`
+/// (wf.rs:2562-2574) and `wf::reserved_prefix_report` (wf.rs:1489-1505) each
+/// carry a comment.  Those comments say the faithful HS bodies need
+/// `prettyProtoRuleE` and HughesPJ `wrappedText`, which the parser crate
+/// cannot reach.  They also say that no corpus input exercises the path.  The
+/// bytes of these two checks are therefore not the oracle's.  A pin here would
+/// fix a divergence in place instead of pinning upstream.  Each of the three
+/// fixtures keeps a topic in `expected.txt` that the parser side can reach
+/// (`Left rule`, `Right rule`, `Reserved prefixes`).  If you empty one of the
+/// three, the parser-side harness still fails.
 const NO_REPORT_EXPECTATION: &[(&str, &str)] = &[
     (
         "diff_left_right_mismatch",
@@ -67,9 +73,10 @@ const NO_REPORT_EXPECTATION: &[(&str, &str)] = &[
     ),
 ];
 
-/// Minimum number of pinned reports, so mass truncation of the expectation
-/// directory fails loudly even though [`report_roster_is_complete`] accepts
-/// any matched pair.
+/// The minimum number of pinned reports.  [`report_roster_is_complete`]
+/// accepts any matched pair, so it alone cannot detect a mass truncation of
+/// the expectation directory.  This floor fails the test as soon as the
+/// number of pinned reports drops below it.
 const MIN_REPORTS: usize = 18;
 
 fn fixtures_dir() -> PathBuf {
@@ -105,8 +112,8 @@ fn stems(dir: &Path, ext: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// Run one fixture through the theory-level wellformedness pipeline and
-/// render the `/* WARNING … */` block the batch driver would print.
+/// Runs one fixture through the theory-level wellformedness pipeline.  It
+/// returns the `/* WARNING … */` block that the batch driver prints.
 fn render_report(name: &str) -> String {
     let path = fixtures_dir().join(format!("{name}.spthy"));
     let src = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
@@ -137,9 +144,9 @@ fn provenance(text: &str) -> Vec<&str> {
     text.lines().take_while(|l| l.starts_with('#')).collect()
 }
 
-/// An expectation file's body: everything after the leading `#` provenance
-/// lines, with the file's single trailing newline removed (`format_wf_block`
-/// ends at `*/`).
+/// An expectation file's body.  The body is everything after the leading `#`
+/// provenance lines.  This function also removes the file's single trailing
+/// newline, because `format_wf_block` ends at `*/`.
 fn expectation_body(text: &str) -> String {
     let body: String = text
         .lines()
@@ -159,9 +166,9 @@ fn every_fixture_report_matches_its_pinned_block() {
         let text =
             fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         let expected = expectation_body(&text);
-        // A fixture that stopped tripping any check would render
-        // `format_wf_block`'s "All wellformedness checks were successful."
-        // line; refuse to pin that, so an expectation file cannot be
+        // A fixture that trips no check renders `format_wf_block`'s
+        // "All wellformedness checks were successful." line.  This assertion
+        // refuses to pin that line.  An expectation file therefore cannot be
         // regenerated into one that compares nothing.
         assert!(
             expected.starts_with("/*\nWARNING: the following wellformedness checks failed!\n"),
@@ -176,8 +183,8 @@ fn every_fixture_report_matches_its_pinned_block() {
     }
 }
 
-/// Every fixture is either pinned here or listed with a reason, and every
-/// pin/exclusion names a fixture that exists.
+/// Every fixture is either pinned here or listed with a reason.  Every pin and
+/// every exclusion names a fixture that exists.
 #[test]
 fn report_roster_is_complete() {
     let fixtures = fixture_stems();
@@ -218,9 +225,10 @@ fn report_roster_is_complete() {
     );
 }
 
-/// Every expectation file states where its bytes came from, and names the
-/// oracle when it does: a `.report` regenerated from the port would pin the
-/// port against itself and pass while comparing nothing upstream.
+/// Every expectation file states where its bytes come from, and the source it
+/// names is the oracle.  A `.report` regenerated from the port would pin the
+/// port against itself.  Such a file passes without comparing anything against
+/// upstream.
 #[test]
 fn every_report_declares_an_oracle_provenance() {
     let dir = reports_dir();

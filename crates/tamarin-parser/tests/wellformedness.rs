@@ -2,22 +2,24 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! Integration test: every fixture in `tests/wellformedness_fixtures/` must
-//! (a) parse, (b) make `wf::check_theory` emit every topic its `expected.txt`
-//! line lists, and (c) NOT make it emit any topic a `#!` line pins as absent.
-//! Nothing here shells out to `tamarin-prover`, so it runs offline; the
+//! Integration test for the fixtures in `tests/wellformedness_fixtures/`.
+//! Each fixture must parse.  It must make `wf::check_theory` emit every
+//! topic that its `expected.txt` line lists.  It must not make
+//! `wf::check_theory` emit any topic that a `#!` line records as absent.
+//! Nothing here runs `tamarin-prover`, so this test works offline.  The
 //! differential runner (`cargo run -p tamarin-parser --example
-//! wellformedness_fixtures`) holds the same file to the oracle.
+//! wellformedness_fixtures`) compares the same file against the oracle.
 //!
-//! The comparison refuses to pass while comparing nothing: a `.spthy` no
-//! `expected.txt` line mentions, a `#!` line for a fixture no positive line
-//! lists, and a fixture left with neither a parser-level expected topic nor a
-//! forbidden one are each a failure.  What this harness still cannot see is a
-//! fixture whose CONTENT was gutted while its `#!` negatives stayed
-//! satisfiable — an empty theory emits no topic, so it trips no negative.
-//! `tamarin-theory`'s `tests/wellformedness_fixture_reports.rs` covers that
-//! from the crate where the post-elaboration checks live, by pinning each
-//! fixture's whole rendered report against the oracle's bytes.
+//! The comparison must not pass while it compares nothing.  Three cases are
+//! each a failure.  The first is a `.spthy` file that no `expected.txt` line
+//! mentions.  The second is a `#!` line for a fixture that no positive line
+//! lists.  The third is a fixture that has neither a parser-level expected
+//! topic nor a forbidden one.  This test still cannot see a fixture that has
+//! lost its content while its `#!` negatives stay satisfiable.  An empty
+//! theory emits no topic, so it triggers no negative.  `tamarin-theory`'s
+//! `tests/wellformedness_fixture_reports.rs` covers that case from the crate
+//! that holds the post-elaboration checks.  It compares the complete
+//! rendered report of each fixture against the bytes of the oracle.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -25,20 +27,21 @@ use std::path::PathBuf;
 
 use tamarin_parser::{parse_theory, wf};
 
-/// The two topics `wf::check_theory` cannot produce: HS `checkTerms` needs
-/// the elaborated `MaudeSig` for reducible/irreducible funsym
-/// classification, and `multRestrictedReport` (Wellformedness.hs:1108-1113)
-/// needs `abstractRule`'s irreducible symbols plus the HughesPJ rule
-/// renderer, so their ports live in `tamarin_theory::check_terms` /
-/// `tamarin_theory::mult_restricted` and are spliced post-elaboration by
-/// `tamarin_theory::translated_wf`.  They are covered by those modules' own
-/// tests (`tamarin-theory/tests/mult_restricted_report.rs`) and by the corpus
-/// wf gate; the parser-only comparison here drops them from the positive
-/// side.
+/// The two topics that `wf::check_theory` cannot produce.  HS `checkTerms`
+/// needs the elaborated `MaudeSig` to classify a funsym as reducible or
+/// irreducible.  `multRestrictedReport` (Wellformedness.hs:1108-1113) needs
+/// the irreducible symbols of `abstractRule` and the HughesPJ rule renderer.
+/// Their ports therefore live in `tamarin_theory::check_terms` and
+/// `tamarin_theory::mult_restricted`, and `tamarin_theory::translated_wf`
+/// splices them in after elaboration.  The tests of those modules
+/// (`tamarin-theory/tests/mult_restricted_report.rs`) and the corpus wf gate
+/// cover these two topics.  The parser-only comparison here drops them from
+/// the positive side.
 const POST_ELABORATION_TOPICS: [&str; 2] = ["Formula terms", "Multiplication restriction of rules"];
 
-/// Minimum roster size, so mass truncation of the corpus fails loudly even
-/// though [`fixture_roster_is_complete`] accepts any file/line pair.
+/// The minimum size of the roster.  [`fixture_roster_is_complete`] accepts
+/// any pair of a file and a line.  This bound is therefore what makes the
+/// test fail when the corpus loses most of its fixtures.
 const MIN_FIXTURES: usize = 20;
 
 fn fixtures_dir() -> PathBuf {
@@ -51,10 +54,10 @@ fn fixtures_dir() -> PathBuf {
         .join("wellformedness_fixtures")
 }
 
-/// Topic titles compare modulo surrounding whitespace: HS carries a
-/// source-literal trailing space on the LHS-usage title and a leading one on
-/// ` Formula guardedness`, neither of which a comma-separated `expected.txt`
-/// entry can hold — its fields are `trim`ed on parse.
+/// The comparison of topic titles ignores the whitespace around a title.  HS
+/// keeps a trailing space in the source literal of the LHS-usage title, and a
+/// leading space in ` Formula guardedness`.  A comma-separated `expected.txt`
+/// entry can hold neither space, because the parse `trim`s its fields.
 fn norm(topic: &str) -> String {
     topic.trim().to_string()
 }
@@ -63,22 +66,23 @@ fn norm(topic: &str) -> String {
 struct Fixture {
     name: String,
     is_diff: bool,
-    /// Topics `wf::check_theory` must emit (subset check: a fixture may
-    /// legitimately emit more).
+    /// The topics that `wf::check_theory` must emit.  The test compares
+    /// subsets.  A fixture may emit more topics, and that is not a failure.
     expected: BTreeSet<String>,
-    /// Topics it must NOT emit — the `#!` lines, which catch a false
-    /// positive the way `expected` catches a missing report.
+    /// The topics that it must not emit.  These come from the `#!` lines.
+    /// They catch a false positive, as `expected` catches a missing report.
     forbidden: BTreeSet<String>,
 }
 
 struct Corpus {
     fixtures: Vec<Fixture>,
-    /// `#!` names with no positive `expected.txt` line: pins nothing enforces.
+    /// The `#!` names that have no positive `expected.txt` line.  Nothing
+    /// enforces these expectations.
     unlisted_negatives: Vec<String>,
 }
 
-/// Parse `expected.txt`.  `#!<name> [flags] : <topics>` is a negative
-/// expectation; every other `#` line is a comment; anything else is a
+/// Parse `expected.txt`.  A `#!<name> [flags] : <topics>` line is a negative
+/// expectation.  Every other `#` line is a comment.  Any other line is a
 /// positive expectation.
 fn load_corpus() -> Corpus {
     let dir = fixtures_dir();
@@ -135,7 +139,7 @@ fn load_corpus() -> Corpus {
     }
 }
 
-/// The `.spthy` file stems present in the fixture directory.
+/// The stems of the `.spthy` files in the fixture directory.
 fn fixture_files() -> BTreeSet<String> {
     fs::read_dir(fixtures_dir())
         .expect("fixture dir")
@@ -199,8 +203,9 @@ fn every_fixture_parses_and_matches() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// A `.spthy` no `expected.txt` line mentions is a fixture nothing checks,
-/// and a `#!` line for an unlisted fixture is a pin nothing enforces.
+/// Nothing checks a `.spthy` file that no `expected.txt` line mentions.
+/// Nothing enforces a `#!` line for a fixture that `expected.txt` does not
+/// list.
 #[test]
 fn fixture_roster_is_complete() {
     let corpus = load_corpus();

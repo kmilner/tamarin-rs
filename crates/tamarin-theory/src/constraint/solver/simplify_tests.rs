@@ -9,10 +9,11 @@ use tamarin_term::maude_sig::pair_maude_sig;
 
 use crate::test_maude::maude_path;
 
-/// A maude speaking the pair signature, or `None` when this run accepts the
-/// no-maude skip ([`maude_path`] panics on a set-but-dangling `MAUDE_PATH`).
-/// A resolved maude that will not START is the same misconfiguration, so
-/// that case panics rather than skipping every test in this file.
+/// Returns a maude that speaks the pair signature.  Returns `None` when this
+/// run accepts the no-maude skip.  [`maude_path`] panics when `MAUDE_PATH` is
+/// set but points at nothing.  A maude that resolves but does not start is
+/// the same misconfiguration.  That case panics.  It does not skip every test
+/// in this file.
 fn maude() -> Option<tamarin_term::maude_proc::MaudeHandle> {
     maude_with_sig(pair_maude_sig())
 }
@@ -44,9 +45,9 @@ fn simplify_empty_is_no_op() {
     let mut r = Reduction::new(&ctx, System::empty());
     let before = r.sys.clone();
     simplify_system(&mut r);
-    // Every CR-rule pass runs over an empty system; none of them may
-    // synthesise a constraint out of nothing (`assert!(goals.is_empty())`
-    // alone would miss a pass that invented a node, edge or formula).
+    // Every CR-rule pass runs over an empty system.  No pass may make a
+    // constraint out of nothing.  `assert!(goals.is_empty())` alone does not
+    // catch a pass that adds a node, an edge or a formula.
     assert!(
         r.sys == before,
         "simplify on an empty system must invent nothing, got {:?}",
@@ -56,12 +57,12 @@ fn simplify_empty_is_no_op() {
 
 /// CR-rule *N6* `exploitUniqueMsgOrder` (Simplify.hs:166-169) inserts
 /// `i_kd < i_ku` for every message that is both a KD conclusion and a KU
-/// action.  HS's `F.mapM_ insertLess … M.intersectionWith` is
-/// UNCONDITIONAL, so a single node that both concludes `KD(m)` and carries
-/// a `KU(m)` action gets a REFLEXIVE `i < i` — and that self-edge is what
-/// makes the order relation cyclic, so the contradiction check kills the
-/// case.  An `i_kd != i_ku` guard here reads as a harmless
-/// redundant-self-ordering cleanup but keeps a spurious source case for
+/// action.  HS's `F.mapM_ insertLess … M.intersectionWith` has no condition.
+/// A single node can both conclude `KD(m)` and carry a `KU(m)` action.  Such
+/// a node gets the reflexive order `i < i`.  That self-edge makes the order
+/// relation cyclic.  The contradiction check then discards the case.  An
+/// `i_kd != i_ku` guard here looks like a harmless cleanup of a redundant
+/// self-ordering.  In fact such a guard keeps a spurious source case for
 /// every wf-invalid rule that uses the reserved KU/KD facts
 /// (regression/trace/issue515.spthy).
 #[test]
@@ -89,7 +90,7 @@ fn exploit_unique_msg_order_inserts_the_reflexive_self_edge() {
             .collect()
     };
 
-    // One node, both roles: HS orders it before ITSELF.
+    // One node in both roles.  HS orders that node before itself.
     let mut sys = System::empty();
     sys.add_node(
         node(1),
@@ -112,7 +113,8 @@ fn exploit_unique_msg_order_inserts_the_reflexive_self_edge() {
         crate::constraint::constraints::Reason::NormalForm
     );
 
-    // Two nodes: the ordinary KD-before-KU edge, oriented KD → KU.
+    // Two nodes.  The pass adds the ordinary KD-before-KU edge.  The edge
+    // goes from the KD node to the KU node.
     let mut sys = System::empty();
     sys.add_node(
         node(1),
@@ -136,8 +138,9 @@ fn exploit_unique_msg_order_inserts_the_reflexive_self_edge() {
     exploit_unique_msg_order(&mut r);
     assert_eq!(pairs(&r), vec![(1, 2)], "KD node orders before KU node");
 
-    // A KD conclusion with no matching KU action orders nothing: the pass
-    // intersects the two term maps, it does not order every node pair.
+    // A KD conclusion with no matching KU action gives no order at all.  The
+    // pass intersects the two term maps.  It does not order every pair of
+    // nodes.
     let mut sys = System::empty();
     sys.add_node(
         node(1),
@@ -333,12 +336,13 @@ fn partial_atom_valuation_last_returns_none_when_successor_not_in_trace() {
              `any (isInTrace sys) (nodesAfter i)` guard."
     );
 
-    // Positive controls — without them a `partialAtomValuation` that
-    // answered `None` for EVERY `Last` atom would pass the assertion above.
+    // The next two steps are positive controls.  A `partialAtomValuation`
+    // that answers `None` for every `Last` atom also passes the assertion
+    // above.  These controls exclude that case.
     //
-    // (1) Put `m` in the trace via an unsolved Action goal (`isInTrace`'s
-    //     `unsolvedActionAtoms` clause).  Now `n` has an in-trace successor,
-    //     so `Last n` is false in every model.
+    // (1) Put `m` in the trace with an unsolved Action goal.  This is the
+    //     `unsolvedActionAtoms` clause of `isInTrace`.  Now `n` has a
+    //     successor in the trace.  So `Last n` is false in every model.
     sys.add_goal(crate::constraint::constraints::Goal::Action(
         m,
         crate::fact::LNFact::new(
@@ -352,7 +356,8 @@ fn partial_atom_valuation_last_returns_none_when_successor_not_in_trace() {
         "an in-trace successor of `n` refutes `Last n`"
     );
 
-    // (2) `isLast sys n` is checked FIRST and wins outright.
+    // (2) The code checks `isLast sys n` first.  That check decides the
+    //     result on its own.
     sys.set_last_atom(Some(n));
     assert_eq!(
         last_n(&sys),
@@ -408,8 +413,9 @@ fn mk_var_l(name: &str, idx: u64, sort: tamarin_term::lterm::LSort) -> tamarin_t
     ))
 }
 
-/// The `(name, idx) → subject term` bindings the caller reads back off a
-/// match; ordered so a whole-substitution assertion is stable.
+/// Returns the `(name, idx) → subject term` bindings that the caller reads
+/// back from a match.  The result is sorted, so an assertion on the complete
+/// substitution is stable.
 fn subst_pairs(s: &crate::guarded::VarSubst) -> Vec<(String, u64, String)> {
     let mut out: Vec<(String, u64, String)> = s
         .iter()
@@ -463,12 +469,12 @@ fn match_atom_via_maude_simple_var_to_var() {
         &i_node,
         &[sys_arg],
     );
-    // One matcher binding BOTH pattern vars: the time directly (the
-    // matcher sets it before calling Maude) and the fact argument
-    // structurally (`solveMatchLTerm`'s pure phase, before Maude is
-    // consulted at all).  Asserting only "a match exists" would accept a
-    // matcher that dropped `k`, and the caller substitutes the guarded
-    // body with exactly these bindings.
+    // There is one matcher, and it binds both pattern vars.  It binds the
+    // time directly, because the matcher sets the time before it calls
+    // Maude.  It binds the fact argument structurally, in the pure phase of
+    // `solveMatchLTerm`, before it consults Maude at all.  A check for only
+    // "a match exists" also accepts a matcher that drops `k`.  The caller
+    // substitutes the guarded body with exactly these bindings.
     assert_eq!(substs.len(), 1);
     assert_eq!(
         subst_pairs(&substs[0]),
@@ -542,11 +548,11 @@ fn match_atom_via_maude_pattern_with_pair_against_pair() {
         &i_node,
         &[sys_pair],
     );
-    // The matcher descends INTO the pair, binding each component var to
-    // the corresponding subject component — `a` and `b` must land on
-    // distinct subject terms, in position order.  A matcher that bound the
-    // whole pair to `a`, or bound the components the wrong way round, would
-    // still "match".
+    // The matcher goes into the pair.  It binds each component var to the
+    // subject component at the same position.  `a` and `b` must get distinct
+    // subject terms, in position order.  A matcher that binds the complete
+    // pair to `a` also reports a match.  So does a matcher that binds the two
+    // components the wrong way round.
     assert_eq!(substs.len(), 1);
     assert_eq!(
         subst_pairs(&substs[0]),
@@ -713,7 +719,7 @@ fn simp_split_neg_ac_recurse_emits_ac_formula() {
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::{f_app_ac, Term};
     use tamarin_term::vterm::Lit;
-    // Multiset signature so `++` (AC Union) is a non-reducible AC head.
+    // The multiset signature makes `++` (AC Union) a non-reducible AC head.
     let h = match maude_with_sig(tamarin_term::maude_sig::mset_maude_sig()) {
         Some(h) => h,
         None => return,
@@ -950,7 +956,7 @@ fn ku_action_uniqueness_unchanged_when_terms_differ() {
     );
 }
 
-/// `x = 'z'` as one `Guarded`, parameterised by the sort hint on `x`.
+/// Builds `x = 'z'` as one `Guarded`.  The sort hint on `x` is a parameter.
 fn eq_pub_lit_with_hint(sort: tamarin_parser::ast::SortHint) -> crate::guarded::Guarded {
     use crate::guarded::{BVar, GAtom, GTerm, Guarded};
     Guarded::Atom(GAtom::Eq(
@@ -964,9 +970,10 @@ fn eq_pub_lit_with_hint(sort: tamarin_parser::ast::SortHint) -> crate::guarded::
     ))
 }
 
-/// `dedupe_formulas_pass` compares on the `normalize_sort_hints` canonical
-/// form, not on raw `Guarded` equality: `x:Msg = 'z'` and `x:Untagged = 'z'`
-/// are ONE formula, and the survivor is the first-seen `Arc`.
+/// `dedupe_formulas_pass` compares the canonical form from
+/// `normalize_sort_hints`.  It does not compare raw `Guarded` equality.
+/// `x:Msg = 'z'` and `x:Untagged = 'z'` are therefore one formula.  The pass
+/// keeps the first `Arc` that it sees.
 #[test]
 fn dedupe_formulas_collapses_sort_hint_variants_keeping_the_first() {
     let ctx = match ctx() {
@@ -977,9 +984,11 @@ fn dedupe_formulas_collapses_sort_hint_variants_keeping_the_first() {
     use tamarin_parser::ast::SortHint;
     let f1 = eq_pub_lit_with_hint(SortHint::Msg);
     let f2 = eq_pub_lit_with_hint(SortHint::Untagged);
-    // Both halves of the premise, pinned so a constructor drift that made the
-    // pair raw-equal (dedupe trivially fires) or canon-unequal (dedupe never
-    // fires) fails here rather than silently emptying the test below.
+    // These two assertions pin both halves of the premise.  A change to the
+    // constructors can make the pair raw-equal.  Dedupe then fires for a
+    // trivial reason.  Such a change can also make the canonical forms
+    // unequal.  Dedupe then never fires.  Both cases fail here.  Without
+    // these assertions the test below quietly checks nothing.
     assert_ne!(f1, f2, "the pair must be distinct under raw `Guarded` `Eq`");
     assert_eq!(
         normalize_sort_hints(&f1),
@@ -999,8 +1008,9 @@ fn dedupe_formulas_collapses_sort_hint_variants_keeping_the_first() {
     );
 }
 
-/// The other side of the canonicalisation: hints that survive
-/// `normalize_sort_hints` keep the formulas apart, so nothing is dropped.
+/// This is the other side of the canonicalisation.  Sort hints that survive
+/// `normalize_sort_hints` keep the formulas apart.  The pass then drops
+/// nothing.
 #[test]
 fn dedupe_formulas_keeps_formulas_whose_canons_differ() {
     let ctx = match ctx() {

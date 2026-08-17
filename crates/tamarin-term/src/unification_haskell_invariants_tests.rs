@@ -367,8 +367,8 @@ fn old_and_factored_unify_agree_on_same_sort_var_var_orientation() {
     // Both paths follow Haskell `unifyRaw` (Unification.hs:273-281, see line 276):
     //   `if vl < vr then elim vr l else elim vl r`
     // i.e. LARGER-idx becomes KEY, smaller-idx becomes value.
-    // The exact pattern from foo_eligibility's saturate: `t.1` is a stable
-    // pattern var, `e.10` is rule-internal.
+    // This is the exact pattern from foo_eligibility's saturate.  `t.1` is a
+    // stable pattern var, and `e.10` is rule-internal.
     let small = msg_var("t", 1); // small idx, "stable"
     let large = msg_var("e", 10); // large idx
 

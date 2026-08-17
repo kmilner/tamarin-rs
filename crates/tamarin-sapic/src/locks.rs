@@ -245,11 +245,12 @@ mod tests {
         assert_eq!(ia.unlock.expect("insert annotated as unlock").0.idx, 0);
     }
 
-    /// `WFRep` and `WFPar` are DISTINCT tags upstream (`prettyWFLockTag`,
-    /// Sapic/Exceptions.hs:32-34) and select different wording in the thrown
-    /// `ProcessNotWellformed`, so the two arms must not collapse into one
-    /// error.  Both are reachable only through a lock whose scope is left
-    /// open, and the public entry point must refuse the process either way.
+    /// `WFRep` and `WFPar` are different tags upstream (`prettyWFLockTag`,
+    /// Sapic/Exceptions.hs:32-34). They select different wording in the
+    /// `ProcessNotWellformed` error that upstream throws. The two arms must
+    /// therefore not collapse into one error. A lock whose scope stays open is
+    /// the only way to reach either tag. The public entry point must refuse
+    /// the process in both cases.
     #[test]
     fn parallel_and_replication_below_lock_error_distinctly() {
         // lock 's'; ( 0 | 0 )  — WFPar

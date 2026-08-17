@@ -519,11 +519,11 @@ mod tests {
     #[test]
     fn simplify_sl0_is_identity() {
         let mut sys = System::empty();
-        // The redundant `a < c` is exactly what SL2/SL3 drop, so SL0 keeping
-        // it is the whole claim — and each atom is compared WHOLE, reason tag
-        // included: the tag picks the rendered edge colour, so a pass that
-        // rewrote reasons while keeping the count would be an identity only
-        // by length.
+        // SL2 and SL3 drop the redundant `a < c`.  This test checks that SL0
+        // keeps it.  The test also compares each atom completely, including
+        // its reason tag.  The tag selects the colour of the rendered edge.
+        // A pass that rewrote the reasons but kept the count would be an
+        // identity by length only.
         sys.content_mut()
             .less_atoms
             .push(LessAtom::new(nid("a", 0), nid("b", 0), Reason::Fresh));
@@ -589,11 +589,12 @@ mod tests {
     }
 
     /// `#i.1 Source -> #i.2 <middle> -> #i.3 Sink`, compressed.  Both ends
-    /// carry an action, so `eligibleRule` rejects them and only the middle
-    /// node is ever a hiding candidate.  The edges matter as much as the
-    /// rules: `tryHideRule` bails unless the in/out edge counts EQUAL the
-    /// premise/conclusion counts (Simplification.hs:125-152), so an isolated
-    /// node survives whatever its rule looks like.
+    /// carry an action, so `eligibleRule` rejects them.  Only the middle node
+    /// is ever a candidate for hiding.  The edges matter as much as the
+    /// rules.  `tryHideRule` stops unless the counts of the in and out edges
+    /// equal the counts of the premises and conclusions
+    /// (Simplification.hs:125-152).  An isolated node therefore survives,
+    /// whatever its rule looks like.
     fn compressed_chain(middle: RuleACInst) -> (RenderSystem, [NodeId; 3]) {
         let kvar: LNTerm = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
         let end = |name: &'static str, prems: Vec<crate::fact::LNFact>| {
@@ -624,8 +625,9 @@ mod tests {
         (compress_system(RenderSystem::from_prover(sys)), ids)
     }
 
-    /// A one-premise/one-conclusion/no-action proto rule named `Transfer`,
-    /// plus `acts` — the middle of [`compressed_chain`].
+    /// A proto rule named `Transfer` with one premise, one conclusion and no
+    /// action of its own, plus `acts`.  This rule is the middle of
+    /// [`compressed_chain`].
     fn transfer_rule(acts: Vec<crate::fact::LNFact>) -> RuleACInst {
         let kvar: LNTerm = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
         Rule::new(
@@ -648,7 +650,8 @@ mod tests {
             "Transfer node should have been hidden: {:?}",
             out.nodes.iter().map(|(id, _)| id).collect::<Vec<_>>()
         );
-        // The two edges it sat on are replaced by the bridging i:1 -> i:3.
+        // One bridging edge i:1 -> i:3 replaces the two edges that the hidden
+        // node sat on.
         assert!(
             out.edges.iter().any(|e| e.src.0 == n1 && e.tgt.0 == n3),
             "Expected i:1 -> i:3 edge in: {:?}",
@@ -661,10 +664,11 @@ mod tests {
 
     #[test]
     fn compress_preserves_node_with_actions() {
-        // The SAME chain as `compress_hides_simple_proto_node`, whose middle
-        // node differs only by carrying an action: `eligibleRule`'s
-        // `null (get rActs ru)` is the single bit under test, so the node's
-        // survival cannot be explained by the edge-count bail-out.
+        // This is the same chain as `compress_hides_simple_proto_node`.  Its
+        // middle node differs only because it carries an action.
+        // `eligibleRule`'s `null (get rActs ru)` is the single bit under
+        // test.  The edge-count condition therefore cannot explain the
+        // survival of the node.
         let kvar: LNTerm = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
         let (out, [_, n2, _]) = compressed_chain(transfer_rule(vec![out_fact(kvar)]));
         assert!(
@@ -676,8 +680,9 @@ mod tests {
 
     #[test]
     fn compress_hides_coerce_node() {
-        // A coerce rule is eligible through the `isCoerceRule` disjunct, so it
-        // is hidden despite its own action row being irrelevant.
+        // A coerce rule is eligible through the `isCoerceRule` disjunct.  The
+        // compression therefore hides it, and its own action row does not
+        // matter.
         let kvar: LNTerm = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
         let coerce = Rule::new(
             RuleInfo::Intr(IntrRuleACInfo::Coerce),

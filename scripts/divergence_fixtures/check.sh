@@ -40,8 +40,9 @@ census_fixture_dir
 
 # Extra assertions for a `diverge` fixture: the SHAPE of the divergence, not
 # just its existence, so an unrelated change to either side cannot leave the
-# fixture green by accident.  A `diverge` row with no arm here would assert
-# nothing beyond "the two files differ", so the fallthrough is a failure.
+# fixture in a passing state for the wrong reason.  A `diverge` row with no arm
+# here asserts nothing more than "the two files differ".  The fallthrough is
+# therefore a failure.
 divergence_shape() {
     case "$1.$2" in
     ac_marker_collapse.theory)
@@ -60,11 +61,11 @@ divergence_shape() {
 }
 
 # `check_slice <name> <slice> <mode> < raw` — compare one block of one load.
-# A reference is required to be NON-EMPTY (`-s`, not `-f`): an empty one matches
-# an engine that printed nothing at all, which is the one way this comparison
-# can pass while asserting nothing.  capture.sh writes each reference by
-# redirection and unlinks it again when the slice comes out empty, so a 0-byte
-# file here is a capture that was killed in between.
+# A reference must be non-empty (`-s`, not `-f`).  An empty reference matches
+# an engine that printed nothing at all.  That is the one way this comparison
+# can pass while it asserts nothing.  capture.sh writes each reference by
+# redirection, and it unlinks the file again when the slice comes out empty.
+# A 0-byte file here is therefore a capture that was killed in between.
 check_slice() {
     local name="$1" sl="$2" mode="$3" hs="$expected/$1.$2.hs.txt" ref got
     if [ ! -s "$hs" ]; then

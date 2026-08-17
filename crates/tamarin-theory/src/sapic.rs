@@ -459,12 +459,12 @@ mod tests {
         assert_eq!(pretty_position(&vec![1, 2, 1]), "121");
     }
 
-    /// `untyped` is HS `SapicLVar v Nothing` — the type tag is ABSENT, not
-    /// the default type's spelling.  The distinction is observable:
-    /// `pretty_function_typing_info` prints `defaultSapicTypeS` ("Any") for
-    /// a `None`, and the SAPIC typing pass treats a `Some` as a user
-    /// declaration it must respect.  `to_lvar` drops whichever tag is
-    /// present and hands back the `LVar` untouched.
+    /// `untyped` is HS `SapicLVar v Nothing`. The type tag is absent. It does
+    /// not hold the spelling of the default type. The difference is visible in
+    /// two places. `pretty_function_typing_info` prints `defaultSapicTypeS`
+    /// ("Any") for a `None`. The SAPIC typing pass treats a `Some` as a user
+    /// declaration that it must respect. `to_lvar` drops whichever tag is
+    /// present and returns the `LVar` unchanged.
     #[test]
     fn sapic_lvar_untyped_has_no_type_tag_and_to_lvar_drops_it() {
         let v = LVar::new("x", LSort::Msg, 0);
@@ -472,17 +472,19 @@ mod tests {
         assert_eq!(sv.stype, None);
         assert_eq!(sv.stype, default_sapic_type());
         assert_eq!(sv.to_lvar(), v);
-        // A tagged variable keeps its tag but still yields the bare `LVar`.
+        // A tagged variable keeps its tag. `to_lvar` still returns the `LVar`
+        // without the tag.
         let typed = SapicLVar::new(v, default_sapic_node_type());
         assert_eq!(typed.stype, Some("node".to_string()));
         assert_eq!(typed.to_lvar(), v);
         assert_ne!(typed, sv, "the type tag is part of the variable's identity");
     }
 
-    /// `<>` on the annotation is field-wise but NOT uniformly: names
-    /// CONCATENATE left-to-right, the location is RIGHT-biased (an inner
-    /// `at`-location overrides an outer one, and only a `None` on the right
-    /// preserves the left's), and the back-substitutions COMPOSE.
+    /// `<>` on the annotation works field by field, but each field behaves
+    /// differently. The names concatenate from left to right. The location
+    /// comes from the right side. An inner `at`-location therefore overrides
+    /// an outer one. Only a `None` on the right keeps the location of the
+    /// left. The back-substitutions compose.
     #[test]
     fn parsed_annotation_append_concats_names_and_right_biases_location() {
         let loc = |n: &str| {
@@ -509,9 +511,9 @@ mod tests {
         ));
         assert_eq!(merged.process_names, vec!["A", "B"]);
         assert_eq!(merged.location, Some(loc("l2")), "location is right-biased");
-        // `compose` (`self . other`), not a union: the LEFT `y ~> z` rewrites
-        // the right's range, so `x ~> y` becomes `x ~> z`.  A union would
-        // leave `x ~> y`.
+        // The operation is `compose` (`self . other`), not a union. The left
+        // `y ~> z` rewrites the range of the right side, so `x ~> y` becomes
+        // `x ~> z`. A union keeps `x ~> y`.
         assert_eq!(
             merged
                 .back_substitution
@@ -523,8 +525,8 @@ mod tests {
             )))
         );
 
-        // A `None` on the right keeps the left's location; a `Some` on the
-        // right wins even when the left has none.
+        // A `None` on the right keeps the location of the left. A `Some` on
+        // the right wins even when the left has no location.
         assert_eq!(
             ann("A", Some(loc("l1")), Subst::empty())
                 .append(ann("B", None, Subst::empty()))
@@ -540,9 +542,9 @@ mod tests {
         assert_eq!(ProcessParsedAnnotation::empty(), ann_empty());
     }
 
-    /// `empty()` and `Default` must stay the same value — `GoodAnnotation::
-    /// default_annotation` routes through `Default`, `Process::null` sites
-    /// through `empty()`.
+    /// `empty()` and `Default` must stay the same value.
+    /// `GoodAnnotation::default_annotation` goes through `Default`. The
+    /// `Process::null` call sites go through `empty()`.
     fn ann_empty() -> ProcessParsedAnnotation {
         <ProcessParsedAnnotation as GoodAnnotation>::default_annotation()
     }

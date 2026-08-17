@@ -1,36 +1,39 @@
 #!/bin/bash
-# Render a HughesPJ document with the REAL `pretty-1.1.3.6` — the library
-# `crates/tamarin-theory/src/pretty_hpj.rs` ports — so an HPJ layout
-# expectation can be DERIVED instead of captured from the port.
+# Render a HughesPJ document with the actual `pretty-1.1.3.6` library.
+# `crates/tamarin-theory/src/pretty_hpj.rs` ports that library.  This script
+# lets you derive an HPJ layout expectation instead of capturing it from the
+# port.
 #
 # Why this exists.  Every other oracle in `scripts/` is the patched
-# tamarin-prover binary, and reaching a specific `Doc` shape through it means
-# finding a theory that produces one.  HPJ is the exception: the layout
-# engine is an ordinary Haskell library, GHC 9.6.7 ships exactly the version
-# the port targets, and a `Doc` expression is three lines.  So the raw
-# combinator pins in `pretty_hpj_tests.rs` cost a compile each rather than a
-# corpus hunt, and "wrapping happened" assertions (`contains('\n')`,
-# `starts_with`) have no excuse.
+# tamarin-prover binary.  To reach a given `Doc` shape through that binary,
+# you must find a theory that produces the shape.  HPJ is the exception.  The
+# layout engine is an ordinary Haskell library.  GHC 9.6.7 ships exactly the
+# version that the port targets.  A `Doc` expression is three lines long.
+# Therefore each raw combinator pin in `pretty_hpj_tests.rs` costs one compile
+# instead of a search through the corpus.  There is then no reason to write an
+# assertion that only shows that wrapping occurred (`contains('\n')`,
+# `starts_with`).
 #
 # Usage:
 #   scripts/hpj_oracle.sh 'sep [text "aaaaaa", text "bbbbbb"]'    # 110/73
 #   scripts/hpj_oracle.sh -w 5 -r 5 'sep [text "aaaaaa", text "bbbbbb"]'
 #   scripts/hpj_oracle.sh --one-line '<expr>'
 #   scripts/hpj_oracle.sh --file Cases.hs   # a whole Main, run verbatim
-#   scripts/hpj_oracle.sh --self-test       # prove the toolchain first
+#   scripts/hpj_oracle.sh --self-test       # check the toolchain first
 #   scripts/hpj_oracle.sh --emit-template   # the generated Main, to stdout
 #
-# The expression is Haskell, evaluated with `Text.PrettyPrint.HughesPJ` in
-# scope and `Prelude`'s `<>` hidden (HughesPJ exports its own).  Read it from
-# stdin by passing `-` instead.
+# The expression is Haskell.  The script evaluates it with
+# `Text.PrettyPrint.HughesPJ` in scope, and with `Prelude`'s `<>` hidden
+# because HughesPJ exports its own `<>`.  To read the expression from stdin,
+# pass `-` in its place.
 #
-# Widths.  `-w`/`-r` are lineLength and RIBBON WIDTH, the same two numbers
-# `Doc::render_with(w, r)` takes; the style's `ribbonsPerLine` is `w/r`, which
-# is how the port's constants are stated too (`RIBBON = round(110/1.5) = 73`).
-# The defaults, 110/73, are HS's CONSOLE width (`Main/Console.hs`'s
-# `renderDoc`) and so are what a bare `Doc::render()` uses on the CLI path;
-# the interactive server renders at HughesPJ's own default 100/67, and
-# `pretty_hpj.rs` names both pairs.
+# Widths.  `-w` sets lineLength and `-r` sets the ribbon width.  These are
+# the same two numbers that `Doc::render_with(w, r)` takes.  The style's
+# `ribbonsPerLine` is `w/r`.  The port states its constants the same way
+# (`RIBBON = round(110/1.5) = 73`).  The defaults, 110/73, are HS's console
+# width (`renderDoc` in `Main/Console.hs`).  They are therefore what a bare
+# `Doc::render()` uses on the CLI path.  The interactive server renders at
+# HughesPJ's own default of 100/67.  `pretty_hpj.rs` names both pairs.
 #
 # pretty_hpj.rs       this script
 # ------------------- ------------------------------------------------------
@@ -38,37 +41,42 @@
 # render()            the defaults, 110/73         (CLI path)
 # render(), server    -w 100 -r 67                 (after set_display_width)
 # one_line_render()   --one-line                   (OneLineMode)
-# render_at(..)       NO public-API equivalent: it calls pretty's internal
-#                     `get1` with a starting column, which HughesPJ does not
-#                     export.  Derive the surrounding Doc instead.
+# render_at(..)       no equivalent in the public API.  It calls pretty's
+#                     internal `get1` with a starting column, and HughesPJ
+#                     does not export `get1`.  Derive the surrounding Doc
+#                     instead.
 #
 # Env:
-#   HPJ_GHC=<path>          compiler to use.  Set-but-unusable is a HARD
-#                           fail, never a silent fall-through to another one.
+#   HPJ_GHC=<path>          the compiler to use.  A compiler that is set but
+#                           unusable stops the script with an error.  The
+#                           script never falls through silently to a
+#                           different compiler.
 #   HPJ_ALLOW_ANY_PRETTY=1  proceed when the resolved compiler's `pretty` is
-#                           not 1.1.3.6.  Off by default because a document
-#                           rendered by a different layout engine is not an
-#                           oracle byte — it is a plausible-looking wrong
-#                           answer, and it would enter the tree as a pin.
+#                           not 1.1.3.6.  This is off by default.  A document
+#                           that a different layout engine renders is not an
+#                           oracle byte.  It is a wrong answer that looks
+#                           correct, and it would enter the tree as a pin.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# The shared plumbing, for the OOM prologue; a consumer that cannot read it
-# exits 2 rather than falling back to a private copy (see gate_common.sh).
+# The shared helper file, which supplies the OOM prologue.  A consumer that
+# cannot read the file exits 2.  It does not fall back to a private copy.
+# See gate_common.sh.
 [ -r "$SCRIPT_DIR/gate_common.sh" ] || {
     echo "cannot read $SCRIPT_DIR/gate_common.sh" >&2; exit 2; }
 # shellcheck source=gate_common.sh
 . "$SCRIPT_DIR/gate_common.sh"
 
-# The pretty the port reproduces.  `pretty_hpj.rs` cites this version by name
-# throughout ("pretty-1.1.3.6 `Text.PrettyPrint.HughesPJ`"), and its layout
-# has changed across releases, so the version is part of what makes an answer
-# here an oracle byte at all.
+# The version of pretty that the port reproduces.  `pretty_hpj.rs` cites this
+# version by name throughout ("pretty-1.1.3.6 `Text.PrettyPrint.HughesPJ`").
+# The layout of pretty changes between releases.  The version is therefore
+# part of what makes an answer from this script an oracle byte.
 WANT_PRETTY=1.1.3.6
-# The GHC that ships it here: the one `./setup.sh testing` already installs to
-# build the oracle, so no second toolchain is needed.  Tried only after
-# $HPJ_GHC and a `ghc` on PATH, so an operator's own wins over this path --
-# the same last-resort shape as `gate_common.sh`'s linuxbrew maude.
+# The GHC that ships that version here.  `./setup.sh testing` already installs
+# this GHC to build the oracle, so no second toolchain is necessary.  The
+# script tries it only after $HPJ_GHC and after a `ghc` on PATH.  An operator's
+# own compiler therefore wins over this path.  This is the same last-resort
+# order that `gate_common.sh` uses for the linuxbrew maude.
 STACK_GHC="${HOME:-/root}/.stack/programs/x86_64-linux/ghc-tinfo6-9.6.7/bin/ghc"
 
 W=110
@@ -105,9 +113,10 @@ case "$W$R" in *[!0-9]*) die "-w and -r take positive integers (got w=$W r=$R)" 
 # --- toolchain resolution ----------------------------------------------------
 resolve_ghc() {
     if [ -n "${HPJ_GHC:-}" ]; then
-        # Set-but-unusable is the failure the maude resolver exists to stop:
-        # falling through to a DIFFERENT compiler would answer from a pretty
-        # the operator did not choose, and say nothing about it.
+        # A compiler that is set but unusable is the failure that the maude
+        # resolver exists to stop.  A fall-through to a different compiler
+        # would answer from a pretty that the operator did not choose, and it
+        # would say nothing about that.
         command -v "$HPJ_GHC" >/dev/null 2>&1 \
             || die "HPJ_GHC=$HPJ_GHC is set but not executable"
         echo "$HPJ_GHC"
@@ -141,9 +150,10 @@ if [ "$HAVE_PRETTY" != "$WANT_PRETTY" ]; then
 fi
 
 # --- the generated program ---------------------------------------------------
-# Written in three pieces so the user's expression never passes through shell
-# expansion: Haskell operators are `$$`, `$+$`, `<>`, and an unquoted heredoc
-# would eat every one of them.
+# The function writes the program in three pieces.  The user's expression
+# therefore never passes through shell expansion.  Haskell operators include
+# `$$`, `$+$` and `<>`, and an unquoted heredoc would consume every one of
+# them.
 emit_main() {
     cat <<HS_HEAD
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -200,7 +210,7 @@ main = report theDoc
 HS_TAIL
 }
 
-# render <workdir> -> compiles and runs, echoing the program's stdout
+# render <workdir> -> compiles and runs the program, and writes its stdout
 run_program() {
     local dir="$1" src="$2" out rc
     (
@@ -218,16 +228,18 @@ cleanup() { [ -n "$WORK" ] && rm -rf "$WORK"; }
 trap cleanup EXIT
 
 # --- self-test ---------------------------------------------------------------
-# Every case is one of the port's own committed assertions, re-derived here.
-# They check the TOOLCHAIN, not the layout: if a case disagrees, either this
-# script is not driving the pretty the port reproduces or the port has
-# regressed, and until that is resolved nothing derived in the session is
-# worth committing.  Run it before deriving a pin you intend to keep.
+# Every case is one of the port's own committed assertions, derived again
+# here.  The cases check the toolchain, not the layout.  If a case disagrees,
+# then one of two things is true.  Either this script does not drive the
+# pretty that the port reproduces, or the port has regressed.  Until you
+# answer that question, do not commit anything derived in the session.  Run
+# the self-test before you derive a pin that you intend to keep.
 #
-# The last case is the only one whose RIBBON differs from its line length,
-# and it is here because of a probe: multiplying the generated style's
-# ribbon by 4 left the five equal-width cases all matching.  Every knob this
-# script plumbs into `theStyle` needs a case that moves when it moves.
+# The last case is the only one whose ribbon differs from its line length.
+# It is here because of a probe.  The probe multiplied the generated style's
+# ribbon by 4, and all five equal-width cases still matched.  Every value that
+# this script passes into `theStyle` needs a case that changes when the value
+# changes.
 SELFTEST_PASS=0
 SELFTEST_FAIL=0
 
@@ -261,7 +273,7 @@ self_test() {
         'fcat [text "<", text "aaa,", text "bbb,", text "ccc,", text "ddd", text ">"]' \
         '"<aaa,bbb,\nccc,ddd>"'
     # crates/tamarin-theory/src/pretty_hpj_sep_nb_regression_tests.rs
-    # (nested_sep_disjunct_second_item_column) — width 50, ribbon 33.
+    # (nested_sep_disjunct_second_item_column) at width 50 and ribbon 33.
     expect 50 33 \
         'let opp d = text "(" <> d <> text ")"; fa a = sep [text "F.", sep [nest 1 (opp (text a)), text "=>", nest 1 (text "RHS")]]; dj l = sep [text ("Q" ++ l ++ "."), sep [nest 1 (opp (text "DANTE")), text "C", nest 1 (sep [opp (fa (replicate 32 (head "A"))) <> text " &", opp (fa (replicate 32 (head "B")))])]] in text "(" <> sep (punctuate (text " |") [opp (dj "x"), opp (dj "y")]) <> text ")"' \
         '"((Qx.\n   (DANTE)\n  C\n   (F.\n     (AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA)\n    =>\n     RHS) &\n   (F.\n     (BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB)\n    =>\n     RHS)) |\n (Qy.\n   (DANTE)\n  C\n   (F.\n     (AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA)\n    =>\n     RHS) &\n   (F.\n     (BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB)\n    =>\n     RHS)))"'
@@ -269,12 +281,12 @@ self_test() {
     echo "self-test: $SELFTEST_PASS matched, $SELFTEST_FAIL failed" \
          "(pretty-$HAVE_PRETTY via $GHC)"
     [ "$SELFTEST_FAIL" -eq 0 ] || return 1
-    # A case list that silently emptied would print "0 matched, 0 failed" and
-    # exit 0, which is the one result this check must never give.
+    # A case list that became empty would print "0 matched, 0 failed" and exit
+    # 0.  That is the one result that this check must never give.
     [ "$SELFTEST_PASS" -gt 0 ] || { echo "self-test compared nothing" >&2; return 1; }
 }
 
-# derive -> just the RUST line's literal, for the self-test's comparison
+# derive -> only the literal from the RUST line, for the self-test to compare
 derive() {
     local d
     d="$(mktemp -d)" || return 1
@@ -299,9 +311,10 @@ fi
 WORK="$(mktemp -d)" || die "mktemp failed"
 
 if [ -n "$FILE" ]; then
-    # Whole-Main mode: a derivation session with shared bindings and a dozen
-    # cases is a Haskell file, not a shell argument.  Run verbatim — the
-    # widths above do not apply, the file states its own.
+    # Whole-Main mode.  A derivation session with shared bindings and a dozen
+    # cases is a Haskell file, not a shell argument.  The script runs the file
+    # unchanged.  The widths above do not apply, because the file states its
+    # own widths.
     [ -r "$FILE" ] || die "cannot read --file $FILE"
     cp "$FILE" "$WORK/Main.hs"
     run_program "$WORK" "$WORK/Main.hs"

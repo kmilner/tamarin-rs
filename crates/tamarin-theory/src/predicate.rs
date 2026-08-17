@@ -99,8 +99,9 @@ mod tests {
     }
 
     /// HS `smallerFact` builds `protoFact Linear "Smaller" [t1, t2]`
-    /// (Predicate.hs:50-56) — the tag `lookup_predicate` matches on, and the
-    /// operand order the `∃ z. t2 = t1 ++ z` expansion depends on.
+    /// (Predicate.hs:50-56).  This is the tag that `lookup_predicate` matches
+    /// on.  It is also the operand order that the `∃ z. t2 = t1 ++ z`
+    /// expansion depends on.
     #[test]
     fn smaller_fact_tag_and_operand_order() {
         let x = LVar::new("x", LSort::Msg, 0);

@@ -558,9 +558,10 @@ mod tests {
     use super::*;
     use crate::function_symbols::FunSym;
 
-    /// Render a rule set the way its equations reach Maude: one `lhs = rhs`
-    /// line per rule, in `BTreeSet` (= HS `Set`) iteration order, which is the
-    /// order `MaudeSig::rrules` hands them to the module builder.
+    /// Render a rule set in the form in which Maude receives its equations.
+    /// The output has one `lhs = rhs` line per rule.  The lines follow the
+    /// `BTreeSet` (= HS `Set`) iteration order.  That is the order in which
+    /// `MaudeSig::rrules` gives the rules to the module builder.
     fn rendered(rules: &BTreeSet<RRule<LNTerm>>) -> Vec<String> {
         rules
             .iter()
@@ -574,11 +575,12 @@ mod tests {
             .collect()
     }
 
-    /// `dhRules` (Rules.hs:47-61): Lankford's DH presentation, 13 rules.  A
-    /// count alone leaves every symbol, argument and nesting free — one
-    /// mistyped `inv`/`*` still gives 13 rules and a silently different
-    /// equational theory.  Each line below is the corresponding HS rule with
-    /// its AC arguments in canonical (`fAppAC`-sorted, flattened) order.
+    /// `dhRules` (Rules.hs:47-61) is Lankford's DH presentation, which has 13
+    /// rules.  A count alone constrains no symbol, no argument and no
+    /// nesting.  One mistyped `inv` or `*` still gives 13 rules and a
+    /// different equational theory, with no message.  Each line below is the
+    /// matching HS rule.  Its AC arguments are in canonical order, which
+    /// means `fAppAC`-sorted and flattened.
     #[test]
     fn dh_rules_match_haskell() {
         assert_eq!(
@@ -602,8 +604,8 @@ mod tests {
     }
 
     /// `xorRules` (Rules.hs:91-95).  `x.1⊕x.1⊕x.2 = x.2` is the flattened
-    /// three-argument form of HS's `x1 +: x1 +: x2`: `fAppAC` flattens the
-    /// nested `+:` at construction, and `x1 +: x1` keeps both copies.
+    /// three-argument form of HS's `x1 +: x1 +: x2`.  `fAppAC` flattens the
+    /// nested `+:` when it builds the term.  `x1 +: x1` keeps both copies.
     #[test]
     fn xor_rules_match_haskell() {
         assert_eq!(
@@ -616,7 +618,7 @@ mod tests {
         );
     }
 
-    /// `bpRules` (Rules.hs:71-78): the bilinear-pairing extension of DH.
+    /// `bpRules` (Rules.hs:71-78) is the bilinear-pairing extension of DH.
     #[test]
     fn bp_rules_match_haskell() {
         assert_eq!(
@@ -629,17 +631,17 @@ mod tests {
         );
     }
 
-    /// `msetRules` (Rules.hs:87) is empty: multisets are pure AC, with no
-    /// rewrite rules of their own.
+    /// `msetRules` (Rules.hs:87) is empty.  Multisets are pure AC.  They have
+    /// no rewrite rules of their own.
     #[test]
     fn mset_rules_are_empty() {
         assert!(mset_rules().is_empty());
     }
 
     /// Each AC convenience wrapper (Convenience.hs `(*:)`/`(+:)`/`(++:)`)
-    /// carries its OWN symbol and routes through the `f_app_ac` smart
-    /// constructor, so a nested application of the same operator flattens and
-    /// the arguments come back in canonical order.
+    /// carries its own symbol.  Each one calls the `f_app_ac` smart
+    /// constructor.  A nested application of the same operator therefore
+    /// flattens, and the arguments come back in canonical order.
     #[test]
     fn convenience_ac_constructors_carry_their_symbol_and_normalise() {
         let a = msg_var("a", 0);
@@ -672,10 +674,11 @@ mod tests {
     /// The builtin signatures are the `NoEqSym` tuples of
     /// `Term.Builtin.Signature` (Term/Builtin/Signature.hs:19-44), grouped at
     /// Term/Builtin/Signature.hs:61-97.  Each symbol's arity, privacy and
-    /// constructability reaches output (the `functions:` block) and decides
-    /// which intruder rules are generated, so pin all three per symbol —
-    /// membership alone lets a `Public`/`Constructor` flip through, and the
-    /// `dest-*` sigs differ from their plain siblings in nothing else.
+    /// constructability appears in the output, in the `functions:` block.
+    /// The three values also decide which intruder rules the code generates.
+    /// The test therefore compares all three for each symbol.  A test of
+    /// membership alone lets a change of `Public` or `Constructor` pass.  The
+    /// `dest-*` signatures differ from their plain siblings in nothing else.
     #[test]
     fn signatures_match_haskell() {
         fn rendered(sig: &NoEqFunSig) -> Vec<String> {
@@ -738,8 +741,8 @@ mod tests {
             ]
         );
         assert_eq!(rendered(&hash_fun_sig()), ["h/1 public ctor"]);
-        // The `dest-*` variants differ from the plain ones ONLY in the
-        // constructability of the reducing symbol.
+        // The `dest-*` variants differ from the plain ones in one value only.
+        // That value is the constructability of the reducing symbol.
         assert_eq!(
             rendered(&sym_enc_fun_dest_sig()),
             ["sdec/2 public dest", "senc/2 public ctor"]

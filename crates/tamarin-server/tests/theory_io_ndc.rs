@@ -24,22 +24,26 @@
 //! functions: fst/1, pair/2, snd/1, zeroo/0, xorr/2 [AC,NDC]
 //! ```
 //!
-//! Maude-backed: skipped only when `TAM_ALLOW_NO_MAUDE=1` says so.
+//! These tests need Maude.  They skip only when `TAM_ALLOW_NO_MAUDE=1` is set.
 //!
-//! Cost: the flag-on load is ~8.3s under `--profile ci` (the profile
-//! `.github/workflows/ci.yml` runs) and ~56s under a plain debug build, so a
-//! debug stopwatch overstates the CI price sevenfold.  Either way it is ~90%
-//! of this crate's test time: `apply_ndc_check` runs a deduction proof per
-//! chainable rule pair.  The flag-off load is 40ms, so the cost is the pass
-//! itself, not the fixture's size — shrinking it means re-capturing both
-//! oracle verdicts above against a different theory.
+//! Cost.  The load with the flag on takes about 8.3s under `--profile ci`.
+//! That is the profile which `.github/workflows/ci.yml` runs.  The same load
+//! takes about 56s under a plain debug build.  A measurement from a debug
+//! build therefore states the CI cost seven times too high.  In both builds
+//! this load is about 90% of the test time of this crate.  The cause is
+//! `apply_ndc_check`, which runs one deduction proof for each chainable rule
+//! pair.  The load with the flag off takes 40ms.  The cost comes from the
+//! pass itself, not from the size of the fixture.  A smaller fixture would
+//! need a new capture of both oracle verdicts above against a different
+//! theory.
 
 use std::path::PathBuf;
 
 use tamarin_server::theory_io;
 use tamarin_server::TheoryEntry;
 
-/// Absolute Maude locations probed when `MAUDE_PATH` is unset.
+/// The absolute Maude locations that this test probes when `MAUDE_PATH` is
+/// unset.
 const MAUDE_CANDIDATES: [&str; 4] = [
     "/home/linuxbrew/.linuxbrew/bin/maude",
     "/usr/local/bin/maude",
@@ -47,14 +51,16 @@ const MAUDE_CANDIDATES: [&str; 4] = [
     "/opt/homebrew/bin/maude",
 ];
 
-/// The Maude this pin runs against: `$MAUDE_PATH`, else a [`MAUDE_CANDIDATES`]
-/// entry, else a `maude` on `$PATH`.
+/// The Maude that this test runs against.  The function returns `$MAUDE_PATH`
+/// first.  If that variable is unset, it returns a [`MAUDE_CANDIDATES`] entry.
+/// If no candidate exists, it returns a `maude` that it finds on `$PATH`.
 ///
-/// A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION, not
-/// a reason to skip — answering `None` there would turn this pin green on a CI
-/// whose image moved maude.  Finding no maude at all panics too, unless
-/// `TAM_ALLOW_NO_MAUDE=1` asks for the skip deliberately: the NDC verdicts
-/// below are exactly what a maude-less load cannot produce.
+/// A `MAUDE_PATH` that names a file which does not exist is a configuration
+/// error, not a reason to skip.  A `None` answer there would make this test
+/// pass on a CI image that moved maude.  The function also panics when it
+/// finds no maude at all.  It returns `None` instead only when
+/// `TAM_ALLOW_NO_MAUDE=1` asks for the skip deliberately.  A load without
+/// maude cannot produce the NDC verdicts below.
 fn maude_bin_path() -> Option<String> {
     if let Ok(p) = std::env::var("MAUDE_PATH") {
         assert!(

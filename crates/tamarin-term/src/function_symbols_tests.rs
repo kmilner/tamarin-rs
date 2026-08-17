@@ -464,10 +464,10 @@ fn constructability_ord_matches_haskell_declaration() {
 /// FunctionSymbols.hs:150-153:
 ///     data FunSym = NoEq NoEqSym | AC ACSym | C CSym | List
 ///
-/// `NoEq` comes FIRST.  This ordering matters because `BTreeSet<FunSym>`
-/// signatures iterate in it when constructing Maude bridge commands.  If
-/// `List` or `C` came before `NoEq`, Maude would see declarations in an
-/// inconsistent order vs Haskell.
+/// `NoEq` comes first.  This order matters because `BTreeSet<FunSym>`
+/// signatures iterate in it when they construct Maude bridge commands.  If
+/// `List` or `C` came before `NoEq`, Maude would see the declarations in an
+/// order that does not agree with Haskell.
 #[test]
 fn fun_sym_ord_matches_haskell_declaration() {
     let no_eq = FunSym::NoEq(pair_sym());

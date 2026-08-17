@@ -136,8 +136,8 @@ fn redeclaration_conflict_outranks_the_ac_arity_check() {
     );
 
     // An `[AC]` symbol goes to `stACFunSyms`, not `stFunSyms`, so it leaves the
-    // name free for a later declaration; `tests/dual_declared_names.rs` pins
-    // both orders and the two symbols each keeps.
+    // name free for a later declaration.  `tests/dual_declared_names.rs`
+    // checks both orders, and the two symbols that each order keeps.
 }
 
 /// Parser/Signature.hs:213 exempts a `fst`/`snd` re-declaration at the pair

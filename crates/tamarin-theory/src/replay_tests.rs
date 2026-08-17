@@ -63,11 +63,12 @@ fn canonicalise_strips_wrap_spaces_inside_brackets() {
     );
 }
 
-/// An otherwise-empty system carrying one solved formula: goal-free and
-/// contradiction-free, but PAST the initial state, so `is_finished` runs and
-/// the auto-prover closes it as Solved.  `System::empty()` itself is still in
-/// the initial state and only ever yields `Sorry`, which would make every
-/// "the auto-prover ran" assertion below hold vacuously.
+/// An otherwise-empty system that carries one solved formula.  The system
+/// has no goals and no contradictions.  It is also past the initial state,
+/// so `is_finished` runs and the auto-prover closes the system as Solved.
+/// `System::empty()` on its own is still in the initial state.  It only ever
+/// yields `Sorry`.  With that system, every assertion below that the
+/// auto-prover ran would hold vacuously.
 fn past_initial_system() -> System {
     let mut sys = System::empty();
     sys.solved_formulas_mut()
@@ -75,18 +76,21 @@ fn past_initial_system() -> System {
     sys
 }
 
-/// The `by sorry` leaf is where the two replay entry points diverge, and the
-/// divergence is the whole point of having both:
-/// `replace_sorry_prove` (HS `replaceSorryProver $ runAutoProver`, the
-/// `--prove`-target path) must hand the leaf's system to the auto-prover, so
-/// its result is exactly `run_proof_search`'s; `check_and_extend` (HS
-/// `checkAndExtendProver (sorryProver Nothing)`, the non-target path) must
-/// NOT prove and must leave an ANNOTATED `Sorry` behind — an annotated one,
-/// so the lemma reprints as plain `by sorry` with no `/* unannotated */`.
+/// The `by sorry` leaf is where the two replay entry points differ.  That
+/// difference is the reason both entry points exist.
 ///
-/// [`past_initial_system`] is the degenerate case the auto-prover closes as
-/// Solved, which is what keeps the equality below from holding vacuously
-/// between two `Sorry`s.
+/// `replace_sorry_prove` (HS `replaceSorryProver $ runAutoProver`, the
+/// `--prove`-target path) must hand the leaf's system to the auto-prover.
+/// Its result is then exactly the result of `run_proof_search`.
+///
+/// `check_and_extend` (HS `checkAndExtendProver (sorryProver Nothing)`, the
+/// non-target path) must not prove.  It must leave an annotated `Sorry`
+/// behind.  The `Sorry` must be annotated, so the lemma reprints as plain
+/// `by sorry` with no `/* unannotated */`.
+///
+/// [`past_initial_system`] is the degenerate case that the auto-prover
+/// closes as Solved.  That is what keeps the equality below from holding
+/// vacuously between two `Sorry`s.
 #[test]
 fn sorry_leaf_runs_auto_prover_only_for_prove_targets() {
     let h = match maude() {
@@ -129,9 +133,9 @@ fn sorry_leaf_runs_auto_prover_only_for_prove_targets() {
 /// (or emits Sorry honestly).  Crucially, the walker must NOT
 /// fabricate a Contradictory status.
 ///
-/// On a goal-free, contradiction-free system the auto-prover recognises the
-/// system as trivially Solved; the load-bearing assertion is
-/// `status != Contradictory`.
+/// On a system with no goals and no contradictions, the auto-prover
+/// recognises the system as trivially Solved.  The assertion that matters
+/// here is `status != Contradictory`.
 #[test]
 fn contradiction_leaf_without_contradiction_falls_back_to_auto() {
     let h = match maude() {
@@ -394,9 +398,10 @@ fn match_chain_goal_by_var_and_idx() {
 /// Subterm matcher — open Subterm goals are matched by canonical
 /// pretty-printed-text equality on both sides.
 ///
-/// TWO open Subterm goals, so the unique-Subterm fallback below is
-/// disabled: only the text comparison can pick a side, and a spec whose
-/// text matches neither must miss rather than guess.
+/// The system holds two open Subterm goals.  This turns off the
+/// unique-Subterm fallback that appears below.  Only the text comparison can
+/// pick a side.  A spec whose text matches neither goal must return no
+/// match.  It must not guess.
 #[test]
 fn match_subterm_goal_by_pretty_text() {
     use tamarin_term::lterm::{LSort, LVar};
@@ -419,10 +424,11 @@ fn match_subterm_goal_by_pretty_text() {
     };
     assert_eq!(match_goal(&spec("x", "y"), &sys).expect("should match"), g1);
     assert_eq!(match_goal(&spec("a", "b"), &sys).expect("should match"), g2);
-    // BOTH sides must agree: the halves of two different goals never
+    // Both sides must agree.  The halves of two different goals never
     // combine into a match.
     assert!(match_goal(&spec("x", "b"), &sys).is_none());
-    // No text match and no unique fallback (two Subterm goals) → miss.
+    // No text matches here.  The unique fallback is off, because there are
+    // two Subterm goals.  `match_goal` therefore returns no match.
     assert!(match_goal(&spec("p", "q"), &sys).is_none());
 }
 
@@ -525,41 +531,44 @@ fn match_disj_goal_by_alt_count() {
     assert_eq!(match_goal(&spec2, &sys).expect("should match"), two);
 }
 
-/// `normalize_disj_alt_text_for_match` is the hand-mirror of the skeleton
-/// parser's `normalize_disj_alt_text` (tamarin-parser proof_tree.rs): strip
-/// every whitespace character and every `#`.  The two copies are private to
-/// their own crates and the dependency runs parser → theory only, so they
-/// cannot be compared directly; this pin plus tamarin-parser's
-/// `proof_tree_tests::solve_disj_two_alts` / `solve_disj_five_alts` (which
-/// pin the stored `alt_texts` the parser emits) are together the drift guard
-/// for the Yubikey `slightly_weaker_invariant` replay path — the inputs below
-/// are those pins' alt texts with the outer parens the parser drops already
-/// gone, and the expected outputs are exactly the strings those pins assert
-/// the parser stores.
+/// `normalize_disj_alt_text_for_match` is a hand-written mirror of the
+/// skeleton parser's `normalize_disj_alt_text` (tamarin-parser
+/// proof_tree.rs).  Both functions strip every whitespace character and
+/// every `#`.
+///
+/// The two copies are private to their own crates, and the dependency runs
+/// from parser to theory only.  A test cannot compare them directly.  This
+/// test and tamarin-parser's `proof_tree_tests::solve_disj_two_alts` /
+/// `solve_disj_five_alts` together guard against drift on the Yubikey
+/// `slightly_weaker_invariant` replay path.  Those two parser tests check
+/// the `alt_texts` that the parser emits and stores.  The inputs below are
+/// the alt texts of those two tests, with the outer parens that the parser
+/// drops already removed.  The expected outputs below are exactly the
+/// strings that those two tests assert the parser stores.
 #[test]
 fn normalize_disj_alt_text_for_match_strips_whitespace_and_hash() {
     assert_eq!(normalize_disj_alt_text_for_match(" last(#t1) "), "last(t1)");
     assert_eq!(normalize_disj_alt_text_for_match("#t1 < #t2"), "t1<t2");
-    // A nested alt keeps its inner parens; wrap-induced newlines and indent
-    // strip like any other whitespace.
+    // A nested alt keeps its inner parens.  The newlines and the indent that
+    // come from line wrapping strip like any other whitespace.
     assert_eq!(
         normalize_disj_alt_text_for_match("(#t1 < #t2)\n   \u{2227} (last(#t3))"),
         "(t1<t2)\u{2227}(last(t3))"
     );
 }
 
-/// Disj matcher — two open Disj goals sharing an alt count AND a per-alt
-/// shape signature, so the shape filter keeps both and source order alone
-/// would bind the first.  `match_goal` renders each candidate's alts via
-/// `pretty_disj_alt` under `normalize_disj_alt_text_for_match` and scores
-/// them against the skeleton's stored `alt_texts`; the best score wins over
-/// source order.
+/// Disj matcher.  The system holds two open Disj goals.  They share an alt
+/// count and a per-alt shape signature.  The shape filter therefore keeps
+/// both of them, and source order alone would bind the first.  `match_goal`
+/// renders each candidate's alts with `pretty_disj_alt` under
+/// `normalize_disj_alt_text_for_match`.  It scores them against the
+/// skeleton's stored `alt_texts`.  The best score wins over source order.
 ///
 /// HS reference: HS keeps the parsed `Guarded`'s concrete LVar identities and
-/// matches structurally (ProofMethod.hs:252-273, see line 258), so it never
-/// needs the tie-break; RS's shape signature is coarser and recovers the
-/// distinction from the stored text.  This is the Yubikey
-/// `slightly_weaker_invariant` situation, where two IH-body disjs share the
+/// matches structurally (ProofMethod.hs:252-273, see line 258).  HS therefore
+/// never needs the tie-break.  RS's shape signature is coarser, and it
+/// recovers the distinction from the stored text.  This is the Yubikey
+/// `slightly_weaker_invariant` situation.  There, two IH-body disjs share the
 /// NonQuant×5 shape and differ only in their alt texts.
 #[test]
 fn match_disj_goal_prefers_alt_text_score_over_source_order() {
@@ -572,14 +581,15 @@ fn match_disj_goal_prefers_alt_text_score_over_source_order() {
         typ: None,
     };
     let last = |n: &str| Guarded::Atom(GAtom::Last(GTerm::Var(BVar::Free(mk_vs(n)))));
-    // Same alt count, same NonQuant×2 signature — only the var names differ.
+    // The two goals have the same alt count and the same NonQuant×2
+    // signature.  Only the variable names differ.
     let first = Goal::Disj(Disj::new(vec![last("a"), last("b")]));
     let second = Goal::Disj(Disj::new(vec![last("c"), last("d")]));
     let mut sys = System::empty();
     sys.goals_mut().push((first.clone(), Default::default()));
     sys.goals_mut().push((second.clone(), Default::default()));
 
-    // The texts a skeleton would have stored for a given candidate.
+    // The texts that a skeleton stores for a given candidate.
     let stored_texts = |g: &Goal| -> Vec<String> {
         let Goal::Disj(d) = g else {
             panic!("expected a Disj goal");
@@ -589,9 +599,10 @@ fn match_disj_goal_prefers_alt_text_score_over_source_order() {
             .collect()
     };
     let want = stored_texts(&second);
-    // Preconditions: the texts must be non-empty (an all-empty `alt_texts`
-    // skips the scoring branch entirely) and must distinguish the two
-    // candidates (otherwise both score alike and source order decides).
+    // Preconditions for this test.  The texts must not be empty.  An
+    // `alt_texts` that is empty everywhere skips the scoring branch
+    // completely.  The texts must also tell the two candidates apart.  If
+    // they do not, both candidates score alike and source order decides.
     assert!(
         want.iter().all(|s| !s.is_empty()),
         "rendered alt texts must be non-empty, got {want:?}"

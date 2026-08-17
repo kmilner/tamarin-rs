@@ -542,9 +542,9 @@ impl<R, R2, P, P2> DiffTheory<R, R2, P, P2> {
 mod tests {
     use super::*;
 
-    /// A theory over cheap stand-in type parameters — the accessors are
-    /// generic over `R`/`P`/`S`, so the item payloads need not be real
-    /// rules or proofs.
+    /// A theory over simple stand-in type parameters.  The accessors are
+    /// generic over `R`/`P`/`S`.  The item payloads therefore do not have to
+    /// be real rules or proofs.
     type TestTheory = Theory<i32, (), char>;
 
     fn lemma(name: &str) -> Lemma<()> {
@@ -571,12 +571,12 @@ mod tests {
         }
     }
 
-    /// Every accessor is a `filter_map` over ONE `TheoryItem` arm, and a
-    /// copy-pasted arm would silently make one accessor answer another's
-    /// items.  With one item of each kind present in a single
-    /// order-preserving `items` vector, each accessor must return exactly
-    /// its own — and `macros()` must FLATTEN its item's list rather than
-    /// count the item.
+    /// Every accessor is a `filter_map` over one `TheoryItem` arm.  A
+    /// copy-pasted arm makes one accessor return another accessor's items,
+    /// and nothing reports the mistake.  The `items` vector below holds one
+    /// item of each kind and keeps their order.  Each accessor must therefore
+    /// return exactly its own items.  `macros()` must also flatten its item's
+    /// list and not count the item.
     #[test]
     fn accessors_select_only_their_own_item_kind() {
         let mut t: TestTheory = Theory::new("Foo", SignaturePure::empty(false));
@@ -616,9 +616,9 @@ mod tests {
         assert_eq!(t.lookup_restriction("L"), None);
     }
 
-    /// HS `addLemma`/`addRestriction` (TheoryObject.hs:453-465) refuse a
-    /// name already present and report the refusal; `addRules` has no such
-    /// check and appends unconditionally.
+    /// HS `addLemma` and `addRestriction` (TheoryObject.hs:453-465) refuse a
+    /// name that is already present, and they report the refusal.  `addRules`
+    /// has no such check.  It always appends.
     #[test]
     fn add_lemma_and_add_restriction_refuse_a_duplicate_name() {
         let mut t: TestTheory = Theory::new("Foo", SignaturePure::empty(false));
@@ -628,8 +628,9 @@ mod tests {
         assert!(t.add_restriction(restriction("R")));
         assert!(!t.add_restriction(restriction("R")));
 
-        // `add_lemmas` / `add_restrictions` fold the singular form, so the
-        // clashing entries are skipped and the fresh ones land, in order.
+        // `add_lemmas` and `add_restrictions` fold the singular form.  They
+        // skip the entries whose names clash.  They add the new entries in
+        // order.
         t.add_lemmas([lemma("L"), lemma("L3")]);
         t.add_restrictions([restriction("R"), restriction("R2")]);
         assert_eq!(
@@ -643,8 +644,8 @@ mod tests {
             vec!["R", "R2"]
         );
 
-        // `add_rules` has no dedup: both copies land, after the items
-        // already present.
+        // `add_rules` removes no duplicates.  It adds both copies after the
+        // items that are already present.
         t.add_rules([7, 7]);
         assert_eq!(t.rules().copied().collect::<Vec<_>>(), vec![7, 7]);
     }
@@ -659,10 +660,10 @@ mod tests {
         assert!(o.lemmas_to_prove.is_empty());
     }
 
-    /// An unproven lemma carries NO proof text and no parsed tree: the
-    /// pretty-printer keys off `raw` and the web/JSON paths off `tree`, so
-    /// a stray placeholder in either would print a proof that was never
-    /// found.
+    /// An unproven lemma carries no proof text and no parsed tree.  The
+    /// pretty-printer reads `raw`.  The web and JSON paths read `tree`.  A
+    /// placeholder in either field makes the code print a proof that the
+    /// prover never found.
     #[test]
     fn proof_skeleton_unproven_is_empty() {
         let p = ProofSkeleton::unproven();

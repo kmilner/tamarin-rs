@@ -2971,10 +2971,11 @@ mod tests {
         parse_args(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("parse")
     }
 
-    /// A scratch path under the system temp dir, keyed by the test binary's
-    /// pid: the filesystem tests below assert on errnos raised by the very
-    /// files they seed, so two concurrent runs of this binary (a second
-    /// worktree, a second `cargo test`) must not share them.
+    /// A scratch path under the system temp dir.  The name of the path holds
+    /// the pid of the test binary.  The filesystem tests below assert on the
+    /// errnos that the files they seed raise.  Two concurrent runs of this
+    /// binary must therefore not share those files.  A second worktree or a
+    /// second `cargo test` is such a run.
     fn scratch(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("tamarin_rs_{}_{}", name, std::process::id()))
     }
@@ -2999,15 +3000,17 @@ mod tests {
     fn out_path_for_none_means_stdout() {
         let a = parse(&["in.spthy"]);
         assert_eq!(out_path_for(&a, "in.spthy"), None);
-        // Bare `-o` records the empty sentinel and, with no `-O` to derive a
-        // name from, is HS `mkOutPath`'s MISS — `None` here is what makes the
-        // caller `die` with `Please specify a valid output file/directory`
-        // (Batch.hs:119-123), not a silent fallback to stdout.
+        // `-o` with no value records the empty sentinel.  There is no `-O` to
+        // derive a name from, so this is the miss case of HS `mkOutPath`.
+        // `None` here makes the caller `die` with
+        // `Please specify a valid output file/directory` (Batch.hs:119-123).
+        // The caller does not fall back to stdout.
         let a = parse(&["-o", "in.spthy"]);
         assert_eq!(a.output_file.as_deref(), Some(""));
         assert_eq!(out_path_for(&a, "in.spthy"), None);
-        // Bare `-O` is the other empty sentinel, and it DOES resolve: HS's
-        // `</>` against `""` leaves a cwd-relative name.
+        // `-O` with no value is the other empty sentinel.  It does resolve.
+        // HS joins the name with `""` through `</>`, and that leaves a
+        // cwd-relative name.
         let a = parse(&["-O", "examples/foo.spthy"]);
         assert_eq!(
             out_path_for(&a, "examples/foo.spthy").as_deref(),
@@ -3115,10 +3118,11 @@ mod tests {
                 "errno {errno}",
             );
         }
-        // An errno outside the table has no `IOErrorType` to name, so Rust's
-        // message stands whole — ` (os error N)` suffix included, where a
-        // mapped reason strips it.  The `ends_with` is what gives the equality
-        // teeth: it proves the suffix is there to be dropped.
+        // An errno outside the table has no `IOErrorType` to name.  The
+        // message from Rust therefore stands complete.  It keeps the
+        // ` (os error N)` suffix, which a mapped reason strips.  The
+        // `ends_with` check makes the equality meaningful.  It shows that the
+        // suffix is present and can be dropped.
         let unmapped = std::io::Error::from_raw_os_error(42);
         assert!(unmapped.to_string().ends_with(" (os error 42)"));
         assert_eq!(io_exception_reason(&unmapped), unmapped.to_string());
@@ -3142,10 +3146,11 @@ mod tests {
         assert_eq!(o.partial_evaluation, None);
     }
 
-    // `--diff` is refused at the top of `run_batch`, BEFORE the maude probe
-    // and before the input is opened — the input named here does not exist,
-    // so a rejection moved below either of those would report that instead
-    // (and, past the probe, only as an `Ok(rc)` from `report_open_file_error`).
+    // `run_batch` refuses `--diff` at its top.  It does so before the maude
+    // probe and before it opens the input.  The input named here does not
+    // exist.  A rejection placed below either of those steps would therefore
+    // report the missing input instead.  Below the probe it would report it
+    // only as an `Ok(rc)` from `report_open_file_error`.
     #[test]
     fn diff_flag_errors_cleanly() {
         let a = parse(&["--diff", "/nonexistent/in.spthy"]);
@@ -3156,10 +3161,10 @@ mod tests {
 
     #[test]
     fn interactive_invalid_interface_errors() {
-        // Asking to bind to garbage is an error naming the flag, produced
+        // A request to bind to garbage is an error that names the flag, made
         // without ever opening a socket.  A WORKDIR must be present: without
-        // one the mode errors out before looking at `--interface`, which is
-        // why the message is asserted rather than the mere fact of an error.
+        // one the mode errors out before it looks at `--interface`.  That is
+        // why this test asserts the message, not only that an error occurs.
         let a = parse(&["interactive", "--interface=not-an-ip", "/tmp"]);
         let RunError(msg) = run(&a).expect_err("expected interface parse error");
         assert!(msg.contains("--interface=\"not-an-ip\""), "{msg}");
@@ -3170,9 +3175,9 @@ mod tests {
     fn no_input_files_is_an_error() {
         // clap's `arg_required_else_help` catches a fully-bare argv, but a
         // flags-only argv reaches `run_batch`, which reports it plainly.  The
-        // message is asserted WHOLE, and that equality is the pin: HS
-        // reprinted the entire help here, canonical clap does not, so a help
-        // document printed around the phrase would slip past a `contains`.
+        // test asserts the complete message.  That equality is the pin.  HS
+        // reprints the entire help here, and canonical clap does not.  A help
+        // document printed around the phrase would pass a `contains` check.
         let a = parse(&["--quiet"]);
         let e = run(&a).unwrap_err();
         assert_eq!(e.to_string(), "no input files given");
@@ -3190,9 +3195,9 @@ mod tests {
     // Pins the per-lemma summary strings to HS `showProofStatus`
     // (Theory/Proof.hs:1105-1112) + the `(N steps)` suffix
     // (ClosedTheory.hs:487-489).  Undetermined/Invalidated render distinct
-    // strings, not "analysis incomplete", and a falsified lemma's wording
-    // TURNS ON THE QUANTIFIER — the one branch of this function whose two
-    // arms are a plausible copy-paste of each other.
+    // strings, not "analysis incomplete".  The wording for a falsified lemma
+    // depends on the quantifier.  That branch is the one branch of this
+    // function whose two arms are a plausible copy-paste of each other.
     #[test]
     fn lemma_summary_line_per_proof_status() {
         // showProofStatus _ UndeterminedProof = "analysis undetermined"
@@ -3216,7 +3221,7 @@ mod tests {
             "L (all-traces): falsified - found trace (9 steps)",
         );
         // showProofStatus ExistsSomeTrace (CompleteProof) = "falsified - no
-        // trace found", under the `exists-trace` quantifier label.
+        // trace found".  The summary uses the `exists-trace` quantifier label.
         assert_eq!(
             format_lemma_summary_line(&mk_result(LemmaVerdict::Falsified, true, 9)),
             "L (exists-trace): falsified - no trace found (9 steps)",

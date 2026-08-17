@@ -4641,8 +4641,8 @@ mod manual_rule_variants_tests {
             contains_manual_rule_variants(&parsed, &elaborated, true),
             positional(&parsed, &elaborated, true),
         );
-        // The gate is an OR over rules, so the mixed theory above would still
-        // fire if EITHER prefix were dropped from the discriminant.  Each
+        // The gate is an OR over the rules.  The mixed theory above still
+        // fires if the discriminant loses one of the two prefixes.  Each
         // prefix therefore gets a single-rule theory of its own.
         for auto in [auto_out, "AUTO_IN_TERM_1_0_0__Recv"] {
             let (parsed, elaborated) = theories(&["R"], vec![elab_rule("R", &[auto])]);

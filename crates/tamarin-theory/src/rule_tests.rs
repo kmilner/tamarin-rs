@@ -6,10 +6,11 @@ use super::*;
 use crate::fact::{fresh_fact, in_fact, out_fact};
 use tamarin_term::builtin::msg_var;
 
-/// `Rule::new` files each argument into its OWN field.  The lists have
-/// distinct lengths and contents so a premises/conclusions swap cannot hide
-/// behind matching shapes, and `ProtoRuleEInfo::standard` interns the name
-/// verbatim into `Stand` with empty attributes/restrictions.
+/// `Rule::new` puts each argument into its own field.  The lists have distinct
+/// lengths and distinct contents.  A swap of the premises and the conclusions
+/// therefore cannot hide behind two lists of the same shape.
+/// `ProtoRuleEInfo::standard` interns the name into `Stand` without change,
+/// and it leaves the attributes and the restrictions empty.
 #[test]
 fn build_simple_proto_rule_e() {
     let r: ProtoRuleE = Rule::new(
@@ -30,9 +31,10 @@ fn build_simple_proto_rule_e() {
     assert!(r.info.restrictions.is_empty());
 }
 
-/// `lookup_premise`/`lookup_conclusion` index their own list — asymmetric
-/// lengths plus identity checks catch a lookup reading the wrong list — and
-/// return `None` one past the end.
+/// `lookup_premise` and `lookup_conclusion` index their own list.  The two
+/// lists have different lengths, and the test also checks the identity of each
+/// fact.  A lookup that reads the wrong list therefore fails here.  Both
+/// functions return `None` for an index one past the end.
 #[test]
 fn rule_indices_lookup() {
     let r: ProtoRuleE = Rule::new(
@@ -57,8 +59,9 @@ fn rule_indices_lookup() {
     assert_eq!(r.lookup_conclusion(ConcIdx(1)), None);
 }
 
-/// The enumerators pair each fact with its own 0-based index, in list order,
-/// and read the premise/conclusion list matching their name.
+/// The enumerators pair each fact with its own 0-based index, in list order.
+/// Each enumerator reads the premise list or the conclusion list that matches
+/// its name.
 #[test]
 fn enumerate_yields_indices() {
     let r: ProtoRuleE = Rule::new(
@@ -85,10 +88,11 @@ fn enumerate_yields_indices() {
     assert_eq!(concs, vec![(ConcIdx(0), out_fact(msg_var("c", 0)))]);
 }
 
-/// `RuleAttributes::merge` — the combiner SAPIC rule compression applies
-/// (`tamarin_sapic::compression`).  `Option` fields take the right when it is
-/// `Some` but KEEP the left when it is `None`; `bool` fields are `||`, so a
-/// `true` on either side survives.
+/// `RuleAttributes::merge` is the combiner that SAPIC rule compression applies
+/// (`tamarin_sapic::compression`).  An `Option` field takes the right value
+/// when that value is `Some`.  It keeps the left value when the right value is
+/// `None`.  A `bool` field is the `||` of the two sides, so a `true` on either
+/// side survives.
 #[test]
 fn rule_attributes_merge_prefers_right_but_keeps_left() {
     use tamarin_utils::color::Rgb;
@@ -104,19 +108,21 @@ fn rule_attributes_merge_prefers_right_but_keeps_left() {
         ..Default::default()
     };
     let merged = a.merge(b.clone());
-    // Right wins where it is `Some` …
+    // The right value wins where it is `Some`.
     assert_eq!(merged.role, Some("bob".into()));
-    // … the left survives where the right is `None` …
+    // The left value survives where the right value is `None`.
     assert_eq!(merged.color, Some(Rgb::new(1.0, 0.0, 0.0)));
-    // … and both bools are ORed, not overwritten by the right.
+    // Both bools are the `||` of the two sides.  The right value alone does
+    // not overwrite them.
     assert!(merged.is_sapic_rule);
     assert!(merged.ignore_deriv_checks);
-    // An all-empty right is the identity: every left field survives.  A
-    // `merge` that simply took the right would wipe them.
+    // A right value with all fields empty is the identity.  The merge keeps
+    // every left field.  A `merge` that took the right value alone would
+    // clear those fields.
     let kept = b.clone().merge(RuleAttributes::empty());
     assert_eq!(kept.role, Some("bob".into()));
     assert!(kept.is_sapic_rule);
-    // An all-empty left leaves the right intact.
+    // A left value with all fields empty leaves the right value unchanged.
     let kept = RuleAttributes::empty().merge(b);
     assert_eq!(kept.role, Some("bob".into()));
     assert!(kept.is_sapic_rule);
@@ -128,8 +134,8 @@ fn rule_info_conversion_round_trip() {
     let lifted: RuleAC = rule_ac_intr_to_rule_ac(intr.clone());
     let back = rule_ac_to_intr_rule_ac(lifted).unwrap();
     assert_eq!(back, intr);
-    // The down-conversion is a filter, not a cast: a protocol rule has no
-    // intruder info and comes back `None`.
+    // The down-conversion is a filter, not a cast.  A protocol rule has no
+    // intruder info, so the conversion returns `None`.
     let proto: RuleAC = Rule::new(
         RuleInfo::Proto(ProtoRuleACInfo {
             name: ProtoRuleName::Stand("P"),
@@ -164,8 +170,8 @@ fn intruder_predicates() {
         funs: vec![f]
     }));
     assert!(is_coerce_rule_info(&IntrRuleACInfo::Coerce));
-    // Each predicate is exclusive to its own variant: an over-broad
-    // `matches!` arm (or a predicate degenerating to `true`) shows up here.
+    // Each predicate accepts only its own variant.  An over-broad `matches!`
+    // arm fails here.  A predicate that always returns `true` also fails here.
     assert!(!is_constr_rule_info(&IntrRuleACInfo::Coerce));
     assert!(!is_destr_rule_info(&IntrRuleACInfo::Coerce));
     assert!(!is_coerce_rule_info(&IntrRuleACInfo::ConstrRule {
@@ -265,9 +271,10 @@ fn unify_ln_fact_eqs_tag_mismatch_no_unifiers() {
     assert!(res.is_empty());
 }
 
-/// Facts that constrain nothing (equal 0-ary tags) short-circuit to the ONE
-/// trivial unifier — not to "no unifiers", which would make every
-/// nullary-fact premise unsolvable.
+/// Facts that constrain nothing are facts with equal 0-ary tags.  They
+/// short-circuit to exactly one unifier, and that unifier is the trivial one.
+/// They do not short-circuit to "no unifiers".  That result would make every
+/// premise with a nullary fact unsolvable.
 #[test]
 fn unify_ln_fact_eqs_nullary_facts_yield_one_trivial_unifier() {
     let path = match maude_path() {
@@ -361,9 +368,9 @@ fn unifiable_rule_ac_insts_different_info_no() {
     assert!(!unifiable_rule_ac_insts(&h, &r1, &r2).unwrap());
 }
 
-/// A rule carrying one distinguishable variable in each of its four
-/// variable-bearing lists.  Both `HasFrees` directions are asserted against
-/// it, so dropping any single list from either walk is visible.
+/// A rule with one distinguishable variable in each of its four
+/// variable-bearing lists.  The tests assert both `HasFrees` directions
+/// against this rule.  A walk that drops any single list is therefore visible.
 fn rule_with_a_var_in_every_list(base: u64) -> ProtoRuleE {
     Rule::new(
         ProtoRuleEInfo::standard("X"),
@@ -374,10 +381,11 @@ fn rule_with_a_var_in_every_list(base: u64) -> ProtoRuleE {
     .with_new_vars(vec![msg_var("d", base + 3)])
 }
 
-/// `HasFrees::for_each_free` folds premises, then conclusions, then actions,
-/// then `new_vars`.  The exact sequence is pinned, not just membership:
-/// dropping a list shrinks every rename's variable set, and reordering the
-/// folds shifts the fresh indices `bounds_max`-style seeds hand out.
+/// `HasFrees::for_each_free` folds the premises, then the conclusions, then
+/// the actions, then `new_vars`.  The test compares the exact sequence, not
+/// only the membership.  A missing list shrinks the variable set of every
+/// rename.  A different fold order shifts the fresh indices that
+/// `bounds_max`-style seeds produce.
 #[test]
 fn has_frees_for_rule_visits_every_list_in_order() {
     use tamarin_term::lterm::{HasFrees, LSort};
@@ -475,9 +483,9 @@ fn get_remaining_rule_applications_works() {
     assert_eq!(get_remaining_rule_applications(&no_budget), 0);
 }
 
-/// `HasFrees::map_free_with` rebuilds all four lists.  Every index must come
-/// back shifted: a list the rebuild forgot to map keeps its original index
-/// and shows up as an unshifted entry here.
+/// `HasFrees::map_free_with` rebuilds all four lists.  Every index comes back
+/// shifted.  A list that the rebuild does not map keeps its original index,
+/// and that index appears here as an entry with no shift.
 #[test]
 fn rename_rule_shifts_indices() {
     use tamarin_term::lterm::{HasFrees, LSort};

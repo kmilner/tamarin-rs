@@ -841,8 +841,9 @@ mod tests {
         assert_eq!(sort_of_name(&Name::new(NameTag::Pub, "p")), LSort::Pub);
         assert_eq!(sort_of_name(&Name::new(NameTag::Node, "n")), LSort::Node);
         assert_eq!(sort_of_name(&Name::new(NameTag::Nat, "n")), LSort::Nat);
-        // The web abbreviation tag has no sort of its own and falls back to
-        // Msg (LTerm.hs:266) — the one tag whose sort is not its namesake.
+        // The web abbreviation tag has no sort of its own.  It falls back to
+        // Msg (LTerm.hs:266).  It is the one tag whose sort does not carry
+        // the name of the tag.
         assert_eq!(sort_of_name(&Name::new(NameTag::Abbrev, "a")), LSort::Msg);
     }
 
@@ -872,11 +873,11 @@ mod tests {
         let c: LNTerm = pub_term("c");
         let inner: LNTerm = f_app_ac(AcSym::Mult, vec![a.clone(), b.clone()]);
         let outer: LNTerm = f_app_ac(AcSym::Mult, vec![inner, c.clone()]);
-        // Children in the (AC-sorted) order they sit in, not merely three of
-        // them: callers index this list positionally.
+        // The children come back in their AC-sorted order, and not merely as
+        // three children.  Callers index this list by position.
         assert_eq!(flattened_ac_terms(AcSym::Mult, &outer), vec![&a, &b, &c]);
-        // A different AC operator does not flatten: the whole term comes back
-        // as the single child.
+        // A different AC operator does not flatten the term.  The complete
+        // term comes back as the single child.
         assert_eq!(flattened_ac_terms(AcSym::Xor, &outer), vec![&outer]);
     }
 
@@ -887,20 +888,21 @@ mod tests {
         let t: LNTerm = f_app_no_eq(pair_sym(), vec![v_fresh, v_pub.clone()]);
         let r = fresh_to_const(t);
         if let Term::App(_, ts) = &r {
-            // The fresh variable becomes the constant `variableToConst`
-            // builds, whose id spells the sort as Haskell's `show LSort` does
-            // (LTerm.hs:436-438) — `LSortFresh`, not the bare `Fresh`.
+            // The fresh variable becomes the constant that `variableToConst`
+            // builds.  The id of that constant spells the sort as Haskell's
+            // `show LSort` does (LTerm.hs:436-438).  It is `LSortFresh`, not
+            // the bare `Fresh`.
             assert_eq!(
                 ts[0],
                 const_term(Name::new(NameTag::Fresh, "constVar_LSortFresh_0_k"))
             );
-            // The pub variable is left alone.
+            // The function does not change the pub variable.
             assert_eq!(ts[1], v_pub);
         } else {
             panic!();
         }
-        // Same spelling rule for the other sorts, with the index between sort
-        // and name.
+        // The other sorts follow the same spelling rule.  The index sits
+        // between the sort and the name.
         assert_eq!(
             variable_to_const(&LVar::new("A", LSort::Pub, 7)),
             const_term(Name::new(NameTag::Pub, "constVar_LSortPub_7_A"))
@@ -911,7 +913,8 @@ mod tests {
     fn nat_to_fresh_vars_swaps_sort() {
         let t: LNTerm = var_term(LVar::new("n", LSort::Nat, 3));
         let r = nat_to_fresh_vars(t);
-        // Only the sort moves: the name hint and index are carried over.
+        // Only the sort changes.  The function carries over the name hint and
+        // the index.
         assert_eq!(get_var(&r), Some(&LVar::new("n", LSort::Fresh, 3)));
     }
 

@@ -601,15 +601,17 @@ mod tests {
             ty: NodeType::System(proto_rule("Setup", None)),
         });
         add_cluster_by_role(&mut repr);
-        // 2 Alice nodes with no connecting edge => 2 separate Alice clusters;
-        // 1 Bob => 1 Bob cluster.  The names are `<role>_Session_<i+1>` over
-        // the `M.toList` order of the role grouping (all of Alice's before
-        // Bob's), and the session index counts `findConnectedComponents`'
-        // output, which HS builds by PREPENDING (`go remainingNodes
-        // (component : components)`, GraphRepr.hs:186-191) — so the LAST
-        // component discovered, `#i.3`, is `_Session_1`.  Both the name and
-        // the position reach the wire, as the DOT subgraph id / JSON
-        // `jgcName` and as the cluster emission order.
+        // The 2 Alice nodes have no edge between them, so they give 2
+        // separate Alice clusters.  The 1 Bob node gives 1 Bob cluster.  The
+        // names are `<role>_Session_<i+1>` over the `M.toList` order of the
+        // role grouping, so all of Alice's names come before Bob's.  The
+        // session index counts the output of `findConnectedComponents`.  HS
+        // builds that output by prepending (`go remainingNodes
+        // (component : components)`, GraphRepr.hs:186-191).  The component
+        // discovered last, `#i.3`, is therefore `_Session_1`.  Both the name
+        // and the position are written to the output.  The name appears as
+        // the DOT subgraph id and as the JSON `jgcName`.  The position
+        // appears as the cluster emission order.
         let clustered: Vec<(&str, Vec<NodeId>)> = repr
             .clusters
             .iter()
@@ -623,7 +625,7 @@ mod tests {
                 ("Bob_Session_1", vec![nid("i", 2)]),
             ]
         );
-        // The roleless node — and only it — stays at the top level.
+        // The node with no role stays at the top level.  No other node does.
         let top: Vec<NodeId> = repr.nodes.iter().map(|n| n.id).collect();
         assert_eq!(top, vec![nid("i", 4)]);
     }

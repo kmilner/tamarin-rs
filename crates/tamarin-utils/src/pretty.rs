@@ -561,18 +561,19 @@ mod tests {
             format!("{:?}", fixed_width_text(3, "abc").node),
             "Text(\"abc\")"
         );
-        // 5 chars rendered but width-3 advertised: split into a width-3 head
-        // plus a zero-width tail.  This module's layout is line-based, so
-        // `ZeroWidth` and `Text` RENDER identically — the split is only visible
-        // in the node tree, and asserting on `render` alone would pass for a
-        // `fixed_width_text` that never splits at all.
+        // The text renders 5 characters but declares a width of 3.  The call
+        // splits it into a head of width 3 and a tail of width zero.  The
+        // layout of this module works on whole lines, so `ZeroWidth` and
+        // `Text` render the same characters.  Only the node tree shows the
+        // split.  An assertion on `render` alone would also pass for a
+        // `fixed_width_text` that never splits.
         assert_eq!(fixed_width_text(3, "abcde").render(), "abcde");
         assert_eq!(
             format!("{:?}", fixed_width_text(3, "abcde").node),
             "Cat(Text(\"abc\"), ZeroWidth(\"de\"))"
         );
-        // `symbol` is `fixed_width_text 1`: everything past column 1 is
-        // zero-width.
+        // `symbol` is `fixed_width_text 1`.  Everything after column 1 has
+        // width zero.
         assert_eq!(
             format!("{:?}", symbol("\u{2225}\u{2225}").node),
             "Cat(Text(\"\u{2225}\"), ZeroWidth(\"\u{2225}\"))"

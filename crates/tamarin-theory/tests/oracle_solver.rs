@@ -3,15 +3,17 @@
 //! revision, or `HS_PATH` — on small fixture `.spthy` files.
 //!
 //! What the cases here compare against the oracle:
-//! 1. Rule and lemma COUNTS, ours against its `--parse-only` echo.
-//! 2. The quantifier structure of `formula_to_guarded`, against the `∃`/`∀`
-//!    prefixes of the same echo.
-//! 3. Per-lemma VERDICTS from `prove_lemma`, against its `--prove` summary
-//!    line (the fixtures are all small lemmas tamarin settles in a few steps).
-//! 4. The `unguarded variable(s)` rejection, which both sides must produce.
+//! 1. The rule and lemma counts.  The test compares ours against the counts
+//!    in the oracle's `--parse-only` echo.
+//! 2. The quantifier structure of `formula_to_guarded`.  The test compares it
+//!    against the `∃`/`∀` prefixes of the same echo.
+//! 3. The per-lemma verdicts from `prove_lemma`.  The test compares them
+//!    against the oracle's `--prove` summary line.  The fixtures are all
+//!    small lemmas, and tamarin settles each one in a few steps.
+//! 4. The `unguarded variable(s)` rejection.  Both sides must produce it.
 //!
-//! The rest of the file drives the reduction / search machinery directly on
-//! the same fixtures, with no oracle involved.
+//! The rest of the file drives the reduction and search machinery directly on
+//! the same fixtures.  Those cases do not use the oracle.
 //!
 //! The harness skips silently when the pinned oracle has not been built
 //! (`./setup.sh testing`), so the test stays fast in environments without it.
@@ -145,8 +147,9 @@ fn oracle_command() -> Option<Command> {
     Some(cmd)
 }
 
-/// [`oracle_command`] under `timeout <secs>s`, for the whole-corpus probe:
-/// it invokes the oracle once per file and a single non-terminating example
+/// [`oracle_command`] under `timeout <secs>s`, for the probe of the whole
+/// corpus.  The probe invokes the oracle once per file.  A single example
+/// that does not terminate
 /// would otherwise wedge the rayon pool.
 fn oracle_command_within(secs: u32) -> Option<Command> {
     let mut cmd = Command::new("timeout");
@@ -295,8 +298,9 @@ fn enforce_probe_ledger(
 /// Oracle-ranked proving execs the oracle script relative to the invoker's
 /// CWD and `std::process::exit(1)`s when it is missing (HS: IO exception →
 /// dies with empty stdout; RS: `search::rank_goals_or_abort`) — one such
-/// file aborts the whole probe binary, uncatchably, so the corpus probe
-/// skips them up front.  Matches inside comments that merely quote a
+/// file aborts the whole probe binary.  The abort cannot be caught.  The
+/// corpus probe therefore skips these files first.  Matches inside a
+/// comment that only quotes a
 /// `--heuristic=O` command line over-exclude a few files; the
 /// `*_MIN_COMPARED` guards keep the exclusion honest.
 fn mentions_oracle_ranking(src: &str) -> bool {
@@ -320,9 +324,9 @@ fn mentions_oracle_ranking(src: &str) -> bool {
     false
 }
 
-/// Whether the pinned oracle is present AND runnable, probed once per process
-/// — the case lists below consult it per case, and each probe is a `--help`
-/// process spawn.
+/// Whether the pinned oracle is present and also runnable.  The function
+/// probes this once per process.  The case lists below consult it once per
+/// case, and each probe is a `--help` process spawn.
 fn tamarin_available() -> bool {
     static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *AVAILABLE.get_or_init(|| {
@@ -401,7 +405,7 @@ fn rust_rule_count(src: &str) -> usize {
 /// Map a lemma's trace quantifier + solved-root status onto tamarin's
 /// verdict string.  Returns `None` for the incomparable fallthrough
 /// (root status is neither Solved nor Contradictory) — each caller keeps
-/// its own None handling/logging.
+/// its own handling and logging for `None`.
 fn verdict_str(
     tq: &tamarin_parser::ast::TraceQuantifier,
     st: &tamarin_theory::constraint::solver::search::NodeStatus,
@@ -417,7 +421,7 @@ fn verdict_str(
     }
 }
 
-/// Per-lemma kill-watchdog used by the corpus probe.  The wall-clock
+/// The per-lemma kill-watchdog that the corpus probe uses.  The wall-clock
 /// deadline at `search::expand` fires BETWEEN expand calls, but a single
 /// blocking Maude IPC read sits forever if Maude itself hangs.  A watchdog
 /// thread kills the subprocess after a hard cap; the blocked read then
@@ -484,12 +488,13 @@ fn spawn_kill_watchdog(
 }
 
 /// A rule-free [`ProofContext`](tamarin_theory::constraint::solver::context::ProofContext)
-/// over a fresh maude subprocess carrying the `pair` signature — the context
-/// the reduction / search unit cases below drive, where the constraint-system
-/// machinery is under test rather than rule instantiation.
+/// over a fresh maude subprocess.  The subprocess carries the `pair`
+/// signature.  The reduction and search unit cases below drive this context.
+/// They test the constraint-system machinery, not rule instantiation.
 ///
-/// `None` only when maude did not resolve, which [`maude_path`] already
-/// restricts to the explicit `TAM_ALLOW_NO_MAUDE=1` opt-out.
+/// The result is `None` only when maude does not resolve.  [`maude_path`]
+/// already restricts that case to the explicit `TAM_ALLOW_NO_MAUDE=1`
+/// opt-out.
 fn rule_free_context() -> Option<tamarin_theory::constraint::solver::context::ProofContext> {
     let h = tamarin_term::maude_proc::MaudeHandle::start(
         &maude_path()?,
@@ -499,9 +504,10 @@ fn rule_free_context() -> Option<tamarin_theory::constraint::solver::context::Pr
     Some(tamarin_theory::constraint::solver::context::ProofContext::new(h, Vec::new()))
 }
 
-/// The initial `System` for the first lemma of fixture `name`, built the way
-/// `prove_lemma` builds one: guarded conversion of the lemma formula, then
-/// `formula_to_system` with no restrictions and raw sources.
+/// The initial `System` for the first lemma of fixture `name`.  The function
+/// builds it the way `prove_lemma` builds one.  It first converts the lemma
+/// formula to guarded form.  It then calls `formula_to_system` with no
+/// restrictions and with raw sources.
 fn fixture_lemma_system(name: &str) -> tamarin_theory::constraint::system::System {
     use tamarin_theory::constraint::system::{formula_to_system, SourceKind};
     let src = std::fs::read_to_string(fixtures_dir().join(name)).expect("read fixture");
@@ -525,8 +531,8 @@ fn fixture_lemma_system(name: &str) -> tamarin_theory::constraint::system::Syste
 }
 
 /// Our parser and the oracle's `--parse-only` echo must find the same number
-/// of rules and lemmas in each fixture — a dropped rule or a lemma our parser
-/// swallows shows up as a count difference on one side only.
+/// of rules and lemmas in each fixture.  If our parser drops a rule, or if it
+/// swallows a lemma, the count changes on one side only.
 #[test]
 fn fixture_rule_and_lemma_counts_match_the_oracle() {
     // (fixture, rules, lemmas)
@@ -643,9 +649,10 @@ fn corpus_sample_lemma_and_rule_counts_match() {
 }
 
 /// A guarded formula's quantifier census: `(ex_blocks, ex_vars, all_blocks,
-/// all_vars)`.  Blocks are `GGuarded` nodes — one per quantifier PREFIX, the
-/// unit HS's `prettyGuarded` prints a single `∃`/`∀` glyph for; vars are the
-/// binders those prefixes open.
+/// all_vars)`.  Blocks are `GGuarded` nodes.  There is one block per
+/// quantifier prefix.  A prefix is the unit that HS's `prettyGuarded` prints
+/// a single `∃`/`∀` glyph for.  Vars are the binders that those prefixes
+/// open.
 fn count_quantifiers(g: &Guarded) -> (usize, usize, usize, usize) {
     fn rec(g: &Guarded, c: &mut (usize, usize, usize, usize)) {
         match g {
@@ -677,10 +684,10 @@ fn count_quantifiers(g: &Guarded) -> (usize, usize, usize, usize) {
     c
 }
 
-/// The oracle's echo of lemma `lemma`'s SOURCE formula in `parse_only` — the
-/// first quoted line at or after the `lemma <name>:` header.  The echo below
-/// it is the GUARDED form (negated for `all-traces`), which is a different
-/// formula and must not be picked up here.
+/// The oracle's echo of the source formula of lemma `lemma` in `parse_only`.
+/// This is the first quoted line at or after the `lemma <name>:` header.  The
+/// echo below that line is the guarded form, negated for `all-traces`.  The
+/// guarded form is a different formula, so this function must not return it.
 fn oracle_lemma_echo<'a>(parse_only: &'a str, lemma: &str) -> &'a str {
     let header = format!("lemma {lemma}:");
     parse_only
@@ -690,19 +697,21 @@ fn oracle_lemma_echo<'a>(parse_only: &'a str, lemma: &str) -> &'a str {
         .unwrap_or_else(|| panic!("no source echo for lemma `{lemma}`:\n{parse_only}"))
 }
 
-/// Cross-check `formula_to_guarded`'s quantifier structure against the oracle
-/// three ways per fixture: our `(ex_blocks, ex_vars, all_blocks, all_vars)`
-/// census is pinned, the oracle's echo of the same lemma is pinned to its
-/// bytes, and the two are TIED — `prettyLFormula` emits exactly one `∃`/`∀`
-/// glyph per quantifier prefix, so a prefix our conversion split or merged
-/// disagrees with the glyph count of a formula the oracle read from the same
-/// source.
+/// The test checks `formula_to_guarded`'s quantifier structure against the
+/// oracle in three ways per fixture.  It pins our `(ex_blocks, ex_vars,
+/// all_blocks, all_vars)` census.  It pins the oracle's echo of the same
+/// lemma to its bytes.  It then checks our block counts against the glyph
+/// counts in that echo.  `prettyLFormula` emits exactly one `∃`/`∀` glyph
+/// per quantifier prefix.  So a prefix that our conversion splits or merges
+/// disagrees with the glyph count of the formula that the oracle reads from
+/// the same source.
 ///
-/// The case list covers both trace quantifiers on purpose: an
-/// `exists-trace`-only list leaves every `all_*` count at zero on both sides,
-/// where no mutation of the `All` arm can disturb it.
+/// The case list covers both trace quantifiers on purpose.  A list of only
+/// `exists-trace` lemmas leaves every `all_*` count at zero on both sides.
+/// No mutation of the `All` arm can disturb a count that stays at zero.
 ///
-/// Echo bytes are the pinned oracle's (Git revision ef3f0468), `--parse-only`.
+/// The echo bytes come from the pinned oracle (Git revision ef3f0468), run
+/// with `--parse-only`.
 #[test]
 fn guarded_quantifier_structure_matches_tamarin() {
     // (fixture, lemma, ex_blocks, ex_vars, all_blocks, all_vars, oracle echo)
@@ -848,7 +857,7 @@ fn proof_search_disj_lemma_picks_induction_first() {
 }
 
 /// **Verdict-match suite**: drive each fixture through `prove_lemma`
-/// and confirm our verdict matches the oracle's summary line.
+/// and confirm that our verdict matches the oracle's summary line.
 ///
 /// Verdict mapping:
 /// - **`exists-trace`** lemma + tamarin `verified` ⇒ we expect `Solved`
@@ -1049,8 +1058,9 @@ fn verdict_match_suite_all_solved_against_tamarin() {
             NodeStatus::Contradictory,
             "verified",
         ),
-        // All-traces lemmas the oracle FALSIFIES: our counter-example
-        // search finds the trace, so the terminal status is `Solved`.
+        // The oracle falsifies these all-traces lemmas.  Our
+        // counter-example search finds the trace, so the terminal
+        // status is `Solved`.
         (
             "falsifiable.spthy",
             "never_both",
@@ -1071,8 +1081,9 @@ fn verdict_match_suite_all_solved_against_tamarin() {
         ),
     ];
 
-    // Several fixtures carry more than one case; the oracle's `--prove` run
-    // covers the whole file, so its summary is reused across a fixture's rows.
+    // Several fixtures carry more than one case.  The oracle's `--prove` run
+    // covers the whole file.  The loop below therefore reuses one summary for
+    // all of the rows of a fixture.
     let mut summaries: tamarin_utils::FastMap<&str, String> = tamarin_utils::FastMap::default();
     for (fixture, lemma, expected, marker) in cases {
         let h = tamarin_term::maude_proc::MaudeHandle::start(
@@ -1100,7 +1111,8 @@ fn verdict_match_suite_all_solved_against_tamarin() {
             let proved = run_tamarin_prove(&path).expect("tamarin");
             extract_summary(&proved).expect("summary").to_string()
         });
-        // The summary lists every lemma; check this one carries the marker.
+        // The summary lists every lemma.  Check that this one carries the
+        // marker.
         let line = summary
             .lines()
             .find(|l| l.contains(&format!("{} (", lemma)))
@@ -1116,31 +1128,33 @@ fn verdict_match_suite_all_solved_against_tamarin() {
     }
 }
 
-/// **Corpus proof-skeleton match probe**: walks the whole `examples/` tree,
-/// invokes `tamarin-prover --prove --output=<tmp>` once per file (so we get
-/// the rendered proof tree from Haskell), then for every verdict-matching
-/// lemma diffs our `render`ed `ProofNode` against tamarin's skeleton via
-/// `first_divergence`.
+/// **Corpus proof-skeleton match probe**.  The probe walks the whole
+/// `examples/` tree.  It invokes `tamarin-prover --prove --output=<tmp>` once
+/// per file, which gives us the rendered proof tree from Haskell.  For every
+/// lemma whose verdict matches, it then diffs our `render`ed `ProofNode`
+/// against tamarin's skeleton with `first_divergence`.
 ///
-/// Reports `corpus structural-match: X/Y` where Y is the total number
-/// of lemmas where Haskell's proof skeleton is available — verdict
-/// divergences DO count against structural match (verdict-only matching
-/// masks reasoning bugs) — except on a lemma where the oracle's output
-/// carries no extractable proof, which is reported in the
-/// `no-haskell-skeleton` list rather than ledgered.  The divergence
-/// identities are then held to [`STRUCTURAL_MISMATCH_LEDGER`], so an
-/// unexpected divergence or a silently-resolved ledger entry fails the
-/// probe instead of scrolling past in the log.
+/// The probe reports `corpus structural-match: X/Y`.  Y is the total number
+/// of lemmas where Haskell's proof skeleton is available.  A verdict
+/// divergence does count against the structural match, because a match on
+/// the verdict alone hides reasoning bugs.  There is one exception: a lemma
+/// whose oracle output carries no proof the probe can extract.  The probe
+/// reports such a lemma in the `no-haskell-skeleton` list and keeps it out of
+/// the ledger.  The probe then holds the divergence identities to
+/// [`STRUCTURAL_MISMATCH_LEDGER`].  An unexpected divergence fails the probe.
+/// So does a ledger entry that the probe compares without finding a
+/// divergence.  The probe does not merely print either one in the log.
 ///
-/// This is the **primary metric** for the port's progress, per
-/// project directive: count only whether the proof matches the
-/// Haskell skeleton directly.
+/// This is the **primary metric** for the port's progress, per the project
+/// directive: count only whether the proof matches the Haskell skeleton
+/// directly.
 ///
-/// `#[ignore]`d (run with `cargo test -- --ignored`): this heavyweight
-/// whole-corpus probe proves every example in-process — an hour-plus of
-/// wall clock.  Oracle-ranked files are skipped up front (see
-/// [`mentions_oracle_ranking`]: a missing oracle script is an uncatchable
-/// `process::exit(1)` that would abort the whole test binary).
+/// The test carries `#[ignore]`.  Run it with `cargo test -- --ignored`.
+/// This heavyweight whole-corpus probe proves every example in-process, which
+/// takes more than an hour of wall clock.  The probe skips oracle-ranked
+/// files first.  See [`mentions_oracle_ranking`]: a missing oracle script
+/// causes a `process::exit(1)` that nothing can catch, and that would abort
+/// the whole test binary.
 #[test]
 #[ignore = "heavyweight whole-corpus probe (hour-plus). Run with --ignored"]
 fn corpus_proof_skeleton_match_probe() {
@@ -1587,11 +1601,12 @@ fn prove_lemma_disj_lemma_terminates_and_tamarin_verifies() {
     let theory = parse_theory(&src, &[]).expect("parse");
     let root = prove_lemma(&theory, "either", h, 50).expect("prove_lemma");
 
-    // `either` is `exists-trace`, so a witness trace is `Solved` on our side
-    // and `verified` on the oracle's.  Anything else — `Open` (budget too
-    // small / search wedged), `Sorry` (gave up), `Contradictory` (we decided
-    // no witness exists) — is a verdict divergence, so the status is pinned
-    // rather than merely required to be terminal.
+    // `either` is `exists-trace`.  A witness trace is therefore `Solved` on
+    // our side and `verified` on the oracle's.  Every other status is a
+    // verdict divergence: `Open` (the budget is too small, or the search
+    // stalled), `Sorry` (the search gave up) and `Contradictory` (we decided
+    // that no witness exists).  So the assertion below pins the status.  It
+    // does not merely require the status to be terminal.
     assert_eq!(
         root.status,
         tamarin_theory::constraint::solver::search::NodeStatus::Solved,
@@ -1631,10 +1646,11 @@ fn proof_search_disj_lemma_descends_into_disj_goal() {
         .children
         .get("non_empty_trace")
         .expect("non_empty branch");
-    // The non_empty case decomposed its Conj formula via simplify, yielding
-    // the `Goal::Disj` the search then picked.  Accepting `Simplify` or
-    // `Finished` here as well would green a run that never reached the
-    // disjunction at all, which is the whole point of the case.
+    // The non_empty case decomposes its Conj formula with simplify.  That
+    // yields the `Goal::Disj` that the search then picks.  If this assertion
+    // also accepted `Simplify` or `Finished`, it would pass for a run that
+    // never reached the disjunction.  Reaching the disjunction is what this
+    // case checks.
     assert!(
         matches!(
             &non_empty.method,
@@ -1643,8 +1659,8 @@ fn proof_search_disj_lemma_descends_into_disj_goal() {
         "expected SolveGoal(Disj) in non_empty_trace, got {:?}",
         non_empty.method
     );
-    // No rules are in the context, so neither disjunct's `A`/`B` action can
-    // ever be produced: both branches dead-end at ⊥.
+    // The context holds no rules.  Nothing can produce the `A` action or the
+    // `B` action that the disjuncts need, so both branches end at ⊥.
     assert_eq!(non_empty.status, NodeStatus::Contradictory);
     let empty = root.children.get("empty_trace").expect("empty branch");
     assert_eq!(empty.status, NodeStatus::Contradictory);
@@ -1829,9 +1845,10 @@ fn solve_premise_goal_against_fixture_matches_rule_count() {
     let fa = tamarin_theory::fact::out_fact(tx);
     let p = (i, tamarin_theory::rule::PremIdx(0));
     let out = r.solve_premise_goal(&p, &fa);
-    // Exactly one matching rule — the solver returns `LinearNamed` carrying
-    // the producing rule's name, which is what HS's `prettyProof` prints as
-    // the single `case Setup`.  A bare `Linear` would print no case heading.
+    // Exactly one rule matches.  The solver returns `LinearNamed`, which
+    // carries the name of the rule that produces the fact.  HS's
+    // `prettyProof` prints that name as the single `case Setup`.  A `Linear`
+    // without a name prints no case heading.
     assert!(
         matches!(&out, GoalCases::LinearNamed(n) if n == "Setup"),
         "expected LinearNamed(\"Setup\"), got {out:?}"

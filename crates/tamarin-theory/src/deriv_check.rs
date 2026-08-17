@@ -860,11 +860,12 @@ mod tests {
 
     use crate::test_maude::maude_path;
 
-    /// A pair-signature handle.  `None` only when [`maude_path`] resolved
-    /// nothing (the documented `TAM_ALLOW_NO_MAUDE` skip); a maude that
-    /// resolved but will not start is the same misconfiguration as a dangling
-    /// `MAUDE_PATH`, so it panics rather than silently skipping every
-    /// maude-backed test in this file.
+    /// A pair-signature handle.  The result is `None` only when
+    /// [`maude_path`] resolves nothing.  That case is the documented
+    /// `TAM_ALLOW_NO_MAUDE` skip.  A maude that resolves but does not start
+    /// is the same misconfiguration as a `MAUDE_PATH` that points at nothing.
+    /// So this function panics.  It does not silently skip every maude-backed
+    /// test in this file.
     fn maude() -> Option<MaudeHandle> {
         Some(start_maude(
             &maude_path()?,
@@ -934,8 +935,8 @@ mod tests {
     /// Start a Maude handle whose signature is elaborated from `src` (so the
     /// theory's own `functions:`/`equations:` symbols — including a private
     /// destructor — are present), exactly as the real driver does via
-    /// `elaborated.signature.maude_sig` (run.rs).  Skips on the same terms as
-    /// [`maude`].
+    /// `elaborated.signature.maude_sig` (run.rs).  The function skips on the
+    /// same terms as [`maude`].
     fn maude_for(src: &str) -> Option<(p::Theory, MaudeHandle)> {
         let p = maude_path()?;
         let thy = parse_theory(src, &[]).expect("parse");

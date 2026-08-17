@@ -1622,10 +1622,11 @@ mod tests {
 
     use crate::test_maude::maude_path;
 
-    /// `None` only when [`maude_path`] resolved nothing (the documented
-    /// `TAM_ALLOW_NO_MAUDE` skip).  A maude that resolved but will not start
-    /// is the same misconfiguration as a dangling `MAUDE_PATH`: swallowing it
-    /// with `.ok()?` would silently skip every maude-backed test in this file.
+    /// This function returns `None` only when [`maude_path`] resolves nothing.
+    /// That case is the documented `TAM_ALLOW_NO_MAUDE` skip.  A maude that
+    /// resolves but does not start is the same misconfiguration as a dangling
+    /// `MAUDE_PATH`, so this function panics for it.  A `.ok()?` here would
+    /// hide that error and skip every maude-backed test in this file.
     fn ctx() -> Option<ProofContext> {
         let path = maude_path()?;
         let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig())
@@ -1669,9 +1670,9 @@ mod tests {
         );
         let root = run_proof_search(&ctx, sys, 10);
         assert_eq!(root.status, NodeStatus::Solved);
-        // `expand_inner` consults `is_finished` BEFORE trying `simplify`, so
-        // an already-finished system becomes the terminal node itself rather
-        // than a `Simplify` with a Solved child.
+        // `expand_inner` consults `is_finished` before it tries `simplify`.
+        // A system that is already finished therefore becomes the terminal
+        // node itself.  It does not become a `Simplify` with a Solved child.
         assert_eq!(root.method, ProofMethod::Finished(MethodResult::Solved));
         assert!(root.children.is_empty());
     }
@@ -1701,9 +1702,10 @@ mod tests {
         ));
         let root = run_proof_search(&ctx, sys, 5);
         assert_eq!(root.status, NodeStatus::Contradictory);
-        // The root is the contradiction ITSELF, not a `SolveGoal` on the empty
-        // disjunction: `is_open_in_sys` drops `DisjG (Disj [])`, so the search
-        // has no goal to pick and closes on `FormulasFalse` with no children.
+        // The root is the contradiction itself.  It is not a `SolveGoal` on
+        // the empty disjunction.  `is_open_in_sys` drops `DisjG (Disj [])`, so
+        // the search has no goal to pick.  It closes on `FormulasFalse` with
+        // no children.
         assert_eq!(
             root.method,
             ProofMethod::Finished(MethodResult::Contradictory(Some(
@@ -1746,10 +1748,11 @@ mod tests {
         assert_eq!(root.status, NodeStatus::Solved);
     }
 
-    /// A system carrying only trivially-true formulas: `simplify` must clear
-    /// them (`dedupe_formulas_pass` then `drop_trivially_true_formulas_pass`)
-    /// so the child closes as Solved.  Leave them in place and the search
-    /// never finishes — it returns `Sorry`.
+    /// This system holds only trivially-true formulas.  `simplify` clears them
+    /// with `dedupe_formulas_pass` and then
+    /// `drop_trivially_true_formulas_pass`, and the child then closes as
+    /// Solved.  A `simplify` that leaves the formulas in place never finishes
+    /// the search, and the search returns `Sorry`.
     #[test]
     fn search_simplify_drops_trivially_true_formulas_then_solves() {
         let ctx = match ctx() {
@@ -1769,9 +1772,10 @@ mod tests {
             .push(std::sync::Arc::new(crate::guarded::gtrue()));
         let root = run_proof_search(&ctx, sys, 5);
         assert_eq!(root.status, NodeStatus::Solved);
-        // One `simplify` step, whose single child is the Solved leaf: the
-        // trivially-true formulas are GONE from the simplified system, which
-        // is what turns an otherwise-unfinishable system into a Solved one.
+        // There is one `simplify` step, and its single child is the Solved
+        // leaf.  The simplified system no longer holds the trivially-true
+        // formulas.  That removal turns a system that cannot otherwise finish
+        // into a Solved one.
         assert_eq!(root.method, ProofMethod::Simplify);
         assert_eq!(root.children.len(), 1);
         let (name, leaf) = root.children.iter().next().unwrap();
@@ -1780,11 +1784,11 @@ mod tests {
         assert!(leaf.sys.formulas.is_empty());
     }
 
-    /// `--bound=N` (HS `boundProofDepth`): every node at depth `N` becomes
-    /// `sorry (Just "bound N hit")`.  The stub is FINAL — it is not a
-    /// `depth limit` thunk, so `is_depth_limited` must reject it or the
-    /// ID-DFS loop would keep doubling `MAX_DEPTH` against a frontier that
-    /// can never move.
+    /// `--bound=N` is HS `boundProofDepth`.  Every node at depth `N` becomes
+    /// `sorry (Just "bound N hit")`.  This stub is final.  It is not a
+    /// `depth limit` thunk, so `is_depth_limited` rejects it.  Otherwise the
+    /// ID-DFS loop keeps doubling `MAX_DEPTH` against a frontier that can
+    /// never move.
     #[test]
     fn search_runs_out_of_budget_returns_sorry() {
         let ctx = match ctx() {
@@ -1797,15 +1801,15 @@ mod tests {
         use tamarin_term::vterm::Lit;
         let tx: tamarin_term::lterm::LNTerm = tamarin_term::term::Term::Lit(Lit::Var(v));
         let ty: tamarin_term::lterm::LNTerm = tamarin_term::term::Term::Lit(Lit::Var(v2));
-        // An Action goal the ruleless context can never solve, so the search
-        // would keep going were the bound not cutting it.
+        // The context has no rules, so it can never solve this Action goal.
+        // The search continues without end if the bound does not cut it.
         let i = tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0);
         let f = crate::fact::out_fact(tx);
         sys.add_goal(crate::constraint::constraints::Goal::Action(i, f));
         // Add a non-empty piece so isInitialSystem returns false.
         sys.subterm_store_mut().add(ty.clone(), ty);
         let root = run_proof_search(&ctx, sys, 1);
-        // Depth 0 is the root's own `simplify`; depth 1 is the cut.
+        // Depth 0 is the root's own `simplify`.  Depth 1 is the cut.
         assert_eq!(root.method, ProofMethod::Simplify);
         assert_eq!(root.status, NodeStatus::Sorry);
         assert_eq!(root.children.len(), 1);

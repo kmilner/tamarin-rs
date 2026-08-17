@@ -202,17 +202,18 @@ mod tests {
         let needle = msg_var("x", 0);
         let inner = pair(needle.clone(), msg_var("y", 0));
         let outer = pair(needle.clone(), inner);
-        // Left-to-right, outermost-first: the direct child at [0] before the
-        // nested occurrence at [1,0].  HS `findSubtermPrime` builds each
-        // position by consing indices and `reverse`s at the hit, so the
-        // recorded position reads root→leaf.
+        // The order is left-to-right and outermost-first.  The direct child at
+        // [0] comes before the nested occurrence at [1,0].  HS
+        // `findSubtermPrime` builds each position with a cons of the indices.
+        // It then applies `reverse` at the hit.  The recorded position
+        // therefore reads root→leaf.
         assert_eq!(find_subterm(&outer, &needle), vec![vec![0i64], vec![1, 0]]);
     }
 
     /// A ground RHS routes through `constantPositions` (SubtermRule.hs:67-71).
-    /// With no argument occurring inside a sibling, `subterms` is empty and HS
-    /// falls back to `positions lhs` — every position of the LHS, the variable
-    /// ones included.
+    /// No argument occurs inside a sibling here.  `subterms` is therefore
+    /// empty, and HS falls back to `positions lhs`.  That is every position of
+    /// the LHS, and it includes the variable positions.
     #[test]
     fn rrule_with_constant_rhs_falls_back_to_all_lhs_positions() {
         use crate::builtin::true_const;
@@ -229,11 +230,12 @@ mod tests {
         );
     }
 
-    /// HS `subterms` (SubtermRule.hs:59-65, called at :69) searches, for each
-    /// top-level argument, the NOT-YET-processed siblings first (`zip [i..] ts`)
-    /// and only then the already-processed ones (`zip [0..] done`) — the two
-    /// halves carry different index bases, and the concatenation order is the
-    /// stored `StRhs` position order, which `strule_rewrites` walks.
+    /// HS `subterms` (SubtermRule.hs:59-65, called at :69) looks at each
+    /// top-level argument in turn.  For that argument it searches the siblings
+    /// that it has not processed yet first (`zip [i..] ts`).  It searches the
+    /// already-processed siblings only after that (`zip [0..] done`).  The two
+    /// halves carry different index bases.  The order of the concatenation is
+    /// the stored `StRhs` position order, which `strule_rewrites` walks.
     #[test]
     fn constant_positions_visit_remaining_siblings_before_processed_ones() {
         use crate::function_symbols::{Constructability, NoEqSym, Privacy};

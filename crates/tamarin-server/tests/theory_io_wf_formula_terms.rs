@@ -24,12 +24,12 @@ use std::path::PathBuf;
 
 use tamarin_server::theory_io;
 
-/// A path that cannot spawn: the report pinned below comes from the STATIC
-/// wellformedness pass, which the load runs before it needs a Maude handle, so
-/// the best-effort Maude block is skipped and the test is hermetic.  (Verified
-/// by running this pin under a real Maude: same bytes.)  Nothing here is
-/// skipped for want of a binary — a skip would report green having compared
-/// nothing.
+/// A path that cannot spawn.  The report below comes from the static
+/// wellformedness pass.  The load runs that pass before it needs a Maude
+/// handle.  The load therefore skips the best-effort Maude block, and the
+/// test is hermetic.  A run of this check under a real Maude gives the same
+/// bytes.  Nothing here skips for want of a binary.  A skip would pass
+/// without comparing anything.
 const NO_MAUDE: &str = "/nonexistent/maude-for-test";
 
 fn fixture() -> PathBuf {

@@ -4,11 +4,11 @@
 
 //! Out-of-line tests for [`super`].
 //!
-//! Verdict pins here cover the shapes the fixture verdict suite in
-//! `tests/oracle_solver.rs` does NOT carry (that suite cross-checks its
+//! The verdict checks here cover the shapes that the fixture verdict suite
+//! in `tests/oracle_solver.rs` does not carry.  That suite cross-checks its
 //! own `(fixture, lemma) -> NodeStatus` table against the pinned Haskell
-//! oracle's `verified`/`falsified` summary, so a shape listed there needs
-//! no second, weaker copy here).
+//! oracle's `verified`/`falsified` summary.  A shape that the suite already
+//! lists therefore needs no second check that asserts less here.
 
 use super::*;
 use crate::constraint::solver::search::NodeStatus;
@@ -16,13 +16,14 @@ use crate::test_maude::maude_path;
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::maude_sig::{pair_maude_sig, MaudeSig};
 
-/// A maude handle on `sig`, or `None` only when the run has explicitly opted
-/// out via `TAM_ALLOW_NO_MAUDE=1` — resolution and the loud-failure policy
-/// live in [`crate::test_maude::maude_path`].
+/// Returns a maude handle on `sig`.  Returns `None` only when the run opts
+/// out explicitly with `TAM_ALLOW_NO_MAUDE=1`.  Path resolution and the
+/// policy that panics both live in [`crate::test_maude::maude_path`].
 ///
-/// A maude that resolved but will not start is the same misconfiguration as a
-/// dangling `MAUDE_PATH`: swallowing it with `.ok()` would silently skip every
-/// pin in this file, so fail loudly instead.
+/// A maude that resolves but does not start is the same misconfiguration as
+/// a dangling `MAUDE_PATH`.  A `.ok()` here would hide that error, and every
+/// check in this file would then skip without notice.  This function panics
+/// instead.
 fn maude_with(sig: MaudeSig) -> Option<MaudeHandle> {
     let path = maude_path()?;
     Some(MaudeHandle::start(&path, sig).unwrap_or_else(|e| {
@@ -30,13 +31,14 @@ fn maude_with(sig: MaudeSig) -> Option<MaudeHandle> {
     }))
 }
 
-/// [`maude_with`] on the pair-only signature.
+/// Calls [`maude_with`] with the pair-only signature.
 fn maude() -> Option<MaudeHandle> {
     maude_with(pair_maude_sig())
 }
 
-/// Parse `tests/fixtures/<name>`.  The fixture is committed next to this
-/// crate, so a read failure is a broken checkout, never a reason to skip.
+/// Parses `tests/fixtures/<name>`.  The fixture is committed next to this
+/// crate.  A read failure therefore means a broken checkout.  It is never a
+/// reason to skip the test.
 fn fixture_theory(name: &str) -> tamarin_parser::ast::Theory {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
@@ -55,20 +57,20 @@ fn prove_lemma_unknown_name_is_error() {
 }
 
 /// The `features/injectivity` corpus example drives
-/// `simple_injective_fact_instances` through a whole proof: the injective-fact
-/// analysis is what supplies the less-atoms that close
-/// `injectivity_check`'s negation.  Lose the analysis (or the less-atoms it
-/// feeds) and the negated all-traces formula stops contradicting, so the
-/// verdict slips from `Contradictory` to `Solved`/`Sorry`.
+/// `simple_injective_fact_instances` through a complete proof.  The
+/// injective-fact analysis supplies the less-atoms that close the negation
+/// of `injectivity_check`.  Without the analysis, or without the less-atoms
+/// it feeds, the negated all-traces formula no longer contradicts.  The
+/// verdict then changes from `Contradictory` to `Solved` or `Sorry`.
 ///
-/// The example is an upstream feature demo that the oracle verifies, so
-/// `Contradictory` is the oracle's verdict, not merely the port's.
+/// The example is an upstream feature demo, and the oracle verifies it.
+/// `Contradictory` is therefore the oracle's verdict, not only the port's.
 #[test]
 fn injectivity_corpus_example_is_contradictory() {
     let Some(h) = maude() else { return };
-    // The crate cannot build without the `tamarin-prover` submodule (it
-    // `include_str!`s from `tamarin-prover/data/`), so the example is
-    // present whenever this test compiles.
+    // The crate cannot build without the `tamarin-prover` submodule.  The
+    // crate uses `include_str!` on files in `tamarin-prover/data/`.  The
+    // example is therefore present whenever this test compiles.
     let src = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../tamarin-prover/examples/features/injectivity/injectivity.spthy"
@@ -79,14 +81,15 @@ fn injectivity_corpus_example_is_contradictory() {
     assert_eq!(root.status, NodeStatus::Contradictory);
 }
 
-/// With the elaborated `MaudeSig` (hashing), the simplify loop must converge
-/// instead of spinning on already-canonical edges.
+/// With the elaborated `MaudeSig` (hashing), the simplify loop must
+/// converge.  It must not loop forever on edges that are already canonical.
 ///
-/// The fixture records upstream's own verdict for `recentalive` ("FINDS PROOF
-/// AUTOMATICALLY"), i.e. `verified` — an all-traces lemma the oracle proves,
-/// so the negation dead-ends and our verdict is `Contradictory`.  The elapsed
-/// bound is the non-convergence guard: a simplify loop that stops making
-/// progress spins here rather than returning a verdict at all.
+/// The fixture records the upstream verdict for `recentalive` ("FINDS PROOF
+/// AUTOMATICALLY"), that is `verified`.  The oracle proves this all-traces
+/// lemma.  The negation therefore dead-ends, and the port's verdict is
+/// `Contradictory`.  The bound on the elapsed time guards against
+/// non-convergence.  A simplify loop that makes no more progress runs
+/// forever here instead of returning any verdict.
 #[test]
 fn cr_external_recentalive_converges_and_holds() {
     let pt = fixture_theory("CR_external.spthy");
@@ -105,10 +108,11 @@ fn cr_external_recentalive_converges_and_holds() {
     );
 }
 
-/// `All k #i. A(k) @ #i ==> A(k) @ #i` is a tautology, so its negation
-/// reduces to ⊥ and the search closes `Contradictory` — proved against the
-/// theory's OWN elaborated `MaudeSig` (which adds `h/1`) rather than the
-/// pair-only one, so a signature that grows must not perturb the verdict.
+/// `All k #i. A(k) @ #i ==> A(k) @ #i` is a tautology.  Its negation
+/// therefore reduces to ⊥, and the search closes as `Contradictory`.  The
+/// test proves the lemma against the elaborated `MaudeSig` of the theory
+/// itself, which adds `h/1`, and not against the pair-only signature.  A
+/// signature that grows must not change the verdict.
 #[test]
 fn sig_minimal_tautology_is_contradictory() {
     let pt = fixture_theory("sig_minimal.spthy");
@@ -120,8 +124,8 @@ fn sig_minimal_tautology_is_contradictory() {
     assert_eq!(root.status, NodeStatus::Contradictory);
 }
 
-/// Two `Fr` premises in ONE rule: both fresh-node premises must be solvable
-/// in a single rule instance for the two-variable existential to close.
+/// The rule has two `Fr` premises.  A single rule instance must solve both
+/// fresh-node premises before the two-variable existential can close.
 #[test]
 fn two_fresh_premises_in_one_rule_reach_solved() {
     let Some(h) = maude() else { return };
@@ -130,10 +134,10 @@ fn two_fresh_premises_in_one_rule_reach_solved() {
     assert_eq!(root.status, NodeStatus::Solved);
 }
 
-/// The adversary must CONSTRUCT `<a, b>` from two separately-`Out`ed
-/// freshes to satisfy `In(<x, y>)`.  Lose the pair-construction intruder
-/// rule (or the `!KU` chain that feeds it) and this existential stops
-/// closing.
+/// The adversary must build `<a, b>` from two fresh values, each sent out by
+/// its own `Out` fact, to satisfy `In(<x, y>)`.  Without the
+/// pair-construction intruder rule, this existential no longer closes.  The
+/// same holds without the `!KU` chain that feeds that rule.
 #[test]
 fn intruder_pair_construction_reaches_solved() {
     let Some(h) = maude() else { return };
@@ -143,13 +147,14 @@ fn intruder_pair_construction_reaches_solved() {
 }
 
 /// HS `gatherReusableLemmas` (CloseRule.hs:179-188) collects the lemmas that
-/// become `sLemmas` hypotheses for the lemma being proved.  Each guard is
-/// load-bearing and independently droppable, so pin them one by one:
-/// declaration order is a `break` (a `[reuse]` lemma is invisible to itself
-/// and to everything ahead of it), the `[reuse]` attribute is required,
-/// `AllTraces == lTraceQuantifier` excludes exists-trace lemmas, and
-/// `pcHiddenLemmas` — the PROVED lemma's own `[hide_lemma=..]` names, with
-/// `ALL` as the wildcard — subtracts from the result.
+/// become `sLemmas` hypotheses for the lemma under proof.  Each guard
+/// matters, and each one can be dropped on its own, so the test checks them
+/// one by one.  The declaration order acts as a `break`: a `[reuse]` lemma is
+/// invisible to itself and to every lemma ahead of it.  The `[reuse]`
+/// attribute is required.  The check `AllTraces == lTraceQuantifier` excludes
+/// exists-trace lemmas.  Finally, `pcHiddenLemmas` subtracts from the result.
+/// It holds the `[hide_lemma=..]` names of the lemma under proof, and `ALL`
+/// is the wildcard.
 #[test]
 fn gather_reusable_lemmas_matches_hs_guards() {
     let f = |name: &str| format!("\"All k #i. {name}(k) @ #i ==> Ex #j. {name}(k) @ #j\"");
@@ -178,13 +183,13 @@ fn gather_reusable_lemmas_matches_hs_guards() {
             .expect("gather")
             .len()
     };
-    // `plain` is preceded by all three of `reusable`, `existential` and
-    // `unflagged`; only `reusable` clears every guard, so 1 — not 3 —
-    // distinguishes a correct filter from a missing attribute or
-    // trace-quantifier check.
+    // All three of `reusable`, `existential` and `unflagged` precede `plain`.
+    // Only `reusable` passes every guard.  A result of 1, rather than 3,
+    // therefore separates a correct filter from a missing attribute check or
+    // a missing trace-quantifier check.
     assert_eq!(gathered("plain"), 1, "only the [reuse] all-traces prior");
-    // The `break` on the proved lemma's own name: nothing precedes
-    // `reusable`, and it cannot reuse itself.
+    // The `break` uses the name of the lemma under proof.  Nothing precedes
+    // `reusable`, and `reusable` cannot reuse itself.
     assert_eq!(gathered("reusable"), 0, "declared-before is a break");
     // `pcHiddenLemmas` subtracts by name, and `ALL` subtracts everything.
     assert_eq!(gathered("hides_one"), 0, "[hide_lemma=reusable] removes it");
@@ -193,9 +198,9 @@ fn gather_reusable_lemmas_matches_hs_guards() {
         0,
         "[hide_lemma=ALL] removes every one"
     );
-    // `trailing` is itself `[reuse]` yet still sees only `reusable`: the
-    // break keeps a lemma out of its own hypothesis set no matter how many
-    // lemmas precede it.
+    // `trailing` carries `[reuse]` itself, but it still sees only
+    // `reusable`.  The break keeps a lemma out of its own hypothesis set,
+    // whatever number of lemmas precede it.
     assert_eq!(gathered("trailing"), 1);
 }
 

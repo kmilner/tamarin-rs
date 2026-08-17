@@ -109,17 +109,18 @@ fn non_graphviz_dot_reports_the_detailed_results_block() {
     );
 }
 
-/// Oracle (`test --with-dot=/bin/false`): the tool starts but exits 1, so the
-/// exit code is consulted before `check` ever runs and the reason is the
-/// `failed with exit code 1` line followed by `ensureGraphVizDot`'s `errMsg1`
-/// (Environment.hs:88-95) — the only route by which that WARNING block reaches
-/// a transcript.  `unlines` already terminated it, so a blank line separates it
-/// from the `Detailed results` dump.  `ensureGraphVizDot` returns `Nothing`, so
-/// the PNG probe is skipped and no blank line follows.
+/// Oracle command: `test --with-dot=/bin/false`.  The tool starts but exits 1.
+/// The code consults the exit code before `check` runs at all.  The reason is
+/// therefore the `failed with exit code 1` line, followed by
+/// `ensureGraphVizDot`'s `errMsg1` (Environment.hs:88-95).  This is the only
+/// route by which that WARNING block reaches a transcript.  `unlines` has
+/// already terminated the block, so a blank line separates it from the
+/// `Detailed results` dump.  `ensureGraphVizDot` returns `Nothing`.  The code
+/// therefore skips the PNG probe, and no blank line follows.
 ///
-/// The WARNING bytes are deliberately duplicated here: the source constant is
-/// private to `probe`, so this transcript pin restates it the same way
-/// `probe_tests.rs` restates its source-derived pins.
+/// This test repeats the WARNING bytes on purpose.  The source constant is
+/// private to `probe`.  This transcript pin restates the constant, in the same
+/// way that `probe_tests.rs` restates its source-derived pins.
 #[test]
 fn bad_exit_dot_reports_the_exit_code_reason_line() {
     if !common::maude_available() {
@@ -258,8 +259,9 @@ fn missing_maude_aborts_a_batch_run() {
 }
 
 /// `variants` runs the same probe (Intruder.hs:45) and dies the same way,
-/// before any variant computation output — the oracle's stdout is EMPTY here,
-/// so an aborted run that had already printed a variant table would differ.
+/// before it writes any variant computation output.  The oracle's stdout is
+/// empty here.  A run that aborts after it prints a variant table has a
+/// different stdout.
 #[test]
 fn missing_maude_aborts_the_variants_command() {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
@@ -277,8 +279,8 @@ fn missing_maude_aborts_the_variants_command() {
 
 /// `interactive` probes through `ensureMaudeAndGetVersion`
 /// (Interactive.hs:103) and dies before binding any socket — no port
-/// juggling needed to test it.  The oracle's stdout is EMPTY, which is the
-/// half that shows the abort came FIRST: the `Finished loading theories …
+/// allocation is needed.  The oracle's stdout is empty.  That is the half
+/// that shows the abort comes first.  The `Finished loading theories …
 /// server ready at` line (Interactive.hs:125) is a stdout `println!`.
 #[test]
 fn missing_maude_aborts_interactive_before_binding() {

@@ -8,11 +8,12 @@
 //! integration test cannot see a `#[cfg(test)]` module of the library it
 //! links.  Keep the two in sync.
 //!
-//! The same structural barrier keeps a handful of copies alive in the other
-//! crates (a sibling crate cannot reach this `pub(crate)` module either), so
-//! the discipline scan in this file's `tests` module polices the WHOLE
-//! workspace rather than this crate alone — its `ALLOWED` array is the roster
-//! of sanctioned copies and records what each one owes.
+//! The same structural barrier keeps a small number of copies alive in the
+//! other crates.  A sibling crate cannot reach this `pub(crate)` module
+//! either.  So the discipline scan in this file's `tests` module checks the
+//! complete workspace, not this crate alone.  Its `ALLOWED` array lists the
+//! sanctioned copies.  The array also records the obligation that each copy
+//! carries.
 
 /// Absolute maude locations probed when `MAUDE_PATH` is unset — the same
 /// pair the rest of the workspace's maude-gated suites walk.
@@ -78,29 +79,33 @@ pub(crate) fn maude_path() -> Option<String> {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    /// Every file in the WORKSPACE allowed to read `$MAUDE_PATH`, and why the
-    /// copy has to exist there.  Workspace-relative, `/`-separated.
+    /// Every file in the workspace that may read `$MAUDE_PATH`, and why the
+    /// copy must exist there.  The paths are workspace-relative and
+    /// `/`-separated.
     ///
-    /// Each entry is a structural barrier, not a convenience: a `#[cfg(test)]`
-    /// module of a library is invisible to that library's own integration
-    /// tests, a `tests/common/mod.rs` is invisible to `src/`, and this
-    /// module is `pub(crate)` so no sibling crate can call it.
+    /// Each entry exists because of a structural barrier, not for
+    /// convenience.  A `#[cfg(test)]` module of a library is not visible to
+    /// that library's own integration tests.  A `tests/common/mod.rs` is not
+    /// visible to `src/`.  This module is `pub(crate)`, so no sibling crate
+    /// can call it.
     ///
     /// - `crates/tamarin-theory/src/test_maude.rs` — the shared probe above.
     /// - `crates/tamarin-theory/tests/oracle_solver.rs` — the integration
     ///   mirror of that probe.
-    /// - `crates/tamarin-theory/examples/common/mod.rs` — the examples'
-    ///   loader; see [`SKIPS_SILENTLY`] for why it is not in [`MUST_BE_LOUD`].
-    /// - `crates/tamarin-server/tests/common/mod.rs` — the server suites'
-    ///   harness (its loud half is `maude_available`).
-    /// - `crates/tamarin-server/tests/theory_io_ndc.rs` — a single-file pin
-    ///   that does not pull in `common`.
+    /// - `crates/tamarin-theory/examples/common/mod.rs` — the loader for the
+    ///   examples.  See [`SKIPS_SILENTLY`] for why it is not in
+    ///   [`MUST_BE_LOUD`].
+    /// - `crates/tamarin-server/tests/common/mod.rs` — the harness for the
+    ///   server suites.  Its half that panics is `maude_available`.
+    /// - `crates/tamarin-server/tests/theory_io_ndc.rs` — a pin in a single
+    ///   file that does not use `common`.
     /// - `crates/tamarin-server/src/handlers/proof_tree.rs` — the server
     ///   library's own `#[cfg(test)]` module.
-    /// - `crates/tamarin-prover/tests/common/mod.rs` — the CLI e2e harness
-    ///   (its loud half is `maude_available`).
+    /// - `crates/tamarin-prover/tests/common/mod.rs` — the harness for the
+    ///   end-to-end CLI tests.  Its half that panics is `maude_available`.
     /// - `crates/tamarin-term/src/test_maude.rs` — the bottom crate's own
-    ///   shared probe, this file's twin; it is in [`SKIPS_SILENTLY`].
+    ///   shared probe, and the twin of this file.  It is in
+    ///   [`SKIPS_SILENTLY`].
     const ALLOWED: [&str; 8] = [
         "crates/tamarin-prover/tests/common/mod.rs",
         "crates/tamarin-server/src/handlers/proof_tree.rs",
@@ -112,12 +117,14 @@ mod tests {
         "crates/tamarin-theory/tests/oracle_solver.rs",
     ];
 
-    /// The [`ALLOWED`] probes that resolve no maude by PANICKING, and so must
-    /// name the `TAM_ALLOW_NO_MAUDE` opt-out that converts the panic back into
-    /// a deliberate skip.  This is the settled semantics: unset `MAUDE_PATH`
-    /// may fall through the candidate ladder, a SET-but-dangling one must
-    /// panic, and resolving nothing at all must panic unless the opt-out is
-    /// named.
+    /// The [`ALLOWED`] probes that panic when they resolve no maude.  Each of
+    /// them must name the `TAM_ALLOW_NO_MAUDE` opt-out.  That opt-out turns
+    /// the panic back into a deliberate skip.
+    ///
+    /// These are the agreed rules.  An unset `MAUDE_PATH` may fall through
+    /// the ladder of candidates.  A `MAUDE_PATH` that is set but names a file
+    /// that does not exist must panic.  A probe that resolves nothing at all
+    /// must also panic, unless the opt-out is named.
     const MUST_BE_LOUD: [&str; 6] = [
         "crates/tamarin-prover/tests/common/mod.rs",
         "crates/tamarin-server/src/handlers/proof_tree.rs",
@@ -127,28 +134,32 @@ mod tests {
         "crates/tamarin-theory/tests/oracle_solver.rs",
     ];
 
-    /// The [`ALLOWED`] probes that do NOT carry the loud policy, frozen so the
-    /// set can only shrink.  `ALLOWED` minus [`MUST_BE_LOUD`] must equal this
-    /// list exactly, in both directions.
+    /// The [`ALLOWED`] probes that do not carry the policy of
+    /// [`MUST_BE_LOUD`].  The list is fixed, so the set can only get smaller.
+    /// `ALLOWED` minus [`MUST_BE_LOUD`] must equal this list exactly, in both
+    /// directions.
     ///
-    /// - `crates/tamarin-theory/examples/common/mod.rs` never skips at all: it
-    ///   hands whatever it resolved (a bare `maude` when `MAUDE_PATH` is
-    ///   unset) to `MaudeHandle::start(..).expect(..)`, so a dangling or
-    ///   missing maude aborts the example rather than reporting a green run.
-    ///   It has no opt-out because it has nothing to opt out of.
-    /// - `crates/tamarin-term/src/test_maude.rs` asserts on a set-but-dangling
-    ///   `MAUDE_PATH` like the loud probes, but still returns `None` — a
-    ///   silent skip — when its ladder resolves nothing.  Listing it here
-    ///   freezes the debt: a ninth copy cannot join without editing this
-    ///   array.
+    /// - `crates/tamarin-theory/examples/common/mod.rs` never skips.  It
+    ///   passes whatever it resolved to `MaudeHandle::start(..).expect(..)`.
+    ///   When `MAUDE_PATH` is unset, that value is a bare `maude`.  So the
+    ///   example stops with an error when `MAUDE_PATH` names a file that does
+    ///   not exist, and also when no maude is found at all.  It does not
+    ///   report a passing run.  The file has no opt-out because it has
+    ///   nothing to opt out of.
+    /// - `crates/tamarin-term/src/test_maude.rs` asserts when `MAUDE_PATH` is
+    ///   set but names a file that does not exist, like the probes that
+    ///   panic.  But it still returns `None`, which is a silent skip, when
+    ///   its ladder resolves nothing.  This entry records that exception and
+    ///   holds the set fixed.  A ninth copy cannot join without an edit to
+    ///   this array.
     const SKIPS_SILENTLY: [&str; 2] = [
         "crates/tamarin-term/src/test_maude.rs",
         "crates/tamarin-theory/examples/common/mod.rs",
     ];
 
-    /// Every `.rs` file under `root`, recursively, skipping `target`
-    /// directories.  `std::fs` only — a discipline scan should not pull a
-    /// walker dependency into the crate.
+    /// Every `.rs` file under `root`, found recursively.  The walk skips
+    /// `target` directories.  It uses `std::fs` only, because a discipline
+    /// scan must not add a directory-walker dependency to the crate.
     fn rs_files(root: &Path) -> Vec<PathBuf> {
         let mut files = Vec::new();
         let mut stack = vec![root.to_path_buf()];
@@ -167,21 +178,24 @@ mod tests {
         files
     }
 
-    /// Reading `$MAUDE_PATH` anywhere in the workspace but [`ALLOWED`] is
-    /// forbidden: a local copy of the probe drifts silently, and a copy that
-    /// reads a dangling `MAUDE_PATH` as "skip" reports green on a box where
-    /// nothing maude-backed ran.
+    /// No file in the workspace outside [`ALLOWED`] may read `$MAUDE_PATH`.
+    /// A local copy of the probe can become different from this one without
+    /// any warning.  A copy can also treat a `MAUDE_PATH` that points at a
+    /// missing file as a reason to skip.  That copy then passes on a machine
+    /// where no maude-backed test ran.
     ///
-    /// The scan is workspace-wide because the drift was: the audit behind it
-    /// deleted seven copies spread over five crates, and a crate-local scan
-    /// would have seen one of them.  It also enforces the semantics, not just
-    /// the head-count — every [`MUST_BE_LOUD`] probe has to name the
-    /// `TAM_ALLOW_NO_MAUDE` opt-out, and the complement has to be exactly the
-    /// [`SKIPS_SILENTLY`] roster, so the silent-skip debt can only shrink.
+    /// The scan covers the whole workspace because the copies were spread
+    /// over the whole workspace.  The audit behind this scan deleted seven
+    /// copies in five crates.  A scan of one crate would have found only one
+    /// of them.  The scan also checks the semantics, not only the number of
+    /// copies.  Every [`MUST_BE_LOUD`] probe must name the
+    /// `TAM_ALLOW_NO_MAUDE` opt-out.  The rest must be exactly the
+    /// [`SKIPS_SILENTLY`] list, so the number of silent skips can only get
+    /// smaller.
     ///
-    /// Two positive controls keep the scan itself from greening while
-    /// asserting nothing: it checks that it reached each allowlisted file,
-    /// and that a needle still matches inside each.
+    /// Two positive controls stop the scan itself from passing while it
+    /// asserts nothing.  It checks that it reached each allowlisted file.  It
+    /// also checks that a needle still matches inside each file.
     #[test]
     fn maude_path_reads_are_confined_to_the_allowlisted_probes() {
         // `<workspace>/crates/tamarin-theory` -> `<workspace>`.
@@ -189,23 +203,26 @@ mod tests {
             .ancestors()
             .nth(2)
             .expect("this crate sits at <workspace>/crates/<name>");
-        // Built by concatenation so this test's own source is not itself a
-        // match — the hit counted for `src/test_maude.rs` below then comes
-        // from the real probe above, which is what the control asserts.
-        // Both `var` and `var_os` spellings, so a rewrite of a probe into the
-        // `OsString` API does not walk out of the allowlist.
+        // The test builds the needles by concatenation, so its own source is
+        // not a match.  The hit counted for `src/test_maude.rs` below then
+        // comes from the real probe above.  That is what the control asserts.
+        // There is one needle for the `var` spelling and one for the `var_os`
+        // spelling.  So the scan still finds a probe that moves to the
+        // `OsString` API.
         let needles = [
             ["var(", "\"", "MAUDE_PATH", "\""].concat(),
             ["var_os(", "\"", "MAUDE_PATH", "\""].concat(),
         ];
-        // Same trick: this array's own source must not satisfy the loud check
-        // for a file that does not really carry the opt-out.
+        // The same method applies here.  This array's own source must not
+        // satisfy the opt-out check for a file that does not carry the
+        // opt-out.
         let loud_needle = ["TAM_ALLOW_", "NO_MAUDE"].concat();
         let files = rs_files(&workspace.join("crates"));
 
         let mut offenders: Vec<String> = Vec::new();
-        // Per allowlisted file: how many times the walk reached it, how many
-        // needle matches it holds, and whether it names the opt-out.
+        // These arrays hold one entry for each allowlisted file.  They record
+        // how many times the walk reached the file, how many needle matches
+        // the file holds, and whether the file names the opt-out.
         let mut reached = [0usize; ALLOWED.len()];
         let mut hits = [0usize; ALLOWED.len()];
         let mut loud = [false; ALLOWED.len()];

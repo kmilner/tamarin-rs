@@ -481,13 +481,14 @@ mod tests {
     use super::*;
     use crate::constraint::system::System;
 
-    /// The all-empty shape, which no corpus proof reaches: every section body
-    /// is `emptyDoc`, so `combine_ (header, d) = fsep [keyword_ header <> colon,
-    /// nest 2 d]` (System.hs:1671-1685) collapses to the bare header, and the
-    /// `vsep` between the nine items leaves a blank line after each but the
-    /// last.  `last` is the only body with content (`maybe (text "none")`), and
-    /// `allowed cases` is `show sSourceKind`.  `prettyEqStore`'s own two
-    /// sub-headers survive at the extra `nest 2`.
+    /// This is the all-empty shape, which no corpus proof reaches.  Every
+    /// section body is `emptyDoc`.  The definition
+    /// `combine_ (header, d) = fsep [keyword_ header <> colon,
+    /// nest 2 d]` (System.hs:1671-1685) therefore collapses to the bare
+    /// header.  The `vsep` between the nine items leaves a blank line after
+    /// every item except the last one.  `last` is the only body with content
+    /// (`maybe (text "none")`).  `allowed cases` is `show sSourceKind`.  The
+    /// two sub-headers of `prettyEqStore` survive at the extra `nest 2`.
     #[test]
     fn empty_system_renders_each_section() {
         let s = System::default();
@@ -542,11 +543,12 @@ mod tests {
         };
         let mut sys = System::empty();
         *sys.subterm_store_mut() = st;
-        // Contradictory header, the three numbered keyword sections in HS's
-        // order, `numbered'`'s `<n>. ` prefixes and the `⊏` operator.  The gap
-        // before `⊏` is TWO spaces, not one: `ppSt (a,b) = prettyNTerm a $$
-        // nest 3 (opSubterm <+> prettyNTerm b)` (SubtermStore.hs:580-581), and
-        // `$$`'s `nilAboveNest` inlines the continuation at `3 - width a`
+        // The assertion covers the Contradictory header, the three numbered
+        // keyword sections in HS's order, the `<n>. ` prefixes of `numbered'`
+        // and the `⊏` operator.  The gap before `⊏` is two spaces, not one.
+        // HS defines `ppSt (a,b) = prettyNTerm a $$
+        // nest 3 (opSubterm <+> prettyNTerm b)` (SubtermStore.hs:580-581).
+        // The `nilAboveNest` of `$$` inlines the continuation at `3 - width a`
         // columns when the small term is a single character.
         assert_eq!(
             pretty_subterm_store(&sys).render(),
@@ -570,11 +572,11 @@ mod tests {
         let mut sys = System::empty();
         sys.set_eq_store(std::sync::Arc::new(eq));
         // `prettyEqStore` (EquationStore.hs:650-662) prefixes `CONTRADICTORY`
-        // only when `eqsIsFalse`, then the two `combine`d sub-sections.  The
-        // disjunction renders as `text (show (unSplitId idx) ++ ".")` beside
-        // `numbered' []`, and HS `numbered _ [] = emptyDoc`
-        // (Text/PrettyPrint/Class.hs:252-253) collapses the empty case list
-        // away, leaving the bare `0.`.
+        // only when `eqsIsFalse` holds.  It then prints the two sub-sections
+        // that `combine` builds.  The disjunction renders as
+        // `text (show (unSplitId idx) ++ ".")` beside `numbered' []`.  HS
+        // `numbered _ [] = emptyDoc` (Text/PrettyPrint/Class.hs:252-253)
+        // removes the empty case list.  Only the bare `0.` remains.
         assert_eq!(
             pretty_eq_store(&sys).render(),
             "CONTRADICTORY\nsubst:\nconj: 0."

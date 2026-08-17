@@ -329,11 +329,13 @@ mod tests {
         }
     }
 
-    /// HS's `FApp (NoEq sym) [a]` arm (Report.hs:93-97) SHADOWS the generic
-    /// `FApp k as` recursion, so a unary non-`report` NoEq application is
-    /// returned whole — its argument is never descended into, even when it
-    /// contains a `report`.  Any other arity still recurses.  Making the unary
-    /// arm recurse "for consistency" silently rewrites terms HS leaves alone.
+    /// The `FApp (NoEq sym) [a]` arm in HS (Report.hs:93-97) comes before the
+    /// generic `FApp k as` recursion and hides it.  So, for a unary NoEq
+    /// application that is not a `report`, HS returns the term unchanged.  HS
+    /// never descends into the argument of that application, even when the
+    /// argument holds a `report`.  Every other arity still recurses.  A unary
+    /// arm that recurses "for consistency" rewrites terms that HS leaves
+    /// alone, and it gives no warning.
     #[test]
     fn subst_unary_noeq_arm_shadows_the_generic_recursion() {
         use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
@@ -351,12 +353,14 @@ mod tests {
         let c: SapicTerm = tamarin_term::lterm::pub_term("c");
         let report_c = f_app_no_eq(tamarin_term::builtin::report_sym(), vec![c.clone()]);
 
-        // Unary `h(report('c'))` — untouched, `report` and all.
+        // The unary `h(report('c'))` stays unchanged, together with the
+        // `report` inside it.
         let unary = f_app_no_eq(sym(b"h", 1), vec![report_c.clone()]);
         assert_eq!(subst(&Some(loc.clone()), &unary), unary);
 
-        // Binary `g(report('c'), 'c')` — the generic arm rewrites the nested
-        // `report`, which is what makes the unary case above discriminating.
+        // In the binary `g(report('c'), 'c')`, the generic arm rewrites the
+        // nested `report`.  That difference is what makes the unary case
+        // above a real check.
         let binary = f_app_no_eq(sym(b"g", 2), vec![report_c, c.clone()]);
         let rewritten = subst(&Some(loc.clone()), &binary);
         assert_ne!(rewritten, binary);

@@ -1140,11 +1140,12 @@ mod tests {
                 "{name} must carry its node {node}:\n{out}"
             );
         }
-        // Cluster ORDER, which the `contains` checks above cannot see: HS
-        // builds the clusters from `Map.toList nodesByGroup`
+        // This checks the cluster order, which the `contains` checks above
+        // cannot see.  HS builds the clusters from `Map.toList nodesByGroup`
         // (GraphRepr.hs:123) over the `Map String [Node]` that
-        // `groupNodesByRole` (:139-144) accumulates, and Data.Map lists its
-        // keys ascending — so the roles reach the wire sorted by name.
+        // `groupNodesByRole` (:139-144) accumulates.  Data.Map lists its keys
+        // in ascending order.  The roles therefore go into the output sorted
+        // by name.
         let p = out
             .find("\"jgcName\": \"P_Session_1\"")
             .expect("P_Session_1 cluster");
@@ -1157,10 +1158,10 @@ mod tests {
         );
     }
 
-    // No traces at all: the empty array stays inline (aeson-pretty does not
-    // break an empty list over three lines) and the document ends without a
-    // trailing newline — the same 20 bytes `--output-json` writes for a theory
-    // with nothing solved.
+    // There are no traces at all.  The empty array stays inline, because
+    // aeson-pretty does not break an empty list over three lines.  The
+    // document also ends without a trailing newline.  These are the same 20
+    // bytes that `--output-json` writes for a theory with nothing solved.
     #[test]
     fn empty_graph_list_is_twenty_bytes() {
         let out = sequents_to_json_pretty(&GraphOptions::default(), &[]);

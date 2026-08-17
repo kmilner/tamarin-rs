@@ -153,9 +153,10 @@ mod tests {
             ],
         );
         assert_eq!(vars_vterm(&t), vec!["x", "y"]);
-        // The in-order sibling keeps BOTH the traversal order and the
-        // duplicates — `freesSapicTerm` and the SAPIC binder walks depend on
-        // first-appearance order, so it must not grow set semantics.
+        // The in-order sibling keeps the traversal order, and it also keeps
+        // the duplicates.  `freesSapicTerm` and the SAPIC binder walks depend
+        // on first-appearance order.  The function must therefore not use
+        // set semantics.
         assert_eq!(vars_vterm_in_order(&t), vec!["y", "x", "y"]);
     }
 

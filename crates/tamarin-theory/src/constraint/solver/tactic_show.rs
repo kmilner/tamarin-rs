@@ -549,8 +549,9 @@ mod tests {
         }
     }
 
-    /// `show LVar` = `sortPrefix s ++ body`: one prefix per sort (Msg and
-    /// Untagged get none), and the `.idx` suffix only for a non-zero index.
+    /// `show LVar` is `sortPrefix s ++ body`.  Each sort has one prefix.  Msg
+    /// and Untagged have no prefix.  The `.idx` suffix appears only for an
+    /// index that is not zero.
     #[test]
     fn show_varspec_covers_every_sort_prefix_and_the_index_suffix() {
         let sorted = |sort, name: &str, idx| {
@@ -567,12 +568,14 @@ mod tests {
         assert_eq!(sorted(p::SortHint::Nat, "n", 0), "%n");
         assert_eq!(sorted(p::SortHint::Msg, "m", 0), "m");
         assert_eq!(sorted(p::SortHint::Untagged, "m", 0), "m");
-        // Suffix-spelled sorts (`s:fresh`) share the prefixes.
+        // Sorts that the source spells as a suffix (`s:fresh`) use the same
+        // prefixes.
         assert_eq!(
             sorted(p::SortHint::Suffix(p::SuffixSort::Fresh), "s", 0),
             "~s"
         );
-        // Non-zero index appends `.idx`; an unnamed var shows the index alone.
+        // An index that is not zero appends `.idx`.  A variable with no name
+        // shows the index alone.
         assert_eq!(sorted(p::SortHint::Fresh, "s", 3), "~s.3");
         assert_eq!(sorted(p::SortHint::Msg, "", 7), "7");
     }
@@ -588,8 +591,8 @@ mod tests {
         assert_eq!(show_gterm(&t), "exp('g',Free ~s)");
     }
 
-    /// Derived `Show [a]`: bracketed, comma-separated with NO space, and `[]`
-    /// when empty.
+    /// The derived `Show [a]` puts the items in brackets.  It separates them
+    /// with a comma and no space.  It shows `[]` for an empty list.
     #[test]
     fn show_term_list_matches_exp_g() {
         let t = GTerm::BinOp(
@@ -608,9 +611,10 @@ mod tests {
         assert_eq!(show_term_list(&[]), "[]");
     }
 
-    /// Every arm of the derived `Show FactTag` — the string `isFactName`
-    /// compares against and `jgnFactName` emits, so a mis-spelled constructor
-    /// silently breaks both tactic matching and `--output-json`.
+    /// Every arm of the derived `Show FactTag`.  `isFactName` compares
+    /// against this string, and `jgnFactName` writes it out.  A constructor
+    /// with a wrong spelling therefore breaks both the tactic matching and
+    /// `--output-json`, and nothing reports an error.
     #[test]
     fn show_fact_tag_covers_every_derived_show_arm() {
         assert_eq!(

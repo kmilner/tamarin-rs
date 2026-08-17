@@ -74,9 +74,9 @@ fn each_mode_renders_its_own_help() {
 #[test]
 fn version_is_stdout_rc_zero() {
     // `-V` prints the short form; `--version` adds the build provenance.
-    // The two ABSENCE assertions are the pin: wiring clap's `version` to
-    // `LONG_VERSION` makes `-V` print the provenance too, and every other
-    // assertion here still holds.
+    // The two assertions for absent text are what this test checks.  A clap
+    // `version` that uses `LONG_VERSION` makes `-V` print the provenance as
+    // well, and every other assertion here still holds.
     let out = run(&["-V"]);
     assert_eq!(out.status.code(), Some(0));
     let text = String::from_utf8_lossy(&out.stdout);

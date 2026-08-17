@@ -229,9 +229,9 @@ fn content_untracked_callers_are_enumerated() {
     let mut offenders: Vec<String> = Vec::new();
     let mut forbidden: Vec<String> = Vec::new();
     let mut escapes: Vec<String> = Vec::new();
-    // How often each door needle and the escape shape actually matched.  A
-    // scan that matches nothing asserts nothing, so these counts are checked
-    // to be non-zero below.
+    // These counters record how many times each door needle and the escape
+    // shape matched.  A scan that matches nothing asserts nothing.  So the
+    // code below checks that these counts are not zero.
     let mut seen = [0usize; 3];
     let mut escaping = 0usize;
     let mut files: Vec<std::path::PathBuf> = Vec::new();
@@ -355,11 +355,11 @@ fn content_untracked_callers_are_enumerated() {
              field projection — audit that no formula store is written through \
              it, then add the fn to ESCAPE_ALLOWED: {escapes:?}"
     );
-    // The three assertions above are satisfied by a scan that matched
-    // NOTHING, which is what a renamed accessor (or a `src` walk that fell
-    // over the whole crate) leaves behind: pin that every needle is still
-    // live, so a rename has to update the needles rather than silence the
-    // discipline.
+    // A scan that matches nothing also satisfies the three assertions above.
+    // A renamed accessor gives that result.  So does a `src` walk that
+    // reaches no file in the crate.  The checks below therefore assert that
+    // every needle still matches something.  A rename must then update the
+    // needles, and it cannot silence this discipline.
     assert!(
         seen.iter().all(|hits| *hits > 0),
         "a door needle matched no call at all — the accessor was renamed or \
@@ -760,15 +760,16 @@ fn formula_to_system_partitions_safety_restrictions() {
             typ: None,
         })
     };
-    // `Last(i)` has a FREE variable, so `is_safety_formula` rejects it: it is
-    // the non-safety arm of the partition, and the one shape that tells the
-    // two arms apart (`formulas` holds exactly one entry either way — the
-    // whole conjunction — so its length says nothing).
+    // `Last(i)` has a free variable, so `is_safety_formula` rejects it.  It
+    // is the non-safety arm of the partition.  It is also the one shape that
+    // tells the two arms apart.  `formulas` holds exactly one entry in both
+    // cases, the complete conjunction, so its length says nothing.
     let goal =
         crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(mkvar("j"))));
     let unsafe_r =
         crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(mkvar("i"))));
-    // gtrue is safety (no Ex, no free vars); so is gfalse (`Disj []`).
+    // gtrue is a safety formula: it has no Ex and no free variables.  gfalse
+    // (`Disj []`) is a safety formula too.
     let restrictions = vec![
         crate::guarded::gtrue(),
         crate::guarded::gfalse(),
@@ -781,16 +782,16 @@ fn formula_to_system_partitions_safety_restrictions() {
         false,
         &goal,
     );
-    // The non-safety restriction is CONJOINED onto the (ExistsTrace, hence
-    // un-negated) goal formula.
+    // The code conjoins the non-safety restriction onto the goal formula.
+    // The goal is ExistsTrace, so the code does not negate it.
     assert_eq!(sys.formulas.len(), 1);
     assert_eq!(
         *sys.formulas[0],
         crate::guarded::Guarded::Conj(vec![goal, unsafe_r.clone()].into())
     );
-    // …and only the safety ones become known-true lemmas.  gtrue is `Conj []`,
-    // which `insert_lemma` flattens to nothing (no items inside the empty
-    // conjunction); gfalse stays.
+    // Only the safety restrictions become known-true lemmas.  gtrue is
+    // `Conj []`, and `insert_lemma` flattens it to nothing, because the empty
+    // conjunction holds no items.  gfalse stays.
     assert!(crate::guarded::stores_contains(
         &sys.lemmas,
         &crate::guarded::gfalse()

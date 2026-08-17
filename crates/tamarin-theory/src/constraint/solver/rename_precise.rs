@@ -833,9 +833,10 @@ mod tests {
         assert_eq!(sys, System::empty());
     }
 
-    /// Two systems differing only by node-id indices must compare equal after
-    /// renaming, and a second pass must be a no-op — without both halves the
-    /// canonical form `process`/`Simplify` compare against is not a fixpoint.
+    /// Two systems that differ only in their node-id indices must compare
+    /// equal after the rename.  A second pass must change nothing.  The test
+    /// needs both halves.  Without them the canonical form that `process` and
+    /// `Simplify` compare against is not a fixpoint.
     #[test]
     fn rename_normalises_node_ids() {
         let mut a = less_sys(0, 5);
@@ -843,9 +844,10 @@ mod tests {
         rename_precise_system(&mut a);
         rename_precise_system(&mut b);
         assert_eq!(a, b);
-        // Distinct source vars must NOT be collapsed onto one name.
+        // The rename must not collapse distinct source vars onto one name.
         assert_ne!(a.less_atoms[0].smaller, a.less_atoms[0].larger);
-        // Idempotent: re-renaming a canonical system changes nothing.
+        // The rename is idempotent.  A second rename of a canonical system
+        // changes nothing.
         let once = a.clone();
         rename_precise_system(&mut a);
         assert_eq!(a, once);

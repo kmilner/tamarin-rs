@@ -54,11 +54,12 @@ const POST_ELABORATION_TOPICS: [&str; 2] = ["Formula terms", "Multiplication res
 /// entry must carry `#!` negative expectations in `expected.txt`, so step 2
 /// compares *something* for it.
 ///
-/// Step 2 still cannot tell a listed fixture's real content from an empty
-/// theory (neither emits a negative topic).  What can is
-/// `tamarin-theory`'s `tests/wellformedness_fixture_reports.rs`, which runs
-/// each fixture through the post-elaboration checks and pins the whole
-/// rendered report against `tests/wellformedness_fixtures/reports/`.
+/// Step 2 still cannot separate the real content of a listed fixture from an
+/// empty theory.  Neither of the two emits a negative topic.
+/// `tests/wellformedness_fixture_reports.rs` in `tamarin-theory` can make
+/// that separation.  It runs each fixture through the post-elaboration
+/// checks.  It then compares the complete rendered report against
+/// `tests/wellformedness_fixtures/reports/`.
 const EMPTY_RUST_EXPECTATION_ALLOWLIST: &[(&str, &str)] = &[
     (
         "formula_unguarded",

@@ -342,11 +342,12 @@ fn minimize_keeps_order_across_differing_and_colliding_fingerprints() {
     assert!(passed_but_false > 0);
 }
 
-// `specialIntruderRules` (IntruderRules.hs:57-77) in full: the five
-// non-diff rules in HS's list order, each pinned premises/conclusions/
-// actions/new-vars.  The SORT of each rule's variable is load-bearing and
-// invisible to a tag-only check — `PubConstr`'s `x:pub` is what makes
-// `!KU($x)` derivable for public names only, and `FreshConstr`'s `x:fresh`
+// This test covers `specialIntruderRules` (IntruderRules.hs:57-77) in full.
+// It checks the five non-diff rules in HS's list order.  For each rule it
+// compares the premises, the conclusions, the actions and the new variables.
+// The sort of each rule's variable carries meaning, and a check on the fact
+// tags alone does not see it.  The `x:pub` of `PubConstr` is what makes
+// `!KU($x)` derivable for public names only.  The `x:fresh` of `FreshConstr`
 // is what ties the rule to an `Fr` premise.
 #[test]
 fn special_rules_excluding_diff_have_the_hs_shapes() {
@@ -409,8 +410,8 @@ fn special_rules_excluding_diff_have_the_hs_shapes() {
     }
 }
 
-// The 6th rule appears only under `diff` and is the one special rule with
-// no conclusion: `IEquality: [KU(x), KD(x)] --[]-> []`.
+// The 6th rule appears only under `diff`.  It is the one special rule that
+// has no conclusion: `IEquality: [KU(x), KD(x)] --[]-> []`.
 #[test]
 fn special_rules_with_diff_append_i_equality() {
     use crate::fact::{kd_fact, ku_fact};
@@ -436,12 +437,12 @@ fn special_rules_with_diff_append_i_equality() {
 // =========================================================================
 
 /// The `Constructability` filter of HS `constructionRules`
-/// (IntruderRules.hs:88-92) is the whole point of the comprehension, and it
-/// is invisible to a test run against one signature: `pairMaudeSig` and
-/// `pairDestMaudeSig` carry the SAME three names, differing only in whether
-/// `fst`/`snd` are constructors.  Dropping the filter would emit `_fst` /
-/// `_snd` KU-construction rules under `dest-pairing` — letting the intruder
-/// construct a projection it may only narrow.
+/// (IntruderRules.hs:88-92) is the purpose of the comprehension.  A test that
+/// runs against one signature does not see the filter.  `pairMaudeSig` and
+/// `pairDestMaudeSig` carry the same three names.  They differ only in
+/// whether `fst` and `snd` are constructors.  Without the filter, the code
+/// emits `_fst` and `_snd` KU-construction rules under `dest-pairing`.  That
+/// lets the intruder construct a projection that it may only narrow.
 #[test]
 fn construction_rules_emit_one_rule_per_public_constructor() {
     let names = |sig: &tamarin_term::maude_sig::MaudeSig| -> Vec<String> {
@@ -462,14 +463,16 @@ fn construction_rules_emit_one_rule_per_public_constructor() {
         names(&tamarin_term::maude_sig::pair_maude_sig()),
         vec!["_fst", "_pair", "_snd"]
     );
-    // `dest-pairing`: the same names, but `fst`/`snd` are destructors.
+    // Under `dest-pairing` the names are the same, but `fst` and `snd` are
+    // destructors.
     assert_eq!(
         names(&tamarin_term::maude_sig::pair_dest_maude_sig()),
         vec!["_pair"]
     );
 
-    // `pair/2` → 2 KU premises, 1 KU conclusion, 1 KU action; HS
-    // `createRuleNoEq` reuses `concfact` for both, so they are equal.
+    // `pair/2` gives 2 KU premises, 1 KU conclusion and 1 KU action.  HS
+    // `createRuleNoEq` reuses `concfact` for the conclusion and for the
+    // action, so the two are equal.
     let sig = tamarin_term::maude_sig::pair_maude_sig();
     let rules = construction_rules(&sig.user_defined_st_fun_syms());
     let pair_rule = rules
@@ -570,10 +573,11 @@ fn destruction_rules_sym_enc_emits_exactly_one_destructor() {
         rules.len()
     );
     let r = &rules[0];
-    // Premise[0] = KD(senc(x, y)); follow-on premises = KU(y); the single
-    // conclusion is the extracted KD(x).
+    // Premise[0] is KD(senc(x, y)).  The premises after it are KU(y).  The
+    // single conclusion is the extracted KD(x).
     assert_eq!(r.premises[0].tag, crate::fact::FactTag::Kd);
-    // Inner step was elided, so no `KD(x) KU(x) -> KD(x)` self-loop.
+    // The code elides the inner step, so there is no
+    // `KD(x) KU(x) -> KD(x)` self-loop.
     for p in &r.premises[1..] {
         assert_eq!(p.tag, crate::fact::FactTag::Ku);
     }
@@ -642,12 +646,12 @@ fn destruction_rules_pair_emits_exactly_two_destructors() {
 // =========================================================================
 use crate::test_maude::maude_path;
 
-/// A maude speaking `sig`, or `None` when no maude resolved at all (the
-/// accepted skip, see [`crate::test_maude::maude_path`]).
+/// A maude that speaks `sig`, or `None` when no maude resolved at all.  The
+/// `None` case is the accepted skip.  See [`crate::test_maude::maude_path`].
 ///
-/// A maude that RESOLVED but will not start is the same misconfiguration as
-/// a dangling `MAUDE_PATH`: swallowing it with `.ok()` would silently skip
-/// every pin in this file, so fail loudly instead.
+/// A maude that resolves but does not start is the same misconfiguration as
+/// a dangling `MAUDE_PATH`.  An `.ok()` here would silently skip every pin in
+/// this file, so this function panics instead.
 fn maude_handle_for(
     sig: tamarin_term::maude_sig::MaudeSig,
 ) -> Option<tamarin_term::maude_proc::MaudeHandle> {

@@ -799,13 +799,14 @@ mod tests {
         assert_eq!(t, gterm_to_term(&g));
     }
 
-    /// [`mk_gpair`]'s canonical invariant: a TRAILING `Pair` is spliced (as
-    /// often as needed), because RS's n-ary `Pair` stands for HS's
-    /// right-nested binary `fAppPair` — `<a, <b, c>>` and `<a, b, c>` are ONE
-    /// term there, and two spellings of it here would defeat the structural
-    /// `==` that `insertFormula` / `canonical_goal_for_dedup` rely on.  A
-    /// `Pair` in a non-tail position is a genuinely different term
-    /// (`pair(pair(a,b),c)`) and must survive untouched.
+    /// This is [`mk_gpair`]'s canonical invariant.  `mk_gpair` splices a
+    /// trailing `Pair`, and it repeats the splice as often as needed.  The
+    /// reason is that RS's n-ary `Pair` stands for HS's right-nested binary
+    /// `fAppPair`.  In HS, `<a, <b, c>>` and `<a, b, c>` are one term.  Two
+    /// spellings of that term here would defeat the structural `==` that
+    /// `insertFormula` and `canonical_goal_for_dedup` rely on.  A `Pair` in a
+    /// non-tail position is a genuinely different term (`pair(pair(a,b),c)`).
+    /// It must survive untouched.
     #[test]
     fn mk_gpair_splices_only_a_trailing_pair() {
         let lit = |s: &str| GTerm::PubLit(s.to_string());
@@ -830,8 +831,8 @@ mod tests {
             head_nested,
             "a pair in a non-tail position is a different term"
         );
-        // `term_to_gterm_free` routes every parser `Pair` through `mk_gpair`,
-        // so the two source spellings lift to the SAME `GTerm`.
+        // `term_to_gterm_free` routes every parser `Pair` through `mk_gpair`.
+        // The two source spellings therefore lift to the same `GTerm`.
         let p_lit = |s: &str| p::Term::PubLit(s.to_string());
         assert_eq!(
             term_to_gterm_free(&p::Term::Pair(vec![

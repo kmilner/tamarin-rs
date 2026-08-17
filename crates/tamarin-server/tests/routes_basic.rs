@@ -5,15 +5,17 @@
 //! Integration tests for the LIVE routes that don't run the solver.
 //!
 //! These tests start a real `axum` server on an ephemeral port with
-//! `tests/fixtures/issue193.spthy` pre-loaded, then make HTTP requests via
-//! `reqwest` and check the status, the `Content-Type` and the body.
+//! `tests/fixtures/issue193.spthy` pre-loaded.  They then make HTTP requests
+//! with `reqwest`.  They check the status, the `Content-Type` and the body.
 //!
-//! The body criterion is byte equality against the captured Haskell responses
-//! under `tests/fixtures/haskell-responses/`, blanking the theory's load stamp
-//! (its load time and origin path) on the pages that print it, which no
-//! capture run can share with a test run, and the `Generated from:` banner's
-//! build values on the `prettyClosedTheory` routes, which the port emits empty
-//! — see `common::VERSION_BANNER_PREFIXES` for the divergence that blanking
+//! The test compares each body byte for byte with the captured Haskell
+//! responses under `tests/fixtures/haskell-responses/`.  It blanks two parts
+//! of the body first.  The first part is the theory's load stamp, on the
+//! pages that print it.  The load stamp is the theory's load time and its
+//! origin path.  A capture run and a test run cannot share those two values.
+//! The second part is the `Generated from:` banner's build values on the
+//! `prettyClosedTheory` routes.  The port emits those values empty.  See
+//! `common::VERSION_BANNER_PREFIXES` for the divergence that the blanking
 //! masks.
 //!
 //! Coverage matrix (LIVE routes):
@@ -85,10 +87,11 @@ async fn test_get_index_returns_html_with_theory_listed() {
     );
     let body = res.text().await.expect("read body");
 
-    // The whole page — `rootTpl` + `introTpl` + the one-row `theoriesTpl`
-    // table inside `defaultLayout` (Web/Hamlet.hs) — byte for byte against the
-    // oracle's, bar the load time and the origin path (the two fields the
-    // capture run cannot share with this one).
+    // The test compares the complete page with the oracle's page, byte for
+    // byte.  The page is `rootTpl` plus `introTpl` plus the one-row
+    // `theoriesTpl` table inside `defaultLayout` (Web/Hamlet.hs).  The load
+    // time and the origin path are the only exceptions.  The capture run
+    // cannot share those two fields with this run.
     assert_page_matches_capture(&body, "index.html", "issue193.spthy");
 }
 
@@ -137,8 +140,9 @@ async fn test_robots_txt() {
     assert!(ct.starts_with("text/plain"), "got CT={}", ct);
     let body = res.text().await.expect("read body");
 
-    // The oracle's body verbatim — `User-agent: *` with no trailing newline
-    // (`getRobotsR`, src/Web/Handler.hs).
+    // The test compares the body with the oracle's body exactly.  The body is
+    // `User-agent: *` with no trailing newline (`getRobotsR`,
+    // src/Web/Handler.hs).
     assert_eq!(body, haskell_capture("robots.txt"));
 }
 
@@ -165,10 +169,11 @@ async fn test_kill_without_path_returns_400() {
     );
     assert_eq!(content_type(&res), "text/html; charset=utf-8");
     let body = res.text().await.expect("read");
-    // The widget `invalidArgs` renders, taken from the oracle's own page so a
-    // re-capture that changes it takes this assertion with it.  The port emits
-    // that widget WITHOUT the surrounding `defaultLayout` frame the capture
-    // carries, which is why this is a line-wise check and not byte equality.
+    // This is the widget that `invalidArgs` renders.  The test takes it from
+    // the oracle's own page, so a re-capture that changes the widget also
+    // changes this assertion.  The port emits the widget without the
+    // surrounding `defaultLayout` frame that the capture carries.  For that
+    // reason the test compares the lines and not the complete bytes.
     let widget = "<h1>Invalid Arguments</h1>\n<ul><li>No path to kill specified!</li>\n</ul>";
     let captured = haskell_capture("kill.txt");
     assert!(
@@ -195,7 +200,7 @@ async fn test_kill_with_path_returns_canceled_request() {
         .expect("send /kill with path");
     assert_eq!(res.status(), 200);
     assert!(content_type(&res).starts_with("text/plain"));
-    // The oracle's body verbatim.
+    // The test compares the body with the oracle's body exactly.
     assert_eq!(
         res.text().await.expect("read"),
         haskell_capture("kill_path.txt")
@@ -220,17 +225,19 @@ async fn test_overview_help_html_structure() {
     assert!(ct.starts_with("text/html"), "got CT={}", ct);
     let body = res.text().await.expect("read body");
 
-    // The whole framed page — `overviewTpl`'s four panes, the proof-script
-    // pane's rendered theory and the help snippet in the centre pane — byte
-    // for byte against the oracle's, bar the load time and the origin path.
+    // The test compares the complete framed page with the oracle's page, byte
+    // for byte.  The load time and the origin path are the only exceptions.
+    // The page holds `overviewTpl`'s four panes, the proof-script pane's
+    // rendered theory and the help snippet in the centre pane.
     //
-    // That includes where the panes SIT: `data/js/jquery-layout.js` resolves
-    // them with `$Container.children(".ui-layout-center")` over `<body>`, so
-    // wrapping them in an extra `<div>` (the `ui-layout-container` the index
-    // page uses, say) triggers the runtime `errCenterPaneMissing` alert and
+    // The comparison also covers where the panes sit.
+    // `data/js/jquery-layout.js` finds them with
+    // `$Container.children(".ui-layout-center")` over `<body>`.  An extra
+    // `<div>` around them, for example the `ui-layout-container` that the
+    // index page uses, triggers the runtime `errCenterPaneMissing` alert, and
     // the page never renders.  HS's `overviewTpl` emits the four panes at the
-    // top level of `defaultLayout`'s widget; any wrapper the port grew would
-    // show up here as a diff.
+    // top level of `defaultLayout`'s widget.  Any wrapper that the port adds
+    // shows up here as a difference.
     assert_page_matches_capture(&body, "overview_help.html", "issue193.spthy");
 }
 
@@ -255,8 +262,9 @@ async fn test_main_help_envelope_matches_haskell() {
         ct
     );
 
-    // The whole `JsonHtml` envelope — the theory header line and the help
-    // widget — against the oracle's, bar the load stamp in the header.
+    // The test compares the complete `JsonHtml` envelope with the oracle's
+    // envelope.  The envelope holds the theory header line and the help
+    // widget.  The load stamp in the header is the only exception.
     assert_page_matches_capture(
         &res.text().await.expect("text"),
         "main_help.json",
@@ -274,8 +282,9 @@ async fn test_main_rules_envelope() {
         .await
         .expect("send main/rules");
     assert_eq!(res.status(), 200);
-    // The rules view carries no load stamp, so the whole envelope — every rule
-    // of the theory, `htmlThyPath`-rendered — is the oracle's byte for byte.
+    // The rules view carries no load stamp.  The test therefore compares the
+    // complete envelope with the oracle's, byte for byte.  The envelope holds
+    // every rule of the theory, rendered by `htmlThyPath`.
     assert_eq!(
         res.text().await.expect("text"),
         haskell_capture("main_rules.json")
@@ -292,9 +301,10 @@ async fn test_main_message_envelope() {
         .await
         .expect("send main/message");
     assert_eq!(res.status(), 200);
-    // HS `messageSnippet` (Web/Theory.hs:926-937): the Signature and the
-    // Construction/Deconstruction rule sections (NOT restrictions — those live
-    // on the rules page).  No load stamp, so the envelope is pinned whole.
+    // HS `messageSnippet` (Web/Theory.hs:926-937) emits the Signature section
+    // and the Construction/Deconstruction rule sections.  It does not emit the
+    // restrictions, which appear on the rules page.  There is no load stamp,
+    // so the test compares the complete envelope.
     assert_eq!(
         res.text().await.expect("text"),
         haskell_capture("main_message.json")
@@ -314,13 +324,14 @@ async fn test_main_lemma_envelope() {
     let body = res.text().await.expect("text");
     // HS `htmlThyPath` renders `TheoryLemma _ -> text "this is a mistake"`
     // (Web/Theory.hs:1011-1152, see line 1074) — a deliberate upstream quirk; the bare
-    // `main/lemma/<name>` path is never used by the frontend (it always links
-    // to `main/proof/<name>`).
+    // `main/lemma/<name>` path is one that the frontend never uses.  The
+    // frontend always links to `main/proof/<name>` instead.
     //
-    // The oracle's envelope verbatim EXCEPT the `<br/>` + newline its
-    // `renderHtmlDoc` appends to the line (`postprocessHtmlDoc`,
-    // Text/PrettyPrint/Html.hs:157-162), which the port does not emit here.
-    // Pinned that way so the day it does, this goes red instead of drifting.
+    // The test compares the body with the oracle's envelope exactly, with one
+    // exception.  The oracle's `renderHtmlDoc` appends a `<br/>` and a newline
+    // to the line (`postprocessHtmlDoc`, Text/PrettyPrint/Html.hs:157-162).
+    // The port does not emit them here.  The test removes them from the
+    // capture, so the test fails on the day the port emits them.
     assert_eq!(
         body,
         haskell_capture("main_lemma.json").replace("<br/>\\n", "")
@@ -499,9 +510,10 @@ async fn test_source_returns_plain_text() {
     assert_eq!(res.status(), 200);
     let ct = content_type(&res);
     assert!(ct.starts_with("text/plain"), "got CT={}", ct);
-    // The route renders the full `prettyClosedTheory` (`getTheorySourceR`,
-    // src/Web/Handler.hs:1015-1022) — pinned against the oracle's, bar the
-    // `Generated from:` banner's build-specific values.
+    // The route renders the complete `prettyClosedTheory` (`getTheorySourceR`,
+    // src/Web/Handler.hs:1015-1022).  The test compares it with the oracle's
+    // rendering.  The `Generated from:` banner's build-specific values are the
+    // only exception.
     assert_theory_source_matches_capture(&res.text().await.expect("read"), "source.txt");
 }
 
@@ -518,8 +530,9 @@ async fn test_message_deduction_returns_plain_text() {
     let ct = content_type(&res);
     assert!(ct.starts_with("text/plain"), "got CT={}", ct);
     // `getTheoryMessageDeductionR` (src/Web/Handler.hs:1050-1055) renders the
-    // same `prettyClosedTheory` `/source` does — the oracle's two captures are
-    // byte-identical — so the route is pinned against its own.
+    // same `prettyClosedTheory` that `/source` renders.  The oracle's two
+    // captures hold the same bytes.  The test compares this route with its own
+    // capture.
     assert_theory_source_matches_capture(&res.text().await.expect("read"), "message.json");
 }
 
@@ -556,9 +569,9 @@ async fn test_download_for_local_theory_returns_source_file() {
         cd,
     );
 
-    // `getDownloadTheoryR` hands back `getTheorySourceR`'s body under the
-    // octet content type (src/Web/Handler.hs:1763-1766), so the payload is
-    // pinned against the oracle's the same way `/source` is.
+    // `getDownloadTheoryR` returns `getTheorySourceR`'s body under the octet
+    // content type (src/Web/Handler.hs:1763-1766).  The test therefore
+    // compares this payload with the oracle's in the same way as `/source`.
     assert_theory_source_matches_capture(&res.text().await.expect("read"), "download.txt");
 }
 

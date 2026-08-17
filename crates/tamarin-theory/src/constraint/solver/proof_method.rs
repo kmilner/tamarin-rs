@@ -808,10 +808,11 @@ mod tests {
 
     use crate::test_maude::maude_path;
 
-    /// `None` only when [`maude_path`] resolved nothing (the documented
-    /// `TAM_ALLOW_NO_MAUDE` skip).  A maude that resolved but will not start
-    /// is the same misconfiguration as a dangling `MAUDE_PATH`: swallowing it
-    /// with `.ok()?` would silently skip every maude-backed test in this file.
+    /// The result is `None` only when [`maude_path`] resolves nothing.  That
+    /// case is the documented `TAM_ALLOW_NO_MAUDE` skip.  A maude that
+    /// resolves but does not start is the same misconfiguration as a dangling
+    /// `MAUDE_PATH`.  An `.ok()?` here would silently skip every maude-backed
+    /// test in this file.
     fn ctx() -> Option<ProofContext> {
         let path = maude_path()?;
         let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig())

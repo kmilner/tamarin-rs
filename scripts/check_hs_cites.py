@@ -165,9 +165,10 @@ import sys
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(SCRIPT_DIR)
 CRATES = os.path.join(REPO, "crates")
-# The two `.spthy` homes outside `crates/`.  Named rather than discovered by a
-# whole-repo walk, which would descend into the `tamarin-prover/` submodule --
-# whose thousands of corpus theories are upstream's, not cites of upstream.
+# The two `.spthy` homes outside `crates/`.  This list names them, because a
+# whole-repo walk would descend into the `tamarin-prover/` submodule.  The
+# thousands of corpus theories there are upstream's own files, not cites of
+# upstream.
 FIXTURE_DIRS = (os.path.join(SCRIPT_DIR, "divergence_fixtures"),
                 os.path.join(REPO, "tests", "wellformedness_fixtures"))
 
@@ -337,7 +338,7 @@ def lex_spans_spthy(src):
     return comments, strings
 
 
-# One lexer per scanned file type; `source_files` yields nothing else.
+# One lexer per scanned file type.  `source_files` yields no other type.
 LEXERS = {".rs": lex_spans, ".spthy": lex_spans_spthy}
 
 

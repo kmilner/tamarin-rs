@@ -90,9 +90,10 @@ for_each_fixture() {
 }
 
 # `census_fixture_dir` — cross-check the fixture directory against the manifest
-# in both directions.  Only what the manifest names is ever loaded, captured or
-# compared, so a `.spthy` no row mentions and a capture left behind by a retired
-# row would both sit here green forever.
+# in both directions.  The scripts load, capture and compare only the files
+# that the manifest names.  Without this census, a `.spthy` file that no row
+# mentions would stay here undetected forever.  So would a capture that a
+# retired row leaves behind.
 census_fixture_dir() {
     local f
     declare -A claimed=([oracle_rev]=1)
@@ -110,7 +111,8 @@ census_fixture_dir() {
     }
     for_each_fixture claim_one
     for f in "$fixdir"/*.spthy "$expected"/*; do
-        # A first-ever capture finds expected/ empty, leaving that glob unexpanded.
+        # A first capture finds the expected/ directory empty.  The glob then
+        # stays unexpanded.
         [ -e "$f" ] || continue
         [ -n "${claimed[$(basename "$f")]:-}" ] \
             || die "$(basename "$f") is claimed by no row of $manifest — add a row or delete the file"

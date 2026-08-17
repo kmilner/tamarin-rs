@@ -690,11 +690,12 @@ mod tests {
         let typed = type_and_rename_process(&sig, &[], &plain).unwrap();
         let st_rules = std::collections::BTreeSet::new();
         let tr = translate(&typed, false, &st_rules, TranslateOptions::default()).unwrap();
-        // Init + new + event + out + null, in that order and under the
-        // `<label>_<index>_<position>` naming HS derives from each node's
-        // pretty-printed head (Facts.hs `toRule`).  Pinning the names rather
-        // than the count catches a rule emitted for the wrong node, a
-        // mis-walked position suffix and a reordered emission.
+        // The rules are Init, new, event, out and null, in that order.  They
+        // use the `<label>_<index>_<position>` naming that HS derives from
+        // the pretty-printed head of each node (Facts.hs `toRule`).  The test
+        // compares the names, not the count.  So it catches a rule emitted
+        // for the wrong node.  It also catches a position suffix that comes
+        // from a wrong walk, and a changed emission order.
         let names: Vec<String> = tr
             .rules
             .iter()
@@ -713,7 +714,7 @@ mod tests {
                 "p_0_111"
             ]
         );
-        // ...plus the `single_session` restriction every SAPIC theory gets.
+        // Every SAPIC theory also gets the `single_session` restriction.
         assert_eq!(tr.restrictions.len(), 1);
         assert_eq!(tr.restrictions[0].name, "single_session");
     }

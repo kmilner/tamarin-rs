@@ -286,16 +286,16 @@ mod tests {
         assert_eq!(ps.len(), 3);
     }
 
-    /// AC applications are addressed through the right-leaning binary
+    /// The code addresses AC applications through the right-leaning binary
     /// encoding `*[t1,t2,t3] ≡ t1 * (t2 * t3)` (`atPosMay`, Positions.hs:47-59;
-    /// `replacePos`, Positions.hs:76-80; `positions`, Positions.hs:109-122):
-    /// `0` selects the head and `1` the tail multiset, so the k-th of n
-    /// arguments sits at `1^k ++ [0]` (`1^k` for the last one) — never at
-    /// `[k]`.  [`positions`], [`at_pos`] and
-    /// [`replace_pos`] have to agree on it, since a term's own position list
-    /// is what indexes into that term (`constant_positions` feeds these
-    /// straight into `StRhs`, and `print_position` turns them into `AUTO_*`
-    /// fact names).
+    /// `replacePos`, Positions.hs:76-80; `positions`, Positions.hs:109-122).
+    /// `0` selects the head, and `1` selects the tail multiset.  The k-th of n
+    /// arguments therefore sits at `1^k ++ [0]`.  The last one sits at `1^k`.
+    /// No argument sits at `[k]`.  [`positions`], [`at_pos`] and
+    /// [`replace_pos`] have to agree on this encoding, because a term's own
+    /// position list is what indexes into that term.  `constant_positions`
+    /// feeds these positions straight into `StRhs`, and `print_position`
+    /// turns them into `AUTO_*` fact names.
     #[test]
     fn ac_positions_use_right_leaning_binary_encoding() {
         use crate::function_symbols::AcSym;
@@ -309,8 +309,9 @@ mod tests {
             vec![vec![], vec![0], vec![1, 0], vec![1, 1]],
             "the three AC arguments live at [0], [1,0], [1,1] — NOT [0], [1], [2]"
         );
-        // `at_pos` reads the same encoding back, including the intermediate
-        // tail multiset at [1] (which is no argument of the flat term).
+        // `at_pos` reads the same encoding back.  It also reads the
+        // intermediate tail multiset at [1].  That multiset is not an argument
+        // of the flat term.
         assert_eq!(at_pos(&t, &[0]), Some(a.clone()));
         assert_eq!(
             at_pos(&t, &[1]),
@@ -318,14 +319,15 @@ mod tests {
         );
         assert_eq!(at_pos(&t, &[1, 0]), Some(b.clone()));
         assert_eq!(at_pos(&t, &[1, 1]), Some(c));
-        // DIVERGENCE (port-captured, not oracle-derived): RS's AC arm ends in a
-        // catch-all `_ => None`; HS `atPosMay` has no such arm and falls through
-        // to the generic `FApp _ as (i:ps)` equation (Positions.hs:55-58), so the
-        // oracle answers `Just c` here. Unreachable in practice: `positions` never
-        // emits a bare index >= 2 for an AC node.
+        // DIVERGENCE (port-captured, not oracle-derived).  The AC arm in RS
+        // ends in a catch-all `_ => None`.  HS `atPosMay` has no such arm.  It
+        // falls through to the generic `FApp _ as (i:ps)` equation
+        // (Positions.hs:55-58), so the oracle answers `Just c` here.  This
+        // difference is unreachable in practice.  `positions` never emits a
+        // bare index >= 2 for an AC node.
         assert_eq!(at_pos(&t, &[2]), None);
-        // Replacement descends the same encoding, and the rebuilt tail
-        // re-flattens into its parent through the AC smart constructor.
+        // `replace_pos` descends the same encoding.  The AC smart constructor
+        // then flattens the rebuilt tail into its parent again.
         let z = msg_var("z", 0);
         assert_eq!(
             replace_pos(&t, &z, &[1, 1]),

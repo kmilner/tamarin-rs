@@ -9,11 +9,11 @@ fn parse(src: &str) -> Theory {
     parse_theory(src, &["diff"]).expect("parse")
 }
 
-/// A conclusion-only fresh variable is unbound.  The sibling checks that
-/// pin the unbound BODY reach it through action facts
-/// (`wf_entry_fills_comma_lists_at_the_report_ribbon`) or a premise-bound
-/// rule (`lookup_binder_is_not_unbound`); this is the conclusion-side
-/// fresh-variable branch.
+/// A fresh variable that occurs only in a conclusion is unbound.  The sibling
+/// checks that pin the body of the unbound-variable report reach that check
+/// through action facts (`wf_entry_fills_comma_lists_at_the_report_ribbon`)
+/// or through a premise-bound rule (`lookup_binder_is_not_unbound`).  This
+/// test covers the conclusion-side fresh-variable branch.
 #[test]
 fn unbound_var_detected() {
     let t = parse("theory T begin rule R: [] --[ ]-> [ Out(~k) ] end");
@@ -21,9 +21,9 @@ fn unbound_var_detected() {
     assert!(topics(&r).contains("Unbound variables"), "report: {:?}", r);
 }
 
-/// The arity table is fed from rule CONCLUSIONS too — the tests that pin
-/// the arity body clash on premises (`nullary_fact_keeps_only_the_sep_space`)
-/// or on an action/lemma-fact pair (`wf_lemma_fact_show_form_nests_pairs_right`).
+/// Rule conclusions also feed the arity table.  The tests that pin the arity
+/// body clash on premises (`nullary_fact_keeps_only_the_sep_space`) or on an
+/// action/lemma-fact pair (`wf_lemma_fact_show_form_nests_pairs_right`).
 #[test]
 fn fact_arity_clash_detected() {
     let t = parse(
@@ -36,7 +36,7 @@ fn fact_arity_clash_detected() {
     assert!(topics(&r).contains("Fact arity issues"));
 }
 
-/// `KU` in a CONCLUSION is a reserved name — the sibling that pins the
+/// `KU` in a conclusion is a reserved name.  The sibling test that pins the
 /// reserved-name body (`wf_entry_fills_comma_lists_at_the_report_ribbon`)
 /// reaches the check through action facts ("on the middle").
 #[test]
@@ -679,13 +679,13 @@ fn only(report: &WfReport, topic: &str) -> String {
 
 /// Probed against tamarin-prover ef3f0468 on `Out(%a %+ ~x)`:
 ///   `~x in term (~x%+%a) must be of sort nat`
-/// i.e. the ONLY offending operand is the fresh var `~x` — the nat-sorted
-/// `%a` is accepted, matching HS `notOnlyNat`/`isNatVar`, which accepts
-/// `NatOne` and nat-sorted *variables*.  The message has NO rule name, and
-/// `t` is the WHOLE fact-arg term.  The `%+` operands print in `Ord LVar`
-/// order (`~x` is `LSortFresh`, `%a` is `LSortNat`, LTerm.hs:165-170)
-/// rather than the source order, because HS's `fAppAC` sorts them at
-/// construction.
+/// The only operand that the check rejects is the fresh var `~x`.  The check
+/// accepts the nat-sorted `%a`.  This matches HS `notOnlyNat`/`isNatVar`,
+/// which accepts `NatOne` and nat-sorted *variables*.  The message has no
+/// rule name.  `t` is the complete fact-arg term.  The `%+` operands print in
+/// `Ord LVar` order (`~x` is `LSortFresh`, `%a` is `LSortNat`,
+/// LTerm.hs:165-170) rather than in the source order.  HS's `fAppAC` sorts
+/// them at construction.
 #[test]
 fn nat_sorts_message_format() {
     let t = parse(
@@ -700,10 +700,10 @@ fn nat_sorts_message_format() {
     );
 }
 
-/// A nat *literal* `%'a'` (a `Con` name, not a var) IS flagged while the
-/// nat var `%y` beside it is not, matching HS `isNatVar` (true only for
-/// `Lit (Var ..)` with LSortNat).  The single body is byte-pinned to the
-/// pinned oracle (ef3f0468).
+/// The check flags a nat *literal* `%'a'`, which is a `Con` name and not a
+/// var.  It does not flag the nat var `%y` beside it.  This matches HS
+/// `isNatVar`, which is true only for `Lit (Var ..)` with LSortNat.  The
+/// single body is pinned byte for byte to the pinned oracle (ef3f0468).
 #[test]
 fn nat_sorts_flags_nat_literal() {
     let t = parse(
@@ -833,26 +833,27 @@ fn subterm_convergence_last_write_wins() {
     );
 }
 
-/// HS's source-literal topic string, trailing space included
+/// This is HS's source-literal topic string.  It includes the trailing space
 /// (Wellformedness.hs:221#topic).
 const LHS_NO_RHS_TOPIC: &str = "Facts occur in the left-hand-side but not in any right-hand-side ";
 
-/// `underlineTopic LHS_NO_RHS_TOPIC` plus the `$-$` blank line that opens the
-/// body: the 65-character title (its trailing space counts) over a 65-`=`
-/// rule.
+/// This is `underlineTopic LHS_NO_RHS_TOPIC` plus the `$-$` blank line that
+/// opens the body.  The title is 65 characters long, and its trailing space
+/// counts.  Below the title is a rule of 65 `=` characters.
 const LHS_NO_RHS_HEADER: &str =
     "Facts occur in the left-hand-side but not in any right-hand-side \n\
      =================================================================\n\n";
 
-/// The suggestion arm of `fact_lhs_occur_no_rhs` is the only consumer of the
-/// live `edit_distance`, and it picks the RHS fact with the SMALLEST name
-/// distance, not the first one: `Sesion` is 1 edit from `Session` and 2 from
-/// the earlier-listed `Section`, so `Session` is suggested.  A broken cost
-/// term in `edit_distance` flips the winner to `Section` here.
+/// The suggestion arm of `fact_lhs_occur_no_rhs` is the only caller of the
+/// live `edit_distance`.  It picks the RHS fact with the smallest name
+/// distance.  It does not pick the first one.  `Sesion` is 1 edit from
+/// `Session` and 2 edits from `Section`, which the source lists earlier.  So
+/// the report suggests `Session`.  A wrong cost term in `edit_distance` makes
+/// `Section` win here.
 ///
-/// Body bytes follow HS `showRuleAndFact`/`showFactInfo`
-/// (Wellformedness.hs:239-251#showRuleAndFact) and were probed against the
-/// pinned oracle (ef3f0468).
+/// The body bytes follow HS `showRuleAndFact`/`showFactInfo`
+/// (Wellformedness.hs:239-251#showRuleAndFact).  They come from a probe
+/// against the pinned oracle (ef3f0468).
 #[test]
 fn fact_lhs_no_rhs_suggests_the_smallest_edit_distance_not_the_first() {
     let t = parse(
@@ -873,9 +874,9 @@ fn fact_lhs_no_rhs_suggests_the_smallest_edit_distance_not_the_first() {
 }
 
 /// HS `isSimilar` keeps the nearest RHS name only at distance `<= 3`
-/// (Wellformedness.hs:192-196#isSimilar).  `Abc` is 4 edits from the sole RHS
-/// name `Abcdefg`, so the line carries no "Perhaps you want to use" suffix.
-/// Body probed against the pinned oracle (ef3f0468).
+/// (Wellformedness.hs:192-196#isSimilar).  `Abc` is 4 edits from `Abcdefg`,
+/// the only RHS name.  So the line has no "Perhaps you want to use" suffix.
+/// The body comes from a probe against the pinned oracle (ef3f0468).
 #[test]
 fn fact_lhs_no_rhs_drops_the_suggestion_past_distance_three() {
     let t = parse(
@@ -893,10 +894,11 @@ fn fact_lhs_no_rhs_drops_the_suggestion_past_distance_three() {
     );
 }
 
-/// Both RHS names are 1 edit from `Aaa`, so the tie goes to the FIRST in RHS
-/// source order — HS `minimalEdFact` takes `listToMaybe . sortOn snd`
-/// (Wellformedness.hs:200-201#minimalEdFact), whose stability the port's
-/// `min_by_key` mirrors.  Body probed against the pinned oracle (ef3f0468).
+/// Both RHS names are 1 edit from `Aaa`.  The tie goes to the first name in
+/// RHS source order.  HS `minimalEdFact` takes `listToMaybe . sortOn snd`
+/// (Wellformedness.hs:200-201#minimalEdFact), and that sort is stable.  The
+/// port's `min_by_key` copies this behaviour.  The body comes from a probe
+/// against the pinned oracle (ef3f0468).
 #[test]
 fn fact_lhs_no_rhs_breaks_distance_ties_by_rhs_source_order() {
     let t = parse(

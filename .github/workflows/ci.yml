@@ -29,11 +29,12 @@ jobs:
       # nothing else fails on a drifted one.  Needs only the submodule; ~seconds.
       - name: HS cite check
         run: python3 scripts/check_hs_cites.py
-      # Any file carrying a resolvable HS citation must carry the constant
-      # licence notice; the script's --check exits 1 on a stale one.  Same
-      # trigger as the cite check above — an ordinary PR that adds a citation
-      # to a previously uncited file makes that file stale, and nothing else
-      # notices.  Needs only the submodule (it resolves the citations).
+      # Every file that has a resolvable HS citation must also have the
+      # constant licence notice.  The script's --check exits 1 on a stale
+      # notice.  This step has the same trigger as the cite check above.  An
+      # ordinary PR can add a citation to a file that has none yet.  That
+      # makes the file stale, and nothing else detects it.  The step needs
+      # only the submodule, because the script resolves the citations.
       - name: Licence header check
         run: python3 scripts/gen_license_headers.py --check
 
@@ -52,12 +53,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install lld
         run: command -v ld.lld >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq lld)
-      # Graphviz: two tests drive a real `dot` — probe_reports.rs's success-path
-      # self-test (the `test` mode's GraphViz block) and dot_tests.rs's lint of
-      # our own DOT.  Both now PANIC rather than skip when `dot` cannot run
-      # (TAM_ALLOW_NO_DOT=1 opts out), so this step is what keeps them from
-      # failing the job — and a runner image that stops shipping graphviz is
-      # then loud instead of quietly dropping both pins.
+      # Graphviz: two tests drive a real `dot`.  The first is the success-path
+      # self-test in probe_reports.rs (the GraphViz block of the `test` mode).
+      # The second is dot_tests.rs's lint of the DOT this port writes.  Both
+      # panic instead of a skip when `dot` cannot run, and TAM_ALLOW_NO_DOT=1
+      # opts out of the panic.  This step is therefore what keeps them from
+      # failing the job.  A runner image that stops shipping graphviz then
+      # fails the job instead of dropping both pins in silence.
       - name: Install Graphviz
         run: command -v dot >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq graphviz)
       # Same pinned Maude as the rs-parity job (see the comment there).
@@ -84,18 +86,18 @@ jobs:
           MAUDE_PATH: /opt/maude/maude
       # Wellformedness fixture roster, port side (~2s; the step above has
       # already built this example).  `cargo test` runs the same 21 fixtures
-      # through crates/tamarin-parser/tests/wellformedness.rs, so what only
-      # this runner adds is its EMPTY_RUST_EXPECTATION_ALLOWLIST, which that
-      # harness has no equivalent of: a fixture whose every expected topic is
-      # post-elaboration has to be listed there with a reason, and a listed
-      # one that stops emptying has to be dropped.  Otherwise a new
-      # post-elaboration-only fixture — one asserting nothing beyond "the file
-      # parses" on the port side — joins the roster with the tests/ harness
-      # green.
+      # through crates/tamarin-parser/tests/wellformedness.rs.  The one thing
+      # this runner adds is its EMPTY_RUST_EXPECTATION_ALLOWLIST, and that
+      # harness has no equivalent of it.  A fixture whose every expected topic
+      # is post-elaboration must appear in that list with a reason.  A listed
+      # fixture whose expectation set stops being empty must come off the
+      # list.  Without this check, a new post-elaboration-only fixture joins
+      # the roster while the tests/ harness still passes.  Such a fixture
+      # asserts nothing beyond "the file parses" on the port side.
       #
-      # `--no-tamarin` is load-bearing, not convenience: the runner's third
-      # step shells out to the pinned `tamarin-prover`, which no CI job
-      # builds, so the fixtures' differential against the oracle stays a
+      # `--no-tamarin` is load-bearing, not a convenience.  The runner's third
+      # step shells out to the pinned `tamarin-prover`, which no CI job builds.
+      # The fixtures' differential against the oracle therefore stays a
       # milestone gate.  Steps 1 and 2 need only the port and the committed
       # tests/wellformedness_fixtures/expected.txt.
       - name: Wellformedness fixture roster

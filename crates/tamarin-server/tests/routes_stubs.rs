@@ -26,10 +26,10 @@ use common::*;
 // ---------------------------------------------------------------------
 // Graph routes — LIVE (DOT pipeline).
 //
-// `graph` renders the system's SVG through `dot`, falling back to the DOT
-// source when the binary is missing.  The other two — `intdot`'s shell page
-// and `interactive-graph-def`'s DOT document — are pinned against the oracle's
-// bytes in `routes_graph.rs`.
+// `graph` renders the system's SVG through `dot`.  It falls back to the DOT
+// source when the binary is missing.  `routes_graph.rs` compares the other two
+// routes against the oracle's bytes.  Those two routes are `intdot`'s shell
+// page and `interactive-graph-def`'s DOT document.
 // ---------------------------------------------------------------------
 #[tokio::test]
 async fn test_graph_returns_image_or_dot() {
@@ -45,9 +45,10 @@ async fn test_graph_returns_image_or_dot() {
     assert_eq!(res.status(), 200);
     let ct = content_type(&res);
     let body = res.text().await.expect("text");
-    // Whether `dot` is installed decides WHICH of the two answers this is, so
-    // the pair has to agree: `image/svg+xml` carries dot's SVG, the fallback
-    // carries the DOT document `interactive-graph-def` also serves.
+    // The presence of `dot` decides which of the two answers the server sends.
+    // The content type and the body must therefore agree.  `image/svg+xml`
+    // carries dot's SVG.  The fallback carries the DOT document that
+    // `interactive-graph-def` also serves.
     if ct.starts_with("image/svg+xml") {
         assert!(
             body.contains("<svg") && body.contains("</svg>"),
@@ -139,8 +140,8 @@ async fn test_del_path_unsupported_returns_alert() {
         .await
         .expect("send");
     assert_eq!(res.status(), 200);
-    // The oracle's body verbatim — the alert allocates no theory, so its bytes
-    // do not depend on the capture session's history.
+    // This is the oracle's body, byte for byte.  The alert allocates no
+    // theory, so its bytes do not depend on the capture session's history.
     assert_eq!(
         res.text().await.expect("text"),
         haskell_capture("del_path_bad.json")
@@ -245,8 +246,9 @@ async fn test_verify_lemma_returns_html_envelope() {
         .await
         .expect("send");
     assert_eq!(res.status(), 200);
-    // `verify/lemma` falls through to the help view, so the envelope is the
-    // oracle's `main/help` one — pinned whole, bar the header's load stamp.
+    // `verify/lemma` falls through to the help view.  The envelope is
+    // therefore the oracle's `main/help` envelope.  The test compares the
+    // complete envelope, except for the header's load stamp.
     assert_page_matches_capture(
         &res.text().await.expect("text"),
         "verify.json",
@@ -264,9 +266,10 @@ async fn test_verify_proof_returns_redirect_envelope() {
         .await
         .expect("send");
     assert_eq!(res.status(), 200);
-    // The oracle's body verbatim: `editProof` uses `replaceTheory` at the SAME
-    // idx, so the redirect names theory 1 — no fresh allocation, which is what
-    // makes these bytes independent of the capture session's history.
+    // This is the oracle's body, byte for byte.  `editProof` uses
+    // `replaceTheory` at the same idx, so the redirect names theory 1.  There
+    // is no fresh allocation, and these bytes are therefore independent of the
+    // capture session's history.
     assert_eq!(
         res.text().await.expect("text"),
         haskell_capture("verify_proof.json")
@@ -275,11 +278,12 @@ async fn test_verify_proof_returns_redirect_envelope() {
 
 #[tokio::test]
 async fn test_equiv_overview_stub_returns_alert() {
-    // Diff theories aren't yet ported (needs `ClosedDiffTheory`).  Haskell
-    // answers its Not Found page — captured, unused, as
-    // `haskell-responses/equiv_overview.json`, the one capture no assertion
-    // can consume — and we answer `{alert}`: a documented divergence to align
-    // when diff support lands.
+    // The port does not support diff theories, because that needs
+    // `ClosedDiffTheory`.  Haskell answers its Not Found page.  The capture of
+    // that page is `haskell-responses/equiv_overview.json`, and it is the one
+    // capture that no assertion can consume.  This port answers `{alert}`
+    // instead.  That is a documented divergence, to align when diff support
+    // lands.
     let s = start_server_with_theory("issue193.spthy").await;
     let res = s
         .client

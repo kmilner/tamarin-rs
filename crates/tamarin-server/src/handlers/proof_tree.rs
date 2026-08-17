@@ -1339,8 +1339,8 @@ mod tests {
         None
     }
 
-    /// The one-rule, one-exists-trace-lemma theory the two `ProofState` tests
-    /// below drive, closed against `mp`.
+    /// The theory that the two `ProofState` tests below drive.  It has one
+    /// rule and one exists-trace lemma.  The function closes it against `mp`.
     fn trivial_proof_state(mp: &str) -> ProofState {
         let src = r#"
 theory T begin
@@ -1405,11 +1405,12 @@ end
         assert!(parse_method(&["bogus".into()], &sys).is_none());
     }
 
-    /// The whole document [`render_proof_tree_html`] emits for an open,
-    /// childless root: the `<h2>` header, the method line with its status
-    /// badge, and — because the node is `Sorry`/`Open` — the two goal-free
-    /// action links, each addressing this node's own (empty) proof path.
-    /// A system with unsolved goals adds `[solve N: …]` links here.
+    /// The complete document that [`render_proof_tree_html`] emits for an
+    /// open, childless root.  The document holds the `<h2>` header and the
+    /// method line with its status badge.  It also holds the two goal-free
+    /// action links, because the node is `Sorry`/`Open`.  Each link addresses
+    /// this node's own proof path, which is empty.  A system with unsolved
+    /// goals adds `[solve N: …]` links here.
     #[test]
     fn render_proof_tree_html_for_an_open_root() {
         let root = ProofNode {

@@ -311,9 +311,10 @@ mod tests {
             LessAtom::new(node("i"), node("j"), Reason::Fresh),
             LessAtom::new(node("j"), node("k"), Reason::Formula),
         ];
-        // Whole projection: pair ORDER within an atom is the direction of
-        // the ordering edge, and atom order is the relation's iteration
-        // order — checking only two endpoints leaves both unpinned.
+        // The test compares the complete projection.  The order of the pair
+        // inside an atom is the direction of the ordering edge.  The order
+        // of the atoms is the iteration order of the relation.  A check of
+        // two endpoints alone leaves both of these orders unchecked.
         assert_eq!(
             get_less_rel(&atoms),
             vec![(node("i"), node("j")), (node("j"), node("k"))]
@@ -382,10 +383,11 @@ mod tests {
         );
     }
 
-    /// Each `is_*` predicate matches its OWN variant and nothing else — the
-    /// failure mode is a copy-pasted `matches!` arm naming the neighbouring
-    /// variant, which is exactly the bug HS ships in `isSubtermGoal`
-    /// (a copy of `isDisjGoal`, see the note on [`Goal::is_subterm`]).
+    /// Each `is_*` predicate matches its own variant and no other variant.
+    /// The failure mode is a copied `matches!` arm that names the
+    /// neighbouring variant.  HS ships exactly that bug in `isSubtermGoal`,
+    /// which is a copy of `isDisjGoal`.  See the note on
+    /// [`Goal::is_subterm`].
     #[test]
     fn goal_kind_predicates() {
         use crate::fact::{FactTag, LNFact};
@@ -398,7 +400,8 @@ mod tests {
         let i = node("i");
         let t = lit(Lit::Var(LVar::new("x", LSort::Msg, 0)));
         let out = LNFact::new(FactTag::Out, vec![t.clone()]);
-        // Column order: action, premise, chain, split, disj, subterm.
+        // The columns are in this order: action, premise, chain, split,
+        // disj, subterm.
         let cases = [
             ("Action", Goal::Action(i, out.clone()), [1, 0, 0, 0, 0, 0]),
             (
@@ -434,9 +437,10 @@ mod tests {
             ];
             assert_eq!(got, want.map(|b| b == 1), "{name}");
         }
-        // `is_standard_action` is the one predicate carrying more than a
-        // variant match: `KU(_)` action goals are the solver's
-        // special-cased intruder-knowledge goals and are NOT standard.
+        // `is_standard_action` is the only predicate that does more than a
+        // variant match.  `KU(_)` action goals are the intruder-knowledge
+        // goals that the solver handles as a special case.  They are not
+        // standard.
         assert!(Goal::Action(i, out).is_standard_action());
         assert!(!Goal::Action(i, LNFact::new(FactTag::Ku, vec![t])).is_standard_action());
         assert!(!Goal::Split(SplitId(0)).is_standard_action());

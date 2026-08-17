@@ -5,11 +5,13 @@
 use super::*;
 use crate::constraint::system::System;
 
-/// A system with nothing in it is the bare no-cluster container: the
-/// `setDefaultAttributes` preamble (System/Dot.hs:132-138) and `showDot`'s blank
-/// line before the closing brace, and NOTHING else — no legend scope (there
-/// is nothing to abbreviate), no stray node or rank statement.  Pinned whole
-/// because every substring check here holds for output that lost its body.
+/// An empty system renders as the bare container with no clusters.  It holds
+/// the `setDefaultAttributes` preamble (System/Dot.hs:132-138) and `showDot`'s
+/// blank line before the closing brace.  It holds nothing else.  There is no
+/// legend scope, because there is nothing to abbreviate.  There is no stray
+/// node statement and no rank statement.  The test compares the complete
+/// document, because every substring check here also holds for output that
+/// lost its body.
 #[test]
 fn dot_for_empty_system() {
     let sys = System::empty();
@@ -342,12 +344,14 @@ fn render_balanced_matches_hs_oidc_rows() {
             sp(23)), "conc row:\n{}", crow[0]);
 }
 
-/// An action-less protocol rule through the DEFAULT options (compress and
-/// abbreviate both on, the batch writer's pair) renders its whole record row
-/// from `prettyLNTerm`: a pub-var literal is `$a`, never a `M:0` placeholder,
-/// and the rule-label row is bare `#i : Setup` with no `[…]` action list.
-/// Pinned as the whole document, so a compression that hid the node or a
-/// legend emitted for a system with nothing to abbreviate also fails here.
+/// This test runs an action-less protocol rule through the default options.
+/// Those options turn on both compress and abbreviate.  That is the pair the
+/// batch writer uses.  The rule renders its complete record row from
+/// `prettyLNTerm`.  A pub-var literal renders as `$a`, never as a `M:0`
+/// placeholder.  The rule-label row is bare `#i : Setup` with no `[…]` action
+/// list.  The test compares the complete document.  A compression that hides
+/// the node therefore fails here.  So does a legend that the writer emits for
+/// a system with nothing to abbreviate.
 #[test]
 fn dot_uses_pretty_printing_for_terms() {
     use crate::fact::{fresh_fact, out_fact};
@@ -420,8 +424,9 @@ fn dot_with_sl0_does_not_collapse_less() {
     };
     let s3 = system_to_dot_with(&sys, &opts_sl3);
     let dashed_sl3 = s3.matches("style=\"dashed\"").count();
-    // Exact counts: `<` alone is satisfied by an SL0 that drops nothing while
-    // SL3 drops BOTH the redundant edge and a chain edge.
+    // The assertions compare exact counts.  A `<` comparison alone also holds
+    // when SL0 drops nothing and SL3 drops both the redundant edge and a
+    // chain edge.
     assert_eq!(dashed_sl0, 3, "SL0 keeps all three less-edges: {s0}");
     assert_eq!(dashed_sl3, 2, "SL3 drops only the redundant a<c: {s3}");
 }
@@ -468,11 +473,11 @@ fn dot_with_cluster_passes_graphviz_lint() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn();
-    // A machine with no runnable Graphviz fails here rather than skipping:
-    // this is the only test that feeds our DOT to a real `dot`, so a silent
-    // skip greens `cargo test` identically with and without it.  Mirrors the
-    // integration suites' `TAM_ALLOW_NO_DOT` escape hatch
-    // (crates/tamarin-prover/tests/common/mod.rs).
+    // On a machine with no runnable Graphviz this test fails instead of a
+    // skip.  This is the only test that feeds our DOT to a real `dot`.  A
+    // silent skip makes `cargo test` pass in exactly the same way with and
+    // without `dot`.  The check copies the `TAM_ALLOW_NO_DOT` escape hatch of
+    // the integration suites (crates/tamarin-prover/tests/common/mod.rs).
     let Ok(mut child) = child else {
         assert!(
             std::env::var("TAM_ALLOW_NO_DOT").as_deref() == Ok("1"),

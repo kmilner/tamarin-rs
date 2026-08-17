@@ -118,8 +118,8 @@ mod tests {
 
     #[test]
     fn match_short_circuits_on_no_match() {
-        // The Haskell `Monoid` instance short-circuits on EITHER side, so a
-        // one-sided guard has to fail here.
+        // The Haskell `Monoid` instance short-circuits on either side.  A
+        // guard that checks only one side therefore fails this test.
         let a: Match<i32> = Match::match_with(1, 2);
         assert!(matches!(
             a.clone().append(Match::no_match()),

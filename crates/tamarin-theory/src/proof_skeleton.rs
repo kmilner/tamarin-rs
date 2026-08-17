@@ -537,11 +537,12 @@ next
 qed
 end"#;
 
-    /// The extractor is pinned by EXACT output, not by `contains`: it must
-    /// start at the named lemma's first proof line, stop at the end of THAT
-    /// proof (`foo`'s single-step proof has no `qed`, so the scope stack is
-    /// what ends it), drop the header/guarded-formula block, and strip
-    /// `solve(<goal>)` down to bare `solve`.
+    /// The test compares the complete output of the extractor.  It does not
+    /// use `contains`.  The extractor must start at the first proof line of
+    /// the named lemma.  It must stop at the end of that same proof.  The
+    /// single-step proof of `foo` has no `qed`, so the scope stack is what
+    /// ends it.  The extractor must also drop the header and guarded-formula
+    /// block, and strip `solve(<goal>)` down to `solve` on its own.
     #[test]
     fn extract_simple_two_lemma_proof() {
         assert_eq!(
@@ -580,10 +581,11 @@ end"#;
         node(method, status, &[])
     }
 
-    /// `render`'s three layout rules in one tree: a branching method wraps its
-    /// children in `case`/`next`/`qed`, a single EMPTY-key child is a Linear
-    /// continuation printed inline (no `case`/`qed` wrapper), and each
-    /// leaf-closure kind gets its own line form.
+    /// One tree that exercises the three layout rules of `render`.  A
+    /// branching method wraps its children in `case`/`next`/`qed`.  A single
+    /// child with an empty key is a Linear continuation, and `render` prints
+    /// it inline with no `case`/`qed` wrapper.  Each kind of leaf closure has
+    /// its own line form.
     #[test]
     fn render_emits_cases_next_qed_and_inlines_linear_children() {
         let root = node(
@@ -636,11 +638,12 @@ end"#;
         );
     }
 
-    /// Exists-trace pruning: once a node's status rolls up to `Solved`,
-    /// `render` keeps only the first Solved child and elides the branches
-    /// that closed contradictorily — mirroring HS `extractSolved`, which
-    /// prunes before printing.  Without the elision the skeleton would carry
-    /// `case_1` and a `next`, and every exists-trace diff would misfire.
+    /// Exists-trace pruning.  Once a node's status is `Solved`, `render`
+    /// keeps only the first Solved child.  It drops the branches that closed
+    /// contradictorily.  This mirrors HS `extractSolved`, which prunes before
+    /// it prints.  Without the pruning, the skeleton would carry `case_1` and
+    /// a `next`, and every exists-trace diff would report a difference that
+    /// is not real.
     #[test]
     fn render_elides_non_solved_siblings_under_a_solved_node() {
         let root = node(
@@ -672,10 +675,10 @@ end"#;
         );
     }
 
-    /// `first_divergence` compares leaf closures up to their reason (so
-    /// `cyclic` vs `from formulas` is NOT a divergence) but reports any other
-    /// line difference with its 1-based line number, using `<EOF>` for the
-    /// shorter side.
+    /// `first_divergence` compares leaf closures up to their reason.  A
+    /// `cyclic` reason against a `from formulas` reason is not a divergence.
+    /// The function reports every other line difference with its 1-based
+    /// line number.  It uses `<EOF>` for the shorter side.
     #[test]
     fn first_divergence_ignores_closure_reasons_only() {
         let ours = "simplify\nby contradiction /* cyclic */\n";

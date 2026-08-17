@@ -145,14 +145,15 @@ fn installed_bundle_resolves_every_attribute_in_term_to_lnterm() {
     }
 }
 
-/// The arity-1 fold's HARDCODED builtin name list in `term_to_vterm` is
-/// deliberate (a signature-driven fold regresses the corpus), so it is only
-/// as good as its membership: every name on it must fold surplus
-/// comma-separated arguments into one right-associative pair, mirroring HS
-/// `naryOpApp`'s `k == 1` branch (Theory/Text/Parser/Term.hs:94-96), and a
-/// genuinely multi-arg builtin must not.  `h` alone is exercised by the
-/// corpus; the rest (`inv`/`pk` and the revealing-signing /
-/// locations-report symbols) are reachable only from theories the fast
+/// The arity-1 fold in `term_to_vterm` uses a hardcoded list of builtin
+/// names.  The list is deliberate, because a signature-driven fold regresses
+/// the corpus.  The fold is therefore only as good as the membership of the
+/// list.  Every name on the list must fold surplus comma-separated arguments
+/// into one right-associative pair.  This mirrors the `k == 1` branch of HS
+/// `naryOpApp` (Theory/Text/Parser/Term.hs:94-96).  A builtin that genuinely
+/// takes several arguments must not fold.  The corpus exercises `h` alone.
+/// The other names (`inv`/`pk` and the revealing-signing and
+/// locations-report symbols) are reachable only from theories that the fast
 /// corpus does not carry.
 #[test]
 fn hardcoded_unary_builtins_fold_surplus_arguments() {
@@ -186,7 +187,7 @@ fn hardcoded_unary_builtins_fold_surplus_arguments() {
             other => panic!("{name}: expected a NoEq application, got {other:?}"),
         }
     }
-    // `senc` is genuinely 2-ary and must be left alone.
+    // `senc` genuinely takes 2 arguments, so the fold must not change it.
     let senc = p::Term::App("senc".into(), vec![a, b]);
     match term_to_lnterm(&senc).unwrap() {
         Term::App(FunSym::NoEq(sym), args) => {
@@ -340,9 +341,9 @@ fn canonicalize_ac_in_pterm_sees_the_installed_ac_set_at_every_depth() {
 }
 
 // A theory with no declarations still carries HS's `minimalMaudeSig`
-// (`emptySignaturePure`, Theory/Model/Signature.hs) — `pair`/`fst`/`snd` are
-// always in scope, which is what makes `<a, b>` parse and the pair intruder
-// rules exist in every theory.
+// (`emptySignaturePure`, Theory/Model/Signature.hs).  `pair`, `fst` and
+// `snd` are always in scope.  That is why `<a, b>` parses, and why the pair
+// intruder rules exist in every theory.
 #[test]
 fn elaborate_empty_theory() {
     let p = parse_theory("theory T begin end", &[]).unwrap();
@@ -503,11 +504,11 @@ fn parser_var(name: &str, idx: u64, sort: p::SortHint) -> p::Term {
     })
 }
 
-// `lnterm_to_term` inverts `term_to_lnterm` on every surface shape the
-// display path round-trips (`pretty_theory` reads a parser AST back out of
-// elaborated terms).  A round trip on its own is satisfied by two matching
-// bugs — a sort mangled one way and unmangled the other — so each case also
-// pins the LNTerm the FORWARD direction produced.
+// `lnterm_to_term` inverts `term_to_lnterm` on every surface shape that the
+// display path round-trips.  (`pretty_theory` reads a parser AST back out of
+// elaborated terms.)  A round trip on its own still succeeds with two
+// matching bugs: one that mangles a sort, and one that unmangles it again.
+// So each case also pins the LNTerm that the forward direction produces.
 #[test]
 fn lnterm_to_term_inverts_term_to_lnterm() {
     use tamarin_term::function_symbols::NoEqSym;
@@ -718,10 +719,11 @@ fn let_block_substitutes_in_actions_and_conclusions() {
     }
 }
 
-// `elaborate` must run the desugaring ITSELF (`rule_to_proto_rule_e`), not
-// merely leave `apply_let_block` available to other callers: the elaborated
-// rule's action and conclusion carry `~k`, and the local name `r` — which
-// elaborates perfectly happily as a free Msg-variable — is gone.
+// `elaborate` must run the desugaring itself (`rule_to_proto_rule_e`).  It
+// must not merely leave `apply_let_block` available to other callers.  The
+// action and the conclusion of the elaborated rule carry `~k`.  The local
+// name `r` is gone.  Without the desugaring, `r` elaborates without any
+// complaint as a free Msg-variable.
 #[test]
 fn let_block_end_to_end_elaborates() {
     let src = r#"theory T begin

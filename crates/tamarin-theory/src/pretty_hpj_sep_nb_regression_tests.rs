@@ -1,13 +1,14 @@
 use super::*;
 
-/// Regression for the column a wrapped `sep` tail lands in when the
-/// break happens inside a `sep` whose own first item already wrapped.
+/// Checks the column that a wrapped `sep` tail goes to. The break here
+/// happens inside a `sep` whose own first item already wraps.
 ///
 /// This case mirrors NSPK3 injective_agree's all-counterexamples
 /// guarded formula: a GDisj whose disjuncts are GGuarded with
 /// recursive `∀`-bodies that themselves wrap.  The expected output is
-/// byte-identical to `Text.PrettyPrint.HughesPJ` (pretty-1.1.3.6,
-/// verified against the real library at width 50 / ribbon 33).
+/// the same, byte for byte, as the output of `Text.PrettyPrint.HughesPJ`
+/// (pretty-1.1.3.6). A run against the real library at width 50 and
+/// ribbon 33 verifies these bytes.
 #[test]
 fn nested_sep_disjunct_second_item_column() {
     let opp = |d: Doc| Doc::text("(").beside(d).beside(Doc::text(")"));
@@ -60,23 +61,25 @@ fn nested_sep_disjunct_second_item_column() {
 
 /// Pins the `False` in `sepNB g Empty k ys`'s
 /// `nilAboveNest False k (reduceDoc (vcat ys))`
-/// (pretty-1.1.3.6 HughesPJ.hs:760-766 — GHC's bundled `pretty` settled on
-/// `False` where the upstream XXX comment wavered).
+/// (pretty-1.1.3.6 HughesPJ.hs:760-766). The `pretty` package that GHC
+/// bundles settles on `False`. The XXX comment upstream does not settle the
+/// choice.
 ///
-/// `nilAboveNest g k q` only branches on that flag when `k > 0`
-/// (`not g && k > 0` inlines `k` spaces instead of breaking the line), and on
-/// this call site `k` is the leading item's nest offset MINUS its text width.
-/// Every `sep` a theory produces has a non-negative nest, so `k` there is
-/// always `<= 0` and both flag values agree — which is why the corpus gates
-/// and the layout pin above cannot see the flag at all.  A NEGATIVE nest on
-/// the first item is the one shape that drives `k` positive: `nest (-5)` less
-/// the 2-column `ab` leaves `k = 3`, so the wrapped tail is inlined after
-/// three spaces rather than moved to its own line.
+/// `nilAboveNest g k q` branches on that flag only when `k > 0`. In that
+/// case `not g && k > 0` inlines `k` spaces instead of a line break. At this
+/// call site `k` is the nest offset of the leading item minus the text width
+/// of that item. Every `sep` that a theory produces has a non-negative nest.
+/// `k` there is therefore always `<= 0`, and both values of the flag give
+/// the same output. For that reason the corpus gates and the layout pin
+/// above cannot see the flag at all. A negative nest on the first item is
+/// the one shape that makes `k` positive. Here `nest (-5)` minus the
+/// 2-column `ab` leaves `k = 3`. The wrapped tail therefore goes inline
+/// after three spaces, and not onto its own line.
 ///
-/// Expected bytes from `Text.PrettyPrint.HughesPJ` (pretty-1.1.3.6) at
-/// lineLength 4 / ribbon 4.  Flipping the flag to `True` breaks the line
-/// instead and re-nests by `k`, which the outer `nest (-5)` then cancels —
-/// yielding `"ab\ncd\nef"`.
+/// The expected bytes come from `Text.PrettyPrint.HughesPJ`
+/// (pretty-1.1.3.6) at lineLength 4 / ribbon 4. A flag value of `True`
+/// breaks the line instead and nests again by `k`. The outer `nest (-5)`
+/// then cancels that nest, and the output is `"ab\ncd\nef"`.
 #[test]
 fn sep_nb_empty_arm_inlines_the_wrapped_tail_at_a_positive_nest() {
     let d = sep(vec![

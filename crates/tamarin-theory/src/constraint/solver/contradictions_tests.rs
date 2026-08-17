@@ -10,11 +10,11 @@ fn n(name: &str) -> NodeId {
     LVar::new(name, LSort::Node, 0)
 }
 
-/// `cyclic` is the `Cyclic` contradiction check over the raw less-relation
-/// — it must see a cycle only when the ordering edges actually close one.
-/// The reflexive case is load-bearing: `exploitUniqueMsgOrder` inserts
-/// `i < i` for a node that both concludes `KD(m)` and carries `KU(m)`, and
-/// that self-edge is the ONLY thing killing such a case (see
+/// `cyclic` is the `Cyclic` contradiction check over the raw less-relation.
+/// It reports a cycle only when the ordering edges close one.  The reflexive
+/// case matters here.  `exploitUniqueMsgOrder` inserts `i < i` for a node that
+/// both concludes `KD(m)` and carries `KU(m)`.  That self-edge is the only
+/// thing that rules out such a case (see
 /// `simplify_tests::exploit_unique_msg_order_inserts_the_reflexive_self_edge`).
 #[test]
 fn cyclic_sees_closed_orderings_only() {
@@ -117,9 +117,10 @@ fn non_injective_fact_witness_emitted() {
         .iter()
         .filter(|c| matches!(c, Contradiction::NonInjectiveFactInstance(_, _, _)))
         .collect();
-    // Exactly the (i, j, k) witness triple, in HS's argument order — the
-    // renderer prints these three ids, so a permuted or duplicated witness
-    // is a byte-visible divergence that "at least one" would let through.
+    // The result is exactly the (i, j, k) witness triple, in HS's argument
+    // order.  The renderer prints these three ids.  A witness in a different
+    // order, or a duplicated witness, therefore changes the printed bytes.  A
+    // check for "at least one" witness would let that through.
     assert_eq!(
         injs,
         vec![&Contradiction::NonInjectiveFactInstance(i, j, k)],

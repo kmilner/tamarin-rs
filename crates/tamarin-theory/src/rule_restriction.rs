@@ -724,17 +724,18 @@ mod tests {
         let p::Formula::Forall(vs, body) = &restr.formula else {
             panic!("expected forall, got {:?}", restr.formula);
         };
-        // Two binders: the abstracted x (Msg) and #NOW (Node), in
-        // sorted order x then NOW.
+        // The formula has two binders.  They are the abstracted x (Msg) and
+        // #NOW (Node), in the sorted order x then NOW.
         assert_eq!(vs.len(), 2);
         assert_eq!((vs[0].name.as_str(), vs[0].sort), ("x", p::SortHint::Msg));
         assert_eq!(
             (vs[1].name.as_str(), vs[1].sort),
             ("NOW", p::SortHint::Node)
         );
-        // HS `f'' = (Action #NOW fact) ==> f'` — the generated action is the
-        // ANTECEDENT and the rewritten body the consequent.  A swap keeps
-        // the formula an `Implies` but inverts the restriction's meaning.
+        // HS `f'' = (Action #NOW fact) ==> f'`.  The generated action is the
+        // antecedent, and the rewritten body is the consequent.  A swap of the
+        // two keeps the formula an `Implies`, but it inverts the meaning of
+        // the restriction.
         let p::Formula::Implies(ante, conseq) = &**body else {
             panic!("expected implication, got {:?}", body);
         };
@@ -750,9 +751,9 @@ mod tests {
                 p::Term::Var(vs[1].clone()),
             ))
         );
-        // The consequent is the predicate body with the whole `eq(x,x)`
-        // subterm abstracted to the fresh `x`, and the nullary constant
-        // `true` left inline as a 0-ary application (never abstracted).
+        // The consequent is the body of the predicate.  The complete `eq(x,x)`
+        // subterm becomes the fresh `x`.  The nullary constant `true` stays
+        // inline as a 0-ary application.  The code never abstracts it.
         assert_eq!(
             **conseq,
             p::Formula::Atom(p::Atom::Eq(
@@ -783,17 +784,19 @@ mod tests {
         });
         let restr_pos = restr_pos.expect("restriction not generated");
         let rule_pos = rule_pos.expect("rule missing");
-        // HS adds the generated restrictions to the accumulated theory and
-        // THEN the rule, so the restriction lands immediately before it.
+        // HS adds the generated restrictions to the accumulated theory, and it
+        // adds the rule after them.  The restriction is therefore immediately
+        // before the rule.
         assert_eq!(restr_pos + 1, rule_pos, "restriction must precede rule");
-        // Rule action rewritten, embedded restrictions cleared.
+        // The pass rewrites the rule action and clears the embedded
+        // restrictions.
         let p::TheoryItem::Rule(r) = &thy.items[rule_pos] else {
             panic!("item at {rule_pos} is not the rule");
         };
         assert!(r.embedded_restrictions.is_empty());
         assert_eq!(r.actions.len(), 1);
         assert_eq!(r.actions[0].name, "Restr_A_1");
-        // The action carries the ORIGINAL, un-abstracted term.
+        // The action carries the original term, without abstraction.
         assert_eq!(r.actions[0].args.len(), 1);
         assert!(
             matches!(&r.actions[0].args[0], p::Term::App(n, args) if n == "eq" && args.len() == 2),

@@ -101,11 +101,11 @@ fn parser_builtin_table_matches_the_maude_signatures() {
 }
 
 /// `reliable-channel` is the one `builtinsNames` row without a signature
-/// (Theory/Text/Parser/Signature.hs:84), so it must reserve nothing: giving it
-/// a row would make `function`'s builtin pre-check fire on names HS leaves
-/// free.  The other direction — no builtin WITH a signature missing from the
-/// table — is [`parser_builtin_table_is_in_builtins_names_order`], whose
-/// whole-list equality already covers membership.
+/// (Theory/Text/Parser/Signature.hs:84).  It must therefore reserve nothing.
+/// A row for it makes `function`'s builtin pre-check fire on names that HS
+/// leaves free.  [`parser_builtin_table_is_in_builtins_names_order`] checks
+/// the other direction, that no builtin with a signature is missing from the
+/// table.  Its equality over the complete list already covers membership.
 #[test]
 fn reliable_channel_reserves_no_symbols() {
     assert!(

@@ -5,9 +5,10 @@
 use super::*;
 use tamarin_term::builtin::msg_var;
 
-/// `Fact::arity` counts the terms; `fact_tag_arity` reads the arity off the
-/// TAG — the `Proto` payload for protocol facts, a fixed 1 for every built-in
-/// tag (HS `factTagArity`, Theory/Model/Fact.hs).
+/// `Fact::arity` counts the terms. `fact_tag_arity` reads the arity from the
+/// tag. For a protocol fact the arity comes from the `Proto` payload. For
+/// every built-in tag the arity is a fixed 1 (HS `factTagArity`,
+/// Theory/Model/Fact.hs).
 #[test]
 fn proto_fact_arity() {
     let f = proto_fact(
@@ -17,7 +18,7 @@ fn proto_fact_arity() {
     );
     assert_eq!(f.arity(), 2);
     assert_eq!(fact_tag_arity(&f.tag), 2);
-    // Read from the tag, not from any term list.
+    // The function reads the arity from the tag, and not from a term list.
     assert_eq!(
         fact_tag_arity(&FactTag::Proto(Multiplicity::Linear, "P", 3)),
         3
@@ -42,10 +43,11 @@ fn equality_ignores_annotations() {
     assert_eq!(a, b);
 }
 
-/// `is_linear`/`is_persistent` partition every tag (HS `factTagMultiplicity`,
-/// Theory/Model/Fact.hs:383-388): `Proto` carries its own multiplicity, KU/KD
-/// are Persistent, everything else is Linear.  Both directions are asserted
-/// so a predicate degenerating to a constant cannot hide.
+/// `is_linear` and `is_persistent` partition every tag (HS
+/// `factTagMultiplicity`, Theory/Model/Fact.hs:383-388). A `Proto` tag carries
+/// its own multiplicity. KU and KD are Persistent. Every other tag is Linear.
+/// The test asserts both directions. A predicate that degenerates to a
+/// constant therefore cannot pass the test.
 #[test]
 fn linear_vs_persistent() {
     let lin = proto_fact(Multiplicity::Linear, "P", vec![]);

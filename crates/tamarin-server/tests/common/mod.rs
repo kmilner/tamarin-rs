@@ -332,9 +332,9 @@ pub fn haskell_capture(name: &str) -> String {
         .unwrap_or_else(|e| panic!("read capture {}: {}", path.display(), e))
 }
 
-/// Replace every `HH:MM:SS` run with `<TIME>`.  The only one in the pages
-/// compared below is the theory's load time (`theoryTpl`'s `%T` column and the
-/// `Loaded at …` line of the theory header).
+/// Replace every `HH:MM:SS` run with `<TIME>`.  The pages compared below hold
+/// only one such run, the theory's load time.  It appears in `theoryTpl`'s
+/// `%T` column and in the `Loaded at …` line of the theory header.
 fn blank_times(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = String::with_capacity(s.len());
@@ -360,19 +360,20 @@ fn blank_times(s: &str) -> String {
     out
 }
 
-/// Blank the two fields a captured page cannot share with a test run: the
-/// theory's load time, and its origin path — the oracle served `./<fixture>`
-/// out of its own work-dir (see `tests/capture_haskell_fixtures.sh`) while the
-/// harness loads the fixture by absolute path.
+/// Blank the two fields that a captured page cannot share with a test run.
+/// The first field is the theory's load time.  The second field is the
+/// theory's origin path.  The oracle serves `./<fixture>` out of its own work
+/// directory (see `tests/capture_haskell_fixtures.sh`).  The harness loads the
+/// fixture by absolute path.
 fn blank_load_stamp(s: &str, fixture: &str) -> String {
     let s = s.replace(&fixture_path(fixture).display().to_string(), "<THEORY>");
     let s = s.replace(&format!("./{fixture}"), "<THEORY>");
     blank_times(&s)
 }
 
-/// Pin an HTML page carrying a theory's load stamp against its capture: every
-/// byte of the template outside the load time and the origin path must be the
-/// oracle's.
+/// Compare an HTML page that carries a theory's load stamp against its
+/// capture.  Every byte of the template outside the load time and the origin
+/// path must be the same as the byte in the oracle's capture.
 #[allow(dead_code)]
 pub fn assert_page_matches_capture(body: &str, capture: &str, fixture: &str) {
     assert_eq!(
@@ -382,17 +383,18 @@ pub fn assert_page_matches_capture(body: &str, capture: &str, fixture: &str) {
     );
 }
 
-/// The `Generated from:` block's build-specific lines: the oracle's values are
-/// its own Maude, git revision and build timestamp, which no test run can
-/// reproduce.  The prefixes themselves are still compared.
+/// The build-specific lines of the `Generated from:` block.  The oracle's
+/// values are its own Maude version, its own git revision and its own build
+/// timestamp.  No test run can reproduce those values.  The comparison still
+/// covers the prefixes themselves.
 ///
-/// The port emits these three values EMPTY on the live routes
-/// (`handlers::theory::render_theory_source` builds a `BuildInfo` with empty
-/// `maude_version` / `git_revision` / `git_branch` / `compiled_at`) — a
-/// recorded divergence awaiting a production fix, which this blanking masks,
-/// so a green pin here is not parity on these lines.  When the fix lands,
-/// tighten these prefixes to compare the values the batch binary already
-/// fills in.
+/// The port writes these three values as empty strings on the live routes.
+/// `handlers::theory::render_theory_source` builds a `BuildInfo` with an empty
+/// `maude_version`, `git_revision`, `git_branch` and `compiled_at`.  This is a
+/// recorded divergence that waits for a production fix.  The blanking hides
+/// the divergence, so a pass here does not show parity on these lines.  After
+/// the fix lands, make these prefixes stricter and compare the values that the
+/// batch binary already fills in.
 const VERSION_BANNER_PREFIXES: [&str; 3] = ["Maude version", "Git revision:", "Compiled at:"];
 
 fn blank_version_banner(s: &str) -> String {
@@ -413,13 +415,15 @@ fn blank_version_banner(s: &str) -> String {
         .collect()
 }
 
-/// Pin a `prettyClosedTheory` rendering against its capture, blanking only the
-/// `Generated from:` banner's build-specific values.
+/// Compare a `prettyClosedTheory` rendering against its capture.  This
+/// function blanks only the build-specific values of the `Generated from:`
+/// banner.
 ///
 /// Three routes serve that one document: `getTheorySourceR`
 /// (`src/Web/Handler.hs:1015-1022`), `getTheoryMessageDeductionR`
 /// (`src/Web/Handler.hs:1050-1055`) and `getDownloadTheoryR`
-/// (`src/Web/Handler.hs:1763-1766`), which hands back the first one's body.
+/// (`src/Web/Handler.hs:1763-1766`).  `getDownloadTheoryR` returns the body of
+/// `getTheorySourceR`.
 #[allow(dead_code)]
 pub fn assert_theory_source_matches_capture(body: &str, capture: &str) {
     assert_eq!(

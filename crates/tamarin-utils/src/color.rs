@@ -268,12 +268,16 @@ mod tests {
         assert!(hex_to_rgb("zzzzzz").is_none());
         assert!(hex_to_rgb("ff00").is_none());
         assert!(hex_to_rgb("ff00000").is_none()); // seven chars
-                                                  // Six *characters* but seven bytes, with the multibyte char straddling
-                                                  // the first byte pair: HS pattern-matches on `String`, so this is a
-                                                  // plain `Nothing`. Byte-slicing the pairs would cut "é" in half and
+                                                  // Six characters but seven bytes.  The
+                                                  // multibyte character straddles the
+                                                  // first byte pair.  HS pattern-matches
+                                                  // on a `String`, so HS answers a plain
+                                                  // `Nothing` here.  A byte slice of the
+                                                  // pairs would cut "é" in half and
                                                   // panic instead.
         assert!(hex_to_rgb("fé0000").is_none());
-        // Six bytes but five characters — also not a six-char match.
+        // Six bytes but five characters.  This is also not a six-character
+        // match.
         assert!(hex_to_rgb("ffé00").is_none());
     }
 
@@ -286,7 +290,8 @@ mod tests {
     fn color_groups_index_layout() {
         let g = color_groups(0.0, &[3, 2, 4]);
         let idxs: Vec<(usize, usize)> = g.iter().map(|(i, _)| *i).collect();
-        // Group-major, element-minor, no gaps — the order callers zip against.
+        // The order is group-major and element-minor, with no gaps.  Callers
+        // zip against this order.
         assert_eq!(
             idxs,
             vec![
@@ -301,12 +306,12 @@ mod tests {
                 (2, 3)
             ]
         );
-        // Hues stay in [0, 360): `properFraction` wraps the zero-hue shift.
+        // Hues stay in [0, 360).  `properFraction` wraps the zero-hue shift.
         for ((_, _), hsv) in &g {
             assert!(hsv.h >= 0.0 && hsv.h < 360.0);
         }
-        // An empty layout, and an empty group inside a layout, contribute no
-        // entries — and neither divides by zero.
+        // An empty layout contributes no entries.  An empty group inside a
+        // layout also contributes no entries.  Neither one divides by zero.
         assert!(color_groups(0.0, &[]).is_empty());
         let with_gap: Vec<(usize, usize)> =
             color_groups(0.0, &[0, 1]).iter().map(|(i, _)| *i).collect();
@@ -315,13 +320,14 @@ mod tests {
 
     #[test]
     fn color_groups_style_constants_match_hs() {
-        // Hand-computed from HS `genColorGroups (colorGroupStyle 0)`, whose
-        // params are scale=0.6, vBottom=0.75, vRange=0.2, sBottom=0.4,
-        // sRange=0:
+        // Hand-computed from HS `genColorGroups (colorGroupStyle 0)`.  The
+        // params of that style are scale=0.6, vBottom=0.75, vRange=0.2,
+        // sBottom=0.4, sRange=0:
         //   toGroupHue g h        = (g + 0.5*(1-scale) + h*scale) / nGroups
         //   toShiftedGroupHue g h = frac (toGroupHue g h + 1 - toGroupHue 0 0.5)
-        // With nGroups = 2 that makes toGroupHue 0 0.5 = 0.25, so the shift
-        // lands the second element of the first group exactly on hue 0.
+        // With nGroups = 2 that makes toGroupHue 0 0.5 = 0.25.  The shift
+        // therefore lands the second element of the first group exactly on
+        // hue 0.
         let g = color_groups(0.0, &[2, 1]);
         let want = [
             ((0, 0), 306.0, 0.4, 0.77), // 360 * (0.10 + 1 - 0.25)

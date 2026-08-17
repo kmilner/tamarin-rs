@@ -368,10 +368,11 @@ mod tests {
         );
     }
     /// [`TheoryPath::render`] runs every segment through
-    /// [`prefix_with_underscore`], so an empty case name reaches the URL as
-    /// `_` and a `_`-leading one gains another; [`decode_segments`]'
-    /// [`unprefix_underscore`] undoes it, so a rendered path parses back to
-    /// the path it came from.
+    /// [`prefix_with_underscore`].  An empty case name therefore appears in
+    /// the URL as `_`.  A case name that starts with `_` gets one more `_`.
+    /// The [`unprefix_underscore`] call in [`decode_segments`] removes that
+    /// prefix again.  A rendered path therefore parses back to the path it
+    /// came from.
     #[test]
     fn render_prefixes_underscores_and_round_trips() {
         let p = TheoryPath::Proof {

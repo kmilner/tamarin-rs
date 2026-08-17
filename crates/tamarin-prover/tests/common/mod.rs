@@ -38,18 +38,20 @@ pub const LINUXBREW_MAUDE: &str = "/home/linuxbrew/.linuxbrew/bin/maude";
 /// into a silent skip, for a machine that genuinely has none.
 pub const ALLOW_NO_MAUDE_ENV: &str = "TAM_ALLOW_NO_MAUDE";
 
-/// Env escape hatch: `TAM_ALLOW_NO_DOT=1` turns an unrunnable `dot` back into
-/// a silent skip, for a machine that genuinely has no Graphviz.
+/// Escape hatch in the environment: `TAM_ALLOW_NO_DOT=1` turns a `dot` that
+/// cannot run back into a silent skip.  Use it on a machine that truly has no
+/// Graphviz.
 pub const ALLOW_NO_DOT_ENV: &str = "TAM_ALLOW_NO_DOT";
 
-/// Whether the `dot` the port resolves — a bare `dot` left to `$PATH`, which
-/// is what `--with-dot`'s default records — can actually be run.
+/// Reports whether the `dot` that the port resolves can really run.  The port
+/// resolves a bare `dot` and leaves the lookup to `$PATH`.  This is what the
+/// default of `--with-dot` records.
 ///
-/// A machine where it cannot fails here rather than skipping, for the same
-/// reason [`maude_available`] does: the dot-backed pins are the only tests
-/// that drive a real Graphviz, so a silent skip makes `cargo test` green
-/// identically with and without it.  Set `TAM_ALLOW_NO_DOT=1` to skip them
-/// deliberately.
+/// On a machine where `dot` cannot run, this function panics instead of
+/// skipping.  [`maude_available`] panics for the same reason.  The tests that
+/// use `dot` are the only ones that drive a real Graphviz.  A silent skip
+/// would therefore make `cargo test` pass in the same way with Graphviz and
+/// without it.  Set `TAM_ALLOW_NO_DOT=1` to skip those tests deliberately.
 pub fn dot_available() -> bool {
     if Command::new("dot").arg("-V").output().is_ok() {
         return true;

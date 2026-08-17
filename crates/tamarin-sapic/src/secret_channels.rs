@@ -155,18 +155,20 @@ mod tests {
         assert!(!out.contains(&c.var));
     }
 
-    /// The join takes the INTERSECTION of the two branches' surviving
-    /// candidates, and each branch is actually descended into.  Asserting the
-    /// exact surviving set (rather than emptiness) is what separates the
-    /// intersection from a union, from either branch alone, and from a join
-    /// that ignores its children and hands the incoming candidates straight
-    /// back — every one of those returns a set the equality below rejects.
+    /// The join takes the intersection of the candidates that survive in the
+    /// two branches, and it descends into each branch.  The test asserts the
+    /// exact surviving set, and not just that the set is empty.  That exact
+    /// set tells the intersection apart from three other behaviours.  Those
+    /// are a union, either branch alone, and a join that ignores its children
+    /// and returns the incoming candidates unchanged.  The equality below
+    /// rejects the set that each of those three returns.
     #[test]
     fn parallel_intersects_candidates() {
         let c = slv("c", LSort::Fresh);
         let e = slv("e", LSort::Fresh);
         let d = slv("d", LSort::Fresh);
-        // `out(d, c)` — sending `c` disqualifies it on whichever side it sits.
+        // `out(d, c)`.  This action sends `c`, and that disqualifies `c` on
+        // the branch that holds the action.
         let out_c = |body: AnnotatedProc| -> AnnotatedProc {
             Process::Action(
                 SapicAction::ChOut {
@@ -195,12 +197,12 @@ mod tests {
             )
         };
         let only_e: BTreeSet<LVar> = [e.var].into_iter().collect();
-        // Disqualified on the left branch only...
+        // Only the left branch disqualifies `c`.
         assert_eq!(
             get_secret_channels(&with_branches(out_c(null()), null()), BTreeSet::new()),
             only_e
         );
-        // ...and on the right branch only.
+        // Only the right branch disqualifies `c`.
         assert_eq!(
             get_secret_channels(&with_branches(null(), out_c(null())), BTreeSet::new()),
             only_e

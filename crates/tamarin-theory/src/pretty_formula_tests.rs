@@ -87,9 +87,9 @@ fn forall_with_action() {
         vec![v("ni", p::SortHint::Untagged), v("i", p::SortHint::Node)],
         Box::new(body),
     );
-    // HS-faithful: `Name( args )` with internal spaces, and `ppImp`
-    // parenthesises BOTH sides of the `⇒`.  Bytes pinned to the oracle
-    // (Git revision ef3f0468).
+    // The output follows HS.  `Name( args )` keeps the internal spaces, and
+    // `ppImp` puts parentheses on both sides of the `⇒`.  The expected bytes
+    // come from the oracle (Git revision ef3f0468).
     assert_eq!(
         pretty_formula(&f),
         "\u{2200} ni #i. (F( ni ) @ #i) \u{21D2} (\u{22A5})"
@@ -201,9 +201,10 @@ fn user_ac_symbol_nullary_renders_bare_name() {
 }
 
 /// HS `prettyTerm` renders an AC operand list with the operator between the
-/// arguments and the whole application in parentheses (Term/Term.hs:305-309),
-/// so `a XOR b` is `(a⊕b)` — no spaces, outer parens kept.  Bytes pinned to
-/// the oracle (Git revision ef3f0468).
+/// arguments.  It puts the complete application in parentheses
+/// (Term/Term.hs:305-309).  `a XOR b` is therefore `(a⊕b)`, with no spaces and
+/// with the outer parentheses kept.  The expected bytes come from the oracle
+/// (Git revision ef3f0468).
 #[test]
 fn binop_xor() {
     let t = p::Term::BinOp(
@@ -227,8 +228,9 @@ fn guarded_negation_shortcut() {
         .into(),
         body: std::sync::Arc::new(Guarded::Disj(vec![].into())),
     };
-    // Bytes pinned to the oracle (Git revision ef3f0468): the binder-free
-    // `∀`-over-⊥ prints as the negated guard alone, never as an `⇒ ⊥`.
+    // The expected bytes come from the oracle (Git revision ef3f0468).  The
+    // `∀` without binders over `⊥` prints as the negated guard alone.  It
+    // never prints as an `⇒ ⊥`.
     assert_eq!(pretty_guarded(&g), "\u{00AC}(#i < #j)");
 }
 

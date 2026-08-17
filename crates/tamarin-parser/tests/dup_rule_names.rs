@@ -104,8 +104,9 @@ fn duplicate_fires_before_a_later_parse_error() {
 /// `maybe True (ru ==) …` guard and is appended AGAIN — both copies are
 /// items (and both render).  The corpus relies on this (e.g.
 /// examples/asiaccs20-POIDC/OIDC_CodeFlow_with_ClientSecret.spthy carries
-/// two identical `Get_pk` rules, the second case's shape); the oracle loads
-/// both theories with exit 0 and prints their `rule (modulo E) …` echo twice.
+/// two identical `Get_pk` rules, which is the shape of the second case).  The
+/// oracle loads both theories with exit 0.  It prints their
+/// `rule (modulo E) …` echo twice.
 #[test]
 fn identical_duplicates_are_accepted_and_appended_twice() {
     for (case, name, src) in [

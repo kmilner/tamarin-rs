@@ -1519,9 +1519,9 @@ mod tests {
 
     /// Cloning a handle must hand out the SAME rule list, not a copy —
     /// this is what makes the per-probe / per-deduction / per-lemma
-    /// contexts cheap.  Turning the field into an owned `Vec`, or giving it a
-    /// deep-copying `Clone`, breaks the pointer identity; a `Deref` exposing
-    /// anything but the whole list breaks the length.
+    /// contexts inexpensive.  A field that becomes an owned `Vec` breaks the
+    /// pointer identity.  A `Clone` that copies deeply breaks it too.  A
+    /// `Deref` that exposes anything but the complete list breaks the length.
     #[test]
     fn intr_rule_cache_clone_shares_one_allocation() {
         let rules = sample_rules();

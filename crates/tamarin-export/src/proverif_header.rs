@@ -27,11 +27,13 @@ pub enum ProVerifHeader {
 mod tests {
     use super::*;
 
-    /// The whole point of the derived `Ord` is the DECLARATION order of the
-    /// six constructors: `attribHeaders` and the `S.toList` that feeds the
-    /// emitted header block sort by it, so reordering the enum silently
-    /// reorders ProVerif output.  Sorting a shuffled one-of-each set is what
-    /// pins that order — the discriminant sequence, not just one pair.
+    /// The derived `Ord` exists for the declaration order of the six
+    /// constructors.  `attribHeaders` sorts by that order, and so does the
+    /// `S.toList` that feeds the header block in the output.  A different
+    /// order of the enum therefore changes the order of the ProVerif output,
+    /// and nothing reports an error.  The test sorts a shuffled set with one
+    /// member of each variant.  That check covers the complete sequence of
+    /// discriminants, not one pair alone.
     #[test]
     fn ordering_follows_upstream_declaration_order() {
         let mut hs = [
@@ -59,8 +61,9 @@ mod tests {
             ["Type", "Sym", "Fun", "HEvent", "Table", "Eq"],
             "ProVerifHeader.hs:4-11 declaration order"
         );
-        // Within a variant the fields break the tie left-to-right, so `Fun`'s
-        // arity (field 3) outranks its type string (field 4).
+        // Inside one variant the fields break the tie from left to right.
+        // The arity of `Fun` (field 3) therefore outranks its type string
+        // (field 4).
         let mut funs = [
             ProVerifHeader::Fun("k".into(), "f".into(), 2, "zz".into(), vec![]),
             ProVerifHeader::Fun("k".into(), "f".into(), 1, "aa".into(), vec![]),

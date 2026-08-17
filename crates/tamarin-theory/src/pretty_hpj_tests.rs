@@ -48,8 +48,8 @@ fn nest_indents_continuation() {
     let d = Doc::text("a").above(Doc::text("b").nest(2));
     assert_eq!(d.render(), "a b");
     // Forcing a newline requires `$+$` (above_g=true) or `sep` of
-    // multi-line content.  Neither item fits the width, so the vertical
-    // alternative wins and `b` lands back at column 0.
+    // multi-line content.  Neither item fits the width.  The vertical
+    // alternative therefore applies, and `b` starts again at column 0.
     let d = sep(vec![Doc::text("aaaaaa"), Doc::text("bbbbbb")]);
     assert_eq!(d.render_with(5, 5), "aaaaaa\nbbbbbb");
 }
@@ -62,8 +62,9 @@ fn sep_fits_horizontal() {
 
 #[test]
 fn sep_breaks_when_too_wide() {
-    // The flat alternative is 81 columns, so the sep takes its vertical
-    // alternative; `nest 0` must stay a no-op on the wrapped line's column.
+    // The flat alternative is 81 columns wide.  The sep therefore takes its
+    // vertical alternative.  `nest 0` must not change the column of the
+    // wrapped line.
     let long = "x".repeat(40);
     let d = sep(vec![Doc::text(&long), Doc::text(&long)]).nest(0);
     assert_eq!(d.render_with(50, 50), format!("{long}\n{long}"));
@@ -71,10 +72,10 @@ fn sep_breaks_when_too_wide() {
 
 #[test]
 fn fsep_packs_greedy() {
-    // `fsep` fills: it keeps taking items while the NEXT one still fits, so at
-    // width 20 the first line stops after `w6` (adding `w7` would reach 23) —
-    // unlike `sep`, which would go all-vertical the moment the flat form
-    // overran.
+    // `fsep` fills the line.  It adds items to the line while the next item
+    // still fits.  At width 20 the first line therefore stops after `w6`,
+    // because `w7` would reach column 23.  `sep` behaves differently.  It puts
+    // every item on its own line as soon as the flat form is too wide.
     let words: Vec<Doc> = (0..10).map(|i| Doc::text(format!("w{}", i))).collect();
     let d = fsep(words);
     assert_eq!(d.render_with(20, 20), "w0 w1 w2 w3 w4 w5 w6\nw7 w8 w9");
@@ -124,9 +125,10 @@ fn nested_binop_w_shrinks_with_depth() {
             Doc::text("y"),
         );
     }
-    // Byte-identical to `Text.PrettyPrint.HughesPJ` (pretty-1.1.3.6) at
-    // lineLength 50 / ribbon 50.  Each level's right operand drops one column
-    // further left as `w` shrinks: `y` at column 1, then at column 0.
+    // The output is byte-identical to `Text.PrettyPrint.HughesPJ`
+    // (pretty-1.1.3.6) at lineLength 50 / ribbon 50.  The right operand of
+    // each level moves one column further left as `w` gets smaller.  The
+    // first `y` is at column 1, and the next `y` is at column 0.
     assert_eq!(
         d.render_with(50, 50),
         "[[[xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] \u{2227} y] \u{2227}\n \
@@ -189,7 +191,7 @@ fn wireguard_aead_fsep_breaks_before_e() {
     // We approximate the inner h(<pair>) as a long opaque text
     // and verify the fsep breaks before "'e',".
     //
-    // Expected bytes verified against `Text.PrettyPrint.HughesPJ`
+    // The expected bytes match `Text.PrettyPrint.HughesPJ`
     // (pretty-1.1.3.6) at lineLength 110 / ribbon 73.
     let arg1 = Doc::text("h(<h(<h(<h(<ci2, pekR, '1'>), z, '1'>), z.1, '1'>), ~psk, '3'>)");
     let arg2 = Doc::text("'e'");
@@ -203,9 +205,10 @@ fn wireguard_aead_fsep_breaks_before_e() {
     // Layout at col 10 (after leading "          ").
     let lead = Doc::text("          ");
     let d = lead.beside(full);
-    // The `text "aead("` BESIDE sets the fsep's indentation to column 15, so
-    // each wrapped argument lands there — `'e',` on its own line, the third
-    // argument on the next, and the closing `)` glued to it.
+    // The `beside` of `text "aead("` sets the indentation of the fsep to
+    // column 15.  Each wrapped argument therefore starts at column 15.
+    // `'e',` appears on its own line.  The third argument takes the next
+    // line, and the closing `)` follows it directly.
     let ind = " ".repeat(15);
     let expected = [
         "          aead(h(<h(<h(<h(<ci2, pekR, '1'>), z, '1'>), z.1, '1'>), ~psk, '3'>),".to_string(),
@@ -338,10 +341,11 @@ fn dnp3_tuple_fill_keystatus_on_first_line() {
     let solve = Doc::text("solve(")
         .beside_sp(goal)
         .beside_sp(Doc::text(")"));
-    // Byte-identical to `Text.PrettyPrint.HughesPJ` (pretty-1.1.3.6) at
-    // lineLength 110 / ribbon 73.  Note the TRAILING SPACE closing the first
-    // line: the `", "` glued onto `keystatus` is what overran, so the fill
-    // breaks after it and the space survives into the output.
+    // The output is byte-identical to `Text.PrettyPrint.HughesPJ`
+    // (pretty-1.1.3.6) at lineLength 110 / ribbon 73.  The first line ends
+    // with a space.  The `", "` that follows `keystatus` is the text that goes
+    // past the line width, so the fill breaks after it.  The space stays in
+    // the output.
     let expected = [
         format!(
             "{}solve( !KU( senc(<~CDSK_j_USR_O, MDSK_j_USR_O, KSQ.1, $USR, keystatus, ",

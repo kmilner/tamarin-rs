@@ -1332,15 +1332,17 @@ mod tests {
 
     #[test]
     fn condeq_unbound_var_errors() {
-        // tildex empty → a, b unbound → WFUnbound error naming BOTH, so the
-        // failure is the unbound-variable check and not some other rejection.
+        // tildex is empty, so a and b are unbound.  The result is a
+        // WFUnbound error that names both of them.  The failure therefore
+        // comes from the unbound-variable check and not from another
+        // rejection.
         let an = ProcessAnnotation::<LVar>::empty();
         let p: Vec<i64> = vec![];
         let tx = BTreeSet::new();
         let c = ProcessCombinator::CondEq(svar("a"), svar("b"));
         let err = base_trans_comb(&c, &an, &p, &tx).unwrap_err();
         assert!(err.contains('a') && err.contains('b'), "got {err}");
-        // Binding both makes the same combinator translate.
+        // When both variables are bound, the same combinator translates.
         let mut tx2 = BTreeSet::new();
         tx2.insert(lv("a", 0));
         tx2.insert(lv("b", 0));

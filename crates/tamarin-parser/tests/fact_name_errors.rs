@@ -31,10 +31,11 @@ fn err(src: &str) -> String {
         .to_string()
 }
 
-/// Every rule position routes through the one `fact'`, so the fail sits at
-/// the char right after the name — the `(` — with the identifier's pending
-/// label merged in, wherever the fact stands and whether or not it is
-/// persistent (the `!` parses before the name).
+/// Every rule position routes through the one `fact'`.  The error therefore
+/// reports at the character right after the name, that is the `(`.  The
+/// pending label of the identifier merges into that error.  This holds
+/// wherever the fact stands, and whether or not the fact is persistent,
+/// because the `!` parses before the name.
 #[test]
 fn a_lowercase_fact_fails_at_the_paren_in_every_rule_position() {
     for (case, src, col) in [
@@ -57,8 +58,8 @@ fn a_lowercase_fact_fails_at_the_paren_in_every_rule_position() {
 }
 
 /// Whitespace between the name and the next token discards the pending
-/// `letter or digit` label — the fail reports at the token after the space,
-/// whatever that token is.
+/// `letter or digit` label.  The error then reports at the token after the
+/// space, whatever that token is.
 #[test]
 fn whitespace_after_the_name_drops_the_letter_label() {
     for (case, src, unexpected) in [

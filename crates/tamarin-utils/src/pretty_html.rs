@@ -157,8 +157,9 @@ mod tests {
 
     #[test]
     fn with_tag_includes_attrs() {
-        // Attribute VALUES are escaped; the inner body is passed through as-is
-        // (the caller owns its safety, per this module's contract).
+        // The function escapes the attribute values.  It passes the inner body
+        // through without change, because the caller owns the safety of that
+        // body under this module's contract.
         assert_eq!(
             with_tag("span", &[("class", "hl"), ("title", "a\"b&c")], "<i>x</i>"),
             "<span class=\"hl\" title=\"a&quot;b&amp;c\"><i>x</i></span>"

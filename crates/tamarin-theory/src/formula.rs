@@ -277,10 +277,10 @@ mod tests {
         ProtoFormula::lfalse()
     }
 
-    /// Each builder tags the node with ITS OWN connective / quantifier — the
-    /// four `Conn` builders are otherwise identical, and so are the two
-    /// `Qua` ones, so a copy-paste slip between them is invisible in the
-    /// shape alone.
+    /// Each builder tags the node with its own connective or quantifier.  The
+    /// four `Conn` builders are the same in every other way, and so are the
+    /// two `Qua` builders.  So the shape alone does not show a copy-paste
+    /// mistake between them.
     #[test]
     fn builders_tag_their_own_connective_and_quantifier() {
         let hint = || ("x".to_string(), LSort::Msg);

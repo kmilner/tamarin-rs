@@ -269,9 +269,10 @@ mod tests {
 
     #[test]
     fn image_and_inverse() {
-        // Both are relation-order preserving front-to-back scans, and the DFS
-        // helpers below inline exactly that scan, so the order is load-bearing:
-        // the successors of `1` come back as listed, not sorted.
+        // `image` and `inverse` both scan the relation from front to back, and
+        // both keep that order.  The DFS helpers below inline that same scan,
+        // so the order matters here.  The successors of `1` come back in the
+        // order the relation lists them, not sorted.
         let r = rel(&[(1, 3), (1, 2), (2, 3)]);
         assert_eq!(image(&1, &r), vec![3, 2]);
         assert_eq!(image(&3, &r), Vec::<i32>::new());
@@ -312,18 +313,20 @@ mod tests {
             let pb = order.iter().position(|x| x == b).unwrap();
             assert!(pa < pb, "{} should come before {} in {:?}", a, b, order);
         }
-        // `trans_red` enumerates index pairs over this order, so the exact
-        // permutation (not just its validity) reaches the reduced edge list.
-        // HS visits `map fst dag ++ map snd dag` and emits each vertex after
-        // its predecessors — which puts 3 before 2, unlike the sorted order
-        // that the validity check above would equally accept.
+        // `trans_red` enumerates index pairs over this order.  The exact
+        // permutation therefore reaches the reduced edge list, and not only
+        // the fact that the order is valid.  HS visits
+        // `map fst dag ++ map snd dag` and emits each vertex after its
+        // predecessors.  That puts 3 before 2.  The sorted order differs, and
+        // the validity check above would accept it just as well.
         assert_eq!(order, vec![1, 3, 2, 4]);
     }
 
     #[test]
     fn loop_breakers_break_cycles() {
-        // Figure-eight: the cycles 1->2->3->1 and 2->3->4->2 share the 2->3
-        // edge, so the single breaker picked at the first back edge cuts both.
+        // The graph holds two cycles, 1->2->3->1 and 2->3->4->2, that share
+        // the 2->3 edge.  The single breaker picked at the first back edge
+        // therefore cuts both cycles.
         let r = rel(&[(1, 2), (2, 3), (3, 1), (3, 4), (4, 2)]);
         let breakers = dfs_loop_breakers(&r);
         assert!(!breakers.is_empty());
@@ -333,10 +336,11 @@ mod tests {
 
     #[test]
     fn dfs_loop_breakers_pins_hs_selection_and_order() {
-        // The picked set reaches printed output, so *which* vertices come back
-        // and in what order is part of the port's contract, not an incidental
-        // choice: HS emits the back-edge SOURCE, stops descending there, and
-        // shares one monotonic `visited` set across all roots.
+        // The picked set reaches the printed output.  The vertices that come
+        // back, and their order, are therefore part of the port's contract.
+        // They are not an incidental choice.  HS emits the source of the back
+        // edge, stops the descent at that vertex, and shares one `visited` set
+        // across all roots.  That set only grows.
         let cases: Vec<(&str, Relation<i32>, Vec<i32>)> = vec![
             ("acyclic", rel(&[(1, 2), (2, 3)]), vec![]),
             (
@@ -350,8 +354,8 @@ mod tests {
                 vec![3],
             ),
             (
-                // 4 is never visited: the back edge at 3 stops the descent
-                // before 3's remaining successors are explored.
+                // The DFS never visits 4.  The back edge at 3 stops the
+                // descent before the DFS explores the other successors of 3.
                 "back edge suppresses the sibling successor",
                 rel(&[(1, 2), (2, 3), (3, 1), (3, 4)]),
                 vec![3],
@@ -362,16 +366,18 @@ mod tests {
                 vec![2, 4],
             ),
             (
-                // Both of 1's successors close a cycle back onto 1, so the
-                // emission order is exactly the order the successors appear in
-                // `rel` — reverse the successor scan and this row flips.
+                // Both successors of 1 close a cycle back onto 1.  The
+                // emission order is therefore the order in which the
+                // successors appear in `rel`.  A reversed successor scan
+                // flips this row.
                 "sibling successors are descended in relation order",
                 rel(&[(1, 2), (1, 3), (2, 1), (3, 1)]),
                 vec![2, 3],
             ),
             (
-                // Root 3 re-enters the already-broken cycle {1,2}; the shared
-                // `visited` set stops it, so no second breaker is emitted.
+                // The root 3 re-enters the cycle {1,2}, which is already
+                // broken.  The shared `visited` set stops the descent, so the
+                // function emits no second breaker.
                 "later root re-entering a visited cycle",
                 rel(&[(1, 2), (2, 1), (3, 2)]),
                 vec![2],
@@ -386,9 +392,10 @@ mod tests {
     fn trans_red_removes_redundant_edges() {
         // 1 -> 2 -> 3, plus shortcut 1 -> 3
         let r = rel(&[(1, 2), (2, 3), (1, 3)]);
-        // The shortcut (1,3) is dropped as already reachable. The kept edges
-        // come back in HS's order: `foldl' visit []` prepends each kept edge,
-        // so the longest-gap-first processing order is reversed on output.
+        // `trans_red` drops the shortcut (1,3), because 3 is already
+        // reachable.  The kept edges come back in HS's order.  `foldl' visit
+        // []` prepends each kept edge.  The processing order takes the longest
+        // gap first, and the output reverses that order.
         assert_eq!(trans_red(&r), vec![(2, 3), (1, 2)]);
     }
 }

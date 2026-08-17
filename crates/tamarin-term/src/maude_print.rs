@@ -509,14 +509,17 @@ mod tests {
         assert!(s.contains("op tamXCFUDH-neutral  : -> Msg ."));
     }
 
-    /// The whole module the port ships to Maude for the pairing signature,
-    /// byte for byte.  Every line is HS `ppTheory`'s (Maude/Parser.hs:176-253):
-    /// the fixed preamble, the `enable_nat`-gated sort/subsort/`op t` lines
-    /// left out, `op nil  : -> TOP .`'s two spaces, the `stFunSyms` block in
-    /// `BTreeSet` order with `theoryFunSym`'s trailing `"Msg "` meeting the
-    /// leading space of `" -> Msg"`, then `theoryRule` per rewrite rule with
-    /// both sides numbered from ONE shared conversion context (`x0`/`x1`
-    /// recur across the rule's two sides, and restart per rule).
+    /// The complete module that the port sends to Maude for the pairing
+    /// signature, byte for byte.  HS `ppTheory` (Maude/Parser.hs:176-253)
+    /// supplies every line.  The module starts with the fixed preamble.  It
+    /// leaves out the sort, subsort and `op t` lines that `enable_nat` gates.
+    /// The line `op nil  : -> TOP .` keeps its two spaces.  The `stFunSyms`
+    /// block comes next, in `BTreeSet` order.  In that block the trailing
+    /// `"Msg "` of `theoryFunSym` meets the leading space of `" -> Msg"`.
+    /// Then comes one `theoryRule` line for each rewrite rule.  A single
+    /// shared conversion context numbers both sides of a rule, so `x0` and
+    /// `x1` occur again on the second side.  The context restarts for each
+    /// rule.
     #[test]
     fn theory_for_pair_is_the_pinned_module() {
         assert_eq!(
@@ -544,23 +547,25 @@ mod tests {
         );
     }
 
-    /// The DH module the port ships to Maude, byte for byte, as captured from
-    /// the pinned oracle: `DEBUG_MAUDE=1 tamarin-prover dh.spthy` tees the
-    /// module Maude is fed to `/tmp/maude.input` (Maude/Process.hs:116-126),
-    /// and `dh.spthy` declares `builtins: diffie-hellman` only, so its
-    /// signature is HS `dhMaudeSig <> pairMaudeSig` (Maude/Signature.hs:201) --
-    /// what the merge below builds.
+    /// The DH module that the port sends to Maude, byte for byte, as captured
+    /// from the pinned oracle.  `DEBUG_MAUDE=1 tamarin-prover dh.spthy` writes
+    /// a copy of the module that Maude reads to `/tmp/maude.input`
+    /// (Maude/Process.hs:116-126).  `dh.spthy` declares only
+    /// `builtins: diffie-hellman`.  Its signature is therefore HS
+    /// `dhMaudeSig <> pairMaudeSig` (Maude/Signature.hs:201), which is what
+    /// the merge below builds.
     ///
-    /// This pins what a rule COUNT cannot: the five DH `op` lines in HS source
-    /// order (Maude/Parser.hs:222-226), `mult` among them carrying
-    /// `[comm assoc]` and NO attribute letters (`theoryOpAC = theoryOp
-    /// Nothing`, Maude/Parser.hs:262) where the other four carry `XCFU`; and
-    /// all 15 rewrite rules -- the 13 of `dhRules` (Builtin/Rules.hs:47-61)
-    /// plus the two pairing rules -- in `Set`-sorted order, each rendered by
-    /// `ppMaude` with AC arguments flattened into a single `tammult(..)`
-    /// application and both sides numbered from ONE per-rule conversion
-    /// context.  Reordering, retyping or renaming any single DH rule moves or
-    /// rewrites a line here.
+    /// A count of the rules cannot check the details that follow.  The module
+    /// holds five DH `op` lines in HS source order (Maude/Parser.hs:222-226).
+    /// Among those five, `mult` carries `[comm assoc]` and no attribute
+    /// letters (`theoryOpAC = theoryOp Nothing`, Maude/Parser.hs:262).  The
+    /// other four carry `XCFU`.  The module also holds all 15 rewrite rules in
+    /// `Set`-sorted order.  They are the 13 rules of `dhRules`
+    /// (Builtin/Rules.hs:47-61) plus the two pairing rules.  `ppMaude` renders
+    /// each rule.  It flattens AC arguments into a single `tammult(..)`
+    /// application.  One conversion context per rule numbers both sides of
+    /// that rule.  A change to the order, the type or the name of any single
+    /// DH rule moves a line here or rewrites it.
     #[test]
     fn theory_for_dh_is_the_oracle_module() {
         assert_eq!(
@@ -606,13 +611,14 @@ mod tests {
         );
     }
 
-    /// The same oracle capture for a `builtins: bilinear-pairing` theory: HS
-    /// `bpMaudeSig <> pairMaudeSig`.  `maudeSig` forces `enableDH` on whenever
-    /// `enableBP` is set (Maude/Signature.hs:112), so this is the DH module
-    /// plus the two BP `op` lines -- `pmult` a plain `theoryOpEq`, `em` a
-    /// `theoryOpC` carrying `[comm]` and no attribute letters
-    /// (Maude/Parser.hs:231-232) -- and the three `bpRules`
-    /// (Builtin/Rules.hs:71-78) sorted in among the DH ones.
+    /// The same oracle capture for a `builtins: bilinear-pairing` theory.  Its
+    /// signature is HS `bpMaudeSig <> pairMaudeSig`.  `maudeSig` sets
+    /// `enableDH` whenever `enableBP` is set (Maude/Signature.hs:112).  This
+    /// module is therefore the DH module plus two additions.  The first
+    /// addition is the two BP `op` lines.  `pmult` is a plain `theoryOpEq`.
+    /// `em` is a `theoryOpC` that carries `[comm]` and no attribute letters
+    /// (Maude/Parser.hs:231-232).  The second addition is the three `bpRules`
+    /// (Builtin/Rules.hs:71-78), sorted in among the DH rules.
     #[test]
     fn theory_for_bp_is_the_oracle_module() {
         assert_eq!(
@@ -663,10 +669,11 @@ mod tests {
         );
     }
 
-    /// `enable_nat` adds the `TamNat` sort to the `sort` line, a `subsort`
-    /// and an `op t` constant, and the `tone`/`tplus` operators — the four
-    /// `enableNat` guards of HS `ppTheory` (Maude/Parser.hs:181-186, 190-193,
-    /// 204-207, 240-244).
+    /// `enable_nat` adds these items to the module.  It adds the `TamNat` sort
+    /// to the `sort` line.  It adds a `subsort` line and an `op t` constant.
+    /// It also adds the `tone` and `tplus` operators.  These lines come from
+    /// the four `enableNat` guards of HS `ppTheory`
+    /// (Maude/Parser.hs:181-186, 190-193, 204-207, 240-244).
     #[test]
     fn nat_theory_adds_the_tamnat_lines() {
         let s = pp_theory(&crate::maude_sig::nat_maude_sig());
@@ -675,15 +682,16 @@ mod tests {
         assert!(s.contains("  op n : Nat -> Node .\n  op t : Nat -> TamNat .\n"));
         assert!(s.contains("  op tamXCFUtone : -> TamNat .\n"));
         assert!(s.contains("  op tamtplus : TamNat TamNat -> TamNat [comm assoc] .\n"));
-        // Without it, none of those lines appear.
+        // Without `enable_nat`, none of these lines appear.
         let plain = pp_theory(&pair_maude_sig());
         assert!(!plain.contains("TamNat"));
     }
 
-    /// The four builtin AC operators' Maude names.  Each must equal the name
-    /// `pp_theory` declares the operator with (`op_ac`'s own literal), or a
-    /// query would be headed by an operator the module never declared;
-    /// `maude_parse::build_app` matches replies against the same constants.
+    /// The Maude names of the four builtin AC operators.  Each name must be
+    /// the same name that `pp_theory` declares the operator with, which is
+    /// the literal in `op_ac`.  If the two names differ, an operator that the
+    /// module never declares heads a query.  `maude_parse::build_app` matches
+    /// replies against the same constants.
     #[test]
     fn ac_sym_names() {
         assert_eq!(pp_maude_ac_sym(AcSym::Mult), b"tammult".to_vec());
@@ -704,11 +712,12 @@ mod tests {
         }
     }
 
-    /// The absolute letters of the attribute block (HS `funSymEncodeAttr`,
-    /// Maude/Parser.hs:76-88) — what actually goes on the wire.
-    /// `every_attribute_quadruple_round_trips_through_decode` pins encode
-    /// only against its own decode, so a letter renamed on BOTH sides
-    /// survives it; these two spellings anchor the alphabet.
+    /// The exact letters of the attribute block (HS `funSymEncodeAttr`,
+    /// Maude/Parser.hs:76-88).  These letters are the ones the port sends to
+    /// Maude.  The test `every_attribute_quadruple_round_trips_through_decode`
+    /// compares the encoder only against its own decoder.  A letter renamed on
+    /// both the encode side and the decode side still passes that test.  These
+    /// two spellings fix the alphabet.
     #[test]
     fn encode_attr_spells_the_haskell_letters() {
         assert_eq!(

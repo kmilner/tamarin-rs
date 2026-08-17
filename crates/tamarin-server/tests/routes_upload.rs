@@ -73,8 +73,8 @@ async fn test_post_index_with_empty_field_shows_alert() {
         .expect("send");
     assert_eq!(res.status(), 200);
     let body = res.text().await.expect("read");
-    // HS `postRootR`'s empty-upload branch, rendered as the port's
-    // `<p class="message">` banner ahead of the index page.
+    // This is the empty-upload branch of HS `postRootR`.  The port renders it
+    // as a `<p class="message">` banner before the index page.
     assert!(
         body.contains(r#"<body><p class="message">No theory file given.</p>"#),
         "expected the empty-upload banner at the top of the index; body={}",
@@ -101,9 +101,10 @@ async fn test_post_index_with_garbage_source_shows_alert() {
         .expect("send");
     assert_eq!(res.status(), 200);
     let body = res.text().await.expect("read");
-    // The banner carries the loader's failure verbatim — the parsec error's
-    // own bytes, HTML-escaped and with its newlines intact (see
-    // `handlers::root::html_escape`), under the uploaded file's name.
+    // The banner carries the failure from the loader word for word.  These
+    // are the bytes of the parsec error itself.  The port escapes them for
+    // HTML and keeps their newlines (see `handlers::root::html_escape`).  The
+    // banner shows them under the name of the uploaded file.
     assert!(
         body.contains(
             "<body><p class=\"message\">Theory loading failed:\n\

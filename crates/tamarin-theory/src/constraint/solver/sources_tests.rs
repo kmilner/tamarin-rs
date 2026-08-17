@@ -14,9 +14,10 @@ fn default_parameters_match_haskell() {
     assert!(!p.show_saturation_steps);
 }
 
-/// `unsolved_chain_constraints` counts exactly the OPEN `Chain` goals: a
-/// solved chain and a non-chain goal are both invisible to it (HS
-/// `openChainGoals`, the `-c/--open-chains` budget's input).
+/// `unsolved_chain_constraints` counts exactly the open `Chain` goals.  It
+/// does not see a solved chain, and it does not see a non-chain goal.  This
+/// matches HS `openChainGoals`, which is the input of the `-c/--open-chains`
+/// budget.
 #[test]
 fn chain_goal_counted() {
     use crate::constraint::constraints::{Goal, NodeId};
@@ -33,7 +34,7 @@ fn chain_goal_counted() {
         crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]),
     ));
     assert_eq!(unsolved_chain_constraints(&s), 1);
-    // Neither does a SOLVED chain goal.
+    // A solved chain goal does not count either.
     s.goals_mut()[0].1.solved = true;
     assert_eq!(unsolved_chain_constraints(&s), 0);
 }
@@ -50,11 +51,12 @@ fn make_rule(name: &str, conc_tag: crate::fact::FactTag) -> crate::theory::OpenP
     crate::theory::OpenProtoRule::new(r)
 }
 
-/// A `ProofContext` over `rules` with the pair signature.  `None` only when
-/// [`maude_path`] resolved nothing (the documented `TAM_ALLOW_NO_MAUDE` skip);
-/// a maude that resolved but will not start is the same misconfiguration as a
-/// dangling `MAUDE_PATH`, so it panics rather than silently skipping every
-/// maude-backed test in this file.
+/// A `ProofContext` over `rules` with the pair signature.  The result is
+/// `None` only when [`maude_path`] resolves nothing.  That case is the
+/// documented `TAM_ALLOW_NO_MAUDE` skip.  A maude that resolves but does not
+/// start is the same misconfiguration as a dangling `MAUDE_PATH`.  This
+/// function therefore panics.  A skip would leave every maude-backed test in
+/// this file unrun, and no message would report that.
 fn ctx_with_rules(
     rules: Vec<crate::theory::OpenProtoRule>,
 ) -> Option<crate::constraint::solver::context::ProofContext> {
@@ -121,8 +123,8 @@ fn precompute_sources_drops_multi_producer() {
         "expected no entry for multi-producer tag, got {:?}",
         entries
     );
-    // Single-producer Foo in the SAME context, so the emptiness above cannot
-    // come from a cache that skipped every rule.
+    // Foo has a single producer in the same context.  So the empty result
+    // above cannot come from a cache that skipped every rule.
     assert_eq!(
         ctx.unique_sources
             .iter()
@@ -132,10 +134,11 @@ fn precompute_sources_drops_multi_producer() {
     );
 }
 
-/// `precompute_full_sources` pushes one lazy `Source` per protocol-fact tag,
-/// with an uncomputed `cases_cell` materialised on the first `cases(ctx)`
-/// call (HS's `initialSource` thunk).  Both halves are pinned here: the
-/// per-tag entry exists, and forcing it yields the producing rules' cases.
+/// `precompute_full_sources` pushes one lazy `Source` for each protocol-fact
+/// tag.  Each `Source` holds an uncomputed `cases_cell`.  The first
+/// `cases(ctx)` call computes that cell.  This is HS's `initialSource` thunk.
+/// The test pins both halves.  The per-tag entry exists, and a forced cell
+/// gives the cases of the producing rules.
 #[test]
 fn precompute_full_sources_emits_per_tag_entries() {
     use crate::fact::{fresh_fact, Fact, FactTag, Multiplicity};
@@ -185,19 +188,22 @@ fn precompute_full_sources_emits_per_tag_entries() {
         ctx.full_sources.iter().map(|s| &s.goal).collect::<Vec<_>>()
     );
     let a_src = a_src.unwrap();
-    // Unforced, the cell is empty — that is what makes the precompute lazy.
+    // The cell is empty while nothing forces it.  That is what makes the
+    // precompute lazy.
     assert!(a_src.cases_or_empty().is_empty());
-    // Forcing enumerates the two rules that conclude `A(x)`.
+    // A forced cell lists the two rules that conclude `A(x)`.
     let names: Vec<String> = a_src.cases(&ctx).into_iter().map(|(n, _)| n).collect();
     assert_eq!(names, ["Init", "Loop"]);
 }
 
-/// Bilinear-pairing source, both directions of HS Sources.hs's
+/// The bilinear-pairing source.  The test covers both directions of this
+/// expression in HS Sources.hs:
 /// `if enableBP msig then return $ fAppC EMap $ nMsgVars 2 else []`.
-/// Emitting it under a BP signature is what keeps the BP targets
-/// (Chen_Kudla, Joux, RYY, Scott, TAK1) from missing the `KU(em(...))`
-/// source-case enumeration; NOT emitting it otherwise is what keeps every
-/// non-BP theory from growing a spurious extra KU source.
+/// A BP signature must emit this source.  Without it, the BP targets
+/// (Chen_Kudla, Joux, RYY, Scott, TAK1) miss the `KU(em(...))` source-case
+/// enumeration.  Any other signature must not emit it.  Such an emission
+/// would give every non-BP theory one extra KU source that does not belong
+/// there.
 #[test]
 fn precompute_full_sources_emits_em_only_when_bp_enabled() {
     use crate::constraint::constraints::Goal;

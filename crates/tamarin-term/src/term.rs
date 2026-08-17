@@ -551,9 +551,10 @@ mod tests {
         assert_eq!(all_prot_subterms(&nat(5)), Vec::<Term<u64>>::new());
     }
 
-    /// Wrapping an already-flat Xor in another Xor yields ONE Xor over the
-    /// union, re-sorted: the new argument is merged into the flattened list,
-    /// not appended after it.
+    /// An Xor that is already flat, inside another Xor, gives exactly one Xor
+    /// over the union of the arguments.  The constructor sorts that union
+    /// again.  It merges the new argument into the flattened list.  It does
+    /// not add the new argument after that list.
     #[test]
     fn ac_flattening_absorbs_a_nested_same_symbol_app() {
         let t1 = f_app_ac(AcSym::Xor, vec![nat(1), nat(2), nat(3)]);
@@ -611,15 +612,18 @@ mod tests {
         assert_eq!(count_subterms(&y, &outer), 1);
     }
 
-    /// [`replace_subterm`] applies `f` to the WHOLE term first and then
-    /// descends into `f`'s result — so a rewrite that introduces new subterms
-    /// has them visited too, and the original children of a replaced node are
-    /// never visited.  A bottom-up traversal (children first, `f` last) is
-    /// indistinguishable on an `f` that only touches leaves, so `f` here maps
-    /// an `exp` node onto a `pair` of fresh leaves: top-down rewrites the top,
-    /// then bumps the two leaves it just introduced, and never sees the
-    /// original `1`/`2`.  [`replace_proper_subterm`] runs the same descent
-    /// with `f` NOT applied at the root.
+    /// [`replace_subterm`] applies `f` to the complete term first.  It then
+    /// descends into the result of `f`.  So it also visits the new subterms
+    /// that a rewrite introduces.  It never visits the original children of a
+    /// node that `f` replaced.
+    ///
+    /// A bottom-up traversal visits the children first and applies `f` last.
+    /// That order gives the same result for an `f` that changes only leaves.
+    /// So the `f` here maps an `exp` node onto a `pair` of two new leaves.
+    /// The top-down order rewrites the top node.  It then increments the two
+    /// leaves it has just introduced.  It never sees the original `1` and
+    /// `2`.  [`replace_proper_subterm`] runs the same descent, but it does
+    /// not apply `f` at the root.
     #[test]
     fn replace_subterm_is_top_down() {
         let t = f_app_no_eq(exp_sym(), vec![nat(1), nat(2)]);
@@ -634,8 +638,8 @@ mod tests {
             replace_subterm(&mut f, t.clone()),
             f_app_no_eq(pair_sym(), vec![nat(17), nat(18)])
         );
-        // `replace_proper_subterm` skips the root: `exp` survives, and each
-        // child is handed to the full top-down `replace_subterm`.
+        // `replace_proper_subterm` skips the root.  The `exp` node stays.
+        // Each child goes to the full top-down `replace_subterm`.
         assert_eq!(
             replace_proper_subterm(&mut f, t),
             f_app_no_eq(exp_sym(), vec![nat(11), nat(12)])
@@ -643,12 +647,13 @@ mod tests {
     }
 
     /// The hand-written `PartialEq`/`Ord`/`PartialOrd`/`Hash` on [`Term`]
-    /// carry an `Arc::ptr_eq` fast path, so they must still answer exactly
-    /// what the derived, purely structural impls would: `Lit` before `App`
-    /// (declaration order — this is what puts constants ahead of
-    /// applications in every `f_app_ac`/`f_app_c` argument sort), symbol
-    /// before arguments within `App`, and one answer whether or not the two
-    /// argument slices happen to be the same allocation.
+    /// contain an `Arc::ptr_eq` fast path.  So they must still give exactly
+    /// the answers of the derived, purely structural implementations.  That
+    /// means three things.  `Lit` comes before `App`, which is the
+    /// declaration order.  That order puts constants before applications in
+    /// every `f_app_ac`/`f_app_c` argument sort.  Inside `App`, the symbol
+    /// comes before the arguments.  The answer is the same whether or not the
+    /// two argument slices are the same allocation.
     #[test]
     fn term_ord_is_structural_whether_or_not_args_are_shared() {
         use std::cmp::Ordering;
@@ -659,23 +664,25 @@ mod tests {
             t.hash(&mut h);
             h.finish()
         }
-        // Lit < App, whatever the payloads.
+        // `Lit` sorts before `App`, for any payloads.
         let big_lit = nat(u64::MAX);
         let app = f_app_no_eq(pair_sym(), vec![nat(0), nat(0)]);
         assert!(big_lit < app);
         assert_eq!(app.cmp(&big_lit), Ordering::Greater);
         assert_eq!(big_lit.partial_cmp(&app), Some(Ordering::Less));
         assert!(big_lit != app);
-        // Within `App`, the symbol outranks the arguments: `exp < pair` in
-        // `NoEqSym` order, so `exp(9,9)` sorts below `pair(0,0)`.
+        // Inside `App`, the symbol has priority over the arguments.  `exp` is
+        // less than `pair` in `NoEqSym` order.  So `exp(9,9)` sorts below
+        // `pair(0,0)`.
         assert!(exp_sym() < pair_sym());
         let exp_big = f_app_no_eq(exp_sym(), vec![nat(9), nat(9)]);
         let pair_small = f_app_no_eq(pair_sym(), vec![nat(0), nat(0)]);
         assert!(exp_big < pair_small);
-        // Shared vs separately built argument slices: `shared` is a clone
-        // (same `Arc`, so the ptr fast path fires), `rebuilt` is an equal
-        // slice at a different address (the fast path misses and the
-        // structural walk answers).  All three answers must agree.
+        // Here are two argument slices: one shared, one built separately.
+        // `shared` is a clone, so it holds the same `Arc` and the pointer
+        // fast path applies.  `rebuilt` is an equal slice at a different
+        // address, so the fast path does not apply and the structural walk
+        // gives the answer.  All three answers must be the same.
         let shared = app.clone();
         let rebuilt = f_app_no_eq(pair_sym(), vec![nat(0), nat(0)]);
         if let (Term::App(_, a), Term::App(_, b), Term::App(_, c)) = (&app, &shared, &rebuilt) {
@@ -688,11 +695,13 @@ mod tests {
             assert_eq!(&app, other);
             assert_eq!(app.cmp(other), Ordering::Equal);
             assert_eq!(app.partial_cmp(other), Some(Ordering::Equal));
-            // `Hash` must agree with that `Eq` — it is content-based, so
-            // the ptr-shared and the rebuilt term hash alike.
+            // `Hash` must agree with that `Eq`.  `Hash` uses the content, so
+            // the term with the shared pointer and the rebuilt term give the
+            // same hash.
             assert_eq!(hash_of(&app), hash_of(other));
         }
-        // A differing argument is still found through the fast-path guard.
+        // The comparison still finds a different argument through the
+        // fast-path guard.
         let differing = f_app_no_eq(pair_sym(), vec![nat(0), nat(1)]);
         assert_ne!(app, differing);
         assert_eq!(app.cmp(&differing), Ordering::Less);

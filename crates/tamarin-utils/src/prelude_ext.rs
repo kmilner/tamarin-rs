@@ -463,10 +463,11 @@ mod tests {
 
     #[test]
     fn keep_first_masks_against_every_earlier_pick() {
-        // "b is a multiple of a" is asymmetric, so masking is directional, and
-        // the masks outlive the pick that set them: 4 is dropped by the 2
-        // picked three positions earlier and 9 by the 3, in both cases across
-        // an intervening pick that does not mask them.
+        // The relation "b is a multiple of a" is asymmetric, so the masking is
+        // directional.  The masks also outlive the pick that set them.  The 2
+        // sits three positions earlier than the 4 and drops it.  The 3 drops
+        // the 9 in the same way.  In both cases an intervening pick lies
+        // between them, and that pick does not mask the dropped value.
         let xs = vec![2, 3, 5, 4, 9];
         assert_eq!(keep_first(&xs, |a, b| b % a == 0), vec![2, 3, 5]);
     }
@@ -484,14 +485,17 @@ mod tests {
         assert_eq!(flush_left(5, "ab"), "ab   ");
         assert_eq!(flush_right_by("0", 4, "12"), "0012");
         assert_eq!(flush_right(2, "abcd"), "abcd"); // no truncation
-                                                    // A multi-character separator is cycled, and only as far as the
-                                                    // padding needs — HS `take (n - length s) (cycle sep)`.
+                                                    // The code cycles a multi-character
+                                                    // separator.  It cycles only as far
+                                                    // as the padding needs.  HS uses
+                                                    // `take (n - length s) (cycle sep)`.
         assert_eq!(flush_right_by("ab", 5, "x"), "ababx");
         assert_eq!(flush_left_by("ab", 5, "x"), "xabab");
-        // Width counts characters, not bytes: "é" is one column, two bytes.
+        // The width counts characters, not bytes.  "é" is one column and
+        // two bytes.
         assert_eq!(flush_right(3, "é"), "  é");
         assert_eq!(flush_right_by("é", 3, "x"), "ééx");
-        // HS `cycle ""` diverges; the port pads nothing rather than hanging.
+        // HS `cycle ""` diverges.  The port adds no padding and does not hang.
         assert_eq!(flush_right_by("", 5, "ab"), "ab");
         assert_eq!(flush_left_by("", 5, "ab"), "ab");
     }

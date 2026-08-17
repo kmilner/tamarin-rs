@@ -1241,10 +1241,11 @@ mod tests {
         Rule::new(info, Vec::new(), Vec::new(), Vec::new())
     }
 
-    /// A term-free rule never reaches Maude at all: `pack_rule_terms`
-    /// returns `None` and the rule is wrapped with HS's `trueDisj =
-    /// [emptySubstVFresh]` (RuleVariants.hs:119).  The rule BODY must come
-    /// through untouched — `makeRule` applies an empty `commonSubst`.
+    /// A term-free rule never reaches Maude at all.  `pack_rule_terms`
+    /// returns `None`.  The code then wraps the rule with HS's
+    /// `trueDisj = [emptySubstVFresh]` (RuleVariants.hs:119).  The body of
+    /// the rule must come through untouched.  `makeRule` applies an empty
+    /// `commonSubst`.
     #[test]
     fn variants_of_rule_with_no_terms_is_identity() {
         let Some(path) = maude_path() else { return };
@@ -1258,11 +1259,12 @@ mod tests {
     }
 
     /// `[Fr(~k)] --> [Out(~k)]` under the pair-only signature has no
-    /// reducible operator, so Maude's single variant is the identity and
-    /// `simp_disjunction_with_maude` folds it into `commonSubst` — leaving
-    /// exactly HS's `trueDisj`, NOT a residual disjunction.  A residual here
-    /// is the NAXOS_eCK_private Init_1-vs-Ltk_reveal shape: entries HS bakes
-    /// into the rule body instead survive as a `SplitG` goal.
+    /// reducible operator.  Maude's single variant is therefore the identity.
+    /// `simp_disjunction_with_maude` folds that variant into `commonSubst`.
+    /// What is left is exactly HS's `trueDisj`, and not a residual
+    /// disjunction.  A residual here is the NAXOS_eCK_private
+    /// Init_1-vs-Ltk_reveal shape.  In that shape, entries that HS bakes into
+    /// the rule body instead survive as a `SplitG` goal.
     #[test]
     fn variants_of_simple_rule_via_maude() {
         let Some(path) = maude_path() else { return };

@@ -207,11 +207,11 @@ fn simp_empty_disj_makes_store_false() {
     assert!(store.is_false());
 }
 
-/// `simp` runs its passes to a FIXPOINT (HS `simp1`'s `changed` loop), so a
-/// second run must be a no-op on a store the first already settled — and the
-/// settled store must still hold the disjunction, not have been emptied or
-/// falsified by a pass that mistakes a satisfiable singleton for a
-/// contradiction.
+/// `simp` runs its passes to a fixpoint. HS does the same with the `changed`
+/// loop in `simp1`. A second run must therefore change nothing on a store that
+/// the first run already settled. The settled store must also still hold the
+/// disjunction. No pass may empty the store or make it false. A pass must not
+/// treat a satisfiable singleton as a contradiction.
 #[test]
 fn simp_is_idempotent_on_a_consistent_store() {
     let mut store = EquationStore::empty();

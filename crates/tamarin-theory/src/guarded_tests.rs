@@ -130,10 +130,11 @@ fn gnot_false_is_true() {
     assert_eq!(gnot(&gfalse()), gtrue());
 }
 
-/// De Morgan: `gnot (gconj [a, b]) = gdisj [gnot a, gnot b]` — the dual of
-/// [`gnot_distributes_over_disj`].  Asserted on atoms rather than on the
-/// propositional constants: `¬(T ∧ T)` collapses to `⊥` under BOTH `gdisj`
-/// and `gconj`, so constants cannot tell the two smart constructors apart.
+/// De Morgan: `gnot (gconj [a, b]) = gdisj [gnot a, gnot b]`.  This is the
+/// dual of [`gnot_distributes_over_disj`].  The test asserts on atoms, and
+/// not on the propositional constants.  `¬(T ∧ T)` collapses to `⊥` under
+/// `gdisj` and under `gconj` alike, so the constants cannot tell the two
+/// smart constructors apart.
 #[test]
 fn gnot_conj_becomes_disj() {
     let a = g("Last(#i)").unwrap();
@@ -156,12 +157,12 @@ fn ginduct_rejects_action_free_formula() {
     assert!(ginduct(&gfalse()).is_err());
 }
 
-/// HS `satisfiedByEmptyTrace` decides a `GGuarded` on its QUANTIFIER
-/// (Guarded.hs:588-594): a guarded `∀` is vacuously satisfied by the empty
-/// trace, a guarded `∃` is not, and a bare atom outside every quantifier is
-/// an error (the formula is not doubly guarded).  All three arms are pinned
-/// here — the `∀` case alone cannot tell the real test apart from a
-/// constant `Ok(true)`.
+/// HS `satisfiedByEmptyTrace` decides a `GGuarded` on its quantifier
+/// (Guarded.hs:588-594).  The empty trace satisfies a guarded `∀` vacuously.
+/// The empty trace does not satisfy a guarded `∃`.  A bare atom outside every
+/// quantifier is an error, because such a formula is not doubly guarded.  The
+/// test checks all three arms.  The `∀` case alone cannot tell the real
+/// function apart from a constant `Ok(true)`.
 #[test]
 fn satisfied_by_empty_trace_handles_quants() {
     let all = g("All x #i. P(x)@#i ==> Q(x)@#i").expect("guarded");
@@ -314,10 +315,10 @@ fn timepoint_guard_matches_sigilless_occurrence() {
     }
 }
 
-/// A top-level implication does NOT become a disjunction: the antecedent's
-/// action atom becomes the universal's GUARD and the consequent becomes its
-/// body, so `All k #i. Setup(k)@#i ==> (Ex j #t. Setup(j)@#t)` nests one
-/// guarded quantifier inside the other.
+/// A top-level implication does not become a disjunction.  The action atom
+/// of the antecedent becomes the guard of the universal, and the consequent
+/// becomes its body.  `All k #i. Setup(k)@#i ==> (Ex j #t. Setup(j)@#t)`
+/// therefore nests one guarded quantifier inside the other.
 #[test]
 fn implication_distributes() {
     let r = g("All k #i. Setup(k) @ #i ==> (Ex j #t. Setup(j) @ #t)").unwrap();
@@ -379,8 +380,9 @@ fn varsubst_descends_into_app_args() {
     assert_eq!(result, expected);
 }
 
-/// The substitution is keyed by `(name, idx)`: a same-named variable at a
-/// different index is a DIFFERENT variable and passes through untouched.
+/// The substitution uses `(name, idx)` as the key.  A variable with the same
+/// name but a different index is another variable.  It passes through
+/// unchanged.
 #[test]
 fn varsubst_idx_aware() {
     let mut s = VarSubst::default();
@@ -459,10 +461,11 @@ fn varsubst_shadowing_blocks_inner_binder() {
     }
 }
 
-/// `ginduct` on an `All`-quantified formula: the base case is the
-/// empty-trace verdict (vacuously true here) and the step case is
-/// `gconj [gf, toInductionHypothesis gf]` — the original formula FIRST,
-/// then the IH, whose outer quantifier is the `Ex` dual.
+/// The test runs `ginduct` on an `All`-quantified formula.  The base case is
+/// the empty-trace verdict, which is vacuously true here.  The step case is
+/// `gconj [gf, toInductionHypothesis gf]`.  The original formula comes first,
+/// and the IH comes after it.  The outer quantifier of the IH is the `Ex`
+/// dual.
 #[test]
 fn ginduct_extracts_two_cases() {
     let gf = g("All k #i. Setup(k) @ #i ==> Ex #j. Setup(k) @ #j & #j < #i").unwrap();
@@ -482,9 +485,10 @@ fn ginduct_extracts_two_cases() {
     }
 }
 
-/// Every `Last(Bound n)` index reachable in a guarded formula, in traversal
-/// order (a quantifier's guards before its body), i.e. the order
-/// `to_induction_hypothesis` emits its `lastAtos` in.
+/// Returns every `Last(Bound n)` index that the guarded formula reaches, in
+/// traversal order.  The traversal takes the guards of a quantifier before
+/// its body.  This is the order in which `to_induction_hypothesis` emits its
+/// `lastAtos`.
 fn last_bound_indices(g: &Guarded) -> Vec<u32> {
     fn go(g: &Guarded, out: &mut Vec<u32>) {
         match g {
@@ -522,8 +526,9 @@ fn induction_hypothesis_emits_last_atoms_for_node_sorted_binders() {
     let g = g("All #i. Setup('k') @ #i ==> G('x') @ #i").unwrap();
     let ih = to_induction_hypothesis(&g).expect("should produce IH");
 
-    // Outer must flip All → Ex, keep its binder, and the body must
-    // mention the innermost binder's `Last` — DeBruijn `Last(Bound 0)`.
+    // The outer quantifier must flip All → Ex and must keep its binder.  The
+    // body must mention the `Last` of the innermost binder.  In DeBruijn form
+    // that is `Last(Bound 0)`.
     match &ih {
         Guarded::GGuarded {
             qua, vars, body, ..
@@ -542,15 +547,17 @@ fn induction_hypothesis_emits_last_atoms_for_node_sorted_binders() {
 }
 
 /// `lastAtos = [Last (Bound j) | (j, (_, LSortNode)) <- zip [0..] (reverse ss)]`
-/// (Guarded.hs:613-616) has TWO discriminating parts, both pinned here by the
-/// exact index list: the `LSortNode` filter (a `Msg`-sorted binder
-/// contributes nothing) and the `reverse` (indices are counted from the
-/// INNERMOST binder outwards, so dropping the `reverse` would shift the pair
-/// to `[1, 2]` and invert the `last`-disjunction's case labels).
+/// (Guarded.hs:613-616) has two parts that discriminate, and the exact index
+/// list checks both.  The first part is the `LSortNode` filter: a `Msg`-sorted
+/// binder contributes nothing.  The second part is the `reverse`: the indices
+/// count from the innermost binder outwards.  Without the `reverse`, the pair
+/// would shift to `[1, 2]` and would invert the case labels of the
+/// `last`-disjunction.
 #[test]
 fn induction_hypothesis_skips_non_node_binders() {
-    // Binders `[k:msg, #i, #j]`; reversed that is `[#j, #i, k]`, so the two
-    // node binders take indices 0 and 1 and the message binder takes none.
+    // The binders are `[k:msg, #i, #j]`.  Reversed, they are `[#j, #i, k]`.
+    // The two node binders therefore take the indices 0 and 1, and the
+    // message binder takes none.
     let g = g("All k #i #j. (Setup(k) @ #i & Setup(k) @ #j) ==> F").unwrap();
     let ih = to_induction_hypothesis(&g).expect("should produce IH");
     assert_eq!(
@@ -623,7 +630,8 @@ fn simplify_conj_short_circuits_on_false() {
     assert_eq!(simplify_guarded_with(&g, &val), gfalse());
 }
 
-/// A binder-free universal with the given guards over the body `p = q`.
+/// Returns a binder-free universal with the given guards over the body
+/// `p = q`.
 fn mk_universal(vars: Vec<GBinding>, guards: &[p::Atom]) -> Guarded {
     Guarded::GGuarded {
         qua: Quant::All,
@@ -647,8 +655,9 @@ fn simplify_universal_drops_true_guards_keeps_unknown() {
     let a = mk_eq("a", "b");
     let b = mk_eq("c", "d");
     let g = mk_universal(Vec::new(), &[a.clone(), b.clone()]);
-    // `a` is decided True (dropped); every other atom — `b` and the body's
-    // — is unknown, so it survives verbatim.
+    // The valuation decides `a` as True, so the code drops it.  Every other
+    // atom is unknown: `b` and the atom in the body.  Each unknown atom
+    // survives unchanged.
     let val = move |atom: &p::Atom| if atom == &a { Some(true) } else { None };
     match simplify_guarded_with(&g, &val) {
         Guarded::GGuarded { vars, guards, .. } => {
@@ -659,11 +668,12 @@ fn simplify_universal_drops_true_guards_keeps_unknown() {
     }
 }
 
-/// With every guard True the universal collapses to `gall [] [] body` = the
-/// simplified BODY (HS `gall _ [] gf = gf`, Guarded.hs:449-453).  The body's
-/// own atom is left unknown here: were it also decided True, `gall`'s
-/// `gf == gtrue` arm would return `gtrue` whether or not the True guards had
-/// been dropped, and the test could not tell the two apart.
+/// With every guard True, the universal collapses to `gall [] [] body`.
+/// That is the simplified body (HS `gall _ [] gf = gf`, Guarded.hs:449-453).
+/// The atom in the body stays unknown here.  If the valuation also decided
+/// that atom as True, the `gf == gtrue` arm of `gall` would return `gtrue`.
+/// It would return `gtrue` whether or not the code dropped the True guards,
+/// and the test could not tell the two cases apart.
 #[test]
 fn simplify_universal_with_all_true_guards_returns_body() {
     let a = mk_eq("a", "b");

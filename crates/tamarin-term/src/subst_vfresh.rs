@@ -826,8 +826,9 @@ mod tests {
             (lv("x", 1), var_term(lv("z", 0))),
         ]);
         let r = s.restrict(&[lv("x", 0)]);
-        // The KEPT key is the listed one, with its image intact — a count
-        // alone is equally happy with the complementary filter.
+        // The kept key is the listed one, and its image stays intact.  A
+        // check of the length alone also passes if the filter keeps the
+        // opposite set of keys.
         assert_eq!(r.image_of(&lv("x", 0)), Some(&var_term(lv("y", 0))));
         assert_eq!(r.image_of(&lv("x", 1)), None);
         assert_eq!(r.len(), 1);
@@ -843,8 +844,8 @@ mod tests {
         assert!(s.remove_renamings().is_empty());
 
         // After adding a second entry that mentions `y`, `x ~> y` is no
-        // longer a clean rename.  `is_renaming` reaches the same verdict
-        // through its own single-pass duplicate-target check, so it needs
+        // longer a clean rename.  `is_renaming` gives the same answer.  It
+        // uses its own single-pass check for duplicate targets, so it needs
         // its own negative case.
         let s2: LSubstVFresh<C> = SubstVFresh::from_list(vec![
             (lv("x", 0), var_term(lv("y", 0))),
@@ -853,8 +854,8 @@ mod tests {
         assert!(!s2.is_renamed_var(&lv("x", 0)));
         assert!(!s2.is_renaming(), "duplicate target var is not a renaming");
 
-        // A sort-changing binding is not a rename either, however unique
-        // its target.
+        // A binding that changes the sort is not a rename either.  This
+        // holds even when its target is unique.
         let s3: LSubstVFresh<C> = SubstVFresh::from_list(vec![(
             lv("x", 0),
             var_term(LVar::new("k", LSort::Fresh, 0)),
@@ -892,39 +893,41 @@ mod tests {
         //     where s2 = substFromListVFresh [(v, lit (Var v)) | v <- vs ]
         //           vs = vs0 \\ domVFresh s
         // `renameFreshAvoiding s t = renameFresh s \`evalFreshAvoiding\` t`
-        // (SubstVFresh.hs:172-175), and `renameFresh` (SubstVFresh.hs:165-170)
-        // hands the whole range list to `rename` (LTerm.hs:634-645), which takes
-        // ONE `freshStart - minVarIdx` shift and applies
-        // `incVar shift (LVar n so i) = LVar n so (i+shift)` to every var —
-        // name and sort untouched, relative spacing preserved.  The avoid set
-        // is `varsRangeVFresh s`, so `freshStart = avoid = maybe 0 (succ . snd)
-        // . boundsVarIdx` (LTerm.hs:677-681) reads the RANGE vars, never the
-        // domain keys.
+        // (SubstVFresh.hs:172-175).  `renameFresh` (SubstVFresh.hs:165-170)
+        // hands the whole range list to `rename` (LTerm.hs:634-645).  `rename`
+        // takes one `freshStart - minVarIdx` shift.  It then applies
+        // `incVar shift (LVar n so i) = LVar n so (i+shift)` to every var.
+        // The name and the sort do not change, and the relative spacing stays
+        // the same.  The avoid set is `varsRangeVFresh s`.  So
+        // `freshStart = avoid = maybe 0 (succ . snd) . boundsVarIdx`
+        // (LTerm.hs:677-681) reads the range vars, never the domain keys.
         let s: LSubstVFresh<C> = SubstVFresh::from_list(vec![(lv("a", 9), var_term(lv("w", 4)))]);
         let q = LVar::new("q", LSort::Fresh, 6);
-        // `a.9` is removed by `vs0 \\ domVFresh s`; the repeated `p.2` collapses
-        // in `substFromListVFresh`'s map.
+        // `vs0 \\ domVFresh s` removes `a.9`.  The map in
+        // `substFromListVFresh` collapses the repeated `p.2`.
         let out = s.extend_with_renaming(&[lv("a", 9), lv("p", 2), q, lv("p", 2)]);
-        // freshStart = succ 4 = 5 — from the RANGE var `w.4`, NOT from the
-        // domain key `a.9`.  minVarIdx over {p.2, q.6} = 2, so the single shift
-        // is +3: the four-wide gap survives, where a dense repack would answer
-        // `p.5` / `q.6`.
+        // freshStart = succ 4 = 5.  This value comes from the range var `w.4`,
+        // not from the domain key `a.9`.  minVarIdx over {p.2, q.6} = 2, so
+        // the single shift is +3.  The four-wide gap survives.  A dense repack
+        // would answer `p.5` / `q.6` instead.
         assert_eq!(out.image_of(&lv("p", 2)), Some(&var_term(lv("p", 5))));
         assert_eq!(
             out.image_of(&q),
             Some(&var_term(LVar::new("q", LSort::Fresh, 9))),
             "`incVar` keeps the name and the sort"
         );
-        // The pre-existing mapping is appended verbatim, not re-renamed.
+        // `extend_with_renaming` appends the existing mapping without any
+        // change.  It does not rename that mapping again.
         assert_eq!(out.image_of(&lv("a", 9)), Some(&var_term(lv("w", 4))));
         assert_eq!(out.len(), 3);
 
-        // Every requested var already in `dom s` ⇒ `vs` is empty, `s2` is
-        // empty, and the result is `s` itself.
+        // Every requested var is already in `dom s`.  Then `vs` is empty, `s2`
+        // is empty, and the result is `s` itself.
         assert_eq!(s.extend_with_renaming(&[lv("a", 9)]), s);
 
-        // Nothing to avoid ⇒ `boundsVarIdx` is `Nothing` ⇒ `avoid = 0`, so the
-        // shift is NEGATIVE and the renamings land at the bottom, still spaced.
+        // There is nothing to avoid.  Then `boundsVarIdx` is `Nothing` and
+        // `avoid = 0`.  The shift is negative, so the renamings land at the
+        // bottom.  They keep their spacing.
         let empty: LSubstVFresh<C> = SubstVFresh::empty();
         let out2 = empty.extend_with_renaming(&[lv("x", 3), lv("y", 7)]);
         assert_eq!(out2.image_of(&lv("x", 3)), Some(&var_term(lv("x", 0))));
@@ -938,10 +941,10 @@ mod tests {
         //       substFromList . renameMappings . substToListVFresh $ s
         //     where renameMappings l =
         //             zip (map fst l) (rename (map snd l) `evalFreshAvoiding` t)
-        // `rename` runs over the RANGE LIST as a whole (LTerm.hs:634-645), so
-        // there is a single shift `freshStart - minVarIdx` across all the
-        // entries; `freshStart` is `avoid t`, handed in here as `fresh_start`.
-        // `substFromList` then drops trivial `x ~> x` mappings
+        // `rename` runs over the range list as a whole (LTerm.hs:634-645).  So
+        // one shift `freshStart - minVarIdx` applies to all the entries.
+        // `freshStart` is `avoid t`.  The caller passes it here as
+        // `fresh_start`.  `substFromList` then drops trivial `x ~> x` mappings
         // (SubstVFree.hs:151-154).
         let s: LSubstVFresh<C> = SubstVFresh::from_list(vec![
             (lv("a", 0), var_term(lv("y", 2))),
@@ -952,9 +955,10 @@ mod tests {
             (lv("b", 10), var_term(lv("b", 2))),
         ]);
         let free = s.fresh_to_free_uniform_shift(10);
-        // minVarIdx over the whole range = 2, so every range var moves by +8:
-        // the y/z spacing survives (a per-entry or dense allocation would put
-        // `z` next to `y`), and the two `y.2` occurrences stay shared.
+        // minVarIdx over the whole range = 2, so every range var moves by +8.
+        // The spacing between y and z survives.  A per-entry allocation or a
+        // dense allocation would put `z` next to `y`.  The two `y.2`
+        // occurrences stay shared.
         assert_eq!(free.image_of(&lv("a", 0)), Some(&var_term(lv("y", 10))));
         assert_eq!(
             free.image_of(&lv("a", 1)),
@@ -967,8 +971,9 @@ mod tests {
         assert_eq!(free.image_of(&lv("b", 10)), None);
         assert_eq!(free.len(), 2);
 
-        // No range vars at all ⇒ `rename` is the identity (`boundsVarIdx` is
-        // `Nothing`) and the conversion is a plain downgrade.
+        // There are no range vars at all.  Then `rename` is the identity,
+        // because `boundsVarIdx` is `Nothing`.  The conversion is only a
+        // downgrade.
         let name = Name::new(crate::lterm::NameTag::Pub, "n");
         let konst: LSubstVFresh<C> =
             SubstVFresh::from_list(vec![(lv("c", 0), crate::vterm::const_term(name))]);
@@ -985,41 +990,45 @@ mod tests {
         // HS `composeVFresh s1_0 s2 = freeToFreshRaw (s1 `compose` s2)` where
         //   s1 = freshToFreeAvoidingFast
         //          (extendWithRenaming (varsRange s2) s1_0) (s2, s1_0)
-        // (Term/Substitution.hs:41-47).  `evalFreshAvoiding` takes `frees
-        // (s2,s1_0)`, and `frees` of a `SubstVFresh` is
-        // `foldFrees f = foldFrees f . M.keys . svMap` (SubstVFresh.hs:196-198)
-        // — the DOMAIN KEYS only.  `s1_0`'s range witnesses must therefore not
-        // enter the avoid set.
+        // (Term/Substitution.hs:41-47).  `evalFreshAvoiding` takes
+        // `frees (s2,s1_0)`.  For a `SubstVFresh`, `frees` is
+        // `foldFrees f = foldFrees f . M.keys . svMap`
+        // (SubstVFresh.hs:196-198).  It reads the domain keys only.  So the
+        // range witnesses of `s1_0` must not enter the avoid set.
         let s1_0: LSubstVFresh<C> =
             SubstVFresh::from_list(vec![(lv("k", 0), var_term(lv("m", 1000)))]);
         let s2: Subst<C, LVar> = Subst::from_list(vec![(lv("u", 0), var_term(lv("v", 3)))]);
-        // Hand-run: `extendWithRenaming [v.3] s1_0` avoids `varsRangeVFresh
-        // s1_0 = {m.1000}`, so freshStart = 1001 and `v.3 ~> v.1001`; then
-        // `freshToFreeAvoidingFast` avoids `frees (s2,s1_0)` = the idxs
-        // {u.0, v.3} ∪ {k.0} ⇒ freshStart = 4, minVarIdx = 1000, shift = -996,
-        // giving `s1 = {k.0 ~> m.4, v.3 ~> v.5}`.  Composing with s2 rewrites
-        // `u.0 ~> v.5` and keeps both of s1's own bindings.  Had `frees s1_0`
-        // wrongly walked the range, freshStart would be 1001 and the witnesses
-        // would land at m.1001 / v.1002.
+        // A hand-run of the pipeline.  `extendWithRenaming [v.3] s1_0` avoids
+        // `varsRangeVFresh s1_0 = {m.1000}`.  So freshStart = 1001 and
+        // `v.3 ~> v.1001`.  Then `freshToFreeAvoidingFast` avoids
+        // `frees (s2,s1_0)`, which is the idxs {u.0, v.3} ∪ {k.0}.  So
+        // freshStart = 4, minVarIdx = 1000 and shift = -996.  That gives
+        // `s1 = {k.0 ~> m.4, v.3 ~> v.5}`.  The composition with s2 rewrites
+        // `u.0 ~> v.5` and keeps both bindings of s1.  A `frees s1_0` that
+        // walked the range would be wrong.  It would make freshStart 1001, and
+        // the witnesses would land at m.1001 / v.1002.
         let out = compose_vfresh(&s1_0, &s2);
         assert_eq!(out.image_of(&lv("u", 0)), Some(&var_term(lv("v", 5))));
         assert_eq!(out.image_of(&lv("k", 0)), Some(&var_term(lv("m", 4))));
         assert_eq!(out.image_of(&lv("v", 3)), Some(&var_term(lv("v", 5))));
         assert_eq!(out.len(), 3);
 
-        // The empty-`s1_0` shape the closed form exists for, run through the
-        // GENERAL pipeline: `extendWithRenaming [v.3] ∅` avoids nothing
-        // (freshStart 0) and answers `v.3 ~> v.0`; `freshToFreeAvoidingFast`
-        // then avoids `frees (s2,∅)` ⇒ freshStart 4, minVarIdx 0, so
-        // `s1 = {v.3 ~> v.4}` and the composition is `{u.0 ~> v.4, v.3 ~> v.4}`.
+        // This is the empty-`s1_0` shape that the closed form exists for.
+        // Here it runs through the general pipeline.  The call
+        // `extendWithRenaming [v.3] ∅` avoids nothing, so freshStart is 0.  It
+        // answers `v.3 ~> v.0`.  `freshToFreeAvoidingFast` then avoids
+        // `frees (s2,∅)`, so freshStart is 4 and minVarIdx is 0.  That gives
+        // `s1 = {v.3 ~> v.4}`, and the composition is
+        // `{u.0 ~> v.4, v.3 ~> v.4}`.
         let empty: LSubstVFresh<C> = SubstVFresh::empty();
         let want: LSubstVFresh<C> = SubstVFresh::from_list(vec![
             (lv("u", 0), var_term(lv("v", 4))),
             (lv("v", 3), var_term(lv("v", 4))),
         ]);
         assert_eq!(compose_vfresh_general(&empty, &s2), want);
-        // …and the fast path `compose_vfresh` dispatches to must agree with it
-        // in value, not just under `debug_assertions`.
+        // The fast path that `compose_vfresh` dispatches to must give the same
+        // value.  It must do so in every build, not only under
+        // `debug_assertions`.
         assert_eq!(compose_vfresh(&empty, &s2), want);
     }
 }

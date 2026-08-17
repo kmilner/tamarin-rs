@@ -1,11 +1,12 @@
 //! Static-asset routing.
 //!
 //! The Haskell server serves `data/css/*` and `data/js/*` (jQuery, CSS,
-//! images) from a single `/static/` namespace; the Rust port does the same via
-//! tower-http's `ServeDir`.  The `/static` miss is a separate matter — HS
-//! serves it from its own wai-app-static WAI app, so it never reaches Yesod's
-//! error handler — and is pinned against the oracle's body by
-//! `routes_basic::test_missing_static_asset_matches_haskell`.
+//! images) from a single `/static/` namespace.  The Rust port does the same
+//! with the `ServeDir` of tower-http.  The miss case for `/static` is a
+//! separate matter.  HS serves that case from its own wai-app-static WAI app,
+//! so the request never reaches the error handler of Yesod.  The test
+//! `routes_basic::test_missing_static_asset_matches_haskell` compares that
+//! case against the body of the oracle.
 
 mod common;
 
@@ -16,13 +17,14 @@ fn data_dir() -> PathBuf {
     workspace_root().join("tamarin-prover/data")
 }
 
-/// Each `/static/<p>` must serve `data/<p>` — the exact bytes on disk, under
-/// the mime `ServeDir` infers.  The two assets below are the ones every page
-/// this crate renders links to.
+/// Each `/static/<p>` must serve `data/<p>`.  It must serve the exact bytes
+/// on disk, under the mime type that `ServeDir` infers.  Every page this
+/// crate renders links to the two assets below.
 ///
-/// A missing `data/` is a MISCONFIGURATION, not a reason to skip: the
-/// directory is the submodule's, and `haskell_captures_match_the_submodule_pin`
-/// (which every test binary here carries) already fails without it.
+/// A missing `data/` is a misconfiguration.  It is not a reason to skip the
+/// test.  The directory belongs to the submodule, and the test
+/// `haskell_captures_match_the_submodule_pin` already fails without it.
+/// Every test binary here carries that test.
 #[tokio::test]
 async fn test_static_assets_are_served_from_the_data_dir() {
     let s = start_server_with_theory("issue193.spthy").await;
@@ -32,8 +34,8 @@ async fn test_static_assets_are_served_from_the_data_dir() {
             "css/tamarin-prover-ui.css",
             "text/css",
         ),
-        // tower-http answers `application/javascript` or `text/javascript`
-        // depending on its mime database; either is correct per RFC 9239.
+        // tower-http answers `application/javascript` or `text/javascript`,
+        // depending on its mime database.  RFC 9239 allows both answers.
         (
             "/static/js/tamarin-prover-ui.js",
             "js/tamarin-prover-ui.js",

@@ -541,10 +541,10 @@ mod tests {
             .collect()
     }
 
-    /// The use-site atom is replaced by the predicate's BODY, with the
-    /// declared parameter mapped to the use-site argument.  Bytes pinned to
-    /// the oracle (Git revision ef3f0468), which renders this lemma as
-    /// `∀ x. ∃ #i. A( x ) @ #i`.
+    /// The expansion replaces the use-site atom with the predicate's body.
+    /// It maps the declared parameter to the use-site argument.  The test
+    /// compares the bytes with the oracle (Git revision ef3f0468).  The
+    /// oracle renders this lemma as `∀ x. ∃ #i. A( x ) @ #i`.
     #[test]
     fn expand_simple_predicate() {
         let preds = pred("P(x) <=> Ex #i. A(x) @ #i");
@@ -653,10 +653,11 @@ mod tests {
             "variable capture: a quantifier still binds `z`: {:?}",
             expanded
         );
-        // The use-site `z` survives as `Act`'s FIRST argument and the renamed
-        // binder fills the second.  The rename mints a new base name (`z1`);
-        // the oracle (Git revision ef3f0468) keeps the base and allocates a
-        // fresh index instead, printing `∃ z.1 #i. Act( z, z.1 ) @ #i`.
+        // The use-site `z` stays as `Act`'s first argument.  The renamed
+        // binder fills the second argument.  The rename makes a new base name
+        // (`z1`).  The oracle (Git revision ef3f0468) keeps the base name and
+        // allocates a new index instead.  It prints
+        // `∃ z.1 #i. Act( z, z.1 ) @ #i`.
         assert_eq!(
             crate::pretty_formula::pretty_formula(&expanded),
             "\u{2203} z1 #i. Act( z, z1 ) @ #i"
@@ -685,11 +686,11 @@ mod tests {
         assert!(!printed.contains("(<)"), "still emits (<): {}", printed);
     }
 
-    /// A use-site that itself mentions `z` must not be captured by the
-    /// builtin's bound `z`: the binder is renamed and the use-site `z` stays
-    /// the union's first operand.  The rename mints a new base name (`z1`);
-    /// the oracle (Git revision ef3f0468) renders the same lemma with a fresh
-    /// INDEX on the original base, `∃ z.1. y = (z++z.1)`.
+    /// The builtin's bound `z` must not capture a use-site that mentions `z`
+    /// itself.  The expansion renames the binder.  The use-site `z` stays the
+    /// union's first operand.  The rename makes a new base name (`z1`).  The
+    /// oracle (Git revision ef3f0468) renders the same lemma with a new index
+    /// on the original base, `∃ z.1. y = (z++z.1)`.
     #[test]
     fn expand_lessmset_capture_avoids_z() {
         let preds: Vec<p::Predicate> = Vec::new();

@@ -683,13 +683,15 @@ mod tests {
     }
 
     /// A real `get variants in MSG : tamXCFUfst(x1:Msg)` reply from Maude
-    /// 3.5.1 over the pairing theory, framed the way the handle receives it
-    /// (`set show timing off`, so `rewrites: N` carries no timing tail).
+    /// 3.5.1 over the pairing theory.  The fixture keeps the framing that the
+    /// handle receives.  `set show timing off` is in force, so `rewrites: N`
+    /// carries no timing tail.
     ///
-    /// The parser has to walk past two per-variant headers, the `rewrites:`
-    /// line, the reprinted term (parsed and DISCARDED), the blank line that
-    /// ends each binding block, and then the `No more variants.` +
-    /// `rewrites:` footer of HS `parseVariantsReply`
+    /// The parser has to walk past several parts of this reply.  There are the
+    /// two per-variant headers.  There is the `rewrites:` line.  There is the
+    /// reprinted term, which the parser parses and then discards.  There is
+    /// the blank line that ends each binding block.  Last there is the
+    /// `No more variants.` + `rewrites:` footer of HS `parseVariantsReply`
     /// (Maude/Parser.hs:294-306).  Only the bindings survive.
     #[test]
     fn parse_two_variant_reply() {
@@ -731,9 +733,9 @@ mod tests {
         );
     }
 
-    /// The `many1`/`endOfInput` guards of `parse_variants_reply`: a reply
-    /// with no `Variant` block at all, and one whose footer is truncated,
-    /// are both errors rather than an empty variant list.
+    /// The `many1` and `endOfInput` guards of `parse_variants_reply`.  A reply
+    /// with no `Variant` block at all is an error.  A reply with a truncated
+    /// footer is an error too.  Neither one gives an empty variant list.
     #[test]
     fn parse_variants_reply_requires_a_variant_and_a_footer() {
         assert!(parse_variants_reply(b"\nNo more variants.\nrewrites: 0\n").is_err());
