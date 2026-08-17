@@ -125,11 +125,33 @@ pub struct Predicate {
     pub formula: Formula,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Restriction {
     pub name: String,
     pub formula: Formula,
     pub attributes: Vec<RestrictionAttr>,
+    pub location: Location,
+}
+
+impl PartialEq for Restriction {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            name: _,
+            formula: _,
+            attributes: _,
+            location: _,
+        } = self;
+        let Self {
+            name: _,
+            formula: _,
+            attributes: _,
+            location: _,
+        } = other;
+        // Everything but location
+        self.name == other.name
+            && self.formula == other.formula
+            && self.attributes == other.attributes
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

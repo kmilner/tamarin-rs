@@ -106,6 +106,11 @@ pub enum ParseError {
         first_at: Location,
         second_at: Location,
     },
+    DuplicateRestriction {
+        name: String,
+        first_at: Location,
+        second_at: Location,
+    },
     ExpectedTheoryItem {
         found: Option<String>,
         expected: Vec<String>,
@@ -303,7 +308,7 @@ impl ParseError {
             | ParseError::Custom { .. }
             | ParseError::Abort { .. } => {}
             ParseError::IoError { .. } => {}
-            ParseError::DuplicateRule { .. } => {}
+            ParseError::DuplicateRule { .. } | ParseError::DuplicateRestriction { .. } => {}
         }
     }
 
@@ -340,6 +345,7 @@ impl ParseError {
             | ParseError::Abort { at, .. }
             | ParseError::UnterminatedDelimiter { found_at: at, .. } => at,
             ParseError::DuplicateRule { second_at, .. } => second_at,
+            ParseError::DuplicateRestriction { second_at, .. } => second_at,
         }
     }
 
@@ -375,6 +381,7 @@ impl ParseError {
             | ParseError::IoError { .. }
             | ParseError::Custom { .. }
             | ParseError::DuplicateRule { .. }
+            | ParseError::DuplicateRestriction { .. }
             | ParseError::Abort { .. } => None,
         }
     }
@@ -411,6 +418,7 @@ impl ParseError {
             | ParseError::IoError { .. }
             | ParseError::Custom { .. }
             | ParseError::DuplicateRule { .. }
+            | ParseError::DuplicateRestriction { .. }
             | ParseError::Abort { .. } => None,
         }
     }
@@ -447,7 +455,8 @@ impl ParseError {
             | ParseError::Custom { .. }
             | ParseError::Abort { .. }
             | ParseError::IoError { .. }
-            | ParseError::DuplicateRule { .. } => None,
+            | ParseError::DuplicateRule { .. }
+            | ParseError::DuplicateRestriction { .. } => None,
         }
         .map(|expected| match self {
             ParseError::ExpectedTheoryItem { found, .. } => {
@@ -507,6 +516,7 @@ impl ParseError {
             ParseError::Custom { .. } => "Parse error",
             ParseError::Abort { .. } => "Invalid input",
             ParseError::DuplicateRule { .. } => "Duplicate protocol rule",
+            ParseError::DuplicateRestriction { .. } => "Duplicate restriction",
         }
     }
 
@@ -533,6 +543,24 @@ impl ParseError {
                     ParseErrorLabel {
                         at: *opening_at,
                         message: format!("opening `{opening}` starts here"),
+                        is_primary: false,
+                    },
+                ]
+            }
+            ParseError::DuplicateRestriction {
+                name,
+                first_at,
+                second_at,
+            } => {
+                vec![
+                    ParseErrorLabel {
+                        at: *second_at,
+                        message: format!("duplicate restriction name `{name}`"),
+                        is_primary: true,
+                    },
+                    ParseErrorLabel {
+                        at: *first_at,
+                        message: format!("first occurrence of restriction name `{name}`"),
                         is_primary: false,
                     },
                 ]
@@ -710,6 +738,9 @@ impl ParseError {
             }
             ParseError::DuplicateRule { .. } => {
                 vec!["Protocol rule names must be unique".into()]
+            }
+            ParseError::DuplicateRestriction { .. } => {
+                vec!["Restriction names must be unique".into()]
             }
         }
     }
@@ -1517,14 +1548,14 @@ pub struct Parser<'a> {
     /// `#include` sub-parsers like the signature state (HS runs one `addItems`
     /// accumulation across included files).
     seen_rules: Vec<Rule>,
-    /// Names of the restrictions in the theory so far: user
+    /// Names of the restrictions in the theory so far with their [`Location`]: user
     /// `restriction:`/`axiom:` items plus the `Restr_<rule>_<i>` restrictions
     /// that `_restrict` expansion mints per rule (HS `fromRuleRestriction`,
     /// Model/Restriction.hs:141-149, `restrPrefix = "Restr_"`).  This is the
     /// name set `addRestriction` (TheoryObject.hs:453-456) guards against when
     /// `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) inserts a rule's
     /// expanded restrictions — checked BEFORE the rule-name guard itself.
-    seen_restriction_names: Vec<String>,
+    seen_restriction_names: Vec<(String, Location)>,
 }
 
 impl<'a> Parser<'a> {
@@ -3516,6 +3547,8 @@ impl<'a> Parser<'a> {
     }
 
     fn restriction(&mut self, kw: &str) -> Result<Restriction, ParseError> {
+        self.skip_ws();
+        let start = self.lx.pos();
         self.require_kw(kw)?;
         let name = self.ident()?;
         let mut attributes = Vec::new();
@@ -3559,11 +3592,14 @@ impl<'a> Parser<'a> {
         // ([`Parser::guard_duplicate_rule`] step 1): HS `addRestriction`
         // checks new `Restr_<rule>_<i>` names against ALL restrictions,
         // user-declared ones included (TheoryObject.hs:453-456).
-        self.seen_restriction_names.push(name.clone());
+        let end = self.lx.pos();
+        let location = Location::from_positions(start, end);
+        self.seen_restriction_names.push((name.clone(), location));
         Ok(Restriction {
             name,
             formula: phi,
             attributes,
+            location,
         })
     }
 
@@ -3661,10 +3697,18 @@ impl<'a> Parser<'a> {
         for i in 1..=r.embedded_restrictions.len() {
             // HS `fromRuleRestriction (rname ++ "_" ++ show i)` with
             // `restrPrefix = "Restr_"` (Model/Restriction.hs:129-149).
+            let restr = r.embedded_restrictions.get(i - 1).unwrap();
             let rstr_name = format!("Restr_{}_{}", r.name, i);
-            if self.seen_restriction_names.contains(&rstr_name) {
-                // TODO: Better error once we have locations for the rules inlined restrictions/actions
-                return Err(self.item_fail(format!("duplicate restriction: {rstr_name}")));
+            if let Some((_, loc)) = self
+                .seen_restriction_names
+                .iter()
+                .find(|(name, _)| name == &rstr_name)
+            {
+                return Err(ParseError::DuplicateRestriction {
+                    name: rstr_name.clone(),
+                    first_at: *loc,
+                    second_at: restr.location,
+                });
             }
         }
         if let Some(first) = self.seen_rules.iter().find(|p| p.name == r.name) {
@@ -3694,16 +3738,12 @@ impl<'a> Parser<'a> {
             self.seen_rules.push(r.clone());
         }
         for i in 1..=r.embedded_restrictions.len() {
+            let restr_name = format!("Restr_{}_{}", r.name, i);
+            let restr = r.embedded_restrictions.get(i - 1).unwrap();
             self.seen_restriction_names
-                .push(format!("Restr_{}_{}", r.name, i));
+                .push((restr_name, restr.location));
         }
         Ok(())
-    }
-
-    /// A failure at the position an item's parse just finished — the
-    /// duplicate-rule/-restriction guards.
-    fn item_fail(&mut self, msg: String) -> ParseError {
-        self.err_fail(msg)
     }
 
     /// Parse the middle arrow of a rule: either the `-->` shortcut (no

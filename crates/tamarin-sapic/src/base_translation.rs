@@ -1012,6 +1012,7 @@ pub fn single_session_restriction() -> tamarin_parser::ast::Restriction {
         name: "single_session".to_string(),
         formula,
         attributes: vec![],
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -1068,6 +1069,7 @@ pub fn predicate_restrictions() -> Vec<tamarin_parser::ast::Restriction> {
         name: "predicate_eq".to_string(),
         formula: eq_formula,
         attributes: vec![],
+        location: DUMMY_LOCATION,
     };
 
     // predicate_not_eq: All #i a b. Pred_Not_Eq(a,b)@i ==> not(a = b)
@@ -1084,6 +1086,7 @@ pub fn predicate_restrictions() -> Vec<tamarin_parser::ast::Restriction> {
         name: "predicate_not_eq".to_string(),
         formula: neq_formula,
         attributes: vec![],
+        location: DUMMY_LOCATION,
     };
 
     vec![predicate_eq, predicate_not_eq]
@@ -1098,6 +1101,7 @@ fn parse_restriction(name: &str, src: &str) -> tamarin_parser::ast::Restriction 
         .unwrap_or_else(|e| panic!("Error parsing hard-coded restriction {name}: {e:?}"));
     p::Restriction {
         name: name.to_string(),
+        location: formula.location,
         formula,
         attributes: vec![],
     }

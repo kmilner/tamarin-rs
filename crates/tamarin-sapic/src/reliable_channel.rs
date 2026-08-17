@@ -250,5 +250,6 @@ fn res_reliable() -> p::Restriction {
         name: "reliable".to_string(),
         formula,
         attributes: vec![],
+        location: DUMMY_LOCATION,
     }
 }

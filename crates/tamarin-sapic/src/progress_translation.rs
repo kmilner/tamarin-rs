@@ -209,6 +209,7 @@ fn res_progress_init() -> p::Restriction {
         name: "progressInit".to_string(),
         formula,
         attributes: vec![],
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -323,6 +324,7 @@ fn make_restriction(pos: &[i64], tos: &PosSet) -> p::Restriction {
         name,
         formula,
         attributes: vec![],
+        location: DUMMY_LOCATION,
     }
 }
 

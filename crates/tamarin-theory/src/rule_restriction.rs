@@ -202,6 +202,7 @@ fn from_rule_restriction(r: &str, f: &p::Formula) -> (p::Restriction, p::Fact) {
     };
     let restriction = p::Restriction {
         name: format!("{}{}", RESTR_PREFIX, r),
+        location: restr_formula.location,
         formula: restr_formula,
         attributes: Vec::new(),
     };
