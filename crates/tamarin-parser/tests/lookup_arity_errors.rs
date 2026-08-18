@@ -308,12 +308,23 @@ fn algapp_arity_mismatch_backtracks() {
 // its `opEqual` failure right after it is THE reported error.
 // ---------------------------------------------------------------------------
 
+// TODO (NM): This test now errors because `p3` is undeclared
 /// A lowercase applied name in a lemma: `fact` refuses it (lowercase), the
 /// term path backtracks to a variable, and the node-equality reparse puts the
 /// error at the char after the name.
 #[test]
 fn formula_lowercase_application_frame() {
     let src = "theory T\nbegin\n\nrule r:\n  [ ] --> [ ]\n\nlemma L:\n  \"All x #i. p3(x) @ #i ==> F\"\n\nend\n";
+    assert_expected(src, 8, 16, "(", &["letter or digit", "\".\"", "\"=\""]);
+}
+
+// TODO (NM): In this test, `p3` is now declared.
+/// A lowercase applied name in a lemma: `fact` refuses it (lowercase), the
+/// term path backtracks to a variable, and the node-equality reparse puts the
+/// error at the char after the name.
+#[test]
+fn formula_lowercase_fact_declared_as_function_fails() {
+    let src = "theory T\nbegin\n\nfunctions: p3/1\n\nrule r:\n  [ ] --> [ ]\n\nlemma L:\n  \"All x #i. p3(x) @ #i ==> F\"\n\nend\n";
     assert_expected(src, 8, 16, "(", &["letter or digit", "\".\"", "\"=\""]);
 }
 
