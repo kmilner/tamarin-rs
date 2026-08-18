@@ -35,7 +35,7 @@ it:
 3. `cargo test -p tamarin-theory --test wellformedness_fixture_reports`
    — the byte-level pin. This harness runs each fixture through three
    of the four `tamarin_theory::translated_wf` entry points, in the
-   order that both production drivers call them. It does not call
+   order that both production callers call them. It does not call
    `prepend_wf_report`. The rendered `/* WARNING … */` block must then
    equal `reports/<fixture>.report` byte for byte. Those `.report`
    files are captures of the pinned oracle's own block. This harness
@@ -74,7 +74,7 @@ follows them. The files use two provenance keys. Every file carries a
 `# source:` line, and that line must name the oracle. Four files also
 carry an `# omits:` line. Those four files need it because the
 oracle's block ends with a `Message Derivation Checks` section.
-Harness 3's pipeline does not produce that section. The drivers splice
+Harness 3's pipeline does not produce that section. The production callers splice
 that section in afterwards. It is a dynamic check, and it needs Maude.
 `expected.txt` records the same difference for the topic-level
 harnesses.

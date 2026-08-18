@@ -1,0 +1,9 @@
+WARNING: the following wellformedness checks failed!
+
+Facts occur in the left-hand-side but not in any right-hand-side 
+=================================================================
+
+  1. in rule "incx_0_":  factName `Message' arity: 2 multiplicity: Linear
+  
+  2. in rule "StxEvxrestrictxxOutx_0_1":  factName `St' arity: 1 multiplicity: Linear. Perhaps you want to use the fact in rule "incx_0_":  factName `Ack' arity: 2 multiplicity: Linear
+*/

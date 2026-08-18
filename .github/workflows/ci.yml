@@ -53,7 +53,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install lld
         run: command -v ld.lld >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq lld)
-      # Graphviz: two tests drive a real `dot`.  The first is the success-path
+      # Graphviz: two tests run a real `dot`.  The first is the success-path
       # self-test in probe_reports.rs (the GraphViz block of the `test` mode).
       # The second is dot_tests.rs's lint of the DOT this port writes.  Both
       # panic instead of a skip when `dot` cannot run, and TAM_ALLOW_NO_DOT=1
@@ -95,7 +95,7 @@ jobs:
       # the roster while the tests/ harness still passes.  Such a fixture
       # asserts nothing beyond "the file parses" on the port side.
       #
-      # `--no-tamarin` is load-bearing, not a convenience.  The runner's third
+      # `--no-tamarin` is required, not a convenience.  The runner's third
       # step shells out to the pinned `tamarin-prover`, which no CI job builds.
       # The fixtures' differential against the oracle therefore stays a
       # milestone gate.  Steps 1 and 2 need only the port and the committed

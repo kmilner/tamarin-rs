@@ -56,7 +56,7 @@ fn prove_lemma_unknown_name_is_error() {
     assert!(matches!(r, Err(ProveError::LemmaNotFound(_))));
 }
 
-/// The `features/injectivity` corpus example drives
+/// The `features/injectivity` corpus example runs
 /// `simple_injective_fact_instances` through a complete proof.  The
 /// injective-fact analysis supplies the less-atoms that close the negation
 /// of `injectivity_check`.  Without the analysis, or without the less-atoms

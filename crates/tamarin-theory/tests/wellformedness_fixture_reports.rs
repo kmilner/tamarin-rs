@@ -16,17 +16,17 @@
 //! subset of the topics.
 //!
 //! The pipeline below calls the four `tamarin_theory::translated_wf` entry
-//! points in the order that both production drivers call them.  Those drivers
+//! points in the order that both production callers call them.  Those callers
 //! are `run.rs`'s batch loop and `tamarin_server::theory_io`'s web load.  This
 //! harness is therefore a third caller of that shared module, not a hand-copy
-//! of either driver.  Two production stages are deliberately absent, and
+//! of either caller.  Two production stages are deliberately absent, and
 //! [`render_report`] asserts that the first one cannot apply:
 //!
 //! * the SAPIC / accountability translation that `run.rs` runs between the
 //!   `swap_subterm_convergence_report` and `splice_translated_wf_reports`
 //!   calls.  No fixture declares a process, and the render asserts this.
 //! * the Maude-backed `Message Derivation Checks` and `Rule variants` blocks
-//!   that the batch driver splices afterwards.  Four expectation files
+//!   that the batch loop splices afterwards.  Four expectation files
 //!   therefore carry an `# omits:` line.  That line names the derivation-check
 //!   section that the oracle prints and this pipeline does not.
 //!   `expected.txt` documents the same asymmetry for the topic-level
@@ -113,7 +113,7 @@ fn stems(dir: &Path, ext: &str) -> BTreeSet<String> {
 }
 
 /// Runs one fixture through the theory-level wellformedness pipeline.  It
-/// returns the `/* WARNING … */` block that the batch driver prints.
+/// returns the `/* WARNING … */` block that the batch loop prints.
 fn render_report(name: &str) -> String {
     let path = fixtures_dir().join(format!("{name}.spthy"));
     let src = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));

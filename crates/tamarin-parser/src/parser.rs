@@ -348,6 +348,12 @@ const TOP_LEVEL_ITEM_EXPECTS: &[&str] = &[
 /// `identifier`'s `<?> "identifier"` (parsec's `Text.Parsec.Token.ident`).
 const TYPEP_EXPECTS: &[&str] = &["\"Any\"", "identifier"];
 
+/// The labels HS `sortedLVarNoSuffix [minBound..]` (Token.hs:486-499) offers
+/// when no variable alternative matches: the five sort-prefix parsers in
+/// LSort order — `$` (pub), `~` (fresh), a bare `identifier` (msg), `#`
+/// (node), `%` (nat).
+const SORTED_LVAR_NO_SUFFIX_EXPECTS: &[&str] = &["\"$\"", "\"~\"", "identifier", "\"#\"", "\"%\""];
+
 // =============================================================================
 // Parser entry points
 // =============================================================================
@@ -1028,6 +1034,15 @@ pub struct Parser<'a> {
     /// inside a process is `x` typed `"nat"`, while the same text in a rule is
     /// the nat-sorted `x`.
     sapic_var_types: bool,
+    /// Whether a `=`-pattern (`Term::PatMatch`) may start a term.  On only in
+    /// the three positions where HS threads a PATTERN literal parser: an `in`
+    /// message (`ltypedpatternlit`, Theory/Text/Parser/Sapic.hs:102,109), the
+    /// pattern side of a process `let` binding (`sapicpatternterm`,
+    /// Parser/Sapic.hs:264), and an embedded MSR rule — all fact rows plus its
+    /// `_restrict` formulas (`genericRule sapicpatternvar`, Parser/Sapic.hs:155).
+    /// Everywhere else HS's literal parser has no `=` alternative, so a `=`
+    /// starts no term and falls through to the no-alternative error.
+    allow_pat: bool,
     /// The `expecting` labels a completed top-level item leaves behind at the
     /// byte offset it stopped at, and that offset.
     ///
@@ -1101,6 +1116,7 @@ impl<'a> Parser<'a> {
             fact_annot_hangover: None,
             resolve_prefix_apps: true,
             sapic_var_types: false,
+            allow_pat: false,
             item_hangover: None,
             seen_rules: Vec::new(),
             seen_restriction_names: Vec::new(),
@@ -3408,6 +3424,53 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// The `in(...)` argument list.  Unlike [`Parser::parse_chan_msg`], the
+    /// MESSAGE term takes `=v` patterns and the channel does not, so the two
+    /// HS alternatives (Parser/Sapic.hs:96-116) cannot fold into one parse:
+    /// `try` the one-argument `(msg)` form with pattern literals first, then
+    /// `(chan, msg)` with a plain channel.  When both fail, the errors merge
+    /// parsec-style ([`Parser::merge_alt_errors`]).
+    fn parse_in_chan_msg(&mut self) -> Result<(Option<Term>, Term), ParseError> {
+        self.require_punct("(")?;
+        let probe = self.save();
+        let e1 = match (|| -> Result<Term, ParseError> {
+            let msg = self.with_patterns(|p| p.term(false))?;
+            self.require_punct(")")?;
+            Ok(msg)
+        })() {
+            Ok(msg) => return Ok((None, msg)),
+            Err(e) if e.ghc_error.is_some() => return Err(e),
+            Err(e) => e,
+        };
+        self.restore(probe);
+        (|| -> Result<(Option<Term>, Term), ParseError> {
+            let chan = self.term(false)?;
+            self.require_punct(",")?;
+            let msg = self.with_patterns(|p| p.term(false))?;
+            self.require_punct(")")?;
+            Ok((Some(chan), msg))
+        })()
+        .map_err(|e2| Self::merge_alt_errors(e1, e2))
+    }
+
+    /// parsec `mergeError`: the failure at the further position wins; at equal
+    /// positions the two message lists concatenate.  A GHC `error` in the
+    /// second branch escapes unmerged.
+    fn merge_alt_errors(e1: ParseError, e2: ParseError) -> ParseError {
+        if e2.ghc_error.is_some() {
+            return e2;
+        }
+        match e2.offset.cmp(&e1.offset) {
+            std::cmp::Ordering::Greater => e2,
+            std::cmp::Ordering::Less => e1,
+            std::cmp::Ordering::Equal => {
+                let mut e = e1;
+                e.messages.extend(e2.messages);
+                e
+            }
+        }
+    }
+
     fn parse_rule(&mut self) -> Result<Rule, ParseError> {
         self.skip_ws();
         let kw_end = self.lx.pos().offset + "rule".len();
@@ -4253,6 +4316,26 @@ impl<'a> Parser<'a> {
         r
     }
 
+    /// Run `f` with [`Parser::allow_pat`] on, restoring the previous value
+    /// afterwards — the HS pattern-literal regions.
+    fn with_patterns<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let saved = self.allow_pat;
+        self.allow_pat = true;
+        let r = f(self);
+        self.allow_pat = saved;
+        r
+    }
+
+    /// One process-`let` binding — HS `definition = sapicpatternterm <*
+    /// equalSign <*> sapicterm` (Let.hs:23-26): only the pattern side takes
+    /// `=v` patterns.
+    fn let_definition(&mut self) -> Result<(Term, Term), ParseError> {
+        let pat = self.with_patterns(|p| p.term(false))?;
+        self.require_punct("=")?;
+        let val = self.term(false)?;
+        Ok((pat, val))
+    }
+
     /// A SAPIC process.  Every variable inside is HS `sapicvar`, so a trailing
     /// `:` names a type rather than a sort — see [`Parser::sapic_var_types`].
     fn process(&mut self) -> Result<Process, ParseError> {
@@ -4352,12 +4435,7 @@ impl<'a> Parser<'a> {
             // failure.
             let mut bindings: Vec<(Term, Term)> = Vec::new();
             // First binding is required.
-            {
-                let pat = self.term(false)?;
-                self.require_punct("=")?;
-                let val = self.term(false)?;
-                bindings.push((pat, val));
-            }
+            bindings.push(self.let_definition()?);
             loop {
                 let _ = self.try_punct(",");
                 self.skip_ws();
@@ -4367,13 +4445,7 @@ impl<'a> Parser<'a> {
                 // Try to parse one more binding; backtrack if it doesn't parse
                 // (matching `many1`'s greedy-with-backtrack behaviour).
                 let probe = self.save();
-                let next = (|| -> Result<(Term, Term), ParseError> {
-                    let pat = self.term(false)?;
-                    self.require_punct("=")?;
-                    let val = self.term(false)?;
-                    Ok((pat, val))
-                })();
-                match next {
+                match self.let_definition() {
                     Ok(b) => bindings.push(b),
                     Err(_) => {
                         self.restore(probe);
@@ -4468,7 +4540,7 @@ impl<'a> Parser<'a> {
             return Ok(Some(SapicAction::Delete(t)));
         }
         if self.try_kw("in") {
-            let (chan, msg) = self.parse_chan_msg()?;
+            let (chan, msg) = self.parse_in_chan_msg()?;
             return Ok(Some(SapicAction::ChIn { chan, msg }));
         }
         if self.try_kw("out") {
@@ -4487,24 +4559,26 @@ impl<'a> Parser<'a> {
             let f = self.fact()?;
             return Ok(Some(SapicAction::Event(f)));
         }
-        // Embedded MSR: `[..] --[..]-> [..]`
+        // Embedded MSR: `[..] --[..]-> [..]`.  HS parses it via `genericRule
+        // sapicpatternvar …` (Parser/Sapic.hs:155), so the whole rule — every
+        // fact row and the `_restrict` formulas — is ONE pattern-literal
+        // region, shared with the plain-rule arrow alternation.
         if self.lx.peek() == Some('[') {
-            let prems = self.fact_list()?;
-            let (acts, restrs) = if self.try_punct("-->") {
-                (vec![], vec![])
-            } else if self.try_punct("--[") {
-                self.parse_action_restr_list()?
-            } else {
-                self.restore(save);
-                return Ok(None);
-            };
-            let concs = self.fact_list()?;
-            return Ok(Some(SapicAction::Msr {
-                prems,
-                acts,
-                concs,
-                restrictions: restrs,
-            }));
+            return self.with_patterns(|p| {
+                let prems = p.fact_list()?;
+                if !p.peek_punct("-->") && !p.peek_punct("--[") {
+                    p.restore(save);
+                    return Ok(None);
+                }
+                let (acts, restrs) = p.parse_actions_and_restrictions()?;
+                let concs = p.fact_list()?;
+                Ok(Some(SapicAction::Msr {
+                    prems,
+                    acts,
+                    concs,
+                    restrictions: restrs,
+                }))
+            });
         }
         self.restore(save);
         Ok(None)
@@ -5228,15 +5302,22 @@ impl<'a> Parser<'a> {
     /// One atomic term.
     fn atom_term_inner(&mut self, eqn: bool) -> Result<Term, ParseError> {
         self.skip_ws();
-        // SAPIC pattern-match prefix `=t` — treat as PatMatch wrapper.
-        if self.lx.peek() == Some('=') {
+        // SAPIC pattern-match prefix `=v` — legal only in pattern positions
+        // ([`Parser::allow_pat`]).  Elsewhere no term alternative starts with
+        // `=`, so the character falls through to the no-alternative error,
+        // matching HS where the literal parser there has no `=` branch.
+        if self.allow_pat && self.lx.peek() == Some('=') {
             // Avoid consuming `=` if it's the start of an operator like `==>`,
             // `=>`, or `==`.
             let r = self.lx.rest();
             if !r.starts_with("==") && !r.starts_with("=>") {
                 self.lx.bump();
                 self.skip_ws();
-                let inner = self.atom_term(eqn)?;
+                // HS `sapicpatternvar` (Token.hs:512-519): after the `=` comes
+                // `sapicvar` — a VARIABLE, never a general term.  `=h(x)`
+                // parses as the match-var `h`, and the `(` then breaks the
+                // enclosing grammar through the variable's hangover labels.
+                let inner = self.pattern_var_atom()?;
                 return Ok(Term::PatMatch(Box::new(inner)));
             }
         }
@@ -5596,6 +5677,23 @@ impl<'a> Parser<'a> {
         }
         self.restore(save_id);
         Err(self.err("expected term"))
+    }
+
+    /// The variable after a pattern `=` — HS `sapicvar` via `sapicpatternvar`
+    /// (Token.hs:506-519): a sorted variable with an optional `.idx` index and
+    /// `:type` annotation, never an application, literal, or compound term.
+    ///
+    /// On a non-variable the failure carries
+    /// [`SORTED_LVAR_NO_SUFFIX_EXPECTS`], as the pinned oracle prints for
+    /// `in(c, =<x, y>)`:
+    /// `unexpected "<" / expecting "$", "~", identifier, "#" or "%"`.
+    fn pattern_var_atom(&mut self) -> Result<Term, ParseError> {
+        if let Some(v) = self.try_var_spec()? {
+            let v = self.attach_sort_suffix(v)?;
+            self.note_var_dot_hangover(&v);
+            return Ok(Term::Var(v));
+        }
+        Err(self.err_expect(SORTED_LVAR_NO_SUFFIX_EXPECTS))
     }
 
     /// `LINE:COLUMN` of `naryOpApp`'s reserved-name `error` in

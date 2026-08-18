@@ -199,7 +199,9 @@ pub(crate) fn map_atom_terms(a: &p::Atom, g: &dyn Fn(&p::Term) -> p::Term) -> p:
 
 /// Shared structural walker: rebuild a formula, mapping `g` over every leaf
 /// term while cloning quantifier `VarSpec`s unchanged.  See [`map_fact_terms`].
-pub(crate) fn map_formula_terms(f: &p::Formula, g: &dyn Fn(&p::Term) -> p::Term) -> p::Formula {
+/// `pub` (not `pub(crate)`): tamarin-sapic's `formula_unpattern` walks with it
+/// too.
+pub fn map_formula_terms(f: &p::Formula, g: &dyn Fn(&p::Term) -> p::Term) -> p::Formula {
     use p::Formula::*;
     match f {
         False => False,

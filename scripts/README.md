@@ -377,7 +377,7 @@ a rename-only migration.
   release of `pretty` lays out documents differently, so a wrong answer here
   enters the tree as a pin. Second, `--self-test` derives six expectations that
   the port already asserts. This checks the toolchain. It adds no new coverage.
-  If a case disagrees, then either the script does not drive the right library
+  If a case disagrees, then either the script does not run the right library
   or the port has regressed. In that case, do not commit anything that you
   derive in that session. One of the six cases carries a ribbon narrower than
   its line length. The other five cases all use `w == r`. The narrow case is

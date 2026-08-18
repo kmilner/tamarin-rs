@@ -935,7 +935,7 @@ fn oracle_only_flag_stops_the_search_when_the_oracle_ranks_nothing() {
 /// this file must describe the same set of runs.  Three faults follow if they
 /// do not.  A renamed row leaves its old reference behind, and that reference
 /// still passes while it pins nothing.  A half-finished capture leaves rows
-/// that nobody notices.  A row that no test drives keeps passing forever.
+/// that nobody notices.  A row that no test runs keeps passing forever.
 #[test]
 fn cli_ref_cases_files_and_manifest_are_in_sync() {
     let cases = flag_cases();
@@ -1046,7 +1046,7 @@ fn cli_ref_cases_files_and_manifest_are_in_sync() {
          {RECAPTURE_HINT}"
     );
 
-    // A test here drives every row.  The tests run rows as
+    // A test here runs every row.  The tests run rows as
     // `run_pinned_case("<name>")`.  A scan of this file's own source for the
     // quoted row name therefore catches an unused row.  Such a row sits in
     // the table, capture and all, and nothing calls it.  The scan needs its
@@ -1058,14 +1058,14 @@ fn cli_ref_cases_files_and_manifest_are_in_sync() {
     assert!(
         src.contains("run_pinned_case(\""),
         "no `run_pinned_case(` call with a literal row name left in {} — the \
-         row scan can no longer see how rows are driven",
+         row scan can no longer see how rows are run",
         src_path.display()
     );
     for name in &names {
         assert!(
             src.contains(&format!("\"{name}\"")),
             "cases.tsv row `{name}` is never named in {} — it has a capture \
-             but no test drives it, so it pins nothing",
+             but no test runs it, so it pins nothing",
             src_path.display()
         );
     }

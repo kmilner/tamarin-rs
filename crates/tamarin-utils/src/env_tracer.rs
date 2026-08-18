@@ -21,7 +21,7 @@ const TRACE_SETTINGS: &str = "DEBUG_TRACE";
 /// `traceKey` is one complete field of `splitOn "," setting`.  `setting` is
 /// the answer of `lookupEnv`.
 ///
-/// This function is separate from [`should_trace`] so that a test can drive
+/// This function is separate from [`should_trace`] so that a test can run
 /// the parse from a literal.  `DEBUG_TRACE` is process-wide.  A test that
 /// wrote it would make every other test in this crate's test binary that
 /// reads the environment flaky.
