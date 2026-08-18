@@ -3154,8 +3154,6 @@ fn render_parsed_restriction(
     } else {
         out.push_str(&r.name);
     }
-
-    out.push(' ');
     render_restriction_attributes(&r.attributes, &mut out);
 
     out.push_str(":\n");
@@ -3188,7 +3186,7 @@ fn render_restriction_attributes(attrs: &[p::RestrictionAttr], out: &mut String)
     if attrs.is_empty() {
         return;
     }
-
+    out.push(' ');
     out.push('[');
     let attr_strs: Vec<&str> = attrs
         .iter()
