@@ -35,7 +35,6 @@ use std::path::PathBuf;
 use crate::ast::*;
 use crate::lexer::{is_ident_char, is_reserved_name, Lexer, Pos};
 use crate::proof_tree::parse_proof_tree;
-use crate::ParseError::ConflictingFunctionDeclarations;
 
 pub const DUMMY_LOCATION: Location = Location {
     line: u32::MAX,
@@ -97,9 +96,24 @@ impl From<Pos> for Location {
 
 #[derive(Debug, Clone)]
 pub enum ParseError {
+    UndeclaredFunction {
+        name: String,
+        at: Location,
+    },
+    ReservedBuiltinInEquation {
+        f: String,
+        at: Location,
+    },
     MalformedHexColor {
         msg: String,
         at: Location,
+    },
+    FunctionUsedWithWrongArity {
+        name: String,
+        declared_arity: usize,
+        used_arity: usize,
+        declared_at: Option<Location>,
+        used_at: Location,
     },
     UnexpectedKeyword {
         found: Option<String>,
@@ -325,8 +339,11 @@ impl ParseError {
             | ParseError::Abort { .. }
             | ParseError::IoError { .. }
             | ParseError::DuplicateRule { .. }
+            | ParseError::ReservedBuiltinInEquation { .. }
+            | ParseError::FunctionUsedWithWrongArity { .. }
             | ParseError::WrongArityforACFunctionDeclaration { .. }
             | ParseError::MalformedHexColor { .. }
+            | ParseError::UndeclaredFunction { .. }
             | ParseError::DuplicateRestriction { .. } => {}
         }
     }
@@ -361,13 +378,16 @@ impl ParseError {
             | ParseError::UnknownAttribute { at, .. }
             | ParseError::Expected { at, .. }
             | ParseError::Custom { at, .. }
+            | ParseError::ReservedBuiltinInEquation { at, .. }
             | ParseError::Abort { at, .. }
+            | ParseError::UndeclaredFunction { at, .. }
             | ParseError::MalformedHexColor { at, .. }
             | ParseError::WrongArityforACFunctionDeclaration { at, .. }
             | ParseError::UnterminatedDelimiter { found_at: at, .. } => at,
             ParseError::DuplicateRule { second_at, .. } => second_at,
             ParseError::DuplicateRestriction { second_at, .. } => second_at,
             ParseError::ConflictingFunctionDeclarations { second_at, .. } => second_at,
+            ParseError::FunctionUsedWithWrongArity { used_at, .. } => used_at,
         }
     }
 
@@ -406,7 +426,10 @@ impl ParseError {
             | ParseError::DuplicateRule { .. }
             | ParseError::DuplicateRestriction { .. }
             | ParseError::WrongArityforACFunctionDeclaration { .. }
+            | ParseError::ReservedBuiltinInEquation { .. }
+            | ParseError::UndeclaredFunction { .. }
             | ParseError::ConflictingFunctionDeclarations { .. }
+            | ParseError::FunctionUsedWithWrongArity { .. }
             | ParseError::Abort { .. } => None,
         }
     }
@@ -446,6 +469,9 @@ impl ParseError {
             | ParseError::DuplicateRestriction { .. }
             | ParseError::WrongArityforACFunctionDeclaration { .. }
             | ParseError::MalformedHexColor { .. }
+            | ParseError::FunctionUsedWithWrongArity { .. }
+            | ParseError::UndeclaredFunction { .. }
+            | ParseError::ReservedBuiltinInEquation { .. }
             | ParseError::ConflictingFunctionDeclarations { .. }
             | ParseError::Abort { .. } => None,
         }
@@ -484,9 +510,12 @@ impl ParseError {
             | ParseError::Abort { .. }
             | ParseError::IoError { .. }
             | ParseError::DuplicateRule { .. }
+            | ParseError::FunctionUsedWithWrongArity { .. }
             | ParseError::MalformedHexColor { .. }
             | ParseError::WrongArityforACFunctionDeclaration { .. }
+            | ParseError::UndeclaredFunction { .. }
             | ParseError::ConflictingFunctionDeclarations { .. }
+            | ParseError::ReservedBuiltinInEquation { .. }
             | ParseError::DuplicateRestriction { .. } => None,
         }
         .map(|expected| match self {
@@ -555,6 +584,9 @@ impl ParseError {
                 "Non-binary AC function declaration"
             }
             ParseError::MalformedHexColor { .. } => "Malformed hex color",
+            ParseError::FunctionUsedWithWrongArity { .. } => "Function used with wrong arity",
+            ParseError::ReservedBuiltinInEquation { .. } => "Reserved builtin function in equation",
+            ParseError::UndeclaredFunction { .. } => "Undeclared function",
         }
     }
 
@@ -621,7 +653,7 @@ impl ParseError {
                     },
                 ]
             }
-            ConflictingFunctionDeclarations {
+            ParseError::ConflictingFunctionDeclarations {
                 name,
                 first_at,
                 second_at,
@@ -652,6 +684,42 @@ impl ParseError {
                 }];
                 lbls
             }
+            ParseError::FunctionUsedWithWrongArity {
+                name,
+                declared_arity,
+                used_arity,
+                declared_at,
+                used_at,
+            } => {
+                let mut lbls = vec![ParseErrorLabel {
+                    at: *used_at,
+                    message: format!("function `{name}` was used with arity {used_arity}, but it has arity {declared_arity}"),
+                    is_primary: true,
+                }];
+                if let Some(declared_at) = declared_at {
+                    lbls.push(ParseErrorLabel {
+                        at: *declared_at,
+                        message: format!("declared with arity {declared_arity} here"),
+                        is_primary: false,
+                    });
+                }
+                lbls
+            }
+            ParseError::ReservedBuiltinInEquation { f, at } => {
+                vec![ParseErrorLabel {
+                    at: *at,
+                    message: format!("reserved builtin function `{f}` was used in an equation")
+                        .to_string(),
+                    is_primary: true,
+                }]
+            }
+            ParseError::UndeclaredFunction { name, at } => {
+                vec![ParseErrorLabel {
+                    at: *at,
+                    message: format!("`{name}` is not a declared function symbol"),
+                    is_primary: true,
+                }]
+            }
             ParseError::Custom { message, at } | ParseError::Abort { message, at } => {
                 vec![ParseErrorLabel {
                     at: *at,
@@ -677,6 +745,9 @@ impl ParseError {
                     found.as_deref(),
                     expected,
                 )]
+            }
+            ParseError::UndeclaredFunction { .. } => {
+                vec!["functions must be declared before use".to_string()]
             }
             ParseError::ExpectedTheoryItem { found, .. } => {
                 // Using the function on self instead of the field computes
@@ -819,6 +890,12 @@ impl ParseError {
             }
             ParseError::MalformedHexColor { .. } => {
                 vec!["Hex color literals must be in the format `#RRGGBB`".into()]
+            }
+            ParseError::FunctionUsedWithWrongArity { .. } => {
+                vec!["Function must be used with the declared arity".into()]
+            }
+            ParseError::ReservedBuiltinInEquation { .. } => {
+                vec!["Reserved builtin functions cannot be used in equations".into()]
             }
         }
     }
@@ -1504,7 +1581,7 @@ pub struct Parser<'a> {
     /// consumes — `ACfctSym`'s `Ord` compares the name first, so set order is
     /// name order.  The order is load-bearing: the LAST symbol in the list binds
     /// tightest.
-    ac_fun_syms: Vec<String>,
+    ac_fun_syms: Vec<(String, FunOptions)>,
     /// The free function symbols known at this point of the parse, the
     /// parse-time slice of HS's `stFunSyms . sig <$> getState` that
     /// `function`'s conflict check reads (Signature.hs:212).
@@ -1815,7 +1892,7 @@ impl<'a> Parser<'a> {
         if dot {
             labels.push("\".\"".to_string());
         }
-        for name in self.ac_fun_syms.iter().rev() {
+        for (name, _) in self.ac_fun_syms.iter().rev() {
             labels.push(format!("\"{name}\""));
         }
         if !eqn {
@@ -2710,6 +2787,17 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn insert_ac_fun_sym(&mut self, name: &str, opts: FunOptions) {
+        let key = (name.as_bytes(), opts.ord_key());
+        match self
+            .ac_fun_syms
+            .binary_search_by(|(n, o)| (n.as_bytes(), o.ord_key()).cmp(&key))
+        {
+            Ok(_) => {}
+            Err(idx) => self.ac_fun_syms.insert(idx, (name.to_string(), opts)),
+        }
+    }
+
     /// Identifier that may contain hyphens (e.g. `asymmetric-encryption`,
     /// `diffie-hellman`, `dest-pairing`). Hyphens are concatenated into the
     /// returned name with no whitespace allowed across the boundary.
@@ -3042,6 +3130,7 @@ impl<'a> Parser<'a> {
         self.fun_syms
             .iter()
             .chain(self.macro_syms.iter())
+            .chain(self.ac_fun_syms.iter())
             .find(|(n, _)| n == name)
             .map(|(_, o)| *o)
     }
@@ -3291,10 +3380,7 @@ impl<'a> Parser<'a> {
             // A binary `[AC]` symbol also becomes an infix operator for the terms
             // that follow, mirroring HS's `modifyStateSig $ addFunSym (ACfctUser
             // ...)`, which likewise runs only in the `IsAC` branch.
-            if !self.ac_fun_syms.contains(&name) {
-                self.ac_fun_syms.push(name.clone());
-                self.ac_fun_syms.sort();
-            }
+            self.insert_ac_fun_sym(&name, requested);
         } else {
             // HS's `NotAC` branch instead files the symbol under `stFunSyms`
             // (`addFunSym (NoEqUser ...)`, Signature.hs:224), a set insert.
@@ -3572,7 +3658,7 @@ impl<'a> Parser<'a> {
     /// first).
     fn macro_name_conflicts(&self, name: &str) -> bool {
         self.fun_syms.iter().any(|(n, _)| n == name)
-            || self.ac_fun_syms.iter().any(|n| n == name)
+            || self.ac_fun_syms.iter().any(|(n, _)| n == name)
             || self.macro_syms.iter().any(|(n, _)| n == name)
             || self.enabled_theory_noeq_syms().any(|s| s.name == name)
     }
@@ -5575,7 +5661,7 @@ impl<'a> Parser<'a> {
     /// Term/Term/FunctionSymbols.hs:146-147).  The AST node therefore has to
     /// carry which spelling was written for the readers to resolve it.
     fn ac_chain(&mut self, level: usize, eqn: bool) -> Result<Term, ParseError> {
-        let Some(op) = self.ac_fun_syms.get(level).cloned() else {
+        let Some((op, _)) = self.ac_fun_syms.get(level).cloned() else {
             return self.atom_term(eqn);
         };
         let mut lhs = self.ac_chain(level + 1, eqn)?;
@@ -5689,7 +5775,7 @@ impl<'a> Parser<'a> {
         if best.is_some() {
             return Some(ArityRes::NoEq { arity });
         }
-        if self.ac_fun_syms.iter().any(|n| n == op) {
+        if self.ac_fun_syms.iter().any(|(n, _)| n == op) {
             return Some(ArityRes::Ac);
         }
         if let Some((_, o)) = self.macro_syms.iter().find(|(n, _)| n == op) {
@@ -5955,6 +6041,7 @@ impl<'a> Parser<'a> {
                 // at the post-whitespace position, relabelled `term` by the
                 // enclosing `<?>`.
                 if ts.len() != 2 {
+                    // TODO: Better errors here.
                     return Err(self.err_fail_labelled(
                         "the diff operator requires exactly 2 arguments",
                         "term",
@@ -5983,6 +6070,8 @@ impl<'a> Parser<'a> {
         // nullary function.
         let save_id = self.save();
         if let Some(id) = self.lx.identifier() {
+            let id_end = self.save();
+            let id_loc = Location::from_positions(save_id, id_end);
             // HS `naryOpApp`/`binaryAlgApp` reject a reserved builtin name in
             // an `equations:` context with a GHC `error` (Term.hs:90-92,
             // 111-113) right after the identifier — BEFORE looking at what
@@ -5991,10 +6080,11 @@ impl<'a> Parser<'a> {
             // call site (Term.hs:92:9) can surface, since `application` tries
             // it first for every identifier.
             if eqn && Self::RESERVED_BUILTINS.contains(&id.as_str()) {
-                return Err(self.err_ghc(
-                    format!("`\"{id}\"` is a reserved function name for builtins."),
-                    Self::term_reserved_name_call_site(),
-                ));
+                let location = Location::from_positions(save_id, id_end);
+                return Err(ParseError::ReservedBuiltinInEquation {
+                    f: id,
+                    at: location,
+                });
             }
             self.last_ident_end = Some(self.ident_end_from(save_id, &id));
             self.skip_ws();
@@ -6035,15 +6125,18 @@ impl<'a> Parser<'a> {
                     // the user-visible frame comes from.  Only the GHC
                     // `error`s escape.
                     if let Some(res) = self.lookup_arity(&id) {
-                        let save_app = self.save();
-                        // TODO: Surface the error here instead of restoring in the `Err(_)` case.
-                        // TODO: Since we have already parsed a `(`, we know that parsing will fail.
-                        // return self.prefix_app_args(&id, res, eqn);
-                        match self.prefix_app_args(&id, res, eqn) {
-                            Ok(t) => return Ok(t),
-                            Err(e) if matches!(e, ParseError::Abort { .. }) => return Err(e),
-                            Err(_) => self.restore(save_app),
-                        }
+                        let f_decl = self.lookup_fun_options(&id).expect(
+                            format!("Function {} has arity but no function options", &id).as_str(),
+                        );
+                        return self.prefix_app_args(&id, id_loc, res, f_decl, eqn);
+                    } else {
+                        // Parsed an identifier and an opening `(`, but the function is not known.
+                        // Instead of backtracking, we return an error here to indicate that the function is unknown.
+                        let (_, found_at) = self.found_token_until(|c| c == ')');
+                        let mut at = Location::from_locations(id_loc, found_at);
+                        at.end = at.end.saturating_add(1);
+                        let e = ParseError::UndeclaredFunction { name: id, at };
+                        return Err(e);
                     }
                 } else {
                     // Structural mode ([`parse_term_str`]): accept any
@@ -6079,15 +6172,11 @@ impl<'a> Parser<'a> {
                         // HS `binaryAlgApp` (Term.hs:109-121): same lookup, arity
                         // fixed at 2, same wholesale backtrack on failure.
                         if let Some(res) = self.lookup_arity(&id) {
-                            let save_app = self.save();
-                            // TODO: Surface the error here instead of restoring in the `Err(_)` case.
-                            // TODO: Since we have already parsed a `{`, we know that parsing will fail.
-                            // return self.binary_alg_app(&id, res, eqn);
-                            match self.binary_alg_app(&id, res, eqn) {
-                                Ok(t) => return Ok(t),
-                                Err(e) if matches!(e, ParseError::Abort { .. }) => return Err(e),
-                                Err(_) => self.restore(save_app),
-                            }
+                            let f_decl = self.lookup_fun_options(&id).expect(
+                                format!("Function {} has arity but no function options", &id)
+                                    .as_str(),
+                            );
+                            return self.binary_alg_app(&id, id_loc, res, f_decl, eqn);
                         }
                     } else {
                         self.lx.bump();
@@ -6137,16 +6226,6 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// The `error, called at <…>` location of `naryOpApp`'s reserved-name
-    /// rejection (Theory/Text/Parser/Term.hs:92:9) as the pinned oracle build
-    /// prints it — same package id as `macro`'s errors.
-    fn term_reserved_name_call_site() -> String {
-        format!(
-            "src/Theory/Text/Parser/Term.hs:92:9 in {}:Theory.Text.Parser.Term",
-            Self::MACRO_ERROR_PACKAGE
-        )
-    }
-
     /// HS `naryOpApp`'s argument parse after `lookupArity` succeeded
     /// (Term.hs:93-105), starting at the opening `(`:
     ///
@@ -6170,58 +6249,55 @@ impl<'a> Parser<'a> {
     ///
     /// Every `Err` return is discarded by the caller's backtrack, mirroring
     /// the enclosing `try` — the messages never surface.
-    fn prefix_app_args(&mut self, id: &str, res: ArityRes, eqn: bool) -> Result<Term, ParseError> {
+    fn prefix_app_args(
+        &mut self,
+        id: &str,
+        id_loc: Location,
+        res: ArityRes,
+        decl: FunOptions,
+        eqn: bool,
+    ) -> Result<Term, ParseError> {
         // the '(' the caller peeked
-        let opening = ("(", self.save());
+        let (opening, opening_at) = ("(", self.save());
         self.lx.bump();
         self.skip_ws();
         match res {
-            ArityRes::NoEq { arity: 1 } => {
-                let arg = self.tuple_contents(eqn)?;
-                self.require_punct(")").map_err(|_| {
-                    let (found, found_at) = self.found_token();
-                    self.err_unterminated_delimiter(
-                        "(",
-                        opening.1,
-                        found_at,
-                        found,
-                        vec![")".into()],
-                    )
-                })?;
-                Ok(Term::App(id.to_string(), vec![arg]))
-            }
             ArityRes::NoEq { arity } => {
-                let ts = self.sep_end_by(")", opening, |p| p.msetterm(eqn))?;
+                let ts = self.sep_end_by(")", (opening, opening_at), |p| p.msetterm(eqn))?;
+                let end_loc = self.save().into();
+                let used_at = Location::from_locations(id_loc, end_loc);
                 if ts.len() != arity {
-                    return Err(self.err(format!(
-                        "operator `{id}' has arity {arity}, but here it is used with arity {}",
-                        ts.len()
-                    )));
+                    return Err(ParseError::FunctionUsedWithWrongArity {
+                        name: id.into(),
+                        declared_arity: arity,
+                        used_arity: ts.len(),
+                        declared_at: decl.location,
+                        used_at: used_at,
+                    });
                 }
                 Ok(Term::App(id.to_string(), ts))
             }
             ArityRes::Ac => {
-                let ts = self.sep_end_by(")", opening, |p| p.msetterm(eqn))?;
+                let ts = self.sep_end_by(")", (opening, opening_at), |p| p.msetterm(eqn))?;
                 let sym = intern_ac_name(id);
-                let mut it = ts.into_iter();
-                match (it.next(), it.next()) {
-                    (None, _) => Ok(Term::App(id.to_string(), Vec::new())),
-                    (Some(a), None) => {
-                        // The collapsed term IS the argument, but the atom's
-                        // last lexeme is this application's `)` — no variable
-                        // hangover survives even when the argument was one.
-                        self.var_dot_hangover = false;
-                        self.var_hangover_ident_end = None;
-                        Ok(a)
-                    }
-                    (Some(a), Some(b)) => {
-                        let mut t = Term::BinOp(BinOp::AcFct(sym), Box::new(a), Box::new(b));
-                        for x in it {
-                            t = Term::BinOp(BinOp::AcFct(sym), Box::new(t), Box::new(x));
-                        }
-                        Ok(t)
-                    }
+                if ts.len() < 2 {
+                    let e = ParseError::FunctionUsedWithWrongArity {
+                        name: id.into(),
+                        declared_arity: 2,
+                        used_arity: ts.len(),
+                        declared_at: decl.location,
+                        used_at: Location::from_locations(id_loc, self.save().into()),
+                    };
+                    return Err(e);
                 }
+                let mut it = ts.into_iter();
+                let a = it.next().unwrap();
+                let b = it.next().unwrap();
+                let mut t = Term::BinOp(BinOp::AcFct(sym), Box::new(a), Box::new(b));
+                for x in it {
+                    t = Term::BinOp(BinOp::AcFct(sym), Box::new(t), Box::new(x));
+                }
+                Ok(t)
             }
         }
     }
@@ -6232,7 +6308,14 @@ impl<'a> Parser<'a> {
     /// otherwise — discarded by the caller's backtrack), and builds
     /// `fAppNoEq`/`fAppAC` by the head's AC state.  There is no `em` special
     /// case here (`naryOpApp`'s Term.hs:103 is prefix-only).
-    fn binary_alg_app(&mut self, id: &str, res: ArityRes, eqn: bool) -> Result<Term, ParseError> {
+    fn binary_alg_app(
+        &mut self,
+        id: &str,
+        id_loc: Location,
+        res: ArityRes,
+        decl: FunOptions,
+        eqn: bool,
+    ) -> Result<Term, ParseError> {
         // the '{' the caller peeked
         let opening_at = self.save();
         self.lx.bump();
@@ -6243,6 +6326,7 @@ impl<'a> Parser<'a> {
             self.err_unterminated_delimiter("{", opening_at, found_at, found, vec!["}".into()])
         })?;
         let arg2 = self.atom_term(eqn)?;
+        let arg2_loc = self.save().into();
         match res {
             ArityRes::Ac => Ok(Term::BinOp(
                 BinOp::AcFct(intern_ac_name(id)),
@@ -6253,8 +6337,14 @@ impl<'a> Parser<'a> {
                 Ok(Term::AlgApp(id.to_string(), Box::new(arg1), Box::new(arg2)))
             }
             ArityRes::NoEq { .. } => {
-                Err(self
-                    .err("only operators of arity 2 can be written using the `op{t1}t2' notation"))
+                let used_at = Location::from_locations(id_loc, arg2_loc);
+                Err(ParseError::FunctionUsedWithWrongArity {
+                    name: id.into(),
+                    declared_arity: decl.arity,
+                    used_arity: 2,
+                    declared_at: decl.location,
+                    used_at,
+                })
             }
         }
     }

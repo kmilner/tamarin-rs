@@ -184,6 +184,9 @@ fn em_wrong_arity_under_bp_shows_dh_operator_labels() {
     );
 }
 
+// TODO (NM): This test now errors because `k` is undeclared
+// TODO (NM): Also, I have changed how AC function applications are parsed.
+// TODO (NM): Arities of < 2 are now errors.
 /// A declared `[AC]` symbol adds its own infix-operator label between the
 /// variable hangovers and the fact-argument labels (`acterm`'s per-symbol
 /// `chainl1` level, Term.hs:165-172).
@@ -200,6 +203,8 @@ fn user_ac_symbol_label_joins_the_frame() {
     );
 }
 
+// TODO (NM): Now that `k(..)` is reported as undeclared instead of parsing `k` as a variable,
+// TODO (NK): this test is useless.
 /// `builtins: xor` opens the `XOR`/`⊕` chain level; both spellings' labels
 /// appear (Term.hs:187-192, Token.hs:554-556).
 #[test]
@@ -221,6 +226,8 @@ fn xor_operator_labels_join_the_frame() {
     );
 }
 
+// TODO (NM): Now that `k(..)` is reported as undeclared instead of parsing `k` as a variable,
+// TODO (NK): this test is useless.
 /// `builtins: multiset` opens the `++`/`+` union level (Term.hs:195-200,
 /// Token.hs:550-552).
 #[test]
@@ -243,6 +250,8 @@ fn multiset_operator_labels_join_the_frame() {
     );
 }
 
+// TODO (NM): Now that `k(..)` is reported as undeclared instead of parsing `k` as a variable,
+// TODO (NK): this test is useless.
 /// `builtins: natural-numbers` opens the `%+` level (Term.hs:203-208).
 #[test]
 fn nat_operator_label_joins_the_frame() {
@@ -256,6 +265,7 @@ fn nat_operator_label_joins_the_frame() {
     );
 }
 
+// TODO (NM): This now reports `g` as having the wrong arity.
 /// Inside a tuple, the failed application carries the tuple's own close
 /// label (`chainr1` comma + `angled`'s `>`).
 #[test]
