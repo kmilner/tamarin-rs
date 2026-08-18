@@ -820,6 +820,7 @@ fn render_open_restriction(
     out.push_str(&keyword_("restriction").render());
     out.push(' ');
     out.push_str(&r.name);
+    out.push(' ');
     render_restriction_attributes(&r.attributes, &mut out);
     out.push_str(":\n");
     out.push_str(&pf::formula_doublequoted_nested(&original, 2));
@@ -3154,6 +3155,7 @@ fn render_parsed_restriction(
         out.push_str(&r.name);
     }
 
+    out.push(' ');
     render_restriction_attributes(&r.attributes, &mut out);
 
     out.push_str(":\n");
