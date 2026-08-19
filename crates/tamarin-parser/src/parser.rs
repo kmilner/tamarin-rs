@@ -3844,12 +3844,33 @@ impl<'a> Parser<'a> {
         }
         self.require_punct(":")?;
         let phi = self.double_quoted_formula()?;
+        let end = self.lx.pos();
+        let location = Location::from_positions(start, end);
+        // HS `liftedAddRestriction` -> `addRestriction` rejects a restriction
+        // whose NAME the theory already carries, minted `Restr_<rule>_<i>`
+        // entries included (Theory/Text/Parser.hs:129-134,
+        // TheoryObject.hs:453-456).  The check runs after the formula parse,
+        // so a formula error wins over the conflict.  Side-attributed
+        // restrictions dedup per side (`addRestrictionDiff`,
+        // Theory/Text/Parser.hs:546-558), which this port does not implement — the
+        // same exemption as [`Parser::guard_duplicate_rule`].  HS's non-diff
+        // grammar has no attribute list at all (Theory/Text/Parser/Restriction.hs:77-81),
+        // so an attributed restriction only arises here when a diff theory is
+        // parsed without diff mode, where this port stays permissive.
+        if !self.is_diff && attributes.is_empty() {
+            if let Some((_, loc)) = self.seen_restriction_names.iter().find(|(n, _)| n == &name) {
+                return Err(ParseError::ConflictingDeclarations {
+                    name,
+                    context: ParseContext::Restriction,
+                    first_at: Some(*loc),
+                    second_at: location,
+                });
+            }
+        }
         // Feed the restriction-name set the `_restrict` guard consults
         // ([`Parser::guard_duplicate_rule`] step 1): HS `addRestriction`
         // checks new `Restr_<rule>_<i>` names against ALL restrictions,
         // user-declared ones included (TheoryObject.hs:453-456).
-        let end = self.lx.pos();
-        let location = Location::from_positions(start, end);
         self.seen_restriction_names.push((name.clone(), location));
         Ok(Restriction {
             name,
@@ -5528,20 +5549,33 @@ impl<'a> Parser<'a> {
             let f = self.iff()?;
             return Ok(FormulaKind::Exists(vs, Box::new(f)));
         }
-        // Parenthesised formula — backtrack to term-relational on failure,
-        // since e.g. `(a+z) = b` should parse as a relational equality atom
-        // whose LHS happens to be a parenthesised term.
+        // A leading `(` opens either a grouped formula or the parenthesised
+        // TERM of a term relation — `(x ++ z) = y`.  HS `fatom` tries
+        // `blatom` before `parens (iff …)` (Theory/Text/Parser/Formula.hs:63-70), and
+        // `blatom`'s term-relation arms are `try`-guarded, so the relation
+        // wins whenever a term parse reaches a relational operator.  Probe
+        // for that shape; on a match fall through to the term-relational
+        // parse below (the `last`/fact attempts cannot consume a `(`).
         if self.lx.peek() == Some('(') {
             let save_p = self.save();
-            self.lx.bump();
-            self.skip_ws();
-            // No other atom can consume a leading `(`, so this is an unterminated parenthesised formula.
-            let f = self.iff()?;
-            self.require_punct(")").map_err(|_| {
-                let (found, found_at) = self.found_token();
-                self.err_unterminated_delimiter("(", save_p, found_at, found, vec![")".to_string()])
-            })?;
-            return Ok(f.kind);
+            let term_relation = self.term(false).is_ok() && self.peek_atom_relop();
+            self.restore(save_p);
+            if !term_relation {
+                self.lx.bump();
+                self.skip_ws();
+                let f = self.iff()?;
+                self.require_punct(")").map_err(|_| {
+                    let (found, found_at) = self.found_token();
+                    self.err_unterminated_delimiter(
+                        "(",
+                        save_p,
+                        found_at,
+                        found,
+                        vec![")".to_string()],
+                    )
+                })?;
+                return Ok(f.kind);
+            }
         }
         // Atom: try last(t), action f@t, equality, less, subterm, smaller, predicate
         if self.try_kw("last") {

@@ -11,7 +11,11 @@
 //!     guard and is appended a second time;
 //!   * each `_restrict` formula's minted `Restr_<rule>_<i>` restriction goes
 //!     through `addRestriction` (TheoryObject.hs:453-456) FIRST, which rejects
-//!     on an existing NAME alone.
+//!     on an existing NAME alone;
+//!   * an explicit `restriction` (or legacy `axiom`) item goes through the
+//!     same guard via `liftedAddRestriction` (Theory/Text/Parser.hs:129-134),
+//!     so it also rejects on any existing restriction name, minted ones
+//!     included.
 //!
 //! Both rejections are `throwM` → `fail (show e)` (Token.hs:210-211) with
 //! `show (DuplicateItem …)` (Parser/Exceptions.hs:38-40): a recoverable
@@ -236,4 +240,72 @@ fn duplicate_across_include_is_rejected() {
         ("R1".to_string(), (1, 1), (5, 1))
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two explicit restrictions under one name die at the second one's add —
+/// HS `addRestriction` rejects on the NAME alone (TheoryObject.hs:453-456).
+#[test]
+fn duplicate_explicit_restrictions_conflict() {
+    let src = "theory T begin\n\
+               restriction R: \"All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j\"\n\
+               restriction R: \"All x #i #j. B(x) @ #i & B(x) @ #j ==> #i = #j\"\n\
+               rule Rl: [ ] --[ A('a') ]-> [ ]\n\
+               end\n";
+    assert_eq!(dup_restriction_err(src), ("R".to_string(), (2, 1), (3, 1)));
+}
+
+/// The legacy `axiom` spelling adds through the same guard
+/// (`liftedAddRestriction`, Theory/Text/Parser.hs:270), so it shares the
+/// restriction name space.
+#[test]
+fn axiom_and_restriction_share_one_name_space() {
+    let src = "theory T begin\n\
+               axiom R: \"All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j\"\n\
+               restriction R: \"All x #i #j. B(x) @ #i & B(x) @ #j ==> #i = #j\"\n\
+               rule Rl: [ ] --[ A('a') ]-> [ ]\n\
+               end\n";
+    assert_eq!(dup_restriction_err(src), ("R".to_string(), (2, 1), (3, 1)));
+}
+
+/// The reverse of [`user_restriction_blocks_restrict_expansion`]: a minted
+/// `Restr_<rule>_<i>` name blocks a LATER explicit restriction, since the
+/// guard checks against ALL restrictions added so far.  `first_at` is the
+/// minted restriction's origin, the `_restrict(…)` formula.
+#[test]
+fn minted_restriction_blocks_a_later_explicit_one() {
+    let src = "theory T begin\n\
+               rule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j ) ]-> [ Out('a') ]\n\
+               restriction Restr_R1_1: \"All x #i #j. B(x) @ #i & B(x) @ #j ==> #i = #j\"\n\
+               end\n";
+    assert_eq!(
+        dup_restriction_err(src),
+        ("Restr_R1_1".to_string(), (2, 29), (3, 1))
+    );
+}
+
+/// Lemmas and restrictions have separate name spaces (`lookupRestriction`
+/// searches restriction items only) — a lemma named like a minted
+/// restriction loads.  The oracle accepts this theory at exit 0.
+#[test]
+fn lemma_named_like_a_minted_restriction_is_accepted() {
+    let src = "theory T begin\n\
+               rule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j ) ]-> [ Out('a') ]\n\
+               lemma Restr_R1_1: \"All x #i. A(x) @ #i ==> Ex #j. A(x) @ #j\"\n\
+               end\n";
+    parse_theory(src, &[]).expect("lemma and restriction name spaces are separate");
+}
+
+/// Side-attributed restrictions dedup PER SIDE in HS (`addRestrictionDiff`,
+/// Theory/Text/Parser.hs:546-558), which this port does not implement, and
+/// HS's non-diff grammar has no attribute list at all — so a `[left]`/
+/// `[right]` pair under one name stays accepted here (the diff corpus
+/// carries this shape in every jcs19-xor diff model).
+#[test]
+fn side_attributed_restrictions_are_not_deduplicated() {
+    let src = "theory T begin\n\
+               rule R: [ In(x) ] --[ Eq(x, x) ]-> [ ]\n\
+               restriction equality [right]: \"All x y #i. Eq(x, y) @ #i ==> x = y\"\n\
+               restriction equality [left]: \"All x y #i. Eq(x, y) @ #i ==> x = y\"\n\
+               end\n";
+    parse_theory(src, &[]).expect("side-attributed restrictions do not name-conflict");
 }
