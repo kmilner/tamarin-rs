@@ -2704,6 +2704,8 @@ impl<'ctx> Reduction<'ctx> {
                         idx: base + i as u64,
                         sort: b.sort,
                         typ: None,
+                        // Freshly allocated solver var — no source location.
+                        location: tamarin_parser::DUMMY_LOCATION,
                     })
                     .collect();
                 if tamarin_utils::env_gate!("TAM_DBG_EX_DECOMP") {
@@ -2879,6 +2881,8 @@ impl<'ctx> Reduction<'ctx> {
                                 idx: last_node.idx,
                                 sort: tamarin_parser::ast::SortHint::Node,
                                 typ: None,
+                                // Synthesized `last` node var — no source location.
+                                location: tamarin_parser::DUMMY_LOCATION,
                             });
                         let d = crate::guarded::Guarded::Disj(
                             vec![

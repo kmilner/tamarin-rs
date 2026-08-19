@@ -685,6 +685,7 @@ fn insert_lemma_flattens_top_level_conj() {
             idx: 0,
             sort: SortHint::Node,
             typ: None,
+            location: tamarin_parser::DUMMY_LOCATION,
         })
     };
     let l1 =

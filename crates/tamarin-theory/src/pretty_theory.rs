@@ -2775,6 +2775,7 @@ pub fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                 idx: v.idx,
                 sort,
                 typ: None,
+                location: DUMMY_LOCATION,
             })
         }
         Term::Lit(Lit::Con(n)) => {
@@ -4012,6 +4013,7 @@ mod oracle_goal_tests {
                 idx: 0,
                 sort: SortHint::Node,
                 typ: None,
+                location: DUMMY_LOCATION,
             }))
         };
         // `#a < #b` ∥ `#b < #a`

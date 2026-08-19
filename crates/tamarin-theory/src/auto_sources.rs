@@ -42,6 +42,7 @@ fn var(name: &str, sort: p::SortHint) -> p::VarSpec {
         idx: 0,
         sort,
         typ: None,
+        location: DUMMY_LOCATION,
     }
 }
 fn var_term(name: &str, sort: p::SortHint) -> p::Term {

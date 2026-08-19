@@ -324,6 +324,7 @@ fn smaller_expansion(lhs: &p::Term, rhs: &p::Term, location: Location) -> p::For
         idx: 0,
         sort: p::SortHint::Untagged,
         typ: None,
+        location: tamarin_parser::DUMMY_LOCATION,
     };
     let z_term = p::Term::Var(z.clone());
     // HS builds the body union via `fAppUnion (fvt x, fvt z)`

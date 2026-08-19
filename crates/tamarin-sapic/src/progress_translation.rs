@@ -190,6 +190,7 @@ fn res_progress_init() -> p::Restriction {
         idx: 0,
         sort: p::SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     };
     let init_at = p::Formula::atom(
         p::Atom::Action(
@@ -267,12 +268,14 @@ fn make_restriction(pos: &[i64], tos: &PosSet) -> p::Restriction {
         idx: 1,
         sort: p::SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     };
     let t2var = p::VarSpec {
         name: "t".into(),
         idx: 2,
         sort: p::SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     };
 
     // antecedent = ProgressFrom_<pos>( prog_<pos> ) @ #t.1

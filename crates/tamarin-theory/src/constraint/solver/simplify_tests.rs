@@ -53,6 +53,7 @@ fn simplify_decomposes_top_level_conj() {
             idx,
             sort: SortHint::Node,
             typ: None,
+            location: DUMMY_LOCATION,
         })
     };
     let a1 = crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Action(
@@ -122,6 +123,7 @@ fn simplify_disj_decomposes_into_goal() {
             idx: 0,
             sort: SortHint::Node,
             typ: None,
+            location: DUMMY_LOCATION,
         })
     };
     let a1 =
@@ -174,6 +176,7 @@ fn partial_atom_valuation_last_returns_none_when_successor_not_in_trace() {
             idx,
             sort: SortHint::Node,
             typ: None,
+            location: DUMMY_LOCATION,
         })
     };
     let mkvar_l = |n: &str, idx: u64| {
@@ -257,6 +260,7 @@ fn mk_var_p(
         idx,
         sort,
         typ: None,
+        location: DUMMY_LOCATION,
     })
 }
 /// The `(name, idx)` projection `try_match_all_guards` hoists and passes
@@ -286,12 +290,14 @@ fn match_atom_via_maude_simple_var_to_var() {
             idx: 0,
             sort: tamarin_parser::ast::SortHint::Msg,
             typ: None,
+            location: DUMMY_LOCATION,
         },
         tamarin_parser::ast::VarSpec {
             name: "i".into(),
             idx: 0,
             sort: tamarin_parser::ast::SortHint::Node,
             typ: None,
+            location: DUMMY_LOCATION,
         },
     ];
     let g_fact = tamarin_parser::ast::Fact {
@@ -347,18 +353,21 @@ fn match_atom_via_maude_pattern_with_pair_against_pair() {
             idx: 0,
             sort: tamarin_parser::ast::SortHint::Msg,
             typ: None,
+            location: DUMMY_LOCATION,
         },
         tamarin_parser::ast::VarSpec {
             name: "b".into(),
             idx: 0,
             sort: tamarin_parser::ast::SortHint::Msg,
             typ: None,
+            location: DUMMY_LOCATION,
         },
         tamarin_parser::ast::VarSpec {
             name: "i".into(),
             idx: 0,
             sort: tamarin_parser::ast::SortHint::Node,
             typ: None,
+            location: DUMMY_LOCATION,
         },
     ];
     let g_fact = tamarin_parser::ast::Fact {
@@ -423,12 +432,14 @@ fn match_atom_via_maude_rejects_wrong_arity() {
             idx: 0,
             sort: tamarin_parser::ast::SortHint::Msg,
             typ: None,
+            location: DUMMY_LOCATION,
         },
         tamarin_parser::ast::VarSpec {
             name: "i".into(),
             idx: 0,
             sort: tamarin_parser::ast::SortHint::Node,
             typ: None,
+            location: DUMMY_LOCATION,
         },
     ];
     let g_fact = tamarin_parser::ast::Fact {

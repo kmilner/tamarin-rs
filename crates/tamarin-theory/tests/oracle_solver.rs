@@ -2166,6 +2166,7 @@ fn atom_decomposition_creates_action_goal_in_simplify() {
             idx: 0,
             sort,
             typ: None,
+            location: DUMMY_LOCATION,
         })
     };
     let action_atom = Atom::Action(
@@ -2352,6 +2353,7 @@ fn simplify_conj_wrapping_disj_produces_goal() {
             idx: 0,
             sort: SortHint::Node,
             typ: None,
+            location: DUMMY_LOCATION,
         })
     };
     let a1 = tamarin_theory::guarded::Guarded::Atom(tamarin_theory::guarded::atom_to_gatom_free(

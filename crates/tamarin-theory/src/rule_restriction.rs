@@ -50,6 +50,7 @@ fn var_now() -> p::VarSpec {
         idx: 0,
         sort: p::SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -303,6 +304,7 @@ impl RewriteState {
             idx,
             sort: p::SortHint::Msg,
             typ: None,
+            location: DUMMY_LOCATION,
         };
         self.subst.insert((v.name.clone(), v.idx), t.clone());
         p::Term::Var(v)

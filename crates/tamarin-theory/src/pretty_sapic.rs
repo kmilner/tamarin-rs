@@ -554,6 +554,7 @@ mod tests {
             name: "k".into(),
             sort: p::SortHint::Msg,
             idx: 1,
+            location: DUMMY_LOCATION,
         });
         let eq_cond = |args: Vec<p::Term>| {
             let f = p::Formula {
@@ -636,6 +637,7 @@ mod tests {
             name: "k".into(),
             sort: p::SortHint::Msg,
             idx: 1,
+            location: DUMMY_LOCATION,
         });
         let add_k_a = p::Term::App("add".into(), vec![k.clone(), p::Term::PubLit("a".into())]);
         let restr = p::Formula {

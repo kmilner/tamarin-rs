@@ -683,6 +683,7 @@ mod tests {
                 idx,
                 sort,
                 typ: None,
+                location: tamarin_parser::DUMMY_LOCATION,
             })
         };
         let pube = |s: &str| p::Term::PubLit(s.to_string());

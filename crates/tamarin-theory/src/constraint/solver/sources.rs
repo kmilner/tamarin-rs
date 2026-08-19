@@ -3525,6 +3525,7 @@ fn freshen_system_keep_with_shift(
                 idx: shift_idx(v.idx),
                 sort: v.sort,
                 typ: v.typ.clone(),
+                location: v.location,
             }
         }
     };
@@ -3935,6 +3936,7 @@ fn freshen_system_some_inst(
                 idx: *new_idx,
                 sort: v.sort,
                 typ: v.typ.clone(),
+                location: v.location,
             }
         } else {
             v.clone()

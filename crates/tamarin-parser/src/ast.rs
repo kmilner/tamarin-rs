@@ -896,12 +896,56 @@ impl BinOp {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct VarSpec {
     pub name: String,
     pub idx: u64,
     pub sort: SortHint,
     pub typ: Option<String>, // SAPIC type annotation
+    pub location: Location,
+}
+
+impl PartialEq for VarSpec {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            name: _,
+            idx: _,
+            sort: _,
+            typ: _,
+            location: _,
+        } = self;
+        let Self {
+            name: _,
+            idx: _,
+            sort: _,
+            typ: _,
+            location: _,
+        } = other;
+        // Everything but location
+        self.name == other.name
+            && self.idx == other.idx
+            && self.sort == other.sort
+            && self.typ == other.typ
+    }
+}
+
+impl Eq for VarSpec {}
+
+impl std::hash::Hash for VarSpec {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let Self {
+            name: _,
+            idx: _,
+            sort: _,
+            typ: _,
+            location: _,
+        } = self;
+        // Everything but location
+        self.name.hash(state);
+        self.idx.hash(state);
+        self.sort.hash(state);
+        self.typ.hash(state);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -925,6 +969,38 @@ pub enum SuffixSort {
     Fresh,
     Node,
     Nat,
+}
+
+impl SuffixSort {
+    fn as_str(&self) -> &'static str {
+        match self {
+            SuffixSort::Msg => "msg",
+            SuffixSort::Pub => "pub",
+            SuffixSort::Fresh => "fresh",
+            SuffixSort::Node => "node",
+            SuffixSort::Nat => "nat",
+        }
+    }
+}
+
+impl std::fmt::Display for VarSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.sort {
+            SortHint::Fresh => write!(f, "~{}", self.name)?,
+            SortHint::Pub => write!(f, "${}", self.name)?,
+            SortHint::Node => write!(f, "#{}", self.name)?,
+            SortHint::Nat => write!(f, "%{}", self.name)?,
+            SortHint::Msg | SortHint::Untagged => write!(f, "{}", self.name)?,
+            SortHint::Suffix(s) => write!(f, "{}:{}", self.name, s.as_str())?,
+        }
+        if self.idx != 0 {
+            write!(f, ".{}", self.idx)?;
+        }
+        if let Some(typ) = &self.typ {
+            write!(f, ":{typ}")?;
+        }
+        Ok(())
+    }
 }
 
 // =============================================================================

@@ -984,6 +984,7 @@ pub fn single_session_restriction() -> tamarin_parser::ast::Restriction {
         idx: 0,
         sort: p::SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     };
     let init_at = |tv: &str| -> p::Formula {
         p::Formula::atom(
@@ -1031,12 +1032,14 @@ pub fn predicate_restrictions() -> Vec<tamarin_parser::ast::Restriction> {
         idx: 0,
         sort: p::SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     };
     let mvar = |name: &str| p::VarSpec {
         name: name.into(),
         idx: 0,
         sort: p::SortHint::Untagged,
         typ: None,
+        location: DUMMY_LOCATION,
     };
     let pred_at = |pname: &str| -> p::Formula {
         p::Formula::atom(
@@ -1371,6 +1374,7 @@ mod tests {
                 name: name.into(),
                 sort: p::SortHint::Untagged,
                 idx: 0,
+                location: DUMMY_LOCATION,
             })
         };
         // `Eq(nil, k)` — the predicate atom the surface `if Eq(nil, k)` parses to.

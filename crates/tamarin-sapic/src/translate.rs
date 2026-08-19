@@ -663,12 +663,14 @@ mod tests {
             idx: 0,
             sort: p::SortHint::Untagged,
             typ: Some("lol".into()),
+            location: DUMMY_LOCATION,
         };
         let xref = p::Term::Var(p::VarSpec {
             name: "x".into(),
             idx: 0,
             sort: p::SortHint::Untagged,
             typ: None,
+            location: DUMMY_LOCATION,
         });
         let ffx = p::Term::App(
             "f".into(),

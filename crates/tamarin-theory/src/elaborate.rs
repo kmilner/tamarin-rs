@@ -1893,6 +1893,7 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                 idx: v.idx,
                 sort,
                 typ: None,
+                location: tamarin_parser::DUMMY_LOCATION,
             })
         }
         tamarin_term::term::Term::Lit(Lit::Con(name)) => {

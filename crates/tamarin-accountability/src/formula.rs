@@ -104,6 +104,7 @@ pub(crate) fn temp_var(name: &str) -> p::VarSpec {
         idx: 0,
         sort: p::SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -114,6 +115,7 @@ pub(crate) fn msg_var(name: &str) -> p::VarSpec {
         idx: 0,
         sort: p::SortHint::Msg,
         typ: None,
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -833,6 +835,7 @@ fn to_p(fm: &Fm, opened: &[p::VarSpec], counter: &mut u64) -> p::Formula {
                 },
                 sort: binding.sort,
                 typ: None,
+                location: DUMMY_LOCATION,
             };
             let mut new_opened = opened.to_vec();
             new_opened.push(v.clone());
@@ -904,6 +907,7 @@ mod tests {
             idx,
             sort: p::SortHint::Node,
             typ: None,
+            location: DUMMY_LOCATION,
         }
     }
 
@@ -923,6 +927,7 @@ mod tests {
             idx,
             sort: p::SortHint::Msg,
             typ: None,
+            location: DUMMY_LOCATION,
         }
     }
 
@@ -943,6 +948,7 @@ mod tests {
                             idx: 0,
                             sort: p::SortHint::Untagged,
                             typ: None,
+                            location: DUMMY_LOCATION,
                         })],
                         annotations: vec![],
                         location: DUMMY_LOCATION,

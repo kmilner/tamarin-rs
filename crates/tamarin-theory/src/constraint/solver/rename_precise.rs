@@ -301,6 +301,8 @@ pub fn rename_precise_system(sys: &mut System) {
                     idx: new.idx,
                     sort,
                     typ: None,
+                    // Renamed solver var — no source location.
+                    location: tamarin_parser::DUMMY_LOCATION,
                 }),
             )
         })

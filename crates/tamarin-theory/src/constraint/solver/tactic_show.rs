@@ -554,6 +554,7 @@ mod tests {
             idx: 0,
             sort: p::SortHint::Fresh,
             typ: None,
+            location: tamarin_parser::DUMMY_LOCATION,
         }
     }
 

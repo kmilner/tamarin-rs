@@ -674,12 +674,14 @@ fn synthesise_probe_theory(
             idx: 0,
             sort: p::SortHint::Node,
             typ: None,
+        location: DUMMY_LOCATION,
         };
         let t1 = p::VarSpec {
             name: "t1".into(),
             idx: 0,
             sort: p::SortHint::Node,
             typ: None,
+        location: DUMMY_LOCATION,
         };
         let gen_at = action_atom(action.clone(), p::Term::Var(t0.clone()));
         let ku_fact = p::Fact {

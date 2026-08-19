@@ -339,6 +339,7 @@ fn var(name: &str, idx: u64) -> p::Term {
         idx,
         sort: p::SortHint::Msg,
         typ: None,
+        location: DUMMY_LOCATION,
     })
 }
 fn pubconst(s: &str) -> p::Term {
@@ -426,6 +427,7 @@ fn varsubst_shadowing_blocks_inner_binder() {
         idx: 0,
         sort: p::SortHint::Msg,
         typ: None,
+        location: DUMMY_LOCATION,
     };
     let mkfact = |t: p::Term| p::Fact {
         persistent: false,
@@ -596,6 +598,7 @@ fn mk_atom_eq(a: &str, b: &str) -> Guarded {
             idx: 0,
             sort: p::SortHint::Msg,
             typ: None,
+            location: DUMMY_LOCATION,
         })
     };
     Guarded::Atom(atom_to_gatom_free(&p::Atom::Eq(mkv(a), mkv(b))))
@@ -663,6 +666,7 @@ fn simplify_universal_with_one_false_guard_is_gtrue() {
             idx: 0,
             sort: p::SortHint::Msg,
             typ: None,
+            location: DUMMY_LOCATION,
         })
     };
     let a = p::Atom::Eq(mkv("a"), mkv("b"));
@@ -692,6 +696,7 @@ fn simplify_universal_drops_true_guards_keeps_unknown() {
             idx: 0,
             sort: p::SortHint::Msg,
             typ: None,
+            location: DUMMY_LOCATION,
         })
     };
     let a = p::Atom::Eq(mkv("a"), mkv("b"));
@@ -739,6 +744,7 @@ fn simplify_universal_with_all_true_guards_returns_body() {
             idx: 0,
             sort: p::SortHint::Msg,
             typ: None,
+            location: DUMMY_LOCATION,
         })
     };
     let a = p::Atom::Eq(mkv("a"), mkv("b"));
@@ -765,6 +771,7 @@ fn simplify_universal_with_quantifier_left_intact() {
             idx: 0,
             sort: p::SortHint::Msg,
             typ: None,
+            location: DUMMY_LOCATION,
         })
     };
     let a = p::Atom::Eq(mkv("a"), mkv("b"));
@@ -1119,6 +1126,7 @@ fn canonicalize_sorts_commutative_em_args() {
         idx: 0,
         sort: p::SortHint::Msg,
         typ: None,
+        location: DUMMY_LOCATION,
     }));
     let p_lit = GTerm::PubLit("P".into());
     let em_unsorted = GTerm::App(Arc::from("em"), Arc::from(vec![x.clone(), p_lit.clone()]));
@@ -1258,6 +1266,7 @@ fn subst_gterm_cow_var_value_equality() {
             idx: 0,
             sort: p::SortHint::Msg,
             typ: None,
+            location: DUMMY_LOCATION,
         }),
     );
 
@@ -1267,6 +1276,7 @@ fn subst_gterm_cow_var_value_equality() {
             idx: 0,
             sort,
             typ: typ.map(str::to_string),
+            location: DUMMY_LOCATION,
         }))
     };
 
@@ -1302,6 +1312,7 @@ fn subst_gterm_cow_var_value_equality() {
             idx: 7,
             sort: p::SortHint::Msg,
             typ: None,
+            location: DUMMY_LOCATION,
         }),
     );
     assert_eq!(
@@ -1318,6 +1329,7 @@ fn subst_gterm_cow_var_value_equality() {
                 idx: 0,
                 sort: p::SortHint::Msg,
                 typ: None,
+                location: DUMMY_LOCATION,
             })),
             &s
         ),

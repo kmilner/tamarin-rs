@@ -348,6 +348,7 @@ fn ndc_node_var(name: &str) -> p::VarSpec {
         idx: 0,
         sort: p::SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     }
 }
 

@@ -8,6 +8,7 @@ fn v(name: &str, sort: p::SortHint) -> p::VarSpec {
         idx: 0,
         sort,
         typ: None,
+        location: DUMMY_LOCATION,
     }
 }
 

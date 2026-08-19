@@ -220,6 +220,7 @@ fn match_action_disambiguates_by_time_var_root() {
                     idx: 0,
                     sort: tamarin_parser::ast::SortHint::Untagged,
                     typ: None,
+                    location: DUMMY_LOCATION,
                 },
             )],
             annotations: Vec::new(),
@@ -247,6 +248,7 @@ fn match_action_disambiguates_by_time_var_root() {
                     idx: 0,
                     sort: tamarin_parser::ast::SortHint::Untagged,
                     typ: None,
+                    location: DUMMY_LOCATION,
                 },
             )],
             annotations: Vec::new(),
@@ -272,6 +274,7 @@ fn match_action_disambiguates_by_time_var_root() {
                     idx: 0,
                     sort: tamarin_parser::ast::SortHint::Untagged,
                     typ: None,
+                    location: DUMMY_LOCATION,
                 },
             )],
             annotations: Vec::new(),
@@ -447,6 +450,7 @@ fn match_disj_goal_by_alt_count() {
         idx: 0,
         sort: tamarin_parser::ast::SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     };
     // Two non-quant alts.
     let two = Goal::Disj(Disj::new(vec![

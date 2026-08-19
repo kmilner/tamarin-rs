@@ -2075,6 +2075,7 @@ pub fn normalize_sort_hints(g: &Guarded) -> Guarded {
                 idx: v.idx,
                 sort: norm_sort(v.sort),
                 typ: v.typ.clone(),
+                location: DUMMY_LOCATION,
             }),
         }
     }
@@ -2373,6 +2374,7 @@ fn collect_witness_vars(g: &Guarded, out: &mut VarSubst) {
                 idx: 0, // canonical idx
                 sort: v.sort,
                 typ: v.typ.clone(),
+                location: DUMMY_LOCATION,
             };
             out.insert((x_name, v.idx), p::Term::Var(canonical));
         }

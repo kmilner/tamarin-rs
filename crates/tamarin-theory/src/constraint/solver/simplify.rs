@@ -1256,6 +1256,8 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
                             idx: rename_baseline,
                             sort: b.sort,
                             typ: None,
+                            // Freshly allocated solver var — no source location.
+                            location: tamarin_parser::DUMMY_LOCATION,
                         });
                         rename_baseline = rename_baseline.saturating_add(1);
                     }
@@ -2351,6 +2353,8 @@ fn match_atom_via_maude(
             idx: i.idx,
             sort: tamarin_parser::ast::SortHint::Node,
             typ: None,
+            // System node var — no source location.
+            location: tamarin_parser::DUMMY_LOCATION,
         });
         base_subst.insert(
             (tamarin_term::intern::intern_str(&g_t.name), g_t.idx),

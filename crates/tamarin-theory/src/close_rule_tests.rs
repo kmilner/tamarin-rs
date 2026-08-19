@@ -176,6 +176,7 @@ fn lemma_guarded_is_invariant_to_hs_ltrue_conjunct() {
         idx: 0,
         sort: p::SortHint::Untagged,
         typ: None,
+        location: DUMMY_LOCATION,
     };
     let gen_at = Formula {
         kind: p::FormulaKind::Atom(p::Atom::Action(

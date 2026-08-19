@@ -201,12 +201,14 @@ fn res_reliable() -> p::Restriction {
         idx,
         sort: p::SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     };
     let mvar = |name: &str| p::VarSpec {
         name: name.into(),
         idx: 0,
         sort: p::SortHint::Untagged,
         typ: None,
+        location: DUMMY_LOCATION,
     };
     let send = p::Formula::atom(
         p::Atom::Action(

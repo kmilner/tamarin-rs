@@ -102,6 +102,7 @@ pub enum ParseContext {
     Macro,
     Rule,
     Lemma,
+    Function,
     // Add more as necessary
 }
 
@@ -113,6 +114,7 @@ impl ParseContext {
             ParseContext::Rule => "rule",
             ParseContext::Lemma => "lemma",
             ParseContext::Restriction => "restriction",
+            ParseContext::Function => "function",
         }
     }
 
@@ -123,6 +125,7 @@ impl ParseContext {
             ParseContext::Rule => "rules",
             ParseContext::Lemma => "lemmas",
             ParseContext::Restriction => "restrictions",
+            ParseContext::Function => "functions",
         }
     }
 
@@ -133,12 +136,18 @@ impl ParseContext {
             ParseContext::Rule => "a rule",
             ParseContext::Lemma => "a lemma",
             ParseContext::Restriction => "a restriction",
+            ParseContext::Function => "a function",
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum ParseError {
+    DuplicateMacroArg {
+        arg: String,
+        first_at: Location,
+        second_at: Location,
+    },
     UndeclaredFunction {
         name: String,
         at: Location,
@@ -164,18 +173,9 @@ pub enum ParseError {
         expected: Vec<String>,
         at: Location,
     },
-    DuplicateRule {
+    ConflictingDeclarations {
         name: String,
-        first_at: Location,
-        second_at: Location,
-    },
-    DuplicateRestriction {
-        name: String,
-        first_at: Location,
-        second_at: Location,
-    },
-    ConflictingFunctionDeclarations {
-        name: String,
+        context: ParseContext,
         first_at: Option<Location>,
         second_at: Location,
     },
@@ -379,16 +379,15 @@ impl ParseError {
             | ParseError::UnexpectedTrailingInput { .. }
             | ParseError::UnknownAttribute { .. }
             | ParseError::Custom { .. }
-            | ParseError::ConflictingFunctionDeclarations { .. }
+            | ParseError::ConflictingDeclarations { .. }
             | ParseError::Abort { .. }
             | ParseError::IoError { .. }
-            | ParseError::DuplicateRule { .. }
             | ParseError::UsedReservedBuiltin { .. }
             | ParseError::FunctionUsedWithWrongArity { .. }
             | ParseError::WrongArityforACFunctionDeclaration { .. }
             | ParseError::MalformedHexColor { .. }
             | ParseError::UndeclaredFunction { .. }
-            | ParseError::DuplicateRestriction { .. } => {}
+            | ParseError::DuplicateMacroArg { .. } => {}
         }
     }
 
@@ -428,9 +427,8 @@ impl ParseError {
             | ParseError::MalformedHexColor { at, .. }
             | ParseError::WrongArityforACFunctionDeclaration { at, .. }
             | ParseError::UnterminatedDelimiter { found_at: at, .. } => at,
-            ParseError::DuplicateRule { second_at, .. } => second_at,
-            ParseError::DuplicateRestriction { second_at, .. } => second_at,
-            ParseError::ConflictingFunctionDeclarations { second_at, .. } => second_at,
+            ParseError::DuplicateMacroArg { second_at, .. } => second_at,
+            ParseError::ConflictingDeclarations { second_at, .. } => second_at,
             ParseError::FunctionUsedWithWrongArity { used_at, .. } => used_at,
         }
     }
@@ -467,12 +465,11 @@ impl ParseError {
             | ParseError::IoError { .. }
             | ParseError::Custom { .. }
             | ParseError::MalformedHexColor { .. }
-            | ParseError::DuplicateRule { .. }
-            | ParseError::DuplicateRestriction { .. }
+            | ParseError::DuplicateMacroArg { .. }
             | ParseError::WrongArityforACFunctionDeclaration { .. }
             | ParseError::UsedReservedBuiltin { .. }
             | ParseError::UndeclaredFunction { .. }
-            | ParseError::ConflictingFunctionDeclarations { .. }
+            | ParseError::ConflictingDeclarations { .. }
             | ParseError::FunctionUsedWithWrongArity { .. }
             | ParseError::Abort { .. } => None,
         }
@@ -509,14 +506,13 @@ impl ParseError {
             ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::IoError { .. }
             | ParseError::Custom { .. }
-            | ParseError::DuplicateRule { .. }
-            | ParseError::DuplicateRestriction { .. }
+            | ParseError::DuplicateMacroArg { .. }
             | ParseError::WrongArityforACFunctionDeclaration { .. }
             | ParseError::MalformedHexColor { .. }
             | ParseError::FunctionUsedWithWrongArity { .. }
             | ParseError::UndeclaredFunction { .. }
             | ParseError::UsedReservedBuiltin { .. }
-            | ParseError::ConflictingFunctionDeclarations { .. }
+            | ParseError::ConflictingDeclarations { .. }
             | ParseError::Abort { .. } => None,
         }
     }
@@ -553,14 +549,13 @@ impl ParseError {
             | ParseError::Custom { .. }
             | ParseError::Abort { .. }
             | ParseError::IoError { .. }
-            | ParseError::DuplicateRule { .. }
+            | ParseError::DuplicateMacroArg { .. }
             | ParseError::FunctionUsedWithWrongArity { .. }
             | ParseError::MalformedHexColor { .. }
             | ParseError::WrongArityforACFunctionDeclaration { .. }
             | ParseError::UndeclaredFunction { .. }
-            | ParseError::ConflictingFunctionDeclarations { .. }
-            | ParseError::UsedReservedBuiltin { .. }
-            | ParseError::DuplicateRestriction { .. } => None,
+            | ParseError::ConflictingDeclarations { .. }
+            | ParseError::UsedReservedBuiltin { .. } => None,
         }
         .map(|expected| match self {
             ParseError::ExpectedTheoryItem { found, .. } => {
@@ -619,10 +614,8 @@ impl ParseError {
             ParseError::Expected { .. } => "Unexpected input",
             ParseError::Custom { .. } => "Parse error",
             ParseError::Abort { .. } => "Invalid input",
-            ParseError::DuplicateRule { .. } => "Duplicate protocol rule",
-            ParseError::DuplicateRestriction { .. } => "Duplicate restriction",
-            ParseError::ConflictingFunctionDeclarations { .. } => {
-                "Conflicting function declarations"
+            ParseError::ConflictingDeclarations { context, .. } => {
+                format!("Conflicting {} declaration", context.as_str()).leak()
             }
             ParseError::WrongArityforACFunctionDeclaration { .. } => {
                 "Non-binary AC function declaration"
@@ -633,6 +626,7 @@ impl ParseError {
                 format!("Reserved builtin function in {}", context.as_str()).leak()
             }
             ParseError::UndeclaredFunction { .. } => "Undeclared function",
+            ParseError::DuplicateMacroArg { .. } => "Duplicate macro argument",
         }
     }
 
@@ -663,49 +657,33 @@ impl ParseError {
                     },
                 ]
             }
-            ParseError::DuplicateRestriction {
-                name,
+            ParseError::DuplicateMacroArg {
+                arg,
                 first_at,
                 second_at,
             } => {
                 vec![
                     ParseErrorLabel {
                         at: *second_at,
-                        message: format!("duplicate restriction name `{name}`"),
+                        message: format!("duplicate macro argument `{arg}`"),
                         is_primary: true,
                     },
                     ParseErrorLabel {
                         at: *first_at,
-                        message: format!("first occurrence of restriction name `{name}`"),
+                        message: format!("first occurrence of argument `{arg}`"),
                         is_primary: false,
                     },
                 ]
             }
-            ParseError::DuplicateRule {
+            ParseError::ConflictingDeclarations {
                 name,
+                context,
                 first_at,
                 second_at,
             } => {
-                vec![
-                    ParseErrorLabel {
-                        at: *second_at,
-                        message: format!("duplicate rule name `{name}`"),
-                        is_primary: true,
-                    },
-                    ParseErrorLabel {
-                        at: *first_at,
-                        message: format!("first occurrence of rule name `{name}`"),
-                        is_primary: false,
-                    },
-                ]
-            }
-            ParseError::ConflictingFunctionDeclarations {
-                name,
-                first_at,
-                second_at,
-            } => {
+                let kind = context.as_str();
                 let msg = format!(
-                    "conflicting function declaration for{}function `{name}`",
+                    "conflicting {kind} declaration for{}`{name}`",
                     if first_at.is_none() { " builtin " } else { " " }
                 );
                 let mut lbls = vec![ParseErrorLabel {
@@ -716,7 +694,7 @@ impl ParseError {
                 if let Some(first_at) = first_at {
                     lbls.push(ParseErrorLabel {
                         at: *first_at,
-                        message: format!("first occurrence of function declaration for `{name}`"),
+                        message: format!("first declaration of `{name}`"),
                         is_primary: false,
                     });
                 }
@@ -928,14 +906,16 @@ impl ParseError {
             ParseError::Custom { message, .. } | ParseError::Abort { message, .. } => {
                 vec![message.clone()]
             }
-            ParseError::DuplicateRule { .. } => {
-                vec!["Protocol rule names must be unique".into()]
-            }
-            ParseError::DuplicateRestriction { .. } => {
-                vec!["Restriction names must be unique".into()]
-            }
-            ParseError::ConflictingFunctionDeclarations { .. } => {
-                vec!["Function declarations must be consistent".into()]
+            ParseError::ConflictingDeclarations { context, .. } => {
+                let tail = match context {
+                    ParseContext::Macro => "unique",
+                    _ => "unique or consistent",
+                };
+                vec![format!(
+                    "{} declarations must be {}",
+                    context.as_str(),
+                    tail
+                )]
             }
             ParseError::WrongArityforACFunctionDeclaration { .. } => {
                 vec!["AC function declarations must be binary".into()]
@@ -951,6 +931,9 @@ impl ParseError {
                     "Reserved builtin functions cannot be used in {}",
                     context.as_str_plural()
                 )]
+            }
+            ParseError::DuplicateMacroArg { .. } => {
+                vec!["Macro arguments must be unique".into()]
             }
         }
     }
@@ -1854,16 +1837,6 @@ impl<'a> Parser<'a> {
     fn err_fail(&mut self, msg: impl Into<String>) -> ParseError {
         self.skip_ws();
         self.err(msg)
-    }
-
-    /// The error for what HS raises as a GHC `error` inside a parser action
-    /// (`macro`'s and `equations`' rejections).  Only the message is
-    /// reported; the `HasCallStack` frame is not reproduced.
-    fn err_ghc(&self, message: String, _call_site: String) -> ParseError {
-        ParseError::Abort {
-            message,
-            at: Location::from(self.lx.pos()),
-        }
     }
 
     fn err_fail_labelled(&mut self, msg: impl Into<String>, _label: &str) -> ParseError {
@@ -3381,8 +3354,9 @@ impl<'a> Parser<'a> {
                 //     .filter(|(_, syms)| syms.iter().any(|s| s.name == name))
                 //     .map(|(b, _)| *b)
                 //     .collect();
-                return Err(ParseError::ConflictingFunctionDeclarations {
+                return Err(ParseError::ConflictingDeclarations {
                     name: name.clone(),
+                    context: ParseContext::Function,
                     first_at: None,
                     second_at: location,
                 });
@@ -3395,8 +3369,9 @@ impl<'a> Parser<'a> {
             // projections' own shape, tested by name, arity and privacy only.
             let pair_proj = (name == "fst" || name == "snd") && requested.arity == 1 && !private;
             if prev != requested && !pair_proj {
-                return Err(ParseError::ConflictingFunctionDeclarations {
+                return Err(ParseError::ConflictingDeclarations {
                     name: name.clone(),
+                    context: ParseContext::Function,
                     first_at: prev.location,
                     second_at: location,
                 });
@@ -3566,7 +3541,6 @@ impl<'a> Parser<'a> {
             // failure in the macro — including a malformed argument list, and
             // the name conflict below that an enabled owning theory would
             // otherwise raise.  Independent of which builtins are enabled.
-            // TODO (NM)
             if Self::RESERVED_BUILTINS.contains(&name.as_str()) {
                 let end = self.lx.pos();
                 let at = Location::from_positions(start, end);
@@ -3585,10 +3559,7 @@ impl<'a> Parser<'a> {
             // `LVar`s, so name, sort and index all count — `m(x, x:pub)` and
             // `m(x.1, x)` pass, `m(x, x)` and `m(x, x:msg)` do not (a
             // prefixless binder is `LSortMsg`, Token.hs:424-433).
-            if Self::has_duplicate_macro_arg(&args) {
-                // TODO
-                return Err(self.macro_duplicate_arg_error(&name));
-            }
+            Self::has_duplicate_macro_arg(&args)?;
             self.require_punct("=")?;
             let body = self.term(false)?;
             let end = self.lx.pos();
@@ -3602,10 +3573,7 @@ impl<'a> Parser<'a> {
             // registered so far (including earlier in this very `macros:`
             // list).  The check runs AFTER the body parse, so a body parse
             // error wins over the conflict.
-            if self.macro_name_conflicts(&name) {
-                // TODO
-                return Err(self.macro_conflict_error(&name));
-            }
+            self.macro_name_conflicts(&name, location)?;
             // HS `macro` registers the name under `macroNames` as
             // `(k, Private, Destructor, NotNDC)` (Macro.hs:46), which
             // `function`'s conflict check then sees (Signature.hs:212).
@@ -3639,35 +3607,6 @@ impl<'a> Parser<'a> {
         "mun", "one", "exp", "mult", "inv", "pmult", "em", "zero", "xor",
     ];
 
-    /// The package id GHC stamps into the `HasCallStack` frame of the `error`s
-    /// `macro` raises, as the pinned oracle build prints it.  Refreshed at a
-    /// submodule bump together with [`Self::MACRO_RESERVED_NAME_SITE`] and
-    /// [`Self::MACRO_DUPLICATE_ARG_SITE`].
-    const MACRO_ERROR_PACKAGE: &'static str = "tamarin-prover-theory-1.13.0-8wixYaxm5uHCGl2uEzaKzP";
-
-    /// `LINE:COLUMN` of the duplicate-argument `error` in
-    /// `src/Theory/Text/Parser/Macro.hs` — see [`Self::MACRO_ERROR_PACKAGE`].
-    const MACRO_DUPLICATE_ARG_SITE: &'static str = "38:15";
-
-    /// The `error, called at <…>` location the `HasCallStack` frame of
-    /// `macro`'s `error` at `Macro.hs:<site>` names.
-    fn macro_error_call_site(site: &str) -> String {
-        format!(
-            "src/Theory/Text/Parser/Macro.hs:{site} in {}:Theory.Text.Parser.Macro",
-            Self::MACRO_ERROR_PACKAGE
-        )
-    }
-
-    /// HS `error $ show op ++ " have two arguments with the same name."`
-    /// (Macro.hs:37-38) — see [`Self::macros`].  `show` on the `ByteString`
-    /// name supplies the double quotes.
-    fn macro_duplicate_arg_error(&self, name: &str) -> ParseError {
-        self.err_ghc(
-            format!("\"{name}\" have two arguments with the same name."),
-            Self::macro_error_call_site(Self::MACRO_DUPLICATE_ARG_SITE),
-        )
-    }
-
     /// The sort HS's `lvar` (Token.hs:409-437) gives a macro argument, i.e. the
     /// `lvarSort` component of the `LVar` `nub` compares: an explicit prefix or
     /// suffix names it, and a prefixless binder is `LSortMsg`
@@ -3686,16 +3625,20 @@ impl<'a> Parser<'a> {
     /// HS `length args /= length (nub args)` (Macro.hs:37): `nub`'s `Eq LVar`
     /// compares name, sort and index together (LTerm.hs:541-542), so two
     /// arguments collide only when all three agree.
-    fn has_duplicate_macro_arg(args: &[VarSpec]) -> bool {
-        let mut seen: Vec<(&str, u64, SuffixSort)> = Vec::with_capacity(args.len());
+    fn has_duplicate_macro_arg(args: &[VarSpec]) -> Result<(), ParseError> {
+        let mut seen: Vec<((&str, u64, SuffixSort), &VarSpec)> = Vec::with_capacity(args.len());
         for a in args {
             let key = (a.name.as_str(), a.idx, Self::macro_arg_sort(a));
-            if seen.contains(&key) {
-                return true;
+            if let Some((_, first)) = seen.iter().find(|(k, _)| k == &key) {
+                return Err(ParseError::DuplicateMacroArg {
+                    arg: a.to_string(),
+                    first_at: first.location,
+                    second_at: a.location,
+                });
             }
-            seen.push(key);
+            seen.push((key, a));
         }
-        false
+        Ok(())
     }
 
     /// The macro-name membership test of Macro.hs:43 — see [`Self::macros`].
@@ -3704,17 +3647,24 @@ impl<'a> Parser<'a> {
     /// this set unless a theory flag contributes them (a macro so named never
     /// reaches this check — the reserved-name `error` at Macro.hs:34-35 fires
     /// first).
-    fn macro_name_conflicts(&self, name: &str) -> bool {
-        self.fun_syms.iter().any(|(n, _)| n == name)
-            || self.ac_fun_syms.iter().any(|(n, _)| n == name)
-            || self.macro_syms.iter().any(|(n, _)| n == name)
-            || self.enabled_theory_noeq_syms().any(|s| s.name == name)
-    }
-
-    /// HS's `fail $ "Conflicting name for macro " ++ op` (Macro.hs:44), at
-    /// the position after the macro body.
-    fn macro_conflict_error(&mut self, name: &str) -> ParseError {
-        self.err_fail(format!("Conflicting name for macro {name}"))
+    fn macro_name_conflicts(&self, name: &str, at: Location) -> Result<(), ParseError> {
+        let first_at = self
+            .fun_syms
+            .iter()
+            .chain(self.ac_fun_syms.iter())
+            .chain(self.macro_syms.iter())
+            .find(|(n, _)| n == name)
+            .and_then(|(_, o)| o.location);
+        if first_at.is_some() || self.enabled_theory_noeq_syms().any(|s| s.name == name) {
+            Err(ParseError::ConflictingDeclarations {
+                name: name.to_string(),
+                context: ParseContext::Macro,
+                first_at,
+                second_at: at,
+            })
+        } else {
+            Ok(())
+        }
     }
 
     fn predicates(&mut self) -> Result<TheoryItem, ParseError> {
@@ -3913,24 +3863,8 @@ impl<'a> Parser<'a> {
         if self.is_diff {
             return Ok(());
         }
-        for i in 1..=r.embedded_restrictions.len() {
-            // HS `fromRuleRestriction (rname ++ "_" ++ show i)` with
-            // `restrPrefix = "Restr_"` (Model/Restriction.hs:129-149).
-            let restr = r.embedded_restrictions.get(i - 1).unwrap();
-            let rstr_name = format!("Restr_{}_{}", r.name, i);
-            if let Some((_, loc)) = self
-                .seen_restriction_names
-                .iter()
-                .find(|(name, _)| name == &rstr_name)
-            {
-                return Err(ParseError::DuplicateRestriction {
-                    name: rstr_name.clone(),
-                    first_at: *loc,
-                    second_at: restr.location,
-                });
-            }
-        }
         if let Some(first) = self.seen_rules.iter().find(|p| p.name == r.name) {
+            // TODO: We could get the location of where the rules differ?
             let differs = first.attributes != r.attributes
                 || first.let_block != r.let_block
                 || first.premises != r.premises
@@ -3946,9 +3880,10 @@ impl<'a> Parser<'a> {
                 // rewrites reserved names / leading `_` — both unreachable
                 // here (`protoRule` rejects reserved rule names and
                 // identifiers cannot start with `_`), so the name is verbatim.
-                let e = ParseError::DuplicateRule {
+                let e = ParseError::ConflictingDeclarations {
                     name: r.name.clone(),
-                    first_at: first.location,
+                    context: ParseContext::Rule,
+                    first_at: Some(first.location),
                     second_at: r.location,
                 };
                 return Err(e);
@@ -3959,6 +3894,7 @@ impl<'a> Parser<'a> {
         for i in 1..=r.embedded_restrictions.len() {
             let restr_name = format!("Restr_{}_{}", r.name, i);
             let restr = r.embedded_restrictions.get(i - 1).unwrap();
+
             self.seen_restriction_names
                 .push((restr_name, restr.location));
         }
@@ -6101,11 +6037,14 @@ impl<'a> Parser<'a> {
                 self.restore(probe);
                 if is_lessmset {
                     let idx = self.try_dot_index();
+                    let id_end = self.save();
+                    let location = Location::from_positions(save_id, id_end);
                     let v = VarSpec {
                         name: id,
                         idx,
                         sort: SortHint::Untagged,
                         typ: None,
+                        location,
                     };
                     let v = self.attach_sort_suffix(v)?;
                     self.note_var_dot_hangover(&v);
@@ -6204,11 +6143,14 @@ impl<'a> Parser<'a> {
             // re-record this name's for `note_var_dot_hangover`.
             self.last_ident_end = Some(self.ident_end_from(save_id, &id));
             let idx = self.try_dot_index();
+            let id_end = self.save();
+            let location = Location::from_positions(save_id, id_end);
             let v = VarSpec {
                 name: id,
                 idx,
                 sort: SortHint::Untagged,
                 typ: None,
+                location,
             };
             let v = self.attach_sort_suffix(v)?;
             self.note_var_dot_hangover(&v);
@@ -6430,11 +6372,14 @@ impl<'a> Parser<'a> {
         };
         self.last_ident_end = Some(self.ident_end_from(pre_ident, &id));
         let idx = self.try_dot_index();
+        let id_end = self.save();
+        let location = Location::from_positions(pre_ident, id_end);
         Ok(Some(VarSpec {
             name: id,
             idx,
             sort,
             typ: None,
+            location,
         }))
     }
 
@@ -6449,7 +6394,11 @@ impl<'a> Parser<'a> {
         })?;
         // Allow `: msg | pub | fresh | node | nat` sort suffix or a SAPIC
         // type annotation after the variable.
-        self.attach_sort_suffix(v)
+        let mut v = self.attach_sort_suffix(v)?;
+        let end = self.save();
+        let location = Location::from_locations(v.location, end.into());
+        v.location = location;
+        Ok(v)
     }
 
     /// Parse a quantifier binder variable (`All`/`Ex` binder list), mirroring

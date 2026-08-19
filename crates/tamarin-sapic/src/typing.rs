@@ -210,6 +210,7 @@ fn rename_cond_formula(
                 idx: nv.idx,
                 sort: v.sort,
                 typ: v.typ.clone(),
+                location: v.location,
             })
         })
     })
@@ -841,6 +842,7 @@ pub fn type_and_rename_process(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tamarin_parser::DUMMY_LOCATION;
     use tamarin_theory::sapic::ProcessParsedAnnotation;
 
     fn slv(name: &str, idx: u64, ty: Option<&str>) -> SapicLVar {
@@ -884,6 +886,7 @@ mod tests {
                 name: "k".into(),
                 sort: p::SortHint::Msg,
                 idx: 0,
+                location: DUMMY_LOCATION,
             })
         };
         let restr = p::Formula::atom(

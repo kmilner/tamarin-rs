@@ -81,6 +81,7 @@ pub(crate) fn lvar_to_varspec(v: &LVar) -> p::VarSpec {
         idx: v.idx,
         sort: lsort_to_sort_hint(v.sort),
         typ: None,
+        location: tamarin_parser::DUMMY_LOCATION,
     }
 }
 
@@ -593,12 +594,14 @@ mod tests {
             idx: 0,
             sort: p::SortHint::Untagged,
             typ: Some("lol".into()),
+            location: DUMMY_LOCATION,
         };
         let xref = p::Term::Var(p::VarSpec {
             name: "x".into(),
             idx: 0,
             sort: p::SortHint::Untagged,
             typ: None,
+            location: DUMMY_LOCATION,
         });
         let ffx = p::Term::App(
             "f".into(),
@@ -681,6 +684,7 @@ mod tests {
             idx: 0,
             sort: p::SortHint::Untagged,
             typ: None,
+            location: DUMMY_LOCATION,
         });
         let cond = p::Process::Comb {
             comb: p::ProcessComb::Cond(p::Condition::Eq(a.clone(), a)),
@@ -717,6 +721,7 @@ mod tests {
                     idx: 0,
                     sort: p::SortHint::Untagged,
                     typ: None,
+                    location: DUMMY_LOCATION,
                 },
             ),
             left: Box::new(event("E")),
@@ -742,6 +747,7 @@ mod tests {
                 idx: 0,
                 sort: p::SortHint::Untagged,
                 typ: None,
+                location: DUMMY_LOCATION,
             })
         };
         // `Eq(c, k)` — `c` is declared 0-arity below, `k` is an ordinary var.
@@ -762,6 +768,7 @@ mod tests {
                     idx: v.idx + 1,
                     sort: v.sort,
                     typ: v.typ.clone(),
+                    location: DUMMY_LOCATION,
                 }))
             })
         };
@@ -785,6 +792,7 @@ mod tests {
                         idx: 1,
                         sort: p::SortHint::Untagged,
                         typ: None,
+                        location: DUMMY_LOCATION,
                     })
                 };
                 p::Formula::atom(
@@ -817,6 +825,7 @@ mod tests {
                             idx: 1,
                             sort: p::SortHint::Untagged,
                             typ: None,
+                            location: DUMMY_LOCATION,
                         })
                     ],
                     annotations: Vec::new(),

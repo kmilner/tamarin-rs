@@ -2000,6 +2000,7 @@ fn bound_to_varspec(n: u32, scope: &[Vec<Bind>]) -> Option<p::VarSpec> {
         idx,
         sort: *sort,
         typ: None,
+        location: tamarin_parser::DUMMY_LOCATION,
     })
 }
 
