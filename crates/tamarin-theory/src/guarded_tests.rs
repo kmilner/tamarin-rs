@@ -354,6 +354,7 @@ fn var(name: &str, idx: u64) -> p::Term {
         idx,
         sort: p::SortHint::Msg,
         typ: None,
+        location: DUMMY_LOCATION,
     })
 }
 fn pubconst(s: &str) -> p::Term {
@@ -426,12 +427,14 @@ fn varsubst_shadowing_blocks_inner_binder() {
         idx: 0,
         sort: p::SortHint::Msg,
         typ: None,
+        location: DUMMY_LOCATION,
     };
     let mkfact = |t: p::Term| p::Fact {
         persistent: false,
         annotations: Vec::new(),
         name: "Action".into(),
         args: vec![t],
+        location: DUMMY_LOCATION,
     };
     // Build via close_guarded so that `k` becomes Bound(0) in the body.
     let g = close_guarded(
@@ -1032,6 +1035,7 @@ fn canonicalize_sorts_commutative_em_args() {
         idx: 0,
         sort: p::SortHint::Msg,
         typ: None,
+        location: DUMMY_LOCATION,
     }));
     let p_lit = GTerm::PubLit("P".into());
     let em_unsorted = GTerm::App(Arc::from("em"), Arc::from(vec![x.clone(), p_lit.clone()]));
@@ -1171,6 +1175,7 @@ fn subst_gterm_cow_var_value_equality() {
             idx: 0,
             sort: p::SortHint::Msg,
             typ: None,
+            location: DUMMY_LOCATION,
         }),
     );
 
@@ -1180,6 +1185,7 @@ fn subst_gterm_cow_var_value_equality() {
             idx: 0,
             sort,
             typ: typ.map(str::to_string),
+            location: DUMMY_LOCATION,
         }))
     };
 
@@ -1215,6 +1221,7 @@ fn subst_gterm_cow_var_value_equality() {
             idx: 7,
             sort: p::SortHint::Msg,
             typ: None,
+            location: DUMMY_LOCATION,
         }),
     );
     assert_eq!(
@@ -1231,6 +1238,7 @@ fn subst_gterm_cow_var_value_equality() {
                 idx: 0,
                 sort: p::SortHint::Msg,
                 typ: None,
+                location: DUMMY_LOCATION,
             })),
             &s
         ),

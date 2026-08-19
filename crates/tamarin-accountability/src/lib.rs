@@ -403,6 +403,7 @@ fn case_test_to_predicate(c: &RawCaseTest) -> Option<p::Predicate> {
         name: capitalize(&c.name),
         args: free_vars.into_iter().map(p::Term::Var).collect(),
         annotations: Vec::new(),
+        location: c.formula.location,
     };
     Some(p::Predicate {
         fact,
@@ -413,16 +414,18 @@ fn case_test_to_predicate(c: &RawCaseTest) -> Option<p::Predicate> {
 /// HS `toLNFormula` returns `Nothing` for a formula carrying syntactic sugar
 /// (`Syntactic _`, i.e. a predicate atom).  Detect any `Pred` atom.
 fn formula_has_predicate_atom(f: &p::Formula) -> bool {
-    match f {
-        p::Formula::True | p::Formula::False => false,
-        p::Formula::Atom(p::Atom::Pred(_)) => true,
-        p::Formula::Atom(_) => false,
-        p::Formula::Not(g) => formula_has_predicate_atom(g),
-        p::Formula::And(a, b)
-        | p::Formula::Or(a, b)
-        | p::Formula::Implies(a, b)
-        | p::Formula::Iff(a, b) => formula_has_predicate_atom(a) || formula_has_predicate_atom(b),
-        p::Formula::Forall(_, body) | p::Formula::Exists(_, body) => {
+    match &f.kind {
+        p::FormulaKind::True | p::FormulaKind::False => false,
+        p::FormulaKind::Atom(p::Atom::Pred(_)) => true,
+        p::FormulaKind::Atom(_) => false,
+        p::FormulaKind::Not(g) => formula_has_predicate_atom(g),
+        p::FormulaKind::And(a, b)
+        | p::FormulaKind::Or(a, b)
+        | p::FormulaKind::Implies(a, b)
+        | p::FormulaKind::Iff(a, b) => {
+            formula_has_predicate_atom(a) || formula_has_predicate_atom(b)
+        }
+        p::FormulaKind::Forall(_, body) | p::FormulaKind::Exists(_, body) => {
             formula_has_predicate_atom(body)
         }
     }

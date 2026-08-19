@@ -30,6 +30,7 @@
 
 use std::collections::BTreeSet;
 
+use tamarin_parser::DUMMY_LOCATION;
 use tamarin_term::lterm::{LNTerm, LSort, LVar};
 use tamarin_term::vterm::{Lit, VTerm};
 
@@ -70,14 +71,16 @@ pub fn report_init(
     // restr: the syntactic predicate atom `Pred (Report( x, loc ))`, as a
     // parser-AST formula so it flows through the `_restrict` expansion
     // (`lift_one_rule`), which binds it to the user `Report` predicate.
-    let report_pred = tamarin_parser::ast::Formula::Atom(tamarin_parser::ast::Atom::Pred(
-        tamarin_parser::ast::Fact {
+    let report_pred = tamarin_parser::ast::Formula::atom(
+        tamarin_parser::ast::Atom::Pred(tamarin_parser::ast::Fact {
             persistent: false,
             name: "Report".to_string(),
             args: vec![lvar_to_parser(&x), lvar_to_parser(&loc)],
             annotations: Vec::new(),
-        },
-    ));
+            location: DUMMY_LOCATION,
+        }),
+        DUMMY_LOCATION,
+    );
 
     let report_rule = AnnotatedRule {
         process_name: Some("ReportRule".to_string()),
@@ -292,8 +295,8 @@ mod tests {
         assert!(rules[0].acts.is_empty());
         assert_eq!(rules[0].restr.len(), 1);
         // The embedded restriction is a Pred(Report(...)) atom.
-        match &rules[0].restr[0] {
-            tamarin_parser::ast::Formula::Atom(tamarin_parser::ast::Atom::Pred(fa)) => {
+        match &rules[0].restr[0].kind {
+            tamarin_parser::ast::FormulaKind::Atom(tamarin_parser::ast::Atom::Pred(fa)) => {
                 assert_eq!(fa.name, "Report");
                 assert_eq!(fa.args.len(), 2);
             }

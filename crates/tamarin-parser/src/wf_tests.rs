@@ -3,7 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
-use crate::parse_theory;
+use crate::{parse_theory, parser::DUMMY_LOCATION};
 
 fn parse(src: &str) -> Theory {
     parse_theory(src, &["diff"]).expect("parse")
@@ -765,8 +765,10 @@ fn lookup_binder_is_not_unbound() {
     );
     for it in t.items.iter_mut() {
         if let TheoryItem::Rule(r) = it {
-            r.attributes
-                .push(RuleAttr::Process("lookup m.1 as v.1".into()));
+            r.attributes.push(RuleAttr {
+                kind: RuleAttrKind::Process("lookup m.1 as v.1".into()),
+                location: DUMMY_LOCATION,
+            });
         }
     }
     assert!(
@@ -785,8 +787,10 @@ fn lookup_binder_is_not_unbound() {
     );
     for it in t2.items.iter_mut() {
         if let TheoryItem::Rule(r) = it {
-            r.attributes
-                .push(RuleAttr::Process("lookup m.1 as v.1".into()));
+            r.attributes.push(RuleAttr {
+                kind: RuleAttrKind::Process("lookup m.1 as v.1".into()),
+                location: DUMMY_LOCATION,
+            });
         }
     }
     let rep = unbound_report(&t2);

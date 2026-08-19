@@ -52,7 +52,7 @@
 
 use crate::pretty_formula as pf;
 use crate::theory::Theory;
-use tamarin_parser::ast as p;
+use tamarin_parser::{ast as p, DUMMY_LOCATION};
 
 /// Build info passed in from the prover binary so the Generated-from
 /// block reflects compile-time facts.
@@ -1568,6 +1568,7 @@ mod open_print_opts_tests {
             ac: false,
             ndc: false,
             ndc_diff: false,
+            location: DUMMY_LOCATION,
         }
     }
 
@@ -2537,8 +2538,8 @@ fn rule_attribute_parts(attrs: &[p::RuleAttr]) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
     // color= : HS `text "color=" <> text (rgbToHex c)`; `rgbToHex` is
     // `'#':` + lowercase 2-digit-per-channel hex (Data/Color.hs:140-147, see line 141).
-    if let Some(hex) = attrs.iter().rev().find_map(|a| match a {
-        p::RuleAttr::Color(c) => Some(c),
+    if let Some(hex) = attrs.iter().rev().find_map(|a| match &a.kind {
+        p::RuleAttrKind::Color(c) => Some(c),
         _ => None,
     }) {
         parts.push(format!(
@@ -2550,20 +2551,26 @@ fn rule_attribute_parts(attrs: &[p::RuleAttr]) -> Vec<String> {
     // (Model/Rule.hs:1324-1327, see line 1324).  Rendered between color= and no_derivcheck.  Only
     // SAPIC-translation-generated rules carry it (the parser ignores a
     // user-written `process=`); the LAST occurrence wins (Maybe field).
-    if let Some(s) = attrs.iter().rev().find_map(|a| match a {
-        p::RuleAttr::Process(s) => Some(s),
+    if let Some(s) = attrs.iter().rev().find_map(|a| match &a.kind {
+        p::RuleAttrKind::Process(s) => Some(s),
         _ => None,
     }) {
         parts.push(format!("process=\"{}\"", s));
     }
-    if attrs.iter().any(|a| matches!(a, p::RuleAttr::NoDerivCheck)) {
+    if attrs
+        .iter()
+        .any(|a| matches!(a.kind, p::RuleAttrKind::NoDerivCheck))
+    {
         parts.push("no_derivcheck".to_string());
     }
-    if attrs.iter().any(|a| matches!(a, p::RuleAttr::IsSapicRule)) {
+    if attrs
+        .iter()
+        .any(|a| matches!(a.kind, p::RuleAttrKind::IsSapicRule))
+    {
         parts.push("issapicrule".to_string());
     }
-    if let Some(r) = attrs.iter().rev().find_map(|a| match a {
-        p::RuleAttr::Role(r) => Some(r),
+    if let Some(r) = attrs.iter().rev().find_map(|a| match &a.kind {
+        p::RuleAttrKind::Role(r) => Some(r),
         _ => None,
     }) {
         parts.push(format!("role='{}'", r));
@@ -2618,7 +2625,7 @@ fn render_rule_e_block(
     {
         use crate::pretty_hpj::Doc;
         let header = crate::pretty_hpj::kw_rule_modulo("E")
-            .beside_sp(Doc::text(name.clone()))
+            .beside_sp(Doc::text(name))
             .beside(rule_attributes_doc(&parsed_rule.attributes))
             .beside(Doc::text(":"));
         out.push_str(&header.render());
@@ -3226,6 +3233,7 @@ pub fn proto_rule_to_parsed(r: &crate::rule::ProtoRuleE) -> p::Rule {
         embedded_restrictions: Vec::new(),
         variants: Vec::new(),
         left_right: None,
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -3244,6 +3252,7 @@ pub fn lnfact_to_parser(fa: &crate::fact::LNFact) -> p::Fact {
         FactTag::Term => ("Term".to_string(), false),
     };
     p::Fact {
+        location: DUMMY_LOCATION,
         persistent,
         name,
         args: fa.terms.iter().map(lnterm_to_parser).collect(),
@@ -3295,6 +3304,7 @@ pub fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                 idx: v.idx,
                 sort,
                 typ: None,
+                location: DUMMY_LOCATION,
             })
         }
         Term::Lit(Lit::Con(n)) => {
@@ -4242,6 +4252,7 @@ fn reparse_fact_doc(fact: &tamarin_parser::ast::Fact) -> crate::pretty_hpj::Doc 
         name: fact.name.clone(),
         args,
         annotations: fact.annotations.clone(),
+        location: fact.location,
     };
     pf::fact_doc(&reparsed)
 }
@@ -4565,6 +4576,7 @@ mod oracle_goal_tests {
                 idx: 0,
                 sort: SortHint::Node,
                 typ: None,
+                location: DUMMY_LOCATION,
             }))
         };
         // `#a < #b` ∥ `#b < #a`
@@ -4603,6 +4615,7 @@ mod manual_rule_variants_tests {
             embedded_restrictions: vec![],
             variants: vec![],
             left_right: None,
+            location: DUMMY_LOCATION,
         })
     }
 

@@ -18,6 +18,7 @@
 
 use std::collections::BTreeSet;
 
+use tamarin_parser::DUMMY_LOCATION;
 use tamarin_term::lterm::{LNTerm, LVar};
 use tamarin_term::vterm::{Lit, VTerm};
 
@@ -680,7 +681,7 @@ pub fn base_trans_comb(
                 ));
             }
             // then-arm carries `[f]`; else-arm carries `[Not f]`.
-            let not_f = tamarin_parser::ast::Formula::Not(Box::new(f.clone()));
+            let not_f = tamarin_parser::ast::Formula::not(f.clone(), f.location);
             let body_then: RuleBody = (
                 vec![def_state(tildex)],
                 vec![],
@@ -892,9 +893,12 @@ fn let_else_restriction(
     freevars: &BTreeSet<LVar>,
 ) -> tamarin_parser::ast::Formula {
     use tamarin_parser::ast as p;
-    let eq = p::Formula::Atom(p::Atom::Eq(ln_term_to_parser(t1), ln_term_to_parser(t2)));
+    let eq = p::Formula::atom(
+        p::Atom::Eq(ln_term_to_parser(t1), ln_term_to_parser(t2)),
+        DUMMY_LOCATION,
+    );
     // `Conn Imp (Ato (EqE t1 t2)) (TF False)` = `(t1 = t2) ⇒ False`.
-    let body = p::Formula::Implies(Box::new(eq), Box::new(p::Formula::False));
+    let body = p::Formula::implies(eq, p::Formula::r#false(DUMMY_LOCATION));
     if freevars.is_empty() {
         body
     } else {
@@ -902,7 +906,7 @@ fn let_else_restriction(
             .iter()
             .map(crate::convert::lvar_to_varspec)
             .collect();
-        p::Formula::Forall(vs, Box::new(body))
+        p::Formula::forall(vs, body, DUMMY_LOCATION)
     }
 }
 
@@ -985,33 +989,36 @@ pub fn single_session_restriction() -> tamarin_parser::ast::Restriction {
         idx: 0,
         sort: p::SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     };
     let init_at = |tv: &str| -> p::Formula {
-        p::Formula::Atom(p::Atom::Action(
-            p::Fact {
-                persistent: false,
-                name: "Init".into(),
-                args: vec![],
-                annotations: vec![],
-            },
-            p::Term::Var(tvar(tv)),
-        ))
+        p::Formula::atom(
+            p::Atom::Action(
+                p::Fact {
+                    persistent: false,
+                    name: "Init".into(),
+                    args: vec![],
+                    annotations: vec![],
+                    location: DUMMY_LOCATION,
+                },
+                p::Term::Var(tvar(tv)),
+            ),
+            DUMMY_LOCATION,
+        )
     };
-    let body = p::Formula::Implies(
-        Box::new(p::Formula::And(
-            Box::new(init_at("i")),
-            Box::new(init_at("j")),
-        )),
-        Box::new(p::Formula::Atom(p::Atom::Eq(
-            p::Term::Var(tvar("i")),
-            p::Term::Var(tvar("j")),
-        ))),
+    let body = p::Formula::implies(
+        p::Formula::and(init_at("i"), init_at("j")),
+        p::Formula::atom(
+            p::Atom::Eq(p::Term::Var(tvar("i")), p::Term::Var(tvar("j"))),
+            DUMMY_LOCATION,
+        ),
     );
-    let formula = p::Formula::Forall(vec![tvar("i"), tvar("j")], Box::new(body));
+    let formula = p::Formula::forall(vec![tvar("i"), tvar("j")], body, DUMMY_LOCATION);
     p::Restriction {
         name: "single_session".to_string(),
         formula,
         attributes: vec![],
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -1030,48 +1037,64 @@ pub fn predicate_restrictions() -> Vec<tamarin_parser::ast::Restriction> {
         idx: 0,
         sort: p::SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     };
     let mvar = |name: &str| p::VarSpec {
         name: name.into(),
         idx: 0,
         sort: p::SortHint::Untagged,
         typ: None,
+        location: DUMMY_LOCATION,
     };
     let pred_at = |pname: &str| -> p::Formula {
-        p::Formula::Atom(p::Atom::Action(
-            p::Fact {
-                persistent: false,
-                name: pname.into(),
-                args: vec![p::Term::Var(mvar("a")), p::Term::Var(mvar("b"))],
-                annotations: vec![],
-            },
-            p::Term::Var(tvar("i")),
-        ))
+        p::Formula::atom(
+            p::Atom::Action(
+                p::Fact {
+                    persistent: false,
+                    name: pname.into(),
+                    args: vec![p::Term::Var(mvar("a")), p::Term::Var(mvar("b"))],
+                    annotations: vec![],
+                    location: DUMMY_LOCATION,
+                },
+                p::Term::Var(tvar("i")),
+            ),
+            DUMMY_LOCATION,
+        )
     };
-    let eq_atom = p::Formula::Atom(p::Atom::Eq(
-        p::Term::Var(mvar("a")),
-        p::Term::Var(mvar("b")),
-    ));
+    let eq_atom = p::Formula::atom(
+        p::Atom::Eq(p::Term::Var(mvar("a")), p::Term::Var(mvar("b"))),
+        DUMMY_LOCATION,
+    );
 
     // predicate_eq: All #i a b. Pred_Eq(a,b)@i ==> a = b
-    let eq_body = p::Formula::Implies(Box::new(pred_at("Pred_Eq")), Box::new(eq_atom.clone()));
-    let eq_formula = p::Formula::Forall(vec![tvar("i"), mvar("a"), mvar("b")], Box::new(eq_body));
+    let eq_body = p::Formula::implies(pred_at("Pred_Eq"), eq_atom.clone());
+    let eq_formula = p::Formula::forall(
+        vec![tvar("i"), mvar("a"), mvar("b")],
+        eq_body,
+        DUMMY_LOCATION,
+    );
     let predicate_eq = p::Restriction {
         name: "predicate_eq".to_string(),
         formula: eq_formula,
         attributes: vec![],
+        location: DUMMY_LOCATION,
     };
 
     // predicate_not_eq: All #i a b. Pred_Not_Eq(a,b)@i ==> not(a = b)
-    let neq_body = p::Formula::Implies(
-        Box::new(pred_at("Pred_Not_Eq")),
-        Box::new(p::Formula::Not(Box::new(eq_atom))),
+    let neq_body = p::Formula::implies(
+        pred_at("Pred_Not_Eq"),
+        p::Formula::not(eq_atom, DUMMY_LOCATION),
     );
-    let neq_formula = p::Formula::Forall(vec![tvar("i"), mvar("a"), mvar("b")], Box::new(neq_body));
+    let neq_formula = p::Formula::forall(
+        vec![tvar("i"), mvar("a"), mvar("b")],
+        neq_body,
+        DUMMY_LOCATION,
+    );
     let predicate_not_eq = p::Restriction {
         name: "predicate_not_eq".to_string(),
         formula: neq_formula,
         attributes: vec![],
+        location: DUMMY_LOCATION,
     };
 
     vec![predicate_eq, predicate_not_eq]
@@ -1086,6 +1109,7 @@ fn parse_restriction(name: &str, src: &str) -> tamarin_parser::ast::Restriction 
         .unwrap_or_else(|e| panic!("Error parsing hard-coded restriction {name}: {e:?}"));
     p::Restriction {
         name: name.to_string(),
+        location: formula.location,
         formula,
         attributes: vec![],
     }
@@ -1196,8 +1220,8 @@ fn rename_lock_pos_atoms(f: &mut tamarin_parser::ast::Formula, idx: u64) {
         }
     }
     fn walk(f: &mut p::Formula, idx: u64) {
-        use p::Formula::*;
-        match f {
+        use p::FormulaKind::*;
+        match &mut f.kind {
             True | False => {}
             Atom(a) => walk_atom(a, idx),
             Not(g) => walk(g, idx),
@@ -1234,6 +1258,7 @@ pub fn res_locking_pure() -> Vec<tamarin_parser::ast::Restriction> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tamarin_parser::DUMMY_LOCATION;
     use tamarin_term::lterm::LSort;
     use tamarin_theory::sapic::ProcessCombinator;
 
@@ -1368,15 +1393,20 @@ mod tests {
                 name: name.into(),
                 sort: p::SortHint::Untagged,
                 idx: 0,
+                location: DUMMY_LOCATION,
             })
         };
         // `Eq(nil, k)` — the predicate atom the surface `if Eq(nil, k)` parses to.
-        let f = p::Formula::Atom(p::Atom::Pred(p::Fact {
-            persistent: false,
-            name: "Eq".into(),
-            args: vec![leaf("nil"), leaf("k")],
-            annotations: Vec::new(),
-        }));
+        let f = p::Formula::atom(
+            p::Atom::Pred(p::Fact {
+                persistent: false,
+                name: "Eq".into(),
+                args: vec![leaf("nil"), leaf("k")],
+                annotations: Vec::new(),
+                location: DUMMY_LOCATION,
+            }),
+            DUMMY_LOCATION,
+        );
         let c = ProcessCombinator::Cond(f);
         let an = ProcessAnnotation::<LVar>::empty();
         let pos: Vec<i64> = vec![];

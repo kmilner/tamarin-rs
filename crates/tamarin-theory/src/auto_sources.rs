@@ -25,7 +25,7 @@ use crate::constraint::system::System;
 use crate::fact::{proto_or_in_fact_view, proto_or_out_fact_view, FactTag, LNFact, Multiplicity};
 use crate::rule::{print_fact_position, print_position, rule_name_string, ExtendedPosition};
 use crate::theory::{OpenProtoRule, TheoryItem};
-use tamarin_parser::ast as p;
+use tamarin_parser::{ast as p, DUMMY_LOCATION};
 use tamarin_term::lterm::{rename_avoiding, LNTerm};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::positions::{at_pos, deepest_prot_subterm, find_pos};
@@ -40,6 +40,7 @@ fn var(name: &str, sort: p::SortHint) -> p::VarSpec {
         idx: 0,
         sort,
         typ: None,
+        location: DUMMY_LOCATION,
     }
 }
 fn var_term(name: &str, sort: p::SortHint) -> p::Term {
@@ -56,6 +57,7 @@ fn input_fact_term(name: &str, terms: Vec<p::Term>, v: p::Term) -> p::Fact {
         name: name.to_string(),
         args,
         annotations: Vec::new(),
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -66,29 +68,15 @@ fn output_fact_term(name: &str, terms: Vec<p::Term>) -> p::Fact {
         name: name.to_string(),
         args: terms,
         annotations: Vec::new(),
+        location: DUMMY_LOCATION,
     }
 }
 
 fn action(fa: p::Fact, tp: p::Term) -> p::Formula {
-    p::Formula::Atom(p::Atom::Action(fa, tp))
+    p::Formula::atom(p::Atom::Action(fa, tp), DUMMY_LOCATION)
 }
 fn less(a: p::Term, b: p::Term) -> p::Formula {
-    p::Formula::Atom(p::Atom::Less(a, b))
-}
-fn and(a: p::Formula, b: p::Formula) -> p::Formula {
-    p::Formula::And(Box::new(a), Box::new(b))
-}
-fn or(a: p::Formula, b: p::Formula) -> p::Formula {
-    p::Formula::Or(Box::new(a), Box::new(b))
-}
-fn implies(a: p::Formula, b: p::Formula) -> p::Formula {
-    p::Formula::Implies(Box::new(a), Box::new(b))
-}
-fn exists(vs: Vec<p::VarSpec>, body: p::Formula) -> p::Formula {
-    p::Formula::Exists(vs, Box::new(body))
-}
-fn forall(vs: Vec<p::VarSpec>, body: p::Formula) -> p::Formula {
-    p::Formula::Forall(vs, Box::new(body))
+    p::Formula::atom(p::Atom::Less(a, b), DUMMY_LOCATION)
 }
 
 const MSG: p::SortHint = p::SortHint::Msg;
@@ -102,27 +90,30 @@ fn or_ku() -> p::Formula {
         name: "KU".to_string(),
         args: vec![var_term("x", MSG)],
         annotations: Vec::new(),
+        location: DUMMY_LOCATION,
     };
-    exists(
+    p::Formula::exists(
         vec![var("j", NODE)],
-        and(
+        p::Formula::and(
             action(ku, var_term("j", NODE)),
             less(var_term("j", NODE), var_term("i", NODE)),
         ),
+        DUMMY_LOCATION,
     )
 }
 
 /// `toFactsTerm ru p f''` (OpenTheory.hs:138-538, see line 502): `f'' ∨ (∃ j. AUTO_OUT_TERM(m) @ j ∧ j < i)`.
 fn to_facts_term(out_name: &str, inner: p::Formula) -> p::Formula {
     let out = output_fact_term(out_name, vec![var_term("m", MSG)]);
-    or(
+    p::Formula::or(
         inner,
-        exists(
+        p::Formula::exists(
             vec![var("j", NODE)],
-            and(
+            p::Formula::and(
                 action(out, var_term("j", NODE)),
                 less(var_term("j", NODE), var_term("i", NODE)),
             ),
+            DUMMY_LOCATION,
         ),
     )
 }
@@ -131,12 +122,13 @@ fn to_facts_term(out_name: &str, inner: p::Formula) -> p::Formula {
 /// `∀ x m i. AUTO_IN_TERM(m,x) @ i ⇒ (orKU ∨ (∃ j. AUTO_OUT_TERM(m) @ j ∧ j < i))`.
 pub fn term_input_form_with_outputs(in_name: &str, out_name: &str) -> p::Formula {
     let in_fact = input_fact_term(in_name, vec![var_term("m", MSG)], var_term("x", MSG));
-    forall(
+    p::Formula::forall(
         vec![var("x", MSG), var("m", MSG), var("i", NODE)],
-        implies(
+        p::Formula::implies(
             action(in_fact, var_term("i", NODE)),
             to_facts_term(out_name, or_ku()),
         ),
+        DUMMY_LOCATION,
     )
 }
 
@@ -144,9 +136,10 @@ pub fn term_input_form_with_outputs(in_name: &str, out_name: &str) -> p::Formula
 /// `∀ x m i. AUTO_IN_TERM(m,x) @ i ⇒ orKU`.
 pub fn term_input_form_no_outputs(in_name: &str) -> p::Formula {
     let in_fact = input_fact_term(in_name, vec![var_term("m", MSG)], var_term("x", MSG));
-    forall(
+    p::Formula::forall(
         vec![var("x", MSG), var("m", MSG), var("i", NODE)],
-        implies(action(in_fact, var_term("i", NODE)), or_ku()),
+        p::Formula::implies(action(in_fact, var_term("i", NODE)), or_ku()),
+        DUMMY_LOCATION,
     )
 }
 
@@ -166,6 +159,7 @@ fn input_fact_fact_ast(name: &str, ms: &[p::VarSpec]) -> p::Fact {
         name: name.to_string(),
         args: ms.iter().map(|v| p::Term::Var(v.clone())).collect(),
         annotations: Vec::new(),
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -176,9 +170,13 @@ fn fact_input_form_no_outputs(in_name: &str, arity: usize) -> p::Formula {
     let in_fact = input_fact_fact_ast(in_name, &ms);
     let mut binders = ms;
     binders.push(var("i", NODE));
-    forall(
+    p::Formula::forall(
         binders,
-        implies(action(in_fact, var_term("i", NODE)), p::Formula::False),
+        p::Formula::implies(
+            action(in_fact, var_term("i", NODE)),
+            p::Formula::r#false(DUMMY_LOCATION),
+        ),
+        DUMMY_LOCATION,
     )
 }
 
@@ -205,19 +203,22 @@ fn fact_input_form_with_outputs(
         name: out_name.to_string(),
         args: out_ms,
         annotations: Vec::new(),
+        location: DUMMY_LOCATION,
     };
-    let to_facts = exists(
+    let to_facts = p::Formula::exists(
         vec![var("j", NODE)],
-        and(
+        p::Formula::and(
             action(out_fact, var_term("j", NODE)),
             less(var_term("j", NODE), var_term("i", NODE)),
         ),
+        DUMMY_LOCATION,
     );
     let mut binders = ms;
     binders.push(var("i", NODE));
-    forall(
+    p::Formula::forall(
         binders,
-        implies(action(in_fact, var_term("i", NODE)), to_facts),
+        p::Formula::implies(action(in_fact, var_term("i", NODE)), to_facts),
+        DUMMY_LOCATION,
     )
 }
 
@@ -336,7 +337,7 @@ pub fn add_auto_sources_lemma(
         }
     }
 
-    let mut formula = p::Formula::True;
+    let mut formula = p::Formula::r#true(DUMMY_LOCATION);
     let mut annotation_groups: Vec<Vec<(String, LNFact)>> = Vec::new();
     let mut done: Vec<(String, ExtendedPosition)> = Vec::new();
 
@@ -525,7 +526,7 @@ pub fn add_auto_sources_lemma(
                     }
                 }
             };
-            formula = and(formula, part);
+            formula = p::Formula::and(formula, part);
         }
 
         // addLabels + addCases (this chain's acts as one group).
@@ -1102,6 +1103,7 @@ mod tests {
             embedded_restrictions: vec![],
             variants: vec![],
             left_right: None,
+            location: DUMMY_LOCATION,
         };
         let mut parsed = p::Theory {
             is_diff: false,
@@ -1186,8 +1188,8 @@ mod tests {
     fn running_example_auto_typing_renders_byte_identically() {
         let in_name = "AUTO_IN_TERM_1_0_0_1_1__Rule_R";
         let out_name = "AUTO_OUT_TERM_1_0_0_1_1__Rule_R";
-        let f = and(
-            p::Formula::True,
+        let f = p::Formula::and(
+            p::Formula::r#true(DUMMY_LOCATION),
             term_input_form_with_outputs(in_name, out_name),
         );
         let rendered = lemma_header_line("all-traces", &f);

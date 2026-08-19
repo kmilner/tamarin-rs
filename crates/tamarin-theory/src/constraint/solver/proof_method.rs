@@ -804,6 +804,7 @@ fn same_kind(a: &Result, b: &Result) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tamarin_parser::DUMMY_LOCATION;
     use tamarin_term::maude_sig::pair_maude_sig;
 
     use crate::test_maude::maude_path;
@@ -936,6 +937,7 @@ mod tests {
                 idx: 0,
                 sort,
                 typ: None,
+                location: DUMMY_LOCATION,
             })
         };
         let action_atom = Atom::Action(
@@ -944,6 +946,7 @@ mod tests {
                 annotations: Vec::new(),
                 name: "Setup".into(),
                 args: vec![mkvar("k", SortHint::Msg)],
+                location: tamarin_parser::DUMMY_LOCATION,
             },
             mkvar("i", SortHint::Node),
         );
@@ -958,12 +961,14 @@ mod tests {
                     idx: 0,
                     sort: SortHint::Msg,
                     typ: None,
+                    location: DUMMY_LOCATION,
                 },
                 VarSpec {
                     name: "i".into(),
                     idx: 0,
                     sort: SortHint::Node,
                     typ: None,
+                    location: DUMMY_LOCATION,
                 },
             ],
             vec![action_atom],

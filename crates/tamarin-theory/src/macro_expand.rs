@@ -179,6 +179,7 @@ pub(crate) fn map_fact_terms(f: &p::Fact, g: &dyn Fn(&p::Term) -> p::Term) -> p:
         name: f.name.clone(),
         args: f.args.iter().map(g).collect(),
         annotations: f.annotations.clone(),
+        location: f.location,
     }
 }
 
@@ -202,8 +203,8 @@ pub(crate) fn map_atom_terms(a: &p::Atom, g: &dyn Fn(&p::Term) -> p::Term) -> p:
 /// `pub` (not `pub(crate)`): tamarin-sapic's `formula_unpattern` walks with it
 /// too.
 pub fn map_formula_terms(f: &p::Formula, g: &dyn Fn(&p::Term) -> p::Term) -> p::Formula {
-    use p::Formula::*;
-    match f {
+    use p::FormulaKind::*;
+    let kind = match &f.kind {
         False => False,
         True => True,
         Atom(a) => Atom(map_atom_terms(a, g)),
@@ -226,6 +227,10 @@ pub fn map_formula_terms(f: &p::Formula, g: &dyn Fn(&p::Term) -> p::Term) -> p::
         ),
         Forall(vs, x) => Forall(vs.clone(), Box::new(map_formula_terms(x, g))),
         Exists(vs, x) => Exists(vs.clone(), Box::new(map_formula_terms(x, g))),
+    };
+    p::Formula {
+        kind,
+        location: f.location,
     }
 }
 

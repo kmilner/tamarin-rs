@@ -275,6 +275,7 @@ pub fn gfact_to_fact(g: &GFact) -> p::Fact {
         name: g.name.clone(),
         args: g.args.iter().map(gterm_to_term).collect(),
         annotations: g.annotations.clone(),
+        location: tamarin_parser::DUMMY_LOCATION,
     }
 }
 
@@ -769,6 +770,8 @@ pub fn map_free_atom<F: FnMut(&p::VarSpec) -> p::VarSpec>(a: &GAtom, f: &mut F) 
 
 #[cfg(test)]
 mod tests {
+    use tamarin_parser::DUMMY_LOCATION;
+
     use super::*;
 
     fn vs(name: &str, idx: u64) -> p::VarSpec {
@@ -777,6 +780,7 @@ mod tests {
             idx,
             sort: p::SortHint::Msg,
             typ: None,
+            location: DUMMY_LOCATION,
         }
     }
 
@@ -786,6 +790,7 @@ mod tests {
             idx,
             sort: p::SortHint::Node,
             typ: None,
+            location: DUMMY_LOCATION,
         }
     }
 
@@ -870,6 +875,7 @@ mod tests {
                 name: "P".to_string(),
                 args: vec![p::Term::Var(x.clone())],
                 annotations: vec![],
+                location: tamarin_parser::DUMMY_LOCATION,
             },
             p::Term::Var(vs_node("t", 0)),
         ));
@@ -990,6 +996,7 @@ mod tests {
                 name: "P".to_string(),
                 args: vec![p::Term::Var(x.clone())],
                 annotations: vec![],
+                location: tamarin_parser::DUMMY_LOCATION,
             },
             p::Term::Var(vs_node("t", 0)),
         ));
@@ -999,6 +1006,7 @@ mod tests {
                 name: "P".to_string(),
                 args: vec![p::Term::Var(y.clone())],
                 annotations: vec![],
+                location: tamarin_parser::DUMMY_LOCATION,
             },
             p::Term::Var(vs_node("t", 0)),
         ));
@@ -1045,6 +1053,7 @@ mod tests {
             idx: v.idx + 100,
             sort: v.sort,
             typ: v.typ.clone(),
+            location: DUMMY_LOCATION,
         });
         match &mapped {
             GTerm::App(_, args) => {

@@ -3,6 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
+use tamarin_parser::DUMMY_LOCATION;
 
 fn v(name: &str, sort: p::SortHint) -> p::VarSpec {
     p::VarSpec {
@@ -10,13 +11,20 @@ fn v(name: &str, sort: p::SortHint) -> p::VarSpec {
         idx: 0,
         sort,
         typ: None,
+        location: DUMMY_LOCATION,
     }
 }
 
 #[test]
 fn trivial_formulas() {
-    assert_eq!(pretty_formula(&p::Formula::True), "\u{22A4}");
-    assert_eq!(pretty_formula(&p::Formula::False), "\u{22A5}");
+    assert_eq!(
+        pretty_formula(&p::Formula::r#true(DUMMY_LOCATION)),
+        "\u{22A4}"
+    );
+    assert_eq!(
+        pretty_formula(&p::Formula::r#false(DUMMY_LOCATION)),
+        "\u{22A5}"
+    );
 }
 
 #[test]
@@ -75,17 +83,19 @@ fn forall_with_action() {
         name: "F".into(),
         args: vec![p::Term::Var(v("ni", p::SortHint::Untagged))],
         annotations: vec![],
+        location: DUMMY_LOCATION,
     };
-    let body = p::Formula::Implies(
-        Box::new(p::Formula::Atom(p::Atom::Action(
-            fa,
-            p::Term::Var(v("i", p::SortHint::Node)),
-        ))),
-        Box::new(p::Formula::False),
+    let body = p::Formula::implies(
+        p::Formula::atom(
+            p::Atom::Action(fa, p::Term::Var(v("i", p::SortHint::Node))),
+            DUMMY_LOCATION,
+        ),
+        p::Formula::r#false(DUMMY_LOCATION),
     );
-    let f = p::Formula::Forall(
+    let f = p::Formula::forall(
         vec![v("ni", p::SortHint::Untagged), v("i", p::SortHint::Node)],
-        Box::new(body),
+        body,
+        DUMMY_LOCATION,
     );
     // The output follows HS.  `Name( args )` keeps the internal spaces, and
     // `ppImp` puts parentheses on both sides of the `⇒`.  The expected bytes
@@ -108,7 +118,7 @@ fn long_quantifier_varlist_wraps() {
         "sks", "y1", "y2", "aa", "ea", "el", "em",
     ];
     let vs: Vec<p::VarSpec> = names.iter().map(|n| v(n, p::SortHint::Untagged)).collect();
-    let f = p::Formula::Exists(vs, Box::new(p::Formula::False));
+    let f = p::Formula::exists(vs, p::Formula::r#false(DUMMY_LOCATION), DUMMY_LOCATION);
     let out = pretty_formula_wrapped(&f, 0);
     let lines: Vec<&str> = out.split('\n').collect();
     assert!(lines.len() >= 2, "long var list must wrap: {out:?}");
@@ -176,6 +186,7 @@ fn user_ac_symbol_renders_infix() {
         name: "F".to_string(),
         args: vec![ast],
         annotations: Vec::new(),
+        location: DUMMY_LOCATION,
     };
     assert_eq!(fact_to_doc(&fa, &[]).render(), "F( (x add y) )");
 }
@@ -448,6 +459,7 @@ fn fact_annotations_render_in_ord_order() {
             p::FactAnnotation::SolveFirst,
             p::FactAnnotation::NoSources, // duplicate: deduped like S.fromList
         ],
+        location: DUMMY_LOCATION,
     };
     assert_eq!(fact_to_doc(&fa, &[]).render(), "F( a )[+, no_precomp]");
 }

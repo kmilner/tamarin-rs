@@ -2,15 +2,13 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! End-to-end stderr / exit-code parity for `naryOpApp`'s reserved-builtin
+//! End-to-end stderr / exit-code behavior for `naryOpApp`'s reserved-builtin
 //! rejection inside `equations:` (Theory/Text/Parser/Term.hs:90-92).
 //!
-//! The rejection is a GHC `error`, not a parsec failure: the exception
-//! escapes the parser run, GHC's top-level handler prints `tamarin-prover: `
-//! plus the message and the `HasCallStack` frame, and the process exits 1
-//! with no stdout.  The pinned oracle (Git revision ef3f0468) produces
-//! exactly the bytes below (probes p22/p47 of the lookup-arity matrix),
-//! after its machine-local `maude tool:` banner.
+//! HS raises this as a GHC `error` (not a parsec failure).  The port raises
+//! it as `ParseError::UsedReservedBuiltin`, which the binary renders as a
+//! codespan diagnostic naming the symbol on stderr and exits 1 with no
+//! stdout.  The GHC `CallStack (from HasCallStack)` frame is not rendered.
 
 mod common;
 
@@ -18,9 +16,9 @@ mod common;
 /// follow it — their path and version are machine-local.
 ///
 /// Unlike [`common::strip_maude_banner`] this does NOT assert the banner was
-/// there: these two runs are not guarded on maude being available, and the
-/// stderr below is asserted in FULL, so a bannerless run still compares the
-/// whole stream rather than passing vacuously.
+/// there: these two runs are not guarded on maude being available.  The
+/// assertions below name the diagnostic's own text, so a run without maude
+/// fails rather than passing vacuously.
 fn strip_maude_banner(stderr: &str) -> String {
     stderr
         .split_inclusive('\n')
@@ -35,37 +33,41 @@ fn run_binary(stem: &str, src: &str) -> (i32, String, usize) {
     (code, strip_maude_banner(&stderr), stdout.len())
 }
 
-/// The GHC top-level handler's stderr for the Term.hs:92:9 `error`.
-fn ghc_stderr(name: &str) -> String {
-    format!(
-        "tamarin-prover: `\"{name}\"` is a reserved function name for builtins.\n\
-         CallStack (from HasCallStack):\n  error, called at \
-         src/Theory/Text/Parser/Term.hs:92:9 in \
-         tamarin-prover-theory-1.13.0-8wixYaxm5uHCGl2uEzaKzP:Theory.Text.Parser.Term\n"
-    )
+/// Assert the death shape shared by both probes: exit 1, empty stdout, the
+/// reserved-builtin diagnostic naming the symbol, no GHC `CallStack` frame.
+fn assert_reserved_death(code: i32, stderr: &str, stdout_len: usize, name: &str) {
+    assert_eq!(code, 1);
+    assert_eq!(stdout_len, 0, "no stdout on an aborting parse error");
+    assert!(
+        stderr.contains("Reserved builtin function in equation")
+            && stderr.contains(&format!(
+                "reserved builtin function `{name}` was used in an equation"
+            )),
+        "expected the reserved-builtin diagnostic:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("CallStack"),
+        "the GHC CallStack frame must not be rendered:\n{stderr}"
+    );
 }
 
 /// `exp` applied inside an equation (probe p22).
 #[test]
-fn applied_reserved_name_in_equations_dies_with_callstack() {
+fn applied_reserved_name_in_equations_dies_with_diagnostic() {
     let (code, stderr, stdout_len) = run_binary(
         "p22_eqn_reserved",
         "theory T\nbegin\n\nequations: exp(x, y) = x\n\nend\n",
     );
-    assert_eq!(code, 1);
-    assert_eq!(stderr, ghc_stderr("exp"));
-    assert_eq!(stdout_len, 0, "no stdout on a GHC error");
+    assert_reserved_death(code, &stderr, stdout_len, "exp");
 }
 
 /// A BARE reserved name in an equation operand aborts too — `naryOpApp`'s
 /// check runs on the identifier before anything else (probe p47).
 #[test]
-fn bare_reserved_name_in_equations_dies_with_callstack() {
+fn bare_reserved_name_in_equations_dies_with_diagnostic() {
     let (code, stderr, stdout_len) = run_binary(
         "p47_eqn_bare_reserved",
         "theory T\nbegin\n\nfunctions: f/1\n\nequations: f(x) = mun\n\nend\n",
     );
-    assert_eq!(code, 1);
-    assert_eq!(stderr, ghc_stderr("mun"));
-    assert_eq!(stdout_len, 0, "no stdout on a GHC error");
+    assert_reserved_death(code, &stderr, stdout_len, "mun");
 }

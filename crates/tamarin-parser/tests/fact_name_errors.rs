@@ -2,92 +2,115 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! Byte-pinned parity for the lowercase-fact-name rejection.
+//! Parity for the lowercase-fact-name rejection.
 //!
 //! HS `fact'` (Parser/Fact.hs:39-50, see line 46) raises `fail "facts must start
 //! with upper-case letters"` right after `identifier` consumed the name.  The
-//! identifier lexeme's pending empty error — `SysUnExpect` of the next char
-//! plus `alphaNum`'s `Expect "letter or digit"` — merges into the fail when
-//! the lexeme's trailing whiteSpace consumed nothing; whitespace after the
-//! name discards the label.  Every expected string below is the stderr the
-//! pinned Haskell oracle (Git revision ef3f0468) prints for the same theory,
-//! minus the three `maude tool:` banner lines.
+//! port raises [`ParseError::FactNameMustStartWithUppercase`] carrying the
+//! offending name, positioned at the name itself rather than at the token the
+//! parsec frame reported after it.
 //!
 //! In FORMULA context the whole `fact'` sits under `try … <?> "fact"` and the
 //! atom alternation falls through to the term-relational atoms, so the fact
 //! message never surfaces there (the oracle reports the term path's merged
 //! labels instead: `unexpected "(" / expecting letter or digit, "." or "="`).
-//! That residual formula-path shape is not pinned here — RS's formula-atom
-//! error machinery reports its own `expected formula atom` frame.
+//! That residual formula-path shape is covered by
+//! `tests/lookup_arity_errors.rs`.
 
-use tamarin_parser::parse_theory;
+use tamarin_parser::{parse_theory, ParseError};
 
-/// The parse error for `src`, rendered as HS's `show err` with `fact.spthy`
-/// as the `SourcePos` name.
-fn err(src: &str) -> String {
-    parse_theory(src, &[])
-        .unwrap_err()
-        .with_source("fact.spthy")
-        .to_string()
+/// Asserts `src` is rejected for the lowercase fact `name`, reported at
+/// `line`:`col`.
+#[track_caller]
+fn assert_lowercase_fact(src: &str, name: &str, line: u32, col: u32) {
+    let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
+    let at = *e.location();
+    let ParseError::FactNameMustStartWithUppercase { name: got, .. } = &e else {
+        panic!("expected the lowercase-fact rejection, got {e:?}");
+    };
+    assert_eq!(got, name);
+    assert_eq!((at.line, at.col), (line, col));
+    assert_eq!(
+        e.notes(),
+        [format!(
+            "fact name `{name}` must start with an uppercase letter"
+        )]
+    );
 }
 
-/// Every rule position routes through the one `fact'`.  The error therefore
-/// reports at the character right after the name, that is the `(`.  The
-/// pending label of the identifier merges into that error.  This holds
-/// wherever the fact stands, and whether or not the fact is persistent,
-/// because the `!` parses before the name.
+/// A lowercase fact in a rule premise.
 #[test]
-fn a_lowercase_fact_fails_at_the_paren_in_every_rule_position() {
-    for (case, src, col) in [
-        ("premise", "rule R: [ foo(x) ] --> [ ]", 14),
-        ("conclusion", "rule R: [ ] --> [ foo('a') ]", 22),
-        ("action", "rule R: [ ] --[ foo('a') ]-> [ ]", 20),
-        ("persistent premise", "rule R: [ !foo(x) ] --> [ ]", 15),
-    ] {
-        assert_eq!(
-            err(&format!("theory T begin\n\n{src}\n\nend\n")),
-            format!(
-                "\"fact.spthy\" (line 3, column {col}):\n\
-                 unexpected \"(\"\n\
-                 expecting letter or digit\n\
-                 facts must start with upper-case letters"
-            ),
-            "case {case}"
-        );
-    }
+fn lowercase_fact_in_premise() {
+    assert_lowercase_fact(
+        "theory T begin\n\nrule R: [ foo(x) ] --> [ ]\n\nend\n",
+        "foo",
+        3,
+        11,
+    );
 }
 
-/// Whitespace between the name and the next token discards the pending
-/// `letter or digit` label.  The error then reports at the token after the
-/// space, whatever that token is.
+/// The same in a conclusion.
 #[test]
-fn whitespace_after_the_name_drops_the_letter_label() {
-    for (case, src, unexpected) in [
-        ("argument list", "rule R: [ foo (x) ] --> [ ]", "\"(\""),
-        ("bare name", "rule R: [ foo ] --> [ ]", "\"]\""),
-    ] {
-        assert_eq!(
-            err(&format!("theory T begin\n\n{src}\n\nend\n")),
-            format!(
-                "\"fact.spthy\" (line 3, column 15):\n\
-                 unexpected {unexpected}\n\
-                 facts must start with upper-case letters"
-            ),
-            "case {case}"
-        );
-    }
+fn lowercase_fact_in_conclusion() {
+    assert_lowercase_fact(
+        "theory T begin\n\nrule R: [ ] --> [ foo('a') ]\n\nend\n",
+        "foo",
+        3,
+        19,
+    );
+}
+
+/// The same in an action.
+#[test]
+fn lowercase_fact_in_action() {
+    assert_lowercase_fact(
+        "theory T begin\n\nrule R: [ ] --[ foo('a') ]-> [ ]\n\nend\n",
+        "foo",
+        3,
+        17,
+    );
+}
+
+/// A persistent lowercase fact behaves the same (the `!` parses first, and
+/// the position is the name's, one past the sigil).
+#[test]
+fn lowercase_persistent_fact() {
+    assert_lowercase_fact(
+        "theory T begin\n\nrule R: [ !foo(x) ] --> [ ]\n\nend\n",
+        "foo",
+        3,
+        12,
+    );
+}
+
+/// What follows the name does not move the report: whitespace before the
+/// argument list, or no argument list at all, both point at the name.
+#[test]
+fn the_token_after_the_name_does_not_move_the_report() {
+    assert_lowercase_fact(
+        "theory T begin\n\nrule R: [ foo (x) ] --> [ ]\n\nend\n",
+        "foo",
+        3,
+        11,
+    );
+    assert_lowercase_fact(
+        "theory T begin\n\nrule R: [ foo ] --> [ ]\n\nend\n",
+        "foo",
+        3,
+        11,
+    );
 }
 
 /// The ordering case that exposed the divergence: a rule whose conclusion
 /// bracket is left open swallows the following `macros:` keyword as a fact
-/// name — the fail sits at the `:` right after `macros`, label intact.
+/// name, so the rejection names `macros` rather than reporting a stray
+/// keyword.
 #[test]
 fn macros_keyword_after_open_bracket_is_a_fact_name() {
-    assert_eq!(
-        err("theory T begin\n\nrule R: [ ] --> [\nmacros:\nm() = 'a'\n\nend\n"),
-        "\"fact.spthy\" (line 4, column 7):\n\
-         unexpected \":\"\n\
-         expecting letter or digit\n\
-         facts must start with upper-case letters"
+    assert_lowercase_fact(
+        "theory T begin\n\nrule R: [ ] --> [\nmacros:\nm() = 'a'\n\nend\n",
+        "macros",
+        4,
+        1,
     );
 }

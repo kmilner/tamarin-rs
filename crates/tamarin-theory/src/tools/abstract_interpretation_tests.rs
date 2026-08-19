@@ -504,6 +504,7 @@ fn parsed_stub_rule(name: &str) -> p::Rule {
         embedded_restrictions: vec![],
         variants: vec![],
         left_right: None,
+        location: tamarin_parser::DUMMY_LOCATION,
     }
 }
 

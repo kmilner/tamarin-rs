@@ -15,7 +15,7 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_parser::ast as p;
+use tamarin_parser::{ast as p, DUMMY_LOCATION};
 use tamarin_term::lterm::LVar;
 use tamarin_theory::sapic::{pretty_position, Process, SapicLVar};
 
@@ -189,21 +189,27 @@ fn res_progress_init() -> p::Restriction {
         idx: 0,
         sort: p::SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     };
-    let init_at = p::Formula::Atom(p::Atom::Action(
-        p::Fact {
-            persistent: false,
-            name: "Init".into(),
-            args: vec![],
-            annotations: vec![],
-        },
-        p::Term::Var(tvar.clone()),
-    ));
-    let formula = p::Formula::Exists(vec![tvar], Box::new(init_at));
+    let init_at = p::Formula::atom(
+        p::Atom::Action(
+            p::Fact {
+                persistent: false,
+                name: "Init".into(),
+                args: vec![],
+                annotations: vec![],
+                location: DUMMY_LOCATION,
+            },
+            p::Term::Var(tvar.clone()),
+        ),
+        DUMMY_LOCATION,
+    );
+    let formula = p::Formula::exists(vec![tvar], init_at, DUMMY_LOCATION);
     p::Restriction {
         name: "progressInit".to_string(),
         formula,
         attributes: vec![],
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -261,37 +267,47 @@ fn make_restriction(pos: &[i64], tos: &PosSet) -> p::Restriction {
         idx: 1,
         sort: p::SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     };
     let t2var = p::VarSpec {
         name: "t".into(),
         idx: 2,
         sort: p::SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     };
 
     // antecedent = ProgressFrom_<pos>( prog_<pos> ) @ #t.1
-    let antecedent = p::Formula::Atom(p::Atom::Action(
-        p::Fact {
-            persistent: false,
-            name: format!("ProgressFrom_{}", pretty_position(&pos_v)),
-            args: vec![pvar_term.clone()],
-            annotations: vec![],
-        },
-        p::Term::Var(t1var.clone()),
-    ));
+    let antecedent = p::Formula::atom(
+        p::Atom::Action(
+            p::Fact {
+                persistent: false,
+                name: format!("ProgressFrom_{}", pretty_position(&pos_v)),
+                args: vec![pvar_term.clone()],
+                annotations: vec![],
+                location: DUMMY_LOCATION,
+            },
+            p::Term::Var(t1var.clone()),
+        ),
+        DUMMY_LOCATION,
+    );
 
     // progressTo to = ∃ #t.2. ProgressTo_<to>( prog_<pos> ) @ #t.2
     let progress_to = |to: &Pos| -> p::Formula {
-        let act = p::Formula::Atom(p::Atom::Action(
-            p::Fact {
-                persistent: false,
-                name: format!("ProgressTo_{}", pretty_position(to)),
-                args: vec![pvar_term.clone()],
-                annotations: vec![],
-            },
-            p::Term::Var(t2var.clone()),
-        ));
-        p::Formula::Exists(vec![t2var.clone()], Box::new(act))
+        let act = p::Formula::atom(
+            p::Atom::Action(
+                p::Fact {
+                    persistent: false,
+                    name: format!("ProgressTo_{}", pretty_position(to)),
+                    args: vec![pvar_term.clone()],
+                    annotations: vec![],
+                    location: DUMMY_LOCATION,
+                },
+                p::Term::Var(t2var.clone()),
+            ),
+            DUMMY_LOCATION,
+        );
+        p::Formula::exists(vec![t2var.clone()], act, DUMMY_LOCATION)
     };
 
     // bigOr over `toList tos` (ascending), right-nested as in HS
@@ -299,16 +315,18 @@ fn make_restriction(pos: &[i64], tos: &PosSet) -> p::Restriction {
     let tos_list: Vec<&Pos> = tos.iter().collect();
     let conclusion = big_or(&tos_list, &progress_to);
 
-    let body = p::Formula::Implies(Box::new(antecedent), Box::new(conclusion));
+    let body = p::Formula::implies(antecedent, conclusion);
     // `hinted forAll pvar $ hinted forAll t1var $ ...`
-    let formula = p::Formula::Forall(
+    let formula = p::Formula::forall(
         vec![pvar_spec],
-        Box::new(p::Formula::Forall(vec![t1var], Box::new(body))),
+        p::Formula::forall(vec![t1var], body, DUMMY_LOCATION),
+        DUMMY_LOCATION,
     );
     p::Restriction {
         name,
         formula,
         attributes: vec![],
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -316,11 +334,8 @@ fn make_restriction(pos: &[i64], tos: &PosSet) -> p::Restriction {
 /// empty case never occurs (`tos` is always non-empty here).
 fn big_or(tos: &[&Pos], progress_to: &impl Fn(&Pos) -> p::Formula) -> p::Formula {
     match tos {
-        [] => p::Formula::False,
+        [] => p::Formula::r#false(DUMMY_LOCATION),
         [to] => progress_to(to),
-        [to, rest @ ..] => p::Formula::Or(
-            Box::new(progress_to(to)),
-            Box::new(big_or(rest, progress_to)),
-        ),
+        [to, rest @ ..] => p::Formula::or(progress_to(to), big_or(rest, progress_to)),
     }
 }

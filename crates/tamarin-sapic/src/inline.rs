@@ -369,6 +369,8 @@ fn apply_match_vars(
 
 #[cfg(test)]
 mod tests {
+    use tamarin_parser::DUMMY_LOCATION;
+
     use super::*;
 
     fn pub_lit(s: &str) -> p::Term {
@@ -382,6 +384,7 @@ mod tests {
             idx: 0,
             sort: p::SortHint::Untagged,
             typ: None,
+            location: DUMMY_LOCATION,
         });
         p::ProcessDef {
             name: name.to_string(),
@@ -390,6 +393,7 @@ mod tests {
                 idx: 0,
                 sort: p::SortHint::Untagged,
                 typ: None,
+                location: DUMMY_LOCATION,
             }]),
             body: p::Process::Action {
                 action: p::SapicAction::ChOut {

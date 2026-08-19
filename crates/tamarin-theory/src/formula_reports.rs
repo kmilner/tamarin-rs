@@ -181,19 +181,19 @@ fn disallowed_sort_show(sort: p::SortHint) -> Option<&'static str> {
 /// contributes its own binder before its body's, and a connective its left
 /// operand's before its right's.
 fn collect_binders<'a>(fm: &'a p::Formula, out: &mut Vec<&'a p::VarSpec>) {
-    match fm {
-        p::Formula::False | p::Formula::True | p::Formula::Atom(_) => {}
-        p::Formula::Not(f) => collect_binders(f, out),
-        p::Formula::And(l, r)
-        | p::Formula::Or(l, r)
-        | p::Formula::Implies(l, r)
-        | p::Formula::Iff(l, r) => {
+    match &fm.kind {
+        p::FormulaKind::False | p::FormulaKind::True | p::FormulaKind::Atom(_) => {}
+        p::FormulaKind::Not(f) => collect_binders(f, out),
+        p::FormulaKind::And(l, r)
+        | p::FormulaKind::Or(l, r)
+        | p::FormulaKind::Implies(l, r)
+        | p::FormulaKind::Iff(l, r) => {
             collect_binders(l, out);
             collect_binders(r, out);
         }
         // A multi-variable `All x y. …` is nested `Quant`s in HS, so the
         // binders come out left to right, then the body's.
-        p::Formula::Forall(vs, body) | p::Formula::Exists(vs, body) => {
+        p::FormulaKind::Forall(vs, body) | p::FormulaKind::Exists(vs, body) => {
             out.extend(vs.iter());
             collect_binders(body, out);
         }

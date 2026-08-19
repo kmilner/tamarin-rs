@@ -127,21 +127,14 @@ pub fn load_from_source(
     maude_path: &str,
     derivcheck_timeout: u32,
 ) -> Result<TheoryEntry, LoadError> {
-    // Inject the parsec `SourcePos` name (the path HS prints in the frame
-    // header) from the origin: a local file's on-disk path, or the uploaded
-    // filename — the same value HS passes as `inFile`/`filename` to
-    // `parseString` (Dispatch.hs:170 `thLoad srcThy path`; Handler.hs:806
-    // `loadAndCloseTheory srcContent filename`).  `LoadError::Parse` then holds
-    // the byte-for-byte parsec frame.
+    // The source name shown in parse errors comes from the origin: a local
+    // file's on-disk path, or the uploaded filename — the same value HS passes
+    // as `inFile`/`filename` to `parseString` (Dispatch.hs:170 `thLoad srcThy
+    // path`; Handler.hs:806 `loadAndCloseTheory srcContent filename`).
+    // `LoadError::Parse` carries the rendered `ParseError`.  Every variant
+    // travels this way, including the GHC-`error`-derived `Abort`s that take
+    // down HS's web handler with an uncaught exception.
     let source_name = origin.label();
-    // Deliberate divergence, same policy as the other web error surfaces: a
-    // theory that trips one of the GHC `error`s inside HS's parser (`macro`'s
-    // reserved name / duplicate argument, Theory/Text/Parser/Macro.hs:34-38)
-    // takes down the HS web handler with an uncaught exception.  Here the
-    // failure travels as an ordinary `LoadError::Parse` and reaches the user
-    // through the normal parse-error surface — `Display for ParseError` renders
-    // a GHC `error` as its bare message, without the parsec frame the position
-    // would fake or the `HasCallStack` block that only the CLI reproduces.
     // Parser flags (`-D` defines + the `quit-on-warning` element) from the
     // interactive CLI, via [`PARSER_FLAGS`]; `#include` paths resolve
     // against the theory file's own directory — HS threads `Just inFile`
@@ -156,8 +149,17 @@ pub fn load_from_source(
         TheoryOrigin::Local(p) => p.parent().map(|d| d.to_path_buf()),
         _ => None,
     };
-    let mut parser_theory = parse_theory_with_base(src, &flags, base_dir)
-        .map_err(|e| LoadError::Parse(e.with_source(source_name).to_string()))?;
+    let mut parser_theory = parse_theory_with_base(src, &flags, base_dir).map_err(|e| {
+        let at = e.location();
+        let mut msg = format!("{}:{}:{}: {}", source_name, at.line, at.col, e);
+        // The variant's notes carry the found/expected detail the short
+        // description leaves out (the CLI shows them as codespan notes).
+        for note in e.notes() {
+            msg.push('\n');
+            msg.push_str(&note);
+        }
+        LoadError::Parse(msg)
+    })?;
 
     // HS `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) expands each
     // rule's `_restrict(φ)` into a fresh `Restr_<rule>_<i>` restriction

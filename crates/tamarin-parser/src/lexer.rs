@@ -72,6 +72,26 @@ impl<'a> Lexer<'a> {
         it.next()
     }
 
+    pub fn peek_until(&self, mut f: impl FnMut(char) -> bool) -> Option<&'a str> {
+        let rest = self.rest();
+        if rest.is_empty() {
+            return None;
+        }
+        let mut end = 0;
+        for c in rest.chars() {
+            if f(c) {
+                break;
+            }
+            end += c.len_utf8();
+        }
+        Some(&rest[..end])
+    }
+
+    /// Peek the next run of non-whitespace chars without advancing.
+    pub fn peek_until_ws(&self) -> Option<&'a str> {
+        self.peek_until(|c| c.is_whitespace())
+    }
+
     /// Advance one char, updating line/col.
     ///
     /// Columns follow parsec's `updatePosChar` (Text/Parsec/Pos.hs): `\n`

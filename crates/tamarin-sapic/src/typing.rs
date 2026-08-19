@@ -210,6 +210,7 @@ fn rename_cond_formula(
                 idx: nv.idx,
                 sort: v.sort,
                 typ: v.typ.clone(),
+                location: v.location,
             })
         })
     })
@@ -955,6 +956,7 @@ pub(crate) fn collect_user_fun_typings(parsed: &tamarin_parser::ast::Theory) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tamarin_parser::DUMMY_LOCATION;
     use tamarin_theory::sapic::ProcessParsedAnnotation;
 
     fn slv(name: &str, idx: u64, ty: Option<&str>) -> SapicLVar {
@@ -998,9 +1000,13 @@ mod tests {
                 name: "k".into(),
                 sort: p::SortHint::Msg,
                 idx: 0,
+                location: DUMMY_LOCATION,
             })
         };
-        let restr = p::Formula::Atom(p::Atom::Eq(k(), p::Term::PubLit("b".into())));
+        let restr = p::Formula::atom(
+            p::Atom::Eq(k(), p::Term::PubLit("b".into())),
+            tamarin_parser::DUMMY_LOCATION,
+        );
         let ev = tamarin_theory::fact::Fact::new(
             tamarin_theory::fact::FactTag::Proto(
                 tamarin_theory::fact::Multiplicity::Linear,
@@ -1040,7 +1046,7 @@ mod tests {
             "Ev's argument must be k.1"
         );
         // ...and so did the embedded restriction.
-        let p::Formula::Atom(p::Atom::Eq(lhs, _)) = &rest[0] else {
+        let p::FormulaKind::Atom(p::Atom::Eq(lhs, _)) = &rest[0].kind else {
             panic!("expected an equality restriction");
         };
         let p::Term::Var(v) = lhs else {

@@ -5,6 +5,7 @@
 use super::*;
 use crate::constraint::system::System;
 use tamarin_parser::ast::{Fact as PFact, ParsedMethod, ParsedProofTree};
+use tamarin_parser::DUMMY_LOCATION;
 use tamarin_term::lterm::{LSort, LVar};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::maude_sig::pair_maude_sig;
@@ -177,6 +178,7 @@ fn match_action_goal_by_name_arity() {
             name: "Setup".into(),
             args: Vec::new(),
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         },
         time_var: "t".into(),
         time_idx: 0,
@@ -201,6 +203,7 @@ fn no_match_returns_none() {
             name: "WrongName".into(),
             args: Vec::new(),
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         },
         time_var: "t".into(),
         time_idx: 0,
@@ -260,9 +263,11 @@ fn match_action_disambiguates_by_time_var_root() {
                     idx: 0,
                     sort: tamarin_parser::ast::SortHint::Untagged,
                     typ: None,
+                    location: DUMMY_LOCATION,
                 },
             )],
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         },
         time_var: "t2".into(),
         time_idx: 7,
@@ -286,9 +291,11 @@ fn match_action_disambiguates_by_time_var_root() {
                     idx: 0,
                     sort: tamarin_parser::ast::SortHint::Untagged,
                     typ: None,
+                    location: DUMMY_LOCATION,
                 },
             )],
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         },
         time_var: "t1".into(),
         time_idx: 5,
@@ -310,9 +317,11 @@ fn match_action_disambiguates_by_time_var_root() {
                     idx: 0,
                     sort: tamarin_parser::ast::SortHint::Untagged,
                     typ: None,
+                    location: DUMMY_LOCATION,
                 },
             )],
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         },
         time_var: "t2".into(),
         time_idx: 9,
@@ -343,6 +352,7 @@ fn match_premise_disambiguates_by_time_var_root() {
             name: "Inp".into(),
             args: Vec::new(),
             annotations: Vec::new(),
+            location: DUMMY_LOCATION,
         },
         prem_idx: 0,
         time_var: "v".into(),
@@ -492,6 +502,7 @@ fn match_disj_goal_by_alt_count() {
         idx: 0,
         sort: tamarin_parser::ast::SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     };
     // Two non-quant alts.
     let two = Goal::Disj(Disj::new(vec![
@@ -579,6 +590,7 @@ fn match_disj_goal_prefers_alt_text_score_over_source_order() {
         idx: 0,
         sort: tamarin_parser::ast::SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     };
     let last = |n: &str| Guarded::Atom(GAtom::Last(GTerm::Var(BVar::Free(mk_vs(n)))));
     // The two goals have the same alt count and the same NonQuant×2

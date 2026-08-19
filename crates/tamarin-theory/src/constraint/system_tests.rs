@@ -703,6 +703,7 @@ fn insert_lemma_flattens_top_level_conj() {
             idx: 0,
             sort: SortHint::Node,
             typ: None,
+            location: tamarin_parser::DUMMY_LOCATION,
         })
     };
     let l1 =
@@ -758,6 +759,7 @@ fn formula_to_system_partitions_safety_restrictions() {
             idx: 0,
             sort: SortHint::Node,
             typ: None,
+            location: tamarin_parser::DUMMY_LOCATION,
         })
     };
     // `Last(i)` has a free variable, so `is_safety_formula` rejects it.  It

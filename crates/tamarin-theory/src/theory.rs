@@ -553,14 +553,17 @@ mod tests {
             modulo: None,
             attributes: Vec::new(),
             trace_quantifier: TraceQuantifier::AllTraces,
-            formula: tamarin_parser::ast::Formula::True,
+            formula: tamarin_parser::ast::Formula::r#true(tamarin_parser::DUMMY_LOCATION),
             proof: (),
             plaintext: String::new(),
         }
     }
 
     fn restriction(name: &str) -> OpenRestriction {
-        OpenRestriction::new(name, tamarin_parser::ast::Formula::True)
+        OpenRestriction::new(
+            name,
+            tamarin_parser::ast::Formula::r#true(tamarin_parser::DUMMY_LOCATION),
+        )
     }
 
     fn lnmacro(name: &str) -> LNMacro {

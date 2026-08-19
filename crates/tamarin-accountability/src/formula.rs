@@ -21,7 +21,7 @@
 //! locally-nameless converters that let the generated lemmas reuse the parser-AST
 //! rendering and guarded-proving paths.
 
-use tamarin_parser::ast as p;
+use tamarin_parser::{ast as p, DUMMY_LOCATION};
 use tamarin_theory::guarded_types::{
     self as gt, atom_to_gatom_free, close_subst, collect_free_atom, gatom_to_atom, lvar_to_binding,
     map_free_atom, normalise_msg_sort, open_subst, subst_bound_atom_at_depth,
@@ -102,6 +102,7 @@ pub(crate) fn temp_var(name: &str) -> p::VarSpec {
         idx: 0,
         sort: p::SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -112,6 +113,7 @@ pub(crate) fn msg_var(name: &str) -> p::VarSpec {
         idx: 0,
         sort: p::SortHint::Msg,
         typ: None,
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -658,37 +660,37 @@ pub(crate) fn from_p_formula(f: &p::Formula) -> Fm {
 }
 
 fn from_p(f: &p::Formula, scope: &[p::VarSpec]) -> Fm {
-    match f {
-        p::Formula::True => Fm::Tf(true),
-        p::Formula::False => Fm::Tf(false),
-        p::Formula::Atom(a) => {
+    match &f.kind {
+        p::FormulaKind::True => Fm::Tf(true),
+        p::FormulaKind::False => Fm::Tf(false),
+        p::FormulaKind::Atom(a) => {
             let ga = atom_to_gatom_free(a);
             let ga = subst_free_atom_at_depth(&ga, &close_subst(scope), 0);
             Fm::Ato(resolve_atom_sorts(&ga))
         }
-        p::Formula::Not(p_) => Fm::Not(Box::new(from_p(p_, scope))),
-        p::Formula::And(a, b) => Fm::Conn(
+        p::FormulaKind::Not(p_) => Fm::Not(Box::new(from_p(p_, scope))),
+        p::FormulaKind::And(a, b) => Fm::Conn(
             Conn::And,
             Box::new(from_p(a, scope)),
             Box::new(from_p(b, scope)),
         ),
-        p::Formula::Or(a, b) => Fm::Conn(
+        p::FormulaKind::Or(a, b) => Fm::Conn(
             Conn::Or,
             Box::new(from_p(a, scope)),
             Box::new(from_p(b, scope)),
         ),
-        p::Formula::Implies(a, b) => Fm::Conn(
+        p::FormulaKind::Implies(a, b) => Fm::Conn(
             Conn::Imp,
             Box::new(from_p(a, scope)),
             Box::new(from_p(b, scope)),
         ),
-        p::Formula::Iff(a, b) => Fm::Conn(
+        p::FormulaKind::Iff(a, b) => Fm::Conn(
             Conn::Iff,
             Box::new(from_p(a, scope)),
             Box::new(from_p(b, scope)),
         ),
-        p::Formula::Forall(vs, body) => from_p_qua(Quant::All, vs, body, scope),
-        p::Formula::Exists(vs, body) => from_p_qua(Quant::Ex, vs, body, scope),
+        p::FormulaKind::Forall(vs, body) => from_p_qua(Quant::All, vs, body, scope),
+        p::FormulaKind::Exists(vs, body) => from_p_qua(Quant::Ex, vs, body, scope),
     }
 }
 
@@ -801,19 +803,19 @@ fn to_p(fm: &Fm, opened: &[p::VarSpec], counter: &mut u64) -> p::Formula {
     match fm {
         Fm::Ato(a) => {
             let a = subst_bound_atom_at_depth(a, &open_subst(opened), 0);
-            p::Formula::Atom(gatom_to_atom(&a))
+            p::Formula::atom(gatom_to_atom(&a), DUMMY_LOCATION)
         }
-        Fm::Tf(true) => p::Formula::True,
-        Fm::Tf(false) => p::Formula::False,
-        Fm::Not(p_) => p::Formula::Not(Box::new(to_p(p_, opened, counter))),
+        Fm::Tf(true) => p::Formula::r#true(DUMMY_LOCATION),
+        Fm::Tf(false) => p::Formula::r#false(DUMMY_LOCATION),
+        Fm::Not(p_) => p::Formula::not(to_p(p_, opened, counter), DUMMY_LOCATION),
         Fm::Conn(c, a, b) => {
-            let a = Box::new(to_p(a, opened, counter));
-            let b = Box::new(to_p(b, opened, counter));
+            let a = to_p(a, opened, counter);
+            let b = to_p(b, opened, counter);
             match c {
-                Conn::And => p::Formula::And(a, b),
-                Conn::Or => p::Formula::Or(a, b),
-                Conn::Imp => p::Formula::Implies(a, b),
-                Conn::Iff => p::Formula::Iff(a, b),
+                Conn::And => p::Formula::and(a, b),
+                Conn::Or => p::Formula::or(a, b),
+                Conn::Imp => p::Formula::implies(a, b),
+                Conn::Iff => p::Formula::iff(a, b),
             }
         }
         Fm::Qua(quant, binding, body) => {
@@ -826,13 +828,14 @@ fn to_p(fm: &Fm, opened: &[p::VarSpec], counter: &mut u64) -> p::Formula {
                 },
                 sort: binding.sort,
                 typ: None,
+                location: DUMMY_LOCATION,
             };
             let mut new_opened = opened.to_vec();
             new_opened.push(v.clone());
-            let inner = Box::new(to_p(body, &new_opened, counter));
+            let inner = to_p(body, &new_opened, counter);
             match quant {
-                Quant::All => p::Formula::Forall(vec![v], inner),
-                Quant::Ex => p::Formula::Exists(vec![v], inner),
+                Quant::All => p::Formula::forall(vec![v], inner, DUMMY_LOCATION),
+                Quant::Ex => p::Formula::exists(vec![v], inner, DUMMY_LOCATION),
             }
         }
     }
@@ -897,6 +900,7 @@ mod tests {
             idx,
             sort: p::SortHint::Node,
             typ: None,
+            location: DUMMY_LOCATION,
         }
     }
 
@@ -916,6 +920,7 @@ mod tests {
             idx,
             sort: p::SortHint::Msg,
             typ: None,
+            location: DUMMY_LOCATION,
         }
     }
 
@@ -924,22 +929,28 @@ mod tests {
     #[test]
     fn case_test_round_trip() {
         // Ex #i. A(x)@i, parser AST (x untagged bare, #i node binder).
-        let src = p::Formula::Exists(
+        let src = p::Formula::exists(
             vec![node("i", 0)],
-            Box::new(p::Formula::Atom(p::Atom::Action(
-                p::Fact {
-                    persistent: false,
-                    name: "A".into(),
-                    args: vec![p::Term::Var(p::VarSpec {
-                        name: "x".into(),
-                        idx: 0,
-                        sort: p::SortHint::Untagged,
-                        typ: None,
-                    })],
-                    annotations: vec![],
-                },
-                p::Term::Var(node("i", 0)),
-            ))),
+            p::Formula::atom(
+                p::Atom::Action(
+                    p::Fact {
+                        persistent: false,
+                        name: "A".into(),
+                        args: vec![p::Term::Var(p::VarSpec {
+                            name: "x".into(),
+                            idx: 0,
+                            sort: p::SortHint::Untagged,
+                            typ: None,
+                            location: DUMMY_LOCATION,
+                        })],
+                        annotations: vec![],
+                        location: DUMMY_LOCATION,
+                    },
+                    p::Term::Var(node("i", 0)),
+                ),
+                DUMMY_LOCATION,
+            ),
+            DUMMY_LOCATION,
         );
         let fm = from_p_formula(&src);
         // x is the only free var; it resolves to Msg.
@@ -957,17 +968,22 @@ mod tests {
         let back = to_p_formula(&fm);
         assert_eq!(
             back,
-            p::Formula::Exists(
+            p::Formula::exists(
                 vec![node("i", 0)],
-                Box::new(p::Formula::Atom(p::Atom::Action(
-                    p::Fact {
-                        persistent: false,
-                        name: "A".into(),
-                        args: vec![p::Term::Var(msg_var_idx("x", 0))],
-                        annotations: vec![],
-                    },
-                    p::Term::Var(node("i", 0)),
-                ))),
+                p::Formula::atom(
+                    p::Atom::Action(
+                        p::Fact {
+                            persistent: false,
+                            name: "A".into(),
+                            args: vec![p::Term::Var(msg_var_idx("x", 0))],
+                            annotations: vec![],
+                            location: DUMMY_LOCATION,
+                        },
+                        p::Term::Var(node("i", 0)),
+                    ),
+                    DUMMY_LOCATION,
+                ),
+                DUMMY_LOCATION,
             )
         );
     }

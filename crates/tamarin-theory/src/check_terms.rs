@@ -348,15 +348,17 @@ type Scope = Vec<VarSpec>;
 /// connectives and quantifiers, pushing binders onto `scope` so that
 /// variable uses inside the body get the right De-Bruijn index.
 fn collect_formula_terms(fm: &Formula, scope: &mut Scope, irr: &Irreducible, out: &mut Vec<RTerm>) {
-    match fm {
-        Formula::True | Formula::False => {}
-        Formula::Atom(a) => collect_atom_terms(a, scope, irr, out),
-        Formula::Not(g) => collect_formula_terms(g, scope, irr, out),
-        Formula::And(a, b) | Formula::Or(a, b) | Formula::Implies(a, b) | Formula::Iff(a, b) => {
+    use tamarin_parser::ast::FormulaKind::*;
+    match &fm.kind {
+        True => {}
+        False => {}
+        Atom(a) => collect_atom_terms(a, scope, irr, out),
+        Not(g) => collect_formula_terms(g, scope, irr, out),
+        And(a, b) | Or(a, b) | Implies(a, b) | Iff(a, b) => {
             collect_formula_terms(a, scope, irr, out);
             collect_formula_terms(b, scope, irr, out);
         }
-        Formula::Forall(vs, body) | Formula::Exists(vs, body) => {
+        Forall(vs, body) | Exists(vs, body) => {
             // HS `foldr (hinted q) f vs` quantifies the LAST var innermost.
             // Pushing in source order makes the last-listed var the
             // innermost binder (highest scope position) — exactly the

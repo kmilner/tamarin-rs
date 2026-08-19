@@ -30,7 +30,8 @@
 //! the replay walker can fall back to the auto-prover.
 
 use crate::ast::{DisjAlt, Fact, GoalSpec, ParsedMethod, ParsedProofTree};
-use crate::lexer::{is_ident_char, Lexer};
+use crate::lexer::{is_ident_char, Lexer, Pos};
+use crate::Location;
 
 #[derive(Debug, Clone)]
 pub struct ProofTreeParseError {
@@ -693,6 +694,7 @@ impl<'a> GoalParser<'a> {
         let save = self.lx.pos();
         // Optional `!` prefix for persistent facts.
         self.lx.skip_ws();
+        let fact_start = self.lx.pos();
         let persistent = self.lx.eat_str("!");
         self.lx.skip_ws();
         // Fact name: starts with uppercase.
@@ -710,7 +712,10 @@ impl<'a> GoalParser<'a> {
         // parse the terms). `build_fact` later splits on top-level commas
         // and wraps each arg as `crate::ast::Term::Var` so the Fact struct
         // is well-formed.
+        let args_text_start = self.lx.pos();
         let args_text = self.read_balanced_paren()?;
+        let fact_end = self.lx.pos();
+        let fact_location = Location::from_positions(fact_end, fact_start);
         // After the `)`, expect `@` (action) or `▶<digit>` (premise).
         self.lx.skip_ws();
         if self.lx.eat_str("@") {
@@ -733,7 +738,7 @@ impl<'a> GoalParser<'a> {
                 0
             };
             return Some(GoalSpec::Action {
-                fact: build_fact(persistent, name, &args_text),
+                fact: build_fact(persistent, name, &args_text, args_text_start, fact_location),
                 time_var: tvar,
                 time_idx: tidx,
             });
@@ -763,7 +768,7 @@ impl<'a> GoalParser<'a> {
                 0
             };
             return Some(GoalSpec::Premise {
-                fact: build_fact(persistent, name, &args_text),
+                fact: build_fact(persistent, name, &args_text, args_text_start, fact_location),
                 prem_idx: idx_val as usize,
                 time_var: tvar,
                 time_idx: tidx,
@@ -782,20 +787,36 @@ impl<'a> GoalParser<'a> {
 /// argument terms — that's used only for diagnostics today.  The
 /// arity (number of commas at top level) is the load-bearing field for
 /// goal matching (matches the count of terms in the runtime LNFact).
-fn build_fact(persistent: bool, name: String, args_text: &str) -> Fact {
+fn build_fact(
+    persistent: bool,
+    name: String,
+    args_text: &str,
+    args_text_start: Pos,
+    fact_location: Location,
+) -> Fact {
     use crate::ast::Term;
+    // Offset of `trimmed` within the untrimmed `args_text`, needed to map
+    // each split part's offset (relative to `trimmed`) back to an absolute
+    // `Pos` starting from `args_text_start`.
+    let leading_ws = args_text.len() - args_text.trim_start().len();
     let trimmed = args_text.trim();
     let args: Vec<Term> = if trimmed.is_empty() {
         Vec::new()
     } else {
         split_top_level_commas(trimmed)
             .into_iter()
-            .map(|s| {
+            .map(|(offset, part)| {
+                let part_leading_ws = part.len() - part.trim_start().len();
+                let part_trimmed = part.trim();
+                let start_offset = leading_ws + offset + part_leading_ws;
+                let start = advance_pos(args_text_start, &args_text[..start_offset]);
+                let end = advance_pos(start, part_trimmed);
                 Term::Var(crate::ast::VarSpec {
-                    name: s.trim().to_string(),
+                    name: part_trimmed.to_string(),
                     idx: 0,
                     sort: crate::ast::SortHint::Untagged,
                     typ: None,
+                    location: Location::from_positions(start, end),
                 })
             })
             .collect()
@@ -805,14 +826,36 @@ fn build_fact(persistent: bool, name: String, args_text: &str) -> Fact {
         name,
         args,
         annotations: Vec::new(),
+        location: fact_location,
     }
 }
 
+/// Advance `start` across `consumed`, mirroring `Lexer::bump`'s line/col
+/// bookkeeping, to recover the absolute `Pos` after skipping that text.
+fn advance_pos(start: Pos, consumed: &str) -> Pos {
+    let mut pos = start;
+    for c in consumed.chars() {
+        pos.offset += c.len_utf8();
+        match c {
+            '\n' => {
+                pos.line += 1;
+                pos.col = 1;
+            }
+            '\t' => pos.col += 8 - ((pos.col - 1) % 8),
+            _ => pos.col += 1,
+        }
+    }
+    pos
+}
+
 /// Split a string at top-level commas — ignores commas inside any kind
-/// of bracket (`()`, `<>`, `[]`, `{}`).
-fn split_top_level_commas(s: &str) -> Vec<String> {
+/// of bracket (`()`, `<>`, `[]`, `{}`).  Each returned part is paired with
+/// its byte offset within `s`, so callers can recover its source `Location`.
+fn split_top_level_commas(s: &str) -> Vec<(usize, String)> {
     let mut out = Vec::new();
     let mut cur = String::new();
+    let mut cur_start = 0usize;
+    let mut byte_pos = 0usize;
     let mut depth: i32 = 0;
     for c in s.chars() {
         match c {
@@ -825,13 +868,15 @@ fn split_top_level_commas(s: &str) -> Vec<String> {
                 cur.push(c);
             }
             ',' if depth == 0 => {
-                out.push(std::mem::take(&mut cur));
+                out.push((cur_start, std::mem::take(&mut cur)));
+                cur_start = byte_pos + c.len_utf8();
             }
             _ => cur.push(c),
         }
+        byte_pos += c.len_utf8();
     }
     if !cur.is_empty() {
-        out.push(cur);
+        out.push((cur_start, cur));
     }
     out
 }

@@ -26,7 +26,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use tamarin_parser::parse_theory;
+use tamarin_parser::{parse_theory, DUMMY_LOCATION};
 use tamarin_theory::guarded::{formula_to_guarded, Guarded, Quant};
 
 fn fixtures_dir() -> PathBuf {
@@ -1557,6 +1557,7 @@ fn atom_decomposition_creates_action_goal_in_simplify() {
             idx: 0,
             sort,
             typ: None,
+            location: DUMMY_LOCATION,
         })
     };
     let action_atom = Atom::Action(
@@ -1565,6 +1566,7 @@ fn atom_decomposition_creates_action_goal_in_simplify() {
             annotations: Vec::new(),
             name: "Setup".into(),
             args: vec![mkvar("k", SortHint::Msg)],
+            location: DUMMY_LOCATION,
         },
         mkvar("i", SortHint::Node),
     );
@@ -1696,6 +1698,7 @@ fn simplify_conj_wrapping_disj_produces_goal() {
             idx: 0,
             sort: SortHint::Node,
             typ: None,
+            location: DUMMY_LOCATION,
         })
     };
     let a1 = tamarin_theory::guarded::Guarded::Atom(tamarin_theory::guarded::atom_to_gatom_free(

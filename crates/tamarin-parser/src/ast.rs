@@ -15,6 +15,10 @@
 // Top-level theory
 // =============================================================================
 
+use std::ops::Deref;
+
+use crate::parser::Location;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Theory {
     pub is_diff: bool,
@@ -68,7 +72,7 @@ pub enum TheoryItem {
 // Functions / equations / macros / predicates / restrictions
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct FunctionDecl {
     pub name: String,
     pub arg_types: Vec<Option<String>>,
@@ -90,6 +94,43 @@ pub struct FunctionDecl {
     /// Theory/Text/Parser/Signature.hs:183-225): neither = `NotNDC`, `ndc`
     /// alone = `IsNDC`, `ndc_diff` alone = `IsNDCDiff`, both = `IsNDCBoth`.
     pub ndc_diff: bool,
+    pub location: Location,
+}
+
+impl PartialEq for FunctionDecl {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            name: _,
+            arg_types: _,
+            out_type: _,
+            private: _,
+            destructor: _,
+            ac: _,
+            ndc: _,
+            ndc_diff: _,
+            location: _,
+        } = self;
+        let Self {
+            name: _,
+            arg_types: _,
+            out_type: _,
+            private: _,
+            destructor: _,
+            ac: _,
+            ndc: _,
+            ndc_diff: _,
+            location: _,
+        } = other;
+        // Everything but location
+        self.name == other.name
+            && self.arg_types == other.arg_types
+            && self.out_type == other.out_type
+            && self.private == other.private
+            && self.destructor == other.destructor
+            && self.ac == other.ac
+            && self.ndc == other.ndc
+            && self.ndc_diff == other.ndc_diff
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -111,11 +152,33 @@ pub struct Predicate {
     pub formula: Formula,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Restriction {
     pub name: String,
     pub formula: Formula,
     pub attributes: Vec<RestrictionAttr>,
+    pub location: Location,
+}
+
+impl PartialEq for Restriction {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            name: _,
+            formula: _,
+            attributes: _,
+            location: _,
+        } = self;
+        let Self {
+            name: _,
+            formula: _,
+            attributes: _,
+            location: _,
+        } = other;
+        // Everything but location
+        self.name == other.name
+            && self.formula == other.formula
+            && self.attributes == other.attributes
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -128,7 +191,7 @@ pub enum RestrictionAttr {
 // Rules
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Rule {
     pub name: String,
     pub modulo: Option<String>, // E or AC
@@ -140,10 +203,76 @@ pub struct Rule {
     pub embedded_restrictions: Vec<Formula>,
     pub variants: Vec<Rule>,
     pub left_right: Option<(Box<Rule>, Box<Rule>)>,
+    pub location: Location,
+}
+
+impl PartialEq for Rule {
+    fn eq(&self, other: &Self) -> bool {
+        // Compilation error once we add new fields
+        let Rule {
+            name: _,
+            modulo: _,
+            attributes: _,
+            let_block: _,
+            premises: _,
+            actions: _,
+            conclusions: _,
+            embedded_restrictions: _,
+            variants: _,
+            left_right: _,
+            location: _,
+        } = self;
+        let Rule {
+            name: _,
+            modulo: _,
+            attributes: _,
+            let_block: _,
+            premises: _,
+            actions: _,
+            conclusions: _,
+            embedded_restrictions: _,
+            variants: _,
+            left_right: _,
+            location: _,
+        } = other;
+        // Everything but the location
+        self.name == other.name
+            && self.modulo == other.modulo
+            && self.attributes == other.attributes
+            && self.let_block == other.let_block
+            && self.premises == other.premises
+            && self.actions == other.actions
+            && self.conclusions == other.conclusions
+            && self.embedded_restrictions == other.embedded_restrictions
+            && self.variants == other.variants
+            && self.left_right == other.left_right
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RuleAttr {
+    pub kind: RuleAttrKind,
+    pub location: Location,
+}
+
+impl PartialEq for RuleAttr {
+    fn eq(&self, other: &Self) -> bool {
+        // Compilation error once we add new fields
+        let RuleAttr {
+            kind: _,
+            location: _,
+        } = self;
+        let RuleAttr {
+            kind: _,
+            location: _,
+        } = other;
+        // Everything but the location
+        self.kind == other.kind
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum RuleAttr {
+pub enum RuleAttrKind {
     Color(String),
     NoDerivCheck,
     Role(String),
@@ -531,12 +660,38 @@ pub enum Condition {
 // Facts
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Fact {
     pub persistent: bool,
     pub name: String,
     pub args: Vec<Term>,
     pub annotations: Vec<FactAnnotation>,
+    pub location: Location,
+}
+
+impl PartialEq for Fact {
+    fn eq(&self, other: &Self) -> bool {
+        // Compilation error once we add new fields
+        let Fact {
+            persistent: _,
+            name: _,
+            args: _,
+            annotations: _,
+            location: _,
+        } = self;
+        let Fact {
+            persistent: _,
+            name: _,
+            args: _,
+            annotations: _,
+            location: _,
+        } = other;
+        // Everything but the location
+        self.persistent == other.persistent
+            && self.name == other.name
+            && self.args == other.args
+            && self.annotations == other.annotations
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Hash)]
@@ -550,8 +705,94 @@ pub enum FactAnnotation {
 // Formulas
 // =============================================================================
 
+#[derive(Debug, Clone)]
+pub struct Formula {
+    pub kind: FormulaKind,
+    pub location: Location,
+}
+
+impl Formula {
+    pub fn new(kind: FormulaKind, location: Location) -> Self {
+        Self { kind, location }
+    }
+
+    pub fn and(self, other: Formula) -> Self {
+        let new_loc = Location::from_locations(self.location, other.location);
+        Formula::new(FormulaKind::And(Box::new(self), Box::new(other)), new_loc)
+    }
+
+    pub fn or(self, other: Formula) -> Self {
+        let new_loc = Location::from_locations(self.location, other.location);
+        Formula::new(FormulaKind::Or(Box::new(self), Box::new(other)), new_loc)
+    }
+
+    pub fn implies(self, other: Formula) -> Self {
+        let new_loc = Location::from_locations(self.location, other.location);
+        Formula::new(
+            FormulaKind::Implies(Box::new(self), Box::new(other)),
+            new_loc,
+        )
+    }
+
+    pub fn iff(self, other: Formula) -> Self {
+        let new_loc = Location::from_locations(self.location, other.location);
+        Formula::new(FormulaKind::Iff(Box::new(self), Box::new(other)), new_loc)
+    }
+
+    pub fn not(inner: Formula, start: Location) -> Self {
+        let new_loc = Location::from_locations(start, inner.location);
+        Formula::new(FormulaKind::Not(Box::new(inner)), new_loc)
+    }
+
+    pub fn forall(vars: Vec<VarSpec>, body: Formula, start: Location) -> Self {
+        let new_loc = Location::from_locations(start, body.location);
+        Formula::new(FormulaKind::Forall(vars, Box::new(body)), new_loc)
+    }
+
+    pub fn exists(vars: Vec<VarSpec>, body: Formula, start: Location) -> Self {
+        let new_loc = Location::from_locations(start, body.location);
+        Formula::new(FormulaKind::Exists(vars, Box::new(body)), new_loc)
+    }
+
+    pub fn atom(atom: Atom, location: Location) -> Self {
+        Formula::new(FormulaKind::Atom(atom), location)
+    }
+
+    pub fn r#false(location: Location) -> Self {
+        Formula::new(FormulaKind::False, location)
+    }
+
+    pub fn r#true(location: Location) -> Self {
+        Formula::new(FormulaKind::True, location)
+    }
+}
+
+impl Deref for Formula {
+    type Target = FormulaKind;
+
+    fn deref(&self) -> &Self::Target {
+        &self.kind
+    }
+}
+
+impl PartialEq for Formula {
+    fn eq(&self, other: &Self) -> bool {
+        // Compilation error once we add new fields
+        let Formula {
+            kind: _,
+            location: _,
+        } = self;
+        let Formula {
+            kind: _,
+            location: _,
+        } = other;
+        // Everything but the location
+        self.kind == other.kind
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
-pub enum Formula {
+pub enum FormulaKind {
     False,
     True,
     Atom(Atom),
@@ -645,12 +886,56 @@ impl BinOp {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct VarSpec {
     pub name: String,
     pub idx: u64,
     pub sort: SortHint,
     pub typ: Option<String>, // SAPIC type annotation
+    pub location: Location,
+}
+
+impl PartialEq for VarSpec {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            name: _,
+            idx: _,
+            sort: _,
+            typ: _,
+            location: _,
+        } = self;
+        let Self {
+            name: _,
+            idx: _,
+            sort: _,
+            typ: _,
+            location: _,
+        } = other;
+        // Everything but location
+        self.name == other.name
+            && self.idx == other.idx
+            && self.sort == other.sort
+            && self.typ == other.typ
+    }
+}
+
+impl Eq for VarSpec {}
+
+impl std::hash::Hash for VarSpec {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let Self {
+            name: _,
+            idx: _,
+            sort: _,
+            typ: _,
+            location: _,
+        } = self;
+        // Everything but location
+        self.name.hash(state);
+        self.idx.hash(state);
+        self.sort.hash(state);
+        self.typ.hash(state);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -674,6 +959,38 @@ pub enum SuffixSort {
     Fresh,
     Node,
     Nat,
+}
+
+impl SuffixSort {
+    fn as_str(&self) -> &'static str {
+        match self {
+            SuffixSort::Msg => "msg",
+            SuffixSort::Pub => "pub",
+            SuffixSort::Fresh => "fresh",
+            SuffixSort::Node => "node",
+            SuffixSort::Nat => "nat",
+        }
+    }
+}
+
+impl std::fmt::Display for VarSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.sort {
+            SortHint::Fresh => write!(f, "~{}", self.name)?,
+            SortHint::Pub => write!(f, "${}", self.name)?,
+            SortHint::Node => write!(f, "#{}", self.name)?,
+            SortHint::Nat => write!(f, "%{}", self.name)?,
+            SortHint::Msg | SortHint::Untagged => write!(f, "{}", self.name)?,
+            SortHint::Suffix(s) => write!(f, "{}:{}", self.name, s.as_str())?,
+        }
+        if self.idx != 0 {
+            write!(f, ".{}", self.idx)?;
+        }
+        if let Some(typ) = &self.typ {
+            write!(f, ":{typ}")?;
+        }
+        Ok(())
+    }
 }
 
 // =============================================================================
