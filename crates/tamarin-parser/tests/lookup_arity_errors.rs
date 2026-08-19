@@ -236,11 +236,12 @@ fn formula_lowercase_application_with_whitespace_is_undeclared() {
     assert_undeclared(src, "p3", 8, 14);
 }
 
-/// Asserts `src` fails with the relational expected set at `line`:`col` on a
-/// token starting with `found` — the error after a complete formula-atom
-/// term that no relational operator follows.
+/// Asserts `src` fails with the formula-atom tail error at `line`:`col` on a
+/// token starting with `found`, carrying exactly the `expected` labels — the
+/// error after a complete formula-atom term that no relational operator
+/// follows (head-dependent, HS `blatom`'s alternation).
 #[track_caller]
-fn assert_relational_expected(src: &str, line: u32, col: u32, found: &str) {
+fn assert_relational_expected(src: &str, line: u32, col: u32, found: &str, expected: &[&str]) {
     let e = parse_theory(src, &[]).expect_err("must fail to parse");
     assert!(
         matches!(&e, ParseError::Expected { .. }),
@@ -253,38 +254,41 @@ fn assert_relational_expected(src: &str, line: u32, col: u32, found: &str) {
         got.starts_with(found),
         "offending token {got:?} should start with {found:?}"
     );
-    assert_eq!(e.expected().unwrap_or_default(), ["=", "<<", "<", "(<)"]);
+    assert_eq!(e.expected().unwrap_or_default(), expected);
 }
 
 /// A DECLARED, well-arity application where a fact is needed parses as a
-/// term; the missing relational operator then errors at the `@` — a fact
-/// name must be uppercase, so the application can never become an action.
+/// term; the un-`try`'d node-equality alternative then re-reads the HEAD and
+/// errors right after the identifier — at the `(`, even though the parsed
+/// atom continued past it.
 #[test]
-fn formula_declared_application_errors_at_the_relop_position() {
+fn formula_declared_application_errors_after_the_name() {
     let src = "theory T\nbegin\n\nfunctions: g/1\n\nrule r:\n  [ ] --> [ ]\n\nlemma L:\n  \"All x #i. g(x) @ #i ==> F\"\n\nend\n";
-    assert_relational_expected(src, 10, 19, "@");
+    assert_relational_expected(src, 10, 15, "(", &["letter or digit", "\".\"", "\"=\""]);
 }
 
 /// The same with the lowercase name DECLARED at the used arity: the
-/// application parses, and the `@` is the error.
+/// application parses, and the report sits after the name.
 #[test]
-fn formula_lowercase_fact_declared_as_function_fails_at_the_relop() {
+fn formula_lowercase_fact_declared_as_function_fails_after_the_name() {
     let src = "theory T\nbegin\n\nfunctions: p3/1\n\nrule r:\n  [ ] --> [ ]\n\nlemma L:\n  \"All x #i. p3(x) @ #i ==> F\"\n\nend\n";
-    assert_relational_expected(src, 10, 20, "@");
+    assert_relational_expected(src, 10, 16, "(", &["letter or digit", "\".\"", "\"=\""]);
 }
 
-/// A bare variable with no relational operator: error at the `@`.
+/// A bare variable with no relational operator: error at the `@`.  The
+/// whitespace after `x` spends the `letter or digit` hangover.
 #[test]
 fn formula_bare_variable_errors_at_the_relop_position() {
     let src = "theory T\nbegin\n\nrule r:\n  [ ] --> [ ]\n\nlemma L:\n  \"All x #i. x @ #i ==> F\"\n\nend\n";
-    assert_relational_expected(src, 8, 16, "@");
+    assert_relational_expected(src, 8, 16, "@", &["\".\"", "\"=\""]);
 }
 
-/// A non-identifier-headed atom (`'a' @ …`) reports the same set.
+/// A non-identifier-headed atom (`'a' @ …`): `nodevar` cannot consume, so
+/// the `<?>` relabels of the relational alternatives survive.
 #[test]
-fn formula_nonidentifier_atom_errors_at_the_relop_position() {
+fn formula_nonidentifier_atom_unions_relational_labels() {
     let src = "theory T\nbegin\n\nrule r:\n  [ ] --> [ ]\n\nlemma L:\n  \"All x #i. 'a' @ #i ==> F\"\n\nend\n";
-    assert_relational_expected(src, 8, 18, "@");
+    assert_relational_expected(src, 8, 18, "@", &["subterm predicate", "term equality"]);
 }
 
 /// An undeclared UPPERCASE application before a relational operator: the

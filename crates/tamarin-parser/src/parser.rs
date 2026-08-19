@@ -5664,16 +5664,67 @@ impl<'a> Parser<'a> {
         // here when `peek_atom_relop` diverted a fact whose relop turned out
         // to belong AFTER it, e.g. `P3(x) = y` with `P3` not a function), then
         // the UN-try'd node-equality `nodevarTerm <* opEqual` (alt 8), whose
-        // consumed failure aborts the whole formula parse and is the frame
+        // consumed failure aborts the whole formula parse and is the error
         // the user sees.
         let after_lhs = self.save();
         self.restore(save_f);
         if let Ok(f) = self.fact() {
             return Ok(FormulaKind::Atom(Atom::Pred(f)));
         }
+        Err(self.formula_atom_tail_error(save_f, after_lhs))
+    }
+
+    /// The error HS's formula-atom alternation reports once every `blatom`
+    /// alternative has failed for the atom that starts at `atom_start`
+    /// (Theory/Text/Parser/Formula.hs:44-60).
+    ///
+    /// The last alternative, `EqE <$> (nodevarTerm <* opEqual) <*> …`, is not
+    /// `try`-wrapped: when `nodevar` (Token.hs:443-447 — a `#`-prefixed or
+    /// bare `indexedIdentifier`) can consume the atom's head, `opEqual`'s
+    /// failure right after it is a CONSUMED error, which parsec's `<|>` does
+    /// not merge away — it aborts the alternation and every accumulated label
+    /// of the earlier alternatives is discarded.  The expected set is the
+    /// identifier lexeme's hangovers plus `"="`, at the position right after
+    /// the name — even when the failed atom continued past it (`g(x) @ #i`
+    /// errors at the `(`).
+    ///
+    /// When `nodevar` cannot consume anything (a non-identifier head such as
+    /// `'a' @ …`), every alternative failed EMPTY and the merged error keeps
+    /// only the furthest-position labels: the `<?>` relabels of the two (three
+    /// with multiset) `try`-wrapped relational alternatives that consumed the
+    /// term and failed where the relational operator was expected —
+    /// `"subterm predicate"`, `"multiset comparisson"` (sic, only when the
+    /// multiset signature bit is on — `smallerp` fails early otherwise) and
+    /// `"term equality"`.
+    fn formula_atom_tail_error(&mut self, atom_start: Pos, after_lhs: Pos) -> ParseError {
+        self.restore(atom_start);
+        self.skip_ws();
+        if self.lx.peek() == Some('#') {
+            self.lx.bump();
+        }
+        let pre_ident = self.save();
+        if let Some(id) = self.lx.identifier() {
+            let ident_end = self.ident_end_from(pre_ident, &id);
+            self.try_dot_index();
+            let idx_spent = self.dot_index_consumed;
+            self.skip_ws();
+            let mut labels: Vec<&str> = Vec::new();
+            if ident_end == self.lx.pos().offset {
+                labels.push("letter or digit");
+            }
+            if !idx_spent {
+                labels.push("\".\"");
+            }
+            labels.push("\"=\"");
+            return self.err_expect(&labels);
+        }
         self.restore(after_lhs);
-        let expected = vec!["=", "<<", "<", "(<)"];
-        Err(self.err_expect(&expected))
+        let mut labels: Vec<&str> = vec!["subterm predicate"];
+        if self.sig_enable_mset {
+            labels.push("multiset comparisson");
+        }
+        labels.push("term equality");
+        self.err_expect(&labels)
     }
 
     // =========================================================================

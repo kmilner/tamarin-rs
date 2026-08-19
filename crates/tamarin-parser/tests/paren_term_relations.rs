@@ -14,8 +14,8 @@
 //!
 //! WHICH theories parse (and which fail) is pinned to the Haskell oracle
 //! (Git revision ef3f0468): every accepted theory here loads with exit 0
-//! there, the rejected one fails on both sides.  The rejection's position
-//! and label set are the port's own.
+//! there, and the rejection carries the oracle's own position and
+//! expectation set.
 
 use tamarin_parser::ast::{Atom, BinOp, Fact, Formula, FormulaKind, Term, TheoryItem};
 use tamarin_parser::{parse_theory, ParseError};
@@ -154,6 +154,6 @@ fn parenthesised_term_without_an_operator_still_fails() {
     assert!(e.found().unwrap_or("").starts_with(')'));
     assert_eq!(
         e.expected().unwrap_or_default(),
-        ["=", "<<", "<", "(<)"].map(String::from)
+        ["subterm predicate", "term equality"].map(String::from)
     );
 }

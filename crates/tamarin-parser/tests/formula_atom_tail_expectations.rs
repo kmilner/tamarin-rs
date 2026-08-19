@@ -2,16 +2,21 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! The formula-atom tail error — what the port reports when no relational
-//! operator follows an atom's leading term (HS `blatom`,
-//! Theory/Text/Parser/Formula.hs:44-60).  HS's parsec merge produces
-//! head-dependent label sets: the node-equality hangovers for an identifier
-//! head, the `<?>` relabels `subterm predicate` / `multiset comparisson`
-//! (sic) / `term equality` otherwise.  The port reports ONE uniform expected
-//! set instead — the relational operators themselves.
+//! Parity for the formula-atom tail error — what `blatom`'s alternation
+//! (Theory/Text/Parser/Formula.hs:44-60) reports when no relational operator
+//! follows an atom's leading term.  Two regimes:
 //!
-//! Each position below is the pinned oracle's for the same source (probed
-//! 2026-08-05); the expected sets are the port's own.
+//! * A `nodevar`-consumable head (bare or `#`-prefixed identifier): the
+//!   un-`try`'d node-equality alternative consumes it, so `opEqual`'s failure
+//!   is a CONSUMED error — the identifier lexeme's hangovers plus `"="`.
+//! * Any other head (sigil-led `~x`/`$x`/`%x`, a literal, a tuple): every
+//!   alternative fails empty and the merged error keeps the furthest-position
+//!   `<?>` relabels of the `try`-wrapped relational alternatives —
+//!   `subterm predicate` (, `multiset comparisson` — sic, only with the
+//!   multiset builtin) and `term equality`.
+//!
+//! Every position and expectation set below is the pinned oracle's (Git
+//! revision ef3f0468) for the same source.
 
 use tamarin_parser::{parse_theory, ParseError};
 
@@ -40,25 +45,25 @@ fn assert_expected(src: &str, line: u32, col: u32, found: &str, expected: &[&str
 }
 
 #[test]
-fn a_bare_temporal_variable_atom_reports_the_relational_set() {
+fn a_bare_temporal_variable_atom_is_the_consumed_node_equality_set() {
     assert_expected(
         "theory A begin\nlemma L: \"All #i. #i\"\nend\n",
         2,
         21,
         "\"",
-        &["=", "<<", "<", "(<)"],
+        &["letter or digit", "\".\"", "\"=\""],
     );
 }
 
 #[test]
-fn sigil_headed_atoms_report_the_relational_set() {
+fn sigil_headed_atoms_keep_the_relational_alternative_labels() {
     for (src, col) in [
         ("theory B begin\nlemma L: \"Ex x. ~x\"\nend\n", 19),
         ("theory C begin\nlemma L: \"Ex x. $x\"\nend\n", 19),
         ("theory D begin\nlemma L: \"Ex x. 'c'\"\nend\n", 20),
         ("theory E begin\nlemma L: \"Ex x. <x, x>\"\nend\n", 23),
     ] {
-        assert_expected(src, 2, col, "\"", &["=", "<<", "<", "(<)"]);
+        assert_expected(src, 2, col, "\"", &["subterm predicate", "term equality"]);
     }
     // A connective after the sigil head errors at the connective, same set.
     assert_expected(
@@ -66,30 +71,30 @@ fn sigil_headed_atoms_report_the_relational_set() {
         2,
         20,
         "&",
-        &["=", "<<", "<", "(<)"],
+        &["subterm predicate", "term equality"],
     );
 }
 
-/// HS adds a `multiset comparisson` (sic) label here; the port's set does
-/// not vary with the enabled builtins.
+/// `smallerp` fails before consuming unless the multiset signature bit is
+/// on, so only then does its `<?>` relabel join the set.
 #[test]
-fn the_multiset_builtin_does_not_change_the_set() {
+fn the_multiset_builtin_adds_the_misspelled_comparisson_label() {
     assert_expected(
         "theory G begin\nbuiltins: multiset\nlemma L: \"Ex x. ~x\"\nend\n",
         3,
         19,
         "\"",
-        &["=", "<<", "<", "(<)"],
+        &["subterm predicate", "multiset comparisson", "term equality"],
     );
 }
 
 #[test]
-fn a_nat_sigil_head_reports_the_same_set() {
+fn a_nat_sigil_head_without_the_builtin_word_keeps_the_two_label_set() {
     assert_expected(
         "theory H begin\nbuiltins: natural-numbers\nlemma L: \"Ex x. %x\"\nend\n",
         3,
         19,
         "\"",
-        &["=", "<<", "<", "(<)"],
+        &["subterm predicate", "term equality"],
     );
 }
