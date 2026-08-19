@@ -94,15 +94,59 @@ impl From<Pos> for Location {
     }
 }
 
+/// An enum to give `[ParseError]` variants context of where the error occured
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParseContext {
+    Equation,
+    Restriction,
+    Macro,
+    Rule,
+    Lemma,
+    // Add more as necessary
+}
+
+impl ParseContext {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ParseContext::Equation => "equation",
+            ParseContext::Macro => "macro",
+            ParseContext::Rule => "rule",
+            ParseContext::Lemma => "lemma",
+            ParseContext::Restriction => "restriction",
+        }
+    }
+
+    pub fn as_str_plural(&self) -> &'static str {
+        match self {
+            ParseContext::Equation => "equations",
+            ParseContext::Macro => "macros",
+            ParseContext::Rule => "rules",
+            ParseContext::Lemma => "lemmas",
+            ParseContext::Restriction => "restrictions",
+        }
+    }
+
+    pub fn as_str_with_article(&self) -> &'static str {
+        match self {
+            ParseContext::Equation => "an equation",
+            ParseContext::Macro => "a macro",
+            ParseContext::Rule => "a rule",
+            ParseContext::Lemma => "a lemma",
+            ParseContext::Restriction => "a restriction",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ParseError {
     UndeclaredFunction {
         name: String,
         at: Location,
     },
-    ReservedBuiltinInEquation {
+    UsedReservedBuiltin {
         f: String,
         at: Location,
+        context: ParseContext,
     },
     MalformedHexColor {
         msg: String,
@@ -195,7 +239,7 @@ pub enum ParseError {
     UnknownAttribute {
         attribute: String,
         at: Location,
-        context: String,
+        context: ParseContext,
     },
     ExpectedExportBodyString {
         found: Option<String>,
@@ -339,7 +383,7 @@ impl ParseError {
             | ParseError::Abort { .. }
             | ParseError::IoError { .. }
             | ParseError::DuplicateRule { .. }
-            | ParseError::ReservedBuiltinInEquation { .. }
+            | ParseError::UsedReservedBuiltin { .. }
             | ParseError::FunctionUsedWithWrongArity { .. }
             | ParseError::WrongArityforACFunctionDeclaration { .. }
             | ParseError::MalformedHexColor { .. }
@@ -378,7 +422,7 @@ impl ParseError {
             | ParseError::UnknownAttribute { at, .. }
             | ParseError::Expected { at, .. }
             | ParseError::Custom { at, .. }
-            | ParseError::ReservedBuiltinInEquation { at, .. }
+            | ParseError::UsedReservedBuiltin { at, .. }
             | ParseError::Abort { at, .. }
             | ParseError::UndeclaredFunction { at, .. }
             | ParseError::MalformedHexColor { at, .. }
@@ -426,7 +470,7 @@ impl ParseError {
             | ParseError::DuplicateRule { .. }
             | ParseError::DuplicateRestriction { .. }
             | ParseError::WrongArityforACFunctionDeclaration { .. }
-            | ParseError::ReservedBuiltinInEquation { .. }
+            | ParseError::UsedReservedBuiltin { .. }
             | ParseError::UndeclaredFunction { .. }
             | ParseError::ConflictingFunctionDeclarations { .. }
             | ParseError::FunctionUsedWithWrongArity { .. }
@@ -471,7 +515,7 @@ impl ParseError {
             | ParseError::MalformedHexColor { .. }
             | ParseError::FunctionUsedWithWrongArity { .. }
             | ParseError::UndeclaredFunction { .. }
-            | ParseError::ReservedBuiltinInEquation { .. }
+            | ParseError::UsedReservedBuiltin { .. }
             | ParseError::ConflictingFunctionDeclarations { .. }
             | ParseError::Abort { .. } => None,
         }
@@ -515,7 +559,7 @@ impl ParseError {
             | ParseError::WrongArityforACFunctionDeclaration { .. }
             | ParseError::UndeclaredFunction { .. }
             | ParseError::ConflictingFunctionDeclarations { .. }
-            | ParseError::ReservedBuiltinInEquation { .. }
+            | ParseError::UsedReservedBuiltin { .. }
             | ParseError::DuplicateRestriction { .. } => None,
         }
         .map(|expected| match self {
@@ -551,7 +595,7 @@ impl ParseError {
             ParseError::UnterminatedDelimiter { .. } => "Unterminated delimiter",
             ParseError::UnknownAttribute { context, .. } => {
                 // Using a string to include the context in the message
-                Box::leak(format!("Unknown {} attribute", context).into_boxed_str())
+                Box::leak(format!("Unknown {} attribute", context.as_str()).into_boxed_str())
             }
             ParseError::ExpectedExportBodyString { .. } => "Expected export body string",
             ParseError::ExpectedProcess { .. } => "Expected process",
@@ -585,7 +629,9 @@ impl ParseError {
             }
             ParseError::MalformedHexColor { .. } => "Malformed hex color",
             ParseError::FunctionUsedWithWrongArity { .. } => "Function used with wrong arity",
-            ParseError::ReservedBuiltinInEquation { .. } => "Reserved builtin function in equation",
+            ParseError::UsedReservedBuiltin { context, .. } => {
+                format!("Reserved builtin function in {}", context.as_str()).leak()
+            }
             ParseError::UndeclaredFunction { .. } => "Undeclared function",
         }
     }
@@ -705,11 +751,14 @@ impl ParseError {
                 }
                 lbls
             }
-            ParseError::ReservedBuiltinInEquation { f, at } => {
+            ParseError::UsedReservedBuiltin { f, at, context } => {
                 vec![ParseErrorLabel {
                     at: *at,
-                    message: format!("reserved builtin function `{f}` was used in an equation")
-                        .to_string(),
+                    message: format!(
+                        "reserved builtin function `{f}` was used in {}",
+                        context.as_str_with_article()
+                    )
+                    .to_string(),
                     is_primary: true,
                 }]
             }
@@ -843,7 +892,10 @@ impl ParseError {
             ParseError::UnknownAttribute {
                 attribute, context, ..
             } => {
-                vec![format!("unknown {context} attribute `{attribute}`")]
+                vec![format!(
+                    "unknown {} attribute `{attribute}`",
+                    context.as_str()
+                )]
             }
             ParseError::FactNameMustStartWithUppercase { name, .. } => {
                 vec![format!(
@@ -894,8 +946,11 @@ impl ParseError {
             ParseError::FunctionUsedWithWrongArity { .. } => {
                 vec!["Function must be used with the declared arity".into()]
             }
-            ParseError::ReservedBuiltinInEquation { .. } => {
-                vec!["Reserved builtin functions cannot be used in equations".into()]
+            ParseError::UsedReservedBuiltin { context, .. } => {
+                vec![format!(
+                    "Reserved builtin functions cannot be used in {}",
+                    context.as_str_plural()
+                )]
             }
         }
     }
@@ -3511,8 +3566,15 @@ impl<'a> Parser<'a> {
             // failure in the macro — including a malformed argument list, and
             // the name conflict below that an enabled owning theory would
             // otherwise raise.  Independent of which builtins are enabled.
+            // TODO (NM)
             if Self::RESERVED_BUILTINS.contains(&name.as_str()) {
-                return Err(self.macro_reserved_name_error(&name));
+                let end = self.lx.pos();
+                let at = Location::from_positions(start, end);
+                return Err(ParseError::UsedReservedBuiltin {
+                    f: name.clone(),
+                    at: at,
+                    context: ParseContext::Macro,
+                });
             }
             let opening = ("(", self.lx.pos());
             self.require_punct("(")?;
@@ -3524,6 +3586,7 @@ impl<'a> Parser<'a> {
             // `m(x.1, x)` pass, `m(x, x)` and `m(x, x:msg)` do not (a
             // prefixless binder is `LSortMsg`, Token.hs:424-433).
             if Self::has_duplicate_macro_arg(&args) {
+                // TODO
                 return Err(self.macro_duplicate_arg_error(&name));
             }
             self.require_punct("=")?;
@@ -3540,6 +3603,7 @@ impl<'a> Parser<'a> {
             // list).  The check runs AFTER the body parse, so a body parse
             // error wins over the conflict.
             if self.macro_name_conflicts(&name) {
+                // TODO
                 return Err(self.macro_conflict_error(&name));
             }
             // HS `macro` registers the name under `macroNames` as
@@ -3581,10 +3645,6 @@ impl<'a> Parser<'a> {
     /// [`Self::MACRO_DUPLICATE_ARG_SITE`].
     const MACRO_ERROR_PACKAGE: &'static str = "tamarin-prover-theory-1.13.0-8wixYaxm5uHCGl2uEzaKzP";
 
-    /// `LINE:COLUMN` of the reserved-name `error` in
-    /// `src/Theory/Text/Parser/Macro.hs` — see [`Self::MACRO_ERROR_PACKAGE`].
-    const MACRO_RESERVED_NAME_SITE: &'static str = "35:15";
-
     /// `LINE:COLUMN` of the duplicate-argument `error` in
     /// `src/Theory/Text/Parser/Macro.hs` — see [`Self::MACRO_ERROR_PACKAGE`].
     const MACRO_DUPLICATE_ARG_SITE: &'static str = "38:15";
@@ -3595,18 +3655,6 @@ impl<'a> Parser<'a> {
         format!(
             "src/Theory/Text/Parser/Macro.hs:{site} in {}:Theory.Text.Parser.Macro",
             Self::MACRO_ERROR_PACKAGE
-        )
-    }
-
-    /// The `error` of Macro.hs:34-35 — see [`Self::macros`].  Its message is
-    /// the macro name inside backticks, followed by " is a reserved function
-    /// name for builtins."; `op` is a `ByteString`, so the `show op` HS
-    /// interpolates wraps it in its own double quotes INSIDE those backticks.
-    /// A macro name is a plain identifier, so it needs no escaping.
-    fn macro_reserved_name_error(&self, name: &str) -> ParseError {
-        self.err_ghc(
-            format!("`\"{name}\"` is a reserved function name for builtins."),
-            Self::macro_error_call_site(Self::MACRO_RESERVED_NAME_SITE),
         )
     }
 
@@ -3739,7 +3787,7 @@ impl<'a> Parser<'a> {
                     return Err(ParseError::UnknownAttribute {
                         attribute: found.unwrap_or("end of file".to_string()),
                         at: found_at,
-                        context: "restriction".into(),
+                        context: ParseContext::Restriction,
                     });
                 }
                 if !self.try_punct(",") {
@@ -4178,7 +4226,7 @@ impl<'a> Parser<'a> {
                     return Err(ParseError::UnknownAttribute {
                         attribute: found.unwrap_or("EOF".to_string()),
                         at,
-                        context: "rule".into(),
+                        context: ParseContext::Rule,
                     });
                 }
             };
@@ -4654,7 +4702,7 @@ impl<'a> Parser<'a> {
                 return Err(ParseError::UnknownAttribute {
                     attribute: found.unwrap_or("EOF".to_string()),
                     at,
-                    context: "lemma".into(),
+                    context: ParseContext::Lemma,
                 });
             }
             if !self.try_punct(",") {
@@ -6028,10 +6076,11 @@ impl<'a> Parser<'a> {
             // call site (Term.hs:92:9) can surface, since `application` tries
             // it first for every identifier.
             if eqn && Self::RESERVED_BUILTINS.contains(&id.as_str()) {
-                let location = Location::from_positions(save_id, id_end);
-                return Err(ParseError::ReservedBuiltinInEquation {
+                // eqn ==> context is `equations:`
+                return Err(ParseError::UsedReservedBuiltin {
                     f: id,
-                    at: location,
+                    at: id_loc,
+                    context: ParseContext::Equation,
                 });
             }
             self.last_ident_end = Some(self.ident_end_from(save_id, &id));
