@@ -2742,42 +2742,26 @@ impl<'a> Parser<'a> {
                 // The comprehension pairs every builtin symbol with every
                 // signature entry of the same name, so a name carrying two
                 // differing entries is listed twice.
-                let mut clashes: Vec<&str> = Vec::new();
-                for s in syms {
-                    let want = FunOptions::of(s);
-                    for (n, o) in &self.fun_syms {
-                        if n == s.name && *o != want {
-                            clashes.push(s.name);
-                        }
-                    }
-                }
+                let clashes = self.conflicting_builtin_names(syms, &self.fun_syms);
                 if !clashes.is_empty() {
                     return Err(self.err_fail(format!(
                         "Builtin '{}' conflicts with existing function(s) (same name, \
                          different arity or function options): {}. Please remove these \
                          function definitions or use different names.",
                         name,
-                        show_string_list(&clashes)
+                        show_string_list(&clashes.iter().map(String::as_str).collect::<Vec<_>>())
                     )));
                 }
             }
             // `macroConflicts` (Signature.hs:114-119): the same test against
             // the macro names, with no `dest-pairing` exemption and with a
             // single `lookup` (first match) per builtin symbol.
-            let mut macro_clashes: Vec<&str> = Vec::new();
-            for s in syms {
-                let want = FunOptions::of(s);
-                if let Some((_, o)) = self.macro_syms.iter().find(|(n, _)| n == s.name) {
-                    if *o != want {
-                        macro_clashes.push(s.name);
-                    }
-                }
-            }
+            let macro_clashes = self.conflicting_builtin_names(syms, &self.macro_syms);
             if !macro_clashes.is_empty() {
                 return Err(self.err_fail(format!(
                     "Builtin '{}' conflicts with existing macro '{}'",
                     name,
-                    show_string_list(&macro_clashes)
+                    show_string_list(&macro_clashes.iter().map(String::as_str).collect::<Vec<_>>(),)
                 )));
             }
             self.reserved_builtin_names
@@ -2824,6 +2808,31 @@ impl<'a> Parser<'a> {
             Ok(_) => {}
             Err(idx) => self.ac_fun_syms.insert(idx, (name.to_string(), opts)),
         }
+    }
+
+    fn first_declared_options(entries: &[(String, FunOptions)], name: &str) -> Option<FunOptions> {
+        entries
+            .iter()
+            .find(|(declared_name, _)| declared_name == name)
+            .map(|(_, options)| *options)
+    }
+
+    /// Return every builtin symbol whose name is already present with different
+    /// options. The nested iteration preserves the order and duplicate entries
+    /// of the existing conflict diagnostics.
+    fn conflicting_builtin_names(
+        &self,
+        syms: &[BuiltinFunSym],
+        existing: &[(String, FunOptions)],
+    ) -> Vec<String> {
+        syms.iter()
+            .flat_map(|sym| {
+                let wanted = FunOptions::of(sym);
+                existing.iter().filter_map(move |(name, options)| {
+                    (name == sym.name && *options != wanted).then(|| sym.name.to_string())
+                })
+            })
+            .collect()
     }
 
     /// Identifier that may contain hyphens (e.g. `asymmetric-encryption`,
@@ -3155,12 +3164,9 @@ impl<'a> Parser<'a> {
     /// sign))` (Theory/Text/Parser/Signature.hs:212), which takes the FIRST
     /// match — free symbols before macros.
     fn lookup_fun_options(&self, name: &str) -> Option<FunOptions> {
-        self.fun_syms
-            .iter()
-            .chain(self.macro_syms.iter())
-            .chain(self.ac_fun_syms.iter())
-            .find(|(n, _)| n == name)
-            .map(|(_, o)| *o)
+        Self::first_declared_options(&self.fun_syms, name)
+            .or_else(|| Self::first_declared_options(&self.macro_syms, name))
+            .or_else(|| Self::first_declared_options(&self.ac_fun_syms, name))
     }
 
     /// HS `functionType` (Theory/Text/Parser/Signature.hs:150-161): either
@@ -3340,11 +3346,7 @@ impl<'a> Parser<'a> {
         // It runs BEFORE the general conflict check, has no `fst`/`snd`
         // exemption, and consults `stFunSyms` only — never the macro names.
         if self.reserved_builtin_names.contains(&name) {
-            let builtin = self
-                .fun_syms
-                .iter()
-                .find(|(n, _)| *n == name)
-                .map(|(_, o)| *o);
+            let builtin = Self::first_declared_options(&self.fun_syms, &name);
             if let Some(_b) = builtin.filter(|b| *b != requested) {
                 // `conflictingBuiltins` (Signature.hs:203) scans the WHOLE
                 // static table, not just the builtins this theory enabled.
@@ -3648,22 +3650,27 @@ impl<'a> Parser<'a> {
     /// reaches this check — the reserved-name `error` at Macro.hs:34-35 fires
     /// first).
     fn macro_name_conflicts(&self, name: &str, at: Location) -> Result<(), ParseError> {
-        let first_at = self
-            .fun_syms
-            .iter()
-            .chain(self.ac_fun_syms.iter())
-            .chain(self.macro_syms.iter())
-            .find(|(n, _)| n == name)
-            .and_then(|(_, o)| o.location);
-        if first_at.is_some() || self.enabled_theory_noeq_syms().any(|s| s.name == name) {
-            Err(ParseError::ConflictingDeclarations {
+        let first_declaration = Self::first_declared_options(&self.fun_syms, name)
+            .or_else(|| Self::first_declared_options(&self.ac_fun_syms, name))
+            .or_else(|| Self::first_declared_options(&self.macro_syms, name))
+            .and_then(|options| Some(options));
+
+        match first_declaration {
+            Some(decl) => Err(ParseError::ConflictingDeclarations {
                 name: name.to_string(),
                 context: ParseContext::Macro,
-                first_at,
+                first_at: decl.location,
                 second_at: at,
-            })
-        } else {
-            Ok(())
+            }),
+            None if self.enabled_theory_noeq_syms().any(|s| s.name == name) => {
+                Err(ParseError::ConflictingDeclarations {
+                    name: name.to_string(),
+                    context: ParseContext::Macro,
+                    first_at: None,
+                    second_at: at,
+                })
+            }
+            None => Ok(()),
         }
     }
 
