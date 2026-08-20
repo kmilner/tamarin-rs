@@ -551,7 +551,7 @@ impl ParseError {
     }
 
     pub fn expected(&self) -> Option<Vec<String>> {
-        let raw_expected_opt = match self {
+        let raw_expected = match self {
             ParseError::UnexpectedKeyword { expected, .. }
             | ParseError::ExpectedTheoryItem { expected, .. }
             | ParseError::ExpectedPunctuation { expected, .. }
@@ -591,10 +591,7 @@ impl ParseError {
             | ParseError::UndeclaredFunction { .. }
             | ParseError::ConflictingDeclarations { .. }
             | ParseError::UsedReservedBuiltin { .. } => None,
-        };
-        let Some(raw_expected) = raw_expected_opt else {
-            return None;
-        };
+        }?;
         let found_opt = self.found();
 
         found_opt.map(|found| {
@@ -912,7 +909,7 @@ impl ParseError {
                 ..
             } => vec![format_found_expected_note(
                 kind.as_str(),
-                Some(&found),
+                Some(found),
                 &self.expected().unwrap_or_default(),
             )],
             ParseError::FactNameMustStartWithUppercase { name, .. } => {
@@ -2795,7 +2792,7 @@ impl<'a> Parser<'a> {
                         "Builtin '{}' conflicts with existing function(s) (same name, \
                          different arity or function options): {}. Please remove these \
                          function definitions or use different names.",
-                        format!("{builtin:?}"),
+                        builtin,
                         show_string_list(&clashes.iter().map(String::as_str).collect::<Vec<_>>())
                     )));
                 }
@@ -2807,7 +2804,7 @@ impl<'a> Parser<'a> {
             if !macro_clashes.is_empty() {
                 return Err(self.err_fail(format!(
                     "Builtin '{}' conflicts with existing macro '{}'",
-                    format!("{builtin:?}"),
+                    builtin,
                     show_string_list(&macro_clashes.iter().map(String::as_str).collect::<Vec<_>>(),)
                 )));
             }
@@ -2872,15 +2869,16 @@ impl<'a> Parser<'a> {
         syms: &[BuiltinFunSym],
         existing: &[(String, FunOptions)],
     ) -> Vec<String> {
-        syms.iter()
-            .flat_map(|sym| {
-                // Location is not important here since it is not part of the equality check
-                let wanted = FunOptions::of(sym, None);
-                existing.iter().filter_map(move |(name, options)| {
-                    (name == sym.name && *options != wanted).then(|| sym.name.to_string())
-                })
-            })
-            .collect()
+        let mut res = vec![];
+        for sym in syms {
+            let wanted = FunOptions::of(sym, None);
+            for (name, options) in existing {
+                if name == sym.name && *options != wanted {
+                    res.push(sym.name.to_string());
+                }
+            }
+        }
+        res
     }
 
     /// Identifier that may contain hyphens (e.g. `asymmetric-encryption`,
@@ -3595,7 +3593,7 @@ impl<'a> Parser<'a> {
                 let at = Location::from_positions(start, end);
                 return Err(ParseError::UsedReservedBuiltin {
                     f: name.clone(),
-                    at: at,
+                    at,
                     context: ParseContext::Macro,
                 });
             }
@@ -3699,8 +3697,7 @@ impl<'a> Parser<'a> {
     fn macro_name_conflicts(&self, name: &str, at: Location) -> Result<(), ParseError> {
         let first_declaration = Self::first_declared_options(&self.fun_syms, name)
             .or_else(|| Self::first_declared_options(&self.ac_fun_syms, name))
-            .or_else(|| Self::first_declared_options(&self.macro_syms, name))
-            .and_then(|options| Some(options));
+            .or_else(|| Self::first_declared_options(&self.macro_syms, name));
 
         match first_declaration {
             Some(decl) => Err(ParseError::ConflictingDeclarations {
@@ -4303,7 +4300,7 @@ impl<'a> Parser<'a> {
             // Closing `'` fails where `many1 hexDigit` stopped.
             let e = self.err_unterminated_delimiter(
                 "'",
-                start.into(),
+                start,
                 found_at,
                 found,
                 vec!["'".into(), "hexadecimal digit".into()],
@@ -5474,7 +5471,7 @@ impl<'a> Parser<'a> {
         }
         self.restore(after_lhs);
         let expected = vec!["=", "<<", "<", "(<)"];
-        return Err(self.err_expect(&expected));
+        Err(self.err_expect(&expected))
     }
 
     // =========================================================================
@@ -6116,9 +6113,9 @@ impl<'a> Parser<'a> {
                     // the user-visible frame comes from.  Only the GHC
                     // `error`s escape.
                     if let Some(res) = self.lookup_arity(&id) {
-                        let f_decl = self.lookup_fun_options(&id).expect(
-                            format!("Function {} has arity but no function options", &id).as_str(),
-                        );
+                        let f_decl = self.lookup_fun_options(&id).unwrap_or_else(|| {
+                            panic!("Function {} has arity but no function options", id)
+                        });
                         return self.prefix_app_args(&id, id_loc, res, f_decl, eqn);
                     } else {
                         // Parsed an identifier and an opening `(`, but the function is not known.
@@ -6163,10 +6160,9 @@ impl<'a> Parser<'a> {
                         // HS `binaryAlgApp` (Term.hs:109-121): same lookup, arity
                         // fixed at 2, same wholesale backtrack on failure.
                         if let Some(res) = self.lookup_arity(&id) {
-                            let f_decl = self.lookup_fun_options(&id).expect(
-                                format!("Function {} has arity but no function options", &id)
-                                    .as_str(),
-                            );
+                            let f_decl = self.lookup_fun_options(&id).unwrap_or_else(|| {
+                                panic!("Function {} has arity but no function options", id)
+                            });
                             return self.binary_alg_app(&id, id_loc, res, f_decl, eqn);
                         }
                     } else {
@@ -6266,7 +6262,7 @@ impl<'a> Parser<'a> {
                         declared_arity: arity,
                         used_arity: ts.len(),
                         declared_at: decl.location,
-                        used_at: used_at,
+                        used_at,
                     });
                 }
                 Ok(Term::App(id.to_string(), ts))

@@ -234,7 +234,7 @@ pub fn check_message_derivation(
             );
         }
         if !undecidable.is_empty() {
-            per_rule.push((rule.name.clone().into(), undecidable));
+            per_rule.push((rule.name.clone(), undecidable));
         }
     }
     if dbg_timing {

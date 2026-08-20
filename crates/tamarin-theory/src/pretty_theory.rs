@@ -2406,7 +2406,7 @@ fn render_rule(
     } else if let Some(r) = elab_rule {
         out.push_str("\n\n");
         out.push_str(&outer_loop_breaker);
-        out.push_str(&render_ac_variants_block(&name, r, &parsed_rule.attributes));
+        out.push_str(&render_ac_variants_block(name, r, &parsed_rule.attributes));
     }
     out
 }

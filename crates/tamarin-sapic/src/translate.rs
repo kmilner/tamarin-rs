@@ -612,7 +612,7 @@ fn is_pos_neg_formula(f: &tamarin_parser::ast::Formula) -> (bool, bool) {
             let disj = Or(Box::new(not_p), Box::new((**q).clone()));
             let tmp = Formula {
                 kind: disj,
-                location: f.location.clone(),
+                location: f.location,
             };
             is_pos_neg_formula(&tmp)
         }
@@ -631,7 +631,7 @@ fn is_pos_neg_formula(f: &tamarin_parser::ast::Formula) -> (bool, bool) {
             let conj = And(Box::new(pq), Box::new(qp));
             let conj = Formula {
                 kind: conj,
-                location: f.location.clone(),
+                location: f.location,
             };
             is_pos_neg_formula(&conj)
         }

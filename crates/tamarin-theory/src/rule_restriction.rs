@@ -221,7 +221,7 @@ fn from_rule_restriction(r: &str, f: &p::Formula) -> (p::Restriction, p::Fact) {
             None => p::Term::Var(v),
         })
         .collect();
-    let action = mk_fact(&r, action_args);
+    let action = mk_fact(r, action_args);
 
     (restriction, action)
 }
