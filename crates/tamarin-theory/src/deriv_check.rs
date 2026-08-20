@@ -299,7 +299,7 @@ fn collect_all_nullary_fun_names(thy: &p::Theory) -> std::collections::BTreeSet<
             }
             p::TheoryItem::Builtins(names) => {
                 for n in names {
-                    for c in crate::elaborate::builtin_nullary_constants(n) {
+                    for c in crate::elaborate::builtin_nullary_constants(n.kind) {
                         out.insert(c);
                     }
                 }
@@ -674,14 +674,14 @@ fn synthesise_probe_theory(
             idx: 0,
             sort: p::SortHint::Node,
             typ: None,
-        location: DUMMY_LOCATION,
+            location: DUMMY_LOCATION,
         };
         let t1 = p::VarSpec {
             name: "t1".into(),
             idx: 0,
             sort: p::SortHint::Node,
             typ: None,
-        location: DUMMY_LOCATION,
+            location: DUMMY_LOCATION,
         };
         let gen_at = action_atom(action.clone(), p::Term::Var(t0.clone()));
         let ku_fact = p::Fact {

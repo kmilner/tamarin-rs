@@ -552,7 +552,10 @@ fn render_open_item(
         // Every `builtins:` entry appends `TranslationItem (SignatureBuiltin
         // name)` (Signature.hs:89-99, see line 97), rendered
         // `text "builtin " <-> text s` (TheoryObject.hs:841) = two spaces.
-        Builtins(names) => names.iter().map(|n| format!("builtin  {}", n)).collect(),
+        Builtins(names) => names
+            .iter()
+            .map(|n| format!("builtin  {}", n.kind))
+            .collect(),
         // Every `functions:` declaration appends `FunctionTypingInfo`
         // (Parser.hs:259-262, TheoryObject.hs:492-493), rendered by the two
         // `prettyTranslationElement` typing cases (TheoryObject.hs:800-838).

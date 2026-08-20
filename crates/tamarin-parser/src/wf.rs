@@ -1053,7 +1053,7 @@ fn user_ac_fun_names(thy: &Theory) -> AcSyms {
             }
             TheoryItem::Builtins(names) => {
                 for n in names {
-                    noeq.extend(crate::parser::builtin_noeq_sym_names(n));
+                    noeq.extend(crate::parser::builtin_noeq_sym_names(n.kind));
                 }
             }
             _ => {}

@@ -95,7 +95,7 @@ impl From<Pos> for Location {
 }
 
 /// An enum to give `[ParseError]` variants context of where the error occured
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
 pub enum ParseContext {
     Equation,
     Restriction,
@@ -103,6 +103,10 @@ pub enum ParseContext {
     Rule,
     Lemma,
     Function,
+    Builtin,
+    RestrictionAttribute,
+    LemmaAttribute,
+    RuleAttribute,
     // Add more as necessary
 }
 
@@ -115,6 +119,10 @@ impl ParseContext {
             ParseContext::Lemma => "lemma",
             ParseContext::Restriction => "restriction",
             ParseContext::Function => "function",
+            ParseContext::RestrictionAttribute => "restriction attribute",
+            ParseContext::LemmaAttribute => "lemma attribute",
+            ParseContext::RuleAttribute => "rule attribute",
+            ParseContext::Builtin => "builtin",
         }
     }
 
@@ -126,6 +134,10 @@ impl ParseContext {
             ParseContext::Lemma => "lemmas",
             ParseContext::Restriction => "restrictions",
             ParseContext::Function => "functions",
+            ParseContext::RestrictionAttribute => "restriction attributes",
+            ParseContext::LemmaAttribute => "lemma attributes",
+            ParseContext::RuleAttribute => "rule attributes",
+            ParseContext::Builtin => "builtins",
         }
     }
 
@@ -137,6 +149,23 @@ impl ParseContext {
             ParseContext::Lemma => "a lemma",
             ParseContext::Restriction => "a restriction",
             ParseContext::Function => "a function",
+            ParseContext::RestrictionAttribute => "a restriction attribute",
+            ParseContext::LemmaAttribute => "a lemma attribute",
+            ParseContext::RuleAttribute => "a rule attribute",
+            ParseContext::Builtin => "a builtin",
+        }
+    }
+
+    // Expected items when parsing a specific context, for error messages
+    fn expected(&self) -> Vec<&'static str> {
+        match self {
+            ParseContext::Builtin => BuiltinKind::iter().map(|b| b.as_str()).collect(),
+            ParseContext::RestrictionAttribute => {
+                RestrictionAttr::iter().map(|r| r.as_str()).collect()
+            }
+            ParseContext::LemmaAttribute => LemmaAttr::expected(),
+            ParseContext::RuleAttribute => RuleAttr::expected(),
+            _ => vec![],
         }
     }
 }
@@ -236,10 +265,10 @@ pub enum ParseError {
         found_at: Location,
         expected: Vec<String>,
     },
-    UnknownAttribute {
-        attribute: String,
+    UnknownItem {
+        item_kind: ParseContext,
+        unknown_item: String,
         at: Location,
-        context: ParseContext,
     },
     ExpectedExportBodyString {
         found: Option<String>,
@@ -377,7 +406,7 @@ impl ParseError {
             | ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::FactArityMismatch { .. }
             | ParseError::UnexpectedTrailingInput { .. }
-            | ParseError::UnknownAttribute { .. }
+            | ParseError::UnknownItem { .. }
             | ParseError::Custom { .. }
             | ParseError::ConflictingDeclarations { .. }
             | ParseError::Abort { .. }
@@ -418,7 +447,7 @@ impl ParseError {
             | ParseError::IoError { at, .. }
             | ParseError::TrailingGarbageInFormulaString { at, .. }
             | ParseError::TrailingGarbageInTermString { at, .. }
-            | ParseError::UnknownAttribute { at, .. }
+            | ParseError::UnknownItem { at, .. }
             | ParseError::Expected { at, .. }
             | ParseError::Custom { at, .. }
             | ParseError::UsedReservedBuiltin { at, .. }
@@ -457,7 +486,9 @@ impl ParseError {
             | ParseError::TrailingGarbageInTermString { found, .. }
             | ParseError::Expected { found, .. }
             | ParseError::UnterminatedDelimiter { found, .. } => found,
-            ParseError::UnknownAttribute { attribute, .. } => Some(attribute),
+            ParseError::UnknownItem {
+                unknown_item: item, ..
+            } => Some(item),
             ParseError::FactNameMustStartWithUppercase { name, .. }
             | ParseError::FactArityMismatch { name, .. }
             | ParseError::UnexpectedTrailingInput { found: name, .. } => Some(name),
@@ -499,7 +530,9 @@ impl ParseError {
             | ParseError::TrailingGarbageInTermString { found, .. }
             | ParseError::Expected { found, .. }
             | ParseError::UnterminatedDelimiter { found, .. } => found.as_deref(),
-            ParseError::UnknownAttribute { attribute, .. } => Some(attribute.as_str()),
+            ParseError::UnknownItem {
+                unknown_item: item, ..
+            } => Some(item.as_str()),
             ParseError::FactNameMustStartWithUppercase { name, .. }
             | ParseError::FactArityMismatch { name, .. } => Some(name.as_str()),
             ParseError::UnexpectedTrailingInput { found, .. } => Some(found.as_str()),
@@ -518,7 +551,7 @@ impl ParseError {
     }
 
     pub fn expected(&self) -> Option<Vec<String>> {
-        match self {
+        let raw_expected_opt = match self {
             ParseError::UnexpectedKeyword { expected, .. }
             | ParseError::ExpectedTheoryItem { expected, .. }
             | ParseError::ExpectedPunctuation { expected, .. }
@@ -541,10 +574,12 @@ impl ParseError {
             | ParseError::TrailingGarbageInTermString { expected, .. }
             | ParseError::Expected { expected, .. }
             | ParseError::UnterminatedDelimiter { expected, .. } => Some(expected.clone()),
+            ParseError::UnknownItem {
+                item_kind: kind, ..
+            } => Some(kind.expected().into_iter().map(|s| s.to_string()).collect()),
             ParseError::FactNameMustStartWithUppercase { .. }
             | ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::FactArityMismatch { .. }
-            | ParseError::UnknownAttribute { .. }
             | ParseError::UnexpectedTrailingInput { .. }
             | ParseError::Custom { .. }
             | ParseError::Abort { .. }
@@ -556,22 +591,20 @@ impl ParseError {
             | ParseError::UndeclaredFunction { .. }
             | ParseError::ConflictingDeclarations { .. }
             | ParseError::UsedReservedBuiltin { .. } => None,
-        }
-        .map(|expected| match self {
-            ParseError::ExpectedTheoryItem { found, .. } => {
-                if let Some(found) = found {
-                    let mut ranked: Vec<(usize, usize, String)> = expected
-                        .into_iter()
-                        .enumerate()
-                        .map(|(idx, exp)| (edit_distance(found, &exp), idx, exp))
-                        .collect();
-                    ranked.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-                    ranked.into_iter().take(3).map(|(_, _, exp)| exp).collect()
-                } else {
-                    expected.into_iter().take(3).collect()
-                }
-            }
-            _ => expected,
+        };
+        let Some(raw_expected) = raw_expected_opt else {
+            return None;
+        };
+        let found_opt = self.found();
+
+        found_opt.map(|found| {
+            let mut ranked: Vec<(usize, usize, String)> = raw_expected
+                .into_iter()
+                .enumerate()
+                .map(|(idx, exp)| (edit_distance(found, &exp), idx, exp))
+                .collect();
+            ranked.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+            ranked.into_iter().take(3).map(|(_, _, exp)| exp).collect()
         })
     }
 
@@ -588,9 +621,15 @@ impl ParseError {
             ParseError::ExpectedHexColor { .. } => "Expected hex color",
             ParseError::ExpectedQuotedString { .. } => "Expected quoted string",
             ParseError::UnterminatedDelimiter { .. } => "Unterminated delimiter",
-            ParseError::UnknownAttribute { context, .. } => {
+            ParseError::UnknownItem {
+                unknown_item,
+                item_kind,
+                ..
+            } => {
                 // Using a string to include the context in the message
-                Box::leak(format!("Unknown {} attribute", context.as_str()).into_boxed_str())
+                Box::leak(
+                    format!("Unknown {} `{}`", item_kind.as_str(), unknown_item).into_boxed_str(),
+                )
             }
             ParseError::ExpectedExportBodyString { .. } => "Expected export body string",
             ParseError::ExpectedProcess { .. } => "Expected process",
@@ -867,14 +906,15 @@ impl ParseError {
                 }
                 notes
             }
-            ParseError::UnknownAttribute {
-                attribute, context, ..
-            } => {
-                vec![format!(
-                    "unknown {} attribute `{attribute}`",
-                    context.as_str()
-                )]
-            }
+            ParseError::UnknownItem {
+                unknown_item: found,
+                item_kind: kind,
+                ..
+            } => vec![format_found_expected_note(
+                kind.as_str(),
+                Some(&found),
+                &self.expected().unwrap_or_default(),
+            )],
             ParseError::FactNameMustStartWithUppercase { name, .. } => {
                 vec![format!(
                     "fact name `{name}` must start with an uppercase letter"
@@ -1290,14 +1330,14 @@ impl FunOptions {
     /// signatures is `NotNDC` (Term/Builtin/Signature.hs:18-44,
     /// Term/Term/FunctionSymbols.hs:245-262), so only arity, privacy and
     /// constructability vary.
-    fn of(sym: &BuiltinFunSym) -> Self {
+    fn of(sym: &BuiltinFunSym, location: Option<Location>) -> Self {
         FunOptions {
             arity: sym.arity,
             private: sym.private,
             destructor: sym.destructor,
             ndc: false,
             ndc_diff: false,
-            location: None,
+            location,
         }
     }
 
@@ -1365,10 +1405,10 @@ impl BuiltinFunSym {
 /// Term/Maude/Signature.hs:191-196) contribute no symbols and reserve no names.
 /// `reliable-channel` is absent on purpose: it maps to `Nothing`
 /// (Signature.hs:84), so it neither merges a signature nor reserves anything.
-const BUILTIN_ST_FUN_SYMS: &[(&str, &[BuiltinFunSym])] = &[
+const BUILTIN_ST_FUN_SYMS: &[(BuiltinKind, &[BuiltinFunSym])] = &[
     // locationReportFunSig (Term/Builtin/Signature.hs:71-72)
     (
-        "locations-report",
+        BuiltinKind::LocationsReport,
         &[
             BuiltinFunSym::new("check_rep", 2, false, true),
             BuiltinFunSym::new("get_rep", 1, false, true),
@@ -1376,13 +1416,13 @@ const BUILTIN_ST_FUN_SYMS: &[(&str, &[BuiltinFunSym])] = &[
             BuiltinFunSym::new("report", 1, false, false),
         ],
     ),
-    ("diffie-hellman", &[]),
-    ("bilinear-pairing", &[]),
-    ("multiset", &[]),
-    ("xor", &[]),
+    (BuiltinKind::DiffieHellman, &[]),
+    (BuiltinKind::BilinearPairing, &[]),
+    (BuiltinKind::Multiset, &[]),
+    (BuiltinKind::Xor, &[]),
     // symEncFunSig (Term/Builtin/Signature.hs:59-61)
     (
-        "symmetric-encryption",
+        BuiltinKind::SymmetricEncryption,
         &[
             BuiltinFunSym::new("sdec", 2, false, false),
             BuiltinFunSym::new("senc", 2, false, false),
@@ -1390,7 +1430,7 @@ const BUILTIN_ST_FUN_SYMS: &[(&str, &[BuiltinFunSym])] = &[
     ),
     // asymEncFunSig (Term/Builtin/Signature.hs:63-65)
     (
-        "asymmetric-encryption",
+        BuiltinKind::AsymmetricEncryption,
         &[
             BuiltinFunSym::new("adec", 2, false, false),
             BuiltinFunSym::new("aenc", 2, false, false),
@@ -1399,7 +1439,7 @@ const BUILTIN_ST_FUN_SYMS: &[(&str, &[BuiltinFunSym])] = &[
     ),
     // signatureFunSig (Term/Builtin/Signature.hs:67-69)
     (
-        "signing",
+        BuiltinKind::Signing,
         &[
             BuiltinFunSym::new("pk", 1, false, false),
             BuiltinFunSym::new("sign", 2, false, false),
@@ -1409,7 +1449,7 @@ const BUILTIN_ST_FUN_SYMS: &[(&str, &[BuiltinFunSym])] = &[
     ),
     // pairFunDestSig (Term/Term/FunctionSymbols.hs:302-304)
     (
-        "dest-pairing",
+        BuiltinKind::DestPairing,
         &[
             BuiltinFunSym::new("fst", 1, false, true),
             BuiltinFunSym::new("pair", 2, false, false),
@@ -1418,7 +1458,7 @@ const BUILTIN_ST_FUN_SYMS: &[(&str, &[BuiltinFunSym])] = &[
     ),
     // symEncFunDestSig (Term/Builtin/Signature.hs:83-85)
     (
-        "dest-symmetric-encryption",
+        BuiltinKind::DestSymmetricEncryption,
         &[
             BuiltinFunSym::new("sdec", 2, false, true),
             BuiltinFunSym::new("senc", 2, false, false),
@@ -1426,7 +1466,7 @@ const BUILTIN_ST_FUN_SYMS: &[(&str, &[BuiltinFunSym])] = &[
     ),
     // asymEncFunDestSig (Term/Builtin/Signature.hs:87-89)
     (
-        "dest-asymmetric-encryption",
+        BuiltinKind::DestAsymmetricEncryption,
         &[
             BuiltinFunSym::new("adec", 2, false, true),
             BuiltinFunSym::new("aenc", 2, false, false),
@@ -1435,7 +1475,7 @@ const BUILTIN_ST_FUN_SYMS: &[(&str, &[BuiltinFunSym])] = &[
     ),
     // signatureFunDestSig (Term/Builtin/Signature.hs:91-93)
     (
-        "dest-signing",
+        BuiltinKind::DestSigning,
         &[
             BuiltinFunSym::new("pk", 1, false, false),
             BuiltinFunSym::new("sign", 2, false, false),
@@ -1445,7 +1485,7 @@ const BUILTIN_ST_FUN_SYMS: &[(&str, &[BuiltinFunSym])] = &[
     ),
     // revealSignatureFunSig (Term/Builtin/Signature.hs:71-73, see line 73)
     (
-        "revealing-signing",
+        BuiltinKind::RevealingSigning,
         &[
             BuiltinFunSym::new("getMessage", 1, false, false),
             BuiltinFunSym::new("pk", 1, false, false),
@@ -1455,8 +1495,11 @@ const BUILTIN_ST_FUN_SYMS: &[(&str, &[BuiltinFunSym])] = &[
         ],
     ),
     // hashFunSig (Term/Builtin/Signature.hs:75-77)
-    ("hashing", &[BuiltinFunSym::new("h", 1, false, false)]),
-    ("natural-numbers", &[]),
+    (
+        BuiltinKind::Hashing,
+        &[BuiltinFunSym::new("h", 1, false, false)],
+    ),
+    (BuiltinKind::NaturalNumbers, &[]),
 ];
 
 /// The `stFunSyms` a `builtins:` name contributes, or `None` for a name with no
@@ -1464,19 +1507,11 @@ const BUILTIN_ST_FUN_SYMS: &[(&str, &[BuiltinFunSym])] = &[
 ///
 /// Public for the `tamarin-theory` cross-check that pins
 /// [`BUILTIN_ST_FUN_SYMS`] against that crate's `MaudeSig` tables.
-pub fn builtin_st_fun_syms(name: &str) -> Option<&'static [BuiltinFunSym]> {
+pub fn builtin_st_fun_syms(builtin: BuiltinKind) -> Option<&'static [BuiltinFunSym]> {
     BUILTIN_ST_FUN_SYMS
         .iter()
-        .find(|(n, _)| *n == name)
+        .find(|(n, _)| *n == builtin)
         .map(|(_, syms)| *syms)
-}
-
-/// The names in [`BUILTIN_ST_FUN_SYMS`], in table (`builtinsNames`) order.
-///
-/// Public for the same `tamarin-theory` cross-check as
-/// [`builtin_st_fun_syms`].
-pub fn builtin_st_fun_sym_names() -> impl Iterator<Item = &'static str> {
-    BUILTIN_ST_FUN_SYMS.iter().map(|(n, _)| *n)
 }
 
 /// The non-AC (`NoEq`) symbols each theory-level enable flag folds into
@@ -1519,12 +1554,12 @@ const NAT_THEORY_NOEQ_SYMS: &[BuiltinFunSym] = &[BuiltinFunSym::new("tone", 0, f
 /// `lookupArity` ranks as `NoEqUser` — ahead of every `ACfctUser`
 /// (Theory/Text/Parser/Term.hs:62-72) — so `crate::wf`'s printers use this to
 /// classify a prefix application of a name that is also declared `[AC]`.
-pub(crate) fn builtin_noeq_sym_names(builtin: &str) -> Vec<&'static str> {
+pub(crate) fn builtin_noeq_sym_names(builtin: BuiltinKind) -> Vec<&'static str> {
     let theory: &[&[BuiltinFunSym]] = match builtin {
-        "diffie-hellman" => &[DH_THEORY_NOEQ_SYMS],
-        "bilinear-pairing" => &[DH_THEORY_NOEQ_SYMS, BP_THEORY_NOEQ_SYMS],
-        "xor" => &[XOR_THEORY_NOEQ_SYMS],
-        "natural-numbers" => &[NAT_THEORY_NOEQ_SYMS],
+        BuiltinKind::DiffieHellman => &[DH_THEORY_NOEQ_SYMS],
+        BuiltinKind::BilinearPairing => &[DH_THEORY_NOEQ_SYMS, BP_THEORY_NOEQ_SYMS],
+        BuiltinKind::Xor => &[XOR_THEORY_NOEQ_SYMS],
+        BuiltinKind::NaturalNumbers => &[NAT_THEORY_NOEQ_SYMS],
         _ => &[],
     };
     builtin_st_fun_syms(builtin)
@@ -2670,7 +2705,7 @@ impl<'a> Parser<'a> {
     /// `<kw>: ident-with-hyphens (, ident-with-hyphens)*` (no trailing comma).
     /// Shared by the `builtins` and `options` declarations, which are identical
     /// modulo the keyword and the wrapping `TheoryItem` variant.
-    fn comma_sep_hyphen_idents(&mut self, kw: &str) -> Result<Vec<String>, ParseError> {
+    fn comma_sep_hyphen_idents(&mut self, kw: &str) -> Result<Vec<(String, Location)>, ParseError> {
         self.require_kw(kw)?;
         self.require_punct(":")?;
         let mut names = Vec::new();
@@ -2686,23 +2721,31 @@ impl<'a> Parser<'a> {
     fn builtins(&mut self) -> Result<TheoryItem, ParseError> {
         self.require_kw("builtins")?;
         self.require_punct(":")?;
-        let mut names = Vec::new();
+        let mut builtins = Vec::new();
         loop {
-            let name = self.hyphen_identifier()?;
+            let (name, location) = self.hyphen_identifier()?;
+            let Some(kind) = BuiltinKind::from_str(&name) else {
+                return Err(ParseError::UnknownItem {
+                    item_kind: ParseContext::Builtin,
+                    unknown_item: name.clone(),
+                    at: location,
+                });
+            };
             // HS `builtinTheory = asum $ map (try . extendSig) builtinsNames`
             // (Signature.hs:135): `extendSig` runs per name, right after its
             // `symbol`, so a conflict is diagnosed against the signature the
             // EARLIER names in the same list already merged, at the position
             // that name's lexeme reached.
-            self.enable_builtin(&name)?;
-            names.push(name);
+            self.enable_builtin(kind, location)?;
+            let builtin = Builtin { kind, location };
+            builtins.push(builtin);
             if !self.try_punct(",") {
                 break;
             }
         }
         // `commaSep1`'s trailing `comma` (Token.hs:353-355) fails here.
         self.set_item_hangover(&["\",\""]);
-        Ok(TheoryItem::Builtins(names))
+        Ok(TheoryItem::Builtins(builtins))
     }
 
     /// HS `extendSig` (Theory/Text/Parser/Signature.hs:102-135) for one
@@ -2717,20 +2760,24 @@ impl<'a> Parser<'a> {
     ///
     /// `diffbuiltins` (Signature.hs:141-148), the parser a diff theory uses,
     /// merges the signature with neither check and reserves no names.
-    fn enable_builtin(&mut self, name: &str) -> Result<(), ParseError> {
-        let Some(syms) = builtin_st_fun_syms(name) else {
+    fn enable_builtin(
+        &mut self,
+        builtin: BuiltinKind,
+        builtin_location: Location,
+    ) -> Result<(), ParseError> {
+        let Some(syms) = builtin_st_fun_syms(builtin) else {
             return Ok(());
         };
         // The `MaudeSig`s of these names carry only an enable flag
         // (Term/Maude/Signature.hs:191-196); `mappend` ORs it into the
         // signature.  Recorded for both the diff and non-diff builtins parsers,
         // which merge signatures identically (Signature.hs:102-148).
-        match name {
-            "diffie-hellman" => self.sig_enable_dh = true,
-            "bilinear-pairing" => self.sig_enable_bp = true,
-            "xor" => self.sig_enable_xor = true,
-            "multiset" => self.sig_enable_mset = true,
-            "natural-numbers" => self.sig_enable_nat = true,
+        match builtin {
+            BuiltinKind::DiffieHellman => self.sig_enable_dh = true,
+            BuiltinKind::BilinearPairing => self.sig_enable_bp = true,
+            BuiltinKind::Xor => self.sig_enable_xor = true,
+            BuiltinKind::Multiset => self.sig_enable_mset = true,
+            BuiltinKind::NaturalNumbers => self.sig_enable_nat = true,
             _ => {}
         }
         if !self.is_diff {
@@ -2738,7 +2785,7 @@ impl<'a> Parser<'a> {
             // brings that the signature already carries at a DIFFERENT options
             // tuple.  `dest-pairing` is exempt — it is expected to replace the
             // seeded `fst`/`snd` constructors with their destructor variants.
-            if name != "dest-pairing" {
+            if builtin != BuiltinKind::DestPairing {
                 // The comprehension pairs every builtin symbol with every
                 // signature entry of the same name, so a name carrying two
                 // differing entries is listed twice.
@@ -2748,7 +2795,7 @@ impl<'a> Parser<'a> {
                         "Builtin '{}' conflicts with existing function(s) (same name, \
                          different arity or function options): {}. Please remove these \
                          function definitions or use different names.",
-                        name,
+                        format!("{builtin:?}"),
                         show_string_list(&clashes.iter().map(String::as_str).collect::<Vec<_>>())
                     )));
                 }
@@ -2760,7 +2807,7 @@ impl<'a> Parser<'a> {
             if !macro_clashes.is_empty() {
                 return Err(self.err_fail(format!(
                     "Builtin '{}' conflicts with existing macro '{}'",
-                    name,
+                    format!("{builtin:?}"),
                     show_string_list(&macro_clashes.iter().map(String::as_str).collect::<Vec<_>>(),)
                 )));
             }
@@ -2775,12 +2822,12 @@ impl<'a> Parser<'a> {
             if s.name == "fst" || s.name == "snd" {
                 let evicted = FunOptions {
                     destructor: !s.destructor,
-                    ..FunOptions::of(s)
+                    ..FunOptions::of(s, Some(builtin_location))
                 };
                 self.fun_syms
                     .retain(|(n, o)| !(n == s.name && *o == evicted));
             }
-            self.insert_fun_sym(s.name, FunOptions::of(s));
+            self.insert_fun_sym(s.name, FunOptions::of(s, Some(builtin_location)));
         }
         Ok(())
     }
@@ -2827,7 +2874,8 @@ impl<'a> Parser<'a> {
     ) -> Vec<String> {
         syms.iter()
             .flat_map(|sym| {
-                let wanted = FunOptions::of(sym);
+                // Location is not important here since it is not part of the equality check
+                let wanted = FunOptions::of(sym, None);
                 existing.iter().filter_map(move |(name, options)| {
                     (name == sym.name && *options != wanted).then(|| sym.name.to_string())
                 })
@@ -2838,7 +2886,8 @@ impl<'a> Parser<'a> {
     /// Identifier that may contain hyphens (e.g. `asymmetric-encryption`,
     /// `diffie-hellman`, `dest-pairing`). Hyphens are concatenated into the
     /// returned name with no whitespace allowed across the boundary.
-    fn hyphen_identifier(&mut self) -> Result<String, ParseError> {
+    fn hyphen_identifier(&mut self) -> Result<(String, Location), ParseError> {
+        let start = self.lx.pos();
         let mut s = self.ident()?;
         loop {
             // Look for `-<ident>` immediately after with no whitespace.
@@ -2858,12 +2907,16 @@ impl<'a> Parser<'a> {
                 _ => break,
             }
         }
-        Ok(s)
+        let end = self.lx.pos();
+        let loc = Location::from_positions(start, end);
+        Ok((s, loc))
     }
 
     fn options(&mut self) -> Result<TheoryItem, ParseError> {
+        // TODO: Keep locations instead of dropping
         Ok(TheoryItem::Options(
-            self.comma_sep_hyphen_idents("options")?,
+            self.comma_sep_hyphen_idents("options")
+                .map(|opts| opts.into_iter().map(|(opt, _)| opt).collect::<Vec<_>>())?,
         ))
     }
 
@@ -3347,19 +3400,13 @@ impl<'a> Parser<'a> {
         // exemption, and consults `stFunSyms` only — never the macro names.
         if self.reserved_builtin_names.contains(&name) {
             let builtin = Self::first_declared_options(&self.fun_syms, &name);
-            if let Some(_b) = builtin.filter(|b| *b != requested) {
+            if let Some(b) = builtin.filter(|b| *b != requested) {
                 // `conflictingBuiltins` (Signature.hs:203) scans the WHOLE
                 // static table, not just the builtins this theory enabled.
-                // TODO: If we had the location where the builtin was declared, we could report it here.
-                // let conflicting: Vec<&str> = BUILTIN_ST_FUN_SYMS
-                //     .iter()
-                //     .filter(|(_, syms)| syms.iter().any(|s| s.name == name))
-                //     .map(|(b, _)| *b)
-                //     .collect();
                 return Err(ParseError::ConflictingDeclarations {
                     name: name.clone(),
                     context: ParseContext::Function,
-                    first_at: None,
+                    first_at: b.location,
                     second_at: location,
                 });
             }
@@ -3735,16 +3782,16 @@ impl<'a> Parser<'a> {
                 if self.peek_punct("]") {
                     break;
                 } else if self.try_kw("left") {
-                    attributes.push(RestrictionAttr::LeftRestriction);
+                    attributes.push(RestrictionAttr::Left);
                 } else if self.try_kw("right") {
-                    attributes.push(RestrictionAttr::RightRestriction);
+                    attributes.push(RestrictionAttr::Right);
                 } else {
                     let (found, found_at) =
                         self.found_token_until(|c| c.is_whitespace() || c == ']');
-                    return Err(ParseError::UnknownAttribute {
-                        attribute: found.unwrap_or("end of file".to_string()),
+                    return Err(ParseError::UnknownItem {
+                        item_kind: ParseContext::RestrictionAttribute,
+                        unknown_item: found.unwrap_or("end of file".to_string()),
                         at: found_at,
-                        context: ParseContext::Restriction,
                     });
                 }
                 if !self.try_punct(",") {
@@ -4166,10 +4213,10 @@ impl<'a> Parser<'a> {
                     }
                     let (found, at) =
                         self.found_token_until(|c| c == ']' || c == ',' || c.is_whitespace());
-                    return Err(ParseError::UnknownAttribute {
-                        attribute: found.unwrap_or("EOF".to_string()),
+                    return Err(ParseError::UnknownItem {
+                        item_kind: ParseContext::RuleAttribute,
+                        unknown_item: found.unwrap_or("EOF".to_string()),
                         at,
-                        context: ParseContext::Rule,
                     });
                 }
             };
@@ -4642,10 +4689,10 @@ impl<'a> Parser<'a> {
 
                 let (found, at) =
                     self.found_token_until(|c| c == ']' || c == ',' || c.is_whitespace());
-                return Err(ParseError::UnknownAttribute {
-                    attribute: found.unwrap_or("EOF".to_string()),
+                return Err(ParseError::UnknownItem {
+                    item_kind: ParseContext::LemmaAttribute,
+                    unknown_item: found.unwrap_or("EOF".to_string()),
                     at,
-                    context: ParseContext::Lemma,
                 });
             }
             if !self.try_punct(",") {
@@ -5703,7 +5750,8 @@ impl<'a> Parser<'a> {
         }
         for s in self.enabled_theory_noeq_syms() {
             if s.name == op {
-                let o = FunOptions::of(s);
+                // Location is not important for look up
+                let o = FunOptions::of(s, None);
                 let k = o.ord_key();
                 if best.is_none_or(|b| k < b) {
                     best = Some(k);

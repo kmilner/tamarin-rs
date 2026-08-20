@@ -662,7 +662,8 @@ fn theory_with_builtins() {
     let t = parse_theory(s, &[]).unwrap();
     match &t.items[0] {
         TheoryItem::Builtins(v) => {
-            assert_eq!(v, &vec!["hashing".to_string(), "signing".into()])
+            let kinds = v.iter().map(|b| b.kind).collect::<Vec<_>>();
+            assert_eq!(kinds, vec![BuiltinKind::Hashing, BuiltinKind::Signing]);
         }
         x => panic!("expected builtins, got {:?}", x),
     }

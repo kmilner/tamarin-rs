@@ -39,7 +39,7 @@ pub struct Theory {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TheoryItem {
-    Builtins(Vec<String>),
+    Builtins(Vec<Builtin>),
     Functions(Vec<FunctionDecl>),
     Equations {
         convergent: bool,
@@ -81,6 +81,124 @@ pub enum TheoryItem {
 // =============================================================================
 // Functions / equations / macros / predicates / restrictions
 // =============================================================================
+
+#[derive(Debug, Clone)]
+pub struct Builtin {
+    pub kind: BuiltinKind,
+    pub location: Location,
+}
+
+impl PartialEq for Builtin {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            kind: _,
+            location: _,
+        } = self;
+        let Self {
+            kind: _,
+            location: _,
+        } = other;
+        // Everything but location
+        self.kind == other.kind
+    }
+}
+
+impl Eq for Builtin {}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BuiltinKind {
+    LocationsReport,
+    DestAsymmetricEncryption,
+    AsymmetricEncryption,
+    DestSymmetricEncryption,
+    SymmetricEncryption,
+    DestSigning,
+    Signing,
+    RevealingSigning,
+    Hashing,
+    DestPairing,
+    Pairing,
+    DiffieHellman,
+    BilinearPairing,
+    Multiset,
+    Xor,
+    NaturalNumbers,
+    ReliableChannel,
+}
+
+impl std::fmt::Display for BuiltinKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl BuiltinKind {
+    pub fn from_str(name: &str) -> Option<Self> {
+        match name {
+            "locations-report" => Some(Self::LocationsReport),
+            "dest-asymmetric-encryption" => Some(Self::DestAsymmetricEncryption),
+            "asymmetric-encryption" => Some(Self::AsymmetricEncryption),
+            "dest-symmetric-encryption" => Some(Self::DestSymmetricEncryption),
+            "symmetric-encryption" => Some(Self::SymmetricEncryption),
+            "dest-signing" => Some(Self::DestSigning),
+            "signing" => Some(Self::Signing),
+            "revealing-signing" => Some(Self::RevealingSigning),
+            "hashing" => Some(Self::Hashing),
+            "dest-pairing" => Some(Self::DestPairing),
+            "pairing" => Some(Self::Pairing),
+            "diffie-hellman" => Some(Self::DiffieHellman),
+            "bilinear-pairing" => Some(Self::BilinearPairing),
+            "multiset" => Some(Self::Multiset),
+            "xor" => Some(Self::Xor),
+            "natural-numbers" => Some(Self::NaturalNumbers),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::LocationsReport => "locations-report",
+            Self::DestAsymmetricEncryption => "dest-asymmetric-encryption",
+            Self::AsymmetricEncryption => "asymmetric-encryption",
+            Self::DestSymmetricEncryption => "dest-symmetric-encryption",
+            Self::SymmetricEncryption => "symmetric-encryption",
+            Self::DestSigning => "dest-signing",
+            Self::Signing => "signing",
+            Self::RevealingSigning => "revealing-signing",
+            Self::Hashing => "hashing",
+            Self::DestPairing => "dest-pairing",
+            Self::Pairing => "pairing",
+            Self::DiffieHellman => "diffie-hellman",
+            Self::BilinearPairing => "bilinear-pairing",
+            Self::Multiset => "multiset",
+            Self::Xor => "xor",
+            Self::NaturalNumbers => "natural-numbers",
+            Self::ReliableChannel => "reliable-channel",
+        }
+    }
+
+    pub fn iter() -> impl Iterator<Item = Self> {
+        const BUILTINKINDS: [BuiltinKind; 16] = [
+            BuiltinKind::LocationsReport,
+            BuiltinKind::DiffieHellman,
+            BuiltinKind::BilinearPairing,
+            BuiltinKind::Multiset,
+            BuiltinKind::Xor,
+            BuiltinKind::SymmetricEncryption,
+            BuiltinKind::AsymmetricEncryption,
+            BuiltinKind::Signing,
+            BuiltinKind::DestPairing,
+            BuiltinKind::DestSymmetricEncryption,
+            BuiltinKind::DestAsymmetricEncryption,
+            BuiltinKind::DestSigning,
+            BuiltinKind::RevealingSigning,
+            BuiltinKind::Hashing,
+            BuiltinKind::NaturalNumbers,
+            BuiltinKind::ReliableChannel,
+        ];
+        BUILTINKINDS.iter().copied()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct FunctionDecl {
@@ -191,10 +309,25 @@ impl PartialEq for Restriction {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum RestrictionAttr {
-    LeftRestriction,
-    RightRestriction,
+    Left,
+    Right,
+}
+
+impl RestrictionAttr {
+    pub fn iter() -> impl Iterator<Item = Self> {
+        const RESTRICTION_ATTRS: [RestrictionAttr; 2] =
+            [RestrictionAttr::Left, RestrictionAttr::Right];
+        RESTRICTION_ATTRS.iter().copied()
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+        }
+    }
 }
 
 // =============================================================================
@@ -281,6 +414,20 @@ impl PartialEq for RuleAttr {
     }
 }
 
+impl RuleAttr {
+    pub fn expected() -> Vec<&'static str> {
+        vec![
+            "color",
+            "colour",
+            "no_derivcheck",
+            "role",
+            "issapicrule",
+            "process",
+            "external attribute",
+        ]
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuleAttrKind {
     Color(String),
@@ -364,6 +511,22 @@ pub enum LemmaAttr {
     Left,
     Right,
     Hint(String),
+}
+
+impl LemmaAttr {
+    pub fn expected() -> Vec<&'static str> {
+        vec![
+            "sources",
+            "reuse",
+            "diff_reuse",
+            "use_induction",
+            "hide_lemma",
+            "heuristic",
+            "output",
+            "left",
+            "right",
+        ]
+    }
 }
 
 /// Structured skeleton parse — mirrors HS's
